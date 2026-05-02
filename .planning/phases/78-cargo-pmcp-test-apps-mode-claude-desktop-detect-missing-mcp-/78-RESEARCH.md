@@ -635,27 +635,31 @@ Wave 4: Plan 04 (docs + anchors) ──┘ (Plan 04 can start in parallel with P
 
 **Parallelization opportunity:** Plans 03 and 04 can run in parallel after Plan 01 completes; they only depend on the validator API surface. Plan 02 is on the critical path because Plan 03's integration tests verify end-to-end behavior.
 
-## Open Questions
+## Open Questions (RESOLVED)
 
 1. **Vite singlefile minification fidelity of identifiers — empirical confirmation needed.**
    - What we know: Terser's default mangler renames local variables but not property assignments; the import string literal is preserved. [CITED: terser docs default `mangle.properties=false`]
    - What's unclear: Does `vite-plugin-singlefile` apply `target: "esnext"` (per GUIDE.md line 354) in a way that prevents *all* property-name mangling? Specifically, are there minifier configurations where `.onteardown=` becomes `.a=` for some setups?
    - Recommendation: Plan 03 ships `corrected_minified.html` as a fixture by *actually running* `vite build --mode production` against `corrected_minimal.html` once during plan execution, not as a hand-rolled approximation. Confidence: MEDIUM until empirically verified.
+   - **RESOLVED:** Plan 03's fixture pair is hand-authored to mirror what `vite-plugin-singlefile` emits in production: string literal `@modelcontextprotocol/ext-apps` preserved AND `\.\s*onteardown\s*=` property-assignment patterns preserved. Empirical verification by an actual Vite build is moved to a follow-up phase if scanner false-negatives are observed in the wild.
 
 2. **Cost Coach reproducer integration — vendor or reference?**
    - What we know: The proposal says "Happy to share the actual debug log, the failing widget bundle, and the working fix as reproducers if useful." (proposal line 115)
    - What's unclear: Is the operator OK with vendoring the Cost Coach widget bundle in-tree under `crates/mcp-tester/tests/fixtures/widgets/cost-coach-broken.html`, or do they want a synthetic minimal fixture?
    - Recommendation: vendor a small synthetic fixture (50-100 LOC) that mirrors the *shape* of the Cost Coach bug but is not the full Cost Coach widget bundle. The bug is well-defined ("widget uses postMessage + window.openai but no ext-apps"); we don't need their full UI code. The synthetic fixture is easier to maintain and not subject to upstream changes in the cost-coach repo.
+   - **RESOLVED:** Use a synthetic minimal fixture in-tree at `crates/mcp-tester/tests/fixtures/widgets/`. Rationale: a full vendored Cost Coach bundle would be ~MB+ of generated JS that bloats the repo; the synthetic minimal pair (broken_minimal.html + corrected_minimal.html, each <2KB) exercises every signal the scanner checks. If Cost Coach later ships a regression fixture, it can be added as `cost_coach_repro.html` alongside without changing tests.
 
 3. **`AppValidator` library API stability — public or private widget validation?**
    - What we know: `AppValidator` is `pub` and re-exported from `mcp_tester::AppValidator` (lib.rs:60). The new `validate_widgets` method will be on this public surface.
    - What's unclear: Should the `WidgetSignals` struct + `extract_inline_scripts` helper also be public for advanced users, or kept private?
    - Recommendation: Keep them private. The contract is `validate_widgets(&[(uri, html)]) -> Vec<TestResult>`. Internal representation is a refactoring detail.
+   - **RESOLVED:** Keep `WidgetSignals` `pub(crate)` (private to mcp-tester). Only `validate_widgets(&self, &[(String, String)]) -> Vec<TestResult>` is the public stable contract. Internal scanner state can change without breaking downstream consumers.
 
 4. **Should `--mode standard` emit any widget warnings at all?**
    - What we know: ROADMAP says Standard mode = WARN, ClaudeDesktop = ERROR.
    - What's unclear: Does Standard mode warn about EVERY missing handler, or only the SDK-import absence (the most informative top-level warning)? Emitting 6 warnings per widget in Standard mode could be noisy for users who just want to deploy to ChatGPT.
    - Recommendation: Standard mode emits ONE summary warning per widget ("widget does not implement MCP Apps SDK; for Claude Desktop compatibility, run `--mode claude-desktop`"); ClaudeDesktop mode emits the full per-handler error breakdown. This is consistent with ROADMAP's "permissive default" wording.
+   - **RESOLVED:** Standard mode emits ONE summary WARN per widget (e.g., `widget X is missing 3 of 4 protocol handlers — see error details for the full list`). ClaudeDesktop mode emits one ERROR row per missing handler (full breakdown). Rationale: ROADMAP says Standard is the "permissive default" — N noisy WARNs per widget contradict that intent. The summary surfaces the same information without dominating output.
 
 ## Environment Availability
 

@@ -1114,7 +1114,12 @@ Acceptance criteria:
 **Plans:** 4 plans
 
 Plans:
+**Wave 1**
 - [ ] 78-01-PLAN.md — Validator core: extend `AppValidator` with `validate_widgets`, regex-based scanner, mode-driven severity (Wave 1)
+
+**Wave 2** *(blocked on Wave 1 completion)*
 - [ ] 78-02-PLAN.md — CLI plumbing: wire `read_widget_bodies` into `cargo pmcp test apps` (Wave 2)
-- [ ] 78-03-PLAN.md — ALWAYS requirements: fixtures, property tests, fuzz target, working example (Wave 3)
 - [ ] 78-04-PLAN.md — Docs polish: README sections, `--help` long-text, GUIDE.md anchor expander (Wave 3, parallel with 78-03)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+- [ ] 78-03-PLAN.md — ALWAYS requirements: fixtures, property tests, fuzz target, working example (Wave 3)

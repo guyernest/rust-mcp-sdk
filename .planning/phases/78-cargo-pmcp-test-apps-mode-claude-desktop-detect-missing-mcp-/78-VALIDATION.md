@@ -39,24 +39,38 @@ created: 2026-05-02
 > The planner fills concrete task IDs after PLAN.md generation. The matrix below
 > captures the mandatory verification dimensions derived from RESEARCH.md so
 > Dimension 8 (Nyquist) coverage is enforced.
+>
+> Note (post-checker revision): test command names below match the actual
+> tests created in each plan. See the linked plan for the exact `<behavior>`
+> block defining each test.
 
 | Dimension | Plan | Wave | Acceptance Criterion | Test Type | Automated Command | Status |
 |-----------|------|------|----------------------|-----------|-------------------|--------|
-| Strict mode WIRES UP behavior (no longer "same as Standard") | 01 | 1 | `AppValidationMode::ClaudeDesktop` produces ERROR-level issues for missing handlers/imports | unit | `cargo test -p mcp-tester app_validator::claude_desktop_strict_mode` | ⬜ pending |
-| Handler signal scanner (4 handlers + ontoolresult + connect + new App) | 01 | 1 | Each protocol-handler property assignment is detected; ≥3 of 4 fallback path covered | unit | `cargo test -p mcp-tester app_validator::widget_signals` | ⬜ pending |
-| Scanner robustness (no panics on arbitrary HTML/JS) | 01 | 1 | Property test never panics; idempotent on whitespace normalization | property | `cargo test -p mcp-tester app_validator::proptest` | ⬜ pending |
-| Fuzz target for regex/AST scan path | 03 | 3 | `cargo +nightly fuzz run widget_scanner` runs ≥60s without crash | fuzz | `cargo +nightly fuzz run widget_scanner -- -max_total_time=60` | ⬜ pending |
-| `resources/read` plumbing (Vec<(uri, html)>) | 02 | 2 | apps.rs forwards widget bodies to validator; missing/large/non-text bodies handled | unit + integration | `cargo test -p cargo-pmcp test_apps_resources_read` | ⬜ pending |
-| Cost Coach reproducer FAILS in claude-desktop mode | 03 | 3 | Broken widget exits non-zero with errors naming missing handler(s) | integration (acceptance) | `cargo run --example validate_widget_pair -- --mode claude-desktop` exits non-zero on broken/exits zero on corrected | ⬜ pending |
-| `cargo pmcp test apps` (Standard) still passes broken widget | 03 | 3 | No regression on permissive default | integration | `cargo run -p cargo-pmcp -- test apps` (no flag) on the broken fixture exits zero with WARN | ⬜ pending |
-| `--mode chatgpt` behavior unchanged | 03 | 3 | Existing chatgpt mode test outputs unchanged | regression | `cargo test -p mcp-tester app_validator::chatgpt_mode` | ⬜ pending |
-| README + `--help` document the mode | 04 | 3 | grep finds claude-desktop section in README; `--help` shows the new mode | docs check | `cargo run -p cargo-pmcp -- test apps --help \| grep claude-desktop && grep -q "claude-desktop" cargo-pmcp/README.md` | ⬜ pending |
-| Error messages link to GUIDE anchor | 04 | 3 | grep finds `[guide:handlers-before-connect]` (or chosen anchor) in error output | unit | `cargo test -p mcp-tester app_validator::error_messages_anchored` | ⬜ pending |
+| Strict mode WIRES UP behavior (no longer "same as Standard") | 01 | 1 | `AppValidationMode::ClaudeDesktop` produces ERROR-level issues for missing handlers/imports | unit | `cargo test -p mcp-tester app_validator::tests::claude_desktop_mode_emits_failed_for_missing_handlers` | ⬜ pending |
+| Standard mode emits ONE summary WARN per widget (Q4 RESOLVED) | 01 | 1 | `AppValidationMode::Standard` emits exactly 1 Warning row per widget listing missing signals | unit | `cargo test -p mcp-tester app_validator::tests::standard_mode_emits_one_summary_warn_per_widget` | ⬜ pending |
+| Handler signal scanner (4 handlers + ontoolresult + connect + new App) | 01 | 1 | Each protocol-handler property assignment is detected; ≥3 of 4 fallback path covered | unit | `cargo test -p mcp-tester app_validator::tests::scan_widget_detects_handlers_via_property_assignment` | ⬜ pending |
+| Scanner robustness (no panics on arbitrary HTML/JS) | 03 | 3 | Property test never panics; idempotent on whitespace normalization | property | `cargo test -p mcp-tester --test property_tests` | ⬜ pending |
+| Fuzz target for regex/AST scan path | 03 | 3 | `cargo +nightly fuzz run app_widget_scanner` runs ≥60s without crash; compile-only check on stable per Phase 77 Plan 09 convention | fuzz | `(cd fuzz && cargo build --bin app_widget_scanner)` (stable) / `cargo +nightly fuzz run app_widget_scanner -- -max_total_time=60` (nightly) | ⬜ pending |
+| `resources/read` plumbing (Vec<(uri, html)>) | 02 | 2 | apps.rs forwards widget bodies to validator; missing/large/non-text bodies handled; integration boundary covered | unit + integration | `cargo test -p cargo-pmcp --bin cargo-pmcp commands::test::apps && cargo test -p cargo-pmcp --test apps_helpers test_apps_resources_read_e2e` | ⬜ pending |
+| Cost Coach reproducer FAILS in claude-desktop mode | 03 | 3 | Broken widget exits non-zero with errors naming missing handler(s) | integration (acceptance) | `cargo test -p mcp-tester --test app_validator_widgets test_broken_widget_fails_claude_desktop` | ⬜ pending |
+| `cargo pmcp test apps` (Standard) emits ONE summary WARN on broken widget | 03 | 3 | No regression on permissive default; emission shape matches Q4 RESOLVED | integration | `cargo test -p mcp-tester --test app_validator_widgets test_standard_mode_one_summary_warn_for_broken` | ⬜ pending |
+| `--mode chatgpt` behavior unchanged | 03 | 3 | Existing chatgpt mode test outputs unchanged | regression | `cargo test -p mcp-tester --test app_validator_widgets test_chatgpt_mode_unchanged_for_widget` | ⬜ pending |
+| README + `--help` document the mode | 04 | 2 | grep finds claude-desktop section in README; `--help` shows the new mode | docs check | `cargo run -p cargo-pmcp -- test apps --help \| grep claude-desktop && grep -q "claude-desktop" cargo-pmcp/README.md` | ⬜ pending |
+| Error messages link to GUIDE anchor | 04 | 2 | grep finds `[guide:handlers-before-connect]` (or chosen anchor) in error output | integration | `cargo test -p mcp-tester --test error_messages_anchored error_messages_anchored` | ⬜ pending |
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
 
 The planner MUST emit task IDs that map onto every row above; no row may be left
 without a `task_id` reference once plans are generated.
+
+### Wave map (post-checker revision)
+
+| Plan | Wave | depends_on |
+|------|------|------------|
+| 01 (validator core) | 1 | [] |
+| 02 (CLI plumbing) | 2 | [78-01] |
+| 03 (ALWAYS reqs + fixtures + tests) | 3 | [78-01, 78-02] (Plan 03's narrative claims its integration tests verify the wired CLI; adding 78-02 to depends_on makes that genuinely true. Wave 3 = max(1, 2) + 1.) |
+| 04 (docs + GUIDE anchors + expander) | 2 | [78-01] (Wave 2 = max(1) + 1; runs in parallel with Plan 02) |
 
 ---
 
@@ -75,8 +89,8 @@ without a `task_id` reference once plans are generated.
 
 | Behavior | Acceptance Ref | Why Manual | Test Instructions |
 |----------|----------------|------------|-------------------|
-| Vite singlefile minification fidelity | RESEARCH §A1 | Confirms `\.\s*onteardown\s*=` patterns survive `vite build --mode production` | Run `npm run build` against `examples/mcp-apps-claude-desktop-validator/source/` (a real Vite project), copy the emitted single-file HTML into the fixture path, confirm scanner still detects ≥3 handlers + import string |
-| Cost Coach reproducer parity | Acceptance §1 | Vendored fixture must match the actual broken bundle Cost Coach is shipping | Once Cost Coach ships the regression bundle, diff against in-repo `broken_minimal.html`; if signals diverge, file follow-up phase |
+| Vite singlefile minification fidelity | RESEARCH §A1 (Q1 RESOLVED — deferred to follow-up) | Confirms `\.\s*onteardown\s*=` patterns survive `vite build --mode production` | Per RESEARCH Q1 RESOLVED, the fixture pair is hand-authored to mirror Vite output. Empirical Vite verification is moved to a follow-up phase if scanner false-negatives are observed in the wild. |
+| Cost Coach reproducer parity | Acceptance §1 (Q2 RESOLVED — synthetic fixture in-tree) | Phase 78 ships a synthetic minimal fixture; full Cost Coach bundle is not vendored | Per RESEARCH Q2 RESOLVED. If Cost Coach later ships a regression bundle, add as `cost_coach_repro.html` alongside without changing tests. |
 
 ---
 
@@ -89,5 +103,7 @@ without a `task_id` reference once plans are generated.
 - [ ] Feedback latency < 30s for unit; < 120s for full
 - [ ] `nyquist_compliant: true` set in frontmatter once gate passes
 - [ ] All ALWAYS requirements (unit + property + fuzz + example) mapped to plan tasks
+- [ ] Every test command in the verification map maps to a real test name in the corresponding plan (Warning 5 fix)
+- [ ] Wave numbering is consistent with depends_on (Wave 2 fix per Warning 3)
 
 **Approval:** pending
