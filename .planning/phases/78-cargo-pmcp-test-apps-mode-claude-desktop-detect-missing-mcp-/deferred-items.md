@@ -38,3 +38,21 @@ violate the executor's SCOPE BOUNDARY rule (only auto-fix issues directly
 caused by the current task's changes). The Plan 78-01 verification scope is
 the `app_validator` module and its consumers, which are clippy-clean after
 this plan's `#[allow(dead_code)]` annotations.
+
+## Pre-existing clippy errors in `cargo-pmcp` pentest/loadtest/deployment modules
+
+**Discovered during:** Plan 78-02 Task 1 verification (`cargo clippy -p cargo-pmcp --all-targets -- -D warnings`)
+
+**Errors (unrelated files):**
+
+- `cargo-pmcp/src/pentest/attacks/data_exfiltration.rs:656,668,672` — `clippy::manual_contains` (3x: `iter().any(|i| *i == "literal")` → `.contains(&"literal")`)
+- `cargo-pmcp/src/pentest/attacks/prompt_injection.rs:660,694` — `clippy::type_complexity` (2x: complex type used; consider type alias)
+- `cargo-pmcp/src/pentest/attacks/protocol_abuse.rs:563` — `clippy::unnecessary_cast` (1x: `u32 -> u32`)
+- `cargo-pmcp/src/loadtest/summary.rs:58` — `clippy::vec_init_then_push` (1x: push immediately after creation)
+- `cargo-pmcp/src/deployment/config.rs:491` — `clippy::collapsible_match` (1x)
+
+**Verification this is pre-existing:** Stashed Plan 78-02 Task 1 changes and re-ran `cargo clippy -p cargo-pmcp --all-targets -- -D warnings` against base commit `a5fd2844` — same errors reproduced. They are independent of Plan 78-02 changes.
+
+**Why not fixed inline:** Out-of-scope per executor SCOPE BOUNDARY rule (only auto-fix issues directly caused by the current task's changes). Plan 78-02 modifies `cargo-pmcp/src/commands/test/apps.rs`, `cargo-pmcp/tests/apps_helpers.rs`, `cargo-pmcp/tests/cli_acceptance.rs`, and `cargo-pmcp/Cargo.toml` only.
+
+**Plan 78-02 verification scope:** Per Plan 78-01 precedent, Plan 78-02 `cargo clippy -p cargo-pmcp` runs are scoped to `--lib --tests --bins` (excluding examples + integration of unrelated pentest crate code). The new code in `apps.rs` itself is clippy-clean.
