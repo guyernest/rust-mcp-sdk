@@ -27,6 +27,9 @@ path = "../crates/pmcp-code-mode"
 default-features = false
 features = ["openapi-code-mode"]
 
+[dependencies.mcp-tester]
+path = "../crates/mcp-tester"
+
 [[bin]]
 name = "protocol_parsing"
 path = "fuzz_targets/protocol_parsing.rs"
@@ -100,6 +103,13 @@ bench = false
 [[bin]]
 name = "list_all_cursor_loop"
 path = "fuzz_targets/list_all_cursor_loop.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "app_widget_scanner"
+path = "fuzz_targets/app_widget_scanner.rs"
 test = false
 doc = false
 bench = false
