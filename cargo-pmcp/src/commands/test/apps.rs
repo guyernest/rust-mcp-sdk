@@ -322,9 +322,7 @@ fn execute_source_scan(
         println!();
         println!(
             "{}",
-            "MCP App Validation (source-scan mode)"
-                .bright_cyan()
-                .bold()
+            "MCP App Validation (source-scan mode)".bright_cyan().bold()
         );
         println!(
             "{}",
