@@ -1,8 +1,32 @@
 # Phase 79: cargo pmcp deploy — widget pre-build + post-deploy verification — Context
 
 **Gathered:** 2026-05-03
-**Status:** Ready for planning
-**Source:** PRD-style synthesis from cost-coach proposal at `/Users/guy/projects/mcp/cost-coach/drafts/proposal-pmcp-deploy-widget-build.md` + scope decisions locked during the `/gsd-phase --insert` conversation on 2026-05-03.
+**Status:** Replanning (revision 3, review-driven)
+**Source:** PRD-style synthesis from cost-coach proposal at `/Users/guy/projects/mcp/cost-coach/drafts/proposal-pmcp-deploy-widget-build.md` + scope decisions locked during the `/gsd-phase --insert` conversation on 2026-05-03 + cross-AI review supersessions from `79-REVIEWS.md` (commit `714b5b2d`) on 2026-05-03.
+
+## Review-Driven Supersessions (2026-05-03)
+
+Cross-AI peer review by Codex (gpt-5) and Gemini (gemini-3-pro-preview) returned 2 HIGH-CONSENSUS + 3 reviewer-unique HIGH findings. Operator decisions on the two scope/policy questions:
+
+1. **HIGH-1 (stdout-parsing brittleness) → SCOPE EXPANSION:** Add a new Plan **79-05** that lands `--format=json` on `cargo pmcp test {check, conformance, apps}` as a Wave-0 prerequisite. Wave 3 verifier consumes structured `TestReport` from the JSON output instead of regex-parsing pretty terminal text (which Codex confirmed doesn't even produce the strings the planner expected — pretty output is in `crates/mcp-tester/src/report.rs`, not the test commands themselves; `--quiet` suppresses output further). Wave structure becomes 5 waves (was 4): **Wave 0 (NEW): test commands `--format=json` flag** → Wave 1 schema → Wave 2 build orchestrator → Wave 3 verify orchestrator (now consumes JSON, not regex) → Wave 4 doctor + scaffold + example + version bump. ~+3 days estimate. Removes the entire `parse_conformance_summary` / `parse_apps_summary` / regex-fallback path; removes the F-2 verbatim banner brittleness; removes Codex's "verify-half parser argv mismatch" finding.
+
+2. **HIGH-G2 (rollback UX trap) → POLICY CHANGE:** `on_failure="rollback"` is **hard-rejected at config validation**, not parsed-but-warned. See updated lock at "Verify half" section below. Loses forward-compat reservation; future phase that ships rollback support will add the variant + migration note.
+
+3. **HIGH-C1 (multi-widget cache invalidation broken) → REPLAN:** Single `PMCP_WIDGET_DIR` env var doesn't survive multiple `[[widgets]]` entries. Replace with `PMCP_WIDGET_DIRS` (colon-separated list, Unix `PATH` convention) OR per-crate watcher generation from `embedded_in_crates`. Planner picks; Codex prefers the env list for simplicity.
+
+4. **HIGH-C2 (resolve_auth_token fights existing auth) → REPLAN:** Strip the `resolve_auth_token` helper. Let child subprocesses inherit the deploy's env and resolve auth via the existing `AuthMethod::None` → Phase 74 cache → auto-refresh path in `cargo-pmcp/src/commands/auth.rs`. Only inject `MCP_API_KEY` when the user explicitly provides `--api-key` (currently a `pmcp test` flag the user can already set). Removes the static-bearer-token path that loses refresh behavior in CI/under-different-user scenarios. Removes the `InfraErrorKind::AuthMissing` variant added in revision 1 (no longer needed since subprocesses self-resolve).
+
+5. **HIGH-G1 (build.rs breaks local cargo run) → REPLAN:** Generated `build.rs` template extends fallback path: when `PMCP_WIDGET_DIR(S)` unset, attempt local discovery via `CARGO_MANIFEST_DIR + ../widget|widgets` lookups (workspace-root-relative, walking up from the manifest dir). Restores local dev loop for `cargo run` / `cargo build` directly. Doctor check still warns when neither env var nor local-discovery hit succeeds.
+
+6. **MEDIUM consensus polish items** (also for the planner to fold in):
+   - **Scaffold target alignment** (Codex MEDIUM): current `cargo pmcp app new` template at `cargo-pmcp/src/templates/mcp_app.rs` uses `WidgetDir` file-serving (run-time read), NOT `include_str!`. Adding `build.rs` to the scaffold is mostly harmless but doesn't address Failure Mode B for new apps using the default scaffold. Doctor check should detect WidgetDir usage explicitly; scaffold task should clarify that `build.rs` is only for projects that opt into `include_str!` embedding.
+   - **`build`/`install` argv schema** (Codex MEDIUM): change schema field type from `Option<String>` (whitespace-split breaks quoting) to `Option<Vec<String>>` (argv array). Or accept both and document the difference.
+   - **`node_modules` heuristic** (Codex MEDIUM): Yarn PnP omits `node_modules` legitimately. Detect Yarn PnP via `.pnp.cjs` / `.pnp.loader.mjs` presence and skip the install heuristic when found.
+
+**Decisions NOT changed by review:** the convention narrowing (`widget/` and `widgets/` only — both reviewers LOW-flagged the `ui/` exclusion but accepted it as defensible default with config escape), `embedded_in_crates` as explicit source of truth, all build-half escape hatches, the `on_failure="fail"` semantics (loud-doc strategy retained — both reviewers want machine signal augmentation, not removal). Per HIGH-2 consensus, ADD a unique exit code 3 = "deploy succeeded but new revision broken and live" (distinct from 1 = test-failed verdict and 2 = infra-error) plus GitHub Actions `::error::` annotation when running in CI (auto-detected via `CI=true` env var). This is an addition, not a replacement of the loud-banner UX.
+
+---
+
 
 <domain>
 ## Phase Boundary
@@ -77,11 +101,11 @@ This phase closes A + B (extend deploy to build widgets and force cache invalida
   enabled = true                                  # default
   checks = ["connectivity", "conformance", "apps"]  # default
   apps_mode = "claude-desktop"                     # default; "chatgpt" or "standard" also valid
-  on_failure = "fail"                              # "fail" | "warn"; "rollback" RESERVED but rejected (see below)
+  on_failure = "fail"                              # "fail" | "warn" — "rollback" hard-rejected at config validation
   timeout_seconds = 60
   warmup_grace_ms = 2000
   ```
-- **LOCKED:** `on_failure = "rollback"` is parsed by the schema but produces a WARN-and-treat-as-`"fail"` runtime behavior, with message: `"on_failure='rollback' is reserved for a future phase — see Phase 79 deferred items. Treating as 'fail' for this deploy."` This reserves the field name without locking out a future implementation.
+- **LOCKED (SUPERSEDED 2026-05-03 by 79-REVIEWS.md HIGH-G2):** `on_failure = "rollback"` is **hard-rejected at config-validation time** with an actionable error: `"on_failure='rollback' is not yet implemented in this version of cargo-pmcp. Change to 'fail' (default) or 'warn'. Auto-rollback support will land in a future phase that verifies the existing DeployTarget::rollback() trait implementations."` Deploy refuses to start until the user changes the value. **Rationale (Gemini review):** the previously-planned reserve-but-warn-then-fallback-to-fail behavior was a UX trap — operators who explicitly configure "rollback" assume rollback happened and ignore the broken-but-live state. Hard-reject removes the trap. **Cost:** loses forward-compat reservation — when rollback support ships, that future phase must (a) add the variant to the schema enum and (b) ship a migration note for users. Operator accepted this trade in the 2026-05-03 review-decision call. *Earlier "LOCKED: parse-but-warn-and-fallback" decision is replaced by this entry.*
 - **LOCKED:** `on_failure = "fail"` semantics: CLI exits non-zero; **the new (broken) Lambda revision STAYS LIVE.** This MUST be documented in screaming-loud language in BOTH the rustdoc on the config field AND the help text for `--on-test-failure`. CI/CD pipelines that interpret non-zero exit as "auto-rollback me" will misread this and serve traffic from a known-broken revision. The example failure-output box from the proposal MUST be reproduced verbatim in `--help` and rustdoc — it pre-prints the rollback command for the operator.
 - **LOCKED:** Distinguish "test FAILED" (verdict on the new code, exit non-zero) from "test command itself errored" (network/auth/timeout — infrastructure flake). The latter is a deploy error with a distinct exit code or message; do not let infra flakiness verdict the new code.
 - **LOCKED:** Endpoint + auth pass-through: deploy already knows the public URL and OAuth token (Phase 74 wiring). Pseudocode:
@@ -96,7 +120,7 @@ This phase closes A + B (extend deploy to build widgets and force cache invalida
 ### Escape hatches (verify half)
 - **LOCKED:** `cargo pmcp deploy --no-post-deploy-test` — skip all post-deploy tests.
 - **LOCKED:** `cargo pmcp deploy --post-deploy-tests=conformance,apps` — explicit subset.
-- **LOCKED:** `cargo pmcp deploy --on-test-failure=warn|fail` — override config (`rollback` reserved but warn-and-rejected).
+- **LOCKED (SUPERSEDED 2026-05-03):** `cargo pmcp deploy --on-test-failure=warn|fail` — override config. `--on-test-failure=rollback` is **hard-rejected at clap parse time** with the same error message as the config-validation reject (no silent fallback). Mirrors the config-validation supersession above (HIGH-G2).
 - **LOCKED:** `cargo pmcp deploy --apps-mode=standard|chatgpt|claude-desktop` — override default strict mode.
 
 ### Help text + docs
