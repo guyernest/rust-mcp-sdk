@@ -5,6 +5,51 @@ All notable changes to the `cargo-pmcp` crate will be documented in this file.
 The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html).
 
+## [0.12.0] - 2026-05-03
+
+### Added
+- **`cargo pmcp deploy` now pre-builds widgets and post-deploy-verifies the live endpoint** (Phase 79).
+
+#### Build half (closes Failure Modes A + B)
+- Auto-detect `widget/` or `widgets/` at workspace root (NOT `ui/` or `app/`).
+- Lockfile-driven package-manager runner (bun > pnpm > yarn > npm).
+- New `[[widgets]]` section in `.pmcp/deploy.toml` with explicit `embedded_in_crates`.
+- `[[widgets]].build` and `.install` are argv arrays (`Vec<String>`) — REVISION 3 (Codex MEDIUM): replaces the pre-revision string form which broke quoting on flags like `--silent`.
+- Yarn PnP detection (`.pnp.cjs` / `.pnp.loader.mjs`) skips the `node_modules` install heuristic — REVISION 3 (Codex MEDIUM).
+- **`cargo pmcp app new --embed-widgets`** opts into `include_str!` widget embedding; default scaffold uses `WidgetDir` (run-time file serving). REVISION 3 (Codex MEDIUM scaffold target alignment).
+- When `--embed-widgets` is set, `cargo pmcp app new` scaffolds a `build.rs` that consumes **`PMCP_WIDGET_DIRS`** (colon-separated list, Unix `PATH` convention) for multi-widget cache invalidation — REVISION 3 (HIGH-C1 supersession of pre-revision single `PMCP_WIDGET_DIR`).
+- The generated `build.rs` includes a **local-discovery fallback** (walks `CARGO_MANIFEST_DIR + ../widget|widgets/dist` up to 3 parents) when `PMCP_WIDGET_DIRS` is unset, restoring the `cargo run` direct-invocation dev loop — REVISION 3 (HIGH-G1 supersession).
+- `cargo pmcp doctor` warns when an `include_str!` crate lacks the matching `build.rs`. WidgetDir crates do NOT trigger the warning (run-time file serving doesn't have the Cargo cache problem). REVISION 3 (Codex MEDIUM).
+- New flags: `--no-widget-build`, `--widgets-only`.
+
+#### Verify half (closes Failure Mode C)
+- After Lambda hot-swap, runs warmup-grace → `cargo pmcp test check` → `cargo pmcp test conformance` → `cargo pmcp test apps --mode claude-desktop` (last only when widgets are present) before reporting deploy success.
+- **`cargo pmcp test {check, conformance, apps} --format=json`** (NEW) emits a structured `mcp_tester::PostDeployReport` JSON document. The post-deploy verifier consumes this typed report — NO regex parsing of pretty terminal output — REVISION 3 (HIGH-1 supersession; requires mcp-tester 0.6.0).
+- New `[post_deploy_tests]` section in `.pmcp/deploy.toml`.
+- `on_failure="fail"` (default): CLI exits **3** (broken-but-live, REVISION 3 HIGH-2 — distinct from infra exit 2 and pre-cutover failures); the deployed broken Lambda revision STAYS LIVE.
+- `on_failure="warn"`: CLI exits 0 with banner.
+- `on_failure="rollback"` is **HARD-REJECTED** at config-validation time AND at clap parse time with an actionable error — REVISION 3 (HIGH-G2 supersession of pre-revision parse-but-warn behavior).
+- **GitHub Actions / GitLab `::error::` annotation** auto-emitted to stderr when `CI=true` env detected — REVISION 3 (HIGH-2 supersession; augments the loud banner, doesn't replace it).
+- Distinct exit codes: 0 success, 2 infra-error, 3 broken-but-live (REVISION 3 HIGH-2 renumbered from pre-revision 1).
+- Auth pass-through: subprocesses **inherit parent env** (Tokio Command default) and resolve via the existing `AuthMethod::None` path which already supports Phase 74 OAuth cache + automatic refresh. NO parent-side `MCP_API_KEY` injection. NO `--api-key` argv (T-79-04 mitigation, REVISION 3 HIGH-C2 supersession of pre-revision `resolve_auth_token` helper).
+- New flags: `--no-post-deploy-test`, `--post-deploy-tests=connectivity,conformance,apps`, `--on-test-failure=warn|fail` (rejects `rollback` at clap parse), `--apps-mode=standard|chatgpt|claude-desktop`.
+
+### Changed
+- `cargo pmcp deploy --help` now mentions widgets verbatim and points to the verification suite.
+- **Bumped `mcp-tester` dependency to 0.6.0** for the new `PostDeployReport` machine-readable contract.
+
+### Security
+- T-79-01 — TOML parser DoS mitigated via `fuzz_widgets_config` (now also exercises OnFailure rollback-rejection path per HIGH-G2).
+- T-79-02 — `[[widgets]].path` traversal rejected at validation time.
+- T-79-04 — Auth tokens routed via subprocess env inheritance, NOT argv flags or parent-side injection.
+- T-79-05 — `OnFailure::Rollback` user-expectation gap eliminated via HARD-REJECT at parse time (REVISION 3 HIGH-G2).
+- T-79-17 — argv-array build/install closes the pre-revision whitespace-split injection vector.
+
+### Notes
+- Pre-existing projects scaffolded before 0.12.0 should run `cargo pmcp doctor` to learn whether they need the new `build.rs`. WidgetDir scaffolds don't need it.
+- Multi-widget projects now correctly invalidate ALL widget output dirs via `PMCP_WIDGET_DIRS` colon-list (REVISION 3 HIGH-C1 fixes the pre-revision last-widget-wins bug).
+- Direct `cargo run` / `cargo build` (without the deploy wrapper) now correctly invalidates on widget changes via the build.rs local-discovery fallback (REVISION 3 HIGH-G1).
+
 ## [0.11.0] - 2026-04-26
 
 ### Added
