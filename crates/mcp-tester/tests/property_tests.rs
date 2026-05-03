@@ -152,4 +152,45 @@ proptest! {
                 "onerror should be Failed when not injected");
         }
     }
+
+    /// G2 cycle-2 false-positive guard: the widened constructor regex
+    /// `[^}]{0,200}\bname\s*:[^,}]{0,100},\s*version\s*:` must NOT match
+    /// arbitrary `new <Class>({<key1>:<val1>,<key2>:<val2>})` shapes when
+    /// neither key is `name`+`version`.
+    ///
+    /// This guards against the Plan 78-10 Task 1 widening over-matching
+    /// benign code that uses `new SomeClass({...})` with arbitrary keys.
+    /// The regex requires `name` AND `version` keys in adjacent positions
+    /// — non-`name`/`version` keys must not satisfy the constructor signal.
+    ///
+    /// Search space: ~12 keys × ~12 keys × class-name space. Default
+    /// proptest config (256 cases) covers a wide swath.
+    #[test]
+    fn prop_g2_cycle2_no_false_positive_on_unrelated_keys(
+        class_name in "[A-Za-z][A-Za-z0-9]{0,15}",
+        key1 in "(foo|bar|baz|qux|year|month|day|color|size|width|height|tag)",
+        val1 in "[A-Za-z0-9]{1,10}",
+        key2 in "(foo|bar|baz|qux|year|month|day|color|size|width|height|tag)",
+        val2 in "[A-Za-z0-9]{1,10}",
+    ) {
+        let html = format!(
+            "<html><body><script>var i = new {class_name}({{{key1}:\"{val1}\",{key2}:\"{val2}\"}});</script></body></html>"
+        );
+        let validator = AppValidator::new(AppValidationMode::ClaudeDesktop, None);
+        let results = validator.validate_widgets(&[(
+            "prop-g2-cycle2".to_string(),
+            "ui://prop-g2-cycle2".to_string(),
+            html,
+        )]);
+        let ctor_row = results.iter().find(|r| r.name.contains("App constructor"));
+        prop_assert!(
+            ctor_row.is_some(),
+            "App constructor row must be emitted under ClaudeDesktop mode",
+        );
+        prop_assert_eq!(
+            ctor_row.unwrap().status.clone(),
+            TestStatus::Failed,
+            "G2 cycle-2: must NOT match new <Class>({{<key1>,<key2>}}) without name+version keys",
+        );
+    }
 }
