@@ -9,15 +9,40 @@
 
 use anyhow::{Context, Result};
 use colored::Colorize;
+use mcp_tester::post_deploy_report::{
+    FailureDetail, PostDeployReport, TestCommand as PdrCommand, TestOutcome,
+};
 use mcp_tester::{AppValidator, ServerTester, TestStatus};
 use std::time::Duration;
 
+use super::TestFormatValue;
 use crate::commands::auth;
 use crate::commands::flags::AuthFlags;
 use crate::commands::GlobalFlags;
 
-/// Execute the check command
+/// Execute the check command. Branches on `format`:
+/// - [`TestFormatValue::Pretty`] (default) — preserves the existing terminal UX byte-for-byte.
+/// - [`TestFormatValue::Json`] — emits a single [`PostDeployReport`] JSON document on stdout
+///   for Phase 79 post-deploy verifier consumption (Plan 79-03).
 pub async fn execute(
+    url: String,
+    transport: Option<String>,
+    timeout: u64,
+    format: TestFormatValue,
+    auth_flags: &AuthFlags,
+    global_flags: &GlobalFlags,
+) -> Result<()> {
+    match format {
+        TestFormatValue::Json => execute_json(url, transport, timeout, auth_flags).await,
+        TestFormatValue::Pretty => {
+            execute_pretty(url, transport, timeout, auth_flags, global_flags).await
+        },
+    }
+}
+
+/// Pretty (human-readable) execution path. Behavior is byte-identical to the
+/// pre-Phase-79 implementation — no UX regression.
+async fn execute_pretty(
     url: String,
     transport: Option<String>,
     timeout: u64,
@@ -56,6 +81,102 @@ pub async fn execute(
 
     print_check_success(&url, global_flags);
 
+    Ok(())
+}
+
+/// JSON execution path. Emits exactly one [`PostDeployReport`] document on
+/// stdout (no ANSI / log lines / banners) and exits with the standard
+/// 0=Passed / 1=TestFailed / 2=InfraError code so the Phase 79 verifier can
+/// dispatch on the typed outcome.
+async fn execute_json(
+    url: String,
+    transport: Option<String>,
+    timeout: u64,
+    auth_flags: &AuthFlags,
+) -> Result<()> {
+    let started = std::time::Instant::now();
+
+    let mut tester = match build_tester(&url, transport.as_deref(), timeout, auth_flags).await {
+        Ok(t) => t,
+        Err(e) => {
+            emit_infra_error_json(PdrCommand::Check, &url, e.to_string(), started.elapsed())?;
+            std::process::exit(2);
+        },
+    };
+
+    let report = match tester.run_quick_test().await {
+        Ok(r) => r,
+        Err(e) => {
+            emit_infra_error_json(PdrCommand::Check, &url, e.to_string(), started.elapsed())?;
+            std::process::exit(2);
+        },
+    };
+
+    let dur_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+
+    let failures: Vec<FailureDetail> = report
+        .tests
+        .iter()
+        .filter(|t| t.status == TestStatus::Failed)
+        .map(|t| FailureDetail {
+            tool: None,
+            message: t.error.clone().unwrap_or_else(|| t.name.clone()),
+            reproduce: format!("cargo pmcp test check {url}"),
+        })
+        .collect();
+    let any_failed = !failures.is_empty();
+
+    let outcome = if any_failed {
+        TestOutcome::TestFailed
+    } else {
+        TestOutcome::Passed
+    };
+    let pdr = PostDeployReport {
+        command: PdrCommand::Check,
+        url: url.clone(),
+        mode: None,
+        outcome,
+        summary: None,
+        failures,
+        duration_ms: dur_ms,
+        schema_version: "1".to_string(),
+    };
+
+    println!("{}", serde_json::to_string_pretty(&pdr)?);
+    if any_failed {
+        std::process::exit(1);
+    }
+    Ok(())
+}
+
+/// Helper: emit a single `InfraError`-shaped [`PostDeployReport`] on stdout.
+/// Cog ≤8.
+pub(super) fn emit_infra_error_json(
+    command: PdrCommand,
+    url: &str,
+    message: String,
+    elapsed: std::time::Duration,
+) -> Result<()> {
+    let subcommand = match command {
+        PdrCommand::Check => "check",
+        PdrCommand::Conformance => "conformance",
+        PdrCommand::Apps => "apps",
+    };
+    let pdr = PostDeployReport {
+        command,
+        url: url.to_string(),
+        mode: None,
+        outcome: TestOutcome::InfraError,
+        summary: None,
+        failures: vec![FailureDetail {
+            tool: None,
+            message,
+            reproduce: format!("cargo pmcp test {subcommand} {url}"),
+        }],
+        duration_ms: u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX),
+        schema_version: "1".to_string(),
+    };
+    println!("{}", serde_json::to_string_pretty(&pdr)?);
     Ok(())
 }
 

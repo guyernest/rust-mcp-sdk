@@ -5,11 +5,16 @@
 
 use anyhow::{Context, Result};
 use colored::Colorize;
+use mcp_tester::post_deploy_report::{
+    FailureDetail, PostDeployReport, TestCommand as PdrCommand, TestOutcome,
+};
 use mcp_tester::{AppValidationMode, AppValidator, TestReport, TestStatus};
 use pmcp::types::{Content, ReadResourceResult};
 use std::collections::HashMap;
 use std::time::Duration;
 
+use super::check::emit_infra_error_json;
+use super::TestFormatValue;
 use crate::commands::auth;
 use crate::commands::flags::AuthFlags;
 use crate::commands::GlobalFlags;
@@ -28,8 +33,59 @@ use crate::commands::GlobalFlags;
 /// a future revision of this plan.
 const MAX_WIDGET_BODY_BYTES: usize = 10 * 1024 * 1024;
 
-/// Execute the `cargo pmcp test apps` command.
+/// Execute the `cargo pmcp test apps` command. Branches on `format`:
+/// - [`TestFormatValue::Pretty`] (default) — preserves the existing terminal UX byte-for-byte.
+/// - [`TestFormatValue::Json`] — emits a single [`PostDeployReport`] on stdout
+///   carrying `mode`, per-failure detail with `tool` + `reproduce` strings
+///   for Phase 79 verifier consumption (Plan 79-03).
+#[allow(clippy::too_many_arguments)]
 pub async fn execute(
+    url: String,
+    mode: Option<String>,
+    tool: Option<String>,
+    strict: bool,
+    transport: Option<String>,
+    timeout: u64,
+    widgets_dir: Option<String>,
+    format: TestFormatValue,
+    auth_flags: &AuthFlags,
+    global_flags: &GlobalFlags,
+) -> Result<()> {
+    match format {
+        TestFormatValue::Json => {
+            execute_json(
+                url,
+                mode,
+                tool,
+                strict,
+                transport,
+                timeout,
+                widgets_dir,
+                auth_flags,
+            )
+            .await
+        },
+        TestFormatValue::Pretty => {
+            execute_pretty(
+                url,
+                mode,
+                tool,
+                strict,
+                transport,
+                timeout,
+                widgets_dir,
+                auth_flags,
+                global_flags,
+            )
+            .await
+        },
+    }
+}
+
+/// Pretty (human-readable) execution path. Behavior is byte-identical to the
+/// pre-Phase-79 implementation — no UX regression.
+#[allow(clippy::too_many_arguments)]
+async fn execute_pretty(
     url: String,
     mode: Option<String>,
     tool: Option<String>,
@@ -196,6 +252,222 @@ pub async fn execute(
     }
 
     Ok(())
+}
+
+/// Helper: unwrap an `Err`-producing operation, emitting an InfraError JSON
+/// document and exiting code 2 on failure. Keeps `execute_json` cog low.
+fn or_infra_exit<T, E: std::fmt::Display>(
+    res: std::result::Result<T, E>,
+    url: &str,
+    started: std::time::Instant,
+) -> T {
+    match res {
+        Ok(v) => v,
+        Err(e) => {
+            // emit_infra_error_json's only failure mode is serde error (cannot
+            // happen for our static struct). Use unwrap_or_else for safety.
+            let _ = emit_infra_error_json(PdrCommand::Apps, url, e.to_string(), started.elapsed());
+            std::process::exit(2);
+        },
+    }
+}
+
+/// JSON execution path. Builds the same validator results as `execute_pretty`,
+/// then wraps them in a [`PostDeployReport`] on stdout. Each failed validator
+/// row becomes a [`FailureDetail`] with `tool` set to the failing tool name
+/// (when identifiable) and `reproduce` set to a copy-pasteable
+/// `cargo pmcp test apps <url> --mode <mode> --tool <name>` command.
+#[allow(clippy::too_many_arguments)]
+async fn execute_json(
+    url: String,
+    mode: Option<String>,
+    tool: Option<String>,
+    strict: bool,
+    transport: Option<String>,
+    timeout: u64,
+    widgets_dir: Option<String>,
+    auth_flags: &AuthFlags,
+) -> Result<()> {
+    let started = std::time::Instant::now();
+    let mode_str = mode.clone().unwrap_or_else(|| "standard".to_string());
+
+    let validation_mode: AppValidationMode = or_infra_exit(mode_str.parse(), &url, started);
+
+    // Source-scan branch: skip remote server entirely.
+    if let Some(dir_str) = widgets_dir.as_deref() {
+        let report = run_source_scan_json(
+            &url,
+            dir_str,
+            validation_mode,
+            tool.as_deref(),
+            strict,
+            &mode_str,
+        );
+        return finalize_json(report, started, &url, &mode_str);
+    }
+
+    let auth_method = auth_flags.resolve();
+    let middleware = or_infra_exit(
+        auth::resolve_auth_middleware(&url, &auth_method).await,
+        &url,
+        started,
+    );
+    let mut tester = or_infra_exit(
+        mcp_tester::ServerTester::new(
+            &url,
+            Duration::from_secs(timeout),
+            false,
+            None,
+            transport.as_deref(),
+            middleware,
+        ),
+        &url,
+        started,
+    );
+    let init_report = or_infra_exit(tester.run_quick_test().await, &url, started);
+    if init_report.has_failures() {
+        let _ = emit_infra_error_json(
+            PdrCommand::Apps,
+            &url,
+            "Server connectivity check failed - cannot validate App metadata".to_string(),
+            started.elapsed(),
+        );
+        std::process::exit(2);
+    }
+
+    let tools = or_infra_exit(tester.list_tools().await, &url, started).tools;
+    let resources = tester
+        .list_resources()
+        .await
+        .map(|r| r.resources)
+        .unwrap_or_default();
+
+    let tool_filter = tool.clone();
+    let validator = AppValidator::new(validation_mode, tool);
+    let mut results = validator.validate_tools(&tools, &resources);
+
+    let app_tools: Vec<&pmcp::types::ToolInfo> = tools
+        .iter()
+        .filter(|t| match tool_filter.as_deref() {
+            Some(name) => t.name == name,
+            None => AppValidator::is_app_capable(t),
+        })
+        .collect();
+
+    let (widget_bodies, mut read_failures) =
+        read_widget_bodies(&mut tester, &app_tools, false).await;
+    results.extend(validator.validate_widgets(&widget_bodies));
+    results.append(&mut read_failures);
+
+    let mut report = TestReport::new();
+    for result in results {
+        report.add_test(result);
+    }
+    if strict {
+        report.apply_strict_mode();
+    }
+
+    finalize_json(report, started, &url, &mode_str)
+}
+
+/// JSON-mode source-scan. Mirrors `execute_source_scan` shape but skips printing.
+fn run_source_scan_json(
+    _url: &str,
+    widgets_dir: &str,
+    validation_mode: AppValidationMode,
+    tool_filter: Option<&str>,
+    strict: bool,
+    _mode_str: &str,
+) -> TestReport {
+    let dir = std::path::Path::new(widgets_dir);
+    let (widget_bodies, read_failures) = match scan_widgets_dir(dir, tool_filter) {
+        Ok(pair) => pair,
+        Err(e) => {
+            // Surface dir-level errors as a single Failed result so the report
+            // round-trips and the verifier sees the cause.
+            let mut report = TestReport::new();
+            report.add_test(make_read_failure_result(widgets_dir, &e.to_string()));
+            return report;
+        },
+    };
+    let validator = AppValidator::new(validation_mode, None);
+    let mut results = validator.validate_widgets(&widget_bodies);
+    results.extend(read_failures);
+    let mut report = TestReport::new();
+    for result in results {
+        report.add_test(result);
+    }
+    if strict {
+        report.apply_strict_mode();
+    }
+    report
+}
+
+/// Wrap a `TestReport` in a `PostDeployReport`, emit JSON on stdout, exit
+/// with the right code (0 / 1 — `InfraError` is handled by the spawn-time
+/// `emit_infra_error_json` helper, never reached here).
+fn finalize_json(
+    report: TestReport,
+    started: std::time::Instant,
+    url: &str,
+    mode_str: &str,
+) -> Result<()> {
+    let dur_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+
+    let failures: Vec<FailureDetail> = report
+        .tests
+        .iter()
+        .filter(|t| t.status == TestStatus::Failed)
+        .map(|t| FailureDetail {
+            tool: extract_tool_name(t),
+            message: t.error.clone().unwrap_or_else(|| t.name.clone()),
+            reproduce: build_apps_reproduce(url, mode_str, extract_tool_name(t).as_deref()),
+        })
+        .collect();
+
+    let outcome = if report.has_failures() {
+        TestOutcome::TestFailed
+    } else {
+        TestOutcome::Passed
+    };
+    let pdr = PostDeployReport {
+        command: PdrCommand::Apps,
+        url: url.to_string(),
+        mode: Some(mode_str.to_string()),
+        outcome,
+        summary: Some(report.summary.clone()),
+        failures,
+        duration_ms: dur_ms,
+        schema_version: "1".to_string(),
+    };
+
+    println!("{}", serde_json::to_string_pretty(&pdr)?);
+    if report.has_failures() {
+        std::process::exit(1);
+    }
+    Ok(())
+}
+
+/// Extract the tool name from a `TestResult.name` of the shape `"<tool>: …"`
+/// or `"[<uri>] read_resource"`. Returns `None` when no tool is identifiable.
+fn extract_tool_name(t: &mcp_tester::TestResult) -> Option<String> {
+    // Pattern A: AppValidator emits names like "<tool>: <check>".
+    if let Some((head, _tail)) = t.name.split_once(':') {
+        let head = head.trim();
+        if !head.is_empty() && !head.starts_with('[') {
+            return Some(head.to_string());
+        }
+    }
+    None
+}
+
+/// Build a copy-pasteable `cargo pmcp test apps` reproduce command.
+/// Always includes `--mode`; includes `--tool` when identifiable.
+fn build_apps_reproduce(url: &str, mode: &str, tool: Option<&str>) -> String {
+    match tool {
+        Some(name) => format!("cargo pmcp test apps {url} --mode {mode} --tool {name}"),
+        None => format!("cargo pmcp test apps {url} --mode {mode}"),
+    }
 }
 
 /// Print the command header: URL, mode, strict flag, tool filter.

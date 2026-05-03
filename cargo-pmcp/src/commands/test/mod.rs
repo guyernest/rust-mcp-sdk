@@ -18,11 +18,41 @@ mod run;
 mod upload;
 
 use anyhow::Result;
-use clap::Subcommand;
+use clap::{Subcommand, ValueEnum};
 use std::path::PathBuf;
 
 use super::flags::{AuthFlags, FormatValue, ServerFlags};
 use super::GlobalFlags;
+
+/// Output format for `cargo pmcp test {check, conformance, apps}` subcommands.
+///
+/// Phase 79 Wave 0 (Plan 79-05): introduces `--format=json` so the post-deploy
+/// verifier (Plan 79-03) can consume `mcp_tester::PostDeployReport` directly
+/// without regex-parsing pretty terminal output. `Pretty` (default) preserves
+/// the existing human-readable UX byte-identically.
+///
+/// Local to `test/mod.rs` so it does NOT disturb the existing `FormatValue`
+/// (which is shared with the `download` subcommand for text/json scenario
+/// output).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum TestFormatValue {
+    /// Human-readable terminal output (default; existing UX preserved byte-for-byte).
+    Pretty,
+    /// Machine-readable JSON document on stdout (one `PostDeployReport` per invocation).
+    Json,
+}
+
+impl TestFormatValue {
+    /// Return the format as a static string slice (avoids heap allocation).
+    /// Used by integration tests to round-trip the parsed flag value.
+    #[allow(dead_code)]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Pretty => "pretty",
+            Self::Json => "json",
+        }
+    }
+}
 
 #[derive(Debug, Subcommand)]
 pub enum TestCommand {
@@ -89,6 +119,11 @@ pub enum TestCommand {
         #[arg(long)]
         widgets_dir: Option<String>,
 
+        /// Output format: pretty (default, human-readable) or json (machine-readable
+        /// for CI / Phase 79 post-deploy verifier consumption).
+        #[arg(long, value_enum, default_value = "pretty")]
+        format: TestFormatValue,
+
         #[command(flatten)]
         auth_flags: AuthFlags,
     },
@@ -118,6 +153,11 @@ pub enum TestCommand {
         #[arg(long, default_value = "30")]
         timeout: u64,
 
+        /// Output format: pretty (default, human-readable) or json (machine-readable
+        /// for CI / Phase 79 post-deploy verifier consumption).
+        #[arg(long, value_enum, default_value = "pretty")]
+        format: TestFormatValue,
+
         #[command(flatten)]
         auth_flags: AuthFlags,
     },
@@ -141,6 +181,11 @@ pub enum TestCommand {
         /// Connection timeout in seconds
         #[arg(long, default_value = "30")]
         timeout: u64,
+
+        /// Output format: pretty (default, human-readable) or json (machine-readable
+        /// for CI / Phase 79 post-deploy verifier consumption).
+        #[arg(long, value_enum, default_value = "pretty")]
+        format: TestFormatValue,
 
         #[command(flatten)]
         auth_flags: AuthFlags,
@@ -274,6 +319,7 @@ impl TestCommand {
                 transport,
                 timeout,
                 widgets_dir,
+                format,
                 auth_flags,
             } => {
                 let runtime = tokio::runtime::Runtime::new()?;
@@ -285,6 +331,7 @@ impl TestCommand {
                     transport,
                     timeout,
                     widgets_dir,
+                    format,
                     &auth_flags,
                     global_flags,
                 ))
@@ -296,6 +343,7 @@ impl TestCommand {
                 domain,
                 transport,
                 timeout,
+                format,
                 auth_flags,
             } => {
                 let runtime = tokio::runtime::Runtime::new()?;
@@ -305,6 +353,7 @@ impl TestCommand {
                     domain,
                     transport,
                     timeout,
+                    format,
                     &auth_flags,
                     global_flags,
                 ))
@@ -314,6 +363,7 @@ impl TestCommand {
                 url,
                 transport,
                 timeout,
+                format,
                 auth_flags,
             } => {
                 let runtime = tokio::runtime::Runtime::new()?;
@@ -321,6 +371,7 @@ impl TestCommand {
                     url,
                     transport,
                     timeout,
+                    format,
                     &auth_flags,
                     global_flags,
                 ))
