@@ -36,9 +36,13 @@ pub async fn execute(
     strict: bool,
     transport: Option<String>,
     timeout: u64,
+    widgets_dir: Option<String>,
     auth_flags: &AuthFlags,
     global_flags: &GlobalFlags,
 ) -> Result<()> {
+    // Task 1 wiring: parameter accepted but unused until Task 2 lands the
+    // source-scan branch. `let _ = ...` suppresses the dead-code warning.
+    let _ = widgets_dir;
     let verbose = global_flags.verbose;
     let validation_mode: AppValidationMode = mode
         .as_deref()

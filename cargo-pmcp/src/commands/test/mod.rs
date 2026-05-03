@@ -46,6 +46,15 @@ pub enum TestCommand {
     ///     (one row per missing handler). Honors `--tool` to restrict the
     ///     check to a single tool's widget. Recommended pre-deploy check
     ///     for servers shipping to Claude clients.
+    ///
+    /// SOURCE vs BUNDLE SCAN:
+    ///   * Default — fetches each widget HTML body via resources/read on the
+    ///     remote server (BUNDLE scan). Required for CI runs against deployed
+    ///     servers.
+    ///   * --widgets-dir <path> — reads <path>/*.html from the local
+    ///     filesystem (SOURCE scan). Higher-confidence pre-deploy check
+    ///     because source files have unmangled identifiers. Mirrors
+    ///     `cargo pmcp preview --widgets-dir` semantics.
     Apps {
         /// URL of the MCP server to validate
         url: String,
@@ -69,6 +78,16 @@ pub enum TestCommand {
         /// Connection timeout in seconds
         #[arg(long, default_value = "30")]
         timeout: u64,
+
+        /// Path to widgets directory for source-scan mode
+        ///
+        /// When set, scans `<path>/*.html` source files directly INSTEAD of
+        /// fetching widget bodies via `resources/read`. Source HTML has unmangled
+        /// identifiers and intact import statements — higher-confidence
+        /// pre-deploy check than scanning the bundle. Mirrors `cargo pmcp preview
+        /// --widgets-dir` flag semantics.
+        #[arg(long)]
+        widgets_dir: Option<String>,
 
         #[command(flatten)]
         auth_flags: AuthFlags,
@@ -254,6 +273,7 @@ impl TestCommand {
                 strict,
                 transport,
                 timeout,
+                widgets_dir,
                 auth_flags,
             } => {
                 let runtime = tokio::runtime::Runtime::new()?;
@@ -264,6 +284,7 @@ impl TestCommand {
                     strict,
                     transport,
                     timeout,
+                    widgets_dir,
                     &auth_flags,
                     global_flags,
                 ))
