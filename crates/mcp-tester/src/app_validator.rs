@@ -48,9 +48,52 @@ fn ext_apps_import_re() -> &'static Regex {
 }
 
 #[allow(dead_code)]
-fn new_app_call_re() -> &'static Regex {
+fn ext_apps_log_prefix_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"\bnew\s+App\s*\(\s*\{").unwrap())
+    // G1: SDK runtime log prefix. Survives Vite singlefile minification because
+    // it's a bracketed string literal in console.log calls inside the inlined
+    // SDK runtime (e.g. `[ext-apps] App.${e}() called before connect`).
+    // Source: cost-coach prod feedback 2026-05-02.
+    RE.get_or_init(|| Regex::new(r"\[ext-apps\]").unwrap())
+}
+
+#[allow(dead_code)]
+fn ui_initialize_method_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    // G1: JSON-RPC method literal. Protocol-level identifier — minifiers
+    // never rename quoted method-name strings.
+    RE.get_or_init(|| Regex::new(r"ui/initialize").unwrap())
+}
+
+#[allow(dead_code)]
+fn ui_tool_result_method_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    // G1: JSON-RPC method literal. Same rationale as ui/initialize.
+    RE.get_or_init(|| Regex::new(r"ui/notifications/tool-result").unwrap())
+}
+
+#[allow(dead_code)]
+fn app_constructor_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    // G2: mangled-id-tolerant constructor regex. Matches `new <id>(...)`
+    // where `<id>` is any short JS identifier (1-6 chars after the leading
+    // letter/_/$) paired with the unmangled `{name: "...", version: "..."}`
+    // payload. The payload is what user code controls; Vite/minifiers
+    // never rename quoted string keys or string values.
+    //
+    // Source: cost-coach prod feedback 2026-05-02. Concrete construction
+    // sites this matches:
+    //   new yl({name:"cost-coach-cost-summary",version:"1.0.0"})
+    //   new gl({name:"cost-coach-cost-over-time",version:"1.0.0"})
+    //   new ol({name:"cost-coach-savings-summary",version:"1.0.0"})
+    //   new App({name:"...",version:"..."})  (unminified — App is a valid
+    //                                          identifier under the regex)
+    RE.get_or_init(|| {
+        Regex::new(
+            r#"new [a-zA-Z_$][a-zA-Z0-9_$]{0,5}\(\s*\{\s*name\s*:\s*"[^"]+"\s*,\s*version\s*:\s*"[^"]+"\s*\}"#,
+        )
+        .unwrap()
+    })
 }
 
 #[allow(dead_code)]
@@ -126,14 +169,40 @@ fn js_line_comment_re() -> &'static Regex {
 #[allow(dead_code)]
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub(crate) struct WidgetSignals {
+    // === SDK-presence signals (G1: any one suffices) ===
+    /// Legacy: literal `@modelcontextprotocol/ext-apps` import. Survives
+    /// in unminified source (Plan 07 `--widgets-dir` path). Vite
+    /// singlefile inlines it away in production bundles.
     has_ext_apps_import: bool,
-    has_new_app: bool,
+    /// G1: `[ext-apps]` log-prefix string inside the inlined SDK runtime.
+    /// Survives minification because bracketed string literals inside
+    /// console.log calls are not renamed.
+    has_log_prefix: bool,
+    /// G1: `ui/initialize` JSON-RPC method literal. Protocol-level
+    /// identifier; minifiers never rename quoted method-name strings.
+    has_method_initialize: bool,
+    /// G1: `ui/notifications/tool-result` JSON-RPC method literal.
+    has_method_tool_result: bool,
+    /// G1 verdict: OR of the four SDK-presence signals above. This is the
+    /// field consumed by emission helpers (G3 cascade-free).
+    has_sdk: bool,
+    // === Constructor signal (G2 — mangled-id-tolerant) ===
+    /// G2: `true` when a `new <id>({name:"...",version:"..."})` call is
+    /// found. Identifier `<id>` may be any 1-6 char JS identifier
+    /// (mangled by Vite singlefile or the literal `App`).
+    has_app_constructor: bool,
+    // === Connect + handlers (G3 — independent of has_sdk) ===
     has_connect: bool,
     has_chatgpt_only_channels: bool,
-    /// Each entry is the handler name found (e.g. "onteardown"). Order is stable
-    /// because we test the four handlers in a fixed order. ontoolresult NOT in this
-    /// vec — it's a separate field for the WARN-tier check.
+    /// Each entry is the handler name found (e.g. "onteardown"). Order is
+    /// stable because the four handlers are tested in a fixed order.
+    /// `ontoolresult` is NOT in this vec — it's a separate field for the
+    /// WARN-tier check.
     handlers_present: Vec<&'static str>,
+    /// G3: derived — `true` when any handler member-assignment matched (i.e.
+    /// `!handlers_present.is_empty()`). Computed in `scan_widget` from the
+    /// independent member-name regexes; INDEPENDENT of `has_sdk`.
+    has_handlers: bool,
     has_ontoolresult: bool,
 }
 
@@ -203,12 +272,25 @@ fn scan_widget(html: &str) -> WidgetSignals {
     if handler_onerror_re().is_match(&scripts) {
         handlers_present.push("onerror");
     }
+    // G1: four independent SDK-presence signals (any one suffices).
+    let has_ext_apps_import = ext_apps_import_re().is_match(&scripts);
+    let has_log_prefix = ext_apps_log_prefix_re().is_match(&scripts);
+    let has_method_initialize = ui_initialize_method_re().is_match(&scripts);
+    let has_method_tool_result = ui_tool_result_method_re().is_match(&scripts);
+    let has_sdk =
+        has_ext_apps_import || has_log_prefix || has_method_initialize || has_method_tool_result;
+    let has_handlers = !handlers_present.is_empty();
     WidgetSignals {
-        has_ext_apps_import: ext_apps_import_re().is_match(&scripts),
-        has_new_app: new_app_call_re().is_match(&scripts),
+        has_ext_apps_import,
+        has_log_prefix,
+        has_method_initialize,
+        has_method_tool_result,
+        has_sdk,
+        has_app_constructor: app_constructor_re().is_match(&scripts),
         has_connect: connect_call_re().is_match(&scripts),
         has_chatgpt_only_channels: chatgpt_only_channels_re().is_match(&scripts),
         handlers_present,
+        has_handlers,
         has_ontoolresult: handler_ontoolresult_re().is_match(&scripts),
     }
 }
@@ -636,22 +718,21 @@ impl AppValidator {
         s: &WidgetSignals,
     ) -> Vec<TestResult> {
         let mut out = Vec::new();
-        // SDK presence: import literal OR >=3 of 4 handler assignments
-        let sdk_present = s.has_ext_apps_import || s.handlers_present.len() >= 3;
+        // SDK presence: G1 four-signal OR computed in scan_widget.
         out.push(self.widget_result_strict(
             tool_name,
             uri,
             "MCP Apps SDK wiring",
-            sdk_present,
-            "Widget does not import @modelcontextprotocol/ext-apps and does not register >=3 of the 4 protocol handlers. [guide:handlers-before-connect]",
+            s.has_sdk,
+            "Widget does not contain any of the four SDK-presence signals: `@modelcontextprotocol/ext-apps` import literal, `[ext-apps]` log prefix, `ui/initialize` method literal, or `ui/notifications/tool-result` method literal. [guide:handlers-before-connect]",
         ));
-        // new App({...})
+        // App constructor: G2 mangled-id-tolerant regex.
         out.push(self.widget_result_strict(
             tool_name,
             uri,
             "App constructor",
-            s.has_new_app,
-            "Widget does not call `new App({...})`. [guide:handlers-before-connect]",
+            s.has_app_constructor,
+            "Widget does not call `new <App>({name, version})`. Searched for any minified-id constructor (e.g. `new yl({name:..., version:...})`). [guide:handlers-before-connect]",
         ));
         // Required handlers (each is its own row so error messages name them)
         for name in ["onteardown", "ontoolinput", "ontoolcancelled", "onerror"] {
@@ -675,7 +756,7 @@ impl AppValidator {
             "Widget does not call `app.connect()`. [guide:handlers-before-connect]",
         ));
         // ChatGPT-only channels: ERROR in ClaudeDesktop only
-        if s.has_chatgpt_only_channels && !s.has_ext_apps_import && s.handlers_present.is_empty() {
+        if s.has_chatgpt_only_channels && !s.has_sdk && s.handlers_present.is_empty() {
             out.push(self.widget_chatgpt_only_failed(tool_name, uri));
         }
         out
@@ -693,15 +774,14 @@ impl AppValidator {
         s: &WidgetSignals,
     ) -> Option<TestResult> {
         let mut missing: Vec<String> = Vec::new();
-        let sdk_present = s.has_ext_apps_import || s.handlers_present.len() >= 3;
-        if !sdk_present {
+        if !s.has_sdk {
             missing.push(
-                "@modelcontextprotocol/ext-apps import (or >=3 of 4 handler assignments)"
+                "MCP Apps SDK presence (any of: @modelcontextprotocol/ext-apps import, [ext-apps] log prefix, ui/initialize method, or ui/notifications/tool-result method)"
                     .to_string(),
             );
         }
-        if !s.has_new_app {
-            missing.push("new App({...}) constructor".to_string());
+        if !s.has_app_constructor {
+            missing.push("App constructor (looked for `new <id>({name, version})`)".to_string());
         }
         for name in ["onteardown", "ontoolinput", "ontoolcancelled", "onerror"] {
             if !s.handlers_present.contains(&name) {
@@ -960,7 +1040,10 @@ mod tests {
         // Simply touching every accessor proves they compile and panic-free.
         let _ = script_block_re();
         let _ = ext_apps_import_re();
-        let _ = new_app_call_re();
+        let _ = ext_apps_log_prefix_re();
+        let _ = ui_initialize_method_re();
+        let _ = ui_tool_result_method_re();
+        let _ = app_constructor_re();
         let _ = handler_onteardown_re();
         let _ = handler_ontoolinput_re();
         let _ = handler_ontoolcancelled_re();
@@ -1014,7 +1097,7 @@ mod tests {
             r#"var n=new App({name:"x",version:"1.0.0"});n.onteardown=async()=>{};n.ontoolinput=()=>{};n.ontoolcancelled=()=>{};n.onerror=()=>{};n.connect();"#,
         ]);
         let signals = scan_widget(&html);
-        assert!(signals.has_new_app, "must detect new App({{...}})");
+        assert!(signals.has_app_constructor, "must detect new App({{...}})");
         assert!(signals.has_connect, "must detect .connect()");
         assert_eq!(
             signals.handlers_present.len(),
@@ -1096,13 +1179,172 @@ mod tests {
             !signals.has_ext_apps_import,
             "ext-apps import in comment must NOT match"
         );
-        assert!(!signals.has_new_app, "new App() in comment must NOT match");
+        assert!(
+            !signals.has_app_constructor,
+            "new App() in comment must NOT match"
+        );
         assert!(!signals.has_connect, "connect() in comment must NOT match");
         assert!(
             signals.handlers_present.is_empty(),
             "handlers in comments must NOT match (got {:?})",
             signals.handlers_present
         );
+    }
+
+    // ==========================================================================
+    // Plan 78-06 Task 1 — G1 (4-signal SDK presence) + G2 (mangled-id ctor) unit tests
+    // ==========================================================================
+
+    #[test]
+    fn scan_widget_g1_log_prefix_alone_satisfies_has_sdk() {
+        let html = r#"<html><body><script>console.log("[ext-apps] boot");</script></body></html>"#;
+        let s = scan_widget(html);
+        assert!(s.has_log_prefix, "expected has_log_prefix true");
+        assert!(s.has_sdk, "G1: log prefix alone must satisfy has_sdk");
+        assert!(!s.has_ext_apps_import);
+        assert!(!s.has_method_initialize);
+        assert!(!s.has_method_tool_result);
+    }
+
+    #[test]
+    fn scan_widget_g1_method_initialize_alone_satisfies_has_sdk() {
+        let html = r#"<html><body><script>rpc("ui/initialize",{});</script></body></html>"#;
+        let s = scan_widget(html);
+        assert!(
+            s.has_method_initialize,
+            "expected has_method_initialize true"
+        );
+        assert!(s.has_sdk, "G1: ui/initialize alone must satisfy has_sdk");
+    }
+
+    #[test]
+    fn scan_widget_g1_method_tool_result_alone_satisfies_has_sdk() {
+        let html =
+            r#"<html><body><script>rpc("ui/notifications/tool-result",{});</script></body></html>"#;
+        let s = scan_widget(html);
+        assert!(
+            s.has_method_tool_result,
+            "expected has_method_tool_result true"
+        );
+        assert!(
+            s.has_sdk,
+            "G1: ui/notifications/tool-result alone must satisfy has_sdk"
+        );
+    }
+
+    #[test]
+    fn scan_widget_g1_legacy_import_still_satisfies_has_sdk() {
+        let html = r#"<html><body><script type="module">import { App } from "@modelcontextprotocol/ext-apps";</script></body></html>"#;
+        let s = scan_widget(html);
+        assert!(s.has_ext_apps_import, "expected has_ext_apps_import true");
+        assert!(
+            s.has_sdk,
+            "Legacy import literal must still satisfy has_sdk"
+        );
+    }
+
+    #[test]
+    fn scan_widget_g1_no_signals_means_no_sdk() {
+        let html = r#"<html><body><script>var x=1;</script></body></html>"#;
+        let s = scan_widget(html);
+        assert!(!s.has_sdk, "no SDK signals → has_sdk = false");
+        assert!(!s.has_ext_apps_import);
+        assert!(!s.has_log_prefix);
+        assert!(!s.has_method_initialize);
+        assert!(!s.has_method_tool_result);
+    }
+
+    #[test]
+    fn scan_widget_g2_mangled_yl_constructor_matches() {
+        let html = r#"<html><body><script>var a=new yl({name:"cost-coach-cost-summary",version:"1.0.0"});</script></body></html>"#;
+        let s = scan_widget(html);
+        assert!(
+            s.has_app_constructor,
+            "G2: mangled `yl` constructor with intact payload must match"
+        );
+    }
+
+    #[test]
+    fn scan_widget_g2_mangled_gl_constructor_matches() {
+        let html = r#"<html><body><script>var a=new gl({name:"cost-coach-cost-over-time",version:"1.0.0"});</script></body></html>"#;
+        let s = scan_widget(html);
+        assert!(
+            s.has_app_constructor,
+            "G2: mangled `gl` constructor must match"
+        );
+    }
+
+    #[test]
+    fn scan_widget_g2_unminified_app_constructor_still_matches() {
+        let html = r#"<html><body><script type="module">const app = new App({name: "tool", version: "1.0.0"});</script></body></html>"#;
+        let s = scan_widget(html);
+        assert!(
+            s.has_app_constructor,
+            "G2: unminified `App` constructor must still match (App is a valid identifier under the regex)"
+        );
+    }
+
+    #[test]
+    fn scan_widget_g2_random_new_call_without_name_version_payload_does_not_match() {
+        let html = r#"<html><body><script>var d=new Date(2026,1,1);var u=new URL("http://x");</script></body></html>"#;
+        let s = scan_widget(html);
+        assert!(
+            !s.has_app_constructor,
+            "G2: random `new <X>(...)` calls without {{name, version}} payload must NOT match"
+        );
+    }
+
+    // ==========================================================================
+    // Plan 78-06 Task 2 — G3 cascade-elimination unit tests
+    // ==========================================================================
+
+    #[test]
+    fn scan_widget_g3_handlers_detected_independently_of_has_sdk() {
+        // The synthetic cascade fixture shape: handlers + connect present,
+        // ALL SDK signals absent.
+        let html = r#"<html><body><script>
+            var obj={};
+            obj.onteardown=async()=>({});
+            obj.ontoolinput=function(p){};
+            obj.ontoolcancelled=function(p){};
+            obj.onerror=function(e){};
+            obj.connect();
+        </script></body></html>"#;
+        let s = scan_widget(html);
+        assert!(!s.has_sdk, "G3: no SDK signals → has_sdk false");
+        assert!(
+            !s.has_app_constructor,
+            "G3: no constructor → has_app_constructor false"
+        );
+        assert!(
+            s.has_handlers,
+            "G3: handlers detected independently of has_sdk"
+        );
+        assert!(
+            s.has_connect,
+            "G3: connect detected independently of has_sdk"
+        );
+        assert_eq!(
+            s.handlers_present.len(),
+            4,
+            "G3: all 4 handlers detected by member-name regex"
+        );
+    }
+
+    #[test]
+    fn scan_widget_g3_chatgpt_only_diagnosis_requires_genuine_evidence_absence() {
+        // chatgpt-only channels + no SDK + no handlers → chatgpt-only-failed fires.
+        let html_a = r#"<html><body><script>window.openai.x();</script></body></html>"#;
+        let s_a = scan_widget(html_a);
+        assert!(s_a.has_chatgpt_only_channels);
+        assert!(!s_a.has_sdk);
+        assert!(s_a.handlers_present.is_empty());
+        // chatgpt-only channels + has_sdk → chatgpt-only-failed must NOT fire
+        // (this is what the compound predicate in emit_results_for_claude_desktop guards).
+        let html_b = r#"<html><body><script>console.log("[ext-apps]");window.openai.x();</script></body></html>"#;
+        let s_b = scan_widget(html_b);
+        assert!(s_b.has_chatgpt_only_channels);
+        assert!(s_b.has_sdk);
     }
 
     // ==========================================================================
@@ -1245,9 +1487,13 @@ mod tests {
     }
 
     #[test]
-    fn sdk_signal_accepts_handler_count_fallback() {
-        // Minified body with import path stripped but >=3 of 4 handler
-        // property assignments present. SDK signal must still pass.
+    fn sdk_signal_requires_independent_evidence_no_fallback() {
+        // G3 cascade-elimination contract (Plan 78-06): the v1 `>=3 of 4
+        // handler-count` fallback is REMOVED. A widget with handlers but no
+        // genuine SDK presence signal must report SDK Failed independently
+        // of the handler rows. This test was previously
+        // `sdk_signal_accepts_handler_count_fallback` and asserted the
+        // opposite (the bug Plan 06 fixes).
         let html = make_widget_html(&[
             r#"var n=new App({name:"x",version:"1.0.0"});n.onteardown=()=>{};n.ontoolinput=()=>{};n.ontoolcancelled=()=>{};n.connect();"#,
         ]);
@@ -1263,8 +1509,18 @@ mod tests {
             .expect("must emit MCP Apps SDK wiring row");
         assert_eq!(
             sdk_row.status,
+            TestStatus::Failed,
+            "G3: SDK signal must NOT cascade off handler count — handlers alone do not imply SDK presence: {sdk_row:?}"
+        );
+        // Handlers themselves must still pass independently.
+        let onteardown_row = results
+            .iter()
+            .find(|r| r.name.contains("handler: onteardown"))
+            .expect("must emit handler: onteardown row");
+        assert_eq!(
+            onteardown_row.status,
             TestStatus::Passed,
-            "SDK signal must pass via handler-count fallback (>=3 of 4) when import literal absent: {sdk_row:?}"
+            "G3: handler row passes independently of SDK row: {onteardown_row:?}"
         );
     }
 
