@@ -151,6 +151,23 @@ pub struct DeployCommand {
     #[arg(long)]
     no_oauth: bool,
 
+    /// Skip the widget pre-build step entirely (Phase 79).
+    ///
+    /// Use this when your CI pipeline runs `npm run build` (or equivalent)
+    /// in a separate step. Cargo's incremental cache may still serve a stale
+    /// binary if `include_str!` resolves to widget files — see
+    /// `cargo pmcp doctor` for the build.rs scaffold check (Phase 79 v2).
+    #[arg(long)]
+    no_widget_build: bool,
+
+    /// Build widgets only; skip cargo build, upload, and Lambda hot-swap (Phase 79).
+    ///
+    /// Useful for the fast inner-loop iteration on widget code without
+    /// re-deploying the Rust binary. The PMCP_WIDGET_DIRS env var is still
+    /// set so a follow-up `cargo build` picks up the rebuilt widgets.
+    #[arg(long)]
+    widgets_only: bool,
+
     #[command(subcommand)]
     action: Option<DeployAction>,
 }
@@ -402,6 +419,49 @@ impl DeployCommand {
     pub fn execute(&self, global_flags: &crate::commands::GlobalFlags) -> Result<()> {
         // Run async code in tokio runtime
         tokio::runtime::Runtime::new()?.block_on(self.execute_async(global_flags))
+    }
+
+    /// Phase 79 Wave 2 — Step 2.5 helper.
+    ///
+    /// Iterates over all `[[widgets]]` entries (or convention-detected
+    /// `widget/`/`widgets/`), runs the orchestrator on each, collects every
+    /// resolved `absolute_output_dir`, and joins them into a single
+    /// `PMCP_WIDGET_DIRS` env var (colon-separated, Unix `PATH` convention)
+    /// BEFORE returning.
+    ///
+    /// Stops on first widget failure (mirrors `79-CONTEXT.md` "Multiple
+    /// `[[widgets]]` blocks supported. Stop on first failure"). Skips the
+    /// env var when no widgets are detected so 79-04's build.rs
+    /// local-discovery fallback (HIGH-G1) can take over for direct
+    /// `cargo run` scenarios.
+    ///
+    /// Cog ≤8.
+    async fn pre_build_widgets_and_set_env(
+        config: &crate::deployment::DeployConfig,
+        project_root: &std::path::Path,
+        global_flags: &crate::commands::GlobalFlags,
+    ) -> Result<()> {
+        let widgets = crate::deployment::widgets::detect_widgets(config, project_root);
+        if widgets.is_empty() {
+            return Ok(());
+        }
+        let quiet = !global_flags.should_output();
+        let mut all_output_dirs: Vec<String> = Vec::with_capacity(widgets.len());
+        for widget in &widgets {
+            let resolved =
+                crate::deployment::widgets::run_widget_build(widget, project_root, quiet).await?;
+            all_output_dirs.push(resolved.absolute_output_dir.to_string_lossy().to_string());
+        }
+        // REVISION 3 HIGH-C1: colon-join all widget output dirs (Unix PATH
+        // convention). Empty case was early-returned above so 79-04's
+        // build.rs local-discovery fallback (HIGH-G1) takes over for
+        // direct-cargo-run scenarios.
+        let joined = all_output_dirs.join(":");
+        // SAFETY: env var mutation is the explicit purpose of this fn —
+        // downstream `target.build()` invokes `cargo build` which reads
+        // PMCP_WIDGET_DIRS via the build.rs scaffold (Phase 79 Wave 4).
+        std::env::set_var("PMCP_WIDGET_DIRS", &joined);
+        Ok(())
     }
 
     async fn execute_async(&self, global_flags: &crate::commands::GlobalFlags) -> Result<()> {
@@ -717,6 +777,35 @@ impl DeployCommand {
                 }
 
                 emit_target_banner_if_resolved(global_flags, &project_root, Some(&config));
+
+                // Step 2.5: Widget pre-build (Phase 79 — Failure Mode A + B mitigation).
+                //
+                // REVISION 3 HIGH-C1: `PMCP_WIDGET_DIRS` (colon-separated list,
+                // Unix PATH convention) is set ONCE here covering ALL widgets so
+                // 79-04's generated build.rs picks up every output dir via
+                // `cargo:rerun-if-env-changed=PMCP_WIDGET_DIRS` plus per-dir
+                // `cargo:rerun-if-changed`. Replaces the pre-revision-3 single
+                // `PMCP_WIDGET_DIR` which was last-widget-wins broken for
+                // multi-widget projects.
+                //
+                // F-4 mitigation: there is no `cargo pmcp build` subcommand
+                // (verified via `enum Commands` in `cargo-pmcp/src/main.rs:83`),
+                // so this `cargo pmcp deploy` execute_async path is the ONLY
+                // place that gets the Step 2.5 hook.
+                if !self.no_widget_build {
+                    Self::pre_build_widgets_and_set_env(&config, &project_root, global_flags)
+                        .await?;
+                }
+
+                if self.widgets_only {
+                    if global_flags.should_output() {
+                        println!(
+                            "\n✓ Widgets built (--widgets-only); skipping cargo build + deploy"
+                        );
+                    }
+                    return Ok(());
+                }
+
                 let artifact = target.build(&config).await?;
                 let outputs = target.deploy(&config, artifact).await?;
 
