@@ -225,6 +225,320 @@ impl PackageManager {
     }
 }
 
+// ============================================================================
+// Wave 2: widget pre-build orchestrator (Plan 79-02)
+// ============================================================================
+//
+// The functions below drive an automatic widget build (`npm run build`,
+// `pnpm run build`, …) from `cargo pmcp deploy`'s `execute_async` BEFORE the
+// `cargo build --release` step. They consume the schema types above
+// (`WidgetConfig`, `PackageManager`, `ResolvedPaths`).
+//
+// Decomposition follows Phase-75 RESEARCH.md Pattern 2 (per-stage pipeline)
+// so every fn stays under cog 20 — well under the PMAT cap of 25.
+//
+// REVISION 3 supersessions:
+// - HIGH-C1: `run_widget_build` returns `ResolvedPaths` so the caller can
+//   join all widgets into a single `PMCP_WIDGET_DIRS` env var (set ONCE,
+//   covers ALL widgets). Per-call `set_var` removed.
+// - Codex MEDIUM (argv): `argv_to_cmd_args` replaces the pre-revision-3
+//   whitespace-split helper — no shell parsing.
+// - Codex MEDIUM (Yarn PnP): `is_yarn_pnp` early-returns from
+//   `ensure_node_modules` when `.pnp.cjs` or `.pnp.loader.mjs` is present.
+
+use anyhow::{bail, Context as _, Result as AnyhowResult};
+
+/// Detect widgets to build from explicit config OR from `widget/`/`widgets/`
+/// convention. Returns a Vec because deploy.toml allows multiple `[[widgets]]`
+/// blocks.
+///
+/// Per `79-CONTEXT.md` "Convention search" LOCKED: ONLY `widget/` and
+/// `widgets/` are auto-detected — `ui/` and `app/` are explicitly DROPPED to
+/// avoid false-positives on Rust workspace bin-crate dirs.
+///
+/// When no explicit `[[widgets]]` block exists AND a convention dir is found,
+/// synthesizes one `WidgetConfig` whose `embedded_in_crates` defaults to ALL
+/// workspace bin crates (safe over-invalidation; `cargo pmcp doctor` hints
+/// the operator to write the explicit config).
+///
+/// REQ-79-01 (drop ui/ + app/): test 1.10 + the `["widget", "widgets"]`
+/// literal is a hard fence.
+/// REQ-79-09 (synthesize embedded_in_crates to all bin crates):
+/// `enumerate_workspace_bin_crates`.
+#[must_use]
+pub fn detect_widgets(
+    config: &crate::deployment::config::DeployConfig,
+    workspace_root: &Path,
+) -> Vec<WidgetConfig> {
+    if !config.widgets.is_empty() {
+        return config.widgets.widgets.clone();
+    }
+    for candidate in ["widget", "widgets"] {
+        if workspace_root.join(candidate).is_dir() {
+            let bin_crates = enumerate_workspace_bin_crates(workspace_root);
+            return vec![WidgetConfig {
+                path: candidate.to_string(),
+                build: None,
+                install: None,
+                output_dir: "dist".to_string(),
+                embedded_in_crates: bin_crates,
+            }];
+        }
+    }
+    Vec::new()
+}
+
+/// List workspace bin crates by name via `cargo metadata`.
+///
+/// Used by [`detect_widgets`] to populate the synthesized `embedded_in_crates`
+/// field when an operator hasn't written an explicit `[[widgets]]` block.
+/// Falls back to an empty Vec on any cargo-metadata error — that just means
+/// `cargo pmcp doctor` will hint the operator more strongly.
+fn enumerate_workspace_bin_crates(workspace_root: &Path) -> Vec<String> {
+    let metadata = match cargo_metadata::MetadataCommand::new()
+        .manifest_path(workspace_root.join("Cargo.toml"))
+        .exec()
+    {
+        Ok(m) => m,
+        Err(_) => return Vec::new(),
+    };
+    let mut names: Vec<String> = Vec::new();
+    for package in metadata.packages {
+        for target in &package.targets {
+            if target.kind.contains(&cargo_metadata::TargetKind::Bin) {
+                let pkg_name = package.name.to_string();
+                if !names.contains(&pkg_name) {
+                    names.push(pkg_name);
+                }
+                break;
+            }
+        }
+    }
+    names
+}
+
+/// REVISION 3 Codex MEDIUM helper: detect Yarn PnP via marker files. When
+/// PnP is in use, `node_modules/` is intentionally absent and the
+/// install heuristic should NOT fire.
+///
+/// Cog ≤4. Recognises both Yarn 3 (`.pnp.cjs`) and Yarn 4+
+/// (`.pnp.loader.mjs`) marker forms.
+fn is_yarn_pnp(widget_dir: &Path) -> bool {
+    widget_dir.join(".pnp.cjs").is_file() || widget_dir.join(".pnp.loader.mjs").is_file()
+}
+
+/// REVISION 3 Codex MEDIUM helper: split argv slice into (cmd, rest_args).
+///
+/// Replaces the pre-revision-3 `parse_explicit_command(s: &str)`
+/// whitespace-split helper which broke quoting on inputs like
+/// `"npm run --silent build"` (the `--silent` flag would attach to the
+/// wrong argument). The argv-array form is unambiguous.
+///
+/// Cog ≤4.
+///
+/// # Errors
+/// Returns Err when `argv` is empty.
+fn argv_to_cmd_args(argv: &[String]) -> AnyhowResult<(String, Vec<String>)> {
+    let mut iter = argv.iter().cloned();
+    let cmd = iter
+        .next()
+        .context("explicit command argv is empty — provide at least one element")?;
+    let args: Vec<String> = iter.collect();
+    Ok((cmd, args))
+}
+
+/// Top-level orchestrator. Builds ONE widget; the caller iterates over all
+/// `[[widgets]]` entries and aggregates the returned `ResolvedPaths` into a
+/// single `PMCP_WIDGET_DIRS` env var (REVISION 3 HIGH-C1).
+///
+/// Pipeline:
+/// 1. `validate()` — T-79-02 mitigation (path traversal + empty argv).
+/// 2. `resolve_paths(workspace_root)` — absolute path computation.
+/// 3. `PackageManager::detect_from_dir` — lockfile-based PM detection.
+/// 4. `ensure_node_modules` — install if missing AND no Yarn-PnP marker.
+/// 5. `invoke_build_script` — the actual `npm run build` (or PM equivalent).
+/// 6. `verify_outputs_exist` — WARN if zero files in output_dir.
+///
+/// Cog ≤7 — Pattern 2 (per-stage pipeline) decomposition.
+///
+/// REVISION 3 HIGH-C1: returns `Ok(ResolvedPaths)` instead of mutating
+/// global env state. Caller (`commands/deploy/mod.rs`) joins all returned
+/// paths into `PMCP_WIDGET_DIRS` ONCE at the end.
+///
+/// # Errors
+/// Returns Err on any pipeline-stage failure (validate, install, build, or
+/// when the package.json has no `build` script unless explicitly overridden).
+pub async fn run_widget_build(
+    widget: &WidgetConfig,
+    workspace_root: &Path,
+    quiet: bool,
+) -> AnyhowResult<ResolvedPaths> {
+    widget.validate()?;
+    let resolved = widget.resolve_paths(workspace_root);
+    let pm = PackageManager::detect_from_dir(&resolved.path);
+    ensure_node_modules(pm, &resolved, widget.install.as_deref(), quiet).await?;
+    invoke_build_script(pm, &resolved, widget.build.as_deref(), quiet).await?;
+    verify_outputs_exist(&resolved, quiet);
+    Ok(resolved)
+}
+
+/// Skip if `node_modules/` exists OR Yarn-PnP markers present
+/// (Pitfall 2 + REVISION 3 Codex MEDIUM mitigations).
+///
+/// Cog ≤8.
+async fn ensure_node_modules(
+    pm: PackageManager,
+    resolved: &ResolvedPaths,
+    explicit_install: Option<&[String]>,
+    quiet: bool,
+) -> AnyhowResult<()> {
+    if resolved.path.join("node_modules").is_dir() {
+        return Ok(());
+    }
+    if is_yarn_pnp(&resolved.path) {
+        // REVISION 3 Codex MEDIUM: Yarn PnP intentionally omits node_modules.
+        // PnP resolves dependencies from .pnp.cjs at runtime — install is a
+        // no-op on the first build and would just slow us down on every run.
+        return Ok(());
+    }
+    if !quiet {
+        println!("  Installing widget dependencies...");
+    }
+    let (cmd, args) = resolve_command_argv(explicit_install, || {
+        let (c, a) = pm.install_args();
+        (c.to_string(), a.iter().map(|s| (*s).to_string()).collect())
+    })?;
+    let label = format!("widget install (`{cmd}`)");
+    spawn_streaming(&cmd, &args, &resolved.path, &label).await
+}
+
+/// Verify package.json has build script before spawning UNLESS explicit
+/// argv override is provided (REVISION 3 Codex MEDIUM: skip the package.json
+/// check when the user supplied an explicit build argv — they take
+/// responsibility for whatever invocation they configured).
+///
+/// Cog ≤8.
+async fn invoke_build_script(
+    pm: PackageManager,
+    resolved: &ResolvedPaths,
+    explicit_build: Option<&[String]>,
+    quiet: bool,
+) -> AnyhowResult<()> {
+    if explicit_build.is_none() {
+        verify_build_script_exists(&resolved.path)?;
+    }
+    if !quiet {
+        println!("  Building widget bundle...");
+    }
+    let (cmd, args) = resolve_command_argv(explicit_build, || {
+        let (c, a) = pm.build_args();
+        (c.to_string(), a.iter().map(|s| (*s).to_string()).collect())
+    })?;
+    let label = format!("widget build (`{cmd}`)");
+    spawn_streaming(&cmd, &args, &resolved.path, &label).await
+}
+
+/// Helper to pick the `(cmd, args)` tuple from EITHER an explicit argv slice
+/// OR a `PackageManager`-supplied default. Centralises the
+/// `Some -> argv_to_cmd_args` / `None -> default` branch so the two callers
+/// (`ensure_node_modules`, `invoke_build_script`) stay under cog 8 each.
+///
+/// Cog ≤3.
+fn resolve_command_argv<F>(
+    explicit: Option<&[String]>,
+    default: F,
+) -> AnyhowResult<(String, Vec<String>)>
+where
+    F: FnOnce() -> (String, Vec<String>),
+{
+    match explicit {
+        Some(argv) => argv_to_cmd_args(argv),
+        None => Ok(default()),
+    }
+}
+
+/// Shared spawn helper. stdout/stderr stream LIVE to the parent terminal —
+/// no `.stdout(Stdio::piped())` capture — so operators see the JS toolchain's
+/// progress output as it runs (REQ-79-05).
+///
+/// REVISION 3 HIGH-C1: env-var setup MOVED to caller. The orchestrator joins
+/// ALL widgets' dirs into `PMCP_WIDGET_DIRS` once at the end.
+///
+/// Cog ≤6.
+///
+/// # Errors
+/// Returns Err when:
+/// - the binary cannot be spawned (e.g., `npm` not on PATH),
+/// - the subprocess exits with a non-zero status.
+async fn spawn_streaming(cmd: &str, args: &[String], cwd: &Path, label: &str) -> AnyhowResult<()> {
+    let mut child = tokio::process::Command::new(cmd)
+        .args(args)
+        .current_dir(cwd)
+        .stdin(std::process::Stdio::null())
+        .spawn()
+        .with_context(|| {
+            format!("Failed to spawn `{cmd}`. Is `{cmd}` on PATH? See `cargo pmcp doctor`.")
+        })?;
+    let status = child
+        .wait()
+        .await
+        .with_context(|| format!("Failed to wait on `{cmd}` subprocess"))?;
+    if !status.success() {
+        bail!(
+            "{label} failed with exit code {:?} — see output above",
+            status.code()
+        );
+    }
+    Ok(())
+}
+
+/// Verify `package.json` exists and has a `scripts.build` entry.
+///
+/// REQ-79-03: error message is verbatim from `79-CONTEXT.md` "Convention
+/// search" LOCKED: `"package.json at <path> has no 'build' script — add one
+/// or configure widgets in .pmcp/deploy.toml"`.
+///
+/// Cog ≤6.
+fn verify_build_script_exists(widget_dir: &Path) -> AnyhowResult<()> {
+    let pkg_json_path = widget_dir.join("package.json");
+    let raw = std::fs::read_to_string(&pkg_json_path)
+        .with_context(|| format!("Failed to read {}", pkg_json_path.display()))?;
+    let parsed: serde_json::Value = serde_json::from_str(&raw)
+        .with_context(|| format!("Invalid JSON in {}", pkg_json_path.display()))?;
+    let has_build = parsed.get("scripts").and_then(|s| s.get("build")).is_some();
+    if !has_build {
+        bail!(
+            "package.json at {} has no 'build' script — add one or configure widgets in .pmcp/deploy.toml",
+            pkg_json_path.display()
+        );
+    }
+    Ok(())
+}
+
+/// WARN when the build emitted zero files into `output_dir` per
+/// `79-CONTEXT.md` "widget build succeeds but emits zero output files →
+/// WARN, do not fail". Likely a misconfigured build script, but may be
+/// intentional during scaffolding.
+///
+/// Infallible (returns nothing) — never aborts the deploy. Reads via
+/// `read_dir.ok()` so a missing dir is silently treated as "zero files".
+///
+/// Cog ≤4.
+fn verify_outputs_exist(resolved: &ResolvedPaths, quiet: bool) {
+    let entries: Vec<_> = std::fs::read_dir(&resolved.absolute_output_dir)
+        .ok()
+        .into_iter()
+        .flatten()
+        .flatten()
+        .collect();
+    if entries.is_empty() && !quiet {
+        eprintln!(
+            "  WARNING: widget build emitted no files into {}; verify your build script",
+            resolved.absolute_output_dir.display()
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     //! Unit tests covering `<behavior>` Tests 1.1..1.8 of Plan 79-01.
