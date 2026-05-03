@@ -75,22 +75,33 @@ fn ui_tool_result_method_re() -> &'static Regex {
 #[allow(dead_code)]
 fn app_constructor_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    // G2: mangled-id-tolerant constructor regex. Matches `new <id>(...)`
-    // where `<id>` is any short JS identifier (1-6 chars after the leading
-    // letter/_/$) paired with the unmangled `{name: "...", version: "..."}`
-    // payload. The payload is what user code controls; Vite/minifiers
-    // never rename quoted string keys or string values.
+    // G2 cycle-2 generalization (Plan 78-10): matches `new <id>({<prefix>
+    // name:<value>,<...>version:<value>...})` where:
+    //   - `<id>` is any 1-21 char JS identifier (mangled or unmangled)
+    //   - `<value>` is any expression up to 100 chars (literal string,
+    //     concatenation, function call, template literal, etc.)
+    //   - `<prefix>` is any non-`}` content up to 200 chars
     //
-    // Source: cost-coach prod feedback 2026-05-02. Concrete construction
-    // sites this matches:
+    // Real-prod motivation (cost-coach @ 29f46efd, all 6 widgets):
+    //   `new yl({name:"cost-coach-"+t,version:"1.0.0"})` — string
+    //   concatenation, NOT a literal. The cycle-1 regex required
+    //   `name:"<lit>",version:"<lit>"` and missed all 8 prod widgets per
+    //   uat-evidence/2026-05-02-cost-coach-prod-rerun.md.
+    //
+    // Bounded character classes (`{0,200}`, `{0,100}`) prevent catastrophic
+    // backtracking on adversarial input from the fuzz target's
+    // `\PC{0,4096}` alphabet.
+    //
+    // Continues to match cycle-1 unit-test positives:
     //   new yl({name:"cost-coach-cost-summary",version:"1.0.0"})
-    //   new gl({name:"cost-coach-cost-over-time",version:"1.0.0"})
-    //   new ol({name:"cost-coach-savings-summary",version:"1.0.0"})
-    //   new App({name:"...",version:"..."})  (unminified — App is a valid
-    //                                          identifier under the regex)
+    //   new App({name: "tool", version: "1.0.0"})
+    // And NOT match cycle-1 negatives:
+    //   new Date(2026,1,1)         (no `{...}` payload)
+    //   new URL("http://x")        (no object payload at all)
+    //   new Foo({foo:1, bar:2})    (no name/version keys)
     RE.get_or_init(|| {
         Regex::new(
-            r#"new [a-zA-Z_$][a-zA-Z0-9_$]{0,5}\(\s*\{\s*name\s*:\s*"[^"]+"\s*,\s*version\s*:\s*"[^"]+"\s*\}"#,
+            r"new [a-zA-Z_$][a-zA-Z0-9_$]{0,20}\(\s*\{[^}]{0,200}\bname\s*:[^,}]{0,100},\s*version\s*:",
         )
         .unwrap()
     })
@@ -207,29 +218,119 @@ pub(crate) struct WidgetSignals {
 }
 
 /// Best-effort comment stripper. Strips HTML, JS block, and JS line comments
-/// from `src` so signal regexes don't match commented-out scaffolding.
+/// from `src` while preserving comment delimiters that appear INSIDE JS
+/// string literals.
 ///
-/// REVISION HIGH-3: this is the load-bearing fix for fixture hygiene and a
-/// real correctness gap (a real widget with commented-out wiring code
-/// containing the literal `@modelcontextprotocol/ext-apps` would falsely
-/// pass under the previous regex scheme).
+/// Cycle-2 fix (Plan 78-10): the cycle-1 implementation used unconditional
+/// regex replacement, which destroyed thousands of bytes of code in
+/// cost-coach prod bundles where a JS string literal contained
+/// `"/*.example.com..."` (a CSP frame-src directive value) — the regex saw
+/// that `/*` as a block-comment opener and matched the next `*/` it found,
+/// far away. See `tests/fixtures/widgets/bundled/real-prod/CAPTURE.md` for
+/// the step-by-step probe evidence.
 ///
-/// Limitations (accepted simplification): the regexes are not string-literal
-/// aware. A `//` inside a JS string literal will be stripped along with the
-/// rest of the line. Per the threat model (T-78-COMMENT-STRIP), this is
-/// acceptable because:
-///   1. Signal detection is presence-based — over-stripping makes
-///      false-negatives more likely, never false-positives.
-///   2. False-negatives are caught by Plan 03's property test which exercises
-///      arbitrary HTML/JS via the `\PC{0,4096}` alphabet.
+/// State machine: outside-strings (`out`) → block_comment / line_comment /
+/// single_string / double_string / template_string. Inside any string state,
+/// `/*` and `//` are NOT comment delimiters and are preserved in the output.
+/// Escape sequences (`\<any>`) are consumed as a unit inside string states.
+///
+/// HTML comments are stripped by the existing `html_comment_re` regex up
+/// front (HTML comments do not appear inside JS string literals in any
+/// realistic bundle).
+///
+/// Accepted simplification: template-literal interpolations `${...}` are
+/// NOT recursively parsed — comment delimiters inside an interpolation
+/// expression are still treated as part of the template string body. Real
+/// prod bundles rarely embed signal literals inside template
+/// interpolations, and full recursive parsing would require tracking
+/// brace depth. The property test exercises arbitrary input.
 #[allow(dead_code)]
 fn strip_js_comments(src: &str) -> String {
-    // Order matters: strip HTML comments first (they may contain `//` inside).
-    // Then block comments. Then line comments (which can come from anywhere).
-    let no_html = html_comment_re().replace_all(src, "");
-    let no_block = js_block_comment_re().replace_all(&no_html, "");
-    let no_line = js_line_comment_re().replace_all(&no_block, "");
-    no_line.into_owned()
+    // Strip HTML comments first; the JS state machine then walks pure JS.
+    let after_html = html_comment_re().replace_all(src, "");
+
+    let bytes = after_html.as_bytes();
+    let mut out = String::with_capacity(bytes.len());
+    let mut i = 0;
+    let n = bytes.len();
+
+    // States:
+    //   0 = outside strings/comments
+    //   1 = inside /* ... */ block comment
+    //   2 = inside // line comment
+    //   3 = inside '...' single-quoted string
+    //   4 = inside "..." double-quoted string
+    //   5 = inside `...` template-literal string
+    let mut state: u8 = 0;
+
+    while i < n {
+        let c = bytes[i];
+        match state {
+            0 => {
+                if c == b'/' && i + 1 < n && bytes[i + 1] == b'*' {
+                    state = 1;
+                    i += 2;
+                } else if c == b'/' && i + 1 < n && bytes[i + 1] == b'/' {
+                    state = 2;
+                    i += 2;
+                } else if c == b'\'' {
+                    state = 3;
+                    out.push(c as char);
+                    i += 1;
+                } else if c == b'"' {
+                    state = 4;
+                    out.push(c as char);
+                    i += 1;
+                } else if c == b'`' {
+                    state = 5;
+                    out.push(c as char);
+                    i += 1;
+                } else {
+                    out.push(c as char);
+                    i += 1;
+                }
+            },
+            1 => {
+                if c == b'*' && i + 1 < n && bytes[i + 1] == b'/' {
+                    state = 0;
+                    i += 2;
+                } else {
+                    i += 1;
+                }
+            },
+            2 => {
+                if c == b'\n' || c == b'\r' {
+                    state = 0;
+                    out.push(c as char);
+                    i += 1;
+                } else {
+                    i += 1;
+                }
+            },
+            3..=5 => {
+                if c == b'\\' && i + 1 < n {
+                    out.push(c as char);
+                    out.push(bytes[i + 1] as char);
+                    i += 2;
+                } else {
+                    let close = match state {
+                        3 => b'\'',
+                        4 => b'"',
+                        5 => b'`',
+                        _ => unreachable!(),
+                    };
+                    if c == close {
+                        state = 0;
+                    }
+                    out.push(c as char);
+                    i += 1;
+                }
+            },
+            _ => unreachable!(),
+        }
+    }
+
+    out
 }
 
 /// Concatenate the bodies of all inline `<script>` tags except those with
@@ -1648,5 +1749,172 @@ mod tests {
                 .map(|r| (&r.name, &r.status))
                 .collect::<Vec<_>>(),
         );
+    }
+
+    // ===== Cycle 2 unit tests (Plan 78-10) =====
+    //
+    // Cycle-2 fixes the comment-stripper bug + widens G2 regex. Source:
+    // tests/fixtures/widgets/bundled/real-prod/CAPTURE.md "Root cause
+    // discovered" section.
+
+    #[test]
+    fn strip_js_comments_preserves_block_comment_inside_double_quoted_string() {
+        // The cost-coach prod bug: a CSP frame-src directive value contains
+        // `/*.example.com`. The cycle-1 stripper saw that `/*` as a
+        // block-comment opener and matched the next `*/` (a license-header
+        // banner thousands of bytes later), destroying the SDK section
+        // between.
+        let src = r#"var csp = "frame-src /*.example.com"; var i = "[ext-apps] App.connect() failed"; /* license */ var x = 1;"#;
+        let stripped = strip_js_comments(src);
+        assert!(
+            stripped.contains("[ext-apps]"),
+            "SDK literal must be preserved when /* appears inside a string literal; got: {stripped}",
+        );
+        assert!(
+            stripped.contains("/*.example.com"),
+            "CSP string content must be preserved; got: {stripped}",
+        );
+        assert!(
+            !stripped.contains("license"),
+            "Real block comments outside strings MUST still be stripped; got: {stripped}",
+        );
+    }
+
+    #[test]
+    fn strip_js_comments_preserves_block_comment_inside_single_quoted_string() {
+        let src = "var csp = 'frame-src /*.example.com'; /* real */ var x = 1;";
+        let stripped = strip_js_comments(src);
+        assert!(stripped.contains("/*.example.com"));
+        assert!(!stripped.contains("real"));
+    }
+
+    #[test]
+    fn strip_js_comments_preserves_line_comment_marker_inside_string() {
+        let src = "var url = \"https://example.com/path\"; // real comment\nvar keep = 1;";
+        let stripped = strip_js_comments(src);
+        assert!(
+            stripped.contains("https://example.com/path"),
+            "URL string with // must be preserved; got: {stripped}",
+        );
+        assert!(
+            !stripped.contains("real comment"),
+            "Real // line comment outside strings MUST still be stripped; got: {stripped}",
+        );
+        assert!(stripped.contains("var keep = 1"));
+    }
+
+    #[test]
+    fn strip_js_comments_still_strips_real_block_comments_outside_strings() {
+        let src = "var x = 1; /* this is a comment */ var y = 2;";
+        let stripped = strip_js_comments(src);
+        assert!(!stripped.contains("this is a comment"));
+        assert!(stripped.contains("var x = 1"));
+        assert!(stripped.contains("var y = 2"));
+    }
+
+    #[test]
+    fn strip_js_comments_still_strips_real_line_comments_outside_strings() {
+        let src = "var x = 1; // line comment\nvar y = 2;";
+        let stripped = strip_js_comments(src);
+        assert!(!stripped.contains("line comment"));
+        assert!(stripped.contains("var x = 1"));
+        assert!(stripped.contains("var y = 2"));
+    }
+
+    #[test]
+    fn strip_js_comments_handles_escaped_string_delimiters() {
+        // \" inside a "..." string must not exit the string state.
+        let src = r#"var s = "He said \"hi\" /* not a comment */"; var z = 1;"#;
+        let stripped = strip_js_comments(src);
+        assert!(
+            stripped.contains("not a comment"),
+            "Block-comment-style text inside a string with escaped quotes must be preserved; got: {stripped}",
+        );
+        assert!(stripped.contains("var z = 1"));
+    }
+
+    #[test]
+    fn strip_js_comments_handles_template_literal() {
+        let src = r#"var t = `template /* not a comment */`; /* real */ var x = 1;"#;
+        let stripped = strip_js_comments(src);
+        assert!(stripped.contains("not a comment"));
+        assert!(!stripped.contains("real"));
+    }
+
+    #[test]
+    fn scan_widget_g2_cycle2_string_concat_name_value_matches() {
+        // Real cost-coach prod constructor shape — name uses string
+        // concatenation: `name:"cost-coach-"+t,version:"1.0.0"`. The
+        // cycle-1 regex required a literal value; cycle-2 widening
+        // accepts any expression up to 100 chars.
+        let html = r#"<script>function f(t){var i=new yl({name:"cost-coach-"+t,version:"1.0.0"});}</script>"#;
+        let signals = scan_widget(html);
+        assert!(
+            signals.has_app_constructor,
+            "G2 cycle-2: must match new <id>({{name:<concat-expr>, version:<expr>}}); signals: {signals:?}",
+        );
+    }
+
+    #[test]
+    fn scan_widget_g2_cycle2_longer_mangled_id_matches() {
+        // Some bundles emit 3-4-or-longer mangled identifiers. Cycle-1
+        // capped at {0,5}; cycle-2 widens to {0,20}.
+        let html = r#"<script>var i=new abcdefg({name:"x",version:"1"});</script>"#;
+        let signals = scan_widget(html);
+        assert!(signals.has_app_constructor);
+    }
+
+    #[test]
+    fn scan_widget_g2_cycle2_random_new_call_with_unrelated_keys_does_not_match() {
+        // Negative: `new Foo({key1, key2})` must NOT match — needs both
+        // `name` AND `version`.
+        let html = r#"<script>var i=new Date({year:2026,month:1});</script>"#;
+        let signals = scan_widget(html);
+        assert!(
+            !signals.has_app_constructor,
+            "G2 cycle-2: must NOT match new Date(...) without name/version keys; signals: {signals:?}",
+        );
+    }
+
+    #[test]
+    fn scan_widget_g2_cycle2_real_cost_coach_prod_pattern() {
+        // Verbatim shape from cost-coach prod (cost-summary.html, function Rw).
+        let html = r#"<script>function Rw(t,e){var i=new yl({name:"cost-coach-"+t,version:"1.0.0"});return i.connect(),i;}</script>"#;
+        let signals = scan_widget(html);
+        assert!(
+            signals.has_app_constructor,
+            "G2 cycle-2: real prod shape; signals: {signals:?}",
+        );
+    }
+
+    #[test]
+    fn scan_widget_g1_cycle2_csp_string_does_not_steal_sdk_section() {
+        // Regression for the cost-coach prod root cause: a `/*` inside a
+        // string literal must not strip away the SDK section that
+        // follows. With the cycle-1 stripper, the `/*.example.com` CSP
+        // string opened a phantom block comment that matched the next
+        // `*/` (a real license-header banner), destroying the entire
+        // SDK runtime between. Cycle-2's string-literal-aware stripper
+        // preserves the SDK section.
+        let html = concat!(
+            r##"<script>var csp = "frame-src /*.example.com"; "##,
+            r##"var msg = "[ext-apps] App.connect() called before connect"; "##,
+            r##"function f(t){var i=new yl({name:"cost-coach-"+t,version:"1.0.0"}); "##,
+            r##"i.onteardown = function(){}; "##,
+            r##"i.ontoolinput = function(){}; "##,
+            r##"i.ontoolcancelled = function(){}; "##,
+            r##"i.onerror = function(){}; "##,
+            r##"i.connect();} "##,
+            r##"/* @license real banner */ var x = 1;</script>"##,
+        );
+        let signals = scan_widget(html);
+        assert!(
+            signals.has_log_prefix,
+            "G1 cycle-2: [ext-apps] preserved through string-literal-aware stripping; signals: {signals:?}",
+        );
+        assert!(signals.has_sdk);
+        assert!(signals.has_app_constructor);
+        assert!(signals.has_handlers);
+        assert!(signals.has_connect);
     }
 }
