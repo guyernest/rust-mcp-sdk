@@ -8,6 +8,7 @@ pub mod outputs;
 pub mod registry;
 pub mod targets;
 pub mod r#trait;
+pub mod widgets;
 
 pub use builder::BinaryBuilder;
 pub use config::DeployConfig;
@@ -17,3 +18,4 @@ pub use operations::OperationStatus;
 pub use outputs::load_cdk_outputs;
 pub use r#trait::{DeploymentOutputs, SecretsAction};
 pub use registry::TargetRegistry;
+pub use widgets::{PackageManager, ResolvedPaths, WidgetConfig, WidgetsConfig};
