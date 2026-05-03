@@ -197,7 +197,11 @@ enum Commands {
         auth_flags: AuthFlags,
     },
 
-    /// Deploy MCP server to cloud platforms
+    /// Deploy MCP server to cloud platforms.
+    ///
+    /// Builds widgets (auto-detected from widget/ or widgets/) before compiling
+    /// and deploying the Rust binary. Verifies the deployed endpoint via
+    /// cargo pmcp test {check,conformance,apps} before reporting success.
     ///
     /// Deploy to AWS Lambda, Azure Container Apps, Google Cloud Run, etc.
     Deploy(commands::deploy::DeployCommand),

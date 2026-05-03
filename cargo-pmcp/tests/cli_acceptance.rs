@@ -144,3 +144,85 @@ fn cli_acceptance_chatgpt_mode_passes_both_and_no_handler_messages() {
         }
     }
 }
+
+// ============================================================================
+// Phase 79 Plan 79-04 — REQ-79-18 (verbatim help text) + REVISION 3 HIGH-G2
+// (clap-level rollback rejection) acceptance tests.
+// ============================================================================
+
+/// Test 1.6 — `cargo-pmcp deploy --help` text contains the verbatim phrase
+/// from CONTEXT.md REQ-79-18: widgets pre-build mention AND verification
+/// suite mention. Locks against accidental rewording in future doc updates.
+#[test]
+fn deploy_help_mentions_widgets_verbatim() {
+    let output = Command::cargo_bin("cargo-pmcp")
+        .expect("cargo-pmcp binary must be available")
+        .args(["deploy", "--help"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let combined = format!("{stdout}{stderr}");
+    assert!(
+        combined.contains(
+            "Builds widgets (auto-detected from widget/ or widgets/) before \
+             compiling and deploying the Rust binary."
+        ),
+        "REQ-79-18: --help text missing widgets mention. Got:\n{combined}"
+    );
+    assert!(
+        combined.contains(
+            "Verifies the deployed endpoint via cargo pmcp test \
+             {check,conformance,apps} before reporting success."
+        ),
+        "REQ-79-18: --help text missing verification mention. Got:\n{combined}"
+    );
+}
+
+/// Test 2.6 — REVISION 3 HIGH-G2: clap REJECTS `--on-test-failure=rollback` at
+/// parse time. Stderr carries the verbatim `ROLLBACK_REJECT_MESSAGE`
+/// substring `not yet implemented`. Locks the integration-level contract.
+#[test]
+fn deploy_on_test_failure_rollback_hard_rejected() {
+    let output = Command::cargo_bin("cargo-pmcp")
+        .expect("cargo-pmcp binary must be available")
+        .args(["deploy", "--on-test-failure=rollback"])
+        .output()
+        .unwrap();
+    assert!(
+        !output.status.success(),
+        "REVISION 3 HIGH-G2: --on-test-failure=rollback must be rejected at parse time"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("not yet implemented"),
+        "REVISION 3 HIGH-G2: stderr should carry ROLLBACK_REJECT_MESSAGE. Got:\n{stderr}"
+    );
+}
+
+/// Test 1.7 — REVISION 3 Codex MEDIUM: `cargo pmcp app new <name>
+/// --embed-widgets` parses without error. We can't `app new` against the real
+/// filesystem without polluting cwd, so we drive `--help` to confirm clap
+/// recognises the flag.
+#[test]
+fn app_new_embed_widgets_flag_parses() {
+    let output = Command::cargo_bin("cargo-pmcp")
+        .expect("cargo-pmcp binary must be available")
+        .args(["app", "new", "--help"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "`cargo pmcp app new --help` must succeed; got status {:?}",
+        output.status
+    );
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        combined.contains("--embed-widgets"),
+        "REVISION 3 Codex MEDIUM: `app new --help` must list --embed-widgets. Got:\n{combined}"
+    );
+}
