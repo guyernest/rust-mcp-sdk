@@ -1,17 +1,18 @@
 ---
-status: re-verify
+status: complete
 phase: 78-cargo-pmcp-test-apps-mode-claude-desktop-detect-missing-mcp-
 source: [78-VERIFICATION.md, 78-05-PLAN.md, 78-06-PLAN.md, 78-07-PLAN.md, 78-09-PLAN.md, 78-10-PLAN.md]
 started: 2026-05-02T00:00:00Z
-updated: 2026-05-02T20:30:00Z
+updated: 2026-05-02T22:00:00Z
 gap_closure_landed: 2026-05-02
 cycle_2_landed: 2026-05-02
-gap_closure_validated: false
+gap_closure_validated: true
+validated: 2026-05-02
 ---
 
 ## Current Test
 
-[awaiting human re-verification post Plan 78-09/10/11 cycle-2 gap closure]
+[complete — Test 6 passed against cost-coach prod 2026-05-02; Phase 78 ready for /gsd-verify-work]
 
 ## Tests
 
@@ -22,24 +23,24 @@ Why this is testable without a fixture binary: Plan 78-07 added `--widgets-dir`,
 
 Cycle-2 note: this test is unchanged from cycle 1 — Plan 10's regex generalization makes the comment-stripper string-literal aware and widens the constructor regex, but does NOT make broken widgets pass. The synthetic broken fixture remains broken.
 
-result: [pending]
+result: [pass]
 
 ### 2. AC-78-2 at CLI binary boundary — corrected widget passes claude-desktop mode
 expected: Run the same `--widgets-dir` command against a directory containing `crates/mcp-tester/tests/fixtures/widgets/corrected_minimal.html`. Process exits zero.
 
 Cycle-2 note: cycle-1 corrected fixture continues to pass. Plan 10's broader regex doesn't reject the unminified `App` constructor + import literal that the corrected fixture uses.
 
-result: [pending]
+result: [pass]
 
 ### 3. AC-78-3 at CLI binary boundary — Standard mode is permissive
 expected: Run `cargo pmcp test apps --widgets-dir <path>` (no `--mode` flag) against BOTH the broken and corrected widgets. Both invocations exit zero — no regression for the permissive default.
 
-result: [pending]
+result: [pass]
 
 ### 4. AC-78-4 at CLI binary boundary — chatgpt mode is unchanged
 expected: Run `cargo pmcp test apps --mode chatgpt --widgets-dir <path>` against both fixtures. Both exit zero AND stderr/stdout MUST NOT contain any of the four protocol handler names — chatgpt mode is a no-op for widget validation.
 
-result: [pending]
+result: [pass]
 
 ### 5. AC-78-5 — UX review of READMEs and `--help` text
 expected: Visual review of `cargo pmcp test apps --help` and both READMEs (`cargo-pmcp/README.md`, `crates/mcp-tester/README.md`). Reader can answer:
@@ -48,7 +49,7 @@ expected: Visual review of `cargo pmcp test apps --help` and both READMEs (`carg
 
 Both questions answerable from the docs alone.
 
-result: [pending]
+result: [pass]
 
 ### 6. Re-verify against cost-coach prod (the cycle-2 binding proof)
 expected: Run
@@ -60,7 +61,7 @@ cargo run -p cargo-pmcp -- test apps --mode claude-desktop https://cost-coach.us
 Expected outcome (cycle-2 acceptance bar):
 - Process exits **zero**.
 - Output reports **zero Failed rows on the 8 production widgets**.
-- Compare to cycle-1 result captured in `uat-evidence/2026-05-02-cost-coach-prod-rerun.md` (97 tests, 60 passed, **33 failed**, 4 warnings — all 33 confirmed false positives). Post-cycle-2 expected: 97 tests, ≥97-(soft-warning-count) passed, **0 failed**, 0 unwarranted warnings (the 4 warnings from cycle 1 may persist if they're genuinely WARN-tier signals like missing `ontoolresult` — those are soft and do NOT block acceptance).
+- Compare to cycle-1 result captured in `uat-evidence/2026-05-02-cost-coach-prod-rerun.md` (97 tests, 60 passed, **33 failed**, 4 warnings — all 33 confirmed false positives). Post-cycle-2 result: **96 tests, 96 passed, 0 failed, 0 warnings**. See `uat-evidence/2026-05-02-cost-coach-prod-cycle2-rerun.md` for the full evidence file.
 
 Optional supplemental run (offline-fallback / drift-check):
 
@@ -86,14 +87,14 @@ On fail:
 - Add a Gap entry below documenting the new failure mode.
 - DO NOT flip `gap_closure_validated` — it stays `false` until cycle 3 closes the residual gap.
 
-result: [pending]
+result: [pass]
 
 ## Summary
 
 total: 6
-passed: 0
+passed: 6
 issues: 0
-pending: 6
+pending: 0
 skipped: 0
 blocked: 0
 
@@ -119,8 +120,10 @@ Post-cycle-2 expected: 8 cost-coach prod widgets produce zero Failed rows.
 (No new gaps unless Test 6 fails. The cycle-1 G6 entry below is preserved for history.)
 
 ### G6 — Plan 05/06 fix did not generalize to real cost-coach prod bundles (CLOSED by cycle 2)
-- **Date:** 2026-05-02
+- **Date:** 2026-05-02 (opened) / 2026-05-02 (closed)
 - **Source:** Test 6 operator re-verification against `https://cost-coach.us-west.pmcp.run/mcp`
-- **Evidence:** `uat-evidence/2026-05-02-cost-coach-prod-rerun.md` (97 tests, 60 passed, 33 failed, 4 warnings)
-- **Cycle-2 closure:** Plans 78-09/10/11. Plan 09 captured the actual prod bytes; library-level probe revealed the comment-stripper as the load-bearing root cause; Plan 10 replaced the stripper with a string-literal aware state machine + widened the G2 regex; Plan 11 wires the binding proof. Validation: this UAT's Test 6 re-run.
-- **Status:** closing — pending Test 6 confirmation by operator.
+- **Evidence (cycle-1):** `uat-evidence/2026-05-02-cost-coach-prod-rerun.md` (97 tests, 60 passed, 33 failed, 4 warnings — all confirmed false positives)
+- **Evidence (cycle-2 closure):** `uat-evidence/2026-05-02-cost-coach-prod-cycle2-rerun.md` (96 tests, 96 passed, 0 failed, 0 warnings — Status PASSED)
+- **Cycle-2 closure:** Plans 78-09/10/11. Plan 09 captured the actual prod bytes; library-level probe revealed the comment-stripper as the load-bearing root cause (a JS string `"/*.example.com..."` opened a phantom block comment that destroyed ~21 KB of SDK code in cost-over-time and savings-summary); Plan 10 replaced the stripper with a string-literal aware state machine + widened the G2 regex; Plan 11 wired the binding proof.
+- **Cross-server validation:** A second independent server (Scientific Calculator MCP App) was tested in parallel. Pre-migration: 48 Failed rows (real — widget didn't use the SDK). The team adopted the SDK using `MIGRATION-CALCULATOR-TO-MCP-APPS-SDK.md` and the post-migration run also passed. See `uat-evidence/2026-05-02-scientific-calculator-cycle2-rerun.md`.
+- **Status:** **closed** (cycle-2 Test 6 PASSED 2026-05-02)
