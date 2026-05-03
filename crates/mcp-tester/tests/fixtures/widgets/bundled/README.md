@@ -38,3 +38,19 @@ version}` payload, member-name handler assignments, `[ext-apps]` log
 prefix, JSON-RPC method strings) without the noise. If a future false
 positive class shows up that requires the actual bytes, capture from
 cost-coach prod into a new fixture and add a row to the table above.
+
+## Cycle 2 update — real-prod fixtures live in `real-prod/`
+
+Cycle 1 (Plans 78-05/06/07/08) validated against the synthetic fixtures
+above and shipped Plan 78-06's G1+G2+G3 fix. The 2026-05-02 cost-coach
+prod re-run reported 33 Failed rows — the synthetic shapes did not
+generalize. Cycle 2 (Plans 78-09/10/11) ADDS `real-prod/` with bytes
+captured from a local cost-coach checkout (`~/projects/mcp/cost-coach/widget/dist/`
+at commit `29f46efd`). See `real-prod/README.md` and `real-prod/CAPTURE.md`
+for capture provenance.
+
+The cycle-1 synthetic fixtures in this directory are PRESERVED untouched
+— they document what the team thought prod looked like, and the
+integration test `app_validator_widgets_bundled.rs` continues to assert
+against them. Plan 78-10 must not regress those tests when generalizing
+the regexes.
