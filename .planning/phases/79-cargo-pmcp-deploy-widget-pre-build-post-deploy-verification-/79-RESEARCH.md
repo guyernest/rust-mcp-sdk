@@ -690,31 +690,38 @@ fn check_widget_rerun_if_changed(quiet: bool) -> u32 {
 
 ---
 
-## Open Questions
+## Open Questions (RESOLVED)
+
+All five open questions resolved at planning time and locked in `79-00-PLAN.md` `<locked_planner_decisions>`. Inline cross-references below.
 
 1. **Subprocess re-spawn argv shape (A8): does `cargo pmcp test ...` work as direct invocation?**
    - What we know: `current_exe()` returns the cargo-pmcp binary path. Invoking it as `<path> test conformance <URL>` should work.
    - What's unclear: cargo-pmcp's main.rs may dispatch differently when invoked as `cargo-pmcp` (with hyphen) vs. via `cargo pmcp ...` (cargo subcommand).
    - Recommendation: plan task verifies via `<binary> --help` at the start of post-deploy verifier work; adjust `Command::new(current_exe()).arg(...)` accordingly.
+   - **RESOLVED:** master plan locked decision **#1** — verified 2026-05-03 against `cargo-pmcp test {check, conformance, apps} --help`; argv shape locked; uniform subprocess via `current_exe()`.
 
 2. **Per-target env-var inheritance (A4): does `PMCP_WIDGET_DIR` reach `cargo build` invoked by Node.js CDK in pmcp-run?**
    - What we know: CDK uses `child_process.spawn("cargo", ...)` internally; node child processes inherit parent env by default.
    - What's unclear: if the CDK process is itself spawned with a sanitized env, the var won't propagate.
    - Recommendation: plan adds a smoke test for cost-coach. Empirically the existing IAM Phase 76 path-passes env vars through (CDK reads `PMCP_ORGANIZATION_ID`/`PMCP_SERVER_ID` per init.rs:592); the same mechanism applies to `PMCP_WIDGET_DIR`.
+   - **RESOLVED:** master plan locked decision **#2** — set `PMCP_WIDGET_DIR` ONCE in orchestrator before `target.build`; 79-02 ships an integration test that asserts the env var reaches a child `cargo build` invocation.
 
 3. **Hybrid in-process/subprocess for `check`?**
    - The connectivity probe is the cheapest step (~200ms for a real Lambda HTTP roundtrip). In-process via `mcp_tester::ServerTester::run_quick_test()` saves ~100ms vs. subprocess.
    - Conformance and apps are more expensive (5-10s) — subprocess overhead is rounding error.
    - Recommendation: plan-time decision. Pure subprocess is simpler; hybrid saves 100ms but doubles the abstraction.
+   - **RESOLVED:** master plan locked decision **#3** — uniform subprocess for all three (`check`, `conformance`, `apps`); ~100ms saved by in-process check does not justify maintaining two abstractions.
 
 4. **Should `--no-post-deploy-test` skip warmup grace as well?**
    - The 2000ms warmup is part of the verify lifecycle; if the user opts out of post-deploy tests, the warmup serves no purpose.
    - Recommendation: skip warmup when `--no-post-deploy-test` is set. (Side benefit: removes 2s from the no-test-deploy path.)
+   - **RESOLVED:** master plan locked decision **#4** — yes; `enabled = false` short-circuits both warmup AND test invocations; 79-03 Task 2 implementation matches.
 
 5. **Where should the runnable example demonstrate?**
    - cost-coach is a real fixture but is in a different repo (`/Users/guy/projects/mcp/cost-coach`).
    - A self-contained example needs a mock target (no real Lambda).
    - Recommendation: example shows `[[widgets]]` config wiring + the widget pre-build orchestrator in isolation against a tempdir + a fake `package.json` with a no-op build script. Don't try to demo full deploy. (This matches Phase 77's `multi_target_monorepo.rs` example which uses schema-direct setup.)
+   - **RESOLVED:** master plan locked decision **#5** — `cargo-pmcp/examples/widget_prebuild_demo.rs` (NOT `deploy_with_widgets.rs`); schema-direct demo against tempdir.
 
 ---
 

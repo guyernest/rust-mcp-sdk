@@ -110,7 +110,7 @@ This phase closes A + B (extend deploy to build widgets and force cache invalida
 - Whether to reuse `cargo-pmcp/src/commands/test/{check,conformance,apps}.rs` `execute()` functions directly via Rust call OR shell out to the CLI subcommand. Direct Rust call preferred (no fork+auth roundtrip), but if the public API isn't reusable as a library, document the gap and either refactor or shell out.
 - Default value tuning for `warmup_grace_ms` and per-test `timeout_seconds` (proposal suggests 2000 / 60 — planner can adjust based on observed Lambda cold-start latencies in cost-coach).
 - Test-side coverage strategy: how many unit tests for path resolution + lockfile detection + config parsing, integration tests for the orchestration end-to-end, and what to mock vs. exercise via a real cargo-pmcp test fixture.
-- Whether to land v1+v2 as one phase (build half) and v3 as a separate later phase, OR ship all three in this phase. **Default to all-three-in-this-phase** unless the planner finds the dependency on Phase 78 (claude-desktop strict mode) is not yet executable, in which case v3 is a follow-on. Note: Phase 78 is NOT yet planned/executed — planner should assume v3 work cannot be EXECUTED until Phase 78 lands but CAN be PLANNED in this phase.
+- Whether to land v1+v2 as one phase (build half) and v3 as a separate later phase, OR ship all three in this phase. **LOCKED to all-three-in-this-phase.** Phase 78 (`AppValidationMode::ClaudeDesktop` real strict mode) shipped 2026-05-02 (commit `ba694e43`, verified at `crates/mcp-tester/src/app_validator.rs:401-421` with per-signal Failed-row emission and 4 unit tests). v3 is not blocked. (Earlier draft of this doc said Phase 78 was unplanned — corrected per 79-RESEARCH.md finding #1.)
 
 </decisions>
 
