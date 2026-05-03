@@ -180,6 +180,31 @@ If your widget bundle is produced by Vite singlefile in production, the validato
 
 > Note: The legacy widget examples under `examples/mcp-apps-chess/`, `examples/mcp-apps-dataviz/`, and `examples/mcp-apps-map/` use the older postMessage channel and will fail `--mode claude-desktop`. For a Claude-Desktop-ready widget, see `crates/mcp-tester/examples/validate_widget_pair.rs` and the corrected fixture at `crates/mcp-tester/tests/fixtures/widgets/corrected_minimal.html`.
 
+### Source-scan mode: `--widgets-dir <path>`
+
+Two scan surfaces are supported:
+
+| Scan mode | When to use | What it scans |
+|-----------|-------------|---------------|
+| **Bundle scan** (default) | CI against a deployed server | Each widget HTML body fetched via `resources/read` |
+| **Source scan** (`--widgets-dir <path>`) | Local pre-deploy validation | `<path>/*.html` source files on disk |
+
+**Why both:** Bundle scan validates what the server actually serves to clients (the post-Vite-singlefile bytes). Source scan is faster and higher-confidence pre-deploy because source files have unmangled identifiers and intact import statements — minifiers cannot defeat patterns that match against the unminified `import { App } from '@modelcontextprotocol/ext-apps'`.
+
+The validator's regex set is minification-resistant in both modes (see [Plan 78-06 — gap closure for cost-coach minified-bundle false positives](.planning/phases/78-cargo-pmcp-test-apps-mode-claude-desktop-detect-missing-mcp-/78-06-PLAN.md)). The four SDK-presence signals — `[ext-apps]` log prefix, `ui/initialize` method literal, `ui/notifications/tool-result` method literal, and the legacy `@modelcontextprotocol/ext-apps` import literal — survive Vite singlefile minification because they are protocol-level strings the SDK exposes by name.
+
+Example:
+
+```bash
+# Source-scan local widget files (pre-deploy)
+cargo pmcp test apps --mode claude-desktop --widgets-dir ./widget "http://informational"
+
+# Bundle-scan against a deployed server (CI)
+cargo pmcp test apps --mode claude-desktop https://my-server.example.com/mcp
+```
+
+Same validator, same verdict shape, two ingestion paths.
+
 ## Global Flags
 
 | Flag | Short | Description |
