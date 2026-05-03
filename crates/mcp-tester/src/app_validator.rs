@@ -199,6 +199,10 @@ pub(crate) struct WidgetSignals {
     /// `ontoolresult` is NOT in this vec — it's a separate field for the
     /// WARN-tier check.
     handlers_present: Vec<&'static str>,
+    /// G3: derived — `true` when any handler member-assignment matched (i.e.
+    /// `!handlers_present.is_empty()`). Computed in `scan_widget` from the
+    /// independent member-name regexes; INDEPENDENT of `has_sdk`.
+    has_handlers: bool,
     has_ontoolresult: bool,
 }
 
@@ -275,6 +279,7 @@ fn scan_widget(html: &str) -> WidgetSignals {
     let has_method_tool_result = ui_tool_result_method_re().is_match(&scripts);
     let has_sdk =
         has_ext_apps_import || has_log_prefix || has_method_initialize || has_method_tool_result;
+    let has_handlers = !handlers_present.is_empty();
     WidgetSignals {
         has_ext_apps_import,
         has_log_prefix,
@@ -285,6 +290,7 @@ fn scan_widget(html: &str) -> WidgetSignals {
         has_connect: connect_call_re().is_match(&scripts),
         has_chatgpt_only_channels: chatgpt_only_channels_re().is_match(&scripts),
         handlers_present,
+        has_handlers,
         has_ontoolresult: handler_ontoolresult_re().is_match(&scripts),
     }
 }
@@ -1286,6 +1292,59 @@ mod tests {
             !s.has_app_constructor,
             "G2: random `new <X>(...)` calls without {{name, version}} payload must NOT match"
         );
+    }
+
+    // ==========================================================================
+    // Plan 78-06 Task 2 — G3 cascade-elimination unit tests
+    // ==========================================================================
+
+    #[test]
+    fn scan_widget_g3_handlers_detected_independently_of_has_sdk() {
+        // The synthetic cascade fixture shape: handlers + connect present,
+        // ALL SDK signals absent.
+        let html = r#"<html><body><script>
+            var obj={};
+            obj.onteardown=async()=>({});
+            obj.ontoolinput=function(p){};
+            obj.ontoolcancelled=function(p){};
+            obj.onerror=function(e){};
+            obj.connect();
+        </script></body></html>"#;
+        let s = scan_widget(html);
+        assert!(!s.has_sdk, "G3: no SDK signals → has_sdk false");
+        assert!(
+            !s.has_app_constructor,
+            "G3: no constructor → has_app_constructor false"
+        );
+        assert!(
+            s.has_handlers,
+            "G3: handlers detected independently of has_sdk"
+        );
+        assert!(
+            s.has_connect,
+            "G3: connect detected independently of has_sdk"
+        );
+        assert_eq!(
+            s.handlers_present.len(),
+            4,
+            "G3: all 4 handlers detected by member-name regex"
+        );
+    }
+
+    #[test]
+    fn scan_widget_g3_chatgpt_only_diagnosis_requires_genuine_evidence_absence() {
+        // chatgpt-only channels + no SDK + no handlers → chatgpt-only-failed fires.
+        let html_a = r#"<html><body><script>window.openai.x();</script></body></html>"#;
+        let s_a = scan_widget(html_a);
+        assert!(s_a.has_chatgpt_only_channels);
+        assert!(!s_a.has_sdk);
+        assert!(s_a.handlers_present.is_empty());
+        // chatgpt-only channels + has_sdk → chatgpt-only-failed must NOT fire
+        // (this is what the compound predicate in emit_results_for_claude_desktop guards).
+        let html_b = r#"<html><body><script>console.log("[ext-apps]");window.openai.x();</script></body></html>"#;
+        let s_b = scan_widget(html_b);
+        assert!(s_b.has_chatgpt_only_channels);
+        assert!(s_b.has_sdk);
     }
 
     // ==========================================================================
