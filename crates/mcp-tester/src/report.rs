@@ -149,7 +149,7 @@ impl TestResult {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TestReport {
     pub tests: Vec<TestResult>,
     pub duration: Duration,
@@ -157,7 +157,7 @@ pub struct TestReport {
     pub summary: TestSummary,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TestSummary {
     pub total: usize,
     pub passed: usize,
