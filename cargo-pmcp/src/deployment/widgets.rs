@@ -32,17 +32,20 @@ use std::path::{Path, PathBuf};
 
 /// Top-level container for `[[widgets]]` entries in `.pmcp/deploy.toml`.
 ///
+/// `#[serde(transparent)]` means `WidgetsConfig` deserialises directly from a
+/// TOML sequence — so `DeployConfig.widgets: WidgetsConfig` reads the
+/// top-level `[[widgets]]` array-of-tables (operator-friendly shape), NOT a
+/// nested `[widgets] widgets = [...]` map.
+///
 /// Empty by default — [`Self::is_empty`] powers the
 /// `#[serde(skip_serializing_if)]` guard on `DeployConfig::widgets` to preserve
 /// byte-identity round-trip for files lacking any `[[widgets]]` block (Phase 76
 /// `IamConfig` D-05 contract).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(transparent)]
 pub struct WidgetsConfig {
-    /// One entry per `[[widgets]]` block. The `rename = "widgets"` collapses the
-    /// container into the same TOML key the operator wrote (`[[widgets]]`),
-    /// so the on-disk schema reads as a flat array of tables, not a nested
-    /// `[widgets].widgets = [...]` structure.
-    #[serde(default, rename = "widgets")]
+    /// One entry per `[[widgets]]` block. The `transparent` derive collapses
+    /// this newtype into a plain TOML sequence at the wire layer.
     pub widgets: Vec<WidgetConfig>,
 }
 
@@ -225,33 +228,44 @@ impl PackageManager {
 #[cfg(test)]
 mod tests {
     //! Unit tests covering `<behavior>` Tests 1.1..1.8 of Plan 79-01.
+    //!
+    //! Many tests parse via a local `Wrapper { widgets: WidgetsConfig }` so
+    //! the schema mirrors the production shape on `DeployConfig.widgets`. The
+    //! `WidgetsConfig` newtype is `#[serde(transparent)]` over a sequence,
+    //! so it cannot deserialize from an empty TOML document directly — only
+    //! through a parent struct that supplies the `widgets` key.
     use super::*;
 
+    #[derive(Debug, serde::Serialize, serde::Deserialize, Default)]
+    struct Wrapper {
+        #[serde(default)]
+        widgets: WidgetsConfig,
+    }
+
     /// Test 1.1 (round_trip_no_widgets_byte_identical): default `WidgetsConfig`
-    /// reports empty AND a manually-deserialized empty container also reports
-    /// empty. The serialized form of an empty `WidgetsConfig` round-trips
-    /// losslessly to another empty `WidgetsConfig` (the byte-identity guarantee
-    /// at the `DeployConfig` level is exercised separately in
-    /// `tests/widgets_config.rs` via the `skip_serializing_if =
-    /// "WidgetsConfig::is_empty"` guard on `DeployConfig::widgets`).
+    /// reports empty AND a manually-deserialized empty wrapper also reports
+    /// empty. The serialized form of an empty wrapper round-trips losslessly
+    /// (the byte-identity guarantee at the `DeployConfig` level is exercised
+    /// separately in `tests/widgets_config.rs` via the
+    /// `skip_serializing_if = "WidgetsConfig::is_empty"` guard on
+    /// `DeployConfig::widgets`).
     #[test]
     fn round_trip_no_widgets_byte_identical() {
         let cfg = WidgetsConfig::default();
         assert!(cfg.is_empty(), "default WidgetsConfig must be empty");
 
-        let parsed: WidgetsConfig = toml::from_str("").expect("empty TOML parses");
+        let parsed: Wrapper = toml::from_str("").expect("empty TOML parses");
         assert!(
-            parsed.is_empty(),
+            parsed.widgets.is_empty(),
             "empty TOML must produce empty WidgetsConfig"
         );
 
         // Round-trip serialise → re-parse → still empty.
-        let serialized = toml::to_string(&cfg).expect("serializes");
-        let reparsed: WidgetsConfig =
-            toml::from_str(&serialized).expect("serialized empty re-parses");
+        let serialized = toml::to_string(&parsed).expect("serializes");
+        let reparsed: Wrapper = toml::from_str(&serialized).expect("serialized empty re-parses");
         assert!(
-            reparsed.is_empty(),
-            "empty WidgetsConfig must round-trip to empty — got serialized:\n{serialized}"
+            reparsed.widgets.is_empty(),
+            "empty wrapper must round-trip to empty — got serialized:\n{serialized}"
         );
     }
 
@@ -266,9 +280,9 @@ mod tests {
 path = "widget"
 embedded_in_crates = ["cost-coach-lambda"]
 "#;
-        let parsed: WidgetsConfig = toml::from_str(toml_str).expect("parses");
-        assert_eq!(parsed.widgets.len(), 1);
-        let w = &parsed.widgets[0];
+        let parsed: Wrapper = toml::from_str(toml_str).expect("parses");
+        assert_eq!(parsed.widgets.widgets.len(), 1);
+        let w = &parsed.widgets.widgets[0];
         assert_eq!(w.path, "widget");
         assert_eq!(w.embedded_in_crates, vec!["cost-coach-lambda".to_string()]);
         assert_eq!(w.output_dir, "dist");
@@ -417,9 +431,9 @@ build = ["npm", "run", "--silent", "build"]
 install = ["pnpm", "install", "--frozen-lockfile"]
 embedded_in_crates = ["my-crate"]
 "#;
-        let parsed: WidgetsConfig = toml::from_str(toml_str).expect("parses");
-        assert_eq!(parsed.widgets.len(), 1);
-        let w = &parsed.widgets[0];
+        let parsed: Wrapper = toml::from_str(toml_str).expect("parses");
+        assert_eq!(parsed.widgets.widgets.len(), 1);
+        let w = &parsed.widgets.widgets[0];
         assert_eq!(
             w.build,
             Some(vec![
@@ -440,9 +454,9 @@ embedded_in_crates = ["my-crate"]
 
         // Round-trip: serialize → re-parse → compare.
         let serialized = toml::to_string(&parsed).expect("serializes");
-        let reparsed: WidgetsConfig = toml::from_str(&serialized).expect("re-parses");
-        assert_eq!(reparsed.widgets[0].build, w.build);
-        assert_eq!(reparsed.widgets[0].install, w.install);
+        let reparsed: Wrapper = toml::from_str(&serialized).expect("re-parses");
+        assert_eq!(reparsed.widgets.widgets[0].build, w.build);
+        assert_eq!(reparsed.widgets.widgets[0].install, w.install);
     }
 
     /// Test 1.8 (build_install_string_alternate_form_optional — REVISION 3):
@@ -456,8 +470,8 @@ path = "widget"
 build = "npm run build"
 embedded_in_crates = ["my-crate"]
 "#;
-        let err = toml::from_str::<WidgetsConfig>(toml_str)
-            .expect_err("string-form build must be rejected");
+        let err =
+            toml::from_str::<Wrapper>(toml_str).expect_err("string-form build must be rejected");
         let msg = err.to_string().to_lowercase();
         // toml's error wording is "invalid type: string ... expected a sequence"
         assert!(

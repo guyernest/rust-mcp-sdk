@@ -3,6 +3,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use crate::deployment::post_deploy_tests::PostDeployTestsConfig;
+use crate::deployment::widgets::WidgetsConfig;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DeployConfig {
     pub target: TargetConfig,
@@ -29,6 +32,21 @@ pub struct DeployConfig {
     /// path so pre-existing `.pmcp/deploy.toml` files round-trip unchanged.
     #[serde(default, skip_serializing_if = "IamConfig::is_empty")]
     pub iam: IamConfig,
+
+    /// Widget pre-build declarations (Phase 79).
+    ///
+    /// The `skip_serializing_if` guard preserves byte-identity on the
+    /// no-`[[widgets]]` path so pre-existing `.pmcp/deploy.toml` files
+    /// round-trip unchanged (mirrors the Phase 76 IamConfig D-05 contract).
+    #[serde(default, skip_serializing_if = "WidgetsConfig::is_empty")]
+    pub widgets: WidgetsConfig,
+
+    /// Post-deploy verification config (Phase 79).
+    ///
+    /// `Option::is_none` skip preserves byte-identity on the
+    /// no-`[post_deploy_tests]` path.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub post_deploy_tests: Option<PostDeployTestsConfig>,
 
     /// Project root directory (not serialized)
     #[serde(skip)]
@@ -553,6 +571,8 @@ impl DeployConfig {
             assets: AssetsConfig::default(),
             composition: CompositionConfig::default(),
             iam: IamConfig::default(),
+            widgets: WidgetsConfig::default(),
+            post_deploy_tests: None,
             project_root,
         }
     }

@@ -1,0 +1,37 @@
+# Phase 79 Wave 1 REVISION 3 fixture: 6 base sections + [post_deploy_tests]
+# with on_failure = "rollback" — MUST be hard-rejected by `DeployConfig::load`
+# per HIGH-G2 supersession (CONTEXT.md "Review-Driven Supersessions" #2). The
+# test in `tests/post_deploy_tests_config.rs` asserts the load returns Err
+# whose Display contains the verbatim ROLLBACK_REJECT_MESSAGE.
+
+[target]
+type = "pmcp-run"
+version = "1.0"
+
+[aws]
+region = "us-west-2"
+
+[server]
+name = "cost-coach"
+memory_mb = 512
+timeout_seconds = 30
+
+[environment]
+RUST_LOG = "info"
+
+[auth]
+enabled = false
+provider = "none"
+
+[observability]
+log_retention_days = 30
+enable_xray = true
+create_dashboard = true
+
+[post_deploy_tests]
+enabled = true
+checks = ["connectivity", "conformance", "apps"]
+apps_mode = "claude-desktop"
+on_failure = "rollback"
+timeout_seconds = 60
+warmup_grace_ms = 2000
