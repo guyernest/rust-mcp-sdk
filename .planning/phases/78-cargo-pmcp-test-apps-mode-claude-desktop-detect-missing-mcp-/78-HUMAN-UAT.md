@@ -3,8 +3,9 @@ status: re-verify
 phase: 78-cargo-pmcp-test-apps-mode-claude-desktop-detect-missing-mcp-
 source: [78-VERIFICATION.md, 78-05-PLAN.md, 78-06-PLAN.md, 78-07-PLAN.md]
 started: 2026-05-02T00:00:00Z
-updated: 2026-05-02T12:00:00Z
+updated: 2026-05-02T18:30:00Z
 gap_closure_landed: 2026-05-02
+gap_closure_validated: false
 ---
 
 ## Current Test
@@ -54,20 +55,34 @@ Optionally, ALSO run `cargo pmcp test apps --mode claude-desktop --widgets-dir c
 
 Source feedback driving this re-verification: `/Users/guy/projects/mcp/cost-coach/drafts/feedback-pmcp-test-apps-v1-false-positives.md` (8.4 KB, dated 2026-05-02). The feedback documents the v1 false-positive class; this re-verification confirms its absence post-fix.
 
-result: [pending]
+result: **FAILED — false-positive class still present.** 33 Failed rows on cost-coach prod, identical count to v1. See `uat-evidence/2026-05-02-cost-coach-prod-rerun.md`. Diagnosis: G2 (constructor regex) misses all 8 prod widgets; G1 (SDK signals) misses 4 of 8. Synthetic fixtures in Plan 05 didn't match real Vite-singlefile prod output — the gap-closure cycle did not generalize to production bundles. Routes to `/gsd-plan-phase 78 --gaps` for a second iteration.
 
 ## Summary
 
 total: 6
 passed: 0
-issues: 0
-pending: 6
+issues: 1
+pending: 5
 skipped: 0
 blocked: 0
 
 ## Gaps
 
-(none yet — populated when human re-verification reveals issues)
+### G6 — Plan 05/06 fix did not generalize to real cost-coach prod bundles
+- **Date:** 2026-05-02
+- **Source:** Test 6 operator re-verification against `https://cost-coach.us-west.pmcp.run/mcp`
+- **Evidence:** `uat-evidence/2026-05-02-cost-coach-prod-rerun.md` (97 tests, 60 passed, 33 failed, 4 warnings — same 33 failure count as v1)
+- **Failure modes:**
+  - G2 (constructor regex) misses **all 8** prod widgets — synthetic `new yl({...})` shape in Plan 05 fixtures does not match real Vite-singlefile minified output
+  - G1 (SDK-presence signals) misses **4 of 8** prod widgets — `[ext-apps]` log prefix, `ui/initialize`, `ui/notifications/tool-result`, and `@modelcontextprotocol/ext-apps` literal don't appear in those 4 widgets even though they render in Claude Desktop
+  - 3 widgets pass G1 + G3 + connect but fail only G2 → constructor pattern is the universal miss
+- **Why the cycle missed it:** Plan 05's fixtures were synthetic models of "what minified Vite output should look like," not samples of actual prod bundles. The RED→GREEN cycle proved the validator handles the synthetic shape, but real prod uses different mangled-id and SDK-loading patterns.
+- **Recommended next step:** `/gsd-plan-phase 78 --gaps` — second gap-closure iteration. New plan should:
+  1. Fetch a real cost-coach prod widget (e.g. `cost-summary.html`) and replace the synthetic fixtures with actual prod-shape samples
+  2. Generalize G1 SDK-detection signals to cover whatever pattern the 4 false-negative widgets use
+  3. Generalize G2 constructor regex to match the actual mangled-id pattern in prod
+  4. Re-run Test 6 end-to-end against cost-coach prod after the second-cycle fixes land
+- **Status:** open (Plan 78-08 stays in-progress; phase 78 stays `gaps_found`)
 
 ## Re-verification context
 
