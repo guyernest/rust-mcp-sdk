@@ -40,15 +40,26 @@ pub async fn execute(
     auth_flags: &AuthFlags,
     global_flags: &GlobalFlags,
 ) -> Result<()> {
-    // Task 1 wiring: parameter accepted but unused until Task 2 lands the
-    // source-scan branch. `let _ = ...` suppresses the dead-code warning.
-    let _ = widgets_dir;
     let verbose = global_flags.verbose;
     let validation_mode: AppValidationMode = mode
         .as_deref()
         .unwrap_or("standard")
         .parse()
         .map_err(|e: String| anyhow::anyhow!(e))?;
+
+    // G4: source-scan branch. When --widgets-dir is set, read local *.html
+    // files directly and skip the remote-server connectivity + resources/read
+    // path entirely.
+    if let Some(dir_str) = widgets_dir.as_deref() {
+        return execute_source_scan(
+            &url,
+            dir_str,
+            validation_mode,
+            tool.as_deref(),
+            strict,
+            global_flags,
+        );
+    }
 
     print_apps_header(
         &url,
@@ -291,6 +302,186 @@ async fn list_resources_for_apps(
             Vec::new()
         },
     }
+}
+
+/// G4: source-scan execution path. Skips remote MCP server entirely.
+///
+/// When `--widgets-dir <path>` is set we don't open a transport, don't run
+/// `tester.list_tools()`, and don't do `resources/read`. We just walk
+/// `<path>/*.html`, build the same `(tool_name, uri, html)` tuple shape that
+/// `read_widget_bodies` produces, and feed it to `validator.validate_widgets`.
+fn execute_source_scan(
+    url: &str,
+    widgets_dir: &str,
+    validation_mode: AppValidationMode,
+    tool_filter: Option<&str>,
+    strict: bool,
+    global_flags: &GlobalFlags,
+) -> Result<()> {
+    if global_flags.should_output() {
+        println!();
+        println!(
+            "{}",
+            "MCP App Validation (source-scan mode)"
+                .bright_cyan()
+                .bold()
+        );
+        println!(
+            "{}",
+            "────────────────────────────────────────".bright_cyan()
+        );
+        println!("  URL (informational): {}", url.bright_white());
+        println!("  Widgets Dir: {}", widgets_dir.bright_magenta());
+        println!("  Mode: {}", validation_mode.to_string().bright_white());
+        if strict {
+            println!("  Strict: {}", "yes".bright_yellow());
+        }
+        if let Some(t) = tool_filter {
+            println!("  Tool filter: {}", t.bright_white());
+        }
+        println!();
+        println!("{}", "1. Scanning widget HTML files...".bright_white());
+    }
+
+    let dir = std::path::Path::new(widgets_dir);
+    let (widget_bodies, read_failures) = scan_widgets_dir(dir, tool_filter)?;
+
+    if global_flags.should_output() {
+        println!(
+            "   {} {} HTML file{} discovered",
+            "✓".green(),
+            widget_bodies.len(),
+            if widget_bodies.len() == 1 { "" } else { "s" }
+        );
+    }
+
+    if widget_bodies.is_empty() && read_failures.is_empty() {
+        if global_flags.should_output() {
+            println!(
+                "   {} No HTML files found in {} (zero validation rows)",
+                "i".bright_cyan(),
+                widgets_dir
+            );
+            println!();
+        }
+        return Ok(());
+    }
+
+    if global_flags.should_output() {
+        println!();
+        println!("{}", "2. Validating widget HTML...".bright_white());
+    }
+
+    // tool_filter is already applied at scan_widgets_dir; pass None to the
+    // validator so it doesn't re-filter (the bundle-scan path does this
+    // for resources/read; source-scan does it for filesystem walk).
+    let validator = AppValidator::new(validation_mode, None);
+    let mut results = validator.validate_widgets(&widget_bodies);
+    results.extend(read_failures);
+
+    if results.is_empty() {
+        if global_flags.should_output() {
+            println!("   {} No validation results", "i".bright_cyan());
+            println!();
+        }
+        return Ok(());
+    }
+
+    let mut report = TestReport::new();
+    for result in results {
+        report.add_test(result);
+    }
+    if strict {
+        report.apply_strict_mode();
+    }
+    report.print(mcp_tester::OutputFormat::Pretty);
+
+    if report.has_failures() {
+        anyhow::bail!("App validation failed - see errors above");
+    }
+
+    if global_flags.should_output() {
+        println!(
+            "{} {}",
+            "✓".green().bold(),
+            "App validation passed".green().bold()
+        );
+        println!();
+    }
+
+    Ok(())
+}
+
+/// G4: source-scan mode. Read `<dir>/*.html` from the local filesystem
+/// instead of fetching widget bundles via `resources/read`. Higher-
+/// confidence pre-deploy check than scanning bundles because source HTML
+/// has unmangled identifiers and intact import statements.
+///
+/// Returns `(widget_bodies, read_failures)` matching `read_widget_bodies`
+/// shape so downstream `validator.validate_widgets(...)` is identical.
+///
+/// File-iteration is non-recursive (top-level `.html` files only) and
+/// sorted by filename for deterministic output.
+///
+/// Per-file errors (oversize, non-UTF8, permission denied) become Failed
+/// `TestResult` rows. Directory-level errors (doesn't exist, not a
+/// directory, can't read) bubble up as `anyhow::Error`.
+fn scan_widgets_dir(
+    dir: &std::path::Path,
+    tool_filter: Option<&str>,
+) -> Result<(Vec<(String, String, String)>, Vec<mcp_tester::TestResult>)> {
+    if !dir.exists() {
+        anyhow::bail!("--widgets-dir path does not exist: {}", dir.display());
+    }
+    if !dir.is_dir() {
+        anyhow::bail!("--widgets-dir path is not a directory: {}", dir.display());
+    }
+    let mut entries: Vec<std::path::PathBuf> = std::fs::read_dir(dir)
+        .with_context(|| format!("Failed to read --widgets-dir: {}", dir.display()))?
+        .filter_map(std::result::Result::ok)
+        .map(|e| e.path())
+        .filter(|p| p.is_file() && p.extension().is_some_and(|ext| ext == "html"))
+        .collect();
+    entries.sort();
+
+    let mut bodies: Vec<(String, String, String)> = Vec::new();
+    let mut failures: Vec<mcp_tester::TestResult> = Vec::new();
+
+    for path in entries {
+        let basename = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("unknown")
+            .to_string();
+
+        // Apply tool filter at the file-iteration level.
+        if let Some(filter) = tool_filter {
+            if basename != filter {
+                continue;
+            }
+        }
+
+        let canonical = path.canonicalize().unwrap_or_else(|_| path.clone());
+        let uri = format!("file://{}", canonical.display());
+
+        match std::fs::read_to_string(&path) {
+            Ok(html) if html.len() <= MAX_WIDGET_BODY_BYTES => {
+                bodies.push((basename, uri, html));
+            },
+            Ok(_) => {
+                failures.push(make_read_failure_result(
+                    &uri,
+                    &format!(
+                        "file exceeds {MAX_WIDGET_BODY_BYTES} byte cap (MAX_WIDGET_BODY_BYTES)"
+                    ),
+                ));
+            },
+            Err(e) => {
+                failures.push(make_read_failure_result(&uri, &e.to_string()));
+            },
+        }
+    }
+    Ok((bodies, failures))
 }
 
 /// REVISION MED-6: deduplicate widget URIs before issuing `read_resource`.

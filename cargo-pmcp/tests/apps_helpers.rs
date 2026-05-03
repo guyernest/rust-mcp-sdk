@@ -188,3 +188,118 @@ fn corrected_widget_passes_claude_desktop() {
         "corrected widget must produce ZERO Failed rows; got {failed}"
     );
 }
+
+// ============================================================================
+// Plan 78-07 — `--widgets-dir <path>` source-scan mode integration tests.
+//
+// These tests drive the cargo-pmcp BIN binary in a subprocess via assert_cmd,
+// which is the CLI binary boundary verification deferred from Plan 78-02.
+// Fixture paths use concat!(env!("CARGO_MANIFEST_DIR"), ...) (H6) so the
+// tests are robust to non-standard cwd (nextest runners, IDE test runners).
+// ============================================================================
+
+#[test]
+fn scan_widgets_dir_reads_html_files() {
+    // H6: resolve the fixture path via CARGO_MANIFEST_DIR so the test is
+    // robust to non-standard cwd (nextest, IDE runners).
+    const CORRECTED_FIXTURE: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../crates/mcp-tester/tests/fixtures/widgets/corrected_minimal.html"
+    );
+
+    let tmp = tempfile::tempdir().expect("create tempdir");
+    std::fs::copy(CORRECTED_FIXTURE, tmp.path().join("widget1.html"))
+        .expect("copy fixture widget1");
+    std::fs::copy(CORRECTED_FIXTURE, tmp.path().join("widget2.html"))
+        .expect("copy fixture widget2");
+
+    // Subprocess invocation pattern (cargo-pmcp is a bin crate):
+    let output = assert_cmd::Command::cargo_bin("cargo-pmcp")
+        .expect("locate cargo-pmcp binary")
+        .args([
+            "test",
+            "apps",
+            "http://informational-only.invalid",
+            "--mode",
+            "claude-desktop",
+            "--widgets-dir",
+            tmp.path().to_str().unwrap(),
+        ])
+        .assert();
+
+    let out = output.get_output();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+
+    // Expect: source-scan banner, "2 HTML files discovered", and zero
+    // failures (corrected_minimal.html has all signals).
+    assert!(
+        stdout.contains("source-scan mode") || stdout.contains("Widgets Dir"),
+        "expected source-scan banner; stdout={stdout}; stderr={stderr}"
+    );
+    assert!(
+        stdout.contains("2 HTML files discovered") || stdout.contains("2 HTML file"),
+        "expected '2 HTML files discovered' line; stdout={stdout}; stderr={stderr}"
+    );
+    assert!(
+        out.status.success(),
+        "expected zero exit; status={}; stderr={stderr}",
+        out.status
+    );
+}
+
+#[test]
+fn scan_widgets_dir_handles_empty_dir() {
+    let tmp = tempfile::tempdir().expect("create tempdir");
+    // No .html files in tmp.
+
+    let output = assert_cmd::Command::cargo_bin("cargo-pmcp")
+        .expect("locate cargo-pmcp binary")
+        .args([
+            "test",
+            "apps",
+            "http://informational-only.invalid",
+            "--mode",
+            "claude-desktop",
+            "--widgets-dir",
+            tmp.path().to_str().unwrap(),
+        ])
+        .assert();
+
+    let out = output.get_output();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+
+    assert!(
+        stdout.contains("No HTML files found") || stdout.contains("0 HTML file"),
+        "expected empty-dir info message; stdout={stdout}"
+    );
+    assert!(out.status.success(), "expected zero exit on empty dir");
+}
+
+#[test]
+fn scan_widgets_dir_errors_on_missing_dir() {
+    let output = assert_cmd::Command::cargo_bin("cargo-pmcp")
+        .expect("locate cargo-pmcp binary")
+        .args([
+            "test",
+            "apps",
+            "http://informational-only.invalid",
+            "--mode",
+            "claude-desktop",
+            "--widgets-dir",
+            "/this/path/should/not/exist/77777",
+        ])
+        .assert();
+
+    let out = output.get_output();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+
+    assert!(
+        !out.status.success(),
+        "expected non-zero exit on missing dir"
+    );
+    assert!(
+        stderr.contains("does not exist") || stderr.contains("widgets-dir"),
+        "expected error mentioning the missing path; stderr={stderr}"
+    );
+}
