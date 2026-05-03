@@ -274,6 +274,543 @@ pub enum InfraErrorKind {
     AuthOrNetwork,
 }
 
+// ============================================================================
+// Phase 79 Wave 3 (Plan 79-03): subprocess orchestrator implementation.
+// ============================================================================
+//
+// The remainder of this file implements the imperative post-deploy verifier
+// orchestrator that consumes the Wave-0 `mcp_tester::PostDeployReport` JSON
+// contract via subprocess invocation. See `<objective>` of Plan 79-03 for the
+// full design rationale.
+//
+// REVISION 3 supersessions applied:
+// - HIGH-1: subprocess argv includes `--format=json`; stdout parsed via
+//   `serde_json::from_str::<PostDeployReport>`. NO regex parsing.
+// - HIGH-C2: subprocess inherits parent env via Tokio Command default. NO
+//   `--api-key` argv. NO `MCP_API_KEY` injection by parent. Child resolves
+//   auth via existing `AuthMethod::None` Phase 74 cache + refresh path.
+// - HIGH-G2: `OnFailure::Rollback` is hard-rejected at parse time — orchestrator
+//   matches exhaustively on `{Fail, Warn}`.
+// - HIGH-2: distinct exit codes (`BrokenButLive=3`, `InfraError=2`); CI
+//   annotation emitted to stderr when `CI=true`.
+
+use mcp_tester::post_deploy_report::{
+    PostDeployReport, TestCommand as JsonTestCommand, TestOutcome as JsonOutcome,
+};
+use std::time::Duration;
+use std::time::Instant;
+use tokio::process::Command;
+use tokio::time::{sleep, timeout};
+
+/// Resolve the executable path to spawn for `cargo pmcp test ...` subprocesses.
+///
+/// In production this is `std::env::current_exe()` (the running cargo-pmcp
+/// binary itself). Under `cfg(test)` the value of the `PMCP_TEST_FIXTURE_EXE`
+/// environment variable, when set, takes precedence — this is the integration-
+/// test injection point that swaps in a deterministic mock binary at
+/// `cargo-pmcp/tests/fixtures/mock_test_binary.rs`.
+fn resolve_test_subprocess_exe() -> std::io::Result<std::path::PathBuf> {
+    if cfg!(test) || std::env::var_os("PMCP_TEST_FIXTURE_EXE").is_some() {
+        if let Some(p) = std::env::var_os("PMCP_TEST_FIXTURE_EXE") {
+            return Ok(std::path::PathBuf::from(p));
+        }
+    }
+    std::env::current_exe()
+}
+
+/// Subprocess invocation for `cargo pmcp test check`. Cog ≤6.
+///
+/// REVISION 3 HIGH-1: argv now includes `--format=json` (Plan 79-05 contract).
+/// REVISION 3 HIGH-C2: NO `--api-key` arg; child inherits parent env and
+/// resolves auth via the existing `AuthMethod::None` Phase 74 cache + refresh
+/// path at `cargo-pmcp/src/commands/auth.rs:99-135`.
+pub async fn run_check(url: &str, timeout_secs: u64) -> TestOutcome {
+    spawn_test_subprocess(
+        &["test", "check", url, "--format=json"],
+        timeout_secs,
+        "Connectivity",
+    )
+    .await
+}
+
+/// Subprocess invocation for `cargo pmcp test conformance`. Cog ≤6.
+pub async fn run_conformance(url: &str, timeout_secs: u64) -> TestOutcome {
+    spawn_test_subprocess(
+        &["test", "conformance", url, "--format=json"],
+        timeout_secs,
+        "Conformance",
+    )
+    .await
+}
+
+/// Subprocess invocation for `cargo pmcp test apps`. Cog ≤8.
+pub async fn run_apps(url: &str, mode: AppsMode, timeout_secs: u64) -> TestOutcome {
+    let mode_arg = match mode {
+        AppsMode::Standard => "standard",
+        AppsMode::Chatgpt => "chatgpt",
+        AppsMode::ClaudeDesktop => "claude-desktop",
+    };
+    spawn_test_subprocess(
+        &["test", "apps", url, "--mode", mode_arg, "--format=json"],
+        timeout_secs,
+        "Apps validation",
+    )
+    .await
+}
+
+/// Shared spawn helper. Cog ≤15.
+///
+/// REVISION 3 HIGH-1: parses `PostDeployReport` from stdout via `serde_json`.
+/// REVISION 3 HIGH-C2: NO `MCP_API_KEY` parent-side injection. Tokio Command
+/// default inherits parent env unchanged.
+async fn spawn_test_subprocess(
+    args: &[&str],
+    timeout_secs: u64,
+    label: &'static str,
+) -> TestOutcome {
+    let exe = match resolve_test_subprocess_exe() {
+        Ok(p) => p,
+        Err(e) => {
+            return TestOutcome::InfraError(
+                InfraErrorKind::Subprocess,
+                format!("Failed to resolve current executable: {e}"),
+            );
+        },
+    };
+
+    // REVISION 3 HIGH-C2: NO env injection. Child inherits parent's full env
+    // (Tokio Command default — no env_clear() call). Child's existing
+    // AuthMethod::None path resolves auth via Phase 74 cache + automatic refresh.
+    let mut cmd = Command::new(&exe);
+    cmd.args(args);
+    cmd.stdout(std::process::Stdio::piped());
+    // stderr inherits → live progress visible to the user.
+
+    let fut = async {
+        let mut child = cmd.spawn()?;
+        let stdout = child.stdout.take();
+        let mut stdout_buf = String::new();
+        if let Some(mut s) = stdout {
+            use tokio::io::AsyncReadExt;
+            let _ = s.read_to_string(&mut stdout_buf).await;
+        }
+        let status = child.wait().await?;
+        Ok::<(std::process::ExitStatus, String), std::io::Error>((status, stdout_buf))
+    };
+
+    match timeout(Duration::from_secs(timeout_secs), fut).await {
+        Ok(Ok((status, stdout_buf))) => parse_subprocess_result(label, status, &stdout_buf),
+        Ok(Err(e)) => TestOutcome::InfraError(
+            InfraErrorKind::Subprocess,
+            format!("{label} subprocess spawn failed: {e}"),
+        ),
+        Err(_) => TestOutcome::InfraError(
+            InfraErrorKind::Timeout,
+            format!("{label} exceeded {timeout_secs}s timeout"),
+        ),
+    }
+}
+
+/// REVISION 3 HIGH-1: typed JSON parser for the Plan 79-05 contract. Cog ≤12.
+fn parse_subprocess_result(
+    label: &'static str,
+    status: std::process::ExitStatus,
+    stdout_buf: &str,
+) -> TestOutcome {
+    // Try typed JSON parse. Malformed JSON → InfraError (don't crash the verifier).
+    let report = match serde_json::from_str::<PostDeployReport>(stdout_buf) {
+        Ok(r) => r,
+        Err(e) => {
+            return TestOutcome::InfraError(
+                InfraErrorKind::Subprocess,
+                format!("{label} subprocess produced unparseable JSON: {e}"),
+            );
+        },
+    };
+
+    match report.outcome {
+        JsonOutcome::Passed => {
+            let summary = report.summary.map(map_upstream_summary);
+            TestOutcome::Passed { summary }
+        },
+        JsonOutcome::TestFailed => {
+            let summary = report.summary.map(map_upstream_summary);
+            let recipes: Vec<FailureRecipe> = report
+                .failures
+                .iter()
+                .map(|f| FailureRecipe {
+                    command: f.reproduce.clone(),
+                })
+                .collect();
+            TestOutcome::TestFailed {
+                label: label.to_string(),
+                summary,
+                recipes,
+            }
+        },
+        JsonOutcome::InfraError => {
+            let msg = report
+                .failures
+                .first()
+                .map(|f| f.message.clone())
+                .unwrap_or_else(|| format!("{label} reported infra-error"));
+            let kind = if status.code() == Some(2) {
+                InfraErrorKind::AuthOrNetwork
+            } else {
+                InfraErrorKind::Subprocess
+            };
+            TestOutcome::InfraError(kind, msg)
+        },
+    }
+}
+
+/// Map upstream 5-bucket `mcp_tester::TestSummary` → local 2-bucket form.
+/// Cog ≤2.
+fn map_upstream_summary(s: mcp_tester::TestSummary) -> TestSummary {
+    TestSummary {
+        passed: u32::try_from(s.passed).unwrap_or(u32::MAX),
+        total: u32::try_from(s.total).unwrap_or(u32::MAX),
+    }
+}
+
+/// Wrap a single test invocation with a single retry-after-1s mitigation
+/// for Lambda alias-swap pooled-connection stragglers (RESEARCH.md Pitfall 3).
+/// Cog ≤6.
+pub async fn run_with_single_retry<F, Fut>(invoke: F, label: &str, quiet: bool) -> TestOutcome
+where
+    F: Fn() -> Fut,
+    Fut: std::future::Future<Output = TestOutcome>,
+{
+    let first = invoke().await;
+    match first {
+        TestOutcome::Passed { .. } => first,
+        TestOutcome::TestFailed { .. }
+        | TestOutcome::InfraError(InfraErrorKind::AuthOrNetwork, _) => {
+            sleep(Duration::from_millis(1000)).await;
+            let second = invoke().await;
+            if matches!(second, TestOutcome::Passed { .. }) && !quiet {
+                eprintln!(
+                    "  INFO: {label} first attempt failed; retry passed \
+                     (consider increasing warmup_grace_ms)"
+                );
+            }
+            second
+        },
+        other => other, // Don't retry timeouts or true infra failures
+    }
+}
+
+/// Format the LIVE-but-broken failure banner per CONTEXT.md "Specifics" lines
+/// 184-198.
+///
+/// REVISION 3 HIGH-1: consumes typed `PostDeployReport`-sourced summary/recipes
+/// directly. Noun (`tests`/`widgets`) dispatched from the per-step
+/// [`JsonTestCommand`] (sourced from `PostDeployReport.command`). Cog ≤10.
+pub fn format_failure_banner_from_report(
+    target_id: &str,
+    outcomes: &[(String, JsonTestCommand, TestOutcome, Option<u64>)],
+) -> String {
+    let mut out = String::new();
+    out.push_str("\nRunning post-deploy verification:\n");
+    for (name, command, outcome, dur) in outcomes {
+        format_one_step(&mut out, name, *command, outcome, *dur);
+    }
+    let any_failed = outcomes
+        .iter()
+        .any(|(_, _, o, _)| !matches!(o, TestOutcome::Passed { .. }));
+    if any_failed {
+        out.push_str("\n⚠ The deployed version IS LIVE and contains issues.\n");
+        out.push_str(&format!(
+            "  To roll back: cargo pmcp deploy rollback --target {target_id}\n"
+        ));
+    }
+    out
+}
+
+/// Render one step line + any reproduce sub-lines into `out`. Cog ≤8.
+fn format_one_step(
+    out: &mut String,
+    name: &str,
+    command: JsonTestCommand,
+    outcome: &TestOutcome,
+    dur: Option<u64>,
+) {
+    let mark = match outcome {
+        TestOutcome::Passed { .. } => "✓",
+        _ => "✗",
+    };
+    // Noun dispatched from typed command (REVISION 3 HIGH-1).
+    let noun = match command {
+        JsonTestCommand::Apps => "widgets",
+        _ => "tests",
+    };
+    let metric = render_step_metric(outcome, dur, noun);
+    out.push_str(&format!("  {mark} {name:<22} {metric}\n"));
+    if let TestOutcome::TestFailed { recipes, .. } = outcome {
+        if recipes.is_empty() {
+            out.push_str(&format!(
+                "     reproduce: cargo pmcp test {} <URL>\n",
+                name.to_lowercase().replace(" validation", "")
+            ));
+        } else {
+            for recipe in recipes {
+                // VERBATIM from PostDeployReport.failures[].reproduce — no reconstruction.
+                out.push_str(&format!("     reproduce: {}\n", recipe.command));
+            }
+        }
+    }
+}
+
+/// Render one step's metric annotation. Cog ≤6.
+fn render_step_metric(outcome: &TestOutcome, dur: Option<u64>, noun: &'static str) -> String {
+    match outcome {
+        TestOutcome::Passed {
+            summary: Some(s), ..
+        } => format!("({}/{} {} passed)", s.passed, s.total, noun),
+        TestOutcome::TestFailed {
+            summary: Some(s), ..
+        } => {
+            let failed = s.total.saturating_sub(s.passed);
+            format!("({}/{} {} failed)", failed, s.total, noun)
+        },
+        _ => dur.map(|d| format!("({d}ms)")).unwrap_or_default(),
+    }
+}
+
+/// REVISION 3 HIGH-2 supersession: emit a GitHub Actions / GitLab-friendly
+/// `::error::` annotation to stderr when running in CI. Auto-detects via
+/// `CI` env var (set by GitHub Actions, GitLab, CircleCI, Travis, etc.).
+/// AUGMENTS the loud banner — does NOT replace it. Cog ≤4.
+pub fn emit_ci_annotation(target_id: &str, exit_code: i32) {
+    if std::env::var("CI").is_err() {
+        return;
+    }
+    let mut sink = std::io::stderr();
+    let _ = write_ci_annotation(&mut sink, target_id, exit_code);
+}
+
+/// Internal writer-targeted CI annotation emitter (testable). Cog ≤2.
+fn write_ci_annotation<W: std::io::Write>(
+    sink: &mut W,
+    target_id: &str,
+    exit_code: i32,
+) -> std::io::Result<()> {
+    writeln!(
+        sink,
+        "::error::Deployment succeeded but post-deploy tests failed (exit code {exit_code}). \
+         Lambda revision is LIVE. To roll back: cargo pmcp deploy rollback --target {target_id}"
+    )
+}
+
+// ============================================================================
+// Top-level orchestrator (Task 2 of Plan 79-03)
+// ============================================================================
+
+/// Result of the orchestrator. Exit-code mapping:
+///
+/// - [`OrchestrationFailure::BrokenButLive`] (test failed against live revision): exit 3
+///   (REVISION 3 HIGH-2)
+/// - [`OrchestrationFailure::InfraError`]: exit 2
+/// - `Ok(())`: exit 0
+///
+/// REVISION 3 HIGH-2 rename: `TestFailed` → `BrokenButLive` to reflect that
+/// post-deploy failures are inherently against a live revision (deploy already
+/// reported success before this verifier ran). Pre-cutover failures take a
+/// different exit-code path entirely (existing `anyhow::Error` from
+/// `target.deploy()`).
+#[derive(Debug)]
+pub enum OrchestrationFailure {
+    /// Post-deploy tests failed against the LIVE revision. CLI exits 3.
+    BrokenButLive {
+        /// CLI exit code (always 3 for this variant).
+        exit_code: i32,
+        /// Pre-formatted failure banner (Display proxies through this).
+        banner: String,
+    },
+    /// Network / spawn / timeout failure. CLI exits 2.
+    InfraError {
+        /// CLI exit code (always 2 for this variant).
+        exit_code: i32,
+        /// Pre-formatted failure banner (Display proxies through this).
+        banner: String,
+    },
+}
+
+impl std::fmt::Display for OrchestrationFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::BrokenButLive { banner, .. } | Self::InfraError { banner, .. } => {
+                f.write_str(banner)
+            },
+        }
+    }
+}
+
+impl std::error::Error for OrchestrationFailure {}
+
+impl OrchestrationFailure {
+    /// CLI exit code for this failure mode.
+    #[must_use]
+    pub fn exit_code(&self) -> i32 {
+        match self {
+            Self::BrokenButLive { exit_code, .. } | Self::InfraError { exit_code, .. } => {
+                *exit_code
+            },
+        }
+    }
+}
+
+/// Internal lifecycle step descriptor. Holds both the human label (for the
+/// banner) and the typed [`JsonTestCommand`] (for noun dispatch).
+struct RunStep {
+    label: String,
+    kind: StepKind,
+    json_command: JsonTestCommand,
+}
+
+enum StepKind {
+    Check,
+    Conformance,
+    Apps,
+}
+
+/// Build the ordered run plan from config + widget detection. Cog ≤6.
+fn build_run_plan(config: &PostDeployTestsConfig, widgets_present: bool) -> Vec<RunStep> {
+    let mut plan = Vec::new();
+    if config.checks.iter().any(|c| c == "connectivity") {
+        plan.push(RunStep {
+            label: "Connectivity".into(),
+            kind: StepKind::Check,
+            json_command: JsonTestCommand::Check,
+        });
+    }
+    if config.checks.iter().any(|c| c == "conformance") {
+        plan.push(RunStep {
+            label: "Conformance".into(),
+            kind: StepKind::Conformance,
+            json_command: JsonTestCommand::Conformance,
+        });
+    }
+    if widgets_present && config.checks.iter().any(|c| c == "apps") {
+        plan.push(RunStep {
+            label: "Apps validation".into(),
+            kind: StepKind::Apps,
+            json_command: JsonTestCommand::Apps,
+        });
+    }
+    plan
+}
+
+/// Invoke a single lifecycle step (with retry-once mitigation). Cog ≤6.
+async fn invoke_step(
+    step: &RunStep,
+    url: &str,
+    config: &PostDeployTestsConfig,
+    quiet: bool,
+) -> TestOutcome {
+    let label = step.label.clone();
+    run_with_single_retry(
+        || async {
+            match step.kind {
+                StepKind::Check => run_check(url, config.timeout_seconds).await,
+                StepKind::Conformance => run_conformance(url, config.timeout_seconds).await,
+                StepKind::Apps => run_apps(url, config.apps_mode, config.timeout_seconds).await,
+            }
+        },
+        &label,
+        quiet,
+    )
+    .await
+}
+
+/// Interpret the per-step outcomes into the final orchestrator verdict + emit
+/// the SOLE failure-banner eprintln (F-6 mitigation). Cog ≤10.
+///
+/// REVISION 3 HIGH-2: emits CI annotation alongside the banner.
+fn interpret_outcomes(
+    target_id: &str,
+    outcomes: &[(String, JsonTestCommand, TestOutcome, Option<u64>)],
+    on_failure: OnFailure,
+    quiet: bool,
+) -> std::result::Result<(), OrchestrationFailure> {
+    let any_infra = outcomes
+        .iter()
+        .any(|(_, _, o, _)| matches!(o, TestOutcome::InfraError(..)));
+    let any_test_failed = outcomes
+        .iter()
+        .any(|(_, _, o, _)| matches!(o, TestOutcome::TestFailed { .. }));
+
+    if !any_infra && !any_test_failed {
+        return Ok(());
+    }
+
+    let banner = format_failure_banner_from_report(target_id, outcomes);
+    if !quiet {
+        eprintln!("{banner}");
+    }
+
+    if any_infra {
+        // REVISION 3 HIGH-2: emit CI annotation for infra failures too.
+        emit_ci_annotation(target_id, 2);
+        return Err(OrchestrationFailure::InfraError {
+            exit_code: 2,
+            banner,
+        });
+    }
+    // any_test_failed must be true here (early-returned above otherwise).
+    match on_failure {
+        OnFailure::Warn => Ok(()),
+        OnFailure::Fail => {
+            // REVISION 3 HIGH-2: exit code 3 (broken-but-live) + CI annotation.
+            emit_ci_annotation(target_id, 3);
+            Err(OrchestrationFailure::BrokenButLive {
+                exit_code: 3,
+                banner,
+            })
+        },
+    }
+}
+
+/// Top-level lifecycle: warmup → check → conformance → apps (apps optional).
+/// Cog ≤10.
+///
+/// `widgets_present` controls whether the `apps` step runs when configured.
+/// `quiet` suppresses the failure-banner eprintln (banner is still returned in
+/// the [`OrchestrationFailure`] for callers that want to log it differently).
+///
+/// REVISION 3 HIGH-C2: no `auth_token` parameter. Subprocesses inherit env via
+/// Tokio Command default and self-resolve auth via the existing
+/// `AuthMethod::None` Phase 74 cache + refresh path.
+pub async fn run_post_deploy_tests(
+    url: &str,
+    target_id: &str,
+    widgets_present: bool,
+    config: &PostDeployTestsConfig,
+    quiet: bool,
+) -> std::result::Result<(), OrchestrationFailure> {
+    if !config.enabled {
+        // Master plan locked decision #4: skip warmup too when disabled.
+        return Ok(());
+    }
+
+    // Warmup grace.
+    if config.warmup_grace_ms > 0 {
+        sleep(Duration::from_millis(config.warmup_grace_ms)).await;
+    }
+
+    let mut outcomes: Vec<(String, JsonTestCommand, TestOutcome, Option<u64>)> = Vec::new();
+
+    let runs = build_run_plan(config, widgets_present);
+    for step in runs {
+        let started = Instant::now();
+        let outcome = invoke_step(&step, url, config, quiet).await;
+        let dur = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+        outcomes.push((step.label, step.json_command, outcome, Some(dur)));
+    }
+
+    interpret_outcomes(target_id, &outcomes, config.on_failure, quiet)
+}
+
 #[cfg(test)]
 mod tests {
     //! Unit tests covering `<behavior>` Tests 2.1..2.10 of Plan 79-01.

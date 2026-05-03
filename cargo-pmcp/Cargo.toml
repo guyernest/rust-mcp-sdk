@@ -18,6 +18,20 @@ path = "src/lib.rs"
 name = "cargo-pmcp"
 path = "src/main.rs"
 
+# Phase 79 Wave 3 (Plan 79-03): test-only mock binary used by the
+# `post_deploy_orchestrator` integration tests via the `PMCP_TEST_FIXTURE_EXE`
+# env-var injection point. NOT shipped — the binary has no production purpose
+# and exists solely so `env!("CARGO_BIN_EXE_mock_test_binary")` resolves under
+# `cargo test`. Cargo always builds declared `[[bin]]` targets, so this adds
+# ~1s to `cargo build`; the implementation is dep-free (no serde, no clap) to
+# minimise that.
+[[bin]]
+name = "mock_test_binary"
+path = "tests/fixtures/mock_test_binary.rs"
+test = false
+bench = false
+doctest = false
+
 [dependencies]
 clap = { version = "4", features = ["derive", "env"] }
 clap_complete = "4"
