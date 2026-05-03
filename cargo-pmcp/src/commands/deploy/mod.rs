@@ -168,8 +168,62 @@ pub struct DeployCommand {
     #[arg(long)]
     widgets_only: bool,
 
+    /// Skip the post-deploy verification suite entirely (warmup + check +
+    /// conformance + apps).
+    ///
+    /// Use when CI runs verification in a separate step or when you
+    /// intentionally want a deploy that doesn't probe the live endpoint.
+    /// NOTE: this also skips the warmup grace, since the warmup serves no
+    /// purpose without subsequent tests.
+    #[arg(long)]
+    no_post_deploy_test: bool,
+
+    /// Run only a subset of post-deploy tests (comma-separated).
+    ///
+    /// Valid values: connectivity, conformance, apps. Default: all three
+    /// (when the corresponding subsystem is present).
+    /// Example: --post-deploy-tests=conformance,apps
+    #[arg(long, value_delimiter = ',', value_name = "CHECKS")]
+    post_deploy_tests: Option<Vec<String>>,
+
+    /// Override [post_deploy_tests].on_failure from deploy.toml.
+    ///
+    /// Values:
+    ///   warn      Print failure banner; CLI exits 0; pipeline continues
+    ///   fail      Print failure banner with IS-LIVE warning; CLI exits 3
+    ///             (REVISION 3 HIGH-2)
+    ///   rollback  REJECTED. Auto-rollback support will land in a future
+    ///             phase that verifies the existing DeployTarget::rollback()
+    ///             trait implementations. Use 'fail' (default) or 'warn'.
+    ///
+    /// Default (from config or "fail"): the deployed broken Lambda revision
+    /// STAYS LIVE on `fail`; CI/CD pipelines that interpret nonzero exit as
+    /// auto-rollback will misread this — the deploy DID succeed at the
+    /// infrastructure level. Exit code 3 is unique-per-failure-mode for
+    /// CI/CD detection (REVISION 3 HIGH-2). To roll back manually, run:
+    ///     cargo pmcp deploy rollback --target <target>
+    #[arg(long, value_name = "MODE", value_parser = parse_on_test_failure_flag)]
+    on_test_failure: Option<crate::deployment::post_deploy_tests::OnFailure>,
+
+    /// Override [post_deploy_tests].apps_mode from deploy.toml.
+    ///
+    /// Values: standard, chatgpt, claude-desktop. Default (from config or
+    /// "claude-desktop"): runs the strict Phase 78 claude-desktop validator
+    /// on every widget.
+    #[arg(long, value_name = "MODE")]
+    apps_mode: Option<String>,
+
     #[command(subcommand)]
     action: Option<DeployAction>,
+}
+
+/// REVISION 3 HIGH-G2 — clap value parser that delegates to
+/// `OnFailure::FromStr` which carries the verbatim `ROLLBACK_REJECT_MESSAGE`
+/// for the string `"rollback"`. Wired on the `--on-test-failure` arg above.
+fn parse_on_test_failure_flag(
+    s: &str,
+) -> Result<crate::deployment::post_deploy_tests::OnFailure, String> {
+    s.parse()
 }
 
 #[derive(Debug, Parser)]
@@ -433,6 +487,35 @@ impl DeployCommand {
     /// `[[widgets]]` blocks supported. Stop on first failure"). Skips the
     /// env var when no widgets are detected so 79-04's build.rs
     /// local-discovery fallback (HIGH-G1) can take over for direct
+    /// Merge CLI flag overrides into the loaded `[post_deploy_tests]` config.
+    /// REVISION 3 HIGH-G2: `OnFailure::Rollback` is impossible here because
+    /// clap rejects `--on-test-failure=rollback` at parse time AND the custom
+    /// `Deserialize` impl rejects `on_failure="rollback"` at config load time.
+    /// Cog ≤8.
+    fn materialize_post_deploy_config(
+        &self,
+        config: &crate::deployment::DeployConfig,
+    ) -> crate::deployment::post_deploy_tests::PostDeployTestsConfig {
+        let mut pdt = config.post_deploy_tests.clone().unwrap_or_default();
+        if let Some(checks) = self.post_deploy_tests.as_ref() {
+            pdt.checks = checks.clone();
+        }
+        if let Some(of) = self.on_test_failure {
+            // REVISION 3: typed OnFailure (Fail|Warn) — clap rejected rollback
+            // at parse, so this assignment cannot widen the variant set.
+            pdt.on_failure = of;
+        }
+        if let Some(s) = self.apps_mode.as_deref() {
+            pdt.apps_mode = match s {
+                "standard" => crate::deployment::post_deploy_tests::AppsMode::Standard,
+                "chatgpt" => crate::deployment::post_deploy_tests::AppsMode::Chatgpt,
+                "claude-desktop" => crate::deployment::post_deploy_tests::AppsMode::ClaudeDesktop,
+                _ => pdt.apps_mode,
+            };
+        }
+        pdt
+    }
+
     /// `cargo run` scenarios.
     ///
     /// Cog ≤8.
@@ -808,6 +891,48 @@ impl DeployCommand {
 
                 let artifact = target.build(&config).await?;
                 let outputs = target.deploy(&config, artifact).await?;
+
+                // Step 4.5: Post-deploy verification (Phase 79 — Failure Mode C
+                // mitigation). Subprocess-spawn `cargo pmcp test {check, conformance,
+                // apps} --format=json` via `current_exe()` per REVISION 3 HIGH-1
+                // (Plan 79-05's JSON contract). REVISION 3 HIGH-C2: NO auth
+                // resolution here — child inherits parent env and resolves via
+                // existing `AuthMethod::None` Phase 74 cache + refresh path.
+                //
+                // F-6 mitigation per gsd-plan-checker REVISION 1 (retained): the
+                // orchestrator (`run_post_deploy_tests` -> `interpret_outcomes`)
+                // is the SOLE banner-print site. Caller MUST NOT eprintln the
+                // failure banner.
+                if !self.no_post_deploy_test {
+                    let pdt_config = self.materialize_post_deploy_config(&config);
+                    let widgets_present =
+                        !crate::deployment::widgets::detect_widgets(&config, &project_root)
+                            .is_empty();
+                    let url = outputs.url.as_deref().unwrap_or("");
+                    let target_id_str = target.id();
+                    let quiet = !global_flags.should_output();
+
+                    if let Err(failure) =
+                        crate::deployment::post_deploy_tests::run_post_deploy_tests(
+                            url,
+                            target_id_str,
+                            widgets_present,
+                            &pdt_config,
+                            quiet,
+                        )
+                        .await
+                    {
+                        // Print outputs first so user sees what's deployed before exiting.
+                        if global_flags.should_output() {
+                            println!();
+                            outputs.display();
+                        }
+                        // REVISION 3 HIGH-2: exit code is 3 for broken-but-live, 2
+                        // for infra. emit_ci_annotation already fired from inside
+                        // interpret_outcomes.
+                        std::process::exit(failure.exit_code());
+                    }
+                }
 
                 if global_flags.should_output() {
                     println!();
