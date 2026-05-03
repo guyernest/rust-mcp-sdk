@@ -301,7 +301,20 @@ fn scan_workspace_for_pattern(
 fn is_ignored_dir(path: &std::path::Path) -> bool {
     path.file_name()
         .and_then(|n| n.to_str())
-        .is_some_and(|name| matches!(name, "target" | "node_modules" | ".git"))
+        .is_some_and(|name| {
+            matches!(
+                name,
+                "target"
+                    | "node_modules"
+                    | ".git"
+                    | "dist"
+                    | ".pnpm-store"
+                    | "vendor"
+                    | ".next"
+                    | ".turbo"
+                    | ".cache"
+            )
+        })
 }
 
 /// Walk up from a file until finding an enclosing `Cargo.toml`. Returns the

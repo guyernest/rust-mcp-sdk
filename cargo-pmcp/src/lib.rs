@@ -38,6 +38,10 @@ pub mod deployment {
 
     #[path = "../deployment/post_deploy_tests.rs"]
     pub mod post_deploy_tests;
+
+    // `widgets::enumerate_workspace_bin_crates` delegates here.
+    #[path = "../deployment/naming.rs"]
+    pub mod naming;
 }
 
 pub mod utils {

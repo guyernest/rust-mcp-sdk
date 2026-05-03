@@ -520,17 +520,16 @@ impl DeployCommand {
     ///
     /// Cog ≤8.
     async fn pre_build_widgets_and_set_env(
-        config: &crate::deployment::DeployConfig,
+        widgets: &[crate::deployment::widgets::WidgetConfig],
         project_root: &std::path::Path,
         global_flags: &crate::commands::GlobalFlags,
     ) -> Result<()> {
-        let widgets = crate::deployment::widgets::detect_widgets(config, project_root);
         if widgets.is_empty() {
             return Ok(());
         }
         let quiet = !global_flags.should_output();
         let mut all_output_dirs: Vec<String> = Vec::with_capacity(widgets.len());
-        for widget in &widgets {
+        for widget in widgets {
             let resolved =
                 crate::deployment::widgets::run_widget_build(widget, project_root, quiet).await?;
             all_output_dirs.push(resolved.absolute_output_dir.to_string_lossy().to_string());
@@ -875,9 +874,19 @@ impl DeployCommand {
                 // (verified via `enum Commands` in `cargo-pmcp/src/main.rs:83`),
                 // so this `cargo pmcp deploy` execute_async path is the ONLY
                 // place that gets the Step 2.5 hook.
+                // Single workspace scan — `detect_widgets` may invoke `cargo metadata`
+                // on the convention path, so cache the result for both Step 2.5 and
+                // the post-deploy `widgets_present` check below.
+                let detected_widgets =
+                    crate::deployment::widgets::detect_widgets(&config, &project_root);
+
                 if !self.no_widget_build {
-                    Self::pre_build_widgets_and_set_env(&config, &project_root, global_flags)
-                        .await?;
+                    Self::pre_build_widgets_and_set_env(
+                        &detected_widgets,
+                        &project_root,
+                        global_flags,
+                    )
+                    .await?;
                 }
 
                 if self.widgets_only {
@@ -905,9 +914,7 @@ impl DeployCommand {
                 // failure banner.
                 if !self.no_post_deploy_test {
                     let pdt_config = self.materialize_post_deploy_config(&config);
-                    let widgets_present =
-                        !crate::deployment::widgets::detect_widgets(&config, &project_root)
-                            .is_empty();
+                    let widgets_present = !detected_widgets.is_empty();
                     let url = outputs.url.as_deref().unwrap_or("");
                     let target_id_str = target.id();
                     let quiet = !global_flags.should_output();

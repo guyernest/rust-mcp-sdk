@@ -295,26 +295,17 @@ pub fn detect_widgets(
 /// Falls back to an empty Vec on any cargo-metadata error — that just means
 /// `cargo pmcp doctor` will hint the operator more strongly.
 fn enumerate_workspace_bin_crates(workspace_root: &Path) -> Vec<String> {
-    let metadata = match cargo_metadata::MetadataCommand::new()
-        .manifest_path(workspace_root.join("Cargo.toml"))
-        .exec()
-    {
-        Ok(m) => m,
-        Err(_) => return Vec::new(),
+    let Ok(binaries) = crate::deployment::naming::detect_workspace_binaries(workspace_root) else {
+        return Vec::new();
     };
-    let mut names: Vec<String> = Vec::new();
-    for package in metadata.packages {
-        for target in &package.targets {
-            if target.kind.contains(&cargo_metadata::TargetKind::Bin) {
-                let pkg_name = package.name.to_string();
-                if !names.contains(&pkg_name) {
-                    names.push(pkg_name);
-                }
-                break;
-            }
-        }
-    }
-    names
+    let mut seen = std::collections::BTreeSet::new();
+    binaries
+        .into_iter()
+        .filter_map(|b| {
+            seen.insert(b.package_name.clone())
+                .then_some(b.package_name)
+        })
+        .collect()
 }
 
 /// REVISION 3 Codex MEDIUM helper: detect Yarn PnP via marker files. When

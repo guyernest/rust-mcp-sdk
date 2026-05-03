@@ -386,16 +386,23 @@ async fn spawn_test_subprocess(
     cmd.stdout(std::process::Stdio::piped());
     // stderr inherits → live progress visible to the user.
 
+    // 16 MiB cap on subprocess stdout — bounds memory if a misbehaving test
+    // command floods stdout (e.g., debug logs, attacker-controlled argv).
+    // The structured PostDeployReport JSON for typical conformance/apps runs
+    // is well under 100 KB.
+    const MAX_STDOUT_BYTES: u64 = 16 * 1024 * 1024;
+
     let fut = async {
         let mut child = cmd.spawn()?;
         let stdout = child.stdout.take();
-        let mut stdout_buf = String::new();
-        if let Some(mut s) = stdout {
+        let mut stdout_buf = Vec::with_capacity(64 * 1024);
+        if let Some(s) = stdout {
             use tokio::io::AsyncReadExt;
-            let _ = s.read_to_string(&mut stdout_buf).await;
+            let _ = s.take(MAX_STDOUT_BYTES).read_to_end(&mut stdout_buf).await;
         }
         let status = child.wait().await?;
-        Ok::<(std::process::ExitStatus, String), std::io::Error>((status, stdout_buf))
+        let stdout_str = String::from_utf8_lossy(&stdout_buf).into_owned();
+        Ok::<(std::process::ExitStatus, String), std::io::Error>((status, stdout_str))
     };
 
     match timeout(Duration::from_secs(timeout_secs), fut).await {
