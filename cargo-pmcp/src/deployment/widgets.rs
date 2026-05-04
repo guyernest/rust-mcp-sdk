@@ -412,12 +412,6 @@ pub async fn run_widget_build(
         return Ok(resolved);
     }
 
-    // Raw-HTML widget with a metadata-stub `package.json` (no `scripts`
-    // block at all, no explicit `widget.build` argv): skip both install and
-    // build. Common for CDN-import widgets that ship a manifest purely for
-    // name/version/description. A `package.json` with a `scripts` block that
-    // is missing `build` is treated as operator misconfig (bails below via
-    // `verify_build_script_exists`).
     if widget.build.is_none() && package_json_is_metadata_stub(&resolved.path) {
         if !quiet {
             println!(
