@@ -5,6 +5,33 @@ All notable changes to the `cargo-pmcp` crate will be documented in this file.
 The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html).
 
+## [0.12.2] - 2026-05-03
+
+### Fixed
+- **Widget pre-build now also recognises raw-HTML / CDN-import widgets that
+  ship a tooling-only metadata-stub `package.json`.** Extends the 0.12.1
+  raw-HTML guard: previously, a `widgets/` directory with a stub
+  `package.json` (name/version/description, no `scripts` block) still
+  entered the Node pipeline and bailed at `verify_build_script_exists` with
+  `package.json at <path> has no 'build' script`. Now, when `package.json`
+  declares no `scripts` block at all AND the operator did not supply an
+  explicit `widget.build` argv, the directory is treated as raw-HTML and
+  both `npm install` and the build step are skipped (zero subprocesses).
+- Reproduction: `Scientific-Calculator-MCP-App/widgets/` containing
+  `keypad.html` (CDN import) plus a stub manifest like
+  `{ "name": "...", "version": "1.0.0", "private": true }`.
+
+### Notes
+- Operator-misconfig contract preserved: a `package.json` with a `scripts`
+  block that lacks `build` (e.g. `scripts: { test: "..." }`) STILL bails
+  with the verbatim REQ-79-03 message — that case is treated as a forgotten
+  build script, not a tooling stub. To opt out, supply explicit
+  `widget.build` argv or remove the `scripts` block.
+- Explicit `widget.build` argv takes precedence over auto-detection — operator
+  opt-in still runs the Node pipeline against any `package.json` shape.
+- Malformed `package.json` continues to defer to `verify_build_script_exists`
+  for diagnostic-rich bailing rather than silently skipping.
+
 ## [0.12.1] - 2026-05-03
 
 ### Fixed

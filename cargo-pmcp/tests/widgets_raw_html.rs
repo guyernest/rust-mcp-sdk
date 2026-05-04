@@ -100,6 +100,47 @@ async fn raw_html_widget_explicit_npm_build_argv_friendly_bail() {
     );
 }
 
+/// Reproduces the Scientific-Calculator-MCP-App report: a tooling-only
+/// stub `package.json` (name/version/description, no scripts, no deps)
+/// alongside `keypad.html`. The early-return must fire — no `npm install`,
+/// no bail on missing `build` script.
+#[tokio::test]
+async fn raw_html_widget_with_stub_package_json_does_not_spawn_npm() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let workspace_root = tmp.path();
+    let widgets_dir = workspace_root.join("widgets");
+    write_keypad_html(&widgets_dir);
+    fs::write(
+        widgets_dir.join("package.json"),
+        br#"{
+  "name": "scientific-calculator-widget",
+  "version": "1.0.0",
+  "description": "Scientific Calculator MCP App Widget",
+  "private": true
+}"#,
+    )
+    .expect("write stub package.json");
+
+    let widget = raw_html_widget_config();
+    let resolved = run_widget_build(&widget, workspace_root, /* quiet */ false)
+        .await
+        .expect("stub package.json should take raw-HTML early-return, not bail");
+
+    assert!(resolved.path.ends_with("widgets"));
+    assert!(
+        !widgets_dir.join("node_modules").exists(),
+        "no npm install should have been spawned"
+    );
+    assert!(
+        !widgets_dir.join("package-lock.json").exists(),
+        "no npm install should have been spawned"
+    );
+    assert!(
+        !workspace_root.join("package-lock.json").exists(),
+        "no parent-walking npm install"
+    );
+}
+
 /// Regression: the Node-project happy path is unchanged by the new guard.
 /// A real `package.json` + stub `node_modules/` (so `ensure_node_modules`
 /// short-circuits without npm on PATH) + explicit `["true"]` argv runs

@@ -329,6 +329,27 @@ fn is_node_project(widget_dir: &Path) -> bool {
     widget_dir.join("package.json").is_file()
 }
 
+/// Returns true iff `widget_dir/package.json` exists, parses as valid JSON,
+/// and has NO `scripts` field at all — a tooling-only metadata stub typical
+/// of raw-HTML / CDN-import widgets that ship a `package.json` purely for
+/// name/version/description. Distinguished from `package.json` that DOES
+/// declare a `scripts` block but forgot `build` — that case is operator
+/// misconfig and bails via [`verify_build_script_exists`].
+///
+/// False when the file is missing (handled by [`is_node_project`]),
+/// unreadable, or malformed JSON — those fall through to
+/// [`verify_build_script_exists`] for the diagnostic-rich bail.
+fn package_json_is_metadata_stub(widget_dir: &Path) -> bool {
+    let pkg_json_path = widget_dir.join("package.json");
+    let Ok(raw) = std::fs::read_to_string(&pkg_json_path) else {
+        return false;
+    };
+    let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&raw) else {
+        return false;
+    };
+    parsed.get("scripts").is_none()
+}
+
 /// REVISION 3 Codex MEDIUM helper: split argv slice into (cmd, rest_args).
 ///
 /// Replaces the pre-revision-3 `parse_explicit_command(s: &str)`
@@ -385,6 +406,22 @@ pub async fn run_widget_build(
         if !quiet {
             println!(
                 "  treating {} as raw HTML / CDN bundle, skipping build",
+                resolved.path.display()
+            );
+        }
+        return Ok(resolved);
+    }
+
+    // Raw-HTML widget with a metadata-stub `package.json` (no `scripts`
+    // block at all, no explicit `widget.build` argv): skip both install and
+    // build. Common for CDN-import widgets that ship a manifest purely for
+    // name/version/description. A `package.json` with a `scripts` block that
+    // is missing `build` is treated as operator misconfig (bails below via
+    // `verify_build_script_exists`).
+    if widget.build.is_none() && package_json_is_metadata_stub(&resolved.path) {
+        if !quiet {
+            println!(
+                "  package.json at {} declares no 'scripts' block, treating as raw HTML / CDN bundle, skipping build",
                 resolved.path.display()
             );
         }
@@ -931,6 +968,83 @@ new App({});
             !widgets_dir.join("package-lock.json").exists(),
             "no npm install should have been spawned"
         );
+    }
+
+    /// `run_widget_build` against a `widgets/` containing a stub
+    /// `package.json` (no `scripts.build`, no deps) plus a `keypad.html`
+    /// returns `Ok(resolved)` and spawns NO subprocess — passes on a runner
+    /// without npm/pnpm/yarn/bun on PATH.
+    #[tokio::test]
+    async fn run_widget_build_raw_html_skip_when_package_json_has_no_build_script() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let workspace_root = tmp.path();
+        let widgets_dir = workspace_root.join("widgets");
+        std::fs::create_dir_all(&widgets_dir).expect("create widgets/");
+        std::fs::write(
+            widgets_dir.join("package.json"),
+            br#"{"name":"stub","version":"1.0.0","private":true}"#,
+        )
+        .expect("write package.json");
+        std::fs::write(
+            widgets_dir.join("keypad.html"),
+            b"<html><body>raw HTML</body></html>",
+        )
+        .expect("write keypad.html");
+
+        let widget = WidgetConfig {
+            path: "widgets".to_string(),
+            build: None,
+            install: None,
+            output_dir: "dist".to_string(),
+            embedded_in_crates: vec![],
+        };
+
+        let resolved = run_widget_build(&widget, workspace_root, /* quiet */ true)
+            .await
+            .expect("stub package.json should not error");
+
+        assert_eq!(resolved.path, workspace_root.join("widgets"));
+        assert!(
+            !widgets_dir.join("node_modules").exists(),
+            "no npm install should have been spawned"
+        );
+        assert!(
+            !widgets_dir.join("package-lock.json").exists(),
+            "no npm install should have been spawned"
+        );
+    }
+
+    /// Regression: explicit `widget.build = ["true"]` argv against a stub
+    /// package.json (no `scripts.build`) takes the Node pipeline (NOT the
+    /// raw-HTML early-return) — the explicit argv is operator opt-in.
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn run_widget_build_explicit_argv_overrides_stub_package_json() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let workspace_root = tmp.path();
+        let widgets_dir = workspace_root.join("widgets");
+        std::fs::create_dir_all(&widgets_dir).expect("create widgets/");
+        std::fs::write(
+            widgets_dir.join("package.json"),
+            br#"{"name":"stub","version":"1.0.0","private":true}"#,
+        )
+        .expect("write package.json");
+        std::fs::create_dir_all(widgets_dir.join("node_modules")).expect("create node_modules/");
+        std::fs::write(widgets_dir.join("node_modules/.placeholder"), b"")
+            .expect("write placeholder");
+
+        let widget = WidgetConfig {
+            path: "widgets".to_string(),
+            build: Some(vec!["true".to_string()]),
+            install: None,
+            output_dir: "dist".to_string(),
+            embedded_in_crates: vec![],
+        };
+
+        let resolved = run_widget_build(&widget, workspace_root, /* quiet */ true)
+            .await
+            .expect("explicit build argv should bypass raw-HTML early-return");
+        assert_eq!(resolved.path, widgets_dir);
     }
 
     #[test]
