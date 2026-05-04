@@ -1,14 +1,14 @@
 ---
-status: diagnosed
+status: gap-closed
 phase: 79-cargo-pmcp-deploy-widget-pre-build-post-deploy-verification-
-source: [79-SUMMARY.md, 79-01-SUMMARY.md, 79-02-SUMMARY.md, 79-03-SUMMARY.md, 79-04-SUMMARY.md, 79-05-SUMMARY.md]
+source: [79-SUMMARY.md, 79-01-SUMMARY.md, 79-02-SUMMARY.md, 79-03-SUMMARY.md, 79-04-SUMMARY.md, 79-05-SUMMARY.md, 79-06-SUMMARY.md]
 started: 2026-05-03T00:00:00Z
 updated: 2026-05-03T00:00:00Z
 ---
 
 ## Current Test
 
-[diagnosis complete — 1 issue diagnosed, 3 tests skipped without reason]
+[gap closed — Test 3 fixed by Plan 79-06; 11 passed, 0 issues, 3 skipped without reason]
 
 ## Tests
 
@@ -33,41 +33,44 @@ expected: |
   (bun > pnpm > yarn > npm based on lockfile) runs `<pm> run build`
   BEFORE any `cargo build`. Console output shows the build script's
   output, then exits.
-result: issue
-reported: |
-  The new cargo pmcp test apps command strictly assumes that the widget
-  UI directory (widgets/) is a Node.js project. It blindly attempts to
-  run npm install and read a package.json file, resulting in a hard
-  crash (os error 2) when the file doesn't exist.
 
-  Why this is problematic for developers:
-  - Breaks the "Raw HTML" Use Case: The MCP Apps architecture beautifully
-    supports single-file, zero-build widgets (like keypad.html) that
-    import the SDK directly via a CDN (https://esm.sh/...). By strictly
-    demanding a package.json, the CLI forces developers to add
-    unnecessary boilerplate.
-  - Implicit npm install side-effects: Because the CLI runs npm install
-    unconditionally without checking if package.json exists in widgets/,
-    npm automatically traverses up the directory tree looking for one
-    (audited 1,839 packages — found one in a parent workspace
-    directory). This can accidentally modify node_modules or
-    package-lock.json files higher up.
-  - Unfriendly Error Propagation: Raw Rust OS-level I/O error
-    (Caused by: No such file or directory (os error 2)) instead of a
-    helpful diagnostic.
+  GAP-CLOSURE EXTENSION (Plan 79-06): for a `widgets/` directory
+  containing only raw `*.html` files (no `package.json`), the
+  orchestrator MUST treat it as a raw-HTML / CDN-import widget set,
+  print `treating <path> as raw HTML / CDN bundle, skipping build`,
+  spawn ZERO subprocesses, and still return Ok so the caller appends
+  the directory to `PMCP_WIDGET_DIRS` for the build.rs cache
+  invalidation chain.
+result: pass
+evidence: |
+  Plan 79-06 closed the gap. Verified by integration test
+  cargo-pmcp/tests/widgets_raw_html.rs::raw_html_widget_archetype_does_not_spawn_npm
+  which mirrors the Scientific-Calculator-MCP-App reproduction:
+  builds a tempdir-rooted workspace with `widgets/keypad.html`
+  containing `import { App } from "https://esm.sh/@modelcontextprotocol/ext-apps"`,
+  no `package.json`, no lockfile. Calls `run_widget_build` directly
+  (schema-direct). Asserts:
+    - returns Ok(resolved)
+    - resolved.absolute_output_dir = workspace_root/widgets/dist
+    - widgets/node_modules does NOT exist (no npm install spawned)
+    - widgets/package-lock.json does NOT exist
+    - workspace_root/package-lock.json does NOT exist (no parent-walk)
+  Test passes on a runner with NO npm/pnpm/yarn/bun on PATH — proof
+  that no subprocess is attempted.
 
-  Recommended fixes:
-  1. Graceful File Detection: use Path::exists() before reading
-     package.json or running npm.
-  2. Support Static/Raw Workflows: if package.json is absent, gracefully
-     skip npm install and Node.js dependency parsing — proceed directly
-     to serving/testing the static files.
-  3. Better Error Messaging: human-readable error if Node env is truly
-     required (e.g. "Error: test harness requires a package.json in the
-     widgets directory.")
+  Code changes (commit 7b3fe93a):
+  - New `is_node_project(widget_dir)` helper using Path::is_file().
+  - Early-return guard at the top of `run_widget_build` when
+    `!is_node_project`.
+  - Defense-in-depth Path::is_file() guard at the head of
+    `verify_build_script_exists` replacing raw os-error-2 with a
+    friendly diagnostic naming the directory and three remediation
+    paths.
 
-  Reference reproduction: ~/projects/mcp/Scientific-Calculator-MCP-App
-severity: major
+  cargo-pmcp version bumped 0.12.0 → 0.12.1 (commit 28381f34).
+  CHANGELOG.md `## [0.12.1] - 2026-05-03` entry under `### Fixed`.
+
+  Originally reported severity: major.
 
 ### 4. Missing node_modules triggers auto-install
 expected: |
@@ -171,8 +174,8 @@ result: skipped
 ## Summary
 
 total: 14
-passed: 10
-issues: 1
+passed: 11
+issues: 0
 pending: 0
 skipped: 3
 blocked: 0
@@ -180,8 +183,9 @@ blocked: 0
 ## Gaps
 
 - truth: "Widget pre-build supports the documented zero-config raw HTML / CDN-import widget use case (single-file widgets without package.json)"
-  status: failed
+  status: closed
   reason: "User reported: widgets/ without package.json hard-crashes with raw OS error 2 (No such file or directory). CLI runs `npm install` unconditionally — npm walks up to a parent workspace, audits ~1839 packages, and may modify node_modules / package-lock.json outside the project. Reproduction: ~/projects/mcp/Scientific-Calculator-MCP-App"
+  closed_by: "Plan 79-06 (commits 7b3fe93a + 28381f34) — `is_node_project` early-return guard + defense-in-depth + cargo-pmcp 0.12.1. Verified by integration test `cargo-pmcp/tests/widgets_raw_html.rs::raw_html_widget_archetype_does_not_spawn_npm`."
   severity: major
   test: 3
   root_cause: |
