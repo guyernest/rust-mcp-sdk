@@ -318,23 +318,13 @@ fn is_yarn_pnp(widget_dir: &Path) -> bool {
     widget_dir.join(".pnp.cjs").is_file() || widget_dir.join(".pnp.loader.mjs").is_file()
 }
 
-/// Plan 79-06 helper: detects whether `widget_dir` is a Node-managed project
-/// by checking for a `package.json` *file* at the directory root.
-///
 /// Returns `false` for raw-HTML / CDN-import widget directories (the
-/// documented zero-build MCP Apps archetype from Phase 45 onwards). When this
-/// returns `false`, [`run_widget_build`] takes the raw-HTML early-return path
-/// and spawns ZERO `npm`/`pnpm`/`yarn`/`bun` subprocesses — the directory's
-/// `*.html` files are served as-is and their CDN imports resolve at runtime.
+/// zero-build MCP Apps archetype). When this returns `false`,
+/// [`run_widget_build`] takes the raw-HTML early-return path and spawns
+/// ZERO `npm`/`pnpm`/`yarn`/`bun` subprocesses.
 ///
-/// Uses [`Path::is_file`] (not [`Path::exists`]) so a directory accidentally
-/// named `package.json` is treated as NOT a Node project. Cog ≤2.
-///
-/// This closes the Phase 79 UAT Test 3 gap-closure: prior to this guard, the
-/// widget pre-build orchestrator would unconditionally spawn `npm install`
-/// against any `widgets/` dir, causing npm to walk UP the directory tree (an
-/// audit of 1839 packages was observed against a parent workspace) and the
-/// subsequent `read_to_string(package.json)` to produce raw `os error 2`.
+/// Uses [`Path::is_file`] (not [`Path::exists`]) so a *directory* accidentally
+/// named `package.json` is treated as NOT a Node project.
 fn is_node_project(widget_dir: &Path) -> bool {
     widget_dir.join("package.json").is_file()
 }
@@ -388,18 +378,9 @@ pub async fn run_widget_build(
     widget.validate()?;
     let resolved = widget.resolve_paths(workspace_root);
 
-    // Plan 79-06 — raw-HTML / CDN-import widget archetype guard (Phase 45
-    // zero-build use case). When the widget dir has no `package.json`, we
-    // treat it as a raw-HTML / CDN bundle: NO `npm install`, NO build step,
-    // NO subprocess at all. Closes the UAT Test 3 regression where the
-    // orchestrator hard-crashed with raw `os error 2` and risked an
-    // `npm install` parent-walk audit (1839 packages observed in the
-    // Scientific-Calculator-MCP-App reproduction).
-    //
-    // CRITICAL HIGH-C1 invariant: we still return Ok(resolved) so the caller
-    // (`commands/deploy/mod.rs::pre_build_widgets_and_set_env`) appends this
-    // widget's absolute_output_dir to PMCP_WIDGET_DIRS — the build.rs
-    // cargo:rerun-if-changed chain still rebuilds the binary on *.html edits.
+    // Why Ok(resolved) and not a no-op return: the caller still appends
+    // `resolved.absolute_output_dir` to `PMCP_WIDGET_DIRS`, so build.rs's
+    // `cargo:rerun-if-changed` chain rebuilds the binary on `*.html` edits.
     if !is_node_project(&resolved.path) {
         if !quiet {
             println!(
@@ -537,13 +518,10 @@ async fn spawn_streaming(cmd: &str, args: &[String], cwd: &Path, label: &str) ->
 fn verify_build_script_exists(widget_dir: &Path) -> AnyhowResult<()> {
     let pkg_json_path = widget_dir.join("package.json");
 
-    // Plan 79-06 defense-in-depth: bail with a friendly diagnostic BEFORE
-    // `std::fs::read_to_string` raises raw `io::Error` ("os error 2"). The
-    // early-return in `run_widget_build` covers the common path; this guard
-    // covers the "explicit Node-shaped build/install argv against a non-Node
-    // dir" edge case (e.g., a stale `node_modules/` masking a deleted
-    // `package.json` — `ensure_node_modules` short-circuits on `node_modules/`
-    // so this function is reached without a manifest).
+    // Defense-in-depth: covers the edge case where `run_widget_build`'s
+    // early-return is bypassed (explicit Node-shaped build argv) AND
+    // `ensure_node_modules` short-circuits on a stale `node_modules/` — this
+    // function would otherwise hit `read_to_string` and surface raw `os error 2`.
     if !pkg_json_path.is_file() {
         bail!(
             "widget dir {} has no package.json — add one with a 'build' script, \
@@ -863,19 +841,6 @@ embedded_in_crates = ["my-crate"]
         assert_eq!(r.absolute_output_dir, PathBuf::from("/tmp/ws/widget/build"));
     }
 
-    // ========================================================================
-    // Plan 79-06: raw-HTML / CDN-import widget archetype guard tests
-    //
-    // These tests pin the gap-closure for UAT Test 3 (severity: major) where
-    // `cargo pmcp deploy` hard-crashed with raw `os error 2` on a `widgets/`
-    // directory containing only `*.html` files (no `package.json`). They lock
-    // the documented zero-build MCP Apps archetype from Phase 45 onwards.
-    // ========================================================================
-
-    /// Plan 79-06 Test U1: `is_node_project` detects a Node-managed widget
-    /// directory by the presence of a `package.json` *file* at the directory
-    /// root. Uses `Path::is_file()` (not `Path::exists()`) so a directory
-    /// accidentally named `package.json` is treated as NOT a Node project.
     #[test]
     fn is_node_project_detects_package_json() {
         // Empty tempdir → not a Node project.
@@ -923,16 +888,9 @@ embedded_in_crates = ["my-crate"]
         );
     }
 
-    /// Plan 79-06 Test U2: `run_widget_build` against a tempdir-rooted
-    /// workspace whose `widgets/` directory contains only `keypad.html` (with
-    /// a CDN import, no `package.json`, no lockfile) returns `Ok(resolved)`,
-    /// resolves the expected paths, and does NOT spawn any subprocess.
-    ///
-    /// Proof that no subprocess was spawned: the test passes on a runner with
-    /// no `npm`/`pnpm`/`yarn`/`bun` on PATH (the early-return guard in
-    /// `run_widget_build` short-circuits BEFORE `spawn_streaming` runs). If
-    /// the guard regressed, this test would fail with the original `os error
-    /// 2` (or `npm not found`) on bare CI runners.
+    /// Proof that no subprocess was spawned: passes on a runner with no
+    /// `npm`/`pnpm`/`yarn`/`bun` on PATH because the early-return short-
+    /// circuits before `spawn_streaming`.
     #[tokio::test]
     async fn run_widget_build_raw_html_skip() {
         let tmp = tempfile::tempdir().expect("tempdir");
@@ -975,50 +933,6 @@ new App({});
         );
     }
 
-    /// Plan 79-06 Test U3: same fixture as U2 but `quiet=false`. We assert
-    /// behaviorally that `Ok(resolved)` is still returned and no subprocess
-    /// was spawned. The println side-effect is exercised manually via
-    /// integration tests; asserting on stdout would require a Write seam that
-    /// adds complexity without proportional value.
-    #[tokio::test]
-    async fn run_widget_build_raw_html_emits_skip_line_when_not_quiet() {
-        let tmp = tempfile::tempdir().expect("tempdir");
-        let workspace_root = tmp.path();
-        let widgets_dir = workspace_root.join("widgets");
-        std::fs::create_dir_all(&widgets_dir).expect("create widgets/");
-        std::fs::write(
-            widgets_dir.join("keypad.html"),
-            b"<html><body>raw HTML</body></html>",
-        )
-        .expect("write keypad.html");
-
-        let widget = WidgetConfig {
-            path: "widgets".to_string(),
-            build: None,
-            install: None,
-            output_dir: "dist".to_string(),
-            embedded_in_crates: vec![],
-        };
-
-        // quiet=false: the println! runs but we don't capture stdout (would
-        // require a Write seam). The behavioral assertion (Ok + no subprocess
-        // side-effects) is U2's job; this test pins that quiet=false does
-        // NOT change the early-return outcome.
-        let resolved = run_widget_build(&widget, workspace_root, /* quiet */ false)
-            .await
-            .expect("raw-HTML widget with quiet=false should not error");
-
-        assert_eq!(resolved.path, workspace_root.join("widgets"));
-        assert!(
-            !widgets_dir.join("node_modules").exists(),
-            "no npm install with quiet=false either"
-        );
-    }
-
-    /// Plan 79-06 Test U4: defense-in-depth — `verify_build_script_exists`
-    /// produces a friendly bail BEFORE `read_to_string` raises raw
-    /// `io::Error: No such file or directory (os error 2)`. The error names
-    /// the widget directory and points to actionable next steps.
     #[test]
     fn verify_build_script_exists_friendly_bail_on_missing_package_json() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -1052,9 +966,8 @@ new App({});
         );
     }
 
-    /// Plan 79-06 Test U5: locks the EXISTING REQ-79-03 verbatim error when
-    /// `package.json` is present but lacks a `scripts.build` entry. This pins
-    /// regression coverage that the new defense-in-depth guard does NOT
+    /// Locks the verbatim error when `package.json` is present but lacks a
+    /// `scripts.build` entry. Pins that the defense-in-depth guard does not
     /// disturb the pre-existing code path.
     #[test]
     fn verify_build_script_exists_existing_friendly_bail_unchanged_when_package_json_present_but_no_build_script(
@@ -1071,12 +984,11 @@ new App({});
         );
     }
 
-    /// Plan 79-06 Test U6: regression coverage that the Node-pipeline path is
-    /// NOT broken by the new guard. A widget with a real `package.json` and a
-    /// stub `node_modules/.placeholder` (so `ensure_node_modules` short-
-    /// circuits without requiring npm on PATH) plus an explicit
-    /// `widget.build = ["true"]` argv MUST run end-to-end and return
-    /// `Ok(resolved)` — proving the early-return guard was NOT taken.
+    /// Regression: the Node-pipeline path is unchanged by the raw-HTML guard.
+    /// A real `package.json` + stub `node_modules/.placeholder` (so
+    /// `ensure_node_modules` short-circuits without npm on PATH) + explicit
+    /// `widget.build = ["true"]` runs end-to-end — proving the early-return
+    /// was NOT taken.
     #[tokio::test]
     #[cfg(unix)]
     async fn run_widget_build_node_path_unchanged_with_package_json() {
@@ -1095,9 +1007,7 @@ new App({});
 
         let widget = WidgetConfig {
             path: "widgets".to_string(),
-            // Explicit POSIX `true` argv — exits 0 on every Unix-like CI runner
-            // and sidesteps `verify_build_script_exists` per the existing
-            // Wave 2 contract.
+            // Explicit `true` argv sidesteps `verify_build_script_exists`.
             build: Some(vec!["true".to_string()]),
             install: None,
             output_dir: "dist".to_string(),
