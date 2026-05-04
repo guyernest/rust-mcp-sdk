@@ -1089,8 +1089,7 @@ new App({});
             br#"{"scripts":{"build":"true"}}"#,
         )
         .expect("write package.json");
-        std::fs::create_dir_all(widgets_dir.join("node_modules"))
-            .expect("create node_modules/");
+        std::fs::create_dir_all(widgets_dir.join("node_modules")).expect("create node_modules/");
         std::fs::write(widgets_dir.join("node_modules/.placeholder"), b"")
             .expect("write placeholder");
 
