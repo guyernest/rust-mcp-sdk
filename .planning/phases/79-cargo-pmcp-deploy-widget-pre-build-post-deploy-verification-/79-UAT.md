@@ -1,5 +1,5 @@
 ---
-status: partial
+status: diagnosed
 phase: 79-cargo-pmcp-deploy-widget-pre-build-post-deploy-verification-
 source: [79-SUMMARY.md, 79-01-SUMMARY.md, 79-02-SUMMARY.md, 79-03-SUMMARY.md, 79-04-SUMMARY.md, 79-05-SUMMARY.md]
 started: 2026-05-03T00:00:00Z
@@ -8,7 +8,7 @@ updated: 2026-05-03T00:00:00Z
 
 ## Current Test
 
-[testing paused — 1 issue found, 3 skipped without reason]
+[diagnosis complete — 1 issue diagnosed, 3 tests skipped without reason]
 
 ## Tests
 
@@ -181,13 +181,40 @@ blocked: 0
 
 - truth: "Widget pre-build supports the documented zero-config raw HTML / CDN-import widget use case (single-file widgets without package.json)"
   status: failed
-  reason: "User reported: widgets/ without package.json hard-crashes with raw OS error 2 (No such file or directory). CLI runs `npm install` unconditionally — npm walks up to a parent workspace, audits ~1839 packages, and may modify node_modules / package-lock.json outside the project. Recommended: Path::exists() guard before reading package.json, gracefully skip npm install for raw HTML widgets, replace OS panic with human-readable diagnostic. Reproduction: ~/projects/mcp/Scientific-Calculator-MCP-App"
+  reason: "User reported: widgets/ without package.json hard-crashes with raw OS error 2 (No such file or directory). CLI runs `npm install` unconditionally — npm walks up to a parent workspace, audits ~1839 packages, and may modify node_modules / package-lock.json outside the project. Reproduction: ~/projects/mcp/Scientific-Calculator-MCP-App"
   severity: major
   test: 3
-  root_cause: ""
-  artifacts: []
+  root_cause: |
+    cargo-pmcp/src/deployment/widgets.rs detect_widgets() (lines 269-289) synthesises a WidgetConfig for any
+    `widget/` or `widgets/` directory that exists, with ZERO check for package.json. The synthesised config
+    flows into run_widget_build() (line 362) → ensure_node_modules() (line 380) which only short-circuits on
+    node_modules/ present OR Yarn-PnP markers (NOT on missing package.json) — so it spawns `npm install` in a
+    dir with no manifest. Then verify_build_script_exists() (line 495) calls `fs::read_to_string(pkg_json_path)`
+    which produces the raw "os error 2" the user saw. The friendly bail at line 502 is unreachable.
+
+    Bug surface: Path A (deploy pre-build) AFFECTED. Path B (`cargo pmcp test apps`) NOT affected — it only
+    walks *.html via scan_widgets_dir and never reads package.json or runs npm. The user observed the crash
+    in the deploy pipeline before the test-apps subprocess was even spawned.
+
+    npm parent-walk (1839 packages audited) is npm's own behavior when it can't find a local package.json,
+    NOT a CWD bug in our code (spawn_streaming correctly sets current_dir to widgets/). Fix is to NOT spawn
+    npm when local package.json is missing, not to change cwd.
+  artifacts:
+    - path: "cargo-pmcp/src/deployment/widgets.rs:269-289"
+      issue: "detect_widgets synthesises Node-shaped config for any widget/widgets dir without checking package.json"
+    - path: "cargo-pmcp/src/deployment/widgets.rs:362-374"
+      issue: "run_widget_build enters Node pipeline unconditionally — no raw-HTML branch"
+    - path: "cargo-pmcp/src/deployment/widgets.rs:380-404"
+      issue: "ensure_node_modules spawns npm install without checking package.json (only checks node_modules/ + Yarn-PnP)"
+    - path: "cargo-pmcp/src/deployment/widgets.rs:493-507"
+      issue: "verify_build_script_exists raw read_to_string produces os error 2 instead of friendly diagnostic; bail at :502 is unreachable"
+    - path: "cargo-pmcp/src/commands/deploy/mod.rs:522-547,880-890"
+      issue: "call site that chains into the broken pipeline"
   missing:
-    - "Path::exists() guard for widgets/package.json before any npm invocation"
-    - "Skip npm install + build steps when package.json is absent (raw HTML / CDN widgets)"
-    - "Replace raw std::io::Error os-error-2 propagation with a friendly diagnostic if a Node env IS strictly required by the chosen mode"
+    - "is_node_project(widget_dir) helper checking widget_dir.join('package.json').is_file()"
+    - "Early-return in run_widget_build when !is_node_project — print 'treating as raw HTML / CDN bundle, skipping build' and still populate PMCP_WIDGET_DIRS"
+    - "Defense-in-depth Path::is_file() guard inside verify_build_script_exists with friendly bail (covers explicit-argv path)"
+    - "Optional: bail when explicit widget.build/widget.install argv starts with npm|pnpm|yarn|bun AND no package.json (warn user-take-the-wheel)"
+    - "Unit test: run_widget_build against widget dir with only *.html, no package.json → Ok + skip-build console message"
+    - "Integration test: documented Raw HTML / CDN widget archetype (keypad.html style)"
   debug_session: ""
