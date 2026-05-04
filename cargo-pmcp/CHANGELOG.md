@@ -5,6 +5,38 @@ All notable changes to the `cargo-pmcp` crate will be documented in this file.
 The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html).
 
+## [0.12.1] - 2026-05-03
+
+### Fixed
+- **Widget pre-build no longer hard-crashes on raw-HTML / CDN-import widgets.**
+  Fixes the regression where `cargo pmcp deploy` aborted with raw `io::Error`
+  ("No such file or directory", `os error 2`) when the auto-detected `widget/`
+  or `widgets/` directory contained only `*.html` files importing the SDK from
+  a CDN (e.g. `https://esm.sh/@modelcontextprotocol/ext-apps`). The Phase 45
+  zero-build MCP Apps archetype is now correctly detected as raw-HTML and the
+  Node pipeline (`npm install`, `npm run build`) is skipped entirely.
+- **Eliminates the `npm install` parent-walk side effect.** Previously, when
+  `package.json` was missing from `widgets/`, the CLI still spawned `npm
+  install`; npm walked UP the directory tree, found a `package.json` in a
+  parent workspace, and audited 1839 packages — risking writes to
+  `node_modules/` or `package-lock.json` outside the project. The fix bails
+  before any subprocess is spawned.
+- **Defense-in-depth diagnostic** at `verify_build_script_exists`: missing
+  `package.json` now produces an actionable error naming the widget directory
+  and three remediation paths (add `package.json`, configure `[[widgets]]`
+  with a non-Node build, or remove the override). Replaces the unactionable
+  raw OS error.
+
+### Notes
+- HIGH-C1 invariant preserved: raw-HTML widget directories are still appended
+  to `PMCP_WIDGET_DIRS` (colon-list), so the generated `build.rs`
+  `cargo:rerun-if-changed` chain still rebuilds the binary on `*.html` edits.
+- HIGH-G1 invariant preserved: `discover_local_widget_dirs()` build.rs
+  fallback unchanged.
+- HIGH-G2 invariant preserved: `ROLLBACK_REJECT_MESSAGE` unchanged.
+- Reference reproduction fixed: `~/projects/mcp/Scientific-Calculator-MCP-App`
+  (UAT Test 3, severity: major).
+
 ## [0.12.0] - 2026-05-03
 
 ### Added
