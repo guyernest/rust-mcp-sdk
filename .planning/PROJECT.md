@@ -86,7 +86,7 @@ Tool handlers can manage long-running operations through a durable task lifecycl
 
 ## Current State
 
-v2.1 in progress. All prior milestones (v1.0-v2.0) shipped. Phase 77 complete — `cargo pmcp configure {add,use,list,show}` ships in cargo-pmcp 0.11.0 with TOML config in `~/.pmcp/config.toml`, per-workspace `.pmcp/active-target` marker, 4-source precedence resolver (ENV > flag > target > deploy.toml), and fixed-order banner emission.
+v2.1 in progress. All prior milestones (v1.0-v2.0) shipped. Phase 79 complete — `cargo pmcp deploy` widget pre-build + post-deploy verification ships in cargo-pmcp 0.12.1, including the raw-HTML / CDN-import widget archetype guard (zero-config single-file widgets without `package.json` no longer crash with `os error 2` and no longer trigger an `npm install` parent-walk audit).
 
 **Shipped milestones:**
 - v1.0: MCP Tasks Foundation (types, store, server integration)
@@ -188,4 +188,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-04-26 after Phase 77 (cargo pmcp configure commands, cargo-pmcp 0.11.0); previously 2026-04-23 after Phase 76 (cargo-pmcp IAM declarations, 0.10.0)*
+*Last updated: 2026-05-03 after Phase 79 gap closure (raw-HTML / CDN-import widget pre-build guard, cargo-pmcp 0.12.1); previously 2026-04-26 after Phase 77 (cargo pmcp configure commands, cargo-pmcp 0.11.0)*
