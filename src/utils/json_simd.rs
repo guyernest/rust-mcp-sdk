@@ -71,7 +71,7 @@ impl StripState {
 /// Parse JSON with SIMD acceleration when available.
 ///
 /// Refactored in 75-01 Task 1a-B (P1): extracted
-/// [`validate_utf8_or_err`] and [`strip_whitespace_simd_aware`] so this
+/// `validate_utf8_or_err` and `strip_whitespace_simd_aware` so this
 /// function becomes a short control-flow dispatch around the SIMD hot path.
 #[cfg(all(feature = "simd", target_arch = "x86_64"))]
 pub fn parse_json_fast<T: for<'de> Deserialize<'de>>(input: &[u8]) -> Result<T, JsonError> {
@@ -226,9 +226,9 @@ fn pretty_print_simd(value: &Value) -> Result<String, JsonError> {
 /// Fast JSON pretty printing.
 ///
 /// Refactored in 75-01 Task 1a-B (P1): extracted `PrettyPrintCtx` state
-/// struct, [`process_pretty_byte`], [`append_non_string_byte`],
-/// [`push_open_bracket`], [`push_close_bracket`], and
-/// [`pretty_print_simd`] so this orchestrator is a short cfg+feature-gate.
+/// struct, `process_pretty_byte`, `append_non_string_byte`,
+/// `push_open_bracket`, `push_close_bracket`, and
+/// `pretty_print_simd` so this orchestrator is a short cfg+feature-gate.
 pub fn pretty_print_fast(value: &Value) -> Result<String, JsonError> {
     #[cfg(all(feature = "simd", target_arch = "x86_64"))]
     {

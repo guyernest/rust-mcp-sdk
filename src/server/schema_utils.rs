@@ -124,8 +124,8 @@ fn apply_inline_pass(
 /// Normalize a JSON schema with custom configuration.
 ///
 /// Refactored in 75-01 Task 1a-B (P1): extracted
-/// [`strip_schema_metadata`], [`extract_definitions_block`],
-/// [`try_inline_root_ref`], [`apply_inline_pass`] so this orchestrator is a
+/// `strip_schema_metadata`, `extract_definitions_block`,
+/// `try_inline_root_ref`, `apply_inline_pass` so this orchestrator is a
 /// sequential pipeline.
 #[cfg(feature = "schema-generation")]
 pub fn normalize_schema_with_config(mut schema: Value, config: &NormalizerConfig) -> Value {
