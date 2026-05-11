@@ -200,7 +200,11 @@ jobs:
           cargo install cargo-llvm-cov
         fi
         if ! command -v cargo-nextest &> /dev/null; then
-          cargo install cargo-nextest
+          # Why: cargo-nextest 0.9.133+ embeds a `locked-tripwire` build-time
+          # compile_error! that aborts unless `--locked` is passed. Without
+          # this flag CI fails with "Nextest does not support being installed
+          # without --locked." See https://nexte.st/docs/installation/from-source/
+          cargo install --locked cargo-nextest
         fi
         # Force install latest cargo-audit to support CVSS 4.0
         cargo install cargo-audit --force

@@ -1,6 +1,6 @@
 [package]
 name = "pmcp-code-mode"
-version = "0.5.0"
+version = "0.5.1"
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/paiml/rust-mcp-sdk"
@@ -45,8 +45,12 @@ sqlparser = { version = "0.61", optional = true }
 cedar-policy = { version = "4.9", optional = true }
 
 # AWS Verified Permissions (optional)
-aws-config = { version = "1", optional = true }
-aws-sdk-verifiedpermissions = { version = "1", optional = true }
+# Why: default features enable `rustls` → aws-smithy-runtime/tls-rustls →
+# aws-smithy-http-client/legacy-rustls-ring → rustls 0.21 / rustls-webpki 0.101
+# (RUSTSEC-2026-0098/0099/0104). Opt into the modern `default-https-client`
+# path (rustls 0.23 via aws-lc-rs) instead.
+aws-config = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio", "credentials-process", "sso", "behavior-version-latest"], optional = true }
+aws-sdk-verifiedpermissions = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio", "behavior-version-latest"], optional = true }
 
 [features]
 default = []

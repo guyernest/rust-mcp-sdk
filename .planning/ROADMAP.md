@@ -1039,3 +1039,141 @@ Plans:
 - [x] 76-03-PLAN.md — Wave 3: Translation rules (`deployment/iam.rs::render_iam_block`) emitting D-02 4-action DynamoDB lists + S3 object-level ARNs + passthrough statements, wired into `render_stack_ts` via a single `{iam_block}` named placeholder + per-rule unit tests + 9 proptests
 - [x] 76-04-PLAN.md — Wave 4: Validator (`validate` + `Warning`) enforcing 6 CR-locked hard-error rules + 2 warning classes + `ValidateCommand::Deploy` subcommand + DeployExecutor hook blocking deploy on hard errors + 29 new tests covering T-76-02 mitigation
 - [x] 76-05-PLAN.md — Wave 5: `fuzz_iam_config` libfuzzer target + corpus seeds + `deploy_with_iam` runnable example + cost-coach fixture + DEPLOYMENT.md IAM Declarations section + README.md pointer + CHANGELOG 0.10.0 entry + version bump + final `make quality-gate`
+
+### Phase 77: Add cargo pmcp configure commands
+
+Developers using cargo pmcp across multiple deployment and upload targets (dev/prod, per-server) currently struggle to maintain and switch between environments. Design and implement `cargo pmcp configure` (modeled after `aws configure`) that lets a developer:
+
+(1) define named targets (e.g., dev, prod, staging) with target-specific configuration: pmcp.run discovery endpoint URL (PMCP_API_URL like https://ipwojemcm6.execute-api.us-west-2.amazonaws.com or its /.well-known/pmcp-config variant), AWS CLI profile, region, and any target-specific credentials/secrets;
+
+(2) switch quickly between targets with a per-workspace selection (one server can stay in dev mode pointing at a dev pmcp.run while a sibling server in the same monorepo deploys to prod);
+
+(3) extend cleanly to non-pmcp.run target types: aws-lambda direct deploy with different AWS profiles, Google Cloud Run, or future targets;
+
+(4) integrate with existing cargo pmcp deploy / cargo pmcp pmcp.run upload flows so they read the active target instead of hardcoded URLs/profiles.
+
+Scope likely includes: a config schema (TOML in workspace .pmcp/ or user ~/.config/pmcp/), `cargo pmcp configure add|use|list|remove|show`, env var override support (PMCP_TARGET=name), and explicit precedence rules between workspace, user, and env.
+
+**Goal:** Ship a `cargo pmcp configure` command group (add/use/list/show) that manages named deployment targets in `~/.pmcp/config.toml` and a per-workspace `.pmcp/active-target` marker; integrates with `cargo pmcp deploy` and `pmcp.run upload` via a precedence-merge resolver (ENV > flag > target > deploy.toml) and a fixed-order header banner; maintains zero-touch backward compatibility for users without a config.toml.
+**Requirements**: REQ-77-01, REQ-77-02, REQ-77-03, REQ-77-04, REQ-77-05, REQ-77-06, REQ-77-07, REQ-77-08, REQ-77-09, REQ-77-10
+**Depends on:** Phase 76
+**Plans:** 9/9 plans complete
+
+Plans:
+- [x] 77-01-PLAN.md — Mint REQ-77-01..REQ-77-10 in REQUIREMENTS.md; bump cargo-pmcp 0.10.0 → 0.11.0; CHANGELOG stub
+- [x] 77-02-PLAN.md — Rename existing deploy `--target` to `--target-type` (with alias); add new global `--target` named-target flag on Cli
+- [x] 77-03-PLAN.md — Module skeleton + TargetConfigV1 schema (TOML, atomic write, 0o600) + workspace utility
+- [x] 77-04-PLAN.md — `configure add` (interactive + flag-driven, raw-credential validator) + `configure use` (workspace marker)
+- [x] 77-05-PLAN.md — `configure list` (text + stable JSON) + `configure show` (raw + merged-with-attribution placeholder)
+- [x] 77-06-PLAN.md — Resolver (precedence walk, env injection helper) + banner (D-13 fixed-order, OnceLock idempotent) + show.rs enrichment
+- [x] 77-07-PLAN.md — Top-level Cli wiring: register Configure variant, dispatch arm, env injection in main.rs, banner emission in deploy/mod.rs
+- [x] 77-08-PLAN.md — Integration tests (full lifecycle, zero-touch, concurrent writes) + fuzz target + working multi-target-monorepo example
+- [x] 77-09-PLAN.md — DRY cleanup (shared validate_target_name) + rustdoc audit + CHANGELOG date + `make quality-gate` certification + manual interactive UX checkpoint
+
+### Phase 78: cargo pmcp test apps --mode claude-desktop: detect missing MCP Apps SDK wiring in widgets
+
+Goal: Catch the silent-fail bug where a widget passes `cargo pmcp test apps` and renders fine in ChatGPT but breaks in Claude Desktop / claude.ai because the widget HTML never imports `@modelcontextprotocol/ext-apps`, never instantiates `App`, and never registers the four required handlers (`onteardown`, `ontoolinput`, `ontoolcancelled`, `onerror`) before `connect()`.
+
+Scope (this phase):
+1. Promote `AppValidationMode::ClaudeDesktop` from placeholder ("same as Standard for now" at `crates/mcp-tester/src/app_validator.rs:28-29`) to a real strict mode.
+2. In `cargo-pmcp/src/commands/test/apps.rs`, fetch each App-capable tool widget body via `resources/read` and pass `Vec<(uri, html)>` into the validator (keeps validator a pure function; ~30 LOC of plumbing).
+3. Add static script-block checks behind `--mode claude-desktop`:
+   - Imports `@modelcontextprotocol/ext-apps` OR has >=3 of the 4 protocol-handler property assignments (handles minified bundles where the import string is preserved but identifiers are renamed; both signals survive Vite singlefile minification).
+   - Constructs `new App({...})` with non-empty Implementation.
+   - Registers `onteardown`, `ontoolinput`, `ontoolcancelled`, `onerror` (ERROR each).
+   - Registers `ontoolresult` (WARN - some widgets render from `getHostContext().toolOutput`).
+   - Calls `app.connect()` (ERROR).
+   - "ChatGPT-only channels and no ext-apps wiring" -> ERROR in `claude-desktop` mode, OK in `chatgpt` mode.
+4. Severity calibration matches existing pattern: `Standard` mode = WARN (MCP Apps is optional in the spec); `ClaudeDesktop` mode = ERROR - mirrors how `Standard` vs `ChatGpt` treat `openai/*` keys today.
+5. Polish: error messages link to specific anchors in `src/server/mcp_apps/GUIDE.md` (especially the "Critical: register all four handlers before connect()" warning at line 185); update README and `cargo pmcp test apps --help` to document the new mode and recommend it as the pre-deploy check for servers shipping to Claude clients.
+
+Out of scope (defer to a later phase):
+- `PreviewMode::ClaudeDesktop` host emulator (postMessage init/tool-result/teardown simulation in `crates/mcp-preview/src/server.rs`). User wants to think about it later and may unify the preview UX across ChatGPT/Claude modes rather than add a third mode.
+
+Reference / context:
+- Proposal from the Cost Coach team: `/Users/guy/projects/mcp/cost-coach/drafts/proposal-pmcp-mcp-app-widget-validation.md`
+- Failing widget bundle + working fix available from Cost Coach as a regression fixture (request via the proposal author).
+- Verified state of the codebase: `AppValidationMode::ClaudeDesktop` is wired into Display/FromStr/CLI parsing but has zero behavior behind it; `AppValidator::validate_tools` only consumes `&[ResourceInfo]` metadata - no `resources/read` call, so widget HTML is never inspected.
+
+ALWAYS requirements (per CLAUDE.md):
+- Unit tests for each new check (positive and negative cases for each handler / SDK signal).
+- Property tests for the script-block scanner (must not panic on arbitrary HTML/JS input; idempotent on normalized whitespace).
+- Fuzz target for the regex/AST scan path.
+- A working example: a `cargo run --example` (or fixture under `examples/`) showing a deliberately-broken widget that fails `--mode claude-desktop` and a corrected one that passes - same widget pair the Cost Coach team will provide.
+
+Acceptance criteria:
+- The Cost Coach reproducer (broken widget) FAILS `cargo pmcp test apps --mode claude-desktop` with errors that name the missing handler(s).
+- The corrected version PASSES.
+- `cargo pmcp test apps` (no flag, Standard mode) still passes for both - no regression for the permissive default.
+- `--mode chatgpt` behavior unchanged.
+- README + `--help` document the new mode.
+
+**Goal:** Promote `AppValidationMode::ClaudeDesktop` from a placeholder to a real strict mode that statically inspects each App-capable widget HTML body (fetched via `resources/read`) for the `@modelcontextprotocol/ext-apps` import, the `new App({...})` constructor, the four required protocol handlers (`onteardown`, `ontoolinput`, `ontoolcancelled`, `onerror`), and the `app.connect()` call — emitting ERROR (vs WARN in Standard mode) on missing signals so widgets shipping to Claude Desktop / Claude.ai are caught before deploy.
+**Requirements**: PHASE-78-AC-1, PHASE-78-AC-2, PHASE-78-AC-3, PHASE-78-AC-4, PHASE-78-AC-5, PHASE-78-ALWAYS-UNIT, PHASE-78-ALWAYS-PROPERTY, PHASE-78-ALWAYS-FUZZ, PHASE-78-ALWAYS-EXAMPLE
+**Depends on:** Phase 77
+**Plans:** 7/11 plans executed (cycle-1 03/04 done; cycle-1 wave 4 plan 08 paused at checkpoint; cycle-2 plans 09-11 added 2026-05-02)
+
+Plans:
+**Wave 1**
+- [x] 78-01-PLAN.md — Validator core: extend `AppValidator` with `validate_widgets`, regex-based scanner, mode-driven severity (Wave 1)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+- [x] 78-02-PLAN.md — CLI plumbing: wire `read_widget_bodies` into `cargo pmcp test apps` (Wave 2)
+- [x] 78-04-PLAN.md — Docs polish: README sections, `--help` long-text, GUIDE.md anchor expander (Wave 3, parallel with 78-03)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+- [x] 78-03-PLAN.md — ALWAYS requirements: fixtures, property tests, fuzz target, working example (Wave 3)
+
+### Phase 79: cargo pmcp deploy: widget pre-build + post-deploy verification (build half: auto-detect widget/ and widgets/ only, package-manager runner, generated build.rs with cargo:rerun-if-changed via env-var path resolution, [[widgets]] config with explicit embedded_in_crates, doctor checks; verify half: warmup grace + test check + conformance + apps --mode claude-desktop, on_failure=fail default; depends on Phase 78; out of scope: auto-rollback, multi-target)
+
+**Goal:** Close two silent-failure gaps in `cargo pmcp deploy` proven by Cost Coach: (A) deploy ships stale `widget/dist/*.html` because nobody ran `npm run build`; (B) Cargo's incremental cache holds a stale `include_str!`-built binary; (C) widget JS SDK is misconfigured but deploy reports success because nothing probes the live endpoint. Build half auto-detects widget directories, runs the lockfile-determined package manager, sets `PMCP_WIDGET_DIR` for cache invalidation via a generated `build.rs`. Verify half runs warmup → check → conformance → apps lifecycle after Lambda hot-swap and surfaces a screaming-loud LIVE-but-broken banner on failure (`on_failure="fail"` default) with the manual rollback command pre-printed.
+**Requirements**: REQ-79-01..18 (locally-derived per CONTEXT.md "Implementation Decisions"; phase has no numbered REQUIREMENTS.md entries)
+**Depends on:** Phase 78
+**Plans:** 7/7 plans complete
+
+Plans:
+- [x] 79-00-PLAN.md — Master plan: wave structure, requirement-to-plan mapping, version bumps, locked planner decisions
+- [x] 79-01-PLAN.md — Wave 1: test fixtures + config schema (`WidgetsConfig`, `PostDeployTestsConfig`, `OnFailure`, `TestOutcome`)
+- [x] 79-02-PLAN.md — Wave 2: widget pre-build orchestrator + `--no-widget-build` / `--widgets-only` CLI flags + `PMCP_WIDGET_DIR` env-var contract
+- [x] 79-03-PLAN.md — Wave 3: post-deploy verifier (subprocess-spawn `cargo pmcp test {check,conformance,apps}` via `current_exe()`) + 4 verify-half flags + WARN-at-deploy-START for `OnFailure::Rollback`
+- [x] 79-04-PLAN.md — Wave 4: doctor `check_widget_rerun_if_changed` + `cargo pmcp app new` build.rs scaffold + runnable example + fuzz target + `cargo-pmcp 0.12.0` version bump + CHANGELOG
+
+---
+
+#### Phase 78 — Gap closure (Plans 05–08, added 2026-05-02)
+
+After cost-coach team UAT against prod (`https://cost-coach.us-west.pmcp.run/mcp`, 8 widgets, 97 tests, 33 failures — all confirmed false positives), 5 gaps were filed in 78-VERIFICATION.md and 4 gap-closure plans were spawned. AC-78-1, AC-78-2, AC-78-3 fail at the binary boundary against real prod; library-boundary verification (9/9 truths) was already passing. The cost-coach prod evidence: bundled widgets contain mangled constructor identifiers (e.g. `new yl({name:"cost-coach-cost-summary",version:"1.0.0"})`) that defeat the v1 `new App\(` regex, the `[ext-apps]` package name only survives as a log-prefix string (not the import literal `@modelcontextprotocol/ext-apps`), and the v1 SDK-detection failure cascades to all 8 handler/connect checks, producing `1 false negative → 8× false negatives` per affected widget.
+
+**Plans (all `gap_closure: true`):**
+
+**Wave 1**
+- [x] 78-05-PLAN.md — RED-phase regression fixtures: 3 bundled HTML fixtures + `app_validator_widgets_bundled.rs` integration tests asserting verdict shape per fixture × mode; tests MUST FAIL today (G5)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+- [x] 78-06-PLAN.md — Validator core fixes (G1+G2+G3): minification-resistant SDK-presence signals (`[ext-apps]` log prefix + `ui/initialize` + `ui/notifications/tool-result` method literals); mangled-id-tolerant constructor regex; eliminate SDK-to-handler/connect cascade
+
+**Wave 3** *(blocked on Wave 2 completion)*
+- [x] 78-07-PLAN.md — `cargo pmcp test apps --widgets-dir <path>` source-scan flag (G4): scan `<path>/*.html` instead of fetching via `resources/read`; mirrors `cargo pmcp preview --widgets-dir` semantics; 3 CLI-boundary integration tests via `assert_cmd`
+
+**Wave 4** *(blocked on Wave 3 completion)*
+- [ ] 78-08-PLAN.md — ALWAYS coverage extension + docs + HUMAN-UAT re-bind: new `prop_g3_handler_detection_independent_of_sdk` proptest, `validate_widget_pair` example demos cost-coach prod-bundle shape, READMEs document `--widgets-dir`, `78-HUMAN-UAT.md` rewritten with 6 re-bound items including cost-coach prod re-verify (Test 6)
+
+**Re-verification gate:** After Plan 06 lands, the cost-coach v1 run (97 tests, 33 false positives) must be re-executed and report zero false-positive failures on the 8 prod widgets. The 5 deferred AC-78-1..5 items are re-bound to the post-Plan-07 `--widgets-dir` path so binary-boundary verification no longer requires the deferred fixture binary `mcp_widget_server.rs.todo`.
+
+
+#### Phase 78 — Gap closure cycle 2 (Plans 09-11, added 2026-05-02)
+
+After cycle-1 closure (Plans 05-08 completed 2026-05-02), the operator re-ran Test 6 against `https://cost-coach.us-west.pmcp.run/mcp` and got the SAME 33 Failed rows. The cycle-1 synthetic fixtures didn't generalize to real Vite-singlefile prod output. Per-widget breakdown in `uat-evidence/2026-05-02-cost-coach-prod-rerun.md`: G2 constructor regex misses 8/8 prod widgets; G1 SDK signals miss 4/8. Diagnosis: Plan 05's fixtures were modeled from feedback-described shape, not bytes captured from prod — RED→GREEN passed against the model, missed reality. Cycle 2 binds the regression set to bytes captured from real prod.
+
+**Plans (all `gap_closure: true`):**
+
+**Wave 1**
+- [ ] 78-09-PLAN.md — Real-prod fixture capture (RED phase): 6 cost-coach prod widget bundles fetched from live cost-coach prod (or local checkout) into `tests/fixtures/widgets/bundled/real-prod/` + CAPTURE.md provenance + 7 RED-phase integration tests (6 real-prod fixtures × claude-desktop + 1 cycle-1 no-regression sentinel) bound to those bytes; tests MUST FAIL today (G6)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+- [ ] 78-10-PLAN.md — Validator G1+G2 generalization (GREEN phase): derive new SDK-presence + constructor patterns from real-prod CAPTURE.md grep evidence; widen mangled-id cap, add quoted-key tolerance + reordered-key support to G2; OR new G1 signals into has_sdk; preserve cycle-1 unit/property/integration tests; PMAT cog ≤ 25 + zero SATD; new G2-false-positive-guard property test guards against the widening risk
+
+**Wave 3** *(blocked on Wave 2 completion)*
+- [ ] 78-11-PLAN.md — ALWAYS-coverage extension + HUMAN-UAT cycle-2 rewrite + Test 6 re-verification checkpoint: extend `validate_widget_pair.rs` example with 6 cycle-2 real-prod widget runs + tally + success-path summary; rewrite `78-HUMAN-UAT.md` with cycle-2-explicit Test 6 acceptance bar (zero Failed rows on 8 cost-coach prod widgets); operator re-runs Test 6 against prod and resumes with `approved` (flips `gap_closure_validated: false → true`, routes to `/gsd-verify-work`) or `failed: <reason>` (routes to `/gsd-plan-phase 78 --gaps` for cycle 3)
+
+**Re-verification gate (cycle 2):** Plan 11 Task 3 is the load-bearing gate. Operator runs `cargo pmcp test apps --mode claude-desktop https://cost-coach.us-west.pmcp.run/mcp` against real prod and confirms zero Failed rows on the 8 production widgets. On pass: phase 78 closes via `/gsd-verify-work`. On fail: phase 78 routes to a third gap-closure cycle with diagnosis in a new `uat-evidence/<date>-cost-coach-prod-cycle3-rerun.md` evidence file.

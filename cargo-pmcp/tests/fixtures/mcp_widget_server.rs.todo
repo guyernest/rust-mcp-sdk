@@ -1,0 +1,16 @@
+# Fixture stub: mcp_widget_server.rs
+
+This fixture is consumed by cargo-pmcp/tests/cli_acceptance.rs (REVISION HIGH-2).
+It must be a stdio MCP server that:
+
+1. Registers two App-capable tools, each with _meta.ui.resourceUri pointing
+   to a widget resource URI.
+2. Registers the corresponding resources. Each resource's body is the HTML
+   for either the broken or the corrected fixture, selected by env var
+   WIDGET_FIXTURE in {broken, corrected}.
+   - broken  -> embed `crates/mcp-tester/tests/fixtures/widgets/broken_no_sdk.html`
+   - corrected -> embed `crates/mcp-tester/tests/fixtures/widgets/corrected_minimal.html`
+
+Wire this in as a [[bin]] target in cargo-pmcp/Cargo.toml under a dev-only
+section once Plan 03 has shipped the fixture HTML. Until then,
+cli_acceptance.rs's `skip_if_no_fixture` gate keeps the tests passive.

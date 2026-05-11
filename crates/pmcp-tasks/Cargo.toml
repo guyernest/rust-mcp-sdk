@@ -7,7 +7,7 @@ license = "MIT"
 rust-version = "1.82.0"
 
 [dependencies]
-pmcp = { version = "2.6.0", path = "../..", default-features = false }
+pmcp = { version = "2.7.0", path = "../..", default-features = false }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0", features = ["preserve_order"] }
 async-trait = "0.1"
@@ -18,8 +18,12 @@ tokio = { version = "1", features = ["sync", "time"] }
 tracing = "0.1"
 parking_lot = "0.12"
 dashmap = "6.1"
-aws-sdk-dynamodb = { version = "1", optional = true }
-aws-config = { version = "1", features = ["behavior-version-latest"], optional = true }
+# Why: default features enable `rustls` → aws-smithy-runtime/tls-rustls →
+# aws-smithy-http-client/legacy-rustls-ring → rustls 0.21 / rustls-webpki 0.101
+# which is flagged by RUSTSEC-2026-0098/0099/0104. Opt into the modern
+# `default-https-client` path (rustls 0.23 via aws-lc-rs) instead.
+aws-sdk-dynamodb = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio", "behavior-version-latest"], optional = true }
+aws-config = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio", "credentials-process", "sso", "behavior-version-latest"], optional = true }
 redis = { version = "1.0", features = ["tokio-comp", "script"], optional = true }
 
 [features]
@@ -29,7 +33,7 @@ redis = ["dep:redis"]
 redis-tests = ["redis"]
 
 [dev-dependencies]
-pmcp = { version = "2.6.0", path = "../..", features = ["full"] }
+pmcp = { version = "2.7.0", path = "../..", features = ["full"] }
 tokio = { version = "1", features = ["full"] }
 serde_json = { version = "1.0", features = ["preserve_order"] }
 pretty_assertions = "1.4"

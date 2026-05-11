@@ -138,6 +138,73 @@ cargo pmcp deploy test --verbose
 | `preview` | Browser-based widget preview with hot-reload | [docs/commands/preview.md](docs/commands/preview.md) |
 | `landing` | Create and deploy server landing pages | [docs/commands/landing.md](docs/commands/landing.md) |
 
+## App Validation
+
+`cargo pmcp test apps URL` validates MCP App metadata on a running server. It cross-references tools that declare `ui.resourceUri` against the resources they reference, validates MIME types, and (in strict modes) statically inspects the widget HTML for required protocol handler wiring.
+
+### Modes
+
+| Mode | Severity | Description |
+|------|----------|-------------|
+| `standard` (default) | Warning | Permissive — emits ONE summary Warning row per widget (MCP Apps is optional in the spec). |
+| `chatgpt` | Error | Strict for ChatGPT compatibility (checks `openai/*` `_meta` keys). **For widget validation specifically, this mode is a no-op** (no widget-related rows emitted; preserves prior behavior). |
+| `claude-desktop` | Error | Strict for Claude Desktop / Claude.ai. Statically inspects each widget HTML body fetched via `resources/read` for the `@modelcontextprotocol/ext-apps` import, the `new App({...})` constructor, the four required protocol handlers (`onteardown`, `ontoolinput`, `ontoolcancelled`, `onerror`), and the `app.connect()` call. Missing signals emit one Error row each. Honors `--tool` to restrict the check to a single tool's widget. |
+
+```bash
+# Default (permissive) mode
+cargo pmcp test apps http://localhost:3000
+
+# ChatGPT compatibility mode
+cargo pmcp test apps http://localhost:3000 --mode chatgpt
+
+# Claude Desktop / Claude.ai pre-deploy gate (strict static widget inspection)
+cargo pmcp test apps http://localhost:3000 --mode claude-desktop
+
+# Restrict the strict check to a single tool's widget via --tool
+cargo pmcp test apps http://localhost:3000 --mode claude-desktop --tool open_dashboard
+```
+
+### Why --mode claude-desktop
+
+Claude Desktop and Claude.ai silently tear down the entire MCP connection when a widget is missing required protocol handlers — the widget appears for a moment, then everything dies with no actionable error. `--mode claude-desktop` catches this class of failure pre-deploy by statically inspecting the widget HTML body for the SDK import, the App constructor, all four required handlers, and the `connect()` call. Missing signals are emitted as Error rows that link to the relevant section of the MCP Apps guide:
+
+[src/server/mcp_apps/GUIDE.md#handlers-before-connect](https://github.com/paiml/rust-mcp-sdk/blob/main/src/server/mcp_apps/GUIDE.md#handlers-before-connect).
+
+### MIME profile (`;profile=mcp-app`)
+
+A common Claude Desktop failure point is omitting the `;profile=mcp-app` MIME parameter on widget resources. Claude Desktop uses this MIME parameter to identify resources that should be rendered as MCP App widgets vs plain HTML resources. Verify your server registers widget resources with `mime_type: "text/html;profile=mcp-app"` (or equivalent — `UIResource::html_mcp_app()` and `UIResourceContents::html()` both produce this MIME type by default).
+
+### Vite singlefile minification
+
+If your widget bundle is produced by Vite singlefile in production, the validator's regex strategy is designed to survive that minifier; if you encounter false-negatives, file an issue with a bundled HTML for empirical analysis.
+
+> Note: The legacy widget examples under `examples/mcp-apps-chess/`, `examples/mcp-apps-dataviz/`, and `examples/mcp-apps-map/` use the older postMessage channel and will fail `--mode claude-desktop`. For a Claude-Desktop-ready widget, see `crates/mcp-tester/examples/validate_widget_pair.rs` and the corrected fixture at `crates/mcp-tester/tests/fixtures/widgets/corrected_minimal.html`.
+
+### Source-scan mode: `--widgets-dir <path>`
+
+Two scan surfaces are supported:
+
+| Scan mode | When to use | What it scans |
+|-----------|-------------|---------------|
+| **Bundle scan** (default) | CI against a deployed server | Each widget HTML body fetched via `resources/read` |
+| **Source scan** (`--widgets-dir <path>`) | Local pre-deploy validation | `<path>/*.html` source files on disk |
+
+**Why both:** Bundle scan validates what the server actually serves to clients (the post-Vite-singlefile bytes). Source scan is faster and higher-confidence pre-deploy because source files have unmangled identifiers and intact import statements — minifiers cannot defeat patterns that match against the unminified `import { App } from '@modelcontextprotocol/ext-apps'`.
+
+The validator's regex set is minification-resistant in both modes (see [Plan 78-06 — gap closure for cost-coach minified-bundle false positives](.planning/phases/78-cargo-pmcp-test-apps-mode-claude-desktop-detect-missing-mcp-/78-06-PLAN.md)). The four SDK-presence signals — `[ext-apps]` log prefix, `ui/initialize` method literal, `ui/notifications/tool-result` method literal, and the legacy `@modelcontextprotocol/ext-apps` import literal — survive Vite singlefile minification because they are protocol-level strings the SDK exposes by name.
+
+Example:
+
+```bash
+# Source-scan local widget files (pre-deploy)
+cargo pmcp test apps --mode claude-desktop --widgets-dir ./widget "http://informational"
+
+# Bundle-scan against a deployed server (CI)
+cargo pmcp test apps --mode claude-desktop https://my-server.example.com/mcp
+```
+
+Same validator, same verdict shape, two ingestion paths.
+
 ## Global Flags
 
 | Flag | Short | Description |

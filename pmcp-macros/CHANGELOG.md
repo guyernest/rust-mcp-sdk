@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.1] - 2026-05-10
+
+### Changed
+- **Phase 75.5 — Cognitive-complexity refactors.** `expand_mcp_tool`,
+  `expand_mcp_prompt`, `expand_mcp_resource`, `expand_mcp_server`, and the
+  `collect_{tool,prompt,resource}_methods` helpers all refactored to ≤ cog 25
+  per workspace quality gate. Cargo-expand snapshot baselines added to lock the
+  generated output. No behavioral changes intended.
+
 ## [0.5.0] - 2026-04-11
 
 ### Removed (breaking)

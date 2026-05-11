@@ -5,9 +5,11 @@ pub mod metadata;
 pub mod naming;
 pub mod operations;
 pub mod outputs;
+pub mod post_deploy_tests;
 pub mod registry;
 pub mod targets;
 pub mod r#trait;
+pub mod widgets;
 
 pub use builder::BinaryBuilder;
 pub use config::DeployConfig;

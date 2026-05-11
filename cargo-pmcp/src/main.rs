@@ -62,6 +62,19 @@ struct Cli {
     #[arg(long, global = true)]
     quiet: bool,
 
+    /// Named target from ~/.pmcp/config.toml (one-off override of .pmcp/active-target).
+    ///
+    /// Phase 77: this flag selects a NAMED target defined via `cargo pmcp configure add <name>`.
+    /// Distinct from `cargo pmcp deploy --target-type <type>` which selects the deployment backend.
+    /// Resolution order: PMCP_TARGET env > this flag > .pmcp/active-target file > none.
+    ///
+    /// Note: `global = true` is intentionally NOT set on this flag — the deploy subcommand
+    /// owns a `--target` alias (deprecated, points to `--target-type`) and clap requires
+    /// unique long-option names across the global+local arg namespace. Top-level resolution
+    /// is sufficient since main.rs reads `cli.target` directly before dispatching.
+    #[arg(long)]
+    pub target: Option<String>,
+
     #[command(subcommand)]
     command: Commands,
 }
@@ -122,6 +135,22 @@ enum Commands {
         command: commands::auth_cmd::AuthCommand,
     },
 
+    /// Manage named deployment targets (dev, prod, staging, …)
+    ///
+    /// Define and select target environments stored in `~/.pmcp/config.toml`
+    /// — modeled on `aws configure`. Each target carries the type, region, AWS
+    /// profile, and api_url; deploy/upload commands resolve via the active target.
+    #[command(after_long_help = "Examples:
+  cargo pmcp configure add dev --type pmcp-run --region us-west-2
+  cargo pmcp configure use dev
+  cargo pmcp configure list
+  cargo pmcp configure list --format json
+  cargo pmcp configure show dev")]
+    Configure {
+        #[command(subcommand)]
+        command: commands::configure::ConfigureCommand,
+    },
+
     /// Start development server
     ///
     /// Builds and runs the server with live logs
@@ -168,7 +197,11 @@ enum Commands {
         auth_flags: AuthFlags,
     },
 
-    /// Deploy MCP server to cloud platforms
+    /// Deploy MCP server to cloud platforms.
+    ///
+    /// Builds widgets (auto-detected from widget/ or widgets/) before compiling
+    /// and deploying the Rust binary. Verifies the deployed endpoint via
+    /// cargo pmcp test {check,conformance,apps} before reporting success.
     ///
     /// Deploy to AWS Lambda, Azure Container Apps, Google Cloud Run, etc.
     Deploy(commands::deploy::DeployCommand),
@@ -307,6 +340,28 @@ enum Commands {
     },
 }
 
+impl Commands {
+    /// MED-2 per 77-REVIEWS.md: determine whether this subcommand consumes a resolved
+    /// Phase 77 target. Only target-consuming commands trigger env injection in `main`.
+    ///
+    /// Target-consuming = invokes AWS API, CDK, GraphQL upload to pmcp.run, or otherwise
+    /// reads `region` / `aws_profile` / `api_url` from the resolved target.
+    ///
+    /// Non-target-consuming commands (configure, auth, doctor, completions, schema, etc.)
+    /// must NOT side-effect into process env: doing so would (a) fail when `PMCP_TARGET`
+    /// is set to a non-existent target, (b) clobber user-set `AWS_PROFILE` / `AWS_REGION`
+    /// for commands that have nothing to do with AWS.
+    pub fn is_target_consuming(&self) -> bool {
+        matches!(
+            self,
+            Commands::Deploy(_)
+                | Commands::Loadtest { .. }
+                | Commands::Test { .. }
+                | Commands::Landing { .. }
+        )
+    }
+}
+
 #[derive(Subcommand)]
 enum AddCommands {
     /// Add a new MCP server to the workspace
@@ -399,6 +454,48 @@ fn main() -> Result<()> {
         quiet: effective_quiet,
     };
 
+    // Phase 77: resolve named target and inject env vars for downstream consumers.
+    // MUST happen BEFORE any aws-config code path (the AWS SDK caches its credential
+    // provider at first use; env injection after that point would be ignored).
+    //
+    // **MED-2 per 77-REVIEWS.md**: env injection is gated to target-consuming commands ONLY.
+    // Running `cargo pmcp configure list` or `cargo pmcp doctor` with PMCP_TARGET=foo set must
+    // NOT mutate process env (or fail because foo doesn't exist) — those commands are NOT
+    // target consumers. The gate uses `Commands::is_target_consuming()`.
+    //
+    // Returns Ok(None) when no target selected AND ~/.pmcp/config.toml does not exist
+    // (D-11 zero-touch).
+    if cli.command.is_target_consuming() {
+        // Discover the workspace root for the resolver. Fall back to current_dir when the walk
+        // fails (e.g. from a system-tmp dir during tests) — the resolver tolerates a non-Cargo
+        // path and just won't find deploy.toml.
+        let project_root =
+            commands::configure::workspace::find_workspace_root().unwrap_or_else(|_| {
+                std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
+            });
+
+        // For dispatch-time injection we don't yet have a parsed DeployConfig (the deploy
+        // command will load its own as part of its action path). We pass `None` here so
+        // env-source vars take effect early, before any AWS SDK initializes its provider chain.
+        // The deploy/test/loadtest commands additionally call resolve_target with their loaded
+        // `Some(&deploy_config)` to get the deploy.toml fall-through layer.
+        match commands::configure::resolver::resolve_target(
+            None,
+            cli.target.as_deref(),
+            &project_root,
+            None,
+        ) {
+            Ok(Some(resolved)) => {
+                commands::configure::resolver::inject_resolved_env_into_process(&resolved);
+            },
+            Ok(None) => { /* D-11 zero-touch: no config, no target — Phase 76 behavior */ },
+            Err(e) => {
+                eprintln!("error: {}", e);
+                std::process::exit(2);
+            },
+        }
+    }
+
     execute_command(cli.command, &global_flags)?;
 
     Ok(())
@@ -423,6 +520,7 @@ fn dispatch_trait_based(command: Commands, global_flags: &GlobalFlags) -> Option
         Commands::Add { component } => execute_add(component, global_flags),
         Commands::Test { command } => command.execute(global_flags),
         Commands::Auth { command } => command.execute(global_flags),
+        Commands::Configure { command } => command.execute(global_flags),
         Commands::Dev {
             server,
             port,
@@ -504,6 +602,236 @@ fn execute_landing(
     let runtime = tokio::runtime::Runtime::new()?;
     let project_root = std::env::current_dir()?;
     runtime.block_on(command.execute(project_root, global_flags))
+}
+
+#[cfg(test)]
+mod cli_target_flag_tests {
+    use super::*;
+    use clap::Parser;
+
+    #[test]
+    fn parses_global_target_named_flag() {
+        // Note: cargo subcommand parsing puts the bin name first
+        let cli = Cli::parse_from(["cargo-pmcp", "--target", "dev", "auth", "status"]);
+        assert_eq!(cli.target.as_deref(), Some("dev"));
+    }
+
+    #[test]
+    fn legacy_deploy_target_alias_still_works() {
+        // The DEPLOY-level `--target aws-lambda` (alias for `--target-type`) still parses
+        let cli = Cli::parse_from(["cargo-pmcp", "deploy", "--target", "aws-lambda", "outputs"]);
+        assert!(
+            cli.target.is_none(),
+            "global --target should NOT consume the deploy-scoped --target alias"
+        );
+    }
+
+    #[test]
+    fn both_flags_coexist() {
+        let cli = Cli::parse_from([
+            "cargo-pmcp",
+            "--target",
+            "dev",
+            "deploy",
+            "--target-type",
+            "aws-lambda",
+            "outputs",
+        ]);
+        assert_eq!(cli.target.as_deref(), Some("dev"));
+    }
+
+    // MED-3 fix per 77-REVIEWS.md: clap matrix tests covering the `--target` (top-level
+    // named target) vs `--target-type` (deploy-scoped, with `alias = "target"`) ambiguity
+    // edge cases. These are explicit snapshot/parse tests; if clap conflates the two flags
+    // for any of these invocations, these tests fail before any wiring runs.
+
+    #[test]
+    fn med3_top_target_and_deploy_target_type_disjoint() {
+        // `cargo pmcp --target dev deploy --target-type aws-lambda <args>`
+        // — top-level Cli.target is "dev"; deploy-scoped target_type is "aws-lambda".
+        let cli = Cli::parse_from([
+            "cargo-pmcp",
+            "--target",
+            "dev",
+            "deploy",
+            "--target-type",
+            "aws-lambda",
+            "outputs",
+        ]);
+        assert_eq!(
+            cli.target.as_deref(),
+            Some("dev"),
+            "top-level --target = dev"
+        );
+        if let Commands::Deploy(deploy_cmd) = cli.command {
+            let dbg = format!("{:?}", deploy_cmd);
+            assert!(
+                dbg.contains("aws-lambda") || dbg.contains("AwsLambda"),
+                "deploy.target_type must contain `aws-lambda`; debug repr: {dbg}"
+            );
+        } else {
+            panic!("expected Commands::Deploy");
+        }
+    }
+
+    #[test]
+    fn med3_legacy_alias_still_works_via_alias() {
+        // `cargo pmcp deploy --target aws-lambda <args>` — `--target` is the deprecated
+        // alias for `--target-type`. The top-level Cli.target must REMAIN None (the deploy-scoped
+        // alias is not consumed by the global --target).
+        let cli = Cli::parse_from(["cargo-pmcp", "deploy", "--target", "aws-lambda", "outputs"]);
+        assert!(
+            cli.target.is_none(),
+            "top-level --target must NOT be populated by deploy-scoped alias"
+        );
+    }
+
+    #[test]
+    fn med3_top_target_and_deploy_target_alias_disjoint() {
+        // `cargo pmcp --target dev deploy --target prod <args>`
+        // — top-level Cli.target = "dev"; deploy-scoped --target alias = "prod" (target_type).
+        let cli = Cli::parse_from([
+            "cargo-pmcp",
+            "--target",
+            "dev",
+            "deploy",
+            "--target",
+            "prod",
+            "outputs",
+        ]);
+        assert_eq!(
+            cli.target.as_deref(),
+            Some("dev"),
+            "top-level --target = dev"
+        );
+        if let Commands::Deploy(deploy_cmd) = cli.command {
+            let dbg = format!("{:?}", deploy_cmd);
+            assert!(
+                dbg.contains("prod"),
+                "deploy-scoped --target alias must = `prod`; debug repr: {dbg}"
+            );
+        }
+    }
+
+    // Phase 77 Plan 07 — MED-2 gating tests for is_target_consuming() + Configure dispatch.
+    // These tests verify that env injection in main.rs is gated to commands that actually
+    // consume a resolved target (deploy/test/loadtest/landing) and skipped for everything else
+    // (configure/auth/doctor/completions/etc.).
+
+    #[test]
+    fn is_target_consuming_returns_true_only_for_target_commands() {
+        let deploy_cli = Cli::parse_from(["cargo-pmcp", "deploy", "outputs"]);
+        assert!(
+            deploy_cli.command.is_target_consuming(),
+            "deploy must be target-consuming"
+        );
+
+        let configure_cli = Cli::parse_from(["cargo-pmcp", "configure", "list"]);
+        assert!(
+            !configure_cli.command.is_target_consuming(),
+            "configure must NOT be target-consuming"
+        );
+
+        let auth_cli = Cli::parse_from(["cargo-pmcp", "auth", "status"]);
+        assert!(
+            !auth_cli.command.is_target_consuming(),
+            "auth must NOT be target-consuming"
+        );
+
+        let doctor_cli = Cli::parse_from(["cargo-pmcp", "doctor"]);
+        assert!(
+            !doctor_cli.command.is_target_consuming(),
+            "doctor must NOT be target-consuming"
+        );
+    }
+
+    #[test]
+    fn pmcp_target_does_not_pollute_env_for_non_target_command() {
+        // MED-2 acceptance: running `cargo pmcp configure list` with PMCP_TARGET=foo set must
+        // NOT mutate process env. We test this by parsing the CLI and checking that
+        // is_target_consuming() returns false — main.rs's gate uses this method.
+        let cli = Cli::parse_from(["cargo-pmcp", "configure", "list"]);
+        assert!(!cli.command.is_target_consuming());
+    }
+
+    #[test]
+    fn med3_deploy_help_renders_both_flags() {
+        // `cargo pmcp deploy --help` must render both `--target` (alias [DEPRECATED]) and
+        // `--target-type` in the help output. We can't easily assert on stdout from inside a
+        // test without spawning a subprocess; verify the structure compiles and clap doesn't
+        // panic at help-render time. Use `Cli::command()` for the parsed command tree.
+        use clap::CommandFactory;
+        let cmd = Cli::command();
+        let deploy = cmd
+            .find_subcommand("deploy")
+            .expect("deploy subcommand exists");
+        let arg_names: Vec<String> = deploy
+            .get_arguments()
+            .map(|a| a.get_id().to_string())
+            .collect();
+        assert!(
+            arg_names.iter().any(|n| n == "target_type"),
+            "deploy must declare target_type arg; got: {:?}",
+            arg_names
+        );
+    }
+}
+
+// Phase 77 Plan 07 — Configure subcommand parse tests
+#[cfg(test)]
+mod configure_dispatch_tests {
+    use super::*;
+    use clap::Parser;
+
+    #[test]
+    fn parses_configure_add_subcommand() {
+        let cli = Cli::parse_from([
+            "cargo-pmcp",
+            "configure",
+            "add",
+            "dev",
+            "--type",
+            "pmcp-run",
+            "--region",
+            "us-west-2",
+        ]);
+        match cli.command {
+            Commands::Configure {
+                command: commands::configure::ConfigureCommand::Add(args),
+            } => {
+                assert_eq!(args.name, "dev");
+                assert_eq!(args.r#type.as_deref(), Some("pmcp-run"));
+                assert_eq!(args.region.as_deref(), Some("us-west-2"));
+            },
+            _ => panic!("expected Configure::Add"),
+        }
+    }
+
+    #[test]
+    fn parses_configure_use_with_keyword_safe_name() {
+        let cli = Cli::parse_from(["cargo-pmcp", "configure", "use", "prod"]);
+        match cli.command {
+            Commands::Configure {
+                command: commands::configure::ConfigureCommand::Use(args),
+            } => {
+                assert_eq!(args.name, "prod");
+            },
+            _ => panic!("expected Configure::Use"),
+        }
+    }
+
+    #[test]
+    fn parses_configure_list_with_format_json() {
+        let cli = Cli::parse_from(["cargo-pmcp", "configure", "list", "--format", "json"]);
+        match cli.command {
+            Commands::Configure {
+                command: commands::configure::ConfigureCommand::List(args),
+            } => {
+                assert_eq!(args.format, "json");
+            },
+            _ => panic!("expected Configure::List"),
+        }
+    }
 }
 
 /// Dispatcher for the Preview command (async; spins up its own tokio runtime).

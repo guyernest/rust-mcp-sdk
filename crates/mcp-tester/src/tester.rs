@@ -55,9 +55,7 @@ pub struct ServerTester {
     pub transport_type: TransportType,
     http_config: Option<StreamableHttpTransportConfig>,
     json_rpc_client: Option<Client>,
-    #[allow(dead_code)]
     timeout: Duration,
-    #[allow(dead_code)]
     insecure: bool,
     api_key: Option<String>,
     #[allow(dead_code)]
@@ -223,6 +221,57 @@ impl ServerTester {
             http_middleware_chain: http_middleware_chain.clone(),
             tool_uis: HashMap::new(),
         })
+    }
+
+    /// Return the URL the tester was constructed with.
+    pub fn url(&self) -> &str {
+        &self.url
+    }
+
+    /// Return the per-request timeout used for outbound HTTP and JSON-RPC traffic.
+    pub fn timeout(&self) -> Duration {
+        self.timeout
+    }
+
+    /// Return whether TLS certificate verification has been disabled.
+    ///
+    /// Set via `--insecure` on the parent CLI for self-signed dev environments.
+    /// Production CI runs MUST NOT enable this.
+    pub fn insecure(&self) -> bool {
+        self.insecure
+    }
+
+    /// Borrow the HTTP middleware chain produced by `cargo pmcp auth`.
+    ///
+    /// Callers building raw HTTP probes (for example the Transport conformance
+    /// domain) MUST reuse this chain when present rather than constructing a
+    /// new `OAuthHelper` or `AuthProvider`. Re-using the chain ensures the
+    /// already-negotiated bearer token is injected without re-prompting the
+    /// operator for credentials.
+    ///
+    /// Returns `Some(&Arc<HttpMiddlewareChain>)` when authentication middleware
+    /// is wired (the typical path on OAuth-protected servers) and `None`
+    /// otherwise. The returned reference is opaque — credentials never leak
+    /// through this accessor; they only ever travel through
+    /// `HttpMiddlewareChain::process_request`.
+    ///
+    /// ```rust
+    /// # fn main() {}
+    /// # // Doctest demonstrates the call site shape; constructing a real
+    /// # // ServerTester requires async setup that is out of scope here.
+    /// # use std::sync::Arc;
+    /// # use pmcp::client::http_middleware::HttpMiddlewareChain;
+    /// # fn demo(tester: &mcp_tester::ServerTester) {
+    /// if let Some(chain) = tester.http_middleware_chain() {
+    ///     // borrow the auth-injecting chain — never construct a new one
+    ///     let _: &Arc<HttpMiddlewareChain> = chain;
+    /// }
+    /// # }
+    /// ```
+    pub fn http_middleware_chain(
+        &self,
+    ) -> Option<&std::sync::Arc<pmcp::client::http_middleware::HttpMiddlewareChain>> {
+        self.http_middleware_chain.as_ref()
     }
 
     async fn send_json_rpc_request(&self, request: JsonRpcRequest) -> Result<JsonRpcResponse> {
@@ -3205,5 +3254,46 @@ impl ServerTester {
 </html>"#,
             html_base64 = html_base64
         )
+    }
+}
+
+#[cfg(test)]
+mod accessors {
+    use super::*;
+
+    fn build_tester() -> ServerTester {
+        ServerTester::new(
+            "http://example.test/mcp",
+            Duration::from_millis(2_500),
+            true,         // insecure
+            None,         // api_key
+            Some("http"), // force_transport
+            None,         // http_middleware_chain
+        )
+        .expect("constructible tester")
+    }
+
+    #[test]
+    fn url_accessor_returns_construction_url() {
+        let tester = build_tester();
+        assert_eq!(tester.url(), "http://example.test/mcp");
+    }
+
+    #[test]
+    fn timeout_accessor_returns_construction_timeout() {
+        let tester = build_tester();
+        assert_eq!(tester.timeout(), Duration::from_millis(2_500));
+    }
+
+    #[test]
+    fn insecure_accessor_returns_construction_flag() {
+        let tester = build_tester();
+        assert!(tester.insecure());
+    }
+
+    #[test]
+    fn http_middleware_chain_accessor_is_none_without_auth() {
+        let tester = build_tester();
+        assert!(tester.http_middleware_chain().is_none());
     }
 }

@@ -16,15 +16,32 @@ pub mod pentest;
 // rest of the `deployment::*` tree (which references `crate::commands::*`,
 // bin-only).
 pub mod deployment {
-    //! Narrow lib-visible view of the deployment subsystem — `config` + `iam`.
-    //! The full module is in the bin target; this surface is sufficient for
-    //! the Phase 76 fuzz target + `deploy_with_iam` example.
+    //! Narrow lib-visible view of the deployment subsystem — `config` + `iam`
+    //! + `widgets` + `post_deploy_tests`. The full module is in the bin
+    //! target; this surface is sufficient for the Phase 76 fuzz target +
+    //! `deploy_with_iam` example PLUS the Phase 79 Wave-1 schema types that
+    //! `config.rs` references via `use crate::deployment::widgets::*` and
+    //! `use crate::deployment::post_deploy_tests::*`.
 
     #[path = "../deployment/config.rs"]
     pub mod config;
 
     #[path = "../deployment/iam.rs"]
     pub mod iam;
+
+    // Phase 79 Wave 1: schema types required by `config.rs` so the lib
+    // target compiles. These modules are leaf — they cross-depend only on
+    // serde and stdlib, so mounting them here does not drag in any further
+    // bin-only `commands::*` references.
+    #[path = "../deployment/widgets.rs"]
+    pub mod widgets;
+
+    #[path = "../deployment/post_deploy_tests.rs"]
+    pub mod post_deploy_tests;
+
+    // `widgets::enumerate_workspace_bin_crates` delegates here.
+    #[path = "../deployment/naming.rs"]
+    pub mod naming;
 }
 
 pub mod utils {
@@ -42,7 +59,15 @@ pub mod utils {
 #[path = "commands/auth_cmd/cache.rs"]
 pub mod test_support_cache;
 
+// Compiled via `#[path]` to bypass the bin-only `commands::configure` tree.
+// Mirrors the test_support_cache pattern (see lib.rs above for the established convention).
+// Only the leaf `config.rs` schema is bridged — the full configure command tree stays bin-only.
+#[doc(hidden)]
+#[path = "commands/configure/config.rs"]
+pub mod test_support_configure;
+
 #[doc(hidden)]
 pub mod test_support {
     pub use crate::test_support_cache as cache;
+    pub use crate::test_support_configure as configure_config;
 }

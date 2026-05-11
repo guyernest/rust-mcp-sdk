@@ -101,6 +101,48 @@ Output includes a per-domain CI summary line:
 Conformance: Core=PASS Tools=PASS Resources=SKIP Prompts=PASS Tasks=SKIP
 ```
 
+## App Validation
+
+Validate MCP App metadata on a running server. Cross-references tools that declare `ui.resourceUri` against the resources they reference, validates MIME types, and (in strict modes) statically inspects the widget HTML for required protocol handler wiring.
+
+```bash
+# Default (permissive) — one summary Warning per widget
+mcp-tester apps http://localhost:3000
+
+# ChatGPT compatibility mode (no-op for widget HTML inspection)
+mcp-tester apps http://localhost:3000 --mode chatgpt
+
+# Claude Desktop / Claude.ai pre-deploy gate (strict static widget inspection)
+mcp-tester apps http://localhost:3000 --mode claude-desktop
+```
+
+`--mode claude-desktop` statically inspects each widget HTML body for the `@modelcontextprotocol/ext-apps` import and the four required protocol handlers (`onteardown`, `ontoolinput`, `ontoolcancelled`, `onerror`) before `connect()`. This catches the silent-fail class where Claude Desktop tears down the MCP connection after a missing handler — see [src/server/mcp_apps/GUIDE.md#handlers-before-connect](https://github.com/paiml/rust-mcp-sdk/blob/main/src/server/mcp_apps/GUIDE.md#handlers-before-connect).
+
+### Source-scan mode: `--widgets-dir <path>`
+
+Two scan surfaces are supported:
+
+| Scan mode | When to use | What it scans |
+|-----------|-------------|---------------|
+| **Bundle scan** (default) | CI against a deployed server | Each widget HTML body fetched via `resources/read` |
+| **Source scan** (`--widgets-dir <path>`) | Local pre-deploy validation | `<path>/*.html` source files on disk |
+
+**Why both:** Bundle scan validates what the server actually serves to clients (the post-Vite-singlefile bytes). Source scan is faster and higher-confidence pre-deploy because source files have unmangled identifiers and intact import statements — minifiers cannot defeat patterns that match against the unminified `import { App } from '@modelcontextprotocol/ext-apps'`.
+
+The validator's regex set is minification-resistant in both modes (see [Plan 78-06 — gap closure for cost-coach minified-bundle false positives](../../.planning/phases/78-cargo-pmcp-test-apps-mode-claude-desktop-detect-missing-mcp-/78-06-PLAN.md)). The four SDK-presence signals — `[ext-apps]` log prefix, `ui/initialize` method literal, `ui/notifications/tool-result` method literal, and the legacy `@modelcontextprotocol/ext-apps` import literal — survive Vite singlefile minification because they are protocol-level strings the SDK exposes by name.
+
+Example:
+
+```bash
+# Source-scan local widget files (pre-deploy)
+cargo pmcp test apps --mode claude-desktop --widgets-dir ./widget "http://informational"
+
+# Bundle-scan against a deployed server (CI)
+cargo pmcp test apps --mode claude-desktop https://my-server.example.com/mcp
+```
+
+Same validator, same verdict shape, two ingestion paths.
+
 ## Generate Test Scenarios
 
 Auto-generate test scenarios from your server's capabilities. The generator discovers all tools, analyzes their JSON schemas, and creates YAML scenario files with smart placeholder values:

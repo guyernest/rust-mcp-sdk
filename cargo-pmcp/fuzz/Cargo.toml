@@ -36,3 +36,17 @@ path = "fuzz_targets/fuzz_iam_config.rs"
 doc = false
 test = false
 bench = false
+
+[[bin]]
+name = "pmcp_config_toml_parser"
+path = "fuzz_targets/pmcp_config_toml_parser.rs"
+doc = false
+test = false
+bench = false
+
+[[bin]]
+name = "fuzz_widgets_config"
+path = "fuzz_targets/fuzz_widgets_config.rs"
+doc = false
+test = false
+bench = false

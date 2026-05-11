@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Cost Coach (broken)</title>
+  </head>
+  <body>
+    <div id="app">Loading…</div>
+    <script type="module">
+      // This widget talks directly to the ChatGPT bridge channel only.
+      // It does not import the MCP Apps SDK, never instantiates the App
+      // class, never registers any of the required protocol handlers,
+      // and never calls the connect entry point. Renders fine in
+      // ChatGPT; Claude Desktop tears down after the first tool result.
+      const root = document.getElementById("app");
+      function render(data) {
+        root.textContent = JSON.stringify(data);
+      }
+      window.addEventListener("message", (e) => {
+        if (e.data && e.data.type === "tool_result") {
+          render(e.data.payload);
+        }
+      });
+      window.openai = window.openai || {};
+      window.openai.requestData = () => {
+        window.parent.postMessage({ type: "request_data" }, "*");
+      };
+    </script>
+  </body>
+</html>

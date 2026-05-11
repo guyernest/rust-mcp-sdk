@@ -2,6 +2,7 @@ use anyhow::{bail, Context, Result};
 use clap::Parser;
 use std::path::{Path, PathBuf};
 
+use crate::commands::configure::workspace::find_workspace_root;
 use crate::commands::flags::FormatValue;
 
 /// Detect server name from Cargo.toml in the project root or core workspace
@@ -89,11 +90,44 @@ pub mod init;
 
 use init::InitCommand;
 
+/// Phase 77: resolve target and emit D-13 banner. Idempotent (OnceLock-guarded).
+///
+/// Safe to call from every AWS-touching code path; the OnceLock prevents duplicate output.
+/// Errors are logged but not propagated (banner is informational, not load-bearing).
+///
+/// `project_root` is the workspace root (typically `find_workspace_root()`); `deploy_config`
+/// is the loaded `DeployConfig` (when available — pass `None` for early-init paths that don't
+/// yet have one). The resolver re-runs precedence resolution; the OnceLock guard makes
+/// duplicate emissions across the dispatch tree no-ops.
+fn emit_target_banner_if_resolved(
+    global_flags: &crate::commands::GlobalFlags,
+    project_root: &std::path::Path,
+    deploy_config: Option<&crate::deployment::config::DeployConfig>,
+) {
+    match crate::commands::configure::resolver::resolve_target(
+        None,
+        None,
+        project_root,
+        deploy_config,
+    ) {
+        Ok(Some(resolved)) => {
+            let _ = crate::commands::configure::banner::emit_resolved_banner_once(
+                &resolved,
+                global_flags.quiet,
+            );
+        },
+        Ok(None) => { /* D-11 zero-touch: no banner */ },
+        Err(_) => { /* swallow — error already surfaced at dispatch time in main.rs */ },
+    }
+}
+
 #[derive(Debug, Parser)]
 pub struct DeployCommand {
-    /// Deployment target (aws-lambda, cloudflare-workers)
-    #[arg(long, global = true)]
-    target: Option<String>,
+    /// Deployment target TYPE (aws-lambda, cloudflare-workers, pmcp-run, google-cloud-run).
+    /// Selects which deployment backend to use. NOT to be confused with the global `--target`
+    /// flag which selects a NAMED target from `~/.pmcp/config.toml` (Phase 77).
+    #[arg(long = "target-type", alias = "target", global = true)]
+    target_type: Option<String>,
 
     /// Use shared OAuth pool for SSO (pmcp-run only).
     ///
@@ -117,8 +151,79 @@ pub struct DeployCommand {
     #[arg(long)]
     no_oauth: bool,
 
+    /// Skip the widget pre-build step entirely (Phase 79).
+    ///
+    /// Use this when your CI pipeline runs `npm run build` (or equivalent)
+    /// in a separate step. Cargo's incremental cache may still serve a stale
+    /// binary if `include_str!` resolves to widget files — see
+    /// `cargo pmcp doctor` for the build.rs scaffold check (Phase 79 v2).
+    #[arg(long)]
+    no_widget_build: bool,
+
+    /// Build widgets only; skip cargo build, upload, and Lambda hot-swap (Phase 79).
+    ///
+    /// Useful for the fast inner-loop iteration on widget code without
+    /// re-deploying the Rust binary. The PMCP_WIDGET_DIRS env var is still
+    /// set so a follow-up `cargo build` picks up the rebuilt widgets.
+    #[arg(long)]
+    widgets_only: bool,
+
+    /// Skip the post-deploy verification suite entirely (warmup + check +
+    /// conformance + apps).
+    ///
+    /// Use when CI runs verification in a separate step or when you
+    /// intentionally want a deploy that doesn't probe the live endpoint.
+    /// NOTE: this also skips the warmup grace, since the warmup serves no
+    /// purpose without subsequent tests.
+    #[arg(long)]
+    no_post_deploy_test: bool,
+
+    /// Run only a subset of post-deploy tests (comma-separated).
+    ///
+    /// Valid values: connectivity, conformance, apps. Default: all three
+    /// (when the corresponding subsystem is present).
+    /// Example: --post-deploy-tests=conformance,apps
+    #[arg(long, value_delimiter = ',', value_name = "CHECKS")]
+    post_deploy_tests: Option<Vec<String>>,
+
+    /// Override [post_deploy_tests].on_failure from deploy.toml.
+    ///
+    /// Values:
+    ///   warn      Print failure banner; CLI exits 0; pipeline continues
+    ///   fail      Print failure banner with IS-LIVE warning; CLI exits 3
+    ///             (REVISION 3 HIGH-2)
+    ///   rollback  REJECTED. Auto-rollback support will land in a future
+    ///             phase that verifies the existing DeployTarget::rollback()
+    ///             trait implementations. Use 'fail' (default) or 'warn'.
+    ///
+    /// Default (from config or "fail"): the deployed broken Lambda revision
+    /// STAYS LIVE on `fail`; CI/CD pipelines that interpret nonzero exit as
+    /// auto-rollback will misread this — the deploy DID succeed at the
+    /// infrastructure level. Exit code 3 is unique-per-failure-mode for
+    /// CI/CD detection (REVISION 3 HIGH-2). To roll back manually, run:
+    ///     cargo pmcp deploy rollback --target <target>
+    #[arg(long, value_name = "MODE", value_parser = parse_on_test_failure_flag)]
+    on_test_failure: Option<crate::deployment::post_deploy_tests::OnFailure>,
+
+    /// Override [post_deploy_tests].apps_mode from deploy.toml.
+    ///
+    /// Values: standard, chatgpt, claude-desktop. Default (from config or
+    /// "claude-desktop"): runs the strict Phase 78 claude-desktop validator
+    /// on every widget.
+    #[arg(long, value_name = "MODE")]
+    apps_mode: Option<String>,
+
     #[command(subcommand)]
     action: Option<DeployAction>,
+}
+
+/// REVISION 3 HIGH-G2 — clap value parser that delegates to
+/// `OnFailure::FromStr` which carries the verbatim `ROLLBACK_REJECT_MESSAGE`
+/// for the string `"rollback"`. Wired on the `--on-test-failure` arg above.
+fn parse_on_test_failure_flag(
+    s: &str,
+) -> Result<crate::deployment::post_deploy_tests::OnFailure, String> {
+    s.parse()
 }
 
 #[derive(Debug, Parser)]
@@ -370,8 +475,79 @@ impl DeployCommand {
         tokio::runtime::Runtime::new()?.block_on(self.execute_async(global_flags))
     }
 
+    /// Phase 79 Wave 2 — Step 2.5 helper.
+    ///
+    /// Iterates over all `[[widgets]]` entries (or convention-detected
+    /// `widget/`/`widgets/`), runs the orchestrator on each, collects every
+    /// resolved `absolute_output_dir`, and joins them into a single
+    /// `PMCP_WIDGET_DIRS` env var (colon-separated, Unix `PATH` convention)
+    /// BEFORE returning.
+    ///
+    /// Stops on first widget failure (mirrors `79-CONTEXT.md` "Multiple
+    /// `[[widgets]]` blocks supported. Stop on first failure"). Skips the
+    /// env var when no widgets are detected so 79-04's build.rs
+    /// local-discovery fallback (HIGH-G1) can take over for direct
+    /// Merge CLI flag overrides into the loaded `[post_deploy_tests]` config.
+    /// REVISION 3 HIGH-G2: `OnFailure::Rollback` is impossible here because
+    /// clap rejects `--on-test-failure=rollback` at parse time AND the custom
+    /// `Deserialize` impl rejects `on_failure="rollback"` at config load time.
+    /// Cog ≤8.
+    fn materialize_post_deploy_config(
+        &self,
+        config: &crate::deployment::DeployConfig,
+    ) -> crate::deployment::post_deploy_tests::PostDeployTestsConfig {
+        let mut pdt = config.post_deploy_tests.clone().unwrap_or_default();
+        if let Some(checks) = self.post_deploy_tests.as_ref() {
+            pdt.checks = checks.clone();
+        }
+        if let Some(of) = self.on_test_failure {
+            // REVISION 3: typed OnFailure (Fail|Warn) — clap rejected rollback
+            // at parse, so this assignment cannot widen the variant set.
+            pdt.on_failure = of;
+        }
+        if let Some(s) = self.apps_mode.as_deref() {
+            pdt.apps_mode = match s {
+                "standard" => crate::deployment::post_deploy_tests::AppsMode::Standard,
+                "chatgpt" => crate::deployment::post_deploy_tests::AppsMode::Chatgpt,
+                "claude-desktop" => crate::deployment::post_deploy_tests::AppsMode::ClaudeDesktop,
+                _ => pdt.apps_mode,
+            };
+        }
+        pdt
+    }
+
+    /// `cargo run` scenarios.
+    ///
+    /// Cog ≤8.
+    async fn pre_build_widgets_and_set_env(
+        widgets: &[crate::deployment::widgets::WidgetConfig],
+        project_root: &std::path::Path,
+        global_flags: &crate::commands::GlobalFlags,
+    ) -> Result<()> {
+        if widgets.is_empty() {
+            return Ok(());
+        }
+        let quiet = !global_flags.should_output();
+        let mut all_output_dirs: Vec<String> = Vec::with_capacity(widgets.len());
+        for widget in widgets {
+            let resolved =
+                crate::deployment::widgets::run_widget_build(widget, project_root, quiet).await?;
+            all_output_dirs.push(resolved.absolute_output_dir.to_string_lossy().to_string());
+        }
+        // REVISION 3 HIGH-C1: colon-join all widget output dirs (Unix PATH
+        // convention). Empty case was early-returned above so 79-04's
+        // build.rs local-discovery fallback (HIGH-G1) takes over for
+        // direct-cargo-run scenarios.
+        let joined = all_output_dirs.join(":");
+        // SAFETY: env var mutation is the explicit purpose of this fn —
+        // downstream `target.build()` invokes `cargo build` which reads
+        // PMCP_WIDGET_DIRS via the build.rs scaffold (Phase 79 Wave 4).
+        std::env::set_var("PMCP_WIDGET_DIRS", &joined);
+        Ok(())
+    }
+
     async fn execute_async(&self, global_flags: &crate::commands::GlobalFlags) -> Result<()> {
-        let project_root = Self::find_project_root()?;
+        let project_root = find_workspace_root()?;
 
         // Get target from flag or config
         let target_id = self.get_target_id(&project_root)?;
@@ -394,6 +570,7 @@ impl DeployCommand {
                     } => {
                         // For init, we can use the old approach or new depending on target
                         if target_id == "aws-lambda" {
+                            emit_target_banner_if_resolved(global_flags, &project_root, None);
                             let mut cmd = InitCommand::new(project_root)
                                 .with_region(region)
                                 .with_credentials_check(!skip_credentials_check);
@@ -447,15 +624,22 @@ impl DeployCommand {
                                 }
                             }
 
+                            emit_target_banner_if_resolved(
+                                global_flags,
+                                &project_root,
+                                Some(&config),
+                            );
                             target.init(&config).await
                         }
                     },
                     DeployAction::Logs { tail, lines } => {
                         let config = crate::deployment::DeployConfig::load(&project_root)?;
+                        emit_target_banner_if_resolved(global_flags, &project_root, Some(&config));
                         target.logs(&config, *tail, *lines).await
                     },
                     DeployAction::Metrics { period } => {
                         let config = crate::deployment::DeployConfig::load(&project_root)?;
+                        emit_target_banner_if_resolved(global_flags, &project_root, Some(&config));
                         let metrics = target.metrics(&config, period).await?;
                         // Requested data -- always show
                         println!("Metrics for {}: {}", target.name(), metrics.period);
@@ -463,6 +647,7 @@ impl DeployCommand {
                     },
                     DeployAction::Test {} => {
                         let config = crate::deployment::DeployConfig::load(&project_root)?;
+                        emit_target_banner_if_resolved(global_flags, &project_root, Some(&config));
                         let results = target.test(&config, global_flags.verbose).await?;
                         // Test results are requested output
                         if results.success {
@@ -480,6 +665,7 @@ impl DeployCommand {
                     },
                     DeployAction::Rollback { version, yes: _ } => {
                         let config = crate::deployment::DeployConfig::load(&project_root)?;
+                        emit_target_banner_if_resolved(global_flags, &project_root, Some(&config));
                         target.rollback(&config, version.as_deref()).await
                     },
                     DeployAction::Destroy {
@@ -488,6 +674,7 @@ impl DeployCommand {
                         no_wait,
                     } => {
                         let config = crate::deployment::DeployConfig::load(&project_root)?;
+                        emit_target_banner_if_resolved(global_flags, &project_root, Some(&config));
 
                         if !yes {
                             println!("WARNING: This will destroy deployment on {}", target.name());
@@ -526,6 +713,7 @@ impl DeployCommand {
                     },
                     DeployAction::Secrets { action } => {
                         let config = crate::deployment::DeployConfig::load(&project_root)?;
+                        emit_target_banner_if_resolved(global_flags, &project_root, Some(&config));
                         let secrets_action = match action {
                             SecretsAction::Set { key, from_env } => {
                                 crate::deployment::SecretsAction::Set {
@@ -545,6 +733,7 @@ impl DeployCommand {
                     },
                     DeployAction::Outputs { format } => {
                         let config = crate::deployment::DeployConfig::load(&project_root)?;
+                        emit_target_banner_if_resolved(global_flags, &project_root, Some(&config));
                         let outputs = target.outputs(&config).await?;
 
                         match format {
@@ -560,14 +749,18 @@ impl DeployCommand {
                     DeployAction::Login => {
                         // Login is target-specific
                         match target_id.as_str() {
-                            "pmcp-run" => crate::deployment::targets::pmcp_run::login().await,
+                            "pmcp-run" => {
+                                emit_target_banner_if_resolved(global_flags, &project_root, None);
+                                crate::deployment::targets::pmcp_run::login().await
+                            },
                             _ => {
                                 bail!("Login is not supported for target: {}", target_id);
                             },
                         }
                     },
                     DeployAction::Logout => {
-                        // Logout is target-specific
+                        // Logout is target-specific (local-only — no AWS/pmcp.run call,
+                        // banner intentionally NOT emitted per RESEARCH §7).
                         match target_id.as_str() {
                             "pmcp-run" => crate::deployment::targets::pmcp_run::logout(),
                             _ => {
@@ -580,6 +773,7 @@ impl DeployCommand {
                         if target_id != "pmcp-run" {
                             bail!("OAuth management is only supported for pmcp-run target");
                         }
+                        emit_target_banner_if_resolved(global_flags, &project_root, None);
                         handle_oauth_action(action).await
                     },
                     DeployAction::Status { operation_id } => {
@@ -596,6 +790,7 @@ impl DeployCommand {
                             println!();
                         }
 
+                        emit_target_banner_if_resolved(global_flags, &project_root, None);
                         let status = target.get_operation_status(operation_id).await?;
 
                         // Status output is requested data
@@ -663,8 +858,88 @@ impl DeployCommand {
                     );
                 }
 
+                emit_target_banner_if_resolved(global_flags, &project_root, Some(&config));
+
+                // Step 2.5: Widget pre-build (Phase 79 — Failure Mode A + B mitigation).
+                //
+                // REVISION 3 HIGH-C1: `PMCP_WIDGET_DIRS` (colon-separated list,
+                // Unix PATH convention) is set ONCE here covering ALL widgets so
+                // 79-04's generated build.rs picks up every output dir via
+                // `cargo:rerun-if-env-changed=PMCP_WIDGET_DIRS` plus per-dir
+                // `cargo:rerun-if-changed`. Replaces the pre-revision-3 single
+                // `PMCP_WIDGET_DIR` which was last-widget-wins broken for
+                // multi-widget projects.
+                //
+                // F-4 mitigation: there is no `cargo pmcp build` subcommand
+                // (verified via `enum Commands` in `cargo-pmcp/src/main.rs:83`),
+                // so this `cargo pmcp deploy` execute_async path is the ONLY
+                // place that gets the Step 2.5 hook.
+                // Single workspace scan — `detect_widgets` may invoke `cargo metadata`
+                // on the convention path, so cache the result for both Step 2.5 and
+                // the post-deploy `widgets_present` check below.
+                let detected_widgets =
+                    crate::deployment::widgets::detect_widgets(&config, &project_root);
+
+                if !self.no_widget_build {
+                    Self::pre_build_widgets_and_set_env(
+                        &detected_widgets,
+                        &project_root,
+                        global_flags,
+                    )
+                    .await?;
+                }
+
+                if self.widgets_only {
+                    if global_flags.should_output() {
+                        println!(
+                            "\n✓ Widgets built (--widgets-only); skipping cargo build + deploy"
+                        );
+                    }
+                    return Ok(());
+                }
+
                 let artifact = target.build(&config).await?;
                 let outputs = target.deploy(&config, artifact).await?;
+
+                // Step 4.5: Post-deploy verification (Phase 79 — Failure Mode C
+                // mitigation). Subprocess-spawn `cargo pmcp test {check, conformance,
+                // apps} --format=json` via `current_exe()` per REVISION 3 HIGH-1
+                // (Plan 79-05's JSON contract). REVISION 3 HIGH-C2: NO auth
+                // resolution here — child inherits parent env and resolves via
+                // existing `AuthMethod::None` Phase 74 cache + refresh path.
+                //
+                // F-6 mitigation per gsd-plan-checker REVISION 1 (retained): the
+                // orchestrator (`run_post_deploy_tests` -> `interpret_outcomes`)
+                // is the SOLE banner-print site. Caller MUST NOT eprintln the
+                // failure banner.
+                if !self.no_post_deploy_test {
+                    let pdt_config = self.materialize_post_deploy_config(&config);
+                    let widgets_present = !detected_widgets.is_empty();
+                    let url = outputs.url.as_deref().unwrap_or("");
+                    let target_id_str = target.id();
+                    let quiet = !global_flags.should_output();
+
+                    if let Err(failure) =
+                        crate::deployment::post_deploy_tests::run_post_deploy_tests(
+                            url,
+                            target_id_str,
+                            widgets_present,
+                            &pdt_config,
+                            quiet,
+                        )
+                        .await
+                    {
+                        // Print outputs first so user sees what's deployed before exiting.
+                        if global_flags.should_output() {
+                            println!();
+                            outputs.display();
+                        }
+                        // REVISION 3 HIGH-2: exit code is 3 for broken-but-live, 2
+                        // for infra. emit_ci_annotation already fired from inside
+                        // interpret_outcomes.
+                        std::process::exit(failure.exit_code());
+                    }
+                }
 
                 if global_flags.should_output() {
                     println!();
@@ -740,8 +1015,8 @@ impl DeployCommand {
     }
 
     fn get_target_id(&self, project_root: &PathBuf) -> Result<String> {
-        // Priority: --target flag > config file > default
-        if let Some(target) = &self.target {
+        // Priority: --target-type flag > config file > default
+        if let Some(target) = &self.target_type {
             return Ok(target.clone());
         }
 
@@ -752,22 +1027,6 @@ impl DeployCommand {
 
         // Default to AWS Lambda
         Ok("aws-lambda".to_string())
-    }
-
-    fn find_project_root() -> Result<PathBuf> {
-        let current_dir = std::env::current_dir().context("Failed to get current directory")?;
-
-        let mut dir = current_dir.as_path();
-
-        loop {
-            if dir.join("Cargo.toml").exists() {
-                return Ok(dir.to_path_buf());
-            }
-
-            dir = dir.parent().ok_or_else(|| {
-                anyhow::anyhow!("Could not find Cargo.toml in any parent directory")
-            })?;
-        }
     }
 
     /// Save deployment info to .pmcp/deployment.toml for landing page integration
@@ -1199,5 +1458,37 @@ fn resolve_public_clients(
         Some(default_public_clients)
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod phase_77_banner_smoke_tests {
+    use super::*;
+
+    /// Phase 77 helper smoke: when no `~/.pmcp/config.toml` exists and no PMCP_TARGET is set,
+    /// `emit_target_banner_if_resolved` must be a silent no-op (D-11 zero-touch). Establishing
+    /// this for free preserves Phase 76 behavior for users who never ran `cargo pmcp configure`.
+    #[test]
+    #[serial_test::serial]
+    fn helper_does_not_panic_when_no_config() {
+        let home_tmp = tempfile::tempdir().unwrap();
+        let saved_home = std::env::var_os("HOME");
+        std::env::set_var("HOME", home_tmp.path());
+        let saved_target = std::env::var_os("PMCP_TARGET");
+        std::env::remove_var("PMCP_TARGET");
+
+        let gf = crate::commands::GlobalFlags::default();
+        let project_root = std::env::temp_dir();
+        // Helper must NOT panic and MUST NOT print a banner when no config exists.
+        emit_target_banner_if_resolved(&gf, &project_root, None);
+
+        match saved_home {
+            Some(v) => std::env::set_var("HOME", v),
+            None => std::env::remove_var("HOME"),
+        }
+        match saved_target {
+            Some(v) => std::env::set_var("PMCP_TARGET", v),
+            None => std::env::remove_var("PMCP_TARGET"),
+        }
     }
 }

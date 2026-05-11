@@ -1,6 +1,6 @@
 [package]
 name = "pmcp-server"
-version = "0.2.2"
+version = "0.2.3"
 edition = "2021"
 authors = ["PMCP SDK Contributors"]
 description = "PMCP SDK developer tools MCP server - protocol testing, scaffolding, schema export, and documentation"
@@ -27,8 +27,8 @@ name = "pmcp-server"
 path = "src/main.rs"
 
 [dependencies]
-pmcp = { version = "2.6.0", path = "../../", features = ["streamable-http"] }
-mcp-tester = { version = "0.5.0", path = "../mcp-tester" }
+pmcp = { version = "2.7.0", path = "../../", features = ["streamable-http"] }
+mcp-tester = { version = "0.6.0", path = "../mcp-tester" }
 tokio = { version = "1", features = ["full"] }
 clap = { version = "4", features = ["derive", "env"] }
 serde = { version = "1", features = ["derive"] }

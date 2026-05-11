@@ -132,6 +132,7 @@ Both `UIResource::html_mcp_app()` and `UIResourceContents::html()` produce `mime
 
 > **Important:** Do not use the legacy `UIResource::html_mcp()` constructor — it produces `text/html+mcp` which is not recognized by Claude Desktop.
 
+<a id="csp-external-resources"></a>
 ### 5. Declare CSP for external domains
 
 If your widget loads external resources (images, API calls, fonts), you **must** declare them in `_meta.ui.csp` on the resource contents. Without this, hosts like Claude.ai block all external domains via Content-Security-Policy.
@@ -180,6 +181,7 @@ Widgets use the `@modelcontextprotocol/ext-apps` SDK and **must be bundled into 
 4. **Read `app.getHostContext()`** — some hosts deliver data only at init time
 5. **Use `app.callServerTool()`** — for interactive widgets that call back to the server
 
+<a id="handlers-before-connect"></a>
 ### Required protocol handlers
 
 > **Critical:** You MUST register `onteardown`, `ontoolinput`, `ontoolcancelled`, and `onerror` handlers before calling `connect()`. Without these, hosts like Claude Desktop and Claude.ai will **tear down the entire MCP connection** after the first tool result — the widget briefly appears then everything dies.
@@ -193,6 +195,7 @@ app.onerror = (err) => { console.error("App error:", err); };
 app.ontoolresult = (result) => { /* your data handler */ };
 ```
 
+<a id="do-not-pass-tools"></a>
 ### Capabilities declaration
 
 Do **not** pass `tools` capability to `new App()`. ChatGPT's adapter rejects it with a Zod validation error (`-32603: expected "object"`). Widgets still receive tool results via `hostContext.toolOutput` and `ontoolresult` notifications without this capability. The `callServerTool()` API also works without it on hosts that support it (mcp-preview, Claude Desktop) — add a `.catch()` fallback for hosts that don't.
@@ -329,6 +332,7 @@ function loadImage(img, url) {
 
 Widgets must be self-contained HTML files with all JavaScript inlined. Use **Vite + vite-plugin-singlefile** to bundle the ext-apps SDK into each widget.
 
+<a id="vite-singlefile"></a>
 ### Setup
 
 ```bash
@@ -421,6 +425,7 @@ Run `cargo pmcp preview` and check the Protocol tab. All checks should show PASS
 | `resources/read` has `_meta` | `ui/resourceUri` + openai keys | `ResourceCollection` + `uri_to_tool_meta` |
 | `resources/read` has CSP (if external resources) | `_meta.ui.csp.resourceDomains` / `connectDomains` | `WidgetMeta::csp()` |
 
+<a id="common-failures-claude"></a>
 ### Common failures
 
 **Widget shows briefly then connection drops (Claude Desktop/Claude.ai):**

@@ -24,6 +24,16 @@ pub enum AppCommand {
         /// Directory to create project in (defaults to current directory)
         #[arg(long)]
         path: Option<String>,
+        /// REVISION 3 Codex MEDIUM: opt into `include_str!` widget embedding
+        /// instead of the default `WidgetDir` (run-time file serving). When
+        /// set, scaffold writes a `build.rs` that consumes `PMCP_WIDGET_DIRS`
+        /// (set by `cargo pmcp deploy`) AND a local-discovery fallback for
+        /// direct `cargo run` / `cargo build`.
+        ///
+        /// Default (omitted): WidgetDir scaffold — files served at run-time,
+        /// no Cargo cache invalidation problem (Failure Mode B does NOT apply).
+        #[arg(long)]
+        embed_widgets: bool,
     },
     /// Generate ChatGPT-compatible manifest JSON
     Manifest {
@@ -66,7 +76,11 @@ impl AppCommand {
     pub fn execute(self, global_flags: &crate::commands::GlobalFlags) -> Result<()> {
         let _ = global_flags; // quiet mode conveyed via PMCP_QUIET env var
         match self {
-            AppCommand::New { name, path } => create_app(name, path),
+            AppCommand::New {
+                name,
+                path,
+                embed_widgets,
+            } => create_app(name, path, embed_widgets),
             AppCommand::Manifest { url, logo, output } => run_manifest(url, logo, output),
             AppCommand::Landing { widget, output } => create_landing(widget, output),
             AppCommand::Build {
@@ -84,7 +98,12 @@ impl AppCommand {
 /// Creates a project directory containing `src/main.rs`, `widgets/hello.html`,
 /// `Cargo.toml`, and `README.md`. Errors if the target directory already exists,
 /// matching `cargo new` semantics.
-fn create_app(name: String, path: Option<String>) -> Result<()> {
+///
+/// REVISION 3 Codex MEDIUM: when `embed_widgets` is `true`, the scaffold uses
+/// `include_str!` widget embedding AND writes a `build.rs` with the
+/// `PMCP_WIDGET_DIRS` env-var contract + local-discovery fallback. Default
+/// (`false`) uses the `WidgetDir` run-time file-serving scaffold (no build.rs).
+fn create_app(name: String, path: Option<String>, embed_widgets: bool) -> Result<()> {
     let not_quiet = std::env::var("PMCP_QUIET").is_err();
     if not_quiet {
         println!("\n{}", "Creating MCP Apps project".bright_cyan().bold());
@@ -115,8 +134,10 @@ fn create_app(name: String, path: Option<String>) -> Result<()> {
         println!("  {} Created project structure", "ok".green());
     }
 
-    // Generate all template files
-    templates::mcp_app::generate(&project_dir, &name)?;
+    // Generate all template files (REVISION 3 Codex MEDIUM: pass embed_widgets
+    // through so the template either writes a `build.rs` + `include_str!`-based
+    // main.rs OR uses the default `WidgetDir` run-time file-serving scaffold).
+    templates::mcp_app::generate(&project_dir, &name, embed_widgets)?;
 
     if not_quiet {
         println!(

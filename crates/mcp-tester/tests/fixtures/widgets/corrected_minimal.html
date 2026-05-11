@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Cost Coach (corrected)</title>
+  </head>
+  <body>
+    <div id="app">Loading…</div>
+    <script type="application/json" id="initial-data">{"version":"1.0.0"}</script>
+    <script type="module">
+      import { App } from "@modelcontextprotocol/ext-apps";
+
+      const app = new App({ name: "cost-coach", version: "1.0.0" });
+
+      app.onteardown = async () => { return {}; };
+      app.ontoolinput = (params) => { console.debug("Tool input:", params); };
+      app.ontoolcancelled = (params) => { console.debug("Tool cancelled:", params.reason); };
+      app.onerror = (err) => { console.error("App error:", err); };
+
+      app.ontoolresult = (result) => {
+        const root = document.getElementById("app");
+        root.textContent = JSON.stringify(result);
+      };
+
+      app.connect();
+    </script>
+  </body>
+</html>
