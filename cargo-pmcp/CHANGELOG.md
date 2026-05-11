@@ -5,6 +5,34 @@ All notable changes to the `cargo-pmcp` crate will be documented in this file.
 The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html).
 
+## [0.13.0] - 2026-05-10
+
+### Security
+- **RUSTSEC-2026-0098/0099/0104** — `aws-sdk-secretsmanager` and `aws-config`
+  now use `default-features = false` and opt into the modern
+  `default-https-client` TLS path. Eliminates the transitive `rustls 0.21` /
+  `rustls-webpki 0.101.7` advisories. Only affects builds with
+  `--features aws-secrets`.
+
+### Added (Phase 79)
+- **Widget pre-build orchestrator (Step 2.5).** `cargo pmcp deploy` now runs an
+  ahead-of-deploy widget build hook with 4 CLI flags + a `WidgetsConfig` /
+  `WidgetConfig` / `PackageManager` schema.
+- **Post-deploy verifier orchestrator.** New post-deploy verifier hook with 4
+  CLI flags, consumes the `mcp-tester::post_deploy_report::PostDeployReport`
+  machine-readable contract (`schema_version: "1"`).
+- **`--format=<pretty|json>` flag** on `cargo pmcp test {check, conformance, apps}`
+  (default `pretty`).
+- **`PostDeployTestsConfig` + `OnFailure(Fail|Warn)` + `TestRunner` schema types.**
+- **`doctor widget-rerun` check.**
+- **`--embed-widgets` scaffold** on `cargo pmcp deploy`.
+- **`widget_prebuild_demo` example** and **`fuzz_widgets_config` fuzz target**.
+
+### Fixed (carried from 0.12.1 / 0.12.2)
+- Widget pre-build no longer hard-crashes on raw-HTML / CDN-import widgets.
+- Tooling-only metadata-stub `package.json` (no `scripts` block) is now
+  recognised as a raw-HTML widget and skips the Node pipeline.
+
 ## [0.12.2] - 2026-05-03
 
 ### Fixed

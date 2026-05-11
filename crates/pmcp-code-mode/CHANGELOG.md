@@ -2,6 +2,18 @@
 
 All notable changes to `pmcp-code-mode` will be documented in this file.
 
+## [0.5.1] - 2026-05-10
+
+### Security
+- **RUSTSEC-2026-0098/0099/0104** — `aws-sdk-verifiedpermissions` and `aws-config`
+  now use `default-features = false` and opt into `default-https-client` only.
+  Only affects builds with `--features avp`.
+
+### Changed
+- Internal cleanup across `eval`, `executor`, `javascript`, `validation`,
+  `cedar_validation`, `policy_annotations`, `policy::{mod, types}`,
+  `schema_exposure`. No public API changes intended.
+
 ## [0.5.0] - 2026-04-16
 
 ### Added — Developer Experience

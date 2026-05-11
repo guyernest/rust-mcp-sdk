@@ -5,6 +5,42 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.7.0] - 2026-05-10
+
+### Security
+
+- **RUSTSEC-2026-0098, RUSTSEC-2026-0099, RUSTSEC-2026-0104** — Resolve three
+  transitive `rustls-webpki 0.101.7` advisories pulled in via the AWS SDK
+  default `rustls` feature → `aws-smithy-runtime/tls-rustls` →
+  `aws-smithy-http-client/legacy-rustls-ring` → `hyper-rustls 0.24` →
+  `rustls 0.21.12` / `rustls-webpki 0.101.7`. The workspace's AWS SDK direct
+  deps (`aws-sdk-dynamodb`, `aws-sdk-secretsmanager`, `aws-sdk-verifiedpermissions`,
+  and the three `aws-config` pins) now use `default-features = false` and opt
+  into `default-https-client` only, which maps to the modern
+  `rustls-aws-lc` path (`rustls 0.23` / `rustls-webpki 0.103` via `aws-lc-rs`).
+  No public API change.
+
+### Changed
+
+- **Phase 75 / 75.5 — Cognitive-complexity refactors across the SDK.** Workspace
+  PMAT cognitive-complexity hotspots reduced to ≤ 25 per function (with a hard
+  cap of 50 for irreducibly complex protocol/parser dispatch). Notable
+  refactored hotspots: `streamable_http_server` (`handle_post_with_middleware`,
+  `handle_post_fast_path`, `validate_headers`, `handle_get_sse`,
+  `validate_protocol_version`, `build_response`), `path_validation::validate_path`
+  (cog 103 → ≤25), `schema_utils` (3 hotspots cog 56/55/41 → ≤25),
+  `workflow::task_prompt_handler::classify_resolution_failure`, and
+  `utils::json_simd` (`parse_json_fast`, `pretty_print_fast`). No public API
+  changes intended; behavior covered by existing tests.
+- **CI quality gate** — `pmat quality-gate --fail-on-violation --checks complexity`
+  now runs in `.github/workflows/ci.yml` and is gated as a required check via
+  the `gate` aggregate job. PMAT pinned to `3.15.0`.
+
+### Internal
+
+- Cumulative phase work since v2.6.0 (Phases 73–79). Per-phase summaries live
+  under `.planning/phases/<NN>-*/SUMMARY.md` in the source tree.
+
 ## [2.6.0] - 2026-04-21
 
 ### Added

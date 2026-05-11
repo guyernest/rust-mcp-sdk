@@ -10,5 +10,5 @@ keywords = ["mcp", "example", "test"]
 categories = ["development-tools::testing"]
 
 [dependencies]
-pmcp = { version = "2.6.0", path = "../../", features = ["http"] }
+pmcp = { version = "2.7.0", path = "../../", features = ["http"] }
 tokio = { version = "1", features = ["full"] }
