@@ -217,6 +217,17 @@ async fn execute_pretty(
     results.extend(validator.validate_widgets(&widget_bodies));
     results.append(&mut read_failures);
 
+    finalize_pretty_report(results, strict, global_flags)
+}
+
+/// Build the `TestReport` from accumulated `results`, print it, and exit
+/// the pretty path with the appropriate success/failure footer. Extracted
+/// from `execute_pretty` so the orchestrator stays under cog 25.
+fn finalize_pretty_report(
+    results: Vec<mcp_tester::TestResult>,
+    strict: bool,
+    global_flags: &GlobalFlags,
+) -> Result<()> {
     if results.is_empty() {
         if global_flags.should_output() {
             println!("   {} No validation results", "i".bright_cyan());
@@ -225,7 +236,6 @@ async fn execute_pretty(
         return Ok(());
     }
 
-    // Build report
     let mut report = TestReport::new();
     for result in results {
         report.add_test(result);
@@ -235,7 +245,6 @@ async fn execute_pretty(
         report.apply_strict_mode();
     }
 
-    // Print report
     report.print(mcp_tester::OutputFormat::Pretty);
 
     if report.has_failures() {

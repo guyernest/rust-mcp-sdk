@@ -265,72 +265,95 @@ fn strip_js_comments(src: &str) -> String {
 
     while i < n {
         let c = bytes[i];
-        match state {
-            0 => {
-                if c == b'/' && i + 1 < n && bytes[i + 1] == b'*' {
-                    state = 1;
-                    i += 2;
-                } else if c == b'/' && i + 1 < n && bytes[i + 1] == b'/' {
-                    state = 2;
-                    i += 2;
-                } else if c == b'\'' {
-                    state = 3;
-                    out.push(c as char);
-                    i += 1;
-                } else if c == b'"' {
-                    state = 4;
-                    out.push(c as char);
-                    i += 1;
-                } else if c == b'`' {
-                    state = 5;
-                    out.push(c as char);
-                    i += 1;
-                } else {
-                    out.push(c as char);
-                    i += 1;
-                }
-            },
-            1 => {
-                if c == b'*' && i + 1 < n && bytes[i + 1] == b'/' {
-                    state = 0;
-                    i += 2;
-                } else {
-                    i += 1;
-                }
-            },
-            2 => {
-                if c == b'\n' || c == b'\r' {
-                    state = 0;
-                    out.push(c as char);
-                    i += 1;
-                } else {
-                    i += 1;
-                }
-            },
-            3..=5 => {
-                if c == b'\\' && i + 1 < n {
-                    out.push(c as char);
-                    out.push(bytes[i + 1] as char);
-                    i += 2;
-                } else {
-                    let close = match state {
-                        3 => b'\'',
-                        4 => b'"',
-                        5 => b'`',
-                        _ => unreachable!(),
-                    };
-                    if c == close {
-                        state = 0;
-                    }
-                    out.push(c as char);
-                    i += 1;
-                }
-            },
+        i = match state {
+            0 => step_js_outside(c, bytes, i, n, &mut out, &mut state),
+            1 => step_js_block_comment(c, bytes, i, n, &mut state),
+            2 => step_js_line_comment(c, &mut out, i, &mut state),
+            3..=5 => step_js_string(c, bytes, i, n, &mut out, &mut state),
             _ => unreachable!(),
-        }
+        };
     }
 
     out
+}
+
+/// State-0 step: outside any string or comment. Detects comment starts,
+/// transitions into string states, and emits ordinary bytes.
+fn step_js_outside(
+    c: u8,
+    bytes: &[u8],
+    i: usize,
+    n: usize,
+    out: &mut String,
+    state: &mut u8,
+) -> usize {
+    if c == b'/' && i + 1 < n && bytes[i + 1] == b'*' {
+        *state = 1;
+        return i + 2;
+    }
+    if c == b'/' && i + 1 < n && bytes[i + 1] == b'/' {
+        *state = 2;
+        return i + 2;
+    }
+    if c == b'\'' {
+        *state = 3;
+    } else if c == b'"' {
+        *state = 4;
+    } else if c == b'`' {
+        *state = 5;
+    }
+    out.push(c as char);
+    i + 1
+}
+
+/// State-1 step: inside a `/* ... */` block comment. Bytes are dropped;
+/// `*/` returns to state 0.
+fn step_js_block_comment(c: u8, bytes: &[u8], i: usize, n: usize, state: &mut u8) -> usize {
+    if c == b'*' && i + 1 < n && bytes[i + 1] == b'/' {
+        *state = 0;
+        i + 2
+    } else {
+        i + 1
+    }
+}
+
+/// State-2 step: inside a `// ...` line comment. Bytes are dropped; the
+/// terminating newline/carriage-return is emitted and returns to state 0.
+fn step_js_line_comment(c: u8, out: &mut String, i: usize, state: &mut u8) -> usize {
+    if c == b'\n' || c == b'\r' {
+        *state = 0;
+        out.push(c as char);
+    }
+    i + 1
+}
+
+/// States 3/4/5 step: inside a `'`/`"`/`` ` `` string. Bytes are emitted
+/// verbatim; escapes consume two bytes; the matching closing quote returns
+/// to state 0.
+fn step_js_string(
+    c: u8,
+    bytes: &[u8],
+    i: usize,
+    n: usize,
+    out: &mut String,
+    state: &mut u8,
+) -> usize {
+    if c == b'\\' && i + 1 < n {
+        out.push(c as char);
+        out.push(bytes[i + 1] as char);
+        return i + 2;
+    }
+    let close = match *state {
+        3 => b'\'',
+        4 => b'"',
+        5 => b'`',
+        _ => unreachable!(),
+    };
+    if c == close {
+        *state = 0;
+    }
+    out.push(c as char);
+    i + 1
 }
 
 /// Concatenate the bodies of all inline `<script>` tags except those with
