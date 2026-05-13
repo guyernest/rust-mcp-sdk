@@ -812,7 +812,8 @@ mod tests {
         let json = serde_json::to_value(&caps).unwrap();
         let round: ServerCapabilities = serde_json::from_value(json).unwrap();
         assert_eq!(
-            round.extensions
+            round
+                .extensions
                 .as_ref()
                 .unwrap()
                 .get("io.modelcontextprotocol/skills"),
@@ -854,17 +855,15 @@ mod tests {
         assert!(round.experimental.is_some());
         assert!(round.extensions.is_some());
         assert_eq!(
-            round.extensions
+            round
+                .extensions
                 .as_ref()
                 .unwrap()
                 .get("io.modelcontextprotocol/skills"),
             Some(&serde_json::json!({}))
         );
         assert_eq!(
-            round.experimental
-                .as_ref()
-                .unwrap()
-                .get("old-thing"),
+            round.experimental.as_ref().unwrap().get("old-thing"),
             Some(&serde_json::json!({"v": 1}))
         );
     }
