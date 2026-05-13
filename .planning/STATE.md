@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Protocol Modernization
-status: Milestone complete
+status: Phase 80 complete
 stopped_at: Phase 77 Plan 09 complete (Phase 77 closeout — DRY cleanup + CHANGELOG date + Toyota Way quality-gate certification + manual TTY UX checkpoint approved)
-last_updated: "2026-05-04T02:25:17.423Z"
+last_updated: "2026-05-13T03:51:50.882Z"
 progress:
   total_phases: 40
   completed_phases: 34
   total_plans: 83
   completed_plans: 83
-  percent: 100
+  percent: 85
 ---
 
 # Project State
@@ -20,12 +20,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-10)
 
 **Core value:** Close credibility and DX gaps where rmcp outshines PMCP -- documentation accuracy, feature gate presentation, macro documentation, example index, repo hygiene.
-**Current focus:** Phase 79 — cargo-pmcp-deploy-widget-pre-build-post-deploy-verification-
+**Current focus:** Phase 80 — SEP-2640 Skills Support
 
 ## Current Position
 
-Phase: 79
-Plan: Not started
+Phase: 80 — COMPLETE
+Plan: 1 of 3
 Next: Phase 74 (cargo pmcp auth subcommand, multi-server OAuth token cache) — reordered ahead of Phase 73 per operator direction 2026-04-21
 After: Phase 73 (Typed client helpers + list_all pagination, PARITY-CLIENT-01)
 Operator follow-ups (deferred from Phase 75 Wave 5, not blocking Phase 74): (a) merge Phase 75 Wave 5 + 75.5 to paiml/rust-mcp-sdk:main; (b) post-merge run `gh workflow run quality-badges.yml -R paiml/rust-mcp-sdk` and append observation to `.planning/phases/75-fix-pmat-issues/75-05-GATE-VERIFICATION.md` "## Badge flip observation" section.
