@@ -89,8 +89,9 @@ pub struct ServerCoreBuilder {
     icons: Option<Vec<crate::types::protocol::IconInfo>>,
     /// Payload and resource limits
     payload_limits: PayloadLimits,
-    /// Accumulated SEP-2640 Agent Skills (80-REVIEWS.md Fix 1: finalized
-    /// into a single `SkillsHandler` exactly once at `.build()` time).
+    /// Accumulated SEP-2640 Agent Skills. The registry is finalized into a
+    /// single `SkillsHandler` exactly once at `.build()` time so chained
+    /// `.skill(...)` / `.skills(...)` calls never produce nested wrappers.
     #[cfg(all(feature = "skills", not(target_arch = "wasm32")))]
     pending_skills: Option<Skills>,
 }
@@ -345,8 +346,7 @@ impl ServerCoreBuilder {
     /// Merges into any prior accumulated skills (a previous `.skill(...)` or
     /// `.skills(...)` call). The accumulated registry is finalized into a
     /// single `SkillsHandler` exactly once at [`Self::build`] time, then
-    /// composed at most once with any `.resources(...)` handler. There is
-    /// no per-call wrapper nesting (80-REVIEWS.md Fix 1).
+    /// composed at most once with any `.resources(...)` handler.
     ///
     /// # Panics
     ///
@@ -360,26 +360,15 @@ impl ServerCoreBuilder {
             None => skills,
         };
         self.pending_skills = Some(merged);
-        // Capability flips: set early so they're visible to inspectors
-        // (e.g., tests) even before `.build()` runs.
-        if self.capabilities.resources.is_none() {
-            self.capabilities.resources = Some(crate::types::ResourceCapabilities {
-                subscribe: Some(false),
-                list_changed: Some(false),
-            });
-        }
-        let mut ext = self.capabilities.extensions.take().unwrap_or_default();
-        ext.entry("io.modelcontextprotocol/skills".to_string())
-            .or_insert_with(|| serde_json::json!({}));
-        self.capabilities.extensions = Some(ext);
+        // Flip capabilities now so inspectors (tests, etc.) see them
+        // before `.build()` runs.
+        crate::server::skills::set_skills_capabilities(&mut self.capabilities);
         self
     }
 
-    /// Fallible variant of [`Self::skills`] (80-REVIEWS.md Fix 10 / Codex G2).
-    ///
-    /// Returns `Err` immediately if the merged registry would contain duplicate
-    /// URIs. Useful for runtime-dynamic registration where panicking is
-    /// unacceptable.
+    /// Fallible variant of [`Self::skills`] — returns `Err` immediately if
+    /// the merged registry would contain duplicate URIs. Useful for
+    /// runtime-dynamic registration where panicking is unacceptable.
     ///
     /// # Errors
     ///
@@ -395,24 +384,15 @@ impl ServerCoreBuilder {
         // construction happens in `.build()` once everything is settled.
         merged.clone().into_handler()?;
         self.pending_skills = Some(merged);
-        if self.capabilities.resources.is_none() {
-            self.capabilities.resources = Some(crate::types::ResourceCapabilities {
-                subscribe: Some(false),
-                list_changed: Some(false),
-            });
-        }
-        let mut ext = self.capabilities.extensions.take().unwrap_or_default();
-        ext.entry("io.modelcontextprotocol/skills".to_string())
-            .or_insert_with(|| serde_json::json!({}));
-        self.capabilities.extensions = Some(ext);
+        crate::server::skills::set_skills_capabilities(&mut self.capabilities);
         Ok(self)
     }
 
     /// Register a skill AND a parallel prompt that returns the same content.
     ///
-    /// The dual-surface bootstrap. Both surfaces are derived from one
-    /// [`Skill`] value, so they cannot drift. The byte-equality is asserted
-    /// in `tests/skills_integration.rs` (Plan 80-03).
+    /// The dual-surface bootstrap: both surfaces are derived from one
+    /// [`Skill`] value so they cannot drift. The byte-equality between
+    /// surfaces is asserted by the skills integration test.
     #[cfg(all(feature = "skills", not(target_arch = "wasm32")))]
     #[must_use]
     pub fn bootstrap_skill_and_prompt(self, skill: Skill, prompt_name: impl Into<String>) -> Self {
@@ -1018,10 +998,11 @@ impl ServerCoreBuilder {
             .stateless_mode
             .unwrap_or_else(Self::detect_stateless_environment);
 
-        // 80-REVIEWS.md Fix 1: finalize accumulated skills exactly once.
-        // Compose with the user's `.resources(...)` slot if both are set —
-        // otherwise pass through unchanged. `.resources(...)` semantics
-        // remain "last write wins" (Fix 4) — see scope guard.
+        // Finalize accumulated skills exactly once and compose with the
+        // user's `.resources(...)` slot if both are set. `.resources(...)`
+        // itself stays "last write wins" — composition lives here so the
+        // setter's semantics are unchanged for callers that don't use
+        // skills.
         #[cfg(all(feature = "skills", not(target_arch = "wasm32")))]
         let final_resources: Option<Arc<dyn ResourceHandler>> =
             finalize_skills_resources(self.pending_skills.take(), self.resources.take());
@@ -1661,8 +1642,8 @@ mod skills_builder_tests {
     }
 
     // ── Test 2.5a: .resources(A).resources(B) is still "B replaces A" ─
-    // (Fix 4: when no skills are registered, the .resources() semantics
-    // are completely unchanged.)
+    // when no skills are registered, the .resources() semantics are
+    // completely unchanged — last write wins.
     #[tokio::test]
     async fn test_2_5a_resources_replace_unchanged_under_skills_feature() {
         struct A;

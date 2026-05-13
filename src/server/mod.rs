@@ -113,15 +113,12 @@ pub mod ui;
 #[cfg(all(not(target_arch = "wasm32"), feature = "mcp-apps"))]
 pub mod mcp_apps;
 
-/// Agent Skills (SEP-2640) — `Skill` / `SkillReference` / `Skills` plus a
-/// dual-surface `PromptHandler` fallback. See [`skills`] for the API.
+/// Agent Skills (SEP-2640) — [`skills::Skill`] / [`skills::SkillReference`] /
+/// [`skills::Skills`] plus a dual-surface `PromptHandler` fallback.
 ///
-/// Gated on `feature = "skills"` AND `not(target_arch = "wasm32")` because
-/// the module's contents (Plan 80-02) consume
-/// [`crate::server::ResourceHandler`] and [`crate::server::PromptHandler`],
-/// both of which are themselves non-wasm-only (declared at lines 222 and 240
-/// of this file). Pairing the cfg here means Plan 80-02 does not have to
-/// re-anchor it on every item declaration.
+/// Gated on `feature = "skills"` AND `not(target_arch = "wasm32")`: the
+/// module's contents consume [`ResourceHandler`] and [`PromptHandler`],
+/// which are themselves non-wasm-only.
 #[cfg(all(feature = "skills", not(target_arch = "wasm32")))]
 pub mod skills;
 
@@ -1772,8 +1769,9 @@ pub struct ServerBuilder {
     website_url: Option<String>,
     /// Optional icons for the server implementation (MCP 2025-11-25)
     icons: Option<Vec<crate::types::protocol::IconInfo>>,
-    /// Accumulated SEP-2640 Agent Skills (80-REVIEWS.md Fix 1: finalized
-    /// into a single `SkillsHandler` exactly once at `.build()` time).
+    /// Accumulated SEP-2640 Agent Skills. The registry is finalized into a
+    /// single `SkillsHandler` exactly once at `.build()` time so chained
+    /// `.skill(...)` / `.skills(...)` calls never produce nested wrappers.
     #[cfg(feature = "skills")]
     pending_skills: Option<skills::Skills>,
 }
@@ -2660,7 +2658,7 @@ impl ServerBuilder {
     /// Convenience over [`Self::skills`] for the single-skill case. The skill
     /// is accumulated and finalized into a `SkillsHandler` exactly once at
     /// [`Self::build`] time, then composed with any `.resources(...)`
-    /// handler set on this builder (80-REVIEWS.md Fix 1).
+    /// handler set on this builder.
     ///
     /// # Panics
     ///
@@ -2695,8 +2693,7 @@ impl ServerBuilder {
     /// Merges into any prior accumulated skills (a previous `.skill(...)` or
     /// `.skills(...)` call). The accumulated registry is finalized into a
     /// single `SkillsHandler` exactly once at [`Self::build`] time, then
-    /// composed at most once with any `.resources(...)` handler. There is
-    /// no per-call wrapper nesting (80-REVIEWS.md Fix 1).
+    /// composed at most once with any `.resources(...)` handler.
     ///
     /// # Panics
     ///
@@ -2710,24 +2707,13 @@ impl ServerBuilder {
             None => skills_registry,
         };
         self.pending_skills = Some(merged);
-        if self.capabilities.resources.is_none() {
-            self.capabilities.resources = Some(crate::types::ResourceCapabilities {
-                subscribe: Some(false),
-                list_changed: Some(false),
-            });
-        }
-        let mut ext = self.capabilities.extensions.take().unwrap_or_default();
-        ext.entry("io.modelcontextprotocol/skills".to_string())
-            .or_insert_with(|| serde_json::json!({}));
-        self.capabilities.extensions = Some(ext);
+        skills::set_skills_capabilities(&mut self.capabilities);
         self
     }
 
-    /// Fallible variant of [`Self::skills`] (80-REVIEWS.md Fix 10 / Codex G2).
-    ///
-    /// Returns `Err` immediately if the merged registry would contain duplicate
-    /// URIs. Useful for runtime-dynamic registration where panicking is
-    /// unacceptable.
+    /// Fallible variant of [`Self::skills`] — returns `Err` immediately if
+    /// the merged registry would contain duplicate URIs. Useful for
+    /// runtime-dynamic registration where panicking is unacceptable.
     ///
     /// # Errors
     ///
@@ -2743,24 +2729,15 @@ impl ServerBuilder {
         // construction happens in `.build()` once everything is settled.
         merged.clone().into_handler()?;
         self.pending_skills = Some(merged);
-        if self.capabilities.resources.is_none() {
-            self.capabilities.resources = Some(crate::types::ResourceCapabilities {
-                subscribe: Some(false),
-                list_changed: Some(false),
-            });
-        }
-        let mut ext = self.capabilities.extensions.take().unwrap_or_default();
-        ext.entry("io.modelcontextprotocol/skills".to_string())
-            .or_insert_with(|| serde_json::json!({}));
-        self.capabilities.extensions = Some(ext);
+        skills::set_skills_capabilities(&mut self.capabilities);
         Ok(self)
     }
 
     /// Register a skill AND a parallel prompt that returns the same content.
     ///
-    /// The dual-surface bootstrap. Both surfaces are derived from one
-    /// [`skills::Skill`] value, so they cannot drift. The byte-equality is
-    /// asserted in `tests/skills_integration.rs` (Plan 80-03).
+    /// The dual-surface bootstrap: both surfaces are derived from one
+    /// [`skills::Skill`] value so they cannot drift. The byte-equality
+    /// between surfaces is asserted by the skills integration test.
     #[cfg(feature = "skills")]
     #[must_use]
     pub fn bootstrap_skill_and_prompt(
@@ -3367,10 +3344,11 @@ impl ServerBuilder {
         // Build URI-to-tool-meta index for widget resource _meta propagation
         let uri_to_tool_meta = core::build_uri_to_tool_meta(&tool_infos);
 
-        // 80-REVIEWS.md Fix 1: finalize accumulated skills exactly once.
-        // Compose with the user's `.resources(...)` slot if both are set —
-        // otherwise pass through unchanged. `.resources(...)` semantics
-        // remain "last write wins" (Fix 4).
+        // Finalize accumulated skills exactly once and compose with the
+        // user's `.resources(...)` slot if both are set. `.resources(...)`
+        // itself stays "last write wins" — composition lives here so the
+        // setter's semantics are unchanged for callers that don't use
+        // skills.
         #[cfg(feature = "skills")]
         let final_resources: Option<Arc<dyn ResourceHandler>> =
             builder::finalize_skills_resources(self.pending_skills, self.resources);

@@ -1,4 +1,4 @@
-//! Phase 80 — SEP-2640 Skills integration test.
+//! SEP-2640 Skills integration test.
 //!
 //! Exercises all four SEP-2640 endpoints (resources/list, resources/read
 //! for SKILL.md, resources/read for a reference, resources/read for the
@@ -7,23 +7,22 @@
 //!
 //! The load-bearing tests are:
 //!
-//! - Test 3.6: the SEP-2640 SURFACE (concatenated resource reads with
-//!   labelled-rule separators) is byte-equal to the CONSTRUCTION PROMPT
-//!   SURFACE (`Skill::as_prompt_text()`).
+//! - Construction-level dual-surface byte equality: the SEP-2640 surface
+//!   (concatenated resource reads with labelled-rule separators) equals
+//!   `Skill::as_prompt_text()`.
 //!
-//! - Test 3.7 (MANDATORY per 80-REVIEWS.md Fix 5): the same SEP-2640
-//!   SURFACE is byte-equal to the WIRE-LEVEL PROMPT SURFACE — extracted
-//!   from the prompt handler that
+//! - Wire-level dual-surface byte equality: the same SEP-2640 surface
+//!   equals the body returned by the prompt handler that
 //!   `Server::builder().bootstrap_skill_and_prompt(...).build()`
-//!   registers, retrieved via `server.get_prompt("x")`, invoked via
+//!   registers, retrieved via `server.get_prompt("x")` and invoked via
 //!   `.handle(args, extra)`. This is the same code path `prompts/get`
-//!   executes at runtime per `src/server/mod.rs` `handle_get_prompt`.
+//!   executes at runtime.
 //!
-//! - Test 3.7a (Fix 9): the invariant holds when the SKILL.md is
-//!   authored with CRLF line endings (Windows) OR LF line endings (Linux).
+//! - CRLF resilience: the invariant holds whether the SKILL.md is
+//!   authored with CRLF (Windows) or LF (Linux) line endings.
 //!
-//! - Test 3.9 (Fix 3): every `read()` response carries the URI and
-//!   per-resource MIME type via `Content::Resource`.
+//! - Per-resource wire shape: every `read()` response carries the URI and
+//!   the per-resource MIME type via `Content::Resource`.
 
 #![cfg(all(feature = "skills", not(target_arch = "wasm32")))]
 
@@ -56,8 +55,9 @@ fn build_widget_skill_lf() -> Skill {
     ))
 }
 
-/// CRLF-authored counterpart for Fix 9 — same content semantically, but
-/// every newline is `\r\n`. The dual-surface invariant must STILL hold.
+/// CRLF-authored counterpart — same content semantically, but every newline
+/// is `\r\n`. The dual-surface invariant must still hold so authors on
+/// Windows can't accidentally break consumers reading on Linux.
 fn build_widget_skill_crlf() -> Skill {
     Skill::new(
         "widget-builder-crlf",
@@ -74,7 +74,8 @@ fn build_trivial_skill() -> Skill {
     Skill::new("hello", "---\nname: hello\n---\nHi.")
 }
 
-/// Extract URI + body + MIME from a Resource-variant Content (Fix 3).
+/// Extract URI + body + MIME from a Resource-variant Content. Reads MUST
+/// be the Resource variant — Content::Text would drop the per-URI MIME.
 fn extract_resource(contents: &[Content]) -> (String, String, String) {
     match contents.first() {
         Some(Content::Resource {
@@ -185,7 +186,7 @@ async fn resources_list_returns_skill_md_and_index_only() {
     );
 }
 
-// Test 3.2 — Fix 3 wire shape for SKILL.md
+// wire shape: SKILL.md reads return Content::Resource with the right MIME
 #[tokio::test]
 async fn resources_read_skill_md_returns_resource_with_text() {
     let handler = build_handler().await;
@@ -202,7 +203,7 @@ async fn resources_read_skill_md_returns_resource_with_text() {
     assert!(text.contains("Widget Builder Workflow"));
 }
 
-// Test 3.3 — Fix 3 wire shape for references with their own MIME
+// wire shape: each reference read carries its own per-URI MIME type
 #[tokio::test]
 async fn resources_read_reference_carries_per_resource_mime() {
     let handler = build_handler().await;
@@ -219,7 +220,7 @@ async fn resources_read_reference_carries_per_resource_mime() {
     assert!(text.contains("Widget Spec"));
 }
 
-// Test 3.4 — Fix 3 wire shape for the index
+// wire shape: the discovery index is served as Content::Resource (application/json)
 #[tokio::test]
 async fn resources_read_index_returns_resource_with_text_application_json() {
     let handler = build_handler().await;
@@ -277,7 +278,7 @@ async fn dual_surface_byte_equal_construction_level() {
     );
 }
 
-// Test 3.7 — MANDATORY wire-level dual-surface via Server::builder + get_prompt
+// wire-level dual-surface: byte equality via Server::builder + get_prompt
 #[tokio::test]
 async fn dual_surface_byte_equal_wire_level_via_get_prompt() {
     let skill = build_widget_skill_lf();
@@ -293,7 +294,7 @@ async fn dual_surface_byte_equal_wire_level_via_get_prompt() {
     );
 }
 
-// Test 3.7a — CRLF + mixed-line-endings (Fix 9)
+// dual-surface invariant survives CRLF + mixed-line-ending SKILL.md authoring
 #[tokio::test]
 async fn dual_surface_byte_equal_crlf_and_mixed_line_endings() {
     for skill in [build_widget_skill_lf(), build_widget_skill_crlf()] {
@@ -346,7 +347,7 @@ proptest! {
     }
 }
 
-// Test 3.9 — proptest wire-shape (Fix 3): every read response carries URI + MIME
+// proptest wire-shape: every read response carries URI + MIME
 proptest! {
     #[test]
     fn proptest_read_responses_always_carry_uri_and_mime(
@@ -369,7 +370,7 @@ proptest! {
                     Content::Resource { uri: u, text, mime_type, .. } => {
                         prop_assert_eq!(u.as_str(), uri);
                         prop_assert!(text.is_some(), "text must be present");
-                        prop_assert!(mime_type.is_some(), "mime_type must be present (Fix 3)");
+                        prop_assert!(mime_type.is_some(), "mime_type must be present");
                     }
                     other => prop_assert!(false, "expected Content::Resource, got {:?}", other),
                 }
