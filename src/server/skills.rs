@@ -361,7 +361,7 @@ impl Skills {
     /// Concatenate another registry onto this one (used by the builder
     /// accumulator on repeated `.skills(...)` calls per 80-REVIEWS.md Fix 1).
     #[must_use]
-    pub fn merge(mut self, other: Skills) -> Self {
+    pub fn merge(mut self, other: Self) -> Self {
         self.skills.extend(other.skills);
         self
     }
@@ -483,11 +483,7 @@ impl ResourceHandler for SkillsHandler {
         Ok(ListResourcesResult::new(resources))
     }
 
-    async fn read(
-        &self,
-        uri: &str,
-        _extra: RequestHandlerExtra,
-    ) -> Result<ReadResourceResult> {
+    async fn read(&self, uri: &str, _extra: RequestHandlerExtra) -> Result<ReadResourceResult> {
         // 80-REVIEWS.md Fix 3 / Codex C4: emit Content::resource_with_text
         // so each read carries its URI + MIME type on the wire.
         if uri == "skill://index.json" {
@@ -579,11 +575,7 @@ impl ResourceHandler for ComposedResources {
         Ok(combined)
     }
 
-    async fn read(
-        &self,
-        uri: &str,
-        extra: RequestHandlerExtra,
-    ) -> Result<ReadResourceResult> {
+    async fn read(&self, uri: &str, extra: RequestHandlerExtra) -> Result<ReadResourceResult> {
         if uri.starts_with("skill://") {
             self.skills.read(uri, extra).await
         } else {
@@ -664,7 +656,10 @@ mod tests {
             "text/markdown",
             "...",
         ));
-        assert_eq!(s.reference_uri("references/a.md"), "skill://x/references/a.md");
+        assert_eq!(
+            s.reference_uri("references/a.md"),
+            "skill://x/references/a.md"
+        );
 
         let s = s.with_path("y/z");
         assert_eq!(
@@ -723,10 +718,7 @@ mod tests {
     // ── Test 1.6b (UTF-8 BOM) ─────────────────────────────────────────
     #[test]
     fn test_1_6b_parse_frontmatter_utf8_bom() {
-        let s = Skill::new(
-            "x",
-            "\u{FEFF}---\nname: x\ndescription: hello\n---\nbody",
-        );
+        let s = Skill::new("x", "\u{FEFF}---\nname: x\ndescription: hello\n---\nbody");
         assert_eq!(s.resolved_description(), "hello");
     }
 
@@ -827,8 +819,16 @@ mod tests {
     #[tokio::test]
     async fn test_1_9_skills_handler_list_excludes_references() {
         let s = Skill::new("a", "")
-            .with_reference(SkillReference::new("references/r1.md", "text/markdown", "1"))
-            .with_reference(SkillReference::new("references/r2.md", "text/markdown", "2"));
+            .with_reference(SkillReference::new(
+                "references/r1.md",
+                "text/markdown",
+                "1",
+            ))
+            .with_reference(SkillReference::new(
+                "references/r2.md",
+                "text/markdown",
+                "2",
+            ));
         let handler = Skills::new().add(s).into_handler().unwrap();
         let list = handler.list(None, extra()).await.unwrap();
         let skill_md_count = list
@@ -855,10 +855,7 @@ mod tests {
             .add(Skill::new("a", "the body"))
             .into_handler()
             .unwrap();
-        let res = handler
-            .read("skill://a/SKILL.md", extra())
-            .await
-            .unwrap();
+        let res = handler.read("skill://a/SKILL.md", extra()).await.unwrap();
         assert_eq!(res.contents.len(), 1);
         match &res.contents[0] {
             Content::Resource {
@@ -912,10 +909,7 @@ mod tests {
             "x",
         ));
         let handler = Skills::new().add(s).into_handler().unwrap();
-        let res = handler
-            .read("skill://index.json", extra())
-            .await
-            .unwrap();
+        let res = handler.read("skill://index.json", extra()).await.unwrap();
         match &res.contents[0] {
             Content::Resource {
                 uri,
@@ -988,11 +982,7 @@ mod tests {
 
     #[async_trait]
     impl ResourceHandler for DocsHandler {
-        async fn read(
-            &self,
-            uri: &str,
-            _extra: RequestHandlerExtra,
-        ) -> Result<ReadResourceResult> {
+        async fn read(&self, uri: &str, _extra: RequestHandlerExtra) -> Result<ReadResourceResult> {
             Ok(ReadResourceResult::new(vec![Content::text(format!(
                 "DOCS:{uri}"
             ))]))
@@ -1019,10 +1009,7 @@ mod tests {
         let other: Arc<dyn ResourceHandler> = Arc::new(DocsHandler);
         let composed = ComposedResources { skills, other };
 
-        let res = composed
-            .read("skill://a/SKILL.md", extra())
-            .await
-            .unwrap();
+        let res = composed.read("skill://a/SKILL.md", extra()).await.unwrap();
         match &res.contents[0] {
             Content::Resource { uri, .. } => assert_eq!(uri, "skill://a/SKILL.md"),
             other => panic!("expected Content::Resource, got {other:?}"),
@@ -1067,8 +1054,12 @@ mod tests {
             "[a-zA-Z]{1,12}",
         )
             .prop_map(|(p, m, b)| SkillReference::new(p, m, b));
-        (name, "[a-zA-Z]{0,20}", proptest::collection::vec(ref_strategy, 0..=5)).prop_map(
-            |(name, body, refs)| {
+        (
+            name,
+            "[a-zA-Z]{0,20}",
+            proptest::collection::vec(ref_strategy, 0..=5),
+        )
+            .prop_map(|(name, body, refs)| {
                 let mut s = Skill::new(name, body);
                 // De-duplicate within a single skill by relative_path.
                 let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -1078,8 +1069,7 @@ mod tests {
                     }
                 }
                 s
-            },
-        )
+            })
     }
 
     // Strategy that preserves references but uniquifies skill paths so
@@ -1114,11 +1104,8 @@ mod tests {
             for s in skills {
                 registry = registry.add(s);
             }
-            let handler = match registry.into_handler() {
-                Ok(h) => h,
-                // Skip inputs that produce duplicate URIs — covered by Test 1.18.
-                Err(_) => return Ok(()),
-            };
+            // Skip inputs that produce duplicate URIs — covered by Test 1.18.
+            let Ok(handler) = registry.into_handler() else { return Ok(()); };
             let rt = tokio::runtime::Runtime::new().unwrap();
             let list = rt.block_on(handler.list(None, RequestHandlerExtra::default())).unwrap();
             for r in &list.resources {
@@ -1182,6 +1169,41 @@ mod tests {
     }
 
     // ── Test 1.19a (property: read responses always have URI + MIME) ──
+    fn collect_all_uris(skills: &[Skill]) -> Vec<String> {
+        let mut uris: Vec<String> = vec!["skill://index.json".to_string()];
+        for s in skills {
+            uris.push(s.skill_md_uri());
+            for r in s.references() {
+                uris.push(s.reference_uri(r.relative_path()));
+            }
+        }
+        uris
+    }
+
+    fn assert_read_response_has_uri_and_mime(
+        contents: &[Content],
+        expected_uri: &str,
+    ) -> std::result::Result<(), proptest::test_runner::TestCaseError> {
+        prop_assert_eq!(contents.len(), 1);
+        match &contents[0] {
+            Content::Resource {
+                uri,
+                text,
+                mime_type,
+                ..
+            } => {
+                prop_assert_eq!(uri, expected_uri);
+                prop_assert!(text.is_some(), "text missing for {}", expected_uri);
+                prop_assert!(mime_type.is_some(), "mime missing for {}", expected_uri);
+                Ok(())
+            },
+            other => {
+                prop_assert!(false, "expected Content::Resource, got {:?}", other);
+                Ok(())
+            },
+        }
+    }
+
     proptest! {
         #[test]
         fn prop_1_19a_read_responses_always_have_uri_and_mime(skills in skills_strategy_with_refs()) {
@@ -1189,33 +1211,12 @@ mod tests {
             for s in skills.clone() {
                 registry = registry.add(s);
             }
-            let handler = match registry.into_handler() {
-                Ok(h) => h,
-                Err(_) => return Ok(()),
-            };
+            let Ok(handler) = registry.into_handler() else { return Ok(()); };
             let rt = tokio::runtime::Runtime::new().unwrap();
-            // Collect every URI: SKILL.md, references, index.
-            let mut uris: Vec<String> = vec!["skill://index.json".to_string()];
-            for s in &skills {
-                uris.push(s.skill_md_uri());
-                for r in s.references() {
-                    uris.push(s.reference_uri(r.relative_path()));
-                }
-            }
+            let uris = collect_all_uris(&skills);
             for uri in uris {
-                let res = match rt.block_on(handler.read(&uri, RequestHandlerExtra::default())) {
-                    Ok(r) => r,
-                    Err(_) => continue,
-                };
-                prop_assert_eq!(res.contents.len(), 1);
-                match &res.contents[0] {
-                    Content::Resource { uri: u, text, mime_type, .. } => {
-                        prop_assert_eq!(u, &uri);
-                        prop_assert!(text.is_some(), "text missing for {}", uri);
-                        prop_assert!(mime_type.is_some(), "mime missing for {}", uri);
-                    },
-                    other => prop_assert!(false, "expected Content::Resource, got {:?}", other),
-                }
+                let Ok(res) = rt.block_on(handler.read(&uri, RequestHandlerExtra::default())) else { continue; };
+                assert_read_response_has_uri_and_mime(&res.contents, &uri)?;
             }
         }
     }
@@ -1224,11 +1225,8 @@ mod tests {
     #[test]
     #[should_panic(expected = "must not be empty")]
     fn test_1_20_with_reference_panic_empty() {
-        let _ = Skill::new("x", "b").with_reference(SkillReference::new(
-            "",
-            "text/markdown",
-            "body",
-        ));
+        let _ =
+            Skill::new("x", "b").with_reference(SkillReference::new("", "text/markdown", "body"));
     }
 
     #[test]
@@ -1301,9 +1299,7 @@ mod tests {
         // Duplicate within skill.
         let res = Skill::new("x", "b")
             .try_with_reference(SkillReference::new("a.md", "text/markdown", "1"))
-            .and_then(|s| {
-                s.try_with_reference(SkillReference::new("a.md", "text/markdown", "2"))
-            });
+            .and_then(|s| s.try_with_reference(SkillReference::new("a.md", "text/markdown", "2")));
         assert!(res.is_err());
 
         // Ok case.
