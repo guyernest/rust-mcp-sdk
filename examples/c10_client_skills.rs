@@ -95,7 +95,10 @@ async fn sep_2640_flow(handler: &dyn ResourceHandler, skill: &Skill) -> String {
 
     // 1. resources/list — SKILL.md + index ONLY (references excluded per §9).
     let list = handler.list(None, extra.clone()).await.unwrap();
-    println!("resources/list returned {} resource(s):", list.resources.len());
+    println!(
+        "resources/list returned {} resource(s):",
+        list.resources.len()
+    );
     for r in &list.resources {
         println!("  {} ({})", r.uri, r.mime_type.as_deref().unwrap_or(""));
     }
