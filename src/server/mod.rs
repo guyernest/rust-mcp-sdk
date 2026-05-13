@@ -125,6 +125,13 @@ pub mod mcp_apps;
 #[cfg(all(feature = "skills", not(target_arch = "wasm32")))]
 pub mod skills;
 
+/// Re-export the public Skills DX types so callers can `use
+/// pmcp::server::{Skill, SkillReference, Skills}` without descending
+/// into the `skills::` submodule path. The canonical path remains
+/// `pmcp::server::skills::*`.
+#[cfg(all(feature = "skills", not(target_arch = "wasm32")))]
+pub use skills::{Skill, SkillReference, Skills};
+
 /// Validation helpers for typed tools.
 #[cfg(not(target_arch = "wasm32"))]
 pub mod validation;
