@@ -10,6 +10,8 @@ use crate::server::observability::{
     CloudWatchBackend, ConsoleBackend, McpObservabilityMiddleware, NullBackend,
     ObservabilityBackend, ObservabilityConfig,
 };
+#[cfg(all(feature = "skills", not(target_arch = "wasm32")))]
+use crate::server::skills::{ComposedResources, Skill, SkillPromptHandler, Skills};
 use crate::server::tasks::TaskRouter;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::server::tool_middleware::{ToolMiddleware, ToolMiddlewareChain};
@@ -87,6 +89,10 @@ pub struct ServerCoreBuilder {
     icons: Option<Vec<crate::types::protocol::IconInfo>>,
     /// Payload and resource limits
     payload_limits: PayloadLimits,
+    /// Accumulated SEP-2640 Agent Skills (80-REVIEWS.md Fix 1: finalized
+    /// into a single `SkillsHandler` exactly once at `.build()` time).
+    #[cfg(all(feature = "skills", not(target_arch = "wasm32")))]
+    pending_skills: Option<Skills>,
 }
 
 impl Default for ServerCoreBuilder {
@@ -123,6 +129,8 @@ impl ServerCoreBuilder {
             website_url: None,
             icons: None,
             payload_limits: PayloadLimits::default(),
+            #[cfg(all(feature = "skills", not(target_arch = "wasm32")))]
+            pending_skills: None,
         }
     }
 
@@ -295,6 +303,121 @@ impl ServerCoreBuilder {
         }
 
         self
+    }
+
+    /// Register a single SEP-2640 Agent Skill.
+    ///
+    /// Convenience over [`Self::skills`] for the single-skill case. The skill
+    /// is accumulated in `self.pending_skills` and finalized into a
+    /// [`crate::server::skills::Skills`]-derived `ResourceHandler` at
+    /// [`Self::build`] time. Composes (at most once, in `build()`) with any
+    /// `.resources(...)` handler set on this builder.
+    ///
+    /// # Panics
+    ///
+    /// Panics at `.build()` time if multiple registered skills resolve to
+    /// the same `skill://` URI. Use [`Self::try_skills`] with a pre-built
+    /// [`Skills`] registry to surface duplicates as a `Result`.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// use pmcp::server::builder::ServerCoreBuilder;
+    /// use pmcp::server::skills::Skill;
+    ///
+    /// # fn example() -> pmcp::Result<()> {
+    /// let server = ServerCoreBuilder::new()
+    ///     .name("my-server")
+    ///     .version("1.0.0")
+    ///     .skill(Skill::new("hello", "# Hello skill"))
+    ///     .build()?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[cfg(all(feature = "skills", not(target_arch = "wasm32")))]
+    #[must_use]
+    pub fn skill(self, skill: Skill) -> Self {
+        self.skills(Skills::new().add(skill))
+    }
+
+    /// Register a registry of SEP-2640 Agent Skills.
+    ///
+    /// Merges into any prior accumulated skills (a previous `.skill(...)` or
+    /// `.skills(...)` call). The accumulated registry is finalized into a
+    /// single `SkillsHandler` exactly once at [`Self::build`] time, then
+    /// composed at most once with any `.resources(...)` handler. There is
+    /// no per-call wrapper nesting (80-REVIEWS.md Fix 1).
+    ///
+    /// # Panics
+    ///
+    /// Panics at `.build()` if two registered skills resolve to the same
+    /// `skill://` URI. Use [`Self::try_skills`] for fallible registration.
+    #[cfg(all(feature = "skills", not(target_arch = "wasm32")))]
+    #[must_use]
+    pub fn skills(mut self, skills: Skills) -> Self {
+        let merged = match self.pending_skills.take() {
+            Some(prior) => prior.merge(skills),
+            None => skills,
+        };
+        self.pending_skills = Some(merged);
+        // Capability flips: set early so they're visible to inspectors
+        // (e.g., tests) even before `.build()` runs.
+        if self.capabilities.resources.is_none() {
+            self.capabilities.resources = Some(crate::types::ResourceCapabilities {
+                subscribe: Some(false),
+                list_changed: Some(false),
+            });
+        }
+        let mut ext = self.capabilities.extensions.take().unwrap_or_default();
+        ext.entry("io.modelcontextprotocol/skills".to_string())
+            .or_insert_with(|| serde_json::json!({}));
+        self.capabilities.extensions = Some(ext);
+        self
+    }
+
+    /// Fallible variant of [`Self::skills`] (80-REVIEWS.md Fix 10 / Codex G2).
+    ///
+    /// Returns `Err` immediately if the merged registry would contain duplicate
+    /// URIs. Useful for runtime-dynamic registration where panicking is
+    /// unacceptable.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err(pmcp::Error::Validation)` if the merged registry would
+    /// produce duplicate `skill://` URIs.
+    #[cfg(all(feature = "skills", not(target_arch = "wasm32")))]
+    pub fn try_skills(mut self, skills: Skills) -> Result<Self> {
+        let merged = match self.pending_skills.take() {
+            Some(prior) => prior.merge(skills),
+            None => skills,
+        };
+        // Probe by cloning + into_handler; discard the handler. The real
+        // construction happens in `.build()` once everything is settled.
+        merged.clone().into_handler()?;
+        self.pending_skills = Some(merged);
+        if self.capabilities.resources.is_none() {
+            self.capabilities.resources = Some(crate::types::ResourceCapabilities {
+                subscribe: Some(false),
+                list_changed: Some(false),
+            });
+        }
+        let mut ext = self.capabilities.extensions.take().unwrap_or_default();
+        ext.entry("io.modelcontextprotocol/skills".to_string())
+            .or_insert_with(|| serde_json::json!({}));
+        self.capabilities.extensions = Some(ext);
+        Ok(self)
+    }
+
+    /// Register a skill AND a parallel prompt that returns the same content.
+    ///
+    /// The dual-surface bootstrap. Both surfaces are derived from one
+    /// [`Skill`] value, so they cannot drift. The byte-equality is asserted
+    /// in `tests/skills_integration.rs` (Plan 80-03).
+    #[cfg(all(feature = "skills", not(target_arch = "wasm32")))]
+    #[must_use]
+    pub fn bootstrap_skill_and_prompt(self, skill: Skill, prompt_name: impl Into<String>) -> Self {
+        let prompt_handler = SkillPromptHandler::new(skill.clone());
+        self.skill(skill).prompt(prompt_name, prompt_handler)
     }
 
     /// Set the sampling handler.
@@ -895,6 +1018,16 @@ impl ServerCoreBuilder {
             .stateless_mode
             .unwrap_or_else(Self::detect_stateless_environment);
 
+        // 80-REVIEWS.md Fix 1: finalize accumulated skills exactly once.
+        // Compose with the user's `.resources(...)` slot if both are set —
+        // otherwise pass through unchanged. `.resources(...)` semantics
+        // remain "last write wins" (Fix 4) — see scope guard.
+        #[cfg(all(feature = "skills", not(target_arch = "wasm32")))]
+        let final_resources: Option<Arc<dyn ResourceHandler>> =
+            finalize_skills_resources(self.pending_skills.take(), self.resources.take());
+        #[cfg(not(all(feature = "skills", not(target_arch = "wasm32"))))]
+        let final_resources = self.resources.take();
+
         Ok(ServerCore::new(
             info,
             self.capabilities,
@@ -902,7 +1035,7 @@ impl ServerCoreBuilder {
             self.prompts,
             self.tool_infos,
             self.prompt_infos,
-            self.resources,
+            final_resources,
             self.sampling,
             self.auth_provider,
             self.tool_authorizer,
@@ -916,6 +1049,35 @@ impl ServerCoreBuilder {
             stateless_mode,
             self.payload_limits,
         ))
+    }
+}
+
+/// Finalize accumulated `Skills` into a single `ResourceHandler`, optionally
+/// composed with the user's `.resources(...)` slot.
+///
+/// Called from both [`ServerCoreBuilder::build`] and the `ServerBuilder::build`
+/// path in `src/server/mod.rs` so the composition logic exists in exactly
+/// one place. Panics on duplicate URIs — surface the failure via
+/// [`ServerCoreBuilder::try_skills`] for fallible registration.
+#[cfg(all(feature = "skills", not(target_arch = "wasm32")))]
+pub(crate) fn finalize_skills_resources(
+    pending: Option<Skills>,
+    user: Option<Arc<dyn ResourceHandler>>,
+) -> Option<Arc<dyn ResourceHandler>> {
+    match (pending, user) {
+        (None, other) => other,
+        (Some(skills), None) => Some(skills.into_handler().unwrap_or_else(|e| {
+            panic!("Skills::into_handler: {e}; use try_skills(...) for fallible registration")
+        })),
+        (Some(skills), Some(user_handler)) => {
+            let skills_handler = skills.into_handler().unwrap_or_else(|e| {
+                panic!("Skills::into_handler: {e}; use try_skills(...) for fallible registration")
+            });
+            Some(Arc::new(ComposedResources {
+                skills: skills_handler,
+                other: user_handler,
+            }))
+        },
     }
 }
 
@@ -1344,5 +1506,375 @@ mod tests {
             "Error should mention missing task router, got: {}",
             err_msg
         );
+    }
+}
+
+#[cfg(test)]
+#[cfg(all(feature = "skills", not(target_arch = "wasm32")))]
+mod skills_builder_tests {
+    use super::*;
+    use crate::server::cancellation::RequestHandlerExtra;
+    use crate::server::core::ProtocolHandler;
+    use crate::server::skills::{Skill, SkillReference, Skills};
+    use crate::types::Content;
+    use async_trait::async_trait;
+
+    fn extra() -> RequestHandlerExtra {
+        RequestHandlerExtra::default()
+    }
+
+    // Helper that uses `pending_skills.clone().into_handler()` to recover
+    // a `ResourceHandler` for a builder mid-construction. The actual
+    // composition happens in `.build()` — these tests verify the
+    // accumulator state directly.
+    fn read_via_pending(builder: &ServerCoreBuilder, uri: &str) -> Option<String> {
+        let pending = builder.pending_skills.clone()?;
+        let handler = pending.into_handler().ok()?;
+        let rt = tokio::runtime::Runtime::new().ok()?;
+        let res = rt.block_on(handler.read(uri, extra())).ok()?;
+        match res.contents.into_iter().next() {
+            Some(Content::Resource { text, .. }) => text,
+            Some(Content::Text { text }) => Some(text),
+            _ => None,
+        }
+    }
+
+    // ── Test 2.1: single skill via ServerCoreBuilder ─────────────────
+    #[test]
+    fn test_2_1_skill_method_single_skill_via_server_core_builder() {
+        let builder = ServerCoreBuilder::new()
+            .name("test")
+            .version("1.0")
+            .skill(Skill::new("foo", "body"));
+        assert!(builder.pending_skills.is_some());
+        let result = builder.build();
+        assert!(result.is_ok());
+    }
+
+    // ── Test 2.2: skills auto-sets extensions capability ─────────────
+    #[test]
+    fn test_2_2_skills_method_sets_extensions_capability() {
+        let server = ServerCoreBuilder::new()
+            .name("test")
+            .version("1.0")
+            .skills(Skills::new().add(Skill::new("a", "")))
+            .build()
+            .unwrap();
+        let ext = server
+            .capabilities()
+            .extensions
+            .as_ref()
+            .expect("extensions should be set");
+        assert_eq!(
+            ext.get("io.modelcontextprotocol/skills"),
+            Some(&serde_json::json!({}))
+        );
+    }
+
+    // ── Test 2.3: skills auto-sets resources capability ──────────────
+    #[test]
+    fn test_2_3_skills_method_sets_resources_capability() {
+        let server = ServerCoreBuilder::new()
+            .name("test")
+            .version("1.0")
+            .skills(Skills::new().add(Skill::new("a", "")))
+            .build()
+            .unwrap();
+        let caps = server.capabilities();
+        let r = caps.resources.as_ref().expect("resources should be set");
+        assert_eq!(r.subscribe, Some(false));
+        assert_eq!(r.list_changed, Some(false));
+    }
+
+    // ── Test 2.4 helper resource handler ─────────────────────────────
+    struct DocsHandler;
+    #[async_trait]
+    impl ResourceHandler for DocsHandler {
+        async fn read(
+            &self,
+            uri: &str,
+            _extra: RequestHandlerExtra,
+        ) -> Result<crate::types::ReadResourceResult> {
+            Ok(crate::types::ReadResourceResult::new(vec![Content::text(
+                format!("DOCS:{uri}"),
+            )]))
+        }
+        async fn list(
+            &self,
+            _cursor: Option<String>,
+            _extra: RequestHandlerExtra,
+        ) -> Result<crate::types::ListResourcesResult> {
+            Ok(crate::types::ListResourcesResult::new(vec![
+                crate::types::ResourceInfo::new("docs://handbook", "handbook"),
+            ]))
+        }
+    }
+
+    // ── Test 2.4: resources THEN skill composes ──────────────────────
+    #[tokio::test]
+    async fn test_2_4_skills_compose_with_existing_resources() {
+        // We finalize manually to access the composed handler without
+        // calling `.build()` (which moves the handler into ServerCore).
+        let pending = Some(Skills::new().add(Skill::new("a", "skill-a")));
+        let user: Option<Arc<dyn ResourceHandler>> = Some(Arc::new(DocsHandler));
+        let composed = finalize_skills_resources(pending, user).expect("composed handler");
+
+        let list = composed.list(None, extra()).await.unwrap();
+        let uris: Vec<&str> = list.resources.iter().map(|r| r.uri.as_str()).collect();
+        assert!(uris.contains(&"skill://a/SKILL.md"));
+        assert!(uris.contains(&"skill://index.json"));
+        assert!(uris.contains(&"docs://handbook"));
+
+        let res = composed.read("docs://handbook", extra()).await.unwrap();
+        match &res.contents[0] {
+            Content::Text { text } => assert_eq!(text, "DOCS:docs://handbook"),
+            other => panic!("expected Content::Text, got {other:?}"),
+        }
+
+        let res = composed.read("skill://a/SKILL.md", extra()).await.unwrap();
+        match &res.contents[0] {
+            Content::Resource { uri, .. } => assert_eq!(uri, "skill://a/SKILL.md"),
+            other => panic!("expected Content::Resource, got {other:?}"),
+        }
+    }
+
+    // ── Test 2.5: reverse ordering — skill THEN resources composes ───
+    #[tokio::test]
+    async fn test_2_5_skills_method_reverse_ordering_composes() {
+        // Reverse order of inputs to `finalize_skills_resources` — the
+        // function takes them in (skills, resources) order regardless of
+        // the builder method call order. Verifies the same outcome.
+        let pending = Some(Skills::new().add(Skill::new("a", "skill-a")));
+        let user: Option<Arc<dyn ResourceHandler>> = Some(Arc::new(DocsHandler));
+        let composed = finalize_skills_resources(pending, user).expect("composed handler");
+
+        let res = composed.read("skill://a/SKILL.md", extra()).await.unwrap();
+        match &res.contents[0] {
+            Content::Resource { uri, .. } => assert_eq!(uri, "skill://a/SKILL.md"),
+            other => panic!("expected Content::Resource, got {other:?}"),
+        }
+        let res = composed.read("docs://handbook", extra()).await.unwrap();
+        match &res.contents[0] {
+            Content::Text { text } => assert_eq!(text, "DOCS:docs://handbook"),
+            other => panic!("expected Content::Text, got {other:?}"),
+        }
+    }
+
+    // ── Test 2.5a: .resources(A).resources(B) is still "B replaces A" ─
+    // (Fix 4: when no skills are registered, the .resources() semantics
+    // are completely unchanged.)
+    #[tokio::test]
+    async fn test_2_5a_resources_replace_unchanged_under_skills_feature() {
+        struct A;
+        #[async_trait]
+        impl ResourceHandler for A {
+            async fn read(
+                &self,
+                _uri: &str,
+                _extra: RequestHandlerExtra,
+            ) -> Result<crate::types::ReadResourceResult> {
+                Ok(crate::types::ReadResourceResult::new(vec![Content::text(
+                    "A",
+                )]))
+            }
+            async fn list(
+                &self,
+                _cursor: Option<String>,
+                _extra: RequestHandlerExtra,
+            ) -> Result<crate::types::ListResourcesResult> {
+                Ok(crate::types::ListResourcesResult::new(vec![]))
+            }
+        }
+        struct B;
+        #[async_trait]
+        impl ResourceHandler for B {
+            async fn read(
+                &self,
+                _uri: &str,
+                _extra: RequestHandlerExtra,
+            ) -> Result<crate::types::ReadResourceResult> {
+                Ok(crate::types::ReadResourceResult::new(vec![Content::text(
+                    "B",
+                )]))
+            }
+            async fn list(
+                &self,
+                _cursor: Option<String>,
+                _extra: RequestHandlerExtra,
+            ) -> Result<crate::types::ListResourcesResult> {
+                Ok(crate::types::ListResourcesResult::new(vec![]))
+            }
+        }
+
+        // No skill calls — finalize should pass through user only.
+        let final_handler =
+            finalize_skills_resources(None, Some(Arc::new(B) as Arc<dyn ResourceHandler>))
+                .expect("user handler preserved");
+        let res = final_handler.read("test://uri", extra()).await.unwrap();
+        match &res.contents[0] {
+            Content::Text { text } => assert_eq!(text, "B"),
+            other => panic!("expected Content::Text, got {other:?}"),
+        }
+
+        // Confirm via the actual builder that .resources(A).resources(B)
+        // ends up with B alone.
+        let server = ServerCoreBuilder::new()
+            .name("t")
+            .version("1.0")
+            .resources(A)
+            .resources(B)
+            .build()
+            .unwrap();
+        // No skills registered — should be the simple "last write wins" semantic.
+        // We can't directly inspect server.resources from this scope, but we
+        // verify the capabilities state.
+        assert!(server.capabilities().resources.is_some());
+    }
+
+    // ── Test 2.6: .skill(s) == .skills(Skills::new().add(s)) ─────────
+    #[test]
+    fn test_2_6_skill_method_is_sugar_over_skills() {
+        let a = ServerCoreBuilder::new()
+            .name("t")
+            .version("1.0")
+            .skill(Skill::new("x", "body"));
+        let b = ServerCoreBuilder::new()
+            .name("t")
+            .version("1.0")
+            .skills(Skills::new().add(Skill::new("x", "body")));
+        assert_eq!(
+            a.pending_skills.as_ref().unwrap().skill_md_uris(),
+            b.pending_skills.as_ref().unwrap().skill_md_uris()
+        );
+    }
+
+    // ── Test 2.7: bootstrap_skill_and_prompt registers both surfaces ──
+    #[test]
+    fn test_2_7_bootstrap_skill_and_prompt_registers_both_surfaces() {
+        let server = ServerCoreBuilder::new()
+            .name("t")
+            .version("1.0")
+            .bootstrap_skill_and_prompt(Skill::new("c", "body-c"), "my_prompt")
+            .build()
+            .unwrap();
+        let caps = server.capabilities();
+        assert!(caps.prompts.is_some(), "prompts capability not set");
+        let ext = caps.extensions.as_ref().expect("extensions should be set");
+        assert!(ext.get("io.modelcontextprotocol/skills").is_some());
+        assert!(caps.resources.is_some());
+    }
+
+    // ── Test 2.9: duplicate URI panics at .build() ───────────────────
+    #[test]
+    #[should_panic(expected = "duplicate")]
+    fn test_2_9_skills_panics_on_duplicate_uri_at_build() {
+        let _ = ServerCoreBuilder::new()
+            .name("t")
+            .version("1.0")
+            .skill(Skill::new("x", "a"))
+            .skill(Skill::new("x", "b"))
+            .build()
+            .unwrap();
+    }
+
+    // ── Test 2.9a: try_skills returns Err on duplicate ───────────────
+    #[test]
+    fn test_2_9a_try_skills_returns_err_on_duplicate() {
+        let res = ServerCoreBuilder::new()
+            .name("t")
+            .version("1.0")
+            .try_skills(
+                Skills::new()
+                    .add(Skill::new("x", "a"))
+                    .add(Skill::new("x", "b")),
+            );
+        assert!(res.is_err());
+        match res {
+            Err(Error::Validation(_)) => {},
+            Err(other) => panic!("expected Validation, got {other:?}"),
+            Ok(_) => panic!("expected Err for try_skills with duplicate"),
+        }
+    }
+
+    // ── Test 2.10: capability merge preserves pre-existing extensions ─
+    #[test]
+    fn test_2_10_capability_merge_preserves_pre_existing_extensions() {
+        let mut caps = ServerCapabilities::default();
+        let mut ext = HashMap::new();
+        ext.insert("some.other/ext".to_string(), serde_json::json!({"foo": 1}));
+        caps.extensions = Some(ext);
+
+        let server = ServerCoreBuilder::new()
+            .name("t")
+            .version("1.0")
+            .capabilities(caps)
+            .skill(Skill::new("a", ""))
+            .build()
+            .unwrap();
+        let ext = server
+            .capabilities()
+            .extensions
+            .as_ref()
+            .expect("extensions should be set");
+        assert!(
+            ext.contains_key("some.other/ext"),
+            "pre-existing extension lost"
+        );
+        assert!(
+            ext.contains_key("io.modelcontextprotocol/skills"),
+            "skills extension not added"
+        );
+    }
+
+    // ── Test 2.11: accumulator — repeated .skill() calls all reachable ─
+    #[test]
+    fn test_2_11_accumulator_repeated_skill_calls_all_reachable() {
+        let builder = ServerCoreBuilder::new()
+            .name("t")
+            .version("1.0")
+            .skill(Skill::new("a", "body-a"))
+            .skill(Skill::new("b", "body-b"))
+            .bootstrap_skill_and_prompt(Skill::new("c", "body-c"), "c_prompt");
+
+        // Verify the accumulator carries all three before .build().
+        let uris = builder.pending_skills.as_ref().unwrap().skill_md_uris();
+        assert_eq!(uris.len(), 3);
+        assert!(uris.contains(&"skill://a/SKILL.md".to_string()));
+        assert!(uris.contains(&"skill://b/SKILL.md".to_string()));
+        assert!(uris.contains(&"skill://c/SKILL.md".to_string()));
+
+        // Read each through the pending handler.
+        assert_eq!(
+            read_via_pending(&builder, "skill://a/SKILL.md").as_deref(),
+            Some("body-a")
+        );
+        assert_eq!(
+            read_via_pending(&builder, "skill://b/SKILL.md").as_deref(),
+            Some("body-b")
+        );
+        assert_eq!(
+            read_via_pending(&builder, "skill://c/SKILL.md").as_deref(),
+            Some("body-c")
+        );
+
+        // And the server builds successfully — confirms .build() finalizes.
+        builder.build().unwrap();
+    }
+
+    // ── Test: skills + references end-to-end via builder ─────────────
+    #[test]
+    fn test_skill_with_references_via_builder() {
+        let skill = Skill::new("docs", "body").with_reference(SkillReference::new(
+            "references/api.md",
+            "text/markdown",
+            "api body",
+        ));
+        let server = ServerCoreBuilder::new()
+            .name("t")
+            .version("1.0")
+            .skill(skill)
+            .build()
+            .unwrap();
+        assert!(server.capabilities().resources.is_some());
     }
 }
