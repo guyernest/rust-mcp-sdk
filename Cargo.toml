@@ -529,6 +529,11 @@ name = "s44_server_skills"
 path = "examples/s44_server_skills.rs"
 required-features = ["skills", "full"]
 
+[[example]]
+name = "c10_client_skills"
+path = "examples/c10_client_skills.rs"
+required-features = ["skills", "full"]
+
 [[bench]]
 name = "comprehensive_benchmarks"
 harness = false
