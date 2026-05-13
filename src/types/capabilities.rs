@@ -80,6 +80,33 @@ pub struct ServerCapabilities {
     /// Experimental capabilities
     #[serde(skip_serializing_if = "Option::is_none")]
     pub experimental: Option<HashMap<String, serde_json::Value>>,
+
+    /// Extension capabilities — reverse-domain-keyed protocol extensions.
+    ///
+    /// This is the wire-correct home for declarations from the Extensions
+    /// Track of MCP (SEPs that ship as extensions rather than as core protocol
+    /// changes). Mandated by SEP-2640 §6 for the
+    /// `io.modelcontextprotocol/skills` identifier.
+    ///
+    /// Use `experimental` only for pre-SEP, pre-namespaced flags. New
+    /// extensions belong here.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use pmcp::types::ServerCapabilities;
+    /// use std::collections::HashMap;
+    ///
+    /// let mut caps = ServerCapabilities::default();
+    /// let mut ext = HashMap::new();
+    /// ext.insert(
+    ///     "io.modelcontextprotocol/skills".to_string(),
+    ///     serde_json::json!({}),
+    /// );
+    /// caps.extensions = Some(ext);
+    /// ```
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extensions: Option<HashMap<String, serde_json::Value>>,
 }
 
 /// Tool-related capabilities.
@@ -755,6 +782,111 @@ mod tests {
         let caps = ClientCapabilities::full();
         let json = serde_json::to_value(&caps).unwrap();
         assert!(json.get("tasks").is_some());
+    }
+
+    #[test]
+    fn default_serializes_without_extensions_key() {
+        // Test 1.1: default `ServerCapabilities` must NOT emit `extensions` —
+        // the `skip_serializing_if = "Option::is_none"` guard must work.
+        let caps = ServerCapabilities::default();
+        let json = serde_json::to_value(&caps).unwrap();
+        assert!(
+            json.get("extensions").is_none(),
+            "default ServerCapabilities should not serialize an `extensions` key, \
+             got: {json}"
+        );
+    }
+
+    #[test]
+    fn extensions_round_trip_byte_equal() {
+        // Test 1.2: round-trip with the SEP-2640 key.
+        let mut ext = HashMap::new();
+        ext.insert(
+            "io.modelcontextprotocol/skills".to_string(),
+            serde_json::json!({}),
+        );
+        let caps = ServerCapabilities {
+            extensions: Some(ext),
+            ..Default::default()
+        };
+        let json = serde_json::to_value(&caps).unwrap();
+        let round: ServerCapabilities = serde_json::from_value(json).unwrap();
+        assert_eq!(
+            round.extensions
+                .as_ref()
+                .unwrap()
+                .get("io.modelcontextprotocol/skills"),
+            Some(&serde_json::json!({})),
+            "round-tripped extensions value must equal the original"
+        );
+    }
+
+    #[test]
+    fn extensions_and_experimental_coexist() {
+        // Test 1.3: both maps are sibling fields, both survive round-trip.
+        let mut exp = HashMap::new();
+        exp.insert("old-thing".to_string(), serde_json::json!({"v": 1}));
+        let mut ext = HashMap::new();
+        ext.insert(
+            "io.modelcontextprotocol/skills".to_string(),
+            serde_json::json!({}),
+        );
+        let caps = ServerCapabilities {
+            experimental: Some(exp),
+            extensions: Some(ext),
+            ..Default::default()
+        };
+        let json = serde_json::to_value(&caps).unwrap();
+        // (a) Both top-level keys present.
+        assert!(json.get("experimental").is_some(), "experimental missing");
+        assert!(json.get("extensions").is_some(), "extensions missing");
+        // (b) They are siblings, not nested — i.e. `extensions` is not inside `experimental`.
+        assert!(
+            json["experimental"].get("extensions").is_none(),
+            "extensions must NOT be nested inside experimental"
+        );
+        assert!(
+            json["extensions"].get("experimental").is_none(),
+            "experimental must NOT be nested inside extensions"
+        );
+        // (c) Round-trip preserves both.
+        let round: ServerCapabilities = serde_json::from_value(json).unwrap();
+        assert!(round.experimental.is_some());
+        assert!(round.extensions.is_some());
+        assert_eq!(
+            round.extensions
+                .as_ref()
+                .unwrap()
+                .get("io.modelcontextprotocol/skills"),
+            Some(&serde_json::json!({}))
+        );
+        assert_eq!(
+            round.experimental
+                .as_ref()
+                .unwrap()
+                .get("old-thing"),
+            Some(&serde_json::json!({"v": 1}))
+        );
+    }
+
+    #[test]
+    fn extensions_camelcase_serde() {
+        // Test 1.4: `#[serde(rename_all = "camelCase")]` must keep `extensions`
+        // verbatim on the wire (it's already lowercase) — SEP-2640 §6 wire match.
+        let mut ext = HashMap::new();
+        ext.insert("k".to_string(), serde_json::json!(1));
+        let caps = ServerCapabilities {
+            extensions: Some(ext),
+            ..Default::default()
+        };
+        let s = serde_json::to_string(&caps).unwrap();
+        assert!(
+            s.contains("\"extensions\""),
+            "wire form must contain exactly `\"extensions\"`, got: {s}"
+        );
+        // Sanity: no unwanted casing variants.
+        assert!(!s.contains("\"Extensions\""));
+        assert!(!s.contains("\"extension\""));
     }
 
     #[test]
