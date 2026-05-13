@@ -1,0 +1,26 @@
+type Query {
+  user(id: ID!): User
+  users(limit: Int = 20, offset: Int = 0): [User!]!
+  ordersByUser(userId: ID!, status: OrderStatus): [Order!]!
+}
+
+type User {
+  id: ID!
+  name: String!
+  email: String!
+  orders(limit: Int = 5): [Order!]!
+}
+
+type Order {
+  id: ID!
+  total: Float!
+  status: OrderStatus!
+  createdAt: String!
+}
+
+enum OrderStatus {
+  PENDING
+  SHIPPED
+  DELIVERED
+  REFUNDED
+}
