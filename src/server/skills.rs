@@ -1,23 +1,19 @@
 //! SEP-2640 Agent Skills — `ResourceHandler`-served skill resources with
 //! a parallel `PromptHandler` fallback for SEP-2640-blind hosts.
 //!
-//! Both surfaces are derived from one [`Skill`] value, so the SKILL.md
+//! Both surfaces are derived from one [`Skill`] value: the SKILL.md
 //! content + each reference body is byte-equal whether the host fetches
 //! via [`crate::server::ResourceHandler::list`]/[`crate::server::ResourceHandler::read`]
 //! (SEP-2640) or via [`crate::server::PromptHandler::handle`] (legacy).
 //!
 //! Internal storage uses [`indexmap::IndexMap`] so resource ordering is
 //! deterministic across runs — required for stable example output,
-//! snapshot tests, and predictable host UX (80-REVIEWS.md Fix 8).
+//! snapshot tests, and predictable host UX.
 //!
 //! Wire shape: reads return [`crate::types::Content::resource_with_text`]
-//! (NOT [`crate::types::Content::text`]) so per-resource MIME types
-//! survive the wire round-trip — required for SEP-2640 compliance and so
-//! reference files like `schema.graphql` keep their
-//! `application/graphql` MIME type (80-REVIEWS.md Fix 3).
-//!
-//! See the spike-findings skill at
-//! `.claude/skills/spike-findings-rust-mcp-sdk/` for the design rationale.
+//! (NOT [`crate::types::Content::text`]) so per-resource MIME types survive
+//! the wire round-trip — reference files like `schema.graphql` keep their
+//! `application/graphql` MIME type.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -33,6 +29,32 @@ use crate::types::content::Role;
 use crate::types::{
     Content, GetPromptResult, ListResourcesResult, PromptMessage, ReadResourceResult, ResourceInfo,
 };
+
+/// Reverse-domain key under `ServerCapabilities.extensions` advertising
+/// SEP-2640 skill support. Set automatically when any skill is registered.
+pub(crate) const SKILLS_EXTENSION_KEY: &str = "io.modelcontextprotocol/skills";
+
+/// Synthesized discovery-index URI; emitted in `resources/list` and
+/// served from `resources/read`.
+const SKILL_INDEX_URI: &str = "skill://index.json";
+const SKILL_MD_MIME: &str = "text/markdown";
+const INDEX_JSON_MIME: &str = "application/json";
+
+/// Flip `ServerCapabilities` to advertise skills support. Called from
+/// every builder method that accepts a skill or skill registry — keeping
+/// the four call sites in sync via one function instead of inline copies.
+pub(crate) fn set_skills_capabilities(caps: &mut crate::types::ServerCapabilities) {
+    if caps.resources.is_none() {
+        caps.resources = Some(crate::types::ResourceCapabilities {
+            subscribe: Some(false),
+            list_changed: Some(false),
+        });
+    }
+    caps.extensions
+        .get_or_insert_with(HashMap::new)
+        .entry(SKILLS_EXTENSION_KEY.to_string())
+        .or_insert_with(|| json!({}));
+}
 
 // ── Public types ──────────────────────────────────────────────────────
 
@@ -116,18 +138,24 @@ pub struct Skill {
     name: String,
     body: String,
     path: Option<String>,
-    description: Option<String>,
+    description: String,
     references: Vec<SkillReference>,
 }
 
 impl Skill {
     /// Create a skill from its frontmatter `name` and full SKILL.md body.
+    ///
+    /// The `description:` frontmatter line is parsed eagerly so per-skill
+    /// metadata reads (e.g. `resources/list`, the discovery index) avoid
+    /// re-scanning the body on every request.
     pub fn new(name: impl Into<String>, body: impl Into<String>) -> Self {
+        let body = body.into();
+        let description = parse_frontmatter_description(&body).unwrap_or_default();
         Self {
             name: name.into(),
-            body: body.into(),
+            body,
             path: None,
-            description: None,
+            description,
             references: Vec::new(),
         }
     }
@@ -139,23 +167,21 @@ impl Skill {
         self
     }
 
-    /// Explicit description override; otherwise parsed from frontmatter.
+    /// Explicit description override (otherwise the frontmatter
+    /// `description:` line is used).
     #[must_use]
     pub fn with_description(mut self, description: impl Into<String>) -> Self {
-        self.description = Some(description.into());
+        self.description = description.into();
         self
     }
 
     /// Append a reference. **Panics** on invalid `relative_path` — use
     /// [`Self::try_with_reference`] for fallible registration.
     ///
-    /// Invalid inputs: empty, exactly `"SKILL.md"` (collides with the
-    /// canonical URI), contains `..` segment, starts with `/`, contains
-    /// `://`, or duplicates a `relative_path` already registered on this
-    /// Skill.
-    ///
-    /// Per 80-REVIEWS.md Fix 6 / Codex C7 — silently storing these
-    /// values produced unreachable or confusing URIs in earlier drafts.
+    /// Invalid inputs: empty, contains a null byte, exactly `"SKILL.md"`
+    /// (collides with the canonical URI), contains a `..` segment, starts
+    /// with `/`, contains `://`, or duplicates a `relative_path` already
+    /// registered on this Skill.
     ///
     /// # Panics
     ///
@@ -180,16 +206,16 @@ impl Skill {
         }
     }
 
-    /// Append a reference, returning Err on invalid input. Use this for
-    /// runtime-dynamic registration where panicking is unacceptable
-    /// (80-REVIEWS.md Fix 6 + Fix 10 / Codex C7 + suggestion G2).
+    /// Append a reference, returning `Err` on invalid input — the fallible
+    /// counterpart to [`Self::with_reference`] for runtime-dynamic
+    /// registration where panicking is unacceptable.
     ///
     /// # Errors
     ///
     /// Returns `Err(pmcp::Error::Validation)` if the relative path is
-    /// empty, exactly `"SKILL.md"`, contains a `..` segment, starts with
-    /// `/`, contains `://`, or duplicates an existing relative path on
-    /// this skill.
+    /// empty, contains a null byte, exactly `"SKILL.md"`, contains a `..`
+    /// segment, starts with `/`, contains `://`, or duplicates an existing
+    /// relative path on this skill.
     ///
     /// # Examples
     ///
@@ -225,14 +251,11 @@ impl Skill {
         self.references.iter()
     }
 
-    /// Resolved description: explicit `.with_description(...)` override
+    /// Resolved description: explicit [`Self::with_description`] override
     /// if set, otherwise the `description:` line parsed from the SKILL.md
-    /// frontmatter. Returns `""` if neither is available.
-    pub fn resolved_description(&self) -> String {
-        if let Some(d) = &self.description {
-            return d.clone();
-        }
-        parse_frontmatter_description(&self.body).unwrap_or_default()
+    /// frontmatter at construction time. Returns `""` if neither is set.
+    pub fn resolved_description(&self) -> &str {
+        &self.description
     }
 
     pub(crate) fn resolved_path(&self) -> &str {
@@ -284,11 +307,15 @@ impl Skill {
     }
 }
 
-/// Reference-path validation per 80-REVIEWS.md Fix 6 / Codex C7.
 fn validate_reference_path(path: &str, existing: &[SkillReference]) -> Result<()> {
     if path.is_empty() {
         return Err(Error::validation(
             "SkillReference relative_path must not be empty",
+        ));
+    }
+    if path.contains('\0') {
+        return Err(Error::validation(
+            "SkillReference relative_path must not contain null bytes",
         ));
     }
     if path == "SKILL.md" {
@@ -358,8 +385,9 @@ impl Skills {
         self
     }
 
-    /// Concatenate another registry onto this one (used by the builder
-    /// accumulator on repeated `.skills(...)` calls per 80-REVIEWS.md Fix 1).
+    /// Concatenate another registry onto this one — the builder
+    /// accumulator uses this on repeated `.skills(...)` calls so each
+    /// call adds to (rather than replaces) prior registrations.
     #[must_use]
     pub fn merge(mut self, other: Self) -> Self {
         self.skills.extend(other.skills);
@@ -377,12 +405,11 @@ impl Skills {
     /// Flatten the registry into a [`crate::server::ResourceHandler`].
     ///
     /// Returns `Err` on:
-    /// - Two skills resolving to the same `skill_md_uri()`
-    ///   (Implementation Decision #5).
-    /// - Two skills' reference URIs colliding (80-REVIEWS.md Fix 6
-    ///   extension).
+    /// - Two skills resolving to the same `skill_md_uri()`.
+    /// - Two skills' reference URIs colliding.
     ///
-    /// Insertion order is preserved via [`indexmap::IndexMap`] (Fix 8).
+    /// Insertion order is preserved via [`indexmap::IndexMap`] so
+    /// `resources/list` output is deterministic across runs.
     ///
     /// # Errors
     ///
@@ -396,17 +423,19 @@ impl Skills {
         for skill in self.skills {
             for r in &skill.references {
                 let uri = skill.reference_uri(&r.relative_path);
-                if references.contains_key(&uri) {
-                    dup_ref.push(uri);
-                } else {
-                    references.insert(uri, (r.mime_type.clone(), r.body.clone()));
+                match references.entry(uri) {
+                    indexmap::map::Entry::Occupied(e) => dup_ref.push(e.key().clone()),
+                    indexmap::map::Entry::Vacant(e) => {
+                        e.insert((r.mime_type.clone(), r.body.clone()));
+                    },
                 }
             }
             let uri = skill.skill_md_uri();
-            if skill_md.contains_key(&uri) {
-                dup_skill.push(uri);
-            } else {
-                skill_md.insert(uri, skill);
+            match skill_md.entry(uri) {
+                indexmap::map::Entry::Occupied(e) => dup_skill.push(e.key().clone()),
+                indexmap::map::Entry::Vacant(e) => {
+                    e.insert(skill);
+                },
             }
         }
         if !dup_skill.is_empty() || !dup_ref.is_empty() {
@@ -419,42 +448,67 @@ impl Skills {
             }
             return Err(Error::validation(msg));
         }
-        Ok(Arc::new(SkillsHandler {
-            skill_md,
-            references,
-        }))
+        Ok(Arc::new(SkillsHandler::new(skill_md, references)))
     }
 }
 
 // ── Internal handler types ────────────────────────────────────────────
 
 /// Internal [`crate::server::ResourceHandler`] impl synthesized by
-/// [`Skills::into_handler`].
+/// [`Skills::into_handler`]. The registry is immutable post-construction,
+/// so list/read responses are precomputed once and cloned per request.
 pub(crate) struct SkillsHandler {
+    list_resources: Vec<ResourceInfo>,
     skill_md: IndexMap<String, Skill>,
     references: IndexMap<String, (String, String)>, // uri -> (mime, body)
+    index_json: String,
 }
 
 impl SkillsHandler {
-    fn discovery_index_json(&self) -> String {
-        let entries: Vec<_> = self
-            .skill_md
+    fn new(
+        skill_md: IndexMap<String, Skill>,
+        references: IndexMap<String, (String, String)>,
+    ) -> Self {
+        let mut list_resources: Vec<ResourceInfo> = skill_md
             .values()
             .map(|s| {
-                json!({
-                    "name": s.name(),
-                    "type": "skill-md",
-                    "description": s.resolved_description(),
-                    "url": s.skill_md_uri(),
-                })
+                ResourceInfo::new(s.skill_md_uri(), s.name().to_string())
+                    .with_description(s.resolved_description())
+                    .with_mime_type(SKILL_MD_MIME)
             })
             .collect();
-        serde_json::to_string_pretty(&json!({
-            "$schema": "https://schemas.agentskills.io/discovery/0.2.0/schema.json",
-            "skills": entries,
-        }))
-        .expect("static JSON object — to_string_pretty cannot fail")
+        list_resources.push(
+            ResourceInfo::new(SKILL_INDEX_URI, "index")
+                .with_description("Skill discovery index (SEP-2640 §9)")
+                .with_mime_type(INDEX_JSON_MIME),
+        );
+        let index_json = build_discovery_index_json(&skill_md);
+        Self {
+            list_resources,
+            skill_md,
+            references,
+            index_json,
+        }
     }
+}
+
+fn build_discovery_index_json(skill_md: &IndexMap<String, Skill>) -> String {
+    let entries: Vec<_> = skill_md
+        .values()
+        .map(|s| {
+            json!({
+                "name": s.name(),
+                "type": "skill-md",
+                "description": s.resolved_description(),
+                "url": s.skill_md_uri(),
+            })
+        })
+        .collect();
+    serde_json::to_string_pretty(&json!({
+        "$schema": "https://schemas.agentskills.io/discovery/0.2.0/schema.json",
+        "skills": entries,
+    }))
+    .expect("static JSON object — to_string_pretty cannot fail")
 }
 
 #[async_trait]
@@ -466,38 +520,25 @@ impl ResourceHandler for SkillsHandler {
     ) -> Result<ListResourcesResult> {
         // Per SEP-2640 §9: list emits SKILL.md entries + the discovery
         // index ONLY. Reference URIs are never enumerated.
-        let mut resources: Vec<ResourceInfo> = self
-            .skill_md
-            .values()
-            .map(|s| {
-                ResourceInfo::new(s.skill_md_uri(), s.name().to_string())
-                    .with_description(s.resolved_description())
-                    .with_mime_type("text/markdown")
-            })
-            .collect();
-        resources.push(
-            ResourceInfo::new("skill://index.json", "index")
-                .with_description("Skill discovery index (SEP-2640 §9)")
-                .with_mime_type("application/json"),
-        );
-        Ok(ListResourcesResult::new(resources))
+        Ok(ListResourcesResult::new(self.list_resources.clone()))
     }
 
     async fn read(&self, uri: &str, _extra: RequestHandlerExtra) -> Result<ReadResourceResult> {
-        // 80-REVIEWS.md Fix 3 / Codex C4: emit Content::resource_with_text
-        // so each read carries its URI + MIME type on the wire.
-        if uri == "skill://index.json" {
+        // resource_with_text (not Content::text) preserves the per-resource
+        // URI + MIME on the wire — required so a reference like
+        // schema.graphql round-trips with `application/graphql`.
+        if uri == SKILL_INDEX_URI {
             return Ok(ReadResourceResult::new(vec![Content::resource_with_text(
                 uri,
-                self.discovery_index_json(),
-                "application/json",
+                self.index_json.clone(),
+                INDEX_JSON_MIME,
             )]));
         }
         if let Some(skill) = self.skill_md.get(uri) {
             return Ok(ReadResourceResult::new(vec![Content::resource_with_text(
                 uri,
                 skill.body().to_string(),
-                "text/markdown",
+                SKILL_MD_MIME,
             )]));
         }
         if let Some((mime, body)) = self.references.get(uri) {
@@ -514,22 +555,26 @@ impl ResourceHandler for SkillsHandler {
     }
 }
 
-/// [`crate::server::PromptHandler`] impl that returns
-/// [`Skill::as_prompt_text`] as a single user message.
+/// [`crate::server::PromptHandler`] impl that returns the
+/// [`Skill::as_prompt_text`] body as a single user message.
 ///
 /// The dual-surface invariant: the prompt body is byte-equal to the
 /// concatenated SKILL.md + reference reads. Pointer-style prompts
-/// (returning a `skill://` URI the host cannot fetch) are PROHIBITED
-/// per Implementation Decision #7.
-#[allow(dead_code)] // Wired up by builder integration in 80-02 Task 2
+/// (returning a `skill://` URI the host cannot fetch) are prohibited —
+/// hosts that don't yet speak SEP-2640 need the content inlined.
 pub(crate) struct SkillPromptHandler {
-    skill: Skill,
+    prompt_text: String,
+    description: String,
 }
 
 impl SkillPromptHandler {
-    #[allow(dead_code)] // Wired up by builder integration in 80-02 Task 2
     pub(crate) fn new(skill: Skill) -> Self {
-        Self { skill }
+        let prompt_text = skill.as_prompt_text();
+        let description = skill.resolved_description().to_string();
+        Self {
+            prompt_text,
+            description,
+        }
     }
 }
 
@@ -540,23 +585,21 @@ impl PromptHandler for SkillPromptHandler {
         _args: HashMap<String, String>,
         _extra: RequestHandlerExtra,
     ) -> Result<GetPromptResult> {
-        // Plain Content::text is correct here — this is a prompt message,
-        // not a resource read. The wire-shape fix in Fix 3 applies only
-        // to ResourceHandler::read, not to PromptMessage content.
-        let message = PromptMessage::new(Role::User, Content::text(self.skill.as_prompt_text()));
+        // Plain Content::text is correct here — this is a PromptMessage,
+        // not a resource read. The resource_with_text shape applies only
+        // to ResourceHandler::read.
+        let message = PromptMessage::new(Role::User, Content::text(self.prompt_text.clone()));
         Ok(GetPromptResult::new(
             vec![message],
-            Some(self.skill.resolved_description()),
+            Some(self.description.clone()),
         ))
     }
 }
 
 /// URI-prefix-routing composite [`crate::server::ResourceHandler`].
 ///
-/// Constructed AT MOST ONCE per server, in the builder's `.build()`
-/// finalization step. There is no `ComposedResources`-inside-`ComposedResources`
-/// nesting (80-REVIEWS.md Fix 1).
-#[allow(dead_code)] // Wired up by builder integration in 80-02 Task 2
+/// Constructed exactly once per server, in the builder's `.build()`
+/// finalization step — never nested.
 pub(crate) struct ComposedResources {
     pub(crate) skills: Arc<dyn ResourceHandler>,
     pub(crate) other: Arc<dyn ResourceHandler>,
@@ -569,7 +612,12 @@ impl ResourceHandler for ComposedResources {
         cursor: Option<String>,
         extra: RequestHandlerExtra,
     ) -> Result<ListResourcesResult> {
-        let mut combined = self.skills.list(cursor.clone(), extra.clone()).await?;
+        // SkillsHandler::list ignores cursor + extra — pass owned defaults
+        // so the user handler can take the real ones by move.
+        let mut combined = self
+            .skills
+            .list(None, RequestHandlerExtra::default())
+            .await?;
         let extra_other = self.other.list(cursor, extra).await?;
         combined.resources.extend(extra_other.resources);
         Ok(combined)
@@ -587,8 +635,8 @@ impl ResourceHandler for ComposedResources {
 // ── Frontmatter parsing (internal) ───────────────────────────────────
 
 fn parse_frontmatter_description(body: &str) -> Option<String> {
-    // 80-REVIEWS.md Fix 9 / Gemini: strip UTF-8 BOM; `str::lines()`
-    // already handles both \n and \r\n line endings.
+    // Strip UTF-8 BOM so frontmatter authored on Windows still parses;
+    // `str::lines()` already handles both \n and \r\n line endings.
     let body = body.strip_prefix('\u{FEFF}').unwrap_or(body);
     let mut in_frontmatter = false;
     for line in body.lines().take(40) {
