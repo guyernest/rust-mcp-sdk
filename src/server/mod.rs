@@ -113,6 +113,18 @@ pub mod ui;
 #[cfg(all(not(target_arch = "wasm32"), feature = "mcp-apps"))]
 pub mod mcp_apps;
 
+/// Agent Skills (SEP-2640) — `Skill` / `SkillReference` / `Skills` plus a
+/// dual-surface `PromptHandler` fallback. See [`skills`] for the API.
+///
+/// Gated on `feature = "skills"` AND `not(target_arch = "wasm32")` because
+/// the module's contents (Plan 80-02) consume
+/// [`crate::server::ResourceHandler`] and [`crate::server::PromptHandler`],
+/// both of which are themselves non-wasm-only (declared at lines 222 and 240
+/// of this file). Pairing the cfg here means Plan 80-02 does not have to
+/// re-anchor it on every item declaration.
+#[cfg(all(feature = "skills", not(target_arch = "wasm32")))]
+pub mod skills;
+
 /// Validation helpers for typed tools.
 #[cfg(not(target_arch = "wasm32"))]
 pub mod validation;
