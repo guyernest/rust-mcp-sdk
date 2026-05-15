@@ -32,6 +32,7 @@
 - [Chapter 12: Progress Tracking & Cancellation](ch12-progress-cancel.md)
 - [Chapter 12.5: MCP Apps Extension — Interactive UIs](ch12-5-mcp-apps.md)
 - [Chapter 12.7: MCP Tasks — Long-Running Operations](ch12-7-tasks.md)
+- [Chapter 12.8: Skills — Agent Workflow Instructions](ch12-8-skills.md)
 - [Chapter 12.9: Code Mode — LLM Code Validation & Execution](ch12-9-code-mode.md)
 
 ## Part IV: Real-World Applications

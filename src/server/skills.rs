@@ -14,6 +14,32 @@
 //! (NOT [`crate::types::Content::text`]) so per-resource MIME types survive
 //! the wire round-trip — reference files like `schema.graphql` keep their
 //! `application/graphql` MIME type.
+//!
+//! # Book Chapter Doctest
+//!
+//! Compile-verified mirror of the doctest at the end of
+//! `pmcp-book/src/ch12-8-skills.md`. Keeping these byte-equal is
+//! enforced by Phase 81 plan 81-07 (cross-property consistency audit,
+//! Audit D). The body below was probe-validated under
+//! `--features skills,full` before being committed (Phase 81 R-4).
+//!
+//! ```rust,no_run
+//! use pmcp::server::skills::Skill;
+//!
+//! fn main() -> Result<(), Box<dyn std::error::Error>> {
+//!     let greeting = Skill::new("hello-world", "# Hello\nThis is a minimal skill.\n");
+//!     let prompt_text = greeting.as_prompt_text();
+//!     assert!(prompt_text.starts_with("# Hello"));
+//!
+//!     let _server = pmcp::Server::builder()
+//!         .name("doctest-skills-demo")
+//!         .version("0.1.0")
+//!         .skill(greeting.clone())
+//!         .bootstrap_skill_and_prompt(greeting, "hello_prompt")
+//!         .build()?;
+//!     Ok(())
+//! }
+//! ```
 
 use std::collections::HashMap;
 use std::sync::Arc;
