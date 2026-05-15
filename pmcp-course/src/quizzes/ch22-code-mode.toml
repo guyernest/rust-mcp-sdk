@@ -1,0 +1,147 @@
+# Quiz: Code Mode - Validated LLM Code Execution
+
+id = "ch22-code-mode"
+title = "Code Mode: Validated LLM Code Execution"
+lesson_id = "ch22"
+pass_threshold = 0.7
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "What does the HMAC approval token bind together to prevent tamper-after-approval attacks?"
+prompt.distractors = [
+    "The LLM model ID, the prompt text, and the temperature parameter.",
+    "The server's IP address, the client's IP address, and the network protocol.",
+    "The validation timestamp, the JWT issuer, and the JWT audience."
+]
+answer.answer = "The code hash, the user ID, the session ID, the server ID, the context hash, the risk level, and the expiry timestamp."
+answer.position = 0
+context = """
+The HMAC-SHA256 token binds all seven components together. Any modification to the code
+after validation produces a hash mismatch and invalidates the token. Tokens are stateless
+(no server-side store), bound to user + session + context + code together, so an attacker
+cannot replay a token from one session in another or substitute different code while
+keeping the original approval.
+"""
+id = "f22a1b2c-d3e4-5678-abcd-123456800001"
+
+[[questions]]
+type = "ShortAnswer"
+prompt.prompt = "Which derive macro attribute selects the validation path (graphql / javascript / sql / mcp) at compile time? (Attribute name only.)"
+answer.answer = "language"
+answer.alternatives = ["language", "code_mode.language"]
+context = """
+The full attribute is `#[code_mode(context_from = "...", language = "graphql")]`. The
+default value is `"graphql"` (no feature flag required). `"javascript"` requires the
+`openapi-code-mode` feature, `"sql"` requires `sql-code-mode`, and `"mcp"` requires
+`mcp-code-mode`. The language is selected at compile time so the validation pipeline
+is monomorphized for the target system.
+"""
+id = "f22a1b2c-d3e4-5678-abcd-123456800002"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "When using #[derive(CodeMode)], the annotated struct MUST contain four fields with specific names. Which set is correct?"
+prompt.distractors = [
+    "config, secret, policy, executor.",
+    "code_mode_cfg, hmac_secret, auth_policy, executor.",
+    "mode_config, token, policies, code_runner."
+]
+answer.answer = "code_mode_config, token_secret, policy_evaluator, code_executor."
+answer.position = 0
+context = """
+The derive macro uses these four field names by convention (v0.1.0 of
+pmcp-code-mode-derive). Renaming any of them breaks compilation because the
+generated register_code_mode_tools method references them by exact name. This
+convention prioritizes clarity over flexibility for the canonical happy path.
+"""
+id = "f22a1b2c-d3e4-5678-abcd-123456800003"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "Under the default CodeModeConfig::enabled(), what happens when an LLM generates a GraphQL mutation?"
+prompt.distractors = [
+    "The mutation runs but the result is filtered by the policy evaluator.",
+    "The mutation succeeds and produces a token with a 'destructive' risk level.",
+    "The mutation runs but its result is rolled back after execution."
+]
+answer.answer = "Validation fails with is_valid = false; no approval token is generated, so the mutation cannot be executed."
+answer.position = 1
+context = """
+Rejection happens before token minting. The default config has allow_mutations: false,
+so mutations are rejected by the validation pipeline. Because no token exists, there is
+nothing for the LLM (or an attacker) to forward to execute_code — the system fails
+closed. Setting allow_mutations: true on the config opts in deliberately and is an
+auditable policy decision.
+"""
+id = "f22a1b2c-d3e4-5678-abcd-123456800004"
+
+[[questions]]
+type = "ShortAnswer"
+prompt.prompt = "What is the minimum byte length enforced by TokenSecret::new at construction time?"
+answer.answer = "16"
+answer.alternatives = ["16", "16 bytes"]
+context = """
+TokenSecret::new returns a Result — a too-short secret produces an error, not a panic.
+The minimum is 16 bytes, but production secrets should be 32+ bytes. The TokenSecret
+type is backed by secrecy::SecretBox with zeroize-on-drop so the key is wiped from
+memory when the server shuts down.
+"""
+id = "f22a1b2c-d3e4-5678-abcd-123456800005"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "Code Mode has three layers of policy enforcement that operate at different times. Which list correctly orders them from compile-time/deploy-time to per-request?"
+prompt.distractors = [
+    "PolicyEvaluator -> CodeModeConfig -> config.toml",
+    "config.toml -> PolicyEvaluator -> CodeModeConfig",
+    "CodeModeConfig -> PolicyEvaluator -> config.toml"
+]
+answer.answer = "config.toml (deploy time, platform-level) -> CodeModeConfig (runtime, server-level) -> PolicyEvaluator (per-request, authorization)."
+answer.position = 2
+context = """
+config.toml declares the operation surface for platform admins (deploy time;
+administrators toggle operations in the pmcp.run admin UI without redeploying).
+CodeModeConfig controls runtime allowlists/blocklists/depth limits (set in Rust at
+server startup). PolicyEvaluator runs per-request per-user before token minting.
+The PolicyEvaluator step is security-critical: a denied operation never receives a
+token, so it can never reach execute_code.
+"""
+id = "f22a1b2c-d3e4-5678-abcd-123456800006"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "You are building a Cost Coach MCP server that makes HTTP calls to AWS Cost Explorer's REST API and reasons over the responses with LLM-generated JavaScript. Which executor adapter is the canonical choice?"
+prompt.distractors = [
+    "McpCodeExecutor — it routes JavaScript through MCP tool composition.",
+    "SdkCodeExecutor — it executes JavaScript against the AWS SDK directly.",
+    "A direct CodeExecutor impl — adapters are only for trivial demos."
+]
+answer.answer = "JsCodeExecutor — it executes JavaScript that makes HTTP calls."
+answer.position = 0
+context = """
+The three adapters target three common backend patterns: JsCodeExecutor = JS + HTTP
+(Cost Coach calling REST APIs); SdkCodeExecutor = JS + SDK (AWS SDK direct calls);
+McpCodeExecutor = MCP tool composition (routing to other MCP servers). Choose a direct
+CodeExecutor impl only when none of the three patterns fit your backend.
+"""
+id = "f22a1b2c-d3e4-5678-abcd-123456800007"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "Why does the s41_code_mode_graphql.rs example use NoopPolicyEvaluator, and what must change for production?"
+prompt.distractors = [
+    "It is the default for GraphQL servers; production uses CedarPolicyEvaluator instead.",
+    "It is faster than real policy evaluators; production keeps it for low-latency paths.",
+    "It is required for the validate_code/execute_code round-trip to function; production wraps it with audit logging."
+]
+answer.answer = "It is a no-op stub for local development that allows all operations. Production servers MUST replace it with a real PolicyEvaluator implementation (Cedar, AVP, or custom)."
+answer.position = 3
+context = """
+The example file's module-level doc comment and the inline 'NOTE' both flag this:
+NoopPolicyEvaluator is for testing/local development ONLY. It returns Allow for every
+request, which is unsafe in any real deployment. Production servers must replace it
+with CedarPolicyEvaluator (local, sub-millisecond), an AVP-backed evaluator (remote,
+centralized), or a custom PolicyEvaluator implementation that delegates to an existing
+authorization backend.
+"""
+id = "f22a1b2c-d3e4-5678-abcd-123456800008"
