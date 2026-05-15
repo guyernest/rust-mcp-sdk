@@ -170,20 +170,24 @@ All domain logic -- state machine validation, owner isolation, variable merge, T
 
 ### Wiring the Store to the Server
 
-Register the store with the server builder:
+The `pmcp-tasks` crate ships a `TaskRouterImpl` that bridges any `TaskStore` to the `TaskRouter` trait the SDK consumes. Wrap the store in `TaskRouterImpl`, then register it with `ServerCoreBuilder::with_task_store(...)`:
 
-```rust
-use pmcp::server::Server;
+```rust,ignore
+use pmcp::server::builder::ServerCoreBuilder;
+use pmcp_tasks::TaskRouterImpl;
+use std::sync::Arc;
 
-let server = Server::builder()
+let router = Arc::new(TaskRouterImpl::new(store));
+
+let server = ServerCoreBuilder::new()
     .name("my-server")
     .version("1.0.0")
-    .task_store(store)  // enables tasks/get, tasks/list, tasks/cancel
-    .tool("deploy_service", DeployTool)
+    .with_task_store(router)  // enables tasks/get, tasks/list, tasks/cancel, tasks/result
+    .tool("deploy_service", DeployTool { /* ... */ })
     .build()?;
 ```
 
-The `.task_store()` method automatically configures `ServerCapabilities.tasks` so clients know the server supports the tasks protocol. You do not need to set capabilities manually.
+`with_task_store(...)` automatically advertises `experimental.tasks` on `ServerCapabilities` so clients know the server supports the tasks protocol. You do not need to set capabilities manually.
 
 ---
 
@@ -245,7 +249,7 @@ This produces an `execution` field in the `tools/list` response:
 
 When a tool has `TaskSupport::Optional`, the handler must support both paths: synchronous (return result directly) and asynchronous (create task, return immediately). The `RequestHandlerExtra` tells you which path the client wants.
 
-```rust
+```rust,ignore
 use async_trait::async_trait;
 use pmcp::error::Result;
 use pmcp::server::cancellation::RequestHandlerExtra;
@@ -254,6 +258,7 @@ use serde_json::{json, Value};
 use std::sync::Arc;
 use pmcp_tasks::store::TaskStore;
 use pmcp_tasks::context::TaskContext;
+use pmcp_tasks::security::resolve_owner_id;
 
 struct DeployTool {
     task_store: Arc<dyn TaskStore>,
@@ -266,21 +271,29 @@ impl ToolHandler for DeployTool {
 
         if extra.is_task_request() {
             // --- Async path: create task, return immediately ---
-            let owner_id = extra.owner_id().unwrap_or("anonymous");
+            // Resolve owner from the auth context (OAuth subject -> client ID ->
+            // session ID -> DEFAULT_LOCAL_OWNER). When anonymous access is
+            // disabled on the store, an unauthenticated request is rejected
+            // before reaching the handler.
+            let auth = extra.auth_context();
+            let subject = auth.map(|a| a.subject.as_str());
+            let client_id = auth.and_then(|a| a.client_id.as_deref());
+            let session_id = extra.session_id.as_deref();
+            let owner_id = resolve_owner_id(subject, client_id, session_id);
+
             let record = self.task_store
-                .create(owner_id, "tools/call", Some(60_000))
+                .create(&owner_id, "tools/call", Some(60_000))
                 .await
                 .map_err(|e| pmcp::Error::internal(e.to_string()))?;
 
             let task_id = record.task.task_id.clone();
             let store = self.task_store.clone();
             let region = region.to_string();
+            let owner_for_ctx = owner_id.clone();
 
             // Spawn the actual work in the background
             tokio::spawn(async move {
-                let ctx = TaskContext::new(
-                    store, task_id, owner_id.to_string(),
-                );
+                let ctx = TaskContext::new(store, task_id, owner_for_ctx);
                 match do_deploy(&region).await {
                     Ok(result) => {
                         let _ = ctx.complete(result).await;
@@ -347,17 +360,19 @@ This principle applies beyond tasks. It is the same pattern used for progress to
 
 ### Server Capability Advertisement
 
-The server side of negotiation happens during initialization. When you call `.task_store(store)` on the builder, PMCP automatically advertises task support in `ServerCapabilities`:
+The server side of negotiation happens during initialization. When you call `.with_task_store(router)` on the builder, PMCP automatically advertises task support under `experimental.tasks`:
 
 ```json
 {
   "capabilities": {
-    "tasks": {
-      "list": {},
-      "cancel": {},
-      "requests": {
-        "tools": {
-          "call": {}
+    "experimental": {
+      "tasks": {
+        "list": {},
+        "cancel": {},
+        "requests": {
+          "tools": {
+            "call": {}
+          }
         }
       }
     }
