@@ -86,8 +86,8 @@ against `crates/pmcp-code-mode/Cargo.toml` and
 ```toml
 [dependencies]
 pmcp = { version = "2.7", features = ["full"] }
-pmcp-code-mode = "0.5"
-pmcp-code-mode-derive = "0.2"
+pmcp-code-mode = "0.5.1"
+pmcp-code-mode-derive = "0.2.0"
 ```
 
 The `pmcp-code-mode` crate is feature-gated: the default build supports
