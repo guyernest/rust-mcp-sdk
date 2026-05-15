@@ -1,0 +1,131 @@
+# Quiz: Skills - Agent Workflow Instructions (SEP-2640)
+
+id = "ch23-skills"
+title = "Skills: SEP-2640 Agent Workflow Instructions"
+lesson_id = "ch23"
+pass_threshold = 0.7
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "What does the dual-surface invariant guarantee about a PMCP Skill registered via `bootstrap_skill_and_prompt`?"
+prompt.distractors = [
+    "The skill URI and the prompt name are the same string",
+    "The prompt body contains a `skill://` URI that the host can fetch on demand",
+    "The skill and prompt are advertised in separate `tools/list` and `prompts/list` responses",
+]
+answer.answer = "The skill surface (concatenated `resources/read` results) and the prompt surface (`prompts/get` body) are byte-equal by construction"
+answer.position = 3
+context = """
+The dual-surface invariant is the load-bearing design property of PMCP's Skills
+implementation. Pointer-style prompt bodies silent-fail on SEP-2640-blind hosts -
+the LLM receives a literal string mentioning a `skill://` URI but the host has no
+mechanism to fetch it. PMCP enforces byte-equality at runtime via the assertion in
+`tests/skills_integration.rs`; both surfaces derive from a single `Skill` value via
+`Skill::as_prompt_text()` so they cannot drift.
+"""
+id = "f23a1b2c-d3e4-5678-abcd-123456800001"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "Why does SEP-2640 §9 require supporting files (`skill://<name>/references/...`) to be readable via `resources/read` but NOT enumerated in `resources/list`?"
+prompt.distractors = [
+    "Listing them would exceed the JSON-RPC payload size limit on most transports",
+    "Supporting files use a different MIME type than SKILL.md and break legacy clients",
+    "Listing them would require a new RPC method (`references/list`)",
+]
+answer.answer = "It keeps the discovery surface focused on top-level skills (one entry per SKILL.md plus the index) so agents pick skills cleanly without scanning every supporting file"
+answer.position = 3
+context = """
+The discovery surface is intentionally narrow. An agent calling `resources/list`
+should see one entry per skill plus the `skill://index.json` discovery URI - not
+every reference file under every skill. References are fetched by URI when the
+skill body tells the agent to fetch them. PMCP enforces this in
+`SkillsHandler::list()` regardless of how many references are registered, and the
+integration test in `tests/skills_integration.rs` asserts the filter holds.
+"""
+id = "f23a1b2c-d3e4-5678-abcd-123456800002"
+
+[[questions]]
+type = "ShortAnswer"
+prompt.prompt = "Which `ServerCapabilities` field gained an additive entry in Phase 80 to declare SEP-2640 support? (Field name only.)"
+answer.answer = "extensions"
+answer.alternatives = ["extensions", "capabilities.extensions"]
+context = """
+GAP #1 from spike 001: `ServerCapabilities` needed an `extensions: Option<HashMap<String, Value>>` field parallel to `experimental` so SEP-2640 support could be
+declared wire-correctly at `capabilities.extensions["io.modelcontextprotocol/skills"] = {}`. The field is additive (does not break older clients) and was the
+prerequisite Phase 80 landed before the DX layer.
+"""
+id = "f23a1b2c-d3e4-5678-abcd-123456800003"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "Why does PMCP's Skills example structure deliberately include the `hello-world` and `refunds` skills in addition to `code-mode`?"
+prompt.distractors = [
+    "To exercise feature flags `skills`, `code-mode`, and `full` separately",
+    "To demonstrate three different MIME types: text/plain, text/markdown, and application/graphql",
+    "Because SEP-2640 §6 requires at least three skills be registered for the capability to be advertised",
+]
+answer.answer = "To enable side-by-side developer-experience comparison against other SEP-2640 reference implementations (TS SDK, gemini-cli, fast-agent, goose, codex), which all use the same `hello-world` + `refunds` tier shape"
+answer.position = 3
+context = """
+Phase 80 deliberately chose the three-tier shape so PMCP can be compared against
+other SEP-2640 reference implementations. `hello-world` and `refunds` are the
+cross-SDK canonical examples; `code-mode` is the additional tier showing that
+Skills compose with another PMCP advanced feature. A developer evaluating SDK
+ergonomics can implement the same two skills in each SDK and form a calibrated
+judgment rather than guessing.
+"""
+id = "f23a1b2c-d3e4-5678-abcd-123456800004"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "Which `ServerBuilder` method registers a single Skill AND publishes a parallel prompt whose body is byte-equal to the skill content, from one `Skill` value?"
+prompt.distractors = [
+    "`.skill(skill)` followed by `.prompt(name, handler)`",
+    "`.skills(Skills::new().add(skill)).prompt(name, SkillPromptHandler::new(skill))`",
+    "`.skill(skill).dual_surface_prompt(name)`",
+]
+answer.answer = "`.bootstrap_skill_and_prompt(skill, prompt_name)`"
+answer.position = 3
+context = """
+The chained alternatives all risk drift between the two surfaces - someone has to
+remember to keep the prompt body and the skill body in sync. `bootstrap_skill_and_prompt`
+derives BOTH surfaces from one `Skill` value via `Skill::as_prompt_text()`, so the
+prompt body is literally the output of concatenating the skill's body + each
+reference body with `\\n--- {path} ---\\n` separators. Drift becomes structurally
+impossible.
+"""
+id = "f23a1b2c-d3e4-5678-abcd-123456800005"
+
+[[questions]]
+type = "ShortAnswer"
+prompt.prompt = "PMCP's Skills support is feature-gated. Which Cargo feature flag must be enabled to use `pmcp::server::skills::Skill` and the builder methods? (Feature name only.)"
+answer.answer = "skills"
+answer.alternatives = ["skills"]
+context = """
+The `skills` feature is opt-in (not in `default-features`) so users who don't need
+SEP-2640 don't pull the additional surface area into their build. The example
+runs with `cargo run --example s44_server_skills --features skills,full` -
+`full` provides the transport/server dependencies and `skills` adds the Skills
+DX layer specifically.
+"""
+id = "f23a1b2c-d3e4-5678-abcd-123456800006"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "Which item from Phase 80's deferred-items list would allow a server author to write `Skill::from_disk(\"skills/hello-world/SKILL.md\")` and have the SKILL.md parsed at compile time?"
+prompt.distractors = [
+    "SEP-2640 §4 archive distribution (application/gzip blob mode)",
+    "Skill subscription via `resources/subscribe` for hot-reload",
+    "Multi-tenant skill scoping for host-side disambiguation",
+]
+answer.answer = "The `#[pmcp::skill]` procedural macro (deferred from Phase 80)"
+answer.position = 3
+context = """
+The `#[pmcp::skill]` macro is an explicit Phase 80 non-goal that would let authors
+write either `Skill::from_disk(...)` or an attribute-form `#[pmcp::skill("skills/hello-world")]` and have the SKILL.md plus references loaded at compile time. Until
+the macro lands, server authors use `Skill::new(name, include_str!(...))` to embed
+SKILL.md at compile time - see `examples/s44_server_skills.rs` for the canonical
+pattern.
+"""
+id = "f23a1b2c-d3e4-5678-abcd-123456800007"

@@ -166,6 +166,10 @@
   - [Chapter 21 Exercises](./part8-advanced/ch21-exercises.md)
 
 - [Code Mode: Validated LLM Code Execution](./part8-advanced/ch22-code-mode.md)
+  - [Chapter 22 Exercises](./part8-advanced/ch22-exercises.md)
+
+- [Skills: Agent Workflow Instructions](./part8-advanced/ch23-skills.md)
+  - [Chapter 23 Exercises](./part8-advanced/ch23-exercises.md)
 
 ---
 
