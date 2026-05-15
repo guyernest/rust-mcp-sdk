@@ -172,7 +172,7 @@ All domain logic -- state machine validation, owner isolation, variable merge, T
 
 The `pmcp-tasks` crate ships a `TaskRouterImpl` that bridges any `TaskStore` to the `TaskRouter` trait the SDK consumes. Wrap the store in `TaskRouterImpl`, then register it with `ServerCoreBuilder::with_task_store(...)`:
 
-```rust,ignore
+```rust
 use pmcp::server::builder::ServerCoreBuilder;
 use pmcp_tasks::TaskRouterImpl;
 use std::sync::Arc;
@@ -249,7 +249,7 @@ This produces an `execution` field in the `tools/list` response:
 
 When a tool has `TaskSupport::Optional`, the handler must support both paths: synchronous (return result directly) and asynchronous (create task, return immediately). The `RequestHandlerExtra` tells you which path the client wants.
 
-```rust,ignore
+```rust
 use async_trait::async_trait;
 use pmcp::error::Result;
 use pmcp::server::cancellation::RequestHandlerExtra;
