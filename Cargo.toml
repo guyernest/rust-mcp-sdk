@@ -154,6 +154,10 @@ full = ["websocket", "http", "streamable-http", "sse", "validation", "resource-w
 composition = ["streamable-http"]
 # MCP Apps Extension - Interactive UI support for ChatGPT Apps, MCP-UI, and standard MCP hosts
 mcp-apps = []
+# SEP-2640 Skills support — Agent Skills as `ResourceHandler`-served resources
+# plus a parallel prompt fallback. See `src/server/skills.rs` (gated module).
+# Opt-in: NOT in `default`, NOT in `full`. Plan 80-02 fills the module.
+skills = []
 jwt-auth = ["http-client", "dep:jsonwebtoken"]
 http-client = ["dep:reqwest"]
 logging = ["dep:tracing-subscriber"]
@@ -519,6 +523,16 @@ path = "examples/s43_handler_peer_sample.rs"
 name = "c09_client_list_all"
 path = "examples/c09_client_list_all.rs"
 required-features = ["full"]
+
+[[example]]
+name = "s44_server_skills"
+path = "examples/s44_server_skills.rs"
+required-features = ["skills", "full"]
+
+[[example]]
+name = "c10_client_skills"
+path = "examples/c10_client_skills.rs"
+required-features = ["skills", "full"]
 
 [[bench]]
 name = "comprehensive_benchmarks"

@@ -1177,3 +1177,19 @@ After cycle-1 closure (Plans 05-08 completed 2026-05-02), the operator re-ran Te
 - [ ] 78-11-PLAN.md — ALWAYS-coverage extension + HUMAN-UAT cycle-2 rewrite + Test 6 re-verification checkpoint: extend `validate_widget_pair.rs` example with 6 cycle-2 real-prod widget runs + tally + success-path summary; rewrite `78-HUMAN-UAT.md` with cycle-2-explicit Test 6 acceptance bar (zero Failed rows on 8 cost-coach prod widgets); operator re-runs Test 6 against prod and resumes with `approved` (flips `gap_closure_validated: false → true`, routes to `/gsd-verify-work`) or `failed: <reason>` (routes to `/gsd-plan-phase 78 --gaps` for cycle 3)
 
 **Re-verification gate (cycle 2):** Plan 11 Task 3 is the load-bearing gate. Operator runs `cargo pmcp test apps --mode claude-desktop https://cost-coach.us-west.pmcp.run/mcp` against real prod and confirms zero Failed rows on the 8 production widgets. On pass: phase 78 closes via `/gsd-verify-work`. On fail: phase 78 routes to a third gap-closure cycle with diagnosis in a new `uat-evidence/<date>-cost-coach-prod-cycle3-rerun.md` evidence file.
+
+---
+
+### Phase 80: SEP-2640 Skills Support
+
+- [x] **Phase 80: SEP-2640 Skills Support** — Add the experimental Skills extension (SEP-2640) as a batteries-included PMCP feature. Includes (a) a one-line additive change to `ServerCapabilities` adding an `extensions` field parallel to `experimental`, (b) a new `Skill` / `SkillReference` / `Skills` DX layer behind a `skills` feature flag built as sugar over the existing `ResourceHandler` trait, (c) builder methods `.skill(...)` / `.skills(...)` / `.bootstrap_skill_and_prompt(...)` on `ServerCoreBuilder` with internal composition over any pre-existing `.resources(...)` handler, (d) the dual-surface pattern — same skill data exposed via both a SEP-2640 skill surface AND a parallel MCP prompt surface (for hosts that don't yet support SEP-2640) — with byte-equal-by-construction invariant, (e) paired `examples/s38_server_skills.rs` + `examples/c38_client_skills.rs` demonstrating three tiers of skills (hello-world, refunds, code-mode), and (f) integration test asserting both surfaces produce byte-equal content. (completed 2026-05-13)
+
+**Goal:** A PMCP server author can register an Agent Skill in ~5 lines of code, and the same skill content is automatically reachable via two parallel surfaces: SEP-2640 skill resources (for capable hosts) and an MCP prompt (for everyone else). The two surfaces are derived from a single `Skill` value so they cannot drift.
+
+**Depends on:** None (no protocol breaking change; additive `extensions` field is backward-compatible).
+
+**Source of truth:** Spike findings packaged at `.claude/skills/spike-findings-rust-mcp-sdk/` (spikes 001 + 002 both VALIDATED). Reference implementation lives at `.planning/spikes/002-skill-ergonomics-pragmatic/src/main.rs` — the `Skill`, `SkillReference`, `Skills`, `SkillsHandler`, and `ComposedResources` types lift near-verbatim into the real implementation.
+
+**Out of scope (deferred to v2):**
+- SEP-2640 §4 archive distribution (`application/gzip` + base64 blob). Blocked by GAP #2 (`Content::Resource` has no `blob` field). The SEP marks archive mode as optional.
+- `#[pmcp::skill]` procedural macro for compile-time SKILL.md validation. Worth a separate spike if compile-time validation is wanted.

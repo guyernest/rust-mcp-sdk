@@ -8,8 +8,8 @@ Examples follow a **role-prefix** naming scheme:
 
 | Prefix | Role | Count |
 |--------|------|-------|
-| `s` | Server | 40 |
-| `c` | Client | 8 |
+| `s` | Server | 44 |
+| `c` | Client | 10 |
 | `t` | Transport | 8 |
 | `m` | Middleware | 8 |
 
@@ -249,6 +249,17 @@ cargo run --example s39_mcp_app_venue_map --features schema-generation
 cargo run --example s40_mcp_app_hotel_gallery --features schema-generation
 ```
 
+### Agent Skills (SEP-2640)
+
+**s44_server_skills** — Three-tier Agent Skills demo registering `hello-world`,
+`refunds`, and `code-mode` skills via `pmcp::Server::builder()`. Uses
+`.bootstrap_skill_and_prompt(...)` to expose the same skill content on BOTH
+a SEP-2640 skill surface AND a parallel MCP prompt fallback for hosts that
+don't yet speak SEP-2640 — the two surfaces are byte-equal by construction.
+```bash
+cargo run --example s44_server_skills --features skills,full
+```
+
 ---
 
 ## Client Examples
@@ -304,6 +315,19 @@ self-contained — see the source-file header for pairing instructions.
 
 ```bash
 cargo run --example c09_client_list_all --features full
+```
+
+### Agent Skills (SEP-2640)
+
+**c10_client_skills** — Walks BOTH host flows side-by-side against an in-process
+server: (a) the SEP-2640 flow enumerates skills via `resources/list`, reads each
+`skill://…/SKILL.md` + reference URI, and asserts `Content::Resource { uri,
+text, mime_type }` wire shape; (b) the legacy flow retrieves the parallel
+prompt handler via `get_prompt("start_code_mode")` and invokes it directly.
+The example `assert_eq!`s both flows' resulting context byte-for-byte —
+proving SEP-2640-capable and SEP-2640-blind hosts see the same content.
+```bash
+cargo run --example c10_client_skills --features skills,full
 ```
 
 ---

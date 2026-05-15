@@ -716,6 +716,7 @@ mod tests {
             sampling: None,
             tasks: None,
             experimental: None,
+            extensions: None,
         };
 
         let server = ServerCoreBuilder::new()

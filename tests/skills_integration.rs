@@ -1,0 +1,381 @@
+//! SEP-2640 Skills integration test.
+//!
+//! Exercises all four SEP-2640 endpoints (resources/list, resources/read
+//! for SKILL.md, resources/read for a reference, resources/read for the
+//! discovery index) via direct trait-impl calls on the `ResourceHandler`
+//! returned by `Skills::into_handler()`.
+//!
+//! The load-bearing tests are:
+//!
+//! - Construction-level dual-surface byte equality: the SEP-2640 surface
+//!   (concatenated resource reads with labelled-rule separators) equals
+//!   `Skill::as_prompt_text()`.
+//!
+//! - Wire-level dual-surface byte equality: the same SEP-2640 surface
+//!   equals the body returned by the prompt handler that
+//!   `Server::builder().bootstrap_skill_and_prompt(...).build()`
+//!   registers, retrieved via `server.get_prompt("x")` and invoked via
+//!   `.handle(args, extra)`. This is the same code path `prompts/get`
+//!   executes at runtime.
+//!
+//! - CRLF resilience: the invariant holds whether the SKILL.md is
+//!   authored with CRLF (Windows) or LF (Linux) line endings.
+//!
+//! - Per-resource wire shape: every `read()` response carries the URI and
+//!   the per-resource MIME type via `Content::Resource`.
+
+#![cfg(all(feature = "skills", not(target_arch = "wasm32")))]
+
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use pmcp::error::ErrorCode;
+use pmcp::server::skills::{Skill, SkillReference, Skills};
+use pmcp::types::Content;
+use pmcp::{RequestHandlerExtra, ResourceHandler};
+use proptest::prelude::*;
+
+// Smaller content than the example's code-mode skill — keeps the test
+// self-contained. The dual-surface invariant is content-agnostic.
+
+fn build_widget_skill_lf() -> Skill {
+    Skill::new(
+        "widget-builder",
+        "---\nname: widget-builder\ndescription: Build widgets per company spec\n---\n\n# Widget Builder Workflow\n\n1. Verify spec.\n2. Render component.\n3. Run smoke test.",
+    )
+    .with_reference(SkillReference::new(
+        "references/spec.md",
+        "text/markdown",
+        "# Widget Spec\n\nWidgets MUST have a name, a body, and zero or more references.",
+    ))
+    .with_reference(SkillReference::new(
+        "references/checklist.md",
+        "text/markdown",
+        "# Pre-flight Checklist\n\n- [ ] Spec matches\n- [ ] Smoke test green",
+    ))
+}
+
+/// CRLF-authored counterpart — same content semantically, but every newline
+/// is `\r\n`. The dual-surface invariant must still hold so authors on
+/// Windows can't accidentally break consumers reading on Linux.
+fn build_widget_skill_crlf() -> Skill {
+    Skill::new(
+        "widget-builder-crlf",
+        "---\r\nname: widget-builder-crlf\r\ndescription: Build widgets per company spec (CRLF authored)\r\n---\r\n\r\n# Widget Builder Workflow\r\n\r\n1. Verify spec.\r\n2. Render component.\r\n3. Run smoke test.",
+    )
+    .with_reference(SkillReference::new(
+        "references/spec.md",
+        "text/markdown",
+        "# Widget Spec\r\n\r\nWidgets MUST have a name, a body, and zero or more references.",
+    ))
+}
+
+fn build_trivial_skill() -> Skill {
+    Skill::new("hello", "---\nname: hello\n---\nHi.")
+}
+
+/// Extract URI + body + MIME from a Resource-variant Content. Reads MUST
+/// be the Resource variant — Content::Text would drop the per-URI MIME.
+fn extract_resource(contents: &[Content]) -> (String, String, String) {
+    match contents.first() {
+        Some(Content::Resource {
+            uri,
+            text,
+            mime_type,
+            ..
+        }) => (
+            uri.clone(),
+            text.clone().expect("skills handler always emits text body"),
+            mime_type
+                .clone()
+                .expect("skills handler always emits mime_type"),
+        ),
+        other => panic!("expected Content::Resource, got {other:?}"),
+    }
+}
+
+fn ensure_trailing_newline(s: &str) -> String {
+    if s.ends_with('\n') {
+        s.to_string()
+    } else {
+        format!("{s}\n")
+    }
+}
+
+async fn build_handler() -> Arc<dyn ResourceHandler> {
+    Skills::new()
+        .add(build_trivial_skill())
+        .add(build_widget_skill_lf())
+        .into_handler()
+        .expect("test fixture must not produce duplicates")
+}
+
+/// Compute the SEP-2640 surface by reading SKILL.md + each reference URI
+/// via the resource handler and concatenating with `as_prompt_text`'s
+/// separators.
+async fn compute_sep_2640_surface(
+    handler: &dyn ResourceHandler,
+    skill: &Skill,
+    skill_name: &str,
+) -> String {
+    let extra = RequestHandlerExtra::default();
+    let main_uri = format!("skill://{skill_name}/SKILL.md");
+    let main = handler.read(&main_uri, extra.clone()).await.unwrap();
+    let (m_uri, m_text, m_mime) = extract_resource(&main.contents);
+    assert_eq!(m_uri, main_uri);
+    assert_eq!(m_mime, "text/markdown");
+    let mut sep = ensure_trailing_newline(&m_text);
+    for r in skill.references() {
+        let uri = format!("skill://{skill_name}/{}", r.relative_path());
+        let read = handler.read(&uri, extra.clone()).await.unwrap();
+        let (r_uri, r_body, r_mime) = extract_resource(&read.contents);
+        assert_eq!(r_uri, uri);
+        assert_eq!(r_mime, r.mime_type());
+        sep.push_str("\n--- ");
+        sep.push_str(r.relative_path());
+        sep.push_str(" ---\n");
+        sep.push_str(&ensure_trailing_newline(&r_body));
+    }
+    sep
+}
+
+// Build a server via the public Server::builder() path, retrieve the
+// registered prompt handler via get_prompt, invoke .handle (the same
+// path prompts/get executes at runtime), and return the first message's
+// text body. Used by Tests 3.7 + 3.7a.
+async fn wire_level_prompt_text(skill: Skill, prompt_name: &str) -> String {
+    let server = pmcp::Server::builder()
+        .name("integration-test")
+        .version("1.0")
+        .bootstrap_skill_and_prompt(skill, prompt_name)
+        .build()
+        .expect("server build");
+    let prompt = server
+        .get_prompt(prompt_name)
+        .expect("bootstrap_skill_and_prompt registered the handler");
+    let result = prompt
+        .handle(HashMap::new(), RequestHandlerExtra::default())
+        .await
+        .unwrap();
+    match &result.messages[0].content {
+        Content::Text { text } => text.clone(),
+        other => panic!("expected Content::Text for prompt message, got {other:?}"),
+    }
+}
+
+// Test 3.1
+#[tokio::test]
+async fn resources_list_returns_skill_md_and_index_only() {
+    let handler = build_handler().await;
+    let result = handler
+        .list(None, RequestHandlerExtra::default())
+        .await
+        .unwrap();
+    let uris: Vec<&str> = result.resources.iter().map(|r| r.uri.as_str()).collect();
+    assert_eq!(
+        result.resources.len(),
+        3,
+        "2 SKILL.md + 1 index = 3, got {uris:?}"
+    );
+    assert!(uris.contains(&"skill://hello/SKILL.md"));
+    assert!(uris.contains(&"skill://widget-builder/SKILL.md"));
+    assert!(uris.contains(&"skill://index.json"));
+    assert!(
+        !uris.iter().any(|u| u.contains("/references/")),
+        "SEP-2640 section 9: references MUST NOT be enumerated"
+    );
+}
+
+// wire shape: SKILL.md reads return Content::Resource with the right MIME
+#[tokio::test]
+async fn resources_read_skill_md_returns_resource_with_text() {
+    let handler = build_handler().await;
+    let result = handler
+        .read(
+            "skill://widget-builder/SKILL.md",
+            RequestHandlerExtra::default(),
+        )
+        .await
+        .unwrap();
+    let (uri, text, mime) = extract_resource(&result.contents);
+    assert_eq!(uri, "skill://widget-builder/SKILL.md");
+    assert_eq!(mime, "text/markdown");
+    assert!(text.contains("Widget Builder Workflow"));
+}
+
+// wire shape: each reference read carries its own per-URI MIME type
+#[tokio::test]
+async fn resources_read_reference_carries_per_resource_mime() {
+    let handler = build_handler().await;
+    let result = handler
+        .read(
+            "skill://widget-builder/references/spec.md",
+            RequestHandlerExtra::default(),
+        )
+        .await
+        .unwrap();
+    let (uri, text, mime) = extract_resource(&result.contents);
+    assert_eq!(uri, "skill://widget-builder/references/spec.md");
+    assert_eq!(mime, "text/markdown");
+    assert!(text.contains("Widget Spec"));
+}
+
+// wire shape: the discovery index is served as Content::Resource (application/json)
+#[tokio::test]
+async fn resources_read_index_returns_resource_with_text_application_json() {
+    let handler = build_handler().await;
+    let result = handler
+        .read("skill://index.json", RequestHandlerExtra::default())
+        .await
+        .unwrap();
+    let (uri, text, mime) = extract_resource(&result.contents);
+    assert_eq!(uri, "skill://index.json");
+    assert_eq!(mime, "application/json");
+    let parsed: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(
+        parsed["$schema"],
+        "https://schemas.agentskills.io/discovery/0.2.0/schema.json"
+    );
+    let arr = parsed["skills"].as_array().unwrap();
+    assert_eq!(arr.len(), 2);
+    for entry in arr {
+        assert_eq!(entry["type"], "skill-md");
+        let url = entry["url"].as_str().unwrap();
+        assert!(
+            !url.contains("/references/"),
+            "index MUST NOT enumerate references"
+        );
+    }
+}
+
+// Test 3.5 — METHOD_NOT_FOUND on unknown URI
+#[tokio::test]
+async fn resources_read_unknown_uri_method_not_found() {
+    let handler = build_handler().await;
+    let err = handler
+        .read(
+            "skill://nonexistent/SKILL.md",
+            RequestHandlerExtra::default(),
+        )
+        .await
+        .unwrap_err();
+    match err {
+        pmcp::Error::Protocol { code, .. } => assert_eq!(code, ErrorCode::METHOD_NOT_FOUND),
+        other => panic!("expected Protocol error with METHOD_NOT_FOUND, got {other:?}"),
+    }
+}
+
+// Test 3.6 — construction-level dual-surface byte equality
+#[tokio::test]
+async fn dual_surface_byte_equal_construction_level() {
+    let skill = build_widget_skill_lf();
+    let handler = Skills::new().add(skill.clone()).into_handler().unwrap();
+    let sep_2640 = compute_sep_2640_surface(&*handler, &skill, "widget-builder").await;
+    let prompt = skill.as_prompt_text();
+    assert_eq!(
+        sep_2640, prompt,
+        "DUAL-SURFACE INVARIANT VIOLATED (construction-level): SEP-2640 read concatenation must equal as_prompt_text()"
+    );
+}
+
+// wire-level dual-surface: byte equality via Server::builder + get_prompt
+#[tokio::test]
+async fn dual_surface_byte_equal_wire_level_via_get_prompt() {
+    let skill = build_widget_skill_lf();
+    let wire_prompt_text = wire_level_prompt_text(skill.clone(), "x").await;
+
+    // Recompute the SEP-2640 surface from the same skill content.
+    let handler = Skills::new().add(skill.clone()).into_handler().unwrap();
+    let sep_2640 = compute_sep_2640_surface(&*handler, &skill, "widget-builder").await;
+
+    assert_eq!(
+        sep_2640, wire_prompt_text,
+        "DUAL-SURFACE INVARIANT VIOLATED (WIRE LEVEL): SEP-2640 read concatenation must equal the prompt body retrieved via get_prompt + handle"
+    );
+}
+
+// dual-surface invariant survives CRLF + mixed-line-ending SKILL.md authoring
+#[tokio::test]
+async fn dual_surface_byte_equal_crlf_and_mixed_line_endings() {
+    for skill in [build_widget_skill_lf(), build_widget_skill_crlf()] {
+        let name = skill.name().to_string();
+        let handler = Skills::new().add(skill.clone()).into_handler().unwrap();
+        let sep_2640 = compute_sep_2640_surface(&*handler, &skill, &name).await;
+        let construction_prompt = skill.as_prompt_text();
+        assert_eq!(
+            sep_2640, construction_prompt,
+            "DUAL-SURFACE INVARIANT VIOLATED for {name} (construction level)"
+        );
+
+        let wire_text = wire_level_prompt_text(skill.clone(), "x").await;
+        assert_eq!(
+            sep_2640, wire_text,
+            "DUAL-SURFACE INVARIANT VIOLATED for {name} (wire level)"
+        );
+    }
+}
+
+// Test 3.8 — proptest construction-level byte equality under arbitrary content
+proptest! {
+    #[test]
+    fn proptest_byte_equality_under_arbitrary_skill_content(
+        body in "[a-zA-Z0-9 \\n.,!?-]{0,200}",
+        ref_paths in proptest::collection::vec("references/[a-z]{1,10}\\.md", 0..4),
+        ref_bodies in proptest::collection::vec("[a-zA-Z0-9 \\n.,!?-]{0,80}", 0..4),
+    ) {
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        rt.block_on(async {
+            let n = ref_paths.len().min(ref_bodies.len());
+            let mut skill = Skill::new("propskill", body);
+            for i in 0..n {
+                // try_with_reference returns Err on invalid paths (e.g. duplicates); skip those.
+                match skill.clone().try_with_reference(SkillReference::new(
+                    &ref_paths[i],
+                    "text/markdown",
+                    &ref_bodies[i],
+                )) {
+                    Ok(s) => skill = s,
+                    Err(_) => continue,
+                }
+            }
+            let prompt = skill.as_prompt_text();
+            let handler = Skills::new().add(skill.clone()).into_handler().unwrap();
+            let sep_2640 = compute_sep_2640_surface(&*handler, &skill, "propskill").await;
+            prop_assert_eq!(sep_2640, prompt);
+            Ok::<(), proptest::test_runner::TestCaseError>(())
+        })?;
+    }
+}
+
+// proptest wire-shape: every read response carries URI + MIME
+proptest! {
+    #[test]
+    fn proptest_read_responses_always_carry_uri_and_mime(
+        body in "[a-zA-Z0-9 \\n]{0,80}",
+    ) {
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        rt.block_on(async {
+            let skill = Skill::new("propmime", body).with_reference(
+                SkillReference::new("references/a.md", "text/markdown", "ref body"),
+            );
+            let handler = Skills::new().add(skill).into_handler().unwrap();
+            let extra = RequestHandlerExtra::default();
+            for uri in [
+                "skill://propmime/SKILL.md",
+                "skill://propmime/references/a.md",
+                "skill://index.json",
+            ] {
+                let r = handler.read(uri, extra.clone()).await.unwrap();
+                match &r.contents[0] {
+                    Content::Resource { uri: u, text, mime_type, .. } => {
+                        prop_assert_eq!(u.as_str(), uri);
+                        prop_assert!(text.is_some(), "text must be present");
+                        prop_assert!(mime_type.is_some(), "mime_type must be present");
+                    }
+                    other => prop_assert!(false, "expected Content::Resource, got {:?}", other),
+                }
+            }
+            Ok::<(), proptest::test_runner::TestCaseError>(())
+        })?;
+    }
+}
