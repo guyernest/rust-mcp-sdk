@@ -213,6 +213,7 @@ High-performance Rust implementation of the MCP protocol.
 - **Workflows**: Multi-step orchestration with array indexing support
 - **MCP Apps**: Rich HTML UI widgets with live preview and browser DevTools
 - **MCP Tasks**: Shared client/server state with task lifecycle management
+- **Agent Skills (SEP-2640)**: Register an Agent Skill in ~5 lines and serve it on BOTH a SEP-2640 skill surface AND a parallel MCP prompt fallback — byte-equal by construction (`skills` feature, opt-in)
 - **Tower Middleware**: DNS rebinding protection, CORS, security headers
 - **Typed Client Helpers**: `call_tool_typed`, `get_prompt_typed`, and auto-paginating `list_all_*` with bounded safety cap
 - **Performance**: 16x faster than TypeScript, SIMD-accelerated parsing
@@ -477,6 +478,10 @@ cargo run --example s28_authentication      # OAuth/Bearer
 cargo run --example t01_websocket_transport # WebSocket
 cargo run --example m01_basic_middleware    # Middleware chain
 
+# Agent Skills (SEP-2640) — dual-surface skill + prompt
+cargo run --example s44_server_skills --features skills,full
+cargo run --example c10_client_skills --features skills,full
+
 # Testing (mcp-tester is a standalone Cargo project in examples/26-server-tester)
 cargo install mcp-tester && mcp-tester test http://localhost:8080
 
@@ -645,6 +650,7 @@ We welcome contributions! Please:
 | Resources | ✓ | ✓ (Subscriptions) |
 | Sampling | ✓ | ✓ |
 | MCP Apps | ✓ | ✓ (Preview + DevTools) |
+| Agent Skills (SEP-2640) | ✓ | ✓ (dual-surface skill + prompt, byte-equal) |
 | Tower Middleware | N/A | ✓ (DNS rebinding, CORS, security headers) |
 | Performance | 1x | 16x faster |
 | Memory | Baseline | 50x lower |
