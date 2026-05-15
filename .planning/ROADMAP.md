@@ -1188,6 +1188,9 @@ After cycle-1 closure (Plans 05-08 completed 2026-05-02), the operator re-ran Te
 Plans:
 - [ ] TBD (run /gsd-plan-phase 81 to break down)
 
+**Cross-cutting constraints:**
+- Every behavioral-prose claim about Tasks (SSE, serverless, owner binding, experimental.tasks, TaskSupport::*, tasks/result, tasks/cancel, tasks/get, poll interval, pollInterval, CreateTaskResult) still accurately describes current `pmcp-tasks` behavior (revision R-5 — prose drift, not just type-name drift).
+
 ---
 
 ### Phase 80: SEP-2640 Skills Support
