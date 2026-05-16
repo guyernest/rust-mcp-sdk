@@ -701,6 +701,8 @@ impl StreamableHttpTransport {
 
         // Use JSON-RPC compatibility layer for serialization
         let body_bytes = crate::shared::StdioTransport::serialize_message(&message)?;
+        // Clone body_bytes so we can retry with the identical payload on 401.
+        let body_bytes_snapshot = body_bytes.clone();
 
         let url = self.config.read().url.clone();
 
@@ -729,12 +731,67 @@ impl StreamableHttpTransport {
             })?,
         );
 
-        // Send request
+        // Send first attempt.
         let response = self
             .client
             .request(request)
             .await
             .map_err(|e| Error::Transport(TransportError::Request(e.to_string())))?;
+
+        // 401 retry — exactly once, only when an auth provider is configured.
+        // `retried_unauthorized` is implicit: the retry path returns directly from
+        // this expression, so we structurally cannot loop back and retry again.
+        // A second 401 on the retry is returned to the caller unchanged.
+        // The retry preserves the original request body, method, and all headers
+        // (except Authorization, which is recomputed from a freshly-vended token).
+        let retried_unauthorized = response.status() == StatusCode::UNAUTHORIZED;
+        let response = if retried_unauthorized {
+            let auth_provider = self.config.read().auth_provider.clone();
+            if let Some(provider) = auth_provider {
+                // Step 1: purge cached token (on_unauthorized BEFORE get_access_token — Test 5).
+                provider.on_unauthorized().await?;
+
+                // Step 2: rebuild the request using the byte-identical body snapshot.
+                let mut retry_request = self
+                    .build_request_with_middleware(
+                        Method::POST,
+                        url.as_str(),
+                        body_bytes_snapshot,
+                    )
+                    .await?;
+
+                // Re-apply the same per-request headers.
+                retry_request.headers_mut().insert(
+                    CONTENT_TYPE,
+                    APPLICATION_JSON.parse().map_err(|e| {
+                        Error::Transport(TransportError::InvalidMessage(format!(
+                            "Invalid header: {}",
+                            e
+                        )))
+                    })?,
+                );
+                retry_request.headers_mut().insert(
+                    ACCEPT,
+                    ACCEPT_STREAMABLE.parse().map_err(|e| {
+                        Error::Transport(TransportError::InvalidMessage(format!(
+                            "Invalid header: {}",
+                            e
+                        )))
+                    })?,
+                );
+
+                // Step 3: send retry — do NOT retry again on a second 401.
+                self.client
+                    .request(retry_request)
+                    .await
+                    .map_err(|e| Error::Transport(TransportError::Request(e.to_string())))?
+            } else {
+                // No auth provider — cannot retry; return the 401 as-is.
+                response
+            }
+        } else {
+            response
+        };
 
         // Process headers for session and protocol info
         self.process_response_headers(&response);
@@ -993,4 +1050,410 @@ impl Transport for StreamableHttpTransport {
 pub trait AuthProvider: Send + Sync + Debug {
     /// Returns an access token.
     async fn get_access_token(&self) -> Result<String>;
+
+    /// Called by the SDK transport immediately after receiving an HTTP 401 response,
+    /// **before** the retry's `get_access_token()` call.
+    ///
+    /// Implementors should evict any cached access token here so that the subsequent
+    /// `get_access_token()` call (which the SDK makes automatically as part of the
+    /// single retry) returns a freshly-vended token rather than the now-invalid cached
+    /// one.
+    ///
+    /// The default implementation is a no-op, preserving backward compatibility for
+    /// all existing `AuthProvider` implementations.
+    ///
+    /// # Retry guarantee
+    ///
+    /// The SDK invokes `on_unauthorized()` at most once per request.  If the retry
+    /// itself also receives a 401, that response is returned to the caller without
+    /// further retrying or calling `on_unauthorized()` again.
+    async fn on_unauthorized(&self) -> Result<()> {
+        Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(all(test, not(target_arch = "wasm32"), feature = "streamable-http"))]
+mod tests {
+    use super::*;
+    use crate::shared::TransportMessage;
+    use mockito::Server as MockServer;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Mutex as StdMutex;
+    use url::Url;
+
+    // ------------------------------------------------------------------
+    // Helpers
+    // ------------------------------------------------------------------
+
+    /// A minimal `AuthProvider` that counts calls and returns a configurable token.
+    #[derive(Debug)]
+    struct CountingProvider {
+        token: String,
+        get_count: AtomicUsize,
+        unauthorized_count: AtomicUsize,
+        /// When `Some`, records the order of method calls as strings.
+        call_order: Option<StdMutex<Vec<&'static str>>>,
+    }
+
+    impl CountingProvider {
+        fn new(token: impl Into<String>) -> Self {
+            Self {
+                token: token.into(),
+                get_count: AtomicUsize::new(0),
+                unauthorized_count: AtomicUsize::new(0),
+                call_order: None,
+            }
+        }
+
+        fn with_order_tracking(token: impl Into<String>) -> Self {
+            Self {
+                token: token.into(),
+                get_count: AtomicUsize::new(0),
+                unauthorized_count: AtomicUsize::new(0),
+                call_order: Some(StdMutex::new(Vec::new())),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl AuthProvider for CountingProvider {
+        async fn get_access_token(&self) -> Result<String> {
+            self.get_count.fetch_add(1, Ordering::SeqCst);
+            if let Some(order) = &self.call_order {
+                order.lock().unwrap().push("get_access_token");
+            }
+            Ok(self.token.clone())
+        }
+
+        async fn on_unauthorized(&self) -> Result<()> {
+            self.unauthorized_count.fetch_add(1, Ordering::SeqCst);
+            if let Some(order) = &self.call_order {
+                order.lock().unwrap().push("on_unauthorized");
+            }
+            Ok(())
+        }
+    }
+
+    /// Build a transport pointed at a mock server URL.
+    fn make_transport(url: Url, provider: Option<Arc<dyn AuthProvider>>) -> StreamableHttpTransport {
+        let mut builder = StreamableHttpTransportConfigBuilder::new(url);
+        if let Some(p) = provider {
+            builder = builder.with_auth_provider(p);
+        }
+        let config = builder.build();
+        StreamableHttpTransport::new(config)
+    }
+
+    /// Helper: build a simple initialized notification for sending.
+    fn ping_message() -> TransportMessage {
+        use crate::types::{ClientNotification, Notification};
+        TransportMessage::Notification(Notification::Client(ClientNotification::Initialized))
+    }
+
+    /// Helper: build a simple list-tools request for body-identity testing.
+    fn list_tools_message() -> TransportMessage {
+        use crate::types::{ClientRequest, ListToolsRequest, Request, RequestId};
+        TransportMessage::Request {
+            id: RequestId::from(42i64),
+            request: Request::Client(Box::new(ClientRequest::ListTools(
+                ListToolsRequest { cursor: None },
+            ))),
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Test 1: default on_unauthorized is a no-op (compile + call succeeds)
+    // ------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_on_unauthorized_default_noop_compiles_and_succeeds() {
+        /// A minimal impl that only provides `get_access_token`.
+        #[derive(Debug)]
+        struct MinimalProvider;
+
+        #[async_trait]
+        impl AuthProvider for MinimalProvider {
+            async fn get_access_token(&self) -> Result<String> {
+                Ok("token".to_string())
+            }
+            // on_unauthorized NOT overridden — uses the default no-op.
+        }
+
+        let p = MinimalProvider;
+        // The default no-op should compile and return Ok(()).
+        let result = p.on_unauthorized().await;
+        assert!(result.is_ok(), "default on_unauthorized should return Ok(())");
+    }
+
+    // ------------------------------------------------------------------
+    // Test 2: on_unauthorized invoked exactly once; request retried once on 401.
+    //          A second 401 on the retry is returned as-is (no infinite loop).
+    // ------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_max_one_retry_on_401() {
+        let mut server = MockServer::new_async().await;
+
+        // Both requests return 401 — verifies exactly one retry (no infinite loop).
+        let _m = server
+            .mock("POST", "/")
+            .with_status(401)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"error":"unauthorized"}"#)
+            .expect(2) // first attempt + exactly one retry
+            .create_async()
+            .await;
+
+        let url = Url::parse(&server.url()).unwrap();
+        let provider = Arc::new(CountingProvider::new("initial-token"));
+        let mut transport = make_transport(url, Some(provider.clone() as Arc<dyn AuthProvider>));
+
+        // Sending will hit 401 twice (original + retry) and then return an error.
+        let _ = transport.send_with_options(ping_message(), SendOptions::default()).await;
+
+        // on_unauthorized called exactly once (not twice).
+        assert_eq!(
+            provider.unauthorized_count.load(Ordering::SeqCst),
+            1,
+            "on_unauthorized should be called exactly once"
+        );
+        // get_access_token called twice: once per attempt.
+        assert_eq!(
+            provider.get_count.load(Ordering::SeqCst),
+            2,
+            "get_access_token should be called twice (once per attempt)"
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // Test 3: on_unauthorized NOT called for non-401 responses.
+    // ------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_on_unauthorized_not_called_for_non_401() {
+        let mut server = MockServer::new_async().await;
+
+        // 200 with valid JSON-RPC response.
+        let _m200 = server
+            .mock("POST", "/")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"jsonrpc":"2.0","id":1,"result":{}}"#)
+            .create_async()
+            .await;
+
+        let url = Url::parse(&server.url()).unwrap();
+        let provider = Arc::new(CountingProvider::new("token"));
+        let mut transport = make_transport(url.clone(), Some(provider.clone() as Arc<dyn AuthProvider>));
+
+        let _ = transport.send_with_options(ping_message(), SendOptions::default()).await;
+        assert_eq!(
+            provider.unauthorized_count.load(Ordering::SeqCst),
+            0,
+            "on_unauthorized must NOT be called on 200"
+        );
+
+        // Also check 500 — no call to on_unauthorized.
+        let mut server2 = MockServer::new_async().await;
+        let _m500 = server2
+            .mock("POST", "/")
+            .with_status(500)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"error":"server error"}"#)
+            .create_async()
+            .await;
+
+        let url2 = Url::parse(&server2.url()).unwrap();
+        let provider2 = Arc::new(CountingProvider::new("token"));
+        let mut transport2 = make_transport(url2, Some(provider2.clone() as Arc<dyn AuthProvider>));
+
+        let _ = transport2.send_with_options(ping_message(), SendOptions::default()).await;
+        assert_eq!(
+            provider2.unauthorized_count.load(Ordering::SeqCst),
+            0,
+            "on_unauthorized must NOT be called on 500"
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // Test 4 (Codex HIGH #17): Retried request body, method, and non-Authorization
+    //         headers are byte-identical to the original request.
+    // ------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_retry_body_and_headers_are_byte_identical() {
+        use std::sync::Mutex as StdMutex;
+
+        /// Captures (method, body, auth_header) for each received request.
+        #[derive(Debug, Default)]
+        struct Captured {
+            requests: Vec<(String, Vec<u8>, String)>,
+        }
+
+        let captured = Arc::new(StdMutex::new(Captured::default()));
+        let captured_clone = captured.clone();
+
+        // Use a hyper-based test server to inspect raw request bodies.
+        use hyper::service::service_fn;
+        use hyper_util::rt::TokioExecutor;
+        use hyper_util::server::conn::auto::Builder as ServerBuilder;
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        let cap = captured_clone.clone();
+        tokio::spawn(async move {
+            let mut attempt = 0u8;
+            loop {
+                let (stream, _) = listener.accept().await.unwrap();
+                let cap = cap.clone();
+                let io = hyper_util::rt::TokioIo::new(stream);
+                tokio::spawn(async move {
+                    let _ = ServerBuilder::new(TokioExecutor::new())
+                        .serve_connection(
+                            io,
+                            service_fn(move |req: Request<hyper::body::Incoming>| {
+                                let cap = cap.clone();
+                                async move {
+                                    let method = req.method().to_string();
+                                    let auth = req
+                                        .headers()
+                                        .get("authorization")
+                                        .and_then(|v| v.to_str().ok())
+                                        .unwrap_or("")
+                                        .to_string();
+                                    let body_bytes = req
+                                        .collect()
+                                        .await
+                                        .map(|b| b.to_bytes().to_vec())
+                                        .unwrap_or_default();
+                                    cap.lock()
+                                        .unwrap()
+                                        .requests
+                                        .push((method, body_bytes, auth));
+                                    // First request: 401. Second: 200.
+                                    let status = {
+                                        let len = cap.lock().unwrap().requests.len();
+                                        if len == 1 { 401u16 } else { 200u16 }
+                                    };
+                                    Ok::<_, hyper::Error>(
+                                        HyperResponse::builder()
+                                            .status(status)
+                                            .header("content-type", "application/json")
+                                            .body(Full::new(Bytes::from(
+                                                if status == 200 {
+                                                    r#"{"jsonrpc":"2.0","id":1,"result":{}}"#
+                                                } else {
+                                                    r#"{"error":"unauthorized"}"#
+                                                },
+                                            )))
+                                            .unwrap(),
+                                    )
+                                }
+                            }),
+                        )
+                        .await;
+                });
+                attempt += 1;
+                if attempt >= 2 {
+                    break;
+                }
+            }
+        });
+
+        // Provider returns different tokens per call to prove Auth header changed.
+        #[derive(Debug)]
+        struct DualTokenProvider {
+            call_count: AtomicUsize,
+        }
+
+        #[async_trait]
+        impl AuthProvider for DualTokenProvider {
+            async fn get_access_token(&self) -> Result<String> {
+                let n = self.call_count.fetch_add(1, Ordering::SeqCst);
+                if n == 0 {
+                    Ok("token-attempt-1".to_string())
+                } else {
+                    Ok("token-attempt-2".to_string())
+                }
+            }
+        }
+
+        let provider = Arc::new(DualTokenProvider { call_count: AtomicUsize::new(0) });
+        let url = Url::parse(&format!("http://127.0.0.1:{}", addr.port())).unwrap();
+        let mut transport = make_transport(url, Some(provider as Arc<dyn AuthProvider>));
+
+        let _ = transport.send_with_options(list_tools_message(), SendOptions::default()).await;
+
+        let cap = captured.lock().unwrap();
+        assert_eq!(cap.requests.len(), 2, "expected exactly 2 requests (original + retry)");
+
+        let (method1, body1, auth1) = &cap.requests[0];
+        let (method2, body2, auth2) = &cap.requests[1];
+
+        // Method must be identical.
+        assert_eq!(method1, method2, "method must be byte-identical across retry");
+
+        // Body must be byte-identical.
+        assert_eq!(body1, body2, "body must be byte-identical across retry");
+
+        // Authorization header must DIFFER (new token on retry).
+        assert_ne!(auth1, auth2, "Authorization header should differ (new token)");
+        assert!(auth1.contains("token-attempt-1"), "first auth: {}", auth1);
+        assert!(auth2.contains("token-attempt-2"), "retry auth: {}", auth2);
+    }
+
+    // ------------------------------------------------------------------
+    // Test 5: on_unauthorized() is invoked BEFORE get_access_token() on retry.
+    // ------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_on_unauthorized_called_before_get_access_token_on_retry() {
+        let mut server = MockServer::new_async().await;
+
+        let _m = server
+            .mock("POST", "/")
+            .with_status(401)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"error":"unauthorized"}"#)
+            .expect(2)
+            .create_async()
+            .await;
+
+        let url = Url::parse(&server.url()).unwrap();
+        let provider = Arc::new(CountingProvider::with_order_tracking("token"));
+        let mut transport = make_transport(url, Some(provider.clone() as Arc<dyn AuthProvider>));
+
+        let _ = transport.send_with_options(ping_message(), SendOptions::default()).await;
+
+        let order = provider
+            .call_order
+            .as_ref()
+            .unwrap()
+            .lock()
+            .unwrap()
+            .clone();
+
+        // Expected order: get_access_token (attempt 1), on_unauthorized, get_access_token (retry).
+        assert!(
+            order.len() >= 3,
+            "expected at least 3 calls, got {:?}",
+            order
+        );
+        // Locate on_unauthorized and the get_access_token that follows it.
+        let unauth_pos = order.iter().position(|&s| s == "on_unauthorized")
+            .expect("on_unauthorized must appear in call order");
+        let retry_get_pos = order.iter().skip(unauth_pos + 1)
+            .position(|&s| s == "get_access_token");
+        assert!(
+            retry_get_pos.is_some(),
+            "get_access_token must be called AFTER on_unauthorized; order = {:?}",
+            order
+        );
+    }
 }
