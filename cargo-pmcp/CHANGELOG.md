@@ -5,6 +5,32 @@ All notable changes to the `cargo-pmcp` crate will be documented in this file.
 The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.0] - 2026-05-16
+
+### Changed
+
+- **pmcp dep bumped 2.7.0 → 2.8.0** (pulls in the
+  `AuthProvider::on_unauthorized()` hook + transport retry-once-on-401).
+- **mcp-tester dep bumped 0.6.0 → 0.7.0** (companion bump for the pmcp
+  ripple).
+- **MSRV bumped to Rust 1.91** to align with the workspace; CI MSRV gate
+  pinned to `dtolnay/rust-toolchain@1.91`.
+
+### Internal
+
+- **`commands::test::apps::execute_pretty`** cog 27 → ≤25 via P1 helper
+  extraction per Phase 75 patterns. Functional behavior preserved.
+- Minor stylistic cleanups from `clippy::unnecessary_duration_constructor`
+  fired by the MSRV bump (Duration::from_secs round-number → from_mins/
+  from_hours rewrites). Semantically equivalent.
+
+### Notes
+
+- Bump from 0.13.0 → 0.14.0 is **minor** because the pmcp dep gained a new
+  public trait method (`on_unauthorized`) and mcp-tester gained a new public
+  module (`post_deploy_report`, since 0.6.0). cargo-pmcp itself does not
+  override `on_unauthorized` and continues to use the default no-op.
+
 ## [0.13.0] - 2026-05-10
 
 ### Security
