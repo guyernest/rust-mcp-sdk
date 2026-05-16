@@ -72,7 +72,7 @@
 //!
 //! # async fn example() -> pmcp::Result<()> {
 //! // Create preset with rate limiting: 100 req/min with bucket size 100
-//! let rate_limiter = RateLimitMiddleware::new(100, 100, Duration::from_secs(60));
+//! let rate_limiter = RateLimitMiddleware::new(100, 100, Duration::from_mins(1));
 //!
 //! let preset = ServerPreset::default()
 //!     .with_rate_limit(rate_limiter);
@@ -196,7 +196,7 @@ impl ServerPreset {
     /// use std::time::Duration;
     ///
     /// // 100 requests per minute, bucket size 100
-    /// let rate_limiter = RateLimitMiddleware::new(100, 100, Duration::from_secs(60));
+    /// let rate_limiter = RateLimitMiddleware::new(100, 100, Duration::from_mins(1));
     /// let preset = ServerPreset::new("my-service").with_rate_limit(rate_limiter);
     /// ```
     pub fn with_rate_limit(self, rate_limiter: RateLimitMiddleware) -> Self {
@@ -287,7 +287,7 @@ mod tests {
 
     #[test]
     fn test_preset_with_rate_limit() {
-        let rate_limiter = RateLimitMiddleware::new(100, 100, Duration::from_secs(60));
+        let rate_limiter = RateLimitMiddleware::new(100, 100, Duration::from_mins(1));
         let preset = ServerPreset::new("test-service").with_rate_limit(rate_limiter);
 
         // Verify protocol chain includes rate limiter
@@ -306,7 +306,7 @@ mod tests {
 
     #[test]
     fn test_preset_chaining() {
-        let rate_limiter = RateLimitMiddleware::new(100, 100, Duration::from_secs(60));
+        let rate_limiter = RateLimitMiddleware::new(100, 100, Duration::from_mins(1));
         let logging = ServerHttpLoggingMiddleware::new();
 
         let preset = ServerPreset::new("test-service")

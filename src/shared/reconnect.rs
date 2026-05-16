@@ -62,9 +62,9 @@ impl Default for ReconnectConfig {
             max_retries: None,
             jitter_factor: 0.1,
             reset_on_success: true,
-            success_threshold: Duration::from_secs(60),
+            success_threshold: Duration::from_mins(1),
             circuit_breaker_threshold: Some(5),
-            circuit_breaker_timeout: Duration::from_secs(60),
+            circuit_breaker_timeout: Duration::from_mins(1),
         }
     }
 }

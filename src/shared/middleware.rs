@@ -1070,7 +1070,7 @@ impl AdvancedMiddleware for RateLimitMiddleware {
 /// // Circuit breaker: 5 failures in 60s window trips for 30s
 /// let circuit_breaker = CircuitBreakerMiddleware::new(
 ///     5,                          // failure_threshold
-///     Duration::from_secs(60),    // time_window
+///     Duration::from_mins(1),    // time_window
 ///     Duration::from_secs(30),    // timeout_duration
 /// );
 /// let context = MiddlewareContext::default();

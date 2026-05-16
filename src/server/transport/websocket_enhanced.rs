@@ -356,7 +356,7 @@ impl EnhancedWebSocketServer {
     async fn check_heartbeats(clients: Arc<RwLock<HashMap<ClientId, ClientConnection>>>) {
         let mut clients_guard = clients.write().await;
         let now = std::time::Instant::now();
-        let timeout = Duration::from_secs(60);
+        let timeout = Duration::from_mins(1);
 
         let stale_clients: Vec<ClientId> = clients_guard
             .iter()

@@ -75,7 +75,7 @@ async fn test_oauth_middleware_injects_token() {
     let mut http_chain = HttpMiddlewareChain::new();
     let token = BearerToken::with_expiry(
         "test-oauth-token-12345".to_string(),
-        Duration::from_secs(3600),
+        Duration::from_hours(1),
     );
     http_chain.add(Arc::new(OAuthClientMiddleware::new(token)));
 
@@ -264,7 +264,7 @@ async fn test_multiple_requests_with_oauth() {
 
     // Create HTTP middleware chain with OAuth
     let mut http_chain = HttpMiddlewareChain::new();
-    let token = BearerToken::with_expiry("persistent-token".to_string(), Duration::from_secs(3600));
+    let token = BearerToken::with_expiry("persistent-token".to_string(), Duration::from_hours(1));
     http_chain.add(Arc::new(OAuthClientMiddleware::new(token)));
 
     // Create client

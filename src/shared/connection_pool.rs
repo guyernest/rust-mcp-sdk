@@ -81,7 +81,7 @@ impl Default for ConnectionPoolConfig {
             strategy: LoadBalanceStrategy::RoundRobin,
             health_check_interval: Duration::from_secs(30),
             operation_timeout: Duration::from_secs(10),
-            max_idle_time: Duration::from_secs(300),
+            max_idle_time: Duration::from_mins(5),
             auto_scaling: true,
             max_retries: 3,
             retry_delay: Duration::from_secs(1),
@@ -486,7 +486,7 @@ impl<T: Transport + Clone + Send + Sync + 'static> ConnectionPool<T> {
             .iter()
             .filter(|(_, conn)| {
                 conn.info.health == HealthStatus::Unhealthy
-                    && now.duration_since(conn.info.last_activity) > Duration::from_secs(300)
+                    && now.duration_since(conn.info.last_activity) > Duration::from_mins(5)
             })
             .map(|(id, _)| *id)
             .collect();

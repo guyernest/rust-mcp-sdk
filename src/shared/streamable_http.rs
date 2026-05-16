@@ -242,7 +242,7 @@ impl StreamableHttpTransportConfigBuilder {
     /// let mut http_chain = HttpMiddlewareChain::new();
     ///
     /// // Add OAuth middleware
-    /// let token = BearerToken::with_expiry("my-token".to_string(), Duration::from_secs(3600));
+    /// let token = BearerToken::with_expiry("my-token".to_string(), Duration::from_hours(1));
     /// http_chain.add(Arc::new(OAuthClientMiddleware::new(token)));
     ///
     /// let config = StreamableHttpTransportConfigBuilder::new(
@@ -753,11 +753,7 @@ impl StreamableHttpTransport {
 
                 // Step 2: rebuild the request using the byte-identical body snapshot.
                 let mut retry_request = self
-                    .build_request_with_middleware(
-                        Method::POST,
-                        url.as_str(),
-                        body_bytes_snapshot,
-                    )
+                    .build_request_with_middleware(Method::POST, url.as_str(), body_bytes_snapshot)
                     .await?;
 
                 // Re-apply the same per-request headers.
@@ -1139,7 +1135,10 @@ mod tests {
     }
 
     /// Build a transport pointed at a mock server URL.
-    fn make_transport(url: Url, provider: Option<Arc<dyn AuthProvider>>) -> StreamableHttpTransport {
+    fn make_transport(
+        url: Url,
+        provider: Option<Arc<dyn AuthProvider>>,
+    ) -> StreamableHttpTransport {
         let mut builder = StreamableHttpTransportConfigBuilder::new(url);
         if let Some(p) = provider {
             builder = builder.with_auth_provider(p);
@@ -1159,9 +1158,9 @@ mod tests {
         use crate::types::{ClientRequest, ListToolsRequest, Request, RequestId};
         TransportMessage::Request {
             id: RequestId::from(42i64),
-            request: Request::Client(Box::new(ClientRequest::ListTools(
-                ListToolsRequest { cursor: None },
-            ))),
+            request: Request::Client(Box::new(ClientRequest::ListTools(ListToolsRequest {
+                cursor: None,
+            }))),
         }
     }
 
@@ -1186,7 +1185,10 @@ mod tests {
         let p = MinimalProvider;
         // The default no-op should compile and return Ok(()).
         let result = p.on_unauthorized().await;
-        assert!(result.is_ok(), "default on_unauthorized should return Ok(())");
+        assert!(
+            result.is_ok(),
+            "default on_unauthorized should return Ok(())"
+        );
     }
 
     // ------------------------------------------------------------------
@@ -1213,7 +1215,9 @@ mod tests {
         let mut transport = make_transport(url, Some(provider.clone() as Arc<dyn AuthProvider>));
 
         // Sending will hit 401 twice (original + retry) and then return an error.
-        let _ = transport.send_with_options(ping_message(), SendOptions::default()).await;
+        let _ = transport
+            .send_with_options(ping_message(), SendOptions::default())
+            .await;
 
         // on_unauthorized called exactly once (not twice).
         assert_eq!(
@@ -1248,9 +1252,12 @@ mod tests {
 
         let url = Url::parse(&server.url()).unwrap();
         let provider = Arc::new(CountingProvider::new("token"));
-        let mut transport = make_transport(url.clone(), Some(provider.clone() as Arc<dyn AuthProvider>));
+        let mut transport =
+            make_transport(url.clone(), Some(provider.clone() as Arc<dyn AuthProvider>));
 
-        let _ = transport.send_with_options(ping_message(), SendOptions::default()).await;
+        let _ = transport
+            .send_with_options(ping_message(), SendOptions::default())
+            .await;
         assert_eq!(
             provider.unauthorized_count.load(Ordering::SeqCst),
             0,
@@ -1271,7 +1278,9 @@ mod tests {
         let provider2 = Arc::new(CountingProvider::new("token"));
         let mut transport2 = make_transport(url2, Some(provider2.clone() as Arc<dyn AuthProvider>));
 
-        let _ = transport2.send_with_options(ping_message(), SendOptions::default()).await;
+        let _ = transport2
+            .send_with_options(ping_message(), SendOptions::default())
+            .await;
         assert_eq!(
             provider2.unauthorized_count.load(Ordering::SeqCst),
             0,
@@ -1286,22 +1295,39 @@ mod tests {
 
     #[tokio::test]
     async fn test_retry_body_and_headers_are_byte_identical() {
+        use hyper::service::service_fn;
+        use hyper_util::rt::TokioExecutor;
+        use hyper_util::server::conn::auto::Builder as ServerBuilder;
         use std::sync::Mutex as StdMutex;
+        use tokio::net::TcpListener;
 
-        /// Captures (method, body, auth_header) for each received request.
+        /// Captures `(method, body, auth_header)` for each received request.
         #[derive(Debug, Default)]
         struct Captured {
             requests: Vec<(String, Vec<u8>, String)>,
         }
 
+        /// Provider returns different tokens per call to prove the
+        /// `Authorization` header changes between attempts.
+        #[derive(Debug)]
+        struct DualTokenProvider {
+            call_count: AtomicUsize,
+        }
+
+        #[async_trait]
+        impl AuthProvider for DualTokenProvider {
+            async fn get_access_token(&self) -> Result<String> {
+                let n = self.call_count.fetch_add(1, Ordering::SeqCst);
+                if n == 0 {
+                    Ok("token-attempt-1".to_string())
+                } else {
+                    Ok("token-attempt-2".to_string())
+                }
+            }
+        }
+
         let captured = Arc::new(StdMutex::new(Captured::default()));
         let captured_clone = captured.clone();
-
-        // Use a hyper-based test server to inspect raw request bodies.
-        use hyper::service::service_fn;
-        use hyper_util::rt::TokioExecutor;
-        use hyper_util::server::conn::auto::Builder as ServerBuilder;
-        use tokio::net::TcpListener;
 
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
@@ -1339,19 +1365,21 @@ mod tests {
                                     // First request: 401. Second: 200.
                                     let status = {
                                         let len = cap.lock().unwrap().requests.len();
-                                        if len == 1 { 401u16 } else { 200u16 }
+                                        if len == 1 {
+                                            401u16
+                                        } else {
+                                            200u16
+                                        }
                                     };
                                     Ok::<_, hyper::Error>(
                                         HyperResponse::builder()
                                             .status(status)
                                             .header("content-type", "application/json")
-                                            .body(Full::new(Bytes::from(
-                                                if status == 200 {
-                                                    r#"{"jsonrpc":"2.0","id":1,"result":{}}"#
-                                                } else {
-                                                    r#"{"error":"unauthorized"}"#
-                                                },
-                                            )))
+                                            .body(Full::new(Bytes::from(if status == 200 {
+                                                r#"{"jsonrpc":"2.0","id":1,"result":{}}"#
+                                            } else {
+                                                r#"{"error":"unauthorized"}"#
+                                            })))
                                             .unwrap(),
                                     )
                                 }
@@ -1366,44 +1394,40 @@ mod tests {
             }
         });
 
-        // Provider returns different tokens per call to prove Auth header changed.
-        #[derive(Debug)]
-        struct DualTokenProvider {
-            call_count: AtomicUsize,
-        }
-
-        #[async_trait]
-        impl AuthProvider for DualTokenProvider {
-            async fn get_access_token(&self) -> Result<String> {
-                let n = self.call_count.fetch_add(1, Ordering::SeqCst);
-                if n == 0 {
-                    Ok("token-attempt-1".to_string())
-                } else {
-                    Ok("token-attempt-2".to_string())
-                }
-            }
-        }
-
-        let provider = Arc::new(DualTokenProvider { call_count: AtomicUsize::new(0) });
+        let provider = Arc::new(DualTokenProvider {
+            call_count: AtomicUsize::new(0),
+        });
         let url = Url::parse(&format!("http://127.0.0.1:{}", addr.port())).unwrap();
         let mut transport = make_transport(url, Some(provider as Arc<dyn AuthProvider>));
 
-        let _ = transport.send_with_options(list_tools_message(), SendOptions::default()).await;
+        let _ = transport
+            .send_with_options(list_tools_message(), SendOptions::default())
+            .await;
 
         let cap = captured.lock().unwrap();
-        assert_eq!(cap.requests.len(), 2, "expected exactly 2 requests (original + retry)");
+        assert_eq!(
+            cap.requests.len(),
+            2,
+            "expected exactly 2 requests (original + retry)"
+        );
 
         let (method1, body1, auth1) = &cap.requests[0];
         let (method2, body2, auth2) = &cap.requests[1];
 
         // Method must be identical.
-        assert_eq!(method1, method2, "method must be byte-identical across retry");
+        assert_eq!(
+            method1, method2,
+            "method must be byte-identical across retry"
+        );
 
         // Body must be byte-identical.
         assert_eq!(body1, body2, "body must be byte-identical across retry");
 
         // Authorization header must DIFFER (new token on retry).
-        assert_ne!(auth1, auth2, "Authorization header should differ (new token)");
+        assert_ne!(
+            auth1, auth2,
+            "Authorization header should differ (new token)"
+        );
         assert!(auth1.contains("token-attempt-1"), "first auth: {}", auth1);
         assert!(auth2.contains("token-attempt-2"), "retry auth: {}", auth2);
     }
@@ -1429,7 +1453,9 @@ mod tests {
         let provider = Arc::new(CountingProvider::with_order_tracking("token"));
         let mut transport = make_transport(url, Some(provider.clone() as Arc<dyn AuthProvider>));
 
-        let _ = transport.send_with_options(ping_message(), SendOptions::default()).await;
+        let _ = transport
+            .send_with_options(ping_message(), SendOptions::default())
+            .await;
 
         let order = provider
             .call_order
@@ -1446,9 +1472,13 @@ mod tests {
             order
         );
         // Locate on_unauthorized and the get_access_token that follows it.
-        let unauth_pos = order.iter().position(|&s| s == "on_unauthorized")
+        let unauth_pos = order
+            .iter()
+            .position(|&s| s == "on_unauthorized")
             .expect("on_unauthorized must appear in call order");
-        let retry_get_pos = order.iter().skip(unauth_pos + 1)
+        let retry_get_pos = order
+            .iter()
+            .skip(unauth_pos + 1)
             .position(|&s| s == "get_access_token");
         assert!(
             retry_get_pos.is_some(),
