@@ -266,7 +266,9 @@ impl SqlValidator {
                     add_object_name(&mut info.tables, name);
                 }
                 for col in &insert.columns {
-                    info.columns.insert(col.value.clone());
+                    // sqlparser 0.62 changed insert column items: use Display
+                    // instead of the removed `.value` field on ObjectName/Ident.
+                    info.columns.insert(col.to_string());
                 }
                 if let Some(source) = &insert.source {
                     self.analyze_query(source, &mut info);
@@ -383,6 +385,9 @@ impl SqlValidator {
             match item {
                 SelectItem::UnnamedExpr(expr) => self.analyze_expr(expr, info),
                 SelectItem::ExprWithAlias { expr, .. } => self.analyze_expr(expr, info),
+                // sqlparser 0.62 added the plural variant for SQL Server's
+                // multi-alias projection syntax — treat like ExprWithAlias.
+                SelectItem::ExprWithAliases { expr, .. } => self.analyze_expr(expr, info),
                 SelectItem::Wildcard(_) | SelectItem::QualifiedWildcard(_, _) => {
                     info.columns.insert("*".to_string());
                 },

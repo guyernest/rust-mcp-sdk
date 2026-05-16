@@ -54,7 +54,13 @@ jobs:
             -max_total_time=300 \
             -print_final_stats=1 \
             -detect_leaks=0
-        timeout-minutes: 10
+        # libFuzzer caps active fuzzing at 300s. The step budget covers
+        # corpus flush + actions/cache save + sanitizer shutdown tail —
+        # which can spike when a target's input space expands (e.g.
+        # adding a `HashMap<String, Value>` field) and a single run adds
+        # thousands of new corpus entries. 15 min gives that tail room
+        # to land without losing CI signal.
+        timeout-minutes: 15
       
       - name: Minimize corpus
         if: github.event_name == 'schedule'
