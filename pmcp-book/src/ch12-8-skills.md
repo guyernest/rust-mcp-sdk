@@ -368,7 +368,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let _server = pmcp::Server::builder()
         .name("doctest-skills-demo")
         .version("0.1.0")
-        .skill(greeting.clone())
         .bootstrap_skill_and_prompt(greeting, "hello_prompt")
         .build()?;
     Ok(())
