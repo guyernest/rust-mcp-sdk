@@ -120,6 +120,12 @@ v2.1 decisions:
 
 - Wave 5 must patch `quality-badges.yml` per D-11-B — without that, no amount of complexity reduction flips the badge.
 
+### Quick Tasks Completed
+
+| # | Description | Date | Commit | Status | Directory |
+|---|-------------|------|--------|--------|-----------|
+| 260516-b2p | AuthProvider::on_unauthorized + transport retry-once + MSRV 1.91 + pmcp 2.8.0 ripple | 2026-05-16 | aba393aa | Verified | [260516-b2p-add-authprovider-on-unauthorized-hook-tr](./quick/260516-b2p-add-authprovider-on-unauthorized-hook-tr/) |
+
 ### Phase 75 Wave 2 Decisions (2026-04-24)
 
 - [Phase 75 Wave 2]: All 40 cargo-pmcp/ hotspots refactored to cog ≤25 via P1-P4 extraction alone. No P5 invocations. No escapees logged to 75.5-ESCAPEES.md. Both monsters (check.rs::execute cog 105, handle_oauth_action cog 91) decomposed to ≤25 via P1 per-stage pipeline + P4 per-variant dispatch.
