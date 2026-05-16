@@ -5,6 +5,54 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.8.0] - 2026-05-16
+
+### Added
+
+- **`AuthProvider::on_unauthorized()` transport hook.** New default-method on the
+  `pmcp::shared::streamable_http::AuthProvider` trait, invoked by the
+  streamable-HTTP transport immediately after a 401 response and before the
+  single auto-retry's `get_access_token()` call. Default impl is a no-op,
+  preserving backward compatibility for all existing implementers
+  (`ProxyProvider`, `NoOpAuthProvider`, downstream user impls). Implementers
+  of cached-token providers (e.g. pmcp.run's `OutboundOAuthAuthProvider`)
+  should override this method to evict stale cached tokens so the SDK's
+  subsequent retry fetches a fresh credential. See the trait doc comment
+  in `src/shared/streamable_http.rs` for the retry guarantee.
+
+### Changed
+
+- **Streamable-HTTP transport: single retry on HTTP 401.** When an `AuthProvider`
+  is configured and the upstream server returns 401, the SDK now calls
+  `on_unauthorized()` and re-sends the request exactly once with a freshly
+  vended token. The retry preserves the original method, byte-identical body,
+  session ID, resumption token, extra_headers, and middleware chain — only
+  the `Authorization` header is recomputed. A second 401 on the retry is
+  returned to the caller unchanged (no infinite loop). For requests with no
+  `auth_provider` configured, behavior is unchanged.
+
+  Behavior note: callers running against a server that returns 401 for an
+  auth-bearing request will now see one extra round-trip per failed request.
+  This is the intended fix for stale-token flows and is negligible in normal
+  operation. Five inline unit tests (`src/shared/streamable_http.rs`) plus two
+  property-based tests (`tests/streamable_http_oauth_properties.rs`) cover
+  the invariant.
+
+- **MSRV bumped to Rust 1.91.** The CI MSRV job now pins
+  `dtolnay/rust-toolchain@1.91`; root `Cargo.toml` declares
+  `rust-version = "1.91.0"`. The current 401-retry implementation uses
+  nested `if let` rather than let-chains, so 1.91 is a policy refresh
+  (six-month headroom from latest stable) rather than a hard requirement
+  of the new feature.
+
+### Internal
+
+- Workspace pin ripple: `mcp-tester` 0.6.0 → 0.7.0, `cargo-pmcp` 0.13.0 →
+  0.14.0; pmcp dep version updated to `2.8.0` in `crates/mcp-tester`,
+  `cargo-pmcp`, `crates/pmcp-server`, `crates/pmcp-server/pmcp-server-lambda`,
+  and `crates/pmcp-tasks`. `pmcp-code-mode` and `pmcp-code-mode-derive`
+  use `>=2.2.0` range pins and were not touched.
+
 ## [2.7.0] - 2026-05-10
 
 ### Security
