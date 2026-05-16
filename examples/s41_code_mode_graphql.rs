@@ -121,9 +121,7 @@ async fn main() {
                     .map(|t| &t[..t.len().min(20)])
                     .unwrap_or("none")
             );
-            if let Some(ref explanation) = Some(&result.explanation) {
-                println!("Explanation: {explanation}");
-            }
+            println!("Explanation: {}", result.explanation);
 
             // Execute with the approval token
             if result.approval_token.is_some() {

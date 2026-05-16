@@ -42,7 +42,7 @@ impl ElicitationManager {
         Self {
             pending: Arc::new(RwLock::new(HashMap::new())),
             request_tx: None,
-            timeout_duration: Duration::from_secs(300), // 5 minutes default
+            timeout_duration: Duration::from_mins(5), // 5 minutes default
         }
     }
 

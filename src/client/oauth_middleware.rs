@@ -110,7 +110,7 @@ impl OAuthClientMiddleware {
         Self {
             token: Arc::new(RwLock::new(token)),
             check_expiry: true,
-            refresh_threshold: Duration::from_secs(60), // Refresh if <60s remaining
+            refresh_threshold: Duration::from_mins(1), // Refresh if <60s remaining
         }
     }
 
@@ -119,7 +119,7 @@ impl OAuthClientMiddleware {
         Self {
             token: Arc::new(RwLock::new(token)),
             check_expiry: false,
-            refresh_threshold: Duration::from_secs(60),
+            refresh_threshold: Duration::from_mins(1),
         }
     }
 
@@ -269,10 +269,10 @@ mod tests {
     fn test_bearer_token_with_expiry() {
         let token = BearerToken::with_expiry(
             "test-token".to_string(),
-            Duration::from_secs(3600), // 1 hour
+            Duration::from_hours(1), // 1 hour
         );
         assert!(!token.is_expired());
-        assert!(!token.expires_soon(Duration::from_secs(120))); // Not expiring in 2 min
+        assert!(!token.expires_soon(Duration::from_mins(2))); // Not expiring in 2 min
     }
 
     #[test]

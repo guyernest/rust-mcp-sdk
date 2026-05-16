@@ -33,7 +33,7 @@ pub(crate) fn build_mcp_cors_layer(allowed: &AllowedOrigins) -> CorsLayer {
             http::HeaderName::from_static("mcp-session-id"),
             http::HeaderName::from_static("mcp-protocol-version"),
         ])
-        .max_age(Duration::from_secs(86400))
+        .max_age(Duration::from_hours(24))
 }
 
 /// Shared test utilities for tower layer tests.

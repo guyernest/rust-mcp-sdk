@@ -324,11 +324,11 @@ mod tests {
         );
         assert_eq!(
             config.timeout_for("slow"),
-            std::time::Duration::from_secs(60)
+            std::time::Duration::from_mins(1)
         );
         assert_eq!(
             config.timeout_for("unknown"),
-            std::time::Duration::from_secs(60)
+            std::time::Duration::from_mins(1)
         );
     }
 

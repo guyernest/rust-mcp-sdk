@@ -102,7 +102,7 @@ impl OptimizedSseTransport {
         let client = reqwest::Client::builder()
             .pool_idle_timeout(Some(Duration::from_secs(90)))
             .pool_max_idle_per_host(config.max_connections)
-            .tcp_keepalive(Some(Duration::from_secs(60)))
+            .tcp_keepalive(Some(Duration::from_mins(1)))
             .timeout(config.connection_timeout)
             .build()
             .expect("Failed to build HTTP client");

@@ -1178,6 +1178,19 @@ After cycle-1 closure (Plans 05-08 completed 2026-05-02), the operator re-ran Te
 
 **Re-verification gate (cycle 2):** Plan 11 Task 3 is the load-bearing gate. Operator runs `cargo pmcp test apps --mode claude-desktop https://cost-coach.us-west.pmcp.run/mcp` against real prod and confirms zero Failed rows on the 8 production widgets. On pass: phase 78 closes via `/gsd-verify-work`. On fail: phase 78 routes to a third gap-closure cycle with diagnosis in a new `uat-evidence/<date>-cost-coach-prod-cycle3-rerun.md` evidence file.
 
+### Phase 81: Update pmcp-book and pmcp-course with v2 advanced topics (code-mode, tasks, skills)
+
+**Goal:** [To be planned]
+**Requirements**: TBD
+**Depends on:** Phase 80
+**Plans:** 10/10 plans complete
+
+Plans:
+- [x] TBD (run /gsd-plan-phase 81 to break down) (completed 2026-05-15)
+
+**Cross-cutting constraints:**
+- Every behavioral-prose claim about Tasks (SSE, serverless, owner binding, experimental.tasks, TaskSupport::*, tasks/result, tasks/cancel, tasks/get, poll interval, pollInterval, CreateTaskResult) still accurately describes current `pmcp-tasks` behavior (revision R-5 — prose drift, not just type-name drift).
+
 ---
 
 ### Phase 80: SEP-2640 Skills Support

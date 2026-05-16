@@ -282,14 +282,14 @@ mod tests {
         let config = HttpConfig {
             base_url: "http://example.com:3000".parse().unwrap(),
             sse_endpoint: None,
-            timeout: Duration::from_secs(60),
+            timeout: Duration::from_mins(1),
             headers: vec![("X-Custom".to_string(), "value".to_string())],
             enable_pooling: false,
             max_idle_per_host: 5,
         };
         assert_eq!(config.base_url.as_str(), "http://example.com:3000/");
         assert!(config.sse_endpoint.is_none());
-        assert_eq!(config.timeout, Duration::from_secs(60));
+        assert_eq!(config.timeout, Duration::from_mins(1));
         assert_eq!(config.headers.len(), 1);
         assert!(!config.enable_pooling);
         assert_eq!(config.max_idle_per_host, 5);

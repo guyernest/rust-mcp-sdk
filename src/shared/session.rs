@@ -296,7 +296,7 @@ pub async fn session_cleanup_task(manager: Arc<SessionManager>, interval: Durati
     let mut interval = tokio::time::interval(
         interval
             .to_std()
-            .unwrap_or(std::time::Duration::from_secs(300)),
+            .unwrap_or(std::time::Duration::from_mins(5)),
     );
 
     loop {

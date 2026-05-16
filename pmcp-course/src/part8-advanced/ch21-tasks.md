@@ -91,7 +91,8 @@ use std::sync::Arc;
 let store = Arc::new(InMemoryTaskStore::new());
 
 // For production: use pmcp-tasks crate with DynamoDB or Redis
-// let store = Arc::new(DynamoDbTaskStore::new(table_name, client).await);
+// let backend = DynamoDbBackend::new(client, table_name);
+// let store = Arc::new(GenericTaskStore::new(backend));
 ```
 
 The SDK provides `InMemoryTaskStore` for development. For production, the `pmcp-tasks` crate provides DynamoDB and Redis backends that survive Lambda cold starts and container restarts.
@@ -99,8 +100,8 @@ The SDK provides `InMemoryTaskStore` for development. For production, the `pmcp-
 | Backend | Crate | Use Case |
 |---------|-------|----------|
 | `InMemoryTaskStore` | `pmcp` (core) | Development, testing, single-process servers |
-| `DynamoDbTaskStore` | `pmcp-tasks` | AWS Lambda, serverless, multi-instance |
-| `RedisTaskStore` | `pmcp-tasks` | Low-latency, container-based deployments |
+| `GenericTaskStore<DynamoDbBackend>` | `pmcp-tasks` | AWS Lambda, serverless, multi-instance |
+| `GenericTaskStore<RedisBackend>` | `pmcp-tasks` | Low-latency, container-based deployments |
 
 **Key point:** The `TaskStore` is not just storage -- it enforces the MCP state machine. Transitions like `completed -> working` are rejected at the store level, not in your handler code. This means you cannot accidentally corrupt task state regardless of how your handler logic is structured.
 

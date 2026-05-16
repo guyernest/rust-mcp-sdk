@@ -132,7 +132,7 @@ impl CognitoProvider {
                 .timeout(Duration::from_secs(10))
                 .build()
                 .map_err(|e| Error::internal(format!("Failed to create HTTP client: {}", e)))?,
-            cache_ttl: Duration::from_secs(3600), // 1 hour
+            cache_ttl: Duration::from_hours(1),
         };
 
         Ok(provider)
@@ -180,7 +180,7 @@ impl CognitoProvider {
                 .timeout(Duration::from_secs(10))
                 .build()
                 .map_err(|e| Error::internal(format!("Failed to create HTTP client: {}", e)))?,
-            cache_ttl: Duration::from_secs(3600),
+            cache_ttl: Duration::from_hours(1),
         };
 
         Ok(provider)
@@ -543,7 +543,7 @@ mod tests {
 
     #[test]
     fn test_cached_data_creation() {
-        let data: CachedData<String> = CachedData::new("test".to_string(), Duration::from_secs(60));
+        let data: CachedData<String> = CachedData::new("test".to_string(), Duration::from_mins(1));
         assert_eq!(data.data, "test");
         assert!(!data.is_expired());
     }
@@ -559,7 +559,7 @@ mod tests {
 
     #[test]
     fn test_cached_data_debug() {
-        let data: CachedData<String> = CachedData::new("test".to_string(), Duration::from_secs(60));
+        let data: CachedData<String> = CachedData::new("test".to_string(), Duration::from_mins(1));
         let debug_str = format!("{:?}", data);
         assert!(debug_str.contains("CachedData"));
         assert!(debug_str.contains("data"));

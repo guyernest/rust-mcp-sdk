@@ -1,0 +1,86 @@
+# Quiz: MCP Tasks - Long-Running Operations
+
+id = "ch21-tasks"
+title = "MCP Tasks: Long-Running Operations"
+lesson_id = "ch21"
+pass_threshold = 0.7
+
+[[questions]]
+type = "ShortAnswer"
+prompt.prompt = "Which method on Server::builder() configures task support so the server advertises the tasks capability during initialize?"
+answer.answer = "task_store"
+answer.alternatives = [".task_store()", "task_store()"]
+context = """
+Calling .task_store(store) on the builder does two things: it stores the TaskStore
+backend and auto-configures the server's capabilities so clients see the tasks
+capability during initialize. You do not set the capability manually.
+"""
+id = "f21a1b2c-d3e4-5678-abcd-123456800001"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "Why is polling preferred over SSE notifications for serverless deployments of MCP Tasks?"
+prompt.distractors = [
+    "SSE is slower than polling because each notification carries more bytes per message",
+    "SSE requires WebSockets, which are not supported by HTTP-based MCP transports",
+    "SSE uses more bandwidth because it sends the full task record on every update"
+]
+answer.answer = "Each poll is a stateless HTTP request that works across cold starts; SSE requires a persistent connection that is incompatible with serverless compute"
+answer.position = 3
+context = """
+Polling wins for serverless because the server does not need to hold a connection
+open or remember which client is listening. Each tasks/get is a fresh HTTP request:
+read state from the TaskStore, return it, shut down. SSE requires the server to
+keep a connection open, which Lambda and similar stateless platforms cannot do.
+"""
+id = "f21a1b2c-d3e4-5678-abcd-123456800002"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "What does declaring TaskSupport::Optional on a tool mean for the client?"
+prompt.distractors = [
+    "The client MUST send a task parameter on every call to this tool",
+    "The client MUST NOT send a task parameter; the server always runs synchronously",
+    "The client MAY only request task execution when deployed on serverless infrastructure"
+]
+answer.answer = "The client MAY send a task parameter to request async execution, but may also call the tool synchronously without one"
+answer.position = 3
+context = """
+TaskSupport::Optional gives every client a path to the tool: task-aware clients
+get the async path (CreateTaskResult, polling), and sync-only clients get the
+synchronous CallToolResult. The handler branches on extra.is_task_request() to
+decide which path to take per request.
+"""
+id = "f21a1b2c-d3e4-5678-abcd-123456800003"
+
+[[questions]]
+type = "ShortAnswer"
+prompt.prompt = "Which method on RequestHandlerExtra lets a tool handler check whether the current tools/call request is task-augmented (i.e., the client sent a task parameter)?"
+answer.answer = "is_task_request"
+answer.alternatives = ["extra.is_task_request()", "is_task_request()"]
+context = """
+RequestHandlerExtra exposes is_task_request() -> bool. Internally, the server core
+extracts req.task from the parsed CallToolRequest and passes it to
+RequestHandlerExtra via .with_task_request(req.task). The handler never touches
+raw JSON -- it calls extra.is_task_request() and gets a boolean.
+"""
+id = "f21a1b2c-d3e4-5678-abcd-123456800004"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "Why does the TaskStore reject a transition like completed -> working?"
+prompt.distractors = [
+    "It is a database constraint enforced only when the backend is DynamoDB",
+    "Clients are expected to enforce the state machine; the store only stores values",
+    "It is a protocol violation that is logged but not blocked by the store"
+]
+answer.answer = "The store enforces the MCP task state machine so handler code cannot corrupt task state regardless of how it is structured"
+answer.position = 3
+context = """
+The TaskStore is more than storage -- it validates every status transition against
+the MCP state machine. Terminal states (completed, failed, cancelled) accept no
+further transitions, and self-transitions like working -> working are also rejected.
+Your handler only calls create, update_status, and get; the store ensures invariants
+are preserved.
+"""
+id = "f21a1b2c-d3e4-5678-abcd-123456800005"

@@ -42,7 +42,7 @@ impl Default for WebSocketConfig {
             url: "ws://localhost:8080".parse().expect("Valid default URL"),
             auto_reconnect: true,
             reconnect_delay: Duration::from_secs(1),
-            max_reconnect_delay: Duration::from_secs(60),
+            max_reconnect_delay: Duration::from_mins(1),
             max_reconnect_attempts: None,
             ping_interval: Some(Duration::from_secs(30)),
             request_timeout: Duration::from_secs(30),
@@ -294,7 +294,7 @@ mod tests {
         let config = WebSocketConfig::default();
         assert!(config.auto_reconnect);
         assert_eq!(config.reconnect_delay, Duration::from_secs(1));
-        assert_eq!(config.max_reconnect_delay, Duration::from_secs(60));
+        assert_eq!(config.max_reconnect_delay, Duration::from_mins(1));
         assert!(config.max_reconnect_attempts.is_none());
         assert_eq!(config.ping_interval, Some(Duration::from_secs(30)));
         assert_eq!(config.request_timeout, Duration::from_secs(30));
@@ -307,10 +307,10 @@ mod tests {
             url: "wss://example.com:9000/ws".parse().unwrap(),
             auto_reconnect: false,
             reconnect_delay: Duration::from_secs(2),
-            max_reconnect_delay: Duration::from_secs(120),
+            max_reconnect_delay: Duration::from_mins(2),
             max_reconnect_attempts: Some(5),
             ping_interval: None,
-            request_timeout: Duration::from_secs(60),
+            request_timeout: Duration::from_mins(1),
         };
         assert_eq!(config.url.as_str(), "wss://example.com:9000/ws");
         assert!(!config.auto_reconnect);

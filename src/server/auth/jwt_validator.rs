@@ -151,7 +151,7 @@ impl JwtValidator {
     /// Default cache TTL is 1 hour.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn new() -> Self {
-        Self::with_cache_ttl(Duration::from_secs(3600))
+        Self::with_cache_ttl(Duration::from_hours(1))
     }
 
     /// Create a new JWT validator with custom cache TTL.
@@ -775,14 +775,14 @@ mod tests {
     #[test]
     fn test_jwt_validator_creation() {
         let validator = JwtValidator::new();
-        assert_eq!(validator.cache_ttl, Duration::from_secs(3600));
+        assert_eq!(validator.cache_ttl, Duration::from_hours(1));
     }
 
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn test_jwt_validator_custom_ttl() {
-        let validator = JwtValidator::with_cache_ttl(Duration::from_secs(7200));
-        assert_eq!(validator.cache_ttl, Duration::from_secs(7200));
+        let validator = JwtValidator::with_cache_ttl(Duration::from_hours(2));
+        assert_eq!(validator.cache_ttl, Duration::from_hours(2));
     }
 
     #[cfg(all(feature = "jwt-auth", not(target_arch = "wasm32")))]

@@ -2,9 +2,9 @@
 gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Protocol Modernization
-status: Phase 80 complete
-stopped_at: Phase 77 Plan 09 complete (Phase 77 closeout — DRY cleanup + CHANGELOG date + Toyota Way quality-gate certification + manual TTY UX checkpoint approved)
-last_updated: "2026-05-13T03:51:50.882Z"
+status: Executing Phase 81
+stopped_at: Phase 81 context gathered
+last_updated: "2026-05-15T20:07:24.629Z"
 progress:
   total_phases: 40
   completed_phases: 34
@@ -20,12 +20,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-10)
 
 **Core value:** Close credibility and DX gaps where rmcp outshines PMCP -- documentation accuracy, feature gate presentation, macro documentation, example index, repo hygiene.
-**Current focus:** Phase 80 — SEP-2640 Skills Support
+**Current focus:** Phase 81 — update-pmcp-book-and-pmcp-course-with-v2-advanced-topics-cod
 
 ## Current Position
 
-Phase: 80 — COMPLETE
-Plan: 1 of 3
+Phase: 81 (update-pmcp-book-and-pmcp-course-with-v2-advanced-topics-cod) — EXECUTING
+Plan: 1 of 7
 Next: Phase 74 (cargo pmcp auth subcommand, multi-server OAuth token cache) — reordered ahead of Phase 73 per operator direction 2026-04-21
 After: Phase 73 (Typed client helpers + list_all pagination, PARITY-CLIENT-01)
 Operator follow-ups (deferred from Phase 75 Wave 5, not blocking Phase 74): (a) merge Phase 75 Wave 5 + 75.5 to paiml/rust-mcp-sdk:main; (b) post-merge run `gh workflow run quality-badges.yml -R paiml/rust-mcp-sdk` and append observation to `.planning/phases/75-fix-pmat-issues/75-05-GATE-VERIFICATION.md` "## Badge flip observation" section.
@@ -110,6 +110,7 @@ v2.1 decisions:
 - Phase 79 cross-AI reviewed (2026-05-03 via `/gsd-review --phase 79 --codex --gemini`, REVIEWS.md commit `714b5b2d`): both reviewers (Codex/gpt-5 + Gemini/gemini-3-pro-preview) returned **HIGH** overall risk with 2 HIGH-CONSENSUS + 3 reviewer-unique HIGH findings. Codex went deeper into source code than the plan-checker had: read `cargo-pmcp/src/commands/{main,test/check,test/conformance,test/apps,auth,templates/mcp_app}.rs` and `crates/mcp-tester/src/report.rs` directly, surfacing real codebase mismatches the plan-checker missed because it only read the planning artifacts. Five HIGH findings: HIGH-1 CONSENSUS (stdout regex parsing brittle — `--quiet` suppresses output the plan tries to parse; pretty output lives in `report.rs`, not the test commands themselves; planned `(8/8 tests passed)` strings don't actually appear in current output); HIGH-2 CONSENSUS (`on_failure="fail"` insufficient for CI/CD — generic nonzero exit indistinguishable from "deploy did not happen"); HIGH-C1 (multi-widget cache invalidation broken — single `PMCP_WIDGET_DIR` + single-dir `build.rs` means last widget wins for multi-`[[widgets]]` projects); HIGH-C2 (`resolve_auth_token` fights existing `AuthMethod::None` path which already does Phase 74 cache + auto-refresh; parent-side static-token injection LOSES refresh behavior); HIGH-G1 (`build.rs` breaks local `cargo run` dev loop — fallback to `cargo:rerun-if-changed=Cargo.toml` means `include_str!` doesn't rebuild on JS changes); HIGH-G2 (`on_failure="rollback"` parse-but-warn-fallback is a UX trap — operators who explicitly set "rollback" will assume rollback happened and ignore the broken-but-live state). Plus 3 MEDIUM polish items (scaffold target uses `WidgetDir` not `include_str!` so build.rs scaffold is mostly harmless but doesn't address the failure mode for default new apps; `build`/`install` whitespace-split breaks quoting; `node_modules` heuristic blunt for Yarn PnP).
 - Phase 79 replanned via `/gsd-plan-phase 79 --reviews` (2026-05-03, revision 3 review-driven): expanded 4 waves → **5 waves**, added NEW Plan 79-05 (Wave 0) per operator decision on HIGH-1 scope expansion. Wave 0 lands `--format=json` flag on `cargo pmcp test {check,conformance,apps}` + `PostDeployReport` typed contract in `crates/mcp-tester/src/post_deploy_report.rs` (sibling to existing `report.rs`); Wave 3 verifier consumes structured JSON via `serde_json::from_str::<PostDeployReport>` instead of regex-parsing pretty terminal text. Per operator decision on HIGH-G2 the rollback variant is **hard-rejected at config validation + clap parse** (NOT reserved-but-warned) with verbatim `ROLLBACK_REJECT_MESSAGE` constant — loses forward-compat reservation, future phase that ships rollback adds the variant + migration note. HIGH-C1 fixed via `PMCP_WIDGET_DIRS` colon-list (Unix `PATH` convention) joined by orchestrator + split by build.rs template. HIGH-C2 fixed by deleting `resolve_auth_token` entirely and `InfraErrorKind::AuthMissing` variant — subprocesses inherit deploy's env via Tokio Command default and self-resolve via existing `AuthMethod::None` path at `cargo-pmcp/src/commands/auth.rs:99-135` (Codex's claim independently verified by checker). HIGH-G1 fixed via `discover_local_widget_dirs` fallback in build.rs template walking `CARGO_MANIFEST_DIR + ../widget|widgets/dist` up to 3 parent levels when env unset. HIGH-2 augmented (NOT replaced) loud-banner UX with new exit code 3 (BrokenButLive — "deploy succeeded but new revision broken and live") distinct from 2 (InfraError) + GitHub Actions `::error::` annotation auto-emitted when `CI=true` env detected. MEDIUM polish folded in: `cargo pmcp app new --embed-widgets` flag scaffolds `include_str!` + build.rs (default scaffold stays `WidgetDir` — Failure Mode B literally cannot occur for default new apps); `WidgetConfig.build`/`.install` schema changed `Option<String>` → `Option<Vec<String>>` argv arrays; `is_yarn_pnp` helper checks `.pnp.cjs`/`.pnp.loader.mjs` markers and skips `node_modules` heuristic. Net cog budget DECREASED ~25 (deletions outweigh additions). Test count INCREASED to 132 across 6 plans (was 88 in rev2). Version bumps now: `cargo-pmcp 0.11.0 → 0.12.0` + `mcp-tester 0.5.3 → 0.6.0` (NEW — Plan 79-05 adds public `PostDeployReport` module). One BLOCKER introduced by rev3 planner (malformed YAML frontmatter in 79-01 — 8 lines mis-indented by 2 spaces) was fixed mechanically post-checker by orchestrator; all 6 plans now `python3 yaml.safe_load` cleanly. Final verdict: **APPROVED** (after YAML fix). To execute: `/gsd-execute-phase 79`.
 - Phase 79 EXECUTED + VERIFIED (2026-05-03, sequential wave-by-wave with explicit dep ordering per operator choice): 5 waves × 17 commits × 121 tests, 24/24 verification dims passed. Wave 0 (3 commits, 18 tests) shipped `PostDeployReport` typed contract + `--format=json` flag — unblocks Wave 3 verifier consuming serde_json::from_str instead of regex. Wave 1 (4 commits, 28 tests) shipped schema types `WidgetsConfig`/`PostDeployTestsConfig`/`OnFailure{Fail|Warn}` with hard-reject Deserialize+FromStr for "rollback" using verbatim `ROLLBACK_REJECT_MESSAGE` constant. Wave 2 (3 commits, 24 tests) shipped widget pre-build orchestrator + Step 2.5 deploy hook + `PMCP_WIDGET_DIRS` colon-joined-once env var + `is_yarn_pnp` early-return. Wave 3 (3 commits, 39 tests) shipped post-deploy verifier + `OrchestrationFailure::BrokenButLive{exit_code:3}` + `emit_ci_annotation` for `CI=true` GitHub Actions `::error::` line + clap value_parser rejecting rollback at parse + 4 verify-half flags; built 170-line dep-free `mock_test_binary` to enable subprocess-shape integration tests without the full MCP-server fixture. Wave 4 (4 commits, 12 tests) shipped doctor `check_widget_rerun_if_changed` (WidgetDir-silent vs include_str!-warn) + `cargo pmcp app new --embed-widgets` opt-in scaffold + build.rs template (PMCP_WIDGET_DIRS split + CARGO_MANIFEST_DIR local-discovery 3-parent walk) + `widget_prebuild_demo` runnable example + `fuzz_widgets_config` fuzz target + version bumps (cargo-pmcp 0.11.0 → 0.12.0, mcp-tester 0.5.3 → 0.6.0) + dated CHANGELOG entries + auto-fixed pmcp-server's mcp-tester pin bump (0.5.0 → 0.6.0 for semver). All 5 wave SUMMARYs + phase-level 79-SUMMARY committed. **Verifier independent confirmations:** `cargo build --release -p cargo-pmcp -p mcp-tester` clean in 2m; `cargo test -p cargo-pmcp -- --test-threads=1` 1064 passed across 17 suites; `cargo test -p mcp-tester -- --test-threads=1` 205 passed across 9 suites; `cargo run -p cargo-pmcp --example widget_prebuild_demo` exits 0; live `::error::` annotation observed on stderr during test run (HIGH-2 runtime path exercised); `grep -rn "parse_conformance_summary|parse_apps_summary|resolve_auth_token"` returns 0 matches across cargo-pmcp/src + crates/mcp-tester/src (HIGH-1 + HIGH-C2 supersessions confirmed at code level). **Two git-safety protocol violations during execution:** Wave 0's executor ran `git stash` and lost the operator's pre-existing dirty source files (4 files, ~400 lines pentest WIP) — recovered byte-identical from dangling stash commit `867177ca` via `git checkout`. Wave 3's executor also ran `git stash` despite hardened prompt language but recovered cleanly via `git stash pop`. Operator restored once + chose hardened-prompts strategy for remaining waves; orchestrator independently verified protected-files snapshot after each spawn (passed every time). One INFO-level cleanup deferred per verifier: `cargo-pmcp/src/deployment/mod.rs:21-23` re-exports unused at root-crate clippy level (Makefile:146 lints `pmcp` workspace member only, so quality-gate exits 0 — non-blocking). cargo-pmcp 0.12.0 + mcp-tester 0.6.0 release-ready. To ship: tag `v0.12.0` or run `/gsd-ship` for the standard release flow.
+- Phase 81 added (2026-05-14): Update pmcp-book and pmcp-course with v2 advanced topics (code-mode, tasks, skills) — refresh the developer learning materials to cover advanced topics that landed across recent milestones but never made it into the book/course: code-mode (Phase 67.1/67.2, `pmcp-code-mode` crate, validation + execution + derive hardening), MCP Tasks (SEP-1686, experimental shared client/server state), MCP Skills (Phase 80, SEP-2640, dual-surface skill + prompt, byte-equal invariant), plus any other batteries-included features that grew documentation debt during v2.x. Scope to be defined during `/gsd-discuss-phase`: which book chapters need rewrites vs. additions, which course parts add new chapters, whether code-mode/tasks/skills each warrant their own dedicated chapter or fold into existing advanced sections, and what to do about the existing "Part VIII: Advanced - MCP Apps (experimental)" course bucket (likely becomes "Part VIII: Advanced - MCP Apps, Tasks, Skills, Code Mode"). Out of scope: rewriting the foundations parts; AI-assisted dev section (Part VI is current); deployment chapters. Depends on Phase 80. To plan: `/gsd-plan-phase 81`.
 
 ### Pending Todos
 
@@ -118,6 +119,21 @@ v2.1 decisions:
 ### Blockers/Concerns
 
 - Wave 5 must patch `quality-badges.yml` per D-11-B — without that, no amount of complexity reduction flips the badge.
+
+### Quick Tasks Completed
+
+| # | Description | Date | Commit | Status | Directory |
+|---|-------------|------|--------|--------|-----------|
+| 260516-b2p | AuthProvider::on_unauthorized + transport retry-once + MSRV 1.91 + pmcp 2.8.0 ripple | 2026-05-16 | aba393aa | Shipped (PR [#256](https://github.com/paiml/rust-mcp-sdk/pull/256)) | [260516-b2p-add-authprovider-on-unauthorized-hook-tr](./quick/260516-b2p-add-authprovider-on-unauthorized-hook-tr/) |
+
+### Last Activity
+
+**2026-05-16** — Shipped v2.8.0 bundle release via PR [#256](https://github.com/paiml/rust-mcp-sdk/pull/256):
+- Quick task 260516-b2p (AuthProvider::on_unauthorized + transport retry-once)
+- Phase 80 (SEP-2640 Agent Skills)
+- Phase 81 (pmcp-book + pmcp-course v2 topic updates)
+- MSRV bump 1.83 → 1.91
+- Workspace dep ripple to pmcp 2.8.0 (publishes 7 crates on `v2.8.0` tag)
 
 ### Phase 75 Wave 2 Decisions (2026-04-24)
 
@@ -166,6 +182,6 @@ v2.1 decisions:
 
 ## Session Continuity
 
-Last session: 2026-05-03T22:02:56.763Z
-Stopped at: Phase 77 Plan 09 complete (Phase 77 closeout — DRY cleanup + CHANGELOG date + Toyota Way quality-gate certification + manual TTY UX checkpoint approved)
+Last session: 2026-05-15T17:23:53.365Z
+Stopped at: Phase 81 context gathered
 Resume: Phase 77 is COMPLETE — all 9 plans executed, all 11 REQ-77-* requirements marked Complete in REQUIREMENTS.md. Run `/gsd-verify-work` for Phase 77 to validate the full deliverable. After verification, the next focus is Phase 74 (cargo pmcp auth subcommand, multi-server OAuth token cache) — reordered ahead of Phase 73 per operator direction 2026-04-21. Plan 09 shipped: (1) `commands/configure/name_validation.rs` (101 lines, 10 unit tests) consolidating the inline `validate_target_name` from add.rs + use_cmd.rs into a single private module — doctest marked `ignore` per HIGH-1 (commands::configure::* is bin-only); (2) CHANGELOG dated `## [0.11.0] - 2026-04-26`; (3) `make quality-gate` exits 0 + `pmat quality-gate --fail-on-violation --checks complexity` exits 0 (PMAT 3.15.0 — matches CI command per Phase 75 Wave 5 D-07); (4) Rule 3 deviation absorbed: `add.rs::build_entry_from_args_or_prompts` decomposed via P4 per-variant dispatch to drop cog from 24 to <23; (5) Manual TTY checkpoint (REQ-77-01 interactive add prompts + REQ-77-05 banner UX including --quiet suppression and PMCP_TARGET override note under --quiet per D-03) approved verbatim "approved" by operator. Fuzz runtime stress (60s) deferred to CI/nightly per Plan 08's same disposition. 80/80 configure-suite tests pass. 2 commits: 2e3ec056 + 599ff26c.

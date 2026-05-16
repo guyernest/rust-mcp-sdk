@@ -343,7 +343,7 @@ impl Default for EventStoreConfig {
             max_events: 10000,
             max_age: chrono::Duration::hours(24),
             auto_cleanup: true,
-            cleanup_interval: std::time::Duration::from_secs(300),
+            cleanup_interval: std::time::Duration::from_mins(5),
         }
     }
 }

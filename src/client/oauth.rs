@@ -729,7 +729,7 @@ impl OAuthHelper {
         tracing::info!("Waiting for authorization...");
 
         // Wait for callback with timeout
-        let authorization_code = tokio::time::timeout(Duration::from_secs(300), rx)
+        let authorization_code = tokio::time::timeout(Duration::from_mins(5), rx)
             .await
             .map_err(|_| {
                 Error::internal("Timeout waiting for OAuth callback (5 minutes)".to_string())

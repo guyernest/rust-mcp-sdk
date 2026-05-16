@@ -273,7 +273,7 @@ impl RecoveryMetrics {
 /// let circuit = RecoveryStrategy::CircuitBreaker {
 ///     failure_threshold: 5,
 ///     success_threshold: 3,
-///     timeout: Duration::from_secs(60),
+///     timeout: Duration::from_mins(1),
 /// };
 /// ```
 #[derive(Debug, Clone)]
@@ -591,7 +591,7 @@ impl std::fmt::Debug for CircuitBreaker {
 /// let config = CircuitBreakerConfig {
 ///     failure_threshold: 5,
 ///     success_threshold: 3,
-///     timeout: Duration::from_secs(60),
+///     timeout: Duration::from_mins(1),
 /// };
 /// ```
 #[derive(Debug, Clone)]

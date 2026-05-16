@@ -10,11 +10,14 @@ rustflags = [
     # LTO is handled in individual Cargo.toml files to avoid issues with dependencies
 ]
 
-# Native build optimizations
-[target.'cfg(not(target_arch = "wasm32"))']
-rustflags = [
-    "-C", "target-cpu=native", # Optimize for current CPU
-]
+# Note: `target-cpu=native` was previously set here as a build-optimization
+# default. It was removed because it also applies to proc-macro builds, and
+# GitHub Actions runners SIGILL when rustc dlopens a proc-macro compiled with
+# instructions the runner CPU doesn't actually support (see PR #256).
+# Downstream consumers get host-default codegen anyway; the optimization only
+# helped binaries run locally on the developer's own machine. If you want it
+# back for a specific local benchmark, set `RUSTFLAGS="-C target-cpu=native"`
+# in your shell.
 
 [alias]
 # Convenient aliases for WASM builds

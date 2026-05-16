@@ -85,7 +85,7 @@ impl GenericOidcConfig {
             client_id: client_id.into(),
             client_secret: None,
             claim_mappings: ClaimMappings::default(),
-            cache_ttl: Duration::from_secs(3600),
+            cache_ttl: Duration::from_hours(1),
             leeway_seconds: 60,
         }
     }
@@ -111,7 +111,7 @@ impl GenericOidcConfig {
             client_id: client_id.into(),
             client_secret: None,
             claim_mappings: ClaimMappings::google(),
-            cache_ttl: Duration::from_secs(3600),
+            cache_ttl: Duration::from_hours(1),
             leeway_seconds: 60,
         }
     }
@@ -126,7 +126,7 @@ impl GenericOidcConfig {
             client_id: client_id.into(),
             client_secret: None,
             claim_mappings: ClaimMappings::auth0(),
-            cache_ttl: Duration::from_secs(3600),
+            cache_ttl: Duration::from_hours(1),
             leeway_seconds: 60,
         }
     }
@@ -141,7 +141,7 @@ impl GenericOidcConfig {
             client_id: client_id.into(),
             client_secret: None,
             claim_mappings: ClaimMappings::okta(),
-            cache_ttl: Duration::from_secs(3600),
+            cache_ttl: Duration::from_hours(1),
             leeway_seconds: 60,
         }
     }
@@ -156,7 +156,7 @@ impl GenericOidcConfig {
             client_id: client_id.into(),
             client_secret: None,
             claim_mappings: ClaimMappings::entra(),
-            cache_ttl: Duration::from_secs(3600),
+            cache_ttl: Duration::from_hours(1),
             leeway_seconds: 60,
         }
     }
@@ -832,7 +832,7 @@ mod tests {
         assert_eq!(config.issuer, "https://auth.example.com");
         assert_eq!(config.client_id, "my-client-id");
         assert!(config.client_secret.is_none());
-        assert_eq!(config.cache_ttl, Duration::from_secs(3600));
+        assert_eq!(config.cache_ttl, Duration::from_hours(1));
         assert_eq!(config.leeway_seconds, 60);
     }
 
@@ -914,7 +914,7 @@ mod tests {
 
     #[test]
     fn test_cached_data_creation() {
-        let data: CachedData<String> = CachedData::new("test".to_string(), Duration::from_secs(60));
+        let data: CachedData<String> = CachedData::new("test".to_string(), Duration::from_mins(1));
         assert_eq!(data.data, "test");
         assert!(!data.is_expired());
     }
@@ -929,7 +929,7 @@ mod tests {
 
     #[test]
     fn test_cached_data_debug() {
-        let data: CachedData<String> = CachedData::new("test".to_string(), Duration::from_secs(60));
+        let data: CachedData<String> = CachedData::new("test".to_string(), Duration::from_mins(1));
         let debug_str = format!("{:?}", data);
         assert!(debug_str.contains("CachedData"));
     }

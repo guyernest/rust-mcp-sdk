@@ -50,7 +50,7 @@ use crate::types::ServerRequest;
 /// Shorter than `ElicitationManager`'s 5-minute default because
 /// sampling/`list_roots` tend to be short and synchronous from the
 /// client's perspective.
-pub const DEFAULT_DISPATCH_TIMEOUT: Duration = Duration::from_secs(60);
+pub const DEFAULT_DISPATCH_TIMEOUT: Duration = Duration::from_mins(1);
 
 static DISPATCH_COUNTER: AtomicU64 = AtomicU64::new(1);
 
