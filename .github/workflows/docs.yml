@@ -46,7 +46,11 @@ jobs:
 
       - name: Install mdbook-quiz
         run: |
-          cargo install mdbook-quiz --locked || echo "mdbook-quiz installation failed, continuing without quiz support"
+          # Pin to 0.4.0 — 0.5.0 introduced an incompatible RenderContext
+          # parser that fails against mdbook 0.4.40 with "Unable to parse the input".
+          # Same pin as course.yml. --force ensures a downgrade if the cached
+          # ~/.cargo/bin/mdbook-quiz from a prior run was 0.5.0.
+          cargo install mdbook-quiz --locked --force --version 0.4.0 || echo "mdbook-quiz installation failed, continuing without quiz support"
 
       - name: Install mdbook-exercises
         run: |
