@@ -124,7 +124,16 @@ v2.1 decisions:
 
 | # | Description | Date | Commit | Status | Directory |
 |---|-------------|------|--------|--------|-----------|
-| 260516-b2p | AuthProvider::on_unauthorized + transport retry-once + MSRV 1.91 + pmcp 2.8.0 ripple | 2026-05-16 | aba393aa | Verified | [260516-b2p-add-authprovider-on-unauthorized-hook-tr](./quick/260516-b2p-add-authprovider-on-unauthorized-hook-tr/) |
+| 260516-b2p | AuthProvider::on_unauthorized + transport retry-once + MSRV 1.91 + pmcp 2.8.0 ripple | 2026-05-16 | aba393aa | Shipped (PR [#256](https://github.com/paiml/rust-mcp-sdk/pull/256)) | [260516-b2p-add-authprovider-on-unauthorized-hook-tr](./quick/260516-b2p-add-authprovider-on-unauthorized-hook-tr/) |
+
+### Last Activity
+
+**2026-05-16** — Shipped v2.8.0 bundle release via PR [#256](https://github.com/paiml/rust-mcp-sdk/pull/256):
+- Quick task 260516-b2p (AuthProvider::on_unauthorized + transport retry-once)
+- Phase 80 (SEP-2640 Agent Skills)
+- Phase 81 (pmcp-book + pmcp-course v2 topic updates)
+- MSRV bump 1.83 → 1.91
+- Workspace dep ripple to pmcp 2.8.0 (publishes 7 crates on `v2.8.0` tag)
 
 ### Phase 75 Wave 2 Decisions (2026-04-24)
 
