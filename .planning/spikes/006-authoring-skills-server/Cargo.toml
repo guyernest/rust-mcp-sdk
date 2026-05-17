@@ -1,0 +1,22 @@
+[package]
+name = "spike-006-authoring-skills-server"
+version = "0.0.1"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "spike-006"
+path = "src/main.rs"
+
+[dependencies]
+# pmcp with the SEP-2640 Skills feature gated on. Skill / Skills /
+# bootstrap_skill_and_prompt all live upstream now (`src/server/skills.rs`
+# + `src/server/mod.rs:2687-2743`) — this spike composes them, it does
+# NOT redefine them.
+pmcp = { path = "../../..", default-features = false, features = ["skills"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+async-trait = "0.1"
+serde_json = "1"
+anyhow = "1"
+
+[workspace]
