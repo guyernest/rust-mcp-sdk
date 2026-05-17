@@ -129,7 +129,7 @@ v2.1 decisions:
 
 ### Last Activity
 
-**2026-05-17** — Completed quick task 260517-hi5: extract `x-pmcp-claim-custom-*` headers in `extract_auth_from_proxy_headers` so Cognito `custom:*` attributes forwarded by pmcp.run mcp-proxy surface via `AuthContext.claims["custom:<snake>"]`. Additive change (no public-API break); 4 unit tests verbatim from spec; `docs/proxy-contract.md` created; CHANGELOG `[Unreleased]` entry. `make quality-gate` green end-to-end on clean worktree. Merge commit `bbc019ba` on `release/pmcp-v2.8.0`.
+**2026-05-17** — Completed quick task 260517-hi5: extract `x-pmcp-claim-custom-*` headers in `extract_auth_from_proxy_headers` so Cognito `custom:*` attributes forwarded by pmcp.run mcp-proxy surface via `AuthContext.claims["custom:<snake>"]`. Additive change (no public-API break); 4 unit tests verbatim from spec; `docs/proxy-contract.md` created; CHANGELOG `[2.8.1]` entry. `make quality-gate` green end-to-end on clean worktree. Bumped to pmcp 2.8.1; PR #257 opened to upstream/main.
 
 **2026-05-16** — Shipped v2.8.0 bundle release via PR [#256](https://github.com/paiml/rust-mcp-sdk/pull/256):
 - Quick task 260516-b2p (AuthProvider::on_unauthorized + transport retry-once)
