@@ -6,10 +6,9 @@ function turns these proxy-forwarded headers into an `AuthContext` for every
 incoming MCP request.
 
 The contract is implemented on the platform side by pmcp.run's `mcp-proxy`
-(see `pmcp-run/amplify/functions/mcp-proxy-rust/src/main.rs`) and on the SDK
-side by `src/server/streamable_http_server.rs`. It is **additive and
-backwards-compatible**: new header families are introduced by appending rows
-to the table below; existing rows do not change semantics.
+and on the SDK side by `src/server/streamable_http_server.rs`. It is
+**additive and backwards-compatible**: new header families are introduced
+by appending rows to the table below; existing rows do not change semantics.
 
 ## Header families
 
@@ -43,8 +42,7 @@ an empty value is dropped — no claim is inserted in either case.
 ## Trust model
 
 pmcp.run's `mcp-proxy` strips every inbound `x-pmcp-claim-custom-*` header
-from client requests **before** injecting its own platform-vetted values
-(strip-rule at `pmcp-run/amplify/functions/mcp-proxy-rust/src/main.rs:3556-3559`).
+from client requests **before** injecting its own platform-vetted values.
 Any header observed inside `extract_auth_from_proxy_headers` is therefore
 trusted and authoritative: SDK consumers do **not** need to re-validate the
 value, check signatures, or apply additional authorization rules at this
