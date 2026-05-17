@@ -97,6 +97,25 @@ SDK lift (004).
 - **`#[pmcp::sql_server]` / `#[pmcp::openapi_server]` proc-macros are
   deferred.** The toolkit being public on crates.io is the prerequisite
   — without it, the macro would expand to types nobody can depend on.
+- **Public `ServerBuilder` needs `tool_arc` + `prompt_arc`.** Spike 004
+  hit this directly — the user-facing `pmcp::ServerBuilder`
+  (`src/server/mod.rs:1741`) only exposes `.tool(name, impl ToolHandler)`
+  and `.prompt(name, impl PromptHandler)` (by value), forcing every
+  config-driven toolkit author to write a 20-line delegating-wrapper
+  shim to share an `Arc<Handler>` between the builder and an
+  in-process handler map. `ServerCoreBuilder` (`src/server/builder.rs:203`)
+  already has the arc variants; lift them to the public builder.
+- **Per-backend connector trait MUST expose `schema_text()`** (or
+  equivalent). The code-mode bootstrap prompt body needs a schema
+  description to seed the LLM with the long-tail surface; spike 004
+  surfaced this naturally when wiring the prompt handler. SQLite impl
+  can hand back the seed schema blob; production impls introspect
+  `sqlite_master`-style metadata.
+- **`Server::handle_request` is private** — external toolkit code
+  cannot drive a built `pmcp::Server` in-process. Either expose a
+  public `in_process` driver, or document handler-level testing
+  (the pattern spike 002 + spike 004 both used) as the recommended
+  way to test a config-driven toolkit.
 
 ## Spikes
 
@@ -105,7 +124,7 @@ SDK lift (004).
 | 001 | skills-as-resources-mapping | standard | A PMCP server can publish a SEP-2640 Skill via existing `resources/*` primitives, and a representative client can discover + load it with no protocol-extension code. | ✓ VALIDATED (with caveats) | skills, sep-2640, resources, wire-protocol |
 | 002 | skill-ergonomics-pragmatic | standard | A PMCP server author can register a skill with a `register_skill(...)` builder (or `#[pmcp::skill]` macro) that mirrors the `register_tool_typed` DX — no hand-rolling URIs, mime types, or naming. | ✓ VALIDATED | skills, dx, batteries-included, builder |
 | 003 | schema-server-surface-diff | standard | Given the three pmcp-run built-in core crates (sql/graphql/openapi), when their config schemas, runtime traits, code-mode handlers, and shared deps are structurally diffed, then either a shared SDK-level abstraction is visible with a concrete shape — or shown to be illusory. | ⚠ PARTIAL → reframed ✓ VALIDATED (shared abstraction already extracted at `mcp-server-common` + `pmcp-code-mode`; single per-backend trait NOT viable; lift mcp-server-common to crates/) | schema-server, structural-diff, builtin-servers |
-| 004 | schema-server-thin-slice-sql | standard | Given the shared abstraction surfaced by 003, when a minimal SDK-level schema-server primitive is implemented with a SQLite reference connector, then a tiny `config.toml` + `schema.sql` + ~15-line `main.rs` produces a runnable MCP server end-to-end, validating tools/list, tools/call, and the code-mode bootstrap surface. | PENDING | schema-server, sdk-lift, sqlite, dx |
+| 004 | schema-server-thin-slice-sql | standard | Given the shared abstraction surfaced by 003, when a minimal SDK-level schema-server primitive is implemented with a SQLite reference connector, then a tiny `config.toml` + `schema.sql` + ~15-line `main.rs` produces a runnable MCP server end-to-end, validating tools/list, tools/call, and the code-mode bootstrap surface. | ✓ VALIDATED (user-facing surface 12 LoC; toolkit slice 346 LoC; SQLite backend 110 LoC; 0 per-tool Rust handlers; 2 DX gaps surfaced upstream) | schema-server, sdk-lift, sqlite, dx |
 
 **Deferred (not in this session):**
 
