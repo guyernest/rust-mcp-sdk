@@ -125,8 +125,11 @@ v2.1 decisions:
 | # | Description | Date | Commit | Status | Directory |
 |---|-------------|------|--------|--------|-----------|
 | 260516-b2p | AuthProvider::on_unauthorized + transport retry-once + MSRV 1.91 + pmcp 2.8.0 ripple | 2026-05-16 | aba393aa | Shipped (PR [#256](https://github.com/paiml/rust-mcp-sdk/pull/256)) | [260516-b2p-add-authprovider-on-unauthorized-hook-tr](./quick/260516-b2p-add-authprovider-on-unauthorized-hook-tr/) |
+| 260517-hi5 | Extract `x-pmcp-claim-custom-*` headers in `extract_auth_from_proxy_headers` (Cognito `custom:*` attribute forwarding) | 2026-05-17 | bbc019ba | Done | [260517-hi5-extract-x-pmcp-claim-custom-headers-in-e](./quick/260517-hi5-extract-x-pmcp-claim-custom-headers-in-e/) |
 
 ### Last Activity
+
+**2026-05-17** — Completed quick task 260517-hi5: extract `x-pmcp-claim-custom-*` headers in `extract_auth_from_proxy_headers` so Cognito `custom:*` attributes forwarded by pmcp.run mcp-proxy surface via `AuthContext.claims["custom:<snake>"]`. Additive change (no public-API break); 4 unit tests verbatim from spec; `docs/proxy-contract.md` created; CHANGELOG `[2.8.1]` entry. `make quality-gate` green end-to-end on clean worktree. Bumped to pmcp 2.8.1; PR #257 opened to upstream/main.
 
 **2026-05-16** — Shipped v2.8.0 bundle release via PR [#256](https://github.com/paiml/rust-mcp-sdk/pull/256):
 - Quick task 260516-b2p (AuthProvider::on_unauthorized + transport retry-once)

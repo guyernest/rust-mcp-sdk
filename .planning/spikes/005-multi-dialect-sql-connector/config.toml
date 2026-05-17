@@ -1,0 +1,52 @@
+# Spike 005: ONE config.toml drives FOUR dialects.
+#
+# The user writes their pareto-tool SQL once, using the canonical `:name`
+# placeholder syntax. Each connector translates to its dialect's native
+# placeholder format at execute time:
+#
+#   Postgres: SELECT ... WHERE id = :id     →  WHERE id = $1
+#   MySQL:    SELECT ... WHERE id = :id     →  WHERE id = ?
+#   Athena:   SELECT ... WHERE id = :id     →  WHERE id = ?
+#   SQLite:   SELECT ... WHERE id = :id     →  WHERE id = :id   (native)
+
+[server]
+name        = "employee-directory"
+version     = "0.1.0"
+description = "Cross-dialect demonstration: one config, four backends."
+
+[[tools]]
+name        = "get_employee_by_id"
+description = "Look up a single employee by id."
+sql         = "SELECT id, name, department, salary FROM employees WHERE id = :id"
+
+[[tools.parameters]]
+name        = "id"
+type        = "integer"
+description = "Employee id."
+required    = true
+
+[[tools]]
+name        = "list_employees_by_department"
+description = "List employees in a department, ordered by salary descending."
+sql         = """
+SELECT id, name, department, salary
+FROM employees
+WHERE department = :department
+ORDER BY salary DESC
+LIMIT :limit_n
+"""
+
+[[tools.parameters]]
+name        = "department"
+type        = "string"
+description = "Department name."
+required    = true
+
+[[tools.parameters]]
+name        = "limit_n"
+type        = "integer"
+description = "Max rows."
+required    = false
+
+[code_mode]
+enabled = true

@@ -1,0 +1,36 @@
+[package]
+name = "spike-004-schema-server-thin-slice-sql"
+version = "0.0.1"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "spike-004"
+path = "src/main.rs"
+
+[dependencies]
+# Path-dep on pmcp keeps spike + SDK in lock-step per CONVENTIONS.
+pmcp = { path = "../../..", default-features = false }
+
+# Async runtime (matches pmcp's runtime).
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+async-trait = "0.1"
+
+# Serde + TOML for the config loader (this is what the toolkit slice would
+# expose). serde_json for wire-format assertions on tool responses.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "1"
+
+# Top-level error handling.
+anyhow = "1"
+
+# SQLite reference connector — `bundled` feature avoids depending on the
+# host's libsqlite. This is the ONE new external crate this spike pulls in
+# vs the spike 001/002 baseline; it's justified because the question is
+# specifically whether the toolkit composes with a real DB backend.
+rusqlite = { version = "0.32", features = ["bundled"] }
+
+# Declare this as its own workspace so the parent (rust-mcp-sdk) workspace
+# does not try to absorb it.
+[workspace]
