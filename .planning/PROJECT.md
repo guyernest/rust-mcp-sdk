@@ -60,16 +60,19 @@ Tool handlers can manage long-running operations through a durable task lifecycl
 
 ### Active
 
-## Current Milestone: v2.1 rmcp Upgrades
+## Current Milestone: v2.2 Configuration-Only MCP Servers
 
-**Goal:** Close the credibility and developer-experience gaps where the official Rust MCP SDK (rmcp) outshines PMCP — documentation accuracy, feature gate presentation, macro documentation, example index, and repo hygiene.
+**Goal:** Shift PMCP from a code-based SDK to one that lets enterprise developers build production-grade MCP servers for SQL databases from configuration + schema files alone — without writing Rust — while preserving PMCP's security, tools/resources/prompts/tasks/skills standards and offering pmcp.run hosting as a deployment target.
 
 **Target features:**
-- Fix examples/README.md with accurate, coherent example index covering all transport types and use cases
-- Fix macros README drift — document full #[mcp_tool], #[mcp_prompt], #[mcp_server] support
-- Tighten feature gating and docs.rs presentation with explicit feature coverage annotations
-- Improve macro documentation and ergonomics — coherent pattern documentation
-- General repo hygiene — README accuracy, consistent doc quality, transport embedding story
+- Upstream DX prerequisites: lift `tool_arc` / `prompt_arc` from `ServerCoreBuilder` to public `ServerBuilder`; expose or document an in-process driver so external toolkits can integration-test built `pmcp::Server`s
+- `crates/pmcp-server-toolkit/`: promote `mcp-server-common` (~2.2k LoC) + `pmcp-code-mode` shapes to a public crates.io-published SDK crate (AuthProvider, SecretsProvider, StaticResourceHandler, StaticPromptHandler, HMAC tokens, ToolInfo synthesis from `[[tools]]` config)
+- `SqlConnector` trait + `Dialect` enum (3 methods + 2 free helpers) with per-backend crates: `pmcp-toolkit-postgres`, `pmcp-toolkit-mysql`, `pmcp-toolkit-athena`, plus SQLite as a feature flag — all pure-Rust, Lambda-friendly, no Docker
+- Four DX shapes ship together: Shape A (`pmcp-sql-server` pure-config binary), Shape B (`cargo pmcp new --kind sql-server` scaffolding), Shape C (12-line `main.rs` library use), Shape D (pmcp.run hosting via `cargo pmcp deploy`)
+- `crates/pmcp-config-helper/`: Type 2 SEP-2640 authoring-skills MCP server for `config.toml` authoring (root SKILL.md + per-backend references + worked examples; dual-surface invariant preserved)
+- Dogfood: rewrite `crates/pmcp-server` (SDK dev-tools MCP server) on top of the new toolkit
+- Type 1 skills content updates in `ai-agents/` with toolkit patterns for coding agents writing Rust against the toolkit
+- GraphQL and OpenAPI toolkits explicitly deferred (OpenAPI additionally gated by Spike 007 — auth-policy pluggability — not yet run)
 
 ### Future
 
@@ -188,4 +191,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-05-03 after Phase 79 gap closure (raw-HTML / CDN-import widget pre-build guard, cargo-pmcp 0.12.1); previously 2026-04-26 after Phase 77 (cargo pmcp configure commands, cargo-pmcp 0.11.0)*
+*Last updated: 2026-05-17 — milestone v2.2 (Configuration-Only MCP Servers) started, derived from validated spikes 003–006 + auto-loaded `spike-findings-rust-mcp-sdk` skill; previously 2026-05-03 after Phase 79 gap closure (raw-HTML / CDN-import widget pre-build guard, cargo-pmcp 0.12.1)*
