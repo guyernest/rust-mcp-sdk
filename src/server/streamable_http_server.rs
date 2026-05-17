@@ -851,7 +851,7 @@ fn extract_auth_from_proxy_headers(
     //
     // mcp-proxy strips inbound `x-pmcp-claim-custom-*` from client requests before
     // injection, so every header observed here is platform-trusted.
-    for (name, value) in headers.iter() {
+    for (name, value) in headers {
         let Some(suffix) = name.as_str().strip_prefix("x-pmcp-claim-custom-") else {
             continue;
         };
@@ -1737,6 +1737,11 @@ mod tests {
     }
 
     #[test]
+    // Why: spec sdk-issue-pmcp-claim-custom-extraction.md line 112 pins
+    // this assertion byte-identically; clippy::unnecessary_get_then_check
+    // would rewrite to !contains_key(...) which is semantically equivalent
+    // but breaks the cross-repo verbatim invariant.
+    #[allow(clippy::unnecessary_get_then_check)]
     fn extract_custom_claim_empty_value_dropped() {
         let mut h = HeaderMap::new();
         h.insert("x-pmcp-user-id", "user-123".parse().unwrap());
