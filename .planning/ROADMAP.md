@@ -1206,3 +1206,137 @@ Plans:
 **Out of scope (deferred to v2):**
 - SEP-2640 §4 archive distribution (`application/gzip` + base64 blob). Blocked by GAP #2 (`Content::Resource` has no `blob` field). The SEP marks archive mode as optional.
 - `#[pmcp::skill]` procedural macro for compile-time SKILL.md validation. Worth a separate spike if compile-time validation is wanted.
+
+---
+
+## v2.2 Configuration-Only MCP Servers (In Progress)
+
+**Milestone Goal:** Shift PMCP from a code-based SDK to one that lets enterprise developers build production-grade MCP servers for SQL databases from configuration + schema files alone — without writing Rust — while preserving PMCP's security, tools/resources/prompts/tasks/skills standards and offering pmcp.run hosting as a deployment target.
+
+**Source of truth:** Validated spikes 003–006 (`.planning/spikes/00{3,4,5,6}-*/`) + auto-loaded `spike-findings-rust-mcp-sdk` skill. Reference implementation: the three production SQL-API servers under `pmcp-run/built-in/sql-api/servers/` (`open-images`, `imdb`, `msr-vtt`) — their `config.toml` shape is the load-bearing input contract for the toolkit lift.
+
+**Critical invariants encoded across phases:**
+- Toolkit `config.toml` schema is a **superset** of `pmcp-run/built-in/sql-api/servers/open-images/config.toml` — additive new keys allowed, **no renames** (REF-01).
+- Pure-Rust Lambda is the deployment target — **no Docker, no testcontainers** (per `feedback_avoid_docker_pure_rust_lambda` memory).
+- Dual-mode curated `[[tools]]` + `[code_mode]` long-tail split is **intentional**, not auto-conversion.
+- SEP-2640 dual-surface invariant: prompt body **byte-equals** SKILL.md (SKLL-05).
+- SEP-2640 §9: supporting files served via `resources/read` but **NOT** in `resources/list` (SKLL-06).
+
+### v2.2 Phase Summary
+
+- [ ] **Phase 82: Builder DX Prerequisites** — Lift `tool_arc` / `prompt_arc` to public `ServerBuilder` + document in-process driver pattern so external toolkit authors stop writing 20-line delegating shims
+- [ ] **Phase 83: Toolkit Core Lift (`pmcp-server-toolkit`)** — Promote `mcp-server-common` shape (~2.2k LoC) to a public crates.io-published SDK crate: AuthProvider, SecretsProvider, StaticResourceHandler, StaticPromptHandler, HMAC tokens, ToolInfo synthesis from `[[tools]]` config, code-mode policy wiring
+- [ ] **Phase 84: SQL Connectors (Postgres / MySQL / Athena / SQLite)** — `SqlConnector` trait + `Dialect` enum + 3 per-backend crates (pure-Rust drivers, Lambda-friendly) + SQLite feature flag, with placeholder translation and dialect-aware code-mode prompt assembly
+- [ ] **Phase 85: Shape A Pure-Config Binary + Reference Parity** — `pmcp-sql-server --config X --schema Y` zero-Rust binary; reproduce open-images end-to-end against the canonical reference scenarios
+- [ ] **Phase 86: Shapes B/C/D — Scaffold, Library Example, Deploy** — `cargo pmcp new --kind sql-server` scaffolding (Shape B), ≤15-line `main.rs` example (Shape C), `cargo pmcp deploy` config-only target wiring with Phase 77 configure system (Shape D)
+- [ ] **Phase 87: Type 2 Authoring Skills MCP Server (`pmcp-config-helper`)** — SEP-2640 Skills MCP server for `config.toml` authoring: root SKILL.md + per-backend references + worked examples, byte-equal dual-surface invariant, §9 list-exclusion compliance, Type 1 `ai-agents/` updates
+- [ ] **Phase 88: Dogfood — `crates/pmcp-server` on Toolkit** — Rewrite the SDK's own dev-tools MCP server on top of `pmcp-server-toolkit` with at least one config-driven tool surface; behavioral parity verified
+- [ ] **Phase 89: Documentation, Migration Guide & Examples Index** — New book chapter + course tutorial covering the four shapes + per-backend recipes + deployment; README + crate-README config-first positioning; reference-implementation migration recipe (REF-03); examples/README + cargo-pmcp README polish
+
+## Phase Details — v2.2 Milestone
+
+### Phase 82: Builder DX Prerequisites
+**Goal**: External toolkit authors can share an `Arc<dyn ToolHandler>` between `pmcp::ServerBuilder` and an in-process handler map without writing a 20-line delegating wrapper shim, and can drive a built `pmcp::Server` in integration tests via a documented public pattern.
+**Depends on**: Phase 81 (v2.1 close); independent of any other v2.2 phase (this unblocks every later phase that uses `tool_arc` / `prompt_arc` in `pmcp-server-toolkit`)
+**Requirements**: BLDR-01, BLDR-02, BLDR-03
+**Success Criteria** (what must be TRUE):
+  1. A toolkit author can call `pmcp::ServerBuilder::tool_arc(name, Arc::new(handler))` on the public builder and share that same `Arc` with an in-process handler map — no delegating wrapper required
+  2. A toolkit author can call `pmcp::ServerBuilder::prompt_arc(name, Arc::new(handler))` on the public builder with the same `Arc`-sharing semantics
+  3. A toolkit integration test can drive a built `pmcp::Server` end-to-end through `tools/list` / `tools/call` flow via a public in-process driver OR via an officially documented handler-level testing pattern — no poking at private `Server::handle_request`
+  4. The two new builder methods are additive (no existing builder method signatures change) and ship in a minor `pmcp` version bump
+**Plans**: TBD
+
+### Phase 83: Toolkit Core Lift (`pmcp-server-toolkit`)
+**Goal**: A new public `crates/pmcp-server-toolkit/` crate exposes the `mcp-server-common` shape (auth, secrets, static resources, static prompts, HMAC tokens, `ToolInfo` synthesis from `[[tools]]` config, code-mode policy wiring) so any external developer can build a config-driven MCP server core without depending on `pmcp-run` internals. The three pmcp-run backend cores cut their path-deps and gain independent release cadence.
+**Depends on**: Phase 82 (uses `tool_arc` / `prompt_arc`)
+**Requirements**: TKIT-01, TKIT-02, TKIT-03, TKIT-04, TKIT-05, TKIT-06, TKIT-07, TKIT-08, TKIT-09, TKIT-10, TEST-02, TEST-03
+**Success Criteria** (what must be TRUE):
+  1. A developer can add `pmcp-server-toolkit = "<published-version>"` to their `Cargo.toml` from crates.io and import `AuthProvider`, `SecretsProvider`, `StaticResourceHandler`, `StaticPromptHandler`, HMAC token helpers, and the `[[tools]]` `ToolInfo` synthesizer from a single crate
+  2. A `config.toml` matching `pmcp-run/built-in/sql-api/servers/open-images/config.toml` (or `imdb` / `msr-vtt`) parses without modification through the toolkit — `[[tools]]` entries with `[[tools.parameters]]` (type/description/required/default/min/max/max_length) and `[tools.annotations]` (read_only_hint/destructive_hint/idempotent_hint/open_world_hint/cost_hint) produce complete `ToolInfo` definitions with **zero** per-tool Rust handlers written
+  3. The `[code_mode]` block (enabled, allow_writes, allow_deletes, allow_ddl, require_limit, max_limit, blocked_tables, sensitive_columns, auto_approve_levels, token_ttl_seconds, token_secret) plus `[code_mode.limits]` (max_tables_per_query, max_join_depth, max_subquery_depth) wires into `pmcp-code-mode`'s validation pipeline + `CodeExecutor` with **zero** per-server Rust glue — same surface as open-images config.toml lines 97–127
+  4. Code-mode prompt body assembly combines dialect-aware schema text (CONN-04, from Phase 84) with `[[database.tables]]` curated table descriptions so the LLM is seeded with both raw DDL and semantic hints
+  5. All three pmcp-run backend cores (`mcp-sql-server-core`, `mcp-graphql-server-core`, `mcp-openapi-server-core`) replace their `pmcp-run/built-in/shared/` path-deps with versioned crates.io `pmcp-server-toolkit` deps and continue to pass their existing tests unchanged
+**Plans**: TBD
+
+### Phase 84: SQL Connectors (Postgres / MySQL / Athena / SQLite)
+**Goal**: A toolkit consumer picks one or more backend crates (`pmcp-toolkit-postgres`, `pmcp-toolkit-mysql`, `pmcp-toolkit-athena`, or the `sqlite` feature flag) and gets a complete `SqlConnector` impl driven entirely by pure-Rust drivers (`tokio-postgres`, `sqlx`, `aws-sdk-athena`, bundled `rusqlite`) — no Docker, no testcontainers, Lambda-deployable as a pure-Rust binary.
+**Depends on**: Phase 83 (`SqlConnector` trait lives in toolkit core)
+**Requirements**: CONN-01, CONN-02, CONN-03, CONN-04, CONN-05, CONN-06, CONN-07, CONN-08, TEST-01, TEST-07
+**Success Criteria** (what must be TRUE):
+  1. A `SqlConnector` trait with exactly **three** methods (`dialect()`, `execute(query, params)`, `schema_text()`) is in toolkit core, and `schema_text()` optionally folds in per-table descriptions from `[[database.tables]]` config entries so curated descriptions reach the code-mode prompt
+  2. Canonical `:name` placeholders in a single `config.toml` translate correctly to dialect-specific placeholder forms (`$1` for Postgres, `?` for MySQL, `?` for Athena, `:name` for SQLite) via the `translate_placeholders` free helper — verified by property tests
+  3. `build_code_mode_prompt(connector)` assembles a dialect-aware code-mode bootstrap prompt body whose schema section comes from the connector's `schema_text()` — verified for all four dialects
+  4. Each per-backend crate (Postgres / MySQL / Athena) is publishable to crates.io and integration-tested against an **authentic in-process mock** for that backend (Postgres `$1`+`information_schema`, MySQL `?`+`information_schema`, Athena `?`+Glue catalog) — no `testcontainers`, no Docker; SQLite tested against a real in-memory `rusqlite` DB
+  5. A fuzz target on the `config.toml` parser (extending Phase 77's `pmcp_config_toml_parser`) confirms malformed config never panics — runtime stress in CI/nightly per the same disposition as Phase 77 Plan 08
+**Plans**: TBD
+
+### Phase 85: Shape A Pure-Config Binary + Reference Parity
+**Goal**: A non-developer can take any of the existing `pmcp-run/built-in/sql-api/servers/*/config.toml` files unchanged, run `pmcp-sql-server --config <file> --schema <file>`, and get a live MCP server with the same tools, same code-mode policy, and same observable behavior as the production pmcp-run server — proving the toolkit lift end-to-end.
+**Depends on**: Phase 84 (Shape A binary needs at least one backend connector to run against)
+**Requirements**: SHAP-A-01, REF-01, REF-02
+**Success Criteria** (what must be TRUE):
+  1. Running `pmcp-sql-server --config pmcp-run/built-in/sql-api/servers/open-images/config.toml --schema <schema-file>` (or `imdb` / `msr-vtt`) produces a running MCP server with **zero** Rust written by the user
+  2. The toolkit's `config.toml` schema is a **superset** of the existing pmcp-run sql-api server configs — any of the three reference servers' configs parse cleanly, additive new keys are allowed, **renames are not**
+  3. The reproduced server responds to `tools/list`, `tools/call` for every `[[tools]]` entry, **and** the code-mode pair (`validate_code` / `execute_code`) with policy enforcement matching the production server's behavior
+  4. Replaying a representative subset of `pmcp-run/built-in/sql-api/reference/scenarios/` against both the original pmcp-run server and the Shape A reproduction yields **result parity** on the asserted scenarios
+**Plans**: TBD
+
+### Phase 86: Shapes B/C/D — Scaffold, Library Example, Deploy
+**Goal**: A developer can choose any of three ergonomics levels for non-pure-config use cases — scaffold a starter project with `cargo pmcp new --kind sql-server` (Shape B), wire a ≤15-line `main.rs` library use (Shape C), or `cargo pmcp deploy` a config-only server to pmcp.run as a hosted target (Shape D) — and Phase 77's `cargo pmcp configure` target system accommodates each without breaking changes.
+**Depends on**: Phase 85 (Shape A proves the binary surface before scaffolding spawns clones of it)
+**Requirements**: SHAP-B-01, SHAP-C-01, SHAP-D-01, TEST-05, TEST-06
+**Success Criteria** (what must be TRUE):
+  1. `cargo pmcp new --kind sql-server` scaffolds a starter project containing `Cargo.toml` (pinned `pmcp-server-toolkit` + chosen backend dep), `main.rs` (Shape C wiring in ≤15 lines), and `config.toml` (commented template); running `cargo run` against an embedded SQLite gets `tools/list` + at least one `tools/call` working — verified end-to-end by an integration test in a tempdir
+  2. A runnable example under `examples/` proves Shape C library use: a complete MCP server in **≤15 lines** of `main.rs` (toolkit + a chosen backend connector)
+  3. `cargo pmcp deploy` packages a config-only server as a pure-Rust Lambda binary and deploys it to pmcp.run; the Phase 77 `cargo pmcp configure` target system handles config-only-server targets with **no breaking changes** to existing target variants
+  4. A deploy integration test exercises at least one config-only-server deploy against a mock or real pmcp.run target and confirms the post-deploy lifecycle (Phase 79 `check` + `conformance` + `apps` verifier) runs cleanly
+**Plans**: TBD
+
+### Phase 87: Type 2 Authoring Skills MCP Server (`pmcp-config-helper`)
+**Goal**: A non-developer using a SEP-2640-capable MCP client gets canonical `config.toml` authoring guidance — root SKILL.md + per-backend references + at least one worked example — served by the `pmcp-config-helper` MCP server, with the SEP-2640 dual-surface invariant (prompt body byte-equals SKILL.md) and §9 list-exclusion compliance asserted in-binary. Coding agents writing Rust against the toolkit pick up the same canonical idioms via Type 1 `ai-agents/` updates.
+**Depends on**: Phase 83 (Skills bundle teaches the toolkit's config shape; needs the public toolkit on crates.io to exist)
+**Requirements**: SKLL-01, SKLL-02, SKLL-03, SKLL-04, SKLL-05, SKLL-06, SKLL-07, TEST-04
+**Success Criteria** (what must be TRUE):
+  1. A SEP-2640-capable MCP client connecting to the `pmcp-config-helper` binary sees the root SKILL.md (covering curated-tool pareto, secrets refs, auth surface, code-mode opt-in) and can `resources/read` per-backend references (`references/postgres.md`, `references/mysql.md`, `references/athena.md`, `references/sqlite.md`) plus at least one worked example bundle (`config.toml` + `schema.sql`)
+  2. **Dual-surface invariant** — `prompts/get` body for the bootstrap prompt is **byte-equal** to the root SKILL.md content, asserted by an in-binary integration test (spike 002's invariant)
+  3. **SEP-2640 §9 compliance** — supporting files (per-backend references, worked example bundle) are served via `resources/read` but **MUST NOT** appear in `resources/list`, asserted by an integration test against a representative client
+  4. The `pmcp-config-helper` crate is publishable to crates.io with a `pmcp-config-helper` binary that runs the server with default skills bundled — no extra setup required
+  5. Type 1 build-time skills in `ai-agents/` are updated with toolkit-authoring patterns (config DSL, connector trait usage, secrets binding) so coding agents writing Rust against `pmcp-server-toolkit` pick up canonical idioms from their dev environment
+**Plans**: TBD
+
+### Phase 88: Dogfood — `crates/pmcp-server` on Toolkit
+**Goal**: The SDK's own dev-tools MCP server (`crates/pmcp-server`) is rewritten on top of `pmcp-server-toolkit` with at least one config-driven tool surface, demonstrating the toolkit's reach. Downstream users see **no functional regression** — the rewritten server passes the existing test suite (or a documented superset) unchanged.
+**Depends on**: Phase 83 (uses the public toolkit), Phase 84 (uses at least one connector for the config-driven tool surface)
+**Requirements**: DOGF-01, DOGF-02
+**Success Criteria** (what must be TRUE):
+  1. `crates/pmcp-server` is rewritten on top of `pmcp-server-toolkit` and exposes at least one tool defined via `[[tools]]` config rather than a hand-written Rust handler
+  2. The existing `pmcp-server` test suite (or a documented superset) passes unchanged — **no functional regression** for any current downstream user
+  3. The dogfood rewrite surfaces and resolves any toolkit DX paper-cuts (logged as fold-back fixes into Phase 83 / 84 follow-ups before milestone close) before the toolkit's first published version
+**Plans**: TBD
+
+### Phase 89: Documentation, Migration Guide & Examples Index
+**Goal**: A developer landing on the PMCP repo or docs.rs sees config-first positioning ("build production MCP servers from config alone"), can follow a book chapter through the four DX shapes + per-backend recipes + deployment, can work through a hands-on course tutorial from `cargo pmcp new --kind sql-server` to a deployed pmcp.run server, and can find a one-page recipe for moving an existing pmcp-run sql-api server author from in-tree path-deps to the public toolkit.
+**Depends on**: Phase 86 (all four shapes shipped), Phase 87 (Type 2 authoring server shipped — book + course mention it), Phase 88 (dogfood validates the docs' usage claims)
+**Requirements**: DOCS-01, DOCS-02, DOCS-03, DOCS-04, DOCS-05, REF-03
+**Success Criteria** (what must be TRUE):
+  1. A new book chapter in `pmcp-book/src/` covers config-only MCP servers — overview, the four shapes, per-backend recipes (Postgres / MySQL / Athena / SQLite), deployment to pmcp.run
+  2. A new course tutorial in `pmcp-course/src/` walks a hands-on path from `cargo pmcp new --kind sql-server` → local `cargo run` → `cargo pmcp deploy` → live pmcp.run server
+  3. The book chapter includes a **migration note** (REF-03) — one-page recipe showing how a pmcp-run SQL-API server author swaps the path-dep for the public toolkit, drops the duplicate domain crates, and regenerates
+  4. The PMCP README and `CRATE-README.md` lead with config-first positioning ("build production MCP servers from config alone"), with the four shapes prominently introduced
+  5. The `examples/README.md` index gains config-only entries (Shape A binary use, Shape C library use); the `cargo-pmcp` README documents `new --kind sql-server` scaffolding and `deploy` for config-only server targets
+**Plans**: TBD
+
+## Progress — v2.2 Milestone
+
+**Execution order:** Phase 82 → Phase 83 → Phase 84 → Phase 85 → Phase 86 (Shapes B/C/D) and Phase 87 (Skills) in parallel after 83 lands → Phase 88 (dogfood) → Phase 89 (docs).
+
+| Phase | Plans Complete | Status | Completed |
+|-------|----------------|--------|-----------|
+| 82. Builder DX Prerequisites | 0/? | Not started | - |
+| 83. Toolkit Core Lift | 0/? | Not started | - |
+| 84. SQL Connectors | 0/? | Not started | - |
+| 85. Shape A + Reference Parity | 0/? | Not started | - |
+| 86. Shapes B/C/D | 0/? | Not started | - |
+| 87. Type 2 Authoring Skills Server | 0/? | Not started | - |
+| 88. Dogfood `pmcp-server` | 0/? | Not started | - |
+| 89. Documentation & Migration | 0/? | Not started | - |

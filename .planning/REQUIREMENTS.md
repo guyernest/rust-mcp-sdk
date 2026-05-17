@@ -336,61 +336,61 @@ Which phases cover which requirements. Updated during roadmap creation.
 | REQ-77-09 | Phase 77 | Complete |
 | REQ-77-10 | Phase 77 | Complete |
 | REQ-77-11 | Phase 77 | Complete |
-| BLDR-01 | TBD (v2.2) | Pending |
-| BLDR-02 | TBD (v2.2) | Pending |
-| BLDR-03 | TBD (v2.2) | Pending |
-| TKIT-01 | TBD (v2.2) | Pending |
-| TKIT-02 | TBD (v2.2) | Pending |
-| TKIT-03 | TBD (v2.2) | Pending |
-| TKIT-04 | TBD (v2.2) | Pending |
-| TKIT-05 | TBD (v2.2) | Pending |
-| TKIT-06 | TBD (v2.2) | Pending |
-| TKIT-07 | TBD (v2.2) | Pending |
-| TKIT-08 | TBD (v2.2) | Pending |
-| TKIT-09 | TBD (v2.2) | Pending |
-| TKIT-10 | TBD (v2.2) | Pending |
-| CONN-01 | TBD (v2.2) | Pending |
-| CONN-02 | TBD (v2.2) | Pending |
-| CONN-03 | TBD (v2.2) | Pending |
-| CONN-04 | TBD (v2.2) | Pending |
-| CONN-05 | TBD (v2.2) | Pending |
-| CONN-06 | TBD (v2.2) | Pending |
-| CONN-07 | TBD (v2.2) | Pending |
-| CONN-08 | TBD (v2.2) | Pending |
-| SHAP-A-01 | TBD (v2.2) | Pending |
-| SHAP-B-01 | TBD (v2.2) | Pending |
-| SHAP-C-01 | TBD (v2.2) | Pending |
-| SHAP-D-01 | TBD (v2.2) | Pending |
-| SKLL-01 | TBD (v2.2) | Pending |
-| SKLL-02 | TBD (v2.2) | Pending |
-| SKLL-03 | TBD (v2.2) | Pending |
-| SKLL-04 | TBD (v2.2) | Pending |
-| SKLL-05 | TBD (v2.2) | Pending |
-| SKLL-06 | TBD (v2.2) | Pending |
-| SKLL-07 | TBD (v2.2) | Pending |
-| REF-01 | TBD (v2.2) | Pending |
-| REF-02 | TBD (v2.2) | Pending |
-| REF-03 | TBD (v2.2) | Pending |
-| DOGF-01 | TBD (v2.2) | Pending |
-| DOGF-02 | TBD (v2.2) | Pending |
-| DOCS-01 | TBD (v2.2) | Pending |
-| DOCS-02 | TBD (v2.2) | Pending |
-| DOCS-03 | TBD (v2.2) | Pending |
-| DOCS-04 | TBD (v2.2) | Pending |
-| DOCS-05 | TBD (v2.2) | Pending |
-| TEST-01 | TBD (v2.2) | Pending |
-| TEST-02 | TBD (v2.2) | Pending |
-| TEST-03 | TBD (v2.2) | Pending |
-| TEST-04 | TBD (v2.2) | Pending |
-| TEST-05 | TBD (v2.2) | Pending |
-| TEST-06 | TBD (v2.2) | Pending |
-| TEST-07 | TBD (v2.2) | Pending |
+| BLDR-01 | Phase 82 | Pending |
+| BLDR-02 | Phase 82 | Pending |
+| BLDR-03 | Phase 82 | Pending |
+| TKIT-01 | Phase 83 | Pending |
+| TKIT-02 | Phase 83 | Pending |
+| TKIT-03 | Phase 83 | Pending |
+| TKIT-04 | Phase 83 | Pending |
+| TKIT-05 | Phase 83 | Pending |
+| TKIT-06 | Phase 83 | Pending |
+| TKIT-07 | Phase 83 | Pending |
+| TKIT-08 | Phase 83 | Pending |
+| TKIT-09 | Phase 83 | Pending |
+| TKIT-10 | Phase 83 | Pending |
+| CONN-01 | Phase 84 | Pending |
+| CONN-02 | Phase 84 | Pending |
+| CONN-03 | Phase 84 | Pending |
+| CONN-04 | Phase 84 | Pending |
+| CONN-05 | Phase 84 | Pending |
+| CONN-06 | Phase 84 | Pending |
+| CONN-07 | Phase 84 | Pending |
+| CONN-08 | Phase 84 | Pending |
+| SHAP-A-01 | Phase 85 | Pending |
+| SHAP-B-01 | Phase 86 | Pending |
+| SHAP-C-01 | Phase 86 | Pending |
+| SHAP-D-01 | Phase 86 | Pending |
+| SKLL-01 | Phase 87 | Pending |
+| SKLL-02 | Phase 87 | Pending |
+| SKLL-03 | Phase 87 | Pending |
+| SKLL-04 | Phase 87 | Pending |
+| SKLL-05 | Phase 87 | Pending |
+| SKLL-06 | Phase 87 | Pending |
+| SKLL-07 | Phase 87 | Pending |
+| REF-01 | Phase 85 | Pending |
+| REF-02 | Phase 85 | Pending |
+| REF-03 | Phase 89 | Pending |
+| DOGF-01 | Phase 88 | Pending |
+| DOGF-02 | Phase 88 | Pending |
+| DOCS-01 | Phase 89 | Pending |
+| DOCS-02 | Phase 89 | Pending |
+| DOCS-03 | Phase 89 | Pending |
+| DOCS-04 | Phase 89 | Pending |
+| DOCS-05 | Phase 89 | Pending |
+| TEST-01 | Phase 84 | Pending |
+| TEST-02 | Phase 83 | Pending |
+| TEST-03 | Phase 83 | Pending |
+| TEST-04 | Phase 87 | Pending |
+| TEST-05 | Phase 86 | Pending |
+| TEST-06 | Phase 86 | Pending |
+| TEST-07 | Phase 84 | Pending |
 
 **Coverage:**
 - v2.1 requirements: 42 total (20 pre-seed + 3 seeded by Phase 69 + 5 seeded by Phase 72 + 1 seeded by Phase 72.1 CR-03 + 2 seeded by Phase 74 + 11 seeded by Phase 77)
 - v2.2 requirements: 49 total (BLDR ×3 + TKIT ×10 + CONN ×8 + SHAP ×4 + SKLL ×7 + REF ×3 + DOGF ×2 + DOCS ×5 + TEST ×7)
-- Mapped to phases: v2.1 42 / 42; v2.2 0 / 49 (roadmap pending)
-- Unmapped: v2.2 has 49 IDs pending phase assignment until ROADMAP.md is created
+- Mapped to phases: v2.1 42 / 42; v2.2 49 / 49 (Phases 82–89)
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-04-10*
@@ -402,3 +402,4 @@ Which phases cover which requirements. Updated during roadmap creation.
 *Last updated: 2026-04-20 — Phase 72.1 complete: cargo-pmcp 0.8.1 landing template runtime /landing-config fetch (AC-11 manual offline gate approved by operator guy).*
 *Last updated: 2026-04-26 — added 11 REQ-77-* IDs seeded by Phase 77 cargo pmcp configure commands research.*
 *Last updated: 2026-05-17 — milestone v2.2 (Configuration-Only MCP Servers) defined. Added 49 IDs across BLDR / TKIT / CONN / SHAP / SKLL / REF / DOGF / DOCS / TEST categories, derived from spikes 003–006 + the auto-loaded `spike-findings-rust-mcp-sdk` skill. Grounded in the existing `pmcp-run/built-in/sql-api/servers/` reference implementation (open-images / imdb / msr-vtt) — the toolkit must consume their `config.toml` shape (incl. dual-mode curated `[[tools]]` + `[code_mode]` policy + `[[database.tables]]` schema enrichment) as a superset, not redesign it. Long-term USAGE-01..03 vision (usage-driven tool promotion from code-mode logs) captured in Future Requirements. Phase assignment pending ROADMAP.md creation.*
+*Last updated: 2026-05-17 — ROADMAP.md v2.2 block written; all 49 v2.2 IDs mapped to Phases 82–89. BLDR→P82; TKIT+TEST-02+TEST-03→P83; CONN+TEST-01+TEST-07→P84; SHAP-A+REF-01+REF-02→P85; SHAP-B/C/D+TEST-05+TEST-06→P86; SKLL+TEST-04→P87; DOGF→P88; DOCS+REF-03→P89.*
