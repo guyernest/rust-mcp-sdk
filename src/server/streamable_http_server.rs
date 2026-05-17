@@ -855,7 +855,9 @@ fn extract_auth_from_proxy_headers(
         let Some(suffix) = name.as_str().strip_prefix("x-pmcp-claim-custom-") else {
             continue;
         };
-        let Ok(val_str) = value.to_str() else { continue };
+        let Ok(val_str) = value.to_str() else {
+            continue;
+        };
         if suffix.is_empty() || val_str.is_empty() {
             continue;
         }
@@ -1723,7 +1725,10 @@ mod tests {
     fn extract_custom_claim_header_inserted_under_cognito_key() {
         let mut h = HeaderMap::new();
         h.insert("x-pmcp-user-id", "user-123".parse().unwrap());
-        h.insert("x-pmcp-claim-custom-primary-creator", "rosen".parse().unwrap());
+        h.insert(
+            "x-pmcp-claim-custom-primary-creator",
+            "rosen".parse().unwrap(),
+        );
         let ctx = extract_auth_from_proxy_headers(&h).expect("auth ctx");
         assert_eq!(
             ctx.claims.get("custom:primary_creator"),
@@ -1744,7 +1749,10 @@ mod tests {
     fn extract_custom_claim_kebab_to_snake() {
         let mut h = HeaderMap::new();
         h.insert("x-pmcp-user-id", "u".parse().unwrap());
-        h.insert("x-pmcp-claim-custom-promo-code", "SUMMER25".parse().unwrap());
+        h.insert(
+            "x-pmcp-claim-custom-promo-code",
+            "SUMMER25".parse().unwrap(),
+        );
         let ctx = extract_auth_from_proxy_headers(&h).expect("auth ctx");
         assert_eq!(
             ctx.claims.get("custom:promo_code"),
