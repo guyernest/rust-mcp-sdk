@@ -843,6 +843,32 @@ fn extract_auth_from_proxy_headers(
         );
     }
 
+    // pmcp.run mcp-proxy emits `x-pmcp-claim-custom-<kebab-suffix>: <value>` for every
+    // Cognito `custom:*` user attribute it sees in the authorizer context (see
+    // rust-mcp-sdk docs/proxy-contract.md). Re-insert each one into `claims` under
+    // the canonical Cognito attribute name `custom:<snake_suffix>` so consumers
+    // can read either via `ctx.claim::<T>("custom:foo")` or the raw `ctx.claims` map.
+    //
+    // mcp-proxy strips inbound `x-pmcp-claim-custom-*` from client requests before
+    // injection, so every header observed here is platform-trusted.
+    for (name, value) in headers.iter() {
+        let Some(suffix) = name.as_str().strip_prefix("x-pmcp-claim-custom-") else {
+            continue;
+        };
+        let Ok(val_str) = value.to_str() else { continue };
+        if suffix.is_empty() || val_str.is_empty() {
+            continue;
+        }
+        let snake: String = suffix
+            .chars()
+            .map(|c| if c == '-' { '_' } else { c })
+            .collect();
+        claims.insert(
+            format!("custom:{}", snake),
+            serde_json::Value::String(val_str.to_string()),
+        );
+    }
+
     tracing::debug!(
         user_id = %user_id,
         email = ?email,
@@ -1686,5 +1712,56 @@ async fn handle_delete_session(
     } else {
         // No session to delete
         create_error_response(StatusCode::NOT_FOUND, -32600, "No session ID provided")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extract_custom_claim_header_inserted_under_cognito_key() {
+        let mut h = HeaderMap::new();
+        h.insert("x-pmcp-user-id", "user-123".parse().unwrap());
+        h.insert("x-pmcp-claim-custom-primary-creator", "rosen".parse().unwrap());
+        let ctx = extract_auth_from_proxy_headers(&h).expect("auth ctx");
+        assert_eq!(
+            ctx.claims.get("custom:primary_creator"),
+            Some(&serde_json::Value::String("rosen".into())),
+        );
+    }
+
+    #[test]
+    fn extract_custom_claim_empty_value_dropped() {
+        let mut h = HeaderMap::new();
+        h.insert("x-pmcp-user-id", "user-123".parse().unwrap());
+        h.insert("x-pmcp-claim-custom-empty", "".parse().unwrap());
+        let ctx = extract_auth_from_proxy_headers(&h).expect("auth ctx");
+        assert!(ctx.claims.get("custom:empty").is_none());
+    }
+
+    #[test]
+    fn extract_custom_claim_kebab_to_snake() {
+        let mut h = HeaderMap::new();
+        h.insert("x-pmcp-user-id", "u".parse().unwrap());
+        h.insert("x-pmcp-claim-custom-promo-code", "SUMMER25".parse().unwrap());
+        let ctx = extract_auth_from_proxy_headers(&h).expect("auth ctx");
+        assert_eq!(
+            ctx.claims.get("custom:promo_code"),
+            Some(&serde_json::Value::String("SUMMER25".into())),
+        );
+    }
+
+    #[test]
+    fn extract_custom_claim_coexists_with_standard_headers() {
+        let mut h = HeaderMap::new();
+        h.insert("x-pmcp-user-id", "u".parse().unwrap());
+        h.insert("x-pmcp-user-email", "u@example.com".parse().unwrap());
+        h.insert("x-pmcp-user-groups", "g1,g2".parse().unwrap());
+        h.insert("x-pmcp-claim-custom-tier", "gold".parse().unwrap());
+        let ctx = extract_auth_from_proxy_headers(&h).expect("auth ctx");
+        assert_eq!(ctx.subject, "u");
+        assert_eq!(ctx.claims["email"], "u@example.com");
+        assert_eq!(ctx.claims["custom:tier"], "gold");
     }
 }
