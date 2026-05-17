@@ -1,0 +1,21 @@
+[package]
+name = "spike-001-skills-as-resources"
+version = "0.0.1"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "spike-001"
+path = "src/main.rs"
+
+[dependencies]
+pmcp = { path = "../../..", default-features = false }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+async-trait = "0.1"
+serde_json = "1"
+anyhow = "1"
+
+# Declare this as its own workspace so the parent (rust-mcp-sdk) workspace
+# does not try to absorb it. The parent `.planning/` exclude already keeps
+# it out of the publish package; this just keeps `cargo` happy at build time.
+[workspace]

@@ -1,0 +1,22 @@
+[package]
+name = "spike-003-schema-server-surface-diff"
+version = "0.0.1"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "spike-003"
+path = "src/main.rs"
+
+[dependencies]
+# This spike is a structural scanner over external source trees (the three
+# pmcp-run built-in core crates). It does not exercise any pmcp APIs — its
+# job is to assert facts about the OTHER codebase. We still keep the path
+# dep so the spike fails to build if pmcp ever moves wildly. No pmcp
+# imports are used.
+pmcp = { path = "../../..", default-features = false }
+anyhow = "1"
+
+# Declare this as its own workspace so the parent (rust-mcp-sdk) workspace
+# does not try to absorb it.
+[workspace]

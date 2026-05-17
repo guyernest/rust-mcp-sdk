@@ -1,0 +1,50 @@
+# Spike 004 sample config: the file the user writes to drive the toolkit.
+# This is the *only* per-server boilerplate. Everything else (tool dispatch,
+# parameter binding, JSON Schema synthesis, code-mode bootstrap) is handled
+# by the toolkit.
+
+[server]
+name        = "employee-directory"
+version     = "0.1.0"
+description = "Query the employee directory via curated pareto tools, or generate ad-hoc SQL via Code Mode."
+
+# Two curated "pareto" tools. The TOML defines the entire surface — the
+# user does not write Rust handlers for these.
+
+[[tools]]
+name        = "get_employee_by_id"
+description = "Look up a single employee by their unique id."
+sql         = "SELECT id, name, department, salary FROM employees WHERE id = :id"
+
+[[tools.parameters]]
+name        = "id"
+type        = "integer"
+description = "Employee id (1-based)."
+required    = true
+
+# ---
+
+[[tools]]
+name        = "list_employees_by_department"
+description = "List all employees in a department, ordered by salary descending."
+sql         = """
+SELECT id, name, department, salary
+FROM employees
+WHERE department = :department
+ORDER BY salary DESC
+"""
+
+[[tools.parameters]]
+name        = "department"
+type        = "string"
+description = "Department name (e.g. 'Research', 'Engineering')."
+required    = true
+
+# ---
+
+[code_mode]
+# Enable the long-tail prompt that lets the LLM author ad-hoc SQL when none
+# of the pareto tools fit. In a real toolkit this also wires the
+# validate_code / execute_code tools via the pmcp-code-mode SDK crate; this
+# spike just validates that the prompt surface is registered correctly.
+enabled = true

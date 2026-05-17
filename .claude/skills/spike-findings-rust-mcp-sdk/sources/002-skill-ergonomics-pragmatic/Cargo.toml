@@ -1,0 +1,18 @@
+[package]
+name = "spike-002-skill-ergonomics-pragmatic"
+version = "0.0.1"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "spike-002"
+path = "src/main.rs"
+
+[dependencies]
+pmcp = { path = "../../..", default-features = false }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+async-trait = "0.1"
+serde_json = "1"
+anyhow = "1"
+
+[workspace]
