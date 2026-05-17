@@ -1,0 +1,31 @@
+[package]
+name = "spike-005-multi-dialect-sql-connector"
+version = "0.0.1"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "spike-005"
+path = "src/main.rs"
+
+[dependencies]
+pmcp = { path = "../../..", default-features = false }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+async-trait = "0.1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "1"
+anyhow = "1"
+
+# SQLite is the ONE real DB this spike runs against — pure-Rust, bundled
+# (no system libsqlite dep, ships fine on AWS Lambda). Postgres / MySQL /
+# Athena are modeled as authentic in-process mocks that capture each
+# dialect's wire behavior (placeholder syntax, schema introspection
+# shape, identifier quoting). The trait-design question is "does ONE
+# trait + Dialect enum cleanly accommodate the divergence" — that's
+# answered by authentic mocks. Real wire integration is a per-connector
+# crate concern (tokio-postgres / sqlx / aws-sdk-athena, all pure-Rust)
+# and intentionally OUT of scope for this spike.
+rusqlite = { version = "0.32", features = ["bundled"] }
+
+[workspace]
