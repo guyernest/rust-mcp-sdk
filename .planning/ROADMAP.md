@@ -1406,7 +1406,35 @@ Plans:
   4. Code-mode prompt body assembly combines dialect-aware schema text (CONN-04, from Phase 84) with `[[database.tables]]` curated table descriptions so the LLM is seeded with both raw DDL and semantic hints
   5. All three pmcp-run backend cores (`mcp-sql-server-core`, `mcp-graphql-server-core`, `mcp-openapi-server-core`) replace their `pmcp-run/built-in/shared/` path-deps with versioned crates.io `pmcp-server-toolkit` deps and continue to pass their existing tests unchanged
 
-**Plans**: TBD
+**Plans:** 9 plans
+
+Plans:
+**Wave 1**
+
+- [ ] 83-01-PLAN.md — Crate scaffold + workspace insertion + module skeleton + reference fixtures (TKIT-01) (Wave 1)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [ ] 83-02-PLAN.md — Lift auth.rs + secrets.rs from mcp-server-common (TKIT-02, TKIT-03) (Wave 2)
+- [ ] 83-03-PLAN.md — Lift resources.rs + prompts.rs from mcp-server-common (TKIT-04, TKIT-05) (Wave 2)
+- [ ] 83-04-PLAN.md — ServerConfig parser + REF-01 superset integration test (TKIT-01) (Wave 2)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [ ] 83-05-PLAN.md — [[tools]] → ToolInfo synthesizer with property test (TKIT-07, TEST-02) (Wave 3)
+- [ ] 83-06-PLAN.md — Code-mode wiring + HMAC re-exports + policy integration test (TKIT-06, TKIT-09) (Wave 3)
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
+- [ ] 83-07-PLAN.md — SqlConnector trait stub + Dialect + assemble_code_mode_prompt (TKIT-10, TEST-02) (Wave 4)
+
+**Wave 5** *(blocked on Wave 4 completion)*
+
+- [ ] 83-08-PLAN.md — ServerBuilderExt + backend-core smoke test + ALWAYS example (TKIT-08, TEST-03) (Wave 5)
+
+**Wave 6** *(blocked on Wave 5 completion)*
+
+- [ ] 83-09-PLAN.md — Fuzz target + contract YAML + shim diff + migration guide + publish-gate (TKIT-01, TKIT-08, TEST-02) (Wave 6)
 
 ### Phase 84: SQL Connectors (Postgres / MySQL / Athena / SQLite)
 

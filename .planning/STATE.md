@@ -2,14 +2,14 @@
 gsd_state_version: 1.0
 milestone: v2.2
 milestone_name: Configuration-Only MCP Servers
-status: planning
+status: executing
 stopped_at: Phase 83 context gathered — ready to plan
-last_updated: "2026-05-18T05:06:25.187Z"
-last_activity: 2026-05-18 -- Phase 82 complete (BLDR-01..04, 3/3 plans, verifier PASS)
+last_updated: "2026-05-18T06:20:38.765Z"
+last_activity: 2026-05-18 -- Phase 83 planning complete
 progress:
   total_phases: 44
   completed_phases: 34
-  total_plans: 137
+  total_plans: 146
   completed_plans: 137
   percent: 77
 ---
@@ -27,8 +27,8 @@ See: .planning/PROJECT.md (updated 2026-05-17)
 
 Phase: Phase 82 complete (verified PASS) — next is Phase 83 (Toolkit Core Lift)
 Plan: —
-Status: Ready to plan Phase 83
-Last activity: 2026-05-18 -- Phase 82 complete (BLDR-01..04, 3/3 plans, verifier PASS)
+Status: Ready to execute
+Last activity: 2026-05-18 -- Phase 83 planning complete
 
 **Carryover from v2.1:** Phase 81 (update-pmcp-book-and-pmcp-course-with-v2-advanced-topics-cod) was executing at v2.1 close; will be tracked separately and folded into v2.1 completion. Operator follow-ups deferred from Phase 75 Wave 5 still pending: (a) merge Phase 75 Wave 5 + 75.5 to paiml/rust-mcp-sdk:main; (b) post-merge run `gh workflow run quality-badges.yml -R paiml/rust-mcp-sdk` and append observation to `.planning/phases/75-fix-pmat-issues/75-05-GATE-VERIFICATION.md` "## Badge flip observation" section.
 
