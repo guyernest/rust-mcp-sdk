@@ -2,15 +2,16 @@
 gsd_state_version: 1.0
 milestone: v2.2
 milestone_name: Configuration-Only MCP Servers
-status: Roadmap defined, Phase 82 next
-stopped_at: ROADMAP.md v2.2 block written, awaiting Phase 82 planning
-last_updated: "2026-05-17T00:00:00.000Z"
+status: Roadmap defined, awaiting `/gsd-plan-phase 82`
+stopped_at: Phase 82 context gathered
+last_updated: "2026-05-18T00:02:18.558Z"
+last_activity: "2026-05-17 — v2.2 ROADMAP.md block written (8 phases, 49 requirements mapped 1:1)"
 progress:
-  total_phases: 8
-  completed_phases: 0
-  total_plans: 0
-  completed_plans: 0
-  percent: 0
+  total_phases: 44
+  completed_phases: 33
+  total_plans: 134
+  completed_plans: 134
+  percent: 75
 ---
 
 # Project State
@@ -117,6 +118,7 @@ Inherited from v2.1 (see PROJECT.md + prior Decisions log):
 **2026-05-17** — Completed quick task 260517-hi5: extract `x-pmcp-claim-custom-*` headers in `extract_auth_from_proxy_headers` so Cognito `custom:*` attributes forwarded by pmcp.run mcp-proxy surface via `AuthContext.claims["custom:<snake>"]`. Additive change (no public-API break); 4 unit tests verbatim from spec; `docs/proxy-contract.md` created; CHANGELOG `[2.8.1]` entry. `make quality-gate` green end-to-end on clean worktree. Bumped to pmcp 2.8.1; PR #257 opened to upstream/main.
 
 **2026-05-16** — Shipped v2.8.0 bundle release via PR [#256](https://github.com/paiml/rust-mcp-sdk/pull/256):
+
 - Quick task 260516-b2p (AuthProvider::on_unauthorized + transport retry-once)
 - Phase 80 (SEP-2640 Agent Skills)
 - Phase 81 (pmcp-book + pmcp-course v2 topic updates)
@@ -125,6 +127,6 @@ Inherited from v2.1 (see PROJECT.md + prior Decisions log):
 
 ## Session Continuity
 
-Last session: 2026-05-17T00:00:00.000Z
-Stopped at: v2.2 ROADMAP.md block written; STATE.md + REQUIREMENTS.md traceability updated
+Last session: 2026-05-18T00:02:18.553Z
+Stopped at: Phase 82 context gathered
 Resume: Next is `/gsd-plan-phase 82` to break Phase 82 (Builder DX Prerequisites) into plans. Phase 82 is the unblocker for every subsequent v2.2 phase that uses `tool_arc` / `prompt_arc` — without it, every config-driven toolkit author writes a 20-line delegating wrapper shim (the same DX paper-cut spike 004 hit). After 82, the critical path is 83 (TKIT anchor) → 84 (CONN anchor) → 85 (Shape A + REF parity). Phases 86 and 87 can run in parallel once 83 lands.
