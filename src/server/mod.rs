@@ -386,6 +386,11 @@ impl Server {
         self.prompts.get(name)
     }
 
+    /// Get a tool handler by name
+    pub fn get_tool(&self, name: &str) -> Option<&Arc<dyn ToolHandler>> {
+        self.tools.get(name)
+    }
+
     /// Get the HTTP middleware chain configured via `ServerBuilder`.
     ///
     /// Returns the HTTP middleware chain that was set using
