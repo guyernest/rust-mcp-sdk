@@ -1,14 +1,7 @@
-//! BLDR-03 regression anchor: handler-level testing pattern.
+//! Handler-level testing pattern integration test.
 //!
-//! This integration test exercises the documented handler-level testing
-//! pattern (CONTEXT.md D-02 part (b)) against a real built `pmcp::Server`,
-//! driving it through the new public `tool_arc` + `get_tool` surface and
-//! the existing `prompt_arc` + `get_prompt` surface end-to-end. It is the
-//! regression anchor: if a future refactor breaks the pattern that
-//! external toolkit authors rely on (Phase 83+ `pmcp-server-toolkit`),
-//! this test fails.
-//!
-//! The pattern shape is:
+//! Drives a real built `pmcp::Server` through the public `tool_arc` +
+//! `get_tool` and `prompt_arc` + `get_prompt` surfaces end-to-end:
 //!
 //! ```text
 //! Server::builder().*_arc(name, Arc::new(handler)).build()
@@ -17,14 +10,9 @@
 //!     -> assert on the result
 //! ```
 //!
-//! This test deliberately bypasses the private JSONRPC dispatch entry
-//! point on `Server` because CONTEXT.md D-01 forbids exposing or
-//! depending on a public dispatch surface in Phase 82. The pattern
-//! exercises handler logic only — the JSONRPC dispatch path that runs
-//! `auth_provider`, `tool_authorizer`, and `tool_middleware` is
-//! bypassed. The negative acceptance grep targets actual invocation
-//! sites and import statements for the private dispatch entry point,
-//! not prose descriptions of the design decision.
+//! This exercises handler logic only — the JSONRPC dispatch path that
+//! runs `auth_provider`, `tool_authorizer`, and `tool_middleware` is
+//! bypassed because there is no public dispatch entry point.
 
 #![cfg(not(target_arch = "wasm32"))]
 
@@ -36,11 +24,9 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::sync::Arc;
 
-/// Echo tool used by every test in this file.
-///
-/// Returns `{ "echoed": <args> }` so a property test (added in Task 2)
-/// can assert on byte-equality of `handle(...)` outputs across the
-/// `tool()` and `tool_arc()` registration paths.
+/// Echo tool used by every test in this file. Returns `{ "echoed": <args> }`
+/// so the equivalence proptest can assert byte-equality across the `tool()`
+/// and `tool_arc()` registration paths.
 struct EchoTool;
 
 #[async_trait]
@@ -70,8 +56,8 @@ impl PromptHandler for EchoPrompt {
     }
 }
 
-/// Behavior 1 + 3 + 4 + 5: Tool round-trip via the new `tool_arc` +
-/// `get_tool` surface, including Arc-identity check.
+/// Tool round-trip via `tool_arc` + `get_tool`, plus Arc-identity check
+/// (no clone-on-insert).
 #[tokio::test]
 async fn tool_arc_get_tool_handle_round_trip() {
     let tool: Arc<dyn ToolHandler> = Arc::new(EchoTool);
@@ -98,8 +84,7 @@ async fn tool_arc_get_tool_handle_round_trip() {
     assert!(server.get_tool("nope").is_none());
 }
 
-/// Behavior 2 + 3 + 4 + 5: Prompt round-trip via the new `prompt_arc` +
-/// existing `get_prompt` surface, including Arc-identity check.
+/// Prompt round-trip via `prompt_arc` + `get_prompt`, plus Arc-identity check.
 #[tokio::test]
 async fn prompt_arc_get_prompt_handle_round_trip() {
     let prompt: Arc<dyn PromptHandler> = Arc::new(EchoPrompt);
@@ -170,17 +155,10 @@ async fn tool_arc_and_prompt_arc_compose_on_same_builder() {
     assert!(server.has_prompt("echo"));
 }
 
-// Property test (Task 2): observational equivalence of `tool()` and
-// `tool_arc()`. The two registration paths must produce servers whose
-// `get_tool(name).handle(args, extra)` outputs are byte-equal for the
-// same `args`. The internal `capabilities` field is private on `Server`
-// and is therefore not observable from this integration test; the
-// capability-shape equivalence invariant lives in Plan 01 Task 3's
-// crate-internal `#[cfg(test)]` unit test (which has access to private
-// fields).
-//
-// proptest = "1.7" is confirmed in Cargo.toml [dev-dependencies] — this
-// test depends on it as a hard precondition (no alternative path).
+// Observational equivalence: `tool()` and `tool_arc()` must produce servers
+// whose `get_tool(name).handle(args, extra)` outputs are byte-equal. The
+// internal `capabilities` shape is asserted by a sibling unit test inside
+// the `pmcp` crate (which has access to private fields).
 proptest! {
     #![proptest_config(ProptestConfig { cases: 32, ..ProptestConfig::default() })]
 
