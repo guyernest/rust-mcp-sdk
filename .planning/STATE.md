@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v2.2
 milestone_name: Configuration-Only MCP Servers
 status: executing
-stopped_at: Phase 83 context gathered — ready to plan
-last_updated: "2026-05-18T21:06:21.133Z"
+stopped_at: "Completed Plan 83-05 — synthesize_from_config GREEN with property + reference-fixture tests; quality-gate passing. Next: Plan 83-06 (TKIT-09 code-mode wiring)."
+last_updated: "2026-05-18T21:29:46.556Z"
 last_activity: 2026-05-18
 progress:
   total_phases: 44
   completed_phases: 34
   total_plans: 146
-  completed_plans: 141
+  completed_plans: 142
   percent: 77
 ---
 
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-05-17)
 ## Current Position
 
 Phase: 83 (Toolkit Core Lift (`pmcp-server-toolkit`)) — EXECUTING
-Plan: 5 of 9
+Plan: 6 of 9
 Status: Ready to execute
 Last activity: 2026-05-18
 
@@ -98,6 +98,8 @@ Inherited from v2.1 (see PROJECT.md + prior Decisions log):
 - [Phase ?]: [Phase 83 Plan 04] ServerConfig three-entry-point API (from_toml / validate / from_toml_strict_validated) per review R8 — partial-merge callers parse without validating; production callers chain both via the convenience method
 - [Phase ?]: [Phase 83 Plan 04] ParamDecl::default + enum_values typed as toml::Value (heterogeneous) — reference fixtures emit integer-, string-, and boolean-defaults; forcing a String coercion would shift the problem to Plan 05's synthesizer
 - [Phase ?]: [Phase 83 Plan 04] All 3 reference fixtures pass validate() on first run — empirically confirms the R8 rule-set (4 required-field checks) is well-calibrated to production usage; no rule was weakened to accommodate a broken fixture
+- [Phase ?]: Plan 83-05: SynthesizedToolHandler::handle returns Err(pmcp::Error::Internal) (not Value with is_error) — honors real ToolHandler::handle signature Result<Value> vs the plan example's Result<CallToolResult>. Semantically equivalent and Gemini-review-compliant.
+- [Phase ?]: Plan 83-05: pub type SynthesizedTool = (String, ToolInfo, Arc<dyn ToolHandler>) introduced to satisfy clippy::type_complexity while preserving PATTERNS §9 tuple shape. Public alias enables Plan 08 to name the type.
 
 ### Roadmap Evolution
 
@@ -122,6 +124,7 @@ Inherited from v2.1 (see PROJECT.md + prior Decisions log):
 | Phase 82-builder-dx-prerequisites P02 | 25min | 4 tasks | 1 files |
 | Phase 83 P03 | 50min | 3 tasks | 3 files |
 | Phase 83 P04 | 40 min | 3 tasks | 4 files |
+| Phase 83 P05 | 22min | 3 tasks | 4 files |
 
 ### Last Activity
 
@@ -139,6 +142,6 @@ Inherited from v2.1 (see PROJECT.md + prior Decisions log):
 
 ## Session Continuity
 
-Last session: 2026-05-18T21:06:02.497Z
-Stopped at: Phase 83 context gathered — ready to plan
+Last session: 2026-05-18T21:29:46.551Z
+Stopped at: Completed Plan 83-05 — synthesize_from_config GREEN with property + reference-fixture tests; quality-gate passing. Next: Plan 83-06 (TKIT-09 code-mode wiring).
 Resume: Next is `/gsd-plan-phase 82` to break Phase 82 (Builder DX Prerequisites) into plans. Phase 82 is the unblocker for every subsequent v2.2 phase that uses `tool_arc` / `prompt_arc` — without it, every config-driven toolkit author writes a 20-line delegating wrapper shim (the same DX paper-cut spike 004 hit). After 82, the critical path is 83 (TKIT anchor) → 84 (CONN anchor) → 85 (Shape A + REF parity). Phases 86 and 87 can run in parallel once 83 lands.
