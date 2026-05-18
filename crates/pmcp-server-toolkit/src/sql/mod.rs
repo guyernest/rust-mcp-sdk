@@ -172,7 +172,13 @@ pub enum ConnectorError {
 
 /// Crate-internal mock connector for testing TKIT-10 prompt assembly without
 /// requiring a real driver. Phase 84's real impls subsume this for production.
+///
+/// Gated `cfg(any(test, feature = "sqlite"))` so Plan 08's smoke test can
+/// reach it under `--features sqlite`. Carries `#[allow(dead_code)]` because
+/// under `--features sqlite` (without `cfg(test)`) there are no in-crate
+/// callers — only Plan 08's smoke test references it from outside.
 #[cfg(any(test, feature = "sqlite"))]
+#[allow(dead_code)]
 pub(crate) struct MockSqlConnector {
     /// Dialect the mock claims to serve.
     pub dialect: Dialect,

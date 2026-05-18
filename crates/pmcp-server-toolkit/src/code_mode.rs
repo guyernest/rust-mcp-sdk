@@ -551,9 +551,7 @@ mod tests {
 #[cfg(test)]
 mod tkit10_tests {
     use super::*;
-    use crate::config::{
-        DatabaseSection, DatabaseTableDecl, ServerConfig, ServerSection,
-    };
+    use crate::config::{DatabaseSection, DatabaseTableDecl, ServerConfig, ServerSection};
     use crate::sql::{Dialect, MockSqlConnector};
 
     fn make_cfg(tables: Vec<DatabaseTableDecl>) -> ServerConfig {

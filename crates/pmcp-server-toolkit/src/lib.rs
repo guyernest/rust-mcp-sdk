@@ -83,6 +83,20 @@ pub use crate::error::ConfigValidationError;
 // reach for; lifting it to the crate root keeps the import surface flat.
 pub use crate::tools::synthesize_from_config;
 
+// SQL connector trait stub (TKIT-10) — Plan 07 headline re-export per D-15 +
+// review R3. MINIMIZED Phase 83 surface per review R2: ONLY `Dialect`,
+// `SqlConnector`, and `ConnectorError` are re-exported. `execute()` and
+// `translate_placeholders` are intentionally absent — they land in Phase 84
+// (pmcp-server-toolkit 0.2.0) once the first real connector validates the
+// contract. `MockSqlConnector` stays `pub(crate)` — it's test-only.
+pub use crate::sql::{ConnectorError, Dialect, SqlConnector};
+
+// Code-mode prompt assembler (TKIT-10 / D-12) — Plan 07 headline re-export.
+// Feature-gated on `code-mode` because it lives in the code_mode module which
+// is itself feature-gated (D-16: code-mode is opt-in).
+#[cfg(feature = "code-mode")]
+pub use crate::code_mode::assemble_code_mode_prompt;
+
 // Why: compile-only assertion proving the headline D-15 / review-R3 crate-root
 // DX promise. If any of these paths fails to resolve, the crate fails to
 // build — no test runtime required.
@@ -101,6 +115,10 @@ const _ROOT_REEXPORT_SMOKE: fn() = || {
     // Plan 05 (TKIT-07): synthesize_from_config is fn-typed; reference the
     // function pointer to assert the re-exported path resolves at the crate root.
     let _: fn(&ServerConfig) -> Result<Vec<crate::tools::SynthesizedTool>> = synthesize_from_config;
+    // Plan 07 (TKIT-10): SqlConnector trait stub + Dialect enum re-exports.
+    let _: Option<Dialect> = None;
+    let _: Option<ConnectorError> = None;
+    let _: Option<&dyn SqlConnector> = None;
 };
 
 // Plan 06 (TKIT-06 + TKIT-09): compile-only assertion that the code_mode
@@ -118,4 +136,8 @@ const _CODE_MODE_REEXPORT_SMOKE: fn() = || {
     let _: Option<crate::code_mode::NoopPolicyEvaluator> = None;
     let _: fn(&ServerConfig) -> Result<crate::code_mode::ValidationPipeline> =
         crate::code_mode::validation_pipeline_from_config;
+    // Plan 07 (TKIT-10 / D-12): assemble_code_mode_prompt re-exports at crate
+    // root under the code-mode feature. The fn returns a `BoxFuture`-ish async
+    // surface; reference the function pointer to assert the path resolves.
+    let _ = assemble_code_mode_prompt;
 };
