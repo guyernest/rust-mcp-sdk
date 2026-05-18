@@ -309,6 +309,107 @@ fn resolve_token_secret(section: &CodeModeSection) -> Result<SecretValue> {
 }
 
 // =============================================================================
+// TKIT-10 — assemble_code_mode_prompt (D-12 / review R2)
+// =============================================================================
+
+use crate::sql::SqlConnector;
+
+/// TKIT-10: assemble the code-mode bootstrap prompt body from a connector's
+/// [`SqlConnector::schema_text`] + curated `[[database.tables]]` descriptions.
+///
+/// Per Phase 83 review R2 (BOTH reviewers HIGH severity), this function calls
+/// ONLY [`SqlConnector::schema_text`] — never `execute()`, which is deferred
+/// to Phase 84. Dialect-aware placeholder GUIDANCE is included even though
+/// `translate_placeholders` is deferred, because the LLM still benefits from
+/// knowing the eventual binding shape.
+///
+/// # Output structure
+///
+/// ```text
+/// # Code Mode — {dialect.name()}
+///
+/// {dialect.placeholder_guidance()}
+///
+/// ## Schema
+///
+/// {connector.schema_text()}
+///
+/// ## Curated Tables
+///
+/// - `table_a`: description A
+/// - `table_b`: description B
+/// ```
+///
+/// The "Curated Tables" section is omitted entirely when
+/// `config.database.tables` is empty OR every entry has no `description`.
+/// Entries with `description = None` are skipped individually.
+///
+/// # Errors
+///
+/// Returns [`ToolkitError::CodeMode`] if `connector.schema_text()` fails.
+/// The toolkit does not retry; callers should ensure the connector is ready
+/// before assembling.
+///
+/// # Example
+///
+/// ```no_run
+/// use pmcp_server_toolkit::code_mode::assemble_code_mode_prompt;
+/// use pmcp_server_toolkit::config::ServerConfig;
+/// use pmcp_server_toolkit::sql::SqlConnector;
+///
+/// async fn assemble<C: SqlConnector>(connector: &C, config: &ServerConfig) {
+///     let prompt = assemble_code_mode_prompt(connector, config).await.unwrap();
+///     assert!(prompt.contains("# Code Mode"));
+/// }
+/// ```
+pub async fn assemble_code_mode_prompt(
+    connector: &(dyn SqlConnector + '_),
+    config: &ServerConfig,
+) -> Result<String> {
+    let dialect = connector.dialect();
+    let schema_text = connector
+        .schema_text()
+        .await
+        .map_err(|e| ToolkitError::CodeMode(format!("schema_text failed: {e}")))?;
+
+    let curated = format_curated_tables(config);
+
+    let mut out = String::with_capacity(schema_text.len() + curated.len() + 256);
+    out.push_str("# Code Mode — ");
+    out.push_str(dialect.name());
+    out.push_str("\n\n");
+    out.push_str(dialect.placeholder_guidance());
+    out.push_str("\n\n## Schema\n\n");
+    out.push_str(&schema_text);
+    if !curated.is_empty() {
+        out.push_str("\n\n## Curated Tables\n\n");
+        out.push_str(&curated);
+    }
+    out.push('\n');
+    Ok(out)
+}
+
+/// Format the `[[database.tables]]` curated descriptions as a Markdown list.
+///
+/// Entries with no `description` are skipped. Returns an empty string when no
+/// described entries exist; callers use that as the signal to omit the whole
+/// "Curated Tables" section (keeping the prompt body tight).
+fn format_curated_tables(config: &ServerConfig) -> String {
+    config
+        .database
+        .tables
+        .iter()
+        .filter_map(|t| {
+            t.description
+                .as_deref()
+                .filter(|d| !d.is_empty())
+                .map(|d| format!("- `{}`: {}", t.name, d))
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+// =============================================================================
 // Unit tests
 // =============================================================================
 
@@ -440,5 +541,136 @@ mod tests {
             },
             Err(other) => panic!("expected CodeMode error, got {other:?}"),
         }
+    }
+}
+
+// =============================================================================
+// TKIT-10 — assemble_code_mode_prompt integration tests
+// =============================================================================
+
+#[cfg(test)]
+mod tkit10_tests {
+    use super::*;
+    use crate::config::{
+        DatabaseSection, DatabaseTableDecl, ServerConfig, ServerSection,
+    };
+    use crate::sql::{Dialect, MockSqlConnector};
+
+    fn make_cfg(tables: Vec<DatabaseTableDecl>) -> ServerConfig {
+        ServerConfig {
+            server: ServerSection {
+                name: "test".to_string(),
+                version: "0.1.0".to_string(),
+                ..Default::default()
+            },
+            database: DatabaseSection {
+                tables,
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn assemble_includes_schema_text_and_dialect_name() {
+        let connector = MockSqlConnector {
+            dialect: Dialect::Postgres,
+            schema: "CREATE TABLE users (id SERIAL PRIMARY KEY);".to_string(),
+        };
+        let cfg = make_cfg(vec![]);
+        let prompt = assemble_code_mode_prompt(&connector, &cfg).await.unwrap();
+        assert!(
+            prompt.contains("# Code Mode — PostgreSQL"),
+            "prompt missing dialect header: {prompt}"
+        );
+        assert!(
+            prompt.contains("CREATE TABLE users"),
+            "prompt missing schema body: {prompt}"
+        );
+        assert!(
+            prompt.contains("$1"),
+            "Postgres guidance should mention $1: {prompt}"
+        );
+    }
+
+    #[tokio::test]
+    async fn assemble_includes_curated_descriptions() {
+        let connector = MockSqlConnector {
+            dialect: Dialect::Athena,
+            schema: "(see Glue catalog)".to_string(),
+        };
+        let cfg = make_cfg(vec![
+            DatabaseTableDecl {
+                name: "users".to_string(),
+                description: Some("App users".to_string()),
+            },
+            DatabaseTableDecl {
+                name: "orders".to_string(),
+                description: Some("Customer orders".to_string()),
+            },
+        ]);
+        let prompt = assemble_code_mode_prompt(&connector, &cfg).await.unwrap();
+        assert!(
+            prompt.contains("## Curated Tables"),
+            "prompt missing curated header: {prompt}"
+        );
+        assert!(
+            prompt.contains("`users`: App users"),
+            "prompt missing users description: {prompt}"
+        );
+        assert!(
+            prompt.contains("`orders`: Customer orders"),
+            "prompt missing orders description: {prompt}"
+        );
+        // Athena uses ? placeholders, not $1
+        assert!(
+            prompt.contains("Amazon Athena"),
+            "prompt missing Athena dialect name: {prompt}"
+        );
+    }
+
+    #[tokio::test]
+    async fn assemble_omits_curated_section_when_tables_empty() {
+        let connector = MockSqlConnector {
+            dialect: Dialect::Sqlite,
+            schema: "CREATE TABLE t (id INTEGER PRIMARY KEY);".to_string(),
+        };
+        let cfg = make_cfg(vec![]);
+        let prompt = assemble_code_mode_prompt(&connector, &cfg).await.unwrap();
+        assert!(
+            !prompt.contains("## Curated Tables"),
+            "empty [[database.tables]] must omit curated section: {prompt}"
+        );
+        assert!(
+            prompt.contains("SQLite"),
+            "prompt missing SQLite dialect name: {prompt}"
+        );
+    }
+
+    #[tokio::test]
+    async fn assemble_skips_tables_without_descriptions() {
+        // A described entry mixed with an undescribed one — only the described
+        // row should render. Curated section still emits because at least one
+        // row qualifies.
+        let connector = MockSqlConnector {
+            dialect: Dialect::MySql,
+            schema: "CREATE TABLE t (id INT);".to_string(),
+        };
+        let cfg = make_cfg(vec![
+            DatabaseTableDecl {
+                name: "with_desc".to_string(),
+                description: Some("has description".to_string()),
+            },
+            DatabaseTableDecl {
+                name: "no_desc".to_string(),
+                description: None,
+            },
+        ]);
+        let prompt = assemble_code_mode_prompt(&connector, &cfg).await.unwrap();
+        assert!(prompt.contains("`with_desc`: has description"));
+        assert!(
+            !prompt.contains("`no_desc`"),
+            "undescribed table must not appear in curated section: {prompt}"
+        );
     }
 }
