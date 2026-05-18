@@ -101,6 +101,7 @@ Inherited from v2.1 (see PROJECT.md + prior Decisions log):
 ### Pending Todos
 
 - **OPERATOR DECISION REQUIRED before Wave 1**: D-10-B scope-expansion. Pick one of (1) split Phase 75 into 75 + 75.5 — recommended; (2) accept additional refactor effort in single phase; (3) raise cog threshold (rejected per CONTEXT.md). See `.planning/phases/75-fix-pmat-issues/75-00-SUMMARY.md` "SCOPE EXPANSION DETECTED" section.
+- **Phase 86 — Ship SQLite-from-config example as Shape B/C dogfood.** Replace 526-line hand-coded `cargo-pmcp/src/templates/sqlite_explorer.rs` with `--template sqlite-explorer-config` (TOML-driven, ~50 lines, `code_mode.enabled = true`) + `examples/sqlite_from_config.rs` (≤15-line Shape C). Surfaces three design inputs: Phase 84 needs identifier-substitution on `SqlConnector`; Phase 85 needs `[database.seed]` block; Phase 86 keeps both Rust-driven + TOML-driven templates. See `.planning/todos/pending/2026-05-18-ship-sqlite-from-config-example-as-phase-86-shape-b-c-dogfood.md`.
 
 ### Blockers/Concerns
 
