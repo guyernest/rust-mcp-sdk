@@ -1426,7 +1426,7 @@ Plans:
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
-- [ ] 83-07-PLAN.md — SqlConnector trait stub + Dialect + assemble_code_mode_prompt (TKIT-10, TEST-02) (Wave 4)
+- [x] 83-07-PLAN.md — SqlConnector trait stub + Dialect + assemble_code_mode_prompt (TKIT-10, TEST-02) (Wave 4)
 
 **Wave 5** *(blocked on Wave 4 completion)*
 

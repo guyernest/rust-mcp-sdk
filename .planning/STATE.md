@@ -4,13 +4,13 @@ milestone: v2.2
 milestone_name: Configuration-Only MCP Servers
 status: executing
 stopped_at: "Completed Plan 83-05 — synthesize_from_config GREEN with property + reference-fixture tests; quality-gate passing. Next: Plan 83-06 (TKIT-09 code-mode wiring)."
-last_updated: "2026-05-18T21:53:11.257Z"
+last_updated: "2026-05-18T22:15:38.804Z"
 last_activity: 2026-05-18
 progress:
   total_phases: 44
   completed_phases: 34
   total_plans: 146
-  completed_plans: 143
+  completed_plans: 144
   percent: 77
 ---
 
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-05-17)
 ## Current Position
 
 Phase: 83 (Toolkit Core Lift (`pmcp-server-toolkit`)) — EXECUTING
-Plan: 7 of 9
+Plan: 8 of 9
 Status: Ready to execute
 Last activity: 2026-05-18
 
@@ -103,6 +103,8 @@ Inherited from v2.1 (see PROJECT.md + prior Decisions log):
 - [Phase ?]: Plan 83-06 selected R1 split (validation_pipeline_from_config + code_mode_tools_from_executor) — pmcp-code-mode CodeExecutor requires backend injection; no config-only constructor exists.
 - [Phase ?]: Plan 83-06 R9 inline-secret enforcement: token_secret defaults to env:VAR_NAME; inline literals rejected via ConfigValidationError::InlineSecretRejected unless allow_inline_token_secret_for_dev=true.
 - [Phase ?]: Plan 83-06 toolkit code-mode feature now forwards pmcp-code-mode/sql-code-mode so SC-3 anchor (allow_writes=false rejects INSERT) compiles under --features code-mode.
+- [Phase ?]: Plan 83-07: Accepted R2 minimization — SqlConnector ships only dialect() + schema_text() in 0.1.0
+- [Phase ?]: Plan 83-07: MockSqlConnector stays pub(crate) — Plan 08 smoke test reaches it under --features sqlite
 
 ### Roadmap Evolution
 
@@ -129,6 +131,7 @@ Inherited from v2.1 (see PROJECT.md + prior Decisions log):
 | Phase 83 P04 | 40 min | 3 tasks | 4 files |
 | Phase 83 P05 | 22min | 3 tasks | 4 files |
 | Phase 83 P06 | 35min | 4 tasks | 7 files |
+| Phase 83-toolkit-core-lift-pmcp-server-toolkit P07 | 19min | 3 tasks | 3 files |
 
 ### Last Activity
 
@@ -146,6 +149,6 @@ Inherited from v2.1 (see PROJECT.md + prior Decisions log):
 
 ## Session Continuity
 
-Last session: 2026-05-18T21:52:50.113Z
+Last session: 2026-05-18T22:15:15.401Z
 Stopped at: Completed Plan 83-05 — synthesize_from_config GREEN with property + reference-fixture tests; quality-gate passing. Next: Plan 83-06 (TKIT-09 code-mode wiring).
 Resume: Next is `/gsd-plan-phase 82` to break Phase 82 (Builder DX Prerequisites) into plans. Phase 82 is the unblocker for every subsequent v2.2 phase that uses `tool_arc` / `prompt_arc` — without it, every config-driven toolkit author writes a 20-line delegating wrapper shim (the same DX paper-cut spike 004 hit). After 82, the critical path is 83 (TKIT anchor) → 84 (CONN anchor) → 85 (Shape A + REF parity). Phases 86 and 87 can run in parallel once 83 lands.
