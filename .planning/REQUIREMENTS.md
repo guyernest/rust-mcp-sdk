@@ -117,9 +117,10 @@ Derived from validated spikes 003 (schema-server-surface-diff), 004 (schema-serv
 
 Upstream PMCP changes that unblock external toolkit authors (spike 004 surfaced these).
 
-- [ ] **BLDR-01**: `pmcp::ServerBuilder::tool_arc(name, Arc<dyn ToolHandler>)` lifted from `ServerCoreBuilder` to the public builder so config-driven toolkits can share an `Arc<Handler>` between the builder and an in-process handler map without a 20-line delegating shim
-- [ ] **BLDR-02**: `pmcp::ServerBuilder::prompt_arc(name, Arc<dyn PromptHandler>)` lifted from `ServerCoreBuilder` to the public builder
-- [ ] **BLDR-03**: Public in-process driver for a built `pmcp::Server` OR an officially documented handler-level testing pattern so external toolkit integration tests can drive request flow without poking at private `Server::handle_request`
+- [x] **BLDR-01**: `pmcp::ServerBuilder::tool_arc(name, Arc<dyn ToolHandler>)` lifted from `ServerCoreBuilder` to the public builder so config-driven toolkits can share an `Arc<Handler>` between the builder and an in-process handler map without a 20-line delegating shim
+- [x] **BLDR-02**: `pmcp::ServerBuilder::prompt_arc(name, Arc<dyn PromptHandler>)` lifted from `ServerCoreBuilder` to the public builder
+- [ ] **BLDR-03**: Public in-process driver for a built `pmcp::Server` OR an officially documented handler-level testing pattern so external toolkit integration tests can drive request flow without poking at private `Server::handle_request`. Includes `Server::get_tool(name)` accessor symmetric with `Server::get_prompt`.
+- [x] **BLDR-04**: `pmcp::ServerBuilder` gains `_arc` variants for the remaining four handler types (`resources_arc`, `sampling_arc`, `auth_provider_arc`, `tool_authorizer_arc`) so all impl-or-Arc handler-registration paths reach parity with `ServerCoreBuilder`
 
 ### Toolkit Core (`pmcp-server-toolkit`)
 
@@ -336,9 +337,10 @@ Which phases cover which requirements. Updated during roadmap creation.
 | REQ-77-09 | Phase 77 | Complete |
 | REQ-77-10 | Phase 77 | Complete |
 | REQ-77-11 | Phase 77 | Complete |
-| BLDR-01 | Phase 82 | Pending |
-| BLDR-02 | Phase 82 | Pending |
+| BLDR-01 | Phase 82 | Complete |
+| BLDR-02 | Phase 82 | Complete |
 | BLDR-03 | Phase 82 | Pending |
+| BLDR-04 | Phase 82 | Complete |
 | TKIT-01 | Phase 83 | Pending |
 | TKIT-02 | Phase 83 | Pending |
 | TKIT-03 | Phase 83 | Pending |
@@ -387,6 +389,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | TEST-07 | Phase 84 | Pending |
 
 **Coverage:**
+
 - v2.1 requirements: 42 total (20 pre-seed + 3 seeded by Phase 69 + 5 seeded by Phase 72 + 1 seeded by Phase 72.1 CR-03 + 2 seeded by Phase 74 + 11 seeded by Phase 77)
 - v2.2 requirements: 49 total (BLDR ×3 + TKIT ×10 + CONN ×8 + SHAP ×4 + SKLL ×7 + REF ×3 + DOGF ×2 + DOCS ×5 + TEST ×7)
 - Mapped to phases: v2.1 42 / 42; v2.2 49 / 49 (Phases 82–89)

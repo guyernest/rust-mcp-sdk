@@ -1238,13 +1238,19 @@ Plans:
 ### Phase 82: Builder DX Prerequisites
 **Goal**: External toolkit authors can share an `Arc<dyn ToolHandler>` between `pmcp::ServerBuilder` and an in-process handler map without writing a 20-line delegating wrapper shim, and can drive a built `pmcp::Server` in integration tests via a documented public pattern.
 **Depends on**: Phase 81 (v2.1 close); independent of any other v2.2 phase (this unblocks every later phase that uses `tool_arc` / `prompt_arc` in `pmcp-server-toolkit`)
-**Requirements**: BLDR-01, BLDR-02, BLDR-03
+**Requirements**: BLDR-01, BLDR-02, BLDR-03, BLDR-04
 **Success Criteria** (what must be TRUE):
   1. A toolkit author can call `pmcp::ServerBuilder::tool_arc(name, Arc::new(handler))` on the public builder and share that same `Arc` with an in-process handler map — no delegating wrapper required
   2. A toolkit author can call `pmcp::ServerBuilder::prompt_arc(name, Arc::new(handler))` on the public builder with the same `Arc`-sharing semantics
   3. A toolkit integration test can drive a built `pmcp::Server` end-to-end through `tools/list` / `tools/call` flow via a public in-process driver OR via an officially documented handler-level testing pattern — no poking at private `Server::handle_request`
-  4. The two new builder methods are additive (no existing builder method signatures change) and ship in a minor `pmcp` version bump
-**Plans**: TBD
+  4. The new builder methods are additive (no existing builder method signatures change) and ship in a minor `pmcp` version bump
+  5. All six `_arc` handler-registration paths (`tool_arc`, `prompt_arc`, `resources_arc`, `sampling_arc`, `auth_provider_arc`, `tool_authorizer_arc`) reach parity with `ServerCoreBuilder`
+  6. `pmcp::Server::get_tool(name) -> Option<&Arc<dyn ToolHandler>>` exists, symmetric with the existing `get_prompt(name)`
+**Plans**: 3 plans (1 complete)
+Plans:
+- [x] 82-01-PLAN.md — Lift six `_arc` methods + `Server::get_tool` + behavioral test + D-03 doctests (commits 8de9ad79..f0dc4b60; [SUMMARY](./phases/82-builder-dx-prerequisites/82-01-SUMMARY.md))
+- [ ] 82-02-PLAN.md — Reference test `tests/in_process_handler_pattern.rs`
+- [ ] 82-03-PLAN.md — Book section on handler-level testing pattern
 
 ### Phase 83: Toolkit Core Lift (`pmcp-server-toolkit`)
 **Goal**: A new public `crates/pmcp-server-toolkit/` crate exposes the `mcp-server-common` shape (auth, secrets, static resources, static prompts, HMAC tokens, `ToolInfo` synthesis from `[[tools]]` config, code-mode policy wiring) so any external developer can build a config-driven MCP server core without depending on `pmcp-run` internals. The three pmcp-run backend cores cut their path-deps and gain independent release cadence.
