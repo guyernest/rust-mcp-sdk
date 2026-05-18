@@ -1,0 +1,803 @@
+# Snapshot from pmcp-run/built-in/sql-api/servers/imdb/config.toml (operator-supplied 2026-05-18).
+# Source-of-truth — DO NOT edit. Re-snapshot via the task documented in
+# .planning/phases/83-toolkit-core-lift-pmcp-server-toolkit/83-01-PLAN.md Task 4.
+# IMDB Movie Database MCP Server Configuration
+# This server connects to IMDB data in AWS Athena, providing movie search
+# and exploration capabilities through curated MCP tools and Code Mode.
+
+[server]
+id = "imdb"
+name = "IMDB Movie Database"
+description = "Query the IMDB movie database via AWS Athena. Search movies, browse ratings, and explore film data."
+type = "sql-api"
+version = "1.0.0"
+
+# =============================================================================
+# Display Metadata (defaults for admin-configurable fields)
+# =============================================================================
+# These values populate the server record on first deploy or after deletion.
+# Admin edits via UI always take priority over these defaults.
+
+[metadata]
+display_name = "IMDB Movie Database"
+short_description = "Query the IMDB movie database via AWS Athena"
+description = "Query the IMDB movie database via AWS Athena. Search movies, browse ratings, explore cast and crew, and analyze film data across millions of titles."
+tags = ["movies", "imdb", "database", "athena"]
+author = "pmcp.run"
+visibility = "public"
+
+[database]
+# AWS Athena for querying IMDB data
+type = "athena"
+database = "imdb"
+output_location = "s3://aws-athena-query-results-${AWS_ACCOUNT_ID}-${AWS_REGION}/imdb/"
+workgroup = "primary"
+query_timeout_ms = 60000
+
+# Table definitions for Code Mode schema enrichment
+[[database.tables]]
+name = "title_basics_optimized"
+description = "Basic title information - movies, TV shows, shorts. Contains title, year, runtime, and genres."
+
+[[database.tables]]
+name = "title_ratings_optimized"
+description = "IMDB ratings and vote counts for titles."
+
+[[database.tables]]
+name = "title_akas_optimized"
+description = "Alternative titles/names for titles in different regions and languages."
+
+[[database.tables]]
+name = "title_crew_optimized"
+description = "Directors and writers for titles. References name_basics_optimized via nconst."
+
+[[database.tables]]
+name = "title_episode_optimized"
+description = "TV episode information - links episodes to their parent series with season/episode numbers."
+
+[[database.tables]]
+name = "title_principals_optimized"
+description = "Principal cast and crew for titles. Links to name_basics_optimized via nconst."
+
+[[database.tables]]
+name = "name_basics_optimized"
+description = "People in the database - actors, directors, writers, etc. Contains name, birth/death years, professions."
+
+[database.pool]
+max_connections = 5
+connection_timeout_seconds = 60
+
+[code_mode]
+# Enable Code Mode for custom SQL queries (~80% of functionality)
+enabled = true
+
+# Server ID — MUST match the entityId used in Cedar policies (AVP).
+# Required for AVP authorization to resolve the correct policy set.
+server_id = "imdb"
+
+# IMDB is read-only - no mutations allowed
+allow_writes = false
+allow_deletes = false
+allow_ddl = false
+
+# Require LIMIT on SELECT queries for cost control
+require_limit = true
+max_limit = 1000
+
+# No blocked or sensitive tables/columns for IMDB
+blocked_tables = []
+sensitive_columns = []
+
+# Risk levels for auto-approval
+auto_approve_levels = ["low"]
+
+# Token settings
+token_ttl_seconds = 300
+
+# Secret for HMAC signing (resolved from Secrets Manager)
+token_secret = "${CODE_MODE_SECRET}"
+
+# Complexity limits
+# Note: With alias tracking, a 2-table JOIN with aliases (tb, tr) correctly counts as 2 tables
+[code_mode.limits]
+max_tables_per_query = 5
+max_join_depth = 4
+max_subquery_depth = 2
+
+# =============================================================================
+# MCP Tools (~20% - Essential Operations Only)
+# =============================================================================
+# These 3 tools cover the most common movie database operations.
+# All other operations (filtering by genre, year ranges, actor lookups, etc.)
+# are available via Code Mode - the LLM can generate SQL using the schema resource.
+#
+# Pareto Principle:
+#   - 3 curated tools = ~20% of functionality (common operations)
+#   - Code Mode = ~80% of functionality (long tail via SQL generation)
+
+# -----------------------------------------------------------------------------
+# Tool 1: Search Movies (Most Common Operation)
+# -----------------------------------------------------------------------------
+# Users most commonly want to find movies by title
+
+[[tools]]
+name = "search_movies"
+description = "Search for movies by title. Returns basic info, ratings, and year."
+sql = """
+SELECT
+    tb.tconst,
+    tb.primary_title,
+    tb.original_title,
+    tb.start_year,
+    tb.runtime_minutes,
+    tb.genres,
+    tr.average_rating,
+    tr.num_votes
+FROM title_basics_optimized tb
+LEFT JOIN title_ratings_optimized tr ON tb.tconst = tr.tconst
+WHERE tb.title_type = 'movie'
+  AND lower(tb.primary_title) LIKE '%' || lower(:query) || '%'
+ORDER BY tr.num_votes DESC NULLS LAST
+LIMIT :limit
+"""
+
+[[tools.parameters]]
+name = "query"
+type = "string"
+description = "Search term for movie title"
+required = true
+max_length = 20
+
+[[tools.parameters]]
+name = "limit"
+type = "integer"
+description = "Maximum results to return"
+required = false
+default = 20
+minimum = 1
+maximum = 100
+
+[tools.annotations]
+read_only_hint = true
+destructive_hint = false
+idempotent_hint = true
+open_world_hint = true
+cost_hint = "medium"
+
+# -----------------------------------------------------------------------------
+# Tool 2: Get Title Details (Lookup by ID)
+# -----------------------------------------------------------------------------
+# After finding movies, users want detailed information about a specific title
+
+[[tools]]
+name = "get_title_details"
+description = "Get detailed information about a specific title by IMDB ID."
+sql = """
+SELECT
+    tb.tconst,
+    tb.title_type,
+    tb.primary_title,
+    tb.original_title,
+    tb.start_year,
+    tb.runtime_minutes,
+    tb.genres,
+    tb.is_adult,
+    tr.average_rating,
+    tr.num_votes
+FROM title_basics_optimized tb
+LEFT JOIN title_ratings_optimized tr ON tb.tconst = tr.tconst
+WHERE tb.tconst = :title_id
+LIMIT 1
+"""
+
+[[tools.parameters]]
+name = "title_id"
+type = "string"
+description = "IMDB title ID (e.g., 'tt0111161' for The Shawshank Redemption)"
+required = true
+
+[tools.annotations]
+read_only_hint = true
+destructive_hint = false
+idempotent_hint = true
+open_world_hint = true
+cost_hint = "low"
+
+# -----------------------------------------------------------------------------
+# Tool 3: Top Rated Movies (Discovery)
+# -----------------------------------------------------------------------------
+# Allows discovering the best-rated movies with configurable vote threshold
+
+[[tools]]
+name = "top_rated_movies"
+description = "Get the top-rated movies with a minimum vote count threshold."
+sql = """
+SELECT
+    tb.tconst,
+    tb.primary_title,
+    tb.start_year,
+    tb.genres,
+    tb.runtime_minutes,
+    tr.average_rating,
+    tr.num_votes
+FROM title_basics_optimized tb
+JOIN title_ratings_optimized tr ON tb.tconst = tr.tconst
+WHERE tb.title_type = 'movie'
+  AND tr.num_votes >= :min_votes
+ORDER BY tr.average_rating DESC, tr.num_votes DESC
+LIMIT :limit
+"""
+
+[[tools.parameters]]
+name = "min_votes"
+type = "integer"
+description = "Minimum number of votes required"
+required = false
+default = 25000
+minimum = 1000
+
+[[tools.parameters]]
+name = "limit"
+type = "integer"
+description = "Maximum results to return"
+required = false
+default = 20
+minimum = 1
+maximum = 100
+
+[tools.annotations]
+read_only_hint = true
+destructive_hint = false
+idempotent_hint = true
+open_world_hint = true
+cost_hint = "medium"
+
+# =============================================================================
+# MCP Resources - Code Mode Context
+# =============================================================================
+# These resources provide all the context needed for Code Mode SQL generation.
+# Load them via the start_code_mode prompt.
+
+# -----------------------------------------------------------------------------
+# Resource 1: Schema Documentation
+# -----------------------------------------------------------------------------
+# Tables, columns, relationships, and data limitations
+
+[[resources]]
+uri = "docs://imdb/schema"
+name = "IMDB Database Schema"
+description = "Tables, columns, relationships, and data limitations for the IMDB database"
+mime_type = "text/markdown"
+content = """
+# IMDB Database Schema (AWS Athena / Presto SQL)
+
+## Quick Reference
+
+| Fact | Value |
+|------|-------|
+| Dialect | AWS Athena (Presto/Trino SQL) |
+| Tables | 7 tables, all read-only |
+| Primary keys | `tconst` (titles), `nconst` (people) |
+| Array columns | genres, directors, writers, primary_profession, known_for_titles |
+| Array syntax | `contains(arr, 'val')` not `arr = 'val'` |
+| String matching | Case-sensitive — always use `lower()` |
+| LIMIT required | Yes, max 1000 |
+| Episode titles | NOT available in title_basics |
+
+## Sample IDs for Testing
+
+| ID | Name | Type |
+|----|------|------|
+| tt0111161 | The Shawshank Redemption | movie |
+| tt0068646 | The Godfather | movie |
+| tt0468569 | The Dark Knight | movie |
+| tt0903747 | Breaking Bad | tvSeries |
+| tt0944947 | Game of Thrones | tvSeries |
+| nm0000138 | Leonardo DiCaprio | person |
+| nm0000151 | Morgan Freeman | person |
+| nm0634240 | Christopher Nolan | person |
+
+## SQL Dialect: Athena (Presto/Trino)
+
+Key syntax differences from standard SQL:
+- **ARRAY membership**: `contains(array_col, 'value')` — NOT `array_col = 'value'`
+- **ARRAY expansion**: `CROSS JOIN UNNEST(array_col) AS t(element)` — expands array into rows
+- **String matching**: `lower(col) LIKE '%term%'` — Athena is case-sensitive by default
+- **NULL ordering**: `ORDER BY col DESC NULLS LAST` — for predictable sort order
+- **String concatenation**: `'%' || lower(:param) || '%'` — use `||` not `CONCAT()`
+
+## Tables
+
+### title_basics_optimized
+Core table — basic information about titles (movies, TV shows, shorts).
+**Approx rows:** ~2.1M
+**IMPORTANT**: Does NOT contain tvEpisode records.
+
+| Column | Type | Description | Values |
+|--------|------|-------------|--------|
+| tconst | STRING | Primary key (e.g., 'tt0111161') | Prefix: 'tt' |
+| title_type | STRING | Content type | 'movie', 'short', 'tvSeries', 'tvMiniSeries', 'tvMovie' |
+| primary_title | STRING | Popular title | e.g., 'The Shawshank Redemption' |
+| original_title | STRING | Original language title | |
+| is_adult | INT | Adult content flag | 0 = no, 1 = yes |
+| start_year | INT | Release year | e.g., 1994 |
+| runtime_minutes | INT | Runtime in minutes | e.g., 142 (nullable) |
+| genres | ARRAY<STRING> | Genre list | 'Drama', 'Comedy', 'Action', 'Thriller', 'Horror', 'Sci-Fi', 'Romance', 'Crime', 'Adventure', 'Animation' |
+
+### title_ratings_optimized
+Ratings and vote counts. Not all titles have ratings.
+**Approx rows:** ~1.4M
+
+| Column | Type | Description |
+|--------|------|-------------|
+| tconst | STRING | FK → title_basics_optimized.tconst |
+| average_rating | DOUBLE | Weighted average rating (1.0–10.0) |
+| num_votes | INT | Number of votes (ranges: 5 to 2.8M) |
+
+### title_akas_optimized
+Alternative titles in different regions/languages.
+**Approx rows:** ~37M
+
+| Column | Type | Description | Values |
+|--------|------|-------------|--------|
+| title_id | STRING | FK → title_basics_optimized.tconst | Note: column is `title_id`, not `tconst` |
+| title | STRING | Localized title | |
+| region | STRING | Region code | 'US', 'GB', 'FR', 'DE', 'JP', etc. |
+| language | STRING | Language code | 'en', 'fr', 'de', 'ja', etc. |
+| is_original_title | INT | Original title flag | 0 or 1 |
+
+### title_crew_optimized
+Directors and writers for titles. One row per title.
+**Approx rows:** ~2.1M
+
+| Column | Type | Description |
+|--------|------|-------------|
+| tconst | STRING | FK → title_basics_optimized.tconst |
+| directors | ARRAY<STRING> | Array of nconst IDs — use UNNEST to expand |
+| writers | ARRAY<STRING> | Array of nconst IDs — use UNNEST to expand |
+
+### title_episode_optimized
+TV episode structure. Links episodes to parent series.
+**Approx rows:** ~7.8M
+**WARNING**: Episode tconst values do NOT exist in title_basics_optimized.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| tconst | STRING | Episode identifier |
+| parent_tconst | STRING | FK → title_basics_optimized.tconst (the series) |
+| season_number | INT | Season number (nullable) |
+| episode_number | INT | Episode number (nullable) |
+
+### title_principals_optimized
+Principal cast and crew for titles. Multiple rows per title.
+**Approx rows:** ~60M
+
+| Column | Type | Description | Values |
+|--------|------|-------------|--------|
+| tconst | STRING | FK → title_basics_optimized.tconst | |
+| nconst | STRING | FK → name_basics_optimized.nconst | |
+| category | STRING | Role type | 'actor', 'actress', 'director', 'writer', 'producer', 'composer', 'cinematographer', 'editor', 'self' |
+| characters | STRING | Character names (JSON string) | e.g., '["Andy Dufresne"]' |
+
+### name_basics_optimized
+People — actors, directors, writers, etc.
+**Approx rows:** ~13M
+
+| Column | Type | Description | Values |
+|--------|------|-------------|--------|
+| nconst | STRING | Primary key (e.g., 'nm0000001') | Prefix: 'nm' |
+| primary_name | STRING | Person's name | e.g., 'Tom Hanks' |
+| birth_year | INT | Year of birth | |
+| death_year | INT | Year of death (nullable) | |
+| primary_profession | ARRAY<STRING> | Top professions | 'actor', 'actress', 'director', 'writer', 'producer', 'composer' |
+| known_for_titles | ARRAY<STRING> | Notable tconst IDs | |
+
+## JOIN Conditions Reference
+
+Use these exact JOIN conditions:
+
+| From Table | To Table | JOIN ON |
+|------------|----------|---------|
+| title_basics_optimized (tb) | title_ratings_optimized (tr) | `tb.tconst = tr.tconst` |
+| title_basics_optimized (tb) | title_akas_optimized (ta) | `tb.tconst = ta.title_id` |
+| title_basics_optimized (tb) | title_crew_optimized (tc) | `tb.tconst = tc.tconst` |
+| title_basics_optimized (tb) | title_principals_optimized (tp) | `tb.tconst = tp.tconst` |
+| title_basics_optimized (tb) | title_episode_optimized (ep) | `tb.tconst = ep.parent_tconst` (series→episodes) |
+| title_principals_optimized (tp) | name_basics_optimized (nb) | `tp.nconst = nb.nconst` |
+| title_crew_optimized (tc) | name_basics_optimized (nb) | `CROSS JOIN UNNEST(tc.directors) AS t(dir_id)` then `dir_id = nb.nconst` |
+
+**DO NOT** JOIN `title_episode_optimized.tconst` → `title_basics_optimized.tconst` (episodes are not in title_basics).
+
+## Available Title Types (title_basics_optimized.title_type)
+
+| title_type | Approx Count | Description |
+|------------|--------------|-------------|
+| movie | ~627K | Feature films |
+| short | ~1.05M | Short films |
+| tvSeries | ~269K | TV series |
+| tvMiniSeries | ~63K | Limited/mini series |
+| tvMovie | ~149K | TV movies |
+
+**NOT in this dataset**: tvEpisode, video, videoGame — these were excluded during optimization.
+
+## ARRAY Column Patterns
+
+Several columns are `ARRAY<STRING>`. Use these Athena patterns:
+
+```sql
+-- Filter: titles containing 'Drama' genre
+WHERE contains(tb.genres, 'Drama')
+
+-- Filter: multiple genres (AND)
+WHERE contains(tb.genres, 'Action') AND contains(tb.genres, 'Comedy')
+
+-- Expand: list all genres for a title as separate rows
+SELECT tb.primary_title, genre
+FROM title_basics_optimized tb
+CROSS JOIN UNNEST(tb.genres) AS t(genre)
+WHERE tb.tconst = 'tt0111161'
+LIMIT 10;
+
+-- Expand directors array to get director names
+SELECT nb.primary_name
+FROM title_crew_optimized tc
+CROSS JOIN UNNEST(tc.directors) AS t(dir_id)
+JOIN name_basics_optimized nb ON dir_id = nb.nconst
+WHERE tc.tconst = 'tt0111161'
+LIMIT 10;
+```
+
+## Characters Column (JSON String, NOT Array)
+
+`characters` in title_principals_optimized is a JSON string like `'["Andy Dufresne"]'`.
+Do NOT use `contains()` or `UNNEST()` — use string matching or `json_extract_scalar()`.
+
+```sql
+-- Extract first character name from JSON string
+SELECT nb.primary_name,
+       json_extract_scalar(tp.characters, '$[0]') AS character_name
+FROM title_principals_optimized tp
+JOIN name_basics_optimized nb ON tp.nconst = nb.nconst
+WHERE tp.tconst = 'tt0111161'
+  AND tp.category IN ('actor', 'actress')
+LIMIT 20;
+
+-- Search for a character by name (string matching on JSON)
+SELECT tb.primary_title, nb.primary_name, tp.characters
+FROM title_principals_optimized tp
+JOIN name_basics_optimized nb ON tp.nconst = nb.nconst
+JOIN title_basics_optimized tb ON tp.tconst = tb.tconst
+WHERE lower(tp.characters) LIKE '%andy dufresne%'
+LIMIT 20;
+```
+
+## Data Caveats
+
+1. **Episode titles unavailable**: title_basics_optimized has NO tvEpisode records. Use title_episode_optimized for season/episode structure only.
+2. **Ratings coverage**: Not all titles have ratings. Use LEFT JOIN to title_ratings_optimized to avoid losing unrated titles.
+3. **NULL values**: runtime_minutes, birth_year, death_year, season_number, episode_number can be NULL.
+4. **characters column**: JSON string format like `["Character Name"]`, not a plain string.
+"""
+
+# -----------------------------------------------------------------------------
+# Resources 2 & 3: Code Mode Instructions & Policies
+# -----------------------------------------------------------------------------
+# Auto-generated from templates at server startup.
+# The template system generates code-mode://instructions (with Athena dialect)
+# and code-mode://policies from the [code_mode] config above.
+# To override, add a [[resources]] block with the same URI.
+
+# -----------------------------------------------------------------------------
+# Resource 2: Example Queries
+# -----------------------------------------------------------------------------
+# Curated examples for common operations
+
+[[resources]]
+uri = "docs://imdb/examples"
+name = "IMDB Example Queries"
+description = "Example SQL queries for common IMDB operations"
+mime_type = "text/markdown"
+content = """
+# IMDB Example Queries
+
+Copy these patterns — they use correct Athena syntax, JOIN conditions, and ARRAY handling.
+
+## Search and Filter
+
+```sql
+-- Movies by genre (genres is ARRAY — use contains())
+SELECT tb.primary_title, tb.start_year, tr.average_rating, tr.num_votes
+FROM title_basics_optimized tb
+JOIN title_ratings_optimized tr ON tb.tconst = tr.tconst
+WHERE tb.title_type = 'movie'
+  AND contains(tb.genres, 'Drama')
+  AND tr.num_votes >= 10000
+ORDER BY tr.average_rating DESC
+LIMIT 20;
+
+-- Movies from a decade
+SELECT tb.primary_title, tb.start_year, tr.average_rating
+FROM title_basics_optimized tb
+JOIN title_ratings_optimized tr ON tb.tconst = tr.tconst
+WHERE tb.title_type = 'movie'
+  AND tb.start_year BETWEEN 1980 AND 1989
+  AND tr.num_votes >= 5000
+ORDER BY tr.average_rating DESC
+LIMIT 30;
+
+-- Multi-genre filter (AND — must match all)
+SELECT tb.primary_title, tb.genres, tr.average_rating
+FROM title_basics_optimized tb
+JOIN title_ratings_optimized tr ON tb.tconst = tr.tconst
+WHERE tb.title_type = 'movie'
+  AND contains(tb.genres, 'Action')
+  AND contains(tb.genres, 'Comedy')
+ORDER BY tr.average_rating DESC
+LIMIT 20;
+
+-- Case-insensitive title search
+SELECT tb.primary_title, tb.start_year, tr.average_rating
+FROM title_basics_optimized tb
+LEFT JOIN title_ratings_optimized tr ON tb.tconst = tr.tconst
+WHERE tb.title_type = 'movie'
+  AND lower(tb.primary_title) LIKE '%godfather%'
+ORDER BY tr.num_votes DESC NULLS LAST
+LIMIT 20;
+```
+
+## People Queries
+
+```sql
+-- Movies by actor name (via title_principals)
+SELECT tb.primary_title, tb.start_year, tr.average_rating, tp.category
+FROM title_basics_optimized tb
+JOIN title_principals_optimized tp ON tb.tconst = tp.tconst
+JOIN name_basics_optimized nb ON tp.nconst = nb.nconst
+LEFT JOIN title_ratings_optimized tr ON tb.tconst = tr.tconst
+WHERE tb.title_type = 'movie'
+  AND lower(nb.primary_name) LIKE '%tom hanks%'
+  AND tp.category IN ('actor', 'actress')
+ORDER BY tr.average_rating DESC NULLS LAST
+LIMIT 20;
+
+-- Directors of a specific movie (directors is ARRAY — use UNNEST)
+SELECT tb.primary_title, nb.primary_name AS director
+FROM title_basics_optimized tb
+JOIN title_crew_optimized tc ON tb.tconst = tc.tconst
+CROSS JOIN UNNEST(tc.directors) AS t(director_id)
+JOIN name_basics_optimized nb ON director_id = nb.nconst
+WHERE tb.tconst = 'tt0111161'
+LIMIT 10;
+
+-- All movies by a director (via title_crew UNNEST)
+SELECT tb.primary_title, tb.start_year, tr.average_rating
+FROM title_crew_optimized tc
+CROSS JOIN UNNEST(tc.directors) AS t(dir_id)
+JOIN name_basics_optimized nb ON dir_id = nb.nconst
+JOIN title_basics_optimized tb ON tc.tconst = tb.tconst
+LEFT JOIN title_ratings_optimized tr ON tb.tconst = tr.tconst
+WHERE lower(nb.primary_name) LIKE '%christopher nolan%'
+  AND tb.title_type = 'movie'
+ORDER BY tb.start_year DESC
+LIMIT 20;
+
+-- Cast of a specific movie
+SELECT nb.primary_name, tp.category, tp.characters
+FROM title_principals_optimized tp
+JOIN name_basics_optimized nb ON tp.nconst = nb.nconst
+WHERE tp.tconst = 'tt0111161'
+ORDER BY tp.category
+LIMIT 20;
+```
+
+## TV Series
+
+```sql
+-- Episode ratings for a series (NO episode titles available)
+SELECT ep.season_number, ep.episode_number, tr.average_rating, tr.num_votes
+FROM title_episode_optimized ep
+LEFT JOIN title_ratings_optimized tr ON ep.tconst = tr.tconst
+WHERE ep.parent_tconst = 'tt0903747'  -- Breaking Bad
+ORDER BY ep.season_number, ep.episode_number
+LIMIT 100;
+
+-- Season averages for a series
+SELECT ep.season_number,
+       COUNT(*) AS episodes,
+       ROUND(AVG(tr.average_rating), 2) AS avg_rating,
+       MIN(tr.average_rating) AS min_rating,
+       MAX(tr.average_rating) AS max_rating
+FROM title_episode_optimized ep
+LEFT JOIN title_ratings_optimized tr ON ep.tconst = tr.tconst
+WHERE ep.parent_tconst = 'tt0903747'
+GROUP BY ep.season_number
+ORDER BY ep.season_number
+LIMIT 20;
+
+-- Top rated TV series
+SELECT tb.primary_title, tb.start_year, tr.average_rating, tr.num_votes
+FROM title_basics_optimized tb
+JOIN title_ratings_optimized tr ON tb.tconst = tr.tconst
+WHERE tb.title_type = 'tvSeries'
+  AND tr.num_votes >= 50000
+ORDER BY tr.average_rating DESC
+LIMIT 20;
+```
+
+## Analytics
+
+```sql
+-- Movies per year with average rating
+SELECT tb.start_year, COUNT(*) AS movie_count,
+       ROUND(AVG(tr.average_rating), 2) AS avg_rating
+FROM title_basics_optimized tb
+JOIN title_ratings_optimized tr ON tb.tconst = tr.tconst
+WHERE tb.title_type = 'movie' AND tr.num_votes >= 10000
+GROUP BY tb.start_year
+ORDER BY tb.start_year DESC
+LIMIT 50;
+
+-- Genre popularity (expand genres array into rows)
+SELECT genre, COUNT(*) AS title_count,
+       ROUND(AVG(tr.average_rating), 2) AS avg_rating
+FROM title_basics_optimized tb
+CROSS JOIN UNNEST(tb.genres) AS t(genre)
+JOIN title_ratings_optimized tr ON tb.tconst = tr.tconst
+WHERE tb.title_type = 'movie' AND tr.num_votes >= 5000
+GROUP BY genre
+ORDER BY title_count DESC
+LIMIT 20;
+
+-- Runtime distribution with CASE
+SELECT
+  CASE
+    WHEN runtime_minutes < 90 THEN 'Short (<90 min)'
+    WHEN runtime_minutes < 120 THEN 'Standard (90-120 min)'
+    WHEN runtime_minutes < 150 THEN 'Long (120-150 min)'
+    ELSE 'Very Long (150+ min)'
+  END AS category,
+  COUNT(*) AS count,
+  ROUND(AVG(tr.average_rating), 2) AS avg_rating
+FROM title_basics_optimized tb
+JOIN title_ratings_optimized tr ON tb.tconst = tr.tconst
+WHERE tb.title_type = 'movie' AND tb.runtime_minutes IS NOT NULL
+GROUP BY 1
+ORDER BY count DESC
+LIMIT 10;
+
+-- Localized titles for a movie
+SELECT ta.title, ta.region, ta.language, ta.is_original_title
+FROM title_akas_optimized ta
+WHERE ta.title_id = 'tt0111161'
+ORDER BY ta.region
+LIMIT 50;
+```
+"""
+
+# -----------------------------------------------------------------------------
+# Resource 3: Learnings from Usage
+# -----------------------------------------------------------------------------
+# Tips and corrections discovered from real usage
+
+[[resources]]
+uri = "code-mode://learnings"
+name = "Code Mode Learnings"
+description = "Tips and corrections from Code Mode usage"
+mime_type = "text/markdown"
+content = """
+# Code Mode Learnings
+
+Tips and corrections discovered from real usage of this server.
+
+## Critical Mistakes (Will Return Wrong Results)
+
+### 1. Joining Episodes to title_basics
+**Wrong** — returns zero rows:
+```sql
+SELECT tb.primary_title as episode_name
+FROM title_episode_optimized ep
+JOIN title_basics_optimized tb ON ep.tconst = tb.tconst
+```
+**Why:** title_basics_optimized has NO tvEpisode records.
+**Correct** — query episode structure directly:
+```sql
+SELECT ep.season_number, ep.episode_number, ep.tconst, tr.average_rating
+FROM title_episode_optimized ep
+LEFT JOIN title_ratings_optimized tr ON ep.tconst = tr.tconst
+WHERE ep.parent_tconst = 'tt0903747'
+ORDER BY ep.season_number, ep.episode_number
+LIMIT 100;
+```
+
+### 2. Using Wrong title_type Values
+**Wrong:** `'tv_show'`, `'episode'`, `'TV Series'`, `'film'`
+**Correct:** `'movie'`, `'short'`, `'tvSeries'`, `'tvMiniSeries'`, `'tvMovie'`
+Values are case-sensitive and camelCase.
+
+### 3. title_akas Uses title_id, Not tconst
+**Wrong:** `JOIN title_akas_optimized ta ON tb.tconst = ta.tconst`
+**Correct:** `JOIN title_akas_optimized ta ON tb.tconst = ta.title_id`
+
+### 4. Treating ARRAY Columns as Scalars
+**Wrong:**
+```sql
+WHERE tb.genres = 'Drama'           -- FAILS: genres is ARRAY<STRING>
+WHERE tb.genres LIKE '%Drama%'      -- FAILS: can't LIKE an array
+WHERE 'Drama' IN (tb.genres)        -- FAILS: wrong syntax
+```
+**Correct:**
+```sql
+WHERE contains(tb.genres, 'Drama')  -- Athena array membership test
+```
+
+### 5. Treating directors/writers as Scalar Joins
+**Wrong:**
+```sql
+JOIN name_basics_optimized nb ON tc.directors = nb.nconst  -- FAILS: directors is ARRAY
+```
+**Correct:**
+```sql
+CROSS JOIN UNNEST(tc.directors) AS t(dir_id)
+JOIN name_basics_optimized nb ON dir_id = nb.nconst
+```
+
+### 6. Exact Match on Names
+**Wrong** — may return zero rows due to case or spacing differences:
+```sql
+WHERE nb.primary_name = 'Tom Hanks'
+```
+**Correct** — use case-insensitive partial match:
+```sql
+WHERE lower(nb.primary_name) LIKE '%tom hanks%'
+```
+Names may have unexpected formatting. Always use `lower()` + `LIKE`.
+
+## Validation Errors and Fixes
+
+### "LIMIT required"
+Every SELECT must end with `LIMIT n` where n ≤ 1000.
+
+### "Too many tables"
+Maximum 5 tables per query. Count each table reference (including subqueries).
+
+### "Query type not allowed"
+Only SELECT is allowed. INSERT, UPDATE, DELETE, CREATE, ALTER, DROP are blocked.
+
+## Performance Tips
+
+1. **Filter early**: Apply WHERE on title_basics before JOINing to ratings/principals
+2. **Use num_votes threshold**: `tr.num_votes >= 10000` removes obscure titles with few ratings
+3. **Avoid SELECT ***: Name specific columns — Athena scans column-oriented data
+4. **LIMIT aggressively**: Athena charges by data scanned, not rows returned
+5. **LEFT JOIN for ratings**: Not all titles have ratings — use LEFT JOIN to avoid losing results
+6. **Use NULLS LAST**: `ORDER BY tr.average_rating DESC NULLS LAST` prevents NULLs at top
+
+## Athena SQL Dialect Notes
+
+- **String concat**: `'%' || lower(:param) || '%'` (not `CONCAT()`)
+- **Array contains**: `contains(array_col, 'value')`
+- **Array expand**: `CROSS JOIN UNNEST(array_col) AS t(element)`
+- **Array length**: `cardinality(array_col)`
+- **Case-sensitive**: Always use `lower()` for string comparisons
+- **LIKE patterns**: `%` for wildcard, `_` for single char — no regex in LIKE
+- **Regex**: Use `regexp_like(col, 'pattern')` for regex matching
+- **Date functions**: `start_year` is INT, not DATE — use arithmetic, not date functions
+- **Aggregation**: GROUP BY can reference column positions: `GROUP BY 1, 2`
+- **DISTINCT**: Supported for deduplication: `SELECT DISTINCT genre FROM ...`
+- **HAVING**: Use after GROUP BY: `GROUP BY genre HAVING COUNT(*) > 100`
+"""
+
+# =============================================================================
+# MCP Prompt - Single Entry Point for Code Mode
+# =============================================================================
+
+[[prompts]]
+name = "start_code_mode"
+description = "Load all context needed for Code Mode SQL generation"
+include_resources = [
+    "docs://imdb/schema",
+    "code-mode://instructions",
+    "code-mode://policies",
+    "docs://imdb/examples",
+    "code-mode://learnings"
+]

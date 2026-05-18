@@ -1,0 +1,352 @@
+# Snapshot from pmcp-run/built-in/sql-api/servers/msr-vtt/config.toml (operator-supplied 2026-05-18).
+# Source-of-truth — DO NOT edit. Re-snapshot via the task documented in
+# .planning/phases/83-toolkit-core-lift-pmcp-server-toolkit/83-01-PLAN.md Task 4.
+# MSR-VTT Video Dataset MCP Server Configuration
+# This server connects to the MSR-VTT video dataset in AWS Athena, providing
+# video search and class hierarchy browsing through curated MCP tools and Code Mode.
+
+[server]
+id = "msr-vtt"
+name = "MSR-VTT Video Explorer"
+description = "Explore the MSR-VTT video dataset via AWS Athena. Search videos by class, browse the visual class hierarchy, and analyze 10K video clips with 200K human-written captions."
+type = "sql-api"
+version = "1.0.0"
+
+# =============================================================================
+# Display Metadata (defaults for admin-configurable fields)
+# =============================================================================
+# These values populate the server record on first deploy or after deletion.
+# Admin edits via UI always take priority over these defaults.
+
+[metadata]
+display_name = "MSR-VTT Video Explorer"
+short_description = "Explore the MSR-VTT video dataset via AWS Athena"
+description = "Explore the MSR-VTT video dataset via AWS Athena. Search videos by class, browse the visual class hierarchy, and analyze 10K video clips with 200K human-written captions."
+tags = ["videos", "msr-vtt", "captions", "athena", "dataset"]
+author = "pmcp.run"
+visibility = "public"
+
+[database]
+# AWS Athena for querying MSR-VTT data
+type = "athena"
+database = "msr_vtt"
+output_location = "s3://aws-athena-query-results-${AWS_ACCOUNT_ID}-${AWS_REGION}/msr-vtt/"
+workgroup = "msr-vtt"
+query_timeout_ms = 60000
+
+# Table definitions for Code Mode schema enrichment
+# 7 base tables + 5 pre-joined views
+
+[[database.tables]]
+name = "videos"
+description = "Core video metadata: video_id, YouTube URL, duration, resolution, S3 public_url, category"
+
+[[database.tables]]
+name = "captions"
+description = "Human-written video captions (~20 per video)"
+
+[[database.tables]]
+name = "video_labels"
+description = "Labels extracted from captions: video_id, label_name, confidence"
+
+[[database.tables]]
+name = "video_relationships"
+description = "Subject-predicate-object triples from captions"
+
+[[database.tables]]
+name = "video_class_descriptions"
+description = "Class name mappings: label_name to display_name"
+
+[[database.tables]]
+name = "video_label_hierarchy"
+description = "Parent-child class hierarchy: parent_label, child_label"
+
+[[database.tables]]
+name = "categories"
+description = "MSR-VTT video categories (20 categories)"
+
+[[database.tables]]
+name = "labeled_videos"
+description = "VIEW: JOIN of video_labels + videos + video_class_descriptions"
+
+[[database.tables]]
+name = "labeled_video_relationships"
+description = "VIEW: JOIN of video_relationships + videos"
+
+[[database.tables]]
+name = "class_hierarchy_resolved"
+description = "VIEW: Pre-joined hierarchy with parent/child names"
+
+[[database.tables]]
+name = "relationship_summary"
+description = "VIEW: Pre-aggregated relationship counts"
+
+[[database.tables]]
+name = "entity_video_counts"
+description = "VIEW: Pre-aggregated video counts per label"
+
+[database.pool]
+max_connections = 5
+connection_timeout_seconds = 60
+
+[code_mode]
+# Enable Code Mode for custom SQL queries (~80% of functionality)
+enabled = true
+
+# MSR-VTT is read-only - no mutations allowed
+allow_writes = false
+allow_deletes = false
+allow_ddl = false
+
+# Require LIMIT on SELECT queries for cost control
+require_limit = true
+max_limit = 1000
+
+# No blocked or sensitive tables/columns for MSR-VTT
+blocked_tables = []
+sensitive_columns = []
+
+# Risk levels for auto-approval
+auto_approve_levels = ["low"]
+
+# Token settings
+token_ttl_seconds = 300
+
+# Secret for HMAC signing (resolved from Secrets Manager)
+token_secret = "${CODE_MODE_SECRET}"
+
+# Complexity limits
+[code_mode.limits]
+max_tables_per_query = 5
+max_join_depth = 4
+max_subquery_depth = 2
+
+# =============================================================================
+# MCP Tools
+# =============================================================================
+# 3 TOML-defined tools: explore_category, browse_relationships,
+# search_relationships. Custom Rust handlers: find_videos, get_video_details,
+# resolve_labels (registered in main.rs).
+#
+# Pareto Principle:
+#   - 3 TOML tools + 3 custom handlers = essential operations
+#   - Code Mode = long tail via SQL generation
+
+# -----------------------------------------------------------------------------
+# Tool 1: Explore Category (Hierarchy Browser with Summaries)
+# -----------------------------------------------------------------------------
+# Dual-mode: keyword search, hierarchy drill-down, or top-level root categories.
+# Returns subtree nodes with relationship summaries.
+
+[[tools]]
+name = "explore_category"
+description = "Explore the class hierarchy. In keyword mode, search class names. In drill-down mode, show children of a specific class. With no arguments, show top-level root categories. Returns subtree nodes with relationship summaries."
+ui_resource_uri = "ui://msr-vtt/graph-explorer.html"
+sql = """
+WITH target AS (
+    SELECT vcd.label_name, vcd.display_name
+    FROM video_class_descriptions vcd
+    WHERE (
+        (:keyword != '' AND lower(vcd.display_name) LIKE '%' || lower(:keyword) || '%')
+        OR
+        (:class_name != '' AND vcd.label_name IN (
+            SELECT chr.child_id FROM class_hierarchy_resolved chr
+            WHERE lower(chr.parent_name) = lower(:class_name)
+        ))
+        OR
+        (:keyword = '' AND :class_name = '' AND NOT EXISTS (
+            SELECT 1 FROM class_hierarchy_resolved chr2 WHERE chr2.child_id = vcd.label_name
+        ))
+    )
+),
+child_counts AS (
+    SELECT t.label_name, COUNT(*) AS child_count
+    FROM target t
+    JOIN class_hierarchy_resolved chr ON chr.parent_id = t.label_name
+    GROUP BY t.label_name
+),
+rel_summaries AS (
+    SELECT t.label_name, COUNT(DISTINCT rs.predicate) AS relationship_types
+    FROM target t
+    JOIN relationship_summary rs ON rs.subject_id = t.label_name OR rs.object_id = t.label_name
+    GROUP BY t.label_name
+)
+SELECT t.display_name AS class_name,
+       t.label_name AS class_id,
+       COALESCE(cc.child_count, 0) AS child_count,
+       COALESCE(rs.relationship_types, 0) AS relationship_types
+FROM target t
+LEFT JOIN child_counts cc ON cc.label_name = t.label_name
+LEFT JOIN rel_summaries rs ON rs.label_name = t.label_name
+ORDER BY t.display_name
+LIMIT :limit
+"""
+
+[[tools.parameters]]
+name = "keyword"
+type = "string"
+description = "Keyword to search class names (e.g., 'man', 'vehicle'). Leave empty for drill-down or root mode."
+required = false
+default = ""
+max_length = 50
+
+[[tools.parameters]]
+name = "class_name"
+type = "string"
+description = "Parent class name to drill into (e.g., 'person', 'animal'). Leave empty for keyword or root mode."
+required = false
+default = ""
+max_length = 50
+
+[[tools.parameters]]
+name = "limit"
+type = "integer"
+description = "Maximum results to return"
+required = false
+default = 50
+minimum = 1
+maximum = 200
+
+[tools.annotations]
+read_only_hint = true
+destructive_hint = false
+idempotent_hint = true
+open_world_hint = true
+cost_hint = "medium"
+
+# -----------------------------------------------------------------------------
+# Tool 2: Search Relationships (Subject-Predicate-Object)
+# -----------------------------------------------------------------------------
+# Search relationships between entities in videos
+
+[[tools]]
+name = "search_relationships"
+description = "Search for relationships between entities in videos. At least one of subject, predicate, or object should be specified."
+sql = """
+SELECT lvr.video_id, lvr.public_url, lvr.subject, lvr.predicate, lvr.object,
+       lvr.category_label, CAST(lvr.duration_seconds AS VARCHAR) AS duration
+FROM labeled_video_relationships lvr
+WHERE (
+    (:subject = '' OR lower(lvr.subject) = lower(:subject))
+    AND (:predicate = '' OR lower(lvr.predicate) = lower(:predicate))
+    AND (:object = '' OR lower(lvr.object) = lower(:object))
+)
+ORDER BY lvr.video_id
+LIMIT :limit
+"""
+
+[[tools.parameters]]
+name = "subject"
+type = "string"
+description = "Subject entity name (e.g., 'man', 'dog')"
+required = false
+default = ""
+max_length = 50
+
+[[tools.parameters]]
+name = "predicate"
+type = "string"
+description = "Relationship type (e.g., 'plays', 'rides', 'eats')"
+required = false
+default = ""
+max_length = 50
+
+[[tools.parameters]]
+name = "object"
+type = "string"
+description = "Object entity name (e.g., 'guitar', 'ball')"
+required = false
+default = ""
+max_length = 50
+
+[[tools.parameters]]
+name = "limit"
+type = "integer"
+description = "Maximum results to return"
+required = false
+default = 20
+minimum = 1
+maximum = 100
+
+[tools.annotations]
+read_only_hint = true
+destructive_hint = false
+idempotent_hint = true
+open_world_hint = true
+cost_hint = "medium"
+
+# -----------------------------------------------------------------------------
+# Tool 3: Browse Relationships (Discovery)
+# -----------------------------------------------------------------------------
+# Lists available relationship predicate types with counts
+
+[[tools]]
+name = "browse_relationships"
+description = "List available relationship types (predicates) in the dataset with their occurrence counts. Use this to discover what relationships exist before searching."
+sql = """
+SELECT rs.predicate AS relationship, SUM(rs.occurrence_count) AS count
+FROM relationship_summary rs
+GROUP BY rs.predicate
+ORDER BY count DESC
+LIMIT :limit
+"""
+
+[[tools.parameters]]
+name = "limit"
+type = "integer"
+description = "Maximum relationship types to return"
+required = false
+default = 50
+minimum = 1
+maximum = 200
+
+[tools.annotations]
+read_only_hint = true
+destructive_hint = false
+idempotent_hint = true
+open_world_hint = true
+cost_hint = "low"
+
+# =============================================================================
+# MCP Resources - Code Mode Documentation
+# =============================================================================
+
+[[resources]]
+uri = "docs://msr-vtt/schema"
+name = "MSR-VTT Database Schema"
+description = "Tables, columns, types, views, and Athena-specific notes for the MSR-VTT database"
+mime_type = "text/markdown"
+content = "loaded from schema.md"
+
+[[resources]]
+uri = "docs://msr-vtt/examples"
+name = "MSR-VTT Example Queries"
+description = "Example SQL queries for common MSR-VTT operations"
+mime_type = "text/markdown"
+content = "loaded from examples.md"
+
+[[resources]]
+uri = "docs://msr-vtt/find-videos-workflow"
+name = "Find Videos Workflow"
+description = "Deterministic resolve-then-search workflow for natural language video queries"
+mime_type = "text/markdown"
+content = "loaded from find-videos-workflow.md"
+
+# =============================================================================
+# MCP Prompts
+# =============================================================================
+
+[[prompts]]
+name = "start_code_mode"
+description = "Load all context needed for Code Mode SQL generation against MSR-VTT"
+include_resources = [
+    "docs://msr-vtt/schema",
+    "code-mode://instructions",
+    "code-mode://policies",
+    "docs://msr-vtt/examples"
+]
+
+[[prompts]]
+name = "find_videos"
+description = "Structured video search workflow. Resolves class names to canonical forms, then searches with resolved names. Use this for natural language video queries."
+include_resources = ["docs://msr-vtt/find-videos-workflow"]
