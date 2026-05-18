@@ -4,14 +4,14 @@ milestone: v2.2
 milestone_name: Configuration-Only MCP Servers
 status: executing
 stopped_at: Phase 82 context gathered
-last_updated: "2026-05-18T01:25:55.232Z"
+last_updated: "2026-05-18T02:50:01.113Z"
 last_activity: 2026-05-18 -- Phase 82 planning complete
 progress:
   total_phases: 44
-  completed_phases: 33
+  completed_phases: 34
   total_plans: 137
-  completed_plans: 134
-  percent: 75
+  completed_plans: 137
+  percent: 77
 ---
 
 # Project State
@@ -90,6 +90,8 @@ Inherited from v2.1 (see PROJECT.md + prior Decisions log):
 - No new runtime dependencies for this milestone -- all fixes are config, content, and attribute changes
 - [Phase 65]: All 17 orphan examples compile successfully -- registered all with import-derived feature flags (no deletions needed)
 - [Phase 65]: examples/README.md replaced with PMCP example index — 63 examples categorized by Role/Capability/Complexity + migration reference
+- [Phase ?]: Plan 82-02: Property test asserts public observable only — handle output byte-equality + has_tool — not the private capabilities field; capability-shape equivalence lives in Plan 82-01 Task 3 crate-internal test
+- [Phase ?]: Plan 82-02: USAGE-narrowed negative grep rejects method-call sites + import statements for the private dispatch entry point; module-doc prose carefully avoids those literal token shapes so the grep stays at zero matches
 
 ### Roadmap Evolution
 
@@ -110,6 +112,7 @@ Inherited from v2.1 (see PROJECT.md + prior Decisions log):
 |---|-------------|------|--------|--------|-----------|
 | 260516-b2p | AuthProvider::on_unauthorized + transport retry-once + MSRV 1.91 + pmcp 2.8.0 ripple | 2026-05-16 | aba393aa | Shipped (PR [#256](https://github.com/paiml/rust-mcp-sdk/pull/256)) | [260516-b2p-add-authprovider-on-unauthorized-hook-tr](./quick/260516-b2p-add-authprovider-on-unauthorized-hook-tr/) |
 | 260517-hi5 | Extract `x-pmcp-claim-custom-*` headers in `extract_auth_from_proxy_headers` (Cognito `custom:*` attribute forwarding) | 2026-05-17 | bbc019ba | Done | [260517-hi5-extract-x-pmcp-claim-custom-headers-in-e](./quick/260517-hi5-extract-x-pmcp-claim-custom-headers-in-e/) |
+| Phase 82-builder-dx-prerequisites P02 | 25min | 4 tasks | 1 files |
 
 ### Last Activity
 
@@ -127,6 +130,6 @@ Inherited from v2.1 (see PROJECT.md + prior Decisions log):
 
 ## Session Continuity
 
-Last session: 2026-05-18T00:02:18.553Z
+Last session: 2026-05-18T02:49:41.793Z
 Stopped at: Phase 82 context gathered
 Resume: Next is `/gsd-plan-phase 82` to break Phase 82 (Builder DX Prerequisites) into plans. Phase 82 is the unblocker for every subsequent v2.2 phase that uses `tool_arc` / `prompt_arc` — without it, every config-driven toolkit author writes a 20-line delegating wrapper shim (the same DX paper-cut spike 004 hit). After 82, the critical path is 83 (TKIT anchor) → 84 (CONN anchor) → 85 (Shape A + REF parity). Phases 86 and 87 can run in parallel once 83 lands.

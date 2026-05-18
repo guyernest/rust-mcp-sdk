@@ -119,7 +119,7 @@ Upstream PMCP changes that unblock external toolkit authors (spike 004 surfaced 
 
 - [x] **BLDR-01**: `pmcp::ServerBuilder::tool_arc(name, Arc<dyn ToolHandler>)` lifted from `ServerCoreBuilder` to the public builder so config-driven toolkits can share an `Arc<Handler>` between the builder and an in-process handler map without a 20-line delegating shim
 - [x] **BLDR-02**: `pmcp::ServerBuilder::prompt_arc(name, Arc<dyn PromptHandler>)` lifted from `ServerCoreBuilder` to the public builder
-- [ ] **BLDR-03**: Officially documented handler-level testing pattern so external toolkit integration tests can drive request flow without poking at private `Server::handle_request` — delivered via `Server::get_tool(name)` accessor symmetric with `get_prompt`, plus a comprehensive doctest on each accessor and a reference integration test under `tests/in_process_handler_pattern.rs` (rejecting the `Server::dispatch`/`MemoryTransport` alternative as out-of-scope for this phase per CONTEXT.md D-01).
+- [x] **BLDR-03**: Officially documented handler-level testing pattern so external toolkit integration tests can drive request flow without poking at private `Server::handle_request` — delivered via `Server::get_tool(name)` accessor symmetric with `get_prompt`, plus a comprehensive doctest on each accessor and a reference integration test under `tests/in_process_handler_pattern.rs` (rejecting the `Server::dispatch`/`MemoryTransport` alternative as out-of-scope for this phase per CONTEXT.md D-01).
 - [x] **BLDR-04**: `pmcp::ServerBuilder` gains `_arc` variants for the remaining four handler types (`resources_arc`, `sampling_arc`, `auth_provider_arc`, `tool_authorizer_arc`) so all impl-or-Arc handler-registration paths reach parity with `ServerCoreBuilder`. This closes the umbrella Arc-symmetry gap surfaced in spike 004's "API surface discovery 1" — no external toolkit author should need a 20-line delegating wrapper shim for any handler type.
 
 ### Toolkit Core (`pmcp-server-toolkit`)
@@ -339,7 +339,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | REQ-77-11 | Phase 77 | Complete |
 | BLDR-01 | Phase 82 | Complete |
 | BLDR-02 | Phase 82 | Complete |
-| BLDR-03 | Phase 82 | Pending |
+| BLDR-03 | Phase 82 | Complete |
 | BLDR-04 | Phase 82 | Complete |
 | TKIT-01 | Phase 83 | Pending |
 | TKIT-02 | Phase 83 | Pending |
