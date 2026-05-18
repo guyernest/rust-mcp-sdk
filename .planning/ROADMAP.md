@@ -1243,7 +1243,7 @@ Plans:
   1. A toolkit author can call `pmcp::ServerBuilder::tool_arc(name, Arc::new(handler))` on the public builder and share that same `Arc` with an in-process handler map — no delegating wrapper required
   2. A toolkit author can call `pmcp::ServerBuilder::prompt_arc(name, Arc::new(handler))` on the public builder with the same `Arc`-sharing semantics
   3. A toolkit integration test can drive a built `pmcp::Server` end-to-end through `tools/list` / `tools/call` flow via a public in-process driver OR via an officially documented handler-level testing pattern — no poking at private `Server::handle_request`
-  4. The new builder methods are additive (no existing builder method signatures change) and ship in a minor `pmcp` version bump
+  4. The new builder methods are additive (no existing builder method signatures change) and ship as part of a minor `pmcp` version bump — the actual `Cargo.toml` version change and `CHANGELOG.md` entry are produced by the v2.2.x release branch per `CLAUDE.md` §"Release & Publish Workflow", NOT by Phase 82's implementation plans. (Phase 82 closes when its three plans land; the release that ships them is tagged separately.)
   5. All six `_arc` handler-registration paths (`tool_arc`, `prompt_arc`, `resources_arc`, `sampling_arc`, `auth_provider_arc`, `tool_authorizer_arc`) reach parity with `ServerCoreBuilder`
   6. `pmcp::Server::get_tool(name) -> Option<&Arc<dyn ToolHandler>>` exists, symmetric with the existing `get_prompt(name)`
 **Plans**: 3 plans (1 complete)
