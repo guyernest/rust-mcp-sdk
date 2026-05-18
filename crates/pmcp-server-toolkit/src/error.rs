@@ -6,8 +6,8 @@
 //! [`ToolkitError`] is `#[non_exhaustive]`: downstream crates must match with a
 //! catch-all arm so the toolkit can add variants without a breaking change.
 //! Phase 83 Plan 04 extends this enum with a `Validation` variant wrapping a
-//! `ConfigValidationError`; Plan 04 Task 2 lands `ConfigValidationError::InlineSecretRejected`
-//! per review R9.
+//! [`ConfigValidationError`] (per review R8) which catches missing-required-value
+//! bugs the `Default` impls on sub-sections would otherwise silently hide.
 
 /// Crate-level result alias used by every public API in `pmcp-server-toolkit`.
 pub type Result<T> = std::result::Result<T, ToolkitError>;
@@ -65,4 +65,55 @@ pub enum ToolkitError {
         /// Human-readable cause (provider name + underlying error).
         cause: String,
     },
+
+    /// Semantic validation of a parsed [`crate::config::ServerConfig`] failed.
+    ///
+    /// Wraps a [`ConfigValidationError`] surfaced by
+    /// [`crate::config::ServerConfig::validate`] /
+    /// [`crate::config::ServerConfig::from_toml_strict_validated`]. Per Phase 83
+    /// review R8 this catches the empty-required-value trap that the
+    /// `Default` impls on sub-sections would otherwise hide behind silent
+    /// successes (e.g. `server.name = ""` if the `[server]` header is typo'd).
+    #[error("config validation failed: {0}")]
+    Validation(#[from] ConfigValidationError),
+}
+
+/// Semantic-validation errors surfaced by
+/// [`crate::config::ServerConfig::validate`].
+///
+/// Per Phase 83 review R8 — the `Default` impls on `ServerConfig` and its
+/// sub-sections deliberately allow `from_toml` to succeed even when required
+/// fields are missing (so partial configs can be merged programmatically). The
+/// [`crate::config::ServerConfig::validate`] entry-point catches these gaps at
+/// parse time and surfaces them as a typed enum variant per rule.
+///
+/// The enum is `#[non_exhaustive]` — match callers must include a wildcard arm
+/// so additional rules can be added without a breaking change.
+///
+/// # Examples
+///
+/// ```
+/// use pmcp_server_toolkit::ConfigValidationError;
+///
+/// // Each variant has a precise `Display` describing the rule violated.
+/// let err = ConfigValidationError::EmptyServerName;
+/// assert_eq!(err.to_string(), "server.name must be non-empty");
+/// let err = ConfigValidationError::EmptyToolName(3);
+/// assert_eq!(err.to_string(), "[[tools]] entry at index 3 has empty name");
+/// ```
+#[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
+pub enum ConfigValidationError {
+    /// `[server] name` is missing or whitespace-only.
+    #[error("server.name must be non-empty")]
+    EmptyServerName,
+    /// `[server] version` is missing or whitespace-only.
+    #[error("server.version must be non-empty")]
+    EmptyServerVersion,
+    /// `[[tools]]` entry at `index` has an empty / whitespace-only `name`.
+    #[error("[[tools]] entry at index {0} has empty name")]
+    EmptyToolName(usize),
+    /// `[[database.tables]]` entry at `index` has an empty / whitespace-only `name`.
+    #[error("[[database.tables]] entry at index {0} has empty name")]
+    EmptyTableName(usize),
 }
