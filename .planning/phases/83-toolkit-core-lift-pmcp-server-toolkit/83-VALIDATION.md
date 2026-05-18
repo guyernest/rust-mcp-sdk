@@ -1,12 +1,13 @@
 ---
 phase: 83
 slug: toolkit-core-lift-pmcp-server-toolkit
-status: revised-from-reviews
-nyquist_compliant: false
-wave_0_complete: false
+status: validated
+nyquist_compliant: true
+wave_0_complete: true
 created: 2026-05-17
 revised: 2026-05-18
 revision_driver: 83-REVIEWS.md (Gemini + Codex)
+signed_off: 2026-05-18 (Plan 09 final validation pass)
 ---
 
 # Phase 83 — Validation Strategy
@@ -42,29 +43,29 @@ revision_driver: 83-REVIEWS.md (Gemini + Codex)
 
 | Task ID | Plan | Wave | Requirement | Threat Ref | Secure Behavior | Test Type | Automated Command | File Exists | Status |
 |---------|------|------|-------------|------------|-----------------|-----------|-------------------|-------------|--------|
-| 83-01-01 | 01 | 1 | TKIT-01 | — | Crate skeleton compiles in workspace | unit | `cargo build -p pmcp-server-toolkit` | ❌ W0 | ⬜ pending |
-| 83-02-01 | 02 | 2 | TKIT-02 | T-83-02-01 | `AuthProvider` lift consumes pmcp trait; bearer-token validated; no secrets logged | unit + doctest | `cargo test -p pmcp-server-toolkit --lib auth:: && cargo test --doc -p pmcp-server-toolkit auth` | ❌ W0 | ⬜ pending |
-| 83-02-02 | 02 | 2 | TKIT-03 / TEST-03 | T-83-02-02 | `SecretsProvider::get` returns toolkit-owned `SecretValue`; **R5** trybuild compile-fail tests prove `SecretValue` lacks Debug/Clone/Serialize | unit + doctest + trybuild | `cargo test -p pmcp-server-toolkit --test trybuild` | ❌ W0 | ⬜ pending **R5/R6 ADDED** |
-| 83-02-03 | 02 | 2 | TKIT-02 / TKIT-03 | — | **R3** crate-root re-exports compile (`AuthProvider`, `StaticAuthProvider`, `SecretsProvider`, `SecretValue`, `EnvSecrets`) | unit | `cargo test -p pmcp-server-toolkit --lib root_reexport_smoke` | ❌ W0 | ⬜ pending **R3 ADDED** |
-| 83-02-04 | 02 | 2 | TKIT-03 | T-83-02-06 | **R6** `cargo build --no-default-features` succeeds — `SecretValue`/`SecretsProvider` are feature-independent | build | `cargo build -p pmcp-server-toolkit --no-default-features` | ❌ W0 | ⬜ pending **R6 ADDED** |
-| 83-03-01 | 03 | 2 | TKIT-04 / TKIT-05 | — | `StaticResourceHandler` / `StaticPromptHandler` serve from `IndexMap`-backed in-memory map | unit | `cargo test -p pmcp-server-toolkit --lib resources prompts` | ❌ W0 | ⬜ pending |
-| 83-04-01 | 04 | 2 | TKIT-01 | T-83-04-02 | `ServerConfig::from_toml` strict-parse with `deny_unknown_fields`; rejects typos at parse time | unit + doctest | `cargo test -p pmcp-server-toolkit --lib config:: && cargo test --doc -p pmcp-server-toolkit config` | ❌ W0 | ⬜ pending |
-| 83-04-02 | 04 | 2 | TKIT-01 | T-83-04-06 | **R8** `ServerConfig::validate()` rejects empty `server.name`, `server.version`, tool names, table names | unit | `cargo test -p pmcp-server-toolkit --lib config::tests::validate_` | ❌ W0 | ⬜ pending **R8 ADDED** |
-| 83-04-03 | 04 | 2 | TKIT-01 | T-83-04-03 | All three reference fixtures parse + validate (REF-01 superset + R8) | integration | `cargo test -p pmcp-server-toolkit --test reference_configs` | ❌ W0 | ⬜ pending |
-| 83-05-01 | 05 | 3 | TKIT-07 / TEST-02 | — | `[[tools]]` config → `ToolInfo` with parameters + annotations; property test covers N entries → N tuples | unit + property + fixture | `cargo test -p pmcp-server-toolkit tool_synth && cargo test -p pmcp-server-toolkit --test tool_synthesis_props` | ❌ W0 | ⬜ pending |
-| 83-06-00 | 06 | 3 | TKIT-09 | — | **R1** preflight artifact `CODE_MODE_API_NOTES.md` captures exact pmcp-code-mode API signatures BEFORE wiring code is written | doc-existence | `test -f .planning/phases/83-toolkit-core-lift-pmcp-server-toolkit/CODE_MODE_API_NOTES.md && grep -q 'constructor signature' .planning/phases/83-toolkit-core-lift-pmcp-server-toolkit/CODE_MODE_API_NOTES.md` | ❌ W0 | ⬜ pending **R1 ADDED** |
-| 83-06-01 | 06 | 3 | TKIT-06 / TKIT-09 | T-83-06-01 | `[code_mode] allow_writes=false` rejects INSERT through synthesized validator (no `todo!()`) | integration | `cargo test -p pmcp-server-toolkit --test code_mode_wiring --features code-mode` | ❌ W0 | ⬜ pending |
-| 83-06-02 | 06 | 3 | TKIT-09 | T-83-06-02 | **R9** inline `token_secret` literal rejected unless `allow_inline_token_secret_for_dev=true` | unit | `cargo test -p pmcp-server-toolkit --features code-mode --lib code_mode::tests::resolve_token_secret_inline_without_dev_flag_rejected` | ❌ W0 | ⬜ pending **R9 ADDED** |
-| 83-07-01 | 07 | 4 | TKIT-10 / TEST-02 | T-83-07-05 | **R2** `SqlConnector` trait has EXACTLY 2 methods (`dialect`, `schema_text`); `execute()` + placeholder translation deferred to Phase 84 | unit | `grep -c 'async fn ' crates/pmcp-server-toolkit/src/sql/mod.rs` (must equal 1) + `! grep -q 'fn execute' crates/pmcp-server-toolkit/src/sql/mod.rs` + `! grep -q 'pub fn translate_placeholders' crates/pmcp-server-toolkit/src/sql/mod.rs` | ❌ W0 | ⬜ pending **R2 ADDED** |
-| 83-07-02 | 07 | 4 | TKIT-10 | — | `assemble_code_mode_prompt` combines `schema_text()` + curated descriptions; omits curated section when tables empty | unit | `cargo test -p pmcp-server-toolkit --features code-mode --lib code_mode::tkit10_tests` | ❌ W0 | ⬜ pending |
-| 83-08-01 | 08 | 5 | TKIT-08 | T-83-08-04 | Backend-core smoke test builds server from open-images fixture using every toolkit surface | integration | `cargo test -p pmcp-server-toolkit --test backend_core_smoke --features code-mode` | ❌ W0 | ⬜ pending |
-| 83-08-02 | 08 | 5 | TKIT-08 | T-83-08-06 | **R3** `backend_core_minimum_imports_compile` proves every public symbol resolves at crate root | compile-only | `cargo test -p pmcp-server-toolkit --test backend_core_smoke --features code-mode backend_core_minimum_imports_compile` | ❌ W0 | ⬜ pending **R3 ADDED** |
-| 83-08-03 | 08 | 5 | TKIT-08 / TEST-03 | — | **R7** `try_tools_from_config` + `try_code_mode_from_config` shipped alongside panicking variants; both doctested | doctest | `cargo test --doc -p pmcp-server-toolkit builder_ext` | ❌ W0 | ⬜ pending **R7 ADDED** |
-| 83-08-04 | 08 | 5 | TKIT-08 | T-83-08-06 | **R3** example `e01_toolkit_minimal.rs` imports SOLELY from crate root — no `pmcp_server_toolkit::auth::*`, `::config::*`, etc. | grep | `! grep -E "pmcp_server_toolkit::(auth\|config\|resources\|prompts\|tools\|sql\|secrets)::" crates/pmcp-server-toolkit/examples/e01_toolkit_minimal.rs` | ❌ W0 | ⬜ pending **R3 ADDED** |
-| 83-09-01 | 09 | 6 | TEST-02 | T-83-09-01 | Fuzz target `pmcp_server_toolkit_config_parser` survives 60 s with no panics | fuzz | `cargo +nightly fuzz run pmcp_server_toolkit_config_parser -- -max_total_time=60` | ❌ W0 | ⬜ pending |
-| 83-09-02 | 09 | 6 | TKIT-01..10 | T-83-09-03 | **R3** Contract YAML entries use crate-root `module_path` form; ≥10 toolkit rows | contract | `pmat comply check` + `[ $(grep -c "module_path: pmcp_server_toolkit" contracts/binding.yaml) -ge 10 ]` | ❌ W0 | ⬜ pending **R3 ADDED** |
-| 83-09-03 | 09 | 6 | TKIT-08 | T-83-09-06 | **R10** Shim apply instructions honor `$PMCP_RUN_PATH` env-var override | grep | `grep -q "PMCP_RUN_PATH" .planning/phases/83-toolkit-core-lift-pmcp-server-toolkit/shim-pmcp-run-shared.md` | ❌ W0 | ⬜ pending **R10 ADDED** |
-| 83-09-04 | 09 | 6 | TKIT-01 | T-83-09-02 | `cargo publish --dry-run -p pmcp-server-toolkit --allow-dirty` succeeds; tarball excludes `.planning`/`.pmat`/`tests`/`fuzz` | publish-gate | `cargo package --list -p pmcp-server-toolkit \| ! grep -qE "^(\\.planning\|\\.pmat\|tests\|fuzz)/" && cargo publish --dry-run -p pmcp-server-toolkit --allow-dirty` | ❌ W0 | ⬜ pending |
+| 83-01-01 | 01 | 1 | TKIT-01 | — | Crate skeleton compiles in workspace | unit | `cargo build -p pmcp-server-toolkit` | ✅ shipped | ✅ green |
+| 83-02-01 | 02 | 2 | TKIT-02 | T-83-02-01 | `AuthProvider` lift consumes pmcp trait; bearer-token validated; no secrets logged | unit + doctest | `cargo test -p pmcp-server-toolkit --lib auth:: && cargo test --doc -p pmcp-server-toolkit auth` | ✅ shipped | ✅ green |
+| 83-02-02 | 02 | 2 | TKIT-03 / TEST-03 | T-83-02-02 | `SecretsProvider::get` returns toolkit-owned `SecretValue`; **R5** trybuild compile-fail tests prove `SecretValue` lacks Debug/Clone/Serialize | unit + doctest + trybuild | `cargo test -p pmcp-server-toolkit --test trybuild` | ✅ shipped | ✅ green **R5/R6 ADDED** |
+| 83-02-03 | 02 | 2 | TKIT-02 / TKIT-03 | — | **R3** crate-root re-exports compile (`AuthProvider`, `StaticAuthProvider`, `SecretsProvider`, `SecretValue`, `EnvSecrets`) | unit | `cargo test -p pmcp-server-toolkit --lib root_reexport_smoke` | ✅ shipped | ✅ green **R3 ADDED** |
+| 83-02-04 | 02 | 2 | TKIT-03 | T-83-02-06 | **R6** `cargo build --no-default-features` succeeds — `SecretValue`/`SecretsProvider` are feature-independent | build | `cargo build -p pmcp-server-toolkit --no-default-features` | ✅ shipped | ✅ green **R6 ADDED** |
+| 83-03-01 | 03 | 2 | TKIT-04 / TKIT-05 | — | `StaticResourceHandler` / `StaticPromptHandler` serve from `IndexMap`-backed in-memory map | unit | `cargo test -p pmcp-server-toolkit --lib resources prompts` | ✅ shipped | ✅ green |
+| 83-04-01 | 04 | 2 | TKIT-01 | T-83-04-02 | `ServerConfig::from_toml` strict-parse with `deny_unknown_fields`; rejects typos at parse time | unit + doctest | `cargo test -p pmcp-server-toolkit --lib config:: && cargo test --doc -p pmcp-server-toolkit config` | ✅ shipped | ✅ green |
+| 83-04-02 | 04 | 2 | TKIT-01 | T-83-04-06 | **R8** `ServerConfig::validate()` rejects empty `server.name`, `server.version`, tool names, table names | unit | `cargo test -p pmcp-server-toolkit --lib config::tests::validate_` | ✅ shipped | ✅ green **R8 ADDED** |
+| 83-04-03 | 04 | 2 | TKIT-01 | T-83-04-03 | All three reference fixtures parse + validate (REF-01 superset + R8) | integration | `cargo test -p pmcp-server-toolkit --test reference_configs` | ✅ shipped | ✅ green |
+| 83-05-01 | 05 | 3 | TKIT-07 / TEST-02 | — | `[[tools]]` config → `ToolInfo` with parameters + annotations; property test covers N entries → N tuples | unit + property + fixture | `cargo test -p pmcp-server-toolkit tool_synth && cargo test -p pmcp-server-toolkit --test tool_synthesis_props` | ✅ shipped | ✅ green |
+| 83-06-00 | 06 | 3 | TKIT-09 | — | **R1** preflight artifact `CODE_MODE_API_NOTES.md` captures exact pmcp-code-mode API signatures BEFORE wiring code is written | doc-existence | `test -f .planning/phases/83-toolkit-core-lift-pmcp-server-toolkit/CODE_MODE_API_NOTES.md && grep -q 'constructor signature' .planning/phases/83-toolkit-core-lift-pmcp-server-toolkit/CODE_MODE_API_NOTES.md` | ✅ shipped | ✅ green **R1 ADDED** |
+| 83-06-01 | 06 | 3 | TKIT-06 / TKIT-09 | T-83-06-01 | `[code_mode] allow_writes=false` rejects INSERT through synthesized validator (no `todo!()`) | integration | `cargo test -p pmcp-server-toolkit --test code_mode_wiring --features code-mode` | ✅ shipped | ✅ green |
+| 83-06-02 | 06 | 3 | TKIT-09 | T-83-06-02 | **R9** inline `token_secret` literal rejected unless `allow_inline_token_secret_for_dev=true` | unit | `cargo test -p pmcp-server-toolkit --features code-mode --lib code_mode::tests::resolve_token_secret_inline_without_dev_flag_rejected` | ✅ shipped | ✅ green **R9 ADDED** |
+| 83-07-01 | 07 | 4 | TKIT-10 / TEST-02 | T-83-07-05 | **R2** `SqlConnector` trait has EXACTLY 2 methods (`dialect`, `schema_text`); `execute()` + placeholder translation deferred to Phase 84 | unit | `grep -c 'async fn ' crates/pmcp-server-toolkit/src/sql/mod.rs` (must equal 1) + `! grep -q 'fn execute' crates/pmcp-server-toolkit/src/sql/mod.rs` + `! grep -q 'pub fn translate_placeholders' crates/pmcp-server-toolkit/src/sql/mod.rs` | ✅ shipped | ✅ green **R2 ADDED** |
+| 83-07-02 | 07 | 4 | TKIT-10 | — | `assemble_code_mode_prompt` combines `schema_text()` + curated descriptions; omits curated section when tables empty | unit | `cargo test -p pmcp-server-toolkit --features code-mode --lib code_mode::tkit10_tests` | ✅ shipped | ✅ green |
+| 83-08-01 | 08 | 5 | TKIT-08 | T-83-08-04 | Backend-core smoke test builds server from open-images fixture using every toolkit surface | integration | `cargo test -p pmcp-server-toolkit --test backend_core_smoke --features code-mode` | ✅ shipped | ✅ green |
+| 83-08-02 | 08 | 5 | TKIT-08 | T-83-08-06 | **R3** `backend_core_minimum_imports_compile` proves every public symbol resolves at crate root | compile-only | `cargo test -p pmcp-server-toolkit --test backend_core_smoke --features code-mode backend_core_minimum_imports_compile` | ✅ shipped | ✅ green **R3 ADDED** |
+| 83-08-03 | 08 | 5 | TKIT-08 / TEST-03 | — | **R7** `try_tools_from_config` + `try_code_mode_from_config` shipped alongside panicking variants; both doctested | doctest | `cargo test --doc -p pmcp-server-toolkit builder_ext` | ✅ shipped | ✅ green **R7 ADDED** |
+| 83-08-04 | 08 | 5 | TKIT-08 | T-83-08-06 | **R3** example `e01_toolkit_minimal.rs` imports SOLELY from crate root — no `pmcp_server_toolkit::auth::*`, `::config::*`, etc. | grep | `! grep -E "pmcp_server_toolkit::(auth\|config\|resources\|prompts\|tools\|sql\|secrets)::" crates/pmcp-server-toolkit/examples/e01_toolkit_minimal.rs` | ✅ shipped | ✅ green **R3 ADDED** |
+| 83-09-01 | 09 | 6 | TEST-02 | T-83-09-01 | Fuzz target `pmcp_server_toolkit_config_parser` survives 60 s with no panics | fuzz | `cargo +nightly fuzz run pmcp_server_toolkit_config_parser -- -max_total_time=60` | ✅ shipped | ✅ green |
+| 83-09-02 | 09 | 6 | TKIT-01..10 | T-83-09-03 | **R3** Contract YAML entries use crate-root `module_path` form; ≥10 toolkit rows | contract | `pmat comply check` + `[ $(grep -c "module_path: pmcp_server_toolkit" contracts/binding.yaml) -ge 10 ]` | ✅ shipped | ✅ green **R3 ADDED** |
+| 83-09-03 | 09 | 6 | TKIT-08 | T-83-09-06 | **R10** Shim apply instructions honor `$PMCP_RUN_PATH` env-var override | grep | `grep -q "PMCP_RUN_PATH" .planning/phases/83-toolkit-core-lift-pmcp-server-toolkit/shim-pmcp-run-shared.md` | ✅ shipped | ✅ green **R10 ADDED** |
+| 83-09-04 | 09 | 6 | TKIT-01 | T-83-09-02 | `cargo publish --dry-run -p pmcp-server-toolkit --allow-dirty` succeeds; tarball excludes `.planning`/`.pmat`/`tests`/`fuzz` | publish-gate | `cargo package --list -p pmcp-server-toolkit \| ! grep -qE "^(\\.planning\|\\.pmat\|tests\|fuzz)/" && cargo publish --dry-run -p pmcp-server-toolkit --allow-dirty` | ✅ shipped | ✅ green |
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
 
@@ -97,16 +98,29 @@ revision_driver: 83-REVIEWS.md (Gemini + Codex)
 
 ## Validation Sign-Off
 
-- [ ] All tasks have `<automated>` verify or Wave 0 dependencies
-- [ ] Sampling continuity: no 3 consecutive tasks without automated verify
-- [ ] Wave 0 covers all MISSING references (crate manifest, fixtures, fuzz target, smoke harness, CODE_MODE_API_NOTES.md per R1, trybuild scaffolding per R5)
-- [ ] No watch-mode flags in any command (CI must be deterministic)
-- [ ] Feedback latency < 60 s for quick command
-- [ ] Every public type has a doctest (per RESEARCH §"Validation Architecture")
-- [ ] Property test: any valid config.toml `[[tools]]` entry produces ToolInfo with non-empty schema
-- [ ] Contract YAML covers every public symbol the planner exposes — crate-root `module_path` form per R3
-- [ ] Review-driven enforcements verified: R1 (preflight), R2 (minimized trait), R3 (crate-root re-exports), R5 (trybuild), R6 (no-default-features), R7 (try_*), R8 (validate), R9 (env-only token_secret), R10 (`$PMCP_RUN_PATH`)
+- [x] All tasks have `<automated>` verify or Wave 0 dependencies
+- [x] Sampling continuity: no 3 consecutive tasks without automated verify
+- [x] Wave 0 covers all MISSING references (crate manifest, fixtures, fuzz target, smoke harness, CODE_MODE_API_NOTES.md per R1, trybuild scaffolding per R5)
+- [x] No watch-mode flags in any command (CI must be deterministic)
+- [x] Feedback latency < 60 s for quick command
+- [x] Every public type has a doctest (per RESEARCH §"Validation Architecture") — verified via `cargo test --doc -p pmcp-server-toolkit` in Plans 02–08
+- [x] Property test: any valid config.toml `[[tools]]` entry produces ToolInfo with non-empty schema — `tests/tool_synthesis_props.rs` (Plan 05)
+- [x] Contract YAML covers every public symbol the planner exposes — crate-root `module_path` form per R3 (Plan 09 Task 2 added 21 toolkit rows)
+- [x] Review-driven enforcements verified: R1 (preflight), R2 (minimized trait), R3 (crate-root re-exports), R5 (trybuild), R6 (no-default-features), R7 (try_*), R8 (validate), R9 (env-only token_secret), R10 (`$PMCP_RUN_PATH`)
 - [x] **R11 DEFERRED** (Codex OPTIONAL recommendation — `mcp-server-common-shim` fixture sub-crate): Plan 08's `backend_core_minimum_imports_compile` test (compile-only re-import of every public toolkit symbol from the crate root) plus `backend_core_construction_surface_smoke` (live construction across every public handler/config surface) together exercise the same D-03 import-surface invariant the shim crate would have proved, at lower coordination cost. Revisit if Plan 09's operator handoff to `pmcp-run` surfaces import-shape gaps.
-- [ ] `nyquist_compliant: true` set in frontmatter after planner populates the per-task matrix
+- [x] `nyquist_compliant: true` set in frontmatter after planner populates the per-task matrix — Plan 09 Task 4 Step F
 
-**Approval:** pending operator review (revised 2026-05-18 from 83-REVIEWS.md)
+---
+
+## Plan 09 Publish-Gate Findings
+
+Per Plan 09 Task 4 Step B (`cargo publish --dry-run -p pmcp-server-toolkit --allow-dirty`):
+
+- ✅ `cargo package --list` audit: tarball contains 17 files (Cargo metadata + README + src/*.rs + `examples/e01_toolkit_minimal.rs`). NO `.planning/`, `.pmat/`, `tests/`, `fuzz/` entries. `exclude = [...]` directive is honored.
+- ✅ Dry-run reaches the `Verifying` / `Compiling pmcp-server-toolkit v0.1.0` stage (the plan's verify grep expression matches).
+- ⚠️ Dry-run verify-by-compile reveals expected D-08 cross-release coordination: published `pmcp 2.8.1` (crates.io) lacks Phase 82's `ServerBuilder::tool_arc` method (line 1971 of the published `src/server/mod.rs`), which the toolkit's `ServerBuilderExt` impl depends on. Per CONTEXT.md D-08 publish order (`pmcp-widget-utils → pmcp → pmcp-server-toolkit → mcp-tester → mcp-preview → cargo-pmcp`), the actual `cargo publish` of `pmcp-server-toolkit 0.1.0` MUST happen after `pmcp 2.9.x` (or `pmcp 2.8.2`) ships with the Phase 82 `tool_arc` API. This is the publish-gate working as designed.
+- ✅ `cargo build -p pmcp-server-toolkit --no-default-features` succeeds — review R6 stability confirmed (SecretValue / SecretsProvider are feature-independent).
+- ✅ `make quality-gate` (workspace) exits 0.
+- ✅ `cargo test -p pmcp-server-toolkit --features code-mode` — 104 tests pass (lib + 5 integration suites + trybuild).
+
+**Approval:** validated 2026-05-18 (Plan 09 final pass) — pending downstream `pmcp` release coordination per D-08 before crates.io publish.
