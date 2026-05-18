@@ -280,6 +280,62 @@ impl StaticResourceHandler {
     }
 }
 
+// =============================================================================
+// Construction from `ServerConfig` (Plan 08 — TKIT-04 completion)
+// =============================================================================
+//
+// `ResourceDecl` is the strict, lifted shape parsed by `ServerConfig`
+// (`config::ResourceDecl`), whereas this module's own `ResourceConfig` carries
+// the richer fields (`content_file`, `meta`) used for file-backed and widget
+// resources. The two shapes are NOT identical — `From<&ServerConfig>` maps the
+// configured `[[resources]]` block onto `LoadedResource` directly so callers
+// don't have to thread a second config type through their builders.
+
+impl From<&crate::config::ServerConfig> for StaticResourceHandler {
+    /// Build a [`StaticResourceHandler`] from a parsed [`crate::config::ServerConfig`].
+    ///
+    /// Each `[[resources]]` entry in `config` becomes one [`LoadedResource`].
+    /// Resources with no `content` field default to an empty body — the
+    /// strict-parse path's [`crate::config::ServerConfig::validate`] does not
+    /// flag empty resource bodies (operators may use the placeholder form
+    /// `"loaded from path.md"` as a stable URI handle), so this construction
+    /// follows suit. Resources WITH `content_file` semantics are out of scope
+    /// for the lifted shape (Lambda runtime constraint, mirroring
+    /// [`LoadedResource::from_config`]).
+    ///
+    /// Insertion order matches the order of `[[resources]]` declarations,
+    /// satisfying Pattern D (deterministic `list()` output).
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use pmcp_server_toolkit::{ServerConfig, StaticResourceHandler};
+    ///
+    /// let cfg = ServerConfig::default();
+    /// let handler = StaticResourceHandler::from(&cfg);
+    /// assert_eq!(handler.len(), 0); // default config has no [[resources]]
+    /// ```
+    fn from(cfg: &crate::config::ServerConfig) -> Self {
+        let mut resources = IndexMap::with_capacity(cfg.resources.len());
+        for r in &cfg.resources {
+            let mime = r
+                .mime_type
+                .clone()
+                .unwrap_or_else(default_mime_type);
+            let loaded = LoadedResource {
+                uri: r.uri.clone(),
+                name: r.name.clone().unwrap_or_else(|| r.uri.clone()),
+                description: r.description.clone(),
+                mime_type: mime,
+                content: r.content.clone().unwrap_or_default(),
+                meta: None,
+            };
+            resources.insert(r.uri.clone(), loaded);
+        }
+        Self { resources }
+    }
+}
+
 #[async_trait]
 impl ResourceHandler for StaticResourceHandler {
     async fn list(

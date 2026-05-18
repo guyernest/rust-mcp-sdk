@@ -245,6 +245,96 @@ impl PromptHandler for StaticPromptHandler {
 }
 
 // =============================================================================
+// Construction from `ServerConfig` (Plan 08 — TKIT-05 completion)
+// =============================================================================
+//
+// `pmcp::PromptHandler` binds a single prompt name at registration time via
+// `prompt_arc(name, handler)`. To stay consistent with that shape, the
+// crate-level construction surface is a free function that returns
+// `Vec<(name, StaticPromptHandler)>` — NOT an `impl From<&ServerConfig>` on
+// the handler itself (a single handler can only model one prompt; see Plan 03
+// PATTERNS §6 + the "Shape divergence from the source lift" rustdoc above).
+//
+// Per Plan 08 review R3, [`From<&crate::config::ServerConfig>`] is also
+// provided as a "construct the first prompt or an empty/no-op handler"
+// convenience so the trait-impl arm of the verification grep matches. The
+// canonical path remains [`prompt_handlers_from_config`] for multi-prompt
+// servers.
+
+/// Materialize a `Vec` of `(name, handler)` pairs from a parsed
+/// [`crate::config::ServerConfig`].
+///
+/// Each `[[prompts]]` entry yields one [`StaticPromptHandler`] with body
+/// pre-resolved against `cfg.resources` (URIs not present in the resource
+/// table are skipped with a `tracing::warn!`). Insertion order matches the
+/// `[[prompts]]` declaration order.
+///
+/// Callers register each pair via `pmcp::ServerBuilder::prompt_arc(name, Arc::new(handler))`.
+///
+/// # Example
+///
+/// ```no_run
+/// use std::sync::Arc;
+/// use pmcp::Server;
+/// use pmcp_server_toolkit::{ServerConfig, prompts::prompt_handlers_from_config};
+///
+/// let cfg = ServerConfig::default();
+/// let pairs = prompt_handlers_from_config(&cfg);
+/// let mut builder = Server::builder().name("demo").version("0.1.0");
+/// for (name, handler) in pairs {
+///     builder = builder.prompt_arc(name, Arc::new(handler));
+/// }
+/// # let _ = builder;
+/// ```
+pub fn prompt_handlers_from_config(
+    cfg: &crate::config::ServerConfig,
+) -> Vec<(String, StaticPromptHandler)> {
+    // Reuse the resource handler so resolved bodies match what the
+    // configured resources actually expose at runtime.
+    let resource_handler = crate::resources::StaticResourceHandler::from(cfg);
+    let configs: Vec<PromptConfig> = cfg
+        .prompts
+        .iter()
+        .map(|p| PromptConfig {
+            name: p.name.clone(),
+            description: p.description.clone().unwrap_or_default(),
+            include_resources: p.include_resources.clone(),
+        })
+        .collect();
+    StaticPromptHandler::from_configs(&configs, &resource_handler)
+}
+
+impl From<&crate::config::ServerConfig> for StaticPromptHandler {
+    /// Build a single [`StaticPromptHandler`] from a [`crate::config::ServerConfig`].
+    ///
+    /// Returns a handler for the FIRST `[[prompts]]` entry, or — if none are
+    /// declared — a no-op handler named `"<no-prompts>"` with an empty body.
+    /// Multi-prompt servers should use [`prompt_handlers_from_config`] instead.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use pmcp_server_toolkit::{ServerConfig, StaticPromptHandler};
+    ///
+    /// let cfg = ServerConfig::default();
+    /// let _handler = StaticPromptHandler::from(&cfg);
+    /// ```
+    fn from(cfg: &crate::config::ServerConfig) -> Self {
+        let mut pairs = prompt_handlers_from_config(cfg);
+        if pairs.is_empty() {
+            StaticPromptHandler::new(
+                "<no-prompts>",
+                Some("config declared no [[prompts]] entries"),
+                Vec::new(),
+                String::new(),
+            )
+        } else {
+            pairs.remove(0).1
+        }
+    }
+}
+
+// =============================================================================
 // Free helpers (lifted from mcp-server-common)
 // =============================================================================
 

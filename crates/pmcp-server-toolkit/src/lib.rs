@@ -83,6 +83,12 @@ pub use crate::error::ConfigValidationError;
 // reach for; lifting it to the crate root keeps the import surface flat.
 pub use crate::tools::synthesize_from_config;
 
+// Builder extensions (TKIT-08) — Plan 08 headline re-export per D-15 + review R3.
+// The trait method set is the Shape C ≤15-line `main.rs` surface; lifting it
+// to the crate root is the binding witness of D-15 (the runnable example
+// imports SOLELY from `pmcp_server_toolkit::*` — never from module paths).
+pub use crate::builder_ext::ServerBuilderExt;
+
 // SQL connector trait stub (TKIT-10) — Plan 07 headline re-export per D-15 +
 // review R3. MINIMIZED Phase 83 surface per review R2: ONLY `Dialect`,
 // `SqlConnector`, and `ConnectorError` are re-exported. `execute()` and
@@ -119,6 +125,11 @@ const _ROOT_REEXPORT_SMOKE: fn() = || {
     let _: Option<Dialect> = None;
     let _: Option<ConnectorError> = None;
     let _: Option<&dyn SqlConnector> = None;
+    // Plan 08 (TKIT-08): ServerBuilderExt trait — the headline Shape C
+    // surface. The trait is `Sized` (can't be `dyn`) — reference its method
+    // pointer instead to assert the crate-root path resolves.
+    let _: fn(pmcp::ServerBuilder, &ServerConfig) -> Result<pmcp::ServerBuilder> =
+        <pmcp::ServerBuilder as ServerBuilderExt>::try_tools_from_config;
 };
 
 // Plan 06 (TKIT-06 + TKIT-09): compile-only assertion that the code_mode
