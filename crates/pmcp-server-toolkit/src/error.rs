@@ -51,4 +51,18 @@ pub enum ToolkitError {
     /// Filesystem failure while reading a config or fixture.
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
+
+    /// Secret resolution failed (env var missing, AWS API error, etc.).
+    ///
+    /// Carries the secret name and a descriptive cause string; the underlying
+    /// raw value is NEVER carried in this variant — only the lookup-key
+    /// metadata and the error context. This preserves the `SecretValue`
+    /// negative-trait invariants at the error path (review R5 + T-83-02-02).
+    #[error("secret '{name}' not resolvable: {cause}")]
+    Secret {
+        /// The secret name that could not be resolved.
+        name: String,
+        /// Human-readable cause (provider name + underlying error).
+        cause: String,
+    },
 }

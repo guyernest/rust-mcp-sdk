@@ -32,6 +32,12 @@ tracing = "0.1"
 # Why: toolkit-owned `SecretValue` newtype ships in Plan 02 regardless of the
 # `code-mode` feature state, per Phase 83 review R6.
 secrecy = "0.10"
+# Why: AWS secrets providers (SsmSecrets, SecretsManagerSecrets,
+# OrgSecretsManagerProvider) use `tokio::sync::RwLock` for their cache.
+# Optional + only pulled in under the `aws` feature so the no-default-features
+# build (which proves SecretValue's feature-independence per review R6) does
+# not pay for it.
+tokio = { version = "1", default-features = false, features = ["sync"], optional = true }
 
 # Why: default features enable `rustls` → aws-smithy-runtime/tls-rustls →
 # aws-smithy-http-client/legacy-rustls-ring → rustls 0.21 / rustls-webpki 0.101
@@ -47,7 +53,7 @@ rusqlite = { version = "0.39", features = ["bundled"], optional = true }
 [features]
 default = ["code-mode"]
 code-mode = ["dep:pmcp-code-mode"]
-aws = ["dep:aws-config", "dep:aws-sdk-secretsmanager", "dep:aws-sdk-ssm"]
+aws = ["dep:aws-config", "dep:aws-sdk-secretsmanager", "dep:aws-sdk-ssm", "dep:tokio"]
 avp = ["code-mode", "pmcp-code-mode/avp"]
 input-validation = ["dep:jsonschema"]
 sqlite = ["dep:rusqlite"]
