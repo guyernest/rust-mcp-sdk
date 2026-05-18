@@ -18,9 +18,8 @@ use pmcp_server_toolkit::config::ServerConfig;
 #[test]
 fn open_images_config_parses_and_validates() {
     let toml = include_str!("fixtures/open-images-config.toml");
-    let cfg = ServerConfig::from_toml_strict_validated(toml).expect(
-        "open-images config must parse + validate — REF-01 superset invariant + review R8",
-    );
+    let cfg = ServerConfig::from_toml_strict_validated(toml)
+        .expect("open-images config must parse + validate — REF-01 superset invariant + review R8");
     assert!(
         !cfg.tools.is_empty(),
         "open-images config must declare at least one [[tools]] entry"

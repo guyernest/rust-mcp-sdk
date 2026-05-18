@@ -70,6 +70,14 @@ pub use crate::resources::StaticResourceHandler;
 // Prompts (TKIT-05) — Plan 03 headline re-export per D-15 + review R3.
 pub use crate::prompts::StaticPromptHandler;
 
+// Config (TKIT-01) — Plan 04 headline re-export per D-15 + review R3.
+// ServerConfig is THE single top-level config type a Shape C consumer touches.
+pub use crate::config::ServerConfig;
+
+// Validation error type also surfaces at the crate root so consumers can
+// pattern-match on it without importing from `error` (review R3 headline DX).
+pub use crate::error::ConfigValidationError;
+
 // Why: compile-only assertion proving the headline D-15 / review-R3 crate-root
 // DX promise. If any of these paths fails to resolve, the crate fails to
 // build — no test runtime required.
@@ -83,4 +91,6 @@ const _ROOT_REEXPORT_SMOKE: fn() = || {
     let _: Option<SecretsProviderChain> = None;
     let _: Option<StaticResourceHandler> = None;
     let _: Option<StaticPromptHandler> = None;
+    let _: Option<ServerConfig> = None;
+    let _: Option<ConfigValidationError> = None;
 };

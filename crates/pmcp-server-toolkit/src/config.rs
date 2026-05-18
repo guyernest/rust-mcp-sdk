@@ -346,7 +346,8 @@ pub struct DatabasePoolSection {
 /// The toolkit uses **unprefixed** field names (REF-01 invariant); the mapping
 /// to `pmcp_code_mode::CodeModeConfig`'s prefixed names (`sql_allow_writes`,
 /// etc.) is handled by Plan 06's executor wiring.
-#[allow(clippy::struct_excessive_bools)] // Why: REF-01 superset — these bools mirror the reference servers' [code_mode] block 1:1 (CONTEXT.md D-13). Grouping into a sub-struct would break REF-01.
+#[allow(clippy::struct_excessive_bools)]
+// Why: REF-01 superset — these bools mirror the reference servers' [code_mode] block 1:1 (CONTEXT.md D-13). Grouping into a sub-struct would break REF-01.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(deny_unknown_fields)]
 pub struct CodeModeSection {
@@ -606,8 +607,7 @@ mod tests {
             enabled = true
             auto_aprove_levels = ["low"]
         "#;
-        let err =
-            ServerConfig::from_toml(toml).expect_err("typo'd code_mode key must be rejected");
+        let err = ServerConfig::from_toml(toml).expect_err("typo'd code_mode key must be rejected");
         assert!(matches!(err, ToolkitError::Parse(_)));
     }
 
