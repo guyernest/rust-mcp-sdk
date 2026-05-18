@@ -389,6 +389,14 @@ pub struct CodeModeSection {
     /// T-83-04-04 in the plan threat model).
     #[serde(default)]
     pub token_secret: Option<String>,
+    /// Per Phase 83 review R9: inline `token_secret = "raw-string"` is REJECTED
+    /// by default to prevent secrets from being committed to source-controlled
+    /// configs. Set this flag to `true` ONLY in dev/test configs where the
+    /// operator explicitly accepts the risk. NEVER set this in a committed
+    /// production config — production must use the `env:VAR_NAME` syntax that
+    /// resolves at runtime through `SecretsProvider`.
+    #[serde(default)]
+    pub allow_inline_token_secret_for_dev: bool,
     /// `[code_mode.limits]` — query-complexity caps.
     #[serde(default)]
     pub limits: Option<CodeModeLimits>,

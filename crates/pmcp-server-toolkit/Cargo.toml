@@ -52,7 +52,12 @@ rusqlite = { version = "0.39", features = ["bundled"], optional = true }
 
 [features]
 default = ["code-mode"]
-code-mode = ["dep:pmcp-code-mode"]
+# Why: the toolkit's code-mode wiring needs `ValidationPipeline::validate_sql_query`
+# for the SC-3 anchor (`allow_writes=false` rejects INSERT). That method is gated
+# behind `pmcp-code-mode/sql-code-mode` (see Phase 83 Plan 06 CODE_MODE_API_NOTES.md
+# Section 5). Forwarding the feature here keeps `cargo test --features code-mode`
+# self-contained for Shape A/C consumers.
+code-mode = ["dep:pmcp-code-mode", "pmcp-code-mode/sql-code-mode"]
 aws = ["dep:aws-config", "dep:aws-sdk-secretsmanager", "dep:aws-sdk-ssm", "dep:tokio"]
 avp = ["code-mode", "pmcp-code-mode/avp"]
 input-validation = ["dep:jsonschema"]

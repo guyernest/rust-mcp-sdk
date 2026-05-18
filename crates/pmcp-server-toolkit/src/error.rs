@@ -116,4 +116,15 @@ pub enum ConfigValidationError {
     /// `[[database.tables]]` entry at `index` has an empty / whitespace-only `name`.
     #[error("[[database.tables]] entry at index {0} has empty name")]
     EmptyTableName(usize),
+    /// Per Phase 83 Plan 06 review R9: `[code_mode].token_secret` was given as
+    /// an inline literal (e.g. `token_secret = "raw-string"`) instead of the
+    /// `env:VAR_NAME` reference form, and the dev-only escape hatch
+    /// `allow_inline_token_secret_for_dev` was not set. Inline literals in
+    /// committed configs leak HMAC signing keys; the toolkit defaults to
+    /// rejecting them.
+    #[error(
+        "[code_mode].token_secret is an inline literal; use 'env:VAR_NAME' \
+         or set allow_inline_token_secret_for_dev=true (NEVER in production)"
+    )]
+    InlineSecretRejected,
 }
