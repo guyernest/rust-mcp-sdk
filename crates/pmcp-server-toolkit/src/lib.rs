@@ -40,3 +40,39 @@ pub mod tools;
 pub mod code_mode;
 
 pub use error::{Result, ToolkitError};
+
+// === Crate-root re-exports per D-15 (headline DX promise — reviewed R3) ===
+//
+// A Shape C consumer writes a single one-line crate-root import:
+//   use pmcp_server_toolkit::{AuthProvider, StaticAuthProvider,
+//                             SecretsProvider, SecretValue, EnvSecrets};
+//
+// NO `as _` no-name imports (those break the DX promise — review R3).
+
+// Auth — re-export pmcp's trait at the toolkit crate root so consumers don't
+// have to write `pmcp::server::auth::AuthProvider`. The toolkit's static impl
+// is also re-exported at crate root.
+pub use crate::auth::StaticAuthProvider;
+pub use pmcp::server::auth::AuthProvider;
+
+// Secrets — toolkit-owned trait + value type + concrete impls. Per review R6
+// the secret type `SecretValue` is toolkit-owned (NOT pmcp_code_mode::TokenSecret),
+// so it's stable under `--no-default-features`.
+pub use crate::secrets::{EnvSecrets, SecretValue, SecretsProvider, SecretsProviderChain};
+
+// AWS-feature-gated secrets impls.
+#[cfg(feature = "aws")]
+pub use crate::secrets::{OrgSecretsManagerProvider, SecretsManagerSecrets, SsmSecrets};
+
+// Why: compile-only assertion proving the headline D-15 / review-R3 crate-root
+// DX promise. If any of these paths fails to resolve, the crate fails to
+// build — no test runtime required.
+#[allow(dead_code)]
+const _ROOT_REEXPORT_SMOKE: fn() = || {
+    let _: Option<&dyn AuthProvider> = None;
+    let _: Option<&dyn SecretsProvider> = None;
+    let _: Option<StaticAuthProvider> = None;
+    let _: Option<EnvSecrets> = None;
+    let _: Option<SecretValue> = None;
+    let _: Option<SecretsProviderChain> = None;
+};

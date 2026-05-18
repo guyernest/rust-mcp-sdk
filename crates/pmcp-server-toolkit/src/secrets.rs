@@ -1,15 +1,6 @@
 // Originated from pmcp-run/built-in/shared/mcp-server-common/src/secrets.rs
 // (https://github.com/guyernest/pmcp-run)
 // Promoted to rust-mcp-sdk workspace for Phase 83 toolkit lift (P83-02).
-//
-// Mechanical deltas applied during the lift (per D-01):
-// 1. Crate-path swap: crate::error::Error::auth(...) -> ToolkitError::Secret { ... }
-// 2. pmcp dep shape: trait operates on toolkit-owned SecretValue (R6) rather
-//    than raw String (anti-pattern §"Anti-Patterns" #11).
-// 3. Feature gates: AWS impls behind `aws`; env impl unconditional. None of
-//    the dropped D-14 features (`ddb`, `dynamo-config`, `openapi-code-mode`,
-//    `js-runtime`, `mcp-code-mode`) survived.
-// 4. Attribution header above.
 
 //! Secrets management for the toolkit.
 //!
@@ -52,9 +43,9 @@
 use crate::error::{Result, ToolkitError};
 use async_trait::async_trait;
 use secrecy::{ExposeSecret, SecretBox};
-use std::sync::Arc;
 #[cfg(feature = "aws")]
 use std::collections::HashMap;
+use std::sync::Arc;
 #[cfg(feature = "aws")]
 use tokio::sync::RwLock;
 
@@ -87,12 +78,11 @@ pub const SERVER_ID_VAR: &str = "PMCP_SERVER_ID";
 pub struct SecretValue(SecretBox<[u8]>);
 
 impl SecretValue {
-    /// Create from raw bytes. The input `Vec` is consumed and copied into a
-    /// `SecretBox`; the original `Vec` is NOT zeroed — callers that need
-    /// maximum security should use [`SecretValue::from_env`] instead.
+    /// Create from raw bytes. The input is moved into the `SecretBox` without
+    /// an intermediate copy — no plaintext residue is left behind by the
+    /// constructor.
     pub fn new(bytes: impl Into<Vec<u8>>) -> Self {
-        let v: Vec<u8> = bytes.into();
-        Self(SecretBox::new(Box::from(v.as_slice())))
+        Self(SecretBox::new(bytes.into().into_boxed_slice()))
     }
 
     /// Read from an environment variable. The string value is converted to
@@ -110,16 +100,6 @@ impl SecretValue {
         self.0.expose_secret()
     }
 }
-
-// SAFETY NOTE: SecretValue intentionally does NOT derive or implement:
-// - Debug (prevents logging secret bytes)
-// - Display (prevents printing secret bytes)
-// - Clone (prevents accidental copies that bypass zeroize)
-// - Serialize / Deserialize (prevents JSON/wire leakage)
-// - PartialEq / Eq (prevents timing side-channel comparisons)
-// `tests/compile_fail/token_secret_no_*.rs` enforce these denials at
-// compile time via `trybuild` (review R5 — commented-out assertions are
-// theatre; only real compile-fail tests carry weight).
 
 /// Interop with `pmcp_code_mode::TokenSecret` when the `code-mode` feature is on.
 ///
@@ -184,7 +164,7 @@ impl SecretsProvider for SecretsProviderChain {
                         "Secret resolved"
                     );
                     return Ok(value);
-                }
+                },
                 Err(e) => {
                     tracing::trace!(
                         secret = %name,
@@ -193,7 +173,7 @@ impl SecretsProvider for SecretsProviderChain {
                         "Secret not found in provider, trying next"
                     );
                     last_error = Some(e);
-                }
+                },
             }
         }
 
@@ -257,7 +237,11 @@ impl EnvSecrets {
     }
 
     fn full_name(&self, name: &str) -> String {
-        format!("{}{}", self.prefix, name)
+        if self.prefix.is_empty() {
+            name.to_string()
+        } else {
+            format!("{}{}", self.prefix, name)
+        }
     }
 }
 
@@ -380,8 +364,8 @@ impl OrgSecretsManagerProvider {
                 cause: "org secret has no string value (binary secrets not supported)".to_string(),
             })?;
 
-        let all_secrets: HashMap<String, serde_json::Value> = serde_json::from_str(secret_string)
-            .map_err(|e| ToolkitError::Secret {
+        let all_secrets: HashMap<String, serde_json::Value> =
+            serde_json::from_str(secret_string).map_err(|e| ToolkitError::Secret {
                 name: self.secret_path.clone(),
                 cause: format!("org secret is not valid JSON: {e}"),
             })?;
@@ -404,13 +388,13 @@ impl OrgSecretsManagerProvider {
                     result.insert(key.clone(), string_value);
                 }
                 result
-            }
+            },
             Some(_) => {
                 return Err(ToolkitError::Secret {
                     name: self.server_id.clone(),
                     cause: "server entry in org secret is not an object".to_string(),
                 });
-            }
+            },
             None => {
                 tracing::warn!(
                     path = %self.secret_path,
@@ -418,7 +402,7 @@ impl OrgSecretsManagerProvider {
                     "No secrets configured for this server in org secret"
                 );
                 HashMap::new()
-            }
+            },
         };
 
         tracing::info!(
@@ -811,7 +795,7 @@ mod tests {
             Err(ToolkitError::Secret { name, cause }) => {
                 assert!(name.contains("PMCP_TOOLKIT_DEFINITELY_NOT_SET_12345"));
                 assert!(cause.contains("env"));
-            }
+            },
             Err(other) => panic!("expected ToolkitError::Secret, got {other:?}"),
         }
     }

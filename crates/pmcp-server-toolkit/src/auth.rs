@@ -1,17 +1,6 @@
 // Originated from pmcp-run/built-in/shared/mcp-server-common/src/auth.rs
 // (https://github.com/guyernest/pmcp-run)
 // Promoted to rust-mcp-sdk workspace for Phase 83 toolkit lift (P83-02).
-//
-// Note on shape divergence (documented as Plan 02 deviation):
-// The mcp-server-common::auth module models OUTBOUND HTTP backend auth (apply
-// auth to outgoing reqwest::HeaderMap), whereas `pmcp::server::auth::AuthProvider`
-// models INBOUND request validation (`validate_request(authorization_header)`).
-// These are different concerns and cannot be lifted byte-for-byte. Per
-// 83-PATTERNS.md §3 (the authoritative shape spec for this lift target), the
-// natural toolkit impl is `StaticAuthProvider { expected_token }` impling
-// `pmcp::server::auth::AuthProvider`. The token-comparison body is structured
-// after the mcp-server-common::auth::BearerAuth provider (the closest source
-// analog) but reshaped for the inbound trait.
 
 //! `AuthProvider` impls for the toolkit — bearer-token-based static auth suitable
 //! for dev/test environments. Production callers should use pmcp's OAuth/JWT
@@ -100,7 +89,7 @@ impl AuthProvider for StaticAuthProvider {
                     ErrorCode::INVALID_REQUEST,
                     "Missing Authorization header",
                 ));
-            }
+            },
         };
 
         // Strip the "Bearer " prefix (case-insensitive scheme name per RFC 6750).
@@ -155,9 +144,7 @@ mod tests {
     #[tokio::test]
     async fn invalid_bearer_token_returns_err() {
         let provider = StaticAuthProvider::new("secret-token");
-        let result = provider
-            .validate_request(Some("Bearer wrong-token"))
-            .await;
+        let result = provider.validate_request(Some("Bearer wrong-token")).await;
         assert!(result.is_err(), "expected Err for mismatched token");
     }
 
@@ -171,9 +158,7 @@ mod tests {
     #[tokio::test]
     async fn non_bearer_scheme_returns_err() {
         let provider = StaticAuthProvider::new("secret-token");
-        let result = provider
-            .validate_request(Some("Basic dXNlcjpwYXNz"))
-            .await;
+        let result = provider.validate_request(Some("Basic dXNlcjpwYXNz")).await;
         assert!(result.is_err(), "expected Err for non-Bearer scheme");
     }
 

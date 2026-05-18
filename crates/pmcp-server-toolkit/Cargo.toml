@@ -60,7 +60,10 @@ sqlite = ["dep:rusqlite"]
 
 [dev-dependencies]
 proptest = "1.7"
-tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+# Why: tests run with --test-threads=1 (project CLAUDE.md). The single-threaded
+# tokio runtime is sufficient; rt-multi-thread bloats compile times without
+# benefit.
+tokio = { version = "1", features = ["macros", "rt"] }
 # Why: Plan 02 Task 2 uses compile-fail tests on `SecretValue`'s negative trait
 # invariants (no `Debug`, no `Display`, no `Serialize`). Per Phase 83 review R5.
 trybuild = "1"
