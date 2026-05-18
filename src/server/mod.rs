@@ -1987,6 +1987,28 @@ impl ServerBuilder {
         self
     }
 
+    /// Add a tool handler with an Arc.
+    ///
+    /// This variant lets the caller share the handler `Arc` between the
+    /// builder and an external in-process handler map (e.g., a downstream
+    /// toolkit's handler registry) without writing a delegating wrapper
+    /// shim. Behavior is otherwise identical to [`Self::tool`]: the first
+    /// registration auto-enables `capabilities.tools`.
+    pub fn tool_arc(mut self, name: impl Into<String>, handler: Arc<dyn ToolHandler>) -> Self {
+        let name = name.into();
+        self.tools.insert(name, handler);
+
+        // Update capabilities to include tools
+        // Use Some(false) instead of None to ensure the field serializes properly
+        if self.capabilities.tools.is_none() {
+            self.capabilities.tools = Some(crate::types::ToolCapabilities {
+                list_changed: Some(false),
+            });
+        }
+
+        self
+    }
+
     /// Register all tools and prompts from an `#[mcp_server]` annotated type.
     ///
     /// This is the ergonomic counterpart to individually registering tools and
@@ -2493,6 +2515,28 @@ impl ServerBuilder {
         handler: impl PromptHandler + 'static,
     ) -> Self {
         self.prompts.insert(name.into(), Arc::new(handler));
+
+        // Update capabilities to include prompts
+        // Use Some(false) instead of None to ensure the field serializes properly
+        if self.capabilities.prompts.is_none() {
+            self.capabilities.prompts = Some(crate::types::PromptCapabilities {
+                list_changed: Some(false),
+            });
+        }
+
+        self
+    }
+
+    /// Add a prompt handler with an Arc.
+    ///
+    /// This variant lets the caller share the handler `Arc` between the
+    /// builder and an external in-process handler map (e.g., a downstream
+    /// toolkit's handler registry) without writing a delegating wrapper
+    /// shim. Behavior is otherwise identical to [`Self::prompt`]: the first
+    /// registration auto-enables `capabilities.prompts`.
+    pub fn prompt_arc(mut self, name: impl Into<String>, handler: Arc<dyn PromptHandler>) -> Self {
+        let name = name.into();
+        self.prompts.insert(name, handler);
 
         // Update capabilities to include prompts
         // Use Some(false) instead of None to ensure the field serializes properly
