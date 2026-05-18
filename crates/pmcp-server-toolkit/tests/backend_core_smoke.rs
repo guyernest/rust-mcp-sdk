@@ -40,7 +40,10 @@ async fn backend_core_construction_surface_smoke() {
     // populate that env var. This exercises the exact same R9 enforcement
     // path the production builder takes and keeps the on-disk fixture
     // verbatim.
-    std::env::set_var("PMCP_TOOLKIT_TOKEN_SECRET", "smoke-test-secret-do-not-use-in-prod");
+    std::env::set_var(
+        "PMCP_TOOLKIT_TOKEN_SECRET",
+        "smoke-test-secret-do-not-use-in-prod",
+    );
 
     let toml = include_str!("fixtures/open-images-config.toml");
     let mut cfg = ServerConfig::from_toml_strict_validated(toml)

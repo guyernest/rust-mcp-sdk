@@ -63,6 +63,10 @@ avp = ["code-mode", "pmcp-code-mode/avp"]
 input-validation = ["dep:jsonschema"]
 sqlite = ["dep:rusqlite"]
 
+[[example]]
+name = "e01_toolkit_minimal"
+required-features = ["code-mode"]
+
 [dev-dependencies]
 proptest = "1.7"
 # Why: tests run with --test-threads=1 (project CLAUDE.md). The single-threaded

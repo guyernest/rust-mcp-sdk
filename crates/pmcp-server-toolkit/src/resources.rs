@@ -318,10 +318,7 @@ impl From<&crate::config::ServerConfig> for StaticResourceHandler {
     fn from(cfg: &crate::config::ServerConfig) -> Self {
         let mut resources = IndexMap::with_capacity(cfg.resources.len());
         for r in &cfg.resources {
-            let mime = r
-                .mime_type
-                .clone()
-                .unwrap_or_else(default_mime_type);
+            let mime = r.mime_type.clone().unwrap_or_else(default_mime_type);
             let loaded = LoadedResource {
                 uri: r.uri.clone(),
                 name: r.name.clone().unwrap_or_else(|| r.uri.clone()),
