@@ -45,6 +45,93 @@ Just as you would thoroughly test a REST API before deploying it, MCP servers ne
    └─────────────────────────────────┘
 ```
 
+## Handler-Level Testing Pattern (In-Process)
+
+When you author an MCP server with `pmcp`, integration tests don't have to spin up a transport, a JSONRPC parser, and a full request-dispatch pipeline. The SDK exposes two accessors — `Server::get_tool(name)` and `Server::get_prompt(name)` — that hand you back the registered `Arc<dyn Handler>` directly, so you can invoke `handler.handle(args, RequestHandlerExtra::default()).await` and assert on the result.
+
+This is the pattern external toolkit authors should reach for first: it's fast, deterministic, and isolates the handler logic from anything the transport stack might do. Combined with the `tool_arc(name, Arc::new(handler))` and `prompt_arc(name, Arc::new(handler))` registration methods on `pmcp::ServerBuilder`, you can also share the exact same `Arc<dyn Handler>` between the built server and any in-process state your test scaffold maintains — no delegating wrapper shim required.
+
+### Example
+
+```rust,no_run
+use std::sync::Arc;
+use async_trait::async_trait;
+use serde_json::{json, Value};
+use pmcp::{Server, RequestHandlerExtra, ToolHandler};
+
+// 1. Define a handler.
+struct EchoTool;
+
+#[async_trait]
+impl ToolHandler for EchoTool {
+    async fn handle(
+        &self,
+        args: Value,
+        _extra: RequestHandlerExtra,
+    ) -> pmcp::Result<Value> {
+        Ok(json!({ "echoed": args }))
+    }
+}
+
+# async fn example() -> pmcp::Result<()> {
+// 2. Build the server with `tool_arc` so the same Arc can be shared with your
+//    in-process test scaffold if needed.
+let handler: Arc<dyn ToolHandler> = Arc::new(EchoTool);
+let server = Server::builder()
+    .name("test-server")
+    .version("0.1.0")
+    .tool_arc("echo", Arc::clone(&handler))
+    .build()?;
+
+// 3. Retrieve the registered handler via the accessor symmetric with `get_prompt`.
+let tool = server.get_tool("echo").expect("echo tool registered");
+
+// 4. Invoke at handler level — bypasses the JSONRPC dispatch path entirely.
+let result = tool
+    .handle(json!({ "msg": "hi" }), RequestHandlerExtra::default())
+    .await?;
+
+// 5. Assert on the result.
+assert_eq!(result, json!({ "echoed": { "msg": "hi" } }));
+# Ok(())
+# }
+```
+
+The shape is symmetric for prompts: register with `prompt_arc(name, Arc::new(handler))`, retrieve with `server.get_prompt(name)`, invoke with `handler.handle(args, RequestHandlerExtra::default()).await`.
+
+See `tests/in_process_handler_pattern.rs` in the `rust-mcp-sdk` repo for the executable reference test that exercises both `tool_arc` and `prompt_arc` registration paths against a real built `pmcp::Server`.
+
+### What this pattern skips
+
+This pattern exercises **only** the handler implementation. The JSONRPC dispatch path (`Server::handle_request`) is bypassed, so the following do **not** run:
+
+- `auth_provider` — no authentication check is performed; the test runs as an unauthenticated caller. Any `AuthContext` your handler expects must be supplied manually via `RequestHandlerExtra`, or your handler must tolerate its absence.
+- `tool_authorizer` — no per-tool authorization (e.g., scope checks via `ScopeBasedAuthorizer`) is invoked. A handler that would be rejected by the authorizer at the transport level will execute successfully here.
+- `tool_middleware` — no middleware chain (logging, metrics, OAuth token injection, tracing spans, etc.) runs around the handler. Anything middleware would normally add to the request or response is absent.
+
+In **production**, real MCP clients hit `Server::handle_request` over a transport (`stdio`, `streamable-http`, `websocket`, `SSE`), and the full pipeline runs every request — auth, authorizer, middleware, then the handler. The handler-level pattern shown above is a deliberate **testing shortcut** to keep handler unit/integration tests fast and self-contained; it is **not** a model of production security behavior.
+
+### When to use a full transport instead
+
+If your integration test needs to verify the full security pipeline (auth, authorization, middleware), drive a real transport with `pmcp::Client`:
+
+- **stdio** — pair `Server::run_stdio()` with `pmcp::Client` over `StdioTransport`. Lowest-overhead full-pipeline test; no network involved.
+- **streamable-http** — boot the server with `pmcp::StreamableHttpServer` and drive it with `pmcp::Client::connect_streamable_http(...)`. Use this when the test needs to cover HTTP-layer behavior (headers, sessions, SSE upgrade) on top of the pipeline.
+
+Use whichever transport matches your deployment target. Full-pipeline tests are slower and have more moving parts; reach for them when the test is specifically about the pipeline, not the handler logic.
+
+### Pattern summary
+
+| Step | Code |
+|------|------|
+| Register handler with an `Arc` | `.tool_arc(name, Arc::new(MyTool))` or `.prompt_arc(name, Arc::new(MyPrompt))` |
+| Build the server | `.build()?` |
+| Retrieve the handler | `server.get_tool(name)` or `server.get_prompt(name)` |
+| Invoke at handler level | `handler.handle(args, RequestHandlerExtra::default()).await?` |
+| Assert on result | `assert_eq!(...)` against `serde_json::Value` (tools) or `GetPromptResult` (prompts) |
+
+> **See also:** [Long-Running Operations (Tasks)](./ch12-7-tasks.md) — toolkit authors using the `_arc` registration pattern often build task-heavy servers; the Tasks chapter covers the long-running-operation surface that pairs naturally with the in-process handler pattern shown here.
+
 ## Official MCP Inspector
 
 The **MCP Inspector** is the official visual testing tool provided by Anthropic for interactive debugging and exploration of MCP servers.
