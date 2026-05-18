@@ -381,12 +381,137 @@ impl Server {
         self.prompts.contains_key(name)
     }
 
-    /// Get a prompt handler by name
+    /// Get a prompt handler by name.
+    ///
+    /// Returns a borrowed reference to the registered prompt handler `Arc`,
+    /// or `None` if no prompt with that name has been registered. Callers
+    /// who need ownership can `Arc::clone(...)` the returned reference.
+    ///
+    /// # Handler-level testing pattern
+    ///
+    /// This accessor is the public API surface for the handler-level
+    /// integration testing pattern documented in the testing chapter of
+    /// the PMCP book: build a `Server`, retrieve the handler by name,
+    /// invoke `.handle(...).await` directly with a synthetic
+    /// `RequestHandlerExtra`. It exercises handler logic in isolation
+    /// without spinning up a transport.
+    ///
+    /// # What this pattern skips
+    ///
+    /// This pattern exercises handler logic only. The JSONRPC dispatch
+    /// path (`Server::handle_request`) is bypassed, so `auth_provider`,
+    /// `tool_authorizer`, and `tool_middleware` are **not** invoked. For
+    /// full-pipeline tests that exercise the security pipeline, drive a
+    /// real transport (stdio or streamable-http) with a `pmcp::Client`.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use std::collections::HashMap;
+    /// use std::sync::Arc;
+    /// use async_trait::async_trait;
+    /// use pmcp::{PromptHandler, Server};
+    /// use pmcp::types::{GetPromptResult, PromptMessage, Content};
+    /// use pmcp::types::content::Role;
+    ///
+    /// struct GreetingPrompt;
+    ///
+    /// #[async_trait]
+    /// impl PromptHandler for GreetingPrompt {
+    ///     async fn handle(
+    ///         &self,
+    ///         args: HashMap<String, String>,
+    ///         _extra: pmcp::RequestHandlerExtra,
+    ///     ) -> pmcp::Result<GetPromptResult> {
+    ///         let who = args.get("name").cloned().unwrap_or_else(|| "world".to_string());
+    ///         Ok(GetPromptResult::new(
+    ///             vec![PromptMessage::new(Role::User, Content::text(format!("Hello, {}!", who)))],
+    ///             Some("Greeting prompt".to_string()),
+    ///         ))
+    ///     }
+    /// }
+    ///
+    /// # async fn example() -> pmcp::Result<()> {
+    /// let server = Server::builder()
+    ///     .name("demo")
+    ///     .version("0.1")
+    ///     .prompt_arc("greet", Arc::new(GreetingPrompt))
+    ///     .build()?;
+    ///
+    /// let handler = server.get_prompt("greet").expect("registered above");
+    /// let mut args = HashMap::new();
+    /// args.insert("name".to_string(), "claude".to_string());
+    /// let result = handler
+    ///     .handle(args, pmcp::RequestHandlerExtra::default())
+    ///     .await?;
+    /// assert_eq!(result.messages.len(), 1);
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn get_prompt(&self, name: &str) -> Option<&Arc<dyn PromptHandler>> {
         self.prompts.get(name)
     }
 
-    /// Get a tool handler by name
+    /// Get a tool handler by name.
+    ///
+    /// Returns a borrowed reference to the registered tool handler `Arc`,
+    /// or `None` if no tool with that name has been registered. Callers
+    /// who need ownership can `Arc::clone(...)` the returned reference.
+    ///
+    /// # Handler-level testing pattern
+    ///
+    /// This accessor is the public API surface for the handler-level
+    /// integration testing pattern: build a `Server`, retrieve the
+    /// handler by name, invoke `.handle(...).await` directly with a
+    /// synthetic `RequestHandlerExtra`. It exercises handler logic in
+    /// isolation without spinning up a transport, which is the primary
+    /// shape downstream toolkit authors use to assert on a built
+    /// `pmcp::Server`'s registered handlers.
+    ///
+    /// # What this pattern skips
+    ///
+    /// This pattern exercises handler logic only. The JSONRPC dispatch
+    /// path (`Server::handle_request`) is bypassed, so `auth_provider`,
+    /// `tool_authorizer`, and `tool_middleware` are **not** invoked. For
+    /// full-pipeline tests that exercise the security pipeline, drive a
+    /// real transport (stdio or streamable-http) with a `pmcp::Client`.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use std::sync::Arc;
+    /// use async_trait::async_trait;
+    /// use pmcp::{Server, ToolHandler};
+    /// use serde_json::Value;
+    ///
+    /// struct EchoTool;
+    ///
+    /// #[async_trait]
+    /// impl ToolHandler for EchoTool {
+    ///     async fn handle(
+    ///         &self,
+    ///         args: Value,
+    ///         _extra: pmcp::RequestHandlerExtra,
+    ///     ) -> pmcp::Result<Value> {
+    ///         Ok(serde_json::json!({ "echoed": args }))
+    ///     }
+    /// }
+    ///
+    /// # async fn example() -> pmcp::Result<()> {
+    /// let server = Server::builder()
+    ///     .name("demo")
+    ///     .version("0.1")
+    ///     .tool_arc("echo", Arc::new(EchoTool))
+    ///     .build()?;
+    ///
+    /// let handler = server.get_tool("echo").expect("registered above");
+    /// let result = handler
+    ///     .handle(serde_json::json!({"msg": "hi"}), pmcp::RequestHandlerExtra::default())
+    ///     .await?;
+    /// assert_eq!(result, serde_json::json!({"echoed": {"msg": "hi"}}));
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn get_tool(&self, name: &str) -> Option<&Arc<dyn ToolHandler>> {
         self.tools.get(name)
     }
