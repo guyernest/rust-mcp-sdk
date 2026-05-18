@@ -70,6 +70,13 @@ pub use crate::resources::StaticResourceHandler;
 // Prompts (TKIT-05) — Plan 03 headline re-export per D-15 + review R3.
 pub use crate::prompts::StaticPromptHandler;
 
+// Plan 08 (TKIT-05 completion): the multi-prompt construction helper. The
+// `impl From<&ServerConfig>` on `StaticPromptHandler` covers single-prompt
+// servers; this function covers the common multi-prompt path. Lifted to the
+// crate root per review R3 so the backend-core smoke test and downstream
+// shape-C consumers don't need `pmcp_server_toolkit::prompts::*` paths.
+pub use crate::prompts::prompt_handlers_from_config;
+
 // Config (TKIT-01) — Plan 04 headline re-export per D-15 + review R3.
 // ServerConfig is THE single top-level config type a Shape C consumer touches.
 pub use crate::config::ServerConfig;
