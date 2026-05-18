@@ -102,3 +102,20 @@ const _ROOT_REEXPORT_SMOKE: fn() = || {
     // function pointer to assert the re-exported path resolves at the crate root.
     let _: fn(&ServerConfig) -> Result<Vec<crate::tools::SynthesizedTool>> = synthesize_from_config;
 };
+
+// Plan 06 (TKIT-06 + TKIT-09): compile-only assertion that the code_mode
+// submodule's re-exports + wiring helpers resolve at `code_mode::*`. Gated on
+// `code-mode` because the module itself is feature-gated (D-15 + D-16: the
+// headline submodule, not a flattened crate-root surface).
+#[cfg(feature = "code-mode")]
+#[allow(dead_code)]
+const _CODE_MODE_REEXPORT_SMOKE: fn() = || {
+    let _: Option<Box<dyn crate::code_mode::CodeExecutor>> = None;
+    let _: Option<crate::code_mode::ValidationPipeline> = None;
+    let _: Option<crate::code_mode::TokenSecret> = None;
+    let _: Option<crate::code_mode::HmacTokenGenerator> = None;
+    let _: Option<crate::code_mode::ApprovalToken> = None;
+    let _: Option<crate::code_mode::NoopPolicyEvaluator> = None;
+    let _: fn(&ServerConfig) -> Result<crate::code_mode::ValidationPipeline> =
+        crate::code_mode::validation_pipeline_from_config;
+};

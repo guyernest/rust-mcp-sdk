@@ -50,12 +50,7 @@ fn allow_writes_false_rejects_insert() {
         .expect("config parses + validates");
     let pipeline = validation_pipeline_from_config(&cfg).expect("pipeline builds");
 
-    let ctx = ValidationContext::new(
-        "test-user",
-        "test-session",
-        "schema-hash",
-        "perms-hash",
-    );
+    let ctx = ValidationContext::new("test-user", "test-session", "schema-hash", "perms-hash");
     let result = pipeline
         .validate_sql_query("INSERT INTO foo VALUES (1, 2, 3);", &ctx)
         .expect("validation runs (returns failure, not Err)");
@@ -65,7 +60,10 @@ fn allow_writes_false_rejects_insert() {
         "ValidationResult.is_valid must be false when allow_writes=false rejects an INSERT"
     );
     assert!(
-        result.violations.iter().any(|v| v.rule == "writes_disabled"),
+        result
+            .violations
+            .iter()
+            .any(|v| v.rule == "writes_disabled"),
         "violations must include a 'writes_disabled' rule, got: {:?}",
         result.violations
     );
@@ -79,12 +77,7 @@ fn allow_writes_true_permits_insert() {
     let cfg = ServerConfig::from_toml_strict_validated(&toml).expect("config parses + validates");
     let pipeline = validation_pipeline_from_config(&cfg).expect("pipeline builds");
 
-    let ctx = ValidationContext::new(
-        "test-user",
-        "test-session",
-        "schema-hash",
-        "perms-hash",
-    );
+    let ctx = ValidationContext::new("test-user", "test-session", "schema-hash", "perms-hash");
     let result = pipeline
         .validate_sql_query("INSERT INTO foo VALUES (1, 2, 3);", &ctx)
         .expect("validation runs");
@@ -106,12 +99,7 @@ fn select_is_always_permitted_under_default_config() {
         .expect("config parses + validates");
     let pipeline = validation_pipeline_from_config(&cfg).expect("pipeline builds");
 
-    let ctx = ValidationContext::new(
-        "test-user",
-        "test-session",
-        "schema-hash",
-        "perms-hash",
-    );
+    let ctx = ValidationContext::new("test-user", "test-session", "schema-hash", "perms-hash");
     let result = pipeline
         .validate_sql_query("SELECT * FROM foo LIMIT 10;", &ctx)
         .expect("validation runs");

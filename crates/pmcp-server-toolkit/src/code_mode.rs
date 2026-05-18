@@ -121,9 +121,8 @@ pub fn validation_pipeline_from_config(config: &ServerConfig) -> Result<Validati
     let cm_config = build_cm_config(section);
     let secret_value = resolve_token_secret(section)?;
     let token_secret: TokenSecret = secret_value.into(); // R6 conversion
-    ValidationPipeline::from_token_secret(cm_config, &token_secret).map_err(|e| {
-        ToolkitError::CodeMode(format!("ValidationPipeline construction failed: {e}"))
-    })
+    ValidationPipeline::from_token_secret(cm_config, &token_secret)
+        .map_err(|e| ToolkitError::CodeMode(format!("ValidationPipeline construction failed: {e}")))
 }
 
 /// Compose toolkit-side tool registration on top of a caller-supplied
@@ -422,8 +421,7 @@ mod tests {
         let mut section = env_section("UNUSED");
         section.token_secret = Some("a-test-secret-bytes-16-or-more".to_string());
         section.allow_inline_token_secret_for_dev = true;
-        let resolved =
-            resolve_token_secret(&section).expect("dev flag must permit inline literal");
+        let resolved = resolve_token_secret(&section).expect("dev flag must permit inline literal");
         assert_eq!(resolved.expose_secret(), b"a-test-secret-bytes-16-or-more");
     }
 
