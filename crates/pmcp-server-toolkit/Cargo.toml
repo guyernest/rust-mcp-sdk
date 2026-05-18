@@ -1,0 +1,60 @@
+[package]
+name = "pmcp-server-toolkit"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/paiml/rust-mcp-sdk"
+description = "Runtime library for config-driven MCP servers — auth, secrets, static resources/prompts, [[tools]] synthesizer, code-mode wiring"
+readme = "README.md"
+keywords = ["mcp", "toolkit", "config-driven", "code-mode", "lambda"]
+categories = ["development-tools", "web-programming"]
+
+# Why: keeps the published artifact under the 10MB crates.io limit (Phase 83
+# Pitfall 6). `tests/` carries large reference fixtures that the toolkit needs
+# only during workspace development; `.planning/`, `.pmat/`, and `fuzz/` are
+# never relevant to downstream consumers.
+exclude = [".planning/", ".pmat/", "fixtures/", "tests/", "fuzz/"]
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[dependencies]
+pmcp = { version = "2.8.1", path = "../..", default-features = false }
+pmcp-code-mode = { version = "0.5.1", path = "../pmcp-code-mode", default-features = false, optional = true }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "1"
+async-trait = "0.1"
+thiserror = "2"
+indexmap = { version = "2.10", features = ["serde"] }
+tracing = "0.1"
+# Why: toolkit-owned `SecretValue` newtype ships in Plan 02 regardless of the
+# `code-mode` feature state, per Phase 83 review R6.
+secrecy = "0.10"
+
+# Why: default features enable `rustls` → aws-smithy-runtime/tls-rustls →
+# aws-smithy-http-client/legacy-rustls-ring → rustls 0.21 / rustls-webpki 0.101
+# which is flagged by RUSTSEC-2026-0098/0099/0104. Opt into the modern
+# `default-https-client` path (rustls 0.23 via aws-lc-rs) instead.
+aws-sdk-secretsmanager = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio", "behavior-version-latest"], optional = true }
+aws-sdk-ssm = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio", "behavior-version-latest"], optional = true }
+aws-config = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio", "credentials-process", "sso", "behavior-version-latest"], optional = true }
+
+jsonschema = { version = "0.46", default-features = false, optional = true }
+rusqlite = { version = "0.39", features = ["bundled"], optional = true }
+
+[features]
+default = ["code-mode"]
+code-mode = ["dep:pmcp-code-mode"]
+aws = ["dep:aws-config", "dep:aws-sdk-secretsmanager", "dep:aws-sdk-ssm"]
+avp = ["code-mode", "pmcp-code-mode/avp"]
+input-validation = ["dep:jsonschema"]
+sqlite = ["dep:rusqlite"]
+
+[dev-dependencies]
+proptest = "1.7"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+# Why: Plan 02 Task 2 uses compile-fail tests on `SecretValue`'s negative trait
+# invariants (no `Debug`, no `Display`, no `Serialize`). Per Phase 83 review R5.
+trybuild = "1"
