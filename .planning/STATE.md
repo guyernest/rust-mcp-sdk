@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v2.2
 milestone_name: Configuration-Only MCP Servers
-status: executing
-stopped_at: "Completed Plan 83-08 — ServerBuilderExt (4 methods: panicking + try_* per R7) + From<&ServerConfig> for Static{Resource,Prompt}Handler + backend-core smoke test (D-03 / TKIT-08) + e01_toolkit_minimal example (D-15 / R3 single-import binding witness). 4 builder_ext unit tests + 4 doctests + 2 smoke tests pass. Quality gate green. Next: Plan 83-09 (final phase plan — pmcp-run shared shim diff)."
-last_updated: "2026-05-18T22:47:17.759Z"
+status: verifying
+stopped_at: "Completed Plan 83-05 — synthesize_from_config GREEN with property + reference-fixture tests; quality-gate passing. Next: Plan 83-06 (TKIT-09 code-mode wiring)."
+last_updated: "2026-05-18T23:18:31.993Z"
 last_activity: 2026-05-18
 progress:
   total_phases: 44
-  completed_phases: 34
+  completed_phases: 35
   total_plans: 146
-  completed_plans: 145
-  percent: 77
+  completed_plans: 146
+  percent: 80
 ---
 
 # Project State
@@ -27,7 +27,7 @@ See: .planning/PROJECT.md (updated 2026-05-17)
 
 Phase: 83 (Toolkit Core Lift (`pmcp-server-toolkit`)) — EXECUTING
 Plan: 9 of 9
-Status: Ready to execute
+Status: Phase complete — ready for verification
 Last activity: 2026-05-18
 
 **Carryover from v2.1:** Phase 81 (update-pmcp-book-and-pmcp-course-with-v2-advanced-topics-cod) was executing at v2.1 close; will be tracked separately and folded into v2.1 completion. Operator follow-ups deferred from Phase 75 Wave 5 still pending: (a) merge Phase 75 Wave 5 + 75.5 to paiml/rust-mcp-sdk:main; (b) post-merge run `gh workflow run quality-badges.yml -R paiml/rust-mcp-sdk` and append observation to `.planning/phases/75-fix-pmat-issues/75-05-GATE-VERIFICATION.md` "## Badge flip observation" section.
@@ -105,6 +105,9 @@ Inherited from v2.1 (see PROJECT.md + prior Decisions log):
 - [Phase ?]: Plan 83-06 toolkit code-mode feature now forwards pmcp-code-mode/sql-code-mode so SC-3 anchor (allow_writes=false rejects INSERT) compiles under --features code-mode.
 - [Phase ?]: Plan 83-07: Accepted R2 minimization — SqlConnector ships only dialect() + schema_text() in 0.1.0
 - [Phase ?]: Plan 83-07: MockSqlConnector stays pub(crate) — Plan 08 smoke test reaches it under --features sqlite
+- [Phase ?]: Phase 83 Plan 09: 21 toolkit contract rows added in CRATE-ROOT module_path form per review R3; pmat comply check reports 0 ghost bindings (CB-1338)
+- [Phase ?]: Phase 83 Plan 09: cargo publish --dry-run revealed expected D-08 cross-release dependency — pmcp must publish 2.9.x (or 2.8.2) with Phase 82 tool_arc before pmcp-server-toolkit 0.1.0 can ship. Publish-gate working as designed.
+- [Phase ?]: Phase 83 Plan 09: 83-VALIDATION.md flipped to nyquist_compliant: true; 24 task rows ✅ green; Phase 83 fully validated.
 
 ### Roadmap Evolution
 
@@ -133,6 +136,7 @@ Inherited from v2.1 (see PROJECT.md + prior Decisions log):
 | Phase 83 P06 | 35min | 4 tasks | 7 files |
 | Phase 83-toolkit-core-lift-pmcp-server-toolkit P07 | 19min | 3 tasks | 3 files |
 | Phase 83 P08 | 50min | - tasks | - files |
+| Phase 83 P09 | 25 | 4 tasks | 6 files |
 
 ### Last Activity
 
@@ -150,6 +154,6 @@ Inherited from v2.1 (see PROJECT.md + prior Decisions log):
 
 ## Session Continuity
 
-Last session: 2026-05-18T22:47:13.645Z
+Last session: 2026-05-18T23:18:31.988Z
 Stopped at: Completed Plan 83-05 — synthesize_from_config GREEN with property + reference-fixture tests; quality-gate passing. Next: Plan 83-06 (TKIT-09 code-mode wiring).
 Resume: Next is `/gsd-plan-phase 82` to break Phase 82 (Builder DX Prerequisites) into plans. Phase 82 is the unblocker for every subsequent v2.2 phase that uses `tool_arc` / `prompt_arc` — without it, every config-driven toolkit author writes a 20-line delegating wrapper shim (the same DX paper-cut spike 004 hit). After 82, the critical path is 83 (TKIT anchor) → 84 (CONN anchor) → 85 (Shape A + REF parity). Phases 86 and 87 can run in parallel once 83 lands.

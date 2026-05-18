@@ -1362,7 +1362,7 @@ Plans:
 ### v2.2 Phase Summary
 
 - [x] **Phase 82: Builder DX Prerequisites** — Lift `tool_arc` / `prompt_arc` to public `ServerBuilder` + document in-process driver pattern so external toolkit authors stop writing 20-line delegating shims (completed 2026-05-18)
-- [ ] **Phase 83: Toolkit Core Lift (`pmcp-server-toolkit`)** — Promote `mcp-server-common` shape (~2.2k LoC) to a public crates.io-published SDK crate: AuthProvider, SecretsProvider, StaticResourceHandler, StaticPromptHandler, HMAC tokens, ToolInfo synthesis from `[[tools]]` config, code-mode policy wiring
+- [x] **Phase 83: Toolkit Core Lift (`pmcp-server-toolkit`)** — Promote `mcp-server-common` shape (~2.2k LoC) to a public crates.io-published SDK crate: AuthProvider, SecretsProvider, StaticResourceHandler, StaticPromptHandler, HMAC tokens, ToolInfo synthesis from `[[tools]]` config, code-mode policy wiring (completed 2026-05-18)
 - [ ] **Phase 84: SQL Connectors (Postgres / MySQL / Athena / SQLite)** — `SqlConnector` trait + `Dialect` enum + 3 per-backend crates (pure-Rust drivers, Lambda-friendly) + SQLite feature flag, with placeholder translation and dialect-aware code-mode prompt assembly
 - [ ] **Phase 85: Shape A Pure-Config Binary + Reference Parity** — `pmcp-sql-server --config X --schema Y` zero-Rust binary; reproduce open-images end-to-end against the canonical reference scenarios
 - [ ] **Phase 86: Shapes B/C/D — Scaffold, Library Example, Deploy** — `cargo pmcp new --kind sql-server` scaffolding (Shape B), ≤15-line `main.rs` example (Shape C), `cargo pmcp deploy` config-only target wiring with Phase 77 configure system (Shape D)
@@ -1406,7 +1406,7 @@ Plans:
   4. Code-mode prompt body assembly combines dialect-aware schema text (CONN-04, from Phase 84) with `[[database.tables]]` curated table descriptions so the LLM is seeded with both raw DDL and semantic hints
   5. All three pmcp-run backend cores (`mcp-sql-server-core`, `mcp-graphql-server-core`, `mcp-openapi-server-core`) replace their `pmcp-run/built-in/shared/` path-deps with versioned crates.io `pmcp-server-toolkit` deps and continue to pass their existing tests unchanged
 
-**Plans:** 8/9 plans executed
+**Plans:** 9/9 plans complete
 
 Plans:
 **Wave 1**
@@ -1434,7 +1434,7 @@ Plans:
 
 **Wave 6** *(blocked on Wave 5 completion)*
 
-- [ ] 83-09-PLAN.md — Fuzz target + contract YAML + shim diff + migration guide + publish-gate (TKIT-01, TKIT-08, TEST-02) (Wave 6)
+- [x] 83-09-PLAN.md — Fuzz target + contract YAML + shim diff + migration guide + publish-gate (TKIT-01, TKIT-08, TEST-02) (Wave 6)
 
 ### Phase 84: SQL Connectors (Postgres / MySQL / Athena / SQLite)
 
@@ -1529,7 +1529,7 @@ Plans:
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 82. Builder DX Prerequisites | 3/3 | Complete   | 2026-05-18 |
-| 83. Toolkit Core Lift | 8/9 | In Progress|  |
+| 83. Toolkit Core Lift | 9/9 | Complete   | 2026-05-18 |
 | 84. SQL Connectors | 0/? | Not started | - |
 | 85. Shape A + Reference Parity | 0/? | Not started | - |
 | 86. Shapes B/C/D | 0/? | Not started | - |
