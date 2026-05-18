@@ -2,10 +2,10 @@
 gsd_state_version: 1.0
 milestone: v2.2
 milestone_name: Configuration-Only MCP Servers
-status: executing
-stopped_at: Phase 82 verified — ready for Phase 83
-last_updated: "2026-05-18T03:30:00.000Z"
-last_activity: 2026-05-18 -- Phase 82 complete (3/3 plans, verifier PASS)
+status: planning
+stopped_at: Phase 83 context gathered — ready to plan
+last_updated: "2026-05-18T05:06:25.187Z"
+last_activity: 2026-05-18 -- Phase 82 complete (BLDR-01..04, 3/3 plans, verifier PASS)
 progress:
   total_phases: 44
   completed_phases: 34
@@ -131,6 +131,6 @@ Inherited from v2.1 (see PROJECT.md + prior Decisions log):
 
 ## Session Continuity
 
-Last session: 2026-05-18T02:49:41.793Z
-Stopped at: Phase 82 context gathered
+Last session: 2026-05-18T05:06:25.181Z
+Stopped at: Phase 83 context gathered — ready to plan
 Resume: Next is `/gsd-plan-phase 82` to break Phase 82 (Builder DX Prerequisites) into plans. Phase 82 is the unblocker for every subsequent v2.2 phase that uses `tool_arc` / `prompt_arc` — without it, every config-driven toolkit author writes a 20-line delegating wrapper shim (the same DX paper-cut spike 004 hit). After 82, the critical path is 83 (TKIT anchor) → 84 (CONN anchor) → 85 (Shape A + REF parity). Phases 86 and 87 can run in parallel once 83 lands.
