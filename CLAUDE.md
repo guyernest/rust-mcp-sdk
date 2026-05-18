@@ -223,9 +223,10 @@ make test-integration   # Integration tests
 ### Workspace Crates (publish order)
 1. `pmcp-widget-utils` (leaf, no internal deps)
 2. `pmcp` (core SDK, depends on widget-utils)
-3. `mcp-tester` (depends on pmcp)
-4. `mcp-preview` (depends on widget-utils)
-5. `cargo-pmcp` (depends on pmcp, mcp-tester, mcp-preview)
+3. `pmcp-server-toolkit` (runtime library; depends on pmcp)
+4. `mcp-tester` (depends on pmcp)
+5. `mcp-preview` (depends on widget-utils)
+6. `cargo-pmcp` (depends on pmcp, mcp-tester, mcp-preview)
 
 ### Pre-Flight Checklist
 Before starting a release, verify:
