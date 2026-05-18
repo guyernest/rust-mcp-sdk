@@ -2702,6 +2702,28 @@ impl ServerBuilder {
         self
     }
 
+    /// Set the resource handler with an Arc.
+    ///
+    /// This variant lets the caller share the handler `Arc` between the
+    /// builder and an external in-process handler map without writing a
+    /// delegating wrapper. Behavior is otherwise identical to
+    /// [`Self::resources`]: the first registration auto-enables
+    /// `capabilities.resources`.
+    pub fn resources_arc(mut self, handler: Arc<dyn ResourceHandler>) -> Self {
+        self.resources = Some(handler);
+
+        // Update capabilities to include resources
+        // Use Some(false) instead of None to ensure fields serialize properly
+        if self.capabilities.resources.is_none() {
+            self.capabilities.resources = Some(crate::types::ResourceCapabilities {
+                subscribe: Some(false),
+                list_changed: Some(false),
+            });
+        }
+
+        self
+    }
+
     /// Register a single SEP-2640 Agent Skill.
     ///
     /// Convenience over [`Self::skills`] for the single-skill case. The skill
@@ -2839,6 +2861,24 @@ impl ServerBuilder {
         self
     }
 
+    /// Set the sampling handler with an Arc.
+    ///
+    /// This variant lets the caller share the handler `Arc` between the
+    /// builder and an external in-process handler map without writing a
+    /// delegating wrapper. Uses the donor's `if is_none` capability
+    /// auto-enable so an explicit prior `.capabilities(custom)` is not
+    /// clobbered by a later `_arc` registration.
+    pub fn sampling_arc(mut self, handler: Arc<dyn SamplingHandler>) -> Self {
+        self.sampling = Some(handler);
+
+        // Update capabilities to include sampling
+        if self.capabilities.sampling.is_none() {
+            self.capabilities.sampling = Some(crate::types::SamplingCapabilities::default());
+        }
+
+        self
+    }
+
     /// Build the server.
     ///
     /// Constructs the final Server instance from the configured builder.
@@ -2899,6 +2939,17 @@ impl ServerBuilder {
         self
     }
 
+    /// Set the authentication provider with an Arc.
+    ///
+    /// This variant lets the caller share the provider `Arc` between the
+    /// builder and an external in-process registry without writing a
+    /// delegating wrapper. Behavior is otherwise identical to
+    /// [`Self::auth_provider`].
+    pub fn auth_provider_arc(mut self, provider: Arc<dyn auth::AuthProvider>) -> Self {
+        self.auth_provider = Some(provider);
+        self
+    }
+
     /// Set the tool authorizer.
     ///
     /// Configures a tool authorizer for fine-grained access control.
@@ -2935,6 +2986,28 @@ impl ServerBuilder {
             self.tool_protections.clear();
         }
         self.tool_authorizer = Some(Arc::new(authorizer));
+        self
+    }
+
+    /// Set the tool authorizer with an Arc.
+    ///
+    /// This variant lets the caller share the authorizer `Arc` between
+    /// the builder and an external in-process registry without writing a
+    /// delegating wrapper. Mirrors [`Self::tool_authorizer`]'s
+    /// protection-clearing semantics: if any prior `protect_tool()`
+    /// configurations exist, they are cleared and a `tracing::warn!` is
+    /// emitted under target `"mcp.auth"`, since a custom authorizer
+    /// supersedes scope-based tool protections.
+    pub fn tool_authorizer_arc(mut self, authorizer: Arc<dyn auth::ToolAuthorizer>) -> Self {
+        if !self.tool_protections.is_empty() {
+            // Log a warning - custom authorizer supersedes protect_tool() configurations
+            tracing::warn!(
+                target: "mcp.auth",
+                "Setting a custom tool_authorizer clears any previous protect_tool() configurations"
+            );
+            self.tool_protections.clear();
+        }
+        self.tool_authorizer = Some(authorizer);
         self
     }
 
@@ -4361,6 +4434,64 @@ mod tests {
         println!(
             "Serialized capabilities: {}",
             serde_json::to_string_pretty(&json).unwrap()
+        );
+    }
+
+    /// Behavioral test for `ServerBuilder::tool_authorizer_arc` — the only
+    /// non-mechanical lift among Phase 82's six `_arc` lifts.
+    ///
+    /// `tool_authorizer_arc` mirrors `tool_authorizer()`'s protection-clearing
+    /// semantics: chaining `.protect_tool(...)` BEFORE `.tool_authorizer_arc(...)`
+    /// must clear `tool_protections` so that `.build()` does NOT hit the
+    /// mixed-config rejection branch at mod.rs `build()` (which fires if
+    /// `tool_protections` is non-empty AND `tool_authorizer` is set).
+    /// This test fills the verification gap source-greps cannot — proving
+    /// the `.clear()` call actually fires.
+    #[tokio::test]
+    async fn tool_authorizer_arc_clears_tool_protections_and_allows_build() {
+        // Define a no-op custom ToolAuthorizer for the test.
+        struct NoopAuthorizer;
+        #[async_trait]
+        impl crate::server::auth::ToolAuthorizer for NoopAuthorizer {
+            async fn can_access_tool(
+                &self,
+                _auth: &crate::server::auth::AuthContext,
+                _tool_name: &str,
+            ) -> crate::Result<bool> {
+                Ok(true)
+            }
+            async fn required_scopes_for_tool(
+                &self,
+                _tool_name: &str,
+            ) -> crate::Result<Vec<String>> {
+                Ok(vec![])
+            }
+        }
+
+        // Build a server with BOTH protect_tool AND tool_authorizer_arc.
+        // Without the clearing semantic, build() would return the
+        // "Cannot use protect_tool() with a custom tool_authorizer" error.
+        let builder = ServerBuilder::new()
+            .name("test")
+            .version("1")
+            .protect_tool("delete", vec!["admin".to_string()])
+            .tool_authorizer_arc(Arc::new(NoopAuthorizer));
+
+        // ASSERT 1: tool_protections was cleared by tool_authorizer_arc(),
+        // visible because we are inside the same module and have access
+        // to the private field.
+        assert!(
+            builder.tool_protections.is_empty(),
+            "tool_authorizer_arc() must clear tool_protections to mirror tool_authorizer()"
+        );
+
+        // ASSERT 2: build() succeeds — the mixed-config rejection branch
+        // does NOT fire because protections was cleared.
+        let build_result = builder.build();
+        assert!(
+            build_result.is_ok(),
+            "build() should succeed after tool_authorizer_arc() clears protections; got Err({:?})",
+            build_result.err()
         );
     }
 }
