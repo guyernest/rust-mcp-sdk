@@ -2,39 +2,209 @@
 // Lands the `[[tools]]`-config-driven synthesizer that turns config rows into
 // `ToolInfo` + `Arc<dyn ToolHandler>` pairs.
 
-//! `synthesize_from_config` — `[[tools]]` → `ToolInfo` + `Arc<dyn ToolHandler>`. Net-new for TKIT-07.
+//! `[[tools]]` → `ToolInfo` + `Arc<dyn ToolHandler>` synthesizer.
 //!
-//! The body of [`synthesize_from_config`] lands in Plan 83-05 Task 2 (GREEN).
-//! Task 1 (RED) commits only the test scaffold against an unimplemented
-//! signature so the suite goes red before any implementation is added.
+//! Net-new code for Phase 83 TKIT-07. Turns curated `[[tools]]` config entries
+//! into complete pmcp [`ToolInfo`] + [`Arc<dyn ToolHandler>`] pairs with zero
+//! per-tool Rust handlers.
+//!
+//! # Invariants enforced
+//!
+//! - **JSON Schema object envelope.** Every synthesized [`ToolInfo`] carries an
+//!   `input_schema` with `"type": "object"`, an explicit `properties` map, a
+//!   `required` array, and `"additionalProperties": false`. Unknown argument
+//!   keys are rejected by pmcp's request-validation path at `tools/call` time —
+//!   defence-in-depth against arg-injection (threat T-83-05-02).
+//! - **`handler.metadata()` returns `Some(ToolInfo)`.** Phase 82's `tool_arc`
+//!   consumes `handler.metadata()` at registration; returning `None` would
+//!   silently degrade the schema enforcement to "anything goes" (RESEARCH
+//!   §Risks #2 — threat T-83-05-01).
+//! - **Constructors, never struct-literals.** Both [`ToolInfo`] and
+//!   [`ToolAnnotations`] are `#[non_exhaustive]` (PATTERNS §Pattern C). The
+//!   synthesizer uses [`ToolInfo::with_annotations`] / [`ToolInfo::new`] and
+//!   the [`ToolAnnotations::new()`]-then-`.with_*` fluent builder.
+//! - **Cognitive complexity ≤25 per function.** Decomposed into
+//!   [`build_input_schema`], [`build_param_property`], and [`build_annotations`]
+//!   per Phase 75 D-03 + PATTERNS §Pattern G. No `#[allow]` annotations.
 
 use std::sync::Arc;
 
+use async_trait::async_trait;
 use pmcp::server::ToolHandler;
-use pmcp::types::ToolInfo;
+use pmcp::types::{ToolAnnotations, ToolInfo};
+use pmcp::RequestHandlerExtra;
+use serde_json::{json, Map, Value};
 
-use crate::config::ServerConfig;
+use crate::config::{AnnotationsDecl, ParamDecl, ServerConfig, ToolDecl};
 use crate::error::Result;
+
+/// Type alias for one synthesized tool tuple: `(name, ToolInfo, Arc<dyn ToolHandler>)`.
+///
+/// Exists so [`synthesize_from_config`]'s return type does not trip
+/// `clippy::type_complexity` while preserving the exact `(name, ToolInfo, Arc)`
+/// shape consumers register with `pmcp::ServerBuilder::tool_arc` (PATTERNS §9).
+pub type SynthesizedTool = (String, ToolInfo, Arc<dyn ToolHandler>);
 
 /// Synthesize one `ToolInfo` + handler per `[[tools]]` config entry.
 ///
-/// Plan 05 RED: signature exists, body is `todo!()` so the unit + property
-/// tests below compile but FAIL at runtime — the canonical TDD red step.
-/// Plan 05 Task 2 (GREEN) replaces the body with the real implementation.
+/// Each returned tuple is `(name, ToolInfo, Arc<dyn ToolHandler>)` and is
+/// ready to feed into `pmcp::ServerBuilder::tool_arc(name, handler)`. The
+/// `ToolInfo` carries the full input schema (synthesized from
+/// `[[tools.parameters]]`) and `ToolAnnotations` (from `[tools.annotations]`)
+/// so the builder's metadata cache will never fall back to the empty schema.
 ///
 /// # Errors
 ///
-/// Will return `ToolkitError::Synth(...)` for malformed tool declarations once
-/// the body lands in Task 2; in the RED phase the function unconditionally
-/// panics via `todo!()`.
-pub fn synthesize_from_config(
-    _config: &ServerConfig,
-) -> Result<Vec<(String, ToolInfo, Arc<dyn ToolHandler>)>> {
-    todo!("Plan 83-05 Task 2 (GREEN) implements this")
+/// Returns [`crate::ToolkitError::Synth`] if a tool declaration is internally
+/// inconsistent. The Plan 05 GREEN body never produces this error path —
+/// synthesis is total over the parsed [`ServerConfig`] surface — but the
+/// `Result` return is kept for forward compatibility with Plan 06 (code-mode
+/// wiring) and Phase 84 (SQL backend resolution).
+///
+/// # Example
+///
+/// ```
+/// use pmcp_server_toolkit::config::ServerConfig;
+/// use pmcp_server_toolkit::tools::synthesize_from_config;
+///
+/// let cfg = ServerConfig::default();
+/// let synthesized = synthesize_from_config(&cfg).unwrap();
+/// assert_eq!(synthesized.len(), 0);
+/// ```
+pub fn synthesize_from_config(config: &ServerConfig) -> Result<Vec<SynthesizedTool>> {
+    let mut out = Vec::with_capacity(config.tools.len());
+    for decl in &config.tools {
+        let schema = build_input_schema(&decl.parameters);
+        let annotations = build_annotations(decl.annotations.as_ref());
+        let info = match annotations {
+            Some(ann) => {
+                ToolInfo::with_annotations(decl.name.clone(), decl.description.clone(), schema, ann)
+            },
+            None => ToolInfo::new(decl.name.clone(), decl.description.clone(), schema),
+        };
+        let handler: Arc<dyn ToolHandler> = Arc::new(SynthesizedToolHandler {
+            info: info.clone(),
+            decl: decl.clone(),
+        });
+        out.push((decl.name.clone(), info, handler));
+    }
+    Ok(out)
+}
+
+/// Build the JSON Schema `properties` + `required` envelope from a
+/// `[[tools.parameters]]` list.
+///
+/// Decomposed from [`synthesize_from_config`] to keep cognitive complexity ≤25
+/// (Phase 75 D-03 + PATTERNS §Pattern G).
+fn build_input_schema(params: &[ParamDecl]) -> Value {
+    let mut props = Map::new();
+    let mut required = Vec::new();
+    for p in params {
+        props.insert(p.name.clone(), build_param_property(p));
+        if p.required {
+            required.push(Value::String(p.name.clone()));
+        }
+    }
+    json!({
+        "type": "object",
+        "properties": props,
+        "required": required,
+        "additionalProperties": false,
+    })
+}
+
+/// Build a single JSON Schema property object from a [`ParamDecl`].
+///
+/// Per-parameter constraints (`minimum`, `maximum`, `maxLength`, `default`,
+/// `enum`) are folded in only when present; the param's `param_type` defaults
+/// to `"string"` when omitted in TOML to match JSON Schema's permissive
+/// default.
+fn build_param_property(p: &ParamDecl) -> Value {
+    let ty = p.param_type.as_deref().unwrap_or("string");
+    let mut prop = json!({ "type": ty });
+    if let Some(desc) = &p.description {
+        prop["description"] = Value::String(desc.clone());
+    }
+    if let Some(min) = p.minimum {
+        prop["minimum"] = json!(min);
+    }
+    if let Some(max) = p.maximum {
+        prop["maximum"] = json!(max);
+    }
+    if let Some(max_len) = p.max_length {
+        prop["maxLength"] = json!(max_len);
+    }
+    if let Some(default) = &p.default {
+        // toml::Value serializes losslessly into serde_json::Value via serde.
+        if let Ok(v) = serde_json::to_value(default) {
+            prop["default"] = v;
+        }
+    }
+    if let Some(enum_vals) = &p.enum_values {
+        if let Ok(v) = serde_json::to_value(enum_vals) {
+            prop["enum"] = v;
+        }
+    }
+    prop
+}
+
+/// Build [`ToolAnnotations`] from an optional `[tools.annotations]` block.
+///
+/// Per PATTERNS §Pattern C, the constructor + fluent builder is used (never a
+/// struct literal — [`ToolAnnotations`] is `#[non_exhaustive]`). The `cost_hint`
+/// field has no `ToolAnnotations` accessor and is therefore not propagated at
+/// this layer; it lives on the toolkit's [`AnnotationsDecl`] and is consumed
+/// by future plans that surface cost into rate-limiting policy.
+fn build_annotations(decl: Option<&AnnotationsDecl>) -> Option<ToolAnnotations> {
+    let d = decl?;
+    let a = ToolAnnotations::new()
+        .with_read_only(d.read_only_hint)
+        .with_destructive(d.destructive_hint)
+        .with_idempotent(d.idempotent_hint)
+        .with_open_world(d.open_world_hint);
+    Some(a)
 }
 
 // -----------------------------------------------------------------------------
-// Tests — Plan 05 Task 1 (RED)
+// SynthesizedToolHandler — crate-private
+// -----------------------------------------------------------------------------
+
+/// Crate-private handler wrapping a synthesized [`ToolInfo`].
+///
+/// [`ToolHandler::metadata`] MUST return `Some(self.info.clone())` — Phase 82's
+/// `tool_arc` consumes `handler.metadata()` at registration time; returning
+/// `None` would cause the builder to fall back to an empty schema (RESEARCH
+/// §Risks #2 — threat T-83-05-01). The unit + property tests in
+/// [`crate::tools`] and `tests/tool_synthesis_props.rs` lock this in.
+///
+/// `handle()` returns an `Err` placeholder until Plan 06 (code-mode wiring) or
+/// Phase 84 (SQL connector dispatch) lands. An `Err` is preferable to a `Value`
+/// pretending success — MCP clients see a tool-call error rather than silent
+/// "ok with empty body" (Gemini review note). The `decl` is held for later
+/// plans to inspect `sql` / `ui_resource_uri` without re-walking the config.
+struct SynthesizedToolHandler {
+    info: ToolInfo,
+    // Held for Plan 06 (code-mode validate/execute) and Phase 84 (SQL backends).
+    #[allow(dead_code)]
+    decl: ToolDecl,
+}
+
+#[async_trait]
+impl ToolHandler for SynthesizedToolHandler {
+    async fn handle(&self, _args: Value, _extra: RequestHandlerExtra) -> pmcp::Result<Value> {
+        Err(pmcp::Error::Internal(format!(
+            "tool '{}' is not yet wired — Plan 06 (code-mode) or Phase 84 (SQL connector) required",
+            self.info.name
+        )))
+    }
+
+    fn metadata(&self) -> Option<ToolInfo> {
+        Some(self.info.clone())
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Tests — Plan 05 Task 1 (RED) → GREEN in Task 2
 // -----------------------------------------------------------------------------
 
 #[cfg(test)]
