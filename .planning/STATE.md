@@ -4,13 +4,13 @@ milestone: v2.2
 milestone_name: Configuration-Only MCP Servers
 status: executing
 stopped_at: Phase 83 context gathered — ready to plan
-last_updated: "2026-05-18T20:47:46.309Z"
+last_updated: "2026-05-18T21:06:21.133Z"
 last_activity: 2026-05-18
 progress:
   total_phases: 44
   completed_phases: 34
   total_plans: 146
-  completed_plans: 140
+  completed_plans: 141
   percent: 77
 ---
 
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-05-17)
 ## Current Position
 
 Phase: 83 (Toolkit Core Lift (`pmcp-server-toolkit`)) — EXECUTING
-Plan: 4 of 9
+Plan: 5 of 9
 Status: Ready to execute
 Last activity: 2026-05-18
 
@@ -95,6 +95,9 @@ Inherited from v2.1 (see PROJECT.md + prior Decisions log):
 - [Phase 83]: Single-prompt-per-handler shape for StaticPromptHandler reconciles plural source config with pmcp's singular trait via from_configs factory
 - [Phase 83]: StaticResourceHandler enforces IndexMap (Pattern D) and Content::resource_with_text (PATTERNS §5) even though source used HashMap+struct-literal Content::Resource
 - [Phase 83]: Local PromptInfoOut alias in prompts.rs avoids verify-regex false-positive against return-type braces while keeping rustfmt happy
+- [Phase ?]: [Phase 83 Plan 04] ServerConfig three-entry-point API (from_toml / validate / from_toml_strict_validated) per review R8 — partial-merge callers parse without validating; production callers chain both via the convenience method
+- [Phase ?]: [Phase 83 Plan 04] ParamDecl::default + enum_values typed as toml::Value (heterogeneous) — reference fixtures emit integer-, string-, and boolean-defaults; forcing a String coercion would shift the problem to Plan 05's synthesizer
+- [Phase ?]: [Phase 83 Plan 04] All 3 reference fixtures pass validate() on first run — empirically confirms the R8 rule-set (4 required-field checks) is well-calibrated to production usage; no rule was weakened to accommodate a broken fixture
 
 ### Roadmap Evolution
 
@@ -118,6 +121,7 @@ Inherited from v2.1 (see PROJECT.md + prior Decisions log):
 | 260517-hi5 | Extract `x-pmcp-claim-custom-*` headers in `extract_auth_from_proxy_headers` (Cognito `custom:*` attribute forwarding) | 2026-05-17 | bbc019ba | Done | [260517-hi5-extract-x-pmcp-claim-custom-headers-in-e](./quick/260517-hi5-extract-x-pmcp-claim-custom-headers-in-e/) |
 | Phase 82-builder-dx-prerequisites P02 | 25min | 4 tasks | 1 files |
 | Phase 83 P03 | 50min | 3 tasks | 3 files |
+| Phase 83 P04 | 40 min | 3 tasks | 4 files |
 
 ### Last Activity
 
@@ -135,6 +139,6 @@ Inherited from v2.1 (see PROJECT.md + prior Decisions log):
 
 ## Session Continuity
 
-Last session: 2026-05-18T20:47:33.705Z
+Last session: 2026-05-18T21:06:02.497Z
 Stopped at: Phase 83 context gathered — ready to plan
 Resume: Next is `/gsd-plan-phase 82` to break Phase 82 (Builder DX Prerequisites) into plans. Phase 82 is the unblocker for every subsequent v2.2 phase that uses `tool_arc` / `prompt_arc` — without it, every config-driven toolkit author writes a 20-line delegating wrapper shim (the same DX paper-cut spike 004 hit). After 82, the critical path is 83 (TKIT anchor) → 84 (CONN anchor) → 85 (Shape A + REF parity). Phases 86 and 87 can run in parallel once 83 lands.
