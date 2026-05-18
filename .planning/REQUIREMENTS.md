@@ -127,8 +127,8 @@ Upstream PMCP changes that unblock external toolkit authors (spike 004 surfaced 
 Lift `mcp-server-common` (~2.2k LoC at `pmcp-run/built-in/shared/`) and `pmcp-code-mode` shapes to a public, crates.io-published SDK crate (spike 003).
 
 - [x] **TKIT-01**: `crates/pmcp-server-toolkit/` exists in the workspace, builds cleanly, and is publishable to crates.io (slotted into the release publish order)
-- [ ] **TKIT-02**: `AuthProvider` trait exposed in the public toolkit API with at least one concrete impl ready for downstream use
-- [ ] **TKIT-03**: `SecretsProvider` trait exposed in the public toolkit API with at least one concrete impl ready for downstream use
+- [x] **TKIT-02**: `AuthProvider` trait exposed in the public toolkit API with at least one concrete impl ready for downstream use
+- [x] **TKIT-03**: `SecretsProvider` trait exposed in the public toolkit API with at least one concrete impl ready for downstream use
 - [x] **TKIT-04**: `StaticResourceHandler` constructible from config exposed in the public toolkit API
 - [x] **TKIT-05**: `StaticPromptHandler` constructible from config exposed in the public toolkit API
 - [x] **TKIT-06**: HMAC token machinery (sign + verify, code-hash binding) exposed in the public toolkit API and integrated with `pmcp-code-mode`
@@ -342,8 +342,8 @@ Which phases cover which requirements. Updated during roadmap creation.
 | BLDR-03 | Phase 82 | Complete |
 | BLDR-04 | Phase 82 | Complete |
 | TKIT-01 | Phase 83 | Complete |
-| TKIT-02 | Phase 83 | Pending |
-| TKIT-03 | Phase 83 | Pending |
+| TKIT-02 | Phase 83 | Complete |
+| TKIT-03 | Phase 83 | Complete |
 | TKIT-04 | Phase 83 | Complete |
 | TKIT-05 | Phase 83 | Complete |
 | TKIT-06 | Phase 83 | Complete |
