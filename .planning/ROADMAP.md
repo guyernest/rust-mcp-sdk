@@ -1406,17 +1406,17 @@ Plans:
   4. Code-mode prompt body assembly combines dialect-aware schema text (CONN-04, from Phase 84) with `[[database.tables]]` curated table descriptions so the LLM is seeded with both raw DDL and semantic hints
   5. All three pmcp-run backend cores (`mcp-sql-server-core`, `mcp-graphql-server-core`, `mcp-openapi-server-core`) replace their `pmcp-run/built-in/shared/` path-deps with versioned crates.io `pmcp-server-toolkit` deps and continue to pass their existing tests unchanged
 
-**Plans:** 9 plans
+**Plans:** 3/9 plans executed
 
 Plans:
 **Wave 1**
 
-- [ ] 83-01-PLAN.md — Crate scaffold + workspace insertion + module skeleton + reference fixtures (TKIT-01) (Wave 1)
+- [x] 83-01-PLAN.md — Crate scaffold + workspace insertion + module skeleton + reference fixtures (TKIT-01) (Wave 1)
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 83-02-PLAN.md — Lift auth.rs + secrets.rs from mcp-server-common (TKIT-02, TKIT-03) (Wave 2)
-- [ ] 83-03-PLAN.md — Lift resources.rs + prompts.rs from mcp-server-common (TKIT-04, TKIT-05) (Wave 2)
+- [x] 83-02-PLAN.md — Lift auth.rs + secrets.rs from mcp-server-common (TKIT-02, TKIT-03) (Wave 2)
+- [x] 83-03-PLAN.md — Lift resources.rs + prompts.rs from mcp-server-common (TKIT-04, TKIT-05) (Wave 2)
 - [ ] 83-04-PLAN.md — ServerConfig parser + REF-01 superset integration test (TKIT-01) (Wave 2)
 
 **Wave 3** *(blocked on Wave 2 completion)*
@@ -1529,7 +1529,7 @@ Plans:
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 82. Builder DX Prerequisites | 3/3 | Complete   | 2026-05-18 |
-| 83. Toolkit Core Lift | 0/? | Not started | - |
+| 83. Toolkit Core Lift | 3/9 | In Progress|  |
 | 84. SQL Connectors | 0/? | Not started | - |
 | 85. Shape A + Reference Parity | 0/? | Not started | - |
 | 86. Shapes B/C/D | 0/? | Not started | - |

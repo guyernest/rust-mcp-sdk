@@ -129,8 +129,8 @@ Lift `mcp-server-common` (~2.2k LoC at `pmcp-run/built-in/shared/`) and `pmcp-co
 - [ ] **TKIT-01**: `crates/pmcp-server-toolkit/` exists in the workspace, builds cleanly, and is publishable to crates.io (slotted into the release publish order)
 - [ ] **TKIT-02**: `AuthProvider` trait exposed in the public toolkit API with at least one concrete impl ready for downstream use
 - [ ] **TKIT-03**: `SecretsProvider` trait exposed in the public toolkit API with at least one concrete impl ready for downstream use
-- [ ] **TKIT-04**: `StaticResourceHandler` constructible from config exposed in the public toolkit API
-- [ ] **TKIT-05**: `StaticPromptHandler` constructible from config exposed in the public toolkit API
+- [x] **TKIT-04**: `StaticResourceHandler` constructible from config exposed in the public toolkit API
+- [x] **TKIT-05**: `StaticPromptHandler` constructible from config exposed in the public toolkit API
 - [ ] **TKIT-06**: HMAC token machinery (sign + verify, code-hash binding) exposed in the public toolkit API and integrated with `pmcp-code-mode`
 - [ ] **TKIT-07**: `ToolInfo` synthesizer reads `[[tools]]` entries from a server's `config.toml` and produces complete `ToolInfo` definitions (name, description, input schema, `[tools.annotations]`) with zero per-tool Rust handlers required. The supported `config.toml` shape MUST be a superset of the existing `pmcp-run/built-in/sql-api/servers/*/config.toml` files — including `[[tools.parameters]]` (type, description, required, default, min/max, max_length) and `[tools.annotations]` (read_only_hint, destructive_hint, idempotent_hint, open_world_hint, cost_hint) — so reference servers port without schema rewrites
 - [ ] **TKIT-08**: All three `pmcp-run` backend cores (`mcp-sql-server-core`, `mcp-graphql-server-core`, `mcp-openapi-server-core`) replace their path-deps on `pmcp-run/built-in/shared/` with versioned crates.io deps on `pmcp-server-toolkit` (independent release cadence unblocked)
@@ -344,8 +344,8 @@ Which phases cover which requirements. Updated during roadmap creation.
 | TKIT-01 | Phase 83 | Pending |
 | TKIT-02 | Phase 83 | Pending |
 | TKIT-03 | Phase 83 | Pending |
-| TKIT-04 | Phase 83 | Pending |
-| TKIT-05 | Phase 83 | Pending |
+| TKIT-04 | Phase 83 | Complete |
+| TKIT-05 | Phase 83 | Complete |
 | TKIT-06 | Phase 83 | Pending |
 | TKIT-07 | Phase 83 | Pending |
 | TKIT-08 | Phase 83 | Pending |

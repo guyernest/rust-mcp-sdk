@@ -4,13 +4,13 @@ milestone: v2.2
 milestone_name: Configuration-Only MCP Servers
 status: executing
 stopped_at: Phase 83 context gathered — ready to plan
-last_updated: "2026-05-18T15:29:10.505Z"
-last_activity: 2026-05-18 -- Phase 83 execution started
+last_updated: "2026-05-18T20:47:46.309Z"
+last_activity: 2026-05-18
 progress:
   total_phases: 44
   completed_phases: 34
   total_plans: 146
-  completed_plans: 137
+  completed_plans: 140
   percent: 77
 ---
 
@@ -26,9 +26,9 @@ See: .planning/PROJECT.md (updated 2026-05-17)
 ## Current Position
 
 Phase: 83 (Toolkit Core Lift (`pmcp-server-toolkit`)) — EXECUTING
-Plan: 1 of 9
-Status: Executing Phase 83
-Last activity: 2026-05-18 -- Phase 83 execution started
+Plan: 4 of 9
+Status: Ready to execute
+Last activity: 2026-05-18
 
 **Carryover from v2.1:** Phase 81 (update-pmcp-book-and-pmcp-course-with-v2-advanced-topics-cod) was executing at v2.1 close; will be tracked separately and folded into v2.1 completion. Operator follow-ups deferred from Phase 75 Wave 5 still pending: (a) merge Phase 75 Wave 5 + 75.5 to paiml/rust-mcp-sdk:main; (b) post-merge run `gh workflow run quality-badges.yml -R paiml/rust-mcp-sdk` and append observation to `.planning/phases/75-fix-pmat-issues/75-05-GATE-VERIFICATION.md` "## Badge flip observation" section.
 
@@ -92,6 +92,9 @@ Inherited from v2.1 (see PROJECT.md + prior Decisions log):
 - [Phase 65]: examples/README.md replaced with PMCP example index — 63 examples categorized by Role/Capability/Complexity + migration reference
 - [Phase ?]: Plan 82-02: Property test asserts public observable only — handle output byte-equality + has_tool — not the private capabilities field; capability-shape equivalence lives in Plan 82-01 Task 3 crate-internal test
 - [Phase ?]: Plan 82-02: USAGE-narrowed negative grep rejects method-call sites + import statements for the private dispatch entry point; module-doc prose carefully avoids those literal token shapes so the grep stays at zero matches
+- [Phase 83]: Single-prompt-per-handler shape for StaticPromptHandler reconciles plural source config with pmcp's singular trait via from_configs factory
+- [Phase 83]: StaticResourceHandler enforces IndexMap (Pattern D) and Content::resource_with_text (PATTERNS §5) even though source used HashMap+struct-literal Content::Resource
+- [Phase 83]: Local PromptInfoOut alias in prompts.rs avoids verify-regex false-positive against return-type braces while keeping rustfmt happy
 
 ### Roadmap Evolution
 
@@ -114,6 +117,7 @@ Inherited from v2.1 (see PROJECT.md + prior Decisions log):
 | 260516-b2p | AuthProvider::on_unauthorized + transport retry-once + MSRV 1.91 + pmcp 2.8.0 ripple | 2026-05-16 | aba393aa | Shipped (PR [#256](https://github.com/paiml/rust-mcp-sdk/pull/256)) | [260516-b2p-add-authprovider-on-unauthorized-hook-tr](./quick/260516-b2p-add-authprovider-on-unauthorized-hook-tr/) |
 | 260517-hi5 | Extract `x-pmcp-claim-custom-*` headers in `extract_auth_from_proxy_headers` (Cognito `custom:*` attribute forwarding) | 2026-05-17 | bbc019ba | Done | [260517-hi5-extract-x-pmcp-claim-custom-headers-in-e](./quick/260517-hi5-extract-x-pmcp-claim-custom-headers-in-e/) |
 | Phase 82-builder-dx-prerequisites P02 | 25min | 4 tasks | 1 files |
+| Phase 83 P03 | 50min | 3 tasks | 3 files |
 
 ### Last Activity
 
@@ -131,6 +135,6 @@ Inherited from v2.1 (see PROJECT.md + prior Decisions log):
 
 ## Session Continuity
 
-Last session: 2026-05-18T05:06:25.181Z
+Last session: 2026-05-18T20:47:33.705Z
 Stopped at: Phase 83 context gathered — ready to plan
 Resume: Next is `/gsd-plan-phase 82` to break Phase 82 (Builder DX Prerequisites) into plans. Phase 82 is the unblocker for every subsequent v2.2 phase that uses `tool_arc` / `prompt_arc` — without it, every config-driven toolkit author writes a 20-line delegating wrapper shim (the same DX paper-cut spike 004 hit). After 82, the critical path is 83 (TKIT anchor) → 84 (CONN anchor) → 85 (Shape A + REF parity). Phases 86 and 87 can run in parallel once 83 lands.
