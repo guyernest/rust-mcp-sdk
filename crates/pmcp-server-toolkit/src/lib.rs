@@ -64,6 +64,12 @@ pub use crate::secrets::{EnvSecrets, SecretValue, SecretsProvider, SecretsProvid
 #[cfg(feature = "aws")]
 pub use crate::secrets::{OrgSecretsManagerProvider, SecretsManagerSecrets, SsmSecrets};
 
+// Resources (TKIT-04) — Plan 03 headline re-export per D-15 + review R3.
+pub use crate::resources::StaticResourceHandler;
+
+// Prompts (TKIT-05) — Plan 03 headline re-export per D-15 + review R3.
+pub use crate::prompts::StaticPromptHandler;
+
 // Why: compile-only assertion proving the headline D-15 / review-R3 crate-root
 // DX promise. If any of these paths fails to resolve, the crate fails to
 // build — no test runtime required.
@@ -75,4 +81,6 @@ const _ROOT_REEXPORT_SMOKE: fn() = || {
     let _: Option<EnvSecrets> = None;
     let _: Option<SecretValue> = None;
     let _: Option<SecretsProviderChain> = None;
+    let _: Option<StaticResourceHandler> = None;
+    let _: Option<StaticPromptHandler> = None;
 };

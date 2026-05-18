@@ -188,7 +188,11 @@ impl LoadedResource {
     /// at the read boundary; the resource _meta is exposed through
     /// `to_resource_info()` for `resources/list` only.
     pub fn to_content(&self) -> Content {
-        Content::resource_with_text(self.uri.clone(), self.content.clone(), self.mime_type.clone())
+        Content::resource_with_text(
+            self.uri.clone(),
+            self.content.clone(),
+            self.mime_type.clone(),
+        )
     }
 }
 
@@ -378,7 +382,7 @@ mod tests {
                 assert_eq!(uri, "schema://main");
                 assert_eq!(text.as_deref(), Some("type Query { hello: String }"));
                 assert_eq!(mime_type.as_deref(), Some("application/graphql"));
-            }
+            },
             other => panic!("expected Content::Resource, got {:?}", other),
         }
     }
