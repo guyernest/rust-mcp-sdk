@@ -78,6 +78,11 @@ pub use crate::config::ServerConfig;
 // pattern-match on it without importing from `error` (review R3 headline DX).
 pub use crate::error::ConfigValidationError;
 
+// Tools (TKIT-07) — Plan 05 headline re-export per D-15 + review R3.
+// `synthesize_from_config` is the one-call entry point Shape A/C consumers
+// reach for; lifting it to the crate root keeps the import surface flat.
+pub use crate::tools::synthesize_from_config;
+
 // Why: compile-only assertion proving the headline D-15 / review-R3 crate-root
 // DX promise. If any of these paths fails to resolve, the crate fails to
 // build — no test runtime required.
@@ -93,4 +98,7 @@ const _ROOT_REEXPORT_SMOKE: fn() = || {
     let _: Option<StaticPromptHandler> = None;
     let _: Option<ServerConfig> = None;
     let _: Option<ConfigValidationError> = None;
+    // Plan 05 (TKIT-07): synthesize_from_config is fn-typed; reference the
+    // function pointer to assert the re-exported path resolves at the crate root.
+    let _: fn(&ServerConfig) -> Result<Vec<crate::tools::SynthesizedTool>> = synthesize_from_config;
 };
