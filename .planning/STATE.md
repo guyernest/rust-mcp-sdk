@@ -4,13 +4,13 @@ milestone: v2.2
 milestone_name: Configuration-Only MCP Servers
 status: executing
 stopped_at: "Completed Plan 83-05 — synthesize_from_config GREEN with property + reference-fixture tests; quality-gate passing. Next: Plan 83-06 (TKIT-09 code-mode wiring)."
-last_updated: "2026-05-18T21:29:46.556Z"
+last_updated: "2026-05-18T21:53:11.257Z"
 last_activity: 2026-05-18
 progress:
   total_phases: 44
   completed_phases: 34
   total_plans: 146
-  completed_plans: 142
+  completed_plans: 143
   percent: 77
 ---
 
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-05-17)
 ## Current Position
 
 Phase: 83 (Toolkit Core Lift (`pmcp-server-toolkit`)) — EXECUTING
-Plan: 6 of 9
+Plan: 7 of 9
 Status: Ready to execute
 Last activity: 2026-05-18
 
@@ -100,6 +100,9 @@ Inherited from v2.1 (see PROJECT.md + prior Decisions log):
 - [Phase ?]: [Phase 83 Plan 04] All 3 reference fixtures pass validate() on first run — empirically confirms the R8 rule-set (4 required-field checks) is well-calibrated to production usage; no rule was weakened to accommodate a broken fixture
 - [Phase ?]: Plan 83-05: SynthesizedToolHandler::handle returns Err(pmcp::Error::Internal) (not Value with is_error) — honors real ToolHandler::handle signature Result<Value> vs the plan example's Result<CallToolResult>. Semantically equivalent and Gemini-review-compliant.
 - [Phase ?]: Plan 83-05: pub type SynthesizedTool = (String, ToolInfo, Arc<dyn ToolHandler>) introduced to satisfy clippy::type_complexity while preserving PATTERNS §9 tuple shape. Public alias enables Plan 08 to name the type.
+- [Phase ?]: Plan 83-06 selected R1 split (validation_pipeline_from_config + code_mode_tools_from_executor) — pmcp-code-mode CodeExecutor requires backend injection; no config-only constructor exists.
+- [Phase ?]: Plan 83-06 R9 inline-secret enforcement: token_secret defaults to env:VAR_NAME; inline literals rejected via ConfigValidationError::InlineSecretRejected unless allow_inline_token_secret_for_dev=true.
+- [Phase ?]: Plan 83-06 toolkit code-mode feature now forwards pmcp-code-mode/sql-code-mode so SC-3 anchor (allow_writes=false rejects INSERT) compiles under --features code-mode.
 
 ### Roadmap Evolution
 
@@ -125,6 +128,7 @@ Inherited from v2.1 (see PROJECT.md + prior Decisions log):
 | Phase 83 P03 | 50min | 3 tasks | 3 files |
 | Phase 83 P04 | 40 min | 3 tasks | 4 files |
 | Phase 83 P05 | 22min | 3 tasks | 4 files |
+| Phase 83 P06 | 35min | 4 tasks | 7 files |
 
 ### Last Activity
 
@@ -142,6 +146,6 @@ Inherited from v2.1 (see PROJECT.md + prior Decisions log):
 
 ## Session Continuity
 
-Last session: 2026-05-18T21:29:46.551Z
+Last session: 2026-05-18T21:52:50.113Z
 Stopped at: Completed Plan 83-05 — synthesize_from_config GREEN with property + reference-fixture tests; quality-gate passing. Next: Plan 83-06 (TKIT-09 code-mode wiring).
 Resume: Next is `/gsd-plan-phase 82` to break Phase 82 (Builder DX Prerequisites) into plans. Phase 82 is the unblocker for every subsequent v2.2 phase that uses `tool_arc` / `prompt_arc` — without it, every config-driven toolkit author writes a 20-line delegating wrapper shim (the same DX paper-cut spike 004 hit). After 82, the critical path is 83 (TKIT anchor) → 84 (CONN anchor) → 85 (Shape A + REF parity). Phases 86 and 87 can run in parallel once 83 lands.

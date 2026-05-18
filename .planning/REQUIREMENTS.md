@@ -131,10 +131,10 @@ Lift `mcp-server-common` (~2.2k LoC at `pmcp-run/built-in/shared/`) and `pmcp-co
 - [ ] **TKIT-03**: `SecretsProvider` trait exposed in the public toolkit API with at least one concrete impl ready for downstream use
 - [x] **TKIT-04**: `StaticResourceHandler` constructible from config exposed in the public toolkit API
 - [x] **TKIT-05**: `StaticPromptHandler` constructible from config exposed in the public toolkit API
-- [ ] **TKIT-06**: HMAC token machinery (sign + verify, code-hash binding) exposed in the public toolkit API and integrated with `pmcp-code-mode`
+- [x] **TKIT-06**: HMAC token machinery (sign + verify, code-hash binding) exposed in the public toolkit API and integrated with `pmcp-code-mode`
 - [x] **TKIT-07**: `ToolInfo` synthesizer reads `[[tools]]` entries from a server's `config.toml` and produces complete `ToolInfo` definitions (name, description, input schema, `[tools.annotations]`) with zero per-tool Rust handlers required. The supported `config.toml` shape MUST be a superset of the existing `pmcp-run/built-in/sql-api/servers/*/config.toml` files — including `[[tools.parameters]]` (type, description, required, default, min/max, max_length) and `[tools.annotations]` (read_only_hint, destructive_hint, idempotent_hint, open_world_hint, cost_hint) — so reference servers port without schema rewrites
 - [ ] **TKIT-08**: All three `pmcp-run` backend cores (`mcp-sql-server-core`, `mcp-graphql-server-core`, `mcp-openapi-server-core`) replace their path-deps on `pmcp-run/built-in/shared/` with versioned crates.io deps on `pmcp-server-toolkit` (independent release cadence unblocked)
-- [ ] **TKIT-09**: `[code_mode]` config block (`enabled`, `allow_writes`, `allow_deletes`, `allow_ddl`, `require_limit`, `max_limit`, `blocked_tables`, `sensitive_columns`, `auto_approve_levels`, `token_ttl_seconds`, `token_secret`) plus `[code_mode.limits]` (`max_tables_per_query`, `max_join_depth`, `max_subquery_depth`) are parsed by the toolkit and wired into `pmcp-code-mode`'s validation pipeline + `CodeExecutor` with zero per-server Rust glue — same surface as `~/Development/mcp/sdk/pmcp-run/built-in/sql-api/servers/open-images/config.toml` lines 97–127
+- [x] **TKIT-09**: `[code_mode]` config block (`enabled`, `allow_writes`, `allow_deletes`, `allow_ddl`, `require_limit`, `max_limit`, `blocked_tables`, `sensitive_columns`, `auto_approve_levels`, `token_ttl_seconds`, `token_secret`) plus `[code_mode.limits]` (`max_tables_per_query`, `max_join_depth`, `max_subquery_depth`) are parsed by the toolkit and wired into `pmcp-code-mode`'s validation pipeline + `CodeExecutor` with zero per-server Rust glue — same surface as `~/Development/mcp/sdk/pmcp-run/built-in/sql-api/servers/open-images/config.toml` lines 97–127
 - [ ] **TKIT-10**: Code-mode prompt body assembly combines `build_code_mode_prompt` (CONN-04) with `[[database.tables]]` curated descriptions so the LLM is seeded with the dialect + per-table semantic hints (not just raw DDL); the assembled prompt matches the spirit of the reference servers' code-mode prompt
 
 ### SQL Connectors
@@ -346,10 +346,10 @@ Which phases cover which requirements. Updated during roadmap creation.
 | TKIT-03 | Phase 83 | Pending |
 | TKIT-04 | Phase 83 | Complete |
 | TKIT-05 | Phase 83 | Complete |
-| TKIT-06 | Phase 83 | Pending |
+| TKIT-06 | Phase 83 | Complete |
 | TKIT-07 | Phase 83 | Complete |
 | TKIT-08 | Phase 83 | Pending |
-| TKIT-09 | Phase 83 | Pending |
+| TKIT-09 | Phase 83 | Complete |
 | TKIT-10 | Phase 83 | Pending |
 | CONN-01 | Phase 84 | Pending |
 | CONN-02 | Phase 84 | Pending |
