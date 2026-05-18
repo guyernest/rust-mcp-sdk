@@ -1406,7 +1406,7 @@ Plans:
   4. Code-mode prompt body assembly combines dialect-aware schema text (CONN-04, from Phase 84) with `[[database.tables]]` curated table descriptions so the LLM is seeded with both raw DDL and semantic hints
   5. All three pmcp-run backend cores (`mcp-sql-server-core`, `mcp-graphql-server-core`, `mcp-openapi-server-core`) replace their `pmcp-run/built-in/shared/` path-deps with versioned crates.io `pmcp-server-toolkit` deps and continue to pass their existing tests unchanged
 
-**Plans:** 6/9 plans executed
+**Plans:** 8/9 plans executed
 
 Plans:
 **Wave 1**
@@ -1430,7 +1430,7 @@ Plans:
 
 **Wave 5** *(blocked on Wave 4 completion)*
 
-- [ ] 83-08-PLAN.md — ServerBuilderExt + backend-core smoke test + ALWAYS example (TKIT-08, TEST-03) (Wave 5)
+- [x] 83-08-PLAN.md — ServerBuilderExt + backend-core smoke test + ALWAYS example (TKIT-08, TEST-03) (Wave 5)
 
 **Wave 6** *(blocked on Wave 5 completion)*
 
@@ -1529,7 +1529,7 @@ Plans:
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 82. Builder DX Prerequisites | 3/3 | Complete   | 2026-05-18 |
-| 83. Toolkit Core Lift | 6/9 | In Progress|  |
+| 83. Toolkit Core Lift | 8/9 | In Progress|  |
 | 84. SQL Connectors | 0/? | Not started | - |
 | 85. Shape A + Reference Parity | 0/? | Not started | - |
 | 86. Shapes B/C/D | 0/? | Not started | - |

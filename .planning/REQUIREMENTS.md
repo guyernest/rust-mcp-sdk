@@ -133,7 +133,7 @@ Lift `mcp-server-common` (~2.2k LoC at `pmcp-run/built-in/shared/`) and `pmcp-co
 - [x] **TKIT-05**: `StaticPromptHandler` constructible from config exposed in the public toolkit API
 - [x] **TKIT-06**: HMAC token machinery (sign + verify, code-hash binding) exposed in the public toolkit API and integrated with `pmcp-code-mode`
 - [x] **TKIT-07**: `ToolInfo` synthesizer reads `[[tools]]` entries from a server's `config.toml` and produces complete `ToolInfo` definitions (name, description, input schema, `[tools.annotations]`) with zero per-tool Rust handlers required. The supported `config.toml` shape MUST be a superset of the existing `pmcp-run/built-in/sql-api/servers/*/config.toml` files — including `[[tools.parameters]]` (type, description, required, default, min/max, max_length) and `[tools.annotations]` (read_only_hint, destructive_hint, idempotent_hint, open_world_hint, cost_hint) — so reference servers port without schema rewrites
-- [ ] **TKIT-08**: All three `pmcp-run` backend cores (`mcp-sql-server-core`, `mcp-graphql-server-core`, `mcp-openapi-server-core`) replace their path-deps on `pmcp-run/built-in/shared/` with versioned crates.io deps on `pmcp-server-toolkit` (independent release cadence unblocked)
+- [x] **TKIT-08**: All three `pmcp-run` backend cores (`mcp-sql-server-core`, `mcp-graphql-server-core`, `mcp-openapi-server-core`) replace their path-deps on `pmcp-run/built-in/shared/` with versioned crates.io deps on `pmcp-server-toolkit` (independent release cadence unblocked)
 - [x] **TKIT-09**: `[code_mode]` config block (`enabled`, `allow_writes`, `allow_deletes`, `allow_ddl`, `require_limit`, `max_limit`, `blocked_tables`, `sensitive_columns`, `auto_approve_levels`, `token_ttl_seconds`, `token_secret`) plus `[code_mode.limits]` (`max_tables_per_query`, `max_join_depth`, `max_subquery_depth`) are parsed by the toolkit and wired into `pmcp-code-mode`'s validation pipeline + `CodeExecutor` with zero per-server Rust glue — same surface as `~/Development/mcp/sdk/pmcp-run/built-in/sql-api/servers/open-images/config.toml` lines 97–127
 - [x] **TKIT-10**: Code-mode prompt body assembly combines `build_code_mode_prompt` (CONN-04) with `[[database.tables]]` curated descriptions so the LLM is seeded with the dialect + per-table semantic hints (not just raw DDL); the assembled prompt matches the spirit of the reference servers' code-mode prompt
 
@@ -200,7 +200,7 @@ ALWAYS requirements from CLAUDE.md plus toolkit-specific coverage.
 
 - [ ] **TEST-01**: Integration tests for each per-backend SQL crate against authentic in-process mocks (Postgres `$1`+`information_schema`, MySQL `?`+`information_schema`, Athena `?`+Glue catalog) plus a real SQLite — no Docker, no testcontainers
 - [x] **TEST-02**: Toolkit core unit + property tests covering placeholder translation invariants, code-mode prompt assembly, ToolInfo synthesis from `[[tools]]` config entries
-- [ ] **TEST-03**: Public API doctest coverage for `pmcp-server-toolkit` (all public types + helpers compile and run as `rust,no_run` or `rust` doctests)
+- [x] **TEST-03**: Public API doctest coverage for `pmcp-server-toolkit` (all public types + helpers compile and run as `rust,no_run` or `rust` doctests)
 - [ ] **TEST-04**: `pmcp-config-helper` integration test asserts dual-surface byte-equality (SKLL-05) and SEP-2640 §9 list-exclusion (SKLL-06)
 - [ ] **TEST-05**: `cargo pmcp new --kind sql-server` scaffold-to-run end-to-end test (scaffold a project in a tempdir, `cargo run` it against an embedded SQLite, hit `tools/list` and one `tools/call`)
 - [ ] **TEST-06**: `cargo pmcp deploy` integration test for at least one config-only server target (mock or real pmcp.run target)
@@ -348,7 +348,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | TKIT-05 | Phase 83 | Complete |
 | TKIT-06 | Phase 83 | Complete |
 | TKIT-07 | Phase 83 | Complete |
-| TKIT-08 | Phase 83 | Pending |
+| TKIT-08 | Phase 83 | Complete |
 | TKIT-09 | Phase 83 | Complete |
 | TKIT-10 | Phase 83 | Complete |
 | CONN-01 | Phase 84 | Pending |
@@ -382,7 +382,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | DOCS-05 | Phase 89 | Pending |
 | TEST-01 | Phase 84 | Pending |
 | TEST-02 | Phase 83 | Complete |
-| TEST-03 | Phase 83 | Pending |
+| TEST-03 | Phase 83 | Complete |
 | TEST-04 | Phase 87 | Pending |
 | TEST-05 | Phase 86 | Pending |
 | TEST-06 | Phase 86 | Pending |

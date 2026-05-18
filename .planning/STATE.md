@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v2.2
 milestone_name: Configuration-Only MCP Servers
 status: executing
-stopped_at: "Completed Plan 83-05 — synthesize_from_config GREEN with property + reference-fixture tests; quality-gate passing. Next: Plan 83-06 (TKIT-09 code-mode wiring)."
-last_updated: "2026-05-18T22:15:38.804Z"
+stopped_at: "Completed Plan 83-08 — ServerBuilderExt (4 methods: panicking + try_* per R7) + From<&ServerConfig> for Static{Resource,Prompt}Handler + backend-core smoke test (D-03 / TKIT-08) + e01_toolkit_minimal example (D-15 / R3 single-import binding witness). 4 builder_ext unit tests + 4 doctests + 2 smoke tests pass. Quality gate green. Next: Plan 83-09 (final phase plan — pmcp-run shared shim diff)."
+last_updated: "2026-05-18T22:47:17.759Z"
 last_activity: 2026-05-18
 progress:
   total_phases: 44
   completed_phases: 34
   total_plans: 146
-  completed_plans: 144
+  completed_plans: 145
   percent: 77
 ---
 
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-05-17)
 ## Current Position
 
 Phase: 83 (Toolkit Core Lift (`pmcp-server-toolkit`)) — EXECUTING
-Plan: 8 of 9
+Plan: 9 of 9
 Status: Ready to execute
 Last activity: 2026-05-18
 
@@ -132,6 +132,7 @@ Inherited from v2.1 (see PROJECT.md + prior Decisions log):
 | Phase 83 P05 | 22min | 3 tasks | 4 files |
 | Phase 83 P06 | 35min | 4 tasks | 7 files |
 | Phase 83-toolkit-core-lift-pmcp-server-toolkit P07 | 19min | 3 tasks | 3 files |
+| Phase 83 P08 | 50min | - tasks | - files |
 
 ### Last Activity
 
@@ -149,6 +150,6 @@ Inherited from v2.1 (see PROJECT.md + prior Decisions log):
 
 ## Session Continuity
 
-Last session: 2026-05-18T22:15:15.401Z
+Last session: 2026-05-18T22:47:13.645Z
 Stopped at: Completed Plan 83-05 — synthesize_from_config GREEN with property + reference-fixture tests; quality-gate passing. Next: Plan 83-06 (TKIT-09 code-mode wiring).
 Resume: Next is `/gsd-plan-phase 82` to break Phase 82 (Builder DX Prerequisites) into plans. Phase 82 is the unblocker for every subsequent v2.2 phase that uses `tool_arc` / `prompt_arc` — without it, every config-driven toolkit author writes a 20-line delegating wrapper shim (the same DX paper-cut spike 004 hit). After 82, the critical path is 83 (TKIT anchor) → 84 (CONN anchor) → 85 (Shape A + REF parity). Phases 86 and 87 can run in parallel once 83 lands.
