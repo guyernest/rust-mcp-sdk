@@ -31,6 +31,7 @@
 use async_trait::async_trait;
 use pmcp::types::{Content, GetPromptResult, PromptMessage, Role};
 use pmcp::{PromptHandler, RequestHandlerExtra, Server, ToolHandler};
+use proptest::prelude::*;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -167,4 +168,61 @@ async fn tool_arc_and_prompt_arc_compose_on_same_builder() {
     // Public sanity checks: both registries report presence.
     assert!(server.has_tool("echo"));
     assert!(server.has_prompt("echo"));
+}
+
+// Property test (Task 2): observational equivalence of `tool()` and
+// `tool_arc()`. The two registration paths must produce servers whose
+// `get_tool(name).handle(args, extra)` outputs are byte-equal for the
+// same `args`. The internal `capabilities` field is private on `Server`
+// and is therefore not observable from this integration test; the
+// capability-shape equivalence invariant lives in Plan 01 Task 3's
+// crate-internal `#[cfg(test)]` unit test (which has access to private
+// fields).
+//
+// proptest = "1.7" is confirmed in Cargo.toml [dev-dependencies] — this
+// test depends on it as a hard precondition (no alternative path).
+proptest! {
+    #![proptest_config(ProptestConfig { cases: 32, ..ProptestConfig::default() })]
+
+    #[test]
+    fn tool_and_tool_arc_produce_observable_equivalence(value in any::<String>()) {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            let server_a = Server::builder()
+                .name("a")
+                .version("0")
+                .tool("echo", EchoTool)
+                .build()
+                .unwrap();
+            let server_b = Server::builder()
+                .name("b")
+                .version("0")
+                .tool_arc("echo", Arc::new(EchoTool))
+                .build()
+                .unwrap();
+
+            let args = json!({ "v": value.clone() });
+            let result_a = server_a
+                .get_tool("echo")
+                .unwrap()
+                .handle(args.clone(), RequestHandlerExtra::default())
+                .await
+                .unwrap();
+            let result_b = server_b
+                .get_tool("echo")
+                .unwrap()
+                .handle(args, RequestHandlerExtra::default())
+                .await
+                .unwrap();
+
+            prop_assert_eq!(result_a, result_b);
+            // Public sanity: both servers must report has_tool("echo").
+            prop_assert!(server_a.has_tool("echo"));
+            prop_assert!(server_b.has_tool("echo"));
+            Ok(())
+        })?;
+    }
 }
