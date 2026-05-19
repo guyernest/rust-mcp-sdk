@@ -1,3 +1,98 @@
+//! Google Cloud Run deployment target.
+//!
+//! # Operator workflow
+//!
+//! Closes upstream issues paiml/rust-mcp-sdk#258 (multi-crate isolated
+//! layout), #259 (distroless runtime default), and #260 (deploy.toml
+//! schema). The canonical workflow for the pmcp.run team:
+//!
+//! ```bash
+//! # 1. Scaffold the deployment artifacts (Dockerfile, .dockerignore,
+//! #    cloudbuild.yaml, .pmcp/deploy.toml). Idempotent — re-running
+//! #    preserves existing files.
+//! cargo pmcp deploy init --target-type google-cloud-run
+//!
+//! # 2. Edit .pmcp/deploy.toml to fill in the GCP project, region, and
+//! #    any [environment] keys your server requires at startup. For a
+//! #    multi-crate isolated layout (e.g. a non-workspace sibling-crate
+//! #    test harness), add the [layout] block.
+//! cat .pmcp/deploy.toml
+//! ```
+//!
+//! ## Minimum-viable deploy.toml for Cloud Run
+//!
+//! ```toml
+//! [target]
+//! type = "google-cloud-run"
+//! version = "1.0.0"
+//!
+//! [gcp]
+//! project_id = "my-gcp-project"
+//! region = "us-central1"
+//!
+//! [server]
+//! name = "auth-echo-cloud-run"
+//! memory = "256Mi"
+//! cpu = "1"
+//! ingress = "all"
+//! allow_unauthenticated = true
+//!
+//! [environment]
+//! EXPECTED_AUDIENCE = "abc.apps.googleusercontent.com"
+//! RUST_LOG = "info"
+//! ```
+//!
+//! ## Multi-crate isolated layout (issue #258)
+//!
+//! For non-workspace sibling crates with path-dep relationships (e.g.
+//! a Cloud Run binary crate that declares
+//! `auth-echo-core = { path = "../auth-echo-core" }`), add a `[layout]`
+//! block. The scaffolder emits surgical per-crate `COPY` lines in the
+//! Dockerfile and `cargo build --manifest-path <primary>/Cargo.toml
+//! --bin <binary>` instead of `COPY . .` (which would over-bundle any
+//! sibling `aws-lambda` crates that intentionally sit outside the
+//! workspace).
+//!
+//! ```toml
+//! [layout]
+//! kind = "multi-crate-isolated"
+//! primary = "gcp-cloud-run"
+//! path_deps = ["auth-echo-core"]
+//!
+//! [server]
+//! name = "auth-echo-cloud-run"
+//! binary = "server"  # passed as `cargo build --bin server`
+//! ```
+//!
+//! ## Distroless runtime + opt-out (issue #259)
+//!
+//! The default runtime FROM image is `gcr.io/distroless/cc-debian12`
+//! (~20 MB, no shell, no apt, no package manager) — the right default
+//! for the cargo-pmcp toolchain shape (rustls is pinned, so no system
+//! libssl is needed at runtime). Opt back to a shell-enabled base by
+//! setting `[runtime].base`. Declarative apt packages are honored only
+//! when the base resolves to a debian-family image:
+//!
+//! ```toml
+//! [runtime]
+//! base = "debian:bookworm-slim"
+//! apt_packages = ["ca-certificates", "libssl3"]
+//! ```
+//!
+//! ## Deploy
+//!
+//! ```bash
+//! gcloud auth login
+//! gcloud config set project my-gcp-project
+//! cargo pmcp deploy --target google-cloud-run
+//! ```
+//!
+//! All `gcloud run deploy` flags (`--memory`, `--cpu`,
+//! `--allow-unauthenticated`, `--ingress`, `--set-env-vars`, etc.) are
+//! sourced from `deploy.toml`. The previous workflow of patching
+//! env vars via `gcloud run services update --set-env-vars` after
+//! every deploy is no longer required (#260).
+
 mod auth;
 mod deploy;
 mod dockerfile;

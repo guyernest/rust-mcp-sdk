@@ -880,4 +880,104 @@ mod tests {
         assert!(runtime.contains("FROM gcr.io/distroless/static-debian12"));
         assert!(!runtime.contains("RUN useradd"));
     }
+
+    // ---------- Property tests ----------
+    //
+    // Per CLAUDE.md ALWAYS requirements, every new feature must include
+    // property-based invariants. These cover the two attack surfaces of
+    // the new code: arbitrary user input flowing into Dockerfile
+    // directives via [layout].path_deps, and arbitrary user input
+    // flowing into the `gcloud --set-env-vars` argument via
+    // [environment].
+
+    use proptest::prelude::*;
+
+    proptest! {
+        /// INVARIANT: any string fed through the crate-name sanitizer
+        /// produces output that is safe to splice into a Dockerfile
+        /// COPY directive — only `[A-Za-z0-9_-]`, no path separators,
+        /// no shell metacharacters, no newlines.
+        #[test]
+        fn prop_sanitize_path_dep_yields_safe_chars_only(input in ".{0,200}") {
+            let mut config =
+                DeployConfig::default_for_cloud_run_server(
+                    "s".to_string(),
+                    "p".to_string(),
+                    "us-central1".to_string(),
+                    std::env::temp_dir(),
+                );
+            config.layout = Some(LayoutConfig {
+                kind: "multi-crate-isolated".to_string(),
+                primary: "primary-crate".to_string(),
+                path_deps: vec![input.clone()],
+            });
+            // Synthesize a Cargo.toml in temp so render_dockerfile
+            // doesn't fail on the simple/workspace detection path. We
+            // route through the multi-crate-isolated branch so the
+            // sanitization invariant is what we measure.
+            let tmp = tempfile::TempDir::new().expect("tmpdir");
+            std::fs::write(
+                tmp.path().join("Cargo.toml"),
+                "[package]\nname = \"p\"\nversion = \"0.1.0\"\n",
+            )
+            .expect("seed cargo");
+            config.project_root = tmp.path().to_path_buf();
+
+            let dockerfile = render_dockerfile(&config).expect("render");
+            // The COPY lines for path_deps must not contain dangerous
+            // characters regardless of input. (The input may also
+            // sanitize to empty — in which case no COPY line is emitted
+            // for that dep, which is also safe.)
+            for line in dockerfile.lines().filter(|l| l.starts_with("COPY ")) {
+                for ch in line.chars() {
+                    prop_assert!(
+                        ch.is_ascii() && (ch != ';' && ch != '`' && ch != '$' && ch != '\\'
+                            && ch != '"' && ch != '\''),
+                        "COPY line contains dangerous char {:?}: {}", ch, line
+                    );
+                }
+                prop_assert!(!line.contains(".."), "COPY line contains `..`: {}", line);
+            }
+        }
+
+        /// INVARIANT: render_set_env_vars output is sorted by key and
+        /// every entry has the form KEY=VALUE. Determinism matters —
+        /// re-running deploy with no schema change must produce the
+        /// exact same gcloud invocation so Cloud Run does not create a
+        /// pointless new revision.
+        #[test]
+        fn prop_render_set_env_vars_is_sorted_and_well_formed(
+            entries in prop::collection::vec(
+                ("[A-Z][A-Z0-9_]{0,15}", "[a-zA-Z0-9._-]{0,40}"),
+                0..16,
+            )
+        ) {
+            let mut env = std::collections::HashMap::new();
+            for (k, v) in entries {
+                env.insert(k, v);
+            }
+            let rendered = super::super::deploy::render_set_env_vars(&env);
+            if env.is_empty() {
+                prop_assert_eq!(rendered, "");
+                return Ok(());
+            }
+            let pairs: Vec<&str> = rendered.split(',').collect();
+            prop_assert_eq!(pairs.len(), env.len());
+            // Every pair is KEY=VALUE.
+            for pair in &pairs {
+                prop_assert!(pair.contains('='), "missing `=` in pair: {}", pair);
+            }
+            // Keys (the part before the first `=`) are sorted ascending.
+            // We assert on keys — not on full pairs — because key sort
+            // order can differ from full-string sort when values
+            // contain bytes lower than `=` (0x3D), e.g. digits (0x30).
+            let keys: Vec<&str> = pairs
+                .iter()
+                .map(|p| p.split('=').next().unwrap_or(""))
+                .collect();
+            let mut sorted_keys = keys.clone();
+            sorted_keys.sort();
+            prop_assert_eq!(keys, sorted_keys);
+        }
+    }
 }
