@@ -600,19 +600,31 @@ impl DeployCommand {
                             // Placeholders are filled in by the operator; the
                             // region flag overrides the schema default when
                             // non-empty.
-                            let server_name = detect_server_name(&project_root)?;
-                            let region_str = if region.is_empty() {
-                                "us-central1".to_string()
-                            } else {
-                                region.clone()
-                            };
-                            let config =
-                                crate::deployment::DeployConfig::default_for_cloud_run_server(
-                                    server_name,
-                                    "your-gcp-project-id".to_string(),
-                                    region_str,
-                                    project_root.clone(),
-                                );
+                            //
+                            // Prefer loading the existing deploy.toml so that
+                            // operator-authored [layout] / [server].binary /
+                            // [environment] blocks flow into the Dockerfile +
+                            // cloudbuild.yaml generators. Without this, a
+                            // pre-existing deploy.toml is preserved on disk
+                            // (save_if_missing) but the in-memory default is
+                            // still what generate_dockerfile() sees, so
+                            // [layout] kind = "multi-crate-isolated" is
+                            // silently ignored on re-init.
+                            let config = crate::deployment::DeployConfig::load(&project_root)
+                                .or_else(|_| -> anyhow::Result<_> {
+                                    let server_name = detect_server_name(&project_root)?;
+                                    let region_str = if region.is_empty() {
+                                        "us-central1".to_string()
+                                    } else {
+                                        region.clone()
+                                    };
+                                    Ok(crate::deployment::DeployConfig::default_for_cloud_run_server(
+                                        server_name,
+                                        "your-gcp-project-id".to_string(),
+                                        region_str,
+                                        project_root.clone(),
+                                    ))
+                                })?;
                             target.init(&config).await
                         } else {
                             // For other targets (pmcp-run, etc.), use the new modular approach
