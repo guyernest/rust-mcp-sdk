@@ -59,10 +59,8 @@ pub async fn deploy_to_cloud_run(config: &DeployConfig) -> Result<DeploymentOutp
     // For multi-crate-isolated layouts, `project_root` is intentionally a
     // parent directory of the primary crate (so multiple sibling crates can
     // be COPY'd into the Docker build context) and has no `Cargo.toml` of
-    // its own. Sanity-check the primary crate's manifest instead. For other
-    // layouts, the project_root is itself a Cargo package and we check that
-    // directly (unchanged behavior).
-    let cargo_toml_path = match config.layout.as_ref().filter(|l| l.kind == "multi-crate-isolated") {
+    // its own. Sanity-check the primary crate's manifest instead.
+    let cargo_toml_path = match config.layout.as_ref().filter(|l| l.is_multi_crate_isolated()) {
         Some(layout) => config.project_root.join(&layout.primary).join("Cargo.toml"),
         None => config.project_root.join("Cargo.toml"),
     };

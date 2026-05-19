@@ -597,9 +597,6 @@ impl DeployCommand {
                             // Cloud Run init writes a Cloud Run-shaped
                             // .pmcp/deploy.toml ([target] + [gcp] + [server] +
                             // [environment]) — see upstream issue #260.
-                            // Placeholders are filled in by the operator; the
-                            // region flag overrides the schema default when
-                            // non-empty.
                             //
                             // Prefer loading the existing deploy.toml so that
                             // operator-authored [layout] / [server].binary /
@@ -610,21 +607,29 @@ impl DeployCommand {
                             // still what generate_dockerfile() sees, so
                             // [layout] kind = "multi-crate-isolated" is
                             // silently ignored on re-init.
-                            let config = crate::deployment::DeployConfig::load(&project_root)
-                                .or_else(|_| -> anyhow::Result<_> {
-                                    let server_name = detect_server_name(&project_root)?;
-                                    let region_str = if region.is_empty() {
-                                        "us-central1".to_string()
-                                    } else {
-                                        region.clone()
-                                    };
-                                    Ok(crate::deployment::DeployConfig::default_for_cloud_run_server(
-                                        server_name,
-                                        "your-gcp-project-id".to_string(),
-                                        region_str,
-                                        project_root.clone(),
-                                    ))
-                                })?;
+                            //
+                            // Gate the load on file existence so parse and
+                            // permission errors propagate as deploy failures
+                            // instead of silently falling back to a default
+                            // scaffold (which would mask a malformed
+                            // deploy.toml as "no file present").
+                            let deploy_toml_path = project_root.join(".pmcp/deploy.toml");
+                            let config = if deploy_toml_path.exists() {
+                                crate::deployment::DeployConfig::load(&project_root)?
+                            } else {
+                                let server_name = detect_server_name(&project_root)?;
+                                let region_str = if region.is_empty() {
+                                    "us-central1".to_string()
+                                } else {
+                                    region.clone()
+                                };
+                                crate::deployment::DeployConfig::default_for_cloud_run_server(
+                                    server_name,
+                                    "your-gcp-project-id".to_string(),
+                                    region_str,
+                                    project_root.clone(),
+                                )
+                            };
                             target.init(&config).await
                         } else {
                             // For other targets (pmcp-run, etc.), use the new modular approach

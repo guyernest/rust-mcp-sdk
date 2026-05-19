@@ -173,6 +173,12 @@ pub struct LayoutConfig {
     pub path_deps: Vec<String>,
 }
 
+impl LayoutConfig {
+    pub fn is_multi_crate_isolated(&self) -> bool {
+        self.kind == "multi-crate-isolated"
+    }
+}
+
 /// Runtime-stage Docker base-image knob.
 ///
 /// When `base` is `None`, the scaffolder emits the target-appropriate

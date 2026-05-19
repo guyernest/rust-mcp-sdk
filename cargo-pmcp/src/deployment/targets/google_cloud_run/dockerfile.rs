@@ -28,7 +28,7 @@ pub(super) fn render_dockerfile(config: &DeployConfig) -> Result<String> {
     let multi_crate = config
         .layout
         .as_ref()
-        .filter(|l| l.kind == "multi-crate-isolated");
+        .filter(|l| l.is_multi_crate_isolated());
 
     let builder = if let Some(layout) = multi_crate {
         builder_stage_multi_crate_isolated(layout, &resolve_binary_name(config))
