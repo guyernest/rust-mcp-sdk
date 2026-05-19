@@ -274,7 +274,7 @@ pub fn resolve_target(
         None,
         entry.as_ref().and_then(|e| e.region().cloned()),
         deploy_config
-            .map(|d| d.aws.region.clone())
+            .and_then(|d| d.aws.as_ref().map(|a| a.region.clone()))
             .filter(|s| !s.is_empty()),
     );
 
@@ -285,7 +285,7 @@ pub fn resolve_target(
         None,
         entry.as_ref().and_then(|e| e.account_id().cloned()),
         deploy_config
-            .and_then(|d| d.aws.account_id.clone())
+            .and_then(|d| d.aws.as_ref().and_then(|a| a.account_id.clone()))
             .filter(|s| !s.is_empty()),
     );
 
