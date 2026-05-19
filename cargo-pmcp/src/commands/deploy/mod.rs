@@ -1062,6 +1062,40 @@ impl DeployCommand {
         Ok("aws-lambda".to_string())
     }
 
+    fn find_project_root() -> Result<PathBuf> {
+        let current_dir = std::env::current_dir().context("Failed to get current directory")?;
+
+        // First pass: prefer the nearest ancestor that has `.pmcp/deploy.toml` —
+        // that's the explicit signal of "this is the project root for cargo-pmcp
+        // deploy." Without this, the Cargo.toml-only walk-up below would skip over
+        // deployment roots that aren't themselves Cargo packages (e.g.
+        // multi-crate-isolated layouts where the deploy.toml lives one level above
+        // the primary + path_deps crates and the parent dir has no Cargo.toml of
+        // its own).
+        let mut dir = current_dir.as_path();
+        loop {
+            if dir.join(".pmcp/deploy.toml").exists() {
+                return Ok(dir.to_path_buf());
+            }
+            match dir.parent() {
+                Some(parent) => dir = parent,
+                None => break,
+            }
+        }
+
+        // Second pass: fall back to nearest ancestor with a `Cargo.toml`.
+        let mut dir = current_dir.as_path();
+        loop {
+            if dir.join("Cargo.toml").exists() {
+                return Ok(dir.to_path_buf());
+            }
+
+            dir = dir.parent().ok_or_else(|| {
+                anyhow::anyhow!("Could not find Cargo.toml in any parent directory")
+            })?;
+        }
+    }
+
     /// Save deployment info to .pmcp/deployment.toml for landing page integration
     fn save_deployment_info(
         project_root: &PathBuf,
