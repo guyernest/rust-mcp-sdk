@@ -83,7 +83,7 @@ fn builder_stage_workspace() -> String {
 # Workspace project structure - builds inside Docker to handle path dependencies
 
 # Stage 1: Build the Rust binary
-FROM rust:1.83-slim AS builder
+FROM rust:1-slim AS builder
 
 {BUILDER_APT_LAYER}
 
@@ -111,7 +111,7 @@ fn builder_stage_simple() -> String {
 # Simple binary crate - builds inside Docker
 
 # Stage 1: Build the Rust binary
-FROM rust:1.83-slim AS builder
+FROM rust:1-slim AS builder
 
 {BUILDER_APT_LAYER}
 
@@ -175,7 +175,7 @@ fn builder_stage_multi_crate_isolated(layout: &LayoutConfig, binary: &str) -> St
 # failures.
 
 # Stage 1: Build the Rust binary
-FROM rust:1.83-slim AS builder
+FROM rust:1-slim AS builder
 
 # Install build dependencies
 RUN apt-get update && apt-get install -y \
