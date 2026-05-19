@@ -96,6 +96,7 @@
 mod auth;
 mod deploy;
 mod dockerfile;
+mod env;
 mod init;
 
 use anyhow::{bail, Context, Result};

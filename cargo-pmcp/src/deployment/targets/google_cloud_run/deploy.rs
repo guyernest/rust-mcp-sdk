@@ -123,7 +123,7 @@ pub async fn deploy_to_cloud_run(config: &DeployConfig) -> Result<DeploymentOutp
 
     let max_instances_str = params.max_instances.to_string();
     let min_instances_str = params.min_instances.to_string();
-    let env_vars_arg = render_set_env_vars(&config.environment);
+    let env_vars_arg = super::env::render_set_env_vars(&config.environment);
 
     let mut deploy_args = vec![
         "run",
@@ -303,61 +303,9 @@ fn resolve_params(config: &DeployConfig) -> CloudRunParams {
     }
 }
 
-/// Render an `[environment]` table as a `gcloud run deploy --set-env-vars`
-/// argument value.
-///
-/// The output is sorted by key to keep the value deterministic across runs
-/// (important so re-running deploy with no schema change does not produce
-/// a different Cloud Run revision purely because HashMap iteration order
-/// shifted). Values are passed verbatim — gcloud accepts `KEY=VAL` where
-/// VAL may contain spaces; commas inside values are not supported by
-/// gcloud's `--set-env-vars` flag, and we surface the same limitation.
-pub(super) fn render_set_env_vars(env: &std::collections::HashMap<String, String>) -> String {
-    if env.is_empty() {
-        return String::new();
-    }
-    let mut entries: Vec<(&String, &String)> = env.iter().collect();
-    entries.sort_by(|a, b| a.0.cmp(b.0));
-    entries
-        .into_iter()
-        .map(|(k, v)| format!("{}={}", k, v))
-        .collect::<Vec<_>>()
-        .join(",")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
-
-    #[test]
-    fn render_set_env_vars_is_deterministic() {
-        let mut env = HashMap::new();
-        env.insert("ZEBRA".to_string(), "z".to_string());
-        env.insert("ALPHA".to_string(), "a".to_string());
-        env.insert("MIKE".to_string(), "m".to_string());
-        let rendered = render_set_env_vars(&env);
-        assert_eq!(rendered, "ALPHA=a,MIKE=m,ZEBRA=z");
-    }
-
-    #[test]
-    fn render_set_env_vars_empty_is_empty_string() {
-        let env = HashMap::new();
-        assert_eq!(render_set_env_vars(&env), "");
-    }
-
-    #[test]
-    fn render_set_env_vars_handles_single_entry() {
-        let mut env = HashMap::new();
-        env.insert(
-            "EXPECTED_AUDIENCE".to_string(),
-            "abc.apps.googleusercontent.com".to_string(),
-        );
-        assert_eq!(
-            render_set_env_vars(&env),
-            "EXPECTED_AUDIENCE=abc.apps.googleusercontent.com"
-        );
-    }
 
     #[test]
     fn resolve_params_prefers_config_over_env_var() {

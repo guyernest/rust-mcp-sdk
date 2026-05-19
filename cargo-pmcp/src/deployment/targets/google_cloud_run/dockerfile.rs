@@ -57,19 +57,35 @@ fn resolve_binary_name(config: &DeployConfig) -> String {
         .unwrap_or_else(|| config.server.name.clone())
 }
 
+/// Shared apt-install layer for the rust:slim builder stage. pkg-config
+/// + libssl-dev cover the common native-build deps; everything else is
+/// expected to come from crates.io.
+const BUILDER_APT_LAYER: &str = "# Install build dependencies
+RUN apt-get update && apt-get install -y \\
+    pkg-config \\
+    libssl-dev \\
+    && rm -rf /var/lib/apt/lists/*";
+
+/// Shared post-build step for the workspace and simple-crate layouts:
+/// locate the produced binary in `target/release` (excluding any
+/// lambda binaries that may have been built alongside it) and copy it
+/// to a stable path the runtime stage expects.
+const FIND_AND_COPY_BINARY: &str = "# Copy the server binary (exclude Lambda binaries)
+RUN find target/release -maxdepth 1 -type f -executable \\
+    ! -name \"*lambda*\" ! -name \"*-lambda\" \\
+    ! -name \"*.so\" ! -name \"*.d\" ! -name \"build-script-*\" \\
+    -exec cp {} /app/mcp-server \\; || \\
+    (echo \"No server binary found in target/release\" && exit 1)";
+
 fn builder_stage_workspace() -> String {
-    String::from(
+    format!(
         r#"# Multi-stage Dockerfile for Rust MCP Server on Google Cloud Run
 # Workspace project structure - builds inside Docker to handle path dependencies
 
 # Stage 1: Build the Rust binary
 FROM rust:1.83-slim AS builder
 
-# Install build dependencies
-RUN apt-get update && apt-get install -y \
-    pkg-config \
-    libssl-dev \
-    && rm -rf /var/lib/apt/lists/*
+{BUILDER_APT_LAYER}
 
 # Create app directory
 WORKDIR /app
@@ -84,30 +100,20 @@ RUN LAMBDA_PKGS=$(cargo metadata --no-deps --format-version=1 2>/dev/null | \
     sed 's/"name":"\([^"]*\)"/--exclude \1/g' || echo ""); \
     cargo build --release --workspace $LAMBDA_PKGS
 
-# Find the server binary (exclude Lambda binaries)
-# This finds the actual executable binary for HTTP server
-RUN find target/release -maxdepth 1 -type f -executable \
-    ! -name "*lambda*" ! -name "*-lambda" \
-    ! -name "*.so" ! -name "*.d" ! -name "build-script-*" \
-    -exec cp {} /app/mcp-server \; || \
-    (echo "No server binary found in target/release" && exit 1)
+{FIND_AND_COPY_BINARY}
 "#,
     )
 }
 
 fn builder_stage_simple() -> String {
-    String::from(
+    format!(
         r#"# Multi-stage Dockerfile for Rust MCP Server on Google Cloud Run
 # Simple binary crate - builds inside Docker
 
 # Stage 1: Build the Rust binary
 FROM rust:1.83-slim AS builder
 
-# Install build dependencies
-RUN apt-get update && apt-get install -y \
-    pkg-config \
-    libssl-dev \
-    && rm -rf /var/lib/apt/lists/*
+{BUILDER_APT_LAYER}
 
 # Create app directory
 WORKDIR /app
@@ -119,12 +125,7 @@ COPY src/ ./src/
 # Build the release binary
 RUN cargo build --release
 
-# Copy the server binary (exclude Lambda binaries)
-RUN find target/release -maxdepth 1 -type f -executable \
-    ! -name "*lambda*" ! -name "*-lambda" \
-    ! -name "*.so" ! -name "*.d" ! -name "build-script-*" \
-    -exec cp {} /app/mcp-server \; || \
-    (echo "No server binary found in target/release" && exit 1)
+{FIND_AND_COPY_BINARY}
 "#,
     )
 }
@@ -414,7 +415,7 @@ pub fn generate_cloudbuild(config: &DeployConfig) -> Result<()> {
     if let Some(ingress) = &config.server.ingress {
         steps_tail.push_str(&format!("      - '--ingress'\n      - '{}'\n", ingress));
     }
-    let env_vars = super::deploy::render_set_env_vars(&config.environment);
+    let env_vars = super::env::render_set_env_vars(&config.environment);
     if !env_vars.is_empty() {
         steps_tail.push_str(&format!(
             "      - '--set-env-vars'\n      - '{}'\n",
@@ -956,7 +957,7 @@ mod tests {
             for (k, v) in entries {
                 env.insert(k, v);
             }
-            let rendered = super::super::deploy::render_set_env_vars(&env);
+            let rendered = super::super::env::render_set_env_vars(&env);
             if env.is_empty() {
                 prop_assert_eq!(rendered, "");
                 return Ok(());

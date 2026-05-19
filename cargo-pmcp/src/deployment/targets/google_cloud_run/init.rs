@@ -14,7 +14,7 @@
 
 use super::dockerfile;
 use crate::deployment::DeployConfig;
-use anyhow::{Context, Result};
+use anyhow::Result;
 
 /// Initialise a Google Cloud Run deployment for `config.project_root`.
 ///
@@ -57,26 +57,15 @@ pub fn init_google_cloud_run(config: &DeployConfig) -> Result<()> {
 
 /// Write `.pmcp/deploy.toml` only when it doesn't already exist.
 ///
-/// Re-running `init` on a project where the operator has already filled in
-/// `[gcp].project_id`, OAuth audiences, or other `[environment]` keys must
-/// not overwrite their work. This mirrors `cargo init` semantics and the
-/// scaffolder-immunity guarantee called out in upstream issue #260.
+/// Delegates to [`DeployConfig::save_if_missing`] for the actual
+/// serialize-and-write logic; this wrapper exists to print the
+/// scaffolder-status line the operator sees.
 fn write_deploy_toml(config: &DeployConfig) -> Result<()> {
-    let pmcp_dir = config.project_root.join(".pmcp");
-    let deploy_toml = pmcp_dir.join("deploy.toml");
-
-    if deploy_toml.exists() {
+    if config.save_if_missing(&config.project_root)? {
+        println!("   ✓ Generated .pmcp/deploy.toml");
+    } else {
         println!("   ⏭  .pmcp/deploy.toml already exists — preserving");
-        return Ok(());
     }
-
-    std::fs::create_dir_all(&pmcp_dir)
-        .with_context(|| format!("Failed to create {}", pmcp_dir.display()))?;
-    let serialized = toml::to_string_pretty(config)
-        .context("Failed to serialize Cloud Run deploy.toml")?;
-    std::fs::write(&deploy_toml, serialized)
-        .with_context(|| format!("Failed to write {}", deploy_toml.display()))?;
-    println!("   ✓ Generated .pmcp/deploy.toml");
     Ok(())
 }
 
