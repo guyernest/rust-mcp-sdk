@@ -54,10 +54,20 @@ pub async fn deploy_to_cloud_run(config: &DeployConfig) -> Result<DeploymentOutp
     }
     println!();
 
-    // Step 3: Path-dep sanity (unchanged behavior).
-    let cargo_toml_path = config.project_root.join("Cargo.toml");
-    let cargo_toml =
-        std::fs::read_to_string(&cargo_toml_path).context("Failed to read Cargo.toml")?;
+    // Step 3: Path-dep sanity.
+    //
+    // For multi-crate-isolated layouts, `project_root` is intentionally a
+    // parent directory of the primary crate (so multiple sibling crates can
+    // be COPY'd into the Docker build context) and has no `Cargo.toml` of
+    // its own. Sanity-check the primary crate's manifest instead. For other
+    // layouts, the project_root is itself a Cargo package and we check that
+    // directly (unchanged behavior).
+    let cargo_toml_path = match config.layout.as_ref().filter(|l| l.kind == "multi-crate-isolated") {
+        Some(layout) => config.project_root.join(&layout.primary).join("Cargo.toml"),
+        None => config.project_root.join("Cargo.toml"),
+    };
+    let cargo_toml = std::fs::read_to_string(&cargo_toml_path)
+        .with_context(|| format!("Failed to read {}", cargo_toml_path.display()))?;
 
     if cargo_toml.contains("path = \"/") || cargo_toml.contains("path = \"~") {
         println!("   ⚠ Warning: Detected absolute path dependencies in Cargo.toml");
