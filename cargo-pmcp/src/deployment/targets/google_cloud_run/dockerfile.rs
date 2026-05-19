@@ -1,19 +1,65 @@
-use crate::deployment::DeployConfig;
+use crate::deployment::{DeployConfig, LayoutConfig};
 use anyhow::{Context, Result};
 
-/// Generate optimized Dockerfile for Rust MCP server on Cloud Run
+/// Generate the Cloud Run Dockerfile for `config.project_root`.
+///
+/// Layout selection precedence:
+/// 1. `[layout].kind = "multi-crate-isolated"` (issue #258) — surgical
+///    per-crate `COPY` lines + `cargo build --manifest-path`.
+/// 2. Root `Cargo.toml` contains `[workspace]` — workspace template
+///    (`COPY . .` + workspace build).
+/// 3. Otherwise — simple binary crate template.
+///
+/// Issue #259's distroless default applies to all three layouts; see
+/// [`runtime_stage`].
 pub fn generate_dockerfile(config: &DeployConfig) -> Result<()> {
-    // Detect if this is a workspace or simple binary crate
-    let cargo_toml_path = config.project_root.join("Cargo.toml");
-    let cargo_toml =
-        std::fs::read_to_string(&cargo_toml_path).context("Failed to read Cargo.toml")?;
+    let dockerfile_content = render_dockerfile(config)?;
+    let dockerfile_path = config.project_root.join("Dockerfile");
+    std::fs::write(&dockerfile_path, dockerfile_content).context("Failed to write Dockerfile")?;
+    println!("   ✓ Generated Dockerfile");
+    Ok(())
+}
 
-    let is_workspace = cargo_toml.contains("[workspace]");
+/// Render the Dockerfile contents without writing to disk.
+///
+/// Exposed for unit tests so the asserts can target the rendered text
+/// directly without touching the filesystem.
+pub(super) fn render_dockerfile(config: &DeployConfig) -> Result<String> {
+    let multi_crate = config
+        .layout
+        .as_ref()
+        .filter(|l| l.kind == "multi-crate-isolated");
 
-    let dockerfile_content = if is_workspace {
-        // Workspace-based Dockerfile - builds inside Docker
-        format!(
-            r#"# Multi-stage Dockerfile for Rust MCP Server on Google Cloud Run
+    let builder = if let Some(layout) = multi_crate {
+        builder_stage_multi_crate_isolated(layout, &resolve_binary_name(config))
+    } else {
+        let cargo_toml_path = config.project_root.join("Cargo.toml");
+        let cargo_toml =
+            std::fs::read_to_string(&cargo_toml_path).context("Failed to read Cargo.toml")?;
+        if cargo_toml.contains("[workspace]") {
+            builder_stage_workspace()
+        } else {
+            builder_stage_simple()
+        }
+    };
+
+    Ok(format!("{builder}\n{runtime}", runtime = runtime_stage(config)))
+}
+
+/// Resolve the binary name for `cargo build --bin <name>` and the runtime
+/// `COPY --from=builder` line. Falls back to `config.server.name` when
+/// `[server].binary` is unset.
+fn resolve_binary_name(config: &DeployConfig) -> String {
+    config
+        .server
+        .binary
+        .clone()
+        .unwrap_or_else(|| config.server.name.clone())
+}
+
+fn builder_stage_workspace() -> String {
+    String::from(
+        r#"# Multi-stage Dockerfile for Rust MCP Server on Google Cloud Run
 # Workspace project structure - builds inside Docker to handle path dependencies
 
 # Stage 1: Build the Rust binary
@@ -43,52 +89,14 @@ RUN LAMBDA_PKGS=$(cargo metadata --no-deps --format-version=1 2>/dev/null | \
 RUN find target/release -maxdepth 1 -type f -executable \
     ! -name "*lambda*" ! -name "*-lambda" \
     ! -name "*.so" ! -name "*.d" ! -name "build-script-*" \
-    -exec cp {{}} /app/mcp-server \; || \
+    -exec cp {} /app/mcp-server \; || \
     (echo "No server binary found in target/release" && exit 1)
+"#,
+    )
+}
 
-# Stage 2: Create minimal runtime image
-FROM debian:bookworm-slim
-
-# Install runtime dependencies
-RUN apt-get update && apt-get install -y \
-    ca-certificates \
-    libssl3 \
-    curl \
-    && rm -rf /var/lib/apt/lists/*
-
-# Create non-root user
-RUN useradd -m -u 1000 mcpserver
-
-# Copy binary from builder
-COPY --from=builder /app/mcp-server /usr/local/bin/mcp-server
-
-# Ensure binary is executable
-RUN chmod +x /usr/local/bin/mcp-server
-
-# Change to non-root user
-USER mcpserver
-
-# Set up working directory
-WORKDIR /home/mcpserver
-
-# Cloud Run will set the PORT environment variable
-# Default to 8080 if not set
-ENV PORT=8080
-
-# Expose the port
-EXPOSE $PORT
-
-# Health check
-HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:$PORT/health || exit 1
-
-# Run the MCP server
-# Cloud Run expects the server to bind to 0.0.0.0:$PORT
-CMD ["/usr/local/bin/mcp-server"]
-"#
-        )
-    } else {
-        // Simple binary crate Dockerfile - builds inside Docker
+fn builder_stage_simple() -> String {
+    String::from(
         r#"# Multi-stage Dockerfile for Rust MCP Server on Google Cloud Run
 # Simple binary crate - builds inside Docker
 
@@ -117,18 +125,124 @@ RUN find target/release -maxdepth 1 -type f -executable \
     ! -name "*.so" ! -name "*.d" ! -name "build-script-*" \
     -exec cp {} /app/mcp-server \; || \
     (echo "No server binary found in target/release" && exit 1)
+"#,
+    )
+}
 
-# Stage 2: Create minimal runtime image
-FROM debian:bookworm-slim
+/// Surgical builder for the multi-crate isolated layout (issue #258).
+///
+/// Emits one `COPY <crate>/Cargo.toml <crate>/Cargo.toml` + one
+/// `COPY <crate>/src <crate>/src` pair for each entry in `primary` +
+/// `path_deps`, then a single `cargo build --release --manifest-path
+/// <primary>/Cargo.toml --bin <binary>` step. The release artifact is
+/// then copied to `/app/mcp-server` so the runtime stage can rely on a
+/// fixed path.
+fn builder_stage_multi_crate_isolated(layout: &LayoutConfig, binary: &str) -> String {
+    // `path_deps` entries are scaffolded into Dockerfile COPY lines. We
+    // restrict to the Cargo crate-name character set (alphanumeric, `-`,
+    // `_`) — `.` is intentionally excluded to block `..` path escapes,
+    // and any other character that would inject Dockerfile syntax or
+    // shell semantics (semicolons, quotes, newlines, whitespace, `/`)
+    // is stripped.
+    let sanitize = |s: &str| -> String {
+        s.chars()
+            .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_'))
+            .collect()
+    };
 
-# Install runtime dependencies
+    let primary = sanitize(&layout.primary);
+    let safe_binary = sanitize(binary);
+
+    let mut copies = String::new();
+    copies.push_str(&format!("COPY {primary}/Cargo.toml {primary}/Cargo.toml\n"));
+    copies.push_str(&format!("COPY {primary}/src {primary}/src\n"));
+    for dep in &layout.path_deps {
+        let safe_dep = sanitize(dep);
+        if safe_dep.is_empty() {
+            continue;
+        }
+        copies.push_str(&format!("COPY {safe_dep}/Cargo.toml {safe_dep}/Cargo.toml\n"));
+        copies.push_str(&format!("COPY {safe_dep}/src {safe_dep}/src\n"));
+    }
+
+    format!(
+        r#"# Multi-stage Dockerfile for Rust MCP Server on Google Cloud Run
+# Multi-crate isolated layout — sibling crates with path-dep relationships
+# (issue 258). Only the primary crate and its declared path_deps are
+# copied into the build context. Unrelated siblings (e.g. aws-lambda)
+# are excluded to keep the image small and avoid cross-toolchain build
+# failures.
+
+# Stage 1: Build the Rust binary
+FROM rust:1.83-slim AS builder
+
+# Install build dependencies
 RUN apt-get update && apt-get install -y \
-    ca-certificates \
-    libssl3 \
-    curl \
+    pkg-config \
+    libssl-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Create non-root user
+# Create app directory
+WORKDIR /app
+
+# Surgical per-crate COPY lines (primary + declared path_deps)
+{copies}
+# Build the binary from the primary crate's manifest
+RUN cargo build --release \
+    --manifest-path {primary}/Cargo.toml \
+    --bin {safe_binary}
+
+# Cargo with `--manifest-path` places the release artifact under the
+# primary crate's own target/release dir. Some setups put it at the
+# top-level target/release dir; try both so the runtime stage gets a
+# stable path.
+RUN cp {primary}/target/release/{safe_binary} /app/mcp-server 2>/dev/null \
+    || cp target/release/{safe_binary} /app/mcp-server
+"#,
+    )
+}
+
+/// Runtime stage of the Dockerfile.
+///
+/// Emits a default secure runtime FROM image. Issue #259 prescribes
+/// `gcr.io/distroless/cc-debian12` (no shell, no apt, ~20 MB vs
+/// `debian:bookworm-slim`'s ~80 MB) as the default for Rust + rustls
+/// servers, with `[runtime].base = "..."` as an explicit opt-out and
+/// `[runtime].apt_packages = [...]` triggering an `apt-get install`
+/// layer when the operator opts back to a debian-family base.
+///
+/// This commit (commit 3) still defaults to `debian:bookworm-slim` —
+/// the distroless switch lands in the next commit, after the `[layout]`
+/// foundation is in. The function is structured so commit 4 only
+/// changes the default branch.
+fn runtime_stage(config: &DeployConfig) -> String {
+    let base = config
+        .runtime
+        .as_ref()
+        .and_then(|r| r.base.as_deref())
+        .unwrap_or("debian:bookworm-slim");
+
+    let apt_layer = if base.starts_with("debian:") || base.starts_with("ubuntu:") {
+        let default_pkgs = ["ca-certificates", "libssl3", "curl"];
+        let pkgs: Vec<&str> = config
+            .runtime
+            .as_ref()
+            .filter(|r| !r.apt_packages.is_empty())
+            .map(|r| r.apt_packages.iter().map(String::as_str).collect::<Vec<_>>())
+            .unwrap_or_else(|| default_pkgs.to_vec());
+        format!(
+            "RUN apt-get update && apt-get install -y \\\n    {} \\\n    && rm -rf /var/lib/apt/lists/*\n\n",
+            pkgs.join(" \\\n    ")
+        )
+    } else {
+        String::new()
+    };
+
+    format!(
+        r#"# Stage 2: Create minimal runtime image
+FROM {base}
+
+{apt_layer}# Create non-root user
 RUN useradd -m -u 1000 mcpserver
 
 # Copy binary from builder
@@ -157,16 +271,8 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
 # Run the MCP server
 # Cloud Run expects the server to bind to 0.0.0.0:$PORT
 CMD ["/usr/local/bin/mcp-server"]
-"#
-        .to_string()
-    };
-
-    let dockerfile_path = config.project_root.join("Dockerfile");
-    std::fs::write(&dockerfile_path, dockerfile_content).context("Failed to write Dockerfile")?;
-
-    println!("   ✓ Generated Dockerfile");
-
-    Ok(())
+"#,
+    )
 }
 
 /// Generate .dockerignore for optimal build context
@@ -463,5 +569,145 @@ mod tests {
         let cb = std::fs::read_to_string(tmp.path().join("cloudbuild.yaml")).expect("read");
         assert!(cb.contains("'--ingress'"));
         assert!(cb.contains("'internal'"));
+    }
+
+    // ---------- Layout / Dockerfile tests (issue #258) ----------
+
+    use crate::deployment::config::LayoutConfig;
+
+    /// Default simple-crate layout: no [workspace] in Cargo.toml, no
+    /// [layout] block. Dockerfile uses the simple template.
+    #[test]
+    fn dockerfile_simple_layout_emits_simple_template() {
+        let tmp = TempDir::new().expect("tmpdir");
+        write_cargo_toml(&tmp);
+        let config = make_config(&tmp);
+
+        let dockerfile = render_dockerfile(&config).expect("render");
+        assert!(dockerfile.contains("Simple binary crate"));
+        assert!(dockerfile.contains("COPY Cargo.toml Cargo.lock ./"));
+        assert!(!dockerfile.contains("multi-crate-isolated"));
+    }
+
+    /// Workspace layout detected via `[workspace]` table at the project
+    /// root. Dockerfile uses the workspace template.
+    #[test]
+    fn dockerfile_workspace_layout_emits_workspace_template() {
+        let tmp = TempDir::new().expect("tmpdir");
+        std::fs::write(
+            tmp.path().join("Cargo.toml"),
+            "[workspace]\nmembers = [\"crate-a\"]\n",
+        )
+        .expect("write cargo");
+        let config = make_config(&tmp);
+
+        let dockerfile = render_dockerfile(&config).expect("render");
+        assert!(dockerfile.contains("Workspace project structure"));
+        assert!(dockerfile.contains("COPY . ."));
+    }
+
+    /// Multi-crate isolated layout (#258): per-crate COPY pairs for
+    /// primary + each path_dep, then `cargo build --manifest-path
+    /// <primary>/Cargo.toml --bin <binary>`. Crucially, no `COPY . .`
+    /// (which would over-bundle sibling lambda crates).
+    #[test]
+    fn dockerfile_multi_crate_isolated_emits_surgical_copy_pairs() {
+        let tmp = TempDir::new().expect("tmpdir");
+        write_cargo_toml(&tmp);
+        let mut config = make_config(&tmp);
+        config.layout = Some(LayoutConfig {
+            kind: "multi-crate-isolated".to_string(),
+            primary: "gcp-cloud-run".to_string(),
+            path_deps: vec!["auth-echo-core".to_string()],
+        });
+        config.server.binary = Some("server".to_string());
+
+        let dockerfile = render_dockerfile(&config).expect("render");
+        assert!(dockerfile.contains("COPY gcp-cloud-run/Cargo.toml gcp-cloud-run/Cargo.toml"));
+        assert!(dockerfile.contains("COPY gcp-cloud-run/src gcp-cloud-run/src"));
+        assert!(dockerfile.contains("COPY auth-echo-core/Cargo.toml auth-echo-core/Cargo.toml"));
+        assert!(dockerfile.contains("COPY auth-echo-core/src auth-echo-core/src"));
+        assert!(
+            dockerfile.contains("--manifest-path gcp-cloud-run/Cargo.toml")
+                || dockerfile.contains("--manifest-path gcp-cloud-run/Cargo.toml \\"),
+            "expected manifest-path build step: {dockerfile}"
+        );
+        assert!(dockerfile.contains("--bin server"));
+        // Critically: must NOT include `COPY . .` which would over-bundle.
+        assert!(
+            !dockerfile.contains("COPY . ."),
+            "multi-crate isolated must not COPY . ."
+        );
+        // Sibling lambda crates must NOT appear in any COPY line. (The
+        // file may mention `aws-lambda` in an explanatory header comment;
+        // we only assert it does not appear in a Dockerfile directive.)
+        for line in dockerfile.lines().filter(|l| l.starts_with("COPY ")) {
+            assert!(
+                !line.contains("aws-lambda") && !line.contains("lambda"),
+                "lambda crate leaked into COPY directive: {line}"
+            );
+        }
+    }
+
+    /// `[layout]` falls back to `config.server.name` when `binary` is
+    /// unset — preserves backward-compat with users who don't set the
+    /// new optional field.
+    #[test]
+    fn dockerfile_multi_crate_isolated_binary_falls_back_to_server_name() {
+        let tmp = TempDir::new().expect("tmpdir");
+        write_cargo_toml(&tmp);
+        let mut config = make_config(&tmp);
+        config.layout = Some(LayoutConfig {
+            kind: "multi-crate-isolated".to_string(),
+            primary: "gcp".to_string(),
+            path_deps: vec![],
+        });
+        // No config.server.binary set — should fall back to server.name.
+        let dockerfile = render_dockerfile(&config).expect("render");
+        assert!(dockerfile.contains("--bin auth-echo-cloud-run"));
+    }
+
+    /// Crate-name sanitization rejects injection attempts. A path_dep
+    /// containing shell-meaningful characters must not propagate them
+    /// into the generated Dockerfile.
+    #[test]
+    fn dockerfile_multi_crate_isolated_sanitizes_crate_names() {
+        let tmp = TempDir::new().expect("tmpdir");
+        write_cargo_toml(&tmp);
+        let mut config = make_config(&tmp);
+        config.layout = Some(LayoutConfig {
+            kind: "multi-crate-isolated".to_string(),
+            primary: "gcp-run".to_string(),
+            path_deps: vec!["evil; rm -rf /".to_string(), "../escape".to_string()],
+        });
+        let dockerfile = render_dockerfile(&config).expect("render");
+        // The sanitized form ("evilrm-rf" / "escape") may appear as crate
+        // names, but no dangerous chars / path-escape segments must
+        // propagate into the COPY/RUN lines.
+        for line in dockerfile.lines().filter(|l| {
+            l.starts_with("COPY")
+                || l.starts_with("RUN")
+                || l.starts_with("CMD")
+                || l.starts_with("    --")
+                || l.starts_with("    cp ")
+                || l.starts_with("    || ")
+        }) {
+            assert!(
+                !line.contains(';'),
+                "directive contains semicolon: {line}"
+            );
+            assert!(
+                !line.contains(".."),
+                "directive contains `..` path escape: {line}"
+            );
+            assert!(
+                !line.contains("rm -rf"),
+                "directive contains shell injection: {line}"
+            );
+        }
+        // Positive check: sanitized form is present where path_deps used
+        // to be.
+        assert!(dockerfile.contains("evilrm-rf/Cargo.toml"));
+        assert!(dockerfile.contains("escape/Cargo.toml"));
     }
 }
