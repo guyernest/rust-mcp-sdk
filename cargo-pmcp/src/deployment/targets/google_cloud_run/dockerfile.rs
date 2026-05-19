@@ -204,42 +204,85 @@ RUN cp {primary}/target/release/{safe_binary} /app/mcp-server 2>/dev/null \
 
 /// Runtime stage of the Dockerfile.
 ///
-/// Emits a default secure runtime FROM image. Issue #259 prescribes
-/// `gcr.io/distroless/cc-debian12` (no shell, no apt, ~20 MB vs
-/// `debian:bookworm-slim`'s ~80 MB) as the default for Rust + rustls
-/// servers, with `[runtime].base = "..."` as an explicit opt-out and
-/// `[runtime].apt_packages = [...]` triggering an `apt-get install`
-/// layer when the operator opts back to a debian-family base.
+/// Emits the runtime stage with the appropriate shape for the runtime
+/// base. Closes upstream paiml/rust-mcp-sdk#259:
 ///
-/// This commit (commit 3) still defaults to `debian:bookworm-slim` —
-/// the distroless switch lands in the next commit, after the `[layout]`
-/// foundation is in. The function is structured so commit 4 only
-/// changes the default branch.
+/// - Default base is `gcr.io/distroless/cc-debian12` — no shell, no apt,
+///   ~20 MB vs `debian:bookworm-slim`'s ~80 MB. Cuts cold-start image-pull
+///   time and the post-exploitation attack surface. Distroless runs as
+///   `nonroot` (uid 65532) by default, so no `useradd` is needed.
+/// - `[runtime].base = "..."` overrides verbatim.
+/// - `[runtime].apt_packages = [...]` is honored only when `base` resolves
+///   to a debian-family image. Empty list (the default) → no apt layer.
 fn runtime_stage(config: &DeployConfig) -> String {
     let base = config
         .runtime
         .as_ref()
         .and_then(|r| r.base.as_deref())
-        .unwrap_or("debian:bookworm-slim");
+        .unwrap_or("gcr.io/distroless/cc-debian12");
 
-    let apt_layer = if base.starts_with("debian:") || base.starts_with("ubuntu:") {
-        let default_pkgs = ["ca-certificates", "libssl3", "curl"];
-        let pkgs: Vec<&str> = config
-            .runtime
-            .as_ref()
-            .filter(|r| !r.apt_packages.is_empty())
-            .map(|r| r.apt_packages.iter().map(String::as_str).collect::<Vec<_>>())
-            .unwrap_or_else(|| default_pkgs.to_vec());
+    if is_debian_family(base) {
+        runtime_stage_debian(config, base)
+    } else {
+        runtime_stage_distroless(base)
+    }
+}
+
+fn is_debian_family(base: &str) -> bool {
+    base.starts_with("debian:") || base.starts_with("ubuntu:")
+}
+
+/// Distroless / non-shell runtime stage.
+///
+/// Contains no shell, no package manager, no `useradd`, no
+/// `HEALTHCHECK CMD curl` (no curl in the image). Cloud Run health-checks
+/// externally on `PORT`, so the in-image HEALTHCHECK is unnecessary.
+fn runtime_stage_distroless(base: &str) -> String {
+    format!(
+        r#"# Stage 2: distroless runtime — minimal attack surface (issue #259)
+# No shell, no apt, no package manager. Cloud Run health-checks externally
+# on $PORT, so no in-image HEALTHCHECK directive is needed.
+FROM {base}
+
+# Copy the prebuilt binary from the builder stage. Distroless cc runs as
+# `nonroot` (uid 65532) by default — no useradd / USER directive needed.
+COPY --from=builder /app/mcp-server /usr/local/bin/mcp-server
+
+# Cloud Run sets PORT (defaults to 8080); the server is expected to bind
+# 0.0.0.0:$PORT.
+ENV PORT=8080
+EXPOSE $PORT
+
+CMD ["/usr/local/bin/mcp-server"]
+"#,
+    )
+}
+
+/// Debian/Ubuntu runtime stage — emitted only when the operator opts back
+/// to a shell-enabled base via `[runtime].base = "debian:..."` (or
+/// `"ubuntu:..."`).
+///
+/// `[runtime].apt_packages` drives the apt-install layer; an empty list
+/// (the default) emits no apt layer at all, leaving the base image
+/// untouched.
+fn runtime_stage_debian(config: &DeployConfig, base: &str) -> String {
+    let pkgs: Vec<&str> = config
+        .runtime
+        .as_ref()
+        .map(|r| r.apt_packages.iter().map(String::as_str).collect::<Vec<_>>())
+        .unwrap_or_default();
+
+    let apt_layer = if pkgs.is_empty() {
+        String::new()
+    } else {
         format!(
-            "RUN apt-get update && apt-get install -y \\\n    {} \\\n    && rm -rf /var/lib/apt/lists/*\n\n",
+            "# Install runtime apt packages declared in [runtime].apt_packages\nRUN apt-get update && apt-get install -y \\\n    {} \\\n    && rm -rf /var/lib/apt/lists/*\n\n",
             pkgs.join(" \\\n    ")
         )
-    } else {
-        String::new()
     };
 
     format!(
-        r#"# Stage 2: Create minimal runtime image
+        r#"# Stage 2: debian-family runtime — opted in via [runtime].base
 FROM {base}
 
 {apt_layer}# Create non-root user
@@ -263,10 +306,6 @@ ENV PORT=8080
 
 # Expose the port
 EXPOSE $PORT
-
-# Health check
-HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:$PORT/health || exit 1
 
 # Run the MCP server
 # Cloud Run expects the server to bind to 0.0.0.0:$PORT
@@ -709,5 +748,136 @@ mod tests {
         // to be.
         assert!(dockerfile.contains("evilrm-rf/Cargo.toml"));
         assert!(dockerfile.contains("escape/Cargo.toml"));
+    }
+
+    // ---------- Runtime / distroless tests (issue #259) ----------
+
+    use crate::deployment::config::RuntimeConfig;
+
+    /// Extract just the runtime (Stage 2) portion of a rendered
+    /// Dockerfile. The builder (Stage 1) uses `apt-get` to install
+    /// pkg-config + libssl-dev regardless of runtime base, so any
+    /// runtime-stage assertions about apt / useradd / etc. need to be
+    /// scoped to Stage 2.
+    fn runtime_portion(dockerfile: &str) -> &str {
+        let start = dockerfile
+            .find("# Stage 2:")
+            .expect("runtime stage marker present");
+        &dockerfile[start..]
+    }
+
+    /// Default runtime base is distroless. No apt layer, no useradd, no
+    /// HEALTHCHECK curl. Closes upstream #259.
+    #[test]
+    fn dockerfile_runtime_defaults_to_distroless() {
+        let tmp = TempDir::new().expect("tmpdir");
+        write_cargo_toml(&tmp);
+        let config = make_config(&tmp);
+
+        let dockerfile = render_dockerfile(&config).expect("render");
+        let runtime = runtime_portion(&dockerfile);
+        assert!(
+            runtime.contains("FROM gcr.io/distroless/cc-debian12"),
+            "default runtime FROM must be distroless: {runtime}"
+        );
+        assert!(!runtime.contains("apt-get install"));
+        assert!(!runtime.contains("RUN useradd"));
+        // Assert no HEALTHCHECK *directive* (a directive starts at the
+        // line start; the explanatory comment may still mention the
+        // keyword).
+        assert!(
+            !runtime
+                .lines()
+                .any(|l| l.trim_start().starts_with("HEALTHCHECK")),
+            "no HEALTHCHECK directive in distroless runtime"
+        );
+        assert!(!runtime.contains("RUN chmod +x"));
+        assert!(runtime.contains("CMD [\"/usr/local/bin/mcp-server\"]"));
+    }
+
+    /// `[runtime].base = "debian:bookworm-slim"` opts back to the
+    /// shell-enabled runtime stage. With no `apt_packages` declared, no
+    /// apt layer is emitted (operator opted out without declaring any
+    /// packages — they get bare debian).
+    #[test]
+    fn dockerfile_runtime_debian_opt_out_no_apt_layer_by_default() {
+        let tmp = TempDir::new().expect("tmpdir");
+        write_cargo_toml(&tmp);
+        let mut config = make_config(&tmp);
+        config.runtime = Some(RuntimeConfig {
+            base: Some("debian:bookworm-slim".to_string()),
+            apt_packages: vec![],
+        });
+
+        let dockerfile = render_dockerfile(&config).expect("render");
+        let runtime = runtime_portion(&dockerfile);
+        assert!(runtime.contains("FROM debian:bookworm-slim"));
+        // No apt layer in the runtime stage.
+        assert!(!runtime.contains("apt-get install"));
+        // Shell-enabled scaffolding is present.
+        assert!(runtime.contains("useradd -m -u 1000 mcpserver"));
+        assert!(runtime.contains("USER mcpserver"));
+    }
+
+    /// `[runtime].apt_packages = ["ca-certificates"]` with a debian base
+    /// produces an apt-install layer with exactly those packages.
+    #[test]
+    fn dockerfile_runtime_debian_with_apt_packages_emits_apt_layer() {
+        let tmp = TempDir::new().expect("tmpdir");
+        write_cargo_toml(&tmp);
+        let mut config = make_config(&tmp);
+        config.runtime = Some(RuntimeConfig {
+            base: Some("debian:bookworm-slim".to_string()),
+            apt_packages: vec!["ca-certificates".to_string(), "libssl3".to_string()],
+        });
+
+        let dockerfile = render_dockerfile(&config).expect("render");
+        let runtime = runtime_portion(&dockerfile);
+        assert!(runtime.contains("FROM debian:bookworm-slim"));
+        assert!(runtime.contains("apt-get install -y"));
+        assert!(runtime.contains("ca-certificates"));
+        assert!(runtime.contains("libssl3"));
+        // Cleanup line for apt cache.
+        assert!(runtime.contains("rm -rf /var/lib/apt/lists/*"));
+    }
+
+    /// `apt_packages` is ignored on non-debian bases (distroless,
+    /// alpine, scratch, etc.). Issue #259 explicitly scopes the
+    /// apt-packages knob to debian-family bases.
+    #[test]
+    fn dockerfile_runtime_apt_packages_ignored_on_distroless() {
+        let tmp = TempDir::new().expect("tmpdir");
+        write_cargo_toml(&tmp);
+        let mut config = make_config(&tmp);
+        config.runtime = Some(RuntimeConfig {
+            base: None,
+            apt_packages: vec!["ca-certificates".to_string()],
+        });
+
+        let dockerfile = render_dockerfile(&config).expect("render");
+        let runtime = runtime_portion(&dockerfile);
+        assert!(runtime.contains("FROM gcr.io/distroless/cc-debian12"));
+        assert!(!runtime.contains("apt-get install"));
+    }
+
+    /// `[runtime].base = "<arbitrary image>"` uses the value verbatim
+    /// and falls through to the distroless-shaped (no-shell) runtime
+    /// stage. Operator-managed bases that aren't debian/ubuntu get the
+    /// minimal scaffolding so the operator is in control of any
+    /// additional layers.
+    #[test]
+    fn dockerfile_runtime_custom_base_uses_distroless_shape() {
+        let tmp = TempDir::new().expect("tmpdir");
+        write_cargo_toml(&tmp);
+        let mut config = make_config(&tmp);
+        config.runtime = Some(RuntimeConfig {
+            base: Some("gcr.io/distroless/static-debian12".to_string()),
+            apt_packages: vec![],
+        });
+
+        let dockerfile = render_dockerfile(&config).expect("render");
+        let runtime = runtime_portion(&dockerfile);
+        assert!(runtime.contains("FROM gcr.io/distroless/static-debian12"));
+        assert!(!runtime.contains("RUN useradd"));
     }
 }
