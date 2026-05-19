@@ -1,6 +1,7 @@
 mod auth;
 mod deploy;
 mod dockerfile;
+mod init;
 
 use anyhow::{bail, Context, Result};
 use async_trait::async_trait;
@@ -93,40 +94,7 @@ impl DeploymentTarget for GoogleCloudRunTarget {
     }
 
     async fn init(&self, config: &DeployConfig) -> Result<()> {
-        println!("🚀 Initializing Google Cloud Run deployment...");
-        println!();
-
-        // Generate Dockerfile
-        dockerfile::generate_dockerfile(config)?;
-
-        // Generate .dockerignore
-        dockerfile::generate_dockerignore(config)?;
-
-        // Generate cloudbuild.yaml (optional)
-        dockerfile::generate_cloudbuild(config)?;
-
-        println!("✅ Google Cloud Run deployment initialized!");
-        println!();
-        println!("📝 Next steps:");
-        println!("   1. Authenticate: gcloud auth login");
-        println!("   2. Set project: gcloud config set project PROJECT_ID");
-        println!("   3. Deploy: cargo pmcp deploy --target google-cloud-run");
-        println!();
-        println!("💡 Generated files:");
-        println!("   • Dockerfile - Multi-stage Rust build");
-        println!("   • .dockerignore - Optimize build context");
-        println!("   • cloudbuild.yaml - Optional Cloud Build configuration");
-        println!();
-        println!("🔧 Configuration options:");
-        println!("   • Region: Set via CLOUD_RUN_REGION (default: us-central1)");
-        println!("   • Memory: Set via CLOUD_RUN_MEMORY (default: 512Mi)");
-        println!("   • CPU: Set via CLOUD_RUN_CPU (default: 1)");
-        println!("   • Max instances: Set via CLOUD_RUN_MAX_INSTANCES (default: 10)");
-        println!(
-            "   • Allow unauthenticated: Set via CLOUD_RUN_ALLOW_UNAUTHENTICATED (default: true)"
-        );
-
-        Ok(())
+        init::init_google_cloud_run(config)
     }
 
     async fn build(&self, config: &DeployConfig) -> Result<BuildArtifact> {

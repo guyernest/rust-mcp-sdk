@@ -593,6 +593,27 @@ impl DeployCommand {
                             }
 
                             cmd.execute()
+                        } else if target_id == "google-cloud-run" {
+                            // Cloud Run init writes a Cloud Run-shaped
+                            // .pmcp/deploy.toml ([target] + [gcp] + [server] +
+                            // [environment]) — see upstream issue #260.
+                            // Placeholders are filled in by the operator; the
+                            // region flag overrides the schema default when
+                            // non-empty.
+                            let server_name = detect_server_name(&project_root)?;
+                            let region_str = if region.is_empty() {
+                                "us-central1".to_string()
+                            } else {
+                                region.clone()
+                            };
+                            let config =
+                                crate::deployment::DeployConfig::default_for_cloud_run_server(
+                                    server_name,
+                                    "your-gcp-project-id".to_string(),
+                                    region_str,
+                                    project_root.clone(),
+                                );
+                            target.init(&config).await
                         } else {
                             // For other targets (pmcp-run, etc.), use the new modular approach
                             // Auto-detect server name from workspace or use package name
