@@ -38,9 +38,7 @@ pub fn init_google_cloud_run(config: &DeployConfig) -> Result<()> {
     println!("✅ Google Cloud Run deployment initialized!");
     println!();
     println!("📝 Next steps:");
-    println!(
-        "   1. Edit .pmcp/deploy.toml: set [gcp].project_id, [server].name,"
-    );
+    println!("   1. Edit .pmcp/deploy.toml: set [gcp].project_id, [server].name,");
     println!("      and any [environment] keys your server requires");
     println!("   2. Authenticate: gcloud auth login");
     println!("   3. Set project: gcloud config set project PROJECT_ID");

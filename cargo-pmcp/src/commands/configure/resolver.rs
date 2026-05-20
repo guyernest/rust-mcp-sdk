@@ -750,7 +750,11 @@ create_dashboard = false
             std::fs::write(ws.join(".pmcp").join("active-target"), "prod\n").unwrap();
 
             let mut deploy = make_test_deploy_config_with_region("us-east-1");
-            deploy.aws.account_id = Some("999888777666".into());
+            deploy
+                .aws
+                .as_mut()
+                .expect("test fixture has aws")
+                .account_id = Some("999888777666".into());
 
             let r = resolve_target(None, None, ws, Some(&deploy))
                 .unwrap()

@@ -1477,8 +1477,8 @@ base = "gcr.io/distroless/cc-debian12"
 
     #[test]
     fn cloud_run_deploy_toml_loads() {
-        let config: DeployConfig = toml::from_str(cloud_run_toml())
-            .expect("Cloud Run deploy.toml shape must load");
+        let config: DeployConfig =
+            toml::from_str(cloud_run_toml()).expect("Cloud Run deploy.toml shape must load");
         assert_eq!(config.target.target_type, "google-cloud-run");
         assert!(config.aws.is_none(), "aws absent in Cloud Run config");
         let gcp = config.gcp.as_ref().expect("gcp block present");

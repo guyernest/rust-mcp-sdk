@@ -43,7 +43,10 @@ pub(super) fn render_dockerfile(config: &DeployConfig) -> Result<String> {
         }
     };
 
-    Ok(format!("{builder}\n{runtime}", runtime = runtime_stage(config)))
+    Ok(format!(
+        "{builder}\n{runtime}",
+        runtime = runtime_stage(config)
+    ))
 }
 
 /// Resolve the binary name for `cargo build --bin <name>` and the runtime
@@ -162,7 +165,9 @@ fn builder_stage_multi_crate_isolated(layout: &LayoutConfig, binary: &str) -> St
         if safe_dep.is_empty() {
             continue;
         }
-        copies.push_str(&format!("COPY {safe_dep}/Cargo.toml {safe_dep}/Cargo.toml\n"));
+        copies.push_str(&format!(
+            "COPY {safe_dep}/Cargo.toml {safe_dep}/Cargo.toml\n"
+        ));
         copies.push_str(&format!("COPY {safe_dep}/src {safe_dep}/src\n"));
     }
 
@@ -270,7 +275,12 @@ fn runtime_stage_debian(config: &DeployConfig, base: &str) -> String {
     let pkgs: Vec<&str> = config
         .runtime
         .as_ref()
-        .map(|r| r.apt_packages.iter().map(String::as_str).collect::<Vec<_>>())
+        .map(|r| {
+            r.apt_packages
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>()
+        })
         .unwrap_or_default();
 
     let apt_layer = if pkgs.is_empty() {
@@ -732,10 +742,7 @@ mod tests {
                 || l.starts_with("    cp ")
                 || l.starts_with("    || ")
         }) {
-            assert!(
-                !line.contains(';'),
-                "directive contains semicolon: {line}"
-            );
+            assert!(!line.contains(';'), "directive contains semicolon: {line}");
             assert!(
                 !line.contains(".."),
                 "directive contains `..` path escape: {line}"
