@@ -21,7 +21,22 @@ pub struct DeployConfig {
     pub environment: HashMap<String, String>,
     #[serde(default)]
     pub secrets: HashMap<String, String>,
+    /// OAuth / identity configuration.
+    ///
+    /// Defaults to `AuthConfig::default()` (`enabled = false, provider = "none"`)
+    /// when the `[auth]` block is omitted from `deploy.toml`. This lets minimum-
+    /// schema deploy.toml files (per upstream issue #260) load without boilerplate
+    /// `[auth] enabled=false, provider="none"` stanzas. Servers that own their
+    /// own auth_provider() in-binary should leave `[auth]` omitted.
+    #[serde(default)]
     pub auth: AuthConfig,
+    /// Observability configuration.
+    ///
+    /// Defaults to `ObservabilityConfig::default()` (everything zero/disabled)
+    /// when the `[observability]` block is omitted from `deploy.toml`. Per-field
+    /// `#[serde(default)]` also makes partial blocks loadable — most fields are
+    /// AWS-Lambda-specific and unused by Cloud Run, so omitting them is normal.
+    #[serde(default)]
     pub observability: ObservabilityConfig,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub api_gateway: Option<ApiGatewayConfig>,
@@ -468,12 +483,15 @@ impl Default for CognitoConfig {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ObservabilityConfig {
+    #[serde(default)]
     pub log_retention_days: u32,
+    #[serde(default)]
     pub enable_xray: bool,
+    #[serde(default)]
     pub create_dashboard: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub alarms: Option<AlarmConfig>,
 }
 
@@ -1530,6 +1548,75 @@ base = "gcr.io/distroless/cc-debian12"
             PathBuf::from("/tmp"),
         );
         let _ = config.aws();
+    }
+
+    /// Minimum-viable Cloud Run deploy.toml per upstream issue #260 must load
+    /// without `[auth]` and `[observability]` blocks. Both fields now carry
+    /// `#[serde(default)]` so the documented "schema is `[target] + [gcp] +
+    /// [server] + [environment]`" promise actually holds.
+    #[test]
+    fn minimum_schema_cloud_run_loads_without_auth_or_observability() {
+        let toml_src = r#"
+[target]
+type = "google-cloud-run"
+version = "1.0.0"
+
+[gcp]
+project_id = "my-gcp-project"
+region = "us-central1"
+
+[server]
+name = "auth-echo-cloud-run"
+memory = "256Mi"
+
+[environment]
+RUST_LOG = "info"
+"#;
+        let config: DeployConfig = toml::from_str(toml_src).expect(
+            "minimum-schema Cloud Run deploy.toml must load without [auth]/[observability]",
+        );
+        assert_eq!(config.target.target_type, "google-cloud-run");
+        let gcp = config.gcp.as_ref().expect("gcp present");
+        assert_eq!(gcp.project_id, "my-gcp-project");
+        // Defaults applied when [auth] is omitted.
+        assert!(!config.auth.enabled, "auth.enabled defaults to false");
+        assert_eq!(config.auth.provider, "none");
+        assert!(config.auth.callback_urls.is_empty());
+        // Defaults applied when [observability] is omitted.
+        assert_eq!(config.observability.log_retention_days, 0);
+        assert!(!config.observability.enable_xray);
+        assert!(!config.observability.create_dashboard);
+        assert!(config.observability.alarms.is_none());
+    }
+
+    /// Partial `[observability]` blocks must also load — per-field
+    /// `#[serde(default)]` lets operators specify only the knobs they care
+    /// about (e.g., AWS Lambda users who want xray on but accept default
+    /// retention).
+    #[test]
+    fn partial_observability_block_loads() {
+        let toml_src = r#"
+[target]
+type = "aws-lambda"
+version = "1.0.0"
+
+[aws]
+region = "us-east-1"
+
+[server]
+name = "s"
+
+[environment]
+
+[observability]
+enable_xray = true
+"#;
+        let config: DeployConfig =
+            toml::from_str(toml_src).expect("partial [observability] block must load");
+        assert!(config.observability.enable_xray, "explicitly set");
+        assert_eq!(config.observability.log_retention_days, 0, "field default");
+        assert!(!config.observability.create_dashboard, "field default");
+        assert!(config.observability.alarms.is_none(), "field default");
     }
 
     #[test]
