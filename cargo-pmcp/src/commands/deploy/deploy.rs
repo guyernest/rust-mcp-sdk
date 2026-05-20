@@ -45,7 +45,7 @@ impl DeployExecutor {
         crate::deployment::iam::emit_warnings(&warnings);
 
         println!("📋 Server: {}", config.server.name);
-        println!("🌍 Region: {}", config.aws.region);
+        println!("🌍 Region: {}", config.aws().region);
         println!();
 
         let builder = crate::deployment::builder::BinaryBuilder::new(self.project_root.clone());
@@ -63,7 +63,7 @@ impl DeployExecutor {
         let stack_name = format!("{}-stack", config.server.name);
         let outputs = crate::deployment::load_cdk_outputs(
             &self.project_root,
-            &config.aws.region,
+            &config.aws().region,
             &stack_name,
         )?;
 
@@ -106,10 +106,10 @@ impl DeployExecutor {
         ])
         .current_dir(&deploy_dir)
         .env("SERVER_NAME", &config.server.name)
-        .env("AWS_REGION", &config.aws.region);
+        .env("AWS_REGION", &config.aws().region);
 
         // If account ID is specified, set it
-        if let Some(account_id) = &config.aws.account_id {
+        if let Some(account_id) = &config.aws().account_id {
             cmd.env("CDK_DEFAULT_ACCOUNT", account_id);
         }
 

@@ -176,7 +176,7 @@ impl DeploymentTarget for AwsLambdaTarget {
 
     async fn outputs(&self, config: &DeployConfig) -> Result<DeploymentOutputs> {
         let stack_name = format!("{}-stack", config.server.name);
-        crate::deployment::load_cdk_outputs(&config.project_root, &config.aws.region, &stack_name)
+        crate::deployment::load_cdk_outputs(&config.project_root, &config.aws().region, &stack_name)
     }
 
     async fn logs(&self, _config: &DeployConfig, _tail: bool, _lines: usize) -> Result<()> {

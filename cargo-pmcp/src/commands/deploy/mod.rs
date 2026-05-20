@@ -593,6 +593,44 @@ impl DeployCommand {
                             }
 
                             cmd.execute()
+                        } else if target_id == "google-cloud-run" {
+                            // Cloud Run init writes a Cloud Run-shaped
+                            // .pmcp/deploy.toml ([target] + [gcp] + [server] +
+                            // [environment]) — see upstream issue #260.
+                            //
+                            // Prefer loading the existing deploy.toml so that
+                            // operator-authored [layout] / [server].binary /
+                            // [environment] blocks flow into the Dockerfile +
+                            // cloudbuild.yaml generators. Without this, a
+                            // pre-existing deploy.toml is preserved on disk
+                            // (save_if_missing) but the in-memory default is
+                            // still what generate_dockerfile() sees, so
+                            // [layout] kind = "multi-crate-isolated" is
+                            // silently ignored on re-init.
+                            //
+                            // Gate the load on file existence so parse and
+                            // permission errors propagate as deploy failures
+                            // instead of silently falling back to a default
+                            // scaffold (which would mask a malformed
+                            // deploy.toml as "no file present").
+                            let deploy_toml_path = project_root.join(".pmcp/deploy.toml");
+                            let config = if deploy_toml_path.exists() {
+                                crate::deployment::DeployConfig::load(&project_root)?
+                            } else {
+                                let server_name = detect_server_name(&project_root)?;
+                                let region_str = if region.is_empty() {
+                                    "us-central1".to_string()
+                                } else {
+                                    region.clone()
+                                };
+                                crate::deployment::DeployConfig::default_for_cloud_run_server(
+                                    server_name,
+                                    "your-gcp-project-id".to_string(),
+                                    region_str,
+                                    project_root.clone(),
+                                )
+                            };
+                            target.init(&config).await
                         } else {
                             // For other targets (pmcp-run, etc.), use the new modular approach
                             // Auto-detect server name from workspace or use package name
@@ -1027,6 +1065,40 @@ impl DeployCommand {
 
         // Default to AWS Lambda
         Ok("aws-lambda".to_string())
+    }
+
+    fn find_project_root() -> Result<PathBuf> {
+        let current_dir = std::env::current_dir().context("Failed to get current directory")?;
+
+        // First pass: prefer the nearest ancestor that has `.pmcp/deploy.toml` —
+        // that's the explicit signal of "this is the project root for cargo-pmcp
+        // deploy." Without this, the Cargo.toml-only walk-up below would skip over
+        // deployment roots that aren't themselves Cargo packages (e.g.
+        // multi-crate-isolated layouts where the deploy.toml lives one level above
+        // the primary + path_deps crates and the parent dir has no Cargo.toml of
+        // its own).
+        let mut dir = current_dir.as_path();
+        loop {
+            if dir.join(".pmcp/deploy.toml").exists() {
+                return Ok(dir.to_path_buf());
+            }
+            match dir.parent() {
+                Some(parent) => dir = parent,
+                None => break,
+            }
+        }
+
+        // Second pass: fall back to nearest ancestor with a `Cargo.toml`.
+        let mut dir = current_dir.as_path();
+        loop {
+            if dir.join("Cargo.toml").exists() {
+                return Ok(dir.to_path_buf());
+            }
+
+            dir = dir.parent().ok_or_else(|| {
+                anyhow::anyhow!("Could not find Cargo.toml in any parent directory")
+            })?;
+        }
     }
 
     /// Save deployment info to .pmcp/deployment.toml for landing page integration

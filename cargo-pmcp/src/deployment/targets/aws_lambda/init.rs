@@ -5,7 +5,7 @@ use anyhow::Result;
 pub async fn init_aws_lambda(config: &DeployConfig) -> Result<()> {
     // Use the existing InitCommand from commands/deploy/init.rs
     let mut init_cmd = crate::commands::deploy::init::InitCommand::new(config.project_root.clone())
-        .with_region(&config.aws.region)
+        .with_region(&config.aws().region)
         .with_credentials_check(true);
 
     // Pass through OAuth configuration if enabled

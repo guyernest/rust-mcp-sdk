@@ -9,12 +9,34 @@ use crate::deployment::widgets::WidgetsConfig;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DeployConfig {
     pub target: TargetConfig,
-    pub aws: AwsConfig,
+    /// AWS configuration (required for `aws-lambda` and `pmcp-run` targets;
+    /// absent for Cloud Run and other non-AWS targets).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub aws: Option<AwsConfig>,
+    /// GCP configuration (required for the `google-cloud-run` target;
+    /// absent for AWS-only targets).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gcp: Option<GcpConfig>,
     pub server: ServerConfig,
     pub environment: HashMap<String, String>,
     #[serde(default)]
     pub secrets: HashMap<String, String>,
+    /// OAuth / identity configuration.
+    ///
+    /// Defaults to `AuthConfig::default()` (`enabled = false, provider = "none"`)
+    /// when the `[auth]` block is omitted from `deploy.toml`. This lets minimum-
+    /// schema deploy.toml files (per upstream issue #260) load without boilerplate
+    /// `[auth] enabled=false, provider="none"` stanzas. Servers that own their
+    /// own auth_provider() in-binary should leave `[auth]` omitted.
+    #[serde(default)]
     pub auth: AuthConfig,
+    /// Observability configuration.
+    ///
+    /// Defaults to `ObservabilityConfig::default()` (everything zero/disabled)
+    /// when the `[observability]` block is omitted from `deploy.toml`. Per-field
+    /// `#[serde(default)]` also makes partial blocks loadable — most fields are
+    /// AWS-Lambda-specific and unused by Cloud Run, so omitting them is normal.
+    #[serde(default)]
     pub observability: ObservabilityConfig,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub api_gateway: Option<ApiGatewayConfig>,
@@ -47,6 +69,25 @@ pub struct DeployConfig {
     /// no-`[post_deploy_tests]` path.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub post_deploy_tests: Option<PostDeployTestsConfig>,
+
+    /// Opt-in layout descriptor for multi-crate isolated Cargo layouts.
+    ///
+    /// When present, drives surgical per-crate `COPY` lines in the generated
+    /// Dockerfile and a `cargo build --manifest-path` build step. Used only
+    /// by the `google-cloud-run` target today; ignored by AWS Lambda.
+    /// See upstream issue #258 for the multi-crate isolated pattern.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub layout: Option<LayoutConfig>,
+
+    /// Opt-out runtime-stage knob for the generated Dockerfile.
+    ///
+    /// When `base` is `None`, the scaffolder emits the target-appropriate
+    /// secure default (currently `gcr.io/distroless/cc-debian12` for
+    /// Cloud Run). When `base` is `Some`, the scaffolder uses that value
+    /// verbatim. `apt_packages` is honored only when `base` resolves to a
+    /// debian-family image. See upstream issue #259.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime: Option<RuntimeConfig>,
 
     /// Project root directory (not serialized)
     #[serde(skip)]
@@ -105,13 +146,124 @@ pub struct AwsConfig {
     pub account_id: Option<String>,
 }
 
+/// Google Cloud configuration for the `google-cloud-run` target.
+///
+/// Mirrors [`AwsConfig`] in shape (project + region) and is required when
+/// `target.type = "google-cloud-run"`. See upstream issue #260.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GcpConfig {
+    /// GCP project id (e.g. `"my-project-123"`). Populated as a placeholder
+    /// on `cargo pmcp deploy init` and edited by the operator before deploy.
+    pub project_id: String,
+    /// Cloud Run region (e.g. `"us-central1"`).
+    pub region: String,
+}
+
+/// Cargo layout descriptor for the multi-crate isolated pattern.
+///
+/// Non-workspace sibling crates with path-dep relationships — for example, a
+/// `gcp-cloud-run` binary crate that declares `auth-echo-core = { path = "../auth-echo-core" }`
+/// — cannot be handled by either of the two default Dockerfile templates
+/// (workspace `COPY . .` over-bundles; simple-crate `COPY src` under-bundles).
+/// Setting `kind = "multi-crate-isolated"` plus `primary` + `path_deps`
+/// produces a surgical Dockerfile with per-crate COPY lines and a
+/// `cargo build --manifest-path <primary>/Cargo.toml` build step.
+///
+/// See upstream issue #258.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LayoutConfig {
+    /// Layout kind. Currently only `"multi-crate-isolated"` is recognized;
+    /// any other value is treated as the default template (workspace or
+    /// simple binary, depending on `Cargo.toml` detection).
+    pub kind: String,
+    /// Sibling directory containing the binary crate to deploy (e.g.
+    /// `"gcp-cloud-run"`). The build runs `cargo build --manifest-path
+    /// <primary>/Cargo.toml`.
+    pub primary: String,
+    /// Sibling crate directories declared as path dependencies by the
+    /// primary crate (e.g. `["auth-echo-core"]`). Each entry is copied into
+    /// the Docker build context as a `Cargo.toml` + `src/` pair so the
+    /// build can resolve them.
+    #[serde(default)]
+    pub path_deps: Vec<String>,
+}
+
+impl LayoutConfig {
+    pub fn is_multi_crate_isolated(&self) -> bool {
+        self.kind == "multi-crate-isolated"
+    }
+}
+
+/// Runtime-stage Docker base-image knob.
+///
+/// When `base` is `None`, the scaffolder emits the target-appropriate
+/// secure default: `gcr.io/distroless/cc-debian12` for Cloud Run (no shell,
+/// no package manager, ~4× smaller than `debian:bookworm-slim`). When
+/// `base` is set, the scaffolder uses that image verbatim.
+///
+/// `apt_packages` is honored only when `base` resolves to a debian-family
+/// image (image ref starting with `debian:` or `ubuntu:`). It triggers a
+/// `RUN apt-get update && apt-get install -y <packages>` layer; an empty
+/// list (the default) produces no apt layer.
+///
+/// See upstream issue #259.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct RuntimeConfig {
+    /// Runtime-stage `FROM` image. `None` selects the target default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base: Option<String>,
+    /// Apt packages to install on debian/ubuntu bases. Ignored otherwise.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub apt_packages: Vec<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServerConfig {
     pub name: String,
+    /// Lambda memory in MB. Used by AWS targets; ignored by Cloud Run
+    /// (which uses [`Self::memory`]). Defaults to 512 to keep the schema
+    /// loadable for Cloud Run deploy.toml files that omit it.
+    #[serde(default = "default_memory_mb")]
     pub memory_mb: u32,
+    /// Lambda timeout in seconds. Used by AWS targets; ignored by Cloud Run.
+    #[serde(default = "default_timeout_seconds")]
     pub timeout_seconds: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reserved_concurrency: Option<u32>,
+    /// Cloud Run memory limit in `Mi`/`Gi` form (e.g. `"256Mi"`, `"1Gi"`).
+    /// `None` → use Cloud Run default (`"512Mi"`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub memory: Option<String>,
+    /// Cloud Run CPU allocation (e.g. `"1"`, `"2"`). `None` → use `"1"`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cpu: Option<String>,
+    /// Cloud Run ingress (`"all"` | `"internal"` |
+    /// `"internal-and-cloud-load-balancing"`). `None` → use Cloud Run default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ingress: Option<String>,
+    /// Cloud Run public-access flag. `None` → fall back to env var
+    /// `CLOUD_RUN_ALLOW_UNAUTHENTICATED` then to `true`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allow_unauthenticated: Option<bool>,
+    /// Cloud Run autoscaler max instances. `None` → `10`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_instances: Option<u32>,
+    /// Cloud Run autoscaler min instances. `None` → `0`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_instances: Option<u32>,
+    /// Binary name to build (passed as `cargo build --bin <binary>`).
+    /// Used by the multi-crate isolated layout; falls back to
+    /// [`Self::name`] when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub binary: Option<String>,
+}
+
+fn default_memory_mb() -> u32 {
+    512
+}
+
+fn default_timeout_seconds() -> u32 {
+    30
 }
 
 /// OAuth authentication configuration for MCP servers
@@ -331,12 +483,15 @@ impl Default for CognitoConfig {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ObservabilityConfig {
+    #[serde(default)]
     pub log_retention_days: u32,
+    #[serde(default)]
     pub enable_xray: bool,
+    #[serde(default)]
     pub create_dashboard: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub alarms: Option<AlarmConfig>,
 }
 
@@ -536,6 +691,23 @@ impl DeployConfig {
         Ok(())
     }
 
+    /// Persist this config to `.pmcp/deploy.toml` only when the file
+    /// does not already exist. Returns `Ok(true)` if a file was written
+    /// and `Ok(false)` if an existing deploy.toml was preserved.
+    ///
+    /// Why: `cargo pmcp deploy init` is expected to be idempotent —
+    /// re-running it on a project where the operator has already filled
+    /// in env vars, IAM bindings, or other tuning must not clobber that
+    /// work. (Scaffolder-immunity invariant from upstream issue #260.)
+    pub fn save_if_missing(&self, project_root: &Path) -> Result<bool> {
+        let config_path = project_root.join(".pmcp/deploy.toml");
+        if config_path.exists() {
+            return Ok(false);
+        }
+        self.save(project_root)?;
+        Ok(true)
+    }
+
     pub fn default_for_server(server_name: String, region: String, project_root: PathBuf) -> Self {
         let mut environment = HashMap::new();
         environment.insert("RUST_LOG".to_string(), "info".to_string());
@@ -545,15 +717,23 @@ impl DeployConfig {
                 target_type: "aws-lambda".to_string(),
                 version: "1.0.0".to_string(),
             },
-            aws: AwsConfig {
+            aws: Some(AwsConfig {
                 region,
                 account_id: None,
-            },
+            }),
+            gcp: None,
             server: ServerConfig {
                 name: server_name,
                 memory_mb: 512,
                 timeout_seconds: 30,
                 reserved_concurrency: None,
+                memory: None,
+                cpu: None,
+                ingress: None,
+                allow_unauthenticated: None,
+                max_instances: None,
+                min_instances: None,
+                binary: None,
             },
             environment,
             secrets: HashMap::new(),
@@ -573,8 +753,84 @@ impl DeployConfig {
             iam: IamConfig::default(),
             widgets: WidgetsConfig::default(),
             post_deploy_tests: None,
+            layout: None,
+            runtime: None,
             project_root,
         }
+    }
+
+    /// Construct a default [`DeployConfig`] for the `google-cloud-run` target.
+    ///
+    /// Mirrors [`Self::default_for_server`] but populates the schema shape
+    /// required for Cloud Run deployments (per upstream issue #260): the
+    /// `[gcp]` block replaces `[aws]`, and the `[server]` block uses Cloud
+    /// Run-flavored fields (`memory` as a string like `"256Mi"`, `cpu`,
+    /// `ingress`, `allow_unauthenticated`).
+    pub fn default_for_cloud_run_server(
+        server_name: String,
+        project_id: String,
+        region: String,
+        project_root: PathBuf,
+    ) -> Self {
+        let mut environment = HashMap::new();
+        environment.insert("RUST_LOG".to_string(), "info".to_string());
+
+        Self {
+            target: TargetConfig {
+                target_type: "google-cloud-run".to_string(),
+                version: "1.0.0".to_string(),
+            },
+            aws: None,
+            gcp: Some(GcpConfig { project_id, region }),
+            server: ServerConfig {
+                name: server_name,
+                // memory_mb / timeout_seconds are AWS-specific; defaults are
+                // retained for serde-load symmetry but never read by the
+                // Cloud Run target.
+                memory_mb: default_memory_mb(),
+                timeout_seconds: default_timeout_seconds(),
+                reserved_concurrency: None,
+                memory: Some("256Mi".to_string()),
+                cpu: Some("1".to_string()),
+                ingress: Some("all".to_string()),
+                allow_unauthenticated: Some(true),
+                max_instances: Some(10),
+                min_instances: Some(0),
+                binary: None,
+            },
+            environment,
+            secrets: HashMap::new(),
+            auth: AuthConfig::default(),
+            observability: ObservabilityConfig {
+                // AWS-specific observability fields; Cloud Run observability
+                // (Cloud Logging / Cloud Trace) is deferred per #260 §5.
+                log_retention_days: 30,
+                enable_xray: false,
+                create_dashboard: false,
+                alarms: None,
+            },
+            api_gateway: None,
+            assets: AssetsConfig::default(),
+            composition: CompositionConfig::default(),
+            iam: IamConfig::default(),
+            widgets: WidgetsConfig::default(),
+            post_deploy_tests: None,
+            layout: None,
+            runtime: None,
+            project_root,
+        }
+    }
+
+    /// Return a reference to the AWS configuration block.
+    ///
+    /// Panics with a clear message when called on a non-AWS deploy config.
+    /// Call sites that only run for AWS targets (`aws-lambda`, `pmcp-run`)
+    /// use this to avoid an `Option::unwrap` everywhere.
+    pub fn aws(&self) -> &AwsConfig {
+        self.aws.as_ref().expect(
+            "deploy.toml is missing the required [aws] block — \
+             this code path requires an AWS target (aws-lambda or pmcp-run)",
+        )
     }
 
     /// Create config with OAuth enabled using Cognito
@@ -1132,5 +1388,267 @@ actions = ["read"]
             resources: vec!["arn:aws:s3:::bucket/*".into()],
         };
         let _iam = IamConfig::default();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn aws_lambda_toml() -> &'static str {
+        r#"
+[target]
+type = "aws-lambda"
+version = "1.0.0"
+
+[aws]
+region = "us-east-1"
+
+[server]
+name = "auth-echo-aws-lambda"
+memory_mb = 256
+timeout_seconds = 30
+
+[environment]
+RUST_LOG = "auth_echo_aws_lambda=info,pmcp=warn"
+
+[auth]
+enabled = false
+
+[observability]
+log_retention_days = 30
+enable_xray = true
+create_dashboard = true
+"#
+    }
+
+    fn cloud_run_toml() -> &'static str {
+        r#"
+[target]
+type = "google-cloud-run"
+version = "1.0.0"
+
+[gcp]
+project_id = "my-gcp-project"
+region = "us-central1"
+
+[server]
+name = "auth-echo-cloud-run"
+memory = "256Mi"
+cpu = "1"
+ingress = "all"
+allow_unauthenticated = true
+
+[environment]
+EXPECTED_AUDIENCE = "abc.apps.googleusercontent.com"
+RUST_LOG = "info"
+
+[auth]
+enabled = false
+
+[observability]
+log_retention_days = 30
+enable_xray = false
+create_dashboard = false
+
+[layout]
+kind = "multi-crate-isolated"
+primary = "gcp-cloud-run"
+path_deps = ["auth-echo-core"]
+
+[runtime]
+base = "gcr.io/distroless/cc-debian12"
+"#
+    }
+
+    #[test]
+    fn aws_lambda_deploy_toml_still_loads() {
+        let config: DeployConfig = toml::from_str(aws_lambda_toml())
+            .expect("AWS Lambda deploy.toml shape must remain loadable");
+        assert_eq!(config.target.target_type, "aws-lambda");
+        let aws = config.aws.as_ref().expect("aws block present");
+        assert_eq!(aws.region, "us-east-1");
+        assert!(config.gcp.is_none(), "gcp absent in AWS Lambda config");
+        assert_eq!(config.server.memory_mb, 256);
+        assert_eq!(config.server.timeout_seconds, 30);
+        assert!(config.layout.is_none());
+        assert!(config.runtime.is_none());
+    }
+
+    #[test]
+    fn cloud_run_deploy_toml_loads() {
+        let config: DeployConfig =
+            toml::from_str(cloud_run_toml()).expect("Cloud Run deploy.toml shape must load");
+        assert_eq!(config.target.target_type, "google-cloud-run");
+        assert!(config.aws.is_none(), "aws absent in Cloud Run config");
+        let gcp = config.gcp.as_ref().expect("gcp block present");
+        assert_eq!(gcp.project_id, "my-gcp-project");
+        assert_eq!(gcp.region, "us-central1");
+        assert_eq!(config.server.memory.as_deref(), Some("256Mi"));
+        assert_eq!(config.server.cpu.as_deref(), Some("1"));
+        assert_eq!(config.server.allow_unauthenticated, Some(true));
+        // memory_mb / timeout_seconds default cleanly when omitted
+        assert_eq!(config.server.memory_mb, 512);
+        assert_eq!(config.server.timeout_seconds, 30);
+        let layout = config.layout.as_ref().expect("layout block present");
+        assert_eq!(layout.kind, "multi-crate-isolated");
+        assert_eq!(layout.primary, "gcp-cloud-run");
+        assert_eq!(layout.path_deps, vec!["auth-echo-core".to_string()]);
+        let runtime = config.runtime.as_ref().expect("runtime block present");
+        assert_eq!(
+            runtime.base.as_deref(),
+            Some("gcr.io/distroless/cc-debian12")
+        );
+        assert!(runtime.apt_packages.is_empty());
+    }
+
+    #[test]
+    fn default_for_cloud_run_server_roundtrips() {
+        let config = DeployConfig::default_for_cloud_run_server(
+            "my-server".to_string(),
+            "my-project".to_string(),
+            "us-central1".to_string(),
+            PathBuf::from("/tmp"),
+        );
+        let serialized = toml::to_string_pretty(&config).expect("serialize");
+        let reloaded: DeployConfig = toml::from_str(&serialized).expect("reload");
+        assert_eq!(reloaded.target.target_type, "google-cloud-run");
+        assert!(reloaded.aws.is_none());
+        let gcp = reloaded.gcp.as_ref().expect("gcp present after roundtrip");
+        assert_eq!(gcp.project_id, "my-project");
+        assert_eq!(reloaded.server.memory.as_deref(), Some("256Mi"));
+        assert_eq!(reloaded.server.allow_unauthenticated, Some(true));
+        // Defaults: layout and runtime are None — operator opts in.
+        assert!(reloaded.layout.is_none());
+        assert!(reloaded.runtime.is_none());
+    }
+
+    #[test]
+    fn default_for_server_roundtrips_as_aws_lambda() {
+        let config = DeployConfig::default_for_server(
+            "lambda-server".to_string(),
+            "us-east-1".to_string(),
+            PathBuf::from("/tmp"),
+        );
+        let serialized = toml::to_string_pretty(&config).expect("serialize");
+        let reloaded: DeployConfig = toml::from_str(&serialized).expect("reload");
+        assert_eq!(reloaded.target.target_type, "aws-lambda");
+        let aws = reloaded.aws.as_ref().expect("aws present after roundtrip");
+        assert_eq!(aws.region, "us-east-1");
+        assert!(reloaded.gcp.is_none());
+    }
+
+    #[test]
+    #[should_panic(expected = "deploy.toml is missing the required [aws] block")]
+    fn aws_helper_panics_when_aws_absent() {
+        let config = DeployConfig::default_for_cloud_run_server(
+            "s".to_string(),
+            "p".to_string(),
+            "r".to_string(),
+            PathBuf::from("/tmp"),
+        );
+        let _ = config.aws();
+    }
+
+    /// Minimum-viable Cloud Run deploy.toml per upstream issue #260 must load
+    /// without `[auth]` and `[observability]` blocks. Both fields now carry
+    /// `#[serde(default)]` so the documented "schema is `[target] + [gcp] +
+    /// [server] + [environment]`" promise actually holds.
+    #[test]
+    fn minimum_schema_cloud_run_loads_without_auth_or_observability() {
+        let toml_src = r#"
+[target]
+type = "google-cloud-run"
+version = "1.0.0"
+
+[gcp]
+project_id = "my-gcp-project"
+region = "us-central1"
+
+[server]
+name = "auth-echo-cloud-run"
+memory = "256Mi"
+
+[environment]
+RUST_LOG = "info"
+"#;
+        let config: DeployConfig = toml::from_str(toml_src).expect(
+            "minimum-schema Cloud Run deploy.toml must load without [auth]/[observability]",
+        );
+        assert_eq!(config.target.target_type, "google-cloud-run");
+        let gcp = config.gcp.as_ref().expect("gcp present");
+        assert_eq!(gcp.project_id, "my-gcp-project");
+        // Defaults applied when [auth] is omitted.
+        assert!(!config.auth.enabled, "auth.enabled defaults to false");
+        assert_eq!(config.auth.provider, "none");
+        assert!(config.auth.callback_urls.is_empty());
+        // Defaults applied when [observability] is omitted.
+        assert_eq!(config.observability.log_retention_days, 0);
+        assert!(!config.observability.enable_xray);
+        assert!(!config.observability.create_dashboard);
+        assert!(config.observability.alarms.is_none());
+    }
+
+    /// Partial `[observability]` blocks must also load — per-field
+    /// `#[serde(default)]` lets operators specify only the knobs they care
+    /// about (e.g., AWS Lambda users who want xray on but accept default
+    /// retention).
+    #[test]
+    fn partial_observability_block_loads() {
+        let toml_src = r#"
+[target]
+type = "aws-lambda"
+version = "1.0.0"
+
+[aws]
+region = "us-east-1"
+
+[server]
+name = "s"
+
+[environment]
+
+[observability]
+enable_xray = true
+"#;
+        let config: DeployConfig =
+            toml::from_str(toml_src).expect("partial [observability] block must load");
+        assert!(config.observability.enable_xray, "explicitly set");
+        assert_eq!(config.observability.log_retention_days, 0, "field default");
+        assert!(!config.observability.create_dashboard, "field default");
+        assert!(config.observability.alarms.is_none(), "field default");
+    }
+
+    #[test]
+    fn runtime_apt_packages_defaults_empty() {
+        let toml_src = r#"
+[target]
+type = "google-cloud-run"
+version = "1.0.0"
+
+[gcp]
+project_id = "p"
+region = "r"
+
+[server]
+name = "s"
+
+[environment]
+
+[auth]
+enabled = false
+
+[observability]
+log_retention_days = 0
+enable_xray = false
+create_dashboard = false
+
+[runtime]
+base = "debian:bookworm-slim"
+"#;
+        let config: DeployConfig = toml::from_str(toml_src).expect("load");
+        let runtime = config.runtime.as_ref().expect("runtime present");
+        assert_eq!(runtime.base.as_deref(), Some("debian:bookworm-slim"));
+        assert!(runtime.apt_packages.is_empty(), "default is empty");
     }
 }
