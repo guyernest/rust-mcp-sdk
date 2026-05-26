@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v2.2
 milestone_name: Configuration-Only MCP Servers
 status: executing
-stopped_at: Completed 84-05-PLAN.md
-last_updated: "2026-05-26T21:55:49.555Z"
+stopped_at: Completed 84-07-PLAN.md
+last_updated: "2026-05-26T22:07:45.021Z"
 last_activity: 2026-05-26
 progress:
   total_phases: 44
   completed_phases: 35
   total_plans: 155
-  completed_plans: 153
+  completed_plans: 154
   percent: 80
 ---
 
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-05-17)
 ## Current Position
 
 Phase: 84 (sql-connectors-postgres-mysql-athena-sqlite) — EXECUTING
-Plan: 8 of 9
+Plan: 9 of 9
 Status: Ready to execute
 Last activity: 2026-05-26
 
@@ -118,6 +118,8 @@ Inherited from v2.1 (see PROJECT.md + prior Decisions log):
 - [Phase 84]: PostgresMock lives at src/dev_mock.rs under the dev_mock feature (REVIEWS H5); legacy tests/mock_postgres.rs removed so publishable examples can opt in without referencing tests/
 - [Phase ?]: 84-06: MysqlConnector uses MySqlPool::connect_lazy — offline-safe constructor, malformed URL fails synchronously, TCP deferred to first use (REVIEWS M3)
 - [Phase ?]: 84-06: MysqlMock lives at src/dev_mock.rs under the dev_mock feature (tests/mock_mysql.rs deleted) so the publishable example reaches it via the public path (REVIEWS H5)
+- [Phase 84]: 84-07: AthenaConnector ships via aws-sdk-athena 1.106.0 with NO aws-sdk-glue (Landmine #4) — schema_text rides GetTableMetadata. from_config stays EXACTLY 2 args (region, workgroup) per D-08 LOCKED; AthenaConfig + with_* builders + from_athena_config carry the rest (REVIEWS M4); runtime gate rejects empty output_location before any AWS call.
+- [Phase 84]: 84-07: paginated_get_query_results loops on next_token across all pages (REVIEWS M5); AthenaMock simulates multi-page via with_pages + PAGINATED_QUERY_MARKER so the M5 test asserts pagination without live Athena. AthenaMock lives at src/dev_mock.rs under dev_mock feature (H5); legacy tests/mock_athena.rs deleted. strip_aws_credentials is per-whitespace-token (cog ≤25). Wave 2 of Phase 84 COMPLETE (postgres+mysql+athena+sqlite).
 
 ### Roadmap Evolution
 
@@ -154,6 +156,7 @@ Inherited from v2.1 (see PROJECT.md + prior Decisions log):
 | Phase 84 P04 | 18 | 3 tasks | 5 files |
 | Phase 84 P05 | 6min | 2 tasks | 6 files |
 | Phase 84 P06 | 18min | 1 tasks | 6 files |
+| Phase 84 P07 | 13min | 2 tasks | 5 files |
 
 ### Last Activity
 
@@ -171,6 +174,6 @@ Inherited from v2.1 (see PROJECT.md + prior Decisions log):
 
 ## Session Continuity
 
-Last session: 2026-05-26T21:54:53.525Z
-Stopped at: Completed 84-05-PLAN.md
-Resume: Wave 1 of Phase 84 is COMPLETE (84-01 trait/errors → 84-02 translate_placeholders → 84-03 synthesizer + structuredContent → 84-04 SqliteConnector). Next is 84-05-PLAN.md — the per-backend Postgres crate (`pmcp-toolkit-postgres`), following the `SqliteConnector` real-driver shape (Arc<Mutex<Connection>> + spawn_blocking) shipped in 84-04. Plans 05/06/07 ship Postgres/MySQL/Athena using the `synthesize_from_config_with_connector` variant; `DatabaseSection.url` (84-03) feeds their URL constructors (D-08). `SqliteConnector` lives at `crates/pmcp-server-toolkit/src/sql/sqlite.rs` as the reference impl.
+Last session: 2026-05-26T22:07:45.016Z
+Stopped at: Completed 84-07-PLAN.md
+Resume: Wave 2 of Phase 84 is COMPLETE — all three per-backend connector crates ship (84-05 Postgres, 84-06 MySQL, 84-07 Athena) plus the 84-04 SQLite feature. `pmcp-toolkit-athena` (84-07) lands `AthenaConnector` via aws-sdk-athena (NO Glue), 2-arg D-08 `from_config` + AthenaConfig builders, query-then-poll execution, next_token pagination, GetTableMetadata schema, AKIA/secret redaction, and an in-process `AthenaMock` at `src/dev_mock.rs`. Next is 84-08-PLAN.md — the final Phase-84 plan: fuzz corpus extension (3 backend seeds) + CLAUDE.md publish-order + REQUIREMENTS closure + verification sweep.
