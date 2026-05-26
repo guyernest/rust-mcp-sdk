@@ -145,9 +145,9 @@ Multi-dialect SQL connector trait + per-backend crates (spike 005). Three method
 - [ ] **CONN-02**: `Dialect` enum in toolkit core with `Postgres`, `MySQL`, `Athena`, `SQLite` variants
 - [ ] **CONN-03**: `translate_placeholders(canonical_query, dialect) -> String` free helper translating `:name` placeholders to dialect-specific forms (`$1`, `?`, `?`, `:name` respectively)
 - [ ] **CONN-04**: `build_code_mode_prompt(connector) -> String` free helper assembling the dialect-aware code-mode bootstrap prompt body from a connector's `schema_text()`
-- [ ] **CONN-05**: `pmcp-toolkit-postgres` crate using pure-Rust `tokio-postgres` implements `SqlConnector` with `information_schema`-driven `schema_text()`
-- [ ] **CONN-06**: `pmcp-toolkit-mysql` crate using pure-Rust `sqlx` (MySQL driver) implements `SqlConnector` with `information_schema`-driven `schema_text()`
-- [ ] **CONN-07**: `pmcp-toolkit-athena` crate using pure-Rust `aws-sdk-athena` implements `SqlConnector` with Glue catalog-driven `schema_text()`
+- [x] **CONN-05**: `pmcp-toolkit-postgres` crate using pure-Rust `tokio-postgres` implements `SqlConnector` with `information_schema`-driven `schema_text()`
+- [x] **CONN-06**: `pmcp-toolkit-mysql` crate using pure-Rust `sqlx` (MySQL driver) implements `SqlConnector` with `information_schema`-driven `schema_text()`
+- [x] **CONN-07**: `pmcp-toolkit-athena` crate using pure-Rust `aws-sdk-athena` implements `SqlConnector` with Glue catalog-driven `schema_text()`
 - [ ] **CONN-08**: SQLite backend ships as a feature flag on the toolkit using `rusqlite` (bundled feature) — no separate crate
 
 ### DX Shapes
@@ -198,13 +198,13 @@ Demonstrate the toolkit's reach by rebuilding the SDK's own dev-tools MCP server
 
 ALWAYS requirements from CLAUDE.md plus toolkit-specific coverage.
 
-- [ ] **TEST-01**: Integration tests for each per-backend SQL crate against authentic in-process mocks (Postgres `$1`+`information_schema`, MySQL `?`+`information_schema`, Athena `?`+Glue catalog) plus a real SQLite — no Docker, no testcontainers
+- [x] **TEST-01**: Integration tests for each per-backend SQL crate against authentic in-process mocks (Postgres `$1`+`information_schema`, MySQL `?`+`information_schema`, Athena `?`+Glue catalog) plus a real SQLite — no Docker, no testcontainers
 - [x] **TEST-02**: Toolkit core unit + property tests covering placeholder translation invariants, code-mode prompt assembly, ToolInfo synthesis from `[[tools]]` config entries
 - [x] **TEST-03**: Public API doctest coverage for `pmcp-server-toolkit` (all public types + helpers compile and run as `rust,no_run` or `rust` doctests)
 - [ ] **TEST-04**: `pmcp-config-helper` integration test asserts dual-surface byte-equality (SKLL-05) and SEP-2640 §9 list-exclusion (SKLL-06)
 - [ ] **TEST-05**: `cargo pmcp new --kind sql-server` scaffold-to-run end-to-end test (scaffold a project in a tempdir, `cargo run` it against an embedded SQLite, hit `tools/list` and one `tools/call`)
 - [ ] **TEST-06**: `cargo pmcp deploy` integration test for at least one config-only server target (mock or real pmcp.run target)
-- [ ] **TEST-07**: Fuzz target for `config.toml` parser ensuring malformed config never panics (extends Phase 77 `pmcp_config_toml_parser` pattern)
+- [x] **TEST-07**: Fuzz target for `config.toml` parser ensuring malformed config never panics (extends Phase 77 `pmcp_config_toml_parser` pattern)
 
 ## Previous Requirements
 
@@ -355,9 +355,9 @@ Which phases cover which requirements. Updated during roadmap creation.
 | CONN-02 | Phase 84 | Pending |
 | CONN-03 | Phase 84 | Pending |
 | CONN-04 | Phase 84 | Pending |
-| CONN-05 | Phase 84 | Pending |
-| CONN-06 | Phase 84 | Pending |
-| CONN-07 | Phase 84 | Pending |
+| CONN-05 | Phase 84 | Complete |
+| CONN-06 | Phase 84 | Complete |
+| CONN-07 | Phase 84 | Complete |
 | CONN-08 | Phase 84 | Pending |
 | SHAP-A-01 | Phase 85 | Pending |
 | SHAP-B-01 | Phase 86 | Pending |
@@ -380,13 +380,13 @@ Which phases cover which requirements. Updated during roadmap creation.
 | DOCS-03 | Phase 89 | Pending |
 | DOCS-04 | Phase 89 | Pending |
 | DOCS-05 | Phase 89 | Pending |
-| TEST-01 | Phase 84 | Pending |
+| TEST-01 | Phase 84 | Complete |
 | TEST-02 | Phase 83 | Complete |
 | TEST-03 | Phase 83 | Complete |
 | TEST-04 | Phase 87 | Pending |
 | TEST-05 | Phase 86 | Pending |
 | TEST-06 | Phase 86 | Pending |
-| TEST-07 | Phase 84 | Pending |
+| TEST-07 | Phase 84 | Complete |
 
 **Coverage:**
 
