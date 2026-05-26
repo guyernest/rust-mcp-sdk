@@ -37,7 +37,11 @@ secrecy = "0.10"
 # Optional + only pulled in under the `aws` feature so the no-default-features
 # build (which proves SecretValue's feature-independence per review R6) does
 # not pay for it.
-tokio = { version = "1", default-features = false, features = ["sync"], optional = true }
+# Why: `aws` needs `sync` (provider caches); `sqlite` needs `rt` for
+# `tokio::task::spawn_blocking`, which wraps every sync `rusqlite` call so the
+# async runtime is never blocked (Phase 84 Plan 04). Both features turn on the
+# single optional `tokio` dep with the union of feature flags.
+tokio = { version = "1", default-features = false, features = ["sync", "rt"], optional = true }
 
 # Why: default features enable `rustls` → aws-smithy-runtime/tls-rustls →
 # aws-smithy-http-client/legacy-rustls-ring → rustls 0.21 / rustls-webpki 0.101
@@ -61,7 +65,7 @@ code-mode = ["dep:pmcp-code-mode", "pmcp-code-mode/sql-code-mode"]
 aws = ["dep:aws-config", "dep:aws-sdk-secretsmanager", "dep:aws-sdk-ssm", "dep:tokio"]
 avp = ["code-mode", "pmcp-code-mode/avp"]
 input-validation = ["dep:jsonschema"]
-sqlite = ["dep:rusqlite"]
+sqlite = ["dep:rusqlite", "dep:tokio"]
 
 [[example]]
 name = "e01_toolkit_minimal"

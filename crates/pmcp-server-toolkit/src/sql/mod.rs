@@ -38,6 +38,16 @@ use thiserror::Error;
 pub mod translate;
 pub use translate::{translate_placeholders, TranslatedSql};
 
+/// First-class SQLite connector (CONN-08), gated behind the `sqlite` feature.
+///
+/// Ships `SqliteConnector` — a real `rusqlite`-backed [`SqlConnector`] impl —
+/// alongside the test-only `pub(crate) MockSqlConnector` fixture (Open Question
+/// #3): the two coexist, the mock is NOT removed.
+#[cfg(feature = "sqlite")]
+pub mod sqlite;
+#[cfg(feature = "sqlite")]
+pub use sqlite::SqliteConnector;
+
 /// Three-method SQL connector trait — Phase 84 ships the full trait surface.
 ///
 /// Phase 83 shipped a 2-method MVP (`dialect()` + `schema_text()`); Phase 84
