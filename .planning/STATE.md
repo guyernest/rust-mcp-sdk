@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v2.2
 milestone_name: Configuration-Only MCP Servers
-status: executing
+status: verifying
 stopped_at: Completed 84-07-PLAN.md
-last_updated: "2026-05-26T22:07:45.021Z"
+last_updated: "2026-05-26T22:21:31.656Z"
 last_activity: 2026-05-26
 progress:
   total_phases: 44
-  completed_phases: 35
+  completed_phases: 36
   total_plans: 155
-  completed_plans: 154
-  percent: 80
+  completed_plans: 155
+  percent: 82
 ---
 
 # Project State
@@ -27,7 +27,7 @@ See: .planning/PROJECT.md (updated 2026-05-17)
 
 Phase: 84 (sql-connectors-postgres-mysql-athena-sqlite) — EXECUTING
 Plan: 9 of 9
-Status: Ready to execute
+Status: Phase complete — ready for verification
 Last activity: 2026-05-26
 
 **Carryover from v2.1:** Phase 81 (update-pmcp-book-and-pmcp-course-with-v2-advanced-topics-cod) was executing at v2.1 close; will be tracked separately and folded into v2.1 completion. Operator follow-ups deferred from Phase 75 Wave 5 still pending: (a) merge Phase 75 Wave 5 + 75.5 to paiml/rust-mcp-sdk:main; (b) post-merge run `gh workflow run quality-badges.yml -R paiml/rust-mcp-sdk` and append observation to `.planning/phases/75-fix-pmat-issues/75-05-GATE-VERIFICATION.md` "## Badge flip observation" section.
@@ -120,6 +120,9 @@ Inherited from v2.1 (see PROJECT.md + prior Decisions log):
 - [Phase ?]: 84-06: MysqlMock lives at src/dev_mock.rs under the dev_mock feature (tests/mock_mysql.rs deleted) so the publishable example reaches it via the public path (REVIEWS H5)
 - [Phase 84]: 84-07: AthenaConnector ships via aws-sdk-athena 1.106.0 with NO aws-sdk-glue (Landmine #4) — schema_text rides GetTableMetadata. from_config stays EXACTLY 2 args (region, workgroup) per D-08 LOCKED; AthenaConfig + with_* builders + from_athena_config carry the rest (REVIEWS M4); runtime gate rejects empty output_location before any AWS call.
 - [Phase 84]: 84-07: paginated_get_query_results loops on next_token across all pages (REVIEWS M5); AthenaMock simulates multi-page via with_pages + PAGINATED_QUERY_MARKER so the M5 test asserts pagination without live Athena. AthenaMock lives at src/dev_mock.rs under dev_mock feature (H5); legacy tests/mock_athena.rs deleted. strip_aws_credentials is per-whitespace-token (cog ≤25). Wave 2 of Phase 84 COMPLETE (postgres+mysql+athena+sqlite).
+- [Phase ?]: Phase 84 Plan 08: extended the single config-parser fuzz target corpus (D-14) with 3 per-backend + 4 REVIEWS M6 adversarial URL seeds; 60s/1.19M-run fuzz clean. Tracked only named seed-*.toml (libfuzzer hash entries left untracked per Phase 77/79 convention).
+- [Phase ?]: Phase 84 Plan 08: aws-sdk-glue guard satisfied by intent (cargo tree shows zero Glue) — the two matches are intentional 'NO aws-sdk-glue' doc comments kept per Wave 0; verification sweep scoped to Phase 84's 4 crates because broad make quality-gate is blocked by pre-existing unrelated rust-1.95.0 pedantic lints in pmcp-widget-utils (deferred-items.md, NOT fixed).
+- [Phase ?]: Phase 84 COMPLETE (9/9): CONN-01..08 + TEST-01 + TEST-07 closed; 84-VALIDATION nyquist_compliant true. CONN-07/TEST-01 Athena descriptions corrected from 'Glue catalog' to GetTableMetadata (Landmine #4/D-08).
 
 ### Roadmap Evolution
 
@@ -157,6 +160,7 @@ Inherited from v2.1 (see PROJECT.md + prior Decisions log):
 | Phase 84 P05 | 6min | 2 tasks | 6 files |
 | Phase 84 P06 | 18min | 1 tasks | 6 files |
 | Phase 84 P07 | 13min | 2 tasks | 5 files |
+| Phase 84 P08 | 24min | 2 tasks | 11 files |
 
 ### Last Activity
 
@@ -174,6 +178,6 @@ Inherited from v2.1 (see PROJECT.md + prior Decisions log):
 
 ## Session Continuity
 
-Last session: 2026-05-26T22:07:45.016Z
+Last session: 2026-05-26T22:21:05.912Z
 Stopped at: Completed 84-07-PLAN.md
 Resume: Wave 2 of Phase 84 is COMPLETE — all three per-backend connector crates ship (84-05 Postgres, 84-06 MySQL, 84-07 Athena) plus the 84-04 SQLite feature. `pmcp-toolkit-athena` (84-07) lands `AthenaConnector` via aws-sdk-athena (NO Glue), 2-arg D-08 `from_config` + AthenaConfig builders, query-then-poll execution, next_token pagination, GetTableMetadata schema, AKIA/secret redaction, and an in-process `AthenaMock` at `src/dev_mock.rs`. Next is 84-08-PLAN.md — the final Phase-84 plan: fuzz corpus extension (3 backend seeds) + CLAUDE.md publish-order + REQUIREMENTS closure + verification sweep.

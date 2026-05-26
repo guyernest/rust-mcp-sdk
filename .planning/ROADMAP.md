@@ -1363,7 +1363,7 @@ Plans:
 
 - [x] **Phase 82: Builder DX Prerequisites** — Lift `tool_arc` / `prompt_arc` to public `ServerBuilder` + document in-process driver pattern so external toolkit authors stop writing 20-line delegating shims (completed 2026-05-18)
 - [x] **Phase 83: Toolkit Core Lift (`pmcp-server-toolkit`)** — Promote `mcp-server-common` shape (~2.2k LoC) to a public crates.io-published SDK crate: AuthProvider, SecretsProvider, StaticResourceHandler, StaticPromptHandler, HMAC tokens, ToolInfo synthesis from `[[tools]]` config, code-mode policy wiring (completed 2026-05-18)
-- [ ] **Phase 84: SQL Connectors (Postgres / MySQL / Athena / SQLite)** — `SqlConnector` trait + `Dialect` enum + 3 per-backend crates (pure-Rust drivers, Lambda-friendly) + SQLite feature flag, with placeholder translation and dialect-aware code-mode prompt assembly
+- [x] **Phase 84: SQL Connectors (Postgres / MySQL / Athena / SQLite)** — `SqlConnector` trait + `Dialect` enum + 3 per-backend crates (pure-Rust drivers, Lambda-friendly) + SQLite feature flag, with placeholder translation and dialect-aware code-mode prompt assembly (completed 2026-05-26)
 - [ ] **Phase 85: Shape A Pure-Config Binary + Reference Parity** — `pmcp-sql-server --config X --schema Y` zero-Rust binary; reproduce open-images end-to-end against the canonical reference scenarios
 - [ ] **Phase 86: Shapes B/C/D — Scaffold, Library Example, Deploy** — `cargo pmcp new --kind sql-server` scaffolding (Shape B), ≤15-line `main.rs` example (Shape C), `cargo pmcp deploy` config-only target wiring with Phase 77 configure system (Shape D)
 - [ ] **Phase 87: Type 2 Authoring Skills MCP Server (`pmcp-config-helper`)** — SEP-2640 Skills MCP server for `config.toml` authoring: root SKILL.md + per-backend references + worked examples, byte-equal dual-surface invariant, §9 list-exclusion compliance, Type 1 `ai-agents/` updates
@@ -1459,7 +1459,7 @@ Plans:
 - [x] 84-05-PLAN.md — pmcp-toolkit-postgres (deadpool-postgres + PgParam ToSql + PostgresMock + 4 D-13 tests)
 - [x] 84-06-PLAN.md — pmcp-toolkit-mysql (sqlx pure-Rust TLS + MysqlMock + 4 D-13 tests)
 - [x] 84-07-PLAN.md — pmcp-toolkit-athena (aws-sdk-athena NO Glue + polling + AthenaMock + 4 D-13 tests)
-- [ ] 84-08-PLAN.md — Fuzz corpus extension (3 backend seeds) + CLAUDE.md publish-order + REQUIREMENTS closure + verification sweep
+- [x] 84-08-PLAN.md — Fuzz corpus extension (3 backend seeds) + CLAUDE.md publish-order + REQUIREMENTS closure + verification sweep
 
 ### Phase 85: Shape A Pure-Config Binary + Reference Parity
 
@@ -1540,7 +1540,7 @@ Plans:
 |-------|----------------|--------|-----------|
 | 82. Builder DX Prerequisites | 3/3 | Complete   | 2026-05-18 |
 | 83. Toolkit Core Lift | 9/9 | Complete   | 2026-05-18 |
-| 84. SQL Connectors | 8/9 | In Progress|  |
+| 84. SQL Connectors | 9/9 | Complete   | 2026-05-26 |
 | 85. Shape A + Reference Parity | 0/? | Not started | - |
 | 86. Shapes B/C/D | 0/? | Not started | - |
 | 87. Type 2 Authoring Skills Server | 0/? | Not started | - |
