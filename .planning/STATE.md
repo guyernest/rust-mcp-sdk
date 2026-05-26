@@ -4,13 +4,13 @@ milestone: v2.2
 milestone_name: Configuration-Only MCP Servers
 status: executing
 stopped_at: Completed 84-05-PLAN.md
-last_updated: "2026-05-26T21:46:07.489Z"
+last_updated: "2026-05-26T21:55:49.555Z"
 last_activity: 2026-05-26
 progress:
   total_phases: 44
   completed_phases: 35
   total_plans: 155
-  completed_plans: 152
+  completed_plans: 153
   percent: 80
 ---
 
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-05-17)
 ## Current Position
 
 Phase: 84 (sql-connectors-postgres-mysql-athena-sqlite) — EXECUTING
-Plan: 7 of 9
+Plan: 8 of 9
 Status: Ready to execute
 Last activity: 2026-05-26
 
@@ -116,6 +116,8 @@ Inherited from v2.1 (see PROJECT.md + prior Decisions log):
 - [Phase ?]: [Phase 84 Plan 04] SqliteConnector promoted to public type behind sqlite feature (CONN-08): Arc<Mutex<Connection>> + tokio::task::spawn_blocking per call (std::sync::Mutex held only inside the closure). sqlite feature now pulls dep:tokio with rt (Rule 3 — spawn_blocking otherwise unavailable; aws keeps sync, union on one optional dep). schema_text reads sqlite_master live (dropped spike schema_blob cache). MockSqlConnector kept pub(crate), coexists. Wave 1 complete: 108 lib tests green, 4-test D-06 integration anchor (REVIEWS H1) passes, :name-only seed (REVIEWS H4).
 - [Phase 84]: PgParam ships 5 scalar variants; object/array params rejected with ConnectorError::ParameterBind (REVIEWS M2), JSON deferred to v0.3
 - [Phase 84]: PostgresMock lives at src/dev_mock.rs under the dev_mock feature (REVIEWS H5); legacy tests/mock_postgres.rs removed so publishable examples can opt in without referencing tests/
+- [Phase ?]: 84-06: MysqlConnector uses MySqlPool::connect_lazy — offline-safe constructor, malformed URL fails synchronously, TCP deferred to first use (REVIEWS M3)
+- [Phase ?]: 84-06: MysqlMock lives at src/dev_mock.rs under the dev_mock feature (tests/mock_mysql.rs deleted) so the publishable example reaches it via the public path (REVIEWS H5)
 
 ### Roadmap Evolution
 
@@ -151,6 +153,7 @@ Inherited from v2.1 (see PROJECT.md + prior Decisions log):
 | Phase 84 P03 | 6min | 2 tasks | 5 files |
 | Phase 84 P04 | 18 | 3 tasks | 5 files |
 | Phase 84 P05 | 6min | 2 tasks | 6 files |
+| Phase 84 P06 | 18min | 1 tasks | 6 files |
 
 ### Last Activity
 
@@ -168,6 +171,6 @@ Inherited from v2.1 (see PROJECT.md + prior Decisions log):
 
 ## Session Continuity
 
-Last session: 2026-05-26T21:46:07.392Z
+Last session: 2026-05-26T21:54:53.525Z
 Stopped at: Completed 84-05-PLAN.md
 Resume: Wave 1 of Phase 84 is COMPLETE (84-01 trait/errors → 84-02 translate_placeholders → 84-03 synthesizer + structuredContent → 84-04 SqliteConnector). Next is 84-05-PLAN.md — the per-backend Postgres crate (`pmcp-toolkit-postgres`), following the `SqliteConnector` real-driver shape (Arc<Mutex<Connection>> + spawn_blocking) shipped in 84-04. Plans 05/06/07 ship Postgres/MySQL/Athena using the `synthesize_from_config_with_connector` variant; `DatabaseSection.url` (84-03) feeds their URL constructors (D-08). `SqliteConnector` lives at `crates/pmcp-server-toolkit/src/sql/sqlite.rs` as the reference impl.
