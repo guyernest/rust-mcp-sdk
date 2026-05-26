@@ -108,3 +108,50 @@ fn msr_vtt_synthesizes() {
     let toml = include_str!("fixtures/msr-vtt-config.toml");
     assert_fixture_synthesizes(toml, "msr-vtt");
 }
+
+// =============================================================================
+// Plan 84-08 (TEST-07, WARNING #8 + REVIEWS M6): fuzz-corpus seed-parse smoke test.
+//
+// The single fuzz target `pmcp_server_toolkit_config_parser` exercises
+// `ServerConfig::from_toml` under libfuzzer mutation; this test pins down the
+// well-formed seeds so they cannot silently rot, while tolerating the REVIEWS M6
+// adversarial seeds (extremely-long URL, non-ASCII URL, malformed env-ref,
+// SQL-injection-shape URL) returning Err. The invariant for all seeds is "no
+// panic" — libfuzzer enforces that under mutation at runtime; here we only
+// materialize the Result.
+// =============================================================================
+
+#[test]
+fn fuzz_corpus_seeds_parse_or_explicitly_fail() {
+    let corpus = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("fuzz/corpus/pmcp_server_toolkit_config_parser");
+    let mut well_formed_seed_ok = 0usize;
+    let mut total = 0usize;
+    for entry in std::fs::read_dir(&corpus).expect("corpus dir") {
+        let path = entry.unwrap().path();
+        if path.extension().and_then(|s| s.to_str()) != Some("toml") {
+            continue;
+        }
+        let name = path.file_name().unwrap().to_string_lossy().into_owned();
+        let text = std::fs::read_to_string(&path).unwrap();
+        let parsed = pmcp_server_toolkit::config::ServerConfig::from_toml(&text);
+        total += 1;
+        // Well-formed seeds MUST parse. Adversarial seeds (extremely-long, non-ascii,
+        // malformed env-ref, injection-shape) MAY be Ok or Err depending on parser
+        // strictness; the invariant is that the parser does NOT panic.
+        let is_adversarial = name.contains("url-extremely-long")
+            || name.contains("url-non-ascii")
+            || name.contains("url-malformed-env-ref")
+            || name.contains("url-sql-injection-shape");
+        if name.starts_with("seed-") && !is_adversarial {
+            parsed.unwrap_or_else(|e| panic!("well-formed seed {name} failed to parse: {e}"));
+            well_formed_seed_ok += 1;
+        }
+        // Adversarial seeds: simply assert no panic occurred (the Result was materialized).
+        // libfuzzer separately enforces the no-panic invariant under mutation.
+    }
+    assert!(
+        well_formed_seed_ok >= 4,
+        "expected at least 4 well-formed seed files (3 per-backend + Plan 00's url seed); iterated {total} files"
+    );
+}

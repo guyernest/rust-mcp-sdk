@@ -1,0 +1,11 @@
+[server]
+name = "fuzz-seed-injection-shape-url"
+version = "0.0.1"
+
+[database]
+type = "postgres"
+# REVIEWS M6 — SQL-injection-shaped substring embedded in URL.
+# This MUST be stored verbatim (the parser is not the SQL boundary — the connector is —
+# but the parser must NOT panic or mishandle the embedded quote/semicolon characters).
+url = "postgres://user:pass'; DROP TABLE users--@host/db"
+database = "test"
