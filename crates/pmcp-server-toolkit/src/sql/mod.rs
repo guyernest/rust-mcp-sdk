@@ -198,11 +198,13 @@ impl Dialect {
     }
 }
 
-/// Errors a [`SqlConnector`] impl may surface from [`SqlConnector::schema_text`].
+/// Errors a [`SqlConnector`] impl may surface from [`SqlConnector::schema_text`]
+/// or [`SqlConnector::execute`].
 ///
-/// Phase 84 may extend this enum (via the `#[non_exhaustive]` escape hatch)
-/// once `execute()` lands and surfaces more failure modes (query errors,
-/// transaction conflicts, etc.).
+/// The enum is `#[non_exhaustive]`, so Phase 84 (CONN-01) adds the execute-time
+/// variants (`Driver`, `Query`, `ParameterBind`, `Connection`) additively
+/// without a semver break, and later phases can add more failure modes the same
+/// way.
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum ConnectorError {
@@ -223,6 +225,40 @@ pub enum ConnectorError {
         /// Dialect actually served by this connector.
         actual: Dialect,
     },
+
+    /// The underlying driver reported a failure (e.g. a `tokio-postgres`,
+    /// `sqlx`, `aws-sdk-athena`, or `rusqlite` error) that is not a query or
+    /// connection problem on its own.
+    #[error("driver error: {0}")]
+    Driver(String),
+
+    /// The backend rejected the query (syntax error, unknown table/column,
+    /// permission denied on the statement, etc.).
+    #[error("query error: {0}")]
+    Query(String),
+
+    /// A named parameter from the caller's `&[(String, Value)]` slice could not
+    /// be bound to the translated statement (type mismatch, missing binding,
+    /// unsupported value shape, etc.).
+    #[error("parameter bind failed for '{name}': {reason}")]
+    ParameterBind {
+        /// Name of the parameter that failed to bind.
+        name: String,
+        /// Human-readable reason the bind failed.
+        reason: String,
+    },
+
+    /// The connector could not establish or maintain a connection to the
+    /// backend.
+    ///
+    /// # Security
+    ///
+    /// Implementors MUST redact credentials (passwords, AWS keys) before
+    /// constructing this variant — the inner `String` reaches MCP clients via
+    /// `Display`. NEVER pass a raw `DATABASE_URL` or `AWS_*` value here; strip
+    /// or mask the secret first (T-84-01-01).
+    #[error("connection error: {0}")]
+    Connection(String),
 }
 
 /// Crate-internal mock connector for testing TKIT-10 prompt assembly without
@@ -256,10 +292,7 @@ impl SqlConnector for MockSqlConnector {
         _sql: &str,
         _params: &[(String, serde_json::Value)],
     ) -> Result<Vec<serde_json::Value>, ConnectorError> {
-        // Task 2 (this plan) introduces `ConnectorError::Driver`, which is the
-        // semantically correct variant here; until then the fixture uses the
-        // pre-existing `Schema` variant so Task 1 compiles atomically.
-        Err(ConnectorError::Schema(
+        Err(ConnectorError::Driver(
             "MockSqlConnector::execute is fixture-only; use SqliteConnector for real execution"
                 .into(),
         ))
@@ -335,5 +368,50 @@ mod execute_signature_tests {
     #[test]
     fn connector_trait_object_is_send_sync_static() {
         assert_send_sync::<Box<dyn SqlConnector>>();
+    }
+}
+
+/// Unit tests for the execute-time `ConnectorError` variants (CONN-01 / Task 2).
+///
+/// Verifies the `thiserror` `Display` format and confirms the `Connection`
+/// variant is not designed as a credential-leak channel (T-84-01-01). Real
+/// redaction lives in the per-backend connectors (Plans 05/06/07); this guard
+/// proves the variant itself does not synthesize credential strings.
+#[cfg(test)]
+mod connector_error_tests {
+    use super::ConnectorError;
+
+    #[test]
+    fn test_display_format_driver() {
+        assert_eq!(
+            format!("{}", ConnectorError::Driver("oops".into())),
+            "driver error: oops"
+        );
+    }
+
+    #[test]
+    fn test_display_format_parameter_bind() {
+        assert_eq!(
+            format!(
+                "{}",
+                ConnectorError::ParameterBind {
+                    name: "id".into(),
+                    reason: "expected int, got string".into(),
+                }
+            ),
+            "parameter bind failed for 'id': expected int, got string"
+        );
+    }
+
+    #[test]
+    fn test_connection_display_does_not_echo_password() {
+        let err = ConnectorError::Connection("connection refused".into());
+        let rendered = format!("{err}");
+        for forbidden in ["password", "AWS_SECRET_ACCESS_KEY", "DATABASE_URL"] {
+            assert!(
+                !rendered.contains(forbidden),
+                "Connection Display must not synthesize the credential token {forbidden:?}; got {rendered:?}"
+            );
+        }
     }
 }
