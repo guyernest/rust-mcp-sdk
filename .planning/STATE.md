@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v2.2
 milestone_name: Configuration-Only MCP Servers
 status: executing
-stopped_at: Completed 84-01-PLAN.md
-last_updated: "2026-05-26T20:59:10.070Z"
+stopped_at: Completed 84-02-PLAN.md
+last_updated: "2026-05-26T21:10:02.520Z"
 last_activity: 2026-05-26
 progress:
   total_phases: 44
   completed_phases: 35
   total_plans: 155
-  completed_plans: 148
+  completed_plans: 149
   percent: 80
 ---
 
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-05-17)
 ## Current Position
 
 Phase: 84 (sql-connectors-postgres-mysql-athena-sqlite) — EXECUTING
-Plan: 3 of 9
+Plan: 4 of 9
 Status: Ready to execute
 Last activity: 2026-05-26
 
@@ -110,6 +110,7 @@ Inherited from v2.1 (see PROJECT.md + prior Decisions log):
 - [Phase ?]: Phase 83 Plan 09: 83-VALIDATION.md flipped to nyquist_compliant: true; 24 task rows ✅ green; Phase 83 fully validated.
 - [Phase ?]: Phase 84 Wave 0: scaffolded pmcp-toolkit-{postgres,mysql,athena} crates + translate.rs RED proptest shell; kept documented '# NO aws-sdk-glue' comment per PATTERNS (no Glue dep in build graph)
 - [Phase ?]: [Phase 84 Plan 01] SqlConnector extended to 3 methods (dialect/execute/schema_text); only in-tree impl MockSqlConnector needed updating — Wave 0 backend stubs do not yet impl the trait, so adding execute() with no default body broke nothing. ConnectorError gained Driver/Query/ParameterBind/Connection variants additively via #[non_exhaustive]; Connection carries a redaction Rustdoc mandate + leak-guard test (T-84-01-01).
+- [Phase ?]: [Phase 84 Plan 02] translate_placeholders SqlWalker uses a CastTypeName one-shot swallow state for ::-casts (1::int / :id::text / 'foo'::text fall out of one rule); Placeholder is only entered when peek() is [A-Za-z_] so pending_name is never empty. 5 RED proptests GREEN + 4 H7 named edge tests; PMAT cog <=25, zero cognitive_complexity allows.
 
 ### Roadmap Evolution
 
@@ -141,6 +142,7 @@ Inherited from v2.1 (see PROJECT.md + prior Decisions log):
 | Phase 83 P09 | 25 | 4 tasks | 6 files |
 | Phase 84 P00 | 25 | 3 tasks | 18 files |
 | Phase 84 P01 | 4 | 2 tasks | 2 files |
+| Phase 84 P02 | 12min | 1 tasks | 1 files |
 
 ### Last Activity
 
@@ -158,6 +160,6 @@ Inherited from v2.1 (see PROJECT.md + prior Decisions log):
 
 ## Session Continuity
 
-Last session: 2026-05-26T20:59:01.435Z
-Stopped at: Completed 84-01-PLAN.md
+Last session: 2026-05-26T21:10:02.514Z
+Stopped at: Completed 84-02-PLAN.md
 Resume: Next is `/gsd-plan-phase 82` to break Phase 82 (Builder DX Prerequisites) into plans. Phase 82 is the unblocker for every subsequent v2.2 phase that uses `tool_arc` / `prompt_arc` — without it, every config-driven toolkit author writes a 20-line delegating wrapper shim (the same DX paper-cut spike 004 hit). After 82, the critical path is 83 (TKIT anchor) → 84 (CONN anchor) → 85 (Shape A + REF parity). Phases 86 and 87 can run in parallel once 83 lands.
