@@ -17,6 +17,13 @@ exclude = [".planning/", ".pmat/", "fixtures/", "tests/", "fuzz/"]
 all-features = true
 rustdoc-args = ["--cfg", "docsrs"]
 
+[features]
+default = []
+# Why (REVIEWS H5): exposes the in-process `MysqlMock` (in `src/dev_mock.rs`)
+# to publishable example targets + downstream integration tests without leaking
+# it into the default publish surface. Not enabled by default.
+dev_mock = []
+
 [dependencies]
 pmcp-server-toolkit = { version = "0.1.0", path = "../pmcp-server-toolkit" }
 # Why: pure-Rust MySQL driver (not C bindings) for Lambda deployability.
@@ -32,3 +39,7 @@ tracing = "0.1"
 proptest = "1.7"
 # Why: tests run with --test-threads=1 per CLAUDE.md — single-threaded tokio is sufficient.
 tokio = { version = "1", features = ["macros", "rt"] }
+
+[[example]]
+name = "mysql_minimal"
+required-features = ["dev_mock"]
