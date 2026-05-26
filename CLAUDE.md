@@ -226,9 +226,16 @@ make test-integration   # Integration tests
 3. `pmcp-code-mode` (depends on pmcp)
 4. `pmcp-code-mode-derive` (depends on pmcp-code-mode)
 5. `pmcp-server-toolkit` (runtime library; depends on pmcp + pmcp-code-mode under the default `code-mode` feature)
-6. `mcp-tester` (depends on pmcp)
-7. `mcp-preview` (depends on widget-utils)
-8. `cargo-pmcp` (depends on pmcp, mcp-tester, mcp-preview)
+6. `pmcp-toolkit-postgres` (depends on pmcp-server-toolkit + tokio-postgres + deadpool-postgres)
+7. `pmcp-toolkit-mysql` (depends on pmcp-server-toolkit + sqlx)
+8. `pmcp-toolkit-athena` (depends on pmcp-server-toolkit + aws-sdk-athena)
+9. `mcp-tester` (depends on pmcp)
+10. `mcp-preview` (depends on widget-utils)
+11. `cargo-pmcp` (depends on pmcp, mcp-tester, mcp-preview)
+
+The three per-backend connector crates (`pmcp-toolkit-postgres`, `-mysql`, `-athena`)
+have no inter-dependencies — they may publish in any order relative to each other,
+but all must publish AFTER `pmcp-server-toolkit`.
 
 ### Pre-Flight Checklist
 Before starting a release, verify:

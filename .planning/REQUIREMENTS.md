@@ -147,7 +147,7 @@ Multi-dialect SQL connector trait + per-backend crates (spike 005). Three method
 - [x] **CONN-04**: `build_code_mode_prompt(connector) -> String` free helper assembling the dialect-aware code-mode bootstrap prompt body from a connector's `schema_text()`
 - [x] **CONN-05**: `pmcp-toolkit-postgres` crate using pure-Rust `tokio-postgres` implements `SqlConnector` with `information_schema`-driven `schema_text()`
 - [x] **CONN-06**: `pmcp-toolkit-mysql` crate using pure-Rust `sqlx` (MySQL driver) implements `SqlConnector` with `information_schema`-driven `schema_text()`
-- [x] **CONN-07**: `pmcp-toolkit-athena` crate using pure-Rust `aws-sdk-athena` implements `SqlConnector` with Glue catalog-driven `schema_text()`
+- [x] **CONN-07**: `pmcp-toolkit-athena` crate using pure-Rust `aws-sdk-athena` implements `SqlConnector` with `schema_text()` driven by Athena `GetTableMetadata` (NO `aws-sdk-glue` dependency — Landmine #4 / Phase 84 D-08: `GetTableMetadata` covers schema introspection without adding Glue to the build graph)
 - [x] **CONN-08**: SQLite backend ships as a feature flag on the toolkit using `rusqlite` (bundled feature) — no separate crate
 
 ### DX Shapes
@@ -198,7 +198,7 @@ Demonstrate the toolkit's reach by rebuilding the SDK's own dev-tools MCP server
 
 ALWAYS requirements from CLAUDE.md plus toolkit-specific coverage.
 
-- [x] **TEST-01**: Integration tests for each per-backend SQL crate against authentic in-process mocks (Postgres `$1`+`information_schema`, MySQL `?`+`information_schema`, Athena `?`+Glue catalog) plus a real SQLite — no Docker, no testcontainers
+- [x] **TEST-01**: Integration tests for each per-backend SQL crate against authentic in-process mocks (Postgres `$1`+`information_schema`, MySQL `?`+`information_schema`, Athena `?`+`GetTableMetadata` schema introspection — NO Glue) plus a real SQLite — no Docker, no testcontainers
 - [x] **TEST-02**: Toolkit core unit + property tests covering placeholder translation invariants, code-mode prompt assembly, ToolInfo synthesis from `[[tools]]` config entries
 - [x] **TEST-03**: Public API doctest coverage for `pmcp-server-toolkit` (all public types + helpers compile and run as `rust,no_run` or `rust` doctests)
 - [ ] **TEST-04**: `pmcp-config-helper` integration test asserts dual-surface byte-equality (SKLL-05) and SEP-2640 §9 list-exclusion (SKLL-06)
@@ -406,3 +406,4 @@ Which phases cover which requirements. Updated during roadmap creation.
 *Last updated: 2026-04-26 — added 11 REQ-77-* IDs seeded by Phase 77 cargo pmcp configure commands research.*
 *Last updated: 2026-05-17 — milestone v2.2 (Configuration-Only MCP Servers) defined. Added 49 IDs across BLDR / TKIT / CONN / SHAP / SKLL / REF / DOGF / DOCS / TEST categories, derived from spikes 003–006 + the auto-loaded `spike-findings-rust-mcp-sdk` skill. Grounded in the existing `pmcp-run/built-in/sql-api/servers/` reference implementation (open-images / imdb / msr-vtt) — the toolkit must consume their `config.toml` shape (incl. dual-mode curated `[[tools]]` + `[code_mode]` policy + `[[database.tables]]` schema enrichment) as a superset, not redesign it. Long-term USAGE-01..03 vision (usage-driven tool promotion from code-mode logs) captured in Future Requirements. Phase assignment pending ROADMAP.md creation.*
 *Last updated: 2026-05-17 — ROADMAP.md v2.2 block written; all 49 v2.2 IDs mapped to Phases 82–89. BLDR→P82; TKIT+TEST-02+TEST-03→P83; CONN+TEST-01+TEST-07→P84; SHAP-A+REF-01+REF-02→P85; SHAP-B/C/D+TEST-05+TEST-06→P86; SKLL+TEST-04→P87; DOGF→P88; DOCS+REF-03→P89.*
+*Last updated: 2026-05-26 — Phase 84 closeout (Plan 84-08). CONN-01..08 + TEST-01 + TEST-07 formally closed: SqlConnector 3-method trait, Dialect enum, translate_placeholders + build_code_mode_prompt helpers, pmcp-toolkit-{postgres,mysql,athena} connector crates, SQLite feature flag, per-backend in-process-mock integration tests (no Docker/testcontainers), and the config.toml fuzz target extended with 3 per-backend + 4 REVIEWS M6 adversarial URL corpus seeds (60s fuzz clean). CONN-07/TEST-01 Athena descriptions corrected from "Glue catalog" to "GetTableMetadata" to match shipped reality (Landmine #4 / D-08 — NO aws-sdk-glue). Phase 84 complete.*
