@@ -31,6 +31,13 @@
 use async_trait::async_trait;
 use thiserror::Error;
 
+/// Dialect-aware placeholder translation (CONN-03).
+///
+/// Public surface lives at `pmcp_server_toolkit::sql::translate_placeholders`
+/// per D-05 — a free helper, not a trait method.
+pub mod translate;
+pub use translate::{translate_placeholders, TranslatedSql};
+
 /// Minimized 2-method connector trait — Phase 83 MVP.
 ///
 /// Phase 83 ships ONLY `dialect()` + `schema_text()`. The rest of the SQL
