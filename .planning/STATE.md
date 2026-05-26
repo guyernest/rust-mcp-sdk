@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v2.2
 milestone_name: Configuration-Only MCP Servers
 status: executing
-stopped_at: Completed 84-02-PLAN.md
-last_updated: "2026-05-26T21:10:02.520Z"
+stopped_at: Completed 84-03-PLAN.md
+last_updated: "2026-05-26T21:20:47.678Z"
 last_activity: 2026-05-26
 progress:
   total_phases: 44
   completed_phases: 35
   total_plans: 155
-  completed_plans: 149
-  percent: 80
+  completed_plans: 150
+  percent: 97
 ---
 
 # Project State
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-05-17)
 ## Current Position
 
 Phase: 84 (sql-connectors-postgres-mysql-athena-sqlite) — EXECUTING
-Plan: 4 of 9
+Plan: 5 of 9
 Status: Ready to execute
 Last activity: 2026-05-26
 
@@ -111,6 +111,8 @@ Inherited from v2.1 (see PROJECT.md + prior Decisions log):
 - [Phase ?]: Phase 84 Wave 0: scaffolded pmcp-toolkit-{postgres,mysql,athena} crates + translate.rs RED proptest shell; kept documented '# NO aws-sdk-glue' comment per PATTERNS (no Glue dep in build graph)
 - [Phase ?]: [Phase 84 Plan 01] SqlConnector extended to 3 methods (dialect/execute/schema_text); only in-tree impl MockSqlConnector needed updating — Wave 0 backend stubs do not yet impl the trait, so adding execute() with no default body broke nothing. ConnectorError gained Driver/Query/ParameterBind/Connection variants additively via #[non_exhaustive]; Connection carries a redaction Rustdoc mandate + leak-guard test (T-84-01-01).
 - [Phase ?]: [Phase 84 Plan 02] translate_placeholders SqlWalker uses a CastTypeName one-shot swallow state for ::-casts (1::int / :id::text / 'foo'::text fall out of one rule); Placeholder is only entered when peek() is [A-Za-z_] so pending_name is never empty. 5 RED proptests GREEN + 4 H7 named edge tests; PMAT cog <=25, zero cognitive_complexity allows.
+- [Phase ?]: [Phase 84 Plan 03] REVIEWS M1: widget_meta flip uses ToolInfo::with_meta_entry("ui", {resourceUri}) NOT with_widget_meta — the latter is #[cfg(feature="mcp-apps")] and the toolkit pulls pmcp with default-features=false (no mcp-apps); with_meta_entry is feature-independent, chainable (preserves annotations), and produces the ui.resourceUri shape ToolInfo::widget_meta() recognises so pmcp core with_widget_enrichment fires structuredContent (D-06). Verified clean on both default and --no-default-features builds.
+- [Phase ?]: [Phase 84 Plan 03] synthesizer split additive (variant-not-overload): synthesize_inner(cfg, Option<Arc<dyn SqlConnector>>) shared by unchanged synthesize_from_config (None) + new synthesize_from_config_with_connector (Some) — all 11 P83 callers + line-91 re-export + line-130 fn-type assertion compile untouched. SynthesizedToolHandler holds Option<connector>; handle() executes SQL when wired (extract_named_params filters to declared params, T-84-03-01; ConnectorError via sanitized Display, T-84-03-02), explicit Err when not (T-84-03-05). build_code_mode_prompt alias (CONN-04) + DatabaseSection.url field (D-08) landed; database-url fuzz seed now parses valid.
 
 ### Roadmap Evolution
 
@@ -143,6 +145,7 @@ Inherited from v2.1 (see PROJECT.md + prior Decisions log):
 | Phase 84 P00 | 25 | 3 tasks | 18 files |
 | Phase 84 P01 | 4 | 2 tasks | 2 files |
 | Phase 84 P02 | 12min | 1 tasks | 1 files |
+| Phase 84 P03 | 6min | 2 tasks | 5 files |
 
 ### Last Activity
 
@@ -160,6 +163,6 @@ Inherited from v2.1 (see PROJECT.md + prior Decisions log):
 
 ## Session Continuity
 
-Last session: 2026-05-26T21:10:02.514Z
-Stopped at: Completed 84-02-PLAN.md
-Resume: Next is `/gsd-plan-phase 82` to break Phase 82 (Builder DX Prerequisites) into plans. Phase 82 is the unblocker for every subsequent v2.2 phase that uses `tool_arc` / `prompt_arc` — without it, every config-driven toolkit author writes a 20-line delegating wrapper shim (the same DX paper-cut spike 004 hit). After 82, the critical path is 83 (TKIT anchor) → 84 (CONN anchor) → 85 (Shape A + REF parity). Phases 86 and 87 can run in parallel once 83 lands.
+Last session: 2026-05-26T21:20:47.678Z
+Stopped at: Completed 84-03-PLAN.md
+Resume: Next is 84-04-PLAN.md — SqliteConnector promotion (MockSqlConnector → pub SqliteConnector under the `sqlite` feature, rusqlite bundled) + sqlite_minimal Shape C example + the moved `tests/synthesizer_structured_content.rs` end-to-end D-06 integration test (REVIEWS H1). Plan 04 consumes this plan's `synthesize_from_config_with_connector` / `try_tools_from_config_with_connector` against a concrete connector. Plans 05/06/07 then ship the per-backend Postgres/MySQL/Athena crates using the same variant; DatabaseSection.url (added here) feeds their URL constructors (D-08).

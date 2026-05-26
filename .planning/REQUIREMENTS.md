@@ -144,7 +144,7 @@ Multi-dialect SQL connector trait + per-backend crates (spike 005). Three method
 - [x] **CONN-01**: `SqlConnector` trait in toolkit core exposes exactly three methods: `dialect() -> Dialect`, `execute(query, params) -> Result<...>`, `schema_text() -> Result<String>`. The `schema_text()` body MUST optionally fold in any per-table descriptions from `[[database.tables]]` config entries (as the reference servers already do) so curated descriptions reach the code-mode prompt
 - [x] **CONN-02**: `Dialect` enum in toolkit core with `Postgres`, `MySQL`, `Athena`, `SQLite` variants
 - [x] **CONN-03**: `translate_placeholders(canonical_query, dialect) -> String` free helper translating `:name` placeholders to dialect-specific forms (`$1`, `?`, `?`, `:name` respectively)
-- [ ] **CONN-04**: `build_code_mode_prompt(connector) -> String` free helper assembling the dialect-aware code-mode bootstrap prompt body from a connector's `schema_text()`
+- [x] **CONN-04**: `build_code_mode_prompt(connector) -> String` free helper assembling the dialect-aware code-mode bootstrap prompt body from a connector's `schema_text()`
 - [x] **CONN-05**: `pmcp-toolkit-postgres` crate using pure-Rust `tokio-postgres` implements `SqlConnector` with `information_schema`-driven `schema_text()`
 - [x] **CONN-06**: `pmcp-toolkit-mysql` crate using pure-Rust `sqlx` (MySQL driver) implements `SqlConnector` with `information_schema`-driven `schema_text()`
 - [x] **CONN-07**: `pmcp-toolkit-athena` crate using pure-Rust `aws-sdk-athena` implements `SqlConnector` with Glue catalog-driven `schema_text()`
@@ -354,7 +354,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | CONN-01 | Phase 84 | Complete |
 | CONN-02 | Phase 84 | Complete |
 | CONN-03 | Phase 84 | Complete |
-| CONN-04 | Phase 84 | Pending |
+| CONN-04 | Phase 84 | Complete |
 | CONN-05 | Phase 84 | Complete |
 | CONN-06 | Phase 84 | Complete |
 | CONN-07 | Phase 84 | Complete |
