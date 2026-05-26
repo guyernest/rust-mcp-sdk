@@ -308,6 +308,14 @@ pub struct DatabaseSection {
     /// `[[database.tables]]` — declared table catalogue for schema enrichment.
     #[serde(default)]
     pub tables: Vec<DatabaseTableDecl>,
+    /// Connection URL for Postgres / MySQL backends. Supports `env:VAR_NAME`
+    /// indirection at the consumer-resolution layer (the toolkit parses the
+    /// string as-is and leaves resolution to the per-backend connector or
+    /// the secret-resolution machinery from P83 R6/R9). Optional/unused for
+    /// Athena (uses `region` + `workgroup` + `output_location`) and SQLite
+    /// (uses `database` for the file path or `:memory:` literal).
+    #[serde(default)]
+    pub url: Option<String>,
     /// `[database.pool]` — connection-pool tuning (optional).
     #[serde(default)]
     pub pool: Option<DatabasePoolSection>,
@@ -697,6 +705,23 @@ mod tests {
             Err(ConfigValidationError::EmptyTableName(0)) => {},
             other => panic!("expected EmptyTableName(0), got {other:?}"),
         }
+    }
+
+    #[test]
+    fn database_url_optional_field_parses() {
+        // Phase 84 CONN-04 / D-08: the additive `[database].url` field parses
+        // under `#[serde(deny_unknown_fields)]` and carries the `env:VAR_NAME`
+        // indirection string verbatim (resolution happens at the consumer layer).
+        let toml = r#"
+            [server]
+            name = "x"
+            version = "0.0.1"
+
+            [database]
+            url = "env:DATABASE_URL"
+        "#;
+        let cfg = ServerConfig::from_toml(toml).expect("config with [database].url must parse");
+        assert_eq!(cfg.database.url, Some("env:DATABASE_URL".to_string()));
     }
 
     #[test]

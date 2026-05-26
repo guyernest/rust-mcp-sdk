@@ -389,6 +389,38 @@ pub async fn assemble_code_mode_prompt(
     Ok(out)
 }
 
+/// Alias for [`assemble_code_mode_prompt`] satisfying CONN-04's literal naming.
+///
+/// Identical behavior; both names are valid public surface. Per Phase 84 D-12 +
+/// RESEARCH §"Open Questions" Q2 / Landmine #15 the recommendation is an
+/// alias-next-to (no deprecation attribute on either name), matching the P83
+/// dual-naming precedent (`register_code_mode_tools` vs
+/// `code_mode_tools_from_executor`).
+///
+/// # Errors
+///
+/// Returns [`ToolkitError::CodeMode`] if `connector.schema_text()` fails —
+/// surfaced verbatim from [`assemble_code_mode_prompt`].
+///
+/// # Example
+///
+/// ```no_run
+/// use pmcp_server_toolkit::code_mode::build_code_mode_prompt;
+/// use pmcp_server_toolkit::config::ServerConfig;
+/// use pmcp_server_toolkit::sql::SqlConnector;
+///
+/// async fn assemble<C: SqlConnector>(connector: &C, config: &ServerConfig) {
+///     let prompt = build_code_mode_prompt(connector, config).await.unwrap();
+///     assert!(prompt.contains("# Code Mode"));
+/// }
+/// ```
+pub async fn build_code_mode_prompt(
+    connector: &(dyn SqlConnector + '_),
+    config: &ServerConfig,
+) -> Result<String> {
+    assemble_code_mode_prompt(connector, config).await
+}
+
 /// Format the `[[database.tables]]` curated descriptions as a Markdown list.
 ///
 /// Entries with no `description` are skipped. Returns an empty string when no
