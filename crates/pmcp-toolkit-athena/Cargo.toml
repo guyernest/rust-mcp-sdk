@@ -1,0 +1,38 @@
+[package]
+name = "pmcp-toolkit-athena"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/paiml/rust-mcp-sdk"
+description = "Amazon Athena connector for pmcp-server-toolkit (config-driven MCP servers)"
+keywords = ["mcp", "athena", "sql", "toolkit"]
+categories = ["development-tools", "database"]
+
+# Why: keeps the published artifact under the 10MB crates.io limit (mirrors
+# pmcp-server-toolkit). `tests/` carries the in-process mock; `.planning/`,
+# `.pmat/`, `fixtures/`, and `fuzz/` are never relevant to downstream consumers.
+exclude = [".planning/", ".pmat/", "fixtures/", "tests/", "fuzz/"]
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[dependencies]
+pmcp-server-toolkit = { version = "0.1.0", path = "../pmcp-server-toolkit" }
+# Why: default features enable `rustls` → aws-smithy-runtime/tls-rustls →
+# aws-smithy-http-client/legacy-rustls-ring → rustls 0.21 / rustls-webpki 0.101
+# (RUSTSEC-2026-0098/0099/0104). Opt into the modern `default-https-client`
+# path (rustls 0.23 via aws-lc-rs) instead. NO aws-sdk-glue — GetTableMetadata
+# on aws-sdk-athena covers schema introspection (Landmine #4).
+aws-sdk-athena = { version = "1.105.0", default-features = false, features = ["default-https-client", "rt-tokio", "behavior-version-latest"] }
+aws-config = { version = "1.8.16", default-features = false, features = ["default-https-client", "rt-tokio", "credentials-process", "sso", "behavior-version-latest"] }
+tokio = { version = "1", default-features = false, features = ["rt"] }
+async-trait = "0.1"
+serde_json = "1"
+thiserror = "2"
+tracing = "0.1"
+
+[dev-dependencies]
+proptest = "1.7"
+# Why: tests run with --test-threads=1 per CLAUDE.md — single-threaded tokio is sufficient.
+tokio = { version = "1", features = ["macros", "rt"] }
