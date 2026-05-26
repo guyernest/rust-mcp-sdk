@@ -90,6 +90,12 @@ pub use crate::error::ConfigValidationError;
 // reach for; lifting it to the crate root keeps the import surface flat.
 pub use crate::tools::synthesize_from_config;
 
+// Phase 84 (CONN-01 / D-06) — additive connector-threaded variant alongside the
+// existing `synthesize_from_config`. The no-connector entry point above is
+// unchanged; this one wires `Arc<dyn SqlConnector>` into each handler so
+// `tools/call` can execute SQL and emit `structuredContent`.
+pub use crate::tools::synthesize_from_config_with_connector;
+
 // Builder extensions (TKIT-08) — Plan 08 headline re-export per D-15 + review R3.
 // The trait method set is the Shape C ≤15-line `main.rs` surface; lifting it
 // to the crate root is the binding witness of D-15 (the runnable example

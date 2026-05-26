@@ -18,10 +18,13 @@
 //! servers should prefer the `try_*` shape so misconfiguration surfaces as a
 //! `Result`, not a crash.
 
+use std::sync::Arc;
+
 use pmcp::ServerBuilder;
 
 use crate::config::ServerConfig;
 use crate::error::Result;
+use crate::sql::SqlConnector;
 
 /// Composable builder extensions for config-driven `pmcp` servers.
 ///
@@ -77,6 +80,75 @@ pub trait ServerBuilderExt: Sized {
     /// # Ok(()) }
     /// ```
     fn try_tools_from_config(self, config: &ServerConfig) -> Result<Self>;
+
+    /// Register every `[[tools]]` entry from `config` as a `tool_arc` handler,
+    /// threading `connector` into each handler so `tools/call` executes SQL and
+    /// emits `structuredContent` (Phase 84 CONN-01 / D-06). Panicking
+    /// convenience wrapping [`ServerBuilderExt::try_tools_from_config_with_connector`].
+    ///
+    /// This is the Shape A wiring point: production servers with a live
+    /// connector use this entry point; the connector-less
+    /// [`ServerBuilderExt::tools_from_config`] remains for callers that only
+    /// need the synthesized tool schemas (handlers error at runtime if invoked).
+    ///
+    /// # Panics
+    ///
+    /// Panics with `"tools_from_config_with_connector: ..."` if
+    /// [`crate::tools::synthesize_from_config_with_connector`] returns `Err`.
+    /// Prefer [`ServerBuilderExt::try_tools_from_config_with_connector`] for
+    /// production servers.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use std::sync::Arc;
+    /// use pmcp::Server;
+    /// use pmcp_server_toolkit::{ServerBuilderExt, ServerConfig};
+    /// use pmcp_server_toolkit::sql::SqlConnector;
+    ///
+    /// fn build(connector: Arc<dyn SqlConnector>) {
+    ///     let cfg = ServerConfig::default();
+    ///     let _builder = Server::builder()
+    ///         .name("demo")
+    ///         .version("0.1.0")
+    ///         .tools_from_config_with_connector(&cfg, connector);
+    /// }
+    /// ```
+    fn tools_from_config_with_connector(
+        self,
+        config: &ServerConfig,
+        connector: Arc<dyn SqlConnector>,
+    ) -> Self;
+
+    /// Fallible companion to
+    /// [`ServerBuilderExt::tools_from_config_with_connector`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::ToolkitError`] if synthesis fails — typically
+    /// [`crate::ToolkitError::Synth`] or [`crate::ToolkitError::Validation`].
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use std::sync::Arc;
+    /// use pmcp::Server;
+    /// use pmcp_server_toolkit::{ServerBuilderExt, ServerConfig};
+    /// use pmcp_server_toolkit::sql::SqlConnector;
+    ///
+    /// # fn run(connector: Arc<dyn SqlConnector>) -> Result<(), Box<dyn std::error::Error>> {
+    /// let cfg = ServerConfig::default();
+    /// let _builder = Server::builder()
+    ///     .name("demo")
+    ///     .version("0.1.0")
+    ///     .try_tools_from_config_with_connector(&cfg, connector)?;
+    /// # Ok(()) }
+    /// ```
+    fn try_tools_from_config_with_connector(
+        self,
+        config: &ServerConfig,
+        connector: Arc<dyn SqlConnector>,
+    ) -> Result<Self>;
 
     /// Wire the `[code_mode]` block. Panicking convenience wrapping
     /// [`ServerBuilderExt::try_code_mode_from_config`].
@@ -156,6 +228,40 @@ impl ServerBuilderExt for ServerBuilder {
             tracing::warn!(
                 target: "pmcp_server_toolkit::builder_ext",
                 "try_tools_from_config: config declared zero [[tools]] entries — \
+                 server will expose no tools (set RUST_LOG=warn to surface this)"
+            );
+        }
+        for (name, _info, handler) in synthesized {
+            self = self.tool_arc(name, handler);
+        }
+        Ok(self)
+    }
+
+    fn tools_from_config_with_connector(
+        self,
+        config: &ServerConfig,
+        connector: Arc<dyn SqlConnector>,
+    ) -> Self {
+        self.try_tools_from_config_with_connector(config, connector)
+            .expect(
+                "tools_from_config_with_connector: synthesize_from_config_with_connector \
+                 returned an error — prefer try_tools_from_config_with_connector to handle \
+                 this as a Result",
+            )
+    }
+
+    fn try_tools_from_config_with_connector(
+        mut self,
+        config: &ServerConfig,
+        connector: Arc<dyn SqlConnector>,
+    ) -> Result<Self> {
+        let synthesized = crate::tools::synthesize_from_config_with_connector(config, connector)?;
+        // T-83-08-02 mitigation: visible signal when the [[tools]] block is
+        // empty so an operator notices the gap rather than a silently-empty server.
+        if synthesized.is_empty() {
+            tracing::warn!(
+                target: "pmcp_server_toolkit::builder_ext",
+                "try_tools_from_config_with_connector: config declared zero [[tools]] entries — \
                  server will expose no tools (set RUST_LOG=warn to surface this)"
             );
         }

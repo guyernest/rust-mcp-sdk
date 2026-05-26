@@ -37,6 +37,7 @@ use serde_json::{json, Map, Value};
 
 use crate::config::{AnnotationsDecl, ParamDecl, ServerConfig, ToolDecl};
 use crate::error::Result;
+use crate::sql::SqlConnector;
 
 /// Type alias for one synthesized tool tuple: `(name, ToolInfo, Arc<dyn ToolHandler>)`.
 ///
@@ -72,23 +73,96 @@ pub type SynthesizedTool = (String, ToolInfo, Arc<dyn ToolHandler>);
 /// assert_eq!(synthesized.len(), 0);
 /// ```
 pub fn synthesize_from_config(config: &ServerConfig) -> Result<Vec<SynthesizedTool>> {
+    synthesize_inner(config, None)
+}
+
+/// Synthesize tools that execute against a wired [`SqlConnector`] (Phase 84
+/// CONN-01 / D-06). ADDITIVE variant alongside [`synthesize_from_config`] — the
+/// existing API is unchanged and all P83 callers compile without modification.
+///
+/// Each synthesized [`SynthesizedToolHandler`] holds the shared `connector`, so
+/// its `handle()` body calls [`SqlConnector::execute`] with the tool's declared
+/// `sql` + the named parameters extracted from the validated args. When a tool
+/// declares `ui_resource_uri`, the synthesized [`ToolInfo`] also carries widget
+/// metadata so pmcp core's `with_widget_enrichment` populates `structuredContent`
+/// (D-06) — that flip lives in the shared [`synthesize_inner`] helper and so
+/// fires for both entry points.
+///
+/// # Errors
+///
+/// Returns [`crate::ToolkitError::Synth`] if a tool declaration is internally
+/// inconsistent. Synthesis is total over the parsed [`ServerConfig`] surface —
+/// the connector is threaded into each handler for runtime use, not consulted at
+/// synthesis time.
+///
+/// # Example
+///
+/// ```no_run
+/// use std::sync::Arc;
+/// use pmcp_server_toolkit::config::ServerConfig;
+/// use pmcp_server_toolkit::sql::SqlConnector;
+/// use pmcp_server_toolkit::tools::synthesize_from_config_with_connector;
+///
+/// fn build(connector: Arc<dyn SqlConnector>) {
+///     let cfg = ServerConfig::default();
+///     let tools = synthesize_from_config_with_connector(&cfg, connector).unwrap();
+///     assert_eq!(tools.len(), 0);
+/// }
+/// ```
+pub fn synthesize_from_config_with_connector(
+    config: &ServerConfig,
+    connector: Arc<dyn SqlConnector>,
+) -> Result<Vec<SynthesizedTool>> {
+    synthesize_inner(config, Some(connector))
+}
+
+/// Shared synthesizer body for both [`synthesize_from_config`] (no connector)
+/// and [`synthesize_from_config_with_connector`] (connector wired).
+///
+/// Keeps the two public entry points one-liners so the widget_meta flip (D-06)
+/// and the handler construction logic are not duplicated. Decomposed per
+/// PATTERNS §Pattern G — the per-tool body delegates to [`build_input_schema`],
+/// [`build_annotations`], and [`apply_widget_meta`] to stay under cog 25.
+fn synthesize_inner(
+    config: &ServerConfig,
+    connector: Option<Arc<dyn SqlConnector>>,
+) -> Result<Vec<SynthesizedTool>> {
     let mut out = Vec::with_capacity(config.tools.len());
     for decl in &config.tools {
         let schema = build_input_schema(&decl.parameters);
         let annotations = build_annotations(decl.annotations.as_ref());
-        let info = match annotations {
+        let base = match annotations {
             Some(ann) => {
                 ToolInfo::with_annotations(decl.name.clone(), decl.description.clone(), schema, ann)
             },
             None => ToolInfo::new(decl.name.clone(), decl.description.clone(), schema),
         };
+        let info = apply_widget_meta(base, decl);
         let handler: Arc<dyn ToolHandler> = Arc::new(SynthesizedToolHandler {
             info: info.clone(),
             decl: decl.clone(),
+            connector: connector.clone(),
         });
         out.push((decl.name.clone(), info, handler));
     }
     Ok(out)
+}
+
+/// Flip widget metadata onto `info` when the declaration carries a
+/// `ui_resource_uri` (D-06 / REVIEWS M1).
+///
+/// Uses the feature-independent [`ToolInfo::with_meta_entry`] surface to insert
+/// `_meta.ui.resourceUri`. This is the verified-correct API: `with_widget_meta`
+/// is gated on pmcp's `mcp-apps` feature (which the toolkit does not enable),
+/// whereas `with_meta_entry` is always available and produces the `ui.resourceUri`
+/// shape that `ToolInfo::widget_meta()` recognises — so pmcp core's
+/// `with_widget_enrichment` populates `structuredContent`. Annotations on `info`
+/// are preserved (chained, not reconstructed).
+fn apply_widget_meta(info: ToolInfo, decl: &ToolDecl) -> ToolInfo {
+    match decl.ui_resource_uri.as_deref() {
+        Some(uri) => info.with_meta_entry("ui", json!({ "resourceUri": uri })),
+        None => info,
+    }
 }
 
 /// Build the JSON Schema `properties` + `required` envelope from a
@@ -177,25 +251,52 @@ fn build_annotations(decl: Option<&AnnotationsDecl>) -> Option<ToolAnnotations> 
 /// §Risks #2 — threat T-83-05-01). The unit + property tests in
 /// [`crate::tools`] and `tests/tool_synthesis_props.rs` lock this in.
 ///
-/// `handle()` returns an `Err` placeholder until Plan 06 (code-mode wiring) or
-/// Phase 84 (SQL connector dispatch) lands. An `Err` is preferable to a `Value`
-/// pretending success — MCP clients see a tool-call error rather than silent
-/// "ok with empty body" (Gemini review note). The `decl` is held for later
-/// plans to inspect `sql` / `ui_resource_uri` without re-walking the config.
+/// `handle()` reads the declared `sql`, extracts named parameters from the
+/// validated args, and calls [`SqlConnector::execute`] when a `connector` is
+/// wired (handlers built via [`synthesize_from_config_with_connector`]).
+/// Handlers built via the no-connector [`synthesize_from_config`] carry
+/// `connector = None` and return an explicit `Err` on invocation — preserving
+/// P83 behaviour where the no-connector path was test-only (T-84-03-05). The
+/// `decl` is held so the handler can read `sql` / `ui_resource_uri` /
+/// `parameters` without re-walking the config.
 struct SynthesizedToolHandler {
     info: ToolInfo,
-    // Held for Plan 06 (code-mode validate/execute) and Phase 84 (SQL backends).
-    #[allow(dead_code)]
     decl: ToolDecl,
+    /// `Some` only for handlers built via [`synthesize_from_config_with_connector`].
+    connector: Option<Arc<dyn SqlConnector>>,
+}
+
+/// Extract the named `(name, value)` parameter pairs the connector binds from,
+/// filtering the caller's validated `args` against the declared parameter list
+/// (T-84-03-01: only declared parameter names reach `execute()`; extra keys are
+/// silently dropped — JSON-schema validation rejects them upstream).
+fn extract_named_params(decl: &ToolDecl, args: &Value) -> Vec<(String, Value)> {
+    decl.parameters
+        .iter()
+        .filter_map(|p| args.get(&p.name).map(|v| (p.name.clone(), v.clone())))
+        .collect()
 }
 
 #[async_trait]
 impl ToolHandler for SynthesizedToolHandler {
-    async fn handle(&self, _args: Value, _extra: RequestHandlerExtra) -> pmcp::Result<Value> {
-        Err(pmcp::Error::Internal(format!(
-            "tool '{}' is not yet wired — Plan 06 (code-mode) or Phase 84 (SQL connector) required",
-            self.info.name
-        )))
+    async fn handle(&self, args: Value, _extra: RequestHandlerExtra) -> pmcp::Result<Value> {
+        let sql = self.decl.sql.as_deref().ok_or_else(|| {
+            pmcp::Error::Internal(format!("tool '{}' has no `sql` declared", self.info.name))
+        })?;
+        let connector = self.connector.as_ref().ok_or_else(|| {
+            pmcp::Error::Internal(format!(
+                "tool '{}' requires connector wiring — build via synthesize_from_config_with_connector",
+                self.info.name
+            ))
+        })?;
+        let named_params = extract_named_params(&self.decl, &args);
+        // T-84-03-02: format!("{e}") uses ConnectorError::Display, which Plan 01
+        // Task 2 guarantees does not echo credentials.
+        let rows = connector
+            .execute(sql, &named_params)
+            .await
+            .map_err(|e| pmcp::Error::Internal(format!("connector error: {e}")))?;
+        Ok(Value::Array(rows))
     }
 
     fn metadata(&self) -> Option<ToolInfo> {
