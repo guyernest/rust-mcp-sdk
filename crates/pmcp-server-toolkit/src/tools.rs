@@ -342,6 +342,49 @@ mod tests {
         assert_eq!(ann.open_world_hint, Some(false));
     }
 
+    /// REVIEWS H1 (in-plan widget_meta flip — no SqliteConnector dependency).
+    ///
+    /// When a `[[tools]]` entry declares `ui_resource_uri`, the synthesized
+    /// `ToolInfo` must carry widget metadata so pmcp core's
+    /// `with_widget_enrichment` (gated on `info.widget_meta().is_some()`)
+    /// populates `structuredContent` (D-06). The flip lives in the shared
+    /// `synthesize_inner` helper, so it fires for BOTH entry points; this test
+    /// exercises it via the no-connector `synthesize_from_config` path.
+    #[test]
+    fn widget_meta_flips_when_ui_resource_uri_present() {
+        let cfg = cfg_with_tools(vec![ToolDecl {
+            name: "widget_tool".to_string(),
+            description: Some("renders a widget".to_string()),
+            ui_resource_uri: Some("ui://test".to_string()),
+            ..Default::default()
+        }]);
+        let out = synthesize_from_config(&cfg).expect("synthesize");
+        let (_, info, _) = &out[0];
+        assert!(
+            info.widget_meta().is_some(),
+            "ui_resource_uri set ⇒ widget_meta() must be Some so D-06 structuredContent fires"
+        );
+    }
+
+    /// REVIEWS H1 negative case — a tool WITHOUT `ui_resource_uri` must NOT
+    /// carry widget metadata (T-84-03-03: no accidental flip on non-widget
+    /// tools).
+    #[test]
+    fn widget_meta_absent_when_ui_resource_uri_none() {
+        let cfg = cfg_with_tools(vec![ToolDecl {
+            name: "plain_tool".to_string(),
+            description: Some("no widget".to_string()),
+            ui_resource_uri: None,
+            ..Default::default()
+        }]);
+        let out = synthesize_from_config(&cfg).expect("synthesize");
+        let (_, info, _) = &out[0];
+        assert!(
+            info.widget_meta().is_none(),
+            "ui_resource_uri absent ⇒ widget_meta() must be None (no accidental flip)"
+        );
+    }
+
     #[tokio::test]
     async fn synthesized_handler_metadata_returns_some() {
         let cfg = cfg_with_tools(vec![ToolDecl {
