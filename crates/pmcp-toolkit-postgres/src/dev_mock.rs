@@ -2,8 +2,8 @@
 //! downstream examples that activate the `dev_mock` cargo feature.
 //!
 //! REVIEWS H5: this file lives under `src/` (not `tests/`) so it's reachable
-//! from publishable example targets via the `dev_mock` feature. NO Docker, NO
-//! testcontainers, NO networking — pure in-process per
+//! from publishable example targets via the `dev_mock` feature. No container
+//! runtime, no networking — pure in-process per
 //! `feedback_avoid_docker_pure_rust_lambda` memory + D-07. The seam is the
 //! [`SqlConnector`] trait itself, not the Postgres wire protocol: the mock
 //! implements the trait directly and records what it was asked to run so tests
