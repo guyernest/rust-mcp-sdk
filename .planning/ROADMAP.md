@@ -1452,7 +1452,7 @@ Plans:
 **Plans**: 9 plans
 
 - [x] 84-00-PLAN.md — Wave 0 scaffolding: 3 per-backend crate skeletons + translate.rs shell + property-test scaffold (RED) + fuzz corpus seed
-- [ ] 84-01-PLAN.md — Extend SqlConnector trait to 3 methods (execute) + 4 ConnectorError variants
+- [x] 84-01-PLAN.md — Extend SqlConnector trait to 3 methods (execute) + 4 ConnectorError variants
 - [ ] 84-02-PLAN.md — translate_placeholders SqlWalker state machine + 5 property invariants (RED→GREEN→REFACTOR)
 - [ ] 84-03-PLAN.md — build_code_mode_prompt alias + DatabaseSection.url field + synthesizer connector threading + widget_meta flip
 - [ ] 84-04-PLAN.md — SqliteConnector promotion + sqlite_minimal Shape C example
@@ -1540,7 +1540,7 @@ Plans:
 |-------|----------------|--------|-----------|
 | 82. Builder DX Prerequisites | 3/3 | Complete   | 2026-05-18 |
 | 83. Toolkit Core Lift | 9/9 | Complete   | 2026-05-18 |
-| 84. SQL Connectors | 1/9 | In Progress|  |
+| 84. SQL Connectors | 2/9 | In Progress|  |
 | 85. Shape A + Reference Parity | 0/? | Not started | - |
 | 86. Shapes B/C/D | 0/? | Not started | - |
 | 87. Type 2 Authoring Skills Server | 0/? | Not started | - |
