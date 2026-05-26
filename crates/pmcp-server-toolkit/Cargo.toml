@@ -71,6 +71,10 @@ sqlite = ["dep:rusqlite", "dep:tokio"]
 name = "e01_toolkit_minimal"
 required-features = ["code-mode"]
 
+[[example]]
+name = "sqlite_minimal"
+required-features = ["sqlite", "code-mode"]
+
 [dev-dependencies]
 proptest = "1.7"
 # Why: tests run with --test-threads=1 (project CLAUDE.md). The single-threaded
