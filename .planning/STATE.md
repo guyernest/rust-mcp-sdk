@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v2.2
 milestone_name: Configuration-Only MCP Servers
 status: verifying
-stopped_at: Completed 84-07-PLAN.md
-last_updated: "2026-05-26T22:21:31.656Z"
+stopped_at: Phase 85 context gathered
+last_updated: "2026-05-26T23:23:07.908Z"
 last_activity: 2026-05-26
 progress:
   total_phases: 44
@@ -178,6 +178,6 @@ Inherited from v2.1 (see PROJECT.md + prior Decisions log):
 
 ## Session Continuity
 
-Last session: 2026-05-26T22:21:05.912Z
-Stopped at: Completed 84-07-PLAN.md
+Last session: 2026-05-26T23:23:07.902Z
+Stopped at: Phase 85 context gathered
 Resume: Wave 2 of Phase 84 is COMPLETE — all three per-backend connector crates ship (84-05 Postgres, 84-06 MySQL, 84-07 Athena) plus the 84-04 SQLite feature. `pmcp-toolkit-athena` (84-07) lands `AthenaConnector` via aws-sdk-athena (NO Glue), 2-arg D-08 `from_config` + AthenaConfig builders, query-then-poll execution, next_token pagination, GetTableMetadata schema, AKIA/secret redaction, and an in-process `AthenaMock` at `src/dev_mock.rs`. Next is 84-08-PLAN.md — the final Phase-84 plan: fuzz corpus extension (3 backend seeds) + CLAUDE.md publish-order + REQUIREMENTS closure + verification sweep.
