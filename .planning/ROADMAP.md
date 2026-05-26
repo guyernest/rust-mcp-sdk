@@ -1473,7 +1473,15 @@ Plans:
   3. The reproduced server responds to `tools/list`, `tools/call` for every `[[tools]]` entry, **and** the code-mode pair (`validate_code` / `execute_code`) with policy enforcement matching the production server's behavior
   4. Replaying a representative subset of `pmcp-run/built-in/sql-api/reference/scenarios/` against both the original pmcp-run server and the Shape A reproduction yields **result parity** on the asserted scenarios
 
-**Plans**: TBD
+**Plans**: 6 plans (4 waves)
+
+Plans:
+- [ ] 85-01-PLAN.md — REF-01 superset config fields (file_path / is_reference / [shared_policy_store]) + ${VAR} expansion gate [wave 1]
+- [ ] 85-02-PLAN.md — Real code-mode tool registration + SqlCodeExecutor adapter + file-based prompt seam [wave 2]
+- [ ] 85-03-PLAN.md — pmcp-sql-server crate skeleton + vendored Chinook DDL/scenarios/config fixtures [wave 1]
+- [ ] 85-04-PLAN.md — clap CLI + [database] type → connector dispatch [wave 2]
+- [ ] 85-05-PLAN.md — Server assembly + streamable-HTTP serving + SC-1 lazy-startup + SC-2 superset-parse tests [wave 3]
+- [ ] 85-06-PLAN.md — Chinook parity replay (REF-02/SC-3/SC-4) + Shape C example + doctests + publish-order + fuzz seed [wave 4]
 
 ### Phase 86: Shapes B/C/D — Scaffold, Library Example, Deploy
 
