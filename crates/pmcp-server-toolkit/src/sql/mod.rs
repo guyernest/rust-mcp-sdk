@@ -1,28 +1,28 @@
 // Net-new code for Phase 83 TKIT-10 (trait stub) + Phase 84 (full trait + per-backend impls).
-// Per review R2 (BOTH reviewers HIGH severity), the Phase 83 trait surface is
-// INTENTIONALLY MINIMIZED to just dialect() + schema_text() — execute() +
-// placeholder translation are deferred to Phase 84 where they're validated
-// against real backends (Postgres / MySQL / Athena / SQLite).
+// Phase 83 INTENTIONALLY MINIMIZED the trait surface to dialect() + schema_text()
+// (per review R2, BOTH reviewers HIGH severity) so execute() + placeholder
+// translation could be validated against real backends first. Phase 84 (CONN-01)
+// now ships the full 3-method trait surface validated against Postgres / MySQL /
+// Athena / SQLite.
 
-//! SQL connector trait stub (2-method MVP) + dialect enum.
+//! SQL connector trait (3-method surface) + dialect enum.
 //!
-//! Phase 83 ships a minimized trait surface to AVOID OSSIFYING the public API
-//! before any real connector validates the contract. Per review R2:
-//! - `execute(sql, params) -> Vec<Value>` would commit to row shape, error
-//!   shape, placeholder ownership, async behavior, and parameter model before
-//!   real connector impls exist (Codex HIGH).
-//! - `translate_placeholders(&str) -> String` loses binding-order information
-//!   needed by positional dialects (Codex HIGH).
-//! - Streaming and transactions are common enterprise SQL requirements that
-//!   `Vec<Value>` precludes (Gemini HIGH).
+//! Phase 83 shipped a minimized 2-method MVP (`dialect()` + `schema_text()`) to
+//! AVOID OSSIFYING the public API before any real connector validated the
+//! contract. Phase 84 (CONN-01) ships the full 3-method trait surface, adding
+//! [`SqlConnector::execute`] now that the per-backend connectors validate the
+//! shape:
+//! - `execute(sql, &[(String, Value)]) -> Result<Vec<Value>, ConnectorError>`
+//!   returns one JSON object per row — the exact shape MCP transport needs at
+//!   the `tools/call` → `structuredContent` boundary (D-01).
+//! - Parameters are a slice of named `(name, value)` pairs so the caller
+//!   controls bind order and they round-trip cleanly through `serde_json` (D-03).
 //!
-//! Phase 84 lands the full trait surface (`execute`, optional streaming,
-//! placeholder translation returning `TranslatedSql { sql, ordered_params }`)
-//! once the first real connector validates the shape.
+//! Streaming and transactions remain deferred to a future semver-additive
+//! release (D-02) — see [`SqlConnector`] for the evolution plan.
 //!
-//! Phase 83 still ships TKIT-10 prompt assembly per CONTEXT.md D-12 — the
-//! assembler calls [`SqlConnector::schema_text`] only, never `execute()`, so the
-//! minimization does not block this phase's deliverable.
+//! Phase 83's TKIT-10 prompt assembly calls [`SqlConnector::schema_text`] only,
+//! never `execute()`, so the additional method does not change that surface.
 
 // Why: dialect display names ("PostgreSQL", "MySQL") are proper nouns that
 // clippy::doc_markdown otherwise flags as needing back-ticks.
@@ -38,36 +38,84 @@ use thiserror::Error;
 pub mod translate;
 pub use translate::{translate_placeholders, TranslatedSql};
 
-/// Minimized 2-method connector trait — Phase 83 MVP.
+/// Three-method SQL connector trait — Phase 84 ships the full trait surface.
 ///
-/// Phase 83 ships ONLY `dialect()` + `schema_text()`. The rest of the SQL
-/// connector contract — query execution, streaming, transactions, and
-/// dialect-aware placeholder translation — lands in Phase 84 once the first
-/// real connector validates the shape.
+/// Phase 83 shipped a 2-method MVP (`dialect()` + `schema_text()`); Phase 84
+/// (CONN-01) lands `execute()` between them now that the per-backend connectors
+/// validate the row/error/parameter shape. The trait is the stable contract the
+/// per-backend crates (`pmcp-toolkit-postgres`, `pmcp-toolkit-mysql`,
+/// `pmcp-toolkit-athena`, plus the `sqlite` feature `SqliteConnector`) implement.
 ///
-/// # Semver-evolution plan (per review R2)
+/// # Semver-evolution plan
 ///
-/// This trait WILL grow in `pmcp-server-toolkit 0.2.0` with:
-/// - `execute(sql, params) -> impl futures::Stream<Item = Result<Row>>`
-///   (streaming rather than `Vec<Value>` — Gemini HIGH severity in R2).
-/// - `translate_placeholders(&str) -> TranslatedSql { sql, ordered_params }`
-///   (preserves bind ordering — Codex HIGH severity in R2).
-/// - Transaction support (begin / commit / rollback or a `transaction()`
-///   continuation).
+/// This trait WILL grow additively in a future minor release with:
+/// - `execute_stream(sql, params) -> impl Stream<Item = Result<Value>>`, shipped
+///   with a default body backed by `execute(...).map(stream::iter)` so it is
+///   semver-compatible on a `Send + Sync + 'static` trait — for the
+///   large-result-scan case (e.g. an Athena warehousing tool). Deferred per D-02
+///   because no v2.2 reference scenario needs it.
+/// - Transaction support as a separate `SqlTransactional` trait extension, when
+///   a real consumer needs it. Deferred per D-02 — the v2.2 reference scenarios
+///   are read-only and Athena has no real transaction model.
 ///
-/// Downstream impl-authors targeting Phase 84 should plan against this growth.
-/// Adding trait methods with defaults in a minor release is semver-compatible
-/// for `Send + Sync + 'static` traits in Rust; the variants on [`Dialect`] and
-/// [`ConnectorError`] are `#[non_exhaustive]` so they can also be extended
-/// additively without semver break.
+/// The variants on [`Dialect`] and [`ConnectorError`] are `#[non_exhaustive]`
+/// so they can be extended additively without a semver break.
 ///
-/// Phase 84's per-backend crates (`pmcp-toolkit-postgres`,
-/// `pmcp-toolkit-mysql`, `pmcp-toolkit-athena`, plus the `sqlite` feature) are
-/// the canonical impls.
+/// # Example
+///
+/// A minimal connector implementing all three methods. The example defines a
+/// LOCAL dummy struct — it deliberately does NOT reference any downstream
+/// per-backend crate, because those depend on `pmcp-server-toolkit` and would
+/// create a circular doctest dependency (REVIEWS H6).
+///
+/// ```no_run
+/// use pmcp_server_toolkit::sql::{SqlConnector, Dialect, ConnectorError};
+/// use async_trait::async_trait;
+/// use serde_json::Value;
+///
+/// struct Dummy;
+///
+/// #[async_trait]
+/// impl SqlConnector for Dummy {
+///     fn dialect(&self) -> Dialect { Dialect::Sqlite }
+///     async fn execute(&self, _sql: &str, _params: &[(String, Value)])
+///         -> Result<Vec<Value>, ConnectorError> {
+///         Ok(vec![])
+///     }
+///     async fn schema_text(&self) -> Result<String, ConnectorError> {
+///         Ok(String::new())
+///     }
+/// }
+/// ```
 #[async_trait]
 pub trait SqlConnector: Send + Sync + 'static {
-    /// Identify the dialect for prompt assembly + (future) placeholder translation.
+    /// Identify the dialect for prompt assembly + placeholder translation.
     fn dialect(&self) -> Dialect;
+
+    /// Execute a query and return one [`serde_json::Value`] per result row.
+    ///
+    /// `sql` is the canonical statement (placeholders in the toolkit's `:name`
+    /// form); `params` is a slice of named `(name, value)` pairs the caller
+    /// controls the order of (D-03). Per-backend impls translate placeholders
+    /// to their dialect via [`translate_placeholders`] and bind from `params`,
+    /// then convert driver-native rows into JSON objects (D-01).
+    ///
+    /// Each returned `Value` is typically a JSON object keyed by column name —
+    /// the exact shape MCP transport needs to populate the `tools/call`
+    /// response's `structuredContent` field (D-06).
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`ConnectorError`] when the backend cannot connect
+    /// ([`ConnectorError::Connection`]), the driver fails
+    /// ([`ConnectorError::Driver`]), the query is rejected
+    /// ([`ConnectorError::Query`]), or a parameter cannot be bound
+    /// ([`ConnectorError::ParameterBind`]).
+    async fn execute(
+        &self,
+        sql: &str,
+        params: &[(String, serde_json::Value)],
+    ) -> Result<Vec<serde_json::Value>, ConnectorError>;
 
     /// Render the backend's schema as DDL or equivalent text for inclusion in
     /// the code-mode prompt. Phase 84 impls drive this from `information_schema`,
@@ -200,6 +248,23 @@ impl SqlConnector for MockSqlConnector {
         self.dialect
     }
 
+    /// Fixture-only: `MockSqlConnector` exists for TKIT-10 prompt-assembly
+    /// tests that exercise only `dialect()` + `schema_text()`. It is not a real
+    /// driver — use `SqliteConnector` (Plan 84-04) for real query execution.
+    async fn execute(
+        &self,
+        _sql: &str,
+        _params: &[(String, serde_json::Value)],
+    ) -> Result<Vec<serde_json::Value>, ConnectorError> {
+        // Task 2 (this plan) introduces `ConnectorError::Driver`, which is the
+        // semantically correct variant here; until then the fixture uses the
+        // pre-existing `Schema` variant so Task 1 compiles atomically.
+        Err(ConnectorError::Schema(
+            "MockSqlConnector::execute is fixture-only; use SqliteConnector for real execution"
+                .into(),
+        ))
+    }
+
     async fn schema_text(&self) -> Result<String, ConnectorError> {
         Ok(self.schema.clone())
     }
@@ -255,5 +320,20 @@ mod tests {
             prop_assert!(!d.placeholder_guidance().is_empty());
             prop_assert!(!d.name().is_empty());
         }
+    }
+}
+
+/// Compile-only assertions that the now-3-method `SqlConnector` trait object
+/// is still object-safe and `Send + Sync + 'static` — the bound per-backend
+/// crates and the toolkit's `Arc<dyn SqlConnector>` plumbing rely on.
+#[cfg(test)]
+mod execute_signature_tests {
+    use super::SqlConnector;
+
+    fn assert_send_sync<T: Send + Sync + 'static>() {}
+
+    #[test]
+    fn connector_trait_object_is_send_sync_static() {
+        assert_send_sync::<Box<dyn SqlConnector>>();
     }
 }
