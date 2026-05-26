@@ -148,7 +148,7 @@ Multi-dialect SQL connector trait + per-backend crates (spike 005). Three method
 - [x] **CONN-05**: `pmcp-toolkit-postgres` crate using pure-Rust `tokio-postgres` implements `SqlConnector` with `information_schema`-driven `schema_text()`
 - [x] **CONN-06**: `pmcp-toolkit-mysql` crate using pure-Rust `sqlx` (MySQL driver) implements `SqlConnector` with `information_schema`-driven `schema_text()`
 - [x] **CONN-07**: `pmcp-toolkit-athena` crate using pure-Rust `aws-sdk-athena` implements `SqlConnector` with Glue catalog-driven `schema_text()`
-- [ ] **CONN-08**: SQLite backend ships as a feature flag on the toolkit using `rusqlite` (bundled feature) — no separate crate
+- [x] **CONN-08**: SQLite backend ships as a feature flag on the toolkit using `rusqlite` (bundled feature) — no separate crate
 
 ### DX Shapes
 
@@ -358,7 +358,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | CONN-05 | Phase 84 | Complete |
 | CONN-06 | Phase 84 | Complete |
 | CONN-07 | Phase 84 | Complete |
-| CONN-08 | Phase 84 | Pending |
+| CONN-08 | Phase 84 | Complete |
 | SHAP-A-01 | Phase 85 | Pending |
 | SHAP-B-01 | Phase 86 | Pending |
 | SHAP-C-01 | Phase 86 | Pending |
