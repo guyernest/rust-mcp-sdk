@@ -1,0 +1,13 @@
+[server]
+name = "fuzz-seed"
+version = "0.0.1"
+
+[database]
+type = "postgres"
+url = "env:DATABASE_URL"
+database = "appdb"
+query_timeout_ms = 5000
+
+[[database.tables]]
+name = "users"
+description = "user accounts"
