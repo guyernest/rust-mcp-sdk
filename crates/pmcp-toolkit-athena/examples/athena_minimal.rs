@@ -1,6 +1,18 @@
-//! Shape C example — Plan 07 fills.
+//! Athena connector minimal example — Shape C ≤15-line `main`.
 //!
-//! Wave 0 ships a buildable shell so `cargo build --example athena_minimal`
-//! succeeds. Plan 07 replaces the body with the ≤15-line Shape C usage.
+//! Uses the `dev_mock` cargo feature for offline demonstration (REVIEWS H5):
+//! the mock is reached via the published `dev_mock` path, NOT a `#[path]`
+//! include into `tests/`.
+//!
+//! Run: `cargo run -p pmcp-toolkit-athena --features dev_mock --example athena_minimal`
 
-fn main() {}
+use pmcp_server_toolkit::sql::SqlConnector;
+use pmcp_toolkit_athena::dev_mock::AthenaMock;
+
+#[tokio::main(flavor = "current_thread")]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let conn = AthenaMock::open_images_fixture();
+    let rows = conn.execute("SELECT * FROM images", &[]).await?;
+    println!("athena_minimal: {} rows", rows.len());
+    Ok(())
+}
