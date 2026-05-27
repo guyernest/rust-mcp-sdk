@@ -196,3 +196,59 @@ a future misconfig.
 _Reviewed: 2026-05-27T02:14:37Z_
 _Reviewer: Claude (gsd-code-reviewer)_
 _Depth: standard_
+
+---
+
+## Gap-Closure Review (85-07–85-10)
+
+**Reviewed:** 2026-05-26
+**Depth:** standard
+**Diff range:** `7bb76b19..HEAD`
+**Scope:** NEW bugs / security / regressions introduced by the fixes that close the prior findings (require_limit unenforced, parity masking, prompt content loss, dropped variables, null-default, swallowed JoinError, per-request pipeline rebuild, sqlite :memory:, empty env vars). Prior findings are NOT re-flagged — they are the intended fixes.
+
+**status: clean**
+
+No new bugs, security vulnerabilities, or regressions were introduced by the gap-closure changes. Every fix is sound, additive where it touches the published `pmcp-code-mode` crate, and accompanied by gating tests. Findings below are verification notes (no severity), not defects.
+
+### Fix-by-fix verdict
+
+| Fix | Verdict | Notes |
+|-----|---------|-------|
+| `SqlCodeExecutor::new` made fallible + caches `Arc<ValidationPipeline>` | SOUND | Error is propagated, never swallowed. All three call sites updated: `builder_ext.rs:354-357` adds `?` (returns `Result<Self>`, same `ToolkitError` alias — no conversion needed); the two test helpers use `.expect(...)`. No stale `self.config` reference remains on `SqlCodeExecutor` (the `self.config` at `code_mode.rs:282` belongs to the unrelated `ValidateCodeHandler`). Construction-time secret resolution = bad secret fails fast; a removed env var post-startup no longer breaks in-flight requests (`pipeline_cached_at_construction_not_reread_per_execute` proves it). |
+| `variables_to_params` binding (`code_mode.rs`) | SOUND, NO INJECTION | Produces `Vec<(String, serde_json::Value)>` matching `SqlConnector::execute`'s param slice; values are BOUND (parameterized), never string-interpolated — no SQL injection / type confusion. Leading `:` stripped via `strip_prefix(':').unwrap_or(k)` to match `extract_named_params`/connector keying. Non-object / `None` → empty `Vec` (the `let-else` guard), so the parity `execute_code` scenario (passes `None`) is unaffected. |
+| `extract_named_params` explicit-null → default (`tools.rs:293`) | SOUND for the documented model | `.filter(|v| !v.is_null())` makes an explicit `null` fall through to the declared default exactly like an omitted key — fixes the `LIMIT NULL` datatype-mismatch. See note GC-1 for the only edge. |
+| `merge_schema_resource` first-match scoping (`assemble.rs:111`) | SOUND | `found_schema` is a captured `&mut bool` mutated inside the `.map()` closure, which runs in `Vec` iteration order during `.collect()` — the FIRST `/schema`-suffixed resource gets the DDL override, all later ones pass through. The `!found_schema` append-fallback path is unchanged. |
+| `synthesize_instructions_resource` / `synthesize_policies_resource` / `merged_resource_configs` (`assemble.rs`) | SOUND, NO SECRET LEAK | `synthesize_policies_resource` reads ONLY non-secret `CodeModeSection` fields (`enabled`, `allow_writes`, `allow_deletes`, `allow_ddl`, `require_limit`, `max_limit`, `blocked_tables`, `sensitive_columns`, `auto_approve_levels`, `token_ttl_seconds`, `limits.*`). It NEVER references `token_secret`, `allow_inline_token_secret_for_dev`, or `server_id` (T-85-09-01 satisfied). Both helpers return `None` when `[code_mode]` is absent (backward-compatible). `merged_resource_configs` dedup is correct: synthesized resources are appended only when their exact URI is not already declared, so an operator `[[resources]]` block WINS and no declared resource is dropped. |
+| `sql_require_limit` added to published `pmcp-code-mode` (`config.rs` + `validation.rs`) | ADDITIVE / NON-BREAKING | New field is `#[serde(default, alias = "require_limit")]` defaulting to `false`; `require_limit_serde_round_trip` proves omission → `false`. The `missing_limit` rejection only fires in the `Select` arm when `sql_require_limit && !info.has_limit`, so configs that omit it keep today's behavior (`require_limit_default_accepts_bare_select`). Writes are untouched (`require_limit_does_not_affect_writes`). No false-positive on LIMITed queries (`require_limit_accepts_select_with_limit`). |
+| `build_cm_config` maps `require_limit → sql_require_limit` (`code_mode.rs:548`) | SOUND | Direct assignment replaces the discarded `let _require_limit_gap`. `build_cm_config_maps_require_limit_{true,false}` cover both directions. |
+| `resolve_secret_env_var` empty/whitespace-env handling (`code_mode.rs`) | SOUND | Centralizes both `env:VAR` and `${VAR}` forms; a set-but-empty / all-whitespace value surfaces a clear `CodeMode("...set but empty...")` error instead of flowing to the HMAC layer as a degenerate secret. Covered by two tests. |
+| `dispatch_sqlite` `file_path`→`database`→`:memory:` (`dispatch.rs:146-162`) | SOUND | Precedence is correct: `file_path` wins, then `database`, then `MissingField`. `:memory:` is explicitly routed to `open_in_memory()` (line 158) after resolution, so either `file_path=":memory:"` or `database=":memory:"` works consistently. |
+| `non_empty_env` for `AWS_REGION`/`AWS_DEFAULT_REGION` (`dispatch.rs`) | SOUND | Set-but-empty / whitespace region is treated as unset so the `AWS_DEFAULT_REGION` → static `us-east-1` fallback fires. Four region tests with a restore-on-drop `RegionEnvGuard` cover the matrix. |
+| `RunError::Serving` + `handle.await.map_err(RunError::Serving)?` (`lib.rs:263`) | SOUND, NO DOUBLE-PANIC | `map_err` converts the `JoinError` (panic/abort) into `RunError::Serving` and returns it — it does NOT re-`unwrap`, so a task panic surfaces as a non-zero process exit, not a re-raised panic. `serving_task_panic_maps_to_run_error_serving` asserts `join_err.is_panic()`. |
+| Parity test per-step gating + presence guard (`parity_chinook.rs`) | SOUND | Gates on every `step_results[i].success` (computed BEFORE the `continue_on_failure` exclusion) plus a `REQUIRED_REJECTION_SCENARIOS` presence guard, so a regressed or deleted rejection scenario now fails the test. Correctly closes the Gap-2 masking. |
+
+### Verification notes (no severity — not defects)
+
+- **GC-1 — `extract_named_params` no longer binds a genuine SQL `NULL`.** `tools.rs:293`. The `.filter(|v| !v.is_null())` means an explicit `{"param": null}` now (a) applies the declared default if one exists, or (b) drops the param entirely if it has no default. The toolkit's tool model is "named params with declared defaults," and binding a real `NULL` is not an advertised use case, so this is the correct tradeoff vs. the prior `LIMIT NULL` crash. If a future tool legitimately needs to bind SQL `NULL`, the param would silently vanish and the connector would error on the unbound `:param` placeholder. Worth a one-line doc note on the tool-param model; not actionable for this phase.
+
+- **GC-2 — `sql_require_limit` inherits the existing `has_limit` subquery semantics.** `validation.rs:1085` reuses `SqlStatementInfo::has_limit`, which `sql.rs:analyze_query` sets `true` if ANY query level (outer OR a recursed subquery, `sql.rs:372`) carries a `LIMIT`. So `SELECT * FROM (SELECT * FROM Artist LIMIT 10)` — an unbounded OUTER query — sets `has_limit=true` and would pass `require_limit`. This is PRE-EXISTING `has_limit` behavior (the `sql_max_rows` path at `sql.rs:192` already relied on it); the gap-closure only reuses it and introduces no new defect. Tightening `require_limit` to require an OUTER-query LIMIT would be a follow-up enhancement, not a regression.
+
+- **GC-3 — `MissingField` message contains embedded backticks.** `dispatch.rs:153` sets `field: "file_path` or `database"`, rendering as ``backend 'sqlite' requires the config field 'file_path` or `database'``. Cosmetic (Markdown-style emphasis inside a plain error string); clear enough, no behavior impact.
+
+### Files reviewed (gap-closure scope)
+
+- crates/pmcp-code-mode/src/config.rs
+- crates/pmcp-code-mode/src/validation.rs
+- crates/pmcp-server-toolkit/src/code_mode.rs
+- crates/pmcp-server-toolkit/src/tools.rs
+- crates/pmcp-server-toolkit/src/builder_ext.rs
+- crates/pmcp-sql-server/src/assemble.rs
+- crates/pmcp-sql-server/src/dispatch.rs
+- crates/pmcp-sql-server/src/lib.rs
+- (cross-referenced: crates/pmcp-code-mode/src/sql.rs, crates/pmcp-server-toolkit/src/sql/mod.rs, crates/pmcp-server-toolkit/src/config.rs, crates/pmcp-sql-server/tests/parity_chinook.rs)
+
+---
+
+_Gap-closure reviewed: 2026-05-26_
+_Reviewer: Claude (gsd-code-reviewer)_
+_Depth: standard_
