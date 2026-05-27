@@ -140,13 +140,17 @@ fn dispatch_sqlite(cfg: &ServerConfig) -> Result<Arc<dyn SqlConnector>, Dispatch
     use pmcp_server_toolkit::sql::SqliteConnector;
     use std::path::Path;
 
+    // Resolve the path from `file_path` first, then fall back to the documented
+    // `database = ":memory:"` / `database = "<path>"` form (config.rs DatabaseSection
+    // docs — 85-10 dispatch fix). `file_path` takes precedence when both are set.
     let path = cfg
         .database
         .file_path
         .as_deref()
+        .or(cfg.database.database.as_deref())
         .ok_or(DispatchError::MissingField {
             backend: "sqlite",
-            field: "file_path",
+            field: "file_path` or `database",
         })?;
     // T-85-04-01: rusqlite's open error echoes the file path, so map any open
     // failure to the path-free DispatchError::SqliteOpen. The operator can find
@@ -211,6 +215,15 @@ async fn dispatch_mysql(_cfg: &ServerConfig) -> Result<Arc<dyn SqlConnector>, Di
     Err(DispatchError::FeatureMissing("mysql".to_string()))
 }
 
+/// Read an env var, returning `None` when it is unset OR set-but-empty /
+/// all-whitespace (85-10 region fix). A set-but-empty `AWS_REGION` previously
+/// flowed through as a present empty region; treating it as unset lets the
+/// `AWS_DEFAULT_REGION` / static-default fallback fire.
+#[cfg(feature = "athena")]
+fn non_empty_env(key: &str) -> Option<String> {
+    std::env::var(key).ok().filter(|v| !v.trim().is_empty())
+}
+
 /// Resolve the AWS region for offline-safe Athena construction.
 ///
 /// REVIEW FIX (T-85-04-04): an EXPLICIT region keeps `aws_config::load()` from
@@ -218,11 +231,15 @@ async fn dispatch_mysql(_cfg: &ServerConfig) -> Result<Arc<dyn SqlConnector>, Di
 /// `AWS_DEFAULT_REGION`; falls back to a static default when neither is set so
 /// the SC-1 no-creds test never reaches the network. Credentials remain lazy
 /// (resolved on the first API call, which dispatch never makes).
+///
+/// A set-but-EMPTY `AWS_REGION` / `AWS_DEFAULT_REGION` is treated as UNSET
+/// (85-10 region fix) so an empty value falls through instead of yielding an
+/// empty region.
 #[cfg(feature = "athena")]
 fn resolve_athena_region() -> String {
-    std::env::var("AWS_REGION")
-        .or_else(|_| std::env::var("AWS_DEFAULT_REGION"))
-        .unwrap_or_else(|_| "us-east-1".to_string())
+    non_empty_env("AWS_REGION")
+        .or_else(|| non_empty_env("AWS_DEFAULT_REGION"))
+        .unwrap_or_else(|| "us-east-1".to_string())
 }
 
 /// Construct the Athena connector (SDK client only; offline-safe, lazy creds).
@@ -257,4 +274,82 @@ async fn dispatch_athena(cfg: &ServerConfig) -> Result<Arc<dyn SqlConnector>, Di
 #[cfg(not(feature = "athena"))]
 async fn dispatch_athena(_cfg: &ServerConfig) -> Result<Arc<dyn SqlConnector>, DispatchError> {
     Err(DispatchError::FeatureMissing("athena".to_string()))
+}
+
+#[cfg(all(test, feature = "athena"))]
+mod region_tests {
+    use super::{non_empty_env, resolve_athena_region};
+
+    /// Snapshot + clear the two region env vars, returning a guard that restores
+    /// them on drop so the test never bleeds region state into siblings.
+    struct RegionEnvGuard {
+        region: Option<String>,
+        default_region: Option<String>,
+    }
+
+    impl RegionEnvGuard {
+        fn take() -> Self {
+            let guard = Self {
+                region: std::env::var("AWS_REGION").ok(),
+                default_region: std::env::var("AWS_DEFAULT_REGION").ok(),
+            };
+            std::env::remove_var("AWS_REGION");
+            std::env::remove_var("AWS_DEFAULT_REGION");
+            guard
+        }
+    }
+
+    impl Drop for RegionEnvGuard {
+        fn drop(&mut self) {
+            match &self.region {
+                Some(v) => std::env::set_var("AWS_REGION", v),
+                None => std::env::remove_var("AWS_REGION"),
+            }
+            match &self.default_region {
+                Some(v) => std::env::set_var("AWS_DEFAULT_REGION", v),
+                None => std::env::remove_var("AWS_DEFAULT_REGION"),
+            }
+        }
+    }
+
+    #[test]
+    fn non_empty_env_treats_empty_and_whitespace_as_unset() {
+        let _guard = RegionEnvGuard::take();
+        std::env::set_var("AWS_REGION", "");
+        assert_eq!(non_empty_env("AWS_REGION"), None, "empty must be unset");
+        std::env::set_var("AWS_REGION", "   ");
+        assert_eq!(
+            non_empty_env("AWS_REGION"),
+            None,
+            "whitespace must be unset"
+        );
+        std::env::set_var("AWS_REGION", "us-west-2");
+        assert_eq!(non_empty_env("AWS_REGION"), Some("us-west-2".to_string()));
+    }
+
+    #[test]
+    fn empty_aws_region_falls_through_to_default_region() {
+        // 85-10: a set-but-EMPTY AWS_REGION must fall through to
+        // AWS_DEFAULT_REGION rather than yielding an empty region.
+        let _guard = RegionEnvGuard::take();
+        std::env::set_var("AWS_REGION", "");
+        std::env::set_var("AWS_DEFAULT_REGION", "eu-west-1");
+        assert_eq!(resolve_athena_region(), "eu-west-1");
+    }
+
+    #[test]
+    fn both_region_vars_empty_use_static_default() {
+        let _guard = RegionEnvGuard::take();
+        std::env::set_var("AWS_REGION", "");
+        std::env::set_var("AWS_DEFAULT_REGION", "");
+        assert_eq!(resolve_athena_region(), "us-east-1");
+    }
+
+    #[test]
+    fn aws_region_wins_when_set_non_empty() {
+        let _guard = RegionEnvGuard::take();
+        std::env::set_var("AWS_REGION", "ap-south-1");
+        std::env::set_var("AWS_DEFAULT_REGION", "eu-west-1");
+        assert_eq!(resolve_athena_region(), "ap-south-1");
+    }
 }

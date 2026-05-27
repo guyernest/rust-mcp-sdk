@@ -85,6 +85,15 @@ pub enum RunError {
     /// Binding / starting the streamable-HTTP listener failed.
     #[error("streamable-HTTP server failed to start: {0}")]
     Serve(#[source] pmcp::Error),
+
+    /// The serving task ended abnormally (panic / abort).
+    ///
+    /// A discarded `JoinError` would hide a crashed listener — the process
+    /// looks healthy while serving nothing. Propagating it here surfaces as a
+    /// non-zero process exit so a supervisor restarts the binary (threat
+    /// T-85-10-02).
+    #[error("streamable-HTTP serving task failed: {0}")]
+    Serving(#[source] tokio::task::JoinError),
 }
 
 /// Load + validate the config and read the schema file.
@@ -246,9 +255,12 @@ pub async fn run(args: Args) -> Result<(), RunError> {
     let (bound, handle) = run_serving(&args).await?;
     tracing::info!(target: "pmcp_sql_server", %bound, "streamable-HTTP server listening");
 
-    // Await the serving task for the lifetime of the process. A JoinError (panic
-    // / abort) ends the run; the process exits with the run's Result.
-    let _ = handle.await;
+    // Await the serving task for the lifetime of the process. A JoinError
+    // (panic / abort) is propagated as RunError::Serving so the process exits
+    // non-zero — main.rs returns run()'s Result, letting a supervisor restart a
+    // crashed listener instead of treating the silent exit as healthy
+    // (threat T-85-10-02).
+    handle.await.map_err(RunError::Serving)?;
     Ok(())
 }
 
@@ -273,5 +285,44 @@ mod tests {
         .map(|a| a.http)
         .unwrap();
         assert_eq!(err, "not-an-addr");
+    }
+
+    /// 85-10 / T-85-10-02: a serving-task panic must surface as
+    /// `RunError::Serving` (a non-zero process exit), NOT a discarded `()`.
+    /// This mirrors `run()`'s `handle.await.map_err(RunError::Serving)` logic on
+    /// a task that panics — driving the full `run()` (which binds a real
+    /// listener) is impractical in a unit test.
+    #[tokio::test]
+    async fn serving_task_panic_maps_to_run_error_serving() {
+        let handle: JoinHandle<()> = tokio::spawn(async {
+            panic!("simulated serve-task panic");
+        });
+        let outcome: Result<(), RunError> = handle.await.map_err(RunError::Serving);
+        match outcome {
+            Ok(()) => panic!("a panicking serve task must NOT map to Ok(())"),
+            Err(RunError::Serving(join_err)) => {
+                assert!(
+                    join_err.is_panic(),
+                    "the JoinError must reflect the task panic"
+                );
+            },
+            Err(other) => panic!("expected RunError::Serving, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn run_error_serving_display_is_descriptive() {
+        // A panic-derived JoinError exercises the Serving Display wording without
+        // pulling in extra tokio features / a futures dependency.
+        let handle: JoinHandle<()> = tokio::spawn(async {
+            panic!("serve-task panic for Display assertion");
+        });
+        let join_err = handle.await.expect_err("panicking task yields a JoinError");
+        let err = RunError::Serving(join_err);
+        let rendered = format!("{err}");
+        assert!(
+            rendered.contains("serving task failed"),
+            "Serving Display must describe the failure: {rendered}"
+        );
     }
 }

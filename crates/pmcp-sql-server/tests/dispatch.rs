@@ -52,16 +52,59 @@ async fn sqlite_memory_uses_open_in_memory() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn sqlite_without_file_path_reports_missing_field() {
+async fn sqlite_without_file_path_or_database_reports_missing_field() {
+    // 85-10: with NEITHER file_path NOR database set, dispatch reports
+    // MissingField naming both accepted fields.
     let cfg = config_with_database("type = \"sqlite\"");
-    let err = expect_dispatch_err(dispatch(&cfg).await, "missing file_path must err");
+    let err = expect_dispatch_err(dispatch(&cfg).await, "missing file_path/database must err");
     assert!(matches!(
         err,
         DispatchError::MissingField {
             backend: "sqlite",
-            field: "file_path"
+            field: "file_path` or `database"
         }
     ));
+}
+
+/// 85-10 dispatch fix: the documented `database = ":memory:"` form (per
+/// `DatabaseSection` docs) opens the in-memory SQLite backend when `file_path`
+/// is absent.
+#[tokio::test(flavor = "current_thread")]
+async fn sqlite_database_memory_form_opens_in_memory() {
+    let cfg = config_with_database("type = \"sqlite\"\ndatabase = \":memory:\"");
+    let conn = dispatch(&cfg)
+        .await
+        .expect("database = \":memory:\" must dispatch to the SQLite backend");
+    assert_eq!(conn.dialect(), Dialect::Sqlite);
+}
+
+/// 85-10: `database = "<path>"` (a file path) is also accepted as the SQLite
+/// fallback path when `file_path` is absent.
+#[tokio::test(flavor = "current_thread")]
+async fn sqlite_database_file_path_form_opens_file() {
+    let tmp = tempfile::NamedTempFile::new().expect("temp db");
+    let path = tmp.path().to_str().expect("utf8 path");
+    let cfg = config_with_database(&format!("type = \"sqlite\"\ndatabase = \"{path}\""));
+    let conn = dispatch(&cfg)
+        .await
+        .expect("database = \"<path>\" must dispatch to the SQLite backend");
+    assert_eq!(conn.dialect(), Dialect::Sqlite);
+}
+
+/// 85-10: `file_path` takes precedence over `database` when BOTH are set.
+#[tokio::test(flavor = "current_thread")]
+async fn sqlite_file_path_takes_precedence_over_database() {
+    let tmp = tempfile::NamedTempFile::new().expect("temp db");
+    let path = tmp.path().to_str().expect("utf8 path");
+    // database points at a nonexistent nested path that WOULD fail to open;
+    // file_path (a real temp file) must win, so dispatch succeeds.
+    let cfg = config_with_database(&format!(
+        "type = \"sqlite\"\nfile_path = \"{path}\"\ndatabase = \"/nonexistent-precedence/db.sqlite\""
+    ));
+    let conn = dispatch(&cfg)
+        .await
+        .expect("file_path must take precedence over database");
+    assert_eq!(conn.dialect(), Dialect::Sqlite);
 }
 
 #[tokio::test(flavor = "current_thread")]
