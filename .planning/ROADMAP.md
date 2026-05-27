@@ -1518,7 +1518,7 @@ Plans:
 Plans:
 **Wave 1**
 
-- [ ] 86-01-PLAN.md — SqliteConnector::execute_batch bootstrap helper (+doctest/unit) + example slot reg + deploy single-crate-resolution spike [wave 1]
+- [ ] 86-01-PLAN.md — execute_batch bootstrap helper + `http` feature forward (pmcp/streamable-http) + asset/db-path resolver (demo_db_path, /var/task vs /tmp) + CONCRETE single-crate-deploy spike [wave 1]
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
@@ -1531,7 +1531,7 @@ Plans:
 **Wave 4** *(blocked on Wave 3 completion)*
 
 - [ ] 86-04-PLAN.md — TEST-05: tempdir scaffold -> patch-deps -> real cargo run -> poll -> tools/list + tools/call [wave 4]
-- [ ] 86-05-PLAN.md — Shape D: deploy config-driven detection seam + scaffold deploy.toml [assets] + TargetEntry-unchanged guard (D-10) [wave 4]
+- [ ] 86-05-PLAN.md — Shape D: detection seam + single-crate Lambda build (builder.rs) + deploy.toml [assets]/pmcp-run + env-ref secret posture + packaging/D-10 tests [wave 4]
 
 **Wave 5** *(blocked on Wave 4 completion)*
 
