@@ -85,6 +85,31 @@ fn read_root_package_name(cargo_toml: &toml::Value) -> Option<String> {
         .map(String::from)
 }
 
+/// Detect a config-driven single-crate project (Shape B/D, SHAP-D-01).
+///
+/// True when the project ROOT carries the three markers a `cargo pmcp new --kind
+/// sql-server` scaffold emits (D-09 heuristic):
+/// 1. `config.toml` at the root,
+/// 2. `schema.sql` at the root, and
+/// 3. a root `Cargo.toml` whose `[dependencies]` reference `pmcp-server-toolkit`.
+///
+/// This is the detection seam used by the deploy `None` arm (M3) to emit an
+/// informational note before the existing `[assets]`-driven bundling + the
+/// single-crate `find_lambda_package_dir` fallback (H3) run for this layout. It
+/// adds NO `TargetEntry` variant and changes NO enum (D-10) — pmcp.run is selected
+/// purely by the scaffold's `target_type = "pmcp-run"` (M3).
+///
+/// Lives as a `pub(crate)` free fn so it is unit-testable in-module (a bin-only
+/// helper cannot be reached from an integration test — M3).
+pub(crate) fn is_config_driven_project(project_root: &Path) -> bool {
+    let has_config = project_root.join("config.toml").exists();
+    let has_schema = project_root.join("schema.sql").exists();
+    let references_toolkit = std::fs::read_to_string(project_root.join("Cargo.toml"))
+        .map(|c| c.contains("pmcp-server-toolkit"))
+        .unwrap_or(false);
+    has_config && has_schema && references_toolkit
+}
+
 pub mod deploy;
 pub mod init;
 
@@ -898,6 +923,21 @@ impl DeployCommand {
                     return Ok(());
                 }
 
+                // Phase 86 Plan 05 (M3/H3): detect a config-driven single-crate
+                // project and emit an informational note. Detection drives NO new
+                // code path of its own — the existing `[assets]`-driven bundling
+                // (the scaffold's deploy.toml lists config.toml + schema.sql) and
+                // the single-crate `find_lambda_package_dir` fallback (H3) handle
+                // this layout. pmcp.run is selected by the scaffold's
+                // `target_type = "pmcp-run"` (M3), NOT inferred from project shape,
+                // and NO `TargetEntry` variant is added (D-10).
+                if is_config_driven_project(&project_root) && global_flags.should_output() {
+                    println!(
+                        "   Detected config-driven project (config.toml + schema.sql + pmcp-server-toolkit); \
+                         bundling assets and building the project root as the Lambda package."
+                    );
+                }
+
                 let artifact = target.build(&config).await?;
                 let outputs = target.deploy(&config, artifact).await?;
 
@@ -1490,5 +1530,69 @@ mod phase_77_banner_smoke_tests {
             Some(v) => std::env::set_var("PMCP_TARGET", v),
             None => std::env::remove_var("PMCP_TARGET"),
         }
+    }
+}
+
+#[cfg(test)]
+mod config_driven_detection_tests {
+    use super::*;
+
+    fn write(path: &std::path::Path, contents: &str) {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        std::fs::write(path, contents).unwrap();
+    }
+
+    /// M3: `is_config_driven_project` is true only when all THREE markers are
+    /// present (config.toml + schema.sql + a `pmcp-server-toolkit` dep). Tested
+    /// in-module because the `pub(crate)` helper is unreachable from an
+    /// integration test.
+    #[test]
+    fn detects_full_config_driven_project() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        write(
+            &root.join("Cargo.toml"),
+            "[package]\nname = \"demo\"\n\n[dependencies]\npmcp-server-toolkit = \"0.1.0\"\n",
+        );
+        write(&root.join("config.toml"), "[server]\nname = \"demo\"\n");
+        write(
+            &root.join("schema.sql"),
+            "CREATE TABLE IF NOT EXISTS t(id INTEGER);\n",
+        );
+
+        assert!(is_config_driven_project(root));
+    }
+
+    /// Missing `schema.sql` ⇒ not config-driven (negative case the plan calls out).
+    #[test]
+    fn not_config_driven_when_schema_absent() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        write(
+            &root.join("Cargo.toml"),
+            "[package]\nname = \"demo\"\n\n[dependencies]\npmcp-server-toolkit = \"0.1.0\"\n",
+        );
+        write(&root.join("config.toml"), "[server]\nname = \"demo\"\n");
+        // no schema.sql
+
+        assert!(!is_config_driven_project(root));
+    }
+
+    /// Missing the toolkit dependency ⇒ not config-driven (a bare crate with the
+    /// two files but no toolkit dep must NOT be treated as config-driven).
+    #[test]
+    fn not_config_driven_when_toolkit_dep_absent() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        write(&root.join("Cargo.toml"), "[package]\nname = \"demo\"\n");
+        write(&root.join("config.toml"), "[server]\nname = \"demo\"\n");
+        write(
+            &root.join("schema.sql"),
+            "CREATE TABLE IF NOT EXISTS t(id INTEGER);\n",
+        );
+
+        assert!(!is_config_driven_project(root));
     }
 }

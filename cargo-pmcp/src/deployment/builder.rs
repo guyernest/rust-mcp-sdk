@@ -318,26 +318,25 @@ impl BinaryBuilder {
             return Ok(preferred_dir);
         }
 
-        // Search workspace members for *-lambda packages
-        let binaries = crate::deployment::naming::detect_workspace_binaries(&self.project_root)?;
+        // Search workspace members for a *-lambda package exposing a `bootstrap`
+        // binary. A metadata error here (e.g. a single-crate config-driven project
+        // whose manifest does not resolve as a workspace) is NOT fatal: we fall
+        // through to the single-crate fallback below rather than bailing early (H3).
+        if let Some(pkg_dir) = self.find_workspace_lambda_package_dir() {
+            return Ok(pkg_dir);
+        }
 
-        for binary in &binaries {
-            if binary.binary_name == "bootstrap" && binary.package_name.ends_with("-lambda") {
-                // Find the Cargo.toml for this package using cargo_metadata
-                let metadata = cargo_metadata::MetadataCommand::new()
-                    .current_dir(&self.project_root)
-                    .exec()
-                    .context("Failed to read workspace metadata")?;
-
-                if let Some(pkg) = metadata
-                    .packages
-                    .iter()
-                    .find(|p| p.name == binary.package_name)
-                {
-                    let pkg_dir = pkg.manifest_path.parent().expect("manifest has parent");
-                    return Ok(pkg_dir.into());
-                }
-            }
+        // H3 (Phase 86 Plan 05): single-crate config-driven fallback.
+        //
+        // A config-driven project (`cargo pmcp new --kind sql-server`) is a SINGLE
+        // crate where the project ROOT *is* the Lambda package — there is no
+        // `<server>-lambda` subdir and no `*-lambda` workspace member. When the root
+        // is such a project, return the project root itself so `cargo lambda build`
+        // runs in the crate that defines the deployable binary. This is an ADDITIVE
+        // final fallback: the two resolution paths above are always tried first, so
+        // existing `*-lambda` layouts are unaffected (no regression).
+        if self.is_single_crate_config_root() {
+            return Ok(self.project_root.clone());
         }
 
         bail!(
@@ -345,6 +344,51 @@ impl BinaryBuilder {
              Run 'cargo pmcp deploy init --target pmcp-run' to create one.",
             preferred_package
         );
+    }
+
+    /// Search workspace members for a `*-lambda` package that exposes a `bootstrap`
+    /// binary and return its package directory.
+    ///
+    /// Returns `None` (rather than an error) when workspace metadata cannot be read
+    /// or no such package exists, so the caller can fall through to the single-crate
+    /// fallback (H3). Extracted from `find_lambda_package_dir` to keep that fn's
+    /// cognitive complexity low.
+    fn find_workspace_lambda_package_dir(&self) -> Option<PathBuf> {
+        let binaries =
+            crate::deployment::naming::detect_workspace_binaries(&self.project_root).ok()?;
+
+        let pkg_name = binaries.iter().find_map(|binary| {
+            (binary.binary_name == "bootstrap" && binary.package_name.ends_with("-lambda"))
+                .then(|| binary.package_name.clone())
+        })?;
+
+        let metadata = cargo_metadata::MetadataCommand::new()
+            .current_dir(&self.project_root)
+            .exec()
+            .ok()?;
+
+        metadata
+            .packages
+            .iter()
+            .find(|p| p.name == pkg_name)
+            .and_then(|pkg| pkg.manifest_path.parent().map(|p| p.into()))
+    }
+
+    /// Whether the project root is a single-crate config-driven project whose root
+    /// crate IS the Lambda package (H3).
+    ///
+    /// True when the root `Cargo.toml` declares a `[package]` (i.e. is NOT a virtual
+    /// workspace manifest) AND both `config.toml` and `schema.sql` are present at the
+    /// root — the same config-driven heuristic the deploy seam uses (D-09). Kept tiny
+    /// so `find_lambda_package_dir` stays well under the cog-25 budget.
+    fn is_single_crate_config_root(&self) -> bool {
+        let cargo_toml = self.project_root.join("Cargo.toml");
+        let is_package_crate = std::fs::read_to_string(&cargo_toml)
+            .map(|c| c.contains("[package]"))
+            .unwrap_or(false);
+        is_package_crate
+            && self.project_root.join("config.toml").exists()
+            && self.project_root.join("schema.sql").exists()
     }
 
     fn find_lambda_package(&self, server_name: &str) -> Result<String> {
@@ -624,5 +668,108 @@ impl BinaryBuilder {
         } else {
             None
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Construct a `BinaryBuilder` for a given root WITHOUT touching the filesystem
+    /// for config (the `new()` constructor calls `DeployConfig::load`, which requires
+    /// `.pmcp/deploy.toml`). Tests only exercise path resolution, so we build the
+    /// struct directly (same-module private-field access).
+    fn builder_for(root: PathBuf) -> BinaryBuilder {
+        BinaryBuilder {
+            project_root: root,
+            oauth_enabled: false,
+            build_oauth_lambdas: false,
+        }
+    }
+
+    fn write(path: &Path, contents: &str) {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        std::fs::write(path, contents).unwrap();
+    }
+
+    /// (ii) H3: a single-crate config-driven root (root `[package]` + config.toml +
+    /// schema.sql, no `*-lambda` package) resolves to the project root itself.
+    #[test]
+    fn find_lambda_package_dir_resolves_single_crate_config_root() {
+        let tmp = std::env::temp_dir().join(format!("pmcp-h3-single-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        write(
+            &tmp.join("Cargo.toml"),
+            "[package]\nname = \"demo\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        );
+        write(&tmp.join("config.toml"), "[server]\nname = \"demo\"\n");
+        write(
+            &tmp.join("schema.sql"),
+            "CREATE TABLE IF NOT EXISTS t(id INTEGER);\n",
+        );
+
+        let b = builder_for(tmp.clone());
+        assert!(b.is_single_crate_config_root());
+        let resolved = b.find_lambda_package_dir("demo").unwrap();
+        assert_eq!(
+            resolved, tmp,
+            "single-crate config root must resolve to the project root (H3)"
+        );
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// (i) No regression: a `<server>-lambda` subdir with a Cargo.toml still resolves
+    /// FIRST (before the single-crate fallback is even considered).
+    #[test]
+    fn find_lambda_package_dir_prefers_server_lambda_subdir() {
+        let tmp = std::env::temp_dir().join(format!("pmcp-h3-wrapper-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        // Root is also a single-crate config root, to prove the `*-lambda` path wins.
+        write(
+            &tmp.join("Cargo.toml"),
+            "[package]\nname = \"demo\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        );
+        write(&tmp.join("config.toml"), "[server]\nname = \"demo\"\n");
+        write(
+            &tmp.join("schema.sql"),
+            "CREATE TABLE IF NOT EXISTS t(id INTEGER);\n",
+        );
+        let wrapper = tmp.join("demo-lambda");
+        write(
+            &wrapper.join("Cargo.toml"),
+            "[package]\nname = \"demo-lambda\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        );
+
+        let b = builder_for(tmp.clone());
+        let resolved = b.find_lambda_package_dir("demo").unwrap();
+        assert_eq!(
+            resolved, wrapper,
+            "the <server>-lambda subdir must resolve first (no regression)"
+        );
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// (iii) A bare root (no `*-lambda`, no config.toml/schema.sql) still bails.
+    #[test]
+    fn find_lambda_package_dir_bails_on_bare_root() {
+        let tmp = std::env::temp_dir().join(format!("pmcp-h3-bare-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        write(
+            &tmp.join("Cargo.toml"),
+            "[package]\nname = \"demo\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        );
+
+        let b = builder_for(tmp.clone());
+        assert!(!b.is_single_crate_config_root());
+        assert!(
+            b.find_lambda_package_dir("demo").is_err(),
+            "a bare root (no *-lambda, no config-driven markers) must bail"
+        );
+
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 }
