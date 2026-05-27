@@ -1522,7 +1522,7 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 86-02-PLAN.md — Shape C: ≤15-line serving example (toolkit + SQLite connector) + spawn-poll integration test + body-count assertion [wave 2]
+- [x] 86-02-PLAN.md — Shape C: ≤15-line serving example (toolkit + SQLite connector) + spawn-poll integration test + body-count assertion [wave 2]
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
@@ -1590,7 +1590,7 @@ Plans:
 | 83. Toolkit Core Lift | 9/9 | Complete   | 2026-05-18 |
 | 84. SQL Connectors | 9/9 | Complete   | 2026-05-26 |
 | 85. Shape A + Reference Parity | 10/10 | Complete    | 2026-05-27 |
-| 86. Shapes B/C/D | 1/6 | In Progress|  |
+| 86. Shapes B/C/D | 2/6 | In Progress|  |
 | 87. Type 2 Authoring Skills Server | 0/? | Not started | - |
 | 88. Dogfood `pmcp-server` | 0/? | Not started | - |
 | 89. Documentation & Migration | 0/? | Not started | - |

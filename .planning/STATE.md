@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v2.2
 milestone_name: Configuration-Only MCP Servers
 status: executing
-stopped_at: Completed 86-01-PLAN.md
-last_updated: "2026-05-27T13:33:00.966Z"
+stopped_at: Completed 86-02-PLAN.md
+last_updated: "2026-05-27T13:45:02.453Z"
 last_activity: 2026-05-27
 progress:
   total_phases: 44
   completed_phases: 37
   total_plans: 171
-  completed_plans: 166
+  completed_plans: 167
   percent: 84
 ---
 
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-05-17)
 ## Current Position
 
 Phase: 86 (shapes-b-c-d-scaffold-library-example-deploy) — EXECUTING
-Plan: 2 of 6
+Plan: 3 of 6
 Status: Ready to execute
 Last activity: 2026-05-27
 
@@ -152,6 +152,9 @@ Inherited from v2.1 (see PROJECT.md + prior Decisions log):
 - [Phase ?]: [Plan 86-01] H1 path resolution decided ONCE: demo_db_path()=/tmp/demo.db under Lambda (LAMBDA_TASK_ROOT set), else relative demo.db; config.toml/schema.sql via pmcp::assets::load_string (Lambda /var/task/assets, local cwd/PMCP_ASSETS_DIR). Exported for 86-02/03/05.
 - [Phase ?]: [Plan 86-01] toolkit http=[pmcp/streamable-http] feature is opt-in (NOT default) — required because [[example]] required-features can only name toolkit features and the toolkit pmcp dep is default-features=false; dev-dep tokio widened to rt-multi-thread, published deps tokio unchanged.
 - [Phase ?]: [Plan 86-01 SPIKE] RESEARCH Open Q#2 = NO: find_lambda_package_dir (builder.rs:312) does NOT resolve a single-crate layout (needs <server>-lambda dir or *-lambda pkg with bootstrap, else bail). Plan 05 MUST add cargo-pmcp/src/deployment/builder.rs to files_modified; seam = build_lambda_binary call at builder.rs:132; scaffolded deploy.toml MUST set target_type=pmcp-run (get_target_id has no shape inference); bundler puts config.toml at zip root + assets under assets/ (H1 validated).
+- [Phase ?]: [Plan 86-02] Shape C example main body is 12 statement lines (≤15 M4): hoisted PMCP_ASSETS_DIR (FIXTURES_DIR const) + HTTP boilerplate (private serve() helper) OUT of main because rustfmt forcibly wraps the builder chain + with_config args. The serve() helper inlines StreamableHttpServer (NOT pmcp_sql_server::serve, Pitfall §2); Plan 03 emits a call to the same shape.
+- [Phase ?]: [Plan 86-02] M4 ≤15-line assertion counts STATEMENT lines not raw physical lines — skips rustfmt method-chain continuations (trimmed start '.') and lone closing-delimiter continuations; a wrapped statement counts once. Documented verbatim in both the example and the test.
+- [Phase ?]: [Plan 86-02] Integration test spawns 'cargo run --example' (examples get no CARGO_BIN_EXE_<example>) and parses the printed PMCP_SQL_SERVER_ADDR= line; ChildGuard(Drop-kill) reaps the subprocess on panic, readiness timeout fails WITH captured stdout/stderr.
 
 ### Roadmap Evolution
 
@@ -201,6 +204,7 @@ Inherited from v2.1 (see PROJECT.md + prior Decisions log):
 | Phase 85 P08 | 12m | 1 tasks | 1 files |
 | Phase 85 P10 | 9min | 2 tasks | 6 files |
 | Phase 86 P01 | 15min | 2 tasks | 3 files |
+| Phase 86 P02 | 35min | 2 tasks | 5 files |
 
 ### Last Activity
 
@@ -218,6 +222,6 @@ Inherited from v2.1 (see PROJECT.md + prior Decisions log):
 
 ## Session Continuity
 
-Last session: 2026-05-27T13:33:00.960Z
-Stopped at: Completed 86-01-PLAN.md
+Last session: 2026-05-27T13:44:52.511Z
+Stopped at: Completed 86-02-PLAN.md
 Resume: Plan 85-03 COMPLETE — scaffolded `crates/pmcp-sql-server` (Shape A pure-config binary): feature-gated 4-connector manifest (sqlite/postgres/mysql/athena, all default-on D-07), lib/main split with a placeholder `lib::run()` Wave 2 replaces. Vendored FOUR self-contained parity fixtures into the SDK repo (closes RESEARCH Open Q#1): the DATA-BEARING `tests/fixtures/chinook.db` (~984 KB, REVIEW FIX #1 — real rows for the parity replay), the SEPARATE `chinook.ddl` (11 CREATE TABLE, the --schema text input D-06), `generated.yaml` (29-scenario contract), and `reference-config.toml` — all publish-excluded via `exclude = [tests/, …]`. 6-test `schema_fixture.rs` proves the DB returns Rock/AC-DC through the real SqliteConnector, the DDL builds a standalone 11-table schema, and generated.yaml parses as a `mcp_tester::TestScenario`. REF-02 fixture foundation done. Next: Plan 85-04 (Wave 2) fills `lib::run()` with the real config-load → connector-select → `pmcp::Server` assembly → transport-serve pipeline; Plan 85-06 replays the 29 scenarios against the vendored DB. NOTE: plan counter advanced 2→3 (monotonic) but plan 85-02 is a parallel Wave-1 plan whose SUMMARY is still pending; progress recalc (157/161, 98%) reflects disk truth.
