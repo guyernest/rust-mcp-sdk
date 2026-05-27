@@ -38,7 +38,7 @@ replaying the canonical reference scenarios and asserting result parity.
   live backend, no creds) — Phase 84 connectors already use `connect_lazy`.
 - **REF-02 / SC-3 / SC-4 parity (SQLite Chinook):** spawn the Shape A repro
   against `reference/config.toml` + a committed Chinook DDL fixture, replay
-  `reference/scenarios/generated.yaml` via mcp-tester, assert the 31 encoded
+  `reference/scenarios/generated.yaml` via mcp-tester, assert the 29 encoded
   scenarios pass — covering curated tools, the `validate_code`/`execute_code`
   code-mode pair, prompts, and resources in one harness.
 - ALWAYS coverage (CLAUDE.md): unit + property + integration + doctests +
@@ -70,7 +70,7 @@ replaying the canonical reference scenarios and asserting result parity.
 - **D-01:** **Reproduce the SQLite Chinook reference server, not Athena
   open-images.** The binding result-parity test targets
   `pmcp-run/built-in/sql-api/reference/config.toml` + `chinook.db`. This is
-  pure-Rust, runs in CI with zero cloud creds, and the 31 scenarios in
+  pure-Rust, runs in CI with zero cloud creds, and the 29 scenarios in
   `reference/scenarios/generated.yaml` already encode that server's behavior.
   This is also the *more faithful* reading of REF-02 — its verification clause
   literally says "replaying … `reference/scenarios/`", which target Chinook.
@@ -135,7 +135,7 @@ replaying the canonical reference scenarios and asserting result parity.
 
 - **D-10:** **mcp-tester replay against the scenarios IS the parity assertion.**
   Spawn the Shape A repro, replay `reference/scenarios/generated.yaml` via
-  mcp-tester, assert all 31 scenarios pass. The scenarios already encode the
+  mcp-tester, assert all 29 scenarios pass. The scenarios already encode the
   production server's expected behavior, so passing them = result parity — no
   need to build/run the pmcp-run Lambda. Rejected: dual live-run + diff (needs
   the Lambda running), golden snapshot (staleness risk).
