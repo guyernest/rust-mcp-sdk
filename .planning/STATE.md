@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v2.2
 milestone_name: Configuration-Only MCP Servers
 status: verifying
-stopped_at: Completed 85-07-PLAN.md (Wave 1 gap closure — sql_require_limit / Gap 1)
-last_updated: "2026-05-27T03:41:53.542Z"
+stopped_at: Completed 85-08-PLAN.md (Wave 2 gap closure — Gap 2 test validity made gating)
+last_updated: "2026-05-27T03:47:57.043Z"
 last_activity: 2026-05-27
 progress:
   total_phases: 44
   completed_phases: 36
   total_plans: 165
-  completed_plans: 163
+  completed_plans: 164
   percent: 82
 ---
 
@@ -142,6 +142,7 @@ Inherited from v2.1 (see PROJECT.md + prior Decisions log):
 - [Phase ?]: [Phase 85 Plan 06] Phase 85 COMPLETE — Shape A reproduces the production Chinook reference; all 29 parity scenarios pass through the real --config --schema path via mcp-tester (REF-02/SC-3/SC-4).
 - [Phase ?]: [Phase 85 Plan 07] Gap 1 closed: sql_require_limit added (additive #[serde(default)]) to pmcp-code-mode CodeModeConfig + enforced in check_sql_config_authorization Select arm (missing_limit rule); toolkit build_cm_config now maps section.require_limit -> cfg.sql_require_limit (was discarded _require_limit_gap). Bare SELECT rejected independent of sql_max_rows; LIMITed read + writes unaffected.
 - [Phase ?]: [Phase 85 Plan 09] Gap 3 closed: assemble.rs synthesizes code-mode://instructions + code-mode://policies from [code_mode] config + dialect, merged (dedup-by-URI, operator override wins) before prompt resolution; the start_code_mode prompt's 2 previously-warn-skipped include_resources now resolve; policy body renders NON-secret fields only (token_secret never emitted, T-85-09-01); merge_schema_resource /schema override scoped to first match.
+- [Phase ?]: 85-08: SC-3 negative-path parity gate strengthened — parity_chinook.rs now gates on per-step StepResult.success (continue_on_failure-independent) plus a presence guard for the 5 policy-rejection scenarios; fixtures byte-unchanged; two-sided regression proof recorded (Gap 1 reverted -> no-LIMIT step fails; restored -> green)
 
 ### Roadmap Evolution
 
@@ -188,6 +189,7 @@ Inherited from v2.1 (see PROJECT.md + prior Decisions log):
 | Phase 85 P06 | 38min | 2 tasks | 8 files |
 | Phase 85 P07 | 4m | 2 tasks | 3 files |
 | Phase 85 P09 | 4min | 1 tasks | 1 files |
+| Phase 85 P08 | 12m | 1 tasks | 1 files |
 
 ### Last Activity
 
@@ -205,6 +207,6 @@ Inherited from v2.1 (see PROJECT.md + prior Decisions log):
 
 ## Session Continuity
 
-Last session: 2026-05-27T03:41:46.425Z
-Stopped at: Completed 85-07-PLAN.md (Wave 1 gap closure — sql_require_limit / Gap 1)
+Last session: 2026-05-27T03:47:49.710Z
+Stopped at: Completed 85-08-PLAN.md (Wave 2 gap closure — Gap 2 test validity made gating)
 Resume: Plan 85-03 COMPLETE — scaffolded `crates/pmcp-sql-server` (Shape A pure-config binary): feature-gated 4-connector manifest (sqlite/postgres/mysql/athena, all default-on D-07), lib/main split with a placeholder `lib::run()` Wave 2 replaces. Vendored FOUR self-contained parity fixtures into the SDK repo (closes RESEARCH Open Q#1): the DATA-BEARING `tests/fixtures/chinook.db` (~984 KB, REVIEW FIX #1 — real rows for the parity replay), the SEPARATE `chinook.ddl` (11 CREATE TABLE, the --schema text input D-06), `generated.yaml` (29-scenario contract), and `reference-config.toml` — all publish-excluded via `exclude = [tests/, …]`. 6-test `schema_fixture.rs` proves the DB returns Rock/AC-DC through the real SqliteConnector, the DDL builds a standalone 11-table schema, and generated.yaml parses as a `mcp_tester::TestScenario`. REF-02 fixture foundation done. Next: Plan 85-04 (Wave 2) fills `lib::run()` with the real config-load → connector-select → `pmcp::Server` assembly → transport-serve pipeline; Plan 85-06 replays the 29 scenarios against the vendored DB. NOTE: plan counter advanced 2→3 (monotonic) but plan 85-02 is a parallel Wave-1 plan whose SUMMARY is still pending; progress recalc (157/161, 98%) reflects disk truth.

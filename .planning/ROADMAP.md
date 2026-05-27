@@ -1498,7 +1498,7 @@ Plans:
 
 - [x] 85-07-PLAN.md — Gap 1: enforce `require_limit` (add+map `sql_require_limit`; no-LIMIT read rejected independent of `max_limit`) (SHAP-A-01) [gap, wave 1]
 - [x] 85-09-PLAN.md — Gap 3: synthesize `code-mode://instructions` + `code-mode://policies` resources during assembly + prompt-body content assertion (REF-02) [gap, wave 1]
-- [ ] 85-08-PLAN.md — Gap 2: make policy-rejection scenarios individually gating in `parity_chinook.rs` (per-step assertion, fixtures unchanged) (REF-02, SHAP-A-01) [gap, wave 2, depends 85-07/85-09]
+- [x] 85-08-PLAN.md — Gap 2: make policy-rejection scenarios individually gating in `parity_chinook.rs` (per-step assertion, fixtures unchanged) (REF-02, SHAP-A-01) [gap, wave 2, depends 85-07/85-09]
 - [ ] 85-10-PLAN.md — Secondary fixes: execute_code variables, null-default bind, cached pipeline, JoinError exit, sqlite `database` form, empty AWS_REGION/token_secret (SHAP-A-01, REF-02) [gap, wave 2, depends 85-07/85-09]
 
 ### Phase 86: Shapes B/C/D — Scaffold, Library Example, Deploy
@@ -1567,7 +1567,7 @@ Plans:
 | 82. Builder DX Prerequisites | 3/3 | Complete   | 2026-05-18 |
 | 83. Toolkit Core Lift | 9/9 | Complete   | 2026-05-18 |
 | 84. SQL Connectors | 9/9 | Complete   | 2026-05-26 |
-| 85. Shape A + Reference Parity | 8/10 | In Progress|  |
+| 85. Shape A + Reference Parity | 9/10 | In Progress|  |
 | 86. Shapes B/C/D | 0/? | Not started | - |
 | 87. Type 2 Authoring Skills Server | 0/? | Not started | - |
 | 88. Dogfood `pmcp-server` | 0/? | Not started | - |
