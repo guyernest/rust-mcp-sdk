@@ -2,7 +2,7 @@ use anyhow::{bail, Context, Result};
 use clap::Parser;
 use std::path::{Path, PathBuf};
 
-use crate::commands::configure::workspace::find_workspace_root;
+use crate::commands::configure::workspace::find_deploy_root;
 use crate::commands::flags::FormatValue;
 
 /// Detect server name from Cargo.toml in the project root or core workspace
@@ -237,6 +237,12 @@ pub struct DeployCommand {
     /// on every widget.
     #[arg(long, value_name = "MODE")]
     apps_mode: Option<String>,
+
+    /// Override deploy-root resolution. Accepts either a directory containing
+    /// `.pmcp/deploy.toml`, OR a path to a `deploy.toml` file directly. Highest
+    /// precedence — applies to deploy, init, and all read subcommands.
+    #[arg(long = "manifest-path", value_name = "PATH", global = true)]
+    manifest_path: Option<PathBuf>,
 
     #[command(subcommand)]
     action: Option<DeployAction>,
@@ -572,7 +578,15 @@ impl DeployCommand {
     }
 
     async fn execute_async(&self, global_flags: &crate::commands::GlobalFlags) -> Result<()> {
-        let project_root = find_workspace_root()?;
+        // Anchor project_root on `.pmcp/deploy.toml` (or an explicit
+        // --manifest-path), NOT on the first ancestor Cargo.toml. init falls
+        // back to current_dir(); reads error "Deployment not initialized".
+        let for_init = matches!(&self.action, Some(DeployAction::Init { .. }));
+        let project_root = self.resolve_project_root(for_init)?;
+        // Jidoka: fire the footgun guard before ANY scaffolding for init.
+        if for_init {
+            Self::guard_init_root(&project_root)?;
+        }
 
         // Get target from flag or config
         let target_id = self.get_target_id(&project_root)?;
@@ -1067,6 +1081,77 @@ impl DeployCommand {
 
         // Default to AWS Lambda
         Ok("aws-lambda".to_string())
+    }
+
+    /// Resolve a project root from an explicit `--manifest-path` override.
+    ///
+    /// Accepts a directory (used directly) or a `.pmcp/deploy.toml` file (its
+    /// parent-of-`.pmcp` is the root). Errors when the override does not resolve
+    /// to an existing `.pmcp/deploy.toml`.
+    fn resolve_manifest_override(path: &Path) -> Result<PathBuf> {
+        // If it's a file named deploy.toml under a .pmcp dir → root is .pmcp's parent.
+        if path.is_file() {
+            let pmcp_dir = path
+                .parent()
+                .filter(|p| p.file_name().is_some_and(|n| n == ".pmcp"))
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "--manifest-path file must be a .pmcp/deploy.toml: {}",
+                        path.display()
+                    )
+                })?;
+            let root = pmcp_dir.parent().ok_or_else(|| {
+                anyhow::anyhow!(
+                    "--manifest-path .pmcp dir has no parent: {}",
+                    path.display()
+                )
+            })?;
+            if !root.join(".pmcp/deploy.toml").exists() {
+                bail!("No .pmcp/deploy.toml at resolved root: {}", root.display());
+            }
+            return Ok(root.to_path_buf());
+        }
+        // Otherwise treat as a directory.
+        if path.join(".pmcp/deploy.toml").exists() {
+            return Ok(path.to_path_buf());
+        }
+        bail!(
+            "--manifest-path does not contain .pmcp/deploy.toml: {}",
+            path.display()
+        );
+    }
+
+    /// Resolve `project_root` honoring precedence: `--manifest-path` override
+    /// first, then deploy-config anchoring on `.pmcp/deploy.toml`.
+    ///
+    /// `for_init` controls the fallback when no deploy config is found:
+    /// - init → `current_dir()` (restores 0.6.x fresh-init behavior)
+    /// - read → "Deployment not initialized" error
+    fn resolve_project_root(&self, for_init: bool) -> Result<PathBuf> {
+        if let Some(mp) = &self.manifest_path {
+            return Self::resolve_manifest_override(mp);
+        }
+        match find_deploy_root()? {
+            Some(root) => Ok(root),
+            None if for_init => std::env::current_dir().context("Failed to get current directory"),
+            None => bail!("Deployment not initialized. Run: cargo pmcp deploy init"),
+        }
+    }
+
+    /// Jidoka footgun guard for init: refuse to scaffold into a resolved root
+    /// that is neither the current directory nor an existing deploy root.
+    fn guard_init_root(root: &Path) -> Result<()> {
+        let cwd = std::env::current_dir().context("Failed to get current directory")?;
+        let same_as_cwd = root.canonicalize().ok() == cwd.canonicalize().ok();
+        if !same_as_cwd && !root.join(".pmcp/deploy.toml").exists() {
+            bail!(
+                "Refusing to scaffold deployment into '{}': it is not the current directory \
+                 and has no existing .pmcp/deploy.toml. Run `cargo pmcp deploy init` from your \
+                 deploy directory, or pass --manifest-path <dir-or-deploy.toml>.",
+                root.display()
+            );
+        }
+        Ok(())
     }
 
     /// Save deployment info to .pmcp/deployment.toml for landing page integration
@@ -1594,5 +1679,89 @@ mod config_driven_detection_tests {
         );
 
         assert!(!is_config_driven_project(root));
+    }
+}
+
+#[cfg(test)]
+mod manifest_resolution_tests {
+    use super::*;
+
+    fn write_deploy_toml(dir: &std::path::Path) {
+        let pmcp = dir.join(".pmcp");
+        std::fs::create_dir_all(&pmcp).unwrap();
+        std::fs::write(pmcp.join("deploy.toml"), "[deployment]\n").unwrap();
+    }
+
+    /// (d) `--manifest-path` pointing at a DIR containing `.pmcp/deploy.toml`
+    /// resolves to that dir.
+    #[test]
+    fn manifest_override_dir_form() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_deploy_toml(tmp.path());
+
+        let root =
+            DeployCommand::resolve_manifest_override(tmp.path()).expect("dir form must resolve");
+        assert_eq!(
+            root.canonicalize().unwrap(),
+            tmp.path().canonicalize().unwrap()
+        );
+    }
+
+    /// (e) `--manifest-path` pointing at a `.pmcp/deploy.toml` FILE resolves to
+    /// the file's grandparent (the parent-of-`.pmcp`).
+    #[test]
+    fn manifest_override_file_form() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_deploy_toml(tmp.path());
+        let file = tmp.path().join(".pmcp").join("deploy.toml");
+
+        let root = DeployCommand::resolve_manifest_override(&file).expect("file form must resolve");
+        assert_eq!(
+            root.canonicalize().unwrap(),
+            tmp.path().canonicalize().unwrap()
+        );
+    }
+
+    /// (f) `--manifest-path` where no `.pmcp/deploy.toml` exists → clear error.
+    #[test]
+    fn manifest_override_missing_errors() {
+        let tmp = tempfile::tempdir().unwrap();
+        // No .pmcp/deploy.toml written.
+        assert!(DeployCommand::resolve_manifest_override(tmp.path()).is_err());
+    }
+
+    /// (g) the init footgun guard fires when the resolved root is neither cwd
+    /// nor a real deploy root; is_ok when root == cwd; is_ok when root has a
+    /// deploy.toml.
+    ///
+    /// NOTE: this test mutates process-global cwd; CI runs `--test-threads=1`
+    /// so serialization is guaranteed. Restore cwd before asserting.
+    #[test]
+    fn guard_init_root_fires_when_not_cwd_and_no_deploy_toml() {
+        let tmp_other = tempfile::tempdir().unwrap(); // no deploy.toml
+        let tmp_cwd = tempfile::tempdir().unwrap(); // a DIFFERENT dir
+        let tmp_with_deploy = tempfile::tempdir().unwrap();
+        write_deploy_toml(tmp_with_deploy.path());
+
+        let saved = std::env::current_dir().unwrap();
+        std::env::set_current_dir(tmp_cwd.path()).unwrap();
+        let cwd = std::env::current_dir().unwrap();
+        let fires = DeployCommand::guard_init_root(tmp_other.path());
+        let same_cwd_ok = DeployCommand::guard_init_root(&cwd);
+        let deploy_root_ok = DeployCommand::guard_init_root(tmp_with_deploy.path());
+        std::env::set_current_dir(&saved).unwrap();
+
+        assert!(
+            fires.is_err(),
+            "guard must error for a non-cwd dir with no deploy.toml"
+        );
+        assert!(
+            same_cwd_ok.is_ok(),
+            "guard must allow the current directory"
+        );
+        assert!(
+            deploy_root_ok.is_ok(),
+            "guard must allow a dir with an existing .pmcp/deploy.toml"
+        );
     }
 }
