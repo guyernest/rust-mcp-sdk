@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v2.2
 milestone_name: Configuration-Only MCP Servers
-status: executing
-stopped_at: Completed 85-05-PLAN.md (Wave 3)
-last_updated: "2026-05-27T01:35:31.514Z"
+status: verifying
+stopped_at: Completed 85-06-PLAN.md (Wave 4 — Phase 85 final plan)
+last_updated: "2026-05-27T02:08:52.476Z"
 last_activity: 2026-05-27
 progress:
   total_phases: 44
-  completed_phases: 36
+  completed_phases: 37
   total_plans: 161
-  completed_plans: 160
-  percent: 82
+  completed_plans: 161
+  percent: 84
 ---
 
 # Project State
@@ -27,7 +27,7 @@ See: .planning/PROJECT.md (updated 2026-05-17)
 
 Phase: 85 (shape-a-pure-config-binary-reference-parity) — EXECUTING
 Plan: 6 of 6
-Status: Ready to execute
+Status: Phase complete — ready for verification
 Last activity: 2026-05-27
 
 **Carryover from v2.1:** Phase 81 (update-pmcp-book-and-pmcp-course-with-v2-advanced-topics-cod) was executing at v2.1 close; will be tracked separately and folded into v2.1 completion. Operator follow-ups deferred from Phase 75 Wave 5 still pending: (a) merge Phase 75 Wave 5 + 75.5 to paiml/rust-mcp-sdk:main; (b) post-merge run `gh workflow run quality-badges.yml -R paiml/rust-mcp-sdk` and append observation to `.planning/phases/75-fix-pmat-issues/75-05-GATE-VERIFICATION.md` "## Badge flip observation" section.
@@ -136,6 +136,10 @@ Inherited from v2.1 (see PROJECT.md + prior Decisions log):
 - [Phase 85]: Plan 85-04: dispatch() per-backend arms split into feature-gated dispatch_<backend> helper pairs (#[cfg(feature)] impl + #[cfg(not)] FeatureMissing stub) keeping each cog <=25; clap Args re-exported at crate root
 - [Phase 85]: Plan 85-05: build_server preserves ALL configured resources (merge_schema_resource overrides ONLY the /schema URI content) + the configured start_code_mode prompt (StaticPromptHandler::from_configs against the merged handler); code-mode via the LOCKED connector-aware API
 - [Phase 85]: Plan 85-05: lib::run serves over streamable HTTP via StreamableHttpServer::with_config(default()).start() (Phase 56 adapter); serve(server,addr) returns (bound_addr,handle) non-blocking so tests drive it. SC-1 timeout-guards athena lazy startup (no creds); SC-2 all four configs parse+dispatch right dialect (all 3 non-sqlite fixtures are athena, not mysql)
+- [Phase ?]: [Phase 85 Plan 06] run_serving extracted as a testable seam (bound_addr, handle); run() delegates then awaits — the parity test drives the IDENTICAL real binary path (config-load -> dispatch -> build_server -> serve), NOT a connector injection (Codex HIGH #5).
+- [Phase ?]: [Phase 85 Plan 06] Rule 1 bug: extract_named_params applies declared [[tools.parameters]] defaults when the arg is omitted — fixes unbound-NULL :limit/:offset binding (SQLite LIMIT NULL -> datatype mismatch) that broke search_tracks/list_artists.
+- [Phase ?]: [Phase 85 Plan 06] Rule 1 bug: ValidateCodeHandler surfaces a policy rejection as a tool Err (isError:true) — the reference observable the generated.yaml DELETE/DDL/no-LIMIT failure assertions verify (SC-3); Plan 85-02 rejection tests updated.
+- [Phase ?]: [Phase 85 Plan 06] Phase 85 COMPLETE — Shape A reproduces the production Chinook reference; all 29 parity scenarios pass through the real --config --schema path via mcp-tester (REF-02/SC-3/SC-4).
 
 ### Roadmap Evolution
 
@@ -179,6 +183,7 @@ Inherited from v2.1 (see PROJECT.md + prior Decisions log):
 | Phase 85 P02 | 18min | 3 tasks | 4 files |
 | Phase 85 P04 | 6min | 2 tasks | 6 files |
 | Phase 85 P05 | 22min | 2 tasks | 7 files |
+| Phase 85 P06 | 38min | 2 tasks | 8 files |
 
 ### Last Activity
 
@@ -196,6 +201,6 @@ Inherited from v2.1 (see PROJECT.md + prior Decisions log):
 
 ## Session Continuity
 
-Last session: 2026-05-27T01:35:31.509Z
-Stopped at: Completed 85-05-PLAN.md (Wave 3)
+Last session: 2026-05-27T02:08:52.453Z
+Stopped at: Completed 85-06-PLAN.md (Wave 4 — Phase 85 final plan)
 Resume: Plan 85-03 COMPLETE — scaffolded `crates/pmcp-sql-server` (Shape A pure-config binary): feature-gated 4-connector manifest (sqlite/postgres/mysql/athena, all default-on D-07), lib/main split with a placeholder `lib::run()` Wave 2 replaces. Vendored FOUR self-contained parity fixtures into the SDK repo (closes RESEARCH Open Q#1): the DATA-BEARING `tests/fixtures/chinook.db` (~984 KB, REVIEW FIX #1 — real rows for the parity replay), the SEPARATE `chinook.ddl` (11 CREATE TABLE, the --schema text input D-06), `generated.yaml` (29-scenario contract), and `reference-config.toml` — all publish-excluded via `exclude = [tests/, …]`. 6-test `schema_fixture.rs` proves the DB returns Rock/AC-DC through the real SqliteConnector, the DDL builds a standalone 11-table schema, and generated.yaml parses as a `mcp_tester::TestScenario`. REF-02 fixture foundation done. Next: Plan 85-04 (Wave 2) fills `lib::run()` with the real config-load → connector-select → `pmcp::Server` assembly → transport-serve pipeline; Plan 85-06 replays the 29 scenarios against the vendored DB. NOTE: plan counter advanced 2→3 (monotonic) but plan 85-02 is a parallel Wave-1 plan whose SUMMARY is still pending; progress recalc (157/161, 98%) reflects disk truth.
