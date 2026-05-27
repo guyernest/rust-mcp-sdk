@@ -1476,11 +1476,22 @@ Plans:
 **Plans**: 6 plans (4 waves)
 
 Plans:
+**Wave 1**
+
 - [ ] 85-01-PLAN.md — REF-01 superset config fields (file_path / is_reference / [shared_policy_store]) + ${VAR} expansion gate [wave 1]
-- [ ] 85-02-PLAN.md — Real code-mode tool registration + SqlCodeExecutor adapter + file-based prompt seam [wave 2]
 - [ ] 85-03-PLAN.md — pmcp-sql-server crate skeleton + vendored Chinook DDL/scenarios/config fixtures [wave 1]
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [ ] 85-02-PLAN.md — Real code-mode tool registration + SqlCodeExecutor adapter + file-based prompt seam [wave 2]
 - [ ] 85-04-PLAN.md — clap CLI + [database] type → connector dispatch [wave 2]
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
 - [ ] 85-05-PLAN.md — Server assembly + streamable-HTTP serving + SC-1 lazy-startup + SC-2 superset-parse tests [wave 3]
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
 - [ ] 85-06-PLAN.md — Chinook parity replay (REF-02/SC-3/SC-4) + Shape C example + doctests + publish-order + fuzz seed [wave 4]
 
 ### Phase 86: Shapes B/C/D — Scaffold, Library Example, Deploy
