@@ -31,6 +31,54 @@ Production-grade MCP server development toolkit.
 cargo install cargo-pmcp
 ```
 
+## Config-Driven SQL Server (`new --kind sql-server`)
+
+`cargo pmcp new --kind sql-server <name>` scaffolds a **single runnable crate**
+(distinct from the default multi-crate workspace) for a config-driven SQL MCP
+server. It emits exactly four files:
+
+```
+<name>/
+├── Cargo.toml      # pins pmcp-server-toolkit with features ["code-mode", "sqlite", "http"]
+├── src/main.rs     # ~12-line wiring: reads config/schema via pmcp::assets, serves over streamable HTTP
+├── config.toml     # [server]/[database]/[code_mode] + a curated list_books tool
+└── schema.sql      # idempotent demo DDL + seed (CREATE TABLE IF NOT EXISTS / INSERT OR IGNORE)
+```
+
+Quick start:
+
+```bash
+cargo pmcp new --kind sql-server my-sql-server
+cd my-sql-server
+cargo run
+# prints: PMCP_SQL_SERVER_ADDR=http://127.0.0.1:<port>
+```
+
+The emitted `src/main.rs` reads `config.toml` + `schema.sql` via
+`pmcp::assets::load_string` and opens SQLite at `demo_db_path()`, so the **same
+crate runs locally AND deploys unchanged** (see config-only deploy below). Edit
+`config.toml` to add tools and tune `[code_mode]`; edit `schema.sql` to change
+the tables/seed — both are read at startup. `schema.sql` is idempotent, so a
+second `cargo run` against a persisted `demo.db` succeeds.
+
+> The emitted `Cargo.toml` pins `pmcp-server-toolkit = "0.1.0"`. Until that
+> crate is published to crates.io, add a local `[patch.crates-io]` (or path
+> dependency) to `cargo run` against an unpublished toolkit build.
+
+The `config.toml` ships an **inline DEV `token_secret`** (gated by
+`allow_inline_token_secret_for_dev = true`) so code-mode works out of the box.
+This is DEV ONLY — production should use a secrets ref
+(`token_secret = "env:CODE_MODE_SECRET"`).
+
+### Config-only deploy
+
+`cargo pmcp deploy` detects a config-driven project (a `config.toml` +
+`schema.sql` + a `pmcp-server-toolkit` dependency) and bundles those assets
+alongside the binary so the deployed server resolves them under
+`/var/task/assets/` (Lambda) — the same `main.rs` that runs locally. The deploy
+path substitutes a secrets ref for the inline DEV `token_secret`. No source
+edits are required between `cargo run` and deploy.
+
 ## End-to-End Example
 
 Walk through the full lifecycle using the `complete` template calculator server.
@@ -122,7 +170,7 @@ cargo pmcp deploy test --verbose
 
 | Command | Description | Reference |
 |---------|-------------|-----------|
-| `new` | Create a new MCP workspace | [docs/commands/new.md](docs/commands/new.md) |
+| `new` | Create a new MCP workspace (or `--kind sql-server` for a single config-driven crate) | [docs/commands/new.md](docs/commands/new.md) |
 | `add` | Add server, tool, or workflow to workspace | [docs/commands/add.md](docs/commands/add.md) |
 | `dev` | Start development server with HTTP transport | [docs/commands/dev.md](docs/commands/dev.md) |
 | `connect` | Connect server to Claude Code, Cursor, or Inspector | [docs/commands/connect.md](docs/commands/connect.md) |
