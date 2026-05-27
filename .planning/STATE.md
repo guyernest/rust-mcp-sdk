@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v2.2
 milestone_name: Configuration-Only MCP Servers
 status: verifying
-stopped_at: Completed 85-08-PLAN.md (Wave 2 gap closure — Gap 2 test validity made gating)
-last_updated: "2026-05-27T03:47:57.043Z"
-last_activity: 2026-05-27
+stopped_at: Completed 85-10-PLAN.md (Wave 2 secondary gap closure — variables binding, cached pipeline, null-default, empty env vars, JoinError exit, sqlite database fallback)
+last_updated: "2026-05-27T04:00:07.064Z"
+last_activity: 2026-05-26
 progress:
   total_phases: 44
-  completed_phases: 36
+  completed_phases: 37
   total_plans: 165
-  completed_plans: 164
-  percent: 82
+  completed_plans: 165
+  percent: 84
 ---
 
 # Project State
@@ -26,9 +26,9 @@ See: .planning/PROJECT.md (updated 2026-05-17)
 ## Current Position
 
 Phase: 85
-Plan: 85-09 complete (Gap 3 closure)
-Status: Phase complete — gap-closure plans landing; ready for re-verification
-Last activity: 2026-05-27
+Plan: 85-10 complete (secondary gap closure — WR-02 variables binding, IN-01 cached pipeline, null-default, empty token_secret/AWS_REGION, JoinError propagation, sqlite database fallback)
+Status: Phase complete — all 10 plans landed; ready for re-verification
+Last activity: 2026-05-26
 
 **Carryover from v2.1:** Phase 81 (update-pmcp-book-and-pmcp-course-with-v2-advanced-topics-cod) was executing at v2.1 close; will be tracked separately and folded into v2.1 completion. Operator follow-ups deferred from Phase 75 Wave 5 still pending: (a) merge Phase 75 Wave 5 + 75.5 to paiml/rust-mcp-sdk:main; (b) post-merge run `gh workflow run quality-badges.yml -R paiml/rust-mcp-sdk` and append observation to `.planning/phases/75-fix-pmat-issues/75-05-GATE-VERIFICATION.md` "## Badge flip observation" section.
 
@@ -81,6 +81,11 @@ v2.2 decisions (this session):
 - **Phase 87 (SKLL) is parallelisable with Phase 86 (B/C/D)** after Phase 83 lands — neither depends on the other.
 - **Phase 89 absorbs REF-03** (migration recipe) into DOCS-01 (book chapter) rather than as a standalone phase — same audience, same surface, same artifact.
 - **Hard-encoded invariants in success criteria:** REF-01 superset (no renames) called out in P83 SC-2 + P85 SC-2; pure-Rust Lambda + no-Docker in P84 SC-4; dual-mode intentional in P83 SC-2/SC-3; dual-surface byte-equality in P87 SC-2; SEP-2640 §9 list-exclusion in P87 SC-3.
+- **[Plan 85-10] WR-02 design = HONOR (bind) execute_code variables, not reject** — `variables_to_params` maps the JSON-object input to `(name, value)` pairs (leading `:` stripped) and binds them; a schema-advertised input is never a silent no-op. None/non-object → empty so the parity scenario (None) is unaffected.
+- **[Plan 85-10] SqlCodeExecutor::new is now fallible** (`Result<Self>`) so the ValidationPipeline is built ONCE and cached; `token_secret` is resolved at builder time, not per request (IN-01). A removed env var after startup no longer breaks in-flight requests.
+- **[Plan 85-10] Robustness invariant: set-but-empty env vars are treated as UNSET** — `token_secret` (env:/${VAR}) and `AWS_REGION`/`AWS_DEFAULT_REGION` reject empty/whitespace (clear error or fall-through), never a degenerate present-empty value.
+- **[Plan 85-10] Serve-task JoinError propagates as RunError::Serving** — `run()` does `handle.await.map_err(RunError::Serving)?` so a serve-task panic exits non-zero (supervisor restart), not silent exit 0.
+- **[Plan 85-10] sqlite accepts the documented `database = ":memory:"/<path>` form** as a fallback when `file_path` is absent (file_path precedence); reconciles dispatch with config.rs DatabaseSection docs.
 
 Inherited from v2.1 (see PROJECT.md + prior Decisions log):
 
@@ -190,6 +195,7 @@ Inherited from v2.1 (see PROJECT.md + prior Decisions log):
 | Phase 85 P07 | 4m | 2 tasks | 3 files |
 | Phase 85 P09 | 4min | 1 tasks | 1 files |
 | Phase 85 P08 | 12m | 1 tasks | 1 files |
+| Phase 85 P10 | 9min | 2 tasks | 6 files |
 
 ### Last Activity
 
