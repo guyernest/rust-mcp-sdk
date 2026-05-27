@@ -1,0 +1,55 @@
+[package]
+name = "pmcp-sql-server"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/paiml/rust-mcp-sdk"
+description = "Shape A pure-config SQL MCP server binary — point it at a config.toml + schema and serve a production MCP server with no Rust required"
+keywords = ["mcp", "sql", "config-driven", "toolkit", "lambda"]
+categories = ["development-tools", "command-line-utilities", "database"]
+
+# Why (REVIEW FIX #1): the data-bearing Chinook fixture (~1 MB) is committed so
+# the Plan 06 parity replay returns real rows in CI, but it is only a test
+# artifact and must never ship in the published crate. `.planning/`, `.pmat/`,
+# and `fuzz/` are likewise never relevant to downstream consumers; `tests/` is
+# excluded wholesale so the chinook.db blob (and every other fixture) stays out
+# of the crates.io tarball.
+exclude = [".planning/", ".pmat/", "fuzz/", "tests/"]
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[lib]
+name = "pmcp_sql_server"
+path = "src/lib.rs"
+
+[[bin]]
+name = "pmcp-sql-server"
+path = "src/main.rs"
+
+[dependencies]
+pmcp = { version = "2.8.1", path = "../..", features = ["streamable-http"] }
+pmcp-server-toolkit = { version = "0.1.0", path = "../pmcp-server-toolkit", features = ["code-mode", "sqlite"] }
+pmcp-toolkit-postgres = { version = "0.1.0", path = "../pmcp-toolkit-postgres", optional = true }
+pmcp-toolkit-mysql = { version = "0.1.0", path = "../pmcp-toolkit-mysql", optional = true }
+pmcp-toolkit-athena = { version = "0.1.0", path = "../pmcp-toolkit-athena", optional = true }
+clap = { version = "4", features = ["derive", "env"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3.20", features = ["env-filter"] }
+
+[features]
+# Why (D-07): all four connectors default-on so the published binary serves any
+# of SQLite/Postgres/MySQL/Athena from config alone; lean single-backend builds
+# opt out via `--no-default-features --features sqlite`.
+default = ["sqlite", "postgres", "mysql", "athena"]
+sqlite = ["pmcp-server-toolkit/sqlite"]
+postgres = ["dep:pmcp-toolkit-postgres"]
+mysql = ["dep:pmcp-toolkit-mysql"]
+athena = ["dep:pmcp-toolkit-athena"]
+
+[dev-dependencies]
+mcp-tester = { version = "0.7.0", path = "../mcp-tester" }
+tempfile = "3"
+proptest = "1"
