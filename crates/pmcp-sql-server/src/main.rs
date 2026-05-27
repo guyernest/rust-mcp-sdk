@@ -1,10 +1,14 @@
 //! Thin `#[tokio::main]` shim for the `pmcp-sql-server` binary.
 //!
-//! All assembly logic lives in the library ([`pmcp_sql_server::run`]) so it
-//! stays unit-testable. Wave 2 (Plan 85-04) adds CLI/env argument parsing here
-//! and constructs the [`pmcp_sql_server::RunConfig`] from it.
+//! All assembly + serving logic lives in the library ([`pmcp_sql_server::run`])
+//! so it stays unit-testable. This shim parses [`pmcp_sql_server::Args`] from the
+//! CLI and delegates — no business logic, no `process::exit`.
+
+use clap::Parser;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    pmcp_sql_server::run(pmcp_sql_server::RunConfig::new()).await
+    let args = pmcp_sql_server::Args::parse();
+    pmcp_sql_server::run(args).await?;
+    Ok(())
 }

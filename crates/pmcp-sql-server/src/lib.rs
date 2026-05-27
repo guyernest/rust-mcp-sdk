@@ -16,18 +16,20 @@
 //! parses CLI/env arguments and delegates to [`run`]. This split keeps the
 //! server-construction logic unit-testable without spawning a process.
 //!
-//! # Status
+//! # Pipeline ([`run`])
 //!
-//! Wave 1 (Plan 85-03) scaffolds this crate so later waves have a place to
-//! build. [`run`] is a documented placeholder that succeeds without starting a
-//! server; Wave 2 (Plan 85-04) replaces its body with the real config-load →
-//! connector-select → `pmcp::Server` assembly → transport-serve pipeline.
+//! [`run`] is the full Shape A pipeline (Plan 85-05): parse the config + schema
+//! files → [`dispatch`] the connector for the `[database] type` → [`build_server`]
+//! the [`pmcp::Server`] (tools + code-mode + the configured resources/prompts
+//! with the `--schema` content merged in) → serve it over streamable HTTP via
+//! the Phase 56 Tower/axum adapter ([`serve`]).
 //!
-//! # Wave 2 seams (Plan 85-04)
+//! # Seams
 //!
 //! - [`cli`]: the clap [`Args`] surface (`--config` / `--schema` / `--http`).
 //! - [`dispatch`]: the NOVEL `[database] type` → `Arc<dyn SqlConnector>` switch
 //!   with a clear compiled-out-backend error ([`dispatch::DispatchError`]).
+//! - [`assemble`]: config + connector + schema → built [`pmcp::Server`].
 
 pub mod assemble;
 pub mod cli;
@@ -37,60 +39,165 @@ pub use assemble::{build_server, merge_schema_resource, AssembleError};
 pub use cli::Args;
 pub use dispatch::{dispatch, DispatchError};
 
-/// Runtime configuration for the Shape A server.
-///
-/// Wave 2 (Plan 85-04) expands this into the parsed CLI/env surface (config
-/// path, `--schema` path, bind address, transport selection). For the Wave 1
-/// scaffold it is intentionally empty so the lib/bin split compiles and the
-/// binary has a concrete type to construct and pass to [`run`].
-#[derive(Debug, Default, Clone)]
-#[non_exhaustive]
-pub struct RunConfig {}
+use std::net::SocketAddr;
+use std::sync::Arc;
 
-impl RunConfig {
-    /// Construct an empty [`RunConfig`].
-    ///
-    /// Wave 2 replaces this with parsing from CLI/env arguments.
-    #[must_use]
-    pub fn new() -> Self {
-        Self {}
-    }
+use pmcp::server::streamable_http_server::{StreamableHttpServer, StreamableHttpServerConfig};
+use pmcp::Server;
+use pmcp_server_toolkit::ServerConfig;
+use tokio::sync::Mutex;
+use tokio::task::JoinHandle;
+
+/// Error from the Shape A [`run`] pipeline.
+#[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
+pub enum RunError {
+    /// Reading the `--config` or `--schema` file from disk failed.
+    #[error("failed to read {what} file: {source}")]
+    Io {
+        /// Which file (`config` or `schema`).
+        what: &'static str,
+        /// Underlying I/O error.
+        source: std::io::Error,
+    },
+
+    /// Parsing or validating the config TOML failed.
+    #[error("config parse/validate failed: {0}")]
+    Config(#[from] pmcp_server_toolkit::ToolkitError),
+
+    /// The `[database] type` could not be dispatched to a connector.
+    #[error("backend dispatch failed: {0}")]
+    Dispatch(#[from] DispatchError),
+
+    /// Assembling the `pmcp::Server` from config + connector + schema failed.
+    #[error("server assembly failed: {0}")]
+    Assemble(#[from] AssembleError),
+
+    /// The `--http` bind address could not be parsed as a `SocketAddr`.
+    #[error("invalid --http bind address '{addr}': {source}")]
+    Addr {
+        /// The offending address string.
+        addr: String,
+        /// Parse error.
+        source: std::net::AddrParseError,
+    },
+
+    /// Binding / starting the streamable-HTTP listener failed.
+    #[error("streamable-HTTP server failed to start: {0}")]
+    Serve(#[source] pmcp::Error),
+}
+
+/// Load + validate the config and read the schema file.
+///
+/// Splitting this out of [`run`] keeps `run`'s cognitive complexity low and lets
+/// tests exercise the load path independently of transport startup.
+///
+/// # Errors
+///
+/// [`RunError::Io`] when a file is unreadable, or [`RunError::Config`] when the
+/// TOML fails to parse/validate.
+fn load_config_and_schema(args: &Args) -> Result<(ServerConfig, String), RunError> {
+    let config_text = std::fs::read_to_string(&args.config).map_err(|source| RunError::Io {
+        what: "config",
+        source,
+    })?;
+    let cfg = ServerConfig::from_toml_strict_validated(&config_text)?;
+    let schema_ddl = std::fs::read_to_string(&args.schema).map_err(|source| RunError::Io {
+        what: "schema",
+        source,
+    })?;
+    Ok((cfg, schema_ddl))
+}
+
+/// Start the streamable-HTTP server for `server` on `addr`, returning the REAL
+/// bound address and the serving task handle.
+///
+/// Uses the Phase 56 Tower/axum adapter
+/// ([`StreamableHttpServer`]) so the DNS-rebinding, CORS, and security-headers
+/// layers are applied by the SDK — never hand-rolled (threat T-85-05-01). The
+/// default [`StreamableHttpServerConfig`] is stateful with
+/// `AllowedOrigins::localhost()` (the loopback default matching `--http`'s
+/// `127.0.0.1` default).
+///
+/// Returning `(addr, handle)` rather than blocking lets tests drive the server
+/// (HTTP smoke) and `run` await the handle for a long-running process.
+///
+/// # Errors
+///
+/// [`RunError::Serve`] if binding the listener fails (e.g. the port is in use).
+pub async fn serve(
+    server: Server,
+    addr: SocketAddr,
+) -> Result<(SocketAddr, JoinHandle<()>), RunError> {
+    let shared = Arc::new(Mutex::new(server));
+    let http =
+        StreamableHttpServer::with_config(addr, shared, StreamableHttpServerConfig::default());
+    http.start().await.map_err(RunError::Serve)
 }
 
 /// Assemble and serve the Shape A SQL MCP server from configuration.
 ///
-/// # Wave 1 scaffold behaviour
+/// The full pipeline: read `--config` + `--schema` → [`dispatch`] the connector
+/// for the `[database] type` → [`build_server`] the [`pmcp::Server`] → [`serve`]
+/// it over streamable HTTP, then await the serving task (blocks until the task
+/// ends or the process is signalled).
 ///
-/// This is a documented placeholder: it accepts the [`RunConfig`] and returns
-/// `Ok(())` without starting a server. Wave 2 (Plan 85-04) replaces the body
-/// with the real pipeline — load `config.toml`, select the connector for the
-/// configured backend, synthesize tools/resources/prompts via the toolkit, and
-/// serve over the chosen transport.
+/// Initialises a `tracing_subscriber::fmt` reader of `RUST_LOG` so operators get
+/// structured logs from a local binary; the subscriber is best-effort (a second
+/// call in the same process is ignored).
 ///
 /// # Errors
 ///
-/// Returns a boxed error once Wave 2 wires in config loading and transport
-/// startup (parse failures, connector construction errors, bind failures). The
-/// Wave 1 scaffold never errors.
-pub async fn run(_config: RunConfig) -> Result<(), Box<dyn std::error::Error>> {
+/// Any [`RunError`] variant — file I/O, config parse/validate, backend dispatch,
+/// server assembly, address parse, or transport startup.
+pub async fn run(args: Args) -> Result<(), RunError> {
+    // Best-effort log init (ignored if a global subscriber is already set, e.g.
+    // when a test process has installed one).
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
+        .try_init();
+
+    let (cfg, schema_ddl) = load_config_and_schema(&args)?;
+    let connector = dispatch(&cfg).await?;
+    let server = build_server(&cfg, connector, schema_ddl)?;
+
+    let addr: SocketAddr = args.http.parse().map_err(|source| RunError::Addr {
+        addr: args.http.clone(),
+        source,
+    })?;
+
+    let (bound, handle) = serve(server, addr).await?;
+    tracing::info!(target: "pmcp_sql_server", %bound, "streamable-HTTP server listening");
+
+    // Await the serving task for the lifetime of the process. A JoinError (panic
+    // / abort) ends the run; the process exits with the run's Result.
+    let _ = handle.await;
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{run, RunConfig};
+    use super::*;
+    use clap::Parser;
 
     #[test]
-    fn run_config_new_is_default() {
-        // RunConfig is the Wave 1 scaffold surface; constructing it must not panic.
-        let _cfg = RunConfig::new();
-        let _default = RunConfig::default();
-    }
-
-    #[tokio::test]
-    async fn run_scaffold_succeeds() {
-        // Wave 1 placeholder returns Ok; Wave 2 replaces with real server startup.
-        let result = run(RunConfig::new()).await;
-        assert!(result.is_ok(), "Wave 1 scaffold run() must succeed");
+    fn run_error_display_is_credential_free_for_addr() {
+        // The Addr variant echoes the operator-typed bind string (not a secret)
+        // and a parse error — no config values.
+        let err = Args::try_parse_from([
+            "pmcp-sql-server",
+            "--config",
+            "c.toml",
+            "--schema",
+            "s.ddl",
+            "--http",
+            "not-an-addr",
+        ])
+        .map(|a| a.http)
+        .unwrap();
+        assert_eq!(err, "not-an-addr");
     }
 }

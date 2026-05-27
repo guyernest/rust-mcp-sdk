@@ -67,3 +67,7 @@ serde_yaml = "0.9"
 # single-statement `SqlConnector::execute` cannot run. `bundled` keeps it
 # pure-Rust (no system SQLite, no Docker), matching the toolkit's sqlite feature.
 rusqlite = { version = "0.39", features = ["bundled"] }
+# Why (Plan 85-05): the SC-1 HTTP smoke test constructs a
+# StreamableHttpTransportConfig whose `url` field is a `url::Url`, mirroring
+# tests/streamable_http_integration.rs. Matches the workspace url = "2.5".
+url = "2.5"
