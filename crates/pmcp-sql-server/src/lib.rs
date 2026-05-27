@@ -135,6 +135,35 @@ pub async fn serve(
     http.start().await.map_err(RunError::Serve)
 }
 
+/// Run the FULL Shape A pipeline up to (but not including) blocking on the
+/// serving task, returning the REAL bound address and the serving task handle.
+///
+/// This is the *exact* binary path — read `--config` + `--schema` from disk via
+/// [`load_config_and_schema`] → [`dispatch`] the connector for the
+/// `[database] type` → [`build_server`] the [`pmcp::Server`] → [`serve`] it over
+/// streamable HTTP — with no connector injection or assembly short-circuit. It
+/// is the testable seam [`run`] delegates to: [`run`] calls this and then awaits
+/// the returned handle, while integration tests (the REF-02 parity replay) call
+/// it directly to obtain the ephemeral bound address, drive the live server, and
+/// `abort()` the handle.
+///
+/// # Errors
+///
+/// Any [`RunError`] variant — file I/O, config parse/validate, backend dispatch,
+/// server assembly, address parse, or transport startup.
+pub async fn run_serving(args: &Args) -> Result<(SocketAddr, JoinHandle<()>), RunError> {
+    let (cfg, schema_ddl) = load_config_and_schema(args)?;
+    let connector = dispatch(&cfg).await?;
+    let server = build_server(&cfg, connector, schema_ddl)?;
+
+    let addr: SocketAddr = args.http.parse().map_err(|source| RunError::Addr {
+        addr: args.http.clone(),
+        source,
+    })?;
+
+    serve(server, addr).await
+}
+
 /// Assemble and serve the Shape A SQL MCP server from configuration.
 ///
 /// The full pipeline: read `--config` + `--schema` → [`dispatch`] the connector
@@ -160,16 +189,7 @@ pub async fn run(args: Args) -> Result<(), RunError> {
         )
         .try_init();
 
-    let (cfg, schema_ddl) = load_config_and_schema(&args)?;
-    let connector = dispatch(&cfg).await?;
-    let server = build_server(&cfg, connector, schema_ddl)?;
-
-    let addr: SocketAddr = args.http.parse().map_err(|source| RunError::Addr {
-        addr: args.http.clone(),
-        source,
-    })?;
-
-    let (bound, handle) = serve(server, addr).await?;
+    let (bound, handle) = run_serving(&args).await?;
     tracing::info!(target: "pmcp_sql_server", %bound, "streamable-HTTP server listening");
 
     // Await the serving task for the lifetime of the process. A JoinError (panic

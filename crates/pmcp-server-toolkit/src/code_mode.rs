@@ -281,7 +281,18 @@ mod tool_handlers {
                 let risk = response.result.risk_level;
                 response = response.with_auto_approved(self.config.should_auto_approve(risk));
             }
-            let (json, _is_error) = response.to_json_response();
+            let (json, is_error) = response.to_json_response();
+            // A policy rejection (allow_writes/deletes/ddl off, require_limit, …)
+            // is reported by `to_json_response` with `is_error == true`. Surface it
+            // as a tool ERROR (not a silent success carrying `valid: false`) so the
+            // MCP `tools/call` result has `isError: true` — this is the production
+            // reference observable that the generated.yaml `failure` assertions
+            // (DELETE/DDL/no-LIMIT) verify (SC-3 policy-enforcement proof,
+            // threat T-85-02-02). The rejection JSON is carried in the error
+            // message so clients still see the violation detail.
+            if is_error {
+                return Err(pmcp::Error::Internal(json.to_string()));
+            }
             Ok(json)
         }
 

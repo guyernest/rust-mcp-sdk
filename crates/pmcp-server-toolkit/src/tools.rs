@@ -270,10 +270,26 @@ struct SynthesizedToolHandler {
 /// filtering the caller's validated `args` against the declared parameter list
 /// (T-84-03-01: only declared parameter names reach `execute()`; extra keys are
 /// silently dropped — JSON-schema validation rejects them upstream).
+///
+/// When the caller omits an optional parameter that declares a `default`, the
+/// default is applied so the bound SQL sees a concrete value. Without this an
+/// omitted `:limit` / `:offset` would bind as unbound `NULL` and SQLite rejects
+/// `LIMIT NULL` with a "datatype mismatch" — so the declared default is the
+/// difference between a working and a broken tool call (the reference
+/// `search_tracks` / `list_artists` calls rely on it).
 fn extract_named_params(decl: &ToolDecl, args: &Value) -> Vec<(String, Value)> {
     decl.parameters
         .iter()
-        .filter_map(|p| args.get(&p.name).map(|v| (p.name.clone(), v.clone())))
+        .filter_map(|p| {
+            args.get(&p.name)
+                .cloned()
+                .or_else(|| {
+                    p.default
+                        .as_ref()
+                        .and_then(|d| serde_json::to_value(d).ok())
+                })
+                .map(|v| (p.name.clone(), v))
+        })
         .collect()
 }
 

@@ -142,10 +142,15 @@ async fn validate_code_rejects_delete_under_read_only_policy() {
         .get_tool("validate_code")
         .expect("validate_code present");
     let args = serde_json::json!({ "code": "DELETE FROM Artist WHERE ArtistId = 1" });
-    let out = handler
+    // A policy rejection surfaces as a tool ERROR so the MCP `tools/call` result
+    // has `isError: true` (the reference observable the generated.yaml `failure`
+    // assertions verify — SC-3). The rejection JSON (`valid: false` + violation)
+    // is carried in the error message.
+    let err = handler
         .handle(args, pmcp::RequestHandlerExtra::default())
         .await
-        .expect("validate_code returns a JSON response, not an Err");
+        .expect_err("DELETE under allow_deletes=false must REJECT as a tool error");
+    let out = rejection_json(&err);
 
     assert_eq!(
         out["valid"], false,
@@ -155,6 +160,17 @@ async fn validate_code_rejects_delete_under_read_only_policy() {
         out["approval_token"].is_null(),
         "an invalid DELETE must NOT receive an approval token: {out}"
     );
+}
+
+/// Parse the rejection JSON carried in a `validate_code` tool error
+/// (`pmcp::Error::Internal(json)`).
+fn rejection_json(err: &pmcp::Error) -> serde_json::Value {
+    match err {
+        pmcp::Error::Internal(msg) => {
+            serde_json::from_str(msg).expect("rejection error carries the rejection JSON")
+        },
+        other => panic!("expected an Internal rejection error, got {other:?}"),
+    }
 }
 
 #[tokio::test]
@@ -172,10 +188,12 @@ async fn validate_code_rejects_ddl_under_read_only_policy() {
         .get_tool("validate_code")
         .expect("validate_code present");
     let args = serde_json::json!({ "code": "DROP TABLE Artist" });
-    let out = handler
+    // DDL rejection also surfaces as a tool error (SC-3).
+    let err = handler
         .handle(args, pmcp::RequestHandlerExtra::default())
         .await
-        .expect("validate_code returns a JSON response");
+        .expect_err("DROP under allow_ddl=false must REJECT as a tool error");
+    let out = rejection_json(&err);
 
     assert_eq!(
         out["valid"], false,
