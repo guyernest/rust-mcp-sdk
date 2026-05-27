@@ -235,6 +235,12 @@ pub struct CodeModeConfig {
     #[serde(default = "default_true", alias = "require_where_on_writes")]
     pub sql_require_where_on_writes: bool,
 
+    /// Whether read-only (SELECT-class) statements MUST declare a LIMIT.
+    /// Opt-in safety guard; default false (no behavior change for configs
+    /// that omit it). Enforced in check_sql_config_authorization.
+    #[serde(default, alias = "require_limit")]
+    pub sql_require_limit: bool,
+
     // ========================================================================
     // Common settings
     // ========================================================================
@@ -335,6 +341,7 @@ impl Default for CodeModeConfig {
             sql_max_rows: default_sql_max_rows(),
             sql_max_joins: default_sql_max_joins(),
             sql_require_where_on_writes: true,
+            sql_require_limit: false,
             // Common
             action_tags: HashMap::new(),
             max_depth: default_max_depth(),

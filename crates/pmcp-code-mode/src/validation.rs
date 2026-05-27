@@ -1079,6 +1079,20 @@ impl<T: TokenGenerator, E: ExplanationGenerator> ValidationPipeline<T, E> {
                         self.build_sql_metadata(info, start.elapsed().as_millis() as u64),
                     ));
                 }
+                // Require a LIMIT on read-only statements when configured. This is
+                // an opt-in guard independent of the sql_max_rows row-estimate
+                // heuristic — a bare SELECT cannot be approved when set.
+                if self.config.sql_require_limit && !info.has_limit {
+                    return Some(ValidationResult::failure(
+                        vec![PolicyViolation::new(
+                            "code_mode",
+                            "missing_limit",
+                            "SELECT statements must declare a LIMIT for this server",
+                        )
+                        .with_suggestion("Add a LIMIT clause (e.g. `LIMIT 100`).")],
+                        self.build_sql_metadata(info, start.elapsed().as_millis() as u64),
+                    ));
+                }
             },
             SqlStatementType::Insert | SqlStatementType::Update => {
                 if !self.config.sql_allow_writes {
@@ -1646,6 +1660,88 @@ mod tests {
             let result = pipeline.validate_sql_query("SELEC id FRM users", &ctx);
 
             assert!(matches!(result, Err(ValidationError::ParseError { .. })));
+        }
+
+        // ====================================================================
+        // sql_require_limit (VERIFICATION Gap 1) tests
+        // ====================================================================
+
+        fn require_limit_pipeline() -> ValidationPipeline {
+            let mut config = CodeModeConfig::enabled();
+            config.sql_require_limit = true;
+            ValidationPipeline::new(config, b"test-secret-key!".to_vec()).unwrap()
+        }
+
+        #[test]
+        fn require_limit_rejects_select_without_limit() {
+            let pipeline = require_limit_pipeline();
+            let ctx = test_context();
+
+            // Bare SELECT with no LIMIT — rejected even though the row estimate
+            // does not exceed sql_max_rows (the Gap-1 condition).
+            let result = pipeline
+                .validate_sql_query("SELECT * FROM Artist", &ctx)
+                .unwrap();
+
+            assert!(!result.is_valid);
+            assert!(result.violations.iter().any(|v| v.rule == "missing_limit"));
+        }
+
+        #[test]
+        fn require_limit_accepts_select_with_limit() {
+            let pipeline = require_limit_pipeline();
+            let ctx = test_context();
+
+            let result = pipeline
+                .validate_sql_query("SELECT * FROM Artist LIMIT 25", &ctx)
+                .unwrap();
+
+            assert!(result.is_valid);
+            assert!(!result.violations.iter().any(|v| v.rule == "missing_limit"));
+        }
+
+        #[test]
+        fn require_limit_default_accepts_bare_select() {
+            // require_limit defaults to false — no regression for configs that omit it.
+            let pipeline = sql_pipeline();
+            let ctx = test_context();
+
+            let result = pipeline
+                .validate_sql_query("SELECT * FROM Artist", &ctx)
+                .unwrap();
+
+            assert!(result.is_valid);
+            assert!(!result.violations.iter().any(|v| v.rule == "missing_limit"));
+        }
+
+        #[test]
+        fn require_limit_does_not_affect_writes() {
+            // require_limit is a read-only-query guard; a write must not be
+            // rejected for a missing LIMIT.
+            let mut config = CodeModeConfig::enabled();
+            config.sql_require_limit = true;
+            config.sql_allow_writes = true;
+            let pipeline = ValidationPipeline::new(config, b"test-secret-key!".to_vec()).unwrap();
+            let ctx = test_context();
+
+            let result = pipeline
+                .validate_sql_query("INSERT INTO Artist (Name) VALUES ('AC/DC')", &ctx)
+                .unwrap();
+
+            assert!(result.is_valid);
+            assert!(!result.violations.iter().any(|v| v.rule == "missing_limit"));
+        }
+
+        #[test]
+        fn require_limit_serde_round_trip() {
+            // Omitted -> defaults to false; present -> parses to true.
+            let without: CodeModeConfig =
+                toml::from_str("enabled = true\n").expect("parse without require_limit");
+            assert!(!without.sql_require_limit);
+
+            let with: CodeModeConfig = toml::from_str("enabled = true\nrequire_limit = true\n")
+                .expect("parse with require_limit");
+            assert!(with.sql_require_limit);
         }
 
         struct FixedDenyEvaluator {
