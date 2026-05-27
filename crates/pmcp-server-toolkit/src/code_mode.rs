@@ -55,16 +55,19 @@
 
 pub use pmcp_code_mode::{
     canonicalize_code, compute_context_hash, hash_code, ApprovalToken, AuthorizationDecision,
-    CodeExecutor, CodeModeConfig, HmacTokenGenerator, NoopPolicyEvaluator, PolicyEvaluator,
-    TokenGenerator, TokenSecret, ValidationContext, ValidationPipeline,
+    CodeExecutor, CodeModeConfig, ExecutionError, HmacTokenGenerator, NoopPolicyEvaluator,
+    PolicyEvaluator, TokenGenerator, TokenSecret, ValidationContext, ValidationPipeline,
 };
 
 #[cfg(feature = "avp")]
 pub use pmcp_code_mode::{AvpClient, AvpConfig, AvpPolicyEvaluator};
 
+use std::sync::Arc;
+
 use crate::config::{CodeModeSection, ServerConfig};
 use crate::error::{ConfigValidationError, Result, ToolkitError};
 use crate::secrets::SecretValue;
+use crate::sql::SqlConnector;
 
 // =============================================================================
 // R1 split — validation_pipeline_from_config + code_mode_tools_from_executor
@@ -189,6 +192,117 @@ pub fn register_code_mode_tools(
     // Plan 06's deliverable is the validation pipeline + re-exports; the helper
     // is shape-preserving for now.
     Ok(builder)
+}
+
+// =============================================================================
+// SHAP-A-01 — SqlCodeExecutor (Plan 85-02 Task 1)
+// =============================================================================
+
+/// [`CodeExecutor`] adapter bridging the toolkit's single-method
+/// [`SqlConnector`] to the code-mode `validate_code` / `execute_code` flow.
+///
+/// # Re-derived for the single-method trait
+///
+/// The production reference (`mcp-sql-server-core::SqlCodeModeHandler`) is
+/// written over a 2-method `DatabaseConnector` (`execute_query` /
+/// `execute_statement`) and dispatches by [`crate::sql`]'s
+/// `QueryType`. The toolkit's [`SqlConnector`] exposes a SINGLE
+/// [`SqlConnector::execute`] entry point, so this adapter collapses that
+/// 2-method dispatch into one `connector.execute(sql, &[])` call regardless of
+/// statement type — re-validating the SQL FIRST for defense-in-depth.
+///
+/// # Defense-in-depth re-validation (threat T-85-02-01)
+///
+/// Before touching the connector, [`SqlCodeExecutor::execute`] re-runs the
+/// `[code_mode]` policy against the supplied SQL via the same
+/// [`ValidationPipeline`] the `validate_code` tool used. The code-mode
+/// framework already verified the approval token + code hash before calling
+/// this method, but re-validation guards against a token issued for an
+/// allowed statement being replayed with a different (e.g. mutating)
+/// statement. A policy violation returns `Err(ExecutionError::BackendError)`
+/// BEFORE the connector is reached — a config-driven server cannot bypass the
+/// write/DDL guards (SC-3, threat T-85-02-02).
+///
+/// # Observable result shape (REVIEW FIX Codex MEDIUM #6b)
+///
+/// The production handler returns
+/// `{"columns": [...], "rows": [...], "rows_affected": N}` because its
+/// 2-method connector surfaces columns + affected-row counts separately. The
+/// toolkit's [`SqlConnector::execute`] returns `Vec<Value>` (one JSON object
+/// per row, keyed by column name) with no separate columns/rows_affected
+/// channel, so this adapter mirrors production's OBSERVABLE `"rows"` key:
+/// `{"rows": <values>}`. The parity replay (Plan 06) only exercises
+/// `execute_code` with an INVALID token (asserts `failure`), so this success
+/// shape is not asserted by `generated.yaml`; mirroring production keeps the
+/// executor correct for any future success-path scenario and for the direct
+/// unit assertions in this crate.
+pub struct SqlCodeExecutor {
+    connector: Arc<dyn SqlConnector>,
+    config: ServerConfig,
+}
+
+impl SqlCodeExecutor {
+    /// Construct an executor over `connector`, enforcing the `[code_mode]`
+    /// policy carried by `config` on every [`SqlCodeExecutor::execute`] call.
+    #[must_use]
+    pub fn new(connector: Arc<dyn SqlConnector>, config: ServerConfig) -> Self {
+        Self { connector, config }
+    }
+
+    /// Defense-in-depth re-validation of `code` against the `[code_mode]`
+    /// policy (threat T-85-02-01). Returns `Err` BEFORE any connector call when
+    /// the statement violates the static policy (e.g. a DELETE under
+    /// `allow_deletes = false`) or fails to parse.
+    fn revalidate(&self, code: &str) -> std::result::Result<(), ExecutionError> {
+        let pipeline = validation_pipeline_from_config(&self.config).map_err(|e| {
+            ExecutionError::BackendError(format!("re-validation pipeline unavailable: {e}"))
+        })?;
+        let ctx = ValidationContext::new(
+            "code-mode-executor",
+            "code-mode-session",
+            "schema-hash",
+            "perms-hash",
+        );
+        let result = pipeline
+            .validate_sql_query(code, &ctx)
+            .map_err(|e| ExecutionError::BackendError(format!("SQL validation failed: {e}")))?;
+        if !result.is_valid {
+            return Err(ExecutionError::BackendError(
+                "SQL rejected by [code_mode] policy on re-validation".to_string(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[pmcp_code_mode::async_trait]
+impl CodeExecutor for SqlCodeExecutor {
+    /// Re-validate the SQL against the `[code_mode]` policy, then execute it via
+    /// the single-method [`SqlConnector::execute`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ExecutionError::BackendError`] when re-validation rejects the
+    /// statement (policy violation or parse failure) or when the connector
+    /// surfaces a [`crate::sql::ConnectorError`]. Connector error messages are
+    /// surfaced verbatim from the toolkit's already-sanitized
+    /// `ConnectorError` Display (T-84-01-01 / threat T-85-02-04) — no raw
+    /// backend credentials are echoed.
+    async fn execute(
+        &self,
+        code: &str,
+        _variables: Option<&serde_json::Value>,
+    ) -> std::result::Result<serde_json::Value, ExecutionError> {
+        // (1) Defense-in-depth re-validation BEFORE the connector is reached.
+        self.revalidate(code)?;
+        // (2) Single entry point — the toolkit trait has one execute() method.
+        let rows =
+            self.connector.execute(code, &[]).await.map_err(|e| {
+                ExecutionError::BackendError(format!("connector execute failed: {e}"))
+            })?;
+        // (3) Mirror production's observable `"rows"` key (REVIEW FIX #6b).
+        Ok(serde_json::json!({ "rows": rows }))
+    }
 }
 
 // =============================================================================
@@ -341,8 +455,6 @@ fn resolve_token_secret(section: &CodeModeSection) -> Result<SecretValue> {
 // =============================================================================
 // TKIT-10 — assemble_code_mode_prompt (D-12 / review R2)
 // =============================================================================
-
-use crate::sql::SqlConnector;
 
 /// TKIT-10: assemble the code-mode bootstrap prompt body from a connector's
 /// [`SqlConnector::schema_text`] + curated `[[database.tables]]` descriptions.
@@ -603,6 +715,120 @@ mod tests {
             },
             Err(other) => panic!("expected CodeMode error, got {other:?}"),
         }
+    }
+}
+
+// =============================================================================
+// SHAP-A-01 — SqlCodeExecutor unit tests (Plan 85-02 Task 1)
+// =============================================================================
+
+#[cfg(all(test, feature = "sqlite"))]
+mod sql_code_executor_tests {
+    use super::*;
+    use crate::config::{CodeModeSection, ServerConfig, ServerSection};
+    use crate::sql::SqliteConnector;
+
+    const TEST_SECRET_VAR: &str = "PMCP_TOOLKIT_SQL_EXECUTOR_TEST_SECRET";
+
+    fn ensure_secret() {
+        std::env::set_var(TEST_SECRET_VAR, "executor-test-secret-16-or-more");
+    }
+
+    /// A read-only `[code_mode]` config (no writes/deletes/DDL) plus an
+    /// in-memory SQLite connector seeded with a single `Artist` row.
+    async fn read_only_executor() -> SqlCodeExecutor {
+        ensure_secret();
+        let connector = SqliteConnector::open_in_memory().expect("open in-memory sqlite");
+        connector
+            .execute(
+                "CREATE TABLE Artist (ArtistId INTEGER PRIMARY KEY, Name TEXT)",
+                &[],
+            )
+            .await
+            .expect("create table");
+        connector
+            .execute(
+                "INSERT INTO Artist (ArtistId, Name) VALUES (1, 'AC/DC')",
+                &[],
+            )
+            .await
+            .expect("seed row");
+
+        let config = ServerConfig {
+            server: ServerSection {
+                name: "executor-test".to_string(),
+                version: "0.1.0".to_string(),
+                ..Default::default()
+            },
+            code_mode: Some(CodeModeSection {
+                enabled: true,
+                server_id: Some("executor-test".to_string()),
+                allow_writes: false,
+                allow_deletes: false,
+                allow_ddl: false,
+                token_secret: Some(format!("env:{TEST_SECRET_VAR}")),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        SqlCodeExecutor::new(Arc::new(connector), config)
+    }
+
+    #[tokio::test]
+    async fn read_only_select_returns_rows() {
+        let executor = read_only_executor().await;
+        let result = executor
+            .execute("SELECT ArtistId, Name FROM Artist", None)
+            .await
+            .expect("read-only SELECT must succeed under a read-only policy");
+        // Mirrors production's observable `"rows"` key (REVIEW FIX #6b).
+        let rows = result.get("rows").expect("payload has a `rows` key");
+        let arr = rows.as_array().expect("`rows` is an array");
+        assert_eq!(arr.len(), 1, "one seeded row expected, got {arr:?}");
+        assert_eq!(arr[0]["Name"], "AC/DC");
+    }
+
+    #[tokio::test]
+    async fn delete_rejected_before_connector_under_read_only_policy() {
+        // allow_deletes=false → re-validation rejects DELETE BEFORE the
+        // connector is reached (threat T-85-02-01 / SC-3).
+        let executor = read_only_executor().await;
+        let err = executor
+            .execute("DELETE FROM Artist WHERE ArtistId = 1", None)
+            .await
+            .expect_err("DELETE must be rejected when allow_deletes=false");
+        assert!(
+            matches!(err, ExecutionError::BackendError(_)),
+            "expected a policy-rejection BackendError, got {err:?}"
+        );
+        // The row must still be present — proving the connector was never reached.
+        let still_there = executor
+            .connector
+            .execute("SELECT COUNT(*) AS n FROM Artist", &[])
+            .await
+            .expect("count query");
+        assert_eq!(still_there[0]["n"], 1, "DELETE must not have run");
+    }
+
+    #[tokio::test]
+    async fn ddl_rejected_under_read_only_policy() {
+        // allow_ddl=false → re-validation rejects DROP TABLE.
+        let executor = read_only_executor().await;
+        let err = executor
+            .execute("DROP TABLE Artist", None)
+            .await
+            .expect_err("DROP must be rejected when allow_ddl=false");
+        assert!(matches!(err, ExecutionError::BackendError(_)));
+    }
+
+    #[tokio::test]
+    async fn malformed_sql_returns_err_never_panics() {
+        let executor = read_only_executor().await;
+        let result = executor.execute("SELEC nonsense FRM", None).await;
+        assert!(
+            result.is_err(),
+            "malformed SQL must surface an Err, never panic"
+        );
     }
 }
 
