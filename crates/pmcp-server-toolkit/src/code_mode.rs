@@ -517,17 +517,19 @@ impl CodeExecutor for SqlCodeExecutor {
 /// `CodeModeConfig` counterpart are noted in inline comments rather than
 /// silently dropped (review R1 + threat T-83-06-04).
 fn build_cm_config(section: &CodeModeSection) -> CodeModeConfig {
-    let mut cfg = CodeModeConfig::default();
-    cfg.enabled = section.enabled;
+    let mut cfg = CodeModeConfig {
+        enabled: section.enabled,
+        // SQL policy bits — toolkit's unprefixed names → pmcp_code_mode's sql_-prefixed.
+        sql_allow_writes: section.allow_writes,
+        sql_allow_deletes: section.allow_deletes,
+        sql_allow_ddl: section.allow_ddl,
+        sql_blocked_tables: section.blocked_tables.iter().cloned().collect(),
+        sql_blocked_columns: section.sensitive_columns.iter().cloned().collect(),
+        ..CodeModeConfig::default()
+    };
     if let Some(ref sid) = section.server_id {
         cfg.server_id = Some(sid.clone());
     }
-    // SQL policy bits — toolkit's unprefixed names → pmcp_code_mode's sql_-prefixed.
-    cfg.sql_allow_writes = section.allow_writes;
-    cfg.sql_allow_deletes = section.allow_deletes;
-    cfg.sql_allow_ddl = section.allow_ddl;
-    cfg.sql_blocked_tables = section.blocked_tables.iter().cloned().collect();
-    cfg.sql_blocked_columns = section.sensitive_columns.iter().cloned().collect();
     // Token TTL — both sides use seconds, but pmcp_code_mode uses i64 and the
     // toolkit uses Option<u64>. Saturate to i64::MAX rather than wrap.
     if let Some(ttl) = section.token_ttl_seconds {

@@ -24,10 +24,7 @@ use std::path::Path;
 
 use pmcp_server_toolkit::sql::{SqlConnector, SqliteConnector};
 
-const CHINOOK_DB: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/tests/fixtures/chinook.db"
-);
+const CHINOOK_DB: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/chinook.db");
 
 const CHINOOK_DDL: &str = include_str!("fixtures/chinook.ddl");
 const GENERATED_YAML: &str = include_str!("fixtures/generated.yaml");
@@ -53,7 +50,10 @@ fn chinook_db_is_data_bearing_blob() {
 async fn populated_db_returns_real_genre_rows() {
     let conn = SqliteConnector::open(Path::new(CHINOOK_DB)).expect("open chinook.db");
     let rows = conn
-        .execute("SELECT Name FROM Genre WHERE Name = :g", &[("g".into(), "Rock".into())])
+        .execute(
+            "SELECT Name FROM Genre WHERE Name = :g",
+            &[("g".into(), "Rock".into())],
+        )
         .await
         .expect("curated Genre SELECT must succeed against the populated DB");
     assert_eq!(
@@ -98,7 +98,10 @@ async fn search_tracks_shape_returns_acdc_rows() {
 /// naming the curated-tool tables — DISTINCT from the `.db` data file.
 #[test]
 fn ddl_fixture_names_curated_tables() {
-    assert!(!CHINOOK_DDL.trim().is_empty(), "chinook.ddl must be non-empty");
+    assert!(
+        !CHINOOK_DDL.trim().is_empty(),
+        "chinook.ddl must be non-empty"
+    );
     for table in ["Artist", "Album", "Track", "Genre"] {
         assert!(
             CHINOOK_DDL.contains(table),

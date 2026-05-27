@@ -81,7 +81,9 @@ async fn widget_handler_produces_value_array() {
     // REVIEWS H4: seed using `:name` placeholders ONLY — bare `?` would not bind
     // through translate_placeholders against Dialect::Sqlite.
     let conn: Arc<dyn SqlConnector> = Arc::new(SqliteConnector::open_in_memory().unwrap());
-    conn.execute("CREATE TABLE t (x INTEGER)", &[]).await.unwrap();
+    conn.execute("CREATE TABLE t (x INTEGER)", &[])
+        .await
+        .unwrap();
     conn.execute(
         "INSERT INTO t VALUES (:p1), (:p2)",
         &[("p1".into(), json!(1)), ("p2".into(), json!(2))],
@@ -110,8 +112,7 @@ sql = "SELECT x FROM t ORDER BY x"
 ui_resource_uri = "ui://rows"
 "#;
     let cfg = ServerConfig::from_toml_strict_validated(cfg_toml).expect("config parses");
-    let tools =
-        synthesize_from_config_with_connector(&cfg, Arc::clone(&conn)).expect("synthesize");
+    let tools = synthesize_from_config_with_connector(&cfg, Arc::clone(&conn)).expect("synthesize");
     let handler = &tools[0].2;
 
     let out = handler
@@ -119,7 +120,9 @@ ui_resource_uri = "ui://rows"
         .await
         .expect("handler runs");
 
-    let rows = out.as_array().expect("handler returns a Value::Array of rows");
+    let rows = out
+        .as_array()
+        .expect("handler returns a Value::Array of rows");
     assert_eq!(rows.len(), 2);
     assert_eq!(rows[0]["x"], json!(1));
     assert_eq!(rows[1]["x"], json!(2));

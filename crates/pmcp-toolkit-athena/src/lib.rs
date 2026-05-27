@@ -276,7 +276,8 @@ fn redact_token(token: &str) -> String {
 fn looks_like_credential(t: &str) -> bool {
     let is_access_key = t.len() == 20
         && (t.starts_with("AKIA") || t.starts_with("ASIA"))
-        && t.chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit());
+        && t.chars()
+            .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit());
     let is_secret_run = t.len() >= 40
         && t.chars()
             .all(|c| c.is_ascii_alphanumeric() || c == '/' || c == '+' || c == '=');
@@ -564,7 +565,10 @@ mod tests {
     #[test]
     fn test_strip_aws_credentials_redacts_akia_prefix() {
         let redacted = strip_aws_credentials("err: AKIAIOSFODNN7EXAMPLE oops");
-        assert!(redacted.contains("***"), "expected redaction, got: {redacted}");
+        assert!(
+            redacted.contains("***"),
+            "expected redaction, got: {redacted}"
+        );
         assert!(
             !redacted.contains("AKIAIOSFODNN7EXAMPLE"),
             "access key must be stripped, got: {redacted}"
@@ -579,7 +583,10 @@ mod tests {
         let secret = "wJalrXUtnFEMIK7MDENGbPxRfiCYEXAMPLEKEYabc";
         let redacted = strip_aws_credentials(&format!("boom {secret} end"));
         assert!(redacted.contains("***"));
-        assert!(!redacted.contains(secret), "secret run stripped: {redacted}");
+        assert!(
+            !redacted.contains(secret),
+            "secret run stripped: {redacted}"
+        );
     }
 
     #[test]

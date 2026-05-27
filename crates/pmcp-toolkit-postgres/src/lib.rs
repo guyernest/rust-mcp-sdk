@@ -115,9 +115,10 @@ impl PostgresConnector {
     /// pool cannot be built. The error message redacts the password via
     /// [`sanitize_url`] — it never echoes the raw secret (T-84-05-02).
     pub async fn connect(url: &str) -> Result<Self, ConnectorError> {
-        let pg_config: tokio_postgres::Config = url.parse().map_err(|e: tokio_postgres::Error| {
-            ConnectorError::Connection(format!("invalid url ({}): {e}", sanitize_url(url)))
-        })?;
+        let pg_config: tokio_postgres::Config =
+            url.parse().map_err(|e: tokio_postgres::Error| {
+                ConnectorError::Connection(format!("invalid url ({}): {e}", sanitize_url(url)))
+            })?;
         let mgr = Manager::from_config(pg_config, NoTls, ManagerConfig::default());
         let pool = Pool::builder(mgr)
             .max_size(16)
@@ -426,8 +427,8 @@ mod tests {
 
     #[test]
     fn test_value_to_pg_param_rejects_array() {
-        let err = value_to_pg_param("tags", &json!([1, 2, 3]))
-            .expect_err("array param must be rejected");
+        let err =
+            value_to_pg_param("tags", &json!([1, 2, 3])).expect_err("array param must be rejected");
         match err {
             ConnectorError::ParameterBind { name, reason } => {
                 assert_eq!(name, "tags");
@@ -442,11 +443,8 @@ mod tests {
 
     #[test]
     fn test_build_bind_list_propagates_object_rejection() {
-        let err = build_bind_list(
-            &["x".to_string()],
-            &[("x".to_string(), json!({"k": "v"}))],
-        )
-        .expect_err("object bind must propagate as error");
+        let err = build_bind_list(&["x".to_string()], &[("x".to_string(), json!({"k": "v"}))])
+            .expect_err("object bind must propagate as error");
         assert!(matches!(
             err,
             ConnectorError::ParameterBind { ref name, .. } if name == "x"

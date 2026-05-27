@@ -335,7 +335,11 @@ mod tests {
             None,
             "empty database segment → None"
         );
-        assert_eq!(parse_database_from_url("not a url"), None, "no scheme → None");
+        assert_eq!(
+            parse_database_from_url("not a url"),
+            None,
+            "no scheme → None"
+        );
     }
 
     #[test]

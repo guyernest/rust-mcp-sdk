@@ -34,7 +34,10 @@ async fn execute_translates_named_to_question_mark() {
         .clone()
         .expect("translated SQL recorded");
     assert!(translated.contains('?'), "named → ? : {translated}");
-    assert!(!translated.contains(":id"), "no named placeholder left: {translated}");
+    assert!(
+        !translated.contains(":id"),
+        "no named placeholder left: {translated}"
+    );
 
     assert_eq!(rows.len(), 1, "exactly one matching row");
     assert_eq!(rows[0]["label"], json!("cat"));

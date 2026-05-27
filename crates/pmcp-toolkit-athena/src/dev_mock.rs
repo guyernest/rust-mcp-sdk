@@ -123,10 +123,12 @@ impl SqlConnector for AthenaMock {
     }
 
     async fn schema_text(&self) -> Result<String, ConnectorError> {
-        Ok("CREATE EXTERNAL TABLE images (\n  image_id STRING,\n  label STRING\n)\n\
+        Ok(
+            "CREATE EXTERNAL TABLE images (\n  image_id STRING,\n  label STRING\n)\n\
             PARTITIONED BY (\n  dt STRING\n)\n\
             LOCATION 's3://example-bucket/images/';\n"
-            .to_string())
+                .to_string(),
+        )
     }
 }
 
@@ -137,7 +139,10 @@ fn cheap_query_engine(
     args: &[Value],
 ) -> Result<Vec<Value>, ConnectorError> {
     if sql.contains("FROM images WHERE image_id = ?") {
-        let id = args.first().and_then(serde_json::Value::as_str).unwrap_or("");
+        let id = args
+            .first()
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("");
         let rows = tables.get("images").cloned().unwrap_or_default();
         return Ok(rows
             .into_iter()

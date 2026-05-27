@@ -113,7 +113,10 @@ fn cheap_query_engine(
     args: &[Value],
 ) -> Result<Vec<Value>, ConnectorError> {
     if sql.contains("FROM employees WHERE id = ?") {
-        let id = args.first().and_then(serde_json::Value::as_i64).unwrap_or(-1);
+        let id = args
+            .first()
+            .and_then(serde_json::Value::as_i64)
+            .unwrap_or(-1);
         let rows = tables.get("employees").cloned().unwrap_or_default();
         return Ok(rows
             .into_iter()

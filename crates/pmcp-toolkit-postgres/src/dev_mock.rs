@@ -89,9 +89,11 @@ impl SqlConnector for PostgresMock {
     }
 
     async fn schema_text(&self) -> Result<String, ConnectorError> {
-        Ok("CREATE TABLE employees (\n  id INTEGER NOT NULL,\n  name TEXT NOT NULL\n);\n\
+        Ok(
+            "CREATE TABLE employees (\n  id INTEGER NOT NULL,\n  name TEXT NOT NULL\n);\n\
             CREATE TABLE departments (\n  id INTEGER NOT NULL,\n  name TEXT NOT NULL\n);\n"
-            .into())
+                .into(),
+        )
     }
 }
 
@@ -102,7 +104,10 @@ fn cheap_query_engine(
     args: &[Value],
 ) -> Result<Vec<Value>, ConnectorError> {
     if sql.contains("FROM employees WHERE id = $1") {
-        let id = args.first().and_then(serde_json::Value::as_i64).unwrap_or(-1);
+        let id = args
+            .first()
+            .and_then(serde_json::Value::as_i64)
+            .unwrap_or(-1);
         let rows = tables.get("employees").cloned().unwrap_or_default();
         return Ok(rows
             .into_iter()
