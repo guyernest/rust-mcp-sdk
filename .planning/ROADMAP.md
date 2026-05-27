@@ -1590,7 +1590,7 @@ Plans:
 | 83. Toolkit Core Lift | 9/9 | Complete   | 2026-05-18 |
 | 84. SQL Connectors | 9/9 | Complete   | 2026-05-26 |
 | 85. Shape A + Reference Parity | 10/10 | Complete    | 2026-05-27 |
-| 86. Shapes B/C/D | 6/6 | Complete   | 2026-05-27 |
+| 86. Shapes B/C/D | 6/6 | Complete    | 2026-05-27 |
 | 87. Type 2 Authoring Skills Server | 0/? | Not started | - |
 | 88. Dogfood `pmcp-server` | 0/? | Not started | - |
 | 89. Documentation & Migration | 0/? | Not started | - |
