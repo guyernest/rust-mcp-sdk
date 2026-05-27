@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v2.2
 milestone_name: Configuration-Only MCP Servers
 status: executing
-stopped_at: Phase 85 context gathered
-last_updated: "2026-05-27T00:57:26.374Z"
+stopped_at: Completed 85-03-PLAN.md (Wave 1)
+last_updated: "2026-05-27T01:12:39.623Z"
 last_activity: 2026-05-27
 progress:
   total_phases: 44
   completed_phases: 36
   total_plans: 161
-  completed_plans: 157
+  completed_plans: 158
   percent: 82
 ---
 
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-05-17)
 ## Current Position
 
 Phase: 85 (shape-a-pure-config-binary-reference-parity) — EXECUTING
-Plan: 3 of 6
+Plan: 4 of 6
 Status: Ready to execute
 Last activity: 2026-05-27
 
@@ -128,6 +128,9 @@ Inherited from v2.1 (see PROJECT.md + prior Decisions log):
 - [Phase ?]: [Phase 85 Plan 03] REVIEW FIX #1: vendored the DATA-BEARING chinook.db (~984 KB) verbatim, NOT a schema-only stub — generated.yaml asserts on real values (Rock/AC-DC/For Those About To Rock); an empty DB would fail the Plan 06 replay. Verified through the SAME SqliteConnector path the parity harness uses.
 - [Phase ?]: [Phase 85 Plan 03] exclude = [tests/, .planning/, .pmat/, fuzz/] keeps the ~1MB chinook.db blob (and all fixtures) out of the published crate — cargo package --list ships only Cargo.toml + src/{lib,main}.rs. The separate chinook.ddl (11 CREATE TABLE) is the --schema text input (D-06), distinct from the .db data file.
 - [Phase ?]: [Phase 85 Plan 03] rusqlite (bundled) added as dev-dep so the standalone-DDL test can execute_batch the 11-statement schema (toolkit's single-statement SqlConnector::execute can't); generated.yaml parses via serde_yaml → mcp_tester::TestScenario. Pre-existing rust-1.95.0 clippy lints in pmcp-server-toolkit dep surfaced under -D warnings but are out of scope (deferred-items.md).
+- [Phase ?]: [Phase 85 Plan 02] try_code_mode_from_config_with_connector (LOCKED) registers validate_code + execute_code via SqlCodeExecutor; connectorless try_code_mode_from_config stays validation-only/no-tool (Codex HIGH #4 resolved).
+- [Phase ?]: [Phase 85 Plan 02] Hand-built the two ToolHandlers in code_mode.rs (no pmcp-code-mode-derive dep); NoopPolicyEvaluator makes static [code_mode] flags THE authorization (D-13, SC-3). DELETE/DDL rejected on a read-only config.
+- [Phase ?]: [Phase 85 Plan 02] execute_code success payload = {rows:<values>} mirroring production observable shape; single-method SqlConnector has no columns/rows_affected channel (Codex #6b). assemble_code_mode_prompt_with_schema is sync/connectorless (D-04/D-05/SC-1).
 
 ### Roadmap Evolution
 
@@ -168,6 +171,7 @@ Inherited from v2.1 (see PROJECT.md + prior Decisions log):
 | Phase 84 P08 | 24min | 2 tasks | 11 files |
 | Phase 85 P01 | 14m | 2 tasks | 5 files |
 | Phase 85 P03 | 5min | 2 tasks | 9 files |
+| Phase 85 P02 | 18min | 3 tasks | 4 files |
 
 ### Last Activity
 
@@ -185,6 +189,6 @@ Inherited from v2.1 (see PROJECT.md + prior Decisions log):
 
 ## Session Continuity
 
-Last session: 2026-05-27T00:57:26.362Z
+Last session: 2026-05-27T01:12:16.818Z
 Stopped at: Completed 85-03-PLAN.md (Wave 1)
 Resume: Plan 85-03 COMPLETE — scaffolded `crates/pmcp-sql-server` (Shape A pure-config binary): feature-gated 4-connector manifest (sqlite/postgres/mysql/athena, all default-on D-07), lib/main split with a placeholder `lib::run()` Wave 2 replaces. Vendored FOUR self-contained parity fixtures into the SDK repo (closes RESEARCH Open Q#1): the DATA-BEARING `tests/fixtures/chinook.db` (~984 KB, REVIEW FIX #1 — real rows for the parity replay), the SEPARATE `chinook.ddl` (11 CREATE TABLE, the --schema text input D-06), `generated.yaml` (29-scenario contract), and `reference-config.toml` — all publish-excluded via `exclude = [tests/, …]`. 6-test `schema_fixture.rs` proves the DB returns Rock/AC-DC through the real SqliteConnector, the DDL builds a standalone 11-table schema, and generated.yaml parses as a `mcp_tester::TestScenario`. REF-02 fixture foundation done. Next: Plan 85-04 (Wave 2) fills `lib::run()` with the real config-load → connector-select → `pmcp::Server` assembly → transport-serve pipeline; Plan 85-06 replays the 29 scenarios against the vendored DB. NOTE: plan counter advanced 2→3 (monotonic) but plan 85-02 is a parallel Wave-1 plan whose SUMMARY is still pending; progress recalc (157/161, 98%) reflects disk truth.

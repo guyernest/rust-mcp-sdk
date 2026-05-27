@@ -1483,7 +1483,7 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 85-02-PLAN.md — Real code-mode tool registration + SqlCodeExecutor adapter + file-based prompt seam [wave 2]
+- [x] 85-02-PLAN.md — Real code-mode tool registration + SqlCodeExecutor adapter + file-based prompt seam [wave 2]
 - [ ] 85-04-PLAN.md — clap CLI + [database] type → connector dispatch [wave 2]
 
 **Wave 3** *(blocked on Wave 2 completion)*
@@ -1560,7 +1560,7 @@ Plans:
 | 82. Builder DX Prerequisites | 3/3 | Complete   | 2026-05-18 |
 | 83. Toolkit Core Lift | 9/9 | Complete   | 2026-05-18 |
 | 84. SQL Connectors | 9/9 | Complete   | 2026-05-26 |
-| 85. Shape A + Reference Parity | 2/6 | In Progress|  |
+| 85. Shape A + Reference Parity | 3/6 | In Progress|  |
 | 86. Shapes B/C/D | 0/? | Not started | - |
 | 87. Type 2 Authoring Skills Server | 0/? | Not started | - |
 | 88. Dogfood `pmcp-server` | 0/? | Not started | - |

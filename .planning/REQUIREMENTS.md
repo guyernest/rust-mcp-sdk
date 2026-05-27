@@ -154,7 +154,7 @@ Multi-dialect SQL connector trait + per-backend crates (spike 005). Three method
 
 Four user-facing surfaces in this milestone (spike 004 menu).
 
-- [ ] **SHAP-A-01**: Shape A — `pmcp-sql-server --config <file> --schema <file>` pure-config binary crate that spawns an MCP server from configuration + schema alone, zero Rust written by the developer. Acceptance check: running it against `pmcp-run/built-in/sql-api/servers/open-images/config.toml` (or `imdb` / `msr-vtt`) produces a server that responds to `tools/list`, `tools/call` for every `[[tools]]` entry, and the code-mode pair (`validate_code` / `execute_code`) with policy enforcement matching the production server's behavior
+- [x] **SHAP-A-01**: Shape A — `pmcp-sql-server --config <file> --schema <file>` pure-config binary crate that spawns an MCP server from configuration + schema alone, zero Rust written by the developer. Acceptance check: running it against `pmcp-run/built-in/sql-api/servers/open-images/config.toml` (or `imdb` / `msr-vtt`) produces a server that responds to `tools/list`, `tools/call` for every `[[tools]]` entry, and the code-mode pair (`validate_code` / `execute_code`) with policy enforcement matching the production server's behavior
 - [ ] **SHAP-B-01**: Shape B — `cargo pmcp new --kind sql-server` scaffolds a starter project with `Cargo.toml` (pinned toolkit + chosen backend dep), `main.rs` (12-line shape-C wiring), and `config.toml` (commented template) ready to `cargo run`
 - [ ] **SHAP-C-01**: Shape C — A runnable `examples/` entry proves library use: an end-to-end MCP server in ≤15 lines of `main.rs` (library use of `pmcp-server-toolkit` + a chosen `pmcp-toolkit-<backend>` crate)
 - [ ] **SHAP-D-01**: Shape D — `cargo pmcp deploy` packages a config-only server (pure-Rust Lambda binary) and deploys it to pmcp.run as a hosted target; the `cargo pmcp configure` target system from Phase 77 accommodates config-only server targets without breaking changes
@@ -359,7 +359,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | CONN-06 | Phase 84 | Complete |
 | CONN-07 | Phase 84 | Complete |
 | CONN-08 | Phase 84 | Complete |
-| SHAP-A-01 | Phase 85 | Pending |
+| SHAP-A-01 | Phase 85 | Complete |
 | SHAP-B-01 | Phase 86 | Pending |
 | SHAP-C-01 | Phase 86 | Pending |
 | SHAP-D-01 | Phase 86 | Pending |
