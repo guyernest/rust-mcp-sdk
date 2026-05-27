@@ -1494,6 +1494,13 @@ Plans:
 
 - [x] 85-06-PLAN.md — Chinook parity replay (REF-02/SC-3/SC-4) + Shape C example + doctests + publish-order + fuzz seed [wave 4]
 
+**Gap closure** *(SC-3 reopened by code review — see 85-VERIFICATION.md Gaps 1-3 + 85-REVIEW.md)*
+
+- [ ] 85-07-PLAN.md — Gap 1: enforce `require_limit` (add+map `sql_require_limit`; no-LIMIT read rejected independent of `max_limit`) (SHAP-A-01) [gap, wave 1]
+- [ ] 85-09-PLAN.md — Gap 3: synthesize `code-mode://instructions` + `code-mode://policies` resources during assembly + prompt-body content assertion (REF-02) [gap, wave 1]
+- [ ] 85-08-PLAN.md — Gap 2: make policy-rejection scenarios individually gating in `parity_chinook.rs` (per-step assertion, fixtures unchanged) (REF-02, SHAP-A-01) [gap, wave 2, depends 85-07/85-09]
+- [ ] 85-10-PLAN.md — Secondary fixes: execute_code variables, null-default bind, cached pipeline, JoinError exit, sqlite `database` form, empty AWS_REGION/token_secret (SHAP-A-01, REF-02) [gap, wave 2, depends 85-07/85-09]
+
 ### Phase 86: Shapes B/C/D — Scaffold, Library Example, Deploy
 
 **Goal**: A developer can choose any of three ergonomics levels for non-pure-config use cases — scaffold a starter project with `cargo pmcp new --kind sql-server` (Shape B), wire a ≤15-line `main.rs` library use (Shape C), or `cargo pmcp deploy` a config-only server to pmcp.run as a hosted target (Shape D) — and Phase 77's `cargo pmcp configure` target system accommodates each without breaking changes.
