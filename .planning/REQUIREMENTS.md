@@ -202,7 +202,7 @@ ALWAYS requirements from CLAUDE.md plus toolkit-specific coverage.
 - [x] **TEST-02**: Toolkit core unit + property tests covering placeholder translation invariants, code-mode prompt assembly, ToolInfo synthesis from `[[tools]]` config entries
 - [x] **TEST-03**: Public API doctest coverage for `pmcp-server-toolkit` (all public types + helpers compile and run as `rust,no_run` or `rust` doctests)
 - [ ] **TEST-04**: `pmcp-config-helper` integration test asserts dual-surface byte-equality (SKLL-05) and SEP-2640 §9 list-exclusion (SKLL-06)
-- [ ] **TEST-05**: `cargo pmcp new --kind sql-server` scaffold-to-run end-to-end test (scaffold a project in a tempdir, `cargo run` it against an embedded SQLite, hit `tools/list` and one `tools/call`)
+- [x] **TEST-05**: `cargo pmcp new --kind sql-server` scaffold-to-run end-to-end test (scaffold a project in a tempdir, `cargo run` it against an embedded SQLite, hit `tools/list` and one `tools/call`)
 - [ ] **TEST-06**: `cargo pmcp deploy` integration test for at least one config-only server target (mock or real pmcp.run target)
 - [x] **TEST-07**: Fuzz target for `config.toml` parser ensuring malformed config never panics (extends Phase 77 `pmcp_config_toml_parser` pattern)
 
@@ -384,7 +384,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | TEST-02 | Phase 83 | Complete |
 | TEST-03 | Phase 83 | Complete |
 | TEST-04 | Phase 87 | Pending |
-| TEST-05 | Phase 86 | Pending |
+| TEST-05 | Phase 86 | Complete |
 | TEST-06 | Phase 86 | Pending |
 | TEST-07 | Phase 84 | Complete |
 
