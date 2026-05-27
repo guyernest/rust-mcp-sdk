@@ -89,7 +89,7 @@ Tool handlers can manage long-running operations through a durable task lifecycl
 
 ## Current State
 
-v2.1 in progress. All prior milestones (v1.0-v2.0) shipped. Phase 79 complete — `cargo pmcp deploy` widget pre-build + post-deploy verification ships in cargo-pmcp 0.12.1, including the raw-HTML / CDN-import widget archetype guard (zero-config single-file widgets without `package.json` no longer crash with `os error 2` and no longer trigger an `npm install` parent-walk audit).
+Milestone v2.2 (Configuration-Only MCP Servers) in progress. All prior milestones (v1.0-v2.0) shipped; v2.1 deploy work (Phase 79) complete. **Phase 85 complete (2026-05-27)** — Shape A pure-config binary `pmcp-sql-server --config X --schema Y` proves the toolkit lift end-to-end: a new `crates/pmcp-sql-server` crate stands up a live MCP server from config + schema alone (no user Rust), the toolkit `config.toml` schema is a verified superset of the pmcp-run sql-api reference configs (additive keys only, `deny_unknown_fields` preserved), `validate_code`/`execute_code` enforce code-mode policy as MCP errors, and all 29 vendored Chinook `generated.yaml` scenarios replay green through the real binary path (REF-02 result parity). Two production-path bugs were found and fixed in the process (parameter-default binding causing `LIMIT NULL`; `ValidateCodeHandler` swallowing the `isError` flag).
 
 **Shipped milestones:**
 - v1.0: MCP Tasks Foundation (types, store, server integration)
@@ -191,4 +191,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-05-17 — milestone v2.2 (Configuration-Only MCP Servers) started, derived from validated spikes 003–006 + auto-loaded `spike-findings-rust-mcp-sdk` skill; previously 2026-05-03 after Phase 79 gap closure (raw-HTML / CDN-import widget pre-build guard, cargo-pmcp 0.12.1)*
+*Last updated: 2026-05-27 — Phase 85 complete (Shape A pure-config binary + Chinook reference parity); previously 2026-05-17 — milestone v2.2 (Configuration-Only MCP Servers) started, derived from validated spikes 003–006 + auto-loaded `spike-findings-rust-mcp-sdk` skill*
