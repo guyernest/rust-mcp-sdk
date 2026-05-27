@@ -29,9 +29,11 @@
 //! - [`dispatch`]: the NOVEL `[database] type` → `Arc<dyn SqlConnector>` switch
 //!   with a clear compiled-out-backend error ([`dispatch::DispatchError`]).
 
+pub mod assemble;
 pub mod cli;
 pub mod dispatch;
 
+pub use assemble::{build_server, merge_schema_resource, AssembleError};
 pub use cli::Args;
 pub use dispatch::{dispatch, DispatchError};
 
