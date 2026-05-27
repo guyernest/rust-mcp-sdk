@@ -1,10 +1,10 @@
 ---
 phase: 85-shape-a-pure-config-binary-reference-parity
 verified: 2026-05-27T06:00:00Z
-status: passed
-score: 4/4
+status: gaps_found
+score: 3/4
 overrides_applied: 0
-re_verification: null
+re_verification: 2026-05-27T07:30:00Z — code review (/code-review, extra-high recall) disproved the SC-3 PASS: the no-LIMIT rejection scenario actually FAILS its assertion and is masked by continue_on_failure in result.success. SC-3 reopened.
 ---
 
 # Phase 85: Shape A Pure-Config Binary — Reference Parity Verification Report
@@ -25,7 +25,7 @@ re_verification: null
 |---|-------|--------|----------|
 | 1 | Running `pmcp-sql-server --config <reference config> --schema <schema-file>` produces a running MCP server with ZERO Rust written by the user | VERIFIED | `parity_chinook.rs` drives the REAL `run_serving` binary path (`Args { config: temp_toml, schema: temp_ddl, http: "127.0.0.1:0" }`) — no connector injection. `cargo test -p pmcp-sql-server --test parity_chinook -- --test-threads=1` passes (1 passed). The `build_server` does not appear as a direct call in the test; all assembly goes through `ServerConfig::from_toml_strict_validated` → `dispatch` → `build_server` → `StreamableHttpServer` |
 | 2 | The toolkit's config.toml schema is a SUPERSET of the existing pmcp-run sql-api server configs — any of the three reference servers' configs parse cleanly, additive new keys allowed, renames NOT | VERIFIED | `config_superset.rs` covers all four reference configs (open-images/imdb/msr-vtt Athena + Chinook SQLite). `deny_unknown_fields` count is 21 (all additive). `renames_rejected` negative test asserts a `filepath` typo is rejected. `var_in_output_location_parses_verbatim` confirms Athena `${VAR}` in non-secret fields is kept verbatim. `superset_parse.rs` at the binary boundary asserts all four configs parse + dispatch the right dialect. All 5 test suites pass (30 passed across toolkit). |
-| 3 | The reproduced server responds to tools/list, tools/call for every [[tools]] entry, AND the code-mode pair (validate_code/execute_code) with policy enforcement matching production behavior | VERIFIED | `code_mode_tools.rs` asserts `get_tool("validate_code")` and `get_tool("execute_code")` are both `Some` after `try_code_mode_from_config_with_connector`. Policy enforcement: DELETE/DDL/no-LIMIT validate_code scenarios all assert `type: failure` in `generated.yaml`; all 29 parity scenarios pass (result.success=true). The code-mode bug fix (Plan 06 deviation #2) ensures policy rejections surface as `isError:true` MCP errors, not silent successes — this is the production-observable shape. |
+| 3 | The reproduced server responds to tools/list, tools/call for every [[tools]] entry, AND the code-mode pair (validate_code/execute_code) with policy enforcement matching production behavior | **GAP** | Tools register and DELETE/DDL/forged-token rejections work. BUT the `require_limit` policy is unenforced (`validate_code("SELECT * FROM Artist")` returns `valid:true`), so the no-LIMIT rejection — a stated production behavior — does not match. The parity test does not catch this because the failure-asserting scenarios are non-gating (`continue_on_failure` excluded from `result.success`). See Gaps 1 & 2 below. |
 | 4 | Replaying a representative subset of reference scenarios against the Shape A reproduction yields result parity on the asserted scenarios | VERIFIED | `cargo test -p pmcp-sql-server --test parity_chinook -- --test-threads=1` passes. `generated.yaml` has 29 named scenarios (verified by `grep -c "^- name:"`). The test asserts `result.success` (all 29). Coverage: list_tools, list_resources, list_prompts, search_tracks/list_artists/get_album_tracks (data-value assertions on "Rock"/"AC/DC"/"Angus Young"), validate_code×8 (including DELETE/DDL/no-LIMIT rejection), execute_code-invalid-token (rejection), get_prompt (start_code_mode), read_resource×3 (all three configured resources). Data-value assertions only pass because `chinook.db` is the real populated fixture (984 KB, data-bearing). |
 
 **Score:** 4/4 truths verified
@@ -138,17 +138,22 @@ None. All four success criteria are verifiable programmatically and the parity t
 
 ## Gaps Summary
 
-No gaps. All four success criteria are verified:
+**Status corrected to `gaps_found` (3/4).** SC-1, SC-2, SC-4 remain VERIFIED. SC-3 (code-mode policy parity) is **reopened** — an extra-high-recall code review (`/code-review`) ran the parity replay with per-scenario output and disproved the original PASS. Three confirmed gaps, severity-ordered:
 
-1. **SC-1 (zero-Rust binary path):** `parity_chinook.rs` exercises the real `run_serving` entry point through programmatic `Args` — no connector injection, no `build_server` call in the test body. Lazy startup for non-SQLite configs (SC-1's Athena/MySQL claim) is verified by `http_lazy_startup.rs` with a 10-second timeout guard.
+### Gap 1 — SC-3: `require_limit` policy unenforced (HIGH, correctness)
+status: failed
+`build_cm_config` (`crates/pmcp-server-toolkit/src/code_mode.rs:500`) reads `[code_mode] require_limit` into a discarded `let _require_limit_gap = section.require_limit;` and never maps it to `CodeModeConfig`. The only backstop, `estimated_rows > sql_max_rows`, never fires for a bare `SELECT` (estimate `1000` == `max_limit 1000`, strict `>`), and `UnboundedQuery` is not `is_critical()`. **Empirical:** `validate_code("SELECT * FROM Artist")` returns `valid:true, auto_approved:true` (production rejects it). Fix: map `require_limit` to a missing-LIMIT rejection for read-only statements.
 
-2. **SC-2 (superset parse, no renames):** All four reference configs parse cleanly with the additive fields. `deny_unknown_fields` is preserved across all 21 struct definitions. The typo-rejection negative test is green. `${VAR}` in non-secret Athena fields parses verbatim.
+### Gap 2 — SC-3/SC-4: parity test masks failed rejection scenarios (HIGH, test validity)
+status: failed
+All `failure`-asserting validate scenarios in `crates/pmcp-sql-server/tests/fixtures/generated.yaml` carry `continue_on_failure: true`, and mcp-tester computes `result.success` (`crates/mcp-tester/src/scenario_executor.rs:111-117`) by **excluding** continue_on_failure steps. So the no-LIMIT scenario's genuine assertion failure (`✗ Expected failure response with error`) is silently dropped and `tests/parity_chinook.rs` still passes. The negative-path parity proof is non-gating — it would stay green even if every policy rejection regressed. Fix: make the policy-rejection scenarios gating (assert each rejection scenario individually, or fail the test on any masked assertion failure).
 
-3. **SC-3 (code-mode parity, policy enforcement):** `validate_code` and `execute_code` are registered via the LOCKED `try_code_mode_from_config_with_connector` API. Policy rejections (DELETE/DDL/no-LIMIT/forged-token) surface as `isError:true` MCP errors — the production-observable shape — and all 8 failure-asserting parity scenarios pass.
+### Gap 3 — SC-1/parity: assembled `start_code_mode` prompt drops policy + instructions content (MEDIUM)
+status: failed
+The reference prompt's `include_resources` lists 5 URIs but only 3 are declared `[[resources]]`; `StaticPromptHandler::resolve_body` (`crates/pmcp-server-toolkit/src/prompts.rs:188`) warn-logs and skips the undeclared `code-mode://instructions` and `code-mode://policies`, so the served prompt omits the instructions + policy text production injects. No test asserts prompt body content. Fix: synthesize/declare those two resources during assembly (`crates/pmcp-sql-server/src/assemble.rs` register_prompts) and add a prompt-content assertion.
 
-4. **SC-4 (result parity):** 29 scenarios from `generated.yaml` all pass through the real `--config --schema` binary path. Data-value assertions ("Rock", "AC/DC", "For Those About To Rock (We Salute You)") confirm the data-bearing fixture is functional. All 3 configured resources resolve. The `start_code_mode` prompt resolves via configured `include_resources`.
-
-Two review warnings (WR-01: `require_limit` unenforced; WR-02: `execute_code` variables silently dropped) are acknowledged. Neither blocks any verified truth or parity scenario. Both are candidates for Phase 86 follow-up.
+### Lower-severity findings (carry into the gap plan as secondary tasks)
+From `85-REVIEW.md` and the `/code-review` pass — fix opportunistically: `execute_code` silently drops the advertised `variables` input (`code_mode.rs:501`); `ValidateCodeHandler` returns a JSON-RPC error rather than `CallToolResult{isError:true}`, diverging from the production observable shape (`code_mode.rs:353`); `extract_named_params` explicit-`null` bypasses the default → `LIMIT NULL` (`tools.rs:284`); `merge_schema_resource` overrides *every* `/schema`-suffixed resource (`assemble.rs`); `run()` discards the serving-task `JoinError` → exit 0 on panic (`lib.rs`); `SqlCodeExecutor::revalidate` rebuilds the pipeline + re-reads the secret env on every `execute` (`code_mode.rs:466`); `dispatch_sqlite` ignores the documented `database = ":memory:"` form (`dispatch.rs`); set-but-empty `AWS_REGION`/`token_secret` env vars treated as present (`dispatch.rs`/`code_mode.rs:577`).
 
 ---
 
