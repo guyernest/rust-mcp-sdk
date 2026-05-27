@@ -1,0 +1,670 @@
+# SQL Reference Server Configuration
+# This is the reference MCP server for SQL databases that:
+# 1. Connects to a demo Chinook SQLite database (digital media store)
+# 2. Creates the shared policy store for all SQL servers
+# 3. Demonstrates the Pareto principle: ~20% tools, ~80% via Code Mode
+
+[server]
+id = "sql-reference"
+name = "SQL Reference Server"
+description = "Reference SQL MCP Server with Demo Chinook Database and Code Mode"
+version = "1.0.0"
+type = "sql-api"
+
+# This is the reference server that creates shared infrastructure
+is_reference = true
+
+# =============================================================================
+# Display Metadata (defaults for admin-configurable fields)
+# =============================================================================
+# These values populate the server record on first deploy or after deletion.
+# Admin edits via UI always take priority over these defaults.
+
+[metadata]
+display_name = "SQL Reference"
+short_description = "Reference SQL MCP Server with demo Chinook database"
+description = "Reference SQL MCP Server with Demo Chinook Database and Code Mode. Demonstrates SQL query generation against a digital media store dataset."
+tags = ["reference", "sql", "database", "demo"]
+author = "pmcp.run"
+visibility = "public"
+
+[database]
+# SQLite database for the demo
+type = "sqlite"
+# Path for Lambda deployment - assets are bundled to /var/task/assets/
+# For local development, download chinook.db to the reference folder:
+#   curl -L https://github.com/lerocha/chinook-database/raw/master/ChinookDatabase/DataSources/Chinook_Sqlite.sqlite -o chinook.db
+file_path = "/var/task/assets/chinook.db"
+
+[database.pool]
+# SQLite-specific settings
+max_connections = 5
+connection_timeout_seconds = 30
+
+# Table definitions for Code Mode availableOperations
+# These populate the management UI allowlist/blocklist checkboxes
+
+[[database.tables]]
+name = "Artist"
+description = "Music artists in the catalog"
+
+[[database.tables]]
+name = "Album"
+description = "Albums released by artists"
+
+[[database.tables]]
+name = "Track"
+description = "Individual tracks on albums with pricing"
+
+[[database.tables]]
+name = "Genre"
+description = "Music genres (Rock, Jazz, Classical, etc.)"
+
+[[database.tables]]
+name = "MediaType"
+description = "Media formats (MP3, AAC, MPEG, etc.)"
+
+[[database.tables]]
+name = "Playlist"
+description = "User-created playlists"
+
+[[database.tables]]
+name = "PlaylistTrack"
+description = "Junction table linking playlists to tracks"
+
+[[database.tables]]
+name = "Customer"
+description = "Customer information (contains PII)"
+
+[[database.tables]]
+name = "Employee"
+description = "Employee information (contains PII)"
+
+[[database.tables]]
+name = "Invoice"
+description = "Customer invoices and billing"
+
+[[database.tables]]
+name = "InvoiceLine"
+description = "Individual line items on invoices"
+
+[code_mode]
+# Enable Code Mode for this server - handles ~80% of operations
+enabled = true
+
+# Allow writes for demo purposes (inserts/updates only)
+allow_writes = true
+allow_deletes = false
+allow_ddl = false
+
+# Require LIMIT on SELECT queries for safety
+require_limit = true
+max_limit = 1000
+
+# Tables to exclude from Code Mode (none - all tables accessible)
+blocked_tables = []
+
+# Sensitive columns that require elevated permissions
+# Code Mode will warn when these are accessed
+sensitive_columns = ["Password", "Phone", "Address", "Email", "PostalCode"]
+
+# Risk levels for auto-approval
+auto_approve_levels = ["low"]
+
+# Token settings
+token_ttl_seconds = 300
+
+# Secret for HMAC signing (resolved from Secrets Manager)
+token_secret = "${CODE_MODE_SECRET}"
+
+# Complexity limits
+[code_mode.limits]
+max_tables_per_query = 5
+max_join_depth = 5
+max_subquery_depth = 3
+
+[shared_policy_store]
+# This server creates the shared policy store for all SQL servers
+creates_shared_store = true
+export_to_ssm = true
+ssm_path = "/pmcp/policy-stores/sql-api"
+
+# The shared store includes these AVP templates for all SQL servers.
+# Action-based model: separate permits for SELECT, INSERT, UPDATE, DELETE
+templates = [
+  # Query permits (action = Select)
+  "PermitAllSelects",
+  "PermitSelectsWithLimits",
+  # Write permits (action = Insert/Update)
+  "PermitAllInserts",
+  "PermitAllUpdates",
+  # Delete controls (action = Delete)
+  "ForbidAllDeletes",
+  "PermitDeleteAllowlist",
+  # DDL controls
+  "ForbidAllDDL",
+  # Cross-action controls
+  "ForbidBlockedTables",
+  "ForbidSensitiveColumns",
+  "ForbidExcessiveComplexity",
+]
+
+# =============================================================================
+# MCP Tools (~20% - Essential Operations Only)
+# =============================================================================
+# These 3 tools cover the most common operations for a music database.
+# All other operations (analytics, customers, playlists, etc.) are available
+# via Code Mode - the LLM can generate SQL using the schema resource.
+#
+# Pareto Principle:
+#   - 3 curated tools = ~20% of functionality (common operations)
+#   - Code Mode = ~80% of functionality (long tail via SQL generation)
+
+# -----------------------------------------------------------------------------
+# Tool 1: Search Tracks (Most Common Operation)
+# -----------------------------------------------------------------------------
+# Users most commonly want to find music by name or composer
+
+[[tools]]
+name = "search_tracks"
+description = "Search tracks by name or composer. Returns track details including album and artist. This is the primary way to find music."
+sql = """
+SELECT t.TrackId, t.Name, t.Composer, a.Title AS Album, ar.Name AS Artist, g.Name AS Genre
+FROM Track t
+JOIN Album a ON t.AlbumId = a.AlbumId
+JOIN Artist ar ON a.ArtistId = ar.ArtistId
+JOIN Genre g ON t.GenreId = g.GenreId
+WHERE t.Name LIKE '%' || :query || '%' OR t.Composer LIKE '%' || :query || '%'
+ORDER BY t.Name
+LIMIT :limit
+"""
+
+[[tools.parameters]]
+name = "query"
+type = "string"
+description = "Search term for track name or composer"
+required = true
+
+[[tools.parameters]]
+name = "limit"
+type = "integer"
+description = "Maximum number of results"
+required = false
+default = 20
+minimum = 1
+maximum = 100
+
+[tools.annotations]
+read_only_hint = true
+idempotent_hint = true
+cost_hint = "medium"
+
+# -----------------------------------------------------------------------------
+# Tool 2: Get Album Tracks (Browse Album Contents)
+# -----------------------------------------------------------------------------
+# After finding music, users want to see what else is on the album
+
+[[tools]]
+name = "get_album_tracks"
+description = "Get all tracks for an album. Use this to browse an album's contents after finding a track you like."
+sql = """
+SELECT t.TrackId, t.Name, t.Composer, t.Milliseconds, t.UnitPrice, g.Name AS Genre
+FROM Track t
+JOIN Genre g ON t.GenreId = g.GenreId
+WHERE t.AlbumId = :album_id
+ORDER BY t.TrackId
+"""
+
+[[tools.parameters]]
+name = "album_id"
+type = "integer"
+description = "Album ID (get this from search_tracks results)"
+required = true
+
+[tools.annotations]
+read_only_hint = true
+idempotent_hint = true
+cost_hint = "low"
+
+# -----------------------------------------------------------------------------
+# Tool 3: List Artists (Basic Discovery)
+# -----------------------------------------------------------------------------
+# Allows browsing the catalog when users don't have a specific search term
+
+[[tools]]
+name = "list_artists"
+description = "List all artists with pagination. Use for browsing the catalog or when you don't know what to search for."
+sql = "SELECT ArtistId, Name FROM Artist ORDER BY Name LIMIT :limit OFFSET :offset"
+
+[[tools.parameters]]
+name = "limit"
+type = "integer"
+description = "Maximum number of artists to return"
+required = false
+default = 20
+minimum = 1
+maximum = 100
+
+[[tools.parameters]]
+name = "offset"
+type = "integer"
+description = "Number of artists to skip (for pagination)"
+required = false
+default = 0
+minimum = 0
+
+[tools.annotations]
+read_only_hint = true
+idempotent_hint = true
+cost_hint = "low"
+
+# =============================================================================
+# MCP Resources - Code Mode Context
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Resource 1: Schema Documentation
+# -----------------------------------------------------------------------------
+
+[[resources]]
+uri = "docs://chinook/schema"
+name = "Chinook Database Schema"
+description = "Tables, columns, relationships for the Chinook music database"
+mime_type = "text/markdown"
+content = """
+# Chinook Database Schema (SQLite)
+
+## Quick Reference
+
+| Fact | Value |
+|------|-------|
+| Dialect | SQLite (standard SQL-92) |
+| Tables | 11 tables, read-write (INSERT/UPDATE allowed) |
+| Primary keys | Integer auto-increment (`ArtistId`, `TrackId`, etc.) |
+| Foreign keys | Enforced — JOINs use standard FK columns |
+| Sensitive columns | Address, PostalCode, Phone, Email, Password |
+| String matching | SQLite LIKE is case-insensitive for ASCII |
+| LIMIT required | Yes, max 1000 |
+| Date format | `strftime('%Y-%m', InvoiceDate)` for date grouping |
+
+## Sample IDs for Testing
+
+| ID | Column | Value | Table |
+|----|--------|-------|-------|
+| ArtistId = 1 | Name | AC/DC | Artist |
+| AlbumId = 1 | Title | For Those About To Rock We Salute You | Album |
+| TrackId = 1 | Name | For Those About To Rock (We Salute You) | Track |
+| GenreId = 1 | Name | Rock | Genre |
+| CustomerId = 1 | Name | Luis Goncalves | Customer |
+| EmployeeId = 1 | Name | Andrew Adams | Employee |
+| InvoiceId = 1 | CustomerId | 2 | Invoice |
+| PlaylistId = 1 | Name | Music | Playlist |
+
+## Row Counts
+
+| Table | Rows |
+|-------|------|
+| Artist | 275 |
+| Album | 347 |
+| Track | 3,503 |
+| Genre | 25 |
+| MediaType | 5 |
+| Playlist | 18 |
+| PlaylistTrack | 8,715 |
+| Customer | 59 |
+| Employee | 8 |
+| Invoice | 412 |
+| InvoiceLine | 2,240 |
+
+Digital media store with artists, albums, tracks, customers, and invoices.
+
+## Tables
+
+### Artist
+| Column | Type | Description |
+|--------|------|-------------|
+| ArtistId | INTEGER | Primary key |
+| Name | TEXT | Artist name |
+
+### Album
+| Column | Type | Description |
+|--------|------|-------------|
+| AlbumId | INTEGER | Primary key |
+| Title | TEXT | Album title |
+| ArtistId | INTEGER | FK to Artist |
+
+### Track
+| Column | Type | Description |
+|--------|------|-------------|
+| TrackId | INTEGER | Primary key |
+| Name | TEXT | Track name |
+| AlbumId | INTEGER | FK to Album |
+| MediaTypeId | INTEGER | FK to MediaType |
+| GenreId | INTEGER | FK to Genre |
+| Composer | TEXT | Composer (nullable) |
+| Milliseconds | INTEGER | Duration in ms |
+| Bytes | INTEGER | File size |
+| UnitPrice | DECIMAL | Price |
+
+### Genre
+| Column | Type | Description |
+|--------|------|-------------|
+| GenreId | INTEGER | Primary key |
+| Name | TEXT | Genre name |
+
+### MediaType
+| Column | Type | Description |
+|--------|------|-------------|
+| MediaTypeId | INTEGER | Primary key |
+| Name | TEXT | Format (MP3, AAC) |
+
+### Playlist / PlaylistTrack
+Junction table: PlaylistId + TrackId
+
+### Customer
+| Column | Type | Sensitive |
+|--------|------|-----------|
+| CustomerId | INTEGER | |
+| FirstName, LastName | TEXT | |
+| Company, City, State, Country | TEXT | |
+| Address, PostalCode | TEXT | Yes |
+| Phone, Email | TEXT | Yes |
+| SupportRepId | INTEGER | FK to Employee |
+
+### Employee
+Similar to Customer with Address, Phone, Email as sensitive.
+ReportsTo links to manager.
+
+### Invoice / InvoiceLine
+Invoice: CustomerId, InvoiceDate, Total, BillingAddress
+InvoiceLine: InvoiceId, TrackId, UnitPrice, Quantity
+
+## Relationships
+
+```
+Artist (1) ───< Album (N) ───< Track (N)
+Genre (1) ─────────────────────< Track (N)
+Playlist (N) >── PlaylistTrack ──< Track (N)
+Customer (1) ───< Invoice (N) ───< InvoiceLine (N) >─── Track
+Employee (1) ───< Customer (N) [SupportRepId]
+```
+
+## JOIN Conditions Reference
+
+| From | To | JOIN ON |
+|------|----|---------|
+| Artist (ar) | Album (a) | `ar.ArtistId = a.ArtistId` |
+| Album (a) | Track (t) | `a.AlbumId = t.AlbumId` |
+| Track (t) | Genre (g) | `t.GenreId = g.GenreId` |
+| Track (t) | MediaType (mt) | `t.MediaTypeId = mt.MediaTypeId` |
+| Track (t) | InvoiceLine (il) | `t.TrackId = il.TrackId` |
+| Invoice (i) | InvoiceLine (il) | `i.InvoiceId = il.InvoiceId` |
+| Customer (c) | Invoice (i) | `c.CustomerId = i.CustomerId` |
+| Employee (e) | Customer (c) | `e.EmployeeId = c.SupportRepId` |
+| Playlist (p) | PlaylistTrack (pt) | `p.PlaylistId = pt.PlaylistId` |
+| PlaylistTrack (pt) | Track (t) | `pt.TrackId = t.TrackId` |
+
+**Common multi-hop JOINs:**
+- Track → Artist: `Track → Album → Artist` (2 JOINs)
+- Track sales: `Track → InvoiceLine → Invoice` (2 JOINs)
+- Customer purchases: `Customer → Invoice → InvoiceLine → Track` (3 JOINs)
+
+## Genres Available
+
+Rock, Jazz, Metal, Blues, Latin, Pop, Classical, R&B/Soul, Hip Hop/Rap, Electronica/Dance, Alternative, Soundtrack, Comedy, Drama, etc.
+"""
+
+# -----------------------------------------------------------------------------
+# Resources 2 & 3: Code Mode Instructions & Policies
+# -----------------------------------------------------------------------------
+# Auto-generated from templates at server startup.
+# The template system generates code-mode://instructions (with SQLite dialect)
+# and code-mode://policies from the [code_mode] config above.
+# To override, add a [[resources]] block with the same URI.
+
+# -----------------------------------------------------------------------------
+# Resource 2: Example Queries
+# -----------------------------------------------------------------------------
+
+[[resources]]
+uri = "docs://chinook/examples"
+name = "Chinook Example Queries"
+description = "Example SQL queries for common operations"
+mime_type = "text/markdown"
+content = """
+# Chinook Example Queries
+
+## Artist & Album Queries
+
+```sql
+-- Get artist by ID
+SELECT * FROM Artist WHERE ArtistId = 1 LIMIT 1;
+
+-- Search artists
+SELECT ArtistId, Name FROM Artist WHERE Name LIKE '%beatles%' LIMIT 20;
+
+-- Albums by artist
+SELECT a.AlbumId, a.Title FROM Album a WHERE a.ArtistId = 1 ORDER BY a.Title;
+```
+
+## Genre & Playlist Queries
+
+```sql
+-- Genre track counts
+SELECT g.Name, COUNT(t.TrackId) as TrackCount
+FROM Genre g LEFT JOIN Track t ON g.GenreId = t.GenreId
+GROUP BY g.GenreId ORDER BY TrackCount DESC LIMIT 20;
+
+-- Tracks by genre
+SELECT t.Name, ar.Name as Artist
+FROM Track t
+JOIN Album a ON t.AlbumId = a.AlbumId
+JOIN Artist ar ON a.ArtistId = ar.ArtistId
+WHERE t.GenreId = (SELECT GenreId FROM Genre WHERE Name = 'Jazz')
+LIMIT 50;
+
+-- Playlist contents
+SELECT t.Name, ar.Name as Artist
+FROM PlaylistTrack pt
+JOIN Track t ON pt.TrackId = t.TrackId
+JOIN Album a ON t.AlbumId = a.AlbumId
+JOIN Artist ar ON a.ArtistId = ar.ArtistId
+WHERE pt.PlaylistId = 1
+LIMIT 50;
+```
+
+## Analytics Queries
+
+```sql
+-- Top selling tracks
+SELECT t.Name, ar.Name as Artist, COUNT(*) as Sales
+FROM InvoiceLine il
+JOIN Track t ON il.TrackId = t.TrackId
+JOIN Album a ON t.AlbumId = a.AlbumId
+JOIN Artist ar ON a.ArtistId = ar.ArtistId
+GROUP BY t.TrackId ORDER BY Sales DESC LIMIT 10;
+
+-- Revenue by genre
+SELECT g.Name, SUM(il.UnitPrice * il.Quantity) as Revenue
+FROM InvoiceLine il
+JOIN Track t ON il.TrackId = t.TrackId
+JOIN Genre g ON t.GenreId = g.GenreId
+GROUP BY g.GenreId ORDER BY Revenue DESC LIMIT 10;
+
+-- Monthly sales
+SELECT strftime('%Y-%m', InvoiceDate) as Month, SUM(Total) as Revenue
+FROM Invoice GROUP BY Month ORDER BY Month LIMIT 50;
+```
+
+## Customer Queries (avoid sensitive columns)
+
+```sql
+-- List customers (public info only)
+SELECT CustomerId, FirstName, LastName, Company, Country, City
+FROM Customer ORDER BY LastName LIMIT 50;
+
+-- Customer purchases
+SELECT i.InvoiceDate, i.Total, t.Name as Track
+FROM Invoice i
+JOIN InvoiceLine il ON i.InvoiceId = il.InvoiceId
+JOIN Track t ON il.TrackId = t.TrackId
+WHERE i.CustomerId = 1
+ORDER BY i.InvoiceDate DESC LIMIT 20;
+
+-- Customer with their support rep (Employee)
+SELECT c.FirstName || ' ' || c.LastName AS Customer,
+       e.FirstName || ' ' || e.LastName AS SupportRep
+FROM Customer c
+JOIN Employee e ON c.SupportRepId = e.EmployeeId
+ORDER BY c.LastName LIMIT 50;
+
+-- Invoices in a date range
+SELECT i.InvoiceId, c.FirstName || ' ' || c.LastName AS Customer,
+       i.InvoiceDate, i.Total
+FROM Invoice i
+JOIN Customer c ON i.CustomerId = c.CustomerId
+WHERE i.InvoiceDate BETWEEN '2009-01-01' AND '2009-12-31'
+ORDER BY i.InvoiceDate LIMIT 50;
+```
+
+## Playlist Queries
+
+```sql
+-- PlaylistTrack junction table — requires compound key (PlaylistId + TrackId)
+SELECT p.Name AS Playlist, t.Name AS Track, ar.Name AS Artist
+FROM Playlist p
+JOIN PlaylistTrack pt ON p.PlaylistId = pt.PlaylistId
+JOIN Track t ON pt.TrackId = t.TrackId
+JOIN Album a ON t.AlbumId = a.AlbumId
+JOIN Artist ar ON a.ArtistId = ar.ArtistId
+WHERE p.PlaylistId = 1
+LIMIT 50;
+
+-- Playlists containing a specific track
+SELECT p.Name AS Playlist
+FROM PlaylistTrack pt
+JOIN Playlist p ON pt.PlaylistId = p.PlaylistId
+WHERE pt.TrackId = 1
+LIMIT 20;
+```
+
+## Write Operations (INSERT/UPDATE allowed)
+
+```sql
+-- Add a new artist
+INSERT INTO Artist (Name) VALUES ('New Artist Name');
+
+-- Add an album for an existing artist
+INSERT INTO Album (Title, ArtistId) VALUES ('New Album Title', 1);
+
+-- Update a track price
+UPDATE Track SET UnitPrice = 1.29 WHERE TrackId = 1;
+
+-- Add a track to a playlist
+INSERT INTO PlaylistTrack (PlaylistId, TrackId) VALUES (1, 100);
+```
+"""
+
+# -----------------------------------------------------------------------------
+# Resource 3: Learnings from Usage
+# -----------------------------------------------------------------------------
+
+[[resources]]
+uri = "code-mode://learnings"
+name = "Code Mode Learnings"
+description = "Tips and corrections from Code Mode usage"
+mime_type = "text/markdown"
+content = """
+# Code Mode Learnings
+
+## Critical Mistakes (Will Return Wrong Results)
+
+### 1. Forgetting LIMIT
+**Wrong:**
+```sql
+SELECT * FROM Track
+```
+**Correct:**
+```sql
+SELECT * FROM Track LIMIT 100
+```
+
+### 2. Selecting Sensitive Columns Unnecessarily
+**Less secure:**
+```sql
+SELECT * FROM Customer LIMIT 50
+```
+**Better** — name specific columns, skip Address/Phone/Email:
+```sql
+SELECT CustomerId, FirstName, LastName, Company, Country FROM Customer LIMIT 50
+```
+
+### 3. Forgetting JOIN for Artist Name
+Track has no Artist column — you must go through Album:
+**Wrong:**
+```sql
+SELECT t.Name, t.Artist FROM Track t LIMIT 20  -- No 'Artist' column on Track
+```
+**Correct** — Track → Album → Artist:
+```sql
+SELECT t.Name, ar.Name AS Artist
+FROM Track t
+JOIN Album a ON t.AlbumId = a.AlbumId
+JOIN Artist ar ON a.ArtistId = ar.ArtistId
+LIMIT 20;
+```
+
+### 4. PlaylistTrack Requires Compound Key
+PlaylistTrack has no single primary key. It uses (PlaylistId, TrackId):
+```sql
+-- Delete a specific track from a playlist
+DELETE FROM PlaylistTrack WHERE PlaylistId = 1 AND TrackId = 100;
+```
+Forgetting either column affects all tracks in a playlist or all playlists for a track.
+
+### 5. SELECT * from Customer Exposes Sensitive Columns
+Customer and Employee contain Address, Phone, Email, PostalCode.
+Always name specific columns to avoid triggering sensitive column warnings.
+
+## Validation Errors and Fixes
+
+### "LIMIT required"
+Every SELECT must end with `LIMIT n` where n <= 1000.
+
+### "Query type not allowed"
+DELETE is blocked. Only SELECT, INSERT, and UPDATE are allowed.
+
+### "Sensitive column access"
+Accessing Address, PostalCode, Phone, Email, or Password elevates the risk level.
+Use specific column names to avoid accidentally including them.
+
+## Performance Tips
+
+1. **Use indexes**: Primary keys (ArtistId, TrackId, etc.) are indexed
+2. **Limit joins**: Each JOIN adds processing time
+3. **Filter early**: Put WHERE before GROUP BY when possible
+4. **Avoid SELECT ***: Name specific columns to skip sensitive data and reduce result size
+
+## SQLite-Specific Notes
+
+- **Date formatting**: `strftime('%Y-%m', InvoiceDate)` for month grouping
+- **String concatenation**: `||` not `+` or `CONCAT()`
+- **Case sensitivity**: LIKE is case-insensitive for ASCII in SQLite
+- **Boolean values**: SQLite uses 0/1, not true/false
+- **No LIMIT in subqueries** with some constructs — use CTEs instead
+"""
+
+# =============================================================================
+# MCP Prompt - Single Entry Point for Code Mode
+# =============================================================================
+
+[[prompts]]
+name = "start_code_mode"
+description = "Load all context needed for Code Mode SQL generation"
+include_resources = [
+    "docs://chinook/schema",
+    "code-mode://instructions",
+    "code-mode://policies",
+    "docs://chinook/examples",
+    "code-mode://learnings"
+]

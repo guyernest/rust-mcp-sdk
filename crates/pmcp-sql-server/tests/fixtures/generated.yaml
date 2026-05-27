@@ -1,0 +1,337 @@
+name: SQL Reference Server Test Scenario
+description: Comprehensive tests for the SQL Reference MCP Server with Chinook database (digital media store)
+timeout: 120
+stop_on_failure: false
+variables:
+  test_id: sql_ref_test_001
+setup: []
+steps:
+
+# =============================================================================
+# Capability Discovery
+# =============================================================================
+
+- name: List available tools
+  operation:
+    type: list_tools
+  assertions:
+  - type: success
+  - type: exists
+    path: tools
+
+- name: List available resources
+  operation:
+    type: list_resources
+  assertions:
+  - type: success
+  - type: exists
+    path: resources
+
+- name: List available prompts
+  operation:
+    type: list_prompts
+  assertions:
+  - type: success
+  - type: exists
+    path: prompts
+
+# =============================================================================
+# Tool: search_tracks
+# =============================================================================
+
+- name: 'Search tracks: find "Rock" in track names'
+  operation:
+    type: tool_call
+    tool: search_tracks
+    arguments: {query: "Rock"}
+  assertions:
+  - type: success
+  - type: contains
+    path: result
+    value: "Rock"
+
+- name: 'Search tracks: find by composer "Angus Young"'
+  operation:
+    type: tool_call
+    tool: search_tracks
+    arguments: {query: "Angus Young"}
+  assertions:
+  - type: success
+  - type: contains
+    path: result
+    value: "Angus Young"
+  - type: contains
+    path: result
+    value: "AC/DC"
+
+- name: 'Search tracks: find "Bohemian"'
+  operation:
+    type: tool_call
+    tool: search_tracks
+    arguments: {query: "Bohemian"}
+  assertions:
+  - type: success
+  - type: contains
+    path: result
+    value: "Bohemian"
+
+- name: 'Search tracks: with explicit limit=5'
+  operation:
+    type: tool_call
+    tool: search_tracks
+    arguments: {query: "Blues", limit: 5}
+  assertions:
+  - type: success
+
+- name: 'Search tracks: no results for gibberish'
+  operation:
+    type: tool_call
+    tool: search_tracks
+    arguments: {query: "xyzzynonexistent99"}
+  assertions:
+  - type: success
+
+# =============================================================================
+# Tool: get_album_tracks
+# =============================================================================
+
+- name: 'Get album tracks: Album 1 (For Those About To Rock)'
+  operation:
+    type: tool_call
+    tool: get_album_tracks
+    arguments: {album_id: 1}
+  assertions:
+  - type: success
+  - type: contains
+    path: result
+    value: "For Those About To Rock (We Salute You)"
+
+- name: 'Get album tracks: Album 4 (Let There Be Rock)'
+  operation:
+    type: tool_call
+    tool: get_album_tracks
+    arguments: {album_id: 4}
+  assertions:
+  - type: success
+  - type: contains
+    path: result
+    value: "Rock"
+
+- name: 'Get album tracks: non-existent album returns empty'
+  operation:
+    type: tool_call
+    tool: get_album_tracks
+    arguments: {album_id: 99999}
+  assertions:
+  - type: success
+
+# =============================================================================
+# Tool: list_artists
+# =============================================================================
+
+- name: 'List artists: default pagination'
+  operation:
+    type: tool_call
+    tool: list_artists
+    arguments: {}
+  assertions:
+  - type: success
+  - type: contains
+    path: result
+    value: "AC/DC"
+
+- name: 'List artists: limit=5'
+  operation:
+    type: tool_call
+    tool: list_artists
+    arguments: {limit: 5}
+  assertions:
+  - type: success
+
+- name: 'List artists: pagination with offset=10'
+  operation:
+    type: tool_call
+    tool: list_artists
+    arguments: {limit: 5, offset: 10}
+  assertions:
+  - type: success
+
+- name: 'List artists: large offset returns empty'
+  operation:
+    type: tool_call
+    tool: list_artists
+    arguments: {limit: 10, offset: 9999}
+  assertions:
+  - type: success
+
+# =============================================================================
+# Code Mode: validate_code (dry_run)
+# =============================================================================
+
+- name: 'Validate: simple SELECT (dry_run)'
+  operation:
+    type: tool_call
+    tool: validate_code
+    arguments:
+      code: "SELECT ArtistId, Name FROM Artist LIMIT 10"
+      dry_run: true
+      format: "sql"
+  assertions:
+  - type: success
+
+- name: 'Validate: SELECT with JOIN (dry_run)'
+  operation:
+    type: tool_call
+    tool: validate_code
+    arguments:
+      code: "SELECT t.Name, a.Title AS Album, ar.Name AS Artist FROM Track t JOIN Album a ON t.AlbumId = a.AlbumId JOIN Artist ar ON a.ArtistId = ar.ArtistId LIMIT 20"
+      dry_run: true
+      format: "sql"
+  assertions:
+  - type: success
+
+- name: 'Validate: SELECT with aggregate (dry_run)'
+  operation:
+    type: tool_call
+    tool: validate_code
+    arguments:
+      code: "SELECT g.Name, COUNT(t.TrackId) as TrackCount FROM Genre g LEFT JOIN Track t ON g.GenreId = t.GenreId GROUP BY g.GenreId ORDER BY TrackCount DESC LIMIT 25"
+      dry_run: true
+      format: "sql"
+  assertions:
+  - type: success
+
+- name: 'Validate: INSERT statement (dry_run)'
+  operation:
+    type: tool_call
+    tool: validate_code
+    arguments:
+      code: "INSERT INTO Artist (Name) VALUES ('Test Artist')"
+      dry_run: true
+      format: "sql"
+  assertions:
+  - type: success
+
+- name: 'Validate: DELETE should be rejected'
+  operation:
+    type: tool_call
+    tool: validate_code
+    arguments:
+      code: "DELETE FROM Artist WHERE ArtistId = 999"
+      dry_run: true
+      format: "sql"
+  continue_on_failure: true
+  assertions:
+  - type: failure
+
+- name: 'Validate: DDL (CREATE TABLE) should be rejected'
+  operation:
+    type: tool_call
+    tool: validate_code
+    arguments:
+      code: "CREATE TABLE TestTable (id INTEGER PRIMARY KEY)"
+      dry_run: true
+      format: "sql"
+  continue_on_failure: true
+  assertions:
+  - type: failure
+
+- name: 'Validate: DROP TABLE should be rejected'
+  operation:
+    type: tool_call
+    tool: validate_code
+    arguments:
+      code: "DROP TABLE Artist"
+      dry_run: true
+      format: "sql"
+  continue_on_failure: true
+  assertions:
+  - type: failure
+
+- name: 'Validate: SELECT without LIMIT should be rejected'
+  operation:
+    type: tool_call
+    tool: validate_code
+    arguments:
+      code: "SELECT * FROM Artist"
+      dry_run: true
+      format: "sql"
+  continue_on_failure: true
+  assertions:
+  - type: failure
+
+# =============================================================================
+# Code Mode: validate_code + execute_code flow
+# =============================================================================
+
+- name: 'Validate: genre count query (get token)'
+  operation:
+    type: tool_call
+    tool: validate_code
+    arguments:
+      code: "SELECT Name FROM Genre ORDER BY Name LIMIT 25"
+      format: "sql"
+  assertions:
+  - type: success
+  - type: contains
+    path: result
+    value: "approval_token"
+
+- name: 'Execute: with invalid token (should fail)'
+  operation:
+    type: tool_call
+    tool: execute_code
+    arguments:
+      code: "SELECT Name FROM Genre ORDER BY Name LIMIT 25"
+      approval_token: "invalid-token-12345"
+  continue_on_failure: true
+  assertions:
+  - type: failure
+
+# =============================================================================
+# Resources
+# =============================================================================
+
+- name: 'Read resource: Chinook schema docs'
+  operation:
+    type: read_resource
+    uri: "docs://chinook/schema"
+  assertions:
+  - type: success
+  - type: exists
+    path: contents
+
+- name: 'Read resource: Example queries'
+  operation:
+    type: read_resource
+    uri: "docs://chinook/examples"
+  assertions:
+  - type: success
+  - type: exists
+    path: contents
+
+- name: 'Read resource: Code Mode learnings'
+  operation:
+    type: read_resource
+    uri: "code-mode://learnings"
+  assertions:
+  - type: success
+  - type: exists
+    path: contents
+
+
+# =============================================================================
+# Prompts
+# =============================================================================
+
+- name: 'Prompt: start_code_mode'
+  operation:
+    type: get_prompt
+    name: start_code_mode
+    arguments: {}
+  assertions:
+  - type: success
+  - type: exists
+    path: messages
+
+cleanup: []
