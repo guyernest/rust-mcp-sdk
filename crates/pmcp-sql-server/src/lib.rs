@@ -22,6 +22,14 @@
 //! build. [`run`] is a documented placeholder that succeeds without starting a
 //! server; Wave 2 (Plan 85-04) replaces its body with the real config-load →
 //! connector-select → `pmcp::Server` assembly → transport-serve pipeline.
+//!
+//! # Wave 2 seams (Plan 85-04)
+//!
+//! - [`cli`]: the clap [`Args`] surface (`--config` / `--schema` / `--http`).
+
+pub mod cli;
+
+pub use cli::Args;
 
 /// Runtime configuration for the Shape A server.
 ///
