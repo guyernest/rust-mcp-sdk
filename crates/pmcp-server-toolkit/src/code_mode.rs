@@ -494,10 +494,12 @@ fn build_cm_config(section: &CodeModeSection) -> CodeModeConfig {
     if let Some(max) = section.max_limit {
         cfg.sql_max_rows = max;
     }
-    // `require_limit` (toolkit) — pmcp_code_mode has no direct equivalent; the
-    // closest semantically is enforced via `sql_max_rows`. Documented gap; not
-    // silently dropped.
-    let _require_limit_gap = section.require_limit;
+    // `require_limit` (toolkit) → `sql_require_limit` (pmcp_code_mode). Enforced
+    // in check_sql_config_authorization: a read-only statement without a LIMIT
+    // is rejected when this is set (closes VERIFICATION Gap 1 — previously this
+    // field was parsed but discarded, so a low-row no-LIMIT SELECT was accepted
+    // despite require_limit=true).
+    cfg.sql_require_limit = section.require_limit;
     // [code_mode.limits] — pmcp_code_mode's CodeModeConfig has `max_depth` and
     // `max_field_count` (GraphQL-flavoured) but no direct counterparts for
     // `max_tables_per_query` / `max_join_depth` / `max_subquery_depth`. These
@@ -869,6 +871,30 @@ mod tests {
     }
 
     #[test]
+    fn build_cm_config_maps_require_limit_true() {
+        // VERIFICATION Gap 1: toolkit `require_limit` must flow to the enforced
+        // pmcp-code-mode `sql_require_limit` (previously discarded).
+        let mut section = env_section("UNUSED");
+        section.require_limit = true;
+        let cfg = build_cm_config(&section);
+        assert!(
+            cfg.sql_require_limit,
+            "require_limit=true must map to sql_require_limit=true"
+        );
+    }
+
+    #[test]
+    fn build_cm_config_maps_require_limit_false() {
+        let mut section = env_section("UNUSED");
+        section.require_limit = false;
+        let cfg = build_cm_config(&section);
+        assert!(
+            !cfg.sql_require_limit,
+            "require_limit=false must map to sql_require_limit=false"
+        );
+    }
+
+    #[test]
     fn build_cm_config_propagates_blocked_tables() {
         let mut section = env_section("UNUSED");
         section.blocked_tables = vec!["users".into(), "secrets".into()];
@@ -989,6 +1015,47 @@ mod sql_code_executor_tests {
         SqlCodeExecutor::new(Arc::new(connector), config)
     }
 
+    /// Same in-memory connector as [`read_only_executor`], but the `[code_mode]`
+    /// config sets `require_limit = true` so a bare SELECT must reject on policy.
+    async fn read_only_executor_with_require_limit() -> SqlCodeExecutor {
+        ensure_secret();
+        let connector = SqliteConnector::open_in_memory().expect("open in-memory sqlite");
+        connector
+            .execute(
+                "CREATE TABLE Artist (ArtistId INTEGER PRIMARY KEY, Name TEXT)",
+                &[],
+            )
+            .await
+            .expect("create table");
+        connector
+            .execute(
+                "INSERT INTO Artist (ArtistId, Name) VALUES (1, 'AC/DC')",
+                &[],
+            )
+            .await
+            .expect("seed row");
+
+        let config = ServerConfig {
+            server: ServerSection {
+                name: "executor-test".to_string(),
+                version: "0.1.0".to_string(),
+                ..Default::default()
+            },
+            code_mode: Some(CodeModeSection {
+                enabled: true,
+                server_id: Some("executor-test".to_string()),
+                allow_writes: false,
+                allow_deletes: false,
+                allow_ddl: false,
+                require_limit: true,
+                token_secret: Some(format!("env:{TEST_SECRET_VAR}")),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        SqlCodeExecutor::new(Arc::new(connector), config)
+    }
+
     #[tokio::test]
     async fn read_only_select_returns_rows() {
         let executor = read_only_executor().await;
@@ -1001,6 +1068,42 @@ mod sql_code_executor_tests {
         let arr = rows.as_array().expect("`rows` is an array");
         assert_eq!(arr.len(), 1, "one seeded row expected, got {arr:?}");
         assert_eq!(arr[0]["Name"], "AC/DC");
+    }
+
+    #[tokio::test]
+    async fn require_limit_rejects_bare_select_before_connector() {
+        // VERIFICATION Gap 1: with require_limit=true, a no-LIMIT SELECT is
+        // rejected on re-validation BEFORE the connector — even though the
+        // single seeded row never exceeds any row-count limit.
+        let executor = read_only_executor_with_require_limit().await;
+        let err = executor
+            .execute("SELECT * FROM Artist", None)
+            .await
+            .expect_err("bare SELECT must be rejected when require_limit=true");
+        assert!(
+            matches!(err, ExecutionError::BackendError(_)),
+            "expected a policy-rejection BackendError, got {err:?}"
+        );
+        // The table is untouched — proving the rejection is the require_limit
+        // policy, not a row-count failure.
+        let count = executor
+            .connector
+            .execute("SELECT COUNT(*) AS n FROM Artist", &[])
+            .await
+            .expect("count query");
+        assert_eq!(count[0]["n"], 1, "row count must be unchanged");
+    }
+
+    #[tokio::test]
+    async fn require_limit_allows_limited_select() {
+        let executor = read_only_executor_with_require_limit().await;
+        let result = executor
+            .execute("SELECT ArtistId, Name FROM Artist LIMIT 5", None)
+            .await
+            .expect("a LIMITed SELECT must succeed under require_limit=true");
+        let rows = result.get("rows").expect("payload has a `rows` key");
+        let arr = rows.as_array().expect("`rows` is an array");
+        assert_eq!(arr.len(), 1, "one seeded row expected, got {arr:?}");
     }
 
     #[tokio::test]
