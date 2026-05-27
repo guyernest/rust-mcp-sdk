@@ -68,6 +68,48 @@ const CODE_MODE_SECRET: &str = "parity-chinook-code-mode-secret-32b";
 /// The vendored Lambda-style `file_path` line the temp config overrides.
 const LAMBDA_FILE_PATH_LINE: &str = "file_path = \"/var/task/assets/chinook.db\"";
 
+/// The policy-rejection scenarios that MUST individually gate this test.
+///
+/// # Why per-step gating (VERIFICATION Gap 2 — test validity)
+///
+/// Each of these scenarios carries `continue_on_failure: true` and asserts
+/// `type: failure` (the policy must REJECT the operation). `mcp-tester` computes
+/// `ScenarioResult.success` (see `crates/mcp-tester/src/scenario_executor.rs`
+/// lines 111-118) by EXCLUDING every `continue_on_failure` step:
+///
+/// ```text
+/// let success = scenario_error.is_none()
+///     && step_results.iter().all(|r| {
+///         r.success
+///             || scenario.steps.iter()
+///                 .any(|step| step.name == r.step_name && step.continue_on_failure)
+///     });
+/// ```
+///
+/// So a genuinely-failing rejection scenario (e.g. the no-LIMIT
+/// `SELECT * FROM Artist` before Gap 1's `require_limit` fix landed) is silently
+/// dropped from the aggregate — `assert!(result.success)` stays green even when
+/// every policy rejection regresses. That makes the SC-3 negative-path parity
+/// proof NON-gating.
+///
+/// The fix lives HERE in the test, not in the fixtures: we assert every
+/// `StepResult.success` is `true`. `StepResult.success` is the per-step truth
+/// (all of that step's assertions passed) and is computed BEFORE the
+/// `continue_on_failure` exclusion, so iterating `result.step_results` gives a
+/// `continue_on_failure`-INDEPENDENT gate. A presence guard (below) then ensures
+/// a rejection scenario cannot silently vanish from `generated.yaml` and make the
+/// per-step gate trivially pass.
+///
+/// DO NOT "simplify" the assertions back to `assert!(result.success)` — that
+/// reintroduces Gap 2.
+const REQUIRED_REJECTION_SCENARIOS: &[&str] = &[
+    "Validate: DELETE should be rejected",
+    "Validate: DDL (CREATE TABLE) should be rejected",
+    "Validate: DROP TABLE should be rejected",
+    "Validate: SELECT without LIMIT should be rejected",
+    "Execute: with invalid token (should fail)",
+];
+
 fn fixtures_dir() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")
 }
@@ -161,31 +203,64 @@ async fn chinook_reference_parity_through_real_binary_path() {
         .expect("scenario execution must complete without a harness error");
 
     // SC-4 (result parity) + SC-3 (code-mode policy parity, via the failure
-    // assertions). Assert on result.success — all scenarios pass — rather than a
-    // hardcoded count (the suite has 29 named scenarios as of this writing).
+    // assertions). We do NOT gate on `result.success`: it EXCLUDES every
+    // `continue_on_failure` step (scenario_executor.rs:111-118), which would mask
+    // a regressed policy rejection (VERIFICATION Gap 2). Instead we gate on EVERY
+    // `step_results[i].success` — the per-step truth, computed before that
+    // exclusion — so each rejection scenario is individually binding.
+
+    // (a) PRESENCE GUARD: every required policy-rejection scenario must still be
+    // present in generated.yaml. Without this, deleting/renaming a rejection
+    // scenario would silently shrink the suite and make the per-step gate (b)
+    // trivially pass. `StepResult.step_name` is set verbatim from the scenario
+    // step's `name` (scenario_executor.rs:154), so we match on it directly.
+    let present_names: Vec<&str> = result
+        .step_results
+        .iter()
+        .map(|s| s.step_name.as_str())
+        .collect();
+    let missing_rejections: Vec<&str> = REQUIRED_REJECTION_SCENARIOS
+        .iter()
+        .copied()
+        .filter(|name| !present_names.contains(name))
+        .collect();
     assert!(
-        result.success,
-        "all reference-parity scenarios must pass through the real binary path: \
-         {}/{} steps passed; error={:?}; failures={:#?}",
+        missing_rejections.is_empty(),
+        "policy-rejection scenarios must be present in generated.yaml so they cannot \
+         silently disappear (VERIFICATION Gap 2). Missing: {missing_rejections:#?}. \
+         Present steps: {present_names:#?}",
+    );
+
+    // (b) PER-STEP GATE: every step — INCLUDING the `continue_on_failure`
+    // rejection scenarios — must have passed all of its own assertions. A
+    // rejection scenario whose `type: failure` assertion did NOT fire (the exact
+    // Gap-2 masking, e.g. the pre-fix no-LIMIT `SELECT * FROM Artist`) now fails
+    // the test instead of being dropped from the aggregate.
+    let failed: Vec<_> = result
+        .step_results
+        .iter()
+        .filter(|s| !s.success)
+        .map(|s| {
+            (
+                &s.step_name,
+                &s.error,
+                s.assertion_results
+                    .iter()
+                    .filter(|a| !a.passed)
+                    .map(|a| (&a.assertion, &a.actual_value, &a.message))
+                    .collect::<Vec<_>>(),
+            )
+        })
+        .collect();
+    assert!(
+        failed.is_empty(),
+        "every reference-parity step must pass its own assertions — rejection \
+         scenarios are individually gating, so a `continue_on_failure` step that \
+         failed its `type: failure` assertion is no longer masked (VERIFICATION \
+         Gap 2). {}/{} steps completed; error={:?}; failed steps={failed:#?}",
         result.steps_completed,
         result.steps_total,
         result.error,
-        result
-            .step_results
-            .iter()
-            .filter(|s| !s.success)
-            .map(|s| {
-                (
-                    &s.step_name,
-                    &s.error,
-                    s.assertion_results
-                        .iter()
-                        .filter(|a| !a.passed)
-                        .map(|a| (&a.assertion, &a.actual_value, &a.message))
-                        .collect::<Vec<_>>(),
-                )
-            })
-            .collect::<Vec<_>>(),
     );
 
     handle.abort();
