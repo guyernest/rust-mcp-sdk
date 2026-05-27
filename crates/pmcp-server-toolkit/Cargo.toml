@@ -66,6 +66,14 @@ aws = ["dep:aws-config", "dep:aws-sdk-secretsmanager", "dep:aws-sdk-ssm", "dep:t
 avp = ["code-mode", "pmcp-code-mode/avp"]
 input-validation = ["dep:jsonschema"]
 sqlite = ["dep:rusqlite", "dep:tokio"]
+# Why: StreamableHttpServer is gated behind pmcp's `streamable-http`, but the
+# toolkit's pmcp dep is `default-features = false` (does NOT enable it). A
+# serving Shape C example/scaffold therefore cannot reach StreamableHttpServer
+# unless the toolkit forwards the feature — and an `[[example]]`'s
+# `required-features` can only name TOOLKIT features, not `pmcp/...` paths
+# directly. This opt-in `http` forward (NOT in `default`, keeping the
+# no-default-features build lean) is what lets Plan 02's serving example compile.
+http = ["pmcp/streamable-http"]
 
 [[example]]
 name = "e01_toolkit_minimal"
@@ -77,10 +85,13 @@ required-features = ["sqlite", "code-mode"]
 
 [dev-dependencies]
 proptest = "1.7"
-# Why: tests run with --test-threads=1 (project CLAUDE.md). The single-threaded
-# tokio runtime is sufficient; rt-multi-thread bloats compile times without
-# benefit.
-tokio = { version = "1", features = ["macros", "rt"] }
+# Why: unit tests run with --test-threads=1 (project CLAUDE.md) where a
+# single-threaded runtime suffices, but the Plan 02 serving Shape C example uses
+# `#[tokio::main]` which defaults to the multi-thread runtime — so the
+# dev-profile (examples build under dev-deps) needs `rt-multi-thread`. The
+# published `[dependencies]` tokio (`["sync","rt"]`) is left UNCHANGED so the
+# library's own runtime surface is not widened.
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 # Why: Plan 02 Task 2 uses compile-fail tests on `SecretValue`'s negative trait
 # invariants (no `Debug`, no `Display`, no `Serialize`). Per Phase 83 review R5.
 trybuild = "1"
