@@ -354,7 +354,7 @@ impl ServerBuilderExt for ServerBuilder {
             let executor = Arc::new(crate::code_mode::SqlCodeExecutor::new(
                 connector,
                 config.clone(),
-            ));
+            )?);
             crate::code_mode::code_mode_tools_from_executor(self, config, executor)
         }
         #[cfg(not(feature = "code-mode"))]

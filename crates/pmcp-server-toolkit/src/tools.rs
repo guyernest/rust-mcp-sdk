@@ -277,11 +277,20 @@ struct SynthesizedToolHandler {
 /// `LIMIT NULL` with a "datatype mismatch" — so the declared default is the
 /// difference between a working and a broken tool call (the reference
 /// `search_tracks` / `list_artists` calls rely on it).
+///
+/// An EXPLICIT JSON `null` for a declared-default parameter is treated the SAME
+/// as an omitted parameter — the declared default is applied (85-10 WR-02
+/// secondary fix). Without the `is_null` filter a caller sending
+/// `{"limit": null}` would bind `LIMIT NULL` and SQLite would reject the query
+/// with "datatype mismatch", even though the tool declares `default = 20`.
 fn extract_named_params(decl: &ToolDecl, args: &Value) -> Vec<(String, Value)> {
     decl.parameters
         .iter()
         .filter_map(|p| {
             args.get(&p.name)
+                // Explicit JSON `null` falls through to the declared default,
+                // exactly like an omitted key (no `LIMIT NULL` bind).
+                .filter(|v| !v.is_null())
                 .cloned()
                 .or_else(|| {
                     p.default
@@ -519,5 +528,55 @@ mod tests {
             "RESEARCH §Risks #2 invariant: SynthesizedToolHandler::metadata() MUST return Some(ToolInfo)"
         );
         assert_eq!(actual.unwrap().name, expected_info.name);
+    }
+
+    /// A `[[tools]]` declaration with one defaulted `limit` param (default=20),
+    /// used to exercise [`extract_named_params`]'s default / explicit-null logic.
+    fn decl_with_limit_default() -> ToolDecl {
+        ToolDecl {
+            name: "search".to_string(),
+            description: Some("Search".to_string()),
+            sql: Some("SELECT * FROM t LIMIT :limit".to_string()),
+            parameters: vec![ParamDecl {
+                name: "limit".to_string(),
+                param_type: Some("integer".to_string()),
+                description: Some("row limit".to_string()),
+                required: false,
+                default: Some(toml::Value::Integer(20)),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn extract_named_params_applies_default_when_absent() {
+        // `{}` → declared default (20) is bound (the reference search/list calls
+        // rely on this so an omitted :limit never binds NULL).
+        let decl = decl_with_limit_default();
+        let params = extract_named_params(&decl, &serde_json::json!({}));
+        assert_eq!(params, vec![("limit".to_string(), serde_json::json!(20))]);
+    }
+
+    #[test]
+    fn extract_named_params_explicit_null_applies_default() {
+        // 85-10 WR-02 secondary fix: an EXPLICIT JSON null must NOT bind
+        // `LIMIT NULL` — it falls through to the declared default exactly like
+        // an omitted key.
+        let decl = decl_with_limit_default();
+        let params = extract_named_params(&decl, &serde_json::json!({ "limit": null }));
+        assert_eq!(
+            params,
+            vec![("limit".to_string(), serde_json::json!(20))],
+            "explicit null must apply the declared default, not bind LIMIT NULL"
+        );
+    }
+
+    #[test]
+    fn extract_named_params_explicit_value_overrides_default() {
+        // A concrete value wins over the default.
+        let decl = decl_with_limit_default();
+        let params = extract_named_params(&decl, &serde_json::json!({ "limit": 5 }));
+        assert_eq!(params, vec![("limit".to_string(), serde_json::json!(5))]);
     }
 }

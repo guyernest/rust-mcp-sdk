@@ -358,8 +358,10 @@ mod tool_handlers {
 /// `execute_statement`) and dispatches by [`crate::sql`]'s
 /// `QueryType`. The toolkit's [`SqlConnector`] exposes a SINGLE
 /// [`SqlConnector::execute`] entry point, so this adapter collapses that
-/// 2-method dispatch into one `connector.execute(sql, &[])` call regardless of
-/// statement type — re-validating the SQL FIRST for defense-in-depth.
+/// 2-method dispatch into one `connector.execute(sql, &params)` call regardless
+/// of statement type — re-validating the SQL FIRST for defense-in-depth. The
+/// `execute_code` `variables` input IS bound as named params (85-10 WR-02);
+/// it is never silently dropped.
 ///
 /// # Defense-in-depth re-validation (threat T-85-02-01)
 ///
@@ -388,32 +390,54 @@ mod tool_handlers {
 /// unit assertions in this crate.
 pub struct SqlCodeExecutor {
     connector: Arc<dyn SqlConnector>,
-    config: ServerConfig,
+    /// The re-validation pipeline, built ONCE at construction (85-10 IN-01).
+    ///
+    /// Previously [`SqlCodeExecutor::revalidate`] rebuilt the pipeline AND
+    /// re-resolved the `token_secret` env var on EVERY `execute` call. Caching
+    /// it here means the secret is resolved a single time (at construction /
+    /// builder time) — a removed/rotated env var after startup no longer breaks
+    /// in-flight requests, and a bad secret still fails fast at builder time.
+    pipeline: Arc<ValidationPipeline>,
 }
 
 impl SqlCodeExecutor {
     /// Construct an executor over `connector`, enforcing the `[code_mode]`
     /// policy carried by `config` on every [`SqlCodeExecutor::execute`] call.
-    #[must_use]
-    pub fn new(connector: Arc<dyn SqlConnector>, config: ServerConfig) -> Self {
-        Self { connector, config }
+    ///
+    /// The [`ValidationPipeline`] is built ONCE here (85-10 IN-01) via
+    /// [`validation_pipeline_from_config`], so the `token_secret` env var is
+    /// resolved a single time at construction rather than on every request.
+    ///
+    /// # Errors
+    ///
+    /// Returns every error from [`validation_pipeline_from_config`] — most
+    /// notably the R9 inline-secret rejection and the secret-resolution /
+    /// 16-byte-minimum failures — so a misconfigured `token_secret` fails at
+    /// builder time, not first request.
+    pub fn new(connector: Arc<dyn SqlConnector>, config: ServerConfig) -> Result<Self> {
+        let pipeline = Arc::new(validation_pipeline_from_config(&config)?);
+        Ok(Self {
+            connector,
+            pipeline,
+        })
     }
 
     /// Defense-in-depth re-validation of `code` against the `[code_mode]`
     /// policy (threat T-85-02-01). Returns `Err` BEFORE any connector call when
     /// the statement violates the static policy (e.g. a DELETE under
     /// `allow_deletes = false`) or fails to parse.
+    ///
+    /// Reuses the cached [`SqlCodeExecutor::pipeline`] (85-10 IN-01) — it does
+    /// NOT rebuild the pipeline or re-read the `token_secret` env var per call.
     fn revalidate(&self, code: &str) -> std::result::Result<(), ExecutionError> {
-        let pipeline = validation_pipeline_from_config(&self.config).map_err(|e| {
-            ExecutionError::BackendError(format!("re-validation pipeline unavailable: {e}"))
-        })?;
         let ctx = ValidationContext::new(
             "code-mode-executor",
             "code-mode-session",
             "schema-hash",
             "perms-hash",
         );
-        let result = pipeline
+        let result = self
+            .pipeline
             .validate_sql_query(code, &ctx)
             .map_err(|e| ExecutionError::BackendError(format!("SQL validation failed: {e}")))?;
         if !result.is_valid {
@@ -423,6 +447,26 @@ impl SqlCodeExecutor {
         }
         Ok(())
     }
+}
+
+/// Convert the `execute_code` `variables` input (a JSON object of name→value)
+/// into the `(name, value)` pairs [`SqlConnector::execute`] binds (85-10
+/// WR-02). A leading `:` on a key is stripped so callers may send either
+/// `{":name": ...}` or `{"name": ...}` — the connector's
+/// `translate_placeholders` keys params WITHOUT the `:` (matching
+/// [`extract_named_params`](crate::tools)). `None` or a non-object value yields
+/// an empty slice, so the parity `execute_code` scenario (passes `None`) is
+/// unaffected.
+fn variables_to_params(variables: Option<&serde_json::Value>) -> Vec<(String, serde_json::Value)> {
+    let Some(serde_json::Value::Object(map)) = variables else {
+        return Vec::new();
+    };
+    map.iter()
+        .map(|(k, v)| {
+            let key = k.strip_prefix(':').unwrap_or(k).to_string();
+            (key, v.clone())
+        })
+        .collect()
 }
 
 #[pmcp_code_mode::async_trait]
@@ -441,13 +485,18 @@ impl CodeExecutor for SqlCodeExecutor {
     async fn execute(
         &self,
         code: &str,
-        _variables: Option<&serde_json::Value>,
+        variables: Option<&serde_json::Value>,
     ) -> std::result::Result<serde_json::Value, ExecutionError> {
         // (1) Defense-in-depth re-validation BEFORE the connector is reached.
         self.revalidate(code)?;
-        // (2) Single entry point — the toolkit trait has one execute() method.
+        // (2) Honor the schema-advertised `variables` input by BINDING it as
+        //     named params (85-10 WR-02 / threat T-85-10-01) — never a silent
+        //     drop. A `None` / absent map yields `&[]`, so the parity scenario
+        //     (passes None) is unaffected. Binding (not string interpolation)
+        //     preserves parameterized-query safety.
+        let params = variables_to_params(variables);
         let rows =
-            self.connector.execute(code, &[]).await.map_err(|e| {
+            self.connector.execute(code, &params).await.map_err(|e| {
                 ExecutionError::BackendError(format!("connector execute failed: {e}"))
             })?;
         // (3) Mirror production's observable `"rows"` key (REVIEW FIX #6b).
@@ -570,6 +619,25 @@ fn expand_braced_var(raw: &str) -> Option<&str> {
 /// A missing/unset env var (either form) returns
 /// [`ToolkitError::CodeMode`] — never a panic, never a fall-back to a weak or
 /// empty secret (threat-model item T-85-01-01).
+/// Read `var` from the process env for `token_secret`, treating a missing OR
+/// set-but-empty/whitespace value as UNSET (85-10 secondary fix, threat
+/// T-85-10-03).
+///
+/// `HmacTokenGenerator` enforces a 16-byte minimum downstream, but an empty
+/// (or all-whitespace) env value should surface as a clear "set but empty"
+/// configuration error at startup — never flow to the HMAC layer as a
+/// degenerate secret. Both the `env:VAR` and `${VAR}` forms route through here.
+fn resolve_secret_env_var(var: &str) -> Result<SecretValue> {
+    let value = std::env::var(var)
+        .map_err(|_| ToolkitError::CodeMode(format!("env var '{var}' not set for token_secret")))?;
+    if value.trim().is_empty() {
+        return Err(ToolkitError::CodeMode(format!(
+            "env var '{var}' is set but empty for token_secret"
+        )));
+    }
+    Ok(SecretValue::new(value.into_bytes()))
+}
+
 fn resolve_token_secret(section: &CodeModeSection) -> Result<SecretValue> {
     let raw = section.token_secret.as_ref().ok_or_else(|| {
         ToolkitError::CodeMode(
@@ -577,18 +645,10 @@ fn resolve_token_secret(section: &CodeModeSection) -> Result<SecretValue> {
         )
     })?;
     if let Some(var) = raw.strip_prefix("env:") {
-        return std::env::var(var)
-            .map(|s| SecretValue::new(s.into_bytes()))
-            .map_err(|_| {
-                ToolkitError::CodeMode(format!("env var '{var}' not set for token_secret"))
-            });
+        return resolve_secret_env_var(var);
     }
     if let Some(var) = expand_braced_var(raw) {
-        return std::env::var(var)
-            .map(|s| SecretValue::new(s.into_bytes()))
-            .map_err(|_| {
-                ToolkitError::CodeMode(format!("env var '{var}' not set for token_secret"))
-            });
+        return resolve_secret_env_var(var);
     }
     if section.allow_inline_token_secret_for_dev {
         tracing::warn!(
@@ -942,6 +1002,74 @@ mod tests {
     }
 
     #[test]
+    fn resolve_token_secret_empty_env_var_is_set_but_empty_error() {
+        // 85-10 / T-85-10-03: a set-but-EMPTY env value must NOT flow to the
+        // HMAC layer as a degenerate secret — it surfaces as a clear
+        // "set but empty" CodeMode error (env: form).
+        const VAR: &str = "PMCP_TOOLKIT_CODE_MODE_TEST_EMPTY_ENV";
+        std::env::set_var(VAR, "");
+        let section = env_section(VAR);
+        let outcome = resolve_token_secret(&section);
+        std::env::remove_var(VAR);
+        match outcome {
+            Ok(_) => panic!("empty env var must error, not yield an empty secret"),
+            Err(ToolkitError::CodeMode(msg)) => {
+                assert!(
+                    msg.contains(VAR) && msg.contains("set but empty"),
+                    "error must name the var as set-but-empty, got: {msg}"
+                );
+            },
+            Err(other) => panic!("expected CodeMode 'set but empty', got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn resolve_token_secret_whitespace_env_var_is_set_but_empty_error() {
+        // All-whitespace is treated the same as empty (${VAR} form).
+        const VAR: &str = "PMCP_TOOLKIT_CODE_MODE_TEST_WS_ENV";
+        std::env::set_var(VAR, "   ");
+        let mut section = env_section("UNUSED");
+        section.token_secret = Some(format!("${{{VAR}}}"));
+        let outcome = resolve_token_secret(&section);
+        std::env::remove_var(VAR);
+        match outcome {
+            Ok(_) => panic!("whitespace-only env var must error"),
+            Err(ToolkitError::CodeMode(msg)) => {
+                assert!(
+                    msg.contains(VAR) && msg.contains("set but empty"),
+                    "error must name the var as set-but-empty, got: {msg}"
+                );
+            },
+            Err(other) => panic!("expected CodeMode 'set but empty', got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn variables_to_params_maps_object_stripping_colon_prefix() {
+        // 85-10 WR-02: a JSON object of name→value becomes (name, value) pairs,
+        // with a leading `:` stripped to match the connector's keying.
+        let vars = serde_json::json!({ ":name": "Rock", "limit": 5 });
+        let mut params = variables_to_params(Some(&vars));
+        params.sort_by(|a, b| a.0.cmp(&b.0));
+        assert_eq!(
+            params,
+            vec![
+                ("limit".to_string(), serde_json::json!(5)),
+                ("name".to_string(), serde_json::json!("Rock")),
+            ]
+        );
+    }
+
+    #[test]
+    fn variables_to_params_none_or_non_object_is_empty() {
+        // None / non-object yields an empty slice — the parity execute_code
+        // scenario (passes None) is unaffected.
+        assert!(variables_to_params(None).is_empty());
+        assert!(variables_to_params(Some(&serde_json::json!("not-an-object"))).is_empty());
+        assert!(variables_to_params(Some(&serde_json::json!([1, 2, 3]))).is_empty());
+    }
+
+    #[test]
     fn resolve_token_secret_missing_env_var_surfaces_error() {
         // Use a var name that is overwhelmingly unlikely to be set in CI.
         let section = env_section("PMCP_TOOLKIT_DEFINITELY_NOT_SET_FOR_TEST");
@@ -1012,7 +1140,7 @@ mod sql_code_executor_tests {
             }),
             ..Default::default()
         };
-        SqlCodeExecutor::new(Arc::new(connector), config)
+        SqlCodeExecutor::new(Arc::new(connector), config).expect("build executor")
     }
 
     /// Same in-memory connector as [`read_only_executor`], but the `[code_mode]`
@@ -1053,7 +1181,7 @@ mod sql_code_executor_tests {
             }),
             ..Default::default()
         };
-        SqlCodeExecutor::new(Arc::new(connector), config)
+        SqlCodeExecutor::new(Arc::new(connector), config).expect("build executor")
     }
 
     #[tokio::test]
@@ -1147,6 +1275,63 @@ mod sql_code_executor_tests {
             result.is_err(),
             "malformed SQL must surface an Err, never panic"
         );
+    }
+
+    #[tokio::test]
+    async fn execute_binds_variables_input() {
+        // 85-10 WR-02 / T-85-10-01: the schema-advertised `variables` input is
+        // BOUND as named params (not silently dropped), so a `WHERE Name = :name`
+        // resolves against the seeded row.
+        let executor = read_only_executor().await;
+        let vars = serde_json::json!({ ":name": "AC/DC" });
+        let result = executor
+            .execute(
+                "SELECT ArtistId FROM Artist WHERE Name = :name",
+                Some(&vars),
+            )
+            .await
+            .expect("bound variable must resolve the WHERE clause");
+        let rows = result.get("rows").expect("payload has a `rows` key");
+        let arr = rows.as_array().expect("`rows` is an array");
+        assert_eq!(arr.len(), 1, "the bound :name must match the seeded row");
+        assert_eq!(arr[0]["ArtistId"], 1);
+    }
+
+    #[tokio::test]
+    async fn execute_empty_variables_is_unaffected() {
+        // An empty variables map binds nothing — identical to today's None path.
+        let executor = read_only_executor().await;
+        let empty = serde_json::json!({});
+        let result = executor
+            .execute("SELECT ArtistId, Name FROM Artist", Some(&empty))
+            .await
+            .expect("empty variables must behave exactly like None");
+        let arr = result["rows"].as_array().expect("`rows` array");
+        assert_eq!(arr.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn pipeline_cached_at_construction_not_reread_per_execute() {
+        // 85-10 IN-01 / T-85-10-03: the pipeline is built ONCE in `new`, so a
+        // SECOND execute does NOT re-resolve the token_secret env var. Remove the
+        // env var after construction — the executor must STILL succeed (proving
+        // it did not re-read the now-missing secret).
+        let executor = read_only_executor().await;
+        // First execute (baseline) succeeds.
+        executor
+            .execute("SELECT ArtistId FROM Artist LIMIT 1", None)
+            .await
+            .expect("first execute succeeds");
+        // Remove the secret the pipeline was built from.
+        std::env::remove_var(TEST_SECRET_VAR);
+        // Second execute STILL succeeds — the cached pipeline never re-reads env.
+        let result = executor
+            .execute("SELECT ArtistId FROM Artist LIMIT 1", None)
+            .await
+            .expect("second execute must succeed from the cached pipeline");
+        // Restore for any sibling tests sharing the process env.
+        ensure_secret();
+        assert!(result.get("rows").is_some());
     }
 }
 
