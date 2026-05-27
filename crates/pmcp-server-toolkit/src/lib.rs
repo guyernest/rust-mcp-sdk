@@ -116,6 +116,12 @@ pub use crate::sql::{ConnectorError, Dialect, SqlConnector};
 #[cfg(feature = "code-mode")]
 pub use crate::code_mode::assemble_code_mode_prompt;
 
+// File-based prompt seam (Plan 85-02 Task 3 / D-04 / D-05) — the sync,
+// connectorless counterpart that seeds the prompt from a `--schema` file
+// without live introspection (SC-1 prerequisite).
+#[cfg(feature = "code-mode")]
+pub use crate::code_mode::assemble_code_mode_prompt_with_schema;
+
 // Why: compile-only assertion proving the headline D-15 / review-R3 crate-root
 // DX promise. If any of these paths fails to resolve, the crate fails to
 // build — no test runtime required.

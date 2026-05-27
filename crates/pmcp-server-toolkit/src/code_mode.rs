@@ -67,7 +67,7 @@ use std::sync::Arc;
 use crate::config::{CodeModeSection, ServerConfig};
 use crate::error::{ConfigValidationError, Result, ToolkitError};
 use crate::secrets::SecretValue;
-use crate::sql::SqlConnector;
+use crate::sql::{Dialect, SqlConnector};
 
 // =============================================================================
 // R1 split — validation_pipeline_from_config + code_mode_tools_from_executor
@@ -702,6 +702,71 @@ pub async fn build_code_mode_prompt(
     assemble_code_mode_prompt(connector, config).await
 }
 
+/// File-based counterpart to [`assemble_code_mode_prompt`] — assemble the
+/// code-mode prompt body from a `--schema` file's text WITHOUT any live
+/// connector introspection (Plan 85-02 Task 3 / D-04 / D-05).
+///
+/// This is a SYNC fn taking the [`Dialect`] + the already-loaded `schema_text`
+/// directly, so it can NEVER trigger a [`SqlConnector::schema_text`] round-trip.
+/// For lazy / network-backed non-SQLite connectors that matters: the
+/// connector-based [`assemble_code_mode_prompt`] would hit the network at prompt
+/// time (breaking SC-1), and it would surface the LIVE schema rather than the
+/// admin-redacted `--schema` file. Routing the `--schema` file content through
+/// THIS helper makes the file the single source of truth — what's in the file
+/// is exactly what the client sees (the D-05 redaction guarantee).
+///
+/// # Output structure
+///
+/// Mirrors [`assemble_code_mode_prompt`] except the schema block is preceded by
+/// a `# Database Schema` header (REVIEW FIX — Gemini LOW, folded here per D-05;
+/// the header text is kept identical to the resource-surface
+/// `merge_schema_resource` helper Plan 05 uses, so prompt + resource parity
+/// holds):
+///
+/// ```text
+/// # Code Mode — {dialect.name()}
+///
+/// {dialect.placeholder_guidance()}
+///
+/// ## Schema
+///
+/// # Database Schema
+///
+/// {schema_text}
+///
+/// ## Curated Tables
+///
+/// - `table_a`: description A
+/// ```
+///
+/// An empty `schema_text` still produces a valid (non-panicking) prompt with
+/// the `# Code Mode` header present.
+#[must_use]
+pub fn assemble_code_mode_prompt_with_schema(
+    schema_text: &str,
+    dialect: Dialect,
+    config: &ServerConfig,
+) -> String {
+    const SCHEMA_HEADER: &str = "# Database Schema\n\n";
+
+    let curated = format_curated_tables(config);
+
+    let mut out = String::with_capacity(schema_text.len() + curated.len() + 256);
+    out.push_str("# Code Mode — ");
+    out.push_str(dialect.name());
+    out.push_str("\n\n");
+    out.push_str(dialect.placeholder_guidance());
+    out.push_str("\n\n## Schema\n\n");
+    out.push_str(SCHEMA_HEADER);
+    out.push_str(schema_text);
+    if !curated.is_empty() {
+        out.push_str("\n\n## Curated Tables\n\n");
+        out.push_str(&curated);
+    }
+    out.push('\n');
+    out
+}
+
 /// Format the `[[database.tables]]` curated descriptions as a Markdown list.
 ///
 /// Entries with no `description` are skipped. Returns an empty string when no
@@ -1096,6 +1161,76 @@ mod tkit10_tests {
         assert!(
             !prompt.contains("`no_desc`"),
             "undescribed table must not appear in curated section: {prompt}"
+        );
+    }
+
+    // =========================================================================
+    // assemble_code_mode_prompt_with_schema — file-based prompt seam (Task 3)
+    // =========================================================================
+
+    #[test]
+    fn with_schema_includes_header_dialect_schema_and_curated() {
+        let cfg = make_cfg(vec![DatabaseTableDecl {
+            name: "Artist".to_string(),
+            description: Some("Musical artists".to_string()),
+        }]);
+        let schema = "CREATE TABLE Artist (ArtistId INTEGER PRIMARY KEY, Name TEXT);";
+        let prompt = assemble_code_mode_prompt_with_schema(schema, Dialect::Sqlite, &cfg);
+
+        assert!(
+            prompt.contains("# Code Mode"),
+            "missing code-mode header: {prompt}"
+        );
+        assert!(prompt.contains("SQLite"), "missing dialect name: {prompt}");
+        assert!(
+            prompt.contains("# Database Schema"),
+            "missing schema-resource header: {prompt}"
+        );
+        assert!(
+            prompt.contains(schema),
+            "schema text must appear verbatim: {prompt}"
+        );
+        assert!(
+            prompt.contains("`Artist`: Musical artists"),
+            "curated table description must appear: {prompt}"
+        );
+    }
+
+    /// The helper is a SYNC fn — this test calls it from a non-async context,
+    /// which only compiles because it never awaits a connector (proving it
+    /// cannot trigger a live `schema_text()`).
+    #[test]
+    fn with_schema_is_sync_and_uses_passed_dialect() {
+        let cfg = make_cfg(vec![]);
+        let prompt = assemble_code_mode_prompt_with_schema(
+            "CREATE TABLE t (id INT);",
+            Dialect::Postgres,
+            &cfg,
+        );
+        assert!(
+            prompt.contains("# Code Mode — PostgreSQL"),
+            "passed dialect must drive the header: {prompt}"
+        );
+        // Postgres placeholder guidance mentions $1 — proves dialect param is used.
+        assert!(prompt.contains("$1"), "Postgres guidance missing: {prompt}");
+        // No curated section when [[database.tables]] is empty.
+        assert!(
+            !prompt.contains("## Curated Tables"),
+            "empty tables must omit curated section: {prompt}"
+        );
+    }
+
+    #[test]
+    fn with_schema_empty_text_still_has_header() {
+        let cfg = make_cfg(vec![]);
+        let prompt = assemble_code_mode_prompt_with_schema("", Dialect::MySql, &cfg);
+        assert!(
+            prompt.contains("# Code Mode — MySQL"),
+            "empty schema must still produce a valid prompt with the header: {prompt}"
+        );
+        assert!(
+            prompt.contains("# Database Schema"),
+            "schema-resource header present even for empty schema: {prompt}"
         );
     }
 }
