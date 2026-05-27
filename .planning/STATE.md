@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v2.2
 milestone_name: Configuration-Only MCP Servers
 status: executing
-stopped_at: Completed 85-04-PLAN.md (Wave 2)
-last_updated: "2026-05-27T01:23:11.017Z"
+stopped_at: Completed 85-05-PLAN.md (Wave 3)
+last_updated: "2026-05-27T01:35:31.514Z"
 last_activity: 2026-05-27
 progress:
   total_phases: 44
   completed_phases: 36
   total_plans: 161
-  completed_plans: 159
+  completed_plans: 160
   percent: 82
 ---
 
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-05-17)
 ## Current Position
 
 Phase: 85 (shape-a-pure-config-binary-reference-parity) — EXECUTING
-Plan: 5 of 6
+Plan: 6 of 6
 Status: Ready to execute
 Last activity: 2026-05-27
 
@@ -134,6 +134,8 @@ Inherited from v2.1 (see PROJECT.md + prior Decisions log):
 - [Phase 85]: Plan 85-04: DispatchError::SqliteOpen is a path-free variant (T-85-04-01) — rusqlite's open error echoes the file path, so the SQLite arm map_err's it instead of forwarding raw ConnectorError; URL backends already redact at source
 - [Phase 85]: Plan 85-04: Athena dispatch offline-safety (T-85-04-04) CONFIRMED — explicit region (AWS_REGION/AWS_DEFAULT_REGION/us-east-1 fallback) stops aws_config::load() IMDS probe; creds lazy; no execute/schema_text at dispatch; no-creds test completes 0.43s under 10s timeout
 - [Phase 85]: Plan 85-04: dispatch() per-backend arms split into feature-gated dispatch_<backend> helper pairs (#[cfg(feature)] impl + #[cfg(not)] FeatureMissing stub) keeping each cog <=25; clap Args re-exported at crate root
+- [Phase 85]: Plan 85-05: build_server preserves ALL configured resources (merge_schema_resource overrides ONLY the /schema URI content) + the configured start_code_mode prompt (StaticPromptHandler::from_configs against the merged handler); code-mode via the LOCKED connector-aware API
+- [Phase 85]: Plan 85-05: lib::run serves over streamable HTTP via StreamableHttpServer::with_config(default()).start() (Phase 56 adapter); serve(server,addr) returns (bound_addr,handle) non-blocking so tests drive it. SC-1 timeout-guards athena lazy startup (no creds); SC-2 all four configs parse+dispatch right dialect (all 3 non-sqlite fixtures are athena, not mysql)
 
 ### Roadmap Evolution
 
@@ -176,6 +178,7 @@ Inherited from v2.1 (see PROJECT.md + prior Decisions log):
 | Phase 85 P03 | 5min | 2 tasks | 9 files |
 | Phase 85 P02 | 18min | 3 tasks | 4 files |
 | Phase 85 P04 | 6min | 2 tasks | 6 files |
+| Phase 85 P05 | 22min | 2 tasks | 7 files |
 
 ### Last Activity
 
@@ -193,6 +196,6 @@ Inherited from v2.1 (see PROJECT.md + prior Decisions log):
 
 ## Session Continuity
 
-Last session: 2026-05-27T01:23:02.661Z
-Stopped at: Completed 85-04-PLAN.md (Wave 2)
+Last session: 2026-05-27T01:35:31.509Z
+Stopped at: Completed 85-05-PLAN.md (Wave 3)
 Resume: Plan 85-03 COMPLETE — scaffolded `crates/pmcp-sql-server` (Shape A pure-config binary): feature-gated 4-connector manifest (sqlite/postgres/mysql/athena, all default-on D-07), lib/main split with a placeholder `lib::run()` Wave 2 replaces. Vendored FOUR self-contained parity fixtures into the SDK repo (closes RESEARCH Open Q#1): the DATA-BEARING `tests/fixtures/chinook.db` (~984 KB, REVIEW FIX #1 — real rows for the parity replay), the SEPARATE `chinook.ddl` (11 CREATE TABLE, the --schema text input D-06), `generated.yaml` (29-scenario contract), and `reference-config.toml` — all publish-excluded via `exclude = [tests/, …]`. 6-test `schema_fixture.rs` proves the DB returns Rock/AC-DC through the real SqliteConnector, the DDL builds a standalone 11-table schema, and generated.yaml parses as a `mcp_tester::TestScenario`. REF-02 fixture foundation done. Next: Plan 85-04 (Wave 2) fills `lib::run()` with the real config-load → connector-select → `pmcp::Server` assembly → transport-serve pipeline; Plan 85-06 replays the 29 scenarios against the vendored DB. NOTE: plan counter advanced 2→3 (monotonic) but plan 85-02 is a parallel Wave-1 plan whose SUMMARY is still pending; progress recalc (157/161, 98%) reflects disk truth.
