@@ -92,6 +92,65 @@ impl SqliteConnector {
             conn: Arc::new(Mutex::new(conn)),
         })
     }
+
+    /// Run a multi-statement SQL batch (`;`-separated DDL + INSERTs) in ONE call.
+    ///
+    /// [`SqlConnector::execute`] is single-statement (it `prepare`s exactly one
+    /// statement); a `schema.sql` bootstrap that issues several `CREATE TABLE`
+    /// and `INSERT` statements cannot run through it. This inherent helper wraps
+    /// [`rusqlite::Connection::execute_batch`], which executes every statement in
+    /// the batch sequentially, so a demo database can be seeded with a single
+    /// call inside the toolkit's ≤15-line wiring.
+    ///
+    /// This is an **inherent method on the concrete [`SqliteConnector`]** — it is
+    /// deliberately NOT part of the locked 3-method [`SqlConnector`] trait. Call
+    /// it on the concrete connector BEFORE wrapping it in
+    /// `Arc<dyn SqlConnector>`; an `Arc<dyn SqlConnector>` exposes only the trait
+    /// surface and would not resolve `execute_batch`.
+    ///
+    /// The batch is intended for IDEMPOTENT bootstrap SQL — use
+    /// `CREATE TABLE IF NOT EXISTS` and `INSERT OR IGNORE` — so a second run
+    /// against an already-seeded persisted database is safe and leaves exactly
+    /// the seeded rows.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConnectorError::Query`] if any statement in the batch fails
+    /// (e.g. a syntax error); the message is the bounded `rusqlite` error string
+    /// and does not echo the batch text. Returns [`ConnectorError::Driver`] if
+    /// the connection mutex is poisoned or the blocking task fails to join.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use pmcp_server_toolkit::sql::{SqliteConnector, SqlConnector};
+    /// # #[tokio::main(flavor = "current_thread")]
+    /// # async fn main() {
+    /// let conn = SqliteConnector::open_in_memory().unwrap();
+    /// conn.execute_batch(
+    ///     "CREATE TABLE t(id INTEGER); INSERT INTO t VALUES (1); INSERT INTO t VALUES (2);",
+    /// )
+    /// .await
+    /// .unwrap();
+    /// let rows = conn.execute("SELECT COUNT(*) AS c FROM t", &[]).await.unwrap();
+    /// assert_eq!(rows[0]["c"], serde_json::json!(2));
+    /// # }
+    /// ```
+    pub async fn execute_batch(&self, sql: &str) -> Result<(), ConnectorError> {
+        let conn = Arc::clone(&self.conn);
+        let sql = sql.to_string();
+        tokio::task::spawn_blocking(move || -> Result<(), ConnectorError> {
+            let guard = conn
+                .lock()
+                .map_err(|_| ConnectorError::Driver("mutex poisoned".into()))?;
+            guard
+                .execute_batch(&sql)
+                .map_err(|e| ConnectorError::Query(e.to_string()))?;
+            Ok(())
+        })
+        .await
+        .map_err(|e| ConnectorError::Driver(format!("join error: {e}")))?
+    }
 }
 
 /// Convert a [`serde_json::Value`] into a `rusqlite` bind value.
@@ -170,7 +229,11 @@ fn bind_params(
 /// Drain a raw-queried statement into one JSON object per row, keyed by column
 /// name (lifted from spike `main.rs:302-315`).
 fn collect_rows(stmt: &mut rusqlite::Statement<'_>) -> Result<Vec<Value>, ConnectorError> {
-    let cols: Vec<String> = stmt.column_names().iter().map(|c| (*c).to_string()).collect();
+    let cols: Vec<String> = stmt
+        .column_names()
+        .iter()
+        .map(|c| (*c).to_string())
+        .collect();
     let mut rows = stmt.raw_query();
     let mut out = Vec::new();
     while let Some(row) = rows
@@ -244,7 +307,9 @@ impl SqlConnector for SqliteConnector {
                 .next()
                 .map_err(|e| ConnectorError::Schema(e.to_string()))?
             {
-                let ddl: String = row.get(1).map_err(|e| ConnectorError::Schema(e.to_string()))?;
+                let ddl: String = row
+                    .get(1)
+                    .map_err(|e| ConnectorError::Schema(e.to_string()))?;
                 out.push_str(&ddl);
                 out.push_str(";\n");
             }
@@ -316,6 +381,67 @@ mod tests {
             .unwrap();
         let rows = conn.execute("SELECT name FROM users", &[]).await.unwrap();
         assert_eq!(rows, vec![json!({ "name": "Ada" })]);
+    }
+
+    #[tokio::test]
+    async fn test_execute_batch_seeds_multiple_tables() {
+        let conn = SqliteConnector::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE artists (id INTEGER, name TEXT);
+             CREATE TABLE albums (id INTEGER, title TEXT);
+             INSERT INTO artists VALUES (1, 'AC-DC');
+             INSERT INTO albums VALUES (1, 'For Those About To Rock');
+             INSERT INTO albums VALUES (2, 'Let There Be Rock');",
+        )
+        .await
+        .unwrap();
+
+        let artists = conn.execute("SELECT name FROM artists", &[]).await.unwrap();
+        assert_eq!(artists, vec![json!({ "name": "AC-DC" })]);
+
+        let albums = conn
+            .execute("SELECT COUNT(*) AS c FROM albums", &[])
+            .await
+            .unwrap();
+        assert_eq!(albums, vec![json!({ "c": 2 })]);
+    }
+
+    #[tokio::test]
+    async fn test_execute_batch_invalid_statement_returns_query_error() {
+        let conn = SqliteConnector::open_in_memory().unwrap();
+        let err = conn
+            .execute_batch("CREATE TABLE ok (id INTEGER); NOT VALID SQL;")
+            .await
+            .expect_err("a syntactically-invalid batch statement must return Err, not panic");
+        assert!(
+            matches!(err, ConnectorError::Query(_)),
+            "expected ConnectorError::Query, got: {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_execute_batch_idempotent_second_run_leaves_seeded_rows() {
+        let conn = SqliteConnector::open_in_memory().unwrap();
+        let bootstrap = "CREATE TABLE IF NOT EXISTS t (id INTEGER PRIMARY KEY);
+                         INSERT OR IGNORE INTO t VALUES (1);
+                         INSERT OR IGNORE INTO t VALUES (2);";
+
+        conn.execute_batch(bootstrap)
+            .await
+            .expect("first bootstrap run succeeds");
+        conn.execute_batch(bootstrap)
+            .await
+            .expect("second bootstrap run against persisted DB succeeds (idempotent)");
+
+        let rows = conn
+            .execute("SELECT COUNT(*) AS c FROM t", &[])
+            .await
+            .unwrap();
+        assert_eq!(
+            rows,
+            vec![json!({ "c": 2 })],
+            "idempotent batch must leave exactly the seeded rows after a second run"
+        );
     }
 
     #[tokio::test]

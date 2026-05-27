@@ -122,6 +122,57 @@ pub use crate::code_mode::assemble_code_mode_prompt;
 #[cfg(feature = "code-mode")]
 pub use crate::code_mode::assemble_code_mode_prompt_with_schema;
 
+// === Asset-aware path resolution (Phase 86 Review H1 — decided ONCE) ===
+//
+// Shapes B/C/D (the example, the scaffold emitter, and the deploy path) all need
+// the SAME answer to "where do I read config.toml / schema.sql, and where do I
+// write the demo SQLite DB?" so that a generated `main.rs` runs unchanged locally
+// AND on AWS Lambda. The resolution is fixed here and re-used everywhere; callers
+// MUST NOT hand-roll path logic.
+//
+// Config + schema are loaded via `pmcp::assets::load_string("config.toml")` and
+// `pmcp::assets::load_string("schema.sql")`. The pmcp asset loader already
+// resolves the correct base on each platform (verified in `src/assets/loader.rs`):
+//   - Lambda: `$LAMBDA_TASK_ROOT/assets` (default `/var/task/assets`) — the
+//     deploy bundler places `[assets] include` files under `assets/` in the zip.
+//   - Local: `$PMCP_ASSETS_DIR` or the current working directory.
+// The `assets` module is NOT feature-gated, so it is reachable from the toolkit's
+// `default-features = false` `pmcp` dependency without enabling extra features.
+
+/// Resolve the writable filesystem path for the demo SQLite database.
+///
+/// On AWS Lambda the deployment root (`/var/task`) is read-only, so a SQLite
+/// database that must be created/seeded at startup has to live under the
+/// writable `/tmp`. Locally a relative `demo.db` in the working directory is
+/// fine. Lambda is detected by the presence of the `LAMBDA_TASK_ROOT`
+/// environment variable, which the Lambda runtime always sets.
+///
+/// This pairs with `pmcp::assets::load_string("config.toml")` /
+/// `pmcp::assets::load_string("schema.sql")` for read-only assets — config and
+/// schema are bundled (and resolved) via the pmcp asset loader, while the
+/// mutable database goes wherever this resolver points. Both halves are decided
+/// once here so the example, the scaffold emitter, and the deploy path share one
+/// shape (Phase 86 Review H1).
+///
+/// # Examples
+///
+/// ```
+/// use pmcp_server_toolkit::demo_db_path;
+///
+/// // Locally (no LAMBDA_TASK_ROOT) the demo DB is a relative file.
+/// std::env::remove_var("LAMBDA_TASK_ROOT");
+/// assert_eq!(demo_db_path(), std::path::PathBuf::from("demo.db"));
+/// ```
+#[must_use]
+pub fn demo_db_path() -> std::path::PathBuf {
+    if std::env::var("LAMBDA_TASK_ROOT").is_ok() {
+        // Lambda: /var/task is read-only; SQLite must bootstrap into /tmp.
+        std::path::PathBuf::from("/tmp/demo.db")
+    } else {
+        std::path::PathBuf::from("demo.db")
+    }
+}
+
 // Why: compile-only assertion proving the headline D-15 / review-R3 crate-root
 // DX promise. If any of these paths fails to resolve, the crate fails to
 // build — no test runtime required.
@@ -171,3 +222,33 @@ const _CODE_MODE_REEXPORT_SMOKE: fn() = || {
     // surface; reference the function pointer to assert the path resolves.
     let _ = assemble_code_mode_prompt;
 };
+
+#[cfg(test)]
+mod demo_db_path_tests {
+    use super::demo_db_path;
+    use std::path::PathBuf;
+
+    // Why: these tests mutate the process-global LAMBDA_TASK_ROOT env var. The
+    // project runs `cargo test -- --test-threads=1` (CLAUDE.md), so they execute
+    // serially and cannot race. Each test restores the prior state.
+    #[test]
+    fn returns_tmp_path_under_lambda() {
+        let prev = std::env::var("LAMBDA_TASK_ROOT").ok();
+        std::env::set_var("LAMBDA_TASK_ROOT", "/var/task");
+        assert_eq!(demo_db_path(), PathBuf::from("/tmp/demo.db"));
+        match prev {
+            Some(v) => std::env::set_var("LAMBDA_TASK_ROOT", v),
+            None => std::env::remove_var("LAMBDA_TASK_ROOT"),
+        }
+    }
+
+    #[test]
+    fn returns_relative_path_locally() {
+        let prev = std::env::var("LAMBDA_TASK_ROOT").ok();
+        std::env::remove_var("LAMBDA_TASK_ROOT");
+        assert_eq!(demo_db_path(), PathBuf::from("demo.db"));
+        if let Some(v) = prev {
+            std::env::set_var("LAMBDA_TASK_ROOT", v);
+        }
+    }
+}
