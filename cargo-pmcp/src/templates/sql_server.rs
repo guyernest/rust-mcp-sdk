@@ -24,12 +24,18 @@ use colored::Colorize;
 use std::fs;
 use std::path::Path;
 
-/// Emit the four files of a single runnable `sql-server` crate into `dir`.
+/// Emit the files of a single runnable `sql-server` crate into `dir`.
+///
+/// Beyond the four runnable-crate files (`Cargo.toml`, `src/main.rs`,
+/// `config.toml`, `schema.sql`) this also emits the deploy descriptor
+/// (`deploy.toml` + `.pmcp/deploy.toml`) so `cargo pmcp deploy` selects pmcp.run
+/// and bundles the assets with the right secret posture (Phase 86 Plan 05).
 pub fn generate(dir: &Path, name: &str) -> Result<()> {
     generate_cargo_toml(dir, name)?;
     generate_main_rs(dir)?;
     generate_config_toml(dir, name)?;
     generate_schema_sql(dir)?;
+    generate_deploy_toml(dir, name)?;
 
     if std::env::var("PMCP_QUIET").is_err() {
         println!("  {} Generated SQL server crate files", "✓".green());
@@ -194,6 +200,85 @@ INSERT OR IGNORE INTO books (id, title, author) VALUES (3, 'Rust for Rustaceans'
 "#;
 
     fs::write(dir.join("schema.sql"), content).context("Failed to create schema.sql")?;
+    Ok(())
+}
+
+/// Emit the deploy descriptor that drives `cargo pmcp deploy` (Phase 86 Plan 05).
+///
+/// The file is written to BOTH `deploy.toml` (project root — human-visible, the
+/// scaffold's canonical descriptor) and `.pmcp/deploy.toml` (the path
+/// [`crate::deployment::config::DeployConfig::load`] reads). It is a complete,
+/// parseable `DeployConfig` carrying:
+///
+/// - `target_type = "pmcp-run"` (M3) — `get_target_id` does NOT infer pmcp.run from
+///   project shape, so the target MUST be declared here.
+/// - `[assets] include = ["config.toml", "schema.sql"]` (H1) so
+///   `bundle_assets_if_configured` places them under `assets/` in the zip →
+///   `/var/task/assets/` on Lambda, exactly where `pmcp::assets::load_string`
+///   resolves.
+/// - Comments documenting the Lambda posture: assets under `/var/task/assets/`,
+///   the mutable SQLite DB under `/tmp/demo.db` (`/var/task` is read-only), and the
+///   `CODE_MODE_SECRET` deploy secret/env that the deploy path substitutes for the
+///   inline DEV `token_secret` (H4 — see `BinaryBuilder::bundle_assets_if_configured`,
+///   which rewrites the bundled config's `token_secret` to `${CODE_MODE_SECRET}` for
+///   config-driven projects so the deployed artifact never ships the dev literal).
+fn generate_deploy_toml(dir: &Path, name: &str) -> Result<()> {
+    let content = format!(
+        r#"# Deploy descriptor for `cargo pmcp deploy` (config-driven single-crate server).
+#
+# Lambda runtime posture (Phase 86 Plan 05):
+# - Assets (config.toml + schema.sql) are bundled under `assets/` and extract to
+#   `/var/task/assets/` on Lambda — exactly where `pmcp::assets::load_string`
+#   resolves them. `/var/task` is READ-ONLY.
+# - The mutable SQLite DB is opened at `/tmp/demo.db` (the only writable path on
+#   Lambda) via `pmcp_server_toolkit::demo_db_path()`.
+# - SECRET (H4): the local `config.toml` carries an inline DEV `token_secret` for
+#   out-of-box `cargo run`. The deploy path substitutes `${{CODE_MODE_SECRET}}`
+#   into the BUNDLED config so the deployed artifact NEVER ships the dev literal —
+#   supply `CODE_MODE_SECRET` as a deploy secret/env on pmcp.run.
+
+[target]
+# M3: pmcp.run is selected by THIS value (get_target_id reads target.type); it is
+# NOT inferred from project shape.
+type = "pmcp-run"
+version = "1.0.0"
+
+[aws]
+region = "us-east-1"
+
+[server]
+name = "{name}"
+memory_mb = 512
+timeout_seconds = 30
+
+[environment]
+RUST_LOG = "info"
+
+[auth]
+enabled = false
+provider = "none"
+
+[observability]
+log_retention_days = 30
+enable_xray = false
+create_dashboard = false
+
+[assets]
+# H1: bundled under `assets/` → `/var/task/assets/{{config.toml,schema.sql}}` on
+# Lambda, where `pmcp::assets::load_string` reads them.
+include = ["config.toml", "schema.sql"]
+"#,
+    );
+
+    fs::write(dir.join("deploy.toml"), &content).context("Failed to create deploy.toml")?;
+
+    // DeployConfig::load reads `<project_root>/.pmcp/deploy.toml`; emit a copy there
+    // so `cargo pmcp deploy` (and the Task 3 parse test) load the same descriptor.
+    let pmcp_dir = dir.join(".pmcp");
+    fs::create_dir_all(&pmcp_dir).context("Failed to create .pmcp directory")?;
+    fs::write(pmcp_dir.join("deploy.toml"), &content)
+        .context("Failed to create .pmcp/deploy.toml")?;
+
     Ok(())
 }
 

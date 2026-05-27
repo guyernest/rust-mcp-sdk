@@ -557,9 +557,19 @@ impl BinaryBuilder {
             .compression_method(zip::CompressionMethod::Deflated)
             .unix_permissions(0o644);
 
+        // H4 (Phase 86 Plan 05): for a config-driven project, the BUNDLED config's
+        // inline DEV `token_secret` MUST be replaced with the `${CODE_MODE_SECRET}`
+        // env ref so the deployed artifact never ships the dev literal. The on-disk
+        // local config.toml is untouched (D-06 out-of-box `cargo run`).
+        let config_driven = crate::commands::deploy::is_config_driven_project(&self.project_root);
+
         // Add config.toml if found (for Code Mode operation extraction by pmcp.run)
-        let config_toml_included =
-            self.add_config_toml_to_zip(&mut zip, file_options, config_toml_path.as_deref())?;
+        let config_toml_included = self.add_config_toml_to_zip(
+            &mut zip,
+            file_options,
+            config_toml_path.as_deref(),
+            config_driven,
+        )?;
 
         // Add assets to assets/ subdirectory in the zip
         // Lambda will extract to $LAMBDA_TASK_ROOT/assets/
@@ -583,6 +593,16 @@ impl BinaryBuilder {
 
             let asset_data = std::fs::read(asset_path)
                 .context(format!("Failed to read {}", asset_path.display()))?;
+            // H4: this `assets/config.toml` copy is the one the runtime reads via
+            // `pmcp::assets::load_string("config.toml")` (/var/task/assets/) — so it
+            // MUST carry the env-ref secret, never the inline dev literal.
+            let asset_data = if config_driven
+                && asset_path.file_name().and_then(|n| n.to_str()) == Some("config.toml")
+            {
+                Self::sanitize_config_bytes_for_deploy(&asset_data)
+            } else {
+                asset_data
+            };
             zip.start_file(&zip_path, file_options)
                 .context(format!("Failed to add {} to zip", zip_path))?;
             zip.write_all(&asset_data)
@@ -611,11 +631,17 @@ impl BinaryBuilder {
     ///
     /// Takes a pre-resolved config path (from `resolve_config_toml`) to avoid
     /// redundant filesystem scanning. Returns true if a config file was added.
+    ///
+    /// When `config_driven` is true the bundled bytes are passed through
+    /// [`Self::sanitize_config_bytes_for_deploy`] so the inline DEV `token_secret`
+    /// is replaced with the `${CODE_MODE_SECRET}` env ref (H4). The on-disk source
+    /// file is never modified.
     fn add_config_toml_to_zip<W: std::io::Write + std::io::Seek>(
         &self,
         zip: &mut ZipWriter<W>,
         options: SimpleFileOptions,
         config_path: Option<&Path>,
+        config_driven: bool,
     ) -> Result<bool> {
         let config_path = match config_path {
             Some(path) => path,
@@ -626,12 +652,54 @@ impl BinaryBuilder {
         std::io::Write::flush(&mut std::io::stdout())?;
 
         let config_data = std::fs::read(config_path).context("Failed to read config.toml")?;
+        let config_data = if config_driven {
+            Self::sanitize_config_bytes_for_deploy(&config_data)
+        } else {
+            config_data
+        };
         zip.start_file("config.toml", options)
             .context("Failed to add config.toml to zip")?;
         zip.write_all(&config_data)
             .context("Failed to write config.toml to zip")?;
         println!(" ✅ ({})", config_path.display());
         Ok(true)
+    }
+
+    /// Rewrite a bundled `config.toml`'s inline DEV `token_secret` to the
+    /// `${CODE_MODE_SECRET}` env ref (H4, Phase 86 Plan 05).
+    ///
+    /// Replaces any `token_secret = "..."` assignment with
+    /// `token_secret = "${CODE_MODE_SECRET}"` (env-expanded by the toolkit config
+    /// parser at runtime) so the DEPLOYED artifact never carries the inline dev
+    /// literal. Operates on bytes-in / bytes-out; if the input is not valid UTF-8
+    /// or has no `token_secret` line, the bytes are returned unchanged. The local
+    /// on-disk config is untouched — only the bundled copy is rewritten (D-06).
+    fn sanitize_config_bytes_for_deploy(bytes: &[u8]) -> Vec<u8> {
+        let text = match std::str::from_utf8(bytes) {
+            Ok(t) => t,
+            Err(_) => return bytes.to_vec(),
+        };
+        let rewritten: String = text
+            .lines()
+            .map(|line| {
+                if line.trim_start().starts_with("token_secret") && line.contains('=') {
+                    let indent_len = line.len() - line.trim_start().len();
+                    format!(
+                        "{}token_secret = \"${{CODE_MODE_SECRET}}\"",
+                        &line[..indent_len]
+                    )
+                } else {
+                    line.to_string()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        // Preserve a trailing newline if the original had one.
+        let mut out = rewritten;
+        if text.ends_with('\n') {
+            out.push('\n');
+        }
+        out.into_bytes()
     }
 
     /// Resolve the server's config.toml path.
