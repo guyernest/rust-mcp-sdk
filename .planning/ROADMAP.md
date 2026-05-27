@@ -1518,7 +1518,7 @@ Plans:
 Plans:
 **Wave 1**
 
-- [ ] 86-01-PLAN.md — execute_batch bootstrap helper + `http` feature forward (pmcp/streamable-http) + asset/db-path resolver (demo_db_path, /var/task vs /tmp) + CONCRETE single-crate-deploy spike [wave 1]
+- [x] 86-01-PLAN.md — execute_batch bootstrap helper + `http` feature forward (pmcp/streamable-http) + asset/db-path resolver (demo_db_path, /var/task vs /tmp) + CONCRETE single-crate-deploy spike [wave 1]
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
@@ -1590,7 +1590,7 @@ Plans:
 | 83. Toolkit Core Lift | 9/9 | Complete   | 2026-05-18 |
 | 84. SQL Connectors | 9/9 | Complete   | 2026-05-26 |
 | 85. Shape A + Reference Parity | 10/10 | Complete    | 2026-05-27 |
-| 86. Shapes B/C/D | 0/? | Not started | - |
+| 86. Shapes B/C/D | 1/6 | In Progress|  |
 | 87. Type 2 Authoring Skills Server | 0/? | Not started | - |
 | 88. Dogfood `pmcp-server` | 0/? | Not started | - |
 | 89. Documentation & Migration | 0/? | Not started | - |

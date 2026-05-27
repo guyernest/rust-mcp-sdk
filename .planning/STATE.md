@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v2.2
 milestone_name: Configuration-Only MCP Servers
 status: executing
-stopped_at: Phase 86 context gathered
-last_updated: "2026-05-27T06:07:32.011Z"
-last_activity: 2026-05-27 -- Phase 86 planning complete
+stopped_at: Completed 86-01-PLAN.md
+last_updated: "2026-05-27T13:33:00.966Z"
+last_activity: 2026-05-27
 progress:
   total_phases: 44
   completed_phases: 37
   total_plans: 171
-  completed_plans: 165
+  completed_plans: 166
   percent: 84
 ---
 
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-05-17)
 
 **Core value:** Enterprise developers build production-grade SQL MCP servers from configuration + schema files alone — no Rust required — while preserving PMCP's security, tools/resources/prompts/tasks/skills standards and pmcp.run hosting integration.
-**Current focus:** Phase 85 — shape-a-pure-config-binary-reference-parity
+**Current focus:** Phase 86 — shapes-b-c-d-scaffold-library-example-deploy
 
 ## Current Position
 
-Phase: 999.1
-Plan: Not started
+Phase: 86 (shapes-b-c-d-scaffold-library-example-deploy) — EXECUTING
+Plan: 2 of 6
 Status: Ready to execute
-Last activity: 2026-05-27 -- Phase 86 planning complete
+Last activity: 2026-05-27
 
 **Carryover from v2.1:** Phase 81 (update-pmcp-book-and-pmcp-course-with-v2-advanced-topics-cod) was executing at v2.1 close; will be tracked separately and folded into v2.1 completion. Operator follow-ups deferred from Phase 75 Wave 5 still pending: (a) merge Phase 75 Wave 5 + 75.5 to paiml/rust-mcp-sdk:main; (b) post-merge run `gh workflow run quality-badges.yml -R paiml/rust-mcp-sdk` and append observation to `.planning/phases/75-fix-pmat-issues/75-05-GATE-VERIFICATION.md` "## Badge flip observation" section.
 
@@ -148,6 +148,10 @@ Inherited from v2.1 (see PROJECT.md + prior Decisions log):
 - [Phase ?]: [Phase 85 Plan 07] Gap 1 closed: sql_require_limit added (additive #[serde(default)]) to pmcp-code-mode CodeModeConfig + enforced in check_sql_config_authorization Select arm (missing_limit rule); toolkit build_cm_config now maps section.require_limit -> cfg.sql_require_limit (was discarded _require_limit_gap). Bare SELECT rejected independent of sql_max_rows; LIMITed read + writes unaffected.
 - [Phase ?]: [Phase 85 Plan 09] Gap 3 closed: assemble.rs synthesizes code-mode://instructions + code-mode://policies from [code_mode] config + dialect, merged (dedup-by-URI, operator override wins) before prompt resolution; the start_code_mode prompt's 2 previously-warn-skipped include_resources now resolve; policy body renders NON-secret fields only (token_secret never emitted, T-85-09-01); merge_schema_resource /schema override scoped to first match.
 - [Phase ?]: 85-08: SC-3 negative-path parity gate strengthened — parity_chinook.rs now gates on per-step StepResult.success (continue_on_failure-independent) plus a presence guard for the 5 policy-rejection scenarios; fixtures byte-unchanged; two-sided regression proof recorded (Gap 1 reverted -> no-LIMIT step fails; restored -> green)
+- [Phase ?]: [Plan 86-01] execute_batch is an inherent method on the concrete SqliteConnector (NOT the locked SqlConnector trait) — callers invoke it before the Arc<dyn> wrap (Review H2); mirrors execute()'s spawn_blocking shape, batch failures map to ConnectorError::Query
+- [Phase ?]: [Plan 86-01] H1 path resolution decided ONCE: demo_db_path()=/tmp/demo.db under Lambda (LAMBDA_TASK_ROOT set), else relative demo.db; config.toml/schema.sql via pmcp::assets::load_string (Lambda /var/task/assets, local cwd/PMCP_ASSETS_DIR). Exported for 86-02/03/05.
+- [Phase ?]: [Plan 86-01] toolkit http=[pmcp/streamable-http] feature is opt-in (NOT default) — required because [[example]] required-features can only name toolkit features and the toolkit pmcp dep is default-features=false; dev-dep tokio widened to rt-multi-thread, published deps tokio unchanged.
+- [Phase ?]: [Plan 86-01 SPIKE] RESEARCH Open Q#2 = NO: find_lambda_package_dir (builder.rs:312) does NOT resolve a single-crate layout (needs <server>-lambda dir or *-lambda pkg with bootstrap, else bail). Plan 05 MUST add cargo-pmcp/src/deployment/builder.rs to files_modified; seam = build_lambda_binary call at builder.rs:132; scaffolded deploy.toml MUST set target_type=pmcp-run (get_target_id has no shape inference); bundler puts config.toml at zip root + assets under assets/ (H1 validated).
 
 ### Roadmap Evolution
 
@@ -196,6 +200,7 @@ Inherited from v2.1 (see PROJECT.md + prior Decisions log):
 | Phase 85 P09 | 4min | 1 tasks | 1 files |
 | Phase 85 P08 | 12m | 1 tasks | 1 files |
 | Phase 85 P10 | 9min | 2 tasks | 6 files |
+| Phase 86 P01 | 15min | 2 tasks | 3 files |
 
 ### Last Activity
 
@@ -213,6 +218,6 @@ Inherited from v2.1 (see PROJECT.md + prior Decisions log):
 
 ## Session Continuity
 
-Last session: 2026-05-27T04:48:49.917Z
-Stopped at: Phase 86 context gathered
+Last session: 2026-05-27T13:33:00.960Z
+Stopped at: Completed 86-01-PLAN.md
 Resume: Plan 85-03 COMPLETE — scaffolded `crates/pmcp-sql-server` (Shape A pure-config binary): feature-gated 4-connector manifest (sqlite/postgres/mysql/athena, all default-on D-07), lib/main split with a placeholder `lib::run()` Wave 2 replaces. Vendored FOUR self-contained parity fixtures into the SDK repo (closes RESEARCH Open Q#1): the DATA-BEARING `tests/fixtures/chinook.db` (~984 KB, REVIEW FIX #1 — real rows for the parity replay), the SEPARATE `chinook.ddl` (11 CREATE TABLE, the --schema text input D-06), `generated.yaml` (29-scenario contract), and `reference-config.toml` — all publish-excluded via `exclude = [tests/, …]`. 6-test `schema_fixture.rs` proves the DB returns Rock/AC-DC through the real SqliteConnector, the DDL builds a standalone 11-table schema, and generated.yaml parses as a `mcp_tester::TestScenario`. REF-02 fixture foundation done. Next: Plan 85-04 (Wave 2) fills `lib::run()` with the real config-load → connector-select → `pmcp::Server` assembly → transport-serve pipeline; Plan 85-06 replays the 29 scenarios against the vendored DB. NOTE: plan counter advanced 2→3 (monotonic) but plan 85-02 is a parallel Wave-1 plan whose SUMMARY is still pending; progress recalc (157/161, 98%) reflects disk truth.
