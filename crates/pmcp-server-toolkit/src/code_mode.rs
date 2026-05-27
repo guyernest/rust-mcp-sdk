@@ -272,15 +272,38 @@ fn map_auto_approve_levels(levels: &[String], cfg: &mut CodeModeConfig) {
     }
 }
 
-/// Per review R9: `token_secret` is `env:`-only by default. Inline literals
-/// are REJECTED at config-validation time unless
+/// Extract `NAME` from a string of the exact shape `${NAME}`.
+///
+/// Returns `Some(name)` only when `raw` both starts with `${` and ends with `}`
+/// AND `name` is non-empty. A string that merely *contains* `${` (e.g. an
+/// Athena `output_location` substring, or a malformed `${` without a closing
+/// brace) returns `None`, so it falls through to the existing inline-secret
+/// handling (still rejected unless the dev flag is set). This is what scopes
+/// `${VAR}` expansion to `token_secret` only and preserves the R9 guarantee
+/// (REVIEW FIX #6).
+fn expand_braced_var(raw: &str) -> Option<&str> {
+    let inner = raw.strip_prefix("${")?.strip_suffix('}')?;
+    if inner.is_empty() {
+        return None;
+    }
+    Some(inner)
+}
+
+/// Per review R9: `token_secret` is `env:`- or `${VAR}`-only by default. Inline
+/// literals are REJECTED at config-validation time unless
 /// `allow_inline_token_secret_for_dev` is set. Returns the resolved bytes
 /// wrapped in the toolkit-owned [`SecretValue`] (per review R6).
 ///
 /// Accepted forms:
 /// - `token_secret = "env:VAR_NAME"` — reads `VAR_NAME` from the process env.
+/// - `token_secret = "${VAR_NAME}"` — reads `VAR_NAME` from the process env
+///   (the form every reference SQL-API config emits, Plan 85-01 Gap #3).
 /// - `token_secret = "raw-string"` — REJECTED unless
 ///   `allow_inline_token_secret_for_dev = true`.
+///
+/// A missing/unset env var (either form) returns
+/// [`ToolkitError::CodeMode`] — never a panic, never a fall-back to a weak or
+/// empty secret (threat-model item T-85-01-01).
 fn resolve_token_secret(section: &CodeModeSection) -> Result<SecretValue> {
     let raw = section.token_secret.as_ref().ok_or_else(|| {
         ToolkitError::CodeMode(
@@ -288,6 +311,13 @@ fn resolve_token_secret(section: &CodeModeSection) -> Result<SecretValue> {
         )
     })?;
     if let Some(var) = raw.strip_prefix("env:") {
+        return std::env::var(var)
+            .map(|s| SecretValue::new(s.into_bytes()))
+            .map_err(|_| {
+                ToolkitError::CodeMode(format!("env var '{var}' not set for token_secret"))
+            });
+    }
+    if let Some(var) = expand_braced_var(raw) {
         return std::env::var(var)
             .map(|s| SecretValue::new(s.into_bytes()))
             .map_err(|_| {
