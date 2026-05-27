@@ -36,13 +36,14 @@
 //! `name`/`version` strings without an error. The strict-validated convenience
 //! is what production callers should reach for.
 //!
-//! REF-01 superset enumeration (from `tests/fixtures/{open-images,imdb,msr-vtt}-config.toml`):
+//! REF-01 superset enumeration (from `tests/fixtures/{open-images,imdb,msr-vtt,reference}-config.toml`;
+//! the SQLite Chinook `reference-config.toml` was lifted in Plan 85-01):
 //!
 //! ```text
-//! [server]            : id, name, description, type, version
+//! [server]            : id, name, description, type, version, is_reference
 //! [metadata]          : display_name, short_description, description, tags, author, visibility
 //! [database]          : type, database, output_location, workgroup, query_timeout_ms,
-//!                       [[database.tables]], [database.pool]
+//!                       url, file_path, [[database.tables]], [database.pool]
 //! [[database.tables]] : name, description
 //! [database.pool]     : max_connections, connection_timeout_seconds
 //! [code_mode]         : enabled, server_id, allow_writes, allow_deletes, allow_ddl,
@@ -50,6 +51,7 @@
 //!                       auto_approve_levels, token_ttl_seconds, token_secret,
 //!                       [code_mode.limits]
 //! [code_mode.limits]  : max_tables_per_query, max_join_depth, max_subquery_depth
+//! [shared_policy_store] : creates_shared_store, export_to_ssm, ssm_path, templates
 //! [[tools]]           : name, description, sql, ui_resource_uri,
 //!                       [[tools.parameters]], [tools.annotations]
 //! [[tools.parameters]] : name, type, description, required, default, max_length,
@@ -125,6 +127,14 @@ pub struct ServerConfig {
     /// `[[resources]]` — declarative resource surface.
     #[serde(default)]
     pub resources: Vec<ResourceDecl>,
+
+    /// `[shared_policy_store]` (optional) — AVP/Cedar shared-policy-store
+    /// declaration emitted by the reference SQL server (`is_reference = true`),
+    /// which provisions the policy store all sibling SQL servers attach to.
+    /// Additive per the REF-01 superset invariant (Plan 85-01); parsed
+    /// verbatim — the toolkit does not provision SSM at parse time.
+    #[serde(default)]
+    pub shared_policy_store: Option<SharedPolicyStoreSection>,
 }
 
 impl ServerConfig {
@@ -248,6 +258,12 @@ pub struct ServerSection {
     /// Semver version string (required for production via [`ServerConfig::validate`]).
     #[serde(default)]
     pub version: String,
+    /// Whether this server is the **reference** server that provisions shared
+    /// infrastructure (the `[shared_policy_store]` for all sibling SQL servers).
+    /// Additive per the REF-01 superset invariant (Plan 85-01); the SQLite
+    /// Chinook reference config sets `is_reference = true`.
+    #[serde(default)]
+    pub is_reference: bool,
 }
 
 // -----------------------------------------------------------------------------
@@ -316,6 +332,13 @@ pub struct DatabaseSection {
     /// (uses `database` for the file path or `:memory:` literal).
     #[serde(default)]
     pub url: Option<String>,
+    /// Filesystem path to a SQLite database file (e.g.
+    /// `"/var/task/assets/chinook.db"` for a Lambda-bundled asset). Additive per
+    /// the REF-01 superset invariant (Plan 85-01). Distinct from `database`
+    /// (which carries the `:memory:` literal or a schema name) and `url` (used
+    /// by Postgres / MySQL). Stored verbatim; the SQLite connector resolves it.
+    #[serde(default)]
+    pub file_path: Option<String>,
     /// `[database.pool]` — connection-pool tuning (optional).
     #[serde(default)]
     pub pool: Option<DatabasePoolSection>,
@@ -423,6 +446,38 @@ pub struct CodeModeLimits {
     /// Maximum subquery nesting depth.
     #[serde(default)]
     pub max_subquery_depth: Option<u32>,
+}
+
+// -----------------------------------------------------------------------------
+// [shared_policy_store]
+// -----------------------------------------------------------------------------
+
+/// `[shared_policy_store]` section — AVP/Cedar shared-policy-store declaration.
+///
+/// Emitted only by the **reference** SQL server (`[server] is_reference = true`),
+/// which provisions a single shared policy store + a set of Cedar templates that
+/// all sibling SQL servers attach to (rather than each minting its own store).
+///
+/// Additive per the REF-01 superset invariant (Plan 85-01). The toolkit parses
+/// this verbatim — SSM export and store provisioning are deployment-time
+/// concerns handled outside config parsing (D-02 parse-only + lazy startup).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(deny_unknown_fields)]
+pub struct SharedPolicyStoreSection {
+    /// Whether this server creates the shared policy store for all SQL servers.
+    #[serde(default)]
+    pub creates_shared_store: bool,
+    /// Whether the created store's identifier is exported to SSM Parameter Store.
+    #[serde(default)]
+    pub export_to_ssm: bool,
+    /// SSM Parameter Store path the store identifier is exported to (when
+    /// `export_to_ssm = true`).
+    #[serde(default)]
+    pub ssm_path: Option<String>,
+    /// Cedar policy-template names included in the shared store (e.g.
+    /// `"PermitAllSelects"`, `"ForbidAllDeletes"`).
+    #[serde(default)]
+    pub templates: Vec<String>,
 }
 
 // -----------------------------------------------------------------------------
