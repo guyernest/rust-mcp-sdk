@@ -184,6 +184,7 @@ Inherited from v2.1 (see PROJECT.md + prior Decisions log):
 |---|-------------|------|--------|--------|-----------|
 | 260516-b2p | AuthProvider::on_unauthorized + transport retry-once + MSRV 1.91 + pmcp 2.8.0 ripple | 2026-05-16 | aba393aa | Shipped (PR [#256](https://github.com/paiml/rust-mcp-sdk/pull/256)) | [260516-b2p-add-authprovider-on-unauthorized-hook-tr](./quick/260516-b2p-add-authprovider-on-unauthorized-hook-tr/) |
 | 260517-hi5 | Extract `x-pmcp-claim-custom-*` headers in `extract_auth_from_proxy_headers` (Cognito `custom:*` attribute forwarding) | 2026-05-17 | bbc019ba | Done | [260517-hi5-extract-x-pmcp-claim-custom-headers-in-e](./quick/260517-hi5-extract-x-pmcp-claim-custom-headers-in-e/) |
+| 260527-lo3 | Fix `cargo pmcp deploy` root-resolution regression — `find_deploy_root()` anchors on `.pmcp/deploy.toml` (cwd-inclusive) + `--manifest-path` override + init Jidoka hard-error guard. Fixes nested `multi-crate-isolated` monorepo layouts (regression vs 0.6.x). | 2026-05-27 | 0a3bdd9d | Done | [260527-lo3-fix-cargo-pmcp-deploy-root-resolution-re](./quick/260527-lo3-fix-cargo-pmcp-deploy-root-resolution-re/) |
 | Phase 82-builder-dx-prerequisites P02 | 25min | 4 tasks | 1 files |
 | Phase 83 P03 | 50min | 3 tasks | 3 files |
 | Phase 83 P04 | 40 min | 3 tasks | 4 files |
