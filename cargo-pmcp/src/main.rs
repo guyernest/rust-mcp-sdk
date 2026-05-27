@@ -88,14 +88,20 @@ enum Commands {
     /// common code (like HTTP bootstrap) across all servers.
     #[command(after_long_help = "Examples:
   cargo pmcp new my-project
-  cargo pmcp new my-project --path /tmp")]
+  cargo pmcp new my-project --path /tmp
+  cargo pmcp new my-sql-server --kind sql-server")]
     New {
-        /// Name of the workspace to create
+        /// Name of the workspace (or single crate, with --kind) to create
         name: String,
 
         /// Directory to create workspace in (defaults to current directory)
         #[arg(long)]
         path: Option<String>,
+
+        /// Project kind. Omit for the default multi-crate workspace; pass
+        /// `sql-server` to emit a single runnable config-driven SQL server crate.
+        #[arg(long)]
+        kind: Option<String>,
     },
 
     /// Add a component to the workspace
@@ -516,7 +522,9 @@ fn execute_command(command: Commands, global_flags: &GlobalFlags) -> Result<()> 
 /// unwraps for `Ok(())` compatibility.
 fn dispatch_trait_based(command: Commands, global_flags: &GlobalFlags) -> Option<Result<()>> {
     let result: Result<()> = match command {
-        Commands::New { name, path } => commands::new::execute(name, path, None, global_flags),
+        Commands::New { name, path, kind } => {
+            commands::new::execute(name, path, None, kind, global_flags)
+        },
         Commands::Add { component } => execute_add(component, global_flags),
         Commands::Test { command } => command.execute(global_flags),
         Commands::Auth { command } => command.execute(global_flags),

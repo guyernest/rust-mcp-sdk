@@ -4,5 +4,6 @@ pub mod mcp_app;
 pub mod oauth;
 pub mod server;
 pub mod server_common;
+pub mod sql_server;
 pub mod sqlite_explorer;
 pub mod workspace;
