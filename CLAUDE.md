@@ -229,13 +229,17 @@ make test-integration   # Integration tests
 6. `pmcp-toolkit-postgres` (depends on pmcp-server-toolkit + tokio-postgres + deadpool-postgres)
 7. `pmcp-toolkit-mysql` (depends on pmcp-server-toolkit + sqlx)
 8. `pmcp-toolkit-athena` (depends on pmcp-server-toolkit + aws-sdk-athena)
-9. `mcp-tester` (depends on pmcp)
-10. `mcp-preview` (depends on widget-utils)
-11. `cargo-pmcp` (depends on pmcp, mcp-tester, mcp-preview)
+9. `pmcp-sql-server` (Shape A pure-config binary; depends on pmcp-server-toolkit + all four connector crates — must publish AFTER items 5–8; no inter-dep with mcp-tester)
+10. `mcp-tester` (depends on pmcp)
+11. `mcp-preview` (depends on widget-utils)
+12. `cargo-pmcp` (depends on pmcp, mcp-tester, mcp-preview)
 
 The three per-backend connector crates (`pmcp-toolkit-postgres`, `-mysql`, `-athena`)
 have no inter-dependencies — they may publish in any order relative to each other,
-but all must publish AFTER `pmcp-server-toolkit`.
+but all must publish AFTER `pmcp-server-toolkit`. `pmcp-sql-server` depends on the
+toolkit plus all three connector crates (and the SQLite feature), so it must publish
+AFTER all of items 5–8; it has no inter-dependency with `mcp-tester` (which it uses
+only as a `[dev-dependencies]` parity-test harness, not a published dependency).
 
 ### Pre-Flight Checklist
 Before starting a release, verify:

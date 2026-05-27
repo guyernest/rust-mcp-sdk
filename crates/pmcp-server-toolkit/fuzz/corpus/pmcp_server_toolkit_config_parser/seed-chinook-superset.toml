@@ -1,0 +1,64 @@
+# Fuzz corpus seed: Chinook-superset config (Plan 85-06, T-85-06-01).
+#
+# Exercises the Plan 85-01 superset fields the prior seeds did not cover:
+#   - [server] is_reference        (the reference server flag)
+#   - [database] file_path         (SQLite file path; distinct from `url`)
+#   - [shared_policy_store]         (AVP/Cedar template export block)
+#
+# Diversity (Gemini suggestion): mixes BOTH token-secret indirection forms so the
+# config parser + downstream resolution logic see them under mutation —
+#   - token_secret = "${CODE_MODE_SECRET}"  (Plan 85-01 ${VAR} expansion form)
+#   - url          = "env:DATABASE_URL"      (env:VAR connector-resolution form)
+# Both are stored verbatim by the parser; only token_secret is ${VAR}-expanded at
+# code-mode wiring time, url at connector construction — the parser must accept
+# either spelling without panicking (the fuzz target's no-panic invariant).
+
+[server]
+id = "sql-reference"
+name = "Chinook Superset Fuzz Seed"
+version = "1.0.0"
+type = "sql-api"
+is_reference = true
+
+[database]
+type = "sqlite"
+file_path = "/var/task/assets/chinook.db"
+# env:VAR form on a sibling field — exercises the alternate indirection spelling
+# even though SQLite ignores `url` (REF-01 superset: extra fields are tolerated).
+url = "env:DATABASE_URL"
+
+[[database.tables]]
+name = "Artist"
+description = "Music artists"
+
+[code_mode]
+enabled = true
+allow_writes = true
+allow_deletes = false
+allow_ddl = false
+require_limit = true
+max_limit = 1000
+# ${VAR} form — Plan 85-01 token_secret expansion.
+token_secret = "${CODE_MODE_SECRET}"
+
+[shared_policy_store]
+creates_shared_store = true
+export_to_ssm = true
+ssm_path = "/pmcp/policy-stores/sql-api"
+templates = [
+  "PermitAllSelects",
+  "ForbidAllDeletes",
+  "ForbidAllDDL",
+]
+
+[[tools]]
+name = "list_artists"
+description = "List all artists"
+sql = "SELECT ArtistId, Name FROM Artist ORDER BY Name LIMIT :limit"
+
+[[tools.parameters]]
+name = "limit"
+type = "integer"
+description = "Maximum number of artists to return"
+required = false
+default = 20

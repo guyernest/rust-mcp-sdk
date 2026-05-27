@@ -125,6 +125,25 @@ fn load_config_and_schema(args: &Args) -> Result<(ServerConfig, String), RunErro
 /// # Errors
 ///
 /// [`RunError::Serve`] if binding the listener fails (e.g. the port is in use).
+///
+/// # Example
+///
+/// ```no_run
+/// use std::sync::Arc;
+/// use pmcp_sql_server::{build_server, serve};
+/// use pmcp_server_toolkit::ServerConfig;
+/// use pmcp_server_toolkit::sql::{SqlConnector, SqliteConnector};
+///
+/// # async fn demo() -> Result<(), Box<dyn std::error::Error>> {
+/// let cfg = ServerConfig::default();
+/// let connector: Arc<dyn SqlConnector> = Arc::new(SqliteConnector::open_in_memory()?);
+/// let server = build_server(&cfg, connector, "-- ddl --".into())?;
+/// let (bound, handle) = serve(server, "127.0.0.1:0".parse()?).await?;
+/// println!("listening on http://{bound}");
+/// handle.abort();
+/// # Ok(())
+/// # }
+/// ```
 pub async fn serve(
     server: Server,
     addr: SocketAddr,
@@ -151,6 +170,24 @@ pub async fn serve(
 ///
 /// Any [`RunError`] variant — file I/O, config parse/validate, backend dispatch,
 /// server assembly, address parse, or transport startup.
+///
+/// # Example
+///
+/// ```no_run
+/// use pmcp_sql_server::{run_serving, Args};
+///
+/// # async fn demo() -> Result<(), Box<dyn std::error::Error>> {
+/// let args = Args {
+///     config: "config.toml".into(),
+///     schema: "schema.ddl".into(),
+///     http: "127.0.0.1:0".to_string(), // ephemeral port
+/// };
+/// let (bound, handle) = run_serving(&args).await?;
+/// println!("listening on http://{bound}");
+/// handle.abort(); // stop serving
+/// # Ok(())
+/// # }
+/// ```
 pub async fn run_serving(args: &Args) -> Result<(SocketAddr, JoinHandle<()>), RunError> {
     let (cfg, schema_ddl) = load_config_and_schema(args)?;
     let connector = dispatch(&cfg).await?;
@@ -179,6 +216,23 @@ pub async fn run_serving(args: &Args) -> Result<(SocketAddr, JoinHandle<()>), Ru
 ///
 /// Any [`RunError`] variant — file I/O, config parse/validate, backend dispatch,
 /// server assembly, address parse, or transport startup.
+///
+/// # Example
+///
+/// ```no_run
+/// use pmcp_sql_server::{run, Args};
+///
+/// # async fn demo() -> Result<(), Box<dyn std::error::Error>> {
+/// // Equivalent to `pmcp-sql-server --config config.toml --schema schema.ddl`.
+/// run(Args {
+///     config: "config.toml".into(),
+///     schema: "schema.ddl".into(),
+///     http: "127.0.0.1:8080".to_string(),
+/// })
+/// .await?; // blocks serving until the task ends
+/// # Ok(())
+/// # }
+/// ```
 pub async fn run(args: Args) -> Result<(), RunError> {
     // Best-effort log init (ignored if a global subscriber is already set, e.g.
     // when a test process has installed one).
