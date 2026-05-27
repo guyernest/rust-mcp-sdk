@@ -1526,7 +1526,7 @@ Plans:
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [ ] 86-03-PLAN.md — Shape B: `new --kind sql-server` single-crate emitter (emits the Shape C wiring) + scoped README docs [wave 3]
+- [x] 86-03-PLAN.md — Shape B: `new --kind sql-server` single-crate emitter (emits the Shape C wiring) + scoped README docs [wave 3]
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
@@ -1590,7 +1590,7 @@ Plans:
 | 83. Toolkit Core Lift | 9/9 | Complete   | 2026-05-18 |
 | 84. SQL Connectors | 9/9 | Complete   | 2026-05-26 |
 | 85. Shape A + Reference Parity | 10/10 | Complete    | 2026-05-27 |
-| 86. Shapes B/C/D | 2/6 | In Progress|  |
+| 86. Shapes B/C/D | 3/6 | In Progress|  |
 | 87. Type 2 Authoring Skills Server | 0/? | Not started | - |
 | 88. Dogfood `pmcp-server` | 0/? | Not started | - |
 | 89. Documentation & Migration | 0/? | Not started | - |
