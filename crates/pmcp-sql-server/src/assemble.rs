@@ -103,7 +103,12 @@ pub fn merge_schema_resource(cfg: &ServerConfig, schema_ddl: &str) -> Vec<Resour
         .resources
         .iter()
         .map(|r| {
-            let is_schema = r.uri.ends_with(SCHEMA_URI_SUFFIX);
+            // Scope the override to the SINGLE intended schema resource: only the
+            // FIRST `/schema`-suffixed resource is overridden with the --schema
+            // DDL. Any subsequent `/schema`-suffixed resource passes through with
+            // its configured content (defends against a config declaring more
+            // than one such URI — REVIEW Gap 3 follow-up).
+            let is_schema = !found_schema && r.uri.ends_with(SCHEMA_URI_SUFFIX);
             if is_schema {
                 found_schema = true;
             }
@@ -146,7 +151,186 @@ pub fn merge_schema_resource(cfg: &ServerConfig, schema_ddl: &str) -> Vec<Resour
     configs
 }
 
-/// Build the [`StaticResourceHandler`] from the schema-merged resource configs.
+/// URI of the synthesized code-mode instructions resource.
+const INSTRUCTIONS_URI: &str = "code-mode://instructions";
+
+/// URI of the synthesized code-mode policies resource.
+const POLICIES_URI: &str = "code-mode://policies";
+
+/// Synthesize the `code-mode://instructions` resource from the `[code_mode]`
+/// config + the configured backend dialect (REVIEW Gap 3).
+///
+/// Returns `None` when `[code_mode]` is absent — backward-compatible: with no
+/// code-mode there is nothing to instruct, and assembly does NOT synthesize.
+///
+/// The reference config documents that this resource is "auto-generated from
+/// templates at server startup … with `{dialect}` dialect"; this helper is that
+/// template. The body explains the `validate_code` → token → `execute_code`
+/// flow and names the dialect derived from `cfg.database.backend_type`.
+#[must_use]
+fn synthesize_instructions_resource(cfg: &ServerConfig) -> Option<ResourceConfig> {
+    if cfg.code_mode.is_none() {
+        return None;
+    }
+    let dialect = dialect_label(cfg);
+    let body = format!(
+        "# Code Mode Instructions — {dialect}\n\n\
+         Code Mode generates and runs {dialect} SQL on your behalf. The flow is:\n\n\
+         1. Call `validate_code` with your SQL. It is checked against the active\n   \
+         policy (see the Code Mode Policies section). On success you receive an\n   \
+         approval token.\n\
+         2. Call `execute_code` with that token to run the validated SQL and\n   \
+         receive the rows.\n\n\
+         Generate a single statement per call. Honor the policy: do not attempt\n\
+         writes, deletes, or DDL the policy forbids, and include a `LIMIT` when\n\
+         the policy requires one.\n"
+    );
+    Some(ResourceConfig {
+        uri: INSTRUCTIONS_URI.to_string(),
+        name: "Code Mode Instructions".to_string(),
+        description: Some("How to use Code Mode (validate_code → execute_code)".to_string()),
+        mime_type: "text/markdown".to_string(),
+        content: Some(body),
+        content_file: None,
+        meta: None,
+    })
+}
+
+/// Synthesize the `code-mode://policies` resource from the `[code_mode]` config
+/// fields (REVIEW Gap 3).
+///
+/// Returns `None` when `[code_mode]` is absent.
+///
+/// T-85-09-01: this renders only NON-secret policy settings — `token_secret`
+/// is NEVER read or emitted. The body is a deterministic Markdown key/value
+/// list so a content assertion can lock specific field text.
+#[must_use]
+fn synthesize_policies_resource(cfg: &ServerConfig) -> Option<ResourceConfig> {
+    let cm = cfg.code_mode.as_ref()?;
+
+    let mut body = String::with_capacity(512);
+    body.push_str("# Code Mode Policies\n\n");
+    body.push_str("The active authorization policy for generated SQL:\n\n");
+    let line = |b: &mut String, k: &str, v: &str| {
+        b.push_str("- `");
+        b.push_str(k);
+        b.push_str("`: ");
+        b.push_str(v);
+        b.push('\n');
+    };
+    line(&mut body, "enabled", &cm.enabled.to_string());
+    line(&mut body, "allow_writes", &cm.allow_writes.to_string());
+    line(&mut body, "allow_deletes", &cm.allow_deletes.to_string());
+    line(&mut body, "allow_ddl", &cm.allow_ddl.to_string());
+    line(&mut body, "require_limit", &cm.require_limit.to_string());
+    line(&mut body, "max_limit", &opt_to_string(cm.max_limit));
+    line(
+        &mut body,
+        "blocked_tables",
+        &join_or_none(&cm.blocked_tables),
+    );
+    line(
+        &mut body,
+        "sensitive_columns",
+        &join_or_none(&cm.sensitive_columns),
+    );
+    line(
+        &mut body,
+        "auto_approve_levels",
+        &join_or_none(&cm.auto_approve_levels),
+    );
+    line(
+        &mut body,
+        "token_ttl_seconds",
+        &opt_to_string(cm.token_ttl_seconds),
+    );
+    if let Some(limits) = &cm.limits {
+        body.push_str("\n## Complexity Limits\n\n");
+        line(
+            &mut body,
+            "max_tables_per_query",
+            &opt_to_string(limits.max_tables_per_query),
+        );
+        line(
+            &mut body,
+            "max_join_depth",
+            &opt_to_string(limits.max_join_depth),
+        );
+        line(
+            &mut body,
+            "max_subquery_depth",
+            &opt_to_string(limits.max_subquery_depth),
+        );
+    }
+
+    Some(ResourceConfig {
+        uri: POLICIES_URI.to_string(),
+        name: "Code Mode Policies".to_string(),
+        description: Some("Active code-mode authorization policy".to_string()),
+        mime_type: "text/markdown".to_string(),
+        content: Some(body),
+        content_file: None,
+        meta: None,
+    })
+}
+
+/// Human-readable dialect label for the prompt, derived from
+/// `cfg.database.backend_type` (e.g. `"sqlite"` → `"SQLite"`). Defaults to
+/// `"SQL"` when no backend is declared. For Shape A the backend string is
+/// sufficient to label the instructions — no live connector is needed.
+fn dialect_label(cfg: &ServerConfig) -> &'static str {
+    match cfg.database.backend_type.as_deref() {
+        Some("sqlite") => "SQLite",
+        Some("postgres") => "PostgreSQL",
+        Some("mysql") => "MySQL",
+        Some("athena") => "Athena",
+        _ => "SQL",
+    }
+}
+
+/// Render an `Option<u64>`/`Option<u32>` policy value as `"none"` or its number.
+fn opt_to_string<T: std::fmt::Display>(value: Option<T>) -> String {
+    value.map_or_else(|| "none".to_string(), |v| v.to_string())
+}
+
+/// Join a policy string list as a comma-separated value, or `"none"` when empty.
+fn join_or_none(values: &[String]) -> String {
+    if values.is_empty() {
+        "none".to_string()
+    } else {
+        values.join(", ")
+    }
+}
+
+/// Assemble the full resource config set the prompt resolves against and the
+/// server serves: the schema-merged configured resources PLUS the synthesized
+/// `code-mode://instructions` + `code-mode://policies` resources.
+///
+/// Synthesized resources are appended ONLY when their URI is not already
+/// declared by the config — an operator `[[resources]]` block with the same URI
+/// WINS (T-85-09-03; dedup-by-exact-URI), matching the reference config's
+/// documented override path. With no `[code_mode]`, nothing is synthesized
+/// (backward-compatible).
+#[must_use]
+fn merged_resource_configs(cfg: &ServerConfig, schema_ddl: &str) -> Vec<ResourceConfig> {
+    let mut configs = merge_schema_resource(cfg, schema_ddl);
+    for synthesized in [
+        synthesize_instructions_resource(cfg),
+        synthesize_policies_resource(cfg),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        if !configs.iter().any(|r| r.uri == synthesized.uri) {
+            configs.push(synthesized);
+        }
+    }
+    configs
+}
+
+/// Build the [`StaticResourceHandler`] from the schema-merged + synthesized
+/// resource configs (so both prompt resolution AND the served resource surface
+/// see the synthesized code-mode instructions/policies).
 ///
 /// # Errors
 ///
@@ -157,7 +341,7 @@ fn build_resource_handler(
     cfg: &ServerConfig,
     schema_ddl: &str,
 ) -> Result<StaticResourceHandler, AssembleError> {
-    let merged = merge_schema_resource(cfg, schema_ddl);
+    let merged = merged_resource_configs(cfg, schema_ddl);
     Ok(StaticResourceHandler::from_configs(&merged)?)
 }
 
@@ -240,8 +424,12 @@ pub fn build_server(
 
 #[cfg(test)]
 mod tests {
-    use super::{merge_schema_resource, SCHEMA_HEADER, SCHEMA_URI_SUFFIX};
-    use pmcp_server_toolkit::ServerConfig;
+    use super::{
+        merge_schema_resource, merged_resource_configs, prompt_configs, SCHEMA_HEADER,
+        SCHEMA_URI_SUFFIX,
+    };
+    use pmcp::PromptHandler;
+    use pmcp_server_toolkit::{ServerConfig, StaticPromptHandler, StaticResourceHandler};
 
     fn cfg_with_resources() -> ServerConfig {
         let toml = r#"
@@ -309,6 +497,219 @@ content = "LEARNINGS BODY"
             .find(|r| r.uri == "code-mode://learnings")
             .expect("learnings preserved");
         assert_eq!(learnings.content.as_deref(), Some("LEARNINGS BODY"));
+    }
+
+    /// A config mirroring the reference `[code_mode]` block + the three declared
+    /// resources + the `start_code_mode` prompt whose `include_resources` lists
+    /// all five URIs (two of which are template-generated, not declared).
+    fn cfg_reference_shaped() -> ServerConfig {
+        let toml = r#"
+[server]
+name = "t"
+version = "0.1.0"
+
+[database]
+type = "sqlite"
+
+[code_mode]
+enabled = true
+allow_writes = true
+allow_deletes = false
+allow_ddl = false
+require_limit = true
+max_limit = 1000
+blocked_tables = []
+sensitive_columns = ["Password", "Phone", "Email"]
+auto_approve_levels = ["low"]
+token_ttl_seconds = 300
+token_secret = "${CODE_MODE_SECRET}"
+
+[code_mode.limits]
+max_tables_per_query = 5
+max_join_depth = 5
+max_subquery_depth = 3
+
+[[resources]]
+uri = "docs://chinook/schema"
+name = "Schema"
+content = "OLD SCHEMA"
+
+[[resources]]
+uri = "docs://chinook/examples"
+name = "Examples"
+content = "EXAMPLES BODY"
+
+[[resources]]
+uri = "code-mode://learnings"
+name = "Learnings"
+content = "LEARNINGS BODY"
+
+[[prompts]]
+name = "start_code_mode"
+description = "Load all context needed for Code Mode SQL generation"
+include_resources = [
+    "docs://chinook/schema",
+    "code-mode://instructions",
+    "code-mode://policies",
+    "docs://chinook/examples",
+    "code-mode://learnings",
+]
+"#;
+        ServerConfig::from_toml_strict_validated(toml).expect("parse")
+    }
+
+    /// Resolve the `start_code_mode` prompt body the SAME way the server serves
+    /// it: build the merged resource handler, run
+    /// `StaticPromptHandler::from_configs` against it, find the named prompt, and
+    /// drive its `PromptHandler::handle` to extract the served message text.
+    /// This asserts the REAL served body (the private `body` field is exposed
+    /// only through `handle`), so the test exercises the production path.
+    async fn resolved_prompt_body(cfg: &ServerConfig, schema_ddl: &str, name: &str) -> String {
+        let merged = merged_resource_configs(cfg, schema_ddl);
+        let handler = StaticResourceHandler::from_configs(&merged).expect("resource handler");
+        let (_, prompt) = StaticPromptHandler::from_configs(&prompt_configs(cfg), &handler)
+            .into_iter()
+            .find(|(n, _)| n == name)
+            .expect("prompt present");
+
+        let result = prompt
+            .handle(
+                std::collections::HashMap::new(),
+                pmcp::RequestHandlerExtra::default(),
+            )
+            .await
+            .expect("prompt handle");
+
+        // Join every text content part of the served messages.
+        result
+            .messages
+            .iter()
+            .filter_map(|m| match &m.content {
+                pmcp::types::Content::Text { text } => Some(text.clone()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[tokio::test]
+    async fn prompt_body_carries_synthesized_instructions_and_policies() {
+        let cfg = cfg_reference_shaped();
+        let body = resolved_prompt_body(&cfg, "CREATE TABLE t (id INT);", "start_code_mode").await;
+
+        // Instructions marker: synthesized from [code_mode] + dialect.
+        assert!(
+            body.contains("Code Mode Instructions"),
+            "prompt body carries the synthesized instructions marker, got:\n{body}"
+        );
+        assert!(
+            body.contains("validate_code") && body.contains("execute_code"),
+            "instructions explain the validate -> token -> execute flow"
+        );
+        assert!(
+            body.contains("SQLite"),
+            "instructions name the dialect derived from backend_type"
+        );
+
+        // Policy text reflecting the config: at least three distinct fields.
+        assert!(
+            body.contains("Code Mode Policies"),
+            "prompt body carries the synthesized policies marker"
+        );
+        assert!(
+            body.contains("require_limit"),
+            "policy body lists require_limit"
+        );
+        assert!(body.contains("max_limit"), "policy body lists max_limit");
+        assert!(
+            body.contains("allow_writes"),
+            "policy body lists allow_writes"
+        );
+        assert!(
+            body.contains("Email"),
+            "policy body lists a sensitive column name"
+        );
+
+        // T-85-09-01: the HMAC secret reference is NEVER rendered into the body.
+        assert!(
+            !body.contains("CODE_MODE_SECRET") && !body.contains("token_secret"),
+            "policy body MUST NOT leak the token_secret reference"
+        );
+    }
+
+    #[test]
+    fn merged_set_preserves_configured_resources_and_schema_override() {
+        let cfg = cfg_reference_shaped();
+        let merged = merged_resource_configs(&cfg, "CREATE TABLE t (id INT);");
+
+        // Schema override survives (no regression to Plan 05).
+        let schema = merged
+            .iter()
+            .find(|r| r.uri == "docs://chinook/schema")
+            .expect("schema present");
+        let schema_body = schema.content.as_deref().unwrap();
+        assert!(schema_body.starts_with(SCHEMA_HEADER));
+        assert!(schema_body.contains("CREATE TABLE t"));
+        assert!(!schema_body.contains("OLD SCHEMA"));
+
+        // The two other configured resources survive verbatim.
+        assert!(merged
+            .iter()
+            .any(|r| r.uri == "docs://chinook/examples"
+                && r.content.as_deref() == Some("EXAMPLES BODY")));
+        assert!(merged
+            .iter()
+            .any(|r| r.uri == "code-mode://learnings"
+                && r.content.as_deref() == Some("LEARNINGS BODY")));
+
+        // The two synthesized resources are now present.
+        assert!(merged.iter().any(|r| r.uri == "code-mode://instructions"));
+        assert!(merged.iter().any(|r| r.uri == "code-mode://policies"));
+    }
+
+    #[test]
+    fn no_code_mode_does_not_synthesize() {
+        let cfg = cfg_with_resources(); // no [code_mode] block
+        let merged = merged_resource_configs(&cfg, "DDL");
+        assert!(!merged.iter().any(|r| r.uri == "code-mode://instructions"));
+        assert!(!merged.iter().any(|r| r.uri == "code-mode://policies"));
+        // Still resolves whatever URIs it can (backward compatible) — only the
+        // three configured resources are present.
+        assert_eq!(merged.len(), 3);
+    }
+
+    #[test]
+    fn operator_override_of_synthesized_uri_wins() {
+        // T-85-09-03: a config-declared code-mode://policies wins over synthesis.
+        let toml = r#"
+[server]
+name = "t"
+version = "0.1.0"
+
+[database]
+type = "sqlite"
+
+[code_mode]
+enabled = true
+require_limit = true
+
+[[resources]]
+uri = "code-mode://policies"
+name = "Custom Policies"
+content = "OPERATOR-OVERRIDDEN POLICIES"
+"#;
+        let cfg = ServerConfig::from_toml_strict_validated(toml).expect("parse");
+        let merged = merged_resource_configs(&cfg, "DDL");
+        let policies: Vec<_> = merged
+            .iter()
+            .filter(|r| r.uri == "code-mode://policies")
+            .collect();
+        assert_eq!(policies.len(), 1, "no duplicate policies resource");
+        assert_eq!(
+            policies[0].content.as_deref(),
+            Some("OPERATOR-OVERRIDDEN POLICIES"),
+            "the configured resource wins over synthesis"
+        );
     }
 
     #[test]
