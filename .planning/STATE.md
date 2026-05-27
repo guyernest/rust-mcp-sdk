@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v2.2
 milestone_name: Configuration-Only MCP Servers
 status: executing
-stopped_at: Completed 86-04-PLAN.md (TEST-05 compiles via --no-run; full run deferred to orchestrator)
-last_updated: "2026-05-27T14:34:11.004Z"
+stopped_at: Completed 86-05-PLAN.md (Shape D config-driven deploy — H3/H1/H4/M3 + D-10 guard)
+last_updated: "2026-05-27T15:52:43.155Z"
 last_activity: 2026-05-27
 progress:
   total_phases: 44
   completed_phases: 37
   total_plans: 171
-  completed_plans: 169
+  completed_plans: 170
   percent: 84
 ---
 
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-05-17)
 ## Current Position
 
 Phase: 86 (shapes-b-c-d-scaffold-library-example-deploy) — EXECUTING
-Plan: 5 of 6
+Plan: 6 of 6
 Status: Ready to execute
 Last activity: 2026-05-27
 
@@ -159,6 +159,8 @@ Inherited from v2.1 (see PROJECT.md + prior Decisions log):
 - [Phase 86]: TEST-05 (cargo-pmcp/tests/scaffold_sql_server.rs) compiles via --no-run; full cold-tempdir execution deferred to the orchestrator (15+ min build of the unpublished toolkit)
 - [Phase 86]: scaffold_patch.rs [patch.crates-io] writer covers transitive unpublished deps (pmcp-code-mode, pmcp-widget-utils), not just pmcp + pmcp-server-toolkit
 - [Phase 86]: No [dev-dependencies] added to cargo-pmcp/Cargo.toml: mcp-tester/tempfile/tokio/serde_json already in [dependencies] (inherited by integration tests)
+- [Phase 86]: [Plan 86-05] cargo pmcp deploy handles a config-driven single-crate server with ZERO TargetEntry enum change (D-10): is_config_driven_project (config.toml+schema.sql+toolkit dep) detection + find_lambda_package_dir single-crate-root fallback (H3, project root IS the Lambda package); pmcp.run selected only by scaffold deploy.toml target_type=pmcp-run (M3, no shape inference)
+- [Phase 86]: [Plan 86-05] H4 secret posture = in-bundle rewrite (mechanism b): bundle_assets_if_configured rewrites token_secret to ${CODE_MODE_SECRET} for both the zip-root config.toml and the runtime-read assets/config.toml when config-driven; local on-disk config.toml keeps the inline DEV secret for cargo run (D-06). deploy.toml emitted to both root and .pmcp/ (DeployConfig::load reads .pmcp/)
 
 ### Roadmap Evolution
 
@@ -211,6 +213,7 @@ Inherited from v2.1 (see PROJECT.md + prior Decisions log):
 | Phase 86 P02 | 35min | 2 tasks | 5 files |
 | Phase 86 P03 | 7min | 2 tasks | 5 files |
 | Phase 86 P04 | 3min | 2 tasks | 2 files |
+| Phase 86 P05 | 18min | 3 tasks | 4 files |
 
 ### Last Activity
 
@@ -228,6 +231,6 @@ Inherited from v2.1 (see PROJECT.md + prior Decisions log):
 
 ## Session Continuity
 
-Last session: 2026-05-27T14:34:10.999Z
-Stopped at: Completed 86-04-PLAN.md (TEST-05 compiles via --no-run; full run deferred to orchestrator)
+Last session: 2026-05-27T15:52:43.150Z
+Stopped at: Completed 86-05-PLAN.md (Shape D config-driven deploy — H3/H1/H4/M3 + D-10 guard)
 Resume: Plan 85-03 COMPLETE — scaffolded `crates/pmcp-sql-server` (Shape A pure-config binary): feature-gated 4-connector manifest (sqlite/postgres/mysql/athena, all default-on D-07), lib/main split with a placeholder `lib::run()` Wave 2 replaces. Vendored FOUR self-contained parity fixtures into the SDK repo (closes RESEARCH Open Q#1): the DATA-BEARING `tests/fixtures/chinook.db` (~984 KB, REVIEW FIX #1 — real rows for the parity replay), the SEPARATE `chinook.ddl` (11 CREATE TABLE, the --schema text input D-06), `generated.yaml` (29-scenario contract), and `reference-config.toml` — all publish-excluded via `exclude = [tests/, …]`. 6-test `schema_fixture.rs` proves the DB returns Rock/AC-DC through the real SqliteConnector, the DDL builds a standalone 11-table schema, and generated.yaml parses as a `mcp_tester::TestScenario`. REF-02 fixture foundation done. Next: Plan 85-04 (Wave 2) fills `lib::run()` with the real config-load → connector-select → `pmcp::Server` assembly → transport-serve pipeline; Plan 85-06 replays the 29 scenarios against the vendored DB. NOTE: plan counter advanced 2→3 (monotonic) but plan 85-02 is a parallel Wave-1 plan whose SUMMARY is still pending; progress recalc (157/161, 98%) reflects disk truth.

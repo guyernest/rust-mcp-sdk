@@ -157,7 +157,7 @@ Four user-facing surfaces in this milestone (spike 004 menu).
 - [x] **SHAP-A-01**: Shape A — `pmcp-sql-server --config <file> --schema <file>` pure-config binary crate that spawns an MCP server from configuration + schema alone, zero Rust written by the developer. Acceptance check: running it against `pmcp-run/built-in/sql-api/servers/open-images/config.toml` (or `imdb` / `msr-vtt`) produces a server that responds to `tools/list`, `tools/call` for every `[[tools]]` entry, and the code-mode pair (`validate_code` / `execute_code`) with policy enforcement matching the production server's behavior
 - [x] **SHAP-B-01**: Shape B — `cargo pmcp new --kind sql-server` scaffolds a starter project with `Cargo.toml` (pinned toolkit + chosen backend dep), `main.rs` (12-line shape-C wiring), and `config.toml` (commented template) ready to `cargo run`
 - [x] **SHAP-C-01**: Shape C — A runnable `examples/` entry proves library use: an end-to-end MCP server in ≤15 lines of `main.rs` (library use of `pmcp-server-toolkit` + a chosen `pmcp-toolkit-<backend>` crate)
-- [ ] **SHAP-D-01**: Shape D — `cargo pmcp deploy` packages a config-only server (pure-Rust Lambda binary) and deploys it to pmcp.run as a hosted target; the `cargo pmcp configure` target system from Phase 77 accommodates config-only server targets without breaking changes
+- [x] **SHAP-D-01**: Shape D — `cargo pmcp deploy` packages a config-only server (pure-Rust Lambda binary) and deploys it to pmcp.run as a hosted target; the `cargo pmcp configure` target system from Phase 77 accommodates config-only server targets without breaking changes
 
 ### SEP-2640 Skills — Type 2 Authoring Skills
 
@@ -362,7 +362,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | SHAP-A-01 | Phase 85 | Complete |
 | SHAP-B-01 | Phase 86 | Complete |
 | SHAP-C-01 | Phase 86 | Complete |
-| SHAP-D-01 | Phase 86 | Pending |
+| SHAP-D-01 | Phase 86 | Complete |
 | SKLL-01 | Phase 87 | Pending |
 | SKLL-02 | Phase 87 | Pending |
 | SKLL-03 | Phase 87 | Pending |
