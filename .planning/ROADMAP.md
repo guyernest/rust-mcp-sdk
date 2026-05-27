@@ -1513,7 +1513,15 @@ Plans:
   3. `cargo pmcp deploy` packages a config-only server as a pure-Rust Lambda binary and deploys it to pmcp.run; the Phase 77 `cargo pmcp configure` target system handles config-only-server targets with **no breaking changes** to existing target variants
   4. A deploy integration test exercises at least one config-only-server deploy against a mock or real pmcp.run target and confirms the post-deploy lifecycle (Phase 79 `check` + `conformance` + `apps` verifier) runs cleanly
 
-**Plans**: TBD
+**Plans**: 6 plans
+
+Plans:
+- [ ] 86-01-PLAN.md — SqliteConnector::execute_batch bootstrap helper (+doctest/unit) + example slot reg + deploy single-crate-resolution spike [wave 1]
+- [ ] 86-02-PLAN.md — Shape C: ≤15-line serving example (toolkit + SQLite connector) + spawn-poll integration test + body-count assertion [wave 2]
+- [ ] 86-03-PLAN.md — Shape B: `new --kind sql-server` single-crate emitter (emits the Shape C wiring) + scoped README docs [wave 3]
+- [ ] 86-04-PLAN.md — TEST-05: tempdir scaffold -> patch-deps -> real cargo run -> poll -> tools/list + tools/call [wave 4]
+- [ ] 86-05-PLAN.md — Shape D: deploy config-driven detection seam + scaffold deploy.toml [assets] + TargetEntry-unchanged guard (D-10) [wave 4]
+- [ ] 86-06-PLAN.md — TEST-06: env-gated real pmcp.run deploy + Phase 79 check/conformance/apps lifecycle (D-11) [wave 5]
 
 ### Phase 87: Type 2 Authoring Skills MCP Server (`pmcp-config-helper`)
 
