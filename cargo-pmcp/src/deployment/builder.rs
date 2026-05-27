@@ -840,4 +840,115 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&tmp);
     }
+
+    /// H4 (Phase 86 Plan 05) — NON-CLOUD packaging + secret-posture test.
+    ///
+    /// Drives `bundle_assets_if_configured` against a scaffold-shaped tempdir
+    /// (config.toml + schema.sql + `.pmcp/deploy.toml` with the `[assets]` include)
+    /// using a DUMMY bootstrap file (only paths/contents are inspected — no real
+    /// deploy, no cloud), then inspects the produced `deployment.zip`:
+    ///
+    /// - it contains `assets/config.toml` and `assets/schema.sql` (H1 — where
+    ///   `pmcp::assets` reads at `/var/task/assets/`);
+    /// - the BUNDLED config bytes (both the zip-root `config.toml` and
+    ///   `assets/config.toml`) do NOT contain the inline DEV secret literal and DO
+    ///   contain `${CODE_MODE_SECRET}` (H4 — the deployed artifact never ships the
+    ///   dev secret).
+    ///
+    /// Lives in-module because `bundle_assets_if_configured` is a private method
+    /// (the plan's fallback when the bundler is unreachable from an integration
+    /// test, mirroring the M3 in-module approach).
+    #[test]
+    fn bundled_artifact_paths_and_secret_posture() {
+        let tmp = std::env::temp_dir().join(format!("pmcp-h4-bundle-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+
+        // Scaffold-shaped single-crate config-driven project.
+        write(
+            &tmp.join("Cargo.toml"),
+            "[package]\nname = \"demo\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n\
+             [dependencies]\npmcp-server-toolkit = \"0.1.0\"\n",
+        );
+        write(
+            &tmp.join("config.toml"),
+            "[code_mode]\nenabled = true\n\
+             token_secret = \"dev-only-insecure-secret-min-16-bytes\"\n\
+             allow_inline_token_secret_for_dev = true\n",
+        );
+        write(
+            &tmp.join("schema.sql"),
+            "CREATE TABLE IF NOT EXISTS books(id INTEGER);\n",
+        );
+        // Minimal parseable deploy descriptor with the [assets] include list.
+        write(
+            &tmp.join(".pmcp/deploy.toml"),
+            "[target]\ntype = \"pmcp-run\"\nversion = \"1.0.0\"\n\n\
+             [aws]\nregion = \"us-east-1\"\n\n\
+             [server]\nname = \"demo\"\nmemory_mb = 512\ntimeout_seconds = 30\n\n\
+             [environment]\nRUST_LOG = \"info\"\n\n\
+             [auth]\nenabled = false\nprovider = \"none\"\n\n\
+             [observability]\nlog_retention_days = 30\nenable_xray = false\ncreate_dashboard = false\n\n\
+             [assets]\ninclude = [\"config.toml\", \"schema.sql\"]\n",
+        );
+        // Dummy bootstrap (only its bytes are copied into the zip).
+        let dummy_bootstrap = tmp.join("dummy-bootstrap");
+        write(&dummy_bootstrap, "ELF-PLACEHOLDER");
+
+        let b = builder_for(tmp.clone());
+        // Sanity: the project is detected as config-driven (drives the H4 rewrite).
+        assert!(crate::commands::deploy::is_config_driven_project(&tmp));
+
+        let zip_path = b
+            .bundle_assets_if_configured(&dummy_bootstrap)
+            .expect("bundling must succeed")
+            .expect("a deployment.zip must be produced (assets are configured)");
+
+        // Read the zip and collect entry name -> contents.
+        let file = std::fs::File::open(&zip_path).expect("open deployment.zip");
+        let mut archive = zip::ZipArchive::new(file).expect("parse deployment.zip");
+        let mut entries: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
+        for i in 0..archive.len() {
+            let mut entry = archive.by_index(i).unwrap();
+            let name = entry.name().to_string();
+            let mut buf = String::new();
+            // bootstrap is binary; ignore read errors for non-UTF8 entries.
+            use std::io::Read;
+            if entry.read_to_string(&mut buf).is_ok() {
+                entries.insert(name, buf);
+            } else {
+                entries.insert(name, String::new());
+            }
+        }
+
+        // H1: assets land under assets/ where pmcp::assets reads (/var/task/assets/).
+        assert!(
+            entries.contains_key("assets/config.toml"),
+            "zip must contain assets/config.toml (H1); entries: {:?}",
+            entries.keys().collect::<Vec<_>>()
+        );
+        assert!(
+            entries.contains_key("assets/schema.sql"),
+            "zip must contain assets/schema.sql (H1); entries: {:?}",
+            entries.keys().collect::<Vec<_>>()
+        );
+
+        // H4: NEITHER bundled config copy may carry the inline dev secret literal,
+        // and BOTH must carry the env ref.
+        for key in ["config.toml", "assets/config.toml"] {
+            let body = entries
+                .get(key)
+                .unwrap_or_else(|| panic!("zip must contain {key}"));
+            assert!(
+                !body.contains("dev-only-insecure-secret-min-16-bytes"),
+                "H4: bundled {key} must NOT contain the inline dev secret literal"
+            );
+            assert!(
+                body.contains("${CODE_MODE_SECRET}"),
+                "H4: bundled {key} must reference ${{CODE_MODE_SECRET}}"
+            );
+        }
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
 }
