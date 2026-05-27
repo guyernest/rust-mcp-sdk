@@ -175,7 +175,7 @@ Validated by spike 006. New deliverable: an MCP server that ships SEP-2640 Skill
 
 Prove the lift by porting at least one of the existing pmcp-run sql-api servers (`open-images`, `imdb`, `msr-vtt`) to the new toolkit, with the SDK consuming the same `config.toml` shape the platform team already wrote.
 
-- [ ] **REF-01**: The toolkit's `config.toml` schema is a superset of the existing pmcp-run sql-api server configs — any of the three reference servers' configs parse cleanly without modification (additive new keys are allowed; renames are not)
+- [x] **REF-01**: The toolkit's `config.toml` schema is a superset of the existing pmcp-run sql-api server configs — any of the three reference servers' configs parse cleanly without modification (additive new keys are allowed; renames are not)
 - [ ] **REF-02**: At least one reference server (open-images recommended given Athena coverage) is reproduced end-to-end as a Shape A invocation: same tools, same code-mode policy, same observable behavior — verified by replaying a representative subset of `~/Development/mcp/sdk/pmcp-run/built-in/sql-api/reference/scenarios/` against both implementations and asserting result parity
 - [ ] **REF-03**: Migration note in DOCS-01 (book chapter) documents how a pmcp-run SQL-API server author moves from the in-tree path-deps to the public toolkit (one-page recipe: swap the dep, drop the duplicate domain crates, regenerate)
 
@@ -370,7 +370,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | SKLL-05 | Phase 87 | Pending |
 | SKLL-06 | Phase 87 | Pending |
 | SKLL-07 | Phase 87 | Pending |
-| REF-01 | Phase 85 | Pending |
+| REF-01 | Phase 85 | Complete |
 | REF-02 | Phase 85 | Pending |
 | REF-03 | Phase 89 | Pending |
 | DOGF-01 | Phase 88 | Pending |
