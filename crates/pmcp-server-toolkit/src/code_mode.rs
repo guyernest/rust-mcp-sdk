@@ -128,49 +128,79 @@ pub fn validation_pipeline_from_config(config: &ServerConfig) -> Result<Validati
         .map_err(|e| ToolkitError::CodeMode(format!("ValidationPipeline construction failed: {e}")))
 }
 
-/// Compose toolkit-side tool registration on top of a caller-supplied
-/// [`CodeExecutor`].
+/// Register `validate_code` + `execute_code` on `builder`, driven by the
+/// `[code_mode]` block and a caller-supplied [`SqlCodeExecutor`].
 ///
-/// Use this when the underlying execution backend (DB driver, AWS SDK, MCP
-/// router) cannot be constructed from `&ServerConfig` alone — the most common
-/// production case per `CODE_MODE_API_NOTES.md` Section 1. Plan 08's
-/// `ServerBuilderExt::code_mode_from_config` is where the executor is wired
-/// into `pmcp::ServerBuilder::tool_arc`. For Plan 06 the helper is shape-
-/// preserving: it surfaces the config-driven validation pipeline construction
-/// (so R9 errors fire) and returns the executor back to the caller unchanged.
+/// This is the actual two-tool registration the LOCKED
+/// [`crate::builder_ext::ServerBuilderExt::try_code_mode_from_config_with_connector`]
+/// delegates to (the Phase 83-06 R1 split precedent: the connector-aware
+/// builder method constructs the executor, this helper wires the tools).
+///
+/// - When `config.code_mode.is_none()` the builder is returned UNCHANGED
+///   (no-op) — code-mode is opt-in at the config level.
+/// - When `[code_mode]` IS present, the R9 inline-secret gate and the
+///   secret-resolution / HMAC machinery run via [`validation_pipeline_from_config`]
+///   (errors surface BEFORE `.build()`), then both tools are registered with
+///   the static `[code_mode]` policy baked into the pipeline (SC-3 / D-13).
+///   A [`NoopPolicyEvaluator`] is wired so authorization is purely the static
+///   config policy (allow_writes / allow_deletes / allow_ddl), not an external
+///   Cedar/AVP engine.
 ///
 /// # Errors
 ///
 /// Surfaces every error from [`validation_pipeline_from_config`] when
-/// `config.code_mode.is_some()`. When `config.code_mode.is_none()` the helper
-/// is a pass-through (returns the executor) since absence of the block means
-/// "code-mode is not configured for this server", which is a legitimate state.
+/// `config.code_mode.is_some()` — most notably
+/// [`ConfigValidationError::InlineSecretRejected`] (review R9) and the
+/// [`ToolkitError::CodeMode`] secret-resolution / 16-byte-minimum failures.
 pub fn code_mode_tools_from_executor(
-    executor: Box<dyn CodeExecutor>,
+    builder: pmcp::ServerBuilder,
     config: &ServerConfig,
-) -> Result<Box<dyn CodeExecutor>> {
-    if config.code_mode.is_some() {
-        // Drive the pipeline construction so R9 (inline-secret) + secret-resolution
-        // errors surface here, BEFORE Plan 08 hands the executor over to
-        // `pmcp::ServerBuilder::tool_arc`.
-        let _pipeline = validation_pipeline_from_config(config)?;
-    }
-    Ok(executor)
+    executor: Arc<SqlCodeExecutor>,
+) -> Result<pmcp::ServerBuilder> {
+    let Some(section) = config.code_mode.as_ref() else {
+        return Ok(builder); // no-op when block absent
+    };
+    // Build the policy-bearing pipeline. This is also the R9 enforcement gate +
+    // secret resolution — must run BEFORE the builder is returned so a
+    // misconfigured token_secret is caught at builder-time, not first request.
+    let cm_config = build_cm_config(section);
+    let secret_value = resolve_token_secret(section)?;
+    let token_secret: TokenSecret = secret_value.into();
+    let evaluator: Arc<dyn PolicyEvaluator> = Arc::new(NoopPolicyEvaluator::new());
+    let pipeline = ValidationPipeline::from_token_secret_with_policy(
+        cm_config.clone(),
+        &token_secret,
+        evaluator,
+    )
+    .map_err(|e| ToolkitError::CodeMode(format!("ValidationPipeline construction failed: {e}")))?;
+    let pipeline = Arc::new(pipeline);
+
+    let validate_handler = tool_handlers::ValidateCodeHandler {
+        pipeline: Arc::clone(&pipeline),
+        config: cm_config,
+    };
+    let execute_handler = tool_handlers::ExecuteCodeHandler { pipeline, executor };
+
+    Ok(builder
+        .tool_arc("validate_code", Arc::new(validate_handler))
+        .tool_arc("execute_code", Arc::new(execute_handler)))
 }
 
-/// Tolerant builder-extension entry point for `[code_mode]` config.
+/// Tolerant builder-extension entry point for `[code_mode]` config — the
+/// CONNECTORLESS, **validation-only / no-tool** path.
 ///
-/// Used by Plan 08's `ServerBuilderExt::code_mode_from_config` to apply
-/// `[code_mode]`-driven behaviour to a `pmcp::ServerBuilder`. The function is
-/// deliberately tolerant of `config.code_mode = None` (returns the builder
-/// unchanged) so callers can invoke it unconditionally — code-mode is opt-in
-/// at the config level.
+/// Used by [`crate::builder_ext::ServerBuilderExt::try_code_mode_from_config`]
+/// (the connectorless companion). It is deliberately tolerant of
+/// `config.code_mode = None` (returns the builder unchanged) so callers can
+/// invoke it unconditionally — code-mode is opt-in at the config level.
 ///
 /// When `[code_mode]` IS present, this helper drives
 /// [`validation_pipeline_from_config`] to surface R9 enforcement errors
-/// (inline `token_secret` rejection) before the builder reaches `.build()`.
-/// Actual tool registration on the `pmcp::ServerBuilder` lands in Plan 08 once
-/// the executor injection contract is fixed.
+/// (inline `token_secret` rejection) before the builder reaches `.build()`,
+/// but registers NO tools because there is no executor to bind to. The
+/// tool-registering path is
+/// [`crate::builder_ext::ServerBuilderExt::try_code_mode_from_config_with_connector`]
+/// (which delegates to [`code_mode_tools_from_executor`]).
 ///
 /// # Errors
 ///
@@ -185,13 +215,122 @@ pub fn register_code_mode_tools(
     }
     // R9 enforcement gate — must run BEFORE the builder is returned so that a
     // misconfigured `[code_mode] token_secret = "inline-string"` is caught at
-    // builder-time, not at first request.
+    // builder-time, not at first request. NO tools registered (no executor) —
+    // this is the documented connectorless validation-only path.
     let _pipeline = validation_pipeline_from_config(config)?;
-    // Plan 08 (`code_mode_from_config` builder extension) will register the
-    // validate/execute tools on `builder` here once executor injection is wired.
-    // Plan 06's deliverable is the validation pipeline + re-exports; the helper
-    // is shape-preserving for now.
     Ok(builder)
+}
+
+// =============================================================================
+// Hand-built validate_code / execute_code ToolHandlers (Plan 85-02 Task 2)
+//
+// Mirrors the `#[derive(CodeMode)]` macro output in pmcp-code-mode-derive but
+// hand-written here so the toolkit does NOT take a proc-macro dependency. Only
+// the PUBLIC API (`code_mode_tools_from_executor` +
+// `try_code_mode_from_config_with_connector`) is LOCKED; this internal
+// mechanism is the implementer's discretion (Plan 85-02 Task 2).
+// =============================================================================
+mod tool_handlers {
+    use std::sync::Arc;
+
+    use super::SqlCodeExecutor;
+    use pmcp_code_mode::CodeExecutor as _;
+    use pmcp_code_mode::TokenGenerator as _;
+
+    /// `validate_code` tool handler: runs the SQL through the policy-bearing
+    /// [`ValidationPipeline`](pmcp_code_mode::ValidationPipeline) and returns
+    /// the explanation + (on success) an HMAC approval token.
+    pub(super) struct ValidateCodeHandler {
+        pub(super) pipeline: Arc<pmcp_code_mode::ValidationPipeline>,
+        pub(super) config: pmcp_code_mode::CodeModeConfig,
+    }
+
+    #[pmcp_code_mode::async_trait]
+    impl pmcp::ToolHandler for ValidateCodeHandler {
+        async fn handle(
+            &self,
+            args: serde_json::Value,
+            _extra: pmcp::RequestHandlerExtra,
+        ) -> pmcp::Result<serde_json::Value> {
+            let input: pmcp_code_mode::ValidateCodeInput = serde_json::from_value(args)
+                .map_err(|e| pmcp::Error::Internal(format!("Invalid arguments: {e}")))?;
+            let code = input.code.trim();
+            let dry_run = input.dry_run.unwrap_or(false);
+
+            // Static-policy ValidationContext — the toolkit binds approval
+            // tokens to a fixed config-derived context (no live user/session
+            // surface in the pure-config binary). Static `[code_mode]` policy
+            // (allow_writes/deletes/ddl) is enforced inside validate_sql_query.
+            let context = pmcp_code_mode::ValidationContext::new(
+                "code-mode-config",
+                "code-mode-session",
+                "schema-hash",
+                "perms-hash",
+            );
+
+            let result = self
+                .pipeline
+                .validate_sql_query(code, &context)
+                .map_err(|e| pmcp::Error::Internal(format!("Validation error: {e}")))?;
+
+            let mut response = pmcp_code_mode::ValidationResponse::from_result(result);
+            if response.result.is_valid {
+                if dry_run {
+                    response.result.approval_token = None;
+                }
+                let risk = response.result.risk_level;
+                response = response.with_auto_approved(self.config.should_auto_approve(risk));
+            }
+            let (json, _is_error) = response.to_json_response();
+            Ok(json)
+        }
+
+        fn metadata(&self) -> Option<pmcp::types::ToolInfo> {
+            Some(pmcp_code_mode::CodeModeToolBuilder::new("sql").build_validate_tool())
+        }
+    }
+
+    /// `execute_code` tool handler: verifies the approval token + code hash,
+    /// then runs the SQL through the [`SqlCodeExecutor`] (which re-validates
+    /// for defense-in-depth before reaching the connector).
+    pub(super) struct ExecuteCodeHandler {
+        pub(super) pipeline: Arc<pmcp_code_mode::ValidationPipeline>,
+        pub(super) executor: Arc<SqlCodeExecutor>,
+    }
+
+    #[pmcp_code_mode::async_trait]
+    impl pmcp::ToolHandler for ExecuteCodeHandler {
+        async fn handle(
+            &self,
+            args: serde_json::Value,
+            _extra: pmcp::RequestHandlerExtra,
+        ) -> pmcp::Result<serde_json::Value> {
+            let input: pmcp_code_mode::ExecuteCodeInput = serde_json::from_value(args)
+                .map_err(|e| pmcp::Error::Internal(format!("Invalid arguments: {e}")))?;
+            let code = input.code.trim();
+
+            let token_gen = self.pipeline.token_generator();
+            let token = pmcp_code_mode::ApprovalToken::decode(&input.approval_token)
+                .map_err(|e| pmcp::Error::Internal(format!("Invalid approval token: {e}")))?;
+            token_gen
+                .verify(&token)
+                .map_err(|e| pmcp::Error::Internal(format!("Token verification failed: {e}")))?;
+            token_gen
+                .verify_code(code, &token)
+                .map_err(|e| pmcp::Error::Internal(format!("Code verification failed: {e}")))?;
+
+            let result = self
+                .executor
+                .execute(code, input.variables.as_ref())
+                .await
+                .map_err(|e| pmcp::Error::Internal(format!("Execution error: {e}")))?;
+            Ok(result)
+        }
+
+        fn metadata(&self) -> Option<pmcp::types::ToolInfo> {
+            Some(pmcp_code_mode::CodeModeToolBuilder::new("sql").build_execute_tool())
+        }
+    }
 }
 
 // =============================================================================

@@ -180,12 +180,15 @@ pub trait ServerBuilderExt: Sized {
     fn code_mode_from_config(self, config: &ServerConfig) -> Self;
 
     /// Fallible companion to [`ServerBuilderExt::code_mode_from_config`]
-    /// (review R7).
+    /// (review R7) — the CONNECTORLESS, **validation-only / no-tool** path.
     ///
-    /// Tolerant of `config.code_mode = None` (returns the builder unchanged)
-    /// — Plan 06 ensures
-    /// [`crate::code_mode::register_code_mode_tools`] is a no-op when the
-    /// block is absent.
+    /// Tolerant of `config.code_mode = None` (returns the builder unchanged).
+    /// When `[code_mode]` IS present this builds + validates the pipeline (so
+    /// R9 / secret-resolution errors fire) but registers NO tools, because no
+    /// executor is available to bind `execute_code` to. For the path that
+    /// actually registers `validate_code` + `execute_code`, use the LOCKED
+    /// connector-aware
+    /// [`ServerBuilderExt::try_code_mode_from_config_with_connector`].
     ///
     /// # Errors
     ///
@@ -209,6 +212,49 @@ pub trait ServerBuilderExt: Sized {
     /// # Ok(()) }
     /// ```
     fn try_code_mode_from_config(self, config: &ServerConfig) -> Result<Self>;
+
+    /// Wire the `[code_mode]` block, registering BOTH `validate_code` and
+    /// `execute_code` over `connector` (the LOCKED connector-aware API — the
+    /// pure-config binary's path; SHAP-A-01 / SC-3).
+    ///
+    /// When `[code_mode]` is present this constructs a
+    /// [`crate::code_mode::SqlCodeExecutor`] from `connector` and delegates to
+    /// [`crate::code_mode::code_mode_tools_from_executor`], which registers the
+    /// two tools with the static `[code_mode]` policy baked into the validation
+    /// pipeline (allow_writes / allow_deletes / allow_ddl enforced; DELETE/DDL
+    /// on a read-only config are rejected). When `[code_mode]` is absent this is
+    /// a no-op (registers neither tool). Unlike the connectorless
+    /// [`ServerBuilderExt::try_code_mode_from_config`], this is the tool-
+    /// registering path because it has an executor to bind `execute_code` to.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::ToolkitError`] if code-mode wiring fails — commonly
+    /// [`crate::ToolkitError::CodeMode`] (env var missing / secret too short)
+    /// or [`crate::ToolkitError::Validation`] (inline `token_secret` rejected
+    /// per review R9).
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use std::sync::Arc;
+    /// use pmcp::Server;
+    /// use pmcp_server_toolkit::{ServerBuilderExt, ServerConfig};
+    /// use pmcp_server_toolkit::sql::SqlConnector;
+    ///
+    /// # fn run(connector: Arc<dyn SqlConnector>) -> Result<(), Box<dyn std::error::Error>> {
+    /// let cfg = ServerConfig::default();
+    /// let _builder = Server::builder()
+    ///     .name("demo")
+    ///     .version("0.1.0")
+    ///     .try_code_mode_from_config_with_connector(&cfg, connector)?;
+    /// # Ok(()) }
+    /// ```
+    fn try_code_mode_from_config_with_connector(
+        self,
+        config: &ServerConfig,
+        connector: Arc<dyn SqlConnector>,
+    ) -> Result<Self>;
 }
 
 impl ServerBuilderExt for ServerBuilder {
@@ -281,7 +327,7 @@ impl ServerBuilderExt for ServerBuilder {
     fn try_code_mode_from_config(self, config: &ServerConfig) -> Result<Self> {
         #[cfg(feature = "code-mode")]
         {
-            return crate::code_mode::register_code_mode_tools(self, config);
+            crate::code_mode::register_code_mode_tools(self, config)
         }
         #[cfg(not(feature = "code-mode"))]
         {
@@ -290,6 +336,34 @@ impl ServerBuilderExt for ServerBuilder {
                 target: "pmcp_server_toolkit::builder_ext",
                 "try_code_mode_from_config called but `code-mode` feature is \
                  disabled at compile-time — skipping (T-83-08-02 visibility)"
+            );
+            Ok(self)
+        }
+    }
+
+    fn try_code_mode_from_config_with_connector(
+        self,
+        config: &ServerConfig,
+        connector: Arc<dyn SqlConnector>,
+    ) -> Result<Self> {
+        #[cfg(feature = "code-mode")]
+        {
+            if config.code_mode.is_none() {
+                return Ok(self); // no-op when block absent (mirrors connectorless path)
+            }
+            let executor = Arc::new(crate::code_mode::SqlCodeExecutor::new(
+                connector,
+                config.clone(),
+            ));
+            crate::code_mode::code_mode_tools_from_executor(self, config, executor)
+        }
+        #[cfg(not(feature = "code-mode"))]
+        {
+            let _ = (config, connector);
+            tracing::warn!(
+                target: "pmcp_server_toolkit::builder_ext",
+                "try_code_mode_from_config_with_connector called but `code-mode` \
+                 feature is disabled at compile-time — skipping (T-83-08-02 visibility)"
             );
             Ok(self)
         }
