@@ -83,6 +83,10 @@ required-features = ["code-mode"]
 name = "sqlite_minimal"
 required-features = ["sqlite", "code-mode"]
 
+[[example]]
+name = "sql_server_http"
+required-features = ["sqlite", "code-mode", "http"]
+
 [dev-dependencies]
 proptest = "1.7"
 # Why: unit tests run with --test-threads=1 (project CLAUDE.md) where a
