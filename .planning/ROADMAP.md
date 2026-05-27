@@ -1560,7 +1560,7 @@ Plans:
 | 82. Builder DX Prerequisites | 3/3 | Complete   | 2026-05-18 |
 | 83. Toolkit Core Lift | 9/9 | Complete   | 2026-05-18 |
 | 84. SQL Connectors | 9/9 | Complete   | 2026-05-26 |
-| 85. Shape A + Reference Parity | 6/6 | Complete   | 2026-05-27 |
+| 85. Shape A + Reference Parity | 6/6 | Complete    | 2026-05-27 |
 | 86. Shapes B/C/D | 0/? | Not started | - |
 | 87. Type 2 Authoring Skills Server | 0/? | Not started | - |
 | 88. Dogfood `pmcp-server` | 0/? | Not started | - |

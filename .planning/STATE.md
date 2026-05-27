@@ -4,7 +4,7 @@ milestone: v2.2
 milestone_name: Configuration-Only MCP Servers
 status: verifying
 stopped_at: Completed 85-06-PLAN.md (Wave 4 — Phase 85 final plan)
-last_updated: "2026-05-27T02:08:52.476Z"
+last_updated: "2026-05-27T02:30:31.935Z"
 last_activity: 2026-05-27
 progress:
   total_phases: 44
@@ -25,8 +25,8 @@ See: .planning/PROJECT.md (updated 2026-05-17)
 
 ## Current Position
 
-Phase: 85 (shape-a-pure-config-binary-reference-parity) — EXECUTING
-Plan: 6 of 6
+Phase: 999.1
+Plan: Not started
 Status: Phase complete — ready for verification
 Last activity: 2026-05-27
 
@@ -62,7 +62,7 @@ Last activity: 2026-05-27
 
 **Velocity:**
 
-- Total plans completed: 114 (v1.0: 9, v1.1: 10, v1.2: 9, v1.3: 12, v1.4: 10, v1.5: 6, v1.6: 5, v1.7: 4, v2.0: 11)
+- Total plans completed: 120 (v1.0: 9, v1.1: 10, v1.2: 9, v1.3: 12, v1.4: 10, v1.5: 6, v1.6: 5, v1.7: 4, v2.0: 11)
 - Total phases completed: 29
 
 ## Accumulated Context
