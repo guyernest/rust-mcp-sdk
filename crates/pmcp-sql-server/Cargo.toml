@@ -38,6 +38,10 @@ clap = { version = "4", features = ["derive", "env"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3.20", features = ["env-filter"] }
+# Why (Plan 85-04): DispatchError derives thiserror::Error for the
+# [database] type → connector dispatch seam (matches the connector crates'
+# ConnectorError style and the toolkit's error types).
+thiserror = "2"
 
 [features]
 # Why (D-07): all four connectors default-on so the published binary serves any

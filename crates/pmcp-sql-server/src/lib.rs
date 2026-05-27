@@ -26,10 +26,14 @@
 //! # Wave 2 seams (Plan 85-04)
 //!
 //! - [`cli`]: the clap [`Args`] surface (`--config` / `--schema` / `--http`).
+//! - [`dispatch`]: the NOVEL `[database] type` → `Arc<dyn SqlConnector>` switch
+//!   with a clear compiled-out-backend error ([`dispatch::DispatchError`]).
 
 pub mod cli;
+pub mod dispatch;
 
 pub use cli::Args;
+pub use dispatch::{dispatch, DispatchError};
 
 /// Runtime configuration for the Shape A server.
 ///
