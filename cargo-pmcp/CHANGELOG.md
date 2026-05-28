@@ -5,6 +5,43 @@ All notable changes to the `cargo-pmcp` crate will be documented in this file.
 The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html).
 
+## [0.15.0] - 2026-05-28
+
+### Added
+
+- **Google Cloud Run deploy target.** Multi-crate Dockerfile generation +
+  local `docker buildx` → `gcloud run deploy` flow. `cargo pmcp deploy init`
+  now writes a `[gcp]`-shaped `deploy.toml` (region, project_id) for GCR
+  targets, and `destroy`/`outputs`/`logs` route through the resolved
+  `config.gcp` rather than ambient `gcloud` config.
+- **`cargo pmcp new --kind sql-server`** — single-crate scaffold for the
+  config-driven SQL toolkit (first built-in server type). Pairs with a
+  config-only deploy path that emits a `pmcp-run`-shaped `deploy.toml`.
+- **`--target` unification** — accepts either a backend type or a named
+  target; unknown values hard-error instead of silently falling back.
+- **`find_deploy_root()`** anchors the deploy project root on
+  `.pmcp/deploy.toml` (+ `--manifest-path` override), so deploy commands
+  resolve the same workspace regardless of the invoking CWD.
+
+### Fixed
+
+- **Scaffold templates now compile against current `pmcp`.** The
+  `mcp_app`, `server_common`, and `deploy init` templates emitted a
+  `StreamableHttpServerConfig { … }` literal that enumerated only six
+  fields — missing `allowed_origins` (and, going forward,
+  `server_initiated`) — so freshly scaffolded projects failed to build
+  with `error[E0063]`. The templates now close the literal with
+  `..Default::default()`, which fills any field the literal does not set
+  and stays forward-compatible as new config fields land.
+
+### Changed
+
+- **Version bumped 0.14.0 → 0.15.0.** The published `0.14.0` predates all
+  of the above; this bump makes locally-built binaries (e.g. the one
+  distributed to the pmcp.run team) self-identify distinctly from the
+  crates.io `0.14.0` artifact rather than colliding on the same version
+  string.
+
 ## [0.14.0] - 2026-05-16
 
 ### Changed

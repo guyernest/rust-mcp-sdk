@@ -1551,6 +1551,84 @@ base = "gcr.io/distroless/cc-debian12"
         assert!(reloaded.gcp.is_none());
     }
 
+    /// Consolidated discriminator guard for ALL deploy targets in one place.
+    ///
+    /// Every target must serialize the sub-block that matches its
+    /// `target.type` — and ONLY that block — then load back with the
+    /// discriminator intact and never carrying both `[aws]` and `[gcp]`.
+    /// This is the regression guard for the bug class where `deploy init`
+    /// wrote an AWS-shaped `deploy.toml` for a Google Cloud Run target
+    /// (fixed in 260527-ttn), plus the symmetric risk for `pmcp-run`: it is
+    /// Lambda-shaped (see `deployment::naming`, which treats
+    /// `"aws-lambda" | "pmcp-run"` identically) and must therefore round-trip
+    /// with an `[aws]` block and NO `[gcp]` block. Round-trips through the
+    /// same `toml::{to_string_pretty, from_str}` calls that
+    /// `DeployConfig::{save, load}` use.
+    #[test]
+    fn every_target_roundtrips_with_its_own_subblock_only() {
+        let aws_lambda = DeployConfig::default_for_server(
+            "lambda-srv".to_string(),
+            "us-east-1".to_string(),
+            PathBuf::from("/tmp"),
+        );
+
+        // pmcp-run is Lambda-shaped: `deploy init` builds the AWS default and
+        // overrides only the discriminator (see commands/deploy/init.rs).
+        let mut pmcp_run = DeployConfig::default_for_server(
+            "pmcprun-srv".to_string(),
+            "us-east-1".to_string(),
+            PathBuf::from("/tmp"),
+        );
+        pmcp_run.target.target_type = "pmcp-run".to_string();
+
+        let cloud_run = DeployConfig::default_for_cloud_run_server(
+            "gcr-srv".to_string(),
+            "my-project".to_string(),
+            "us-central1".to_string(),
+            PathBuf::from("/tmp"),
+        );
+
+        // (config, expected target.type, expects [aws] block, expects [gcp] block)
+        let cases = [
+            (aws_lambda, "aws-lambda", true, false),
+            (pmcp_run, "pmcp-run", true, false),
+            (cloud_run, "google-cloud-run", false, true),
+        ];
+
+        for (config, want_type, expects_aws, expects_gcp) in cases {
+            let toml_str = toml::to_string_pretty(&config).expect("serialize");
+
+            // The discriminator must be written verbatim into [target].
+            assert!(
+                toml_str.contains(&format!("type = \"{want_type}\"")),
+                "[target].type `{want_type}` missing from serialized deploy.toml:\n{toml_str}"
+            );
+
+            let reloaded: DeployConfig = toml::from_str(&toml_str).expect("reload");
+
+            assert_eq!(
+                reloaded.target.target_type, want_type,
+                "discriminator must survive the round-trip"
+            );
+            assert_eq!(
+                reloaded.aws.is_some(),
+                expects_aws,
+                "target `{want_type}`: [aws] block presence mismatch after round-trip"
+            );
+            assert_eq!(
+                reloaded.gcp.is_some(),
+                expects_gcp,
+                "target `{want_type}`: [gcp] block presence mismatch after round-trip"
+            );
+            // Mutual exclusivity: the original bug wrote BOTH shapes. A target
+            // must never carry both sub-blocks simultaneously.
+            assert!(
+                !(reloaded.aws.is_some() && reloaded.gcp.is_some()),
+                "target `{want_type}` must not carry both [aws] and [gcp] blocks"
+            );
+        }
+    }
+
     #[test]
     #[should_panic(expected = "deploy.toml is missing the required [aws] block")]
     fn aws_helper_panics_when_aws_absent() {

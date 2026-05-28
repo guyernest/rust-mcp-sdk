@@ -279,17 +279,34 @@ async fn dispatch_athena(_cfg: &ServerConfig) -> Result<Arc<dyn SqlConnector>, D
 #[cfg(all(test, feature = "athena"))]
 mod region_tests {
     use super::{non_empty_env, resolve_athena_region};
+    use std::sync::{Mutex, MutexGuard};
 
-    /// Snapshot + clear the two region env vars, returning a guard that restores
-    /// them on drop so the test never bleeds region state into siblings.
+    /// Process-global lock serializing every test that mutates the shared
+    /// `AWS_REGION` / `AWS_DEFAULT_REGION` env vars. The default test runner
+    /// is multi-threaded, so without this the region tests interleave and
+    /// stomp each other's env (e.g. one test setting `AWS_DEFAULT_REGION=""`
+    /// clobbers another that just set it to `eu-west-1`), producing flaky
+    /// failures. `RegionEnvGuard` holds the lock for the whole test body.
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    /// Snapshot + clear the two region env vars, returning a guard that
+    /// restores them on drop so the test never bleeds region state into
+    /// siblings. Also holds [`ENV_LOCK`] so region tests run serially.
     struct RegionEnvGuard {
+        // Declared first so it is the last field dropped: the `Drop` impl
+        // restores the env vars while the lock is still held, then this
+        // releases it. Poisoning is recovered so a panicking test does not
+        // cascade-fail its siblings.
+        _lock: MutexGuard<'static, ()>,
         region: Option<String>,
         default_region: Option<String>,
     }
 
     impl RegionEnvGuard {
         fn take() -> Self {
+            let lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
             let guard = Self {
+                _lock: lock,
                 region: std::env::var("AWS_REGION").ok(),
                 default_region: std::env::var("AWS_DEFAULT_REGION").ok(),
             };
