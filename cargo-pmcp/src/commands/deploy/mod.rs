@@ -1069,9 +1069,21 @@ impl DeployCommand {
     }
 
     fn get_target_id(&self, project_root: &PathBuf) -> Result<String> {
-        // Priority: --target-type flag > config file > default
-        if let Some(target) = &self.target_type {
-            return Ok(target.clone());
+        // Priority: --target-type/--target flag > config file > default.
+        //
+        // The flag value is resolved against BOTH the known backend types
+        // (aws-lambda, cloudflare-workers, google-cloud-run, pmcp-run) AND the
+        // operator's configured named targets, so `--target prod` (a named
+        // target) and `--target pmcp-run` (a backend type) both work. An
+        // unknown value hard-errors here with a helpful message BEFORE
+        // `registry.get` would emit its bare "Unknown deployment target".
+        if let Some(value) = &self.target_type {
+            let registry = crate::deployment::TargetRegistry::new();
+            let valid_owned: Vec<String> =
+                registry.list().iter().map(|t| t.id().to_string()).collect();
+            let valid_types: Vec<&str> = valid_owned.iter().map(String::as_str).collect();
+            let named = read_named_target_kinds();
+            return resolve_target_flag(value, &valid_types, &named);
         }
 
         // Try to read from config
@@ -1198,6 +1210,128 @@ endpoint = "{}"
 
         Ok(())
     }
+}
+
+/// Read the operator's configured named targets from the user config and map
+/// each name to the backend type it deploys to (its `type_tag()`).
+///
+/// A missing or unreadable user config is treated as "no named targets" (an
+/// empty map) — never an error, because most operators have no named targets
+/// and `--target <backend-type>` must keep working regardless.
+fn read_named_target_kinds() -> std::collections::BTreeMap<String, String> {
+    use crate::commands::configure::config::{default_user_config_path, TargetConfigV1};
+    let path = default_user_config_path();
+    TargetConfigV1::read(&path).map_or_else(
+        |_| std::collections::BTreeMap::new(),
+        |cfg| {
+            cfg.targets
+                .into_iter()
+                .map(|(name, entry)| (name, entry.type_tag().to_string()))
+                .collect()
+        },
+    )
+}
+
+/// Resolve a `--target` / `--target-type` flag value into a backend type id.
+///
+/// Resolution order:
+/// 1. `value` is a known backend type (`valid_types`) → returns it unchanged.
+/// 2. `value` is a configured named target (`named` maps name → backend type)
+///    → returns the backend type that named target deploys to.
+/// 3. Otherwise → hard-errors with a message listing the valid backend types,
+///    the configured named-target names, and (when `value` is a near-miss of a
+///    known type) a `--target-type` hint.
+///
+/// This is the single unified path for both `--target` and its
+/// `--target-type` synonym; both flow through here so they behave identically.
+///
+/// # Errors
+///
+/// Returns an error when `value` is neither a known backend type nor a
+/// configured named target.
+fn resolve_target_flag(
+    value: &str,
+    valid_types: &[&str],
+    named: &std::collections::BTreeMap<String, String>,
+) -> Result<String> {
+    if valid_types.contains(&value) {
+        return Ok(value.to_string());
+    }
+    if let Some(backend) = named.get(value) {
+        return Ok(backend.clone());
+    }
+    bail!("{}", unknown_target_message(value, valid_types, named));
+}
+
+/// Build the helpful hard-error message for an unknown `--target` value.
+///
+/// Lists the valid backend types and the configured named-target names, and
+/// appends a `--target-type <type>` hint when `value` looks like a near-miss
+/// of a known backend type (a prefix of, or within edit-distance 1 of, a known
+/// type).
+fn unknown_target_message(
+    value: &str,
+    valid_types: &[&str],
+    named: &std::collections::BTreeMap<String, String>,
+) -> String {
+    let types_list = valid_types.join(", ");
+    let named_list = if named.is_empty() {
+        "(none configured)".to_string()
+    } else {
+        named.keys().cloned().collect::<Vec<_>>().join(", ")
+    };
+
+    let mut msg = format!(
+        "Unknown --target value '{value}'.\n  \
+         Valid backend types: {types_list}\n  \
+         Configured named targets: {named_list}"
+    );
+
+    if let Some(suggestion) = near_miss_hint(value, valid_types) {
+        msg.push_str(&format!("\n  Did you mean `--target-type {suggestion}`?"));
+    }
+
+    msg
+}
+
+/// Return the first known backend type that `value` is a near-miss of: either
+/// `value` is a prefix of the type, or the two are within Levenshtein
+/// edit-distance 1. Returns `None` when nothing is close.
+fn near_miss_hint(value: &str, valid_types: &[&str]) -> Option<String> {
+    valid_types
+        .iter()
+        .find(|t| t.starts_with(value) || levenshtein_within_one(value, t))
+        .map(|t| (*t).to_string())
+}
+
+/// Returns `true` when `a` and `b` are within Levenshtein edit-distance 1
+/// (equal, or differ by a single insertion, deletion, or substitution).
+fn levenshtein_within_one(a: &str, b: &str) -> bool {
+    let (a, b): (&[u8], &[u8]) = (a.as_bytes(), b.as_bytes());
+    let (la, lb) = (a.len(), b.len());
+    if la.abs_diff(lb) > 1 {
+        return false;
+    }
+    if la == lb {
+        // At most one substitution.
+        return a.iter().zip(b).filter(|(x, y)| x != y).count() <= 1;
+    }
+    // Lengths differ by exactly 1: the longer must contain the shorter with a
+    // single character skipped.
+    let (short, long) = if la < lb { (a, b) } else { (b, a) };
+    let (mut i, mut j, mut skipped) = (0usize, 0usize, false);
+    while i < short.len() && j < long.len() {
+        if short[i] == long[j] {
+            i += 1;
+            j += 1;
+        } else if skipped {
+            return false;
+        } else {
+            skipped = true;
+            j += 1;
+        }
+    }
+    true
 }
 
 /// Handle OAuth subcommands for pmcp.run
@@ -1763,5 +1897,112 @@ mod manifest_resolution_tests {
             deploy_root_ok.is_ok(),
             "guard must allow a dir with an existing .pmcp/deploy.toml"
         );
+    }
+}
+
+#[cfg(test)]
+mod target_resolution_tests {
+    //! Unit tests for the unified `--target` / `--target-type` resolver.
+    //!
+    //! Hermetic: they call the pure `resolve_target_flag` with injected
+    //! type-set + named-target-set, so they never read the operator's real
+    //! `~/.pmcp/config.toml`.
+    use super::{near_miss_hint, resolve_target_flag};
+    use std::collections::BTreeMap;
+
+    const VALID: &[&str] = &[
+        "aws-lambda",
+        "cloudflare-workers",
+        "google-cloud-run",
+        "pmcp-run",
+    ];
+
+    fn no_named() -> BTreeMap<String, String> {
+        BTreeMap::new()
+    }
+
+    #[test]
+    fn known_backend_types_resolve_to_themselves() {
+        for ty in VALID {
+            let got = resolve_target_flag(ty, VALID, &no_named())
+                .unwrap_or_else(|e| panic!("{ty} must resolve: {e}"));
+            assert_eq!(&got, ty);
+        }
+    }
+
+    #[test]
+    fn pmcp_run_still_works() {
+        // The everyday flow must never regress.
+        let got = resolve_target_flag("pmcp-run", VALID, &no_named()).expect("pmcp-run resolves");
+        assert_eq!(got, "pmcp-run");
+    }
+
+    #[test]
+    fn configured_named_target_resolves_to_its_backend_type() {
+        let mut named = BTreeMap::new();
+        named.insert("prod".to_string(), "aws-lambda".to_string());
+        let got = resolve_target_flag("prod", VALID, &named).expect("named target resolves");
+        assert_eq!(got, "aws-lambda");
+    }
+
+    #[test]
+    fn unknown_value_hard_errors_with_helpful_message() {
+        let mut named = BTreeMap::new();
+        named.insert("prod".to_string(), "aws-lambda".to_string());
+        let err = resolve_target_flag("totally-bogus", VALID, &named)
+            .expect_err("unknown value must error");
+        let msg = err.to_string();
+        // (a) lists the valid backend types
+        assert!(msg.contains("aws-lambda"), "must list valid types: {msg}");
+        assert!(
+            msg.contains("google-cloud-run"),
+            "must list valid types: {msg}"
+        );
+        assert!(msg.contains("pmcp-run"), "must list valid types: {msg}");
+        // (b) lists the configured named-target names
+        assert!(
+            msg.contains("prod"),
+            "must list configured named targets: {msg}"
+        );
+        // never a bare "Unknown deployment target" / "<unset>"
+        assert!(
+            !msg.contains("<unset>"),
+            "must not fall through to <unset>: {msg}"
+        );
+    }
+
+    #[test]
+    fn near_miss_of_known_type_hints_target_type() {
+        // "aws-lamda" (one deletion) and "google" (prefix) are near-misses.
+        let err =
+            resolve_target_flag("aws-lamda", VALID, &no_named()).expect_err("typo must error");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("--target-type aws-lambda"),
+            "edit-distance-1 typo must hint --target-type: {msg}"
+        );
+
+        let err2 =
+            resolve_target_flag("google", VALID, &no_named()).expect_err("prefix must error");
+        assert!(
+            err2.to_string().contains("--target-type google-cloud-run"),
+            "prefix near-miss must hint --target-type: {err2}"
+        );
+    }
+
+    #[test]
+    fn target_type_synonym_passes_a_real_type() {
+        // --target-type is the explicit type-only synonym; a real type passes
+        // through the same resolver unchanged.
+        let got =
+            resolve_target_flag("cloudflare-workers", VALID, &no_named()).expect("type resolves");
+        assert_eq!(got, "cloudflare-workers");
+    }
+
+    #[test]
+    fn near_miss_hint_returns_none_for_unrelated_input() {
+        // A wholly-unrelated value yields no hint (so the message has no
+        // misleading suggestion).
+        assert!(near_miss_hint("totally-bogus", VALID).is_none());
     }
 }
