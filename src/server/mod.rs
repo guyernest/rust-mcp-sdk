@@ -1327,15 +1327,31 @@ impl Server {
                 self.cancellation_manager
                     .remove_token(&request_id_str)
                     .await;
-                Ok(v)
+                v
             },
             Err(e) => {
                 self.cancellation_manager
                     .remove_token(&request_id_str)
                     .await;
-                Err(e)
+                // `Error::ToolRejected` is an APPLICATION-level rejection (e.g.
+                // Code Mode policy: a SELECT missing its LIMIT), not a protocol
+                // fault. Map it to a successful `CallToolResult { isError: true }`
+                // — `message` becomes text content, `details` becomes
+                // `structuredContent` — so the model reads the reason and retries
+                // with corrected input, instead of `?`-propagating a JSON-RPC
+                // error that reads as a server crash. All other errors keep
+                // propagating as protocol errors.
+                if let Error::ToolRejected { message, details } = e {
+                    let mut rejected =
+                        CallToolResult::error(vec![crate::types::Content::text(message)]);
+                    if let Some(details) = details {
+                        rejected = rejected.with_structured_content(details);
+                    }
+                    return Ok(serde_json::to_value(rejected)?);
+                }
+                return Err(e);
             },
-        }?;
+        };
         // Build CallToolResult, adding structured_content for widget tools
         let text = result.to_string();
         let mut call_result = CallToolResult::new(vec![crate::types::Content::text(text)]);
@@ -4000,6 +4016,74 @@ mod tests {
                 assert_eq!(call_result.content.len(), 1);
             },
             ResponsePayload::Error(_) => panic!("Expected success response"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handle_call_tool_rejected_is_iserror_not_protocol_error() {
+        // A handler returning `Error::tool_rejected` must surface through the
+        // streamable-HTTP `Server` path as a SUCCESSFUL `CallToolResult`
+        // with `isError: true` (message → content, details → structuredContent),
+        // NOT a JSON-RPC protocol error. This is the Code Mode policy-rejection
+        // envelope (e.g. "SELECT missing LIMIT") observed by `pmcp-sql-server`.
+        struct RejectingTool;
+        #[async_trait]
+        impl ToolHandler for RejectingTool {
+            async fn handle(
+                &self,
+                _args: Value,
+                _extra: crate::server::cancellation::RequestHandlerExtra,
+            ) -> Result<Value> {
+                Err(Error::tool_rejected(
+                    "SELECT statements must declare a LIMIT",
+                    Some(json!({ "violations": [{ "rule": "missing_limit" }] })),
+                ))
+            }
+        }
+
+        let server = Server::builder()
+            .name("test-server")
+            .version("1.0.0")
+            .tool("reject", RejectingTool)
+            .build()
+            .unwrap();
+
+        let request = Request::Client(Box::new(ClientRequest::CallTool(CallToolRequest {
+            name: "reject".to_string(),
+            arguments: json!({}),
+            _meta: None,
+            task: None,
+        })));
+
+        let response = server
+            .handle_request(RequestId::from(1i64), request, None)
+            .await;
+
+        match response.payload {
+            ResponsePayload::Result(result) => {
+                let call_result: CallToolResult = serde_json::from_value(result).unwrap();
+                assert!(call_result.is_error, "tool_rejected must set isError: true");
+                let text = call_result
+                    .content
+                    .iter()
+                    .find_map(|c| match c {
+                        crate::types::Content::Text { text } => Some(text.clone()),
+                        _ => None,
+                    })
+                    .unwrap_or_default();
+                assert!(
+                    text.contains("must declare a LIMIT"),
+                    "content must carry the rejection message, got: {text}"
+                );
+                let sc = call_result
+                    .structured_content
+                    .expect("structuredContent must carry the violation detail");
+                assert_eq!(sc["violations"][0]["rule"], "missing_limit");
+            },
+            ResponsePayload::Error(e) => panic!(
+                "tool_rejected must NOT be a protocol error, got {}: {}",
+                e.code, e.message
+            ),
         }
     }
 

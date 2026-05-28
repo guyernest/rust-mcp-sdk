@@ -73,6 +73,35 @@ pub enum Error {
     #[error("Circuit breaker is open")]
     CircuitBreakerOpen,
 
+    /// A tool executed but rejected the request at the application level —
+    /// e.g. Code Mode policy/validation (`SELECT` missing a `LIMIT`, `DELETE`
+    /// not allowed), schema-mismatched input, or any tool that wants the model
+    /// to correct its input and retry.
+    ///
+    /// Unlike the protocol-level variants above (which a `tools/call` handler
+    /// surfaces as a JSON-RPC error and therefore read to the model as a
+    /// *server fault*), the server's tool dispatch maps `ToolRejected` to a
+    /// successful [`CallToolResult`](crate::types::CallToolResult) with
+    /// `isError: true`: `message` becomes the text content and `details`
+    /// (when present) becomes `structuredContent`. That is the MCP-idiomatic
+    /// way to tell the model "your input was not accepted — here is
+    /// specifically what to change" so it can self-correct on the next call,
+    /// rather than the call appearing to have crashed the server.
+    ///
+    /// Reach for this from a [`ToolHandler`](crate::server::ToolHandler) when
+    /// the failure is the *caller's* to fix. Keep using [`Error::Internal`]
+    /// (or [`Error::protocol`]) for genuine faults the caller cannot correct.
+    #[error("{message}")]
+    ToolRejected {
+        /// Human/model-readable summary of why the input was rejected and what
+        /// to change (e.g. "SELECT statements must declare a LIMIT").
+        message: String,
+        /// Optional machine-readable detail (e.g. a Code Mode `violations`
+        /// array of `{rule, message, suggestion}`) carried verbatim into the
+        /// tool result's `structuredContent` for programmatic clients.
+        details: Option<serde_json::Value>,
+    },
+
     /// Other errors
     #[error(transparent)]
     Other(#[from] anyhow::Error),
@@ -238,6 +267,20 @@ impl Error {
     /// Create a not found error.
     pub fn not_found(message: impl Into<String>) -> Self {
         Self::NotFound(message.into())
+    }
+
+    /// Create a tool-level rejection.
+    ///
+    /// The server's `tools/call` dispatch maps this to a
+    /// [`CallToolResult`](crate::types::CallToolResult) with `isError: true`
+    /// (NOT a JSON-RPC protocol error), so the model sees the reason and can
+    /// retry with corrected input. `details` is carried into the result's
+    /// `structuredContent`. See [`Error::ToolRejected`].
+    pub fn tool_rejected(message: impl Into<String>, details: Option<serde_json::Value>) -> Self {
+        Self::ToolRejected {
+            message: message.into(),
+            details,
+        }
     }
 
     /// Create an unsupported capability error.

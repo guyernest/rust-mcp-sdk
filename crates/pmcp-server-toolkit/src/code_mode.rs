@@ -284,14 +284,28 @@ mod tool_handlers {
             let (json, is_error) = response.to_json_response();
             // A policy rejection (allow_writes/deletes/ddl off, require_limit, …)
             // is reported by `to_json_response` with `is_error == true`. Surface it
-            // as a tool ERROR (not a silent success carrying `valid: false`) so the
-            // MCP `tools/call` result has `isError: true` — this is the production
-            // reference observable that the generated.yaml `failure` assertions
-            // (DELETE/DDL/no-LIMIT) verify (SC-3 policy-enforcement proof,
-            // threat T-85-02-02). The rejection JSON is carried in the error
-            // message so clients still see the violation detail.
+            // as a TOOL-level rejection via `Error::tool_rejected` so the MCP
+            // `tools/call` result is `CallToolResult { isError: true }` carrying a
+            // model-actionable `message` plus the full violation JSON in
+            // `structuredContent` — NOT a `-32603` protocol error (which reads as a
+            // server fault and gives the model nothing to correct). This is the
+            // production-reference observable the generated.yaml `failure`
+            // assertions (DELETE/DDL/no-LIMIT) verify: mcp-tester treats
+            // `isError: true` as a failed step (SC-3 policy-enforcement proof,
+            // threat T-85-02-02).
             if is_error {
-                return Err(pmcp::Error::Internal(json.to_string()));
+                let message = response
+                    .result
+                    .violations
+                    .first()
+                    .map(|v| match &v.suggestion {
+                        Some(s) => format!("{}: {} — {}", v.rule, v.message, s),
+                        None => format!("{}: {}", v.rule, v.message),
+                    })
+                    .unwrap_or_else(|| {
+                        "Code Mode rejected the query (policy validation failed)".to_string()
+                    });
+                return Err(pmcp::Error::tool_rejected(message, Some(json)));
             }
             Ok(json)
         }
@@ -320,15 +334,41 @@ mod tool_handlers {
                 .map_err(|e| pmcp::Error::Internal(format!("Invalid arguments: {e}")))?;
             let code = input.code.trim();
 
+            // Token / code-hash verification failures are model-actionable
+            // rejections (the model must re-run validate_code to obtain a fresh
+            // token, or resend the exact validated code), so surface them as
+            // `CallToolResult { isError: true }` via `Error::tool_rejected` —
+            // not `-32603`. A genuine execution fault (connector/SQL runtime,
+            // below) stays an `Internal` protocol error: the caller cannot fix
+            // it by changing input.
             let token_gen = self.pipeline.token_generator();
-            let token = pmcp_code_mode::ApprovalToken::decode(&input.approval_token)
-                .map_err(|e| pmcp::Error::Internal(format!("Invalid approval token: {e}")))?;
-            token_gen
-                .verify(&token)
-                .map_err(|e| pmcp::Error::Internal(format!("Token verification failed: {e}")))?;
-            token_gen
-                .verify_code(code, &token)
-                .map_err(|e| pmcp::Error::Internal(format!("Code verification failed: {e}")))?;
+            let token =
+                pmcp_code_mode::ApprovalToken::decode(&input.approval_token).map_err(|e| {
+                    pmcp::Error::tool_rejected(
+                        format!(
+                        "Invalid approval_token: {e}. Call validate_code to obtain a valid token."
+                    ),
+                        None,
+                    )
+                })?;
+            token_gen.verify(&token).map_err(|e| {
+                pmcp::Error::tool_rejected(
+                    format!(
+                        "Approval token is invalid or expired: {e}. \
+                         Call validate_code again to obtain a fresh token."
+                    ),
+                    None,
+                )
+            })?;
+            token_gen.verify_code(code, &token).map_err(|e| {
+                pmcp::Error::tool_rejected(
+                    format!(
+                        "Code does not match the validated code: {e}. execute_code must use the \
+                         exact code string that was passed to validate_code."
+                    ),
+                    None,
+                )
+            })?;
 
             let result = self
                 .executor
