@@ -110,6 +110,37 @@ pub(crate) fn is_config_driven_project(project_root: &Path) -> bool {
     has_config && has_schema && references_toolkit
 }
 
+/// Build a default `DeployConfig` whose SHAPE matches the requested `target_id`.
+///
+/// The cargo-pmcp init dispatch (`execute_async` / `DeployAction::Init`) calls this
+/// to pick the right constructor — `default_for_cloud_run_server` for
+/// `"google-cloud-run"`, `default_for_server` for everything else (pmcp-run,
+/// cloudflare-workers, …). Before this branched, every non-aws-lambda target
+/// got the AWS-shaped default (required `[aws]`, no `[gcp]`, AWS-flavored
+/// `memory_mb`), which save_if_missing then cemented into the operator's
+/// `.pmcp/deploy.toml` (n51 follow-up #1).
+///
+/// `project_id` is left empty for the google-cloud-run shape; the operator
+/// fills it in via `[gcp].project_id`, and `deploy::resolve_params` falls back
+/// to `gcloud config get-value project` when the field is empty/placeholder.
+pub(crate) fn default_config_for_target(
+    target_id: &str,
+    server_name: String,
+    region: String,
+    project_root: std::path::PathBuf,
+) -> crate::deployment::DeployConfig {
+    if target_id == "google-cloud-run" {
+        crate::deployment::DeployConfig::default_for_cloud_run_server(
+            server_name,
+            String::new(),
+            region,
+            project_root,
+        )
+    } else {
+        crate::deployment::DeployConfig::default_for_server(server_name, region, project_root)
+    }
+}
+
 pub mod deploy;
 pub mod init;
 
@@ -633,16 +664,23 @@ impl DeployCommand {
 
                             cmd.execute()
                         } else {
-                            // For other targets (pmcp-run, etc.), use the new modular approach
-                            // Auto-detect server name from workspace or use package name
+                            // For other targets (pmcp-run, google-cloud-run, …), use the
+                            // new modular approach. Branch on target_id so the saved
+                            // deploy.toml has the correct SHAPE for the target — without
+                            // this, a google-cloud-run init wrote an AWS-shape deploy.toml
+                            // (no [gcp], required [aws]/memory_mb), then save_if_missing
+                            // cemented it on every re-init (n51 follow-up #1).
                             let server_name = detect_server_name(&project_root)?;
-                            let mut config = crate::deployment::DeployConfig::default_for_server(
+                            let mut config = default_config_for_target(
+                                &target_id,
                                 server_name,
                                 region.clone(),
                                 project_root.clone(),
                             );
 
-                            // Update target type to match the actual target
+                            // Update target type to match the actual target. (For
+                            // google-cloud-run the constructor already sets it; the
+                            // explicit reassignment keeps the post-condition uniform.)
                             config.target.target_type = target_id.clone();
 
                             // Configure OAuth if specified (for pmcp-run target)
@@ -1897,6 +1935,66 @@ mod manifest_resolution_tests {
             deploy_root_ok.is_ok(),
             "guard must allow a dir with an existing .pmcp/deploy.toml"
         );
+    }
+}
+
+/// Tests for `default_config_for_target` — guards n51-follow-up #1: the init
+/// dispatch MUST pick the target-shape-appropriate constructor.
+#[cfg(test)]
+mod default_config_for_target_tests {
+    use super::default_config_for_target;
+    use std::path::PathBuf;
+
+    #[test]
+    fn google_cloud_run_target_produces_gcp_shape() {
+        let cfg = default_config_for_target(
+            "google-cloud-run",
+            "test-server".to_string(),
+            "us-central1".to_string(),
+            PathBuf::from("/tmp/test"),
+        );
+        assert!(
+            cfg.gcp.is_some(),
+            "google-cloud-run init MUST produce a config with [gcp] set"
+        );
+        assert!(
+            cfg.aws.is_none(),
+            "google-cloud-run init MUST NOT produce a config with [aws] set"
+        );
+        assert_eq!(cfg.target.target_type, "google-cloud-run");
+        assert_eq!(cfg.server.name, "test-server");
+        // `default_for_cloud_run_server` is called with empty project_id;
+        // operator fills [gcp].project_id, deploy::resolve_params falls back to
+        // `gcloud config get-value project` if still empty.
+        assert_eq!(cfg.gcp.unwrap().region, "us-central1");
+    }
+
+    #[test]
+    fn pmcp_run_target_produces_aws_shape() {
+        let cfg = default_config_for_target(
+            "pmcp-run",
+            "test-server".to_string(),
+            "us-east-1".to_string(),
+            PathBuf::from("/tmp/test"),
+        );
+        assert!(
+            cfg.aws.is_some(),
+            "pmcp-run init keeps the legacy aws-shape default (uses lambda primitives)"
+        );
+        assert!(cfg.gcp.is_none());
+    }
+
+    #[test]
+    fn cloudflare_workers_target_produces_aws_shape() {
+        // cloudflare-workers also uses default_for_server (no GCR-specific knobs).
+        let cfg = default_config_for_target(
+            "cloudflare-workers",
+            "test-server".to_string(),
+            "us-east-1".to_string(),
+            PathBuf::from("/tmp/test"),
+        );
+        assert!(cfg.aws.is_some());
+        assert!(cfg.gcp.is_none());
     }
 }
 
