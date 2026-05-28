@@ -26,8 +26,29 @@ pub mod deployment {
     #[path = "../deployment/config.rs"]
     pub mod config;
 
+    // Re-export the schema types the mounted Cloud Run Dockerfile generator
+    // references via `crate::deployment::*` (`dockerfile.rs` imports
+    // `crate::deployment::{DeployConfig, LayoutConfig}`).
+    pub use config::{DeployConfig, LayoutConfig};
+
     #[path = "../deployment/iam.rs"]
     pub mod iam;
+
+    /// Narrow lib-visible view of the Google Cloud Run Dockerfile generator.
+    ///
+    /// The full `targets::*` tree is bin-only (it cross-depends on
+    /// `commands::*`), but the Dockerfile / cloudbuild rendering for Cloud Run
+    /// only needs `deployment::config` + a sibling `env` helper. Mounting just
+    /// these two leaf files via `#[path]` lets the env-gated
+    /// `cloud_run_local_build` integration test render the multi-crate-isolated
+    /// Dockerfile via the real generator (issue #258) without pulling in the
+    /// command layer.
+    #[path = "../deployment/targets/google_cloud_run"]
+    pub mod google_cloud_run {
+        pub mod env;
+
+        pub mod dockerfile;
+    }
 
     // Phase 79 Wave 1: schema types required by `config.rs` so the lib
     // target compiles. These modules are leaf — they cross-depend only on
