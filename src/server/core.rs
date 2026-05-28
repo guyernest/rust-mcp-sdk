@@ -551,11 +551,9 @@ impl ServerCore {
         let value = match result {
             Ok(value) => value,
             Err(crate::error::Error::ToolRejected { message, details }) => {
-                let mut rejected = CallToolResult::error(vec![Content::text(message)]);
-                if let Some(details) = details {
-                    rejected = rejected.with_structured_content(details);
-                }
-                return Ok(ToolCallOutcome::Result(rejected));
+                return Ok(ToolCallOutcome::Result(CallToolResult::rejected(
+                    message, details,
+                )));
             },
             Err(e) => return Err(e),
         };

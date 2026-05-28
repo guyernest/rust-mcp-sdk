@@ -1322,35 +1322,26 @@ impl Server {
         #[cfg(target_arch = "wasm32")]
         let result = handler.handle(req.arguments, extra).await;
 
+        // Token cleanup is unconditional (success or failure) and does not
+        // touch `result`, so it runs once before the value/error split.
+        self.cancellation_manager
+            .remove_token(&request_id_str)
+            .await;
         let result = match result {
-            Ok(v) => {
-                self.cancellation_manager
-                    .remove_token(&request_id_str)
-                    .await;
-                v
+            Ok(v) => v,
+            // `Error::ToolRejected` is an APPLICATION-level rejection (e.g.
+            // Code Mode policy: a SELECT missing its LIMIT), not a protocol
+            // fault. Map it to a successful `CallToolResult { isError: true }`
+            // (message → content, details → structuredContent) so the model
+            // reads the reason and retries with corrected input, instead of
+            // `?`-propagating a JSON-RPC error that reads as a server crash.
+            // All other errors keep propagating as protocol errors.
+            Err(Error::ToolRejected { message, details }) => {
+                return Ok(serde_json::to_value(CallToolResult::rejected(
+                    message, details,
+                ))?);
             },
-            Err(e) => {
-                self.cancellation_manager
-                    .remove_token(&request_id_str)
-                    .await;
-                // `Error::ToolRejected` is an APPLICATION-level rejection (e.g.
-                // Code Mode policy: a SELECT missing its LIMIT), not a protocol
-                // fault. Map it to a successful `CallToolResult { isError: true }`
-                // — `message` becomes text content, `details` becomes
-                // `structuredContent` — so the model reads the reason and retries
-                // with corrected input, instead of `?`-propagating a JSON-RPC
-                // error that reads as a server crash. All other errors keep
-                // propagating as protocol errors.
-                if let Error::ToolRejected { message, details } = e {
-                    let mut rejected =
-                        CallToolResult::error(vec![crate::types::Content::text(message)]);
-                    if let Some(details) = details {
-                        rejected = rejected.with_structured_content(details);
-                    }
-                    return Ok(serde_json::to_value(rejected)?);
-                }
-                return Err(e);
-            },
+            Err(e) => return Err(e),
         };
         // Build CallToolResult, adding structured_content for widget tools
         let text = result.to_string();

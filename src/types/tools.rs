@@ -561,6 +561,21 @@ impl CallToolResult {
         }
     }
 
+    /// Create a tool-level rejection result.
+    ///
+    /// An `isError: true` result whose `content` is the model-readable
+    /// `message` and whose `structuredContent` is `details` (when present).
+    /// This is the envelope the server's `tools/call` dispatch produces for
+    /// [`Error::ToolRejected`](crate::Error::ToolRejected) — an application
+    /// rejection the caller should correct and retry, NOT a protocol fault.
+    pub fn rejected(message: impl Into<String>, details: Option<Value>) -> Self {
+        let result = Self::error(vec![Content::text(message.into())]);
+        match details {
+            Some(details) => result.with_structured_content(details),
+            None => result,
+        }
+    }
+
     /// Add structured content for both model and widget.
     pub fn with_structured_content(mut self, content: Value) -> Self {
         self.structured_content = Some(content);
