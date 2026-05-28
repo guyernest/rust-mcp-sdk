@@ -345,15 +345,9 @@ timeout_ms = 5000
 
     // Normalize weights if some categories are empty
     let total = tool_weight + resource_weight + prompt_weight;
-    let (tw, rw, pw) = if total > 0 {
-        (
-            tool_weight * 100 / total,
-            resource_weight * 100 / total,
-            prompt_weight * 100 / total,
-        )
-    } else {
-        (100, 0, 0)
-    };
+    let tw = (tool_weight * 100).checked_div(total).unwrap_or(100);
+    let rw = (resource_weight * 100).checked_div(total).unwrap_or(0);
+    let pw = (prompt_weight * 100).checked_div(total).unwrap_or(0);
 
     // Add tool steps
     for tool in &schema.tools {

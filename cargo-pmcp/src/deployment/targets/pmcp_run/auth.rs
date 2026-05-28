@@ -636,7 +636,7 @@ fn run_callback_server_loop(tx: &mpsc::Sender<String>) {
     let server = tiny_http::Server::http(format!("127.0.0.1:{}", CALLBACK_PORT)).unwrap();
 
     for request in server.incoming_requests() {
-        let code_value = extract_code_from_url(&request.url().to_string());
+        let code_value = extract_code_from_url(request.url());
 
         if let Some(code) = code_value {
             respond_callback_success(request);

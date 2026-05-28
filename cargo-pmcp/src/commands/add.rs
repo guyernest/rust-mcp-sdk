@@ -35,10 +35,11 @@ pub fn server(
         );
     }
 
-    if replace && config.has_server(&name) {
-        if !confirm_and_remove_existing_server(&name, &template, &config, not_quiet)? {
-            return Ok(());
-        }
+    if replace
+        && config.has_server(&name)
+        && !confirm_and_remove_existing_server(&name, &template, &config, not_quiet)?
+    {
+        return Ok(());
     }
 
     let assigned_port = resolve_assigned_port(port, replace, &name, &config)?;

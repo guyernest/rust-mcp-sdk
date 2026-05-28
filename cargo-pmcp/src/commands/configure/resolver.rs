@@ -856,10 +856,11 @@ mod proptests {
                 Some((f.clone(), TargetSource::Flag))
             } else if let Some(t) = target.as_ref().filter(|s| !s.is_empty()) {
                 Some((t.clone(), TargetSource::Target))
-            } else if let Some(d) = deploy.as_ref().filter(|s| !s.is_empty()) {
-                Some((d.clone(), TargetSource::DeployToml))
             } else {
-                None
+                deploy
+                    .as_ref()
+                    .filter(|s| !s.is_empty())
+                    .map(|d| (d.clone(), TargetSource::DeployToml))
             };
             prop_assert_eq!(r, expected);
         }

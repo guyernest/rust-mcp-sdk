@@ -661,15 +661,12 @@ impl DeployConfig {
         let mut required_assets: Vec<String> = Vec::new();
 
         for server in workspace_config.servers.values() {
-            match server.template.as_str() {
-                "sqlite-explorer" | "db-explorer" => {
-                    // sqlite-explorer template requires chinook.db
-                    if !required_assets.contains(&"chinook.db".to_string()) {
-                        required_assets.push("chinook.db".to_string());
-                    }
-                },
-                // Add other templates with asset requirements here
-                _ => {},
+            // sqlite-explorer / db-explorer templates require chinook.db.
+            // (Add other templates with asset requirements here.)
+            if matches!(server.template.as_str(), "sqlite-explorer" | "db-explorer")
+                && !required_assets.contains(&"chinook.db".to_string())
+            {
+                required_assets.push("chinook.db".to_string());
             }
         }
 

@@ -182,16 +182,18 @@ fn print_field(label: &str, field: Option<&ResolvedField>) {
 }
 
 /// Collect display fields in fixed banner order (D-13).
-/// Returns `(api_url, aws_profile, region, extras)` where `extras` carries
-/// per-variant fields (account_id, gcp_project, api_token_env, …).
-fn collect_for_display(
-    entry: &TargetEntry,
-) -> (
+/// Resolved display fields for a target: `(api_url, aws_profile, region, extras)`,
+/// where `extras` carries per-variant fields (account_id, gcp_project, …).
+type DisplayFields = (
     Option<String>,
     Option<String>,
     Option<String>,
     Vec<(&'static str, String)>,
-) {
+);
+
+/// Returns `(api_url, aws_profile, region, extras)` where `extras` carries
+/// per-variant fields (account_id, gcp_project, api_token_env, …).
+fn collect_for_display(entry: &TargetEntry) -> DisplayFields {
     let mut extras: Vec<(&'static str, String)> = Vec::new();
     match entry {
         TargetEntry::PmcpRun(e) => (

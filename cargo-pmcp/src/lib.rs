@@ -16,12 +16,12 @@ pub mod pentest;
 // rest of the `deployment::*` tree (which references `crate::commands::*`,
 // bin-only).
 pub mod deployment {
-    //! Narrow lib-visible view of the deployment subsystem — `config` + `iam`
-    //! + `widgets` + `post_deploy_tests`. The full module is in the bin
-    //! target; this surface is sufficient for the Phase 76 fuzz target +
-    //! `deploy_with_iam` example PLUS the Phase 79 Wave-1 schema types that
-    //! `config.rs` references via `use crate::deployment::widgets::*` and
-    //! `use crate::deployment::post_deploy_tests::*`.
+    //! Narrow lib-visible view of the deployment subsystem: `config`, `iam`,
+    //! `widgets`, and `post_deploy_tests`. The full module is in the bin
+    //! target; this surface is sufficient for the Phase 76 fuzz target and
+    //! the `deploy_with_iam` example, plus the Phase 79 Wave-1 schema types
+    //! that `config.rs` references via `use crate::deployment::widgets::*`
+    //! and `use crate::deployment::post_deploy_tests::*`.
 
     #[path = "../deployment/config.rs"]
     pub mod config;
