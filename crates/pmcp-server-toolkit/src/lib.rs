@@ -103,6 +103,13 @@ pub use crate::tools::synthesize_from_config;
 // `tools/call` can execute SQL and emit `structuredContent`.
 pub use crate::tools::synthesize_from_config_with_connector;
 
+// Phase 90 (OAPI-02a) — single-call HTTP synthesizer, mirroring the SQL
+// connector-threaded variant above. Feature-gated on `http`. Wires
+// `Arc<dyn HttpConnector>` into each single-call `[[tools]]` handler so
+// `tools/call` executes the REST operation and returns JSON.
+#[cfg(feature = "http")]
+pub use crate::tools::synthesize_from_config_with_http_connector;
+
 // Builder extensions (TKIT-08) — Plan 08 headline re-export per D-15 + review R3.
 // The trait method set is the Shape C ≤15-line `main.rs` surface; lifting it
 // to the crate root is the binding witness of D-15 (the runnable example

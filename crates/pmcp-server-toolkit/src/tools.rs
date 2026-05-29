@@ -39,6 +39,11 @@ use crate::config::{AnnotationsDecl, ParamDecl, ServerConfig, ToolDecl};
 use crate::error::Result;
 use crate::sql::SqlConnector;
 
+#[cfg(feature = "http")]
+use crate::error::ToolkitError;
+#[cfg(feature = "http")]
+use crate::http::{HttpConnector, Operation, Parameter, ParameterLocation};
+
 /// Type alias for one synthesized tool tuple: `(name, ToolInfo, Arc<dyn ToolHandler>)`.
 ///
 /// Exists so [`synthesize_from_config`]'s return type does not trip
@@ -330,6 +335,171 @@ impl ToolHandler for SynthesizedToolHandler {
 }
 
 // -----------------------------------------------------------------------------
+// Single-call HTTP synthesizer (Phase 90 OAPI-02a) — feature `http`
+// -----------------------------------------------------------------------------
+
+/// Synthesize one `ToolInfo` + handler per single-call `[[tools]]` entry,
+/// executing against a wired [`HttpConnector`] (Phase 90 OAPI-02a / D-01).
+///
+/// Mirrors [`synthesize_from_config_with_connector`] (the SQL analog) in shape.
+/// For each `[[tools]]` where [`ToolDecl::is_script_tool`] is `false` and a
+/// `path` + `method` pair is present, an [`Operation`] is built from the path
+/// template (the `{...}` segments become path parameters), the declared
+/// `[[tools.parameters]]` (non-path params become query params; `POST`/`PUT`/
+/// `PATCH` carry a request body), and the per-tool `base_url` override — which is
+/// reflected onto the [`Operation`] so the connector targets the per-tool host
+/// (never silently dropped, Codex MEDIUM). The synthesized [`ToolInfo`] uses the
+/// EXISTING [`build_input_schema`] (object envelope + `additionalProperties:false`)
+/// and [`build_annotations`] helpers; the handler calls
+/// [`HttpConnector::execute`] and returns the JSON.
+///
+/// # Script-tool seam (Plan 05)
+///
+/// A `script` tool encountered here returns a typed [`ToolkitError::Synth`] — it
+/// is an EXPLICIT, clearly-marked seam, NOT a silent skip and NOT a `todo!()`.
+/// Plan 05 widens this function's signature (adding the shared `http_exec` +
+/// `exec_config`) and fills the `is_script_tool()` arm with a `ScriptToolHandler`
+/// branch; that change is a localized, anticipated edit because the seam is
+/// surfaced here.
+///
+/// # Errors
+///
+/// Returns [`ToolkitError::Synth`] when a `[[tools]]` entry is a `script` tool
+/// (Plan 05 seam) or is neither a valid single-call (missing `path` OR `method`)
+/// nor a script tool (T-90-03-04 negative validation — an ill-formed tool is
+/// rejected, never silently registered).
+#[cfg(feature = "http")]
+pub fn synthesize_from_config_with_http_connector(
+    config: &ServerConfig,
+    connector: Arc<dyn HttpConnector>,
+) -> Result<Vec<SynthesizedTool>> {
+    let mut out = Vec::with_capacity(config.tools.len());
+    for decl in &config.tools {
+        // EXPLICIT script-tool seam — Plan 05 fills this arm (signature widening
+        // + ScriptToolHandler branch). Until then a script tool is a typed error,
+        // never a silent skip.
+        if decl.is_script_tool() {
+            return Err(ToolkitError::Synth(format!(
+                "tool '{}' is a script tool — script tools require Plan 05 wiring",
+                decl.name
+            )));
+        }
+
+        // Single-call requires BOTH path and method. A `[[tools]]` that is
+        // neither a valid single-call nor a script tool is rejected (T-90-03-04).
+        let (path, method) = match (decl.path.as_deref(), decl.method.as_deref()) {
+            (Some(p), Some(m)) => (p, m),
+            _ => {
+                return Err(ToolkitError::Synth(format!(
+                    "tool '{}' is not a valid single-call tool: both `path` and `method` are required",
+                    decl.name
+                )));
+            },
+        };
+
+        let operation = build_operation(path, method, decl);
+        let schema = build_input_schema(&decl.parameters);
+        let annotations = build_annotations(decl.annotations.as_ref());
+        let base = match annotations {
+            Some(ann) => {
+                ToolInfo::with_annotations(decl.name.clone(), decl.description.clone(), schema, ann)
+            },
+            None => ToolInfo::new(decl.name.clone(), decl.description.clone(), schema),
+        };
+        let info = apply_widget_meta(base, decl);
+        let handler: Arc<dyn ToolHandler> = Arc::new(HttpToolHandler {
+            info: info.clone(),
+            operation,
+            connector: connector.clone(),
+        });
+        out.push((decl.name.clone(), info, handler));
+    }
+    Ok(out)
+}
+
+/// Build the [`Operation`] for a single-call tool from its `path` template,
+/// `method`, declared parameters, and per-tool `base_url`.
+///
+/// Path parameters are the `{...}` segments of the path template; every other
+/// declared `[[tools.parameters]]` becomes a query parameter (the reference
+/// `create_tool_from_config` mapping). `POST`/`PUT`/`PATCH` carry a request body
+/// so non-path/query args are sent as JSON. The per-tool `base_url` is reflected
+/// onto the [`Operation`] (Codex MEDIUM — never dropped).
+#[cfg(feature = "http")]
+fn build_operation(path: &str, method: &str, decl: &ToolDecl) -> Operation {
+    let method_upper = method.to_uppercase();
+    let path_param_names: Vec<&str> = path
+        .split('/')
+        .filter(|s| s.starts_with('{') && s.ends_with('}') && s.len() > 2)
+        .map(|s| &s[1..s.len() - 1])
+        .collect();
+
+    let mut parameters = Vec::with_capacity(decl.parameters.len());
+    // Path params (template `{...}` segments) — always required.
+    for name in &path_param_names {
+        parameters.push(Parameter::new(
+            (*name).to_string(),
+            ParameterLocation::Path,
+            true,
+        ));
+    }
+    // Remaining declared params → query params.
+    for p in &decl.parameters {
+        if path_param_names.iter().any(|n| *n == p.name) {
+            continue;
+        }
+        parameters.push(Parameter::new(
+            p.name.clone(),
+            ParameterLocation::Query,
+            p.required,
+        ));
+    }
+
+    let has_request_body = matches!(method_upper.as_str(), "POST" | "PUT" | "PATCH");
+
+    Operation {
+        method: method_upper,
+        path: path.to_string(),
+        parameters,
+        has_request_body,
+        base_url: decl.base_url.clone(),
+    }
+}
+
+/// Crate-private handler for a single-call HTTP tool (Phase 90 OAPI-02a).
+///
+/// Holds the synthesized [`ToolInfo`], the built [`Operation`], and the shared
+/// [`HttpConnector`]. [`ToolHandler::metadata`] returns `Some(self.info.clone())`
+/// (the same RESEARCH §Risks #2 invariant the SQL handler upholds); `handle()`
+/// calls [`HttpConnector::execute`] and returns the JSON response.
+#[cfg(feature = "http")]
+struct HttpToolHandler {
+    info: ToolInfo,
+    operation: Operation,
+    connector: Arc<dyn HttpConnector>,
+}
+
+#[cfg(feature = "http")]
+#[async_trait]
+impl ToolHandler for HttpToolHandler {
+    async fn handle(&self, args: Value, _extra: RequestHandlerExtra) -> pmcp::Result<Value> {
+        // T-90-03-01: arg injection is bounded by the object-envelope schema
+        // (additionalProperties:false) enforced upstream; path substitution in the
+        // connector touches only declared `{params}`.
+        // The connector's Display is redaction-safe (T-90-01-01); no URL/credential
+        // reaches the client error.
+        self.connector
+            .execute(&self.operation, &args)
+            .await
+            .map_err(|e| pmcp::Error::Internal(format!("connector error: {e}")))
+    }
+
+    fn metadata(&self) -> Option<ToolInfo> {
+        Some(self.info.clone())
+    }
+}
+
+// -----------------------------------------------------------------------------
 // Tests — Plan 05 Task 1 (RED) → GREEN in Task 2
 // -----------------------------------------------------------------------------
 
@@ -578,5 +748,251 @@ mod tests {
         let decl = decl_with_limit_default();
         let params = extract_named_params(&decl, &serde_json::json!({ "limit": 5 }));
         assert_eq!(params, vec![("limit".to_string(), serde_json::json!(5))]);
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Tests — Phase 90 OAPI-02a single-call HTTP synthesizer (feature `http`)
+// -----------------------------------------------------------------------------
+
+#[cfg(all(test, feature = "http"))]
+mod synth_http_tests {
+    use super::*;
+    use crate::config::{ParamDecl, ServerConfig, ServerSection, ToolDecl};
+    use crate::http::{HttpConnector, HttpConnectorError, Operation};
+    use pmcp::RequestHandlerExtra;
+    use serde_json::{json, Value};
+    use std::sync::{Arc, Mutex};
+
+    /// A mock [`HttpConnector`] that records the [`Operation`] it last received
+    /// and returns a fixed JSON payload — so a synthesized handler can be
+    /// invoked without any network.
+    struct MockHttpConnector {
+        last: Mutex<Option<Operation>>,
+        payload: Value,
+    }
+
+    impl MockHttpConnector {
+        fn new(payload: Value) -> Arc<Self> {
+            Arc::new(Self {
+                last: Mutex::new(None),
+                payload,
+            })
+        }
+    }
+
+    #[async_trait]
+    impl HttpConnector for MockHttpConnector {
+        async fn execute(
+            &self,
+            operation: &Operation,
+            _args: &Value,
+        ) -> std::result::Result<Value, HttpConnectorError> {
+            *self.last.lock().unwrap() = Some(operation.clone());
+            Ok(self.payload.clone())
+        }
+        fn base_url(&self) -> &str {
+            "https://mock.example.com"
+        }
+    }
+
+    fn cfg_with_tools(tools: Vec<ToolDecl>) -> ServerConfig {
+        ServerConfig {
+            server: ServerSection {
+                name: "demo".to_string(),
+                version: "0.1.0".to_string(),
+                ..Default::default()
+            },
+            tools,
+            ..Default::default()
+        }
+    }
+
+    /// (1) A single-call `[[tools]]` with a `{id}` path param synthesizes a
+    /// `ToolInfo` whose input schema marks `id` required (object envelope), and
+    /// the handler (wired to a mock connector) returns the mocked JSON.
+    #[tokio::test]
+    async fn synth_http_single_call_path_param_required_and_handler_returns_json() {
+        let cfg = cfg_with_tools(vec![ToolDecl {
+            name: "line_status".to_string(),
+            description: Some("Line status".to_string()),
+            path: Some("/Line/{id}/Status".to_string()),
+            method: Some("GET".to_string()),
+            parameters: vec![ParamDecl {
+                name: "id".to_string(),
+                param_type: Some("string".to_string()),
+                required: true,
+                ..Default::default()
+            }],
+            ..Default::default()
+        }]);
+        let connector = MockHttpConnector::new(json!({ "status": "Good Service" }));
+        let out = synthesize_from_config_with_http_connector(&cfg, connector.clone())
+            .expect("synthesize");
+        assert_eq!(out.len(), 1);
+        let (name, info, handler) = &out[0];
+        assert_eq!(name, "line_status");
+        let schema = &info.input_schema;
+        assert_eq!(schema["type"], "object");
+        assert_eq!(schema["required"], json!(["id"]));
+        assert_eq!(schema["additionalProperties"], Value::Bool(false));
+
+        let extra = RequestHandlerExtra::default();
+        let result = handler
+            .handle(json!({ "id": "victoria" }), extra)
+            .await
+            .expect("handle");
+        assert_eq!(result, json!({ "status": "Good Service" }));
+
+        // The operation carried the `{id}` path param as a Path parameter.
+        let op = connector.last.lock().unwrap().clone().expect("operation recorded");
+        let path_params: Vec<&str> =
+            op.path_parameters().iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(path_params, vec!["id"]);
+    }
+
+    /// (2) A `POST` tool routes non-path args to the request body
+    /// (`has_request_body` true) and the non-path param is NOT a path param.
+    #[tokio::test]
+    async fn synth_http_post_sets_request_body() {
+        let cfg = cfg_with_tools(vec![ToolDecl {
+            name: "create_item".to_string(),
+            description: Some("Create".to_string()),
+            path: Some("/items".to_string()),
+            method: Some("post".to_string()),
+            parameters: vec![ParamDecl {
+                name: "title".to_string(),
+                param_type: Some("string".to_string()),
+                required: true,
+                ..Default::default()
+            }],
+            ..Default::default()
+        }]);
+        let connector = MockHttpConnector::new(json!({ "ok": true }));
+        let out = synthesize_from_config_with_http_connector(&cfg, connector.clone())
+            .expect("synthesize");
+        let (_, _, handler) = &out[0];
+        let extra = RequestHandlerExtra::default();
+        handler
+            .handle(json!({ "title": "widget" }), extra)
+            .await
+            .expect("handle");
+        let op = connector.last.lock().unwrap().clone().expect("operation recorded");
+        assert_eq!(op.method, "POST");
+        assert!(op.has_request_body, "POST must carry a request body");
+        assert!(op.path_parameters().is_empty());
+    }
+
+    /// (3) A tool with path + query params lands them in the right schema slots /
+    /// `Operation` parameter locations.
+    #[tokio::test]
+    async fn synth_http_path_and_query_param_slots() {
+        let cfg = cfg_with_tools(vec![ToolDecl {
+            name: "search".to_string(),
+            description: Some("Search".to_string()),
+            path: Some("/repos/{owner}/issues".to_string()),
+            method: Some("GET".to_string()),
+            parameters: vec![
+                ParamDecl {
+                    name: "owner".to_string(),
+                    param_type: Some("string".to_string()),
+                    required: true,
+                    ..Default::default()
+                },
+                ParamDecl {
+                    name: "state".to_string(),
+                    param_type: Some("string".to_string()),
+                    required: false,
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        }]);
+        let connector = MockHttpConnector::new(json!([]));
+        let out = synthesize_from_config_with_http_connector(&cfg, connector.clone())
+            .expect("synthesize");
+        let (_, _, handler) = &out[0];
+        let extra = RequestHandlerExtra::default();
+        handler
+            .handle(json!({ "owner": "rust-lang", "state": "open" }), extra)
+            .await
+            .expect("handle");
+        let op = connector.last.lock().unwrap().clone().expect("operation recorded");
+        let path_params: Vec<&str> =
+            op.path_parameters().iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(path_params, vec!["owner"]);
+        let query_params: Vec<&str> = op
+            .query_parameters()
+            .iter()
+            .map(|p| p.name.as_str())
+            .collect();
+        assert_eq!(query_params, vec!["state"]);
+    }
+
+    /// (4) A per-tool `base_url` is reflected in the synthesized `Operation`
+    /// (Codex MEDIUM — not dropped).
+    #[tokio::test]
+    async fn synth_http_per_tool_base_url_reflected() {
+        let cfg = cfg_with_tools(vec![ToolDecl {
+            name: "other_host".to_string(),
+            description: Some("Other host".to_string()),
+            path: Some("/ping".to_string()),
+            method: Some("GET".to_string()),
+            base_url: Some("https://other.example.com/v2".to_string()),
+            ..Default::default()
+        }]);
+        let connector = MockHttpConnector::new(json!({ "pong": true }));
+        let out = synthesize_from_config_with_http_connector(&cfg, connector.clone())
+            .expect("synthesize");
+        let (_, _, handler) = &out[0];
+        let extra = RequestHandlerExtra::default();
+        handler.handle(json!({}), extra).await.expect("handle");
+        let op = connector.last.lock().unwrap().clone().expect("operation recorded");
+        assert_eq!(
+            op.base_url.as_deref(),
+            Some("https://other.example.com/v2"),
+            "per-tool base_url must be reflected on the Operation, not dropped"
+        );
+    }
+
+    /// (5) NEGATIVE: a `[[tools]]` missing `method` (and without `script`) is
+    /// rejected with a typed `ToolkitError` (T-90-03-04 — never silently
+    /// registered).
+    #[test]
+    fn synth_http_missing_method_rejected() {
+        let cfg = cfg_with_tools(vec![ToolDecl {
+            name: "broken".to_string(),
+            description: Some("missing method".to_string()),
+            path: Some("/items".to_string()),
+            method: None,
+            ..Default::default()
+        }]);
+        let connector = MockHttpConnector::new(json!(null));
+        let err = synthesize_from_config_with_http_connector(&cfg, connector)
+            .err()
+            .expect("ill-formed single-call tool must be rejected");
+        assert!(matches!(err, ToolkitError::Synth(_)));
+    }
+
+    /// (5b) NEGATIVE: a `script` tool hits the explicit Plan 05 seam and is
+    /// rejected with a typed `ToolkitError` — NOT a silent skip, NOT a panic.
+    #[test]
+    fn synth_http_script_tool_hits_plan05_seam() {
+        let cfg = cfg_with_tools(vec![ToolDecl {
+            name: "scripted".to_string(),
+            description: Some("script tool".to_string()),
+            script: Some("await api.get('/x')".to_string()),
+            ..Default::default()
+        }]);
+        let connector = MockHttpConnector::new(json!(null));
+        let err = synthesize_from_config_with_http_connector(&cfg, connector)
+            .err()
+            .expect("script tool must hit the Plan 05 seam");
+        match err {
+            ToolkitError::Synth(msg) => {
+                assert!(msg.contains("Plan 05"), "seam message must reference Plan 05: {msg}");
+            },
+            other => panic!("expected Synth error, got {other:?}"),
+        }
     }
 }

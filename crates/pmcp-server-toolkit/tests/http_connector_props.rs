@@ -8,10 +8,14 @@
 
 #![cfg(feature = "http")]
 
+use async_trait::async_trait;
+use pmcp_server_toolkit::config::{ParamDecl, ServerConfig, ServerSection, ToolDecl};
 use pmcp_server_toolkit::http::auth::NoAuth;
-use pmcp_server_toolkit::http::{HttpClient, HttpConnector};
+use pmcp_server_toolkit::http::{HttpClient, HttpConnector, HttpConnectorError, Operation};
+use pmcp_server_toolkit::synthesize_from_config_with_http_connector;
 use proptest::prelude::*;
-use std::sync::Arc;
+use serde_json::{json, Value};
+use std::sync::{Arc, Mutex};
 
 /// Build a base URL with the given path segments and return the `HttpClient`'s
 /// stored `base_url()` for assertion convenience.
@@ -60,5 +64,101 @@ proptest! {
             joined,
             format!("https://api.example.com/v1/{leaf}")
         );
+    }
+}
+
+/// Mock connector that records the [`Operation`] the synthesized handler passes
+/// to [`HttpConnector::execute`] (so the path-param-substitution property can be
+/// asserted on what the synthesizer produced, without a live HTTP backend).
+struct RecordingConnector {
+    last: Mutex<Option<Operation>>,
+}
+
+#[async_trait]
+impl HttpConnector for RecordingConnector {
+    async fn execute(
+        &self,
+        operation: &Operation,
+        _args: &Value,
+    ) -> Result<Value, HttpConnectorError> {
+        *self.last.lock().unwrap() = Some(operation.clone());
+        Ok(Value::Null)
+    }
+    fn base_url(&self) -> &str {
+        "https://api.example.com"
+    }
+}
+
+proptest! {
+    /// Path-param-substitution invariant (T-90-03-01): for a single-call tool
+    /// whose path template declares exactly one `{declared}` placeholder, the
+    /// synthesized `Operation` carries that — and ONLY that — name as a path
+    /// parameter, regardless of any extra (undeclared-as-path) query params the
+    /// tool declares. Undeclared keys never become path parameters, so they can
+    /// never be substituted into the URL path.
+    #[test]
+    fn only_declared_path_segments_become_path_params(
+        declared in "[a-z]{1,8}",
+        extra in "[a-z]{1,8}",
+    ) {
+        // Keep the two names distinct so the assertion is unambiguous.
+        prop_assume!(declared != extra);
+
+        let cfg = ServerConfig {
+            server: ServerSection {
+                name: "demo".to_string(),
+                version: "0.1.0".to_string(),
+                ..Default::default()
+            },
+            tools: vec![ToolDecl {
+                name: "t".to_string(),
+                description: Some("t".to_string()),
+                path: Some(format!("/things/{{{declared}}}")),
+                method: Some("GET".to_string()),
+                parameters: vec![
+                    ParamDecl {
+                        name: declared.clone(),
+                        param_type: Some("string".to_string()),
+                        required: true,
+                        ..Default::default()
+                    },
+                    // `extra` is declared but is NOT a `{...}` segment ⇒ query.
+                    ParamDecl {
+                        name: extra.clone(),
+                        param_type: Some("string".to_string()),
+                        required: false,
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let connector = Arc::new(RecordingConnector { last: Mutex::new(None) });
+        let out = synthesize_from_config_with_http_connector(&cfg, connector.clone())
+            .expect("synthesize");
+        let (_, _, handler) = &out[0];
+
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            handler
+                .handle(json!({ &declared: "v1", &extra: "v2" }), pmcp::RequestHandlerExtra::default())
+                .await
+                .expect("handle");
+        });
+
+        let op = connector.last.lock().unwrap().clone().expect("operation recorded");
+        let path_params: Vec<String> =
+            op.path_parameters().iter().map(|p| p.name.clone()).collect();
+        // Only the declared `{...}` segment is a path param.
+        prop_assert_eq!(path_params, vec![declared.clone()]);
+        // The extra declared param is a query param, never a path param.
+        let query_params: Vec<String> =
+            op.query_parameters().iter().map(|p| p.name.clone()).collect();
+        prop_assert!(query_params.contains(&extra), "extra must be a query param");
     }
 }
