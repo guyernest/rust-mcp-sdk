@@ -104,13 +104,13 @@ The seam was architecturally complete but **dead**: `ScriptToolHandler::handle` 
 ### Plan-vs-reality notes
 - The plan instructed exporting the new symbols "from the crate alongside `code_mode_tools_from_executor`" at the crate root. In reality `code_mode_tools_from_executor` is NOT re-exported at the crate root — it is reached via the `pmcp_server_toolkit::code_mode::*` module path (the module is `pub`). The new `request_executor_from_extra` + `code_mode_http_tools_from_executor` are `pub` in that module and reachable via the identical path (which `assemble.rs` and the tests use), so no crate-root re-export line was added — consistent with the existing surface.
 
-## Post-commit fixes (commits `6437eca4`, `de763e81`, `8af6d804`)
+## Post-commit fixes (commits `6437eca4`, `de763e81`, `31cf5293`)
 
 Three follow-up fixes were needed after the initial Task commits because intermediate edits left the build/tests broken (the pre-commit hook does not run a full `cargo check --all-targets`, so the breakage was not caught at commit time):
 
 1. **`6437eca4`** — an edit dropped the `use pmcp_code_mode::CodeExecutor as _;` trait import inside `run_code` (both `match` arms call the trait's `.execute()`), and `pmcp-openapi-server/src/lib.rs` still re-exported the removed `assemble::request_executor`. Restored the trait import; removed the dead re-export.
 2. **`de763e81`** — `oauth_passthrough_e2e.rs` referenced `pmcp_code_mode::{CodeExecutor, PlanCompiler, PlanExecutor}` directly, but `pmcp-code-mode` is not a dependency of `pmcp-openapi-server` (7 compile errors — the test never built). Switched to the toolkit re-export (`pmcp_server_toolkit::code_mode::CodeExecutor`) and drove the script-tool surface through the toolkit's public `JsCodeExecutor` seam over `request_executor_from_extra` — the SAME pmcp-code-mode engine `ScriptToolHandler` uses (D-02, byte-equality proven in `script_tool_engine_parity.rs`), keeping the test dependency-free.
-3. **`8af6d804`** — the e2e Code-Mode script used `api.get(...)` without `await`; the `JsCodeExecutor` routes ONLY awaited `api.*` calls to the `HttpExecutor` (an un-awaited call errors `"API calls should be handled by executor, not evaluator"`). Prefixed the script with `await` (matching the working `code_mode_openapi.rs` form). All 5 e2e tests now pass.
+3. **`31cf5293`** — the e2e Code-Mode script used `api.get(...)` without `await`; the `JsCodeExecutor` routes ONLY awaited `api.*` calls to the `HttpExecutor` (an un-awaited call errors `"API calls should be handled by executor, not evaluator"`). Prefixed the script with `await` (matching the working `code_mode_openapi.rs` form). All 5 e2e tests now pass.
 
 ## Final verification (all green)
 
@@ -128,4 +128,4 @@ Three follow-up fixes were needed after the initial Task commits because interme
 - FOUND commit 26b7ae69 (Task 2)
 - FOUND commit 9b5ed8aa (Task 3)
 - FOUND commit 7f511e43 (docs)
-- FOUND commit 6437eca4, de763e81, 8af6d804 (build/test fixes)
+- FOUND commit 6437eca4, de763e81, 31cf5293 (build/test fixes)
