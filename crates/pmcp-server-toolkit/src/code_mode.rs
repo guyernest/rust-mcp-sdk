@@ -554,7 +554,8 @@ mod tool_handlers {
             #[cfg_attr(not(feature = "openapi-code-mode"), allow(unused_variables))]
             extra: &pmcp::RequestHandlerExtra,
         ) -> std::result::Result<serde_json::Value, pmcp_code_mode::ExecutionError> {
-                match &self.source {
+            use pmcp_code_mode::CodeExecutor as _;
+            match &self.source {
                 ExecSource::Static(executor) => executor.execute(code, variables).await,
                 #[cfg(feature = "openapi-code-mode")]
                 ExecSource::PerRequestHttp { base, exec_config } => {

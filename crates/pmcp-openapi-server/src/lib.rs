@@ -35,7 +35,7 @@ pub mod assemble;
 pub mod cli;
 pub mod dispatch;
 
-pub use assemble::{build_server, request_executor, AssembleError};
+pub use assemble::{build_server, AssembleError};
 pub use cli::Args;
 pub use dispatch::{dispatch, DispatchError};
 
