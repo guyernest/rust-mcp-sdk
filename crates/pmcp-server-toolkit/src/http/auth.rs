@@ -702,7 +702,7 @@ mod tests {
         let mut query = HashMap::new();
         auth.apply(&mut headers, &mut query, None).await.unwrap();
         assert!(
-            query.get("app_key").is_none(),
+            !query.contains_key("app_key"),
             "an unset required=false api_key ref is omitted, not sent empty/literal"
         );
     }

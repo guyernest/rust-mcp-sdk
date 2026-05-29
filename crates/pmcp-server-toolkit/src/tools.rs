@@ -139,15 +139,7 @@ fn synthesize_inner(
 ) -> Result<Vec<SynthesizedTool>> {
     let mut out = Vec::with_capacity(config.tools.len());
     for decl in &config.tools {
-        let schema = build_input_schema(&decl.parameters);
-        let annotations = build_annotations(decl.annotations.as_ref());
-        let base = match annotations {
-            Some(ann) => {
-                ToolInfo::with_annotations(decl.name.clone(), decl.description.clone(), schema, ann)
-            },
-            None => ToolInfo::new(decl.name.clone(), decl.description.clone(), schema),
-        };
-        let info = apply_widget_meta(base, decl);
+        let info = build_tool_info(decl);
         let handler: Arc<dyn ToolHandler> = Arc::new(SynthesizedToolHandler {
             info: info.clone(),
             decl: decl.clone(),
@@ -173,6 +165,24 @@ fn apply_widget_meta(info: ToolInfo, decl: &ToolDecl) -> ToolInfo {
         Some(uri) => info.with_meta_entry("ui", json!({ "resourceUri": uri })),
         None => info,
     }
+}
+
+/// Build the [`ToolInfo`] for a synthesized tool from its declaration.
+///
+/// The schema + annotations + widget-meta sequence is identical for every tool
+/// kind (single-call HTTP, SQL, and script), so it lives here once — keeping the
+/// `#[non_exhaustive]` [`ToolInfo`] constructor discipline (the `with_annotations`
+/// vs `new` arms) in a single place rather than copy-pasted per synthesizer.
+fn build_tool_info(decl: &ToolDecl) -> ToolInfo {
+    let schema = build_input_schema(&decl.parameters);
+    let annotations = build_annotations(decl.annotations.as_ref());
+    let base = match annotations {
+        Some(ann) => {
+            ToolInfo::with_annotations(decl.name.clone(), decl.description.clone(), schema, ann)
+        },
+        None => ToolInfo::new(decl.name.clone(), decl.description.clone(), schema),
+    };
+    apply_widget_meta(base, decl)
 }
 
 /// Build the JSON Schema `properties` + `required` envelope from a
@@ -466,15 +476,7 @@ fn synthesize_http_inner(
         };
 
         let operation = build_operation(path, method, decl);
-        let schema = build_input_schema(&decl.parameters);
-        let annotations = build_annotations(decl.annotations.as_ref());
-        let base = match annotations {
-            Some(ann) => {
-                ToolInfo::with_annotations(decl.name.clone(), decl.description.clone(), schema, ann)
-            },
-            None => ToolInfo::new(decl.name.clone(), decl.description.clone(), schema),
-        };
-        let info = apply_widget_meta(base, decl);
+        let info = build_tool_info(decl);
         let handler: Arc<dyn ToolHandler> = Arc::new(HttpToolHandler {
             info: info.clone(),
             operation,
@@ -599,8 +601,10 @@ impl ToolHandler for HttpToolHandler {
 /// code-mode`) compiles without this type (single-call only).
 #[cfg(feature = "openapi-code-mode")]
 struct ScriptToolHandler {
-    /// The admin-authored embedded JS, compiled + executed per `handle`.
-    script: String,
+    /// The admin-authored script, compiled ONCE at synthesis (the body is fixed
+    /// content). Executed per `handle` over a fresh
+    /// [`PlanExecutor`](pmcp_code_mode::PlanExecutor).
+    plan: pmcp_code_mode::ExecutionPlan,
     /// The SAME executor instance that feeds Code Mode (D-02). Cloned per request
     /// to construct a fresh [`PlanExecutor`](pmcp_code_mode::PlanExecutor).
     http_exec: HttpCodeExecutor,
@@ -625,8 +629,9 @@ impl ScriptToolHandler {
     /// # Errors
     ///
     /// Returns [`ToolkitError::Synth`] if the declaration carries no `script`
-    /// (callers route only `is_script_tool()` entries here, so this is a
-    /// defensive guard, not an expected path).
+    /// (a defensive guard — callers route only `is_script_tool()` entries here),
+    /// or if the script fails to compile (surfaced here at server build time,
+    /// failing fast rather than on the first tool call).
     fn new(
         decl: &ToolDecl,
         http_exec: HttpCodeExecutor,
@@ -638,17 +643,21 @@ impl ScriptToolHandler {
                 decl.name
             ))
         })?;
-        let schema = build_input_schema(&decl.parameters);
-        let annotations = build_annotations(decl.annotations.as_ref());
-        let base = match annotations {
-            Some(ann) => {
-                ToolInfo::with_annotations(decl.name.clone(), decl.description.clone(), schema, ann)
-            },
-            None => ToolInfo::new(decl.name.clone(), decl.description.clone(), schema),
-        };
-        let tool_info = apply_widget_meta(base, decl);
+        // Compile the admin-authored JS ONCE at synthesis time — the script is
+        // fixed content, so compiling per request would re-run a full SWC parse
+        // on the hot path (the PlanCompiler-accepted subset, no eval / FFI, is
+        // the static bound). A compile error surfaces here at server build.
+        let plan = pmcp_code_mode::PlanCompiler::with_config(&exec_config)
+            .compile_code(&script)
+            .map_err(|e| {
+                ToolkitError::Synth(format!(
+                    "tool '{}' script failed to compile: {e}",
+                    decl.name
+                ))
+            })?;
+        let tool_info = build_tool_info(decl);
         Ok(Self {
-            script,
+            plan,
             http_exec,
             exec_config,
             tool_info,
@@ -659,26 +668,21 @@ impl ScriptToolHandler {
 #[cfg(feature = "openapi-code-mode")]
 #[pmcp_code_mode::async_trait]
 impl ToolHandler for ScriptToolHandler {
-    /// Compile + run the admin-authored script over the shared engine, binding
+    /// Run the pre-compiled admin-authored script over the shared engine, binding
     /// the validated `args` to the `args` variable (D-02 — identical to the
     /// `JsCodeExecutor` path's `set_variable("args", …)`).
     async fn handle(&self, args: Value, _extra: RequestHandlerExtra) -> pmcp::Result<Value> {
-        // (1) Compile the admin-authored JS to an execution plan. The
-        //     PlanCompiler-accepted subset (no eval / FFI) is the static bound.
-        let plan = pmcp_code_mode::PlanCompiler::with_config(&self.exec_config)
-            .compile_code(&self.script)
-            .map_err(|e| pmcp::Error::Internal(format!("script compile failed: {e}")))?;
-
-        // (2) Execute over the SHARED HttpCodeExecutor instance (D-02), bounded by
-        //     ExecutionConfig (Pitfall 7 — no token cycle, only these caps).
+        // (1) Execute the plan (compiled once in `new`) over the SHARED
+        //     HttpCodeExecutor instance (D-02), bounded by ExecutionConfig
+        //     (Pitfall 7 — no token cycle, only these caps).
         let mut executor =
             pmcp_code_mode::PlanExecutor::new(self.http_exec.clone(), self.exec_config.clone());
-        // (3) Bind the schema-validated client args to `args` (T-90-05-03) —
+        // (2) Bind the schema-validated client args to `args` (T-90-05-03) —
         //     byte-identical to compile_and_execute's set_variable("args", …).
         executor.set_variable("args", args);
 
         let result = executor
-            .execute(&plan)
+            .execute(&self.plan)
             .await
             .map_err(|e| pmcp::Error::Internal(format!("script execution failed: {e}")))?;
         Ok(result.value)
