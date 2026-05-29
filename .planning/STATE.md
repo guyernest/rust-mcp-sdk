@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v2.2
 milestone_name: Configuration-Only MCP Servers
 status: executing
-stopped_at: Phase 90 context gathered
-last_updated: "2026-05-29T16:51:48.375Z"
-last_activity: 2026-05-29 -- Phase 90 planning complete
+stopped_at: Completed 90-01-PLAN.md
+last_updated: "2026-05-29T17:59:36.302Z"
+last_activity: 2026-05-29
 progress:
   total_phases: 45
   completed_phases: 38
   total_plans: 180
-  completed_plans: 171
+  completed_plans: 172
   percent: 84
 ---
 
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-05-17)
 
 **Core value:** Enterprise developers build production-grade SQL MCP servers from configuration + schema files alone — no Rust required — while preserving PMCP's security, tools/resources/prompts/tasks/skills standards and pmcp.run hosting integration.
-**Current focus:** Phase 86 — shapes-b-c-d-scaffold-library-example-deploy
+**Current focus:** Phase 90 — openapi-built-in-server
 
 ## Current Position
 
-Phase: 999.1
-Plan: Not started
+Phase: 90 (openapi-built-in-server) — EXECUTING
+Plan: 2 of 9
 Status: Ready to execute
-Last activity: 2026-05-29 -- Phase 90 planning complete
+Last activity: 2026-05-29
 
 **Carryover from v2.1:** Phase 81 (update-pmcp-book-and-pmcp-course-with-v2-advanced-topics-cod) was executing at v2.1 close; will be tracked separately and folded into v2.1 completion. Operator follow-ups deferred from Phase 75 Wave 5 still pending: (a) merge Phase 75 Wave 5 + 75.5 to paiml/rust-mcp-sdk:main; (b) post-merge run `gh workflow run quality-badges.yml -R paiml/rust-mcp-sdk` and append observation to `.planning/phases/75-fix-pmat-issues/75-05-GATE-VERIFICATION.md` "## Badge flip observation" section.
 
@@ -163,6 +163,9 @@ Inherited from v2.1 (see PROJECT.md + prior Decisions log):
 - [Phase 86]: [Plan 86-05] H4 secret posture = in-bundle rewrite (mechanism b): bundle_assets_if_configured rewrites token_secret to ${CODE_MODE_SECRET} for both the zip-root config.toml and the runtime-read assets/config.toml when config-driven; local on-disk config.toml keeps the inline DEV secret for cargo run (D-06). deploy.toml emitted to both root and .pmcp/ (DeployConfig::load reads .pmcp/)
 - [Phase ?]: [86-06] TEST-06 cloud deploy test is double-gated (PMCP_RUN_DEPLOY_TEST env early-return + #[ignore]) so it skips cleanly in credential-less CI and is authentic for an operator with creds
 - [Phase ?]: [86-06] Deploy driven via the real cargo-pmcp binary subprocess asserting exit-0 (M1) not in-process; reuses Plan 04 append_crates_io_patch + ChildGuard; no new deploy code, no always-on mock (D-11)
+- [Phase ?]: [Phase 90 Plan 01] http feature reconciled: merged the pre-existing http=[pmcp/streamable-http] (Phase 86 sql_server_http example) with the new OpenAPI connector deps into one http feature — both concerns ride one flag (Rule 3).
+- [Phase ?]: [Phase 90 Plan 01] reqwest 0.13 gates RequestBuilder::query behind a query feature (plan premise stale); query params appended via url::Url query_pairs_mut, keeping the query feature off and the light build lean (Rule 1).
+- [Phase ?]: [Phase 90 Plan 01] AuthConfig + HttpConfig owned in http module for Plan 02 re-export; HttpAuthProvider::apply takes inbound_token: Option<&str> so one trait serves static + per-request oauth_passthrough; static providers ignore it (T-90-01-06).
 
 ### Roadmap Evolution
 
@@ -223,6 +226,7 @@ Inherited from v2.1 (see PROJECT.md + prior Decisions log):
 | Phase 86 P04 | 3min | 2 tasks | 2 files |
 | Phase 86 P05 | 18min | 3 tasks | 4 files |
 | Phase 86 P06 | 9min | 1 tasks | 1 files |
+| Phase 90 P01 | 15min | 3 tasks | 8 files |
 
 ### Last Activity
 
@@ -240,6 +244,6 @@ Inherited from v2.1 (see PROJECT.md + prior Decisions log):
 
 ## Session Continuity
 
-Last session: 2026-05-29T14:14:39.095Z
-Stopped at: Phase 90 context gathered
+Last session: 2026-05-29T17:59:36.297Z
+Stopped at: Completed 90-01-PLAN.md
 Resume: Plan 85-03 COMPLETE — scaffolded `crates/pmcp-sql-server` (Shape A pure-config binary): feature-gated 4-connector manifest (sqlite/postgres/mysql/athena, all default-on D-07), lib/main split with a placeholder `lib::run()` Wave 2 replaces. Vendored FOUR self-contained parity fixtures into the SDK repo (closes RESEARCH Open Q#1): the DATA-BEARING `tests/fixtures/chinook.db` (~984 KB, REVIEW FIX #1 — real rows for the parity replay), the SEPARATE `chinook.ddl` (11 CREATE TABLE, the --schema text input D-06), `generated.yaml` (29-scenario contract), and `reference-config.toml` — all publish-excluded via `exclude = [tests/, …]`. 6-test `schema_fixture.rs` proves the DB returns Rock/AC-DC through the real SqliteConnector, the DDL builds a standalone 11-table schema, and generated.yaml parses as a `mcp_tester::TestScenario`. REF-02 fixture foundation done. Next: Plan 85-04 (Wave 2) fills `lib::run()` with the real config-load → connector-select → `pmcp::Server` assembly → transport-serve pipeline; Plan 85-06 replays the 29 scenarios against the vendored DB. NOTE: plan counter advanced 2→3 (monotonic) but plan 85-02 is a parallel Wave-1 plan whose SUMMARY is still pending; progress recalc (157/161, 98%) reflects disk truth.
