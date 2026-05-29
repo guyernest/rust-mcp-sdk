@@ -298,10 +298,7 @@ mod tool_handlers {
                     .result
                     .violations
                     .first()
-                    .map(|v| match &v.suggestion {
-                        Some(s) => format!("{}: {} — {}", v.rule, v.message, s),
-                        None => format!("{}: {}", v.rule, v.message),
-                    })
+                    .map(ToString::to_string)
                     .unwrap_or_else(|| {
                         "Code Mode rejected the query (policy validation failed)".to_string()
                     });
