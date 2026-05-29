@@ -73,7 +73,7 @@ fn code_mode_executor(
 
 /// Minimal Code-Mode script the SWC JS subset accepts: a single `api.get` bound
 /// to a const before return (90-05 engine-accuracy decision).
-const GET_ME_SCRIPT: &str = "const r = api.get(\"/me\"); return r;";
+const GET_ME_SCRIPT: &str = "const r = await api.get(\"/me\"); return r;";
 
 // ============================================================================
 // required:true
