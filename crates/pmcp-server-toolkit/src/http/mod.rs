@@ -290,7 +290,11 @@ mod tests {
             ],
             has_request_body: false,
         };
-        let path_params: Vec<&str> = op.path_parameters().iter().map(|p| p.name.as_str()).collect();
+        let path_params: Vec<&str> = op
+            .path_parameters()
+            .iter()
+            .map(|p| p.name.as_str())
+            .collect();
         assert_eq!(path_params, vec!["id"]);
         let query_params: Vec<&str> = op
             .query_parameters()
@@ -334,7 +338,10 @@ mod tests {
     #[test]
     fn display_no_secret_status_shows_code() {
         let rendered = HttpConnectorError::Status { status: 401 }.to_string();
-        assert!(rendered.contains("401"), "status code must be visible: {rendered:?}");
+        assert!(
+            rendered.contains("401"),
+            "status code must be visible: {rendered:?}"
+        );
         for forbidden in ["Bearer", "Authorization", "app_key", "https://"] {
             assert!(!rendered.contains(forbidden), "must not echo {forbidden:?}");
         }

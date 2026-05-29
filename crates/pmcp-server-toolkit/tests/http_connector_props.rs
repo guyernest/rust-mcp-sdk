@@ -17,8 +17,8 @@ use std::sync::Arc;
 /// stored `base_url()` for assertion convenience.
 fn client_base(path: &str) -> String {
     let base = format!("https://api.example.com{path}");
-    let client = HttpClient::new(reqwest::Client::new(), base, Arc::new(NoAuth))
-        .expect("valid base URL");
+    let client =
+        HttpClient::new(reqwest::Client::new(), base, Arc::new(NoAuth)).expect("valid base URL");
     client.base_url().to_string()
 }
 

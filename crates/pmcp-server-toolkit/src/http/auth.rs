@@ -219,8 +219,9 @@ impl HttpAuthProvider for ApiKeyAuth {
             query.insert(key.clone(), value.clone());
         }
         for (key, value) in &self.headers {
-            let name = HeaderName::try_from(key.as_str())
-                .map_err(|_| HttpConnectorError::InvalidHeader("invalid header name".to_string()))?;
+            let name = HeaderName::try_from(key.as_str()).map_err(|_| {
+                HttpConnectorError::InvalidHeader("invalid header name".to_string())
+            })?;
             let val = HeaderValue::try_from(value.as_str()).map_err(|_| {
                 HttpConnectorError::InvalidHeader("invalid header value".to_string())
             })?;
@@ -334,10 +335,9 @@ impl OAuth2ClientCredentialsAuth {
         struct TokenResponse {
             access_token: String,
         }
-        let token: TokenResponse = response
-            .json()
-            .await
-            .map_err(|_| HttpConnectorError::Auth("oauth2 token response unparseable".to_string()))?;
+        let token: TokenResponse = response.json().await.map_err(|_| {
+            HttpConnectorError::Auth("oauth2 token response unparseable".to_string())
+        })?;
         Ok(token.access_token)
     }
 }
@@ -397,9 +397,12 @@ impl HttpAuthProvider for OAuthPassthroughAuth {
 
         match token {
             Some(tok) => {
-                let header_name = HeaderName::try_from(self.target_header.as_str()).map_err(|_| {
-                    HttpConnectorError::InvalidHeader("invalid passthrough target header".to_string())
-                })?;
+                let header_name =
+                    HeaderName::try_from(self.target_header.as_str()).map_err(|_| {
+                        HttpConnectorError::InvalidHeader(
+                            "invalid passthrough target header".to_string(),
+                        )
+                    })?;
                 // Forward the token verbatim if it already carries a scheme,
                 // otherwise prefix with "Bearer ".
                 let value = if tok.starts_with("Bearer ") || tok.starts_with("Basic ") {
@@ -412,7 +415,7 @@ impl HttpAuthProvider for OAuthPassthroughAuth {
                 })?;
                 headers.insert(header_name, header_value);
                 Ok(())
-            }
+            },
             None if self.required => Err(HttpConnectorError::Auth(
                 "passthrough authentication required but no inbound token was provided".to_string(),
             )),
@@ -452,7 +455,7 @@ pub fn create_auth_provider(
             } else {
                 Arc::new(NoAuth)
             }
-        }
+        },
         AuthConfig::Bearer { token, .. } => {
             if token.is_empty() {
                 Arc::new(NoAuth)
@@ -461,7 +464,7 @@ pub fn create_auth_provider(
                     token: token.clone(),
                 })
             }
-        }
+        },
         AuthConfig::Basic {
             username, password, ..
         } => {
@@ -473,7 +476,7 @@ pub fn create_auth_provider(
                     password: password.clone(),
                 })
             }
-        }
+        },
         AuthConfig::OAuth2ClientCredentials {
             token_url,
             client_id,
@@ -491,14 +494,14 @@ pub fn create_auth_provider(
                     scopes.clone(),
                 ))
             }
-        }
+        },
         AuthConfig::OAuthPassthrough { required, .. } => {
             if *required {
                 Arc::new(MissingTokenAuth)
             } else {
                 Arc::new(NoAuth)
             }
-        }
+        },
     };
     Ok(provider)
 }
@@ -598,7 +601,10 @@ mod tests {
         let mut query = HashMap::new();
         auth.apply(&mut headers, &mut query, None).await.unwrap();
         assert_eq!(query.get("app_key"), Some(&"secret123".to_string()));
-        assert!(headers.is_empty(), "api-key-in-query must not touch headers");
+        assert!(
+            headers.is_empty(),
+            "api-key-in-query must not touch headers"
+        );
     }
 
     #[tokio::test]
@@ -632,7 +638,10 @@ mod tests {
         auth.apply(&mut headers, &mut query, Some("client-tok"))
             .await
             .unwrap();
-        assert_eq!(headers.get("X-Forwarded-Token").unwrap(), "Bearer client-tok");
+        assert_eq!(
+            headers.get("X-Forwarded-Token").unwrap(),
+            "Bearer client-tok"
+        );
     }
 
     #[tokio::test]

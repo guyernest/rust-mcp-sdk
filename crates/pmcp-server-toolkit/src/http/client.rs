@@ -140,7 +140,10 @@ impl HttpClient {
     }
 
     /// Substitute path parameters into the operation path template.
-    fn substitute_path(operation: &Operation, args: &serde_json::Map<String, serde_json::Value>) -> String {
+    fn substitute_path(
+        operation: &Operation,
+        args: &serde_json::Map<String, serde_json::Value>,
+    ) -> String {
         let mut path = operation.path.clone();
         for param in operation.path_parameters() {
             let placeholder = format!("{{{}}}", param.name);
@@ -209,8 +212,11 @@ impl HttpClient {
         if let Some(body) = args.get("body") {
             return Some(body.clone());
         }
-        let declared: std::collections::HashSet<&str> =
-            operation.parameters.iter().map(|p| p.name.as_str()).collect();
+        let declared: std::collections::HashSet<&str> = operation
+            .parameters
+            .iter()
+            .map(|p| p.name.as_str())
+            .collect();
         let body: serde_json::Map<String, serde_json::Value> = args
             .iter()
             .filter(|(k, _)| !declared.contains(k.as_str()))
@@ -232,7 +238,9 @@ impl HttpClient {
             "DELETE" => Ok(reqwest::Method::DELETE),
             "HEAD" => Ok(reqwest::Method::HEAD),
             "OPTIONS" => Ok(reqwest::Method::OPTIONS),
-            _ => Err(HttpConnectorError::Backend("unknown HTTP method".to_string())),
+            _ => Err(HttpConnectorError::Backend(
+                "unknown HTTP method".to_string(),
+            )),
         }
     }
 
@@ -261,7 +269,7 @@ impl HttpClient {
                         continue;
                     }
                     return Ok(response);
-                }
+                },
                 Err(e) => {
                     let retryable = e.is_connect() || e.is_timeout();
                     if retryable && attempt < max_retries {
@@ -271,7 +279,7 @@ impl HttpClient {
                     return Err(HttpConnectorError::Request(
                         "transport error contacting backend".to_string(),
                     ));
-                }
+                },
             }
         }
         Err(HttpConnectorError::Status {
@@ -349,8 +357,9 @@ impl HttpConnector for HttpClient {
         if body.is_empty() {
             return Ok(serde_json::Value::Null);
         }
-        serde_json::from_str(&body)
-            .map_err(|_| HttpConnectorError::Backend("response body was not valid JSON".to_string()))
+        serde_json::from_str(&body).map_err(|_| {
+            HttpConnectorError::Backend("response body was not valid JSON".to_string())
+        })
     }
 
     fn base_url(&self) -> &str {
@@ -418,9 +427,13 @@ mod tests {
     #[test]
     fn test_new_is_lazy_and_rejects_bad_url() {
         // Lazy: a bad URL fails synchronously without any network (CF-2).
-        let err = HttpClient::new(reqwest::Client::new(), "not a url".to_string(), Arc::new(NoAuth))
-            .err()
-            .expect("bad URL should error");
+        let err = HttpClient::new(
+            reqwest::Client::new(),
+            "not a url".to_string(),
+            Arc::new(NoAuth),
+        )
+        .err()
+        .expect("bad URL should error");
         assert!(matches!(err, HttpConnectorError::Backend(_)));
         let rendered = err.to_string();
         assert!(!rendered.contains("not a url"), "must not echo the bad URL");
@@ -434,11 +447,15 @@ mod tests {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/users/42"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"id": 42, "name": "Ada"})))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"id": 42, "name": "Ada"})),
+            )
             .mount(&server)
             .await;
 
-        let client = HttpClient::new(reqwest::Client::new(), server.uri(), Arc::new(NoAuth)).unwrap();
+        let client =
+            HttpClient::new(reqwest::Client::new(), server.uri(), Arc::new(NoAuth)).unwrap();
         let op = get_user_op();
         let args = serde_json::json!({"id": "42"});
         let result = client.execute(&op, &args).await.unwrap();
@@ -489,13 +506,17 @@ mod tests {
             .mount(&server)
             .await;
 
-        let client = HttpClient::new(reqwest::Client::new(), server.uri(), Arc::new(NoAuth)).unwrap();
+        let client =
+            HttpClient::new(reqwest::Client::new(), server.uri(), Arc::new(NoAuth)).unwrap();
         let op = get_user_op();
         let args = serde_json::json!({"id": "42"});
         let err = client.execute(&op, &args).await.unwrap_err();
         assert!(matches!(err, HttpConnectorError::Status { status: 404 }));
         let rendered = err.to_string();
         assert!(rendered.contains("404"));
-        assert!(!rendered.contains("http://"), "status error must not echo the URL");
+        assert!(
+            !rendered.contains("http://"),
+            "status error must not echo the URL"
+        );
     }
 }
