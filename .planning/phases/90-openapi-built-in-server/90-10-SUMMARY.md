@@ -70,7 +70,7 @@ The seam was architecturally complete but **dead**: `ScriptToolHandler::handle` 
 - `build_server` wires Code Mode via `code_mode_http_tools_from_executor(builder, cfg, http_exec, exec_config, ValidationFlavor::OpenApi)` over the original `http_exec` (the synthesizer keeps its own clone), so the handler re-derives a request-scoped executor carrying the captured token.
 - **Removed** the dead binary `request_executor` fn + its unit test (WR-01). Kept `TokenCaptureAuthProvider` (the live inbound-capture piece). Updated module/fn docs.
 
-### Task 3 — End-to-end wiremock proof through the handler path (commit `c0e6c7e7`)
+### Task 3 — End-to-end wiremock proof through the handler path (commit `9b5ed8aa`; build fix `1a2b9f3`)
 - Added `crates/pmcp-openapi-server/tests/oauth_passthrough_e2e.rs` (5 tests). The forwarded `Authorization` header is asserted at a wiremock backend through the SAME executor seams the toolkit handlers use: the `ExecuteCodeHandler::PerRequestHttp` `JsCodeExecutor` (built from `request_executor_from_extra`) and the `ScriptToolHandler` `PlanExecutor`. Cases: required:true present (forwards + succeeds, `expect(1)`), required:true absent (FAILS, `expect(0)` proves the backend was never contacted), required:false present (forwards, `expect(1)`), required:false absent (proceeds with NO auth header — a header-matching mock at `expect(0)` plus a no-auth mock at `expect(1)`), and the script-tool surface forwarding the token.
 - Added an `openapi-code-mode` (default) passthrough feature to `pmcp-openapi-server/Cargo.toml` so `--features openapi-code-mode` resolves for the gated test; the toolkit dep already hard-enables the feature.
 
@@ -104,9 +104,15 @@ The seam was architecturally complete but **dead**: `ScriptToolHandler::handle` 
 ### Plan-vs-reality notes
 - The plan instructed exporting the new symbols "from the crate alongside `code_mode_tools_from_executor`" at the crate root. In reality `code_mode_tools_from_executor` is NOT re-exported at the crate root — it is reached via the `pmcp_server_toolkit::code_mode::*` module path (the module is `pub`). The new `request_executor_from_extra` + `code_mode_http_tools_from_executor` are `pub` in that module and reachable via the identical path (which `assemble.rs` and the tests use), so no crate-root re-export line was added — consistent with the existing surface.
 
+## Post-commit build fix (commit `1a2b9f3`)
+
+An intermediate edit during Task 3 dropped the `use pmcp_code_mode::CodeExecutor as _;` trait import inside `run_code` (both `match` arms call the trait's `.execute()`), and `pmcp-openapi-server/src/lib.rs` still re-exported the removed `assemble::request_executor`. Both were corrected in a follow-up commit; `cargo check --all-targets`, the full toolkit + openapi-server test suites, the SQL-only build, and clippy on both crates are now all green.
+
 ## Self-Check: PASSED
 
 - FOUND: crates/pmcp-openapi-server/tests/oauth_passthrough_e2e.rs
 - FOUND commit bcdd48ce (Task 1)
 - FOUND commit 26b7ae69 (Task 2)
-- FOUND commit c0e6c7e7 (Task 3)
+- FOUND commit 9b5ed8aa (Task 3)
+- FOUND commit 7f511e43 (docs)
+- FOUND commit 1a2b9f3 (build fix)
