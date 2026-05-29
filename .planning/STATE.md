@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v2.2
 milestone_name: Configuration-Only MCP Servers
-status: executing
+status: verifying
 stopped_at: Completed 90-08-PLAN.md
-last_updated: "2026-05-29T21:47:24.178Z"
+last_updated: "2026-05-29T21:56:44.425Z"
 last_activity: 2026-05-29
 progress:
   total_phases: 45
-  completed_phases: 38
+  completed_phases: 39
   total_plans: 180
-  completed_plans: 179
-  percent: 84
+  completed_plans: 180
+  percent: 87
 ---
 
 # Project State
@@ -27,7 +27,7 @@ See: .planning/PROJECT.md (updated 2026-05-17)
 
 Phase: 90 (openapi-built-in-server) — EXECUTING
 Plan: 9 of 9
-Status: Ready to execute
+Status: Phase complete — ready for verification
 Last activity: 2026-05-29
 
 **Carryover from v2.1:** Phase 81 (update-pmcp-book-and-pmcp-course-with-v2-advanced-topics-cod) was executing at v2.1 close; will be tracked separately and folded into v2.1 completion. Operator follow-ups deferred from Phase 75 Wave 5 still pending: (a) merge Phase 75 Wave 5 + 75.5 to paiml/rust-mcp-sdk:main; (b) post-merge run `gh workflow run quality-badges.yml -R paiml/rust-mcp-sdk` and append observation to `.planning/phases/75-fix-pmat-issues/75-05-GATE-VERIFICATION.md` "## Badge flip observation" section.
@@ -180,6 +180,7 @@ Inherited from v2.1 (see PROJECT.md + prior Decisions log):
 - [Phase 90]: D-03 no-spec + code-mode = warn-and-proceed (Code Mode runs without the api_schema resource)
 - [Phase 90]: Plan 07 Rule 2: create_auth_provider expands ${VAR}/env:VAR in api_key query_params/headers (resolve_api_key_value+expand_api_key_map); unset required=false omitted. Outbound api_key was never expanded (only token_secret, Plan 85-01) so literal ${TFL_APP_KEY} would have hit the backend — gap exposed by london-tube parity must_have.
 - [Phase 90]: Plan 07 london-tube parity proven OFFLINE through run_serving against wiremock; tool-surface asserted behaviorally (tool_call) since mcp-tester contains matches string array elements not tool objects; secret expansion proven two-sided (app_key=dummy matchers + received_requests literal-absence); live TfL replay #[ignore]+PMCP_OPENAPI_LIVE_TEST double-gated.
+- [Phase ?]: Docs in three shapes (README + pmcp-book Ch 12.11 + pmcp-course) document the OpenAPI built-in server, all leading with the cargo pmcp new --kind openapi-server on-ramp; auth table documents all SIX AuthConfig variants traced to http::auth source (OAPI-09)
 
 ### Roadmap Evolution
 
@@ -248,6 +249,7 @@ Inherited from v2.1 (see PROJECT.md + prior Decisions log):
 | Phase 90 P06 | 13min | 3 tasks | 9 files |
 | Phase 90 P07 | 12min | 2 tasks | 5 files |
 | Phase 90 P08 | 13min | 2 tasks | 6 files |
+| Phase 90 P09 | 4min | 2 tasks | 5 files |
 
 ### Last Activity
 
@@ -265,6 +267,6 @@ Inherited from v2.1 (see PROJECT.md + prior Decisions log):
 
 ## Session Continuity
 
-Last session: 2026-05-29T21:47:24.172Z
+Last session: 2026-05-29T21:56:36.463Z
 Stopped at: Completed 90-08-PLAN.md
 Resume: Plan 90-08 COMPLETE — `cargo pmcp new --kind openapi-server` scaffold (OAPI-07/CF-3). `templates/openapi_server.rs` emits a SINGLE runnable crate: Cargo.toml (toolkit `openapi-code-mode` umbrella + `pmcp-openapi-server` lib for the `dispatch`/`build_server` seam — the http path has NO ServerBuilderExt method, Plan 06 decision, Rule 3 reconciliation), a ≤15-statement-line Shape C `main.rs` (load config[+optional api.yaml] → dispatch → build_server → serve, with the StreamableHttpServer boilerplate hoisted into a private serve() helper, CF-5), a `config.toml` with [backend] + a single-call + a script tool + `[code_mode] enabled=true` carrying an inline DEV token_secret + `allow_inline_token_secret_for_dev=true` + a LOUD replace-for-production note (CF-4), a minimal `api.yaml` (D-03, optional at runtime), and `deploy.toml` + `.pmcp/deploy.toml` with `[target] type="pmcp-run"` (CF-6, Phase 77 enum unchanged). `new.rs` gained the `openapi-server` arm + execute/print helpers + a widened error. `tests/scaffold_openapi_server.rs` is two-tier (mirror TEST-05): always-on file-emission + CF-5 ≤15-line golden-drift, plus an env-gated (`PMCP_SCAFFOLD_COMPILE_TEST=1`) cold `cargo check` that was RUN and passed (proving the scaffold compiles end to end). README documents the new `--kind` in a scoped fold. Commits `4caab84b`, `6b992761`. Next: Plan 90-09 (docs) — only remaining incomplete Phase 90 plan.

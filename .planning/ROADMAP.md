@@ -1630,7 +1630,7 @@ Plans:
 
 **Wave 6** *(blocked on Wave 5 completion)*
 
-- [ ] 90-09-PLAN.md — docs in three shapes (crate README + book + course chapters) (OAPI-09)
+- [x] 90-09-PLAN.md — docs in three shapes (crate README + book + course chapters) (OAPI-09)
 
 ## Progress — v2.2 Milestone
 
@@ -1646,4 +1646,4 @@ Plans:
 | 87. Type 2 Authoring Skills Server | 0/? | Not started | - |
 | 88. Dogfood `pmcp-server` | 0/? | Not started | - |
 | 89. Documentation & Migration | 0/? | Not started | - |
-| 90. OpenAPI Built-In Server | 8/9 | In Progress|  |
+| 90. OpenAPI Built-In Server | 9/9 | Complete   | 2026-05-29 |
