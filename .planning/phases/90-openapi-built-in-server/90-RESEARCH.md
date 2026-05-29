@@ -705,7 +705,7 @@ engines** — they are the SAME engine at two layers. `PlanCompiler`+`PlanExecut
 | A5 | `wiremock` (pure-Rust) is the right test backend, honoring no-Docker rule | Supporting stack | none material |
 | A6 | Reference `HttpClientExecutor::execute_request` body is liftable into the toolkit verbatim (minus `crate::auth` path) | Pattern 4 | If it pulls `mcp_server_common`-only helpers, swap to toolkit equivalents (none observed in `:95-165`) `[VERIFIED: only `crate::auth::AuthProvider` + reqwest]` |
 
-## Open Questions
+## Open Questions (RESOLVED)
 
 1. **Validation flavor selection for `validate_code` in the OpenAPI path.**
    - What we know: the SDK exposes `JavaScriptValidator` and `CodeModeToolBuilder::new("openapi")`; the
@@ -714,6 +714,9 @@ engines** — they are the SAME engine at two layers. `PlanCompiler`+`PlanExecut
      flavor in the same refactor (cleaner) — vs. an OpenAPI-specific handler variant.
    - Recommendation: parameterize both (executor + flavor) in one refactor; it's a small, well-bounded change.
      Confidence MEDIUM (verified the coupling exists and is local).
+   - **RESOLVED:** Plan 90-04 Task 2 generalizes `code_mode_tools_from_executor` + `ValidateCodeHandler`
+     to `Arc<dyn CodeExecutor>` + a parameterized validation flavor in ONE refactor (executor + flavor
+     together), gated so the existing SQL path stays green (`cargo test -p pmcp-sql-server` in `<automated>`).
 
 2. **Script-tool `ExecutionConfig` defaults.**
    - What we know: SDK defaults are `max_api_calls=50`, `timeout_seconds=30`, `max_loop_iterations=100`.
@@ -721,6 +724,8 @@ engines** — they are the SAME engine at two layers. `PlanCompiler`+`PlanExecut
      overrides from `[[tools]]` (a Claude's-Discretion item in CONTEXT).
    - Recommendation: start with the shared `[code_mode]`-derived `ExecutionConfig`; allow per-tool override
      later if needed. Confidence HIGH (defaults verified).
+   - **RESOLVED:** Plan 90-05 adopts the shared `[code_mode]`-derived `ExecutionConfig` for script tools;
+     per-tool `[[tools]]` overrides are deferred (Claude's-Discretion / future additive change).
 
 ## Environment Availability
 

@@ -1605,14 +1605,31 @@ Plans:
 **Plans**: 9 plans in 6 waves (planned 2026-05-29)
 
 Plans:
+**Wave 1**
+
 - [ ] 90-01-PLAN.md — HttpConnector trait + reqwest client + 5-variant outgoing auth + http feature (OAPI-01/03)
 - [ ] 90-02-PLAN.md — additive [backend]/[backend.auth]/[backend.http] + ToolDecl two-kind fields on ServerConfig (D-06, OAPI-02a/03)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
 - [ ] 90-03-PLAN.md — openapiv3 --spec parser (optional at runtime) + single-call tool synthesizer (OAPI-04/02a)
 - [ ] 90-04-PLAN.md — HttpCodeExecutor seam + generalize code_mode_tools_from_executor to Arc<dyn CodeExecutor>+flavor (OAPI-05/10)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
 - [ ] 90-05-PLAN.md — ScriptToolHandler (one engine, no token cycle) + the D-02 engine-parity proof (OAPI-02b/10)
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
 - [ ] 90-06-PLAN.md — pmcp-openapi-server Shape A binary (cli/dispatch/assemble/lib, streamable HTTP, spec optional) (OAPI-06)
+
+**Wave 5** *(blocked on Wave 4 completion)*
+
 - [ ] 90-07-PLAN.md — london-tube wiremock parity replay + env-gated live test (OAPI-08, D-04)
 - [ ] 90-08-PLAN.md — cargo pmcp new --kind openapi-server scaffold + deploy parity + scoped README (OAPI-07)
+
+**Wave 6** *(blocked on Wave 5 completion)*
+
 - [ ] 90-09-PLAN.md — docs in three shapes (crate README + book + course chapters) (OAPI-09)
 
 ## Progress — v2.2 Milestone
