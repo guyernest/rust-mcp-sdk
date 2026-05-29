@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-05-17)
 Phase: 999.1
 Plan: Not started
 Status: Phase complete — ready for verification
-Last activity: 2026-05-29 - Completed quick task 260528-oam: README for pmcp-sql-server (Shape A pure-config SQL MCP server binary)
+Last activity: 2026-05-29 - Added Phase 90 (OpenAPI Built-In Server) to v2.2 roadmap; research pass next, then plan
 
 **Carryover from v2.1:** Phase 81 (update-pmcp-book-and-pmcp-course-with-v2-advanced-topics-cod) was executing at v2.1 close; will be tracked separately and folded into v2.1 completion. Operator follow-ups deferred from Phase 75 Wave 5 still pending: (a) merge Phase 75 Wave 5 + 75.5 to paiml/rust-mcp-sdk:main; (b) post-merge run `gh workflow run quality-badges.yml -R paiml/rust-mcp-sdk` and append observation to `.planning/phases/75-fix-pmat-issues/75-05-GATE-VERIFICATION.md` "## Badge flip observation" section.
 
@@ -167,6 +167,7 @@ Inherited from v2.1 (see PROJECT.md + prior Decisions log):
 ### Roadmap Evolution
 
 - **2026-05-17 — v2.2 ROADMAP block written.** 8 phases (82–89) covering BLDR (P82) → TKIT (P83) → CONN (P84) → SHAP-A + REF parity (P85) → SHAP-B/C/D (P86) ‖ SKLL (P87) → DOGF (P88) → DOCS+REF-03 (P89). 49/49 v2.2 requirements mapped 1:1 with no orphans. REQUIREMENTS.md traceability table updated to replace TBD (v2.2) entries with concrete phase numbers.
+- **2026-05-29 — Phase 90 added: OpenAPI Built-In Server (`pmcp-openapi-server`).** New scope (not in original v2.2 roadmap). Mirrors the SQL toolkit (Shape A binary + connector model + scaffold + docs), reusing the backend-agnostic toolkit core (P83) and Shape A/scaffold patterns (P85–86) plus the existing `openapi-code-mode` feature in `pmcp-code-mode`. Independent of P87–89, can run in parallel. Requirements deferred to a RESEARCH pass (scout `openapi-code-mode` + any `mcp-openapi-server-core` reference) before planning.
 - See PROJECT.md / prior STATE.md `Roadmap Evolution` history for v1.0–v2.1 evolution log (long; not duplicated here).
 
 ### Pending Todos

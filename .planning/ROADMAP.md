@@ -1343,8 +1343,6 @@ Plans:
 - SEP-2640 §4 archive distribution (`application/gzip` + base64 blob). Blocked by GAP #2 (`Content::Resource` has no `blob` field). The SEP marks archive mode as optional.
 - `#[pmcp::skill]` procedural macro for compile-time SKILL.md validation. Worth a separate spike if compile-time validation is wanted.
 
----
-
 ## v2.2 Configuration-Only MCP Servers (In Progress)
 
 **Milestone Goal:** Shift PMCP from a code-based SDK to one that lets enterprise developers build production-grade MCP servers for SQL databases from configuration + schema files alone — without writing Rust — while preserving PMCP's security, tools/resources/prompts/tasks/skills standards and offering pmcp.run hosting as a deployment target.
@@ -1580,9 +1578,27 @@ Plans:
 
 **Plans**: TBD
 
+### Phase 90: OpenAPI Built-In Server (`pmcp-openapi-server`)
+
+**Goal**: Deliver a config-driven **OpenAPI** MCP server that mirrors the completed SQL toolkit (Shape A binary `pmcp-sql-server`, Phases 83–86): a non-developer points a binary at a `config.toml` + an OpenAPI spec and gets a live MCP server — curated operation→tool mappings for the common ~20%, Code Mode (the existing `openapi-code-mode` feature in `pmcp-code-mode`) for the long-tail ~80% — with **zero Rust written**. The backend-agnostic toolkit (Phase 83) and the Shape A / scaffold / deploy patterns (Phases 85–86) are reused; only an OpenAPI connector model, the operation→tool config mapping, the `pmcp-openapi-server` binary, the `cargo pmcp new --kind openapi-server` scaffold, and docs are new.
+**Depends on**: Phase 83 (backend-agnostic toolkit core), Phase 85 (Shape A binary pattern), Phase 86 (scaffold + deploy). Reuses the existing `openapi-code-mode` feature in `pmcp-code-mode`.
+**Requirements**: TBD — to be refined by a RESEARCH pass (scope below). This is **new scope** added 2026-05-29; it was not part of the original v2.2 roadmap.
+**Scope (to be confirmed by RESEARCH)**:
+
+  - An OpenAPI "connector" abstraction analogous to `SqlConnector` (`crates/pmcp-server-toolkit/src/sql/mod.rs`): given an OpenAPI spec + base URL + auth, invoke API operations over HTTP.
+  - Config schema mapping curated `[[tools]]` to OpenAPI operations (analogous to SQL's `sql=` templates).
+  - A `pmcp-openapi-server` Shape A binary (`--config` + `--spec`/`--schema`), mirroring `pmcp-sql-server`.
+  - A `cargo pmcp new --kind openapi-server` scaffold, mirroring `--kind sql-server`.
+  - Reuse of the existing `openapi-code-mode` feature for the Code Mode long-tail path.
+  - Docs in three shapes (crate README + `pmcp-book` chapter + `pmcp-course` chapter), matching the SQL docs.
+
+**Open questions for RESEARCH**: scout the existing `openapi-code-mode` feature and any `mcp-openapi-server-core` reference impl under `pmcp-run/built-in/` to ground the connector shape, auth models, and spec-source handling before requirements/success-criteria are locked.
+
+**Plans**: TBD (run /gsd:plan-phase 90 after research)
+
 ## Progress — v2.2 Milestone
 
-**Execution order:** Phase 82 → Phase 83 → Phase 84 → Phase 85 → Phase 86 (Shapes B/C/D) and Phase 87 (Skills) in parallel after 83 lands → Phase 88 (dogfood) → Phase 89 (docs).
+**Execution order:** Phase 82 → Phase 83 → Phase 84 → Phase 85 → Phase 86 (Shapes B/C/D) and Phase 87 (Skills) in parallel after 83 lands → Phase 88 (dogfood) → Phase 89 (docs). Phase 90 (OpenAPI built-in, added 2026-05-29) is independent of 87–89 — it reuses the toolkit core (83) and Shape A/scaffold patterns (85–86), so it can proceed in parallel with the remaining SQL-milestone phases.
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
@@ -1594,3 +1610,4 @@ Plans:
 | 87. Type 2 Authoring Skills Server | 0/? | Not started | - |
 | 88. Dogfood `pmcp-server` | 0/? | Not started | - |
 | 89. Documentation & Migration | 0/? | Not started | - |
+| 90. OpenAPI Built-In Server | 0/? | Not started | - |
