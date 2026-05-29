@@ -351,11 +351,19 @@ impl ServerBuilderExt for ServerBuilder {
             if config.code_mode.is_none() {
                 return Ok(self); // no-op when block absent (mirrors connectorless path)
             }
-            let executor = Arc::new(crate::code_mode::SqlCodeExecutor::new(
-                connector,
-                config.clone(),
-            )?);
-            crate::code_mode::code_mode_tools_from_executor(self, config, executor)
+            // Coerce the SQL executor to the backend-agnostic `Arc<dyn
+            // CodeExecutor>` the generalized wiring fn takes (OAPI-10 / D-02).
+            // `CodeExecutor` is `#[async_trait]` and object-safe, so this is a
+            // plain unsize coercion. The SQL path passes `ValidationFlavor::Sql`.
+            let executor: Arc<dyn crate::code_mode::CodeExecutor> = Arc::new(
+                crate::code_mode::SqlCodeExecutor::new(connector, config.clone())?,
+            );
+            crate::code_mode::code_mode_tools_from_executor(
+                self,
+                config,
+                executor,
+                crate::code_mode::ValidationFlavor::Sql,
+            )
         }
         #[cfg(not(feature = "code-mode"))]
         {

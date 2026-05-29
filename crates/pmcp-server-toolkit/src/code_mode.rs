@@ -77,6 +77,40 @@ use crate::error::{ConfigValidationError, Result, ToolkitError};
 use crate::secrets::SecretValue;
 use crate::sql::{Dialect, SqlConnector};
 
+/// Which validation surface the generalized code-mode wiring drives (OAPI-10 /
+/// D-02 / Gemini review: a compile-time enum, NOT a stringly-typed `&str`, so a
+/// flavor typo is impossible).
+///
+/// Selects BOTH the `CodeModeToolBuilder` format string (the `validate_code` /
+/// `execute_code` tool schema `format` enum, via the private `code_format`
+/// accessor) AND which `ValidationPipeline` method `validate_code` calls:
+/// - [`ValidationFlavor::Sql`] → the `sql` format + `validate_sql_query` (the
+///   Shape A SQL path; unchanged behavior).
+/// - [`ValidationFlavor::OpenApi`] → the `openapi` format +
+///   `validate_javascript_code` (the OpenAPI JS path; really runs SWC-backed JS
+///   validation, not a stub).
+#[cfg(feature = "code-mode")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ValidationFlavor {
+    /// SQL Code Mode — validate via `validate_sql_query`, `"sql"` tool format.
+    Sql,
+    /// OpenAPI Code Mode — validate via `validate_javascript_code`, `"openapi"`
+    /// tool format. Available regardless of the JS engine feature at the type
+    /// level; the OpenAPI `validate_code` path requires `openapi-code-mode`.
+    OpenApi,
+}
+
+#[cfg(feature = "code-mode")]
+impl ValidationFlavor {
+    /// The `CodeModeToolBuilder` format string for this flavor.
+    fn code_format(self) -> &'static str {
+        match self {
+            Self::Sql => "sql",
+            Self::OpenApi => "openapi",
+        }
+    }
+}
+
 // =============================================================================
 // R1 split — validation_pipeline_from_config + code_mode_tools_from_executor
 // =============================================================================
@@ -137,7 +171,16 @@ pub fn validation_pipeline_from_config(config: &ServerConfig) -> Result<Validati
 }
 
 /// Register `validate_code` + `execute_code` on `builder`, driven by the
-/// `[code_mode]` block and a caller-supplied [`SqlCodeExecutor`].
+/// `[code_mode]` block, a caller-supplied [`CodeExecutor`], and a
+/// [`ValidationFlavor`] (OAPI-10 / D-02).
+///
+/// This is the ONE backend-agnostic wiring function serving BOTH the SQL path
+/// (`flavor = ValidationFlavor::Sql`, executor = [`SqlCodeExecutor`]) and the
+/// OpenAPI path (`flavor = ValidationFlavor::OpenApi`, executor =
+/// `JsCodeExecutor<HttpCodeExecutor>`). The `executor` is type-erased to
+/// `Arc<dyn CodeExecutor>` so the same function — and the same `execute_code`
+/// handler body, which already dispatches through the trait — works for any
+/// backend; only the `flavor` selects the validation surface + tool format.
 ///
 /// This is the actual two-tool registration the LOCKED
 /// [`crate::builder_ext::ServerBuilderExt::try_code_mode_from_config_with_connector`]
@@ -163,7 +206,8 @@ pub fn validation_pipeline_from_config(config: &ServerConfig) -> Result<Validati
 pub fn code_mode_tools_from_executor(
     builder: pmcp::ServerBuilder,
     config: &ServerConfig,
-    executor: Arc<SqlCodeExecutor>,
+    executor: Arc<dyn CodeExecutor>,
+    flavor: ValidationFlavor,
 ) -> Result<pmcp::ServerBuilder> {
     let Some(section) = config.code_mode.as_ref() else {
         return Ok(builder); // no-op when block absent
@@ -186,8 +230,13 @@ pub fn code_mode_tools_from_executor(
     let validate_handler = tool_handlers::ValidateCodeHandler {
         pipeline: Arc::clone(&pipeline),
         config: cm_config,
+        flavor,
     };
-    let execute_handler = tool_handlers::ExecuteCodeHandler { pipeline, executor };
+    let execute_handler = tool_handlers::ExecuteCodeHandler {
+        pipeline,
+        executor,
+        flavor,
+    };
 
     Ok(builder
         .tool_arc("validate_code", Arc::new(validate_handler))
@@ -241,16 +290,45 @@ pub fn register_code_mode_tools(
 mod tool_handlers {
     use std::sync::Arc;
 
-    use super::SqlCodeExecutor;
-    use pmcp_code_mode::CodeExecutor as _;
+    use super::ValidationFlavor;
     use pmcp_code_mode::TokenGenerator as _;
 
-    /// `validate_code` tool handler: runs the SQL through the policy-bearing
-    /// [`ValidationPipeline`](pmcp_code_mode::ValidationPipeline) and returns
-    /// the explanation + (on success) an HMAC approval token.
+    /// Run the flavor-appropriate validation surface (OAPI-10 / D-02).
+    ///
+    /// - [`ValidationFlavor::Sql`] → `validate_sql_query` (Shape A SQL path).
+    /// - [`ValidationFlavor::OpenApi`] → `validate_javascript_code` (the OpenAPI
+    ///   JS path; really runs SWC-backed JS validation). Only reachable when the
+    ///   `openapi-code-mode` feature is enabled — the binary that wires the
+    ///   OpenApi flavor enables that umbrella, so the arm is feature-gated.
+    fn run_flavored_validation(
+        pipeline: &pmcp_code_mode::ValidationPipeline,
+        flavor: ValidationFlavor,
+        code: &str,
+        context: &pmcp_code_mode::ValidationContext,
+    ) -> std::result::Result<pmcp_code_mode::ValidationResult, String> {
+        match flavor {
+            ValidationFlavor::Sql => pipeline
+                .validate_sql_query(code, context)
+                .map_err(|e| format!("Validation error: {e}")),
+            #[cfg(feature = "openapi-code-mode")]
+            ValidationFlavor::OpenApi => pipeline
+                .validate_javascript_code(code, context)
+                .map_err(|e| format!("Validation error: {e}")),
+            #[cfg(not(feature = "openapi-code-mode"))]
+            ValidationFlavor::OpenApi => Err(
+                "OpenAPI Code Mode validation requires the `openapi-code-mode` feature".to_string(),
+            ),
+        }
+    }
+
+    /// `validate_code` tool handler: runs the code through the policy-bearing
+    /// [`ValidationPipeline`](pmcp_code_mode::ValidationPipeline) (SQL or JS per
+    /// [`ValidationFlavor`]) and returns the explanation + (on success) an HMAC
+    /// approval token.
     pub(super) struct ValidateCodeHandler {
         pub(super) pipeline: Arc<pmcp_code_mode::ValidationPipeline>,
         pub(super) config: pmcp_code_mode::CodeModeConfig,
+        pub(super) flavor: ValidationFlavor,
     }
 
     #[pmcp_code_mode::async_trait]
@@ -268,7 +346,9 @@ mod tool_handlers {
             // Static-policy ValidationContext — the toolkit binds approval
             // tokens to a fixed config-derived context (no live user/session
             // surface in the pure-config binary). Static `[code_mode]` policy
-            // (allow_writes/deletes/ddl) is enforced inside validate_sql_query.
+            // (allow_writes/deletes/ddl for SQL; openapi_blocked_paths /
+            // disallowed ops for OpenApi) is enforced inside the validation
+            // surface selected by `flavor`.
             let context = pmcp_code_mode::ValidationContext::new(
                 "code-mode-config",
                 "code-mode-session",
@@ -276,10 +356,8 @@ mod tool_handlers {
                 "perms-hash",
             );
 
-            let result = self
-                .pipeline
-                .validate_sql_query(code, &context)
-                .map_err(|e| pmcp::Error::Internal(format!("Validation error: {e}")))?;
+            let result = run_flavored_validation(&self.pipeline, self.flavor, code, &context)
+                .map_err(pmcp::Error::Internal)?;
 
             let mut response = pmcp_code_mode::ValidationResponse::from_result(result);
             if response.result.is_valid {
@@ -316,16 +394,23 @@ mod tool_handlers {
         }
 
         fn metadata(&self) -> Option<pmcp::types::ToolInfo> {
-            Some(pmcp_code_mode::CodeModeToolBuilder::new("sql").build_validate_tool())
+            Some(
+                pmcp_code_mode::CodeModeToolBuilder::new(self.flavor.code_format())
+                    .build_validate_tool(),
+            )
         }
     }
 
     /// `execute_code` tool handler: verifies the approval token + code hash,
-    /// then runs the SQL through the [`SqlCodeExecutor`] (which re-validates
-    /// for defense-in-depth before reaching the connector).
+    /// then runs the code through the backend-agnostic
+    /// [`CodeExecutor`](pmcp_code_mode::CodeExecutor) (SQL re-validates before
+    /// the connector; OpenAPI runs the validated JS through the
+    /// `JsCodeExecutor`). The `flavor` only selects the tool `format` metadata —
+    /// the `handle` body dispatches through the trait regardless of backend.
     pub(super) struct ExecuteCodeHandler {
         pub(super) pipeline: Arc<pmcp_code_mode::ValidationPipeline>,
-        pub(super) executor: Arc<SqlCodeExecutor>,
+        pub(super) executor: Arc<dyn pmcp_code_mode::CodeExecutor>,
+        pub(super) flavor: ValidationFlavor,
     }
 
     #[pmcp_code_mode::async_trait]
@@ -384,7 +469,10 @@ mod tool_handlers {
         }
 
         fn metadata(&self) -> Option<pmcp::types::ToolInfo> {
-            Some(pmcp_code_mode::CodeModeToolBuilder::new("sql").build_execute_tool())
+            Some(
+                pmcp_code_mode::CodeModeToolBuilder::new(self.flavor.code_format())
+                    .build_execute_tool(),
+            )
         }
     }
 }
