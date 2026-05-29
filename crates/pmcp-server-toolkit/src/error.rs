@@ -127,4 +127,14 @@ pub enum ConfigValidationError {
          or set allow_inline_token_secret_for_dev=true (NEVER in production)"
     )]
     InlineSecretRejected,
+    /// Per Phase 90 Plan 02 (D-01, T-90-02-04): a `[[tools]]` entry declares
+    /// more than one mutually-exclusive tool kind. A tool is EITHER a SQL tool
+    /// (`sql`), a single-call HTTP tool (`path`/`method`), OR a script tool
+    /// (`script`) — never a mixture. The ambiguity is rejected rather than
+    /// resolved by a silent precedence rule. The `usize` is the entry index.
+    #[error(
+        "[[tools]] entry at index {0} declares ambiguous tool kind: set exactly \
+         one of `sql`, `path`/`method`, or `script` (not a mixture)"
+    )]
+    AmbiguousToolKind(usize),
 }

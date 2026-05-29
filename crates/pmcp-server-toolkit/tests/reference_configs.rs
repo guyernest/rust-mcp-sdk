@@ -143,7 +143,26 @@ fn fuzz_corpus_seeds_parse_or_explicitly_fail() {
             || name.contains("url-non-ascii")
             || name.contains("url-malformed-env-ref")
             || name.contains("url-sql-injection-shape");
-        if name.starts_with("seed-") && !is_adversarial {
+        // Plan 90-02: seed-backend.toml carries a `[backend]` block that only
+        // parses when the `http` feature is enabled (the field is
+        // `#[cfg(feature = "http")]`). Under default features it is an unknown
+        // section and Err is the correct, non-panicking outcome; under `http`
+        // it MUST parse. Treat it as feature-conditional rather than adversarial.
+        let is_http_gated = name == "seed-backend.toml";
+        if is_http_gated {
+            #[cfg(feature = "http")]
+            {
+                parsed.unwrap_or_else(|e| {
+                    panic!("http-gated seed {name} must parse under --features http: {e}")
+                });
+                well_formed_seed_ok += 1;
+            }
+            #[cfg(not(feature = "http"))]
+            {
+                // No panic is the only invariant when the feature is off.
+                let _ = parsed;
+            }
+        } else if name.starts_with("seed-") && !is_adversarial {
             parsed.unwrap_or_else(|e| panic!("well-formed seed {name} failed to parse: {e}"));
             well_formed_seed_ok += 1;
         }

@@ -219,7 +219,9 @@ impl ServerConfig {
     /// 1. `server.name` is non-empty (trimmed).
     /// 2. `server.version` is non-empty (trimmed).
     /// 3. Every `[[tools]]` entry has a non-empty `name`.
-    /// 4. Every `[[database.tables]]` entry has a non-empty `name`.
+    /// 4. No `[[tools]]` entry mixes tool kinds (`sql` / `path`+`method` /
+    ///    `script`) — D-01 / T-90-02-04.
+    /// 5. Every `[[database.tables]]` entry has a non-empty `name`.
     ///
     /// # Errors
     ///
@@ -235,6 +237,12 @@ impl ServerConfig {
         for (i, tool) in self.tools.iter().enumerate() {
             if tool.name.trim().is_empty() {
                 return Err(ConfigValidationError::EmptyToolName(i));
+            }
+            // D-01 / T-90-02-04: a tool is EITHER sql, single-call (path/method),
+            // OR script — never a mixture. Reject ambiguity instead of letting a
+            // silent "script wins" precedence hide a config mistake.
+            if tool.declared_kind_count() > 1 {
+                return Err(ConfigValidationError::AmbiguousToolKind(i));
             }
         }
         for (i, table) in self.database.tables.iter().enumerate() {
@@ -564,6 +572,26 @@ pub struct ToolDecl {
     /// SQL template (uses `:param` placeholders bound by [`ParamDecl`]).
     #[serde(default)]
     pub sql: Option<String>,
+    /// HTTP request path for a **single-call** OpenAPI/REST tool (D-01), e.g.
+    /// `"/Line/Mode/tube/Status"`. Concatenated onto the backend `base_url`
+    /// (or this tool's [`Self::base_url`] override). Additive per REF-01 — `None`
+    /// for SQL / script tools.
+    #[serde(default)]
+    pub path: Option<String>,
+    /// HTTP method for a single-call tool (`"GET"`, `"POST"`, …). Pairs with
+    /// [`Self::path`] (D-01). Additive; `None` for SQL / script tools.
+    #[serde(default)]
+    pub method: Option<String>,
+    /// Per-tool backend base-URL override. When absent a single-call tool
+    /// inherits `[backend].base_url`. Additive; `None` for SQL / script tools.
+    #[serde(default)]
+    pub base_url: Option<String>,
+    /// JavaScript body for a **script** tool (D-01) — a code-mode snippet that
+    /// orchestrates multiple backend calls and binds `[[tools.parameters]]` to
+    /// `args`. When set, this entry is a script tool ([`Self::is_script_tool`]).
+    /// Additive; `None` for SQL / single-call tools.
+    #[serde(default)]
+    pub script: Option<String>,
     /// Optional UI-resource URI for `structuredContent` widgets.
     #[serde(default)]
     pub ui_resource_uri: Option<String>,
@@ -573,6 +601,50 @@ pub struct ToolDecl {
     /// `[tools.annotations]` — MCP `toolAnnotations`.
     #[serde(default)]
     pub annotations: Option<AnnotationsDecl>,
+}
+
+impl ToolDecl {
+    /// Whether this `[[tools]]` entry is a **script** tool (D-01 detection rule).
+    ///
+    /// The detection rule is: `script.is_some()` ⇒ script tool; otherwise a
+    /// `path` + `method` pair ⇒ single-call HTTP tool; otherwise (a `sql`
+    /// field) ⇒ SQL tool. Plan 03/05 synthesizers branch on this method so the
+    /// rule lives in exactly one place. Mutual-exclusivity is enforced at
+    /// [`ServerConfig::validate`] (an entry mixing kinds is rejected, not
+    /// silently resolved by precedence).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use pmcp_server_toolkit::config::ToolDecl;
+    ///
+    /// let script = ToolDecl { script: Some("await api.get('/x')".into()), ..Default::default() };
+    /// assert!(script.is_script_tool());
+    ///
+    /// let single = ToolDecl {
+    ///     path: Some("/Line/Mode/tube/Status".into()),
+    ///     method: Some("GET".into()),
+    ///     ..Default::default()
+    /// };
+    /// assert!(!single.is_script_tool());
+    /// ```
+    #[must_use]
+    pub fn is_script_tool(&self) -> bool {
+        self.script.is_some()
+    }
+
+    /// Number of distinct mutually-exclusive tool kinds declared on this entry.
+    ///
+    /// Used by [`ServerConfig::validate`] to reject an ambiguous `[[tools]]`
+    /// entry (D-01 / T-90-02-04). A well-formed entry declares exactly one kind
+    /// (count `1`); count `> 1` is ambiguous; count `0` is a kind-less stub
+    /// (left to other validation rules).
+    fn declared_kind_count(&self) -> usize {
+        let is_sql = self.sql.is_some();
+        let is_single_call = self.path.is_some() || self.method.is_some();
+        let is_script = self.script.is_some();
+        usize::from(is_sql) + usize::from(is_single_call) + usize::from(is_script)
+    }
 }
 
 /// Single `[[tools.parameters]]` entry.
@@ -874,6 +946,149 @@ mod tests {
             ),
             "got: {err:?}"
         );
+    }
+
+    // -------------------------------------------------------------------------
+    // ToolDecl two-kind detection — D-01 (shared, not http-gated)
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_tooldecl_single_call_parses() {
+        let toml = r#"
+            [server]
+            name = "tube"
+            version = "0.1.0"
+
+            [[tools]]
+            name = "tube_status"
+            path = "/Line/Mode/tube/Status"
+            method = "GET"
+        "#;
+        let cfg = ServerConfig::from_toml(toml).expect("single-call tool must parse");
+        let tool = &cfg.tools[0];
+        assert_eq!(tool.path.as_deref(), Some("/Line/Mode/tube/Status"));
+        assert_eq!(tool.method.as_deref(), Some("GET"));
+        assert!(!tool.is_script_tool());
+        cfg.validate().expect("single-call tool is a valid single kind");
+    }
+
+    #[test]
+    fn test_tooldecl_script_parses() {
+        let toml = r#"
+            [server]
+            name = "tube"
+            version = "0.1.0"
+
+            [[tools]]
+            name = "plan_journey"
+            script = """
+            const a = await api.get('/Journey/JourneyResults/' + args.from + '/to/' + args.to);
+            return a;
+            """
+
+            [[tools.parameters]]
+            name = "from"
+            type = "string"
+            required = true
+
+            [[tools.parameters]]
+            name = "to"
+            type = "string"
+            required = true
+        "#;
+        let cfg = ServerConfig::from_toml(toml).expect("script tool must parse");
+        let tool = &cfg.tools[0];
+        assert!(tool.script.is_some());
+        assert!(tool.is_script_tool());
+        assert_eq!(tool.parameters.len(), 2);
+        cfg.validate().expect("script tool is a valid single kind");
+    }
+
+    #[test]
+    fn test_tooldecl_detection() {
+        let script = ToolDecl {
+            script: Some("return 1;".to_string()),
+            ..Default::default()
+        };
+        assert!(script.is_script_tool());
+
+        let single = ToolDecl {
+            path: Some("/x".to_string()),
+            method: Some("GET".to_string()),
+            ..Default::default()
+        };
+        assert!(!single.is_script_tool());
+
+        let sql = ToolDecl {
+            sql: Some("SELECT 1".to_string()),
+            ..Default::default()
+        };
+        assert!(!sql.is_script_tool());
+    }
+
+    #[test]
+    fn test_tooldecl_ambiguous_rejected() {
+        // script + path/method is ambiguous (Codex MEDIUM): rejected, not
+        // resolved by a silent "script wins".
+        let toml = r#"
+            [server]
+            name = "tube"
+            version = "0.1.0"
+
+            [[tools]]
+            name = "confused"
+            path = "/x"
+            method = "GET"
+            script = "return 1;"
+        "#;
+        let cfg = ServerConfig::from_toml(toml).expect("parse (ambiguity is a validate-time rule)");
+        match cfg.validate() {
+            Err(ConfigValidationError::AmbiguousToolKind(0)) => {},
+            other => panic!("expected AmbiguousToolKind(0), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_tooldecl_ambiguous_sql_plus_script_rejected() {
+        let toml = r#"
+            [server]
+            name = "tube"
+            version = "0.1.0"
+
+            [[tools]]
+            name = "confused"
+            sql = "SELECT 1"
+            script = "return 1;"
+        "#;
+        let cfg = ServerConfig::from_toml(toml).expect("parse");
+        match cfg.validate() {
+            Err(ConfigValidationError::AmbiguousToolKind(0)) => {},
+            other => panic!("expected AmbiguousToolKind(0), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_tooldecl_sql_still_parses() {
+        // REF-01 superset regression: an existing sql= tool is unaffected by the
+        // additive path/method/base_url/script fields.
+        let toml = r#"
+            [server]
+            name = "demo"
+            version = "0.1.0"
+
+            [[tools]]
+            name = "list_tables"
+            sql = "SELECT name FROM sqlite_master"
+        "#;
+        let cfg = ServerConfig::from_toml(toml).expect("sql tool must still parse");
+        let tool = &cfg.tools[0];
+        assert_eq!(tool.sql.as_deref(), Some("SELECT name FROM sqlite_master"));
+        assert!(tool.path.is_none());
+        assert!(tool.method.is_none());
+        assert!(tool.base_url.is_none());
+        assert!(tool.script.is_none());
+        assert!(!tool.is_script_tool());
+        cfg.validate().expect("sql tool validates as a single kind");
     }
 
     // -------------------------------------------------------------------------
