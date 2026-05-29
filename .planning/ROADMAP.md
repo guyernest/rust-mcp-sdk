@@ -1608,7 +1608,7 @@ Plans:
 **Wave 1**
 
 - [x] 90-01-PLAN.md — HttpConnector trait + reqwest client + 5-variant outgoing auth + http feature (OAPI-01/03)
-- [ ] 90-02-PLAN.md — additive [backend]/[backend.auth]/[backend.http] + ToolDecl two-kind fields on ServerConfig (D-06, OAPI-02a/03)
+- [x] 90-02-PLAN.md — additive [backend]/[backend.auth]/[backend.http] + ToolDecl two-kind fields on ServerConfig (D-06, OAPI-02a/03)
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
@@ -1646,4 +1646,4 @@ Plans:
 | 87. Type 2 Authoring Skills Server | 0/? | Not started | - |
 | 88. Dogfood `pmcp-server` | 0/? | Not started | - |
 | 89. Documentation & Migration | 0/? | Not started | - |
-| 90. OpenAPI Built-In Server | 1/9 | In Progress|  |
+| 90. OpenAPI Built-In Server | 2/9 | In Progress|  |
