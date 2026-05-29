@@ -1613,7 +1613,7 @@ Plans:
 **Wave 2** *(blocked on Wave 1 completion)*
 
 - [x] 90-03-PLAN.md — openapiv3 --spec parser (optional at runtime) + single-call tool synthesizer (OAPI-04/02a)
-- [ ] 90-04-PLAN.md — HttpCodeExecutor seam + generalize code_mode_tools_from_executor to Arc<dyn CodeExecutor>+flavor (OAPI-05/10)
+- [x] 90-04-PLAN.md — HttpCodeExecutor seam + generalize code_mode_tools_from_executor to Arc<dyn CodeExecutor>+flavor (OAPI-05/10)
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
@@ -1646,4 +1646,4 @@ Plans:
 | 87. Type 2 Authoring Skills Server | 0/? | Not started | - |
 | 88. Dogfood `pmcp-server` | 0/? | Not started | - |
 | 89. Documentation & Migration | 0/? | Not started | - |
-| 90. OpenAPI Built-In Server | 3/9 | In Progress|  |
+| 90. OpenAPI Built-In Server | 4/9 | In Progress|  |

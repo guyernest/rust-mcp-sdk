@@ -4,13 +4,13 @@ milestone: v2.2
 milestone_name: Configuration-Only MCP Servers
 status: executing
 stopped_at: Completed 90-02-PLAN.md
-last_updated: "2026-05-29T18:20:59.195Z"
+last_updated: "2026-05-29T19:08:36.629Z"
 last_activity: 2026-05-29
 progress:
   total_phases: 45
   completed_phases: 38
   total_plans: 180
-  completed_plans: 174
+  completed_plans: 175
   percent: 84
 ---
 
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-05-17)
 ## Current Position
 
 Phase: 90 (openapi-built-in-server) — EXECUTING
-Plan: 4 of 9
+Plan: 5 of 9
 Status: Ready to execute
 Last activity: 2026-05-29
 
@@ -170,6 +170,8 @@ Inherited from v2.1 (see PROJECT.md + prior Decisions log):
 - [Phase ?]: [Phase 90 Plan 02] [backend]/[backend.auth]/[backend.http] gated #[cfg(feature=http)] on BOTH struct and ServerConfig field (no dead stub); AuthConfig/HttpConfig re-exported from Plan 90-01, not redefined (H3/D-06).
 - [Phase ?]: [Phase 90 Plan 02] ToolDecl::is_script_tool() is the single D-01 detection rule; validate() rejects sql+script / script+path mixtures via ConfigValidationError::AmbiguousToolKind, never silent precedence.
 - [Phase ?]: [Phase 90 Plan 02] Rule 2: added deny_unknown_fields to lifted HttpConfig (+PartialEq/Eq to AuthConfig & HttpConfig) for T-90-02-01 unknown-key rejection and ServerConfig's PartialEq derive.
+- [Phase ?]: [Phase 90 Plan 04] HttpCodeExecutor impls the LOW-LEVEL pmcp_code_mode::HttpExecutor (execute_request), a DIFFERENT layer than SqlCodeExecutor's high-level CodeExecutor — wrapped by JsCodeExecutor for Code Mode + called directly by script tools (Plan 05); per-request inbound token via with_inbound_token clone-builder for oauth_passthrough (H1); gated openapi-code-mode (H2 — NOT all(http,code-mode)); query params via url::Url (reqwest 0.13 query feature off, Plan 01 Rule 1); ExecutionError never echoes URL/token (T-90-04-01).
+- [Phase ?]: [Phase 90 Plan 04] OAPI-10 refactor: code_mode_tools_from_executor generalized to Arc<dyn CodeExecutor> + ValidationFlavor{Sql,OpenApi} enum (compile-time, not &str) — ONE wiring fn + ONE execute_code handler body for SQL + OpenAPI; flavor selects validate_sql_query vs validate_javascript_code (feature-gated OpenApi arm) + the CodeModeToolBuilder format. OpenAPI validate_code really runs SWC JS validation. SQL path unchanged: builder_ext coerces SqlCodeExecutor→Arc<dyn CodeExecutor>+ValidationFlavor::Sql; assemble.rs/pmcp-sql-server UNTOUCHED (LOCKED ext signature absorbs flavor), non-regression via cargo test -p pmcp-sql-server.
 
 ### Roadmap Evolution
 
@@ -233,6 +235,7 @@ Inherited from v2.1 (see PROJECT.md + prior Decisions log):
 | Phase 90 P01 | 15min | 3 tasks | 8 files |
 | Phase 90 P02 | 6 | 2 tasks | 6 files |
 | Phase 90 P03 | 9 | 2 tasks | 6 files |
+| Phase 90 P04 | 18min | 2 tasks | 4 files |
 
 ### Last Activity
 
@@ -250,6 +253,6 @@ Inherited from v2.1 (see PROJECT.md + prior Decisions log):
 
 ## Session Continuity
 
-Last session: 2026-05-29T18:20:44.062Z
+Last session: 2026-05-29T19:08:36.619Z
 Stopped at: Completed 90-02-PLAN.md
 Resume: Plan 85-03 COMPLETE — scaffolded `crates/pmcp-sql-server` (Shape A pure-config binary): feature-gated 4-connector manifest (sqlite/postgres/mysql/athena, all default-on D-07), lib/main split with a placeholder `lib::run()` Wave 2 replaces. Vendored FOUR self-contained parity fixtures into the SDK repo (closes RESEARCH Open Q#1): the DATA-BEARING `tests/fixtures/chinook.db` (~984 KB, REVIEW FIX #1 — real rows for the parity replay), the SEPARATE `chinook.ddl` (11 CREATE TABLE, the --schema text input D-06), `generated.yaml` (29-scenario contract), and `reference-config.toml` — all publish-excluded via `exclude = [tests/, …]`. 6-test `schema_fixture.rs` proves the DB returns Rock/AC-DC through the real SqliteConnector, the DDL builds a standalone 11-table schema, and generated.yaml parses as a `mcp_tester::TestScenario`. REF-02 fixture foundation done. Next: Plan 85-04 (Wave 2) fills `lib::run()` with the real config-load → connector-select → `pmcp::Server` assembly → transport-serve pipeline; Plan 85-06 replays the 29 scenarios against the vendored DB. NOTE: plan counter advanced 2→3 (monotonic) but plan 85-02 is a parallel Wave-1 plan whose SUMMARY is still pending; progress recalc (157/161, 98%) reflects disk truth.
