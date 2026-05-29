@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v2.2
 milestone_name: Configuration-Only MCP Servers
 status: verifying
-stopped_at: Completed 86-05-PLAN.md (Shape D config-driven deploy — H3/H1/H4/M3 + D-10 guard)
-last_updated: "2026-05-27T21:18:16.579Z"
-last_activity: 2026-05-27
+stopped_at: Phase 90 context gathered
+last_updated: "2026-05-29T14:14:39.101Z"
+last_activity: 2026-05-29 - Added Phase 90 (OpenAPI Built-In Server) to v2.2 roadmap; research pass next, then plan
 progress:
-  total_phases: 44
+  total_phases: 45
   completed_phases: 38
   total_plans: 171
   completed_plans: 171
-  percent: 86
+  percent: 84
 ---
 
 # Project State
@@ -240,6 +240,6 @@ Inherited from v2.1 (see PROJECT.md + prior Decisions log):
 
 ## Session Continuity
 
-Last session: 2026-05-27T16:13:22.118Z
-Stopped at: Completed 86-05-PLAN.md (Shape D config-driven deploy — H3/H1/H4/M3 + D-10 guard)
+Last session: 2026-05-29T14:14:39.095Z
+Stopped at: Phase 90 context gathered
 Resume: Plan 85-03 COMPLETE — scaffolded `crates/pmcp-sql-server` (Shape A pure-config binary): feature-gated 4-connector manifest (sqlite/postgres/mysql/athena, all default-on D-07), lib/main split with a placeholder `lib::run()` Wave 2 replaces. Vendored FOUR self-contained parity fixtures into the SDK repo (closes RESEARCH Open Q#1): the DATA-BEARING `tests/fixtures/chinook.db` (~984 KB, REVIEW FIX #1 — real rows for the parity replay), the SEPARATE `chinook.ddl` (11 CREATE TABLE, the --schema text input D-06), `generated.yaml` (29-scenario contract), and `reference-config.toml` — all publish-excluded via `exclude = [tests/, …]`. 6-test `schema_fixture.rs` proves the DB returns Rock/AC-DC through the real SqliteConnector, the DDL builds a standalone 11-table schema, and generated.yaml parses as a `mcp_tester::TestScenario`. REF-02 fixture foundation done. Next: Plan 85-04 (Wave 2) fills `lib::run()` with the real config-load → connector-select → `pmcp::Server` assembly → transport-serve pipeline; Plan 85-06 replays the 29 scenarios against the vendored DB. NOTE: plan counter advanced 2→3 (monotonic) but plan 85-02 is a parallel Wave-1 plan whose SUMMARY is still pending; progress recalc (157/161, 98%) reflects disk truth.
