@@ -1602,7 +1602,7 @@ Plans:
 
 **Open questions for RESEARCH**: how much of `mcp-openapi-server-core` is already covered by the backend-agnostic toolkit (Phase 83) vs genuinely new; the exact HTTP-connector trait shape; auth models beyond bearer (apiKey/basic/oauth) in the instance configs; spec-source handling (`--spec` file vs inline `[[tools]]`-only); and whether code-mode's `js-runtime` needs toolkit-side wiring like the SQL `executor_from_config` seam.
 
-**Plans**: 9 plans in 7 waves (planned 2026-05-29; replanned with cross-AI review feedback)
+**Plans**: 9 plans in 7 waves + 4 gap-closure plans in 2 waves (planned 2026-05-29; replanned with cross-AI review feedback; gap-closure planned 2026-05-29 from VERIFICATION gaps_found 9/11 + REVIEW WR-02/03/04)
 
 Plans:
 **Wave 1**
@@ -1631,6 +1631,16 @@ Plans:
 **Wave 6** *(blocked on Wave 5 completion)*
 
 - [x] 90-09-PLAN.md — docs in three shapes (crate README + book + course chapters) (OAPI-09)
+
+**Gap-Closure Wave 1** *(closing VERIFICATION gaps + REVIEW warnings; planned 2026-05-29)*
+
+- [ ] 90-10-PLAN.md — oauth_passthrough per-request token made live at runtime: toolkit-resident request_executor_from_extra seam called by ScriptToolHandler + ExecuteCodeHandler; dispatch installs OAuthPassthroughAuth; e2e wiremock proof (closes VERIFICATION truths #3/#8, WR-01; OAPI-03/05)
+- [ ] 90-11-PLAN.md — cross-variant ${VAR}/env:VAR secret resolution chokepoint applied to bearer/basic/oauth2 credential fields (closes altitude finding; OAPI-03)
+- [ ] 90-12-PLAN.md — backend.base_url non-empty validation + oauth_passthrough trust-boundary docs (closes WR-02/WR-04; OAPI-03)
+
+**Gap-Closure Wave 2** *(blocked on 90-10 — shared code_mode.rs)*
+
+- [ ] 90-13-PLAN.md — reject non-scalar path/query/header params with a value-redacted error instead of silent JSON-stringification (closes WR-03; OAPI-02a/05)
 
 ## Progress — v2.2 Milestone
 
