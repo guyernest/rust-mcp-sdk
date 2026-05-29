@@ -435,6 +435,54 @@ impl HttpAuthProvider for OAuthPassthroughAuth {
 /// This constructor never fails today (returns `Ok`) — the fallible signature is
 /// reserved so a future variant requiring construction-time validation can error
 /// without a breaking change.
+/// Resolve a single api_key value, expanding a `${VAR}` or `env:VAR` reference
+/// from the process environment.
+///
+/// The outbound api_key (carried as a query param or header) frequently holds a
+/// secret reference (`"${TFL_APP_KEY}"`) rather than a literal — mirroring the
+/// `token_secret` convention in [`crate::code_mode`]. Without expansion the
+/// LITERAL `${TFL_APP_KEY}` would be sent to the backend, so 100% of authenticated
+/// calls would fail (this is a correctness requirement, not a convenience).
+///
+/// Resolution rules (matching the `token_secret` env-ref discipline):
+/// - `"${VAR}"` / `"env:VAR"` → the value of `VAR` from the process env.
+/// - An UNSET or set-but-empty/whitespace `VAR` resolves to an empty string, so
+///   a `required = false` api_key is OMITTED rather than sent as a degenerate
+///   empty/placeholder value.
+/// - A plain literal (no `${...}` / `env:` prefix) is returned verbatim.
+///
+/// No error path: an unresolvable reference yields an empty string (omission),
+/// never a panic and never the literal `${...}` reaching the wire.
+fn resolve_api_key_value(raw: &str) -> String {
+    let var = if let Some(v) = raw.strip_prefix("env:") {
+        Some(v)
+    } else if let Some(inner) = raw.strip_prefix("${").and_then(|s| s.strip_suffix('}')) {
+        (!inner.is_empty()).then_some(inner)
+    } else {
+        // Plain literal — used verbatim.
+        return raw.to_string();
+    };
+    match var {
+        Some(name) => std::env::var(name)
+            .ok()
+            .filter(|v| !v.trim().is_empty())
+            .unwrap_or_default(),
+        // Malformed reference (e.g. `"${}"`) → empty (omitted).
+        None => String::new(),
+    }
+}
+
+/// Expand every value in an api_key map, dropping entries that resolve to empty
+/// (an unset `required = false` reference is omitted, not sent empty).
+fn expand_api_key_map(map: &HashMap<String, String>) -> HashMap<String, String> {
+    map.iter()
+        .filter_map(|(k, v)| {
+            let resolved = resolve_api_key_value(v);
+            (!resolved.is_empty()).then(|| (k.clone(), resolved))
+        })
+        .collect()
+}
+
 pub fn create_auth_provider(
     cfg: &AuthConfig,
 ) -> Result<Arc<dyn HttpAuthProvider>, HttpConnectorError> {
@@ -445,12 +493,17 @@ pub fn create_auth_provider(
             headers,
             ..
         } => {
+            // Expand `${VAR}` / `env:VAR` references BEFORE building the provider
+            // so the RESOLVED secret (not the literal placeholder) is applied to
+            // outgoing requests. Unset references are dropped (omitted).
+            let query_params = expand_api_key_map(query_params);
+            let headers = expand_api_key_map(headers);
             let has_values = query_params.values().any(|v| !v.is_empty())
                 || headers.values().any(|v| !v.is_empty());
             if has_values {
                 Arc::new(ApiKeyAuth {
-                    query_params: query_params.clone(),
-                    headers: headers.clone(),
+                    query_params,
+                    headers,
                 })
             } else {
                 Arc::new(NoAuth)
@@ -605,6 +658,65 @@ mod tests {
             headers.is_empty(),
             "api-key-in-query must not touch headers"
         );
+    }
+
+    #[tokio::test]
+    async fn test_api_key_query_param_expands_braced_env_ref() {
+        // The RESOLVED ${VAR} value (not the literal `${...}`) reaches the wire.
+        let var = "PMCP_TEST_TFL_APP_KEY_BRACED";
+        std::env::set_var(var, "dummy");
+        let cfg = AuthConfig::ApiKey {
+            query_params: [("app_key".to_string(), format!("${{{var}}}"))]
+                .into_iter()
+                .collect(),
+            headers: HashMap::new(),
+            required: false,
+        };
+        let auth = create_auth_provider(&cfg).unwrap();
+        let mut headers = HeaderMap::new();
+        let mut query = HashMap::new();
+        auth.apply(&mut headers, &mut query, None).await.unwrap();
+        assert_eq!(
+            query.get("app_key"),
+            Some(&"dummy".to_string()),
+            "resolved env value lands on the query, not the literal ${{...}}"
+        );
+        std::env::remove_var(var);
+    }
+
+    #[tokio::test]
+    async fn test_api_key_query_param_unset_ref_is_omitted() {
+        // required=false + an UNSET ${VAR} → the param is omitted (not sent
+        // empty, not the literal placeholder).
+        let var = "PMCP_TEST_TFL_APP_KEY_UNSET";
+        std::env::remove_var(var);
+        let cfg = AuthConfig::ApiKey {
+            query_params: [("app_key".to_string(), format!("${{{var}}}"))]
+                .into_iter()
+                .collect(),
+            headers: HashMap::new(),
+            required: false,
+        };
+        let auth = create_auth_provider(&cfg).unwrap();
+        let mut headers = HeaderMap::new();
+        let mut query = HashMap::new();
+        auth.apply(&mut headers, &mut query, None).await.unwrap();
+        assert!(
+            query.get("app_key").is_none(),
+            "an unset required=false api_key ref is omitted, not sent empty/literal"
+        );
+    }
+
+    #[test]
+    fn test_resolve_api_key_value_forms() {
+        let var = "PMCP_TEST_RESOLVE_API_KEY_FORM";
+        std::env::set_var(var, "resolved");
+        assert_eq!(resolve_api_key_value(&format!("${{{var}}}")), "resolved");
+        assert_eq!(resolve_api_key_value(&format!("env:{var}")), "resolved");
+        assert_eq!(resolve_api_key_value("plain-literal"), "plain-literal");
+        std::env::remove_var(var);
+        assert_eq!(resolve_api_key_value(&format!("${{{var}}}")), "");
+        assert_eq!(resolve_api_key_value("${}"), "");
     }
 
     #[tokio::test]

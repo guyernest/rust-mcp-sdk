@@ -27,8 +27,15 @@
 //! cargo test -p pmcp-openapi-server --test parity_replay -- --test-threads=1
 //! ```
 
+use std::time::Duration;
+
+use mcp_tester::{ScenarioExecutor, ServerTester, TestScenario};
+use pmcp_openapi_server::{run_serving, Args};
 use pmcp_server_toolkit::http::OpenApiSchema;
 use pmcp_server_toolkit::ServerConfig;
+use serde_json::json;
+use wiremock::matchers::{method, path, query_param};
+use wiremock::{Mock, MockServer, ResponseTemplate};
 
 /// Absolute path to the vendored fixtures directory.
 fn fixtures_dir() -> std::path::PathBuf {
@@ -97,4 +104,262 @@ fn london_tube_fixture() {
             .is_some(),
         "spec covers GET /Line/{{lineId}}/Disruption (the script tool's per-line call)"
     );
+}
+
+/// The dummy api key the parity test resolves `${TFL_APP_KEY}` to. The wiremock
+/// backend REQUIRES `app_key=dummy` on every request — proving BOTH the api_key
+/// query-param outgoing-auth path (D-04) AND that `${TFL_APP_KEY}` was RESOLVED
+/// (not sent as the literal `${...}`, T-90-07-04).
+const DUMMY_APP_KEY: &str = "dummy";
+
+/// Mount the london-tube backend responses on the wiremock server, REQUIRING the
+/// `app_key=dummy` query param on every matcher (the secret-expansion + api_key
+/// query-param proof). Victoria is disrupted (statusSeverity 6 < 10), Central is
+/// healthy (10); the per-line `/Line/victoria/Disruption` returns "Severe delays".
+async fn mount_london_tube(server: &MockServer) {
+    Mock::given(method("GET"))
+        .and(path("/Line/Mode/tube/Status"))
+        .and(query_param("app_key", DUMMY_APP_KEY))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!([
+            { "id": "victoria", "name": "Victoria", "lineStatuses": [ { "statusSeverity": 6, "statusSeverityDescription": "Severe Delays" } ] },
+            { "id": "central", "name": "Central", "lineStatuses": [ { "statusSeverity": 10, "statusSeverityDescription": "Good Service" } ] }
+        ])))
+        .mount(server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/Line/victoria/Disruption"))
+        .and(query_param("app_key", DUMMY_APP_KEY))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "category": "RealTime",
+            "description": "Severe delays due to an earlier signal failure."
+        })))
+        .mount(server)
+        .await;
+}
+
+/// Build a temp `london-tube.toml` from the vendored fixture with its
+/// `[backend] base_url` overridden to point at the wiremock server. String
+/// replacement keeps the rest of the fixture (auth, tools, code_mode) byte-identical.
+fn temp_config_pointing_at(backend_url: &str) -> String {
+    const REFERENCE_BASE_URL: &str = r#"base_url = "https://api.tfl.gov.uk""#;
+    let reference = std::fs::read_to_string(fixtures_dir().join("london-tube.toml"))
+        .expect("read london-tube.toml");
+    assert!(
+        reference.contains(REFERENCE_BASE_URL),
+        "london-tube.toml must contain the base_url line to override"
+    );
+    reference.replace(REFERENCE_BASE_URL, &format!("base_url = \"{backend_url}\""))
+}
+
+/// OAPI-08 / D-04 — the binding parity assertion, OFFLINE via wiremock.
+///
+/// Drives the REAL binary pipeline ([`run_serving`]) against a wiremock backend
+/// that REQUIRES `app_key=dummy` and replays `london-tube-scenarios.yaml` through
+/// `mcp-tester`, gating per-step. The wiremock `query_param("app_key", "dummy")`
+/// matchers + the post-replay request inspection prove the api_key query-param
+/// auth AND the `${TFL_APP_KEY}` → `app_key=dummy` secret expansion (never the
+/// literal `${...}`).
+#[tokio::test]
+async fn london_tube_parity_through_real_binary_path() {
+    // The fixture's `${TFL_APP_KEY}` resolves from the process env at auth
+    // provider construction time — set it BEFORE spawning the server.
+    std::env::set_var("TFL_APP_KEY", DUMMY_APP_KEY);
+
+    // (1) Stand up the wiremock backend with app_key=dummy-gated matchers.
+    let backend = MockServer::start().await;
+    mount_london_tube(&backend).await;
+
+    // (2) Temp config: the vendored london-tube.toml with base_url → wiremock.
+    let tmp = tempfile::tempdir().expect("create tempdir");
+    let config_path = tmp.path().join("london-tube.toml");
+    std::fs::write(&config_path, temp_config_pointing_at(&backend.uri()))
+        .expect("write temp london-tube.toml");
+
+    // (3) The REAL binary path: programmatic Args → run_serving (NO --spec; the
+    // reference instance ships none — D-03 curated path). Ephemeral loopback port.
+    let args = Args {
+        config: config_path,
+        spec: None,
+        http: "127.0.0.1:0".to_string(),
+    };
+    let (bound, handle) = tokio::time::timeout(Duration::from_secs(10), run_serving(&args))
+        .await
+        .expect("run_serving must not hang")
+        .expect("REAL binary path must assemble + serve the london-tube config");
+
+    // (4) Replay london-tube-scenarios.yaml via the mcp-tester library.
+    let url = format!("http://{bound}");
+    let mut tester = ServerTester::new(
+        &url,
+        Duration::from_secs(30),
+        false,        // insecure
+        None,         // api_key
+        Some("http"), // force_transport
+        None,         // http_middleware_chain
+    )
+    .expect("construct ServerTester for the spawned HTTP server");
+
+    let mut initialized = false;
+    for attempt in 0..20u32 {
+        if matches!(
+            tester.test_initialize().await.status,
+            mcp_tester::report::TestStatus::Passed
+        ) {
+            initialized = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50 * u64::from(attempt + 1))).await;
+    }
+    assert!(initialized, "MCP initialize must succeed (readiness)");
+
+    let scenario = TestScenario::from_file(fixtures_dir().join("london-tube-scenarios.yaml"))
+        .expect("load the london-tube parity contract");
+    let mut exec = ScenarioExecutor::new(&mut tester, true /* detailed */);
+    let result = exec
+        .execute(scenario)
+        .await
+        .expect("scenario execution must complete without a harness error");
+
+    // (5) PER-STEP GATE: every parity step must pass its own assertions (tool
+    // list parity + tool-output parity). We gate on each `step_results[i].success`
+    // (the per-step truth) rather than the aggregate.
+    let failed: Vec<_> = result
+        .step_results
+        .iter()
+        .filter(|s| !s.success)
+        .map(|s| (&s.step_name, &s.error))
+        .collect();
+    assert!(
+        failed.is_empty(),
+        "every london-tube parity step must pass — tool list + tool outputs must \
+         match the reference scenarios. {}/{} completed; failed={failed:#?}",
+        result.steps_completed,
+        result.steps_total,
+    );
+
+    // (6) SECRET-EXPANSION PROOF (T-90-07-04): the backend RECEIVED `app_key=dummy`
+    // (the matchers already enforced this — every served response REQUIRED it), and
+    // NO recorded request URL carries the literal `${TFL_APP_KEY}` placeholder.
+    let recorded = backend
+        .received_requests()
+        .await
+        .expect("wiremock records requests");
+    assert!(
+        !recorded.is_empty(),
+        "the parity replay must have hit the backend at least once (proving the \
+         tool calls reached wiremock — not a no-op)"
+    );
+    for req in &recorded {
+        let full = req.url.to_string();
+        assert!(
+            full.contains("app_key=dummy"),
+            "every backend request carries the RESOLVED app_key=dummy (api_key \
+             query-param auth, D-04): {full}"
+        );
+        assert!(
+            !full.contains("%24%7BTFL_APP_KEY%7D") && !full.contains("${TFL_APP_KEY}"),
+            "the literal ${{TFL_APP_KEY}} placeholder must NEVER reach the wire — \
+             it must be RESOLVED to `dummy` (T-90-07-04): {full}"
+        );
+    }
+
+    // (7) required=false behavior (Codex LOW): the api_key was SET (`dummy`), so it
+    // IS present in every request (asserted above). The UNSET case — where an unset
+    // `${TFL_APP_KEY}` makes a `required=false` api_key OMITTED rather than sent as
+    // the literal placeholder — is covered by the toolkit unit test
+    // `test_api_key_query_param_unset_ref_is_omitted` (auth.rs), the receiving end
+    // of the same expansion path exercised here.
+
+    // Bounded shutdown — no leaked spawned server.
+    handle.abort();
+}
+
+/// OAPI-08 (live) — the SAME scenarios against the REAL `https://api.tfl.gov.uk`,
+/// double-gated (`#[ignore]` + `PMCP_OPENAPI_LIVE_TEST=1` + a real `TFL_APP_KEY`).
+///
+/// Skips cleanly in credential-less / offline CI (the env early-return), and is
+/// authentic for an operator who opts in with a real key. Mirrors the Phase
+/// 84/86 double-gate (offline default, live env-gated).
+///
+/// Run with:
+/// ```sh
+/// PMCP_OPENAPI_LIVE_TEST=1 TFL_APP_KEY=<real-key> \
+///   cargo test -p pmcp-openapi-server --test parity_replay parity_live_tfl \
+///   -- --ignored --test-threads=1
+/// ```
+#[tokio::test]
+#[ignore = "live network — requires PMCP_OPENAPI_LIVE_TEST=1 + a real TFL_APP_KEY"]
+async fn parity_live_tfl() {
+    // Double-gate: even when run with --ignored, bail unless explicitly enabled
+    // AND a real key is present (never hit the live API by accident).
+    if std::env::var("PMCP_OPENAPI_LIVE_TEST").ok().as_deref() != Some("1") {
+        eprintln!("parity_live_tfl skipped: set PMCP_OPENAPI_LIVE_TEST=1 to enable");
+        return;
+    }
+    let Ok(app_key) = std::env::var("TFL_APP_KEY") else {
+        eprintln!("parity_live_tfl skipped: set TFL_APP_KEY to a real TfL key");
+        return;
+    };
+    if app_key.trim().is_empty() {
+        eprintln!("parity_live_tfl skipped: TFL_APP_KEY is empty");
+        return;
+    }
+
+    // Use the vendored fixture VERBATIM — base_url stays https://api.tfl.gov.uk.
+    let tmp = tempfile::tempdir().expect("create tempdir");
+    let config_path = tmp.path().join("london-tube.toml");
+    std::fs::copy(fixtures_dir().join("london-tube.toml"), &config_path)
+        .expect("copy london-tube.toml");
+
+    let args = Args {
+        config: config_path,
+        spec: None,
+        http: "127.0.0.1:0".to_string(),
+    };
+    let (bound, handle) = run_serving(&args)
+        .await
+        .expect("REAL binary path must serve against the live TfL backend");
+
+    let url = format!("http://{bound}");
+    let mut tester = ServerTester::new(
+        &url,
+        Duration::from_secs(60),
+        false,
+        None,
+        Some("http"),
+        None,
+    )
+    .expect("construct ServerTester for the spawned HTTP server");
+    assert!(
+        matches!(
+            tester.test_initialize().await.status,
+            mcp_tester::report::TestStatus::Passed
+        ),
+        "MCP initialize must succeed against the live-backed server"
+    );
+
+    let scenario = TestScenario::from_file(fixtures_dir().join("london-tube-scenarios.yaml"))
+        .expect("load the london-tube parity contract");
+    let mut exec = ScenarioExecutor::new(&mut tester, true);
+    let result = exec
+        .execute(scenario)
+        .await
+        .expect("live scenario execution must complete without a harness error");
+
+    // Tool list parity is deterministic; tool-OUTPUT value assertions
+    // ("Victoria" / "Severe delays") may legitimately vary against the live API
+    // (real-time status), so gate only on the capability-discovery steps here.
+    let discovery_failed: Vec<_> = result
+        .step_results
+        .iter()
+        .filter(|s| s.step_name.starts_with("List ") || s.step_name.starts_with("Tools include"))
+        .filter(|s| !s.success)
+        .map(|s| (&s.step_name, &s.error))
+        .collect();
+    assert!(
+        discovery_failed.is_empty(),
+        "live parity: the tool surface must match the reference. failed={discovery_failed:#?}"
+    );
+
+    handle.abort();
 }
