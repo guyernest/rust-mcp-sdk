@@ -4,13 +4,13 @@ milestone: v2.2
 milestone_name: Configuration-Only MCP Servers
 status: executing
 stopped_at: Completed 90-02-PLAN.md
-last_updated: "2026-05-29T19:29:14.996Z"
+last_updated: "2026-05-29T21:06:05.716Z"
 last_activity: 2026-05-29
 progress:
   total_phases: 45
   completed_phases: 38
   total_plans: 180
-  completed_plans: 176
+  completed_plans: 177
   percent: 84
 ---
 
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-05-17)
 ## Current Position
 
 Phase: 90 (openapi-built-in-server) — EXECUTING
-Plan: 6 of 9
+Plan: 7 of 9
 Status: Ready to execute
 Last activity: 2026-05-29
 
@@ -175,6 +175,9 @@ Inherited from v2.1 (see PROJECT.md + prior Decisions log):
 - [Phase ?]: [Phase 90 Plan 05] Script tools = crate-private ScriptToolHandler (openapi-code-mode) running admin JS over the SAME PlanCompiler+PlanExecutor+HttpCodeExecutor seam Code Mode uses (args bound to args, NO validate/token cycle); is_script_tool() seam filled via additive openapi-code-mode synthesize_from_config_with_http_connector_and_scripts, not a widened http-gated signature
 - [Phase ?]: [Phase 90 Plan 05] D-02 proven by tests/script_tool_engine_parity.rs: one script via ScriptToolHandler vs JsCodeExecutor.execute_code yields byte-equal output + identical backend request sequence
 - [Phase ?]: [Phase 90 Plan 05] pmcp-code-mode JS subset reality: api.get paths need a string/template literal (no + concat); a top-level ApiCall must bind to a const before return; .slice() bounds need numeric literals (runtime args.maxLines NOT consumed) — 90-RESEARCH Code Examples over-claim; Plan 06/07 configs must use engine-accurate forms
+- [Phase 90]: pmcp-openapi-server pins reqwest 0.13 to match the toolkit's shared reqwest::Client type
+- [Phase 90]: H1 inbound token capture lives at the binary boundary (TokenCaptureAuthProvider + request_executor) since the toolkit synthesizer holds a fixed http_exec
+- [Phase 90]: D-03 no-spec + code-mode = warn-and-proceed (Code Mode runs without the api_schema resource)
 
 ### Roadmap Evolution
 
@@ -240,6 +243,7 @@ Inherited from v2.1 (see PROJECT.md + prior Decisions log):
 | Phase 90 P03 | 9 | 2 tasks | 6 files |
 | Phase 90 P04 | 18min | 2 tasks | 4 files |
 | Phase 90 P05 | 11min | 2 tasks | 4 files |
+| Phase 90 P06 | 13min | 3 tasks | 9 files |
 
 ### Last Activity
 
@@ -257,6 +261,6 @@ Inherited from v2.1 (see PROJECT.md + prior Decisions log):
 
 ## Session Continuity
 
-Last session: 2026-05-29T19:28:40.841Z
+Last session: 2026-05-29T21:05:45.605Z
 Stopped at: Completed 90-02-PLAN.md
 Resume: Plan 85-03 COMPLETE — scaffolded `crates/pmcp-sql-server` (Shape A pure-config binary): feature-gated 4-connector manifest (sqlite/postgres/mysql/athena, all default-on D-07), lib/main split with a placeholder `lib::run()` Wave 2 replaces. Vendored FOUR self-contained parity fixtures into the SDK repo (closes RESEARCH Open Q#1): the DATA-BEARING `tests/fixtures/chinook.db` (~984 KB, REVIEW FIX #1 — real rows for the parity replay), the SEPARATE `chinook.ddl` (11 CREATE TABLE, the --schema text input D-06), `generated.yaml` (29-scenario contract), and `reference-config.toml` — all publish-excluded via `exclude = [tests/, …]`. 6-test `schema_fixture.rs` proves the DB returns Rock/AC-DC through the real SqliteConnector, the DDL builds a standalone 11-table schema, and generated.yaml parses as a `mcp_tester::TestScenario`. REF-02 fixture foundation done. Next: Plan 85-04 (Wave 2) fills `lib::run()` with the real config-load → connector-select → `pmcp::Server` assembly → transport-serve pipeline; Plan 85-06 replays the 29 scenarios against the vendored DB. NOTE: plan counter advanced 2→3 (monotonic) but plan 85-02 is a parallel Wave-1 plan whose SUMMARY is still pending; progress recalc (157/161, 98%) reflects disk truth.
