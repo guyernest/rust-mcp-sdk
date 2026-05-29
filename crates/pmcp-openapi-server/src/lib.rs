@@ -4,8 +4,10 @@
 //! by Tasks 2 and 3.
 
 pub mod cli;
+pub mod dispatch;
 
 pub use cli::Args;
+pub use dispatch::{dispatch, DispatchError};
 
 /// Scaffold entry point — replaced by the full pipeline in Task 3.
 ///
