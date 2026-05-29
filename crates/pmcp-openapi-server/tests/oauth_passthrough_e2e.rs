@@ -22,12 +22,11 @@
 #![cfg(feature = "openapi-code-mode")]
 
 use pmcp_server_toolkit::code_mode::{
-    request_executor_from_extra, ExecutionConfig, HttpCodeExecutor, JsCodeExecutor,
+    request_executor_from_extra, CodeExecutor, ExecutionConfig, HttpCodeExecutor, JsCodeExecutor,
 };
 use pmcp_server_toolkit::http::auth::{create_passthrough_auth_provider, AuthConfig};
 
 use pmcp::server::auth::AuthContext;
-use pmcp_code_mode::CodeExecutor;
 use serde_json::json;
 use wiremock::matchers::{header, header_exists, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -211,22 +210,22 @@ async fn oauth_passthrough_e2e_script_tool_surface_forwards_token() {
         .mount(&server)
         .await;
 
-    let exec_config = ExecutionConfig::default();
-    // Compile the admin script ONCE (as ScriptToolHandler::new does).
-    let plan = pmcp_code_mode::PlanCompiler::with_config(&exec_config)
-        .compile_code(GET_ME_SCRIPT)
-        .expect("script must compile");
-
-    // Per-request token threading (as ScriptToolHandler::handle does).
+    // Per-request token threading (the SAME seam ScriptToolHandler::handle uses:
+    // request_executor_from_extra over the shared HttpCodeExecutor). The
+    // PlanCompiler/PlanExecutor engine and the JsCodeExecutor engine are the SAME
+    // pmcp-code-mode engine (D-02, proven byte-equal in
+    // tests/script_tool_engine_parity.rs); here we drive the toolkit's public
+    // re-exported JsCodeExecutor seam to keep this test free of a direct
+    // pmcp-code-mode dependency, while still proving the captured token reaches
+    // the backend through the per-request derivation a script tool uses.
     let base = passthrough_exec(server.uri(), true);
     let extra = extra_with_token(Some("Bearer e2e-tok"));
     let http = request_executor_from_extra(&base, &extra);
-    let mut executor = pmcp_code_mode::PlanExecutor::new(http, exec_config);
-    executor.set_variable("args", json!({}));
+    let executor = JsCodeExecutor::new(http, ExecutionConfig::default());
 
     let result = executor
-        .execute(&plan)
+        .execute(GET_ME_SCRIPT, None)
         .await
-        .expect("script tool must forward the captured token and succeed");
-    assert_eq!(result.value["script_ok"], true);
+        .expect("script-tool seam must forward the captured token and succeed");
+    assert_eq!(result["script_ok"], true);
 }
