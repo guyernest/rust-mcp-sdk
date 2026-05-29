@@ -1583,16 +1583,24 @@ Plans:
 **Goal**: Deliver a config-driven **OpenAPI** MCP server that mirrors the completed SQL toolkit (Shape A binary `pmcp-sql-server`, Phases 83–86): a non-developer points a binary at a `config.toml` + an OpenAPI spec and gets a live MCP server — curated operation→tool mappings for the common ~20%, Code Mode (the existing `openapi-code-mode` feature in `pmcp-code-mode`) for the long-tail ~80% — with **zero Rust written**. The backend-agnostic toolkit (Phase 83) and the Shape A / scaffold / deploy patterns (Phases 85–86) are reused; only an OpenAPI connector model, the operation→tool config mapping, the `pmcp-openapi-server` binary, the `cargo pmcp new --kind openapi-server` scaffold, and docs are new.
 **Depends on**: Phase 83 (backend-agnostic toolkit core), Phase 85 (Shape A binary pattern), Phase 86 (scaffold + deploy). Reuses the existing `openapi-code-mode` feature in `pmcp-code-mode`.
 **Requirements**: TBD — to be refined by a RESEARCH pass (scope below). This is **new scope** added 2026-05-29; it was not part of the original v2.2 roadmap.
-**Scope (to be confirmed by RESEARCH)**:
+**Reference to lift from (CONFIRMED)**: `~/Development/mcp/sdk/pmcp-run/built-in/openapi-api` — the OpenAPI sibling of the `sql-api` reference the SQL toolkit (Phases 83–86) was lifted from. This is the source-of-truth for Phase 90, exactly as `sql-api` was for SQL. Structure:
 
-  - An OpenAPI "connector" abstraction analogous to `SqlConnector` (`crates/pmcp-server-toolkit/src/sql/mod.rs`): given an OpenAPI spec + base URL + auth, invoke API operations over HTTP.
-  - Config schema mapping curated `[[tools]]` to OpenAPI operations (analogous to SQL's `sql=` templates).
-  - A `pmcp-openapi-server` Shape A binary (`--config` + `--spec`/`--schema`), mirroring `pmcp-sql-server`.
+  - **`crates/mcp-openapi-server-core`** — the core to lift (analog of `mcp-sql-server-core`). Modules: `auth`, `code_mode`, `config`, `http`, `schema`, `secrets`, `templates`, `tools`, `pmcp_server`, `lambda`. Builds on `pmcp` (workspace), `openapiv3` (spec parse), `reqwest 0.13` (rustls), `serde_yaml`, and `pmcp-code-mode 0.4.0` with the **`js-runtime`** feature (long-tail = validated JS calling the API). Currently uses `shared/mcp-server-common` + `shared/mcp-lambda-proxy` path-deps to be replaced by the public `pmcp-server-toolkit` (the REF-style lift).
+  - **Config shape** (analog of SQL's `[database]`): `[backend] base_url` + `[backend.auth]` (`type = "bearer"`, `token = "${ENV}"`, `required`) + `[backend.http]` (timeout/retries/backoff) + `[[tools]]` mapping an operation via `path` / `method` / `base_url` (the operation→tool analog of SQL's `sql=`) + `[secrets]` + `[metadata]` + `[observability]`.
+  - **Instance configs (parity fixtures)**: `instances/{lichess,london-tube,dhl,rest-admin}.toml` and `servers/{lichess,london-tube,dhl,aws-cloudwatch,aws-billing,rest-admin}/`. `lichess` and `london-tube` are public / no-auth-friendly → best demo + parity candidates.
+  - **Design docs to mine**: `OPENAPI_CODE_MODE_DESIGN.md`, `OPENAPI_CODE_MODE_POLICY_DESIGN.md`, `OPENAPI_CODE_MODE_ACCESS_CONTROL.md`, `OPENAPI_SCRIPT_TOOLS.md`, `BUILTIN_SERVER_ARCHITECTURE.md`, `DEPLOYMENT.md`.
+
+**Scope (mirrors the SQL lift; confirm details in RESEARCH)**:
+
+  - Lift `mcp-openapi-server-core`'s reusable glue into `pmcp-server-toolkit` (auth/secrets/config/code-mode wiring is largely shared; the NEW backend piece is an **HTTP/OpenAPI connector** analogous to `SqlConnector` at `crates/pmcp-server-toolkit/src/sql/mod.rs`).
+  - `[backend]`-driven config: curated `[[tools]]` → OpenAPI operations (`path`/`method`/`base_url`), bearer/`${ENV}` auth, retries/timeouts.
+  - A `pmcp-openapi-server` Shape A binary (`--config` + `--spec`), mirroring `pmcp-sql-server`.
   - A `cargo pmcp new --kind openapi-server` scaffold, mirroring `--kind sql-server`.
-  - Reuse of the existing `openapi-code-mode` feature for the Code Mode long-tail path.
+  - Reuse `pmcp-code-mode`'s `js-runtime` / `openapi-code-mode` feature for the Code Mode long-tail path.
+  - REF-style parity: a reference instance (e.g. `lichess`) reproduces the pmcp-run server's tools + behavior unchanged.
   - Docs in three shapes (crate README + `pmcp-book` chapter + `pmcp-course` chapter), matching the SQL docs.
 
-**Open questions for RESEARCH**: scout the existing `openapi-code-mode` feature and any `mcp-openapi-server-core` reference impl under `pmcp-run/built-in/` to ground the connector shape, auth models, and spec-source handling before requirements/success-criteria are locked.
+**Open questions for RESEARCH**: how much of `mcp-openapi-server-core` is already covered by the backend-agnostic toolkit (Phase 83) vs genuinely new; the exact HTTP-connector trait shape; auth models beyond bearer (apiKey/basic/oauth) in the instance configs; spec-source handling (`--spec` file vs inline `[[tools]]`-only); and whether code-mode's `js-runtime` needs toolkit-side wiring like the SQL `executor_from_config` seam.
 
 **Plans**: TBD (run /gsd:plan-phase 90 after research)
 
