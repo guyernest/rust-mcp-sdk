@@ -110,6 +110,14 @@ pub use crate::tools::synthesize_from_config_with_connector;
 #[cfg(feature = "http")]
 pub use crate::tools::synthesize_from_config_with_http_connector;
 
+// Phase 90 (OAPI-02b / D-01 / D-02) — single-call + SCRIPT HTTP synthesizer.
+// Gated `openapi-code-mode` (the umbrella that forwards
+// `pmcp-code-mode/js-runtime`). Adds the shared `HttpCodeExecutor` + bounds so a
+// `script` `[[tools]]` synthesizes a `ScriptToolHandler` that runs admin-authored
+// JS over the SAME engine Code Mode uses (one engine, two surfaces).
+#[cfg(feature = "openapi-code-mode")]
+pub use crate::tools::synthesize_from_config_with_http_connector_and_scripts;
+
 // Builder extensions (TKIT-08) — Plan 08 headline re-export per D-15 + review R3.
 // The trait method set is the Shape C ≤15-line `main.rs` surface; lifting it
 // to the crate root is the binding witness of D-15 (the runnable example

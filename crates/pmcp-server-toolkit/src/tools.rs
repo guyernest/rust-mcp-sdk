@@ -44,6 +44,11 @@ use crate::error::ToolkitError;
 #[cfg(feature = "http")]
 use crate::http::{HttpConnector, Operation, Parameter, ParameterLocation};
 
+#[cfg(feature = "openapi-code-mode")]
+use crate::code_mode::HttpCodeExecutor;
+#[cfg(feature = "openapi-code-mode")]
+use pmcp_code_mode::ExecutionConfig;
+
 /// Type alias for one synthesized tool tuple: `(name, ToolInfo, Arc<dyn ToolHandler>)`.
 ///
 /// Exists so [`synthesize_from_config`]'s return type does not trip
@@ -373,16 +378,79 @@ pub fn synthesize_from_config_with_http_connector(
     config: &ServerConfig,
     connector: Arc<dyn HttpConnector>,
 ) -> Result<Vec<SynthesizedTool>> {
+    // No script-tool builder is supplied on this (single-call-only) entry point,
+    // so the `is_script_tool()` arm of [`synthesize_http_inner`] returns the
+    // typed Plan 05 seam error. The OpenAPI Code Mode build calls
+    // [`synthesize_from_config_with_http_connector_and_scripts`], which supplies
+    // a [`ScriptToolHandler`] builder so a `script` tool synthesizes a real
+    // handler over the shared engine (OAPI-02b / D-01 / D-02).
+    synthesize_http_inner(config, connector, |decl| {
+        Err(ToolkitError::Synth(format!(
+            "tool '{}' is a script tool — script tools require the `openapi-code-mode` \
+             feature (use synthesize_from_config_with_http_connector_and_scripts)",
+            decl.name
+        )))
+    })
+}
+
+/// Synthesize single-call AND script `[[tools]]` against a wired
+/// [`HttpConnector`] plus a shared [`HttpCodeExecutor`] + [`ExecutionConfig`]
+/// (Phase 90 OAPI-02b / D-01 / D-02).
+///
+/// This is the OpenAPI Code Mode entry point (gated `openapi-code-mode`): it
+/// adds the `http_exec` + `exec_config` the script-tool path needs, threading
+/// the SAME `HttpCodeExecutor` instance that feeds Code Mode (D-02 — one engine,
+/// two surfaces). Single-call tools synthesize exactly as in
+/// [`synthesize_from_config_with_http_connector`]; a `script` tool synthesizes a
+/// [`ScriptToolHandler`] that compiles + runs the embedded JS through the SAME
+/// `PlanCompiler` + `PlanExecutor` + `HttpCodeExecutor` seam Code Mode uses,
+/// with NO validate/token cycle (admin-authored, `ExecutionConfig`-bounded —
+/// Pitfall 7).
+///
+/// The binary (Plan 06) supplies `http_exec` (built once over the resolved
+/// backend `base_url` + auth provider) and `exec_config` (from the
+/// `[code_mode.limits]` / defaults: `max_api_calls=50`, `max_loop_iterations=100`,
+/// `timeout_seconds=30`).
+///
+/// # Errors
+///
+/// Returns [`ToolkitError::Synth`] when a `[[tools]]` entry is neither a valid
+/// single-call (missing `path` OR `method`) nor a script tool (T-90-03-04
+/// negative validation), or when a script tool fails to build its `ToolInfo`.
+#[cfg(feature = "openapi-code-mode")]
+pub fn synthesize_from_config_with_http_connector_and_scripts(
+    config: &ServerConfig,
+    connector: Arc<dyn HttpConnector>,
+    http_exec: HttpCodeExecutor,
+    exec_config: ExecutionConfig,
+) -> Result<Vec<SynthesizedTool>> {
+    synthesize_http_inner(config, connector, |decl| {
+        let handler = ScriptToolHandler::new(decl, http_exec.clone(), exec_config.clone())?;
+        let info = handler.tool_info.clone();
+        let arc: Arc<dyn ToolHandler> = Arc::new(handler);
+        Ok((info, arc))
+    })
+}
+
+/// Shared synthesizer body for the single-call HTTP entry points.
+///
+/// `build_script_tool` is invoked for each `script` tool: the single-call-only
+/// entry point passes a closure that returns the typed Plan 05 / `openapi-code-mode`
+/// seam error, while the OpenAPI Code Mode entry point passes a closure that
+/// constructs a [`ScriptToolHandler`]. Decomposed per PATTERNS §Pattern G to keep
+/// the per-tool loop body under cog ≤25.
+#[cfg(feature = "http")]
+fn synthesize_http_inner(
+    config: &ServerConfig,
+    connector: Arc<dyn HttpConnector>,
+    mut build_script_tool: impl FnMut(&ToolDecl) -> Result<(ToolInfo, Arc<dyn ToolHandler>)>,
+) -> Result<Vec<SynthesizedTool>> {
     let mut out = Vec::with_capacity(config.tools.len());
     for decl in &config.tools {
-        // EXPLICIT script-tool seam — Plan 05 fills this arm (signature widening
-        // + ScriptToolHandler branch). Until then a script tool is a typed error,
-        // never a silent skip.
         if decl.is_script_tool() {
-            return Err(ToolkitError::Synth(format!(
-                "tool '{}' is a script tool — script tools require Plan 05 wiring",
-                decl.name
-            )));
+            let (info, handler) = build_script_tool(decl)?;
+            out.push((decl.name.clone(), info, handler));
+            continue;
         }
 
         // Single-call requires BOTH path and method. A `[[tools]]` that is
@@ -496,6 +564,128 @@ impl ToolHandler for HttpToolHandler {
 
     fn metadata(&self) -> Option<ToolInfo> {
         Some(self.info.clone())
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Script-tool handler (Phase 90 OAPI-02b / D-01 / D-02) — feature
+// `openapi-code-mode`
+// -----------------------------------------------------------------------------
+
+/// Crate-private handler for a **script** `[[tools]]` entry (OAPI-02b / D-01).
+///
+/// A script tool runs admin-authored embedded JS through the EXACT SAME
+/// `pmcp_code_mode` engine that Code Mode uses (D-02 — one engine, two
+/// surfaces): [`pmcp_code_mode::PlanCompiler`] compiles the `script` to an
+/// execution plan, then [`pmcp_code_mode::PlanExecutor`] over the shared
+/// [`HttpCodeExecutor`] walks it. The client's validated `args` are bound to the
+/// `args` variable BEFORE the script runs — identical to the `JsCodeExecutor`
+/// path's `set_variable("args", …)`, which is what makes the engine-parity proof
+/// (Plan 05 Task 2) hold byte-for-byte.
+///
+/// # No token cycle (Pitfall 7 / T-90-05-01)
+///
+/// A script tool is admin-authored + trusted (like a `sql=` curated query), so it
+/// skips the Code Mode validation + HMAC-token gate entirely. It is bounded ONLY by
+/// the [`ExecutionConfig`] caps (`max_api_calls`, `max_loop_iterations`,
+/// `timeout_seconds`) the [`PlanExecutor`](pmcp_code_mode::PlanExecutor) enforces,
+/// and by the `PlanCompiler`-accepted JS subset (no `eval` / FFI).
+///
+/// # Feature gate (RESEARCH Pitfall 4)
+///
+/// Gated `openapi-code-mode` (the umbrella that forwards
+/// `pmcp-code-mode/js-runtime`) — `PlanCompiler` / `PlanExecutor` are NOT in
+/// scope under bare `code-mode`, so the light / curated-only build (`http
+/// code-mode`) compiles without this type (single-call only).
+#[cfg(feature = "openapi-code-mode")]
+struct ScriptToolHandler {
+    /// The admin-authored embedded JS, compiled + executed per `handle`.
+    script: String,
+    /// The SAME executor instance that feeds Code Mode (D-02). Cloned per request
+    /// to construct a fresh [`PlanExecutor`](pmcp_code_mode::PlanExecutor).
+    http_exec: HttpCodeExecutor,
+    /// The execution bounds (Pitfall 7 — the only limit on an admin script).
+    exec_config: ExecutionConfig,
+    /// The synthesized `ToolInfo` (object-envelope schema from
+    /// `[[tools.parameters]]`, `additionalProperties:false`) — `args` are
+    /// schema-validated against this BEFORE the script runs (T-90-05-03).
+    tool_info: ToolInfo,
+}
+
+#[cfg(feature = "openapi-code-mode")]
+impl ScriptToolHandler {
+    /// Build a [`ScriptToolHandler`] from a script `[[tools]]` declaration,
+    /// the shared [`HttpCodeExecutor`], and the [`ExecutionConfig`] bounds.
+    ///
+    /// The `tool_info` is built from `[[tools.parameters]]` via the SAME
+    /// [`build_input_schema`] / [`build_annotations`] / [`apply_widget_meta`]
+    /// helpers the single-call path uses, so a script tool's `args` are
+    /// schema-validated identically (object envelope, `additionalProperties:false`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ToolkitError::Synth`] if the declaration carries no `script`
+    /// (callers route only `is_script_tool()` entries here, so this is a
+    /// defensive guard, not an expected path).
+    fn new(
+        decl: &ToolDecl,
+        http_exec: HttpCodeExecutor,
+        exec_config: ExecutionConfig,
+    ) -> Result<Self> {
+        let script = decl.script.clone().ok_or_else(|| {
+            ToolkitError::Synth(format!(
+                "tool '{}' has no `script` body — not a script tool",
+                decl.name
+            ))
+        })?;
+        let schema = build_input_schema(&decl.parameters);
+        let annotations = build_annotations(decl.annotations.as_ref());
+        let base = match annotations {
+            Some(ann) => {
+                ToolInfo::with_annotations(decl.name.clone(), decl.description.clone(), schema, ann)
+            },
+            None => ToolInfo::new(decl.name.clone(), decl.description.clone(), schema),
+        };
+        let tool_info = apply_widget_meta(base, decl);
+        Ok(Self {
+            script,
+            http_exec,
+            exec_config,
+            tool_info,
+        })
+    }
+}
+
+#[cfg(feature = "openapi-code-mode")]
+#[pmcp_code_mode::async_trait]
+impl ToolHandler for ScriptToolHandler {
+    /// Compile + run the admin-authored script over the shared engine, binding
+    /// the validated `args` to the `args` variable (D-02 — identical to the
+    /// `JsCodeExecutor` path's `set_variable("args", …)`).
+    async fn handle(&self, args: Value, _extra: RequestHandlerExtra) -> pmcp::Result<Value> {
+        // (1) Compile the admin-authored JS to an execution plan. The
+        //     PlanCompiler-accepted subset (no eval / FFI) is the static bound.
+        let plan = pmcp_code_mode::PlanCompiler::with_config(&self.exec_config)
+            .compile_code(&self.script)
+            .map_err(|e| pmcp::Error::Internal(format!("script compile failed: {e}")))?;
+
+        // (2) Execute over the SHARED HttpCodeExecutor instance (D-02), bounded by
+        //     ExecutionConfig (Pitfall 7 — no token cycle, only these caps).
+        let mut executor =
+            pmcp_code_mode::PlanExecutor::new(self.http_exec.clone(), self.exec_config.clone());
+        // (3) Bind the schema-validated client args to `args` (T-90-05-03) —
+        //     byte-identical to compile_and_execute's set_variable("args", …).
+        executor.set_variable("args", args);
+
+        let result = executor
+            .execute(&plan)
+            .await
+            .map_err(|e| pmcp::Error::Internal(format!("script execution failed: {e}")))?;
+        Ok(result.value)
+    }
+
+    fn metadata(&self) -> Option<ToolInfo> {
+        Some(self.tool_info.clone())
     }
 }
 
@@ -845,9 +1035,17 @@ mod synth_http_tests {
         assert_eq!(result, json!({ "status": "Good Service" }));
 
         // The operation carried the `{id}` path param as a Path parameter.
-        let op = connector.last.lock().unwrap().clone().expect("operation recorded");
-        let path_params: Vec<&str> =
-            op.path_parameters().iter().map(|p| p.name.as_str()).collect();
+        let op = connector
+            .last
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("operation recorded");
+        let path_params: Vec<&str> = op
+            .path_parameters()
+            .iter()
+            .map(|p| p.name.as_str())
+            .collect();
         assert_eq!(path_params, vec!["id"]);
     }
 
@@ -877,7 +1075,12 @@ mod synth_http_tests {
             .handle(json!({ "title": "widget" }), extra)
             .await
             .expect("handle");
-        let op = connector.last.lock().unwrap().clone().expect("operation recorded");
+        let op = connector
+            .last
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("operation recorded");
         assert_eq!(op.method, "POST");
         assert!(op.has_request_body, "POST must carry a request body");
         assert!(op.path_parameters().is_empty());
@@ -917,9 +1120,17 @@ mod synth_http_tests {
             .handle(json!({ "owner": "rust-lang", "state": "open" }), extra)
             .await
             .expect("handle");
-        let op = connector.last.lock().unwrap().clone().expect("operation recorded");
-        let path_params: Vec<&str> =
-            op.path_parameters().iter().map(|p| p.name.as_str()).collect();
+        let op = connector
+            .last
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("operation recorded");
+        let path_params: Vec<&str> = op
+            .path_parameters()
+            .iter()
+            .map(|p| p.name.as_str())
+            .collect();
         assert_eq!(path_params, vec!["owner"]);
         let query_params: Vec<&str> = op
             .query_parameters()
@@ -947,7 +1158,12 @@ mod synth_http_tests {
         let (_, _, handler) = &out[0];
         let extra = RequestHandlerExtra::default();
         handler.handle(json!({}), extra).await.expect("handle");
-        let op = connector.last.lock().unwrap().clone().expect("operation recorded");
+        let op = connector
+            .last
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("operation recorded");
         assert_eq!(
             op.base_url.as_deref(),
             Some("https://other.example.com/v2"),
@@ -974,10 +1190,13 @@ mod synth_http_tests {
         assert!(matches!(err, ToolkitError::Synth(_)));
     }
 
-    /// (5b) NEGATIVE: a `script` tool hits the explicit Plan 05 seam and is
-    /// rejected with a typed `ToolkitError` — NOT a silent skip, NOT a panic.
+    /// (5b) NEGATIVE: on the single-call-only entry point, a `script` tool is
+    /// rejected with a typed `ToolkitError` pointing at the `openapi-code-mode`
+    /// script path — NOT a silent skip, NOT a panic. (The OpenAPI Code Mode
+    /// entry point `synthesize_from_config_with_http_connector_and_scripts`
+    /// synthesizes a real `ScriptToolHandler` — proven in `script_tool` tests.)
     #[test]
-    fn synth_http_script_tool_hits_plan05_seam() {
+    fn synth_http_script_tool_without_engine_is_rejected() {
         let cfg = cfg_with_tools(vec![ToolDecl {
             name: "scripted".to_string(),
             description: Some("script tool".to_string()),
@@ -987,10 +1206,13 @@ mod synth_http_tests {
         let connector = MockHttpConnector::new(json!(null));
         let err = synthesize_from_config_with_http_connector(&cfg, connector)
             .err()
-            .expect("script tool must hit the Plan 05 seam");
+            .expect("script tool on the single-call-only entry point must be rejected");
         match err {
             ToolkitError::Synth(msg) => {
-                assert!(msg.contains("Plan 05"), "seam message must reference Plan 05: {msg}");
+                assert!(
+                    msg.contains("openapi-code-mode"),
+                    "seam message must point at the openapi-code-mode script path: {msg}"
+                );
             },
             other => panic!("expected Synth error, got {other:?}"),
         }
