@@ -383,6 +383,7 @@ mod tests {
                 Parameter::new("verbose", ParameterLocation::Query, false),
             ],
             has_request_body: false,
+            base_url: None,
         }
     }
 
@@ -489,6 +490,7 @@ mod tests {
             path: "/items".to_string(),
             parameters: vec![],
             has_request_body: true,
+            base_url: None,
         };
         let args = serde_json::json!({"name": "widget"});
         let result = client.execute(&op, &args).await.unwrap();

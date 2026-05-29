@@ -17,8 +17,9 @@
 //!   reaches MCP clients and therefore MUST NOT echo credentials or URLs (analog
 //!   of `ConnectorError`, mirrors its Connection Security doc-comment).
 //! - [`Operation`] / [`Parameter`] / [`ParameterLocation`] — the request model
-//!   the trait signature needs. Defined here in Wave 1; Plan 03 (OAPI-02) extends
-//!   them from the `openapiv3` parse in [`schema`].
+//!   the trait signature needs. AUTHORITATIVE in [`schema`] (the `openapiv3`
+//!   parser is their producer) and re-exported here so the trait signature and
+//!   every later plan reference one stable type path (Plan 03 / OAPI-02).
 //! - [`join_url`] — the ONE shared `base_url` + `path` concatenation helper. Both
 //!   [`client::HttpClient`] (this plan) and Plan 04's `HttpCodeExecutor` call it
 //!   instead of re-inlining the trim logic — it preserves an API-Gateway stage
@@ -32,7 +33,6 @@
 #![allow(clippy::doc_markdown)]
 
 use async_trait::async_trait;
-use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 /// Authentication providers for OUTGOING HTTP requests (OAPI-03 / D-05).
@@ -48,6 +48,14 @@ pub use auth::{
 };
 #[doc(inline)]
 pub use client::{HttpClient, HttpConfig};
+
+// Operation / Parameter / ParameterLocation are AUTHORITATIVE in `schema` (the
+// parser is their producer). They are re-exported here so the
+// [`HttpConnector::execute`] trait signature and every Plan (01/03/04/05) keep
+// referencing ONE stable type path — the type never moves home again (Codex
+// MEDIUM: keep `Operation` in one place from day one).
+#[doc(inline)]
+pub use schema::{OpenApiSchema, Operation, Parameter, ParameterLocation};
 
 /// Concatenate a base URL and a request path with exactly one separating slash,
 /// PRESERVING any non-root path already on the base.
@@ -71,96 +79,6 @@ pub(crate) fn join_url(base: &str, path: &str) -> String {
         base.trim_end_matches('/'),
         path.trim_start_matches('/')
     )
-}
-
-/// An extracted REST operation backed by an OpenAPI definition.
-///
-/// Defined here in Plan 01 so the [`HttpConnector::execute`] signature can name
-/// it; Plan 03 (OAPI-02) populates these values from an `openapiv3` parse in
-/// [`schema`] and MAY extend the struct additively. The shape mirrors the
-/// pmcp-run reference `mcp-openapi-server-core::schema::Operation`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Operation {
-    /// HTTP method (`GET`, `POST`, ...).
-    pub method: String,
-
-    /// Path template, e.g. `"/users/{id}"`.
-    pub path: String,
-
-    /// Input parameters (path / query / header).
-    #[serde(default)]
-    pub parameters: Vec<Parameter>,
-
-    /// Whether this operation expects a request body.
-    #[serde(default)]
-    pub has_request_body: bool,
-}
-
-impl Operation {
-    /// Path parameters (the `{...}` segments of [`Operation::path`]).
-    #[must_use]
-    pub fn path_parameters(&self) -> Vec<&Parameter> {
-        self.parameters
-            .iter()
-            .filter(|p| p.location == ParameterLocation::Path)
-            .collect()
-    }
-
-    /// Query parameters.
-    #[must_use]
-    pub fn query_parameters(&self) -> Vec<&Parameter> {
-        self.parameters
-            .iter()
-            .filter(|p| p.location == ParameterLocation::Query)
-            .collect()
-    }
-
-    /// Header parameters.
-    #[must_use]
-    pub fn header_parameters(&self) -> Vec<&Parameter> {
-        self.parameters
-            .iter()
-            .filter(|p| p.location == ParameterLocation::Header)
-            .collect()
-    }
-}
-
-/// A single OpenAPI operation parameter.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Parameter {
-    /// Parameter name (matches the `{name}` placeholder for path params).
-    pub name: String,
-
-    /// Where the parameter is carried in the request.
-    pub location: ParameterLocation,
-
-    /// Whether the parameter is required.
-    #[serde(default)]
-    pub required: bool,
-}
-
-impl Parameter {
-    /// Construct a parameter (test/parser convenience).
-    #[must_use]
-    pub fn new(name: impl Into<String>, location: ParameterLocation, required: bool) -> Self {
-        Self {
-            name: name.into(),
-            location,
-            required,
-        }
-    }
-}
-
-/// Where an [`Operation`] parameter is carried in the outgoing request.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum ParameterLocation {
-    /// Substituted into the path template (`/users/{id}`).
-    Path,
-    /// Appended to the query string.
-    Query,
-    /// Sent as a request header.
-    Header,
 }
 
 /// Errors an [`HttpConnector`] implementation may surface.
@@ -276,38 +194,6 @@ mod tests {
         assert_eq!(join_url("https://x/v1", "users"), "https://x/v1/users");
         // Root base.
         assert_eq!(join_url("https://x", "/users"), "https://x/users");
-    }
-
-    #[test]
-    fn test_operation_path_parameters() {
-        let op = Operation {
-            method: "GET".to_string(),
-            path: "/users/{id}".to_string(),
-            parameters: vec![
-                Parameter::new("id", ParameterLocation::Path, true),
-                Parameter::new("verbose", ParameterLocation::Query, false),
-                Parameter::new("x-trace", ParameterLocation::Header, false),
-            ],
-            has_request_body: false,
-        };
-        let path_params: Vec<&str> = op
-            .path_parameters()
-            .iter()
-            .map(|p| p.name.as_str())
-            .collect();
-        assert_eq!(path_params, vec!["id"]);
-        let query_params: Vec<&str> = op
-            .query_parameters()
-            .iter()
-            .map(|p| p.name.as_str())
-            .collect();
-        assert_eq!(query_params, vec!["verbose"]);
-        let header_params: Vec<&str> = op
-            .header_parameters()
-            .iter()
-            .map(|p| p.name.as_str())
-            .collect();
-        assert_eq!(header_params, vec!["x-trace"]);
     }
 
     /// T-90-01-01: the rendered `Display` of every error variant MUST NOT echo a
