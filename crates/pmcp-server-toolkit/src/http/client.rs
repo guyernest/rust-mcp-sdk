@@ -20,7 +20,8 @@ use std::time::Duration;
 
 /// HTTP client configuration (OWNED here in `http`, mirroring [`super::AuthConfig`]
 /// ownership so Plan 02 re-exports it rather than redefining).
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct HttpConfig {
     /// Request timeout in seconds.
     #[serde(default = "default_timeout")]

@@ -55,7 +55,7 @@ fn default_auth_header() -> String {
 /// `config.toml` `[backend.auth]` block selects the variant via `type = "..."`
 /// (`none`, `api_key`, `bearer`, `basic`, `oauth2_client_credentials`,
 /// `oauth_passthrough`). [`Default`] is [`AuthConfig::None`].
-#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, Default)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AuthConfig {
     /// No authentication.

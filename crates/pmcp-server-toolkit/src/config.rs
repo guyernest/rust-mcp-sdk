@@ -112,6 +112,18 @@ pub struct ServerConfig {
     #[serde(default)]
     pub database: DatabaseSection,
 
+    /// `[backend]` (optional, `http` feature) — OpenAPI/REST HTTP backend
+    /// declaration (`base_url` + `[backend.auth]` + `[backend.http]`).
+    ///
+    /// Additive per the REF-01 superset invariant (D-06): a pure-SQL config
+    /// omits `[backend]` and this field parses to `None`. The whole section is
+    /// gated behind the `http` feature — a no-http build has no OpenAPI backend,
+    /// so exposing an unusable stub type would be misleading. See
+    /// [`BackendSection`].
+    #[cfg(feature = "http")]
+    #[serde(default)]
+    pub backend: Option<BackendSection>,
+
     /// `[code_mode]` (optional) — code-mode policy and limits.
     #[serde(default)]
     pub code_mode: Option<CodeModeSection>,
@@ -366,6 +378,61 @@ pub struct DatabasePoolSection {
     /// Connection-acquisition timeout, in seconds.
     #[serde(default)]
     pub connection_timeout_seconds: Option<u64>,
+}
+
+// -----------------------------------------------------------------------------
+// [backend] (http feature)
+// -----------------------------------------------------------------------------
+
+/// Re-export of the outgoing-HTTP authentication config (owned by
+/// [`crate::http::auth`], Plan 90-01). Callers may also reach it via the
+/// `crate::http` module path; this re-export keeps `[backend.auth]` named
+/// alongside the `ServerConfig` types it deserializes into.
+#[cfg(feature = "http")]
+pub use crate::http::auth::AuthConfig;
+
+/// Re-export of the HTTP client tuning config (owned by [`crate::http::client`],
+/// Plan 90-01) used by `[backend.http]`.
+#[cfg(feature = "http")]
+pub use crate::http::client::HttpConfig;
+
+/// `[backend]` section — the OpenAPI/REST HTTP backend declaration (D-06).
+///
+/// This is the HTTP analog of [`DatabaseSection`]: it identifies the upstream
+/// REST API the synthesized tools call. `base_url` is the API root; the optional
+/// `[backend.auth]` sub-table selects an [`AuthConfig`] variant (`type = "..."`)
+/// and `[backend.http]` carries [`HttpConfig`] tuning (timeout / retries / …).
+///
+/// Gated behind the `http` feature — the whole section (and the
+/// [`ServerConfig::backend`] field) is absent in a no-http build so there is no
+/// dead stub type. `AuthConfig` and `HttpConfig` are DEFINED in
+/// [`crate::http`] (Plan 90-01) and re-exported here, not redefined (H3).
+///
+/// Strict-parse discipline (D-13) is preserved: `#[serde(deny_unknown_fields)]`
+/// rejects a typo'd key under `[backend]` or `[backend.http]`.
+///
+/// Secrets posture (T-90-02-02): inline token fields under `[backend.auth]`
+/// hold operator references (`${ENV}` / `env:VAR`) resolved upstream by the
+/// Phase 83 secrets machinery — config parsing stores the string verbatim and
+/// never the resolved value.
+#[cfg(feature = "http")]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(deny_unknown_fields)]
+pub struct BackendSection {
+    /// REST API root URL (e.g. `"https://api.tfl.gov.uk"`). Single-call tools
+    /// concatenate their `path` onto this (an empty per-tool `base_url`
+    /// inherits this value).
+    #[serde(default)]
+    pub base_url: String,
+    /// `[backend.auth]` — outgoing authentication ([`AuthConfig`], six modes).
+    /// Defaults to [`AuthConfig::None`] when the sub-table is omitted.
+    #[serde(default)]
+    pub auth: AuthConfig,
+    /// `[backend.http]` — client tuning ([`HttpConfig`]: timeout / retries /
+    /// backoff / user-agent / default headers). Defaults to [`HttpConfig`]'s
+    /// defaults when the sub-table is omitted.
+    #[serde(default)]
+    pub http: HttpConfig,
 }
 
 // -----------------------------------------------------------------------------
@@ -807,6 +874,108 @@ mod tests {
             ),
             "got: {err:?}"
         );
+    }
+
+    // -------------------------------------------------------------------------
+    // [backend] / [backend.auth] / [backend.http] — D-06 (http feature)
+    // -------------------------------------------------------------------------
+
+    #[cfg(feature = "http")]
+    #[test]
+    fn test_backend_section_parses() {
+        // A full [backend] + [backend.auth] (api_key) + [backend.http] block
+        // round-trips into ServerConfig with backend.is_some().
+        let toml = r#"
+            [server]
+            name = "tube"
+            version = "0.1.0"
+
+            [backend]
+            base_url = "https://api.tfl.gov.uk"
+
+            [backend.auth]
+            type = "api_key"
+
+            [backend.auth.query_params]
+            app_key = "${TFL_APP_KEY}"
+
+            [backend.http]
+            timeout_seconds = 10
+            retries = 2
+        "#;
+        let cfg = ServerConfig::from_toml(toml).expect("[backend] config must parse");
+        let backend = cfg.backend.expect("backend must be Some");
+        assert_eq!(backend.base_url, "https://api.tfl.gov.uk");
+        assert_eq!(backend.http.timeout_seconds, 10);
+        assert_eq!(backend.http.retries, 2);
+        assert!(
+            matches!(backend.auth, AuthConfig::ApiKey { .. }),
+            "auth must be api_key, got {:?}",
+            backend.auth
+        );
+    }
+
+    #[cfg(feature = "http")]
+    #[test]
+    fn test_backend_auth_defaults_to_none() {
+        // [backend] without a [backend.auth] sub-table defaults auth to None
+        // and http to HttpConfig defaults (additive sub-tables).
+        let toml = r#"
+            [server]
+            name = "tube"
+            version = "0.1.0"
+
+            [backend]
+            base_url = "https://api.example.com"
+        "#;
+        let cfg = ServerConfig::from_toml(toml).expect("backend w/o auth must parse");
+        let backend = cfg.backend.expect("backend must be Some");
+        assert!(matches!(backend.auth, AuthConfig::None));
+        assert_eq!(backend.http, HttpConfig::default());
+    }
+
+    #[cfg(feature = "http")]
+    #[test]
+    fn test_sql_config_unaffected() {
+        // REF-01 superset / D-06 additive proof: a pure-SQL config with NO
+        // [backend] still parses, and backend == None.
+        let toml = r#"
+            [server]
+            name = "demo"
+            version = "0.1.0"
+
+            [database]
+            type = "sqlite"
+            file_path = "/tmp/demo.db"
+
+            [[tools]]
+            name = "list_tables"
+            sql = "SELECT name FROM sqlite_master"
+        "#;
+        let cfg = ServerConfig::from_toml(toml).expect("SQL config must still parse");
+        assert!(cfg.backend.is_none(), "SQL config must have backend == None");
+        assert_eq!(cfg.tools.len(), 1);
+    }
+
+    #[cfg(feature = "http")]
+    #[test]
+    fn test_backend_unknown_field_rejected() {
+        // T-90-02-01: deny_unknown_fields preserved — an unknown key under
+        // [backend.http] is a hard parse error, never a silent default.
+        let toml = r#"
+            [server]
+            name = "tube"
+            version = "0.1.0"
+
+            [backend]
+            base_url = "https://api.example.com"
+
+            [backend.http]
+            foo = 1
+        "#;
+        let err =
+            ServerConfig::from_toml(toml).expect_err("unknown [backend.http] key must be rejected");
+        assert!(matches!(err, ToolkitError::Parse(_)), "got: {err:?}");
     }
 
     proptest! {

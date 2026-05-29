@@ -1,0 +1,24 @@
+[server]
+name = "openapi-backend-fuzz-seed"
+version = "0.0.1"
+
+[backend]
+base_url = "https://api.tfl.gov.uk"
+
+[backend.auth]
+type = "api_key"
+
+[backend.auth.query_params]
+app_key = "${TFL_APP_KEY}"
+
+[backend.http]
+timeout_seconds = 10
+retries = 2
+retry_backoff_ms = 500
+user_agent = "pmcp-openapi-seed/0.0.1"
+
+[[tools]]
+name = "tube_status"
+description = "Tube line status (single-call)"
+path = "/Line/Mode/tube/Status"
+method = "GET"
