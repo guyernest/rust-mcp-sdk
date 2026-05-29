@@ -903,6 +903,31 @@ fn format_curated_tables(config: &ServerConfig) -> String {
 // Unit tests
 // =============================================================================
 
+/// Process-global lock serializing every test that reads or mutates the shared
+/// process environment via `std::env::{set_var, remove_var}`.
+///
+/// Those calls are process-global and not thread-safe, so under the default
+/// multi-threaded test runner the env-touching tests in this file's `tests` and
+/// `sql_code_executor_tests` modules otherwise interleave and corrupt each
+/// other's variables (e.g. an executor build fails to read the `TEST_SECRET_VAR`
+/// it just set). Acquire the guard around each synchronous env-op group; NEVER
+/// hold it across an `.await` (the `std` `MutexGuard` is `!Send`, and tokio's
+/// multi-thread runtime requires the test future to be `Send`).
+#[cfg(test)]
+mod test_env_guard {
+    use std::sync::{Mutex, MutexGuard};
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    /// Lock the process-env mutex, recovering from poisoning so a panicking
+    /// test does not cascade-fail its siblings.
+    pub(super) fn lock() -> MutexGuard<'static, ()> {
+        ENV_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1006,6 +1031,7 @@ mod tests {
 
     #[test]
     fn resolve_token_secret_env_reference_succeeds() {
+        let _env = super::test_env_guard::lock();
         const VAR: &str = "PMCP_TOOLKIT_CODE_MODE_TEST_RESOLVE_ENV";
         // Long enough to satisfy HmacTokenGenerator::MIN_SECRET_LEN (16 bytes).
         std::env::set_var(VAR, "a-test-secret-bytes-16-or-more");
@@ -1042,6 +1068,7 @@ mod tests {
 
     #[test]
     fn resolve_token_secret_empty_env_var_is_set_but_empty_error() {
+        let _env = super::test_env_guard::lock();
         // 85-10 / T-85-10-03: a set-but-EMPTY env value must NOT flow to the
         // HMAC layer as a degenerate secret — it surfaces as a clear
         // "set but empty" CodeMode error (env: form).
@@ -1064,6 +1091,7 @@ mod tests {
 
     #[test]
     fn resolve_token_secret_whitespace_env_var_is_set_but_empty_error() {
+        let _env = super::test_env_guard::lock();
         // All-whitespace is treated the same as empty (${VAR} form).
         const VAR: &str = "PMCP_TOOLKIT_CODE_MODE_TEST_WS_ENV";
         std::env::set_var(VAR, "   ");
@@ -1145,7 +1173,6 @@ mod sql_code_executor_tests {
     /// A read-only `[code_mode]` config (no writes/deletes/DDL) plus an
     /// in-memory SQLite connector seeded with a single `Artist` row.
     async fn read_only_executor() -> SqlCodeExecutor {
-        ensure_secret();
         let connector = SqliteConnector::open_in_memory().expect("open in-memory sqlite");
         connector
             .execute(
@@ -1179,13 +1206,17 @@ mod sql_code_executor_tests {
             }),
             ..Default::default()
         };
+        // Serialize set-secret + env-read (build) so a concurrent test cannot
+        // corrupt the process environment between them. Synchronous — no
+        // `.await` inside the locked section (the `std` guard is `!Send`).
+        let _env = super::test_env_guard::lock();
+        ensure_secret();
         SqlCodeExecutor::new(Arc::new(connector), config).expect("build executor")
     }
 
     /// Same in-memory connector as [`read_only_executor`], but the `[code_mode]`
     /// config sets `require_limit = true` so a bare SELECT must reject on policy.
     async fn read_only_executor_with_require_limit() -> SqlCodeExecutor {
-        ensure_secret();
         let connector = SqliteConnector::open_in_memory().expect("open in-memory sqlite");
         connector
             .execute(
@@ -1220,6 +1251,11 @@ mod sql_code_executor_tests {
             }),
             ..Default::default()
         };
+        // Serialize set-secret + env-read (build) so a concurrent test cannot
+        // corrupt the process environment between them. Synchronous — no
+        // `.await` inside the locked section (the `std` guard is `!Send`).
+        let _env = super::test_env_guard::lock();
+        ensure_secret();
         SqlCodeExecutor::new(Arc::new(connector), config).expect("build executor")
     }
 
@@ -1361,15 +1397,23 @@ mod sql_code_executor_tests {
             .execute("SELECT ArtistId FROM Artist LIMIT 1", None)
             .await
             .expect("first execute succeeds");
-        // Remove the secret the pipeline was built from.
-        std::env::remove_var(TEST_SECRET_VAR);
+        // Remove the secret the pipeline was built from. Each discrete env
+        // mutation is serialized under the shared lock (held only across the
+        // synchronous call, never across the `.await`s above/below).
+        {
+            let _env = super::test_env_guard::lock();
+            std::env::remove_var(TEST_SECRET_VAR);
+        }
         // Second execute STILL succeeds — the cached pipeline never re-reads env.
         let result = executor
             .execute("SELECT ArtistId FROM Artist LIMIT 1", None)
             .await
             .expect("second execute must succeed from the cached pipeline");
         // Restore for any sibling tests sharing the process env.
-        ensure_secret();
+        {
+            let _env = super::test_env_guard::lock();
+            ensure_secret();
+        }
         assert!(result.get("rows").is_some());
     }
 }

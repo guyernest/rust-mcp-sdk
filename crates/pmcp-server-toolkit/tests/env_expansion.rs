@@ -15,8 +15,9 @@
 //! 5. Proptest: arbitrary `${name}`-ish token-secret strings never panic
 //!    (the pipeline returns `Ok` or `Err`, never unwinds).
 //!
-//! Tests share process env, so the suite MUST run with `--test-threads=1`
-//! (matches the project-wide CI convention).
+//! These tests mutate the shared process env, so they serialize on
+//! [`support::env_lock`] and are safe under the default multi-threaded runner
+//! (no `--test-threads=1` required).
 
 #![cfg(feature = "code-mode")]
 
@@ -24,6 +25,8 @@ use pmcp_server_toolkit::code_mode::validation_pipeline_from_config;
 use pmcp_server_toolkit::config::ServerConfig;
 use pmcp_server_toolkit::ToolkitError;
 use proptest::prelude::*;
+
+mod support;
 
 /// Build a minimal `[code_mode]`-enabled config with the given verbatim
 /// `token_secret` value. `validation_pipeline_from_config` resolves that secret.
@@ -44,6 +47,7 @@ fn config_with_token_secret(token_secret: &str) -> ServerConfig {
 
 #[test]
 fn braced_var_resolves_from_env() {
+    let _env = support::env_lock();
     const VAR: &str = "PMCP_TOOLKIT_BRACED_VAR_RESOLVES";
     std::env::set_var(VAR, "a-test-secret-bytes-16-or-more");
     let cfg = config_with_token_secret(&format!("${{{VAR}}}"));
@@ -60,6 +64,7 @@ fn braced_var_resolves_from_env() {
 fn braced_var_missing_errors_without_panic() {
     // T-85-01-01: a missing/unset ${VAR} must error cleanly, never panic and
     // never fall back to a weak/empty secret.
+    let _env = support::env_lock();
     let cfg = config_with_token_secret("${PMCP_TOOLKIT_DEFINITELY_NOT_SET_BRACED}");
     match validation_pipeline_from_config(&cfg) {
         Ok(_) => panic!("missing ${{VAR}} must error"),
@@ -76,6 +81,7 @@ fn braced_var_missing_errors_without_panic() {
 #[test]
 fn env_prefix_still_resolves() {
     // No regression: the existing `env:VAR` convention still works.
+    let _env = support::env_lock();
     const VAR: &str = "PMCP_TOOLKIT_ENV_PREFIX_STILL_WORKS";
     std::env::set_var(VAR, "a-test-secret-bytes-16-or-more");
     let cfg = config_with_token_secret(&format!("env:{VAR}"));
@@ -109,6 +115,7 @@ proptest! {
     /// is *no panic*.
     #[test]
     fn braced_var_resolution_never_panics(name in "[A-Za-z_][A-Za-z0-9_]{0,32}") {
+        let _env = support::env_lock();
         let cfg = config_with_token_secret(&format!("${{{name}}}"));
         // Materialize the Result — Ok or Err, never a panic.
         let _ = validation_pipeline_from_config(&cfg);

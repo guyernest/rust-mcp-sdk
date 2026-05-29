@@ -19,6 +19,8 @@ use pmcp_server_toolkit::code_mode::{
 use pmcp_server_toolkit::config::ServerConfig;
 use pmcp_server_toolkit::{ConfigValidationError, ToolkitError};
 
+mod support;
+
 const CONFIG_WRITES_DISALLOWED: &str = r#"
 [server]
 name = "Test"
@@ -45,6 +47,7 @@ fn ensure_hmac_env() {
 fn allow_writes_false_rejects_insert() {
     // SC-3 anchor: writes-disallowed config REJECTS an INSERT statement at
     // validation time.
+    let _env = support::env_lock();
     ensure_hmac_env();
     let cfg = ServerConfig::from_toml_strict_validated(CONFIG_WRITES_DISALLOWED)
         .expect("config parses + validates");
@@ -72,6 +75,7 @@ fn allow_writes_false_rejects_insert() {
 #[test]
 fn allow_writes_true_permits_insert() {
     // Inverse — when writes are enabled, the same INSERT validates successfully.
+    let _env = support::env_lock();
     ensure_hmac_env();
     let toml = CONFIG_WRITES_DISALLOWED.replace("allow_writes = false", "allow_writes = true");
     let cfg = ServerConfig::from_toml_strict_validated(&toml).expect("config parses + validates");
@@ -94,6 +98,7 @@ fn allow_writes_true_permits_insert() {
 fn select_is_always_permitted_under_default_config() {
     // Sanity check: a basic SELECT is permitted under the default
     // writes-disallowed config (proves the pipeline isn't blanket-rejecting).
+    let _env = support::env_lock();
     ensure_hmac_env();
     let cfg = ServerConfig::from_toml_strict_validated(CONFIG_WRITES_DISALLOWED)
         .expect("config parses + validates");

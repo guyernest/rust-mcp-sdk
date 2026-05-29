@@ -20,18 +20,16 @@ use pmcp_server_toolkit::config::ServerConfig;
 use pmcp_server_toolkit::sql::{SqlConnector, SqliteConnector};
 use pmcp_server_toolkit::ServerBuilderExt;
 
-const SECRET_VAR: &str = "PMCP_TOOLKIT_CODE_MODE_TOOLS_TEST_SECRET";
-
-fn ensure_secret() {
-    std::env::set_var(SECRET_VAR, "code-mode-tools-secret-16-or-more");
-}
-
-/// A read-only `[code_mode]` config (allow_writes/deletes/ddl all false) with
-/// an env:-style token_secret pointing at [`SECRET_VAR`].
+/// A read-only `[code_mode]` config (allow_writes/deletes/ddl all false).
+///
+/// Uses a dev inline `token_secret` rather than an `env:` reference: these
+/// tests exercise static-policy ENFORCEMENT (DELETE/DDL rejection), not secret
+/// resolution, so an inline secret avoids mutating the shared process
+/// environment and the multi-threaded `std::env` race that comes with it.
+/// (Env-resolution itself is covered by `tests/env_expansion.rs` and the
+/// `resolve_token_secret_*` unit tests.)
 fn read_only_config() -> ServerConfig {
-    ensure_secret();
-    let toml = format!(
-        r#"
+    let toml = r#"
 [server]
 name = "code-mode-tools-test"
 version = "0.1.0"
@@ -42,10 +40,10 @@ server_id = "code-mode-tools-test"
 allow_writes = false
 allow_deletes = false
 allow_ddl = false
-token_secret = "env:{SECRET_VAR}"
-"#
-    );
-    ServerConfig::from_toml_strict_validated(&toml).expect("config parses + validates")
+token_secret = "code-mode-tools-secret-16-or-more"
+allow_inline_token_secret_for_dev = true
+"#;
+    ServerConfig::from_toml_strict_validated(toml).expect("config parses + validates")
 }
 
 /// A bare config with NO `[code_mode]` block.
@@ -162,14 +160,18 @@ async fn validate_code_rejects_delete_under_read_only_policy() {
     );
 }
 
-/// Parse the rejection JSON carried in a `validate_code` tool error
-/// (`pmcp::Error::Internal(json)`).
+/// Parse the rejection JSON carried in a `validate_code` tool rejection
+/// (`pmcp::Error::ToolRejected { details, .. }`).
+///
+/// A policy rejection surfaces as `Error::ToolRejected` (which the server maps
+/// to a `CallToolResult { isError: true }`); the structured `valid: false` +
+/// `violations` payload rides in `details`.
 fn rejection_json(err: &pmcp::Error) -> serde_json::Value {
     match err {
-        pmcp::Error::Internal(msg) => {
-            serde_json::from_str(msg).expect("rejection error carries the rejection JSON")
-        },
-        other => panic!("expected an Internal rejection error, got {other:?}"),
+        pmcp::Error::ToolRejected { details, .. } => details
+            .clone()
+            .expect("validate_code rejection carries the violation JSON in `details`"),
+        other => panic!("expected a ToolRejected error, got {other:?}"),
     }
 }
 
