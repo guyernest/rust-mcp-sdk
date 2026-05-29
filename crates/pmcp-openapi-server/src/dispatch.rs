@@ -10,11 +10,24 @@
 //! # Lazy startup (CF-2)
 //!
 //! Construction is offline-safe: the `reqwest::Client` is built without
-//! contacting the backend, the auth provider is constructed statically (an
-//! `oauth_passthrough` provider holds no token here — its per-request token is
-//! threaded in by the assemble layer, H1), and the `HttpClient` only parses the
-//! `base_url`. No spec read, no backend request, and no network call is made at
-//! dispatch time — the backend is contacted only on the first tool invocation.
+//! contacting the backend, the auth provider is constructed statically, and the
+//! `HttpClient` only parses the `base_url`. No spec read, no backend request,
+//! and no network call is made at dispatch time — the backend is contacted only
+//! on the first tool invocation.
+//!
+//! # `oauth_passthrough` runtime forwarding (Plan 90-10 / OAPI-03 / OAPI-05)
+//!
+//! For an `oauth_passthrough` backend, dispatch installs an
+//! `OAuthPassthroughAuth` provider via
+//! [`create_passthrough_auth_provider`](pmcp_server_toolkit::http::auth::create_passthrough_auth_provider)
+//! holding NO construction-time token — the per-request inbound MCP token is
+//! threaded in via `apply`'s `inbound_token` from the toolkit handler seam
+//! (`request_executor_from_extra`). This is what makes the captured token
+//! actually reach `target_header` at runtime; the previous `create_auth_provider`
+//! installed a `MissingTokenAuth`/`NoAuth` provider that never forwarded the
+//! token. Non-passthrough configs are unaffected:
+//! `create_passthrough_auth_provider` delegates to `create_auth_provider` for
+//! every other `AuthConfig` variant.
 //!
 //! # Credential safety (V7 / Pitfall 5 / T-90-06-01)
 //!
@@ -28,7 +41,7 @@ use std::sync::Arc;
 
 use pmcp_server_toolkit::code_mode::HttpCodeExecutor;
 use pmcp_server_toolkit::config::ServerConfig;
-use pmcp_server_toolkit::http::auth::create_auth_provider;
+use pmcp_server_toolkit::http::auth::create_passthrough_auth_provider;
 use pmcp_server_toolkit::http::{HttpClient, HttpConnector, HttpConnectorError};
 
 /// Error returned when [`dispatch`] cannot produce the connector/executor pair.
@@ -63,10 +76,12 @@ pub enum DispatchError {
 ///
 /// Reads `cfg.backend` (error [`DispatchError::MissingBackend`] when absent),
 /// builds the outgoing auth provider via
-/// [`create_auth_provider`](pmcp_server_toolkit::http::auth::create_auth_provider)
-/// (the static-construction path — `oauth_passthrough` is constructed with no
-/// token here; its per-request token is threaded by the assemble layer, H1),
-/// builds a shared `reqwest::Client` (lazy — no network, CF-2), and constructs
+/// [`create_passthrough_auth_provider`](pmcp_server_toolkit::http::auth::create_passthrough_auth_provider)
+/// (an `oauth_passthrough` backend installs an `OAuthPassthroughAuth` provider
+/// holding NO construction-time token — its per-request token is threaded by the
+/// toolkit handler seam, Plan 90-10; every other config delegates to
+/// `create_auth_provider`), builds a shared `reqwest::Client` (lazy — no
+/// network, CF-2), and constructs
 /// both an [`HttpClient`] (single-call connector, Plan 03) and an
 /// [`HttpCodeExecutor`] (Code-Mode / script-tool execution surface, Plan 04)
 /// over the SAME client + base_url + auth. Returns the pair.
@@ -86,10 +101,13 @@ pub async fn dispatch(
 ) -> Result<(Arc<dyn HttpConnector>, HttpCodeExecutor), DispatchError> {
     let backend = cfg.backend.as_ref().ok_or(DispatchError::MissingBackend)?;
 
-    // Static auth construction (H1): an `oauth_passthrough` provider is built
-    // with NO token here; the per-request inbound MCP token is threaded in by
-    // the assemble layer via `HttpCodeExecutor::with_inbound_token`.
-    let auth = create_auth_provider(&backend.auth).map_err(DispatchError::Auth)?;
+    // Auth construction (Plan 90-10 / H1): for an `oauth_passthrough` backend
+    // this installs an `OAuthPassthroughAuth` provider holding NO token here; the
+    // per-request inbound MCP token is threaded in by the toolkit handler seam
+    // (`request_executor_from_extra` → `HttpCodeExecutor::with_inbound_token` →
+    // `apply`'s `inbound_token`) so it actually reaches `target_header`. Every
+    // non-passthrough config delegates to `create_auth_provider` (unchanged).
+    let auth = create_passthrough_auth_provider(&backend.auth, None).map_err(DispatchError::Auth)?;
 
     // Lazy (CF-2): the reqwest client is built without contacting the backend.
     // Shared by BOTH the single-call connector and the Code-Mode executor so a

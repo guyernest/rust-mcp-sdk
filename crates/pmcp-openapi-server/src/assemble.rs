@@ -24,13 +24,16 @@
 //! A [`TokenCaptureAuthProvider`] (lifted CONCEPT from the reference
 //! `pmcp_server.rs:37-64`, NOT the whole file — Pitfall 6) is installed on the
 //! builder so the inbound MCP client `Authorization` header lands in the
-//! [`AuthContext`] threaded through [`pmcp::RequestHandlerExtra`]. A tool handler
-//! derives a per-request executor via
-//! [`HttpCodeExecutor::with_inbound_token`] from that captured token so the
-//! outbound `oauth_passthrough` provider (Plan 01/04) forwards it. The
-//! per-request derivation helper is [`request_executor`]; the toolkit synthesizer
-//! does not yet read `extra` into its handlers, so the binary owns this seam (see
-//! [`request_executor`] docs).
+//! [`AuthContext`] threaded through `pmcp::RequestHandlerExtra`. The toolkit's
+//! Code-Mode / script-tool handlers then read that captured token from `extra`
+//! and re-derive a per-request executor via
+//! `request_executor_from_extra` → [`HttpCodeExecutor::with_inbound_token`], so
+//! the outbound `oauth_passthrough` provider (Plan 90-10) forwards it to the
+//! backend. The per-request derivation now lives in the TOOLKIT (the handlers
+//! live there; the binary cannot be a dependency of the toolkit), so the binary
+//! wires the OpenAPI Code-Mode path via
+//! [`code_mode_http_tools_from_executor`](pmcp_server_toolkit::code_mode::code_mode_http_tools_from_executor)
+//! — the dead binary `request_executor` (WR-01) was removed.
 //!
 //! # No-spec + Code-Mode behavior (D-03)
 //!
@@ -50,8 +53,7 @@ use std::sync::Arc;
 use pmcp_server_toolkit::{ServerConfig, StaticPromptHandler, StaticResourceHandler};
 
 use pmcp_server_toolkit::code_mode::{
-    code_mode_tools_from_executor, ExecutionConfig, HttpCodeExecutor, JsCodeExecutor,
-    ValidationFlavor,
+    code_mode_http_tools_from_executor, ExecutionConfig, HttpCodeExecutor, ValidationFlavor,
 };
 use pmcp_server_toolkit::http::{HttpConnector, OpenApiSchema};
 use pmcp_server_toolkit::prompts::PromptConfig;
@@ -59,7 +61,7 @@ use pmcp_server_toolkit::resources::ResourceConfig;
 use pmcp_server_toolkit::synthesize_from_config_with_http_connector_and_scripts;
 
 use pmcp::server::auth::{AuthContext, AuthProvider};
-use pmcp::{RequestHandlerExtra, Server};
+use pmcp::Server;
 
 /// URI of the OpenAPI contract resource served from `--spec` (D-03 surface (a)).
 const API_SCHEMA_URI: &str = "api_schema";
@@ -110,26 +112,6 @@ impl AuthProvider for TokenCaptureAuthProvider {
     fn is_required(&self) -> bool {
         false
     }
-}
-
-/// Derive the per-request [`HttpCodeExecutor`] for a tool handler call (H1).
-///
-/// Reads the inbound MCP client token captured by [`TokenCaptureAuthProvider`]
-/// from `extra`'s [`AuthContext`] and threads it into a cheap clone of `base`
-/// via [`HttpCodeExecutor::with_inbound_token`]. For an `oauth_passthrough`
-/// backend the cloned executor then forwards the captured token; for static-auth
-/// backends the token is ignored (harmless).
-///
-/// This is the binary-side seam (Plan 06): the toolkit synthesizer constructs its
-/// script-tool / Code-Mode handlers over a FIXED `http_exec` and does not yet
-/// read `extra`, so the per-request token threading lives here. A custom tool
-/// handler (or a future toolkit handler that accepts a derivation hook) calls
-/// this to obtain the request-scoped executor before invoking the engine; the
-/// receiving end is the outbound `apply(.., inbound_token)` from Plan 01.
-#[must_use]
-pub fn request_executor(base: &HttpCodeExecutor, extra: &RequestHandlerExtra) -> HttpCodeExecutor {
-    let token = extra.auth_context().and_then(|ctx| ctx.token.clone());
-    base.clone().with_inbound_token(token)
 }
 
 /// Build the [`ExecutionConfig`] bounds for the shared engine from
@@ -239,9 +221,11 @@ fn register_prompts(
 ///    the synthesizer routes `is_script_tool()` to a `ScriptToolHandler` over the
 ///    SAME `http_exec`.
 /// 2. Code Mode `validate_code` + `execute_code` via
-///    [`code_mode_tools_from_executor`] (Plan 04) over a [`JsCodeExecutor`]
-///    wrapping the SAME `http_exec` (D-02: one engine), with
-///    [`ValidationFlavor::OpenApi`] (real SWC-backed JS validation).
+///    [`code_mode_http_tools_from_executor`](pmcp_server_toolkit::code_mode::code_mode_http_tools_from_executor)
+///    (Plan 90-10) over the SAME `http_exec` (D-02: one engine), with
+///    [`ValidationFlavor::OpenApi`] (real SWC-backed JS validation). The handler
+///    re-derives a request-scoped `JsCodeExecutor` per call so the captured
+///    inbound `oauth_passthrough` token reaches the backend (OAPI-03/OAPI-05).
 /// 3. The configured resources, with the `api_schema` resource merged from
 ///    `spec` when supplied (D-03).
 /// 4. The configured prompts, resolved against the merged resources.
@@ -293,9 +277,18 @@ pub fn build_server(
         builder = builder.tool_arc(name, handler);
     }
 
-    // 2. Code Mode over a JsCodeExecutor wrapping the SAME http_exec (D-02).
-    let js_exec = Arc::new(JsCodeExecutor::new(http_exec, exec_config));
-    builder = code_mode_tools_from_executor(builder, cfg, js_exec, ValidationFlavor::OpenApi)?;
+    // 2. Code Mode over the SAME http_exec (D-02). The per-request entry point
+    //    (Plan 90-10) hands the handler the base HttpCodeExecutor + exec_config
+    //    so it re-derives a request-scoped JsCodeExecutor carrying the captured
+    //    inbound oauth_passthrough token (OAPI-03/OAPI-05). The synthesizer above
+    //    took its own clone; code-mode takes the original http_exec.
+    builder = code_mode_http_tools_from_executor(
+        builder,
+        cfg,
+        http_exec,
+        exec_config,
+        ValidationFlavor::OpenApi,
+    )?;
 
     // 3 + 4. Prompts resolved against the merged resources, then the resources.
     let builder = register_prompts(builder, cfg, &resources);
@@ -308,9 +301,7 @@ pub fn build_server(
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        build_server, merge_spec_resource, request_executor, AssembleError, API_SCHEMA_URI,
-    };
+    use super::{build_server, merge_spec_resource, AssembleError, API_SCHEMA_URI};
     use pmcp_server_toolkit::config::ServerConfig;
     use pmcp_server_toolkit::http::auth::{create_auth_provider, AuthConfig};
     use pmcp_server_toolkit::http::OpenApiSchema;
@@ -403,24 +394,10 @@ required = true
         );
     }
 
-    #[test]
-    fn request_executor_threads_captured_token() {
-        // H1: the per-request executor derivation reads the captured inbound
-        // token from RequestHandlerExtra's AuthContext and threads it via
-        // with_inbound_token. We assert the derivation runs without panic over a
-        // context carrying a token (the forward itself is proven in Plan 04).
-        let base = http_exec();
-        let ctx = pmcp::server::auth::AuthContext {
-            subject: "s".to_string(),
-            scopes: vec![],
-            claims: std::collections::HashMap::new(),
-            token: Some("Bearer client-tok".to_string()),
-            client_id: None,
-            expires_at: None,
-            authenticated: true,
-        };
-        let extra = pmcp::RequestHandlerExtra::default().with_auth_context(Some(ctx));
-        let _scoped = request_executor(&base, &extra);
-        // A clone-with-token executor is produced (Clone is cheap, H1).
-    }
+    // NOTE: the per-request executor derivation that was tested here as the
+    // binary's `request_executor` moved into the toolkit as
+    // `request_executor_from_extra` (Plan 90-10 / WR-01 — the binary helper was
+    // dead). Its unit coverage now lives in the toolkit
+    // (`code_mode::per_request_executor_tests`), and the end-to-end
+    // handler-path forwarding proof is `tests/oauth_passthrough_e2e.rs`.
 }
