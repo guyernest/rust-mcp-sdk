@@ -1582,7 +1582,7 @@ Plans:
 
 **Goal**: Deliver a config-driven **OpenAPI** MCP server that mirrors the completed SQL toolkit (Shape A binary `pmcp-sql-server`, Phases 83–86): a non-developer points a binary at a `config.toml` + an OpenAPI spec and gets a live MCP server — curated operation→tool mappings for the common ~20%, Code Mode (the existing `openapi-code-mode` feature in `pmcp-code-mode`) for the long-tail ~80% — with **zero Rust written**. The backend-agnostic toolkit (Phase 83) and the Shape A / scaffold / deploy patterns (Phases 85–86) are reused; only an OpenAPI connector model, the operation→tool config mapping, the `pmcp-openapi-server` binary, the `cargo pmcp new --kind openapi-server` scaffold, and docs are new.
 **Depends on**: Phase 83 (backend-agnostic toolkit core), Phase 85 (Shape A binary pattern), Phase 86 (scaffold + deploy). Reuses the existing `openapi-code-mode` feature in `pmcp-code-mode`.
-**Requirements**: TBD — to be refined by a RESEARCH pass (scope below). This is **new scope** added 2026-05-29; it was not part of the original v2.2 roadmap.
+**Requirements**: OAPI-01 (HttpConnector trait), OAPI-02a (single-call tool synth), OAPI-02b (script tools — D-01), OAPI-03 (5-variant outgoing auth — D-05), OAPI-04 (openapiv3 --spec parser — D-03), OAPI-05 (HttpCodeExecutor seam), OAPI-06 (Shape A binary), OAPI-07 (--kind openapi-server scaffold + deploy), OAPI-08 (london-tube wiremock parity — D-04), OAPI-09 (docs in three shapes), OAPI-10 (generalize code_mode wiring to Arc<dyn CodeExecutor> + the one-engine parity proof — D-02). New scope added 2026-05-29; refined by the RESEARCH pass.
 **Reference to lift from (CONFIRMED)**: `~/Development/mcp/sdk/pmcp-run/built-in/openapi-api` — the OpenAPI sibling of the `sql-api` reference the SQL toolkit (Phases 83–86) was lifted from. This is the source-of-truth for Phase 90, exactly as `sql-api` was for SQL. Structure:
 
   - **`crates/mcp-openapi-server-core`** — the core to lift (analog of `mcp-sql-server-core`). Modules: `auth`, `code_mode`, `config`, `http`, `schema`, `secrets`, `templates`, `tools`, `pmcp_server`, `lambda`. Builds on `pmcp` (workspace), `openapiv3` (spec parse), `reqwest 0.13` (rustls), `serde_yaml`, and `pmcp-code-mode 0.4.0` with the **`js-runtime`** feature (long-tail = validated JS calling the API). Currently uses `shared/mcp-server-common` + `shared/mcp-lambda-proxy` path-deps to be replaced by the public `pmcp-server-toolkit` (the REF-style lift).
@@ -1602,7 +1602,18 @@ Plans:
 
 **Open questions for RESEARCH**: how much of `mcp-openapi-server-core` is already covered by the backend-agnostic toolkit (Phase 83) vs genuinely new; the exact HTTP-connector trait shape; auth models beyond bearer (apiKey/basic/oauth) in the instance configs; spec-source handling (`--spec` file vs inline `[[tools]]`-only); and whether code-mode's `js-runtime` needs toolkit-side wiring like the SQL `executor_from_config` seam.
 
-**Plans**: TBD (run /gsd:plan-phase 90 after research)
+**Plans**: 9 plans in 6 waves (planned 2026-05-29)
+
+Plans:
+- [ ] 90-01-PLAN.md — HttpConnector trait + reqwest client + 5-variant outgoing auth + http feature (OAPI-01/03)
+- [ ] 90-02-PLAN.md — additive [backend]/[backend.auth]/[backend.http] + ToolDecl two-kind fields on ServerConfig (D-06, OAPI-02a/03)
+- [ ] 90-03-PLAN.md — openapiv3 --spec parser (optional at runtime) + single-call tool synthesizer (OAPI-04/02a)
+- [ ] 90-04-PLAN.md — HttpCodeExecutor seam + generalize code_mode_tools_from_executor to Arc<dyn CodeExecutor>+flavor (OAPI-05/10)
+- [ ] 90-05-PLAN.md — ScriptToolHandler (one engine, no token cycle) + the D-02 engine-parity proof (OAPI-02b/10)
+- [ ] 90-06-PLAN.md — pmcp-openapi-server Shape A binary (cli/dispatch/assemble/lib, streamable HTTP, spec optional) (OAPI-06)
+- [ ] 90-07-PLAN.md — london-tube wiremock parity replay + env-gated live test (OAPI-08, D-04)
+- [ ] 90-08-PLAN.md — cargo pmcp new --kind openapi-server scaffold + deploy parity + scoped README (OAPI-07)
+- [ ] 90-09-PLAN.md — docs in three shapes (crate README + book + course chapters) (OAPI-09)
 
 ## Progress — v2.2 Milestone
 
