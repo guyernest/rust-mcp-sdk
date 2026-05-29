@@ -4,6 +4,21 @@ Shape A pure-config SQL MCP server binary — point it at a `config.toml` + a sc
 
 **Status:** 0.1.0 — early access. The pipeline is fully implemented; the public config/CLI surface may evolve as DX matures across Phases 85–89.
 
+> **Most people don't run this binary directly.** The recommended way to build and
+> ship a config-driven SQL MCP server is the `cargo pmcp` CLI:
+> `cargo pmcp new my-server --kind sql-server` scaffolds a project, `cargo run`
+> serves it locally, and `cargo pmcp deploy` ships it to AWS Lambda / Cloud Run /
+> Cloudflare / pmcp.run. See the user guide in
+> [`cargo-pmcp/README.md`](../../cargo-pmcp/README.md#config-driven-sql-server-new---kind-sql-server)
+> (and the *Config-Driven SQL Servers* chapters in the PMCP book and course).
+>
+> **This README is for the other path:** running the prebuilt `pmcp-sql-server`
+> binary as-is, or **extending the toolkit** (adding a new SQL dialect/connector).
+> The CLI scaffold ("Shape B") generates a small crate that uses the
+> [`pmcp-server-toolkit`](../pmcp-server-toolkit) *library* with its own `main.rs`;
+> this crate ("Shape A") is the standalone, no-Rust-required *binary*. They are
+> siblings built on the same toolkit — the scaffold does not invoke this binary.
+
 ## The improvement (why this exists)
 
 To expose a SQL database over the Model Context Protocol today, you hand-write a Rust binary against the SDK: wire a `ServerBuilder`, implement a tool handler for every query, construct and manage the database connector, wire up Code Mode policy, stand up the HTTP transport, and **recompile for every schema or tool change**.

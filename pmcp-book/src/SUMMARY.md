@@ -34,6 +34,7 @@
 - [Chapter 12.7: MCP Tasks — Long-Running Operations](ch12-7-tasks.md)
 - [Chapter 12.8: Skills — Agent Workflow Instructions](ch12-8-skills.md)
 - [Chapter 12.9: Code Mode — LLM Code Validation & Execution](ch12-9-code-mode.md)
+- [Chapter 12.10: Config-Driven SQL Servers (cargo pmcp)](ch12-10-config-driven-sql-servers.md)
 
 ## Part IV: Real-World Applications
 
