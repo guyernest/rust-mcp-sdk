@@ -554,8 +554,7 @@ mod tool_handlers {
             #[cfg_attr(not(feature = "openapi-code-mode"), allow(unused_variables))]
             extra: &pmcp::RequestHandlerExtra,
         ) -> std::result::Result<serde_json::Value, pmcp_code_mode::ExecutionError> {
-            use pmcp_code_mode::CodeExecutor as _;
-            match &self.source {
+                match &self.source {
                 ExecSource::Static(executor) => executor.execute(code, variables).await,
                 #[cfg(feature = "openapi-code-mode")]
                 ExecSource::PerRequestHttp { base, exec_config } => {
@@ -2226,8 +2225,15 @@ mod per_request_executor_tests {
             ValidationFlavor::OpenApi,
         )
         .expect("OpenAPI per-request code-mode wiring must build");
-        assert!(builder.has_tool("validate_code"), "validate_code registered");
-        assert!(builder.has_tool("execute_code"), "execute_code registered");
+        let server = builder.build().expect("server builds");
+        assert!(
+            server.get_tool("validate_code").is_some(),
+            "validate_code registered"
+        );
+        assert!(
+            server.get_tool("execute_code").is_some(),
+            "execute_code registered"
+        );
         std::env::remove_var("PMCP_TOOLKIT_90_10_HTTP_SECRET");
     }
 
@@ -2250,7 +2256,11 @@ mod per_request_executor_tests {
             ValidationFlavor::OpenApi,
         )
         .expect("no-op when [code_mode] absent");
-        assert!(!builder.has_tool("execute_code"), "no tools without [code_mode]");
+        let server = builder.build().expect("server builds");
+        assert!(
+            server.get_tool("execute_code").is_none(),
+            "no tools without [code_mode]"
+        );
     }
 }
 
@@ -2291,8 +2301,9 @@ mod sql_static_source_tests {
         let builder =
             code_mode_tools_from_executor(builder, &cfg, executor, ValidationFlavor::Sql)
                 .expect("SQL code-mode wiring must build");
-        assert!(builder.has_tool("validate_code"));
-        assert!(builder.has_tool("execute_code"));
+        let server = builder.build().expect("server builds");
+        assert!(server.get_tool("validate_code").is_some());
+        assert!(server.get_tool("execute_code").is_some());
         std::env::remove_var("PMCP_TOOLKIT_90_10_SQL_SECRET");
     }
 }

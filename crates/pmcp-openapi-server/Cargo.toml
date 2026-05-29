@@ -17,6 +17,17 @@ exclude = [".planning/", ".pmat/", "fuzz/", "tests/"]
 all-features = true
 rustdoc-args = ["--cfg", "docsrs"]
 
+[features]
+# Why (Plan 90-10): the binary ALWAYS pulls the toolkit's `openapi-code-mode`
+# surface (the dependency below hard-enables it — the binary serves the full
+# script-tool + Code-Mode surface). This passthrough feature exists so the
+# `oauth_passthrough_e2e` integration test (gated `#![cfg(feature =
+# "openapi-code-mode")]`, matching the toolkit's own test gating convention) can
+# be selected with `--features openapi-code-mode`. It is a `default` feature so a
+# bare `cargo test -p pmcp-openapi-server` exercises the e2e proof too.
+default = ["openapi-code-mode"]
+openapi-code-mode = ["pmcp-server-toolkit/openapi-code-mode"]
+
 [lib]
 name = "pmcp_openapi_server"
 path = "src/lib.rs"
