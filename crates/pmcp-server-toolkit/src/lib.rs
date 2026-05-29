@@ -36,6 +36,13 @@ pub mod secrets;
 pub mod sql;
 pub mod tools;
 
+/// HTTP backend primitives for config-driven OpenAPI MCP servers (Phase 90).
+///
+/// Gated behind the opt-in `http` feature so the curated / no-`http` toolkit
+/// build stays light (RESEARCH Pitfall 4).
+#[cfg(feature = "http")]
+pub mod http;
+
 #[cfg(feature = "code-mode")]
 pub mod code_mode;
 
@@ -109,6 +116,11 @@ pub use crate::builder_ext::ServerBuilderExt;
 // (pmcp-server-toolkit 0.2.0) once the first real connector validates the
 // contract. `MockSqlConnector` stays `pub(crate)` — it's test-only.
 pub use crate::sql::{ConnectorError, Dialect, SqlConnector};
+
+// HTTP connector (Phase 90 OAPI-01) — crate-root re-export of the headline
+// types, mirroring the SQL connector re-export. Feature-gated on `http`.
+#[cfg(feature = "http")]
+pub use crate::http::{HttpConnector, HttpConnectorError, Operation};
 
 // Code-mode prompt assembler (TKIT-10 / D-12) — Plan 07 headline re-export.
 // Feature-gated on `code-mode` because it lives in the code_mode module which
