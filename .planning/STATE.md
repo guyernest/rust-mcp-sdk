@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v2.2
 milestone_name: Configuration-Only MCP Servers
 status: executing
-stopped_at: Completed 90-07-PLAN.md
-last_updated: "2026-05-29T21:28:54.028Z"
+stopped_at: Completed 90-08-PLAN.md
+last_updated: "2026-05-29T21:47:24.178Z"
 last_activity: 2026-05-29
 progress:
   total_phases: 45
   completed_phases: 38
   total_plans: 180
-  completed_plans: 178
+  completed_plans: 179
   percent: 84
 ---
 
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-05-17)
 ## Current Position
 
 Phase: 90 (openapi-built-in-server) — EXECUTING
-Plan: 8 of 9
+Plan: 9 of 9
 Status: Ready to execute
 Last activity: 2026-05-29
 
@@ -247,6 +247,7 @@ Inherited from v2.1 (see PROJECT.md + prior Decisions log):
 | Phase 90 P05 | 11min | 2 tasks | 4 files |
 | Phase 90 P06 | 13min | 3 tasks | 9 files |
 | Phase 90 P07 | 12min | 2 tasks | 5 files |
+| Phase 90 P08 | 13min | 2 tasks | 6 files |
 
 ### Last Activity
 
@@ -264,6 +265,6 @@ Inherited from v2.1 (see PROJECT.md + prior Decisions log):
 
 ## Session Continuity
 
-Last session: 2026-05-29T21:28:54.022Z
-Stopped at: Completed 90-07-PLAN.md
-Resume: Plan 85-03 COMPLETE — scaffolded `crates/pmcp-sql-server` (Shape A pure-config binary): feature-gated 4-connector manifest (sqlite/postgres/mysql/athena, all default-on D-07), lib/main split with a placeholder `lib::run()` Wave 2 replaces. Vendored FOUR self-contained parity fixtures into the SDK repo (closes RESEARCH Open Q#1): the DATA-BEARING `tests/fixtures/chinook.db` (~984 KB, REVIEW FIX #1 — real rows for the parity replay), the SEPARATE `chinook.ddl` (11 CREATE TABLE, the --schema text input D-06), `generated.yaml` (29-scenario contract), and `reference-config.toml` — all publish-excluded via `exclude = [tests/, …]`. 6-test `schema_fixture.rs` proves the DB returns Rock/AC-DC through the real SqliteConnector, the DDL builds a standalone 11-table schema, and generated.yaml parses as a `mcp_tester::TestScenario`. REF-02 fixture foundation done. Next: Plan 85-04 (Wave 2) fills `lib::run()` with the real config-load → connector-select → `pmcp::Server` assembly → transport-serve pipeline; Plan 85-06 replays the 29 scenarios against the vendored DB. NOTE: plan counter advanced 2→3 (monotonic) but plan 85-02 is a parallel Wave-1 plan whose SUMMARY is still pending; progress recalc (157/161, 98%) reflects disk truth.
+Last session: 2026-05-29T21:47:24.172Z
+Stopped at: Completed 90-08-PLAN.md
+Resume: Plan 90-08 COMPLETE — `cargo pmcp new --kind openapi-server` scaffold (OAPI-07/CF-3). `templates/openapi_server.rs` emits a SINGLE runnable crate: Cargo.toml (toolkit `openapi-code-mode` umbrella + `pmcp-openapi-server` lib for the `dispatch`/`build_server` seam — the http path has NO ServerBuilderExt method, Plan 06 decision, Rule 3 reconciliation), a ≤15-statement-line Shape C `main.rs` (load config[+optional api.yaml] → dispatch → build_server → serve, with the StreamableHttpServer boilerplate hoisted into a private serve() helper, CF-5), a `config.toml` with [backend] + a single-call + a script tool + `[code_mode] enabled=true` carrying an inline DEV token_secret + `allow_inline_token_secret_for_dev=true` + a LOUD replace-for-production note (CF-4), a minimal `api.yaml` (D-03, optional at runtime), and `deploy.toml` + `.pmcp/deploy.toml` with `[target] type="pmcp-run"` (CF-6, Phase 77 enum unchanged). `new.rs` gained the `openapi-server` arm + execute/print helpers + a widened error. `tests/scaffold_openapi_server.rs` is two-tier (mirror TEST-05): always-on file-emission + CF-5 ≤15-line golden-drift, plus an env-gated (`PMCP_SCAFFOLD_COMPILE_TEST=1`) cold `cargo check` that was RUN and passed (proving the scaffold compiles end to end). README documents the new `--kind` in a scoped fold. Commits `4caab84b`, `6b992761`. Next: Plan 90-09 (docs) — only remaining incomplete Phase 90 plan.

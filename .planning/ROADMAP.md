@@ -1626,7 +1626,7 @@ Plans:
 **Wave 5** *(blocked on Wave 4 completion)*
 
 - [x] 90-07-PLAN.md — london-tube wiremock parity replay + env-gated live test (OAPI-08, D-04)
-- [ ] 90-08-PLAN.md — cargo pmcp new --kind openapi-server scaffold + deploy parity + scoped README (OAPI-07)
+- [x] 90-08-PLAN.md — cargo pmcp new --kind openapi-server scaffold + deploy parity + scoped README (OAPI-07)
 
 **Wave 6** *(blocked on Wave 5 completion)*
 
@@ -1646,4 +1646,4 @@ Plans:
 | 87. Type 2 Authoring Skills Server | 0/? | Not started | - |
 | 88. Dogfood `pmcp-server` | 0/? | Not started | - |
 | 89. Documentation & Migration | 0/? | Not started | - |
-| 90. OpenAPI Built-In Server | 7/9 | In Progress|  |
+| 90. OpenAPI Built-In Server | 8/9 | In Progress|  |
