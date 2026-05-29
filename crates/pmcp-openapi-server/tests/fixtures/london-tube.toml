@@ -1,0 +1,114 @@
+# =============================================================================
+# london-tube.toml — vendored OpenAPI Shape-A parity fixture (OAPI-08 / D-04)
+# =============================================================================
+#
+# PROVENANCE (do not let this drift — diff against the reference before editing):
+#   vendored from ~/Development/mcp/sdk/pmcp-run/built-in/openapi-api/instances/london-tube.toml
+#   @ 4f5b4a47d35b719f9f4b5db91981629ec4f61a09 (2026-02-07), captured 2026-05-29.
+#
+# This is a SELF-CONTAINED, OFFLINE, REDUCED parity fixture — NOT a byte copy of
+# the reference. It is adapted to the toolkit `[backend]` config shape (Plan 90-02)
+# rather than the reference's `shared/mcp-server-common` shape:
+#   - `[backend]` + `[backend.auth] type="api_key"` (api_key carried as a QUERY
+#     param `app_key`, the new outgoing-auth path D-04 proves) + `[backend.http]`.
+#   - `[[tools]]` use the toolkit's `[[tools.parameters]]` array shape, NOT the
+#     reference's `[tools.inputs.parameters.X]` / `[tools.outputs]` shape.
+#   - Two tools only: ONE single-call (`get-tube-status`) + ONE script
+#     (`disrupted-lines-with-detail`), enough to prove parity offline.
+#   - `[code_mode]` carries an inline DEV-ONLY `token_secret` guarded by
+#     `allow_inline_token_secret_for_dev = true` (CF-4) so the offline parity test
+#     needs no extra env wiring for the HMAC secret.
+#
+# NO REAL SECRETS: the `app_key` is the `${TFL_APP_KEY}` placeholder; the parity
+# test sets `TFL_APP_KEY=dummy` in the process env and asserts the RESOLVED value
+# (`app_key=dummy`) reaches the backend — never the literal `${...}` (T-90-07-01,
+# T-90-07-04).
+
+[server]
+name = "london-tube"
+version = "1.1.0"
+description = "London Underground line status + disruptions over the TfL API (offline parity fixture)."
+
+# =============================================================================
+# Backend — TfL API, api_key carried as a QUERY parameter (D-04 path under test)
+# =============================================================================
+
+[backend]
+base_url = "https://api.tfl.gov.uk"
+
+[backend.auth]
+type = "api_key"
+# The api_key is carried as a QUERY param `app_key`. `${TFL_APP_KEY}` is resolved
+# from the process env at provider-construction time (the parity test sets it to
+# `dummy`). `required = false`: when the env var is unset the param is OMITTED
+# (the backend is still reachable for anonymous/low-rate access); when SET it is
+# present (the parity test asserts `app_key=dummy` IS present).
+query_params = { app_key = "${TFL_APP_KEY}" }
+required = false
+
+[backend.http]
+timeout_seconds = 30
+retries = 3
+retry_backoff_ms = 1000
+
+# =============================================================================
+# Tool 1 (single-call) — get-tube-status
+# =============================================================================
+# Maps 1:1 onto `GET /Line/Mode/tube/Status`. No parameters. This is the
+# canonical "list all tube line statuses" curated tool from the reference.
+
+[[tools]]
+name = "get-tube-status"
+description = "Get the current status of all London Underground lines. Returns service status (Good Service, Minor Delays, Severe Delays, etc.) for each line."
+path = "/Line/Mode/tube/Status"
+method = "GET"
+
+[tools.annotations]
+read_only_hint = true
+idempotent_hint = true
+
+# =============================================================================
+# Tool 2 (script) — disrupted-lines-with-detail
+# =============================================================================
+# A multi-call orchestration: fetch all line statuses, filter to the disrupted
+# ones (statusSeverity < 10), and fetch the per-line disruption detail. Mirrors
+# the reference Code Mode "lines with delays + detail" pattern, written in the
+# engine-accurate JS subset (Plan 90-05): `api.get` paths are string/template
+# literals, the result binds to a const before `return`, and `args.maxLines` is
+# read (bound from `[[tools.parameters]]`).
+
+[[tools]]
+name = "disrupted-lines-with-detail"
+description = "List the currently-disrupted tube lines (statusSeverity < 10) with their per-line disruption detail."
+script = """
+const statuses = await api.get('/Line/Mode/tube/Status');
+const disrupted = statuses.filter(line => line.lineStatuses.some(s => s.statusSeverity < 10));
+const out = [];
+for (const line of disrupted) {
+  const detail = await api.get(`/Line/${line.id}/Disruption`);
+  out.push({ line: line.name, detail: detail, max: args.maxLines });
+}
+return { count: out.length, lines: out };
+"""
+
+[[tools.parameters]]
+name = "maxLines"
+type = "integer"
+description = "Maximum number of disrupted lines to detail."
+required = false
+default = 5
+
+[tools.annotations]
+read_only_hint = true
+
+# =============================================================================
+# Code Mode — engine shared with the script tool (D-02, one engine)
+# =============================================================================
+
+[code_mode]
+enabled = true
+# DEV-ONLY inline secret (CF-4): guarded by allow_inline_token_secret_for_dev so
+# the offline parity test boots without extra env wiring. NEVER set this flag in
+# a committed production config.
+token_secret = "london-tube-parity-dev-secret-32bytes"
+allow_inline_token_secret_for_dev = true
