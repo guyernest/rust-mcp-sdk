@@ -46,6 +46,8 @@ pub mod schema;
 pub use auth::{
     create_auth_provider, create_passthrough_auth_provider, AuthConfig, HttpAuthProvider,
 };
+#[doc(inline)]
+pub use client::{HttpClient, HttpConfig};
 
 /// Concatenate a base URL and a request path with exactly one separating slash,
 /// PRESERVING any non-root path already on the base.
@@ -62,10 +64,6 @@ pub use auth::{
 /// # // join_url is pub(crate); the behaviour is asserted in the module tests.
 /// // join_url("https://x/v1", "/users") == "https://x/v1/users"
 /// ```
-// Why: Task 1 lands the helper + its unit test; Task 3's `client.rs` is the first
-// non-test caller. The allow keeps the Task-1 commit warning-clean and is removed
-// in Task 3 once `HttpClient::execute` calls `join_url`.
-#[allow(dead_code)]
 #[must_use]
 pub(crate) fn join_url(base: &str, path: &str) -> String {
     format!(
