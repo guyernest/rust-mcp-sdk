@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v2.2
 milestone_name: Configuration-Only MCP Servers
-status: verifying
-stopped_at: Completed 90-08-PLAN.md
-last_updated: "2026-05-29T21:56:44.425Z"
-last_activity: 2026-05-29
+status: executing
+stopped_at: Completed 90-10-PLAN.md
+last_updated: "2026-05-29T23:59:00.000Z"
+last_activity: 2026-05-29 -- Phase 90 gap-closure 90-10 complete (oauth_passthrough runtime wiring)
 progress:
   total_phases: 45
-  completed_phases: 39
-  total_plans: 180
+  completed_phases: 38
+  total_plans: 184
   completed_plans: 180
-  percent: 87
+  percent: 84
 ---
 
 # Project State
@@ -26,9 +26,9 @@ See: .planning/PROJECT.md (updated 2026-05-17)
 ## Current Position
 
 Phase: 90 (openapi-built-in-server) — EXECUTING
-Plan: 9 of 9
-Status: Phase complete — ready for verification
-Last activity: 2026-05-29
+Plan: 1 of 13
+Status: Executing Phase 90
+Last activity: 2026-05-29 -- Phase 90 execution started
 
 **Carryover from v2.1:** Phase 81 (update-pmcp-book-and-pmcp-course-with-v2-advanced-topics-cod) was executing at v2.1 close; will be tracked separately and folded into v2.1 completion. Operator follow-ups deferred from Phase 75 Wave 5 still pending: (a) merge Phase 75 Wave 5 + 75.5 to paiml/rust-mcp-sdk:main; (b) post-merge run `gh workflow run quality-badges.yml -R paiml/rust-mcp-sdk` and append observation to `.planning/phases/75-fix-pmat-issues/75-05-GATE-VERIFICATION.md` "## Badge flip observation" section.
 
@@ -181,6 +181,10 @@ Inherited from v2.1 (see PROJECT.md + prior Decisions log):
 - [Phase 90]: Plan 07 Rule 2: create_auth_provider expands ${VAR}/env:VAR in api_key query_params/headers (resolve_api_key_value+expand_api_key_map); unset required=false omitted. Outbound api_key was never expanded (only token_secret, Plan 85-01) so literal ${TFL_APP_KEY} would have hit the backend — gap exposed by london-tube parity must_have.
 - [Phase 90]: Plan 07 london-tube parity proven OFFLINE through run_serving against wiremock; tool-surface asserted behaviorally (tool_call) since mcp-tester contains matches string array elements not tool objects; secret expansion proven two-sided (app_key=dummy matchers + received_requests literal-absence); live TfL replay #[ignore]+PMCP_OPENAPI_LIVE_TEST double-gated.
 - [Phase ?]: Docs in three shapes (README + pmcp-book Ch 12.11 + pmcp-course) document the OpenAPI built-in server, all leading with the cargo pmcp new --kind openapi-server on-ramp; auth table documents all SIX AuthConfig variants traced to http::auth source (OAPI-09)
+- [Phase 90 Plan 10]: oauth_passthrough per-request token now reaches the backend at RUNTIME (OAPI-03/OAPI-05 PARTIAL→SATISFIED, VERIFICATION truths #3/#8). Cross-crate constraint resolved by moving the derivation INTO the toolkit: request_executor_from_extra(base, extra) reads extra.auth_context().token and clones the base HttpCodeExecutor with the inbound token. The dead binary request_executor (WR-01) was REMOVED, not delegated.
+- [Phase 90 Plan 10]: ExecuteCodeHandler holds an ExecSource enum — Static(Arc<dyn CodeExecutor>) for SQL (unchanged) + #[cfg(openapi-code-mode)] PerRequestHttp { base, exec_config } for OpenAPI per-request rederivation (works around JsCodeExecutor's private http field by holding the Clone-able base HttpCodeExecutor). New code_mode_http_tools_from_executor entry point wires the PerRequestHttp source; code_mode_tools_from_executor keeps the Static source.
+- [Phase 90 Plan 10]: dispatch() uses create_passthrough_auth_provider(&backend.auth, None) so passthrough installs OAuthPassthroughAuth (forwards target_header); every non-passthrough config delegates to create_auth_provider (unchanged). Was MissingTokenAuth/NoAuth which never forwarded.
+- [Phase 90 Plan 10]: Rule 3 — added an openapi-code-mode (default) passthrough feature to pmcp-openapi-server/Cargo.toml so the e2e test gate + the plan's --features verify command resolve (the toolkit dep already hard-enables the feature).
 
 ### Roadmap Evolution
 
@@ -250,6 +254,7 @@ Inherited from v2.1 (see PROJECT.md + prior Decisions log):
 | Phase 90 P07 | 12min | 2 tasks | 5 files |
 | Phase 90 P08 | 13min | 2 tasks | 6 files |
 | Phase 90 P09 | 4min | 2 tasks | 5 files |
+| Phase 90 P10 | 35min | 3 tasks | 6 files |
 
 ### Last Activity
 
