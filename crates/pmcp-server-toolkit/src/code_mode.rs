@@ -62,6 +62,14 @@ pub use pmcp_code_mode::{
 #[cfg(feature = "avp")]
 pub use pmcp_code_mode::{AvpClient, AvpConfig, AvpPolicyEvaluator};
 
+// OpenAPI / Code-Mode engine surface (Plan 90-04 / OAPI-05). Gated under the
+// `openapi-code-mode` umbrella (which forwards `pmcp-code-mode/js-runtime`), so
+// the bare `code-mode` (SQL-only) build does NOT pull the SWC JS engine
+// (RESEARCH Pitfall 4). Re-exported here so the binary (Plan 06) + Plan 05
+// reference ONE stable path for the engine types the OpenAPI flavor needs.
+#[cfg(feature = "openapi-code-mode")]
+pub use pmcp_code_mode::{ExecutionConfig, HttpExecutor, JsCodeExecutor};
+
 use std::sync::Arc;
 
 use crate::config::{CodeModeSection, ServerConfig};
@@ -538,6 +546,249 @@ impl CodeExecutor for SqlCodeExecutor {
             })?;
         // (3) Mirror production's observable `"rows"` key (REVIEW FIX #6b).
         Ok(serde_json::json!({ "rows": rows }))
+    }
+}
+
+// =============================================================================
+// OAPI-05 — HttpCodeExecutor (Plan 90-04 Task 1 / H1 / H2)
+// =============================================================================
+
+/// Low-level HTTP executor bridging the toolkit's outbound
+/// [`HttpAuthProvider`](crate::http::auth::HttpAuthProvider) to pmcp-code-mode's
+/// [`HttpExecutor`](pmcp_code_mode::HttpExecutor) trait.
+///
+/// This is the OpenAPI analog of [`SqlCodeExecutor`], but at a DIFFERENT layer:
+/// it impls the LOW-LEVEL `pmcp_code_mode::HttpExecutor`
+/// (`execute_request(method, path, body)`), NOT the high-level
+/// [`CodeExecutor`]. It is wrapped by a
+/// [`JsCodeExecutor`](pmcp_code_mode::JsCodeExecutor) for the Code Mode path
+/// (the `JsCodeExecutor<HttpCodeExecutor>: CodeExecutor` blanket impl) and is
+/// called directly by script tools (Plan 05). The single-call synthesizer
+/// (Plan 03) does NOT use this path — it calls `HttpConnector::execute`
+/// directly.
+///
+/// # Per-request passthrough token (H1)
+///
+/// The `inbound_token` field carries the per-request MCP client token captured
+/// by the binary (Plan 06) into [`AuthContext`]. It is passed to
+/// [`HttpAuthProvider::apply`](crate::http::auth::HttpAuthProvider::apply) so an
+/// [`OAuthPassthroughAuth`](crate::http::auth::OAuthPassthroughAuth) provider
+/// forwards it to the backend; static providers ignore it (proven in Plan 01).
+/// Because Code Mode reuses ONE executor instance across requests, the binary
+/// produces a per-request clone carrying the captured token via
+/// [`HttpCodeExecutor::with_inbound_token`].
+///
+/// # Redaction (Pitfall 5 / T-90-04-01)
+///
+/// Auth/transport failures are mapped to
+/// [`ExecutionError::RuntimeError`](pmcp_code_mode::ExecutionError::RuntimeError)
+/// whose message names the operation / status only — it NEVER echoes the
+/// request URL or the `Authorization` token.
+///
+/// # Feature gate (H2)
+///
+/// Gated under `openapi-code-mode` (the Plan 90-01 umbrella that forwards
+/// `pmcp-code-mode/js-runtime`). The bare `code-mode` feature does NOT bring
+/// `HttpExecutor` into scope, so this type cannot be gated on
+/// `all(feature = "http", feature = "code-mode")`.
+#[cfg(feature = "openapi-code-mode")]
+#[derive(Clone)]
+pub struct HttpCodeExecutor {
+    client: reqwest::Client,
+    base_url: String,
+    auth: Arc<dyn crate::http::auth::HttpAuthProvider>,
+    /// Per-request captured MCP client token for `oauth_passthrough` (H1).
+    /// `None` for the static-auth path; set per request via
+    /// [`HttpCodeExecutor::with_inbound_token`].
+    inbound_token: Option<String>,
+}
+
+#[cfg(feature = "openapi-code-mode")]
+impl HttpCodeExecutor {
+    /// Construct an executor over `client` + `base_url`, authenticating outgoing
+    /// requests via `auth`. The per-request `inbound_token` starts `None`;
+    /// the binary attaches it per request with
+    /// [`HttpCodeExecutor::with_inbound_token`].
+    #[must_use]
+    pub fn new(
+        client: reqwest::Client,
+        base_url: String,
+        auth: Arc<dyn crate::http::auth::HttpAuthProvider>,
+    ) -> Self {
+        Self {
+            client,
+            base_url,
+            auth,
+            inbound_token: None,
+        }
+    }
+
+    /// Cheap clone-with-token builder (H1): the binary calls this PER REQUEST to
+    /// attach the captured inbound MCP token so an `oauth_passthrough` provider
+    /// forwards it. Static providers ignore the token, so calling this on a
+    /// static-auth executor is harmless.
+    ///
+    /// Single-call tools (Plan 03) don't use this path; the per-request token
+    /// flows through Code Mode + script tools only.
+    #[must_use]
+    pub fn with_inbound_token(mut self, token: Option<String>) -> Self {
+        self.inbound_token = token;
+        self
+    }
+
+    /// Substitute `{key}` path-template segments from `body` keys, returning the
+    /// resolved path and the remaining (non-path) body fields.
+    ///
+    /// Lifted from the pmcp-run reference `execute_request` (kept a free helper
+    /// so the trait method stays under the cog ≤25 budget).
+    fn resolve_path(
+        path: &str,
+        body: &Option<serde_json::Value>,
+    ) -> (String, Option<serde_json::Value>) {
+        let mut resolved_path = path.to_string();
+        let remaining = if let Some(serde_json::Value::Object(obj)) = body {
+            let mut remaining = serde_json::Map::new();
+            for (key, value) in obj {
+                let placeholder = format!("{{{key}}}");
+                if resolved_path.contains(&placeholder) {
+                    resolved_path = resolved_path.replace(&placeholder, &Self::scalar_str(value));
+                } else {
+                    remaining.insert(key.clone(), value.clone());
+                }
+            }
+            if remaining.is_empty() {
+                None
+            } else {
+                Some(serde_json::Value::Object(remaining))
+            }
+        } else {
+            body.clone()
+        };
+        (resolved_path, remaining)
+    }
+
+    /// Render a JSON scalar for path / query substitution (strings unquoted).
+    fn scalar_str(value: &serde_json::Value) -> String {
+        match value {
+            serde_json::Value::String(s) => s.clone(),
+            serde_json::Value::Null => "null".to_string(),
+            other => other.to_string(),
+        }
+    }
+}
+
+#[cfg(feature = "openapi-code-mode")]
+#[pmcp_code_mode::async_trait]
+impl pmcp_code_mode::HttpExecutor for HttpCodeExecutor {
+    async fn execute_request(
+        &self,
+        method: &str,
+        path: &str,
+        body: Option<serde_json::Value>,
+    ) -> std::result::Result<serde_json::Value, ExecutionError> {
+        let upper = method.to_uppercase();
+        let is_get_like = matches!(upper.as_str(), "GET" | "HEAD" | "OPTIONS");
+
+        // (1) Path-param substitution from the body object.
+        let (resolved_path, remaining_body) = Self::resolve_path(path, &body);
+
+        // (2) Shared join_url helper (Pitfall 2 — preserves an API-Gateway
+        //     stage prefix; it does NOT use the RFC-3986 path-replacing join).
+        //     join_url does the base+path CONCAT; we still parse the result to
+        //     append query pairs because reqwest 0.13 gates
+        //     RequestBuilder::query behind a `query` feature the toolkit
+        //     deliberately does not enable (Plan 01 Rule 1).
+        let url = crate::http::join_url(&self.base_url, &resolved_path);
+
+        // (3) Apply auth, threading the per-request inbound token (H1). Auth
+        //     failures map to a RuntimeError WITHOUT echoing URL/token
+        //     (Pitfall 5 / T-90-04-01).
+        let mut headers = reqwest::header::HeaderMap::new();
+        let mut auth_query: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
+        self.auth
+            .apply(&mut headers, &mut auth_query, self.inbound_token.as_deref())
+            .await
+            .map_err(|_| ExecutionError::RuntimeError {
+                message: "authentication failed for outgoing request".to_string(),
+            })?;
+
+        let mut query_params: Vec<(String, String)> = auth_query.into_iter().collect();
+
+        // (4) For GET-like requests, serialize remaining body fields as query
+        //     params; otherwise keep them as the JSON body.
+        let request_body = if is_get_like {
+            if let Some(serde_json::Value::Object(obj)) = &remaining_body {
+                for (key, value) in obj {
+                    query_params.push((key.clone(), Self::scalar_str(value)));
+                }
+            }
+            None
+        } else {
+            remaining_body
+        };
+
+        // Append query params via url::Url (reqwest 0.13's RequestBuilder::query
+        // is behind the off-by-default `query` feature; Plan 01 Rule 1).
+        let final_url = if query_params.is_empty() {
+            url
+        } else {
+            let mut parsed = url::Url::parse(&url).map_err(|_| ExecutionError::RuntimeError {
+                message: "could not construct the request URL".to_string(),
+            })?;
+            {
+                let mut pairs = parsed.query_pairs_mut();
+                for (k, v) in &query_params {
+                    pairs.append_pair(k, v);
+                }
+            }
+            parsed.to_string()
+        };
+
+        let mut request = match upper.as_str() {
+            "GET" => self.client.get(&final_url),
+            "POST" => self.client.post(&final_url),
+            "PUT" => self.client.put(&final_url),
+            "DELETE" => self.client.delete(&final_url),
+            "PATCH" => self.client.patch(&final_url),
+            "HEAD" => self.client.head(&final_url),
+            _ => {
+                return Err(ExecutionError::RuntimeError {
+                    message: "unsupported HTTP method".to_string(),
+                })
+            },
+        };
+        request = request.headers(headers);
+        if let Some(b) = request_body {
+            request = request.header("Content-Type", "application/json").json(&b);
+        }
+
+        // (5) Send + read. Transport / status / parse errors NEVER echo the URL
+        //     or token (Pitfall 5).
+        let response = request
+            .send()
+            .await
+            .map_err(|_| ExecutionError::RuntimeError {
+                message: "outgoing HTTP request failed".to_string(),
+            })?;
+        let status = response.status();
+        let text = response
+            .text()
+            .await
+            .map_err(|_| ExecutionError::RuntimeError {
+                message: "failed to read response body".to_string(),
+            })?;
+        if !status.is_success() {
+            return Err(ExecutionError::RuntimeError {
+                message: format!("backend returned HTTP status {}", status.as_u16()),
+            });
+        }
+        if text.is_empty() {
+            return Ok(serde_json::Value::Null);
+        }
+        serde_json::from_str(&text).map_err(|_| ExecutionError::RuntimeError {
+            message: "failed to parse response body as JSON".to_string(),
+        })
     }
 }
 
