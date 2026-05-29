@@ -404,7 +404,10 @@ mod tests {
             "PMCP_OPENAPI_SERVER_ADDR",
         ];
         for tok in tokens {
-            assert!(m.contains(tok), "emitted main.rs missing wiring token: {tok}");
+            assert!(
+                m.contains(tok),
+                "emitted main.rs missing wiring token: {tok}"
+            );
         }
         // D-03: api.yaml is loaded with `.ok()` so a missing spec boots curated-only.
         assert!(
@@ -422,7 +425,10 @@ mod tests {
         generate(tmp.path(), "scaffold_openapi_demo").expect("generate scaffold");
 
         let config = fs::read_to_string(tmp.path().join("config.toml")).unwrap();
-        assert!(config.contains("enabled = true"), "code_mode must be enabled");
+        assert!(
+            config.contains("enabled = true"),
+            "code_mode must be enabled"
+        );
         assert!(
             config.contains("allow_inline_token_secret_for_dev = true"),
             "config must set the dev inline-secret flag (CF-4)"

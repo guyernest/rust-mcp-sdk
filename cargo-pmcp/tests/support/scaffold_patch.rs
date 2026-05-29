@@ -54,6 +54,12 @@ pub fn repo_root() -> PathBuf {
 /// - `pmcp-server-toolkit`→ `<repo>/crates/pmcp-server-toolkit`   (0.1.0, NOT yet on crates.io)
 /// - `pmcp-code-mode`     → `<repo>/crates/pmcp-code-mode`        (toolkit's optional dep)
 /// - `pmcp-widget-utils`  → `<repo>/crates/pmcp-widget-utils`     (pmcp's dep)
+/// - `pmcp-openapi-server`→ `<repo>/crates/pmcp-openapi-server`   (0.1.0, openapi-server scaffold's dispatch/build_server seam)
+///
+/// The `pmcp-openapi-server` entry is unused by the `sql-server` scaffold's
+/// dependency graph (cargo emits a harmless unused-patch warning there) but is
+/// REQUIRED by the `openapi-server` scaffold, which depends on it for the
+/// `dispatch` + `build_server` orchestrators.
 ///
 /// `crate_dir` is the scaffolded crate root (the dir containing its `Cargo.toml`).
 pub fn append_crates_io_patch(crate_dir: &Path) {
@@ -77,11 +83,13 @@ pub fn append_crates_io_patch(crate_dir: &Path) {
          pmcp = {{ path = \"{pmcp}\" }}\n\
          pmcp-server-toolkit = {{ path = \"{toolkit}\" }}\n\
          pmcp-code-mode = {{ path = \"{code_mode}\" }}\n\
-         pmcp-widget-utils = {{ path = \"{widget}\" }}\n",
+         pmcp-widget-utils = {{ path = \"{widget}\" }}\n\
+         pmcp-openapi-server = {{ path = \"{openapi}\" }}\n",
         pmcp = path_str(&root),
         toolkit = path_str(&root.join("crates/pmcp-server-toolkit")),
         code_mode = path_str(&root.join("crates/pmcp-code-mode")),
         widget = path_str(&root.join("crates/pmcp-widget-utils")),
+        openapi = path_str(&root.join("crates/pmcp-openapi-server")),
     );
 
     content.push_str(&patch);

@@ -65,10 +65,17 @@ pub fn execute(
     }
 
     // --kind branch: emit a SINGLE runnable crate (distinct from the multi-crate
-    // workspace path below). Currently only `sql-server` is supported.
+    // workspace path below). `sql-server` (SQL toolkit) and `openapi-server`
+    // (OpenAPI/HTTP toolkit) are supported.
     match kind.as_deref() {
         Some("sql-server") => return execute_sql_server(&workspace_dir, &name, global_flags),
-        Some(k) => anyhow::bail!("unknown --kind '{}'; supported: sql-server", k),
+        Some("openapi-server") => {
+            return execute_openapi_server(&workspace_dir, &name, global_flags)
+        },
+        Some(k) => anyhow::bail!(
+            "unknown --kind '{}'; supported: sql-server, openapi-server",
+            k
+        ),
         None => {},
     }
 
@@ -187,6 +194,77 @@ fn print_sql_server_next_steps(name: &str) {
         "4.".bright_cyan().bold(),
         "config.toml".bright_green(),
         "schema.sql".bright_green()
+    );
+}
+
+/// Emit a SINGLE runnable config-driven OpenAPI server crate (Shape B/C/D,
+/// OAPI-07): `Cargo.toml` + `src/main.rs` + `config.toml` + `api.yaml` +
+/// `deploy.toml`. The emitted `src/main.rs` is the ≤15-line Shape C wiring
+/// (CF-5) over the `pmcp-openapi-server` `dispatch` + `build_server` seam, so the
+/// same crate runs locally (`cargo run`) AND deploys to pmcp.run (CF-6).
+fn execute_openapi_server(
+    workspace_dir: &Path,
+    name: &str,
+    global_flags: &crate::commands::GlobalFlags,
+) -> Result<()> {
+    // Validate the crate name BEFORE any fs::write (path-traversal guard,
+    // T-90-08-01 — same guard as the SQL arm).
+    validate_crate_name(name)?;
+
+    fs::create_dir_all(workspace_dir.join("src")).context("Failed to create src directory")?;
+
+    templates::openapi_server::generate(workspace_dir, name)?;
+
+    if global_flags.should_output() {
+        println!(
+            "\n{} OpenAPI server crate created successfully!",
+            "✓".green().bold()
+        );
+        print_openapi_server_next_steps(name);
+    }
+
+    Ok(())
+}
+
+fn print_openapi_server_next_steps(name: &str) {
+    println!(
+        "\n{}",
+        "🚀 Next Steps (config-driven OpenAPI server):"
+            .bright_white()
+            .bold()
+    );
+    println!();
+    println!("  {} Enter your crate:", "1.".bright_cyan().bold());
+    println!("     {}", format!("cd {}", name).bright_yellow());
+    println!();
+    println!(
+        "  {} Point {} at your REST API and run it (serves over streamable HTTP):",
+        "2.".bright_cyan().bold(),
+        "config.toml".bright_green()
+    );
+    println!("     {}", "cargo run".bright_yellow());
+    println!();
+    println!(
+        "  {} It prints {} — connect your MCP client there.",
+        "3.".bright_cyan().bold(),
+        "PMCP_OPENAPI_SERVER_ADDR=http://…".bright_green()
+    );
+    println!();
+    println!(
+        "  {} Edit {} ([backend], tools, code_mode) and {} (the OpenAPI spec);",
+        "4.".bright_cyan().bold(),
+        "config.toml".bright_green(),
+        "api.yaml".bright_green()
+    );
+    println!(
+        "     both are read at startup ({} is optional).",
+        "api.yaml".bright_green()
+    );
+    println!();
+    println!(
+        "  {} Deploy to pmcp.run: {}",
+        "5.".bright_cyan().bold(),
+        "cargo pmcp deploy".bright_yellow()
     );
 }
 

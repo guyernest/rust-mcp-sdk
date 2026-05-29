@@ -181,6 +181,50 @@ cargo pmcp test conformance <deployed-url>
 For a guided, hands-on version of this walkthrough, see the **Config-Driven SQL
 Servers** chapters in the [PMCP book](../pmcp-book) and [PMCP course](../pmcp-course).
 
+## Config-Driven OpenAPI Server (`new --kind openapi-server`)
+
+The OpenAPI/HTTP sibling of `--kind sql-server`: declare a REST `[backend]`, a
+handful of curated `[[tools]]` (single-call or multi-call script), and a
+`[code_mode]` policy in `config.toml`, optionally ship an `api.yaml` OpenAPI
+spec, and serve a production MCP server over the backend's HTTP API — **no Rust
+required to change behaviour, just edit the config**.
+
+> **Two shapes, same toolkit.** This scaffold ("Shape B") generates a crate you
+> own and can extend. There is also a prebuilt `pmcp-openapi-server` *binary*
+> ("Shape A") you run with `--config`/`--spec` and never compile — see
+> [`crates/pmcp-openapi-server`](../crates/pmcp-openapi-server).
+
+```bash
+cargo pmcp new my-openapi-server --kind openapi-server
+cd my-openapi-server
+cargo run
+# prints: PMCP_OPENAPI_SERVER_ADDR=http://127.0.0.1:<port>
+```
+
+The scaffold emits a **single runnable crate**:
+
+```
+<name>/
+├── Cargo.toml          # pmcp-server-toolkit (features ["openapi-code-mode"]) + pmcp-openapi-server (dispatch/build_server) + pmcp ["streamable-http"]
+├── src/main.rs         # generated ≤15-line wiring: load config[+optional api.yaml] → dispatch → build_server → serve streamable HTTP
+├── config.toml         # [server] / [backend] / [code_mode] + a single-call tool + a script tool (DEV-only inline token_secret)
+├── api.yaml            # minimal OpenAPI spec (optional at runtime; exposed as the api_schema resource for Code Mode)
+├── deploy.toml         # human-visible deploy descriptor (target = pmcp-run; assets = config.toml + api.yaml)
+└── .pmcp/deploy.toml   # the copy `cargo pmcp deploy` actually reads
+```
+
+Out of the box you get the curated `list_widgets` tool, a `widget_with_detail`
+script tool, and Code Mode's `validate_code` / `execute_code` tools — the LLM
+writes JS against your backend for the long tail you didn't curate. The generated
+`config.toml` carries an inline **DEV-ONLY** `token_secret` (guarded by
+`allow_inline_token_secret_for_dev = true`); **replace it with a secrets ref for
+production** — `cargo pmcp deploy` substitutes one automatically.
+
+> The emitted `Cargo.toml` pins `pmcp-server-toolkit = "0.1.0"` and
+> `pmcp-openapi-server = "0.1.0"`. Until those crates are published to crates.io,
+> add a local `[patch.crates-io]` (or path dependencies) so `cargo run` resolves
+> against your in-repo build.
+
 ## End-to-End Example
 
 Walk through the full lifecycle using the `complete` template calculator server.
@@ -272,7 +316,7 @@ cargo pmcp deploy test --verbose
 
 | Command | Description | Reference |
 |---------|-------------|-----------|
-| `new` | Create a new MCP workspace (or `--kind sql-server` for a single config-driven crate) | [docs/commands/new.md](docs/commands/new.md) |
+| `new` | Create a new MCP workspace (or `--kind sql-server` / `--kind openapi-server` for a single config-driven crate) | [docs/commands/new.md](docs/commands/new.md) |
 | `add` | Add server, tool, or workflow to workspace | [docs/commands/add.md](docs/commands/add.md) |
 | `dev` | Start development server with HTTP transport | [docs/commands/dev.md](docs/commands/dev.md) |
 | `connect` | Connect server to Claude Code, Cursor, or Inspector | [docs/commands/connect.md](docs/commands/connect.md) |
