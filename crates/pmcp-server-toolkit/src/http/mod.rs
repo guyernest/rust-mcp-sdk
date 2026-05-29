@@ -42,6 +42,11 @@ pub mod client;
 /// OpenAPI schema parsing seam — forward stub filled by Plan 03 (OAPI-02).
 pub mod schema;
 
+#[doc(inline)]
+pub use auth::{
+    create_auth_provider, create_passthrough_auth_provider, AuthConfig, HttpAuthProvider,
+};
+
 /// Concatenate a base URL and a request path with exactly one separating slash,
 /// PRESERVING any non-root path already on the base.
 ///
