@@ -1617,7 +1617,7 @@ Plans:
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [ ] 90-05-PLAN.md — ScriptToolHandler (one engine, no token cycle) + the D-02 engine-parity proof (OAPI-02b/10)
+- [x] 90-05-PLAN.md — ScriptToolHandler (one engine, no token cycle) + the D-02 engine-parity proof (OAPI-02b/10)
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
@@ -1646,4 +1646,4 @@ Plans:
 | 87. Type 2 Authoring Skills Server | 0/? | Not started | - |
 | 88. Dogfood `pmcp-server` | 0/? | Not started | - |
 | 89. Documentation & Migration | 0/? | Not started | - |
-| 90. OpenAPI Built-In Server | 4/9 | In Progress|  |
+| 90. OpenAPI Built-In Server | 5/9 | In Progress|  |
