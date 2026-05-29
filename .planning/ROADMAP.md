@@ -1602,7 +1602,7 @@ Plans:
 
 **Open questions for RESEARCH**: how much of `mcp-openapi-server-core` is already covered by the backend-agnostic toolkit (Phase 83) vs genuinely new; the exact HTTP-connector trait shape; auth models beyond bearer (apiKey/basic/oauth) in the instance configs; spec-source handling (`--spec` file vs inline `[[tools]]`-only); and whether code-mode's `js-runtime` needs toolkit-side wiring like the SQL `executor_from_config` seam.
 
-**Plans**: 9 plans in 6 waves (planned 2026-05-29)
+**Plans**: 9 plans in 7 waves (planned 2026-05-29; replanned with cross-AI review feedback)
 
 Plans:
 **Wave 1**
