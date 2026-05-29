@@ -671,12 +671,16 @@ impl ToolHandler for ScriptToolHandler {
     /// Run the pre-compiled admin-authored script over the shared engine, binding
     /// the validated `args` to the `args` variable (D-02 — identical to the
     /// `JsCodeExecutor` path's `set_variable("args", …)`).
-    async fn handle(&self, args: Value, _extra: RequestHandlerExtra) -> pmcp::Result<Value> {
-        // (1) Execute the plan (compiled once in `new`) over the SHARED
-        //     HttpCodeExecutor instance (D-02), bounded by ExecutionConfig
+    async fn handle(&self, args: Value, extra: RequestHandlerExtra) -> pmcp::Result<Value> {
+        // (1) Execute the plan (compiled once in `new`) over a PER-REQUEST clone
+        //     of the shared HttpCodeExecutor (D-02), threading the captured
+        //     inbound MCP token (Plan 90-10 / OAPI-03 / OAPI-05) so an
+        //     `oauth_passthrough` backend forwards it. Bounded by ExecutionConfig
         //     (Pitfall 7 — no token cycle, only these caps).
-        let mut executor =
-            pmcp_code_mode::PlanExecutor::new(self.http_exec.clone(), self.exec_config.clone());
+        let mut executor = pmcp_code_mode::PlanExecutor::new(
+            crate::code_mode::request_executor_from_extra(&self.http_exec, &extra),
+            self.exec_config.clone(),
+        );
         // (2) Bind the schema-validated client args to `args` (T-90-05-03) —
         //     byte-identical to compile_and_execute's set_variable("args", …).
         executor.set_variable("args", args);

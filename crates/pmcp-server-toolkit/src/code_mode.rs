@@ -111,6 +111,34 @@ impl ValidationFlavor {
     }
 }
 
+/// Derive a per-request [`HttpCodeExecutor`] from a [`pmcp::RequestHandlerExtra`]
+/// by threading the captured inbound MCP client token (Plan 90-10 / OAPI-03 /
+/// OAPI-05).
+///
+/// This is the **toolkit-resident** replacement for the binary's dead
+/// `assemble.rs::request_executor` (WR-01 — the binary helper had NO runtime
+/// callers because the handlers, which live in THIS crate, could not reach it
+/// across the crate boundary). Both [`crate::tools`]'s `ScriptToolHandler` and
+/// the OpenAPI [`tool_handlers::ExecuteCodeHandler`] call this from inside their
+/// `handle` methods so the per-request `oauth_passthrough` token actually reaches
+/// the outbound request at runtime.
+///
+/// Reads `extra.auth_context().and_then(|ctx| ctx.token.clone())` (the raw
+/// inbound `Authorization` header captured by the binary's
+/// `TokenCaptureAuthProvider`) and returns a cheap clone of `base` carrying that
+/// token via [`HttpCodeExecutor::with_inbound_token`]. For an `oauth_passthrough`
+/// backend the cloned executor forwards the captured token to `target_header`;
+/// for static-auth backends the token is ignored (harmless).
+#[cfg(feature = "openapi-code-mode")]
+#[must_use]
+pub fn request_executor_from_extra(
+    base: &HttpCodeExecutor,
+    extra: &pmcp::RequestHandlerExtra,
+) -> HttpCodeExecutor {
+    let token = extra.auth_context().and_then(|ctx| ctx.token.clone());
+    base.clone().with_inbound_token(token)
+}
+
 // =============================================================================
 // R1 split — validation_pipeline_from_config + code_mode_tools_from_executor
 // =============================================================================
@@ -234,7 +262,77 @@ pub fn code_mode_tools_from_executor(
     };
     let execute_handler = tool_handlers::ExecuteCodeHandler {
         pipeline,
-        executor,
+        source: tool_handlers::ExecSource::Static(executor),
+        flavor,
+    };
+
+    Ok(builder
+        .tool_arc("validate_code", Arc::new(validate_handler))
+        .tool_arc("execute_code", Arc::new(execute_handler)))
+}
+
+/// Register `validate_code` + `execute_code` on `builder` for the **OpenAPI
+/// per-request** Code-Mode path (Plan 90-10 / OAPI-03 / OAPI-05).
+///
+/// This is the per-request analog of [`code_mode_tools_from_executor`]. Where
+/// that helper takes a FIXED type-erased `Arc<dyn CodeExecutor>` (the SQL path,
+/// whose `SqlCodeExecutor` carries no per-request state), this helper takes the
+/// concrete [`HttpCodeExecutor`] `base` + [`ExecutionConfig`] so the
+/// [`tool_handlers::ExecuteCodeHandler`] can RE-DERIVE a request-scoped
+/// `JsCodeExecutor` per call via [`request_executor_from_extra`] — threading the
+/// captured inbound MCP token so an `oauth_passthrough` backend forwards it to
+/// the real backend.
+///
+/// The reason a per-request entry point is required: a `JsCodeExecutor`'s inner
+/// `http` field is private with no accessor, so a type-erased
+/// `Arc<dyn CodeExecutor>` cannot be re-derived per request. Holding the base
+/// [`HttpCodeExecutor`] (which IS `Clone` + has the `with_inbound_token` builder)
+/// makes the per-request rederivation possible WITHOUT changing the SQL path.
+///
+/// The `validate_code` handler is identical to the
+/// [`code_mode_tools_from_executor`] one; only `execute_code` differs (it carries
+/// the [`tool_handlers::ExecSource::PerRequestHttp`] source instead of
+/// [`tool_handlers::ExecSource::Static`]).
+///
+/// # Errors
+///
+/// Surfaces every error from [`validation_pipeline_from_config`] when
+/// `config.code_mode.is_some()` (R9 inline-secret rejection, secret-resolution /
+/// 16-byte-minimum failures). No-op (returns the builder unchanged) when
+/// `config.code_mode.is_none()`.
+#[cfg(feature = "openapi-code-mode")]
+pub fn code_mode_http_tools_from_executor(
+    builder: pmcp::ServerBuilder,
+    config: &ServerConfig,
+    base: HttpCodeExecutor,
+    exec_config: ExecutionConfig,
+    flavor: ValidationFlavor,
+) -> Result<pmcp::ServerBuilder> {
+    let Some(section) = config.code_mode.as_ref() else {
+        return Ok(builder); // no-op when block absent
+    };
+    // R9 enforcement gate + secret resolution — must run BEFORE the builder is
+    // returned so a misconfigured token_secret is caught at builder-time.
+    let cm_config = build_cm_config(section);
+    let secret_value = resolve_token_secret(section)?;
+    let token_secret: TokenSecret = secret_value.into();
+    let evaluator: Arc<dyn PolicyEvaluator> = Arc::new(NoopPolicyEvaluator::new());
+    let pipeline = ValidationPipeline::from_token_secret_with_policy(
+        cm_config.clone(),
+        &token_secret,
+        evaluator,
+    )
+    .map_err(|e| ToolkitError::CodeMode(format!("ValidationPipeline construction failed: {e}")))?;
+    let pipeline = Arc::new(pipeline);
+
+    let validate_handler = tool_handlers::ValidateCodeHandler {
+        pipeline: Arc::clone(&pipeline),
+        config: cm_config,
+        flavor,
+    };
+    let execute_handler = tool_handlers::ExecuteCodeHandler {
+        pipeline,
+        source: tool_handlers::ExecSource::PerRequestHttp { base, exec_config },
         flavor,
     };
 
@@ -401,16 +499,73 @@ mod tool_handlers {
         }
     }
 
+    /// How `execute_code` obtains the [`CodeExecutor`](pmcp_code_mode::CodeExecutor)
+    /// for a request (Plan 90-10 / OAPI-03 / OAPI-05).
+    ///
+    /// - [`ExecSource::Static`] — a FIXED type-erased executor (the SQL path's
+    ///   `SqlCodeExecutor`, which carries no per-request state). Unchanged
+    ///   behavior; available under bare `code-mode`.
+    /// - [`ExecSource::PerRequestHttp`] — the OpenAPI path: a base
+    ///   [`HttpCodeExecutor`](super::HttpCodeExecutor) + [`ExecutionConfig`](super::ExecutionConfig)
+    ///   from which a request-scoped `JsCodeExecutor` is RE-DERIVED per call (via
+    ///   [`request_executor_from_extra`](super::request_executor_from_extra)) so
+    ///   the captured inbound `oauth_passthrough` token is threaded to the
+    ///   backend. Feature-gated `openapi-code-mode` (the engine types are only in
+    ///   scope there); the SQL build is unaffected.
+    pub(super) enum ExecSource {
+        /// SQL path — a fixed type-erased executor, no per-request derivation.
+        Static(Arc<dyn pmcp_code_mode::CodeExecutor>),
+        /// OpenAPI path — re-derive a request-scoped executor per call so the
+        /// captured inbound token reaches the backend (OAPI-03 / OAPI-05).
+        #[cfg(feature = "openapi-code-mode")]
+        PerRequestHttp {
+            /// The base executor (cloned + token-threaded per request).
+            base: super::HttpCodeExecutor,
+            /// The execution bounds for the per-request `JsCodeExecutor`.
+            exec_config: super::ExecutionConfig,
+        },
+    }
+
     /// `execute_code` tool handler: verifies the approval token + code hash,
     /// then runs the code through the backend-agnostic
     /// [`CodeExecutor`](pmcp_code_mode::CodeExecutor) (SQL re-validates before
-    /// the connector; OpenAPI runs the validated JS through the
+    /// the connector; OpenAPI runs the validated JS through a request-scoped
     /// `JsCodeExecutor`). The `flavor` only selects the tool `format` metadata —
     /// the `handle` body dispatches through the trait regardless of backend.
     pub(super) struct ExecuteCodeHandler {
         pub(super) pipeline: Arc<pmcp_code_mode::ValidationPipeline>,
-        pub(super) executor: Arc<dyn pmcp_code_mode::CodeExecutor>,
+        pub(super) source: ExecSource,
         pub(super) flavor: ValidationFlavor,
+    }
+
+    impl ExecuteCodeHandler {
+        /// Run the validated `code` through the source-appropriate executor
+        /// (Plan 90-10). The `Static` arm dispatches through the fixed
+        /// type-erased executor (SQL); the `PerRequestHttp` arm RE-DERIVES a
+        /// request-scoped `JsCodeExecutor` carrying the captured inbound token
+        /// via [`request_executor_from_extra`](super::request_executor_from_extra)
+        /// so an `oauth_passthrough` backend forwards it (OAPI-03 / OAPI-05).
+        ///
+        /// Extracted from `handle` to keep both bodies under the cog ≤25 budget.
+        async fn run_code(
+            &self,
+            code: &str,
+            variables: Option<&serde_json::Value>,
+            #[cfg_attr(not(feature = "openapi-code-mode"), allow(unused_variables))]
+            extra: &pmcp::RequestHandlerExtra,
+        ) -> std::result::Result<serde_json::Value, pmcp_code_mode::ExecutionError> {
+            use pmcp_code_mode::CodeExecutor as _;
+            match &self.source {
+                ExecSource::Static(executor) => executor.execute(code, variables).await,
+                #[cfg(feature = "openapi-code-mode")]
+                ExecSource::PerRequestHttp { base, exec_config } => {
+                    let http_exec = super::request_executor_from_extra(base, extra);
+                    super::JsCodeExecutor::new(http_exec, exec_config.clone())
+                        .execute(code, variables)
+                        .await
+                },
+            }
+        }
     }
 
     #[pmcp_code_mode::async_trait]
@@ -418,7 +573,7 @@ mod tool_handlers {
         async fn handle(
             &self,
             args: serde_json::Value,
-            _extra: pmcp::RequestHandlerExtra,
+            extra: pmcp::RequestHandlerExtra,
         ) -> pmcp::Result<serde_json::Value> {
             let input: pmcp_code_mode::ExecuteCodeInput = serde_json::from_value(args)
                 .map_err(|e| pmcp::Error::Internal(format!("Invalid arguments: {e}")))?;
@@ -461,8 +616,7 @@ mod tool_handlers {
             })?;
 
             let result = self
-                .executor
-                .execute(code, input.variables.as_ref())
+                .run_code(code, input.variables.as_ref(), &extra)
                 .await
                 .map_err(|e| pmcp::Error::Internal(format!("Execution error: {e}")))?;
             Ok(result)
@@ -722,6 +876,14 @@ impl HttpCodeExecutor {
     pub fn with_inbound_token(mut self, token: Option<String>) -> Self {
         self.inbound_token = token;
         self
+    }
+
+    /// Test-only accessor for the per-request captured token, so unit tests can
+    /// assert [`request_executor_from_extra`] threads the inbound token (the
+    /// field is otherwise private — Plan 90-10).
+    #[cfg(test)]
+    pub(crate) fn inbound_token_for_test(&self) -> Option<&str> {
+        self.inbound_token.as_deref()
     }
 
     /// Substitute `{key}` path-template segments from `body` keys, returning the
@@ -1953,5 +2115,184 @@ mod tkit10_tests {
             prompt.contains("# Database Schema"),
             "schema-resource header present even for empty schema: {prompt}"
         );
+    }
+}
+
+// =============================================================================
+// Plan 90-10 — per-request executor seam + OpenAPI per-request wiring tests
+// =============================================================================
+
+#[cfg(all(test, feature = "openapi-code-mode"))]
+mod per_request_executor_tests {
+    use super::*;
+    use crate::config::{CodeModeSection, ServerConfig, ServerSection};
+    use crate::http::auth::{create_passthrough_auth_provider, AuthConfig};
+    use pmcp::server::auth::AuthContext;
+
+    /// A passthrough-configured `HttpCodeExecutor` over a fixed base_url.
+    fn passthrough_base() -> HttpCodeExecutor {
+        let auth = create_passthrough_auth_provider(
+            &AuthConfig::OAuthPassthrough {
+                target_header: "Authorization".to_string(),
+                required: true,
+            },
+            None,
+        )
+        .expect("passthrough auth provider");
+        HttpCodeExecutor::new(reqwest::Client::new(), "https://api.example".to_string(), auth)
+    }
+
+    fn extra_with_token(token: Option<&str>) -> pmcp::RequestHandlerExtra {
+        let ctx = AuthContext {
+            subject: "s".to_string(),
+            scopes: vec![],
+            claims: std::collections::HashMap::new(),
+            token: token.map(str::to_string),
+            client_id: None,
+            expires_at: None,
+            authenticated: token.is_some(),
+        };
+        pmcp::RequestHandlerExtra::default().with_auth_context(Some(ctx))
+    }
+
+    #[test]
+    fn request_executor_from_extra_threads_present_token() {
+        // Plan 90-10 / OAPI-03 / OAPI-05: the captured inbound token reaches the
+        // per-request executor's inbound_token field.
+        let base = passthrough_base();
+        assert_eq!(
+            base.inbound_token_for_test(),
+            None,
+            "base executor starts with no inbound token"
+        );
+        let extra = extra_with_token(Some("Bearer client-tok"));
+        let scoped = request_executor_from_extra(&base, &extra);
+        assert_eq!(
+            scoped.inbound_token_for_test(),
+            Some("Bearer client-tok"),
+            "the captured inbound token must be threaded into the per-request executor"
+        );
+    }
+
+    #[test]
+    fn request_executor_from_extra_no_token_yields_none() {
+        let base = passthrough_base();
+        let extra = extra_with_token(None);
+        let scoped = request_executor_from_extra(&base, &extra);
+        assert_eq!(
+            scoped.inbound_token_for_test(),
+            None,
+            "an extra carrying no token must yield an executor with inbound_token None"
+        );
+        // No auth context at all also yields None (never panics).
+        let bare = request_executor_from_extra(&base, &pmcp::RequestHandlerExtra::default());
+        assert_eq!(bare.inbound_token_for_test(), None);
+    }
+
+    fn cfg_with_code_mode() -> ServerConfig {
+        std::env::set_var(
+            "PMCP_TOOLKIT_90_10_HTTP_SECRET",
+            "per-request-test-secret-16-or-more",
+        );
+        ServerConfig {
+            server: ServerSection {
+                name: "http-cm".to_string(),
+                version: "0.1.0".to_string(),
+                ..Default::default()
+            },
+            code_mode: Some(CodeModeSection {
+                enabled: true,
+                server_id: Some("http-cm".to_string()),
+                token_secret: Some("env:PMCP_TOOLKIT_90_10_HTTP_SECRET".to_string()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn http_tools_register_validate_and_execute_with_per_request_source() {
+        // code_mode_http_tools_from_executor builds the ExecuteCodeHandler over
+        // the PerRequestHttp source (constructed without panic over a passthrough
+        // executor) and registers both Code-Mode tools.
+        let _env = super::test_env_guard::lock();
+        let cfg = cfg_with_code_mode();
+        let builder = pmcp::Server::builder().name("http-cm").version("0.1.0");
+        let builder = code_mode_http_tools_from_executor(
+            builder,
+            &cfg,
+            passthrough_base(),
+            ExecutionConfig::default(),
+            ValidationFlavor::OpenApi,
+        )
+        .expect("OpenAPI per-request code-mode wiring must build");
+        assert!(builder.has_tool("validate_code"), "validate_code registered");
+        assert!(builder.has_tool("execute_code"), "execute_code registered");
+        std::env::remove_var("PMCP_TOOLKIT_90_10_HTTP_SECRET");
+    }
+
+    #[test]
+    fn http_tools_no_op_when_code_mode_absent() {
+        let cfg = ServerConfig {
+            server: ServerSection {
+                name: "no-cm".to_string(),
+                version: "0.1.0".to_string(),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let builder = pmcp::Server::builder().name("no-cm").version("0.1.0");
+        let builder = code_mode_http_tools_from_executor(
+            builder,
+            &cfg,
+            passthrough_base(),
+            ExecutionConfig::default(),
+            ValidationFlavor::OpenApi,
+        )
+        .expect("no-op when [code_mode] absent");
+        assert!(!builder.has_tool("execute_code"), "no tools without [code_mode]");
+    }
+}
+
+#[cfg(all(test, feature = "sqlite", feature = "openapi-code-mode"))]
+mod sql_static_source_tests {
+    use super::*;
+    use crate::config::{CodeModeSection, ServerConfig, ServerSection};
+    use crate::sql::SqliteConnector;
+
+    #[test]
+    fn sql_path_registers_static_source_unchanged() {
+        // The SQL path via code_mode_tools_from_executor still builds the
+        // ExecuteCodeHandler with the Static source (SqlCodeExecutor) — Plan
+        // 90-10 must not change the SQL wiring.
+        let _env = super::test_env_guard::lock();
+        std::env::set_var(
+            "PMCP_TOOLKIT_90_10_SQL_SECRET",
+            "sql-static-test-secret-16-or-more",
+        );
+        let connector = SqliteConnector::open_in_memory().expect("sqlite");
+        let cfg = ServerConfig {
+            server: ServerSection {
+                name: "sql-cm".to_string(),
+                version: "0.1.0".to_string(),
+                ..Default::default()
+            },
+            code_mode: Some(CodeModeSection {
+                enabled: true,
+                server_id: Some("sql-cm".to_string()),
+                token_secret: Some("env:PMCP_TOOLKIT_90_10_SQL_SECRET".to_string()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let executor: Arc<dyn CodeExecutor> =
+            Arc::new(SqlCodeExecutor::new(Arc::new(connector), cfg.clone()).expect("executor"));
+        let builder = pmcp::Server::builder().name("sql-cm").version("0.1.0");
+        let builder =
+            code_mode_tools_from_executor(builder, &cfg, executor, ValidationFlavor::Sql)
+                .expect("SQL code-mode wiring must build");
+        assert!(builder.has_tool("validate_code"));
+        assert!(builder.has_tool("execute_code"));
+        std::env::remove_var("PMCP_TOOLKIT_90_10_SQL_SECRET");
     }
 }
