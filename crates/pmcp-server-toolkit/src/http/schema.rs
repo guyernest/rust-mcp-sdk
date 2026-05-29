@@ -169,9 +169,7 @@ impl OpenApiSchema {
         let spec: OpenAPI = serde_json::from_str(text)
             .or_else(|_| serde_yaml::from_str(text))
             .map_err(|_| {
-                HttpConnectorError::Backend(
-                    "OpenAPI spec is not valid JSON or YAML".to_string(),
-                )
+                HttpConnectorError::Backend("OpenAPI spec is not valid JSON or YAML".to_string())
             })?;
         Self::from_spec(spec, text.to_string())
     }
@@ -184,8 +182,9 @@ impl OpenApiSchema {
     /// the contents do not parse. The error message carries a static reason and
     /// never echoes the file path or spec body (T-90-03-03 discipline).
     pub fn parse_path(path: &Path) -> Result<Self, HttpConnectorError> {
-        let text = std::fs::read_to_string(path)
-            .map_err(|_| HttpConnectorError::Backend("could not read OpenAPI spec file".to_string()))?;
+        let text = std::fs::read_to_string(path).map_err(|_| {
+            HttpConnectorError::Backend("could not read OpenAPI spec file".to_string())
+        })?;
         Self::parse(&text)
     }
 
@@ -371,8 +370,11 @@ paths:
             .expect("getUser operation present");
         assert_eq!(op.method, "GET");
         assert_eq!(op.path, "/users/{id}");
-        let path_params: Vec<&str> =
-            op.path_parameters().iter().map(|p| p.name.as_str()).collect();
+        let path_params: Vec<&str> = op
+            .path_parameters()
+            .iter()
+            .map(|p| p.name.as_str())
+            .collect();
         assert_eq!(path_params, vec!["id"]);
         let query_params: Vec<&str> = op
             .query_parameters()

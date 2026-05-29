@@ -969,7 +969,8 @@ mod tests {
         assert_eq!(tool.path.as_deref(), Some("/Line/Mode/tube/Status"));
         assert_eq!(tool.method.as_deref(), Some("GET"));
         assert!(!tool.is_script_tool());
-        cfg.validate().expect("single-call tool is a valid single kind");
+        cfg.validate()
+            .expect("single-call tool is a valid single kind");
     }
 
     #[test]
@@ -1168,7 +1169,10 @@ mod tests {
             sql = "SELECT name FROM sqlite_master"
         "#;
         let cfg = ServerConfig::from_toml(toml).expect("SQL config must still parse");
-        assert!(cfg.backend.is_none(), "SQL config must have backend == None");
+        assert!(
+            cfg.backend.is_none(),
+            "SQL config must have backend == None"
+        );
         assert_eq!(cfg.tools.len(), 1);
     }
 
