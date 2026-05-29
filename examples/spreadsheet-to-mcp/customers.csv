@@ -1,0 +1,9 @@
+id,company_name,contact_name,email,country,created_at
+1,Northwind Traders,Ana Ruiz,ana@northwind.example,US,2024-01-15
+2,Globex Industrial,Tom Becker,tom@globex.example,DE,2024-02-03
+3,Initech Systems,Priya Nair,priya@initech.example,IN,2024-02-20
+4,Umbrella Logistics,Sofia Rossi,sofia@umbrella.example,IT,2024-03-11
+5,Hooli Cloud,Marcus Lee,marcus@hooli.example,US,2024-04-02
+6,Soylent Foods,Yuki Tanaka,yuki@soylent.example,JP,2024-04-19
+7,Stark Manufacturing,Olivia Brown,olivia@stark.example,GB,2024-05-07
+8,Wayne Components,David Cohen,david@wayne.example,US,2024-06-01
