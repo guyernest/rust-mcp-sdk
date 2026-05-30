@@ -34,6 +34,32 @@ steps:
   - type: exists
     path: tools
 
+# Resource + prompt discovery parity — the enriched london-tube fixture (Plan 01)
+# ships three [[resources]] + a start_code_mode [[prompts]]; these two steps prove
+# the served surface LISTS them. Mirrors the SQL gold-standard generated.yaml:22-36
+# exactly (success + exists). mcp-tester's `contains` assertion only matches STRING
+# array elements, but list_resources/list_prompts return OBJECT arrays, so a
+# per-URI/per-name `contains` match is impossible and an indexed `resources[0].uri`
+# equals check would be order-dependent/brittle; the minimal SQL-parity `exists`
+# check is kept. URI/name specificity is already covered by Plan 01's fixture
+# asserts in parity_replay.rs (all three resource URIs + the start_code_mode name).
+
+- name: List available resources
+  operation:
+    type: list_resources
+  assertions:
+  - type: success
+  - type: exists
+    path: resources
+
+- name: List available prompts
+  operation:
+    type: list_prompts
+  assertions:
+  - type: success
+  - type: exists
+    path: prompts
+
 # Tool-surface parity is proven BEHAVIORALLY below: each curated tool
 # (get-tube-status, disrupted-lines-with-detail) is invoked, and the code-mode
 # validate_code tool is invoked — a successful call is proof the tool is present
