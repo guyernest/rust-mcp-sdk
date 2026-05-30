@@ -2,10 +2,10 @@
 gsd_state_version: 1.0
 milestone: v2.2
 milestone_name: Configuration-Only MCP Servers
-status: executing
+status: completed
 stopped_at: Completed 90-13-PLAN.md
-last_updated: "2026-05-30T01:13:35.444Z"
-last_activity: 2026-05-30
+last_updated: "2026-05-30T01:19:35.454Z"
+last_activity: 2026-05-30 -- Phase 90 marked complete
 progress:
   total_phases: 45
   completed_phases: 39
@@ -25,10 +25,10 @@ See: .planning/PROJECT.md (updated 2026-05-17)
 
 ## Current Position
 
-Phase: 90 (openapi-built-in-server) — EXECUTING
+Phase: 90 — COMPLETE
 Plan: 4 of 13
-Status: Ready to execute
-Last activity: 2026-05-30
+Status: Phase 90 complete
+Last activity: 2026-05-30 -- Phase 90 marked complete
 
 **Carryover from v2.1:** Phase 81 (update-pmcp-book-and-pmcp-course-with-v2-advanced-topics-cod) was executing at v2.1 close; will be tracked separately and folded into v2.1 completion. Operator follow-ups deferred from Phase 75 Wave 5 still pending: (a) merge Phase 75 Wave 5 + 75.5 to paiml/rust-mcp-sdk:main; (b) post-merge run `gh workflow run quality-badges.yml -R paiml/rust-mcp-sdk` and append observation to `.planning/phases/75-fix-pmat-issues/75-05-GATE-VERIFICATION.md` "## Badge flip observation" section.
 
