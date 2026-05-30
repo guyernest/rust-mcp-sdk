@@ -1657,3 +1657,23 @@ Plans:
 | 88. Dogfood `pmcp-server` | 0/? | Not started | - |
 | 89. Documentation & Migration | 0/? | Not started | - |
 | 90. OpenAPI Built-In Server | 13/13 | Complete   | 2026-05-30 |
+
+### Phase 90.1: OpenAPI Built-In Server — Examples & Article Parity (INSERTED)
+
+**Goal:** Bring the OpenAPI built-in server's examples and documentation to full parity with the SQL server. Scope (locked via progress routing):
+1. Enrich `crates/pmcp-openapi-server/tests/fixtures/london-tube.toml` from a thin 114-line test fixture into the full annotated showcase reference instance — the OpenAPI equivalent of SQL's `chinook` `reference-config.toml`: add `[[resources]]` (TfL API schema docs + sample request/response payloads + example scripts), `[[prompts]]` (start-code-mode), and full per-tool `[tools.annotations]` (read_only_hint, idempotent_hint, cost_hint, auth hints).
+2. Add a runnable example config users can point at.
+3. Deepen `pmcp-book/src/openapi-built-in-server.md` and `pmcp-course/src/openapi-built-in-server.md` with a resources/prompts config-walkthrough section — the one section SQL's chapters have that OpenAPI skips (chapter *structure* is already at parity from Phase 90-09; this adds the missing config-depth section).
+4. Add a replay/parity test covering the enriched fixture (ALWAYS requirements: parity test + example demonstration).
+
+**Decision:** Keep london-tube as the single showcase; do NOT add a second real-world API.
+**SQL parallels (mirror these):** `crates/pmcp-sql-server/tests/fixtures/reference-config.toml` (670 lines), `chinook.ddl`, `pmcp-book/src/ch12-10-config-driven-sql-servers.md`, `pmcp-course/src/part3-deployment/ch08-5-config-driven-sql-server.md`.
+**Requirements**: P901-FIXTURE, P901-EXAMPLE, P901-DOCS-BOOK, P901-DOCS-COURSE, P901-PARITY
+**Depends on:** Phase 90
+**Plans:** 3 plans
+
+Plans:
+
+- [ ] 90.1-01-PLAN.md — Enrich london-tube.toml (resources + prompt + full annotations) + fixture-validity asserts + build-only example (P901-FIXTURE, P901-EXAMPLE)
+- [ ] 90.1-02-PLAN.md — Add Resources & Prompts config-walkthrough section to book + course OpenAPI chapters (P901-DOCS-BOOK, P901-DOCS-COURSE)
+- [ ] 90.1-03-PLAN.md — Add list_resources + list_prompts replay steps to london-tube-scenarios.yaml (P901-PARITY)
