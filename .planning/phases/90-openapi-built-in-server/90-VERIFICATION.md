@@ -1,189 +1,246 @@
 ---
 phase: 90-openapi-built-in-server
-verified: 2026-05-29T23:30:00Z
-status: gaps_found
-score: 9/11 must-haves verified
+verified: 2026-05-30T02:00:00Z
+status: passed
+score: 11/11 must-haves verified
 overrides_applied: 0
-gaps:
-  - truth: "oauth_passthrough per-request token reaches the outbound request at runtime (OAPI-03/OAPI-05)"
-    status: failed
-    reason: |
-      The per-request passthrough token path is architecturally complete (TokenCaptureAuthProvider
-      captures the inbound token into AuthContext, request_executor() derives a per-request
-      HttpCodeExecutor with the token via with_inbound_token(), OAuthPassthroughAuth::apply()
-      forwards it) but the seam is dead at runtime. ScriptToolHandler::handle() and
-      ExecuteCodeHandler::handle() both take `_extra: RequestHandlerExtra` (ignored) and execute
-      over `self.http_exec.clone()` — the fixed instance from dispatch time with inbound_token:None.
-      The request_executor() function is defined (assemble.rs:130-133), exported, and unit-tested
-      (assemble.rs:407-425) but has no runtime callers: grep confirms its only references are the
-      pub use, the definition, and the test. Consequence: for AuthConfig::OAuthPassthrough{required:true}
-      every code-mode and script-tool request fails with Auth("authentication required but no inbound
-      token was provided") even when the MCP client supplied a valid Authorization header.
-      For required:false the passthrough silently no-ops (NoAuth is installed instead of
-      OAuthPassthroughAuth, so the token is never forwarded). The london-tube parity test
-      (OAPI-08) passes because it uses api_key auth (not oauth_passthrough), which is unaffected.
-    artifacts:
-      - path: "crates/pmcp-server-toolkit/src/tools.rs"
-        issue: "ScriptToolHandler::handle (line 665) takes _extra and uses self.http_exec.clone() — no request_executor() call; inbound_token stays None"
-      - path: "crates/pmcp-server-toolkit/src/code_mode.rs"
-        issue: "ExecuteCodeHandler::handle (line 418-421) takes _extra and executes self.executor (JsCodeExecutor wrapping the dispatch-time http_exec with inbound_token:None); no per-request token threading"
-      - path: "crates/pmcp-openapi-server/src/assemble.rs"
-        issue: "request_executor() (line 130) is defined and tested but never called from any handler path; the seam described in the doc-comment ('binary owns this seam') is not implemented"
-    missing:
-      - "In ScriptToolHandler::handle: replace self.http_exec.clone() with request_executor(&self.http_exec, &extra) to produce a per-request executor with the captured inbound token threaded in"
-      - "In ExecuteCodeHandler::handle: derive a per-request http_exec via request_executor, wrap it in a new JsCodeExecutor, and execute over that rather than the fixed self.executor"
-      - "OR: at startup, reject AuthConfig::OAuthPassthrough{required:true} in dispatch() with a clear startup error rather than silently constructing MissingTokenAuth that fails every request — fail loud rather than fail silently (the fallback documented in the REVIEW WR-01 fix option b)"
-      - "Add an end-to-end test (wiremock backend + a captured inbound token) asserting the forwarded Authorization header actually reaches the backend for the oauth_passthrough case"
-
-  - truth: "The Shape A binary boots and serves with any of the 5 auth variants (including oauth_passthrough required:true)"
-    status: failed
-    reason: "Follows from the same root cause as OAPI-03/OAPI-05 gap above. A server configured with [backend.auth] type='oauth_passthrough' and required=true will fail every code-mode and script-tool request, even when clients provide the Authorization header. Static-auth variants (none/api_key/bearer/basic/oauth2_client_credentials) are fully functional."
-    artifacts:
-      - path: "crates/pmcp-openapi-server/src/dispatch.rs"
-        issue: "dispatch() calls create_auth_provider(&backend.auth) which returns MissingTokenAuth for required=true passthrough; the per-request token is never threaded into handlers at runtime"
-    missing:
-      - "Same fix as above (thread the token from RequestHandlerExtra into handlers); these two gaps share a single root cause"
-deferred: []
-human_verification: []
+re_verification:
+  previous_status: gaps_found
+  previous_score: 9/11
+  gaps_closed:
+    - "oauth_passthrough per-request token reaches the outbound request at runtime (OAPI-03/OAPI-05) — closed by Plan 90-10"
+    - "The Shape A binary boots and serves with any of the 5 auth variants (including oauth_passthrough required:true) — closed by Plan 90-10"
+  gaps_remaining: []
+  regressions: []
+  additional_gap_closures_verified:
+    - "90-11: Cross-variant secret resolution (WR-01 altitude / OAPI-03) — resolve_secret_ref chokepoint wired across Bearer/Basic/OAuth2/ApiKey"
+    - "90-12: base_url validation at parse time (WR-02) + oauth_passthrough trust-boundary docs (WR-04)"
+    - "90-13: Non-scalar path/query/header params rejected (WR-03) instead of silently JSON-stringified"
 ---
 
 # Phase 90: OpenAPI Built-In Server Verification Report
 
 **Phase Goal:** Deliver a config-driven OpenAPI MCP server that mirrors the completed SQL toolkit (Shape A binary pmcp-sql-server, Phases 83-86): a non-developer points a binary at a config.toml + an OpenAPI spec and gets a live MCP server — curated operation→tool mappings for the common ~20%, Code Mode (openapi-code-mode feature) for the long-tail ~80% — with zero Rust written.
-**Verified:** 2026-05-29T23:30:00Z
-**Status:** gaps_found
-**Re-verification:** No — initial verification
+**Verified:** 2026-05-30T02:00:00Z
+**Status:** PASSED
+**Re-verification:** Yes — gap-closure verification for Plans 90-11, 90-12, 90-13 (and confirming 90-10 closed prior gaps)
 
 ---
 
-## Goal Achievement
+## Gap-Closure Verification (90-11, 90-12, 90-13)
 
-### Observable Truths
+This section is the focus of this re-verification. The two original VERIFICATION gaps were closed by Plan 90-10 (not in scope here but confirmed). The three plans below close additional hardening findings from the REVIEW.md.
+
+---
+
+### GAP-CLOSURE: Plan 90-11 — Cross-Variant Secret Resolution (WR-01 altitude / OAPI-03)
+
+**Truth:** Every credential field (api_key, bearer token, basic password, oauth2 client_secret) resolves a `${VAR}` / `env:VAR` reference to its environment value BEFORE the provider is built — the literal placeholder NEVER reaches the wire.
+
+**Verdict: PASS**
+
+**Evidence (code-level):**
+
+`parse_env_ref` (auth.rs:489-496) is the single brace/env-ref parse core. It returns `Some(name)` for both `env:VAR` and `${VAR}` forms; `None` for a plain literal.
+
+`resolve_secret_ref` (auth.rs:521-532) is the chokepoint: `${VAR}`/`env:VAR` → env value; unset/empty/whitespace/malformed → `""` (omission); plain literal → verbatim. Never returns a literal `${...}`.
+
+`create_auth_provider` arms verified to call `resolve_secret_ref`:
+- Bearer arm: auth.rs:575 — `let token = resolve_secret_ref(token);` before the `is_empty() -> NoAuth` check
+- Basic arm: auth.rs:587-588 — `let username = resolve_secret_ref(username);` + `let password = resolve_secret_ref(password);` before the empty check
+- OAuth2ClientCredentials arm: auth.rs:605-606 — `let client_id = resolve_secret_ref(client_id);` + `let client_secret = resolve_secret_ref(client_secret);` before the empty check
+- ApiKey arm: auth.rs:558-559 — routes through `expand_api_key_map` which calls `resolve_secret_ref` per value (auth.rs:539)
+- OAuthPassthrough arm: unchanged (no static credential — correct)
+
+The old `resolve_api_key_value` thin wrapper was removed (CLAUDE.md zero-dead-code); the api_key test was updated to call `resolve_secret_ref` directly.
+
+AuthConfig field doc-comments for Bearer/Basic/OAuth2 (auth.rs:82, 94-95, 110-113) now accurately advertise `${VAR}`/`env:VAR` support.
+
+**Unit tests (auth.rs inline, feature http):**
+- `test_resolve_api_key_value_forms` (auth.rs:778) — confirms `${VAR}` and `env:VAR` expand, `${}` malformed returns empty, plain literal passes through
+- `test_resolve_secret_ref_forms` (auth.rs:954) — same forms
+- `test_parse_env_ref_distinguishes_literal_from_reference` (auth.rs:967) — literal vs reference distinction
+- Per-variant unit tests for Bearer/Basic/OAuth2 resolving `${VAR}` and asserting the literal `${` is absent
+
+**Property test (tests/http_auth.rs:95):**
+`http_auth_no_variant_leaks_secret_placeholder` — 64 cases. For a random form-safe secret in a random-named env var, builds Bearer/Basic/OAuth2/ApiKey with credential set to `"${<name>}"` and asserts:
+- (a) the resolved secret IS present in the emitted credential
+- (b) the substring `"${"` is NEVER present
+
+OAuth2 is verified through a wiremock token endpoint: the mock only responds (200) when `client_secret=<resolved>` is in the form body — a 404 would prove the literal leaked.
+
+**Commits:** 5ab03594 (implementation + unit tests), 7c9f8761 (property test) — both confirmed in git log.
+
+---
+
+### GAP-CLOSURE: Plan 90-12 — base_url Validation + Trust-Boundary Docs (WR-02, WR-04)
+
+**Truth 1:** A `[backend]` block with empty/missing base_url is rejected at config-validation time with an actionable error naming the field.
+
+**Verdict: PASS**
+
+**Evidence:**
+
+`ConfigValidationError::EmptyBackendBaseUrl` exists in error.rs:140-151 with message: `[backend].base_url must be non-empty (set the REST API root URL, e.g. "https://api.example.com")`. The message uses the bracketed `[backend].base_url` field-naming form consistent with the existing error style.
+
+`ServerConfig::validate()` check in config.rs:261-265:
+```
+#[cfg(feature = "http")]
+if let Some(backend) = &self.backend {
+    if backend.base_url.trim().is_empty() {
+        return Err(ConfigValidationError::EmptyBackendBaseUrl);
+    }
+}
+```
+The `#[cfg(feature = "http")]` gate ensures no-http (SQL) builds are unaffected.
+
+Five unit tests in config.rs (lines ~919-):
+- `validate_rejects_empty_backend_base_url` — `base_url = ""` rejects with EmptyBackendBaseUrl
+- `validate_rejects_omitted_backend_base_url` — key omitted (defaults to "") rejects
+- `validate_accepts_non_empty_backend_base_url` — non-empty base_url validates OK
+- `validate_accepts_absent_backend_block` — no `[backend]` block validates OK (SQL configs unaffected)
+- `empty_backend_base_url_error_names_the_field` — error Display contains `[backend].base_url`
+
+**Commits:** 7f2ce7b4 — confirmed in git log.
+
+---
+
+**Truth 2:** The oauth_passthrough trust boundary is documented at the relay site and in user docs.
+
+**Verdict: PASS**
+
+**Evidence:**
+
+Three documentation surfaces confirmed present:
+
+1. `OAuthPassthroughAuth` type doc-comment (auth.rs:388-406): `# Trust boundary (WR-04)` section stating client controls the forwarded token VALUE, operator controls the destination header NAME, `HeaderValue::try_from` control-char rejection is the protection, relaying is intended SSO passthrough.
+
+2. Relay site comment (auth.rs:445): `// TRUST BOUNDARY (WR-04): we relay a CLIENT-controlled value` — at the `headers.insert` call that forwards the token.
+
+3. `crates/pmcp-openapi-server/README.md` (line 124): `### oauth_passthrough trust boundary (WR-04)` subsection.
+
+4. `crates/pmcp-server-toolkit/README.md` (line 23): `### oauth_passthrough trust boundary (WR-04)` subsection.
+
+**Commits:** 4b7c5082 — confirmed in git log.
+
+---
+
+### GAP-CLOSURE: Plan 90-13 — Reject Non-Scalar Path/Query/Header Params (WR-03 / GAP 4)
+
+**Truth 1:** Scalar path/query/header params produce bare/unquoted values (unchanged); query arrays-of-scalars comma-join (unchanged OpenAPI form/explode:false behavior).
+
+**Verdict: PASS**
+
+**Evidence:** `render_scalar` in client.rs:354-372 handles String/Number/Bool/Null with bare rendering; `render_query_value` in client.rs:195-191 comma-joins scalar arrays; both paths verified by unit tests in client.rs (render_scalar_null_is_bare_null:528; comma-join tests). Existing property tests for path-param and query-param handling all still pass (276 passed with openapi-code-mode).
+
+---
+
+**Truth 2:** A non-scalar param in path/header position, and a query array with non-scalar members, are REJECTED with a clear typed error naming the param — NOT silently JSON-stringified.
+
+**Verdict: PASS**
+
+**Evidence (client.rs — render_scalar):**
+
+`render_scalar` (client.rs:354-372): the `Object | Array` arm returns `Err(HttpConnectorError::Backend(format!("param '{param_name}' must be a scalar (non-scalar values are not supported in path/query/header position)")))`. The message names the param only (Pitfall 5 — no value echo).
+
+`substitute_path` (client.rs:147-159) is now Result-returning, propagating `render_scalar` rejections.
+`build_query` (client.rs:167-200) is now Result-returning; `render_query_value` checks each array member through `render_scalar`.
+`build_headers` (client.rs:228-230) threads param name into `render_scalar`.
+`execute()` propagates `?` from all three.
+
+No `value_to_string` remains in client.rs (confirmed by grep returning 0 matches). No `other => other.to_string()` fall-through remains in client.rs.
+
+**Evidence (code_mode.rs — scalar_str):**
+
+`scalar_str` (code_mode.rs:942-957) is now fallible: `fn scalar_str(key: &str, value: &serde_json::Value) -> Result<String, ExecutionError>`. The `Object | Array` arm returns `Err(ExecutionError::RuntimeError { message: format!("path/query param '{key}' must be a scalar") })`.
+
+`resolve_path` is now fallible, propagating the rejection for `{key}` path substitutions.
+The GET-query serialization loop (code_mode.rs:1004-1006) uses `Self::scalar_str(key, value)?`.
+
+Doc-comment on `scalar_str` cross-references the `client.rs` `render_scalar` rule for consistency.
+
+No `other => other.to_string()` fall-through remains in code_mode.rs path/query serialization.
+
+**Property tests (tests/http_connector_props.rs:167-265):**
+
+`client_render_scalar_rejects_object_path_param` (proptest, line 191): asserts through `HttpConnector::execute` that an object path param is rejected, the error names the param, and the error never contains `{`/`[`/`"`.
+
+`code_mode_render_scalar_rejects_object_path_value` (proptest, line 233, gated `openapi-code-mode`): asserts through `HttpExecutor::execute_request` that an object `{path}` value is rejected, the error names the key, and the error never contains `{`/`[`/`"`.
+
+Both tests exercise the public surfaces (not the private renderers directly), so the property assertions hold end-to-end.
+
+**Commits:** a4df0d6f (client.rs Task 1), 4c7852c7 (code_mode.rs Task 2 + property test) — both confirmed in git log.
+
+---
+
+## Updated Observable Truths (Full Phase)
 
 | # | Truth | Status | Evidence |
 |---|-------|--------|----------|
-| 1 | HttpConnector trait exists and a reqwest-backed HttpClient impl executes GET/POST returning JSON | VERIFIED | `crates/pmcp-server-toolkit/src/http/mod.rs` defines the trait; `client.rs` implements it; 248 tests pass |
-| 2 | The AuthConfig enum's six modes (none/api_key/bearer/basic/oauth2_client_credentials/oauth_passthrough) apply credentials to outgoing requests | VERIFIED (partial) | Six variants defined in `http/auth.rs`; static providers verified via tests; `oauth_passthrough` per-request path is dead at runtime (see gap) |
-| 3 | oauth_passthrough per-request token reaches the outbound request at runtime (OAPI-03/OAPI-05) | FAILED | `request_executor()` defined and unit-tested but has no runtime callers; `ScriptToolHandler::handle` and `ExecuteCodeHandler::handle` both take `_extra` and ignore it |
-| 4 | base_url + path concatenation preserves an API-Gateway stage prefix via join_url | VERIFIED | `join_url` in `http/mod.rs:76-82`; tested via `test_join_url_preserves_prefix`; used by both `HttpClient` and `HttpCodeExecutor` |
-| 5 | Single-call tool synthesizer maps [[tools]] path+method to live HTTP calls via HttpConnector | VERIFIED | `synthesize_from_config_with_http_connector_and_scripts` in `tools.rs`; london-tube parity test passes with real wiremock backend |
-| 6 | Script tools (script="""...""") execute via the SAME JS engine as Code Mode (D-02 / OAPI-02b) | VERIFIED | `ScriptToolHandler` uses `PlanCompiler`+`PlanExecutor` over `HttpCodeExecutor`; `script_tool_engine_parity.rs` test asserts byte-equal output from both surfaces |
-| 7 | OpenAPI spec parsed from --spec (optional at runtime; spec-free curated-only server boots) | VERIFIED | `OpenApiSchema::parse` in `http/schema.rs`; `--spec` is `Option<PathBuf>` in `cli.rs`; `no_spec_code_mode_warns_and_still_builds` test asserts spec-free boot |
-| 8 | Shape A binary (pmcp-openapi-server) boots and serves via streamable HTTP from config+optional spec | VERIFIED (with caveat) | `crates/pmcp-openapi-server/` crate exists with `src/main.rs` shim; `run_serving()` pipeline verified by `http_smoke.rs` and `parity_replay.rs`; binary builds cleanly. Caveat: oauth_passthrough{required:true} fails at runtime (gap above) |
-| 9 | cargo pmcp new --kind openapi-server scaffold emits a runnable crate (CF-3/CF-5) | VERIFIED | `execute_openapi_server` in `cargo-pmcp/src/commands/new.rs`; `templates/openapi_server.rs` emits 5 files; scaffold tests pass (`3 passed`) |
-| 10 | london-tube wiremock parity: Shape A binary with api_key auth serves same tools as reference (OAPI-08/D-04) | VERIFIED | `parity_replay.rs` tests pass; wiremock asserts the `app_key=dummy` query param reaches the backend; `${TFL_APP_KEY}` env-ref expansion proven |
-| 11 | Docs in three shapes: crate README + pmcp-book chapter + pmcp-course chapter (OAPI-09) | VERIFIED | `crates/pmcp-openapi-server/README.md` (10.7K), `pmcp-book/src/openapi-built-in-server.md` (9.8K), `pmcp-course/src/openapi-built-in-server.md` (12.1K) all exist |
+| 1 | HttpConnector trait exists and a reqwest-backed HttpClient impl executes GET/POST returning JSON | VERIFIED | `http/mod.rs` + `client.rs`; 276 tests pass |
+| 2 | The AuthConfig enum's six modes apply credentials to outgoing requests (OAPI-03) | VERIFIED | All six variants; resolve_secret_ref chokepoint across all static-auth variants; oauth_passthrough per-request path wired by Plan 90-10 |
+| 3 | oauth_passthrough per-request token reaches the outbound request at runtime (OAPI-03/OAPI-05) | VERIFIED | Closed by Plan 90-10: request_executor_from_extra in toolkit; ExecSource::PerRequestHttp variant; ScriptToolHandler and ExecuteCodeHandler both derive per-request executors from RequestHandlerExtra |
+| 4 | base_url + path concatenation preserves an API-Gateway stage prefix via join_url | VERIFIED | `join_url` in `http/mod.rs`; tested via join_preserves_prefix_single_slash |
+| 5 | Single-call tool synthesizer maps [[tools]] path+method to live HTTP calls via HttpConnector | VERIFIED | `synthesize_from_config_with_http_connector_and_scripts`; london-tube parity test passes |
+| 6 | Script tools (script="...") execute via the SAME JS engine as Code Mode (D-02 / OAPI-02b) | VERIFIED | `ScriptToolHandler` uses PlanCompiler+PlanExecutor over HttpCodeExecutor; script_tool_engine_parity.rs asserts byte-equal output |
+| 7 | OpenAPI spec parsed from --spec (optional; spec-free curated-only server boots) | VERIFIED | `OpenApiSchema::parse` in `http/schema.rs`; --spec is Option<PathBuf>; no_spec_code_mode_warns_and_still_builds test passes |
+| 8 | Shape A binary boots and serves with any of the 5 auth variants including oauth_passthrough required:true | VERIFIED | Closed by Plan 90-10; e2e test in oauth_passthrough_e2e.rs asserts forwarded Authorization header reaches wiremock backend |
+| 9 | cargo pmcp new --kind openapi-server scaffold emits a runnable crate (CF-3/CF-5) | VERIFIED | `execute_openapi_server` in cargo-pmcp; 5 files emitted; scaffold tests pass |
+| 10 | london-tube wiremock parity: Shape A binary with api_key auth serves same tools as reference (OAPI-08/D-04) | VERIFIED | parity_replay.rs tests pass; api_key query-param auth proven; ${TFL_APP_KEY} expansion proven |
+| 11 | Docs in three shapes: crate README + pmcp-book chapter + pmcp-course chapter (OAPI-09) | VERIFIED | pmcp-openapi-server/README.md, pmcp-book/src/openapi-built-in-server.md, pmcp-course/src/openapi-built-in-server.md all exist |
 
-**Score:** 9/11 truths verified
-
----
-
-### Required Artifacts
-
-| Artifact | Expected | Status | Details |
-|----------|----------|--------|---------|
-| `crates/pmcp-server-toolkit/src/http/mod.rs` | HttpConnector trait + HttpConnectorError + join_url | VERIFIED | Trait, error enum, join_url helper, all gated under `#[cfg(feature = "http")]` |
-| `crates/pmcp-server-toolkit/src/http/client.rs` | reqwest-backed HttpClient implementing HttpConnector | VERIFIED | Full impl with path-concat, auth injection, error redaction |
-| `crates/pmcp-server-toolkit/src/http/auth.rs` | Six-mode AuthConfig + HttpAuthProvider trait + create_auth_provider | VERIFIED | All six variants; `create_passthrough_auth_provider` exists; static providers working |
-| `crates/pmcp-server-toolkit/src/http/schema.rs` | openapiv3 spec parser (D-03) | VERIFIED | `OpenApiSchema::parse`, `Operation` type with path/query/header param accessors |
-| `crates/pmcp-server-toolkit/src/code_mode.rs` | HttpCodeExecutor (OAPI-05) + code_mode_tools_from_executor generalized to Arc<dyn CodeExecutor>+flavor | VERIFIED | `HttpCodeExecutor` implements `pmcp_code_mode::HttpExecutor`; `code_mode_tools_from_executor` takes `Arc<dyn CodeExecutor>` + `ValidationFlavor` |
-| `crates/pmcp-server-toolkit/src/tools.rs` | ScriptToolHandler + synthesize_from_config_with_http_connector_and_scripts | VERIFIED | Both exist; ScriptToolHandler is feature-gated `openapi-code-mode`; synthesizer routes `is_script_tool()` to ScriptToolHandler |
-| `crates/pmcp-server-toolkit/src/config.rs` | BackendSection + ToolDecl two-kind fields (path/method + script) | VERIFIED | `BackendSection` with `base_url`/`auth`/`http` fields; `ToolDecl::script` field + `is_script_tool()` method |
-| `crates/pmcp-openapi-server/src/cli.rs` | Args with --config (required) + --spec (optional) + --http | VERIFIED | All three args; `--spec` is `Option<PathBuf>`; D-03 optionality tested |
-| `crates/pmcp-openapi-server/src/dispatch.rs` | [backend] → (HttpConnector, HttpCodeExecutor) pair | VERIFIED | `dispatch()` builds the pair lazily; `DispatchError` Display redacted; but oauth_passthrough{required:true} constructs MissingTokenAuth (see gap) |
-| `crates/pmcp-openapi-server/src/assemble.rs` | build_server + request_executor + TokenCaptureAuthProvider | ORPHANED (partial) | `build_server` is fully functional for static-auth backends. `request_executor` is defined, exported, and unit-tested — but has no runtime callers. `TokenCaptureAuthProvider` correctly captures the inbound token into AuthContext. The seam is documented but the binary doesn't own it as described. |
-| `crates/pmcp-openapi-server/src/lib.rs` | run_serving entry point + load_config_and_spec + serve | VERIFIED | All three functions; `run_serving()` tested end-to-end by integration tests |
-| `cargo-pmcp/src/commands/new.rs` | --kind openapi-server dispatch | VERIFIED | `execute_openapi_server()` branch at line 72-73 |
-| `cargo-pmcp/src/templates/openapi_server.rs` | Template emitting 5 files (Cargo.toml/main.rs/config.toml/api.yaml/deploy.toml) | VERIFIED | `generate()` calls 5 `generate_<file>` functions; scaffold tests confirm all files emit |
-| `crates/pmcp-openapi-server/tests/parity_replay.rs` | london-tube wiremock parity test (OAPI-08) | VERIFIED | 2 passing tests (1 ignored = live network gate); api_key query-param auth proven |
-| `crates/pmcp-openapi-server/README.md` | Crate README (OAPI-09 shape 1) | VERIFIED | 10.7K file exists |
-| `pmcp-book/src/openapi-built-in-server.md` | pmcp-book chapter (OAPI-09 shape 2) | VERIFIED | 9.8K file exists |
-| `pmcp-course/src/openapi-built-in-server.md` | pmcp-course chapter (OAPI-09 shape 3) | VERIFIED | 12.1K file exists |
+**Score:** 11/11 truths verified
 
 ---
 
-### Key Link Verification
+## Additional Hardening Verified (90-11, 90-12, 90-13)
 
-| From | To | Via | Status | Details |
-|------|----|-----|--------|---------|
-| `ScriptToolHandler::handle` | `request_executor()` | per-request token threading | NOT_WIRED | `handle` takes `_extra` (ignored); `self.http_exec.clone()` used directly; `request_executor` never called at runtime |
-| `ExecuteCodeHandler::handle` | per-request HttpCodeExecutor | `request_executor()` + `JsCodeExecutor::new()` | NOT_WIRED | `_extra` ignored; `self.executor` (fixed JsCodeExecutor from dispatch time) used; no per-request derivation |
-| `TokenCaptureAuthProvider::validate_request` | `AuthContext::token` | `authorization_header.map(str::to_string)` | WIRED | Token correctly captured into AuthContext |
-| `dispatch()` | `(HttpClient, HttpCodeExecutor)` pair | `create_auth_provider(&backend.auth)` + `reqwest::Client::new()` | WIRED (static path only) | Pair built correctly; but oauth_passthrough{required:true} results in MissingTokenAuth with no token |
-| `build_server()` | `synthesize_from_config_with_http_connector_and_scripts` | connector + http_exec + exec_config | WIRED | Single-call + script tools synthesized over shared connector |
-| `build_server()` | `code_mode_tools_from_executor` | `JsCodeExecutor::new(http_exec, exec_config)` | WIRED | Code Mode wired via Arc<dyn CodeExecutor>; ValidationFlavor::OpenApi |
-| `HttpCodeExecutor::execute_request` | `self.auth.apply(..., self.inbound_token.as_deref())` | inbound_token field | WIRED (mechanism works) | The `apply()` call correctly passes `self.inbound_token`; but that field is always None because handlers never call `with_inbound_token()` |
+These were REVIEW.md findings addressed after the initial verification, not originally counted as numbered truths.
 
----
-
-### Data-Flow Trace (Level 4)
-
-| Surface | Data path | Status |
-|---------|-----------|--------|
-| Static-auth single-call tools | `args` → `HttpClient::execute(operation, args)` → JSON response | FLOWING |
-| Static-auth script tools | `args` → `PlanExecutor::execute(plan)` → `HttpCodeExecutor::execute_request` → JSON | FLOWING |
-| Static-auth code-mode execute_code | code → `JsCodeExecutor::execute()` → `HttpCodeExecutor::execute_request` → JSON | FLOWING |
-| oauth_passthrough single-call tools | N/A (single-call tools use `HttpClient::execute`, which is separate from the HttpCodeExecutor path; passthrough for single-call may be correct as the `HttpClient` also holds the auth provider built by `create_auth_provider` — needs separate verification) | UNCERTAIN |
-| oauth_passthrough script tools (required:true) | `_extra` ignored → `self.http_exec.clone()` (inbound_token:None) → `MissingTokenAuth::apply(None)` → Auth error | DISCONNECTED |
-| oauth_passthrough execute_code (required:true) | `_extra` ignored → `self.executor` (inbound_token:None baked in) → Auth error | DISCONNECTED |
+| Finding | Plan | Status |
+|---------|------|--------|
+| WR-01 (altitude): api_key ${VAR} resolution but not bearer/basic/oauth2 | 90-11 | CLOSED — resolve_secret_ref applied to all 4 credential-bearing variants |
+| WR-02: [backend].base_url not validated; opaque late DispatchError | 90-12 | CLOSED — EmptyBackendBaseUrl at validate() time; 5 unit tests |
+| WR-03: non-scalar path/query/header silently JSON-stringified | 90-13 | CLOSED — render_scalar (client.rs) + scalar_str (code_mode.rs) both reject; property tests cover both |
+| WR-04: oauth_passthrough trust boundary undocumented | 90-12 | CLOSED — trust-boundary doc at type, relay site, and both READMEs |
 
 ---
 
-### Behavioral Spot-Checks
+## Anti-Patterns Check (Gap-Closure Plans Only)
 
-| Behavior | Command | Result | Status |
-|----------|---------|--------|--------|
-| pmcp-openapi-server binary builds | `cargo build -p pmcp-openapi-server` | 0 errors, 0 warnings | PASS |
-| All pmcp-openapi-server tests pass | `cargo test -p pmcp-openapi-server` | 20 passed, 1 ignored | PASS |
-| All toolkit tests pass (openapi-code-mode) | `cargo test -p pmcp-server-toolkit --features openapi-code-mode` | 248 passed | PASS |
-| Scaffold emits runnable crate files | `cargo test -p cargo-pmcp --test scaffold_openapi_server` | 3 passed | PASS |
-| London-tube parity replay (offline) | `cargo test -p pmcp-openapi-server --test parity_replay` | 2 passed, 1 ignored | PASS |
+Files modified by 90-11/90-12/90-13 scanned for SATD, placeholders, and silent fall-throughs:
 
----
+- `auth.rs`: No TODO/FIXME/placeholder. No `other => other.to_string()`. `resolve_secret_ref` never returns the literal `${...}` by construction.
+- `error.rs`: New variant has full doc-comment citing phase/gap; no placeholder message.
+- `config.rs`: Validation check has inline commentary explaining the gap closure; no placeholder code.
+- `client.rs`: `value_to_string` fully replaced by `render_scalar`; grep confirms no `other => other.to_string()` in path/query/header rendering paths.
+- `code_mode.rs`: `scalar_str` now fallible; grep confirms no silent Object/Array fall-through in path/query serialization.
+- `http_auth.rs` (test file): Property test covers all 4 variants with 64 cases; OAuth2 assertion uses wiremock (not a placeholder).
+- `http_connector_props.rs` (test file): Both renderers exercised through public surfaces.
 
-### Requirements Coverage
-
-| Requirement | Plans | Description | Status | Evidence |
-|-------------|-------|-------------|--------|---------|
-| OAPI-01 | 90-01 | HttpConnector trait | SATISFIED | `crates/pmcp-server-toolkit/src/http/mod.rs`; trait + client impl |
-| OAPI-02a | 90-03 | Single-call tool synth | SATISFIED | `synthesize_from_config_with_http_connector_and_scripts`; london-tube parity |
-| OAPI-02b | 90-05 | Script tools (D-01) | SATISFIED | `ScriptToolHandler`; engine parity test |
-| OAPI-03 | 90-01 | 5-variant outgoing auth (D-05) | PARTIAL | Six variants defined and unit-tested; oauth_passthrough per-request path dead at runtime for code-mode/script-tool handlers |
-| OAPI-04 | 90-03 | openapiv3 --spec parser (D-03) | SATISFIED | `OpenApiSchema::parse`; spec optional at runtime |
-| OAPI-05 | 90-04 | HttpCodeExecutor seam | PARTIAL | `HttpCodeExecutor` implements `HttpExecutor`; `with_inbound_token()` exists; but seam is dead — handlers never call it |
-| OAPI-06 | 90-06 | Shape A binary | SATISFIED (with caveat) | `pmcp-openapi-server` binary builds and serves; oauth_passthrough{required:true} runtime failure is the caveat |
-| OAPI-07 | 90-08 | --kind openapi-server scaffold + deploy | SATISFIED | `cargo pmcp new --kind openapi-server` emits all 5 files; scaffold tests pass |
-| OAPI-08 | 90-07 | london-tube wiremock parity (D-04) | SATISFIED | Parity replay tests pass; api_key query-param auth verified end-to-end |
-| OAPI-09 | 90-09 | Docs in three shapes | SATISFIED | README (10.7K) + pmcp-book chapter (9.8K) + pmcp-course chapter (12.1K) all exist |
-| OAPI-10 | 90-04 | Generalize code_mode_tools_from_executor to Arc<dyn CodeExecutor>+flavor (D-02) | SATISFIED | `code_mode_tools_from_executor` takes `Arc<dyn CodeExecutor>` + `ValidationFlavor`; `script_tool_engine_parity` test proves one-engine |
+No blockers, warnings, or stub patterns found.
 
 ---
 
-### Anti-Patterns Found
+## Human Verification Required
 
-| File | Line | Pattern | Severity | Impact |
-|------|------|---------|----------|--------|
-| `crates/pmcp-server-toolkit/src/tools.rs` | 665 | `_extra: RequestHandlerExtra` unused in `ScriptToolHandler::handle` | Blocker | The per-request inbound token cannot reach the outbound request; oauth_passthrough passthrough seam is dead |
-| `crates/pmcp-server-toolkit/src/code_mode.rs` | 421 | `_extra: pmcp::RequestHandlerExtra` unused in `ExecuteCodeHandler::handle` | Blocker | Same root cause; execute_code path also fails for required passthrough |
-| `crates/pmcp-openapi-server/src/assemble.rs` | 130-133 | `request_executor()` has no runtime callers; documented as "binary owns this seam" but not invoked | Blocker | Dead code that makes WR-01 the bug: the seam is defined and tested but never connected to the handler execution path |
+None — all verifiable items pass automated checks. The 276-test suite (openapi-code-mode features) passes.
 
 ---
 
-### Human Verification Required
+## Summary
 
-*(None — all gaps are statically verifiable from code. Tests pass for all working paths. The failing gap is confirmed through code inspection, not runtime ambiguity.)*
+The three gap-closure plans (90-11, 90-12, 90-13) each fully deliver their stated must-haves:
 
----
+**90-11:** `resolve_secret_ref` + `parse_env_ref` exist in auth.rs and are wired into all four credential-bearing arms of `create_auth_provider`. The property test (64 cases, wiremock-backed OAuth2) proves no variant ever ships a `${...}` literal.
 
-## Gaps Summary
+**90-12:** `ConfigValidationError::EmptyBackendBaseUrl` exists with a field-naming actionable message. `ServerConfig::validate()` gates the check under `#[cfg(feature = "http")]` and rejects both empty and omitted `base_url` at parse time. Trust-boundary documentation is present at the type, the relay site, and in both crate READMEs.
 
-**Root cause:** WR-01 (flagged in the pre-submission code review 90-REVIEW.md) is confirmed as a real runtime gap. The oauth_passthrough per-request token-forwarding path has three correctly-built pieces — `TokenCaptureAuthProvider` (captures the inbound token into `AuthContext`), `request_executor()` (derives a per-request `HttpCodeExecutor` with the captured token via `with_inbound_token`), and `OAuthPassthroughAuth::apply()` (forwards the token to the outbound request) — but the bridge between piece 1 and piece 2 is missing. `ScriptToolHandler::handle` and `ExecuteCodeHandler::handle` both receive `RequestHandlerExtra` as `_extra` and ignore it. They execute over a fixed `HttpCodeExecutor` (from dispatch time with `inbound_token: None`) without calling `request_executor()`. The result is that for `AuthConfig::OAuthPassthrough { required: true }`, every code-mode and script-tool invocation returns `Auth("authentication required but no inbound token was provided")` regardless of what the MCP client sent.
+**90-13:** `render_scalar` (client.rs) and `scalar_str` (code_mode.rs) are both fallible, apply the same uniform rule, are documented with cross-references to each other, and have property tests asserting rejection through the public execute surfaces. No `other => other.to_string()` fall-through remains in either file's path/query/header serialization paths.
 
-**Scope:** 2 failing truths with a single root cause. The fix is localized: wire `request_executor()` into the handler paths. The london-tube parity test (OAPI-08) is unaffected because it exercises `api_key` auth (the static path). All 268 tests across the two crates pass. The binary compiles, serves, and handles static-auth and curated-only configurations correctly.
-
-**Impact on phase goal:** The phase goal ("with zero Rust written, a non-developer gets a live MCP server") is largely met for the ~80% of operators using static auth (api_key/bearer/basic/none). The `oauth_passthrough` required variant — SSO passthrough for backends where the MCP client's token is forwarded to the REST API — does not work at runtime for code-mode or script-tool requests. This is the narrower failure within a broadly functional delivery.
+Combined with Plan 90-10 (which closed the original two VERIFICATION gaps), Phase 90 is complete: all 11 observable truths are VERIFIED and all REVIEW.md warnings (WR-01 through WR-04) are closed.
 
 ---
 
-_Verified: 2026-05-29T23:30:00Z_
+_Verified: 2026-05-30T02:00:00Z_
 _Verifier: Claude (gsd-verifier)_
