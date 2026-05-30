@@ -335,8 +335,9 @@ async fn contoso_m365_code_mode_rollover_math_equals_pinned_window_start() {
     let ref_date = wb["ref_date"].as_str().expect("ref_date");
     let window_start = wb["window_start"].as_str().expect("window_start");
 
-    let server = MockServer::start().await;
-    let base = passthrough_exec(server.uri(), false);
+    // Pure date math — the script makes no api.get call, so no MockServer is
+    // needed; this dummy base URL is never dialed.
+    let base = passthrough_exec("http://127.0.0.1:0".to_string(), false);
     let extra = extra_with_token(None);
     let executor = code_mode_executor(&base, &extra);
 

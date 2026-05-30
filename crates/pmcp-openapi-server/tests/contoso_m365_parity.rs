@@ -85,31 +85,31 @@ fn canonical_workbook() -> Value {
         .expect("canonical contoso-m365-workbook.json parses")
 }
 
-/// The Customers-sheet range address for a `customer_id`, read from the canonical
-/// json's `customers[].address` (e.g. `C001 -> A2:D2`). The mock path is built from
-/// this — NOT a hand-typed literal.
-fn customer_address(workbook: &Value, customer_id: &str) -> String {
+/// The canonical-json `customers[]` entry for a `customer_id`. Both the range
+/// address and the row are derived from this single node — so a given id is
+/// looked up ONCE per use, and the lookup predicate lives in one place.
+fn find_customer<'a>(workbook: &'a Value, customer_id: &str) -> &'a Value {
     workbook["customers"]
         .as_array()
         .expect("customers array")
         .iter()
         .find(|c| c["customer_id"] == json!(customer_id))
-        .unwrap_or_else(|| panic!("customer {customer_id} present in canonical json"))["address"]
+        .unwrap_or_else(|| panic!("customer {customer_id} present in canonical json"))
+}
+
+/// The Customers-sheet range address for a `customer_id`, read from the canonical
+/// json's `customers[].address` (e.g. `C001 -> A2:D2`). The mock path is built from
+/// this — NOT a hand-typed literal.
+fn customer_address(workbook: &Value, customer_id: &str) -> String {
+    find_customer(workbook, customer_id)["address"]
         .as_str()
         .expect("customer address is a string")
         .to_string()
 }
 
-/// That customer's row as the 4-column `[customer_id, name, segment, region]`
-/// vector, read from the canonical json (the values the Graph mock returns for the
-/// single-customer range).
-fn customer_row(workbook: &Value, customer_id: &str) -> Vec<Value> {
-    let c = workbook["customers"]
-        .as_array()
-        .expect("customers array")
-        .iter()
-        .find(|c| c["customer_id"] == json!(customer_id))
-        .unwrap_or_else(|| panic!("customer {customer_id} present in canonical json"));
+/// A customer node's row as the 4-column `[customer_id, name, segment, region]`
+/// vector (the values the Graph mock returns for the single-customer range).
+fn customer_row(c: &Value) -> Vec<Value> {
     vec![
         c["customer_id"].clone(),
         c["name"].clone(),
@@ -310,9 +310,14 @@ fn contoso_m365_pointable_example_parses() {
 async fn mount_contoso(server: &MockServer, workbook: &Value) {
     let bearer = format!("Bearer {USER_TOKEN}");
 
-    // get_customer("C001") — Customers single-customer range, address + row from json.
-    let cust_addr = customer_address(workbook, "C001");
-    let cust_row = customer_row(workbook, "C001");
+    // get_customer("C001") — Customers single-customer range, address + row from
+    // ONE canonical-json lookup.
+    let cust = find_customer(workbook, "C001");
+    let cust_addr = cust["address"]
+        .as_str()
+        .expect("customer address is a string")
+        .to_string();
+    let cust_row = customer_row(cust);
     let cust_path = format!(
         "/drives/CONTOSO_DRIVE/items/CUSTOMERS_ITEM/workbook/worksheets/Customers/range(address='{cust_addr}')"
     );
