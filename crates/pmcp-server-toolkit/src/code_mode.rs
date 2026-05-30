@@ -2172,7 +2172,11 @@ mod per_request_executor_tests {
             None,
         )
         .expect("passthrough auth provider");
-        HttpCodeExecutor::new(reqwest::Client::new(), "https://api.example".to_string(), auth)
+        HttpCodeExecutor::new(
+            reqwest::Client::new(),
+            "https://api.example".to_string(),
+            auth,
+        )
     }
 
     fn extra_with_token(token: Option<&str>) -> pmcp::RequestHandlerExtra {
@@ -2332,9 +2336,8 @@ mod sql_static_source_tests {
         let executor: Arc<dyn CodeExecutor> =
             Arc::new(SqlCodeExecutor::new(Arc::new(connector), cfg.clone()).expect("executor"));
         let builder = pmcp::Server::builder().name("sql-cm").version("0.1.0");
-        let builder =
-            code_mode_tools_from_executor(builder, &cfg, executor, ValidationFlavor::Sql)
-                .expect("SQL code-mode wiring must build");
+        let builder = code_mode_tools_from_executor(builder, &cfg, executor, ValidationFlavor::Sql)
+            .expect("SQL code-mode wiring must build");
         let server = builder.build().expect("server builds");
         assert!(server.get_tool("validate_code").is_some());
         assert!(server.get_tool("execute_code").is_some());

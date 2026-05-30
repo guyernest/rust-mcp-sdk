@@ -107,7 +107,8 @@ pub async fn dispatch(
     // (`request_executor_from_extra` → `HttpCodeExecutor::with_inbound_token` →
     // `apply`'s `inbound_token`) so it actually reaches `target_header`. Every
     // non-passthrough config delegates to `create_auth_provider` (unchanged).
-    let auth = create_passthrough_auth_provider(&backend.auth, None).map_err(DispatchError::Auth)?;
+    let auth =
+        create_passthrough_auth_provider(&backend.auth, None).map_err(DispatchError::Auth)?;
 
     // Lazy (CF-2): the reqwest client is built without contacting the backend.
     // Shared by BOTH the single-call connector and the Code-Mode executor so a

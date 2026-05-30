@@ -67,7 +67,9 @@ async fn http_auth_api_key_query_param_round_trips() {
 /// the `Authorization` header value (Bearer/Basic) plus all query-param values
 /// (ApiKey), concatenated. Used by the leak property to assert both presence of
 /// the resolved secret and absence of the `"${"` placeholder fragment.
-async fn rendered_credential(auth: &dyn pmcp_server_toolkit::http::auth::HttpAuthProvider) -> String {
+async fn rendered_credential(
+    auth: &dyn pmcp_server_toolkit::http::auth::HttpAuthProvider,
+) -> String {
     let mut headers = HeaderMap::new();
     let mut query: HashMap<String, String> = HashMap::new();
     auth.apply(&mut headers, &mut query, None).await.unwrap();
