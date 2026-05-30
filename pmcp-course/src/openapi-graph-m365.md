@@ -15,7 +15,7 @@ user*. The headline is the outgoing auth model: `oauth_passthrough`.
 - The `oauth_passthrough` **double lock**: admin-consent ceiling + per-user
   forwarded token, with no standing credential on the server
 - Two read-only `customer_id`-keyed script tools (`get_customer`,
-  `get_customer_orders`) and why the address math lives in the script
+  `get_customer_orders`) and the read-and-filter pattern that keeps them simple
 - The headline Code Mode query and why its result is deterministic and
   time-stable
 
@@ -79,48 +79,38 @@ privilege by default.
 ## Two Kinds of Tools (`get_customer` / `get_customer_orders`)
 
 Contoso curates two read-only **script** tools, each keyed by `customer_id`. A
-script tool runs a tiny engine-accurate JS body that templates the Graph
-worksheet-range URL and issues one `api.get` (the connector does literal string
-substitution, no arithmetic, so the `customer_id → range-address` mapping lives in
-the script):
+script tool runs a tiny engine-accurate JS body: read a sheet's data block over the
+Graph worksheet-range API with one `api.get`, then return the rows you want. The
+readable shape is **load the records, filter by the id column**:
 
 ```toml
 [[tools]]
 name = "get_customer"
 description = "Fetch one customer row (customer_id, name, segment, region) from the Contoso Customers sheet."
 script = """
-let addr = "";
-if (args.customer_id === "C001") { addr = "A2:D2"; }
-else if (args.customer_id === "C002") { addr = "A3:D3"; }
-else if (args.customer_id === "C003") { addr = "A4:D4"; }
-else if (args.customer_id === "C004") { addr = "A5:D5"; }
-else if (args.customer_id === "C005") { addr = "A6:D6"; }
-else if (args.customer_id === "C006") { addr = "A7:D7"; }
-const r = await api.get(`/drives/CONTOSO_DRIVE/items/CUSTOMERS_ITEM/workbook/worksheets/Customers/range(address='${addr}')?$select=values`);
-return r.values;
+const resp = await api.get("/drives/CONTOSO_DRIVE/items/CUSTOMERS_ITEM/workbook/worksheets/Customers/range(address='A2:D7')?$select=values");
+const rows = resp.values;
+const matches = rows.filter(row => row[0] === args.customer_id);
+return matches;
 """
 
 [[tools]]
 name = "get_customer_orders"
-description = "Fetch the contiguous Orders block (order_id, customer_id, order_date, amount) for one customer from the Contoso Orders sheet."
+description = "Fetch the Orders rows (order_id, customer_id, order_date, amount) for one customer from the Contoso Orders sheet."
 script = """
-let ordersAddr = "";
-if (args.customer_id === "C001") { ordersAddr = "A2:D3"; }
-else if (args.customer_id === "C002") { ordersAddr = "A4:D4"; }
-else if (args.customer_id === "C003") { ordersAddr = "A5:D5"; }
-else if (args.customer_id === "C004") { ordersAddr = "A6:D6"; }
-else if (args.customer_id === "C005") { ordersAddr = "A7:D7"; }
-const r = await api.get(`/drives/CONTOSO_DRIVE/items/ORDERS_ITEM/workbook/worksheets/Orders/range(address='${ordersAddr}')?$select=values`);
-return r.values;
+const resp = await api.get("/drives/CONTOSO_DRIVE/items/ORDERS_ITEM/workbook/worksheets/Orders/range(address='A2:D7')?$select=values");
+const rows = resp.values;
+const matches = rows.filter(row => row[1] === args.customer_id);
+return matches;
 """
 ```
 
-`get_customer` maps `C00N` to its Customers row (`C001 → A2:D2`);
-`get_customer_orders` maps it to that customer's contiguous Orders block
-(`C001 → A2:D3`). The mapping is a literal `if`/`else if` chain on purpose: the
-engine-accurate JS subset renders arithmetic as floats (`A${idx+1}` →
-`A2.0:D2.0`) and has no object string-indexing, so literal addresses are the
-engine-safe form. Anything richer is left to Code Mode.
+Both tools read the same whole-sheet block (`A2:D7`) and differ only in the filter
+column: `customer_id` is column 0 in Customers, column 1 in Orders. Reading the
+block and calling `.filter()` keeps the logic obvious and avoids the engine's
+gotchas (no `Date` builtin; arithmetic renders as floats, so computing `A${idx+1}`
+would build `A2.0:D2.0`). A customer with no orders falls out as an empty result —
+no special case. Anything richer is left to Code Mode.
 
 ## Resources & Prompts (Code Mode Context)
 
@@ -205,8 +195,8 @@ credential and the server reads only as the calling user.
   per-user **forwarded token** that further restricts, with **no standing
   credential** — the server can only act as the calling user.
 - Two read-only `customer_id`-keyed script tools (`get_customer`,
-  `get_customer_orders`) keep the address math in engine-safe literal JS; the long
-  tail goes to Code Mode.
+  `get_customer_orders`) use a plain read-and-filter (load the block, filter by the
+  id column) in engine-safe JS; the long tail goes to Code Mode.
 - The headline query ("bought more than 100 in the last 3 months") returns a
   deterministic `["C001", "C003", "C005"]`, stable across calendar time because the
   reference date is pinned (the engine has no `Date` builtin).

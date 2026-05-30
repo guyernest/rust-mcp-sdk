@@ -107,15 +107,23 @@ fn customer_address(workbook: &Value, customer_id: &str) -> String {
         .to_string()
 }
 
-/// A customer node's row as the 4-column `[customer_id, name, segment, region]`
-/// vector (the values the Graph mock returns for the single-customer range).
-fn customer_row(c: &Value) -> Vec<Value> {
-    vec![
-        c["customer_id"].clone(),
-        c["name"].clone(),
-        c["segment"].clone(),
-        c["region"].clone(),
-    ]
+/// All Customers data rows (header excluded) as `[customer_id, name, segment, region]`
+/// rows — the `values` the Graph mock returns for the whole-sheet `A2:D7` block the
+/// `get_customer` script reads before filtering by the customer_id column (column 0).
+fn all_customer_rows(workbook: &Value) -> Vec<Value> {
+    workbook["customers"]
+        .as_array()
+        .expect("customers array")
+        .iter()
+        .map(|c| {
+            json!([
+                c["customer_id"].clone(),
+                c["name"].clone(),
+                c["segment"].clone(),
+                c["region"].clone(),
+            ])
+        })
+        .collect()
 }
 
 /// The Orders-block range address for a `customer_id`, read from the canonical
@@ -127,15 +135,14 @@ fn orders_block_address(workbook: &Value, customer_id: &str) -> String {
         .to_string()
 }
 
-/// That customer's orders as `[order_id, customer_id, order_date, amount]` rows,
-/// read from the canonical json `orders` (the values the Graph mock returns for the
-/// contiguous Orders block).
-fn orders_rows(workbook: &Value, customer_id: &str) -> Vec<Value> {
+/// All Orders data rows as `[order_id, customer_id, order_date, amount]` rows — the
+/// `values` the Graph mock returns for the whole-sheet `A2:D7` block the
+/// `get_customer_orders` script reads before filtering by the customer_id column (1).
+fn all_order_rows(workbook: &Value) -> Vec<Value> {
     workbook["orders"]
         .as_array()
         .expect("orders array")
         .iter()
-        .filter(|o| o["customer_id"] == json!(customer_id))
         .map(|o| {
             json!([
                 o["order_id"].clone(),
@@ -145,19 +152,6 @@ fn orders_rows(workbook: &Value, customer_id: &str) -> Vec<Value> {
             ])
         })
         .collect()
-}
-
-/// Build the Graph `workbookRange` response body for a single-customer range read:
-/// `{ "address": <addr>, "values": [[ <the loaded customer row> ]] }`. Shape matches
-/// what the `get_customer` script reads back as `r.values`.
-fn customer_range_body(addr: &str, row: &[Value]) -> Value {
-    json!({ "address": addr, "values": [row] })
-}
-
-/// Build the Graph `workbookRange` response body for an Orders block read:
-/// `{ "address": <addr>, "values": [<the loaded order rows>] }`.
-fn orders_range_body(addr: &str, rows: &[Value]) -> Value {
-    json!({ "address": addr, "values": rows })
 }
 
 // ============================================================================
@@ -300,39 +294,37 @@ fn contoso_m365_pointable_example_parses() {
 /// Mount the Contoso Graph range-read mocks on the wiremock server, REQUIRING the
 /// forwarded `Authorization: Bearer contoso-user-tok` header on every matcher (the
 /// passthrough proof — the mock serves ONLY when the inbound user bearer was
-/// forwarded). The matched range addresses + response rows are LOADED from the
-/// canonical workbook json (`customer_address`/`orders_block_address` +
-/// `customer_row`/`orders_rows`), NOT hand-typed.
+/// forwarded). Each tool reads its whole sheet block (`A2:D7`) and filters by the
+/// customer_id column in-script, so the mock returns the FULL Customers / Orders
+/// blocks (rows + addresses LOADED from the canonical workbook json, NOT hand-typed)
+/// and the tool does the filtering.
 ///
 /// Two matchers, both from the canonical dataset:
-/// - `get_customer("C001")` -> Customers range `A2:D2` -> the C001 row.
-/// - `get_customer_orders("C001")` -> Orders block `A2:D3` -> C001's order rows.
+/// - `get_customer(..)` -> Customers whole block `A2:D7` -> all customer rows.
+/// - `get_customer_orders(..)` -> Orders whole block `A2:D7` -> all order rows.
 async fn mount_contoso(server: &MockServer, workbook: &Value) {
     let bearer = format!("Bearer {USER_TOKEN}");
 
-    // get_customer("C001") — Customers single-customer range, address + row from
-    // ONE canonical-json lookup.
-    let cust = find_customer(workbook, "C001");
-    let cust_addr = cust["address"]
+    // get_customer — Customers whole-block read (A2:D7); the script filters by column 0.
+    let customers_addr = workbook["all_customers_address"]
         .as_str()
-        .expect("customer address is a string")
-        .to_string();
-    let cust_row = customer_row(cust);
-    let cust_path = format!(
-        "/drives/CONTOSO_DRIVE/items/CUSTOMERS_ITEM/workbook/worksheets/Customers/range(address='{cust_addr}')"
+        .expect("all_customers_address is a string");
+    let customers_path = format!(
+        "/drives/CONTOSO_DRIVE/items/CUSTOMERS_ITEM/workbook/worksheets/Customers/range(address='{customers_addr}')"
     );
     Mock::given(method("GET"))
-        .and(path(cust_path))
+        .and(path(customers_path))
         .and(header("authorization", bearer.as_str()))
-        .respond_with(
-            ResponseTemplate::new(200).set_body_json(customer_range_body(&cust_addr, &cust_row)),
-        )
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            json!({ "address": customers_addr, "values": all_customer_rows(workbook) }),
+        ))
         .mount(server)
         .await;
 
-    // get_customer_orders("C001") — Orders contiguous block, address + rows from json.
-    let orders_addr = orders_block_address(workbook, "C001");
-    let orders = orders_rows(workbook, "C001");
+    // get_customer_orders — Orders whole-block read (A2:D7); the script filters by column 1.
+    let orders_addr = workbook["all_orders_address"]
+        .as_str()
+        .expect("all_orders_address is a string");
     let orders_path = format!(
         "/drives/CONTOSO_DRIVE/items/ORDERS_ITEM/workbook/worksheets/Orders/range(address='{orders_addr}')"
     );
@@ -340,7 +332,9 @@ async fn mount_contoso(server: &MockServer, workbook: &Value) {
         .and(path(orders_path))
         .and(header("authorization", bearer.as_str()))
         .respond_with(
-            ResponseTemplate::new(200).set_body_json(orders_range_body(&orders_addr, &orders)),
+            ResponseTemplate::new(200).set_body_json(
+                json!({ "address": orders_addr, "values": all_order_rows(workbook) }),
+            ),
         )
         .mount(server)
         .await;

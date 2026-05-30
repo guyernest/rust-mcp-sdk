@@ -88,50 +88,42 @@ default, not an add-on.
 ## Two Kinds of Tools (`get_customer` / `get_customer_orders`)
 
 Contoso curates exactly two read-only **script** tools, each keyed by
-`customer_id`. A script tool runs a tiny engine-accurate JS body that templates
-the Graph worksheet-range URL, then issues a single `api.get`. (The connector
-itself does no arithmetic — it performs a literal string substitution — so all of
-the `customer_id → range-address` mapping lives in the script.)
+`customer_id`. A script tool runs a tiny engine-accurate JS body: it reads a
+sheet's data block over the Graph worksheet-range API with a single `api.get`, then
+returns the rows it wants. The natural, readable shape is **load the records, then
+filter by the id column** — exactly what you'd write against any tabular source:
 
 ```toml
 [[tools]]
 name = "get_customer"
 description = "Fetch one customer row (customer_id, name, segment, region) from the Contoso Customers sheet."
 script = """
-let addr = "";
-if (args.customer_id === "C001") { addr = "A2:D2"; }
-else if (args.customer_id === "C002") { addr = "A3:D3"; }
-else if (args.customer_id === "C003") { addr = "A4:D4"; }
-else if (args.customer_id === "C004") { addr = "A5:D5"; }
-else if (args.customer_id === "C005") { addr = "A6:D6"; }
-else if (args.customer_id === "C006") { addr = "A7:D7"; }
-const r = await api.get(`/drives/CONTOSO_DRIVE/items/CUSTOMERS_ITEM/workbook/worksheets/Customers/range(address='${addr}')?$select=values`);
-return r.values;
+const resp = await api.get("/drives/CONTOSO_DRIVE/items/CUSTOMERS_ITEM/workbook/worksheets/Customers/range(address='A2:D7')?$select=values");
+const rows = resp.values;
+const matches = rows.filter(row => row[0] === args.customer_id);
+return matches;
 """
 
 [[tools]]
 name = "get_customer_orders"
-description = "Fetch the contiguous Orders block (order_id, customer_id, order_date, amount) for one customer from the Contoso Orders sheet."
+description = "Fetch the Orders rows (order_id, customer_id, order_date, amount) for one customer from the Contoso Orders sheet."
 script = """
-let ordersAddr = "";
-if (args.customer_id === "C001") { ordersAddr = "A2:D3"; }
-else if (args.customer_id === "C002") { ordersAddr = "A4:D4"; }
-else if (args.customer_id === "C003") { ordersAddr = "A5:D5"; }
-else if (args.customer_id === "C004") { ordersAddr = "A6:D6"; }
-else if (args.customer_id === "C005") { ordersAddr = "A7:D7"; }
-const r = await api.get(`/drives/CONTOSO_DRIVE/items/ORDERS_ITEM/workbook/worksheets/Orders/range(address='${ordersAddr}')?$select=values`);
-return r.values;
+const resp = await api.get("/drives/CONTOSO_DRIVE/items/ORDERS_ITEM/workbook/worksheets/Orders/range(address='A2:D7')?$select=values");
+const rows = resp.values;
+const matches = rows.filter(row => row[1] === args.customer_id);
+return matches;
 """
 ```
 
-`get_customer` maps a `customer_id` (`C00N`) to its single Customers-sheet row
-(`C001 → A2:D2`); `get_customer_orders` maps it to that customer's *contiguous*
-Orders block (`C001 → A2:D3`, because orders are grouped by `customer_id`). The
-mapping is an explicit `if`/`else if` chain of literal range addresses on purpose:
-the engine-accurate JS subset renders numeric arithmetic as floats (so `A${idx+1}`
-would build `A2.0:D2.0`) and does not support object string-indexing — literal
-addresses are the engine-safe form. Everything richer than these two blessed reads
-is left to Code Mode.
+Both tools read the same whole-sheet data block (`A2:D7`) and differ only in which
+column they filter on: `customer_id` is **column 0** in the Customers sheet and
+**column 1** in the Orders sheet. Reading the block and calling `.filter()` keeps
+the logic obvious and side-steps the engine's gotchas — the accurate JS subset has
+no `Date` builtin and renders numeric arithmetic as floats, so *computing* a per-id
+cell address (`A${idx+1}` would build `A2.0:D2.0`) would be both clumsy and wrong,
+whereas filtering an already-read block just works. A customer with no orders falls
+out naturally as an empty result — no special case needed. Everything richer than
+these two reads is left to Code Mode.
 
 ## Resources & Prompts (Code Mode Context)
 

@@ -74,15 +74,10 @@ required = true
 name = "get_customer"
 description = "Fetch one customer row from the Contoso Customers sheet."
 script = """
-let addr = "";
-if (args.customer_id === "C001") { addr = "A2:D2"; }
-else if (args.customer_id === "C002") { addr = "A3:D3"; }
-else if (args.customer_id === "C003") { addr = "A4:D4"; }
-else if (args.customer_id === "C004") { addr = "A5:D5"; }
-else if (args.customer_id === "C005") { addr = "A6:D6"; }
-else if (args.customer_id === "C006") { addr = "A7:D7"; }
-const r = await api.get(`/drives/CONTOSO_DRIVE/items/CUSTOMERS_ITEM/workbook/worksheets/Customers/range(address='${addr}')?$select=values`);
-return r.values;
+const resp = await api.get("/drives/CONTOSO_DRIVE/items/CUSTOMERS_ITEM/workbook/worksheets/Customers/range(address='A2:D7')?$select=values");
+const rows = resp.values;
+const matches = rows.filter(row => row[0] === args.customer_id);
+return matches;
 """
 
 [[tools.parameters]]
@@ -105,7 +100,7 @@ mime_type = "text/markdown"
 content = """
 # Contoso M365 Workbook
 - Customers columns A..D: customer_id, name, segment, region (data from row 2).
-- 'C00N' -> Customers row N + 1 -> range A{row}:D{row}.
+- get_customer reads the whole block (A2:D7) and filters by the customer_id column.
 """
 
 [[prompts]]

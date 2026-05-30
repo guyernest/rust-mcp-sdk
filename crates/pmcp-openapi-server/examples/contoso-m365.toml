@@ -16,12 +16,12 @@
 # start_code_mode [[prompts]] block. Keep this file in sync with the fixture (the
 # Plan-02 parity test's `assert_contoso_code_mode_surface` checks BOTH for drift).
 #
-# DATA PROVENANCE: every customer row, range address, and orders-block address is
-# TRANSCRIBED FROM the canonical dataset
+# DATA PROVENANCE: the whole-sheet range both tools read (`A2:D7`) and every
+# customer/order row are defined by the canonical dataset
 #   crates/pmcp-openapi-server/tests/fixtures/contoso-m365-workbook.json
 # (the SINGLE source of truth — the same dataset the parity test loads its mock
-# rows from). The get_customer script's computed address for a given id MUST equal
-# that id's address in the canonical json.
+# rows from). Each tool reads that whole block and filters by the customer_id column,
+# so the rows it returns MUST match the canonical json.
 #
 # AUTH — `oauth_passthrough`: the server holds NO standing credential. It captures
 # the signed-in user's inbound `Authorization: Bearer <token>` and forwards it to
@@ -34,8 +34,8 @@
 # ONLY non-placeholder credential literal is the dev-guarded inline token secret
 # (see the [code_mode] block below); NEVER set that flag in a production config.
 #
-# NO date builtin: the embedded JS engine has no date support -- the scripts do
-# pure id->row->range-address arithmetic only; all date logic lives in Code Mode.
+# NO date builtin: the embedded JS engine has no date support -- the tool scripts do
+# a simple read-then-filter (no arithmetic at all); all date logic lives in Code Mode.
 
 [server]
 name = "contoso-m365"
@@ -64,28 +64,22 @@ retry_backoff_ms = 1000
 # =============================================================================
 # Tool 1 (script) — get_customer
 # =============================================================================
-# customer_id 'C00N' -> Customers-sheet row N + 1 (header at row 1) -> range
-# `A{row}:D{row}` over columns customer_id,name,segment,region. The address MUST
-# match the canonical json `address` for that id (e.g. 'C001' -> 'A2:D2', 'C006'
-# -> 'A7:D7'). The id->address map is an explicit if-chain of LITERAL addresses
-# (the accurate JS subset has no `Date` builtin AND renders arithmetic results as
-# floats like `2.0` + does not support object string-indexing `m[key]`, so we map
-# ids to literal address strings rather than computing `A${idx+1}` or indexing an
-# object). Connector does literal str::replace, no math (D-04). Bind to a const.
+# Read the whole Customers data block (`A2:D7`, columns customer_id,name,segment,
+# region) and return the row(s) whose customer_id (column 0) matches the argument.
+# This is the natural "load the records, filter by the id column" shape -- the same
+# read-and-filter pattern the headline Code Mode query uses, just scoped to one id.
+# No per-id address math: the engine has no `Date` builtin and renders arithmetic as
+# floats, so filtering an already-read block is both simpler AND engine-safe. Bind
+# the awaited api.get value to a const before filtering it (Code Mode learning).
 
 [[tools]]
 name = "get_customer"
 description = "Fetch one customer row (customer_id, name, segment, region) from the Contoso Customers sheet."
 script = """
-let addr = "";
-if (args.customer_id === "C001") { addr = "A2:D2"; }
-else if (args.customer_id === "C002") { addr = "A3:D3"; }
-else if (args.customer_id === "C003") { addr = "A4:D4"; }
-else if (args.customer_id === "C004") { addr = "A5:D5"; }
-else if (args.customer_id === "C005") { addr = "A6:D6"; }
-else if (args.customer_id === "C006") { addr = "A7:D7"; }
-const r = await api.get(`/drives/CONTOSO_DRIVE/items/CUSTOMERS_ITEM/workbook/worksheets/Customers/range(address='${addr}')?$select=values`);
-return r.values;
+const resp = await api.get("/drives/CONTOSO_DRIVE/items/CUSTOMERS_ITEM/workbook/worksheets/Customers/range(address='A2:D7')?$select=values");
+const rows = resp.values;
+const matches = rows.filter(row => row[0] === args.customer_id);
+return matches;
 """
 
 [[tools.parameters]]
@@ -103,25 +97,20 @@ cost_hint = "low"
 # =============================================================================
 # Tool 2 (script) — get_customer_orders
 # =============================================================================
-# The Orders sheet is laid out grouped/sorted by customer_id so each customer's
-# orders form a CONTIGUOUS block (D-03). The per-id block address is a literal
-# lookup TRANSCRIBED FROM the canonical json `orders_blocks` (variable orders per
-# customer, so not a uniform formula). The computed block MUST match the canonical
-# json (e.g. 'C001' -> 'A2:D3', 'C002' -> 'A4:D4'). No date use. Bind to a const.
+# Read the whole Orders data block (`A2:D7`, columns order_id,customer_id,order_date,
+# amount) and return the rows whose customer_id (column 1) matches the argument. Same
+# read-and-filter shape as get_customer, just filtering a different column. A customer
+# with no orders (e.g. 'C006') falls out naturally as an empty result -- no special
+# case needed. No date use. Bind the awaited api.get value to a const before filtering.
 
 [[tools]]
 name = "get_customer_orders"
-description = "Fetch the contiguous Orders block (order_id, customer_id, order_date, amount) for one customer from the Contoso Orders sheet."
+description = "Fetch the Orders rows (order_id, customer_id, order_date, amount) for one customer from the Contoso Orders sheet."
 script = """
-let ordersAddr = "";
-if (args.customer_id === "C001") { ordersAddr = "A2:D3"; }
-else if (args.customer_id === "C002") { ordersAddr = "A4:D4"; }
-else if (args.customer_id === "C003") { ordersAddr = "A5:D5"; }
-else if (args.customer_id === "C004") { ordersAddr = "A6:D6"; }
-else if (args.customer_id === "C005") { ordersAddr = "A7:D7"; }
-if (ordersAddr === "") { return []; }
-const r = await api.get(`/drives/CONTOSO_DRIVE/items/ORDERS_ITEM/workbook/worksheets/Orders/range(address='${ordersAddr}')?$select=values`);
-return r.values;
+const resp = await api.get("/drives/CONTOSO_DRIVE/items/ORDERS_ITEM/workbook/worksheets/Orders/range(address='A2:D7')?$select=values");
+const rows = resp.values;
+const matches = rows.filter(row => row[1] === args.customer_id);
+return matches;
 """
 
 [[tools.parameters]]
@@ -167,7 +156,7 @@ returns a workbookRange object whose `values` is a 2-D array of the cell values.
 
 ## Tools
 - `get_customer(customer_id)` -> one customer row from the Customers sheet.
-- `get_customer_orders(customer_id)` -> that customer's contiguous Orders block.
+- `get_customer_orders(customer_id)` -> that customer's Orders rows.
 """
 
 [[resources]]
@@ -178,10 +167,11 @@ mime_type = "text/markdown"
 content = """
 # Contoso Example Scripts
 
-## Read one customer
+## Read one customer (read the block, filter by the id column)
 ```js
-const r = await api.get(`/drives/CONTOSO_DRIVE/items/CUSTOMERS_ITEM/workbook/worksheets/Customers/range(address='A2:D2')?$select=values`);
-return r.values;
+const resp = await api.get(`/drives/CONTOSO_DRIVE/items/CUSTOMERS_ITEM/workbook/worksheets/Customers/range(address='A2:D7')?$select=values`);
+const rows = resp.values;
+return rows.filter(row => row[0] === "C001");
 ```
 
 ## Read all customers (header excluded)
@@ -212,8 +202,9 @@ content = """
   (`"2026-02-28" <= d && d <= "2026-05-28"`) -- never wall-clock `now`.
 - `range(address='...')` carries `(`, `)`, `'`, `:` literally; build the full
   range URL as a template string and pass it to `api.get`.
-- `customer_id` 'C00N' maps to Customers row `N + 1`; the Orders block per id is a
-  contiguous range (orders are grouped by `customer_id`).
+- To fetch one entity, read the whole data block (`A2:D7`) and `.filter()` the rows
+  by the id column (customer_id is column 0 in Customers, column 1 in Orders) --
+  simpler and engine-safer than computing a per-id range address.
 """
 
 # =============================================================================
