@@ -1636,7 +1636,7 @@ Plans:
 
 - [x] 90-10-PLAN.md — oauth_passthrough per-request token made live at runtime: toolkit-resident request_executor_from_extra seam called by ScriptToolHandler + ExecuteCodeHandler; dispatch installs OAuthPassthroughAuth; e2e wiremock proof (closes VERIFICATION truths #3/#8, WR-01; OAPI-03/05)
 - [x] 90-11-PLAN.md — cross-variant ${VAR}/env:VAR secret resolution chokepoint applied to bearer/basic/oauth2 credential fields (closes altitude finding; OAPI-03)
-- [ ] 90-12-PLAN.md — backend.base_url non-empty validation + oauth_passthrough trust-boundary docs (closes WR-02/WR-04; OAPI-03)
+- [x] 90-12-PLAN.md — backend.base_url non-empty validation + oauth_passthrough trust-boundary docs (closes WR-02/WR-04; OAPI-03)
 
 **Gap-Closure Wave 2** *(blocked on 90-10 — shared code_mode.rs)*
 
@@ -1656,4 +1656,4 @@ Plans:
 | 87. Type 2 Authoring Skills Server | 0/? | Not started | - |
 | 88. Dogfood `pmcp-server` | 0/? | Not started | - |
 | 89. Documentation & Migration | 0/? | Not started | - |
-| 90. OpenAPI Built-In Server | 11/13 | In Progress|  |
+| 90. OpenAPI Built-In Server | 12/13 | In Progress|  |
