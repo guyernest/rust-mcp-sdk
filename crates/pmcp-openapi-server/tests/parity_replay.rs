@@ -42,6 +42,48 @@ fn fixtures_dir() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")
 }
 
+/// Absolute path to the published `examples/` directory (ships with the crate;
+/// `tests/` is excluded from the tarball but `examples/` is NOT — Cargo.toml:14).
+fn examples_dir() -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples")
+}
+
+/// P901-EXAMPLE smoke: the user-pointable `examples/london-tube.toml` (the config
+/// a user runs via `pmcp-openapi-server --config <path>`) parses + validates
+/// through the SAME strict entry point the binary uses, and carries the full
+/// resources/prompts/annotations showcase surface. This proves the published
+/// example config is well-formed without needing to boot a live server.
+#[test]
+fn pointable_example_config_parses_and_validates() {
+    let config_text = std::fs::read_to_string(examples_dir().join("london-tube.toml"))
+        .expect("read examples/london-tube.toml");
+    let cfg = ServerConfig::from_toml_strict_validated(&config_text)
+        .expect("pointable examples/london-tube.toml parses + validates");
+
+    // Same three Code Mode context resources as the enriched fixture.
+    for uri in [
+        "docs://london-tube/schema",
+        "docs://london-tube/examples",
+        "code-mode://learnings",
+    ] {
+        assert!(
+            cfg.resources.iter().any(|r| r.uri == uri),
+            "pointable example ships the {uri} resource: {:?}",
+            cfg.resources.iter().map(|r| &r.uri).collect::<Vec<_>>()
+        );
+    }
+    // Same start_code_mode prompt as the enriched fixture.
+    assert!(
+        cfg.prompts.iter().any(|p| p.name == "start_code_mode"),
+        "pointable example ships the start_code_mode prompt"
+    );
+    // No real credential committed — only the ${TFL_APP_KEY} placeholder.
+    assert!(
+        config_text.contains("${TFL_APP_KEY}"),
+        "pointable example keeps the ${{TFL_APP_KEY}} placeholder (no real key)"
+    );
+}
+
 /// Fixture-validity (Task 1): the vendored config + spec parse, and the expected
 /// reference tool names are present. This is the offline gate that the vendored
 /// fixtures are well-formed BEFORE the parity replay drives them.
