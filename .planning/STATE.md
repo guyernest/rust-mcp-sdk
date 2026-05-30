@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v2.2
 milestone_name: Configuration-Only MCP Servers
 status: executing
-stopped_at: Completed 90-13-PLAN.md
-last_updated: "2026-05-30T03:26:11.733Z"
+stopped_at: Phase 90.2 context gathered
+last_updated: "2026-05-30T16:30:56.442Z"
 last_activity: 2026-05-30
 progress:
   total_phases: 45
@@ -279,6 +279,6 @@ Inherited from v2.1 (see PROJECT.md + prior Decisions log):
 
 ## Session Continuity
 
-Last session: 2026-05-30T01:13:23.343Z
-Stopped at: Completed 90-13-PLAN.md
+Last session: 2026-05-30T16:30:56.435Z
+Stopped at: Phase 90.2 context gathered
 Resume: Plan 90-08 COMPLETE — `cargo pmcp new --kind openapi-server` scaffold (OAPI-07/CF-3). `templates/openapi_server.rs` emits a SINGLE runnable crate: Cargo.toml (toolkit `openapi-code-mode` umbrella + `pmcp-openapi-server` lib for the `dispatch`/`build_server` seam — the http path has NO ServerBuilderExt method, Plan 06 decision, Rule 3 reconciliation), a ≤15-statement-line Shape C `main.rs` (load config[+optional api.yaml] → dispatch → build_server → serve, with the StreamableHttpServer boilerplate hoisted into a private serve() helper, CF-5), a `config.toml` with [backend] + a single-call + a script tool + `[code_mode] enabled=true` carrying an inline DEV token_secret + `allow_inline_token_secret_for_dev=true` + a LOUD replace-for-production note (CF-4), a minimal `api.yaml` (D-03, optional at runtime), and `deploy.toml` + `.pmcp/deploy.toml` with `[target] type="pmcp-run"` (CF-6, Phase 77 enum unchanged). `new.rs` gained the `openapi-server` arm + execute/print helpers + a widened error. `tests/scaffold_openapi_server.rs` is two-tier (mirror TEST-05): always-on file-emission + CF-5 ≤15-line golden-drift, plus an env-gated (`PMCP_SCAFFOLD_COMPILE_TEST=1`) cold `cargo check` that was RUN and passed (proving the scaffold compiles end to end). README documents the new `--kind` in a scoped fold. Commits `4caab84b`, `6b992761`. Next: Plan 90-09 (docs) — only remaining incomplete Phase 90 plan.
