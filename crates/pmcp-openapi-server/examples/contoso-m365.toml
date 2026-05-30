@@ -1,29 +1,38 @@
 # =============================================================================
-# contoso-m365.toml — Contoso M365 OpenAPI Shape-A fixture (Phase 90.2, P902-CONFIG)
+# contoso-m365.toml — POINTABLE OpenAPI Shape-A oauth_passthrough showcase (P902-EXAMPLE)
 # =============================================================================
 #
-# A fictional "Contoso" Microsoft 365 instance over Microsoft Graph, demonstrating
-# PER-USER DELEGATED OAuth (`oauth_passthrough`) reading a two-sheet (Customers /
-# Orders) Excel workbook. This is the 90.2 analog of the 90.1 london-tube fixture,
-# re-skinned to Contoso / Graph / passthrough. It CONFIGURES machinery that already
-# ships from Phase 90 (no `src/` change).
+# This is the config "users can point at" — the per-user delegated OAuth
+# (`oauth_passthrough`) sibling of the london-tube api_key showcase. Unlike
+# tests/fixtures/contoso-m365.toml (which is EXCLUDED from the published crate via
+# Cargo.toml `exclude = [..., "tests/"]`), this file lives under examples/ and SHIPS
+# with the published crate, so users can:
 #
-# DATA PROVENANCE (do not let this drift): every customer row, range address, and
-# orders-block address below is TRANSCRIBED FROM the canonical dataset
+#   pmcp-openapi-server --config crates/pmcp-openapi-server/examples/contoso-m365.toml
+#
+# It mirrors the enriched tests/fixtures/contoso-m365.toml surface: the same
+# `oauth_passthrough` backend auth, the same two read-only Contoso SCRIPT tools
+# (get_customer / get_customer_orders), the same three [[resources]], and the same
+# start_code_mode [[prompts]] block. Keep this file in sync with the fixture (the
+# Plan-02 parity test's `assert_contoso_code_mode_surface` checks BOTH for drift).
+#
+# DATA PROVENANCE: every customer row, range address, and orders-block address is
+# TRANSCRIBED FROM the canonical dataset
 #   crates/pmcp-openapi-server/tests/fixtures/contoso-m365-workbook.json
-# which is the SINGLE source of truth. The get_customer script's computed address
-# for a given id MUST equal that id's `address` in the canonical json; the
-# get_customer_orders script's block addresses MUST equal `orders_blocks` there.
+# (the SINGLE source of truth — the same dataset the parity test loads its mock
+# rows from). The get_customer script's computed address for a given id MUST equal
+# that id's address in the canonical json.
 #
 # AUTH — `oauth_passthrough`: the server holds NO standing credential. It captures
 # the signed-in user's inbound `Authorization: Bearer <token>` and forwards it to
 # Graph, so it can only ever act AS the calling user (least privilege; admin
-# consents once to a bounded scope as the ceiling). Proven offline in Plan 02/03.
+# consents once to a bounded scope as the ceiling). Proven offline in Plan 02.
 #
-# NO REAL SECRETS: any tenant/client id would appear ONLY as an env-ref placeholder
-# in docs; the auth path here carries NO standing credential at all (the bearer
-# comes from the inbound user token). The ONLY non-placeholder credential literal
-# is the dev-guarded inline token secret (see the [code_mode] block below).
+# NO REAL SECRETS: any tenant/client id would appear ONLY as a `${VAR}` env-ref
+# placeholder (see the [server] description note) — the auth path here carries NO
+# standing credential at all (the bearer comes from the inbound user token). The
+# ONLY non-placeholder credential literal is the dev-guarded inline token secret
+# (see the [code_mode] block below); NEVER set that flag in a production config.
 #
 # NO date builtin: the embedded JS engine has no date support -- the scripts do
 # pure id->row->range-address arithmetic only; all date logic lives in Code Mode.
@@ -31,16 +40,13 @@
 [server]
 name = "contoso-m365"
 version = "1.0.0"
-description = "Contoso M365: per-user delegated OAuth (passthrough) reading a Customers/Orders Excel workbook over Microsoft Graph (offline fixture)."
+description = "Contoso M365: per-user delegated OAuth (passthrough) reading a Customers/Orders Excel workbook over Microsoft Graph (pointable showcase config). Tenant/client ids, if templated for a real deployment, are ${VAR} placeholders resolved from the environment."
 
 # =============================================================================
 # Backend — Microsoft Graph, per-user delegated token forwarded (THE headline)
 # =============================================================================
 # `oauth_passthrough` forwards the inbound MCP `Authorization` header to Graph as
 # `target_header` (default "Authorization"). No standing credential is held here.
-# Field names verified against AuthConfig::OAuthPassthrough
-# (crates/pmcp-server-toolkit/src/http/auth.rs:122-130): `target_header` defaults
-# "Authorization", `required` defaults true.
 
 [backend]
 base_url = "https://graph.microsoft.com/v1.0"
@@ -135,7 +141,8 @@ cost_hint = "low"
 # The three URIs below are the EXACT set referenced by the start_code_mode
 # prompt's include_resources (Pitfall 3 -- register_prompts resolves each against
 # the StaticResourceHandler; a typo'd URI fails assembly). These exact strings are
-# also reused verbatim by Plan 04's book/course chapters.
+# also reused verbatim by Plan 04's book/course chapters and asserted by the
+# Plan-02 parity test's assert_contoso_code_mode_surface.
 
 [[resources]]
 uri = "docs://contoso-m365/schema"
@@ -232,5 +239,5 @@ include_resources = [
 
 [code_mode]
 enabled = true
-token_secret = "contoso-m365-parity-dev-secret-32bytes"
+token_secret = "contoso-m365-pointable-dev-secret-32by"
 allow_inline_token_secret_for_dev = true
