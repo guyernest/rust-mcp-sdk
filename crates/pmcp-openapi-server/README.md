@@ -121,6 +121,15 @@ required = false
 
 The static variants (`none` / `api_key` / `bearer` / `basic` / `oauth2_client_credentials`) ignore any inbound MCP token. Only `oauth_passthrough` forwards the per-request inbound token to the backend.
 
+### `oauth_passthrough` trust boundary (WR-04)
+
+`oauth_passthrough` relays a **client-controlled** credential into an **operator-controlled** destination:
+
+- The **MCP client controls the forwarded token VALUE** — it is the raw inbound `Authorization` header the client sent, captured at the binary boundary and passed through verbatim (the binary prefixes a bare token with `Bearer ` when no scheme is present).
+- The **operator controls the destination header NAME** — `target_header` is fixed in your committed config; the client cannot redirect the token to a different header.
+
+Relaying the client's own credential to the backend is the **intended** SSO-passthrough behavior: use it only when the backend should receive the MCP client's own identity. The control-character rejection in `HeaderValue::try_from` is the protection against header-injection; a malformed token value is rejected rather than relayed. Do **not** enable `oauth_passthrough` when the backend should be called with a server-side service credential — use `bearer` / `oauth2_client_credentials` for that instead.
+
 ## The OpenAPI spec is optional (D-03)
 
 `--spec` is **optional**. A curated-only server — only single-call and/or script `[[tools]]`, no Code Mode contract resource — boots with no spec at all. When you do supply `--spec`, it is served as the `api_schema` Code Mode resource so the agent can author scripts against your real OpenAPI contract.

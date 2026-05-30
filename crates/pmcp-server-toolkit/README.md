@@ -17,7 +17,17 @@ Runtime library for config-driven MCP servers — auth, secrets, static resource
 - `sql` — `SqlConnector` trait + dialect enum for backend-agnostic SQL toolkits.
 - `builder_ext` — `ServerBuilderExt` trait adding `tools_from_config` / `code_mode_from_config` to `pmcp::ServerBuilder`.
 - `code_mode` *(feature `code-mode`, default-on)* — re-exports from `pmcp-code-mode` plus toolkit-side wiring (`executor_from_config`, `assemble_code_mode_prompt`).
+- `http` *(feature `http`)* — OpenAPI/REST backend connector + outgoing `[backend.auth]` providers (`HttpAuthProvider`), including the `oauth_passthrough` relay.
 - `error` — `ToolkitError` enum and the crate-level `Result<T>` alias.
+
+### `oauth_passthrough` trust boundary (WR-04)
+
+The `http` module's `oauth_passthrough` `[backend.auth]` variant relays a **client-controlled** credential into an **operator-controlled** destination, and the trust posture must be explicit:
+
+- The **MCP client controls the forwarded token VALUE** — it is the raw inbound `Authorization` header the client sent, captured by the binary's token-capture provider and forwarded verbatim (a bare token is prefixed with `Bearer `).
+- The **operator controls the destination header NAME** — `target_header` is fixed in the committed config; the client cannot redirect the token elsewhere.
+
+Forwarding the client's own credential to the backend is the **intended** SSO-passthrough behavior — use it only when the backend should receive the MCP client's own identity. The `HeaderValue::try_from` control-character rejection is the protection against header injection. For a server-side service credential, use a static variant (`bearer` / `oauth2_client_credentials`) instead.
 
 ## What this crate is NOT
 

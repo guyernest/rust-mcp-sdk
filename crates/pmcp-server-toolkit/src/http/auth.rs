@@ -384,6 +384,27 @@ impl HttpAuthProvider for OAuth2ClientCredentialsAuth {
 /// to the construction-time captured `incoming_token` (via
 /// [`create_passthrough_auth_provider`]). When neither is present and the config
 /// is `required`, `apply` returns [`HttpConnectorError::Auth`].
+///
+/// # Trust boundary (WR-04)
+///
+/// This provider relays a **client-controlled** value into an
+/// **operator-controlled** destination — the trust posture is intentional and
+/// must stay visible at the type:
+///
+/// - The MCP **client controls the forwarded token VALUE**: it is the raw
+///   inbound `Authorization` header captured by `TokenCaptureAuthProvider` and
+///   forwarded verbatim (bare tokens are prefixed with `Bearer ` in [`apply`]).
+/// - The **operator controls the destination header NAME** (`target_header`),
+///   fixed in the committed config; the client cannot redirect the token to a
+///   different header.
+///
+/// Relaying the client's own credential to the backend is the **intended**
+/// SSO-passthrough behavior — use it only when the backend should receive the
+/// MCP client's own identity. The `HeaderValue::try_from` control-character
+/// rejection in [`apply`] is the protection against header injection; a
+/// malformed token value is rejected, not relayed.
+///
+/// [`apply`]: OAuthPassthroughAuth::apply
 pub struct OAuthPassthroughAuth {
     target_header: String,
     incoming_token: Option<String>,
@@ -421,6 +442,15 @@ impl HttpAuthProvider for OAuthPassthroughAuth {
                 let header_value = HeaderValue::try_from(value).map_err(|_| {
                     HttpConnectorError::InvalidHeader("invalid passthrough token value".to_string())
                 })?;
+                // TRUST BOUNDARY (WR-04): we relay a CLIENT-controlled value
+                // (`tok`, the raw inbound Authorization header captured by
+                // TokenCaptureAuthProvider) into an OPERATOR-controlled
+                // destination (`header_name`, from the committed `target_header`).
+                // Forwarding the client's own credential is INTENDED SSO
+                // passthrough — use only when the backend should receive the MCP
+                // client's identity. The HeaderValue::try_from guard above is the
+                // protection: it rejects control chars, so a malformed token is
+                // rejected rather than injected. See the type doc-comment.
                 headers.insert(header_name, header_value);
                 Ok(())
             },
