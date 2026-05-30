@@ -1,0 +1,101 @@
+# =============================================================================
+# contoso-m365-scenarios.yaml — mcp-tester parity contract (P902-PARITY, tool-correctness)
+# =============================================================================
+#
+# Replayed OFFLINE against the wiremock Graph backend stood up by Plan 02's
+# tests/contoso_m365_parity.rs. Exercises capability discovery plus both Contoso
+# tools. Every asserted VALUE is TRANSCRIBED FROM the canonical dataset
+#   crates/pmcp-openapi-server/tests/fixtures/contoso-m365-workbook.json
+# so it matches the rows Plan 02's wiremock returns for those exact addresses --
+# a value mismatch fails parity.
+#
+# NOTE (RQ-2): the deterministic HEADLINE Code Mode result (the customer set
+# {C001,C003,C005}) lives in Plan 03's Rust code-mode test, NOT here. The
+# validate_code / tool_call steps below assert success + contains only.
+name: Contoso M365 Reference Parity (offline wiremock replay)
+description: Reproduces the Contoso M365 tools + behavior against a mocked Microsoft Graph backend (per-user passthrough).
+timeout: 120
+stop_on_failure: false
+variables:
+  test_id: contoso_m365_parity_001
+setup: []
+steps:
+
+# =============================================================================
+# Capability Discovery — the Contoso tool/resource/prompt surface must be present.
+# =============================================================================
+
+- name: List available tools
+  operation:
+    type: list_tools
+  assertions:
+  - type: success
+  - type: exists
+    path: tools
+
+# list_resources / list_prompts return OBJECT arrays (mcp-tester `contains` only
+# matches STRING array elements), so per-URI/per-name presence is asserted via the
+# Plan-02 fixture asserts in contoso_m365_parity.rs; here the minimal exists check
+# proves the served surface LISTS them (mirrors london-tube-scenarios.yaml).
+
+- name: List available resources
+  operation:
+    type: list_resources
+  assertions:
+  - type: success
+  - type: exists
+    path: resources
+
+- name: List available prompts
+  operation:
+    type: list_prompts
+  assertions:
+  - type: success
+  - type: exists
+    path: prompts
+
+# Tool-surface parity is proven BEHAVIORALLY below: each curated tool is invoked,
+# and the code-mode validate_code tool is invoked -- a successful call is proof the
+# tool is present in the synthesized surface.
+
+- name: 'Code Mode tool validate_code is present (validates a read-only Contoso script)'
+  operation:
+    type: tool_call
+    tool: validate_code
+    arguments: {code: "const r = await api.get(`/drives/CONTOSO_DRIVE/items/CUSTOMERS_ITEM/workbook/worksheets/Customers/range(address='A2:D2')?$select=values`); return r.values;"}
+  assertions:
+  - type: success
+
+# =============================================================================
+# Tool: get_customer (script) — customer_id 'C001' -> Customers row 2 (A2:D2).
+# Asserted name "Northwind Traders" is C001's `name` in the canonical workbook json
+# (C001 is a HEADLINE MATCH). The wiremock mock returns this exact row for A2:D2.
+# =============================================================================
+
+- name: 'get_customer returns the Northwind Traders row for C001'
+  operation:
+    type: tool_call
+    tool: get_customer
+    arguments: {customer_id: "C001"}
+  assertions:
+  - type: success
+  - type: contains
+    path: result
+    value: "Northwind Traders"
+
+# =============================================================================
+# Tool: get_customer_orders (script) — C001 -> contiguous Orders block A2:D3.
+# Asserted order id "O1001" is C001's first order in the canonical workbook json.
+# The wiremock mock returns C001's orders for A2:D3.
+# =============================================================================
+
+- name: 'get_customer_orders surfaces order O1001 for C001'
+  operation:
+    type: tool_call
+    tool: get_customer_orders
+    arguments: {customer_id: "C001"}
+  assertions:
+  - type: success
+  - type: contains
+    path: result
+    value: "O1001"
