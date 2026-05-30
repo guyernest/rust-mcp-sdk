@@ -222,6 +222,8 @@ impl ServerConfig {
     /// 4. No `[[tools]]` entry mixes tool kinds (`sql` / `path`+`method` /
     ///    `script`) — D-01 / T-90-02-04.
     /// 5. Every `[[database.tables]]` entry has a non-empty `name`.
+    /// 6. When a `[backend]` block is present (`http` feature), its `base_url`
+    ///    is non-empty (trimmed) — GAP 3 / WR-02. Absent on no-http builds.
     ///
     /// # Errors
     ///
@@ -248,6 +250,18 @@ impl ServerConfig {
         for (i, table) in self.database.tables.iter().enumerate() {
             if table.name.trim().is_empty() {
                 return Err(ConfigValidationError::EmptyTableName(i));
+            }
+        }
+        // Phase 90 gap-closure (GAP 3 / WR-02): when a `[backend]` block is
+        // declared, its `base_url` must be non-empty. Catch a typo'd / omitted
+        // URL here (the field is `#[serde(default)]` -> `""`) rather than
+        // letting it surface late as an opaque DispatchError at request time.
+        // Gated on `http` because the `backend` field itself is http-only; the
+        // block simply vanishes in a no-http build (SQL configs unaffected).
+        #[cfg(feature = "http")]
+        if let Some(backend) = &self.backend {
+            if backend.base_url.trim().is_empty() {
+                return Err(ConfigValidationError::EmptyBackendBaseUrl);
             }
         }
         Ok(())
@@ -899,6 +913,87 @@ mod tests {
             Err(ConfigValidationError::EmptyTableName(0)) => {},
             other => panic!("expected EmptyTableName(0), got {other:?}"),
         }
+    }
+
+    /// Phase 90 gap-closure (GAP 3 / WR-02): a `[backend]` block with an
+    /// empty / missing `base_url` is rejected at validate() time with
+    /// [`ConfigValidationError::EmptyBackendBaseUrl`] — not a late opaque
+    /// `DispatchError::Connector("invalid base URL")` at request time.
+    #[cfg(feature = "http")]
+    #[test]
+    fn validate_rejects_empty_backend_base_url() {
+        // base_url key present but empty.
+        let toml = r#"
+            [server]
+            name = "demo"
+            version = "0.1.0"
+
+            [backend]
+            base_url = ""
+        "#;
+        let cfg = ServerConfig::from_toml(toml).expect("parse");
+        match cfg.validate() {
+            Err(ConfigValidationError::EmptyBackendBaseUrl) => {},
+            other => panic!("expected EmptyBackendBaseUrl, got {other:?}"),
+        }
+    }
+
+    /// A `[backend]` block whose `base_url` key is omitted entirely (defaults
+    /// to `""` via `#[serde(default)]`) is rejected the same way.
+    #[cfg(feature = "http")]
+    #[test]
+    fn validate_rejects_omitted_backend_base_url() {
+        let toml = r#"
+            [server]
+            name = "demo"
+            version = "0.1.0"
+
+            [backend]
+        "#;
+        let cfg = ServerConfig::from_toml(toml).expect("parse");
+        match cfg.validate() {
+            Err(ConfigValidationError::EmptyBackendBaseUrl) => {},
+            other => panic!("expected EmptyBackendBaseUrl, got {other:?}"),
+        }
+    }
+
+    /// A `[backend]` block with a non-empty `base_url` validates OK.
+    #[cfg(feature = "http")]
+    #[test]
+    fn validate_accepts_non_empty_backend_base_url() {
+        let toml = r#"
+            [server]
+            name = "demo"
+            version = "0.1.0"
+
+            [backend]
+            base_url = "https://api.example.com"
+        "#;
+        let cfg = ServerConfig::from_toml(toml).expect("parse");
+        cfg.validate()
+            .expect("config with a non-empty backend.base_url must validate");
+    }
+
+    /// A config with NO `[backend]` block (a pure-SQL config) is unaffected by
+    /// the new check — `backend` is `None`, so the check never fires.
+    #[cfg(feature = "http")]
+    #[test]
+    fn validate_accepts_absent_backend() {
+        let cfg = ServerConfig::from_toml(MINIMAL).expect("parse");
+        assert!(cfg.backend.is_none());
+        cfg.validate()
+            .expect("a config without [backend] must validate (SQL configs unaffected)");
+    }
+
+    /// The error Display names the offending field and is actionable.
+    #[cfg(feature = "http")]
+    #[test]
+    fn empty_backend_base_url_error_names_the_field() {
+        let msg = ConfigValidationError::EmptyBackendBaseUrl.to_string();
+        assert!(
+            msg.contains("[backend].base_url"),
+            "error must name the field, got: {msg}"
+        );
     }
 
     #[test]

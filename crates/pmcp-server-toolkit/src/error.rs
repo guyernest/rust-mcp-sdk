@@ -137,4 +137,16 @@ pub enum ConfigValidationError {
          one of `sql`, `path`/`method`, or `script` (not a mixture)"
     )]
     AmbiguousToolKind(usize),
+    /// Per Phase 90 gap-closure (GAP 3 / WR-02): a `[backend]` block is present
+    /// but its `base_url` is empty / whitespace-only (or the `base_url` key was
+    /// omitted, defaulting to `""` via `#[serde(default)]`). Without this
+    /// parse-time check a typo'd or missing `base_url` would validate cleanly
+    /// and then surface late as an opaque `DispatchError::Connector("invalid
+    /// base URL")` at the first backend request. Rejecting it here turns that
+    /// late opaque failure into an actionable, field-naming error.
+    #[error(
+        "[backend].base_url must be non-empty (set the REST API root URL, \
+         e.g. \"https://api.example.com\")"
+    )]
+    EmptyBackendBaseUrl,
 }
