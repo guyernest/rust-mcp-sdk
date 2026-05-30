@@ -1670,13 +1670,13 @@ This is config + curated spec + fixture + docs, NOT a feature build: `AuthConfig
 **SQL/OpenAPI parallels (mirror these):** 90.1 london-tube fixture/example/chapters/`parity_replay.rs`; `crates/pmcp-sql-server/tests/fixtures/reference-config.toml`.
 **Requirements**: P902-SPEC, P902-CONFIG, P902-FIXTURE, P902-PARITY, P902-CODEMODE, P902-EXAMPLE, P902-DOCS-BOOK, P902-DOCS-COURSE (locked via SPEC.md)
 **Depends on:** Phase 90
-**Plans:** 1/4 plans executed
+**Plans:** 3/4 plans executed
 
 Plans:
 
 - [x] 90.2-01-PLAN.md — Contoso M365 fixtures: CANONICAL workbook dataset (contoso-m365-workbook.json) + oauth_passthrough config + two customer_id-keyed script tools + curated Graph range-read spec + replay scenario (P902-SPEC, P902-CONFIG, P902-FIXTURE)
-- [ ] 90.2-02-PLAN.md — Offline parity test (forwarded-bearer passthrough proof) + pointable examples/contoso-m365.toml + build-only example (P902-PARITY, P902-EXAMPLE)
-- [ ] 90.2-03-PLAN.md — Deterministic headline Code Mode Rust test (>100-in-3-months, pinned reference date) (P902-CODEMODE)
+- [x] 90.2-02-PLAN.md — Offline parity test (forwarded-bearer passthrough proof) + pointable examples/contoso-m365.toml + build-only example (P902-PARITY, P902-EXAMPLE)
+- [x] 90.2-03-PLAN.md — Deterministic headline Code Mode Rust test (>100-in-3-months, pinned reference date) (P902-CODEMODE)
 - [ ] 90.2-04-PLAN.md — Dedicated book + course chapters (governance + Excel narrative) wired into both SUMMARYs (P902-DOCS-BOOK, P902-DOCS-COURSE)
 
 ### Phase 90.1: OpenAPI Built-In Server — Examples & Article Parity (INSERTED)
