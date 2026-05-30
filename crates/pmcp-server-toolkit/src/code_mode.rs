@@ -891,17 +891,24 @@ impl HttpCodeExecutor {
     ///
     /// Lifted from the pmcp-run reference `execute_request` (kept a free helper
     /// so the trait method stays under the cog ≤25 budget).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ExecutionError::RuntimeError`] naming the offending key when a
+    /// `{key}` path value is a non-scalar (`Object`/`Array`) — see
+    /// [`HttpCodeExecutor::scalar_str`] for the decided rule (WR-03 / GAP 4).
     fn resolve_path(
         path: &str,
         body: &Option<serde_json::Value>,
-    ) -> (String, Option<serde_json::Value>) {
+    ) -> std::result::Result<(String, Option<serde_json::Value>), ExecutionError> {
         let mut resolved_path = path.to_string();
         let remaining = if let Some(serde_json::Value::Object(obj)) = body {
             let mut remaining = serde_json::Map::new();
             for (key, value) in obj {
                 let placeholder = format!("{{{key}}}");
                 if resolved_path.contains(&placeholder) {
-                    resolved_path = resolved_path.replace(&placeholder, &Self::scalar_str(value));
+                    resolved_path =
+                        resolved_path.replace(&placeholder, &Self::scalar_str(key, value)?);
                 } else {
                     remaining.insert(key.clone(), value.clone());
                 }
@@ -914,15 +921,38 @@ impl HttpCodeExecutor {
         } else {
             body.clone()
         };
-        (resolved_path, remaining)
+        Ok((resolved_path, remaining))
     }
 
-    /// Render a JSON scalar for path / query substitution (strings unquoted).
-    fn scalar_str(value: &serde_json::Value) -> String {
+    /// Render a JSON scalar for path / query substitution (strings unquoted),
+    /// REJECTING non-scalar values (WR-03 / GAP 4).
+    ///
+    /// This is the `code_mode` counterpart of [`crate::http::client`]'s
+    /// `render_scalar`; both HTTP surfaces apply the SAME decided rule. Because
+    /// the `Parameter` model carries no OpenAPI `style`/`explode`/`type` hint,
+    /// the rule is uniform: a scalar (`String`, `Number`, `Bool`, `Null`)
+    /// renders to a bare string (`Null` → `"null"`, preserving prior behavior);
+    /// an `Object` or `Array` in a `{path}` substitution or a GET-query field is
+    /// rejected rather than silently JSON-stringified into the URL.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ExecutionError::RuntimeError`] naming `key` when `value` is a
+    /// non-scalar. Per Pitfall 5 the message names the KEY only — never the value.
+    fn scalar_str(
+        key: &str,
+        value: &serde_json::Value,
+    ) -> std::result::Result<String, ExecutionError> {
         match value {
-            serde_json::Value::String(s) => s.clone(),
-            serde_json::Value::Null => "null".to_string(),
-            other => other.to_string(),
+            serde_json::Value::String(s) => Ok(s.clone()),
+            serde_json::Value::Null => Ok("null".to_string()),
+            serde_json::Value::Number(n) => Ok(n.to_string()),
+            serde_json::Value::Bool(b) => Ok(b.to_string()),
+            serde_json::Value::Object(_) | serde_json::Value::Array(_) => {
+                Err(ExecutionError::RuntimeError {
+                    message: format!("path/query param '{key}' must be a scalar"),
+                })
+            },
         }
     }
 }
@@ -939,8 +969,9 @@ impl pmcp_code_mode::HttpExecutor for HttpCodeExecutor {
         let upper = method.to_uppercase();
         let is_get_like = matches!(upper.as_str(), "GET" | "HEAD" | "OPTIONS");
 
-        // (1) Path-param substitution from the body object.
-        let (resolved_path, remaining_body) = Self::resolve_path(path, &body);
+        // (1) Path-param substitution from the body object. A non-scalar `{key}`
+        //     value is rejected (WR-03) rather than JSON-stringified into the URL.
+        let (resolved_path, remaining_body) = Self::resolve_path(path, &body)?;
 
         // (2) Shared join_url helper (Pitfall 2 — preserves an API-Gateway
         //     stage prefix; it does NOT use the RFC-3986 path-replacing join).
@@ -970,7 +1001,9 @@ impl pmcp_code_mode::HttpExecutor for HttpCodeExecutor {
         let request_body = if is_get_like {
             if let Some(serde_json::Value::Object(obj)) = &remaining_body {
                 for (key, value) in obj {
-                    query_params.push((key.clone(), Self::scalar_str(value)));
+                    // A non-scalar GET-query value is rejected (WR-03) rather than
+                    // silently JSON-stringified into the URL.
+                    query_params.push((key.clone(), Self::scalar_str(key, value)?));
                 }
             }
             None
