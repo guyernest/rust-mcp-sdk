@@ -101,6 +101,12 @@ pub enum AuthConfig {
     },
 
     /// OAuth2 client-credentials grant.
+    ///
+    /// `rename_all = "snake_case"` derives the tag `o_auth2_client_credentials`,
+    /// but the documented config form (README, line-56 doc comment) is
+    /// `type = "oauth2_client_credentials"`. The alias accepts the documented
+    /// spelling so `[backend.auth]` configs deserialize as documented.
+    #[serde(alias = "oauth2_client_credentials")]
     OAuth2ClientCredentials {
         /// Token endpoint URL.
         token_url: String,
@@ -120,6 +126,12 @@ pub enum AuthConfig {
     },
 
     /// Forward the INCOMING MCP client token to the backend (SSO passthrough, H1).
+    ///
+    /// `rename_all = "snake_case"` derives the tag `o_auth_passthrough`, but the
+    /// documented config form (README, line-56 doc comment) is
+    /// `type = "oauth_passthrough"`. The alias accepts the documented spelling so
+    /// `[backend.auth]` configs deserialize as documented.
+    #[serde(alias = "oauth_passthrough")]
     OAuthPassthrough {
         /// Outgoing header to set (default `Authorization`).
         #[serde(default = "default_auth_header")]

@@ -58,20 +58,26 @@ retry_backoff_ms = 1000
 # =============================================================================
 # Tool 1 (script) — get_customer
 # =============================================================================
-# customer_id 'C00N' -> index N -> Customers-sheet row = N + 1 (header at row 1)
-# -> range `A{row}:D{row}` over columns customer_id,name,segment,region. The
-# computed address MUST match the canonical json `address` for that id (e.g.
-# 'C001' -> 'A2:D2', 'C006' -> 'A7:D7'). Connector does literal str::replace, no
-# math -- so the arithmetic lives here in JS (D-04). No date use. Bind api.get to
-# a const before return (engine-accuracy rule).
+# customer_id 'C00N' -> Customers-sheet row N + 1 (header at row 1) -> range
+# `A{row}:D{row}` over columns customer_id,name,segment,region. The address MUST
+# match the canonical json `address` for that id (e.g. 'C001' -> 'A2:D2', 'C006'
+# -> 'A7:D7'). The id->address map is an explicit if-chain of LITERAL addresses
+# (the accurate JS subset has no `Date` builtin AND renders arithmetic results as
+# floats like `2.0` + does not support object string-indexing `m[key]`, so we map
+# ids to literal address strings rather than computing `A${idx+1}` or indexing an
+# object). Connector does literal str::replace, no math (D-04). Bind to a const.
 
 [[tools]]
 name = "get_customer"
 description = "Fetch one customer row (customer_id, name, segment, region) from the Contoso Customers sheet."
 script = """
-const idx = parseInt(args.customer_id.slice(1), 10);   // 'C007' -> 7
-const row = idx + 1;                                    // header offset (row 1 = header, data from row 2)
-const addr = `A${row}:D${row}`;
+let addr = "";
+if (args.customer_id === "C001") { addr = "A2:D2"; }
+else if (args.customer_id === "C002") { addr = "A3:D3"; }
+else if (args.customer_id === "C003") { addr = "A4:D4"; }
+else if (args.customer_id === "C004") { addr = "A5:D5"; }
+else if (args.customer_id === "C005") { addr = "A6:D6"; }
+else if (args.customer_id === "C006") { addr = "A7:D7"; }
 const r = await api.get(`/drives/CONTOSO_DRIVE/items/CUSTOMERS_ITEM/workbook/worksheets/Customers/range(address='${addr}')?$select=values`);
 return r.values;
 """
@@ -101,14 +107,12 @@ cost_hint = "low"
 name = "get_customer_orders"
 description = "Fetch the contiguous Orders block (order_id, customer_id, order_date, amount) for one customer from the Contoso Orders sheet."
 script = """
-const blocks = {
-  C001: "A2:D3",
-  C002: "A4:D4",
-  C003: "A5:D5",
-  C004: "A6:D6",
-  C005: "A7:D7"
-};
-const ordersAddr = blocks[args.customer_id];
+let ordersAddr = "";
+if (args.customer_id === "C001") { ordersAddr = "A2:D3"; }
+else if (args.customer_id === "C002") { ordersAddr = "A4:D4"; }
+else if (args.customer_id === "C003") { ordersAddr = "A5:D5"; }
+else if (args.customer_id === "C004") { ordersAddr = "A6:D6"; }
+else if (args.customer_id === "C005") { ordersAddr = "A7:D7"; }
 const r = await api.get(`/drives/CONTOSO_DRIVE/items/ORDERS_ITEM/workbook/worksheets/Orders/range(address='${ordersAddr}')?$select=values`);
 return r.values;
 """
