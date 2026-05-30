@@ -4,8 +4,8 @@ milestone: v2.2
 milestone_name: Configuration-Only MCP Servers
 status: executing
 stopped_at: Completed 90-13-PLAN.md
-last_updated: "2026-05-30T03:01:52.559Z"
-last_activity: 2026-05-30 -- Phase 90.1 planning complete
+last_updated: "2026-05-30T03:04:55.816Z"
+last_activity: 2026-05-30 -- Phase 90.1 execution started
 progress:
   total_phases: 45
   completed_phases: 39
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-05-17)
 
 **Core value:** Enterprise developers build production-grade SQL MCP servers from configuration + schema files alone — no Rust required — while preserving PMCP's security, tools/resources/prompts/tasks/skills standards and pmcp.run hosting integration.
-**Current focus:** Phase 90 — openapi-built-in-server
+**Current focus:** Phase 90.1 — openapi-built-in-server-examples-article-parity-finish-the-o
 
 ## Current Position
 
-Phase: 90 — COMPLETE
-Plan: 4 of 13
-Status: Ready to execute
-Last activity: 2026-05-30 -- Phase 90.1 planning complete
+Phase: 90.1 (openapi-built-in-server-examples-article-parity-finish-the-o) — EXECUTING
+Plan: 1 of 3
+Status: Executing Phase 90.1
+Last activity: 2026-05-30 -- Phase 90.1 execution started
 
 **Carryover from v2.1:** Phase 81 (update-pmcp-book-and-pmcp-course-with-v2-advanced-topics-cod) was executing at v2.1 close; will be tracked separately and folded into v2.1 completion. Operator follow-ups deferred from Phase 75 Wave 5 still pending: (a) merge Phase 75 Wave 5 + 75.5 to paiml/rust-mcp-sdk:main; (b) post-merge run `gh workflow run quality-badges.yml -R paiml/rust-mcp-sdk` and append observation to `.planning/phases/75-fix-pmat-issues/75-05-GATE-VERIFICATION.md` "## Badge flip observation" section.
 
