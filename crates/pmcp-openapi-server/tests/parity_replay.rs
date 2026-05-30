@@ -48,6 +48,30 @@ fn examples_dir() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples")
 }
 
+/// The Code Mode showcase surface that BOTH the enriched fixture and the
+/// pointable example must ship (P901-FIXTURE / P901-EXAMPLE): the three context
+/// resource URIs + the `start_code_mode` prompt. Asserting it in one place keeps
+/// the two configs from drifting apart on the showcase surface. `label` names the
+/// config under test so a failure points at the right file.
+fn assert_london_tube_code_mode_surface(cfg: &ServerConfig, label: &str) {
+    let resource_uris: Vec<&str> = cfg.resources.iter().map(|r| r.uri.as_str()).collect();
+    for uri in [
+        "docs://london-tube/schema",
+        "docs://london-tube/examples",
+        "code-mode://learnings",
+    ] {
+        assert!(
+            resource_uris.contains(&uri),
+            "{label} ships the {uri} resource: {resource_uris:?}"
+        );
+    }
+    assert!(
+        cfg.prompts.iter().any(|p| p.name == "start_code_mode"),
+        "{label} ships the start_code_mode prompt: {:?}",
+        cfg.prompts.iter().map(|p| &p.name).collect::<Vec<_>>()
+    );
+}
+
 /// P901-EXAMPLE smoke: the user-pointable `examples/london-tube.toml` (the config
 /// a user runs via `pmcp-openapi-server --config <path>`) parses + validates
 /// through the SAME strict entry point the binary uses, and carries the full
@@ -60,23 +84,9 @@ fn pointable_example_config_parses_and_validates() {
     let cfg = ServerConfig::from_toml_strict_validated(&config_text)
         .expect("pointable examples/london-tube.toml parses + validates");
 
-    // Same three Code Mode context resources as the enriched fixture.
-    for uri in [
-        "docs://london-tube/schema",
-        "docs://london-tube/examples",
-        "code-mode://learnings",
-    ] {
-        assert!(
-            cfg.resources.iter().any(|r| r.uri == uri),
-            "pointable example ships the {uri} resource: {:?}",
-            cfg.resources.iter().map(|r| &r.uri).collect::<Vec<_>>()
-        );
-    }
-    // Same start_code_mode prompt as the enriched fixture.
-    assert!(
-        cfg.prompts.iter().any(|p| p.name == "start_code_mode"),
-        "pointable example ships the start_code_mode prompt"
-    );
+    // Same three Code Mode context resources + start_code_mode prompt as the
+    // enriched fixture (shared surface — asserted in one helper to prevent drift).
+    assert_london_tube_code_mode_surface(&cfg, "pointable example");
     // No real credential committed — only the ${TFL_APP_KEY} placeholder.
     assert!(
         config_text.contains("${TFL_APP_KEY}"),
@@ -108,25 +118,9 @@ fn london_tube_fixture() {
         "script tool disrupted-lines-with-detail present: {tool_names:?}"
     );
 
-    // (1a) The enriched showcase ships all three Code Mode context resources.
-    let resource_uris: Vec<&str> = cfg.resources.iter().map(|r| r.uri.as_str()).collect();
-    for uri in [
-        "docs://london-tube/schema",
-        "docs://london-tube/examples",
-        "code-mode://learnings",
-    ] {
-        assert!(
-            cfg.resources.iter().any(|r| r.uri == uri),
-            "enriched fixture ships the {uri} resource: {resource_uris:?}"
-        );
-    }
-
-    // (1b) The enriched showcase ships the start_code_mode Code Mode prompt.
-    assert!(
-        cfg.prompts.iter().any(|p| p.name == "start_code_mode"),
-        "enriched fixture ships the start_code_mode prompt: {:?}",
-        cfg.prompts.iter().map(|p| &p.name).collect::<Vec<_>>()
-    );
+    // (1a/1b) The enriched showcase ships all three Code Mode context resources
+    // and the start_code_mode prompt (shared surface — see helper).
+    assert_london_tube_code_mode_surface(&cfg, "enriched fixture");
 
     // (1c) cost_hint VALUE check: get-tube-status parses to the allowed "low" value
     // (not a mere presence check — proves the cost_hint enum string parsed).
@@ -142,11 +136,7 @@ fn london_tube_fixture() {
     assert_eq!(
         cost_hint,
         Some("low"),
-        "get-tube-status cost_hint must parse to the allowed \"low\" value"
-    );
-    assert!(
-        matches!(cost_hint, Some("low" | "medium" | "high")),
-        "cost_hint must be one of the allowed enum strings (low|medium|high): {cost_hint:?}"
+        "get-tube-status cost_hint must parse to the allowed \"low\" value (one of low|medium|high)"
     );
 
     // The api_key query-param backend auth (the D-04 path) is declared.
