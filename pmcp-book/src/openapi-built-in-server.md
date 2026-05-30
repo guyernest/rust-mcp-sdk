@@ -172,6 +172,85 @@ required = false
 The static variants ignore any inbound MCP token; only `oauth_passthrough`
 forwards the per-request inbound token to the backend.
 
+## Resources & Prompts (Code Mode Context)
+
+Like the config itself, every `[[resources]]` and `[[prompts]]` block is parsed
+with `#[serde(deny_unknown_fields)]` — a misspelled key is a hard parse error,
+not a silent default. These two block types let you ship the *context* an agent
+needs to author good Code Mode scripts, entirely from config.
+
+Define a resource with an inline body and an addressable URI:
+
+```toml
+[[resources]]
+uri = "docs://london-tube/schema"
+name = "TfL Line API Schema"
+description = "Endpoints, response shapes, and line ids for the TfL Line API"
+mime_type = "text/markdown"
+content = """
+# TfL Line API (subset)
+
+- `GET /Line/Mode/tube/Status` — status for every tube line
+- `GET /Line/{lineId}/Disruption` — disruption detail for one line
+
+A `statusSeverity` below 10 means the line is disrupted. Sample line ids:
+`victoria`, `central`, `bakerloo` (line ids are lowercase).
+"""
+
+[[resources]]
+uri = "code-mode://learnings"
+name = "TfL Code Mode Learnings"
+description = "Tips and gotchas for authoring TfL Code Mode scripts"
+mime_type = "text/markdown"
+content = """
+# TfL Code Mode Learnings
+
+- Bind the `api.get(...)` result to a `const` before you `return` it.
+- Line ids are lowercase — `victoria`, not `Victoria`.
+- Filter on `statusSeverity < 10` to find disrupted lines.
+"""
+```
+
+Then bundle those URIs into a prompt the agent loads to prime a Code Mode
+session:
+
+```toml
+[[prompts]]
+name = "start_code_mode"
+description = "Load all context needed for Code Mode script generation"
+include_resources = [
+    "docs://london-tube/schema",
+    "code-mode://learnings",
+]
+```
+
+**What this gives you, in practice:** the server registers these static
+resources and prompts at startup directly from config — change the TOML, restart,
+and the new surface is live. No recompile, no Rust. A client can `resources/read`
+the schema doc or `prompts/get` the `start_code_mode` prompt the moment the server
+boots. *(Under the hood, `assemble.rs` wires `cfg.resources` →
+`StaticResourceHandler` → `builder.resources_arc()` and `cfg.prompts` →
+`register_prompts` → `builder.prompt_arc()` — but that wiring is the maintainer's
+concern, not yours.)*
+
+These resources are **inert static markdown context** — documentation the model
+reads to write better scripts. They are *not* executable scripts; the server
+never runs resource content. (The runnable surface is `[[tools]]`, covered above.)
+
+> **Pitfall — keep URIs in sync.** Every URI in a prompt's `include_resources`
+> list must **exactly** match a `uri` value on a defined `[[resources]]` block.
+> A typo (e.g. `docs://london-tube/shema`) resolves to a missing resource and the
+> prompt loads with a hole in its context rather than erroring loudly.
+
+**See also.** The SQL built-in server uses the *identical* resources/prompts
+config schema. Its pointable showcase config —
+[`crates/pmcp-sql-server/tests/fixtures/reference-config.toml`][sql-ref] — ships
+the same `[[resources]]` + `start_code_mode` `[[prompts]]` shape against a
+Chinook database, so a config you learn here transfers straight across to the SQL
+sibling ([Chapter 12.10](ch12-10-config-driven-sql-servers.md)).
+
+[sql-ref]: https://github.com/paiml/rust-mcp-sdk/blob/main/crates/pmcp-sql-server/tests/fixtures/reference-config.toml
+
 ## The OpenAPI Spec Is Optional (D-03)
 
 `--spec` (the scaffold's `api.yaml`) is **optional**. A curated-only server —
