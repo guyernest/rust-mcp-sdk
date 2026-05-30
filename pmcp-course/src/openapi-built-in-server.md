@@ -188,6 +188,76 @@ no spec. When supplied, the spec becomes the Code Mode `api_schema` resource. If
 Code Mode is enabled but no spec is present, the server warns and proceeds —
 Code Mode runs without the contract rather than failing.
 
+## Resources & Prompts (Code Mode Context)
+
+`[[resources]]` and `[[prompts]]` blocks ship the *context* an agent needs to
+write good Code Mode scripts — straight from config, no Rust. Like the rest of the
+config they parse with `#[serde(deny_unknown_fields)]`, so a misspelled key is a
+hard parse error, not a silent default.
+
+A resource is inline markdown addressed by a URI:
+
+```toml
+[[resources]]
+uri = "docs://london-tube/schema"
+name = "TfL Line API Schema"
+description = "Endpoints, response shapes, and line ids for the TfL Line API"
+mime_type = "text/markdown"
+content = """
+# TfL Line API (subset)
+
+- `GET /Line/Mode/tube/Status` — status for every tube line
+- `GET /Line/{lineId}/Disruption` — disruption detail for one line
+
+A `statusSeverity` below 10 means the line is disrupted. Sample line ids:
+`victoria`, `central`, `bakerloo` (line ids are lowercase).
+"""
+
+[[resources]]
+uri = "code-mode://learnings"
+name = "TfL Code Mode Learnings"
+description = "Tips and gotchas for authoring TfL Code Mode scripts"
+mime_type = "text/markdown"
+content = """
+# TfL Code Mode Learnings
+
+- Bind the `api.get(...)` result to a `const` before you `return` it.
+- Line ids are lowercase — `victoria`, not `Victoria`.
+- Filter on `statusSeverity < 10` to find disrupted lines.
+"""
+```
+
+A prompt bundles those URIs into the context an agent loads to start a session:
+
+```toml
+[[prompts]]
+name = "start_code_mode"
+description = "Load all context needed for Code Mode script generation"
+include_resources = [
+    "docs://london-tube/schema",
+    "code-mode://learnings",
+]
+```
+
+In practice: the server registers these static resources and prompts at startup
+from config — change the TOML, restart, the new surface is live, no recompile.
+*(Under the hood `assemble.rs` wires `cfg.resources` → `StaticResourceHandler` →
+`builder.resources_arc()` and `cfg.prompts` → `register_prompts` →
+`builder.prompt_arc()` — a maintainer detail, not something you wire by hand.)*
+
+These resources are **inert static markdown context** the model reads — *not*
+executable scripts; the server never runs resource content. Every URI in a
+prompt's `include_resources` must **exactly** match a defined `[[resources]]`
+`uri`, or the prompt loads against a missing resource.
+
+**See also:** the SQL built-in server uses the *identical* resources/prompts
+schema — its pointable showcase config
+[`crates/pmcp-sql-server/tests/fixtures/reference-config.toml`][sql-ref] carries
+the same `[[resources]]` + `start_code_mode` `[[prompts]]` shape, so what you
+learn here transfers straight to the SQL sibling.
+
+[sql-ref]: https://github.com/paiml/rust-mcp-sdk/blob/main/crates/pmcp-sql-server/tests/fixtures/reference-config.toml
+
 ## Step 5: Deploy
 
 The scaffold's `deploy.toml` targets `pmcp-run` by default. Change `[target]
