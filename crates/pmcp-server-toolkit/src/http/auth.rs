@@ -77,7 +77,9 @@ pub enum AuthConfig {
 
     /// Bearer token (`Authorization: Bearer <token>`).
     Bearer {
-        /// Token value (operator-configured; may be a `${VAR}` reference resolved upstream).
+        /// Token value. Supports a `${VAR}` or `env:VAR` reference resolved from
+        /// the process environment at provider-build time (an unset reference
+        /// collapses to no-auth; the literal placeholder never reaches the wire).
         token: String,
         /// Whether authentication is required.
         #[serde(default = "default_true")]
@@ -86,9 +88,12 @@ pub enum AuthConfig {
 
     /// HTTP Basic auth (`Authorization: Basic <base64(user:pass)>`).
     Basic {
-        /// Username.
+        /// Username. Supports a `${VAR}` / `env:VAR` reference (resolved at
+        /// provider-build time) for symmetry with `password`.
         username: String,
-        /// Password.
+        /// Password. Supports a `${VAR}` or `env:VAR` reference resolved from the
+        /// process environment at provider-build time (the literal placeholder
+        /// never reaches the wire).
         password: String,
         /// Whether authentication is required.
         #[serde(default = "default_true")]
@@ -99,9 +104,12 @@ pub enum AuthConfig {
     OAuth2ClientCredentials {
         /// Token endpoint URL.
         token_url: String,
-        /// Client ID.
+        /// Client ID. Supports a `${VAR}` / `env:VAR` reference resolved at
+        /// provider-build time.
         client_id: String,
-        /// Client secret.
+        /// Client secret. Supports a `${VAR}` or `env:VAR` reference resolved from
+        /// the process environment at provider-build time (the literal
+        /// placeholder never reaches the token endpoint).
         client_secret: String,
         /// Requested scopes.
         #[serde(default)]
@@ -435,40 +443,61 @@ impl HttpAuthProvider for OAuthPassthroughAuth {
 /// This constructor never fails today (returns `Ok`) — the fallible signature is
 /// reserved so a future variant requiring construction-time validation can error
 /// without a breaking change.
-/// Resolve a single api_key value, expanding a `${VAR}` or `env:VAR` reference
-/// from the process environment.
+/// The single brace/env-ref parse core shared by EVERY credential-resolution
+/// path (api_key, bearer token, basic password, oauth2 client_secret).
 ///
-/// The outbound api_key (carried as a query param or header) frequently holds a
-/// secret reference (`"${TFL_APP_KEY}"`) rather than a literal — mirroring the
-/// `token_secret` convention in [`crate::code_mode`]. Without expansion the
-/// LITERAL `${TFL_APP_KEY}` would be sent to the backend, so 100% of authenticated
-/// calls would fail (this is a correctness requirement, not a convenience).
+/// Returns `Some(var_name)` when `raw` is a secret REFERENCE — either the
+/// `"env:VAR"` or the `"${VAR}"` form — and `None` for a plain literal (which the
+/// caller uses verbatim). A malformed brace reference (e.g. `"${}"`) is treated
+/// as a reference to an empty name, i.e. `Some("")`, so the caller resolves it to
+/// the empty string (omission) rather than shipping the literal `${}`.
+///
+/// This consolidates the two brace parsers that previously existed (the inline
+/// `${`-strip in the old api_key resolver here and `expand_braced_var` in
+/// `crate::code_mode`): all credential resolution now flows through this one
+/// chokepoint so the env-ref discipline cannot drift per-variant.
+fn parse_env_ref(raw: &str) -> Option<&str> {
+    if let Some(v) = raw.strip_prefix("env:") {
+        Some(v)
+    } else {
+        // `${...}` → the inner name (possibly empty for the malformed `${}` form).
+        raw.strip_prefix("${").and_then(|s| s.strip_suffix('}'))
+    }
+}
+
+/// Resolve a single credential value, expanding a `${VAR}` or `env:VAR` reference
+/// from the process environment — the ONE chokepoint applied to every credential
+/// field (api_key, bearer `token`, basic `password`, oauth2 `client_secret`) as
+/// it enters [`create_auth_provider`].
+///
+/// A credential frequently holds a secret reference (`"${GITHUB_PAT}"`) rather
+/// than a literal — mirroring the `token_secret` convention in
+/// [`crate::code_mode`]. Without expansion the LITERAL `${GITHUB_PAT}` would be
+/// sent to the backend, so 100% of authenticated calls would fail (this is a
+/// correctness requirement, not a convenience).
 ///
 /// Resolution rules (matching the `token_secret` env-ref discipline):
 /// - `"${VAR}"` / `"env:VAR"` → the value of `VAR` from the process env.
 /// - An UNSET or set-but-empty/whitespace `VAR` resolves to an empty string, so
-///   a `required = false` api_key is OMITTED rather than sent as a degenerate
-///   empty/placeholder value.
+///   a `required = false` credential is OMITTED rather than sent as a degenerate
+///   empty/placeholder value (each variant's existing empty→`NoAuth` check then
+///   collapses the provider to no-auth — the correct failure mode, NOT shipping
+///   the literal `${...}`).
 /// - A plain literal (no `${...}` / `env:` prefix) is returned verbatim.
+/// - A malformed reference (e.g. `"${}"`) resolves to an empty string.
 ///
 /// No error path: an unresolvable reference yields an empty string (omission),
 /// never a panic and never the literal `${...}` reaching the wire.
-fn resolve_api_key_value(raw: &str) -> String {
-    let var = if let Some(v) = raw.strip_prefix("env:") {
-        Some(v)
-    } else if let Some(inner) = raw.strip_prefix("${").and_then(|s| s.strip_suffix('}')) {
-        (!inner.is_empty()).then_some(inner)
-    } else {
+fn resolve_secret_ref(raw: &str) -> String {
+    match parse_env_ref(raw) {
         // Plain literal — used verbatim.
-        return raw.to_string();
-    };
-    match var {
+        None => raw.to_string(),
+        // Malformed reference (e.g. `"${}"`) → empty (omitted).
+        Some(name) if name.is_empty() => String::new(),
         Some(name) => std::env::var(name)
             .ok()
             .filter(|v| !v.trim().is_empty())
             .unwrap_or_default(),
-        // Malformed reference (e.g. `"${}"`) → empty (omitted).
-        None => String::new(),
     }
 }
 
@@ -477,7 +506,7 @@ fn resolve_api_key_value(raw: &str) -> String {
 fn expand_api_key_map(map: &HashMap<String, String>) -> HashMap<String, String> {
     map.iter()
         .filter_map(|(k, v)| {
-            let resolved = resolve_api_key_value(v);
+            let resolved = resolve_secret_ref(v);
             (!resolved.is_empty()).then(|| (k.clone(), resolved))
         })
         .collect()
@@ -510,24 +539,27 @@ pub fn create_auth_provider(
             }
         },
         AuthConfig::Bearer { token, .. } => {
+            // Resolve `${VAR}` / `env:VAR` BEFORE the empty-check so the RESOLVED
+            // token (never the literal placeholder) reaches the wire; an unset
+            // ref collapses to NoAuth (the correct failure mode).
+            let token = resolve_secret_ref(token);
             if token.is_empty() {
                 Arc::new(NoAuth)
             } else {
-                Arc::new(BearerAuth {
-                    token: token.clone(),
-                })
+                Arc::new(BearerAuth { token })
             }
         },
         AuthConfig::Basic {
             username, password, ..
         } => {
+            // Resolve both fields (username typically not a secret, but support
+            // `${VAR}` for symmetry) BEFORE the empty-check.
+            let username = resolve_secret_ref(username);
+            let password = resolve_secret_ref(password);
             if username.is_empty() && password.is_empty() {
                 Arc::new(NoAuth)
             } else {
-                Arc::new(BasicAuth {
-                    username: username.clone(),
-                    password: password.clone(),
-                })
+                Arc::new(BasicAuth { username, password })
             }
         },
         AuthConfig::OAuth2ClientCredentials {
@@ -537,13 +569,18 @@ pub fn create_auth_provider(
             scopes,
             ..
         } => {
+            // Resolve client_id + client_secret BEFORE the empty-check so the
+            // RESOLVED secret (never the literal placeholder) is sent to the token
+            // endpoint; an unset ref collapses to NoAuth.
+            let client_id = resolve_secret_ref(client_id);
+            let client_secret = resolve_secret_ref(client_secret);
             if client_id.is_empty() || client_secret.is_empty() {
                 Arc::new(NoAuth)
             } else {
                 Arc::new(OAuth2ClientCredentialsAuth::new(
                     token_url.clone(),
-                    client_id.clone(),
-                    client_secret.clone(),
+                    client_id,
+                    client_secret,
                     scopes.clone(),
                 ))
             }
@@ -709,14 +746,15 @@ mod tests {
 
     #[test]
     fn test_resolve_api_key_value_forms() {
+        // api_key now resolves through the shared `resolve_secret_ref` chokepoint.
         let var = "PMCP_TEST_RESOLVE_API_KEY_FORM";
         std::env::set_var(var, "resolved");
-        assert_eq!(resolve_api_key_value(&format!("${{{var}}}")), "resolved");
-        assert_eq!(resolve_api_key_value(&format!("env:{var}")), "resolved");
-        assert_eq!(resolve_api_key_value("plain-literal"), "plain-literal");
+        assert_eq!(resolve_secret_ref(&format!("${{{var}}}")), "resolved");
+        assert_eq!(resolve_secret_ref(&format!("env:{var}")), "resolved");
+        assert_eq!(resolve_secret_ref("plain-literal"), "plain-literal");
         std::env::remove_var(var);
-        assert_eq!(resolve_api_key_value(&format!("${{{var}}}")), "");
-        assert_eq!(resolve_api_key_value("${}"), "");
+        assert_eq!(resolve_secret_ref(&format!("${{{var}}}")), "");
+        assert_eq!(resolve_secret_ref("${}"), "");
     }
 
     #[tokio::test]
@@ -876,5 +914,211 @@ token = "abc"
     fn test_auth_config_default_is_none() {
         assert!(matches!(AuthConfig::default(), AuthConfig::None));
         assert!(!AuthConfig::None.is_required());
+    }
+
+    // -------------------------------------------------------------------------
+    // Plan 90-11: single secret-resolution chokepoint across ALL variants.
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_resolve_secret_ref_forms() {
+        let var = "PMCP_TEST_RESOLVE_SECRET_REF_FORM";
+        std::env::set_var(var, "secret");
+        assert_eq!(resolve_secret_ref(&format!("${{{var}}}")), "secret");
+        assert_eq!(resolve_secret_ref(&format!("env:{var}")), "secret");
+        assert_eq!(resolve_secret_ref("plain-literal"), "plain-literal");
+        std::env::remove_var(var);
+        // Unset / malformed → empty (omitted), never the literal.
+        assert_eq!(resolve_secret_ref(&format!("${{{var}}}")), "");
+        assert_eq!(resolve_secret_ref("${}"), "");
+    }
+
+    #[test]
+    fn test_parse_env_ref_distinguishes_literal_from_reference() {
+        assert_eq!(parse_env_ref("env:FOO"), Some("FOO"));
+        assert_eq!(parse_env_ref("${FOO}"), Some("FOO"));
+        assert_eq!(parse_env_ref("${}"), Some("")); // malformed-but-a-reference
+        assert_eq!(parse_env_ref("plain"), None);
+        assert_eq!(parse_env_ref("${FOO"), None); // unterminated → literal
+    }
+
+    #[tokio::test]
+    async fn test_bearer_resolves_braced_env_ref() {
+        let var = "PMCP_TEST_BEARER_BRACED_PAT";
+        std::env::set_var(var, "ghp_abc");
+        let cfg = AuthConfig::Bearer {
+            token: format!("${{{var}}}"),
+            required: true,
+        };
+        let auth = create_auth_provider(&cfg).unwrap();
+        let mut headers = HeaderMap::new();
+        let mut query = HashMap::new();
+        auth.apply(&mut headers, &mut query, None).await.unwrap();
+        let rendered = headers
+            .get(reqwest::header::AUTHORIZATION)
+            .unwrap()
+            .to_str()
+            .unwrap();
+        assert_eq!(rendered, "Bearer ghp_abc");
+        assert!(
+            !rendered.contains("${"),
+            "the literal ${{...}} must never reach the Authorization header"
+        );
+        std::env::remove_var(var);
+    }
+
+    #[tokio::test]
+    async fn test_bearer_resolves_env_prefix_ref() {
+        let var = "PMCP_TEST_BEARER_ENV_PAT";
+        std::env::set_var(var, "ghp_xyz");
+        let cfg = AuthConfig::Bearer {
+            token: format!("env:{var}"),
+            required: true,
+        };
+        let auth = create_auth_provider(&cfg).unwrap();
+        let mut headers = HeaderMap::new();
+        let mut query = HashMap::new();
+        auth.apply(&mut headers, &mut query, None).await.unwrap();
+        assert_eq!(
+            headers.get(reqwest::header::AUTHORIZATION).unwrap(),
+            "Bearer ghp_xyz"
+        );
+        std::env::remove_var(var);
+    }
+
+    #[tokio::test]
+    async fn test_bearer_unset_ref_collapses_to_no_auth() {
+        let var = "PMCP_TEST_BEARER_UNSET_PAT";
+        std::env::remove_var(var);
+        let cfg = AuthConfig::Bearer {
+            token: format!("${{{var}}}"),
+            required: true,
+        };
+        let auth = create_auth_provider(&cfg).unwrap();
+        let mut headers = HeaderMap::new();
+        let mut query = HashMap::new();
+        auth.apply(&mut headers, &mut query, None).await.unwrap();
+        // Unset ref → NoAuth: no Authorization header, and CERTAINLY not the literal.
+        assert!(headers.is_empty());
+        assert!(query.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_basic_resolves_password_braced_env_ref() {
+        use base64::Engine;
+        let var = "PMCP_TEST_BASIC_BRACED_PW";
+        std::env::set_var(var, "s3cr3t");
+        let cfg = AuthConfig::Basic {
+            username: "u".to_string(),
+            password: format!("${{{var}}}"),
+            required: true,
+        };
+        let auth = create_auth_provider(&cfg).unwrap();
+        let mut headers = HeaderMap::new();
+        let mut query = HashMap::new();
+        auth.apply(&mut headers, &mut query, None).await.unwrap();
+        let rendered = headers
+            .get(reqwest::header::AUTHORIZATION)
+            .unwrap()
+            .to_str()
+            .unwrap();
+        let expected = format!(
+            "Basic {}",
+            base64::engine::general_purpose::STANDARD.encode("u:s3cr3t")
+        );
+        assert_eq!(rendered, expected);
+        assert!(
+            !rendered.contains("${"),
+            "the literal ${{...}} must never reach the Basic credential"
+        );
+        std::env::remove_var(var);
+    }
+
+    #[tokio::test]
+    async fn test_basic_resolves_password_env_prefix_ref() {
+        use base64::Engine;
+        let var = "PMCP_TEST_BASIC_ENV_PW";
+        std::env::set_var(var, "p4ss");
+        let cfg = AuthConfig::Basic {
+            username: "user".to_string(),
+            password: format!("env:{var}"),
+            required: true,
+        };
+        let auth = create_auth_provider(&cfg).unwrap();
+        let mut headers = HeaderMap::new();
+        let mut query = HashMap::new();
+        auth.apply(&mut headers, &mut query, None).await.unwrap();
+        let expected = format!(
+            "Basic {}",
+            base64::engine::general_purpose::STANDARD.encode("user:p4ss")
+        );
+        assert_eq!(
+            headers.get(reqwest::header::AUTHORIZATION).unwrap(),
+            expected.as_str()
+        );
+        std::env::remove_var(var);
+    }
+
+    #[tokio::test]
+    async fn test_oauth2_resolves_client_secret_via_token_endpoint() {
+        // Drive fetch_token against a wiremock token endpoint asserting the
+        // RESOLVED client_secret (not the literal `${...}`) is in the form body.
+        use wiremock::matchers::{body_string_contains, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let var = "PMCP_TEST_OAUTH2_BRACED_CS";
+        std::env::set_var(var, "xyz");
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/token"))
+            .and(body_string_contains("client_secret=xyz"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "access_token": "issued-token"
+                })),
+            )
+            .mount(&server)
+            .await;
+
+        let cfg = AuthConfig::OAuth2ClientCredentials {
+            token_url: format!("{}/token", server.uri()),
+            client_id: "cid".to_string(),
+            client_secret: format!("${{{var}}}"),
+            scopes: vec![],
+            required: true,
+        };
+        let auth = create_auth_provider(&cfg).unwrap();
+        let mut headers = HeaderMap::new();
+        let mut query = HashMap::new();
+        // apply() triggers fetch_token; the wiremock body matcher (client_secret=xyz)
+        // FAILS the request (404) unless the resolved secret was sent — so success
+        // proves the resolved `xyz` (not the literal `${VAR}`) reached the wire.
+        auth.apply(&mut headers, &mut query, None).await.unwrap();
+        assert_eq!(
+            headers.get(reqwest::header::AUTHORIZATION).unwrap(),
+            "Bearer issued-token"
+        );
+        std::env::remove_var(var);
+    }
+
+    #[tokio::test]
+    async fn test_oauth2_unset_secret_collapses_to_no_auth() {
+        let var = "PMCP_TEST_OAUTH2_UNSET_CS";
+        std::env::remove_var(var);
+        let cfg = AuthConfig::OAuth2ClientCredentials {
+            token_url: "http://127.0.0.1:1/token".to_string(),
+            client_id: "cid".to_string(),
+            client_secret: format!("${{{var}}}"),
+            scopes: vec![],
+            required: true,
+        };
+        let auth = create_auth_provider(&cfg).unwrap();
+        let mut headers = HeaderMap::new();
+        let mut query = HashMap::new();
+        // Unset secret → NoAuth: apply does NOT attempt any network fetch.
+        auth.apply(&mut headers, &mut query, None).await.unwrap();
+        assert!(headers.is_empty());
+        assert!(query.is_empty());
     }
 }
