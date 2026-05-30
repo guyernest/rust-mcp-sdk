@@ -1658,6 +1658,24 @@ Plans:
 | 89. Documentation & Migration | 0/? | Not started | - |
 | 90. OpenAPI Built-In Server | 13/13 | Complete   | 2026-05-30 |
 
+### Phase 90.2: OpenAPI Built-In Server — Advanced Example (Contoso M365: OAuth passthrough + Excel-over-Graph) (INSERTED)
+
+**Goal:** Ship a second, advanced OpenAPI showcase that demonstrates enterprise OAuth and business-data access, distinct from London Tube's `api_key` (90.1). Vehicle: Microsoft Graph / M365 for a fictional org "Contoso", READ-ONLY. The headline narrative: *keep your existing Excel files, connect them to AI via MCP* — and the business analyst curates the relevant slice of a huge API rather than dumping full Graph metadata. Auth = `oauth_passthrough`: an org admin consents once to a bounded scope (the ceiling of what the server may request), and the signed-in user's forwarded token (from their MCP client, e.g. ChatGPT) governs per-file access — the server holds no standing credentials and can only ever act as the calling user.
+
+Concrete shape: a demo Excel workbook in SharePoint/OneDrive with two sheets — **Customers** and **Orders** (orders belong to customers). Two explicit MCP tools over the Graph Excel range-read API — `get_customer` and `get_customer_orders` — with everything richer left to Code Mode (e.g. "customers who bought more than 100 in the last 3 months"). A curated/trimmed Graph OpenAPI spec (~3–4 read-only ops: list SharePoint files, file content, Excel worksheet range read), NOT the full metadata.
+
+This is config + curated spec + fixture + docs, NOT a feature build: `AuthConfig::OAuthPassthrough` (`crates/pmcp-server-toolkit/src/http/auth.rs:123`) and the full passthrough chain (`TokenCaptureAuthProvider → AuthContext → HttpCodeExecutor::with_inbound_token → outbound forward`, `crates/pmcp-openapi-server/src/assemble.rs:22-31,93`) already ship from Phase 90 (Plan 90-10). Mirror the London Tube structure (90.1): fixture + pointable example + book/course chapters + offline `parity_replay` (wiremock asserts the forwarded `Authorization: Bearer` reached the Graph backend), plus an `#[ignore]`+env-gated live test like `parity_live_tfl`. NOTE: `@odata.nextLink` pagination is NOT handled by the connector today and is NOT needed for a single demo workbook — explicitly out of scope (avoids turning this into a feature build).
+
+**Decision:** READ-ONLY (no Excel write / workbook-session path); `oauth_passthrough` is the hero auth path (app-only client-credentials only mentioned as a documented contrast, if at all).
+**SQL/OpenAPI parallels (mirror these):** 90.1 london-tube fixture/example/chapters/`parity_replay.rs`; `crates/pmcp-sql-server/tests/fixtures/reference-config.toml`.
+**Requirements**: P902-SPEC, P902-CONFIG, P902-FIXTURE, P902-PARITY, P902-EXAMPLE, P902-DOCS-BOOK, P902-DOCS-COURSE (provisional — SPEC.md locks final set)
+**Depends on:** Phase 90
+**Plans:** 0 plans
+
+Plans:
+
+- [ ] TBD (run /gsd:spec-phase 90.2 then /gsd:plan-phase 90.2 to break down)
+
 ### Phase 90.1: OpenAPI Built-In Server — Examples & Article Parity (INSERTED)
 
 **Goal:** Bring the OpenAPI built-in server's examples and documentation to full parity with the SQL server. Scope (locked via progress routing):
