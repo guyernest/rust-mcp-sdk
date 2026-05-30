@@ -4,8 +4,8 @@ milestone: v2.2
 milestone_name: Configuration-Only MCP Servers
 status: executing
 stopped_at: Completed 90-13-PLAN.md
-last_updated: "2026-05-30T03:04:55.816Z"
-last_activity: 2026-05-30 -- Phase 90.1 execution started
+last_updated: "2026-05-30T03:26:11.733Z"
+last_activity: 2026-05-30
 progress:
   total_phases: 45
   completed_phases: 39
@@ -25,10 +25,10 @@ See: .planning/PROJECT.md (updated 2026-05-17)
 
 ## Current Position
 
-Phase: 90.1 (openapi-built-in-server-examples-article-parity-finish-the-o) — EXECUTING
-Plan: 1 of 3
+Phase: 999.1
+Plan: Not started
 Status: Executing Phase 90.1
-Last activity: 2026-05-30 -- Phase 90.1 execution started
+Last activity: 2026-05-30
 
 **Carryover from v2.1:** Phase 81 (update-pmcp-book-and-pmcp-course-with-v2-advanced-topics-cod) was executing at v2.1 close; will be tracked separately and folded into v2.1 completion. Operator follow-ups deferred from Phase 75 Wave 5 still pending: (a) merge Phase 75 Wave 5 + 75.5 to paiml/rust-mcp-sdk:main; (b) post-merge run `gh workflow run quality-badges.yml -R paiml/rust-mcp-sdk` and append observation to `.planning/phases/75-fix-pmat-issues/75-05-GATE-VERIFICATION.md` "## Badge flip observation" section.
 
@@ -62,7 +62,7 @@ Last activity: 2026-05-30 -- Phase 90.1 execution started
 
 **Velocity:**
 
-- Total plans completed: 152 (v1.0: 9, v1.1: 10, v1.2: 9, v1.3: 12, v1.4: 10, v1.5: 6, v1.6: 5, v1.7: 4, v2.0: 11)
+- Total plans completed: 155 (v1.0: 9, v1.1: 10, v1.2: 9, v1.3: 12, v1.4: 10, v1.5: 6, v1.6: 5, v1.7: 4, v2.0: 11)
 - Total phases completed: 29
 
 ## Accumulated Context
