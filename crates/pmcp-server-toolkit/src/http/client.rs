@@ -141,45 +141,77 @@ impl HttpClient {
     }
 
     /// Substitute path parameters into the operation path template.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HttpConnectorError::Backend`] (via [`render_scalar`]) when a path
+    /// parameter value is a non-scalar (`Object`/`Array`) — such a value would
+    /// otherwise be JSON-stringified into the URL (WR-03).
     fn substitute_path(
         operation: &Operation,
         args: &serde_json::Map<String, serde_json::Value>,
-    ) -> String {
+    ) -> Result<String, HttpConnectorError> {
         let mut path = operation.path.clone();
         for param in operation.path_parameters() {
             let placeholder = format!("{{{}}}", param.name);
             if let Some(value) = args.get(&param.name) {
-                let value_str = value_to_string(value);
+                let value_str = render_scalar(&param.name, value)?;
                 path = path.replace(&placeholder, &value_str);
             }
         }
-        path
+        Ok(path)
+    }
+
+    /// Render one query value: a scalar passes through; an array-of-scalars is
+    /// comma-joined (OpenAPI `form`/`explode:false` style); an object or an array
+    /// with any non-scalar member is rejected (each member is checked through
+    /// [`render_scalar`]).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HttpConnectorError::Backend`] naming `param_name` when `value`
+    /// (or any array member) is a non-scalar.
+    fn render_query_value(
+        param_name: &str,
+        value: &serde_json::Value,
+    ) -> Result<String, HttpConnectorError> {
+        if let serde_json::Value::Array(arr) = value {
+            // Comma-separate array members (OpenAPI `form`/`simple` style). A
+            // nested non-scalar member is rejected by render_scalar.
+            let mut csv = String::new();
+            for (i, member) in arr.iter().enumerate() {
+                if i > 0 {
+                    csv.push(',');
+                }
+                csv.push_str(&render_scalar(param_name, member)?);
+            }
+            Ok(csv)
+        } else {
+            render_scalar(param_name, value)
+        }
     }
 
     /// Build the query map from query-located params present in `args`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HttpConnectorError::Backend`] naming the offending parameter when
+    /// a query value is an object, or an array containing a non-scalar member
+    /// (WR-03). A scalar or an array-of-scalars behaves exactly as before.
     fn build_query(
         operation: &Operation,
         args: &serde_json::Map<String, serde_json::Value>,
-    ) -> HashMap<String, String> {
+    ) -> Result<HashMap<String, String>, HttpConnectorError> {
         let mut query = HashMap::new();
         for param in operation.query_parameters() {
             if let Some(value) = args.get(&param.name) {
-                if let serde_json::Value::Array(arr) = value {
-                    // Comma-separate array members (OpenAPI `form`/`simple` style).
-                    let mut csv = String::new();
-                    for (i, member) in arr.iter().enumerate() {
-                        if i > 0 {
-                            csv.push(',');
-                        }
-                        csv.push_str(&value_to_string(member));
-                    }
-                    query.insert(param.name.clone(), csv);
-                } else {
-                    query.insert(param.name.clone(), value_to_string(value));
-                }
+                query.insert(
+                    param.name.clone(),
+                    Self::render_query_value(&param.name, value)?,
+                );
             }
         }
-        query
+        Ok(query)
     }
 
     /// Build the header map from header-located params present in `args`.
@@ -193,7 +225,10 @@ impl HttpClient {
                 let name = HeaderName::try_from(param.name.as_str()).map_err(|_| {
                     HttpConnectorError::InvalidHeader("invalid header name".to_string())
                 })?;
-                let val = HeaderValue::try_from(value_to_string(value)).map_err(|_| {
+                // Reject a non-scalar header value (naming the param) before it
+                // can be JSON-stringified into the header (WR-03).
+                let rendered = render_scalar(&param.name, value)?;
+                let val = HeaderValue::try_from(rendered).map_err(|_| {
                     HttpConnectorError::InvalidHeader("invalid header value".to_string())
                 })?;
                 headers.insert(name, val);
@@ -289,13 +324,50 @@ impl HttpClient {
     }
 }
 
-/// Stringify a JSON scalar for use in a path / query / header position.
-fn value_to_string(value: &serde_json::Value) -> String {
+/// Render a JSON scalar for use in a path / query / header position, REJECTING
+/// non-scalar values (WR-03 / GAP 4).
+///
+/// # The decided rule (uniform)
+///
+/// The `http::schema::Parameter` model carries NO OpenAPI `style` / `explode` /
+/// `type` hint, so there is no per-parameter serialization directive to honor;
+/// the rule must therefore be uniform across every path / query / header
+/// position:
+///
+/// - A scalar (`String`, `Number`, `Bool`, `Null`) renders to a bare string
+///   (`Null` → `"null"`, matching the `code_mode::HttpCodeExecutor::scalar_str`
+///   counterpart so the two HTTP surfaces stay consistent).
+/// - A query parameter that is an **array of scalars** is comma-joined by the
+///   caller ([`build_query`]); each member is rendered through this function so a
+///   nested non-scalar member is rejected.
+/// - An `Object`, an array containing any non-scalar member, or ANY non-scalar
+///   in path / header position is **rejected** with a typed error that names the
+///   parameter — it is NEVER JSON-stringified into the URL/header (which would
+///   leak literal `{`/`[`/`"` that then percent-encode into a silently-wrong
+///   request).
+///
+/// # Errors
+///
+/// Returns [`HttpConnectorError::Backend`] naming `param_name` when `value` is a
+/// non-scalar (`Object` or `Array`). Per the module's redaction discipline
+/// (Pitfall 5) the message names the PARAMETER ONLY — never the value.
+fn render_scalar(
+    param_name: &str,
+    value: &serde_json::Value,
+) -> Result<String, HttpConnectorError> {
     match value {
-        serde_json::Value::String(s) => s.clone(),
-        serde_json::Value::Number(n) => n.to_string(),
-        serde_json::Value::Bool(b) => b.to_string(),
-        other => other.to_string(),
+        serde_json::Value::String(s) => Ok(s.clone()),
+        serde_json::Value::Number(n) => Ok(n.to_string()),
+        serde_json::Value::Bool(b) => Ok(b.to_string()),
+        serde_json::Value::Null => Ok("null".to_string()),
+        // Object OR Array: non-scalar in a path/query/header position is rejected
+        // rather than silently JSON-stringified. Name the param ONLY (Pitfall 5).
+        serde_json::Value::Object(_) | serde_json::Value::Array(_) => {
+            Err(HttpConnectorError::Backend(format!(
+                "param '{param_name}' must be a scalar (non-scalar values are \
+                 not supported in path/query/header position)"
+            )))
+        },
     }
 }
 
@@ -312,12 +384,12 @@ impl HttpConnector for HttpClient {
         // Build URL via the shared join_url helper (explicit concat, never the
         // url-crate RFC-3986 path merge) — preserves a stage prefix like /v1
         // (Pitfall 2 / T-90-01-05).
-        let substituted = Self::substitute_path(operation, args_map);
+        let substituted = Self::substitute_path(operation, args_map)?;
         let joined = join_url(self.base_url.as_str(), &substituted);
         let mut url = url::Url::parse(&joined)
             .map_err(|_| HttpConnectorError::Backend("constructed URL is invalid".to_string()))?;
 
-        let mut query = Self::build_query(operation, args_map);
+        let mut query = Self::build_query(operation, args_map)?;
         let mut headers = Self::build_headers(operation, args_map)?;
 
         // Single-call tools have no per-request passthrough token (Plan 04/06 carry
@@ -399,7 +471,7 @@ mod tests {
         let op = get_user_op();
         let mut args = serde_json::Map::new();
         args.insert("id".to_string(), serde_json::json!("42"));
-        let substituted = HttpClient::substitute_path(&op, &args);
+        let substituted = HttpClient::substitute_path(&op, &args).unwrap();
         let joined = join_url(client.base_url(), &substituted);
         assert_eq!(
             joined,
@@ -412,7 +484,7 @@ mod tests {
         let op = get_user_op();
         let mut args = serde_json::Map::new();
         args.insert("id".to_string(), serde_json::json!(7));
-        assert_eq!(HttpClient::substitute_path(&op, &args), "/users/7");
+        assert_eq!(HttpClient::substitute_path(&op, &args).unwrap(), "/users/7");
     }
 
     #[test]
@@ -421,9 +493,121 @@ mod tests {
         let mut args = serde_json::Map::new();
         args.insert("id".to_string(), serde_json::json!("42"));
         args.insert("verbose".to_string(), serde_json::json!(true));
-        let query = HttpClient::build_query(&op, &args);
+        let query = HttpClient::build_query(&op, &args).unwrap();
         assert_eq!(query.get("verbose"), Some(&"true".to_string()));
         assert!(!query.contains_key("id"));
+    }
+
+    // -- WR-03 / GAP 4: fallible scalar renderer (reject non-scalar params) -----
+
+    /// An array-of-scalars query param comma-joins (unchanged OpenAPI
+    /// `form`/`explode:false` behavior).
+    #[test]
+    fn render_query_value_comma_joins_scalar_array() {
+        let rendered =
+            HttpClient::render_query_value("tags", &serde_json::json!(["a", 2, true])).unwrap();
+        assert_eq!(rendered, "a,2,true");
+    }
+
+    /// A scalar query param renders bare (unchanged).
+    #[test]
+    fn render_query_value_scalar_passthrough() {
+        assert_eq!(
+            HttpClient::render_query_value("q", &serde_json::json!("hi")).unwrap(),
+            "hi"
+        );
+        assert_eq!(
+            HttpClient::render_query_value("n", &serde_json::json!(7)).unwrap(),
+            "7"
+        );
+    }
+
+    /// `render_scalar` renders Null as the bare string `"null"` (matches the
+    /// code_mode `scalar_str` counterpart).
+    #[test]
+    fn render_scalar_null_is_bare_null() {
+        assert_eq!(
+            render_scalar("x", &serde_json::Value::Null).unwrap(),
+            "null"
+        );
+    }
+
+    /// An OBJECT path param is rejected, naming the param; the error never echoes
+    /// the value and never produces a JSON-stringified `{`/`[`/`"`.
+    #[test]
+    fn substitute_path_rejects_object_param() {
+        let op = get_user_op();
+        let mut args = serde_json::Map::new();
+        args.insert("id".to_string(), serde_json::json!({"nested": "x"}));
+        let err = HttpClient::substitute_path(&op, &args).unwrap_err();
+        assert!(matches!(err, HttpConnectorError::Backend(_)));
+        let rendered = err.to_string();
+        assert!(
+            rendered.contains("id"),
+            "error must name the param: {rendered}"
+        );
+        for forbidden in ['{', '[', '"'] {
+            assert!(
+                !rendered.contains(forbidden),
+                "must not echo JSON: {rendered}"
+            );
+        }
+        // Pitfall 5: never echo the value.
+        assert!(
+            !rendered.contains("nested"),
+            "must not echo the value: {rendered}"
+        );
+    }
+
+    /// An OBJECT query param is rejected, naming the param.
+    #[test]
+    fn build_query_rejects_object_param() {
+        let op = get_user_op();
+        let mut args = serde_json::Map::new();
+        args.insert("verbose".to_string(), serde_json::json!({"k": "v"}));
+        let err = HttpClient::build_query(&op, &args).unwrap_err();
+        assert!(matches!(err, HttpConnectorError::Backend(_)));
+        assert!(err.to_string().contains("verbose"));
+    }
+
+    /// An array CONTAINING a non-scalar member is rejected (the scalar comma-join
+    /// is preserved only for scalar-only arrays).
+    #[test]
+    fn render_query_value_rejects_array_with_object_member() {
+        let err = HttpClient::render_query_value("tags", &serde_json::json!(["ok", {"bad": 1}]))
+            .unwrap_err();
+        assert!(matches!(err, HttpConnectorError::Backend(_)));
+        assert!(err.to_string().contains("tags"));
+    }
+
+    /// A non-scalar HEADER param is rejected, naming the param.
+    #[test]
+    fn build_headers_rejects_non_scalar_param() {
+        let op = Operation {
+            method: "GET".to_string(),
+            path: "/x".to_string(),
+            parameters: vec![Parameter::new("x-trace", ParameterLocation::Header, false)],
+            has_request_body: false,
+            base_url: None,
+        };
+        // An ARRAY in header position is non-scalar (arrays comma-join ONLY in
+        // query position) and is rejected.
+        let mut args = serde_json::Map::new();
+        args.insert("x-trace".to_string(), serde_json::json!(["a", "b"]));
+        let err = HttpClient::build_headers(&op, &args).unwrap_err();
+        assert!(matches!(err, HttpConnectorError::Backend(_)));
+        assert!(err.to_string().contains("x-trace"));
+        // An OBJECT in header position is likewise rejected.
+        let mut args2 = serde_json::Map::new();
+        args2.insert("x-trace".to_string(), serde_json::json!({"k": "v"}));
+        let err2 = HttpClient::build_headers(&op, &args2).unwrap_err();
+        assert!(matches!(err2, HttpConnectorError::Backend(_)));
+        assert!(err2.to_string().contains("x-trace"));
+        // A scalar header value still succeeds.
+        let mut args3 = serde_json::Map::new();
+        args3.insert("x-trace".to_string(), serde_json::json!("abc"));
+        let headers = HttpClient::build_headers(&op, &args3).unwrap();
+        assert_eq!(headers.get("x-trace").unwrap(), "abc");
     }
 
     #[test]
