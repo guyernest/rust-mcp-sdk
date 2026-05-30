@@ -2,10 +2,11 @@
 # https://docs.rs/cargo-audit/latest/cargo_audit/
 
 [advisories]
-# All advisories below are in transitive dependencies from the AWS SDK chain.
-# We don't control these dependency versions — they're pulled in by
-# aws-smithy-http-client, aws-lc-sys, and rustls 0.21.
-# Tracking: waiting for AWS SDK to update to rustls 0.23+ and patched aws-lc-sys.
+# Advisories in transitive dependencies we don't directly control. The AWS SDK
+# chain block is grouped first (pulled in by aws-smithy-http-client, aws-lc-sys,
+# and rustls 0.21; tracking: waiting for the AWS SDK to update to rustls 0.23+ and
+# a patched aws-lc-sys). Advisories from optional SQL backend connectors follow at
+# the end.
 
 ignore = [
     # rustls-webpki 0.101.7: CRL Distribution Point matching logic error
@@ -40,4 +41,12 @@ ignore = [
 
     # aws-lc-sys: PKCS7_verify certificate chain validation bypass
     "RUSTSEC-2026-0046",
+
+    # rsa 0.9.10: Marvin Attack — potential key recovery via timing sidechannels.
+    # No fixed upgrade is available (the `rsa` crate has no patched release).
+    # Path: pmcp-toolkit-mysql -> sqlx-mysql 0.8.6 -> rsa (used only by the MySQL
+    # caching_sha2_password / sha256_password auth handshake on the OPTIONAL mysql
+    # connector). Low practical risk for the connector's use; tracking an upstream
+    # `rsa` fix or a sqlx-mysql path that avoids it.
+    "RUSTSEC-2023-0071",
 ]
