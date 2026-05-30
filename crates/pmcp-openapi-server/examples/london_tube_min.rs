@@ -36,7 +36,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Summary line proving the resources/prompts surface assembled.
     println!(
-        "{} assembled: {} tool(s), {} resource(s), {} prompt(s) (build-only example)",
+        "{} assembled: {} tool(s), {} resource(s), {} prompt(s) \
+         (trimmed example — full surface in examples/london-tube.toml)",
         cfg.server.name,
         cfg.tools.len(),
         cfg.resources.len(),
