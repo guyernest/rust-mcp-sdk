@@ -1671,10 +1671,10 @@ Plans:
 **SQL parallels (mirror these):** `crates/pmcp-sql-server/tests/fixtures/reference-config.toml` (670 lines), `chinook.ddl`, `pmcp-book/src/ch12-10-config-driven-sql-servers.md`, `pmcp-course/src/part3-deployment/ch08-5-config-driven-sql-server.md`.
 **Requirements**: P901-FIXTURE, P901-EXAMPLE, P901-DOCS-BOOK, P901-DOCS-COURSE, P901-PARITY
 **Depends on:** Phase 90
-**Plans:** 2/3 plans executed
+**Plans:** 3/3 plans complete
 
 Plans:
 
 - [x] 90.1-01-PLAN.md — Enrich london-tube.toml (resources + prompt + full annotations) + fixture-validity asserts + build-only example (P901-FIXTURE, P901-EXAMPLE)
 - [x] 90.1-02-PLAN.md — Add Resources & Prompts config-walkthrough section to book + course OpenAPI chapters (P901-DOCS-BOOK, P901-DOCS-COURSE)
-- [ ] 90.1-03-PLAN.md — Add list_resources + list_prompts replay steps to london-tube-scenarios.yaml (P901-PARITY)
+- [x] 90.1-03-PLAN.md — Add list_resources + list_prompts replay steps to london-tube-scenarios.yaml (P901-PARITY)
