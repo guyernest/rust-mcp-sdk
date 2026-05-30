@@ -2,10 +2,10 @@
 gsd_state_version: 1.0
 milestone: v2.2
 milestone_name: Configuration-Only MCP Servers
-status: completed
+status: executing
 stopped_at: Completed 90-13-PLAN.md
-last_updated: "2026-05-30T01:19:35.454Z"
-last_activity: 2026-05-30 -- Phase 90 marked complete
+last_updated: "2026-05-30T02:47:09.771Z"
+last_activity: 2026-05-30 -- Phase 90.1 planning complete
 progress:
   total_phases: 45
   completed_phases: 39
@@ -27,8 +27,8 @@ See: .planning/PROJECT.md (updated 2026-05-17)
 
 Phase: 90 — COMPLETE
 Plan: 4 of 13
-Status: Phase 90 complete
-Last activity: 2026-05-30 -- Phase 90 marked complete
+Status: Ready to execute
+Last activity: 2026-05-30 -- Phase 90.1 planning complete
 
 **Carryover from v2.1:** Phase 81 (update-pmcp-book-and-pmcp-course-with-v2-advanced-topics-cod) was executing at v2.1 close; will be tracked separately and folded into v2.1 completion. Operator follow-ups deferred from Phase 75 Wave 5 still pending: (a) merge Phase 75 Wave 5 + 75.5 to paiml/rust-mcp-sdk:main; (b) post-merge run `gh workflow run quality-badges.yml -R paiml/rust-mcp-sdk` and append observation to `.planning/phases/75-fix-pmat-issues/75-05-GATE-VERIFICATION.md` "## Badge flip observation" section.
 
@@ -193,6 +193,7 @@ Inherited from v2.1 (see PROJECT.md + prior Decisions log):
 
 - **2026-05-17 — v2.2 ROADMAP block written.** 8 phases (82–89) covering BLDR (P82) → TKIT (P83) → CONN (P84) → SHAP-A + REF parity (P85) → SHAP-B/C/D (P86) ‖ SKLL (P87) → DOGF (P88) → DOCS+REF-03 (P89). 49/49 v2.2 requirements mapped 1:1 with no orphans. REQUIREMENTS.md traceability table updated to replace TBD (v2.2) entries with concrete phase numbers.
 - **2026-05-29 — Phase 90 added: OpenAPI Built-In Server (`pmcp-openapi-server`).** New scope (not in original v2.2 roadmap). Mirrors the SQL toolkit (Shape A binary + connector model + scaffold + docs), reusing the backend-agnostic toolkit core (P83) and Shape A/scaffold patterns (P85–86) plus the existing `openapi-code-mode` feature in `pmcp-code-mode`. Independent of P87–89, can run in parallel. Requirements deferred to a RESEARCH pass (scout `openapi-code-mode` + any `mcp-openapi-server-core` reference) before planning.
+- **2026-05-30 — Phase 90.1 inserted after Phase 90: OpenAPI Built-In Server — Examples & Article Parity.** Finishes the OpenAPI deliverable by bringing examples + docs to full SQL parity: enrich `london-tube.toml` into the full annotated showcase reference instance (the chinook equivalent — add `[[resources]]`/`[[prompts]]`/per-tool annotations), add a runnable example config, deepen the book+course chapters with the resources/prompts config-walkthrough section SQL has and OpenAPI skips (chapter structure already at parity from 90-09), and add a replay/parity test for the enriched fixture. Decision: keep london-tube as the single showcase, NO second real-world API. Routed via /gsd-progress after Phase 90 gap-closure verified complete.
 - See PROJECT.md / prior STATE.md `Roadmap Evolution` history for v1.0–v2.1 evolution log (long; not duplicated here).
 
 ### Pending Todos
