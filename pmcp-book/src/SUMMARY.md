@@ -36,6 +36,7 @@
 - [Chapter 12.9: Code Mode — LLM Code Validation & Execution](ch12-9-code-mode.md)
 - [Chapter 12.10: Config-Driven SQL Servers (cargo pmcp)](ch12-10-config-driven-sql-servers.md)
 - [Chapter 12.11: Config-Driven OpenAPI Servers (cargo pmcp)](openapi-built-in-server.md)
+- [Chapter 12.12: OpenAPI over Microsoft Graph (Contoso M365)](openapi-graph-m365.md)
 
 ## Part IV: Real-World Applications
 
