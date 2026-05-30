@@ -133,3 +133,25 @@ include_resources = ["docs://sqlite-explorer/schema", "code-mode://instructions"
 - Reference shape: `pmcp-run/built-in/sql-api/servers/open-images/config.toml`
 - Existing template: `cargo-pmcp/src/templates/sqlite_explorer.rs` (526 lines)
 - Captured during: Phase 82 /simplify pass
+
+## Resolution (2026-05-30) — SUPERSEDED + pointable example shipped
+
+The literal `add --template sqlite-explorer-config` deliverable was SUPERSEDED by
+Phase 86's generalized `cargo pmcp new --kind sql-server` (config-driven,
+SQLite-capable, covers all SQL dialects) plus the toolkit Shape-C example
+`crates/pmcp-server-toolkit/examples/sql_server_http.rs`. Building the one-off
+template now would duplicate that generalized path.
+
+The one genuinely-missing piece was a *pointable* SQLite config (the SQL analog of
+the london-tube / contoso OpenAPI examples). The v2.9.0 release prep added a
+runnable example that ships with the crate (only `tests/` is excluded):
+
+- `crates/pmcp-sql-server/examples/sqlite-explorer.toml` (Shape-A config: `[database]
+  type=sqlite` + curated `list_books` / `books_by_author` tools + Code Mode policy)
+- `crates/pmcp-sql-server/examples/sqlite-explorer.sql` (idempotent seed, dual-purpose
+  as the `--schema` Code Mode resource)
+- Run recipe added to `crates/pmcp-sql-server/README.md`
+
+Verified end-to-end: `sqlite3` seed + the real `pmcp-sql-server` binary boots and
+serves against the example (`streamable-HTTP server listening`). Closed during the
+v2.9.0 release prep.

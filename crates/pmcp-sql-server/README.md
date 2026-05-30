@@ -59,6 +59,28 @@ If a config names a backend whose feature was compiled out, the binary fails fas
 
 ## Quickstart
 
+> **Fastest path — the shipped `sqlite-explorer` example.** This crate ships a
+> complete, runnable SQLite config under `examples/` (only `tests/` is excluded
+> from the published crate). From a checkout of this repo (paths are relative to
+> this crate directory; copy the two files anywhere to run them standalone):
+>
+> ```bash
+> # 1. seed a tiny demo database (the binary connects to an EXISTING db; it does
+> #    not create or seed one)
+> sqlite3 /tmp/pmcp-sqlite-explorer.db < examples/sqlite-explorer.sql
+>
+> # 2. serve it — two curated tools (list_books, books_by_author) + Code Mode
+> #    for the long tail, all from config alone
+> pmcp-sql-server \
+>   --config examples/sqlite-explorer.toml \
+>   --schema examples/sqlite-explorer.sql \
+>   --http 127.0.0.1:8080
+> ```
+>
+> `examples/sqlite-explorer.sql` is used twice: to seed the demo DB (step 1) and
+> as the `--schema` Code Mode resource (step 2). The walkthrough below builds the
+> same shape by hand.
+
 ### 1. Build / install
 
 ```bash
@@ -101,7 +123,7 @@ required = false
 default = 20
 ```
 
-The full reference configuration — a Chinook demo with curated tools, schema/examples/learnings `[[resources]]`, and a `start_code_mode` `[[prompts]]` entry — lives at [`tests/fixtures/reference-config.toml`](tests/fixtures/reference-config.toml).
+A complete, runnable config ships with the crate at [`examples/sqlite-explorer.toml`](examples/sqlite-explorer.toml) (with its seed/schema [`examples/sqlite-explorer.sql`](examples/sqlite-explorer.sql)) — see the callout at the top of this section. A larger reference — a Chinook demo with curated tools, schema/examples/learnings `[[resources]]`, and a `start_code_mode` `[[prompts]]` entry — lives at [`tests/fixtures/reference-config.toml`](tests/fixtures/reference-config.toml) (in-repo only; `tests/` is excluded from the published crate).
 
 ### 3. Run it
 
