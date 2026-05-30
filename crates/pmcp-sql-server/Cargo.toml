@@ -29,7 +29,7 @@ name = "pmcp-sql-server"
 path = "src/main.rs"
 
 [dependencies]
-pmcp = { version = "2.8.1", path = "../..", features = ["streamable-http"] }
+pmcp = { version = "2.9.0", path = "../..", features = ["streamable-http"] }
 pmcp-server-toolkit = { version = "0.1.0", path = "../pmcp-server-toolkit", features = ["code-mode", "sqlite"] }
 pmcp-toolkit-postgres = { version = "0.1.0", path = "../pmcp-toolkit-postgres", optional = true }
 pmcp-toolkit-mysql = { version = "0.1.0", path = "../pmcp-toolkit-mysql", optional = true }

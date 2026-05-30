@@ -37,7 +37,7 @@ name = "pmcp-openapi-server"
 path = "src/main.rs"
 
 [dependencies]
-pmcp = { version = "2.8.1", path = "../..", features = ["streamable-http"] }
+pmcp = { version = "2.9.0", path = "../..", features = ["streamable-http"] }
 # Why (Plan 90-01 Task 1): the `openapi-code-mode` UMBRELLA feature composes
 # `http` + `code-mode` + `pmcp-code-mode/js-runtime`. The bare `["code-mode",
 # "http"]` pair does NOT forward `pmcp-code-mode/js-runtime`, so the
