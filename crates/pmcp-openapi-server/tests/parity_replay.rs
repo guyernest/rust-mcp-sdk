@@ -66,6 +66,47 @@ fn london_tube_fixture() {
         "script tool disrupted-lines-with-detail present: {tool_names:?}"
     );
 
+    // (1a) The enriched showcase ships all three Code Mode context resources.
+    let resource_uris: Vec<&str> = cfg.resources.iter().map(|r| r.uri.as_str()).collect();
+    for uri in [
+        "docs://london-tube/schema",
+        "docs://london-tube/examples",
+        "code-mode://learnings",
+    ] {
+        assert!(
+            cfg.resources.iter().any(|r| r.uri == uri),
+            "enriched fixture ships the {uri} resource: {resource_uris:?}"
+        );
+    }
+
+    // (1b) The enriched showcase ships the start_code_mode Code Mode prompt.
+    assert!(
+        cfg.prompts.iter().any(|p| p.name == "start_code_mode"),
+        "enriched fixture ships the start_code_mode prompt: {:?}",
+        cfg.prompts.iter().map(|p| &p.name).collect::<Vec<_>>()
+    );
+
+    // (1c) cost_hint VALUE check: get-tube-status parses to the allowed "low" value
+    // (not a mere presence check — proves the cost_hint enum string parsed).
+    let status_tool = cfg
+        .tools
+        .iter()
+        .find(|t| t.name == "get-tube-status")
+        .expect("get-tube-status tool present");
+    let cost_hint = status_tool
+        .annotations
+        .as_ref()
+        .and_then(|a| a.cost_hint.as_deref());
+    assert_eq!(
+        cost_hint,
+        Some("low"),
+        "get-tube-status cost_hint must parse to the allowed \"low\" value"
+    );
+    assert!(
+        matches!(cost_hint, Some("low" | "medium" | "high")),
+        "cost_hint must be one of the allowed enum strings (low|medium|high): {cost_hint:?}"
+    );
+
     // The api_key query-param backend auth (the D-04 path) is declared.
     let backend = cfg.backend.as_ref().expect("[backend] section present");
     assert!(
