@@ -870,6 +870,39 @@ mod tests {
         assert!(matches!(err, HttpConnectorError::Auth(_)));
     }
 
+    #[test]
+    fn test_oauth_passthrough_documented_tag_deserializes() {
+        // The documented `[backend.auth]` form is `type = "oauth_passthrough"`,
+        // but `rename_all = "snake_case"` derives the tag `o_auth_passthrough`.
+        // The `#[serde(alias)]` must accept the documented spelling.
+        let cfg: AuthConfig = toml::from_str(r#"type = "oauth_passthrough""#)
+            .expect("documented oauth_passthrough tag must deserialize via the serde alias");
+        assert!(matches!(cfg, AuthConfig::OAuthPassthrough { .. }));
+    }
+
+    #[test]
+    fn test_oauth2_client_credentials_documented_tag_deserializes() {
+        let cfg: AuthConfig = toml::from_str(
+            r#"
+            type = "oauth2_client_credentials"
+            token_url = "https://example.test/token"
+            client_id = "${CID}"
+            client_secret = "${CSECRET}"
+            "#,
+        )
+        .expect("documented oauth2_client_credentials tag must deserialize via the serde alias");
+        assert!(matches!(cfg, AuthConfig::OAuth2ClientCredentials { .. }));
+    }
+
+    #[test]
+    fn test_snake_case_tag_still_deserializes_after_alias() {
+        // The alias is ADDITIVE — the rename_all-derived `o_auth_passthrough`
+        // tag (the canonical serialized form) must still round-trip.
+        let cfg: AuthConfig = toml::from_str(r#"type = "o_auth_passthrough""#)
+            .expect("canonical snake_case tag must still deserialize");
+        assert!(matches!(cfg, AuthConfig::OAuthPassthrough { .. }));
+    }
+
     #[tokio::test]
     async fn test_static_provider_ignores_inbound_token() {
         // T-90-01-06: a static provider must NOT leak the inbound token into its
@@ -1115,11 +1148,9 @@ token = "abc"
         Mock::given(method("POST"))
             .and(path("/token"))
             .and(body_string_contains("client_secret=xyz"))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                    "access_token": "issued-token"
-                })),
-            )
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "access_token": "issued-token"
+            })))
             .mount(&server)
             .await;
 

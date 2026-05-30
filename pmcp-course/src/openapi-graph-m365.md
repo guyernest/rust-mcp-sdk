@@ -39,7 +39,7 @@ description = "Contoso M365: per-user delegated OAuth (passthrough) reading a Cu
 base_url = "https://graph.microsoft.com/v1.0"
 ```
 
-## Step 4: Authenticate to the Backend — The Double Lock
+## Authenticate to the Backend — The Double Lock
 
 This is the headline. The workbook holds sensitive data, so the server must never
 read more than the asker is allowed to, and it must hold **no standing credential**
@@ -76,7 +76,7 @@ privilege by default.
 > deliberately avoids, since it would expose every user's files. Passthrough is the
 > right choice when the backend's per-user authorization should govern access.
 
-## Step 3: Two Kinds of Tools (`get_customer` / `get_customer_orders`)
+## Two Kinds of Tools (`get_customer` / `get_customer_orders`)
 
 Contoso curates two read-only **script** tools, each keyed by `customer_id`. A
 script tool runs a tiny engine-accurate JS body that templates the Graph

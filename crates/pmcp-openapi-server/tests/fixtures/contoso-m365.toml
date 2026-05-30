@@ -113,6 +113,7 @@ else if (args.customer_id === "C002") { ordersAddr = "A4:D4"; }
 else if (args.customer_id === "C003") { ordersAddr = "A5:D5"; }
 else if (args.customer_id === "C004") { ordersAddr = "A6:D6"; }
 else if (args.customer_id === "C005") { ordersAddr = "A7:D7"; }
+if (ordersAddr === "") { return []; }
 const r = await api.get(`/drives/CONTOSO_DRIVE/items/ORDERS_ITEM/workbook/worksheets/Orders/range(address='${ordersAddr}')?$select=values`);
 return r.values;
 """
