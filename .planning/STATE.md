@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v2.2
 milestone_name: Configuration-Only MCP Servers
 status: executing
-stopped_at: Completed 90-11-PLAN.md
-last_updated: "2026-05-30T01:03:07.701Z"
+stopped_at: Completed 90-13-PLAN.md
+last_updated: "2026-05-30T01:13:35.444Z"
 last_activity: 2026-05-30
 progress:
   total_phases: 45
-  completed_phases: 38
+  completed_phases: 39
   total_plans: 184
-  completed_plans: 183
-  percent: 84
+  completed_plans: 184
+  percent: 87
 ---
 
 # Project State
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-05-17)
 ## Current Position
 
 Phase: 90 (openapi-built-in-server) — EXECUTING
-Plan: 3 of 13
+Plan: 4 of 13
 Status: Ready to execute
 Last activity: 2026-05-30
 
@@ -187,6 +187,7 @@ Inherited from v2.1 (see PROJECT.md + prior Decisions log):
 - [Phase 90 Plan 10]: Rule 3 — added an openapi-code-mode (default) passthrough feature to pmcp-openapi-server/Cargo.toml so the e2e test gate + the plan's --features verify command resolve (the toolkit dep already hard-enables the feature).
 - [Phase ?]: [Phase 90 Plan 11] resolve_secret_ref is the single env-ref chokepoint for ALL credential variants (bearer token, basic password+username, oauth2 client_secret+client_id, api_key); reuses api_key OMIT-on-unset semantics (unset->empty->NoAuth), NOT token_secret ERROR-on-unset. parse_env_ref is the one shared brace/env-ref parser. The literal ${VAR} can no longer reach the backend on any variant (OAPI-03 closed cross-variant).
 - [Phase ?]: [Phase 90 Plan 12] GAP 3/WR-02 closed: ConfigValidationError::EmptyBackendBaseUrl + an http-gated validate() check reject a present [backend] with empty/omitted base_url at parse time (serde-default ""); turns a late opaque DispatchError::Connector into an actionable field-naming error. GAP 5/WR-04 closed docs-only: oauth_passthrough trust boundary documented at the OAuthPassthroughAuth type, the relay site, and both crate READMEs (client controls token VALUE; operator controls target_header NAME; HeaderValue::try_from control-char guard is the protection). No length cap added.
+- [Phase ?]: [Phase 90 Plan 13] GAP 4/WR-03 closed: non-scalar path/query/header params are rejected with a typed, param-naming, value-redacted error in BOTH http surfaces (client.rs render_scalar + code_mode.rs scalar_str) instead of silently JSON-stringified; scalars + query arrays-of-scalars unchanged; Null renders bare 'null' uniformly.
 
 ### Roadmap Evolution
 
@@ -259,6 +260,7 @@ Inherited from v2.1 (see PROJECT.md + prior Decisions log):
 | Phase 90 P10 | 35min | 3 tasks | 6 files |
 | Phase 90 P11 | 12min | 2 tasks | 2 files |
 | Phase 90 P12 | 6min | 2 tasks | 5 files |
+| Phase 90 P13 | 7m | 2 tasks | 3 files |
 
 ### Last Activity
 
@@ -276,6 +278,6 @@ Inherited from v2.1 (see PROJECT.md + prior Decisions log):
 
 ## Session Continuity
 
-Last session: 2026-05-30T01:02:41.012Z
-Stopped at: Completed 90-11-PLAN.md
+Last session: 2026-05-30T01:13:23.343Z
+Stopped at: Completed 90-13-PLAN.md
 Resume: Plan 90-08 COMPLETE — `cargo pmcp new --kind openapi-server` scaffold (OAPI-07/CF-3). `templates/openapi_server.rs` emits a SINGLE runnable crate: Cargo.toml (toolkit `openapi-code-mode` umbrella + `pmcp-openapi-server` lib for the `dispatch`/`build_server` seam — the http path has NO ServerBuilderExt method, Plan 06 decision, Rule 3 reconciliation), a ≤15-statement-line Shape C `main.rs` (load config[+optional api.yaml] → dispatch → build_server → serve, with the StreamableHttpServer boilerplate hoisted into a private serve() helper, CF-5), a `config.toml` with [backend] + a single-call + a script tool + `[code_mode] enabled=true` carrying an inline DEV token_secret + `allow_inline_token_secret_for_dev=true` + a LOUD replace-for-production note (CF-4), a minimal `api.yaml` (D-03, optional at runtime), and `deploy.toml` + `.pmcp/deploy.toml` with `[target] type="pmcp-run"` (CF-6, Phase 77 enum unchanged). `new.rs` gained the `openapi-server` arm + execute/print helpers + a widened error. `tests/scaffold_openapi_server.rs` is two-tier (mirror TEST-05): always-on file-emission + CF-5 ≤15-line golden-drift, plus an env-gated (`PMCP_SCAFFOLD_COMPILE_TEST=1`) cold `cargo check` that was RUN and passed (proving the scaffold compiles end to end). README documents the new `--kind` in a scoped fold. Commits `4caab84b`, `6b992761`. Next: Plan 90-09 (docs) — only remaining incomplete Phase 90 plan.

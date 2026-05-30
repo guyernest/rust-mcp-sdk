@@ -1640,7 +1640,7 @@ Plans:
 
 **Gap-Closure Wave 2** *(blocked on 90-10 — shared code_mode.rs)*
 
-- [ ] 90-13-PLAN.md — reject non-scalar path/query/header params with a value-redacted error instead of silent JSON-stringification (closes WR-03; OAPI-02a/05)
+- [x] 90-13-PLAN.md — reject non-scalar path/query/header params with a value-redacted error instead of silent JSON-stringification (closes WR-03; OAPI-02a/05)
 
 ## Progress — v2.2 Milestone
 
@@ -1656,4 +1656,4 @@ Plans:
 | 87. Type 2 Authoring Skills Server | 0/? | Not started | - |
 | 88. Dogfood `pmcp-server` | 0/? | Not started | - |
 | 89. Documentation & Migration | 0/? | Not started | - |
-| 90. OpenAPI Built-In Server | 12/13 | In Progress|  |
+| 90. OpenAPI Built-In Server | 13/13 | Complete   | 2026-05-30 |
