@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v2.2
 milestone_name: Configuration-Only MCP Servers
 status: executing
-stopped_at: Completed 90-10-PLAN.md
-last_updated: "2026-05-29T23:59:00.000Z"
-last_activity: 2026-05-29 -- Phase 90 gap-closure 90-10 complete (oauth_passthrough runtime wiring)
+stopped_at: Completed 90-11-PLAN.md
+last_updated: "2026-05-30T00:55:48.101Z"
+last_activity: 2026-05-30
 progress:
   total_phases: 45
   completed_phases: 38
   total_plans: 184
-  completed_plans: 180
+  completed_plans: 182
   percent: 84
 ---
 
@@ -26,9 +26,9 @@ See: .planning/PROJECT.md (updated 2026-05-17)
 ## Current Position
 
 Phase: 90 (openapi-built-in-server) — EXECUTING
-Plan: 1 of 13
-Status: Executing Phase 90
-Last activity: 2026-05-29 -- Phase 90 execution started
+Plan: 2 of 13
+Status: Ready to execute
+Last activity: 2026-05-30
 
 **Carryover from v2.1:** Phase 81 (update-pmcp-book-and-pmcp-course-with-v2-advanced-topics-cod) was executing at v2.1 close; will be tracked separately and folded into v2.1 completion. Operator follow-ups deferred from Phase 75 Wave 5 still pending: (a) merge Phase 75 Wave 5 + 75.5 to paiml/rust-mcp-sdk:main; (b) post-merge run `gh workflow run quality-badges.yml -R paiml/rust-mcp-sdk` and append observation to `.planning/phases/75-fix-pmat-issues/75-05-GATE-VERIFICATION.md` "## Badge flip observation" section.
 
@@ -185,6 +185,7 @@ Inherited from v2.1 (see PROJECT.md + prior Decisions log):
 - [Phase 90 Plan 10]: ExecuteCodeHandler holds an ExecSource enum — Static(Arc<dyn CodeExecutor>) for SQL (unchanged) + #[cfg(openapi-code-mode)] PerRequestHttp { base, exec_config } for OpenAPI per-request rederivation (works around JsCodeExecutor's private http field by holding the Clone-able base HttpCodeExecutor). New code_mode_http_tools_from_executor entry point wires the PerRequestHttp source; code_mode_tools_from_executor keeps the Static source.
 - [Phase 90 Plan 10]: dispatch() uses create_passthrough_auth_provider(&backend.auth, None) so passthrough installs OAuthPassthroughAuth (forwards target_header); every non-passthrough config delegates to create_auth_provider (unchanged). Was MissingTokenAuth/NoAuth which never forwarded.
 - [Phase 90 Plan 10]: Rule 3 — added an openapi-code-mode (default) passthrough feature to pmcp-openapi-server/Cargo.toml so the e2e test gate + the plan's --features verify command resolve (the toolkit dep already hard-enables the feature).
+- [Phase ?]: [Phase 90 Plan 11] resolve_secret_ref is the single env-ref chokepoint for ALL credential variants (bearer token, basic password+username, oauth2 client_secret+client_id, api_key); reuses api_key OMIT-on-unset semantics (unset->empty->NoAuth), NOT token_secret ERROR-on-unset. parse_env_ref is the one shared brace/env-ref parser. The literal ${VAR} can no longer reach the backend on any variant (OAPI-03 closed cross-variant).
 
 ### Roadmap Evolution
 
@@ -255,6 +256,7 @@ Inherited from v2.1 (see PROJECT.md + prior Decisions log):
 | Phase 90 P08 | 13min | 2 tasks | 6 files |
 | Phase 90 P09 | 4min | 2 tasks | 5 files |
 | Phase 90 P10 | 35min | 3 tasks | 6 files |
+| Phase 90 P11 | 12min | 2 tasks | 2 files |
 
 ### Last Activity
 
@@ -272,6 +274,6 @@ Inherited from v2.1 (see PROJECT.md + prior Decisions log):
 
 ## Session Continuity
 
-Last session: 2026-05-29T21:56:36.463Z
-Stopped at: Completed 90-08-PLAN.md
+Last session: 2026-05-30T00:55:48.096Z
+Stopped at: Completed 90-11-PLAN.md
 Resume: Plan 90-08 COMPLETE — `cargo pmcp new --kind openapi-server` scaffold (OAPI-07/CF-3). `templates/openapi_server.rs` emits a SINGLE runnable crate: Cargo.toml (toolkit `openapi-code-mode` umbrella + `pmcp-openapi-server` lib for the `dispatch`/`build_server` seam — the http path has NO ServerBuilderExt method, Plan 06 decision, Rule 3 reconciliation), a ≤15-statement-line Shape C `main.rs` (load config[+optional api.yaml] → dispatch → build_server → serve, with the StreamableHttpServer boilerplate hoisted into a private serve() helper, CF-5), a `config.toml` with [backend] + a single-call + a script tool + `[code_mode] enabled=true` carrying an inline DEV token_secret + `allow_inline_token_secret_for_dev=true` + a LOUD replace-for-production note (CF-4), a minimal `api.yaml` (D-03, optional at runtime), and `deploy.toml` + `.pmcp/deploy.toml` with `[target] type="pmcp-run"` (CF-6, Phase 77 enum unchanged). `new.rs` gained the `openapi-server` arm + execute/print helpers + a widened error. `tests/scaffold_openapi_server.rs` is two-tier (mirror TEST-05): always-on file-emission + CF-5 ≤15-line golden-drift, plus an env-gated (`PMCP_SCAFFOLD_COMPILE_TEST=1`) cold `cargo check` that was RUN and passed (proving the scaffold compiles end to end). README documents the new `--kind` in a scoped fold. Commits `4caab84b`, `6b992761`. Next: Plan 90-09 (docs) — only remaining incomplete Phase 90 plan.
