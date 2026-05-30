@@ -1,0 +1,69 @@
+# =============================================================================
+# contoso-m365-api.yaml — curated Microsoft Graph Excel range-read subset (P902-SPEC)
+# =============================================================================
+#
+# A hand-authored, TRIMMED Microsoft Graph OpenAPI description covering ONLY the
+# Excel worksheet range-read operation that backs the two Contoso tools. This is
+# NOT the full Graph metadata: there is NO write op and NO SharePoint
+# file-listing/content op (P902-SPEC boundary). The workbook is addressed by the
+# pinned drive/item ids in contoso-m365.toml; navigation is out of scope.
+#
+# Kept intentionally small + offline. Parsed via `OpenApiSchema::parse` in the
+# Plan-02 fixture-validity test (no network).
+#
+# OData PATH FORM (decision made in Plan 90.2-01 Task 3): the PRIMARY Graph OData
+# path is shipped verbatim --
+#   /drives/{drive-id}/items/{item-id}/workbook/worksheets/{worksheet-id}/range(address='{address}')
+# A Wave-0 smoke parse through openapiv3 2.x (the same crate `OpenApiSchema::parse`
+# uses) ACCEPTS the parenthesized `range(address='{address}')` segment, so no
+# fallback to a plain `/range` + query `address` was needed. The spec is served as
+# Code Mode CONTEXT only -- tools dispatch from the [[tools]] script in
+# contoso-m365.toml, not from this spec (assemble.rs) -- and the runtime script's
+# `range(address='...')` URL is identical to this path form either way. [CITED:
+# learn.microsoft.com/graph/api/range-get]
+openapi: 3.0.0
+info:
+  title: Contoso M365 — Excel range-read subset (Microsoft Graph)
+  version: "1.0.0"
+  description: Minimal subset of Microsoft Graph covering the Excel worksheet range-read op backing the Contoso get_customer / get_customer_orders tools.
+servers:
+  - url: https://graph.microsoft.com/v1.0
+paths:
+  /drives/{drive-id}/items/{item-id}/workbook/worksheets/{worksheet-id}/range(address='{address}'):
+    get:
+      operationId: getWorksheetRange
+      summary: Read a rectangular range of cell values from a worksheet in the workbook.
+      parameters:
+        - name: drive-id
+          in: path
+          required: true
+          description: The drive id holding the workbook (pinned in config).
+          schema:
+            type: string
+        - name: item-id
+          in: path
+          required: true
+          description: The driveItem id of the workbook file (pinned in config).
+          schema:
+            type: string
+        - name: worksheet-id
+          in: path
+          required: true
+          description: The worksheet name ('Customers' or 'Orders').
+          schema:
+            type: string
+        - name: address
+          in: path
+          required: true
+          description: The A1-style range address, e.g. 'A2:D2'.
+          schema:
+            type: string
+        - name: $select
+          in: query
+          required: false
+          description: OData $select projection (e.g. 'values').
+          schema:
+            type: string
+      responses:
+        "200":
+          description: A workbookRange object whose `values` is a 2-D array of the requested cell values.
