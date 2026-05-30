@@ -66,6 +66,8 @@ method = "GET"
 [tools.annotations]
 read_only_hint = true
 idempotent_hint = true
+open_world_hint = true
+cost_hint = "low"      # "low" | "medium" | "high"
 
 # =============================================================================
 # Tool 2 (script) — disrupted-lines-with-detail
@@ -100,6 +102,110 @@ default = 5
 
 [tools.annotations]
 read_only_hint = true
+idempotent_hint = true
+open_world_hint = true
+cost_hint = "medium"   # multi-call fan-out: one status call + one per disrupted line
+
+# =============================================================================
+# Resources — inert static markdown served as Code Mode context (T-90.1-02)
+# =============================================================================
+# Mirrors the SQL reference's resource shape (structure only — no SQL/[database]
+# content). The server serves this markdown verbatim as MCP resources; it is
+# never executed. The three URIs below are the EXACT set the start_code_mode
+# prompt's include_resources references (Pitfall 2 — register_prompts resolves
+# them against the StaticResourceHandler; a typo points at a missing resource).
+
+[[resources]]
+uri = "docs://london-tube/schema"
+name = "TfL Line API Schema"
+description = "Endpoints, response shapes, and line ids for the TfL Line API"
+mime_type = "text/markdown"
+content = """
+# TfL Line API (subset)
+
+## Endpoints
+- `GET /Line/Mode/tube/Status` — status for every tube line. Returns an array of
+  line objects, each with `id`, `name`, and a `lineStatuses` array.
+- `GET /Line/{lineId}/Disruption` — disruption detail for a single line. `lineId`
+  is the lowercase line id (e.g. `victoria`, `central`), NOT the display name.
+
+## Response shape
+Each line object:
+```json
+{ "id": "victoria", "name": "Victoria",
+  "lineStatuses": [ { "statusSeverity": 6, "statusSeverityDescription": "Severe Delays" } ] }
+```
+
+## statusSeverity scale
+`statusSeverity` is an integer. A value `< 10` means the line is DISRUPTED;
+`10` means Good Service. Filter on `statusSeverity < 10` to find disrupted lines.
+
+## Sample line ids
+`victoria`, `central`, `bakerloo`, `jubilee`, `northern`, `piccadilly`.
+"""
+
+[[resources]]
+uri = "docs://london-tube/examples"
+name = "TfL Example Scripts"
+description = "Example Code Mode scripts for common TfL queries"
+mime_type = "text/markdown"
+content = """
+# TfL Example Scripts
+
+## List every tube line status
+```js
+const statuses = await api.get('/Line/Mode/tube/Status');
+return statuses;
+```
+
+## Find disrupted lines (statusSeverity < 10)
+```js
+const statuses = await api.get('/Line/Mode/tube/Status');
+const disrupted = statuses.filter(line =>
+  line.lineStatuses.some(s => s.statusSeverity < 10));
+return disrupted.map(line => line.name);
+```
+
+## Fan out to per-line disruption detail
+```js
+const detail = await api.get(`/Line/${'victoria'}/Disruption`);
+return detail;
+```
+"""
+
+[[resources]]
+uri = "code-mode://learnings"
+name = "TfL Code Mode Learnings"
+description = "Tips and gotchas for authoring TfL Code Mode scripts"
+mime_type = "text/markdown"
+content = """
+# TfL Code Mode Learnings
+
+- Bind the `api.get` result to a `const` BEFORE `return` — the engine's accurate
+  JS subset expects the awaited value bound, not returned inline.
+- Line ids are LOWERCASE (`victoria`, not `Victoria`); `{lineId}` in the path is
+  the `id` field, never the display `name`.
+- Read tool parameters off `args` (e.g. `args.maxLines`), bound from
+  `[[tools.parameters]]`; an unset optional parameter falls back to its `default`.
+- `api.get` paths are string/template literals only — no dynamic path building
+  outside template strings.
+"""
+
+# =============================================================================
+# Prompt — start_code_mode: load all context for Code Mode script generation
+# =============================================================================
+# include_resources lists EXACTLY the three resource URIs defined above
+# (Pitfall 2 / assemble.rs register_prompts resolves each against the
+# StaticResourceHandler — every URI here must match a [[resources]] uri).
+
+[[prompts]]
+name = "start_code_mode"
+description = "Load all context needed for Code Mode script generation"
+include_resources = [
+    "docs://london-tube/schema",
+    "docs://london-tube/examples",
+    "code-mode://learnings",
+]
 
 # =============================================================================
 # Code Mode — engine shared with the script tool (D-02, one engine)
