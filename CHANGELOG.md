@@ -7,13 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [2.9.1] - 2026-05-31
 
-Release-engineering fix completing the v2.9.0 publish. The six v2.2 config-driven
-toolkit crates — `pmcp-server-toolkit`, `pmcp-toolkit-postgres` / `-mysql` /
-`-athena`, `pmcp-sql-server`, `pmcp-openapi-server` — were absent from
-`release.yml`'s hardcoded publish list and so did not reach crates.io during the
-v2.9.0 run. They are added to the release workflow and published under this tag.
-No source changes vs v2.9.0; crate versions are unchanged (`pmcp` 2.9.0,
-`pmcp-code-mode` 0.5.2, the six toolkit crates 0.1.0).
+Completes the v2.9.0 release and fixes a yanked-dependency breakage.
+
+### Fixed
+
+- **`pmcp-code-mode` 0.5.3** — repin the optional `swc_ecma_*` JS-parser
+  dependencies (used by the `openapi-code-mode` feature) off the **yanked swc
+  "40" generation** back to the non-yanked "39" generation. `swc_ecma_parser`
+  40.0.0, `swc_ecma_ast`/`swc_ecma_visit` 24.0.0, and `swc_common` 22.0.0 were
+  all yanked from crates.io, which made 0.5.2's `^40` pin unresolvable and broke
+  every build of `pmcp-code-mode` (and the toolkit crates) with the swc-backed
+  feature enabled.
+
+### Added
+
+- The six v2.2 config-driven toolkit crates — `pmcp-server-toolkit`,
+  `pmcp-toolkit-postgres` / `-mysql` / `-athena`, `pmcp-sql-server`,
+  `pmcp-openapi-server` — are now published to crates.io. They were absent from
+  `release.yml`'s hardcoded publish list and so were skipped during the v2.9.0 run.
+
+Versions: `pmcp-code-mode` 0.5.2 → 0.5.3; `pmcp` (2.9.0) and the six toolkit
+crates (0.1.0) are unchanged.
 
 ## [2.9.0] - 2026-05-30
 

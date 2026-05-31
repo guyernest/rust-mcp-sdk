@@ -1,6 +1,6 @@
 [package]
 name = "pmcp-code-mode"
-version = "0.5.2"
+version = "0.5.3"
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/paiml/rust-mcp-sdk"
@@ -32,10 +32,14 @@ chrono = "0.4"
 graphql-parser = "0.4"
 toml = "1.0"
 
-# JavaScript parsing (optional, for OpenAPI Code Mode)
-swc_ecma_parser = { version = "40", optional = true }
+# JavaScript parsing (optional, for OpenAPI Code Mode).
+# Pinned to the swc "39" generation: the "40" generation (parser 40.0.0, ast/visit
+# 24.0.0, common 22.0.0) was YANKED wholesale from crates.io, which made the prior
+# mixed pins (parser "40" + visit "24") unresolvable. This 39-gen set is non-yanked
+# and is the generation this crate's code compiles against.
+swc_ecma_parser = { version = "39", optional = true }
 swc_ecma_ast = { version = "23", optional = true }
-swc_ecma_visit = { version = "24", optional = true }
+swc_ecma_visit = { version = "23", optional = true }
 swc_common = { version = "21", optional = true }
 
 # SQL parsing (optional, for SQL Code Mode)
