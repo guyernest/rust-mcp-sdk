@@ -271,6 +271,7 @@ pub async fn run_http(server: Server, server_name: &str, server_version: &str) -
         on_session_initialized: None,
         on_session_closed: None,
         http_middleware: Some(Arc::new(middleware_chain)),
+        ..Default::default()
     };
 
     // Create and start the HTTP server

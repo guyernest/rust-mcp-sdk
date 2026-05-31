@@ -1,0 +1,26 @@
+[package]
+name = "pmcp-server-toolkit-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+license = "MIT OR Apache-2.0"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+pmcp-server-toolkit = { path = ".." }
+toml = "1.0"
+
+# Why: keeps the fuzz crate isolated from the main workspace per Phase 77
+# PATTERNS §17 — fuzz/* declares its own one-crate workspace so the workspace
+# root's lints/deps don't bleed into the libfuzzer-sys nightly-only build.
+[workspace]
+
+[[bin]]
+name = "pmcp_server_toolkit_config_parser"
+path = "fuzz_targets/pmcp_server_toolkit_config_parser.rs"
+doc = false
+test = false
+bench = false

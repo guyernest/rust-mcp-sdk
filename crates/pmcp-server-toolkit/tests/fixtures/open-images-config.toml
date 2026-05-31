@@ -1,0 +1,397 @@
+# Snapshot from pmcp-run/built-in/sql-api/servers/open-images/config.toml (operator-supplied 2026-05-18).
+# Source-of-truth — DO NOT edit. Re-snapshot via the task documented in
+# .planning/phases/83-toolkit-core-lift-pmcp-server-toolkit/83-01-PLAN.md Task 4.
+# Open Images V7 MCP Server Configuration
+# This server connects to the Open Images V7 dataset in AWS Athena, providing
+# image search and class hierarchy browsing through curated MCP tools and Code Mode.
+
+[server]
+id = "open-images"
+name = "Open Images Explorer"
+description = "Explore the Open Images V7 dataset via AWS Athena. Search images by class, browse the visual class hierarchy, and analyze 42K images with 303K bounding boxes."
+type = "sql-api"
+version = "1.0.0"
+
+# =============================================================================
+# Display Metadata (defaults for admin-configurable fields)
+# =============================================================================
+# These values populate the server record on first deploy or after deletion.
+# Admin edits via UI always take priority over these defaults.
+
+[metadata]
+display_name = "Open Images Explorer"
+short_description = "Explore the Open Images V7 dataset via AWS Athena"
+description = "Explore the Open Images V7 dataset via AWS Athena. Search images by class, browse the visual class hierarchy, and analyze 42K images with 303K bounding boxes."
+tags = ["images", "open-images", "computer-vision", "athena", "dataset"]
+author = "pmcp.run"
+visibility = "public"
+
+[database]
+# AWS Athena for querying Open Images data
+type = "athena"
+database = "open_images_full"
+output_location = "s3://aws-athena-query-results-${AWS_ACCOUNT_ID}-${AWS_REGION}/open-images/"
+workgroup = "open-images"
+query_timeout_ms = 60000
+
+# Table definitions for Code Mode schema enrichment
+# 7 base tables + 4 pre-joined views
+
+[[database.tables]]
+name = "images"
+description = "Core image metadata: image_id, thumbnail URLs, author, license"
+
+[[database.tables]]
+name = "class_descriptions"
+description = "Class names mapping label_name (MID) to display_name"
+
+[[database.tables]]
+name = "labels"
+description = "Image-level labels with confidence scores and source"
+
+[[database.tables]]
+name = "bounding_boxes"
+description = "Object bounding box annotations with coordinates and confidence"
+
+[[database.tables]]
+name = "masks"
+description = "Segmentation mask annotations with click coordinates"
+
+[[database.tables]]
+name = "relationships"
+description = "Visual relationships between objects (subject-predicate-object)"
+
+[[database.tables]]
+name = "label_hierarchy"
+description = "Parent-child class hierarchy (parent_mid to child_mid)"
+
+[[database.tables]]
+name = "labeled_images"
+description = "VIEW: JOIN of labels + images + class_descriptions for search"
+
+[[database.tables]]
+name = "labeled_boxes"
+description = "VIEW: JOIN of bounding_boxes + images + class_descriptions"
+
+[[database.tables]]
+name = "labeled_masks"
+description = "VIEW: JOIN of masks + images + class_descriptions"
+
+[[database.tables]]
+name = "labeled_relationships"
+description = "VIEW: JOIN of relationships + images + class_descriptions"
+
+[[database.tables]]
+name = "class_hierarchy_resolved"
+description = "VIEW: Pre-joined label_hierarchy with parent/child display names"
+
+[[database.tables]]
+name = "entity_image_counts"
+description = "VIEW: Pre-aggregated image counts per class label"
+
+[[database.tables]]
+name = "relationship_summary"
+description = "VIEW: Pre-aggregated relationship counts with resolved subject/object names"
+
+[database.pool]
+max_connections = 5
+connection_timeout_seconds = 60
+
+[code_mode]
+# Enable Code Mode for custom SQL queries (~80% of functionality)
+enabled = true
+
+# Open Images is read-only - no mutations allowed
+allow_writes = false
+allow_deletes = false
+allow_ddl = false
+
+# Require LIMIT on SELECT queries for cost control
+require_limit = true
+max_limit = 1000
+
+# No blocked or sensitive tables/columns for Open Images
+blocked_tables = []
+sensitive_columns = []
+
+# Risk levels for auto-approval
+auto_approve_levels = ["low"]
+
+# Token settings
+token_ttl_seconds = 300
+
+# Secret for HMAC signing (resolved from Secrets Manager)
+token_secret = "${CODE_MODE_SECRET}"
+
+# Complexity limits
+[code_mode.limits]
+max_tables_per_query = 5
+max_join_depth = 4
+max_subquery_depth = 2
+
+# =============================================================================
+# MCP Tools
+# =============================================================================
+# 3 TOML-defined tools: explore_category, browse_relationships,
+# search_relationships. Custom Rust handlers: find_images, get_image_details,
+# resolve_labels (registered in main.rs).
+#
+# Pareto Principle:
+#   - 3 TOML tools + 3 custom handlers = essential operations
+#   - Code Mode = long tail via SQL generation
+
+# -----------------------------------------------------------------------------
+# Tool 1: Explore Category (Hierarchy Browser with Samples)
+# -----------------------------------------------------------------------------
+# Dual-mode: keyword search, hierarchy drill-down, or top-level root categories.
+# Returns subtree nodes with sample thumbnails and relationship summaries.
+
+[[tools]]
+name = "explore_category"
+description = "Explore the class hierarchy. In keyword mode, search class names. In drill-down mode, show children of a specific class. With no arguments, show top-level root categories. Returns subtree nodes with sample thumbnails and relationship summaries."
+ui_resource_uri = "ui://open-images/graph-explorer.html"
+sql = """
+WITH target AS (
+    SELECT cd.label_name, cd.display_name
+    FROM class_descriptions cd
+    WHERE (
+        (:keyword != '' AND lower(cd.display_name) LIKE '%' || lower(:keyword) || '%')
+        OR
+        (:class_name != '' AND cd.label_name IN (
+            SELECT chr.child_id FROM class_hierarchy_resolved chr
+            WHERE lower(chr.parent_name) = lower(:class_name)
+        ))
+        OR
+        (:keyword = '' AND :class_name = '' AND NOT EXISTS (
+            SELECT 1 FROM class_hierarchy_resolved chr2 WHERE chr2.child_id = cd.label_name
+        ))
+    )
+),
+child_counts AS (
+    SELECT t.label_name, COUNT(*) AS child_count
+    FROM target t
+    JOIN class_hierarchy_resolved chr ON chr.parent_id = t.label_name
+    GROUP BY t.label_name
+),
+rel_summaries AS (
+    SELECT t.label_name, COUNT(DISTINCT rs.predicate) AS relationship_types
+    FROM target t
+    JOIN relationship_summary rs ON rs.subject_id = t.label_name OR rs.object_id = t.label_name
+    GROUP BY t.label_name
+)
+SELECT t.display_name AS class_name,
+       t.label_name AS class_id,
+       COALESCE(cc.child_count, 0) AS child_count,
+       COALESCE(rs.relationship_types, 0) AS relationship_types
+FROM target t
+LEFT JOIN child_counts cc ON cc.label_name = t.label_name
+LEFT JOIN rel_summaries rs ON rs.label_name = t.label_name
+ORDER BY t.display_name
+LIMIT :limit
+"""
+
+[[tools.parameters]]
+name = "keyword"
+type = "string"
+description = "Keyword to search class names (e.g., 'bird', 'vehicle'). Leave empty for drill-down or root mode."
+required = false
+default = ""
+max_length = 50
+
+[[tools.parameters]]
+name = "class_name"
+type = "string"
+description = "Parent class name to drill into (e.g., 'Animal', 'Vehicle'). Leave empty for keyword or root mode."
+required = false
+default = ""
+max_length = 50
+
+[[tools.parameters]]
+name = "limit"
+type = "integer"
+description = "Maximum results to return"
+required = false
+default = 50
+minimum = 1
+maximum = 200
+
+[tools.annotations]
+read_only_hint = true
+destructive_hint = false
+idempotent_hint = true
+open_world_hint = true
+cost_hint = "medium"
+
+# -----------------------------------------------------------------------------
+# Tool 2: Search Relationships (Subject-Predicate-Object)
+# -----------------------------------------------------------------------------
+# Search visual relationships between objects with optional spatial filters
+
+[[tools]]
+name = "search_relationships"
+description = "Search for visual relationships between objects in images. At least one of subject, predicate, or object should be specified. Optional position and size filters apply to the subject bounding box."
+ui_resource_uri = "ui://open-images/relationships.html"
+sql = """
+SELECT
+    lr.image_id,
+    lr.cvdf_url AS thumbnail_300k_url,
+    lr.display_name_1 AS subject,
+    lr.relationship_label AS relationship,
+    lr.display_name_2 AS object,
+    lr.author
+FROM labeled_relationships lr
+WHERE (
+    (:subject = '' OR lower(lr.display_name_1) = lower(:subject))
+    AND (:predicate = '' OR lower(lr.relationship_label) = lower(:predicate))
+    AND (:object = '' OR lower(lr.display_name_2) = lower(:object))
+    AND (:position = '' OR
+        (:position = 'left' AND (lr.x_min_1 + lr.x_max_1) / 2.0 < 0.33) OR
+        (:position = 'right' AND (lr.x_min_1 + lr.x_max_1) / 2.0 > 0.67) OR
+        (:position = 'center' AND (lr.x_min_1 + lr.x_max_1) / 2.0 BETWEEN 0.33 AND 0.67) OR
+        (:position = 'top' AND (lr.y_min_1 + lr.y_max_1) / 2.0 < 0.33) OR
+        (:position = 'bottom' AND (lr.y_min_1 + lr.y_max_1) / 2.0 > 0.67)
+    )
+    AND (:size = '' OR
+        (:size = 'small' AND (lr.x_max_1 - lr.x_min_1) * (lr.y_max_1 - lr.y_min_1) < 0.05) OR
+        (:size = 'medium' AND (lr.x_max_1 - lr.x_min_1) * (lr.y_max_1 - lr.y_min_1) BETWEEN 0.05 AND 0.25) OR
+        (:size = 'large' AND (lr.x_max_1 - lr.x_min_1) * (lr.y_max_1 - lr.y_min_1) > 0.25) OR
+        (:size = 'dominant' AND (lr.x_max_1 - lr.x_min_1) * (lr.y_max_1 - lr.y_min_1) > 0.5)
+    )
+)
+ORDER BY lr.image_id
+LIMIT :limit
+"""
+
+[[tools.parameters]]
+name = "subject"
+type = "string"
+description = "Subject class name (e.g., 'Person', 'Dog')"
+required = false
+default = ""
+max_length = 50
+
+[[tools.parameters]]
+name = "predicate"
+type = "string"
+description = "Relationship type (e.g., 'on', 'at', 'holds', 'under')"
+required = false
+default = ""
+max_length = 50
+
+[[tools.parameters]]
+name = "object"
+type = "string"
+description = "Object class name (e.g., 'Horse', 'Table')"
+required = false
+default = ""
+max_length = 50
+
+[[tools.parameters]]
+name = "position"
+type = "string"
+description = "Filter by subject position in image"
+required = false
+default = ""
+enum = ["", "left", "right", "center", "top", "bottom"]
+
+[[tools.parameters]]
+name = "size"
+type = "string"
+description = "Filter by subject bounding box size"
+required = false
+default = ""
+enum = ["", "small", "medium", "large", "dominant"]
+
+[[tools.parameters]]
+name = "limit"
+type = "integer"
+description = "Maximum results to return"
+required = false
+default = 20
+minimum = 1
+maximum = 100
+
+[tools.annotations]
+read_only_hint = true
+destructive_hint = false
+idempotent_hint = true
+open_world_hint = true
+cost_hint = "medium"
+
+# -----------------------------------------------------------------------------
+# Tool 3: Browse Relationships (Discovery)
+# -----------------------------------------------------------------------------
+# Lists available relationship predicate types with counts
+
+[[tools]]
+name = "browse_relationships"
+description = "List available relationship types (predicates) in the dataset with their occurrence counts. Use this to discover what relationships exist before searching."
+sql = """
+SELECT
+    rs.predicate AS relationship,
+    SUM(rs.occurrence_count) AS count
+FROM relationship_summary rs
+GROUP BY rs.predicate
+ORDER BY count DESC
+LIMIT :limit
+"""
+
+[[tools.parameters]]
+name = "limit"
+type = "integer"
+description = "Maximum relationship types to return"
+required = false
+default = 50
+minimum = 1
+maximum = 200
+
+[tools.annotations]
+read_only_hint = true
+destructive_hint = false
+idempotent_hint = true
+open_world_hint = true
+cost_hint = "low"
+
+# =============================================================================
+# MCP Resources - Code Mode Documentation
+# =============================================================================
+
+[[resources]]
+uri = "docs://open-images/schema"
+name = "Open Images Database Schema"
+description = "Tables, columns, types, views, and Athena-specific notes for the Open Images database"
+mime_type = "text/markdown"
+content = "loaded from schema.md"
+
+[[resources]]
+uri = "docs://open-images/examples"
+name = "Open Images Example Queries"
+description = "Example SQL queries for common Open Images operations"
+mime_type = "text/markdown"
+content = "loaded from examples.md"
+
+[[resources]]
+uri = "docs://open-images/find-images-workflow"
+name = "Find Images Workflow"
+description = "Deterministic resolve-then-search workflow for natural language image queries"
+mime_type = "text/markdown"
+content = "loaded from find-images-workflow.md"
+
+# =============================================================================
+# MCP Prompts
+# =============================================================================
+
+[[prompts]]
+name = "start_code_mode"
+description = "Load all context needed for Code Mode SQL generation against Open Images"
+include_resources = [
+    "docs://open-images/schema",
+    "code-mode://instructions",
+    "code-mode://policies",
+    "docs://open-images/examples"
+]
+
+[[prompts]]
+name = "find_images"
+description = "Structured image search workflow. Resolves class names to canonical forms, then searches with resolved names. Use this for natural language image queries."
+include_resources = ["docs://open-images/find-images-workflow"]

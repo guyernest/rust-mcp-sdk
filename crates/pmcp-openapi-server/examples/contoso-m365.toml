@@ -1,0 +1,235 @@
+# =============================================================================
+# contoso-m365.toml — POINTABLE OpenAPI Shape-A oauth_passthrough showcase (P902-EXAMPLE)
+# =============================================================================
+#
+# This is the config "users can point at" — the per-user delegated OAuth
+# (`oauth_passthrough`) sibling of the london-tube api_key showcase. Unlike
+# tests/fixtures/contoso-m365.toml (which is EXCLUDED from the published crate via
+# Cargo.toml `exclude = [..., "tests/"]`), this file lives under examples/ and SHIPS
+# with the published crate, so users can:
+#
+#   pmcp-openapi-server --config crates/pmcp-openapi-server/examples/contoso-m365.toml
+#
+# It mirrors the enriched tests/fixtures/contoso-m365.toml surface: the same
+# `oauth_passthrough` backend auth, the same two read-only Contoso SCRIPT tools
+# (get_customer / get_customer_orders), the same three [[resources]], and the same
+# start_code_mode [[prompts]] block. Keep this file in sync with the fixture (the
+# Plan-02 parity test's `assert_contoso_code_mode_surface` checks BOTH for drift).
+#
+# DATA PROVENANCE: the whole-sheet range both tools read (`A2:D7`) and every
+# customer/order row are defined by the canonical dataset
+#   crates/pmcp-openapi-server/tests/fixtures/contoso-m365-workbook.json
+# (the SINGLE source of truth — the same dataset the parity test loads its mock
+# rows from). Each tool reads that whole block and filters by the customer_id column,
+# so the rows it returns MUST match the canonical json.
+#
+# AUTH — `oauth_passthrough`: the server holds NO standing credential. It captures
+# the signed-in user's inbound `Authorization: Bearer <token>` and forwards it to
+# Graph, so it can only ever act AS the calling user (least privilege; admin
+# consents once to a bounded scope as the ceiling). Proven offline in Plan 02.
+#
+# NO REAL SECRETS: any tenant/client id would appear ONLY as a `${VAR}` env-ref
+# placeholder (see the [server] description note) — the auth path here carries NO
+# standing credential at all (the bearer comes from the inbound user token). The
+# ONLY non-placeholder credential literal is the dev-guarded inline token secret
+# (see the [code_mode] block below); NEVER set that flag in a production config.
+#
+# NO date builtin: the embedded JS engine has no date support -- the tool scripts do
+# a simple read-then-filter (no arithmetic at all); all date logic lives in Code Mode.
+
+[server]
+name = "contoso-m365"
+version = "1.0.0"
+description = "Contoso M365: per-user delegated OAuth (passthrough) reading a Customers/Orders Excel workbook over Microsoft Graph (pointable showcase config). Tenant/client ids, if templated for a real deployment, are ${VAR} placeholders resolved from the environment."
+
+# =============================================================================
+# Backend — Microsoft Graph, per-user delegated token forwarded (THE headline)
+# =============================================================================
+# `oauth_passthrough` forwards the inbound MCP `Authorization` header to Graph as
+# `target_header` (default "Authorization"). No standing credential is held here.
+
+[backend]
+base_url = "https://graph.microsoft.com/v1.0"
+
+[backend.auth]
+type = "oauth_passthrough"
+target_header = "Authorization"
+required = true
+
+[backend.http]
+timeout_seconds = 30
+retries = 3
+retry_backoff_ms = 1000
+
+# =============================================================================
+# Tool 1 (script) — get_customer
+# =============================================================================
+# Read the whole Customers data block (`A2:D7`, columns customer_id,name,segment,
+# region) and return the row(s) whose customer_id (column 0) matches the argument.
+# This is the natural "load the records, filter by the id column" shape -- the same
+# read-and-filter pattern the headline Code Mode query uses, just scoped to one id.
+# No per-id address math: the engine has no `Date` builtin and renders arithmetic as
+# floats, so filtering an already-read block is both simpler AND engine-safe. Bind
+# the awaited api.get value to a const before filtering it (Code Mode learning).
+
+[[tools]]
+name = "get_customer"
+description = "Fetch one customer row (customer_id, name, segment, region) from the Contoso Customers sheet."
+script = """
+const resp = await api.get("/drives/CONTOSO_DRIVE/items/CUSTOMERS_ITEM/workbook/worksheets/Customers/range(address='A2:D7')?$select=values");
+const rows = resp.values;
+const matches = rows.filter(row => row[0] === args.customer_id);
+return matches;
+"""
+
+[[tools.parameters]]
+name = "customer_id"
+type = "string"
+description = "Customer id, e.g. 'C007'."
+required = true
+
+[tools.annotations]
+read_only_hint = true
+idempotent_hint = true
+open_world_hint = true
+cost_hint = "low"
+
+# =============================================================================
+# Tool 2 (script) — get_customer_orders
+# =============================================================================
+# Read the whole Orders data block (`A2:D7`, columns order_id,customer_id,order_date,
+# amount) and return the rows whose customer_id (column 1) matches the argument. Same
+# read-and-filter shape as get_customer, just filtering a different column. A customer
+# with no orders (e.g. 'C006') falls out naturally as an empty result -- no special
+# case needed. No date use. Bind the awaited api.get value to a const before filtering.
+
+[[tools]]
+name = "get_customer_orders"
+description = "Fetch the Orders rows (order_id, customer_id, order_date, amount) for one customer from the Contoso Orders sheet."
+script = """
+const resp = await api.get("/drives/CONTOSO_DRIVE/items/ORDERS_ITEM/workbook/worksheets/Orders/range(address='A2:D7')?$select=values");
+const rows = resp.values;
+const matches = rows.filter(row => row[1] === args.customer_id);
+return matches;
+"""
+
+[[tools.parameters]]
+name = "customer_id"
+type = "string"
+description = "Customer id, e.g. 'C007'."
+required = true
+
+[tools.annotations]
+read_only_hint = true
+idempotent_hint = true
+open_world_hint = true
+cost_hint = "low"
+
+# =============================================================================
+# Resources — inert static markdown served as Code Mode context
+# =============================================================================
+# The three URIs below are the EXACT set referenced by the start_code_mode
+# prompt's include_resources (Pitfall 3 -- register_prompts resolves each against
+# the StaticResourceHandler; a typo'd URI fails assembly). These exact strings are
+# also reused verbatim by Plan 04's book/course chapters and asserted by the
+# Plan-02 parity test's assert_contoso_code_mode_surface.
+
+[[resources]]
+uri = "docs://contoso-m365/schema"
+name = "Contoso Workbook Schema"
+description = "Customers/Orders sheet columns, the Graph range-read shape, and the id->row addressing convention"
+mime_type = "text/markdown"
+content = """
+# Contoso M365 Workbook (Customers.xlsx on the SharePoint "Sales" site)
+
+## Sheets
+- **Customers** — columns A..D: `customer_id`, `name`, `segment`, `region`.
+  Row 1 is the header; customer data starts at row 2. `customer_id` 'C00N' lives
+  on sheet row `N + 1` (e.g. 'C001' -> row 2 -> `A2:D2`).
+- **Orders** — columns A..D: `order_id`, `customer_id`, `order_date`, `amount`.
+  Row 1 is the header; orders are grouped/sorted by `customer_id` so each
+  customer's orders form a contiguous block (e.g. 'C001' -> `A2:D3`).
+
+## Graph range-read shape
+`GET /drives/{drive-id}/items/{item-id}/workbook/worksheets/{worksheet-id}/range(address='A2:D2')?$select=values`
+returns a workbookRange object whose `values` is a 2-D array of the cell values.
+
+## Tools
+- `get_customer(customer_id)` -> one customer row from the Customers sheet.
+- `get_customer_orders(customer_id)` -> that customer's Orders rows.
+"""
+
+[[resources]]
+uri = "docs://contoso-m365/examples"
+name = "Contoso Example Scripts"
+description = "Example Code Mode scripts for common Contoso Customers/Orders queries"
+mime_type = "text/markdown"
+content = """
+# Contoso Example Scripts
+
+## Read one customer (read the block, filter by the id column)
+```js
+const resp = await api.get(`/drives/CONTOSO_DRIVE/items/CUSTOMERS_ITEM/workbook/worksheets/Customers/range(address='A2:D7')?$select=values`);
+const rows = resp.values;
+return rows.filter(row => row[0] === "C001");
+```
+
+## Read all customers (header excluded)
+```js
+const r = await api.get(`/drives/CONTOSO_DRIVE/items/CUSTOMERS_ITEM/workbook/worksheets/Customers/range(address='A2:D7')?$select=values`);
+return r.values;
+```
+
+## Read all orders
+```js
+const r = await api.get(`/drives/CONTOSO_DRIVE/items/ORDERS_ITEM/workbook/worksheets/Orders/range(address='A2:D7')?$select=values`);
+return r.values;
+```
+"""
+
+[[resources]]
+uri = "code-mode://learnings"
+name = "Contoso Code Mode Learnings"
+description = "Tips and gotchas for authoring Contoso Code Mode scripts"
+mime_type = "text/markdown"
+content = """
+# Contoso Code Mode Learnings
+
+- Bind the `api.get` result to a `const` BEFORE `return` -- the engine's accurate
+  JS subset expects the awaited value bound, not returned inline.
+- The engine has **no `Date` builtin**. For the "last 3 months" headline query use
+  a PINNED reference date literal and compare ISO date strings lexicographically
+  (`"2026-02-28" <= d && d <= "2026-05-28"`) -- never wall-clock `now`.
+- `range(address='...')` carries `(`, `)`, `'`, `:` literally; build the full
+  range URL as a template string and pass it to `api.get`.
+- To fetch one entity, read the whole data block (`A2:D7`) and `.filter()` the rows
+  by the id column (customer_id is column 0 in Customers, column 1 in Orders) --
+  simpler and engine-safer than computing a per-id range address.
+"""
+
+# =============================================================================
+# Prompt — start_code_mode: load all context for Code Mode script generation
+# =============================================================================
+# include_resources lists EXACTLY the three resource URIs defined above (Pitfall 3
+# -- every URI here must equal a [[resources]] uri or register_prompts fails).
+
+[[prompts]]
+name = "start_code_mode"
+description = "Load all context needed for Code Mode script generation against the Contoso workbook"
+include_resources = [
+    "docs://contoso-m365/schema",
+    "docs://contoso-m365/examples",
+    "code-mode://learnings",
+]
+
+# =============================================================================
+# Code Mode — engine shared with the script tools
+# =============================================================================
+# DEV-ONLY inline secret guarded by allow_inline_token_secret_for_dev so the
+# offline parity/code-mode tests boot without extra env wiring. NEVER set this
+# flag in a committed production config.
+
+[code_mode]
+enabled = true
+token_secret = "contoso-m365-pointable-dev-secret-32by"
+allow_inline_token_secret_for_dev = true

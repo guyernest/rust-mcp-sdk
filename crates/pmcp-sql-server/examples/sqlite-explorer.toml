@@ -1,0 +1,100 @@
+# =============================================================================
+# sqlite-explorer.toml — POINTABLE config-driven SQLite MCP server (Shape A)
+# =============================================================================
+#
+# The SQLite sibling of the OpenAPI london-tube / contoso-m365 pointable configs:
+# a complete MCP server described in TOML alone — NO Rust. Point the published
+# `pmcp-sql-server` binary at this file and a schema/seed file and serve it:
+#
+#   # 1. seed a tiny demo database (the binary connects to an EXISTING db; it
+#   #    does not create or seed one):
+#   sqlite3 /tmp/pmcp-sqlite-explorer.db < examples/sqlite-explorer.sql
+#
+#   # 2. serve it over streamable HTTP:
+#   pmcp-sql-server \
+#     --config examples/sqlite-explorer.toml \
+#     --schema examples/sqlite-explorer.sql \
+#     --http 127.0.0.1:8080
+#
+# `examples/sqlite-explorer.sql` is used TWICE: once to SEED the demo database
+# (step 1) and once as the `--schema` code-mode resource the server serves to
+# agents (step 2). Re-running step 1 is safe — the schema is idempotent.
+#
+# This file ships with the published crate (only tests/ is excluded), so a user
+# can `cargo install pmcp-sql-server` and run exactly the commands above.
+
+[server]
+name = "sqlite-explorer"
+version = "1.0.0"
+description = "Config-driven SQLite MCP server over a tiny books demo — built from config alone, no Rust."
+
+# =============================================================================
+# Database — local SQLite file (the Shape-A binary reads `file_path`)
+# =============================================================================
+# The connector opens the file at `file_path`; it must already exist (seed it
+# with the sqlite3 line above, or point this at your own .db).
+
+[database]
+type = "sqlite"
+file_path = "/tmp/pmcp-sqlite-explorer.db"
+
+[[database.tables]]
+name = "books"
+description = "One row per book: id, title, author, year, genre."
+
+[database.pool]
+# SQLite is single-writer; one connection is the honest cap for a demo.
+max_connections = 1
+connection_timeout_seconds = 5
+
+# =============================================================================
+# Code Mode — the v2.2 selling point: ad-hoc read-only SQL governed by policy
+# =============================================================================
+# validate_code / execute_code let an agent author one-off SELECTs for the long
+# tail the curated tools below do not cover, under a static default-deny policy.
+
+[code_mode]
+enabled = true
+allow_writes = false
+require_limit = true
+max_limit = 100
+# DEV ONLY — never commit a real secret. Production uses a secrets reference
+# (token_secret = "env:CODE_MODE_SECRET") substituted by `cargo pmcp deploy`.
+# The inline literal below is rejected unless the dev flag is set.
+token_secret = "sqlite-explorer-dev-only-secret-32by"
+allow_inline_token_secret_for_dev = true
+
+# =============================================================================
+# Curated tools — the common ~20%, each a parameterized SELECT with :named binds
+# =============================================================================
+# Parameters bind as SQL values (never string-spliced), so they are injection-safe.
+
+[[tools]]
+name = "list_books"
+description = "List books ordered by title."
+sql = "SELECT id, title, author, year, genre FROM books ORDER BY title LIMIT :limit"
+
+[[tools.parameters]]
+name = "limit"
+type = "integer"
+description = "Maximum number of rows to return."
+required = false
+default = 20
+
+[[tools]]
+name = "books_by_author"
+description = "Find books by an exact author name."
+sql = "SELECT id, title, author, year, genre FROM books WHERE author = :author ORDER BY title LIMIT :limit"
+
+[[tools.parameters]]
+name = "author"
+type = "string"
+description = "Exact author name to filter by, e.g. 'Jon Gjengset'."
+required = true
+
+[[tools.parameters]]
+name = "limit"
+type = "integer"
+description = "Maximum number of rows to return."
+required = false
+default = 20

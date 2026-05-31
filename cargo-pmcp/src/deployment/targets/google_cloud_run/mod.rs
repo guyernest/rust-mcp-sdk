@@ -125,6 +125,39 @@ impl Default for GoogleCloudRunTarget {
     }
 }
 
+/// Resolve `(project_id, region)` for Cloud Run lifecycle ops.
+///
+/// Mirrors `deploy::resolve_params`'s precedence so `destroy`/`outputs`/`logs`/
+/// `metrics` target the SAME project and region as the preceding `deploy()` —
+/// previously these methods ignored `config.gcp` and hit the ambient `gcloud
+/// config get-value project` + `CLOUD_RUN_REGION` env var, which silently
+/// targets the wrong project whenever the gcloud CLI is logged into a
+/// different account than the operator's deploy.toml declares (review
+/// finding #2 / n51 follow-up).
+///
+/// Precedence:
+/// 1. `config.gcp.project_id` / `config.gcp.region` (deploy.toml — source of truth)
+///    — skipping empty strings and the placeholder `"your-gcp-project-id"`
+/// 2. `CLOUD_RUN_REGION` env var (region only — gcloud has no analogous env
+///    for project_id)
+/// 3. `gcloud config get-value project` / `run/region` (ambient gcloud)
+fn resolve_project_and_region(config: &DeployConfig) -> Result<(String, String)> {
+    let project_id = config
+        .gcp
+        .as_ref()
+        .map(|g| g.project_id.clone())
+        .filter(|p| !p.is_empty() && p != "your-gcp-project-id")
+        .map_or_else(auth::get_project_id, Ok)?;
+    let region = config
+        .gcp
+        .as_ref()
+        .map(|g| g.region.clone())
+        .filter(|r| !r.is_empty())
+        .or_else(|| std::env::var("CLOUD_RUN_REGION").ok())
+        .unwrap_or_else(auth::get_region);
+    Ok((project_id, region))
+}
+
 #[async_trait]
 impl DeploymentTarget for GoogleCloudRunTarget {
     fn id(&self) -> &str {
@@ -217,10 +250,9 @@ impl DeploymentTarget for GoogleCloudRunTarget {
         println!("🗑️  Destroying Google Cloud Run deployment...");
         println!();
 
-        // Get project and region
-        let project_id = auth::get_project_id()?;
-        let region =
-            std::env::var("CLOUD_RUN_REGION").unwrap_or_else(|_| "us-central1".to_string());
+        // Source-of-truth: deploy.toml [gcp]. Falls back to gcloud ambient
+        // only when [gcp] is absent/empty — matches the deploy() precedence.
+        let (project_id, region) = resolve_project_and_region(config)?;
         let service_name = &config.server.name;
 
         // Delete Cloud Run service
@@ -268,9 +300,7 @@ impl DeploymentTarget for GoogleCloudRunTarget {
     }
 
     async fn outputs(&self, config: &DeployConfig) -> Result<DeploymentOutputs> {
-        let project_id = auth::get_project_id()?;
-        let region =
-            std::env::var("CLOUD_RUN_REGION").unwrap_or_else(|_| "us-central1".to_string());
+        let (project_id, region) = resolve_project_and_region(config)?;
         let service_name = &config.server.name;
 
         // Get service URL
@@ -307,9 +337,10 @@ impl DeploymentTarget for GoogleCloudRunTarget {
     }
 
     async fn logs(&self, config: &DeployConfig, tail: bool, lines: usize) -> Result<()> {
-        let project_id = auth::get_project_id()?;
-        let _region =
-            std::env::var("CLOUD_RUN_REGION").unwrap_or_else(|_| "us-central1".to_string());
+        // `gcloud logging read` filters by the service-name label, not by region,
+        // so region is bound to `_region` (computed for parity with deploy/destroy
+        // precedence; future change can promote it into the filter).
+        let (project_id, _region) = resolve_project_and_region(config)?;
         let service_name = &config.server.name;
 
         println!("📜 Fetching logs from Google Cloud Run...");
@@ -345,12 +376,12 @@ impl DeploymentTarget for GoogleCloudRunTarget {
         Ok(())
     }
 
-    async fn metrics(&self, config: &DeployConfig, period: &str) -> Result<MetricsData> {
-        let _project_id = auth::get_project_id()?;
-        let _region =
-            std::env::var("CLOUD_RUN_REGION").unwrap_or_else(|_| "us-central1".to_string());
-        let _service_name = &config.server.name;
-
+    async fn metrics(&self, _config: &DeployConfig, period: &str) -> Result<MetricsData> {
+        // metrics() is a stub today (just prints a Cloud Console URL); when it
+        // grows a real implementation it should call resolve_project_and_region
+        // to stay consistent with destroy/outputs/logs. The previous version
+        // bound `_project_id`/`_region`/`_service_name` via the gcloud-ambient
+        // path, which silently masked the wrapper-bypass bug — dropped here.
         println!("📊 Google Cloud Run metrics available in Cloud Console");
         println!("   View at: https://console.cloud.google.com/run");
 
@@ -411,5 +442,112 @@ impl DeploymentTarget for GoogleCloudRunTarget {
         );
 
         Ok(())
+    }
+}
+
+/// Tests for `resolve_project_and_region` — guards n51 follow-up #2: lifecycle
+/// methods MUST read deploy.toml `[gcp]`, not the ambient gcloud config.
+///
+/// These tests are env-mutating (CLOUD_RUN_REGION); CI runs `--test-threads=1`
+/// so serialization is guaranteed. Each test save/restores the env var so
+/// failures don't poison subsequent tests in the same process.
+#[cfg(test)]
+mod resolve_project_and_region_tests {
+    use super::resolve_project_and_region;
+    use crate::deployment::config::DeployConfig;
+    use std::path::PathBuf;
+
+    /// Save+restore guard for an env var across a single test.
+    struct EnvGuard {
+        key: &'static str,
+        saved: Option<String>,
+    }
+    impl EnvGuard {
+        fn set(key: &'static str, value: Option<&str>) -> Self {
+            let saved = std::env::var(key).ok();
+            match value {
+                Some(v) => std::env::set_var(key, v),
+                None => std::env::remove_var(key),
+            }
+            Self { key, saved }
+        }
+    }
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            match self.saved.take() {
+                Some(v) => std::env::set_var(self.key, v),
+                None => std::env::remove_var(self.key),
+            }
+        }
+    }
+
+    fn cfg_with_gcp(project_id: &str, region: &str) -> DeployConfig {
+        DeployConfig::default_for_cloud_run_server(
+            "test-svc".to_string(),
+            project_id.to_string(),
+            region.to_string(),
+            PathBuf::from("/tmp/test"),
+        )
+    }
+
+    /// Happy path: config.gcp fully populated → returned verbatim, never
+    /// reaches gcloud or env-var fallback.
+    #[test]
+    fn prefers_config_gcp_over_env() {
+        let _g = EnvGuard::set("CLOUD_RUN_REGION", Some("us-east-1"));
+        let cfg = cfg_with_gcp("prod-billing", "europe-west1");
+        let (project, region) =
+            resolve_project_and_region(&cfg).expect("must resolve from config.gcp");
+        assert_eq!(project, "prod-billing");
+        assert_eq!(
+            region, "europe-west1",
+            "config.gcp.region wins over CLOUD_RUN_REGION env var"
+        );
+    }
+
+    /// region empty in config.gcp + CLOUD_RUN_REGION set → falls back to env.
+    /// project_id stays from config.gcp (still populated).
+    #[test]
+    fn region_falls_back_to_env_when_gcp_region_empty() {
+        let _g = EnvGuard::set("CLOUD_RUN_REGION", Some("us-east-1"));
+        let mut cfg = cfg_with_gcp("prod-billing", "");
+        assert_eq!(cfg.gcp.as_ref().map(|g| g.region.as_str()), Some(""));
+        // Sanity: ensure region is truly empty post-construction.
+        cfg.gcp.as_mut().unwrap().region = String::new();
+        let (project, region) =
+            resolve_project_and_region(&cfg).expect("must resolve via env fallback");
+        assert_eq!(project, "prod-billing");
+        assert_eq!(region, "us-east-1");
+    }
+
+    /// Both env and config.gcp.region set → config wins (precedence).
+    #[test]
+    fn config_gcp_region_wins_over_env() {
+        let _g = EnvGuard::set("CLOUD_RUN_REGION", Some("us-east-1"));
+        let cfg = cfg_with_gcp("p", "asia-northeast1");
+        let (_, region) = resolve_project_and_region(&cfg).expect("must resolve");
+        assert_eq!(
+            region, "asia-northeast1",
+            "config.gcp.region is highest precedence"
+        );
+    }
+
+    /// Placeholder project_id `"your-gcp-project-id"` is rejected (treated as
+    /// empty so the gcloud fallback fires). We can't easily assert the gcloud
+    /// outcome (it shells out), so this test verifies the placeholder is at
+    /// LEAST not blindly returned.
+    #[test]
+    fn rejects_placeholder_project_id() {
+        let cfg = cfg_with_gcp("your-gcp-project-id", "us-central1");
+        let result = resolve_project_and_region(&cfg);
+        // If gcloud is configured, result is Ok with project != placeholder.
+        // If gcloud is unconfigured, result is Err. Either way, the literal
+        // "your-gcp-project-id" must NOT appear as the returned project_id.
+        if let Ok((project, _)) = result {
+            assert_ne!(
+                project, "your-gcp-project-id",
+                "placeholder must be rejected, falling through to gcloud or Err"
+            );
+        }
     }
 }

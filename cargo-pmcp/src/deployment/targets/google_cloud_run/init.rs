@@ -25,6 +25,11 @@ use anyhow::Result;
 /// - `cloudbuild.yaml`
 ///
 /// Pre-existing files are preserved verbatim.
+///
+/// # Errors
+///
+/// Returns an error if any of the deploy.toml / Dockerfile / .dockerignore /
+/// cloudbuild.yaml artifacts cannot be written.
 pub fn init_google_cloud_run(config: &DeployConfig) -> Result<()> {
     println!("🚀 Initializing Google Cloud Run deployment...");
     println!();

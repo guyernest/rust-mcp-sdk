@@ -1,0 +1,187 @@
+Phase 81 Re-Audit Raw Results (plan 81-10, Task 2a)
+====================================================
+
+Run at: 2026-05-15 (UTC), HEAD 942d9463
+Spec: 81-07-PLAN.md as amended by plan 81-09 (R-9 / R-1A clauses a/b/c/d/e)
+Pin state: post plan 81-08
+
+--- mdBook Build Results (orchestrator-captured, EXIT=0 DIRECT) ---
+
+pmcp-book: PASS
+  Log: /tmp/81-10-mdbook-book.log
+  Last line: EXIT=0
+  Captured by orchestrator at: 2026-05-15T23:52:22Z
+  HEAD at capture: 942d9463 (matches current HEAD; no commits between capture and re-audit)
+  Evidence type: DIRECT EXIT-CODE (orchestrator shell, not subject to executor's mdbook deny rule)
+  NOT timestamp-fallback substitution
+
+pmcp-course: PASS
+  Log: /tmp/81-10-mdbook-course.log
+  Last line: EXIT=0
+  Captured by orchestrator at: 2026-05-15T23:52:22Z
+  HEAD at capture: 942d9463 (matches current HEAD)
+  Evidence type: DIRECT EXIT-CODE (orchestrator shell)
+  NOT timestamp-fallback substitution
+
+--- Per-Finding Empirical Disposition (Audit A under R-9 relaxations) ---
+
+Finding 1: book ch12-9-code-mode.md L246-L262 vs examples/s41_code_mode_graphql.rs L79-L93
+  Original disposition: FAIL (4-space main-fn de-indent drift)
+  Re-audit (R-1A.a): apply symmetric de-indent (block min=0, source min=4 -> strip 4 from source)
+  After symmetric de-indent, block matches source as contiguous substring line-for-line.
+  Disposition: PASS per R-1A.a
+
+Finding 2: book ch12-9-code-mode.md L285-L322 vs examples/s41_code_mode_graphql.rs L108-L143
+  Original disposition: FAIL (4-space main-fn de-indent drift)
+  Re-audit (R-1A.a): apply symmetric de-indent (block min=0, source min=4)
+  After symmetric de-indent, contiguous-substring match holds line-for-line throughout the
+    success-path match arm (block L286-L321 maps to source L108-L143).
+  Disposition: PASS per R-1A.a
+
+Finding 3: book ch12-9-code-mode.md L343-L371 vs examples/s41_code_mode_graphql.rs L145-L171
+  Original disposition: FAIL (4-space main-fn de-indent drift)
+  Re-audit (R-1A.a): apply symmetric de-indent (block min=0, source min=4)
+  After symmetric de-indent, contiguous-substring match holds:
+    block L344 "// --- REJECTION PATH ---" == source L145 (de-indented)
+    block L345 "// Demonstrates that mutations are rejected when allow_mutations is false (the default)." == source L146 (de-indented)
+      [book block PRESERVES the comment that the course block at Finding 5 omits]
+    block L346 through L371 maps line-for-line to source L147-L171.
+  Disposition: PASS per R-1A.a
+
+Finding 4: course ch22-code-mode.md L196-L222 vs examples/s41_code_mode_graphql.rs L107-L143
+  Original disposition: FAIL (de-indented + structural abbreviation via `// ...` placeholder)
+  Re-audit (R-1A.a + R-1A.b + R-1A.d combined):
+    (i) Block at L196-L222 contains `// ...` at L217 (trimmed content exactly `// ...`)
+    (ii) Source lines elided by the placeholder: L131-L138 (the multi-line `match exec_result` block inside `if result.approval_token.is_some()`)
+    (iii) Additionally, source L124-L127 (`if let Some(ref explanation) = ...` arm) is OMITTED from the block WITHOUT a `// ...` marker - covered by R-1A.d (non-load-bearing: a degenerate `if let Some(ref) = Some(...)` whose Some arm is always taken; the inner action is a `println!` for an "Explanation" debug line; no struct fields, no control-flow change that affects external behavior, no API shape)
+    (iv) Additionally, source L140-L142 (multi-line `Err(e) => { println!(...); },`) is collapsed to a single line in block L220 - semantic-preserving cosmetic reformatting; treated as cosmetic drift under R-1A.d
+  Disposition: WARN per R-1A.b + R-1A.d (combined).
+  Citation: chapter L217 placeholder marks source L131-L138 (R-1A.b); chapter omits source L124-L127 unmarked (R-1A.d, non-load-bearing); chapter L220 collapses source L140-L142 (cosmetic line-collapse under R-1A.d spirit).
+
+Finding 5: course ch22-code-mode.md L228-L254 vs examples/s41_code_mode_graphql.rs L145-L171
+  Original disposition: FAIL (de-indented + source-side comment + println! omitted without `// ...` marker)
+  Re-audit (R-1A.a + R-1A.d) - EXPLICIT R-1A.d disposition path:
+    (i) Block at L228-L254 contains NO `// ...` placeholder marker. R-1A.b does NOT apply.
+    (ii) Source-side omissions identified:
+        source L146: `    // Demonstrates that mutations are rejected when allow_mutations is false (the default).` (`//` comment line)
+        source L169: `            println!("This demonstrates that invalid code does NOT receive an approval token.");` (`println!` macro line)
+    (iii) Both omitted lines are confirmed ABSENT from the chapter block at L228-L254:
+        The substring "Demonstrates that mutations are rejected when allow_mutations is false" does NOT appear in block L228-L254.
+        The substring "This demonstrates that invalid code does NOT receive an approval token" does NOT appear in block L228-L254.
+        [Note: block L243 contains "This demonstrates that mutations do NOT receive an approval token." - this is the Ok-arm message at source L160, NOT the Err-arm message at source L169; they are different sentences with overlapping prefix.]
+    (iv) Both omitted lines are non-load-bearing per R-1A.d definition:
+        source L146 is a `//` comment: no struct field, no control flow, no API shape
+        source L169 is a `println!` macro call: no struct field, no control flow, no API shape
+    (v) Apply R-1A.a symmetric de-indent + elide source L146 + L169. Narrowed source = L145, L147-L168, L170-L171.
+    (vi) Substring-match test (line-by-line after de-indent and source-side elision): contiguous match on de-indent + elision of L146 and L169.
+  Disposition: WARN per R-1A.d.
+  Citation: "source L146 omitted (comment, non-load-bearing), source L169 omitted (println!, non-load-bearing); contiguous match on de-indent + elision".
+
+Finding 6: Audit E pmcp-code-mode pin
+  Original disposition: FAIL (book="0.5" vs course="0.5.1")
+  Re-audit (post 81-08): book L89 `pmcp-code-mode = "0.5.1"`, course L67 `pmcp-code-mode = "0.5.1"`
+  Byte-equality: TRUE
+  Disposition: PASS
+
+Finding 7: Audit E pmcp-code-mode-derive pin
+  Original disposition: FAIL (book="0.2" vs course="0.2.0")
+  Re-audit (post 81-08): book L90 `pmcp-code-mode-derive = "0.2.0"`, course L68 `pmcp-code-mode-derive = "0.2.0"`
+  Byte-equality: TRUE
+  Disposition: PASS
+
+--- R-1A.c Per-Anchor Source-Match-Guard Enumeration (course ch23-skills.md) ---
+
+H2 boundaries (empirical, from `grep -n '^## '`):
+  L138-L182: Tier 1: Hello-World Skill
+  L183-L248: Tier 2: Refunds Skill with References
+  L249-L270: Tier 3: Code-Mode Skill
+  L271-L352: Before you generate a query
+  L353-L383: Cross-SDK Compatibility
+
+Fenced block boundaries (empirical, opening fences only, from `grep -n '^```'`):
+  L107 (Tier 1), L144 (Tier 1), L158 (Tier 1), L191 (Tier 2), L213 (Tier 2),
+  L260 (Tier 3), L281 (Before-you), L305 (Before-you), L330 (Before-you)
+
+Anchor L175/176 cites examples/s44_server_skills.rs (Rust)
+  H2: Tier 1 (L138-L182)
+  Next fenced block within same H2 after L176: NONE (next fence is L191 in Tier 2, OUT of Tier 1's H2 boundary)
+  Guard outcome: N/A (no following block within same H2 -> no application of guard)
+  In-scope contribution: 0
+  Note: out-of-scope candidate block at L191 (Tier 2 markdown excerpting refunds/SKILL.md). If algorithm misread to allow cross-H2 scoping, guard would reject this candidate: lang fence is `markdown` (not Rust); literal `s44_server_skills` absent; no Rust function signature or struct from s44_server_skills.rs. R-1A.c guard FAIL -> OUT OF SCOPE either way. L175/176 is the per-plan exemplar showing the R-1A.c guard working as intended.
+
+Anchor L238/239 cites examples/s44_server_skills.rs (Rust)
+  H2: Tier 2 (L183-L248)
+  Next fenced block within same H2 after L239: NONE (next fence is L260 in Tier 3)
+  Guard outcome: N/A (no following block within same H2)
+  In-scope contribution: 0
+
+Anchor L341/342 cites examples/s44_server_skills.rs (Rust)
+  H2: Before you generate a query (L271-L352)
+  Next fenced block within same H2 after L342: NONE (last fence in this H2 is L330/335)
+  Guard outcome: N/A (no following block within same H2)
+  In-scope contribution: 0
+
+Anchor L343/344 cites examples/c10_client_skills.rs (Rust)
+  H2: Before you generate a query (L271-L352)
+  Next fenced block within same H2 after L344: NONE (H2 ends at L352)
+  Guard outcome: N/A (no following block within same H2)
+  In-scope contribution: 0
+
+R-1A.c empirical total: 0 (all four anchors are at section-ends; no following block within their respective H2 boundaries).
+
+--- W-7 Coverage Floor (R-1A.e classification) ---
+
+In-scope excerpt count breakdown:
+  pmcp-book/src/ch12-7-tasks.md: 0 (drift-refresh, no permalink anchors)
+  pmcp-book/src/ch12-8-skills.md: 0 (anchors at L147, L203, L324 at section ends; no following blocks within H2)
+  pmcp-book/src/ch12-9-code-mode.md: 3 (Findings 1, 2, 3 in-scope under R-1A.a -> PASS)
+  pmcp-course/src/part8-advanced/ch21-tasks.md: 0 (drift-refresh)
+  pmcp-course/src/part8-advanced/ch22-code-mode.md: 2 (Finding 4 WARN-in-scope per R-1A.b+R-1A.d; Finding 5 WARN-in-scope per R-1A.d)
+  pmcp-course/src/part8-advanced/ch23-skills.md: 0 (R-1A.c per-anchor table; all four anchors at section ends)
+  pmcp-course/src/part8-advanced/ch22-exercises.md: 0
+  pmcp-course/src/part8-advanced/ch23-exercises.md: 0
+
+Total excerpts checked: N=5 (3 + 2)
+Synthetic excerpts skipped: M=7 (carried from 81-07-AUDIT.md as no chapter content changed)
+W-7 classification: WARN (N=5 < 10) per R-1A.e. NOT a hard FAIL. Phase 81 remains shippable.
+
+--- Audit B (Cross-link audit) ---
+
+Total GitHub permalinks (de-duped): 3
+  examples/s44_server_skills.rs: FOUND (5.2K) -> PASS
+  examples/c10_client_skills.rs: FOUND (8.2K) -> PASS
+  examples/s41_code_mode_graphql.rs: FOUND (6.6K) -> PASS
+Broken links (FAIL): 0
+Disposition: PASS
+
+--- Audit C (SUMMARY.md audit) ---
+
+pmcp-book/src/SUMMARY.md Phase 81 entries: 3/3 resolve -> PASS
+pmcp-course/src/SUMMARY.md Phase 81 entries: 5/5 resolve -> PASS
+Disposition: PASS
+
+--- Audit D (Doctest byte-equality + course-doctest invariant) ---
+
+Skills doctest byte-equality: byte-equal after `//! ` strip (13 functional lines) -> PASS
+Course-doctest invariant (W-8): 0 `rust,no_run` matches in either course chapter -> PASS
+
+--- Audit E (Version-pin consistency, post 81-08) ---
+
+pmcp-code-mode pin: book L89 == course L67 == `pmcp-code-mode = "0.5.1"` -> PASS
+pmcp-code-mode-derive pin: book L90 == course L68 == `pmcp-code-mode-derive = "0.2.0"` -> PASS
+
+--- Audit F (Cross-property prose consistency) ---
+
+F1 (byte-equal anchor): book=9, course=8 -> PASS
+F2 (skills_integration.rs citation): book=3, course=3 -> PASS
+F3 (derive-macro-first ordering): book derive=L8 manual=none; course derive=L3 manual=L60 (3<60) -> PASS
+F4 (Language-table row-count parity): book=4, course=4 -> PASS
+
+--- Overall Verdict ---
+
+FAIL count: 0
+WARN count: 3 (Finding 4 WARN per R-1A.b+R-1A.d; Finding 5 WARN per R-1A.d; W-7 WARN per R-1A.e)
+
+Overall Verdict: PASS WITH WARNINGS (3 WARNs; zero FAILs)
+
+Shippability: Phase 81 IS shippable (zero FAILs). Recommended next step: /gsd-verify-phase 81.

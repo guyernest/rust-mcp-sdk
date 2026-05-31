@@ -1,0 +1,175 @@
+# =============================================================================
+# london-tube.toml — POINTABLE OpenAPI Shape-A showcase config (P901-EXAMPLE)
+# =============================================================================
+#
+# This is the config "users can point at" — the OpenAPI equivalent of the SQL
+# reference-config.toml showcase. Unlike tests/fixtures/london-tube.toml (which
+# is excluded from the published crate via Cargo.toml `exclude = [..., "tests/"]`),
+# this file lives under examples/ and SHIPS with the published crate, so users can:
+#
+#   pmcp-openapi-server --config crates/pmcp-openapi-server/examples/london-tube.toml
+#
+# It mirrors the enriched tests/fixtures/london-tube.toml surface: the same two
+# read-only TfL tools with full annotations, the same three [[resources]], and the
+# same start_code_mode [[prompts]] block. Keep this file in sync with the fixture
+# (the runnable examples/london_tube_min.rs embeds a trimmed copy of this surface).
+#
+# NO REAL SECRETS: `app_key` is the `${TFL_APP_KEY}` placeholder (resolved from the
+# process env at provider-construction time; omitted when unset, since
+# `required = false`). The inline `token_secret` is a DEV-ONLY literal guarded by
+# `allow_inline_token_secret_for_dev = true` — NEVER set that flag in production.
+
+[server]
+name = "london-tube"
+version = "1.1.0"
+description = "London Underground line status + disruptions over the TfL API (pointable showcase config)."
+
+# =============================================================================
+# Backend — TfL API, api_key carried as a QUERY parameter (D-04 path)
+# =============================================================================
+
+[backend]
+base_url = "https://api.tfl.gov.uk"
+
+[backend.auth]
+type = "api_key"
+# api_key carried as a QUERY param `app_key`; `${TFL_APP_KEY}` resolves from the
+# process env. `required = false`: omitted when unset (anonymous/low-rate access),
+# present when set.
+query_params = { app_key = "${TFL_APP_KEY}" }
+required = false
+
+[backend.http]
+timeout_seconds = 30
+retries = 3
+retry_backoff_ms = 1000
+
+# =============================================================================
+# Tool 1 (single-call) — get-tube-status  →  GET /Line/Mode/tube/Status
+# =============================================================================
+
+[[tools]]
+name = "get-tube-status"
+description = "Get the current status of all London Underground lines. Returns service status (Good Service, Minor Delays, Severe Delays, etc.) for each line."
+path = "/Line/Mode/tube/Status"
+method = "GET"
+
+[tools.annotations]
+read_only_hint = true
+idempotent_hint = true
+open_world_hint = true
+cost_hint = "low"      # "low" | "medium" | "high"
+
+# =============================================================================
+# Tool 2 (script) — disrupted-lines-with-detail (multi-call orchestration)
+# =============================================================================
+
+[[tools]]
+name = "disrupted-lines-with-detail"
+description = "List the currently-disrupted tube lines (statusSeverity < 10) with their per-line disruption detail."
+script = """
+const statuses = await api.get('/Line/Mode/tube/Status');
+const disrupted = statuses.filter(line => line.lineStatuses.some(s => s.statusSeverity < 10));
+const out = [];
+for (const line of disrupted) {
+  const detail = await api.get(`/Line/${line.id}/Disruption`);
+  out.push({ line: line.name, detail: detail, max: args.maxLines });
+}
+return { count: out.length, lines: out };
+"""
+
+[[tools.parameters]]
+name = "maxLines"
+type = "integer"
+description = "Maximum number of disrupted lines to detail."
+required = false
+default = 5
+
+[tools.annotations]
+read_only_hint = true
+idempotent_hint = true
+open_world_hint = true
+cost_hint = "medium"   # multi-call fan-out: one status call + one per disrupted line
+
+# =============================================================================
+# Resources — inert static markdown served as Code Mode context (T-90.1-02)
+# =============================================================================
+# The three URIs below are the EXACT set the start_code_mode prompt references.
+
+[[resources]]
+uri = "docs://london-tube/schema"
+name = "TfL Line API Schema"
+description = "Endpoints, response shapes, and line ids for the TfL Line API"
+mime_type = "text/markdown"
+content = """
+# TfL Line API (subset)
+
+## Endpoints
+- `GET /Line/Mode/tube/Status` — status for every tube line. Returns an array of
+  line objects, each with `id`, `name`, and a `lineStatuses` array.
+- `GET /Line/{lineId}/Disruption` — disruption detail for a single line. `lineId`
+  is the lowercase line id (e.g. `victoria`, `central`), NOT the display name.
+
+## statusSeverity scale
+`statusSeverity` is an integer. A value `< 10` means the line is DISRUPTED;
+`10` means Good Service. Filter on `statusSeverity < 10` to find disrupted lines.
+
+## Sample line ids
+`victoria`, `central`, `bakerloo`, `jubilee`, `northern`, `piccadilly`.
+"""
+
+[[resources]]
+uri = "docs://london-tube/examples"
+name = "TfL Example Scripts"
+description = "Example Code Mode scripts for common TfL queries"
+mime_type = "text/markdown"
+content = """
+# TfL Example Scripts
+
+## Find disrupted lines (statusSeverity < 10)
+```js
+const statuses = await api.get('/Line/Mode/tube/Status');
+const disrupted = statuses.filter(line =>
+  line.lineStatuses.some(s => s.statusSeverity < 10));
+return disrupted.map(line => line.name);
+```
+"""
+
+[[resources]]
+uri = "code-mode://learnings"
+name = "TfL Code Mode Learnings"
+description = "Tips and gotchas for authoring TfL Code Mode scripts"
+mime_type = "text/markdown"
+content = """
+# TfL Code Mode Learnings
+
+- Bind the `api.get` result to a `const` BEFORE `return`.
+- Line ids are LOWERCASE (`victoria`, not `Victoria`).
+- Read tool parameters off `args` (e.g. `args.maxLines`), bound from
+  `[[tools.parameters]]`; an unset optional parameter falls back to its `default`.
+"""
+
+# =============================================================================
+# Prompt — start_code_mode: load all context for Code Mode script generation
+# =============================================================================
+# include_resources lists EXACTLY the three resource URIs defined above.
+
+[[prompts]]
+name = "start_code_mode"
+description = "Load all context needed for Code Mode script generation"
+include_resources = [
+    "docs://london-tube/schema",
+    "docs://london-tube/examples",
+    "code-mode://learnings",
+]
+
+# =============================================================================
+# Code Mode — engine shared with the script tool (D-02, one engine)
+# =============================================================================
+
+[code_mode]
+enabled = true
+# DEV-ONLY inline secret (CF-4): guarded by allow_inline_token_secret_for_dev so
+# this showcase boots without extra env wiring. NEVER set this flag in production.
+token_secret = "london-tube-showcase-dev-secret-32bytes"
+allow_inline_token_secret_for_dev = true

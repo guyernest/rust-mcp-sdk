@@ -23,7 +23,7 @@ pub(super) fn render_set_env_vars(env: &HashMap<String, String>) -> String {
     entries.sort_by(|a, b| a.0.cmp(b.0));
     entries
         .into_iter()
-        .map(|(k, v)| format!("{}={}", k, v))
+        .map(|(k, v)| format!("{k}={v}"))
         .collect::<Vec<_>>()
         .join(",")
 }

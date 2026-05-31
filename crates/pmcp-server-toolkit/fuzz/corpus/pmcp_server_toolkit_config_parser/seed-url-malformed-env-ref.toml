@@ -1,0 +1,16 @@
+[server]
+name = "fuzz-seed-malformed-env-refs"
+version = "0.0.1"
+
+[database]
+type = "postgres"
+# REVIEWS M6 — malformed env-ref shapes that the resolver must handle gracefully.
+# The url field carries the primary adversarial shape; other shapes appear as comments
+# so libfuzzer mutations can splice them into real string positions:
+#   - "env:"                 (env prefix with empty var name)
+#   - "env:UNDEFINED"        (env ref to a definitely-unset var)
+#   - "env: SPACED"          (env ref with leading space — malformed)
+#   - "env:NAME WITH SPACES" (env ref with internal space)
+#   - "env:NAME\nNEWLINE"    (env ref containing newline)
+url = "env:"
+database = "test"

@@ -225,6 +225,220 @@ bindings:
     Registers sampling handler and enables sampling capability in server capabilities.
     Also available as sampling_arc() for Arc<dyn SamplingHandler>.
 
+# === Toolkit Core (Phase 83) ===
+# Per Phase 83 review R3, every D-15-headline `module_path` is the CRATE-ROOT
+# form (e.g. `pmcp_server_toolkit::AuthProvider`), aligning with the headline
+# DX promise of "one crate-root import line is enough". The submodule paths
+# still exist internally and remain valid (compatibility); the canonical
+# surface for contracts is the crate root.
+#
+# Per Phase 83 Plan 09 Task 2 sub-step 2b, every row uses the concrete
+# `Result<T, ToolkitError>` form consistently (not the `Result<T>` alias) so
+# contract validators see explicit error types.
+#
+# Power-user surfaces (`pmcp_server_toolkit::tools::synthesize_from_config`,
+# `pmcp_server_toolkit::code_mode::*`) keep their submodule paths where the
+# symbol genuinely lives below the crate root by design.
+
+- contract: mcp-protocol-sdk-v1.yaml
+  equation: config_strict_parse
+  function: ServerConfig::from_toml
+  module_path: pmcp_server_toolkit::ServerConfig
+  signature: 'pub fn from_toml(toml_str: &str) -> Result<Self, ToolkitError>'
+  status: implemented
+  notes: TKIT-01 — strict-parse entry point; `#[serde(deny_unknown_fields)]` on every section (D-13).
+
+- contract: mcp-protocol-sdk-v1.yaml
+  equation: config_strict_validated
+  function: ServerConfig::from_toml_strict_validated
+  module_path: pmcp_server_toolkit::ServerConfig
+  signature: 'pub fn from_toml_strict_validated(toml_str: &str) -> Result<Self, ToolkitError>'
+  status: implemented
+  notes: TKIT-01 — parse + validate convenience per review R8; catches empty required values that bypass parse-time strict checks.
+
+- contract: mcp-protocol-sdk-v1.yaml
+  equation: config_validate
+  function: ServerConfig::validate
+  module_path: pmcp_server_toolkit::ServerConfig
+  signature: 'pub fn validate(&self) -> std::result::Result<(), ConfigValidationError>'
+  status: implemented
+  notes: TKIT-01 — review R8 anchor; rejects empty `server.name`, `server.version`, tool names, table names.
+
+- contract: mcp-protocol-sdk-v1.yaml
+  equation: auth_provider_trait
+  function: AuthProvider
+  module_path: pmcp_server_toolkit::AuthProvider
+  signature: '#[async_trait] pub trait AuthProvider: Send + Sync'
+  status: implemented
+  notes: TKIT-02 — re-exported from `pmcp::server::auth::AuthProvider` at the toolkit crate root per review R3 (the headline D-15 DX promise).
+
+- contract: mcp-protocol-sdk-v1.yaml
+  equation: auth_static_provider
+  function: StaticAuthProvider::new
+  module_path: pmcp_server_toolkit::StaticAuthProvider
+  signature: 'pub fn new(expected_token: impl Into<String>) -> Self'
+  status: implemented
+  notes: TKIT-02 — concrete `pmcp::server::auth::AuthProvider` impl (dev/test bearer-token only).
+
+- contract: mcp-protocol-sdk-v1.yaml
+  equation: secrets_provider_trait
+  function: SecretsProvider::get
+  module_path: pmcp_server_toolkit::SecretsProvider
+  signature: 'async fn get(&self, name: &str) -> Result<SecretValue, ToolkitError>'
+  status: implemented
+  notes: >-
+    TKIT-03 — toolkit's secrets surface. Return type is the toolkit-owned
+    `SecretValue` (per review R6 — NOT `pmcp_code_mode::TokenSecret`, which
+    would leak the code-mode feature). `EnvSecrets` is the always-available
+    default impl.
+
+- contract: mcp-protocol-sdk-v1.yaml
+  equation: secret_value
+  function: SecretValue::expose_secret
+  module_path: pmcp_server_toolkit::SecretValue
+  signature: 'pub fn expose_secret(&self) -> &[u8]'
+  status: implemented
+  notes: >-
+    TKIT-03 — toolkit-owned secret newtype. Per review R5, lacks
+    `Debug`/`Display`/`Clone`/`Serialize`/`Deserialize`/`PartialEq` (trybuild
+    compile-fail tests at `crates/pmcp-server-toolkit/tests/compile_fail/`
+    enforce). Per review R6, feature-independent — works under
+    `--no-default-features`.
+
+- contract: mcp-protocol-sdk-v1.yaml
+  equation: secret_value_new
+  function: SecretValue::new
+  module_path: pmcp_server_toolkit::SecretValue
+  signature: 'pub fn new(bytes: impl Into<Vec<u8>>) -> Self'
+  status: implemented
+  notes: >-
+    TKIT-03 — constructs a `SecretValue` from raw bytes via `secrecy::SecretBox`
+    (zeroed on drop). No intermediate plaintext copy left behind by the
+    constructor.
+
+- contract: mcp-protocol-sdk-v1.yaml
+  equation: static_resource_handler
+  function: StaticResourceHandler::new
+  module_path: pmcp_server_toolkit::StaticResourceHandler
+  signature: 'pub fn new(resources: IndexMap<String, LoadedResource>) -> Self'
+  status: implemented
+  notes: TKIT-04 — impl of `pmcp::ResourceHandler`; MIME-typed wire via `Content::resource_with_text`.
+
+- contract: mcp-protocol-sdk-v1.yaml
+  equation: static_prompt_handler
+  function: StaticPromptHandler::new
+  module_path: pmcp_server_toolkit::StaticPromptHandler
+  signature: 'pub fn new(...) -> Self'
+  status: implemented
+  notes: >-
+    TKIT-05 — impl of `pmcp::PromptHandler`; arg-validation returns
+    `pmcp::Error::validation`. Multi-prompt convenience constructor
+    `prompt_handlers_from_config(&ServerConfig)` lifted to the crate root per
+    review R3.
+
+- contract: mcp-protocol-sdk-v1.yaml
+  equation: prompt_handlers_from_config
+  function: prompt_handlers_from_config
+  module_path: pmcp_server_toolkit::prompt_handlers_from_config
+  signature: 'pub fn prompt_handlers_from_config(cfg: &ServerConfig) -> Vec<(String, StaticPromptHandler)>'
+  status: implemented
+  notes: TKIT-05 — multi-prompt path; lifted to the crate root per review R3 so the backend-core smoke test can compose prompts from a single crate-root import.
+
+- contract: mcp-protocol-sdk-v1.yaml
+  equation: hmac_token_reexport
+  function: HmacTokenGenerator
+  module_path: pmcp_server_toolkit::code_mode::HmacTokenGenerator
+  signature: 'pub use pmcp_code_mode::HmacTokenGenerator'
+  status: implemented
+  notes: >-
+    TKIT-06 — re-export only (D-16). No duplicate HMAC code in the toolkit.
+    Lives under the `code_mode` submodule (feature-gated per D-16: code-mode
+    is opt-in).
+
+- contract: mcp-protocol-sdk-v1.yaml
+  equation: tool_synthesis
+  function: synthesize_from_config
+  module_path: pmcp_server_toolkit::synthesize_from_config
+  signature: 'pub fn synthesize_from_config(config: &ServerConfig) -> Result<Vec<SynthesizedTool>, ToolkitError>'
+  status: implemented
+  notes: >-
+    TKIT-07 — turns `[[tools]]` entries into `(name, ToolInfo, Arc<dyn ToolHandler>)`
+    tuples (`SynthesizedTool` type alias). Lifted to the crate root per
+    review R3 — Shape C consumers reach for the higher-level
+    `ServerBuilderExt::try_tools_from_config` instead.
+
+- contract: mcp-protocol-sdk-v1.yaml
+  equation: code_mode_validation_pipeline
+  function: validation_pipeline_from_config
+  module_path: pmcp_server_toolkit::code_mode::validation_pipeline_from_config
+  signature: 'pub fn validation_pipeline_from_config(config: &ServerConfig) -> Result<ValidationPipeline, ToolkitError>'
+  status: implemented
+  notes: >-
+    TKIT-09 — bridges `[code_mode]` + `[code_mode.limits]` blocks into
+    `pmcp_code_mode::ValidationPipeline`. Per review R1, the construction
+    surface was verified via `CODE_MODE_API_NOTES.md` (no `todo!()` survived
+    to commit). Per review R9, inline `token_secret` literals are rejected
+    unless `allow_inline_token_secret_for_dev = true`.
+
+- contract: mcp-protocol-sdk-v1.yaml
+  equation: code_mode_register_tools
+  function: register_code_mode_tools
+  module_path: pmcp_server_toolkit::code_mode::register_code_mode_tools
+  signature: 'pub fn register_code_mode_tools(builder: pmcp::ServerBuilder, config: &ServerConfig) -> Result<pmcp::ServerBuilder, ToolkitError>'
+  status: implemented
+  notes: TKIT-09 — tolerant builder-extension entry point used by `ServerBuilderExt::code_mode_from_config`. No-op when `[code_mode]` is absent; R9 enforcement gate when present.
+
+- contract: mcp-protocol-sdk-v1.yaml
+  equation: code_mode_prompt_assembly
+  function: assemble_code_mode_prompt
+  module_path: pmcp_server_toolkit::assemble_code_mode_prompt
+  signature: 'pub async fn assemble_code_mode_prompt(connector: &dyn SqlConnector, config: &ServerConfig) -> Result<String, ToolkitError>'
+  status: implemented
+  notes: TKIT-10 / D-12 — combines `connector.schema_text()` with curated `[[database.tables]]` descriptions; omits the curated section when tables are empty. Crate-root re-export per review R3 (feature-gated on `code-mode`).
+
+- contract: mcp-protocol-sdk-v1.yaml
+  equation: sql_connector_trait
+  function: SqlConnector
+  module_path: pmcp_server_toolkit::SqlConnector
+  signature: '#[async_trait] pub trait SqlConnector: Send + Sync + ''static { fn dialect(&self) -> Dialect; async fn schema_text(&self) -> Result<String, ConnectorError>; }'
+  status: stub
+  notes: >-
+    TKIT-10 trait stub MINIMIZED to 2 methods per review R2 — `execute()` and
+    placeholder translation are deferred to Phase 84 (pmcp-server-toolkit
+    0.2.0) once the first real connector validates the contract.
+
+- contract: mcp-protocol-sdk-v1.yaml
+  equation: sql_dialect
+  function: Dialect
+  module_path: pmcp_server_toolkit::Dialect
+  signature: 'pub enum Dialect { Postgres, MySql, Athena, Sqlite }'
+  status: implemented
+  notes: TKIT-10 — backend-agnostic SQL dialect enum used by `SqlConnector::dialect`.
+
+- contract: mcp-protocol-sdk-v1.yaml
+  equation: server_builder_ext
+  function: ServerBuilderExt::tools_from_config
+  module_path: pmcp_server_toolkit::ServerBuilderExt
+  signature: 'fn tools_from_config(self, config: &ServerConfig) -> Self'
+  status: implemented
+  notes: TKIT-08 / D-10 — wires `synthesize_from_config` into `pmcp::ServerBuilder` via Phase 82 `tool_arc`. Panicking convenience; production servers should prefer `try_tools_from_config` per review R7.
+
+- contract: mcp-protocol-sdk-v1.yaml
+  equation: server_builder_ext_fallible
+  function: ServerBuilderExt::try_tools_from_config
+  module_path: pmcp_server_toolkit::ServerBuilderExt
+  signature: 'fn try_tools_from_config(self, config: &ServerConfig) -> Result<Self, ToolkitError>'
+  status: implemented
+  notes: TKIT-08 / D-10 / review R7 — fallible companion to `tools_from_config`. Surfaces synthesis errors as `Result` for production servers.
+
+- contract: mcp-protocol-sdk-v1.yaml
+  equation: server_builder_ext_code_mode
+  function: ServerBuilderExt::try_code_mode_from_config
+  module_path: pmcp_server_toolkit::ServerBuilderExt
+  signature: 'fn try_code_mode_from_config(self, config: &ServerConfig) -> Result<Self, ToolkitError>'
+  status: implemented
+  notes: TKIT-08 / D-10 / review R7 — fallible companion to `code_mode_from_config`. R9 enforcement fires here before `.build()` is reached.
+
 critical_path:
 - jsonrpc_framing
 - protocol_version_negotiation

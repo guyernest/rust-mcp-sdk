@@ -321,12 +321,12 @@ async fn missing_binary_returns_actionable_path_error() {
 
 /// Build a minimal `DeployConfig` (no `[[widgets]]` block) for synthesis tests.
 fn empty_deploy_config(
-    workspace_root: &std::path::PathBuf,
+    workspace_root: &std::path::Path,
 ) -> cargo_pmcp::deployment::config::DeployConfig {
     cargo_pmcp::deployment::config::DeployConfig::default_for_server(
         "fixture-server".to_string(),
         "us-west-2".to_string(),
-        workspace_root.clone(),
+        workspace_root.to_path_buf(),
     )
 }
 
@@ -337,7 +337,7 @@ fn empty_deploy_config(
 fn detect_widgets_synthesizes_from_widget_dir() {
     let workspace = tempfile::tempdir().expect("workspace tempdir");
     fs::create_dir_all(workspace.path().join("widget")).expect("mkdir widget");
-    let cfg = empty_deploy_config(&workspace.path().to_path_buf());
+    let cfg = empty_deploy_config(workspace.path());
     let widgets = detect_widgets(&cfg, workspace.path());
     assert_eq!(widgets.len(), 1, "must synthesize exactly one widget");
     assert_eq!(widgets[0].path, "widget");
@@ -352,7 +352,7 @@ fn detect_widgets_synthesizes_from_widget_dir() {
 fn detect_widgets_synthesizes_from_widgets_dir() {
     let workspace = tempfile::tempdir().expect("workspace tempdir");
     fs::create_dir_all(workspace.path().join("widgets")).expect("mkdir widgets");
-    let cfg = empty_deploy_config(&workspace.path().to_path_buf());
+    let cfg = empty_deploy_config(workspace.path());
     let widgets = detect_widgets(&cfg, workspace.path());
     assert_eq!(widgets.len(), 1);
     assert_eq!(widgets[0].path, "widgets");
@@ -365,7 +365,7 @@ fn detect_widgets_skips_ui_and_app_dirs() {
     let workspace = tempfile::tempdir().expect("workspace tempdir");
     fs::create_dir_all(workspace.path().join("ui")).expect("mkdir ui");
     fs::create_dir_all(workspace.path().join("app")).expect("mkdir app");
-    let cfg = empty_deploy_config(&workspace.path().to_path_buf());
+    let cfg = empty_deploy_config(workspace.path());
     let widgets = detect_widgets(&cfg, workspace.path());
     assert!(
         widgets.is_empty(),

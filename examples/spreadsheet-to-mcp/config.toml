@@ -1,0 +1,88 @@
+# pmcp-sql-server config for the Acme sales data imported from a spreadsheet.
+# Parsed strictly (#[serde(deny_unknown_fields)]) — every key here is a known
+# toolkit field. Run with:
+#   pmcp-sql-server --config config.toml --schema schema.sql
+
+[server]
+name = "Acme Sales MCP"
+version = "0.1.0"
+description = "Customers and quotes imported from the sales spreadsheet"
+
+[database]
+# Shape A opens this existing SQLite file — it does NOT create or seed it.
+# Build company.db from the CSVs first (see README.md).
+type = "sqlite"
+file_path = "company.db"
+
+[[database.tables]]
+name = "customers"
+description = "Companies we sell to"
+
+[[database.tables]]
+name = "quotes"
+description = "Sales quotes issued to customers"
+
+[code_mode]
+# The curated [[tools]] below cover the common asks; Code Mode answers the long
+# tail (aggregations, joins, filters) by generating SQL against the schema
+# resource under this policy.
+enabled = true
+allow_writes = false          # read-only: this is reference data
+allow_deletes = false
+allow_ddl = false
+require_limit = true          # every generated query must bound its rows
+max_limit = 1000
+sensitive_columns = ["email"] # surfaced in the policy resource as guidance
+# DEV ONLY. In production supply token_secret = "env:CODE_MODE_SECRET" and drop
+# the dev flag; the cargo pmcp deploy path substitutes a secrets ref for you.
+token_secret = "dev-only-insecure-secret-min-16-bytes"
+allow_inline_token_secret_for_dev = true
+
+# ---- Curated tools (the ~20%) -------------------------------------------------
+
+[[tools]]
+name = "list_customers"
+description = "List customers ordered by company name"
+sql = "SELECT id, company_name, contact_name, country FROM customers ORDER BY company_name LIMIT :limit"
+
+[[tools.parameters]]
+name = "limit"
+type = "integer"
+description = "Maximum rows to return"
+required = false
+default = 50
+
+[[tools]]
+name = "quotes_for_customer"
+description = "List quotes for a given customer, newest first"
+sql = "SELECT id, amount, currency, status, issued_date FROM quotes WHERE customer_id = :customer_id ORDER BY issued_date DESC LIMIT :limit"
+
+[[tools.parameters]]
+name = "customer_id"
+type = "integer"
+description = "The customers.id to fetch quotes for"
+required = true
+
+[[tools.parameters]]
+name = "limit"
+type = "integer"
+required = false
+default = 50
+
+# ---- Schema resource + Code Mode prompt --------------------------------------
+
+[[resources]]
+uri = "docs://acme/schema"
+name = "Database Schema"
+description = "DDL for the customers and quotes tables"
+# `content` is intentionally omitted: at startup the --schema file's text is
+# merged in as this resource's body (the model reads it to write correct SQL).
+
+[[prompts]]
+name = "start_code_mode"
+description = "Load schema + policy context for Code Mode SQL generation"
+include_resources = [
+    "docs://acme/schema",
+    "code-mode://instructions",
+    "code-mode://policies",
+]

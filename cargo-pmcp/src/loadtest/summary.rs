@@ -55,15 +55,13 @@ const PAD_WIDTH: usize = 40;
 /// ```
 pub fn render_summary(result: &LoadTestResult, config: &LoadTestConfig, url: &str) -> String {
     let snap = &result.snapshot;
-    let mut lines = Vec::new();
-
     // ASCII art header
-    lines.push(render_header(
+    let mut lines = vec![render_header(
         url,
         config.settings.virtual_users,
         config.settings.duration_secs,
         config.scenario.len(),
-    ));
+    )];
 
     // Latency metrics
     lines.push(format_metric_row(

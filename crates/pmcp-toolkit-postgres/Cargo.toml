@@ -1,0 +1,48 @@
+[package]
+name = "pmcp-toolkit-postgres"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/paiml/rust-mcp-sdk"
+description = "Postgres connector for pmcp-server-toolkit (config-driven MCP servers)"
+keywords = ["mcp", "postgres", "sql", "toolkit"]
+categories = ["development-tools", "database"]
+
+# Why: keeps the published artifact under the 10MB crates.io limit (mirrors
+# pmcp-server-toolkit). `tests/` carries the in-process mock; `.planning/`,
+# `.pmat/`, `fixtures/`, and `fuzz/` are never relevant to downstream consumers.
+exclude = [".planning/", ".pmat/", "fixtures/", "tests/", "fuzz/"]
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[features]
+default = []
+# Why (REVIEWS H5): exposes the in-process `PostgresMock` (in `src/dev_mock.rs`)
+# to publishable example targets + downstream integration tests without leaking
+# it into the default publish surface. Not enabled by default.
+dev_mock = []
+
+[dependencies]
+pmcp-server-toolkit = { version = "0.1.0", path = "../pmcp-server-toolkit" }
+tokio-postgres = "0.7.17"
+deadpool-postgres = "0.14.1"
+tokio = { version = "1", default-features = false, features = ["rt"] }
+async-trait = "0.1"
+serde_json = "1"
+thiserror = "2"
+tracing = "0.1"
+# Why (REVIEWS M2): tokio-postgres's `ToSql::to_sql` takes `&mut bytes::BytesMut`,
+# so the `PgParam` impl crate must name the `bytes` type directly — declared
+# EXPLICITLY rather than relying on transitive resolution from tokio-postgres.
+bytes = "1"
+
+[dev-dependencies]
+proptest = "1.7"
+# Why: tests run with --test-threads=1 per CLAUDE.md — single-threaded tokio is sufficient.
+tokio = { version = "1", features = ["macros", "rt"] }
+
+[[example]]
+name = "postgres_minimal"
+required-features = ["dev_mock"]

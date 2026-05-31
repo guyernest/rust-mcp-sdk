@@ -1,0 +1,47 @@
+{
+  "_comment": "CANONICAL Contoso M365 workbook dataset (Phase 90.2 Plan 01, Task 1). This is the SINGLE source of truth for the deterministic Customers/Orders rows, the pinned reference date + 3-month window boundary, the per-id Excel range addresses, and the hand-computed expected headline set. tests/fixtures/contoso-m365.toml (the whole-block read address the tools filter), tests/fixtures/contoso-m365-scenarios.yaml (asserted values), AND Plans 02 (wiremock rows) / 03 (Code Mode REF + expected set) TRANSCRIBE from here -- they MUST NOT invent independent values. Inert static business data; never executed. NO secrets, NO Date-derived values (every date is a hand-written literal).",
+
+  "ref_date": "2026-05-28",
+  "window_start": "2026-02-28",
+  "_window_note": "window_start = ref_date minus 3 calendar months, written as a literal. ref_date day is 28 (<= 28) so the minus-3-months boundary is calendar-unambiguous (no 31->30/28 trap). The headline query window is the inclusive interval [window_start, ref_date] = [2026-02-28, 2026-05-28]. Plan 03's `const REF` copies ref_date verbatim; Plan 03 may also assert against window_start.",
+
+  "drive_id": "CONTOSO_DRIVE",
+  "customers_item_id": "CUSTOMERS_ITEM",
+  "orders_item_id": "ORDERS_ITEM",
+
+  "_addressing_note": "Customers sheet: row 1 is the header, customer data starts at row 2. customer_id 'C00N' -> index N -> sheet row = N + 1 (header offset 1). Single-customer range is `A{row}:D{row}` over columns A..D = customer_id,name,segment,region. Orders sheet: row 1 is the header, order data starts at row 2, laid out grouped/sorted by customer_id so each customer's orders form a contiguous block (D-03). columns A..D = order_id,customer_id,order_date,amount.",
+
+  "all_customers_address": "A2:D7",
+  "all_orders_address": "A2:D7",
+
+  "customers": [
+    { "customer_id": "C001", "name": "Northwind Traders", "segment": "Enterprise", "region": "West",    "row": 2, "address": "A2:D2" },
+    { "customer_id": "C002", "name": "Fabrikam",          "segment": "SMB",        "region": "East",    "row": 3, "address": "A3:D3" },
+    { "customer_id": "C003", "name": "Tailspin Toys",     "segment": "Enterprise", "region": "Central", "row": 4, "address": "A4:D4" },
+    { "customer_id": "C004", "name": "Adventure Works",   "segment": "SMB",        "region": "West",    "row": 5, "address": "A5:D5" },
+    { "customer_id": "C005", "name": "Wingtip Toys",      "segment": "Enterprise", "region": "East",    "row": 6, "address": "A6:D6" },
+    { "customer_id": "C006", "name": "Proseware",         "segment": "SMB",        "region": "Central", "row": 7, "address": "A7:D7" }
+  ],
+
+  "orders": [
+    { "order_id": "O1001", "customer_id": "C001", "order_date": "2026-03-15", "amount": 80.0 },
+    { "order_id": "O1002", "customer_id": "C001", "order_date": "2026-05-01", "amount": 60.0 },
+    { "order_id": "O1003", "customer_id": "C002", "order_date": "2026-04-10", "amount": 40.0 },
+    { "order_id": "O1004", "customer_id": "C003", "order_date": "2026-02-28", "amount": 150.0 },
+    { "order_id": "O1005", "customer_id": "C004", "order_date": "2026-02-27", "amount": 500.0 },
+    { "order_id": "O1006", "customer_id": "C005", "order_date": "2026-05-20", "amount": 200.0 }
+  ],
+
+  "orders_blocks": {
+    "C001": "A2:D3",
+    "C002": "A4:D4",
+    "C003": "A5:D5",
+    "C004": "A6:D6",
+    "C005": "A7:D7"
+  },
+  "_orders_blocks_note": "C006 has NO orders (intentional non-match: no in-window orders at all), so it has no contiguous block address here. get_customer_orders('C006') reads an empty result.",
+
+  "expected_headline_set": ["C001", "C003", "C005"],
+
+  "_expected_note": "Hand-computed: customers whose summed `amount` over orders with order_date in the inclusive window [window_start, ref_date] = [2026-02-28, 2026-05-28] is strictly > 100. In-window totals: C001 = 80 + 60 = 140 (MATCH), C002 = 40 (<=100, NON-MATCH), C003 = 150 (MATCH; its single order is dated EXACTLY window_start 2026-02-28 -> boundary classified IN), C004 = 0 in-window (its only order 2026-02-27 is < window_start -> just OUTSIDE, NON-MATCH), C005 = 200 (MATCH), C006 = 0 (no orders, NON-MATCH). Matches: C001, C003, C005. Non-matches: C002, C004, C006. Boundary customer at window_start: C003 (IN). Just-outside customer: C004 (OUT). Plan 03 asserts exactly ['C001','C003','C005']."
+}

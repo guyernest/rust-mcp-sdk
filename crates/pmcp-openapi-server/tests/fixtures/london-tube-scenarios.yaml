@@ -1,0 +1,114 @@
+# =============================================================================
+# london-tube-scenarios.yaml — mcp-tester TestScenario parity contract (OAPI-08)
+# =============================================================================
+#
+# PROVENANCE: hand-authored 2026-05-29 to capture the london-tube reference's
+# EXPECTED tool list + tool outputs, replayed OFFLINE against the wiremock
+# backend stood up by tests/parity_replay.rs. The expected tool surface mirrors
+# the reference instance
+# (~/Development/mcp/sdk/pmcp-run/built-in/openapi-api/instances/london-tube.toml
+# @ 4f5b4a47d35b719f9f4b5db91981629ec4f61a09) reduced to the two vendored tools
+# (get-tube-status + disrupted-lines-with-detail) plus the code-mode tools the
+# toolkit synthesizes.
+#
+# The expected VALUES (Victoria / Central / "Severe delays") match the canned
+# wiremock responses in parity_replay.rs — a value mismatch fails parity.
+name: London Tube Reference Parity (offline wiremock replay)
+description: Reproduces the london-tube reference tools + behavior against a mocked TfL backend.
+timeout: 120
+stop_on_failure: false
+variables:
+  test_id: london_tube_parity_001
+setup: []
+steps:
+
+# =============================================================================
+# Capability Discovery — the reference tool surface must be present.
+# =============================================================================
+
+- name: List available tools
+  operation:
+    type: list_tools
+  assertions:
+  - type: success
+  - type: exists
+    path: tools
+
+# Resource + prompt discovery parity — the enriched london-tube fixture (Plan 01)
+# ships three [[resources]] + a start_code_mode [[prompts]]; these two steps prove
+# the served surface LISTS them. Mirrors the SQL gold-standard generated.yaml:22-36
+# exactly (success + exists). mcp-tester's `contains` assertion only matches STRING
+# array elements, but list_resources/list_prompts return OBJECT arrays, so a
+# per-URI/per-name `contains` match is impossible and an indexed `resources[0].uri`
+# equals check would be order-dependent/brittle; the minimal SQL-parity `exists`
+# check is kept. URI/name specificity is already covered by Plan 01's fixture
+# asserts in parity_replay.rs (all three resource URIs + the start_code_mode name).
+
+- name: List available resources
+  operation:
+    type: list_resources
+  assertions:
+  - type: success
+  - type: exists
+    path: resources
+
+- name: List available prompts
+  operation:
+    type: list_prompts
+  assertions:
+  - type: success
+  - type: exists
+    path: prompts
+
+# Tool-surface parity is proven BEHAVIORALLY below: each curated tool
+# (get-tube-status, disrupted-lines-with-detail) is invoked, and the code-mode
+# validate_code tool is invoked — a successful call is proof the tool is present
+# in the synthesized surface (mcp-tester's `contains` assertion matches string
+# array elements, but list_tools returns tool OBJECTS, so name presence is
+# asserted via invocation rather than a brittle array-element string match).
+
+- name: 'Code Mode tool validate_code is present (validates a read-only script)'
+  operation:
+    type: tool_call
+    tool: validate_code
+    arguments: {code: "const s = await api.get('/Line/Mode/tube/Status'); return s;"}
+  assertions:
+  - type: success
+
+# =============================================================================
+# Tool: get-tube-status (single call) — returns the mocked line-status array.
+# =============================================================================
+
+- name: 'get-tube-status returns the Victoria line (disrupted) and Central (good)'
+  operation:
+    type: tool_call
+    tool: get-tube-status
+    arguments: {}
+  assertions:
+  - type: success
+  - type: contains
+    path: result
+    value: "Victoria"
+  - type: contains
+    path: result
+    value: "Central"
+
+# =============================================================================
+# Tool: disrupted-lines-with-detail (script) — multi-call orchestration.
+# Only Victoria (statusSeverity 6 < 10) is disrupted; its per-line detail is
+# "Severe delays" from the mocked /Line/victoria/Disruption response.
+# =============================================================================
+
+- name: 'disrupted-lines-with-detail surfaces Victoria with its disruption detail'
+  operation:
+    type: tool_call
+    tool: disrupted-lines-with-detail
+    arguments: {maxLines: 3}
+  assertions:
+  - type: success
+  - type: contains
+    path: result
+    value: "Victoria"
+  - type: contains
+    path: result
+    value: "Severe delays"

@@ -16,18 +16,39 @@ pub mod pentest;
 // rest of the `deployment::*` tree (which references `crate::commands::*`,
 // bin-only).
 pub mod deployment {
-    //! Narrow lib-visible view of the deployment subsystem — `config` + `iam`
-    //! + `widgets` + `post_deploy_tests`. The full module is in the bin
-    //! target; this surface is sufficient for the Phase 76 fuzz target +
-    //! `deploy_with_iam` example PLUS the Phase 79 Wave-1 schema types that
-    //! `config.rs` references via `use crate::deployment::widgets::*` and
-    //! `use crate::deployment::post_deploy_tests::*`.
+    //! Narrow lib-visible view of the deployment subsystem: `config`, `iam`,
+    //! `widgets`, and `post_deploy_tests`. The full module is in the bin
+    //! target; this surface is sufficient for the Phase 76 fuzz target and
+    //! the `deploy_with_iam` example, plus the Phase 79 Wave-1 schema types
+    //! that `config.rs` references via `use crate::deployment::widgets::*`
+    //! and `use crate::deployment::post_deploy_tests::*`.
 
     #[path = "../deployment/config.rs"]
     pub mod config;
 
+    // Re-export the schema types the mounted Cloud Run Dockerfile generator
+    // references via `crate::deployment::*` (`dockerfile.rs` imports
+    // `crate::deployment::{DeployConfig, LayoutConfig}`).
+    pub use config::{DeployConfig, LayoutConfig};
+
     #[path = "../deployment/iam.rs"]
     pub mod iam;
+
+    /// Narrow lib-visible view of the Google Cloud Run Dockerfile generator.
+    ///
+    /// The full `targets::*` tree is bin-only (it cross-depends on
+    /// `commands::*`), but the Dockerfile / cloudbuild rendering for Cloud Run
+    /// only needs `deployment::config` + a sibling `env` helper. Mounting just
+    /// these two leaf files via `#[path]` lets the env-gated
+    /// `cloud_run_local_build` integration test render the multi-crate-isolated
+    /// Dockerfile via the real generator (issue #258) without pulling in the
+    /// command layer.
+    #[path = "../deployment/targets/google_cloud_run"]
+    pub mod google_cloud_run {
+        pub mod env;
+
+        pub mod dockerfile;
+    }
 
     // Phase 79 Wave 1: schema types required by `config.rs` so the lib
     // target compiles. These modules are leaf — they cross-depend only on

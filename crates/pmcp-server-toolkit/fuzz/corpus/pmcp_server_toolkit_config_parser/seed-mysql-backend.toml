@@ -1,0 +1,17 @@
+[server]
+name = "mysql-fuzz-seed"
+version = "0.0.1"
+
+[database]
+type = "mysql"
+url = "env:MYSQL_DATABASE_URL"
+database = "appdb"
+query_timeout_ms = 30000
+
+[database.pool]
+max_connections = 8
+connection_timeout_seconds = 5
+
+[[database.tables]]
+name = "products"
+description = "product catalog"

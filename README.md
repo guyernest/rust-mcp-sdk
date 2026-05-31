@@ -18,8 +18,9 @@
 
 ## Overview
 
-PMCP is a complete MCP ecosystem for Rust, providing everything you need to build, test, and deploy production-grade MCP servers:
+PMCP is a complete MCP ecosystem for Rust, providing everything you need to build, test, and deploy production-grade MCP servers — in Rust, **or from configuration alone**:
 
+- **🧩 Config-Driven Servers** - Build SQL & OpenAPI/HTTP MCP servers from a `config.toml` alone, **no Rust required** (`pmcp-server-toolkit`, `pmcp-sql-server`, `pmcp-openapi-server`)
 - **🦀 pmcp SDK** - High-performance Rust crate with full MCP protocol support
 - **⚡ cargo-pmcp** - CLI toolkit for scaffolding, testing, and development
 - **📚 pmcp-book** - Comprehensive reference guide with 27 chapters
@@ -36,7 +37,39 @@ PMCP is a complete MCP ecosystem for Rust, providing everything you need to buil
 
 Choose your path based on experience and preference:
 
-### 🚀 Path 1: AI-Assisted (Fastest - Recommended for Rapid Prototyping)
+### 🧩 Path 1: Config-Only Servers — No Rust Required (SQL & OpenAPI)
+
+**New in v2.9 — this removes the biggest blocker to putting organizational data behind MCP: you no longer need a Rust programmer.** Describe a production MCP server over a **SQL database** or any **OpenAPI / HTTP backend** in a `config.toml` — declare the backend, a handful of curated tools, and a Code Mode policy — and a prebuilt binary serves it. No Rust, no recompiling. Curated tools cover the common ~20%; **Code Mode** handles the long-tail ~80% by generating queries against your schema/spec under a static, default-deny policy. A business analyst curates the API slice in config; the toolkit does the rest.
+
+**SQL — SQLite / Postgres / MySQL / Athena** (runnable from a checkout of this repo):
+```bash
+cargo install pmcp-sql-server
+
+# Seed a tiny demo DB, then serve it from config alone — two curated tools
+# (list_books, books_by_author) + Code Mode for the long tail.
+sqlite3 /tmp/pmcp-sqlite-explorer.db < crates/pmcp-sql-server/examples/sqlite-explorer.sql
+pmcp-sql-server \
+  --config crates/pmcp-sql-server/examples/sqlite-explorer.toml \
+  --schema crates/pmcp-sql-server/examples/sqlite-explorer.sql
+```
+
+**OpenAPI / HTTP — any REST backend**, with six outgoing-auth models including OAuth **passthrough** (the server holds no standing credential and forwards the caller's own token, so it can only act as the signed-in user):
+```bash
+cargo install pmcp-openapi-server
+
+# Curated configs ship with the crate — e.g. a London Tube (api_key) showcase and
+# a Microsoft-Graph / Excel "Contoso" (oauth_passthrough) example. These talk to a
+# live backend, so supply any required credential per the example's comments.
+pmcp-openapi-server --config crates/pmcp-openapi-server/examples/london-tube.toml
+```
+
+**Want to extend and deploy it?** `cargo pmcp new my-server --kind sql-server` (or `--kind openapi-server`) scaffolds the same config-driven server as a small crate, ready for `cargo pmcp deploy` to AWS Lambda / Google Cloud Run / Cloudflare / pmcp.run.
+
+**Learn more**: the *Config-Driven SQL Servers* and *OpenAPI* chapters in the [pmcp-book](https://paiml.github.io/rust-mcp-sdk/book/) · [`pmcp-sql-server`](crates/pmcp-sql-server/README.md) · [`pmcp-openapi-server`](crates/pmcp-openapi-server/README.md) · [`pmcp-server-toolkit`](crates/pmcp-server-toolkit/README.md)
+
+---
+
+### 🚀 Path 2: AI-Assisted (Recommended for Rapid Prototyping)
 
 Build production-ready MCP servers with AI assistance in minutes:
 
@@ -84,7 +117,7 @@ $ cargo pmcp add server weather --template minimal
 
 ---
 
-### ⚡ Path 2: cargo-pmcp Toolkit (Recommended for Manual Development)
+### ⚡ Path 3: cargo-pmcp Toolkit (Recommended for Manual Development)
 
 Scaffold and build servers using the cargo-pmcp CLI:
 
@@ -118,17 +151,21 @@ cargo pmcp test --server myserver
 cargo build --release
 ```
 
-**Available templates:**
+**Available templates** (`cargo pmcp add server <name> --template <t>`):
 - `minimal` - Empty structure for custom servers
 - `calculator` - Arithmetic operations (learning)
 - `complete_calculator` - Full-featured reference implementation
-- `sqlite_explorer` - Database browser pattern
+- `sqlite_explorer` - Hand-coded Rust database browser (escape hatch)
+
+**Config-driven kinds** (`cargo pmcp new <name> --kind <k>` — TOML-driven, no per-tool Rust):
+- `sql-server` - SQL MCP server over SQLite / Postgres / MySQL / Athena from `config.toml`
+- `openapi-server` - MCP server over any OpenAPI / HTTP backend from `config.toml`
 
 **Learn more**: [cargo-pmcp Guide](cargo-pmcp/README.md)
 
 ---
 
-### 🦀 Path 3: pmcp SDK Directly (For Fine-Grained Control)
+### 🦀 Path 4: pmcp SDK Directly (For Fine-Grained Control)
 
 Use the pmcp crate directly for maximum control:
 
@@ -219,7 +256,7 @@ High-performance Rust implementation of the MCP protocol.
 - **Performance**: 16x faster than TypeScript, SIMD-accelerated parsing
 - **Quality**: Zero `unwrap()`, comprehensive error handling
 
-**Latest Version:** `pmcp = "2.6"`
+**Latest Version:** `pmcp = "2.9"`
 
 **Documentation:**
 - [API Reference](https://docs.rs/pmcp)
@@ -251,6 +288,21 @@ cargo pmcp deploy logs --tail           # Stream production logs
 Covers the full development lifecycle: scaffolding, dev mode, testing, load testing, security pentesting, MCP Apps preview, schema management, multi-target deployment, secrets, and OAuth setup.
 
 **Full command reference**: [cargo-pmcp Guide](cargo-pmcp/README.md)
+
+---
+
+### 🧩 Config-Driven Servers (No Rust)
+
+Build production MCP servers over SQL and HTTP backends from a `config.toml` alone — the toolkit synthesizes curated tools + a Code Mode long tail, so exposing organizational data over MCP no longer needs a Rust programmer.
+
+| Crate | What it is |
+| ----- | ---------- |
+| [`pmcp-server-toolkit`](crates/pmcp-server-toolkit) | The backend-agnostic library: config types, the `[[tools]]` synthesizer, Code Mode wiring, and the connector/auth seams that the binaries below build on. |
+| [`pmcp-sql-server`](crates/pmcp-sql-server) | Shape-A binary serving a SQL database (SQLite / Postgres / MySQL / Athena) from `config.toml` + a schema file. Ships a runnable [`sqlite-explorer`](crates/pmcp-sql-server/examples/sqlite-explorer.toml) example. |
+| [`pmcp-openapi-server`](crates/pmcp-openapi-server) | Shape-A binary serving any OpenAPI / HTTP backend, with six outgoing-auth models (incl. OAuth passthrough). Ships [`london-tube`](crates/pmcp-openapi-server/examples/london-tube.toml) (api_key) and [`contoso-m365`](crates/pmcp-openapi-server/examples/contoso-m365.toml) (oauth_passthrough, Microsoft Graph + Excel) examples. |
+| [`pmcp-toolkit-postgres`](crates/pmcp-toolkit-postgres) / [`-mysql`](crates/pmcp-toolkit-mysql) / [`-athena`](crates/pmcp-toolkit-athena) | Per-backend SQL connectors for the toolkit. |
+
+Both binaries have `cargo pmcp new --kind {sql-server,openapi-server}` scaffold siblings that generate the same config-driven server as a small, deployable crate. See **Path 1** above and the *Config-Driven SQL Servers* / *OpenAPI* chapters in the [pmcp-book](https://paiml.github.io/rust-mcp-sdk/book/).
 
 ---
 

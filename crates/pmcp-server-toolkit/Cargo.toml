@@ -1,0 +1,151 @@
+[package]
+name = "pmcp-server-toolkit"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/paiml/rust-mcp-sdk"
+description = "Runtime library for config-driven MCP servers — auth, secrets, static resources/prompts, [[tools]] synthesizer, code-mode wiring"
+readme = "README.md"
+keywords = ["mcp", "toolkit", "config-driven", "code-mode", "lambda"]
+categories = ["development-tools", "web-programming"]
+
+# Why: keeps the published artifact under the 10MB crates.io limit (Phase 83
+# Pitfall 6). `tests/` carries large reference fixtures that the toolkit needs
+# only during workspace development; `.planning/`, `.pmat/`, and `fuzz/` are
+# never relevant to downstream consumers.
+exclude = [".planning/", ".pmat/", "fixtures/", "tests/", "fuzz/"]
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[dependencies]
+pmcp = { version = "2.9.0", path = "../..", default-features = false }
+pmcp-code-mode = { version = "0.5.2", path = "../pmcp-code-mode", default-features = false, optional = true }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "1"
+async-trait = "0.1"
+thiserror = "2"
+indexmap = { version = "2.10", features = ["serde"] }
+tracing = "0.1"
+# Why: toolkit-owned `SecretValue` newtype ships in Plan 02 regardless of the
+# `code-mode` feature state, per Phase 83 review R6.
+secrecy = "0.10"
+# Why: AWS secrets providers (SsmSecrets, SecretsManagerSecrets,
+# OrgSecretsManagerProvider) use `tokio::sync::RwLock` for their cache.
+# Optional + only pulled in under the `aws` feature so the no-default-features
+# build (which proves SecretValue's feature-independence per review R6) does
+# not pay for it.
+# Why: `aws` needs `sync` (provider caches); `sqlite` needs `rt` for
+# `tokio::task::spawn_blocking`, which wraps every sync `rusqlite` call so the
+# async runtime is never blocked (Phase 84 Plan 04). Both features turn on the
+# single optional `tokio` dep with the union of feature flags.
+tokio = { version = "1", default-features = false, features = ["sync", "rt"], optional = true }
+
+# Why: default features enable `rustls` → aws-smithy-runtime/tls-rustls →
+# aws-smithy-http-client/legacy-rustls-ring → rustls 0.21 / rustls-webpki 0.101
+# which is flagged by RUSTSEC-2026-0098/0099/0104. Opt into the modern
+# `default-https-client` path (rustls 0.23 via aws-lc-rs) instead.
+aws-sdk-secretsmanager = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio", "behavior-version-latest"], optional = true }
+aws-sdk-ssm = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio", "behavior-version-latest"], optional = true }
+aws-config = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio", "credentials-process", "sso", "behavior-version-latest"], optional = true }
+
+jsonschema = { version = "0.46", default-features = false, optional = true }
+rusqlite = { version = "0.39", features = ["bundled"], optional = true }
+
+# Why: Phase 90 OpenAPI HTTP backend (OAPI-01 / OAPI-03). These optional deps are
+# gated under the `http` feature and own ALL toolkit dependency changes for the
+# phase (Plans 03/04/05 treat them as already-present). VERIFIED feature names
+# against root Cargo.toml :117 — reqwest uses exactly json + rustls + form (the
+# builder's per-call query method is core, not a feature gate). `base64`
+# (root :82), `url` (root :62), `regex` (root :66) mirror workspace versions;
+# `openapiv3`/`serde_yaml` are NEW to the workspace (OpenAPI schema parse lands in
+# Plan 03). The `http` feature also pulls `dep:tokio` for `tokio::time::sleep`
+# (retry backoff) and `tokio::test`.
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls", "form"], optional = true }
+url = { version = "2.5", optional = true }
+openapiv3 = { version = "2", optional = true }
+serde_yaml = { version = "0.9", optional = true }
+base64 = { version = "0.22", optional = true }
+regex = { version = "1.11", optional = true }
+
+[features]
+default = ["code-mode"]
+# Why: the toolkit's code-mode wiring needs `ValidationPipeline::validate_sql_query`
+# for the SC-3 anchor (`allow_writes=false` rejects INSERT). That method is gated
+# behind `pmcp-code-mode/sql-code-mode` (see Phase 83 Plan 06 CODE_MODE_API_NOTES.md
+# Section 5). Forwarding the feature here keeps `cargo test --features code-mode`
+# self-contained for Shape A/C consumers.
+code-mode = ["dep:pmcp-code-mode", "pmcp-code-mode/sql-code-mode"]
+aws = ["dep:aws-config", "dep:aws-sdk-secretsmanager", "dep:aws-sdk-ssm", "dep:tokio"]
+avp = ["code-mode", "pmcp-code-mode/avp"]
+input-validation = ["dep:jsonschema"]
+sqlite = ["dep:rusqlite", "dep:tokio"]
+# Why: the `http` feature serves two reconciled concerns (Phase 90 Plan 01,
+# Rule 3 — name reconciliation):
+#   1. The Phase 90 OpenAPI HTTP BACKEND — the `http::{HttpConnector, HttpClient,
+#      HttpAuthProvider}` module that executes OUTGOING requests against a REST
+#      backend (OAPI-01 / OAPI-03). It needs reqwest/url/openapiv3/serde_yaml/
+#      base64 (and regex for path-param extraction, plus tokio for retry sleep).
+#   2. The pre-existing `pmcp/streamable-http` forward (Phase 86 Plan 01) that
+#      lets a serving Shape C example/scaffold reach StreamableHttpServer — an
+#      `[[example]]`'s `required-features` can only name TOOLKIT features, not
+#      `pmcp/...` paths directly.
+# This is the bare backend feature — no JS engine (RESEARCH Pitfall 4: the
+# curated-single-call-only build stays light). NOT in `default`, keeping the
+# no-default-features build lean.
+http = [
+    "dep:reqwest",
+    "dep:url",
+    "dep:openapiv3",
+    "dep:serde_yaml",
+    "dep:base64",
+    "dep:regex",
+    "dep:tokio",
+    "pmcp/streamable-http",
+]
+# Why: `openapi-code-mode` is THE umbrella feature that gates the script-tool +
+# Code Mode engine surface (`PlanCompiler`/`PlanExecutor`/`HttpExecutor`/
+# `JsCodeExecutor`) for Plans 04/05/06. The bare `code-mode` feature deliberately
+# does NOT forward `pmcp-code-mode/js-runtime` (SQL avoids SWC for curated-only
+# builds — RESEARCH Pitfall 4), so without this umbrella those engine types are
+# NOT in scope. Plans 04/05 gate their engine code under
+# `#[cfg(feature = "openapi-code-mode")]` (NOT `all(feature="http",
+# feature="code-mode")`), and Plan 06's binary enables the toolkit with
+# `["openapi-code-mode"]`. Plan 05's `ScriptToolHandler` and Plan 06's binary dep
+# both key off this single feature.
+openapi-code-mode = ["http", "code-mode", "pmcp-code-mode/js-runtime"]
+
+[[example]]
+name = "e01_toolkit_minimal"
+required-features = ["code-mode"]
+
+[[example]]
+name = "sqlite_minimal"
+required-features = ["sqlite", "code-mode"]
+
+[[example]]
+name = "sql_server_http"
+required-features = ["sqlite", "code-mode", "http"]
+
+[dev-dependencies]
+proptest = "1.7"
+# Why: unit tests run with --test-threads=1 (project CLAUDE.md) where a
+# single-threaded runtime suffices, but the Plan 02 serving Shape C example uses
+# `#[tokio::main]` which defaults to the multi-thread runtime — so the
+# dev-profile (examples build under dev-deps) needs `rt-multi-thread`. The
+# published `[dependencies]` tokio (`["sync","rt"]`) is left UNCHANGED so the
+# library's own runtime surface is not widened.
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+# Why: Plan 02 Task 2 uses compile-fail tests on `SecretValue`'s negative trait
+# invariants (no `Debug`, no `Display`, no `Serialize`). Per Phase 83 review R5.
+trybuild = "1"
+# Why: Plan 86-02 Task 2 drives the serving Shape C example over HTTP
+# (initialize → tools/list → tools/call) via the mcp-tester library. Dev-only —
+# `tests/` is excluded from the published artifact (see `exclude` above), so this
+# does NOT enter the downstream dependency graph.
+mcp-tester = { version = "0.7.0", path = "../mcp-tester" }
+# Why: Phase 90 Plans 01/03/04/05 drive the HttpConnector against a mock REST
+# backend (GET/POST + auth-header assertions) without a live server. Dev-only.
+wiremock = "0.6"

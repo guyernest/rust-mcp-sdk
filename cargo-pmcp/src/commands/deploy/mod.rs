@@ -2,7 +2,7 @@ use anyhow::{bail, Context, Result};
 use clap::Parser;
 use std::path::{Path, PathBuf};
 
-use crate::commands::configure::workspace::find_workspace_root;
+use crate::commands::configure::workspace::find_deploy_root;
 use crate::commands::flags::FormatValue;
 
 /// Detect server name from Cargo.toml in the project root or core workspace
@@ -83,6 +83,62 @@ fn read_root_package_name(cargo_toml: &toml::Value) -> Option<String> {
         .and_then(|p| p.get("name"))
         .and_then(|n| n.as_str())
         .map(String::from)
+}
+
+/// Detect a config-driven single-crate project (Shape B/D, SHAP-D-01).
+///
+/// True when the project ROOT carries the three markers a `cargo pmcp new --kind
+/// sql-server` scaffold emits (D-09 heuristic):
+/// 1. `config.toml` at the root,
+/// 2. `schema.sql` at the root, and
+/// 3. a root `Cargo.toml` whose `[dependencies]` reference `pmcp-server-toolkit`.
+///
+/// This is the detection seam used by the deploy `None` arm (M3) to emit an
+/// informational note before the existing `[assets]`-driven bundling + the
+/// single-crate `find_lambda_package_dir` fallback (H3) run for this layout. It
+/// adds NO `TargetEntry` variant and changes NO enum (D-10) — pmcp.run is selected
+/// purely by the scaffold's `target_type = "pmcp-run"` (M3).
+///
+/// Lives as a `pub(crate)` free fn so it is unit-testable in-module (a bin-only
+/// helper cannot be reached from an integration test — M3).
+pub(crate) fn is_config_driven_project(project_root: &Path) -> bool {
+    let has_config = project_root.join("config.toml").exists();
+    let has_schema = project_root.join("schema.sql").exists();
+    let references_toolkit = std::fs::read_to_string(project_root.join("Cargo.toml"))
+        .map(|c| c.contains("pmcp-server-toolkit"))
+        .unwrap_or(false);
+    has_config && has_schema && references_toolkit
+}
+
+/// Build a default `DeployConfig` whose SHAPE matches the requested `target_id`.
+///
+/// The cargo-pmcp init dispatch (`execute_async` / `DeployAction::Init`) calls this
+/// to pick the right constructor — `default_for_cloud_run_server` for
+/// `"google-cloud-run"`, `default_for_server` for everything else (pmcp-run,
+/// cloudflare-workers, …). Before this branched, every non-aws-lambda target
+/// got the AWS-shaped default (required `[aws]`, no `[gcp]`, AWS-flavored
+/// `memory_mb`), which save_if_missing then cemented into the operator's
+/// `.pmcp/deploy.toml` (n51 follow-up #1).
+///
+/// `project_id` is left empty for the google-cloud-run shape; the operator
+/// fills it in via `[gcp].project_id`, and `deploy::resolve_params` falls back
+/// to `gcloud config get-value project` when the field is empty/placeholder.
+pub(crate) fn default_config_for_target(
+    target_id: &str,
+    server_name: String,
+    region: String,
+    project_root: std::path::PathBuf,
+) -> crate::deployment::DeployConfig {
+    if target_id == "google-cloud-run" {
+        crate::deployment::DeployConfig::default_for_cloud_run_server(
+            server_name,
+            String::new(),
+            region,
+            project_root,
+        )
+    } else {
+        crate::deployment::DeployConfig::default_for_server(server_name, region, project_root)
+    }
 }
 
 pub mod deploy;
@@ -212,6 +268,12 @@ pub struct DeployCommand {
     /// on every widget.
     #[arg(long, value_name = "MODE")]
     apps_mode: Option<String>,
+
+    /// Override deploy-root resolution. Accepts either a directory containing
+    /// `.pmcp/deploy.toml`, OR a path to a `deploy.toml` file directly. Highest
+    /// precedence — applies to deploy, init, and all read subcommands.
+    #[arg(long = "manifest-path", value_name = "PATH", global = true)]
+    manifest_path: Option<PathBuf>,
 
     #[command(subcommand)]
     action: Option<DeployAction>,
@@ -547,7 +609,15 @@ impl DeployCommand {
     }
 
     async fn execute_async(&self, global_flags: &crate::commands::GlobalFlags) -> Result<()> {
-        let project_root = find_workspace_root()?;
+        // Anchor project_root on `.pmcp/deploy.toml` (or an explicit
+        // --manifest-path), NOT on the first ancestor Cargo.toml. init falls
+        // back to current_dir(); reads error "Deployment not initialized".
+        let for_init = matches!(&self.action, Some(DeployAction::Init { .. }));
+        let project_root = self.resolve_project_root(for_init)?;
+        // Jidoka: fire the footgun guard before ANY scaffolding for init.
+        if for_init {
+            Self::guard_init_root(&project_root)?;
+        }
 
         // Get target from flag or config
         let target_id = self.get_target_id(&project_root)?;
@@ -632,16 +702,23 @@ impl DeployCommand {
                             };
                             target.init(&config).await
                         } else {
-                            // For other targets (pmcp-run, etc.), use the new modular approach
-                            // Auto-detect server name from workspace or use package name
+                            // For other targets (pmcp-run, google-cloud-run, …), use the
+                            // new modular approach. Branch on target_id so the saved
+                            // deploy.toml has the correct SHAPE for the target — without
+                            // this, a google-cloud-run init wrote an AWS-shape deploy.toml
+                            // (no [gcp], required [aws]/memory_mb), then save_if_missing
+                            // cemented it on every re-init (n51 follow-up #1).
                             let server_name = detect_server_name(&project_root)?;
-                            let mut config = crate::deployment::DeployConfig::default_for_server(
+                            let mut config = default_config_for_target(
+                                &target_id,
                                 server_name,
                                 region.clone(),
                                 project_root.clone(),
                             );
 
-                            // Update target type to match the actual target
+                            // Update target type to match the actual target. (For
+                            // google-cloud-run the constructor already sets it; the
+                            // explicit reassignment keeps the post-condition uniform.)
                             config.target.target_type = target_id.clone();
 
                             // Configure OAuth if specified (for pmcp-run target)
@@ -936,6 +1013,21 @@ impl DeployCommand {
                     return Ok(());
                 }
 
+                // Phase 86 Plan 05 (M3/H3): detect a config-driven single-crate
+                // project and emit an informational note. Detection drives NO new
+                // code path of its own — the existing `[assets]`-driven bundling
+                // (the scaffold's deploy.toml lists config.toml + schema.sql) and
+                // the single-crate `find_lambda_package_dir` fallback (H3) handle
+                // this layout. pmcp.run is selected by the scaffold's
+                // `target_type = "pmcp-run"` (M3), NOT inferred from project shape,
+                // and NO `TargetEntry` variant is added (D-10).
+                if is_config_driven_project(&project_root) && global_flags.should_output() {
+                    println!(
+                        "   Detected config-driven project (config.toml + schema.sql + pmcp-server-toolkit); \
+                         bundling assets and building the project root as the Lambda package."
+                    );
+                }
+
                 let artifact = target.build(&config).await?;
                 let outputs = target.deploy(&config, artifact).await?;
 
@@ -1053,9 +1145,21 @@ impl DeployCommand {
     }
 
     fn get_target_id(&self, project_root: &PathBuf) -> Result<String> {
-        // Priority: --target-type flag > config file > default
-        if let Some(target) = &self.target_type {
-            return Ok(target.clone());
+        // Priority: --target-type/--target flag > config file > default.
+        //
+        // The flag value is resolved against BOTH the known backend types
+        // (aws-lambda, cloudflare-workers, google-cloud-run, pmcp-run) AND the
+        // operator's configured named targets, so `--target prod` (a named
+        // target) and `--target pmcp-run` (a backend type) both work. An
+        // unknown value hard-errors here with a helpful message BEFORE
+        // `registry.get` would emit its bare "Unknown deployment target".
+        if let Some(value) = &self.target_type {
+            let registry = crate::deployment::TargetRegistry::new();
+            let valid_owned: Vec<String> =
+                registry.list().iter().map(|t| t.id().to_string()).collect();
+            let valid_types: Vec<&str> = valid_owned.iter().map(String::as_str).collect();
+            let named = read_named_target_kinds();
+            return resolve_target_flag(value, &valid_types, &named);
         }
 
         // Try to read from config
@@ -1067,38 +1171,75 @@ impl DeployCommand {
         Ok("aws-lambda".to_string())
     }
 
-    fn find_project_root() -> Result<PathBuf> {
-        let current_dir = std::env::current_dir().context("Failed to get current directory")?;
-
-        // First pass: prefer the nearest ancestor that has `.pmcp/deploy.toml` —
-        // that's the explicit signal of "this is the project root for cargo-pmcp
-        // deploy." Without this, the Cargo.toml-only walk-up below would skip over
-        // deployment roots that aren't themselves Cargo packages (e.g.
-        // multi-crate-isolated layouts where the deploy.toml lives one level above
-        // the primary + path_deps crates and the parent dir has no Cargo.toml of
-        // its own).
-        let mut dir = current_dir.as_path();
-        loop {
-            if dir.join(".pmcp/deploy.toml").exists() {
-                return Ok(dir.to_path_buf());
-            }
-            match dir.parent() {
-                Some(parent) => dir = parent,
-                None => break,
-            }
-        }
-
-        // Second pass: fall back to nearest ancestor with a `Cargo.toml`.
-        let mut dir = current_dir.as_path();
-        loop {
-            if dir.join("Cargo.toml").exists() {
-                return Ok(dir.to_path_buf());
-            }
-
-            dir = dir.parent().ok_or_else(|| {
-                anyhow::anyhow!("Could not find Cargo.toml in any parent directory")
+    /// Resolve a project root from an explicit `--manifest-path` override.
+    ///
+    /// Accepts a directory (used directly) or a `.pmcp/deploy.toml` file (its
+    /// parent-of-`.pmcp` is the root). Errors when the override does not resolve
+    /// to an existing `.pmcp/deploy.toml`.
+    fn resolve_manifest_override(path: &Path) -> Result<PathBuf> {
+        // If it's a file named deploy.toml under a .pmcp dir → root is .pmcp's parent.
+        if path.is_file() {
+            let pmcp_dir = path
+                .parent()
+                .filter(|p| p.file_name().is_some_and(|n| n == ".pmcp"))
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "--manifest-path file must be a .pmcp/deploy.toml: {}",
+                        path.display()
+                    )
+                })?;
+            let root = pmcp_dir.parent().ok_or_else(|| {
+                anyhow::anyhow!(
+                    "--manifest-path .pmcp dir has no parent: {}",
+                    path.display()
+                )
             })?;
+            if !root.join(".pmcp/deploy.toml").exists() {
+                bail!("No .pmcp/deploy.toml at resolved root: {}", root.display());
+            }
+            return Ok(root.to_path_buf());
         }
+        // Otherwise treat as a directory.
+        if path.join(".pmcp/deploy.toml").exists() {
+            return Ok(path.to_path_buf());
+        }
+        bail!(
+            "--manifest-path does not contain .pmcp/deploy.toml: {}",
+            path.display()
+        );
+    }
+
+    /// Resolve `project_root` honoring precedence: `--manifest-path` override
+    /// first, then deploy-config anchoring on `.pmcp/deploy.toml`.
+    ///
+    /// `for_init` controls the fallback when no deploy config is found:
+    /// - init → `current_dir()` (restores 0.6.x fresh-init behavior)
+    /// - read → "Deployment not initialized" error
+    fn resolve_project_root(&self, for_init: bool) -> Result<PathBuf> {
+        if let Some(mp) = &self.manifest_path {
+            return Self::resolve_manifest_override(mp);
+        }
+        match find_deploy_root()? {
+            Some(root) => Ok(root),
+            None if for_init => std::env::current_dir().context("Failed to get current directory"),
+            None => bail!("Deployment not initialized. Run: cargo pmcp deploy init"),
+        }
+    }
+
+    /// Jidoka footgun guard for init: refuse to scaffold into a resolved root
+    /// that is neither the current directory nor an existing deploy root.
+    fn guard_init_root(root: &Path) -> Result<()> {
+        let cwd = std::env::current_dir().context("Failed to get current directory")?;
+        let same_as_cwd = root.canonicalize().ok() == cwd.canonicalize().ok();
+        if !same_as_cwd && !root.join(".pmcp/deploy.toml").exists() {
+            bail!(
+                "Refusing to scaffold deployment into '{}': it is not the current directory \
+                 and has no existing .pmcp/deploy.toml. Run `cargo pmcp deploy init` from your \
+                 deploy directory, or pass --manifest-path <dir-or-deploy.toml>.",
+                root.display()
+            );
+        }
+        Ok(())
     }
 
     /// Save deployment info to .pmcp/deployment.toml for landing page integration
@@ -1145,6 +1286,128 @@ endpoint = "{}"
 
         Ok(())
     }
+}
+
+/// Read the operator's configured named targets from the user config and map
+/// each name to the backend type it deploys to (its `type_tag()`).
+///
+/// A missing or unreadable user config is treated as "no named targets" (an
+/// empty map) — never an error, because most operators have no named targets
+/// and `--target <backend-type>` must keep working regardless.
+fn read_named_target_kinds() -> std::collections::BTreeMap<String, String> {
+    use crate::commands::configure::config::{default_user_config_path, TargetConfigV1};
+    let path = default_user_config_path();
+    TargetConfigV1::read(&path).map_or_else(
+        |_| std::collections::BTreeMap::new(),
+        |cfg| {
+            cfg.targets
+                .into_iter()
+                .map(|(name, entry)| (name, entry.type_tag().to_string()))
+                .collect()
+        },
+    )
+}
+
+/// Resolve a `--target` / `--target-type` flag value into a backend type id.
+///
+/// Resolution order:
+/// 1. `value` is a known backend type (`valid_types`) → returns it unchanged.
+/// 2. `value` is a configured named target (`named` maps name → backend type)
+///    → returns the backend type that named target deploys to.
+/// 3. Otherwise → hard-errors with a message listing the valid backend types,
+///    the configured named-target names, and (when `value` is a near-miss of a
+///    known type) a `--target-type` hint.
+///
+/// This is the single unified path for both `--target` and its
+/// `--target-type` synonym; both flow through here so they behave identically.
+///
+/// # Errors
+///
+/// Returns an error when `value` is neither a known backend type nor a
+/// configured named target.
+fn resolve_target_flag(
+    value: &str,
+    valid_types: &[&str],
+    named: &std::collections::BTreeMap<String, String>,
+) -> Result<String> {
+    if valid_types.contains(&value) {
+        return Ok(value.to_string());
+    }
+    if let Some(backend) = named.get(value) {
+        return Ok(backend.clone());
+    }
+    bail!("{}", unknown_target_message(value, valid_types, named));
+}
+
+/// Build the helpful hard-error message for an unknown `--target` value.
+///
+/// Lists the valid backend types and the configured named-target names, and
+/// appends a `--target-type <type>` hint when `value` looks like a near-miss
+/// of a known backend type (a prefix of, or within edit-distance 1 of, a known
+/// type).
+fn unknown_target_message(
+    value: &str,
+    valid_types: &[&str],
+    named: &std::collections::BTreeMap<String, String>,
+) -> String {
+    let types_list = valid_types.join(", ");
+    let named_list = if named.is_empty() {
+        "(none configured)".to_string()
+    } else {
+        named.keys().cloned().collect::<Vec<_>>().join(", ")
+    };
+
+    let mut msg = format!(
+        "Unknown --target value '{value}'.\n  \
+         Valid backend types: {types_list}\n  \
+         Configured named targets: {named_list}"
+    );
+
+    if let Some(suggestion) = near_miss_hint(value, valid_types) {
+        msg.push_str(&format!("\n  Did you mean `--target-type {suggestion}`?"));
+    }
+
+    msg
+}
+
+/// Return the first known backend type that `value` is a near-miss of: either
+/// `value` is a prefix of the type, or the two are within Levenshtein
+/// edit-distance 1. Returns `None` when nothing is close.
+fn near_miss_hint(value: &str, valid_types: &[&str]) -> Option<String> {
+    valid_types
+        .iter()
+        .find(|t| t.starts_with(value) || levenshtein_within_one(value, t))
+        .map(|t| (*t).to_string())
+}
+
+/// Returns `true` when `a` and `b` are within Levenshtein edit-distance 1
+/// (equal, or differ by a single insertion, deletion, or substitution).
+fn levenshtein_within_one(a: &str, b: &str) -> bool {
+    let (a, b): (&[u8], &[u8]) = (a.as_bytes(), b.as_bytes());
+    let (la, lb) = (a.len(), b.len());
+    if la.abs_diff(lb) > 1 {
+        return false;
+    }
+    if la == lb {
+        // At most one substitution.
+        return a.iter().zip(b).filter(|(x, y)| x != y).count() <= 1;
+    }
+    // Lengths differ by exactly 1: the longer must contain the shorter with a
+    // single character skipped.
+    let (short, long) = if la < lb { (a, b) } else { (b, a) };
+    let (mut i, mut j, mut skipped) = (0usize, 0usize, false);
+    while i < short.len() && j < long.len() {
+        if short[i] == long[j] {
+            i += 1;
+            j += 1;
+        } else if skipped {
+            return false;
+        } else {
+            skipped = true;
+            j += 1;
+        }
+    }
+    true
 }
 
 /// Handle OAuth subcommands for pmcp.run
@@ -1562,5 +1825,320 @@ mod phase_77_banner_smoke_tests {
             Some(v) => std::env::set_var("PMCP_TARGET", v),
             None => std::env::remove_var("PMCP_TARGET"),
         }
+    }
+}
+
+#[cfg(test)]
+mod config_driven_detection_tests {
+    use super::*;
+
+    fn write(path: &std::path::Path, contents: &str) {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        std::fs::write(path, contents).unwrap();
+    }
+
+    /// M3: `is_config_driven_project` is true only when all THREE markers are
+    /// present (config.toml + schema.sql + a `pmcp-server-toolkit` dep). Tested
+    /// in-module because the `pub(crate)` helper is unreachable from an
+    /// integration test.
+    #[test]
+    fn detects_full_config_driven_project() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        write(
+            &root.join("Cargo.toml"),
+            "[package]\nname = \"demo\"\n\n[dependencies]\npmcp-server-toolkit = \"0.1.0\"\n",
+        );
+        write(&root.join("config.toml"), "[server]\nname = \"demo\"\n");
+        write(
+            &root.join("schema.sql"),
+            "CREATE TABLE IF NOT EXISTS t(id INTEGER);\n",
+        );
+
+        assert!(is_config_driven_project(root));
+    }
+
+    /// Missing `schema.sql` ⇒ not config-driven (negative case the plan calls out).
+    #[test]
+    fn not_config_driven_when_schema_absent() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        write(
+            &root.join("Cargo.toml"),
+            "[package]\nname = \"demo\"\n\n[dependencies]\npmcp-server-toolkit = \"0.1.0\"\n",
+        );
+        write(&root.join("config.toml"), "[server]\nname = \"demo\"\n");
+        // no schema.sql
+
+        assert!(!is_config_driven_project(root));
+    }
+
+    /// Missing the toolkit dependency ⇒ not config-driven (a bare crate with the
+    /// two files but no toolkit dep must NOT be treated as config-driven).
+    #[test]
+    fn not_config_driven_when_toolkit_dep_absent() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        write(&root.join("Cargo.toml"), "[package]\nname = \"demo\"\n");
+        write(&root.join("config.toml"), "[server]\nname = \"demo\"\n");
+        write(
+            &root.join("schema.sql"),
+            "CREATE TABLE IF NOT EXISTS t(id INTEGER);\n",
+        );
+
+        assert!(!is_config_driven_project(root));
+    }
+}
+
+#[cfg(test)]
+mod manifest_resolution_tests {
+    use super::*;
+
+    fn write_deploy_toml(dir: &std::path::Path) {
+        let pmcp = dir.join(".pmcp");
+        std::fs::create_dir_all(&pmcp).unwrap();
+        std::fs::write(pmcp.join("deploy.toml"), "[deployment]\n").unwrap();
+    }
+
+    /// (d) `--manifest-path` pointing at a DIR containing `.pmcp/deploy.toml`
+    /// resolves to that dir.
+    #[test]
+    fn manifest_override_dir_form() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_deploy_toml(tmp.path());
+
+        let root =
+            DeployCommand::resolve_manifest_override(tmp.path()).expect("dir form must resolve");
+        assert_eq!(
+            root.canonicalize().unwrap(),
+            tmp.path().canonicalize().unwrap()
+        );
+    }
+
+    /// (e) `--manifest-path` pointing at a `.pmcp/deploy.toml` FILE resolves to
+    /// the file's grandparent (the parent-of-`.pmcp`).
+    #[test]
+    fn manifest_override_file_form() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_deploy_toml(tmp.path());
+        let file = tmp.path().join(".pmcp").join("deploy.toml");
+
+        let root = DeployCommand::resolve_manifest_override(&file).expect("file form must resolve");
+        assert_eq!(
+            root.canonicalize().unwrap(),
+            tmp.path().canonicalize().unwrap()
+        );
+    }
+
+    /// (f) `--manifest-path` where no `.pmcp/deploy.toml` exists → clear error.
+    #[test]
+    fn manifest_override_missing_errors() {
+        let tmp = tempfile::tempdir().unwrap();
+        // No .pmcp/deploy.toml written.
+        assert!(DeployCommand::resolve_manifest_override(tmp.path()).is_err());
+    }
+
+    /// (g) the init footgun guard fires when the resolved root is neither cwd
+    /// nor a real deploy root; is_ok when root == cwd; is_ok when root has a
+    /// deploy.toml.
+    ///
+    /// NOTE: this test mutates process-global cwd; CI runs `--test-threads=1`
+    /// so serialization is guaranteed. Restore cwd before asserting.
+    #[test]
+    fn guard_init_root_fires_when_not_cwd_and_no_deploy_toml() {
+        let tmp_other = tempfile::tempdir().unwrap(); // no deploy.toml
+        let tmp_cwd = tempfile::tempdir().unwrap(); // a DIFFERENT dir
+        let tmp_with_deploy = tempfile::tempdir().unwrap();
+        write_deploy_toml(tmp_with_deploy.path());
+
+        let saved = std::env::current_dir().unwrap();
+        std::env::set_current_dir(tmp_cwd.path()).unwrap();
+        let cwd = std::env::current_dir().unwrap();
+        let fires = DeployCommand::guard_init_root(tmp_other.path());
+        let same_cwd_ok = DeployCommand::guard_init_root(&cwd);
+        let deploy_root_ok = DeployCommand::guard_init_root(tmp_with_deploy.path());
+        std::env::set_current_dir(&saved).unwrap();
+
+        assert!(
+            fires.is_err(),
+            "guard must error for a non-cwd dir with no deploy.toml"
+        );
+        assert!(
+            same_cwd_ok.is_ok(),
+            "guard must allow the current directory"
+        );
+        assert!(
+            deploy_root_ok.is_ok(),
+            "guard must allow a dir with an existing .pmcp/deploy.toml"
+        );
+    }
+}
+
+/// Tests for `default_config_for_target` — guards n51-follow-up #1: the init
+/// dispatch MUST pick the target-shape-appropriate constructor.
+#[cfg(test)]
+mod default_config_for_target_tests {
+    use super::default_config_for_target;
+    use std::path::PathBuf;
+
+    #[test]
+    fn google_cloud_run_target_produces_gcp_shape() {
+        let cfg = default_config_for_target(
+            "google-cloud-run",
+            "test-server".to_string(),
+            "us-central1".to_string(),
+            PathBuf::from("/tmp/test"),
+        );
+        assert!(
+            cfg.gcp.is_some(),
+            "google-cloud-run init MUST produce a config with [gcp] set"
+        );
+        assert!(
+            cfg.aws.is_none(),
+            "google-cloud-run init MUST NOT produce a config with [aws] set"
+        );
+        assert_eq!(cfg.target.target_type, "google-cloud-run");
+        assert_eq!(cfg.server.name, "test-server");
+        // `default_for_cloud_run_server` is called with empty project_id;
+        // operator fills [gcp].project_id, deploy::resolve_params falls back to
+        // `gcloud config get-value project` if still empty.
+        assert_eq!(cfg.gcp.unwrap().region, "us-central1");
+    }
+
+    #[test]
+    fn pmcp_run_target_produces_aws_shape() {
+        let cfg = default_config_for_target(
+            "pmcp-run",
+            "test-server".to_string(),
+            "us-east-1".to_string(),
+            PathBuf::from("/tmp/test"),
+        );
+        assert!(
+            cfg.aws.is_some(),
+            "pmcp-run init keeps the legacy aws-shape default (uses lambda primitives)"
+        );
+        assert!(cfg.gcp.is_none());
+    }
+
+    #[test]
+    fn cloudflare_workers_target_produces_aws_shape() {
+        // cloudflare-workers also uses default_for_server (no GCR-specific knobs).
+        let cfg = default_config_for_target(
+            "cloudflare-workers",
+            "test-server".to_string(),
+            "us-east-1".to_string(),
+            PathBuf::from("/tmp/test"),
+        );
+        assert!(cfg.aws.is_some());
+        assert!(cfg.gcp.is_none());
+    }
+}
+
+#[cfg(test)]
+mod target_resolution_tests {
+    //! Unit tests for the unified `--target` / `--target-type` resolver.
+    //!
+    //! Hermetic: they call the pure `resolve_target_flag` with injected
+    //! type-set + named-target-set, so they never read the operator's real
+    //! `~/.pmcp/config.toml`.
+    use super::{near_miss_hint, resolve_target_flag};
+    use std::collections::BTreeMap;
+
+    const VALID: &[&str] = &[
+        "aws-lambda",
+        "cloudflare-workers",
+        "google-cloud-run",
+        "pmcp-run",
+    ];
+
+    fn no_named() -> BTreeMap<String, String> {
+        BTreeMap::new()
+    }
+
+    #[test]
+    fn known_backend_types_resolve_to_themselves() {
+        for ty in VALID {
+            let got = resolve_target_flag(ty, VALID, &no_named())
+                .unwrap_or_else(|e| panic!("{ty} must resolve: {e}"));
+            assert_eq!(&got, ty);
+        }
+    }
+
+    #[test]
+    fn pmcp_run_still_works() {
+        // The everyday flow must never regress.
+        let got = resolve_target_flag("pmcp-run", VALID, &no_named()).expect("pmcp-run resolves");
+        assert_eq!(got, "pmcp-run");
+    }
+
+    #[test]
+    fn configured_named_target_resolves_to_its_backend_type() {
+        let mut named = BTreeMap::new();
+        named.insert("prod".to_string(), "aws-lambda".to_string());
+        let got = resolve_target_flag("prod", VALID, &named).expect("named target resolves");
+        assert_eq!(got, "aws-lambda");
+    }
+
+    #[test]
+    fn unknown_value_hard_errors_with_helpful_message() {
+        let mut named = BTreeMap::new();
+        named.insert("prod".to_string(), "aws-lambda".to_string());
+        let err = resolve_target_flag("totally-bogus", VALID, &named)
+            .expect_err("unknown value must error");
+        let msg = err.to_string();
+        // (a) lists the valid backend types
+        assert!(msg.contains("aws-lambda"), "must list valid types: {msg}");
+        assert!(
+            msg.contains("google-cloud-run"),
+            "must list valid types: {msg}"
+        );
+        assert!(msg.contains("pmcp-run"), "must list valid types: {msg}");
+        // (b) lists the configured named-target names
+        assert!(
+            msg.contains("prod"),
+            "must list configured named targets: {msg}"
+        );
+        // never a bare "Unknown deployment target" / "<unset>"
+        assert!(
+            !msg.contains("<unset>"),
+            "must not fall through to <unset>: {msg}"
+        );
+    }
+
+    #[test]
+    fn near_miss_of_known_type_hints_target_type() {
+        // "aws-lamda" (one deletion) and "google" (prefix) are near-misses.
+        let err =
+            resolve_target_flag("aws-lamda", VALID, &no_named()).expect_err("typo must error");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("--target-type aws-lambda"),
+            "edit-distance-1 typo must hint --target-type: {msg}"
+        );
+
+        let err2 =
+            resolve_target_flag("google", VALID, &no_named()).expect_err("prefix must error");
+        assert!(
+            err2.to_string().contains("--target-type google-cloud-run"),
+            "prefix near-miss must hint --target-type: {err2}"
+        );
+    }
+
+    #[test]
+    fn target_type_synonym_passes_a_real_type() {
+        // --target-type is the explicit type-only synonym; a real type passes
+        // through the same resolver unchanged.
+        let got =
+            resolve_target_flag("cloudflare-workers", VALID, &no_named()).expect("type resolves");
+        assert_eq!(got, "cloudflare-workers");
+    }
+
+    #[test]
+    fn near_miss_hint_returns_none_for_unrelated_input() {
+        // A wholly-unrelated value yields no hint (so the message has no
+        // misleading suggestion).
+        assert!(near_miss_hint("totally-bogus", VALID).is_none());
     }
 }

@@ -1,0 +1,18 @@
+[server]
+name = "athena-fuzz-seed"
+version = "0.0.1"
+
+[database]
+type = "athena"
+database = "default"
+output_location = "s3://example-bucket/athena-results/"
+workgroup = "primary"
+query_timeout_ms = 60000
+
+[[database.tables]]
+name = "events"
+description = "clickstream events"
+
+[[database.tables]]
+name = "users"
+description = "user dimension"

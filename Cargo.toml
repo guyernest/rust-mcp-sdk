@@ -1,6 +1,6 @@
 [package]
 name = "pmcp"
-version = "2.8.1"
+version = "2.9.0"
 edition = "2021"
 authors = ["PAIML Team"]
 description = "High-quality Rust SDK for Model Context Protocol (MCP) with full TypeScript SDK compatibility"
@@ -145,7 +145,7 @@ clap = { version = "4.5", features = ["derive"] }
 env_logger = "0.11"
 dashmap = "6.1"  # Already in main deps but needed for examples
 pmcp-macros = { version = "0.6.1", path = "pmcp-macros" }  # For macro examples (s23_mcp_tool_macro)
-pmcp-code-mode = { version = "0.5.1", path = "crates/pmcp-code-mode" }  # For code mode example (s41)
+pmcp-code-mode = { version = "0.5.2", path = "crates/pmcp-code-mode" }  # For code mode example (s41)
 pmcp-code-mode-derive = { version = "0.2.0", path = "crates/pmcp-code-mode-derive" }  # For code mode example (s41)
 
 [features]
@@ -538,7 +538,7 @@ required-features = ["skills", "full"]
 name = "comprehensive_benchmarks"
 harness = false
 [workspace]
-members = ["pmcp-macros", "crates/pmcp-macros-support", "crates/mcp-tester", "crates/mcp-preview", "crates/pmcp-server", "crates/pmcp-server/pmcp-server-lambda", "crates/pmcp-tasks", "crates/mcp-e2e-tests", "crates/pmcp-widget-utils", "crates/pmcp-code-mode", "crates/pmcp-code-mode-derive", "examples/25-oauth-basic", "examples/test-basic", "cargo-pmcp"]
+members = ["pmcp-macros", "crates/pmcp-macros-support", "crates/mcp-tester", "crates/mcp-preview", "crates/pmcp-server", "crates/pmcp-server/pmcp-server-lambda", "crates/pmcp-tasks", "crates/mcp-e2e-tests", "crates/pmcp-widget-utils", "crates/pmcp-code-mode", "crates/pmcp-code-mode-derive", "crates/pmcp-server-toolkit", "crates/pmcp-toolkit-postgres", "crates/pmcp-toolkit-mysql", "crates/pmcp-toolkit-athena", "crates/pmcp-sql-server", "crates/pmcp-openapi-server", "examples/25-oauth-basic", "examples/test-basic", "cargo-pmcp"]
 # WASM examples and standalone examples are excluded from regular workspace tests
 exclude = ["fuzz", "examples/cloudflare-worker-mcp", "examples/26-server-tester", "examples/27-course-server-minimal", "examples/wasm-client", "examples/mcp-apps-chess", "examples/mcp-apps-map", "examples/mcp-apps-dataviz"]
 

@@ -540,8 +540,23 @@ impl ServerCore {
             handler.handle(args, extra).await
         };
 
-        // Convert result to CallToolResult
-        let value = result?;
+        // Convert result to CallToolResult.
+        //
+        // `Error::ToolRejected` is an APPLICATION-level rejection (e.g. Code
+        // Mode policy: a SELECT missing its LIMIT), not a protocol fault. Map
+        // it to a successful `CallToolResult { isError: true }` so the model
+        // reads the reason + suggestions and retries with corrected input —
+        // rather than `?`-propagating it into a JSON-RPC error that reads as a
+        // server crash. All other errors keep propagating as protocol errors.
+        let value = match result {
+            Ok(value) => value,
+            Err(crate::error::Error::ToolRejected { message, details }) => {
+                return Ok(ToolCallOutcome::Result(CallToolResult::rejected(
+                    message, details,
+                )));
+            },
+            Err(e) => return Err(e),
+        };
         let tool_info = self.tool_infos.get(&req.name);
 
         // Task detection: return CreateTaskResult only when ALL of:

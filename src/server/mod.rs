@@ -381,9 +381,139 @@ impl Server {
         self.prompts.contains_key(name)
     }
 
-    /// Get a prompt handler by name
+    /// Get a prompt handler by name.
+    ///
+    /// Returns a borrowed reference to the registered prompt handler `Arc`,
+    /// or `None` if no prompt with that name has been registered. Callers
+    /// who need ownership can `Arc::clone(...)` the returned reference.
+    ///
+    /// # Handler-level testing pattern
+    ///
+    /// This accessor is the public API surface for the handler-level
+    /// integration testing pattern documented in the testing chapter of
+    /// the PMCP book: build a `Server`, retrieve the handler by name,
+    /// invoke `.handle(...).await` directly with a synthetic
+    /// `RequestHandlerExtra`. It exercises handler logic in isolation
+    /// without spinning up a transport.
+    ///
+    /// # What this pattern skips
+    ///
+    /// This pattern exercises handler logic only. The JSONRPC dispatch
+    /// path (`Server::handle_request`) is bypassed, so `auth_provider`,
+    /// `tool_authorizer`, and `tool_middleware` are **not** invoked. For
+    /// full-pipeline tests that exercise the security pipeline, drive a
+    /// real transport (stdio or streamable-http) with a `pmcp::Client`.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use std::collections::HashMap;
+    /// use std::sync::Arc;
+    /// use async_trait::async_trait;
+    /// use pmcp::{PromptHandler, Server};
+    /// use pmcp::types::{GetPromptResult, PromptMessage, Content};
+    /// use pmcp::types::content::Role;
+    ///
+    /// struct GreetingPrompt;
+    ///
+    /// #[async_trait]
+    /// impl PromptHandler for GreetingPrompt {
+    ///     async fn handle(
+    ///         &self,
+    ///         args: HashMap<String, String>,
+    ///         _extra: pmcp::RequestHandlerExtra,
+    ///     ) -> pmcp::Result<GetPromptResult> {
+    ///         let who = args.get("name").cloned().unwrap_or_else(|| "world".to_string());
+    ///         Ok(GetPromptResult::new(
+    ///             vec![PromptMessage::new(Role::User, Content::text(format!("Hello, {}!", who)))],
+    ///             Some("Greeting prompt".to_string()),
+    ///         ))
+    ///     }
+    /// }
+    ///
+    /// # async fn example() -> pmcp::Result<()> {
+    /// let server = Server::builder()
+    ///     .name("demo")
+    ///     .version("0.1")
+    ///     .prompt_arc("greet", Arc::new(GreetingPrompt))
+    ///     .build()?;
+    ///
+    /// let handler = server.get_prompt("greet").expect("registered above");
+    /// let mut args = HashMap::new();
+    /// args.insert("name".to_string(), "claude".to_string());
+    /// let result = handler
+    ///     .handle(args, pmcp::RequestHandlerExtra::default())
+    ///     .await?;
+    /// assert_eq!(result.messages.len(), 1);
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn get_prompt(&self, name: &str) -> Option<&Arc<dyn PromptHandler>> {
         self.prompts.get(name)
+    }
+
+    /// Get a tool handler by name.
+    ///
+    /// Returns a borrowed reference to the registered tool handler `Arc`,
+    /// or `None` if no tool with that name has been registered. Callers
+    /// who need ownership can `Arc::clone(...)` the returned reference.
+    ///
+    /// # Handler-level testing pattern
+    ///
+    /// This accessor is the public API surface for the handler-level
+    /// integration testing pattern: build a `Server`, retrieve the
+    /// handler by name, invoke `.handle(...).await` directly with a
+    /// synthetic `RequestHandlerExtra`. It exercises handler logic in
+    /// isolation without spinning up a transport, which is the primary
+    /// shape downstream toolkit authors use to assert on a built
+    /// `pmcp::Server`'s registered handlers.
+    ///
+    /// # What this pattern skips
+    ///
+    /// This pattern exercises handler logic only. The JSONRPC dispatch
+    /// path (`Server::handle_request`) is bypassed, so `auth_provider`,
+    /// `tool_authorizer`, and `tool_middleware` are **not** invoked. For
+    /// full-pipeline tests that exercise the security pipeline, drive a
+    /// real transport (stdio or streamable-http) with a `pmcp::Client`.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use std::sync::Arc;
+    /// use async_trait::async_trait;
+    /// use pmcp::{Server, ToolHandler};
+    /// use serde_json::Value;
+    ///
+    /// struct EchoTool;
+    ///
+    /// #[async_trait]
+    /// impl ToolHandler for EchoTool {
+    ///     async fn handle(
+    ///         &self,
+    ///         args: Value,
+    ///         _extra: pmcp::RequestHandlerExtra,
+    ///     ) -> pmcp::Result<Value> {
+    ///         Ok(serde_json::json!({ "echoed": args }))
+    ///     }
+    /// }
+    ///
+    /// # async fn example() -> pmcp::Result<()> {
+    /// let server = Server::builder()
+    ///     .name("demo")
+    ///     .version("0.1")
+    ///     .tool_arc("echo", Arc::new(EchoTool))
+    ///     .build()?;
+    ///
+    /// let handler = server.get_tool("echo").expect("registered above");
+    /// let result = handler
+    ///     .handle(serde_json::json!({"msg": "hi"}), pmcp::RequestHandlerExtra::default())
+    ///     .await?;
+    /// assert_eq!(result, serde_json::json!({"echoed": {"msg": "hi"}}));
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn get_tool(&self, name: &str) -> Option<&Arc<dyn ToolHandler>> {
+        self.tools.get(name)
     }
 
     /// Get the HTTP middleware chain configured via `ServerBuilder`.
@@ -1192,20 +1322,27 @@ impl Server {
         #[cfg(target_arch = "wasm32")]
         let result = handler.handle(req.arguments, extra).await;
 
+        // Token cleanup is unconditional (success or failure) and does not
+        // touch `result`, so it runs once before the value/error split.
+        self.cancellation_manager
+            .remove_token(&request_id_str)
+            .await;
         let result = match result {
-            Ok(v) => {
-                self.cancellation_manager
-                    .remove_token(&request_id_str)
-                    .await;
-                Ok(v)
+            Ok(v) => v,
+            // `Error::ToolRejected` is an APPLICATION-level rejection (e.g.
+            // Code Mode policy: a SELECT missing its LIMIT), not a protocol
+            // fault. Map it to a successful `CallToolResult { isError: true }`
+            // (message → content, details → structuredContent) so the model
+            // reads the reason and retries with corrected input, instead of
+            // `?`-propagating a JSON-RPC error that reads as a server crash.
+            // All other errors keep propagating as protocol errors.
+            Err(Error::ToolRejected { message, details }) => {
+                return Ok(serde_json::to_value(CallToolResult::rejected(
+                    message, details,
+                ))?);
             },
-            Err(e) => {
-                self.cancellation_manager
-                    .remove_token(&request_id_str)
-                    .await;
-                Err(e)
-            },
-        }?;
+            Err(e) => return Err(e),
+        };
         // Build CallToolResult, adding structured_content for widget tools
         let text = result.to_string();
         let mut call_result = CallToolResult::new(vec![crate::types::Content::text(text)]);
@@ -1982,6 +2119,28 @@ impl ServerBuilder {
         self
     }
 
+    /// Add a tool handler with an Arc.
+    ///
+    /// This variant lets the caller share the handler `Arc` between the
+    /// builder and an external in-process handler map (e.g., a downstream
+    /// toolkit's handler registry) without writing a delegating wrapper
+    /// shim. Behavior is otherwise identical to [`Self::tool`]: the first
+    /// registration auto-enables `capabilities.tools`.
+    pub fn tool_arc(mut self, name: impl Into<String>, handler: Arc<dyn ToolHandler>) -> Self {
+        let name = name.into();
+        self.tools.insert(name, handler);
+
+        // Update capabilities to include tools
+        // Use Some(false) instead of None to ensure the field serializes properly
+        if self.capabilities.tools.is_none() {
+            self.capabilities.tools = Some(crate::types::ToolCapabilities {
+                list_changed: Some(false),
+            });
+        }
+
+        self
+    }
+
     /// Register all tools and prompts from an `#[mcp_server]` annotated type.
     ///
     /// This is the ergonomic counterpart to individually registering tools and
@@ -2500,6 +2659,28 @@ impl ServerBuilder {
         self
     }
 
+    /// Add a prompt handler with an Arc.
+    ///
+    /// This variant lets the caller share the handler `Arc` between the
+    /// builder and an external in-process handler map (e.g., a downstream
+    /// toolkit's handler registry) without writing a delegating wrapper
+    /// shim. Behavior is otherwise identical to [`Self::prompt`]: the first
+    /// registration auto-enables `capabilities.prompts`.
+    pub fn prompt_arc(mut self, name: impl Into<String>, handler: Arc<dyn PromptHandler>) -> Self {
+        let name = name.into();
+        self.prompts.insert(name, handler);
+
+        // Update capabilities to include prompts
+        // Use Some(false) instead of None to ensure the field serializes properly
+        if self.capabilities.prompts.is_none() {
+            self.capabilities.prompts = Some(crate::types::PromptCapabilities {
+                list_changed: Some(false),
+            });
+        }
+
+        self
+    }
+
     /// Register a workflow-based prompt with automatic validation.
     ///
     /// This method validates the workflow before registration and converts it
@@ -2653,6 +2834,28 @@ impl ServerBuilder {
         self
     }
 
+    /// Set the resource handler with an Arc.
+    ///
+    /// This variant lets the caller share the handler `Arc` between the
+    /// builder and an external in-process handler map without writing a
+    /// delegating wrapper. Behavior is otherwise identical to
+    /// [`Self::resources`]: the first registration auto-enables
+    /// `capabilities.resources`.
+    pub fn resources_arc(mut self, handler: Arc<dyn ResourceHandler>) -> Self {
+        self.resources = Some(handler);
+
+        // Update capabilities to include resources
+        // Use Some(false) instead of None to ensure fields serialize properly
+        if self.capabilities.resources.is_none() {
+            self.capabilities.resources = Some(crate::types::ResourceCapabilities {
+                subscribe: Some(false),
+                list_changed: Some(false),
+            });
+        }
+
+        self
+    }
+
     /// Register a single SEP-2640 Agent Skill.
     ///
     /// Convenience over [`Self::skills`] for the single-skill case. The skill
@@ -2790,6 +2993,24 @@ impl ServerBuilder {
         self
     }
 
+    /// Set the sampling handler with an Arc.
+    ///
+    /// This variant lets the caller share the handler `Arc` between the
+    /// builder and an external in-process handler map without writing a
+    /// delegating wrapper. Uses the donor's `if is_none` capability
+    /// auto-enable so an explicit prior `.capabilities(custom)` is not
+    /// clobbered by a later `_arc` registration.
+    pub fn sampling_arc(mut self, handler: Arc<dyn SamplingHandler>) -> Self {
+        self.sampling = Some(handler);
+
+        // Update capabilities to include sampling
+        if self.capabilities.sampling.is_none() {
+            self.capabilities.sampling = Some(crate::types::SamplingCapabilities::default());
+        }
+
+        self
+    }
+
     /// Build the server.
     ///
     /// Constructs the final Server instance from the configured builder.
@@ -2850,6 +3071,17 @@ impl ServerBuilder {
         self
     }
 
+    /// Set the authentication provider with an Arc.
+    ///
+    /// This variant lets the caller share the provider `Arc` between the
+    /// builder and an external in-process registry without writing a
+    /// delegating wrapper. Behavior is otherwise identical to
+    /// [`Self::auth_provider`].
+    pub fn auth_provider_arc(mut self, provider: Arc<dyn auth::AuthProvider>) -> Self {
+        self.auth_provider = Some(provider);
+        self
+    }
+
     /// Set the tool authorizer.
     ///
     /// Configures a tool authorizer for fine-grained access control.
@@ -2886,6 +3118,28 @@ impl ServerBuilder {
             self.tool_protections.clear();
         }
         self.tool_authorizer = Some(Arc::new(authorizer));
+        self
+    }
+
+    /// Set the tool authorizer with an Arc.
+    ///
+    /// This variant lets the caller share the authorizer `Arc` between
+    /// the builder and an external in-process registry without writing a
+    /// delegating wrapper. Mirrors [`Self::tool_authorizer`]'s
+    /// protection-clearing semantics: if any prior `protect_tool()`
+    /// configurations exist, they are cleared and a `tracing::warn!` is
+    /// emitted under target `"mcp.auth"`, since a custom authorizer
+    /// supersedes scope-based tool protections.
+    pub fn tool_authorizer_arc(mut self, authorizer: Arc<dyn auth::ToolAuthorizer>) -> Self {
+        if !self.tool_protections.is_empty() {
+            // Log a warning - custom authorizer supersedes protect_tool() configurations
+            tracing::warn!(
+                target: "mcp.auth",
+                "Setting a custom tool_authorizer clears any previous protect_tool() configurations"
+            );
+            self.tool_protections.clear();
+        }
+        self.tool_authorizer = Some(authorizer);
         self
     }
 
@@ -3757,6 +4011,74 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_handle_call_tool_rejected_is_iserror_not_protocol_error() {
+        // A handler returning `Error::tool_rejected` must surface through the
+        // streamable-HTTP `Server` path as a SUCCESSFUL `CallToolResult`
+        // with `isError: true` (message → content, details → structuredContent),
+        // NOT a JSON-RPC protocol error. This is the Code Mode policy-rejection
+        // envelope (e.g. "SELECT missing LIMIT") observed by `pmcp-sql-server`.
+        struct RejectingTool;
+        #[async_trait]
+        impl ToolHandler for RejectingTool {
+            async fn handle(
+                &self,
+                _args: Value,
+                _extra: crate::server::cancellation::RequestHandlerExtra,
+            ) -> Result<Value> {
+                Err(Error::tool_rejected(
+                    "SELECT statements must declare a LIMIT",
+                    Some(json!({ "violations": [{ "rule": "missing_limit" }] })),
+                ))
+            }
+        }
+
+        let server = Server::builder()
+            .name("test-server")
+            .version("1.0.0")
+            .tool("reject", RejectingTool)
+            .build()
+            .unwrap();
+
+        let request = Request::Client(Box::new(ClientRequest::CallTool(CallToolRequest {
+            name: "reject".to_string(),
+            arguments: json!({}),
+            _meta: None,
+            task: None,
+        })));
+
+        let response = server
+            .handle_request(RequestId::from(1i64), request, None)
+            .await;
+
+        match response.payload {
+            ResponsePayload::Result(result) => {
+                let call_result: CallToolResult = serde_json::from_value(result).unwrap();
+                assert!(call_result.is_error, "tool_rejected must set isError: true");
+                let text = call_result
+                    .content
+                    .iter()
+                    .find_map(|c| match c {
+                        crate::types::Content::Text { text } => Some(text.clone()),
+                        _ => None,
+                    })
+                    .unwrap_or_default();
+                assert!(
+                    text.contains("must declare a LIMIT"),
+                    "content must carry the rejection message, got: {text}"
+                );
+                let sc = call_result
+                    .structured_content
+                    .expect("structuredContent must carry the violation detail");
+                assert_eq!(sc["violations"][0]["rule"], "missing_limit");
+            },
+            ResponsePayload::Error(e) => panic!(
+                "tool_rejected must NOT be a protocol error, got {}: {}",
+                e.code, e.message
+            ),
+        }
+    }
+
+    #[tokio::test]
     async fn test_handle_call_tool_not_found() {
         let server = Server::builder()
             .name("test-server")
@@ -4312,6 +4634,64 @@ mod tests {
         println!(
             "Serialized capabilities: {}",
             serde_json::to_string_pretty(&json).unwrap()
+        );
+    }
+
+    /// Behavioral test for `ServerBuilder::tool_authorizer_arc` — the only
+    /// non-mechanical lift among Phase 82's six `_arc` lifts.
+    ///
+    /// `tool_authorizer_arc` mirrors `tool_authorizer()`'s protection-clearing
+    /// semantics: chaining `.protect_tool(...)` BEFORE `.tool_authorizer_arc(...)`
+    /// must clear `tool_protections` so that `.build()` does NOT hit the
+    /// mixed-config rejection branch at mod.rs `build()` (which fires if
+    /// `tool_protections` is non-empty AND `tool_authorizer` is set).
+    /// This test fills the verification gap source-greps cannot — proving
+    /// the `.clear()` call actually fires.
+    #[tokio::test]
+    async fn tool_authorizer_arc_clears_tool_protections_and_allows_build() {
+        // Define a no-op custom ToolAuthorizer for the test.
+        struct NoopAuthorizer;
+        #[async_trait]
+        impl crate::server::auth::ToolAuthorizer for NoopAuthorizer {
+            async fn can_access_tool(
+                &self,
+                _auth: &crate::server::auth::AuthContext,
+                _tool_name: &str,
+            ) -> crate::Result<bool> {
+                Ok(true)
+            }
+            async fn required_scopes_for_tool(
+                &self,
+                _tool_name: &str,
+            ) -> crate::Result<Vec<String>> {
+                Ok(vec![])
+            }
+        }
+
+        // Build a server with BOTH protect_tool AND tool_authorizer_arc.
+        // Without the clearing semantic, build() would return the
+        // "Cannot use protect_tool() with a custom tool_authorizer" error.
+        let builder = ServerBuilder::new()
+            .name("test")
+            .version("1")
+            .protect_tool("delete", vec!["admin".to_string()])
+            .tool_authorizer_arc(Arc::new(NoopAuthorizer));
+
+        // ASSERT 1: tool_protections was cleared by tool_authorizer_arc(),
+        // visible because we are inside the same module and have access
+        // to the private field.
+        assert!(
+            builder.tool_protections.is_empty(),
+            "tool_authorizer_arc() must clear tool_protections to mirror tool_authorizer()"
+        );
+
+        // ASSERT 2: build() succeeds — the mixed-config rejection branch
+        // does NOT fire because protections was cleared.
+        let build_result = builder.build();
+        assert!(
+            build_result.is_ok(),
+            "build() should succeed after tool_authorizer_arc() clears protections; got Err({:?})",
+            build_result.err()
         );
     }
 }

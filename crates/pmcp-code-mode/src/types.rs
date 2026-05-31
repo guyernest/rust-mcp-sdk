@@ -417,6 +417,39 @@ impl PolicyViolation {
     }
 }
 
+impl std::fmt::Display for PolicyViolation {
+    /// One-line rendering used wherever a single violation is surfaced to a
+    /// model/operator (e.g. the `tools/call` rejection message): `rule:
+    /// message` plus ` — suggestion` when a fix is available.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self.suggestion {
+            Some(suggestion) => write!(f, "{}: {} — {}", self.rule, self.message, suggestion),
+            None => write!(f, "{}: {}", self.rule, self.message),
+        }
+    }
+}
+
+#[cfg(test)]
+mod policy_violation_display_tests {
+    use super::PolicyViolation;
+
+    #[test]
+    fn renders_rule_message_and_suggestion_when_present() {
+        let v = PolicyViolation::new("code_mode", "missing_limit", "SELECT must declare a LIMIT")
+            .with_suggestion("Add a LIMIT clause (e.g. `LIMIT 100`).");
+        assert_eq!(
+            v.to_string(),
+            "missing_limit: SELECT must declare a LIMIT — Add a LIMIT clause (e.g. `LIMIT 100`)."
+        );
+    }
+
+    #[test]
+    fn omits_dash_when_no_suggestion() {
+        let v = PolicyViolation::new("code_mode", "blocked_table", "Table 'secrets' is blocked");
+        assert_eq!(v.to_string(), "blocked_table: Table 'secrets' is blocked");
+    }
+}
+
 /// Errors that can occur during validation.
 #[derive(Debug, thiserror::Error)]
 pub enum ValidationError {

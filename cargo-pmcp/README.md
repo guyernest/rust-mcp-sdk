@@ -31,6 +31,200 @@ Production-grade MCP server development toolkit.
 cargo install cargo-pmcp
 ```
 
+## Config-Driven SQL Server (`new --kind sql-server`)
+
+This is the recommended way to build a SQL MCP server: declare your tables,
+tools, and Code Mode policy in a `config.toml`, point it at a schema, and let
+`cargo pmcp` scaffold, run, and deploy it. **You do not write a tool handler
+per query, and you do not recompile to change tools or schema.** A small,
+generated `src/main.rs` wires the [`pmcp-server-toolkit`](../crates/pmcp-server-toolkit)
+library; everything that varies between servers lives in config.
+
+> **Two shapes, same toolkit.** This scaffold ("Shape B") generates a crate you
+> own and can extend. There is also a prebuilt `pmcp-sql-server` *binary*
+> ("Shape A") you run with `--config`/`--schema` and never compile — see
+> [`crates/pmcp-sql-server/README.md`](../crates/pmcp-sql-server/README.md).
+> Use the scaffold when you want to deploy and customize; use the binary for the
+> zero-build, point-and-serve path or when extending the toolkit with a new SQL
+> dialect.
+
+### 1. Scaffold
+
+`cargo pmcp new <name> --kind sql-server` emits a **single runnable crate**
+(distinct from the default multi-crate workspace):
+
+```
+<name>/
+├── Cargo.toml          # pins pmcp-server-toolkit (features ["code-mode", "sqlite", "http"]) + pmcp ["streamable-http"]
+├── src/main.rs         # generated wiring: load config/schema → open SQLite → build server → serve streamable HTTP
+├── config.toml         # [server] / [database] / [code_mode] + a curated list_books tool
+├── schema.sql          # idempotent demo DDL + seed (CREATE TABLE IF NOT EXISTS / INSERT OR IGNORE)
+├── deploy.toml         # human-visible deploy descriptor (target = pmcp-run; assets = config.toml + schema.sql)
+└── .pmcp/deploy.toml   # the copy `cargo pmcp deploy` actually reads
+```
+
+The generated `src/main.rs` loads `config.toml` + `schema.sql` via
+`pmcp::assets::load_string` (resolves to the cwd locally, `/var/task/assets/` on
+Lambda) and opens SQLite at `pmcp_server_toolkit::demo_db_path()` (`/tmp/demo.db`
+on Lambda). The **same binary runs locally and deploys unchanged** — no source
+edits between `cargo run` and `cargo pmcp deploy`.
+
+> The emitted `Cargo.toml` pins `pmcp-server-toolkit = "0.1.0"`. Until that crate
+> is published to crates.io, add a local `[patch.crates-io]` (or a path
+> dependency) so `cargo run` resolves against your toolkit build.
+
+### 2. Run it locally
+
+```bash
+cargo pmcp new my-sql-server --kind sql-server
+cd my-sql-server
+cargo run
+# prints: PMCP_SQL_SERVER_ADDR=http://127.0.0.1:<port>
+```
+
+Connect any MCP client to the printed address. Out of the box you get the
+curated `list_books` tool plus Code Mode's `validate_code` / `execute_code`
+tools — the LLM writes SQL against your schema for the long tail you didn't
+curate. You can also drive the dev loop through the CLI, which builds the crate
+and injects `.env` variables:
+
+```bash
+cargo pmcp dev --server my-sql-server --port 3000
+```
+
+### 3. Edit config (no recompile)
+
+The generated `config.toml` is parsed with `#[serde(deny_unknown_fields)]`, so a
+typo is a hard error rather than a silent no-op. Add tools and tune policy by
+editing config — both `config.toml` and `schema.sql` are read at startup:
+
+```toml
+[code_mode]
+enabled = true
+allow_writes = false          # default-deny: read-only posture
+require_limit = true
+max_limit = 1000
+# DEV ONLY — the deploy path rewrites this to a secrets ref automatically.
+token_secret = "dev-only-insecure-secret-min-16-bytes"
+allow_inline_token_secret_for_dev = true
+
+[[tools]]
+name = "list_books"
+description = "List books ordered by title"
+sql = "SELECT id, title, author FROM books ORDER BY title LIMIT :limit"
+
+[[tools.parameters]]
+name = "limit"
+type = "integer"
+required = false
+default = 20
+```
+
+`schema.sql` is idempotent (`CREATE TABLE IF NOT EXISTS` / `INSERT OR IGNORE`),
+so a second `cargo run` against a persisted `demo.db` succeeds. To target a
+different backend, change `[database] type` to `postgres`, `mysql`, or `athena`
+and add the connector feature to `Cargo.toml` (the four connectors live in
+`pmcp-server-toolkit`).
+
+### 4. Deploy to AWS Lambda
+
+`cargo pmcp deploy` detects a config-driven project (a `config.toml` +
+`schema.sql` + a `pmcp-server-toolkit` dependency) and bundles those assets
+beside the binary so the deployed server resolves them under
+`/var/task/assets/`. The scaffold's `deploy.toml` defaults to `pmcp-run`; for
+Lambda, set the target type and deploy:
+
+```toml
+# deploy.toml  (and .pmcp/deploy.toml — keep them in sync)
+[target]
+type = "aws-lambda"
+version = "1.0.0"
+
+[aws]
+region = "us-east-1"
+
+[server]
+name = "my-sql-server"
+memory_mb = 512
+timeout_seconds = 30
+
+[assets]
+include = ["config.toml", "schema.sql"]
+```
+
+```bash
+# One-time prerequisites (see the AWS Lambda chapter in the PMCP course):
+#   aws sts get-caller-identity        # credentials configured
+#   cargo install cargo-lambda         # cross-compile to the Lambda runtime
+#   npm install -g aws-cdk             # infra provisioning
+
+cargo pmcp validate deploy             # pre-flight: catches IAM footguns before any AWS call
+cargo pmcp deploy --target-type aws-lambda
+cargo pmcp deploy outputs              # show the deployed endpoint
+```
+
+**Lambda runtime posture** (handled for you):
+
+- **Assets** (`config.toml`, `schema.sql`) extract to `/var/task/assets/` (read-only) — exactly where `pmcp::assets::load_string` looks.
+- **The mutable SQLite DB** opens at `/tmp/demo.db` (`/tmp` is the only writable path on Lambda).
+- **Secret (H4):** the deploy path rewrites the bundled config's inline DEV
+  `token_secret` to `${CODE_MODE_SECRET}` so the deployed artifact never ships
+  the dev literal. Supply `CODE_MODE_SECRET` as a deploy secret/env. Your
+  on-disk `config.toml` is left untouched.
+
+Verify the live endpoint:
+
+```bash
+cargo pmcp test conformance <deployed-url>
+```
+
+For a guided, hands-on version of this walkthrough, see the **Config-Driven SQL
+Servers** chapters in the [PMCP book](../pmcp-book) and [PMCP course](../pmcp-course).
+
+## Config-Driven OpenAPI Server (`new --kind openapi-server`)
+
+The OpenAPI/HTTP sibling of `--kind sql-server`: declare a REST `[backend]`, a
+handful of curated `[[tools]]` (single-call or multi-call script), and a
+`[code_mode]` policy in `config.toml`, optionally ship an `api.yaml` OpenAPI
+spec, and serve a production MCP server over the backend's HTTP API — **no Rust
+required to change behaviour, just edit the config**.
+
+> **Two shapes, same toolkit.** This scaffold ("Shape B") generates a crate you
+> own and can extend. There is also a prebuilt `pmcp-openapi-server` *binary*
+> ("Shape A") you run with `--config`/`--spec` and never compile — see
+> [`crates/pmcp-openapi-server`](../crates/pmcp-openapi-server).
+
+```bash
+cargo pmcp new my-openapi-server --kind openapi-server
+cd my-openapi-server
+cargo run
+# prints: PMCP_OPENAPI_SERVER_ADDR=http://127.0.0.1:<port>
+```
+
+The scaffold emits a **single runnable crate**:
+
+```
+<name>/
+├── Cargo.toml          # pmcp-server-toolkit (features ["openapi-code-mode"]) + pmcp-openapi-server (dispatch/build_server) + pmcp ["streamable-http"]
+├── src/main.rs         # generated ≤15-line wiring: load config[+optional api.yaml] → dispatch → build_server → serve streamable HTTP
+├── config.toml         # [server] / [backend] / [code_mode] + a single-call tool + a script tool (DEV-only inline token_secret)
+├── api.yaml            # minimal OpenAPI spec (optional at runtime; exposed as the api_schema resource for Code Mode)
+├── deploy.toml         # human-visible deploy descriptor (target = pmcp-run; assets = config.toml + api.yaml)
+└── .pmcp/deploy.toml   # the copy `cargo pmcp deploy` actually reads
+```
+
+Out of the box you get the curated `list_widgets` tool, a `widget_with_detail`
+script tool, and Code Mode's `validate_code` / `execute_code` tools — the LLM
+writes JS against your backend for the long tail you didn't curate. The generated
+`config.toml` carries an inline **DEV-ONLY** `token_secret` (guarded by
+`allow_inline_token_secret_for_dev = true`); **replace it with a secrets ref for
+production** — `cargo pmcp deploy` substitutes one automatically.
+
+> The emitted `Cargo.toml` pins `pmcp-server-toolkit = "0.1.0"` and
+> `pmcp-openapi-server = "0.1.0"`. Until those crates are published to crates.io,
+> add a local `[patch.crates-io]` (or path dependencies) so `cargo run` resolves
+> against your in-repo build.
+
 ## End-to-End Example
 
 Walk through the full lifecycle using the `complete` template calculator server.
@@ -122,7 +316,7 @@ cargo pmcp deploy test --verbose
 
 | Command | Description | Reference |
 |---------|-------------|-----------|
-| `new` | Create a new MCP workspace | [docs/commands/new.md](docs/commands/new.md) |
+| `new` | Create a new MCP workspace (or `--kind sql-server` / `--kind openapi-server` for a single config-driven crate) | [docs/commands/new.md](docs/commands/new.md) |
 | `add` | Add server, tool, or workflow to workspace | [docs/commands/add.md](docs/commands/add.md) |
 | `dev` | Start development server with HTTP transport | [docs/commands/dev.md](docs/commands/dev.md) |
 | `connect` | Connect server to Claude Code, Cursor, or Inspector | [docs/commands/connect.md](docs/commands/connect.md) |

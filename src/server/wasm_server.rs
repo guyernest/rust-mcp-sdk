@@ -173,7 +173,18 @@ impl WasmMcpServer {
                 serde_json::to_value(result).map_err(|e| Error::internal(&e.to_string()))
             },
             Err(e) => {
-                let result = CallToolResult::error(vec![Content::text(format!("Error: {}", e))]);
+                // An application-level rejection (e.g. Code Mode policy: a
+                // SELECT missing its LIMIT) carries a model-actionable message
+                // and structured detail — route it through the shared
+                // `rejected` envelope so the wasm transport matches the native
+                // paths (message → content, details → structuredContent),
+                // rather than flattening it to a prefixed `Error: …` string.
+                let result = match e {
+                    Error::ToolRejected { message, details } => {
+                        CallToolResult::rejected(message, details)
+                    },
+                    other => CallToolResult::error(vec![Content::text(format!("Error: {other}"))]),
+                };
                 serde_json::to_value(result).map_err(|e| Error::internal(&e.to_string()))
             },
         }

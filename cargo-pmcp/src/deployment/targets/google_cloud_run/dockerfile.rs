@@ -12,6 +12,12 @@ use anyhow::{Context, Result};
 ///
 /// Issue #259's distroless default applies to all three layouts; see
 /// [`runtime_stage`].
+///
+/// # Errors
+///
+/// Returns an error if the project `Cargo.toml` cannot be read (non
+/// multi-crate-isolated layouts) or the rendered Dockerfile cannot be
+/// written to disk.
 pub fn generate_dockerfile(config: &DeployConfig) -> Result<()> {
     let dockerfile_content = render_dockerfile(config)?;
     let dockerfile_path = config.project_root.join("Dockerfile");
@@ -60,8 +66,8 @@ fn resolve_binary_name(config: &DeployConfig) -> String {
         .unwrap_or_else(|| config.server.name.clone())
 }
 
-/// Shared apt-install layer for the rust:slim builder stage. pkg-config
-/// + libssl-dev cover the common native-build deps; everything else is
+/// Shared apt-install layer for the rust:slim builder stage. `pkg-config`
+/// and `libssl-dev` cover the common native-build deps; everything else is
 /// expected to come from crates.io.
 const BUILDER_APT_LAYER: &str = "# Install build dependencies
 RUN apt-get update && apt-get install -y \\
@@ -326,6 +332,10 @@ CMD ["/usr/local/bin/mcp-server"]
 }
 
 /// Generate .dockerignore for optimal build context
+///
+/// # Errors
+///
+/// Returns an error if the `.dockerignore` file cannot be written.
 pub fn generate_dockerignore(config: &DeployConfig) -> Result<()> {
     let dockerignore_content = r#"# Rust build artifacts
 target/debug/
@@ -400,6 +410,10 @@ Thumbs.db
 /// counts / ingress / `allow-unauthenticated` are all sourced from
 /// `[server]`; the `[environment]` table becomes the `--set-env-vars`
 /// argument.
+///
+/// # Errors
+///
+/// Returns an error if the `cloudbuild.yaml` file cannot be written.
 pub fn generate_cloudbuild(config: &DeployConfig) -> Result<()> {
     let region = config
         .gcp
@@ -423,14 +437,11 @@ pub fn generate_cloudbuild(config: &DeployConfig) -> Result<()> {
 
     let mut steps_tail = String::new();
     if let Some(ingress) = &config.server.ingress {
-        steps_tail.push_str(&format!("      - '--ingress'\n      - '{}'\n", ingress));
+        steps_tail.push_str(&format!("      - '--ingress'\n      - '{ingress}'\n"));
     }
     let env_vars = super::env::render_set_env_vars(&config.environment);
     if !env_vars.is_empty() {
-        steps_tail.push_str(&format!(
-            "      - '--set-env-vars'\n      - '{}'\n",
-            env_vars
-        ));
+        steps_tail.push_str(&format!("      - '--set-env-vars'\n      - '{env_vars}'\n"));
     }
     let auth_flag = if allow_unauth {
         "--allow-unauthenticated"
@@ -507,12 +518,6 @@ options:
   logging: CLOUD_LOGGING_ONLY
 "#,
         name = config.server.name,
-        region = region,
-        memory = memory,
-        cpu = cpu,
-        max_instances = max_instances,
-        min_instances = min_instances,
-        auth_flag = auth_flag,
         tail = steps_tail,
     );
 

@@ -441,6 +441,76 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_tool_rejected_maps_to_iserror_result_not_protocol_error() {
+        // A handler returning `Error::tool_rejected` must surface as a
+        // SUCCESSFUL `CallToolResult { isError: true }` carrying the message as
+        // text content and the detail as `structuredContent` — NOT a JSON-RPC
+        // protocol error. This is the Code Mode policy-rejection envelope
+        // (e.g. "SELECT missing LIMIT"): the model reads it and retries with a
+        // corrected query rather than treating the call as a server fault.
+        struct RejectingTool;
+        #[async_trait]
+        impl ToolHandler for RejectingTool {
+            async fn handle(&self, _args: Value, _extra: RequestHandlerExtra) -> Result<Value> {
+                Err(Error::tool_rejected(
+                    "SELECT statements must declare a LIMIT",
+                    Some(json!({ "violations": [{ "rule": "missing_limit" }] })),
+                ))
+            }
+        }
+
+        let server = ServerCoreBuilder::new()
+            .name("test-server")
+            .version("1.0.0")
+            .tool("reject", RejectingTool)
+            .build()
+            .unwrap();
+        server
+            .handle_request(RequestId::from(1i64), create_init_request(), None)
+            .await;
+
+        let request = Request::Client(Box::new(ClientRequest::CallTool(CallToolRequest {
+            name: "reject".to_string(),
+            arguments: json!({}),
+            _meta: None,
+            task: None,
+        })));
+        let response = server
+            .handle_request(RequestId::from(2i64), request, None)
+            .await;
+
+        match response.payload {
+            crate::types::jsonrpc::ResponsePayload::Result(result) => {
+                let call_result: CallToolResult = serde_json::from_value(result).unwrap();
+                assert!(
+                    call_result.is_error,
+                    "tool_rejected must produce isError: true"
+                );
+                let text = call_result
+                    .content
+                    .iter()
+                    .find_map(|c| match c {
+                        Content::Text { text } => Some(text.clone()),
+                        _ => None,
+                    })
+                    .unwrap_or_default();
+                assert!(
+                    text.contains("must declare a LIMIT"),
+                    "content must carry the rejection message, got: {text}"
+                );
+                let sc = call_result
+                    .structured_content
+                    .expect("structuredContent must carry the violation detail");
+                assert_eq!(sc["violations"][0]["rule"], "missing_limit");
+            },
+            crate::types::jsonrpc::ResponsePayload::Error(e) => panic!(
+                "tool_rejected must NOT be a protocol error, got {}: {}",
+                e.code, e.message
+            ),
+        }
+    }
+
+    #[tokio::test]
     async fn test_prompt_handling() {
         let prompt = MockPromptHandler::new();
 

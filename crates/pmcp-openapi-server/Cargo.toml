@@ -1,0 +1,72 @@
+[package]
+name = "pmcp-openapi-server"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/paiml/rust-mcp-sdk"
+description = "Shape A pure-config OpenAPI MCP server binary — point it at a config.toml (+ optional OpenAPI spec) and serve a production MCP server with no Rust required"
+keywords = ["mcp", "openapi", "config-driven", "toolkit", "rest"]
+categories = ["development-tools", "command-line-utilities", "web-programming"]
+
+# Why (mirror pmcp-sql-server REVIEW FIX #1): `tests/` fixtures, `.planning/`,
+# `.pmat/`, and `fuzz/` are never relevant to downstream consumers — exclude them
+# wholesale so no fixture blob ships in the crates.io tarball.
+exclude = [".planning/", ".pmat/", "fuzz/", "tests/"]
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[features]
+# Why (Plan 90-10): the binary ALWAYS pulls the toolkit's `openapi-code-mode`
+# surface (the dependency below hard-enables it — the binary serves the full
+# script-tool + Code-Mode surface). This passthrough feature exists so the
+# `oauth_passthrough_e2e` integration test (gated `#![cfg(feature =
+# "openapi-code-mode")]`, matching the toolkit's own test gating convention) can
+# be selected with `--features openapi-code-mode`. It is a `default` feature so a
+# bare `cargo test -p pmcp-openapi-server` exercises the e2e proof too.
+default = ["openapi-code-mode"]
+openapi-code-mode = ["pmcp-server-toolkit/openapi-code-mode"]
+
+[lib]
+name = "pmcp_openapi_server"
+path = "src/lib.rs"
+
+[[bin]]
+name = "pmcp-openapi-server"
+path = "src/main.rs"
+
+[dependencies]
+pmcp = { version = "2.9.0", path = "../..", features = ["streamable-http"] }
+# Why (Plan 90-01 Task 1): the `openapi-code-mode` UMBRELLA feature composes
+# `http` + `code-mode` + `pmcp-code-mode/js-runtime`. The bare `["code-mode",
+# "http"]` pair does NOT forward `pmcp-code-mode/js-runtime`, so the
+# `ScriptToolHandler` + code-mode engine path (gated `openapi-code-mode` in
+# Plans 90-04/90-05) would compile out and the binary's script-tool/code-mode
+# wiring would break (RESEARCH Pitfall 4). The binary serves the full surface.
+pmcp-server-toolkit = { version = "0.1.0", path = "../pmcp-server-toolkit", features = ["openapi-code-mode"] }
+clap = { version = "4", features = ["derive", "env"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3.20", features = ["env-filter"] }
+# Why: DispatchError / RunError / AssembleError derive thiserror::Error for the
+# config → connector dispatch + assembly seams (matches the toolkit's error
+# style and pmcp-sql-server).
+thiserror = "2"
+# Why: dispatch builds a shared reqwest::Client (lazy — no network at startup,
+# CF-2) that both the HttpClient connector and the HttpCodeExecutor reuse. MUST
+# match pmcp-server-toolkit's reqwest 0.13 so the shared `reqwest::Client` type
+# threaded into `HttpClient::new`/`HttpCodeExecutor::new` is the SAME type.
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
+
+[dev-dependencies]
+mcp-tester = { version = "0.7.0", path = "../mcp-tester" }
+tempfile = "3"
+serde_json = "1"
+# Why: the SC-1 HTTP smoke test stands up a wiremock REST backend so the
+# curated-only (no-spec) boot serves real tool surface offline.
+wiremock = "0.6"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
+# Why (mirror pmcp-sql-server): the StreamableHttpTransportConfig `url` field is
+# a `url::Url`. Matches the workspace url = "2.5".
+url = "2.5"

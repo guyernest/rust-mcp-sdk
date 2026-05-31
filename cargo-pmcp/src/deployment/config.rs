@@ -189,6 +189,9 @@ pub struct LayoutConfig {
 }
 
 impl LayoutConfig {
+    /// Returns `true` when this layout uses the multi-crate isolated pattern,
+    /// which drives surgical per-crate `COPY` lines in the generated Dockerfile.
+    #[must_use]
     pub fn is_multi_crate_isolated(&self) -> bool {
         self.kind == "multi-crate-isolated"
     }
@@ -658,15 +661,12 @@ impl DeployConfig {
         let mut required_assets: Vec<String> = Vec::new();
 
         for server in workspace_config.servers.values() {
-            match server.template.as_str() {
-                "sqlite-explorer" | "db-explorer" => {
-                    // sqlite-explorer template requires chinook.db
-                    if !required_assets.contains(&"chinook.db".to_string()) {
-                        required_assets.push("chinook.db".to_string());
-                    }
-                },
-                // Add other templates with asset requirements here
-                _ => {},
+            // sqlite-explorer / db-explorer templates require chinook.db.
+            // (Add other templates with asset requirements here.)
+            if matches!(server.template.as_str(), "sqlite-explorer" | "db-explorer")
+                && !required_assets.contains(&"chinook.db".to_string())
+            {
+                required_assets.push("chinook.db".to_string());
             }
         }
 
@@ -826,6 +826,13 @@ impl DeployConfig {
     /// Panics with a clear message when called on a non-AWS deploy config.
     /// Call sites that only run for AWS targets (`aws-lambda`, `pmcp-run`)
     /// use this to avoid an `Option::unwrap` everywhere.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the `[aws]` block is absent (e.g. a `google-cloud-run`
+    /// config). Non-AWS code paths must read [`Self::aws`] (the `Option`)
+    /// directly rather than calling this accessor.
+    #[must_use]
     pub fn aws(&self) -> &AwsConfig {
         self.aws.as_ref().expect(
             "deploy.toml is missing the required [aws] block — \
@@ -1392,7 +1399,12 @@ actions = ["read"]
 }
 
 #[cfg(test)]
-mod tests {
+mod gcp_layout_runtime_tests {
+    //! Ported from the 0.6.x reference (`config.rs` test module) for the
+    //! `google-cloud-run` `[gcp]` + `[layout]` + `[runtime]` schema port.
+    //! These are the parse/roundtrip contract: a GCR deploy.toml carrying
+    //! `[gcp]`/`[layout]`/`[runtime]` and no `[aws]`/`memory_mb`/`timeout_seconds`
+    //! must load, while every existing aws-lambda shape must still load.
     use super::*;
 
     fn aws_lambda_toml() -> &'static str {
@@ -1494,6 +1506,7 @@ base = "gcr.io/distroless/cc-debian12"
         assert_eq!(layout.kind, "multi-crate-isolated");
         assert_eq!(layout.primary, "gcp-cloud-run");
         assert_eq!(layout.path_deps, vec!["auth-echo-core".to_string()]);
+        assert!(layout.is_multi_crate_isolated());
         let runtime = config.runtime.as_ref().expect("runtime block present");
         assert_eq!(
             runtime.base.as_deref(),
@@ -1536,6 +1549,84 @@ base = "gcr.io/distroless/cc-debian12"
         let aws = reloaded.aws.as_ref().expect("aws present after roundtrip");
         assert_eq!(aws.region, "us-east-1");
         assert!(reloaded.gcp.is_none());
+    }
+
+    /// Consolidated discriminator guard for ALL deploy targets in one place.
+    ///
+    /// Every target must serialize the sub-block that matches its
+    /// `target.type` — and ONLY that block — then load back with the
+    /// discriminator intact and never carrying both `[aws]` and `[gcp]`.
+    /// This is the regression guard for the bug class where `deploy init`
+    /// wrote an AWS-shaped `deploy.toml` for a Google Cloud Run target
+    /// (fixed in 260527-ttn), plus the symmetric risk for `pmcp-run`: it is
+    /// Lambda-shaped (see `deployment::naming`, which treats
+    /// `"aws-lambda" | "pmcp-run"` identically) and must therefore round-trip
+    /// with an `[aws]` block and NO `[gcp]` block. Round-trips through the
+    /// same `toml::{to_string_pretty, from_str}` calls that
+    /// `DeployConfig::{save, load}` use.
+    #[test]
+    fn every_target_roundtrips_with_its_own_subblock_only() {
+        let aws_lambda = DeployConfig::default_for_server(
+            "lambda-srv".to_string(),
+            "us-east-1".to_string(),
+            PathBuf::from("/tmp"),
+        );
+
+        // pmcp-run is Lambda-shaped: `deploy init` builds the AWS default and
+        // overrides only the discriminator (see commands/deploy/init.rs).
+        let mut pmcp_run = DeployConfig::default_for_server(
+            "pmcprun-srv".to_string(),
+            "us-east-1".to_string(),
+            PathBuf::from("/tmp"),
+        );
+        pmcp_run.target.target_type = "pmcp-run".to_string();
+
+        let cloud_run = DeployConfig::default_for_cloud_run_server(
+            "gcr-srv".to_string(),
+            "my-project".to_string(),
+            "us-central1".to_string(),
+            PathBuf::from("/tmp"),
+        );
+
+        // (config, expected target.type, expects [aws] block, expects [gcp] block)
+        let cases = [
+            (aws_lambda, "aws-lambda", true, false),
+            (pmcp_run, "pmcp-run", true, false),
+            (cloud_run, "google-cloud-run", false, true),
+        ];
+
+        for (config, want_type, expects_aws, expects_gcp) in cases {
+            let toml_str = toml::to_string_pretty(&config).expect("serialize");
+
+            // The discriminator must be written verbatim into [target].
+            assert!(
+                toml_str.contains(&format!("type = \"{want_type}\"")),
+                "[target].type `{want_type}` missing from serialized deploy.toml:\n{toml_str}"
+            );
+
+            let reloaded: DeployConfig = toml::from_str(&toml_str).expect("reload");
+
+            assert_eq!(
+                reloaded.target.target_type, want_type,
+                "discriminator must survive the round-trip"
+            );
+            assert_eq!(
+                reloaded.aws.is_some(),
+                expects_aws,
+                "target `{want_type}`: [aws] block presence mismatch after round-trip"
+            );
+            assert_eq!(
+                reloaded.gcp.is_some(),
+                expects_gcp,
+                "target `{want_type}`: [gcp] block presence mismatch after round-trip"
+            );
+            // Mutual exclusivity: the original bug wrote BOTH shapes. A target
+            // must never carry both sub-blocks simultaneously.
+            assert!(
+                !(reloaded.aws.is_some() && reloaded.gcp.is_some()),
+                "target `{want_type}` must not carry both [aws] and [gcp] blocks"
+            );
+        }
     }
 
     #[test]

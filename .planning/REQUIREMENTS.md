@@ -1,7 +1,10 @@
-# Requirements: PMCP SDK rmcp Upgrades
+# Requirements: PMCP SDK — Configuration-Only MCP Servers (v2.2 active, v2.1 retained)
 
-**Defined:** 2026-04-10
-**Core Value:** Close credibility and DX gaps where rmcp outshines PMCP — documentation accuracy, feature gate presentation, macro documentation, example index, and repo hygiene.
+**Active milestone defined:** 2026-05-17
+**Active core value:** Enterprise developers build production-grade SQL MCP servers from configuration + schema files alone — no Rust required — while preserving PMCP's security, tools/resources/prompts/tasks/skills standards and pmcp.run hosting integration.
+
+**Prior milestone (v2.1 rmcp Upgrades) defined:** 2026-04-10
+**Prior milestone core value:** Close credibility and DX gaps where rmcp outshines PMCP — documentation accuracy, feature gate presentation, macro documentation, example index, and repo hygiene.
 
 ## v2.1 Requirements
 
@@ -94,6 +97,115 @@ Seeded by Phase 77 cargo-pmcp configure commands research (`.planning/phases/77-
 - [x] **REQ-77-10**: ALWAYS gates pass: `cargo fuzz run pmcp_config_toml_parser -- -max_total_time=60`, `cargo test -p cargo-pmcp configure::config::proptests`, `cargo test -p cargo-pmcp configure::resolver::proptests::precedence_holds`, `cargo run --example multi_target_monorepo -p cargo-pmcp` all exit 0.
 - [x] **REQ-77-11**: Banner emission integrates with ALL target-consuming entry points enumerated in 77-RESEARCH §7 (HIGH-2 per 77-REVIEWS.md): `commands/deploy/mod.rs` (8+ AWS-touching sites), `commands/test/upload.rs` (top of `execute` before `auth::get_credentials()`), `commands/loadtest/upload.rs` (same pattern), and `commands/landing/deploy.rs` (lines 69, 215, 334). The OnceLock-guarded `emit_resolved_banner_once` makes duplicate calls within a single process invocation safe.
 
+## v2.2 Requirements
+
+Requirements for the Configuration-Only MCP Servers milestone. Each maps to roadmap phases.
+
+Derived from validated spikes 003 (schema-server-surface-diff), 004 (schema-server-thin-slice-sql), 005 (multi-dialect-sql-connector), 006 (authoring-skills-server). Foundation patterns + invariants are encoded in the auto-loaded `spike-findings-rust-mcp-sdk` skill.
+
+**Reference implementation as ground truth.** The pmcp.run service already ships three production SQL-API servers under `~/Development/mcp/sdk/pmcp-run/built-in/sql-api/servers/` (`open-images`, `imdb`, `msr-vtt`). Their `config.toml` files (e.g. `servers/open-images/config.toml`) demonstrate the canonical shape this milestone lifts into the SDK:
+
+- `[server]` + `[metadata]` blocks (id, name, description, tags, visibility)
+- `[database]` with `type` (athena/postgres/mysql/sqlite), connection params, and `[[database.tables]]` blocks for code-mode schema enrichment
+- `[code_mode]` policy (`enabled`, `allow_writes`, `allow_deletes`, `allow_ddl`, `require_limit`, `max_limit`, `blocked_tables`, `sensitive_columns`, `auto_approve_levels`, `token_ttl_seconds`, `token_secret`) + `[code_mode.limits]` (max tables/join depth/subquery depth)
+- `[[tools]]` entries — curated tools defined as SQL queries with `:name` canonical placeholders, named `[[tools.parameters]]` (type, description, required, default, min/max, max_length), and `[tools.annotations]` (read_only_hint, destructive_hint, idempotent_hint, open_world_hint, cost_hint)
+- Optional `ui_resource_uri` per tool wiring an MCP Apps widget
+
+**Pareto split is intentional, not auto-conversion.** Curated `[[tools]]` cover the high-frequency business use cases (~80% of usage); `[code_mode]` covers the long-tail via LLM-generated SQL bounded by the policy. This dual-mode shape is the load-bearing design decision — it preserves the "high standard of well-designed MCP schema" while letting non-developers add tools by writing SQL + a name + a description.
+
+### Builder DX Prerequisites
+
+Upstream PMCP changes that unblock external toolkit authors (spike 004 surfaced these).
+
+- [x] **BLDR-01**: `pmcp::ServerBuilder::tool_arc(name, Arc<dyn ToolHandler>)` lifted from `ServerCoreBuilder` to the public builder so config-driven toolkits can share an `Arc<Handler>` between the builder and an in-process handler map without a 20-line delegating shim
+- [x] **BLDR-02**: `pmcp::ServerBuilder::prompt_arc(name, Arc<dyn PromptHandler>)` lifted from `ServerCoreBuilder` to the public builder
+- [x] **BLDR-03**: Officially documented handler-level testing pattern so external toolkit integration tests can drive request flow without poking at private `Server::handle_request` — delivered via `Server::get_tool(name)` accessor symmetric with `get_prompt`, plus a comprehensive doctest on each accessor and a reference integration test under `tests/in_process_handler_pattern.rs` (rejecting the `Server::dispatch`/`MemoryTransport` alternative as out-of-scope for this phase per CONTEXT.md D-01).
+- [x] **BLDR-04**: `pmcp::ServerBuilder` gains `_arc` variants for the remaining four handler types (`resources_arc`, `sampling_arc`, `auth_provider_arc`, `tool_authorizer_arc`) so all impl-or-Arc handler-registration paths reach parity with `ServerCoreBuilder`. This closes the umbrella Arc-symmetry gap surfaced in spike 004's "API surface discovery 1" — no external toolkit author should need a 20-line delegating wrapper shim for any handler type.
+
+### Toolkit Core (`pmcp-server-toolkit`)
+
+Lift `mcp-server-common` (~2.2k LoC at `pmcp-run/built-in/shared/`) and `pmcp-code-mode` shapes to a public, crates.io-published SDK crate (spike 003).
+
+- [x] **TKIT-01**: `crates/pmcp-server-toolkit/` exists in the workspace, builds cleanly, and is publishable to crates.io (slotted into the release publish order)
+- [x] **TKIT-02**: `AuthProvider` trait exposed in the public toolkit API with at least one concrete impl ready for downstream use
+- [x] **TKIT-03**: `SecretsProvider` trait exposed in the public toolkit API with at least one concrete impl ready for downstream use
+- [x] **TKIT-04**: `StaticResourceHandler` constructible from config exposed in the public toolkit API
+- [x] **TKIT-05**: `StaticPromptHandler` constructible from config exposed in the public toolkit API
+- [x] **TKIT-06**: HMAC token machinery (sign + verify, code-hash binding) exposed in the public toolkit API and integrated with `pmcp-code-mode`
+- [x] **TKIT-07**: `ToolInfo` synthesizer reads `[[tools]]` entries from a server's `config.toml` and produces complete `ToolInfo` definitions (name, description, input schema, `[tools.annotations]`) with zero per-tool Rust handlers required. The supported `config.toml` shape MUST be a superset of the existing `pmcp-run/built-in/sql-api/servers/*/config.toml` files — including `[[tools.parameters]]` (type, description, required, default, min/max, max_length) and `[tools.annotations]` (read_only_hint, destructive_hint, idempotent_hint, open_world_hint, cost_hint) — so reference servers port without schema rewrites
+- [x] **TKIT-08**: All three `pmcp-run` backend cores (`mcp-sql-server-core`, `mcp-graphql-server-core`, `mcp-openapi-server-core`) replace their path-deps on `pmcp-run/built-in/shared/` with versioned crates.io deps on `pmcp-server-toolkit` (independent release cadence unblocked)
+- [x] **TKIT-09**: `[code_mode]` config block (`enabled`, `allow_writes`, `allow_deletes`, `allow_ddl`, `require_limit`, `max_limit`, `blocked_tables`, `sensitive_columns`, `auto_approve_levels`, `token_ttl_seconds`, `token_secret`) plus `[code_mode.limits]` (`max_tables_per_query`, `max_join_depth`, `max_subquery_depth`) are parsed by the toolkit and wired into `pmcp-code-mode`'s validation pipeline + `CodeExecutor` with zero per-server Rust glue — same surface as `~/Development/mcp/sdk/pmcp-run/built-in/sql-api/servers/open-images/config.toml` lines 97–127
+- [x] **TKIT-10**: Code-mode prompt body assembly combines `build_code_mode_prompt` (CONN-04) with `[[database.tables]]` curated descriptions so the LLM is seeded with the dialect + per-table semantic hints (not just raw DDL); the assembled prompt matches the spirit of the reference servers' code-mode prompt
+
+### SQL Connectors
+
+Multi-dialect SQL connector trait + per-backend crates (spike 005). Three methods + two free helpers cleanly handle Postgres / MySQL / Athena / SQLite.
+
+- [x] **CONN-01**: `SqlConnector` trait in toolkit core exposes exactly three methods: `dialect() -> Dialect`, `execute(query, params) -> Result<...>`, `schema_text() -> Result<String>`. The `schema_text()` body MUST optionally fold in any per-table descriptions from `[[database.tables]]` config entries (as the reference servers already do) so curated descriptions reach the code-mode prompt
+- [x] **CONN-02**: `Dialect` enum in toolkit core with `Postgres`, `MySQL`, `Athena`, `SQLite` variants
+- [x] **CONN-03**: `translate_placeholders(canonical_query, dialect) -> String` free helper translating `:name` placeholders to dialect-specific forms (`$1`, `?`, `?`, `:name` respectively)
+- [x] **CONN-04**: `build_code_mode_prompt(connector) -> String` free helper assembling the dialect-aware code-mode bootstrap prompt body from a connector's `schema_text()`
+- [x] **CONN-05**: `pmcp-toolkit-postgres` crate using pure-Rust `tokio-postgres` implements `SqlConnector` with `information_schema`-driven `schema_text()`
+- [x] **CONN-06**: `pmcp-toolkit-mysql` crate using pure-Rust `sqlx` (MySQL driver) implements `SqlConnector` with `information_schema`-driven `schema_text()`
+- [x] **CONN-07**: `pmcp-toolkit-athena` crate using pure-Rust `aws-sdk-athena` implements `SqlConnector` with `schema_text()` driven by Athena `GetTableMetadata` (NO `aws-sdk-glue` dependency — Landmine #4 / Phase 84 D-08: `GetTableMetadata` covers schema introspection without adding Glue to the build graph)
+- [x] **CONN-08**: SQLite backend ships as a feature flag on the toolkit using `rusqlite` (bundled feature) — no separate crate
+
+### DX Shapes
+
+Four user-facing surfaces in this milestone (spike 004 menu).
+
+- [x] **SHAP-A-01**: Shape A — `pmcp-sql-server --config <file> --schema <file>` pure-config binary crate that spawns an MCP server from configuration + schema alone, zero Rust written by the developer. Acceptance check: running it against `pmcp-run/built-in/sql-api/servers/open-images/config.toml` (or `imdb` / `msr-vtt`) produces a server that responds to `tools/list`, `tools/call` for every `[[tools]]` entry, and the code-mode pair (`validate_code` / `execute_code`) with policy enforcement matching the production server's behavior
+- [x] **SHAP-B-01**: Shape B — `cargo pmcp new --kind sql-server` scaffolds a starter project with `Cargo.toml` (pinned toolkit + chosen backend dep), `main.rs` (12-line shape-C wiring), and `config.toml` (commented template) ready to `cargo run`
+- [x] **SHAP-C-01**: Shape C — A runnable `examples/` entry proves library use: an end-to-end MCP server in ≤15 lines of `main.rs` (library use of `pmcp-server-toolkit` + a chosen `pmcp-toolkit-<backend>` crate)
+- [x] **SHAP-D-01**: Shape D — `cargo pmcp deploy` packages a config-only server (pure-Rust Lambda binary) and deploys it to pmcp.run as a hosted target; the `cargo pmcp configure` target system from Phase 77 accommodates config-only server targets without breaking changes
+
+### SEP-2640 Skills — Type 2 Authoring Skills
+
+Validated by spike 006. New deliverable: an MCP server that ships SEP-2640 Skills for config authoring.
+
+- [ ] **SKLL-01**: `crates/pmcp-config-helper/` MCP server crate exists and is publishable; a `pmcp-config-helper` binary runs the server with default skills bundled
+- [ ] **SKLL-02**: Root `SKILL.md` covering general `config.toml` authoring conventions (curated-tool pareto, secrets refs, auth surface, code-mode opt-in)
+- [ ] **SKLL-03**: Per-backend reference files (`references/postgres.md`, `references/mysql.md`, `references/athena.md`, `references/sqlite.md`) addressable via `resources/read`
+- [ ] **SKLL-04**: At least one worked example bundle (complete `config.toml` + `schema.sql` for a representative use case) addressable via `resources/read`
+- [ ] **SKLL-05**: Dual-surface invariant — `prompts/get` body for the bootstrap prompt is byte-equal to the root `SKILL.md` content; asserted in an in-binary integration test
+- [ ] **SKLL-06**: SEP-2640 §9 compliance — supporting files (per-backend references, worked examples) are served via `resources/read` but MUST NOT appear in `resources/list`; asserted in an integration test against a representative client
+- [ ] **SKLL-07**: Type 1 build-time skills in `ai-agents/` updated with toolkit-authoring patterns so coding agents writing Rust against the toolkit pick up canonical idioms (config DSL, connector trait usage, secrets binding)
+
+### Reference-Implementation Compatibility (REF)
+
+Prove the lift by porting at least one of the existing pmcp-run sql-api servers (`open-images`, `imdb`, `msr-vtt`) to the new toolkit, with the SDK consuming the same `config.toml` shape the platform team already wrote.
+
+- [x] **REF-01**: The toolkit's `config.toml` schema is a superset of the existing pmcp-run sql-api server configs — any of the three reference servers' configs parse cleanly without modification (additive new keys are allowed; renames are not)
+- [x] **REF-02**: At least one reference server (open-images recommended given Athena coverage) is reproduced end-to-end as a Shape A invocation: same tools, same code-mode policy, same observable behavior — verified by replaying a representative subset of `~/Development/mcp/sdk/pmcp-run/built-in/sql-api/reference/scenarios/` against both implementations and asserting result parity
+- [ ] **REF-03**: Migration note in DOCS-01 (book chapter) documents how a pmcp-run SQL-API server author moves from the in-tree path-deps to the public toolkit (one-page recipe: swap the dep, drop the duplicate domain crates, regenerate)
+
+### Dogfood — `crates/pmcp-server`
+
+Demonstrate the toolkit's reach by rebuilding the SDK's own dev-tools MCP server.
+
+- [ ] **DOGF-01**: `crates/pmcp-server` (SDK dev-tools MCP server) rewritten on top of `pmcp-server-toolkit` with at least one config-driven tool surface
+- [ ] **DOGF-02**: Behavioral parity verified — the rewritten `pmcp-server` passes the existing test suite (or a documented superset) unchanged; no functional regression for downstream users
+
+### Documentation
+
+- [ ] **DOCS-01**: New book chapter (`pmcp-book/src/`) for config-only MCP servers — overview, the four shapes, per-backend recipes, deployment
+- [ ] **DOCS-02**: New course tutorial (`pmcp-course/src/`) for config-only MCP servers — hands-on walk-through from `cargo pmcp new --kind sql-server` to deployed pmcp.run server
+- [ ] **DOCS-03**: PMCP README + `CRATE-README.md` updated with config-first positioning ("build production MCP servers from config alone")
+- [ ] **DOCS-04**: `examples/README.md` index updated with config-only example entries (Shape A binary use, Shape C library use)
+- [ ] **DOCS-05**: cargo-pmcp README documents `new --kind sql-server` scaffolding and `deploy` for config-only server targets
+
+### Testing
+
+ALWAYS requirements from CLAUDE.md plus toolkit-specific coverage.
+
+- [x] **TEST-01**: Integration tests for each per-backend SQL crate against authentic in-process mocks (Postgres `$1`+`information_schema`, MySQL `?`+`information_schema`, Athena `?`+`GetTableMetadata` schema introspection — NO Glue) plus a real SQLite — no Docker, no testcontainers
+- [x] **TEST-02**: Toolkit core unit + property tests covering placeholder translation invariants, code-mode prompt assembly, ToolInfo synthesis from `[[tools]]` config entries
+- [x] **TEST-03**: Public API doctest coverage for `pmcp-server-toolkit` (all public types + helpers compile and run as `rust,no_run` or `rust` doctests)
+- [ ] **TEST-04**: `pmcp-config-helper` integration test asserts dual-surface byte-equality (SKLL-05) and SEP-2640 §9 list-exclusion (SKLL-06)
+- [x] **TEST-05**: `cargo pmcp new --kind sql-server` scaffold-to-run end-to-end test (scaffold a project in a tempdir, `cargo run` it against an embedded SQLite, hit `tools/list` and one `tools/call`)
+- [x] **TEST-06**: `cargo pmcp deploy` integration test for at least one config-only server target (mock or real pmcp.run target)
+- [x] **TEST-07**: Fuzz target for `config.toml` parser ensuring malformed config never panics (extends Phase 77 `pmcp_config_toml_parser` pattern)
+
 ## Previous Requirements
 
 <details>
@@ -129,6 +241,24 @@ Seeded by Phase 77 cargo-pmcp configure commands research (`.planning/phases/77-
 
 Deferred to later milestone. Tracked but not in current roadmap.
 
+### Configuration-Only Servers — Follow-on Backends
+
+- **GQL-TKIT-01**: `crates/pmcp-toolkit-graphql/` per-backend crate after a GraphQL-analog of spike 005 confirms connector shape (next milestone)
+- **OAPI-TKIT-01**: `crates/pmcp-toolkit-openapi/` per-backend crate — gated by Spike 007 (`openapi-auth-policy-pluggability`), not yet run; OpenAPI may stay at `pmcp-run` if policy pluggability proves not viable
+- **PMACRO-SQL-01**: `#[pmcp::sql_server]` proc-macro (deferred — public toolkit on crates.io is the prerequisite)
+- **PMACRO-OAPI-01**: `#[pmcp::openapi_server]` proc-macro (deferred — Spike 007 + OpenAPI toolkit are the prerequisite)
+- **CFG-HELPER-EXT-01**: Extend `pmcp-config-helper` skills bundle to cover GraphQL + OpenAPI config authoring once those toolkits land
+- **FED-01**: Cross-backend tool federation — a single MCP server serving tools from Postgres + Athena + ... (composed via toolkit core)
+- **ARCH-DIST-01**: SEP-2640 archive distribution (`Content::Resource.blob` field + `application/gzip` + base64 blob) — blocked on upstream protocol-types gap from spike 001
+
+### Usage-Driven Tool Promotion (long-term vision)
+
+Capture real code-mode usage from deployed servers, surface repeated patterns, and promote them to curated `[[tools]]` config entries — improving LLM task-completion success rate and giving non-developers a natural path to define new tools from common business use cases.
+
+- **USAGE-01**: Code-mode usage capture — deployed servers emit anonymized telemetry (query text after parameter extraction, frequency, success/failure, latency) to a configurable sink (CloudWatch / S3 / OTLP). Privacy-respecting (no parameter values, no result rows). Gated by an explicit `[telemetry] enabled = true` opt-in in `config.toml`.
+- **USAGE-02**: Pattern-suggestion workflow — operator-facing `cargo pmcp toolkit suggest-tools <server>` reads captured usage, clusters semantically-equivalent queries (parameter abstraction), ranks by frequency × success rate, and prints proposed `[[tools]]` config entries the operator can paste into `config.toml`
+- **USAGE-03**: Type 2 skill in `pmcp-config-helper` ("promote pattern from logs") that walks a non-developer through reviewing a suggestion + naming the tool + writing a user-facing description — closing the loop from real usage to curated tool definition entirely through the MCP server's UI
+
 ### Documentation Depth
 
 - **DOCD-01**: Per-capability code examples in README (book/course fill this role today)
@@ -147,6 +277,12 @@ Explicitly excluded. Documented to prevent scope creep.
 
 | Feature | Reason |
 |---------|--------|
+| GraphQL toolkit in v2.2 | Separate milestone — connector shape spike not yet run; SQL is enough to prove the v2.2 thesis end-to-end |
+| OpenAPI toolkit in v2.2 | Spike 007 (`openapi-auth-policy-pluggability`) has not run; until ONE `PolicyEvaluator` trait is proven viable across AVP / OPA / Cedar / bespoke RBAC, OpenAPI stays at `pmcp-run` |
+| Unifying per-backend executors behind a single `SchemaServer<S, C>` trait | Spike 003 disproved viability — executors, parameter binding, and policy surfaces diverge semantically; `code_mode.rs` LoC spread of 545 / 767 / 1560 reflects real divergence |
+| Docker / testcontainers for SQL backend testing | Pure-Rust Lambda binaries are the deployment target (see `feedback_avoid_docker_pure_rust_lambda` memory). Use authentic in-process mocks + pure-Rust drivers (`tokio-postgres`, `sqlx`, `aws-sdk-athena`, `rusqlite` bundled) |
+| `#[pmcp::sql_server]` / `#[pmcp::openapi_server]` proc-macros in v2.2 | The toolkit being public on crates.io is the prerequisite — without it, the macro would expand to types nobody can depend on |
+| SEP-2640 archive distribution (gzip blob) | `Content::Resource` lacks a `blob` field today (upstream protocol-types gap from spike 001); SEP-2640 §4 marks archive distribution as optional; ship text-mode skills first |
 | Copying rmcp's trait-based architecture docs | Different SDK architecture; would be misleading |
 | Per-capability inline README sections | Would make README 2000+ lines; book/course serve this role |
 | Example subdirectory reorganization | High churn for low gain; flat numbering works |
@@ -201,10 +337,62 @@ Which phases cover which requirements. Updated during roadmap creation.
 | REQ-77-09 | Phase 77 | Complete |
 | REQ-77-10 | Phase 77 | Complete |
 | REQ-77-11 | Phase 77 | Complete |
+| BLDR-01 | Phase 82 | Complete |
+| BLDR-02 | Phase 82 | Complete |
+| BLDR-03 | Phase 82 | Complete |
+| BLDR-04 | Phase 82 | Complete |
+| TKIT-01 | Phase 83 | Complete |
+| TKIT-02 | Phase 83 | Complete |
+| TKIT-03 | Phase 83 | Complete |
+| TKIT-04 | Phase 83 | Complete |
+| TKIT-05 | Phase 83 | Complete |
+| TKIT-06 | Phase 83 | Complete |
+| TKIT-07 | Phase 83 | Complete |
+| TKIT-08 | Phase 83 | Complete |
+| TKIT-09 | Phase 83 | Complete |
+| TKIT-10 | Phase 83 | Complete |
+| CONN-01 | Phase 84 | Complete |
+| CONN-02 | Phase 84 | Complete |
+| CONN-03 | Phase 84 | Complete |
+| CONN-04 | Phase 84 | Complete |
+| CONN-05 | Phase 84 | Complete |
+| CONN-06 | Phase 84 | Complete |
+| CONN-07 | Phase 84 | Complete |
+| CONN-08 | Phase 84 | Complete |
+| SHAP-A-01 | Phase 85 | Complete |
+| SHAP-B-01 | Phase 86 | Complete |
+| SHAP-C-01 | Phase 86 | Complete |
+| SHAP-D-01 | Phase 86 | Complete |
+| SKLL-01 | Phase 87 | Pending |
+| SKLL-02 | Phase 87 | Pending |
+| SKLL-03 | Phase 87 | Pending |
+| SKLL-04 | Phase 87 | Pending |
+| SKLL-05 | Phase 87 | Pending |
+| SKLL-06 | Phase 87 | Pending |
+| SKLL-07 | Phase 87 | Pending |
+| REF-01 | Phase 85 | Complete |
+| REF-02 | Phase 85 | Complete |
+| REF-03 | Phase 89 | Pending |
+| DOGF-01 | Phase 88 | Pending |
+| DOGF-02 | Phase 88 | Pending |
+| DOCS-01 | Phase 89 | Pending |
+| DOCS-02 | Phase 89 | Pending |
+| DOCS-03 | Phase 89 | Pending |
+| DOCS-04 | Phase 89 | Pending |
+| DOCS-05 | Phase 89 | Pending |
+| TEST-01 | Phase 84 | Complete |
+| TEST-02 | Phase 83 | Complete |
+| TEST-03 | Phase 83 | Complete |
+| TEST-04 | Phase 87 | Pending |
+| TEST-05 | Phase 86 | Complete |
+| TEST-06 | Phase 86 | Complete |
+| TEST-07 | Phase 84 | Complete |
 
 **Coverage:**
+
 - v2.1 requirements: 42 total (20 pre-seed + 3 seeded by Phase 69 + 5 seeded by Phase 72 + 1 seeded by Phase 72.1 CR-03 + 2 seeded by Phase 74 + 11 seeded by Phase 77)
-- Mapped to phases: 42
+- v2.2 requirements: 49 total (BLDR ×3 + TKIT ×10 + CONN ×8 + SHAP ×4 + SKLL ×7 + REF ×3 + DOGF ×2 + DOCS ×5 + TEST ×7)
+- Mapped to phases: v2.1 42 / 42; v2.2 49 / 49 (Phases 82–89)
 - Unmapped: 0
 
 ---
@@ -216,3 +404,6 @@ Which phases cover which requirements. Updated during roadmap creation.
 *Last updated: 2026-04-20 — added LAND-CR03-01 seeded by Phase 72.1 CR-03 rev-2 (cargo-pmcp 0.8.1 landing runtime fetch).*
 *Last updated: 2026-04-20 — Phase 72.1 complete: cargo-pmcp 0.8.1 landing template runtime /landing-config fetch (AC-11 manual offline gate approved by operator guy).*
 *Last updated: 2026-04-26 — added 11 REQ-77-* IDs seeded by Phase 77 cargo pmcp configure commands research.*
+*Last updated: 2026-05-17 — milestone v2.2 (Configuration-Only MCP Servers) defined. Added 49 IDs across BLDR / TKIT / CONN / SHAP / SKLL / REF / DOGF / DOCS / TEST categories, derived from spikes 003–006 + the auto-loaded `spike-findings-rust-mcp-sdk` skill. Grounded in the existing `pmcp-run/built-in/sql-api/servers/` reference implementation (open-images / imdb / msr-vtt) — the toolkit must consume their `config.toml` shape (incl. dual-mode curated `[[tools]]` + `[code_mode]` policy + `[[database.tables]]` schema enrichment) as a superset, not redesign it. Long-term USAGE-01..03 vision (usage-driven tool promotion from code-mode logs) captured in Future Requirements. Phase assignment pending ROADMAP.md creation.*
+*Last updated: 2026-05-17 — ROADMAP.md v2.2 block written; all 49 v2.2 IDs mapped to Phases 82–89. BLDR→P82; TKIT+TEST-02+TEST-03→P83; CONN+TEST-01+TEST-07→P84; SHAP-A+REF-01+REF-02→P85; SHAP-B/C/D+TEST-05+TEST-06→P86; SKLL+TEST-04→P87; DOGF→P88; DOCS+REF-03→P89.*
+*Last updated: 2026-05-26 — Phase 84 closeout (Plan 84-08). CONN-01..08 + TEST-01 + TEST-07 formally closed: SqlConnector 3-method trait, Dialect enum, translate_placeholders + build_code_mode_prompt helpers, pmcp-toolkit-{postgres,mysql,athena} connector crates, SQLite feature flag, per-backend in-process-mock integration tests (no Docker/testcontainers), and the config.toml fuzz target extended with 3 per-backend + 4 REVIEWS M6 adversarial URL corpus seeds (60s fuzz clean). CONN-07/TEST-01 Athena descriptions corrected from "Glue catalog" to "GetTableMetadata" to match shipped reality (Landmine #4 / D-08 — NO aws-sdk-glue). Phase 84 complete.*

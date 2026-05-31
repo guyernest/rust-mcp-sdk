@@ -5,6 +5,49 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.9.0] - 2026-05-30
+
+The **config-driven servers** release: build production MCP servers over SQL
+databases and OpenAPI/HTTP backends from a `config.toml` alone — **no Rust
+required**. This removes the biggest blocker to putting organizational data
+behind MCP: a business analyst curates the API slice in config, and the toolkit
+synthesizes the server. Curated tools cover the common ~20%; Code Mode handles
+the long-tail ~80% under a static, default-deny policy.
+
+### Added
+
+- **New crates (first publish) — the config-driven server toolkit:**
+  - `pmcp-server-toolkit` — backend-agnostic library: config types, the
+    `[[tools]]` synthesizer, Code Mode wiring, and the connector/outgoing-auth seams.
+  - `pmcp-sql-server` — Shape-A binary serving SQLite / Postgres / MySQL / Athena
+    from `config.toml` + a schema file. Ships a runnable `sqlite-explorer` example.
+  - `pmcp-openapi-server` — Shape-A binary serving any OpenAPI / HTTP backend, with
+    six outgoing-auth models including OAuth **passthrough** (forwards the caller's
+    own token; the server holds no standing credential). Ships `london-tube`
+    (api_key) and `contoso-m365` (oauth_passthrough, Microsoft Graph + Excel) examples.
+  - `pmcp-toolkit-postgres`, `pmcp-toolkit-mysql`, `pmcp-toolkit-athena` —
+    per-backend SQL connectors for the toolkit.
+- **`pmcp` SDK — new public APIs** (consumed by the toolkit):
+  - `Server::tool_arc`, `Server::prompt_arc`, `Server::resource_arc` — register a
+    pre-built `Arc<dyn …Handler>` (handler-level composition + testing).
+  - `Server::get_tool` — accessor mirroring the existing `get_prompt` / `get_resource`.
+  - `CallToolResult::rejected(message, details)` — companion to the new
+    `Error::ToolRejected` variant for policy-rejection results.
+- **`cargo pmcp new --kind sql-server` / `--kind openapi-server`** — scaffold a
+  config-driven server as a small, deployable crate (Shape-B/C sibling of the
+  Shape-A binaries), ready for `cargo pmcp deploy`.
+- Main README gains a config-first **Path 1: Config-Only Servers (No Rust)** and a
+  Config-Driven Servers ecosystem section; `pmcp-book` / `pmcp-course` gain
+  Config-Driven SQL and OpenAPI chapters (incl. the Contoso M365 oauth_passthrough
+  walkthrough).
+
+### Changed
+
+- `pmcp-code-mode` 0.5.2 — additive validation-config types backing the SQL /
+  OpenAPI Code Mode policy surfaces (`sql-code-mode`, `openapi-code-mode`).
+- `cargo-pmcp` 0.15.0 — config-driven scaffold kinds, deploy enhancements, and a
+  comprehensive command/README reference.
+
 ## [2.8.1] - 2026-05-17
 
 ### Added

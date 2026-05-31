@@ -307,6 +307,7 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {{
         on_session_initialized: None,
         on_session_closed: None,
         http_middleware: None,
+        ..Default::default()
     }};
 
     let http_server = StreamableHttpServer::with_config(addr, server, config);
@@ -534,6 +535,7 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {{
         on_session_initialized: None,
         on_session_closed: None,
         http_middleware: None,
+        ..Default::default()
     }};
 
     let http_server = StreamableHttpServer::with_config(addr, server, config);

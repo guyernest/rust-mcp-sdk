@@ -136,62 +136,78 @@ See phase details in `.planning/phases/52-*` and `.planning/phases/53-*`
 <summary>Phases 27-53 (v1.6 + v1.7 — prior milestones)</summary>
 
 ### Phase 27: Global Flag Infrastructure
+
 **Goal**: Every cargo pmcp invocation supports --no-color and --quiet for scripting and CI use
 **Depends on**: Phase 26 (v1.5 complete)
 **Requirements**: FLAG-08, FLAG-09
 **Success Criteria** (what must be TRUE):
+
   1. User can pass `--no-color` to any cargo pmcp command and all terminal output is plain text (no ANSI escape codes)
   2. User can pass `--quiet` to any cargo pmcp command and only errors and explicit requested output appear
   3. Both flags work when placed before or after the subcommand (global position)
+
 **Plans**: 2 plans
 Plans:
+
 - [ ] 27-01-PLAN.md — GlobalFlags struct, --no-color/--quiet CLI args, wire through all command dispatch, global color suppression
 - [ ] 27-02-PLAN.md — Quiet mode output filtering across all commands, verbose-wins-over-quiet precedence
 
 ### Phase 28: Flag Normalization
+
 **Goal**: Every existing cargo pmcp command uses the same conventions for URLs, server references, verbosity, confirmations, output, and format values
 **Depends on**: Phase 27
 **Requirements**: FLAG-01, FLAG-02, FLAG-03, FLAG-04, FLAG-05, FLAG-06, FLAG-07
 **Success Criteria** (what must be TRUE):
+
   1. User can pass a server URL as a positional argument to any command that connects to a server (no more `--url` or `--endpoint`)
   2. User can use `--server` consistently for pmcp.run server references (no more `--server-id`)
   3. User can use `--verbose` / `-v` for detailed output on any command (no more `--detailed`)
   4. User can use `--yes` to skip confirmations and `-o` as shorthand for `--output` on any command that supports them
   5. All `--format` flags accept `text` and `json` as values (no other human-readable format names)
+
 **Plans**: 3 plans
 
 Plans:
+
 - [ ] 28-01-PLAN.md — Create shared flag structs (FormatValue, OutputFlags, FormatFlags), convert deploy #[clap()] to #[arg()], clean up dead code
 - [ ] 28-02-PLAN.md — Normalize test/schema/preview/connect/validate/deploy flags: URL positional, verbose removal, format normalization
 - [ ] 28-03-PLAN.md — Normalize app/secret/loadtest/landing flags: URL positional, --force to --yes, -o alias, --server-id to --server
 
 ### Phase 29: Auth Flag Propagation
+
 **Goal**: Every command that connects to an MCP server accepts OAuth and API-key authentication flags
 **Depends on**: Phase 28
 **Requirements**: AUTH-01, AUTH-02, AUTH-03, AUTH-04, AUTH-05, AUTH-06
 **Success Criteria** (what must be TRUE):
+
   1. User can pass `--api-key <key>` to test check/run/generate, preview, schema export, and connect commands
   2. User can pass OAuth flags (--oauth-issuer, --oauth-client-id, --oauth-scopes, --oauth-no-cache, --oauth-redirect-port) to any of those same commands
   3. Auth flags are defined in a shared struct (AuthFlags or similar) flattened into each command, not duplicated per command
   4. Commands that already had auth support (e.g., loadtest) continue to work unchanged
+
 **Plans**: 3 plans
 
 Plans:
+
 - [ ] 29-01-PLAN.md — Define AuthFlags struct, AuthMethod enum, resolve() method in flags.rs; create shared auth.rs with resolve_auth_middleware()
 - [ ] 29-02-PLAN.md — Flatten AuthFlags into test check/run/generate/apps, wire handlers; migrate loadtest inline auth to shared AuthFlags
 - [ ] 29-03-PLAN.md — Add AuthFlags to preview/schema export/connect; extend McpProxy with auth_header; wire connect config generation
 
 ### Phase 30: Tester CLI Integration
+
 **Goal**: Users can run all mcp-tester capabilities through cargo pmcp test subcommands with consistent flag conventions
 **Depends on**: Phase 29
 **Requirements**: TEST-01, TEST-02, TEST-03, TEST-04, TEST-05, TEST-06, TEST-07, TEST-08
 **Success Criteria** (what must be TRUE):
+
   1. User can run `cargo pmcp test compliance <url>`, `cargo pmcp test diagnose <url>`, and `cargo pmcp test compare <url1> <url2>` to validate MCP servers
   2. User can run `cargo pmcp test tools <url>`, `cargo pmcp test resources <url>`, `cargo pmcp test prompts <url>`, and `cargo pmcp test health <url>` to inspect server capabilities
   3. All `cargo pmcp test` subcommands accept the same auth flags (--api-key, OAuth) and global flags (--verbose, --no-color, --quiet) established in prior phases
   4. The standalone `mcp-tester` binary uses the same flag conventions as `cargo pmcp test` (positional URL, --verbose/-v, --yes)
+
 **Plans:** 6 plans
 Plans:
+
 - [x] 67.2-01-PLAN.md — Wire policy_evaluator into generated handlers + switch to async validation
 - [x] 67.2-02-PLAN.md — Add context_from and language darling attributes to derive macro
 - [x] 67.2-03-PLAN.md — HmacTokenGenerator::new returns Result + trybuild compile-fail tests
@@ -200,15 +216,19 @@ Plans:
 - [x] 67.2-06-PLAN.md — json_to_string unification + StepOutcome refactor + ValidationResponse wrapping + clippy cleanup
 
 ### Phase 31: New Commands
+
 **Goal**: Users have workspace diagnostics and shell completion generation built into the CLI
 **Depends on**: Phase 28
 **Requirements**: CMD-01, CMD-02
 **Success Criteria** (what must be TRUE):
+
   1. User can run `cargo pmcp doctor` and see validation results for workspace structure, Rust toolchain, config files, and optionally server connectivity
   2. User can run `cargo pmcp completions bash` (or zsh/fish/powershell) and pipe the output to the appropriate shell config file
   3. Both commands follow all established flag conventions (global flags, --format, help text patterns)
+
 **Plans:** 6 plans
 Plans:
+
 - [x] 67.2-01-PLAN.md — Wire policy_evaluator into generated handlers + switch to async validation
 - [x] 67.2-02-PLAN.md — Add context_from and language darling attributes to derive macro
 - [x] 67.2-03-PLAN.md — HmacTokenGenerator::new returns Result + trybuild compile-fail tests
@@ -217,15 +237,19 @@ Plans:
 - [x] 67.2-06-PLAN.md — json_to_string unification + StepOutcome refactor + ValidationResponse wrapping + clippy cleanup
 
 ### Phase 32: Help Text Polish
+
 **Goal**: Every cargo pmcp command has professional, consistent help output ready for course recording
 **Depends on**: Phase 31
 **Requirements**: HELP-01, HELP-02
 **Success Criteria** (what must be TRUE):
+
   1. Every command's `--help` output includes a description, grouped options (by category: connection, auth, output, etc.), and a usage examples section via `after_help`
   2. All help text follows the same structural pattern: synopsis line, categorized options, examples section
   3. Running `cargo pmcp --help` shows a clean top-level overview with all subcommands and their one-line descriptions
+
 **Plans:** 6 plans
 Plans:
+
 - [x] 67.2-01-PLAN.md — Wire policy_evaluator into generated handlers + switch to async validation
 - [x] 67.2-02-PLAN.md — Add context_from and language darling attributes to derive macro
 - [x] 67.2-03-PLAN.md — HmacTokenGenerator::new returns Result + trybuild compile-fail tests
@@ -280,6 +304,7 @@ Plans:
 **Plans:** 3/3 plans complete
 
 Plans:
+
 - [ ] 33-01-PLAN.md — Version bumps and crates.io publish
 
 ### Phase 34: Fix MCP Apps ChatGPT compatibility
@@ -290,6 +315,7 @@ Plans:
 **Plans:** 3 plans (2 complete, 1 gap closure)
 
 Plans:
+
 - [x] 34-01-PLAN.md — Fix tool _meta format (nested ui.resourceUri + openai/outputTemplate), add MIME type variant, dual-emit WidgetMeta
 - [ ] 34-02-PLAN.md — Fix mcp-preview axum 0.8 wildcard route panic
 
@@ -301,6 +327,7 @@ Plans:
 **Plans:** 4 plans
 
 Plans:
+
 - [ ] TBD (run /gsd:plan-phase 35 to break down)
 
 ### Phase 36: Unify UIMimeType and ExtendedUIMimeType with From bridge
@@ -311,6 +338,7 @@ Plans:
 **Plans:** 1/1 plans complete
 
 Plans:
+
 - [ ] 36-01-PLAN.md — TDD: From<UIMimeType> for ExtendedUIMimeType and TryFrom<ExtendedUIMimeType> for UIMimeType
 
 ### Phase 37: Add with_ui support to TypedSyncTool
@@ -321,6 +349,7 @@ Plans:
 **Plans:** 1/1 plans complete
 
 Plans:
+
 - [ ] 37-01-PLAN.md — Add ui_resource_uri field, with_ui() builder, and _meta emission to TypedSyncTool and WasmTypedTool
 
 ### Phase 38: Cache ToolInfo at registration to avoid per-request cloning
@@ -331,6 +360,7 @@ Plans:
 **Plans:** 1/1 plans complete
 
 Plans:
+
 - [ ] 38-01-PLAN.md — Add tool_infos/prompt_infos cache to builders, replace 6 per-request metadata() call sites with cache lookups
 
 ### Phase 39: Add deep-merge for ui meta key to prevent collision
@@ -341,6 +371,7 @@ Plans:
 **Plans:** 3 plans (2 complete, 1 gap closure)
 
 Plans:
+
 - [x] 39-01-PLAN.md — Add deep_merge function in ui.rs and ToolInfo::with_meta_entry builder method
 - [ ] 39-02-PLAN.md — Update TypedTool, TypedSyncTool, TypedToolWithOutput, WasmTypedTool metadata() to use deep_merge; add with_ui() to TypedToolWithOutput
 
@@ -352,6 +383,7 @@ Plans:
 **Plans:** 3 plans (2 complete, 1 gap closure)
 
 Plans:
+
 - [ ] 40-01-PLAN.md — Add legacy flat key ui/resourceUri to build_meta_map() for ext-apps backward compat
 - [ ] 40-02-PLAN.md — Dual-emit nested ui.csp/ui.domain in WidgetMeta, add ModelOnly to ToolVisibility, emit ui.visibility array in ChatGptToolMeta
 
@@ -363,6 +395,7 @@ Plans:
 **Plans:** 3/3 plans complete
 
 Plans:
+
 - [ ] 41-01-PLAN.md — Add _meta to Content::Resource, fix ChatGptAdapter MIME type to HtmlMcpApp
 - [ ] 41-02-PLAN.md — Update bridge protocol method names in widget-runtime.mjs and index.html
 - [ ] 41-03-PLAN.md — Update scaffold template with correct MIME type, with_ui(), and resource _meta
@@ -375,6 +408,7 @@ Plans:
 **Plans:** 3 plans (2 complete, 1 gap closure)
 
 Plans:
+
 - [x] 42-01-PLAN.md — Core types migration: ToolAnnotations cleanup, ToolInfo field + builder, TypedToolWithOutput rewire, macro codegen
 - [ ] 42-02-PLAN.md — Consumers: cargo-pmcp schema structs, tests, example, docs update
 
@@ -386,6 +420,7 @@ Plans:
 **Plans:** 3 plans (2 complete, 1 gap closure)
 
 Plans:
+
 - [ ] 43-01-PLAN.md — Add _meta field to ResourceInfo, filter with_widget_enrichment to openai/toolInvocation/*, build URI-to-tool-meta index on ServerCore, update all struct literals
 - [ ] 43-02-PLAN.md — Post-process handle_list_resources and handle_read_resource to propagate tool _meta to resource responses
 
@@ -397,6 +432,7 @@ Plans:
 **Plans:** 3 plans (2 complete, 1 gap closure)
 
 Plans:
+
 - [x] 44-01-PLAN.md — Rust-side mode plumbing: PreviewMode enum, CLI --mode flag, ConfigResponse with keys, ResourceInfo _meta, banner
 - [x] 44-02-PLAN.md — Browser-side Protocol tab, ChatGPT postMessage emulation, window.openai stub, mode badge
 
@@ -408,6 +444,7 @@ Plans:
 **Plans:** 3/3 plans complete
 
 Plans:
+
 - [ ] 45-01-PLAN.md — Refactor metadata emission to standard-only default + host layer enrichment pipeline on ServerCoreBuilder
 - [ ] 45-02-PLAN.md — Normalize widget-runtime bridge with extensions namespace for ChatGPT-specific APIs
 - [ ] 45-03-PLAN.md — Update mcp-preview standard mode default + verify examples render in both modes
@@ -418,13 +455,16 @@ Plans:
 **Requirements**: BRIDGE-01, BRIDGE-02, BRIDGE-03, BRIDGE-04, BRIDGE-05, BRIDGE-06, BRIDGE-07, BRIDGE-08
 **Depends on:** Phase 45
 **Success Criteria** (what must be TRUE):
+
   1. Widgets receive tool result data regardless of whether the host sends short-form (ui/toolResult) or long-form (ui/notifications/tool-result) method names
   2. McpApps adapter bridge provides onToolResult callback API on mcpBridge
   3. mcp-preview waits for widget readiness signal before delivering tool results (no setTimeout)
   4. Bridge diagnostics tab in mcp-preview shows PostMessage traffic log, handshake trace, and current mode
+
 **Plans:** 2/3 plans executed
 
 Plans:
+
 - [ ] 46-01-PLAN.md — Fix bridge protocol method name mismatch in adapter.rs and App class normalization
 - [ ] 46-02-PLAN.md — Fix mcp-preview tool result delivery with readiness signal and dual method emission
 - [ ] 46-03-PLAN.md — Add Bridge diagnostics tab to mcp-preview and verify complete fix with real widget
@@ -435,13 +475,16 @@ Plans:
 **Requirements**: APP-VAL-01, APP-VAL-02, APP-VAL-03, APP-VAL-04, APP-VAL-05
 **Depends on:** Phase 46
 **Success Criteria** (what must be TRUE):
+
   1. User can run `mcp-tester apps <url>` or `cargo pmcp test apps --url <url>` to validate App metadata on any MCP server
   2. Validation checks ui.resourceUri, MIME types, resource cross-references, and optionally ChatGPT-specific keys
   3. `cargo pmcp test check` shows hint when App-capable tools are detected
   4. --strict promotes warnings to failures, --tool filters to single tool, --mode selects host-specific checks
+
 **Plans:** 3 plans (2 complete, 1 gap closure)
 
 Plans:
+
 - [ ] 47-01-PLAN.md -- AppValidator module, TestCategory::Apps, mcp-tester apps subcommand
 - [ ] 47-02-PLAN.md -- cargo pmcp test apps subcommand, check command App hint
 
@@ -451,14 +494,17 @@ Plans:
 **Requirements**: DOCS-01, DOCS-02, DOCS-03, DOCS-04, PREVIEW-01
 **Depends on:** Phase 47
 **Success Criteria** (what must be TRUE):
+
   1. mcp-tester README documents the `apps` subcommand with usage examples and validation modes
   2. mcp-preview README describes current capabilities including multi-host preview, widget runtime, and DevTools
   3. pmcp-book MCP Apps chapters are updated with current tooling, host layer system, and developer guide content
   4. pmcp-course materials are aligned with book updates
   5. mcp-preview sends `styles.variables` CSS custom properties in host context so widgets respond to theme changes
+
 **Plans:** 3/3 plans complete
 
 Plans:
+
 - [ ] 48-01-PLAN.md — Update mcp-tester/mcp-preview READMEs and rewrite book ch12-5 MCP Apps chapter with GUIDE.md content
 - [ ] 48-02-PLAN.md — Update pmcp-course ch20 MCP Apps chapters and ch11-02 mcp-tester lesson to align with book
 - [ ] 48-03-PLAN.md — Add theme CSS variable palettes to mcp-preview host context for ext-apps widget theming
@@ -469,13 +515,16 @@ Plans:
 **Requirements**: DEP-01
 **Depends on:** Phase 48
 **Success Criteria** (what must be TRUE):
+
   1. All four workspace Cargo.toml files reference reqwest 0.13 with correct feature names (rustls, form)
   2. jsonschema bumped to 0.45 with MSRV raised to 1.83.0
   3. Template strings in deploy/scaffold generate correct reqwest 0.13 lines for new projects
   4. `make quality-gate` passes with zero warnings
+
 **Plans:** 1/1 plans complete
 
 Plans:
+
 - [ ] 49-01-PLAN.md — Update all Cargo.toml files, MSRV, deprecated methods, and template strings for reqwest 0.13 + jsonschema 0.45
 
 ### Phase 50: Improve Binary Release
@@ -484,14 +533,17 @@ Plans:
 **Requirements**: TRIGGER, ARM-MAC, ARM-LIN, CHECKSUMS, INSTALL-SH, INSTALL-PS1, BINSTALL
 **Depends on:** Phase 49
 **Success Criteria** (what must be TRUE):
+
   1. Pushing a v* tag triggers binary builds for both mcp-tester and mcp-preview automatically
   2. Release includes binaries for 5 targets: x86_64-linux, aarch64-linux, x86_64-macos, aarch64-macos, x86_64-windows
   3. Each binary has a corresponding SHA256 checksum file on the release
   4. Users can install binaries via curl|sh (Linux/macOS) or PowerShell (Windows)
   5. cargo binstall metadata is present in both crate Cargo.toml files
+
 **Plans:** 3 plans (2 complete, 1 gap closure)
 
 Plans:
+
 - [ ] 50-01-PLAN.md — Convert binary workflows to reusable workflow_call, fix runner labels, add ARM64 targets, add SHA256 checksums
 - [ ] 50-02-PLAN.md — Create install.sh and install.ps1 installer scripts, add cargo-binstall metadata to Cargo.toml files
 
@@ -501,14 +553,17 @@ Plans:
 **Requirements**: None (new feature)
 **Depends on:** Phase 50
 **Success Criteria** (what must be TRUE):
+
   1. Server binary starts and serves 5 tools (test_check, test_generate, test_apps, scaffold, schema_export) over streamable HTTP
   2. Server provides 9 documentation resources via pmcp:// URIs with embedded markdown content
   3. Server provides 7 guided workflow prompts (quickstart, create-mcp-server, add-tool, diagnose, setup-auth, debug-protocol-error, migrate)
   4. All content is statically embedded in the binary via include_str! -- no runtime file dependencies
   5. Release workflow builds pmcp-server binaries for 5 platform targets and publishes to crates.io
+
 **Plans:** 5/5 plans complete
 
 Plans:
+
 - [ ] 51-01-PLAN.md — Crate scaffold, workspace integration, server skeleton, ScenarioGenerator API addition
 - [ ] 51-02-PLAN.md — Testing tools: test_check, test_generate, test_apps wrapping mcp-tester library
 - [ ] 51-03-PLAN.md — Build tools: scaffold (code templates) and schema_export (schema discovery)
@@ -523,6 +578,7 @@ Plans:
 **Plans:** 2 plans — Complete (2026-03-18)
 
 Plans:
+
 - [x] 52-01-PLAN.md — Cargo.toml: remove unused deps, slim features, make reqwest/tracing-subscriber optional
 - [x] 52-02-PLAN.md — Source code: cfg gates for optional deps, full feature matrix verification
 
@@ -534,6 +590,7 @@ Plans:
 **Plans:** 3 plans (2 complete, 1 gap closure)
 
 Plans:
+
 - [x] 53-01-PLAN.md — Deep verification of TypeScript vs Rust SDK source differences across 6 domains
 - [x] 53-02-PLAN.md — Gap analysis report with prioritized recommendations and proposed implementation phases
 
@@ -547,6 +604,7 @@ Plans:
 **Plans:** 4/4 plans complete
 
 Plans:
+
 - [x] 54-01-PLAN.md — Module split (protocol.rs -> 7 domain sub-modules) + version negotiation update to 2025-11-25
 - [ ] 54-02-PLAN.md — Add 33 new types (task, content, sampling, elicitation, capabilities) + fix IncludeContext, LogLevel bugs
 - [ ] 54-03-PLAN.md — Fix internal src/ imports, remove 11 legacy type aliases
@@ -560,6 +618,7 @@ Plans:
 **Plans:** 3/3 plans complete
 
 Plans:
+
 - [x] 54.1-01-PLAN.md — Add constructors/Default/#[non_exhaustive]/.with_*() to resources.rs, prompts.rs, content.rs (Content enum helpers)
 - [x] 54.1-02-PLAN.md — Add constructors/Default/#[non_exhaustive]/.with_*() to protocol/mod.rs, tasks.rs, sampling.rs, notifications.rs, capabilities.rs, tools.rs
 - [x] 54.1-03-PLAN.md — Migrate all external consumers (src/, tests/, examples/, workspace crates) to constructors, update MIGRATION.md
@@ -570,15 +629,18 @@ Plans:
 **Requirements**: TASKS-POLLING, TASK-STORE, TASK-CAPABILITIES
 **Depends on:** Phase 54.1
 **Success Criteria** (what must be TRUE):
+
   1. SDK TaskStatus has is_terminal() and can_transition_to() utility methods matching pmcp-tasks
   2. Task.ttl serializes as null (not omitted) when None, per MCP spec
   3. SDK defines TaskStore trait with create/get/list/cancel/update_status/cleanup_expired
   4. InMemoryTaskStore provides dev/test implementation with owner isolation, state machine, TTL
   5. Builder.task_store() registers Arc<dyn TaskStore> and auto-configures ServerCapabilities.tasks
   6. Server dispatches tasks/get, tasks/list, tasks/cancel through TaskStore
+
 **Plans:** 3/3 plans executed
 
 Plans:
+
 - [x] 55-01-PLAN.md — SDK task type reconciliation: add utility methods, fix TTL serialization
 - [x] 55-02-PLAN.md — TaskStore trait + InMemoryTaskStore in SDK core
 - [x] 55-03-PLAN.md — Server builder integration, core dispatch, capability negotiation, re-exports
@@ -591,6 +653,7 @@ Plans:
 **Plans:** 3 plans (2 complete, 1 gap closure)
 
 Plans:
+
 - [x] 55.1-01-PLAN.md — Add execution field and with_execution() to all TypedTool variants
 - [x] 55.1-02-PLAN.md — Wire task detection in core.rs, return CreateTaskResult with _meta
 
@@ -600,14 +663,17 @@ Plans:
 **Requirements**: TOWER-MIDDLEWARE, DNS-REBINDING, AXUM-ADAPTER
 **Depends on:** Phase 54
 **Success Criteria** (what must be TRUE):
+
   1. DnsRebindingLayer validates Host header (always) and Origin header (when present), returns 403 on mismatch
   2. SecurityHeadersLayer adds X-Content-Type-Options: nosniff, X-Frame-Options: DENY, Cache-Control: no-store
   3. `pmcp::axum::router(server)` returns axum::Router with DNS rebinding + security headers + origin-locked CORS
   4. StreamableHttpServer no longer uses wildcard `Access-Control-Allow-Origin: *`
   5. Example 55 (ServerHttpMiddleware) still compiles unchanged
+
 **Plans:** 3/3 plans complete
 
 Plans:
+
 - [x] 56-01-PLAN.md -- Tower deps, AllowedOrigins config, DnsRebindingLayer, SecurityHeadersLayer with unit tests (completed 2026-03-21)
 - [x] 56-02-PLAN.md -- Axum router convenience function, StreamableHttpServer CORS fix, lib.rs re-exports (completed 2026-03-21)
 - [ ] 56-03-PLAN.md -- Gap closure: apply Tower layers in StreamableHttpServer::start(), delete add_cors_headers, pre-resolve AllowedOrigins in ServerState
@@ -620,6 +686,7 @@ Plans:
 **Plans:** 3 plans (2 complete, 1 gap closure)
 
 Plans:
+
 - [x] 57-01-PLAN.md — Conformance module with ConformanceRunner orchestrator and 5 domain scenario groups (Core, Tools, Resources, Prompts, Tasks) (completed 2026-03-21)
 - [x] 57-02-PLAN.md — CLI integration: replace Compliance with Conformance in mcp-tester, add cargo pmcp test conformance (completed 2026-03-21)
 
@@ -631,6 +698,7 @@ Plans:
 **Plans:** 3/3 plans complete
 
 Plans:
+
 - [x] 58-01-PLAN.md — State<T> type, parameter classification, standalone #[mcp_tool] macro
 - [x] 58-02-PLAN.md — #[mcp_server] impl-block macro with McpServer trait and builder extension
 - [x] 58-03-PLAN.md — Integration tests, compile-fail tests, and example 63
@@ -643,6 +711,7 @@ Plans:
 **Plans:** 3 plans (2 complete, 1 gap closure)
 
 Plans:
+
 - [x] 59-01-PLAN.md — TypedPrompt runtime type and standalone #[mcp_prompt] attribute macro
 - [x] 59-02-PLAN.md — #[mcp_server] prompt extension, integration tests, compile-fail tests, and example 64
 
@@ -654,6 +723,7 @@ Plans:
 **Plans:** 1/1 plans complete
 
 Plans:
+
 - [x] 60-01-PLAN.md — Remove Console tab, add resizable/collapsible panel with toggle button and global Clear All
 
 ### Phase 61: Add OAuth support to mcp-preview
@@ -664,6 +734,7 @@ Plans:
 **Plans:** 3/3 plans complete
 
 Plans:
+
 - [x] 61-01-PLAN.md -- Server-side OAuth infrastructure (RwLock proxy, auth handlers, callback page, config exposure, 401/403 propagation)
 - [x] 61-02-PLAN.md -- Browser-side OAuth popup flow (OAuthManager, PKCE, login modal) and CLI OAuth flag wiring
 - [x] 61-03-PLAN.md -- Gap closure: fix forward_raw/forward_mcp 401/403 propagation for WASM bridge path
@@ -676,6 +747,7 @@ Plans:
 **Plans:** 3/3 plans complete
 
 Plans:
+
 - [x] 62-01-PLAN.md -- Foundation: types, config, rate limiter, report (JSON/SARIF), discovery, payload library, CLI command skeleton
 - [ ] 62-02-PLAN.md -- Prompt injection (PI-01..PI-07) and tool poisoning (TP-01..TP-06) attack runners
 - [x] 62-03-PLAN.md -- Session security (SS-01..SS-06) attack runner and final integration verification
@@ -688,6 +760,7 @@ Plans:
 **Plans:** 3/3 plans complete
 
 Plans:
+
 - [x] 63-01-PLAN.md -- Foundation: extend AttackCategory enum, add PentestProfile, --profile flag, 4 attack module stubs, SARIF rules, engine dispatch
 - [ ] 63-02-PLAN.md -- Transport security (TR-01..03) and auth flow (AF-01..03) attack runners
 - [x] 63-03-PLAN.md -- Data exfiltration (DE-01..03), protocol abuse (PA-01..04) attack runners, deep fuzzing mode
@@ -700,6 +773,7 @@ Plans:
 **Plans:** 3/3 plans complete
 
 Plans:
+
 - [x] 64-01-PLAN.md -- Secret resolution logic + deploy pipeline integration (dotenvy, resolve_secrets, CDK env passthrough)
 - [x] 64-02-PLAN.md -- SDK pmcp::secrets thin reader module (get/require helpers, SecretError)
 - [ ] 64-03-PLAN.md -- Dev command .env loading + documentation (dev.rs injection, README, CLI help)
@@ -716,31 +790,39 @@ Plans:
 ## Phase Details — Current Milestone
 
 ### Phase 65: Examples Cleanup and Protocol Accuracy
+
 **Goal**: Developers browsing the examples/ directory and README see accurate PMCP content with correct protocol version, every example file is runnable, and no numbering collisions exist
 **Depends on**: Phase 64
 **Requirements**: EXMP-01, EXMP-02, EXMP-03, PROT-01
 **Success Criteria** (what must be TRUE):
+
   1. `examples/README.md` contains a PMCP example index organized by category (transport, tools, resources, prompts, tasks, apps) with required features and run commands for each example
   2. Every `.rs` file in `examples/` has a corresponding `[[example]]` entry in `Cargo.toml` with correct `required-features`, and `cargo run --example <name>` works for each
   3. No two example files share the same numbered prefix -- `ls examples/*.rs | awk -F_ '{print $1}' | sort | uniq -d` returns empty
   4. The README.md MCP-Compatible badge and compatibility table display protocol version `2025-11-25`, matching `LATEST_PROTOCOL_VERSION` in source code
+
 **Plans:** 3/3 plans complete
 Plans:
+
 - [x] 65-01-PLAN.md — Audit orphan examples + fix protocol badge (EXMP-02, PROT-01)
 - [x] 65-02-PLAN.md — Renumber all examples with role-prefix scheme (EXMP-03)
 - [x] 65-03-PLAN.md — Write examples/README.md index (EXMP-01)
 
 ### Phase 66: Macros Documentation Rewrite
+
 **Goal**: A developer reading pmcp-macros documentation (on docs.rs or GitHub) sees accurate documentation of #[mcp_tool], #[mcp_server], #[mcp_prompt], and #[mcp_resource] as the primary API, with a clear migration path from deprecated macros
 **Depends on**: Phase 65
 **Requirements**: MACR-01, MACR-02, MACR-03
 **Success Criteria** (what must be TRUE):
+
   1. `pmcp-macros/README.md` documents `#[mcp_tool]`, `#[mcp_server]`, `#[mcp_prompt]`, and `#[mcp_resource]` as the primary API with working code examples that compile
   2. A migration section guides users from deprecated `#[tool]`/`#[tool_router]` to `#[mcp_tool]`/`#[mcp_server]` with before/after code comparisons
   3. `pmcp-macros/src/lib.rs` uses `include_str!("../README.md")` so that `docs.rs/pmcp-macros` renders the rewritten README as the crate-level documentation
   4. No references to stale version numbers (e.g., `pmcp = { version = "1.*" }`) appear in the macros README
+
 **Plans:** 6 plans
 Plans:
+
 - [x] 67.2-01-PLAN.md — Wire policy_evaluator into generated handlers + switch to async validation
 - [x] 67.2-02-PLAN.md — Add context_from and language darling attributes to derive macro
 - [x] 67.2-03-PLAN.md — HmacTokenGenerator::new returns Result + trybuild compile-fail tests
@@ -749,17 +831,21 @@ Plans:
 - [ ] 67.2-06-PLAN.md — json_to_string unification + StepOutcome refactor + ValidationResponse wrapping + clippy cleanup
 
 ### Phase 67: docs.rs Pipeline and Feature Flags
+
 **Goal**: docs.rs renders PMCP with automatic feature badges on all feature-gated items, an explicit feature list preventing internal APIs from surfacing, a documented feature flag table, and zero rustdoc warnings
 **Depends on**: Phase 66
 **Requirements**: DRSD-01, DRSD-02, DRSD-03, DRSD-04
 **Success Criteria** (what must be TRUE):
+
   1. `src/lib.rs` contains `#![cfg_attr(docsrs, feature(doc_auto_cfg))]` and all ~145 feature-gated items on docs.rs display automatic feature availability badges
   2. `Cargo.toml` `[package.metadata.docs.rs]` uses an explicit feature list (~13 user-facing features) instead of `all-features = true`, preventing test helpers and internal features from surfacing
   3. A feature flag table in `lib.rs` doc comments documents all user-facing features with descriptions and what they enable
   4. `RUSTDOCFLAGS="-D warnings" cargo doc --all-features --no-deps` exits with zero warnings -- all broken intra-doc links and unclosed HTML tags resolved
   5. CI includes a `make doc-check` target that enforces zero rustdoc warnings on every PR
+
 **Plans:** 6 plans
 Plans:
+
 - [x] 67.2-01-PLAN.md — Wire policy_evaluator into generated handlers + switch to async validation
 - [x] 67.2-02-PLAN.md — Add context_from and language darling attributes to derive macro
 - [x] 67.2-03-PLAN.md — HmacTokenGenerator::new returns Result + trybuild compile-fail tests
@@ -773,15 +859,18 @@ Plans:
 **Depends on:** Phase 67
 **Requirements**: CMSUP-01, CMSUP-02, CMSUP-03, CMSUP-04, CMSUP-05, CMSUP-06
 **Success Criteria** (what must be TRUE):
+
   1. `crates/pmcp-code-mode/` exists in the rust-mcp-sdk workspace containing the moved + hardened Code Mode core (validation pipeline, `PolicyEvaluator`, `CedarPolicyEvaluator`, `NoopPolicyEvaluator`, new `CodeExecutor` trait, new `TokenSecret` newtype with zeroization) and all existing tests pass
   2. `crates/pmcp-code-mode-derive/` exists and provides a working `#[derive(CodeMode)]` proc macro that emits a `register_code_mode_tools(builder)` method, enforces `Send + Sync` at compile time, and has `trybuild` compile-pass + compile-fail snapshot coverage
   3. `pmcp-code-mode/src/lib.rs` re-exports `async_trait` (`pub use async_trait::async_trait;`) and generated derive output uses `#[pmcp_code_mode::async_trait]` to avoid version conflicts
   4. A complete worked example in `examples/` (e.g. `XX_code_mode_graphql.rs`) demonstrates: struct annotation → `register_code_mode_tools` → `validate_code` → approval token → `execute_code` round trip using `NoopPolicyEvaluator`
   5. Contract YAMLs for `pmcp-code-mode` and `pmcp-code-mode-derive` exist under `../provable-contracts/contracts/` and `pmat comply check` passes on both
   6. `make quality-gate` passes workspace-wide (zero clippy warnings, zero SATD, all tests green, format clean) and both new crates are positioned in the publishing order documented in CLAUDE.md, ready for the next release phase
+
 **Plans:** 6/6 plans complete
 
 Plans:
+
 - [x] 67.1-01-PLAN.md — Crate scaffolding + source move into workspace
 - [x] 67.1-02-PLAN.md — Security hardening (TokenSecret, NoopPolicyEvaluator, async_trait re-export)
 - [x] 67.1-03-PLAN.md — CodeExecutor high-level trait
@@ -796,26 +885,33 @@ Plans:
 **Requirements**: CMSUP-07, CMSUP-08, CMSUP-09, CMSUP-10
 **Success Criteria** (what must be TRUE):
   **Derive macro — critical (pmcp.run review items 1-3):**
+
   1. Generated `ValidateCodeHandler` calls `policy_evaluator.evaluate_operation()` between pipeline validation and token generation — the security contract is enforced
   2. `#[code_mode(context_from = "method_name")]` attribute extracts real `ValidationContext` from `RequestHandlerExtra` or a struct method, replacing hardcoded placeholders
   3. `#[code_mode(language = "graphql"|"javascript"|"sql")]` attribute parameterizes tool metadata — SQL/OpenAPI servers get correct tool schemas
   **Derive macro — warnings (pmcp.run review items 4-8):**
+
   4. `HmacTokenGenerator::new` returns `Result` instead of panicking on short secrets
   5. Trybuild compile-fail tests cover `token_secret` and `code_executor` absent fields
   6. Generated handlers share a single `Arc<ValidationPipeline>` instead of constructing two
   **Performance (IMPROVEMENTS.md P-01, P-03):**
+
   7. eval.rs array methods use scope-chain/push-pop instead of cloning entire HashMap per element (P-01)
   8. Async GraphQL validation fallback reuses parsed `query_info` instead of re-parsing (P-03)
   *Deferred: P-02 (double SWC parse) requires new `ValidatedCode` type threading AST across javascript.rs/executor.rs — deferred to a future phase*
   **Code quality (IMPROVEMENTS.md Q-01 through Q-04, R-01):**
+
   9. `json_to_string` / `value_to_string` unified into one function (Q-01)
   10. `LoopContinue`/`LoopBreak` moved to internal `StepOutcome` enum, removed from public `ExecutionError` (Q-04)
   11. `ValidationResponse` wraps `ValidationResult` instead of duplicating all fields (R-01)
   **Baseline:**
+
   12. All existing tests pass, `cargo test -p pmcp-code-mode -p pmcp-code-mode-derive` green
   13. Clippy suppressions reduced (trivially fixable: `useless_format`, `derivable_impls`, etc.)
+
 **Plans:** 6/6 plans complete
 Plans:
+
 - [x] 67.2-01-PLAN.md — Wire policy_evaluator into generated handlers + switch to async validation
 - [x] 67.2-02-PLAN.md — Add context_from and language darling attributes to derive macro
 - [ ] 67.2-03-PLAN.md — HmacTokenGenerator::new returns Result + trybuild compile-fail tests
@@ -824,16 +920,20 @@ Plans:
 - [ ] 67.2-06-PLAN.md — json_to_string unification + StepOutcome refactor + ValidationResponse wrapping + clippy cleanup
 
 ### Phase 68: General Documentation Polish
+
 **Goal**: Crate-level documentation showcases current best practices (TypedToolWithOutput, proc macros), transport types are discoverable, and CI gates prevent future documentation drift
 **Depends on**: Phase 67
 **Requirements**: PLSH-01, PLSH-02, PLSH-03
 **Success Criteria** (what must be TRUE):
+
   1. `lib.rs` crate-level doc examples compile and demonstrate the `TypedToolWithOutput` pattern and current builder APIs (not legacy `Server::builder()` or `ToolHandler`)
   2. A transport matrix table in `lib.rs` doc comments lists all supported transports (stdio, streamable HTTP, SSE) with links to their actual module/type paths
   3. CI enforces that the count of `[[example]]` entries in `Cargo.toml` matches the count of `.rs` files in `examples/`, failing the build on mismatch
   4. `cargo semver-checks check-release` runs in CI on every PR to prevent accidental API breakage during documentation changes
+
 **Plans:** 6 plans
 Plans:
+
 - [ ] 67.2-01-PLAN.md — Wire policy_evaluator into generated handlers + switch to async validation
 - [ ] 67.2-02-PLAN.md — Add context_from and language darling attributes to derive macro
 - [ ] 67.2-03-PLAN.md — HmacTokenGenerator::new returns Result + trybuild compile-fail tests
@@ -859,6 +959,7 @@ Parking lot for unsequenced ideas. Items here aren't scheduled — promote with 
 **Goal:** Remove the public `DEFAULT_PROTOCOL_VERSION` re-export and replace each of its ~15 callsites with an explicit choice — either `LATEST_PROTOCOL_VERSION` (where the code is advertising what this SDK supports) or a literal `"2025-03-26"` with a `// backward-compat fallback` comment (where the code genuinely wants the widest-compatible version for un-negotiated peers). The name `DEFAULT` is misleading: nothing is actually "default" about it — it's a specific compat choice that happens to be older than `LATEST`, and that distinction is invisible at every callsite.
 
 **Scope:**
+
 - Breaking API change (public re-export at `src/lib.rs:307` + `src/types/mod.rs:32`) — requires minor version bump and release note
 - Callsites to audit and convert:
   - `src/types/protocol/mod.rs:32` — `impl Default for ProtocolVersion`
@@ -876,6 +977,7 @@ Parking lot for unsequenced ideas. Items here aren't scheduled — promote with 
 **Plans:** 6/6 plans complete
 
 Plans:
+
 - [ ] TBD (promote with `/gsd:review-backlog` when ready)
 
 ### Phase 999.2: TOON data format feasibility and SDK integration (BACKLOG)
@@ -883,12 +985,14 @@ Plans:
 **Goal:** Investigate whether PMCP should add built-in support for TOON as an alternative wire format to JSON for MCP tool outputs and resource payloads, specifically to optimize performance of MCP Apps that often ship large JSON payloads. Deliver a spike report + recommendation (adopt / pilot / reject), and if adoption is recommended, a follow-up implementation plan for a feature-gated `toon` format with encoder/decoder integrated into `Content`, tool output serialization, and the MCP App bridge so servers and Apps can opt in with a single flag.
 
 **Motivation:**
+
 - MCP Apps frequently serialize large structured payloads (tables, datasets, chart data) — the dataviz, hotel gallery, and venue map examples are all 10–100 KB of JSON per response
 - Both the LLM context window and the UI widget render path benefit from smaller payloads: fewer tokens consumed by tool output, faster postMessage bridge transfer, faster widget mount
 - TOON (Token-Oriented Object Notation) is designed explicitly for this use case — schema-aware compression that encodes repeated keys and types once, yielding ~30–60% size reductions on tabular data compared to JSON
 - If adoption works, MCP servers would flip a flag per-tool or per-resource to switch output format, and MCP Apps would transparently decode on the bridge side
 
 **Research questions (spike scope, not implementation):**
+
 1. Maturity of TOON — is the spec stable enough to commit a feature-gated SDK integration? Is there a Rust encoder/decoder crate, or would PMCP need to author one?
 2. Compatibility — can TOON payloads ride over existing MCP `Content` variants (probably via a new `TextContent` MIME type or a new `Content::Toon` variant), or does it need protocol changes that break v2025-11-25 compat?
 3. Measurement — what are the realistic size/token savings on representative MCP App payloads (dataviz, gallery, map from existing examples)? Do LLMs tokenize TOON efficiently, or does the token savings on the wire get lost when Claude/GPT re-tokenize the decoded content?
@@ -896,6 +1000,7 @@ Plans:
 5. Opt-in UX — what does `#[mcp_tool(output_format = "toon")]` or equivalent look like on the server side? What's the per-call server-side negotiation story?
 
 **Why backlog (not an active phase):**
+
 - The user's framing is explicitly exploratory ("let's investigate if we can add it as a built-in support")
 - TOON is a newer format — the feasibility spike should happen before committing a phase slot
 - The v2.1 rmcp Upgrades milestone is scoped to documentation polish; runtime data-format work doesn't belong there
@@ -908,6 +1013,7 @@ Plans:
 **Plans:** 6 plans
 
 Plans:
+
 - [ ] TBD (promote with `/gsd:review-backlog` when ready)
 
 ### Phase 69: rmcp parity research — ergonomics gap analysis + follow-on phase proposals
@@ -915,6 +1021,7 @@ Plans:
 **Goal:** Produce a rigorous, evidence-backed gap matrix comparing pmcp vs rmcp on *ergonomics* (macro DX, builder APIs, typed wrappers, handler shapes, state/extra patterns) and use it to propose 2–4 concrete follow-on phases to close the credibility/DX gap. Transports, examples polish, and docs coverage are intentionally out of scope — Phase 68 handles those surfaces at the polish layer.
 
 **Deliverables:**
+
 - `69-RESEARCH.md` — gap matrix (per-feature: rmcp approach, pmcp approach, gap severity, evidence citations)
 - `69-PROPOSALS.md` — 2–4 follow-on phase proposals with goals, scope, and rough success criteria, ready to slot into v2.1 or seed v2.2
 
@@ -923,6 +1030,7 @@ Plans:
 **Plans:** 3 plans
 
 Plans:
+
 - [x] 69-01-PLAN.md — Produce the rmcp vs pmcp ergonomics gap matrix (69-RESEARCH.md) across 6 surfaces
 - [x] 69-02-PLAN.md — Derive follow-on phase proposals from High-severity gaps (69-PROPOSALS.md)
 - [x] 69-03-PLAN.md — Quality gate + land PARITY-* requirement IDs + update STATE/PROJECT
@@ -935,6 +1043,7 @@ Plans:
 **Plans:** 4 plans
 
 Plans:
+
 - [x] 70-01-PLAN.md — Extensions typemap on both RequestHandlerExtra structs + #[non_exhaustive] + accessor parity + 5 proptests + refactor 12 struct-literal test sites (Wave 1)
 - [x] 70-02-PLAN.md — ServerRequestDispatcher (outbound ServerRequest + response correlation) + Server::run drain-to-transport + route TransportMessage::Response through dispatcher (NEW plan from reviews replan — addresses Codex Findings 2+3) (Wave 2)
 - [x] 70-03-PLAN.md — PeerHandle trait + DispatchPeerHandle delegating to Plan 02 dispatcher + conditional .with_peer(...) at 9 dispatch sites + dispatch-path round-trip integration test (Wave 3)
@@ -948,6 +1057,7 @@ Plans:
 **Plans:** 4/4 plans complete
 
 Plans:
+
 - [x] 71-01-PLAN.md — Create new sibling crate `crates/pmcp-macros-support/` (non-proc-macro) holding the pure `extract_doc_description` normalization helper with unit tests + proptest invariants — resolves HIGH-1 via Option A so proc-macro crate API restrictions don't block property/fuzz consumers (Wave 1)
 - [x] 71-02-PLAN.md — `pmcp-macros` adds path dep on `pmcp-macros-support` + single shared `resolve_tool_args` resolver in `mcp_common.rs`; both parse sites (`mcp_tool.rs` standalone + `mcp_server.rs::parse_mcp_tool_attr` impl-block) delegate to it; integration tests lock symmetry (MEDIUM-1) (Wave 2)
 - [x] 71-03-PLAN.md — 4 trybuild compile-fail snapshots (existing regenerated + new empty-args + new non-empty-args + regenerated multi-args) + README migration section with Limitations subsection + mixed-shape fuzz target `rustdoc_normalize.rs` (MEDIUM-2 + MEDIUM-3 + LOW-3) (Wave 3)
@@ -963,6 +1073,7 @@ Plans:
 **Plans:** 3/3 plans complete
 
 Plans:
+
 - [x] 72-01-PLAN.md — Seed RMCP-EVAL-01..05 in REQUIREMENTS.md; produce 72-INVENTORY.md (inversion inventory, >=15 pmcp module families with file:line + rmcp evidence) and 72-STRATEGY-MATRIX.md (5 options x 5 criteria = 25 cells, no TBD) (Wave 1)
 - [x] 72-02-PLAN.md — Produce 72-POC-PROPOSAL.md (3 slices, each <=500 LOC, at least one <=3 days, with LOC/Files/Pass/Fail/Time-box fields) and 72-DECISION-RUBRIC.md (>=5 falsifiable thresholds, each followed by Data source) (Wave 2)
 - [x] 72-03-PLAN.md — Produce 72-RECOMMENDATION.md (RMCP-EVAL-05) — opens with `**Recommendation:** <A|B|C|D|E>`, contains 5 per-criterion justification subsections citing T-IDs + inventory/matrix rows, lists UNRESOLVED thresholds, and names the next-phase handoff (Wave 3)
@@ -975,6 +1086,7 @@ Plans:
 **Plans:** 1/1 plans complete
 
 Plans:
+
 - [x] 72.1-01-PLAN.md — Create `lib/useLandingConfig.ts` hook; rewrite 4 consumers (signup, callback, connect [server->client flip], Header [conditional button]); fix 3 rustdoc comments in `src/landing/config.rs`; bump `Cargo.toml` 0.8.0 -> 0.8.1; run `make quality-gate` + `cargo doc` + template `tsc`/`next build` + grep guardrails G1..G6 + manual AC-11 offline gate (Wave 1)
 
 ### Phase 74: Add cargo pmcp auth subcommand with multi-server OAuth token management
@@ -985,6 +1097,7 @@ Plans:
 **Plans:** 3/3 plans complete
 
 Plans:
+
 - [x] 74-01-PLAN.md — SDK DCR: OAuthConfig refactor (client_id Option), DcrRequest/DcrResponse re-export, auto-fire DCR in OAuthHelper, unit/property/fuzz/mockito-integration tests, examples/c08_oauth_dcr.rs, CHANGELOG entry (Wave 1, pmcp crate)
 - [x] 74-02-PLAN.md — CLI auth group: new commands/auth_cmd/ module (login/logout/status/token/refresh + TokenCacheV1 cache with atomic writes & URL normalization), main.rs wiring, resolve_auth_middleware cache fallback with near-expiry auto-refresh, pentest.rs migration to shared AuthFlags, tempfile promoted to regular dep, mockito+cli integration tests (Wave 2, cargo-pmcp crate)
 - [x] 74-03-PLAN.md — Release coordination: bump pmcp 2.4.0→2.5.0 and cargo-pmcp 0.8.1→0.9.0, update cargo-pmcp pmcp dep pin to 2.5.0, finalize CHANGELOG date, run make quality-gate to match CI exactly (Wave 3)
@@ -997,6 +1110,7 @@ Plans:
 **Plans:** 3/3 plans complete
 
 Plans:
+
 - [x] 73-01-PLAN.md — ClientOptions scaffold + new Client::with_client_options constructor + four typed helpers (call_tool_typed / _with_task / _and_poll / get_prompt_typed) with doctests, unit tests, and one property test (Wave 1, pmcp crate)
 - [x] 73-02-PLAN.md — Four list_all_* auto-paginating helpers with max_iterations cap enforcement (T-73-01 DoS mitigation); integration test file tests/list_all_pagination.rs; two property tests (flat-concatenation + cap-enforcement); new fuzz target fuzz/fuzz_targets/list_all_cursor_loop.rs (Wave 2, pmcp crate)
 - [x] 73-03-PLAN.md — Release coordination: examples/c09_client_list_all.rs (avoids c08 collision) + examples/c02_client_tools.rs update + README index; bump pmcp 2.5.0→2.6.0 across all 8 pin lines in 7 Cargo.toml files; CHANGELOG v2.6.0 entry; REQUIREMENTS.md §55 D-15 doc-fix (call_prompt_typed → get_prompt_typed); README Key Features bullet; make quality-gate (Wave 3)
@@ -1009,6 +1123,7 @@ Plans:
 **Plans:** 6 plans
 
 Plans:
+
 - [x] 75-00-PLAN.md — Wave 0: Baseline + spike (PMAT path-filter empirical test, insta snapshot baseline for pmcp-macros, semantic regression baseline for pmcp-code-mode, PMAT version pin in CI) — completed 2026-04-23 — D-09 resolved (include_works=false, .pmatignore is the only honored filter), D-10 resolved D-10-B (PMAT ignores #[allow] — SCOPE EXPANSION DETECTED), D-11 resolved D-11-B (bare gate fails on 5 dimensions — Wave 5 must patch quality-badges.yml)
 - [x] 75-01-PLAN.md — Wave 1: src/ + pmcp-macros/ refactors — completed 2026-04-24. 20 hotspots cleared to ≤25 via P1-P3 (zero P5 usage, zero escapees). Delta: PMAT complexity 94→75 (−19). Task 1a-C explicitly skipped per addendum Rule 1 (migrated to Phase 75.5 Category A); pre-existing bare #[allow] at streamable_http_server.rs:1004 removed. Macro expansion snapshots byte-identical (Wave 0 contract preserved).
 - [x] 75-02-PLAN.md — Wave 2: cargo-pmcp/ refactors — completed 2026-04-24. 40 hotspots cleared to ≤25 via P1-P4 (zero P5 usage, zero escapees). Both monsters (check.rs::execute cog 105→≤25, handle_oauth_action cog 91→≤25) decomposed. Delta: PMAT complexity-gate 75→29 (−46); cargo-pmcp cog>25 40→0. `make quality-gate` exits 0. Shared scan_for_package helper established in cloudflare/init.rs (3-bird kill).
@@ -1024,6 +1139,7 @@ Plans:
 **Plans:** 1/1 plan complete
 
 Plans:
+
 - [x] 75.5-01-PLAN.md — Wave 1: 12 Category-A bare `#[allow(clippy::cognitive_complexity)]` attributes removed from src/ (server/, server/transport/, shared/, client/) — completed 2026-04-25. All 12 sites resolved by single-line attribute deletion (no refactor triggered — clippy pedantic+nursery quiet on `--features full` post-removal, confirming all underlying functions sit at cog ≤25). `make quality-gate` exit 0; `pmat quality-gate --fail-on-violation --checks complexity` exit 0 (PMAT 3.15.0); `grep -rn '#[allow(clippy::cognitive_complexity)]' src/` 0 matches. ESCAPEES.md (Category B) unchanged at 0 entries. Two pre-existing environmental test failures (mcp-e2e-tests::chess chromiumoxide browser archive missing; pmcp-tasks::store::redis/dynamodb Connection refused) classified out-of-scope per deviation-rules SCOPE BOUNDARY — neither touches src/server/, src/shared/, or src/client/. Commits: fae333fa (Task 1: server/+server/transport/), 7a0cc362 (Task 2: shared/+client/).
 
 ### Phase 76: cargo-pmcp IAM declarations — servers declare IAM needs in deploy.toml
@@ -1034,6 +1150,7 @@ Plans:
 **Plans:** 5/5 plans complete
 
 Plans:
+
 - [x] 76-01-PLAN.md — Wave 1: Part 1 — McpRoleArn CfnOutput in both template branches + `render_stack_ts` renderer extraction + D-03 aws-iam import fix + Wave 1 golden-file baseline (D-05 anchor)
 - [x] 76-02-PLAN.md — Wave 2: Full IamConfig schema (TablePermission / BucketPermission / IamStatement) wired into DeployConfig with `skip_serializing_if` to preserve D-05 + serde roundtrip integration tests
 - [x] 76-03-PLAN.md — Wave 3: Translation rules (`deployment/iam.rs::render_iam_block`) emitting D-02 4-action DynamoDB lists + S3 object-level ARNs + passthrough statements, wired into `render_stack_ts` via a single `{iam_block}` named placeholder + per-rule unit tests + 9 proptests
@@ -1060,6 +1177,7 @@ Scope likely includes: a config schema (TOML in workspace .pmcp/ or user ~/.conf
 **Plans:** 9/9 plans complete
 
 Plans:
+
 - [x] 77-01-PLAN.md — Mint REQ-77-01..REQ-77-10 in REQUIREMENTS.md; bump cargo-pmcp 0.10.0 → 0.11.0; CHANGELOG stub
 - [x] 77-02-PLAN.md — Rename existing deploy `--target` to `--target-type` (with alias); add new global `--target` named-target flag on Cli
 - [x] 77-03-PLAN.md — Module skeleton + TargetConfigV1 schema (TOML, atomic write, 0o600) + workspace utility
@@ -1075,6 +1193,7 @@ Plans:
 Goal: Catch the silent-fail bug where a widget passes `cargo pmcp test apps` and renders fine in ChatGPT but breaks in Claude Desktop / claude.ai because the widget HTML never imports `@modelcontextprotocol/ext-apps`, never instantiates `App`, and never registers the four required handlers (`onteardown`, `ontoolinput`, `ontoolcancelled`, `onerror`) before `connect()`.
 
 Scope (this phase):
+
 1. Promote `AppValidationMode::ClaudeDesktop` from placeholder ("same as Standard for now" at `crates/mcp-tester/src/app_validator.rs:28-29`) to a real strict mode.
 2. In `cargo-pmcp/src/commands/test/apps.rs`, fetch each App-capable tool widget body via `resources/read` and pass `Vec<(uri, html)>` into the validator (keeps validator a pure function; ~30 LOC of plumbing).
 3. Add static script-block checks behind `--mode claude-desktop`:
@@ -1088,20 +1207,24 @@ Scope (this phase):
 5. Polish: error messages link to specific anchors in `src/server/mcp_apps/GUIDE.md` (especially the "Critical: register all four handlers before connect()" warning at line 185); update README and `cargo pmcp test apps --help` to document the new mode and recommend it as the pre-deploy check for servers shipping to Claude clients.
 
 Out of scope (defer to a later phase):
+
 - `PreviewMode::ClaudeDesktop` host emulator (postMessage init/tool-result/teardown simulation in `crates/mcp-preview/src/server.rs`). User wants to think about it later and may unify the preview UX across ChatGPT/Claude modes rather than add a third mode.
 
 Reference / context:
+
 - Proposal from the Cost Coach team: `/Users/guy/projects/mcp/cost-coach/drafts/proposal-pmcp-mcp-app-widget-validation.md`
 - Failing widget bundle + working fix available from Cost Coach as a regression fixture (request via the proposal author).
 - Verified state of the codebase: `AppValidationMode::ClaudeDesktop` is wired into Display/FromStr/CLI parsing but has zero behavior behind it; `AppValidator::validate_tools` only consumes `&[ResourceInfo]` metadata - no `resources/read` call, so widget HTML is never inspected.
 
 ALWAYS requirements (per CLAUDE.md):
+
 - Unit tests for each new check (positive and negative cases for each handler / SDK signal).
 - Property tests for the script-block scanner (must not panic on arbitrary HTML/JS input; idempotent on normalized whitespace).
 - Fuzz target for the regex/AST scan path.
 - A working example: a `cargo run --example` (or fixture under `examples/`) showing a deliberately-broken widget that fails `--mode claude-desktop` and a corrected one that passes - same widget pair the Cost Coach team will provide.
 
 Acceptance criteria:
+
 - The Cost Coach reproducer (broken widget) FAILS `cargo pmcp test apps --mode claude-desktop` with errors that name the missing handler(s).
 - The corrected version PASSES.
 - `cargo pmcp test apps` (no flag, Standard mode) still passes for both - no regression for the permissive default.
@@ -1115,13 +1238,16 @@ Acceptance criteria:
 
 Plans:
 **Wave 1**
+
 - [x] 78-01-PLAN.md — Validator core: extend `AppValidator` with `validate_widgets`, regex-based scanner, mode-driven severity (Wave 1)
 
 **Wave 2** *(blocked on Wave 1 completion)*
+
 - [x] 78-02-PLAN.md — CLI plumbing: wire `read_widget_bodies` into `cargo pmcp test apps` (Wave 2)
 - [x] 78-04-PLAN.md — Docs polish: README sections, `--help` long-text, GUIDE.md anchor expander (Wave 3, parallel with 78-03)
 
 **Wave 3** *(blocked on Wave 2 completion)*
+
 - [x] 78-03-PLAN.md — ALWAYS requirements: fixtures, property tests, fuzz target, working example (Wave 3)
 
 ### Phase 79: cargo pmcp deploy: widget pre-build + post-deploy verification (build half: auto-detect widget/ and widgets/ only, package-manager runner, generated build.rs with cargo:rerun-if-changed via env-var path resolution, [[widgets]] config with explicit embedded_in_crates, doctor checks; verify half: warmup grace + test check + conformance + apps --mode claude-desktop, on_failure=fail default; depends on Phase 78; out of scope: auto-rollback, multi-target)
@@ -1132,6 +1258,7 @@ Plans:
 **Plans:** 7/7 plans complete
 
 Plans:
+
 - [x] 79-00-PLAN.md — Master plan: wave structure, requirement-to-plan mapping, version bumps, locked planner decisions
 - [x] 79-01-PLAN.md — Wave 1: test fixtures + config schema (`WidgetsConfig`, `PostDeployTestsConfig`, `OnFailure`, `TestOutcome`)
 - [x] 79-02-PLAN.md — Wave 2: widget pre-build orchestrator + `--no-widget-build` / `--widgets-only` CLI flags + `PMCP_WIDGET_DIR` env-var contract
@@ -1147,19 +1274,22 @@ After cost-coach team UAT against prod (`https://cost-coach.us-west.pmcp.run/mcp
 **Plans (all `gap_closure: true`):**
 
 **Wave 1**
+
 - [x] 78-05-PLAN.md — RED-phase regression fixtures: 3 bundled HTML fixtures + `app_validator_widgets_bundled.rs` integration tests asserting verdict shape per fixture × mode; tests MUST FAIL today (G5)
 
 **Wave 2** *(blocked on Wave 1 completion)*
+
 - [x] 78-06-PLAN.md — Validator core fixes (G1+G2+G3): minification-resistant SDK-presence signals (`[ext-apps]` log prefix + `ui/initialize` + `ui/notifications/tool-result` method literals); mangled-id-tolerant constructor regex; eliminate SDK-to-handler/connect cascade
 
 **Wave 3** *(blocked on Wave 2 completion)*
+
 - [x] 78-07-PLAN.md — `cargo pmcp test apps --widgets-dir <path>` source-scan flag (G4): scan `<path>/*.html` instead of fetching via `resources/read`; mirrors `cargo pmcp preview --widgets-dir` semantics; 3 CLI-boundary integration tests via `assert_cmd`
 
 **Wave 4** *(blocked on Wave 3 completion)*
+
 - [ ] 78-08-PLAN.md — ALWAYS coverage extension + docs + HUMAN-UAT re-bind: new `prop_g3_handler_detection_independent_of_sdk` proptest, `validate_widget_pair` example demos cost-coach prod-bundle shape, READMEs document `--widgets-dir`, `78-HUMAN-UAT.md` rewritten with 6 re-bound items including cost-coach prod re-verify (Test 6)
 
 **Re-verification gate:** After Plan 06 lands, the cost-coach v1 run (97 tests, 33 false positives) must be re-executed and report zero false-positive failures on the 8 prod widgets. The 5 deferred AC-78-1..5 items are re-bound to the post-Plan-07 `--widgets-dir` path so binary-boundary verification no longer requires the deferred fixture binary `mcp_widget_server.rs.todo`.
-
 
 #### Phase 78 — Gap closure cycle 2 (Plans 09-11, added 2026-05-02)
 
@@ -1168,12 +1298,15 @@ After cycle-1 closure (Plans 05-08 completed 2026-05-02), the operator re-ran Te
 **Plans (all `gap_closure: true`):**
 
 **Wave 1**
+
 - [ ] 78-09-PLAN.md — Real-prod fixture capture (RED phase): 6 cost-coach prod widget bundles fetched from live cost-coach prod (or local checkout) into `tests/fixtures/widgets/bundled/real-prod/` + CAPTURE.md provenance + 7 RED-phase integration tests (6 real-prod fixtures × claude-desktop + 1 cycle-1 no-regression sentinel) bound to those bytes; tests MUST FAIL today (G6)
 
 **Wave 2** *(blocked on Wave 1 completion)*
+
 - [ ] 78-10-PLAN.md — Validator G1+G2 generalization (GREEN phase): derive new SDK-presence + constructor patterns from real-prod CAPTURE.md grep evidence; widen mangled-id cap, add quoted-key tolerance + reordered-key support to G2; OR new G1 signals into has_sdk; preserve cycle-1 unit/property/integration tests; PMAT cog ≤ 25 + zero SATD; new G2-false-positive-guard property test guards against the widening risk
 
 **Wave 3** *(blocked on Wave 2 completion)*
+
 - [ ] 78-11-PLAN.md — ALWAYS-coverage extension + HUMAN-UAT cycle-2 rewrite + Test 6 re-verification checkpoint: extend `validate_widget_pair.rs` example with 6 cycle-2 real-prod widget runs + tally + success-path summary; rewrite `78-HUMAN-UAT.md` with cycle-2-explicit Test 6 acceptance bar (zero Failed rows on 8 cost-coach prod widgets); operator re-runs Test 6 against prod and resumes with `approved` (flips `gap_closure_validated: false → true`, routes to `/gsd-verify-work`) or `failed: <reason>` (routes to `/gsd-plan-phase 78 --gaps` for cycle 3)
 
 **Re-verification gate (cycle 2):** Plan 11 Task 3 is the load-bearing gate. Operator runs `cargo pmcp test apps --mode claude-desktop https://cost-coach.us-west.pmcp.run/mcp` against real prod and confirms zero Failed rows on the 8 production widgets. On pass: phase 78 closes via `/gsd-verify-work`. On fail: phase 78 routes to a third gap-closure cycle with diagnosis in a new `uat-evidence/<date>-cost-coach-prod-cycle3-rerun.md` evidence file.
@@ -1186,9 +1319,11 @@ After cycle-1 closure (Plans 05-08 completed 2026-05-02), the operator re-ran Te
 **Plans:** 10/10 plans complete
 
 Plans:
+
 - [x] TBD (run /gsd-plan-phase 81 to break down) (completed 2026-05-15)
 
 **Cross-cutting constraints:**
+
 - Every behavioral-prose claim about Tasks (SSE, serverless, owner binding, experimental.tasks, TaskSupport::*, tasks/result, tasks/cancel, tasks/get, poll interval, pollInterval, CreateTaskResult) still accurately describes current `pmcp-tasks` behavior (revision R-5 — prose drift, not just type-name drift).
 
 ---
@@ -1204,5 +1339,363 @@ Plans:
 **Source of truth:** Spike findings packaged at `.claude/skills/spike-findings-rust-mcp-sdk/` (spikes 001 + 002 both VALIDATED). Reference implementation lives at `.planning/spikes/002-skill-ergonomics-pragmatic/src/main.rs` — the `Skill`, `SkillReference`, `Skills`, `SkillsHandler`, and `ComposedResources` types lift near-verbatim into the real implementation.
 
 **Out of scope (deferred to v2):**
+
 - SEP-2640 §4 archive distribution (`application/gzip` + base64 blob). Blocked by GAP #2 (`Content::Resource` has no `blob` field). The SEP marks archive mode as optional.
 - `#[pmcp::skill]` procedural macro for compile-time SKILL.md validation. Worth a separate spike if compile-time validation is wanted.
+
+## v2.2 Configuration-Only MCP Servers (In Progress)
+
+**Milestone Goal:** Shift PMCP from a code-based SDK to one that lets enterprise developers build production-grade MCP servers for SQL databases from configuration + schema files alone — without writing Rust — while preserving PMCP's security, tools/resources/prompts/tasks/skills standards and offering pmcp.run hosting as a deployment target.
+
+**Source of truth:** Validated spikes 003–006 (`.planning/spikes/00{3,4,5,6}-*/`) + auto-loaded `spike-findings-rust-mcp-sdk` skill. Reference implementation: the three production SQL-API servers under `pmcp-run/built-in/sql-api/servers/` (`open-images`, `imdb`, `msr-vtt`) — their `config.toml` shape is the load-bearing input contract for the toolkit lift.
+
+**Critical invariants encoded across phases:**
+
+- Toolkit `config.toml` schema is a **superset** of `pmcp-run/built-in/sql-api/servers/open-images/config.toml` — additive new keys allowed, **no renames** (REF-01).
+- Pure-Rust Lambda is the deployment target — **no Docker, no testcontainers** (per `feedback_avoid_docker_pure_rust_lambda` memory).
+- Dual-mode curated `[[tools]]` + `[code_mode]` long-tail split is **intentional**, not auto-conversion.
+- SEP-2640 dual-surface invariant: prompt body **byte-equals** SKILL.md (SKLL-05).
+- SEP-2640 §9: supporting files served via `resources/read` but **NOT** in `resources/list` (SKLL-06).
+
+### v2.2 Phase Summary
+
+- [x] **Phase 82: Builder DX Prerequisites** — Lift `tool_arc` / `prompt_arc` to public `ServerBuilder` + document in-process driver pattern so external toolkit authors stop writing 20-line delegating shims (completed 2026-05-18)
+- [x] **Phase 83: Toolkit Core Lift (`pmcp-server-toolkit`)** — Promote `mcp-server-common` shape (~2.2k LoC) to a public crates.io-published SDK crate: AuthProvider, SecretsProvider, StaticResourceHandler, StaticPromptHandler, HMAC tokens, ToolInfo synthesis from `[[tools]]` config, code-mode policy wiring (completed 2026-05-18)
+- [x] **Phase 84: SQL Connectors (Postgres / MySQL / Athena / SQLite)** — `SqlConnector` trait + `Dialect` enum + 3 per-backend crates (pure-Rust drivers, Lambda-friendly) + SQLite feature flag, with placeholder translation and dialect-aware code-mode prompt assembly (completed 2026-05-26)
+- [x] **Phase 85: Shape A Pure-Config Binary + Reference Parity** — `pmcp-sql-server --config X --schema Y` zero-Rust binary; reproduce open-images end-to-end against the canonical reference scenarios (completed 2026-05-27)
+- [x] **Phase 86: Shapes B/C/D — Scaffold, Library Example, Deploy** — `cargo pmcp new --kind sql-server` scaffolding (Shape B), ≤15-line `main.rs` example (Shape C), `cargo pmcp deploy` config-only target wiring with Phase 77 configure system (Shape D) (completed 2026-05-27)
+- [ ] **Phase 87: Type 2 Authoring Skills MCP Server (`pmcp-config-helper`)** — SEP-2640 Skills MCP server for `config.toml` authoring: root SKILL.md + per-backend references + worked examples, byte-equal dual-surface invariant, §9 list-exclusion compliance, Type 1 `ai-agents/` updates
+- [ ] **Phase 88: Dogfood — `crates/pmcp-server` on Toolkit** — Rewrite the SDK's own dev-tools MCP server on top of `pmcp-server-toolkit` with at least one config-driven tool surface; behavioral parity verified
+- [ ] **Phase 89: Documentation, Migration Guide & Examples Index** — New book chapter + course tutorial covering the four shapes + per-backend recipes + deployment; README + crate-README config-first positioning; reference-implementation migration recipe (REF-03); examples/README + cargo-pmcp README polish
+
+## Phase Details — v2.2 Milestone
+
+### Phase 82: Builder DX Prerequisites
+
+**Goal**: External toolkit authors can share an `Arc<dyn ToolHandler>` between `pmcp::ServerBuilder` and an in-process handler map without writing a 20-line delegating wrapper shim, and can drive a built `pmcp::Server` in integration tests via a documented public pattern.
+**Depends on**: Phase 81 (v2.1 close); independent of any other v2.2 phase (this unblocks every later phase that uses `tool_arc` / `prompt_arc` in `pmcp-server-toolkit`)
+**Requirements**: BLDR-01, BLDR-02, BLDR-03, BLDR-04
+**Success Criteria** (what must be TRUE):
+
+  1. A toolkit author can call `pmcp::ServerBuilder::tool_arc(name, Arc::new(handler))` on the public builder and share that same `Arc` with an in-process handler map — no delegating wrapper required
+  2. A toolkit author can call `pmcp::ServerBuilder::prompt_arc(name, Arc::new(handler))` on the public builder with the same `Arc`-sharing semantics
+  3. A toolkit integration test can drive a built `pmcp::Server` end-to-end through `tools/list` / `tools/call` flow via a public in-process driver OR via an officially documented handler-level testing pattern — no poking at private `Server::handle_request`
+  4. The new builder methods are additive (no existing builder method signatures change) and ship as part of a minor `pmcp` version bump — the actual `Cargo.toml` version change and `CHANGELOG.md` entry are produced by the v2.2.x release branch per `CLAUDE.md` §"Release & Publish Workflow", NOT by Phase 82's implementation plans. (Phase 82 closes when its three plans land; the release that ships them is tagged separately.)
+  5. All six `_arc` handler-registration paths (`tool_arc`, `prompt_arc`, `resources_arc`, `sampling_arc`, `auth_provider_arc`, `tool_authorizer_arc`) reach parity with `ServerCoreBuilder`
+  6. `pmcp::Server::get_tool(name) -> Option<&Arc<dyn ToolHandler>>` exists, symmetric with the existing `get_prompt(name)`
+
+**Plans**: 3 plans (1 complete)
+Plans:
+
+- [x] 82-01-PLAN.md — Lift six `_arc` methods + `Server::get_tool` + behavioral test + D-03 doctests (commits 8de9ad79..f0dc4b60; [SUMMARY](./phases/82-builder-dx-prerequisites/82-01-SUMMARY.md))
+- [x] 82-02-PLAN.md — Reference test `tests/in_process_handler_pattern.rs`
+- [x] 82-03-PLAN.md — Book section on handler-level testing pattern
+
+### Phase 83: Toolkit Core Lift (`pmcp-server-toolkit`)
+
+**Goal**: A new public `crates/pmcp-server-toolkit/` crate exposes the `mcp-server-common` shape (auth, secrets, static resources, static prompts, HMAC tokens, `ToolInfo` synthesis from `[[tools]]` config, code-mode policy wiring) so any external developer can build a config-driven MCP server core without depending on `pmcp-run` internals. The three pmcp-run backend cores cut their path-deps and gain independent release cadence.
+**Depends on**: Phase 82 (uses `tool_arc` / `prompt_arc`)
+**Requirements**: TKIT-01, TKIT-02, TKIT-03, TKIT-04, TKIT-05, TKIT-06, TKIT-07, TKIT-08, TKIT-09, TKIT-10, TEST-02, TEST-03
+**Success Criteria** (what must be TRUE):
+
+  1. A developer can add `pmcp-server-toolkit = "<published-version>"` to their `Cargo.toml` from crates.io and import `AuthProvider`, `SecretsProvider`, `StaticResourceHandler`, `StaticPromptHandler`, HMAC token helpers, and the `[[tools]]` `ToolInfo` synthesizer from a single crate
+  2. A `config.toml` matching `pmcp-run/built-in/sql-api/servers/open-images/config.toml` (or `imdb` / `msr-vtt`) parses without modification through the toolkit — `[[tools]]` entries with `[[tools.parameters]]` (type/description/required/default/min/max/max_length) and `[tools.annotations]` (read_only_hint/destructive_hint/idempotent_hint/open_world_hint/cost_hint) produce complete `ToolInfo` definitions with **zero** per-tool Rust handlers written
+  3. The `[code_mode]` block (enabled, allow_writes, allow_deletes, allow_ddl, require_limit, max_limit, blocked_tables, sensitive_columns, auto_approve_levels, token_ttl_seconds, token_secret) plus `[code_mode.limits]` (max_tables_per_query, max_join_depth, max_subquery_depth) wires into `pmcp-code-mode`'s validation pipeline + `CodeExecutor` with **zero** per-server Rust glue — same surface as open-images config.toml lines 97–127
+  4. Code-mode prompt body assembly combines dialect-aware schema text (CONN-04, from Phase 84) with `[[database.tables]]` curated table descriptions so the LLM is seeded with both raw DDL and semantic hints
+  5. All three pmcp-run backend cores (`mcp-sql-server-core`, `mcp-graphql-server-core`, `mcp-openapi-server-core`) replace their `pmcp-run/built-in/shared/` path-deps with versioned crates.io `pmcp-server-toolkit` deps and continue to pass their existing tests unchanged
+
+**Plans:** 9/9 plans complete
+
+Plans:
+**Wave 1**
+
+- [x] 83-01-PLAN.md — Crate scaffold + workspace insertion + module skeleton + reference fixtures (TKIT-01) (Wave 1)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [x] 83-02-PLAN.md — Lift auth.rs + secrets.rs from mcp-server-common (TKIT-02, TKIT-03) (Wave 2)
+- [x] 83-03-PLAN.md — Lift resources.rs + prompts.rs from mcp-server-common (TKIT-04, TKIT-05) (Wave 2)
+- [x] 83-04-PLAN.md — ServerConfig parser + REF-01 superset integration test (TKIT-01) (Wave 2)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [x] 83-05-PLAN.md — [[tools]] → ToolInfo synthesizer with property test (TKIT-07, TEST-02) (Wave 3)
+- [x] 83-06-PLAN.md — Code-mode wiring + HMAC re-exports + policy integration test (TKIT-06, TKIT-09) (Wave 3)
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
+- [x] 83-07-PLAN.md — SqlConnector trait stub + Dialect + assemble_code_mode_prompt (TKIT-10, TEST-02) (Wave 4)
+
+**Wave 5** *(blocked on Wave 4 completion)*
+
+- [x] 83-08-PLAN.md — ServerBuilderExt + backend-core smoke test + ALWAYS example (TKIT-08, TEST-03) (Wave 5)
+
+**Wave 6** *(blocked on Wave 5 completion)*
+
+- [x] 83-09-PLAN.md — Fuzz target + contract YAML + shim diff + migration guide + publish-gate (TKIT-01, TKIT-08, TEST-02) (Wave 6)
+
+### Phase 84: SQL Connectors (Postgres / MySQL / Athena / SQLite)
+
+**Goal**: A toolkit consumer picks one or more backend crates (`pmcp-toolkit-postgres`, `pmcp-toolkit-mysql`, `pmcp-toolkit-athena`, or the `sqlite` feature flag) and gets a complete `SqlConnector` impl driven entirely by pure-Rust drivers (`tokio-postgres`, `sqlx`, `aws-sdk-athena`, bundled `rusqlite`) — no Docker, no testcontainers, Lambda-deployable as a pure-Rust binary.
+**Depends on**: Phase 83 (`SqlConnector` trait lives in toolkit core)
+**Requirements**: CONN-01, CONN-02, CONN-03, CONN-04, CONN-05, CONN-06, CONN-07, CONN-08, TEST-01, TEST-07
+**Success Criteria** (what must be TRUE):
+
+  1. A `SqlConnector` trait with exactly **three** methods (`dialect()`, `execute(query, params)`, `schema_text()`) is in toolkit core, and `schema_text()` optionally folds in per-table descriptions from `[[database.tables]]` config entries so curated descriptions reach the code-mode prompt
+  2. Canonical `:name` placeholders in a single `config.toml` translate correctly to dialect-specific placeholder forms (`$1` for Postgres, `?` for MySQL, `?` for Athena, `:name` for SQLite) via the `translate_placeholders` free helper — verified by property tests
+  3. `build_code_mode_prompt(connector)` assembles a dialect-aware code-mode bootstrap prompt body whose schema section comes from the connector's `schema_text()` — verified for all four dialects
+  4. Each per-backend crate (Postgres / MySQL / Athena) is publishable to crates.io and integration-tested against an **authentic in-process mock** for that backend (Postgres `$1`+`information_schema`, MySQL `?`+`information_schema`, Athena `?`+Glue catalog) — no `testcontainers`, no Docker; SQLite tested against a real in-memory `rusqlite` DB
+  5. A fuzz target on the `config.toml` parser (extending Phase 77's `pmcp_config_toml_parser`) confirms malformed config never panics — runtime stress in CI/nightly per the same disposition as Phase 77 Plan 08
+
+**Plans**: 9 plans
+
+- [x] 84-00-PLAN.md — Wave 0 scaffolding: 3 per-backend crate skeletons + translate.rs shell + property-test scaffold (RED) + fuzz corpus seed
+- [x] 84-01-PLAN.md — Extend SqlConnector trait to 3 methods (execute) + 4 ConnectorError variants
+- [x] 84-02-PLAN.md — translate_placeholders SqlWalker state machine + 5 property invariants (RED→GREEN→REFACTOR)
+- [x] 84-03-PLAN.md — build_code_mode_prompt alias + DatabaseSection.url field + synthesizer connector threading + widget_meta flip
+- [x] 84-04-PLAN.md — SqliteConnector promotion + sqlite_minimal Shape C example
+- [x] 84-05-PLAN.md — pmcp-toolkit-postgres (deadpool-postgres + PgParam ToSql + PostgresMock + 4 D-13 tests)
+- [x] 84-06-PLAN.md — pmcp-toolkit-mysql (sqlx pure-Rust TLS + MysqlMock + 4 D-13 tests)
+- [x] 84-07-PLAN.md — pmcp-toolkit-athena (aws-sdk-athena NO Glue + polling + AthenaMock + 4 D-13 tests)
+- [x] 84-08-PLAN.md — Fuzz corpus extension (3 backend seeds) + CLAUDE.md publish-order + REQUIREMENTS closure + verification sweep
+
+### Phase 85: Shape A Pure-Config Binary + Reference Parity
+
+**Goal**: A non-developer can take any of the existing `pmcp-run/built-in/sql-api/servers/*/config.toml` files unchanged, run `pmcp-sql-server --config <file> --schema <file>`, and get a live MCP server with the same tools, same code-mode policy, and same observable behavior as the production pmcp-run server — proving the toolkit lift end-to-end.
+**Depends on**: Phase 84 (Shape A binary needs at least one backend connector to run against)
+**Requirements**: SHAP-A-01, REF-01, REF-02
+**Success Criteria** (what must be TRUE):
+
+  1. Running `pmcp-sql-server --config pmcp-run/built-in/sql-api/servers/open-images/config.toml --schema <schema-file>` (or `imdb` / `msr-vtt`) produces a running MCP server with **zero** Rust written by the user
+  2. The toolkit's `config.toml` schema is a **superset** of the existing pmcp-run sql-api server configs — any of the three reference servers' configs parse cleanly, additive new keys are allowed, **renames are not**
+  3. The reproduced server responds to `tools/list`, `tools/call` for every `[[tools]]` entry, **and** the code-mode pair (`validate_code` / `execute_code`) with policy enforcement matching the production server's behavior
+  4. Replaying a representative subset of `pmcp-run/built-in/sql-api/reference/scenarios/` against both the original pmcp-run server and the Shape A reproduction yields **result parity** on the asserted scenarios
+
+**Plans**: 6 plans (4 waves)
+
+Plans:
+**Wave 1**
+
+- [x] 85-01-PLAN.md — REF-01 superset config fields (file_path / is_reference / [shared_policy_store]) + ${VAR} expansion gate [wave 1]
+- [x] 85-03-PLAN.md — pmcp-sql-server crate skeleton + vendored Chinook DDL/scenarios/config fixtures [wave 1]
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [x] 85-02-PLAN.md — Real code-mode tool registration + SqlCodeExecutor adapter + file-based prompt seam [wave 2]
+- [x] 85-04-PLAN.md — clap CLI + [database] type → connector dispatch [wave 2]
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [x] 85-05-PLAN.md — Server assembly + streamable-HTTP serving + SC-1 lazy-startup + SC-2 superset-parse tests [wave 3]
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
+- [x] 85-06-PLAN.md — Chinook parity replay (REF-02/SC-3/SC-4) + Shape C example + doctests + publish-order + fuzz seed [wave 4]
+
+**Gap closure** *(SC-3 reopened by code review — see 85-VERIFICATION.md Gaps 1-3 + 85-REVIEW.md)*
+
+- [x] 85-07-PLAN.md — Gap 1: enforce `require_limit` (add+map `sql_require_limit`; no-LIMIT read rejected independent of `max_limit`) (SHAP-A-01) [gap, wave 1]
+- [x] 85-09-PLAN.md — Gap 3: synthesize `code-mode://instructions` + `code-mode://policies` resources during assembly + prompt-body content assertion (REF-02) [gap, wave 1]
+- [x] 85-08-PLAN.md — Gap 2: make policy-rejection scenarios individually gating in `parity_chinook.rs` (per-step assertion, fixtures unchanged) (REF-02, SHAP-A-01) [gap, wave 2, depends 85-07/85-09]
+- [x] 85-10-PLAN.md — Secondary fixes: execute_code variables, null-default bind, cached pipeline, JoinError exit, sqlite `database` form, empty AWS_REGION/token_secret (SHAP-A-01, REF-02) [gap, wave 2, depends 85-07/85-09]
+
+### Phase 86: Shapes B/C/D — Scaffold, Library Example, Deploy
+
+**Goal**: A developer can choose any of three ergonomics levels for non-pure-config use cases — scaffold a starter project with `cargo pmcp new --kind sql-server` (Shape B), wire a ≤15-line `main.rs` library use (Shape C), or `cargo pmcp deploy` a config-only server to pmcp.run as a hosted target (Shape D) — and Phase 77's `cargo pmcp configure` target system accommodates each without breaking changes.
+**Depends on**: Phase 85 (Shape A proves the binary surface before scaffolding spawns clones of it)
+**Requirements**: SHAP-B-01, SHAP-C-01, SHAP-D-01, TEST-05, TEST-06
+**Success Criteria** (what must be TRUE):
+
+  1. `cargo pmcp new --kind sql-server` scaffolds a starter project containing `Cargo.toml` (pinned `pmcp-server-toolkit` + chosen backend dep), `main.rs` (Shape C wiring in ≤15 lines), and `config.toml` (commented template); running `cargo run` against an embedded SQLite gets `tools/list` + at least one `tools/call` working — verified end-to-end by an integration test in a tempdir
+  2. A runnable example under `examples/` proves Shape C library use: a complete MCP server in **≤15 lines** of `main.rs` (toolkit + a chosen backend connector)
+  3. `cargo pmcp deploy` packages a config-only server as a pure-Rust Lambda binary and deploys it to pmcp.run; the Phase 77 `cargo pmcp configure` target system handles config-only-server targets with **no breaking changes** to existing target variants
+  4. A deploy integration test exercises at least one config-only-server deploy against a mock or real pmcp.run target and confirms the post-deploy lifecycle (Phase 79 `check` + `conformance` + `apps` verifier) runs cleanly
+
+**Plans**: 6 plans
+
+Plans:
+**Wave 1**
+
+- [x] 86-01-PLAN.md — execute_batch bootstrap helper + `http` feature forward (pmcp/streamable-http) + asset/db-path resolver (demo_db_path, /var/task vs /tmp) + CONCRETE single-crate-deploy spike [wave 1]
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [x] 86-02-PLAN.md — Shape C: ≤15-line serving example (toolkit + SQLite connector) + spawn-poll integration test + body-count assertion [wave 2]
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [x] 86-03-PLAN.md — Shape B: `new --kind sql-server` single-crate emitter (emits the Shape C wiring) + scoped README docs [wave 3]
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
+- [x] 86-04-PLAN.md — TEST-05: tempdir scaffold -> patch-deps -> real cargo run -> poll -> tools/list + tools/call [wave 4]
+- [x] 86-05-PLAN.md — Shape D: detection seam + single-crate Lambda build (builder.rs) + deploy.toml [assets]/pmcp-run + env-ref secret posture + packaging/D-10 tests [wave 4]
+
+**Wave 5** *(blocked on Wave 4 completion)*
+
+- [x] 86-06-PLAN.md — TEST-06: env-gated real pmcp.run deploy + Phase 79 check/conformance/apps lifecycle (D-11) [wave 5]
+
+### Phase 87: Type 2 Authoring Skills MCP Server (`pmcp-config-helper`)
+
+**Goal**: A non-developer using a SEP-2640-capable MCP client gets canonical `config.toml` authoring guidance — root SKILL.md + per-backend references + at least one worked example — served by the `pmcp-config-helper` MCP server, with the SEP-2640 dual-surface invariant (prompt body byte-equals SKILL.md) and §9 list-exclusion compliance asserted in-binary. Coding agents writing Rust against the toolkit pick up the same canonical idioms via Type 1 `ai-agents/` updates.
+**Depends on**: Phase 83 (Skills bundle teaches the toolkit's config shape; needs the public toolkit on crates.io to exist)
+**Requirements**: SKLL-01, SKLL-02, SKLL-03, SKLL-04, SKLL-05, SKLL-06, SKLL-07, TEST-04
+**Success Criteria** (what must be TRUE):
+
+  1. A SEP-2640-capable MCP client connecting to the `pmcp-config-helper` binary sees the root SKILL.md (covering curated-tool pareto, secrets refs, auth surface, code-mode opt-in) and can `resources/read` per-backend references (`references/postgres.md`, `references/mysql.md`, `references/athena.md`, `references/sqlite.md`) plus at least one worked example bundle (`config.toml` + `schema.sql`)
+  2. **Dual-surface invariant** — `prompts/get` body for the bootstrap prompt is **byte-equal** to the root SKILL.md content, asserted by an in-binary integration test (spike 002's invariant)
+  3. **SEP-2640 §9 compliance** — supporting files (per-backend references, worked example bundle) are served via `resources/read` but **MUST NOT** appear in `resources/list`, asserted by an integration test against a representative client
+  4. The `pmcp-config-helper` crate is publishable to crates.io with a `pmcp-config-helper` binary that runs the server with default skills bundled — no extra setup required
+  5. Type 1 build-time skills in `ai-agents/` are updated with toolkit-authoring patterns (config DSL, connector trait usage, secrets binding) so coding agents writing Rust against `pmcp-server-toolkit` pick up canonical idioms from their dev environment
+
+**Plans**: TBD
+
+### Phase 88: Dogfood — `crates/pmcp-server` on Toolkit
+
+**Goal**: The SDK's own dev-tools MCP server (`crates/pmcp-server`) is rewritten on top of `pmcp-server-toolkit` with at least one config-driven tool surface, demonstrating the toolkit's reach. Downstream users see **no functional regression** — the rewritten server passes the existing test suite (or a documented superset) unchanged.
+**Depends on**: Phase 83 (uses the public toolkit), Phase 84 (uses at least one connector for the config-driven tool surface)
+**Requirements**: DOGF-01, DOGF-02
+**Success Criteria** (what must be TRUE):
+
+  1. `crates/pmcp-server` is rewritten on top of `pmcp-server-toolkit` and exposes at least one tool defined via `[[tools]]` config rather than a hand-written Rust handler
+  2. The existing `pmcp-server` test suite (or a documented superset) passes unchanged — **no functional regression** for any current downstream user
+  3. The dogfood rewrite surfaces and resolves any toolkit DX paper-cuts (logged as fold-back fixes into Phase 83 / 84 follow-ups before milestone close) before the toolkit's first published version
+
+**Plans**: TBD
+
+### Phase 89: Documentation, Migration Guide & Examples Index
+
+**Goal**: A developer landing on the PMCP repo or docs.rs sees config-first positioning ("build production MCP servers from config alone"), can follow a book chapter through the four DX shapes + per-backend recipes + deployment, can work through a hands-on course tutorial from `cargo pmcp new --kind sql-server` to a deployed pmcp.run server, and can find a one-page recipe for moving an existing pmcp-run sql-api server author from in-tree path-deps to the public toolkit.
+**Depends on**: Phase 86 (all four shapes shipped), Phase 87 (Type 2 authoring server shipped — book + course mention it), Phase 88 (dogfood validates the docs' usage claims)
+**Requirements**: DOCS-01, DOCS-02, DOCS-03, DOCS-04, DOCS-05, REF-03
+**Success Criteria** (what must be TRUE):
+
+  1. A new book chapter in `pmcp-book/src/` covers config-only MCP servers — overview, the four shapes, per-backend recipes (Postgres / MySQL / Athena / SQLite), deployment to pmcp.run
+  2. A new course tutorial in `pmcp-course/src/` walks a hands-on path from `cargo pmcp new --kind sql-server` → local `cargo run` → `cargo pmcp deploy` → live pmcp.run server
+  3. The book chapter includes a **migration note** (REF-03) — one-page recipe showing how a pmcp-run SQL-API server author swaps the path-dep for the public toolkit, drops the duplicate domain crates, and regenerates
+  4. The PMCP README and `CRATE-README.md` lead with config-first positioning ("build production MCP servers from config alone"), with the four shapes prominently introduced
+  5. The `examples/README.md` index gains config-only entries (Shape A binary use, Shape C library use); the `cargo-pmcp` README documents `new --kind sql-server` scaffolding and `deploy` for config-only server targets
+
+**Plans**: TBD
+
+### Phase 90: OpenAPI Built-In Server (`pmcp-openapi-server`)
+
+**Goal**: Deliver a config-driven **OpenAPI** MCP server that mirrors the completed SQL toolkit (Shape A binary `pmcp-sql-server`, Phases 83–86): a non-developer points a binary at a `config.toml` + an OpenAPI spec and gets a live MCP server — curated operation→tool mappings for the common ~20%, Code Mode (the existing `openapi-code-mode` feature in `pmcp-code-mode`) for the long-tail ~80% — with **zero Rust written**. The backend-agnostic toolkit (Phase 83) and the Shape A / scaffold / deploy patterns (Phases 85–86) are reused; only an OpenAPI connector model, the operation→tool config mapping, the `pmcp-openapi-server` binary, the `cargo pmcp new --kind openapi-server` scaffold, and docs are new.
+**Depends on**: Phase 83 (backend-agnostic toolkit core), Phase 85 (Shape A binary pattern), Phase 86 (scaffold + deploy). Reuses the existing `openapi-code-mode` feature in `pmcp-code-mode`.
+**Requirements**: OAPI-01 (HttpConnector trait), OAPI-02a (single-call tool synth), OAPI-02b (script tools — D-01), OAPI-03 (5-variant outgoing auth — D-05), OAPI-04 (openapiv3 --spec parser — D-03), OAPI-05 (HttpCodeExecutor seam), OAPI-06 (Shape A binary), OAPI-07 (--kind openapi-server scaffold + deploy), OAPI-08 (london-tube wiremock parity — D-04), OAPI-09 (docs in three shapes), OAPI-10 (generalize code_mode wiring to Arc<dyn CodeExecutor> + the one-engine parity proof — D-02). New scope added 2026-05-29; refined by the RESEARCH pass.
+**Reference to lift from (CONFIRMED)**: `~/Development/mcp/sdk/pmcp-run/built-in/openapi-api` — the OpenAPI sibling of the `sql-api` reference the SQL toolkit (Phases 83–86) was lifted from. This is the source-of-truth for Phase 90, exactly as `sql-api` was for SQL. Structure:
+
+  - **`crates/mcp-openapi-server-core`** — the core to lift (analog of `mcp-sql-server-core`). Modules: `auth`, `code_mode`, `config`, `http`, `schema`, `secrets`, `templates`, `tools`, `pmcp_server`, `lambda`. Builds on `pmcp` (workspace), `openapiv3` (spec parse), `reqwest 0.13` (rustls), `serde_yaml`, and `pmcp-code-mode 0.4.0` with the **`js-runtime`** feature (long-tail = validated JS calling the API). Currently uses `shared/mcp-server-common` + `shared/mcp-lambda-proxy` path-deps to be replaced by the public `pmcp-server-toolkit` (the REF-style lift).
+  - **Config shape** (analog of SQL's `[database]`): `[backend] base_url` + `[backend.auth]` (`type = "bearer"`, `token = "${ENV}"`, `required`) + `[backend.http]` (timeout/retries/backoff) + `[[tools]]` mapping an operation via `path` / `method` / `base_url` (the operation→tool analog of SQL's `sql=`) + `[secrets]` + `[metadata]` + `[observability]`.
+  - **Instance configs (parity fixtures)**: `instances/{lichess,london-tube,dhl,rest-admin}.toml` and `servers/{lichess,london-tube,dhl,aws-cloudwatch,aws-billing,rest-admin}/`. `lichess` and `london-tube` are public / no-auth-friendly → best demo + parity candidates.
+  - **Design docs to mine**: `OPENAPI_CODE_MODE_DESIGN.md`, `OPENAPI_CODE_MODE_POLICY_DESIGN.md`, `OPENAPI_CODE_MODE_ACCESS_CONTROL.md`, `OPENAPI_SCRIPT_TOOLS.md`, `BUILTIN_SERVER_ARCHITECTURE.md`, `DEPLOYMENT.md`.
+
+**Scope (mirrors the SQL lift; confirm details in RESEARCH)**:
+
+  - Lift `mcp-openapi-server-core`'s reusable glue into `pmcp-server-toolkit` (auth/secrets/config/code-mode wiring is largely shared; the NEW backend piece is an **HTTP/OpenAPI connector** analogous to `SqlConnector` at `crates/pmcp-server-toolkit/src/sql/mod.rs`).
+  - `[backend]`-driven config: curated `[[tools]]` → OpenAPI operations (`path`/`method`/`base_url`), bearer/`${ENV}` auth, retries/timeouts.
+  - A `pmcp-openapi-server` Shape A binary (`--config` + `--spec`), mirroring `pmcp-sql-server`.
+  - A `cargo pmcp new --kind openapi-server` scaffold, mirroring `--kind sql-server`.
+  - Reuse `pmcp-code-mode`'s `js-runtime` / `openapi-code-mode` feature for the Code Mode long-tail path.
+  - REF-style parity: a reference instance (e.g. `lichess`) reproduces the pmcp-run server's tools + behavior unchanged.
+  - Docs in three shapes (crate README + `pmcp-book` chapter + `pmcp-course` chapter), matching the SQL docs.
+
+**Open questions for RESEARCH**: how much of `mcp-openapi-server-core` is already covered by the backend-agnostic toolkit (Phase 83) vs genuinely new; the exact HTTP-connector trait shape; auth models beyond bearer (apiKey/basic/oauth) in the instance configs; spec-source handling (`--spec` file vs inline `[[tools]]`-only); and whether code-mode's `js-runtime` needs toolkit-side wiring like the SQL `executor_from_config` seam.
+
+**Plans**: 9 plans in 7 waves + 4 gap-closure plans in 2 waves (planned 2026-05-29; replanned with cross-AI review feedback; gap-closure planned 2026-05-29 from VERIFICATION gaps_found 9/11 + REVIEW WR-02/03/04)
+
+Plans:
+**Wave 1**
+
+- [x] 90-01-PLAN.md — HttpConnector trait + reqwest client + 5-variant outgoing auth + http feature (OAPI-01/03)
+- [x] 90-02-PLAN.md — additive [backend]/[backend.auth]/[backend.http] + ToolDecl two-kind fields on ServerConfig (D-06, OAPI-02a/03)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [x] 90-03-PLAN.md — openapiv3 --spec parser (optional at runtime) + single-call tool synthesizer (OAPI-04/02a)
+- [x] 90-04-PLAN.md — HttpCodeExecutor seam + generalize code_mode_tools_from_executor to Arc<dyn CodeExecutor>+flavor (OAPI-05/10)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [x] 90-05-PLAN.md — ScriptToolHandler (one engine, no token cycle) + the D-02 engine-parity proof (OAPI-02b/10)
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
+- [x] 90-06-PLAN.md — pmcp-openapi-server Shape A binary (cli/dispatch/assemble/lib, streamable HTTP, spec optional) (OAPI-06)
+
+**Wave 5** *(blocked on Wave 4 completion)*
+
+- [x] 90-07-PLAN.md — london-tube wiremock parity replay + env-gated live test (OAPI-08, D-04)
+- [x] 90-08-PLAN.md — cargo pmcp new --kind openapi-server scaffold + deploy parity + scoped README (OAPI-07)
+
+**Wave 6** *(blocked on Wave 5 completion)*
+
+- [x] 90-09-PLAN.md — docs in three shapes (crate README + book + course chapters) (OAPI-09)
+
+**Gap-Closure Wave 1** *(closing VERIFICATION gaps + REVIEW warnings; planned 2026-05-29)*
+
+- [x] 90-10-PLAN.md — oauth_passthrough per-request token made live at runtime: toolkit-resident request_executor_from_extra seam called by ScriptToolHandler + ExecuteCodeHandler; dispatch installs OAuthPassthroughAuth; e2e wiremock proof (closes VERIFICATION truths #3/#8, WR-01; OAPI-03/05)
+- [x] 90-11-PLAN.md — cross-variant ${VAR}/env:VAR secret resolution chokepoint applied to bearer/basic/oauth2 credential fields (closes altitude finding; OAPI-03)
+- [x] 90-12-PLAN.md — backend.base_url non-empty validation + oauth_passthrough trust-boundary docs (closes WR-02/WR-04; OAPI-03)
+
+**Gap-Closure Wave 2** *(blocked on 90-10 — shared code_mode.rs)*
+
+- [x] 90-13-PLAN.md — reject non-scalar path/query/header params with a value-redacted error instead of silent JSON-stringification (closes WR-03; OAPI-02a/05)
+
+## Progress — v2.2 Milestone
+
+**Execution order:** Phase 82 → Phase 83 → Phase 84 → Phase 85 → Phase 86 (Shapes B/C/D) and Phase 87 (Skills) in parallel after 83 lands → Phase 88 (dogfood) → Phase 89 (docs). Phase 90 (OpenAPI built-in, added 2026-05-29) is independent of 87–89 — it reuses the toolkit core (83) and Shape A/scaffold patterns (85–86), so it can proceed in parallel with the remaining SQL-milestone phases.
+
+| Phase | Plans Complete | Status | Completed |
+|-------|----------------|--------|-----------|
+| 82. Builder DX Prerequisites | 3/3 | Complete   | 2026-05-18 |
+| 83. Toolkit Core Lift | 9/9 | Complete   | 2026-05-18 |
+| 84. SQL Connectors | 9/9 | Complete   | 2026-05-26 |
+| 85. Shape A + Reference Parity | 10/10 | Complete    | 2026-05-27 |
+| 86. Shapes B/C/D | 6/6 | Complete    | 2026-05-27 |
+| 87. Type 2 Authoring Skills Server | 0/? | Not started | - |
+| 88. Dogfood `pmcp-server` | 0/? | Not started | - |
+| 89. Documentation & Migration | 0/? | Not started | - |
+| 90. OpenAPI Built-In Server | 13/13 | Complete   | 2026-05-30 |
+
+### Phase 90.2: OpenAPI Built-In Server — Advanced Example (Contoso M365: OAuth passthrough + Excel-over-Graph) (INSERTED)
+
+**Goal:** Ship a second, advanced OpenAPI showcase that demonstrates enterprise OAuth and business-data access, distinct from London Tube's `api_key` (90.1). Vehicle: Microsoft Graph / M365 for a fictional org "Contoso", READ-ONLY. The headline narrative: *keep your existing Excel files, connect them to AI via MCP* — and the business analyst curates the relevant slice of a huge API rather than dumping full Graph metadata. Auth = `oauth_passthrough`: an org admin consents once to a bounded scope (the ceiling of what the server may request), and the signed-in user's forwarded token (from their MCP client, e.g. ChatGPT) governs per-file access — the server holds no standing credentials and can only ever act as the calling user.
+
+Concrete shape: a demo Excel workbook in SharePoint/OneDrive with two sheets — **Customers** and **Orders** (orders belong to customers). Two explicit MCP tools over the Graph Excel range-read API — `get_customer` and `get_customer_orders` — with everything richer left to Code Mode (e.g. "customers who bought more than 100 in the last 3 months"). A curated/trimmed Graph OpenAPI spec (~3–4 read-only ops: list SharePoint files, file content, Excel worksheet range read), NOT the full metadata.
+
+This is config + curated spec + fixture + docs, NOT a feature build: `AuthConfig::OAuthPassthrough` (`crates/pmcp-server-toolkit/src/http/auth.rs:123`) and the full passthrough chain (`TokenCaptureAuthProvider → AuthContext → HttpCodeExecutor::with_inbound_token → outbound forward`, `crates/pmcp-openapi-server/src/assemble.rs:22-31,93`) already ship from Phase 90 (Plan 90-10). Mirror the London Tube structure (90.1): fixture + pointable example + book/course chapters + offline `parity_replay` (wiremock asserts the forwarded `Authorization: Bearer` reached the Graph backend), plus an `#[ignore]`+env-gated live test like `parity_live_tfl`. NOTE: `@odata.nextLink` pagination is NOT handled by the connector today and is NOT needed for a single demo workbook — explicitly out of scope (avoids turning this into a feature build).
+
+**Decision:** READ-ONLY (no Excel write / workbook-session path); `oauth_passthrough` is the hero auth path (app-only client-credentials only mentioned as a documented contrast, if at all).
+**SQL/OpenAPI parallels (mirror these):** 90.1 london-tube fixture/example/chapters/`parity_replay.rs`; `crates/pmcp-sql-server/tests/fixtures/reference-config.toml`.
+**Requirements**: P902-SPEC, P902-CONFIG, P902-FIXTURE, P902-PARITY, P902-CODEMODE, P902-EXAMPLE, P902-DOCS-BOOK, P902-DOCS-COURSE (locked via SPEC.md)
+**Depends on:** Phase 90
+**Plans:** 4/4 plans complete
+
+Plans:
+
+- [x] 90.2-01-PLAN.md — Contoso M365 fixtures: CANONICAL workbook dataset (contoso-m365-workbook.json) + oauth_passthrough config + two customer_id-keyed script tools + curated Graph range-read spec + replay scenario (P902-SPEC, P902-CONFIG, P902-FIXTURE)
+- [x] 90.2-02-PLAN.md — Offline parity test (forwarded-bearer passthrough proof) + pointable examples/contoso-m365.toml + build-only example (P902-PARITY, P902-EXAMPLE)
+- [x] 90.2-03-PLAN.md — Deterministic headline Code Mode Rust test (>100-in-3-months, pinned reference date) (P902-CODEMODE)
+- [x] 90.2-04-PLAN.md — Dedicated book + course chapters (governance + Excel narrative) wired into both SUMMARYs (P902-DOCS-BOOK, P902-DOCS-COURSE)
+
+### Phase 90.1: OpenAPI Built-In Server — Examples & Article Parity (INSERTED)
+
+**Goal:** Bring the OpenAPI built-in server's examples and documentation to full parity with the SQL server. Scope (locked via progress routing):
+
+1. Enrich `crates/pmcp-openapi-server/tests/fixtures/london-tube.toml` from a thin 114-line test fixture into the full annotated showcase reference instance — the OpenAPI equivalent of SQL's `chinook` `reference-config.toml`: add `[[resources]]` (TfL API schema docs + sample request/response payloads + example scripts), `[[prompts]]` (start-code-mode), and full per-tool `[tools.annotations]` (read_only_hint, idempotent_hint, cost_hint, auth hints).
+2. Add a runnable example config users can point at.
+3. Deepen `pmcp-book/src/openapi-built-in-server.md` and `pmcp-course/src/openapi-built-in-server.md` with a resources/prompts config-walkthrough section — the one section SQL's chapters have that OpenAPI skips (chapter *structure* is already at parity from Phase 90-09; this adds the missing config-depth section).
+4. Add a replay/parity test covering the enriched fixture (ALWAYS requirements: parity test + example demonstration).
+
+**Decision:** Keep london-tube as the single showcase; do NOT add a second real-world API.
+**SQL parallels (mirror these):** `crates/pmcp-sql-server/tests/fixtures/reference-config.toml` (670 lines), `chinook.ddl`, `pmcp-book/src/ch12-10-config-driven-sql-servers.md`, `pmcp-course/src/part3-deployment/ch08-5-config-driven-sql-server.md`.
+**Requirements**: P901-FIXTURE, P901-EXAMPLE, P901-DOCS-BOOK, P901-DOCS-COURSE, P901-PARITY
+**Depends on:** Phase 90
+**Plans:** 3/3 plans complete
+
+Plans:
+
+- [x] 90.1-01-PLAN.md — Enrich london-tube.toml (resources + prompt + full annotations) + fixture-validity asserts + build-only example (P901-FIXTURE, P901-EXAMPLE)
+- [x] 90.1-02-PLAN.md — Add Resources & Prompts config-walkthrough section to book + course OpenAPI chapters (P901-DOCS-BOOK, P901-DOCS-COURSE)
+- [x] 90.1-03-PLAN.md — Add list_resources + list_prompts replay steps to london-tube-scenarios.yaml (P901-PARITY)

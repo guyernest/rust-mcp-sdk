@@ -266,6 +266,13 @@ pub fn resolve_target(
     );
 
     // region — pmcp-run, aws-lambda, google-cloud-run.
+    //
+    // Read `[aws].region` for aws-lambda/pmcp-run AND `[gcp].region` for
+    // google-cloud-run. The two shapes are mutually exclusive per
+    // `target.target_type`, so the OR-chain is safe (n51 follow-up #3: the
+    // resolver previously only read d.aws, so `configure show` against a
+    // Cloud Run deploy.toml showed a blank region column for the
+    // deploy-file source).
     put(
         "region",
         std::env::var("AWS_REGION")
@@ -274,7 +281,12 @@ pub fn resolve_target(
         None,
         entry.as_ref().and_then(|e| e.region().cloned()),
         deploy_config
-            .and_then(|d| d.aws.as_ref().map(|a| a.region.clone()))
+            .and_then(|d| {
+                d.aws
+                    .as_ref()
+                    .map(|a| a.region.clone())
+                    .or_else(|| d.gcp.as_ref().map(|g| g.region.clone()))
+            })
             .filter(|s| !s.is_empty()),
     );
 
@@ -290,6 +302,10 @@ pub fn resolve_target(
     );
 
     // gcp_project — google-cloud-run.
+    //
+    // Reads `[gcp].project_id` from deploy.toml (n51 follow-up #3: the
+    // deploy_config source was hardcoded to `None`, so `configure show`
+    // ignored the project_id even when the operator had set it).
     put(
         "gcp_project",
         std::env::var("GOOGLE_CLOUD_PROJECT").ok(),
@@ -301,7 +317,9 @@ pub fn resolve_target(
                 None
             }
         }),
-        None,
+        deploy_config
+            .and_then(|d| d.gcp.as_ref().map(|g| g.project_id.clone()))
+            .filter(|s| !s.is_empty()),
     );
 
     // api_token_env — cloudflare-workers (an env-var NAME, not value; references-only per D-07).
@@ -417,7 +435,7 @@ impl TargetEntry {
 mod tests {
     use super::*;
     use crate::commands::configure::config::{
-        AwsLambdaEntry, PmcpRunEntry, TargetConfigV1, TargetEntry,
+        AwsLambdaEntry, GoogleCloudRunEntry, PmcpRunEntry, TargetConfigV1, TargetEntry,
     };
     use serial_test::serial;
 
@@ -750,11 +768,9 @@ create_dashboard = false
             std::fs::write(ws.join(".pmcp").join("active-target"), "prod\n").unwrap();
 
             let mut deploy = make_test_deploy_config_with_region("us-east-1");
-            deploy
-                .aws
-                .as_mut()
-                .expect("test fixture has aws")
-                .account_id = Some("999888777666".into());
+            if let Some(a) = deploy.aws.as_mut() {
+                a.account_id = Some("999888777666".into());
+            }
 
             let r = resolve_target(None, None, ws, Some(&deploy))
                 .unwrap()
@@ -799,6 +815,119 @@ create_dashboard = false
                     source: TargetSource::DeployToml,
                     shadowed_target_value: None,
                 })
+            );
+        });
+    }
+
+    /// Synthesizes a google-cloud-run deploy.toml carrying `[gcp]` (and no
+    /// `[aws]`) for testing the n51-follow-up #3 gcp source paths.
+    fn make_test_deploy_config_with_gcp(
+        project_id: &str,
+        region: &str,
+    ) -> crate::deployment::config::DeployConfig {
+        let toml_str = format!(
+            r#"
+[target]
+type = "google-cloud-run"
+version = "1.0"
+
+[gcp]
+project_id = "{}"
+region = "{}"
+
+[server]
+name = "test-svc"
+
+[environment]
+
+[auth]
+enabled = false
+provider = "none"
+
+[observability]
+log_retention_days = 7
+enable_xray = false
+create_dashboard = false
+"#,
+            project_id, region
+        );
+        let mut cfg: crate::deployment::config::DeployConfig =
+            toml::from_str(&toml_str).expect("GCR deploy.toml literal must parse for tests");
+        cfg.project_root = std::path::PathBuf::from("/tmp");
+        cfg
+    }
+
+    /// n51 follow-up #3: when the named google-cloud-run target carries no
+    /// region but the deploy.toml has `[gcp].region`, the resolver must
+    /// surface the gcp region (was always None before — resolver only read
+    /// d.aws.region).
+    #[test]
+    #[serial]
+    fn resolve_target_falls_back_to_deploy_toml_for_gcp_region() {
+        run_isolated(|home, ws| {
+            let path = home.join(".pmcp").join("config.toml");
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            let mut cfg = TargetConfigV1::empty();
+            cfg.targets.insert(
+                "prod".into(),
+                TargetEntry::GoogleCloudRun(GoogleCloudRunEntry {
+                    gcp_project: None,
+                    region: None, // ← intentionally absent in the named target
+                }),
+            );
+            cfg.write_atomic(&path).unwrap();
+            std::fs::create_dir_all(ws.join(".pmcp")).unwrap();
+            std::fs::write(ws.join(".pmcp").join("active-target"), "prod\n").unwrap();
+
+            let deploy = make_test_deploy_config_with_gcp("prod-billing", "europe-west1");
+            let r = resolve_target(None, None, ws, Some(&deploy))
+                .unwrap()
+                .expect("must resolve");
+            assert_eq!(
+                r.region(),
+                Some(&ResolvedField {
+                    value: "europe-west1".into(),
+                    source: TargetSource::DeployToml,
+                    shadowed_target_value: None,
+                }),
+                "deploy.toml [gcp].region must be surfaced as the region source"
+            );
+        });
+    }
+
+    /// n51 follow-up #3: when the named google-cloud-run target carries no
+    /// gcp_project but the deploy.toml has `[gcp].project_id`, the resolver
+    /// must surface it (was hardcoded to None before).
+    #[test]
+    #[serial]
+    fn resolve_target_falls_back_to_deploy_toml_for_gcp_project() {
+        run_isolated(|home, ws| {
+            let path = home.join(".pmcp").join("config.toml");
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            let mut cfg = TargetConfigV1::empty();
+            cfg.targets.insert(
+                "prod".into(),
+                TargetEntry::GoogleCloudRun(GoogleCloudRunEntry {
+                    gcp_project: None, // ← intentionally absent in the named target
+                    region: Some("us-central1".into()),
+                }),
+            );
+            cfg.write_atomic(&path).unwrap();
+            std::fs::create_dir_all(ws.join(".pmcp")).unwrap();
+            std::fs::write(ws.join(".pmcp").join("active-target"), "prod\n").unwrap();
+
+            let deploy = make_test_deploy_config_with_gcp("prod-billing", "us-central1");
+            let r = resolve_target(None, None, ws, Some(&deploy))
+                .unwrap()
+                .expect("must resolve");
+            assert_eq!(
+                r.gcp_project(),
+                Some(&ResolvedField {
+                    value: "prod-billing".into(),
+                    source: TargetSource::DeployToml,
+                    shadowed_target_value: None,
+                }),
+                "deploy.toml [gcp].project_id must be surfaced as the gcp_project source"
             );
         });
     }
@@ -858,10 +987,11 @@ mod proptests {
                 Some((f.clone(), TargetSource::Flag))
             } else if let Some(t) = target.as_ref().filter(|s| !s.is_empty()) {
                 Some((t.clone(), TargetSource::Target))
-            } else if let Some(d) = deploy.as_ref().filter(|s| !s.is_empty()) {
-                Some((d.clone(), TargetSource::DeployToml))
             } else {
-                None
+                deploy
+                    .as_ref()
+                    .filter(|s| !s.is_empty())
+                    .map(|d| (d.clone(), TargetSource::DeployToml))
             };
             prop_assert_eq!(r, expected);
         }

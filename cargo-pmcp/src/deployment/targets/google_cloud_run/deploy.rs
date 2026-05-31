@@ -14,6 +14,12 @@ use anyhow::{bail, Context, Result};
 /// 5. `gcloud run deploy` with `--set-env-vars` populated from
 ///    `[environment]`.
 /// 6. Return the deployment URL.
+///
+/// # Errors
+///
+/// Returns an error if authentication fails, the primary crate's
+/// `Cargo.toml` cannot be read, absolute path dependencies are detected,
+/// or any of the `docker` / `gcloud` subprocess invocations fail.
 pub async fn deploy_to_cloud_run(config: &DeployConfig) -> Result<DeploymentOutputs> {
     println!("🚀 Deploying to Google Cloud Run...");
     println!();
@@ -30,7 +36,7 @@ pub async fn deploy_to_cloud_run(config: &DeployConfig) -> Result<DeploymentOutp
         .map(|g| g.project_id.clone())
         .filter(|p| !p.is_empty() && p != "your-gcp-project-id")
         .map_or_else(auth::get_project_id, Ok)?;
-    println!("   ✓ Project: {}", project_id);
+    println!("   ✓ Project: {project_id}");
     println!();
 
     let params = resolve_params(config);
@@ -44,7 +50,7 @@ pub async fn deploy_to_cloud_run(config: &DeployConfig) -> Result<DeploymentOutp
     println!("   Min instances: {}", params.min_instances);
     println!("   Allow unauthenticated: {}", params.allow_unauth);
     if let Some(ingress) = &params.ingress {
-        println!("   Ingress: {}", ingress);
+        println!("   Ingress: {ingress}");
     }
     if !config.environment.is_empty() {
         println!(
@@ -104,7 +110,7 @@ pub async fn deploy_to_cloud_run(config: &DeployConfig) -> Result<DeploymentOutp
         bail!("Docker build failed:\n{}", stderr);
     }
 
-    println!("   ✓ Image built: {}", image_tag);
+    println!("   ✓ Image built: {image_tag}");
     println!();
 
     // Step 5: Push to GCR.
@@ -217,10 +223,10 @@ pub async fn deploy_to_cloud_run(config: &DeployConfig) -> Result<DeploymentOutp
     println!("🎉 Deployment successful!");
     println!();
     println!("📊 Deployment Details:");
-    println!("   Project: {}", project_id);
+    println!("   Project: {project_id}");
     println!("   Region: {}", params.region);
     println!("   Service: {}", params.service_name);
-    println!("   URL: {}", url);
+    println!("   URL: {url}");
 
     if !params.allow_unauth {
         println!();

@@ -1,0 +1,35 @@
+# Shape C example config (D-06) — parses through `from_toml_strict_validated`
+# (`#[serde(deny_unknown_fields)]`); every key below is in the toolkit's known
+# field set (src/config.rs:39-63).
+[server]
+name = "sql-server-http-demo"
+version = "0.1.0"
+
+[database]
+# The runtime opens SQLite at `demo_db_path()` (Plan 01 H1 resolver), NOT a
+# config `file_path`. `type` is declared for completeness/dialect intent.
+type = "sqlite"
+
+[code_mode]
+# D-06: code-mode (validate_code / execute_code) visible on first run.
+enabled = true
+allow_writes = false
+require_limit = true
+max_limit = 1000
+# DEV ONLY — this inline literal is rejected unless
+# `allow_inline_token_secret_for_dev = true` (Pitfall §4). Production MUST use a
+# secrets ref instead, e.g. `token_secret = "env:CODE_MODE_SECRET"`.
+token_secret = "dev-only-insecure-secret-min-16-bytes"
+allow_inline_token_secret_for_dev = true
+
+[[tools]]
+name = "list_books"
+description = "List books ordered by title"
+sql = "SELECT id, title, author FROM books ORDER BY title LIMIT :limit"
+
+[[tools.parameters]]
+name = "limit"
+type = "integer"
+description = "Maximum number of rows to return"
+required = false
+default = 20

@@ -702,13 +702,13 @@ fn execute_source_scan(
 /// File-iteration is non-recursive (top-level `.html` files only) and
 /// sorted by filename for deterministic output.
 ///
+/// Discovered `(tool_name, uri, html)` widget tuples plus per-file `TestResult` rows.
+type WidgetScanResult = (Vec<(String, String, String)>, Vec<mcp_tester::TestResult>);
+
 /// Per-file errors (oversize, non-UTF8, permission denied) become Failed
 /// `TestResult` rows. Directory-level errors (doesn't exist, not a
 /// directory, can't read) bubble up as `anyhow::Error`.
-fn scan_widgets_dir(
-    dir: &std::path::Path,
-    tool_filter: Option<&str>,
-) -> Result<(Vec<(String, String, String)>, Vec<mcp_tester::TestResult>)> {
+fn scan_widgets_dir(dir: &std::path::Path, tool_filter: Option<&str>) -> Result<WidgetScanResult> {
     if !dir.exists() {
         anyhow::bail!("--widgets-dir path does not exist: {}", dir.display());
     }
@@ -771,9 +771,11 @@ fn scan_widgets_dir(
 /// returns a `HashMap<uri, Vec<tool_name>>` that lets the read loop fetch
 /// each unique URI exactly once and then fan the cached HTML back out per
 /// tool.
-fn dedup_widget_uris(
-    app_tools: &[&pmcp::types::ToolInfo],
-) -> (Vec<(String, String)>, HashMap<String, Vec<String>>) {
+///
+/// `(pairs, by_uri)` — the `(tool, uri)` pairs and the URI → tool-names index.
+type DedupedWidgetUris = (Vec<(String, String)>, HashMap<String, Vec<String>>);
+
+fn dedup_widget_uris(app_tools: &[&pmcp::types::ToolInfo]) -> DedupedWidgetUris {
     let mut pairs: Vec<(String, String)> = Vec::with_capacity(app_tools.len());
     let mut by_uri: HashMap<String, Vec<String>> = HashMap::new();
     for tool in app_tools {
