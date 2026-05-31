@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.9.1] - 2026-05-31
+
+Release-engineering fix completing the v2.9.0 publish. The six v2.2 config-driven
+toolkit crates — `pmcp-server-toolkit`, `pmcp-toolkit-postgres` / `-mysql` /
+`-athena`, `pmcp-sql-server`, `pmcp-openapi-server` — were absent from
+`release.yml`'s hardcoded publish list and so did not reach crates.io during the
+v2.9.0 run. They are added to the release workflow and published under this tag.
+No source changes vs v2.9.0; crate versions are unchanged (`pmcp` 2.9.0,
+`pmcp-code-mode` 0.5.2, the six toolkit crates 0.1.0).
+
 ## [2.9.0] - 2026-05-30
 
 The **config-driven servers** release: build production MCP servers over SQL
