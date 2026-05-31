@@ -691,6 +691,23 @@ impl DeployConfig {
         Ok(())
     }
 
+    /// Persist this config to `.pmcp/deploy.toml` only when the file
+    /// does not already exist. Returns `Ok(true)` if a file was written
+    /// and `Ok(false)` if an existing deploy.toml was preserved.
+    ///
+    /// Why: `cargo pmcp deploy init` is expected to be idempotent —
+    /// re-running it on a project where the operator has already filled
+    /// in env vars, IAM bindings, or other tuning must not clobber that
+    /// work. (Scaffolder-immunity invariant from upstream issue #260.)
+    pub fn save_if_missing(&self, project_root: &Path) -> Result<bool> {
+        let config_path = project_root.join(".pmcp/deploy.toml");
+        if config_path.exists() {
+            return Ok(false);
+        }
+        self.save(project_root)?;
+        Ok(true)
+    }
+
     pub fn default_for_server(server_name: String, region: String, project_root: PathBuf) -> Self {
         let mut environment = HashMap::new();
         environment.insert("RUST_LOG".to_string(), "info".to_string());
@@ -802,23 +819,6 @@ impl DeployConfig {
             runtime: None,
             project_root,
         }
-    }
-
-    /// Persist this config to `.pmcp/deploy.toml` only when the file
-    /// does not already exist. Returns `Ok(true)` if a file was written
-    /// and `Ok(false)` if an existing deploy.toml was preserved.
-    ///
-    /// Why: `cargo pmcp deploy init` is expected to be idempotent —
-    /// re-running it on a project where the operator has already filled
-    /// in env vars, IAM bindings, or other tuning must not clobber that
-    /// work. (Scaffolder-immunity invariant from upstream issue #260.)
-    pub fn save_if_missing(&self, project_root: &Path) -> Result<bool> {
-        let config_path = project_root.join(".pmcp/deploy.toml");
-        if config_path.exists() {
-            return Ok(false);
-        }
-        self.save(project_root)?;
-        Ok(true)
     }
 
     /// Return a reference to the AWS configuration block.

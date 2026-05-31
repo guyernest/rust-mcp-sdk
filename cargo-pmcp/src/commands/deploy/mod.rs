@@ -663,6 +663,44 @@ impl DeployCommand {
                             }
 
                             cmd.execute()
+                        } else if target_id == "google-cloud-run" {
+                            // Cloud Run init writes a Cloud Run-shaped
+                            // .pmcp/deploy.toml ([target] + [gcp] + [server] +
+                            // [environment]) — see upstream issue #260.
+                            //
+                            // Prefer loading the existing deploy.toml so that
+                            // operator-authored [layout] / [server].binary /
+                            // [environment] blocks flow into the Dockerfile +
+                            // cloudbuild.yaml generators. Without this, a
+                            // pre-existing deploy.toml is preserved on disk
+                            // (save_if_missing) but the in-memory default is
+                            // still what generate_dockerfile() sees, so
+                            // [layout] kind = "multi-crate-isolated" is
+                            // silently ignored on re-init.
+                            //
+                            // Gate the load on file existence so parse and
+                            // permission errors propagate as deploy failures
+                            // instead of silently falling back to a default
+                            // scaffold (which would mask a malformed
+                            // deploy.toml as "no file present").
+                            let deploy_toml_path = project_root.join(".pmcp/deploy.toml");
+                            let config = if deploy_toml_path.exists() {
+                                crate::deployment::DeployConfig::load(&project_root)?
+                            } else {
+                                let server_name = detect_server_name(&project_root)?;
+                                let region_str = if region.is_empty() {
+                                    "us-central1".to_string()
+                                } else {
+                                    region.clone()
+                                };
+                                crate::deployment::DeployConfig::default_for_cloud_run_server(
+                                    server_name,
+                                    "your-gcp-project-id".to_string(),
+                                    region_str,
+                                    project_root.clone(),
+                                )
+                            };
+                            target.init(&config).await
                         } else {
                             // For other targets (pmcp-run, google-cloud-run, …), use the
                             // new modular approach. Branch on target_id so the saved

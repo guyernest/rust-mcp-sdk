@@ -12,7 +12,7 @@ pub mod r#trait;
 pub mod widgets;
 
 pub use builder::BinaryBuilder;
-pub use config::{DeployConfig, LayoutConfig};
+pub use config::{DeployConfig, GcpConfig, LayoutConfig, RuntimeConfig};
 pub use iam::render_iam_block;
 pub use naming::would_conflict;
 pub use operations::OperationStatus;
