@@ -33,14 +33,14 @@ graphql-parser = "0.4"
 toml = "1.0"
 
 # JavaScript parsing (optional, for OpenAPI Code Mode).
-# Pinned to the swc "39" generation: the "40" generation (parser 40.0.0, ast/visit
-# 24.0.0, common 22.0.0) was YANKED wholesale from crates.io, which made the prior
-# mixed pins (parser "40" + visit "24") unresolvable. This 39-gen set is non-yanked
-# and is the generation this crate's code compiles against.
+# Aligned to the coherent swc "41" generation (parser 41, ast 25, visit 25,
+# common 23). These four crates share generated AST/visitor types and MUST move
+# together — a mixed set (e.g. parser 41 + ast 23) resolves two copies of
+# swc_ecma_ast and breaks the `Visit` impl in javascript.rs with E0053.
 swc_ecma_parser = { version = "41", optional = true }
-swc_ecma_ast = { version = "23", optional = true }
+swc_ecma_ast = { version = "25", optional = true }
 swc_ecma_visit = { version = "25", optional = true }
-swc_common = { version = "21", optional = true }
+swc_common = { version = "23", optional = true }
 
 # SQL parsing (optional, for SQL Code Mode)
 sqlparser = { version = "0.62", optional = true }
