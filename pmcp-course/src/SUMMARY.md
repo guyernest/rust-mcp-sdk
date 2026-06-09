@@ -86,6 +86,8 @@
   - [Auto-Scaling Configuration](./part3-deployment/ch10-02-scaling.md)
   - [Comparison with Lambda](./part3-deployment/ch10-03-comparison.md)
 
+- [Azure Container Apps](./part3-deployment/ch11-azure-container-apps.md)
+
 ---
 
 # Part IV: Testing

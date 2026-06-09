@@ -5,6 +5,36 @@ All notable changes to the `cargo-pmcp` crate will be documented in this file.
 The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html).
 
+## [0.16.0] - 2026-06-08
+
+### Added
+- **Azure Container Apps deploy target** — the fifth `cargo pmcp deploy`
+  target, alongside pmcp.run, AWS Lambda, Google Cloud Run, and Cloudflare
+  Workers. Deploys via `az containerapp up --source` (ACR cloud-build — **no
+  local Docker required**, a UX win over the Google Cloud Run target which needs
+  a local `docker buildx`). `is_available()` requires only the `az` CLI.
+- **Typed `[azure]` deploy.toml section** — `resource_group`, `location`
+  (default `eastus`), `environment`, `target_port` (default `8080`), and
+  `min_replicas` (default `1`). Backward-compatible: an empty/absent `[azure]`
+  section serialises byte-identically to a pre-0.16 deploy.toml (the same
+  `#[serde(default, skip_serializing_if = ...)]` pattern as `[iam]`/`[widgets]`).
+  Precedence is **ENV (`AZURE_*`) > `[azure]` section > built-in defaults**.
+- **`init` scaffolding** — generates the proven Dockerfile
+  (`rust:1-slim-bookworm` builder → `debian:bookworm-slim` runtime, non-root,
+  `ENV PORT=8080`, no `--locked`), a `.dockerignore`, and a
+  `[target] type = "azure-container-apps"` deploy.toml stub.
+- **Server-template defaults** — `cargo pmcp new`-scaffolded servers now set
+  `allowed_origins: Some(AllowedOrigins::any())` and bind `0.0.0.0:$PORT`
+  (honoring `$PORT`, default `8080`), closing the two spike-007 traps (a `None`
+  allow-list = localhost-only = `403 Forbidden: Host header not in allowed
+  origins` behind any ingress).
+- **Lifecycle trait methods wired to `az`** — `destroy` (`group delete
+  --no-wait`), `outputs`/`test` (FQDN probe), `logs` (`containerapp logs show
+  [--follow] --tail N`), and `rollback` (executes `containerapp ingress traffic
+  set --revision-weight`). The deploy long-poll re-checks `provisioningState` on
+  `RemoteDisconnected` rather than treating an intermittent poll drop as a hard
+  failure.
+
 ## [0.15.0] - 2026-05-28
 
 ### Added

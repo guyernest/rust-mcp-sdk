@@ -1058,7 +1058,7 @@ aws secretsmanager restore-secret --secret-id calculator-server/api_key
 - [ ] Deployment cloning
 
 ### v2.0.0 - Multi-Cloud
-- [ ] Azure Container Apps support
+- [x] Azure Container Apps support
 - [ ] Google Cloud Run support
 - [ ] Deployment comparison tools
 - [ ] Cost analysis
@@ -1188,6 +1188,127 @@ export class CalculatorServerStack extends cdk.Stack {
   }
 }
 ```
+
+---
+
+## Azure Container Apps (`azure-container-apps` target)
+
+`cargo pmcp deploy` ships a first-class **Azure Container Apps (ACA)** target. Like the
+Google Cloud Run target it is container-based, but its single biggest UX win is that it
+needs **no local Docker**: the deploy primitive is `az containerapp up --source`, which
+hands your build context to **Azure Container Registry (ACR) cloud-build**. The only
+prerequisite is the `az` CLI (`is_available()` does not require Docker).
+
+### CLI workflow (start here)
+
+The whole loop is CLI-first — scaffold, init, log in, deploy:
+
+```bash
+# 1. Scaffold a server (the template ships the two ingress-safe defaults — see below)
+cargo pmcp new my-mcp-server
+cd my-mcp-server
+cargo pmcp add server calculator --template complete
+
+# 2. Generate the Azure deploy artifacts (Dockerfile + .dockerignore + deploy.toml stub)
+cargo pmcp deploy init --target azure-container-apps
+
+# 3. Authenticate (management-plane calls need a fresh interactive token)
+az login           # pick the target subscription if prompted
+
+# 4. Deploy — ACR cloud-builds the Dockerfile and provisions the Container App
+cargo pmcp deploy --target-type azure-container-apps
+```
+
+`init` writes a proven multi-stage `Dockerfile` (`rust:1-slim-bookworm` +
+`build-essential pkg-config` → `debian:bookworm-slim`, non-root, `ENV PORT=8080`, a plain
+`cargo build --release` — **never `--locked` without a shipped `Cargo.lock`**), a
+`.dockerignore`, and a `.pmcp/deploy.toml` stub with `[target] type = "azure-container-apps"`.
+The Azure init path skips AWS credentials and CDK entirely.
+
+`deploy` then runs the spike-007-proven sequence: register the required providers
+(`--wait`), create the resource group and Container Apps environment, run
+`az containerapp up --source <dir> --ingress external --target-port 8080`, enable ingress
+CORS, set `--min-replicas 1`, and read back the FQDN. The deployed MCP endpoint is served
+at the root (`https://<app>.<env-suffix>.<region>.azurecontainerapps.io/`).
+
+### `[azure]` deploy.toml section
+
+`init` leaves the `[azure]` section to defaults; add/override keys as needed:
+
+```toml
+[target]
+type = "azure-container-apps"
+
+[server]
+name = "calculator-server"
+
+[azure]
+resource_group = "calculator-server-rg"   # default: <server-name>-rg
+location        = "eastus"                 # default: eastus
+environment     = "calculator-server-env"  # default: <server-name>-env
+target_port     = 8080                     # default: 8080
+min_replicas    = 1                        # default: 1
+```
+
+**Precedence is `ENV (AZURE_*) > [azure] section > built-in defaults`.** The numeric
+overrides `AZURE_TARGET_PORT` (u16) and `AZURE_MIN_REPLICAS` (u32) are validated — an
+unparseable value is a clear named error, never a raw string passed to `az`. Other env
+overrides: `AZURE_RESOURCE_GROUP`, `AZURE_CONTAINERAPP_ENV`, `AZURE_LOCATION`. An
+absent/empty `[azure]` section serialises byte-identically to a pre-Azure deploy.toml, so
+existing AWS/GCR configs are untouched.
+
+### Two server requirements the scaffold ships (the spike-007 traps)
+
+A server deployed behind ACA ingress MUST do two things or it will fail. `cargo pmcp new`'s
+HTTP server template now sets both for you (global default across all targets), but a
+**hand-rolled** server must set them itself:
+
+1. **`allowed_origins: Some(AllowedOrigins::any())`** — `None` means localhost-only, so
+   every request behind ingress returns `403 Forbidden: Host header not in allowed origins`
+   (pmcp's DNS-rebinding guard). This is the same class of bug as the Lambda proxy note.
+2. **Bind `0.0.0.0:$PORT`** (`Ipv4Addr::UNSPECIFIED`, honoring `$PORT`/8080), not
+   `127.0.0.1` — otherwise ingress cannot reach the container.
+
+`cargo pmcp deploy init` prints a warning surfacing both requirements; the scaffolded
+template (`server_common.rs`) bakes them in.
+
+### Operational notes
+
+- **Cold-subscription provider registration is awaited.** `Microsoft.App`,
+  `Microsoft.OperationalInsights`, and `Microsoft.ContainerRegistry` are registered with
+  `--wait` before `env create`; async registration otherwise races and the environment
+  fails to create. This is a one-time 1–5 minute cost on a cold subscription.
+- **`az` long-polls drop intermittently** (`RemoteDisconnected` / read-timeout /
+  connection-reset). The deploy runner re-checks `properties.provisioningState` and only
+  treats `Failed` as a real failure — a dropped poll is not a deployment error.
+- **No `/health` route needed** — pmcp mounts MCP at `/` and ACA's default TCP probe
+  suffices.
+- `cargo pmcp deploy --target-type azure-container-apps logs [--follow] [--tail N]`,
+  `outputs` (FQDN probe), `rollback --version <revision>` (`ingress traffic set
+  --revision-weight <rev>=100`), and `destroy` (`group delete --no-wait`) are wired to the
+  corresponding `az` commands.
+
+### Security / production hardening
+
+The scaffold default `allowed_origins: Some(AllowedOrigins::any())` **and** the ingress CORS
+`*` that `deploy` enables are **proxy-safe but broad**: they accept browser requests from
+**any** origin. That is the correct *default* — it is what makes a freshly deployed server
+actually reachable behind ingress (a server that 403s behind every reverse proxy is the
+worse failure mode) — but it is **not** where a production deployment should stop.
+
+Once the ACA FQDN is known (after the first deploy), harden the surface:
+
+1. **Restrict `allowed_origins` to the deployment FQDN** instead of `any()`, e.g.
+   `AllowedOrigins::new(["https://<app>.<env-suffix>.<region>.azurecontainerapps.io"])`,
+   and tighten the ingress CORS allowed-origins to the same FQDN
+   (`az containerapp ingress cors enable --allowed-origins 'https://<fqdn>'`).
+2. **Enable authentication.** Public ingress with broad CORS and no auth means anyone who
+   knows the URL can call your tools. Wire pmcp's auth layer — see the pmcp auth
+   documentation for OAuth/token validation patterns.
+
+**Azure Entra ID integration** (managed-identity / OAuth passthrough on Container Apps) is
+a **planned future phase and is out of scope here** — this target gives you a reachable,
+TLS-terminated MCP server; locking it down to an audience is the explicit next step.
 
 ---
 

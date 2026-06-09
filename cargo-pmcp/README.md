@@ -18,7 +18,7 @@ Production-grade MCP server development toolkit.
 - **Workflow Validation** - Catch structural errors in workflows before runtime
 - **MCP Apps** - Scaffold widget projects, generate ChatGPT manifests, and build landing pages
 - **Widget Preview** - Browser-based preview with dual proxy/WASM bridge modes and hot-reload
-- **Multi-Target Deployment** - Deploy to AWS Lambda, Google Cloud Run, Cloudflare Workers, or pmcp.run
+- **Multi-Target Deployment** - Deploy to AWS Lambda, Google Cloud Run, Azure Container Apps, Cloudflare Workers, or pmcp.run. The Azure Container Apps target needs no local Docker (ACR cloud-build via `az containerapp up --source`) — see [DEPLOYMENT.md § Azure Container Apps](./DEPLOYMENT.md#azure-container-apps-azure-container-apps-target).
 - **Declarative IAM** - Declare AWS permissions (DynamoDB, S3, SecretsManager, …) in `.pmcp/deploy.toml` via the `[iam]` section. Translated into `mcpFunction.addToRolePolicy(...)` calls in the generated CDK stack at deploy time. See [docs/IAM.md](./docs/IAM.md) for the how-to guide, or [DEPLOYMENT.md § IAM Declarations](./DEPLOYMENT.md#iam-declarations-iam-section) for the schema reference.
 - **Secrets Management** - Multi-provider secret storage (local, pmcp.run, AWS Secrets Manager)
 - **OAuth Authentication** - Production-ready OAuth 2.0 with AWS Cognito, Dynamic Client Registration, and SSO
@@ -302,6 +302,11 @@ cargo pmcp deploy init --target aws-lambda --oauth cognito
 
 # Deploy
 cargo pmcp deploy --target aws-lambda
+
+# Or deploy to Azure Container Apps (no local Docker — ACR cloud-build)
+cargo pmcp deploy init --target azure-container-apps
+az login
+cargo pmcp deploy --target-type azure-container-apps
 ```
 
 ### 8. Monitor
@@ -326,7 +331,7 @@ cargo pmcp deploy test --verbose
 | `doctor` | Workspace diagnostics — toolchain, dependencies, connectivity | |
 | `schema` | Export, validate, and diff MCP server schemas | [docs/commands/schema.md](docs/commands/schema.md) |
 | `validate` | Validate workflows and server components | [docs/commands/validate.md](docs/commands/validate.md) |
-| `deploy` | Deploy to AWS Lambda, Cloud Run, Workers, pmcp.run | [docs/commands/deploy.md](docs/commands/deploy.md) |
+| `deploy` | Deploy to AWS Lambda, Cloud Run, Azure Container Apps, Workers, pmcp.run | [docs/commands/deploy.md](docs/commands/deploy.md) |
 | `secret` | Manage secrets across local, pmcp.run, and AWS | [docs/commands/secret.md](docs/commands/secret.md) |
 | `app` | Scaffold MCP Apps projects with widgets | [docs/commands/app.md](docs/commands/app.md) |
 | `preview` | Browser-based widget preview with hot-reload | [docs/commands/preview.md](docs/commands/preview.md) |
