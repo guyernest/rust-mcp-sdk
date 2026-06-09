@@ -89,6 +89,16 @@ pub struct DeployConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub runtime: Option<RuntimeConfig>,
 
+    /// Typed `[azure]` section for the Azure Container Apps deploy target
+    /// (Phase 80, REQ-80-04).
+    ///
+    /// The `skip_serializing_if` guard preserves byte-identity on the
+    /// no-`[azure]` path so pre-existing `.pmcp/deploy.toml` files round-trip
+    /// unchanged (mirrors the Phase 76 `IamConfig` D-05 contract). See
+    /// [`AzureConfig`].
+    #[serde(default, skip_serializing_if = "AzureConfig::is_empty")]
+    pub azure: AzureConfig,
+
     /// Project root directory (not serialized)
     #[serde(skip)]
     pub project_root: PathBuf,
@@ -218,6 +228,92 @@ pub struct RuntimeConfig {
     /// Apt packages to install on debian/ubuntu bases. Ignored otherwise.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub apt_packages: Vec<String>,
+}
+
+/// Typed `[azure]` deploy.toml section for the Azure Container Apps target
+/// (Phase 80, REQ-80-04).
+///
+/// Mirrors the [`IamConfig`] / [`WidgetsConfig`] backward-compat contract:
+/// the `skip_serializing_if = "AzureConfig::is_empty"` guard on
+/// `DeployConfig::azure` preserves byte-identity on the no-`[azure]` path so
+/// pre-Phase-80 `.pmcp/deploy.toml` files round-trip unchanged (D-05).
+///
+/// `resource_group`/`environment` stay `None` when unset so the consumer
+/// (`AcaSettings::from_config`, landing in 80-02) can keep its
+/// `<server-name>-rg` / `<server-name>-env` fallbacks. Precedence is
+/// ENV (`AZURE_*`) > `[azure]` section > these built-in defaults.
+///
+/// # Example
+///
+/// ```toml
+/// [azure]
+/// location = "westus2"
+/// resource_group = "my-rg"
+/// target_port = 9090
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AzureConfig {
+    /// Azure resource group. Falls back to `<server-name>-rg` when unset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resource_group: Option<String>,
+
+    /// Container Apps environment. Falls back to `<server-name>-env` when unset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub environment: Option<String>,
+
+    /// Azure region. Defaults to `eastus`.
+    #[serde(default = "default_azure_location")]
+    pub location: String,
+
+    /// Ingress target port. Defaults to `8080`.
+    #[serde(default = "default_azure_target_port")]
+    pub target_port: u16,
+
+    /// Minimum replica count. Defaults to `1`.
+    #[serde(default = "default_azure_min_replicas")]
+    pub min_replicas: u32,
+}
+
+fn default_azure_location() -> String {
+    "eastus".to_string()
+}
+
+fn default_azure_target_port() -> u16 {
+    8080
+}
+
+fn default_azure_min_replicas() -> u32 {
+    1
+}
+
+impl Default for AzureConfig {
+    fn default() -> Self {
+        Self {
+            resource_group: None,
+            environment: None,
+            location: default_azure_location(),
+            target_port: default_azure_target_port(),
+            min_replicas: default_azure_min_replicas(),
+        }
+    }
+}
+
+impl AzureConfig {
+    /// Returns `true` when every field equals its built-in default
+    /// (`resource_group`/`environment` `None`, `location == "eastus"`,
+    /// `target_port == 8080`, `min_replicas == 1`).
+    ///
+    /// Used by `DeployConfig`'s
+    /// `#[serde(skip_serializing_if = "AzureConfig::is_empty")]` to preserve
+    /// byte-identity for configs without an `[azure]` section (D-05).
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.resource_group.is_none()
+            && self.environment.is_none()
+            && self.location == default_azure_location()
+            && self.target_port == default_azure_target_port()
+            && self.min_replicas == default_azure_min_replicas()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -755,6 +851,7 @@ impl DeployConfig {
             post_deploy_tests: None,
             layout: None,
             runtime: None,
+            azure: AzureConfig::default(),
             project_root,
         }
     }
@@ -817,6 +914,7 @@ impl DeployConfig {
             post_deploy_tests: None,
             layout: None,
             runtime: None,
+            azure: AzureConfig::default(),
             project_root,
         }
     }
@@ -1741,5 +1839,204 @@ base = "debian:bookworm-slim"
         let runtime = config.runtime.as_ref().expect("runtime present");
         assert_eq!(runtime.base.as_deref(), Some("debian:bookworm-slim"));
         assert!(runtime.apt_packages.is_empty(), "default is empty");
+    }
+}
+
+#[cfg(test)]
+mod azure_wave1_tests {
+    //! Phase 80 Plan 01 — typed `[azure]` section (REQ-80-04).
+    //!
+    //! Struct-level assertions live in-crate (`super::*` exposes the private
+    //! `AzureConfig`/`DeployConfig` types) mirroring the Phase 76 IamConfig
+    //! lib-boundary note. The only external artifact is the committed golden
+    //! `tests/golden/deploy-toml-no-azure.golden.toml`, regenerated by the
+    //! `#[ignore]`d `emit_golden` helper below.
+
+    use super::*;
+
+    /// Committed pre-azure baseline (byte-identity / D-05 proof, Test A).
+    const GOLDEN: &str = include_str!("../../tests/golden/deploy-toml-no-azure.golden.toml");
+
+    /// Deterministic baseline used for the committed-golden byte-identity proof.
+    /// The project_root path is fixed so the golden is stable across machines.
+    fn azure_golden_baseline() -> DeployConfig {
+        DeployConfig::default_for_server(
+            "demo-server".to_string(),
+            "us-west-2".to_string(),
+            std::path::PathBuf::from("/tmp/phase80-azure-golden"),
+        )
+    }
+
+    /// Manual: regenerates the committed golden when the non-azure baseline shape
+    /// legitimately changes. Run with `--ignored`. Not part of the normal suite.
+    #[test]
+    #[ignore = "manual: regenerates the committed golden TOML"]
+    fn emit_golden() {
+        let out = toml::to_string(&azure_golden_baseline()).expect("baseline serialises");
+        std::fs::write(
+            concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/tests/golden/deploy-toml-no-azure.golden.toml"
+            ),
+            out,
+        )
+        .expect("write golden");
+    }
+
+    /// Test A — byte-identity: the serialised empty-default baseline (azure
+    /// elided) is BYTE-IDENTICAL to the committed golden, proving D-05.
+    #[test]
+    fn empty_azure_serialises_byte_identical_to_golden() {
+        let out = toml::to_string(&azure_golden_baseline()).expect("baseline serialises");
+        assert_eq!(
+            out, GOLDEN,
+            "empty-default DeployConfig must serialise byte-identically to the committed golden (D-05)"
+        );
+        // Belt-and-suspenders: the committed baseline really is the pre-azure shape.
+        assert!(
+            !GOLDEN.contains("[azure]"),
+            "committed golden must carry no [azure] header"
+        );
+    }
+
+    /// Test B — is_empty flips false for each of the five fields, one per field.
+    #[test]
+    fn is_empty_flips_when_any_field_differs_from_default() {
+        assert!(
+            AzureConfig::default().is_empty(),
+            "AzureConfig::default() must report empty"
+        );
+
+        let mut c = AzureConfig::default();
+        c.resource_group = Some("custom-rg".to_string());
+        assert!(!c.is_empty(), "resource_group=Some must flip is_empty");
+
+        let mut c = AzureConfig::default();
+        c.environment = Some("custom-env".to_string());
+        assert!(!c.is_empty(), "environment=Some must flip is_empty");
+
+        let mut c = AzureConfig::default();
+        c.location = "westus2".to_string();
+        assert!(!c.is_empty(), "non-default location must flip is_empty");
+
+        let mut c = AzureConfig::default();
+        c.target_port = 9090;
+        assert!(!c.is_empty(), "non-default target_port must flip is_empty");
+
+        let mut c = AzureConfig::default();
+        c.min_replicas = 2;
+        assert!(!c.is_empty(), "non-default min_replicas must flip is_empty");
+    }
+
+    /// Test C — a non-empty `[azure]` roundtrips (serialise → parse) preserving
+    /// resource_group/location/target_port; is_empty stays false.
+    #[test]
+    fn non_empty_azure_roundtrips_through_toml() {
+        let mut cfg = azure_golden_baseline();
+        cfg.azure.location = "westus2".to_string();
+        cfg.azure.resource_group = Some("custom-rg".to_string());
+        cfg.azure.target_port = 9090;
+
+        let serialised = toml::to_string(&cfg).expect("config with [azure] serialises");
+        assert!(
+            serialised.contains("[azure]"),
+            "non-default azure must emit an [azure] table"
+        );
+
+        let parsed: DeployConfig =
+            toml::from_str(&serialised).expect("round-trip DeployConfig parses");
+        assert_eq!(parsed.azure.location, "westus2");
+        assert_eq!(parsed.azure.resource_group.as_deref(), Some("custom-rg"));
+        assert_eq!(parsed.azure.target_port, 9090);
+        assert!(
+            !parsed.azure.is_empty(),
+            "round-tripped non-default azure must not be empty"
+        );
+    }
+
+    /// Test D — an `[azure]` fragment omitting target_port/min_replicas parses
+    /// them to their built-in defaults (8080 / 1).
+    #[test]
+    fn azure_fragment_applies_field_defaults() {
+        let mut toml_str = toml::to_string(&azure_golden_baseline()).expect("baseline serialises");
+        toml_str.push_str("\n[azure]\nlocation = \"westus2\"\n");
+
+        let parsed: DeployConfig =
+            toml::from_str(&toml_str).expect("config with partial [azure] parses");
+        assert_eq!(parsed.azure.location, "westus2");
+        assert_eq!(
+            parsed.azure.target_port, 8080,
+            "omitted target_port must default to 8080"
+        );
+        assert_eq!(
+            parsed.azure.min_replicas, 1,
+            "omitted min_replicas must default to 1"
+        );
+        assert!(
+            parsed.azure.resource_group.is_none(),
+            "omitted resource_group must stay None"
+        );
+    }
+
+    // ── Property: arbitrary-input [azure] TOML roundtrip (Phase 80 Plan 04) ──────
+    //
+    // The fixed-case roundtrip above (Test C) proves a handful of hand-picked
+    // values survive serialise → parse. This property generalises it to
+    // arbitrary valid AzureConfig values, proving all five fields are preserved.
+    // It lives in-crate because AzureConfig + DeployConfig are reached via
+    // `super::*` (mirrors the Phase 76 struct-level-tests-in-crate decision).
+    use proptest::prelude::*;
+
+    /// Strategy for an optional name string. Restricted to a printable,
+    /// TOML-serialisable charset (basic-string escaping covers it) while still
+    /// exercising unicode, spaces, quotes and backslashes. `None` is included so
+    /// the `resource_group`/`environment` fallbacks are covered too.
+    fn arb_opt_name() -> impl Strategy<Value = Option<String>> {
+        prop_oneof![
+            Just(None),
+            "[\\PC]{0,40}".prop_map(Some), // any printable char, 0..=40 long
+        ]
+    }
+
+    fn arb_azure_config() -> impl Strategy<Value = AzureConfig> {
+        (
+            arb_opt_name(),
+            arb_opt_name(),
+            "[\\PC]{1,40}",
+            any::<u16>(),
+            any::<u32>(),
+        )
+            .prop_map(
+                |(resource_group, environment, location, target_port, min_replicas)| AzureConfig {
+                    resource_group,
+                    environment,
+                    location,
+                    target_port,
+                    min_replicas,
+                },
+            )
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(256))]
+
+        /// For arbitrary valid AzureConfig values, `toml::to_string` of a
+        /// DeployConfig carrying that `[azure]` section then `toml::from_str`
+        /// back roundtrips and preserves all five fields.
+        #[test]
+        fn azure_config_toml_roundtrips_all_fields(azure in arb_azure_config()) {
+            let mut cfg = azure_golden_baseline();
+            cfg.azure = azure.clone();
+
+            let serialised = toml::to_string(&cfg).expect("DeployConfig with [azure] serialises");
+            let parsed: DeployConfig =
+                toml::from_str(&serialised).expect("round-trip DeployConfig parses");
+
+            prop_assert_eq!(parsed.azure.resource_group, azure.resource_group);
+            prop_assert_eq!(parsed.azure.environment, azure.environment);
+            prop_assert_eq!(parsed.azure.location, azure.location);
+            prop_assert_eq!(parsed.azure.target_port, azure.target_port);
+            prop_assert_eq!(parsed.azure.min_replicas, azure.min_replicas);
+        }
     }
 }
