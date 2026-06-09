@@ -50,3 +50,10 @@ path = "fuzz_targets/fuzz_widgets_config.rs"
 doc = false
 test = false
 bench = false
+
+[[bin]]
+name = "fuzz_azure_config"
+path = "fuzz_targets/fuzz_azure_config.rs"
+doc = false
+test = false
+bench = false
