@@ -638,12 +638,17 @@ impl DeployCommand {
                         cognito_pool_name,
                         social_providers,
                     } => {
-                        // For init, we can use the old approach or new depending on target
-                        if target_id == "aws-lambda" {
+                        // For init, route through InitCommand for aws-lambda and
+                        // container targets (azure-container-apps). InitCommand
+                        // dispatches on target_type at the top of execute():
+                        // the container arm writes a deploy.toml stub + invokes
+                        // the target's init() (Dockerfile) and skips AWS creds + CDK.
+                        if target_id == "aws-lambda" || target_id == "azure-container-apps" {
                             emit_target_banner_if_resolved(global_flags, &project_root, None);
                             let mut cmd = InitCommand::new(project_root)
                                 .with_region(region)
-                                .with_credentials_check(!skip_credentials_check);
+                                .with_credentials_check(!skip_credentials_check)
+                                .with_target_type(&target_id);
 
                             // Configure OAuth if specified
                             if let Some(provider) = oauth {

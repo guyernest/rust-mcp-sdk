@@ -41,8 +41,12 @@ async-trait = { workspace = true }
     Ok(())
 }
 
-fn generate_lib_rs(server_common_dir: &Path) -> Result<()> {
-    let content = r#"//! Shared HTTP bootstrap for all MCP servers
+/// Generated `server-common` `lib.rs` source.
+///
+/// Exposed as a module-level const so template-defaults tests can assert the
+/// rendered source carries the spike-007 proxy-safe defaults without
+/// re-rendering the whole crate.
+const LIB_RS_TEMPLATE: &str = r#"//! Shared HTTP bootstrap for all MCP servers
 //!
 //! This module provides production-grade HTTP server setup used by all servers.
 //! Binary servers just call `run_http()` with their configured server (~6 LOC).
@@ -83,7 +87,7 @@ use pmcp::server::http_middleware::{
 use pmcp::server::auth::{
     IdentityProvider, CognitoProvider, GenericOidcConfig, GenericOidcProvider,
 };
-use pmcp::Server;
+use pmcp::{AllowedOrigins, Server};
 use pmcp::error::Error as PmcpError;
 use async_trait::async_trait;
 use std::net::{Ipv4Addr, SocketAddr};
@@ -271,6 +275,12 @@ pub async fn run_http(server: Server, server_name: &str, server_version: &str) -
         on_session_initialized: None,
         on_session_closed: None,
         http_middleware: Some(Arc::new(middleware_chain)),
+        // Proxy-safe: required behind ACA/Lambda/Cloud Run ingress — None = localhost-only = 403.
+        // Deliberate GLOBAL default for scaffolded servers: it broadens browser-origin access so
+        // the server works through any reverse proxy out of the box.
+        // Production: restrict to your deployment FQDN and/or add auth once the hostname is known —
+        // see DEPLOYMENT.md security note.
+        allowed_origins: Some(AllowedOrigins::any()),
         ..Default::default()
     };
 
@@ -530,6 +540,9 @@ mod tests {
 }
 "#;
 
+fn generate_lib_rs(server_common_dir: &Path) -> Result<()> {
+    let content = LIB_RS_TEMPLATE;
+
     fs::write(server_common_dir.join("src").join("lib.rs"), content)
         .or_else(|_| {
             // Create src/ directory if it doesn't exist
@@ -539,4 +552,34 @@ mod tests {
         .context("Failed to create server-common lib.rs")?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod template_defaults_tests {
+    use super::LIB_RS_TEMPLATE;
+
+    // Locks the two spike-007 traps into the generated server template against
+    // future edits (same defensive shape as the azure `dockerfile_carries_007_findings` test).
+
+    #[test]
+    fn template_sets_proxy_safe_allowed_origins() {
+        // 007 Finding 1: allowed_origins: None 403s every request through ingress.
+        assert!(
+            LIB_RS_TEMPLATE.contains("AllowedOrigins::any()"),
+            "scaffolded server must set allowed_origins: Some(AllowedOrigins::any()) for proxy-safe ingress"
+        );
+    }
+
+    #[test]
+    fn template_binds_unspecified_not_localhost() {
+        // 007 Finding 2: binding 127.0.0.1 makes the container unreachable behind ingress.
+        assert!(
+            LIB_RS_TEMPLATE.contains("Ipv4Addr::UNSPECIFIED"),
+            "scaffolded server must bind 0.0.0.0 (Ipv4Addr::UNSPECIFIED) for container reachability"
+        );
+        assert!(
+            !LIB_RS_TEMPLATE.contains("Ipv4Addr::LOCALHOST"),
+            "scaffolded server must NOT bind Ipv4Addr::LOCALHOST — unreachable behind ingress"
+        );
+    }
 }

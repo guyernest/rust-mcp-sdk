@@ -82,6 +82,13 @@ impl InitCommand {
     }
 
     pub fn execute(&self) -> Result<()> {
+        // Dispatch on target_type at the TOP, BEFORE any AWS-specific work.
+        // Container targets (e.g. azure-container-apps) generate a Dockerfile
+        // via the target's own `init()` and must NOT touch AWS creds or CDK.
+        if self.target_type == "azure-container-apps" {
+            return self.init_container_target("azure-container-apps");
+        }
+
         println!("🚀 Initializing AWS Lambda deployment...");
         println!();
 
@@ -146,6 +153,42 @@ impl InitCommand {
             println!("  Registration:  <api-url>/oauth2/register");
             println!("  Authorization: <api-url>/oauth2/authorize");
             println!("  Token:         <api-url>/oauth2/token");
+        }
+
+        Ok(())
+    }
+
+    /// Initialise a container deploy target (e.g. Azure Container Apps).
+    ///
+    /// Writes a `.pmcp/deploy.toml` stub with `[target] type = "<target_id>"`
+    /// (via `create_config`), then resolves the target from the registry and
+    /// invokes its async `DeploymentTarget::init`, which generates the
+    /// Dockerfile + `.dockerignore` and prints the ingress security warning.
+    /// Deliberately skips `check_aws_credentials` / `create_cdk_project` /
+    /// `install_cdk_deps` — those are AWS-Lambda-only.
+    fn init_container_target(&self, target_id: &str) -> Result<()> {
+        println!("🚀 Initializing {target_id} deployment...");
+        println!();
+
+        // 1. Resolve the server name and write the deploy.toml stub.
+        //    `create_config` sets `config.target.target_type = self.target_type`.
+        let server_name = self.get_server_name()?;
+        self.create_config(&server_name)?;
+
+        // 2. Resolve the target and run its own init() (Dockerfile + .dockerignore).
+        let registry = crate::deployment::TargetRegistry::new();
+        let target = registry.get(target_id)?;
+        let config = crate::deployment::config::DeployConfig::load(&self.project_root)?;
+
+        // `execute()` is sync but is itself invoked from inside the tokio runtime
+        // started by `DeployCommand::execute` (block_on). Creating a *new* runtime
+        // here panics ("Cannot start a runtime from within a runtime"). Drive the
+        // async init() on the current runtime when one exists; otherwise (unit
+        // tests) spin a fresh one.
+        let init_fut = target.init(&config);
+        match tokio::runtime::Handle::try_current() {
+            Ok(handle) => tokio::task::block_in_place(|| handle.block_on(init_fut))?,
+            Err(_) => tokio::runtime::Runtime::new()?.block_on(init_fut)?,
         }
 
         Ok(())
@@ -2060,5 +2103,84 @@ mod wave1_stack_ts_tests {
             !ts.contains("// Operator-declared IAM"),
             "wave3: empty IamConfig must not emit the operator banner"
         );
+    }
+}
+
+#[cfg(test)]
+mod azure_container_init_tests {
+    //! Phase 80 Wave 2 Task 2: `deploy init --target azure-container-apps`
+    //! dispatches at the top of `execute()`, writes the container artifacts via
+    //! the target's own `init()`, and skips the entire AWS-Lambda/CDK path.
+    //!
+    //! `InitCommand`'s fields are private, so this lives in-crate.
+
+    use super::*;
+
+    /// A throwaway project dir with a minimal `Cargo.toml` so `get_server_name`
+    /// resolves a package name. Returns the dir (caller cleans up).
+    fn make_temp_project(tag: &str) -> PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("pmcp-azure-init-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("Cargo.toml"),
+            "[package]\nname = \"demo-mcp\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        )
+        .unwrap();
+        dir
+    }
+
+    fn make_azure_init(project_root: PathBuf) -> InitCommand {
+        InitCommand {
+            project_root,
+            region: "eastus".to_string(),
+            check_credentials: false,
+            oauth_options: OAuthOptions::default(),
+            target_type: "azure-container-apps".to_string(),
+        }
+    }
+
+    #[test]
+    fn azure_init_writes_container_artifacts_and_skips_cdk() {
+        let dir = make_temp_project("artifacts");
+        let cmd = make_azure_init(dir.clone());
+
+        cmd.execute()
+            .expect("azure-container-apps init should succeed");
+
+        // Container artifacts exist.
+        assert!(
+            dir.join("Dockerfile").exists(),
+            "init must generate a Dockerfile"
+        );
+        assert!(
+            dir.join(".dockerignore").exists(),
+            "init must generate a .dockerignore"
+        );
+
+        // deploy.toml stub exists and declares the azure target type.
+        let deploy_toml = dir.join(".pmcp/deploy.toml");
+        assert!(
+            deploy_toml.exists(),
+            "init must write .pmcp/deploy.toml stub"
+        );
+        let toml_body = std::fs::read_to_string(&deploy_toml).unwrap();
+        assert!(
+            toml_body.contains("azure-container-apps"),
+            "deploy.toml must record type = azure-container-apps, got:\n{toml_body}"
+        );
+
+        // The AWS-Lambda/CDK path must NOT have run: no deploy/ dir, no CDK package.json.
+        assert!(
+            !dir.join("deploy").exists(),
+            "azure init must NOT create the CDK deploy/ directory"
+        );
+        assert!(
+            !dir.join("deploy/package.json").exists(),
+            "azure init must NOT create a CDK package.json"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
