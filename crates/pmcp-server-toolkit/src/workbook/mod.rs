@@ -91,6 +91,12 @@ pub use pmcp_workbook_runtime::{
 /// The binary-baked [`BundleSource`] (WBSV-09), re-exported only when the
 /// toolkit's `workbook-embedded` feature layers the runtime's `embedded`
 /// (include_dir) support on top of the LocalDirSource-only `workbook` build.
+///
+/// To construct one, invoke the `include_dir::include_dir!` macro over a
+/// committed bundle directory (add `include_dir` as a dependency — the macro
+/// emits unqualified `include_dir::` paths so the crate must be nameable at the
+/// consumer's root) and pass the resulting `&'static Dir` to
+/// [`EmbeddedSource::new`].
 #[cfg(feature = "workbook-embedded")]
 pub use pmcp_workbook_runtime::EmbeddedSource;
 
