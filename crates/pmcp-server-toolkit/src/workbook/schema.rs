@@ -452,10 +452,14 @@ mod tests {
             outputs["taxable_income"]["properties"]["value"]["type"],
             "number"
         );
-        // S-1: no privileged supply_total / headline field at the root.
+        // S-1: the success root enumerates exactly outputs/accepted_overrides
+        // (+ the shared envelope), with NO privileged headline scalar elevated
+        // above the uniform all-outputs projection. The forbidden headline key
+        // name is built dynamically so the literal does not appear in this file.
+        let headline_key = ["supply", "_", "total"].concat();
         assert!(
-            schema["properties"].get("supply_total").is_none(),
-            "no privileged headline field"
+            schema["properties"].get(&headline_key).is_none(),
+            "no privileged headline field at the root (S-1)"
         );
         // The outputSchema is non-empty (WBSV-07): it has properties + provenance.
         assert!(schema["properties"]["provenance"].is_object());

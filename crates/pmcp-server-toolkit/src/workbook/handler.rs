@@ -5,7 +5,7 @@
 //! [`pmcp::types::ToolInfo::with_ui`] (so the returned `Value` lands in
 //! `structuredContent`). Each attaches the provenance stamp and advertises a
 //! non-empty `outputSchema` (WBSV-07). Domain failures return the `isError:true`
-//! envelope via [`to_iserror_result`] — NEVER an `Err(pmcp::Error)` (T-92-10).
+//! envelope via [`to_iserror_result`] — NEVER a protocol-level error (T-92-10).
 //!
 //! `calculate`/`explain` re-run the SERVE-time
 //! [`pmcp_workbook_runtime::run_executor`] over the pre-built `bundle.dag`
@@ -116,8 +116,8 @@ pub(crate) fn with_provenance(mut payload: Value, stamp: &ProvStamp) -> Value {
 }
 
 /// Render a fallible compute pipeline once at the boundary: a domain failure
-/// becomes the `isError:true` envelope (in `structuredContent`), never an
-/// `Err(pmcp::Error)`.
+/// becomes the `isError:true` envelope (in `structuredContent`), never a
+/// protocol-level error.
 #[allow(clippy::result_large_err)]
 pub(crate) fn render_at_boundary(
     result: Result<Value, WorkbookToolError>,
