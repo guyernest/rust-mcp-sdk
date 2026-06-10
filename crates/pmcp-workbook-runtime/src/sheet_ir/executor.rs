@@ -121,7 +121,12 @@ pub fn run(
                 ..
             }) => {
                 let mut trace = EvalTrace::new(&key);
-                let result = eval_expr(e, &env, &errs, &mut trace);
+                // WR-04: the OWNING cell's sheet (from its `sheet!addr` key) is
+                // the default an unqualified Range falls back to in
+                // `expand_range` — without it, an empty `range.sheet` expanded
+                // to phantom `"!B2"` keys that could never match env.
+                let current_sheet = key.split_once('!').map_or("", |(s, _)| s);
+                let result = eval_expr(e, &env, &errs, current_sheet, &mut trace);
                 if let CellValue::Error(err) = &result {
                     errs.insert(key.clone(), *err);
                     trace.short_circuited.get_or_insert(*err);
@@ -141,10 +146,13 @@ pub fn run(
 }
 
 /// Recursively evaluate the WHOLE [`Expr`] tree to a scalar [`CellValue`].
+/// `current_sheet` is the OWNING cell's sheet (WR-04) — the default an
+/// unqualified [`Expr::Range`] member falls back to in `expand_range`.
 fn eval_expr(
     e: &Expr,
     env: &CellEnv,
     errs: &HashMap<String, ExcelError>,
+    current_sheet: &str,
     trace: &mut EvalTrace,
 ) -> CellValue {
     trace.formula.get_or_insert_with(|| format!("{e:?}"));
@@ -152,7 +160,7 @@ fn eval_expr(
         Expr::Call { name, args } => {
             let vals: Vec<EvalValue> = args
                 .iter()
-                .map(|a| materialize_arg(a, env, errs, trace))
+                .map(|a| materialize_arg(a, env, errs, current_sheet, trace))
                 .collect();
             trace.dispatched_fn = Some(name.clone());
             for v in &vals {
@@ -171,8 +179,8 @@ fn eval_expr(
         }
         Expr::BinaryOp { left, op, right } => {
             if matches!(op, BinOp::Pow) {
-                let lv = eval_expr(left, env, errs, trace);
-                let rv = eval_expr(right, env, errs, trace);
+                let lv = eval_expr(left, env, errs, current_sheet, trace);
+                let rv = eval_expr(right, env, errs, current_sheet, trace);
                 let l = semantics::to_number(&lv);
                 let r = semantics::to_number(&rv);
                 return match (l, r) {
@@ -181,11 +189,11 @@ fn eval_expr(
                 };
             }
             if is_leaf_lowerable(left) && is_leaf_lowerable(right) {
-                record_refs(e, env, trace);
+                record_refs(e, env, current_sheet, trace);
                 return eval_leaf(e, env, errs);
             }
-            let l = eval_expr(left, env, errs, trace);
-            let r = eval_expr(right, env, errs, trace);
+            let l = eval_expr(left, env, errs, current_sheet, trace);
+            let r = eval_expr(right, env, errs, current_sheet, trace);
             let lowered = Expr::BinaryOp {
                 left: Box::new(scalar_to_leaf(&l)),
                 op: *op,
@@ -195,17 +203,17 @@ fn eval_expr(
         }
         Expr::UnaryOp { op, operand } => {
             if matches!(op, UnOp::Percent) {
-                let v = eval_expr(operand, env, errs, trace);
+                let v = eval_expr(operand, env, errs, current_sheet, trace);
                 return match semantics::to_number(&v) {
                     Ok(x) => finite_or_num(percent(x)),
                     Err(e) => CellValue::Error(e),
                 };
             }
             if is_leaf_lowerable(operand) {
-                record_refs(e, env, trace);
+                record_refs(e, env, current_sheet, trace);
                 return eval_leaf(e, env, errs);
             }
-            let v = eval_expr(operand, env, errs, trace);
+            let v = eval_expr(operand, env, errs, current_sheet, trace);
             let lowered = Expr::UnaryOp {
                 op: *op,
                 operand: Box::new(scalar_to_leaf(&v)),
@@ -213,7 +221,7 @@ fn eval_expr(
             eval_leaf(&lowered, env, errs)
         }
         other => {
-            record_refs(other, env, trace);
+            record_refs(other, env, current_sheet, trace);
             eval_leaf(other, env, errs)
         }
     }
@@ -256,30 +264,28 @@ fn scalar_to_leaf(cv: &CellValue) -> Expr {
     }
 }
 
-/// Materialize a function argument into an [`EvalValue`].
+/// Materialize a function argument into an [`EvalValue`]. `current_sheet` is the
+/// OWNING cell's sheet — `expand_range` defaults an unqualified range
+/// (`range.sheet.is_empty()`) onto it (WR-04: the old
+/// `if range.sheet.is_empty() { "" }` conditional was a no-op that expanded
+/// unqualified ranges to phantom `"!B2"` keys).
 fn materialize_arg(
     a: &Expr,
     env: &CellEnv,
     errs: &HashMap<String, ExcelError>,
+    current_sheet: &str,
     trace: &mut EvalTrace,
 ) -> EvalValue {
     match a {
-        Expr::Range(range) => {
-            let current_sheet = if range.sheet.is_empty() {
-                ""
-            } else {
-                &range.sheet
-            };
-            match resolve::expand_range(range, current_sheet) {
-                Ok((keys, shape)) => build_range(&keys, shape, env, errs, trace),
-                Err(_) => {
-                    trace.short_circuited.get_or_insert(ExcelError::Ref);
-                    EvalValue::Scalar(CellValue::Error(ExcelError::Ref))
-                }
+        Expr::Range(range) => match resolve::expand_range(range, current_sheet) {
+            Ok((keys, shape)) => build_range(&keys, shape, env, errs, trace),
+            Err(_) => {
+                trace.short_circuited.get_or_insert(ExcelError::Ref);
+                EvalValue::Scalar(CellValue::Error(ExcelError::Ref))
             }
-        }
+        },
         Expr::Name(_) => EvalValue::Scalar(CellValue::Error(ExcelError::Name)),
-        scalar => EvalValue::Scalar(eval_expr(scalar, env, errs, trace)),
+        scalar => EvalValue::Scalar(eval_expr(scalar, env, errs, current_sheet, trace)),
     }
 }
 
@@ -332,27 +338,24 @@ fn build_range(
 /// keys to build edges) and [`record_refs`] (which additionally reads each key's
 /// current env value into the trace) — so the two cannot disagree on what a cell
 /// depends on.
-fn collect_ref_keys(e: &Expr, out: &mut Vec<String>) {
+fn collect_ref_keys(e: &Expr, current_sheet: &str, out: &mut Vec<String>) {
     match e {
         Expr::Ref(addr) => out.push(addr.clone()),
         Expr::Range(range) => {
-            let current_sheet = if range.sheet.is_empty() {
-                ""
-            } else {
-                &range.sheet
-            };
+            // WR-04: an unqualified range defaults onto the OWNING cell's sheet
+            // inside `expand_range` — never onto an empty-sheet `"!B2"` key.
             if let Ok((keys, _shape)) = resolve::expand_range(range, current_sheet) {
                 out.extend(keys);
             }
         }
         Expr::BinaryOp { left, right, .. } => {
-            collect_ref_keys(left, out);
-            collect_ref_keys(right, out);
+            collect_ref_keys(left, current_sheet, out);
+            collect_ref_keys(right, current_sheet, out);
         }
-        Expr::UnaryOp { operand, .. } => collect_ref_keys(operand, out),
+        Expr::UnaryOp { operand, .. } => collect_ref_keys(operand, current_sheet, out),
         Expr::Call { args, .. } => {
             for a in args {
-                collect_ref_keys(a, out);
+                collect_ref_keys(a, current_sheet, out);
             }
         }
         Expr::Number(_) | Expr::Str(_) | Expr::Bool(_) | Expr::Name(_) | Expr::ErrorLit(_) => {}
@@ -361,9 +364,9 @@ fn collect_ref_keys(e: &Expr, out: &mut Vec<String>) {
 
 /// Record every ref the leaf-lowered [`Expr`] `e` depends on + its current env
 /// value into the trace, sharing the single [`collect_ref_keys`] walk.
-fn record_refs(e: &Expr, env: &CellEnv, trace: &mut EvalTrace) {
+fn record_refs(e: &Expr, env: &CellEnv, current_sheet: &str, trace: &mut EvalTrace) {
     let mut keys = Vec::new();
-    collect_ref_keys(e, &mut keys);
+    collect_ref_keys(e, current_sheet, &mut keys);
     for key in keys {
         let cv = env_lookup(env, &key).unwrap_or(CellValue::Empty);
         trace.resolved_refs.push((key, cv));
@@ -384,8 +387,12 @@ pub fn build_dag(ir: &HashMap<String, Cell>) -> Dag {
     for (key, cell) in ir {
         dag.add_node(key);
         if let CellExpr::Formula(e) = &cell.expr {
+            // WR-04: the owning cell's sheet (from its `sheet!addr` key) is the
+            // default an unqualified range expands onto — so DAG edges and the
+            // eval-time walk agree on the SAME qualified member keys.
+            let current_sheet = key.split_once('!').map_or("", |(s, _)| s);
             let mut deps = Vec::new();
-            collect_ref_keys(e, &mut deps);
+            collect_ref_keys(e, current_sheet, &mut deps);
             for dep in deps {
                 dag.add_edge(key, &dep);
             }
@@ -702,6 +709,34 @@ mod tests {
             "every range member is a DAG edge (not dropped)"
         );
         // The built DAG drives a correct topo run.
+        let out = run(&ir, &dag, &CellEnv::new()).expect("no cycle");
+        assert_eq!(out.computed.get("S!C1"), Some(&CellValue::Number(60.0)));
+    }
+
+    #[test]
+    fn unqualified_range_defaults_to_the_owning_cells_sheet() {
+        // WR-04 regression: a RangeRef with an EMPTY sheet (legal per the type;
+        // expand_range supports defaulting) must default onto the OWNING cell's
+        // sheet — the old no-op conditional expanded it to phantom `"!B2"` keys
+        // that never matched env, turning every member into a silent #REF!.
+        let ir: HashMap<String, Cell> = [
+            lit("S!B2", 10.0),
+            lit("S!B3", 20.0),
+            lit("S!B4", 30.0),
+            formula("S!C1", call("SUM", vec![range("", "B2", "B4")])),
+        ]
+        .into_iter()
+        .collect();
+        // build_dag must create edges to the QUALIFIED member keys (not "!B2").
+        let dag = build_dag(&ir);
+        let mut deps = dag.dependencies_of("S!C1").to_vec();
+        deps.sort();
+        assert_eq!(
+            deps,
+            vec!["S!B2".to_string(), "S!B3".to_string(), "S!B4".to_string()],
+            "unqualified range edges are sheet-qualified, not phantom \"!B2\" nodes"
+        );
+        // And the run resolves the members (not a silent #REF!).
         let out = run(&ir, &dag, &CellEnv::new()).expect("no cycle");
         assert_eq!(out.computed.get("S!C1"), Some(&CellValue::Number(60.0)));
     }
