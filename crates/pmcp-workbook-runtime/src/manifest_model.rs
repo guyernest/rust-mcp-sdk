@@ -243,6 +243,24 @@ pub struct GovernedDatum {
     pub provenance: Option<String>,
 }
 
+/// One declared output/cell annotation (D-18): a neutral, additive note binding
+/// a human-readable `meaning` to a `target` (a cell key or output name).
+///
+/// Annotations are PURELY descriptive metadata the served tools may surface; they
+/// carry no integrity or routing semantics. The field is additive and
+/// `#[serde(default)]` on [`Manifest`], so older manifests without an
+/// `annotations` key deserialize unchanged (the [`CellRole::allowed_values`]
+/// additive-serde precedent).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct AnnotationDecl {
+    /// The annotation name (a stable label).
+    pub name: String,
+    /// The annotation target — a cell key (`sheet!addr`) or an output name.
+    pub target: String,
+    /// The human-readable meaning this annotation conveys.
+    pub meaning: String,
+}
+
 /// The logical manifest — the source of truth for cell roles + metadata that
 /// REPLACES colour as canonical (DIA-03). Synthesis builds a CANDIDATE
 /// (`ratified = false`); BA ratification (Plan 05) makes it conformant.
@@ -280,6 +298,13 @@ pub struct Manifest {
     /// Declared capability calls (ART-02 — DECLARE-ONLY seam).
     #[serde(default)]
     pub capability_calls: Vec<CapabilityDecl>,
+    /// Additive output/cell annotations (D-18): purely descriptive metadata the
+    /// served tools may surface. `#[serde(default)]` so old manifests without the
+    /// key deserialize to an empty Vec; `skip_serializing_if` keeps existing
+    /// `manifest.json` snapshots byte-stable when empty (the `allowed_values`
+    /// additive-serde precedent).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub annotations: Vec<AnnotationDecl>,
 }
 
 #[cfg(test)]
@@ -362,6 +387,7 @@ mod tests {
             ],
             changelog: vec![],
             capability_calls: vec![],
+            annotations: vec![],
         };
 
         let json = serde_json::to_string(&manifest).expect("serialize Manifest");
@@ -389,6 +415,7 @@ mod tests {
             }],
             changelog: vec![],
             capability_calls: vec![],
+            annotations: vec![],
         };
         let json = serde_json::to_string(&manifest).expect("serialize Manifest");
         let back: Manifest = serde_json::from_str(&json).expect("deserialize Manifest");
@@ -578,6 +605,83 @@ mod tests {
         assert!(
             m.capability_calls.is_empty(),
             "absent capability_calls defaults empty"
+        );
+    }
+
+    #[test]
+    fn annotations_default_to_empty_when_absent_from_json() {
+        // A manifest JSON serialized BEFORE the annotations field existed must
+        // still deserialize (serde default → empty Vec). D-18 additive contract.
+        let json = r#"{
+            "schema_version": 1,
+            "workflow": "tax-calc",
+            "workbook_hash": null,
+            "ratified": false,
+            "ratified_by": null,
+            "ratified_at": null,
+            "cells": [],
+            "loop_block": null
+        }"#;
+        let m: Manifest = serde_json::from_str(json).expect("deserialize without annotations");
+        assert!(
+            m.annotations.is_empty(),
+            "absent annotations must default to an empty Vec"
+        );
+    }
+
+    #[test]
+    fn annotations_round_trip_to_equality_when_present() {
+        let mut m: Manifest = serde_json::from_str(
+            r#"{
+                "schema_version": 1,
+                "workflow": "tax-calc",
+                "workbook_hash": null,
+                "ratified": false,
+                "ratified_by": null,
+                "ratified_at": null,
+                "cells": [],
+                "loop_block": null
+            }"#,
+        )
+        .expect("base manifest");
+        m.annotations = vec![
+            AnnotationDecl {
+                name: "headline".to_string(),
+                target: "out_total".to_string(),
+                meaning: "The total payable amount".to_string(),
+            },
+            AnnotationDecl {
+                name: "rate".to_string(),
+                target: "1_Inputs!E6".to_string(),
+                meaning: "The applied tax rate".to_string(),
+            },
+        ];
+        let json = serde_json::to_string(&m).expect("serialize Manifest with annotations");
+        let back: Manifest = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(m, back, "annotations must serde round-trip to equality");
+    }
+
+    #[test]
+    fn empty_annotations_are_skipped_from_serialization() {
+        // skip_serializing_if keeps existing manifest.json snapshots byte-stable:
+        // an empty annotations Vec must NOT appear as a key at all.
+        let m: Manifest = serde_json::from_str(
+            r#"{
+                "schema_version": 1,
+                "workflow": "tax-calc",
+                "workbook_hash": null,
+                "ratified": false,
+                "ratified_by": null,
+                "ratified_at": null,
+                "cells": [],
+                "loop_block": null
+            }"#,
+        )
+        .expect("base manifest");
+        let v = serde_json::to_value(&m).expect("serialize Manifest");
+        assert!(
+            v.get("annotations").is_none(),
+            "empty annotations must be skipped from serialization, got {v}"
         );
     }
 
