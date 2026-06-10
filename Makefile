@@ -521,6 +521,30 @@ purity-check:
 	  done; \
 	done; \
 	echo "purity-check: Layer 1 clean — no umya/calamine/quick-xml/swc_/pmcp-code-mode in $(PURITY_CRATES) (all feature combos); rust_xlsxwriter present in $(PURITY_WRITER_CRATES) (zip permitted via the writer)"
+	@# Phase 92 (T-92-19, WBRT-04 carried forward): the served toolkit's workbook
+	@# features must stay reader-free. This is a DISTINCT per-feature-combination
+	@# assertion — `pmcp-server-toolkit` is NOT in PURITY_CRATES (it carries
+	@# code-mode/sql/http and is therefore NOT unconditionally reader-free; RESEARCH
+	@# Pitfall 1 / A5). Both combos are checked: `--features workbook` (LocalDirSource
+	@# only) AND `--features workbook-embedded` (the include_dir-bearing tree). The
+	@# embedded combo is the critical one — it pulls include_dir and must STILL be
+	@# reader-free. Fails closed on a non-zero cargo status from either invocation.
+	@echo "$(BLUE)purity-check: Phase 92 — pmcp-server-toolkit workbook[-embedded] reader-absence (distinct from PURITY_CRATES)$(NC)"
+	@set -euo pipefail; \
+	BAN='umya|calamine|quick-xml|swc_|pmcp-code-mode'; \
+	for feat in "workbook" "workbook-embedded"; do \
+	  status=0; tree=$$(cargo tree -p pmcp-server-toolkit --no-default-features --features "$$feat" 2>&1) || status=$$?; \
+	  if [ $$status -ne 0 ]; then \
+	    echo "purity-check FAILED: cargo tree errored for pmcp-server-toolkit (--features $$feat) [exit $$status] — failing closed"; \
+	    printf '%s\n' "$$tree"; \
+	    exit 1; \
+	  fi; \
+	  if printf '%s\n' "$$tree" | grep -Ei "$$BAN"; then \
+	    echo "purity-check FAILED: reader/JS dep in pmcp-server-toolkit (--features $$feat) — the served workbook boundary is breached"; \
+	    exit 1; \
+	  fi; \
+	done; \
+	echo "purity-check: pmcp-server-toolkit workbook + workbook-embedded are reader-free (umya/calamine/quick-xml/swc_/pmcp-code-mode absent in BOTH; include_dir permitted in the embedded tree)"
 	@echo "$(BLUE)purity-check: Layer 2 — crate-local cargo-deny [bans] (--manifest-path scoped; workspace deny.toml untouched)$(NC)"
 	@# WR-02 fail-closed guard: cargo-deny 0.18.3 does NOT fail on a missing
 	@# --config path — it WARNs and falls back to the default (empty-ban) config,
