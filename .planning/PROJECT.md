@@ -90,7 +90,7 @@ Tool handlers can manage long-running operations through a durable task lifecycl
 
 ## Current State
 
-Milestone v2.3 (Excel-as-Configuration MCP Servers) starting — defining requirements. v2.2 (Configuration-Only MCP Servers / SQL + OpenAPI toolkits) substantially complete: phases 82–90.2 delivered the toolkit-core lift, SQL connectors (postgres/mysql/athena/sqlite), all four DX shapes, and the OpenAPI built-in server with advanced examples; remaining v2.2 items are experimental 999.x phases. All prior milestones (v1.0–v2.1) shipped.
+Milestone v2.3 (Excel-as-Configuration MCP Servers) in progress — Phase 91 complete (2026-06-10): reader-free `pmcp-workbook-runtime` leaf crate lifted from the lighthouse (deterministic evaluator, writer-only `.xlsx` renderer, 130+ tests), `pmcp-workbook-dialect` contract crate (flat 13-fn WHITELIST + versioned `docs/workbook-dialect-spec.md` + doc↔const binding test, WBDL-01), and the fail-closed three-layer purity gate (`make`/`just purity-check` + crate-local cargo-deny bans + merge-blocking CI job, WBRT-04). WBDL-03 (linter) re-mapped to Phase 93 per D-02. Next: Phase 92 (BundleSource + served-tool toolkit module). v2.2 (Configuration-Only MCP Servers / SQL + OpenAPI toolkits) substantially complete: phases 82–90.2 delivered the toolkit-core lift, SQL connectors (postgres/mysql/athena/sqlite), all four DX shapes, and the OpenAPI built-in server with advanced examples; remaining v2.2 items are experimental 999.x phases. All prior milestones (v1.0–v2.1) shipped.
 
 v2.3 extracts the proven Excel-as-Configuration compiler from the `ai-on-cloud/towelrads-quote-pricing` lighthouse (its milestone v0.5.0 — phases 7–14 — is complete: golden quote reconciled to ±£0.01, ~730 workspace tests, snapshot tests on `tools/list` schemas, promote-gate integration tests including a real BA `--accept` flow, crate-level `#![deny(clippy::unwrap_used, expect_used, panic)]` on value paths). The extraction is a full end-to-end cut: runtime + compiler + CLI subcommands + generic served-tool toolkit module, with the known generalization gaps (RFC §5) redesigned rather than copied.
 
@@ -194,4 +194,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-06-09 — milestone v2.3 (Excel-as-Configuration MCP Servers) started, derived from the `towelrads-quote-pricing` lighthouse RFC (sdk-issue-excel-workbook-compiler-extraction.md); previously 2026-05-27 — Phase 85 complete (Shape A pure-config binary + Chinook reference parity)*
+*Last updated: 2026-06-10 — Phase 91 complete (workbook runtime + purity gate + dialect spec; requirements WBRT-01..04, WBDL-01 validated); previously 2026-06-09 — milestone v2.3 (Excel-as-Configuration MCP Servers) started, derived from the `towelrads-quote-pricing` lighthouse RFC*
