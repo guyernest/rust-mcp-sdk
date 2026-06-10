@@ -1,6 +1,5 @@
-//! Byte-stability + boot-integrity tests for the committed `tax-calc@1.1.0`
-//! golden bundle (Phase 92 Plan 02, Task 2). The tamper negative-path tests are
-//! appended by Task 3.
+//! Byte-stability + boot-integrity + tamper negative-path tests for the committed
+//! `tax-calc@1.1.0` golden bundle (Phase 92 Plan 02, Tasks 2 & 3).
 //!
 //! - [`golden_regeneration_is_byte_identical`] is the CI mechanism enforcing D-03:
 //!   any code change that would alter a golden artifact is caught because the
@@ -8,6 +7,9 @@
 //!   golden member must match its freshly-generated counterpart byte-for-byte.
 //! - [`golden_passes_boot_integrity`] proves the committed golden passes the same
 //!   fail-closed `load_bundle` gate real bundles do (WBSV-08).
+//! - The `tamper_*` tests prove the copy-then-corrupt helpers each provoke a
+//!   DISTINCT fail-closed `BundleLoadError` variant (D-05 — no committed corrupt
+//!   fixtures; corruption happens in a tempdir copy).
 //!
 //! The whole binary is gated on the `workbook` feature (the generator + the
 //! runtime loader only exist there). Run with:
@@ -19,9 +21,10 @@ mod support;
 
 use std::path::{Path, PathBuf};
 
-use pmcp_workbook_runtime::{load_bundle, LocalDirSource};
+use pmcp_workbook_runtime::{load_bundle, BundleLoadError, LocalDirSource};
 
 use support::fixture_gen::{generate_tax_calc_bundle, BUNDLE_ID, VERSION};
+use support::tamper;
 
 /// The committed golden bundle directory (relative to the crate manifest dir).
 fn golden_dir() -> PathBuf {
@@ -100,4 +103,66 @@ fn golden_passes_boot_integrity() {
         !bundle.manifest.annotations.is_empty(),
         "golden manifest declares bracket-boundary annotations"
     );
+}
+
+// === Task 3: tamper negative paths (D-05 — copy-then-corrupt in a tempdir) ===
+
+/// T-92-01: a single byte mutation in a hash-covered member is rejected with
+/// `IntegrityMismatch`.
+#[test]
+fn tamper_flip_byte_provokes_integrity_mismatch() {
+    let dir = tamper::copy_golden_to_temp();
+    tamper::flip_byte(dir.path(), "manifest.json");
+    let source = LocalDirSource::new(dir.path());
+    match load_bundle(&source) {
+        Err(BundleLoadError::IntegrityMismatch {
+            expected,
+            recomputed,
+            ..
+        }) => assert_ne!(expected, recomputed, "diagnostic carries found-vs-expected"),
+        other => panic!("expected IntegrityMismatch, got {other:?}"),
+    }
+}
+
+/// A deleted member surfaces as a load error (missing member), never a panic.
+#[test]
+fn tamper_delete_artifact_provokes_load_error() {
+    let dir = tamper::copy_golden_to_temp();
+    tamper::delete_artifact(dir.path(), "manifest.json");
+    let source = LocalDirSource::new(dir.path());
+    assert!(
+        load_bundle(&source).is_err(),
+        "a deleted member must fail closed (load error), not load successfully"
+    );
+}
+
+/// T-92-02: a lock whose version disagrees with the changelog `to_version` is
+/// rejected with `StampMismatch` on the `version` field.
+#[test]
+fn tamper_desync_lock_version_provokes_stamp_mismatch() {
+    let dir = tamper::copy_golden_to_temp();
+    tamper::desync_lock_version(dir.path());
+    let source = LocalDirSource::new(dir.path());
+    match load_bundle(&source) {
+        Err(BundleLoadError::StampMismatch { field, .. }) => {
+            assert_eq!(field, "version", "version desync fires the version stamp gate")
+        },
+        other => panic!("expected StampMismatch on version, got {other:?}"),
+    }
+}
+
+/// T-92-22 / Codex MEDIUM #9: an extra member outside the frozen allow-set is
+/// rejected with `UnexpectedMember` BEFORE parsing.
+#[test]
+fn tamper_add_unexpected_member_provokes_unexpected_member() {
+    let dir = tamper::copy_golden_to_temp();
+    tamper::add_unexpected_member(dir.path());
+    let source = LocalDirSource::new(dir.path());
+    match load_bundle(&source) {
+        Err(BundleLoadError::UnexpectedMember { member }) => assert!(
+            member.ends_with("sneaky.json"),
+            "the unexpected member is named in the diagnostic, got {member}"
+        ),
+        other => panic!("expected UnexpectedMember, got {other:?}"),
+    }
 }
