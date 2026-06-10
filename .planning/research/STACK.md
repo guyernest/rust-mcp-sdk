@@ -1,291 +1,203 @@
-# Stack Research: rmcp Documentation & DX Upgrades (v2.1)
+# Technology Stack — v2.3 Governed Excel (Workbook) CodeLanguage
 
-**Domain:** Documentation quality, docs.rs presentation, README accuracy, macro documentation
-**Researched:** 2026-04-10
-**Confidence:** HIGH (all findings verified against actual codebase files in both repos)
-**Mode:** Subsequent milestone -- only documentation/DX gaps benchmarked against rmcp
+**Project:** PMCP SDK — extract the Excel-workbook → MCP-server compiler from the TowelRads `quote-pricing` lighthouse into two SDK crates (`pmcp-workbook-runtime` + `pmcp-workbook-compiler`) plus a `pmcp-server-toolkit` served-tool module.
+**Researched:** 2026-06-09
+**Scope:** ONLY the stack additions/changes for the NEW workbook capability. Existing SDK toolkit capabilities (auth, secrets, static handlers, `[[tools]]` synthesis, SQL/OpenAPI connectors, `pmcp-code-mode`) are the integration target and are NOT re-researched.
+**Overall confidence:** HIGH — every crate version was verified against crates.io on 2026-06-09; the lighthouse pins are already current; the SDK already vendors the serde/schemars/sha2/hex/jsonschema versions the lighthouse uses.
 
-## Executive Assessment
+---
 
-PMCP has a **documentation presentation gap, not a documentation quantity gap**. PMCP actually has MORE documentation content than rmcp (682-line README, 252-line macros README, extensive rustdoc comments), but rmcp presents its documentation more effectively through three specific patterns that PMCP should adopt:
+## Headline: there are almost no *new* third-party crates
 
-1. **Crate-level README as docs.rs landing page** via `include_str!`
-2. **`doc_auto_cfg`** for automatic feature-flag badges on every gated item
-3. **Focused crate READMEs** that work well in both GitHub and docs.rs contexts
+The single most important stack finding: **the workbook capability adds exactly two non-trivial third-party crates** — `umya-spreadsheet` (reader, compiler-only) and `rust_xlsxwriter` (writer, runtime-only) — plus two low-level transitive-matching crates (`quick-xml`, `zip`) that exist only inside the compiler for quarantined provenance parsing. Everything else (serde, serde_json, schemars, sha2, hex, thiserror, chrono, jsonschema) is **already in the SDK workspace at the exact versions the lighthouse uses.** The formula parser, DAG, and `sheet_ir` Excel-semantics layer are **hand-rolled in the lighthouse** — there is no formula-engine crate to adopt, and adopting one would be a regression (see §3).
 
-No new crates or dependencies are needed. This is entirely configuration and content restructuring.
+This means the v2.3 stack risk is concentrated almost entirely in **one crate (`umya-spreadsheet`) and one boundary (the purity gate)**, not in a broad dependency expansion.
 
-## Gap Analysis: PMCP vs rmcp
+---
 
-### 1. docs.rs Feature Coverage Annotations
+## Recommended Stack
 
-**rmcp approach:**
+### Compiler crate (`pmcp-workbook-compiler`) — offline, build-time, reader-bearing
+
+| Technology | Version | Purpose | Why |
+|------------|---------|---------|-----|
+| `umya-spreadsheet` | `3.0` (latest `3.0.0`, 2026-06-03) | Read `.xlsx`: cells, formulas, cached values, colours, named ranges, data-validation lists, `_Manifest` sheet | The ONE reader. Lighthouse already on `3.0.0`; it is the newest stable. Pure-Rust, no native deps. MUST be confined to this crate (purity rule §5). |
+| `quick-xml` | `0.37` (pin to umya's transitive lock, **not** current 0.40.1) | Quarantined provenance reader: parse raw `calcPr@calcId` + `<Application>` from `docProps/app.xml` to detect umya's fabricated identity (§1 caveat) | Pin must match umya's own `quick-xml` (lighthouse `Cargo.lock` = 0.37.5). Bumping to 0.40.1 forks the resolved tree and risks a second copy. Re-derive the pin from `cargo tree -p umya-spreadsheet -i quick-xml` at extraction time. |
+| `zip` | `8` (latest stable `8.6.0`; **avoid 9.0.0-preX**) | Quarantined `.xlsx` (ZIP container) part reader for the same provenance probe | Match umya's transitive `zip` (lighthouse lock = 8.6.0). `9.0.0` is pre-release only — do not adopt. |
+| `serde` | `1` (+ `derive`) | Model (de)serialization | Already workspace-standard. |
+| `serde_json` | `1` | Bundle artifact JSON I/O (`manifest.json`, `executable.ir.json`, `cell_map.json`, `BUNDLE.lock`) | Already workspace-standard. |
+| `schemars` | `1.0` (latest `1.2.1`) | `outputSchema` / manifest JSON-Schema projection | SDK already pins `schemars = "1.0"` behind `schema-generation`. Exact match. |
+| `sha2` | `0.11` | `workbook_hash` + bundle content hashes | Matches `pmcp-code-mode` pin exactly. |
+| `hex` | `0.4` | Hash hex encoding | Matches `pmcp-code-mode` pin exactly. |
+| `thiserror` | `2` | Compiler error enums | Lighthouse uses `1`; SDK toolkit crates (`pmcp-server-toolkit`, `pmcp-toolkit-postgres`) standardized on `thiserror = "2"`. **Use `2`** to match the SDK's current convention. |
+| `chrono` | `0.4` (`clock`, `serde`, `std`) | Effective-date / approval timestamps | Matches SDK root pin. |
+| `pmcp-workbook-runtime` | path | Re-exports the owned IR/model types; compiler builds them, runtime executes them | Same leaf pattern as lighthouse: compiler depends on runtime and re-exports its types so the served binary links ONLY the runtime. |
+
+**Deliberately NOT in the compiler:** `pmcp-code-mode` with `js-runtime`. The lighthouse compiler pulled `pmcp-code-mode` (SWC JS kernel) as the offline calc engine. The SDK runtime already ships a **pure-Rust `scalar_eval`** leaf evaluator (`workbook-runtime/src/scalar_eval.rs`), and the served path uses it. Recommendation: **drop the SWC/`pmcp-code-mode` dependency from the SDK compiler** unless a concrete reconciliation gap requires the JS oracle. If retained for offline penny-reconciliation parity, gate it behind a non-default `js-oracle` feature so the default compiler build is SWC-free. This is a generalization decision for the roadmapper (LOW-MEDIUM confidence on whether the JS oracle is still load-bearing — verify against the lighthouse Phase-10 reconcile path during planning).
+
+### Runtime crate (`pmcp-workbook-runtime`) — served-binary, reader-free, writer-only
+
+| Technology | Version | Purpose | Why |
+|------------|---------|---------|-----|
+| `serde` | `1` (+ `derive`) | Owned IR + manifest model | Workspace-standard. |
+| `serde_json` | `1` | Deserialize bundle artifacts at serve time; emit `structuredContent` | Workspace-standard. |
+| `schemars` | `1.0` | `outputSchema` projection from the manifest model | Matches SDK. |
+| `thiserror` | `2` | Runtime error types | Match SDK convention. |
+| `sha2` | `0.11` | Bundle-artifact hash verification at load | Matches pin. |
+| `hex` | `0.4` | Hash encoding | Matches pin. |
+| `rust_xlsxwriter` | `0.95` (latest `0.95.0`, 2026-05-09), `default-features = false` | WRITER-ONLY `.xlsx` emitter for `render_workbook` (computed values → provenance-bound `workbook://` resource) | The single deliberate purity relaxation. A WRITER is not a READER. Pulls `zip` (deflate container) but no workbook parser. `default-features = false` drops chrono/serde extras the writer doesn't need. Author `jmcnamara`, MIT/Apache, clean audit. |
+
+**Deliberately NOT in the runtime:** `umya-spreadsheet`, `quick-xml`, `pmcp-code-mode`, any SWC crate. These are the banned tokens the purity gate asserts absent (§5). `zip` IS permitted (it enters only via `rust_xlsxwriter`, as the deflate container — not a reader).
+
+### Served-tool layer — `pmcp-server-toolkit` module (no new deps)
+
+Mirror the SQL/OpenAPI pattern: the served-tool surface (`calculate` / `explain` / `get_manifest` / `diff_version` / `render_workbook`) becomes a **module inside `pmcp-server-toolkit`** gated behind a `workbook` feature, depending on `pmcp-workbook-runtime` only. No new third-party deps — it reuses the toolkit's existing `jsonschema = "0.46"` (input validation), `indexmap`, `serde`, `tracing`, and the `[[tools]]`/`ToolInfo` synthesis machinery. The `BundleSource` trait (local-dir + embedded impls) is pure SDK code over `std::fs` + `include_bytes!` — no crate needed.
+
+---
+
+## Answers to the six specific questions
+
+### 1. `umya-spreadsheet` — version, fabricated-provenance caveat, isolate-vs-replace
+
+- **Version:** current stable is **`3.0.0`** (released 2026-06-03). The lighthouse pin `"3.0"` already resolves to the newest release — no bump needed, no currency debt. HIGH confidence.
+- **Fabricated-provenance caveat (verified against RFC §5):** on EVERY save, umya hard-codes `<Application>Microsoft Excel</Application>` in `docProps/app.xml` and writes a `calcId` into `calcPr`. A umya-AUTHORED workbook therefore presents **fabricated Excel identity** and would pass a naïve "was this recalculated by real Excel?" freshness/staleness gate (the lighthouse Phase-8 provenance gate). Any SDK tooling that *programmatically mutates* a workbook (e.g. the one-shot DV-authoring path) inherits a workbook whose provenance lies.
+- **Isolate, do NOT replace.** umya is the only mature pure-Rust crate that reads the full surface the compiler needs (cells + cached values + formulas + colours + named ranges + data-validation + custom sheets). `calamine` reads cells/values but does **not** write and has weaker formula/named-range/validation coverage — it cannot replace umya for the compiler's authoring + full-fidelity-read needs. So:
+  - Keep umya confined to `pmcp-workbook-compiler` (the offline crate). The purity gate (§5) asserts it never enters the runtime/served tree.
+  - Handle the caveat at the **provenance layer, not the reader layer**: keep the lighthouse's quarantined `quick-xml`+`zip` probe that reads the RAW `calcPr@calcId` / `<Application>` bytes and classifies umya-authored workbooks into a **distinct provenance class** (so they cannot satisfy the "real-Excel recalc" oracle gate). The SDK must carry this forward as a first-class generalization, not a lighthouse wart — it is the only thing keeping the "compile, don't fabricate" guarantee honest.
+  - The reader MUST NEVER enter the served binary tree (purity rule, enforced by §5).
+
+### 2. `rust_xlsxwriter` — version, why writer-only keeps the served binary reader-free
+
+- **Version:** current stable **`0.95.0`** (released 2026-05-09). Lighthouse pin `"0.95"` is current. HIGH confidence.
+- **Why writer-only matters:** `render_workbook` only ever *emits* a freshly-computed `.xlsx` from the runtime's already-evaluated cell values + the `layout.json` template. It never *parses* an `.xlsx`. A writer crate has no XML/ZIP *reader* in its public path — it pulls `zip` purely as the deflate *container* for output. So the served binary gains the ability to produce Excel output **without ever linking a workbook parser**, preserving the invariant that no untrusted/ambiguous `.xlsx` parsing logic exists on the hot serving path. The attack/complexity surface of "parse arbitrary spreadsheet" stays entirely offline in the compiler. `default-features = false` further trims the writer to the minimum (no chrono/serde extras). The `zip` token is the one explicitly-permitted exception in the runtime purity assertion precisely because it is writer-container, not reader-parser.
+
+### 3. Formula parsing / DAG — crates or hand-rolled? footprint?
+
+**Hand-rolled. No external formula crate, and that is the correct choice.** Verified by reading the lighthouse sources:
+- `workbook-compiler/src/formula/{token.rs, parser.rs, rebase.rs}` — a custom tokenizer + recursive-descent/Pratt parser (~52KB) that validates function names against the dialect `WHITELIST` **at parse time** (an out-of-whitelist function is a parse-time rejection, not a silent accept). This whitelist-gated-at-parse-time behaviour is the core safety primitive of the "governed Excel" dialect — no off-the-shelf formula crate enforces a dialect whitelist, so adopting one would *lose* the security property.
+- `workbook-compiler/src/dag/{graph.rs, resolve.rs, topo.rs}` — DAG build + Kahn topological sort.
+- `workbook-runtime/src/{formula.rs, dag.rs, resolve.rs, scalar_eval.rs}` + `sheet_ir/{executor.rs, semantics.rs, eval_value.rs, rounding.rs}` — the owned serde/schemars-clean AST (`Expr`/`BinOp`/`UnOp`/`RangeRef`), the runtime DAG container + toposort, and a pure-Rust scalar leaf evaluator + Excel-semantics layer (rounding, error propagation).
+- **Footprint:** ZERO third-party formula/parser/DAG crates. The entire formula + DAG + semantics stack is owned Rust over `std::collections` + `serde`. `petgraph` is NOT used and should NOT be introduced (the owned `Dag` + Kahn's algorithm is ~200 LOC and keeps the runtime serde-clean and dependency-free).
+- **Recommendation:** lift the hand-rolled modules verbatim into the two SDK crates. Do NOT introduce `formualizer`, `xlformula_engine`, `petgraph`, or any formula crate. The dialect-whitelist-at-parse-time design is a feature, not debt. HIGH confidence.
+
+### 4. serde / schemars / JSON-Schema for manifest + outputSchema
+
+All already SDK-standard — **no version changes, no new crates:**
+- `serde = "1"` (+ `derive`), `serde_json = "1"` — workspace baseline (root Cargo.toml `serde = "1.0"`, `serde_json = "1.0"`).
+- `schemars = "1.0"` — the SDK already pins exactly this behind its `schema-generation` feature (root Cargo.toml:52). The lighthouse uses `schemars = "1.0"` with `preserve_order` + `chrono04`. Mirror those features where the manifest model needs ordered properties and chrono timestamps. Current stable is `1.2.1` (`"1.0"` resolves forward to it cleanly — semver-compatible).
+- `jsonschema = "0.46"` — for **runtime input validation** (enum-gated `calculate`, closed-enum membership checks). The toolkit ALREADY depends on `jsonschema = "0.46"` (behind `input-validation`), so the workbook served-tool module reuses it. No new dep.
+- **outputSchema projection** = `schemars`-derived `JsonSchema` on the runtime manifest model, emitted as the tool's `outputSchema`, feeding `structuredContent` — identical to the SDK's existing TypedToolWithOutput pattern. HIGH confidence.
+
+### 5. Purity-check mechanism — express as a Cargo/CI gate
+
+The lighthouse uses a `just purity-check` recipe with two arms per boundary: (a) a **`cargo tree` token assertion** (FAIL if a forbidden crate appears in a crate's dependency graph), and (b) a value-path grep. The `cargo tree` arm is the load-bearing, link-level, provable boundary. Port it as follows, with a recommended **three-layer defense**:
+
+**Layer 1 — `cargo tree` assertion in CI + `just` (the proven mechanism; adopt as-is).**
+A CI step and a `just purity-check` recipe that runs, for each served-binary-tree crate, `cargo tree -p <crate> | grep -Ei '<banned tokens>'` and **fails on match.** Concretely for v2.3:
+- `cargo tree -p pmcp-workbook-runtime` must NOT contain `umya|quick-xml|pmcp-code-mode|swc_` (reader/JS banned). It MUST contain `rust_xlsxwriter` (positive assertion the renderer is wired). `zip` is PERMITTED (writer container).
+- `cargo tree -p pmcp-server-toolkit --features workbook` must NOT contain `umya|quick-xml|pmcp-code-mode|swc_`.
+- Any scaffolded `--kind workbook-server` binary's tree must NOT contain `umya|quick-xml`.
+This is the direct analogue of the lighthouse `quote-pricing-server` / `workbook-runtime` purity arms. It is the recommendation of record because it proves a **link boundary**, not a convention. The lighthouse even includes a POSITIVE assertion (`rust_xlsxwriter` IS present in `workbook-runtime`) — carry that forward so a silently-dropped renderer also fails the gate.
+
+**Layer 2 — `cargo-deny` `[bans]` as a redundant CI backstop (NEW, recommended addition).**
+Add a `deny.toml` `[bans]` section that denies `umya-spreadsheet`, `quick-xml`, and `pmcp-code-mode`/`swc_*` for the runtime/served crates. `cargo-deny` gives a declarative, auditable, machine-checkable ban that complements the grep-based `cargo tree` arm and is already a standard SDK CI tool family (the SDK runs `cargo audit`). This catches a leak even if someone edits the `just` recipe. (Note: `cargo-deny`'s native per-crate ban scoping is coarse; the `cargo tree`-per-crate arm remains the precise boundary, with `cargo-deny` as the declarative backstop.)
+
+**Layer 3 — feature-flag / crate-split structural boundary (the real enforcement).**
+The strongest guarantee is **architectural, not a check**: `umya` lives in `pmcp-workbook-compiler` and is NEVER a `[dependencies]` entry of `pmcp-workbook-runtime` or the toolkit `workbook` module. The compiler depends on the runtime (one-directional), re-exporting the runtime's owned types so call sites compile while the served binary links only the runtime. The gate (Layers 1–2) then merely *proves* the split was not accidentally broken. Mirror the lighthouse `[lib]`/`[[bin]]` split and the "compiler depends on runtime, runtime depends on neither" topology exactly.
+
+**Wire into the SDK's existing gate:** add the `cargo tree` arm + `cargo deny check bans` into the `quality-gate` CI job (the same job that runs PMAT/clippy), NOT into local `make quality-gate` if dev-loop speed matters (mirrors the D-27 doc-check decision). A dedicated `make purity-check` / `just purity-check` target lets developers run it on demand. HIGH confidence on the `cargo tree` mechanism; MEDIUM on the exact `cargo-deny` scoping ergonomics (verify `[bans]` per-crate scoping during planning).
+
+### 6. Version currency — verified 2026-06-09 against crates.io
+
+| Crate | Lighthouse pin | Current stable (crates.io) | Released | Status |
+|-------|----------------|----------------------------|----------|--------|
+| `umya-spreadsheet` | `3.0` | **3.0.0** | 2026-06-03 | Current — no bump |
+| `rust_xlsxwriter` | `0.95` | **0.95.0** | 2026-05-09 | Current — no bump |
+| `quick-xml` | `0.37` (pin to umya transitive) | 0.40.1 (2026-05-15) | — | **Keep 0.37** to match umya's lock; do NOT chase 0.40 |
+| `zip` | `8` | **8.6.0** | — | Current stable; `9.0.0-pre2` exists — AVOID pre-release |
+| `schemars` | `1.0` | 1.2.1 (2026-02-01) | — | `"1.0"` resolves forward; current |
+| `jsonschema` | (SDK `0.46`) | 0.46.x | — | Matches SDK toolkit pin |
+| `sha2` | `0.11` | 0.11.x | — | Matches `pmcp-code-mode` |
+| `hex` | `0.4` | 0.4.x | — | Matches `pmcp-code-mode` |
+
+No formula/DAG crate to verify — hand-rolled (§3).
+
+---
+
+## Alternatives Considered
+
+| Category | Recommended | Alternative | Why Not |
+|----------|-------------|-------------|---------|
+| Excel reader | `umya-spreadsheet` 3.0 | `calamine` | calamine is read-only (no write/authoring), weaker named-range/data-validation/formula fidelity — cannot serve the compiler's full-surface read + DV-authoring needs |
+| Excel writer | `rust_xlsxwriter` 0.95 (writer-only) | umya for output too | Reusing umya for render would drag the READER into the served tree — violates the purity rule. A writer-only crate is the whole point |
+| Formula engine | hand-rolled (lift from lighthouse) | `formualizer` / `xlformula_engine` | No off-the-shelf engine enforces the dialect whitelist at parse time — adopting one loses the core safety property and adds a dependency |
+| DAG / toposort | owned `Dag` + Kahn's (lift) | `petgraph` | ~200 LOC owned container keeps the runtime serde-clean and zero-dep; petgraph would add weight for no gain |
+| Offline calc oracle | pure-Rust `scalar_eval` (already in runtime) | `pmcp-code-mode` SWC JS kernel | The runtime already replaced the JS kernel with a pure-Rust scalar evaluator; pulling SWC into the SDK compiler is heavy and likely unnecessary (verify the reconcile-parity need in planning) |
+| Provenance probe | quarantined `quick-xml`+`zip` raw-bytes read | Trust umya's metadata | umya FABRICATES `<Application>Microsoft Excel</Application>`+`calcId` — trusting its metadata defeats the freshness gate |
+| `thiserror` | `2` (match SDK) | `1` (lighthouse) | SDK toolkit crates standardized on `thiserror = "2"`; align to avoid two majors in-tree |
+| Purity enforcement | `cargo tree` assert + `cargo-deny` bans + crate split | grep-only (`just purity-check`) | grep-only is fragile; the `cargo tree` link assertion + declarative `cargo-deny` bans + structural crate split are layered and harder to silently break |
+
+---
+
+## Installation (anticipated Cargo.toml shape)
+
 ```toml
-# crates/rmcp/Cargo.toml
-[package.metadata.docs.rs]
-features = ["auth", "client", "macros", "server", "transport-io", ...]  # explicit list of 22 features
-rustdoc-args = ["--cfg", "docsrs"]
-```
-```rust
-// lib.rs
-#![cfg_attr(docsrs, feature(doc_cfg))]
-#![cfg_attr(docsrs, allow(unused_attributes))]
-```
-rmcp explicitly lists 22 features in `[package.metadata.docs.rs]` but does NOT use `#[doc(cfg(...))]` on individual items. It relies on `feature(doc_cfg)` which on nightly (docs.rs uses nightly) enables automatic `doc_auto_cfg` behavior -- items behind `#[cfg(feature = "...")]` get feature badges automatically.
+# crates/pmcp-workbook-runtime/Cargo.toml  (served-binary leaf — reader-free)
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+schemars = "1.0"
+thiserror = "2"
+sha2 = "0.11"
+hex = "0.4"
+rust_xlsxwriter = { version = "0.95", default-features = false }  # WRITER-ONLY
 
-**PMCP approach:**
-```toml
-[package.metadata.docs.rs]
-all-features = true
-rustdoc-args = ["--cfg", "docsrs"]
-```
-```rust
-#![cfg_attr(docsrs, feature(doc_cfg))]
-```
-PMCP uses `all-features = true` and has 6 manual `#[cfg_attr(docsrs, doc(cfg(...)))]` annotations across 145 feature-gated items.
+# crates/pmcp-workbook-compiler/Cargo.toml  (offline — reader-bearing)
+[dependencies]
+pmcp-workbook-runtime = { path = "../pmcp-workbook-runtime" }
+umya-spreadsheet = "3.0"            # the ONE reader — confined here
+quick-xml = "0.37"                  # pin to umya's transitive lock (re-derive via cargo tree)
+zip = "8"                           # pin to umya's transitive lock; NOT 9.0.0-pre
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+schemars = { version = "1.0", features = ["preserve_order", "chrono04"] }
+thiserror = "2"
+chrono = { version = "0.4", default-features = false, features = ["clock", "serde", "std"] }
+sha2 = "0.11"
+hex = "0.4"
+# OPTIONAL, non-default — only if offline JS reconcile-oracle parity is still required:
+# pmcp-code-mode = { path = "../pmcp-code-mode", features = ["js-runtime"], optional = true }
 
-**Gap:** PMCP's 6/145 coverage means 139 feature-gated items show NO feature badge on docs.rs. Users cannot tell which items require which feature flags.
-
-**Fix:** Add `#![cfg_attr(docsrs, feature(doc_auto_cfg))]` to `src/lib.rs`. This nightly-only feature (available on docs.rs since docs.rs uses nightly) automatically generates `doc(cfg(...))` for ALL `#[cfg(feature = "...")]` items. Zero manual annotation needed. The existing 6 manual annotations can be removed.
-
-```rust
-// src/lib.rs - add this line:
-#![cfg_attr(docsrs, feature(doc_auto_cfg))]
-```
-
-**Why not explicit feature list like rmcp?** PMCP has more features (20+ in the `full` flag alone). `all-features = true` is simpler and correct. rmcp's explicit list is actually worse -- it requires manual maintenance when features are added.
-
-**Confidence:** HIGH -- verified both Cargo.toml files, counted actual annotations.
-
-### 2. Crate-Level README as docs.rs Landing Page
-
-**rmcp approach:**
-```rust
-// crates/rmcp/src/lib.rs
-#![doc = include_str!("../README.md")]
-```
-rmcp has a focused 66-line crate README (`crates/rmcp/README.md`) that:
-- Uses `<style>.rustdoc-hidden { display: none; }</style>` to hide GitHub badges from docs.rs
-- Documents feature flags in a clean table
-- Documents transport options
-- Links to the main repo README for full docs
-
-The MAIN repo README (991 lines) is separate and contains the full usage guide with tools, resources, prompts, sampling, roots, logging, completions, subscriptions, and examples.
-
-**rmcp-macros approach:**
-```rust
-// crates/rmcp-macros/src/lib.rs
-#![doc = include_str!("../README.md")]
-```
-81-line focused README with macro table, quick example, and link to main README.
-
-**PMCP approach:**
-- `src/lib.rs` has inline `//! # MCP SDK for Rust` doc comments (61 lines of module docs)
-- Does NOT use `include_str!`
-- The main README (682 lines) is specified as `readme = "README.md"` in Cargo.toml but is NOT rendered as the docs.rs landing page
-- `pmcp-macros/src/lib.rs` has inline `//!` doc comments (53 lines)
-
-**Gap:** PMCP's docs.rs landing page is the 61-line inline doc comment, not the README. The README content (feature flags, transports, quick start) is not visible on docs.rs. Meanwhile, rmcp users see feature flag tables and transport docs immediately on the docs.rs landing page.
-
-**Fix:** Create a focused `DOCS_RS.md` or rename approach -- but the simplest and best approach is:
-
-1. Create a concise crate-level README file (like rmcp's 66 lines) specifically for the docs.rs landing page
-2. Use `#![doc = include_str!("../crate-doc.md")]` in lib.rs
-3. Keep the main README.md for GitHub (repository landing page)
-
-OR (simpler, recommended):
-
-1. Add feature flag table and transport summary to the existing inline docs in lib.rs
-2. Expand the `//!` module doc from 61 lines to ~100-120 lines with feature flags table
-
-**Recommendation:** Use the `include_str!` approach with a focused crate doc file. This keeps documentation in markdown (easier to edit) and automatically stays in sync. The file should contain:
-- Feature flags table (like rmcp)
-- Transport summary
-- Quick start code snippet
-- Link to full README and docs
-
-**Confidence:** HIGH -- verified both lib.rs files and README content.
-
-### 3. Macro Documentation: README vs Inline Docs
-
-**rmcp-macros approach:**
-- 81-line README with `<style>.rustdoc-hidden { display: none; }</style>` for GitHub/docs.rs dual rendering
-- Concise table of all 7 macros with docs.rs links
-- Two quick examples (simple + advanced)
-- Uses `#![doc = include_str!("../README.md")]` so this IS the docs.rs landing
-- Each macro has detailed `///` doc comments in lib.rs (30-50 lines each with tables and examples)
-
-**pmcp-macros approach:**
-- 252-line README with detailed examples but several inaccuracies:
-  - States "Currently only supports tools (prompts and resources coming soon)" -- but `#[mcp_prompt]` and `#[mcp_resource]` already ship
-  - Version reference `pmcp = { version = "1.1" }` is outdated (current: 2.2.0)
-  - Does not document `#[mcp_tool]`, `#[mcp_prompt]`, `#[mcp_resource]`, `#[mcp_server]` macros
-  - Only documents the deprecated `#[tool]` and `#[tool_router]` macros
-- Does NOT use `include_str!` -- lib.rs has its own 53-line inline docs
-- Each macro has detailed `///` doc comments in lib.rs (good coverage, 10-40 lines each)
-
-**Gap:** The pmcp-macros README is fundamentally stale. It documents deprecated macros and claims features are missing that actually exist. The inline lib.rs docs are accurate but the README (what users see on crates.io and GitHub) is misleading.
-
-**Fix:**
-1. Rewrite `pmcp-macros/README.md` to match rmcp's pattern:
-   - Table of ALL current macros: `#[mcp_tool]`, `#[mcp_prompt]`, `#[mcp_resource]`, `#[mcp_server]`, plus legacy `#[tool]`, `#[tool_router]`
-   - Use `rustdoc-hidden` CSS trick for GitHub-only badges
-   - Quick example using CURRENT macros (not deprecated ones)
-   - Link to main README for full docs
-2. Add `#![doc = include_str!("../README.md")]` to pmcp-macros/src/lib.rs
-3. Remove inline `//!` module docs from lib.rs (README replaces them)
-
-**Confidence:** HIGH -- verified README content against actual lib.rs macro exports.
-
-### 4. Example Indexing Patterns
-
-**rmcp approach:**
-- Examples organized into subdirectories: `examples/servers/`, `examples/clients/`, `examples/transport/`, `examples/wasi/`
-- Each subdirectory has its own README with:
-  - Per-example descriptions (3-5 lines each)
-  - Run commands
-  - Dependencies list
-  - Common module documentation
-- Top-level `examples/README.md` is a quick-start guide, not an index
-
-**PMCP approach:**
-- All 60+ examples in flat `examples/` directory with numeric prefixes: `01_`, `02_`, etc.
-- `examples/README.md` exists but was not verified as current in this research
-- Examples registered in `Cargo.toml` with `[[example]]` entries and `required-features`
-- Some standalone examples in subdirectories: `examples/mcp-apps-chess/`, `examples/mcp-apps-map/`, etc.
-
-**Gap:** PMCP's flat directory works fine for discoverability (numeric prefixes are good). The gap is README accuracy -- the README must list every example with:
-- Correct name
-- What it demonstrates
-- Required features
-- Run command
-
-**Fix:** Rewrite `examples/README.md` with:
-- Category groupings (Core, Transport, Security, Workflows, MCP Apps, Macros)
-- Per-example: name, one-line description, required features, run command
-- Generate from `Cargo.toml` `[[example]]` entries if desired (but manual is fine for 60 examples)
-
-**Confidence:** HIGH -- verified actual example files against Cargo.toml entries.
-
-### 5. Crate-Level Doc Attributes
-
-**rmcp lib.rs attributes:**
-```rust
-#![cfg_attr(docsrs, feature(doc_cfg))]
-#![cfg_attr(docsrs, allow(unused_attributes))]
-#![doc = include_str!("../README.md")]
+# crates/pmcp-server-toolkit/Cargo.toml  (add a feature + module — no new third-party deps)
+[features]
+workbook = ["dep:pmcp-workbook-runtime"]   # reuses existing jsonschema/indexmap/serde
 ```
 
-**PMCP lib.rs attributes:**
-```rust
-#![warn(missing_docs, missing_debug_implementations, rust_2018_idioms, unreachable_pub)]
-#![deny(unsafe_code)]
-#![cfg_attr(docsrs, feature(doc_cfg))]
-#![allow(clippy::missing_errors_doc)]
-#![allow(clippy::return_self_not_must_use)]
-#![allow(clippy::multiple_crate_versions)]
-#![allow(clippy::used_underscore_binding)]
-#![allow(clippy::result_large_err)]
-```
+---
 
-**Gap:** PMCP actually has STRICTER lint attributes than rmcp (good). The only missing piece is `doc_auto_cfg` (covered in item 1 above) and `include_str!` (covered in item 2).
+## Confidence Assessment
 
-**Fix:** Add `#![cfg_attr(docsrs, feature(doc_auto_cfg))]` -- that is the only attribute change needed.
+| Area | Confidence | Notes |
+|------|------------|-------|
+| umya / rust_xlsxwriter versions | HIGH | Verified crates.io 2026-06-09; both = lighthouse pins; both newest stable |
+| Hand-rolled formula/DAG (no crate) | HIGH | Read lighthouse `formula/`, `dag/`, `sheet_ir/` sources directly |
+| serde/schemars/jsonschema/sha2/hex reuse | HIGH | SDK root + toolkit Cargo.toml already pin identical versions |
+| quick-xml/zip transitive-pin strategy | MEDIUM-HIGH | Pin must be re-derived from umya's lock at extraction (`cargo tree -i`) |
+| `cargo tree` purity arm | HIGH | Proven in lighthouse justfile; link-level boundary |
+| `cargo-deny` ban scoping ergonomics | MEDIUM | Per-crate `[bans]` scoping is coarse — verify during planning |
+| Dropping SWC/pmcp-code-mode from compiler | LOW-MEDIUM | Depends on whether the JS oracle is still load-bearing for penny-reconcile parity — verify against lighthouse Phase-10 |
 
-## Recommended Stack Changes
+## Gaps to Address (for roadmapper / planners)
 
-### Configuration Changes (Zero Dependencies)
-
-| Change | File | What | Why |
-|--------|------|------|-----|
-| Add `doc_auto_cfg` | `src/lib.rs` | `#![cfg_attr(docsrs, feature(doc_auto_cfg))]` | Auto-generates feature badges for all 145 gated items on docs.rs |
-| Add `include_str!` | `src/lib.rs` | `#![doc = include_str!("../crate-doc.md")]` | Makes docs.rs landing page useful with feature tables |
-| Add `include_str!` | `pmcp-macros/src/lib.rs` | `#![doc = include_str!("../README.md")]` | Makes macros docs.rs page show the README |
-| Remove manual `doc(cfg)` | 6 locations in `src/` | Delete `#[cfg_attr(docsrs, doc(cfg(...)))]` | Redundant once `doc_auto_cfg` is enabled |
-
-### New Files (Zero Dependencies)
-
-| File | Purpose | Size |
-|------|---------|------|
-| `crate-doc.md` | Focused docs.rs landing page (feature tables, transports, quick start) | ~80-100 lines |
-
-### File Rewrites (Zero Dependencies)
-
-| File | What Changes | Why |
-|------|-------------|-----|
-| `pmcp-macros/README.md` | Complete rewrite: document current macros, drop deprecated-only coverage | README is stale, documents only deprecated macros |
-| `examples/README.md` | Comprehensive example index with categories, features, run commands | Current index may not match actual examples |
-
-### Makefile/CI Integration
-
-The existing `make doc` target already does the right thing:
-```makefile
-doc:
-    RUSTDOCFLAGS="--cfg docsrs" $(CARGO) doc --all-features --no-deps
-```
-
-Add a verification target:
-```makefile
-doc-check:
-    RUSTDOCFLAGS="--cfg docsrs -D warnings" $(CARGO) doc --all-features --no-deps
-```
-
-This catches broken doc links and missing docs before they reach docs.rs.
-
-### Local Testing Command
-
-```bash
-RUSTDOCFLAGS="--cfg docsrs" cargo +nightly doc --all-features --no-deps --open
-```
-
-This previews exactly what docs.rs will render, including feature badges.
-
-## What NOT to Add
-
-| Temptation | Why Avoid |
-|-----------|-----------|
-| `document-features` crate | Adds a build dependency just to extract Cargo.toml comments. Manual feature table in crate-doc.md is simpler and more flexible. |
-| README generation tooling (cargo-readme, etc.) | Over-engineering. PMCP has 2 READMEs to maintain. Manual is fine. |
-| Automated example index generation | The `[[example]]` entries in Cargo.toml are the source of truth. A script adds fragile tooling for a one-time rewrite task. |
-| Sphinx/mdBook for API docs | docs.rs + rustdoc is the standard. PMCP already has mdBook for book/course. |
-| Per-feature documentation pages | Feature badges on items are sufficient. Per-feature guide pages are the book/course's job. |
-| Copying rmcp's explicit feature list in docs.rs metadata | PMCP's `all-features = true` is correct and lower-maintenance. rmcp's explicit list requires updates on every feature addition. |
-
-## Implementation Priority
-
-1. **`doc_auto_cfg` attribute** -- Single line change, massive docs.rs improvement (139 items gain badges)
-2. **pmcp-macros README rewrite** -- Highest user-facing impact, current README actively misleads
-3. **`include_str!` for crate-doc.md** -- Makes docs.rs landing page useful
-4. **examples/README.md rewrite** -- Ensures example discoverability
-5. **Remove manual `doc(cfg)` annotations** -- Cleanup after `doc_auto_cfg` does it automatically
-6. **`make doc-check` target** -- CI enforcement
-
-## Version Matrix
-
-| Component | Current Version | Required Change |
-|-----------|----------------|-----------------|
-| pmcp | 2.2.0 | lib.rs attributes only |
-| pmcp-macros | 0.4.1 | README rewrite + lib.rs `include_str!` |
-| Rust (local) | 1.83+ | No change needed |
-| docs.rs | nightly | Already compatible |
-| Makefile | existing | Add `doc-check` target |
+- Confirm whether the offline JS reconcile-oracle (`pmcp-code-mode`/SWC) is still required, or whether pure-Rust `scalar_eval` fully covers penny-reconciliation. If not required, drop it from the SDK compiler entirely; if required, gate behind a non-default `js-oracle` feature so the default build is SWC-free.
+- Re-derive the exact `quick-xml` and `zip` pins from `umya-spreadsheet 3.0.0`'s resolved lock at extraction time (avoid forking a second copy into the tree).
+- Decide `cargo-deny` `[bans]` scoping vs relying on the per-crate `cargo tree` arm as the precise boundary (cargo-deny as declarative backstop).
+- Confirm the `workbook` toolkit feature reuses the existing `jsonschema`/`indexmap` deps rather than introducing a parallel validator.
 
 ## Sources
 
-All findings verified against actual files in:
-- `/Users/guy/Development/mcp/sdk/rust-mcp-sdk/` (PMCP codebase)
-- `/Users/guy/Development/mcp/sdk/rust-sdk/` (rmcp codebase)
-
-Key files examined:
-- rmcp: `crates/rmcp/Cargo.toml` (docs.rs metadata, 22 explicit features)
-- rmcp: `crates/rmcp/src/lib.rs` (3 crate attributes + `include_str!`)
-- rmcp: `crates/rmcp/README.md` (66-line focused crate doc)
-- rmcp: `crates/rmcp-macros/README.md` (81-line macro table + examples)
-- rmcp: `crates/rmcp-macros/src/lib.rs` (`include_str!` + detailed `///` docs)
-- pmcp: `Cargo.toml` (docs.rs metadata with `all-features = true`)
-- pmcp: `src/lib.rs` (145 feature gates, 6 doc(cfg) annotations)
-- pmcp: `pmcp-macros/README.md` (252 lines, stale content)
-- pmcp: `pmcp-macros/src/lib.rs` (inline docs, no `include_str!`)
-- rmcp docs.rs: https://docs.rs/rmcp
-- Rust doc_auto_cfg: https://doc.rust-lang.org/stable/unstable-book/language-features/doc-auto-cfg.html
-- docs.rs metadata: https://docs.rs/about/metadata
+- crates.io API (verified 2026-06-09): umya-spreadsheet 3.0.0, rust_xlsxwriter 0.95.0, quick-xml 0.40.1, zip 8.6.0, schemars 1.2.1
+- Lighthouse `quote-pricing` Cargo.toml files (`workbook-compiler`, `workbook-runtime`, workspace) + `justfile` purity-check recipe
+- Lighthouse source: `workbook-compiler/src/formula/parser.rs`, `dag/`, `workbook-runtime/src/{formula,dag,scalar_eval}.rs`, `sheet_ir/`
+- SDK: root `Cargo.toml`, `crates/pmcp-server-toolkit/Cargo.toml`, `crates/pmcp-toolkit-postgres/Cargo.toml`, `crates/pmcp-code-mode/Cargo.toml`
+- Extraction RFC: `sdk-issue-excel-workbook-compiler-extraction.md` (§5 fabricated-provenance caveat)
