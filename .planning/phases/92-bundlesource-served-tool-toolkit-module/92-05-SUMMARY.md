@@ -177,3 +177,7 @@ only root `pmcp`).
 - **T-92-SC** (package installs): mitigated — `include_dir` is a vetted, pinned
   (0.7.4) crate already present in the workspace/embedded tree (no new untrusted
   install); the purity gate keeps reader/slop crates out of the served tree.
+
+## Self-Check: PASSED
+
+All four key files exist on disk and all five commits (39d31c8c, 58ade148, d0883b92, bc78fc47, 179c2c22) are present in the git log. Working tree clean.
