@@ -43,6 +43,11 @@ pub mod manifest_model;
 /// integrity hash helpers shared by the emitter and the served integrity check).
 pub mod artifact_model;
 
+/// The dumb-byte `BundleSource` trait (local-dir + feature-gated embedded impls)
+/// — raw-byte access only, so no source can bypass the shared loader's integrity
+/// gate (WBSV-08/WBSV-09).
+pub mod bundle_source;
+
 /// The PURE-RUST scalar leaf evaluator that replaces the pmcp-code-mode kernel.
 pub mod scalar_eval;
 
@@ -82,6 +87,10 @@ pub use manifest_model::{
 pub use artifact_model::{
     build_bundle_lock, sha256_hex, update_field, ArtifactHashes, BundleLock, CellEntry, CellMap,
 };
+
+pub use bundle_source::{BundleSource, BundleSourceError, LocalDirSource};
+#[cfg(feature = "embedded")]
+pub use bundle_source::EmbeddedSource;
 
 pub use render::{CellLayout, LayoutDescriptor, SheetLayout, LAYOUT_DESCRIPTOR_VERSION};
 
