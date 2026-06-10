@@ -76,6 +76,16 @@ pub enum ToolkitError {
     /// successes (e.g. `server.name = ""` if the `[server]` header is typo'd).
     #[error("config validation failed: {0}")]
     Validation(#[from] ConfigValidationError),
+
+    /// A governed-Excel workbook bundle failed to load + integrity-verify at
+    /// boot (Phase 92, WBSV-08 fail-closed). Wraps a
+    /// [`pmcp_workbook_runtime::BundleLoadError`] — a source read failure, a
+    /// malformed/truncated artifact, or an integrity-hash mismatch (a tampered
+    /// or swapped bundle). Feature-gated on `workbook` so the no-`workbook`
+    /// build never names the runtime type.
+    #[cfg(feature = "workbook")]
+    #[error("workbook bundle load failed: {0}")]
+    Workbook(#[from] pmcp_workbook_runtime::BundleLoadError),
 }
 
 /// Semantic-validation errors surfaced by

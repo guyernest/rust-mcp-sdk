@@ -79,6 +79,15 @@ regex = { version = "1.11", optional = true }
 # `workbook` feature carries LocalDirSource only; `workbook-embedded` layers the
 # runtime's `embedded` (include_dir) EmbeddedSource on top.
 pmcp-workbook-runtime = { version = "0.1.0", path = "../pmcp-workbook-runtime", optional = true }
+# Why: the `workbook-embedded` feature lets a Shape A/B server bake a bundle into
+# the binary via the `include_dir!` macro for an `EmbeddedSource` (WBSV-09). The
+# macro emits UNQUALIFIED `include_dir::` paths, so the crate must be a DIRECT,
+# nameable dependency at the consumer's root (a re-export through the runtime
+# does NOT satisfy the macro). Optional + gated on `workbook-embedded` so it
+# never enters the plain `workbook` (LocalDirSource-only) or default build. It is
+# NOT a reader/JS crate — the purity gate's BAN regex (umya/calamine/quick-xml/
+# swc_/pmcp-code-mode) does not flag it, and the embedded tree already carries it.
+include_dir = { version = "0.7.4", optional = true }
 
 [features]
 default = ["code-mode"]
@@ -135,7 +144,7 @@ openapi-code-mode = ["http", "code-mode", "pmcp-code-mode/js-runtime"]
 #     top, adding EmbeddedSource for binary-baked bundles (WBSV-09).
 # Neither is in `default` (D-10), keeping the no-default-features build lean.
 workbook = ["dep:pmcp-workbook-runtime", "dep:base64"]
-workbook-embedded = ["workbook", "pmcp-workbook-runtime/embedded"]
+workbook-embedded = ["workbook", "pmcp-workbook-runtime/embedded", "dep:include_dir"]
 
 [[example]]
 name = "e01_toolkit_minimal"
@@ -148,6 +157,13 @@ required-features = ["sqlite", "code-mode"]
 [[example]]
 name = "sql_server_http"
 required-features = ["sqlite", "code-mode", "http"]
+
+# Phase 92 (D-12 as refined) — the streamable-HTTP workbook server. Defaults to
+# the EmbeddedSource (include_dir over the committed @1.1.0 golden), so it needs
+# `workbook-embedded` (not bare `workbook`); `http` forwards pmcp/streamable-http.
+[[example]]
+name = "workbook_server_http"
+required-features = ["workbook-embedded", "http"]
 
 [dev-dependencies]
 proptest = "1.7"

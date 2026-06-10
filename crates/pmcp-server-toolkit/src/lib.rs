@@ -146,6 +146,24 @@ pub use crate::sql::{ConnectorError, Dialect, SqlConnector};
 #[cfg(feature = "http")]
 pub use crate::http::{HttpConnector, HttpConnectorError, Operation};
 
+// Workbook served-tool boot surface (Phase 92, WBSV-01/08/09 / D-11) — the
+// FULL consumer-side contract at the crate root so Shape A/B servers register a
+// governed workbook in ONE call WITHOUT ever naming `pmcp-workbook-runtime`:
+// the builder-ext trait, the `BundleSource` trait + its on-disk impl, the
+// fail-closed loader entry point, and both error types. The `EmbeddedSource`
+// impl is gated on `workbook-embedded` (it needs the runtime's `embedded`
+// include_dir support). Gated on `workbook` because the module is feature-gated.
+#[cfg(feature = "workbook")]
+pub use crate::workbook::{
+    load_bundle, BundleLoadError, BundleSource, BundleSourceError, LocalDirSource,
+    WorkbookBuilderExt,
+};
+
+/// The binary-baked workbook [`BundleSource`] (WBSV-09), re-exported at the
+/// crate root only when the `workbook-embedded` feature is active.
+#[cfg(feature = "workbook-embedded")]
+pub use crate::workbook::EmbeddedSource;
+
 // Code-mode prompt assembler (TKIT-10 / D-12) — Plan 07 headline re-export.
 // Feature-gated on `code-mode` because it lives in the code_mode module which
 // is itself feature-gated (D-16: code-mode is opt-in).
@@ -257,6 +275,38 @@ const _CODE_MODE_REEXPORT_SMOKE: fn() = || {
     // root under the code-mode feature. The fn returns a `BoxFuture`-ish async
     // surface; reference the function pointer to assert the path resolves.
     let _ = assemble_code_mode_prompt;
+};
+
+// Phase 92 (WBSV-01/08/09 / D-11): compile-only assertion that the FULL workbook
+// boot surface resolves at the crate root — the binding witness that a Shape A/B
+// consumer registers a governed workbook WITHOUT naming `pmcp-workbook-runtime`.
+// Gated on `workbook` because the module is feature-gated.
+#[cfg(feature = "workbook")]
+#[allow(dead_code)]
+const _WORKBOOK_REEXPORT_SMOKE: fn() = || {
+    // BundleSource (trait) + its on-disk impl + both error types — the loader
+    // inputs/outputs consumers need from the crate root.
+    let _: Option<&dyn BundleSource> = None;
+    let _: Option<LocalDirSource> = None;
+    let _: Option<BundleSourceError> = None;
+    let _: Option<BundleLoadError> = None;
+    // load_bundle (the fail-closed boot entry point) is fn-typed; reference its
+    // function pointer to assert the re-exported path resolves at the crate root.
+    let _: fn(
+        &dyn BundleSource,
+    ) -> std::result::Result<crate::workbook::WorkbookBundle, BundleLoadError> = load_bundle;
+    // WorkbookBuilderExt (the headline one-call registration) is `Sized` (can't
+    // be `dyn`) — reference its `try_` method pointer instead.
+    let _: fn(pmcp::ServerBuilder, &dyn BundleSource) -> Result<pmcp::ServerBuilder> =
+        <pmcp::ServerBuilder as WorkbookBuilderExt>::try_with_workbook_bundle;
+};
+
+// Phase 92 (WBSV-09): the embedded-source re-export resolves at the crate root
+// when the `workbook-embedded` feature layers include_dir support on top.
+#[cfg(feature = "workbook-embedded")]
+#[allow(dead_code)]
+const _WORKBOOK_EMBEDDED_REEXPORT_SMOKE: fn() = || {
+    let _: Option<EmbeddedSource> = None;
 };
 
 #[cfg(test)]
