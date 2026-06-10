@@ -1764,7 +1764,12 @@ Plans:
   4. The server recomputes the `BUNDLE.lock` combined hash-of-hashes at boot and fails closed on any tampered or mismatched artifact before serving
   5. A server loads a bundle via the `BundleSource` trait with both local-directory and embedded (`include_dir!`) implementations; S3/registry is a documented extension seam, not shipped
 
-**Plans**: TBD
+**Plans**: 5 plans (5 waves, strictly sequential)
+- [ ] 92-01-PLAN.md — Runtime BundleSource trait (local-dir + embedded) + shared fail-closed BundleLoader + manifest annotations field + D-17/S-1 scrub
+- [ ] 92-02-PLAN.md — Synthetic tax-calc golden fixture generator + committed byte-stable golden + tamper helpers
+- [ ] 92-03-PLAN.md — Toolkit workbook served core: isError envelope, manifest→schema projection, fail-closed input validation, 4 handlers (calculate/explain/get_manifest/diff_version)
+- [ ] 92-04-PLAN.md — render_workbook: workbook:// URI codec + stateless regen-on-read resource + published URI contract doc
+- [ ] 92-05-PLAN.md — WorkbookBuilderExt wiring + boot-surface re-exports + workbook feature + streamable-HTTP example + integration tests + purity-gate extension
 **UI hint**: yes
 
 ### Phase 93: Workbook Compiler + §5 Generalization Fixes + Promote Gate
