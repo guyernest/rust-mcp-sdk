@@ -113,6 +113,17 @@ Shape B scaffold + dialect-version declaration + second-workbook gate
   in the SDK docs alongside the dialect spec. Format changes become versioned
   decisions, not silent edits.
 
+### Post-research contract decisions (user, 2026-06-10)
+- **D-17:** The SDK's frozen on-disk bundle contract **renames the lighthouse
+  `BUNDLE.lock` `workflow` field to `bundle_id`** — the fixture generator
+  emits `bundle_id`, the BundleLoader expects `bundle_id`, and Phase 93's
+  compiler will emit `bundle_id`. No SDK consumer ever sees the lighthouse's
+  legacy naming; lighthouse migration is the lighthouse's own concern.
+- **D-18:** D-14's manifest annotations land as an **additive
+  `Vec<AnnotationDecl>` field on `Manifest`, serde-default empty** (name +
+  target cell/output + meaning). Old manifests without it deserialize fine;
+  the tax fixture declares bracket-boundary annotations to prove the path.
+
 ### Claude's Discretion
 - **Trait surface granularity (from D-06/D-07 discussion):** user said "you
   decide" on raw-bytes accessor vs parsed-aggregate return. Leaning: **dumb
