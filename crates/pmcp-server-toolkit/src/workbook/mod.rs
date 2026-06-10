@@ -47,7 +47,12 @@
 //! [`pmcp_workbook_runtime::BundleLock::workbook_hash`], which is the SOURCE
 //! workbook content hash, a DIFFERENT value.
 
+use std::sync::Arc;
+
+use pmcp::ServerBuilder;
 use serde_json::{json, Value};
+
+use crate::error::Result;
 
 pub mod error;
 pub mod handler;
@@ -72,6 +77,22 @@ pub use render_uri::{decode, encode, DecodedRender, MAX_ENCODED_URI_LEN, WORKBOO
 /// Re-export of the verified runtime bundle the served tools operate on (loaded
 /// fail-closed via [`pmcp_workbook_runtime::load_bundle`]).
 pub use pmcp_workbook_runtime::{CellMap, Manifest, WorkbookBundle};
+
+/// Re-export of the full boot surface (D-11) so Shape A/B consumers register a
+/// served workbook WITHOUT ever naming `pmcp-workbook-runtime`: the
+/// `BundleSource` trait + its on-disk impl, the fail-closed loader entry point,
+/// and both error types. The `EmbeddedSource` impl is re-exported separately
+/// under the `workbook-embedded` feature (it needs the runtime's `embedded`
+/// include_dir support).
+pub use pmcp_workbook_runtime::{
+    load_bundle, BundleLoadError, BundleSource, BundleSourceError, LocalDirSource,
+};
+
+/// The binary-baked [`BundleSource`] (WBSV-09), re-exported only when the
+/// toolkit's `workbook-embedded` feature layers the runtime's `embedded`
+/// (include_dir) support on top of the LocalDirSource-only `workbook` build.
+#[cfg(feature = "workbook-embedded")]
+pub use pmcp_workbook_runtime::EmbeddedSource;
 
 /// The UI resource URI every workbook tool advertises (MCP Apps widget hook).
 ///
@@ -125,5 +146,133 @@ impl ProvStamp {
             "version": self.version,
             "combined_hash": self.combined_hash,
         })
+    }
+}
+
+// === Builder extension — the single Shape A/B registration call (D-09) =========
+
+/// Composable builder extension wiring a verified workbook bundle into a
+/// [`pmcp::ServerBuilder`] in ONE call.
+///
+/// [`WorkbookBuilderExt::with_workbook_bundle`] /
+/// [`WorkbookBuilderExt::try_with_workbook_bundle`] load + integrity-verify a
+/// [`BundleSource`] at boot (fail-closed — a tampered bundle aborts the boot,
+/// WBSV-08), then register all FIVE served tools (`calculate`, `explain`,
+/// `get_manifest`, `diff_version`, `render_workbook`) plus the `workbook://`
+/// render resource. Mirrors [`crate::builder_ext::ServerBuilderExt`]'s
+/// panicking-convenience + fallible-companion pair (review R7): production
+/// servers should prefer the `try_` form so a tampered/malformed bundle surfaces
+/// as a `Result`, not a crash.
+///
+/// This is THE consumer-side contract: Shape A/B servers depend ONLY on
+/// `pmcp-server-toolkit` and never name `pmcp-workbook-runtime` (the loader,
+/// source impls, and error types are re-exported at this module / the crate
+/// root, D-11).
+pub trait WorkbookBuilderExt: Sized {
+    /// Load + verify `source` and register all five workbook tools + the
+    /// `workbook://` resource. Panicking convenience wrapping
+    /// [`WorkbookBuilderExt::try_with_workbook_bundle`].
+    ///
+    /// # Panics
+    ///
+    /// Panics with `"with_workbook_bundle: ..."` if the bundle fails to load or
+    /// its recomputed integrity hashes do not match its lock (a tampered /
+    /// malformed bundle, [`BundleLoadError`]). Prefer
+    /// [`WorkbookBuilderExt::try_with_workbook_bundle`] for production servers
+    /// where a bad bundle must surface as a `Result` (WBSV-08).
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use pmcp::Server;
+    /// use pmcp_server_toolkit::workbook::{LocalDirSource, WorkbookBuilderExt};
+    ///
+    /// let source = LocalDirSource::new("bundles/tax-calc@1.1.0");
+    /// let _builder = Server::builder()
+    ///     .name("workbook-tax-calc")
+    ///     .version("1.1.0")
+    ///     .with_workbook_bundle(&source);
+    /// ```
+    fn with_workbook_bundle(self, source: &dyn BundleSource) -> Self;
+
+    /// Fallible companion to [`WorkbookBuilderExt::with_workbook_bundle`]
+    /// (review R7) — the boot LOAD is fail-closed (WBSV-08): a tampered or
+    /// malformed bundle returns `Err` BEFORE any tool is registered, so the
+    /// server never boots on an unverified bundle.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::ToolkitError`] (wrapping a [`BundleLoadError`]) if the
+    /// bundle fails to load — typically a source read error, a JSON parse
+    /// failure, or an integrity-hash mismatch (a swapped / tampered artifact).
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use pmcp::Server;
+    /// use pmcp_server_toolkit::workbook::{LocalDirSource, WorkbookBuilderExt};
+    ///
+    /// # fn run() -> Result<(), Box<dyn std::error::Error>> {
+    /// let source = LocalDirSource::new("bundles/tax-calc@1.1.0");
+    /// let _builder = Server::builder()
+    ///     .name("workbook-tax-calc")
+    ///     .version("1.1.0")
+    ///     .try_with_workbook_bundle(&source)?;
+    /// # Ok(()) }
+    /// ```
+    fn try_with_workbook_bundle(self, source: &dyn BundleSource) -> Result<Self>;
+}
+
+impl WorkbookBuilderExt for ServerBuilder {
+    fn with_workbook_bundle(self, source: &dyn BundleSource) -> Self {
+        self.try_with_workbook_bundle(source).expect(
+            "with_workbook_bundle: BundleLoader load/verify returned an error — \
+             prefer try_with_workbook_bundle to handle a tampered/malformed bundle \
+             as a Result (WBSV-08 fail-closed)",
+        )
+    }
+
+    fn try_with_workbook_bundle(self, source: &dyn BundleSource) -> Result<Self> {
+        // WBSV-08 fail-closed: load + integrity-verify the bundle BEFORE any
+        // tool is registered. A `WorkbookBundle` value is proof the bundle was
+        // untampered at load, so the server cannot boot on an unverified bundle.
+        let bundle = Arc::new(load_bundle(source)?);
+
+        // Operator visibility (mirrors builder_ext.rs:273-279): a bundle that
+        // declares zero outputs would serve tools that compute nothing useful —
+        // surface that as a warning rather than a silently-empty server.
+        if bundle.cell_map.outputs.is_empty() {
+            tracing::warn!(
+                target: "pmcp_server_toolkit::workbook",
+                bundle_id = %bundle.stamp.bundle_id,
+                version = %bundle.stamp.version,
+                "with_workbook_bundle: bundle declares zero outputs — the served \
+                 tools will compute no output projections (set RUST_LOG=warn to \
+                 surface this)"
+            );
+        }
+
+        // Register the five served tools over the shared verified bundle. Each
+        // handler is `Arc`-cloned so they share ONE verified bundle (no copies).
+        let builder = self
+            .tool_arc("calculate", Arc::new(CalculateHandler::new(bundle.clone())))
+            .tool_arc("explain", Arc::new(ExplainHandler::new(bundle.clone())))
+            .tool_arc(
+                "get_manifest",
+                Arc::new(GetManifestHandler::new(bundle.clone())),
+            )
+            .tool_arc(
+                "diff_version",
+                Arc::new(DiffVersionHandler::new(bundle.clone())),
+            )
+            .tool_arc(
+                "render_workbook",
+                Arc::new(RenderWorkbookHandler::new(bundle.clone())),
+            )
+            // The single `workbook://` render resource (A3 — no DispatchingResource
+            // wrapper, exactly one resource handler).
+            .resources_arc(Arc::new(RenderWorkbookResource::new(bundle)));
+
+        Ok(builder)
     }
 }
