@@ -222,6 +222,33 @@ pub fn diff_version_output_schema() -> Value {
     result_envelope_schema(success)
 }
 
+/// The `render_workbook` output schema (WBSV-05, WBSV-07): a `workbook://`
+/// resource-URI POINTER + its MIME type — NOT the `.xlsx` bytes (those arrive on
+/// `resources/read`). Non-empty so the `outputSchema`-advertise contract holds.
+#[must_use]
+pub fn render_workbook_output_schema() -> Value {
+    let mut success = Map::new();
+    success.insert(
+        "resource_uri".to_string(),
+        json!({
+            "type": "string",
+            "description": "A provenance-bound workbook:// resource URI. Read it via \
+                            resources/read to obtain the base64-encoded .xlsx, which is \
+                            regenerated statelessly from the URI on each read. The URI \
+                            encodes the inputs — treat it as sensitive.",
+        }),
+    );
+    success.insert(
+        "mime_type".to_string(),
+        json!({
+            "type": "string",
+            "description": "The MIME type of the resource the URI resolves to (the OOXML \
+                            spreadsheet type).",
+        }),
+    );
+    result_envelope_schema(success)
+}
+
 /// The provenance stamp sub-schema — present on every result. Carries
 /// `bundle_id`/`version`/`combined_hash` (NEVER `workbook_hash` — Codex HIGH #3).
 #[must_use]
