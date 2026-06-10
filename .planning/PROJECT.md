@@ -60,19 +60,20 @@ Tool handlers can manage long-running operations through a durable task lifecycl
 
 ### Active
 
-## Current Milestone: v2.2 Configuration-Only MCP Servers
+## Current Milestone: v2.3 Excel-as-Configuration MCP Servers (governed Excel CodeLanguage)
 
-**Goal:** Shift PMCP from a code-based SDK to one that lets enterprise developers build production-grade MCP servers for SQL databases from configuration + schema files alone — without writing Rust — while preserving PMCP's security, tools/resources/prompts/tasks/skills standards and offering pmcp.run hosting as a deployment target.
+**Goal:** Extract the Excel-workbook → MCP-server compiler from the TowelRads `quote-pricing` lighthouse into the SDK so that *any* project can compile a governed Excel workbook into a tested, versioned, deterministic MCP server — a new "governed Excel" CodeLanguage alongside the v2.2 SQL and OpenAPI toolkits. Compile-not-interpret: the workbook is simultaneously the specification (formula DAG), the test oracle (cached cell values become assertions), and the output template.
 
 **Target features:**
-- Upstream DX prerequisites: lift `tool_arc` / `prompt_arc` from `ServerCoreBuilder` to public `ServerBuilder`; expose or document an in-process driver so external toolkits can integration-test built `pmcp::Server`s
-- `crates/pmcp-server-toolkit/`: promote `mcp-server-common` (~2.2k LoC) + `pmcp-code-mode` shapes to a public crates.io-published SDK crate (AuthProvider, SecretsProvider, StaticResourceHandler, StaticPromptHandler, HMAC tokens, ToolInfo synthesis from `[[tools]]` config)
-- `SqlConnector` trait + `Dialect` enum (3 methods + 2 free helpers) with per-backend crates: `pmcp-toolkit-postgres`, `pmcp-toolkit-mysql`, `pmcp-toolkit-athena`, plus SQLite as a feature flag — all pure-Rust, Lambda-friendly, no Docker
-- Four DX shapes ship together: Shape A (`pmcp-sql-server` pure-config binary), Shape B (`cargo pmcp new --kind sql-server` scaffolding), Shape C (12-line `main.rs` library use), Shape D (pmcp.run hosting via `cargo pmcp deploy`)
-- `crates/pmcp-config-helper/`: Type 2 SEP-2640 authoring-skills MCP server for `config.toml` authoring (root SKILL.md + per-backend references + worked examples; dual-surface invariant preserved)
-- Dogfood: rewrite `crates/pmcp-server` (SDK dev-tools MCP server) on top of the new toolkit
-- Type 1 skills content updates in `ai-agents/` with toolkit patterns for coding agents writing Rust against the toolkit
-- GraphQL and OpenAPI toolkits explicitly deferred (OpenAPI additionally gated by Spike 007 — auth-policy pluggability — not yet run)
+- `pmcp-workbook-runtime` crate — owned model types + deterministic evaluator + output-template renderer, **reader-free**; CI/just purity gate asserts the Excel reader (`umya`) never enters the runtime/served-binary tree
+- `pmcp-workbook-compiler` crate — offline pipeline (ingest → lint → manifest synth → formula parse → DAG compile → penny-reconcile → artifact emission → promote-time gate); `umya` reader isolated here
+- `cargo pmcp compile-workbook` + `lint-workbook` + `emit-bundle` subcommands, with the gated `--accept --approver --effective-date` approval flow in the CLI
+- Generic served-tool layer as a `pmcp-server-toolkit` module (`calculate`/`explain`/`get_manifest`/`diff_version`/`render_workbook`), fully bundle-driven; `cargo pmcp new --kind workbook-server` scaffold
+- `BundleSource` trait with local-dir + embedded impls (S3/registry left as documented extension seam)
+- SDK-owned versioned dialect spec; workbooks declare a dialect version they target
+- Generalization fixes (do not copy lighthouse debt as-is): manifest-driven tool schema (kill hardcoded `build_reference_manifest`); fix promote-path bugs CR-01 (change-class demotion asymmetry) / CR-02 (version-overwrite) / WR-01 (enum-input tiering); umya fabricated-provenance handling; project-level `pmcp.toml` mapping workbooks → bundle IDs
+- Complements `pmcp-code-mode` (untrusted long-tail path) — explicitly does NOT touch it
+- Named-range-backed validation lists deferred by design (Phase-14 extension seam documented); S3/registry bundle store deferred
 
 ### Future
 
@@ -89,7 +90,9 @@ Tool handlers can manage long-running operations through a durable task lifecycl
 
 ## Current State
 
-Milestone v2.2 (Configuration-Only MCP Servers) in progress. All prior milestones (v1.0-v2.0) shipped; v2.1 deploy work (Phase 79) complete. **Phase 85 complete (2026-05-27)** — Shape A pure-config binary `pmcp-sql-server --config X --schema Y` proves the toolkit lift end-to-end: a new `crates/pmcp-sql-server` crate stands up a live MCP server from config + schema alone (no user Rust), the toolkit `config.toml` schema is a verified superset of the pmcp-run sql-api reference configs (additive keys only, `deny_unknown_fields` preserved), `validate_code`/`execute_code` enforce code-mode policy as MCP errors, and all 29 vendored Chinook `generated.yaml` scenarios replay green through the real binary path (REF-02 result parity). Two production-path bugs were found and fixed in the process (parameter-default binding causing `LIMIT NULL`; `ValidateCodeHandler` swallowing the `isError` flag).
+Milestone v2.3 (Excel-as-Configuration MCP Servers) starting — defining requirements. v2.2 (Configuration-Only MCP Servers / SQL + OpenAPI toolkits) substantially complete: phases 82–90.2 delivered the toolkit-core lift, SQL connectors (postgres/mysql/athena/sqlite), all four DX shapes, and the OpenAPI built-in server with advanced examples; remaining v2.2 items are experimental 999.x phases. All prior milestones (v1.0–v2.1) shipped.
+
+v2.3 extracts the proven Excel-as-Configuration compiler from the `ai-on-cloud/towelrads-quote-pricing` lighthouse (its milestone v0.5.0 — phases 7–14 — is complete: golden quote reconciled to ±£0.01, ~730 workspace tests, snapshot tests on `tools/list` schemas, promote-gate integration tests including a real BA `--accept` flow, crate-level `#![deny(clippy::unwrap_used, expect_used, panic)]` on value paths). The extraction is a full end-to-end cut: runtime + compiler + CLI subcommands + generic served-tool toolkit module, with the known generalization gaps (RFC §5) redesigned rather than copied.
 
 **Shipped milestones:**
 - v1.0: MCP Tasks Foundation (types, store, server integration)
@@ -191,4 +194,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-05-27 — Phase 85 complete (Shape A pure-config binary + Chinook reference parity); previously 2026-05-17 — milestone v2.2 (Configuration-Only MCP Servers) started, derived from validated spikes 003–006 + auto-loaded `spike-findings-rust-mcp-sdk` skill*
+*Last updated: 2026-06-09 — milestone v2.3 (Excel-as-Configuration MCP Servers) started, derived from the `towelrads-quote-pricing` lighthouse RFC (sdk-issue-excel-workbook-compiler-extraction.md); previously 2026-05-27 — Phase 85 complete (Shape A pure-config binary + Chinook reference parity)*

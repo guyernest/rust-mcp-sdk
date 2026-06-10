@@ -1,17 +1,16 @@
 ---
 gsd_state_version: 1.0
-milestone: v2.2
-milestone_name: Configuration-Only MCP Servers
-status: executing
-stopped_at: Phase 90.2 context gathered
-last_updated: "2026-05-30T18:40:02.710Z"
-last_activity: 2026-05-30
+milestone: v2.3
+milestone_name: Excel-as-Configuration MCP Servers
+status: planning
+last_updated: "2026-06-10T01:39:42.287Z"
+last_activity: 2026-06-10
 progress:
-  total_phases: 45
-  completed_phases: 39
-  total_plans: 184
-  completed_plans: 184
-  percent: 87
+  total_phases: 0
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
+  percent: 0
 ---
 
 # Project State
@@ -25,12 +24,10 @@ See: .planning/PROJECT.md (updated 2026-05-17)
 
 ## Current Position
 
-Phase: 999.1
-Plan: Not started
-Status: Executing Phase 90.2
-Last activity: 2026-05-30
-
-**Carryover from v2.1:** Phase 81 (update-pmcp-book-and-pmcp-course-with-v2-advanced-topics-cod) was executing at v2.1 close; will be tracked separately and folded into v2.1 completion. Operator follow-ups deferred from Phase 75 Wave 5 still pending: (a) merge Phase 75 Wave 5 + 75.5 to paiml/rust-mcp-sdk:main; (b) post-merge run `gh workflow run quality-badges.yml -R paiml/rust-mcp-sdk` and append observation to `.planning/phases/75-fix-pmat-issues/75-05-GATE-VERIFICATION.md` "## Badge flip observation" section.
+Phase: Not started (defining requirements)
+Plan: —
+Status: Defining requirements
+Last activity: 2026-06-10 — Milestone v2.3 started
 
 ## v2.2 Phase Plan (8 phases, 49 requirements)
 
