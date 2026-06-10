@@ -52,14 +52,22 @@ use serde_json::{json, Value};
 pub mod error;
 pub mod handler;
 pub mod input;
+pub mod render_resource;
+pub mod render_uri;
 pub mod schema;
 
 #[doc(inline)]
 pub use error::{to_iserror_result, WorkbookToolError};
 #[doc(inline)]
-pub use handler::{CalculateHandler, DiffVersionHandler, ExplainHandler, GetManifestHandler};
+pub use handler::{
+    CalculateHandler, DiffVersionHandler, ExplainHandler, GetManifestHandler, RenderWorkbookHandler,
+};
 #[doc(inline)]
 pub use input::{validate_input, ValidatedInput};
+#[doc(inline)]
+pub use render_resource::RenderWorkbookResource;
+#[doc(inline)]
+pub use render_uri::{decode, encode, DecodedRender, MAX_ENCODED_URI_LEN, WORKBOOK_XLSX_MIME};
 
 /// Re-export of the verified runtime bundle the served tools operate on (loaded
 /// fail-closed via [`pmcp_workbook_runtime::load_bundle`]).

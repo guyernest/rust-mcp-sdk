@@ -31,9 +31,11 @@ use pmcp_workbook_runtime::{run_executor, CellEnv, CellValue, RunResult};
 
 use super::error::{to_iserror_result, WorkbookToolError};
 use super::input::validate_input;
+use super::render_uri;
 use super::schema::{
     diff_version_output_schema, empty_input_schema, explain_output_schema,
     get_manifest_output_schema, input_schema_for_manifest, output_schema_for_manifest,
+    render_workbook_output_schema,
 };
 use super::{ProvStamp, WorkbookBundle, WORKBOOK_TOOL_UI};
 
@@ -518,6 +520,73 @@ impl ToolHandler for DiffVersionHandler {
     }
 }
 
+// ---- render_workbook ---------------------------------------------------------
+
+/// The `render_workbook` handler (WBSV-05): validate the inputs, then return a
+/// provenance-bound `workbook://` URI POINTER — NOT the `.xlsx` bytes. The bytes
+/// are recomputed per `resources/read` by [`super::render_resource`] from the
+/// decoded URI (stateless regen-on-read, Lambda-safe, V3).
+///
+/// The URI encodes the canonical inputs + the bundle [`ProvStamp`]
+/// (`combined_hash`, Codex HIGH #3) via [`render_uri::encode`]. A domain failure
+/// (invalid input, an un-encodable payload) routes through [`to_iserror_result`]
+/// into `structuredContent` — never a protocol-level error (T-92-10).
+pub struct RenderWorkbookHandler {
+    bundle: Arc<WorkbookBundle>,
+}
+
+impl RenderWorkbookHandler {
+    /// Build over the shared verified bundle.
+    #[must_use]
+    pub fn new(bundle: Arc<WorkbookBundle>) -> Self {
+        Self { bundle }
+    }
+
+    /// The linear `?`-chained `render_workbook` pipeline: validate → encode the
+    /// canonical DTO + provenance into a `workbook://` URI → return the POINTER
+    /// (plus the stamp), NOT the bytes.
+    #[allow(clippy::result_large_err)]
+    fn compute(&self, args: Value) -> Result<Value, WorkbookToolError> {
+        let validated = validate_input(args, &self.bundle.manifest, &self.bundle.cell_map)?;
+        let stamp = ProvStamp::from_bundle(&self.bundle);
+        let uri = render_uri::encode(&validated.canonical_dto, &stamp)?;
+        let payload = json!({
+            "resource_uri": uri,
+            "mime_type": render_uri::WORKBOOK_XLSX_MIME,
+        });
+        Ok(with_provenance(payload, &stamp))
+    }
+}
+
+#[async_trait]
+impl ToolHandler for RenderWorkbookHandler {
+    async fn handle(&self, args: Value, _extra: RequestHandlerExtra) -> pmcp::Result<Value> {
+        Ok(render_at_boundary(
+            self.compute(args),
+            &ProvStamp::from_bundle(&self.bundle),
+        ))
+    }
+
+    fn metadata(&self) -> Option<ToolInfo> {
+        Some(
+            ToolInfo::with_ui(
+                "render_workbook",
+                Some(
+                    "Render the computed workbook to a downloadable .xlsx. Returns a \
+                     provenance-bound workbook:// resource URI (NOT the bytes) — read \
+                     that URI via resources/read to obtain the base64-encoded .xlsx, \
+                     which is regenerated statelessly from the URI on each read. The URI \
+                     encodes the inputs; treat it as sensitive."
+                        .into(),
+                ),
+                input_schema_for_manifest(&self.bundle.manifest, &self.bundle.cell_map),
+                WORKBOOK_TOOL_UI,
+            )
+            .with_output_schema(render_workbook_output_schema()),
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -717,5 +786,62 @@ mod tests {
             json!("string")
         );
         assert_eq!(schema["properties"]["deltas"]["type"], json!("array"));
+    }
+
+    // ---- render_workbook (WBSV-05) ---------------------------------------
+
+    #[test]
+    fn render_workbook_returns_uri_pointer_not_bytes() {
+        let bundle = golden_bundle();
+        let handler = RenderWorkbookHandler::new(bundle.clone());
+        let v = handler
+            .compute(json!({ "inputs": { "gross_income": 60000.0, "filing_status": "single" } }))
+            .expect("render_workbook succeeds");
+
+        // The response carries a workbook:// pointer, NOT the bytes.
+        let uri = v["resource_uri"]
+            .as_str()
+            .expect("resource_uri is a string");
+        assert!(
+            uri.starts_with(render_uri::RENDER_URI_PREFIX),
+            "returns a workbook:// pointer"
+        );
+        assert!(
+            v.get("bytes").is_none() && v.get("data").is_none(),
+            "the bytes are NOT in the tool response"
+        );
+        // The pointer decodes back to the bound provenance (Codex HIGH #3).
+        let decoded = render_uri::decode(uri).expect("pointer decodes");
+        assert_eq!(decoded.provenance, ProvStamp::from_bundle(&bundle));
+        assert_eq!(decoded.provenance.combined_hash, bundle.stamp.combined);
+        // The success payload carries the provenance stamp.
+        assert!(v["provenance"]["combined_hash"].is_string());
+        assert!(v.get("isError").is_none(), "a success is not an error");
+    }
+
+    #[test]
+    fn render_workbook_invalid_input_returns_iserror() {
+        let bundle = golden_bundle();
+        let handler = RenderWorkbookHandler::new(bundle.clone());
+        let v = render_at_boundary(
+            handler.compute(json!({ "inputs": { "filing_status": "alien" } })),
+            &ProvStamp::from_bundle(&bundle),
+        );
+        assert_eq!(v["isError"], json!(true), "isError rides in the payload");
+        assert_eq!(v["code"], json!("invalid_input"));
+        assert!(v["provenance"]["combined_hash"].is_string());
+    }
+
+    #[test]
+    fn render_workbook_advertises_non_empty_output_schema() {
+        let handler = RenderWorkbookHandler::new(golden_bundle());
+        let meta = handler.metadata().expect("metadata present");
+        let schema = meta
+            .output_schema
+            .expect("outputSchema advertised (WBSV-07)");
+        assert_eq!(
+            schema["properties"]["resource_uri"]["type"],
+            json!("string")
+        );
     }
 }
