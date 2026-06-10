@@ -1769,7 +1769,7 @@ Plans:
 - [x] 92-01-PLAN.md — Runtime BundleSource trait (local-dir + embedded) + shared fail-closed BundleLoader + manifest annotations field + D-17/S-1 scrub
 - [x] 92-02-PLAN.md — Synthetic tax-calc golden fixture generator + committed byte-stable golden + tamper helpers
 - [x] 92-03-PLAN.md — Toolkit workbook served core: isError envelope, manifest→schema projection, fail-closed input validation, 4 handlers (calculate/explain/get_manifest/diff_version)
-- [ ] 92-04-PLAN.md — render_workbook: workbook:// URI codec + stateless regen-on-read resource + published URI contract doc
+- [x] 92-04-PLAN.md — render_workbook: workbook:// URI codec + stateless regen-on-read resource + published URI contract doc
 - [ ] 92-05-PLAN.md — WorkbookBuilderExt wiring + boot-surface re-exports + workbook feature + streamable-HTTP example + integration tests + purity-gate extension
 
 **UI hint**: yes
@@ -1837,7 +1837,7 @@ Plans:
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 91. Workbook Runtime + Purity Gate + Dialect | 3/3 | Complete    | 2026-06-10 |
-| 92. BundleSource + Served-Tool Toolkit Module | 3/5 | In Progress|  |
+| 92. BundleSource + Served-Tool Toolkit Module | 4/5 | In Progress|  |
 | 93. Workbook Compiler + §5 Fixes + Promote Gate | 0/? | Not started | - |
 | 94. CLI Subcommands + `pmcp.toml` | 0/? | Not started | - |
 | 95. Shape A Binary `pmcp-workbook-server` | 0/? | Not started | - |
