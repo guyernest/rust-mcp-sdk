@@ -23,7 +23,12 @@ findings:
   warning: 6
   info: 7
   total: 14
-status: issues_found
+fixes:
+  fixed_at: 2026-06-09
+  scope: critical_warning
+  fixed: 7
+  deferred: 0
+status: fixes_applied
 ---
 
 # Phase 91: Code Review Report
@@ -45,6 +50,7 @@ However: one **reachable panic** in the render path was empirically reproduced (
 
 ### CR-01: Reachable panic in `argb_to_color` on non-ASCII 8-byte ARGB string
 
+**Status:** fixed in `38feba92` (char-boundary-safe `hex.get(2..)?` + two regression tests: direct non-ASCII 8-byte input and end-to-end render via `CellLayout.fill_argb`/`font_argb`)
 **File:** `crates/pmcp-workbook-runtime/src/render/mod.rs:119`
 **Issue:** `&hex[2..]` is a byte-indexed slice. `hex.len()` returns the **byte** length, so an 8-byte string containing a multibyte UTF-8 character (e.g. `"€abcde"` — 3+5 bytes) matches the `8 =>` arm and then panics at slice time: `byte index 2 is not a char boundary`. Reproduced empirically (`panicked at ... start byte index 2 is not a char boundary; it is inside '€'`, exit 101). `fill_argb`/`font_argb` arrive via `CellLayout`, which is **deserialized from the bundle's `layout.json`** at serve time — so a corrupt or attacker-influenced bundle crashes `render_xlsx`. This directly violates the module's own documented contracts: "an unparseable ARGB is silently skipped, never an error" (line 131) and "the writer value path is panic-free" (line 47). The crate's `#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]` does not catch slice-index panics, so the lint gate gives false confidence here.
 **Fix:**
@@ -66,6 +72,7 @@ fn argb_to_color(argb: &str) -> Option<Color> {
 
 ### WR-01: Makefile `purity-check` error diagnostics are unreachable dead code under `set -e`
 
+**Status:** fixed in `47e58486` (`status=0; tree=$(…) || status=$?` capture — suppresses `set -e` for the capture only while preserving the `[exit N]` diagnostic; failure path empirically verified to print cargo's stderr and exit 1; `docs/workbook-purity-gate.md` snippet updated to match)
 **File:** `Makefile:485` (the `tree=$$(cargo tree ...); status=$$?` capture lines, repeated in both loops)
 **Issue:** Under `set -euo pipefail`, a failing command substitution in a plain assignment (`tree=$(cargo tree ...)`) aborts the shell **immediately** with cargo's exit status — `status=$?`, the `if [ $status -ne 0 ]` branch, the "failing closed" message, and the `printf '%s\n' "$tree"` dump are all unreachable. Empirically demonstrated: `sh -c 'set -euo pipefail; t=$(exit 3); s=$?; echo reached'` prints nothing and exits 3. The gate **does** still fail closed (the recipe exits non-zero), but on failure the developer sees only `make: *** Error N` with **zero diagnostics** — cargo's stderr was captured into `$tree` via `2>&1` and is discarded. `docs/workbook-purity-gate.md` ("Fail-Closed Design" section, lines 36-49) quotes this exact code and describes the explicit-capture behavior as if it executes, so the published doc misdescribes the actual mechanism.
 **Fix:** Use the `if !` condition form, which suppresses `set -e` for the capture while preserving fail-closed semantics AND the diagnostics:
@@ -80,6 +87,7 @@ Update the quoted snippet in `docs/workbook-purity-gate.md` to match.
 
 ### WR-02: Purity-gate Layer 2 is fail-open when the crate-local deny.toml is missing
 
+**Status:** fixed in `10f15c14` (`test -f` guards before both cargo-deny invocations; empirically verified — temporarily removing `crates/pmcp-workbook-runtime/deny.toml` makes the gate exit non-zero with a "Layer 2 would be vacuous; failing closed" message, file restored)
 **File:** `Makefile:516-517` (the two `cargo deny ... check --config deny.toml bans` invocations)
 **Issue:** cargo-deny 0.18.3 does **not** fail when the `--config` path does not exist — it logs `[WARN] config path ... doesn't exist, falling back to default config` and then reports `bans ok` with **exit 0** (empirically demonstrated with a nonexistent config name). The default config has an empty ban list, so the check passes vacuously. Consequence: deleting, renaming, or moving `crates/pmcp-workbook-runtime/deny.toml` or `crates/pmcp-workbook-dialect/deny.toml` silently disables Layer 2 while the gate keeps reporting "cargo-deny-bans-clean". This contradicts the phase's fail-closed requirement (WBRT-04) and the doc's "non-vacuous" claim — the documented non-vacuity proof (substituting a present crate into the ban list) only proves the list is evaluated *when the config loads*, not that the config loads at all. Layer 1 independently bans the same tokens, so the overall gate is not bypassed today, but the backstop's entire purpose is redundancy against Layer-1 regressions.
 **Fix:** Guard each invocation with an existence check in the recipe:
@@ -91,6 +99,7 @@ Update the quoted snippet in `docs/workbook-purity-gate.md` to match.
 
 ### WR-03: Range members that evaluated to an Excel error are mis-reported as `#REF!`
 
+**Status:** fixed in `52963c04` (`errs` threaded into `build_range`; an errored member propagates its ACTUAL error, the absent-member `#REF!` hard error is preserved; regression test asserts SUM over a `#DIV/0!` member yields `#DIV/0!` and `resolved_refs` records the member's real error. Test note: the member must compute its error via the formula path — a literal `1/0` is unusable because the kernel-parity scalar evaluator deliberately clamps `x/0` to `0.0`, see `scalar_eval.rs` WR-02 comment)
 **File:** `crates/pmcp-workbook-runtime/src/sheet_ir/executor.rs:289-315` (`build_range`), with the cause at `executor.rs:129-131`
 **Issue:** When a formula cell evaluates to `CellValue::Error`, `to_json` returns `None` (D-04: errors never lower), so the cell is recorded in `errs` but **never enters `env`**. Scalar refs propagate correctly because `eval_leaf`/`preflight_error` consult `errs` — but `build_range` only consults `env` (`env_lookup`), so an errored range member looks identical to a genuinely absent cell and is converted to `CellValue::Error(ExcelError::Ref)`. Result: `SUM(A1:A3)` where `A2` computed `#DIV/0!` yields `#REF!` instead of propagating `#DIV/0!`, and the `EvalTrace` records `short_circuited: Ref` with `resolved_refs` showing a `#REF!` member — wrong evidence for the classifier this trace exists to feed. The `errs` map is already in scope in `materialize_arg` (executor.rs:260-284) but is not passed down to `build_range`.
 **Fix:** Thread `errs` into `build_range` and check it before the absent-member fallback:
@@ -109,6 +118,7 @@ let cv = match env_lookup(env, key) {
 
 ### WR-04: No-op `current_sheet` conditional — unqualified ranges silently resolve to empty-sheet keys
 
+**Status:** fixed in `627cfbde` (option (a): the owning cell's sheet, derived from `Cell.key` via `split_once('!')` in both `run()` and `build_dag()`, is threaded through `eval_expr`/`materialize_arg`/`record_refs`/`collect_ref_keys`; the no-op conditionals deleted; regression test proves an unqualified `SUM(B2:B4)` on sheet `S` builds qualified DAG edges and computes 60, not phantom `"!B2"` `#REF!`s)
 **File:** `crates/pmcp-workbook-runtime/src/sheet_ir/executor.rs:268-272` and `executor.rs:330-334`
 **Issue:** Both `materialize_arg` and `collect_ref_keys` compute:
 ```rust
@@ -119,6 +129,7 @@ This is a complete no-op: when `range.sheet` is empty the branch passes `""`, an
 
 ### WR-05: Published-crate `dialect_spec` test depends on a repo-relative path outside the package
 
+**Status:** fixed in `ddda3766` (test skip-with-pass + eprintln when the spec file is absent — empirically verified by temporarily moving the doc aside; in-repo fail-closed backstop added to `make purity-check`: `test -f docs/workbook-dialect-spec.md` fails the gate so an in-repo deletion cannot silently disable the drift check)
 **File:** `crates/pmcp-workbook-dialect/src/lib.rs:220,263-265`
 **Issue:** The WBDL-01 binding test lives inline in `src/lib.rs` (so it ships in the published crate — `exclude = ["tests/"]` does not remove `#[cfg(test)]` modules in `src/`) and reads `../../docs/workbook-dialect-spec.md` relative to `CARGO_MANIFEST_DIR`. In the published package, the manifest dir is the package root and `../../docs/` does not exist, so `cargo test` on the published crate (vendored workspaces, distro packaging, downstream `cargo test --workspace` with the crate as a path-replaced dep) fails unconditionally with the `panic!` at line 265. In-repo CI is unaffected.
 **Fix:** Move the binding test to `tests/dialect_spec.rs` and drop `"tests/"` from the `exclude` list only if you want it published — or simpler, keep it inline but skip-with-pass when the spec file is absent *and* `option_env!("CI").is_none()` is insufficient; the cleanest fail-closed form is to gate on an in-repo marker:
@@ -134,6 +145,7 @@ plus a CI assertion (in the purity/quality gate, which always runs in-repo) that
 
 ### WR-06: Published dialect spec cites files that do not exist in this repository
 
+**Status:** fixed in `6eb6c1be` (architecture brief + lighthouse workbook rewritten as explicit external/not-vendored lighthouse references; §6 remapped onto this repo's phases — "nothing enforced in Phase 91 yet; linter + compile-time DAG check land in Phase 93"; all `Phase 7`/`Phase 9`/`Plan 0x` lighthouse numbering removed; whitelist table untouched, binding test still passes)
 **File:** `docs/workbook-dialect-spec.md:10,50,155`
 **Issue:** The spec — explicitly the "BA/auditor-facing" published contract — instructs readers to "read the brief for the design rationale" at `docs/Excel-as-Configuration-Architecture-Brief.md` and names the lighthouse workbook `docs/UFH_Quote_Process_Model_Plot3.xlsx`. Neither file exists in this repo (verified). The doc also carries lighthouse-internal phase numbering ("Phase 7", "Phase 9", "Plan 04") that has no meaning in this repo's phase scheme (91-96), so §6's "ENFORCED in Phase 7" claims are unanchored — a reader cannot tell what is enforced *here today* (answer per Phase 91 scope: nothing yet; the linter is Phase 93).
 **Fix:** Either vendor the architecture brief (and decide whether the lighthouse workbook ships), or rewrite the citations as external/lighthouse references; map the "Enforced in Phase 7 / deferred to Phase 9" sections onto this repo's phase numbers (93/…) so the enforced-vs-declared contract is accurate for this codebase.
