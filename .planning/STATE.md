@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v2.3
 milestone_name: Excel-as-Configuration MCP Servers
-status: planning
-stopped_at: Phase 91 context gathered
-last_updated: "2026-06-10T02:53:46.784Z"
-last_activity: 2026-06-09 — v2.3 roadmap created (6 phases 91-96, 38 requirements mapped, 100% coverage)
+status: executing
+stopped_at: Completed 91-01-PLAN.md
+last_updated: "2026-06-10T04:41:59.682Z"
+last_activity: 2026-06-10
 progress:
   total_phases: 53
   completed_phases: 41
-  total_plans: 191
-  completed_plans: 191
+  total_plans: 194
+  completed_plans: 192
   percent: 77
 ---
 
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-06-09) · .planning/ROADMAP.md (v2.3 milestone, Phases 91-96)
 
 **Core value:** Compile, never interpret — any project can compile a governed Excel workbook into a tested, versioned, deterministic MCP server where the workbook is simultaneously the specification (formula DAG), the test oracle (cached cell values = assertions), and the output template.
-**Current focus:** Phase 91 — Workbook Runtime + Purity Gate + Dialect Spec
+**Current focus:** Phase 91 — workbook-runtime-purity-gate-dialect-spec
 
 ## Current Position
 
-Phase: 91 of 96 (Workbook Runtime + Purity Gate + Dialect Spec)
-Plan: 0 of TBD in current phase
-Status: Ready to plan
-Last activity: 2026-06-09 — v2.3 roadmap created (6 phases 91-96, 38 requirements mapped, 100% coverage)
+Phase: 91 (workbook-runtime-purity-gate-dialect-spec) — EXECUTING
+Plan: 2 of 3
+Status: Ready to execute
+Last activity: 2026-06-10
 
 Progress: [░░░░░░░░░░] 0%
 
@@ -55,6 +55,7 @@ Decisions are logged in PROJECT.md Key Decisions table. Decisions framing this m
 - v2.3: Freeze the bundle contract from the consumer side (Phase 92) BEFORE re-cutting the compiler (Phase 93).
 - v2.3: §5 generalization fixes (manifest-driven emit, CR-01/CR-02/WR-01, umya provenance) land in the compiler-owning phase (93), not deferred.
 - v2.3: Mirror the v2.2 toolkit pattern (toolkit feature module + Shape A binary + Shape B scaffold); explicitly does NOT touch `pmcp-code-mode`.
+- [Phase ?]: Phase 91-01: pmcp-workbook-runtime lifted reader-free from lighthouse; D-08 adds Deserialize to finding types; no pmcp dep (D-09 permits but runtime is pmcp-free); writer-only rust_xlsxwriter — zip enters only via the writer
 
 ### Pending Todos
 
@@ -91,6 +92,12 @@ Items deferred by design for this milestone:
 
 ## Session Continuity
 
-Last session: 2026-06-10T02:53:46.778Z
-Stopped at: Phase 91 context gathered
-Resume file: .planning/phases/91-workbook-runtime-purity-gate-dialect-spec/91-CONTEXT.md
+Last session: 2026-06-10T04:41:59.677Z
+Stopped at: Completed 91-01-PLAN.md
+Resume file: None
+
+## Performance Metrics
+
+| Phase | Plan | Duration | Notes |
+|-------|------|----------|-------|
+| Phase 91 P01 | 14 | 3 tasks | 21 files |
