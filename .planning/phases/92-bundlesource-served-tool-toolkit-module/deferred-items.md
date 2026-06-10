@@ -14,3 +14,11 @@
 - **Discovered during:** Plan 92-04 Task 1 (`cargo fmt -p pmcp-server-toolkit` reformatted them).
 - **Issue:** These Plan-02 fixture/tamper helpers were committed with a slightly older rustfmt formatting (multi-line fn args / `assert!` wrapping). A current-toolchain `cargo fmt --all --check` flags them. They are NOT touched by Plan 04 and the change is whitespace-only.
 - **Disposition:** Out of scope (executor scope boundary — not caused by Plan 04's changes). Reverted to keep Plan 04 commits scoped. Should be picked up by a workspace-wide `cargo fmt --all` in the next plan that runs `make quality-gate` (Plan 05 wires the builder-ext + purity gate + example, which runs the full gate).
+- **Resolution:** RESOLVED in Plan 05 (`style(92-05): rustfmt the plan-02 test-support files`). `make quality-gate` is now clean.
+
+## [92-05] Pre-existing clippy `redundant_guards` warning in http/auth.rs (not workbook)
+
+- **File:** `crates/pmcp-server-toolkit/src/http/auth.rs:538` (`Some(name) if name.is_empty() => ...`).
+- **Discovered during:** Plan 92-05 (running default `cargo clippy --features http` over the toolkit to double-check the workbook combos).
+- **Issue:** A default-on `clippy::redundant_guards` (rust-1.95) warning surfaces only under `--features http`; the match-guard could be rewritten as `Some("")`. It is in a Phase-90 OpenAPI file, NOT touched by Plan 05's workbook work.
+- **Disposition:** Out of scope (executor scope boundary — not caused by Plan 05's changes). `make quality-gate` PASSES (its `make lint` does not flag this — the toolkit crate is not pedantic-gated per user MEMORY `project_rust195_clippy_gate_debt.md`; the real CI lints only root `pmcp` with an allow-list). Left untouched; a future Phase-90 maintenance pass should rewrite the guard.
