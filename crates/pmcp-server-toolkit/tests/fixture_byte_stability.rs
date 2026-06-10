@@ -145,7 +145,10 @@ fn tamper_desync_lock_version_provokes_stamp_mismatch() {
     let source = LocalDirSource::new(dir.path());
     match load_bundle(&source) {
         Err(BundleLoadError::StampMismatch { field, .. }) => {
-            assert_eq!(field, "version", "version desync fires the version stamp gate")
+            assert_eq!(
+                field, "version",
+                "version desync fires the version stamp gate"
+            )
         },
         other => panic!("expected StampMismatch on version, got {other:?}"),
     }

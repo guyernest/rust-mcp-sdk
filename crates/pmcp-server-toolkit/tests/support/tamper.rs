@@ -67,7 +67,10 @@ pub fn copy_golden_to_temp() -> TempDir {
 pub fn flip_byte(dir: &Path, member: &str) {
     let path = dir.join(member);
     let mut bytes = std::fs::read(&path).expect("read member to flip");
-    assert!(!bytes.is_empty(), "member {member} must be non-empty to flip");
+    assert!(
+        !bytes.is_empty(),
+        "member {member} must be non-empty to flip"
+    );
     // Find the first ASCII alphanumeric byte and bump it to a different ASCII
     // alphanumeric value (digit 0-8 -> +1, '9' -> '0', letters rotate). This
     // changes the content hash while keeping the file present AND valid UTF-8.

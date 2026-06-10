@@ -383,7 +383,12 @@ fn build_cell_map() -> CellMap {
 }
 
 /// One captured layout cell.
-fn layout_cell(addr: &str, formula: Option<&str>, value: &str, number_format: Option<&str>) -> CellLayout {
+fn layout_cell(
+    addr: &str,
+    formula: Option<&str>,
+    value: &str,
+    number_format: Option<&str>,
+) -> CellLayout {
     CellLayout {
         addr: addr.to_string(),
         formula: formula.map(str::to_string),
@@ -431,9 +436,24 @@ fn build_layout(workbook_hash: &str) -> LayoutDescriptor {
                 name: "3_Outputs".to_string(),
                 hidden: false,
                 cells: vec![
-                    layout_cell("B2", Some("1_Inputs!B2-1_Inputs!B4"), "48000", Some("#,##0.00")),
-                    layout_cell("B3", Some("3_Outputs!B2*2_Brackets!B2"), "4800", Some("#,##0.00")),
-                    layout_cell("B4", Some("3_Outputs!B3/1_Inputs!B2"), "0.08", Some("0.00%")),
+                    layout_cell(
+                        "B2",
+                        Some("1_Inputs!B2-1_Inputs!B4"),
+                        "48000",
+                        Some("#,##0.00"),
+                    ),
+                    layout_cell(
+                        "B3",
+                        Some("3_Outputs!B2*2_Brackets!B2"),
+                        "4800",
+                        Some("#,##0.00"),
+                    ),
+                    layout_cell(
+                        "B4",
+                        Some("3_Outputs!B3/1_Inputs!B2"),
+                        "0.08",
+                        Some("0.00%"),
+                    ),
                     layout_cell("B5", Some("2_Brackets!B3"), "0.22", Some("0.00%")),
                 ],
                 merges: vec![],
