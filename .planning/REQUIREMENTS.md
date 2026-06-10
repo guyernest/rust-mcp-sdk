@@ -19,7 +19,7 @@
 
 ### Workbook Dialect — SDK-owned, versioned
 
-- [ ] **WBDL-01**: SDK owns a versioned dialect spec document (function whitelist + refuse-set) bound to the `WHITELIST` const by a test that fails if doc and code diverge
+- [x] **WBDL-01**: SDK owns a versioned dialect spec document (function whitelist + refuse-set) bound to the `WHITELIST` const by a test that fails if doc and code diverge
 - [ ] **WBDL-02**: A workbook declares the dialect version it targets, enabling forward-compatible dialect evolution
 - [ ] **WBDL-03**: Developer can lint a workbook against the dialect (whitelist-only, deny-by-default) and receive collect-all, located, BA-actionable findings with repair guidance
 
@@ -99,7 +99,7 @@
 | WBRT-02 | Phase 91 | Complete |
 | WBRT-03 | Phase 91 | Complete |
 | WBRT-04 | Phase 91 | Pending |
-| WBDL-01 | Phase 91 | Pending |
+| WBDL-01 | Phase 91 | Complete |
 | WBDL-03 | Phase 91 | Pending |
 | WBSV-01 | Phase 92 | Pending |
 | WBSV-02 | Phase 92 | Pending |

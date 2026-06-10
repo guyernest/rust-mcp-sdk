@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v2.3
 milestone_name: Excel-as-Configuration MCP Servers
 status: executing
-stopped_at: Completed 91-01-PLAN.md
-last_updated: "2026-06-10T04:41:59.682Z"
+stopped_at: Completed 91-02-PLAN.md
+last_updated: "2026-06-10T04:58:08.020Z"
 last_activity: 2026-06-10
 progress:
   total_phases: 53
   completed_phases: 41
   total_plans: 194
-  completed_plans: 192
+  completed_plans: 193
   percent: 77
 ---
 
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-06-09) · .planning/ROADMAP.md (v2.3 mil
 ## Current Position
 
 Phase: 91 (workbook-runtime-purity-gate-dialect-spec) — EXECUTING
-Plan: 2 of 3
+Plan: 3 of 3
 Status: Ready to execute
 Last activity: 2026-06-10
 
@@ -56,6 +56,7 @@ Decisions are logged in PROJECT.md Key Decisions table. Decisions framing this m
 - v2.3: §5 generalization fixes (manifest-driven emit, CR-01/CR-02/WR-01, umya provenance) land in the compiler-owning phase (93), not deferred.
 - v2.3: Mirror the v2.2 toolkit pattern (toolkit feature module + Shape A binary + Shape B scaffold); explicitly does NOT touch `pmcp-code-mode`.
 - [Phase ?]: Phase 91-01: pmcp-workbook-runtime lifted reader-free from lighthouse; D-08 adds Deserialize to finding types; no pmcp dep (D-09 permits but runtime is pmcp-free); writer-only rust_xlsxwriter — zip enters only via the writer
+- [Phase ?]: Phase 91-02: pmcp-workbook-dialect reader-free slot 2b; flat 13-fn WHITELIST (D-05); doc-const binding test enforces WBDL-01; re-exports runtime findings (D-03); linter/WorkbookMap deferred to Phase 93 (D-02)
 
 ### Pending Todos
 
@@ -92,8 +93,8 @@ Items deferred by design for this milestone:
 
 ## Session Continuity
 
-Last session: 2026-06-10T04:41:59.677Z
-Stopped at: Completed 91-01-PLAN.md
+Last session: 2026-06-10T04:58:03.475Z
+Stopped at: Completed 91-02-PLAN.md
 Resume file: None
 
 ## Performance Metrics
@@ -101,3 +102,4 @@ Resume file: None
 | Phase | Plan | Duration | Notes |
 |-------|------|----------|-------|
 | Phase 91 P01 | 14 | 3 tasks | 21 files |
+| Phase 91 P02 | 9min | 3 tasks | 4 files |
