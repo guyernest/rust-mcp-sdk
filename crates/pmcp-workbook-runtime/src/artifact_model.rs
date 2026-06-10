@@ -14,8 +14,8 @@
 //! - `workbook-compiler` (the offline EMITTER) re-exports these from
 //!   `artifact::{cell_map,bundle_lock}` via a re-export shim (the SAME pattern
 //!   `manifest::model` uses), so the emit path keeps compiling unchanged.
-//! - `quote-pricing-server` (the served binary) deserializes these types DIRECTLY
-//!   and recomputes integrity via the SAME [`build_bundle_lock`] the emitter used.
+//! - the served binary deserializes these types DIRECTLY and recomputes
+//!   integrity via the SAME [`build_bundle_lock`] the emitter used.
 //!
 //! The hashing helpers ([`sha256_hex`], [`build_bundle_lock`], [`update_field`])
 //! are the SINGLE source the emitter and the server-side integrity check share —
@@ -27,8 +27,8 @@ use sha2::{Digest, Sha256};
 /// One input/output cell entry in a [`CellMap`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct CellEntry {
-    /// The Plot-3 JSON key the caller uses for this cell (the LLM-facing name).
-    pub plot3_json_key: String,
+    /// The neutral JSON key the caller uses for this cell (the LLM-facing name).
+    pub json_key: String,
     /// The `CellEnv` seed coordinate — the fully-qualified `sheet!addr` cell key.
     pub seed_coord: String,
     /// The declared unit (`m2`/`GBP`/…), when known.
@@ -36,16 +36,16 @@ pub struct CellEntry {
 }
 
 /// The manifest-driven I/O cell map (Codex HIGH #5): the inputs/outputs the served
-/// `calculate` seeds and projects, plus the named supply-total output cell.
+/// `calculate` seeds and projects.
+///
+/// There is NO privileged-headline field (S-1): the served all-outputs path
+/// iterates [`CellMap::outputs`] independently, so no single output is elevated.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct CellMap {
-    /// One entry per `Role::Input` cell (the seedable per-quote inputs).
+    /// One entry per `Role::Input` cell (the seedable per-call inputs).
     pub inputs: Vec<CellEntry>,
     /// One entry per `Role::Output` cell (the projected answers).
     pub outputs: Vec<CellEntry>,
-    /// The fully-qualified cell key (`sheet!addr`) of the single supply-total
-    /// output cell — the headline answer the served `calculate` returns.
-    pub supply_total_cell: String,
 }
 
 /// The three per-artifact content hashes recorded in a [`BundleLock`].
@@ -60,13 +60,13 @@ pub struct ArtifactHashes {
     pub evidence: String,
 }
 
-/// The `BUNDLE.lock` record (ART-04/D-05): the workflow identity, the
+/// The `BUNDLE.lock` record (ART-04/D-05): the bundle identity, the
 /// `workbook_hash` provenance anchor, the three per-artifact content hashes, and
 /// the COMBINED hash-of-hashes that flips on any single-artifact change.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct BundleLock {
-    /// The workflow name (e.g. `"ufh-quote"`).
-    pub workflow: String,
+    /// The neutral bundle identifier (D-17; e.g. `"tax-calc"`).
+    pub bundle_id: String,
     /// The semver version (e.g. `"1.0.0"`).
     pub version: String,
     /// The canonical source-workbook CONTENT hash (`source_workbook_hash`), the
@@ -105,7 +105,7 @@ pub fn update_field(hasher: &mut Sha256, tag: &[u8], data: &[u8]) {
 /// recomputed from raw bytes (D-05). A one-byte change to any artifact flips its
 /// per-artifact hash, which flips the combined hash (D-05 tamper detection).
 pub fn build_bundle_lock(
-    workflow: &str,
+    bundle_id: &str,
     version: &str,
     workbook_hash: String,
     ir_json: &str,
@@ -121,7 +121,7 @@ pub fn build_bundle_lock(
     let combined = sha256_hex(format!("{h_exec}{h_manifest}{h_evidence}").as_bytes());
 
     BundleLock {
-        workflow: workflow.to_string(),
+        bundle_id: bundle_id.to_string(),
         version: version.to_string(),
         workbook_hash,
         artifacts: ArtifactHashes {
@@ -144,7 +144,7 @@ mod tests {
     #[test]
     fn bundle_lock_records_three_plus_combined() {
         let lock = build_bundle_lock(
-            "ufh-quote",
+            "tax-calc",
             "1.0.0",
             workbook_hash(),
             "{IR}",
@@ -167,7 +167,7 @@ mod tests {
     #[test]
     fn bundle_lock_hashes_stable_across_runs() {
         let a = build_bundle_lock(
-            "ufh-quote",
+            "tax-calc",
             "1.0.0",
             workbook_hash(),
             "{IR}",
@@ -175,7 +175,7 @@ mod tests {
             &sha256_hex(b"{EVID}"),
         );
         let b = build_bundle_lock(
-            "ufh-quote",
+            "tax-calc",
             "1.0.0",
             workbook_hash(),
             "{IR}",
@@ -188,7 +188,7 @@ mod tests {
     #[test]
     fn combined_hash_changes_when_any_artifact_changes() {
         let base = build_bundle_lock(
-            "ufh-quote",
+            "tax-calc",
             "1.0.0",
             workbook_hash(),
             "{IR}",
@@ -196,7 +196,7 @@ mod tests {
             &sha256_hex(b"{EVID}"),
         );
         let tampered = build_bundle_lock(
-            "ufh-quote",
+            "tax-calc",
             "1.0.0",
             workbook_hash(),
             "{IR}",
@@ -206,7 +206,7 @@ mod tests {
         assert_ne!(base.artifacts.manifest, tampered.artifacts.manifest);
         assert_ne!(base.combined, tampered.combined);
         let tampered_exec = build_bundle_lock(
-            "ufh-quote",
+            "tax-calc",
             "1.0.0",
             workbook_hash(),
             "{IR }",
@@ -220,7 +220,7 @@ mod tests {
     fn workbook_hash_reuses_content_projection() {
         let wh = workbook_hash();
         let lock = build_bundle_lock(
-            "ufh-quote",
+            "tax-calc",
             "1.0.0",
             wh.clone(),
             "{IR}",
@@ -235,14 +235,14 @@ mod tests {
     #[test]
     fn workflow_and_version_are_parameters_not_hardcoded() {
         let lock = build_bundle_lock(
-            "other-workflow",
+            "other-bundle",
             "2.3.4",
             workbook_hash(),
             "{IR}",
             "{MANIFEST}",
             &sha256_hex(b"{EVID}"),
         );
-        assert_eq!(lock.workflow, "other-workflow");
+        assert_eq!(lock.bundle_id, "other-bundle");
         assert_eq!(lock.version, "2.3.4");
     }
 

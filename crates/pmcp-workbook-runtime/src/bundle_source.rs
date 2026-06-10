@@ -335,12 +335,13 @@ mod tests {
     #[test]
     fn embedded_source_matches_local_dir_bytes() {
         use include_dir::{include_dir, Dir};
-        static FIXTURE: Dir =
-            include_dir!("$CARGO_MANIFEST_DIR/tests/fixtures/embedded_bundle");
+        static FIXTURE: Dir = include_dir!("$CARGO_MANIFEST_DIR/tests/fixtures/embedded_bundle");
         let embedded = EmbeddedSource::new(&FIXTURE);
 
-        let manifest_root =
-            concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/embedded_bundle");
+        let manifest_root = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/embedded_bundle"
+        );
         let local = LocalDirSource::new(manifest_root);
 
         for member in ["manifest.json", "evidence/changelog.json"] {
