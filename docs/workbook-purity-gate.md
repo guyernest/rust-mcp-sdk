@@ -37,9 +37,20 @@ The Makefile recipe begins `set -euo pipefail` and captures **every** `cargo tre
 exit status explicitly:
 
 ```sh
-tree=$(cargo tree -p $crate $feat 2>&1); status=$?
-if [ $status -ne 0 ]; then echo "...failing closed"; exit 1; fi
+status=0; tree=$(cargo tree -p $crate $feat 2>&1) || status=$?
+if [ $status -ne 0 ]; then
+  echo "purity-check FAILED: ... [exit $status] — failing closed"
+  printf '%s\n' "$tree"   # cargo's captured stderr, dumped for diagnosis
+  exit 1
+fi
 ```
+
+The `|| status=$?` form matters under `set -e`: a plain
+`tree=$(cargo tree …); status=$?` would abort the shell **at the assignment**
+when `cargo tree` fails — the gate would still exit non-zero (fail-closed), but
+the explicit diagnostic branch (the "failing closed" message and the captured
+cargo stderr) would be unreachable dead code. The `||` suppresses `set -e` for
+the capture only, so on failure the developer sees cargo's actual error output.
 
 A `cargo tree` invocation that fails for **any** reason — a broken `-p`, a transient
 registry error, a malformed feature flag — aborts the gate as a **FAILURE**. It is

@@ -473,6 +473,11 @@ docs-all: doc book
 # A `cargo tree` that errors for ANY reason (broken -p, transient failure) aborts
 # the gate as a FAILURE — it is NEVER read as "no banned dependency". There is no
 # `2>/dev/null` swallow on the tree output. See docs/workbook-purity-gate.md.
+# NOTE (WR-01): the capture uses `tree=$(...) || status=$?` — a PLAIN
+# `tree=$(...); status=$?` would abort the shell at the assignment under
+# `set -e`, making the diagnostic branch dead code (the gate would still fail
+# closed, but with ZERO diagnostics). The `|| status=$?` form suppresses
+# `set -e` for the capture only, so the explicit branch actually runs.
 #
 # `zip` is PERMITTED (it enters legitimately via the writer-only rust_xlsxwriter).
 # `pmcp` is PERMITTED (D-09 — the SDK runtime may depend on pmcp).
@@ -490,7 +495,7 @@ purity-check:
 	BAN='umya|calamine|quick-xml|swc_|pmcp-code-mode'; \
 	for crate in pmcp-workbook-runtime pmcp-workbook-dialect; do \
 	  for feat in "" "--no-default-features" "--all-features"; do \
-	    tree=$$(cargo tree -p $$crate $$feat 2>&1); status=$$?; \
+	    status=0; tree=$$(cargo tree -p $$crate $$feat 2>&1) || status=$$?; \
 	    if [ $$status -ne 0 ]; then \
 	      echo "purity-check FAILED: cargo tree errored for $$crate ($$feat) [exit $$status] — failing closed"; \
 	      printf '%s\n' "$$tree"; \
@@ -504,7 +509,7 @@ purity-check:
 	done; \
 	echo "purity-check: negative arm clean — no umya/calamine/quick-xml/swc_/pmcp-code-mode in either crate (all feature combos)"; \
 	for feat in "" "--no-default-features" "--all-features"; do \
-	  tree=$$(cargo tree -p pmcp-workbook-runtime $$feat 2>&1); status=$$?; \
+	  status=0; tree=$$(cargo tree -p pmcp-workbook-runtime $$feat 2>&1) || status=$$?; \
 	  if [ $$status -ne 0 ]; then \
 	    echo "purity-check FAILED: cargo tree errored for pmcp-workbook-runtime ($$feat) [exit $$status] — failing closed"; \
 	    printf '%s\n' "$$tree"; \
