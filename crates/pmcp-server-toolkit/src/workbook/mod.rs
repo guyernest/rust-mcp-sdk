@@ -50,10 +50,13 @@
 use serde_json::{json, Value};
 
 pub mod error;
+pub mod input;
 pub mod schema;
 
 #[doc(inline)]
 pub use error::{to_iserror_result, WorkbookToolError};
+#[doc(inline)]
+pub use input::{validate_input, ValidatedInput};
 
 /// Re-export of the verified runtime bundle the served tools operate on (loaded
 /// fail-closed via [`pmcp_workbook_runtime::load_bundle`]).
