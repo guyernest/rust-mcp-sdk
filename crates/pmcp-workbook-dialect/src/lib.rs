@@ -261,6 +261,21 @@ mod dialect_spec {
     #[test]
     fn doc_whitelist_table_matches_const() {
         let spec_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(SPEC_PATH);
+        // WR-05: this inline test SHIPS in the published crate, but the repo's
+        // `docs/` tree does not — in a published-package context (vendored
+        // workspace, distro packaging, path-replaced dep) the spec file is
+        // absent and the test must SKIP, not fail unconditionally. The in-repo
+        // gate stays fail-closed: `make purity-check` independently asserts the
+        // spec file exists, so an in-repo deletion/rename still fails CI rather
+        // than silently disabling this drift check.
+        if !spec_path.exists() {
+            eprintln!(
+                "skipping doc-binding test: dialect spec not present at {} \
+                 (published-package context; in-repo presence is enforced by `make purity-check`)",
+                spec_path.display()
+            );
+            return;
+        }
         let markdown = std::fs::read_to_string(&spec_path)
             .unwrap_or_else(|e| panic!("read published dialect spec {}: {e}", spec_path.display()));
 

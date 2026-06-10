@@ -528,6 +528,11 @@ purity-check:
 	@# must FAIL the gate, not silently disable Layer 2.
 	@test -f crates/pmcp-workbook-runtime/deny.toml || { echo "purity-check FAILED: crates/pmcp-workbook-runtime/deny.toml missing — Layer 2 would be vacuous; failing closed"; exit 1; }
 	@test -f crates/pmcp-workbook-dialect/deny.toml || { echo "purity-check FAILED: crates/pmcp-workbook-dialect/deny.toml missing — Layer 2 would be vacuous; failing closed"; exit 1; }
+	@# WR-05 in-repo backstop: the dialect crate's WBDL-01 doc-binding test
+	@# SKIPS when docs/workbook-dialect-spec.md is absent (so the PUBLISHED
+	@# package's tests pass without the repo docs tree). In-repo, absence must
+	@# FAIL — otherwise deleting the spec silently disables drift protection.
+	@test -f docs/workbook-dialect-spec.md || { echo "purity-check FAILED: docs/workbook-dialect-spec.md missing — the WBDL-01 doc-binding test would silently skip; failing closed"; exit 1; }
 	@cargo deny --manifest-path crates/pmcp-workbook-runtime/Cargo.toml check --config deny.toml bans
 	@cargo deny --manifest-path crates/pmcp-workbook-dialect/Cargo.toml check --config deny.toml bans
 	@echo "$(GREEN)purity-check PASSED: reader-free (umya/calamine/quick-xml/swc_/pmcp-code-mode absent) + writer-present (rust_xlsxwriter, per-feature) + zip-permitted + cargo-deny-bans-clean$(NC)"
