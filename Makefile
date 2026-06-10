@@ -522,6 +522,12 @@ purity-check:
 	done; \
 	echo "purity-check: positive arm clean — rust_xlsxwriter present in pmcp-workbook-runtime (all feature combos; zip permitted via the writer)"
 	@echo "$(BLUE)purity-check: Layer 2 — crate-local cargo-deny [bans] (--manifest-path scoped; workspace deny.toml untouched)$(NC)"
+	@# WR-02 fail-closed guard: cargo-deny 0.18.3 does NOT fail on a missing
+	@# --config path — it WARNs and falls back to the default (empty-ban) config,
+	@# reporting "bans ok" vacuously. A deleted/renamed crate-local deny.toml
+	@# must FAIL the gate, not silently disable Layer 2.
+	@test -f crates/pmcp-workbook-runtime/deny.toml || { echo "purity-check FAILED: crates/pmcp-workbook-runtime/deny.toml missing — Layer 2 would be vacuous; failing closed"; exit 1; }
+	@test -f crates/pmcp-workbook-dialect/deny.toml || { echo "purity-check FAILED: crates/pmcp-workbook-dialect/deny.toml missing — Layer 2 would be vacuous; failing closed"; exit 1; }
 	@cargo deny --manifest-path crates/pmcp-workbook-runtime/Cargo.toml check --config deny.toml bans
 	@cargo deny --manifest-path crates/pmcp-workbook-dialect/Cargo.toml check --config deny.toml bans
 	@echo "$(GREEN)purity-check PASSED: reader-free (umya/calamine/quick-xml/swc_/pmcp-code-mode absent) + writer-present (rust_xlsxwriter, per-feature) + zip-permitted + cargo-deny-bans-clean$(NC)"
