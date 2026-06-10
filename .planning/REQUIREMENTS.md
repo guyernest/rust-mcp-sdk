@@ -95,4 +95,41 @@
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| _(filled by roadmap)_ | | |
+| WBRT-01 | Phase 91 | Pending |
+| WBRT-02 | Phase 91 | Pending |
+| WBRT-03 | Phase 91 | Pending |
+| WBRT-04 | Phase 91 | Pending |
+| WBDL-01 | Phase 91 | Pending |
+| WBDL-03 | Phase 91 | Pending |
+| WBSV-01 | Phase 92 | Pending |
+| WBSV-02 | Phase 92 | Pending |
+| WBSV-03 | Phase 92 | Pending |
+| WBSV-04 | Phase 92 | Pending |
+| WBSV-05 | Phase 92 | Pending |
+| WBSV-06 | Phase 92 | Pending |
+| WBSV-07 | Phase 92 | Pending |
+| WBSV-08 | Phase 92 | Pending |
+| WBSV-09 | Phase 92 | Pending |
+| WBCO-01 | Phase 93 | Pending |
+| WBCO-02 | Phase 93 | Pending |
+| WBCO-03 | Phase 93 | Pending |
+| WBCO-04 | Phase 93 | Pending |
+| WBCO-05 | Phase 93 | Pending |
+| WBCO-06 | Phase 93 | Pending |
+| WBCO-07 | Phase 93 | Pending |
+| WBGV-01 | Phase 93 | Pending |
+| WBGV-02 | Phase 93 | Pending |
+| WBGV-03 | Phase 93 | Pending |
+| WBGV-04 | Phase 93 | Pending |
+| WBGV-05 | Phase 93 | Pending |
+| WBGV-06 | Phase 93 | Pending |
+| WBGV-07 | Phase 93 | Pending |
+| WBCL-01 | Phase 94 | Pending |
+| WBCL-02 | Phase 94 | Pending |
+| WBCL-03 | Phase 94 | Pending |
+| WBCL-04 | Phase 94 | Pending |
+| WBCL-06 | Phase 95 | Pending |
+| WBCL-05 | Phase 96 | Pending |
+| WBDL-02 | Phase 96 | Pending |
+| WBEX-01 | Phase 96 | Pending |
+| WBEX-02 | Phase 96 | Pending |

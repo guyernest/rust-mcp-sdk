@@ -12,6 +12,8 @@
 - ✅ **v1.7 SDK Maturation** — Phases 52-53 (shipped 2026-03-20)
 - **v2.0 Protocol Modernization** — Phases 54-59 (in progress)
 - **v2.1 rmcp Upgrades** — Phases 65-68 (in progress)
+- ✅ **v2.2 Configuration-Only MCP Servers (SQL + OpenAPI toolkits)** — Phases 82-90.2 (substantially shipped)
+- 🚧 **v2.3 Excel-as-Configuration MCP Servers (governed Excel CodeLanguage)** — Phases 91-96 (in progress)
 
 ## Phases
 
@@ -1699,3 +1701,117 @@ Plans:
 - [x] 90.1-01-PLAN.md — Enrich london-tube.toml (resources + prompt + full annotations) + fixture-validity asserts + build-only example (P901-FIXTURE, P901-EXAMPLE)
 - [x] 90.1-02-PLAN.md — Add Resources & Prompts config-walkthrough section to book + course OpenAPI chapters (P901-DOCS-BOOK, P901-DOCS-COURSE)
 - [x] 90.1-03-PLAN.md — Add list_resources + list_prompts replay steps to london-tube-scenarios.yaml (P901-PARITY)
+
+## v2.3 Excel-as-Configuration MCP Servers (governed Excel CodeLanguage) (In Progress)
+
+**Milestone Goal:** Extract the proven Excel-workbook → MCP-server compiler from the `towelrads-quote-pricing` lighthouse (its milestone v0.5.0, phases 7–14, all green — golden quote penny-reconciled to ±£0.01) into the PMCP SDK as a third "governed Excel" CodeLanguage alongside the v2.2 SQL and OpenAPI toolkits. **Compile, never interpret:** the workbook is simultaneously the specification (formula DAG), the test oracle (cached cell values become assertions), and the output template. Any project can compile a governed Excel workbook into a tested, versioned, deterministic MCP server. Generalize the known lighthouse debt (RFC §5) — do not copy it.
+
+**Source of truth:** RFC `docs/sdk-issue-excel-workbook-compiler-extraction.md` + `.planning/research/` (STACK / FEATURES / ARCHITECTURE / PITFALLS / SUMMARY, all HIGH confidence, researched 2026-06-09). Reference implementation: the lighthouse `crates/workbook-runtime/`, `crates/workbook-compiler/`, and `crates/quote-pricing-server/src/workbook/` (the served layer is already ~95% workbook-agnostic).
+
+**Load-bearing invariants encoded across phases:**
+
+- **Purity invariant (Pitfall 1):** the Excel reader (`umya` / `quick-xml`) must NEVER enter the served-binary dependency tree. The served path links only `pmcp-workbook-runtime`; the reader lives only in `pmcp-workbook-compiler` (consumed only by `cargo-pmcp`). A `cargo tree` + `cargo-deny [bans]` purity gate stands up in Phase 91 (with the runtime, before any `umya` code lands) and is re-asserted in every later phase that touches the served tree. The writer (`rust_xlsxwriter`, pulls permitted `zip`) IS positively asserted present.
+- **Dependency-forced ordering:** runtime ← compiler ← CLI; runtime ← served-tool toolkit module ← Shape A binary ← Shape B scaffold. The served layer requires the bundle contract; the bundle contract requires the compiler; the compiler requires the dialect + runtime. Freeze the bundle contract from the consumer side (Phase 92) BEFORE the compiler is re-cut (Phase 93).
+- **§5 generalization, not copy:** kill hardcoded `build_reference_manifest` (manifest fully synth-driven), fix promote-path bugs CR-01 (demotion asymmetry) / CR-02 (version overwrite) / WR-01 (enum-input tiering), handle umya fabricated-provenance — all in the compiler-owning phase (93).
+- **Second-workbook test (WBEX-01) is the generalization gate:** it lands in Phase 96, after the compiler + served layer are manifest-driven, and its success proves the §5 manifest-driven fix actually generalized (no per-workbook Rust, no privileged single output).
+- **Mirror the v2.2 toolkit pattern:** `pmcp-server-toolkit` feature module + per-source crates + Shape A binary / Shape B scaffold, same `TypedToolWithOutput` → `outputSchema` → `structuredContent` discipline.
+- **Explicitly NOT touched:** `pmcp-code-mode` (the untrusted long-tail path). A compiled workbook is curated config trusted by the promote gate + BA curation, not a runtime token. The two CodeLanguages coexist.
+
+### v2.3 Phase Summary
+
+- [ ] **Phase 91: Workbook Runtime + Purity Gate + Dialect Spec** — Port the reader-free `pmcp-workbook-runtime` leaf (owned IR/model types, deterministic evaluator, writer-only `.xlsx` renderer) and stand up the `cargo tree` + `cargo-deny` purity gate on day one; ship the SDK-owned versioned dialect spec + linter
+- [ ] **Phase 92: BundleSource + Served-Tool Toolkit Module** — Freeze the bundle contract from the consumer side: `BundleSource` trait (local-dir + embedded) + the generic, fully manifest-driven `workbook` feature module in `pmcp-server-toolkit` (all five tools, fail-closed validation, boot integrity gate) against a test bundle
+- [ ] **Phase 93: Workbook Compiler + §5 Generalization Fixes + Promote Gate** — Port `pmcp-workbook-compiler` (umya-isolated offline pipeline), do the §5 fixes here (manifest-driven emit, CR-01/CR-02/WR-01, umya fabricated-provenance), and ship the change-class + golden-corpus promote gate with the `--accept` approval flow
+- [ ] **Phase 94: CLI Subcommands + `pmcp.toml`** — `cargo pmcp compile-workbook` / `lint-workbook` / `emit-bundle` thin shells over the compiler, the gated `--accept --approver --effective-date` flow, and a project-level `pmcp.toml` mapping workbooks → bundle IDs (kills single-workbook assumptions)
+- [ ] **Phase 95: Shape A Binary `pmcp-workbook-server`** — A pure-config binary that stands up a live MCP server from a compiled bundle alone (no user Rust), mirroring `pmcp-sql-server` field-for-field
+- [ ] **Phase 96: Shape B Scaffold + Dialect-Version Declaration + Generalization Validation** — `cargo pmcp new --kind workbook-server` scaffold (Shape B), workbooks declare the dialect version they target, and the second-workbook + Excel-quirk-corpus generalization gates prove the manifest is truly synth-driven
+
+## Phase Details — v2.3 Milestone
+
+### Phase 91: Workbook Runtime + Purity Gate + Dialect Spec
+**Goal**: A reader-free `pmcp-workbook-runtime` leaf crate owns every shared model/IR type, runs a compiled workbook's IR through a deterministic evaluator and a writer-only `.xlsx` renderer, and a mechanically-provable purity gate guarantees the Excel reader can never reach the served binary — established BEFORE any `umya` code exists. The SDK also owns a versioned dialect spec + linter.
+**Depends on**: Phase 90.2 (v2.2 close); pmcp core only — proves the purity boundary first (RFC §7 smallest cut)
+**Requirements**: WBRT-01, WBRT-02, WBRT-03, WBRT-04, WBDL-01, WBDL-03
+**Success Criteria** (what must be TRUE):
+
+  1. A developer can depend on `pmcp-workbook-runtime` (reader-free leaf, slot 2a) and deserialize the shared model types (`Manifest`, `CellMap`, `BundleLock`, `VersionChangelog`, IR `Cell`/`Expr`) identically to how the offline emitter produces them — serde/schemars-clean, zero reader dependency
+  2. The runtime runs a compiled IR through a deterministic topo executor producing typed outputs plus per-cell derivation traces, and renders a computed workbook back to `.xlsx` via the writer-only `rust_xlsxwriter` renderer
+  3. **PURITY GATE:** CI + `just purity-check` fail the build if `umya` / `quick-xml` appear in the runtime's (or any served-binary's) dependency tree, run per feature-combination (not just defaults), with a positive assertion that `rust_xlsxwriter` IS present and `zip` (writer container) is permitted — `cargo tree` assertions backed by a `cargo-deny [bans]` declaration
+  4. The SDK owns a versioned dialect spec document (function whitelist + refuse-set) bound to the `WHITELIST` const by a test that fails if doc and code diverge
+  5. A developer can lint a workbook against the dialect (whitelist-only, deny-by-default) and receive collect-all, located, BA-actionable findings with repair guidance
+**Plans**: TBD
+
+### Phase 92: BundleSource + Served-Tool Toolkit Module
+**Goal**: The compiled-bundle contract is frozen from the consumer side: a generic, fully manifest-driven `workbook` feature module in `pmcp-server-toolkit` registers all five tools against a test bundle loaded through a `BundleSource` trait, fails closed on any integrity or validation gap, and emits the same `outputSchema` → `structuredContent` discipline as the SQL/OpenAPI toolkits — with zero per-workbook Rust.
+**Depends on**: Phase 91 (runtime types + purity gate)
+**Requirements**: WBSV-01, WBSV-02, WBSV-03, WBSV-04, WBSV-05, WBSV-06, WBSV-07, WBSV-08, WBSV-09
+**Success Criteria** (what must be TRUE):
+
+  1. An agent can call `calculate` with typed, tier-enforced, dtype-checked, enum-gated inputs and receive ALL named outputs (`{value,unit}` each) plus a provenance stamp — no single privileged "headline" output — and `explain` / `get_manifest` / `diff_version` / `render_workbook` each return their bundle-driven projections (per-cell trace, curated manifest, hash-verified changelog, provenance-bound `workbook://` resource)
+  2. Input and output schemas are projected entirely from the manifest (`additionalProperties:false`, per-column dtype/unit/meaning; mandatory non-empty `outputSchema`) — parity with the SQL/OpenAPI `TypedToolWithOutput` pattern; no per-workbook handler code
+  3. Every domain failure returns a structured `isError:true` envelope in `structuredContent` (never a protocol `Err`) carrying `code`, `reason`, and self-repair fields (`allowed`/`required`/`range`) plus the provenance stamp; validation is **fail-closed** (a missing manifest role for a supplied input is an error, not an `if let Some` skip — WR-05; non-string values on enum inputs rejected — WR-02)
+  4. The server recomputes the `BUNDLE.lock` combined hash-of-hashes at boot and fails closed on any tampered or mismatched artifact before serving
+  5. A server loads a bundle via the `BundleSource` trait with both local-directory and embedded (`include_dir!`) implementations; S3/registry is a documented extension seam, not shipped
+**Plans**: TBD
+**UI hint**: yes
+
+### Phase 93: Workbook Compiler + §5 Generalization Fixes + Promote Gate
+**Goal**: `pmcp-workbook-compiler` ports the full offline pipeline (ingest → lint → manifest synth → formula parse → DAG compile → penny-reconcile → artifact emit → promote-time gate) with `umya` isolated to this crate, and ships the §5 generalization fixes at extraction time (not copied): a fully manifest-driven emit path, symmetric change-class classification, versioned non-overwriting bundle writes, enum-tiering correctness, umya fabricated-provenance refusal, and the change-class + golden-corpus promote gate with a BA approval flow.
+**Depends on**: Phase 91 (re-exports runtime types); contract frozen by Phase 92
+**Requirements**: WBCO-01, WBCO-02, WBCO-03, WBCO-04, WBCO-05, WBCO-06, WBCO-07, WBGV-01, WBGV-02, WBGV-03, WBGV-04, WBGV-05, WBGV-06, WBGV-07
+**Success Criteria** (what must be TRUE):
+
+  1. The compiler ingests a `.xlsx` (umya, compiler-isolated), captures cached cell values as a trusted oracle, parses formulas + reconstructs the dependency DAG (`sheet_ir`), compiles pure cells to executable IR, and **penny-reconciles** computed values against the oracle using operand-anchored rounding (never a naïve `delta.abs()` tolerance — grep-gated), emitting the complete seven-member bundle (manifest/IR/cell_map/layout/BUNDLE.lock/evidence)
+  2. The candidate semantic manifest is synthesized **fully workbook-driven** from colour/Guide/headers with BA ratification — `build_reference_manifest` is deleted from every non-test path (kills per-workbook Rust); closed JSON-Schema enums come from inline DV literals (≤10), with range/named-range sources rejected with precise reason codes
+  3. **CR-01 fix:** the change-class classifier is symmetric — demotion-direction changes (Input→Constant, source/assumption flips) each produce a non-empty class routing to BlockUntilAccept/NeverAutoPromote, never silent HotReload; the strictest-policy reducer hard-blocks any assumption (yellow-cell) change; numeric drift is distinguished from semantic redefinition via a stable canonical IR sub-DAG identity hash
+  4. **CR-02 fix:** promotion writes the new bundle to its own `@<next_version>` directory and never overwrites the baseline (promote-twice yields two distinct on-disk version dirs, prior baseline byte-identical, `BUNDLE.lock` version == `changelog.to_version`); the golden-corpus gate blocks any over-tolerance named-output delta unless a content-hash-fingerprinted `ApprovalRecord` covers the candidate, and a BA can record one via `--accept --approver <X> --effective-date <D>`
+  5. **WR-01 fix + umya provenance:** enum inputs skip Variable-tier assignment so the default path can never seed an out-of-enum empty string (verified against the COMMITTED manifest, not the in-memory builder); the freshness gate assigns a distinct provenance class to umya-stamped (fabricated `<Application>Microsoft Excel</Application>`/`calcId`) workbooks and REFUSES them with `oracle/non-excel-app`
+**Plans**: TBD
+
+### Phase 94: CLI Subcommands + `pmcp.toml`
+**Goal**: The compiler's verbs become first-class `cargo pmcp` subcommands (thin shells over the Phase 93 compiler) carrying the gated BA approval flow, and a project-level `pmcp.toml` maps workbooks → bundle IDs, eliminating the lighthouse's single-workbook justfile/path assumptions so a second project can use the tooling.
+**Depends on**: Phase 93 (the compiler)
+**Requirements**: WBCL-01, WBCL-02, WBCL-03, WBCL-04
+**Success Criteria** (what must be TRUE):
+
+  1. A developer can run `cargo pmcp compile-workbook <wb.xlsx>` to ingest → lint → synth → parse → compile → reconcile → **gate** → write a bundle, with the gate running before any write; and `cargo pmcp lint-workbook <wb.xlsx>` runs the dialect linter standalone (non-zero exit on errors)
+  2. A developer can run `cargo pmcp emit-bundle` to regenerate a bundle without the gate (dev/reference)
+  3. The `--accept --approver <X> --effective-date <D>` flow records a fingerprint-bound `ApprovalRecord` and re-baselines the golden corpus through the CLI, with clear gate output stating the change class and the exact command to run
+  4. A project declares workbooks → bundle IDs in a project-level `pmcp.toml` (`[[workbook.workbooks]]` source → bundle_id), and the three CLI subcommands resolve sources through it — no lighthouse paths
+**Plans**: TBD
+
+### Phase 95: Shape A Binary `pmcp-workbook-server`
+**Goal**: A `pmcp-workbook-server` pure-config binary stands up a live MCP server from a compiled bundle alone, with no user Rust — mirroring `pmcp-sql-server` field-for-field (lib `run`/`serve` + thin `main.rs` shim, `RunError` → non-zero exit), selecting a `BundleSource` from CLI args.
+**Depends on**: Phase 92 (toolkit module + `BundleSource`) and Phase 94 (stable `pmcp.toml` contract)
+**Requirements**: WBCL-06
+**Success Criteria** (what must be TRUE):
+
+  1. Running `pmcp-workbook-server --bundle-dir <dir> --bundle-id <id>` (optionally `--http`) stands up a live MCP server whose five tools are served entirely from the compiled bundle — zero user Rust written
+  2. The binary selects a `BundleSource` from CLI args, runs the boot integrity gate, and surfaces a load/integrity failure as a typed `RunError` → non-zero exit (matching `pmcp-sql-server`'s behavior)
+  3. The published binary (slot 9a) links only `pmcp-server-toolkit[workbook]` + `pmcp-workbook-runtime` — the purity gate confirms no reader in its tree
+**Plans**: TBD
+
+### Phase 96: Shape B Scaffold + Dialect-Version Declaration + Generalization Validation
+**Goal**: `cargo pmcp new --kind workbook-server` scaffolds a thin binary over `BundleSource` + the served-tool toolkit module (Shape B); workbooks declare the dialect version they target (forward-compatible evolution); and the generalization gates — a second, non-lighthouse workbook compiling and serving end-to-end, plus an Excel-quirk fixture corpus — prove the manifest is truly synth-driven with no per-workbook Rust and no privileged single output.
+**Depends on**: Phase 95 (the scaffold targets the Shape A wiring)
+**Requirements**: WBCL-05, WBDL-02, WBEX-01, WBEX-02
+**Success Criteria** (what must be TRUE):
+
+  1. A developer can run `cargo pmcp new --kind workbook-server` to scaffold a runnable crate (Cargo.toml + `main.rs` using `EmbeddedSource` + sample `pmcp.toml` + sample bundle) — a thin shell over the toolkit module, mirroring `--kind sql-server`
+  2. A workbook declares the dialect version it targets, and the compiler validates that declaration — enabling forward-compatible dialect evolution
+  3. **GENERALIZATION GATE (WBEX-01):** a second, non-lighthouse example workbook compiles and serves end-to-end through the SDK path, and its server's `get_manifest` / `tools/list` schema reflects ITS OWN inputs with zero shared Rust and no privileged single output — proving the manifest-driven §5 fix generalized
+  4. An Excel-quirk fixture corpus (1900 leap-year, empty-cell coercion, error propagation, half-rounding boundaries) verifies reconcile determinism beyond the single golden case
+**Plans**: TBD
+
+## Progress — v2.3 Milestone
+
+**Execution order:** Phase 91 (runtime + purity gate + dialect) → Phase 92 (BundleSource + served-tool module, freezes the bundle contract) → Phase 93 (compiler + §5 fixes + promote gate) → Phase 94 (CLI + `pmcp.toml`) → Phase 95 (Shape A binary) → Phase 96 (Shape B scaffold + dialect-version + generalization gates). Strictly sequential: each phase's output is the next phase's dependency (runtime ← compiler/toolkit; contract frozen before compiler re-cut; CLI/binary/scaffold over the now-stable runtime+compiler).
+
+| Phase | Plans Complete | Status | Completed |
+|-------|----------------|--------|-----------|
+| 91. Workbook Runtime + Purity Gate + Dialect | 0/? | Not started | - |
+| 92. BundleSource + Served-Tool Toolkit Module | 0/? | Not started | - |
+| 93. Workbook Compiler + §5 Fixes + Promote Gate | 0/? | Not started | - |
+| 94. CLI Subcommands + `pmcp.toml` | 0/? | Not started | - |
+| 95. Shape A Binary `pmcp-workbook-server` | 0/? | Not started | - |
+| 96. Shape B Scaffold + Dialect-Version + Generalization | 0/? | Not started | - |
