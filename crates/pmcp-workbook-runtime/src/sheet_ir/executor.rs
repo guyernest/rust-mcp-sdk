@@ -8,8 +8,12 @@
 //! Leaf arithmetic routes through the PURE-RUST [`super::scalar_eval`] via
 //! [`eval_leaf`] (no SWC/JS kernel); function dispatch routes through
 //! [`semantics::apply`]; range member-keys + 2-D shape come from the public
-//! [`resolve::expand_range`]. The DAG-BUILD path (`build_dag`/`rebase`/loop
-//! unroll, `run_with_loop`) STAYS in `workbook-compiler` and calls THIS `run()`.
+//! [`resolve::expand_range`]. This crate exports a silent-drop [`build_dag`]
+//! (reconstructs edges from an ALREADY-built IR at load time; a failed range
+//! expansion contributes no edge). The finding-pushing DAG-BUILD pipeline
+//! (`rebase`/loop unroll, `run_with_loop`) lives in the compiler crate
+//! (Phase 93), which calls THIS `run()` — extend that pipeline there rather
+//! than shadowing this `build_dag`.
 //!
 //! Order comes from [`toposort`] ONLY — NEVER calcChain (RESEARCH Pitfall 3). A
 //! `toposort` cycle surfaces as ONE located `dag/cycle` [`LintFinding`].
@@ -71,6 +75,13 @@ pub struct RunResult {
     pub traces: HashMap<String, EvalTrace>,
 }
 
+/// The owning sheet of a fully-qualified `sheet!addr` cell key — the default an
+/// unqualified Range falls back to (WR-04). Splitter sibling of the key builder
+/// [`crate::range_ref::cell_key`]; empty when the key carries no `!`.
+fn owning_sheet(key: &str) -> &str {
+    key.split_once('!').map_or("", |(s, _)| s)
+}
+
 /// Walk the per-cell [`Dag`] in toposort order, filling `env` from `seed`, and
 /// compute every cell in `ir`. Returns the computed `{cell_key -> CellValue}` map
 /// together with per-cell [`EvalTrace`] evidence, or ONE located `dag/cycle`
@@ -115,17 +126,15 @@ pub fn run(
                     errs.insert(key.clone(), *err);
                 }
                 computed.insert(key.clone(), v.clone());
-            }
+            },
             Some(Cell {
                 expr: CellExpr::Formula(e),
                 ..
             }) => {
                 let mut trace = EvalTrace::new(&key);
-                // WR-04: the OWNING cell's sheet (from its `sheet!addr` key) is
-                // the default an unqualified Range falls back to in
-                // `expand_range` — without it, an empty `range.sheet` expanded
-                // to phantom `"!B2"` keys that could never match env.
-                let current_sheet = key.split_once('!').map_or("", |(s, _)| s);
+                // WR-04: without the owning sheet, an empty `range.sheet`
+                // expanded to phantom `"!B2"` keys that could never match env.
+                let current_sheet = owning_sheet(&key);
                 let result = eval_expr(e, &env, &errs, current_sheet, &mut trace);
                 if let CellValue::Error(err) = &result {
                     errs.insert(key.clone(), *err);
@@ -136,9 +145,9 @@ pub fn run(
                 }
                 computed.insert(key.clone(), result);
                 traces.insert(key.clone(), trace);
-            }
+            },
             // A cell in the DAG but absent from `ir` is a pre-seeded input.
-            None => {}
+            None => {},
         }
     }
 
@@ -172,11 +181,11 @@ fn eval_expr(
                                 trace.operand_values.push(cv.clone());
                             }
                         }
-                    }
+                    },
                 }
             }
             semantics::apply(name, &vals)
-        }
+        },
         Expr::BinaryOp { left, op, right } => {
             if matches!(op, BinOp::Pow) {
                 let lv = eval_expr(left, env, errs, current_sheet, trace);
@@ -200,7 +209,7 @@ fn eval_expr(
                 right: Box::new(scalar_to_leaf(&r)),
             };
             eval_leaf(&lowered, env, errs)
-        }
+        },
         Expr::UnaryOp { op, operand } => {
             if matches!(op, UnOp::Percent) {
                 let v = eval_expr(operand, env, errs, current_sheet, trace);
@@ -219,11 +228,11 @@ fn eval_expr(
                 operand: Box::new(scalar_to_leaf(&v)),
             };
             eval_leaf(&lowered, env, errs)
-        }
+        },
         other => {
             record_refs(other, env, current_sheet, trace);
             eval_leaf(other, env, errs)
-        }
+        },
     }
 }
 
@@ -248,7 +257,7 @@ fn is_leaf_lowerable(e: &Expr) -> bool {
         Expr::Range(_) | Expr::Name(_) | Expr::Call { .. } => false,
         Expr::BinaryOp { left, op, right } => {
             !matches!(op, BinOp::Pow) && is_leaf_lowerable(left) && is_leaf_lowerable(right)
-        }
+        },
         Expr::UnaryOp { op, operand } => !matches!(op, UnOp::Percent) && is_leaf_lowerable(operand),
     }
 }
@@ -282,7 +291,7 @@ fn materialize_arg(
             Err(_) => {
                 trace.short_circuited.get_or_insert(ExcelError::Ref);
                 EvalValue::Scalar(CellValue::Error(ExcelError::Ref))
-            }
+            },
         },
         Expr::Name(_) => EvalValue::Scalar(CellValue::Error(ExcelError::Name)),
         scalar => EvalValue::Scalar(eval_expr(scalar, env, errs, current_sheet, trace)),
@@ -317,7 +326,7 @@ fn build_range(
                     None => {
                         trace.short_circuited.get_or_insert(ExcelError::Ref);
                         CellValue::Error(ExcelError::Ref)
-                    }
+                    },
                 },
             };
             trace.resolved_refs.push((key.clone(), cv.clone()));
@@ -347,18 +356,18 @@ fn collect_ref_keys(e: &Expr, current_sheet: &str, out: &mut Vec<String>) {
             if let Ok((keys, _shape)) = resolve::expand_range(range, current_sheet) {
                 out.extend(keys);
             }
-        }
+        },
         Expr::BinaryOp { left, right, .. } => {
             collect_ref_keys(left, current_sheet, out);
             collect_ref_keys(right, current_sheet, out);
-        }
+        },
         Expr::UnaryOp { operand, .. } => collect_ref_keys(operand, current_sheet, out),
         Expr::Call { args, .. } => {
             for a in args {
                 collect_ref_keys(a, current_sheet, out);
             }
-        }
-        Expr::Number(_) | Expr::Str(_) | Expr::Bool(_) | Expr::Name(_) | Expr::ErrorLit(_) => {}
+        },
+        Expr::Number(_) | Expr::Str(_) | Expr::Bool(_) | Expr::Name(_) | Expr::ErrorLit(_) => {},
     }
 }
 
@@ -387,10 +396,9 @@ pub fn build_dag(ir: &HashMap<String, Cell>) -> Dag {
     for (key, cell) in ir {
         dag.add_node(key);
         if let CellExpr::Formula(e) = &cell.expr {
-            // WR-04: the owning cell's sheet (from its `sheet!addr` key) is the
-            // default an unqualified range expands onto — so DAG edges and the
-            // eval-time walk agree on the SAME qualified member keys.
-            let current_sheet = key.split_once('!').map_or("", |(s, _)| s);
+            // WR-04: same owning-sheet default as `run()` — so DAG edges and
+            // the eval-time walk agree on the SAME qualified member keys.
+            let current_sheet = owning_sheet(key);
             let mut deps = Vec::new();
             collect_ref_keys(e, current_sheet, &mut deps);
             for dep in deps {

@@ -291,7 +291,7 @@ mod tests {
         let all = [Role::Input, Role::Constant, Role::Output, Role::Formula];
         for r in all {
             match r {
-                Role::Input | Role::Constant | Role::Output | Role::Formula => {}
+                Role::Input | Role::Constant | Role::Output | Role::Formula => {},
             }
         }
         assert_eq!(all.len(), 4, "Role must have exactly four variants");
@@ -504,7 +504,7 @@ mod tests {
             Some(InputTier::BoundedVariable { min, max, .. }) => {
                 assert_eq!(min, CellValue::Number(0.1));
                 assert_eq!(max, CellValue::Number(0.3));
-            }
+            },
             other => panic!("expected BoundedVariable, got {other:?}"),
         }
     }
@@ -586,7 +586,7 @@ mod tests {
         let all = [Role::Input, Role::Constant, Role::Output, Role::Formula];
         for r in all {
             match r {
-                Role::Input | Role::Constant | Role::Output | Role::Formula => {}
+                Role::Input | Role::Constant | Role::Output | Role::Formula => {},
             }
         }
         assert_eq!(all.len(), 4, "Role must still have exactly four variants");

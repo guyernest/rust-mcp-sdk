@@ -275,7 +275,7 @@ pub fn render_xlsx(layout: &LayoutDescriptor, run: &RunResult) -> Result<Vec<u8>
                 Some(CellValue::Number(n)) if n.is_finite() => Some(format_number(*n)),
                 Some(CellValue::Number(_)) => {
                     return Err(RenderError::NonFiniteValue { cell: key })
-                }
+                },
                 Some(CellValue::Text(s)) => Some(s.clone()),
                 Some(CellValue::Bool(b)) => Some(b.to_string()),
                 _ => cell.value.clone(),
@@ -311,11 +311,11 @@ pub fn render_xlsx(layout: &LayoutDescriptor, run: &RunResult) -> Result<Vec<u8>
                         return Err(RenderError::NonFiniteValue { cell: key });
                     }
                     write_number_cell(ws, row, col, cell, *n, fmt.as_ref())?;
-                }
+                },
                 Some(CellValue::Text(s)) => write_string_cell(ws, row, col, s, fmt.as_ref())?,
                 Some(CellValue::Bool(b)) => {
                     write_string_cell(ws, row, col, &b.to_string(), fmt.as_ref())?;
-                }
+                },
                 // Error / Empty / not-computed: fall back to the captured value
                 // text (the descriptor's "copy of the workbook" content) so a
                 // non-output cell still renders its original literal.
@@ -323,7 +323,7 @@ pub fn render_xlsx(layout: &LayoutDescriptor, run: &RunResult) -> Result<Vec<u8>
                     if let Some(v) = &cell.value {
                         write_string_cell(ws, row, col, v, fmt.as_ref())?;
                     }
-                }
+                },
             }
         }
     }
@@ -356,19 +356,19 @@ fn write_number_cell(
                 Formula::new(normalize_formula_for_writer(f)).set_result(format_number(n));
             ws.write_formula_with_format(row, col, formula, fmt)
                 .map_err(writer_err)?;
-        }
+        },
         (Some(f), None) => {
             let formula =
                 Formula::new(normalize_formula_for_writer(f)).set_result(format_number(n));
             ws.write_formula(row, col, formula).map_err(writer_err)?;
-        }
+        },
         (None, Some(fmt)) => {
             ws.write_number_with_format(row, col, n, fmt)
                 .map_err(writer_err)?;
-        }
+        },
         (None, None) => {
             ws.write_number(row, col, n).map_err(writer_err)?;
-        }
+        },
     }
     Ok(())
 }

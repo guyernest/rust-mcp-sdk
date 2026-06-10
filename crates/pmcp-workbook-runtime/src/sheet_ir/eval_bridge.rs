@@ -114,7 +114,7 @@ pub fn preflight_error(expr: &Expr, errors: &HashMap<String, ExcelError>) -> Opt
         Expr::Range(_) | Expr::Name(_) | Expr::Number(_) | Expr::Str(_) | Expr::Bool(_) => None,
         Expr::BinaryOp { left, right, .. } => {
             preflight_error(left, errors).or_else(|| preflight_error(right, errors))
-        }
+        },
         Expr::UnaryOp { operand, .. } => preflight_error(operand, errors),
         Expr::Call { args, .. } => args.iter().find_map(|a| preflight_error(a, errors)),
     }

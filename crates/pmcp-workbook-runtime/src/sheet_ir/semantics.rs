@@ -115,7 +115,7 @@ fn values_equal(a: &CellValue, b: &CellValue) -> bool {
         // Cross-type: a number matches a numeric text key (Excel coerces).
         (CellValue::Number(x), CellValue::Text(t)) | (CellValue::Text(t), CellValue::Number(x)) => {
             t.trim().parse::<f64>().map(|v| v == *x).unwrap_or(false)
-        }
+        },
         _ => false,
     }
 }
@@ -158,10 +158,10 @@ fn f_sum(args: &[EvalValue]) -> Result<CellValue, ExcelError> {
                         // SUM ignores text/bool members the way Excel does for a
                         // range, but counts numbers and empties (as 0).
                         CellValue::Number(n) => total += n,
-                        CellValue::Empty | CellValue::Text(_) | CellValue::Bool(_) => {}
+                        CellValue::Empty | CellValue::Text(_) | CellValue::Bool(_) => {},
                     }
                 }
-            }
+            },
         }
     }
     Ok(CellValue::Number(total))
@@ -348,7 +348,7 @@ fn f_search(args: &[EvalValue]) -> Result<CellValue, ExcelError> {
             } else {
                 return Err(ExcelError::Value);
             }
-        }
+        },
         None => 0,
     };
     let hay_lower = haystack.to_lowercase();

@@ -33,8 +33,8 @@ pub use pmcp_workbook_runtime::finding::{LintFinding, LintReport, Severity};
 /// the source workbook. Removing any of these breaks the reference workbook's
 /// clean lint (D-07).
 pub const WHITELIST: &[&str] = &[
-    "IF", "VLOOKUP", "INDEX", "MATCH", "SUMIF", "SUM", "ROUNDUP", "CEILING",
-    "IFERROR", "ISNUMBER", "SEARCH", "ROUND", "TEXT",
+    "IF", "VLOOKUP", "INDEX", "MATCH", "SUMIF", "SUM", "ROUNDUP", "CEILING", "IFERROR", "ISNUMBER",
+    "SEARCH", "ROUND", "TEXT",
 ];
 
 /// The fallback colour-role palette ARGBs (the lighthouse's known direct fills /
@@ -156,13 +156,46 @@ impl DialectRules {
 mod tests {
     use super::{CandidateRole, DialectRules, WHITELIST};
 
+    // Exact membership is pinned by the `dialect_spec` doc-binding test against
+    // the published spec table (an independent source); this canary owns only
+    // the structural invariants, so a deliberate D-05 widening edits two lists
+    // (const + spec table), not three.
     #[test]
-    fn whitelist_is_exactly_the_thirteen_names() {
-        let expected = [
-            "IF", "VLOOKUP", "INDEX", "MATCH", "SUMIF", "SUM", "ROUNDUP", "CEILING", "IFERROR",
-            "ISNUMBER", "SEARCH", "ROUND", "TEXT",
-        ];
-        assert_eq!(WHITELIST, &expected, "WHITELIST must be exactly the 13 flat names");
+    fn whitelist_canary_count_unique_uppercase() {
+        assert_eq!(
+            WHITELIST.len(),
+            13,
+            "deliberate widening must update this canary (D-05)"
+        );
+        let unique: std::collections::BTreeSet<_> = WHITELIST.iter().collect();
+        assert_eq!(
+            unique.len(),
+            WHITELIST.len(),
+            "duplicate names in WHITELIST"
+        );
+        assert!(
+            WHITELIST
+                .iter()
+                .all(|n| !n.is_empty() && n.chars().all(|c| c.is_ascii_uppercase())),
+            "whitelist names must be non-empty ASCII uppercase"
+        );
+    }
+
+    // Const↔dispatch binding: a name present in the dialect contract but not
+    // dispatched by the runtime's `semantics::apply` would lint clean yet
+    // evaluate to `#NAME?` at serve time — the drift the doc↔const binding
+    // test cannot see.
+    #[test]
+    fn every_whitelisted_function_dispatches_in_the_runtime() {
+        use pmcp_workbook_runtime::sheet_ir::semantics::apply;
+        use pmcp_workbook_runtime::{CellValue, ExcelError};
+        for name in WHITELIST {
+            let v = apply(name, &[]);
+            assert!(
+                !matches!(v, CellValue::Error(ExcelError::Name)),
+                "{name} is in WHITELIST but the runtime dispatches it to #NAME?"
+            );
+        }
     }
 
     #[test]
@@ -264,14 +297,24 @@ mod dialect_spec {
         // WR-05: this inline test SHIPS in the published crate, but the repo's
         // `docs/` tree does not — in a published-package context (vendored
         // workspace, distro packaging, path-replaced dep) the spec file is
-        // absent and the test must SKIP, not fail unconditionally. The in-repo
-        // gate stays fail-closed: `make purity-check` independently asserts the
-        // spec file exists, so an in-repo deletion/rename still fails CI rather
-        // than silently disabling this drift check.
+        // absent and the test must SKIP, not fail unconditionally. In-repo,
+        // absence must FAIL — otherwise deleting the spec silently disables
+        // this drift check. "In-repo" is detected by the repo's `.git` two
+        // levels up from the crate (a directory in a normal checkout, a file
+        // in a git worktree — `exists()` covers both); published-package
+        // contexts have no `.git` at that path.
         if !spec_path.exists() {
+            let in_repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../.git")
+                .exists();
+            assert!(
+                !in_repo,
+                "docs/workbook-dialect-spec.md is missing from the repo — the WBDL-01 \
+                 doc↔const drift check would be silently disabled (fail-closed in-repo)"
+            );
             eprintln!(
                 "skipping doc-binding test: dialect spec not present at {} \
-                 (published-package context; in-repo presence is enforced by `make purity-check`)",
+                 (published-package context)",
                 spec_path.display()
             );
             return;

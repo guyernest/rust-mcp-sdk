@@ -98,16 +98,16 @@ fn eval_json(expr: &Expr, env: &CellEnv) -> Result<JsonValue, ScalarError> {
             let l = eval_json(left, env)?;
             let r = eval_json(right, env)?;
             eval_binop(&l, *op, &r)
-        }
+        },
         Expr::UnaryOp { op, operand } => {
             let v = eval_json(operand, env)?;
             eval_unop(*op, &v)
-        }
+        },
         // Ranges, names, calls, and error literals NEVER lower to the evaluator —
         // the semantics layer owns them (mirrors lower_scalar's None arms).
         Expr::Range(_) | Expr::Name(_) | Expr::Call { .. } | Expr::ErrorLit(_) => {
             Err(ScalarError::NotLowerable)
-        }
+        },
     }
 }
 
@@ -139,7 +139,7 @@ fn eval_binop(left: &JsonValue, op: BinOp, right: &JsonValue) -> Result<JsonValu
             let l_str = json_to_string(left);
             let r_str = json_to_string(right);
             JsonValue::String(format!("{l_str}{r_str}"))
-        }
+        },
         BinOp::Eq => JsonValue::Bool(json_equals(left, right)),
         BinOp::Ne => JsonValue::Bool(!json_equals(left, right)),
         BinOp::Lt => JsonValue::Bool(to_number(left) < to_number(right)),
@@ -161,13 +161,13 @@ fn eval_unop(op: UnOp, value: &JsonValue) -> Result<JsonValue, ScalarError> {
             serde_json::Number::from_f64(n)
                 .map(JsonValue::Number)
                 .unwrap_or(JsonValue::Null)
-        }
+        },
         UnOp::Neg => {
             let n = to_number(value);
             JsonValue::Number(
                 serde_json::Number::from_f64(-n).unwrap_or_else(|| serde_json::Number::from(0)),
             )
-        }
+        },
         // % has no kernel op — semantics layer (/100.0).
         UnOp::Percent => return Err(ScalarError::NotLowerable),
     };
@@ -190,7 +190,7 @@ fn to_number(value: &JsonValue) -> f64 {
             } else {
                 0.0
             }
-        }
+        },
         JsonValue::Number(n) => n.as_f64().unwrap_or(f64::NAN),
         JsonValue::String(s) => s.parse().unwrap_or(f64::NAN),
         JsonValue::Array(_) | JsonValue::Object(_) => f64::NAN,
@@ -232,7 +232,7 @@ fn json_equals(left: &JsonValue, right: &JsonValue) -> bool {
         (JsonValue::Bool(a), JsonValue::Bool(b)) => a == b,
         (JsonValue::Number(a), JsonValue::Number(b)) => {
             a.as_f64().unwrap_or(f64::NAN) == b.as_f64().unwrap_or(f64::NAN)
-        }
+        },
         (JsonValue::String(a), JsonValue::String(b)) => a == b,
         (JsonValue::Number(n), JsonValue::String(s))
         | (JsonValue::String(s), JsonValue::Number(n)) => {
@@ -241,7 +241,7 @@ fn json_equals(left: &JsonValue, right: &JsonValue) -> bool {
             } else {
                 false
             }
-        }
+        },
         _ => false,
     }
 }
