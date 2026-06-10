@@ -271,7 +271,7 @@ fn materialize_arg(
                 &range.sheet
             };
             match resolve::expand_range(range, current_sheet) {
-                Ok((keys, shape)) => build_range(&keys, shape, env, trace),
+                Ok((keys, shape)) => build_range(&keys, shape, env, errs, trace),
                 Err(_) => {
                     trace.short_circuited.get_or_insert(ExcelError::Ref);
                     EvalValue::Scalar(CellValue::Error(ExcelError::Ref))
@@ -285,11 +285,14 @@ fn materialize_arg(
 
 /// Rebuild a shape-correct 2-D `Vec<Vec<CellValue>>` from column-major member
 /// `keys` + the [`resolve::RangeShape`]. An ABSENT member is the Pitfall-5 HARD
-/// error.
+/// error. A member that COMPUTED an Excel error is looked up in `errs` (errored
+/// cells never enter `env` per D-04 — `to_json` returns `None`) and propagates
+/// its ACTUAL error (e.g. `#DIV/0!`), never a misleading `#REF!` (WR-03).
 fn build_range(
     keys: &[String],
     shape: resolve::RangeShape,
     env: &CellEnv,
+    errs: &HashMap<String, ExcelError>,
     trace: &mut EvalTrace,
 ) -> EvalValue {
     let rows = shape.rows as usize;
@@ -301,10 +304,15 @@ fn build_range(
             let key = &keys[c * rows + r];
             let cv = match env_lookup(env, key) {
                 Some(cv) => cv,
-                None => {
-                    trace.short_circuited.get_or_insert(ExcelError::Ref);
-                    CellValue::Error(ExcelError::Ref)
-                }
+                // The member evaluated to an error: propagate ITS error.
+                None => match errs.get(key) {
+                    Some(e) => CellValue::Error(*e),
+                    // Genuinely absent member: the Pitfall-5 hard #REF!.
+                    None => {
+                        trace.short_circuited.get_or_insert(ExcelError::Ref);
+                        CellValue::Error(ExcelError::Ref)
+                    }
+                },
             };
             trace.resolved_refs.push((key.clone(), cv.clone()));
             row_cells.push(cv);
@@ -569,6 +577,46 @@ mod tests {
         ]);
         let out = run(&ir, &dag, &CellEnv::new()).expect("no cycle");
         assert_eq!(out.computed.get("S!C1"), Some(&CellValue::Number(60.0)));
+    }
+
+    #[test]
+    fn sum_over_range_member_with_computed_error_propagates_that_error() {
+        // WR-03 regression: B3 COMPUTES #DIV/0! (a formula cell whose result is
+        // an error never enters env — D-04, `to_json` returns None — it lives
+        // only in `errs`), so SUM(B2:B4) must propagate the member's ACTUAL
+        // #DIV/0! — not mis-report the member as an absent-cell #REF!.
+        // (NOTE: a literal `1/0` is NOT usable here — the kernel-parity scalar
+        // evaluator deliberately clamps x/0 to 0.0, see scalar_eval.rs WR-02.)
+        let ir: HashMap<String, Cell> = [
+            lit("S!B2", 10.0),
+            formula("S!B3", Expr::ErrorLit(ExcelError::DivZero)),
+            lit("S!B4", 30.0),
+            formula("S!C1", call("SUM", vec![range("S", "B2", "B4")])),
+        ]
+        .into_iter()
+        .collect();
+        let dag = dag_of(&[
+            ("S!B2", &[]),
+            ("S!B3", &[]),
+            ("S!B4", &[]),
+            ("S!C1", &["S!B2", "S!B3", "S!B4"]),
+        ]);
+        let out = run(&ir, &dag, &CellEnv::new()).expect("no cycle");
+        assert_eq!(
+            out.computed.get("S!C1"),
+            Some(&CellValue::Error(ExcelError::DivZero)),
+            "the member's actual error propagates, not #REF!"
+        );
+        // The trace evidence records the member with ITS error, not #REF!.
+        let trace = out.traces.get("S!C1").expect("a trace for C1");
+        assert!(
+            trace
+                .resolved_refs
+                .iter()
+                .any(|(k, v)| k == "S!B3" && *v == CellValue::Error(ExcelError::DivZero)),
+            "resolved_refs records S!B3 as #DIV/0!, got {:?}",
+            trace.resolved_refs
+        );
     }
 
     #[test]
