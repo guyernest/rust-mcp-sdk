@@ -52,6 +52,7 @@ use serde_json::{json, Value};
 pub mod error;
 pub mod handler;
 pub mod input;
+pub mod render_resource;
 pub mod render_uri;
 pub mod schema;
 
@@ -63,6 +64,8 @@ pub use handler::{
 };
 #[doc(inline)]
 pub use input::{validate_input, ValidatedInput};
+#[doc(inline)]
+pub use render_resource::RenderWorkbookResource;
 #[doc(inline)]
 pub use render_uri::{decode, encode, DecodedRender, MAX_ENCODED_URI_LEN, WORKBOOK_XLSX_MIME};
 
