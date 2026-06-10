@@ -57,7 +57,7 @@ pub mod schema;
 #[doc(inline)]
 pub use error::{to_iserror_result, WorkbookToolError};
 #[doc(inline)]
-pub use handler::CalculateHandler;
+pub use handler::{CalculateHandler, DiffVersionHandler, ExplainHandler, GetManifestHandler};
 #[doc(inline)]
 pub use input::{validate_input, ValidatedInput};
 

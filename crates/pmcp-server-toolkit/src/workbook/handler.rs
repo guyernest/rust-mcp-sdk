@@ -31,7 +31,10 @@ use pmcp_workbook_runtime::{run_executor, CellEnv, CellValue, RunResult};
 
 use super::error::{to_iserror_result, WorkbookToolError};
 use super::input::validate_input;
-use super::schema::{input_schema_for_manifest, output_schema_for_manifest};
+use super::schema::{
+    diff_version_output_schema, empty_input_schema, explain_output_schema,
+    get_manifest_output_schema, input_schema_for_manifest, output_schema_for_manifest,
+};
 use super::{ProvStamp, WorkbookBundle, WORKBOOK_TOOL_UI};
 
 // ---- Shared handler helpers (kept decomposed so each handler fn stays under
@@ -187,6 +190,334 @@ impl ToolHandler for CalculateHandler {
     }
 }
 
+// ---- explain -----------------------------------------------------------------
+
+/// A display projection of a [`CellValue`] for the explain trace.
+fn cell_value_display(v: &CellValue) -> Value {
+    match v {
+        CellValue::Number(n) => json!(n),
+        CellValue::Text(s) => json!(s),
+        CellValue::Bool(b) => json!(b),
+        CellValue::Empty => Value::Null,
+        CellValue::Error(e) => json!(format!("{e:?}")),
+    }
+}
+
+/// The `explain` handler (WBSV-02): a stateless re-run that renders the
+/// derivation trace as ordered business-language steps, plus a GENERIC
+/// manifest-declared `annotations` object (S-2 — any domain-specific keystone is
+/// generalized into manifest-declared annotations; the engine reads only
+/// `manifest.annotations` names, nothing domain-specific).
+pub struct ExplainHandler {
+    bundle: Arc<WorkbookBundle>,
+}
+
+impl ExplainHandler {
+    /// Build over the shared verified bundle.
+    #[must_use]
+    pub fn new(bundle: Arc<WorkbookBundle>) -> Self {
+        Self { bundle }
+    }
+
+    /// The linear `?`-chained `explain` pipeline: validate → re-run → ordered
+    /// derivation steps + manifest annotations → stamp.
+    #[allow(clippy::result_large_err)]
+    fn compute(&self, args: Value) -> Result<Value, WorkbookToolError> {
+        let validated = validate_input(args, &self.bundle.manifest, &self.bundle.cell_map)?;
+        let run = run_bundle(&self.bundle, &validated.seeds)?;
+        let steps = self.render_steps(&run);
+        let payload = json!({
+            "steps": steps,
+            "annotations": self.manifest_annotations(),
+        });
+        Ok(with_provenance(
+            payload,
+            &ProvStamp::from_bundle(&self.bundle),
+        ))
+    }
+
+    /// Render the [`RunResult`] traces into ORDERED business-language steps
+    /// (sorted by cell key for determinism), each carrying the formula + operand
+    /// values + the manifest meaning.
+    fn render_steps(&self, run: &RunResult) -> Vec<Value> {
+        let mut keys: Vec<&String> = run.traces.keys().collect();
+        keys.sort();
+        let mut steps = Vec::with_capacity(keys.len());
+        for key in keys {
+            let Some(trace) = run.traces.get(key) else {
+                continue;
+            };
+            steps.push(json!({
+                "step": "derivation",
+                "cell": key,
+                "meaning": self.meaning_for(key),
+                "formula": trace.formula,
+                "dispatched_fn": trace.dispatched_fn,
+                "resolved_refs": trace.resolved_refs.iter().map(|(k, v)| json!({
+                    "cell": k,
+                    "value": cell_value_display(v),
+                })).collect::<Vec<_>>(),
+                "result": run.computed.get(key).map(cell_value_display),
+            }));
+        }
+        steps
+    }
+
+    /// The GENERIC manifest-declared annotations object (S-2): keyed by each
+    /// [`pmcp_workbook_runtime::AnnotationDecl`] `name`, carrying its `target` +
+    /// `meaning`. The engine reads ONLY manifest-declared names — nothing
+    /// domain-specific.
+    fn manifest_annotations(&self) -> Value {
+        let mut obj = serde_json::Map::new();
+        for ann in &self.bundle.manifest.annotations {
+            obj.insert(
+                ann.name.clone(),
+                json!({ "target": ann.target, "meaning": ann.meaning }),
+            );
+        }
+        Value::Object(obj)
+    }
+
+    /// The manifest meaning for a cell key (for the business-language prose).
+    fn meaning_for(&self, key: &str) -> Option<String> {
+        self.bundle
+            .manifest
+            .cells
+            .iter()
+            .find(|c| c.cell == key)
+            .and_then(|c| c.meaning.clone().or_else(|| c.name.clone()))
+    }
+}
+
+#[async_trait]
+impl ToolHandler for ExplainHandler {
+    async fn handle(&self, args: Value, _extra: RequestHandlerExtra) -> pmcp::Result<Value> {
+        Ok(render_at_boundary(
+            self.compute(args),
+            &ProvStamp::from_bundle(&self.bundle),
+        ))
+    }
+
+    fn metadata(&self) -> Option<ToolInfo> {
+        Some(
+            ToolInfo::with_ui(
+                "explain",
+                Some(
+                    "Explain the computed workbook outputs: an ordered business-language \
+                     derivation trace (formula + operands + meaning per step) plus a \
+                     manifest-declared annotations object. Stamped + stateless (re-run \
+                     from the same inputs)."
+                        .into(),
+                ),
+                input_schema_for_manifest(&self.bundle.manifest, &self.bundle.cell_map),
+                WORKBOOK_TOOL_UI,
+            )
+            .with_output_schema(explain_output_schema()),
+        )
+    }
+}
+
+// ---- get_manifest ------------------------------------------------------------
+
+/// The `get_manifest` handler (WBSV-03): a CURATED agent-facing projection —
+/// inputs (tier+default+unit), outputs (unit/meaning), governed-data summary,
+/// versions/hashes, changelog — NOT the raw internal manifest.
+pub struct GetManifestHandler {
+    bundle: Arc<WorkbookBundle>,
+}
+
+impl GetManifestHandler {
+    /// Build over the shared verified bundle.
+    #[must_use]
+    pub fn new(bundle: Arc<WorkbookBundle>) -> Self {
+        Self { bundle }
+    }
+}
+
+/// Project one manifest input cell into its curated agent-facing record.
+fn input_projection(role: &pmcp_workbook_runtime::CellRole) -> Value {
+    use pmcp_workbook_runtime::InputTier;
+    let (tier_kind, default) = match &role.tier {
+        Some(InputTier::Variable { default }) => ("variable", cell_value_display(default)),
+        Some(InputTier::BoundedVariable { default, .. }) => {
+            ("bounded_variable", cell_value_display(default))
+        },
+        None => ("variable", Value::Null),
+    };
+    json!({
+        "name": role.name,
+        "unit": role.unit,
+        "meaning": role.meaning,
+        "tier": tier_kind,
+        "default": default,
+    })
+}
+
+/// Build the curated agent-facing manifest projection (WBSV-03) + stamp.
+fn curated_manifest(bundle: &WorkbookBundle) -> Value {
+    use pmcp_workbook_runtime::Role;
+
+    let mut inputs = Vec::new();
+    let mut outputs = Vec::new();
+    for role in &bundle.manifest.cells {
+        match role.role {
+            Role::Input => inputs.push(input_projection(role)),
+            Role::Output => outputs.push(json!({
+                "name": role.name,
+                "unit": role.unit,
+                "meaning": role.meaning,
+            })),
+            Role::Constant | Role::Formula => {},
+        }
+    }
+
+    let governed: Vec<Value> = bundle
+        .manifest
+        .governed_data
+        .iter()
+        .map(|g| {
+            json!({
+                "key": g.key,
+                "value": cell_value_display(&g.value),
+                "approved_by": g.approved_by,
+                "provenance": g.provenance,
+            })
+        })
+        .collect();
+
+    let changelog: Vec<Value> = bundle
+        .manifest
+        .changelog
+        .iter()
+        .map(|c| json!({ "version": c.version, "note": c.note }))
+        .collect();
+
+    let stamp = ProvStamp::from_bundle(bundle);
+    json!({
+        "bundle_id": stamp.bundle_id,
+        "version": stamp.version,
+        "combined_hash": stamp.combined_hash,
+        "inputs": inputs,
+        "outputs": outputs,
+        "governed_data": governed,
+        "changelog": changelog,
+        "provenance": stamp.to_json(),
+    })
+}
+
+#[async_trait]
+impl ToolHandler for GetManifestHandler {
+    async fn handle(&self, _args: Value, _extra: RequestHandlerExtra) -> pmcp::Result<Value> {
+        Ok(curated_manifest(&self.bundle))
+    }
+
+    fn metadata(&self) -> Option<ToolInfo> {
+        Some(
+            ToolInfo::with_ui(
+                "get_manifest",
+                Some(
+                    "Describe the compiled workbook workflow: a curated agent-facing \
+                     manifest projection (inputs with tier/default/unit, outputs with \
+                     unit/meaning, governed-data summary, version/hashes, changelog) + \
+                     provenance stamp."
+                        .into(),
+                ),
+                empty_input_schema(),
+                WORKBOOK_TOOL_UI,
+            )
+            .with_output_schema(get_manifest_output_schema()),
+        )
+    }
+}
+
+// ---- diff_version ------------------------------------------------------------
+
+/// The `diff_version` handler (WBSV-04): serve the RECORDED prev→current
+/// [`pmcp_workbook_runtime::VersionChangelog`] the offline promote step folded
+/// into the bundle (hash-verified at boot — NOT a runtime computation), stamped.
+pub struct DiffVersionHandler {
+    bundle: Arc<WorkbookBundle>,
+}
+
+impl DiffVersionHandler {
+    /// Build over the shared verified bundle.
+    #[must_use]
+    pub fn new(bundle: Arc<WorkbookBundle>) -> Self {
+        Self { bundle }
+    }
+
+    /// Project the recorded changelog into the served result (a fallible shape so
+    /// any future runtime parse routes through the isError envelope, never a
+    /// panic / protocol Err).
+    #[allow(clippy::result_large_err)]
+    fn compute(&self) -> Result<Value, WorkbookToolError> {
+        Ok(serve_changelog(&self.bundle))
+    }
+}
+
+/// Serialize the recorded [`pmcp_workbook_runtime::VersionChangelog`] into the
+/// served structured payload.
+fn serve_changelog(bundle: &WorkbookBundle) -> Value {
+    let cl = &bundle.changelog;
+    let deltas: Vec<Value> = cl.deltas.iter().map(delta_to_json).collect();
+    let payload = json!({
+        "from_version": cl.from_version,
+        "to_version": cl.to_version,
+        "deltas": deltas,
+        "summary": cl.summary,
+    });
+    with_provenance(payload, &ProvStamp::from_bundle(bundle))
+}
+
+/// Project one [`pmcp_workbook_runtime::OutputDelta`] into its served JSON shape.
+fn delta_to_json(delta: &pmcp_workbook_runtime::OutputDelta) -> Value {
+    json!({
+        "region": delta.region,
+        "change_class": delta.change_class,
+        "old": meta_to_json(&delta.old),
+        "new": meta_to_json(&delta.new),
+        "severity": delta.severity,
+    })
+}
+
+/// Project one [`pmcp_workbook_runtime::OutputMeta`] into its served JSON.
+fn meta_to_json(meta: &pmcp_workbook_runtime::OutputMeta) -> Value {
+    json!({
+        "meaning": meta.meaning,
+        "unit": meta.unit,
+        "provenance": meta.provenance,
+    })
+}
+
+#[async_trait]
+impl ToolHandler for DiffVersionHandler {
+    async fn handle(&self, _args: Value, _extra: RequestHandlerExtra) -> pmcp::Result<Value> {
+        Ok(render_at_boundary(
+            self.compute(),
+            &ProvStamp::from_bundle(&self.bundle),
+        ))
+    }
+
+    fn metadata(&self) -> Option<ToolInfo> {
+        Some(
+            ToolInfo::with_ui(
+                "diff_version",
+                Some(
+                    "Describe what changed between two promoted workflow versions: the \
+                     RECORDED, hash-verified prev→current changelog (per-output deltas \
+                     with change class + drift/redefinition severity + a human-readable \
+                     summary) + a provenance stamp. Served from the bundle's recorded \
+                     evidence, not a runtime computation."
+                        .into(),
+                ),
+                empty_input_schema(),
+                WORKBOOK_TOOL_UI,
+            )
+            .with_output_schema(diff_version_output_schema()),
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -284,5 +615,107 @@ mod tests {
             outputs.as_object().is_some_and(|o| !o.is_empty()),
             "outputSchema enumerates the named outputs"
         );
+    }
+
+    // ---- explain (WBSV-02, S-2) ------------------------------------------
+
+    #[test]
+    fn explain_emits_ordered_trace_and_generic_manifest_annotations() {
+        let handler = ExplainHandler::new(golden_bundle());
+        let v = handler
+            .compute(json!({ "inputs": { "gross_income": 60000.0, "filing_status": "single" } }))
+            .expect("explain succeeds");
+
+        // An ordered per-cell derivation trace.
+        let steps = v["steps"].as_array().expect("steps is an array");
+        assert!(!steps.is_empty(), "explain emits derivation steps");
+        for step in steps {
+            assert_eq!(step["step"], json!("derivation"));
+            assert!(step["cell"].is_string());
+        }
+
+        // S-2: a GENERIC annotations object keyed by the manifest AnnotationDecl
+        // names (the tax golden declares bracket_boundary_1/2) — nothing
+        // domain-specific is hardcoded.
+        let annotations = v["annotations"].as_object().expect("annotations object");
+        assert!(annotations.contains_key("bracket_boundary_1"));
+        assert!(annotations.contains_key("bracket_boundary_2"));
+        assert_eq!(
+            annotations["bracket_boundary_1"]["target"],
+            json!("2_Brackets!A2")
+        );
+        assert!(annotations["bracket_boundary_1"]["meaning"].is_string());
+
+        assert!(v["provenance"]["combined_hash"].is_string());
+    }
+
+    #[test]
+    fn explain_invalid_input_returns_iserror() {
+        let bundle = golden_bundle();
+        let handler = ExplainHandler::new(bundle.clone());
+        let v = render_at_boundary(
+            handler.compute(json!({ "inputs": { "filing_status": "alien" } })),
+            &ProvStamp::from_bundle(&bundle),
+        );
+        assert_eq!(v["isError"], json!(true));
+        assert_eq!(v["code"], json!("invalid_input"));
+    }
+
+    // ---- get_manifest (WBSV-03) ------------------------------------------
+
+    #[test]
+    fn get_manifest_returns_curated_projection_with_no_input() {
+        let bundle = golden_bundle();
+        let v = curated_manifest(&bundle);
+        assert_eq!(v["bundle_id"], json!("tax-calc"));
+        assert_eq!(v["version"], json!("1.1.0"));
+        assert!(v["combined_hash"].is_string());
+        // Curated inputs/outputs/governed_data/changelog projections.
+        let inputs = v["inputs"].as_array().expect("inputs array");
+        assert_eq!(inputs.len(), 3, "three inputs projected");
+        assert!(inputs.iter().all(|i| i["tier"].is_string()));
+        let outputs = v["outputs"].as_array().expect("outputs array");
+        assert_eq!(outputs.len(), 4, "four outputs projected");
+        assert!(v["governed_data"].is_array());
+        assert!(v["changelog"].is_array());
+        assert!(v["provenance"]["combined_hash"].is_string());
+    }
+
+    // ---- diff_version (WBSV-04) ------------------------------------------
+
+    #[test]
+    fn diff_version_serves_recorded_changelog() {
+        let bundle = golden_bundle();
+        let handler = DiffVersionHandler::new(bundle.clone());
+        let v = handler.compute().expect("serve changelog");
+
+        // The served changelog matches the recorded one (not recomputed).
+        assert_eq!(v["from_version"], json!(bundle.changelog.from_version));
+        assert_eq!(v["to_version"], json!(bundle.changelog.to_version));
+        assert_eq!(v["summary"], json!(bundle.changelog.summary));
+        let deltas = v["deltas"].as_array().expect("deltas array");
+        assert_eq!(deltas.len(), bundle.changelog.deltas.len());
+        if let Some(first) = deltas.first() {
+            assert!(first["region"].is_string());
+            assert!(first["change_class"].is_string());
+            assert!(first["severity"].is_string());
+        }
+        assert!(v["provenance"]["combined_hash"].is_string());
+        assert!(
+            v.get("isError").is_none(),
+            "a served changelog is not an error"
+        );
+    }
+
+    #[test]
+    fn diff_version_advertises_output_schema() {
+        let handler = DiffVersionHandler::new(golden_bundle());
+        let meta = handler.metadata().expect("metadata present");
+        let schema = meta.output_schema.expect("output schema advertised");
+        assert_eq!(
+            schema["properties"]["from_version"]["type"],
+            json!("string")
+        );
+        assert_eq!(schema["properties"]["deltas"]["type"], json!("array"));
     }
 }
