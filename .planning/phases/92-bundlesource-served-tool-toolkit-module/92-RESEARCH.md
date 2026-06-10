@@ -376,16 +376,18 @@ pub fn to_iserror_result(err: &WorkbookToolError, stamp: &ProvStamp) -> Value {
 | A4 | The runtime `CellMap.supply_total_cell` field can be removed or left unused without breaking the executor | S-1 | Medium — `read_supply_total`/`project_outputs` reference it; the all-outputs path (`project_outputs`, `handler.rs:88-108`) already iterates `cell_map.outputs` independently, so removing the headline is mechanical |
 | A5 | The toolkit `workbook` feature can be cargo-tree-asserted reader-free as a distinct check (not via `PURITY_CRATES`) | Pitfall 1 | Low — the Makefile recipe structure supports adding a separate per-feature assertion |
 
-## Open Questions
+## Open Questions (RESOLVED)
 
 1. **Where does the on-disk `BUNDLE.lock.workflow` field rename land (S-3)?**
    - What we know: the served stamp surfaces `bundle_id` (D-15). The runtime `BundleLock.workflow` is the on-disk artifact field (`artifact_model.rs:69`).
    - What's unclear: whether to rename the on-disk field too (cleaner, but a fixture/artifact contract change) or keep `workflow` on disk and map it to `bundle_id` only in the served `ProvStamp`.
    - Recommendation: keep the on-disk artifact field name as-is for Phase-93 producer/consumer agreement (the compiler emits it), and rename only at the served `ProvStamp` boundary. Confirm with the user — it touches the frozen contract.
+   - **RESOLVED:** rename on-disk per D-17 — the SDK's frozen contract renames `BUNDLE.lock.workflow` → `bundle_id` end-to-end (fixture generator emits it, BundleLoader expects it, Phase-93 compiler emits it; no SDK consumer sees the lighthouse legacy naming). This SUPERSEDES the recommendation above. Plans 01 (artifact_model rename + loader) and 02 (golden BUNDLE.lock carries `bundle_id`) implement this.
 
 2. **Does the synthetic manifest need a new annotation declaration type, or can D-14 reuse an existing field?**
    - What we know: `manifest_model.rs` has `CellRole.notes`, `GovernedDatum`, but no cell-annotation declaration.
    - Recommendation: add an additive `Manifest.annotations: Vec<AnnotationDecl>` (serde-default-empty). Validate the exact shape during planning against the tax-fixture's bracket-boundary annotation needs.
+   - **RESOLVED:** additive `Vec<AnnotationDecl>` per D-18 — annotations land as an additive serde-default-empty `Manifest.annotations` field (name + target cell/output + meaning); old manifests deserialize unchanged. Plan 01 Task 3 implements the field + type; Plan 02 Task 1 populates bracket-boundary annotations in the tax fixture.
 
 ## Environment Availability
 
