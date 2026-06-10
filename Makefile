@@ -457,6 +457,70 @@ docs-all: doc book
 	@echo "$(GREEN)✓ All documentation built$(NC)"
 
 # Quality gate - PAIML/PMAT style with ALWAYS requirements
+# Phase 91 (WBRT-04) purity gate — fail-closed, per-crate, per-feature.
+#
+# Three layers prove the Excel READER (umya/quick-xml/calamine) and the JS stack
+# (swc_*/pmcp-code-mode) can NEVER enter the reader-free served trees
+# (pmcp-workbook-runtime / pmcp-workbook-dialect):
+#   Layer 1 — cargo-tree negative (reader/JS absent) + positive (rust_xlsxwriter
+#             present) assertions, per-crate AND per-feature-combination.
+#   Layer 2 — crate-local cargo-deny [bans] (deny.toml under each crate), scoped
+#             via --manifest-path so the workspace-global deny.toml is untouched
+#             and Phase 93's compiler is unaffected.
+#   Layer 3 — the crate split itself (delivered by plans 91-01 / 91-02).
+#
+# FAIL-CLOSED: `set -euo pipefail` + explicit per-invocation exit-status capture.
+# A `cargo tree` that errors for ANY reason (broken -p, transient failure) aborts
+# the gate as a FAILURE — it is NEVER read as "no banned dependency". There is no
+# `2>/dev/null` swallow on the tree output. See docs/workbook-purity-gate.md.
+#
+# `zip` is PERMITTED (it enters legitimately via the writer-only rust_xlsxwriter).
+# `pmcp` is PERMITTED (D-09 — the SDK runtime may depend on pmcp).
+#
+# Canonical cargo-deny ban form (per the plan / D-09):
+#   cargo deny --manifest-path crates/<crate>/Cargo.toml --config deny.toml check bans
+# NOTE: cargo-deny 0.18.3's CLI accepts --config only AFTER the `check`
+# subcommand (a global --config is rejected with "unexpected argument"), and it
+# resolves the config path relative to the manifest dir. So the EXECUTED form
+# below is the equivalent `check --config deny.toml bans` ordering.
+.PHONY: purity-check
+purity-check:
+	@echo "$(BLUE)purity-check: Phase 91 reader-free boundary gate (fail-closed, per-crate/per-feature)$(NC)"
+	@set -euo pipefail; \
+	BAN='umya|calamine|quick-xml|swc_|pmcp-code-mode'; \
+	for crate in pmcp-workbook-runtime pmcp-workbook-dialect; do \
+	  for feat in "" "--no-default-features" "--all-features"; do \
+	    tree=$$(cargo tree -p $$crate $$feat 2>&1); status=$$?; \
+	    if [ $$status -ne 0 ]; then \
+	      echo "purity-check FAILED: cargo tree errored for $$crate ($$feat) [exit $$status] — failing closed"; \
+	      printf '%s\n' "$$tree"; \
+	      exit 1; \
+	    fi; \
+	    if printf '%s\n' "$$tree" | grep -Ei "$$BAN"; then \
+	      echo "purity-check FAILED: reader/JS dep in $$crate ($$feat) — the served boundary is breached"; \
+	      exit 1; \
+	    fi; \
+	  done; \
+	done; \
+	echo "purity-check: negative arm clean — no umya/calamine/quick-xml/swc_/pmcp-code-mode in either crate (all feature combos)"; \
+	for feat in "" "--no-default-features" "--all-features"; do \
+	  tree=$$(cargo tree -p pmcp-workbook-runtime $$feat 2>&1); status=$$?; \
+	  if [ $$status -ne 0 ]; then \
+	    echo "purity-check FAILED: cargo tree errored for pmcp-workbook-runtime ($$feat) [exit $$status] — failing closed"; \
+	    printf '%s\n' "$$tree"; \
+	    exit 1; \
+	  fi; \
+	  if ! printf '%s\n' "$$tree" | grep -qi 'rust_xlsxwriter'; then \
+	    echo "purity-check FAILED: rust_xlsxwriter ABSENT from runtime tree ($$feat) — the writer/renderer is missing (non-vacuous positive assertion)"; \
+	    exit 1; \
+	  fi; \
+	done; \
+	echo "purity-check: positive arm clean — rust_xlsxwriter present in pmcp-workbook-runtime (all feature combos; zip permitted via the writer)"
+	@echo "$(BLUE)purity-check: Layer 2 — crate-local cargo-deny [bans] (--manifest-path scoped; workspace deny.toml untouched)$(NC)"
+	@cargo deny --manifest-path crates/pmcp-workbook-runtime/Cargo.toml check --config deny.toml bans
+	@cargo deny --manifest-path crates/pmcp-workbook-dialect/Cargo.toml check --config deny.toml bans
+	@echo "$(GREEN)purity-check PASSED: reader-free (umya/calamine/quick-xml/swc_/pmcp-code-mode absent) + writer-present (rust_xlsxwriter, per-feature) + zip-permitted + cargo-deny-bans-clean$(NC)"
+
 .PHONY: quality-gate
 quality-gate:
 	@echo "$(YELLOW)═══════════════════════════════════════════════════════$(NC)"
@@ -473,6 +537,7 @@ quality-gate:
 	@$(MAKE) check-todos
 	@$(MAKE) check-unwraps
 	@$(MAKE) validate-always
+	@$(MAKE) purity-check
 	@echo "$(GREEN)═══════════════════════════════════════════════════════$(NC)"
 	@echo "$(GREEN)        ✅ ALL TOYOTA WAY QUALITY CHECKS PASSED        $(NC)"
 	@echo "$(GREEN)        🎯 ALWAYS Requirements Validated                $(NC)"

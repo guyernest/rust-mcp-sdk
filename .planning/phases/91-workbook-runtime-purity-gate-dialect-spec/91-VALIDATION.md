@@ -44,7 +44,8 @@ The **purity gate is the load-bearing sampling point** (WBRT-04): per feature-co
 | WBRT-01 | Model types serde round-trip (incl. new finding `Deserialize`) | unit | `cargo test -p pmcp-workbook-runtime finding -- --test-threads=1` | ⚠️ lift exists; ADD round-trip test for `Deserialize` (D-08) |
 | WBRT-02 | `run()` evaluator determinism + per-cell traces; dependency cycle → `LintFinding` | unit | `cargo test -p pmcp-workbook-runtime sheet_ir -- --test-threads=1` | ✅ lifted from lighthouse |
 | WBRT-03 | `render_xlsx` produces byte-identical deterministic output | unit | `cargo test -p pmcp-workbook-runtime render -- --test-threads=1` | ✅ lighthouse has a two-render byte-equal determinism test |
-| WBRT-04 | Purity gate fails on reader presence; passes reader-free; per-feature matrix | CI/script | `make purity-check` (new) + per-feature CI matrix job | ❌ Wave 0 — author the recipe + CI job |
+| WBRT-04 | Purity gate fails on reader presence; passes reader-free; per-feature matrix (Layer 1 cargo-tree) | CI/script | `make purity-check` (new) + per-feature CI matrix job | ✅ delivered (plan 91-03 Task 2/3) |
+| WBRT-04 | Layer 2 cargo-deny `[bans]` backstop (crate-local, `--manifest-path`-scoped — workspace `deny.toml` untouched, Phase 93 unaffected) | CI/script | canonical `cargo deny --manifest-path crates/pmcp-workbook-runtime/Cargo.toml --config deny.toml check bans` (cargo-deny 0.18.3 executes the equivalent `check --config deny.toml bans` ordering; same for the `pmcp-workbook-dialect` crate) — invoked by `make purity-check` | ✅ delivered (plan 91-03 Task 2) |
 | WBDL-01 | doc↔`WHITELIST` binding (drift fails build) | unit | `cargo test -p pmcp-workbook-dialect doc_whitelist_table_matches_const` | ⚠️ lift exists; adapt for flat-13 (D-05) |
 | WBDL-03 | **RE-MAPPED to Phase 93** (D-02) — linter execution + `WorkbookMap` not delivered here | n/a | REQUIREMENTS.md line 103 must change `Phase 91 → Phase 93` (blocking doc edit) | ❌ mechanical doc fix, planner Task 1 |
 
@@ -63,11 +64,15 @@ The **purity gate is the load-bearing sampling point** (WBRT-04): per feature-co
 
 ## Manual-Only Verifications
 
-| Behavior | Requirement | Why Manual | Test Instructions |
-|----------|-------------|------------|-------------------|
-| cargo-deny `[bans]` backstop (Layer 2 of D-09) | WBRT-04 | `deny.toml` is infra-managed ("do not edit manually") AND ban scoping is workspace-global — a `quick-xml`/`umya` ban would break Phase 93's compiler | Document as deferred/honest backstop; WBRT-04 is fully satisfied by the cargo-tree per-crate arm (Layer 1) + crate split (Layer 3). Confirm with infra owner before any `deny.toml` edit. |
+_None._ The Layer 2 cargo-deny `[bans]` backstop that was previously listed here as
+deferred/manual is now **delivered automatically** by plan 91-03 (Task 2) via
+**crate-local** `deny.toml` files invoked with `--manifest-path` — this scopes the
+ban to each workbook crate's tree as its sole graph root, so the infra-managed
+workspace-global `deny.toml` is never touched and Phase 93's compiler (a separate,
+non-dependent member) is unaffected. It is now an automated row in the Per-Task
+Verification Map under WBRT-04.
 
-*All other phase behaviors have automated verification.*
+*All phase behaviors have automated verification.*
 
 ---
 

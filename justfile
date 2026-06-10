@@ -60,3 +60,8 @@ fmt:
 # Run clippy
 clippy:
     cargo clippy -- -D warnings
+
+# Run the Phase 91 purity gate (WBRT-04) — delegates to the single fail-closed
+# `make purity-check` implementation so both D-09 entrypoints exist.
+purity-check:
+    make purity-check
