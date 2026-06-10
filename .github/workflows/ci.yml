@@ -209,6 +209,11 @@ jobs:
         # Force install latest cargo-audit to support CVSS 4.0
         cargo install cargo-audit --force
 
+    - name: Install cargo-deny (make quality-gate chains purity-check, which needs it)
+      uses: taiki-e/install-action@v2
+      with:
+        tool: cargo-deny
+
     - name: Check disk space before quality gate
       run: df -h
 
@@ -293,12 +298,16 @@ jobs:
     - name: Cache cargo
       uses: actions/cache@v5
       with:
+        # No ~/.cargo/bin/ here — taiki-e/install-action fetches a prebuilt
+        # cargo-deny in seconds and caches it itself; restore-keys keeps the
+        # registry warm across Cargo.lock bumps.
         path: |
-          ~/.cargo/bin/
           ~/.cargo/registry/index/
           ~/.cargo/registry/cache/
           ~/.cargo/git/db/
         key: ${{ runner.os }}-cargo-purity-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-cargo-purity-
 
     - name: Install cargo-deny (Layer 2 backstop)
       uses: taiki-e/install-action@v2

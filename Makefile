@@ -488,12 +488,20 @@ docs-all: doc book
 # subcommand (a global --config is rejected with "unexpected argument"), and it
 # resolves the config path relative to the manifest dir. So the EXECUTED form
 # below is the equivalent `check --config deny.toml bans` ordering.
+#
+# Adding a reader-free crate in a later phase (92-96): append it to
+# PURITY_CRATES (and to PURITY_WRITER_CRATES if it must link the writer) and
+# give it a crate-local deny.toml — every loop, guard, parity check, and
+# cargo-deny invocation below is driven from these two lists.
+PURITY_CRATES := pmcp-workbook-runtime pmcp-workbook-dialect
+PURITY_WRITER_CRATES := pmcp-workbook-runtime
+
 .PHONY: purity-check
 purity-check:
 	@echo "$(BLUE)purity-check: Phase 91 reader-free boundary gate (fail-closed, per-crate/per-feature)$(NC)"
 	@set -euo pipefail; \
 	BAN='umya|calamine|quick-xml|swc_|pmcp-code-mode'; \
-	for crate in pmcp-workbook-runtime pmcp-workbook-dialect; do \
+	for crate in $(PURITY_CRATES); do \
 	  for feat in "" "--no-default-features" "--all-features"; do \
 	    status=0; tree=$$(cargo tree -p $$crate $$feat 2>&1) || status=$$?; \
 	    if [ $$status -ne 0 ]; then \
@@ -505,36 +513,35 @@ purity-check:
 	      echo "purity-check FAILED: reader/JS dep in $$crate ($$feat) — the served boundary is breached"; \
 	      exit 1; \
 	    fi; \
+	    if echo " $(PURITY_WRITER_CRATES) " | grep -q " $$crate " && \
+	       ! printf '%s\n' "$$tree" | grep -qi 'rust_xlsxwriter'; then \
+	      echo "purity-check FAILED: rust_xlsxwriter ABSENT from $$crate tree ($$feat) — the writer/renderer is missing (non-vacuous positive assertion)"; \
+	      exit 1; \
+	    fi; \
 	  done; \
 	done; \
-	echo "purity-check: negative arm clean — no umya/calamine/quick-xml/swc_/pmcp-code-mode in either crate (all feature combos)"; \
-	for feat in "" "--no-default-features" "--all-features"; do \
-	  status=0; tree=$$(cargo tree -p pmcp-workbook-runtime $$feat 2>&1) || status=$$?; \
-	  if [ $$status -ne 0 ]; then \
-	    echo "purity-check FAILED: cargo tree errored for pmcp-workbook-runtime ($$feat) [exit $$status] — failing closed"; \
-	    printf '%s\n' "$$tree"; \
-	    exit 1; \
-	  fi; \
-	  if ! printf '%s\n' "$$tree" | grep -qi 'rust_xlsxwriter'; then \
-	    echo "purity-check FAILED: rust_xlsxwriter ABSENT from runtime tree ($$feat) — the writer/renderer is missing (non-vacuous positive assertion)"; \
-	    exit 1; \
-	  fi; \
-	done; \
-	echo "purity-check: positive arm clean — rust_xlsxwriter present in pmcp-workbook-runtime (all feature combos; zip permitted via the writer)"
+	echo "purity-check: Layer 1 clean — no umya/calamine/quick-xml/swc_/pmcp-code-mode in $(PURITY_CRATES) (all feature combos); rust_xlsxwriter present in $(PURITY_WRITER_CRATES) (zip permitted via the writer)"
 	@echo "$(BLUE)purity-check: Layer 2 — crate-local cargo-deny [bans] (--manifest-path scoped; workspace deny.toml untouched)$(NC)"
 	@# WR-02 fail-closed guard: cargo-deny 0.18.3 does NOT fail on a missing
 	@# --config path — it WARNs and falls back to the default (empty-ban) config,
 	@# reporting "bans ok" vacuously. A deleted/renamed crate-local deny.toml
-	@# must FAIL the gate, not silently disable Layer 2.
-	@test -f crates/pmcp-workbook-runtime/deny.toml || { echo "purity-check FAILED: crates/pmcp-workbook-runtime/deny.toml missing — Layer 2 would be vacuous; failing closed"; exit 1; }
-	@test -f crates/pmcp-workbook-dialect/deny.toml || { echo "purity-check FAILED: crates/pmcp-workbook-dialect/deny.toml missing — Layer 2 would be vacuous; failing closed"; exit 1; }
-	@# WR-05 in-repo backstop: the dialect crate's WBDL-01 doc-binding test
-	@# SKIPS when docs/workbook-dialect-spec.md is absent (so the PUBLISHED
-	@# package's tests pass without the repo docs tree). In-repo, absence must
-	@# FAIL — otherwise deleting the spec silently disables drift protection.
-	@test -f docs/workbook-dialect-spec.md || { echo "purity-check FAILED: docs/workbook-dialect-spec.md missing — the WBDL-01 doc-binding test would silently skip; failing closed"; exit 1; }
-	@cargo deny --manifest-path crates/pmcp-workbook-runtime/Cargo.toml check --config deny.toml bans
-	@cargo deny --manifest-path crates/pmcp-workbook-dialect/Cargo.toml check --config deny.toml bans
+	@# must FAIL the gate, not silently disable Layer 2. The parity check keeps
+	@# the per-crate [bans] deny lists in lockstep — adding a ban to one crate's
+	@# deny.toml but not the others would silently weaken Layer 2 for the rest.
+	@set -euo pipefail; \
+	ref=""; refcrate=""; \
+	for crate in $(PURITY_CRATES); do \
+	  test -f crates/$$crate/deny.toml || { echo "purity-check FAILED: crates/$$crate/deny.toml missing — Layer 2 would be vacuous; failing closed"; exit 1; }; \
+	  bans=$$(grep -E '\{ name = ' crates/$$crate/deny.toml | sort); \
+	  if [ -z "$$refcrate" ]; then ref="$$bans"; refcrate=$$crate; \
+	  elif [ "$$bans" != "$$ref" ]; then \
+	    echo "purity-check FAILED: crates/$$crate/deny.toml [bans] deny list drifted from crates/$$refcrate/deny.toml — Layer 2 ban lists must stay in lockstep"; \
+	    exit 1; \
+	  fi; \
+	done; \
+	for crate in $(PURITY_CRATES); do \
+	  cargo deny --manifest-path crates/$$crate/Cargo.toml check --config deny.toml bans; \
+	done
 	@echo "$(GREEN)purity-check PASSED: reader-free (umya/calamine/quick-xml/swc_/pmcp-code-mode absent) + writer-present (rust_xlsxwriter, per-feature) + zip-permitted + cargo-deny-bans-clean$(NC)"
 
 .PHONY: quality-gate

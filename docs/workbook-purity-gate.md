@@ -23,6 +23,13 @@ just purity-check     # thin recipe that delegates to `make purity-check`
 It is also part of `make quality-gate` (the local pre-commit single-source-of-truth)
 and runs as a **merge-blocking** CI job wired into the org-required `gate` job.
 
+The gated crate set is defined **once** at the top of the Makefile target:
+`PURITY_CRATES` (every reader-free crate) and `PURITY_WRITER_CRATES` (the subset
+that must positively link `rust_xlsxwriter`). Later phases (92-96) add a
+reader-free crate by appending to those lists and shipping a crate-local
+`deny.toml` — every loop, presence guard, parity check, and cargo-deny
+invocation derives from them.
+
 ## Three Layers
 
 | Layer | Mechanism | What it proves |
@@ -74,12 +81,14 @@ invocation can never be misread as a clean tree.
 
 ## Positive Writer Assertion (non-vacuous)
 
-The positive arm asserts `rust_xlsxwriter` **is** present, scoped to
-`cargo tree -p pmcp-workbook-runtime` (so another workspace member pulling the
-writer cannot produce a false positive) **and** across the
-`"" / --no-default-features / --all-features` matrix (so a feature combo that drops
-the renderer is caught). A deleted renderer therefore cannot make the gate
-vacuously pass.
+The positive arm asserts `rust_xlsxwriter` **is** present for every crate in
+`PURITY_WRITER_CRATES`. It runs against the **same captured tree** as the
+negative grep — one `cargo tree` per crate × feature, both assertions applied
+to it — so the per-crate scoping (another workspace member pulling the writer
+cannot produce a false positive) and the
+`"" / --no-default-features / --all-features` matrix (a feature combo that drops
+the renderer is caught) hold for both arms identically. A deleted renderer
+therefore cannot make the gate vacuously pass.
 
 ## Ban Token Set
 
@@ -117,6 +126,17 @@ edited**.
 The ban enforcement is **non-vacuous**: substituting a present crate
 (e.g. `rust_xlsxwriter`) into a crate's ban list makes `cargo deny … check bans`
 exit non-zero ("bans FAILED"), proving the ban list is actually evaluated.
+
+Two additional fail-closed guards protect Layer 2 itself:
+
+- **Presence guard** — cargo-deny 0.18.3 does *not* fail on a missing `--config`
+  path; it warns and falls back to the default (empty-ban) config, reporting
+  "bans ok" vacuously. The recipe `test -f`s each crate-local `deny.toml` first,
+  so a deleted/renamed config **fails** the gate instead of silently disabling it.
+- **Parity check** — the per-crate `[bans]` deny lists must be identical across
+  `PURITY_CRATES` (the recipe diffs the `{ name = … }` entries against the first
+  crate's). Adding a ban to one crate's `deny.toml` but not the others would
+  otherwise silently weaken Layer 2 for the rest.
 
 ## Merge-Blocking Wiring
 
