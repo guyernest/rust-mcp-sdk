@@ -1,0 +1,114 @@
+{
+  "1_Inputs!B2": {
+    "key": "1_Inputs!B2",
+    "expr": {
+      "Literal": {
+        "Number": 60000.0
+      }
+    }
+  },
+  "1_Inputs!B3": {
+    "key": "1_Inputs!B3",
+    "expr": {
+      "Literal": {
+        "Text": "single"
+      }
+    }
+  },
+  "1_Inputs!B4": {
+    "key": "1_Inputs!B4",
+    "expr": {
+      "Literal": {
+        "Number": 12000.0
+      }
+    }
+  },
+  "2_Brackets!A2": {
+    "key": "2_Brackets!A2",
+    "expr": {
+      "Literal": {
+        "Number": 0.0
+      }
+    }
+  },
+  "2_Brackets!A3": {
+    "key": "2_Brackets!A3",
+    "expr": {
+      "Literal": {
+        "Number": 40000.0
+      }
+    }
+  },
+  "2_Brackets!B2": {
+    "key": "2_Brackets!B2",
+    "expr": {
+      "Literal": {
+        "Number": 0.1
+      }
+    }
+  },
+  "2_Brackets!B3": {
+    "key": "2_Brackets!B3",
+    "expr": {
+      "Literal": {
+        "Number": 0.22
+      }
+    }
+  },
+  "3_Outputs!B2": {
+    "key": "3_Outputs!B2",
+    "expr": {
+      "Formula": {
+        "BinaryOp": {
+          "left": {
+            "Ref": "1_Inputs!B2"
+          },
+          "op": "Sub",
+          "right": {
+            "Ref": "1_Inputs!B4"
+          }
+        }
+      }
+    }
+  },
+  "3_Outputs!B3": {
+    "key": "3_Outputs!B3",
+    "expr": {
+      "Formula": {
+        "BinaryOp": {
+          "left": {
+            "Ref": "3_Outputs!B2"
+          },
+          "op": "Mul",
+          "right": {
+            "Ref": "2_Brackets!B2"
+          }
+        }
+      }
+    }
+  },
+  "3_Outputs!B4": {
+    "key": "3_Outputs!B4",
+    "expr": {
+      "Formula": {
+        "BinaryOp": {
+          "left": {
+            "Ref": "3_Outputs!B3"
+          },
+          "op": "Div",
+          "right": {
+            "Ref": "1_Inputs!B2"
+          }
+        }
+      }
+    }
+  },
+  "3_Outputs!B5": {
+    "key": "3_Outputs!B5",
+    "expr": {
+      "Formula": {
+        "Ref": "2_Brackets!B3"
+      }
+    }
+  }
+}
