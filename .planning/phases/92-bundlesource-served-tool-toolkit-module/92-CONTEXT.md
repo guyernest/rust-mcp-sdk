@@ -83,9 +83,14 @@ Shape B scaffold + dialect-version declaration + second-workbook gate
 - **D-12 (user, explicit):** The mandatory runnable example serves over
   **streamable-HTTP, NOT stdio** — the target audience is business people
   consuming a remotely-hosted workbook server, not installing binaries
-  locally. Wire `required-features = ["workbook", "http"]` (the toolkit `http`
-  feature already forwards `pmcp/streamable-http`). One example, all five
-  tools, against the synthetic tax-calc fixture.
+  locally. One example, all five tools, against the synthetic tax-calc fixture.
+  *Refinement (2026-06-10, orchestrator, within delegated discretion):* after
+  the D-06 checker fix split the toolkit feature into `workbook` (LocalDirSource
+  only) + `workbook-embedded` (adds `include_dir`), the example — which defaults
+  to the embedded source per the bundle-source discretion below — wires
+  `required-features = ["workbook-embedded", "http"]`. The user's decision
+  (streamable-HTTP transport, remote business-user story) is unchanged; the
+  original `["workbook", "http"]` wording predated the feature split.
 
 ### Served layer (lift posture)
 - **D-13:** **Reuse the lighthouse's generic engine code, scrubbed.** Port the
