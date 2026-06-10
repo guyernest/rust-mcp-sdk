@@ -116,8 +116,12 @@ pub fn normalize_formula_for_writer(f: &str) -> String {
 fn argb_to_color(argb: &str) -> Option<Color> {
     let hex = argb.trim();
     let rgb_hex = match hex.len() {
-        8 => &hex[2..], // ARGB -> drop the alpha byte
-        6 => hex,       // already RGB
+        // ARGB -> drop the alpha byte. `get` (not a byte-indexed slice) so an
+        // 8-BYTE string whose byte 2 is not a char boundary (multibyte UTF-8)
+        // is `None`, never a slice panic (CR-01 — `layout.json` is untrusted
+        // bundle input; the writer value path must stay panic-free).
+        8 => hex.get(2..)?,
+        6 => hex, // already RGB
         _ => return None,
     };
     let rgb = u32::from_str_radix(rgb_hex, 16).ok()?;
@@ -574,6 +578,31 @@ mod tests {
             ("7_Quote!A3", CellValue::Error(ExcelError::DivZero)),
         ]);
         let bytes = render_xlsx(&layout, &run).expect("render");
+        assert_eq!(&bytes[..4], ZIP_MAGIC);
+    }
+
+    #[test]
+    fn argb_to_color_non_ascii_eight_byte_input_is_none_not_a_panic() {
+        // CR-01 regression: "€abcde" is 8 BYTES (3 + 5) but byte index 2 falls
+        // inside the multibyte '€' — the old `&hex[2..]` slice panicked. The
+        // fix returns None (unparseable ARGB is silently skipped, per the
+        // documented contract).
+        assert_eq!("€abcde".len(), 8, "the reproducer is byte-length 8");
+        assert_eq!(argb_to_color("€abcde"), None);
+        // Valid forms still parse.
+        assert!(argb_to_color("FFE2EFDA").is_some());
+        assert!(argb_to_color("E2EFDA").is_some());
+    }
+
+    #[test]
+    fn render_xlsx_with_non_ascii_argb_renders_without_panic() {
+        // CR-01 end-to-end: a corrupt/attacker-influenced bundle ARGB reaching
+        // cell_format via CellLayout must render (colour skipped), never panic.
+        let mut bad = cell("A1", None, Some("x"));
+        bad.fill_argb = Some("€abcde".to_string());
+        bad.font_argb = Some("€abcde".to_string());
+        let layout = one_sheet("7_Quote", vec![bad], vec![]);
+        let bytes = render_xlsx(&layout, &run_with(&[])).expect("render");
         assert_eq!(&bytes[..4], ZIP_MAGIC);
     }
 }
