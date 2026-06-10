@@ -1739,7 +1739,16 @@ Plans:
   3. **PURITY GATE:** CI + `just purity-check` fail the build if `umya` / `quick-xml` appear in the runtime's (or any served-binary's) dependency tree, run per feature-combination (not just defaults), with a positive assertion that `rust_xlsxwriter` IS present and `zip` (writer container) is permitted — `cargo tree` assertions backed by a `cargo-deny [bans]` declaration
   4. The SDK owns a versioned dialect spec document (function whitelist + refuse-set) bound to the `WHITELIST` const by a test that fails if doc and code diverge
   5. A developer can lint a workbook against the dialect (whitelist-only, deny-by-default) and receive collect-all, located, BA-actionable findings with repair guidance
-**Plans**: TBD
+
+> **Note (D-02):** WBDL-03 (the running linter + `WorkbookMap` ingest) is re-mapped to **Phase 93** — it needs a real `.xlsx` via umya. Phase 91 ships only the dialect *contract* (WHITELIST + spec doc + binding test).
+
+**Plans**: 3 plans
+
+Plans:
+
+- [ ] 91-01-PLAN.md — Lift the reader-free `pmcp-workbook-runtime` leaf crate (IR/model types, deterministic topo executor + traces, writer-only `.xlsx` renderer, finding model + D-08 Deserialize) (WBRT-01, WBRT-02, WBRT-03)
+- [ ] 91-02-PLAN.md — Create `pmcp-workbook-dialect` leaf crate (flat-13 WHITELIST + DialectRules + re-exported findings) + port `docs/workbook-dialect-spec.md` + doc↔const binding test (WBDL-01)
+- [ ] 91-03-PLAN.md — `make purity-check` (cargo-tree per-crate/per-feature reader-absence + writer-presence) + merge-blocking CI gate + WBDL-03 → Phase 93 re-map (WBRT-04, WBDL-03)
 
 ### Phase 92: BundleSource + Served-Tool Toolkit Module
 **Goal**: The compiled-bundle contract is frozen from the consumer side: a generic, fully manifest-driven `workbook` feature module in `pmcp-server-toolkit` registers all five tools against a test bundle loaded through a `BundleSource` trait, fails closed on any integrity or validation gap, and emits the same `outputSchema` → `structuredContent` discipline as the SQL/OpenAPI toolkits — with zero per-workbook Rust.
@@ -1809,7 +1818,7 @@ Plans:
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 91. Workbook Runtime + Purity Gate + Dialect | 0/? | Not started | - |
+| 91. Workbook Runtime + Purity Gate + Dialect | 0/3 | Planned | - |
 | 92. BundleSource + Served-Tool Toolkit Module | 0/? | Not started | - |
 | 93. Workbook Compiler + §5 Fixes + Promote Gate | 0/? | Not started | - |
 | 94. CLI Subcommands + `pmcp.toml` | 0/? | Not started | - |
