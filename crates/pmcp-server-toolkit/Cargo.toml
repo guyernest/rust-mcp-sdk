@@ -169,3 +169,21 @@ mcp-tester = { version = "0.7.0", path = "../mcp-tester" }
 # Why: Phase 90 Plans 01/03/04/05 drive the HttpConnector against a mock REST
 # backend (GET/POST + auth-header assertions) without a live server. Dev-only.
 wiremock = "0.6"
+# Why: Phase 92 Plan 02 — the tax-calc golden fixture generator builds the bundle
+# artifacts via the runtime's OWN Serialize types + build_bundle_lock (so the
+# golden lock matches BundleLoader's recompute exactly). Dev-only path dep with
+# the `embedded` feature OFF (the generator only needs the model + hasher, not
+# include_dir). `tests/` is excluded from the published artifact, so this never
+# enters the downstream dependency graph.
+pmcp-workbook-runtime = { version = "0.1.0", path = "../pmcp-workbook-runtime" }
+# Why: Phase 92 Plan 02 — the byte-stability test regenerates the golden into a
+# tempdir and the tamper helpers copy-then-corrupt the golden in a tempdir
+# (D-05: no committed corrupt fixtures). Dev-only.
+tempfile = "3"
+# Why: Phase 92 Plan 02 — the fixture generator folds the evidence-dir hash the
+# EXACT way the runtime loader does (path+length-prefixed via the runtime's own
+# `update_field`), which needs a `Sha256` instance + `hex::encode`. Both are
+# already workspace deps the runtime uses (no new package to vet); pinned to the
+# runtime's versions. Dev-only.
+sha2 = "0.11"
+hex = "0.4"
