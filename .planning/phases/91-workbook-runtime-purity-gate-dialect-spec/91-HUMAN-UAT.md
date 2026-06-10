@@ -1,14 +1,14 @@
 ---
-status: partial
+status: complete
 phase: 91-workbook-runtime-purity-gate-dialect-spec
 source: [91-VERIFICATION.md]
 started: 2026-06-10T05:10:00Z
-updated: 2026-06-10T05:10:00Z
+updated: 2026-06-10T05:45:00Z
 ---
 
 ## Current Test
 
-CR-01 disposition decision
+[all items resolved]
 
 ## Tests
 
@@ -26,14 +26,14 @@ result: passed — orchestrator ran both: make purity-check exit 0 (reader-free 
 
 ### 4. CR-01 disposition (render/mod.rs:119 argb_to_color panic path)
 expected: Human decides — fix the non-ASCII ARGB byte-slice panic before Phase 92, or document acceptance
-result: [pending]
+result: passed — user chose "fix Critical + Warnings now"; CR-01 fixed in 38feba92 (`hex.get(2..)?` + 2 regression tests) and all 6 warnings fixed (WR-01..WR-06, commits 47e58486..6eb6c1be); 136 tests pass, clippy clean, make purity-check exits 0 with fail-closed paths empirically demonstrated
 
 ## Summary
 
 total: 4
-passed: 3
+passed: 4
 issues: 0
-pending: 1
+pending: 0
 skipped: 0
 blocked: 0
 
