@@ -1719,7 +1719,7 @@ Plans:
 
 ### v2.3 Phase Summary
 
-- [ ] **Phase 91: Workbook Runtime + Purity Gate + Dialect Spec** — Port the reader-free `pmcp-workbook-runtime` leaf (owned IR/model types, deterministic evaluator, writer-only `.xlsx` renderer) and stand up the `cargo tree` + `cargo-deny` purity gate on day one; ship the SDK-owned versioned dialect spec + linter
+- [x] **Phase 91: Workbook Runtime + Purity Gate + Dialect Spec** — Port the reader-free `pmcp-workbook-runtime` leaf (owned IR/model types, deterministic evaluator, writer-only `.xlsx` renderer) and stand up the `cargo tree` + `cargo-deny` purity gate on day one; ship the SDK-owned versioned dialect spec + linter (completed 2026-06-10)
 - [ ] **Phase 92: BundleSource + Served-Tool Toolkit Module** — Freeze the bundle contract from the consumer side: `BundleSource` trait (local-dir + embedded) + the generic, fully manifest-driven `workbook` feature module in `pmcp-server-toolkit` (all five tools, fail-closed validation, boot integrity gate) against a test bundle
 - [ ] **Phase 93: Workbook Compiler + §5 Generalization Fixes + Promote Gate** — Port `pmcp-workbook-compiler` (umya-isolated offline pipeline), do the §5 fixes here (manifest-driven emit, CR-01/CR-02/WR-01, umya fabricated-provenance), and ship the change-class + golden-corpus promote gate with the `--accept` approval flow
 - [ ] **Phase 94: CLI Subcommands + `pmcp.toml`** — `cargo pmcp compile-workbook` / `lint-workbook` / `emit-bundle` thin shells over the compiler, the gated `--accept --approver --effective-date` flow, and a project-level `pmcp.toml` mapping workbooks → bundle IDs (kills single-workbook assumptions)
@@ -1749,7 +1749,7 @@ Plans:
 
 - [x] 91-01-PLAN.md — Lift the reader-free `pmcp-workbook-runtime` leaf crate (IR/model types, deterministic topo executor + traces, writer-only `.xlsx` renderer, finding model + D-08 Deserialize) (WBRT-01, WBRT-02, WBRT-03)
 - [x] 91-02-PLAN.md — Create `pmcp-workbook-dialect` leaf crate (flat-13 WHITELIST + DialectRules + re-exported findings) + port `docs/workbook-dialect-spec.md` + doc↔const binding test (WBDL-01)
-- [ ] 91-03-PLAN.md — `make purity-check` (cargo-tree per-crate/per-feature reader-absence + writer-presence) + merge-blocking CI gate + WBDL-03 → Phase 93 re-map (WBRT-04, WBDL-03)
+- [x] 91-03-PLAN.md — `make purity-check` (cargo-tree per-crate/per-feature reader-absence + writer-presence) + merge-blocking CI gate + WBDL-03 → Phase 93 re-map (WBRT-04, WBDL-03)
 
 ### Phase 92: BundleSource + Served-Tool Toolkit Module
 
@@ -1829,7 +1829,7 @@ Plans:
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 91. Workbook Runtime + Purity Gate + Dialect | 2/3 | In Progress|  |
+| 91. Workbook Runtime + Purity Gate + Dialect | 3/3 | Complete   | 2026-06-10 |
 | 92. BundleSource + Served-Tool Toolkit Module | 0/? | Not started | - |
 | 93. Workbook Compiler + §5 Fixes + Promote Gate | 0/? | Not started | - |
 | 94. CLI Subcommands + `pmcp.toml` | 0/? | Not started | - |

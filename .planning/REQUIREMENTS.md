@@ -15,7 +15,7 @@
 - [x] **WBRT-01**: Developer can depend on a reader-free crate owning the shared model types (Manifest, CellMap, BundleLock, VersionChangelog, IR `Cell`/`Expr`), serde/schemars-clean, deserialized identically by the offline emitter and the served binary
 - [x] **WBRT-02**: Server can run a compiled workbook's IR through a deterministic evaluator producing typed outputs plus per-cell derivation traces
 - [x] **WBRT-03**: Server can render a computed workbook back to `.xlsx` via a writer-only renderer (`rust_xlsxwriter`) that keeps the served binary reader-free
-- [ ] **WBRT-04**: CI/`just` purity gate fails the build if the Excel reader (`umya`/`quick-xml`) appears in the runtime or any served-binary dependency tree (cargo-tree assertion + `cargo-deny [bans]` backstop)
+- [x] **WBRT-04**: CI/`just` purity gate fails the build if the Excel reader (`umya`/`quick-xml`) appears in the runtime or any served-binary dependency tree (cargo-tree assertion + `cargo-deny [bans]` backstop)
 
 ### Workbook Dialect — SDK-owned, versioned
 
@@ -98,7 +98,7 @@
 | WBRT-01 | Phase 91 | Complete |
 | WBRT-02 | Phase 91 | Complete |
 | WBRT-03 | Phase 91 | Complete |
-| WBRT-04 | Phase 91 | Pending |
+| WBRT-04 | Phase 91 | Complete |
 | WBDL-01 | Phase 91 | Complete |
 | WBDL-03 | Phase 93 | Pending |
 | WBSV-01 | Phase 92 | Pending |
