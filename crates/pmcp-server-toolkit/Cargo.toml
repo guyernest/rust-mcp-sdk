@@ -70,6 +70,16 @@ serde_yaml = { version = "0.9", optional = true }
 base64 = { version = "0.22", optional = true }
 regex = { version = "1.11", optional = true }
 
+# Why: Phase 92 governed-Excel workbook served-tool module (WBSV-08/09). The
+# `workbook` feature pulls the reader-free `pmcp-workbook-runtime` (BundleSource +
+# BundleLoader + the artifact/manifest/changelog/layout model) so the served
+# `calculate`/`explain`/`get_manifest`/`diff_version`/`render_workbook` tools can
+# operate on a verified `WorkbookBundle`. `base64` lives HERE (the toolkit), NOT
+# in the runtime (Codex MEDIUM #6 — the runtime stays base64-free). The bare
+# `workbook` feature carries LocalDirSource only; `workbook-embedded` layers the
+# runtime's `embedded` (include_dir) EmbeddedSource on top.
+pmcp-workbook-runtime = { version = "0.1.0", path = "../pmcp-workbook-runtime", optional = true }
+
 [features]
 default = ["code-mode"]
 # Why: the toolkit's code-mode wiring needs `ValidationPipeline::validate_sql_query`
@@ -116,6 +126,16 @@ http = [
 # `["openapi-code-mode"]`. Plan 05's `ScriptToolHandler` and Plan 06's binary dep
 # both key off this single feature.
 openapi-code-mode = ["http", "code-mode", "pmcp-code-mode/js-runtime"]
+# Why: Phase 92 governed-Excel served-tool module (D-06). The feature PAIR keeps
+# `include_dir` (a ~50KB compile-time dependency) out of the LocalDirSource-only
+# build:
+#   - `workbook` pulls the runtime (LocalDirSource path) + base64 (toolkit-side,
+#     Codex MEDIUM #6) — does NOT pull include_dir.
+#   - `workbook-embedded` LAYERS the runtime's `embedded` (include_dir 0.7.4) on
+#     top, adding EmbeddedSource for binary-baked bundles (WBSV-09).
+# Neither is in `default` (D-10), keeping the no-default-features build lean.
+workbook = ["dep:pmcp-workbook-runtime", "dep:base64"]
+workbook-embedded = ["workbook", "pmcp-workbook-runtime/embedded"]
 
 [[example]]
 name = "e01_toolkit_minimal"
