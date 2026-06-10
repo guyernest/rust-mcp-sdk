@@ -1,4 +1,4 @@
-# Workbook Dialect Spec (v0.5.0, Phase 7)
+# Workbook Dialect Spec (v0.5.0, Phase 91)
 
 > **The published, constrained workbook dialect contract (DIA-01).** This is the
 > BA/auditor-facing "moat" document: a governed Excel workbook conforms to *this*
@@ -7,9 +7,11 @@
 > `crates/pmcp-workbook-dialect/src/lib.rs` so the published contract and the
 > enforced rule can never drift.
 >
-> Cites the architecture brief `docs/Excel-as-Configuration-Architecture-Brief.md`
-> §5 (the dialect: layered sheets, function set, acyclic DAG) and §7 (cell
-> taxonomy). It does not copy them — read the brief for the design rationale.
+> Derives from the lighthouse project's Excel-as-Configuration architecture
+> brief — §5 (the dialect: layered sheets, function set, acyclic DAG) and §7
+> (cell taxonomy). The brief is an **external lighthouse document, not vendored
+> in this repository**; the §5/§7 pointers below refer to it for design
+> rationale, but this spec is self-contained for SDK readers.
 
 ## 1. What this dialect is
 
@@ -47,7 +49,8 @@ is **deny-by-default**: any function token not in the set is a located
 auto-widened — see §6).
 
 The set is a flat list of **13 first-class functions** that the lighthouse
-workbook (`docs/UFH_Quote_Process_Model_Plot3.xlsx`) already authors, so it
+workbook (`UFH_Quote_Process_Model_Plot3.xlsx` — the lighthouse project's
+reference workbook, not vendored in this repository) already authors, so it
 lints clean **as-authored**. Every function below is first-class — there is no
 core/widened tiering.
 
@@ -85,7 +88,8 @@ separately — they are not function tokens and do not appear in the whitelist.
   tables)** are the BA-facing canonical surface, and a hidden **`_Manifest`
   sheet** is the technical enrichment layer (units, meanings, loop metadata, role
   classifications). Colour is linted *against* the manifest; it is never the
-  source of truth. (Synthesis + round-trip of this model is Plan 04, not Plan 03.)
+  source of truth. (Synthesis + round-trip of this model land with the Phase 93
+  compiler.)
 
 ## 5. The refuse-set (DIA-02, D-07 / D-08)
 
@@ -110,40 +114,45 @@ green fill `FFE2EFDA` → constant, yellow fill → assumption, default-font for
 cell → formula. These are *evidence labels* used to propose roles and to lint
 colour against the manifest — never canonical (architecture brief §7).
 
-## 6. Phase-7-enforced vs declared-for-Phase-9
+## 6. Enforcement status in this repository (phases 91 / 93)
 
-To avoid overclaiming, every dialect rule is marked as either **ENFORCED in
-Phase 7** (the linter actually checks it over the owned `WorkbookMap`) or
-**DECLARED but deferred** (part of the published dialect, but not checked until a
-later phase builds the machinery).
+To avoid overclaiming, every dialect rule is marked as either **ENFORCED** (the
+linter actually checks it over the owned `WorkbookMap`) or **DECLARED but
+deferred** (part of the published dialect, but not checked until a later phase
+builds the machinery). Phase numbers below are **this repository's** roadmap
+phases (`.planning/ROADMAP.md`), not the lighthouse project's.
 
-### Enforced in Phase 7
+### Enforced today (Phase 91 — this phase)
 
-- The full **refuse-set** of §5 (structural + role + formula-kind), over the owned
-  `WorkbookMap` — the linter never reaches back into `umya`.
+- **Nothing in §5 is mechanically enforced yet.** Phase 91 publishes the
+  contract: this document, the machine `WHITELIST` const, and the doc↔const
+  binding test (so the published and enforced whitelist cannot drift before the
+  linter even exists).
+- The served **runtime** already fails a cyclic dependency DAG at run time (a
+  located `dag/cycle` finding from `toposort`) — but that is a runtime guard
+  over an already-compiled IR, not a compile-time workbook check.
+
+### Enforced in Phase 93 (the compiler + linter phase)
+
+- The full **refuse-set** of §5 (structural + role + formula-kind), over the
+  owned `WorkbookMap` — the linter never reaches back into `umya`.
 - The **whitelist token scan** (§3) — deny-by-default, located, no auto-widening.
 - The **two-layer overlap** consistency check and **colour-vs-manifest** lint
-  (DIA-03 / DIA-04) land with manifest synthesis (Plan 04, same phase).
+  (DIA-03 / DIA-04) — land with manifest synthesis, also Phase 93.
+- **Compile-time acyclic dependency DAG.** The architecture brief §5 requires
+  the formula graph to be an acyclic DAG; the Phase 93 compiler's formula parser
+  + DAG reconstruction checks it at compile time.
 
-### Declared but deferred (NOT enforced in Phase 7)
-
-- **Acyclic dependency DAG.** The architecture brief §5 requires the formula
-  graph to be an acyclic DAG. **Phase 7 does NOT reconstruct a dependency DAG and
-  does NOT check acyclicity** — that requires the formula parser + DAG
-  reconstruction, which is **Phase 9**. The dialect *declares* the requirement;
-  Phase 9 enforces it.
-- **Full formula parsing / AST.** Phase 7 uses a lightweight *token* scan for the
-  whitelist check (§3), not a lexer or parser. The Phase-9 parser supersedes it.
-
-### Known Phase-7 limitation — whitelist string-literal false positive
+### Known linter limitation — whitelist string-literal false positive
 
 The whitelist scan is a **token approximation**, not a lexer. A function name
 that appears *inside a quoted string literal* — e.g. `TEXT(x,"0")` containing a
 literal `"SUM("` inside the quotes, or a cell whose text content is `"OFFSET("` —
-can be mistaken for a function call. The Phase-7 scanner mitigates the common case
-by skipping over quoted-string regions, but a fully robust resolution (a real
-lexer that tracks string vs formula context) is **Phase 9**. This is an accepted
-Phase-7 approximation, documented here so it is not mistaken for a defect.
+can be mistaken for a function call. The Phase 93 scanner mitigates the common
+case by skipping over quoted-string regions, but a fully robust resolution (a
+real lexer that tracks string vs formula context) is deferred beyond Phase 93.
+This is an accepted approximation, documented here so it is not mistaken for a
+defect.
 
 The scanner also strips a leading `_xlfn.` future-function prefix before
 comparison, so `_xlfn.CONCAT(` is compared as `CONCAT`.
@@ -151,5 +160,6 @@ comparison, so `_xlfn.CONCAT(` is compared as `CONCAT`.
 ---
 
 *Bound to `crates/pmcp-workbook-dialect/src/lib.rs` `WHITELIST` by
-`pmcp_workbook_dialect::dialect_spec::doc_whitelist_table_matches_const`. Cites
-`docs/Excel-as-Configuration-Architecture-Brief.md` §5 / §7.*
+`pmcp_workbook_dialect::dialect_spec::doc_whitelist_table_matches_const`.
+Derives from the lighthouse project's Excel-as-Configuration architecture brief
+§5 / §7 (external; not vendored in this repository).*
