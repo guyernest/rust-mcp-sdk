@@ -43,6 +43,15 @@ pub mod tools;
 #[cfg(feature = "http")]
 pub mod http;
 
+/// Governed-Excel workbook served-tool module (Phase 92).
+///
+/// Gated behind the opt-in `workbook` feature so the no-`workbook` toolkit
+/// build never links the `pmcp-workbook-runtime` BundleSource/BundleLoader
+/// surface. The `workbook-embedded` feature additionally enables the runtime's
+/// `embedded` (include_dir) EmbeddedSource for binary-baked bundles.
+#[cfg(feature = "workbook")]
+pub mod workbook;
+
 #[cfg(feature = "code-mode")]
 pub mod code_mode;
 
