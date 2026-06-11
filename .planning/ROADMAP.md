@@ -1839,7 +1839,7 @@ Plans:
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 91. Workbook Runtime + Purity Gate + Dialect | 3/3 | Complete    | 2026-06-10 |
-| 92. BundleSource + Served-Tool Toolkit Module | 7/7 | Complete   | 2026-06-11 |
+| 92. BundleSource + Served-Tool Toolkit Module | 7/7 | Complete    | 2026-06-11 |
 | 93. Workbook Compiler + §5 Fixes + Promote Gate | 0/? | Not started | - |
 | 94. CLI Subcommands + `pmcp.toml` | 0/? | Not started | - |
 | 95. Shape A Binary `pmcp-workbook-server` | 0/? | Not started | - |

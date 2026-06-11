@@ -45,15 +45,15 @@
 
 ### Workbook Served-tool layer — `pmcp-server-toolkit` module (bundle-driven)
 
-- [ ] **WBSV-01**: Agent can call `calculate` with typed, tier-enforced, dtype-checked, enum-gated inputs and receive **all named outputs** (`{value,unit}` each) plus a provenance stamp — no single privileged "headline" output
-- [ ] **WBSV-02**: Agent can call `explain` to get an ordered per-cell business-language derivation trace (formula + operand values + manifest meaning), with reconciliation annotations generalized from the lighthouse `coil_band` field
-- [ ] **WBSV-03**: Agent can call `get_manifest` to discover input meanings/tiers/defaults/units, output units/meanings, governed data, versions, and changelog
-- [ ] **WBSV-04**: Agent can call `diff_version` to read the recorded, hash-verified prev→current changelog (per-output deltas, change class, severity, summary)
-- [ ] **WBSV-05**: Agent can call `render_workbook` to receive a provenance-bound `workbook://` resource URI whose `resources/read` statelessly regenerates the computed `.xlsx` (provenance-verified, re-validated, re-run, rendered)
-- [ ] **WBSV-06**: Every domain failure returns a structured `isError:true` envelope (in `structuredContent`, never a protocol `Err`) carrying `code`, `reason`, and self-repair fields (`allowed` / `required` / `range`) plus the provenance stamp
-- [ ] **WBSV-07**: Input and output schemas are projected entirely from the manifest (`additionalProperties:false`, per-column dtype/unit/meaning; mandatory non-empty `outputSchema`) — parity with the SQL/OpenAPI `TypedToolWithOutput` pattern
-- [ ] **WBSV-08**: The server recomputes the `BUNDLE.lock` combined hash at boot and fails closed on any tampered or mismatched artifact before serving
-- [ ] **WBSV-09**: A server loads a bundle via a `BundleSource` trait with local-directory and embedded (`include_dir!`) implementations; S3/registry is a documented extension seam, not shipped
+- [x] **WBSV-01**: Agent can call `calculate` with typed, tier-enforced, dtype-checked, enum-gated inputs and receive **all named outputs** (`{value,unit}` each) plus a provenance stamp — no single privileged "headline" output
+- [x] **WBSV-02**: Agent can call `explain` to get an ordered per-cell business-language derivation trace (formula + operand values + manifest meaning), with reconciliation annotations generalized from the lighthouse `coil_band` field
+- [x] **WBSV-03**: Agent can call `get_manifest` to discover input meanings/tiers/defaults/units, output units/meanings, governed data, versions, and changelog
+- [x] **WBSV-04**: Agent can call `diff_version` to read the recorded, hash-verified prev→current changelog (per-output deltas, change class, severity, summary)
+- [x] **WBSV-05**: Agent can call `render_workbook` to receive a provenance-bound `workbook://` resource URI whose `resources/read` statelessly regenerates the computed `.xlsx` (provenance-verified, re-validated, re-run, rendered)
+- [x] **WBSV-06**: Every domain failure returns a structured `isError:true` envelope (in `structuredContent`, never a protocol `Err`) carrying `code`, `reason`, and self-repair fields (`allowed` / `required` / `range`) plus the provenance stamp
+- [x] **WBSV-07**: Input and output schemas are projected entirely from the manifest (`additionalProperties:false`, per-column dtype/unit/meaning; mandatory non-empty `outputSchema`) — parity with the SQL/OpenAPI `TypedToolWithOutput` pattern
+- [x] **WBSV-08**: The server recomputes the `BUNDLE.lock` combined hash at boot and fails closed on any tampered or mismatched artifact before serving
+- [x] **WBSV-09**: A server loads a bundle via a `BundleSource` trait with local-directory and embedded (`include_dir!`) implementations; S3/registry is a documented extension seam, not shipped
 
 ### Workbook CLI & Developer Experience
 
@@ -101,15 +101,15 @@
 | WBRT-04 | Phase 91 | Complete |
 | WBDL-01 | Phase 91 | Complete |
 | WBDL-03 | Phase 93 | Pending |
-| WBSV-01 | Phase 92 | Pending |
-| WBSV-02 | Phase 92 | Pending |
-| WBSV-03 | Phase 92 | Pending |
-| WBSV-04 | Phase 92 | Pending |
-| WBSV-05 | Phase 92 | Pending |
-| WBSV-06 | Phase 92 | Pending |
-| WBSV-07 | Phase 92 | Pending |
-| WBSV-08 | Phase 92 | Pending |
-| WBSV-09 | Phase 92 | Pending |
+| WBSV-01 | Phase 92 | Complete |
+| WBSV-02 | Phase 92 | Complete |
+| WBSV-03 | Phase 92 | Complete |
+| WBSV-04 | Phase 92 | Complete |
+| WBSV-05 | Phase 92 | Complete |
+| WBSV-06 | Phase 92 | Complete |
+| WBSV-07 | Phase 92 | Complete |
+| WBSV-08 | Phase 92 | Complete |
+| WBSV-09 | Phase 92 | Complete |
 | WBCO-01 | Phase 93 | Pending |
 | WBCO-02 | Phase 93 | Pending |
 | WBCO-03 | Phase 93 | Pending |
