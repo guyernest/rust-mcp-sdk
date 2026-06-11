@@ -14,6 +14,11 @@ exclude = [".planning/", ".pmat/", "fuzz/", "tests/"]
 all-features = true
 rustdoc-args = ["--cfg", "docsrs"]
 
+# `cargo fuzz` sets `--cfg fuzzing`; declare it so the non-fuzz build does not
+# warn on the `#[cfg(fuzzing)]` raw-reader hook (the fuzz target lives in fuzz/).
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(fuzzing)'] }
+
 [lib]
 name = "pmcp_workbook_compiler"
 path = "src/lib.rs"
@@ -52,3 +57,13 @@ chrono = "0.4"
 # version so Cargo.lock keeps ONE copy. No JS-kernel dep (no SWC, no code-mode):
 # the runtime's pure-Rust scalar_eval replaces the JS kernel on every path here.
 umya-spreadsheet = "3.0"
+
+# The provenance raw reader (Plan 02, WBCO-07) reads the ORIGINAL on-disk .xlsx
+# bytes via quick-xml/zip — umya cannot surface calcPr/app.xml and FABRICATES
+# them on a round-trip, so the gate MUST read the original bytes here. These are
+# DIRECT pins set to umya's EXACT transitively-resolved versions (quick-xml
+# 0.37.x, zip 8.6.x via `cargo tree -p umya-spreadsheet`) so Cargo.lock keeps ONE
+# copy each (no forked second version). The reader stays pub(crate)-quarantined:
+# no quick-xml/zip type ever crosses a public signature (T-93-02-LEAK).
+quick-xml = "0.37"
+zip = "8.6"
