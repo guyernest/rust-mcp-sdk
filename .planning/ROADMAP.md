@@ -1764,13 +1764,15 @@ Plans:
   4. The server recomputes the `BUNDLE.lock` combined hash-of-hashes at boot and fails closed on any tampered or mismatched artifact before serving
   5. A server loads a bundle via the `BundleSource` trait with both local-directory and embedded (`include_dir!`) implementations; S3/registry is a documented extension seam, not shipped
 
-**Plans**: 5 plans (5 waves, strictly sequential)
+**Plans**: 7 plans (7 waves, strictly sequential — 92-06/92-07 close the gaps_found verification)
 
 - [x] 92-01-PLAN.md — Runtime BundleSource trait (local-dir + embedded) + shared fail-closed BundleLoader + manifest annotations field + D-17/S-1 scrub
 - [x] 92-02-PLAN.md — Synthetic tax-calc golden fixture generator + committed byte-stable golden + tamper helpers
 - [x] 92-03-PLAN.md — Toolkit workbook served core: isError envelope, manifest→schema projection, fail-closed input validation, 4 handlers (calculate/explain/get_manifest/diff_version)
 - [x] 92-04-PLAN.md — render_workbook: workbook:// URI codec + stateless regen-on-read resource + published URI contract doc
 - [x] 92-05-PLAN.md — WorkbookBuilderExt wiring + boot-surface re-exports + workbook feature + streamable-HTTP example + integration tests + purity-gate extension
+- [ ] 92-06-PLAN.md — Gap closure (CR-01): drop Role::Input cells from the golden IR + seed-preserving executor literal arm + regenerate golden + non-default-input regression test (unblocks WBSV-01/02/05)
+- [ ] 92-07-PLAN.md — Gap closure (Blocker 2): fail-closed override role filter (WR-02) + fail-closed project_outputs (WR-04) + absent-anchor stamp gate (WR-07) (completes WBSV-06)
 
 **UI hint**: yes
 
