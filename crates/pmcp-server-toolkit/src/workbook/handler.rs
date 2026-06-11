@@ -75,8 +75,16 @@ pub(crate) fn project_outputs(
 ) -> Result<Value, WorkbookToolError> {
     let mut outputs = serde_json::Map::new();
     for entry in &bundle.cell_map.outputs {
+        // WR-04: fail closed on a declared-but-uncomputed output. A cell_map output
+        // (already verified at boot) absent from the run result is a cell_map/IR skew,
+        // not a success — silently dropping it would let the served payload diverge
+        // from the advertised outputSchema (WBSV-07). Surface it as an `invalid_input`
+        // error so the contract and the payload can never disagree.
         let Some(value) = run.computed.get(&entry.seed_coord) else {
-            continue;
+            return Err(WorkbookToolError::invalid_input(format!(
+                "internal: declared output '{}' ({}) was not computed by the bundle IR",
+                entry.json_key, entry.seed_coord
+            )));
         };
         let projected = finite_output_value(value, &entry.seed_coord, &entry.json_key)?;
         outputs.insert(

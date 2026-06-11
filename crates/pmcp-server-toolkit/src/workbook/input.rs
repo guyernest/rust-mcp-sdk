@@ -142,6 +142,20 @@ pub fn validate_input(
                     variable_tier_keys(manifest),
                 ));
             },
+            // WR-02: reject an override targeting a computed cell. A
+            // `Role::Output`/`Role::Formula` cell is derived by the IR — seeding it
+            // would (after 92-06's seed-preserving executor) let a caller pin a served
+            // output under a valid provenance stamp (output forging). Mirror
+            // `variable_tier_keys`' own `!matches!(r.role, Role::Output | Role::Formula)`
+            // filter so the accept arm cannot contradict the module's allow-list. A
+            // forbidden-role override surfaces the same machine-actionable allowed-list
+            // as an unknown key.
+            Some(r) if matches!(r.role, Role::Output | Role::Formula) => {
+                return Err(WorkbookToolError::unsupported_option(
+                    key.clone(),
+                    variable_tier_keys(manifest),
+                ));
+            },
             Some(r) => {
                 check_value_dtype(r, key, value)?;
                 seeds.insert(r.cell.clone(), value.clone());
