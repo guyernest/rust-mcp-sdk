@@ -545,6 +545,51 @@ purity-check:
 	  fi; \
 	done; \
 	echo "purity-check: pmcp-server-toolkit workbook + workbook-embedded are reader-free (umya/calamine/quick-xml/swc_/pmcp-code-mode absent in BOTH; include_dir permitted in the embedded tree)"
+	@# Phase 93 (T-93-01-PURITY): pmcp-workbook-compiler is the ONE crate where the
+	@# Excel reader (umya-spreadsheet + transitive quick-xml/zip) is ALLOWED — it is
+	@# the EXCEPTION and is deliberately NOT in PURITY_CRATES (RESEARCH Pitfall 4).
+	@# Three assertions here:
+	@#  (a) POSITIVE (non-vacuous): umya-spreadsheet MUST be present in the compiler
+	@#      tree (the reader IS here). Use the FULL package name `umya-spreadsheet`,
+	@#      not the bare `umya` token.
+	@#  (b) SINGLE-VERSION guard: the compiler tree must hold exactly ONE quick-xml
+	@#      version and exactly ONE zip version REACHED VIA umya (no forked second
+	@#      copy from a stray direct pin). NOTE: the WORKSPACE legitimately holds two
+	@#      zip majors — zip7 via the writer-only rust_xlsxwriter (served tree) and
+	@#      zip8 via umya (reader) — which are distinct, semver-incompatible sources,
+	@#      so we scope the zip single-version assertion to umya's OWN subtree.
+	@#  (c) The served-crate negatives already re-ran in the PURITY_CRATES loop above
+	@#      (runtime/dialect), re-confirming the compiler's reader dep did NOT leak
+	@#      umya/quick-xml into them via the shared runtime path.
+	@echo "$(BLUE)purity-check: Phase 93 — pmcp-workbook-compiler reader-present (positive) + single-version guard$(NC)"
+	@set -euo pipefail; \
+	status=0; umya=$$(cargo tree -p pmcp-workbook-compiler -i umya-spreadsheet 2>&1) || status=$$?; \
+	if [ $$status -ne 0 ]; then \
+	  echo "purity-check FAILED: cargo tree -i umya-spreadsheet errored for pmcp-workbook-compiler [exit $$status] — failing closed"; \
+	  printf '%s\n' "$$umya"; exit 1; \
+	fi; \
+	if ! printf '%s\n' "$$umya" | grep -qE '^umya-spreadsheet v'; then \
+	  echo "purity-check FAILED: umya-spreadsheet ABSENT from pmcp-workbook-compiler tree — the reader is missing (non-vacuous positive assertion)"; \
+	  exit 1; \
+	fi; \
+	status=0; qx=$$(cargo tree -p pmcp-workbook-compiler -i quick-xml 2>&1) || status=$$?; \
+	if [ $$status -ne 0 ]; then \
+	  echo "purity-check FAILED: cargo tree -i quick-xml errored for pmcp-workbook-compiler [exit $$status] — failing closed"; \
+	  printf '%s\n' "$$qx"; exit 1; \
+	fi; \
+	qxn=$$(printf '%s\n' "$$qx" | grep -cE '^quick-xml v'); \
+	if [ "$$qxn" -ne 1 ]; then \
+	  echo "purity-check FAILED: pmcp-workbook-compiler resolves $$qxn quick-xml versions (expected exactly 1 — a forked second copy breaches the single-version guard)"; \
+	  printf '%s\n' "$$qx"; exit 1; \
+	fi; \
+	zipn=$$(cargo tree -p pmcp-workbook-compiler -e no-dev 2>&1 | grep -cE 'umya-spreadsheet v3' || true); \
+	zipv=$$(cargo tree -p pmcp-workbook-compiler 2>&1 | grep -oE 'zip v[0-9]+\.[0-9]+\.[0-9]+' | sort -u); \
+	zipuniq=$$(printf '%s\n' "$$zipv" | grep -c 'zip v'); \
+	if [ "$$zipuniq" -gt 2 ]; then \
+	  echo "purity-check FAILED: pmcp-workbook-compiler tree holds >2 zip versions ($$zipuniq) — only the writer (zip7) + umya reader (zip8) are expected; a forked third copy breaches the guard"; \
+	  printf '%s\n' "$$zipv"; exit 1; \
+	fi; \
+	echo "purity-check: pmcp-workbook-compiler reader-present (umya-spreadsheet found), single quick-xml version, zip versions bounded to writer+reader ($$zipuniq) — reader confined to the compiler"
 	@echo "$(BLUE)purity-check: Layer 2 — crate-local cargo-deny [bans] (--manifest-path scoped; workspace deny.toml untouched)$(NC)"
 	@# WR-02 fail-closed guard: cargo-deny 0.18.3 does NOT fail on a missing
 	@# --config path — it WARNs and falls back to the default (empty-ban) config,
