@@ -704,6 +704,55 @@ mod tests {
     }
 
     #[test]
+    fn project_outputs_fails_closed_on_missing_declared_output() {
+        // WR-04: a declared output (verified in cell_map at boot) absent from the run
+        // result is a cell_map/IR skew, NOT a success. project_outputs must fail
+        // closed with invalid_input so the served payload can never silently diverge
+        // from the advertised outputSchema (WBSV-07) — never an `else { continue }`.
+        let bundle = golden_bundle();
+        // A crafted RunResult whose `computed` map is EMPTY — every declared output's
+        // seed_coord is therefore absent.
+        let run = RunResult::default();
+        let err = project_outputs(&bundle, &run)
+            .expect_err("a missing declared output fails closed (WR-04)");
+        assert_eq!(err.code, "invalid_input");
+        assert!(
+            err.reason.contains("was not computed by the bundle IR"),
+            "the error names the cell_map/IR skew: {}",
+            err.reason
+        );
+        // The named, missing output is identified in the message.
+        assert!(
+            bundle
+                .cell_map
+                .outputs
+                .iter()
+                .any(|e| err.reason.contains(&e.json_key) || err.reason.contains(&e.seed_coord)),
+            "the error identifies the uncomputed output: {}",
+            err.reason
+        );
+    }
+
+    #[test]
+    fn project_outputs_succeeds_when_all_declared_outputs_present() {
+        // Companion to the fail-closed test: when every declared output IS computed,
+        // project_outputs returns the full { value, unit } map (no false positive).
+        let bundle = golden_bundle();
+        let mut run = RunResult::default();
+        for entry in &bundle.cell_map.outputs {
+            run.computed
+                .insert(entry.seed_coord.clone(), CellValue::Number(1.0));
+        }
+        let projected = project_outputs(&bundle, &run).expect("all-present projects");
+        let obj = projected.as_object().expect("outputs is an object");
+        assert_eq!(
+            obj.len(),
+            bundle.cell_map.outputs.len(),
+            "every declared output is projected"
+        );
+    }
+
+    #[test]
     fn calculate_advertises_non_empty_output_schema() {
         let handler = CalculateHandler::new(golden_bundle());
         let meta = handler.metadata().expect("metadata present");
