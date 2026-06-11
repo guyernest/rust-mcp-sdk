@@ -1794,7 +1794,7 @@ Plans:
 Plans:
 **Wave 1**
 
-- [ ] 93-01-PLAN.md — Crate skeleton: Cargo.toml + re-export-surface lib.rs + generic compile_workbook stub + purity-gate extension (reader confined)
+- [x] 93-01-PLAN.md — Crate skeleton: Cargo.toml + re-export-surface lib.rs + generic compile_workbook stub + purity-gate extension (reader confined)
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
@@ -1866,7 +1866,7 @@ Plans:
 |-------|----------------|--------|-----------|
 | 91. Workbook Runtime + Purity Gate + Dialect | 3/3 | Complete    | 2026-06-10 |
 | 92. BundleSource + Served-Tool Toolkit Module | 7/7 | Complete    | 2026-06-11 |
-| 93. Workbook Compiler + §5 Fixes + Promote Gate | 0/? | Not started | - |
+| 93. Workbook Compiler + §5 Fixes + Promote Gate | 1/7 | In Progress|  |
 | 94. CLI Subcommands + `pmcp.toml` | 0/? | Not started | - |
 | 95. Shape A Binary `pmcp-workbook-server` | 0/? | Not started | - |
 | 96. Shape B Scaffold + Dialect-Version + Generalization | 0/? | Not started | - |
