@@ -399,7 +399,14 @@ let is_excel = app.application.as_deref()
 | A6 | A bounded auto-derived corpus grid (defaults + per-enum-member + numeric boundary) satisfies D-09 | Pitfall 6 (O-4) | An under-covered grid misses a regression; an over-covered grid is slow. Grid-size policy is Claude's discretion but needs a decision |
 | A7 | The lighthouse `Manifest` lacks `annotations`; the in-repo runtime `Manifest` has it (Phase 92 D-18) | Pitfall 2 | Constructor mismatch → compile errors (caught at build); synth must populate/default `annotations` |
 
-## Open Questions
+## Open Questions (RESOLVED)
+
+> All four open questions were resolved during planning (Phase 93 plan-phase).
+> Resolution summary (each cites the plan/task where the decision lives):
+> - **O-1 (SWC/JS oracle necessity):** RESOLVED — Plan 93-04 Task 2 verifies pure-Rust `scalar_eval` + `sheet_ir` reconcile parity; SWC/`pmcp-code-mode` dropped by default (gate behind a non-default `js-oracle` feature only if a parity gap appears).
+> - **O-2 (producer/consumer proof shape):** RESOLVED — `checkpoint:decision` gate in Plan 93-07 Task 2, both options fully specified (author a neutral `tax-calc.xlsx` for byte-identical re-emit, or structural-equivalence + regenerate golden); either routes to full delivery in Task 3.
+> - **O-3 (umya-fabrication detection signal):** RESOLVED — Plan 93-02 Task 2 detects the `calcId=122211` sentinel and/or absence of an Excel build/app-version string, with a umya-author → REFUSE regression test; chosen signal documented in the task action.
+> - **O-4 (auto-corpus grid policy):** RESOLVED — Plan 93-06 Task 1 uses defaults + one case per enum member (others held at default) + numeric boundary cases, capped at a small documented N; policy documented in the plan SUMMARY.
 
 1. **O-1 (SWC/JS oracle necessity):**
    - What we know: in-repo runtime ships pure-Rust `scalar_eval` + `sheet_ir` executor; lighthouse compiler links `pmcp-code-mode` with `js-runtime` as the offline reconcile oracle.

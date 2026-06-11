@@ -1792,12 +1792,29 @@ Plans:
 **Plans**: 7 plans (6 waves)
 
 Plans:
+**Wave 1**
+
 - [ ] 93-01-PLAN.md — Crate skeleton: Cargo.toml + re-export-surface lib.rs + generic compile_workbook stub + purity-gate extension (reader confined)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
 - [ ] 93-02-PLAN.md — ingest (umya → WorkbookMap + cached oracle) + provenance (quarantined raw reader; REFUSE umya-fabricated identity, WBCO-07) + provenance fuzz target
 - [ ] 93-03-PLAN.md — WBDL-03 running linter + formula parser (whitelist-at-parse) + Kahn DAG + formula-parser fuzz target
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
 - [ ] 93-04-PLAN.md — manifest synth/ratify (annotations reconciled; inline-DV enums; range-DV warning) + operand-anchored reconcile (no delta.abs)
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
 - [ ] 93-05-PLAN.md — seven-member artifact emit (bundle_id; WR-01 enum-tier skip) + symmetric change-class classifier + IR identity hash (lift WITH tests)
+
+**Wave 5** *(blocked on Wave 4 completion)*
+
 - [ ] 93-06-PLAN.md — promote gate: auto-derived corpus (D-09) + fingerprint-bound ApprovalRecord + accept() + CR-02 versioned non-overwriting promote
+
+**Wave 6** *(blocked on Wave 5 completion)*
+
 - [ ] 93-07-PLAN.md — stage1 + wired generic driver + neutral tax-calc.xlsx + producer/consumer byte-identical proof + example + full quality/purity gate
 
 ### Phase 94: CLI Subcommands + `pmcp.toml`
