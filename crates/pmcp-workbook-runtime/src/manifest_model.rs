@@ -180,6 +180,16 @@ pub fn is_strict_constant(role: &CellRole) -> bool {
     matches!(role.role, Role::Constant) && role.tier.is_none()
 }
 
+/// Whether a [`CellRole`] is COMPUTED — derived by the bundle IR
+/// ([`Role::Output`] or [`Role::Formula`]) and therefore never caller-seedable
+/// (WR-02: seeding a computed cell would let a caller pin a served output under
+/// a valid provenance stamp). The SINGLE predicate shared by the served tools'
+/// override reject gate and their allowed-override list, so "what we reject"
+/// and "what we advertise as overridable" cannot drift.
+pub fn is_computed(role: &CellRole) -> bool {
+    matches!(role.role, Role::Output | Role::Formula)
+}
+
 /// Find the manifest [`CellRole`] whose fully-qualified `cell` key equals
 /// `cell_key` — the SINGLE exact-cell-key lookup shared by the served tools'
 /// schema builder, input validator, and explain trace, so the matching

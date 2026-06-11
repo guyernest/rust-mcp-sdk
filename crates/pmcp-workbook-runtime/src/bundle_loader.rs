@@ -391,10 +391,10 @@ mod tests {
         }
     }
 
-    fn sample_layout(hash: &str) -> LayoutDescriptor {
+    fn sample_layout(hash: Option<&str>) -> LayoutDescriptor {
         LayoutDescriptor {
             descriptor_version: crate::render::LAYOUT_DESCRIPTOR_VERSION,
-            source_workbook_hash: Some(hash.to_string()),
+            source_workbook_hash: hash.map(String::from),
             sheets: vec![],
         }
     }
@@ -425,18 +425,22 @@ mod tests {
 
     /// Build a golden bundle: serialize every member, fold the evidence hash via
     /// the shared [`fold_evidence_hash`], build the lock over the member bytes,
-    /// then assemble the source map. `lock_version` and `changelog_version`
-    /// diverge only in the stamp-desync test.
-    fn golden_with_versions(lock_version: &str, changelog_version: &str) -> MapSource {
+    /// then assemble the source map. `lock_workbook_hash` and `layout_anchor`
+    /// diverge from each other only in the stamp-binding tests.
+    fn golden_with(
+        lock_version: &str,
+        changelog_version: &str,
+        lock_workbook_hash: String,
+        layout_anchor: Option<&str>,
+    ) -> MapSource {
         let bundle_id = "tax-calc";
-        let workbook_hash = sha256_hex(b"source-workbook-bytes");
 
         let ir: HashMap<String, Cell> = HashMap::new();
         let ir_json = serde_json::to_string(&ir).unwrap();
         let manifest = empty_manifest(bundle_id);
         let manifest_json = serde_json::to_string(&manifest).unwrap();
         let cell_map_json = serde_json::to_string(&sample_cell_map()).unwrap();
-        let layout_json = serde_json::to_string(&sample_layout(&workbook_hash)).unwrap();
+        let layout_json = serde_json::to_string(&sample_layout(layout_anchor)).unwrap();
         let changelog_json = serde_json::to_string(&sample_changelog(changelog_version)).unwrap();
         let parser_equiv_json = r#"{"equivalent":true}"#.to_string();
 
@@ -450,7 +454,7 @@ mod tests {
         let lock = build_bundle_lock(
             bundle_id,
             lock_version,
-            workbook_hash,
+            lock_workbook_hash,
             &ir_json,
             &manifest_json,
             &evidence_hash,
@@ -469,6 +473,18 @@ mod tests {
         );
         members.insert(MEMBER_LOCK.to_string(), lock_json.into_bytes());
         MapSource { members }
+    }
+
+    /// A golden with a consistent workbook-hash stamp; `lock_version` and
+    /// `changelog_version` diverge only in the stamp-desync test.
+    fn golden_with_versions(lock_version: &str, changelog_version: &str) -> MapSource {
+        let workbook_hash = sha256_hex(b"source-workbook-bytes");
+        golden_with(
+            lock_version,
+            changelog_version,
+            workbook_hash.clone(),
+            Some(&workbook_hash),
+        )
     }
 
     /// A fully self-consistent golden (every gate passes).
@@ -482,53 +498,7 @@ mod tests {
     /// stamp gate (absent-anchor rejection) is what must fire, NOT a vacuous
     /// `"" == ""` pass.
     fn golden_with_absent_anchor_and_empty_lock_hash() -> MapSource {
-        let bundle_id = "tax-calc";
-        let empty_hash = String::new();
-
-        let ir: HashMap<String, Cell> = HashMap::new();
-        let ir_json = serde_json::to_string(&ir).unwrap();
-        let manifest = empty_manifest(bundle_id);
-        let manifest_json = serde_json::to_string(&manifest).unwrap();
-        let cell_map_json = serde_json::to_string(&sample_cell_map()).unwrap();
-        // Absent anchor: source_workbook_hash = None.
-        let layout = LayoutDescriptor {
-            descriptor_version: crate::render::LAYOUT_DESCRIPTOR_VERSION,
-            source_workbook_hash: None,
-            sheets: vec![],
-        };
-        let layout_json = serde_json::to_string(&layout).unwrap();
-        let changelog_json = serde_json::to_string(&sample_changelog("1.0.0")).unwrap();
-        let parser_equiv_json = r#"{"equivalent":true}"#.to_string();
-
-        let evidence_hash = fold_evidence_hash(&[
-            (MEMBER_CELL_MAP, cell_map_json.as_bytes()),
-            (MEMBER_LAYOUT, layout_json.as_bytes()),
-            (MEMBER_CHANGELOG, changelog_json.as_bytes()),
-            (MEMBER_PARSER_EQUIV, parser_equiv_json.as_bytes()),
-        ]);
-
-        let lock = build_bundle_lock(
-            bundle_id,
-            "1.0.0",
-            empty_hash, // empty lock.workbook_hash — the vacuous "" == "" case
-            &ir_json,
-            &manifest_json,
-            &evidence_hash,
-        );
-        let lock_json = serde_json::to_string(&lock).unwrap();
-
-        let mut members = HashMap::new();
-        members.insert(MEMBER_IR.to_string(), ir_json.into_bytes());
-        members.insert(MEMBER_MANIFEST.to_string(), manifest_json.into_bytes());
-        members.insert(MEMBER_CELL_MAP.to_string(), cell_map_json.into_bytes());
-        members.insert(MEMBER_LAYOUT.to_string(), layout_json.into_bytes());
-        members.insert(MEMBER_CHANGELOG.to_string(), changelog_json.into_bytes());
-        members.insert(
-            MEMBER_PARSER_EQUIV.to_string(),
-            parser_equiv_json.into_bytes(),
-        );
-        members.insert(MEMBER_LOCK.to_string(), lock_json.into_bytes());
-        MapSource { members }
+        golden_with("1.0.0", "1.0.0", String::new(), None)
     }
 
     #[test]

@@ -75,10 +75,11 @@ pub(crate) fn project_outputs(
 ) -> Result<Value, WorkbookToolError> {
     let mut outputs = serde_json::Map::new();
     for entry in &bundle.cell_map.outputs {
-        // WR-04: fail closed on a declared-but-uncomputed output. A cell_map output
-        // (already verified at boot) absent from the run result is a cell_map/IR skew,
-        // not a success — silently dropping it would let the served payload diverge
-        // from the advertised outputSchema (WBSV-07). Surface it as an `invalid_input`
+        // WR-04: fail closed on a declared-but-uncomputed output. The boot gate
+        // hash-covers the cell_map bytes but does NOT check that output seed_coords
+        // exist in the IR, so an absent entry here is a cell_map/IR skew, not a
+        // success — silently dropping it would let the served payload diverge from
+        // the advertised outputSchema (WBSV-07). Surface it as an `invalid_input`
         // error so the contract and the payload can never disagree.
         let Some(value) = run.computed.get(&entry.seed_coord) else {
             return Err(WorkbookToolError::invalid_input(format!(
@@ -641,12 +642,9 @@ mod tests {
 
     #[test]
     fn calculate_honors_non_default_input() {
-        // CR-01 (92-VERIFICATION.md, Blocker 1): a caller-supplied input MUST drive
-        // the computation, not be silently discarded in favour of the bundle's
-        // baked-in default (gross_income=60000). Before this plan, the fixture
-        // generator emitted the input cells as IR literals and the executor's
-        // literal arm re-seeded them at topo-walk time, clobbering validate_input's
-        // caller seed — so this assertion would have FAILED returning 48000.0.
+        // CR-01: a caller-supplied input MUST drive the computation, not be
+        // silently discarded in favour of the bundle's baked-in default
+        // (gross_income=60000).
         let handler = CalculateHandler::new(golden_bundle());
 
         // gross_income 100000, default deduction 12000 => taxable_income 88000.
