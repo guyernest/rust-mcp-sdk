@@ -180,6 +180,15 @@ pub fn is_strict_constant(role: &CellRole) -> bool {
     matches!(role.role, Role::Constant) && role.tier.is_none()
 }
 
+/// Find the manifest [`CellRole`] whose fully-qualified `cell` key equals
+/// `cell_key` — the SINGLE exact-cell-key lookup shared by the served tools'
+/// schema builder, input validator, and explain trace, so the matching
+/// semantics cannot drift between them. (Lookups by `name`-or-`cell` are a
+/// DIFFERENT, looser predicate and stay separate.)
+pub fn role_for_cell<'a>(manifest: &'a Manifest, cell_key: &str) -> Option<&'a CellRole> {
+    manifest.cells.iter().find(|c| c.cell == cell_key)
+}
+
 /// One entry in the [`Manifest::changelog`] (ART-02): a version stamp recording a
 /// workbook-hash transition + a human note.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]

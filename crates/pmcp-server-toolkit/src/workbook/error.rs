@@ -87,14 +87,8 @@ impl WorkbookToolError {
     #[must_use]
     pub fn invalid_input_field(field: impl Into<String>, allowed: Vec<String>) -> Self {
         let field = field.into();
-        Self {
-            code: "invalid_input".to_string(),
-            reason: format!("'{field}' is not a known input field"),
-            field: Some(field),
-            allowed: Some(allowed),
-            range: None,
-            required: None,
-        }
+        let reason = format!("'{field}' is not a known input field");
+        Self::invalid_enum(field, allowed, reason)
     }
 
     /// `invalid_input` carrying the closed-enum `allowed` members (an

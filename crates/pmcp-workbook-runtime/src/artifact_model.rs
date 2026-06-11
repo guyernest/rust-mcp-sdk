@@ -96,6 +96,24 @@ pub fn update_field(hasher: &mut Sha256, tag: &[u8], data: &[u8]) {
     hasher.update(data);
 }
 
+/// Fold the evidence-dir hash over `(relative_path, bytes)` members.
+///
+/// Each member is fed as two length-prefixed fields (`evidence.path`, then
+/// `evidence.body`) via [`update_field`], in SORTED relative-path order — the
+/// sort happens HERE, so callers cannot desync on ordering. This is the SINGLE
+/// evidence fold the emitter, the fixture generator, and the server-side loader
+/// recompute share, byte-for-byte (Pitfall 2).
+pub fn fold_evidence_hash(members: &[(&str, &[u8])]) -> String {
+    let mut sorted: Vec<&(&str, &[u8])> = members.iter().collect();
+    sorted.sort_by_key(|(path, _)| *path);
+    let mut hasher = Sha256::new();
+    for (path, body) in sorted {
+        update_field(&mut hasher, b"evidence.path", path.as_bytes());
+        update_field(&mut hasher, b"evidence.body", body);
+    }
+    hex::encode(hasher.finalize())
+}
+
 /// Build the [`BundleLock`] over the emitted artifact bytes.
 ///
 /// Each per-artifact hash is `hex::encode(Sha256::digest(bytes))`; the combined

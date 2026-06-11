@@ -84,46 +84,24 @@ pub struct DecodedRender {
 
 /// The on-wire JSON payload (pre-base64). Kept private — callers go through
 /// [`encode`] / [`decode`] which own the scheme prefix + size guard.
-#[derive(Debug, Serialize, Deserialize)]
+///
+/// The `provenance` triple `{ bundle_id, version, combined_hash }` is
+/// [`ProvStamp`] itself (its serde derives ARE the wire contract — Codex
+/// HIGH #3: the `combined_hash` field, NEVER a source-workbook hash).
+#[derive(Debug, Deserialize)]
 struct RenderPayload {
     /// The canonical input DTO.
     dto: Value,
-    /// The provenance triple `{ bundle_id, version, combined_hash }` (Codex
-    /// HIGH #3 — the `combined_hash` field, NEVER a source-workbook hash).
-    provenance: ProvenanceWire,
+    /// The provenance stamp bound into the URI at encode time.
+    provenance: ProvStamp,
 }
 
-/// The serializable provenance triple carried in the payload. Mirrors
-/// [`ProvStamp`] exactly: it carries the `combined_hash` integrity anchor and
-/// NEVER the source-workbook content hash (Codex HIGH #3).
-#[derive(Debug, Serialize, Deserialize)]
-struct ProvenanceWire {
-    /// The neutral bundle identifier.
-    bundle_id: String,
-    /// The semver version.
-    version: String,
-    /// The `BUNDLE.lock` COMBINED hash-of-hashes (Codex HIGH #3).
-    combined_hash: String,
-}
-
-impl From<&ProvStamp> for ProvenanceWire {
-    fn from(s: &ProvStamp) -> Self {
-        Self {
-            bundle_id: s.bundle_id.clone(),
-            version: s.version.clone(),
-            combined_hash: s.combined_hash.clone(),
-        }
-    }
-}
-
-impl From<ProvenanceWire> for ProvStamp {
-    fn from(w: ProvenanceWire) -> Self {
-        Self {
-            bundle_id: w.bundle_id,
-            version: w.version,
-            combined_hash: w.combined_hash,
-        }
-    }
+/// Borrowing serialize-only twin of [`RenderPayload`] — same field names and
+/// order, so the encoded bytes are identical without cloning the DTO + stamp.
+#[derive(Serialize)]
+struct RenderPayloadRef<'a> {
+    dto: &'a Value,
+    provenance: &'a ProvStamp,
 }
 
 /// Encode a validated input DTO + provenance stamp into a `workbook://` render
@@ -141,10 +119,7 @@ impl From<ProvenanceWire> for ProvStamp {
 /// fallible signature keeps the call site `?`-chained and panic-free).
 #[allow(clippy::result_large_err)]
 pub fn encode(dto: &Value, provenance: &ProvStamp) -> Result<String, WorkbookToolError> {
-    let payload = RenderPayload {
-        dto: dto.clone(),
-        provenance: ProvenanceWire::from(provenance),
-    };
+    let payload = RenderPayloadRef { dto, provenance };
     let json = serde_json::to_vec(&payload).map_err(|e| {
         WorkbookToolError::invalid_input(format!("could not encode render payload: {e}"))
     })?;
@@ -192,7 +167,7 @@ pub fn decode(uri: &str) -> Result<DecodedRender, WorkbookToolError> {
     })?;
     Ok(DecodedRender {
         dto: payload.dto,
-        provenance: ProvStamp::from(payload.provenance),
+        provenance: payload.provenance,
     })
 }
 

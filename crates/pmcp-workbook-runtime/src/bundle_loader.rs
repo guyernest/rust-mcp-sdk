@@ -9,7 +9,7 @@
 //!    is rejected with [`BundleLoadError::UnexpectedMember`] BEFORE parsing
 //!    (frozen-bundle contract, threat T-92-22);
 //! 2. recomputes the evidence-dir hash (path+length-prefixed, SORTED) via the
-//!    runtime's own [`crate::artifact_model::update_field`];
+//!    runtime's own shared [`crate::artifact_model::fold_evidence_hash`];
 //! 3. recomputes the per-artifact + combined `BUNDLE.lock` hashes via the
 //!    runtime's own [`crate::artifact_model::build_bundle_lock`] (it does NOT
 //!    re-implement hashing), and fails closed on any mismatch
@@ -24,10 +24,9 @@
 
 use std::collections::HashMap;
 
-use sha2::{Digest, Sha256};
 use thiserror::Error;
 
-use crate::artifact_model::{build_bundle_lock, update_field, BundleLock, CellMap};
+use crate::artifact_model::{build_bundle_lock, fold_evidence_hash, BundleLock, CellMap};
 use crate::bundle_source::{BundleSource, BundleSourceError};
 use crate::changelog::VersionChangelog;
 use crate::dag::Dag;
@@ -36,23 +35,26 @@ use crate::render::LayoutDescriptor;
 use crate::sheet_ir::{build_dag, Cell};
 
 /// The bundle member holding the executable IR (a `HashMap<String, Cell>`).
-const MEMBER_IR: &str = "executable.ir.json";
+pub const MEMBER_IR: &str = "executable.ir.json";
 /// The bundle member holding the logical manifest.
-const MEMBER_MANIFEST: &str = "manifest.json";
+pub const MEMBER_MANIFEST: &str = "manifest.json";
 /// The bundle member holding the I/O cell map.
-const MEMBER_CELL_MAP: &str = "cell_map.json";
+pub const MEMBER_CELL_MAP: &str = "cell_map.json";
 /// The bundle member holding the captured layout descriptor.
-const MEMBER_LAYOUT: &str = "layout.json";
+pub const MEMBER_LAYOUT: &str = "layout.json";
 /// The bundle member holding the integrity lock.
-const MEMBER_LOCK: &str = "BUNDLE.lock";
+pub const MEMBER_LOCK: &str = "BUNDLE.lock";
 /// The bundle member holding the recorded version changelog.
-const MEMBER_CHANGELOG: &str = "evidence/changelog.json";
+pub const MEMBER_CHANGELOG: &str = "evidence/changelog.json";
 /// The bundle member holding the parser-equivalence evidence record.
-const MEMBER_PARSER_EQUIV: &str = "evidence/parser_equivalence.json";
+pub const MEMBER_PARSER_EQUIV: &str = "evidence/parser_equivalence.json";
 
 /// The FROZEN member allow-set (threat T-92-22): the bundle MUST contain exactly
 /// these members — any member outside this set fails closed BEFORE parsing.
-const ALLOWED_MEMBERS: &[&str] = &[
+///
+/// Exported so the fixture generator and future emitters share the loader's
+/// canonical member-name table instead of re-declaring it.
+pub const ALLOWED_MEMBERS: &[&str] = &[
     MEMBER_IR,
     MEMBER_MANIFEST,
     MEMBER_CELL_MAP,
@@ -62,14 +64,15 @@ const ALLOWED_MEMBERS: &[&str] = &[
     MEMBER_PARSER_EQUIV,
 ];
 
-/// The members folded (SORTED by relative path) into the evidence-dir hash — the
-/// evidence members PLUS `cell_map.json` + `layout.json`, matching the emitter's
-/// fold (Pitfall 2: the generator and loader MUST fold the identical set).
-const EVIDENCE_FOLD_MEMBERS: &[&str] = &[
+/// The members folded into the evidence-dir hash — the evidence members PLUS
+/// `cell_map.json` + `layout.json`, matching the emitter's fold (Pitfall 2: the
+/// generator and loader MUST fold the identical set). Declared in SORTED
+/// relative-path order (asserted by test) so the fold iterates it directly.
+pub const EVIDENCE_FOLD_MEMBERS: &[&str] = &[
     MEMBER_CELL_MAP,
-    MEMBER_LAYOUT,
     MEMBER_CHANGELOG,
     MEMBER_PARSER_EQUIV,
+    MEMBER_LAYOUT,
 ];
 
 /// The fully-parsed, integrity-verified bundle the served tools operate on.
@@ -187,19 +190,16 @@ fn parse_member<T: serde::de::DeserializeOwned>(
     })
 }
 
-/// Recompute the evidence-dir hash the way the emitter folded it: PATH- and
-/// LENGTH-PREFIXED over [`EVIDENCE_FOLD_MEMBERS`] in SORTED relative-path order,
-/// via the runtime's own [`update_field`] (so it byte-reproduces the emitter).
+/// Recompute the evidence-dir hash the way the emitter folded it: read the
+/// [`EVIDENCE_FOLD_MEMBERS`] bytes and feed them to the runtime's own shared
+/// [`fold_evidence_hash`] (so it byte-reproduces the emitter by construction).
 fn recompute_evidence_hash(source: &dyn BundleSource) -> Result<String, BundleLoadError> {
-    let mut members: Vec<&str> = EVIDENCE_FOLD_MEMBERS.to_vec();
-    members.sort_unstable();
-    let mut hasher = Sha256::new();
-    for member in members {
-        let bytes = read_member(source, member)?;
-        update_field(&mut hasher, b"evidence.path", member.as_bytes());
-        update_field(&mut hasher, b"evidence.body", &bytes);
+    let mut bodies: Vec<(&str, Vec<u8>)> = Vec::with_capacity(EVIDENCE_FOLD_MEMBERS.len());
+    for member in EVIDENCE_FOLD_MEMBERS {
+        bodies.push((member, read_member(source, member)?));
     }
-    Ok(hex::encode(hasher.finalize()))
+    let members: Vec<(&str, &[u8])> = bodies.iter().map(|(p, b)| (*p, b.as_slice())).collect();
+    Ok(fold_evidence_hash(&members))
 }
 
 /// Cross-check the lock's identity/provenance triple against independently
@@ -414,11 +414,12 @@ mod tests {
         }
     }
 
-    /// Build a VALID golden bundle: serialize every member, fold the evidence
-    /// hash, build the lock over the member bytes, then assemble the source map.
-    fn valid_golden() -> MapSource {
+    /// Build a golden bundle: serialize every member, fold the evidence hash via
+    /// the shared [`fold_evidence_hash`], build the lock over the member bytes,
+    /// then assemble the source map. `lock_version` and `changelog_version`
+    /// diverge only in the stamp-desync test.
+    fn golden_with_versions(lock_version: &str, changelog_version: &str) -> MapSource {
         let bundle_id = "tax-calc";
-        let version = "1.0.0";
         let workbook_hash = sha256_hex(b"source-workbook-bytes");
 
         let ir: HashMap<String, Cell> = HashMap::new();
@@ -427,27 +428,19 @@ mod tests {
         let manifest_json = serde_json::to_string(&manifest).unwrap();
         let cell_map_json = serde_json::to_string(&sample_cell_map()).unwrap();
         let layout_json = serde_json::to_string(&sample_layout(&workbook_hash)).unwrap();
-        let changelog_json = serde_json::to_string(&sample_changelog(version)).unwrap();
+        let changelog_json = serde_json::to_string(&sample_changelog(changelog_version)).unwrap();
         let parser_equiv_json = r#"{"equivalent":true}"#.to_string();
 
-        // Fold the evidence hash over the SAME sorted member set the loader uses.
-        let mut fold: Vec<(&str, &str)> = vec![
-            (MEMBER_CELL_MAP, &cell_map_json),
-            (MEMBER_LAYOUT, &layout_json),
-            (MEMBER_CHANGELOG, &changelog_json),
-            (MEMBER_PARSER_EQUIV, &parser_equiv_json),
-        ];
-        fold.sort_by(|a, b| a.0.cmp(b.0));
-        let mut hasher = Sha256::new();
-        for (path, body) in &fold {
-            update_field(&mut hasher, b"evidence.path", path.as_bytes());
-            update_field(&mut hasher, b"evidence.body", body.as_bytes());
-        }
-        let evidence_hash = hex::encode(hasher.finalize());
+        let evidence_hash = fold_evidence_hash(&[
+            (MEMBER_CELL_MAP, cell_map_json.as_bytes()),
+            (MEMBER_LAYOUT, layout_json.as_bytes()),
+            (MEMBER_CHANGELOG, changelog_json.as_bytes()),
+            (MEMBER_PARSER_EQUIV, parser_equiv_json.as_bytes()),
+        ]);
 
         let lock = build_bundle_lock(
             bundle_id,
-            version,
+            lock_version,
             workbook_hash,
             &ir_json,
             &manifest_json,
@@ -467,6 +460,11 @@ mod tests {
         );
         members.insert(MEMBER_LOCK.to_string(), lock_json.into_bytes());
         MapSource { members }
+    }
+
+    /// A fully self-consistent golden (every gate passes).
+    fn valid_golden() -> MapSource {
+        golden_with_versions("1.0.0", "1.0.0")
     }
 
     #[test]
@@ -502,57 +500,10 @@ mod tests {
 
     #[test]
     fn version_desync_returns_stamp_mismatch() {
-        // Re-fold a golden whose lock says 1.0.0 but changelog.to_version=1.1.0,
-        // keeping the integrity hashes self-consistent so the stamp gate (not the
-        // integrity gate) is what fires.
-        let bundle_id = "tax-calc";
-        let workbook_hash = sha256_hex(b"source-workbook-bytes");
-        let ir: HashMap<String, Cell> = HashMap::new();
-        let ir_json = serde_json::to_string(&ir).unwrap();
-        let manifest_json = serde_json::to_string(&empty_manifest(bundle_id)).unwrap();
-        let cell_map_json = serde_json::to_string(&sample_cell_map()).unwrap();
-        let layout_json = serde_json::to_string(&sample_layout(&workbook_hash)).unwrap();
-        // changelog says 1.1.0 ...
-        let changelog_json = serde_json::to_string(&sample_changelog("1.1.0")).unwrap();
-        let parser_equiv_json = r#"{"equivalent":true}"#.to_string();
-
-        let mut fold: Vec<(&str, &str)> = vec![
-            (MEMBER_CELL_MAP, &cell_map_json),
-            (MEMBER_LAYOUT, &layout_json),
-            (MEMBER_CHANGELOG, &changelog_json),
-            (MEMBER_PARSER_EQUIV, &parser_equiv_json),
-        ];
-        fold.sort_by(|a, b| a.0.cmp(b.0));
-        let mut hasher = Sha256::new();
-        for (path, body) in &fold {
-            update_field(&mut hasher, b"evidence.path", path.as_bytes());
-            update_field(&mut hasher, b"evidence.body", body.as_bytes());
-        }
-        let evidence_hash = hex::encode(hasher.finalize());
-        // ... but lock says 1.0.0.
-        let lock = build_bundle_lock(
-            bundle_id,
-            "1.0.0",
-            workbook_hash,
-            &ir_json,
-            &manifest_json,
-            &evidence_hash,
-        );
-        let mut members = HashMap::new();
-        members.insert(MEMBER_IR.to_string(), ir_json.into_bytes());
-        members.insert(MEMBER_MANIFEST.to_string(), manifest_json.into_bytes());
-        members.insert(MEMBER_CELL_MAP.to_string(), cell_map_json.into_bytes());
-        members.insert(MEMBER_LAYOUT.to_string(), layout_json.into_bytes());
-        members.insert(MEMBER_CHANGELOG.to_string(), changelog_json.into_bytes());
-        members.insert(
-            MEMBER_PARSER_EQUIV.to_string(),
-            parser_equiv_json.into_bytes(),
-        );
-        members.insert(
-            MEMBER_LOCK.to_string(),
-            serde_json::to_string(&lock).unwrap().into_bytes(),
-        );
-        let source = MapSource { members };
+        // A golden whose lock says 1.0.0 but changelog.to_version=1.1.0, with
+        // integrity hashes self-consistent so the stamp gate (not the integrity
+        // gate) is what fires.
+        let source = golden_with_versions("1.0.0", "1.1.0");
 
         match load(&source) {
             Err(BundleLoadError::StampMismatch { field, .. }) => {
@@ -589,6 +540,16 @@ mod tests {
             },
             other => panic!("expected UnexpectedMember, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn evidence_fold_members_const_is_sorted() {
+        // EVIDENCE_FOLD_MEMBERS is declared pre-sorted so the fold iterates it
+        // directly; this guard keeps the declaration honest.
+        assert!(
+            EVIDENCE_FOLD_MEMBERS.windows(2).all(|w| w[0] < w[1]),
+            "EVIDENCE_FOLD_MEMBERS must be declared in sorted relative-path order"
+        );
     }
 
     #[test]

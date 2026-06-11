@@ -85,12 +85,13 @@ pub use resolve::{
 };
 
 pub use manifest_model::{
-    is_strict_constant, plot3_key, AnnotationDecl, CapabilityDecl, CellRole, ChangelogEntry, Dtype,
-    GovernedDatum, InputTier, LoopDecl, Manifest, Role,
+    is_strict_constant, plot3_key, role_for_cell, AnnotationDecl, CapabilityDecl, CellRole,
+    ChangelogEntry, Dtype, GovernedDatum, InputTier, LoopDecl, Manifest, Role,
 };
 
 pub use artifact_model::{
-    build_bundle_lock, sha256_hex, update_field, ArtifactHashes, BundleLock, CellEntry, CellMap,
+    build_bundle_lock, fold_evidence_hash, sha256_hex, update_field, ArtifactHashes, BundleLock,
+    CellEntry, CellMap,
 };
 
 #[cfg(feature = "embedded")]

@@ -15,12 +15,12 @@
 //!    CLAUDE.md "cargo run --example" ALWAYS requirement.
 #![cfg(feature = "workbook")]
 
-use std::path::Path;
-
 use pmcp::Server;
 use pmcp_server_toolkit::workbook::{LocalDirSource, WorkbookBuilderExt};
 
 mod support;
+
+use support::tamper::golden_dir;
 
 /// The five served tools every workbook server registers (the registration
 /// contract this plan freezes).
@@ -31,11 +31,6 @@ const WORKBOOK_TOOLS: [&str; 5] = [
     "diff_version",
     "render_workbook",
 ];
-
-/// The committed golden bundle directory (the 92-02 `@1.1.0` golden).
-fn golden_dir() -> std::path::PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/tax-calc@1.1.0")
-}
 
 #[test]
 fn with_workbook_bundle_registers_all_five_tools() {

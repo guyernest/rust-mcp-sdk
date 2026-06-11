@@ -49,11 +49,11 @@ use super::{ProvStamp, WorkbookBundle, WORKBOOK_TOOL_UI};
 #[allow(clippy::result_large_err)]
 pub(crate) fn run_bundle(
     bundle: &WorkbookBundle,
-    seeds: &BTreeMap<String, Value>,
+    seeds: BTreeMap<String, Value>,
 ) -> Result<RunResult, WorkbookToolError> {
     let mut env = CellEnv::new();
     for (key, value) in seeds {
-        env = env.with_value(key.clone(), value.clone());
+        env = env.with_value(key, value);
     }
     run_executor(&bundle.ir, &bundle.dag, &env).map_err(|f| {
         WorkbookToolError::invalid_input(format!("executor failed: {} ({})", f.message, f.rule))
@@ -134,45 +134,44 @@ pub(crate) fn render_at_boundary(
 /// embedded IR → project ALL outputs (finite) → stamp.
 pub struct CalculateHandler {
     bundle: Arc<WorkbookBundle>,
+    stamp: ProvStamp,
 }
 
 impl CalculateHandler {
+    /// The registered tool name — the single source for registration + metadata.
+    pub const NAME: &str = "calculate";
+
     /// Build over the shared verified bundle.
     #[must_use]
     pub fn new(bundle: Arc<WorkbookBundle>) -> Self {
-        Self { bundle }
+        let stamp = ProvStamp::from_bundle(&bundle);
+        Self { bundle, stamp }
     }
 
     /// The linear `?`-chained `calculate` pipeline.
     #[allow(clippy::result_large_err)]
     fn compute(&self, args: Value) -> Result<Value, WorkbookToolError> {
         let validated = validate_input(args, &self.bundle.manifest, &self.bundle.cell_map)?;
-        let run = run_bundle(&self.bundle, &validated.seeds)?;
+        let run = run_bundle(&self.bundle, validated.seeds)?;
         let outputs = project_outputs(&self.bundle, &run)?;
         let payload = json!({
             "outputs": outputs,
             "accepted_overrides": validated.accepted_overrides,
         });
-        Ok(with_provenance(
-            payload,
-            &ProvStamp::from_bundle(&self.bundle),
-        ))
+        Ok(with_provenance(payload, &self.stamp))
     }
 }
 
 #[async_trait]
 impl ToolHandler for CalculateHandler {
     async fn handle(&self, args: Value, _extra: RequestHandlerExtra) -> pmcp::Result<Value> {
-        Ok(render_at_boundary(
-            self.compute(args),
-            &ProvStamp::from_bundle(&self.bundle),
-        ))
+        Ok(render_at_boundary(self.compute(args), &self.stamp))
     }
 
     fn metadata(&self) -> Option<ToolInfo> {
         Some(
             ToolInfo::with_ui(
-                "calculate",
+                Self::NAME,
                 Some(
                     "Compute the workbook outputs from the declared inputs by re-running \
                      the compiled workbook IR. Returns every named output as a \
@@ -212,13 +211,18 @@ fn cell_value_display(v: &CellValue) -> Value {
 /// `manifest.annotations` names, nothing domain-specific).
 pub struct ExplainHandler {
     bundle: Arc<WorkbookBundle>,
+    stamp: ProvStamp,
 }
 
 impl ExplainHandler {
+    /// The registered tool name — the single source for registration + metadata.
+    pub const NAME: &str = "explain";
+
     /// Build over the shared verified bundle.
     #[must_use]
     pub fn new(bundle: Arc<WorkbookBundle>) -> Self {
-        Self { bundle }
+        let stamp = ProvStamp::from_bundle(&bundle);
+        Self { bundle, stamp }
     }
 
     /// The linear `?`-chained `explain` pipeline: validate → re-run → ordered
@@ -226,29 +230,23 @@ impl ExplainHandler {
     #[allow(clippy::result_large_err)]
     fn compute(&self, args: Value) -> Result<Value, WorkbookToolError> {
         let validated = validate_input(args, &self.bundle.manifest, &self.bundle.cell_map)?;
-        let run = run_bundle(&self.bundle, &validated.seeds)?;
+        let run = run_bundle(&self.bundle, validated.seeds)?;
         let steps = self.render_steps(&run);
         let payload = json!({
             "steps": steps,
             "annotations": self.manifest_annotations(),
         });
-        Ok(with_provenance(
-            payload,
-            &ProvStamp::from_bundle(&self.bundle),
-        ))
+        Ok(with_provenance(payload, &self.stamp))
     }
 
     /// Render the [`RunResult`] traces into ORDERED business-language steps
     /// (sorted by cell key for determinism), each carrying the formula + operand
     /// values + the manifest meaning.
     fn render_steps(&self, run: &RunResult) -> Vec<Value> {
-        let mut keys: Vec<&String> = run.traces.keys().collect();
-        keys.sort();
-        let mut steps = Vec::with_capacity(keys.len());
-        for key in keys {
-            let Some(trace) = run.traces.get(key) else {
-                continue;
-            };
+        let mut entries: Vec<_> = run.traces.iter().collect();
+        entries.sort_by(|a, b| a.0.cmp(b.0));
+        let mut steps = Vec::with_capacity(entries.len());
+        for (key, trace) in entries {
             steps.push(json!({
                 "step": "derivation",
                 "cell": key,
@@ -282,11 +280,7 @@ impl ExplainHandler {
 
     /// The manifest meaning for a cell key (for the business-language prose).
     fn meaning_for(&self, key: &str) -> Option<String> {
-        self.bundle
-            .manifest
-            .cells
-            .iter()
-            .find(|c| c.cell == key)
+        pmcp_workbook_runtime::role_for_cell(&self.bundle.manifest, key)
             .and_then(|c| c.meaning.clone().or_else(|| c.name.clone()))
     }
 }
@@ -294,16 +288,13 @@ impl ExplainHandler {
 #[async_trait]
 impl ToolHandler for ExplainHandler {
     async fn handle(&self, args: Value, _extra: RequestHandlerExtra) -> pmcp::Result<Value> {
-        Ok(render_at_boundary(
-            self.compute(args),
-            &ProvStamp::from_bundle(&self.bundle),
-        ))
+        Ok(render_at_boundary(self.compute(args), &self.stamp))
     }
 
     fn metadata(&self) -> Option<ToolInfo> {
         Some(
             ToolInfo::with_ui(
-                "explain",
+                Self::NAME,
                 Some(
                     "Explain the computed workbook outputs: an ordered business-language \
                      derivation trace (formula + operands + meaning per step) plus a \
@@ -326,13 +317,18 @@ impl ToolHandler for ExplainHandler {
 /// versions/hashes, changelog — NOT the raw internal manifest.
 pub struct GetManifestHandler {
     bundle: Arc<WorkbookBundle>,
+    stamp: ProvStamp,
 }
 
 impl GetManifestHandler {
+    /// The registered tool name — the single source for registration + metadata.
+    pub const NAME: &str = "get_manifest";
+
     /// Build over the shared verified bundle.
     #[must_use]
     pub fn new(bundle: Arc<WorkbookBundle>) -> Self {
-        Self { bundle }
+        let stamp = ProvStamp::from_bundle(&bundle);
+        Self { bundle, stamp }
     }
 }
 
@@ -356,7 +352,7 @@ fn input_projection(role: &pmcp_workbook_runtime::CellRole) -> Value {
 }
 
 /// Build the curated agent-facing manifest projection (WBSV-03) + stamp.
-fn curated_manifest(bundle: &WorkbookBundle) -> Value {
+fn curated_manifest(bundle: &WorkbookBundle, stamp: &ProvStamp) -> Value {
     use pmcp_workbook_runtime::Role;
 
     let mut inputs = Vec::new();
@@ -394,7 +390,6 @@ fn curated_manifest(bundle: &WorkbookBundle) -> Value {
         .map(|c| json!({ "version": c.version, "note": c.note }))
         .collect();
 
-    let stamp = ProvStamp::from_bundle(bundle);
     json!({
         "bundle_id": stamp.bundle_id,
         "version": stamp.version,
@@ -410,13 +405,13 @@ fn curated_manifest(bundle: &WorkbookBundle) -> Value {
 #[async_trait]
 impl ToolHandler for GetManifestHandler {
     async fn handle(&self, _args: Value, _extra: RequestHandlerExtra) -> pmcp::Result<Value> {
-        Ok(curated_manifest(&self.bundle))
+        Ok(curated_manifest(&self.bundle, &self.stamp))
     }
 
     fn metadata(&self) -> Option<ToolInfo> {
         Some(
             ToolInfo::with_ui(
-                "get_manifest",
+                Self::NAME,
                 Some(
                     "Describe the compiled workbook workflow: a curated agent-facing \
                      manifest projection (inputs with tier/default/unit, outputs with \
@@ -439,27 +434,25 @@ impl ToolHandler for GetManifestHandler {
 /// into the bundle (hash-verified at boot — NOT a runtime computation), stamped.
 pub struct DiffVersionHandler {
     bundle: Arc<WorkbookBundle>,
+    stamp: ProvStamp,
 }
 
 impl DiffVersionHandler {
+    /// The registered tool name — the single source for registration + metadata.
+    pub const NAME: &str = "diff_version";
+
     /// Build over the shared verified bundle.
     #[must_use]
     pub fn new(bundle: Arc<WorkbookBundle>) -> Self {
-        Self { bundle }
-    }
-
-    /// Project the recorded changelog into the served result (a fallible shape so
-    /// any future runtime parse routes through the isError envelope, never a
-    /// panic / protocol Err).
-    #[allow(clippy::result_large_err)]
-    fn compute(&self) -> Result<Value, WorkbookToolError> {
-        Ok(serve_changelog(&self.bundle))
+        let stamp = ProvStamp::from_bundle(&bundle);
+        Self { bundle, stamp }
     }
 }
 
 /// Serialize the recorded [`pmcp_workbook_runtime::VersionChangelog`] into the
-/// served structured payload.
-fn serve_changelog(bundle: &WorkbookBundle) -> Value {
+/// served structured payload. Infallible — the changelog was hash-verified and
+/// parsed at boot, so serving it cannot fail.
+fn serve_changelog(bundle: &WorkbookBundle, stamp: &ProvStamp) -> Value {
     let cl = &bundle.changelog;
     let deltas: Vec<Value> = cl.deltas.iter().map(delta_to_json).collect();
     let payload = json!({
@@ -468,7 +461,7 @@ fn serve_changelog(bundle: &WorkbookBundle) -> Value {
         "deltas": deltas,
         "summary": cl.summary,
     });
-    with_provenance(payload, &ProvStamp::from_bundle(bundle))
+    with_provenance(payload, stamp)
 }
 
 /// Project one [`pmcp_workbook_runtime::OutputDelta`] into its served JSON shape.
@@ -494,16 +487,13 @@ fn meta_to_json(meta: &pmcp_workbook_runtime::OutputMeta) -> Value {
 #[async_trait]
 impl ToolHandler for DiffVersionHandler {
     async fn handle(&self, _args: Value, _extra: RequestHandlerExtra) -> pmcp::Result<Value> {
-        Ok(render_at_boundary(
-            self.compute(),
-            &ProvStamp::from_bundle(&self.bundle),
-        ))
+        Ok(serve_changelog(&self.bundle, &self.stamp))
     }
 
     fn metadata(&self) -> Option<ToolInfo> {
         Some(
             ToolInfo::with_ui(
-                "diff_version",
+                Self::NAME,
                 Some(
                     "Describe what changed between two promoted workflow versions: the \
                      RECORDED, hash-verified prev→current changelog (per-output deltas \
@@ -533,13 +523,18 @@ impl ToolHandler for DiffVersionHandler {
 /// into `structuredContent` — never a protocol-level error (T-92-10).
 pub struct RenderWorkbookHandler {
     bundle: Arc<WorkbookBundle>,
+    stamp: ProvStamp,
 }
 
 impl RenderWorkbookHandler {
+    /// The registered tool name — the single source for registration + metadata.
+    pub const NAME: &str = "render_workbook";
+
     /// Build over the shared verified bundle.
     #[must_use]
     pub fn new(bundle: Arc<WorkbookBundle>) -> Self {
-        Self { bundle }
+        let stamp = ProvStamp::from_bundle(&bundle);
+        Self { bundle, stamp }
     }
 
     /// The linear `?`-chained `render_workbook` pipeline: validate → encode the
@@ -548,29 +543,25 @@ impl RenderWorkbookHandler {
     #[allow(clippy::result_large_err)]
     fn compute(&self, args: Value) -> Result<Value, WorkbookToolError> {
         let validated = validate_input(args, &self.bundle.manifest, &self.bundle.cell_map)?;
-        let stamp = ProvStamp::from_bundle(&self.bundle);
-        let uri = render_uri::encode(&validated.canonical_dto, &stamp)?;
+        let uri = render_uri::encode(&validated.canonical_dto, &self.stamp)?;
         let payload = json!({
             "resource_uri": uri,
             "mime_type": render_uri::WORKBOOK_XLSX_MIME,
         });
-        Ok(with_provenance(payload, &stamp))
+        Ok(with_provenance(payload, &self.stamp))
     }
 }
 
 #[async_trait]
 impl ToolHandler for RenderWorkbookHandler {
     async fn handle(&self, args: Value, _extra: RequestHandlerExtra) -> pmcp::Result<Value> {
-        Ok(render_at_boundary(
-            self.compute(args),
-            &ProvStamp::from_bundle(&self.bundle),
-        ))
+        Ok(render_at_boundary(self.compute(args), &self.stamp))
     }
 
     fn metadata(&self) -> Option<ToolInfo> {
         Some(
             ToolInfo::with_ui(
-                "render_workbook",
+                Self::NAME,
                 Some(
                     "Render the computed workbook to a downloadable .xlsx. Returns a \
                      provenance-bound workbook:// resource URI (NOT the bytes) — read \
@@ -735,7 +726,7 @@ mod tests {
     #[test]
     fn get_manifest_returns_curated_projection_with_no_input() {
         let bundle = golden_bundle();
-        let v = curated_manifest(&bundle);
+        let v = curated_manifest(&bundle, &ProvStamp::from_bundle(&bundle));
         assert_eq!(v["bundle_id"], json!("tax-calc"));
         assert_eq!(v["version"], json!("1.1.0"));
         assert!(v["combined_hash"].is_string());
@@ -755,8 +746,7 @@ mod tests {
     #[test]
     fn diff_version_serves_recorded_changelog() {
         let bundle = golden_bundle();
-        let handler = DiffVersionHandler::new(bundle.clone());
-        let v = handler.compute().expect("serve changelog");
+        let v = serve_changelog(&bundle, &ProvStamp::from_bundle(&bundle));
 
         // The served changelog matches the recorded one (not recomputed).
         assert_eq!(v["from_version"], json!(bundle.changelog.from_version));

@@ -6,23 +6,6 @@
 //! verified [`pmcp_workbook_runtime::WorkbookBundle`] (loaded fail-closed via
 //! the runtime's `BundleSource` + `BundleLoader`).
 //!
-//! # Wiring discipline (Codex HIGH #1 / HIGH #2)
-//!
-//! The feature + this gated module skeleton land EARLY (this plan, wave 2) so
-//! the wave-3/4 plans can `cargo test --features workbook` before the handlers
-//! exist. The skeleton intentionally exposes NOTHING yet — the submodule
-//! declarations below stay COMMENTED until the plan that creates each file
-//! uncomments the matching `pub mod` line (never declare a `pub mod` before its
-//! file exists — Codex HIGH #2):
-//!
-//! - Plan 03 Task 1 creates `error`/`schema`/`input`/`handler` and uncomments
-//!   their declarations as each file lands.
-//! - Plan 05 adds the builder-ext wiring + crate-root re-exports.
-//!
-//! Until the handlers land the `workbook` / `workbook-embedded` builds compile
-//! against the lifted error/schema surface, proving the feature gate is wired
-//! correctly.
-//!
 //! # Domain failure vs infrastructure failure (Codex LOW)
 //!
 //! The served tools draw a sharp line between two failure classes:
@@ -50,7 +33,8 @@
 use std::sync::Arc;
 
 use pmcp::ServerBuilder;
-use serde_json::{json, Value};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use crate::error::Result;
 
@@ -117,7 +101,11 @@ pub const WORKBOOK_TOOL_UI: &str = "ui://workbook/result";
 /// — NOT [`pmcp_workbook_runtime::BundleLock::workbook_hash`] (the source-workbook
 /// hash). The two MUST never be conflated: `combined_hash` flips when ANY bundle
 /// artifact changes, binding the response to the exact verified bundle.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// The field names ARE the wire contract (pinned by
+/// `tests/workbook_provstamp_contract.rs`), so the serde derives serialize the
+/// stamp directly — every projection (`to_json`, the `workbook://` URI payload,
+/// the advertised schema) shares this one definition.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProvStamp {
     /// The neutral bundle identifier (e.g. `"tax-calc"`).
     pub bundle_id: String,
@@ -147,11 +135,8 @@ impl ProvStamp {
     /// The stamp as a JSON object attached to every result payload.
     #[must_use]
     pub fn to_json(&self) -> Value {
-        json!({
-            "bundle_id": self.bundle_id,
-            "version": self.version,
-            "combined_hash": self.combined_hash,
-        })
+        // Infallible: ProvStamp is three plain strings.
+        serde_json::to_value(self).unwrap_or(Value::Null)
     }
 }
 
@@ -261,18 +246,24 @@ impl WorkbookBuilderExt for ServerBuilder {
         // Register the five served tools over the shared verified bundle. Each
         // handler is `Arc`-cloned so they share ONE verified bundle (no copies).
         let builder = self
-            .tool_arc("calculate", Arc::new(CalculateHandler::new(bundle.clone())))
-            .tool_arc("explain", Arc::new(ExplainHandler::new(bundle.clone())))
             .tool_arc(
-                "get_manifest",
+                CalculateHandler::NAME,
+                Arc::new(CalculateHandler::new(bundle.clone())),
+            )
+            .tool_arc(
+                ExplainHandler::NAME,
+                Arc::new(ExplainHandler::new(bundle.clone())),
+            )
+            .tool_arc(
+                GetManifestHandler::NAME,
                 Arc::new(GetManifestHandler::new(bundle.clone())),
             )
             .tool_arc(
-                "diff_version",
+                DiffVersionHandler::NAME,
                 Arc::new(DiffVersionHandler::new(bundle.clone())),
             )
             .tool_arc(
-                "render_workbook",
+                RenderWorkbookHandler::NAME,
                 Arc::new(RenderWorkbookHandler::new(bundle.clone())),
             )
             // The single `workbook://` render resource (A3 — no DispatchingResource

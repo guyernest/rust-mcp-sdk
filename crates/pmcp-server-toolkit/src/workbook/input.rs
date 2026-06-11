@@ -121,11 +121,8 @@ pub fn validate_input(
         // WR-05 (fail-closed): the supplied input's seed_coord MUST have a
         // manifest role — `?`-or-reject, NEVER an if-let-Some skip. A roleless
         // seed would bypass the dtype + enum gates below.
-        let role = manifest
-            .cells
-            .iter()
-            .find(|r| r.cell == entry.seed_coord)
-            .ok_or_else(|| {
+        let role =
+            pmcp_workbook_runtime::role_for_cell(manifest, &entry.seed_coord).ok_or_else(|| {
                 WorkbookToolError::invalid_input(format!(
                     "internal: input '{key}' maps to {} which has no manifest role",
                     entry.seed_coord

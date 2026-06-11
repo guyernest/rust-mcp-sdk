@@ -196,10 +196,3 @@ pmcp-workbook-runtime = { version = "0.1.0", path = "../pmcp-workbook-runtime" }
 # tempdir and the tamper helpers copy-then-corrupt the golden in a tempdir
 # (D-05: no committed corrupt fixtures). Dev-only.
 tempfile = "3"
-# Why: Phase 92 Plan 02 — the fixture generator folds the evidence-dir hash the
-# EXACT way the runtime loader does (path+length-prefixed via the runtime's own
-# `update_field`), which needs a `Sha256` instance + `hex::encode`. Both are
-# already workspace deps the runtime uses (no new package to vet); pinned to the
-# runtime's versions. Dev-only.
-sha2 = "0.11"
-hex = "0.4"

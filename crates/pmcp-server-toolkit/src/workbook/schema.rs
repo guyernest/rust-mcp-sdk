@@ -29,9 +29,10 @@ pub(crate) fn dtype_json_type(dtype: Dtype) -> &'static str {
     }
 }
 
-/// Find the manifest [`CellRole`] for a `cell_map` entry's seed coordinate.
+/// Find the manifest [`CellRole`] for a `cell_map` entry's seed coordinate —
+/// the runtime's shared exact-cell-key lookup.
 fn role_for_seed<'a>(manifest: &'a Manifest, seed_coord: &str) -> Option<&'a CellRole> {
-    manifest.cells.iter().find(|c| c.cell == seed_coord)
+    pmcp_workbook_runtime::role_for_cell(manifest, seed_coord)
 }
 
 /// Build the per-output-column schema for the `calculate` result `outputs` map.

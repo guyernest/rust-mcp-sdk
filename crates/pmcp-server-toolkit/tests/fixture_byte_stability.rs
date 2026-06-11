@@ -19,28 +19,15 @@
 
 mod support;
 
-use std::path::{Path, PathBuf};
-
+use pmcp_workbook_runtime::bundle_loader::ALLOWED_MEMBERS;
 use pmcp_workbook_runtime::{load_bundle, BundleLoadError, LocalDirSource};
 
 use support::fixture_gen::{generate_tax_calc_bundle, BUNDLE_ID, VERSION};
-use support::tamper;
+use support::tamper::{self, golden_dir};
 
-/// The committed golden bundle directory (relative to the crate manifest dir).
-fn golden_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/tax-calc@1.1.0")
-}
-
-/// The seven members the golden must carry, in the loader's allow-set order.
-const MEMBERS: &[&str] = &[
-    "executable.ir.json",
-    "manifest.json",
-    "cell_map.json",
-    "layout.json",
-    "BUNDLE.lock",
-    "evidence/changelog.json",
-    "evidence/parser_equivalence.json",
-];
+/// The seven members the golden must carry — the loader's OWN frozen allow-set,
+/// so the test cannot desync from the canonical member table.
+const MEMBERS: &[&str] = ALLOWED_MEMBERS;
 
 /// Regenerate the committed golden in place. Run on demand with
 /// `cargo test -p pmcp-server-toolkit --features workbook --test fixture_byte_stability \

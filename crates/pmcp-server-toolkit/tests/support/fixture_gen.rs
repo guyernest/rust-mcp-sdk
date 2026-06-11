@@ -30,6 +30,10 @@ use std::collections::BTreeMap;
 use std::io::Write;
 use std::path::Path;
 
+use pmcp_workbook_runtime::bundle_loader::{
+    MEMBER_CELL_MAP, MEMBER_CHANGELOG, MEMBER_IR, MEMBER_LAYOUT, MEMBER_LOCK, MEMBER_MANIFEST,
+    MEMBER_PARSER_EQUIV,
+};
 use pmcp_workbook_runtime::changelog::{
     ChangeClass, OutputDelta, OutputMeta, Severity, VersionChangelog,
 };
@@ -39,10 +43,9 @@ use pmcp_workbook_runtime::manifest_model::{
 use pmcp_workbook_runtime::render::{CellLayout, LayoutDescriptor, SheetLayout};
 use pmcp_workbook_runtime::sheet_ir::value::CellValue;
 use pmcp_workbook_runtime::{
-    build_bundle_lock, sha256_hex, update_field, BinOp, Cell, CellEntry, CellExpr, CellMap, Expr,
-    LAYOUT_DESCRIPTOR_VERSION,
+    build_bundle_lock, fold_evidence_hash, sha256_hex, BinOp, Cell, CellEntry, CellExpr, CellMap,
+    Expr, LAYOUT_DESCRIPTOR_VERSION,
 };
-use sha2::{Digest, Sha256};
 
 /// The neutral bundle identifier (D-17). The lock's `bundle_id` and the
 /// manifest's `workflow` MUST agree (the loader's stamp-binding gate).
@@ -52,15 +55,6 @@ pub const BUNDLE_ID: &str = "tax-calc";
 pub const VERSION: &str = "1.1.0";
 /// The version the recorded changelog transitions FROM.
 pub const PREV_VERSION: &str = "1.0.0";
-
-/// The seven bundle members, in the loader's frozen allow-set order.
-const MEMBER_IR: &str = "executable.ir.json";
-const MEMBER_MANIFEST: &str = "manifest.json";
-const MEMBER_CELL_MAP: &str = "cell_map.json";
-const MEMBER_LAYOUT: &str = "layout.json";
-const MEMBER_LOCK: &str = "BUNDLE.lock";
-const MEMBER_CHANGELOG: &str = "evidence/changelog.json";
-const MEMBER_PARSER_EQUIV: &str = "evidence/parser_equivalence.json";
 
 /// The input-sheet cell keys.
 const CELL_GROSS_INCOME: &str = "1_Inputs!B2";
@@ -506,33 +500,6 @@ fn build_parser_equivalence() -> BTreeMap<String, serde_json::Value> {
     m
 }
 
-/// Fold the evidence-dir hash the EXACT way [`pmcp_workbook_runtime`]'s loader
-/// does: PATH- and LENGTH-PREFIXED over the evidence fold set in SORTED
-/// relative-path order, via the runtime's own [`update_field`] (Pitfall 2 — the
-/// generator and loader MUST fold the identical set, byte-for-byte). The fold set
-/// is `cell_map.json`, `layout.json`, `evidence/changelog.json`,
-/// `evidence/parser_equivalence.json`.
-fn fold_evidence_hash(
-    cell_map_json: &str,
-    layout_json: &str,
-    changelog_json: &str,
-    parser_equiv_json: &str,
-) -> String {
-    let mut fold: Vec<(&str, &str)> = vec![
-        (MEMBER_CELL_MAP, cell_map_json),
-        (MEMBER_LAYOUT, layout_json),
-        (MEMBER_CHANGELOG, changelog_json),
-        (MEMBER_PARSER_EQUIV, parser_equiv_json),
-    ];
-    fold.sort_by(|a, b| a.0.cmp(b.0));
-    let mut hasher = Sha256::new();
-    for (path, body) in &fold {
-        update_field(&mut hasher, b"evidence.path", path.as_bytes());
-        update_field(&mut hasher, b"evidence.body", body.as_bytes());
-    }
-    hex::encode(hasher.finalize())
-}
-
 /// Write one member to `out_dir/member`, creating parent dirs as needed.
 fn write_member(out_dir: &Path, member: &str, bytes: &str) -> std::io::Result<()> {
     let path = out_dir.join(member);
@@ -576,13 +543,14 @@ pub fn generate_tax_calc_bundle(out_dir: &Path) -> std::io::Result<()> {
     let changelog_json = to_canonical_json(&changelog);
     let parser_equiv_json = to_canonical_json(&parser_equiv);
 
-    // Fold the evidence hash over the same sorted set the loader folds.
-    let evidence_hash = fold_evidence_hash(
-        &cell_map_json,
-        &layout_json,
-        &changelog_json,
-        &parser_equiv_json,
-    );
+    // Fold the evidence hash via the runtime's OWN shared fold (Pitfall 2 — the
+    // generator and loader fold the identical set byte-for-byte by construction).
+    let evidence_hash = fold_evidence_hash(&[
+        (MEMBER_CELL_MAP, cell_map_json.as_bytes()),
+        (MEMBER_LAYOUT, layout_json.as_bytes()),
+        (MEMBER_CHANGELOG, changelog_json.as_bytes()),
+        (MEMBER_PARSER_EQUIV, parser_equiv_json.as_bytes()),
+    ]);
 
     // Build the lock via the runtime's own hasher (so the loader's recompute
     // matches byte-for-byte).

@@ -43,14 +43,15 @@ use pmcp_workbook_runtime::render::render_xlsx;
 
 use super::input::validate_input;
 use super::render_uri::{self, WORKBOOK_XLSX_MIME};
-use super::{ProvStamp, WorkbookBundle};
+use super::WorkbookBundle;
 
 /// The single resource URI advertised by `resources/list` for the render surface.
 ///
-/// It is the SCHEME root (no encoded payload) — a stable, listable handle. The
-/// concrete `workbook://render/<payload>` URIs are minted per call by
-/// `render_workbook` and read back through [`RenderWorkbookResource::read`].
-pub const RENDER_RESOURCE_LIST_URI: &str = "workbook://render/";
+/// It is the SCHEME root (no encoded payload) — a stable, listable handle, the
+/// same canonical prefix the codec mints URIs under. The concrete
+/// `workbook://render/<payload>` URIs are minted per call by `render_workbook`
+/// and read back through [`RenderWorkbookResource::read`].
+pub const RENDER_RESOURCE_LIST_URI: &str = render_uri::RENDER_URI_PREFIX;
 
 /// The stateless regen-on-read resource handler for `workbook://` render
 /// pointers (WBSV-05). Holds the shared verified bundle; every read regenerates
@@ -85,15 +86,19 @@ impl RenderWorkbookResource {
         // 1. Decode (size guard + total decode are inside render_uri::decode).
         let decoded = render_uri::decode(uri).map_err(|e| RegenError::BadUri(e.reason))?;
         // 2. Verify provenance == the live bundle stamp (cross-provenance guard).
-        let bundle_stamp = ProvStamp::from_bundle(&self.bundle);
-        if decoded.provenance != bundle_stamp {
+        //    Field-wise against the lock — no allocation per read.
+        let lock = &self.bundle.stamp;
+        if decoded.provenance.bundle_id != lock.bundle_id
+            || decoded.provenance.version != lock.version
+            || decoded.provenance.combined_hash != lock.combined
+        {
             return Err(RegenError::CrossProvenance);
         }
         // 3. RE-VALIDATE the decoded inputs (injected/out-of-range guard).
         let validated = validate_input(decoded.dto, &self.bundle.manifest, &self.bundle.cell_map)
             .map_err(|e| RegenError::Invalid(e.reason))?;
         // 4. Re-run + render (writer-only, reader-free).
-        let run = super::handler::run_bundle(&self.bundle, &validated.seeds)
+        let run = super::handler::run_bundle(&self.bundle, validated.seeds)
             .map_err(|e| RegenError::Invalid(e.reason))?;
         let bytes = render_xlsx(&self.bundle.layout, &run)
             .map_err(|e| RegenError::Render(e.to_string()))?;
@@ -171,6 +176,7 @@ impl ResourceHandler for RenderWorkbookResource {
 
 #[cfg(test)]
 mod tests {
+    use super::super::ProvStamp;
     use super::*;
     use std::path::{Path, PathBuf};
 
