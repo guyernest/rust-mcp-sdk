@@ -1,19 +1,29 @@
-//! Formula parse stage — tokenize + parse to the runtime's owned `Expr` AST.
+//! Formula front-end (WBCO-03): the tokenizer + Pratt parser that builds the
+//! owned AST over the dialect `WHITELIST`, validating function names AT PARSE
+//! TIME (the core security primitive).
 //!
-//! Parses cell formulas into the runtime's owned `Expr`/`BinOp`/`UnOp` AST
-//! (re-exported from `pmcp-workbook-runtime`; NEVER re-declared) with a
-//! whitelist-at-parse check against the dialect contract. Wave 1 ships a typed
-//! stub; Plan 05 fills the body.
+//! The owned AST (`Expr`/`BinOp`/`UnOp`) lives in `pmcp-workbook-runtime`; this
+//! module re-exports it FROM there (so `crate::formula::{Expr, BinOp, UnOp}`
+//! resolves) and keeps the compiler-side `token` lexer + `parser` (whitelist-at-
+//! parse, depth-limited, typed `ParseError`) + `rebase` (row-block templating).
+//!
+//! # Parser-error vs lint-finding boundary (Codex MEDIUM)
+//!
+//! [`parser::parse`] returns a typed [`parser::ParseError`] — it NEVER pushes a
+//! `LintFinding`. The linter (`crate::dialect::linter`) owns the collect-all,
+//! cell-addressed dialect findings. The two surfaces stay crisp.
 
-use crate::error::CompileError;
+/// The Excel-formula tokenizer.
+pub mod parser;
+/// Per-cell row-offset rebasing for a loop / row-block template.
+pub mod rebase;
+/// The Excel-formula tokenizer.
+pub mod token;
 
-/// Parse all formulas in the ingested cell model to the owned `Expr` AST.
-///
-/// Wave 1 stub: returns [`CompileError::NotImplemented`]. Plan 05 wires the
-/// tokenizer + parser here.
-///
-/// # Errors
-/// Returns [`CompileError::NotImplemented`] until the parser is wired.
-pub fn parse_all() -> Result<(), CompileError> {
-    Err(CompileError::NotImplemented("formula::parse_all"))
-}
+// The AST lives in `pmcp-workbook-runtime`; re-export it (NEVER re-declared) so
+// `crate::formula::{Expr, BinOp, UnOp}` resolves.
+pub use pmcp_workbook_runtime::{BinOp, Expr, UnOp};
+
+pub use parser::{parse, ParseError, MAX_PARSE_DEPTH};
+pub use rebase::{rebase, BlockRange};
+pub use token::{tokenize, LexError, Token, MAX_FORMULA_LEN};

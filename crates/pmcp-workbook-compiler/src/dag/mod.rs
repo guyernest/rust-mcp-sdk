@@ -1,18 +1,29 @@
-//! DAG compile stage — build the dependency graph + toposort.
+//! DAG compile stage (WBCO-03): build the dependency graph + Kahn toposort.
 //!
-//! Builds the runtime's owned `Dag` and orders it with `toposort` (both
-//! re-exported from `pmcp-workbook-runtime`; NEVER re-declared). Wave 1 ships a
-//! typed stub; Plan 05 fills the body.
+//! Builds the runtime's owned [`graph::Dag`] from the parsed [`crate::formula`]
+//! `Expr` references and orders it with [`topo::toposort`] (both re-exported from
+//! `pmcp-workbook-runtime`; NEVER re-declared — no petgraph). The build path
+//! operates over a SYNTHETIC [`topo::ParsedCell`] slice + a synthetic
+//! defined-name table (`crate::dialect::DefinedName`) — never 93-02's owned cell
+//! model — so this plan stays parallel with 93-02.
+//!
+//! # Typed errors, NOT lint findings (Codex MEDIUM)
+//!
+//! The DAG build returns a typed [`resolve::DagBuildError`] (range-too-large,
+//! malformed range, unknown name, cycle) — it never pushes a `LintFinding`. The
+//! linter owns the cell-addressed reporting; this layer is a pure IR→graph
+//! transform with a typed failure mode.
 
-use crate::error::CompileError;
+/// The pure owned dependency-graph container (re-exported from the runtime).
+pub mod graph;
+/// Reference resolution + the typed [`resolve::DagBuildError`].
+pub mod resolve;
+/// Kahn topo-sort + cycle detection + the [`topo::build_dag`] entry point.
+pub mod topo;
 
-/// Build the dependency DAG from the parsed formula set.
-///
-/// Wave 1 stub: returns [`CompileError::NotImplemented`]. Plan 05 wires the
-/// graph build + toposort here.
-///
-/// # Errors
-/// Returns [`CompileError::NotImplemented`] until the DAG build is wired.
-pub fn build_dag() -> Result<(), CompileError> {
-    Err(CompileError::NotImplemented("dag::build_dag"))
-}
+pub use graph::Dag;
+pub use resolve::{
+    collect_refs, expand_range, parse_a1, split_ref, DagBuildError, RangeShape, ResolveError,
+    MAX_RANGE_CELLS,
+};
+pub use topo::{build_dag, toposort, ParsedCell};
