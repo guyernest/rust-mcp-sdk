@@ -142,6 +142,20 @@ pub fn validate_input(
                     variable_tier_keys(manifest),
                 ));
             },
+            // WR-02: reject an override targeting a computed cell. A
+            // `Role::Output`/`Role::Formula` cell is derived by the IR — seeding it
+            // would (after 92-06's seed-preserving executor) let a caller pin a served
+            // output under a valid provenance stamp (output forging). Mirror
+            // `variable_tier_keys`' own `!matches!(r.role, Role::Output | Role::Formula)`
+            // filter so the accept arm cannot contradict the module's allow-list. A
+            // forbidden-role override surfaces the same machine-actionable allowed-list
+            // as an unknown key.
+            Some(r) if matches!(r.role, Role::Output | Role::Formula) => {
+                return Err(WorkbookToolError::unsupported_option(
+                    key.clone(),
+                    variable_tier_keys(manifest),
+                ));
+            },
             Some(r) => {
                 check_value_dtype(r, key, value)?;
                 seeds.insert(r.cell.clone(), value.clone());
@@ -486,6 +500,81 @@ mod tests {
         let err = validate_input(args, &manifest(), &cell_map())
             .expect_err("an override naming no manifest cell is unsupported_option");
         assert_eq!(err.code, "unsupported_option");
+    }
+
+    /// A manifest extending the tax fixture with a `Role::Output` cell (`tax_owed`)
+    /// and a `Role::Formula` cell (`taxable_income`) — the two computed roles an
+    /// override must never be allowed to seed (WR-02).
+    fn manifest_with_computed_cells() -> Manifest {
+        let mut m = manifest();
+        m.cells.push(CellRole {
+            cell: "3_Outputs!B3".to_string(),
+            role: Role::Output,
+            name: Some("tax_owed".to_string()),
+            unit: Some("USD".to_string()),
+            meaning: None,
+            dtype: Dtype::Number,
+            colour_evidence: None,
+            source: "test".to_string(),
+            notes: None,
+            tier: None,
+            allowed_values: None,
+        });
+        m.cells.push(CellRole {
+            cell: "3_Outputs!B2".to_string(),
+            role: Role::Formula,
+            name: Some("taxable_income".to_string()),
+            unit: Some("USD".to_string()),
+            meaning: None,
+            dtype: Dtype::Number,
+            colour_evidence: None,
+            source: "test".to_string(),
+            notes: None,
+            tier: None,
+            allowed_values: None,
+        });
+        m
+    }
+
+    #[test]
+    fn override_on_output_cell_is_rejected_unsupported_option() {
+        // WR-02: an override targeting a Role::Output cell is the live output-forging
+        // vector after 92-06 (a seeded output now wins over the IR formula). It must
+        // be rejected with unsupported_option and NEVER appear in accepted_overrides.
+        // Target both by name ("tax_owed") and by cell key ("3_Outputs!B3").
+        for key in ["tax_owed", "3_Outputs!B3"] {
+            let args = json!({ "overrides": { key: 999.0 } });
+            let err = validate_input(args, &manifest_with_computed_cells(), &cell_map())
+                .expect_err("a Role::Output override is rejected (WR-02)");
+            assert_eq!(err.code, "unsupported_option", "key {key} rejected");
+            assert!(
+                err.allowed.is_some(),
+                "carries the variable-tier allowed-list (key {key})"
+            );
+            // The forbidden role is excluded from the allow-list it surfaces.
+            let allowed = err.allowed.clone().unwrap();
+            assert!(
+                !allowed.contains(&"tax_owed".to_string())
+                    && !allowed.contains(&"3_Outputs!B3".to_string()),
+                "an output key is never offered as an allowed override (key {key}): {allowed:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn override_on_formula_cell_is_rejected_unsupported_option() {
+        // WR-02: a Role::Formula override is rejected identically to a Role::Output
+        // one — both are computed cells the caller must not seed.
+        for key in ["taxable_income", "3_Outputs!B2"] {
+            let args = json!({ "overrides": { key: 123.0 } });
+            let err = validate_input(args, &manifest_with_computed_cells(), &cell_map())
+                .expect_err("a Role::Formula override is rejected (WR-02)");
+            assert_eq!(err.code, "unsupported_option", "key {key} rejected");
+            assert!(
+                err.allowed.is_some(),
+                "carries the variable-tier allowed-list (key {key})"
+            );
+        }
     }
 
     // ---- Gemini Excel-edge seeds: empty-string vs null --------------------

@@ -214,8 +214,17 @@ fn verify_stamp_binding(
     changelog: &VersionChangelog,
 ) -> Result<(), BundleLoadError> {
     // workbook_hash ↔ layout.source_workbook_hash. An ABSENT anchor makes the
-    // binding impossible — fail closed (the emitter always stamps it).
-    let layout_hash = layout.source_workbook_hash.as_deref().unwrap_or("");
+    // binding impossible — reject it explicitly (WR-07). Defaulting to "" would let
+    // an absent anchor + empty lock.workbook_hash pass vacuously ("" == ""); the
+    // emitter always stamps the anchor, so an absent one is a tampered/partial bundle.
+    let Some(layout_hash) = layout.source_workbook_hash.as_deref() else {
+        return Err(BundleLoadError::StampMismatch {
+            field: "workbook_hash",
+            lock_value: lock.workbook_hash.clone(),
+            member_value: "<absent>".to_string(),
+            member: "layout.json (source_workbook_hash)",
+        });
+    };
     if layout_hash != lock.workbook_hash {
         return Err(BundleLoadError::StampMismatch {
             field: "workbook_hash",
@@ -467,6 +476,61 @@ mod tests {
         golden_with_versions("1.0.0", "1.0.0")
     }
 
+    /// WR-07 fixture: a golden whose `layout.source_workbook_hash` is ABSENT
+    /// (`None`) and whose `lock.workbook_hash` is the empty string. Every integrity
+    /// hash is recomputed over these exact bytes so the integrity gate passes — the
+    /// stamp gate (absent-anchor rejection) is what must fire, NOT a vacuous
+    /// `"" == ""` pass.
+    fn golden_with_absent_anchor_and_empty_lock_hash() -> MapSource {
+        let bundle_id = "tax-calc";
+        let empty_hash = String::new();
+
+        let ir: HashMap<String, Cell> = HashMap::new();
+        let ir_json = serde_json::to_string(&ir).unwrap();
+        let manifest = empty_manifest(bundle_id);
+        let manifest_json = serde_json::to_string(&manifest).unwrap();
+        let cell_map_json = serde_json::to_string(&sample_cell_map()).unwrap();
+        // Absent anchor: source_workbook_hash = None.
+        let layout = LayoutDescriptor {
+            descriptor_version: crate::render::LAYOUT_DESCRIPTOR_VERSION,
+            source_workbook_hash: None,
+            sheets: vec![],
+        };
+        let layout_json = serde_json::to_string(&layout).unwrap();
+        let changelog_json = serde_json::to_string(&sample_changelog("1.0.0")).unwrap();
+        let parser_equiv_json = r#"{"equivalent":true}"#.to_string();
+
+        let evidence_hash = fold_evidence_hash(&[
+            (MEMBER_CELL_MAP, cell_map_json.as_bytes()),
+            (MEMBER_LAYOUT, layout_json.as_bytes()),
+            (MEMBER_CHANGELOG, changelog_json.as_bytes()),
+            (MEMBER_PARSER_EQUIV, parser_equiv_json.as_bytes()),
+        ]);
+
+        let lock = build_bundle_lock(
+            bundle_id,
+            "1.0.0",
+            empty_hash, // empty lock.workbook_hash — the vacuous "" == "" case
+            &ir_json,
+            &manifest_json,
+            &evidence_hash,
+        );
+        let lock_json = serde_json::to_string(&lock).unwrap();
+
+        let mut members = HashMap::new();
+        members.insert(MEMBER_IR.to_string(), ir_json.into_bytes());
+        members.insert(MEMBER_MANIFEST.to_string(), manifest_json.into_bytes());
+        members.insert(MEMBER_CELL_MAP.to_string(), cell_map_json.into_bytes());
+        members.insert(MEMBER_LAYOUT.to_string(), layout_json.into_bytes());
+        members.insert(MEMBER_CHANGELOG.to_string(), changelog_json.into_bytes());
+        members.insert(
+            MEMBER_PARSER_EQUIV.to_string(),
+            parser_equiv_json.into_bytes(),
+        );
+        members.insert(MEMBER_LOCK.to_string(), lock_json.into_bytes());
+        MapSource { members }
+    }
+
     #[test]
     fn load_valid_golden_returns_populated_bundle() {
         let source = valid_golden();
@@ -510,6 +574,28 @@ mod tests {
                 assert_eq!(field, "version");
             },
             other => panic!("expected StampMismatch on version, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn absent_layout_anchor_with_empty_lock_hash_fails_closed() {
+        // WR-07: an absent layout.source_workbook_hash MUST be rejected even when
+        // lock.workbook_hash is empty — the old empty-default made this pass vacuously
+        // (empty == empty). The stamp gate must fire with member_value "<absent>".
+        let source = golden_with_absent_anchor_and_empty_lock_hash();
+        match load(&source) {
+            Err(BundleLoadError::StampMismatch {
+                field,
+                member_value,
+                ..
+            }) => {
+                assert_eq!(field, "workbook_hash");
+                assert_eq!(
+                    member_value, "<absent>",
+                    "an absent anchor must be reported as <absent>, never defaulted to \"\""
+                );
+            },
+            other => panic!("expected StampMismatch <absent> on workbook_hash, got {other:?}"),
         }
     }
 

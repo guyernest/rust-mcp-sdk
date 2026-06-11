@@ -75,8 +75,16 @@ pub(crate) fn project_outputs(
 ) -> Result<Value, WorkbookToolError> {
     let mut outputs = serde_json::Map::new();
     for entry in &bundle.cell_map.outputs {
+        // WR-04: fail closed on a declared-but-uncomputed output. A cell_map output
+        // (already verified at boot) absent from the run result is a cell_map/IR skew,
+        // not a success — silently dropping it would let the served payload diverge
+        // from the advertised outputSchema (WBSV-07). Surface it as an `invalid_input`
+        // error so the contract and the payload can never disagree.
         let Some(value) = run.computed.get(&entry.seed_coord) else {
-            continue;
+            return Err(WorkbookToolError::invalid_input(format!(
+                "internal: declared output '{}' ({}) was not computed by the bundle IR",
+                entry.json_key, entry.seed_coord
+            )));
         };
         let projected = finite_output_value(value, &entry.seed_coord, &entry.json_key)?;
         outputs.insert(
@@ -693,6 +701,55 @@ mod tests {
         // A finite number projects fine.
         let ok = finite_output_value(&CellValue::Number(42.0), "c", "k").expect("finite ok");
         assert_eq!(ok, json!(42.0));
+    }
+
+    #[test]
+    fn project_outputs_fails_closed_on_missing_declared_output() {
+        // WR-04: a declared output (verified in cell_map at boot) absent from the run
+        // result is a cell_map/IR skew, NOT a success. project_outputs must fail
+        // closed with invalid_input so the served payload can never silently diverge
+        // from the advertised outputSchema (WBSV-07) — never an `else { continue }`.
+        let bundle = golden_bundle();
+        // A crafted RunResult whose `computed` map is EMPTY — every declared output's
+        // seed_coord is therefore absent.
+        let run = RunResult::default();
+        let err = project_outputs(&bundle, &run)
+            .expect_err("a missing declared output fails closed (WR-04)");
+        assert_eq!(err.code, "invalid_input");
+        assert!(
+            err.reason.contains("was not computed by the bundle IR"),
+            "the error names the cell_map/IR skew: {}",
+            err.reason
+        );
+        // The named, missing output is identified in the message.
+        assert!(
+            bundle
+                .cell_map
+                .outputs
+                .iter()
+                .any(|e| err.reason.contains(&e.json_key) || err.reason.contains(&e.seed_coord)),
+            "the error identifies the uncomputed output: {}",
+            err.reason
+        );
+    }
+
+    #[test]
+    fn project_outputs_succeeds_when_all_declared_outputs_present() {
+        // Companion to the fail-closed test: when every declared output IS computed,
+        // project_outputs returns the full { value, unit } map (no false positive).
+        let bundle = golden_bundle();
+        let mut run = RunResult::default();
+        for entry in &bundle.cell_map.outputs {
+            run.computed
+                .insert(entry.seed_coord.clone(), CellValue::Number(1.0));
+        }
+        let projected = project_outputs(&bundle, &run).expect("all-present projects");
+        let obj = projected.as_object().expect("outputs is an object");
+        assert_eq!(
+            obj.len(),
+            bundle.cell_map.outputs.len(),
+            "every declared output is projected"
+        );
     }
 
     #[test]
