@@ -1,0 +1,54 @@
+[package]
+name = "pmcp-workbook-compiler"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/paiml/rust-mcp-sdk"
+description = "Offline Excel→MCP compiler: umya-isolated ingest→lint→synth→DAG→reconcile→emit→promote-gate"
+
+# Why: keep the published artifact lean; planning/pmat/fuzz/tests never ship to
+# downstream consumers.
+exclude = [".planning/", ".pmat/", "fuzz/", "tests/"]
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[lib]
+name = "pmcp_workbook_compiler"
+path = "src/lib.rs"
+
+[dependencies]
+# version + path together — SDK workspace-internal dep convention. The compiler
+# re-exports the runtime's shared model/IR/hash/changelog/finding/rounding types
+# (NEVER re-declares them) so the served loader and the compiler read ONE
+# definition of Manifest/ChangeClass/etc.
+pmcp-workbook-runtime = { version = "0.1.0", path = "../pmcp-workbook-runtime" }
+# The dialect contract (WHITELIST/DialectRules/CandidateRole) the linter runs
+# against — re-exported here, never re-declared (the dialect crate's spec-binding
+# test would be defeated by a second WHITELIST copy).
+pmcp-workbook-dialect = { version = "0.1.0", path = "../pmcp-workbook-dialect" }
+
+# Match the runtime crate's pins (NOT lighthouse's thiserror = "1").
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+schemars = "1.0"
+sha2 = "0.11"
+hex = "0.4"
+chrono = "0.4"
+
+# READER DEP — the ONE crate in the workspace where the Excel reader is allowed
+# (T-93-01-PURITY; the Makefile purity-check POSITIVELY asserts umya IS here and
+# is ABSENT from every served-tree crate). Install was GATED behind a
+# blocking-human legitimacy checkpoint (Task 1 / T-93-01-SC): the three reader
+# packages were [ASSUMED] (slopcheck unavailable at research time) and were
+# verified on crates.io and explicitly human-approved before this first install.
+# umya-spreadsheet (author MathNya, MIT, github.com/MathNya/umya-spreadsheet)
+# pulls quick-xml + zip transitively; we keep them transitive-only (single
+# version each in Cargo.lock) rather than adding direct pins — the provenance
+# raw reader (Plan 02) re-derives its direct quick-xml/zip pins from umya's
+# resolved versions IF it needs them as direct deps, set to the exact resolved
+# version so Cargo.lock keeps ONE copy. No JS-kernel dep (no SWC, no code-mode):
+# the runtime's pure-Rust scalar_eval replaces the JS kernel on every path here.
+umya-spreadsheet = "3.0"
