@@ -89,17 +89,6 @@ fn literal_num(key: &str, n: f64) -> (String, Cell) {
     )
 }
 
-/// A literal-text cell (the enum filing-status input default).
-fn literal_text(key: &str, s: &str) -> (String, Cell) {
-    (
-        key.to_string(),
-        Cell {
-            key: key.to_string(),
-            expr: CellExpr::Literal(CellValue::Text(s.to_string())),
-        },
-    )
-}
-
 /// `left op right` over two cell references.
 fn binop_refs(key: &str, left: &str, op: BinOp, right: &str) -> (String, Cell) {
     (
@@ -125,15 +114,19 @@ fn binop_refs(key: &str, left: &str, op: BinOp, right: &str) -> (String, Cell) {
 /// - `marginal_rate  = bracket2_rate`  (the top applicable bracket rate)
 fn build_ir() -> BTreeMap<String, Cell> {
     let mut ir: BTreeMap<String, Cell> = BTreeMap::new();
-    // Inputs (literal seed cells).
-    for (k, c) in [
-        literal_num(CELL_GROSS_INCOME, 60_000.0),
-        literal_num(CELL_DEDUCTIONS, 12_000.0),
-    ] {
-        ir.insert(k, c);
-    }
-    let (k, c) = literal_text(CELL_FILING_STATUS, "single");
-    ir.insert(k, c);
+    // The three Role::Input cells — CELL_GROSS_INCOME ("1_Inputs!B2"),
+    // CELL_FILING_STATUS ("1_Inputs!B3"), CELL_DEDUCTIONS ("1_Inputs!B4") — are
+    // deliberately ABSENT from the IR (CR-01). The executor's documented seed
+    // contract (executor.rs run() doc) is that Role::Input cells are pre-loaded
+    // into the seed env by validate_input and resolve before the topo walk. If we
+    // emitted them as IR literals here, the executor's literal arm would re-seed
+    // the bundle's baked-in defaults at walk time and clobber the caller's
+    // validated inputs — every calculate/explain/render_workbook call would then
+    // compute from gross_income=60000 regardless of what the caller sent. The
+    // output formulas below reference these input cells by Ref; those refs resolve
+    // from the seed env, NOT from an IR literal. The cells are still declared as
+    // Role::Input in the manifest and listed in cell_map.inputs so validate_input
+    // seeds and dtype/enum-gates them.
     // Governed bracket rate table (literal governed-data cells).
     for (k, c) in [
         literal_num(CELL_BRACKET1_BOUND, 0.0),

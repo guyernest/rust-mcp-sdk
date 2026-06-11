@@ -1,28 +1,4 @@
 {
-  "1_Inputs!B2": {
-    "key": "1_Inputs!B2",
-    "expr": {
-      "Literal": {
-        "Number": 60000.0
-      }
-    }
-  },
-  "1_Inputs!B3": {
-    "key": "1_Inputs!B3",
-    "expr": {
-      "Literal": {
-        "Text": "single"
-      }
-    }
-  },
-  "1_Inputs!B4": {
-    "key": "1_Inputs!B4",
-    "expr": {
-      "Literal": {
-        "Number": 12000.0
-      }
-    }
-  },
   "2_Brackets!A2": {
     "key": "2_Brackets!A2",
     "expr": {

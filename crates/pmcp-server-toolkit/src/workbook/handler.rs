@@ -632,6 +632,38 @@ mod tests {
     }
 
     #[test]
+    fn calculate_honors_non_default_input() {
+        // CR-01 (92-VERIFICATION.md, Blocker 1): a caller-supplied input MUST drive
+        // the computation, not be silently discarded in favour of the bundle's
+        // baked-in default (gross_income=60000). Before this plan, the fixture
+        // generator emitted the input cells as IR literals and the executor's
+        // literal arm re-seeded them at topo-walk time, clobbering validate_input's
+        // caller seed — so this assertion would have FAILED returning 48000.0.
+        let handler = CalculateHandler::new(golden_bundle());
+
+        // gross_income 100000, default deduction 12000 => taxable_income 88000.
+        let v = handler
+            .compute(json!({ "inputs": { "gross_income": 100000.0 } }))
+            .expect("calculate honors a non-default gross_income");
+        assert_eq!(
+            v["outputs"]["taxable_income"]["value"],
+            json!(88000.0),
+            "taxable_income reflects the caller's gross_income (100000 - 12000), not the default"
+        );
+
+        // A DIFFERENT non-default input also flows (guards against a single-value
+        // coincidence): gross_income 80000 - 12000 => 68000.
+        let v = handler
+            .compute(json!({ "inputs": { "gross_income": 80000.0 } }))
+            .expect("calculate honors a second non-default gross_income");
+        assert_eq!(
+            v["outputs"]["taxable_income"]["value"],
+            json!(68000.0),
+            "a second caller input flows through (80000 - 12000)"
+        );
+    }
+
+    #[test]
     fn calculate_invalid_input_returns_iserror_in_structured_content() {
         let bundle = golden_bundle();
         let handler = CalculateHandler::new(bundle.clone());
