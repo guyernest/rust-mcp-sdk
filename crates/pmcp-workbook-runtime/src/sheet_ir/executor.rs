@@ -121,7 +121,15 @@ pub fn run(
                 expr: CellExpr::Literal(v),
                 ..
             }) => {
-                env = env.seed_cell(&key, v);
+                // Seed-preserving: a caller-seeded value (pre-loaded into `seed`
+                // by `validate_input`) WINS over an IR literal of the same key. The
+                // executor's seed contract is that `Role::Input` cells are ABSENT
+                // from `ir`; this guard is defense-in-depth so a future
+                // compiler-emitted bundle that repeats the input-literal shape can
+                // no longer silently clobber a validated caller seed (CR-01).
+                if env.get(&key).is_none() {
+                    env = env.seed_cell(&key, v);
+                }
                 if let CellValue::Error(err) = v {
                     errs.insert(key.clone(), *err);
                 }
