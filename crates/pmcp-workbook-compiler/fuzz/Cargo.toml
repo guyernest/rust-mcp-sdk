@@ -1,0 +1,27 @@
+[package]
+name = "pmcp-workbook-compiler-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+license = "MIT OR Apache-2.0"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+pmcp-workbook-compiler = { path = ".." }
+
+# Why: keeps the fuzz crate isolated from the main workspace (matches the
+# pmcp-server-toolkit fuzz pattern) so the workspace root's lints/deps don't
+# bleed into the libfuzzer-sys nightly-only build. cargo-fuzz builds with
+# `--cfg fuzzing`, which enables the compiler crate's `#[cfg(fuzzing)]`
+# `fuzz_read_parts` hook over the quarantined raw provenance reader.
+[workspace]
+
+[[bin]]
+name = "fuzz_provenance_reader"
+path = "fuzz_targets/fuzz_provenance_reader.rs"
+doc = false
+test = false
+bench = false
