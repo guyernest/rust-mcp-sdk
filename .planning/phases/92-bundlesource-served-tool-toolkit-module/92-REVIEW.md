@@ -1,8 +1,8 @@
 ---
 phase: 92-bundlesource-served-tool-toolkit-module
-reviewed: 2026-06-10T21:46:26Z
+reviewed: 2026-06-11T01:05:35Z
 depth: standard
-files_reviewed: 33
+files_reviewed: 34
 files_reviewed_list:
   - crates/pmcp-server-toolkit/Cargo.toml
   - crates/pmcp-server-toolkit/examples/workbook_server_http.rs
@@ -34,238 +34,311 @@ files_reviewed_list:
   - crates/pmcp-workbook-runtime/src/bundle_source.rs
   - crates/pmcp-workbook-runtime/src/lib.rs
   - crates/pmcp-workbook-runtime/src/manifest_model.rs
+  - crates/pmcp-workbook-runtime/src/sheet_ir/executor.rs
   - crates/pmcp-workbook-runtime/tests/fixtures/embedded_bundle/evidence/changelog.json
   - crates/pmcp-workbook-runtime/tests/fixtures/embedded_bundle/manifest.json
   - docs/workbook-uri-spec.md
 findings:
-  critical: 1
+  critical: 0
   warning: 7
-  info: 8
-  total: 16
+  info: 6
+  total: 13
 status: issues_found
 ---
 
 # Phase 92: Code Review Report
 
-**Reviewed:** 2026-06-10T21:46:26Z
+**Reviewed:** 2026-06-11T01:05:35Z
 **Depth:** standard
-**Files Reviewed:** 33
+**Files Reviewed:** 34
 **Status:** issues_found
 
 ## Summary
 
-Phase 92 adds the governed-Excel workbook served-tool module: the `BundleSource`
-trait + fail-closed `BundleLoader` in `pmcp-workbook-runtime`, and the five
-served tools (`calculate`/`explain`/`get_manifest`/`diff_version`/
-`render_workbook`) + `workbook://` render resource in `pmcp-server-toolkit`,
-plus the committed `tax-calc@1.1.0` golden fixture and its generator/tamper
-test harness.
+Final post-gap-closure review of the Phase 92 workbook served-tool module: the
+runtime `BundleSource`/`BundleLoader` surface, the five toolkit handlers, the
+strict input gate, the `workbook://` codec/resource, the golden fixture +
+generator, and the published URI spec.
 
-The hardening architecture (frozen member allow-set, integrity recompute via
-the shared hasher, stamp binding, URI size guard, total decode, provenance
-verification, input re-validation on read) is genuinely well-constructed, and
-the negative-path test coverage is broad. However, the review found **one
-empirically-verified critical correctness defect**: for the committed golden
-bundle, caller-supplied inputs and overrides are **silently ignored** — every
-`calculate`/`explain`/`render_workbook` call computes from the bundle's baked-in
-default inputs. The test suite cannot detect this because every value-bearing
-test supplies inputs equal to the defaults. Several fail-open gaps in the
-validation and loader paths were also found.
+The headline gap closures verify as fixed: the fixture generator no longer emits
+`Role::Input` cells as IR literals (confirmed in the committed
+`executable.ir.json` — only bracket constants and output formulas are present);
+the executor's literal arm is seed-preserving in `env`; `validate_input` rejects
+`Role::Output`/`Role::Formula` overrides with `unsupported_option`;
+`project_outputs` fails closed on a declared-but-uncomputed output; and the
+loader rejects an absent `layout.source_workbook_hash` anchor instead of
+vacuously passing `"" == ""`. Default-path arithmetic was traced end-to-end
+(60000/12000 → 48000/4800/0.08/0.22) and matches both the layout snapshot and
+the handler tests.
 
-## Critical Issues
-
-### CR-01: Caller inputs and overrides are silently ignored — the golden bundle's IR literals clobber the validated seeds
-
-**File:** `crates/pmcp-server-toolkit/tests/support/fixture_gen.rs:132-184` (root cause), `crates/pmcp-server-toolkit/src/workbook/handler.rs:50-61` (affected path)
-**Issue:** The executor contract (`pmcp-workbook-runtime/src/sheet_ir/executor.rs:90-91`) is explicit: the seed env "carries pre-loaded `Role::Input` cells … (cells **ABSENT** from `ir`)". The executor's literal arm (`executor.rs:118-129`) unconditionally calls `env.seed_cell(&key, v)` for every IR cell holding a `CellExpr::Literal`, and `CellEnv::seed_cell` (`eval_bridge.rs:57-62`) does an unconditional `HashMap::insert` — **overwriting** any caller-seeded value for that key. The Phase 92 fixture generator violates the contract: `build_ir()` (`fixture_gen.rs:135-142`) inserts all three input cells (`1_Inputs!B2/B3/B4`) into the IR as literals carrying the defaults. Because `build_dag` adds every IR key as a node, the topo walk visits each input cell **before** its dependents and replaces the caller's validated seed with the baked-in default.
-
-Net effect, **empirically verified** against the committed golden (probe run during this review):
-
-```
-calculate { gross_income: 100000 }  →  taxable_income = 48000   (i.e. 60000 − 12000, the defaults)
-                                       expected 88000 (100000 − 12000)
-```
-
-Every input-bearing served surface is affected: `calculate`, `explain`, `render_workbook`, and the `workbook://` regen-on-read pipeline (the rendered `.xlsx` is byte-identical regardless of the inputs encoded in the URI). Overrides are equally ineffective while still being reported in `accepted_overrides` — the response actively misrepresents what was computed, under a valid provenance stamp. For a governance-focused feature whose whole premise is "the served numbers are the governed computation over YOUR inputs", this is a silent correctness failure.
-
-The test suite is structurally blind to it: `handler.rs:610`, `render_resource.rs:203`, and every other value-bearing test passes `gross_income: 60000.0` / `filing_status: "single"` — exactly the IR-literal defaults — and asserts only key presence, never an input-dependent value.
-
-**Fix:** Two coordinated changes plus a regression test:
-1. In `build_ir()`, do NOT emit `Role::Input` cells as IR literals (honoring the executor's documented seed contract). The tier-default seeding in `validate_input` step 1 (`input.rs:103-109`) already guarantees omitted inputs resolve, so the formula refs stay satisfied:
-```rust
-fn build_ir() -> BTreeMap<String, Cell> {
-    let mut ir: BTreeMap<String, Cell> = BTreeMap::new();
-    // Input cells are deliberately ABSENT from the IR: they are seeded per call
-    // (executor contract — an IR literal would clobber the caller's seed).
-    // Governed bracket rate table only:
-    for (k, c) in [ ... bracket literals ... ] { ir.insert(k, c); }
-    // Outputs (formulas) ...
-}
-```
-   Then regenerate the committed golden via the `regenerate_committed_golden` ignored test.
-2. Add a value-asserting regression test using a NON-default input, e.g.:
-```rust
-let v = handler.compute(json!({ "inputs": { "gross_income": 100000.0 } })).unwrap();
-assert_eq!(v["outputs"]["taxable_income"]["value"], json!(88000.0));
-```
-3. Defense in depth (recommended): either make the executor's literal arm seed-preserving (`if env.get(&key).is_none() { env = env.seed_cell(&key, v); }`) or have `load_bundle`/`run_bundle` reject a bundle whose `cell_map.inputs` seed coordinates appear in the IR — otherwise any future compiler-emitted bundle that repeats this shape reintroduces the bug silently.
+The remaining defects are second-order but real: the **inputs** path still
+lacks the role-kind gate that 92-07 added to the **overrides** path (the same
+output-forging vector under a cell_map/manifest skew the module's own WR-05
+comments treat as a live threat); the executor's CR-01 defense-in-depth is only
+half-applied (`computed`/`errs` still record the clobbering IR literal);
+`encode` can mint URIs that violate its own size bound and can therefore never
+be read back; and the published crate ships an example whose `include_dir!`
+target is excluded from the package. No Critical findings.
 
 ## Warnings
 
-### WR-01: Loader verifies one set of bytes but parses a second read (double-fetch / TOCTOU in the integrity gate)
+### WR-01: `inputs` path lacks the role-kind gate the `overrides` path got — cell_map skew can seed computed cells through `inputs`
 
-**File:** `crates/pmcp-workbook-runtime/src/bundle_loader.rs:286,316-320`
-**Issue:** `load` computes the evidence hash by reading `cell_map.json`, `layout.json`, `evidence/changelog.json`, `evidence/parser_equivalence.json` inside `recompute_evidence_hash` (line 286), then **re-reads** `cell_map.json` / `layout.json` / `evidence/changelog.json` from the source at lines 316-320 to parse them. The bytes that pass the integrity gate are therefore not guaranteed to be the bytes the server actually serves: with a `LocalDirSource`, a writer racing the boot window can swap a member between the hash read and the parse read, defeating the gate's central guarantee. The inconsistency is telling — `ir_bytes`/`manifest_bytes` ARE correctly read once and reused for both hashing and parsing (lines 283-315), so the double-fetch on the other three members looks unintended.
-**Fix:** Read every member exactly once up front into a map (or struct of buffers), feed those buffers to both the evidence fold and the parsers:
+**File:** `crates/pmcp-server-toolkit/src/workbook/input.rs:113-133`
+**Issue:** The 92-07 fix added a fail-closed arm rejecting `overrides` that
+target `Role::Output`/`Role::Formula` cells (input.rs:153-158), because after
+the 92-06 seed-preserving executor "a seeded output now wins over the IR
+formula" (output forging). But the **`inputs`** loop (step 2) only requires
+that the `cell_map.inputs` entry's `seed_coord` has *some* manifest role — it
+never checks that the role is `Role::Input`. The module's own WR-05 rationale
+states the threat model explicitly: "the manifest and cell_map are separate
+embedded artifacts and can skew across a partial regeneration." Under exactly
+that skew — a `cell_map.inputs` entry whose `seed_coord` resolves to a
+`Role::Output`, `Role::Formula`, or strict `Role::Constant` cell — a caller
+value passes `check_value_dtype` and is seeded directly, and the
+seed-preserving executor then lets it win. That is the same forging vector
+WR-02 closed for overrides, still open one loop earlier, and it additionally
+bypasses the V4 strict-constant rejection (which only guards `overrides`).
+**Fix:** Mirror the overrides gate in the inputs loop:
 ```rust
-let cell_map_bytes = read_member(source, MEMBER_CELL_MAP)?;
-let layout_bytes = read_member(source, MEMBER_LAYOUT)?;
-let changelog_bytes = read_member(source, MEMBER_CHANGELOG)?;
-let parser_equiv_bytes = read_member(source, MEMBER_PARSER_EQUIV)?;
-let evidence_hash = fold_evidence(&[(MEMBER_CELL_MAP, &cell_map_bytes), ...]);
-// later: parse_member(&cell_map_bytes, MEMBER_CELL_MAP)? — same bytes that were hashed
-```
-
-### WR-02: Overrides are accepted on `Role::Output` and `Role::Formula` cells (fails open against the documented variable-tier contract)
-
-**File:** `crates/pmcp-server-toolkit/src/workbook/input.rs:141-160,242-247`
-**Issue:** The override gate rejects strict constants (`is_strict_constant`) and unknown keys, but the accept arm `Some(r) => { ... seeds.insert(r.cell.clone(), ...) }` has no role filter: `find_role_by_key` matches ANY manifest cell by `name` or `cell`, so `overrides: { "out_tax_owed": 0 }` or `overrides: { "3_Outputs!B3": 0 }` is ACCEPTED, seeded, and echoed back in `accepted_overrides`. The docs (`input.rs:55-56`, schema description `schema.rs:308-309`) promise "variable-tier parameter overrides" only — and `variable_tier_keys` (line 251-258) itself excludes `Role::Output | Role::Formula` from the allowed-alternatives list, so the accept arm contradicts the module's own allow-list. Today the seeded output value is recomputed-over by the executor's formula arm, masking the impact — but if CR-01 is fixed in the "seeds win over IR" direction (option 3), this becomes a live output-forging vector: a caller could pin a served output to an arbitrary value under a valid provenance stamp.
-**Fix:** Mirror the `variable_tier_keys` filter in the accept arm:
-```rust
-Some(r) if matches!(r.role, Role::Output | Role::Formula) => {
-    return Err(WorkbookToolError::unsupported_option(
-        key.clone(),
-        variable_tier_keys(manifest),
-    ));
-},
-```
-
-### WR-03: The inputs path never checks the resolved manifest role is `Role::Input` — a skewed cell_map can route caller input onto a BA-governed constant
-
-**File:** `crates/pmcp-server-toolkit/src/workbook/input.rs:124-135`
-**Issue:** Step 2 resolves the supplied input's `seed_coord` to a manifest role and rejects when NO role exists (WR-05 fail-closed), but accepts any role kind that IS found. A skewed `cell_map.inputs` entry whose `seed_coord` points at a `Role::Constant` cell (the exact manifest/cell_map partial-regeneration skew the module's own WR-05 comment warns about, lines 12-16) lets a caller seed a strict BA-governed constant through `inputs`, bypassing the V4 strict-constant protection that guards only the `overrides` map. The gate already holds the `role` value — the check is one line away.
-**Fix:** After resolving `role`, fail closed on non-input roles:
-```rust
+let role = pmcp_workbook_runtime::role_for_cell(manifest, &entry.seed_coord)
+    .ok_or_else(|| /* existing WR-05 arm */)?;
 if !matches!(role.role, Role::Input) {
     return Err(WorkbookToolError::invalid_input(format!(
-        "internal: input '{key}' maps to {} whose manifest role is not an input",
+        "internal: input '{key}' maps to {} which is not a Role::Input cell",
         entry.seed_coord
     )));
 }
 ```
+Add a companion test (skewed `cell_map` pointing an input at `3_Outputs!B3`)
+alongside `cell_map_entry_without_manifest_role_is_rejected_fail_closed`.
 
-### WR-04: `project_outputs` silently drops outputs missing from the run result (fails open on cell_map/IR skew)
+### WR-02: Seed-preserving literal arm is half-applied — `computed` and `errs` still record the clobbering IR literal
 
-**File:** `crates/pmcp-server-toolkit/src/workbook/handler.rs:77-80`
-**Issue:** `let Some(value) = run.computed.get(&entry.seed_coord) else { continue; };` — an output declared in the verified `cell_map` whose seed coordinate was never computed (cell_map/IR skew, a partial regeneration) simply vanishes from the success payload. The client receives a success-shaped result with a valid provenance stamp and a subset of the advertised outputs, with no signal anything is wrong. This is exactly the `if let Some(...) skip that fails open` pattern the input module's docs (`input.rs:10-11`) forbid, and it contradicts WBSV-07 (the advertised `outputSchema` enumerates every named output).
-**Fix:** Replace the `continue` with a fail-closed error:
+**File:** `crates/pmcp-workbook-runtime/src/sheet_ir/executor.rs:119-137`
+**Issue:** The CR-01 guard preserves a caller seed in `env` only:
 ```rust
-let Some(value) = run.computed.get(&entry.seed_coord) else {
-    return Err(WorkbookToolError::invalid_input(format!(
-        "internal: declared output '{}' ({}) was not computed by the bundle IR",
-        entry.json_key, entry.seed_coord
-    )));
-};
+if env.get(&key).is_none() {
+    env = env.seed_cell(&key, v);
+}
+if let CellValue::Error(err) = v {
+    errs.insert(key.clone(), *err);
+}
+computed.insert(key.clone(), v.clone());
+```
+When a seed wins, `computed[key]` still records the bundle's baked-in literal
+`v` (not the value downstream formulas actually consumed from `env`), and a
+literal `CellValue::Error` is still inserted into `errs` even though the seed
+overrode it. For the very bundle shape this guard exists to defend against
+(input cells repeated as IR literals), `RunResult.computed` diverges from the
+computation: any consumer of `computed` for that cell — `project_outputs` if
+the cell is also a declared output, or future trace/evidence consumers — sees
+the stale default while the formulas used the caller's value. The
+defense-in-depth is therefore only half a defense.
+**Fix:** Make the whole arm seed-aware:
+```rust
+match env.get(&key) {
+    Some(seeded) => {
+        computed.insert(key.clone(), from_json(seeded));
+    },
+    None => {
+        env = env.seed_cell(&key, v);
+        if let CellValue::Error(err) = v {
+            errs.insert(key.clone(), *err);
+        }
+        computed.insert(key.clone(), v.clone());
+    },
+}
 ```
 
-### WR-05: `encode` has no size guard — the server can mint `workbook://` URIs its own read side will always reject
+### WR-03: `encode` does not enforce `MAX_ENCODED_URI_LEN` — `render_workbook` can mint pointers that always fail `resources/read`
 
-**File:** `crates/pmcp-server-toolkit/src/workbook/render_uri.rs:143-153`
-**Issue:** `decode` enforces `MAX_ENCODED_URI_LEN` (64 KiB) but `encode` does not. A `Dtype::Text` input WITHOUT `allowed_values` (a legal manifest shape per `manifest_model.rs:131` — `None` means the input "stays DYNAMIC") accepts arbitrarily long strings through `validate_input`, so `render_workbook` can return a success result carrying a URI longer than the bound — a dead pointer every `resources/read` rejects as `BadUri`. The published spec (`docs/workbook-uri-spec.md` §4) says "a conforming workbook input set must encode within it", but nothing enforces conformance at mint time; the failure surfaces on a later read as a confusing protocol error instead of an actionable domain error at the tool call.
-**Fix:** Check the bound in `encode` and return the domain error there:
+**File:** `crates/pmcp-server-toolkit/src/workbook/render_uri.rs:121-128`
+**Issue:** `decode` enforces the 64 KiB bound, but `encode` does not. A
+`Dtype::Text` input with no `allowed_values` accepts arbitrarily long strings
+(`check_value_dtype` has no length cap), so a caller can supply a large text
+input, get a *successful* `render_workbook` response carrying a
+`workbook://` URI longer than `MAX_ENCODED_URI_LEN`, and then every
+`resources/read` of that URI is rejected by the size guard — a success-shaped
+result that is permanently unreadable. The spec (docs/workbook-uri-spec.md §4)
+says "a conforming workbook input set must encode within it," but nothing
+enforces conformance at mint time; the failure surfaces late, on the wrong
+operation, with a misleading "invalid URI" diagnostic. (Not triggerable with
+the committed golden — its only text input is enum-bound — but live for any
+bundle with a free-text input.)
+**Fix:** Check the bound at mint time and return a domain error:
 ```rust
 let uri = format!("{RENDER_URI_PREFIX}{b64}");
 if uri.len() > MAX_ENCODED_URI_LEN {
     return Err(WorkbookToolError::invalid_input(format!(
-        "inputs too large to encode: the workbook:// URI would exceed the \
-         {MAX_ENCODED_URI_LEN}-byte limit ({} bytes)", uri.len()
+        "rendered inputs encode to {} bytes, exceeding the {MAX_ENCODED_URI_LEN}-byte workbook:// limit",
+        uri.len()
     )));
 }
 Ok(uri)
 ```
 
-### WR-06: Example `--bundle-dir` parsing fails open — a missing value silently serves the embedded bundle instead
+### WR-04: Published crate ships an example whose `include_dir!` target is excluded from the package
+
+**File:** `crates/pmcp-server-toolkit/Cargo.toml:16` and `crates/pmcp-server-toolkit/examples/workbook_server_http.rs:50`
+**Issue:** The package `exclude` list contains `"tests/"`, but the canonical
+D-12 example bakes the golden via
+`include_dir!("$CARGO_MANIFEST_DIR/tests/fixtures/tax-calc@1.1.0")`. Examples
+ARE included in the published `.crate`; `tests/` is not. Any downstream user
+who tries `cargo build --example workbook_server_http --features
+workbook-embedded,http` against the published crate (or vendors the crate and
+runs its examples) gets a compile-time `include_dir!` failure on a missing
+directory. This silently breaks the project's own "EXAMPLE Demonstration
+(ALWAYS REQUIRED)" contract for the published artifact, and `cargo publish`'s
+verify step won't catch it (examples are not built during verification).
+**Fix:** Either (a) move a small committed bundle for the example under
+`examples/fixtures/` (included in the package) and point both the example and
+an `#[ignore]`d parity test at it, or (b) exclude the example from the package
+(`exclude = ["examples/workbook_server_http.rs", ...]`) and document it as a
+workspace-only example. Option (a) preserves the published example contract.
+
+### WR-05: `get_manifest` advertises input names that the `calculate` tool rejects
+
+**File:** `crates/pmcp-server-toolkit/src/workbook/handler.rs:344-360` (with `tests/support/fixture_gen.rs:227-264` and `tests/fixtures/tax-calc@1.1.0/cell_map.json`)
+**Issue:** The curated manifest projection emits `"name": role.name` — for the
+golden, `in_gross_income` / `in_filing_status` / `in_deductions`. But
+`calculate`/`explain`/`render_workbook` accept inputs keyed by the cell_map
+`json_key` — `gross_income` / `filing_status` / `deductions`. An agent that
+reads the "curated agent-facing" `get_manifest` projection and then calls
+`calculate` with `{"inputs": {"in_gross_income": ...}}` gets an
+`invalid_input` rejection. This contradicts the module's own self-repair
+design goal (machine-actionable surfaces), and the fixture also drifts from
+the documented `plot3_key` precedence (manifest_model.rs:167 says the cell_map
+emitter and schema builders share `plot3_key` "so the precedence cannot
+drift" — `plot3_key` would have produced `in_gross_income` as the json_key,
+yet the hand-authored cell_map uses `gross_income`; `plot3_key` is not
+referenced anywhere in the toolkit workbook module or fixture generator).
+**Fix:** Have `input_projection` carry the wire key: resolve each
+`Role::Input` cell through `cell_map.inputs` and emit
+`"name": entry.json_key` (or add a distinct `"json_key"` field alongside the
+manifest name). Add a test asserting every `get_manifest` input name is
+accepted by `validate_input`.
+
+### WR-06: Loader hashes one read of cell_map/layout/changelog, then parses a second read — verified bytes are not the parsed bytes
+
+**File:** `crates/pmcp-workbook-runtime/src/bundle_loader.rs:295,325-329`
+**Issue:** `recompute_evidence_hash` reads `cell_map.json`, `layout.json`,
+`evidence/changelog.json`, and `evidence/parser_equivalence.json` and folds
+them into the integrity hash; step 3 then calls `read_member` **again** on
+cell_map/layout/changelog and parses those fresh bytes. For a
+`LocalDirSource` on a mutable volume (the example's documented
+`--bundle-dir` "newly promoted bundle dropped onto a mounted volume" flow), a
+member swapped between the two reads means the bundle that passed the
+integrity gate is not the bundle being served — a verify-then-re-read
+(TOCTOU) gap. `ir_bytes`/`manifest_bytes` already get this right (read once,
+hash and parse the same buffer); the evidence-fold members do not. The
+attacker model is weak (a dir writer can re-mint the unkeyed lock anyway),
+but the gate also exists for accidental mid-promote corruption, where this
+window admits exactly the skew the gate is supposed to exclude.
+**Fix:** Read each member once and reuse the bytes for both the fold and the
+parse — e.g. have `recompute_evidence_hash` return the
+`Vec<(member, Vec<u8>)>` bodies (or read all seven members up front into a
+map) and parse from those buffers in step 3.
+
+### WR-07: Example silently serves the embedded bundle when `--bundle-dir` is malformed
 
 **File:** `crates/pmcp-server-toolkit/examples/workbook_server_http.rs:67-72`
-**Issue:** `std::env::args().skip_while(|a| a != "--bundle-dir").nth(1)` yields `None` both when the flag is absent AND when it is supplied without a value (`--bundle-dir` as the last arg). In the second case the operator believes they pointed the server at an out-of-band updated bundle, but the binary silently falls back to the baked-in embedded golden and serves stale governed logic. The example's own doc comment (lines 19-24) sells exactly this operator workflow as the live-update seam, so the silent fallback is an operational hazard, not just a UX nit. The naive scan also mis-fires if the literal string `--bundle-dir` appears as a VALUE of another argument.
-**Fix:** Treat a flag-without-value as a hard error:
+**Issue:** `std::env::args().skip_while(|a| a != "--bundle-dir").nth(1)`
+yields `None` when `--bundle-dir` is the last argument, and never matches the
+`--bundle-dir=path` form at all. In both cases the example silently falls back
+to the embedded golden. This example is documented as THE operator path for
+"point the SAME binary at a workbook updated OUT-OF-BAND" — a typo'd flag
+silently serving stale baked-in spreadsheet logic is precisely the silent
+fallback the phase's fail-closed philosophy forbids elsewhere (compare the
+loader's `<absent>` anchor rejection). It also misparses orderings where a
+later flag's value could be consumed as the directory.
+**Fix:** Parse explicitly and fail loudly:
 ```rust
 let mut args = std::env::args().skip(1);
-let bundle_dir = match args.position(|a| a == "--bundle-dir") {
-    Some(_) => Some(args.next().ok_or("--bundle-dir requires a path argument")?),
+let bundle_dir = match args.find(|a| a == "--bundle-dir" || a.starts_with("--bundle-dir=")) {
+    Some(a) if a.contains('=') => a.split_once('=').map(|(_, v)| v.to_string()),
+    Some(_) => Some(args.next().ok_or("--bundle-dir requires a directory argument")?),
     None => None,
 };
 ```
-
-### WR-07: Stamp binding passes vacuously when both the layout anchor and the lock hash are empty
-
-**File:** `crates/pmcp-workbook-runtime/src/bundle_loader.rs:216-226`
-**Issue:** The comment claims "An ABSENT anchor makes the binding impossible — fail closed", but the code is `layout.source_workbook_hash.as_deref().unwrap_or("")` compared against `lock.workbook_hash`: a bundle whose layout omits `source_workbook_hash` (`None`) AND whose lock records `workbook_hash: ""` satisfies `"" == ""` and passes the T-92-02 gate. Nothing in `build_bundle_lock` rejects an empty `workbook_hash`, so this fail-open arm sits inside a security gate while its own comment asserts the opposite.
-**Fix:** Reject the absent anchor explicitly before comparing:
-```rust
-let Some(layout_hash) = layout.source_workbook_hash.as_deref() else {
-    return Err(BundleLoadError::StampMismatch {
-        field: "workbook_hash",
-        lock_value: lock.workbook_hash.clone(),
-        member_value: "<absent>".to_string(),
-        member: "layout.json (source_workbook_hash)",
-    });
-};
-```
-(and optionally reject an empty `lock.workbook_hash` in the same gate).
+(plus reject an empty value).
 
 ## Info
 
-### IN-01: Stale module documentation describes the skeleton state
+### IN-01: Stale section cross-references in the published URI spec
 
-**File:** `crates/pmcp-server-toolkit/src/workbook/mod.rs:9-24`
-**Issue:** The "Wiring discipline" section still says the submodule declarations "stay COMMENTED until the plan that creates each file uncomments the matching `pub mod` line" — all six `pub mod` lines (57-62) are live and the handlers exist. The paragraph documents a transitional state that no longer exists.
-**Fix:** Rewrite the section in the past tense or delete it.
+**File:** `docs/workbook-uri-spec.md:9,120`
+**Issue:** The top blockquote says "Format changes to the `workbook://` scheme
+are versioned decisions … see §7", and §6 says "That is a versioned change
+(§7)". The versioning section is §8 ("Versioning decision note (D-16)"); §7 is
+the rate-limiting note. Two stale cross-references in a document that declares
+itself a published, versioned contract.
+**Fix:** Point both references at §8.
 
-### IN-02: `explain` steps are lexicographically ordered by cell key, not derivation order
+### IN-02: The single advertised resource URI is itself unreadable
 
-**File:** `crates/pmcp-server-toolkit/src/workbook/handler.rs:244-247,308-311`
-**Issue:** `render_steps` sorts trace keys lexicographically; the tool description advertises an "ordered business-language derivation trace". For the golden's `1_/2_/3_` sheet-name convention the two coincide, but for any bundle whose sheet names do not sort in dependency order, a step can reference operand values whose own derivation appears LATER in the list. Topological order (the executor already walks it) is the truthful ordering.
-**Fix:** Emit steps in the executor's topo order (e.g. carry an ordered trace list in `RunResult`, or re-toposort `bundle.dag` and filter to traced keys), or soften the description to "deterministically ordered".
+**File:** `crates/pmcp-server-toolkit/src/workbook/render_resource.rs:54,72-80`
+**Issue:** `resources/list` advertises `workbook://render/` (the bare prefix).
+Reading that exact URI always fails: the empty body base64-decodes to zero
+bytes and JSON-parse rejects it (`RegenError::BadUri` → INVALID_PARAMS). A
+generic MCP client that iterates `resources/list` → `resources/read` will hit
+a guaranteed error on the only listed resource. The design is deliberate (a
+"stable, listable handle"), but the error message ("URI payload is not
+valid") doesn't explain that concrete URIs are minted by `render_workbook`.
+**Fix:** Special-case the bare prefix in `read` with a descriptive
+INVALID_PARAMS message ("this is the scheme root; call render_workbook to
+mint a readable workbook://render/<payload> URI").
 
-### IN-03: A DAG cycle is misclassified as the caller-repairable `invalid_input` code
+### IN-03: `get_manifest`/`diff_version` advertise `additionalProperties:false` but ignore arguments at runtime
 
-**File:** `crates/pmcp-server-toolkit/src/workbook/handler.rs:58-60`
-**Issue:** `run_bundle` maps an executor cycle failure to `WorkbookToolError::invalid_input("executor failed: ...")`. By the module's own taxonomy (`mod.rs:26-38`) a cyclic bundle is an infrastructure/bundle defect — no input change can repair it — yet the agent receives the "fix your argument" self-repair code.
-**Fix:** Either surface it as a protocol-level internal error (the infrastructure class) or add a distinct non-repairable code; at minimum document why `invalid_input` was chosen.
+**File:** `crates/pmcp-server-toolkit/src/workbook/schema.rs:318-320` and `crates/pmcp-server-toolkit/src/workbook/handler.rs:415,497`
+**Issue:** `empty_input_schema()` advertises a strict empty object, but both
+handlers take `_args: Value` and never validate, so a call with junk arguments
+succeeds silently — the schema promises a strictness the runtime doesn't
+enforce (unlike `calculate`, whose `deny_unknown_fields` DTO mirrors its
+schema).
+**Fix:** Reject non-empty argument objects with the existing
+`invalid_input` envelope, or relax the advertised schema.
 
-### IN-04: Input schema advertises roleless cell_map entries as valid `number` inputs the runtime then rejects
+### IN-04: DAG cycle (a malformed bundle) is classified as the domain error `invalid_input`
 
-**File:** `crates/pmcp-server-toolkit/src/workbook/schema.rs:277-278`
-**Issue:** `input_schema_for_manifest` falls back to `Dtype::Number` when a cell_map input has no manifest role and still advertises the property — but `validate_input` (WR-05 gate, `input.rs:124-133`) rejects any supplied value for that key as an internal-consistency error. The module doc (`schema.rs:9-10`) promises "a client trusting the schema never sends a key the runtime then rejects"; this is the one path where it does.
-**Fix:** Skip roleless entries in the schema projection (`let Some(role) = role_for_seed(...) else { continue; }`) so the advertised surface mirrors the gate.
+**File:** `crates/pmcp-server-toolkit/src/workbook/handler.rs:50-61`
+**Issue:** `run_bundle` maps an executor cycle finding to
+`WorkbookToolError::invalid_input("executor failed: …")`. Per the module's own
+domain-vs-infrastructure doctrine (workbook/mod.rs and workbook/error.rs
+module docs), a cyclic DAG in a boot-verified bundle is an infrastructure
+fault, not a caller-repairable input problem — the `invalid_input` self-repair
+code tells the agent to fix arguments that are not at fault. The comment
+acknowledges the choice ("impossible for a conforming bundle"), so this is
+recorded as a classification inconsistency, not a bug.
+**Fix:** Consider an `internal`-style code (or a protocol `Err` from the
+handler boundary) for executor faults the caller cannot repair.
 
-### IN-05: The published crate's `workbook_server_http` example cannot compile from the crates.io artifact
+### IN-05: `LocalDirSource::read_artifact` joins unsanitized member names
 
-**File:** `crates/pmcp-server-toolkit/Cargo.toml:16`, `crates/pmcp-server-toolkit/examples/workbook_server_http.rs:50`
-**Issue:** `examples/` ships in the published package, but the example's `include_dir!("$CARGO_MANIFEST_DIR/tests/fixtures/tax-calc@1.1.0")` points into `tests/`, which is `exclude`d from the artifact. Anyone building the example from the downloaded crate (`cargo build --examples --features workbook-embedded,http`) gets an opaque macro error. Latent (examples are not built for dependents), but a broken artifact nonetheless.
-**Fix:** Either exclude this example from the package, or document in the example header that it builds only from the repository checkout.
+**File:** `crates/pmcp-workbook-runtime/src/bundle_source.rs:157-168`
+**Issue:** `self.root.join(name)` performs no traversal check — a caller
+passing `"../../secret"` reads outside the bundle root. The shared loader only
+ever passes the seven frozen member constants, so this is unreachable through
+`load_bundle`, but `BundleSource` is a public trait/impl and future callers
+(or a future loader change) inherit the gap.
+**Fix:** Reject member names containing `..` components or absolute paths
+before joining (defense-in-depth on the public surface).
 
-### IN-06: Bundle member-name constants duplicated between the loader and the fixture generator
+### IN-06: Golden fixture's `filing_status` input affects no output
 
-**File:** `crates/pmcp-server-toolkit/tests/support/fixture_gen.rs:57-63`, `crates/pmcp-workbook-runtime/src/bundle_loader.rs:39-63`
-**Issue:** The seven member names and the evidence fold set are re-declared as private consts in both crates. The byte-stability test would catch a generator-side drift, but a loader-side rename would desync silently until a fixture regeneration. The plan's own Pitfall 2 ("the generator and loader MUST fold the identical set") argues for one definition.
-**Fix:** Export the member-name consts (and `EVIDENCE_FOLD_MEMBERS`) from `pmcp-workbook-runtime` and consume them in the generator.
-
-### IN-07: The integrity gate is self-referential — a wholesale bundle replacement passes every check
-
-**File:** `crates/pmcp-workbook-runtime/src/bundle_loader.rs:1-23`, `crates/pmcp-server-toolkit/src/workbook/mod.rs:166-171`
-**Issue:** `BUNDLE.lock` is unsigned and the recompute feeds the lock's own `bundle_id`/`version`/`workbook_hash` back into `build_bundle_lock`, so the gates detect corruption, partial swaps, and desyncs — but an attacker with write access to the bundle directory can regenerate a fully self-consistent lock and "verify" cleanly. The pervasive "tampered bundle aborts the boot" language can lead an operator to assume cryptographic authentication that is not there.
-**Fix:** Add one sentence to the loader/builder-ext docs distinguishing tamper-EVIDENCE (hash self-consistency) from tamper-PROOF (signature over the lock — a documented future seam).
-
-### IN-08: `get_manifest`/`diff_version` ignore their arguments despite advertising a strict empty input schema
-
-**File:** `crates/pmcp-server-toolkit/src/workbook/handler.rs:412,496`
-**Issue:** Both handlers advertise `empty_input_schema()` (`additionalProperties:false`) but accept any `_args` without validation — a caller sending junk arguments gets a clean success, unlike `calculate`/`explain` where the schema is mirrored by a runtime gate.
-**Fix:** Reject non-empty argument objects with an `invalid_input` envelope for consistency, or note the asymmetry in the handler docs.
+**File:** `crates/pmcp-server-toolkit/tests/support/fixture_gen.rs:115-171`
+**Issue:** `1_Inputs!B3` is seeded and enum-gated but referenced by no IR
+formula — every output is invariant under `filing_status`. The fixture still
+exercises the enum-membership gates (its purpose), but no test can ever catch
+a regression where an enum input's *value* fails to flow into a computation
+(the value-flow regression is covered only via the numeric `gross_income`).
+**Fix:** Optional hardening when the golden is next regenerated: make one
+output depend on `filing_status` so enum inputs are also covered by the
+value-flow regression tests.
 
 ---
 
-_Reviewed: 2026-06-10T21:46:26Z_
+_Reviewed: 2026-06-11T01:05:35Z_
 _Reviewer: Claude (gsd-code-reviewer)_
 _Depth: standard_
