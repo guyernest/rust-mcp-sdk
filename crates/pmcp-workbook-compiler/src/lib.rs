@@ -124,6 +124,26 @@ pub use reconcile::{
     reconcile as reconcile_oracle, ComparisonMap, GradedMismatch, ReconcileReport,
 };
 
+// The bundle-emit surface (WBCO-05/WBGV-07): the seven-member emitter (deterministic
+// serialization + bundle_id BUNDLE.lock via the runtime hash helpers + the WR-01
+// enum-tier skip) and its evidence/parser-equivalence record. The runtime hash
+// helpers (build_bundle_lock/fold_evidence_hash/sha256_hex/BundleLock) are already
+// re-exported above from the runtime — NOT re-routed through `artifact` here, so
+// there is exactly ONE definition of each.
+pub use artifact::{
+    build_cell_map, build_layout_descriptor, emit_bundle, parser_equivalence_json, CellEntry,
+    CellMap, EmitError, EvidenceInputs, LayoutDescriptor, ParserEquivalence,
+};
+
+// The change-class surface (WBGV-01/02/03): the symmetric demotion-aware classifier,
+// the strictest-policy reducer, the per-class routing policy + block message, the
+// canonical IR sub-DAG identity hash, and the output redefinition diff. `ChangeClass`
+// / `OutputDelta` / `VersionChangelog` are re-exported above from the runtime (the
+// served `diff_version` tool reads the SAME enum) — NEVER re-declared here.
+pub use change_class::{
+    block_message, classify, diff_outputs, effective_policy, ir_subdag_hash, policy, GatePolicy,
+};
+
 /// Compile a governed Excel workbook into a served bundle, promote-gating the
 /// result against the prior accepted version.
 ///
