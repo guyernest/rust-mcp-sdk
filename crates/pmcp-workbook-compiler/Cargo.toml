@@ -67,3 +67,13 @@ umya-spreadsheet = "3.0"
 # no quick-xml/zip type ever crosses a public signature (T-93-02-LEAK).
 quick-xml = "0.37"
 zip = "8.6"
+
+[dev-dependencies]
+# Test-only scratch dirs for the bundle-emit tests (no workspace artifacts leak).
+tempfile = "3"
+# The CONSUMER contract: the direct toolkit loader round-trip test
+# (`emitted_bundle_loads_via_toolkit`) loads an emitted temp bundle through the
+# Phase 92 served loader. The `workbook` feature pulls the LocalDirSource + the
+# fail-closed BundleLoader. Dev-only — the compiler never depends on the toolkit
+# at runtime (the purity boundary keeps umya out of the served tree).
+pmcp-server-toolkit = { version = "0.1.0", path = "../pmcp-server-toolkit", default-features = false, features = ["workbook"] }
