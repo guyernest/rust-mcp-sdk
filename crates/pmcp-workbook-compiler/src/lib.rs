@@ -107,6 +107,23 @@ pub use pmcp_workbook_runtime::sheet_ir::rounding::{excel_ceiling, excel_round, 
 // second WHITELIST copy would defeat the dialect crate's spec-binding test).
 pub use pmcp_workbook_dialect::{CandidateRole, DialectRules, WHITELIST};
 
+// The SERVE-time executor surface the compiler-side reconcile drives (the runtime's
+// pure-Rust executor — NO SWC/JS oracle; re-export, never re-declare). The O-1
+// parity proof depends on the compiler and the server reconciling through ONE path.
+pub use pmcp_workbook_runtime::{run_executor, CellEnv, EvalTrace, RunResult};
+
+// The manifest→CellSource wiring seam (93-02 ⋈ 93-03): the real WorkbookMap drives
+// the linter/parser/DAG through this adapter.
+pub use manifest::WorkbookCellSource;
+
+// The penny-reconcile surface (WBCO-04): the operand-anchored classifier, the D-03
+// named-output/helper severity split, and the collect-all driver.
+pub use reconcile::classifier::{MismatchClass, MismatchEvidence, BOUNDARY_EPSILON};
+pub use reconcile::drift::{is_named_output, mismatch_severity};
+pub use reconcile::{
+    reconcile as reconcile_oracle, ComparisonMap, GradedMismatch, ReconcileReport,
+};
+
 /// Compile a governed Excel workbook into a served bundle, promote-gating the
 /// result against the prior accepted version.
 ///
