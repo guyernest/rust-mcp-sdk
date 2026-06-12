@@ -1803,7 +1803,7 @@ Plans:
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [ ] 93-04-PLAN.md — manifest synth/ratify (annotations reconciled; inline-DV enums; range-DV warning) + operand-anchored reconcile (no delta.abs)
+- [x] 93-04-PLAN.md — manifest synth/ratify (annotations reconciled; inline-DV enums; range-DV warning) + operand-anchored reconcile (no delta.abs)
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
@@ -1866,7 +1866,7 @@ Plans:
 |-------|----------------|--------|-----------|
 | 91. Workbook Runtime + Purity Gate + Dialect | 3/3 | Complete    | 2026-06-10 |
 | 92. BundleSource + Served-Tool Toolkit Module | 7/7 | Complete    | 2026-06-11 |
-| 93. Workbook Compiler + §5 Fixes + Promote Gate | 3/7 | In Progress|  |
+| 93. Workbook Compiler + §5 Fixes + Promote Gate | 4/7 | In Progress|  |
 | 94. CLI Subcommands + `pmcp.toml` | 0/? | Not started | - |
 | 95. Shape A Binary `pmcp-workbook-server` | 0/? | Not started | - |
 | 96. Shape B Scaffold + Dialect-Version + Generalization | 0/? | Not started | - |
