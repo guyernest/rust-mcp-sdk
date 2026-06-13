@@ -88,7 +88,7 @@ pub enum CorpusError {
 /// captured automatically — NOT BA-authored).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct ApprovalCase {
-    /// The stable derived case identifier (e.g. `"default"`, `"enum:1_In!B3=boiler"`).
+    /// The stable derived case identifier (e.g. `"default"`, `"enum:1_In!B3=married"`).
     pub case_id: String,
     /// The auto-derived case input as a JSON object `{cell_key: value}` (the driver
     /// seeds it into the executor). A `BTreeMap`-backed object for determinism.

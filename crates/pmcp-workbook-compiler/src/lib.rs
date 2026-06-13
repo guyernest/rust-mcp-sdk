@@ -254,7 +254,11 @@ fn compile_workbook_inner(
     if report.has_errors() || report.is_hard_fail() {
         return Err(CompileError::Reconcile(format!(
             "{} named-output mismatch(es) against the cached oracle",
-            report.mismatches.iter().filter(|m| m.severity == Severity::Error).count()
+            report
+                .mismatches
+                .iter()
+                .filter(|m| m.severity == Severity::Error)
+                .count()
         )));
     }
 
@@ -352,11 +356,23 @@ fn build_ir_and_dag(
                     expr: expr.clone(),
                 });
                 let rebased = rebase_refs(&expr, &sheet.name);
-                ir.insert(key.clone(), Cell { key, expr: CellExpr::Formula(rebased) });
+                ir.insert(
+                    key.clone(),
+                    Cell {
+                        key,
+                        expr: CellExpr::Formula(rebased),
+                    },
+                );
             } else if governed.contains(key.as_str()) {
                 if let Some(value) = &cell.value {
                     let lit = parse_cell_value(value);
-                    ir.insert(key.clone(), Cell { key, expr: CellExpr::Literal(lit) });
+                    ir.insert(
+                        key.clone(),
+                        Cell {
+                            key,
+                            expr: CellExpr::Literal(lit),
+                        },
+                    );
                 }
             }
         }
@@ -454,7 +470,10 @@ fn seed_from_inputs(map: &ingest::WorkbookMap, manifest: &Manifest) -> CellEnv {
 /// Build the reconcile [`reconcile::ComparisonMap`] from the manifest's
 /// `Role::Output` cells, taking each output's cached value (the oracle the
 /// reconcile stage grades the computed output against).
-fn comparison_from_outputs(map: &ingest::WorkbookMap, manifest: &Manifest) -> reconcile::ComparisonMap {
+fn comparison_from_outputs(
+    map: &ingest::WorkbookMap,
+    manifest: &Manifest,
+) -> reconcile::ComparisonMap {
     let mut value_by_key: HashMap<String, CellValue> = HashMap::new();
     for sheet in &map.sheets {
         for cell in &sheet.cells {

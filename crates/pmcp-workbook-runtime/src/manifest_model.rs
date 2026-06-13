@@ -158,13 +158,13 @@ pub enum InputTier {
     },
 }
 
-/// The Plot-3 JSON key for a role-bearing cell: the manifest `name` when present,
+/// The LLM-facing JSON key for a role-bearing cell: the manifest `name` when present,
 /// else the human-readable `meaning`, else the fully-qualified cell key itself.
 ///
 /// This is the SINGLE source of the name/meaning/cell precedence used to map a
 /// [`CellRole`] to the LLM-facing key — shared by the `cell_map` emitter and the
 /// served tools' input/output schema builders so the precedence cannot drift.
-pub fn plot3_key(role: &CellRole) -> String {
+pub fn json_key_for_role(role: &CellRole) -> String {
     role.name
         .clone()
         .or_else(|| role.meaning.clone())

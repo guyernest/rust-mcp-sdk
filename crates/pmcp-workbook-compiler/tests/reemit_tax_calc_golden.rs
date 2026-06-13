@@ -161,17 +161,25 @@ fn structural_eq_check2_seven_members_present() {
 fn structural_eq_check3_bundle_lock_recomputes() {
     let (_scratch, bundle) = compile_fixture();
     let lock: Value = read_json(&bundle, "BUNDLE.lock");
-    assert!(lock.get("bundle_id").is_some(), "BUNDLE.lock carries bundle_id (D-17)");
+    assert!(
+        lock.get("bundle_id").is_some(),
+        "BUNDLE.lock carries bundle_id (D-17)"
+    );
 
     let ir_json = std::fs::read_to_string(bundle.join("executable.ir.json")).expect("ir");
     let manifest_json = std::fs::read_to_string(bundle.join("manifest.json")).expect("manifest");
     let recomputed = build_bundle_lock(
         lock["bundle_id"].as_str().expect("bundle_id"),
         lock["version"].as_str().expect("version"),
-        lock["workbook_hash"].as_str().expect("workbook_hash").to_string(),
+        lock["workbook_hash"]
+            .as_str()
+            .expect("workbook_hash")
+            .to_string(),
         &ir_json,
         &manifest_json,
-        lock["artifacts"]["evidence"].as_str().expect("evidence hash"),
+        lock["artifacts"]["evidence"]
+            .as_str()
+            .expect("evidence hash"),
     );
     assert_eq!(
         recomputed.combined,
@@ -190,7 +198,11 @@ fn structural_eq_check4_loads_via_toolkit() {
     assert_eq!(loaded.stamp.bundle_id, "tax-calc");
     assert_eq!(loaded.stamp.version, "1.1.0");
     assert_eq!(loaded.cell_map.inputs.len(), 3, "three inputs served");
-    assert_eq!(loaded.cell_map.outputs.len(), 4, "four named outputs served");
+    assert_eq!(
+        loaded.cell_map.outputs.len(),
+        4,
+        "four named outputs served"
+    );
 }
 
 /// Check (5) — named-output names/dtypes/roles match the golden's.

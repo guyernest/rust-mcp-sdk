@@ -74,7 +74,9 @@ pub fn author_tax_calc_xlsx() -> Vec<u8> {
     let dv = rust_xlsxwriter::DataValidation::new()
         .allow_list_strings(&["single", "married_joint", "head_of_household"])
         .expect("dv list");
-    inputs.add_data_validation(2, 1, 2, 1, &dv).expect("add dv B3");
+    inputs
+        .add_data_validation(2, 1, 2, 1, &dv)
+        .expect("add dv B3");
 
     // ---- 2_Brackets (green-fill governed constants) ------------------------
     let brackets = book.add_worksheet();
@@ -103,13 +105,25 @@ pub fn author_tax_calc_xlsx() -> Vec<u8> {
     outputs.set_name("3_Outputs").expect("name 3_Outputs");
     outputs.write_string(0, 0, "output").expect("hdr");
     outputs
-        .write_formula(1, 1, Formula::new("='1_Inputs'!B2-'1_Inputs'!B4").set_result("48000"))
+        .write_formula(
+            1,
+            1,
+            Formula::new("='1_Inputs'!B2-'1_Inputs'!B4").set_result("48000"),
+        )
         .expect("B2 taxable_income");
     outputs
-        .write_formula(2, 1, Formula::new("='3_Outputs'!B2*'2_Brackets'!B2").set_result("4800"))
+        .write_formula(
+            2,
+            1,
+            Formula::new("='3_Outputs'!B2*'2_Brackets'!B2").set_result("4800"),
+        )
         .expect("B3 tax_owed");
     outputs
-        .write_formula(3, 1, Formula::new("='3_Outputs'!B3/'1_Inputs'!B2").set_result("0.08"))
+        .write_formula(
+            3,
+            1,
+            Formula::new("='3_Outputs'!B3/'1_Inputs'!B2").set_result("0.08"),
+        )
         .expect("B4 effective_rate");
     outputs
         .write_formula(4, 1, Formula::new("='2_Brackets'!B3").set_result("0.22"))

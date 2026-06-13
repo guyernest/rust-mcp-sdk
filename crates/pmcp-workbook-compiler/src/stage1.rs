@@ -116,7 +116,8 @@ pub fn run_stage1(
     // ---- 3. Freshness / provenance gate over the ORIGINAL on-disk bytes
     // (never a umya round-trip). The production path enforces; a TEST may admit
     // a committed trusted fixture's provenance class. ------------------------
-    let (provenance, gate_result) = gate_with_policy(original_bytes, map, &synth_manifest, freshness);
+    let (provenance, gate_result) =
+        gate_with_policy(original_bytes, map, &synth_manifest, freshness);
     let gate_findings = match gate_result {
         Ok(()) => Vec::new(),
         Err(findings) => findings,
@@ -182,11 +183,12 @@ fn gate_with_policy(
     }
 }
 
-/// The TEST-ONLY trusted-fixture gate wrapper: honour the committed-fixture
+/// The TEST/DEV-ONLY trusted-fixture gate wrapper: honour the committed-fixture
 /// provenance override so the producer/consumer proof can compile a neutral,
-/// non-Excel-authored fixture. Compiled ONLY under `cfg(test)`; production builds
-/// never link it.
-#[cfg(test)]
+/// non-Excel-authored fixture. Compiled ONLY under `cfg(test)` OR the dev-only
+/// `trusted-fixture` feature (never in the default/published feature set);
+/// production builds never link it.
+#[cfg(any(test, feature = "trusted-fixture"))]
 fn trusted_fixture_gate(
     original_bytes: &[u8],
     map: &WorkbookMap,
@@ -201,12 +203,12 @@ fn trusted_fixture_gate(
     (provenance, result.map(|_corpus| ()))
 }
 
-/// Production stub for the test-only trusted-fixture gate: NEVER constructible on
-/// the production path (the policy enum only yields `TrustedFixture` from a test).
-/// Compiled in non-test builds so the match stays total; it enforces the gate
-/// exactly like `Enforce` so even a hypothetical production `TrustedFixture` could
-/// not weaken refusal.
-#[cfg(not(test))]
+/// Production stub for the test/dev-only trusted-fixture gate: NEVER constructible
+/// on the production path (the policy enum only yields `TrustedFixture` from a
+/// test / the dev-only feature). Compiled in production builds so the match stays
+/// total; it enforces the gate exactly like `Enforce` so even a hypothetical
+/// production `TrustedFixture` could not weaken refusal.
+#[cfg(not(any(test, feature = "trusted-fixture")))]
 fn trusted_fixture_gate(
     original_bytes: &[u8],
     map: &WorkbookMap,
@@ -234,7 +236,11 @@ fn render_aggregate(errors: &[&LintFinding]) -> String {
 /// Count the formula cells across all sheets — the parser-equivalence record's
 /// `checked_cells`.
 fn count_formula_cells(map: &WorkbookMap) -> u32 {
-    let n: usize = map.sheets.iter().map(|s| s.cells.iter().filter(|c| c.is_formula).count()).sum();
+    let n: usize = map
+        .sheets
+        .iter()
+        .map(|s| s.cells.iter().filter(|c| c.is_formula).count())
+        .sum();
     u32::try_from(n).unwrap_or(u32::MAX)
 }
 
@@ -289,7 +295,10 @@ mod tests {
             sheet("1_Inputs", vec![cell("B2", None, Some("1"))]),
             sheet(
                 "3_Outputs",
-                vec![cell("B2", Some("1_Inputs!B2"), Some("1")), cell("B3", Some("B2*2"), Some("2"))],
+                vec![
+                    cell("B2", Some("1_Inputs!B2"), Some("1")),
+                    cell("B3", Some("B2*2"), Some("2")),
+                ],
             ),
         ]);
         assert_eq!(count_formula_cells(&m), 2);
