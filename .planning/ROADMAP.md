@@ -1834,7 +1834,7 @@ Plans:
 Plans:
 **Wave 0**
 
-- [ ] 94-00-PLAN.md — library seams in pmcp-workbook-compiler: PUBLIC read_workbook_version + prepare_candidate (gated-update candidate facade) + write_gate_marker (hash-covered ungated marker channel) — exposes existing internals only (WBCL-01 gated half, WBCL-03 marker)
+- [x] 94-00-PLAN.md — library seams in pmcp-workbook-compiler: PUBLIC read_workbook_version + prepare_candidate (gated-update candidate facade) + write_gate_marker (hash-covered ungated marker channel) — exposes existing internals only (WBCL-01 gated half, WBCL-03 marker)
 
 **Wave 1**
 
@@ -1889,6 +1889,6 @@ Plans:
 | 91. Workbook Runtime + Purity Gate + Dialect | 3/3 | Complete    | 2026-06-10 |
 | 92. BundleSource + Served-Tool Toolkit Module | 7/7 | Complete    | 2026-06-11 |
 | 93. Workbook Compiler + §5 Fixes + Promote Gate | 7/7 | Complete    | 2026-06-13 |
-| 94. CLI Subcommands + `pmcp.toml` | 0/? | Not started | - |
+| 94. CLI Subcommands + `pmcp.toml` | 1/6 | In Progress|  |
 | 95. Shape A Binary `pmcp-workbook-server` | 0/? | Not started | - |
 | 96. Shape B Scaffold + Dialect-Version + Generalization | 0/? | Not started | - |
