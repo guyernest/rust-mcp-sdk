@@ -28,7 +28,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 
 // ---- Pipeline modules (each a compilable Wave 1 stub; downstream plans fill bodies) ----
@@ -82,6 +82,13 @@ pub mod version;
 // integration test could not see it). Runs via plain `cargo test`.
 #[cfg(test)]
 mod reemit_golden;
+
+// In-crate `#[cfg(test)]` tests for the `prepare_candidate` facade (Task 94-00-02).
+// Lives in `src/` (not `tests/`) so it can reach the `#[cfg(test)]`-only
+// `prepare_candidate_with_fixture_override` (same CR-01 reachability reason as
+// `reemit_golden`): an external integration test cannot see `#[cfg(test)]` items.
+#[cfg(test)]
+mod prepare_candidate_tests;
 
 pub use error::CompileError;
 
@@ -536,4 +543,199 @@ fn promote_named_outputs(manifest: &mut Manifest, map: &ingest::WorkbookMap) {
             role.name = Some(dn.name.clone());
         }
     }
+}
+
+/// The gated-update CANDIDATE: everything [`gate::gate`] and
+/// [`gate::accept::promote`] need to grade and (if accepted) publish a re-compile,
+/// assembled by COMPOSING the existing private candidate-build internals — WITHOUT
+/// writing any bundle (gate-before-write, T-94-00-WRITE).
+///
+/// The fields line up 1:1 with [`gate::accept::PromoteInputs`] so the thin-shell
+/// CLI (94-03) assembles a `PromoteInputs` borrowing a `Candidate` without inventing
+/// any field: `bundle_id`/`changelog` are the CLI's lane decision; `ir`/`manifest`/
+/// `layout`/`parser_equivalence`/`version`/`candidate_workbook_hash` come straight
+/// from here. The `computed` named-output map is what the gate corpus grades.
+#[derive(Debug)]
+pub struct Candidate {
+    /// The compiled IR (`{cell_key -> Cell}`), built via [`build_ir_and_dag`] —
+    /// the same shape `compile_workbook` emits, ready for `PromoteInputs::ir`.
+    pub ir: HashMap<String, Cell>,
+    /// The dependency [`Dag`] reconstructed from the parsed references — the CLI
+    /// derives the gate corpus from this candidate IR/DAG.
+    pub dag: Dag,
+    /// The synthesized manifest with `out_*` outputs promoted (UN-ratified —
+    /// `prepare` writes nothing; ratification is the emit step's recorded act).
+    pub manifest: Manifest,
+    /// The named-output region→value map (`Role::Output` cells projected from the
+    /// executor's `RunResult.computed`, finite `f64` only) — the gate's grading set.
+    pub computed: BTreeMap<String, f64>,
+    /// The candidate workbook content hash (`sha256_hex` of the ORIGINAL bytes) —
+    /// the gate's `candidate_workbook_hash` and `PromoteInputs::workbook_hash`.
+    pub candidate_workbook_hash: String,
+    /// The D-08 parser-equivalence evidence record (from stage 1).
+    pub parser_equivalence: ParserEquivalence,
+    /// The captured workbook layout descriptor (for `PromoteInputs::layout`).
+    pub layout: LayoutDescriptor,
+    /// The workbook-DECLARED version (via [`read_workbook_version`]) — so the CLI
+    /// never supplies a `--version` flag (D-02/D-11).
+    pub version: String,
+}
+
+/// Build the gated-update [`Candidate`] for `workbook_path` by COMPOSING the
+/// existing private candidate-build internals — WITHOUT writing any bundle.
+///
+/// This MIRRORS [`compile_workbook`]'s pipeline up to BUT NOT INCLUDING the
+/// `promote` step: read the ORIGINAL bytes → [`ingest::ingest`] →
+/// [`stage1::run_stage1`] (with [`FreshnessPolicy::Enforce`] — `prepare` relaxes NO
+/// gate) → [`promote_named_outputs`] → [`build_ir_and_dag`] → [`seed_from_inputs`] +
+/// [`sheet_ir::eval`] → project the `Role::Output` computed values → build the
+/// layout → read the declared version. It STOPS here: the CLI (94-03) decides
+/// block-vs-promote, so `prepare` writes nothing (gate-before-write).
+///
+/// `prepare` does NOT ratify the manifest: ratification writes a sidecar, and
+/// `build_ir_and_dag` reads only the manifest's `Role`s (not the ratification
+/// stamp), so skipping ratify keeps `prepare` write-free without changing the IR.
+///
+/// # Arguments
+/// * `workbook_path` — the candidate `.xlsx` to build.
+/// * `workflow` — the workflow/bundle name (NEVER a hardcoded literal — WBCO-02).
+///
+/// # Errors
+/// Returns the SAME per-stage [`CompileError`] the seed lane returns: a stage-1
+/// `Error` (lint/freshness) surfaces [`CompileError::Lint`]; a parse failure
+/// surfaces [`CompileError::Lint`]; a named-output oracle mismatch surfaces
+/// [`CompileError::Reconcile`]. `prepare` relaxes none of these gates.
+pub fn prepare_candidate(workbook_path: &Path, workflow: &str) -> Result<Candidate, CompileError> {
+    prepare_candidate_inner(workbook_path, workflow, FreshnessPolicy::Enforce, None)
+}
+
+/// The shared `prepare` body. `freshness` is [`FreshnessPolicy::Enforce`] on the
+/// production path ([`prepare_candidate`]); only the TEST-ONLY
+/// [`prepare_candidate_with_fixture_override`] passes
+/// [`FreshnessPolicy::TrustedFixture`] (the SAME pattern [`compile_workbook_inner`]
+/// uses, so the parity test can build a candidate from the committed neutral
+/// fixture and compare it against the seed lane's emitted bundle).
+///
+/// `version_override` is `None` on the production path — the version comes SOLELY
+/// from the workbook via [`read_workbook_version`] (D-02/D-11). It is `Some` ONLY
+/// from the `#[cfg(test)]` fixture override, because the committed neutral fixture
+/// predates the `version` named-range convention and declares no version cell; the
+/// production path NEVER supplies an override, so the workbook remains the only
+/// version source in production.
+fn prepare_candidate_inner(
+    workbook_path: &Path,
+    workflow: &str,
+    freshness: FreshnessPolicy,
+    version_override: Option<&str>,
+) -> Result<Candidate, CompileError> {
+    // (1) ORIGINAL on-disk bytes (the provenance anchor — never a umya round-trip).
+    let bytes = std::fs::read(workbook_path)?;
+
+    // (2) umya ingest → owned WorkbookMap + collect-all ingest findings.
+    let (map, ingest_findings) =
+        ingest::ingest(workbook_path).map_err(|e| CompileError::Ingest(e.to_string()))?;
+
+    // (3) Composed stage-1 pass (lint + synth + freshness), collect-all refuse —
+    // the SAME gate the seed lane runs; `prepare` does NOT relax it.
+    let stage1 = stage1::run_stage1(&bytes, &map, &ingest_findings, workflow, freshness)?;
+
+    // (3a) Promote the workbook's `out_*` named-range targets to `Role::Output`.
+    let mut manifest = stage1.synth_manifest;
+    promote_named_outputs(&mut manifest, &map);
+
+    // (4) The candidate content anchor. NOTE: `prepare` does NOT ratify (ratify
+    // writes a sidecar) — gate-before-write means `prepare` writes NOTHING; the
+    // manifest's `Role`s alone drive build_ir_and_dag.
+    let candidate_workbook_hash = sha256_hex(&bytes);
+
+    // (5) Build the IR + DAG from the parsed formulas (whitelist-at-parse, D-06).
+    let (ir, dag) = build_ir_and_dag(&map, &manifest)?;
+
+    // (6) Run the SHARED runtime executor over the IR with inputs seeded from
+    // their cached values — the SAME pure-Rust path the served binary uses.
+    let seed = seed_from_inputs(&map, &manifest);
+    let run = sheet_ir::eval(&ir, &dag, &seed)
+        .map_err(|finding| CompileError::Reconcile(finding.message.clone()))?;
+
+    // (7) Reconcile the computed outputs against the cached oracle (named-output =
+    // ERROR). A named-output mismatch blocks — the seed lane's identical gate.
+    let comparison = comparison_from_outputs(&map, &manifest);
+    let report = reconcile::reconcile(&run.computed, &run.traces, &ir, &comparison, &manifest);
+    if report.has_errors() || report.is_hard_fail() {
+        return Err(CompileError::Reconcile(format!(
+            "{} named-output mismatch(es) against the cached oracle",
+            report
+                .mismatches
+                .iter()
+                .filter(|m| m.severity == Severity::Error)
+                .count()
+        )));
+    }
+
+    // (8) Project the named-output computed values into the gate's grading map and
+    // capture the layout + declared version. The candidate STOPS here (no promote).
+    let computed = project_named_outputs(&manifest, &run.computed);
+    let layout = artifact::build_layout_descriptor(&map, &candidate_workbook_hash);
+    let version = match version_override {
+        Some(v) => v.to_string(),
+        None => read_workbook_version(workbook_path)?,
+    };
+
+    Ok(Candidate {
+        ir,
+        dag,
+        manifest,
+        computed,
+        candidate_workbook_hash,
+        parser_equivalence: stage1.parser_equivalence,
+        layout,
+        version,
+    })
+}
+
+/// Project the manifest's `Role::Output` cells from the executor's `computed`
+/// `{cell_key -> CellValue}` into the gate's `{cell_key -> f64}` grading map,
+/// keeping ONLY finite numeric outputs (a non-numeric or non-finite output is not
+/// a gradable named output and is skipped — the reconcile gate already refused a
+/// genuinely wrong output above).
+fn project_named_outputs(
+    manifest: &Manifest,
+    computed: &HashMap<String, CellValue>,
+) -> BTreeMap<String, f64> {
+    let mut out: BTreeMap<String, f64> = BTreeMap::new();
+    for role in &manifest.cells {
+        if !matches!(role.role, Role::Output) {
+            continue;
+        }
+        if let Some(CellValue::Number(n)) = computed.get(&role.cell) {
+            if n.is_finite() {
+                out.insert(role.cell.clone(), *n);
+            }
+        }
+    }
+    out
+}
+
+/// TEST-ONLY: build a [`Candidate`] from a committed neutral fixture, honouring its
+/// trusted-fixture provenance override (the SAME `#[cfg(test)]`-only mechanism
+/// [`compile_workbook_with_fixture_override`] uses — CR-01: NO publishable feature
+/// arms it). The production [`prepare_candidate`] always passes
+/// [`FreshnessPolicy::Enforce`], so the same bytes are REFUSED on the production
+/// path. This lets the parity test build a candidate from the committed
+/// `tax-calc.xlsx` and compare its IR/computed against the seed lane.
+#[cfg(test)]
+fn prepare_candidate_with_fixture_override(
+    workbook_path: &Path,
+    workflow: &str,
+) -> Result<Candidate, CompileError> {
+    // The committed neutral fixture predates the `version` named-range convention,
+    // so the test supplies the version the seed-lane proof uses ("1.1.0"). The
+    // production `prepare_candidate` NEVER reaches this path — it always reads the
+    // version from the workbook.
+    prepare_candidate_inner(
+        workbook_path,
+        workflow,
+        FreshnessPolicy::TrustedFixture,
+        Some("1.1.0"),
+    )
 }
