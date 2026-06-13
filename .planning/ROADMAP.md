@@ -1829,7 +1829,14 @@ Plans:
   3. The `--accept --approver <X> --effective-date <D>` flow records a fingerprint-bound `ApprovalRecord` and re-baselines the golden corpus through the CLI, with clear gate output stating the change class and the exact command to run
   4. A project declares workbooks → bundle IDs in a project-level `pmcp.toml` (`[[workbook.workbooks]]` source → bundle_id), and the three CLI subcommands resolve sources through it — no lighthouse paths
 
-**Plans**: TBD
+**Plans**: 5 plans
+
+Plans:
+- [ ] 94-01-PLAN.md — pmcp.toml parser (PmcpToml load/resolve/all_entries/validate) + cargo-pmcp→compiler dep edge (WBCL-04)
+- [ ] 94-02-PLAN.md — `workbook` subcommand group + main.rs wiring + `lint` handler with text/json + errors-fail exit codes (WBCL-02, D-04/D-09/D-10)
+- [ ] 94-03-PLAN.md — `compile` handler: seed/gated lane, gate-before-write, mandatory --approver, --accept flow, compile-all (WBCL-01/04, D-06/D-07)
+- [ ] 94-04-PLAN.md — `emit` handler: ungated bundle + loud banner + evidence gated:false marker (WBCL-03, D-08)
+- [ ] 94-05-PLAN.md — end-to-end CLI integration test + purity-gate confirmation + runnable example (WBCL-01/02/03/04)
 
 ### Phase 95: Shape A Binary `pmcp-workbook-server`
 
