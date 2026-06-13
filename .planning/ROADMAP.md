@@ -1832,10 +1832,21 @@ Plans:
 **Plans**: 5 plans
 
 Plans:
+**Wave 1**
+
 - [ ] 94-01-PLAN.md — pmcp.toml parser (PmcpToml load/resolve/all_entries/validate) + cargo-pmcp→compiler dep edge (WBCL-04)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
 - [ ] 94-02-PLAN.md — `workbook` subcommand group + main.rs wiring + `lint` handler with text/json + errors-fail exit codes (WBCL-02, D-04/D-09/D-10)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
 - [ ] 94-03-PLAN.md — `compile` handler: seed/gated lane, gate-before-write, mandatory --approver, --accept flow, compile-all (WBCL-01/04, D-06/D-07)
 - [ ] 94-04-PLAN.md — `emit` handler: ungated bundle + loud banner + evidence gated:false marker (WBCL-03, D-08)
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
 - [ ] 94-05-PLAN.md — end-to-end CLI integration test + purity-gate confirmation + runnable example (WBCL-01/02/03/04)
 
 ### Phase 95: Shape A Binary `pmcp-workbook-server`
