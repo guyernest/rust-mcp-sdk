@@ -1846,8 +1846,8 @@ Plans:
 
 **Wave 3** *(blocked on Wave 0 + Wave 2 completion)*
 
-- [ ] 94-03-PLAN.md — `compile` handler: seed/gated lane (prepare_candidate→gate::gate→block-or-promote), gate-before-write, mandatory --approver, --accept flow, compile-all (WBCL-01/04, D-06/D-07)
-- [ ] 94-04-PLAN.md — `emit` handler: ungated bundle + loud banner + HASH-COVERED evidence gated:false marker via write_gate_marker (WBCL-03, D-08)
+- [x] 94-03-PLAN.md — `compile` handler: seed/gated lane (prepare_candidate→gate::gate→block-or-promote), gate-before-write, mandatory --approver, --accept flow, compile-all (WBCL-01/04, D-06/D-07)
+- [x] 94-04-PLAN.md — `emit` handler: ungated bundle + loud banner + HASH-COVERED evidence gated:false marker via write_gate_marker (WBCL-03, D-08)
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
@@ -1889,6 +1889,6 @@ Plans:
 | 91. Workbook Runtime + Purity Gate + Dialect | 3/3 | Complete    | 2026-06-10 |
 | 92. BundleSource + Served-Tool Toolkit Module | 7/7 | Complete    | 2026-06-11 |
 | 93. Workbook Compiler + §5 Fixes + Promote Gate | 7/7 | Complete    | 2026-06-13 |
-| 94. CLI Subcommands + `pmcp.toml` | 3/6 | In Progress|  |
+| 94. CLI Subcommands + `pmcp.toml` | 5/6 | In Progress|  |
 | 95. Shape A Binary `pmcp-workbook-server` | 0/? | Not started | - |
 | 96. Shape B Scaffold + Dialect-Version + Generalization | 0/? | Not started | - |
