@@ -72,6 +72,10 @@ pub mod gate;
 /// Stage-1 composed pass — collect-all lint + synth + freshness + drift (Plan 06).
 pub mod stage1;
 
+/// Workbook-declared version accessor — the read-only `read_workbook_version`
+/// surface the thin-shell CLI reads instead of a `--version` flag (D-02/D-11).
+pub mod version;
+
 // Producer/consumer golden proof (WBCO-05). In-crate `#[cfg(test)]` so it can
 // reach the `#[cfg(test)]`-only `compile_workbook_with_fixture_override`
 // (CR-01: the override is unreachable from any publishable feature; an external
@@ -155,6 +159,11 @@ pub use change_class::{
 // The composed stage-1 pass + its freshness policy (the production driver passes
 // `Enforce`; a TEST may pass `TrustedFixture` to admit a committed neutral fixture).
 pub use stage1::{run_stage1, FreshnessPolicy, Stage1Output};
+
+// The workbook-declared-version accessor (WBCL-01 / D-02 / D-11): the version the
+// bundle is stamped with comes FROM the workbook, never a CLI flag or `pmcp.toml`.
+// The thin-shell CLI reads it through this re-export.
+pub use version::read_workbook_version;
 
 use pmcp_workbook_runtime::sheet_ir::{Cell, CellExpr};
 
