@@ -154,6 +154,13 @@ pub use artifact::{
     CellMap, EmitError, EvidenceInputs, LayoutDescriptor, ParserEquivalence,
 };
 
+// The hash-covered ungated/gated EMIT MARKER channel (WBCL-03 / D-08): the emit
+// status travels WITH the artifact. A SELF-CONTAINED additive channel — it does
+// NOT enter the served loader's FROZEN evidence fold / allow-set (T-94-00-FROZEN).
+pub use artifact::{
+    read_gate_marker, write_gate_marker, GateMarker, EVIDENCE_GATE_DIGEST, EVIDENCE_GATE_MARKER,
+};
+
 // The change-class surface (WBGV-01/02/03): the symmetric demotion-aware classifier,
 // the strictest-policy reducer, the per-class routing policy + block message, the
 // canonical IR sub-DAG identity hash, and the output redefinition diff. `ChangeClass`

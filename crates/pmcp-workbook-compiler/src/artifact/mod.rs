@@ -42,7 +42,10 @@ pub use bundle_lock::{
     build_bundle_lock, fold_evidence_hash, sha256_hex, ArtifactHashes, BundleLock,
 };
 pub use cell_map::{build_cell_map, CellEntry, CellMap};
-pub use evidence::{emit_evidence, parser_equivalence_json, EvidenceInputs, ParserEquivalence};
+pub use evidence::{
+    emit_evidence, parser_equivalence_json, read_gate_marker, write_gate_marker, EvidenceInputs,
+    GateMarker, ParserEquivalence, EVIDENCE_GATE_DIGEST, EVIDENCE_GATE_MARKER,
+};
 pub use executable::emit_executable;
 pub use layout::{build_layout_descriptor, CellLayout, LayoutDescriptor, SheetLayout};
 pub use serialize::{to_bundle_json, to_bundle_json_sorted_map};

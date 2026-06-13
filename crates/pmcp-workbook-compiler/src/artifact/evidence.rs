@@ -21,7 +21,28 @@ use pmcp_workbook_runtime::fold_evidence_hash;
 use serde::{Deserialize, Serialize};
 
 use super::serialize::to_bundle_json;
-use super::{write_file, EmitError};
+use super::{sha256_hex, write_file, EmitError};
+
+/// The relative bundle path of the ungated/gated status marker (D-08): the emit
+/// status travels WITH the artifact. This is an ADDITIVE, self-contained channel —
+/// it is NOT a member of the served loader's FROZEN seven-member set or the
+/// `EVIDENCE_FOLD_MEMBERS` fold (adding it there would change the SERVED contract,
+/// a Phase-92/93 deliverable, not "expose existing internals").
+pub const EVIDENCE_GATE_MARKER: &str = "evidence/gate.json";
+
+/// The relative bundle path of the marker's recorded sha256 digest. A reader
+/// recomputes `sha256_hex(read gate.json bytes)` and compares against this file —
+/// so a STRIPPED or EDITED marker is DETECTABLE (tamper-evident, T-94-00-MARKER).
+pub const EVIDENCE_GATE_DIGEST: &str = "evidence/gate.sha256";
+
+/// The ungated/gated status marker body: `{ "gated": <bool> }`. `gated: false` is
+/// the ungated emit's marker; a future gated promote could stamp `gated: true`.
+/// Deterministically serialized through the bundle's [`to_bundle_json`] choke point.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct GateMarker {
+    /// Whether this bundle was emitted through the gated promote lane.
+    pub gated: bool,
+}
 
 /// The D-08 parser-equivalence evidence record: a run-derived attestation that
 /// the offline parse and the served evaluator agree on the workbook's cells. It
@@ -96,6 +117,64 @@ pub fn parser_equivalence_json(record: &ParserEquivalence) -> Result<String, Emi
     to_bundle_json(record, "evidence/parser_equivalence.json")
 }
 
+/// Write the HASH-COVERED ungated/gated status marker into `bundle_dir`, returning
+/// the recorded sha256 hex digest.
+///
+/// Writes `evidence/gate.json` = `{ "gated": <gated> }` (deterministic via
+/// [`to_bundle_json`]) AND records `sha256_hex(json bytes)` into
+/// `evidence/gate.sha256` so a later reader detects a stripped or edited marker
+/// (tamper-evident, T-94-00-MARKER). This is a SELF-CONTAINED in-crate channel: it
+/// does NOT touch [`EvidenceInputs`], [`emit_evidence`], or the served loader's
+/// FROZEN `EVIDENCE_FOLD_MEMBERS`/`ALLOWED_MEMBERS` — the frozen evidence-dir fold
+/// and the served allow-set are UNCHANGED. It is written into a bundle dir the CLI
+/// manages, AFTER emit, so it never trips the served allow-set check at compile time.
+///
+/// # Errors
+/// Returns [`EmitError::Io`] if the `evidence/` dir cannot be created or either
+/// member cannot be written, or [`EmitError::Serde`] if the marker cannot be
+/// serialized.
+pub fn write_gate_marker(bundle_dir: &Path, gated: bool) -> Result<String, EmitError> {
+    let json = to_bundle_json(&GateMarker { gated }, EVIDENCE_GATE_MARKER)?;
+    let digest = sha256_hex(json.as_bytes());
+
+    let evidence_dir = bundle_dir.join("evidence");
+    std::fs::create_dir_all(&evidence_dir).map_err(|e| EmitError::Io {
+        path: evidence_dir.display().to_string(),
+        detail: e.to_string(),
+    })?;
+    write_file(&bundle_dir.join(EVIDENCE_GATE_MARKER), &json)?;
+    write_file(&bundle_dir.join(EVIDENCE_GATE_DIGEST), &digest)?;
+    Ok(digest)
+}
+
+/// Read the marker back from `bundle_dir`, returning `(gated, digest_ok)` where
+/// `digest_ok` is `sha256_hex(read gate.json bytes) == read gate.sha256` — the
+/// tamper-evidence check (a stripped or edited `gate.json` yields
+/// `digest_ok == false`, T-94-00-MARKER).
+///
+/// # Errors
+/// Returns [`EmitError::Io`] if either marker member cannot be read, or
+/// [`EmitError::Serde`] if `gate.json` cannot be parsed.
+pub fn read_gate_marker(bundle_dir: &Path) -> Result<(bool, bool), EmitError> {
+    let json_path = bundle_dir.join(EVIDENCE_GATE_MARKER);
+    let json_bytes = std::fs::read(&json_path).map_err(|e| EmitError::Io {
+        path: json_path.display().to_string(),
+        detail: e.to_string(),
+    })?;
+    let digest_path = bundle_dir.join(EVIDENCE_GATE_DIGEST);
+    let recorded_digest = std::fs::read_to_string(&digest_path).map_err(|e| EmitError::Io {
+        path: digest_path.display().to_string(),
+        detail: e.to_string(),
+    })?;
+
+    let marker: GateMarker = serde_json::from_slice(&json_bytes).map_err(|e| EmitError::Serde {
+        what: EVIDENCE_GATE_MARKER.to_string(),
+        detail: e.to_string(),
+    })?;
+    let digest_ok = sha256_hex(&json_bytes) == recorded_digest.trim();
+    Ok((marker.gated, digest_ok))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -147,5 +226,110 @@ mod tests {
         let json = parser_equivalence_json(&rec).expect("serialize");
         let back: ParserEquivalence = serde_json::from_str(&json).expect("parse");
         assert_eq!(back, rec);
+    }
+
+    #[test]
+    fn gate_marker_round_trips_ungated() {
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let digest = write_gate_marker(dir.path(), false).expect("write marker");
+        assert_eq!(
+            digest.len(),
+            64,
+            "the recorded digest is a 64-char sha256 hex"
+        );
+
+        // Both members exist under evidence/.
+        assert!(dir.path().join("evidence/gate.json").exists());
+        assert!(dir.path().join("evidence/gate.sha256").exists());
+
+        // read_gate_marker round-trips the bool and confirms the digest.
+        let (gated, digest_ok) = read_gate_marker(dir.path()).expect("read marker");
+        assert!(!gated, "the written bool round-trips (ungated)");
+        assert!(digest_ok, "the recorded digest matches the written bytes");
+    }
+
+    #[test]
+    fn gate_marker_round_trips_gated() {
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        write_gate_marker(dir.path(), true).expect("write marker");
+        let (gated, digest_ok) = read_gate_marker(dir.path()).expect("read marker");
+        assert!(gated, "the written bool round-trips (gated)");
+        assert!(digest_ok, "the recorded digest matches the written bytes");
+    }
+
+    #[test]
+    fn gate_marker_digest_covers_the_exact_written_bytes() {
+        // The recorded digest is sha256_hex of the EXACT gate.json bytes on disk.
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        write_gate_marker(dir.path(), false).expect("write marker");
+        let json_bytes = std::fs::read(dir.path().join("evidence/gate.json")).expect("read json");
+        let recorded =
+            std::fs::read_to_string(dir.path().join("evidence/gate.sha256")).expect("read digest");
+        assert_eq!(
+            sha256_hex(&json_bytes),
+            recorded.trim(),
+            "the recorded digest covers the exact written gate.json bytes (tamper-evident)"
+        );
+    }
+
+    #[test]
+    fn gate_marker_tamper_is_detected() {
+        // Corrupting gate.json after writing flips digest_ok to false.
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        write_gate_marker(dir.path(), false).expect("write marker");
+
+        // Edit the marker body (flip gated false -> true) WITHOUT updating the
+        // recorded digest — a stripped/edited marker.
+        std::fs::write(
+            dir.path().join("evidence/gate.json"),
+            "{\n  \"gated\": true\n}",
+        )
+        .expect("corrupt marker");
+
+        let (_gated, digest_ok) = read_gate_marker(dir.path()).expect("read marker");
+        assert!(
+            !digest_ok,
+            "an edited gate.json is detected (digest_ok == false)"
+        );
+    }
+
+    #[test]
+    fn frozen_evidence_fold_is_unchanged_by_the_marker_channel() {
+        // The marker channel is ADDITIVE: emit_evidence is byte-stable and the
+        // FROZEN fold member set still has exactly four members. (This guards
+        // T-94-00-FROZEN: the served seven-member contract is untouched.)
+        assert_eq!(
+            EVIDENCE_FOLD_MEMBERS.len(),
+            4,
+            "the frozen evidence fold still has exactly four members"
+        );
+
+        let inputs = EvidenceInputs {
+            cell_map_json: "{\"inputs\":[],\"outputs\":[]}",
+            changelog_json: "{\"from_version\":\"1.0.0\"}",
+            parser_equivalence_json: "{\"checked_cells\":1,\"equivalent\":true,\"method\":\"x\"}",
+            layout_json: "{\"descriptor_version\":1}",
+        };
+
+        // emit_evidence over fixed inputs is byte-stable (the marker channel did
+        // not perturb the fold) — two emits into two dirs return the SAME hash.
+        let d1 = tempfile::TempDir::new().expect("tempdir 1");
+        let d2 = tempfile::TempDir::new().expect("tempdir 2");
+        let h1 = emit_evidence(&inputs, d1.path()).expect("emit 1");
+        let h2 = emit_evidence(&inputs, d2.path()).expect("emit 2");
+        assert_eq!(
+            h1, h2,
+            "emit_evidence is byte-stable (frozen fold untouched)"
+        );
+
+        // And writing the gate marker into the SAME dir does NOT change the folded
+        // evidence hash (the marker is outside the fold).
+        let after_marker = emit_evidence(&inputs, d1.path()).expect("re-emit");
+        write_gate_marker(d1.path(), false).expect("write marker into the same dir");
+        let after_marker_again = emit_evidence(&inputs, d1.path()).expect("re-emit after marker");
+        assert_eq!(
+            after_marker, after_marker_again,
+            "the evidence fold hash is unchanged whether or not the gate marker is present"
+        );
     }
 }
