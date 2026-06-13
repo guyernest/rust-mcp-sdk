@@ -217,16 +217,29 @@ fn compile_workbook_inner(
     // (3) Composed stage-1 pass (lint + synth + freshness), collect-all refuse.
     let stage1 = stage1::run_stage1(&bytes, &map, &ingest_findings, workflow, freshness)?;
 
+    // (3a) Promote the workbook's `out_*` named-range targets to `Role::Output`.
+    // Synthesis classifies Input/Constant/Formula from COLOUR alone (it never
+    // emits `Role::Output`); the OUTPUT convention is a named-range act the
+    // workbook authors (`out_taxable_income → 3_Outputs!B2`). The driver applies
+    // it so the manifest carries the declared outputs a served `calculate`
+    // requires — without this every emit would fail loud in `build_cell_map`
+    // (zero-output manifest). This stays out of `synth` (colour-only) and is the
+    // driver's naming-convention responsibility.
+    let mut manifest = stage1.synth_manifest;
+    promote_named_outputs(&mut manifest, &map);
+
     // (4) RATIFY the candidate manifest (a recorded sign-off). The sidecar lives
     // beside the output root so the audit trail is co-located with the bundle.
     let workbook_hash = sha256_hex(&bytes);
-    let mut manifest = stage1.synth_manifest;
     let sidecar = out_root.join(format!("{workflow}.ratifications.jsonl"));
     manifest::ratify(&mut manifest, &workbook_hash, approver, &sidecar)
         .map_err(|e| CompileError::Emit(e.to_string()))?;
 
     // (5) Build the IR + DAG from the parsed formulas (whitelist-at-parse, D-06).
-    let (ir, dag) = build_ir_and_dag(&map)?;
+    // The literal cells emitted are the GOVERNED CONSTANTS only (the bracket
+    // table) — inputs are seeded at run-time via the cell-map, and decorative
+    // text labels never enter the served IR.
+    let (ir, dag) = build_ir_and_dag(&map, &manifest)?;
 
     // (6) Run the SHARED runtime executor over the IR with the input cells seeded
     // from their cached values — the SAME pure-Rust path the served binary uses.
@@ -270,14 +283,20 @@ fn compile_workbook_inner(
     Ok(lock)
 }
 
-/// TEST-ONLY: compile a committed neutral fixture, honouring its trusted-fixture
-/// provenance override so the producer/consumer proof can run against a workbook
-/// that was authored WITHOUT Excel (and so carries no Excel provenance). The
-/// override is reachable ONLY here under `cfg(test)`; the production
-/// [`compile_workbook`] always passes [`FreshnessPolicy::Enforce`], so the same
-/// bytes are REFUSED on the production path.
-#[cfg(test)]
-pub(crate) fn compile_workbook_with_fixture_override(
+/// TEST/DEV-ONLY: compile a committed neutral fixture, honouring its
+/// trusted-fixture provenance override so the producer/consumer proof (and the
+/// `compile_a_workbook` example) can run against a workbook authored WITHOUT Excel
+/// (so it carries no Excel provenance). Reachable ONLY under `cfg(test)` OR the
+/// dev-only `trusted-fixture` feature (NEVER in the default/published feature
+/// set); the production [`compile_workbook`] always passes
+/// [`FreshnessPolicy::Enforce`], so the same bytes are REFUSED on the production
+/// path (the override cannot weaken production refusal).
+///
+/// # Errors
+/// Returns the per-stage [`CompileError`] variant on failure (same surface as
+/// [`compile_workbook`]).
+#[cfg(any(test, feature = "trusted-fixture"))]
+pub fn compile_workbook_with_fixture_override(
     workbook_path: &Path,
     out_root: &Path,
     workflow: &str,
@@ -299,16 +318,31 @@ pub(crate) fn compile_workbook_with_fixture_override(
 ///
 /// Every formula cell parses to a [`CellExpr::Formula`] whose `Expr::Ref` nodes are
 /// rebased to fully-qualified `cell_key`s (so the executor resolves cross-sheet
-/// references); every non-formula cell carrying a cached value becomes a
-/// [`CellExpr::Literal`]. The DAG is reconstructed SOLELY from the parsed
-/// references (never `calcChain.xml`).
-fn build_ir_and_dag(map: &ingest::WorkbookMap) -> Result<(HashMap<String, Cell>, Dag), CompileError> {
+/// references). For NON-formula cells, ONLY the manifest's `Role::Constant`
+/// (governed) cells enter the IR as a [`CellExpr::Literal`]: inputs are seeded at
+/// run-time via the cell-map and decorative text labels never enter the served IR
+/// (matching the frozen golden's IR shape — formula cells + governed constants).
+/// The DAG is reconstructed SOLELY from the parsed references (never
+/// `calcChain.xml`).
+fn build_ir_and_dag(
+    map: &ingest::WorkbookMap,
+    manifest: &Manifest,
+) -> Result<(HashMap<String, Cell>, Dag), CompileError> {
+    use pmcp_workbook_runtime::range_ref::cell_key;
     let mut ir: HashMap<String, Cell> = HashMap::new();
     let mut parsed: Vec<dag::ParsedCell> = Vec::new();
 
+    // The governed-constant cells that may enter the IR as literals.
+    let governed: std::collections::HashSet<&str> = manifest
+        .cells
+        .iter()
+        .filter(|c| matches!(c.role, Role::Constant))
+        .map(|c| c.cell.as_str())
+        .collect();
+
     for sheet in &map.sheets {
         for cell in &sheet.cells {
-            let key = pmcp_workbook_runtime::range_ref::cell_key(&sheet.name, &cell.addr);
+            let key = cell_key(&sheet.name, &cell.addr);
             if let Some(formula) = &cell.formula {
                 let expr = formula::parse(formula, &sheet.name, &cell.addr)
                     .map_err(|e| CompileError::Lint(format!("parse {key}: {e}")))?;
@@ -319,9 +353,11 @@ fn build_ir_and_dag(map: &ingest::WorkbookMap) -> Result<(HashMap<String, Cell>,
                 });
                 let rebased = rebase_refs(&expr, &sheet.name);
                 ir.insert(key.clone(), Cell { key, expr: CellExpr::Formula(rebased) });
-            } else if let Some(value) = &cell.value {
-                let lit = parse_cell_value(value);
-                ir.insert(key.clone(), Cell { key, expr: CellExpr::Literal(lit) });
+            } else if governed.contains(key.as_str()) {
+                if let Some(value) = &cell.value {
+                    let lit = parse_cell_value(value);
+                    ir.insert(key.clone(), Cell { key, expr: CellExpr::Literal(lit) });
+                }
             }
         }
     }
@@ -438,4 +474,34 @@ fn comparison_from_outputs(map: &ingest::WorkbookMap, manifest: &Manifest) -> re
         }
     }
     comparison
+}
+
+/// Promote every `out_*` named-range target cell in `manifest` to [`Role::Output`].
+///
+/// Synthesis classifies cells from COLOUR alone and never emits [`Role::Output`];
+/// the OUTPUT convention is a named-range the WORKBOOK authors (`out_<name>`
+/// targeting a single result cell). For each workbook defined name whose name
+/// starts with `out_` and whose target is a single cell, this re-roles the matching
+/// manifest cell to [`Role::Output`] and records the named-range `name` (the
+/// cell-map `json_key` source). A `Role::Output` cell with no synthesized
+/// counterpart (e.g. an output formula cell synthesis classified as
+/// [`Role::Formula`]) is re-roled in place; an unmatched name is ignored (a
+/// defined name pointing nowhere is a linter concern, not a hard failure here).
+fn promote_named_outputs(manifest: &mut Manifest, map: &ingest::WorkbookMap) {
+    use pmcp_workbook_runtime::range_ref::cell_key;
+    for dn in &map.defined_names {
+        if !dn.name.starts_with("out_") {
+            continue;
+        }
+        // Single-cell target only: start == end (a range output is not a scalar
+        // named output and is left for the linter to flag).
+        if dn.target.start != dn.target.end {
+            continue;
+        }
+        let key = cell_key(&dn.target.sheet, &dn.target.start);
+        if let Some(role) = manifest.cells.iter_mut().find(|c| c.cell == key) {
+            role.role = Role::Output;
+            role.name = Some(dn.name.clone());
+        }
+    }
 }

@@ -23,6 +23,31 @@ unexpected_cfgs = { level = "warn", check-cfg = ['cfg(fuzzing)'] }
 name = "pmcp_workbook_compiler"
 path = "src/lib.rs"
 
+[features]
+# DEV-ONLY: exposes `compile_workbook_with_fixture_override` + the provenance
+# trusted-fixture override so the producer/consumer proof and the
+# `compile_a_workbook` example can compile a neutral, non-Excel-authored fixture.
+# NEVER in `default` and NEVER enabled by a published consumer — the production
+# `compile_workbook` always enforces the provenance refuse path. The override is
+# honoured ONLY when this feature (or `cfg(test)`) is active, so it cannot weaken
+# production refusal.
+default = []
+trusted-fixture = []
+
+# The library-level ingest->emit demonstration authors a neutral, non-Excel
+# fixture, so it needs the dev-only trusted-fixture override entry. Run with:
+#   cargo run -p pmcp-workbook-compiler --example compile_a_workbook --features trusted-fixture
+[[example]]
+name = "compile_a_workbook"
+required-features = ["trusted-fixture"]
+
+# The producer/consumer proof compiles the neutral fixture via the dev-only
+# trusted-fixture override. Run with:
+#   cargo test -p pmcp-workbook-compiler --test reemit_tax_calc_golden --features trusted-fixture
+[[test]]
+name = "reemit_tax_calc_golden"
+required-features = ["trusted-fixture"]
+
 [dependencies]
 # version + path together — SDK workspace-internal dep convention. The compiler
 # re-exports the runtime's shared model/IR/hash/changelog/finding/rounding types
@@ -71,6 +96,14 @@ zip = "8.6"
 [dev-dependencies]
 # Test-only scratch dirs for the bundle-emit tests (no workspace artifacts leak).
 tempfile = "3"
+# WRITER-ONLY xlsx authoring for the neutral producer/consumer fixture
+# (`tax-calc.xlsx`). NOT umya: the provenance gate refuses a umya-authored
+# fixture (Pitfall 3), so the proof fixture is authored by rust_xlsxwriter (a
+# pure writer; pulls zip-deflate but NO workbook reader). It writes formulas WITH
+# cached `<v>` results via `Formula::set_result` — the Plan 04 reconcile oracle.
+# Dev-only: the compiler never links a writer at runtime. Version mirrors the
+# runtime crate's pin (0.95, default-features off).
+rust_xlsxwriter = { version = "0.95", default-features = false }
 # The CONSUMER contract: the direct toolkit loader round-trip test
 # (`emitted_bundle_loads_via_toolkit`) loads an emitted temp bundle through the
 # Phase 92 served loader. The `workbook` feature pulls the LocalDirSource + the
