@@ -1811,7 +1811,7 @@ Plans:
 
 **Wave 5** *(blocked on Wave 4 completion)*
 
-- [ ] 93-06-PLAN.md — promote gate: auto-derived corpus (D-09) + fingerprint-bound ApprovalRecord + accept() + CR-02 versioned non-overwriting promote
+- [x] 93-06-PLAN.md — promote gate: auto-derived corpus (D-09) + fingerprint-bound ApprovalRecord + accept() + CR-02 versioned non-overwriting promote
 
 **Wave 6** *(blocked on Wave 5 completion)*
 
@@ -1866,7 +1866,7 @@ Plans:
 |-------|----------------|--------|-----------|
 | 91. Workbook Runtime + Purity Gate + Dialect | 3/3 | Complete    | 2026-06-10 |
 | 92. BundleSource + Served-Tool Toolkit Module | 7/7 | Complete    | 2026-06-11 |
-| 93. Workbook Compiler + §5 Fixes + Promote Gate | 5/7 | In Progress|  |
+| 93. Workbook Compiler + §5 Fixes + Promote Gate | 6/7 | In Progress|  |
 | 94. CLI Subcommands + `pmcp.toml` | 0/? | Not started | - |
 | 95. Shape A Binary `pmcp-workbook-server` | 0/? | Not started | - |
 | 96. Shape B Scaffold + Dialect-Version + Generalization | 0/? | Not started | - |
