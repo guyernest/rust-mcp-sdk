@@ -693,13 +693,13 @@ mod tests {
     #[test]
     fn synth_inline_dv_becomes_enum() {
         let map = wb_with_dv(
-            dv("C6", "C6", "list", Some("\"heat_pump,boiler\"")),
-            Some("heat_pump"),
+            dv("C6", "C6", "list", Some("\"single,married\"")),
+            Some("single"),
         );
         let (m, findings) = synthesize(&map, &DialectRules::default(), "wf");
         assert_eq!(
             c6_allowed(&m),
-            Some(vec!["heat_pump".to_string(), "boiler".to_string()]),
+            Some(vec!["single".to_string(), "married".to_string()]),
             "an inline DV literal ≤10 freezes to a closed enum"
         );
         assert!(!findings.iter().any(|f| f.rule == "manifest/dv-dynamic"));

@@ -61,6 +61,20 @@ use super::{OracleCorpus, OracleProvenance, ProvenanceError, RegionHashes};
 /// calcId AND no Excel `<AppVersion>` build string is umya-fabricated (WBCO-07).
 pub(crate) const UMYA_SENTINEL_CALC_ID: u32 = 122211;
 
+/// The STALENESS / non-Excel-recalc freshness rules a TEST/DEV trusted-fixture
+/// override demotes from `Error` to `Warning` (so a non-Excel-authored fixture
+/// whose cached values ARE the authored oracle can compile on the proof path; the
+/// softened signals survive as recorded evidence). The STRUCTURAL corruption rules
+/// (`oracle/unreadable-provenance`, `oracle/missing-provenance`,
+/// `oracle/missing-manifest`) are deliberately NOT here — they stay `Error` even
+/// under the override, so a malformed/unreadable workbook still hard-refuses.
+const SOFTENABLE_FRESHNESS_RULES: &[&str] = &[
+    "oracle/no-recalc",
+    "oracle/non-excel-app",
+    "oracle/stale-cache",
+    "oracle/missing-cache",
+];
+
 /// The provenance verdict — the single authoritative classification the refuse
 /// decision derives from (never an ad-hoc check). `ExcelTrusted` is the ONLY
 /// accept class; every other variant REFUSES.
@@ -222,9 +236,11 @@ pub fn gate(
 /// not write Excel provenance. The override CANNOT weaken the production refuse
 /// path: [`gate`] passes `None` and always classifies from raw bytes.
 ///
-/// This entry exists ONLY for tests; it is never wired into the production
-/// `compile_workbook` driver.
-#[cfg(test)]
+/// This entry exists ONLY for the test / dev-fixture path (gated behind
+/// `cfg(test)` OR the dev-only `trusted-fixture` feature, which is NEVER in the
+/// default/published feature set); it is never wired into the production
+/// `compile_workbook` driver (which always passes `None`).
+#[cfg(any(test, feature = "trusted-fixture"))]
 pub(crate) fn gate_with_fixture_override(
     original_bytes: &[u8],
     map: &WorkbookMap,
@@ -433,6 +449,25 @@ fn gate_inner(
              reported — refusing fail-closed",
             "Re-save the workbook from Microsoft Excel with a full recalc.",
         ));
+    }
+
+    // TRUSTED-FIXTURE FRESHNESS SOFTENING (test/dev path ONLY): a committed
+    // trusted fixture authored by a non-Excel WRITER (e.g. rust_xlsxwriter, which
+    // hard-codes `fullCalcOnLoad=1` and writes no Excel recalc stamp) trips the
+    // STALENESS freshness findings even though its cached `<v>` values are the
+    // authored oracle. When the override is present those STALENESS signals are
+    // DEMOTED to Warning so the proof can compile the fixture — they SURVIVE as
+    // recorded evidence, never silently dropped. The STRUCTURAL corruption
+    // findings (`oracle/unreadable-provenance`, `oracle/missing-provenance`,
+    // `oracle/missing-manifest`) are NOT in the softenable set: a malformed
+    // workbook still hard-refuses even with the override. Production
+    // [`gate`] passes `None`, so this never runs on the production path.
+    if fixture_override.is_some() {
+        for f in &mut findings {
+            if SOFTENABLE_FRESHNESS_RULES.contains(&f.rule.as_str()) {
+                f.severity = Severity::Warning;
+            }
+        }
     }
 
     // Accept/refuse decision: any Error-severity finding refuses.

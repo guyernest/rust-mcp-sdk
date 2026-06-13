@@ -5,7 +5,7 @@
 //! `{json_key, seed_coord, unit}`.
 //!
 //! - `json_key` — the neutral JSON key the LLM/caller uses for this cell. Derived
-//!   via the runtime's shared [`plot3_key`] (the manifest `name` when present,
+//!   via the runtime's shared [`json_key_for_role`] (the manifest `name` when present,
 //!   else the `meaning`, else the cell key) so the cell-map key and the served
 //!   tools' schema builder cannot drift.
 //! - `seed_coord` — the `CellEnv` seed coordinate: the fully-qualified cell key
@@ -25,7 +25,7 @@
 //! Built from the (tier-ratified) [`Manifest`] in `emit_bundle`; serialized
 //! through the deterministic [`crate::artifact::serialize`] choke point.
 
-use pmcp_workbook_runtime::{plot3_key, CellRole, Manifest, Role};
+use pmcp_workbook_runtime::{json_key_for_role, CellRole, Manifest, Role};
 
 // Re-export the runtime-safe artifact shapes (the served loader deserializes the
 // SAME `CellMap`/`CellEntry`); never re-declared here.
@@ -34,7 +34,7 @@ pub use pmcp_workbook_runtime::{CellEntry, CellMap};
 /// Build the [`CellMap`] from a (tier-ratified) [`Manifest`].
 ///
 /// For each `Role::Input`/`Role::Output` [`CellRole`] derives a [`CellEntry`]
-/// (`json_key` via [`plot3_key`], `seed_coord` = the cell key, `unit`). Fails loud
+/// (`json_key` via [`json_key_for_role`], `seed_coord` = the cell key, `unit`). Fails loud
 /// (returns `Err`) ONLY if the manifest declares NO `Role::Output` cell — a served
 /// workbook with no output cannot answer a `calculate`.
 ///
@@ -64,10 +64,10 @@ pub fn build_cell_map(manifest: &Manifest) -> Result<CellMap, String> {
 }
 
 /// Build a [`CellEntry`] for a role-bearing cell: the JSON key is the runtime's
-/// shared [`plot3_key`] precedence (name → meaning → cell key).
+/// shared [`json_key_for_role`] precedence (name → meaning → cell key).
 fn entry(role: &CellRole) -> CellEntry {
     CellEntry {
-        json_key: plot3_key(role),
+        json_key: json_key_for_role(role),
         seed_coord: role.cell.clone(),
         unit: role.unit.clone(),
     }

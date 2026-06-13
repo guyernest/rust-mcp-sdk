@@ -1,0 +1,7 @@
+{
+  "kind": "trusted-fixture",
+  "fixture": "tax-calc.xlsx",
+  "reason": "authored by rust_xlsxwriter (a pure writer, NOT Excel), so it carries no Excel provenance; honoured ONLY on the test/dev path so the producer/consumer proof can compile a neutral fixture. The production compile path NEVER reads this file and still refuses non-Excel provenance.",
+  "authored_by": "rust_xlsxwriter",
+  "scope": "test-path-only"
+}

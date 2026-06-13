@@ -193,8 +193,8 @@ mod tests {
     #[test]
     fn inline_list_parses_and_caps_enum_labels() {
         assert_eq!(
-            resolve_inline_list("\"heat_pump,boiler\""),
-            Some(vec!["heat_pump".to_string(), "boiler".to_string()]),
+            resolve_inline_list("\"single,married\""),
+            Some(vec!["single".to_string(), "married".to_string()]),
         );
     }
 
