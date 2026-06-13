@@ -1829,9 +1829,13 @@ Plans:
   3. The `--accept --approver <X> --effective-date <D>` flow records a fingerprint-bound `ApprovalRecord` and re-baselines the golden corpus through the CLI, with clear gate output stating the change class and the exact command to run
   4. A project declares workbooks → bundle IDs in a project-level `pmcp.toml` (`[[workbook.workbooks]]` source → bundle_id), and the three CLI subcommands resolve sources through it — no lighthouse paths
 
-**Plans**: 5 plans
+**Plans**: 6 plans
 
 Plans:
+**Wave 0**
+
+- [ ] 94-00-PLAN.md — library seams in pmcp-workbook-compiler: PUBLIC read_workbook_version + prepare_candidate (gated-update candidate facade) + write_gate_marker (hash-covered ungated marker channel) — exposes existing internals only (WBCL-01 gated half, WBCL-03 marker)
+
 **Wave 1**
 
 - [ ] 94-01-PLAN.md — pmcp.toml parser (PmcpToml load/resolve/all_entries/validate) + cargo-pmcp→compiler dep edge (WBCL-04)
@@ -1840,14 +1844,14 @@ Plans:
 
 - [ ] 94-02-PLAN.md — `workbook` subcommand group + main.rs wiring + `lint` handler with text/json + errors-fail exit codes (WBCL-02, D-04/D-09/D-10)
 
-**Wave 3** *(blocked on Wave 2 completion)*
+**Wave 3** *(blocked on Wave 0 + Wave 2 completion)*
 
-- [ ] 94-03-PLAN.md — `compile` handler: seed/gated lane, gate-before-write, mandatory --approver, --accept flow, compile-all (WBCL-01/04, D-06/D-07)
-- [ ] 94-04-PLAN.md — `emit` handler: ungated bundle + loud banner + evidence gated:false marker (WBCL-03, D-08)
+- [ ] 94-03-PLAN.md — `compile` handler: seed/gated lane (prepare_candidate→gate::gate→block-or-promote), gate-before-write, mandatory --approver, --accept flow, compile-all (WBCL-01/04, D-06/D-07)
+- [ ] 94-04-PLAN.md — `emit` handler: ungated bundle + loud banner + HASH-COVERED evidence gated:false marker via write_gate_marker (WBCL-03, D-08)
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
-- [ ] 94-05-PLAN.md — end-to-end CLI integration test + purity-gate confirmation + runnable example (WBCL-01/02/03/04)
+- [ ] 94-05-PLAN.md — end-to-end CLI integration test (incl. hash-covered emit marker) + purity-gate confirmation + runnable example (WBCL-01/02/03/04)
 
 ### Phase 95: Shape A Binary `pmcp-workbook-server`
 
