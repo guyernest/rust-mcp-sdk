@@ -21,27 +21,27 @@
 
 - [x] **WBDL-01**: SDK owns a versioned dialect spec document (function whitelist + refuse-set) bound to the `WHITELIST` const by a test that fails if doc and code diverge
 - [ ] **WBDL-02**: A workbook declares the dialect version it targets, enabling forward-compatible dialect evolution
-- [ ] **WBDL-03**: Developer can lint a workbook against the dialect (whitelist-only, deny-by-default) and receive collect-all, located, BA-actionable findings with repair guidance
+- [x] **WBDL-03**: Developer can lint a workbook against the dialect (whitelist-only, deny-by-default) and receive collect-all, located, BA-actionable findings with repair guidance
 
 ### Workbook Compiler — `pmcp-workbook-compiler` crate (umya-owning, offline only)
 
-- [ ] **WBCO-01**: Compiler ingests a `.xlsx` (umya, compiler-isolated) and captures cached cell values as a trusted oracle
-- [ ] **WBCO-02**: Compiler synthesizes a candidate semantic manifest (inputs/outputs/dtypes/units/meanings/tiers) from colour/Guide/headers with BA ratification — **fully workbook-driven, no per-workbook Rust** (kills the hardcoded `build_reference_manifest`)
-- [ ] **WBCO-03**: Compiler parses formulas and reconstructs the dependency DAG with an Excel-semantics layer (`sheet_ir`)
-- [ ] **WBCO-04**: Compiler compiles pure cells to executable IR and penny-reconciles computed values against the oracle (operand-anchored rounding, not a naïve abs-delta tolerance)
-- [ ] **WBCO-05**: Compiler emits the compiled bundle (manifest.json, executable.ir.json, cell_map.json, layout.json, BUNDLE.lock, evidence/) — the complete compiler↔server contract
-- [ ] **WBCO-06**: Compiler synthesizes closed JSON-Schema enums from inline Excel data-validation lists (inline `formula1` quoted literals, ≤10 values); range/named-range sources are rejected with precise reason codes
-- [ ] **WBCO-07**: The oracle staleness/freshness gate assigns a **distinct provenance class** to programmatically-authored (umya-stamped, fabricated `<Application>Microsoft Excel</Application>`/`calcId`) workbooks so they cannot pass the freshness gate on fabricated Excel identity
+- [x] **WBCO-01**: Compiler ingests a `.xlsx` (umya, compiler-isolated) and captures cached cell values as a trusted oracle
+- [x] **WBCO-02**: Compiler synthesizes a candidate semantic manifest (inputs/outputs/dtypes/units/meanings/tiers) from colour/Guide/headers with BA ratification — **fully workbook-driven, no per-workbook Rust** (kills the hardcoded `build_reference_manifest`)
+- [x] **WBCO-03**: Compiler parses formulas and reconstructs the dependency DAG with an Excel-semantics layer (`sheet_ir`)
+- [x] **WBCO-04**: Compiler compiles pure cells to executable IR and penny-reconciles computed values against the oracle (operand-anchored rounding, not a naïve abs-delta tolerance)
+- [x] **WBCO-05**: Compiler emits the compiled bundle (manifest.json, executable.ir.json, cell_map.json, layout.json, BUNDLE.lock, evidence/) — the complete compiler↔server contract
+- [x] **WBCO-06**: Compiler synthesizes closed JSON-Schema enums from inline Excel data-validation lists (inline `formula1` quoted literals, ≤10 values); range/named-range sources are rejected with precise reason codes
+- [x] **WBCO-07**: The oracle staleness/freshness gate assigns a **distinct provenance class** to programmatically-authored (umya-stamped, fabricated `<Application>Microsoft Excel</Application>`/`calcId`) workbooks so they cannot pass the freshness gate on fabricated Excel identity
 
 ### Workbook Governance — promote-time gate (the differentiating moat)
 
-- [ ] **WBGV-01**: Compiler auto-derives a change class (HotReload / BlockUntilAccept / NeverAutoPromote) from a prior-vs-current manifest+IR diff, with **symmetric coverage of demotion-direction changes** (Input→Constant, source flips) — fixes CR-01
-- [ ] **WBGV-02**: A strictest-policy reducer ensures an assumption (yellow-cell) change hard-blocks even when other deltas are hot-reloadable
-- [ ] **WBGV-03**: The gate distinguishes numeric drift from semantic redefinition via a stable canonical IR sub-DAG identity hash
-- [ ] **WBGV-04**: The golden-corpus gate blocks any over-tolerance named-output delta unless a fingerprint-matching `ApprovalRecord` covers the candidate
-- [ ] **WBGV-05**: A BA can record an approval via `--accept --approver <X> --effective-date <D>`, re-baselining the golden corpus and writing a fingerprint-bound `ApprovalRecord`
-- [ ] **WBGV-06**: Promotion writes the new bundle to its own `@<next_version>` directory and never overwrites the baseline — fixes CR-02
-- [ ] **WBGV-07**: Enum inputs skip Variable-tier assignment so the default path can never seed an out-of-enum empty string — fixes WR-01
+- [x] **WBGV-01**: Compiler auto-derives a change class (HotReload / BlockUntilAccept / NeverAutoPromote) from a prior-vs-current manifest+IR diff, with **symmetric coverage of demotion-direction changes** (Input→Constant, source flips) — fixes CR-01
+- [x] **WBGV-02**: A strictest-policy reducer ensures an assumption (yellow-cell) change hard-blocks even when other deltas are hot-reloadable
+- [x] **WBGV-03**: The gate distinguishes numeric drift from semantic redefinition via a stable canonical IR sub-DAG identity hash
+- [x] **WBGV-04**: The golden-corpus gate blocks any over-tolerance named-output delta unless a fingerprint-matching `ApprovalRecord` covers the candidate
+- [x] **WBGV-05**: A BA can record an approval via `--accept --approver <X> --effective-date <D>`, re-baselining the golden corpus and writing a fingerprint-bound `ApprovalRecord`
+- [x] **WBGV-06**: Promotion writes the new bundle to its own `@<next_version>` directory and never overwrites the baseline — fixes CR-02
+- [x] **WBGV-07**: Enum inputs skip Variable-tier assignment so the default path can never seed an out-of-enum empty string — fixes WR-01
 
 ### Workbook Served-tool layer — `pmcp-server-toolkit` module (bundle-driven)
 
@@ -78,6 +78,17 @@
 - [ ] Multi-output generalization hardening once many N-output workbooks beyond the lighthouse are validated
 - [ ] `cargo pmcp deploy` integration baking embedded bundles into Lambda (EmbeddedSource parity)
 
+## v2.4 Requirements - GitHub-Native Deployment Automation
+
+**Goal:** Provide two complementary GitHub deployment paths: portable GitHub Actions scaffolding in the open-source `cargo-pmcp` CLI for all supported targets, and a pmcp.run managed connected-repository path for hosted builds, deploy logs, rollbacks, and previews.
+
+- [ ] **GHDEP-01**: Developer can run `cargo pmcp github init --target-type <target>` to generate an idempotent `.github/workflows/pmcp-deploy.yml` for each cargo-pmcp deployment target (`pmcp-run`, `aws-lambda`, `google-cloud-run`, `azure-container-apps`, `cloudflare-workers`)
+- [ ] **GHDEP-02**: The generated workflow reuses `.pmcp/deploy.toml`, named target conventions, and `cargo pmcp deploy`; no second deployment config file is introduced for GitHub automation
+- [ ] **GHDEP-03**: pmcp.run GitHub Actions deployments prefer GitHub OIDC (`id-token: write`) and exchange the GitHub OIDC JWT for a short-lived pmcp.run deploy credential instead of requiring long-lived PMCP secrets
+- [ ] **GHDEP-04**: The pmcp.run OIDC trust contract is represented explicitly in SDK-side command/help/docs so the service can validate repository, ref, audience, and environment claims before minting deploy credentials
+- [ ] **GHDEP-05**: Non-pmcp.run targets get transparent GitHub Actions workflows that keep cloud credentials in the user's GitHub/cloud account and do not route AWS/GCP/Azure/Cloudflare credentials through pmcp.run
+- [ ] **GHDEP-06**: Documentation and examples distinguish the open-source GitHub Actions path from the pmcp.run connected-repository path, including trigger behavior, authentication, logs, rollbacks, and preview deployment ownership
+
 ## Out of Scope (explicit exclusions)
 
 - **Live workbook interpretation on the hot path** — dissolves the security message; compile-not-interpret is the whole point (reader never enters served binary)
@@ -100,7 +111,7 @@
 | WBRT-03 | Phase 91 | Complete |
 | WBRT-04 | Phase 91 | Complete |
 | WBDL-01 | Phase 91 | Complete |
-| WBDL-03 | Phase 93 | Pending |
+| WBDL-03 | Phase 93 | Complete |
 | WBSV-01 | Phase 92 | Complete |
 | WBSV-02 | Phase 92 | Complete |
 | WBSV-03 | Phase 92 | Complete |
@@ -110,20 +121,20 @@
 | WBSV-07 | Phase 92 | Complete |
 | WBSV-08 | Phase 92 | Complete |
 | WBSV-09 | Phase 92 | Complete |
-| WBCO-01 | Phase 93 | Pending |
-| WBCO-02 | Phase 93 | Pending |
-| WBCO-03 | Phase 93 | Pending |
-| WBCO-04 | Phase 93 | Pending |
-| WBCO-05 | Phase 93 | Pending |
-| WBCO-06 | Phase 93 | Pending |
-| WBCO-07 | Phase 93 | Pending |
-| WBGV-01 | Phase 93 | Pending |
-| WBGV-02 | Phase 93 | Pending |
-| WBGV-03 | Phase 93 | Pending |
-| WBGV-04 | Phase 93 | Pending |
-| WBGV-05 | Phase 93 | Pending |
-| WBGV-06 | Phase 93 | Pending |
-| WBGV-07 | Phase 93 | Pending |
+| WBCO-01 | Phase 93 | Complete |
+| WBCO-02 | Phase 93 | Complete |
+| WBCO-03 | Phase 93 | Complete |
+| WBCO-04 | Phase 93 | Complete |
+| WBCO-05 | Phase 93 | Complete |
+| WBCO-06 | Phase 93 | Complete |
+| WBCO-07 | Phase 93 | Complete |
+| WBGV-01 | Phase 93 | Complete |
+| WBGV-02 | Phase 93 | Complete |
+| WBGV-03 | Phase 93 | Complete |
+| WBGV-04 | Phase 93 | Complete |
+| WBGV-05 | Phase 93 | Complete |
+| WBGV-06 | Phase 93 | Complete |
+| WBGV-07 | Phase 93 | Complete |
 | WBCL-01 | Phase 94 | Pending |
 | WBCL-02 | Phase 94 | Pending |
 | WBCL-03 | Phase 94 | Pending |
@@ -133,3 +144,9 @@
 | WBDL-02 | Phase 96 | Pending |
 | WBEX-01 | Phase 96 | Pending |
 | WBEX-02 | Phase 96 | Pending |
+| GHDEP-01 | Phase 97 | Pending |
+| GHDEP-02 | Phase 97 | Pending |
+| GHDEP-03 | Phase 97 | Pending |
+| GHDEP-04 | Phase 97 | Pending |
+| GHDEP-05 | Phase 97 | Pending |
+| GHDEP-06 | Phase 97 | Pending |
