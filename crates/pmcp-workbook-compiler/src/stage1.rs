@@ -183,12 +183,12 @@ fn gate_with_policy(
     }
 }
 
-/// The TEST/DEV-ONLY trusted-fixture gate wrapper: honour the committed-fixture
-/// provenance override so the producer/consumer proof can compile a neutral,
-/// non-Excel-authored fixture. Compiled ONLY under `cfg(test)` OR the dev-only
-/// `trusted-fixture` feature (never in the default/published feature set);
-/// production builds never link it.
-#[cfg(any(test, feature = "trusted-fixture"))]
+/// The TEST-ONLY trusted-fixture gate wrapper: honour the committed-fixture
+/// provenance override so the in-crate producer/consumer golden proof can compile
+/// a neutral fixture whose non-Excel recalc stamp trips the staleness signals.
+/// Compiled ONLY under `#[cfg(test)]` (CR-01: there is NO publishable feature that
+/// arms it); production builds never link it.
+#[cfg(test)]
 fn trusted_fixture_gate(
     original_bytes: &[u8],
     map: &WorkbookMap,
@@ -203,12 +203,12 @@ fn trusted_fixture_gate(
     (provenance, result.map(|_corpus| ()))
 }
 
-/// Production stub for the test/dev-only trusted-fixture gate: NEVER constructible
-/// on the production path (the policy enum only yields `TrustedFixture` from a
-/// test / the dev-only feature). Compiled in production builds so the match stays
-/// total; it enforces the gate exactly like `Enforce` so even a hypothetical
-/// production `TrustedFixture` could not weaken refusal.
-#[cfg(not(any(test, feature = "trusted-fixture")))]
+/// Production stub for the test-only trusted-fixture gate: NEVER constructible on
+/// the production path (the policy enum only yields `TrustedFixture` from
+/// `#[cfg(test)]` code). Compiled in non-test builds so the match stays total; it
+/// enforces the gate exactly like `Enforce` so even a hypothetical production
+/// `TrustedFixture` could not weaken refusal.
+#[cfg(not(test))]
 fn trusted_fixture_gate(
     original_bytes: &[u8],
     map: &WorkbookMap,

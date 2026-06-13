@@ -61,16 +61,23 @@ use super::{OracleCorpus, OracleProvenance, ProvenanceError, RegionHashes};
 /// calcId AND no Excel `<AppVersion>` build string is umya-fabricated (WBCO-07).
 pub(crate) const UMYA_SENTINEL_CALC_ID: u32 = 122211;
 
-/// The STALENESS / non-Excel-recalc freshness rules a TEST/DEV trusted-fixture
-/// override demotes from `Error` to `Warning` (so a non-Excel-authored fixture
-/// whose cached values ARE the authored oracle can compile on the proof path; the
-/// softened signals survive as recorded evidence). The STRUCTURAL corruption rules
+/// The genuine-STALENESS freshness rules a `#[cfg(test)]` trusted-fixture override
+/// may demote from `Error` to `Warning` (so a committed fixture written by a
+/// non-Excel WRITER — whose `fullCalcOnLoad=1` recalc stamp trips the staleness
+/// signals even though its cached `<v>` values ARE the authored oracle — can
+/// compile on the proof path; the softened signals survive as recorded evidence).
+///
+/// CR-01 defense-in-depth: `oracle/non-excel-app` is deliberately NOT here. The
+/// fabricated-/non-Excel-identity refusal can NEVER be softened — not even by the
+/// test-only override. A fixture that needs trusted Excel identity must obtain it
+/// the legitimate way (carry a genuine Excel `<Application>` + `<AppVersion>` so
+/// it classifies as [`ProvenanceClass::ExcelTrusted`]); the override may only
+/// relax genuine staleness. The STRUCTURAL corruption rules
 /// (`oracle/unreadable-provenance`, `oracle/missing-provenance`,
-/// `oracle/missing-manifest`) are deliberately NOT here — they stay `Error` even
-/// under the override, so a malformed/unreadable workbook still hard-refuses.
+/// `oracle/missing-manifest`) are likewise NOT here — they stay `Error` even under
+/// the override, so a malformed/unreadable workbook still hard-refuses.
 const SOFTENABLE_FRESHNESS_RULES: &[&str] = &[
     "oracle/no-recalc",
-    "oracle/non-excel-app",
     "oracle/stale-cache",
     "oracle/missing-cache",
 ];
@@ -196,14 +203,16 @@ fn provenance_error_to_finding(err: &ProvenanceError, sheet: &str) -> LintFindin
     }
 }
 
-/// A committed-fixture provenance override (test paths ONLY).
+/// A committed-fixture provenance override (TEST paths ONLY).
 ///
-/// A trusted committed fixture (authored by `rust_xlsxwriter`, not Excel, so it
-/// carries no Excel provenance) may ship this marker so reconcile tests can run.
-/// The override is honoured ONLY by [`gate_with_fixture_override`] (a test API);
-/// the production [`gate`] NEVER honours it — production always classifies from
-/// raw bytes. A test asserts the SAME bytes are still REFUSED on the production
-/// path (`override_does_not_weaken_production`).
+/// A trusted committed fixture (authored by `rust_xlsxwriter`, whose non-Excel
+/// recalc stamp trips the STALENESS freshness signals) may ship this marker so
+/// reconcile tests can run. The override is honoured ONLY by
+/// [`gate_with_fixture_override`] (a `#[cfg(test)]` API — CR-01: NOT reachable
+/// from any publishable feature); the production [`gate`] NEVER honours it —
+/// production always classifies from raw bytes. A test asserts the SAME bytes are
+/// still REFUSED on the production path (`override_does_not_weaken_production`).
+#[cfg(test)]
 #[derive(Debug, Clone, Copy)]
 pub struct TrustedFixtureMarker;
 
@@ -224,42 +233,47 @@ pub fn gate(
     map: &WorkbookMap,
     manifest: &Manifest,
 ) -> (OracleProvenance, Result<OracleCorpus, Vec<LintFinding>>) {
-    gate_inner(original_bytes, map, manifest, None)
+    gate_inner(original_bytes, map, manifest, false)
 }
 
 /// The freshness / provenance gate with an OPTIONAL trusted-fixture override
 /// (TEST API only).
 ///
-/// When `fixture_override` is `Some(TrustedFixtureMarker)`, a provenance class
-/// that would otherwise REFUSE on the umya/non-Excel/unknown axis is admitted so
-/// reconcile tests can run against committed fixtures whose authoring tool does
-/// not write Excel provenance. The override CANNOT weaken the production refuse
-/// path: [`gate`] passes `None` and always classifies from raw bytes.
+/// When `fixture_override` is `Some(TrustedFixtureMarker)`, the genuine-STALENESS
+/// freshness findings ([`SOFTENABLE_FRESHNESS_RULES`]) are DEMOTED to `Warning` so
+/// reconcile tests can run against committed fixtures whose non-Excel WRITER trips
+/// the staleness signals. The override CANNOT soften the fabricated-/non-Excel
+/// IDENTITY refusal (`oracle/non-excel-app`) — that always stays a blocking
+/// `Error` (CR-01 defense-in-depth). The override CANNOT weaken the production
+/// refuse path: [`gate`] passes `false` and always classifies from raw bytes.
 ///
-/// This entry exists ONLY for the test / dev-fixture path (gated behind
-/// `cfg(test)` OR the dev-only `trusted-fixture` feature, which is NEVER in the
-/// default/published feature set); it is never wired into the production
-/// `compile_workbook` driver (which always passes `None`).
-#[cfg(any(test, feature = "trusted-fixture"))]
+/// This entry exists ONLY for the test path (gated behind `#[cfg(test)]` — CR-01:
+/// there is NO publishable feature that arms it, so a default/`--all-features`
+/// build of the crate as a dependency neither compiles nor exposes it); it is
+/// never wired into the production `compile_workbook` driver (which always passes
+/// `false`).
+#[cfg(test)]
 pub(crate) fn gate_with_fixture_override(
     original_bytes: &[u8],
     map: &WorkbookMap,
     manifest: &Manifest,
     fixture_override: Option<TrustedFixtureMarker>,
 ) -> (OracleProvenance, Result<OracleCorpus, Vec<LintFinding>>) {
-    gate_inner(original_bytes, map, manifest, fixture_override)
+    gate_inner(original_bytes, map, manifest, fixture_override.is_some())
 }
 
-/// The shared gate body. `fixture_override` is `None` on the production path
-/// ([`gate`]); only the test API ([`gate_with_fixture_override`]) may pass
-/// `Some`. The override admits an otherwise-refused provenance CLASS — it never
-/// bypasses the freshness (calc-mode/calcId/missing-cache) findings.
+/// The shared gate body. `soften_staleness` is `false` on the production path
+/// ([`gate`]); only the test API ([`gate_with_fixture_override`]) may pass `true`.
+/// When `true`, the genuine-staleness findings ([`SOFTENABLE_FRESHNESS_RULES`])
+/// are demoted to `Warning` — but the fabricated-/non-Excel IDENTITY refusal
+/// (`oracle/non-excel-app`) ALWAYS fires (CR-01: it is not softenable), and the
+/// override never bypasses any other finding.
 #[allow(clippy::too_many_lines)]
 fn gate_inner(
     original_bytes: &[u8],
     map: &WorkbookMap,
     manifest: &Manifest,
-    fixture_override: Option<TrustedFixtureMarker>,
+    soften_staleness: bool,
 ) -> (OracleProvenance, Result<OracleCorpus, Vec<LintFinding>>) {
     let sheet = workbook_sheet(map);
     let mut findings: Vec<LintFinding> = Vec::new();
@@ -397,13 +411,14 @@ fn gate_inner(
         ));
     }
 
-    // WBCO-07: the provenance CLASS decides the identity refusal. A non-trusted
-    // class (NonExcel / UmyaFabricated / UnknownStale) is REFUSED with
-    // oracle/non-excel-app — UNLESS a TEST trusted-fixture override is supplied,
-    // which admits the class (the override path is #[cfg(test)] only; production
-    // [`gate`] passes None). The freshness findings above ALWAYS apply, override
-    // or not — the override only relaxes the provenance-CLASS axis.
-    if class != ProvenanceClass::ExcelTrusted && fixture_override.is_none() {
+    // WBCO-07 + CR-01: the provenance CLASS decides the identity refusal. A
+    // non-trusted class (NonExcel / UmyaFabricated / UnknownStale) is ALWAYS
+    // REFUSED with oracle/non-excel-app — the test trusted-fixture override does
+    // NOT exempt it (oracle/non-excel-app is not in SOFTENABLE_FRESHNESS_RULES, so
+    // it stays a blocking Error even under the override). The override may only
+    // demote genuine STALENESS; a fixture that needs trusted identity must carry a
+    // genuine Excel app.xml so it classifies as ExcelTrusted.
+    if class != ProvenanceClass::ExcelTrusted {
         let app_name = app
             .application
             .as_deref()
@@ -451,18 +466,20 @@ fn gate_inner(
         ));
     }
 
-    // TRUSTED-FIXTURE FRESHNESS SOFTENING (test/dev path ONLY): a committed
+    // TRUSTED-FIXTURE FRESHNESS SOFTENING (#[cfg(test)] path ONLY): a committed
     // trusted fixture authored by a non-Excel WRITER (e.g. rust_xlsxwriter, which
     // hard-codes `fullCalcOnLoad=1` and writes no Excel recalc stamp) trips the
     // STALENESS freshness findings even though its cached `<v>` values are the
     // authored oracle. When the override is present those STALENESS signals are
     // DEMOTED to Warning so the proof can compile the fixture — they SURVIVE as
-    // recorded evidence, never silently dropped. The STRUCTURAL corruption
-    // findings (`oracle/unreadable-provenance`, `oracle/missing-provenance`,
-    // `oracle/missing-manifest`) are NOT in the softenable set: a malformed
-    // workbook still hard-refuses even with the override. Production
-    // [`gate`] passes `None`, so this never runs on the production path.
-    if fixture_override.is_some() {
+    // recorded evidence, never silently dropped. The IDENTITY refusal
+    // (`oracle/non-excel-app`) and the STRUCTURAL corruption findings
+    // (`oracle/unreadable-provenance`, `oracle/missing-provenance`,
+    // `oracle/missing-manifest`) are NOT in the softenable set: a fabricated/
+    // non-Excel/malformed workbook still hard-refuses even with the override
+    // (CR-01). Production [`gate`] passes `false`, so this never runs on the
+    // production path.
+    if soften_staleness {
         for f in &mut findings {
             if SOFTENABLE_FRESHNESS_RULES.contains(&f.rule.as_str()) {
                 f.severity = Severity::Warning;
@@ -729,10 +746,39 @@ mod tests {
     }
 
     #[test]
-    fn override_does_not_weaken_production() {
-        // The SAME umya-fabricated bytes: the test override ADMITS the provenance
-        // class (so reconcile tests can run against a rust_xlsxwriter fixture),
-        // but the production gate() still REFUSES the identical bytes.
+    fn override_admits_genuine_excel_but_stale_fixture() {
+        // A GENUINE Excel identity (anchored name + AppVersion build + non-sentinel
+        // calcId ⇒ ExcelTrusted) whose ONLY problem is a staleness signal
+        // (fullCalcOnLoad=1 ⇒ oracle/stale-cache): the test override DEMOTES the
+        // staleness signal so the committed-fixture proof can compile, but the
+        // identity axis was never in question.
+        let wb = r#"<?xml version="1.0"?><workbook><calcPr calcMode="auto" calcId="124519" fullCalcOnLoad="1"/></workbook>"#;
+        let app = r#"<?xml version="1.0"?><Properties><Application>Microsoft Excel</Application><AppVersion>12.0000</AppVersion></Properties>"#;
+        let bytes = xlsx(wb, app);
+        let m = clean_map();
+        let mani = manifest();
+
+        // Production path: REFUSED on the staleness signal (override is None).
+        let (_p, prod) = gate(&bytes, &m, &mani);
+        let prod_findings = prod.expect_err("production must refuse a fullCalcOnLoad=1 cache");
+        assert!(has_rule(&prod_findings, "oracle/stale-cache"));
+
+        // Test override path: the genuine-Excel staleness signal is demoted, so the
+        // SAME bytes accept.
+        let (_p2, overridden) =
+            gate_with_fixture_override(&bytes, &m, &mani, Some(TrustedFixtureMarker));
+        assert!(
+            overridden.is_ok(),
+            "the test override demotes the genuine-Excel staleness signal, got {overridden:?}"
+        );
+    }
+
+    #[test]
+    fn override_cannot_soften_fabricated_identity() {
+        // CR-01 defense-in-depth: even WITH the test override, umya-fabricated
+        // identity (Microsoft Excel name + sentinel calcId + NO AppVersion ⇒
+        // UmyaFabricated ⇒ oracle/non-excel-app) is STILL refused — the override may
+        // only soften genuine staleness, never the fabricated-identity refusal.
         let wb = format!(
             r#"<?xml version="1.0"?><workbook><calcPr calcMode="auto" calcId="{UMYA_SENTINEL_CALC_ID}"/></workbook>"#
         );
@@ -746,13 +792,15 @@ mod tests {
         let prod_findings = prod.expect_err("production must refuse umya-fabricated bytes");
         assert!(has_rule(&prod_findings, "oracle/non-excel-app"));
 
-        // Test override path: the provenance CLASS is admitted (calcMode=auto +
-        // non-zero calcId + no missing cache ⇒ fresh), so the SAME bytes accept.
+        // Test override path: STILL refused — oracle/non-excel-app is no longer
+        // softenable, so the fabricated identity stays a blocking Error.
         let (_p2, overridden) =
             gate_with_fixture_override(&bytes, &m, &mani, Some(TrustedFixtureMarker));
+        let over_findings =
+            overridden.expect_err("the override must NOT soften fabricated identity (CR-01)");
         assert!(
-            overridden.is_ok(),
-            "the test override admits the fixture provenance class, got {overridden:?}"
+            has_rule(&over_findings, "oracle/non-excel-app"),
+            "fabricated identity stays a blocking Error even under the override, got {over_findings:?}"
         );
     }
 

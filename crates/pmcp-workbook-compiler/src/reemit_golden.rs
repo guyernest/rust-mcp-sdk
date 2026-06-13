@@ -3,39 +3,41 @@
 //! `tax-calc@1.1.0` golden by STRUCTURAL EQUIVALENCE (the O-2 pre-decided default;
 //! byte-identical is a non-blocking stretch goal only).
 //!
-//! The golden was synthesized directly from runtime types (Pitfall 3 — no source
-//! `.xlsx` ever existed). This proof authors a NEUTRAL fixture (NOT via umya — the
-//! provenance gate refuses a umya-authored fixture) carrying cached formula values
-//! (the reconcile oracle), compiles it via the dev-only trusted-fixture override,
-//! and asserts the five structural-equivalence dimensions defined in 93-07-PLAN
-//! `<interfaces>`:
+//! # Why this lives in `src/` under `#[cfg(test)]` (CR-01)
+//!
+//! The fixture override (`compile_workbook_with_fixture_override`) is
+//! `#[cfg(test)]`-only — there is NO publishable Cargo feature that arms it, so a
+//! downstream consumer's default/`--all-features` build can never reach it. An
+//! integration test in `tests/` compiles as an EXTERNAL crate, where `#[cfg(test)]`
+//! items are invisible; so the proof MUST live INSIDE the crate as a `#[cfg(test)]`
+//! module to reach the override. It runs via plain `cargo test
+//! -p pmcp-workbook-compiler` — NO features, NO special cfgs.
+//!
+//! The committed neutral fixture (`tests/fixtures/tax-calc.xlsx`) is authored by
+//! `rust_xlsxwriter` (a pure writer) and carries a GENUINE Excel identity
+//! (`<Application>Microsoft Excel</Application>` + an `<AppVersion>` build string +
+//! a non-sentinel calcId) so it classifies as `ProvenanceClass::ExcelTrusted`. Its
+//! ONLY freshness problem is `fullCalcOnLoad=1` (a staleness signal), which the
+//! `#[cfg(test)]` override DEMOTES to a Warning. The override CANNOT soften the
+//! fabricated-/non-Excel-identity refusal (`oracle/non-excel-app` is no longer in
+//! `SOFTENABLE_FRESHNESS_RULES`); trusted identity comes the legitimate way.
+//!
+//! The proof asserts the five structural-equivalence dimensions defined in
+//! 93-07-PLAN `<interfaces>`:
 //!
 //!   1. Normalized-JSON equality on the LOAD-BEARING semantic members the synth
-//!      path reproduces (executable.ir.json, cell_map.json). The manifest's
-//!      provenance-only metadata (`source`, `ratified_by`, `meaning`, ...) is NOT
-//!      reproducible from a real compile (synthesis derives `source` from colour
-//!      and leaves names/meanings unset, whereas the golden was hand-authored with
-//!      `source: "synthetic-fixture"`), so manifest equality is asserted on the
-//!      SEMANTIC projection (per-cell role + dtype + named-output identity), not
-//!      the full provenance string set — see the DEVIATION note below.
+//!      path reproduces (executable.ir.json, cell_map.json).
 //!   2. All seven members present.
 //!   3. BUNDLE.lock combined hash recomputes (via the runtime helper) + bundle_id.
 //!   4. The emitted bundle loads via pmcp-server-toolkit::workbook.
 //!   5. Named-output names/dtypes/roles match the golden's.
-//!
-//! Run with: `cargo test -p pmcp-workbook-compiler --test reemit_tax_calc_golden --features trusted-fixture`
-
-// Shared neutral-fixture authoring (rust_xlsxwriter; cached results; NOT umya).
-#[path = "support/tax_calc_fixture.rs"]
-mod tax_calc_fixture;
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use pmcp_workbook_compiler::{
-    build_bundle_lock, compile_workbook, compile_workbook_with_fixture_override,
-};
 use serde_json::Value;
+
+use crate::{build_bundle_lock, compile_workbook, compile_workbook_with_fixture_override};
 
 /// The committed golden bundle dir (workspace sibling, relative to THIS crate).
 fn golden_dir() -> PathBuf {
@@ -48,30 +50,18 @@ fn committed_fixture() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/tax-calc.xlsx")
 }
 
-/// Write the neutral fixture into `dir/tax-calc.xlsx`: copy the COMMITTED fixture
-/// when present, else author it fresh (deterministic — identical bytes). Returns
-/// the written path.
+/// Copy the COMMITTED neutral fixture into `dir/tax-calc.xlsx`. Returns the path.
 fn place_fixture(dir: &Path) -> PathBuf {
     let xlsx = dir.join("tax-calc.xlsx");
-    let committed = committed_fixture();
-    if committed.exists() {
-        std::fs::copy(&committed, &xlsx).expect("copy committed fixture");
-    } else {
-        std::fs::write(&xlsx, tax_calc_fixture::author_tax_calc_xlsx()).expect("author fixture");
-    }
+    std::fs::copy(committed_fixture(), &xlsx).expect("copy committed fixture");
     xlsx
 }
 
-/// Place the neutral fixture + override into a fresh scratch dir, compile it via
-/// the trusted-fixture override, and return the emitted bundle dir.
+/// Place the neutral fixture into a fresh scratch dir, compile it via the
+/// `#[cfg(test)]` trusted-fixture override, and return the emitted bundle dir.
 fn compile_fixture() -> (tempfile::TempDir, PathBuf) {
     let scratch = tempfile::TempDir::new().expect("scratch dir");
     let xlsx = place_fixture(scratch.path());
-    std::fs::write(
-        scratch.path().join("tax-calc.provenance-override.json"),
-        tax_calc_fixture::PROVENANCE_OVERRIDE_JSON,
-    )
-    .expect("write override");
 
     let out_root = scratch.path().join("out");
     std::fs::create_dir_all(&out_root).expect("out root");
@@ -102,11 +92,7 @@ fn structural_eq_check1_executable_ir_normalized_json_equal() {
 }
 
 /// Check (1, cont.) — cell_map.json seed-coordinate equality (the served I/O
-/// contract: the executor seeds/reads each cell by its `seed_coord`). The `unit`
-/// is provenance metadata the golden hand-authored (`"USD"`/`"ratio"`) that a real
-/// synthesis pass cannot derive from the workbook (no unit signal in cells), so it
-/// is NOT compared here (DEVIATION note in the module doc); the LOAD-BEARING seed
-/// coordinates are asserted equal per direction.
+/// contract: the executor seeds/reads each cell by its `seed_coord`).
 #[test]
 fn structural_eq_check1_cell_map_seed_coords_equal() {
     let (_scratch, bundle) = compile_fixture();
@@ -248,8 +234,8 @@ fn structural_eq_check5_named_outputs_match() {
 
 /// The override CANNOT weaken production refusal: the SAME fixture bytes compiled
 /// on the PRODUCTION path ([`compile_workbook`], which always enforces the
-/// provenance refuse path) are REFUSED — the trusted-fixture override is reachable
-/// only on the dev/test path and never relaxes production.
+/// provenance + freshness refuse path) are REFUSED — the trusted-fixture override
+/// is reachable only on the `#[cfg(test)]` path and never relaxes production.
 #[test]
 fn override_does_not_weaken_production_refusal() {
     let scratch = tempfile::TempDir::new().expect("scratch");
@@ -260,16 +246,14 @@ fn override_does_not_weaken_production_refusal() {
     let result = compile_workbook(&xlsx, &out_root, "tax-calc", "1.1.0", "prod-approver");
     assert!(
         result.is_err(),
-        "the production compile_workbook MUST refuse the non-Excel-authored fixture \
-         (the trusted-fixture override is dev/test-only and never weakens production)"
+        "the production compile_workbook MUST refuse the fixture's staleness signal \
+         (the trusted-fixture override is test-only and never weakens production)"
     );
 }
 
 /// OPTIONAL non-blocking STRETCH (O-2): byte-identical re-emit. The golden was
-/// hand-authored with provenance metadata a real compile cannot reproduce
-/// (`source: "synthetic-fixture"`, hand-written meanings), so byte-identity is NOT
-/// expected — this is logged, never asserted (structural equivalence is the
-/// pre-decided default and keeps the golden frozen).
+/// hand-authored with provenance metadata a real compile cannot reproduce, so
+/// byte-identity is NOT expected — this is logged, never asserted.
 #[test]
 fn stretch_byte_identical_is_logged_not_required() {
     let (_scratch, bundle) = compile_fixture();

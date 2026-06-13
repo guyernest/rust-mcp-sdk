@@ -1,83 +1,81 @@
-//! Library-level `ingest → emit` demonstration of the generic compiler driver.
+//! Library-level demonstration of the GENERIC compiler driver's
+//! provenance-refusal boundary (WBCO-07).
 //!
-//! Authors the neutral `tax-calc.xlsx` fixture (3 inputs incl. an inline-DV enum,
-//! a governed bracket table, 4 named outputs, real formulas WITH cached values),
-//! then compiles it through [`pmcp_workbook_compiler::compile_workbook_with_fixture_override`]
-//! — the SAME synth-driven pipeline the production [`compile_workbook`] runs, but
-//! honouring the committed trusted-fixture provenance override so a non-Excel
-//! authored fixture is admitted on this DEV path. Production
-//! [`compile_workbook`](pmcp_workbook_compiler::compile_workbook) still REFUSES the
-//! same bytes.
+//! This example runs the PUBLIC [`pmcp_workbook_compiler::compile_workbook`] API
+//! against the committed neutral fixture (`tests/fixtures/tax-calc.xlsx`) and
+//! HONESTLY shows the outcome. The fixture is authored by a non-Excel writer, so
+//! its cache carries a `fullCalcOnLoad=1` staleness stamp — the production
+//! compiler correctly REFUSES it with a typed [`CompileError`]. A refusal is the
+//! honest demonstration: the security boundary is doing its job.
 //!
-//! Run with:
-//! `cargo run -p pmcp-workbook-compiler --example compile_a_workbook --features trusted-fixture`
+//! There is NO override here and NO Cargo feature to flip (CR-01: the
+//! trusted-fixture override is `#[cfg(test)]`-only — it is unreachable from any
+//! default or feature-unifiable build, so a downstream consumer can never arm the
+//! provenance bypass). The in-crate `#[cfg(test)]` golden proof
+//! (`src/reemit_golden.rs`) is where a successful compile-and-re-emit is proven.
+//!
+//! Run with: `cargo run -p pmcp-workbook-compiler --example compile_a_workbook`
 //!
 //! The CLI front-end is Phase 94 — this is the library-level demonstration.
 
-// The shared fixture authoring (NOT umya; rust_xlsxwriter writer with cached
-// results). `include!`d so the example and the proof share ONE authoring path.
-#[path = "../tests/support/tax_calc_fixture.rs"]
-mod tax_calc_fixture;
-
 use std::path::Path;
 
-use pmcp_workbook_compiler::compile_workbook_with_fixture_override;
+use pmcp_workbook_compiler::{compile_workbook, CompileError};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let committed = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/tax-calc.xlsx");
+    let xlsx_path = Path::new(committed);
+    if !xlsx_path.exists() {
+        return Err(format!("committed fixture not found: {committed}").into());
+    }
+    println!("compiling neutral fixture via the PUBLIC compile_workbook API: {committed}");
+
     let dir = std::env::temp_dir().join(format!("tax-calc-example-{}", std::process::id()));
     std::fs::create_dir_all(&dir)?;
-    let xlsx_path = dir.join("tax-calc.xlsx");
-
-    // Prefer the COMMITTED neutral fixture (`tests/fixtures/tax-calc.xlsx`); fall
-    // back to authoring it fresh (the authoring is deterministic, so both paths
-    // produce the same bytes). The committed override marks it as the trusted
-    // fixture for the dev/test override path.
-    let committed = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/tax-calc.xlsx");
-    if Path::new(committed).exists() {
-        std::fs::copy(committed, &xlsx_path)?;
-        println!("using committed neutral fixture: {committed}");
-    } else {
-        std::fs::write(&xlsx_path, tax_calc_fixture::author_tax_calc_xlsx())?;
-        println!("authored neutral fixture: {}", xlsx_path.display());
-    }
-    std::fs::write(
-        dir.join("tax-calc.provenance-override.json"),
-        tax_calc_fixture::PROVENANCE_OVERRIDE_JSON,
-    )?;
-
-    // Compile: ingest → stage1 (lint+synth+freshness) → ratify → parse+DAG →
-    // executor → reconcile → emit the seven-member bundle.
     let out_root = dir.join("out");
     std::fs::create_dir_all(&out_root)?;
-    let lock = compile_workbook_with_fixture_override(
-        &xlsx_path,
+
+    // The production pipeline: ingest -> stage1 (lint+synth+freshness) -> ratify ->
+    // parse+DAG -> executor -> reconcile -> emit. The freshness/provenance gate
+    // enforces the WBCO-07 refuse path — no override is reachable here.
+    match compile_workbook(
+        xlsx_path,
         &out_root,
         "tax-calc",
         "1.1.0",
         "example-approver",
-    )?;
-
-    let bundle_dir = out_root.join("tax-calc@1.1.0");
-    println!("emitted bundle: {}", bundle_dir.display());
-    println!(
-        "  bundle_id={} version={} combined_hash={}",
-        lock.bundle_id, lock.version, lock.combined
-    );
-    for member in [
-        "manifest.json",
-        "executable.ir.json",
-        "cell_map.json",
-        "layout.json",
-        "BUNDLE.lock",
-        "evidence/changelog.json",
-        "evidence/parser_equivalence.json",
-    ] {
-        let present = bundle_dir.join(member).exists();
-        println!("  [{}] {member}", if present { "x" } else { " " });
+    ) {
+        Ok(lock) => {
+            // A genuinely-Excel-provenanced, fresh workbook would land here.
+            let bundle_dir = out_root.join("tax-calc@1.1.0");
+            println!("emitted bundle: {}", bundle_dir.display());
+            println!(
+                "  bundle_id={} version={} combined_hash={}",
+                lock.bundle_id, lock.version, lock.combined
+            );
+        },
+        Err(e) => {
+            // The HONEST demonstration: the non-genuine-Excel cache is REFUSED with
+            // a typed error. This is the security boundary working as designed.
+            println!("provenance-refusal boundary REFUSED the workbook (as designed):");
+            match &e {
+                CompileError::Lint(msg) => {
+                    println!("  CompileError::Lint — collect-all blocking finding(s):");
+                    for line in msg.lines() {
+                        println!("  {line}");
+                    }
+                },
+                other => println!("  {other}"),
+            }
+            println!(
+                "\nThis refusal is correct: the committed fixture is not a genuine, fresh \
+                 Excel save, so its cached values are not trusted as the oracle. The \
+                 production compiler NEVER admits it — and there is no publishable feature \
+                 to bypass the boundary (CR-01)."
+            );
+        },
     }
 
-    // Clean up the scratch dir (the demonstration is the printed loop above).
     let _ = std::fs::remove_dir_all(&dir);
-    println!("ingest -> emit complete (seven-member bundle produced)");
     Ok(())
 }

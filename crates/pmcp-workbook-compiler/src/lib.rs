@@ -72,6 +72,13 @@ pub mod gate;
 /// Stage-1 composed pass — collect-all lint + synth + freshness + drift (Plan 06).
 pub mod stage1;
 
+// Producer/consumer golden proof (WBCO-05). In-crate `#[cfg(test)]` so it can
+// reach the `#[cfg(test)]`-only `compile_workbook_with_fixture_override`
+// (CR-01: the override is unreachable from any publishable feature; an external
+// integration test could not see it). Runs via plain `cargo test`.
+#[cfg(test)]
+mod reemit_golden;
+
 pub use error::CompileError;
 
 // ---- Curated re-export surface (re-export the runtime/dialect shared types) ----
@@ -287,20 +294,17 @@ fn compile_workbook_inner(
     Ok(lock)
 }
 
-/// TEST/DEV-ONLY: compile a committed neutral fixture, honouring its
-/// trusted-fixture provenance override so the producer/consumer proof (and the
-/// `compile_a_workbook` example) can run against a workbook authored WITHOUT Excel
-/// (so it carries no Excel provenance). Reachable ONLY under `cfg(test)` OR the
-/// dev-only `trusted-fixture` feature (NEVER in the default/published feature
-/// set); the production [`compile_workbook`] always passes
+/// TEST-ONLY: compile a committed neutral fixture, honouring its trusted-fixture
+/// provenance override so the in-crate producer/consumer golden proof can run
+/// against a workbook authored WITHOUT a genuine Excel save (its `fullCalcOnLoad`
+/// staleness signal is demoted to a Warning). Reachable ONLY under `cfg(test)`
+/// (CR-01: there is NO publishable feature that arms this — a default or
+/// `--all-features` build of the crate as a dependency neither compiles nor
+/// exposes this symbol). The production [`compile_workbook`] always passes
 /// [`FreshnessPolicy::Enforce`], so the same bytes are REFUSED on the production
 /// path (the override cannot weaken production refusal).
-///
-/// # Errors
-/// Returns the per-stage [`CompileError`] variant on failure (same surface as
-/// [`compile_workbook`]).
-#[cfg(any(test, feature = "trusted-fixture"))]
-pub fn compile_workbook_with_fixture_override(
+#[cfg(test)]
+fn compile_workbook_with_fixture_override(
     workbook_path: &Path,
     out_root: &Path,
     workflow: &str,
