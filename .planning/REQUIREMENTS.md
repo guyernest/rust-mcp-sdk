@@ -57,10 +57,10 @@
 
 ### Workbook CLI & Developer Experience
 
-- [ ] **WBCL-01**: Developer can run `cargo pmcp compile-workbook <wb.xlsx>` to ingest→lint→synth→parse→compile→reconcile→**gate**→write a bundle (gate runs before any write)
-- [ ] **WBCL-02**: Developer can run `cargo pmcp lint-workbook <wb.xlsx>` to run the dialect linter standalone
-- [ ] **WBCL-03**: Developer can run `cargo pmcp emit-bundle` to regenerate a bundle without the gate (dev/reference)
-- [ ] **WBCL-04**: A project declares workbooks → bundle IDs in a project-level `pmcp.toml`, replacing the lighthouse's single-workbook justfile/path assumptions
+- [x] **WBCL-01**: Developer can run `cargo pmcp compile-workbook <wb.xlsx>` to ingest→lint→synth→parse→compile→reconcile→**gate**→write a bundle (gate runs before any write)
+- [x] **WBCL-02**: Developer can run `cargo pmcp lint-workbook <wb.xlsx>` to run the dialect linter standalone
+- [x] **WBCL-03**: Developer can run `cargo pmcp emit-bundle` to regenerate a bundle without the gate (dev/reference)
+- [x] **WBCL-04**: A project declares workbooks → bundle IDs in a project-level `pmcp.toml`, replacing the lighthouse's single-workbook justfile/path assumptions
 - [ ] **WBCL-05**: Developer can run `cargo pmcp new --kind workbook-server` to scaffold a thin binary over `BundleSource` + the served-tool toolkit module (Shape B)
 - [ ] **WBCL-06**: A `pmcp-workbook-server` pure-config binary stands up a live MCP server from a compiled bundle alone, no user Rust (Shape A, mirroring `pmcp-sql-server`)
 
@@ -135,10 +135,10 @@
 | WBGV-05 | Phase 93 | Complete |
 | WBGV-06 | Phase 93 | Complete |
 | WBGV-07 | Phase 93 | Complete |
-| WBCL-01 | Phase 94 | Pending |
-| WBCL-02 | Phase 94 | Pending |
-| WBCL-03 | Phase 94 | Pending |
-| WBCL-04 | Phase 94 | Pending |
+| WBCL-01 | Phase 94 | Complete |
+| WBCL-02 | Phase 94 | Complete |
+| WBCL-03 | Phase 94 | Complete |
+| WBCL-04 | Phase 94 | Complete |
 | WBCL-06 | Phase 95 | Pending |
 | WBCL-05 | Phase 96 | Pending |
 | WBDL-02 | Phase 96 | Pending |
