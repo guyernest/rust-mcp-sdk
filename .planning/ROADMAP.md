@@ -1723,7 +1723,7 @@ Plans:
 - [x] **Phase 92: BundleSource + Served-Tool Toolkit Module** — Freeze the bundle contract from the consumer side: `BundleSource` trait (local-dir + embedded) + the generic, fully manifest-driven `workbook` feature module in `pmcp-server-toolkit` (all five tools, fail-closed validation, boot integrity gate) against a test bundle (verification: gaps found 2026-06-10) (completed 2026-06-11)
 - [x] **Phase 93: Workbook Compiler + §5 Generalization Fixes + Promote Gate** — Port `pmcp-workbook-compiler` (umya-isolated offline pipeline), do the §5 fixes here (manifest-driven emit, CR-01/CR-02/WR-01, umya fabricated-provenance), and ship the change-class + golden-corpus promote gate with the `--accept` approval flow (completed 2026-06-13)
 - [x] **Phase 94: CLI Subcommands + `pmcp.toml`** — `cargo pmcp compile-workbook` / `lint-workbook` / `emit-bundle` thin shells over the compiler, the gated `--accept --approver --effective-date` flow, and a project-level `pmcp.toml` mapping workbooks → bundle IDs (kills single-workbook assumptions) (completed 2026-06-14)
-- [ ] **Phase 95: Shape A Binary `pmcp-workbook-server`** — A pure-config binary that stands up a live MCP server from a compiled bundle alone (no user Rust), mirroring `pmcp-sql-server` field-for-field
+- [x] **Phase 95: Shape A Binary `pmcp-workbook-server`** — A pure-config binary that stands up a live MCP server from a compiled bundle alone (no user Rust), mirroring `pmcp-sql-server` field-for-field (completed 2026-06-14)
 - [ ] **Phase 96: Shape B Scaffold + Dialect-Version Declaration + Generalization Validation** — `cargo pmcp new --kind workbook-server` scaffold (Shape B), workbooks declare the dialect version they target, and the second-workbook + Excel-quirk-corpus generalization gates prove the manifest is truly synth-driven
 
 ## Phase Details — v2.3 Milestone
@@ -1872,7 +1872,7 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 95-02-PLAN.md — Test trio (assemble surface / ephemeral-port HTTP smoke / mcp-tester parity through the real binary path) + proptest fuzz of the --bundle-id fail-closed guard + purity-check assertion for the reader-free served cone + CLAUDE.md slot-9a publish-order wiring
+- [x] 95-02-PLAN.md — Test trio (assemble surface / ephemeral-port HTTP smoke / mcp-tester parity through the real binary path) + proptest fuzz of the --bundle-id fail-closed guard + purity-check assertion for the reader-free served cone + CLAUDE.md slot-9a publish-order wiring
 
 ### Phase 96: Shape B Scaffold + Dialect-Version Declaration + Generalization Validation
 
@@ -1898,5 +1898,5 @@ Plans:
 | 92. BundleSource + Served-Tool Toolkit Module | 7/7 | Complete    | 2026-06-11 |
 | 93. Workbook Compiler + §5 Fixes + Promote Gate | 7/7 | Complete    | 2026-06-13 |
 | 94. CLI Subcommands + `pmcp.toml` | 6/6 | Complete    | 2026-06-14 |
-| 95. Shape A Binary `pmcp-workbook-server` | 1/2 | In Progress|  |
+| 95. Shape A Binary `pmcp-workbook-server` | 2/2 | Complete   | 2026-06-14 |
 | 96. Shape B Scaffold + Dialect-Version + Generalization | 0/? | Not started | - |
