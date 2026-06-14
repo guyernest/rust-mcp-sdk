@@ -1866,7 +1866,12 @@ Plans:
 
 **Plans**: 2 plans
 Plans:
+**Wave 1**
+
 - [ ] 95-01-PLAN.md — Re-skin the pmcp-sql-server crate as pmcp-workbook-server: lib (run/serve/run_serving + RunError incl. BundleIdMismatch), cli Args (--bundle-dir/--bundle-id/--http loopback), main shim, build_server seam (LocalDirSource + --bundle-id assert + try_with_workbook_bundle), workspace registration, runnable example over the synthetic golden bundle
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
 - [ ] 95-02-PLAN.md — Test trio (assemble surface / ephemeral-port HTTP smoke / mcp-tester parity through the real binary path) + proptest fuzz of the --bundle-id fail-closed guard + purity-check assertion for the reader-free served cone + CLAUDE.md slot-9a publish-order wiring
 
 ### Phase 96: Shape B Scaffold + Dialect-Version Declaration + Generalization Validation
