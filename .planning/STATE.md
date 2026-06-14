@@ -4,8 +4,8 @@ milestone: v2.3
 milestone_name: Excel-as-Configuration MCP Servers
 status: executing
 stopped_at: Phase 95 context gathered
-last_updated: "2026-06-14T21:44:06.030Z"
-last_activity: 2026-06-14 -- Phase 95 planning complete
+last_updated: "2026-06-14T23:00:10.598Z"
+last_activity: 2026-06-14 -- Phase 95 execution started
 progress:
   total_phases: 53
   completed_phases: 45
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-06-09) · .planning/ROADMAP.md (v2.3 milestone, Phases 91-96)
 
 **Core value:** Compile, never interpret — any project can compile a governed Excel workbook into a tested, versioned, deterministic MCP server where the workbook is simultaneously the specification (formula DAG), the test oracle (cached cell values = assertions), and the output template.
-**Current focus:** Phase 94 — cli-subcommands-pmcp-toml
+**Current focus:** Phase 95 — shape-a-binary-pmcp-workbook-server
 
 ## Current Position
 
-Phase: 999.1
-Plan: Not started
-Status: Ready to execute
-Last activity: 2026-06-14 -- Phase 95 planning complete
+Phase: 95 (shape-a-binary-pmcp-workbook-server) — EXECUTING
+Plan: 1 of 2
+Status: Executing Phase 95
+Last activity: 2026-06-14 -- Phase 95 execution started
 
 Progress: [███░░░░░░░] 33% (v2.3 phases: 91, 92 done; 93–96 remain)
 

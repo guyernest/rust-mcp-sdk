@@ -1868,7 +1868,7 @@ Plans:
 Plans:
 **Wave 1**
 
-- [ ] 95-01-PLAN.md — Re-skin the pmcp-sql-server crate as pmcp-workbook-server: lib (run/serve/run_serving + RunError incl. BundleIdMismatch), cli Args (--bundle-dir/--bundle-id/--http loopback), main shim, build_server seam (LocalDirSource + --bundle-id assert + try_with_workbook_bundle), workspace registration, runnable example over the synthetic golden bundle
+- [x] 95-01-PLAN.md — Re-skin the pmcp-sql-server crate as pmcp-workbook-server: lib (run/serve/run_serving + RunError incl. BundleIdMismatch), cli Args (--bundle-dir/--bundle-id/--http loopback), main shim, build_server seam (LocalDirSource + --bundle-id assert + try_with_workbook_bundle), workspace registration, runnable example over the synthetic golden bundle
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
@@ -1898,5 +1898,5 @@ Plans:
 | 92. BundleSource + Served-Tool Toolkit Module | 7/7 | Complete    | 2026-06-11 |
 | 93. Workbook Compiler + §5 Fixes + Promote Gate | 7/7 | Complete    | 2026-06-13 |
 | 94. CLI Subcommands + `pmcp.toml` | 6/6 | Complete    | 2026-06-14 |
-| 95. Shape A Binary `pmcp-workbook-server` | 0/? | Not started | - |
+| 95. Shape A Binary `pmcp-workbook-server` | 1/2 | In Progress|  |
 | 96. Shape B Scaffold + Dialect-Version + Generalization | 0/? | Not started | - |
