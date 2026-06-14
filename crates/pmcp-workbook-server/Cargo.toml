@@ -1,0 +1,42 @@
+[package]
+name = "pmcp-workbook-server"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/paiml/rust-mcp-sdk"
+description = "Shape A pure-config workbook MCP server binary — point it at a compiled bundle dir and serve five workbook tools with no Rust required"
+keywords = ["mcp", "workbook", "config-driven", "toolkit", "excel"]
+categories = ["development-tools", "command-line-utilities"]
+
+# Why: `.planning/`, `.pmat/`, `fuzz/`, and `tests/` are never relevant to
+# downstream consumers of the published crate — they hold planning notes, PMAT
+# state, fuzz harnesses, and test fixtures. Mirrors `pmcp-sql-server`'s exclude.
+exclude = [".planning/", ".pmat/", "fuzz/", "tests/"]
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[lib]
+name = "pmcp_workbook_server"
+path = "src/lib.rs"
+
+[[bin]]
+name = "pmcp-workbook-server"
+path = "src/main.rs"
+
+[dependencies]
+pmcp = { version = "2.9.0", path = "../..", features = ["streamable-http"] }
+# Why (D-02 / D-11): the binary depends ONLY on the toolkit, with the `workbook`
+# (NOT `workbook-embedded`) feature for the LocalDirSource boot surface plus the
+# `http` feature for the streamable-HTTP forward. It NEVER names
+# `pmcp-workbook-runtime` directly — the boot surface (LocalDirSource,
+# load_bundle, WorkbookBuilderExt) is re-exported through the toolkit.
+pmcp-server-toolkit = { version = "0.1.0", path = "../pmcp-server-toolkit", features = ["workbook", "http"] }
+clap = { version = "4", features = ["derive"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3.20", features = ["env-filter"] }
+# Why: RunError derives thiserror::Error for the typed fail-closed exit path
+# (matches the toolkit's error types and the sql-server binary's style).
+thiserror = "2"
