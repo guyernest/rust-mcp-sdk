@@ -95,8 +95,8 @@ fn matching_bundle_id_succeeds() {
 /// is a guard, not a resolution input, so omitting it never blocks assembly.
 #[test]
 fn absent_bundle_id_succeeds() {
-    let server =
-        build_server(&args_with_bundle_id(None)).expect("absent --bundle-id must assemble a server");
+    let server = build_server(&args_with_bundle_id(None))
+        .expect("absent --bundle-id must assemble a server");
     assert!(
         server.get_tool("calculate").is_some(),
         "the no-assertion server registers the workbook tools"
