@@ -80,6 +80,14 @@ pub enum RunError {
         source: std::net::AddrParseError,
     },
 
+    /// The final `pmcp::Server::builder().build()` failed (in-process assembly,
+    /// before any listener is bound). Distinct from [`RunError::Serve`]
+    /// (transport startup): a build failure never touches a socket, so reporting
+    /// it as a transport-start error would misdirect an operator toward
+    /// port/bind faults for what is actually a server-construction error.
+    #[error("workbook server build failed: {0}")]
+    Build(#[source] pmcp::Error),
+
     /// Binding / starting the streamable-HTTP listener failed.
     #[error("streamable-HTTP server failed to start: {0}")]
     Serve(#[source] pmcp::Error),
@@ -302,6 +310,25 @@ mod tests {
             },
             Err(other) => panic!("expected RunError::Serving, got {other:?}"),
         }
+    }
+
+    /// WR-01: a `Server::builder().build()` failure must surface as the distinct
+    /// [`RunError::Build`] variant whose Display names the build phase — NOT the
+    /// transport-start [`RunError::Serve`] wording. This guards against the
+    /// re-skin regression that reported an in-process assembly fault as a
+    /// "streamable-HTTP server failed to start" error.
+    #[test]
+    fn run_error_build_display_names_the_build_phase() {
+        let err = RunError::Build(pmcp::Error::internal("synthetic build failure"));
+        let rendered = format!("{err}");
+        assert!(
+            rendered.contains("workbook server build failed"),
+            "Build Display must name the build phase, not transport start: {rendered}"
+        );
+        assert!(
+            !rendered.contains("failed to start"),
+            "Build Display must NOT borrow the transport-start wording: {rendered}"
+        );
     }
 
     #[tokio::test]

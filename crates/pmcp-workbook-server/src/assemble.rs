@@ -46,7 +46,8 @@ use crate::{Args, RunError};
 ///   (fail-closed boot gate).
 /// - [`RunError::BundleIdMismatch`] when `--bundle-id` does not match the loaded
 ///   bundle's identity.
-/// - [`RunError::Serve`] when the final `pmcp::Server` build fails.
+/// - [`RunError::Build`] when the final `pmcp::Server` build fails (in-process
+///   assembly, before any listener is bound).
 pub fn build_server(args: &Args) -> Result<Server, RunError> {
     let source = LocalDirSource::new(&args.bundle_dir);
 
@@ -84,7 +85,7 @@ pub fn build_server(args: &Args) -> Result<Server, RunError> {
         .version(env!("CARGO_PKG_VERSION"))
         .try_with_workbook_bundle(&source)?
         .build()
-        .map_err(RunError::Serve)?;
+        .map_err(RunError::Build)?;
 
     Ok(server)
 }
