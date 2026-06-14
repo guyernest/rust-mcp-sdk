@@ -22,6 +22,7 @@ pub mod compile;
 pub mod config;
 pub mod emit;
 pub mod lint;
+mod targets;
 
 use anyhow::Result;
 use clap::Subcommand;

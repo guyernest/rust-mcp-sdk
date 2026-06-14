@@ -48,8 +48,7 @@ use pmcp_workbook_compiler::{
     Dag, Manifest, VersionChangelog,
 };
 
-use super::config::{PmcpToml, WorkbookEntry};
-use super::lint::{lint_exit_code, print_lint_report};
+use super::targets::{resolve_targets, run_lint_phase, Target};
 use super::{GlobalFlags, EXIT_ERROR, EXIT_GATE_BLOCK, EXIT_OK};
 use crate::commands::configure::workspace::find_workspace_root;
 
@@ -94,18 +93,6 @@ pub struct CompileArgs {
     pub format: String,
 }
 
-/// A single resolved compile target: where to read the workbook, what workflow /
-/// bundle id it compiles to, and where to write the bundle.
-#[derive(Debug, Clone)]
-struct Target {
-    /// The source `.xlsx` path.
-    path: PathBuf,
-    /// The workflow / bundle id (the `{bundle_id}@{version}/` dir name).
-    workflow: String,
-    /// The output root the `{bundle_id}@{version}/` dir is written under.
-    out_root: PathBuf,
-}
-
 /// Execute `cargo pmcp workbook compile`.
 ///
 /// Resolves the target set (bare path / bundle-id / compile-all), compiles each
@@ -128,7 +115,12 @@ pub fn execute(args: CompileArgs, gf: &GlobalFlags) -> Result<()> {
     }
 
     let project_root = find_workspace_root().unwrap_or_else(|_| PathBuf::from("."));
-    let targets = resolve_targets(&args, &project_root)?;
+    let targets = resolve_targets(
+        args.bundle_id_or_path.as_deref(),
+        args.workflow.as_deref(),
+        args.out.as_deref(),
+        &project_root,
+    )?;
     if targets.is_empty() {
         bail!("no workbook to compile: pass a path/bundle-id or declare workbooks in pmcp.toml");
     }
@@ -186,75 +178,6 @@ fn surface_worst(worst: i32) -> Result<()> {
     }
 }
 
-/// Resolve the requested target set from `args` (D-03 / D-05):
-/// - a bare PATH that IS a file → one ad-hoc target (`--workflow` required);
-/// - otherwise a bundle-id → resolve through `pmcp.toml`;
-/// - no argument → every declared `pmcp.toml` entry (compile-all).
-fn resolve_targets(args: &CompileArgs, project_root: &Path) -> Result<Vec<Target>> {
-    match args.bundle_id_or_path.as_deref() {
-        Some(arg) if Path::new(arg).is_file() => {
-            let workflow = args
-                .workflow
-                .clone()
-                .context("a bare workbook path requires --workflow <id>")?;
-            let path = PathBuf::from(arg);
-            let out_root = args.out.clone().unwrap_or_else(|| default_out_root(&path));
-            Ok(vec![Target {
-                path,
-                workflow,
-                out_root,
-            }])
-        },
-        Some(bundle_id) => {
-            let toml = load_required_toml(project_root)?;
-            let entry = toml.resolve(bundle_id)?;
-            Ok(vec![target_from_entry(
-                entry,
-                project_root,
-                args.out.as_deref(),
-            )])
-        },
-        None => {
-            let toml = load_required_toml(project_root)?;
-            Ok(toml
-                .all_entries()
-                .iter()
-                .map(|entry| target_from_entry(entry, project_root, args.out.as_deref()))
-                .collect())
-        },
-    }
-}
-
-/// Load `pmcp.toml`, erroring when it is ABSENT (a bundle-id / compile-all request
-/// needs it — only a bare-path compile works without a toml).
-fn load_required_toml(project_root: &Path) -> Result<PmcpToml> {
-    PmcpToml::load(project_root)?
-        .context("no pmcp.toml found: declare workbooks or pass a workbook path")
-}
-
-/// Build a [`Target`] from a `pmcp.toml` [`WorkbookEntry`], resolving its
-/// project-root-relative paths and honouring a `--out` override.
-fn target_from_entry(entry: &WorkbookEntry, project_root: &Path, out: Option<&Path>) -> Target {
-    let out_root = match out {
-        Some(o) => o.to_path_buf(),
-        None => project_root.join(&entry.out_dir),
-    };
-    Target {
-        path: project_root.join(&entry.path),
-        workflow: entry.bundle_id.clone(),
-        out_root,
-    }
-}
-
-/// The default out-root for a bare-path compile with no `--out` and no toml: the
-/// workbook's parent directory (the bundle lands beside the workbook).
-fn default_out_root(workbook: &Path) -> PathBuf {
-    workbook
-        .parent()
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| PathBuf::from("."))
-}
-
 /// Compile ONE target, returning its per-workbook exit code. Runs the lint phase
 /// first (an error short-circuits before any compile), reads the workbook-declared
 /// version, then selects the lane: SEED (no prior baseline) or GATED UPDATE (a
@@ -275,24 +198,6 @@ fn compile_one(target: &Target, args: &CompileArgs, not_quiet: bool) -> Result<i
         None => run_seed_lane(target, &version, &args.approver, not_quiet),
         Some(prior) => run_gated_lane(target, &version, &prior, args, not_quiet),
     }
-}
-
-/// Run the lint pass (REUSING Plan-02 [`print_lint_report`] / [`lint_exit_code`] —
-/// no re-rendering). Returns `Some(EXIT_ERROR)` (short-circuit, do NOT compile) when
-/// the report has errors, else `None` (proceed to compile).
-fn run_lint_phase(target: &Target, format: &str, not_quiet: bool) -> Result<Option<i32>> {
-    let (map, _ingest_findings) = pmcp_workbook_compiler::ingest::ingest(&target.path)
-        .with_context(|| format!("failed to ingest workbook {}", target.path.display()))?;
-    let src = pmcp_workbook_compiler::WorkbookCellSource::new(&map);
-    let report = pmcp_workbook_compiler::dialect::linter::lint(
-        &src,
-        &pmcp_workbook_compiler::DialectRules::default(),
-    );
-    print_lint_report(&report, format, not_quiet)?;
-    if lint_exit_code(&report) == EXIT_ERROR {
-        return Ok(Some(EXIT_ERROR));
-    }
-    Ok(None)
 }
 
 /// SEED LANE (first version, NO gate — D-12): [`compile_workbook`] writes the
@@ -658,41 +563,6 @@ mod tests {
     }
 
     #[test]
-    fn default_out_root_is_the_workbook_parent() {
-        let root = default_out_root(Path::new("/proj/wb/quote.xlsx"));
-        assert_eq!(root, PathBuf::from("/proj/wb"));
-        // A bare file name (no parent component) falls back to the cwd.
-        assert_eq!(default_out_root(Path::new("quote.xlsx")), PathBuf::from(""));
-    }
-
-    #[test]
-    fn target_from_entry_resolves_relative_paths_under_root() {
-        let entry = WorkbookEntry {
-            path: PathBuf::from("workbooks/quote.xlsx"),
-            bundle_id: "quote".to_string(),
-            out_dir: PathBuf::from("dist/quote"),
-        };
-        let root = Path::new("/project");
-        let target = target_from_entry(&entry, root, None);
-        assert_eq!(target.path, PathBuf::from("/project/workbooks/quote.xlsx"));
-        assert_eq!(target.out_root, PathBuf::from("/project/dist/quote"));
-        assert_eq!(target.workflow, "quote");
-    }
-
-    #[test]
-    fn target_from_entry_honours_out_override() {
-        let entry = WorkbookEntry {
-            path: PathBuf::from("workbooks/quote.xlsx"),
-            bundle_id: "quote".to_string(),
-            out_dir: PathBuf::from("dist/quote"),
-        };
-        let root = Path::new("/project");
-        let override_out = Path::new("/tmp/elsewhere");
-        let target = target_from_entry(&entry, root, Some(override_out));
-        assert_eq!(target.out_root, PathBuf::from("/tmp/elsewhere"));
-    }
-
-    #[test]
     fn find_prior_baseline_is_none_for_a_missing_out_root() {
         let missing = Path::new("/this/path/does/not/exist/at/all");
         let prior = find_prior_baseline(missing, "quote").expect("probe a missing root");
@@ -707,88 +577,6 @@ mod tests {
         let tmp = tempfile::tempdir().expect("tempdir");
         let prior = find_prior_baseline(tmp.path(), "quote").expect("probe an empty root");
         assert!(prior.is_none(), "no @version dir means no prior baseline");
-    }
-
-    #[test]
-    fn resolve_targets_bare_path_requires_workflow() {
-        // A bare PATH with NO --workflow is rejected (the bundle-id supplies the
-        // workflow; an ad-hoc path must name it).
-        let tmp = tempfile::tempdir().expect("tempdir");
-        let wb = tmp.path().join("quote.xlsx");
-        std::fs::write(&wb, b"not-a-real-xlsx").expect("write fixture file");
-        let args = CompileArgs {
-            bundle_id_or_path: Some(wb.to_string_lossy().to_string()),
-            workflow: None,
-            approver: "alice".to_string(),
-            accept: false,
-            effective_date: None,
-            out: None,
-            format: "text".to_string(),
-        };
-        let err = resolve_targets(&args, tmp.path()).expect_err("bare path needs --workflow");
-        assert!(
-            err.to_string().contains("--workflow"),
-            "names the missing flag: {err}"
-        );
-    }
-
-    #[test]
-    fn resolve_targets_compile_all_visits_every_declared_entry() {
-        // compile-all (no argument) resolves EVERY declared pmcp.toml entry — the
-        // continue-on-error loop then attempts each (concern I).
-        let tmp = tempfile::tempdir().expect("tempdir");
-        std::fs::write(
-            tmp.path().join("pmcp.toml"),
-            r#"
-[[workbook]]
-path = "a.xlsx"
-bundle_id = "a"
-out_dir = "dist/a"
-
-[[workbook]]
-path = "b.xlsx"
-bundle_id = "b"
-out_dir = "dist/b"
-"#,
-        )
-        .expect("write pmcp.toml");
-        let args = CompileArgs {
-            bundle_id_or_path: None,
-            workflow: None,
-            approver: "alice".to_string(),
-            accept: false,
-            effective_date: None,
-            out: None,
-            format: "text".to_string(),
-        };
-        let targets = resolve_targets(&args, tmp.path()).expect("resolve compile-all");
-        assert_eq!(targets.len(), 2, "compile-all visits BOTH declared entries");
-        assert_eq!(targets[0].workflow, "a");
-        assert_eq!(targets[1].workflow, "b");
-        // Even if the FIRST workbook would error (the file is absent), the SECOND is
-        // still a resolved target the loop attempts (continue-on-error).
-        assert_eq!(targets[1].path, tmp.path().join("b.xlsx"));
-    }
-
-    #[test]
-    fn resolve_targets_unknown_bundle_id_errors() {
-        let tmp = tempfile::tempdir().expect("tempdir");
-        std::fs::write(
-            tmp.path().join("pmcp.toml"),
-            "[[workbook]]\npath=\"a.xlsx\"\nbundle_id=\"a\"\nout_dir=\"dist/a\"\n",
-        )
-        .expect("write pmcp.toml");
-        let args = CompileArgs {
-            bundle_id_or_path: Some("missing".to_string()),
-            workflow: None,
-            approver: "alice".to_string(),
-            accept: false,
-            effective_date: None,
-            out: None,
-            format: "text".to_string(),
-        };
-        let err = resolve_targets(&args, tmp.path()).expect_err("unknown id must error");
-        assert!(err.to_string().contains("missing"), "names the id: {err}");
     }
 
     #[test]
