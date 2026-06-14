@@ -32,7 +32,15 @@ pmcp = { version = "2.9.0", path = "../..", features = ["streamable-http"] }
 # `http` feature for the streamable-HTTP forward. It NEVER names
 # `pmcp-workbook-runtime` directly — the boot surface (LocalDirSource,
 # load_bundle, WorkbookBuilderExt) is re-exported through the toolkit.
-pmcp-server-toolkit = { version = "0.1.0", path = "../pmcp-server-toolkit", features = ["workbook", "http"] }
+#
+# Why `default-features = false` (T-95-06, purity-gate fix): the toolkit's
+# DEFAULT feature set includes `code-mode`, which pulls in `pmcp-code-mode`
+# (a SWC/JS code-mode stack the workbook binary serves NONE of — it serves
+# pre-compiled bundles, not SQL/JS code-mode). Leaving defaults on leaks
+# `pmcp-code-mode` into the served binary tree and TRIPS the Phase 95
+# `make purity-check` reader/JS-absence gate. Disabling defaults keeps the
+# served cone reader-free + code-mode-free, matching the D-11 posture above.
+pmcp-server-toolkit = { version = "0.1.0", path = "../pmcp-server-toolkit", default-features = false, features = ["workbook", "http"] }
 clap = { version = "4", features = ["derive"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 tracing = "0.1"

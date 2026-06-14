@@ -590,6 +590,35 @@ purity-check:
 	  printf '%s\n' "$$zipv"; exit 1; \
 	fi; \
 	echo "purity-check: pmcp-workbook-compiler reader-present (umya-spreadsheet found), single quick-xml version, zip versions bounded to writer+reader ($$zipuniq) — reader confined to the compiler"
+	@# Phase 95 (T-95-06, WBCL-06 success criterion 3): the Shape A
+	@# `pmcp-workbook-server` BINARY's served cone (binary → pmcp-server-toolkit
+	@# [workbook,http] → pmcp-workbook-runtime → pmcp) must stay reader-free — the
+	@# published binary must NEVER carry an Excel reader / JS stack. This is a
+	@# DISTINCT crate-level assertion: the binary is NOT in PURITY_CRATES (it pulls
+	@# the http-feature toolkit), so its tree is checked here on its own. The binary
+	@# is a SERVER (read-pointer regen-on-read render), NOT a writer crate, so there
+	@# is deliberately NO `umya` POSITIVE assertion (unlike the Phase 93 compiler
+	@# block). Fails closed on any non-zero cargo status (NEVER 2>/dev/null — WR-01).
+	@# BAN-breadth (Codex MEDIUM #6): the BAN list is intentionally BROAD and
+	@# fail-closed (`quick-xml` in particular could one day match an unrelated
+	@# transitive XML dep that is NOT an Excel reader). This breadth is DELIBERATE —
+	@# a future false positive MUST be resolved by NARROWING the pattern (scoping it
+	@# to the specific offending crate name) AFTER confirming it is not a reader
+	@# entering the served cone, NEVER by weakening or removing this gate.
+	@echo "$(BLUE)purity-check: Phase 95 — pmcp-workbook-server served cone reader-absence (distinct from PURITY_CRATES)$(NC)"
+	@set -euo pipefail; \
+	BAN='umya|calamine|quick-xml|swc_|pmcp-code-mode'; \
+	status=0; tree=$$(cargo tree -p pmcp-workbook-server 2>&1) || status=$$?; \
+	if [ $$status -ne 0 ]; then \
+	  echo "purity-check FAILED: cargo tree errored for pmcp-workbook-server [exit $$status] — failing closed"; \
+	  printf '%s\n' "$$tree"; \
+	  exit 1; \
+	fi; \
+	if printf '%s\n' "$$tree" | grep -Ei "$$BAN"; then \
+	  echo "purity-check FAILED: reader/JS dep in pmcp-workbook-server — the served binary boundary is breached"; \
+	  exit 1; \
+	fi; \
+	echo "purity-check: pmcp-workbook-server reader-free (umya/calamine/quick-xml/swc_/pmcp-code-mode absent in the served binary tree)"
 	@echo "$(BLUE)purity-check: Layer 2 — crate-local cargo-deny [bans] (--manifest-path scoped; workspace deny.toml untouched)$(NC)"
 	@# WR-02 fail-closed guard: cargo-deny 0.18.3 does NOT fail on a missing
 	@# --config path — it WARNs and falls back to the default (empty-ban) config,
