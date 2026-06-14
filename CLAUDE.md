@@ -230,6 +230,7 @@ make test-integration   # Integration tests
 7. `pmcp-toolkit-mysql` (depends on pmcp-server-toolkit + sqlx)
 8. `pmcp-toolkit-athena` (depends on pmcp-server-toolkit + aws-sdk-athena)
 9. `pmcp-sql-server` (Shape A pure-config binary; depends on pmcp-server-toolkit + all four connector crates — must publish AFTER items 5–8; no inter-dep with mcp-tester)
+9a. `pmcp-workbook-server` (Shape A pure-config WORKBOOK binary; depends on `pmcp-server-toolkit` with the `workbook` + `http` features — and thus transitively on `pmcp-workbook-runtime` — plus `pmcp`. Must publish AFTER `pmcp-server-toolkit` (item 5) and its `pmcp-workbook-runtime` dep. It is a sibling of `pmcp-sql-server` (item 9) but has NO inter-dependency with the SQL connector crates (items 6–8) and NO inter-dep with `mcp-tester`, which it uses only as a `[dev-dependencies]` parity-test harness, not a published dependency.)
 10. `mcp-tester` (depends on pmcp)
 11. `mcp-preview` (depends on widget-utils)
 12. `cargo-pmcp` (depends on pmcp, mcp-tester, mcp-preview)
