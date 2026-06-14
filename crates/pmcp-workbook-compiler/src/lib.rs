@@ -119,6 +119,15 @@ pub use pmcp_workbook_runtime::{LintFinding, LintReport, Severity};
 // hash — the served loader recomputes with these).
 pub use pmcp_workbook_runtime::{build_bundle_lock, fold_evidence_hash, sha256_hex, BundleLock};
 
+// The fail-closed bundle loader (re-exported so a consumer loads a prior baseline
+// through the SAME integrity-verifying path the server uses — NEVER hand-read the
+// members + rebuild the DAG, which would feed an UNVERIFIED golden into the
+// governance gate). `load_bundle` returns a `WorkbookBundle` only after the frozen
+// member set + integrity lock + stamp binding all verify (fail-closed).
+pub use pmcp_workbook_runtime::{
+    load_bundle, BundleLoadError, BundleSource, BundleSourceError, LocalDirSource, WorkbookBundle,
+};
+
 // The Excel rounding helpers the reconcile classifier anchors on.
 pub use pmcp_workbook_runtime::sheet_ir::rounding::{excel_ceiling, excel_round, excel_roundup};
 

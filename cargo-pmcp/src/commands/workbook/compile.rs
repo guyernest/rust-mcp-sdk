@@ -42,10 +42,10 @@ use pmcp_workbook_compiler::gate::accept::{accept, promote, EmitLane, PromoteInp
 use pmcp_workbook_compiler::gate::corpus::{derive_corpus, ApprovalCase};
 use pmcp_workbook_compiler::gate::governed_artifact::read_approvals;
 use pmcp_workbook_compiler::gate::{gate, GateDecision};
-use pmcp_workbook_compiler::sheet_ir::{build_dag, Cell};
+use pmcp_workbook_compiler::sheet_ir::Cell;
 use pmcp_workbook_compiler::{
-    compile_workbook, prepare_candidate, read_workbook_version, BundleLock, Candidate, ChangeClass,
-    Dag, Manifest, VersionChangelog,
+    compile_workbook, load_bundle, prepare_candidate, read_workbook_version, Candidate,
+    ChangeClass, Dag, LocalDirSource, Manifest, VersionChangelog,
 };
 
 use super::targets::{resolve_targets, run_lint_phase, Target};
@@ -233,58 +233,70 @@ struct PriorBaseline {
     version: String,
 }
 
-/// Probe `out_root` for the most-recent prior `{workflow}@{version}/` baseline. A
-/// missing out-root or no matching dir means NO prior baseline (the seed lane).
+/// Probe `out_root` for the HIGHEST-version prior `{workflow}@{version}/` baseline,
+/// loading it through the fail-closed [`load_bundle`] verifier.
 ///
-/// Reads the prior bundle's `BUNDLE.lock` (the `combined` hash anchors the gate) +
-/// `executable.ir.json` + `manifest.json` as plain JSON — no served bundle loader is
-/// needed for the build-time gate inputs.
+/// - A missing out-root means NO prior baseline (the seed lane).
+/// - Any OTHER `read_dir` error (permission denied, not-a-directory, transient I/O)
+///   PROPAGATES — it must never masquerade as "no prior", which would silently run
+///   the UNGATED seed lane (a governance bypass).
+/// - The selected baseline is integrity-verified on load: a tampered, malformed, or
+///   ungated prior is a loud error, never a forged golden fed to the gate.
 fn find_prior_baseline(out_root: &Path, workflow: &str) -> Result<Option<PriorBaseline>> {
     let prefix = format!("{workflow}@");
     let read = match std::fs::read_dir(out_root) {
         Ok(rd) => rd,
-        Err(_) => return Ok(None),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => {
+            return Err(e)
+                .with_context(|| format!("scanning {} for a prior baseline", out_root.display()))
+        },
     };
-    let mut versions: Vec<(String, PathBuf)> = Vec::new();
-    for entry in read.filter_map(std::result::Result::ok) {
-        let name = entry.file_name().to_string_lossy().to_string();
-        if let Some(ver) = name.strip_prefix(&prefix) {
-            if entry.path().is_dir() {
-                versions.push((ver.to_string(), entry.path()));
-            }
-        }
-    }
-    // Lexical max picks the highest version dir deterministically (sufficient for
-    // the single-prior-baseline transition the gate grades against).
-    versions.sort_by(|a, b| a.0.cmp(&b.0));
-    let Some((version, dir)) = versions.pop() else {
+
+    // Pick the highest version NUMERICALLY (not lexically: `10` must beat `9`,
+    // `1.10.0` must beat `1.9.0`).
+    let highest = read
+        .filter_map(std::result::Result::ok)
+        .filter_map(|entry| {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let ver = name.strip_prefix(&prefix)?.to_string();
+            entry.path().is_dir().then(|| (ver, entry.path()))
+        })
+        .max_by(|a, b| version_sort_key(&a.0).cmp(&version_sort_key(&b.0)));
+
+    let Some((_dir_version, dir)) = highest else {
         return Ok(None);
     };
-    Ok(Some(read_prior_bundle(&dir, version)?))
+    Ok(Some(read_prior_bundle(&dir)?))
 }
 
-/// Read a prior baseline bundle's gate inputs from its on-disk members.
-fn read_prior_bundle(dir: &Path, version: String) -> Result<PriorBaseline> {
-    let lock: BundleLock = read_bundle_member(dir, "BUNDLE.lock")?;
-    let ir: HashMap<String, Cell> = read_bundle_member(dir, "executable.ir.json")?;
-    let manifest: Manifest = read_bundle_member(dir, "manifest.json")?;
-    let dag = build_dag(&ir);
+/// A NUMERIC sort key for a `{version}` directory segment: each dot-separated
+/// component parsed as a number so ordering is numeric (`10 > 9`), with a
+/// non-numeric component sorting as `0` (a malformed dir never wins selection).
+fn version_sort_key(version: &str) -> Vec<u64> {
+    version
+        .split('.')
+        .map(|part| part.parse::<u64>().unwrap_or(0))
+        .collect()
+}
+
+/// Load a prior baseline bundle through the fail-closed [`load_bundle`] verifier.
+///
+/// The returned bundle is proof the frozen member set + integrity lock + stamp
+/// binding all verified, so its IR / DAG / manifest / combined-hash are TRUSTED
+/// gate inputs (NEVER hand-read + rebuilt, which would feed an unverified golden
+/// into the gate — threats T-92-01 / T-92-02). The version comes from the VERIFIED
+/// stamp, not the directory name.
+fn read_prior_bundle(dir: &Path) -> Result<PriorBaseline> {
+    let bundle = load_bundle(&LocalDirSource::new(dir))
+        .with_context(|| format!("loading prior baseline bundle at {}", dir.display()))?;
     Ok(PriorBaseline {
-        ir,
-        dag,
-        manifest,
-        prev_bundle_hash: lock.combined,
-        version,
+        prev_bundle_hash: bundle.stamp.combined,
+        version: bundle.stamp.version,
+        ir: bundle.ir,
+        dag: bundle.dag,
+        manifest: bundle.manifest,
     })
-}
-
-/// Deserialize one JSON bundle member (`dir/member`) into `T`.
-fn read_bundle_member<T: serde::de::DeserializeOwned>(dir: &Path, member: &str) -> Result<T> {
-    let path = dir.join(member);
-    let bytes = std::fs::read(&path)
-        .with_context(|| format!("reading prior baseline member {}", path.display()))?;
-    serde_json::from_slice(&bytes)
-        .with_context(|| format!("parsing prior baseline member {}", path.display()))
 }
 
 /// GATED UPDATE LANE (a prior baseline exists): build the candidate WITHOUT writing
@@ -577,6 +589,48 @@ mod tests {
         let tmp = tempfile::tempdir().expect("tempdir");
         let prior = find_prior_baseline(tmp.path(), "quote").expect("probe an empty root");
         assert!(prior.is_none(), "no @version dir means no prior baseline");
+    }
+
+    #[test]
+    fn find_prior_baseline_propagates_a_non_missing_read_error() {
+        // A read_dir error that is NOT NotFound (here: out_root is a FILE, not a
+        // directory) MUST propagate — never be swallowed as "no prior baseline",
+        // which would silently downgrade to the UNGATED seed lane.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let file = tmp.path().join("not-a-dir");
+        std::fs::write(&file, b"x").expect("write file");
+        let result = find_prior_baseline(&file, "quote");
+        assert!(
+            result.is_err(),
+            "a non-NotFound read error must propagate, not seed silently"
+        );
+    }
+
+    #[test]
+    fn find_prior_baseline_errors_on_an_unverifiable_prior() {
+        // A `{workflow}@{version}/` dir that is not a valid, integrity-verified
+        // bundle (here: a stray non-member file) is REJECTED by load_bundle — a
+        // loud error, never accepted as a trusted gate golden, never a silent seed.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let prior_dir = tmp.path().join("quote@1.0.0");
+        std::fs::create_dir_all(&prior_dir).expect("create prior dir");
+        std::fs::write(prior_dir.join("garbage.txt"), b"not a bundle").expect("write junk");
+        let result = find_prior_baseline(tmp.path(), "quote");
+        assert!(
+            result.is_err(),
+            "an unverifiable prior baseline must error, not be trusted or skipped"
+        );
+    }
+
+    #[test]
+    fn version_sort_key_orders_numerically_not_lexically() {
+        // The bug this guards: lexical string order makes "9" > "10". The numeric
+        // key must order 10 > 9 and 1.10.0 > 1.9.0 so the gate selects the true
+        // highest prior baseline.
+        assert!(version_sort_key("10") > version_sort_key("9"));
+        assert!(version_sort_key("1.10.0") > version_sort_key("1.9.0"));
+        assert!(version_sort_key("2.0.0") > version_sort_key("1.9.9"));
+        assert_eq!(version_sort_key("1.2.3"), vec![1, 2, 3]);
     }
 
     #[test]
