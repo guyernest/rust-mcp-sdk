@@ -39,7 +39,7 @@ use clap::Args;
 
 use pmcp_workbook_compiler::change_class::classify;
 use pmcp_workbook_compiler::gate::accept::{accept, promote, EmitLane, PromoteInputs};
-use pmcp_workbook_compiler::gate::corpus::{derive_corpus, region_deltas, ApprovalCase};
+use pmcp_workbook_compiler::gate::corpus::{derive_corpus, ApprovalCase};
 use pmcp_workbook_compiler::gate::governed_artifact::read_approvals;
 use pmcp_workbook_compiler::gate::{gate, GateDecision};
 use pmcp_workbook_compiler::sheet_ir::{build_dag, Cell};
@@ -508,7 +508,6 @@ fn accept_and_promote(
         .effective_date
         .as_deref()
         .context("--accept requires --effective-date")?;
-    let _deltas = region_deltas(case, computed); // binding payload (lib-derived)
     accept(
         case,
         &target.out_root,
