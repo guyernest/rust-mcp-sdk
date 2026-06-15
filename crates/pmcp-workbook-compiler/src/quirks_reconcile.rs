@@ -330,14 +330,19 @@ fn each_named_reconcilable_quirk_has_a_reconcile_assertion() {
         "1900-leap serial offset reconciles to 62: {computed:?}"
     );
 
-    // Cross-check the corpus count stays within the D-09 ~7-9 cap (5 reconcile
-    // fixtures here + the leap probe = 6 reconcile fixtures; 8 quirks across both
-    // layers via the traceability map).
+    // Pin the reconcile-fixture count to its single source of truth (`quirk_cases`)
+    // so adding/removing a fixture forces a DELIBERATE edit here and a re-check
+    // against the D-09 ~7-9 cap. `quirk_cases()` returns a hardcoded 5-element vec
+    // (5 reconcile fixtures + the leap probe = 6 reconcile fixtures; 8 quirks across
+    // both layers via the traceability map), so an exact equality is meaningful
+    // where the old `(5..=9).contains(len+1)` range was tautological (len is
+    // compile-time-fixed, so it could only ever read 6).
     let cases: Vec<QuirkCase> = quirk_cases();
-    assert!(
-        (5..=9).contains(&cases.len().saturating_add(1)),
-        "the reconcile corpus stays within the D-09 cap (got {} + leap probe)",
-        cases.len()
+    assert_eq!(
+        cases.len(),
+        5,
+        "the reconcile corpus is the 5 fixtures in `quirk_cases` (+ the leap probe = \
+         6); changing it must be a deliberate edit re-checked against the D-09 cap"
     );
 }
 
