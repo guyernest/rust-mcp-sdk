@@ -159,6 +159,28 @@ pub fn resolve_dialect_version(map: &WorkbookMap) -> Result<DialectVersion, Comp
     }
 }
 
+/// The SHARED step-(2a) fail-closed dialect-version gate BOTH compile lanes run
+/// over the ingested [`WorkbookMap`]: the SEED lane (`compile_workbook_inner`) and
+/// the GATED-UPDATE lane (`prepare_candidate_inner`, reached by every governed
+/// re-compile through `cargo pmcp workbook compile`). Factoring the call into ONE
+/// function ensures the two lanes cannot drift apart on the D-04 contract — the
+/// HI-01 fail-closed gap was exactly such a drift (the check lived only in the seed
+/// lane, so an author bumping `pmcp_dialect_version` to an incompatible value on an
+/// already-seeded workbook was silently accepted on the gated-update path). It is a
+/// thin wrapper over [`resolve_dialect_version`] that discards the resolved version:
+/// both lanes need only the fail-closed REFUSAL, not the value.
+///
+/// Semantics are IDENTICAL on both lanes: a different major OR a newer-than-supported
+/// minor → typed [`CompileError::Lint`] (fail-closed, D-04); an absent declaration →
+/// the baseline with NO error (D-05, zero-churn for existing fixtures).
+///
+/// # Errors
+///
+/// [`CompileError::Lint`] if the declared version is malformed or incompatible.
+pub fn validate_dialect_version_step(map: &WorkbookMap) -> Result<(), CompileError> {
+    resolve_dialect_version(map).map(|_| ())
+}
+
 /// Validate a DECLARED version string against the supported version (the D-04
 /// decision). Shared by [`resolve_dialect_version`] and the ALWAYS example so the
 /// example exercises the SAME compat path the pipeline does.
@@ -623,5 +645,62 @@ mod wired_path_integration {
             resolve_dialect_version(&map),
             Err(CompileError::Lint(_))
         ));
+    }
+
+    // ---- GATED-UPDATE lane parity (HI-01) ----
+    //
+    // The SHARED `validate_dialect_version_step` is the SINGLE function both lanes
+    // call: `compile_workbook_inner` (SEED) and `prepare_candidate_inner`
+    // (GATED-UPDATE). These cases exercise that shared step directly — the exact
+    // call the gated-update re-compile path runs — proving the fail-closed gate is
+    // no longer absent from the gated lane (the HI-01 D-04 gap). An author who bumps
+    // `pmcp_dialect_version` to an incompatible value on an already-seeded workbook
+    // is now refused on the re-compile path, and an ABSENT declaration still
+    // re-compiles (baseline, zero churn).
+
+    #[test]
+    fn gated_update_step_refuses_incompatible_different_major() {
+        // Simulates the author bumping `pmcp_dialect_version` to `2.0` on an
+        // already-seeded workbook and re-running `cargo pmcp workbook compile`
+        // (the gated-update lane). The shared step both lanes invoke must REFUSE.
+        let map = map_declaring("0_Meta", "B1", "2.0");
+        assert!(matches!(
+            validate_dialect_version_step(&map),
+            Err(CompileError::Lint(_))
+        ));
+    }
+
+    #[test]
+    fn gated_update_step_refuses_incompatible_newer_minor() {
+        // A newer-than-supported minor (`1.5`) on the re-compile path must also fail
+        // closed — identical semantics to the seed lane.
+        let map = map_declaring("0_Meta", "B1", "1.5");
+        assert!(matches!(
+            validate_dialect_version_step(&map),
+            Err(CompileError::Lint(_))
+        ));
+    }
+
+    #[test]
+    fn gated_update_step_absent_declaration_recompiles_as_baseline() {
+        // An ABSENT declaration must still pass on the gated-update lane (D-05,
+        // zero-churn): the shared step returns Ok, so the re-compile proceeds.
+        validate_dialect_version_step(&absent_map())
+            .expect("absent declaration → baseline, gated-update re-compile proceeds");
+    }
+
+    #[test]
+    fn gated_update_and_seed_steps_agree_over_a_grid() {
+        // Both lanes call the SAME `validate_dialect_version_step`, so the seed-lane
+        // `resolve_dialect_version` Ok/Err verdict and the shared step's verdict must
+        // agree for every map — proving the two lanes cannot drift (HI-01).
+        for declared in ["1.0", "1.0.999", "01.0", "1.5", "2.0", "0.0", "1.x"] {
+            let map = map_declaring("0_Meta", "B1", declared);
+            assert_eq!(
+                resolve_dialect_version(&map).is_ok(),
+                validate_dialect_version_step(&map).is_ok(),
+                "seed-lane and gated-update-lane verdicts must agree for `{declared}`"
+            );
+        }
     }
 }

@@ -299,8 +299,11 @@ fn compile_workbook_inner(
     // NO error — every existing fixture (which declares no `pmcp_dialect_version`)
     // keeps compiling with zero edits. Run over the ingested `map` (mirroring how
     // `promote_named_outputs` consumes `&map`), BEFORE stage-1, so an
-    // incompatible dialect is refused before any synth/reconcile work.
-    let _dialect_version = dialect_version::resolve_dialect_version(&map)?;
+    // incompatible dialect is refused before any synth/reconcile work. This is the
+    // SHARED step `prepare_candidate_inner` (the gated-update lane) ALSO runs — both
+    // lanes call the one `validate_dialect_version_step` so the D-04 gate cannot
+    // drift between them (HI-01).
+    dialect_version::validate_dialect_version_step(&map)?;
 
     // (3) Composed stage-1 pass (lint + synth + freshness), collect-all refuse.
     let stage1 = stage1::run_stage1(&bytes, &map, &ingest_findings, workflow, freshness)?;
@@ -739,6 +742,17 @@ fn prepare_candidate_inner(
     // (2) umya ingest → owned WorkbookMap + collect-all ingest findings.
     let (map, ingest_findings) =
         ingest::ingest(workbook_path).map_err(|e| CompileError::Ingest(e.to_string()))?;
+
+    // (2a) Resolve + validate the workbook-declared DIALECT version (WBDL-02) —
+    // the SAME fail-closed step the SEED lane (`compile_workbook_inner`) runs.
+    // The gated-update lane is reached by every governed re-compile through
+    // `cargo pmcp workbook compile`, so without this an author bumping
+    // `pmcp_dialect_version` to an incompatible value on an already-seeded workbook
+    // would be silently accepted (the HI-01 D-04 fail-closed gap). Both lanes call
+    // the one `validate_dialect_version_step`, so the gate cannot drift: a different
+    // major OR a newer-than-supported minor → typed `CompileError::Lint`; an absent
+    // declaration → baseline with NO error (D-05, zero-churn re-compile).
+    dialect_version::validate_dialect_version_step(&map)?;
 
     // (3) Composed stage-1 pass (lint + synth + freshness), collect-all refuse —
     // the SAME gate the seed lane runs; `prepare` does NOT relax it.
