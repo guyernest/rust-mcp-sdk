@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v2.3
 milestone_name: Excel-as-Configuration MCP Servers
 status: executing
-stopped_at: Completed 96-03-PLAN.md (WBEX-01/02 landmine retirement + 1900-leap disposition)
-last_updated: "2026-06-15T08:34:43.781Z"
-last_activity: 2026-06-15 -- Completed Phase 96 Plan 03 (fixture author + 1900-leap spike, WBEX-01/02 de-risk)
+stopped_at: Completed 96-04-PLAN.md (WBEX-01 generalization gate — second loan workbook serves its own schema)
+last_updated: "2026-06-15T08:50:47.223Z"
+last_activity: 2026-06-15 -- Completed Phase 96 Plan 04 (WBEX-01 generalization gate: loan rate-tier second workbook + reemit_loan served-schema proof)
 progress:
   total_phases: 53
   completed_phases: 46
   total_plans: 221
-  completed_plans: 219
+  completed_plans: 220
   percent: 87
 ---
 
@@ -26,9 +26,9 @@ See: .planning/PROJECT.md (updated 2026-06-09) · .planning/ROADMAP.md (v2.3 mil
 ## Current Position
 
 Phase: 96 (shape-b-scaffold-dialect-version-declaration-generalization-validation) — EXECUTING
-Plan: 4 of 5 (Plans 01 WBDL-02, 02 WBCL-05, 03 WBEX-01/02 de-risk complete)
-Status: Ready to execute
-Last activity: 2026-06-15 -- Completed Phase 96 Plan 03 (#[cfg(test)] rust_xlsxwriter fixture author + 1900-leap disposition A)
+Plan: 5 of 5 (Plans 01 WBDL-02, 02 WBCL-05, 03 WBEX-01/02 de-risk, 04 WBEX-01 generalization gate complete)
+Status: Ready to execute (96-05 WBEX-02 Excel-quirk corpus remains)
+Last activity: 2026-06-15 -- Completed Phase 96 Plan 04 (WBEX-01 generalization gate)
 
 Progress: [███░░░░░░░] 33% (v2.3 phases: 91, 92 done; 93–96 remain)
 
@@ -61,6 +61,7 @@ Decisions are logged in PROJECT.md Key Decisions table. Decisions framing this m
 - Phase 96-02 (WBCL-05): `cargo pmcp new --kind workbook-server` Shape B scaffold; scaffold assets EMBEDDED under the cargo-pmcp package root via include_dir!/include_bytes! (publish-safe, NOT copied from crates/* at generate-time); narrow #[path] lib seam (templates_workbook_server) exposes the generator to the example+integration test; emitted Cargo.toml is purity-safe (default-features=false, workbook-embedded+http); reuses the tax-calc@1.1.0 golden (D-07, no new .xlsx)
 - Phase 96-03 (WBEX-01/02 de-risk): reusable #[cfg(test)] rust_xlsxwriter fixture author (fixture_author.rs) retires the .xlsx authoring landmine -- genuine Excel identity (rust_xlsxwriter 0.95 defaults: Application=Microsoft Excel + AppVersion=12.0000 + non-sentinel calcId 124519 => ExcelTrusted, no DocProperties needed) asserted DIRECTLY via classify_authored(), cached-<v> reconcile oracle via Formula::set_result, env-gated #[ignore] regenerate_fixtures generator (normal tests use TempDir), production-refusal guard (T-96-07). Per-fixture *.provenance-override.json + *.gen.json sidecars
 - Phase 96-03: 1900-leap disposition (A) DAG-expressible -- IF(serial>59, serial+1, serial) over f64 with whitelisted ops only; NO DATE/DATEVALUE added (WBDL-01 doc-const binding + deferred-functions boundary held; dialect crate byte-clean); committed leap1900-probe.xlsx reconcile fixture compiles+reconciles; SPIKE-1900-leap.md carries ## WBEX-02 Traceability for Plan 96-05
+- Phase 96-04 (WBEX-01 generalization gate PROVEN): a second synthetic loan rate-tier workbook compiles via the GENERIC compile_workbook driver and serves its OWN get_manifest/tools/list schema (loan input/output keys present, tax-calc keys absent, the two key sets DISJOINT) behind the SAME five generic tool names -- the disjointness read off the generic toolkit fns (input_schema_for_manifest/output_schema_for_manifest/GetManifestHandler) IS the proof (T-96-11), zero per-workbook served Rust. Whitelist-legal (VLOOKUP + INDEX-MATCH cross-check, IFERROR, nested-IF tiering, ROUND/CEILING; NO PMT/POWER/exponentiation, D-02). Added name_named_inputs() -- the in_* input named-range convention mirroring out_* -- so the served input schema carries semantic keys (loan_amount) not the cell's numeric value (Rule 2 deviation). Custom-unit acceptance item NOT achievable via the compile path (synth sets role.unit=None; cell_map reads role.unit) -> asserted the generic { value, unit } projection RUNS per output instead. reemit_loan.rs (9 #[cfg(test)] assertions incl. production-refusal T-96-10) + committed synthetic loan-calc.xlsx (zero customer/TowelRads material, T-96-12)
 
 ### Pending Todos
 
@@ -97,7 +98,7 @@ Items deferred by design for this milestone:
 
 ## Session Continuity
 
-Last session: 2026-06-15T08:34:43.776Z
+Last session: 2026-06-15T08:50:47.218Z
 Stopped at: Completed 96-03-PLAN.md (WBEX-01/02 landmine retirement + 1900-leap disposition A)
 Resume file: None
 
@@ -110,3 +111,4 @@ Resume file: None
 | Phase 91 P03 | 22min | 3 tasks | 9 files |
 | Phase 96 P02 | 38min | 3 tasks | 15 files |
 | Phase 96 P03 | 35min | 2 tasks | 6 files |
+| Phase 96 P04 | ~40min | 2 tasks | 6 files |
