@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v2.3
 milestone_name: Excel-as-Configuration MCP Servers
 status: executing
-stopped_at: Phase 96 context gathered
-last_updated: "2026-06-15T07:55:59.615Z"
-last_activity: 2026-06-15 -- Phase 96 planning complete
+stopped_at: Completed 96-01-PLAN.md (WBDL-02)
+last_updated: "2026-06-15T08:09:00.000Z"
+last_activity: 2026-06-15 -- Completed Phase 96 Plan 01 (WBDL-02 dialect-version declaration)
 progress:
   total_phases: 53
   completed_phases: 46
   total_plans: 221
-  completed_plans: 216
+  completed_plans: 217
   percent: 87
 ---
 
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-06-09) · .planning/ROADMAP.md (v2.3 milestone, Phases 91-96)
 
 **Core value:** Compile, never interpret — any project can compile a governed Excel workbook into a tested, versioned, deterministic MCP server where the workbook is simultaneously the specification (formula DAG), the test oracle (cached cell values = assertions), and the output template.
-**Current focus:** Phase 95 — shape-a-binary-pmcp-workbook-server
+**Current focus:** Phase 96 — shape-b-scaffold-dialect-version-declaration-generalization-validation
 
 ## Current Position
 
-Phase: 999.1
-Plan: Not started
-Status: Ready to execute
-Last activity: 2026-06-15 -- Phase 96 planning complete
+Phase: 96 (shape-b-scaffold-dialect-version-declaration-generalization-validation) — EXECUTING
+Plan: 2 of 5 (Plan 01 WBDL-02 complete)
+Status: Executing Phase 96
+Last activity: 2026-06-15 -- Completed Phase 96 Plan 01 (WBDL-02 dialect-version declaration)
 
 Progress: [███░░░░░░░] 33% (v2.3 phases: 91, 92 done; 93–96 remain)
 

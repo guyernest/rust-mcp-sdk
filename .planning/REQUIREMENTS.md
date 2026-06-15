@@ -20,7 +20,7 @@
 ### Workbook Dialect — SDK-owned, versioned
 
 - [x] **WBDL-01**: SDK owns a versioned dialect spec document (function whitelist + refuse-set) bound to the `WHITELIST` const by a test that fails if doc and code diverge
-- [ ] **WBDL-02**: A workbook declares the dialect version it targets, enabling forward-compatible dialect evolution
+- [x] **WBDL-02**: A workbook declares the dialect version it targets, enabling forward-compatible dialect evolution
 - [x] **WBDL-03**: Developer can lint a workbook against the dialect (whitelist-only, deny-by-default) and receive collect-all, located, BA-actionable findings with repair guidance
 
 ### Workbook Compiler — `pmcp-workbook-compiler` crate (umya-owning, offline only)
@@ -141,7 +141,7 @@
 | WBCL-04 | Phase 94 | Complete |
 | WBCL-06 | Phase 95 | Complete |
 | WBCL-05 | Phase 96 | Pending |
-| WBDL-02 | Phase 96 | Pending |
+| WBDL-02 | Phase 96 | Complete (96-01) |
 | WBEX-01 | Phase 96 | Pending |
 | WBEX-02 | Phase 96 | Pending |
 | GHDEP-01 | Phase 97 | Pending |
