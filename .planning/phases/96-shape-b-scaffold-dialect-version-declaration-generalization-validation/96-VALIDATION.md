@@ -1,9 +1,9 @@
 ---
 phase: 96
 slug: shape-b-scaffold-dialect-version-declaration-generalization-validation
-status: draft
+status: verified
 nyquist_compliant: true
-wave_0_complete: false
+wave_0_complete: true
 created: 2026-06-14
 updated: 2026-06-15
 ---
@@ -61,33 +61,33 @@ No deferred-by-design scope pulled in (row iteration, capability cells, validati
 
 | Task ID | Plan | Wave | Requirement | Threat Ref | Secure Behavior | Test Type | Automated Command | File Exists | Status |
 |---------|------|------|-------------|------------|-----------------|-----------|-------------------|-------------|--------|
-| T1 | 96-01 | 1 | WBDL-02 | T-96-03 | version consts bound to spec by drift guard; grammar documented | unit | `cargo test -p pmcp-workbook-dialect` | ❌ W0 | ⬜ pending |
-| T2 | 96-01 | 1 | WBDL-02 | T-96-01 | fail-closed typed CompileError on incompatible/malformed version; PUBLIC parser; explicit grammar matrix; ALWAYS example demonstrates absent/compatible/incompatible | unit + property + example | `cargo test -p pmcp-workbook-compiler dialect_version && cargo run -p pmcp-workbook-compiler --example dialect_version_demo` | ❌ W0 | ⬜ pending |
-| T3 | 96-01 | 1 | WBDL-02 | T-96-01 | wired stage-1 check + 5-case integration test; absent→baseline preserved; registered fuzz target (non-masking grep gate) | unit + integration + fuzz | `cargo test -p pmcp-workbook-compiler && grep -q 'name = "dialect_version_parse"' crates/pmcp-workbook-compiler/fuzz/Cargo.toml && grep -q 'dialect_version::parse_dialect_version' crates/pmcp-workbook-compiler/fuzz/fuzz_targets/dialect_version_parse.rs` | ❌ W0 | ⬜ pending |
-| T1 | 96-02 | 1 | WBCL-05 | T-96-05 | scaffold Cargo.toml default-features=false (purity-safe); EMBEDDED publish-safe assets; lib-callable generate | unit | `cargo build -p cargo-pmcp && cargo build -p cargo-pmcp --lib` | ❌ W0 | ⬜ pending |
-| T2 | 96-02 | 1 | WBCL-05 | T-96-04 / T-96-06 / T-96-06b | path-traversal guard; bundle-bytes drift lock (LF/CRLF-safe); hardcoded-version drift guard | unit | `cargo test -p cargo-pmcp workbook_server` | ❌ W0 | ⬜ pending |
-| T3 | 96-02 | 1 | WBCL-05 | T-96-06b | scaffold via CLI/lib seam + scaffold-build smoke + packaging smoke; ALWAYS example through lib-public seam | example + integration | `cargo run -p cargo-pmcp --example workbook_server_scaffold && cargo test -p cargo-pmcp --test workbook_scaffold` | ❌ W0 | ⬜ pending |
-| T1 | 96-03 | 2 | WBEX-01 / WBEX-02 | T-96-07 / T-96-08 / T-96-08b | direct `classify()==ExcelTrusted` assertion; production-refusal self-test; non-mutating env-gated generator | integration | `cargo test -p pmcp-workbook-compiler fixture_author` | ❌ W0 | ⬜ pending |
-| T2 | 96-03 | 2 | WBEX-02 | T-96-09 | 1900-leap disposition + WBEX-02 traceability recorded; no DATE functions added | integration + doc | `test -f crates/pmcp-workbook-compiler/SPIKE-1900-leap.md && grep -q "Disposition" crates/pmcp-workbook-compiler/SPIKE-1900-leap.md && grep -q "WBEX-02 Traceability" crates/pmcp-workbook-compiler/SPIKE-1900-leap.md && cargo test -p pmcp-workbook-compiler` | ❌ W0 | ⬜ pending |
-| T1 | 96-04 | 3 | WBEX-01 | T-96-12 | synthetic loan fixture (no customer/TowelRads material); multiple unit-carrying `out_*` outputs | integration | `test -f crates/pmcp-workbook-compiler/tests/fixtures/loan-calc.xlsx && test -f crates/pmcp-workbook-compiler/tests/fixtures/loan-calc.provenance-override.json && cargo test -p pmcp-workbook-compiler fixture_author` | ❌ W0 | ⬜ pending |
-| T2 | 96-04 | 3 | WBEX-01 | T-96-10 / T-96-11 | loan serves OWN get_manifest/tools/list schema (loan fields present, tax fields absent) behind UNCHANGED 5 generic names; production-refusal counter-test | integration | `cargo test -p pmcp-workbook-compiler reemit_loan` | ❌ W0 | ⬜ pending |
-| T1 | 96-05 | 4 | WBEX-02 | T-96-15 | per-quirk scalar_eval assertions ({formula+context,oracle,expected}) against excel_round (no naive round) | unit | `cargo test -p pmcp-workbook-runtime scalar_eval` | ❌ W0 | ⬜ pending |
-| T2 | 96-05 | 4 | WBEX-02 | T-96-13 / T-96-14 / T-96-14b | penny reconcile via within_tol (computed-vs-oracle, not compile-success); ≥1 reconcile per named quirk; production-refusal spot check; WBEX-02 traceability map | integration | `cargo test -p pmcp-workbook-compiler quirks` | ❌ W0 | ⬜ pending |
+| T1 | 96-01 | 1 | WBDL-02 | T-96-03 | version consts bound to spec by drift guard; grammar documented | unit | `cargo test -p pmcp-workbook-dialect` | ✅ | ✅ green |
+| T2 | 96-01 | 1 | WBDL-02 | T-96-01 | fail-closed typed CompileError on incompatible/malformed version; PUBLIC parser; explicit grammar matrix; ALWAYS example demonstrates absent/compatible/incompatible | unit + property + example | `cargo test -p pmcp-workbook-compiler dialect_version && cargo run -p pmcp-workbook-compiler --example dialect_version_demo` | ✅ | ✅ green |
+| T3 | 96-01 | 1 | WBDL-02 | T-96-01 | wired stage-1 check + 5-case integration test; absent→baseline preserved; registered fuzz target (non-masking grep gate) | unit + integration + fuzz | `cargo test -p pmcp-workbook-compiler && grep -q 'name = "dialect_version_parse"' crates/pmcp-workbook-compiler/fuzz/Cargo.toml && grep -q 'dialect_version::parse_dialect_version' crates/pmcp-workbook-compiler/fuzz/fuzz_targets/dialect_version_parse.rs` | ✅ | ✅ green |
+| T1 | 96-02 | 1 | WBCL-05 | T-96-05 | scaffold Cargo.toml default-features=false (purity-safe); EMBEDDED publish-safe assets; lib-callable generate | unit | `cargo build -p cargo-pmcp && cargo build -p cargo-pmcp --lib` | ✅ | ✅ green |
+| T2 | 96-02 | 1 | WBCL-05 | T-96-04 / T-96-06 / T-96-06b | path-traversal guard; bundle-bytes drift lock (LF/CRLF-safe); hardcoded-version drift guard | unit | `cargo test -p cargo-pmcp workbook_server` | ✅ | ✅ green |
+| T3 | 96-02 | 1 | WBCL-05 | T-96-06b | scaffold via CLI/lib seam + scaffold-build smoke + packaging smoke; ALWAYS example through lib-public seam | example + integration | `cargo run -p cargo-pmcp --example workbook_server_scaffold && cargo test -p cargo-pmcp --test workbook_scaffold` | ✅ | ✅ green |
+| T1 | 96-03 | 2 | WBEX-01 / WBEX-02 | T-96-07 / T-96-08 / T-96-08b | direct `classify()==ExcelTrusted` assertion; production-refusal self-test; non-mutating env-gated generator | integration | `cargo test -p pmcp-workbook-compiler fixture_author` | ✅ | ✅ green |
+| T2 | 96-03 | 2 | WBEX-02 | T-96-09 | 1900-leap disposition + WBEX-02 traceability recorded; no DATE functions added | integration + doc | `test -f crates/pmcp-workbook-compiler/SPIKE-1900-leap.md && grep -q "Disposition" crates/pmcp-workbook-compiler/SPIKE-1900-leap.md && grep -q "WBEX-02 Traceability" crates/pmcp-workbook-compiler/SPIKE-1900-leap.md && cargo test -p pmcp-workbook-compiler` | ✅ | ✅ green |
+| T1 | 96-04 | 3 | WBEX-01 | T-96-12 | synthetic loan fixture (no customer/TowelRads material); multiple unit-carrying `out_*` outputs | integration | `test -f crates/pmcp-workbook-compiler/tests/fixtures/loan-calc.xlsx && test -f crates/pmcp-workbook-compiler/tests/fixtures/loan-calc.provenance-override.json && cargo test -p pmcp-workbook-compiler fixture_author` | ✅ | ✅ green |
+| T2 | 96-04 | 3 | WBEX-01 | T-96-10 / T-96-11 | loan serves OWN get_manifest/tools/list schema (loan fields present, tax fields absent) behind UNCHANGED 5 generic names; production-refusal counter-test | integration | `cargo test -p pmcp-workbook-compiler reemit_loan` | ✅ | ✅ green |
+| T1 | 96-05 | 4 | WBEX-02 | T-96-15 | per-quirk scalar_eval assertions ({formula+context,oracle,expected}) against excel_round (no naive round) | unit | `cargo test -p pmcp-workbook-runtime scalar_eval` | ✅ | ✅ green |
+| T2 | 96-05 | 4 | WBEX-02 | T-96-13 / T-96-14 / T-96-14b | penny reconcile via within_tol (computed-vs-oracle, not compile-success); ≥1 reconcile per named quirk; production-refusal spot check; WBEX-02 traceability map | integration | `cargo test -p pmcp-workbook-compiler quirks` | ✅ | ✅ green |
 
-*Filled by planner; Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
+*Filled by planner; Status: ✅ green · ✅ green · ❌ red · ⚠️ flaky*
 
 ---
 
 ## Wave 0 Requirements
 
-- [ ] `.xlsx` fixture authoring recipe (rust_xlsxwriter with Excel identity + `compile_workbook_with_fixture_override` / `FreshnessPolicy::TrustedFixture`) proven reusable for the loan workbook (WBEX-01) and the quirk corpus (WBEX-02), with a direct `classify()==ExcelTrusted` assertion + a non-mutating env-gated generator — established by 96-03 Task 1 (`fixture_author.rs`)
-- [ ] Doc↔const binding test harness extended to cover the dialect-version surface (WBDL-02) — established by 96-01 Task 1 (`SUPPORTED_DIALECT_VERSION` / `BASELINE_DIALECT_VERSION` consts + spec-doc drift guard)
-- [ ] `dialect_version.rs` reader + PUBLIC explicit-grammar parser + semver-compat decision + ALWAYS `examples/dialect_version_demo.rs` created (WBDL-02) — 96-01 Task 2
-- [ ] Compiler fuzz harness for the version-string parse REGISTERED in the existing `fuzz/` crate + 5-case integration test (WBDL-02 ALWAYS fuzz) — 96-01 Task 3 (`fuzz/fuzz_targets/dialect_version_parse.rs`)
-- [ ] `workbook_server.rs` scaffold template (EMBEDDED publish-safe assets) + lib seam + drift-lock/bundle-bytes/version-drift/packaging golden tests (WBCL-05) — 96-02 Tasks 1–3
-- [ ] 1900-leap-year disposition + WBEX-02 traceability decided so the quirk corpus has a path (WBEX-02) — 96-03 Task 2 (`SPIKE-1900-leap.md`)
-- [ ] `reemit_loan.rs` in-crate compile-and-SERVE-SCHEMA proof (WBEX-01) — 96-04 Task 2
-- [ ] `quirks_reconcile.rs` mini-reconcile harness (computed-vs-oracle) + production-refusal spot check + per-quirk scalar_eval tests + WBEX-02 traceability map (WBEX-02) — 96-05 Tasks 1–2
+- [x] `.xlsx` fixture authoring recipe (rust_xlsxwriter with Excel identity + `compile_workbook_with_fixture_override` / `FreshnessPolicy::TrustedFixture`) proven reusable for the loan workbook (WBEX-01) and the quirk corpus (WBEX-02), with a direct `classify()==ExcelTrusted` assertion + a non-mutating env-gated generator — established by 96-03 Task 1 (`fixture_author.rs`)
+- [x] Doc↔const binding test harness extended to cover the dialect-version surface (WBDL-02) — established by 96-01 Task 1 (`SUPPORTED_DIALECT_VERSION` / `BASELINE_DIALECT_VERSION` consts + spec-doc drift guard)
+- [x] `dialect_version.rs` reader + PUBLIC explicit-grammar parser + semver-compat decision + ALWAYS `examples/dialect_version_demo.rs` created (WBDL-02) — 96-01 Task 2
+- [x] Compiler fuzz harness for the version-string parse REGISTERED in the existing `fuzz/` crate + 5-case integration test (WBDL-02 ALWAYS fuzz) — 96-01 Task 3 (`fuzz/fuzz_targets/dialect_version_parse.rs`)
+- [x] `workbook_server.rs` scaffold template (EMBEDDED publish-safe assets) + lib seam + drift-lock/bundle-bytes/version-drift/packaging golden tests (WBCL-05) — 96-02 Tasks 1–3
+- [x] 1900-leap-year disposition + WBEX-02 traceability decided so the quirk corpus has a path (WBEX-02) — 96-03 Task 2 (`SPIKE-1900-leap.md`)
+- [x] `reemit_loan.rs` in-crate compile-and-SERVE-SCHEMA proof (WBEX-01) — 96-04 Task 2
+- [x] `quirks_reconcile.rs` mini-reconcile harness (computed-vs-oracle) + production-refusal spot check + per-quirk scalar_eval tests + WBEX-02 traceability map (WBEX-02) — 96-05 Tasks 1–2
 
 ---
 
@@ -113,4 +113,31 @@ No deferred-by-design scope pulled in (row iteration, capability cells, validati
 - [x] Cross-AI review items dispositioned (verified vs false-positive)
 - [x] ALWAYS EXAMPLE present for the WBDL-02 feature (`dialect_version_demo`, automated on stable)
 
-**Approval:** pending
+**Approval:** validated 2026-06-15
+
+---
+
+## Validation Audit 2026-06-15
+
+State A retroactive audit of the completed phase. Every Per-Task Map automated command was executed against the live tree (genchi genbutsu) and confirmed green — not inferred from SUMMARY/VERIFICATION claims:
+
+| Metric | Count |
+|--------|-------|
+| Tasks audited | 11 |
+| Resolved (COVERED, green) | 11 |
+| Escalated | 0 |
+| Gaps found | 0 |
+
+Evidence (live runs):
+- `cargo test -p pmcp-workbook-dialect` → 6 passed (incl. `doc_versions_match_consts` drift guard)
+- `cargo test -p pmcp-workbook-compiler dialect_version` → 30 passed
+- `cargo test -p cargo-pmcp workbook_server` → 8 passed; `--test workbook_scaffold` → 2 passed, 2 ignored (env-gated smokes)
+- `cargo test -p pmcp-workbook-compiler fixture_author` → 6 passed, 1 ignored
+- `cargo test -p pmcp-workbook-compiler reemit_loan` → 9 passed
+- `cargo test -p pmcp-workbook-compiler quirks` → 5 passed
+- `cargo test -p pmcp-workbook-runtime scalar_eval` → 12 passed
+- `cargo run -p pmcp-workbook-compiler --example dialect_version_demo` → exit 0 (absent/compatible/incompatible)
+- `cargo run -p cargo-pmcp --example workbook_server_scaffold` → exit 0 (11-file tree)
+- fuzz grep-gate (`dialect_version_parse` bin + public-parser call), SPIKE-1900-leap.md (Disposition + WBEX-02 Traceability), and loan fixture + override marker all present.
+
+No new test files generated — phase shipped with complete automated coverage. `nyquist_compliant: true` confirmed by execution.
