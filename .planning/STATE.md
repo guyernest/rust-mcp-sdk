@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v2.3
 milestone_name: Excel-as-Configuration MCP Servers
-status: executing
-stopped_at: Completed 96-05-PLAN.md (WBEX-02 Excel-quirk corpus — 8 quirks in both layers; LAST plan of Phase 96)
-last_updated: "2026-06-15T09:35:00.000Z"
-last_activity: 2026-06-15 -- Completed Phase 96 Plan 05 (WBEX-02 Excel-quirk fixture corpus: scalar_eval + penny-reconcile layers)
+status: verifying
+stopped_at: Completed 96-05-PLAN.md (WBEX-02 Excel-quirk corpus — LAST plan of Phase 96)
+last_updated: "2026-06-15T09:39:42.111Z"
+last_activity: 2026-06-15
 progress:
   total_phases: 53
-  completed_phases: 46
+  completed_phases: 47
   total_plans: 221
   completed_plans: 221
-  percent: 87
+  percent: 89
 ---
 
 # Project State
@@ -25,10 +25,10 @@ See: .planning/PROJECT.md (updated 2026-06-09) · .planning/ROADMAP.md (v2.3 mil
 
 ## Current Position
 
-Phase: 96 (shape-b-scaffold-dialect-version-declaration-generalization-validation) — ALL PLANS COMPLETE (full verifier next)
-Plan: 5 of 5 COMPLETE (01 WBDL-02, 02 WBCL-05, 03 WBEX-01/02 de-risk, 04 WBEX-01 gate, 05 WBEX-02 quirk corpus)
+Phase: 999.1
+Plan: Not started
 Status: Phase 96 plans all executed — orchestrator full verifier + `make quality-gate` next (all four reqs WBCL-05/WBDL-02/WBEX-01/WBEX-02 complete)
-Last activity: 2026-06-15 -- Completed Phase 96 Plan 05 (WBEX-02 Excel-quirk corpus)
+Last activity: 2026-06-15
 
 Progress: [███░░░░░░░] 33% (v2.3 phases: 91, 92 done; 93–96 remain)
 
