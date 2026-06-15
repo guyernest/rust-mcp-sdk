@@ -61,7 +61,7 @@
 - [x] **WBCL-02**: Developer can run `cargo pmcp lint-workbook <wb.xlsx>` to run the dialect linter standalone
 - [x] **WBCL-03**: Developer can run `cargo pmcp emit-bundle` to regenerate a bundle without the gate (dev/reference)
 - [x] **WBCL-04**: A project declares workbooks → bundle IDs in a project-level `pmcp.toml`, replacing the lighthouse's single-workbook justfile/path assumptions
-- [ ] **WBCL-05**: Developer can run `cargo pmcp new --kind workbook-server` to scaffold a thin binary over `BundleSource` + the served-tool toolkit module (Shape B)
+- [x] **WBCL-05**: Developer can run `cargo pmcp new --kind workbook-server` to scaffold a thin binary over `BundleSource` + the served-tool toolkit module (Shape B)
 - [x] **WBCL-06**: A `pmcp-workbook-server` pure-config binary stands up a live MCP server from a compiled bundle alone, no user Rust (Shape A, mirroring `pmcp-sql-server`)
 
 ### Generalization Validation
@@ -140,7 +140,7 @@
 | WBCL-03 | Phase 94 | Complete |
 | WBCL-04 | Phase 94 | Complete |
 | WBCL-06 | Phase 95 | Complete |
-| WBCL-05 | Phase 96 | Pending |
+| WBCL-05 | Phase 96 | Complete (96-02) |
 | WBDL-02 | Phase 96 | Complete (96-01) |
 | WBEX-01 | Phase 96 | Pending |
 | WBEX-02 | Phase 96 | Pending |

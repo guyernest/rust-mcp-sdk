@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v2.3
 milestone_name: Excel-as-Configuration MCP Servers
 status: executing
-stopped_at: Completed 96-01-PLAN.md (WBDL-02)
-last_updated: "2026-06-15T08:09:00.000Z"
-last_activity: 2026-06-15 -- Completed Phase 96 Plan 01 (WBDL-02 dialect-version declaration)
+stopped_at: Completed 96-02-PLAN.md (WBCL-05 Shape B scaffold)
+last_updated: "2026-06-15T09:30:00.000Z"
+last_activity: 2026-06-15 -- Completed Phase 96 Plan 02 (WBCL-05 cargo pmcp new --kind workbook-server scaffold)
 progress:
   total_phases: 53
   completed_phases: 46
   total_plans: 221
-  completed_plans: 217
+  completed_plans: 218
   percent: 87
 ---
 
@@ -26,9 +26,9 @@ See: .planning/PROJECT.md (updated 2026-06-09) · .planning/ROADMAP.md (v2.3 mil
 ## Current Position
 
 Phase: 96 (shape-b-scaffold-dialect-version-declaration-generalization-validation) — EXECUTING
-Plan: 2 of 5 (Plan 01 WBDL-02 complete)
+Plan: 3 of 5 (Plans 01 WBDL-02, 02 WBCL-05 complete)
 Status: Executing Phase 96
-Last activity: 2026-06-15 -- Completed Phase 96 Plan 01 (WBDL-02 dialect-version declaration)
+Last activity: 2026-06-15 -- Completed Phase 96 Plan 02 (WBCL-05 Shape B `cargo pmcp new --kind workbook-server` scaffold)
 
 Progress: [███░░░░░░░] 33% (v2.3 phases: 91, 92 done; 93–96 remain)
 
@@ -58,6 +58,7 @@ Decisions are logged in PROJECT.md Key Decisions table. Decisions framing this m
 - [Phase ?]: Phase 91-01: pmcp-workbook-runtime lifted reader-free from lighthouse; D-08 adds Deserialize to finding types; no pmcp dep (D-09 permits but runtime is pmcp-free); writer-only rust_xlsxwriter — zip enters only via the writer
 - [Phase ?]: Phase 91-02: pmcp-workbook-dialect reader-free slot 2b; flat 13-fn WHITELIST (D-05); doc-const binding test enforces WBDL-01; re-exports runtime findings (D-03); linter/WorkbookMap deferred to Phase 93 (D-02)
 - [Phase ?]: Phase 91-03: WBRT-04 fail-closed three-layer purity gate (cargo-tree per-crate/per-feature negative+positive + crate-local cargo-deny bans + crate split); merge-blocking CI gate; just+make entrypoints (D-09); WBDL-03 re-mapped to Phase 93 (D-02)
+- Phase 96-02 (WBCL-05): `cargo pmcp new --kind workbook-server` Shape B scaffold; scaffold assets EMBEDDED under the cargo-pmcp package root via include_dir!/include_bytes! (publish-safe, NOT copied from crates/* at generate-time); narrow #[path] lib seam (templates_workbook_server) exposes the generator to the example+integration test; emitted Cargo.toml is purity-safe (default-features=false, workbook-embedded+http); reuses the tax-calc@1.1.0 golden (D-07, no new .xlsx)
 
 ### Pending Todos
 
@@ -94,9 +95,9 @@ Items deferred by design for this milestone:
 
 ## Session Continuity
 
-Last session: 2026-06-15T06:29:43.943Z
-Stopped at: Phase 96 context gathered
-Resume file: .planning/phases/96-shape-b-scaffold-dialect-version-declaration-generalization-validation/96-CONTEXT.md
+Last session: 2026-06-15T09:30:00.000Z
+Stopped at: Completed 96-02-PLAN.md (WBCL-05 Shape B scaffold)
+Resume file: None
 
 ## Performance Metrics
 
@@ -105,3 +106,4 @@ Resume file: .planning/phases/96-shape-b-scaffold-dialect-version-declaration-ge
 | Phase 91 P01 | 14 | 3 tasks | 21 files |
 | Phase 91 P02 | 9min | 3 tasks | 4 files |
 | Phase 91 P03 | 22min | 3 tasks | 9 files |
+| Phase 96 P02 | 38min | 3 tasks | 15 files |

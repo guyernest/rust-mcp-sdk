@@ -1888,7 +1888,7 @@ Plans:
 
 **Plans**: 5 plans
 - [x] 96-01-PLAN.md — WBDL-02 dialect-version declaration: pmcp_dialect_version reader + semver-compat (fail-closed) + dialect consts/spec drift guard + fuzz/property ✅ (commits 14047806, 45e4fa4f, 4702a329)
-- [ ] 96-02-PLAN.md — WBCL-05 Shape B scaffold: `cargo pmcp new --kind workbook-server` template + dispatch + purity-safe Cargo.toml + drift-lock/bundle-bytes golden tests + example
+- [x] 96-02-PLAN.md — WBCL-05 Shape B scaffold: `cargo pmcp new --kind workbook-server` template + dispatch + purity-safe Cargo.toml + EMBEDDED publish-safe assets (include_dir!) + lib seam + drift-lock/bundle-bytes/version-drift golden tests + scaffold-build & packaging smokes + example ✅ (commits 91933535, 736a1266, cf670b6b)
 - [ ] 96-03-PLAN.md — WBEX critical-path spike: reusable #[cfg(test)] rust_xlsxwriter fixture author (Excel identity) + 1900-leap-year disposition spike
 - [ ] 96-04-PLAN.md — WBEX-01 generalization gate: loan/mortgage second workbook + reemit_loan compile-and-serve proof asserting its OWN manifest
 - [ ] 96-05-PLAN.md — WBEX-02 Excel-quirk corpus: ~7-9 quirks in scalar_eval unit tests + mini reconcile fixtures (penny path)
@@ -1904,4 +1904,4 @@ Plans:
 | 93. Workbook Compiler + §5 Fixes + Promote Gate | 7/7 | Complete    | 2026-06-13 |
 | 94. CLI Subcommands + `pmcp.toml` | 6/6 | Complete    | 2026-06-14 |
 | 95. Shape A Binary `pmcp-workbook-server` | 2/2 | Complete    | 2026-06-14 |
-| 96. Shape B Scaffold + Dialect-Version + Generalization | 0/? | Not started | - |
+| 96. Shape B Scaffold + Dialect-Version + Generalization | 2/5 | In progress | WBDL-02 (01), WBCL-05 (02) complete |
