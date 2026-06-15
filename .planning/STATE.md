@@ -2,9 +2,9 @@
 gsd_state_version: 1.0
 milestone: v2.3
 milestone_name: Excel-as-Configuration MCP Servers
-status: verifying
-stopped_at: Completed 96-05-PLAN.md (WBEX-02 Excel-quirk corpus — LAST plan of Phase 96)
-last_updated: "2026-06-15T09:39:42.111Z"
+status: phase-complete
+stopped_at: Phase 96 complete — verified (UAT 5/5), secured (threats_open 0), validated (nyquist-compliant). v2.3 milestone phases 91–96 all Complete.
+last_updated: "2026-06-15T17:14:47.664Z"
 last_activity: 2026-06-15
 progress:
   total_phases: 53
@@ -21,16 +21,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-06-09) · .planning/ROADMAP.md (v2.3 milestone, Phases 91-96)
 
 **Core value:** Compile, never interpret — any project can compile a governed Excel workbook into a tested, versioned, deterministic MCP server where the workbook is simultaneously the specification (formula DAG), the test oracle (cached cell values = assertions), and the output template.
-**Current focus:** Phase 96 — shape-b-scaffold-dialect-version-declaration-generalization-validation
+**Current focus:** v2.3 milestone complete (phases 91–96) — next: phase 97 (github-deploy-automation) or `/gsd:audit-milestone`
 
 ## Current Position
 
-Phase: 999.1
+Phase: 999.1 (BACKLOG — not a milestone phase)
 Plan: Not started
-Status: Phase 96 plans all executed — orchestrator full verifier + `make quality-gate` next (all four reqs WBCL-05/WBDL-02/WBEX-01/WBEX-02 complete)
+Status: v2.3 milestone COMPLETE — all phases 91–96 done. Phase 96 verified (UAT 5/5 pass), secured (threats_open: 0), validated (nyquist-compliant).
 Last activity: 2026-06-15
 
-Progress: [███░░░░░░░] 33% (v2.3 phases: 91, 92 done; 93–96 remain)
+Progress: [████████████████████] 286/290 plans (99%) · v2.3 phases 91–96 all Complete
 
 ## v2.3 Phase Plan (6 phases, 38 requirements)
 
