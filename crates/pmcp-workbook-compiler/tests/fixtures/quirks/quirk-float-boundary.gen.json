@@ -1,0 +1,23 @@
+{
+  "generator_fn": "quirk_float_boundary_spec",
+  "authored_by": "rust_xlsxwriter",
+  "sheet": "Quirk",
+  "input_cells": [
+    "A1",
+    "A2"
+  ],
+  "formula_oracles": [
+    {
+      "cell": "B1",
+      "formula": "A1+A2",
+      "cached_oracle": "0.3"
+    }
+  ],
+  "expected_outputs": [
+    {
+      "name": "out_sum",
+      "target": "'Quirk'!$B$1"
+    }
+  ],
+  "override_reason": "authored by rust_xlsxwriter; a WBEX-02 Excel-quirk reconcile fixture (one quirk, whitelisted formula DAG, cached <v> oracle) — honoured ONLY on the test/dev path. Production still refuses non-fresh provenance."
+}

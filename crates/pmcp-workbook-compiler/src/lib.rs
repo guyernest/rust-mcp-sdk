@@ -104,6 +104,16 @@ mod fixture_author;
 #[cfg(test)]
 mod reemit_loan;
 
+// WBEX-02 Excel-quirk reconcile corpus (Plan 96-05): the D-08 layer-2
+// (penny-reconcile) partner of the runtime crate's scalar_eval quirk unit tests.
+// Each numerically-expressible quirk is a tiny fixture compiled through the
+// trusted-fixture override, then graded by retrieving the executor's recomputed
+// value + the cached oracle and comparing via the real `reconcile::within_tol`
+// penny path. In-crate `#[cfg(test)]` for the same CR-01 reachability reason as
+// `reemit_golden`: it must reach the `#[cfg(test)]`-only override.
+#[cfg(test)]
+mod quirks_reconcile;
+
 // In-crate `#[cfg(test)]` tests for the `prepare_candidate` facade (Task 94-00-02).
 // Lives in `src/` (not `tests/`) so it can reach the `#[cfg(test)]`-only
 // `prepare_candidate_with_fixture_override` (same CR-01 reachability reason as

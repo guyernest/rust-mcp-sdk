@@ -1,0 +1,7 @@
+{
+  "kind": "trusted-fixture",
+  "fixture": "quirk-negative-rounding.xlsx",
+  "reason": "authored by rust_xlsxwriter; a WBEX-02 Excel-quirk reconcile fixture (one quirk, whitelisted formula DAG, cached <v> oracle) — honoured ONLY on the test/dev path. Production still refuses non-fresh provenance.",
+  "authored_by": "rust_xlsxwriter",
+  "scope": "test-path-only"
+}

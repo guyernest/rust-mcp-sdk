@@ -410,6 +410,259 @@ fn regenerate_fixtures() {
     write_gen_metadata(&loan_path, "loan_calc_spec", &loan, loan_reason)
         .expect("loan gen metadata");
     eprintln!("[regenerate_fixtures] wrote {}", loan_path.display());
+
+    // The WBEX-02 Excel-quirk reconcile corpus (Plan 96-05 Task 2): each tiny
+    // workbook encodes ONE numerically-expressible Excel quirk as a whitelisted
+    // formula DAG with a cached `<v>` oracle, so the quirks_reconcile harness can
+    // grade the executor's recomputation against the oracle through the REAL
+    // penny-reconcile path. (The 1900-leap reconcile fixture is the committed
+    // `leap1900-probe.xlsx` above — Plan 96-03 disposition A — so it is NOT
+    // re-authored here; this generator emits only the six NON-leap reconcile
+    // fixtures.) Authored into the quirks/ subdir, each with its override marker
+    // and gen-metadata sidecar.
+    let quirks_dir = fixtures.join("quirks");
+    std::fs::create_dir_all(&quirks_dir).expect("quirks fixtures dir");
+    for (file_stem, generator_fn, spec) in quirk_reconcile_specs() {
+        let path = quirks_dir.join(format!("{file_stem}.xlsx"));
+        let reason = "authored by rust_xlsxwriter; a WBEX-02 Excel-quirk reconcile fixture \
+                      (one quirk, whitelisted formula DAG, cached <v> oracle) — honoured ONLY \
+                      on the test/dev path. Production still refuses non-fresh provenance.";
+        author_xlsx(&path, &spec).expect("author quirk fixture");
+        write_override_marker(&path, reason).expect("quirk marker");
+        write_gen_metadata(&path, generator_fn, &spec, reason).expect("quirk gen metadata");
+        eprintln!("[regenerate_fixtures] wrote {}", path.display());
+    }
+}
+
+/// The WBEX-02 quirk reconcile-fixture specs (Plan 96-05 Task 2): each is a tiny
+/// single-formula DAG encoding ONE numerically-expressible Excel quirk, with the
+/// cached `<v>` carrying the Excel oracle the penny-reconcile harness grades the
+/// recomputation against. The returned tuples are `(file_stem, generator_fn_name,
+/// spec)` for the env-gated generator above. (The 1900-leap reconcile fixture is
+/// the committed `leap1900-probe.xlsx` — Plan 96-03 disposition A — so it is not
+/// in this list; the four NAMED roadmap quirks are covered as: 1900-leap = the
+/// probe; half-rounding = `quirk-half-rounding`; empty-cell coercion =
+/// `quirk-empty-coercion`; error/`#DIV/0!` propagation = the scalar_eval layer +
+/// the SPIKE-documented runtime limitation, see `quirks_reconcile.rs`.)
+pub(crate) fn quirk_reconcile_specs() -> Vec<(&'static str, &'static str, WorkbookSpec)> {
+    vec![
+        (
+            "quirk-half-rounding",
+            "quirk_half_rounding_spec",
+            quirk_half_rounding_spec(),
+        ),
+        (
+            "quirk-negative-rounding",
+            "quirk_negative_rounding_spec",
+            quirk_negative_rounding_spec(),
+        ),
+        (
+            "quirk-empty-coercion",
+            "quirk_empty_coercion_spec",
+            quirk_empty_coercion_spec(),
+        ),
+        (
+            "quirk-float-boundary",
+            "quirk_float_boundary_spec",
+            quirk_float_boundary_spec(),
+        ),
+        (
+            "quirk-text-coercion",
+            "quirk_text_coercion_spec",
+            quirk_text_coercion_spec(),
+        ),
+    ]
+}
+
+/// QUIRK: half-rounding boundary. `ROUND(1594.925, 2)` is `1594.93` (half away
+/// from zero), NOT the naive binary-f64 `1594.92` — the executor's `excel_round`
+/// applies the boundary epsilon. {formula `ROUND(A1,2)`, context: ROUND of a
+/// decimal-half input; oracle `1594.93`; reconcile key `out_rounded` → B1}.
+fn quirk_half_rounding_spec() -> WorkbookSpec {
+    WorkbookSpec {
+        sheet: "Quirk",
+        cells: vec![
+            AuthoredCell::Number {
+                addr: "A1",
+                value: 1594.925,
+                paint: CellPaint::Input,
+            },
+            AuthoredCell::Formula {
+                addr: "B1",
+                formula: "ROUND(A1,2)",
+                cached: "1594.93",
+            },
+        ],
+        defined_names: vec![
+            DefinedNameSpec {
+                name: "in_value",
+                target: "'Quirk'!$A$1",
+            },
+            DefinedNameSpec {
+                name: "out_rounded",
+                target: "'Quirk'!$B$1",
+            },
+        ],
+    }
+}
+
+/// QUIRK: negative-value rounding sign. `ROUND(-2.5, 0)` is `-3` (Excel rounds
+/// half AWAY FROM ZERO, sign preserved), NOT `-2`. {formula `ROUND(A1,0)`,
+/// context: ROUND of a negative half; oracle `-3`; reconcile key `out_rounded`
+/// → B1}.
+fn quirk_negative_rounding_spec() -> WorkbookSpec {
+    WorkbookSpec {
+        sheet: "Quirk",
+        cells: vec![
+            AuthoredCell::Number {
+                addr: "A1",
+                value: -2.5,
+                paint: CellPaint::Input,
+            },
+            AuthoredCell::Formula {
+                addr: "B1",
+                formula: "ROUND(A1,0)",
+                cached: "-3",
+            },
+        ],
+        defined_names: vec![
+            DefinedNameSpec {
+                name: "in_value",
+                target: "'Quirk'!$A$1",
+            },
+            DefinedNameSpec {
+                name: "out_rounded",
+                target: "'Quirk'!$B$1",
+            },
+        ],
+    }
+}
+
+/// QUIRK: empty-cell coercion (named roadmap quirk). An EMPTY cell coerces to 0
+/// in additive arithmetic (Excel's empty-cell-as-0). The empty cell is PRODUCED
+/// by a 2-arg `IF` whose condition is false — `IF(A2>9999, 1)` has no else
+/// branch, so Excel (and the runtime semantics layer) returns EMPTY (not a hard
+/// `#REF!` the way an absent range member would). Then `A2 + A1` adds the
+/// number to the empty cell: `5 + (empty->0) = 5`. {formula `A2+A1` where
+/// `A1 = IF(A2>9999,1)` is empty; context: empty cell in additive `+`; oracle
+/// `5`; reconcile key `out_sum` → B1}. The ONLY input is A2.
+///
+/// (Why not a blank cell in a SUM range: on this runtime an ABSENT range member
+/// is a hard `#REF!`, not Empty — empty-cell-as-0 applies to a cell that RESOLVES
+/// to Empty, which the 2-arg `IF` produces deterministically.)
+fn quirk_empty_coercion_spec() -> WorkbookSpec {
+    WorkbookSpec {
+        sheet: "Quirk",
+        cells: vec![
+            AuthoredCell::Number {
+                addr: "A2",
+                value: 5.0,
+                paint: CellPaint::Input,
+            },
+            // A1: a deterministically-EMPTY helper (false 2-arg IF, no else).
+            AuthoredCell::Formula {
+                addr: "A1",
+                formula: "IF(A2>9999,1)",
+                cached: "",
+            },
+            // B1: the named output — adds the number to the empty cell (->0).
+            AuthoredCell::Formula {
+                addr: "B1",
+                formula: "A2+A1",
+                cached: "5",
+            },
+        ],
+        defined_names: vec![
+            DefinedNameSpec {
+                name: "in_value",
+                target: "'Quirk'!$A$2",
+            },
+            DefinedNameSpec {
+                name: "out_sum",
+                target: "'Quirk'!$B$1",
+            },
+        ],
+    }
+}
+
+/// QUIRK: float boundary. `0.1 + 0.2` is stored in binary-f64 as
+/// `0.30000000000000004`, not exactly `0.3` — which is WHY money compares go
+/// through `within_tol` (±0.01), never exact-float `==`. {formula `A1+A2`,
+/// context: binary-f64 additive boundary; oracle `0.3` (graded within_tol);
+/// reconcile key `out_sum` → B1}.
+fn quirk_float_boundary_spec() -> WorkbookSpec {
+    WorkbookSpec {
+        sheet: "Quirk",
+        cells: vec![
+            AuthoredCell::Number {
+                addr: "A1",
+                value: 0.1,
+                paint: CellPaint::Input,
+            },
+            AuthoredCell::Number {
+                addr: "A2",
+                value: 0.2,
+                paint: CellPaint::Input,
+            },
+            AuthoredCell::Formula {
+                addr: "B1",
+                formula: "A1+A2",
+                cached: "0.3",
+            },
+        ],
+        defined_names: vec![
+            DefinedNameSpec {
+                name: "in_a",
+                target: "'Quirk'!$A$1",
+            },
+            DefinedNameSpec {
+                name: "in_b",
+                target: "'Quirk'!$A$2",
+            },
+            DefinedNameSpec {
+                name: "out_sum",
+                target: "'Quirk'!$B$1",
+            },
+        ],
+    }
+}
+
+/// QUIRK: text→number coercion. In a MULTIPLICATIVE context Excel coerces a
+/// numeric-text operand to its number: `"5.5" * 2` is `11`. (Context is
+/// load-bearing: in an ADDITIVE `&`/concat context the same text would NOT be
+/// summed — see the scalar_eval layer, which pins the `+`-vs-`*` distinction.)
+/// {formula `A1*A2`, context: numeric-text in `*`; oracle `11`; reconcile key
+/// `out_product` → B1}. A1 is authored as TEXT `"5.5"`.
+fn quirk_text_coercion_spec() -> WorkbookSpec {
+    WorkbookSpec {
+        sheet: "Quirk",
+        cells: vec![
+            AuthoredCell::Text {
+                addr: "A1",
+                text: "5.5",
+            },
+            AuthoredCell::Number {
+                addr: "A2",
+                value: 2.0,
+                paint: CellPaint::Input,
+            },
+            AuthoredCell::Formula {
+                addr: "B1",
+                formula: "A1*A2",
+                cached: "11",
+            },
+        ],
+        defined_names: vec![
+            DefinedNameSpec {
+                name: "in_factor",
+                target: "'Quirk'!$A$2",
+            },
+            DefinedNameSpec {
+                name: "out_product",
+                target: "'Quirk'!$B$1",
+            },
+        ],
+    }
 }
 
 /// The synthetic loan/mortgage rate-tier calculator spec (Plan 96-04 Task 1 —
