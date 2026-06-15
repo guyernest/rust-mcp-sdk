@@ -378,17 +378,19 @@ pub fn excel_round(x: f64, digits: i32) -> f64 {
 | A5 | The scaffold carries the committed `tax-calc@1.1.0` bundle + `tax-calc.xlsx` (not a regenerated copy) and a sample `pmcp.toml` | Pattern 2 / Pitfall 5 | Low — D-07 mandates reuse; the example already include_dir!s the committed golden. |
 | A6 | A NEW fixtures location/crate for loan + quirks needs `rust_xlsxwriter` added to ITS dev-deps if not the compiler crate | Standard Stack / Installation | Low — keeping fixtures + authors in the compiler crate (where `rust_xlsxwriter` is already a dev-dep) avoids this entirely. Recommend compiler crate. |
 
-## Open Questions
+## Open Questions (RESOLVED)
 
 1. **Is the 1900-leap-year quirk expressible with whitelisted ops over `f64` serials?**
    - What we know: No date-serial code exists; DATE() is not whitelisted; serials are bare `f64`.
    - What's unclear: Whether a fixture can meaningfully encode the leap-year serial offset using only IF/arithmetic/whitelisted fns.
    - Recommendation: During planning, spike a tiny fixture. If it can't be expressed without new date primitives, document the date quirk as a `scalar_eval`-level numeric assertion (or a known-limitation note) — do NOT add date functions (deferred-boundary violation).
+   - **RESOLVED** — routed to the planning-time spike in Plan 96-03 Task 2 (records disposition in SPIKE-1900-leap.md); guarded against adding any DATE function (deferred-functions boundary + WBDL-01 doc↔const binding).
 
 2. **Reserved identifier: `pmcp_dialect_version` (named range) vs a config-sheet cell?**
    - What we know: D-03 allows either; the named-range path reuses `version.rs`'s proven defined-name scan.
    - What's unclear: Whether a config-sheet cell (positional) is preferred for authoring ergonomics.
    - Recommendation: Use a **named range** (`pmcp_dialect_version`) — it reuses the existing scan, is position-independent, and matches the `version`/`out_*` named-range conventions already in the codebase.
+   - **RESOLVED** — named-range `pmcp_dialect_version` (unanimous convention across all Phase 96 plans).
 
 3. **Where do the loan + quirk fixtures live?**
    - What we know: `tax-calc.xlsx` lives in `pmcp-workbook-compiler/tests/fixtures/`; `rust_xlsxwriter` is already a dev-dep there.
