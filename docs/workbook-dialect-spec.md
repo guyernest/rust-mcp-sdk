@@ -157,6 +157,67 @@ defect.
 The scanner also strips a leading `_xlfn.` future-function prefix before
 comparison, so `_xlfn.CONCAT(` is compared as `CONCAT`.
 
+## 7. Dialect version declaration & compatibility policy (WBDL-02)
+
+A workbook MAY self-declare the dialect version it targets so the dialect can
+evolve forward-compatibly without abandoning the milestone's fail-closed ethos.
+The declaration travels *with* the workbook (it is the specification), so it
+lives **inside the `.xlsx`**, not in `pmcp.toml` or a CLI flag — there is exactly
+one source of truth for the dialect version, and a flag can never spoof it.
+
+### 7.1 The `pmcp_dialect_version` named range (D-03)
+
+The version is declared in a reserved **single-cell defined name** named
+`pmcp_dialect_version` (case-insensitive), targeting one cell whose cached value
+is the version string. This mirrors the `version` / `out_*` named-range
+conventions already in the dialect. A multi-cell range named
+`pmcp_dialect_version` is not a scalar version and is ignored.
+
+### 7.2 Version grammar
+
+The accepted version-string format is `MAJOR.MINOR` with an OPTIONAL `.PATCH`
+suffix:
+
+- `MAJOR.MINOR` is REQUIRED; `.PATCH` is tolerated but optional.
+- Each component is **base-10 digits only**; each parses into a `u64`. A component
+  that overflows `u64` is MALFORMED (a typed compile error, never a panic).
+- Surrounding whitespace is trimmed before parse; embedded whitespace
+  (e.g. `1 .0`) is MALFORMED.
+- Leading zeros are accepted and parsed numerically (`01.0` == `1.0`); a single
+  `0` component is legal.
+- `PATCH` is **ignored for the compatibility decision** — compatibility is decided
+  on `MAJOR.MINOR` only, so `1.0.999` is accepted when the supported version is
+  `1.0` (a declared patch can never make a compatible `MAJOR.MINOR` incompatible).
+
+### 7.3 Compatibility rule (D-04, fail-closed)
+
+A declared version is **accepted** when it has the **same major** as the
+compiler's supported version AND its **minor is less than or equal to** the
+supported minor. Otherwise — a different major, OR a newer-than-supported minor —
+the compile **fails closed** with a typed `CompileError`, never a silent accept.
+
+### 7.4 Absent declaration → baseline (D-05)
+
+A workbook with **no** `pmcp_dialect_version` cell is treated as targeting the
+**baseline** dialect version and compiles normally (the compiler MAY emit a
+non-fatal advisory recommending the author add an explicit cell). Every existing
+fixture has no version cell and keeps working with zero edits.
+
+### 7.5 Version values (bound to the consts)
+
+These two values are the *published* version contract; the
+`SUPPORTED_DIALECT_VERSION` / `BASELINE_DIALECT_VERSION` consts in
+`crates/pmcp-workbook-dialect/src/lib.rs` are the *enforced* contract. An
+automated binding test
+(`pmcp_workbook_dialect::dialect_version_spec::doc_versions_match_consts`) parses
+the values out of this very table and asserts string-equality with the consts, so
+if either drifts the build fails.
+
+| Version field | Value | Meaning |
+|---------------|-------|---------|
+| `supported` | `1.0` | the maximum `MAJOR.MINOR` the compiler accepts |
+| `baseline` | `1.0` | the dialect an absent declaration targets (D-05) |
+
 ---
 
 *Bound to `crates/pmcp-workbook-dialect/src/lib.rs` `WHITELIST` by

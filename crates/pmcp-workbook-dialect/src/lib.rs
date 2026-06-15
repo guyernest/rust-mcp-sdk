@@ -37,6 +37,20 @@ pub const WHITELIST: &[&str] = &[
     "SEARCH", "ROUND", "TEXT",
 ];
 
+/// The baseline dialect version a workbook with NO `pmcp_dialect_version`
+/// declaration targets (WBDL-02 / D-05). An absent declaration is NOT an error —
+/// it compiles against this baseline. Parallel to [`WHITELIST`]: this crate owns
+/// the version *contract*, bound to `docs/workbook-dialect-spec.md` by the
+/// `dialect_version_spec` drift-guard test.
+pub const BASELINE_DIALECT_VERSION: &str = "1.0";
+
+/// The maximum `MAJOR.MINOR` dialect version the compiler supports (WBDL-02 /
+/// D-04). A declared version with the same major and a minor `<=` this is
+/// accepted; a different major OR a newer minor fails closed with a typed
+/// `CompileError`. Bound to the spec doc by the `dialect_version_spec` drift guard
+/// so the published contract and the enforced const can never drift.
+pub const SUPPORTED_DIALECT_VERSION: &str = "1.0";
+
 /// The fallback colour-role palette ARGBs (the lighthouse's known direct fills /
 /// fonts). A later synthesis phase MAY override the palette from the `0_Guide`
 /// legend; [`DialectRules::default`] owns THIS hardcoded fallback.
@@ -337,6 +351,117 @@ mod dialect_spec {
              doc-only: {:?}\nconst-only: {:?}",
             doc_set.difference(&const_set).collect::<Vec<_>>(),
             const_set.difference(&doc_set).collect::<Vec<_>>(),
+        );
+    }
+}
+
+/// WBDL-02 binding test: the published dialect-version policy section of
+/// `docs/workbook-dialect-spec.md` and the [`SUPPORTED_DIALECT_VERSION`] /
+/// [`BASELINE_DIALECT_VERSION`] consts MUST never drift. This test parses the two
+/// version values out of the spec's version table and asserts string-equality with
+/// the consts — it READS the consts, it does not redefine them. Flipping a const
+/// without editing the doc (or vice versa) fails the build.
+///
+/// Named `dialect_version_spec` so
+/// `cargo test -p pmcp-workbook-dialect dialect_version_spec` runs it.
+#[cfg(test)]
+mod dialect_version_spec {
+    use super::{BASELINE_DIALECT_VERSION, SUPPORTED_DIALECT_VERSION};
+
+    /// The published dialect spec, resolved relative to this crate's manifest dir
+    /// (`crates/pmcp-workbook-dialect` → `../../docs/...`).
+    const SPEC_PATH: &str = "../../docs/workbook-dialect-spec.md";
+
+    /// Parse the `supported` / `baseline` version values out of the version table.
+    ///
+    /// The version table rows look like
+    /// `| \`supported\` | \`1.0\` | ... |`. We take the FIRST backtick-quoted token
+    /// of column 1 as the field key and the FIRST backtick-quoted token of column 2
+    /// as its value, keeping only the `supported` / `baseline` rows. This ignores
+    /// other backtick tokens elsewhere in the doc so only the version table feeds
+    /// the comparison.
+    fn parse_doc_versions(markdown: &str) -> (Option<String>, Option<String>) {
+        let mut supported = None;
+        let mut baseline = None;
+        for line in markdown.lines() {
+            let trimmed = line.trim();
+            if !trimmed.starts_with('|') {
+                continue;
+            }
+            let cols: Vec<&str> = trimmed.trim_matches('|').split('|').collect();
+            if cols.len() < 2 {
+                continue;
+            }
+            let Some(key) = first_backtick_token(cols[0]) else {
+                continue;
+            };
+            let Some(value) = first_backtick_token(cols[1]) else {
+                continue;
+            };
+            match key.as_str() {
+                "supported" => supported = Some(value),
+                "baseline" => baseline = Some(value),
+                _ => {},
+            }
+        }
+        (supported, baseline)
+    }
+
+    /// Extract the first `` `BACKTICKED` `` token from a markdown cell.
+    fn first_backtick_token(cell: &str) -> Option<String> {
+        let start = cell.find('`')? + 1;
+        let rest = &cell[start..];
+        let end = rest.find('`')?;
+        Some(rest[..end].trim().to_string())
+    }
+
+    #[test]
+    fn doc_versions_match_consts() {
+        let spec_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(SPEC_PATH);
+        // WR-05: this inline test SHIPS in the published crate, but the repo's
+        // `docs/` tree does not — in a published-package context the spec file is
+        // absent and the test must SKIP, not fail unconditionally. In-repo,
+        // absence must FAIL — otherwise deleting the spec silently disables this
+        // drift check. "In-repo" is detected by the repo's `.git` two levels up
+        // from the crate (a directory in a normal checkout, a file in a git
+        // worktree — `exists()` covers both); published-package contexts have no
+        // `.git` at that path.
+        if !spec_path.exists() {
+            let in_repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../.git")
+                .exists();
+            assert!(
+                !in_repo,
+                "docs/workbook-dialect-spec.md is missing from the repo — the WBDL-02 \
+                 version doc↔const drift check would be silently disabled (fail-closed in-repo)"
+            );
+            eprintln!(
+                "skipping version doc-binding test: dialect spec not present at {} \
+                 (published-package context)",
+                spec_path.display()
+            );
+            return;
+        }
+        let markdown = std::fs::read_to_string(&spec_path)
+            .unwrap_or_else(|e| panic!("read published dialect spec {}: {e}", spec_path.display()));
+
+        let (doc_supported, doc_baseline) = parse_doc_versions(&markdown);
+
+        // Pitfall guard: catches a silent empty-parse if the table format drifts.
+        let doc_supported = doc_supported.expect(
+            "parsed no `supported` version from the spec version table — table format drifted?",
+        );
+        let doc_baseline = doc_baseline.expect(
+            "parsed no `baseline` version from the spec version table — table format drifted?",
+        );
+
+        assert_eq!(
+            doc_supported, SUPPORTED_DIALECT_VERSION,
+            "published `supported` dialect version and SUPPORTED_DIALECT_VERSION const have DRIFTED"
+        );
+        assert_eq!(
+            doc_baseline, BASELINE_DIALECT_VERSION,
+            "published `baseline` dialect version and BASELINE_DIALECT_VERSION const have DRIFTED"
         );
     }
 }
