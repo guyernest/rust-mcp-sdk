@@ -18,8 +18,7 @@ use std::path::PathBuf;
 
 use pmcp_workbook_server::{build_server, Args};
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     // The committed synthetic golden bundle (read-only; reuse, do NOT regenerate
     // — D-05). Resolved from CARGO_MANIFEST_DIR so the example is cwd-invariant.
     let bundle_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
