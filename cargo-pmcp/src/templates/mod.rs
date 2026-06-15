@@ -7,4 +7,5 @@ pub mod server;
 pub mod server_common;
 pub mod sql_server;
 pub mod sqlite_explorer;
+pub mod workbook_server;
 pub mod workspace;

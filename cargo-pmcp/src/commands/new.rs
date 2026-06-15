@@ -72,8 +72,11 @@ pub fn execute(
         Some("openapi-server") => {
             return execute_openapi_server(&workspace_dir, &name, global_flags)
         },
+        Some("workbook-server") => {
+            return execute_workbook_server(&workspace_dir, &name, global_flags)
+        },
         Some(k) => anyhow::bail!(
-            "unknown --kind '{}'; supported: sql-server, openapi-server",
+            "unknown --kind '{}'; supported: sql-server, openapi-server, workbook-server",
             k
         ),
         None => {},
@@ -265,6 +268,73 @@ fn print_openapi_server_next_steps(name: &str) {
         "  {} Deploy to pmcp.run: {}",
         "5.".bright_cyan().bold(),
         "cargo pmcp deploy".bright_yellow()
+    );
+}
+
+/// Emit a SINGLE runnable governed-Excel workbook server crate (Shape B,
+/// WBCL-05). The payload is `Cargo.toml`, `src/main.rs` (EmbeddedSource wiring),
+/// `pmcp.toml`, `workbook/tax-calc.xlsx` (source), and `bundle/tax-calc@1.1.0/*`
+/// (pre-compiled). `cargo run` serves the five workbook tools immediately; the
+/// dev can edit the workbook, run `cargo pmcp workbook compile`, then rerun (the
+/// full authoring loop, D-06). Mirrors `execute_sql_server`: `validate_crate_name`
+/// runs FIRST (path-traversal guard, T-96-04), then the embedded-asset emitter.
+fn execute_workbook_server(
+    workspace_dir: &Path,
+    name: &str,
+    global_flags: &crate::commands::GlobalFlags,
+) -> Result<()> {
+    // Validate the crate name BEFORE any fs::write (path-traversal guard,
+    // T-96-04 — same reused guard as the SQL/OpenAPI arms).
+    validate_crate_name(name)?;
+
+    fs::create_dir_all(workspace_dir.join("src")).context("Failed to create src directory")?;
+
+    templates::workbook_server::generate(workspace_dir, name)?;
+
+    if global_flags.should_output() {
+        println!(
+            "\n{} Workbook server crate created successfully!",
+            "✓".green().bold()
+        );
+        print_workbook_server_next_steps(name);
+    }
+
+    Ok(())
+}
+
+fn print_workbook_server_next_steps(name: &str) {
+    println!(
+        "\n{}",
+        "🚀 Next Steps (governed-Excel workbook server):"
+            .bright_white()
+            .bold()
+    );
+    println!();
+    println!("  {} Enter your crate:", "1.".bright_cyan().bold());
+    println!("     {}", format!("cd {}", name).bright_yellow());
+    println!();
+    println!(
+        "  {} Run it (serves over streamable HTTP):",
+        "2.".bright_cyan().bold()
+    );
+    println!("     {}", "cargo run".bright_yellow());
+    println!();
+    println!(
+        "  {} It prints {} — connect your MCP client there (5 workbook tools).",
+        "3.".bright_cyan().bold(),
+        "PMCP_WORKBOOK_SERVER_ADDR=http://…".bright_green()
+    );
+    println!();
+    println!(
+        "  {} Edit {} then recompile the embedded bundle:",
+        "4.".bright_cyan().bold(),
+        "workbook/tax-calc.xlsx".bright_green()
+    );
+    println!("     {}", "cargo pmcp workbook compile".bright_yellow());
+    println!(
+        "     {} then rerun {}.",
+        "↳".bright_cyan(),
+        "cargo run".bright_yellow()
     );
 }
 
