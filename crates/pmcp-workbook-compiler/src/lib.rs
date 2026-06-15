@@ -76,6 +76,12 @@ pub mod stage1;
 /// surface the thin-shell CLI reads instead of a `--version` flag (D-02/D-11).
 pub mod version;
 
+/// Workbook-declared DIALECT-version accessor (WBDL-02) — a SIBLING of [`version`]
+/// reading `pmcp_dialect_version` with absent→baseline (D-05) + a fail-closed
+/// semver-compat decision (D-04). PUBLIC so the fuzz target + examples reach the
+/// parser. Declared HERE (Plan 96-01 Task 2); the call-site wiring is Task 3.
+pub mod dialect_version;
+
 // Producer/consumer golden proof (WBCO-05). In-crate `#[cfg(test)]` so it can
 // reach the `#[cfg(test)]`-only `compile_workbook_with_fixture_override`
 // (CR-01: the override is unreachable from any publishable feature; an external
