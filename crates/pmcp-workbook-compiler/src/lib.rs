@@ -89,6 +89,13 @@ pub mod dialect_version;
 #[cfg(test)]
 mod reemit_golden;
 
+// The reusable `#[cfg(test)]` rust_xlsxwriter fixture author (Plan 96-03 Task 1).
+// Lives in `src/` so its self-tests reach the `#[cfg(test)]`-only
+// `compile_workbook_with_fixture_override` (same CR-01 reachability reason as
+// `reemit_golden`); the WBEX gates (Plans 04/05) author their fixtures through it.
+#[cfg(test)]
+mod fixture_author;
+
 // In-crate `#[cfg(test)]` tests for the `prepare_candidate` facade (Task 94-00-02).
 // Lives in `src/` (not `tests/`) so it can reach the `#[cfg(test)]`-only
 // `prepare_candidate_with_fixture_override` (same CR-01 reachability reason as
