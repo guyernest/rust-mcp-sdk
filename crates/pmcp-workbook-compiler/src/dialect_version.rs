@@ -509,3 +509,119 @@ mod tests {
         }
     }
 }
+
+/// Integration coverage for the WIRED path (WBDL-02 Task 3): the dialect-version
+/// check `compile_workbook_inner` runs at step (2a) is exactly
+/// [`resolve_dialect_version`] over the ingested `WorkbookMap`. These cases drive
+/// that SAME function over synthetic maps for all FIVE outcomes the wiring must
+/// produce — {compatible, absent, newer-minor, different-major, malformed} —
+/// asserting the compatible+absent maps resolve Ok (the pipeline proceeds) and the
+/// newer-minor/different-major/malformed maps refuse with the typed
+/// [`CompileError::Lint`] (fail-closed, the same refuse the driver propagates).
+///
+/// The full real-`.xlsx` pipeline witness that an ABSENT-version workbook still
+/// compiles end-to-end (D-05 zero-churn) is `reemit_golden` (the committed
+/// `tax-calc` fixture declares no `pmcp_dialect_version`).
+#[cfg(test)]
+mod wired_path_integration {
+    use super::*;
+    use crate::ingest::cell_map::{CellRecord, DefinedNameRecord, DefinedNameScope, FormulaKind};
+    use crate::ingest::{RangeRef, SheetRecord};
+
+    const NAME: &str = DIALECT_VERSION_NAME;
+
+    /// A synthetic map declaring `NAME` -> (`sheet`!`addr`) with `cell_value`.
+    fn map_declaring(sheet: &str, addr: &str, cell_value: &str) -> WorkbookMap {
+        WorkbookMap {
+            sheets: vec![SheetRecord {
+                name: sheet.to_string(),
+                state: "visible".to_string(),
+                hidden_rows: vec![],
+                hidden_cols: vec![],
+                col_widths: vec![],
+                merges: vec![],
+                cf_ranges: vec![],
+                tables: vec![],
+                data_validations: vec![],
+                notes: vec![],
+                cells: vec![CellRecord {
+                    addr: addr.to_string(),
+                    formula: None,
+                    value: Some(cell_value.to_string()),
+                    fill_argb: None,
+                    font_argb: None,
+                    number_format: None,
+                    is_formula: false,
+                    formula_kind: FormulaKind::Normal,
+                }],
+            }],
+            defined_names: vec![DefinedNameRecord {
+                name: NAME.to_string(),
+                target: RangeRef {
+                    sheet: sheet.to_string(),
+                    start: addr.to_string(),
+                    end: addr.to_string(),
+                },
+                scope: DefinedNameScope::Workbook,
+            }],
+            external_links: vec![],
+            has_macros: false,
+            source_extension: "xlsx".to_string(),
+            save_timestamp: None,
+        }
+    }
+
+    fn absent_map() -> WorkbookMap {
+        WorkbookMap {
+            sheets: vec![],
+            defined_names: vec![],
+            external_links: vec![],
+            has_macros: false,
+            source_extension: "xlsx".to_string(),
+            save_timestamp: None,
+        }
+    }
+
+    #[test]
+    fn wired_compatible_proceeds() {
+        let map = map_declaring("0_Meta", "B1", "1.0");
+        resolve_dialect_version(&map).expect("compatible declaration → pipeline proceeds");
+    }
+
+    #[test]
+    fn wired_absent_proceeds_as_baseline() {
+        let v =
+            resolve_dialect_version(&absent_map()).expect("absent → baseline, pipeline proceeds");
+        assert_eq!(
+            v,
+            parse_dialect_version(BASELINE_DIALECT_VERSION).expect("baseline parses")
+        );
+    }
+
+    #[test]
+    fn wired_newer_minor_refuses() {
+        let map = map_declaring("0_Meta", "B1", "1.5");
+        assert!(matches!(
+            resolve_dialect_version(&map),
+            Err(CompileError::Lint(_))
+        ));
+    }
+
+    #[test]
+    fn wired_different_major_refuses() {
+        let map = map_declaring("0_Meta", "B1", "2.0");
+        assert!(matches!(
+            resolve_dialect_version(&map),
+            Err(CompileError::Lint(_))
+        ));
+    }
+
+    #[test]
+    fn wired_malformed_refuses() {
+        let map = map_declaring("0_Meta", "B1", "1.x");
+        assert!(matches!(
+            resolve_dialect_version(&map),
+            Err(CompileError::Lint(_))
+        ));
+    }
+}

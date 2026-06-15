@@ -34,3 +34,10 @@ path = "fuzz_targets/fuzz_formula_parser.rs"
 doc = false
 test = false
 bench = false
+
+[[bin]]
+name = "dialect_version_parse"
+path = "fuzz_targets/dialect_version_parse.rs"
+doc = false
+test = false
+bench = false

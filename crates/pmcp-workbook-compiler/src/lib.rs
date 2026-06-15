@@ -194,6 +194,14 @@ pub use stage1::{run_stage1, FreshnessPolicy, Stage1Output};
 // The thin-shell CLI reads it through this re-export.
 pub use version::read_workbook_version;
 
+// The workbook-declared DIALECT-version accessor (WBDL-02 / D-03/D-04/D-05): a
+// SIBLING of `read_workbook_version`. `resolve_dialect_version` resolves+validates
+// the `pmcp_dialect_version` declaration (absent → baseline, no error; present →
+// fail-closed semver-compat). The `pub mod dialect_version` declaration (which
+// exposes the public parser to the fuzz target + examples) lives above; this is
+// just the convenience re-export of the resolve entry point.
+pub use dialect_version::resolve_dialect_version;
+
 use pmcp_workbook_runtime::sheet_ir::{Cell, CellExpr};
 
 /// Compile a governed Excel workbook into a served bundle.
@@ -258,6 +266,16 @@ fn compile_workbook_inner(
     // (2) umya ingest → owned WorkbookMap + collect-all ingest findings.
     let (map, ingest_findings) =
         ingest::ingest(workbook_path).map_err(|e| CompileError::Ingest(e.to_string()))?;
+
+    // (2a) Resolve + validate the workbook-declared DIALECT version (WBDL-02).
+    // Fail-closed (D-04): a different major OR a newer-than-supported minor is a
+    // typed `CompileError::Lint` reported in the same refuse pass as the lint/
+    // freshness gate. An ABSENT declaration resolves to the baseline (D-05) with
+    // NO error — every existing fixture (which declares no `pmcp_dialect_version`)
+    // keeps compiling with zero edits. Run over the ingested `map` (mirroring how
+    // `promote_named_outputs` consumes `&map`), BEFORE stage-1, so an
+    // incompatible dialect is refused before any synth/reconcile work.
+    let _dialect_version = dialect_version::resolve_dialect_version(&map)?;
 
     // (3) Composed stage-1 pass (lint + synth + freshness), collect-all refuse.
     let stage1 = stage1::run_stage1(&bytes, &map, &ingest_findings, workflow, freshness)?;
