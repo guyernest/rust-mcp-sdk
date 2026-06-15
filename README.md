@@ -20,7 +20,7 @@
 
 PMCP is a complete MCP ecosystem for Rust, providing everything you need to build, test, and deploy production-grade MCP servers — in Rust, **or from configuration alone**:
 
-- **🧩 Config-Driven Servers** - Build SQL & OpenAPI/HTTP MCP servers from a `config.toml` alone, **no Rust required** (`pmcp-server-toolkit`, `pmcp-sql-server`, `pmcp-openapi-server`)
+- **🧩 Config-Driven Servers** - Build SQL & OpenAPI/HTTP MCP servers from a `config.toml`, or serve a governed Excel workbook from a compiled bundle — all **no Rust required** (`pmcp-server-toolkit`, `pmcp-sql-server`, `pmcp-openapi-server`, `pmcp-workbook-server`)
 - **🦀 pmcp SDK** - High-performance Rust crate with full MCP protocol support
 - **⚡ cargo-pmcp** - CLI toolkit for scaffolding, testing, and development
 - **📚 pmcp-book** - Comprehensive reference guide with 27 chapters
@@ -63,9 +63,20 @@ cargo install pmcp-openapi-server
 pmcp-openapi-server --config crates/pmcp-openapi-server/examples/london-tube.toml
 ```
 
-**Want to extend and deploy it?** `cargo pmcp new my-server --kind sql-server` (or `--kind openapi-server`) scaffolds the same config-driven server as a small crate, ready for `cargo pmcp deploy` to AWS Lambda / Google Cloud Run / Cloudflare / pmcp.run.
+**Excel workbook — a governed spreadsheet, served as five MCP tools** (no `config.toml`, no schema; the single input is a compiled `bundle@version` directory):
+```bash
+cargo install pmcp-workbook-server
 
-**Learn more**: the *Config-Driven SQL Servers* and *OpenAPI* chapters in the [pmcp-book](https://paiml.github.io/rust-mcp-sdk/book/) · [`pmcp-sql-server`](crates/pmcp-sql-server/README.md) · [`pmcp-openapi-server`](crates/pmcp-openapi-server/README.md) · [`pmcp-server-toolkit`](crates/pmcp-server-toolkit/README.md)
+# Compile a governed workbook to a deterministic bundle (ingest → lint → compile →
+# reconcile → fail-closed gate → write), then serve calculate / explain /
+# get_manifest / diff_version / render_workbook from the bundle alone.
+cargo pmcp workbook compile pricing.xlsx --workflow quote --approver alice
+pmcp-workbook-server --bundle-dir bundles/quote@1.0.0
+```
+
+**Want to extend and deploy it?** `cargo pmcp new my-server --kind sql-server` (or `--kind openapi-server` / `--kind workbook-server`) scaffolds the same config-driven server as a small crate, ready for `cargo pmcp deploy` to AWS Lambda / Google Cloud Run / Cloudflare / pmcp.run.
+
+**Learn more**: the *Config-Driven SQL Servers*, *OpenAPI*, and *Config-Driven Workbook Servers* chapters in the [pmcp-book](https://paiml.github.io/rust-mcp-sdk/book/) · [`pmcp-sql-server`](crates/pmcp-sql-server/README.md) · [`pmcp-openapi-server`](crates/pmcp-openapi-server/README.md) · [`pmcp-workbook-server`](crates/pmcp-workbook-server/README.md) · [`pmcp-server-toolkit`](crates/pmcp-server-toolkit/README.md)
 
 ---
 
@@ -160,6 +171,7 @@ cargo build --release
 **Config-driven kinds** (`cargo pmcp new <name> --kind <k>` — TOML-driven, no per-tool Rust):
 - `sql-server` - SQL MCP server over SQLite / Postgres / MySQL / Athena from `config.toml`
 - `openapi-server` - MCP server over any OpenAPI / HTTP backend from `config.toml`
+- `workbook-server` - MCP server over a governed Excel workbook, served from a compiled `bundle@version` directory
 
 **Learn more**: [cargo-pmcp Guide](cargo-pmcp/README.md)
 
@@ -300,9 +312,10 @@ Build production MCP servers over SQL and HTTP backends from a `config.toml` alo
 | [`pmcp-server-toolkit`](crates/pmcp-server-toolkit) | The backend-agnostic library: config types, the `[[tools]]` synthesizer, Code Mode wiring, and the connector/auth seams that the binaries below build on. |
 | [`pmcp-sql-server`](crates/pmcp-sql-server) | Shape-A binary serving a SQL database (SQLite / Postgres / MySQL / Athena) from `config.toml` + a schema file. Ships a runnable [`sqlite-explorer`](crates/pmcp-sql-server/examples/sqlite-explorer.toml) example. |
 | [`pmcp-openapi-server`](crates/pmcp-openapi-server) | Shape-A binary serving any OpenAPI / HTTP backend, with six outgoing-auth models (incl. OAuth passthrough). Ships [`london-tube`](crates/pmcp-openapi-server/examples/london-tube.toml) (api_key) and [`contoso-m365`](crates/pmcp-openapi-server/examples/contoso-m365.toml) (oauth_passthrough, Microsoft Graph + Excel) examples. |
+| [`pmcp-workbook-server`](crates/pmcp-workbook-server) | Shape-A binary serving a governed Excel workbook as five MCP tools (`calculate` / `explain` / `get_manifest` / `diff_version` / `render_workbook`) from a compiled `bundle@version` directory alone — no `config.toml`, no schema. The Excel reader and JS code-mode are compile-time only and absent from the served binary (purity gate). |
 | [`pmcp-toolkit-postgres`](crates/pmcp-toolkit-postgres) / [`-mysql`](crates/pmcp-toolkit-mysql) / [`-athena`](crates/pmcp-toolkit-athena) | Per-backend SQL connectors for the toolkit. |
 
-Both binaries have `cargo pmcp new --kind {sql-server,openapi-server}` scaffold siblings that generate the same config-driven server as a small, deployable crate. See **Path 1** above and the *Config-Driven SQL Servers* / *OpenAPI* chapters in the [pmcp-book](https://paiml.github.io/rust-mcp-sdk/book/).
+These binaries have `cargo pmcp new --kind {sql-server,openapi-server,workbook-server}` scaffold siblings that generate the same config-driven server as a small, deployable crate. See **Path 1** above and the *Config-Driven SQL Servers* / *OpenAPI* / *Config-Driven Workbook Servers* chapters in the [pmcp-book](https://paiml.github.io/rust-mcp-sdk/book/).
 
 ---
 
