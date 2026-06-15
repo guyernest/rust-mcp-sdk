@@ -391,6 +391,216 @@ fn regenerate_fixtures() {
     write_gen_metadata(&probe_path, "leap1900_probe_spec", &probe, probe_reason)
         .expect("probe gen metadata");
     eprintln!("[regenerate_fixtures] wrote {}", probe_path.display());
+
+    // The loan/mortgage rate-tier calculator (Plan 96-04 Task 1 — the WBEX-01
+    // generalization fixture): a fixed-cell DAG whose divergence from tax-calc
+    // comes ENTIRELY from whitelist-legal lookup families (VLOOKUP +
+    // INDEX/MATCH against a rate-tier table, IFERROR guards, nested-IF tiering,
+    // ROUND/CEILING to currency) — NO PMT/POWER/exponentiation (D-02). Fully
+    // synthetic (zero customer/TowelRads material).
+    let loan = loan_calc_spec();
+    let loan_path = fixtures.join("loan-calc.xlsx");
+    let loan_reason = "authored by rust_xlsxwriter; a synthetic loan/mortgage rate-tier \
+                       calculator (the WBEX-01 second-workbook generalization fixture). \
+                       Whitelist-legal (VLOOKUP/INDEX-MATCH/IFERROR/nested-IF/ROUND/CEILING, \
+                       NO PMT/POWER) — honoured ONLY on the test/dev path. Production still \
+                       refuses non-fresh provenance.";
+    author_xlsx(&loan_path, &loan).expect("author loan-calc fixture");
+    write_override_marker(&loan_path, loan_reason).expect("loan marker");
+    write_gen_metadata(&loan_path, "loan_calc_spec", &loan, loan_reason)
+        .expect("loan gen metadata");
+    eprintln!("[regenerate_fixtures] wrote {}", loan_path.display());
+}
+
+/// The synthetic loan/mortgage rate-tier calculator spec (Plan 96-04 Task 1 —
+/// the WBEX-01 second-workbook generalization fixture).
+///
+/// # Why this workbook is deliberately divergent from `tax-calc` (D-01/D-02)
+///
+/// It is a fixed-cell formula DAG whose divergence is sourced ENTIRELY from
+/// whitelist-legal LOOKUP families — proving the manifest-driven serve path
+/// generalizes to a workbook whose shape `tax-calc` never exercised:
+///
+/// - a rate-tier TABLE (governed constants `D2:E4`, painted green) mapping a
+///   credit-tier index → an annual rate,
+/// - `VLOOKUP(...)` AND `INDEX(.., MATCH(.., 0))` both resolving the tier→rate
+///   (two lookup families, cross-checked),
+/// - `IFERROR(..)` guarding a lookup miss,
+/// - a nested `IF(.., IF(..))` tiering the credit score into a band index,
+/// - `ROUND`/`CEILING` to currency (the executor's `excel_round`/`excel_ceiling`
+///   source of truth — the cached `<v>` oracle below is computed against them).
+///
+/// It is whitelist-legal: NO `PMT`, NO `POWER`, NO exponentiation (an
+/// arbitrary-term `(1+r)^n` amortization is NOT expressible and is deferred);
+/// the first-period interest model below stays inside the 13-fn whitelist.
+///
+/// # Named inputs / outputs (with units)
+///
+/// Inputs (blue font → `Role::Input`): `loan_amount` (A2, USD), `term_months`
+/// (A3), `credit_score` (A4).
+///
+/// Outputs (`out_*` named ranges → `Role::Output`, MULTIPLE — no privileged
+/// single headline, the Anti-Pattern this fixture guards against):
+/// - `out_credit_tier` (B2) — the resolved tier index,
+/// - `out_applied_rate` (B3, unit `percent`) — the VLOOKUP'd annual rate (the
+///   custom-unit output that exercises the served schema's unit projection),
+/// - `out_monthly_interest` (B5, unit `USD`) — first-period interest,
+/// - `out_total_interest` (B6, unit `USD`) — `CEILING`'d simple-interest total,
+/// - `out_tier_rate` (B8, unit `percent`) — the INDEX/MATCH cross-check of the
+///   same tier→rate (proves both lookup families resolve identically).
+///
+/// # The reconcile oracle (cached `<v>`)
+///
+/// Worked for `loan_amount=240000, term_months=360, credit_score=700`:
+/// - B2 tier  = `IF(700>=740,3,IF(700>=680,2,1))`                     → `2`
+/// - B3 rate  = `IFERROR(VLOOKUP(2,D2:E4,2,FALSE),0.08)`             → `0.06`
+/// - B4 m.rate= `ROUND(0.06/12,6)`                                    → `0.005`
+/// - B5 m.int = `ROUND(240000*0.005,2)`                              → `1200`
+/// - B6 t.int = `CEILING(1200*360,1)`                               → `432000`
+/// - B8 tier  = `IFERROR(INDEX(E2:E4,MATCH(2,D2:D4,0)),0.08)`        → `0.06`
+fn loan_calc_spec() -> WorkbookSpec {
+    WorkbookSpec {
+        sheet: "Loan",
+        cells: vec![
+            // ---- labels (documentation, not role-bearing) ----
+            AuthoredCell::Text {
+                addr: "A1",
+                text: "Loan rate-tier calculator (synthetic)",
+            },
+            AuthoredCell::Text {
+                addr: "C1",
+                text: "tier",
+            },
+            AuthoredCell::Text {
+                addr: "D1",
+                text: "rate",
+            },
+            // ---- inputs (blue font → Role::Input) ----
+            AuthoredCell::Number {
+                addr: "A2",
+                value: 240_000.0,
+                paint: CellPaint::Input,
+            },
+            AuthoredCell::Number {
+                addr: "A3",
+                value: 360.0,
+                paint: CellPaint::Input,
+            },
+            AuthoredCell::Number {
+                addr: "A4",
+                value: 700.0,
+                paint: CellPaint::Input,
+            },
+            // ---- rate-tier table (governed constants, green fill) ----
+            AuthoredCell::Number {
+                addr: "D2",
+                value: 1.0,
+                paint: CellPaint::Constant,
+            },
+            AuthoredCell::Number {
+                addr: "E2",
+                value: 0.08,
+                paint: CellPaint::Constant,
+            },
+            AuthoredCell::Number {
+                addr: "D3",
+                value: 2.0,
+                paint: CellPaint::Constant,
+            },
+            AuthoredCell::Number {
+                addr: "E3",
+                value: 0.06,
+                paint: CellPaint::Constant,
+            },
+            AuthoredCell::Number {
+                addr: "D4",
+                value: 3.0,
+                paint: CellPaint::Constant,
+            },
+            AuthoredCell::Number {
+                addr: "E4",
+                value: 0.045,
+                paint: CellPaint::Constant,
+            },
+            // ---- the formula DAG (cached <v> = the reconcile oracle) ----
+            AuthoredCell::Formula {
+                addr: "B2",
+                formula: "IF(A4>=740,3,IF(A4>=680,2,1))",
+                cached: "2",
+            },
+            AuthoredCell::Formula {
+                addr: "B3",
+                formula: "IFERROR(VLOOKUP(B2,D2:E4,2,FALSE),0.08)",
+                cached: "0.06",
+            },
+            AuthoredCell::Formula {
+                addr: "B4",
+                formula: "ROUND(B3/12,6)",
+                cached: "0.005",
+            },
+            AuthoredCell::Formula {
+                addr: "B5",
+                formula: "ROUND(A2*B4,2)",
+                cached: "1200",
+            },
+            AuthoredCell::Formula {
+                addr: "B6",
+                formula: "CEILING(B5*A3,1)",
+                cached: "432000",
+            },
+            AuthoredCell::Formula {
+                addr: "B8",
+                formula: "IFERROR(INDEX(E2:E4,MATCH(B2,D2:D4,0)),0.08)",
+                cached: "0.06",
+            },
+            // ---- the WBDL-02 present-path declaration (compatible value) ----
+            AuthoredCell::Text {
+                addr: "A10",
+                text: "1.0",
+            },
+        ],
+        defined_names: vec![
+            // `in_*` INPUT named ranges (the input analogue of `out_*`): they give
+            // each blue-font input a STABLE semantic served key (`loan_amount`)
+            // instead of the cell's numeric value. See `name_named_inputs` (lib.rs).
+            DefinedNameSpec {
+                name: "in_loan_amount",
+                target: "'Loan'!$A$2",
+            },
+            DefinedNameSpec {
+                name: "in_term_months",
+                target: "'Loan'!$A$3",
+            },
+            DefinedNameSpec {
+                name: "in_credit_score",
+                target: "'Loan'!$A$4",
+            },
+            DefinedNameSpec {
+                name: "out_credit_tier",
+                target: "'Loan'!$B$2",
+            },
+            DefinedNameSpec {
+                name: "out_applied_rate",
+                target: "'Loan'!$B$3",
+            },
+            DefinedNameSpec {
+                name: "out_monthly_interest",
+                target: "'Loan'!$B$5",
+            },
+            DefinedNameSpec {
+                name: "out_total_interest",
+                target: "'Loan'!$B$6",
+            },
+            DefinedNameSpec {
+                name: "out_tier_rate",
+                target: "'Loan'!$B$8",
+            },
+            DefinedNameSpec {
+                name: "pmcp_dialect_version",
+                target: "'Loan'!$A$10",
+            },
+        ],
+    }
 }
 
 /// The 1900-leap-year probe spec (Plan 96-03 Task 2 disposition A).

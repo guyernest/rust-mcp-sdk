@@ -1,0 +1,65 @@
+{
+  "generator_fn": "loan_calc_spec",
+  "authored_by": "rust_xlsxwriter",
+  "sheet": "Loan",
+  "input_cells": [
+    "A2",
+    "A3",
+    "A4"
+  ],
+  "formula_oracles": [
+    {
+      "cell": "B2",
+      "formula": "IF(A4>=740,3,IF(A4>=680,2,1))",
+      "cached_oracle": "2"
+    },
+    {
+      "cell": "B3",
+      "formula": "IFERROR(VLOOKUP(B2,D2:E4,2,FALSE),0.08)",
+      "cached_oracle": "0.06"
+    },
+    {
+      "cell": "B4",
+      "formula": "ROUND(B3/12,6)",
+      "cached_oracle": "0.005"
+    },
+    {
+      "cell": "B5",
+      "formula": "ROUND(A2*B4,2)",
+      "cached_oracle": "1200"
+    },
+    {
+      "cell": "B6",
+      "formula": "CEILING(B5*A3,1)",
+      "cached_oracle": "432000"
+    },
+    {
+      "cell": "B8",
+      "formula": "IFERROR(INDEX(E2:E4,MATCH(B2,D2:D4,0)),0.08)",
+      "cached_oracle": "0.06"
+    }
+  ],
+  "expected_outputs": [
+    {
+      "name": "out_credit_tier",
+      "target": "'Loan'!$B$2"
+    },
+    {
+      "name": "out_applied_rate",
+      "target": "'Loan'!$B$3"
+    },
+    {
+      "name": "out_monthly_interest",
+      "target": "'Loan'!$B$5"
+    },
+    {
+      "name": "out_total_interest",
+      "target": "'Loan'!$B$6"
+    },
+    {
+      "name": "out_tier_rate",
+      "target": "'Loan'!$B$8"
+    }
+  ],
+  "override_reason": "authored by rust_xlsxwriter; a synthetic loan/mortgage rate-tier calculator (the WBEX-01 second-workbook generalization fixture). Whitelist-legal (VLOOKUP/INDEX-MATCH/IFERROR/nested-IF/ROUND/CEILING, NO PMT/POWER) — honoured ONLY on the test/dev path. Production still refuses non-fresh provenance."
+}
