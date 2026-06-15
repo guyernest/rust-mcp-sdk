@@ -96,6 +96,14 @@ mod reemit_golden;
 #[cfg(test)]
 mod fixture_author;
 
+// WBEX-01 generalization gate (Plan 96-04): a SECOND, non-lighthouse loan/mortgage
+// workbook compiles through the generic driver and serves ITS OWN
+// get_manifest/tools/list schema behind the SAME five generic tool names. In-crate
+// `#[cfg(test)]` for the same CR-01 reachability reason as `reemit_golden`: it must
+// reach the `#[cfg(test)]`-only `compile_workbook_with_fixture_override`.
+#[cfg(test)]
+mod reemit_loan;
+
 // In-crate `#[cfg(test)]` tests for the `prepare_candidate` facade (Task 94-00-02).
 // Lives in `src/` (not `tests/`) so it can reach the `#[cfg(test)]`-only
 // `prepare_candidate_with_fixture_override` (same CR-01 reachability reason as
@@ -297,6 +305,10 @@ fn compile_workbook_inner(
     // driver's naming-convention responsibility.
     let mut manifest = stage1.synth_manifest;
     promote_named_outputs(&mut manifest, &map);
+    // (3b) Name `in_*` named-range INPUT cells so the served input schema carries
+    // a stable semantic key (`loan_amount`) rather than the cell's numeric value.
+    // The INPUT analogue of the `out_*` convention — naming only, never re-roling.
+    name_named_inputs(&mut manifest, &map);
 
     // (4) RATIFY the candidate manifest (a recorded sign-off). The sidecar lives
     // beside the output root so the audit trail is co-located with the bundle.
@@ -592,6 +604,42 @@ fn promote_named_outputs(manifest: &mut Manifest, map: &ingest::WorkbookMap) {
     }
 }
 
+/// Name every `in_*` named-range target cell that synthesis already classified
+/// [`Role::Input`] (the blue-font convention) with the named-range identifier.
+///
+/// Synthesis classifies a cell's ROLE from colour alone but never assigns a
+/// semantic `name`; for an INPUT cell (a bare numeric leaf) the cell-map
+/// [`json_key_for_role`](pmcp_workbook_runtime::json_key_for_role) precedence
+/// (`name → meaning → cell key`) would otherwise fall through to the cell's own
+/// numeric VALUE string — a meaningless served input key (`"240000"`). The `in_<name>`
+/// named range is the INPUT analogue of the proven `out_<name>` output convention
+/// (see [`promote_named_outputs`]): the WORKBOOK author declares it so the served
+/// `calculate`/`explain` input schema carries a stable semantic key (`loan_amount`),
+/// exactly as the output side does. This NEVER changes a cell's role (an `in_*`
+/// name targeting a non-Input cell is ignored — naming is not re-roling); it only
+/// records the `name` the cell-map `json_key` reads. An unmatched name is ignored
+/// (a defined name pointing nowhere is a linter concern, not a hard failure).
+fn name_named_inputs(manifest: &mut Manifest, map: &ingest::WorkbookMap) {
+    use pmcp_workbook_runtime::range_ref::cell_key;
+    for dn in &map.defined_names {
+        if !dn.name.starts_with("in_") {
+            continue;
+        }
+        // Single-cell target only (a range input is not a scalar named input).
+        if dn.target.start != dn.target.end {
+            continue;
+        }
+        let key = cell_key(&dn.target.sheet, &dn.target.start);
+        if let Some(role) = manifest
+            .cells
+            .iter_mut()
+            .find(|c| c.cell == key && c.role == Role::Input)
+        {
+            role.name = Some(dn.name.clone());
+        }
+    }
+}
+
 /// The gated-update CANDIDATE: everything [`gate::gate`] and
 /// [`gate::accept::promote`] need to grade and (if accepted) publish a re-compile,
 /// assembled by COMPOSING the existing private candidate-build internals — WITHOUT
@@ -689,6 +737,8 @@ fn prepare_candidate_inner(
     // (3a) Promote the workbook's `out_*` named-range targets to `Role::Output`.
     let mut manifest = stage1.synth_manifest;
     promote_named_outputs(&mut manifest, &map);
+    // (3b) Name `in_*` named-range INPUT cells (the input analogue of `out_*`).
+    name_named_inputs(&mut manifest, &map);
 
     // (4) The candidate content anchor. NOTE: `prepare` does NOT ratify (ratify
     // writes a sidecar) — gate-before-write means `prepare` writes NOTHING; the
