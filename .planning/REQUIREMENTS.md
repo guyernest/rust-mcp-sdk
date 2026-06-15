@@ -67,7 +67,7 @@
 ### Generalization Validation
 
 - [x] **WBEX-01**: A second, non-lighthouse example workbook compiles and serves end-to-end through the SDK path — the generalization gate proving the manifest is truly synth-driven (no per-workbook Rust, no privileged single output)
-- [ ] **WBEX-02**: An Excel-quirk fixture corpus (1900 leap-year, empty-cell coercion, error propagation) verifies reconcile determinism beyond the single golden case
+- [x] **WBEX-02**: An Excel-quirk fixture corpus (1900 leap-year, empty-cell coercion, error propagation) verifies reconcile determinism beyond the single golden case
 
 ---
 
@@ -143,7 +143,7 @@
 | WBCL-05 | Phase 96 | Complete (96-02) |
 | WBDL-02 | Phase 96 | Complete (96-01) |
 | WBEX-01 | Phase 96 | Complete |
-| WBEX-02 | Phase 96 | Pending |
+| WBEX-02 | Phase 96 | Complete (96-05) |
 | GHDEP-01 | Phase 97 | Pending |
 | GHDEP-02 | Phase 97 | Pending |
 | GHDEP-03 | Phase 97 | Pending |

@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v2.3
 milestone_name: Excel-as-Configuration MCP Servers
 status: executing
-stopped_at: Completed 96-04-PLAN.md (WBEX-01 generalization gate — second loan workbook serves its own schema)
-last_updated: "2026-06-15T08:50:47.223Z"
-last_activity: 2026-06-15 -- Completed Phase 96 Plan 04 (WBEX-01 generalization gate: loan rate-tier second workbook + reemit_loan served-schema proof)
+stopped_at: Completed 96-05-PLAN.md (WBEX-02 Excel-quirk corpus — 8 quirks in both layers; LAST plan of Phase 96)
+last_updated: "2026-06-15T09:35:00.000Z"
+last_activity: 2026-06-15 -- Completed Phase 96 Plan 05 (WBEX-02 Excel-quirk fixture corpus: scalar_eval + penny-reconcile layers)
 progress:
   total_phases: 53
   completed_phases: 46
   total_plans: 221
-  completed_plans: 220
+  completed_plans: 221
   percent: 87
 ---
 
@@ -25,10 +25,10 @@ See: .planning/PROJECT.md (updated 2026-06-09) · .planning/ROADMAP.md (v2.3 mil
 
 ## Current Position
 
-Phase: 96 (shape-b-scaffold-dialect-version-declaration-generalization-validation) — EXECUTING
-Plan: 5 of 5 (Plans 01 WBDL-02, 02 WBCL-05, 03 WBEX-01/02 de-risk, 04 WBEX-01 generalization gate complete)
-Status: Ready to execute (96-05 WBEX-02 Excel-quirk corpus remains)
-Last activity: 2026-06-15 -- Completed Phase 96 Plan 04 (WBEX-01 generalization gate)
+Phase: 96 (shape-b-scaffold-dialect-version-declaration-generalization-validation) — ALL PLANS COMPLETE (full verifier next)
+Plan: 5 of 5 COMPLETE (01 WBDL-02, 02 WBCL-05, 03 WBEX-01/02 de-risk, 04 WBEX-01 gate, 05 WBEX-02 quirk corpus)
+Status: Phase 96 plans all executed — orchestrator full verifier + `make quality-gate` next (all four reqs WBCL-05/WBDL-02/WBEX-01/WBEX-02 complete)
+Last activity: 2026-06-15 -- Completed Phase 96 Plan 05 (WBEX-02 Excel-quirk corpus)
 
 Progress: [███░░░░░░░] 33% (v2.3 phases: 91, 92 done; 93–96 remain)
 
@@ -62,6 +62,7 @@ Decisions are logged in PROJECT.md Key Decisions table. Decisions framing this m
 - Phase 96-03 (WBEX-01/02 de-risk): reusable #[cfg(test)] rust_xlsxwriter fixture author (fixture_author.rs) retires the .xlsx authoring landmine -- genuine Excel identity (rust_xlsxwriter 0.95 defaults: Application=Microsoft Excel + AppVersion=12.0000 + non-sentinel calcId 124519 => ExcelTrusted, no DocProperties needed) asserted DIRECTLY via classify_authored(), cached-<v> reconcile oracle via Formula::set_result, env-gated #[ignore] regenerate_fixtures generator (normal tests use TempDir), production-refusal guard (T-96-07). Per-fixture *.provenance-override.json + *.gen.json sidecars
 - Phase 96-03: 1900-leap disposition (A) DAG-expressible -- IF(serial>59, serial+1, serial) over f64 with whitelisted ops only; NO DATE/DATEVALUE added (WBDL-01 doc-const binding + deferred-functions boundary held; dialect crate byte-clean); committed leap1900-probe.xlsx reconcile fixture compiles+reconciles; SPIKE-1900-leap.md carries ## WBEX-02 Traceability for Plan 96-05
 - Phase 96-04 (WBEX-01 generalization gate PROVEN): a second synthetic loan rate-tier workbook compiles via the GENERIC compile_workbook driver and serves its OWN get_manifest/tools/list schema (loan input/output keys present, tax-calc keys absent, the two key sets DISJOINT) behind the SAME five generic tool names -- the disjointness read off the generic toolkit fns (input_schema_for_manifest/output_schema_for_manifest/GetManifestHandler) IS the proof (T-96-11), zero per-workbook served Rust. Whitelist-legal (VLOOKUP + INDEX-MATCH cross-check, IFERROR, nested-IF tiering, ROUND/CEILING; NO PMT/POWER/exponentiation, D-02). Added name_named_inputs() -- the in_* input named-range convention mirroring out_* -- so the served input schema carries semantic keys (loan_amount) not the cell's numeric value (Rule 2 deviation). Custom-unit acceptance item NOT achievable via the compile path (synth sets role.unit=None; cell_map reads role.unit) -> asserted the generic { value, unit } projection RUNS per output instead. reemit_loan.rs (9 #[cfg(test)] assertions incl. production-refusal T-96-10) + committed synthetic loan-calc.xlsx (zero customer/TowelRads material, T-96-12)
+- Phase 96-05 (WBEX-02 Excel-quirk corpus COMPLETE): 8 quirks in BOTH D-08 layers -- scalar_eval unit tests (runtime crate, 8 #[test] each with a {formula+context, oracle, expected} tuple; half-rounding asserts excel_round source of truth; 1900-leap asserts the >59 boundary + +1 offset components per SPIKE, no DATE) + penny-reconcile mini fixtures (quirks_reconcile.rs harness: compile via override -> load bundle -> seed inputs -> run_executor -> RETRIEVE recomputed value + cached oracle -> within_tol, cannot pass on compile-success alone T-96-14b; a wrong-oracle negative test proves the value is graded; production-refusal spot check T-96-13). 3 of 4 NAMED quirks have a real reconcile fixture (1900-leap reuses leap1900-probe.xlsx; empty-cell coercion via A2+(A1=IF(A2>9999,1)->Empty) since an absent range member is a hard #REF! not Empty; half-rounding). Error propagation (named) is the plan-sanctioned scalar_eval-only stand-in: the runtime Div clamps zero-divisor NaN->0 (WR-02/IN-03) and errors short-circuit at preflight_error, so a numeric reconcile fixture is not expressible. Quirk->WBEX-02 traceability map in the quirks_reconcile.rs module doc. Reverted incidental regenerate_fixtures rewrites of existing leap/loan fixtures (no edits to existing fixtures). make quality-gate DEFERRED to the phase verifier.
 
 ### Pending Todos
 
@@ -98,8 +99,8 @@ Items deferred by design for this milestone:
 
 ## Session Continuity
 
-Last session: 2026-06-15T08:50:47.218Z
-Stopped at: Completed 96-03-PLAN.md (WBEX-01/02 landmine retirement + 1900-leap disposition A)
+Last session: 2026-06-15T09:35:00.000Z
+Stopped at: Completed 96-05-PLAN.md (WBEX-02 Excel-quirk corpus — LAST plan of Phase 96)
 Resume file: None
 
 ## Performance Metrics
@@ -112,3 +113,4 @@ Resume file: None
 | Phase 96 P02 | 38min | 3 tasks | 15 files |
 | Phase 96 P03 | 35min | 2 tasks | 6 files |
 | Phase 96 P04 | ~40min | 2 tasks | 6 files |
+| Phase 96 P05 | ~40min | 2 tasks | 9 files |

@@ -1884,7 +1884,7 @@ Plans:
   1. A developer can run `cargo pmcp new --kind workbook-server` to scaffold a runnable crate (Cargo.toml + `main.rs` using `EmbeddedSource` + sample `pmcp.toml` + sample bundle) — a thin shell over the toolkit module, mirroring `--kind sql-server`
   2. A workbook declares the dialect version it targets, and the compiler validates that declaration — enabling forward-compatible dialect evolution
   3. **GENERALIZATION GATE (WBEX-01):** a second, non-lighthouse example workbook compiles and serves end-to-end through the SDK path, and its server's `get_manifest` / `tools/list` schema reflects ITS OWN inputs with zero shared Rust and no privileged single output — proving the manifest-driven §5 fix generalized
-  4. An Excel-quirk fixture corpus (1900 leap-year, empty-cell coercion, error propagation, half-rounding boundaries) verifies reconcile determinism beyond the single golden case
+  4. ✅ An Excel-quirk fixture corpus (1900 leap-year, empty-cell coercion, error propagation, half-rounding boundaries) verifies reconcile determinism beyond the single golden case (WBEX-02, 96-05: 8 quirks across both layers — scalar_eval unit tests + penny-reconcile mini fixtures graded via within_tol)
 
 **Plans**: 5 plans
 
@@ -1892,7 +1892,7 @@ Plans:
 - [x] 96-02-PLAN.md — WBCL-05 Shape B scaffold: `cargo pmcp new --kind workbook-server` template + dispatch + purity-safe Cargo.toml + EMBEDDED publish-safe assets (include_dir!) + lib seam + drift-lock/bundle-bytes/version-drift golden tests + scaffold-build & packaging smokes + example ✅ (commits 91933535, 736a1266, cf670b6b)
 - [x] 96-03-PLAN.md — WBEX critical-path spike: reusable #[cfg(test)] rust_xlsxwriter fixture author (Excel identity) + 1900-leap-year disposition spike
 - [x] 96-04-PLAN.md — WBEX-01 generalization gate: synthetic loan/mortgage rate-tier second workbook compiles via the generic driver + serves its OWN get_manifest/tools/list schema (loan keys present, tax keys absent, DISJOINT) behind the same five generic tool names; reemit_loan 9-assertion served-schema proof (incl. production-refusal T-96-10) + the in_* input-naming convention (mirrors out_*) ✅ (commits 6b622e95, a7529369)
-- [ ] 96-05-PLAN.md — WBEX-02 Excel-quirk corpus: ~7-9 quirks in scalar_eval unit tests + mini reconcile fixtures (penny path)
+- [x] 96-05-PLAN.md — WBEX-02 Excel-quirk corpus: 8 quirks in BOTH layers — scalar_eval unit tests (excel_round source of truth; 1900-leap >59/+1 components per SPIKE, no DATE) + mini penny-reconcile fixtures graded by retrieving the recomputed value + cached oracle through within_tol (cannot pass on compile-success alone); 3 of 4 named quirks have a reconcile fixture (error propagation is the scalar_eval-only stand-in — runtime Div clamps NaN->0 / preflight short-circuit); production-refusal spot check + quirk->WBEX-02 traceability map ✅ (commits e3cce105, 7fa7458f)
 
 ## Progress — v2.3 Milestone
 
@@ -1905,4 +1905,4 @@ Plans:
 | 93. Workbook Compiler + §5 Fixes + Promote Gate | 7/7 | Complete    | 2026-06-13 |
 | 94. CLI Subcommands + `pmcp.toml` | 6/6 | Complete    | 2026-06-14 |
 | 95. Shape A Binary `pmcp-workbook-server` | 2/2 | Complete    | 2026-06-14 |
-| 96. Shape B Scaffold + Dialect-Version + Generalization | 4/5 | In Progress|  |
+| 96. Shape B Scaffold + Dialect-Version + Generalization | 5/5 | Complete    | 2026-06-15 |
