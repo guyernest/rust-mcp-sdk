@@ -275,28 +275,22 @@ fn production_compile_refuses_a_quirk_fixture() {
 /// stand-in per the module header.)
 #[test]
 fn each_named_reconcilable_quirk_has_a_reconcile_assertion() {
-    // empty-cell coercion (NAMED).
-    let empty = QuirkCase {
-        stem: "quirk-empty-coercion",
-        bundle_id: "quirk-empty-coercion",
-        inputs: &[("Quirk!A2", 5.0)],
-        text_inputs: &[],
-        output_key: "Quirk!B1",
-        oracle: 5.0,
+    // Look the named cases up from the single-source `quirk_cases()` table rather
+    // than re-declaring their literals here (which could silently drift from it).
+    let cases: Vec<QuirkCase> = quirk_cases();
+    let case_by_stem = |stem: &str| -> &QuirkCase {
+        cases
+            .iter()
+            .find(|c| c.stem == stem)
+            .unwrap_or_else(|| panic!("named quirk `{stem}` is present in quirk_cases()"))
     };
-    let (c, o) = recompute_at_reconcile_key(&empty);
+
+    // empty-cell coercion (NAMED).
+    let (c, o) = recompute_at_reconcile_key(case_by_stem("quirk-empty-coercion"));
     assert!(within_tol(&c, &o), "empty-cell coercion reconciles: {c:?}");
 
     // half-rounding boundaries (NAMED).
-    let half = QuirkCase {
-        stem: "quirk-half-rounding",
-        bundle_id: "quirk-half-rounding",
-        inputs: &[("Quirk!A1", 1594.925)],
-        text_inputs: &[],
-        output_key: "Quirk!B1",
-        oracle: 1594.93,
-    };
-    let (c, o) = recompute_at_reconcile_key(&half);
+    let (c, o) = recompute_at_reconcile_key(case_by_stem("quirk-half-rounding"));
     assert!(within_tol(&c, &o), "half-rounding reconciles: {c:?}");
 
     // 1900 leap-year (NAMED) — the committed probe, re-graded here through the
@@ -336,8 +330,8 @@ fn each_named_reconcilable_quirk_has_a_reconcile_assertion() {
     // (5 reconcile fixtures + the leap probe = 6 reconcile fixtures; 8 quirks across
     // both layers via the traceability map), so an exact equality is meaningful
     // where the old `(5..=9).contains(len+1)` range was tautological (len is
-    // compile-time-fixed, so it could only ever read 6).
-    let cases: Vec<QuirkCase> = quirk_cases();
+    // compile-time-fixed, so it could only ever read 6). Reuses the `cases`
+    // fetched at the top of this test.
     assert_eq!(
         cases.len(),
         5,

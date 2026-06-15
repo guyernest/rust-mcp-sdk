@@ -338,7 +338,7 @@ fn compile_workbook_inner(
 
     // (6) Run the SHARED runtime executor over the IR with the input cells seeded
     // from their cached values — the SAME pure-Rust path the served binary uses.
-    let seed = seed_from_inputs(&map, &manifest);
+    let seed = seed_from_inputs(&map);
     let run = sheet_ir::eval(&ir, &dag, &seed)
         .map_err(|finding| CompileError::Reconcile(finding.message.clone()))?;
 
@@ -525,10 +525,10 @@ fn parse_cell_value(raw: &str) -> CellValue {
     }
 }
 
-/// Seed the executor [`CellEnv`] from the manifest's `Role::Input` cells, taking
-/// each input's cached value from the workbook map. Inputs are the leaves the
-/// executor needs pre-loaded before it walks the formula DAG.
-fn seed_from_inputs(map: &ingest::WorkbookMap, manifest: &Manifest) -> CellEnv {
+/// Seed the executor [`CellEnv`] from every non-formula literal cell in the
+/// workbook map — the leaves (inputs, constants, governed bracket-table
+/// literals) the executor needs pre-loaded before it walks the formula DAG.
+fn seed_from_inputs(map: &ingest::WorkbookMap) -> CellEnv {
     let mut value_by_key: HashMap<String, CellValue> = HashMap::new();
     for sheet in &map.sheets {
         for cell in &sheet.cells {
@@ -542,17 +542,12 @@ fn seed_from_inputs(map: &ingest::WorkbookMap, manifest: &Manifest) -> CellEnv {
         }
     }
 
+    // Seed every non-formula literal cell the executor depends on: the
+    // manifest's `Input`/`Constant` cells AND any governed literal the manifest
+    // did not role (e.g. a bracket-table constant) so the DAG's leaf cells
+    // resolve. `value_by_key` is already the superset of both, so one pass covers
+    // it.
     let mut env = CellEnv::new();
-    for role in &manifest.cells {
-        if matches!(role.role, Role::Input | Role::Constant) {
-            if let Some(value) = value_by_key.get(&role.cell) {
-                env = env.seed_cell(&role.cell, value);
-            }
-        }
-    }
-    // ALSO seed any non-formula literal cell the executor depends on but the
-    // manifest did not role (e.g. a governed bracket-table constant) so the DAG's
-    // leaf cells resolve.
     for (key, value) in &value_by_key {
         env = env.seed_cell(key, value);
     }
@@ -774,7 +769,7 @@ fn prepare_candidate_inner(
 
     // (6) Run the SHARED runtime executor over the IR with inputs seeded from
     // their cached values — the SAME pure-Rust path the served binary uses.
-    let seed = seed_from_inputs(&map, &manifest);
+    let seed = seed_from_inputs(&map);
     let run = sheet_ir::eval(&ir, &dag, &seed)
         .map_err(|finding| CompileError::Reconcile(finding.message.clone()))?;
 

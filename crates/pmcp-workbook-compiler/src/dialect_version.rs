@@ -98,10 +98,10 @@ pub fn parse_dialect_version(raw: &str) -> Result<DialectVersion, CompileError> 
     }
     let major = parse_component(raw, "MAJOR", parts[0])?;
     let minor = parse_component(raw, "MINOR", parts[1])?;
-    let patch = match parts.get(2) {
-        Some(p) => Some(parse_component(raw, "PATCH", p)?),
-        None => None,
-    };
+    let patch = parts
+        .get(2)
+        .map(|p| parse_component(raw, "PATCH", p))
+        .transpose()?;
     Ok(DialectVersion {
         major,
         minor,
@@ -208,17 +208,19 @@ pub fn validate_declared(declared: &str) -> Result<DialectVersion, CompileError>
 /// const. Infallible on a well-formed const; a const that ever stops parsing is a
 /// build-time programming error surfaced as a typed `Lint` (never a panic).
 fn supported_version() -> DialectVersion {
-    parse_dialect_version(SUPPORTED_DIALECT_VERSION).unwrap_or(DialectVersion {
-        major: 0,
-        minor: 0,
-        patch: None,
-    })
+    parse_const_version(SUPPORTED_DIALECT_VERSION)
 }
 
 /// The baseline dialect version (D-05 absent target), parsed from the dialect
 /// crate's const.
 fn baseline_version() -> DialectVersion {
-    parse_dialect_version(BASELINE_DIALECT_VERSION).unwrap_or(DialectVersion {
+    parse_const_version(BASELINE_DIALECT_VERSION)
+}
+
+/// Parse a dialect-crate version const, falling back to `0.0` on the
+/// (build-time-impossible) unparseable case rather than panicking.
+fn parse_const_version(s: &str) -> DialectVersion {
+    parse_dialect_version(s).unwrap_or(DialectVersion {
         major: 0,
         minor: 0,
         patch: None,
@@ -239,7 +241,9 @@ fn declared_dialect_version(map: &WorkbookMap) -> Option<String> {
         if dn.target.start != dn.target.end {
             continue;
         }
-        if let Some(value) = cell_value_for_key(map, &dn.target.sheet, &dn.target.start) {
+        if let Some(value) =
+            crate::version::cell_value_for_key(map, &dn.target.sheet, &dn.target.start)
+        {
             let trimmed = value.trim();
             if !trimmed.is_empty() {
                 return Some(trimmed.to_string());
@@ -248,14 +252,6 @@ fn declared_dialect_version(map: &WorkbookMap) -> Option<String> {
         // A matched-but-empty target falls through (absent → baseline, D-05).
     }
     None
-}
-
-/// Read the cached `value` of the cell at (`sheet`, `addr`) from the owned map, or
-/// `None` when the sheet/cell is absent or the cell has no value.
-fn cell_value_for_key<'a>(map: &'a WorkbookMap, sheet: &str, addr: &str) -> Option<&'a str> {
-    let sheet_rec = map.sheets.iter().find(|s| s.name == sheet)?;
-    let cell = sheet_rec.cells.iter().find(|c| c.addr == addr)?;
-    cell.value.as_deref()
 }
 
 #[cfg(test)]

@@ -88,7 +88,13 @@ fn is_version_name(name: &str) -> bool {
 
 /// Read the cached `value` of the cell at (`sheet`, `addr`) from the owned map,
 /// or `None` when the sheet/cell is absent or the cell has no value.
-fn cell_value_for_key<'a>(map: &'a WorkbookMap, sheet: &str, addr: &str) -> Option<&'a str> {
+///
+/// Shared by [`crate::dialect_version`] so the single-cell read rule lives once.
+pub(crate) fn cell_value_for_key<'a>(
+    map: &'a WorkbookMap,
+    sheet: &str,
+    addr: &str,
+) -> Option<&'a str> {
     let sheet_rec = map.sheets.iter().find(|s| s.name == sheet)?;
     let cell = sheet_rec.cells.iter().find(|c| c.addr == addr)?;
     cell.value.as_deref()
