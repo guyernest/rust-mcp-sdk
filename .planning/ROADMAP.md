@@ -1886,7 +1886,12 @@ Plans:
   3. **GENERALIZATION GATE (WBEX-01):** a second, non-lighthouse example workbook compiles and serves end-to-end through the SDK path, and its server's `get_manifest` / `tools/list` schema reflects ITS OWN inputs with zero shared Rust and no privileged single output — proving the manifest-driven §5 fix generalized
   4. An Excel-quirk fixture corpus (1900 leap-year, empty-cell coercion, error propagation, half-rounding boundaries) verifies reconcile determinism beyond the single golden case
 
-**Plans**: TBD
+**Plans**: 5 plans
+- [ ] 96-01-PLAN.md — WBDL-02 dialect-version declaration: pmcp_dialect_version reader + semver-compat (fail-closed) + dialect consts/spec drift guard + fuzz/property
+- [ ] 96-02-PLAN.md — WBCL-05 Shape B scaffold: `cargo pmcp new --kind workbook-server` template + dispatch + purity-safe Cargo.toml + drift-lock/bundle-bytes golden tests + example
+- [ ] 96-03-PLAN.md — WBEX critical-path spike: reusable #[cfg(test)] rust_xlsxwriter fixture author (Excel identity) + 1900-leap-year disposition spike
+- [ ] 96-04-PLAN.md — WBEX-01 generalization gate: loan/mortgage second workbook + reemit_loan compile-and-serve proof asserting its OWN manifest
+- [ ] 96-05-PLAN.md — WBEX-02 Excel-quirk corpus: ~7-9 quirks in scalar_eval unit tests + mini reconcile fixtures (penny path)
 
 ## Progress — v2.3 Milestone
 
