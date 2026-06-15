@@ -52,6 +52,12 @@ static EMBEDDED_XLSX: &[u8] = include_bytes!("workbook_bundle/tax-calc.xlsx");
 /// silently drift from the released crate (Codex MEDIUM).
 const PMCP_VERSION: &str = "2.9.0";
 
+/// The pinned `pmcp-server-toolkit` version the emitted `Cargo.toml` declares. A
+/// test asserts this equals the workspace `pmcp-server-toolkit` package version so
+/// the hardcoded pin cannot silently drift from the released crate (ME-01) —
+/// mirroring the `PMCP_VERSION` drift guard.
+const TOOLKIT_VERSION: &str = "0.1.0";
+
 /// Emit the files of a single runnable `workbook-server` crate into `dir`.
 pub fn generate(dir: &Path, name: &str) -> Result<()> {
     generate_cargo_toml(dir, name)?;
@@ -85,9 +91,8 @@ pmcp = {{ version = "{PMCP_VERSION}", features = ["streamable-http"] }}
 # DEFAULT pulls `code-mode` → pmcp-code-mode (SWC/JS) into the served tree and
 # trips `make purity-check`. `workbook-embedded` (NOT bare workbook) supplies
 # EmbeddedSource; `http` forwards the streamable-HTTP server.
-pmcp-server-toolkit = {{ version = "0.1.0", default-features = false, features = ["workbook-embedded", "http"] }}
-include-dir = {{ version = "0.7.4", package = "include_dir" }}
-clap = {{ version = "4", features = ["derive"] }}
+pmcp-server-toolkit = {{ version = "{TOOLKIT_VERSION}", default-features = false, features = ["workbook-embedded", "http"] }}
+include_dir = "0.7.4"
 tokio = {{ version = "1", features = ["macros", "rt-multi-thread"] }}
 "#,
     );
@@ -478,6 +483,29 @@ mod tests {
             PMCP_VERSION, root_version,
             "the scaffold's hardcoded pmcp version `{PMCP_VERSION}` drifted from the \
              workspace-root pin `{root_version}` — bump PMCP_VERSION in workbook_server.rs"
+        );
+    }
+
+    #[test]
+    fn emitted_toolkit_version_matches_workspace_pin() {
+        // ME-01: the hardcoded TOOLKIT_VERSION must not drift from the workspace
+        // `pmcp-server-toolkit` package version (publish-item 5, a strong candidate
+        // to bump). Parse its Cargo.toml `[package] version` and compare — mirroring
+        // the PMCP_VERSION drift guard so a stale toolkit pin fails a test rather
+        // than shipping silently in `cargo pmcp new --kind workbook-server` output.
+        const TOOLKIT_CARGO_TOML: &str =
+            include_str!("../../../crates/pmcp-server-toolkit/Cargo.toml");
+        let parsed: toml::Value =
+            toml::from_str(TOOLKIT_CARGO_TOML).expect("parse pmcp-server-toolkit Cargo.toml");
+        let toolkit_version = parsed
+            .get("package")
+            .and_then(|p| p.get("version"))
+            .and_then(|v| v.as_str())
+            .expect("pmcp-server-toolkit Cargo.toml has [package] version");
+        assert_eq!(
+            TOOLKIT_VERSION, toolkit_version,
+            "the scaffold's hardcoded pmcp-server-toolkit version `{TOOLKIT_VERSION}` drifted \
+             from the workspace pin `{toolkit_version}` — bump TOOLKIT_VERSION in workbook_server.rs"
         );
     }
 }
