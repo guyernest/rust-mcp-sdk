@@ -1,0 +1,22 @@
+{
+  "from_version": "1.0.0",
+  "to_version": "1.1.0",
+  "deltas": [
+    {
+      "region": "out_marginal_rate",
+      "change_class": "output-schema",
+      "old": {
+        "meaning": "The top bracket rate",
+        "unit": "ratio",
+        "provenance": "synthetic-fixture"
+      },
+      "new": {
+        "meaning": "The rate applied to the next dollar of income",
+        "unit": "ratio",
+        "provenance": "synthetic-fixture"
+      },
+      "severity": "redefinition"
+    }
+  ],
+  "summary": "1.1.0: clarified out_marginal_rate meaning (1 redefinition)"
+}

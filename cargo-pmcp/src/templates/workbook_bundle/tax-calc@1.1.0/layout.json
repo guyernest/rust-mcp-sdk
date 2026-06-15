@@ -1,0 +1,148 @@
+{
+  "descriptor_version": 1,
+  "source_workbook_hash": "b0b85e69dcae2c353faeee2ddf4c94e1f3c493549330ee7733cc02c650e12c09",
+  "sheets": [
+    {
+      "name": "1_Inputs",
+      "hidden": false,
+      "cells": [
+        {
+          "addr": "B2",
+          "formula": null,
+          "value": "60000",
+          "number_format": "#,##0.00",
+          "fill_argb": null,
+          "font_argb": null
+        },
+        {
+          "addr": "B3",
+          "formula": null,
+          "value": "single",
+          "number_format": null,
+          "fill_argb": null,
+          "font_argb": null
+        },
+        {
+          "addr": "B4",
+          "formula": null,
+          "value": "12000",
+          "number_format": "#,##0.00",
+          "fill_argb": null,
+          "font_argb": null
+        }
+      ],
+      "merges": [],
+      "col_widths": [
+        [
+          1,
+          18.0
+        ],
+        [
+          2,
+          14.0
+        ]
+      ],
+      "hidden_cols": []
+    },
+    {
+      "name": "2_Brackets",
+      "hidden": false,
+      "cells": [
+        {
+          "addr": "A2",
+          "formula": null,
+          "value": "0",
+          "number_format": "#,##0.00",
+          "fill_argb": null,
+          "font_argb": null
+        },
+        {
+          "addr": "B2",
+          "formula": null,
+          "value": "0.1",
+          "number_format": "0.00%",
+          "fill_argb": null,
+          "font_argb": null
+        },
+        {
+          "addr": "A3",
+          "formula": null,
+          "value": "40000",
+          "number_format": "#,##0.00",
+          "fill_argb": null,
+          "font_argb": null
+        },
+        {
+          "addr": "B3",
+          "formula": null,
+          "value": "0.22",
+          "number_format": "0.00%",
+          "fill_argb": null,
+          "font_argb": null
+        }
+      ],
+      "merges": [],
+      "col_widths": [
+        [
+          1,
+          14.0
+        ],
+        [
+          2,
+          10.0
+        ]
+      ],
+      "hidden_cols": []
+    },
+    {
+      "name": "3_Outputs",
+      "hidden": false,
+      "cells": [
+        {
+          "addr": "B2",
+          "formula": "1_Inputs!B2-1_Inputs!B4",
+          "value": "48000",
+          "number_format": "#,##0.00",
+          "fill_argb": null,
+          "font_argb": null
+        },
+        {
+          "addr": "B3",
+          "formula": "3_Outputs!B2*2_Brackets!B2",
+          "value": "4800",
+          "number_format": "#,##0.00",
+          "fill_argb": null,
+          "font_argb": null
+        },
+        {
+          "addr": "B4",
+          "formula": "3_Outputs!B3/1_Inputs!B2",
+          "value": "0.08",
+          "number_format": "0.00%",
+          "fill_argb": null,
+          "font_argb": null
+        },
+        {
+          "addr": "B5",
+          "formula": "2_Brackets!B3",
+          "value": "0.22",
+          "number_format": "0.00%",
+          "fill_argb": null,
+          "font_argb": null
+        }
+      ],
+      "merges": [],
+      "col_widths": [
+        [
+          1,
+          22.0
+        ],
+        [
+          2,
+          14.0
+        ]
+      ],
+      "hidden_cols": []
+    }
+  ]
+}

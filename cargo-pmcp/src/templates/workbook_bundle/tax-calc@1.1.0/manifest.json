@@ -1,0 +1,149 @@
+{
+  "schema_version": 1,
+  "workflow": "tax-calc",
+  "workbook_hash": "b0b85e69dcae2c353faeee2ddf4c94e1f3c493549330ee7733cc02c650e12c09",
+  "ratified": true,
+  "ratified_by": "synthetic-fixture",
+  "ratified_at": "2026-06-10",
+  "cells": [
+    {
+      "cell": "1_Inputs!B2",
+      "role": "input",
+      "name": "in_gross_income",
+      "unit": "USD",
+      "meaning": "Gross annual income before deductions",
+      "dtype": "number",
+      "colour_evidence": null,
+      "source": "synthetic-fixture",
+      "notes": null,
+      "tier": {
+        "kind": "variable",
+        "default": {
+          "Number": 60000.0
+        }
+      }
+    },
+    {
+      "cell": "1_Inputs!B3",
+      "role": "input",
+      "name": "in_filing_status",
+      "unit": null,
+      "meaning": "Tax filing status",
+      "dtype": "text",
+      "colour_evidence": null,
+      "source": "synthetic-fixture",
+      "notes": null,
+      "tier": {
+        "kind": "variable",
+        "default": {
+          "Text": "single"
+        }
+      },
+      "allowed_values": [
+        "single",
+        "married_joint",
+        "head_of_household"
+      ]
+    },
+    {
+      "cell": "1_Inputs!B4",
+      "role": "input",
+      "name": "in_deductions",
+      "unit": "USD",
+      "meaning": "Total itemized or standard deductions",
+      "dtype": "number",
+      "colour_evidence": null,
+      "source": "synthetic-fixture",
+      "notes": null,
+      "tier": {
+        "kind": "variable",
+        "default": {
+          "Number": 12000.0
+        }
+      }
+    },
+    {
+      "cell": "3_Outputs!B2",
+      "role": "output",
+      "name": "out_taxable_income",
+      "unit": "USD",
+      "meaning": "Income subject to tax after deductions",
+      "dtype": "number",
+      "colour_evidence": null,
+      "source": "synthetic-fixture",
+      "notes": null,
+      "tier": null
+    },
+    {
+      "cell": "3_Outputs!B3",
+      "role": "output",
+      "name": "out_tax_owed",
+      "unit": "USD",
+      "meaning": "Total tax owed for the period",
+      "dtype": "number",
+      "colour_evidence": null,
+      "source": "synthetic-fixture",
+      "notes": null,
+      "tier": null
+    },
+    {
+      "cell": "3_Outputs!B4",
+      "role": "output",
+      "name": "out_effective_rate",
+      "unit": "ratio",
+      "meaning": "Tax owed as a fraction of gross income",
+      "dtype": "number",
+      "colour_evidence": null,
+      "source": "synthetic-fixture",
+      "notes": null,
+      "tier": null
+    },
+    {
+      "cell": "3_Outputs!B5",
+      "role": "output",
+      "name": "out_marginal_rate",
+      "unit": "ratio",
+      "meaning": "The rate applied to the next dollar of income",
+      "dtype": "number",
+      "colour_evidence": null,
+      "source": "synthetic-fixture",
+      "notes": null,
+      "tier": null
+    }
+  ],
+  "loop_block": null,
+  "governed_data": [
+    {
+      "key": "const_bracket1_rate",
+      "value": {
+        "Number": 0.1
+      },
+      "effective_date": "2026-01-01",
+      "approved_by": "synthetic-fixture",
+      "provenance": "synthetic progressive-tax schedule, bracket 1"
+    },
+    {
+      "key": "const_bracket2_rate",
+      "value": {
+        "Number": 0.22
+      },
+      "effective_date": "2026-01-01",
+      "approved_by": "synthetic-fixture",
+      "provenance": "synthetic progressive-tax schedule, bracket 2"
+    }
+  ],
+  "changelog": [],
+  "capability_calls": [],
+  "annotations": [
+    {
+      "name": "bracket_boundary_1",
+      "target": "2_Brackets!A2",
+      "meaning": "Lower bound of tax bracket 1 (USD); income at/above is taxed at rate 1"
+    },
+    {
+      "name": "bracket_boundary_2",
+      "target": "2_Brackets!A3",
+      "meaning": "Lower bound of tax bracket 2 (USD); income at/above is taxed at rate 2"
+    }
+  ]
+}
