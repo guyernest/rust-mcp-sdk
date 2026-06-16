@@ -1906,3 +1906,26 @@ Plans:
 | 94. CLI Subcommands + `pmcp.toml` | 6/6 | Complete    | 2026-06-14 |
 | 95. Shape A Binary `pmcp-workbook-server` | 2/2 | Complete    | 2026-06-14 |
 | 96. Shape B Scaffold + Dialect-Version + Generalization | 5/5 | Complete    | 2026-06-15 |
+
+## Phase Details — v2.4 (cargo-pmcp deploy)
+
+### Phase 98: `cargo pmcp deploy` — stack.ts Regeneration Guard + Config-Driven Metadata
+
+**Goal**: `cargo pmcp deploy` stops silently overwriting an operator-curated `deploy/lib/stack.ts`, and curated template metadata (`mcp:serverType`, `mcp:snapshotBaked`) becomes reproducible-from-config so it survives any regeneration. Closes the defect diagnosed in `.planning/debug/deploy-overwrites-stack-ts.md`: both deploy targets do an unconditional `std::fs::write(stack.ts)` (no exists-guard, no diff, no opt-out), and `mcp:serverType`/`mcp:snapshotBaked` cannot be driven from `.pmcp/deploy.toml` (serverType hardcoded `'custom'` for custom/pmcp.toml servers; snapshotBaked has zero representation).
+
+**Depends on**: none (standalone deploy-correctness fix; independent of Phase 97's GitHub-automation work, though it shares the `deploy.rs` / `.pmcp/deploy.toml` surface)
+**Requirements**: DSTK-01, DSTK-02, DSTK-03, DSTK-04
+**Success Criteria** (what must be TRUE):
+
+  1. Running `cargo pmcp deploy` against a directory with a pre-existing, operator-edited `deploy/lib/stack.ts` leaves that file byte-for-byte unchanged on BOTH targets (pmcp-run + aws-lambda); IAM validation still runs and a "preserved existing stack.ts" notice is printed
+  2. Passing `--regenerate-stack` (or `--force`) re-renders `stack.ts` from the template as before — the opt-out is explicit, not the default
+  3. A `[metadata]` block in `.pmcp/deploy.toml` (`server_type = "graph-rag"`, `snapshot_baked = true`) flows through `render_stack_ts` / `McpMetadata` / `to_cdk_context` so the synthesized `stack.ts` advertises `mcp:serverType:'graph-rag'` + `mcp:snapshotBaked:'true'` — reproducible from config, surviving a regeneration
+  4. ALWAYS coverage present and green: exists-guard unit tests on both targets, config-survives-render unit/property tests, golden-file update in `tests/backward_compat_stack_ts.rs` for the new `mcp:snapshotBaked` line, `--regenerate-stack` documented in `cargo-pmcp/docs/commands/deploy.md`; `make quality-gate` passes
+
+**Source**: debug session `.planning/debug/deploy-overwrites-stack-ts.md` (root cause + recommended fix direction recorded under Resolution)
+
+**Plans:** 4 plans (waves 1→4, strictly sequential — shared `config.rs` / `targets/pmcp_run/deploy.rs` surface)
+- [ ] 98-01-PLAN.md — Config contract (`[metadata]` block + `regenerate_stack` runtime flag on DeployConfig) + RED regression tests reproducing the overwrite + config-metadata defects [DSTK-02]
+- [ ] 98-02-PLAN.md — DSTK-01 exists-guard + `--regenerate-stack`/`--force` flag on BOTH targets (shared guarded-write helper, IAM validation preserved, "preserved existing stack.ts" notice) [DSTK-01]
+- [ ] 98-03-PLAN.md — DSTK-02 + DSTK-03 config-driven metadata (`McpMetadata.snapshot_baked` + `server_type` override → `to_cdk_context` `mcp:snapshotBaked` → template literal) [DSTK-02, DSTK-03]
+- [ ] 98-04-PLAN.md — DSTK-04 ALWAYS coverage (property test, `[metadata]` fuzz target, golden-file update, runnable example, `--regenerate-stack` + `[metadata]` docs) + `make quality-gate` green [DSTK-04]
