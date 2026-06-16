@@ -15,10 +15,14 @@ pub async fn deploy_aws_lambda(
     println!("🚀 Deploying to AWS Lambda...");
     println!();
 
-    // Use the existing DeployExecutor with transient secret env vars
+    // Use the existing DeployExecutor with transient secret env vars.
+    // Thread the `--regenerate-stack`/`--force` opt-in (DSTK-01): execute()
+    // re-loads DeployConfig from disk (dropping the `#[serde(skip)]` runtime
+    // flag), so it is carried on the executor and re-applied there.
     let executor =
         crate::commands::deploy::deploy::DeployExecutor::new(config.project_root.clone())
-            .with_extra_env(extra_env);
+            .with_extra_env(extra_env)
+            .with_regenerate_stack(config.regenerate_stack);
     executor.execute()?;
 
     // Load and return outputs

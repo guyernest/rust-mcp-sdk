@@ -11,6 +11,12 @@ pub struct DeployExecutor {
     /// vars for the CDK child process (per D-05: baked at deploy time,
     /// D-06: never persisted).
     extra_env: HashMap<String, String>,
+    /// Runtime carrier for the `--regenerate-stack`/`--force` flag (Phase 98,
+    /// DSTK-01). `execute()` re-loads `DeployConfig` from disk, which would
+    /// drop the `#[serde(skip)]` `config.regenerate_stack` set by the CLI, so
+    /// the flag is threaded onto the executor instead and re-applied to the
+    /// freshly-loaded config before the stack.ts write.
+    regenerate_stack: bool,
 }
 
 impl DeployExecutor {
@@ -18,6 +24,7 @@ impl DeployExecutor {
         Self {
             project_root,
             extra_env: HashMap::new(),
+            regenerate_stack: false,
         }
     }
 
@@ -30,13 +37,25 @@ impl DeployExecutor {
         self
     }
 
+    /// Set the `--regenerate-stack`/`--force` opt-in (Phase 98, DSTK-01).
+    ///
+    /// When `true`, an existing `deploy/lib/stack.ts` is overwritten; when
+    /// `false` (default) a pre-existing curated file is preserved.
+    pub fn with_regenerate_stack(mut self, regenerate_stack: bool) -> Self {
+        self.regenerate_stack = regenerate_stack;
+        self
+    }
+
     pub fn execute(&self) -> Result<()> {
         let start = Instant::now();
 
         println!("🚀 Deploying to AWS Lambda...");
         println!();
 
-        let config = crate::deployment::config::DeployConfig::load(&self.project_root)?;
+        let mut config = crate::deployment::config::DeployConfig::load(&self.project_root)?;
+        // Re-apply the runtime regeneration opt-in dropped by the disk reload
+        // (`config.regenerate_stack` is `#[serde(skip)]`). Phase 98, DSTK-01.
+        config.regenerate_stack = self.regenerate_stack;
 
         // Fail-closed IAM gate: hard errors block deploy before any AWS call;
         // warnings print to stderr and never block.
@@ -78,14 +97,22 @@ impl DeployExecutor {
 
     fn regenerate_stack_ts(&self, config: &crate::deployment::config::DeployConfig) -> Result<()> {
         let lib_dir = self.project_root.join("deploy").join("lib");
-        std::fs::create_dir_all(&lib_dir).context("Failed to create deploy/lib directory")?;
         let stack_ts = crate::commands::deploy::init::render_stack_ts_for_deploy(
             &config.target.target_type,
             &config.server.name,
             &config.iam,
         );
-        std::fs::write(lib_dir.join("stack.ts"), stack_ts)
-            .context("Failed to write deploy/lib/stack.ts")?;
+        // DSTK-01: preserve an operator-curated stack.ts unless
+        // `--regenerate-stack`/`--force` was passed. IAM validation already ran
+        // in `execute()`, so the guard never disables validation.
+        let wrote = crate::deployment::config::write_stack_ts_guarded(
+            &lib_dir,
+            &stack_ts,
+            config.regenerate_stack,
+        )?;
+        if !wrote {
+            println!("{}", crate::deployment::config::STACK_TS_PRESERVED_NOTICE);
+        }
         Ok(())
     }
 

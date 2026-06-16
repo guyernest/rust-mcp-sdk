@@ -169,6 +169,59 @@ impl MetadataConfig {
     }
 }
 
+/// One-line notice printed by both deploy targets when an existing
+/// `deploy/lib/stack.ts` is preserved (the regeneration guard skipped the
+/// write). Factored as a `const` so both write sites emit an identical
+/// string (Phase 98, DSTK-01).
+//
+// Why allow(dead_code): both consumers (commands::deploy::deploy and
+// targets::pmcp_run::deploy) live in the bin-only tree. config.rs is ALSO
+// mounted into the lib via `#[path]` (see lib.rs), where this const has no
+// caller — so the lib build alone reports it unused. It is exercised by the
+// in-crate test `preserved_notice_names_the_regenerate_flag` and used by the
+// bin build.
+#[allow(dead_code)]
+pub(crate) const STACK_TS_PRESERVED_NOTICE: &str =
+    "preserved existing deploy/lib/stack.ts (pass --regenerate-stack to overwrite)";
+
+/// Write `stack.ts` into `lib_dir`, guarded by an existence check so a
+/// pre-existing operator-curated file is never silently overwritten
+/// (Phase 98, DSTK-01).
+///
+/// Behavior:
+/// - The `lib_dir` is always created (`create_dir_all`).
+/// - When `deploy/lib/stack.ts` does NOT exist, it is written unconditionally
+///   (first-deploy scaffold) regardless of `regenerate`.
+/// - When it EXISTS and `regenerate == false`, the write is SKIPPED and the
+///   file is left byte-for-byte unchanged.
+/// - When it EXISTS and `regenerate == true`, it is overwritten.
+///
+/// Returns `Ok(true)` when the file was written, `Ok(false)` when an existing
+/// file was preserved. Callers print [`STACK_TS_PRESERVED_NOTICE`] on `false`.
+///
+/// This helper is deliberately decoupled from IAM validation: callers run
+/// validation BEFORE invoking it, so the validation step is never skipped on
+/// the preserve path.
+//
+// Why allow(dead_code): the production callers are bin-only (see
+// STACK_TS_PRESERVED_NOTICE above); config.rs is also mounted into the lib
+// via `#[path]`, where the non-test build sees no caller. Exercised by the
+// in-crate `stack_ts_guard_tests` and used by the bin build.
+#[allow(dead_code)]
+pub(crate) fn write_stack_ts_guarded(
+    lib_dir: &Path,
+    stack_ts: &str,
+    regenerate: bool,
+) -> Result<bool> {
+    std::fs::create_dir_all(lib_dir).context("Failed to create deploy/lib directory")?;
+    let path = lib_dir.join("stack.ts");
+    if path.exists() && !regenerate {
+        return Ok(false);
+    }
+    std::fs::write(&path, stack_ts).context("Failed to write deploy/lib/stack.ts")?;
+    Ok(true)
+}
+
 /// Composition configuration for MCP server-to-server communication.
 ///
 /// Enables servers to be composed in a tiered architecture:
@@ -2107,5 +2160,76 @@ mod azure_wave1_tests {
             prop_assert_eq!(parsed.azure.target_port, azure.target_port);
             prop_assert_eq!(parsed.azure.min_replicas, azure.min_replicas);
         }
+    }
+}
+
+#[cfg(test)]
+mod stack_ts_guard_tests {
+    //! Phase 98 Plan 02 — unit coverage for the shared exists-guard helper
+    //! [`write_stack_ts_guarded`] (DSTK-01). Both deploy targets call this
+    //! helper, so its three cases (absent→write, exists+no-flag→preserve,
+    //! exists+flag→overwrite) are proven once here.
+
+    use super::*;
+
+    #[test]
+    fn writes_when_stack_ts_absent_regardless_of_flag() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let lib_dir = tmp.path().join("deploy").join("lib");
+
+        // No file yet: helper writes the first-deploy scaffold even with the
+        // regenerate flag OFF.
+        let wrote = write_stack_ts_guarded(&lib_dir, "scaffold contents", false)
+            .expect("write should succeed");
+        assert!(wrote, "absent stack.ts must be written (returns Ok(true))");
+        let on_disk =
+            std::fs::read_to_string(lib_dir.join("stack.ts")).expect("stack.ts written to disk");
+        assert_eq!(on_disk, "scaffold contents");
+    }
+
+    #[test]
+    fn preserves_existing_stack_ts_without_flag() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let lib_dir = tmp.path().join("deploy").join("lib");
+        std::fs::create_dir_all(&lib_dir).expect("create lib dir");
+        let curated = "// curated by operator — do not clobber\n";
+        std::fs::write(lib_dir.join("stack.ts"), curated).expect("seed curated stack.ts");
+
+        let wrote = write_stack_ts_guarded(&lib_dir, "REGENERATED TEMPLATE", false)
+            .expect("guard should succeed");
+        assert!(
+            !wrote,
+            "existing stack.ts must be preserved (returns Ok(false))"
+        );
+        let on_disk =
+            std::fs::read_to_string(lib_dir.join("stack.ts")).expect("read stack.ts back");
+        assert_eq!(
+            on_disk, curated,
+            "curated stack.ts must be byte-identical when regenerate=false"
+        );
+    }
+
+    #[test]
+    fn preserved_notice_names_the_regenerate_flag() {
+        // The notice is consumed by the bin-only write sites; assert its text
+        // here so the lib build exercises the constant and operators get an
+        // actionable hint (mentions the opt-in flag).
+        assert!(STACK_TS_PRESERVED_NOTICE.contains("--regenerate-stack"));
+        assert!(STACK_TS_PRESERVED_NOTICE.contains("preserved existing deploy/lib/stack.ts"));
+    }
+
+    #[test]
+    fn overwrites_existing_stack_ts_with_flag() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let lib_dir = tmp.path().join("deploy").join("lib");
+        std::fs::create_dir_all(&lib_dir).expect("create lib dir");
+        std::fs::write(lib_dir.join("stack.ts"), "// curated\n").expect("seed curated stack.ts");
+
+        let wrote = write_stack_ts_guarded(&lib_dir, "REGENERATED TEMPLATE", true)
+            .expect("guard should succeed");
+        assert!(wrote, "regenerate=true must overwrite (returns Ok(true))");
+        let on_disk =
+            std::fs::read_to_string(lib_dir.join("stack.ts")).expect("read stack.ts back");
+        assert_eq!(on_disk, "REGENERATED TEMPLATE");
     }
 }

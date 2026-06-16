@@ -733,14 +733,22 @@ fn validate_and_regenerate_stack_ts(config: &DeployConfig) -> Result<()> {
     crate::deployment::iam::emit_warnings(&warnings);
 
     let lib_dir = config.project_root.join("deploy").join("lib");
-    std::fs::create_dir_all(&lib_dir).context("Failed to create deploy/lib directory")?;
     let stack_ts = crate::commands::deploy::init::render_stack_ts_for_deploy(
         &config.target.target_type,
         &config.server.name,
         &config.iam,
     );
-    std::fs::write(lib_dir.join("stack.ts"), stack_ts)
-        .context("Failed to write deploy/lib/stack.ts")?;
+    // DSTK-01: skip the write (preserving an operator-curated stack.ts) unless
+    // `--regenerate-stack`/`--force` was passed. IAM validation above always
+    // runs, so the guard never disables validation.
+    let wrote = crate::deployment::config::write_stack_ts_guarded(
+        &lib_dir,
+        &stack_ts,
+        config.regenerate_stack,
+    )?;
+    if !wrote {
+        println!("{}", crate::deployment::config::STACK_TS_PRESERVED_NOTICE);
+    }
 
     Ok(())
 }
