@@ -99,9 +99,74 @@ pub struct DeployConfig {
     #[serde(default, skip_serializing_if = "AzureConfig::is_empty")]
     pub azure: AzureConfig,
 
+    /// Curated template metadata (`server_type`, `snapshot_baked`) threaded
+    /// into the generated CDK `stack.ts` (Phase 98, DSTK-02).
+    ///
+    /// The `skip_serializing_if` guard preserves byte-identity on the
+    /// no-`[metadata]` path so pre-existing `.pmcp/deploy.toml` files
+    /// round-trip unchanged (mirrors the Phase 76 `IamConfig` D-05 contract).
+    /// See [`MetadataConfig`].
+    #[serde(default, skip_serializing_if = "MetadataConfig::is_empty")]
+    pub metadata: MetadataConfig,
+
+    /// Runtime opt-out carrier for the `stack.ts` regeneration guard
+    /// (Phase 98, DSTK-01). When `true`, the deploy path overwrites an
+    /// existing `deploy/lib/stack.ts`; when `false` (the default) an
+    /// existing curated file is preserved.
+    ///
+    /// Set at runtime by the `--regenerate-stack`/`--force` flag (Plan 98-02)
+    /// and never persisted — `#[serde(skip)]` mirrors the existing
+    /// non-persisted `project_root` field, so toggling it produces no
+    /// `regenerate_stack` key in the serialized TOML.
+    #[serde(skip)]
+    pub regenerate_stack: bool,
+
     /// Project root directory (not serialized)
     #[serde(skip)]
     pub project_root: PathBuf,
+}
+
+/// Curated template metadata for the generated CDK `stack.ts` (Phase 98).
+///
+/// Maps to an optional `[metadata]` block in `.pmcp/deploy.toml`:
+///
+/// ```toml
+/// [metadata]
+/// server_type = "graph-rag"
+/// snapshot_baked = true
+/// ```
+///
+/// Both fields are `Option` and elided when `None` via
+/// `skip_serializing_if = "Option::is_none"`, so the enclosing
+/// `#[serde(skip_serializing_if = "MetadataConfig::is_empty")]` guard on
+/// `DeployConfig::metadata` keeps configs that do not opt in byte-identical
+/// (the DSTK-02 backward-compat contract, mirroring `IamConfig`'s D-05).
+///
+/// `server_type` overrides the `mcp:serverType` template literal (otherwise
+/// hardcoded `'custom'` for pmcp.toml/custom servers); `snapshot_baked`
+/// drives the new `mcp:snapshotBaked` literal (no representation today). The
+/// render-path plumbing for both lands in Plan 98-03.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct MetadataConfig {
+    /// Override for the `mcp:serverType` template metadata literal.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub server_type: Option<String>,
+
+    /// Drives the `mcp:snapshotBaked` template metadata literal.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snapshot_baked: Option<bool>,
+}
+
+impl MetadataConfig {
+    /// Returns `true` when no metadata is declared (both fields `None`).
+    ///
+    /// Used by `DeployConfig`'s
+    /// `#[serde(skip_serializing_if = "MetadataConfig::is_empty")]` to preserve
+    /// byte-identity for configs without a `[metadata]` section (DSTK-02).
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.server_type.is_none() && self.snapshot_baked.is_none()
+    }
 }
 
 /// Composition configuration for MCP server-to-server communication.
@@ -852,6 +917,8 @@ impl DeployConfig {
             layout: None,
             runtime: None,
             azure: AzureConfig::default(),
+            metadata: MetadataConfig::default(),
+            regenerate_stack: false,
             project_root,
         }
     }
@@ -915,6 +982,8 @@ impl DeployConfig {
             layout: None,
             runtime: None,
             azure: AzureConfig::default(),
+            metadata: MetadataConfig::default(),
+            regenerate_stack: false,
             project_root,
         }
     }
