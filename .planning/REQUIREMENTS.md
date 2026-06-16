@@ -89,6 +89,15 @@
 - [ ] **GHDEP-05**: Non-pmcp.run targets get transparent GitHub Actions workflows that keep cloud credentials in the user's GitHub/cloud account and do not route AWS/GCP/Azure/Cloudflare credentials through pmcp.run
 - [ ] **GHDEP-06**: Documentation and examples distinguish the open-source GitHub Actions path from the pmcp.run connected-repository path, including trigger behavior, authentication, logs, rollbacks, and preview deployment ownership
 
+## v2.4 Requirements - Deploy `stack.ts` Regeneration Safety (cargo-pmcp)
+
+**Goal:** `cargo pmcp deploy` must stop silently clobbering an operator-curated `deploy/lib/stack.ts`, and curated template metadata (`mcp:serverType`, `mcp:snapshotBaked`) must be reproducible-from-config so it survives any regeneration. Source: debug session `.planning/debug/deploy-overwrites-stack-ts.md`.
+
+- [ ] **DSTK-01**: `cargo pmcp deploy` does not overwrite an existing `deploy/lib/stack.ts` on EITHER target (pmcp-run `targets/pmcp_run/deploy.rs`, aws-lambda `commands/deploy/deploy.rs`) without an explicit `--regenerate-stack` (alias `--force`) opt-in; IAM validation still runs and a "preserved existing stack.ts" notice is printed when the write is skipped
+- [ ] **DSTK-02**: `.pmcp/deploy.toml` gains an optional `[metadata]` block (`server_type`, `snapshot_baked`) on `DeployConfig`, threaded through `render_stack_ts_for_deploy` / `render_stack_ts` and `McpMetadata`, so a custom / pmcp.toml server's `mcp:serverType` is config-overridable instead of hardcoded `'custom'`
+- [ ] **DSTK-03**: `mcp:snapshotBaked` is representable end-to-end — `McpMetadata` carries `snapshot_baked`, `to_cdk_context` emits `-c 'mcp:snapshotBaked=…'`, and the generated stack template emits the `mcp:snapshotBaked` metadata literal so curated values are reproducible from config
+- [ ] **DSTK-04**: ALWAYS coverage — exists-guard unit tests on BOTH deploy targets (preserved without flag, overwritten with flag), config-survives-render unit/property tests, golden-file update in `tests/backward_compat_stack_ts.rs` for the new `mcp:snapshotBaked` line, and `--regenerate-stack` documented in `cargo-pmcp/docs/commands/deploy.md`
+
 ## Out of Scope (explicit exclusions)
 
 - **Live workbook interpretation on the hot path** — dissolves the security message; compile-not-interpret is the whole point (reader never enters served binary)
@@ -150,3 +159,7 @@
 | GHDEP-04 | Phase 97 | Pending |
 | GHDEP-05 | Phase 97 | Pending |
 | GHDEP-06 | Phase 97 | Pending |
+| DSTK-01 | Phase 98 | Pending |
+| DSTK-02 | Phase 98 | Pending |
+| DSTK-03 | Phase 98 | Pending |
+| DSTK-04 | Phase 98 | Pending |

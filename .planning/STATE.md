@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-06-09) · .planning/ROADMAP.md (v2.3 milestone, Phases 91-96)
 
 **Core value:** Compile, never interpret — any project can compile a governed Excel workbook into a tested, versioned, deterministic MCP server where the workbook is simultaneously the specification (formula DAG), the test oracle (cached cell values = assertions), and the output template.
-**Current focus:** v2.3 milestone complete (phases 91–96) — next: phase 97 (github-deploy-automation) or `/gsd:audit-milestone`
+**Current focus:** Phase 98 (cargo-pmcp deploy stack.ts regeneration guard + config-driven metadata) PLANNED — ready to `/gsd:execute-phase 98`. Also pending: phase 97 (github-deploy-automation), `/gsd:audit-milestone`.
 
 ## Current Position
 
-Phase: 999.1 (BACKLOG — not a milestone phase)
-Plan: Not started
-Status: v2.3 milestone COMPLETE — all phases 91–96 done. Phase 96 verified (UAT 5/5 pass), secured (threats_open: 0), validated (nyquist-compliant).
-Last activity: 2026-06-15
+Phase: 98 (deploy stack.ts regeneration guard + config-driven metadata) — PLANNED, not started
+Plan: 4 plans (98-01..04, 4 sequential waves) — plan-check PASSED
+Status: Derived from debug session `.planning/debug/deploy-overwrites-stack-ts.md` (root_cause_found). v2.3 milestone COMPLETE (phases 91–96). Phase 98 seated under emerging v2.4 deploy work (DSTK-01..04).
+Last activity: 2026-06-16
 
 Progress: [████████████████████] 286/290 plans (99%) · v2.3 phases 91–96 all Complete
 
