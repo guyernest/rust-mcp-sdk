@@ -1924,8 +1924,9 @@ Plans:
 
 **Source**: debug session `.planning/debug/deploy-overwrites-stack-ts.md` (root cause + recommended fix direction recorded under Resolution)
 
-**Plans:** 4 plans (waves 1→4, strictly sequential — shared `config.rs` / `targets/pmcp_run/deploy.rs` surface)
-- [ ] 98-01-PLAN.md — Config contract (`[metadata]` block + `regenerate_stack` runtime flag on DeployConfig) + RED regression tests reproducing the overwrite + config-metadata defects [DSTK-02]
+**Plans:** 1/4 plans executed
+
+- [x] 98-01-PLAN.md — Config contract (`[metadata]` block + `regenerate_stack` runtime flag on DeployConfig) + RED regression tests reproducing the overwrite + config-metadata defects [DSTK-02] ✅ 2026-06-16
 - [ ] 98-02-PLAN.md — DSTK-01 exists-guard + `--regenerate-stack`/`--force` flag on BOTH targets (shared guarded-write helper, IAM validation preserved, "preserved existing stack.ts" notice) [DSTK-01]
 - [ ] 98-03-PLAN.md — DSTK-02 + DSTK-03 config-driven metadata (`McpMetadata.snapshot_baked` + `server_type` override → `to_cdk_context` `mcp:snapshotBaked` → template literal) [DSTK-02, DSTK-03]
 - [ ] 98-04-PLAN.md — DSTK-04 ALWAYS coverage (property test, `[metadata]` fuzz target, golden-file update, runnable example, `--regenerate-stack` + `[metadata]` docs) + `make quality-gate` green [DSTK-04]

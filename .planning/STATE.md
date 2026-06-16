@@ -2,10 +2,10 @@
 gsd_state_version: 1.0
 milestone: v2.3
 milestone_name: Excel-as-Configuration MCP Servers
-status: phase-complete
-stopped_at: Phase 96 complete — verified (UAT 5/5), secured (threats_open 0), validated (nyquist-compliant). v2.3 milestone phases 91–96 all Complete.
-last_updated: "2026-06-15T17:14:47.664Z"
-last_activity: 2026-06-15
+status: executing
+stopped_at: Completed 96-05-PLAN.md (WBEX-02 Excel-quirk corpus — LAST plan of Phase 96)
+last_updated: "2026-06-16T23:39:28.566Z"
+last_activity: 2026-06-16 -- Phase 98 execution started
 progress:
   total_phases: 53
   completed_phases: 47
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-06-09) · .planning/ROADMAP.md (v2.3 milestone, Phases 91-96)
 
 **Core value:** Compile, never interpret — any project can compile a governed Excel workbook into a tested, versioned, deterministic MCP server where the workbook is simultaneously the specification (formula DAG), the test oracle (cached cell values = assertions), and the output template.
-**Current focus:** Phase 98 (cargo-pmcp deploy stack.ts regeneration guard + config-driven metadata) PLANNED — ready to `/gsd:execute-phase 98`. Also pending: phase 97 (github-deploy-automation), `/gsd:audit-milestone`.
+**Current focus:** Phase 98 — deploy-stack-ts-regeneration-guard-config-driven-metadata
 
 ## Current Position
 
-Phase: 98 (deploy stack.ts regeneration guard + config-driven metadata) — PLANNED, not started
-Plan: 4 plans (98-01..04, 4 sequential waves) — plan-check PASSED
-Status: Derived from debug session `.planning/debug/deploy-overwrites-stack-ts.md` (root_cause_found). v2.3 milestone COMPLETE (phases 91–96). Phase 98 seated under emerging v2.4 deploy work (DSTK-01..04).
-Last activity: 2026-06-16
+Phase: 98 (deploy-stack-ts-regeneration-guard-config-driven-metadata) — EXECUTING
+Plan: 2 of 4 (98-01 complete)
+Status: Executing Phase 98
+Last activity: 2026-06-16 -- Phase 98 Plan 01 complete (DSTK-02 config contract + RED regression)
 
 Progress: [████████████████████] 286/290 plans (99%) · v2.3 phases 91–96 all Complete
 
@@ -99,8 +99,8 @@ Items deferred by design for this milestone:
 
 ## Session Continuity
 
-Last session: 2026-06-15T09:35:00.000Z
-Stopped at: Completed 96-05-PLAN.md (WBEX-02 Excel-quirk corpus — LAST plan of Phase 96)
+Last session: 2026-06-16T23:40:00.000Z
+Stopped at: Completed 98-01-PLAN.md (DSTK-02 config contract + RED stack.ts-guard regression)
 Resume file: None
 
 ## Performance Metrics
@@ -114,3 +114,4 @@ Resume file: None
 | Phase 96 P03 | 35min | 2 tasks | 6 files |
 | Phase 96 P04 | ~40min | 2 tasks | 6 files |
 | Phase 96 P05 | ~40min | 2 tasks | 9 files |
+| Phase 98 P01 | ~12min | 2 tasks | 2 files |
