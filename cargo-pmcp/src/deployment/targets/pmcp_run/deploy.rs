@@ -836,4 +836,60 @@ mod tests {
             "stack.ts must not be written when validator rejects config (fail-closed)"
         );
     }
+
+    /// Seed a curated `deploy/lib/stack.ts` under `project_root` and return its
+    /// path + the curated content for byte-identity assertions.
+    fn seed_curated_stack_ts(project_root: &std::path::Path) -> (PathBuf, String) {
+        let lib_dir = project_root.join("deploy").join("lib");
+        std::fs::create_dir_all(&lib_dir).expect("create deploy/lib");
+        let path = lib_dir.join("stack.ts");
+        let curated = "// operator-curated stack.ts — DO NOT CLOBBER\n".to_string();
+        std::fs::write(&path, &curated).expect("seed curated stack.ts");
+        (path, curated)
+    }
+
+    /// DSTK-01: a pre-existing curated stack.ts is preserved byte-for-byte when
+    /// no `--regenerate-stack`/`--force` flag is set, while IAM validation
+    /// (which precedes the guarded write) still runs successfully.
+    #[test]
+    fn pmcp_run_preserves_existing_stack_ts_without_flag() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let (path, curated) = seed_curated_stack_ts(tmp.path());
+
+        let mut config =
+            cfg_with_target_and_iam(tmp.path().to_path_buf(), "pmcp-run", IamConfig::default());
+        config.regenerate_stack = false;
+
+        validate_and_regenerate_stack_ts(&config).expect("guard succeeds, IAM still validates");
+
+        let after = std::fs::read_to_string(&path).expect("read stack.ts back");
+        assert_eq!(
+            after, curated,
+            "curated stack.ts must be byte-identical when regenerate_stack is false"
+        );
+    }
+
+    /// DSTK-01: with `--regenerate-stack`/`--force` the curated file is
+    /// re-rendered from the template (overwritten).
+    #[test]
+    fn pmcp_run_overwrites_existing_stack_ts_with_flag() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let (path, curated) = seed_curated_stack_ts(tmp.path());
+
+        let mut config =
+            cfg_with_target_and_iam(tmp.path().to_path_buf(), "pmcp-run", IamConfig::default());
+        config.regenerate_stack = true;
+
+        validate_and_regenerate_stack_ts(&config).expect("regenerate succeeds");
+
+        let after = std::fs::read_to_string(&path).expect("read stack.ts back");
+        assert_ne!(
+            after, curated,
+            "stack.ts must be overwritten when regenerate_stack is true"
+        );
+        assert!(
+            after.contains("pmcp-${serverId}-McpRoleArn"),
+            "overwritten stack.ts must carry the pmcp-run rendered template signature"
+        );
+    }
 }

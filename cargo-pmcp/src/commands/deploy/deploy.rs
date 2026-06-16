@@ -188,4 +188,81 @@ mod tests {
         assert_eq!(executor.extra_env["SECRET_A"], "val_a");
         assert_eq!(executor.extra_env["SECRET_B"], "val_b");
     }
+
+    #[test]
+    fn with_regenerate_stack_builder() {
+        let executor = DeployExecutor::new(PathBuf::from("/tmp"));
+        assert!(
+            !executor.regenerate_stack,
+            "regenerate_stack defaults to false (preserve curated stack.ts)"
+        );
+        let executor = executor.with_regenerate_stack(true);
+        assert!(executor.regenerate_stack);
+    }
+
+    /// Build an aws-lambda DeployConfig anchored at `project_root` with the
+    /// given regeneration opt-in.
+    fn aws_lambda_cfg(
+        project_root: PathBuf,
+        regenerate_stack: bool,
+    ) -> crate::deployment::config::DeployConfig {
+        let mut cfg = crate::deployment::config::DeployConfig::default_for_server(
+            "demo-server".to_string(),
+            "us-east-1".to_string(),
+            project_root,
+        );
+        cfg.target.target_type = "aws-lambda".to_string();
+        cfg.regenerate_stack = regenerate_stack;
+        cfg
+    }
+
+    /// Seed a curated `deploy/lib/stack.ts` and return its path + content.
+    fn seed_curated_stack_ts(project_root: &std::path::Path) -> (PathBuf, String) {
+        let lib_dir = project_root.join("deploy").join("lib");
+        std::fs::create_dir_all(&lib_dir).expect("create deploy/lib");
+        let path = lib_dir.join("stack.ts");
+        let curated = "// operator-curated stack.ts — DO NOT CLOBBER\n".to_string();
+        std::fs::write(&path, &curated).expect("seed curated stack.ts");
+        (path, curated)
+    }
+
+    /// DSTK-01 (aws-lambda): a pre-existing curated stack.ts is preserved
+    /// byte-for-byte when no `--regenerate-stack`/`--force` flag is set.
+    #[test]
+    fn aws_lambda_preserves_existing_stack_ts_without_flag() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let (path, curated) = seed_curated_stack_ts(tmp.path());
+
+        let config = aws_lambda_cfg(tmp.path().to_path_buf(), false);
+        let executor = DeployExecutor::new(tmp.path().to_path_buf());
+        executor
+            .regenerate_stack_ts(&config)
+            .expect("guard succeeds");
+
+        let after = std::fs::read_to_string(&path).expect("read stack.ts back");
+        assert_eq!(
+            after, curated,
+            "curated stack.ts must be byte-identical when regenerate_stack is false"
+        );
+    }
+
+    /// DSTK-01 (aws-lambda): with the flag, the curated file is re-rendered
+    /// (overwritten) from the template.
+    #[test]
+    fn aws_lambda_overwrites_existing_stack_ts_with_flag() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let (path, curated) = seed_curated_stack_ts(tmp.path());
+
+        let config = aws_lambda_cfg(tmp.path().to_path_buf(), true);
+        let executor = DeployExecutor::new(tmp.path().to_path_buf());
+        executor
+            .regenerate_stack_ts(&config)
+            .expect("regenerate succeeds");
+
+        let after = std::fs::read_to_string(&path).expect("read stack.ts back");
+        assert_ne!(
+            after, curated,
+            "stack.ts must be overwritten when regenerate_stack is true"
+        );
+    }
 }

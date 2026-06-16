@@ -69,20 +69,35 @@ fn config_at(project_root: std::path::PathBuf, regenerate_stack: bool) -> Deploy
     cfg
 }
 
-/// Test A — overwrite guard. EXPECTED RED until Plan 98-02 lands the
-/// exists-guard + `--regenerate-stack` flag (DSTK-01).
+/// Test A — overwrite guard (DSTK-01).
 ///
-/// Reproduction: write a curated `deploy/lib/stack.ts` containing the two
-/// metadata literals, build a DeployConfig with `regenerate_stack = false`,
-/// invoke the regenerate path, and assert the file content is UNCHANGED. This
-/// FAILS today because the `fs::write` is unconditional.
+/// **DSTK-01 status:** SATISFIED in Plan 98-02. The exists-guard
+/// (`deployment::config::write_stack_ts_guarded`) and the
+/// `--regenerate-stack`/`--force` flag now skip the `fs::write` for a
+/// pre-existing curated `stack.ts` on BOTH deploy targets. The behavior is
+/// proven by in-crate unit tests that can reach the bin-only
+/// `pub(crate)` write sites:
+///   - `deployment::config::stack_ts_guard_tests::{preserves_existing_stack_ts_without_flag,
+///     overwrites_existing_stack_ts_with_flag}` (the shared helper),
+///   - `deployment::targets::pmcp_run::deploy::tests::{pmcp_run_preserves_existing_stack_ts_without_flag,
+///     pmcp_run_overwrites_existing_stack_ts_with_flag}` (pmcp-run target),
+///   - `commands::deploy::deploy::tests::{aws_lambda_preserves_existing_stack_ts_without_flag,
+///     aws_lambda_overwrites_existing_stack_ts_with_flag}` (aws-lambda target).
 ///
-/// `#[ignore]`: the regenerate entry point is `pub(crate)` in the bin-only tree
-/// (see module doc). Plan 98-02 makes it reachable (or asserts via the deploy
-/// executor) and removes this `#[ignore]`.
+/// **Why this integration-level test stays `#[ignore]`:** the regenerate entry
+/// points (`validate_and_regenerate_stack_ts`, `DeployExecutor::regenerate_stack_ts`)
+/// and the `write_stack_ts_guarded` helper are all `pub(crate)` inside the
+/// bin-only `commands::*`/`deployment::targets::*` tree the lib does not
+/// re-export (same lib-boundary constraint documented in the module header and
+/// in `backward_compat_stack_ts.rs`). An integration test in this external
+/// `tests/` crate therefore cannot invoke the real guard. The in-crate unit
+/// tests above ARE the live DSTK-01 proof; this test documents the operator-facing
+/// reproduction. Plan 98-04 (docs/CLI-acceptance) decides whether to expose a
+/// lib-public guard entry point and flip this to a live black-box assertion.
 #[test]
-#[ignore = "RED until Plan 98-02 (DSTK-01): regenerate path is bin-only pub(crate); \
-            98-02 lands the exists-guard + --regenerate-stack flag and un-ignores this"]
+#[ignore = "DSTK-01 satisfied in 98-02 via in-crate unit tests (see doc); the guard \
+            entry points are bin-only pub(crate) so this external integration test \
+            cannot reach them — 98-04 decides on a lib-public surface to flip this live"]
 fn curated_stack_ts_is_preserved_without_regenerate_flag() {
     let tmp = tempfile::tempdir().expect("create tempdir");
     let lib_dir = tmp.path().join("deploy").join("lib");
@@ -93,9 +108,9 @@ fn curated_stack_ts_is_preserved_without_regenerate_flag() {
 
     let _cfg = config_at(tmp.path().to_path_buf(), false);
 
-    // 98-02 wires the actual regenerate invocation here (currently unreachable
-    // from the lib). After it runs with regenerate_stack = false, the curated
-    // file must be byte-for-byte preserved.
+    // The bin-only guard preserves this file with regenerate_stack = false; this
+    // external test cannot reach it (see doc), so it asserts only the curated
+    // fixture shape. The live byte-identity proof lives in the in-crate unit tests.
     let after = std::fs::read_to_string(&stack_ts_path).expect("read stack.ts back");
     assert_eq!(
         after, curated,
