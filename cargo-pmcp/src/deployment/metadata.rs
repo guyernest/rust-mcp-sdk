@@ -1224,4 +1224,90 @@ version = "0.1.0"
             "snapshot_baked=false must be elided from serialized JSON, got: {json}"
         );
     }
+
+    // ========================================================================
+    // DSTK-04 — config-survives-render property test (proptest)
+    // ========================================================================
+    //
+    // The `to_cdk_context` synth seam is the real (bin-only `pub`) render
+    // boundary the operator's `[metadata]` flows through. This is the ALWAYS
+    // property coverage mandated by CLAUDE.md for the config-driven metadata
+    // path: for ARBITRARY valid inputs, a config-declared `server_type` /
+    // `snapshot_baked` survives `apply_config_overrides` → `to_cdk_context`
+    // exactly — `mcp:serverType={server_type}` is always present, and
+    // `mcp:snapshotBaked=true` is present iff `snapshot_baked` was opted in.
+    mod dstk04_proptests {
+        use super::custom_metadata;
+        use crate::deployment::config::MetadataConfig;
+        use proptest::prelude::*;
+
+        /// Strategy for a sane, non-empty `server_type` string.
+        ///
+        /// Restricted to ASCII alnum + dash so the generated value cannot break
+        /// the single-quoted `-c 'mcp:serverType=…'` shell arg that
+        /// `to_cdk_context` emits (the same shell-safety convention T-98-06 the
+        /// production path relies on). Length-bounded to keep the case space
+        /// small and fast.
+        fn server_type_strategy() -> impl Strategy<Value = String> {
+            "[A-Za-z0-9][A-Za-z0-9-]{0,31}".prop_filter("non-empty", |s| !s.is_empty())
+        }
+
+        proptest! {
+            /// For arbitrary `server_type`/`snapshot_baked`, the config value
+            /// round-trips into the synth context exactly: serverType is always
+            /// advertised; snapshotBaked is advertised iff opted in.
+            #[test]
+            fn config_metadata_survives_into_cdk_context(
+                server_type in server_type_strategy(),
+                snapshot_baked in any::<bool>(),
+            ) {
+                let mut metadata = custom_metadata();
+                metadata.apply_config_overrides(&MetadataConfig {
+                    server_type: Some(server_type.clone()),
+                    snapshot_baked: Some(snapshot_baked),
+                });
+
+                let context = metadata.to_cdk_context();
+
+                // server_type ALWAYS surfaces (DSTK-02).
+                let expected_server_type = format!("mcp:serverType={server_type}");
+                prop_assert!(
+                    context.iter().any(|c| c.contains(&expected_server_type)),
+                    "config server_type must surface in to_cdk_context: looked for {expected_server_type:?} in {context:?}"
+                );
+
+                // snapshotBaked surfaces IFF opted in (DSTK-03 — byte-identity
+                // for non-opting servers).
+                let has_snapshot = context.iter().any(|c| c.contains("mcp:snapshotBaked=true"));
+                prop_assert_eq!(
+                    has_snapshot,
+                    snapshot_baked,
+                    "mcp:snapshotBaked=true must be present IFF snapshot_baked is opted in (was {}); context: {:?}",
+                    snapshot_baked,
+                    context
+                );
+
+                // A non-opting render must NOT leak any snapshotBaked arg.
+                if !snapshot_baked {
+                    prop_assert!(
+                        !context.iter().any(|c| c.contains("mcp:snapshotBaked")),
+                        "non-opting server must emit NO mcp:snapshotBaked arg; context: {context:?}"
+                    );
+                }
+            }
+
+            /// Absent config fields leave the extracted/default metadata
+            /// untouched for arbitrary inputs (backward-compat invariant).
+            #[test]
+            fn absent_config_fields_leave_metadata_untouched(
+                _seed in any::<u8>(),
+            ) {
+                let mut metadata = custom_metadata();
+                let before_server_type = metadata.server_type.clone();
+                metadata.apply_config_overrides(&MetadataConfig::default());
+                prop_assert_eq!(metadata.server_type, before_server_type);
+                prop_assert!(!metadata.snapshot_baked);
+            }
+        }
+    }
 }

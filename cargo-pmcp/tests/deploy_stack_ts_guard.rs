@@ -258,3 +258,75 @@ fn render_stack_ts_with_metadata(_cfg: &DeployConfig) -> String {
     // run early, documenting that the plumbing is not yet in place.
     String::new()
 }
+
+// ============================================================================
+// DSTK-04 — config-survives-render property test (proptest)
+// ============================================================================
+//
+// **Why the property test lives here at the config-carrier level:** the real
+// render seam (`McpMetadata::to_cdk_context`, `render_stack_ts_for_deploy`) is
+// bin-only `pub(crate)`/in-the-bin-tree and unreachable from this external
+// `tests/` crate (the same lib boundary that keeps Tests A/C `#[ignore]`d). The
+// END-TO-END "config survives into to_cdk_context" property — for arbitrary
+// `server_type`/`snapshot_baked` — is proven IN-CRATE by
+// `deployment::metadata::tests::dstk04_proptests::config_metadata_survives_into_cdk_context`
+// (it can reach the real synth seam).
+//
+// This external proptest proves the COMPLEMENTARY half on the lib-public
+// surface: for arbitrary valid inputs, a `[metadata]`-declared
+// `server_type`/`snapshot_baked` survives a full TOML serialize → parse
+// round-trip on `DeployConfig` exactly. That carrier-fidelity is the
+// precondition the in-crate render property depends on — together they cover
+// the config → carrier → render chain for the DSTK-04 ALWAYS mandate.
+mod dstk04_config_survives_render {
+    use super::*;
+    use proptest::prelude::*;
+
+    /// Strategy for a sane, non-empty `server_type` string: ASCII alnum + dash,
+    /// length-bounded. Avoids characters that would break the single-quoted
+    /// `-c 'mcp:serverType=…'` shell arg the render path emits (T-98-06), and
+    /// avoids TOML-reserved characters so the round-trip is well-defined.
+    fn server_type_strategy() -> impl Strategy<Value = String> {
+        "[A-Za-z0-9][A-Za-z0-9-]{0,31}".prop_filter("non-empty", |s| !s.is_empty())
+    }
+
+    proptest! {
+        /// For arbitrary `server_type`/`snapshot_baked`, a DeployConfig carrying
+        /// that `[metadata]` block serialises and re-parses with the values
+        /// intact — the carrier never drops or mutates them. This is the
+        /// config-survives-render precondition (the render half is proven
+        /// in-crate; see the module doc).
+        #[test]
+        fn metadata_config_survives_toml_round_trip(
+            server_type in server_type_strategy(),
+            snapshot_baked in any::<bool>(),
+        ) {
+            let mut cfg = DeployConfig::default_for_server(
+                "graph-rag-demo".to_string(),
+                "us-west-2".to_string(),
+                std::path::PathBuf::from("/tmp/phase98-dstk04-proptest"),
+            );
+            cfg.metadata = MetadataConfig {
+                server_type: Some(server_type.clone()),
+                snapshot_baked: Some(snapshot_baked),
+            };
+
+            let serialised = toml::to_string(&cfg).expect("DeployConfig serialises");
+            let reparsed: DeployConfig =
+                toml::from_str(&serialised).expect("round-trips back through TOML");
+
+            prop_assert_eq!(
+                reparsed.metadata.server_type.as_deref(),
+                Some(server_type.as_str()),
+                "server_type must survive the TOML round-trip unchanged"
+            );
+            prop_assert_eq!(
+                reparsed.metadata.snapshot_baked,
+                Some(snapshot_baked),
+                "snapshot_baked must survive the TOML round-trip unchanged"
+            );
+            // A populated [metadata] block must never report empty.
+            prop_assert!(!reparsed.metadata.is_empty());
+        }
+    }
+}
