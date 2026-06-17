@@ -171,10 +171,10 @@ fn col_to_a1(mut col: u32) -> String {
 
 /// The in-`visited` precedents of one IR cell key (the cell's precedents
 /// restricted to the visited sub-DAG). Missing keys contribute no deps.
-fn visited_precedents<'a>(
+fn visited_precedents(
     key: &str,
     ir: &HashMap<String, Cell>,
-    visited: &'a BTreeSet<String>,
+    visited: &BTreeSet<String>,
 ) -> Vec<String> {
     ir.get(key)
         .map(|c| {
