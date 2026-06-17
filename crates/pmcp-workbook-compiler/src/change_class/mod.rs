@@ -148,8 +148,119 @@ fn schema_triple(role: &CellRole) -> (&Option<String>, &Option<String>, &str) {
     (&role.meaning, &role.unit, role.source.as_str())
 }
 
+/// Whether a present-on-both-sides assumption cell actually changed (a triple /
+/// dtype edit, or an assumption-status flip). A newly-added assumption (no prior
+/// role) is always a change — handled by the `None => true` caller arm.
+fn assumption_changed(prev: &CellRole, cur: &CellRole, prev_was_assumption: bool) -> bool {
+    is_assumption(cur) != prev_was_assumption
+        || schema_triple(prev) != schema_triple(cur)
+        || prev.dtype != cur.dtype
+}
+
+/// Assumption FIRST (hard rule): assumption involvement on EITHER side is an
+/// Assumption change (CR-01). A DEMOTION (yellow assumption re-classified to an
+/// ordinary constant / any other role) is exactly as review-critical as a
+/// promotion — re-classifying an assumption must route to Assumption →
+/// `NeverAutoPromote`, never escape with zero classes (D-09 hard rule).
+///
+/// Returns `true` when the cell involved an assumption (and was thus fully handled
+/// here), so the caller skips the role-specific arms for it.
+fn classify_assumption(
+    key: &str,
+    cur: &CellRole,
+    prev_role: Option<&CellRole>,
+    out: &mut Vec<(ChangeClass, String)>,
+) -> bool {
+    let prev_was_assumption = prev_role.is_some_and(is_assumption);
+    if !is_assumption(cur) && !prev_was_assumption {
+        return false;
+    }
+    let changed = match prev_role {
+        Some(p) => assumption_changed(p, cur, prev_was_assumption),
+        None => true,
+    };
+    if changed {
+        out.push((ChangeClass::Assumption, key.to_string()));
+    }
+    true
+}
+
+/// Role flips AWAY from Input/Output are schema changes too (CR-01): an
+/// input/output retyped to Constant/Formula silently leaves the served schema
+/// unless classified here. The symmetric flips TO Input/Output are caught by
+/// [`classify_current_role`]; duplicates dedup in [`classify`].
+fn classify_role_flip_away(
+    key: &str,
+    cur: &CellRole,
+    prev_role: Option<&CellRole>,
+    out: &mut Vec<(ChangeClass, String)>,
+) {
+    let Some(p) = prev_role else { return };
+    if matches!(p.role, Role::Input) && !matches!(cur.role, Role::Input) {
+        out.push((ChangeClass::InputSchema, key.to_string()));
+    }
+    if matches!(p.role, Role::Output) && !matches!(cur.role, Role::Output) {
+        out.push((ChangeClass::OutputSchema, key.to_string()));
+    }
+}
+
+/// Whether a current-`Output` cell is an output-schema redefinition: a flip TO
+/// Output (from any other role) counts even when the `(meaning, unit, source)`
+/// triple matches; an added cell (no prior role) is always a redefinition.
+fn output_redefined(cur: &CellRole, prev_role: Option<&CellRole>) -> bool {
+    match prev_role {
+        Some(p) => !matches!(p.role, Role::Output) || schema_triple(p) != schema_triple(cur),
+        None => true,
+    }
+}
+
+/// Whether a current-`Input` cell is retyped: a role flip, a dtype change, OR an
+/// enum-domain change (ENUM-07 — an `allowed_values` add/remove/flip on an
+/// existing input is a SCHEMA-axis change that must route through InputSchema →
+/// `BlockUntilAccept`). An added cell (no prior role) is always retyped.
+fn input_retyped(cur: &CellRole, prev_role: Option<&CellRole>) -> bool {
+    match prev_role {
+        Some(p) => {
+            !matches!(p.role, Role::Input)
+                || p.dtype != cur.dtype
+                || p.allowed_values != cur.allowed_values
+        },
+        None => true,
+    }
+}
+
+/// Classify a current cell by its `Role` into `OutputSchema` / `InputSchema`
+/// (Constant / Formula carry no role-schema change here).
+fn classify_current_role(
+    key: &str,
+    cur: &CellRole,
+    prev_role: Option<&CellRole>,
+    out: &mut Vec<(ChangeClass, String)>,
+) {
+    match cur.role {
+        Role::Output if output_redefined(cur, prev_role) => {
+            out.push((ChangeClass::OutputSchema, key.to_string()));
+        },
+        Role::Input if input_retyped(cur, prev_role) => {
+            out.push((ChangeClass::InputSchema, key.to_string()));
+        },
+        Role::Output | Role::Input | Role::Constant | Role::Formula => {},
+    }
+}
+
+/// A cell present in `prev` but removed in `current` is a schema/assumption change.
+fn classify_removed_cell(key: &str, prev: &CellRole, out: &mut Vec<(ChangeClass, String)>) {
+    if is_assumption(prev) {
+        out.push((ChangeClass::Assumption, key.to_string()));
+    } else if matches!(prev.role, Role::Input) {
+        out.push((ChangeClass::InputSchema, key.to_string()));
+    } else if matches!(prev.role, Role::Output) {
+        out.push((ChangeClass::OutputSchema, key.to_string()));
+    }
+}
+
 /// Diff the per-cell roles into `OutputSchema` / `InputSchema` / `Assumption`
-/// (CR-01 symmetric).
+/// (CR-01 symmetric). Thin orchestrator over the per-decision helpers above.
 fn classify_cell_roles(prev: &Manifest, current: &Manifest, out: &mut Vec<(ChangeClass, String)>) {
     let prev_c = index_cells(prev);
     let cur_c = index_cells(current);
@@ -157,86 +268,18 @@ fn classify_cell_roles(prev: &Manifest, current: &Manifest, out: &mut Vec<(Chang
     for (key, cur) in &cur_c {
         let prev_role = prev_c.get(key).copied();
 
-        // Assumption FIRST (hard rule): assumption involvement on EITHER side is an
-        // Assumption change (CR-01). A DEMOTION (yellow assumption re-classified to
-        // an ordinary constant / any other role) is exactly as review-critical as a
-        // promotion — re-classifying an assumption must route to Assumption →
-        // NeverAutoPromote, never escape with zero classes (D-09 hard rule).
-        let prev_was_assumption = prev_role.is_some_and(is_assumption);
-        if is_assumption(cur) || prev_was_assumption {
-            let changed = match prev_role {
-                Some(p) => {
-                    is_assumption(cur) != prev_was_assumption
-                        || schema_triple(p) != schema_triple(cur)
-                        || p.dtype != cur.dtype
-                },
-                None => true,
-            };
-            if changed {
-                out.push((ChangeClass::Assumption, (*key).to_string()));
-            }
+        // Assumption involvement short-circuits the role-specific arms.
+        if classify_assumption(key, cur, prev_role, out) {
             continue;
         }
-
-        // Role flips AWAY from Input/Output are schema changes too (CR-01): an
-        // input/output retyped to Constant/Formula silently leaves the served
-        // schema unless classified here. The symmetric flips TO Input/Output are
-        // caught by the role-specific arms below; duplicates dedup in classify().
-        if let Some(p) = prev_role {
-            if matches!(p.role, Role::Input) && !matches!(cur.role, Role::Input) {
-                out.push((ChangeClass::InputSchema, (*key).to_string()));
-            }
-            if matches!(p.role, Role::Output) && !matches!(cur.role, Role::Output) {
-                out.push((ChangeClass::OutputSchema, (*key).to_string()));
-            }
-        }
-
-        match cur.role {
-            Role::Output => {
-                let redefined = match prev_role {
-                    // A flip TO Output (from any other role) is an output-schema
-                    // change even when the (meaning, unit, source) triple matches.
-                    Some(p) => {
-                        !matches!(p.role, Role::Output) || schema_triple(p) != schema_triple(cur)
-                    },
-                    None => true,
-                };
-                if redefined {
-                    out.push((ChangeClass::OutputSchema, (*key).to_string()));
-                }
-            },
-            Role::Input => {
-                // Retyped = role flip, dtype change, OR an enum-domain change
-                // (ENUM-07): an `allowed_values` add/remove/flip on an existing
-                // input is a SCHEMA-axis change — loosening/changing the closed
-                // domain must route through InputSchema → BlockUntilAccept.
-                let retyped = match prev_role {
-                    Some(p) => {
-                        !matches!(p.role, Role::Input)
-                            || p.dtype != cur.dtype
-                            || p.allowed_values != cur.allowed_values
-                    },
-                    None => true, // added
-                };
-                if retyped {
-                    out.push((ChangeClass::InputSchema, (*key).to_string()));
-                }
-            },
-            Role::Constant | Role::Formula => {},
-        }
+        classify_role_flip_away(key, cur, prev_role, out);
+        classify_current_role(key, cur, prev_role, out);
     }
 
     // Removed inputs / removed assumptions are schema/assumption changes too.
     for (key, prev) in &prev_c {
-        if cur_c.contains_key(key) {
-            continue;
-        }
-        if is_assumption(prev) {
-            out.push((ChangeClass::Assumption, (*key).to_string()));
-        } else if matches!(prev.role, Role::Input) {
-            out.push((ChangeClass::InputSchema, (*key).to_string()));
-        } else if matches!(prev.role, Role::Output) {
-            out.push((ChangeClass::OutputSchema, (*key).to_string()));
+        if !cur_c.contains_key(key) {
+            classify_removed_cell(key, prev, out);
         }
     }
 }
