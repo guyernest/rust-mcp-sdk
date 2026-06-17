@@ -352,21 +352,11 @@ fn extract_function_tokens(formula: &str) -> Vec<String> {
 
         // An identifier start: a letter or underscore.
         if c.is_ascii_alphabetic() || c == '_' {
-            let (ident, next) = read_identifier(&chars, i);
+            let (token, next) = scan_function_token(&chars, i);
+            if let Some(name) = token {
+                tokens.push(name);
+            }
             i = next;
-
-            // Skip whitespace between the identifier and a possible `(`.
-            let mut j = i;
-            while j < chars.len() && chars[j].is_whitespace() {
-                j += 1;
-            }
-
-            if j < chars.len() && chars[j] == '(' {
-                let name = strip_xlfn_prefix(&ident);
-                if !name.is_empty() {
-                    tokens.push(name);
-                }
-            }
             continue;
         }
 
@@ -374,6 +364,30 @@ fn extract_function_tokens(formula: &str) -> Vec<String> {
     }
 
     tokens
+}
+
+/// Scan an identifier starting at `start` and decide whether it is a function
+/// call (the identifier is followed — modulo whitespace — by `(`). Returns the
+/// recognised function token (with any `_xlfn.` prefix stripped) when it is a
+/// call, plus the index just past the identifier so the caller can resume. A
+/// non-call identifier yields `None` while still advancing the cursor.
+fn scan_function_token(chars: &[char], start: usize) -> (Option<String>, usize) {
+    let (ident, next) = read_identifier(chars, start);
+    if !followed_by_open_paren(chars, next) {
+        return (None, next);
+    }
+    let name = strip_xlfn_prefix(&ident);
+    let token = if name.is_empty() { None } else { Some(name) };
+    (token, next)
+}
+
+/// True when the first non-whitespace character at or after `from` is `(`.
+fn followed_by_open_paren(chars: &[char], from: usize) -> bool {
+    let mut j = from;
+    while j < chars.len() && chars[j].is_whitespace() {
+        j += 1;
+    }
+    j < chars.len() && chars[j] == '('
 }
 
 /// Skip a double-quoted string literal starting at the opening quote `start`,
