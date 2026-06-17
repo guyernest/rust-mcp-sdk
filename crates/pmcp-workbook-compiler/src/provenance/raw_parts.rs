@@ -179,49 +179,80 @@ fn parse_calc_pr(part_bytes: &[u8]) -> Result<RawCalcPr, ProvenanceError> {
     let mut stack: Vec<Vec<u8>> = Vec::new();
 
     loop {
-        match reader.read_event() {
-            Ok(Event::Eof) => break,
-            // `<calcPr …/>` is self-closing (Empty): its parent is the current
-            // top of the open-element stack; it does NOT push.
-            Ok(Event::Empty(e)) => {
-                if e.local_name().as_ref() == b"calcPr"
-                    && stack.last().map(Vec::as_slice) == Some(b"workbook")
-                {
-                    apply_calc_pr_attrs(&e, &mut found)?;
-                    break;
-                }
-            },
-            // A paired `<calcPr …></calcPr>` arrives as Start: its parent is the
-            // current top BEFORE we push. Other Start elements push their name.
-            Ok(Event::Start(e)) => {
-                if e.local_name().as_ref() == b"calcPr"
-                    && stack.last().map(Vec::as_slice) == Some(b"workbook")
-                {
-                    apply_calc_pr_attrs(&e, &mut found)?;
-                    break;
-                }
-                if stack.len() >= MAX_XML_DEPTH {
-                    return Err(ProvenanceError::XmlTooDeep {
-                        part: WORKBOOK_PART.to_string(),
-                        limit: MAX_XML_DEPTH,
-                    });
-                }
-                stack.push(e.local_name().as_ref().to_vec());
-            },
-            Ok(Event::End(_)) => {
-                stack.pop();
-            },
-            Ok(_) => {},
-            Err(err) => {
-                return Err(ProvenanceError::UnreadableXml {
-                    part: WORKBOOK_PART.to_string(),
-                    detail: err.to_string(),
-                });
-            },
+        let event = reader
+            .read_event()
+            .map_err(|err| ProvenanceError::UnreadableXml {
+                part: WORKBOOK_PART.to_string(),
+                detail: err.to_string(),
+            })?;
+        if step_calc_pr_event(event, &mut stack, &mut found)? == CalcPrFlow::Done {
+            break;
         }
     }
 
     Ok(found)
+}
+
+/// Loop control for the [`parse_calc_pr`] event walk: keep reading, or stop
+/// (the authoritative `calcPr` was applied, or EOF was reached).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CalcPrFlow {
+    /// Continue reading the next event.
+    Continue,
+    /// Stop the walk (EOF, or the workbook-child `calcPr` was applied).
+    Done,
+}
+
+/// Handle one `xl/workbook.xml` parse event for [`parse_calc_pr`].
+///
+/// Mutates the open-element `stack` and the accumulated `found` attributes,
+/// returning whether the walk should stop. Only a `calcPr` whose immediate
+/// parent is `workbook` is honoured (decoy-shadowing guard); `Start` depth is
+/// bounded by [`MAX_XML_DEPTH`].
+fn step_calc_pr_event(
+    event: Event<'_>,
+    stack: &mut Vec<Vec<u8>>,
+    found: &mut RawCalcPr,
+) -> Result<CalcPrFlow, ProvenanceError> {
+    match event {
+        Event::Eof => Ok(CalcPrFlow::Done),
+        // `<calcPr …/>` is self-closing (Empty): its parent is the current top
+        // of the open-element stack; it does NOT push.
+        Event::Empty(e) => {
+            if is_workbook_child_calc_pr(&e, stack) {
+                apply_calc_pr_attrs(&e, found)?;
+                return Ok(CalcPrFlow::Done);
+            }
+            Ok(CalcPrFlow::Continue)
+        },
+        // A paired `<calcPr …></calcPr>` arrives as Start: its parent is the
+        // current top BEFORE we push. Other Start elements push their name.
+        Event::Start(e) => {
+            if is_workbook_child_calc_pr(&e, stack) {
+                apply_calc_pr_attrs(&e, found)?;
+                return Ok(CalcPrFlow::Done);
+            }
+            if stack.len() >= MAX_XML_DEPTH {
+                return Err(ProvenanceError::XmlTooDeep {
+                    part: WORKBOOK_PART.to_string(),
+                    limit: MAX_XML_DEPTH,
+                });
+            }
+            stack.push(e.local_name().as_ref().to_vec());
+            Ok(CalcPrFlow::Continue)
+        },
+        Event::End(_) => {
+            stack.pop();
+            Ok(CalcPrFlow::Continue)
+        },
+        _ => Ok(CalcPrFlow::Continue),
+    }
+}
+
+/// `true` when `e` is a `calcPr` element whose immediate parent (the open-element
+/// stack top) is `workbook` — the only `calcPr` the gate trusts.
+fn is_workbook_child_calc_pr(e: &quick_xml::events::BytesStart<'_>, stack: &[Vec<u8>]) -> bool {
+    e.local_name().as_ref() == b"calcPr" && stack.last().map(Vec::as_slice) == Some(b"workbook")
 }
 
 /// Read the gated `<calcPr>` attributes off one element event into `found`.
@@ -280,68 +311,96 @@ fn parse_app_props(part_bytes: &[u8]) -> Result<RawAppProps, ProvenanceError> {
         app_version: None,
     };
     // Which element's text we are currently inside (None = none).
-    let mut current: Option<&'static str> = None;
+    let mut current: Option<AppField> = None;
     // Element nesting depth (pathological-nesting guard).
     let mut depth: usize = 0;
 
     loop {
-        match reader.read_event() {
-            Ok(Event::Eof) => break,
-            Ok(Event::Start(e)) => {
-                depth += 1;
-                if depth > MAX_XML_DEPTH {
-                    return Err(ProvenanceError::XmlTooDeep {
-                        part: APP_PART.to_string(),
-                        limit: MAX_XML_DEPTH,
-                    });
-                }
-                match e.local_name().as_ref() {
-                    b"Application" => current = Some("Application"),
-                    b"AppVersion" => current = Some("AppVersion"),
-                    _ => current = None,
-                }
-            },
-            Ok(Event::Text(t)) => {
-                if let Some(field) = current {
-                    let text = match t.unescape() {
-                        Ok(v) => v.into_owned(),
-                        Err(err) => {
-                            return Err(ProvenanceError::UnreadableXml {
-                                part: APP_PART.to_string(),
-                                detail: err.to_string(),
-                            });
-                        },
-                    };
-                    // ACCUMULATE across split Text events instead of overwriting.
-                    // A single element's text can arrive in multiple Text events
-                    // (e.g. around a character reference like `&amp;`); overwriting
-                    // kept only the LAST chunk. `get_or_insert_with` + `push_str`
-                    // concatenates every chunk in order.
-                    let slot = match field {
-                        "Application" => Some(&mut props.application),
-                        "AppVersion" => Some(&mut props.app_version),
-                        _ => None,
-                    };
-                    if let Some(slot) = slot {
-                        slot.get_or_insert_with(String::new).push_str(&text);
-                    }
-                }
-            },
-            Ok(Event::End(_)) => {
-                depth = depth.saturating_sub(1);
-                current = None;
-            },
-            Ok(_) => {},
-            Err(err) => {
-                return Err(ProvenanceError::UnreadableXml {
-                    part: APP_PART.to_string(),
-                    detail: err.to_string(),
-                });
-            },
+        let event = reader
+            .read_event()
+            .map_err(|err| ProvenanceError::UnreadableXml {
+                part: APP_PART.to_string(),
+                detail: err.to_string(),
+            })?;
+        if matches!(event, Event::Eof) {
+            break;
         }
+        step_app_props_event(event, &mut depth, &mut current, &mut props)?;
     }
 
     Ok(props)
+}
+
+/// The `docProps/app.xml` element whose character data we are currently inside.
+#[derive(Debug, Clone, Copy)]
+enum AppField {
+    /// `<Application>` text.
+    Application,
+    /// `<AppVersion>` text.
+    AppVersion,
+}
+
+/// Handle one `docProps/app.xml` parse event for [`parse_app_props`].
+///
+/// Updates the nesting `depth`, the `current` text target, and accumulates text
+/// into `props`. Nesting beyond [`MAX_XML_DEPTH`] fails closed; `Eof` is handled
+/// by the caller.
+fn step_app_props_event(
+    event: Event<'_>,
+    depth: &mut usize,
+    current: &mut Option<AppField>,
+    props: &mut RawAppProps,
+) -> Result<(), ProvenanceError> {
+    match event {
+        Event::Start(e) => {
+            *depth += 1;
+            if *depth > MAX_XML_DEPTH {
+                return Err(ProvenanceError::XmlTooDeep {
+                    part: APP_PART.to_string(),
+                    limit: MAX_XML_DEPTH,
+                });
+            }
+            *current = match e.local_name().as_ref() {
+                b"Application" => Some(AppField::Application),
+                b"AppVersion" => Some(AppField::AppVersion),
+                _ => None,
+            };
+            Ok(())
+        },
+        Event::Text(t) => accumulate_app_text(&t, *current, props),
+        Event::End(_) => {
+            *depth = depth.saturating_sub(1);
+            *current = None;
+            Ok(())
+        },
+        _ => Ok(()),
+    }
+}
+
+/// Append the (unescaped) `Text` event into the `current` field's slot.
+///
+/// ACCUMULATES across split Text events instead of overwriting: a single
+/// element's text can arrive in multiple Text events (e.g. around a character
+/// reference like `&amp;`), so `get_or_insert_with` + `push_str` concatenates
+/// every chunk in order. An unescape failure becomes [`ProvenanceError::UnreadableXml`].
+fn accumulate_app_text(
+    t: &quick_xml::events::BytesText<'_>,
+    current: Option<AppField>,
+    props: &mut RawAppProps,
+) -> Result<(), ProvenanceError> {
+    let Some(field) = current else {
+        return Ok(());
+    };
+    let text = t.unescape().map_err(|err| ProvenanceError::UnreadableXml {
+        part: APP_PART.to_string(),
+        detail: err.to_string(),
+    })?;
+    let slot = match field {
+        AppField::Application => &mut props.application,
+        AppField::AppVersion => &mut props.app_version,
+    };
+    slot.get_or_insert_with(String::new).push_str(&text);
+    Ok(())
 }
 
 /// Parse an OOXML boolean attribute (`"1"`/`"true"` ⇒ `true`; anything else,
