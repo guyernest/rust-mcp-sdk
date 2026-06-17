@@ -169,50 +169,81 @@ fn col_to_a1(mut col: u32) -> String {
     String::from_utf8(s).unwrap_or_default()
 }
 
-/// Order the visited sub-DAG nodes in a DETERMINISTIC dependency order: precedents
-/// before dependents, ties broken by lexicographic key sort.
-fn dependency_order(visited: &BTreeSet<String>, ir: &HashMap<String, Cell>) -> Vec<String> {
-    let deps: HashMap<&str, Vec<String>> = visited
-        .iter()
-        .map(|k| {
-            let d = ir
-                .get(k)
-                .map(|c| {
-                    precedents_of(c)
-                        .into_iter()
-                        .filter(|p| visited.contains(p))
-                        .collect::<Vec<_>>()
-                })
-                .unwrap_or_default();
-            (k.as_str(), d)
+/// The in-`visited` precedents of one IR cell key (the cell's precedents
+/// restricted to the visited sub-DAG). Missing keys contribute no deps.
+fn visited_precedents<'a>(
+    key: &str,
+    ir: &HashMap<String, Cell>,
+    visited: &'a BTreeSet<String>,
+) -> Vec<String> {
+    ir.get(key)
+        .map(|c| {
+            precedents_of(c)
+                .into_iter()
+                .filter(|p| visited.contains(p))
+                .collect()
         })
-        .collect();
+        .unwrap_or_default()
+}
 
+/// Build the adjacency map `key -> its in-visited precedents` for the sub-DAG.
+fn build_deps<'a>(
+    visited: &'a BTreeSet<String>,
+    ir: &HashMap<String, Cell>,
+) -> HashMap<&'a str, Vec<String>> {
+    visited
+        .iter()
+        .map(|k| (k.as_str(), visited_precedents(k, ir, visited)))
+        .collect()
+}
+
+/// After `key` is emitted, decrement the remaining-precedent count of every node
+/// that depends on `key`.
+fn decrement_dependents<'a>(
+    key: &str,
+    deps: &HashMap<&'a str, Vec<String>>,
+    remaining: &mut HashMap<&'a str, usize>,
+) {
+    for (other, d) in deps {
+        if remaining.contains_key(other) && d.iter().any(|p| p == key) {
+            if let Some(n) = remaining.get_mut(other) {
+                *n = n.saturating_sub(1);
+            }
+        }
+    }
+}
+
+/// The set of nodes with zero remaining precedents, sorted lexicographically.
+fn ready_nodes<'a>(remaining: &HashMap<&'a str, usize>) -> Vec<&'a str> {
+    let mut ready: Vec<&str> = remaining
+        .iter()
+        .filter(|(_, &n)| n == 0)
+        .map(|(k, _)| *k)
+        .collect();
+    ready.sort_unstable();
+    ready
+}
+
+/// Order the visited sub-DAG nodes in a DETERMINISTIC dependency order: precedents
+/// before dependents, ties broken by lexicographic key sort. Thin Kahn's-algorithm
+/// driver over the helpers above.
+fn dependency_order(visited: &BTreeSet<String>, ir: &HashMap<String, Cell>) -> Vec<String> {
+    let deps = build_deps(visited, ir);
     let mut remaining: HashMap<&str, usize> = deps.iter().map(|(k, d)| (*k, d.len())).collect();
 
     let mut order: Vec<String> = Vec::with_capacity(visited.len());
     loop {
-        let mut ready: Vec<&str> = remaining
-            .iter()
-            .filter(|(_, &n)| n == 0)
-            .map(|(k, _)| *k)
-            .collect();
+        let ready = ready_nodes(&remaining);
         if ready.is_empty() {
             break;
         }
-        ready.sort_unstable();
         for key in ready {
             remaining.remove(key);
             order.push(key.to_string());
-            for (other, d) in &deps {
-                if remaining.contains_key(other) && d.iter().any(|p| p == key) {
-                    if let Some(n) = remaining.get_mut(other) {
-                        *n = n.saturating_sub(1);
-                    }
-                }
-            }
+            decrement_dependents(key, &deps, &mut remaining);
         }
     }
+
     // Append any residual cyclic nodes in sorted order (totality).
     let mut residual: Vec<&str> = remaining.keys().copied().collect();
     residual.sort_unstable();
