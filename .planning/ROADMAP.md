@@ -1950,16 +1950,16 @@ Plans:
 
 **Wave 1** *(disjoint files — fully parallel)*
 
-- [ ] 99-01-PLAN.md — render_xlsx (93) decomposition [runtime] [CPLX-01]
-- [ ] 99-02-PLAN.md — eval_expr (58) + f_index (24) + f_search (31) [runtime] [CPLX-01]
-- [ ] 99-03-PLAN.md — bundle_loader::load (28) [runtime] [CPLX-01]
-- [ ] 99-04-PLAN.md — classify_cell_roles (74) + dependency_order (24) [compiler] [CPLX-02]
-- [ ] 99-05-PLAN.md — tokenize (52) + lex_quoted_sheet_ref (33) + scan_atom_run (30) [compiler] [CPLX-02]
-- [ ] 99-06-PLAN.md — ingest (57) + references_external_workbook (31) [compiler] [CPLX-02]
-- [ ] 99-07-PLAN.md — parse_calc_pr (44) + parse_app_props (39) + gate_inner (29) [compiler] [CPLX-02]
-- [ ] 99-08-PLAN.md — derive_case_grid (34) + no_seeded_value_outside_allowed (46) [compiler] [CPLX-02]
-- [ ] 99-09-PLAN.md — extract_function_tokens (29) + author_xlsx (29) + walk (25) [compiler] [CPLX-02]
-- [ ] 99-10-PLAN.md — validate_input (33) [server-toolkit] [CPLX-03]
+- [x] 99-01-PLAN.md — render_xlsx (93) decomposition [runtime] [CPLX-01]
+- [x] 99-02-PLAN.md — eval_expr (58) + f_index (24) + f_search (31) [runtime] [CPLX-01]
+- [x] 99-03-PLAN.md — bundle_loader::load (28) [runtime] [CPLX-01]
+- [x] 99-04-PLAN.md — classify_cell_roles (74) + dependency_order (24) [compiler] [CPLX-02]
+- [x] 99-05-PLAN.md — tokenize (52) + lex_quoted_sheet_ref (33) + scan_atom_run (30) [compiler] [CPLX-02]
+- [x] 99-06-PLAN.md — ingest (57) + references_external_workbook (31) [compiler] [CPLX-02]
+- [x] 99-07-PLAN.md — parse_calc_pr (44) + parse_app_props (39) + gate_inner (29) [compiler] [CPLX-02]
+- [x] 99-08-PLAN.md — derive_case_grid (34) + no_seeded_value_outside_allowed (46) [compiler] [CPLX-02]
+- [x] 99-09-PLAN.md — extract_function_tokens (29) + author_xlsx (29) + walk (25) [compiler] [CPLX-02]
+- [x] 99-10-PLAN.md — validate_input (33) [server-toolkit] [CPLX-03]
 
 **Wave 2** *(blocked on all of Wave 1)*
 
