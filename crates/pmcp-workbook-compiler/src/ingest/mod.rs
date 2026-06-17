@@ -76,22 +76,36 @@ fn references_external_workbook(formula: &str) -> bool {
             continue;
         };
         let inner = &formula[i + 1..i + 1 + close_rel];
-        let lower = inner.to_ascii_lowercase();
-        let is_path = lower.ends_with(".xlsx")
-            || lower.ends_with(".xlsm")
-            || lower.ends_with(".xlsb")
-            || lower.ends_with(".xls");
-        let prev_is_ident = i > 0 && {
-            let p = bytes[i - 1];
-            p.is_ascii_alphanumeric() || p == b'_' || p == b'.'
-        };
-        let is_index =
-            !prev_is_ident && !inner.is_empty() && inner.bytes().all(|d| d.is_ascii_digit());
-        if is_path || is_index {
+        if is_external_bracket(inner, prev_byte_is_ident(bytes, i)) {
             return true;
         }
     }
     false
+}
+
+/// Whether the byte preceding position `i` is an identifier char (alphanumeric,
+/// `_`, or `.`). Used to tell a structured table reference (`Table1[1]`) from an
+/// external link index (`[1]Sheet1!A1`).
+fn prev_byte_is_ident(bytes: &[u8], i: usize) -> bool {
+    if i == 0 {
+        return false;
+    }
+    let p = bytes[i - 1];
+    p.is_ascii_alphanumeric() || p == b'_' || p == b'.'
+}
+
+/// Whether a bracketed `inner` token denotes an EXTERNAL-workbook reference: a
+/// bracketed workbook path (`[Book.xlsx]`, also `.xlsm`/`.xlsb`/`.xls`) OR a
+/// bracketed link index (`[1]`, `[10]`, …) that is NOT preceded by an identifier
+/// char (so `Table1[1]` is excluded — that is `prev_is_ident == true`).
+fn is_external_bracket(inner: &str, prev_is_ident: bool) -> bool {
+    let lower = inner.to_ascii_lowercase();
+    let is_path = lower.ends_with(".xlsx")
+        || lower.ends_with(".xlsm")
+        || lower.ends_with(".xlsb")
+        || lower.ends_with(".xls");
+    let is_index = !prev_is_ident && !inner.is_empty() && inner.bytes().all(|d| d.is_ascii_digit());
+    is_path || is_index
 }
 
 /// Read a local `.xlsx`/`.xlsm` into an owned [`WorkbookMap`] plus any
@@ -110,13 +124,6 @@ pub fn ingest(path: &Path) -> Result<(WorkbookMap, Vec<LintFinding>), IngestErro
     })?;
 
     let mut findings: Vec<LintFinding> = Vec::new();
-
-    let source_extension = path
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(|e| e.to_ascii_lowercase())
-        .unwrap_or_default();
-
     let mut external_links: Vec<String> = Vec::new();
     let mut sheets: Vec<SheetRecord> = Vec::new();
 
@@ -125,209 +132,11 @@ pub fn ingest(path: &Path) -> Result<(WorkbookMap, Vec<LintFinding>), IngestErro
     let mut cell_cap_hit = false;
 
     for ws in book.sheet_collection() {
-        let sheet_name = ws.name().to_string();
-        let state = state_to_string(ws.state());
-
-        // Hidden rows → Vec<u32> (typed, locatable).
-        let mut hidden_rows: Vec<u32> = ws
-            .row_dimensions()
-            .into_iter()
-            .filter(|r| r.hidden())
-            .map(|r| r.row_num())
-            .collect();
-        hidden_rows.sort_unstable();
-
-        // Merges / CF ranges / tables → owned RangeRef.
-        let merges: Vec<RangeRef> = ws
-            .merge_cells()
-            .iter()
-            .map(|r| range_ref_from_a1(&sheet_name, &r.range()))
-            .collect();
-
-        let mut cf_ranges: Vec<RangeRef> = Vec::new();
-        for cf in ws.conditional_formatting_collection() {
-            for r in cf.sequence_of_references().range_collection() {
-                cf_ranges.push(range_ref_from_a1(&sheet_name, &r.range()));
-            }
-        }
-
-        let tables: Vec<RangeRef> = ws
-            .tables()
-            .iter()
-            .map(|t| {
-                let (start, end) = t.area();
-                RangeRef {
-                    sheet: sheet_name.clone(),
-                    start: start.get_coordinate(),
-                    end: end.get_coordinate(),
-                }
-            })
-            .collect();
-
-        // Data validations → owned DataValidationRecord, ONE record per
-        // (data validation × sqref range): FLAT-MAP over range_collection() so a
-        // multi-range sqref (e.g. "C6 E6") emits one record per range, never a
-        // single collapsed record. An absent DataValidations block reads as an
-        // empty slice (unwrap_or — NEVER .unwrap(), crate deny gate); formula1
-        // carries the RAW formula text (quotes NOT stripped — token parsing is
-        // synth's job), None when empty.
-        let data_validations: Vec<DataValidationRecord> = ws
-            .data_validations()
-            .map(|d| d.data_validation_list())
-            .unwrap_or(&[])
-            .iter()
-            .flat_map(|dv| {
-                let dv_type = dv.get_type().value_string().to_string();
-                let formula1 = {
-                    let f = dv.formula1().to_string();
-                    (!f.is_empty()).then_some(f)
-                };
-                let sheet_name = &sheet_name;
-                dv.sequence_of_references()
-                    .range_collection()
-                    .iter()
-                    .map(move |r| DataValidationRecord {
-                        target: range_ref_from_a1(sheet_name, &r.range()),
-                        dv_type: dv_type.clone(),
-                        formula1: formula1.clone(),
-                    })
-            })
-            .collect();
-
-        // Hidden columns → Vec<u32> (mirrors the hidden_rows row_dimensions()
-        // pattern).
-        let mut hidden_cols: Vec<u32> = ws
-            .column_dimensions()
-            .iter()
-            .filter(|c| c.hidden())
-            .map(|c| c.col_num())
-            .collect();
-        hidden_cols.sort_unstable();
-
-        // Per-column widths → (1-based col index, width) pairs (the layout
-        // descriptor replays these). The umya accessor is `column_dimensions()`
-        // → `Column::get_col_num()`/`get_width()`. Sorted by column so the
-        // descriptor is deterministic.
-        let mut col_widths: Vec<(u32, f64)> = ws
-            .column_dimensions()
-            .iter()
-            .map(|c| (c.col_num(), c.width()))
-            .collect();
-        col_widths.sort_by_key(|(col, _)| *col);
-
-        // Notes/comments → owned NoteRecord (sheet level, mirroring the tables
-        // boundary conversion). Legacy `Comment`s carry full author/text via
-        // umya; threaded comments are flagged `threaded=true`. An empty-text
-        // note is SKIPPED so the Vec never holds a placeholder record.
-        let notes: Vec<NoteRecord> = ws
-            .comments()
-            .iter()
-            .map(note_from_comment)
-            .filter(|n| !n.text.is_empty())
-            .collect();
-        // Threaded comments (Office-2019) are intentionally NOT emitted: umya
-        // 3.0.0 surfaces a threaded comment's coordinate/id/date but exposes NO
-        // public accessor for its body text or author, so any record we built
-        // would carry empty text and be dropped by the empty-skip rule above.
-
-        // Cells → owned CellRecord, bounded by MAX_CELL_COUNT (T-93-02-DOS).
-        let mut cells: Vec<CellRecord> = Vec::new();
-        for cell in ws.cells() {
-            // DoS guard: stop feeding cells once the running total reaches the
-            // cap. The partial map is still returned with an Error finding so
-            // the collect-all gate refuses — no unbounded allocation, no panic.
-            if total_cells >= MAX_CELL_COUNT {
-                cell_cap_hit = true;
-                break;
-            }
-
-            let addr = cell.coordinate().get_coordinate();
-            let is_formula = cell.is_formula();
-
-            let formula = if is_formula {
-                let f = cell.formula();
-                if f.is_empty() {
-                    None
-                } else {
-                    // External-link references travel in the formula text
-                    // (`[1]Sheet1!...`); the detection target is the reference
-                    // itself. Record it here.
-                    if references_external_workbook(f) {
-                        let reference = f.to_string();
-                        if !external_links.contains(&reference) {
-                            external_links.push(reference);
-                        }
-                        findings.push(LintFinding::new(
-                            Severity::Error,
-                            "structure/external-link",
-                            sheet_name.clone(),
-                            Some(addr.clone()),
-                            format!("cell formula references an external workbook: {f}"),
-                            "Inline the referenced value; the dialect forbids external-workbook links",
-                        ));
-                    }
-                    Some(f.to_string())
-                }
-            } else {
-                None
-            };
-
-            let value_cow = cell.value();
-            let value = if value_cow.is_empty() {
-                None
-            } else {
-                Some(value_cow.into_owned())
-            };
-
-            let style = cell.style();
-            let fill_argb = style
-                .background_color()
-                .map(|c| c.argb_str())
-                .filter(|s| !s.is_empty() && s != TRANSPARENT_ARGB);
-            let font_argb = style
-                .font()
-                .map(|f| f.color().argb_str())
-                .filter(|s| !s.is_empty() && s != TRANSPARENT_ARGB);
-
-            // The number-format code (the layout descriptor replays this).
-            // `style.number_format()` is `Option<&NumberingFormat>` whose
-            // `format_code()` is the code text; the General/unset code reads as
-            // `None` so the descriptor never carries a meaningless "General".
-            let number_format = style
-                .number_format()
-                .map(|nf| nf.format_code().to_string())
-                .filter(|c| !c.is_empty() && c != "General");
-
-            let formula_kind = classify_formula_kind(cell);
-
-            cells.push(CellRecord {
-                addr,
-                formula,
-                value,
-                fill_argb,
-                font_argb,
-                number_format,
-                is_formula,
-                formula_kind,
-            });
-            total_cells += 1;
-        }
-
-        sheets.push(SheetRecord {
-            name: sheet_name,
-            state,
-            hidden_rows,
-            hidden_cols,
-            col_widths,
-            merges,
-            cf_ranges,
-            tables,
-            data_validations,
-            notes,
-            cells,
-        });
-
-        if cell_cap_hit {
+        let (sheet, hit_cap) =
+            collect_sheet(ws, &mut external_links, &mut findings, &mut total_cells);
+        sheets.push(sheet);
+        if hit_cap {
+            cell_cap_hit = true;
             break;
         }
     }
@@ -337,24 +146,41 @@ pub fn ingest(path: &Path) -> Result<(WorkbookMap, Vec<LintFinding>), IngestErro
     // allocation stayed bounded by MAX_CELL_COUNT (never the workbook's claimed
     // size).
     if cell_cap_hit {
-        let sheet = sheets
-            .first()
-            .map(|s| s.name.clone())
-            .unwrap_or_else(|| "workbook".to_string());
-        findings.push(LintFinding::new(
-            Severity::Error,
-            "oracle/too-many-cells",
-            sheet,
-            None,
-            format!(
-                "the workbook exceeds the {MAX_CELL_COUNT}-cell ingest cap — \
-                 ingest was abandoned to bound memory (DoS guard)"
-            ),
-            "Split the workbook or reduce its cell count below the ingest cap.",
-        ));
+        findings.push(cell_cap_finding(&sheets));
     }
 
-    // Defined names at BOTH scopes, structured + scoped.
+    let map = WorkbookMap {
+        defined_names: collect_defined_names(&book),
+        save_timestamp: save_timestamp(&book),
+        has_macros: book.has_macros(),
+        source_extension: source_extension(path),
+        sheets,
+        external_links,
+    };
+
+    Ok((map, findings))
+}
+
+/// The lower-cased file extension (`"xlsx"`/`"xlsm"`/…) of the source path, or
+/// an empty string when the path has no extension.
+fn source_extension(path: &Path) -> String {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .map(str::to_ascii_lowercase)
+        .unwrap_or_default()
+}
+
+/// The workbook save timestamp (docProps/core.xml dcterms:modified), umya-surfaced
+/// via `get_properties().modified()`. An empty value becomes `None` so the gate
+/// distinguishes "absent" from a real stamp. Returned on `WorkbookMap` so the
+/// provenance builder never re-opens the workbook.
+fn save_timestamp(book: &umya_spreadsheet::Workbook) -> Option<String> {
+    let modified = book.properties().modified();
+    (!modified.is_empty()).then(|| modified.to_string())
+}
+
+/// Defined names at BOTH scopes (workbook + per-sheet), structured + scoped.
+fn collect_defined_names(book: &umya_spreadsheet::Workbook) -> Vec<DefinedNameRecord> {
     let mut defined_names: Vec<DefinedNameRecord> = Vec::new();
     for dn in book.defined_names() {
         defined_names.push(DefinedNameRecord {
@@ -373,28 +199,281 @@ pub fn ingest(path: &Path) -> Result<(WorkbookMap, Vec<LintFinding>), IngestErro
             });
         }
     }
+    defined_names
+}
 
-    // Workbook save timestamp (docProps/core.xml dcterms:modified), umya-surfaced
-    // via get_properties().modified(). An empty value becomes None so the gate
-    // distinguishes "absent" from a real stamp. Returned on WorkbookMap so the
-    // provenance builder never re-opens the workbook.
-    let modified = book.properties().modified();
-    let save_timestamp = if modified.is_empty() {
-        None
-    } else {
-        Some(modified.to_string())
+/// The single located Error finding emitted when the cell-count cap was hit
+/// (T-93-02-DOS). Anchored to the first sheet's name, or `"workbook"` when empty.
+fn cell_cap_finding(sheets: &[SheetRecord]) -> LintFinding {
+    let sheet = sheets
+        .first()
+        .map(|s| s.name.clone())
+        .unwrap_or_else(|| "workbook".to_string());
+    LintFinding::new(
+        Severity::Error,
+        "oracle/too-many-cells",
+        sheet,
+        None,
+        format!(
+            "the workbook exceeds the {MAX_CELL_COUNT}-cell ingest cap — \
+             ingest was abandoned to bound memory (DoS guard)"
+        ),
+        "Split the workbook or reduce its cell count below the ingest cap.",
+    )
+}
+
+/// Convert one umya worksheet into an owned [`SheetRecord`], threading the
+/// running cell total and accumulating external-link references / findings.
+/// Returns the record plus `true` when the [`MAX_CELL_COUNT`] cap was hit while
+/// scanning this sheet's cells (the caller stops feeding further sheets).
+fn collect_sheet(
+    ws: &umya_spreadsheet::Worksheet,
+    external_links: &mut Vec<String>,
+    findings: &mut Vec<LintFinding>,
+    total_cells: &mut usize,
+) -> (SheetRecord, bool) {
+    let sheet_name = ws.name().to_string();
+    let state = state_to_string(ws.state());
+    let (cells, cap_hit) = collect_cells(ws, &sheet_name, external_links, findings, total_cells);
+
+    let sheet = SheetRecord {
+        state,
+        hidden_rows: hidden_rows(ws),
+        hidden_cols: hidden_cols(ws),
+        col_widths: col_widths(ws),
+        merges: merge_ranges(ws, &sheet_name),
+        cf_ranges: conditional_format_ranges(ws, &sheet_name),
+        tables: table_ranges(ws, &sheet_name),
+        data_validations: data_validations(ws, &sheet_name),
+        notes: sheet_notes(ws),
+        cells,
+        name: sheet_name,
     };
+    (sheet, cap_hit)
+}
 
-    let map = WorkbookMap {
-        sheets,
-        defined_names,
-        external_links,
-        has_macros: book.has_macros(),
-        source_extension,
-        save_timestamp,
-    };
+/// Hidden rows → sorted `Vec<u32>` (typed, locatable).
+fn hidden_rows(ws: &umya_spreadsheet::Worksheet) -> Vec<u32> {
+    let mut rows: Vec<u32> = ws
+        .row_dimensions()
+        .into_iter()
+        .filter(|r| r.hidden())
+        .map(|r| r.row_num())
+        .collect();
+    rows.sort_unstable();
+    rows
+}
 
-    Ok((map, findings))
+/// Hidden columns → sorted `Vec<u32>` (mirrors the [`hidden_rows`] pattern).
+fn hidden_cols(ws: &umya_spreadsheet::Worksheet) -> Vec<u32> {
+    let mut cols: Vec<u32> = ws
+        .column_dimensions()
+        .iter()
+        .filter(|c| c.hidden())
+        .map(|c| c.col_num())
+        .collect();
+    cols.sort_unstable();
+    cols
+}
+
+/// Per-column widths → `(1-based col index, width)` pairs (the layout
+/// descriptor replays these), sorted by column for determinism.
+fn col_widths(ws: &umya_spreadsheet::Worksheet) -> Vec<(u32, f64)> {
+    let mut widths: Vec<(u32, f64)> = ws
+        .column_dimensions()
+        .iter()
+        .map(|c| (c.col_num(), c.width()))
+        .collect();
+    widths.sort_by_key(|(col, _)| *col);
+    widths
+}
+
+/// Merge ranges → owned [`RangeRef`]s on `sheet_name`.
+fn merge_ranges(ws: &umya_spreadsheet::Worksheet, sheet_name: &str) -> Vec<RangeRef> {
+    ws.merge_cells()
+        .iter()
+        .map(|r| range_ref_from_a1(sheet_name, &r.range()))
+        .collect()
+}
+
+/// Conditional-formatting ranges → owned [`RangeRef`]s on `sheet_name`.
+fn conditional_format_ranges(ws: &umya_spreadsheet::Worksheet, sheet_name: &str) -> Vec<RangeRef> {
+    let mut cf_ranges: Vec<RangeRef> = Vec::new();
+    for cf in ws.conditional_formatting_collection() {
+        for r in cf.sequence_of_references().range_collection() {
+            cf_ranges.push(range_ref_from_a1(sheet_name, &r.range()));
+        }
+    }
+    cf_ranges
+}
+
+/// Table areas → owned [`RangeRef`]s on `sheet_name`.
+fn table_ranges(ws: &umya_spreadsheet::Worksheet, sheet_name: &str) -> Vec<RangeRef> {
+    ws.tables()
+        .iter()
+        .map(|t| {
+            let (start, end) = t.area();
+            RangeRef {
+                sheet: sheet_name.to_string(),
+                start: start.get_coordinate(),
+                end: end.get_coordinate(),
+            }
+        })
+        .collect()
+}
+
+/// Data validations → owned [`DataValidationRecord`]s, ONE record per
+/// (data validation × sqref range): FLAT-MAP over `range_collection()` so a
+/// multi-range sqref (e.g. `"C6 E6"`) emits one record per range, never a
+/// single collapsed record. An absent DataValidations block reads as an empty
+/// slice (`unwrap_or` — NEVER `.unwrap()`, crate deny gate); `formula1` carries
+/// the RAW formula text (quotes NOT stripped — token parsing is synth's job),
+/// `None` when empty.
+fn data_validations(
+    ws: &umya_spreadsheet::Worksheet,
+    sheet_name: &str,
+) -> Vec<DataValidationRecord> {
+    ws.data_validations()
+        .map(|d| d.data_validation_list())
+        .unwrap_or(&[])
+        .iter()
+        .flat_map(|dv| {
+            let dv_type = dv.get_type().value_string().to_string();
+            let formula1 = {
+                let f = dv.formula1().to_string();
+                (!f.is_empty()).then_some(f)
+            };
+            dv.sequence_of_references()
+                .range_collection()
+                .iter()
+                .map(move |r| DataValidationRecord {
+                    target: range_ref_from_a1(sheet_name, &r.range()),
+                    dv_type: dv_type.clone(),
+                    formula1: formula1.clone(),
+                })
+        })
+        .collect()
+}
+
+/// Notes/comments → owned [`NoteRecord`]s (sheet level). Legacy `Comment`s carry
+/// full author/text via umya; an empty-text note is SKIPPED so the Vec never
+/// holds a placeholder record.
+///
+/// Threaded comments (Office-2019) are intentionally NOT emitted: umya 3.0.0
+/// surfaces a threaded comment's coordinate/id/date but exposes NO public
+/// accessor for its body text or author, so any record we built would carry
+/// empty text and be dropped by the empty-skip rule.
+fn sheet_notes(ws: &umya_spreadsheet::Worksheet) -> Vec<NoteRecord> {
+    ws.comments()
+        .iter()
+        .map(note_from_comment)
+        .filter(|n| !n.text.is_empty())
+        .collect()
+}
+
+/// Cells → owned [`CellRecord`]s, bounded by [`MAX_CELL_COUNT`] (T-93-02-DOS).
+/// Returns the records collected so far plus `true` when the cap was reached
+/// mid-scan (the partial map is still returned so the collect-all gate refuses
+/// on the Error finding — no unbounded allocation, no panic).
+fn collect_cells(
+    ws: &umya_spreadsheet::Worksheet,
+    sheet_name: &str,
+    external_links: &mut Vec<String>,
+    findings: &mut Vec<LintFinding>,
+    total_cells: &mut usize,
+) -> (Vec<CellRecord>, bool) {
+    let mut cells: Vec<CellRecord> = Vec::new();
+    for cell in ws.cells() {
+        // DoS guard: stop feeding cells once the running total reaches the cap.
+        if *total_cells >= MAX_CELL_COUNT {
+            return (cells, true);
+        }
+        cells.push(cell_record(cell, sheet_name, external_links, findings));
+        *total_cells += 1;
+    }
+    (cells, false)
+}
+
+/// Convert one umya cell into an owned [`CellRecord`], recording any
+/// external-workbook reference spotted in its formula text as both an
+/// `external_links` entry and a `structure/external-link` finding.
+fn cell_record(
+    cell: &umya_spreadsheet::structs::Cell,
+    sheet_name: &str,
+    external_links: &mut Vec<String>,
+    findings: &mut Vec<LintFinding>,
+) -> CellRecord {
+    let addr = cell.coordinate().get_coordinate();
+    let is_formula = cell.is_formula();
+    let formula = cell_formula(cell, &addr, sheet_name, external_links, findings);
+
+    let value_cow = cell.value();
+    let value = (!value_cow.is_empty()).then(|| value_cow.into_owned());
+
+    let style = cell.style();
+    let fill_argb = style
+        .background_color()
+        .map(|c| c.argb_str())
+        .filter(|s| !s.is_empty() && s != TRANSPARENT_ARGB);
+    let font_argb = style
+        .font()
+        .map(|f| f.color().argb_str())
+        .filter(|s| !s.is_empty() && s != TRANSPARENT_ARGB);
+
+    // The number-format code (the layout descriptor replays this).
+    // `style.number_format()` is `Option<&NumberingFormat>` whose
+    // `format_code()` is the code text; the General/unset code reads as `None`
+    // so the descriptor never carries a meaningless "General".
+    let number_format = style
+        .number_format()
+        .map(|nf| nf.format_code().to_string())
+        .filter(|c| !c.is_empty() && c != "General");
+
+    CellRecord {
+        addr,
+        formula,
+        value,
+        fill_argb,
+        font_argb,
+        number_format,
+        is_formula,
+        formula_kind: classify_formula_kind(cell),
+    }
+}
+
+/// The owned formula text for a cell (or `None` for a non-formula / empty
+/// formula). External-link references travel in the formula text
+/// (`[1]Sheet1!...`); when one is spotted it is recorded as both an
+/// `external_links` entry (deduped) and a located Error finding.
+fn cell_formula(
+    cell: &umya_spreadsheet::structs::Cell,
+    addr: &str,
+    sheet_name: &str,
+    external_links: &mut Vec<String>,
+    findings: &mut Vec<LintFinding>,
+) -> Option<String> {
+    if !cell.is_formula() {
+        return None;
+    }
+    let f = cell.formula();
+    if f.is_empty() {
+        return None;
+    }
+    if references_external_workbook(f) {
+        let reference = f.to_string();
+        if !external_links.contains(&reference) {
+            external_links.push(reference);
+        }
+        findings.push(LintFinding::new(
+            Severity::Error,
+            "structure/external-link",
+            sheet_name.to_string(),
+            Some(addr.to_string()),
+            format!("cell formula references an external workbook: {f}"),
+            "Inline the referenced value; the dialect forbids external-workbook links",
+        ));
+    }
+    Some(f.to_string())
 }
 
 /// Render a `umya` [`SheetStateValues`] to the owned `"visible"`/`"hidden"`/
