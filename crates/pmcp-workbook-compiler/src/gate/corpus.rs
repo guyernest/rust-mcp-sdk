@@ -466,32 +466,51 @@ pub fn region_deltas(
 /// no-seed base for an enum input). Used by the property test.
 #[must_use]
 pub fn no_seeded_value_outside_allowed(manifest: &Manifest, cases: &[ApprovalCase]) -> bool {
-    let enum_domains: BTreeMap<&str, &Vec<String>> = manifest
+    let enum_domains = enum_input_domains(manifest);
+    let all_in_domain = cases
+        .iter()
+        .all(|case| case_seeded_values_allowed(case, &enum_domains));
+    let _ = is_computed; // re-exported predicate kept available to the gate consumer
+    all_in_domain
+}
+
+/// The frozen-enum input domains of `manifest`, keyed `cell -> allowed_values`
+/// (only `Role::Input` cells that declare an `allowed_values` set).
+fn enum_input_domains(manifest: &Manifest) -> BTreeMap<&str, &Vec<String>> {
+    manifest
         .cells
         .iter()
         .filter(|r| matches!(r.role, Role::Input))
         .filter_map(|r| r.allowed_values.as_ref().map(|v| (r.cell.as_str(), v)))
-        .collect();
-    for case in cases {
-        if let Value::Object(map) = &case.input {
-            for (cell, value) in map {
-                if let Some(domain) = enum_domains.get(cell.as_str()) {
-                    if let Value::String(s) = value {
-                        if !domain.contains(s) {
-                            return false;
-                        }
-                    } else if let Ok(CellValue::Text(s)) =
-                        serde_json::from_value::<CellValue>(value.clone())
-                    {
-                        if !domain.contains(&s) {
-                            return false;
-                        }
-                    }
-                }
-            }
-        }
+        .collect()
+}
+
+/// `true` iff every enum-input seed in one `case` is a declared domain member.
+/// Non-enum cells and non-object inputs impose no constraint.
+fn case_seeded_values_allowed(
+    case: &ApprovalCase,
+    enum_domains: &BTreeMap<&str, &Vec<String>>,
+) -> bool {
+    let Value::Object(map) = &case.input else {
+        return true;
+    };
+    map.iter().all(|(cell, value)| {
+        enum_domains
+            .get(cell.as_str())
+            .is_none_or(|domain| seeded_value_in_domain(value, domain))
+    })
+}
+
+/// `true` iff a single seeded JSON `value` lies in the enum `domain`. A textual
+/// seed (raw JSON string or a `CellValue::Text`) must be a declared member; any
+/// non-text seed imposes no enum constraint and is accepted.
+fn seeded_value_in_domain(value: &Value, domain: &[String]) -> bool {
+    if let Value::String(s) = value {
+        return domain.contains(s);
     }
-    let _ = is_computed; // re-exported predicate kept available to the gate consumer
+    if let Ok(CellValue::Text(s)) = serde_json::from_value::<CellValue>(value.clone()) {
+        return domain.contains(&s);
+    }
     true
 }
 
