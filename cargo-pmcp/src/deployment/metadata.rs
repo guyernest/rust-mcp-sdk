@@ -75,6 +75,25 @@ pub struct McpMetadata {
     /// Extracted from config.toml or set directly in CloudFormation Metadata.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub available_operations: Option<AvailableOperations>,
+
+    /// Whether the server's snapshot is baked into the deployment artifact.
+    ///
+    /// Drives the `mcp:snapshotBaked` template/synth literal (DSTK-03). Defaults
+    /// to `false` and is skipped during serialization when `false` so servers
+    /// that do not opt in produce byte-identical JSON / CloudFormation metadata
+    /// (the Phase 98 backward-compat contract).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub snapshot_baked: bool,
+}
+
+/// Serde predicate: `true` when the bool is `false`.
+///
+/// Used by `McpMetadata::snapshot_baked`'s `skip_serializing_if` so the default
+/// (`false`) field is elided, keeping no-opt-in metadata byte-identical (DSTK-03
+/// backward-compat).
+#[allow(clippy::trivially_copy_pass_by_ref)]
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 /// Resource requirements for the server.
@@ -708,6 +727,7 @@ impl McpMetadata {
                 composition: manifest.features.composition_enabled,
             },
             available_operations: None,
+            snapshot_baked: false,
         })
     }
 
@@ -767,6 +787,7 @@ impl McpMetadata {
                     composition: false,
                 },
                 available_operations: None,
+                snapshot_baked: false,
             });
         }
 
@@ -787,6 +808,7 @@ impl McpMetadata {
             resources: ResourceRequirements::default(),
             capabilities: ServerCapabilities::default(),
             available_operations: None,
+            snapshot_baked: false,
         })
     }
 
@@ -819,7 +841,25 @@ impl McpMetadata {
             resources: ResourceRequirements::default(),
             capabilities: ServerCapabilities::default(),
             available_operations: None,
+            snapshot_baked: false,
         })
+    }
+
+    /// Apply operator `[metadata]` overrides from `.pmcp/deploy.toml`.
+    ///
+    /// When `config.server_type` is `Some`, it REPLACES the extracted/hardcoded
+    /// `server_type` (DSTK-02: lets a custom/pmcp.toml server advertise e.g.
+    /// `graph-rag` instead of the hardcoded `'custom'`). When
+    /// `config.snapshot_baked` is `Some`, it sets `snapshot_baked` (DSTK-03,
+    /// enabling the `mcp:snapshotBaked` literal). Absent fields leave the
+    /// extracted/default values untouched, preserving backward-compat.
+    pub fn apply_config_overrides(&mut self, config: &crate::deployment::config::MetadataConfig) {
+        if let Some(server_type) = &config.server_type {
+            self.server_type = server_type.clone();
+        }
+        if let Some(snapshot_baked) = config.snapshot_baked {
+            self.snapshot_baked = snapshot_baked;
+        }
     }
 
     /// Convert metadata to CDK context arguments.
@@ -840,6 +880,12 @@ impl McpMetadata {
 
         if let Some(ref template_version) = self.template_version {
             context.push(format!("-c 'mcp:templateVersion={}'", template_version));
+        }
+
+        // DSTK-03: only emit mcp:snapshotBaked when opted in, so non-opting
+        // servers' synth args are byte-identical (backward-compat).
+        if self.snapshot_baked {
+            context.push(format!("-c 'mcp:snapshotBaked={}'", self.snapshot_baked));
         }
 
         // Serialize resources as JSON with single quotes for shell safety
@@ -874,6 +920,12 @@ impl McpMetadata {
 
         if let Some(ref template_version) = self.template_version {
             metadata["mcp:templateVersion"] = serde_json::json!(template_version);
+        }
+
+        // DSTK-03: mirror the conditional to_cdk_context emission so non-opting
+        // servers' CloudFormation metadata is byte-identical.
+        if self.snapshot_baked {
+            metadata["mcp:snapshotBaked"] = serde_json::json!(self.snapshot_baked);
         }
 
         if let Some(ref ops) = self.available_operations {
@@ -1019,6 +1071,7 @@ description = "A test tool"
                 composition: false,
             },
             available_operations: None,
+            snapshot_baked: false,
         };
 
         let context = metadata.to_cdk_context();
@@ -1046,6 +1099,7 @@ description = "A test tool"
             resources: ResourceRequirements::default(),
             capabilities: ServerCapabilities::default(),
             available_operations: None,
+            snapshot_baked: false,
         };
 
         let cf_metadata = metadata.to_cloudformation_metadata();
@@ -1071,5 +1125,103 @@ version = "0.1.0"
 
         assert_eq!(metadata.server_type, "custom");
         assert_eq!(metadata.server_id, "my-mcp-server");
+    }
+
+    /// Build a minimal `custom` metadata fixture for the DSTK-02/03 tests.
+    fn custom_metadata() -> McpMetadata {
+        McpMetadata {
+            version: MCP_METADATA_VERSION.to_string(),
+            server_type: "custom".to_string(),
+            server_id: "my-server".to_string(),
+            template_id: None,
+            template_version: None,
+            resources: ResourceRequirements::default(),
+            capabilities: ServerCapabilities::default(),
+            available_operations: None,
+            snapshot_baked: false,
+        }
+    }
+
+    /// DSTK-02 + DSTK-03: `apply_config_overrides` replaces `server_type` and
+    /// sets `snapshot_baked` from a `[metadata]` block; absent fields are left
+    /// untouched.
+    #[test]
+    fn apply_config_overrides_replaces_server_type_and_sets_snapshot_baked() {
+        use crate::deployment::config::MetadataConfig;
+
+        let mut metadata = custom_metadata();
+        metadata.apply_config_overrides(&MetadataConfig {
+            server_type: Some("graph-rag".to_string()),
+            snapshot_baked: Some(true),
+        });
+
+        assert_eq!(metadata.server_type, "graph-rag");
+        assert!(metadata.snapshot_baked);
+
+        // Absent fields leave the values untouched.
+        let mut untouched = custom_metadata();
+        untouched.apply_config_overrides(&MetadataConfig::default());
+        assert_eq!(untouched.server_type, "custom");
+        assert!(!untouched.snapshot_baked);
+    }
+
+    /// DSTK-03: `to_cdk_context` emits `mcp:snapshotBaked=true` when opted in and
+    /// OMITS it when `false` (backward-compat byte-identity).
+    #[test]
+    fn to_cdk_context_snapshot_baked_is_conditional() {
+        let mut metadata = custom_metadata();
+
+        // Off by default → no snapshotBaked arg.
+        let off = metadata.to_cdk_context();
+        assert!(
+            !off.iter().any(|c| c.contains("mcp:snapshotBaked")),
+            "non-opting server must NOT emit mcp:snapshotBaked"
+        );
+
+        // Opted in → arg present.
+        metadata.snapshot_baked = true;
+        let on = metadata.to_cdk_context();
+        assert!(
+            on.iter().any(|c| c.contains("mcp:snapshotBaked=true")),
+            "opted-in server must emit mcp:snapshotBaked=true"
+        );
+    }
+
+    /// DSTK-02: a `[metadata].server_type` override surfaces in `to_cdk_context`
+    /// even for a `custom`/pmcp.toml server (previously forced to `'custom'`).
+    #[test]
+    fn config_server_type_override_surfaces_in_cdk_context() {
+        use crate::deployment::config::MetadataConfig;
+
+        let mut metadata = custom_metadata();
+        metadata.apply_config_overrides(&MetadataConfig {
+            server_type: Some("graph-rag".to_string()),
+            snapshot_baked: Some(true),
+        });
+
+        let context = metadata.to_cdk_context();
+        assert!(
+            context
+                .iter()
+                .any(|c| c.contains("mcp:serverType=graph-rag")),
+            "config server_type override must reach to_cdk_context"
+        );
+        assert!(
+            context.iter().any(|c| c.contains("mcp:snapshotBaked=true")),
+            "config snapshot_baked must reach to_cdk_context"
+        );
+    }
+
+    /// DSTK-03 backward-compat: a `false` `snapshot_baked` is elided from the
+    /// serialized JSON (no `snapshotBaked` key), keeping no-opt-in output
+    /// byte-identical.
+    #[test]
+    fn snapshot_baked_false_is_elided_from_json() {
+        let metadata = custom_metadata();
+        let json = serde_json::to_string(&metadata).expect("serialize");
+        assert!(
+            !json.contains("snapshot_baked") && !json.contains("snapshotBaked"),
+            "snapshot_baked=false must be elided from serialized JSON, got: {json}"
+        );
     }
 }
