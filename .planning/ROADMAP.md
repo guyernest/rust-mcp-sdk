@@ -976,7 +976,7 @@ Parking lot for unsequenced ideas. Items here aren't scheduled — promote with 
 
 **Requirements:** TBD
 
-**Plans:** 6/6 plans complete
+**Plans:** 11/11 plans complete
 
 Plans:
 
