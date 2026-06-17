@@ -202,6 +202,109 @@ fn recompute_evidence_hash(source: &dyn BundleSource) -> Result<String, BundleLo
     Ok(fold_evidence_hash(&members))
 }
 
+/// Enforce the FAIL-CLOSED membership allow-set (threat T-92-22): reject ANY
+/// member outside the frozen [`ALLOWED_MEMBERS`] set BEFORE parsing.
+fn enforce_member_allow_set(source: &dyn BundleSource) -> Result<(), BundleLoadError> {
+    let members = source
+        .list_artifacts()
+        .map_err(|e| BundleLoadError::Source {
+            member: "<list_artifacts>".to_string(),
+            detail: match e {
+                BundleSourceError::Io(d) => d,
+                BundleSourceError::NotFound { member } => format!("not found: {member}"),
+            },
+        })?;
+    for member in &members {
+        if !ALLOWED_MEMBERS.contains(&member.as_str()) {
+            return Err(BundleLoadError::UnexpectedMember {
+                member: member.clone(),
+            });
+        }
+    }
+    Ok(())
+}
+
+/// Decode one member's bytes as UTF-8, mapping a non-UTF-8 body to
+/// [`BundleLoadError::Parse`] (the integrity recompute hashes the JSON text).
+fn member_utf8<'a>(bytes: &'a [u8], what: &str) -> Result<&'a str, BundleLoadError> {
+    std::str::from_utf8(bytes).map_err(|e| BundleLoadError::Parse {
+        what: what.to_string(),
+        detail: e.to_string(),
+    })
+}
+
+/// Parse the lock then recompute integrity via the runtime's OWN hasher
+/// (threat T-92-01), failing closed on any artifact/combined-hash mismatch.
+///
+/// Returns the verified lock plus the raw IR/manifest bytes (already read here)
+/// so the caller parses them ONCE without re-reading the source.
+fn verify_integrity(
+    source: &dyn BundleSource,
+) -> Result<(BundleLock, Vec<u8>, Vec<u8>), BundleLoadError> {
+    let lock_bytes = read_member(source, MEMBER_LOCK)?;
+    let lock: BundleLock = parse_member(&lock_bytes, MEMBER_LOCK)?;
+
+    let ir_bytes = read_member(source, MEMBER_IR)?;
+    let manifest_bytes = read_member(source, MEMBER_MANIFEST)?;
+
+    let evidence_hash = recompute_evidence_hash(source)?;
+    let ir_json = member_utf8(&ir_bytes, MEMBER_IR)?;
+    let manifest_json = member_utf8(&manifest_bytes, MEMBER_MANIFEST)?;
+    let recomputed = build_bundle_lock(
+        &lock.bundle_id,
+        &lock.version,
+        lock.workbook_hash.clone(),
+        ir_json,
+        manifest_json,
+        &evidence_hash,
+    );
+    if recomputed.artifacts != lock.artifacts || recomputed.combined != lock.combined {
+        return Err(BundleLoadError::IntegrityMismatch {
+            expected: lock.combined,
+            recomputed: recomputed.combined,
+            expected_evidence: lock.artifacts.evidence,
+            recomputed_evidence: evidence_hash,
+        });
+    }
+
+    Ok((lock, ir_bytes, manifest_bytes))
+}
+
+/// The total + panic-free parse of every member needed to assemble the bundle
+/// (threat T-92-04). The IR/manifest bytes were already read by the integrity
+/// step, so they are parsed from the passed-in bytes rather than re-read.
+struct ParsedMembers {
+    ir: HashMap<String, Cell>,
+    manifest: Manifest,
+    cell_map: CellMap,
+    layout: LayoutDescriptor,
+    changelog: VersionChangelog,
+}
+
+/// Parse every bundle member into its typed value (threat T-92-04). `ir_bytes`
+/// and `manifest_bytes` come from [`verify_integrity`]; the remaining members
+/// are read here.
+fn parse_members(
+    source: &dyn BundleSource,
+    ir_bytes: &[u8],
+    manifest_bytes: &[u8],
+) -> Result<ParsedMembers, BundleLoadError> {
+    let ir: HashMap<String, Cell> = parse_member(ir_bytes, MEMBER_IR)?;
+    let manifest: Manifest = parse_member(manifest_bytes, MEMBER_MANIFEST)?;
+    let cell_map: CellMap = parse_member(&read_member(source, MEMBER_CELL_MAP)?, MEMBER_CELL_MAP)?;
+    let layout: LayoutDescriptor =
+        parse_member(&read_member(source, MEMBER_LAYOUT)?, MEMBER_LAYOUT)?;
+    let changelog: VersionChangelog =
+        parse_member(&read_member(source, MEMBER_CHANGELOG)?, MEMBER_CHANGELOG)?;
+    Ok(ParsedMembers {
+        ir,
+        manifest,
+        cell_map,
+        layout,
+        changelog,
+    })
+}
+
 /// Cross-check the lock's identity/provenance triple against independently
 /// hash-covered members (threat T-92-02). The recompute necessarily feeds the
 /// lock's own `bundle_id`/`version`/`workbook_hash` from the lock itself, so a
@@ -266,81 +369,34 @@ fn verify_stamp_binding(
 /// [`BundleLoadError::Parse`] for malformed JSON, or
 /// [`BundleLoadError::Source`] for a read failure.
 pub fn load(source: &dyn BundleSource) -> Result<WorkbookBundle, BundleLoadError> {
-    // 1. Fail-closed membership policy (threat T-92-22): reject ANY member
-    //    outside the frozen allow-set BEFORE parsing.
-    let members = source
-        .list_artifacts()
-        .map_err(|e| BundleLoadError::Source {
-            member: "<list_artifacts>".to_string(),
-            detail: match e {
-                BundleSourceError::Io(d) => d,
-                BundleSourceError::NotFound { member } => format!("not found: {member}"),
-            },
-        })?;
-    for member in &members {
-        if !ALLOWED_MEMBERS.contains(&member.as_str()) {
-            return Err(BundleLoadError::UnexpectedMember {
-                member: member.clone(),
-            });
-        }
-    }
+    // 1. Fail-closed membership policy (threat T-92-22).
+    enforce_member_allow_set(source)?;
 
-    // 2. Parse the lock + recompute integrity via the runtime's OWN hasher.
-    let lock_bytes = read_member(source, MEMBER_LOCK)?;
-    let lock: BundleLock = parse_member(&lock_bytes, MEMBER_LOCK)?;
+    // 2. Parse the lock + recompute integrity via the runtime's OWN hasher
+    //    (threat T-92-01), reusing the IR/manifest bytes it already read.
+    let (lock, ir_bytes, manifest_bytes) = verify_integrity(source)?;
 
-    let ir_bytes = read_member(source, MEMBER_IR)?;
-    let manifest_bytes = read_member(source, MEMBER_MANIFEST)?;
-
-    let evidence_hash = recompute_evidence_hash(source)?;
-    let ir_json = std::str::from_utf8(&ir_bytes).map_err(|e| BundleLoadError::Parse {
-        what: MEMBER_IR.to_string(),
-        detail: e.to_string(),
-    })?;
-    let manifest_json =
-        std::str::from_utf8(&manifest_bytes).map_err(|e| BundleLoadError::Parse {
-            what: MEMBER_MANIFEST.to_string(),
-            detail: e.to_string(),
-        })?;
-    let recomputed = build_bundle_lock(
-        &lock.bundle_id,
-        &lock.version,
-        lock.workbook_hash.clone(),
-        ir_json,
-        manifest_json,
-        &evidence_hash,
-    );
-    if recomputed.artifacts != lock.artifacts || recomputed.combined != lock.combined {
-        return Err(BundleLoadError::IntegrityMismatch {
-            expected: lock.combined,
-            recomputed: recomputed.combined,
-            expected_evidence: lock.artifacts.evidence,
-            recomputed_evidence: evidence_hash,
-        });
-    }
-
-    // 3. Parse the remaining members (total + panic-free; threat T-92-04).
-    let ir: HashMap<String, Cell> = parse_member(&ir_bytes, MEMBER_IR)?;
-    let manifest: Manifest = parse_member(&manifest_bytes, MEMBER_MANIFEST)?;
-    let cell_map: CellMap = parse_member(&read_member(source, MEMBER_CELL_MAP)?, MEMBER_CELL_MAP)?;
-    let layout: LayoutDescriptor =
-        parse_member(&read_member(source, MEMBER_LAYOUT)?, MEMBER_LAYOUT)?;
-    let changelog: VersionChangelog =
-        parse_member(&read_member(source, MEMBER_CHANGELOG)?, MEMBER_CHANGELOG)?;
+    // 3. Parse every member (total + panic-free; threat T-92-04).
+    let members = parse_members(source, &ir_bytes, &manifest_bytes)?;
 
     // 4. Cross-check the provenance triple (threat T-92-02).
-    verify_stamp_binding(&lock, &manifest, &layout, &changelog)?;
+    verify_stamp_binding(
+        &lock,
+        &members.manifest,
+        &members.layout,
+        &members.changelog,
+    )?;
 
     // 5. Build the per-cell DAG ONCE at load.
-    let dag = build_dag(&ir);
+    let dag = build_dag(&members.ir);
 
     Ok(WorkbookBundle {
-        ir,
+        ir: members.ir,
         dag,
-        manifest,
-        cell_map,
-        layout,
-        changelog,
+        manifest: members.manifest,
+        cell_map: members.cell_map,
+        layout: members.layout,
+        changelog: members.changelog,
         stamp: lock,
     })
 }
