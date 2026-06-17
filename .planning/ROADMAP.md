@@ -1963,4 +1963,4 @@ Plans:
 
 **Wave 2** *(blocked on all of Wave 1)*
 
-- [ ] 99-11-PLAN.md — gate-closure verification: `pmat quality-gate --checks complexity` zero violations + full workspace tests + `make quality-gate` green; assert no `.pmatignore`/`#[allow]` weakening [CPLX-01/02/03/04]
+- [x] 99-11-PLAN.md — gate-closure verification: `pmat quality-gate --checks complexity` zero violations + full workspace tests + `make quality-gate` green; assert no `.pmatignore`/`#[allow]` weakening [CPLX-01/02/03/04]
