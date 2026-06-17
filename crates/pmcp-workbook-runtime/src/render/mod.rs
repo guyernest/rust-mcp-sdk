@@ -225,110 +225,179 @@ fn replay_merges(
 /// Output is via `save_to_buffer()` ONLY — never a file path (Lambda-safe,
 /// RESEARCH Pitfall 6).
 pub fn render_xlsx(layout: &LayoutDescriptor, run: &RunResult) -> Result<Vec<u8>, RenderError> {
-    let mut wb = Workbook::new();
+    let mut wb = init_workbook()?;
+    for sheet in &layout.sheets {
+        let ws = wb.add_worksheet();
+        render_sheet(ws, sheet, run)?;
+    }
+    wb.save_to_buffer().map_err(writer_err)
+}
 
-    // DETERMINISM FIRST (review item 8, T-12-15): pin the document properties so
-    // no per-render creation timestamp / author / metadata leaks into the bytes.
+/// Build the workbook with its determinism-pinned document properties (review
+/// item 8, T-12-15): a FIXED creation datetime + empty author so two renders of
+/// the same `(layout, run)` are byte-identical.
+fn init_workbook() -> Result<Workbook, RenderError> {
+    let mut wb = Workbook::new();
     let props = DocProperties::new()
         .set_author("")
         .set_creation_datetime(&fixed_creation_datetime()?);
     wb.set_properties(&props);
+    Ok(wb)
+}
 
-    for sheet in &layout.sheets {
-        let ws = wb.add_worksheet();
-        ws.set_name(&sheet.name).map_err(writer_err)?;
-        if sheet.hidden {
-            ws.set_hidden(true);
-        }
-        // Per-column widths + hidden columns (best-effort, deterministic order).
-        for (col_1based, width) in &sheet.col_widths {
-            if let Some(col) = col_1based.checked_sub(1) {
-                ws.set_column_width(col, *width).map_err(writer_err)?;
-            }
-        }
-        for col_1based in &sheet.hidden_cols {
-            if let Some(col) = col_1based.checked_sub(1) {
-                ws.set_column_hidden(col).map_err(writer_err)?;
-            }
-        }
+/// Render a single sheet: scaffold (name/hidden/columns) → top-left text map →
+/// merge replay → per-cell value injection. A thin per-sheet orchestrator over
+/// the three phase helpers; the per-cell write order is preserved exactly so
+/// output stays byte-deterministic.
+fn render_sheet(
+    ws: &mut rust_xlsxwriter::Worksheet,
+    sheet: &SheetLayout,
+    run: &RunResult,
+) -> Result<(), RenderError> {
+    apply_sheet_scaffold(ws, sheet)?;
+    // PASS 1: resolve each cell's merge-top-left display TEXT so a merge can
+    // fetch it without re-deriving (also validates each addr panic-free).
+    let top_left_text = build_top_left_text(sheet, run)?;
+    // Replay merges first (top-left only); collect interior coords to skip.
+    let interior = replay_merges(ws, sheet, &top_left_text)?;
+    // PASS 2: write every non-merge-interior cell, injecting computed values.
+    for cell in &sheet.cells {
+        write_cell(ws, sheet, run, cell, &interior)?;
+    }
+    Ok(())
+}
 
-        // PASS 1: resolve each cell to (row, col) + the text/value it would
-        // carry, so a merge can fetch its top-left text without re-deriving it.
-        // We also stash the merge top-left TEXT for write-via-merge_range.
-        let mut top_left_text: HashMap<(u32, u16), String> = HashMap::new();
-        for cell in &sheet.cells {
-            // Validate the addr up front (panic-free): a bad addr is an Err.
-            if a1_to_zero_indexed_row_col(&cell.addr).is_none() {
-                // Distinguish a genuinely malformed addr from one parse_a1
-                // rejects only because it overflows u16: parse_a1 succeeding but
-                // the conversion failing is still malformed-for-the-writer.
-                let _ = parse_a1(&cell.addr); // documents the reuse; result unused
-                return Err(RenderError::MalformedAddr {
-                    sheet: sheet.name.clone(),
-                    addr: cell.addr.clone(),
-                });
-            }
-            let key = cell_key(&sheet.name, &cell.addr);
-            // The text a merged top-left should display: prefer the computed
-            // value, else the descriptor's captured value text.
-            let display = match run.computed.get(&key) {
-                Some(CellValue::Number(n)) if n.is_finite() => Some(format_number(*n)),
-                Some(CellValue::Number(_)) => {
-                    return Err(RenderError::NonFiniteValue { cell: key })
-                },
-                Some(CellValue::Text(s)) => Some(s.clone()),
-                Some(CellValue::Bool(b)) => Some(b.to_string()),
-                _ => cell.value.clone(),
-            };
-            if let (Some((r, c)), Some(text)) = (a1_to_zero_indexed_row_col(&cell.addr), display) {
-                top_left_text.insert((r, c), text);
-            }
-        }
-
-        // Replay merges first (top-left only); collect interior coords to skip.
-        let interior = replay_merges(ws, sheet, &top_left_text)?;
-
-        // PASS 2: write every non-merge-interior cell, injecting computed values.
-        for cell in &sheet.cells {
-            let (row, col) = a1_to_zero_indexed_row_col(&cell.addr).ok_or_else(|| {
-                RenderError::MalformedAddr {
-                    sheet: sheet.name.clone(),
-                    addr: cell.addr.clone(),
-                }
-            })?;
-            if interior.contains(&(row, col)) {
-                continue; // merge_range already owns this coordinate
-            }
-            let key = cell_key(&sheet.name, &cell.addr);
-            let computed = run.computed.get(&key);
-            let fmt = cell_format(cell);
-
-            match computed {
-                Some(CellValue::Number(n)) => {
-                    // WR-06 / T-12-05: a non-finite computed number is never
-                    // written as a bogus cell — fail loud.
-                    if !n.is_finite() {
-                        return Err(RenderError::NonFiniteValue { cell: key });
-                    }
-                    write_number_cell(ws, row, col, cell, *n, fmt.as_ref())?;
-                },
-                Some(CellValue::Text(s)) => write_string_cell(ws, row, col, s, fmt.as_ref())?,
-                Some(CellValue::Bool(b)) => {
-                    write_string_cell(ws, row, col, &b.to_string(), fmt.as_ref())?;
-                },
-                // Error / Empty / not-computed: fall back to the captured value
-                // text (the descriptor's "copy of the workbook" content) so a
-                // non-output cell still renders its original literal.
-                _ => {
-                    if let Some(v) = &cell.value {
-                        write_string_cell(ws, row, col, v, fmt.as_ref())?;
-                    }
-                },
-            }
+/// Apply the sheet-level scaffold: name, hidden flag, per-column widths and
+/// hidden columns (best-effort, deterministic descriptor order).
+fn apply_sheet_scaffold(
+    ws: &mut rust_xlsxwriter::Worksheet,
+    sheet: &SheetLayout,
+) -> Result<(), RenderError> {
+    ws.set_name(&sheet.name).map_err(writer_err)?;
+    if sheet.hidden {
+        ws.set_hidden(true);
+    }
+    for (col_1based, width) in &sheet.col_widths {
+        if let Some(col) = col_1based.checked_sub(1) {
+            ws.set_column_width(col, *width).map_err(writer_err)?;
         }
     }
+    for col_1based in &sheet.hidden_cols {
+        if let Some(col) = col_1based.checked_sub(1) {
+            ws.set_column_hidden(col).map_err(writer_err)?;
+        }
+    }
+    Ok(())
+}
 
-    wb.save_to_buffer().map_err(writer_err)
+/// PASS 1: resolve each cell to `(row, col)` + the text it would carry, so a
+/// merge can fetch its top-left text without re-deriving it. Validates each addr
+/// up front (panic-free — a bad addr is an `Err`) and rejects a non-finite
+/// computed number (T-12-05) before it can leak into a merged cell.
+fn build_top_left_text(
+    sheet: &SheetLayout,
+    run: &RunResult,
+) -> Result<HashMap<(u32, u16), String>, RenderError> {
+    let mut top_left_text: HashMap<(u32, u16), String> = HashMap::new();
+    for cell in &sheet.cells {
+        // Validate the addr up front (panic-free): a bad addr is an Err.
+        if a1_to_zero_indexed_row_col(&cell.addr).is_none() {
+            // Distinguish a genuinely malformed addr from one parse_a1 rejects
+            // only because it overflows u16: parse_a1 succeeding but the
+            // conversion failing is still malformed-for-the-writer.
+            let _ = parse_a1(&cell.addr); // documents the reuse; result unused
+            return Err(RenderError::MalformedAddr {
+                sheet: sheet.name.clone(),
+                addr: cell.addr.clone(),
+            });
+        }
+        let key = cell_key(&sheet.name, &cell.addr);
+        let display = display_text(run, &key, cell)?;
+        if let (Some((r, c)), Some(text)) = (a1_to_zero_indexed_row_col(&cell.addr), display) {
+            top_left_text.insert((r, c), text);
+        }
+    }
+    Ok(top_left_text)
+}
+
+/// The text a merged top-left should display: prefer the computed value, else
+/// the descriptor's captured value text. A non-finite computed number is an
+/// `Err` (T-12-05), never a bogus merged cell.
+fn display_text(
+    run: &RunResult,
+    key: &str,
+    cell: &CellLayout,
+) -> Result<Option<String>, RenderError> {
+    let display = match run.computed.get(key) {
+        Some(CellValue::Number(n)) if n.is_finite() => Some(format_number(*n)),
+        Some(CellValue::Number(_)) => {
+            return Err(RenderError::NonFiniteValue {
+                cell: key.to_string(),
+            })
+        },
+        Some(CellValue::Text(s)) => Some(s.clone()),
+        Some(CellValue::Bool(b)) => Some(b.to_string()),
+        _ => cell.value.clone(),
+    };
+    Ok(display)
+}
+
+/// PASS 2: write a single non-merge-interior cell, injecting its computed value.
+/// A coordinate owned by a merge range is skipped (merge_range already wrote it).
+fn write_cell(
+    ws: &mut rust_xlsxwriter::Worksheet,
+    sheet: &SheetLayout,
+    run: &RunResult,
+    cell: &CellLayout,
+    interior: &MergeInterior,
+) -> Result<(), RenderError> {
+    let (row, col) =
+        a1_to_zero_indexed_row_col(&cell.addr).ok_or_else(|| RenderError::MalformedAddr {
+            sheet: sheet.name.clone(),
+            addr: cell.addr.clone(),
+        })?;
+    if interior.contains(&(row, col)) {
+        return Ok(()); // merge_range already owns this coordinate
+    }
+    let key = cell_key(&sheet.name, &cell.addr);
+    let computed = run.computed.get(&key);
+    let fmt = cell_format(cell);
+    write_computed_value(ws, row, col, cell, computed, key, fmt.as_ref())
+}
+
+/// Dispatch a cell's computed value to the right writer (flat match): a finite
+/// number → number/formula cell; text/bool → string cell; error/empty/not-computed
+/// → fall back to the captured literal. A non-finite number is an `Err` (T-12-05).
+fn write_computed_value(
+    ws: &mut rust_xlsxwriter::Worksheet,
+    row: u32,
+    col: u16,
+    cell: &CellLayout,
+    computed: Option<&CellValue>,
+    key: String,
+    fmt: Option<&Format>,
+) -> Result<(), RenderError> {
+    match computed {
+        Some(CellValue::Number(n)) => {
+            // WR-06 / T-12-05: a non-finite computed number is never written as
+            // a bogus cell — fail loud.
+            if !n.is_finite() {
+                return Err(RenderError::NonFiniteValue { cell: key });
+            }
+            write_number_cell(ws, row, col, cell, *n, fmt)?;
+        },
+        Some(CellValue::Text(s)) => write_string_cell(ws, row, col, s, fmt)?,
+        Some(CellValue::Bool(b)) => write_string_cell(ws, row, col, &b.to_string(), fmt)?,
+        // Error / Empty / not-computed: fall back to the captured value text (the
+        // descriptor's "copy of the workbook" content) so a non-output cell still
+        // renders its original literal.
+        _ => {
+            if let Some(v) = &cell.value {
+                write_string_cell(ws, row, col, v, fmt)?;
+            }
+        },
+    }
+    Ok(())
 }
 
 /// Format a finite f64 for a fallback text cell deterministically. Full-precision
