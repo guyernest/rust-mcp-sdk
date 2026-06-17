@@ -3,6 +3,18 @@
 
 use std::sync::{Mutex, MutexGuard};
 
+/// The synthetic tax-calc golden bundle generator (Phase 92 Plan 02 Task 1).
+///
+/// Gated behind the `workbook` feature so the no-`workbook` test binaries (which
+/// link this `support` module but not `pmcp-workbook-runtime`) still compile.
+#[cfg(feature = "workbook")]
+pub mod fixture_gen;
+
+/// Copy-to-tempdir + corrupt tamper helpers for the WBSV-06/08 negative paths
+/// (Phase 92 Plan 02 Task 3, D-05 — no committed corrupt fixtures).
+#[cfg(feature = "workbook")]
+pub mod tamper;
+
 /// Per-test-binary lock serializing tests that read or mutate the shared
 /// process environment via `std::env::{set_var, remove_var}`.
 ///

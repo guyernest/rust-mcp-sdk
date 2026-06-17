@@ -1,5 +1,11 @@
 # Milestones
 
+## v2.0 Roadmap: MCP Tasks for PMCP SDK (Backfilled: 2026-06-11)
+
+**Note:** Synthesized from archive snapshot by `/gsd:health --backfill`. Original completion date unknown.
+
+---
+
 ## v1.0 MCP Tasks Foundation (Shipped: 2026-02-22)
 
 **Phases completed:** 3 phases, 9 plans
@@ -9,6 +15,7 @@
 **Delivered:** Complete MCP Tasks support for the PMCP SDK — from spec-compliant protocol types through in-memory storage with security enforcement to full server integration with task-augmented tool calls, lifecycle polling, and working examples.
 
 **Key accomplishments:**
+
 1. Complete MCP 2025-11-25 Tasks wire types with spec-compliant serialization (10 protocol types, state machine with validated transitions)
 2. In-memory task store with DashMap concurrency, owner isolation, and configurable security limits (max tasks, TTL, anonymous access)
 3. TaskContext ergonomic wrapper with typed variable accessors and atomic completion
@@ -20,7 +27,6 @@
 
 ---
 
-
 ## v1.1 Task-Prompt Bridge (Shipped: 2026-02-23)
 
 **Phases completed:** 5 phases, 10 plans
@@ -30,6 +36,7 @@
 **Delivered:** Task-prompt bridge for the PMCP SDK — workflow prompts create tasks, execute server-resolvable steps, return structured handoff with remaining step guidance, and support client continuation via `_task_id` binding.
 
 **Key accomplishments:**
+
 1. Task-aware workflow composition via `TaskWorkflowPromptHandler` that wraps `WorkflowPromptHandler` with zero modification to existing behavior
 2. Active execution engine that creates tasks, runs server-resolvable steps sequentially, and pauses at client-deferred steps with typed `PauseReason` diagnostics
 3. Hybrid handoff format with `_meta` JSON for machine parsing plus natural language narrative, including resolved arguments and remaining step guidance
@@ -41,7 +48,6 @@
 
 ---
 
-
 ## v1.2 Pluggable Storage Backends (Shipped: 2026-02-24)
 
 **Phases completed:** 5 phases, 9 plans, 15 tasks
@@ -51,6 +57,7 @@
 **Delivered:** Pluggable KV storage backend layer for MCP Tasks — StorageBackend trait with GenericTaskStore centralizing all domain logic, InMemoryBackend refactored from existing store, plus production-ready DynamoDB and Redis backends behind feature flags with automated feature-flag verification in CI.
 
 **Key accomplishments:**
+
 1. StorageBackend async trait with 6 KV methods and GenericTaskStore<B> implementing all 11 domain operations once, backend-agnostically
 2. InMemoryBackend refactor replacing InMemoryTaskStore internals with GenericTaskStore<InMemoryBackend> — zero behavioral changes, all 500+ tests pass unchanged
 3. DynamoDbBackend with single-table design (composite keys), CAS via ConditionExpression, native TTL, behind `dynamodb` feature flag with 18 cloud integration tests
@@ -61,7 +68,6 @@
 
 ---
 
-
 ## v1.3 MCP Apps Developer Experience (Shipped: 2026-02-26)
 
 **Phases completed:** 6 phases, 12 plans, 23 tasks
@@ -71,6 +77,7 @@
 **Delivered:** Production-ready MCP Apps developer experience for the PMCP SDK — from `cargo pmcp app new` scaffolding through `cargo pmcp preview` with dual bridge modes to `cargo pmcp app build` for ChatGPT manifest and demo landing page generation, with 20 E2E browser tests proving the full widget pipeline.
 
 **Key accomplishments:**
+
 1. Session-persistent MCP proxy with resource picker, bridge call logging in DevTools, and connection status lifecycle in preview UI
 2. WASM in-browser MCP client with proxy/WASM toggle, CallToolResult response normalization, and standalone widget-runtime.js polyfill
 3. MCP Apps-aligned TypeScript bridge library (App, PostMessageTransport, AppBridge) eliminating ~250 lines of duplicated inline JavaScript
@@ -81,12 +88,12 @@
 **Requirements:** 26/26 satisfied (PREV-01..07, WASM-01..05, DEVX-01..07, PUBL-01..02, SHIP-01..05)
 
 ### Known Tech Debt
+
 - Dual `inject_bridge_script` implementations (mcp-preview vs pmcp core) — architectural decision, not a bug
 - E2E tests use mock bridge injection (CDP), not the real postMessage bridge chain
 - Unused API endpoints in preview server (GET /api/status, GET /ws)
 
 ---
-
 
 ## v1.4 Book & Course Update (Shipped: 2026-02-28)
 
@@ -97,6 +104,7 @@
 **Delivered:** Complete documentation update for pmcp-book and pmcp-course — load testing chapters, MCP Apps chapter refreshes, quizzes, exercises, and cross-references wiring book and course content together.
 
 **Key accomplishments:**
+
 1. Book Ch 14 (Performance & Load Testing): 961-line comprehensive chapter covering `cargo pmcp loadtest` CLI, TOML config, flat/staged execution, HdrHistogram metrics, breaking point detection, coordinated omission, and CI/CD integration
 2. Book Ch 12.5 (MCP Apps): 1294-line complete rewrite with WidgetDir file-based authoring, `cargo pmcp app` workflow, multi-platform adapter pattern, and chess/map/dataviz example walkthroughs
 3. Course Ch 18-03: 952-line hands-on load testing tutorial with progressive difficulty from first test through capacity planning
@@ -106,6 +114,7 @@
 **Requirements:** 19/19 satisfied (BKLT-01..04, BKAP-01..04, CRLT-01..04, CRAP-01..03, CRQE-01..04)
 
 ### Known Tech Debt
+
 - ch18-operations.toml quiz not embedded via `{{#quiz}}` in any course page
 - loadtest.ai.toml exercise not embedded via `{{#exercise}}` in ch18-exercises.md
 - ch19-exercises.md links to old ch20-applications.md instead of ch20-mcp-apps.md
@@ -113,4 +122,3 @@
 - ch18-operations.md is a 1-line stub
 
 ---
-

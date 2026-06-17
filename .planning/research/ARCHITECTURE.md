@@ -1,381 +1,283 @@
-# Architecture Research: rmcp Documentation/DX Upgrades
+# Architecture Research: Excel-as-Configuration → MCP-server compiler (v2.3 extraction)
 
-**Domain:** Rust crate documentation, docs.rs presentation, developer experience
-**Researched:** 2026-04-10
-**Overall confidence:** HIGH (direct codebase comparison, no external sources needed)
+**Domain:** Compile-not-interpret workbook→MCP-server toolchain extracted into the PMCP SDK
+**Researched:** 2026-06-09
+**Overall confidence:** HIGH (direct read of the lighthouse crates + the SDK integration targets; mirrors a proven v0.5.0 reference impl)
 
 ## Executive Summary
 
-PMCP has significant documentation architecture gaps compared to rmcp. The issues fall into six categories: (1) docs.rs feature metadata uses `all-features = true` which hides feature gate information from users, (2) the examples/README.md is literally a copy of the Spin framework README -- completely bogus, (3) the pmcp-macros README documents deprecated `#[tool]`/`#[tool_router]` but not the current `#[mcp_tool]`/`#[mcp_server]`/`#[mcp_prompt]`/`#[mcp_resource]` macros, (4) only 7 out of ~131 feature-gated items have `cfg_attr(docsrs, doc(cfg(...)))` annotations, (5) lib.rs crate docs use inline doc comments instead of the README-as-docs pattern, and (6) these changes have a specific dependency order that must be followed.
+The v2.3 milestone extracts a working, penny-reconciled Excel-workbook compiler from the `towelrads-quote-pricing` lighthouse into the SDK as a new "governed Excel" CodeLanguage, slotting alongside the v2.2 SQL and OpenAPI toolkits. The lighthouse already enforces the load-bearing architectural invariant — **the Excel reader (`umya`) never enters the served-binary dependency tree** — via a two-crate split (`workbook-runtime` reader-free leaf, `workbook-compiler` umya-owning offline pipeline) that a `cargo-tree`-provable purity gate asserts. The SDK extraction mirrors this exactly into `pmcp-workbook-runtime` + `pmcp-workbook-compiler`.
 
-## Recommended Architecture
+The served-tool layer in the lighthouse (`quote-pricing-server/src/workbook/`) is **already ~95% workbook-agnostic** — its schema projection (`schema.rs`), input validation (`input.rs`), and tier enforcement all read from the embedded `Manifest`, not from per-workbook Rust. The single hardcoded seam is `build_reference_manifest` in `workbook-compiler/src/lib.rs`, which inlines the lighthouse's `heat_source` input as a Rust literal. The §5 generalization is therefore **narrower than it looks**: the served projection is reusable as-is; what must change is that the *compiler* must synthesize `manifest.json` purely from the workbook (it already has `manifest::synthesize` — the candidate synthesizer), and `build_reference_manifest` must be deleted in favor of a generic bundle-emit driver.
 
-### Component 1: docs.rs Feature Metadata (Cargo.toml)
+Shape A is a thin `pmcp-workbook-server` binary that mirrors `pmcp-sql-server` exactly (lib `run`/`serve` + thin `main.rs` shim), differing only in that the "backend" is a `BundleSource` (where the compiled bundle is read from) rather than a SQL connector. Shape B is `cargo pmcp new --kind workbook-server`, a new arm in the existing `new.rs` `--kind` switch with a `templates::workbook_server` module mirroring `templates::sql_server`. The CLI gains `cargo pmcp compile-workbook`/`lint-workbook`/`emit-bundle` as new command modules under `cargo-pmcp/src/commands/`, each a thin shell over `pmcp-workbook-compiler` (which owns umya — so the **compiler is a dependency of cargo-pmcp**, never of the runtime/server). A project-level `pmcp.toml` maps workbook files → bundle IDs so the single-workbook lighthouse assumptions (`ufh-quote`, hardcoded paths) generalize.
 
-**Current state (PMCP):**
-```toml
-[package.metadata.docs.rs]
-all-features = true
-rustdoc-args = ["--cfg", "docsrs"]
-```
+The recommended build order ports `pmcp-workbook-runtime` first (RFC §7 — smallest cut, zero reader deps, already serde/schemars-clean), then the served-tool toolkit module against it, then the compiler + CLI with the §5 generalization fixes (manifest-driven emit, CR-01/CR-02/WR-01, umya provenance), then the Shape-A binary and Shape-B scaffold last. Porting the runtime first proves the purity boundary before any umya code lands.
 
-**rmcp's approach:**
-```toml
-[package.metadata.docs.rs]
-features = [
-  "auth", "client", "macros", "server",
-  "transport-io", "transport-child-process",
-  "transport-streamable-http-server",
-  # ... explicit list of every feature
-]
-rustdoc-args = ["--cfg", "docsrs"]
-```
+## Standard Architecture
 
-**Problem with `all-features = true`:** It enables every feature including test-helpers, unstable, simd, authentication_example, cancellation_example, progress_example, wasm, wasi-http, etc. This means:
-1. Test scaffolding and example-only features leak into docs
-2. Mutually exclusive features (wasm vs non-wasm) may conflict
-3. Users cannot see which items require which features -- everything appears unconditionally available
+### System Overview — the two dependency spines
 
-**Recommendation:** Replace `all-features = true` with an explicit feature list. Include all user-facing features, exclude internal/test/example features.
-
-**Explicit feature list for PMCP:**
-```toml
-[package.metadata.docs.rs]
-features = [
-  "websocket",
-  "http",
-  "streamable-http",
-  "sse",
-  "validation",
-  "resource-watcher",
-  "schema-generation",
-  "jwt-auth",
-  "composition",
-  "mcp-apps",
-  "http-client",
-  "logging",
-  "macros",
-  "oauth",
-]
-rustdoc-args = ["--cfg", "docsrs"]
-```
-
-Excluded: `wasm`, `websocket-wasm`, `wasm-tokio`, `wasi-http` (platform-specific, not buildable together with native), `full` (redundant -- list individual features), `test-helpers`, `unstable`, `simd`, `rayon`, `authentication_example`, `cancellation_example`, `progress_example`.
-
-### Component 2: Feature Gate Annotations (cfg_attr docsrs)
-
-**Current state (PMCP):** 7 annotations across 3 files (lib.rs, server/mod.rs, types/mod.rs).
-
-**Current state (rmcp):** Only 1 annotation (lib.rs preamble). rmcp relies on `cfg_attr(docsrs, feature(doc_cfg))` in lib.rs but does NOT systematically annotate individual items -- they rely on Rust nightly `doc_cfg` auto-detection instead.
-
-**Key insight:** The `#![cfg_attr(docsrs, feature(doc_cfg))]` attribute in lib.rs enables the unstable `doc_cfg` feature on docs.rs nightly builds. When combined with `--cfg docsrs`, this causes rustdoc to **automatically** display feature requirements for items behind `#[cfg(feature = "...")]`. The manual `#[cfg_attr(docsrs, doc(cfg(feature = "...")))]` annotations are only needed when the auto-detection does not work correctly (e.g., complex conditional compilation with `all()`, `any()`, or platform-specific gates).
-
-**However**, PMCP has many items gated on compound conditions like `#[cfg(all(not(target_arch = "wasm32"), feature = "mcp-apps"))]` where auto-detection would show the full compound condition. Manual annotation with just `doc(cfg(feature = "mcp-apps"))` provides a cleaner user-facing label.
-
-**Recommendation:** Add `cfg_attr(docsrs, doc(cfg(...)))` annotations to:
-1. All public modules gated on features in lib.rs, server/mod.rs, shared/mod.rs, types/mod.rs
-2. All public re-exports gated on features in lib.rs
-3. Feature-gated public items in server builder methods
-4. Skip internal/private items -- they are not visible in docs anyway
-
-**Priority targets (public-facing modules):**
-
-| File | Module/Item | Feature | Has annotation? |
-|------|------------|---------|-----------------|
-| lib.rs | `pub mod composition` | composition | YES |
-| lib.rs | `pub mod axum` | streamable-http | YES |
-| lib.rs | `pub use tower_layers::*` | streamable-http | NO |
-| lib.rs | `pub use pmcp_macros::*` | macros | NO |
-| lib.rs | `pub use WebSocketTransport` | websocket | NO |
-| lib.rs | `pub use HttpTransport` | http | NO |
-| server/mod.rs | `pub mod axum_router` | streamable-http | YES |
-| server/mod.rs | `pub mod tower_layers` | streamable-http | YES |
-| server/mod.rs | `pub mod mcp_apps` | mcp-apps | YES |
-| server/mod.rs | `pub mod schema_utils` | schema-generation | NO |
-| server/mod.rs | `pub mod streamable_http_server` | streamable-http | NO |
-| server/mod.rs | `pub mod resource_watcher` | resource-watcher | NO |
-| shared/mod.rs | `pub mod websocket` | websocket | NO |
-| shared/mod.rs | `pub mod http` | http | NO |
-| shared/mod.rs | `pub mod sse_optimized` | sse | NO |
-| shared/mod.rs | `pub mod streamable_http` | streamable-http | NO |
-| types/mod.rs | `pub mod mcp_apps` | mcp-apps | YES |
-
-**Missing count:** ~10 public modules/re-exports need annotation.
-
-### Component 3: lib.rs Documentation Strategy
-
-**Current state (PMCP):** Inline `//!` doc comments with Quick Start examples (Client + Server). 62 lines of doc comments. Does NOT use `include_str!("../README.md")`.
-
-**rmcp's approach:** `#![doc = include_str!("../README.md")]` -- README.md serves as both the GitHub/crates.io landing page AND the docs.rs crate-level documentation. The README uses `<div class="rustdoc-hidden">` to hide GitHub-specific content (badges) from rustdoc.
-
-**Trade-offs:**
-
-| Approach | Pros | Cons |
-|----------|------|------|
-| Inline `//!` (PMCP current) | Separate control, can include compilable doctests | Drifts from README, duplicated content |
-| `include_str!` (rmcp) | Single source of truth, always in sync | Markdown only (no compilable doctests in lib.rs), need `rustdoc-hidden` CSS hack |
-| Hybrid | Best of both worlds | Two places to maintain |
-
-**Recommendation:** Keep inline `//!` doc comments in lib.rs but rewrite them to be comprehensive. Do NOT adopt the `include_str!("../README.md")` pattern because:
-1. PMCP's README contains deployment/CLI/book content that is irrelevant to crate-level docs
-2. The doctests in lib.rs serve as compile-time validation of the API
-3. The `rustdoc-hidden` CSS hack is fragile
-
-Instead, the lib.rs doc comments should be expanded to include:
-- Feature flag table (matching README)
-- Transport overview table
-- Quick start examples (already present but need accuracy check)
-- Links to key modules
-
-### Component 4: examples/README.md
-
-**Current state (PMCP):** The file contains the Spin framework README -- entirely wrong content. It is 100% bogus.
-
-**rmcp's approach:** A focused README with:
-1. Quick Start with Claude Desktop (build command + config JSON)
-2. Links to sub-directories: `clients/README.md`, `servers/README.md`
-3. Transport examples section
-4. Integration examples section
-5. WASI section
-6. MCP Inspector usage
-
-**Recommendation:** Complete rewrite of `examples/README.md`. Structure:
+The architecture is two non-overlapping dependency cones that meet only at the runtime leaf and the on-disk bundle contract:
 
 ```
-# PMCP Examples
-
-## Quick Start
-[Build + run the simplest example]
-
-## Example Index
-
-### Getting Started (01-12)
-| # | Name | Transport | Features | Description |
-|---|------|-----------|----------|-------------|
-
-### Transport Examples (13-24)
-| # | Name | Transport | Features | Description |
-|---|------|-----------|----------|-------------|
-
-### Advanced Patterns (27-37)
-| # | Name | Transport | Features | Description |
-|---|------|-----------|----------|-------------|
-
-### Workflow & Integration (49-64)
-| # | Name | Transport | Features | Description |
-|---|------|-----------|----------|-------------|
-
-### MCP Apps
-[Links to standalone examples in subdirectories]
-
-## Running Examples
-[cargo run --example NAME -- flags]
-
-## Testing with MCP Inspector
+┌──────────────────────── OFFLINE (build-time, umya allowed) ──────────────────────────┐
+│                                                                                       │
+│   cargo-pmcp  (compile-workbook / lint-workbook / emit-bundle commands)               │
+│        │  depends                                                                     │
+│        ▼                                                                              │
+│   pmcp-workbook-compiler   ── owns umya, quick-xml, zip (Excel reader + provenance)   │
+│        │  ingest → lint → manifest synth → formula parse → DAG compile →              │
+│        │  penny-reconcile → artifact emit → promote-gate                              │
+│        ▼                                                                              │
+│   pmcp-workbook-runtime  ◄─── (re-exports IR/Manifest types so compiler compiles)     │
+│                                                                                       │
+└───────────────────────────────────────┬──────────────────────────────────────────-──┘
+                                         │  emits
+                                         ▼
+                          ┌───────────────────────────────┐
+                          │   compiled bundle (on disk)    │  ← THE CONTRACT
+                          │   manifest.json / executable   │     (compiler ↔ server)
+                          │   .ir.json / cell_map.json /   │
+                          │   layout.json / BUNDLE.lock /  │
+                          │   evidence/                    │
+                          └───────────────┬───────────────┘
+                                          │  loaded by BundleSource
+                                          ▼
+┌──────────────── SERVED (runtime, NO umya — purity-gated) ────────────────────────────┐
+│                                                                                       │
+│   pmcp-workbook-server  (Shape A binary)   OR   cargo pmcp new --kind workbook-server │
+│        │  depends                                    (Shape B scaffold)               │
+│        ▼                                                                              │
+│   pmcp-server-toolkit :: workbook module  (NEW — parallels sql/http modules)          │
+│        │  calculate / explain / get_manifest / diff_version / render_workbook         │
+│        │  schema projection + input validation, ALL manifest-driven                   │
+│        ▼                                                                              │
+│   pmcp-workbook-runtime  ── owned IR + deterministic executor + writer-only render    │
+│        │  depends                                                                     │
+│        ▼                                                                              │
+│   pmcp  (core SDK: ServerBuilder, ToolInfo, streamable-http)                          │
+│                                                                                       │
+└───────────────────────────────────────────────────────────────────────────────────-─┘
 ```
 
-Key difference from rmcp: PMCP examples are flat-file numbered, not sub-crate based. The README must provide the organizational structure that the file naming alone does not.
+The purity invariant is the whole point of the split: a `cargo tree -p pmcp-workbook-server -i umya` (and `-i swc_ecma_parser`, `-i quick-xml`, `-i zip`) must return empty. This is a `just`/CI gate, mirroring the lighthouse's `just purity-check`.
 
-**Content audit needed:** Some examples exist on disk but are not in Cargo.toml `[[example]]` entries (e.g., `08_server_resources.rs`, `11_progress_countdown.rs`, `12_prompt_workflow_progress.rs`, `32_simd_parsing_performance.rs`, `40_middleware_demo.rs`, `47_multiple_clients_parallel.rs`, `48_structured_output_schema.rs`, `54_hybrid_workflow_execution.rs`, `58_oauth_transport_to_tools.rs`, `59_dynamic_resource_workflow.rs`, `60_resource_only_steps.rs`, `61_observability_middleware.rs`, `client.rs`, `currency_server.rs`). These are orphaned examples that should either be registered in Cargo.toml or removed.
+### Component Responsibilities
 
-### Component 5: pmcp-macros README and Documentation
+| Component | Responsibility | Status | Mirrors / Source |
+|-----------|----------------|--------|------------------|
+| `pmcp-workbook-runtime` | Owned IR (`Expr`/`Cell`/`CellValue`/`Dag`), deterministic topo executor (`run`), pure-Rust scalar leaf eval (`eval_scalar`, replaces the SWC/JS kernel), manifest projection model (`Manifest`/`CellRole`/`Role`/`Dtype`/`InputTier`/`allowed_values`), bundle artifact model + integrity hash, writer-only render `LayoutDescriptor`, version-changelog model | NEW crate (lift) | `crates/workbook-runtime/src/lib.rs` (reader-free leaf) |
+| `pmcp-workbook-compiler` | Offline pipeline: ingest (umya→owned cell map), dialect lint, manifest **synthesis** (`synthesize` — colour+Guide+headers → candidate roles, BA-ratified), formula parse (Pratt over whitelist), DAG reconstruction + Kahn topo-sort, sheet-IR + Excel-semantics, penny reconciliation, provenance/freshness gate (quick-xml/zip part reader), artifact emission (the bundle), promote-time gate (numeric corpus + change-class router), compile-workbook driver | NEW crate (lift) | `crates/workbook-compiler/src/lib.rs` (umya isolated) |
+| `pmcp-server-toolkit :: workbook` (feature `workbook`) | The generic served-tool module: load a bundle via `BundleSource`, recompute integrity (fail-closed at boot), register `calculate`/`explain`/`get_manifest`/`diff_version`/`render_workbook` via `ServerBuilder`, project input/output schema from the manifest, tier-enforce overrides | NEW module in existing crate | lift `quote-pricing-server/src/workbook/` (schema/input/handler/diff_version/render_resource), already manifest-driven |
+| `BundleSource` trait | Abstract "where the compiled bundle bytes come from": `LocalDirSource` (read `bundles/<id>@<ver>/`) + `EmbeddedSource` (`include_bytes!`/`include_str!` baked at build for Lambda); S3/registry left as a documented seam | NEW trait | lighthouse hardcodes `include_str!`; this generalizes it |
+| `pmcp-workbook-server` (Shape A binary) | Thin `run`/`serve` lib + `main.rs` shim: parse CLI (`--bundle-dir`/`--bundle-id`/`--http`), construct a `BundleSource`, build the `pmcp::Server` from the toolkit `workbook` module, serve over streamable HTTP | NEW crate | mirrors `pmcp-sql-server/src/{lib,main,cli,assemble}.rs` exactly |
+| `cargo pmcp compile-workbook` / `lint-workbook` / `emit-bundle` | Thin command shells over `pmcp-workbook-compiler`; `compile-workbook` carries the gated `--accept --approver --effective-date` BA approval flow | NEW commands | mirrors `cargo-pmcp/src/commands/*.rs` thin-shell layout |
+| `cargo pmcp new --kind workbook-server` | Scaffold a single runnable crate (`Cargo.toml` + `main.rs` + `pmcp.toml` + a sample bundle dir) | NEW `--kind` arm | mirrors `new.rs::execute_sql_server` + `templates::sql_server` |
+| `pmcp.toml` (project config) | Map workbook source files → bundle IDs + versions; the home for compile/lint/emit defaults (bundles dir, corpus path) replacing lighthouse justfile literals | NEW config shape | replaces single-workbook `ufh-quote` / justfile assumptions |
+| Versioned dialect spec | SDK-owned `workbook-dialect-spec.md` + a `DialectRules` version constant; workbooks declare the dialect version they target | NEW SDK-owned doc | lighthouse `dialect::DialectRules` + `docs/workbook-dialect-spec.md` |
 
-**Current state (PMCP):**
-- README.md documents `#[tool]` and `#[tool_router]` (deprecated since 0.3.0)
-- Does NOT document `#[mcp_tool]`, `#[mcp_server]`, `#[mcp_prompt]`, `#[mcp_resource]`
-- lib.rs crate docs mention `#[tool]`, `#[tool_router]`, `#[prompt]`, `#[resource]` in the feature list
-- lib.rs does have comprehensive doc comments on each proc macro
-- README.md does NOT use `include_str!` pattern
-- Version references say `pmcp = { version = "1.1" }` (stale -- current is 2.2.0)
+## The crate dependency graph (new vs modified)
 
-**rmcp's approach:**
-- README.md uses `rustdoc-hidden` for badges, `include_str!("../README.md")` in lib.rs
-- README.md has a clean macro table linking to docs.rs for each macro
-- README.md provides Quick Example showing the most concise usage pattern
-- lib.rs doc comments on each macro are comprehensive with tables
+```
+pmcp (core, EXISTING)
+  └── pmcp-workbook-runtime (NEW)  ── reader-free leaf; depends only on pmcp + serde/schemars/sha2
+        ├── pmcp-workbook-compiler (NEW)  ── adds umya + quick-xml + zip (OFFLINE ONLY)
+        │     └── cargo-pmcp (MODIFIED)   ── depends compiler for compile/lint/emit commands
+        └── pmcp-server-toolkit (MODIFIED) ── new `workbook` module + `workbook` feature; depends runtime ONLY
+              └── pmcp-workbook-server (NEW) ── Shape A binary; depends toolkit[workbook] + runtime
+```
 
-**Recommendation:**
-1. Rewrite pmcp-macros README.md to document current macros (`#[mcp_tool]`, `#[mcp_server]`, `#[mcp_prompt]`, `#[mcp_resource]`)
-2. Mark deprecated macros (`#[tool]`, `#[tool_router]`, `#[prompt]`, `#[resource]`) as legacy
-3. Update version references to 2.2.0
-4. Update lib.rs crate-level doc comment feature list to lead with current macros
-5. Consider `include_str!("../README.md")` for the macro crate (simpler crate, README is focused)
+Critical edges to preserve:
+- **`pmcp-server-toolkit` depends on `pmcp-workbook-runtime` ONLY** — never on `pmcp-workbook-compiler`. This is the purity boundary expressed as a Cargo edge. The `workbook` module must be feature-gated (`workbook = ["dep:pmcp-workbook-runtime"]`) so the no-default-features toolkit build (and the SQL/OpenAPI consumers) never pull it.
+- **`cargo-pmcp` is the only consumer of `pmcp-workbook-compiler`** — umya lives entirely in the CLI/build path. `cargo-pmcp` is a dev tool, never a deployed server, so the purity boundary holds.
+- **`pmcp-workbook-compiler` re-exports types FROM `pmcp-workbook-runtime`** (the lighthouse does this — `workbook-compiler/src/lib.rs` lines 155–221 re-export `Expr`/`Dag`/`Manifest`/`ChangeClass`/`VersionChangelog` from `workbook_runtime`). This keeps the compiler's historical call sites compiling while the runtime owns the shared types the server deserializes.
 
-### Component 6: Feature Flag Documentation Strategy
+### Workspace publish order (extending CLAUDE.md's v2.2 list)
 
-**Two approaches observed:**
+CLAUDE.md lists items 1–12. The workbook crates slot in by dependency depth: `pmcp-workbook-runtime` is a new leaf (depends only on `pmcp`), so it publishes right after `pmcp` and before the toolkit (whose new `workbook` module depends on it). The compiler depends on the runtime; the Shape-A binary depends on the toolkit + runtime; `cargo-pmcp` (already last) gains a dep on the compiler.
 
-**rmcp's approach:** Feature flag table in README.md (which becomes crate docs via `include_str!`). Divided into three categories: core features, transport features, TLS backend options. Clean tables with description and default indicator.
+Extended order (new entries marked **NEW**):
 
-**PMCP's current state:** Feature flags are listed in Cargo.toml but not documented in any user-facing location. No feature table in README, no feature table in lib.rs docs.
+1. `pmcp-widget-utils`
+2. `pmcp` (core SDK)
+2a. **`pmcp-workbook-runtime`** *(NEW — leaf after pmcp, before toolkit; the served binary's only workbook dep)*
+3. `pmcp-code-mode`
+4. `pmcp-code-mode-derive`
+5. `pmcp-server-toolkit` *(MODIFIED — now also depends on `pmcp-workbook-runtime` under the new `workbook` feature; must publish AFTER 2a)*
+6. `pmcp-toolkit-postgres`
+7. `pmcp-toolkit-mysql`
+8. `pmcp-toolkit-athena`
+8a. **`pmcp-workbook-compiler`** *(NEW — depends on `pmcp-workbook-runtime`; publish after 2a; no inter-dep with the connector crates or the SQL server)*
+9. `pmcp-sql-server`
+9a. **`pmcp-workbook-server`** *(NEW — Shape A binary; depends on `pmcp-server-toolkit[workbook]` + `pmcp-workbook-runtime`; must publish AFTER 5 and 2a; sibling to `pmcp-sql-server`, no inter-dep)*
+10. `mcp-tester`
+11. `mcp-preview`
+12. `cargo-pmcp` *(MODIFIED — gains a dependency edge on `pmcp-workbook-compiler`; already last, so it naturally publishes after 8a)*
 
-**Recommendation:** Add a feature flag table to lib.rs doc comments. Structure:
+Rationale: the publish order is a topological sort of the dep graph. `pmcp-workbook-runtime` must precede everything that links it (toolkit, compiler, server). `pmcp-workbook-compiler` must precede `cargo-pmcp`. `pmcp-workbook-server` must follow the toolkit. None of the new crates have inter-dependencies with the SQL/OpenAPI connector cluster, so they interleave as shown.
+
+## The served-tool layer as a toolkit module
+
+### What it must implement (the interfaces)
+
+The lighthouse served layer registers tools via `pmcp::ServerBuilder::tool_arc` directly (it notes it does NOT import the server-toolkit, which "has no native-handler arm and is absent on the current SDK checkout"). In the SDK, this becomes a first-class toolkit module mirroring how `sql`/`http` expose a synthesizer:
+
+1. **A bundle-load + integrity entry point** — `WorkbookBundle::load(source: &dyn BundleSource, id: &str, version: &str) -> Result<WorkbookBundle, BundleLoadError>` that reads the 7 bundle members, parses the `Manifest`/IR/`CellMap`/`LayoutDescriptor`/`VersionChangelog`, recomputes the `BUNDLE.lock` `combined` hash-of-hashes from all members via the shared `workbook_runtime::{update_field, build_bundle_lock}`, and **fails closed at boot** on mismatch. The lighthouse panics; the SDK should return a typed error the Shape-A `run` surfaces as a non-zero exit (matching `pmcp-sql-server`'s `RunError::Serving`).
+
+2. **A builder-extension** mirroring `ServerBuilderExt::try_tools_from_config`. Proposed `ServerBuilderExt::try_workbook_from_bundle(builder, &WorkbookBundle) -> Result<ServerBuilder>` (feature-gated `workbook`). It registers the five tools:
+   - `calculate` — manifest-projected typed inputs, enum-gated, structured errors with an `allowed` repair field; recomputes via `run_executor`, returns `structuredContent`.
+   - `explain` — per-cell business-language lineage (renders the reconciliation annotation).
+   - `get_manifest` — the curated agent-facing manifest projection.
+   - `diff_version` — serves the embedded `VersionChangelog`.
+   - `render_workbook` — returns the computed `.xlsx` as a provenance-bound `workbook://` resource (writer-only `rust_xlsxwriter` — keeps the binary reader-free).
+
+3. **Schema projection (already manifest-driven, lift as-is).** `schema.rs::output_schema_for_manifest` iterates `manifest.cells`, projects each `Role::Output` cell's `dtype`/`unit`/`meaning` into a strict column-typed JSON Schema, and emits it as the mandatory `outputSchema`. This is the projection interface §4 needs — **it already exists and is generic.** The work is wiring it through the toolkit's `ToolInfo` synthesis (the toolkit synthesizes `ToolInfo` from `[[tools]]`; the workbook module synthesizes it from the manifest instead).
+
+4. **Input validation + tier enforcement (already manifest-driven, lift as-is).** `input.rs::validate_input` reads each `overrides` key, looks it up in the manifest, rejects strict constants (`is_strict_constant`), accepts variable/bounded-variable tiers, maps `inputs` keys through the `cell_map` to executor seed coords, and applies manifest defaults. Enum inputs surface as `{"enum":[...]}` from `allowed_values` with a present-only runtime membership gate.
+
+### Config shape vs the SQL toolkit
+
+The SQL toolkit is config-driven through `ServerConfig` (`[[tools]]` + `[database]`). The workbook module is **bundle-driven, not `[[tools]]`-driven** — the tool surface is projected entirely from `manifest.json`, so the served config is minimal: which bundle(s) to load and from where. This is the cleanest divergence from the SQL/OpenAPI shape and should be explicit: the workbook server's "config" is the `BundleSource` selection (bundle id + version + source kind), not a `[[tools]]` table. A workbook server can still carry the toolkit's auth/secrets/static-resources config; only the tool-synthesis arm differs.
+
+## The §4 manifest-driven generalization (concrete)
+
+The lighthouse's `build_reference_manifest` (workbook-compiler/src/lib.rs lines 524–606) **hand-constructs a `Manifest`** with the `heat_source` enum input as a literal `CellRole`. This is the one piece of per-workbook Rust. The fix:
+
+- **Delete `build_reference_manifest` + `emit_reference_bundle` + `renderer_equivalence_governed`** (all the `ufh-quote`-literal functions). Replace with a generic `compile_workbook(workbook_path, bundles_dir, …)` driver that:
+  1. `ingest`s the real `.xlsx` (umya).
+  2. Runs `manifest::synthesize` (the candidate synthesizer that already exists — colour + Guide + headers → candidate `CellRole`s with `role`/`dtype`/`unit`/`meaning`/`allowed_values`).
+  3. Requires BA `ratify` (the ratification stamp already exists).
+  4. Builds the DAG + reconciles against the oracle (cached cell values).
+  5. Emits via the existing `emit_bundle` (`build_candidate_model`/`write_candidate_bundle` already take the manifest as a parameter — **only their callers hardcode `ufh-quote`**).
+- **The projection interface is the `Manifest` itself.** `Role`/`Dtype`/`unit`/`allowed_values` flow from `synthesize` → `manifest.json` → the served `schema.rs`/`input.rs`. No Rust per workbook anywhere. `role` drives input/output/constant classification; `dtype` drives the JSON Schema primitive; `unit`/`meaning` drive the self-describing labels; `allowed_values` drives the enum gate.
+
+This is why §5 is narrower than it appears: the **served projection is already generic**; only the **compiler's emit driver** hardcodes the lighthouse. The generalization is "route `synthesize`'s output into `emit_bundle` instead of a hand-built manifest."
+
+## BundleSource trait design
 
 ```rust
-//! ## Feature Flags
-//!
-//! | Feature | Description | Default |
-//! |---------|-------------|---------|
-//! | `logging` | Enable tracing-subscriber for structured logging | Yes |
-//! | `macros` | Proc macros: `#[mcp_tool]`, `#[mcp_server]`, `#[mcp_prompt]`, `#[mcp_resource]` | |
-//! | `schema-generation` | JSON Schema generation via `schemars` | |
-//!
-//! ### Transport Features
-//! | Feature | Description |
-//! |---------|-------------|
-//! | `websocket` | WebSocket transport (tokio-tungstenite) |
-//! | `http` | HTTP transport (hyper) |
-//! | `streamable-http` | Streamable HTTP with axum/tower |
-//! | `sse` | Server-Sent Events transport |
-//!
-//! ### Extension Features
-//! | Feature | Description |
-//! |---------|-------------|
-//! | `mcp-apps` | MCP Apps interactive UI (ChatGPT Apps, MCP-UI) |
-//! | `composition` | Server composition / proxy |
-//! | `jwt-auth` | JWT authentication support |
-//! | `oauth` | OAuth2 client helper |
-//! | `validation` | JSON Schema + garde validation |
-//! | `resource-watcher` | File system resource watching |
+/// Where a compiled workbook bundle's bytes come from. The served path depends
+/// ONLY on this trait + the runtime — never on the compiler/umya.
+pub trait BundleSource: Send + Sync {
+    /// Read a single named member (e.g. "manifest.json", "executable.ir.json",
+    /// "evidence/changelog.json") of the bundle `<id>@<version>`.
+    fn read_member(&self, id: &str, version: &str, member: &str)
+        -> Result<Vec<u8>, BundleSourceError>;
+    /// Enumerate available `(id, version)` pairs (multi-bundle servers + diff_version).
+    fn list(&self) -> Result<Vec<(String, String)>, BundleSourceError>;
+}
 ```
 
-## Integration Points
+- **`LocalDirSource { root: PathBuf }`** — reads `root/<id>@<version>/<member>` from disk. The dev/test default; the Shape-A binary's `--bundle-dir` points at it.
+- **`EmbeddedSource`** — baked at build via `include_bytes!`/`include_str!` (the lighthouse pattern, `workbook/mod.rs` lines 55–120). For Lambda/deploy where the bundle ships *inside* the binary. The scaffold's generated `main.rs` uses this so the deployed server has no filesystem dependency. Note the contrast with `pmcp-server-toolkit`'s SQL path (`demo_db_path()` + `pmcp::assets::load_string` resolve a writable `/tmp` DB + read-only assets under `/var/task/assets`): the workbook bundle is read-only, so it can be baked straight into the *binary* via `EmbeddedSource` with no `/var/task/assets` round-trip.
+- **S3/registry seam** — `S3BundleSource`/`RegistryBundleSource` are documented but deferred; the trait's `read_member`/`list` shape is the seam (an S3 impl is `GetObject` per member, a registry impl is an HTTP fetch + cache). No runtime change needed to add them.
 
-### New Components (to create)
+Integrity is computed by the *loader over the source*, not by the source — `WorkbookBundle::load` reads all members through the `BundleSource`, then runs the shared `build_bundle_lock` fold and compares to the embedded `BUNDLE.lock`. So any source (local/embedded/S3) gets the same fail-closed boot check.
 
-| Component | Type | Location | Purpose |
-|-----------|------|----------|---------|
-| Feature flag table | Doc comments | `src/lib.rs` | Centralized feature documentation |
-| Examples README | Markdown | `examples/README.md` | Accurate example index |
+## CLI integration (cargo-pmcp)
 
-### Modified Components (existing)
+The existing `cargo-pmcp/src/commands/` modules are thin shells (each `<cmd>.rs` parses clap args and delegates). Add three sibling modules mirroring that layout:
 
-| Component | Change Type | Location | What Changes |
-|-----------|------------|----------|--------------|
-| docs.rs metadata | Config | `Cargo.toml` | `all-features = true` -> explicit list |
-| lib.rs preamble | Doc comments | `src/lib.rs` | Add feature flag table, improve module docs |
-| Feature gate annotations | Attributes | Multiple `mod.rs` files | Add ~10 `cfg_attr(docsrs, ...)` annotations |
-| pmcp-macros README | Rewrite | `pmcp-macros/README.md` | Document current macros, deprecate old |
-| pmcp-macros lib.rs | Doc comments | `pmcp-macros/src/lib.rs` | Update feature list in crate-level docs |
+- **`commands/compile_workbook.rs`** — `cargo pmcp compile-workbook <workbook.xlsx> [--bundles-dir DIR] [--bundle-id ID] [--accept --approver NAME --effective-date DATE]`. Delegates to `pmcp_workbook_compiler::compile_workbook` (the build-candidate → gate → write driver). The `--accept` flow records the BA approval into the corpus exactly as the lighthouse `gate::accept::accept` does. **Recommendation (RFC §6 OQ-3 / brief §11 OD-2):** keep `--accept` in the CLI, not in `deploy` — the lighthouse proves it as a reviewable artifact (`bundles/corpus/<id>/cases.json`), and the gate's BA review is its own reviewable step ("distinct compile-workbook step feeding deploy").
+- **`commands/lint_workbook.rs`** — `cargo pmcp lint-workbook <workbook.xlsx>`. Delegates to the compiler's `lint`/`LintReport`; exits non-zero on `report.has_errors()`. The fast feedback loop before a full compile.
+- **`commands/emit_bundle.rs`** — `cargo pmcp emit-bundle [--bundle-id ID]`. Regenerates a bundle (the generalized `emit_bundle` driver) for an already-ratified workbook; the analog of `just emit-bundle`.
 
-### Data Flow
+These register in `cargo-pmcp/src/main.rs`'s clap subcommand dispatch. Because they pull `pmcp-workbook-compiler` (umya), they are the **only** umya entry point in the SDK product surface.
 
-Documentation build pipeline:
-```
-Cargo.toml [package.metadata.docs.rs]
-  |
-  v
-rustdoc (with --cfg docsrs + explicit feature list)
-  |
-  v
-lib.rs #![cfg_attr(docsrs, feature(doc_cfg))]
-  |                                |
-  v                                v
-Inline //! doc comments      Per-item #[cfg_attr(docsrs, doc(cfg(...)))]
-(feature table, examples)    (shows "Available on feature X only" badges)
-  |                                |
-  v                                v
-              docs.rs rendered output
+### Project-level `pmcp.toml`
+
+The lighthouse hardcodes `ufh-quote`, the bundles dir, and the corpus path in justfile recipes. Generalize into a project-root `pmcp.toml`:
+
+```toml
+[workbook]
+bundles_dir = "bundles"          # where compiled bundles land / are read
+corpus_dir  = "bundles/corpus"   # golden corpus + approval records
+
+[[workbook.workbooks]]
+source    = "docs/ufh-quote.xlsx"  # the BA-authored workbook
+bundle_id = "ufh-quote"            # → bundles/ufh-quote@<ver>/
+dialect   = "1.0"                  # the SDK-owned dialect version it targets
 ```
 
-## Build Order for Documentation Changes
+`compile-workbook`/`lint-workbook`/`emit-bundle` read `pmcp.toml` to resolve `source → bundle_id`, killing the single-workbook assumption. The Shape-A binary reads the same `[workbook]` table (or CLI flags) to know which bundle id/version to serve.
 
-These changes have dependencies. The correct build order:
+## Patterns to Follow
 
-### Phase 1: Foundation (no dependencies)
-**Can be done in parallel:**
+### Pattern: lib `run`/`serve` + thin `main.rs` shim (Shape A)
+**What:** Put all assembly/serving logic in the binary crate's `lib.rs` (`run`, `run_serving`, `serve`, `build_server`, `load`), keep `main.rs` a ~10-line `#[tokio::main]` shim that parses clap `Args` and calls `run`. **Why:** keeps server construction unit-testable without spawning a process. **Source:** `pmcp-sql-server/src/{lib,main}.rs` — replicate field-for-field, swapping `dispatch(SqlConnector)` for `load(BundleSource)`.
 
-1. **Cargo.toml docs.rs metadata** -- Replace `all-features = true` with explicit feature list. This is the single highest-impact change: it fixes the docs.rs build configuration that everything else depends on.
+### Pattern: feature-gated toolkit module mirroring `sql`/`http`
+**What:** Add `#[cfg(feature = "workbook")] pub mod workbook;` to `pmcp-server-toolkit/src/lib.rs`, with crate-root re-exports of the headline types (`WorkbookBundle`, `BundleSource`, `LocalDirSource`, `EmbeddedSource`, `try_workbook_from_bundle`). **Why:** matches the `#[cfg(feature = "http")] pub mod http;` precedent so no-default-features and SQL-only builds never link the runtime. **Source:** `pmcp-server-toolkit/src/lib.rs` lines 43–44.
 
-2. **Feature gate annotations** -- Add `cfg_attr(docsrs, doc(cfg(...)))` to ~10 public modules/re-exports. These are mechanical changes across `src/lib.rs`, `src/server/mod.rs`, `src/shared/mod.rs`.
+### Pattern: re-export shared types from the runtime leaf
+**What:** The compiler re-exports `Expr`/`Dag`/`Manifest`/`ChangeClass`/`VersionChangelog` from the runtime crate so its public surface and call sites compile against historical names. **Why:** the served binary deserializes these types, so they MUST live in the reader-free crate; the compiler borrows them upward. **Source:** `workbook-compiler/src/lib.rs` lines 155–221.
 
-**Rationale:** These two changes fix the rendering pipeline. Without them, the feature badges will not appear on docs.rs regardless of what documentation text says.
-
-### Phase 2: Content (depends on Phase 1)
-
-3. **lib.rs documentation rewrite** -- Add feature flag table, transport overview, improve module-level docs. Must come after Phase 1 because the feature table should match the explicit feature list in Cargo.toml.
-
-4. **pmcp-macros README rewrite** -- Document `#[mcp_tool]`, `#[mcp_server]`, `#[mcp_prompt]`, `#[mcp_resource]`. Independent of lib.rs changes but logically part of the same documentation pass.
-
-5. **pmcp-macros lib.rs crate doc update** -- Update feature list to lead with current macros. Should follow the README rewrite to stay consistent.
-
-### Phase 3: Examples (depends on Phase 2)
-
-6. **examples/README.md rewrite** -- Complete rewrite with accurate example index. Must come last because:
-   - Need to audit which examples are registered in Cargo.toml vs orphaned on disk
-   - Feature requirements per example should match the feature table from Phase 2
-   - May discover examples that need updates/removal during audit
-
-7. **Orphaned example cleanup** -- Register or remove examples that exist on disk but are not in Cargo.toml `[[example]]` entries.
-
-### Dependency Graph
-
-```
-Phase 1 (Foundation):
-  [Cargo.toml docs.rs] ----+
-  [Feature annotations] ----+
-                            |
-                            v
-Phase 2 (Content):
-  [lib.rs docs] ------------+
-  [macros README] ----------+
-  [macros lib.rs docs] -----+
-                            |
-                            v
-Phase 3 (Examples):
-  [examples/README.md] -----+
-  [Orphaned example cleanup]-+
-```
+### Pattern: cargo-tree purity gate
+**What:** A `just purity-check` / CI step asserting `cargo tree -p pmcp-workbook-server -i umya` (and `-i quick-xml -i zip -i swc_ecma_parser`) is empty. **Why:** the entire compile-not-interpret security story rests on the reader never reaching prod; make it mechanically provable, not a convention. **Source:** lighthouse `just purity-check`.
 
 ## Anti-Patterns to Avoid
 
-### Anti-Pattern 1: `all-features = true` for docs.rs
-**What:** Enabling every feature flag for documentation builds.
-**Why bad:** Includes test scaffolding, platform-conflicting features (wasm + native), and example-only features in docs. Users see items as unconditionally available when they are actually feature-gated. Also risks build failures if mutually exclusive features are combined.
-**Instead:** Explicit feature list in `[package.metadata.docs.rs]`.
+### Anti-Pattern: copying `build_reference_manifest` / hand-built manifests
+**What:** Porting the `ufh-quote`-literal `build_reference_manifest`/`emit_reference_bundle` as the bundle-emit path. **Why bad:** it is the single hardcoded seam the whole §5 generalization exists to kill; copying it forks per-workbook Rust into the SDK. **Instead:** route `manifest::synthesize` (already present) → `ratify` → the generic `emit_bundle`.
 
-### Anti-Pattern 2: README-as-crate-docs for complex crates
-**What:** Using `#![doc = include_str!("../README.md")]` when the README contains non-API content.
-**Why bad:** PMCP's README includes deployment guides, CLI usage, book references -- none of which belong in crate-level API docs. Forces the `rustdoc-hidden` CSS hack for every non-docs section.
-**Instead:** Keep inline `//!` doc comments focused on API usage. Reserve `include_str!` for leaf crates with focused READMEs (like pmcp-macros).
+### Anti-Pattern: letting the toolkit depend on the compiler
+**What:** Adding `pmcp-workbook-compiler` to `pmcp-server-toolkit`'s deps "for convenience" (e.g. to re-synthesize a manifest at boot). **Why bad:** drags umya/quick-xml/zip into every served binary, breaking the purity invariant and the security message. **Instead:** the server only ever *reads* a pre-compiled bundle via `BundleSource`; synthesis is build-time only.
 
-### Anti-Pattern 3: Annotating only some feature-gated items
-**What:** Adding `cfg_attr(docsrs, ...)` to a few items but not others.
-**Why bad:** Inconsistent UX on docs.rs -- some items show "Available on feature X" badges, others silently appear/disappear. Users cannot trust the badges.
-**Instead:** Systematic annotation of ALL public feature-gated modules and re-exports.
+### Anti-Pattern: trusting umya-fabricated Excel provenance (§5 caveat)
+**What:** Treating a umya-authored/round-tripped workbook as a fresh real-Excel recalc. **Why bad:** umya 3.0.0 hard-codes `<Application>Microsoft Excel</Application>` + `calcId` on every save, so a umya-written workbook passes the Phase-8 freshness gate on **fabricated** identity. **Instead:** any SDK tooling that programmatically mutates a workbook must mark a distinct provenance class (or use a different writer); the freshness gate must not treat umya identity as proof of recalc.
 
-### Anti-Pattern 4: Documenting deprecated macros prominently
-**What:** README leading with `#[tool]` and `#[tool_router]` when they are deprecated since 0.3.0.
-**Why bad:** New users adopt the deprecated API, then hit deprecation warnings. Creates confusion about which macros to use.
-**Instead:** Lead with current macros, add a "Legacy Macros" section at the bottom.
+### Anti-Pattern: copying the CR-01/CR-02/WR-01 promote-path debt
+**What:** Lifting the promote path as-is. **Why bad:** CR-02 (promotion computes `next_version` but writes back into the same `@1.0.0` dir, overwriting the baseline), CR-01 (demotion-direction change-class changes escape classification and auto-promote), WR-01 (`ratify_tiers` gives enum inputs a `Variable{default:""}` tier, seeding an out-of-enum empty string). **Instead:** fix at extraction — write to the computed `next_version` dir, make the change-class classifier symmetric, skip tiering for enum inputs. These §5 fixes slot into the compiler/promote-gate phase (Phase C).
 
-## Orphaned Example Audit
+## Data-flow changes vs the lighthouse
 
-Examples on disk NOT in Cargo.toml `[[example]]` entries:
+| Flow | Lighthouse | SDK extraction |
+|------|-----------|----------------|
+| Bundle origin | `include_str!` of in-crate `bundles/ufh-quote@1.0.0/` | `BundleSource` (local-dir dev / embedded deploy / S3 seam) |
+| Manifest origin | hand-built `build_reference_manifest` | `manifest::synthesize` → `ratify` → `emit_bundle` (manifest-driven) |
+| Bundle identity | hardcoded `ufh-quote` / justfile literals | `pmcp.toml` `[[workbook.workbooks]]` source→bundle_id map |
+| Served tool reg | direct `ServerBuilder::tool_arc` in the server crate | toolkit `workbook` module `try_workbook_from_bundle` |
+| Compile entry | `cargo run -p workbook-compiler -- compile-workbook …` | `cargo pmcp compile-workbook …` (thin shell over compiler) |
+| Integrity boot check | panic on hash mismatch | typed `BundleLoadError` → `RunError` → non-zero exit (matches sql-server) |
 
-| File | Status | Action |
-|------|--------|--------|
-| `08_server_resources.rs` | Duplicate of `04_server_resources.rs`? | Investigate, likely remove |
-| `11_progress_countdown.rs` | Not registered | Register or remove |
-| `12_prompt_workflow_progress.rs` | Not registered | Register or remove |
-| `32_simd_parsing_performance.rs` | Not registered, needs `simd` feature | Register with `required-features` or remove |
-| `40_middleware_demo.rs` | Not registered | Register or remove |
-| `47_multiple_clients_parallel.rs` | Not registered | Register or remove |
-| `48_structured_output_schema.rs` | Not registered | Register or remove |
-| `54_hybrid_workflow_execution.rs` | Not registered | Register or remove |
-| `58_oauth_transport_to_tools.rs` | Not registered | Register or remove |
-| `59_dynamic_resource_workflow.rs` | Not registered | Register or remove |
-| `60_resource_only_steps.rs` | Number conflicts with tasks examples | Renumber or remove |
-| `61_observability_middleware.rs` | Not registered | Register or remove |
-| `client.rs` | Unnumbered | Register or remove |
-| `currency_server.rs` | Unnumbered | Register or remove |
+## Suggested PHASE BUILD ORDER
 
-This is 14 orphaned examples. Each needs a decision: register in Cargo.toml (with correct `required-features`) or remove.
+Respects the purity boundary (runtime before any umya code) and the dependency cone (runtime → toolkit module → compiler → CLI → Shape A/B). Directly answers RFC §7: **yes, port the runtime first even within a full-extraction milestone** — it is the smallest cut that proves the boundary, has zero reader deps, and unblocks every downstream consumer.
+
+1. **Phase A — Port `pmcp-workbook-runtime`** (RFC §7 first cut). Lift the reader-free leaf: IR types, `run` executor, `eval_scalar`, manifest projection model (`Manifest`/`CellRole`/`Role`/`Dtype`/`InputTier`/`allowed_values`), bundle artifact model + integrity hashing, render `LayoutDescriptor`, changelog model. Establish the `cargo-tree` purity gate. Publish `pmcp-workbook-runtime` (slot 2a). *Dependency: pmcp only. Proves the boundary before any umya lands.*
+
+2. **Phase B — `BundleSource` + served-tool toolkit module.** Add the `workbook` feature + `pub mod workbook` to `pmcp-server-toolkit`. Define `BundleSource` (+ `LocalDirSource`, `EmbeddedSource`). Lift the served layer (`schema.rs`/`input.rs`/`handler.rs`/`diff_version.rs`/`render_resource.rs` — already manifest-driven), wired through `try_workbook_from_bundle` + boot integrity. *Dependency: Phase A. The schema/input projection comes over nearly unchanged because it already reads the manifest.*
+
+3. **Phase C — `pmcp-workbook-compiler` + the §5 generalization fixes.** Lift the offline pipeline (ingest/dialect/manifest-synth/formula/dag/sheet_ir/reconcile/provenance/artifact/gate/change_class). **Do the §5 fixes here, not after:** (a) delete `build_reference_manifest`/`emit_reference_bundle`, replace with a generic `compile_workbook` routing `synthesize`→`ratify`→`emit_bundle` (the manifest-driven kill); (b) CR-02 — write to the computed `next_version` dir; (c) CR-01 — symmetric change-class classifier; (d) WR-01 — skip tiering for enum inputs; (e) umya fabricated-provenance — distinct provenance class. Publish the compiler (slot 8a). *Dependency: Phase A (re-exports runtime types). The fixes belong in the phase that owns the code they fix.*
+
+4. **Phase D — `cargo pmcp compile-workbook` / `lint-workbook` / `emit-bundle` + `pmcp.toml`.** Add the three command modules + the `--accept` BA approval flow + the project-level `pmcp.toml` (workbooks→bundle IDs) resolving the single-workbook assumption. *Dependency: Phase C (the compiler). `pmcp.toml` lands here because the CLI is its first consumer.*
+
+5. **Phase E — Shape A binary `pmcp-workbook-server`.** Mirror `pmcp-sql-server`: lib `run`/`serve` + thin `main.rs`, CLI (`--bundle-dir`/`--bundle-id`/`--http`), construct a `BundleSource`, build the server from the toolkit `workbook` module. Publish (slot 9a). *Dependency: Phase B (toolkit module) + the `BundleSource` impls.*
+
+6. **Phase F — Shape B scaffold `cargo pmcp new --kind workbook-server` + dialect spec.** Add the `--kind workbook-server` arm to `new.rs` + a `templates::workbook_server` (Cargo.toml + `main.rs` using `EmbeddedSource` + a sample `pmcp.toml` + a sample bundle). Publish the SDK-owned versioned `workbook-dialect-spec.md`. *Dependency: Phase E (the scaffold's generated `main.rs` targets the Shape-A wiring).*
+
+**Ordering rationale:** A→B is the runtime-then-server cut (purity proven before umya). C is intentionally after B so the served contract (what the bundle must contain for `calculate`/`explain`/etc.) is locked before the compiler is generalized to emit it — the bundle is the contract, and you freeze the consumer's needs before re-cutting the producer. D/E/F are the DX surfaces over the now-stable runtime+compiler. The §5 fixes concentrate in C (compiler-owned: manifest-driven emit, CR-01/CR-02/WR-01, umya provenance) and D (`pmcp.toml`, single-workbook generalization) — each fix lands in the phase that owns its code.
+
+## Scalability / Evolution Considerations
+
+| Concern | At 1 workbook (lighthouse parity) | At N workbooks (one server) | At a bundle registry |
+|---------|-----------------------------------|------------------------------|----------------------|
+| Bundle delivery | `EmbeddedSource` (baked in binary) | `LocalDirSource` over a bundles dir; `pmcp.toml` lists all | `RegistryBundleSource` (deferred seam) |
+| Tool naming | flat `calculate`/`explain`/… | namespaced per bundle id (`ufh-quote.calculate`) — design registration to prefix | registry resolves id→bundle |
+| Integrity | boot fold over embedded members | per-bundle fold on load | signature/registry-attested |
+| Versioning | single `@1.0.0` | `diff_version` across versions present in source | registry version negotiation |
+
+Named-range-backed validation lists and the S3/registry bundle store are deferred by design (documented seams), consistent with the milestone scope.
 
 ## Sources
 
-- Direct codebase comparison: PMCP at `/Users/guy/Development/mcp/sdk/rust-mcp-sdk/`
-- Direct codebase comparison: rmcp at `/Users/guy/Development/mcp/sdk/rust-sdk/`
-- Rust docs.rs build system: `[package.metadata.docs.rs]` consumed by docs.rs to configure the rustdoc build
-- Rust `doc_cfg` feature: nightly-only feature enabled by `#![cfg_attr(docsrs, feature(doc_cfg))]` that shows feature requirement badges
-- Confidence: HIGH -- all findings based on direct source code inspection of both repos
+- `crates/workbook-runtime/src/lib.rs` (lighthouse) — reader-free leaf, the `pmcp-workbook-runtime` lift target — HIGH
+- `crates/workbook-compiler/src/lib.rs` (lighthouse) — umya pipeline + the hardcoded `build_reference_manifest` (lines 524–606) — HIGH
+- `crates/quote-pricing-server/src/workbook/{mod,schema,input}.rs` (lighthouse) — the already-manifest-driven served layer — HIGH
+- `crates/pmcp-server-toolkit/src/lib.rs` + `Cargo.toml` (SDK) — the `#[cfg(feature="http")] pub mod http` precedent + feature-gating pattern — HIGH
+- `crates/pmcp-sql-server/src/{lib,main}.rs` + `Cargo.toml` (SDK) — the Shape-A lib/`run`/`serve` + thin-shim + `RunError` pattern to mirror — HIGH
+- `cargo-pmcp/src/commands/new.rs` + `templates/sql_server.rs` (SDK) — the `--kind` switch + scaffold-template pattern — HIGH
+- `docs/sdk-issue-excel-workbook-compiler-extraction.md` (RFC §5/§6/§7) — generalization gaps, open questions, runtime-first recommendation — HIGH
+- `docs/Excel-as-Configuration-Architecture-Brief.md` — two-surface model, reuse-vs-new, promote-gate philosophy — HIGH
+- `CLAUDE.md` Release & Publish Workflow — the v2.2 publish order extended above — HIGH

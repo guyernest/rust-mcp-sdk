@@ -12,6 +12,8 @@
 - ✅ **v1.7 SDK Maturation** — Phases 52-53 (shipped 2026-03-20)
 - **v2.0 Protocol Modernization** — Phases 54-59 (in progress)
 - **v2.1 rmcp Upgrades** — Phases 65-68 (in progress)
+- ✅ **v2.2 Configuration-Only MCP Servers (SQL + OpenAPI toolkits)** — Phases 82-90.2 (substantially shipped)
+- 🚧 **v2.3 Excel-as-Configuration MCP Servers (governed Excel CodeLanguage)** — Phases 91-96 (in progress)
 
 ## Phases
 
@@ -974,7 +976,7 @@ Parking lot for unsequenced ideas. Items here aren't scheduled — promote with 
 
 **Requirements:** TBD
 
-**Plans:** 6/6 plans complete
+**Plans:** 11/11 plans complete
 
 Plans:
 
@@ -1699,3 +1701,266 @@ Plans:
 - [x] 90.1-01-PLAN.md — Enrich london-tube.toml (resources + prompt + full annotations) + fixture-validity asserts + build-only example (P901-FIXTURE, P901-EXAMPLE)
 - [x] 90.1-02-PLAN.md — Add Resources & Prompts config-walkthrough section to book + course OpenAPI chapters (P901-DOCS-BOOK, P901-DOCS-COURSE)
 - [x] 90.1-03-PLAN.md — Add list_resources + list_prompts replay steps to london-tube-scenarios.yaml (P901-PARITY)
+
+## v2.3 Excel-as-Configuration MCP Servers (governed Excel CodeLanguage) (In Progress)
+
+**Milestone Goal:** Extract the proven Excel-workbook → MCP-server compiler from the `towelrads-quote-pricing` lighthouse (its milestone v0.5.0, phases 7–14, all green — golden quote penny-reconciled to ±£0.01) into the PMCP SDK as a third "governed Excel" CodeLanguage alongside the v2.2 SQL and OpenAPI toolkits. **Compile, never interpret:** the workbook is simultaneously the specification (formula DAG), the test oracle (cached cell values become assertions), and the output template. Any project can compile a governed Excel workbook into a tested, versioned, deterministic MCP server. Generalize the known lighthouse debt (RFC §5) — do not copy it.
+
+**Source of truth:** RFC `docs/sdk-issue-excel-workbook-compiler-extraction.md` + `.planning/research/` (STACK / FEATURES / ARCHITECTURE / PITFALLS / SUMMARY, all HIGH confidence, researched 2026-06-09). Reference implementation: the lighthouse `crates/workbook-runtime/`, `crates/workbook-compiler/`, and `crates/quote-pricing-server/src/workbook/` (the served layer is already ~95% workbook-agnostic).
+
+**Load-bearing invariants encoded across phases:**
+
+- **Purity invariant (Pitfall 1):** the Excel reader (`umya` / `quick-xml`) must NEVER enter the served-binary dependency tree. The served path links only `pmcp-workbook-runtime`; the reader lives only in `pmcp-workbook-compiler` (consumed only by `cargo-pmcp`). A `cargo tree` + `cargo-deny [bans]` purity gate stands up in Phase 91 (with the runtime, before any `umya` code lands) and is re-asserted in every later phase that touches the served tree. The writer (`rust_xlsxwriter`, pulls permitted `zip`) IS positively asserted present.
+- **Dependency-forced ordering:** runtime ← compiler ← CLI; runtime ← served-tool toolkit module ← Shape A binary ← Shape B scaffold. The served layer requires the bundle contract; the bundle contract requires the compiler; the compiler requires the dialect + runtime. Freeze the bundle contract from the consumer side (Phase 92) BEFORE the compiler is re-cut (Phase 93).
+- **§5 generalization, not copy:** kill hardcoded `build_reference_manifest` (manifest fully synth-driven), fix promote-path bugs CR-01 (demotion asymmetry) / CR-02 (version overwrite) / WR-01 (enum-input tiering), handle umya fabricated-provenance — all in the compiler-owning phase (93).
+- **Second-workbook test (WBEX-01) is the generalization gate:** it lands in Phase 96, after the compiler + served layer are manifest-driven, and its success proves the §5 manifest-driven fix actually generalized (no per-workbook Rust, no privileged single output).
+- **Mirror the v2.2 toolkit pattern:** `pmcp-server-toolkit` feature module + per-source crates + Shape A binary / Shape B scaffold, same `TypedToolWithOutput` → `outputSchema` → `structuredContent` discipline.
+- **Explicitly NOT touched:** `pmcp-code-mode` (the untrusted long-tail path). A compiled workbook is curated config trusted by the promote gate + BA curation, not a runtime token. The two CodeLanguages coexist.
+
+### v2.3 Phase Summary
+
+- [x] **Phase 91: Workbook Runtime + Purity Gate + Dialect Spec** — Port the reader-free `pmcp-workbook-runtime` leaf (owned IR/model types, deterministic evaluator, writer-only `.xlsx` renderer) and stand up the `cargo tree` + `cargo-deny` purity gate on day one; ship the SDK-owned versioned dialect spec + linter (completed 2026-06-10)
+- [x] **Phase 92: BundleSource + Served-Tool Toolkit Module** — Freeze the bundle contract from the consumer side: `BundleSource` trait (local-dir + embedded) + the generic, fully manifest-driven `workbook` feature module in `pmcp-server-toolkit` (all five tools, fail-closed validation, boot integrity gate) against a test bundle (verification: gaps found 2026-06-10) (completed 2026-06-11)
+- [x] **Phase 93: Workbook Compiler + §5 Generalization Fixes + Promote Gate** — Port `pmcp-workbook-compiler` (umya-isolated offline pipeline), do the §5 fixes here (manifest-driven emit, CR-01/CR-02/WR-01, umya fabricated-provenance), and ship the change-class + golden-corpus promote gate with the `--accept` approval flow (completed 2026-06-13)
+- [x] **Phase 94: CLI Subcommands + `pmcp.toml`** — `cargo pmcp compile-workbook` / `lint-workbook` / `emit-bundle` thin shells over the compiler, the gated `--accept --approver --effective-date` flow, and a project-level `pmcp.toml` mapping workbooks → bundle IDs (kills single-workbook assumptions) (completed 2026-06-14)
+- [x] **Phase 95: Shape A Binary `pmcp-workbook-server`** — A pure-config binary that stands up a live MCP server from a compiled bundle alone (no user Rust), mirroring `pmcp-sql-server` field-for-field (completed 2026-06-14)
+- [x] **Phase 96: Shape B Scaffold + Dialect-Version Declaration + Generalization Validation** — `cargo pmcp new --kind workbook-server` scaffold (Shape B), workbooks declare the dialect version they target, and the second-workbook + Excel-quirk-corpus generalization gates prove the manifest is truly synth-driven (completed 2026-06-15)
+
+## Phase Details — v2.3 Milestone
+
+### Phase 91: Workbook Runtime + Purity Gate + Dialect Spec
+
+**Goal**: A reader-free `pmcp-workbook-runtime` leaf crate owns every shared model/IR type, runs a compiled workbook's IR through a deterministic evaluator and a writer-only `.xlsx` renderer, and a mechanically-provable purity gate guarantees the Excel reader can never reach the served binary — established BEFORE any `umya` code exists. The SDK also owns a versioned dialect spec + linter.
+**Depends on**: Phase 90.2 (v2.2 close); pmcp core only — proves the purity boundary first (RFC §7 smallest cut)
+**Requirements**: WBRT-01, WBRT-02, WBRT-03, WBRT-04, WBDL-01
+**Success Criteria** (what must be TRUE):
+
+  1. A developer can depend on `pmcp-workbook-runtime` (reader-free leaf, slot 2a) and deserialize the shared model types (`Manifest`, `CellMap`, `BundleLock`, `VersionChangelog`, IR `Cell`/`Expr`) identically to how the offline emitter produces them — serde/schemars-clean, zero reader dependency
+  2. The runtime runs a compiled IR through a deterministic topo executor producing typed outputs plus per-cell derivation traces, and renders a computed workbook back to `.xlsx` via the writer-only `rust_xlsxwriter` renderer
+  3. **PURITY GATE:** CI + `just purity-check` fail the build if `umya` / `quick-xml` appear in the runtime's (or any served-binary's) dependency tree, run per feature-combination (not just defaults), with a positive assertion that `rust_xlsxwriter` IS present and `zip` (writer container) is permitted — `cargo tree` assertions backed by a `cargo-deny [bans]` declaration
+  4. The SDK owns a versioned dialect spec document (function whitelist + refuse-set) bound to the `WHITELIST` const by a test that fails if doc and code diverge
+  5. A developer can lint a workbook against the dialect (whitelist-only, deny-by-default) and receive collect-all, located, BA-actionable findings with repair guidance
+
+> **Note (D-02):** WBDL-03 (the running linter + `WorkbookMap` ingest) is re-mapped to **Phase 93** — it needs a real `.xlsx` via umya. Phase 91 ships only the dialect *contract* (WHITELIST + spec doc + binding test).
+
+**Plans**: 3 plans
+
+Plans:
+
+- [x] 91-01-PLAN.md — Lift the reader-free `pmcp-workbook-runtime` leaf crate (IR/model types, deterministic topo executor + traces, writer-only `.xlsx` renderer, finding model + D-08 Deserialize) (WBRT-01, WBRT-02, WBRT-03)
+- [x] 91-02-PLAN.md — Create `pmcp-workbook-dialect` leaf crate (flat-13 WHITELIST + DialectRules + re-exported findings) + port `docs/workbook-dialect-spec.md` + doc↔const binding test (WBDL-01)
+- [x] 91-03-PLAN.md — `make purity-check` (cargo-tree per-crate/per-feature reader-absence + writer-presence) + merge-blocking CI gate + WBDL-03 → Phase 93 re-map (WBRT-04, WBDL-03)
+
+### Phase 92: BundleSource + Served-Tool Toolkit Module
+
+**Goal**: The compiled-bundle contract is frozen from the consumer side: a generic, fully manifest-driven `workbook` feature module in `pmcp-server-toolkit` registers all five tools against a test bundle loaded through a `BundleSource` trait, fails closed on any integrity or validation gap, and emits the same `outputSchema` → `structuredContent` discipline as the SQL/OpenAPI toolkits — with zero per-workbook Rust.
+**Depends on**: Phase 91 (runtime types + purity gate)
+**Requirements**: WBSV-01, WBSV-02, WBSV-03, WBSV-04, WBSV-05, WBSV-06, WBSV-07, WBSV-08, WBSV-09
+**Success Criteria** (what must be TRUE):
+
+  1. An agent can call `calculate` with typed, tier-enforced, dtype-checked, enum-gated inputs and receive ALL named outputs (`{value,unit}` each) plus a provenance stamp — no single privileged "headline" output — and `explain` / `get_manifest` / `diff_version` / `render_workbook` each return their bundle-driven projections (per-cell trace, curated manifest, hash-verified changelog, provenance-bound `workbook://` resource)
+  2. Input and output schemas are projected entirely from the manifest (`additionalProperties:false`, per-column dtype/unit/meaning; mandatory non-empty `outputSchema`) — parity with the SQL/OpenAPI `TypedToolWithOutput` pattern; no per-workbook handler code
+  3. Every domain failure returns a structured `isError:true` envelope in `structuredContent` (never a protocol `Err`) carrying `code`, `reason`, and self-repair fields (`allowed`/`required`/`range`) plus the provenance stamp; validation is **fail-closed** (a missing manifest role for a supplied input is an error, not an `if let Some` skip — WR-05; non-string values on enum inputs rejected — WR-02)
+  4. The server recomputes the `BUNDLE.lock` combined hash-of-hashes at boot and fails closed on any tampered or mismatched artifact before serving
+  5. A server loads a bundle via the `BundleSource` trait with both local-directory and embedded (`include_dir!`) implementations; S3/registry is a documented extension seam, not shipped
+
+**Plans**: 7 plans (7 waves, strictly sequential — 92-06/92-07 close the gaps_found verification)
+
+- [x] 92-01-PLAN.md — Runtime BundleSource trait (local-dir + embedded) + shared fail-closed BundleLoader + manifest annotations field + D-17/S-1 scrub
+- [x] 92-02-PLAN.md — Synthetic tax-calc golden fixture generator + committed byte-stable golden + tamper helpers
+- [x] 92-03-PLAN.md — Toolkit workbook served core: isError envelope, manifest→schema projection, fail-closed input validation, 4 handlers (calculate/explain/get_manifest/diff_version)
+- [x] 92-04-PLAN.md — render_workbook: workbook:// URI codec + stateless regen-on-read resource + published URI contract doc
+- [x] 92-05-PLAN.md — WorkbookBuilderExt wiring + boot-surface re-exports + workbook feature + streamable-HTTP example + integration tests + purity-gate extension
+- [x] 92-06-PLAN.md — Gap closure (CR-01): drop Role::Input cells from the golden IR + seed-preserving executor literal arm + regenerate golden + non-default-input regression test (unblocks WBSV-01/02/05)
+- [x] 92-07-PLAN.md — Gap closure (Blocker 2): fail-closed override role filter (WR-02) + fail-closed project_outputs (WR-04) + absent-anchor stamp gate (WR-07) (completes WBSV-06)
+
+**UI hint**: yes
+
+### Phase 93: Workbook Compiler + §5 Generalization Fixes + Promote Gate
+
+**Goal**: `pmcp-workbook-compiler` ports the full offline pipeline (ingest → lint → manifest synth → formula parse → DAG compile → penny-reconcile → artifact emit → promote-time gate) with `umya` isolated to this crate, and ships the §5 generalization fixes at extraction time (not copied): a fully manifest-driven emit path, symmetric change-class classification, versioned non-overwriting bundle writes, enum-tiering correctness, umya fabricated-provenance refusal, and the change-class + golden-corpus promote gate with a BA approval flow.
+**Depends on**: Phase 91 (re-exports runtime types); contract frozen by Phase 92
+**Requirements**: WBCO-01, WBCO-02, WBCO-03, WBCO-04, WBCO-05, WBCO-06, WBCO-07, WBGV-01, WBGV-02, WBGV-03, WBGV-04, WBGV-05, WBGV-06, WBGV-07, WBDL-03
+**Success Criteria** (what must be TRUE):
+
+  1. The compiler ingests a `.xlsx` (umya, compiler-isolated), captures cached cell values as a trusted oracle, parses formulas + reconstructs the dependency DAG (`sheet_ir`), compiles pure cells to executable IR, and **penny-reconciles** computed values against the oracle using operand-anchored rounding (never a naïve `delta.abs()` tolerance — grep-gated), emitting the complete seven-member bundle (manifest/IR/cell_map/layout/BUNDLE.lock/evidence)
+  2. The candidate semantic manifest is synthesized **fully workbook-driven** from colour/Guide/headers with BA ratification — `build_reference_manifest` is deleted from every non-test path (kills per-workbook Rust); closed JSON-Schema enums come from inline DV literals (≤10), with range/named-range sources rejected with precise reason codes
+  3. **CR-01 fix:** the change-class classifier is symmetric — demotion-direction changes (Input→Constant, source/assumption flips) each produce a non-empty class routing to BlockUntilAccept/NeverAutoPromote, never silent HotReload; the strictest-policy reducer hard-blocks any assumption (yellow-cell) change; numeric drift is distinguished from semantic redefinition via a stable canonical IR sub-DAG identity hash
+  4. **CR-02 fix:** promotion writes the new bundle to its own `@<next_version>` directory and never overwrites the baseline (promote-twice yields two distinct on-disk version dirs, prior baseline byte-identical, `BUNDLE.lock` version == `changelog.to_version`); the golden-corpus gate blocks any over-tolerance named-output delta unless a content-hash-fingerprinted `ApprovalRecord` covers the candidate, and a BA can record one via `--accept --approver <X> --effective-date <D>`
+  5. **WR-01 fix + umya provenance:** enum inputs skip Variable-tier assignment so the default path can never seed an out-of-enum empty string (verified against the COMMITTED manifest, not the in-memory builder); the freshness gate assigns a distinct provenance class to umya-stamped (fabricated `<Application>Microsoft Excel</Application>`/`calcId`) workbooks and REFUSES them with `oracle/non-excel-app`
+
+**Plans**: 7 plans (6 waves)
+
+Plans:
+**Wave 1**
+
+- [x] 93-01-PLAN.md — Crate skeleton: Cargo.toml + re-export-surface lib.rs + generic compile_workbook stub + purity-gate extension (reader confined)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [x] 93-02-PLAN.md — ingest (umya → WorkbookMap + cached oracle) + provenance (quarantined raw reader; REFUSE umya-fabricated identity, WBCO-07) + provenance fuzz target
+- [x] 93-03-PLAN.md — WBDL-03 running linter + formula parser (whitelist-at-parse) + Kahn DAG + formula-parser fuzz target
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [x] 93-04-PLAN.md — manifest synth/ratify (annotations reconciled; inline-DV enums; range-DV warning) + operand-anchored reconcile (no delta.abs)
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
+- [x] 93-05-PLAN.md — seven-member artifact emit (bundle_id; WR-01 enum-tier skip) + symmetric change-class classifier + IR identity hash (lift WITH tests)
+
+**Wave 5** *(blocked on Wave 4 completion)*
+
+- [x] 93-06-PLAN.md — promote gate: auto-derived corpus (D-09) + fingerprint-bound ApprovalRecord + accept() + CR-02 versioned non-overwriting promote
+
+**Wave 6** *(blocked on Wave 5 completion)*
+
+- [x] 93-07-PLAN.md — stage1 + wired generic driver + neutral tax-calc.xlsx + producer/consumer byte-identical proof + example + full quality/purity gate
+
+### Phase 94: CLI Subcommands + `pmcp.toml`
+
+**Goal**: The compiler's verbs become first-class `cargo pmcp` subcommands (thin shells over the Phase 93 compiler) carrying the gated BA approval flow, and a project-level `pmcp.toml` maps workbooks → bundle IDs, eliminating the lighthouse's single-workbook justfile/path assumptions so a second project can use the tooling.
+**Depends on**: Phase 93 (the compiler)
+**Requirements**: WBCL-01, WBCL-02, WBCL-03, WBCL-04
+**Success Criteria** (what must be TRUE):
+
+  1. A developer can run `cargo pmcp compile-workbook <wb.xlsx>` to ingest → lint → synth → parse → compile → reconcile → **gate** → write a bundle, with the gate running before any write; and `cargo pmcp lint-workbook <wb.xlsx>` runs the dialect linter standalone (non-zero exit on errors)
+  2. A developer can run `cargo pmcp emit-bundle` to regenerate a bundle without the gate (dev/reference)
+  3. The `--accept --approver <X> --effective-date <D>` flow records a fingerprint-bound `ApprovalRecord` and re-baselines the golden corpus through the CLI, with clear gate output stating the change class and the exact command to run
+  4. A project declares workbooks → bundle IDs in a project-level `pmcp.toml` (`[[workbook.workbooks]]` source → bundle_id), and the three CLI subcommands resolve sources through it — no lighthouse paths
+
+**Plans**: 6 plans
+
+Plans:
+**Wave 0**
+
+- [x] 94-00-PLAN.md — library seams in pmcp-workbook-compiler: PUBLIC read_workbook_version + prepare_candidate (gated-update candidate facade) + write_gate_marker (hash-covered ungated marker channel) — exposes existing internals only (WBCL-01 gated half, WBCL-03 marker)
+
+**Wave 1**
+
+- [x] 94-01-PLAN.md — pmcp.toml parser (PmcpToml load/resolve/all_entries/validate) + cargo-pmcp→compiler dep edge (WBCL-04)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [x] 94-02-PLAN.md — `workbook` subcommand group + main.rs wiring + `lint` handler with text/json + errors-fail exit codes (WBCL-02, D-04/D-09/D-10)
+
+**Wave 3** *(blocked on Wave 0 + Wave 2 completion)*
+
+- [x] 94-03-PLAN.md — `compile` handler: seed/gated lane (prepare_candidate→gate::gate→block-or-promote), gate-before-write, mandatory --approver, --accept flow, compile-all (WBCL-01/04, D-06/D-07)
+- [x] 94-04-PLAN.md — `emit` handler: ungated bundle + loud banner + HASH-COVERED evidence gated:false marker via write_gate_marker (WBCL-03, D-08)
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
+- [x] 94-05-PLAN.md — end-to-end CLI integration test (incl. hash-covered emit marker) + purity-gate confirmation + runnable example (WBCL-01/02/03/04)
+
+### Phase 95: Shape A Binary `pmcp-workbook-server`
+
+**Goal**: A `pmcp-workbook-server` pure-config binary stands up a live MCP server from a compiled bundle alone, with no user Rust — mirroring `pmcp-sql-server` field-for-field (lib `run`/`serve` + thin `main.rs` shim, `RunError` → non-zero exit), selecting a `BundleSource` from CLI args.
+**Depends on**: Phase 92 (toolkit module + `BundleSource`) and Phase 94 (stable `pmcp.toml` contract)
+**Requirements**: WBCL-06
+**Success Criteria** (what must be TRUE):
+
+  1. Running `pmcp-workbook-server --bundle-dir <dir> --bundle-id <id>` (optionally `--http`) stands up a live MCP server whose five tools are served entirely from the compiled bundle — zero user Rust written
+  2. The binary selects a `BundleSource` from CLI args, runs the boot integrity gate, and surfaces a load/integrity failure as a typed `RunError` → non-zero exit (matching `pmcp-sql-server`'s behavior)
+  3. The published binary (slot 9a) links only `pmcp-server-toolkit[workbook]` + `pmcp-workbook-runtime` — the purity gate confirms no reader in its tree
+
+**Plans**: 2 plans
+Plans:
+**Wave 1**
+
+- [x] 95-01-PLAN.md — Re-skin the pmcp-sql-server crate as pmcp-workbook-server: lib (run/serve/run_serving + RunError incl. BundleIdMismatch), cli Args (--bundle-dir/--bundle-id/--http loopback), main shim, build_server seam (LocalDirSource + --bundle-id assert + try_with_workbook_bundle), workspace registration, runnable example over the synthetic golden bundle
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [x] 95-02-PLAN.md — Test trio (assemble surface / ephemeral-port HTTP smoke / mcp-tester parity through the real binary path) + proptest fuzz of the --bundle-id fail-closed guard + purity-check assertion for the reader-free served cone + CLAUDE.md slot-9a publish-order wiring
+
+### Phase 96: Shape B Scaffold + Dialect-Version Declaration + Generalization Validation
+
+**Goal**: `cargo pmcp new --kind workbook-server` scaffolds a thin binary over `BundleSource` + the served-tool toolkit module (Shape B); workbooks declare the dialect version they target (forward-compatible evolution); and the generalization gates — a second, non-lighthouse workbook compiling and serving end-to-end, plus an Excel-quirk fixture corpus — prove the manifest is truly synth-driven with no per-workbook Rust and no privileged single output.
+**Depends on**: Phase 95 (the scaffold targets the Shape A wiring)
+**Requirements**: WBCL-05, WBDL-02, WBEX-01, WBEX-02
+**Success Criteria** (what must be TRUE):
+
+  1. A developer can run `cargo pmcp new --kind workbook-server` to scaffold a runnable crate (Cargo.toml + `main.rs` using `EmbeddedSource` + sample `pmcp.toml` + sample bundle) — a thin shell over the toolkit module, mirroring `--kind sql-server`
+  2. A workbook declares the dialect version it targets, and the compiler validates that declaration — enabling forward-compatible dialect evolution
+  3. **GENERALIZATION GATE (WBEX-01):** a second, non-lighthouse example workbook compiles and serves end-to-end through the SDK path, and its server's `get_manifest` / `tools/list` schema reflects ITS OWN inputs with zero shared Rust and no privileged single output — proving the manifest-driven §5 fix generalized
+  4. ✅ An Excel-quirk fixture corpus (1900 leap-year, empty-cell coercion, error propagation, half-rounding boundaries) verifies reconcile determinism beyond the single golden case (WBEX-02, 96-05: 8 quirks across both layers — scalar_eval unit tests + penny-reconcile mini fixtures graded via within_tol)
+
+**Plans**: 5 plans
+
+- [x] 96-01-PLAN.md — WBDL-02 dialect-version declaration: pmcp_dialect_version reader + semver-compat (fail-closed) + dialect consts/spec drift guard + fuzz/property ✅ (commits 14047806, 45e4fa4f, 4702a329)
+- [x] 96-02-PLAN.md — WBCL-05 Shape B scaffold: `cargo pmcp new --kind workbook-server` template + dispatch + purity-safe Cargo.toml + EMBEDDED publish-safe assets (include_dir!) + lib seam + drift-lock/bundle-bytes/version-drift golden tests + scaffold-build & packaging smokes + example ✅ (commits 91933535, 736a1266, cf670b6b)
+- [x] 96-03-PLAN.md — WBEX critical-path spike: reusable #[cfg(test)] rust_xlsxwriter fixture author (Excel identity) + 1900-leap-year disposition spike
+- [x] 96-04-PLAN.md — WBEX-01 generalization gate: synthetic loan/mortgage rate-tier second workbook compiles via the generic driver + serves its OWN get_manifest/tools/list schema (loan keys present, tax keys absent, DISJOINT) behind the same five generic tool names; reemit_loan 9-assertion served-schema proof (incl. production-refusal T-96-10) + the in_* input-naming convention (mirrors out_*) ✅ (commits 6b622e95, a7529369)
+- [x] 96-05-PLAN.md — WBEX-02 Excel-quirk corpus: 8 quirks in BOTH layers — scalar_eval unit tests (excel_round source of truth; 1900-leap >59/+1 components per SPIKE, no DATE) + mini penny-reconcile fixtures graded by retrieving the recomputed value + cached oracle through within_tol (cannot pass on compile-success alone); 3 of 4 named quirks have a reconcile fixture (error propagation is the scalar_eval-only stand-in — runtime Div clamps NaN->0 / preflight short-circuit); production-refusal spot check + quirk->WBEX-02 traceability map ✅ (commits e3cce105, 7fa7458f)
+
+## Progress — v2.3 Milestone
+
+**Execution order:** Phase 91 (runtime + purity gate + dialect) → Phase 92 (BundleSource + served-tool module, freezes the bundle contract) → Phase 93 (compiler + §5 fixes + promote gate) → Phase 94 (CLI + `pmcp.toml`) → Phase 95 (Shape A binary) → Phase 96 (Shape B scaffold + dialect-version + generalization gates). Strictly sequential: each phase's output is the next phase's dependency (runtime ← compiler/toolkit; contract frozen before compiler re-cut; CLI/binary/scaffold over the now-stable runtime+compiler).
+
+| Phase | Plans Complete | Status | Completed |
+|-------|----------------|--------|-----------|
+| 91. Workbook Runtime + Purity Gate + Dialect | 3/3 | Complete    | 2026-06-10 |
+| 92. BundleSource + Served-Tool Toolkit Module | 7/7 | Complete    | 2026-06-11 |
+| 93. Workbook Compiler + §5 Fixes + Promote Gate | 7/7 | Complete    | 2026-06-13 |
+| 94. CLI Subcommands + `pmcp.toml` | 6/6 | Complete    | 2026-06-14 |
+| 95. Shape A Binary `pmcp-workbook-server` | 2/2 | Complete    | 2026-06-14 |
+| 96. Shape B Scaffold + Dialect-Version + Generalization | 5/5 | Complete    | 2026-06-15 |
+
+## Phase Details — v2.4 (cargo-pmcp deploy)
+
+### Phase 98: `cargo pmcp deploy` — stack.ts Regeneration Guard + Config-Driven Metadata
+
+**Goal**: `cargo pmcp deploy` stops silently overwriting an operator-curated `deploy/lib/stack.ts`, and curated template metadata (`mcp:serverType`, `mcp:snapshotBaked`) becomes reproducible-from-config so it survives any regeneration. Closes the defect diagnosed in `.planning/debug/deploy-overwrites-stack-ts.md`: both deploy targets do an unconditional `std::fs::write(stack.ts)` (no exists-guard, no diff, no opt-out), and `mcp:serverType`/`mcp:snapshotBaked` cannot be driven from `.pmcp/deploy.toml` (serverType hardcoded `'custom'` for custom/pmcp.toml servers; snapshotBaked has zero representation).
+
+**Depends on**: none (standalone deploy-correctness fix; independent of Phase 97's GitHub-automation work, though it shares the `deploy.rs` / `.pmcp/deploy.toml` surface)
+**Requirements**: DSTK-01, DSTK-02, DSTK-03, DSTK-04
+**Success Criteria** (what must be TRUE):
+
+  1. Running `cargo pmcp deploy` against a directory with a pre-existing, operator-edited `deploy/lib/stack.ts` leaves that file byte-for-byte unchanged on BOTH targets (pmcp-run + aws-lambda); IAM validation still runs and a "preserved existing stack.ts" notice is printed
+  2. Passing `--regenerate-stack` (or `--force`) re-renders `stack.ts` from the template as before — the opt-out is explicit, not the default
+  3. A `[metadata]` block in `.pmcp/deploy.toml` (`server_type = "graph-rag"`, `snapshot_baked = true`) flows through `render_stack_ts` / `McpMetadata` / `to_cdk_context` so the synthesized `stack.ts` advertises `mcp:serverType:'graph-rag'` + `mcp:snapshotBaked:'true'` — reproducible from config, surviving a regeneration
+  4. ALWAYS coverage present and green: exists-guard unit tests on both targets, config-survives-render unit/property tests, golden-file update in `tests/backward_compat_stack_ts.rs` for the new `mcp:snapshotBaked` line, `--regenerate-stack` documented in `cargo-pmcp/docs/commands/deploy.md`; `make quality-gate` passes
+
+**Source**: debug session `.planning/debug/deploy-overwrites-stack-ts.md` (root cause + recommended fix direction recorded under Resolution)
+
+**Plans:** 4/4 plans complete
+
+- [x] 98-01-PLAN.md — Config contract (`[metadata]` block + `regenerate_stack` runtime flag on DeployConfig) + RED regression tests reproducing the overwrite + config-metadata defects [DSTK-02] ✅ 2026-06-16
+- [x] 98-02-PLAN.md — DSTK-01 exists-guard + `--regenerate-stack`/`--force` flag on BOTH targets (shared guarded-write helper, IAM validation preserved, "preserved existing stack.ts" notice) [DSTK-01]
+- [x] 98-03-PLAN.md — DSTK-02 + DSTK-03 config-driven metadata (`McpMetadata.snapshot_baked` + `server_type` override → `to_cdk_context` `mcp:snapshotBaked` → template literal) [DSTK-02, DSTK-03]
+- [x] 98-04-PLAN.md — DSTK-04 ALWAYS coverage (property test, `[metadata]` fuzz target, golden-file update, runnable example, `--regenerate-stack` + `[metadata]` docs) + `make quality-gate` green [DSTK-04]
+
+### Phase 99: Workbook-Crate Cognitive-Complexity Reduction (PMAT gate debt)
+
+**Goal**: Make `pmat quality-gate --fail-on-violation --checks complexity` pass workspace-wide by refactoring the 21 cognitive-complexity violations in the v2.3 workbook crates to the gate threshold, WITHOUT weakening the gate (`#[allow]` is a no-op for PMAT per Phase 75 D-10-B; no production crate goes into `.pmatignore`). Behavior is preserved by the milestone's existing golden/reconcile/quirk test net. Unblocks PR #279's complexity gate (the Makefile `SHELL := bash` fix already unblocked the separate purity-check gate).
+
+**Depends on**: none (refactor of already-merged-on-branch milestone code; independent of Phase 98)
+**Requirements**: CPLX-01, CPLX-02, CPLX-03, CPLX-04
+**Success Criteria** (what must be TRUE):
+
+  1. `pmat quality-gate --fail-on-violation --checks complexity` exits 0 with ZERO violations across the workspace
+  2. All 21 flagged functions are refactored (the 5 over the cog-50 hard cap — `render_xlsx` 93, `classify_cell_roles` 74, `eval_expr` 58, `ingest` 57, `tokenize` 52 — by genuine decomposition); no production crate is added to `.pmatignore`; no `#[allow(clippy::cognitive_complexity)]` is relied on to clear the PMAT gate
+  3. No behavior regressions — full workspace test suite green (golden/reconcile/quirk fixtures, dialect linter, provenance gate) and `make quality-gate` green
+  4. PR #279's CI complexity gate goes green on the next run
+
+**Source**: PR #279 CI failure (21 PMAT complexity violations); empirical PMAT-allow behavior in `.planning/phases/75-fix-pmat-issues/pmat-allow-behavior.md` (D-10-B)
+
+**Plans**: 11 plans (10 parallel refactor plans + 1 gate-closure verification)
+
+**Wave 1** *(disjoint files — fully parallel)*
+
+- [x] 99-01-PLAN.md — render_xlsx (93) decomposition [runtime] [CPLX-01]
+- [x] 99-02-PLAN.md — eval_expr (58) + f_index (24) + f_search (31) [runtime] [CPLX-01]
+- [x] 99-03-PLAN.md — bundle_loader::load (28) [runtime] [CPLX-01]
+- [x] 99-04-PLAN.md — classify_cell_roles (74) + dependency_order (24) [compiler] [CPLX-02]
+- [x] 99-05-PLAN.md — tokenize (52) + lex_quoted_sheet_ref (33) + scan_atom_run (30) [compiler] [CPLX-02]
+- [x] 99-06-PLAN.md — ingest (57) + references_external_workbook (31) [compiler] [CPLX-02]
+- [x] 99-07-PLAN.md — parse_calc_pr (44) + parse_app_props (39) + gate_inner (29) [compiler] [CPLX-02]
+- [x] 99-08-PLAN.md — derive_case_grid (34) + no_seeded_value_outside_allowed (46) [compiler] [CPLX-02]
+- [x] 99-09-PLAN.md — extract_function_tokens (29) + author_xlsx (29) + walk (25) [compiler] [CPLX-02]
+- [x] 99-10-PLAN.md — validate_input (33) [server-toolkit] [CPLX-03]
+
+**Wave 2** *(blocked on all of Wave 1)*
+
+- [x] 99-11-PLAN.md — gate-closure verification: `pmat quality-gate --checks complexity` zero violations + full workspace tests + `make quality-gate` green; assert no `.pmatignore`/`#[allow]` weakening [CPLX-01/02/03/04]

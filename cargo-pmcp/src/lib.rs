@@ -92,3 +92,13 @@ pub mod test_support {
     pub use crate::test_support_cache as cache;
     pub use crate::test_support_configure as configure_config;
 }
+
+// WBCL-05: expose ONLY the `workbook-server` scaffold emitter to the lib target
+// (mirrors the `test_support_cache` `#[path]` convention). The full `templates`
+// tree is BIN-ONLY (its siblings reference `crate::commands::*`); this single
+// leaf is dependency-light (std::fs + include_dir + format! + colored), so it
+// compiles in the lib target without dragging in the command layer. The
+// `workbook_server_scaffold` example and the `workbook_scaffold` integration
+// test reach `generate` through this seam, NOT the bin-only `templates::*`.
+#[path = "templates/workbook_server.rs"]
+pub mod templates_workbook_server;

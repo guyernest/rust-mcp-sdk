@@ -1,0 +1,54 @@
+[package]
+name = "pmcp-workbook-runtime"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/paiml/rust-mcp-sdk"
+description = "Reader-free workbook IR + deterministic executor + writer-only .xlsx renderer"
+
+# Why: keep the published artifact lean and reader-free; planning/pmat/fuzz/tests
+# never ship to downstream consumers.
+exclude = [".planning/", ".pmat/", "fuzz/", "tests/"]
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[lib]
+name = "pmcp_workbook_runtime"
+path = "src/lib.rs"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+schemars = "1.0"
+thiserror = "2"
+sha2 = "0.11"                      # bundle-artifact hashing (match pmcp-code-mode pin)
+hex = "0.4"                        # match pmcp-code-mode pin
+
+# WRITER-ONLY .xlsx emitter (Phase 12, Plan 02 — D-01, T-12-SC). The single
+# deliberate cross-phase purity-gate relaxation: a writer (NOT a reader/parser).
+# It pulls `zip` (the deflate container) but NO workbook reader (no quick-xml /
+# umya / calamine). default-features=false drops chrono/serde extras the writer
+# does not need. Install was GATED behind a blocking human-verify (T-12-SC):
+# crates.io legitimacy (author jmcnamara, MIT/Apache, repo
+# github.com/jmcnamara/rust_xlsxwriter), `cargo tree -i` writer-only confirmation
+# (zip enters ONLY via this crate; no reader leaks), and `cargo audit` clean —
+# mirroring the umya 3.0.0 / csv 1.4 supply-chain discipline of record.
+rust_xlsxwriter = { version = "0.95", default-features = false }
+
+# EMBEDDED-BUNDLE support (Phase 92, Plan 01 — WBSV-09, T-92-SC). Optional +
+# behind the `embedded` feature so the default build never pulls it. It bakes a
+# whole bundle directory tree into the binary for `EmbeddedSource`. slopcheck
+# could not run, so this install was GATED behind a blocking human-verify
+# (T-92-SC, Task 1): crates.io legitimacy confirmed (author Michael-F-Bryan,
+# license MIT OR Apache-2.0, repo github.com/Michael-F-Bryan/include_dir,
+# 53.4M downloads, v0.7.4 latest stable, not yanked) and `cargo audit` clean —
+# mirroring the rust_xlsxwriter 0.95 / umya 3.0.0 supply-chain discipline of
+# record. It pulls NO workbook reader (no quick-xml / umya / calamine), so the
+# crate stays reader-free with the feature on.
+include_dir = { version = "0.7.4", optional = true }
+
+[features]
+# Bake a bundle directory tree into the binary via `EmbeddedSource` (WBSV-09).
+embedded = ["dep:include_dir"]

@@ -269,6 +269,16 @@ pub struct DeployCommand {
     #[arg(long, value_name = "MODE")]
     apps_mode: Option<String>,
 
+    /// Overwrite an existing `deploy/lib/stack.ts` (Phase 98, DSTK-01).
+    ///
+    /// By default `cargo pmcp deploy` PRESERVES a pre-existing, operator-curated
+    /// `deploy/lib/stack.ts` instead of silently regenerating it from the
+    /// template (a first deploy still scaffolds a missing file without this
+    /// flag). Pass `--regenerate-stack` (alias `--force`) to re-render and
+    /// overwrite the existing file from `.pmcp/deploy.toml`.
+    #[arg(long = "regenerate-stack", alias = "force")]
+    regenerate_stack: bool,
+
     /// Override deploy-root resolution. Accepts either a directory containing
     /// `.pmcp/deploy.toml`, OR a path to a `deploy.toml` file directly. Highest
     /// precedence — applies to deploy, init, and all read subcommands.
@@ -961,6 +971,13 @@ impl DeployCommand {
                 );
 
                 let mut config = crate::deployment::DeployConfig::load(&project_root)?;
+
+                // DSTK-01: carry the --regenerate-stack/--force opt-in via the
+                // config carrier (the #[serde(skip)] runtime field), mirroring
+                // the config.secrets injection below — the flag travels on
+                // `config`, not a new trait parameter, so both deploy targets
+                // read it uniformly through DeployConfig.
+                config.regenerate_stack = self.regenerate_stack;
 
                 // For aws-lambda: inject resolved secrets into config.secrets (transient,
                 // never saved). These flow to DeployExecutor.extra_env -> CDK process env.

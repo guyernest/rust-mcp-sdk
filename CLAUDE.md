@@ -230,6 +230,7 @@ make test-integration   # Integration tests
 7. `pmcp-toolkit-mysql` (depends on pmcp-server-toolkit + sqlx)
 8. `pmcp-toolkit-athena` (depends on pmcp-server-toolkit + aws-sdk-athena)
 9. `pmcp-sql-server` (Shape A pure-config binary; depends on pmcp-server-toolkit + all four connector crates — must publish AFTER items 5–8; no inter-dep with mcp-tester)
+9a. `pmcp-workbook-server` (Shape A pure-config WORKBOOK binary; depends on `pmcp-server-toolkit` with the `workbook` + `http` features — and thus transitively on `pmcp-workbook-runtime` — plus `pmcp`. Must publish AFTER `pmcp-server-toolkit` (item 5) and its `pmcp-workbook-runtime` dep. It is a sibling of `pmcp-sql-server` (item 9) but has NO inter-dependency with the SQL connector crates (items 6–8) and NO inter-dep with `mcp-tester`, which it uses only as a `[dev-dependencies]` parity-test harness, not a published dependency. NOTE: `pmcp-workbook-runtime` is NOT a numbered item in this list — it is pulled in only transitively, through `pmcp-server-toolkit`'s `workbook` feature (this binary depends on the toolkit directly, never on the runtime crate), and is published out-of-band by its own Phase 91/92 workbook-runtime release ahead of `pmcp-server-toolkit` (item 5). The release workflow skips already-published crates gracefully, so no numbered slot is required here; just ensure the workbook-runtime tree is published before item 5.)
 10. `mcp-tester` (depends on pmcp)
 11. `mcp-preview` (depends on widget-utils)
 12. `cargo-pmcp` (depends on pmcp, mcp-tester, mcp-preview)

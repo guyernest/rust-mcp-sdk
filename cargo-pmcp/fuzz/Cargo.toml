@@ -57,3 +57,10 @@ path = "fuzz_targets/fuzz_azure_config.rs"
 doc = false
 test = false
 bench = false
+
+[[bin]]
+name = "fuzz_metadata_config"
+path = "fuzz_targets/fuzz_metadata_config.rs"
+doc = false
+test = false
+bench = false

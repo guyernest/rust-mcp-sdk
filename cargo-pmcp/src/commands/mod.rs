@@ -17,6 +17,7 @@ pub mod schema;
 pub mod secret;
 pub mod test;
 pub mod validate;
+pub mod workbook;
 
 /// Global CLI flags shared across all commands.
 ///

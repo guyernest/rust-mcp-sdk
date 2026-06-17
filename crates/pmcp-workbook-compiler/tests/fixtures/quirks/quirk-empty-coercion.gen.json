@@ -1,0 +1,27 @@
+{
+  "generator_fn": "quirk_empty_coercion_spec",
+  "authored_by": "rust_xlsxwriter",
+  "sheet": "Quirk",
+  "input_cells": [
+    "A2"
+  ],
+  "formula_oracles": [
+    {
+      "cell": "A1",
+      "formula": "IF(A2>9999,1)",
+      "cached_oracle": ""
+    },
+    {
+      "cell": "B1",
+      "formula": "A2+A1",
+      "cached_oracle": "5"
+    }
+  ],
+  "expected_outputs": [
+    {
+      "name": "out_sum",
+      "target": "'Quirk'!$B$1"
+    }
+  ],
+  "override_reason": "authored by rust_xlsxwriter; a WBEX-02 Excel-quirk reconcile fixture (one quirk, whitelisted formula DAG, cached <v> oracle) — honoured ONLY on the test/dev path. Production still refuses non-fresh provenance."
+}

@@ -1,0 +1,27 @@
+[package]
+name = "pmcp-workbook-dialect"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/paiml/rust-mcp-sdk"
+description = "Versioned workbook dialect contract — function whitelist, refuse-set, colour ontology + spec-doc binding test"
+
+# Why: keep the published artifact lean; planning/pmat/fuzz/tests never ship to
+# downstream consumers.
+exclude = [".planning/", ".pmat/", "fuzz/", "tests/"]
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[lib]
+name = "pmcp_workbook_dialect"
+path = "src/lib.rs"
+
+[dependencies]
+# version + path together — SDK workspace-internal dep convention. The dialect
+# crate layers the contract (WHITELIST/DialectRules) on top of the runtime's
+# finding types, which it re-exports (D-03).
+pmcp-workbook-runtime = { version = "0.1.0", path = "../pmcp-workbook-runtime" }
+# NOTE: no `serde` — the lighthouse rules.rs types (DialectRules / CandidateRole /
+# WHITELIST) carry no serde derives and need none this phase.

@@ -1,0 +1,43 @@
+# Crate-local cargo-deny config — Layer 2 of the Phase 91 purity gate (WBRT-04, D-09).
+#
+# Scope: this file is invoked ONLY via
+#   cargo deny --manifest-path crates/pmcp-workbook-dialect/Cargo.toml \
+#             --config crates/pmcp-workbook-dialect/deny.toml check bans
+# Per cargo-deny 0.18.3 `--manifest-path` semantics, the dialect crate is the
+# sole root of the crate graph; only workspace members that are dependencies of
+# pmcp-workbook-dialect (i.e. pmcp-workbook-runtime + its writer-only
+# transitives) are evaluated. Phase 93's compiler is never evaluated here, and
+# the infra-managed workspace-global deny.toml is NEVER touched by this file.
+#
+# This config governs ONLY [bans]; advisories/licenses/sources are permissive so
+# `check bans` evaluates the ban list and nothing else.
+
+[advisories]
+version = 2
+ignore = []
+
+[licenses]
+version = 2
+allow = []
+confidence-threshold = 0.0
+
+[sources]
+unknown-registry = "allow"
+unknown-git = "allow"
+
+[bans]
+# The Excel READER stack and the JS/code-mode stack must NEVER enter the
+# reader-free dialect tree. `pmcp` is NOT banned (D-09). `zip` is NOT banned
+# (it enters legitimately via the writer-only rust_xlsxwriter in the runtime).
+multiple-versions = "allow"
+wildcards = "allow"
+deny = [
+  { name = "umya-spreadsheet" },
+  { name = "calamine" },
+  { name = "quick-xml" },
+  { name = "swc_core" },
+  { name = "swc_common" },
+  { name = "swc_ecma_parser" },
+  { name = "swc_ecma_ast" },
+  { name = "pmcp-code-mode" },
+]

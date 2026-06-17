@@ -70,6 +70,25 @@ serde_yaml = { version = "0.9", optional = true }
 base64 = { version = "0.22", optional = true }
 regex = { version = "1.11", optional = true }
 
+# Why: Phase 92 governed-Excel workbook served-tool module (WBSV-08/09). The
+# `workbook` feature pulls the reader-free `pmcp-workbook-runtime` (BundleSource +
+# BundleLoader + the artifact/manifest/changelog/layout model) so the served
+# `calculate`/`explain`/`get_manifest`/`diff_version`/`render_workbook` tools can
+# operate on a verified `WorkbookBundle`. `base64` lives HERE (the toolkit), NOT
+# in the runtime (Codex MEDIUM #6 — the runtime stays base64-free). The bare
+# `workbook` feature carries LocalDirSource only; `workbook-embedded` layers the
+# runtime's `embedded` (include_dir) EmbeddedSource on top.
+pmcp-workbook-runtime = { version = "0.1.0", path = "../pmcp-workbook-runtime", optional = true }
+# Why: the `workbook-embedded` feature lets a Shape A/B server bake a bundle into
+# the binary via the `include_dir!` macro for an `EmbeddedSource` (WBSV-09). The
+# macro emits UNQUALIFIED `include_dir::` paths, so the crate must be a DIRECT,
+# nameable dependency at the consumer's root (a re-export through the runtime
+# does NOT satisfy the macro). Optional + gated on `workbook-embedded` so it
+# never enters the plain `workbook` (LocalDirSource-only) or default build. It is
+# NOT a reader/JS crate — the purity gate's BAN regex (umya/calamine/quick-xml/
+# swc_/pmcp-code-mode) does not flag it, and the embedded tree already carries it.
+include_dir = { version = "0.7.4", optional = true }
+
 [features]
 default = ["code-mode"]
 # Why: the toolkit's code-mode wiring needs `ValidationPipeline::validate_sql_query`
@@ -116,6 +135,16 @@ http = [
 # `["openapi-code-mode"]`. Plan 05's `ScriptToolHandler` and Plan 06's binary dep
 # both key off this single feature.
 openapi-code-mode = ["http", "code-mode", "pmcp-code-mode/js-runtime"]
+# Why: Phase 92 governed-Excel served-tool module (D-06). The feature PAIR keeps
+# `include_dir` (a ~50KB compile-time dependency) out of the LocalDirSource-only
+# build:
+#   - `workbook` pulls the runtime (LocalDirSource path) + base64 (toolkit-side,
+#     Codex MEDIUM #6) — does NOT pull include_dir.
+#   - `workbook-embedded` LAYERS the runtime's `embedded` (include_dir 0.7.4) on
+#     top, adding EmbeddedSource for binary-baked bundles (WBSV-09).
+# Neither is in `default` (D-10), keeping the no-default-features build lean.
+workbook = ["dep:pmcp-workbook-runtime", "dep:base64"]
+workbook-embedded = ["workbook", "pmcp-workbook-runtime/embedded", "dep:include_dir"]
 
 [[example]]
 name = "e01_toolkit_minimal"
@@ -128,6 +157,13 @@ required-features = ["sqlite", "code-mode"]
 [[example]]
 name = "sql_server_http"
 required-features = ["sqlite", "code-mode", "http"]
+
+# Phase 92 (D-12 as refined) — the streamable-HTTP workbook server. Defaults to
+# the EmbeddedSource (include_dir over the committed @1.1.0 golden), so it needs
+# `workbook-embedded` (not bare `workbook`); `http` forwards pmcp/streamable-http.
+[[example]]
+name = "workbook_server_http"
+required-features = ["workbook-embedded", "http"]
 
 [dev-dependencies]
 proptest = "1.7"
@@ -149,3 +185,14 @@ mcp-tester = { version = "0.7.0", path = "../mcp-tester" }
 # Why: Phase 90 Plans 01/03/04/05 drive the HttpConnector against a mock REST
 # backend (GET/POST + auth-header assertions) without a live server. Dev-only.
 wiremock = "0.6"
+# Why: Phase 92 Plan 02 — the tax-calc golden fixture generator builds the bundle
+# artifacts via the runtime's OWN Serialize types + build_bundle_lock (so the
+# golden lock matches BundleLoader's recompute exactly). Dev-only path dep with
+# the `embedded` feature OFF (the generator only needs the model + hasher, not
+# include_dir). `tests/` is excluded from the published artifact, so this never
+# enters the downstream dependency graph.
+pmcp-workbook-runtime = { version = "0.1.0", path = "../pmcp-workbook-runtime" }
+# Why: Phase 92 Plan 02 — the byte-stability test regenerates the golden into a
+# tempdir and the tamper helpers copy-then-corrupt the golden in a tempdir
+# (D-05: no committed corrupt fixtures). Dev-only.
+tempfile = "3"

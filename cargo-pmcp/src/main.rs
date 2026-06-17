@@ -157,6 +157,20 @@ enum Commands {
         command: commands::configure::ConfigureCommand,
     },
 
+    /// Compile, lint, and emit governed Excel workbook bundles
+    ///
+    /// Shells over the pmcp-workbook-compiler: ingest → lint → synth → compile →
+    /// reconcile → gate → write. Reads workbook→bundle mappings from pmcp.toml.
+    #[command(after_long_help = "Examples:
+  cargo pmcp workbook compile pricing.xlsx --workflow quote --approver alice
+  cargo pmcp workbook compile                 # compile-all from pmcp.toml
+  cargo pmcp workbook lint pricing.xlsx
+  cargo pmcp workbook emit pricing.xlsx --workflow quote")]
+    Workbook {
+        #[command(subcommand)]
+        command: commands::workbook::WorkbookCommand,
+    },
+
     /// Start development server
     ///
     /// Builds and runs the server with live logs
@@ -502,7 +516,23 @@ fn main() -> Result<()> {
         }
     }
 
-    execute_command(cli.command, &global_flags)?;
+    // Dispatch the command. A returned `Err` is first downcast to `WorkbookExit`
+    // (D-10): a governance gate block must reach the shell as the DISTINCT exit
+    // code 2, not be collapsed to anyhow's default `1`. The gate-block render is
+    // already printed to stdout by the handler before it constructs the error;
+    // here we re-surface a concise message to stderr and exit with its code. This
+    // MIRRORS the existing `eprintln!()+std::process::exit(2)` precedent above
+    // (the Phase-77 resolver path).
+    match execute_command(cli.command, &global_flags) {
+        Ok(()) => {},
+        Err(e) => {
+            if let Some(wx) = e.downcast_ref::<commands::workbook::WorkbookExit>() {
+                eprintln!("{}", wx.message);
+                std::process::exit(wx.code);
+            }
+            return Err(e);
+        },
+    }
 
     Ok(())
 }
@@ -529,6 +559,7 @@ fn dispatch_trait_based(command: Commands, global_flags: &GlobalFlags) -> Option
         Commands::Test { command } => command.execute(global_flags),
         Commands::Auth { command } => command.execute(global_flags),
         Commands::Configure { command } => command.execute(global_flags),
+        Commands::Workbook { command } => command.execute(global_flags),
         Commands::Dev {
             server,
             port,

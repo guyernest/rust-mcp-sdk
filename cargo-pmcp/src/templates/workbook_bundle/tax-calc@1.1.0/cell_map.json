@@ -1,0 +1,41 @@
+{
+  "inputs": [
+    {
+      "json_key": "gross_income",
+      "seed_coord": "1_Inputs!B2",
+      "unit": "USD"
+    },
+    {
+      "json_key": "filing_status",
+      "seed_coord": "1_Inputs!B3",
+      "unit": null
+    },
+    {
+      "json_key": "deductions",
+      "seed_coord": "1_Inputs!B4",
+      "unit": "USD"
+    }
+  ],
+  "outputs": [
+    {
+      "json_key": "taxable_income",
+      "seed_coord": "3_Outputs!B2",
+      "unit": "USD"
+    },
+    {
+      "json_key": "tax_owed",
+      "seed_coord": "3_Outputs!B3",
+      "unit": "USD"
+    },
+    {
+      "json_key": "effective_rate",
+      "seed_coord": "3_Outputs!B4",
+      "unit": "ratio"
+    },
+    {
+      "json_key": "marginal_rate",
+      "seed_coord": "3_Outputs!B5",
+      "unit": "ratio"
+    }
+  ]
+}

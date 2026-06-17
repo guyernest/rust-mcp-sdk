@@ -1,0 +1,43 @@
+[package]
+name = "pmcp-workbook-compiler-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+license = "MIT OR Apache-2.0"
+
+# Why: this is a cargo-fuzz harness crate, excluded from the parent workspace (the
+# root Cargo.toml `exclude`s every `fuzz/`); it is built only via `cargo fuzz` on a
+# nightly toolchain. cargo-fuzz builds with `--cfg fuzzing`, which enables the
+# compiler crate's `#[cfg(fuzzing)]` hooks over the quarantined raw provenance
+# reader and the untrusted formula parser.
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+pmcp-workbook-compiler = { path = ".." }
+
+# Prevent this Cargo.toml from being absorbed into the parent workspace — the
+# fuzz crate resolves its own deps.
+[workspace]
+
+[[bin]]
+name = "fuzz_provenance_reader"
+path = "fuzz_targets/fuzz_provenance_reader.rs"
+doc = false
+test = false
+bench = false
+
+[[bin]]
+name = "fuzz_formula_parser"
+path = "fuzz_targets/fuzz_formula_parser.rs"
+doc = false
+test = false
+bench = false
+
+[[bin]]
+name = "dialect_version_parse"
+path = "fuzz_targets/dialect_version_parse.rs"
+doc = false
+test = false
+bench = false

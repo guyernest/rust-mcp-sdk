@@ -1,0 +1,97 @@
+[package]
+name = "pmcp-workbook-compiler"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/paiml/rust-mcp-sdk"
+description = "Offline Excel→MCP compiler: umya-isolated ingest→lint→synth→DAG→reconcile→emit→promote-gate"
+
+# Why: keep the published artifact lean; planning/pmat/fuzz/tests never ship to
+# downstream consumers.
+exclude = [".planning/", ".pmat/", "fuzz/", "tests/"]
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+# `cargo fuzz` sets `--cfg fuzzing`; declare it so the non-fuzz build does not
+# warn on the `#[cfg(fuzzing)]` raw-reader hook (the fuzz target lives in fuzz/).
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(fuzzing)'] }
+
+[lib]
+name = "pmcp_workbook_compiler"
+path = "src/lib.rs"
+
+[features]
+# No publishable feature arms the provenance override. The fixture override is
+# `#[cfg(test)]`-only (CR-01): it is unreachable from any default or
+# feature-unifiable build of a downstream consumer. The producer/consumer golden
+# proof lives in an in-crate `#[cfg(test)]` module (src/reemit_golden.rs) so the
+# test cfg is actually reachable; the `compile_a_workbook` example uses ONLY the
+# public `compile_workbook` API and honestly demonstrates the provenance-refusal
+# boundary.
+default = []
+
+[dependencies]
+# version + path together — SDK workspace-internal dep convention. The compiler
+# re-exports the runtime's shared model/IR/hash/changelog/finding/rounding types
+# (NEVER re-declares them) so the served loader and the compiler read ONE
+# definition of Manifest/ChangeClass/etc.
+pmcp-workbook-runtime = { version = "0.1.0", path = "../pmcp-workbook-runtime" }
+# The dialect contract (WHITELIST/DialectRules/CandidateRole) the linter runs
+# against — re-exported here, never re-declared (the dialect crate's spec-binding
+# test would be defeated by a second WHITELIST copy).
+pmcp-workbook-dialect = { version = "0.1.0", path = "../pmcp-workbook-dialect" }
+
+# Match the runtime crate's pins (NOT lighthouse's thiserror = "1").
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+schemars = "1.0"
+sha2 = "0.11"
+hex = "0.4"
+chrono = "0.4"
+
+# READER DEP — the ONE crate in the workspace where the Excel reader is allowed
+# (T-93-01-PURITY; the Makefile purity-check POSITIVELY asserts umya IS here and
+# is ABSENT from every served-tree crate). Install was GATED behind a
+# blocking-human legitimacy checkpoint (Task 1 / T-93-01-SC): the three reader
+# packages were [ASSUMED] (slopcheck unavailable at research time) and were
+# verified on crates.io and explicitly human-approved before this first install.
+# umya-spreadsheet (author MathNya, MIT, github.com/MathNya/umya-spreadsheet)
+# pulls quick-xml + zip transitively; we keep them transitive-only (single
+# version each in Cargo.lock) rather than adding direct pins — the provenance
+# raw reader (Plan 02) re-derives its direct quick-xml/zip pins from umya's
+# resolved versions IF it needs them as direct deps, set to the exact resolved
+# version so Cargo.lock keeps ONE copy. No JS-kernel dep (no SWC, no code-mode):
+# the runtime's pure-Rust scalar_eval replaces the JS kernel on every path here.
+umya-spreadsheet = "3.0"
+
+# The provenance raw reader (Plan 02, WBCO-07) reads the ORIGINAL on-disk .xlsx
+# bytes via quick-xml/zip — umya cannot surface calcPr/app.xml and FABRICATES
+# them on a round-trip, so the gate MUST read the original bytes here. These are
+# DIRECT pins set to umya's EXACT transitively-resolved versions (quick-xml
+# 0.37.x, zip 8.6.x via `cargo tree -p umya-spreadsheet`) so Cargo.lock keeps ONE
+# copy each (no forked second version). The reader stays pub(crate)-quarantined:
+# no quick-xml/zip type ever crosses a public signature (T-93-02-LEAK).
+quick-xml = "0.37"
+zip = "8.6"
+
+[dev-dependencies]
+# Test-only scratch dirs for the bundle-emit tests (no workspace artifacts leak).
+tempfile = "3"
+# WRITER-ONLY xlsx authoring for the neutral producer/consumer fixture
+# (`tax-calc.xlsx`). NOT umya: the provenance gate refuses a umya-authored
+# fixture (Pitfall 3), so the proof fixture is authored by rust_xlsxwriter (a
+# pure writer; pulls zip-deflate but NO workbook reader). It writes formulas WITH
+# cached `<v>` results via `Formula::set_result` — the Plan 04 reconcile oracle.
+# Dev-only: the compiler never links a writer at runtime. Version mirrors the
+# runtime crate's pin (0.95, default-features off).
+rust_xlsxwriter = { version = "0.95", default-features = false }
+# The CONSUMER contract: the direct toolkit loader round-trip test
+# (`emitted_bundle_loads_via_toolkit`) loads an emitted temp bundle through the
+# Phase 92 served loader. The `workbook` feature pulls the LocalDirSource + the
+# fail-closed BundleLoader. Dev-only — the compiler never depends on the toolkit
+# at runtime (the purity boundary keeps umya out of the served tree).
+pmcp-server-toolkit = { version = "0.1.0", path = "../pmcp-server-toolkit", default-features = false, features = ["workbook"] }

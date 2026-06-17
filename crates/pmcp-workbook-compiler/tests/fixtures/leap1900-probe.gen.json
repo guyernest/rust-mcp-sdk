@@ -1,0 +1,22 @@
+{
+  "generator_fn": "leap1900_probe_spec",
+  "authored_by": "rust_xlsxwriter",
+  "sheet": "Serial",
+  "input_cells": [
+    "A1"
+  ],
+  "formula_oracles": [
+    {
+      "cell": "B1",
+      "formula": "IF(A1>59,A1+1,A1)",
+      "cached_oracle": "62"
+    }
+  ],
+  "expected_outputs": [
+    {
+      "name": "out_excel_serial",
+      "target": "'Serial'!$B$1"
+    }
+  ],
+  "override_reason": "authored by rust_xlsxwriter; the 1900-leap serial offset encoded as whitelisted f64 arithmetic (NO date function) — honoured ONLY on the test/dev path. Production still refuses non-fresh provenance."
+}

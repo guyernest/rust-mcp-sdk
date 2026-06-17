@@ -37,6 +37,7 @@
 - [Chapter 12.10: Config-Driven SQL Servers (cargo pmcp)](ch12-10-config-driven-sql-servers.md)
 - [Chapter 12.11: Config-Driven OpenAPI Servers (cargo pmcp)](openapi-built-in-server.md)
 - [Chapter 12.12: OpenAPI over Microsoft Graph (Contoso M365)](openapi-graph-m365.md)
+- [Chapter 12.13: Config-Driven Workbook Servers (cargo pmcp)](ch12-13-config-driven-workbook-servers.md)
 
 ## Part IV: Real-World Applications
 

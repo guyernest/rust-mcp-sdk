@@ -1,0 +1,7 @@
+{
+  "kind": "trusted-fixture",
+  "fixture": "loan-calc.xlsx",
+  "reason": "authored by rust_xlsxwriter; a synthetic loan/mortgage rate-tier calculator (the WBEX-01 second-workbook generalization fixture). Whitelist-legal (VLOOKUP/INDEX-MATCH/IFERROR/nested-IF/ROUND/CEILING, NO PMT/POWER) — honoured ONLY on the test/dev path. Production still refuses non-fresh provenance.",
+  "authored_by": "rust_xlsxwriter",
+  "scope": "test-path-only"
+}

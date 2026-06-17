@@ -1,6 +1,12 @@
 # Rust MCP SDK Makefile with pmat quality standards
 # Zero tolerance for technical debt
 
+# Recipes use bashisms (`set -euo pipefail`, `printf`, process substitution).
+# Make defaults SHELL to /bin/sh (dash on Ubuntu CI), which rejects
+# `set -o pipefail` — pin to bash so the fail-closed purity/quality recipes run
+# identically in CI and locally.
+SHELL := /bin/bash
+
 CARGO = cargo
 RUSTFLAGS = -D warnings
 RUST_LOG ?= debug
@@ -457,6 +463,199 @@ docs-all: doc book
 	@echo "$(GREEN)✓ All documentation built$(NC)"
 
 # Quality gate - PAIML/PMAT style with ALWAYS requirements
+# Phase 91 (WBRT-04) purity gate — fail-closed, per-crate, per-feature.
+#
+# Three layers prove the Excel READER (umya/quick-xml/calamine) and the JS stack
+# (swc_*/pmcp-code-mode) can NEVER enter the reader-free served trees
+# (pmcp-workbook-runtime / pmcp-workbook-dialect):
+#   Layer 1 — cargo-tree negative (reader/JS absent) + positive (rust_xlsxwriter
+#             present) assertions, per-crate AND per-feature-combination.
+#   Layer 2 — crate-local cargo-deny [bans] (deny.toml under each crate), scoped
+#             via --manifest-path so the workspace-global deny.toml is untouched
+#             and Phase 93's compiler is unaffected.
+#   Layer 3 — the crate split itself (delivered by plans 91-01 / 91-02).
+#
+# FAIL-CLOSED: `set -euo pipefail` + explicit per-invocation exit-status capture.
+# A `cargo tree` that errors for ANY reason (broken -p, transient failure) aborts
+# the gate as a FAILURE — it is NEVER read as "no banned dependency". There is no
+# `2>/dev/null` swallow on the tree output. See docs/workbook-purity-gate.md.
+# NOTE (WR-01): the capture uses `tree=$(...) || status=$?` — a PLAIN
+# `tree=$(...); status=$?` would abort the shell at the assignment under
+# `set -e`, making the diagnostic branch dead code (the gate would still fail
+# closed, but with ZERO diagnostics). The `|| status=$?` form suppresses
+# `set -e` for the capture only, so the explicit branch actually runs.
+#
+# `zip` is PERMITTED (it enters legitimately via the writer-only rust_xlsxwriter).
+# `pmcp` is PERMITTED (D-09 — the SDK runtime may depend on pmcp).
+#
+# Canonical cargo-deny ban form (per the plan / D-09):
+#   cargo deny --manifest-path crates/<crate>/Cargo.toml --config deny.toml check bans
+# NOTE: cargo-deny 0.18.3's CLI accepts --config only AFTER the `check`
+# subcommand (a global --config is rejected with "unexpected argument"), and it
+# resolves the config path relative to the manifest dir. So the EXECUTED form
+# below is the equivalent `check --config deny.toml bans` ordering.
+#
+# Adding a reader-free crate in a later phase (92-96): append it to
+# PURITY_CRATES (and to PURITY_WRITER_CRATES if it must link the writer) and
+# give it a crate-local deny.toml — every loop, guard, parity check, and
+# cargo-deny invocation below is driven from these two lists.
+PURITY_CRATES := pmcp-workbook-runtime pmcp-workbook-dialect
+PURITY_WRITER_CRATES := pmcp-workbook-runtime
+
+.PHONY: purity-check
+purity-check:
+	@# Pre-resolve Cargo.lock ONCE before the per-crate/per-feature tree loops below.
+	@# Every loop captures `cargo tree ... 2>&1`; on a fresh/stale lock (always in CI —
+	@# Cargo.lock is gitignored) cargo prints "Adding <crate> v.. (available: ..)" resolve
+	@# progress to stderr. Those lines name banned reader crates (e.g. "Adding quick-xml",
+	@# pulled by umya in the COMPILER, not the served runtime) and were matched by the BAN
+	@# grep — a false-positive boundary breach. Warming the lock here makes the grepped
+	@# trees contain only real dependency edges. Fails closed if the workspace won't resolve.
+	@cargo metadata --format-version 1 >/dev/null 2>&1 || { echo "purity-check FAILED: could not resolve Cargo.lock (failing closed)"; exit 1; }
+	@echo "$(BLUE)purity-check: Phase 91 reader-free boundary gate (fail-closed, per-crate/per-feature)$(NC)"
+	@set -euo pipefail; \
+	BAN='umya|calamine|quick-xml|swc_|pmcp-code-mode'; \
+	for crate in $(PURITY_CRATES); do \
+	  for feat in "" "--no-default-features" "--all-features"; do \
+	    status=0; tree=$$(cargo tree -p $$crate $$feat 2>&1) || status=$$?; \
+	    if [ $$status -ne 0 ]; then \
+	      echo "purity-check FAILED: cargo tree errored for $$crate ($$feat) [exit $$status] — failing closed"; \
+	      printf '%s\n' "$$tree"; \
+	      exit 1; \
+	    fi; \
+	    if printf '%s\n' "$$tree" | grep -Ei "$$BAN"; then \
+	      echo "purity-check FAILED: reader/JS dep in $$crate ($$feat) — the served boundary is breached"; \
+	      exit 1; \
+	    fi; \
+	    if echo " $(PURITY_WRITER_CRATES) " | grep -q " $$crate " && \
+	       ! printf '%s\n' "$$tree" | grep -qi 'rust_xlsxwriter'; then \
+	      echo "purity-check FAILED: rust_xlsxwriter ABSENT from $$crate tree ($$feat) — the writer/renderer is missing (non-vacuous positive assertion)"; \
+	      exit 1; \
+	    fi; \
+	  done; \
+	done; \
+	echo "purity-check: Layer 1 clean — no umya/calamine/quick-xml/swc_/pmcp-code-mode in $(PURITY_CRATES) (all feature combos); rust_xlsxwriter present in $(PURITY_WRITER_CRATES) (zip permitted via the writer)"
+	@# Phase 92 (T-92-19, WBRT-04 carried forward): the served toolkit's workbook
+	@# features must stay reader-free. This is a DISTINCT per-feature-combination
+	@# assertion — `pmcp-server-toolkit` is NOT in PURITY_CRATES (it carries
+	@# code-mode/sql/http and is therefore NOT unconditionally reader-free; RESEARCH
+	@# Pitfall 1 / A5). Both combos are checked: `--features workbook` (LocalDirSource
+	@# only) AND `--features workbook-embedded` (the include_dir-bearing tree). The
+	@# embedded combo is the critical one — it pulls include_dir and must STILL be
+	@# reader-free. Fails closed on a non-zero cargo status from either invocation.
+	@echo "$(BLUE)purity-check: Phase 92 — pmcp-server-toolkit workbook[-embedded] reader-absence (distinct from PURITY_CRATES)$(NC)"
+	@set -euo pipefail; \
+	BAN='umya|calamine|quick-xml|swc_|pmcp-code-mode'; \
+	for feat in "workbook" "workbook-embedded"; do \
+	  status=0; tree=$$(cargo tree -p pmcp-server-toolkit --no-default-features --features "$$feat" 2>&1) || status=$$?; \
+	  if [ $$status -ne 0 ]; then \
+	    echo "purity-check FAILED: cargo tree errored for pmcp-server-toolkit (--features $$feat) [exit $$status] — failing closed"; \
+	    printf '%s\n' "$$tree"; \
+	    exit 1; \
+	  fi; \
+	  if printf '%s\n' "$$tree" | grep -Ei "$$BAN"; then \
+	    echo "purity-check FAILED: reader/JS dep in pmcp-server-toolkit (--features $$feat) — the served workbook boundary is breached"; \
+	    exit 1; \
+	  fi; \
+	done; \
+	echo "purity-check: pmcp-server-toolkit workbook + workbook-embedded are reader-free (umya/calamine/quick-xml/swc_/pmcp-code-mode absent in BOTH; include_dir permitted in the embedded tree)"
+	@# Phase 93 (T-93-01-PURITY): pmcp-workbook-compiler is the ONE crate where the
+	@# Excel reader (umya-spreadsheet + transitive quick-xml/zip) is ALLOWED — it is
+	@# the EXCEPTION and is deliberately NOT in PURITY_CRATES (RESEARCH Pitfall 4).
+	@# Three assertions here:
+	@#  (a) POSITIVE (non-vacuous): umya-spreadsheet MUST be present in the compiler
+	@#      tree (the reader IS here). Use the FULL package name `umya-spreadsheet`,
+	@#      not the bare `umya` token.
+	@#  (b) SINGLE-VERSION guard: the compiler tree must hold exactly ONE quick-xml
+	@#      version and exactly ONE zip version REACHED VIA umya (no forked second
+	@#      copy from a stray direct pin). NOTE: the WORKSPACE legitimately holds two
+	@#      zip majors — zip7 via the writer-only rust_xlsxwriter (served tree) and
+	@#      zip8 via umya (reader) — which are distinct, semver-incompatible sources,
+	@#      so we scope the zip single-version assertion to umya's OWN subtree.
+	@#  (c) The served-crate negatives already re-ran in the PURITY_CRATES loop above
+	@#      (runtime/dialect), re-confirming the compiler's reader dep did NOT leak
+	@#      umya/quick-xml into them via the shared runtime path.
+	@echo "$(BLUE)purity-check: Phase 93 — pmcp-workbook-compiler reader-present (positive) + single-version guard$(NC)"
+	@set -euo pipefail; \
+	status=0; umya=$$(cargo tree -p pmcp-workbook-compiler -i umya-spreadsheet 2>&1) || status=$$?; \
+	if [ $$status -ne 0 ]; then \
+	  echo "purity-check FAILED: cargo tree -i umya-spreadsheet errored for pmcp-workbook-compiler [exit $$status] — failing closed"; \
+	  printf '%s\n' "$$umya"; exit 1; \
+	fi; \
+	if ! printf '%s\n' "$$umya" | grep -qE '^umya-spreadsheet v'; then \
+	  echo "purity-check FAILED: umya-spreadsheet ABSENT from pmcp-workbook-compiler tree — the reader is missing (non-vacuous positive assertion)"; \
+	  exit 1; \
+	fi; \
+	status=0; qx=$$(cargo tree -p pmcp-workbook-compiler -i quick-xml 2>&1) || status=$$?; \
+	if [ $$status -ne 0 ]; then \
+	  echo "purity-check FAILED: cargo tree -i quick-xml errored for pmcp-workbook-compiler [exit $$status] — failing closed"; \
+	  printf '%s\n' "$$qx"; exit 1; \
+	fi; \
+	qxn=$$(printf '%s\n' "$$qx" | grep -cE '^quick-xml v'); \
+	if [ "$$qxn" -ne 1 ]; then \
+	  echo "purity-check FAILED: pmcp-workbook-compiler resolves $$qxn quick-xml versions (expected exactly 1 — a forked second copy breaches the single-version guard)"; \
+	  printf '%s\n' "$$qx"; exit 1; \
+	fi; \
+	zipn=$$(cargo tree -p pmcp-workbook-compiler -e no-dev 2>&1 | grep -cE 'umya-spreadsheet v3' || true); \
+	zipv=$$(cargo tree -p pmcp-workbook-compiler 2>&1 | grep -oE 'zip v[0-9]+\.[0-9]+\.[0-9]+' | sort -u); \
+	zipuniq=$$(printf '%s\n' "$$zipv" | grep -c 'zip v'); \
+	if [ "$$zipuniq" -gt 2 ]; then \
+	  echo "purity-check FAILED: pmcp-workbook-compiler tree holds >2 zip versions ($$zipuniq) — only the writer (zip7) + umya reader (zip8) are expected; a forked third copy breaches the guard"; \
+	  printf '%s\n' "$$zipv"; exit 1; \
+	fi; \
+	echo "purity-check: pmcp-workbook-compiler reader-present (umya-spreadsheet found), single quick-xml version, zip versions bounded to writer+reader ($$zipuniq) — reader confined to the compiler"
+	@# Phase 95 (T-95-06, WBCL-06 success criterion 3): the Shape A
+	@# `pmcp-workbook-server` BINARY's served cone (binary → pmcp-server-toolkit
+	@# [workbook,http] → pmcp-workbook-runtime → pmcp) must stay reader-free — the
+	@# published binary must NEVER carry an Excel reader / JS stack. This is a
+	@# DISTINCT crate-level assertion: the binary is NOT in PURITY_CRATES (it pulls
+	@# the http-feature toolkit), so its tree is checked here on its own. The binary
+	@# is a SERVER (read-pointer regen-on-read render), NOT a writer crate, so there
+	@# is deliberately NO `umya` POSITIVE assertion (unlike the Phase 93 compiler
+	@# block). Fails closed on any non-zero cargo status (NEVER 2>/dev/null — WR-01).
+	@# BAN-breadth (Codex MEDIUM #6): the BAN list is intentionally BROAD and
+	@# fail-closed (`quick-xml` in particular could one day match an unrelated
+	@# transitive XML dep that is NOT an Excel reader). This breadth is DELIBERATE —
+	@# a future false positive MUST be resolved by NARROWING the pattern (scoping it
+	@# to the specific offending crate name) AFTER confirming it is not a reader
+	@# entering the served cone, NEVER by weakening or removing this gate.
+	@echo "$(BLUE)purity-check: Phase 95 — pmcp-workbook-server served cone reader-absence (distinct from PURITY_CRATES)$(NC)"
+	@set -euo pipefail; \
+	BAN='umya|calamine|quick-xml|swc_|pmcp-code-mode'; \
+	status=0; tree=$$(cargo tree -p pmcp-workbook-server 2>&1) || status=$$?; \
+	if [ $$status -ne 0 ]; then \
+	  echo "purity-check FAILED: cargo tree errored for pmcp-workbook-server [exit $$status] — failing closed"; \
+	  printf '%s\n' "$$tree"; \
+	  exit 1; \
+	fi; \
+	if printf '%s\n' "$$tree" | grep -Ei "$$BAN"; then \
+	  echo "purity-check FAILED: reader/JS dep in pmcp-workbook-server — the served binary boundary is breached"; \
+	  exit 1; \
+	fi; \
+	echo "purity-check: pmcp-workbook-server reader-free (umya/calamine/quick-xml/swc_/pmcp-code-mode absent in the served binary tree)"
+	@echo "$(BLUE)purity-check: Layer 2 — crate-local cargo-deny [bans] (--manifest-path scoped; workspace deny.toml untouched)$(NC)"
+	@# WR-02 fail-closed guard: cargo-deny 0.18.3 does NOT fail on a missing
+	@# --config path — it WARNs and falls back to the default (empty-ban) config,
+	@# reporting "bans ok" vacuously. A deleted/renamed crate-local deny.toml
+	@# must FAIL the gate, not silently disable Layer 2. The parity check keeps
+	@# the per-crate [bans] deny lists in lockstep — adding a ban to one crate's
+	@# deny.toml but not the others would silently weaken Layer 2 for the rest.
+	@set -euo pipefail; \
+	ref=""; refcrate=""; \
+	for crate in $(PURITY_CRATES); do \
+	  test -f crates/$$crate/deny.toml || { echo "purity-check FAILED: crates/$$crate/deny.toml missing — Layer 2 would be vacuous; failing closed"; exit 1; }; \
+	  bans=$$(grep -E '\{ name = ' crates/$$crate/deny.toml | sort); \
+	  if [ -z "$$refcrate" ]; then ref="$$bans"; refcrate=$$crate; \
+	  elif [ "$$bans" != "$$ref" ]; then \
+	    echo "purity-check FAILED: crates/$$crate/deny.toml [bans] deny list drifted from crates/$$refcrate/deny.toml — Layer 2 ban lists must stay in lockstep"; \
+	    exit 1; \
+	  fi; \
+	done; \
+	for crate in $(PURITY_CRATES); do \
+	  cargo deny --manifest-path crates/$$crate/Cargo.toml check --config deny.toml bans; \
+	done
+	@echo "$(GREEN)purity-check PASSED: reader-free (umya/calamine/quick-xml/swc_/pmcp-code-mode absent) + writer-present (rust_xlsxwriter, per-feature) + zip-permitted + cargo-deny-bans-clean$(NC)"
+
 .PHONY: quality-gate
 quality-gate:
 	@echo "$(YELLOW)═══════════════════════════════════════════════════════$(NC)"
@@ -473,6 +672,7 @@ quality-gate:
 	@$(MAKE) check-todos
 	@$(MAKE) check-unwraps
 	@$(MAKE) validate-always
+	@$(MAKE) purity-check
 	@echo "$(GREEN)═══════════════════════════════════════════════════════$(NC)"
 	@echo "$(GREEN)        ✅ ALL TOYOTA WAY QUALITY CHECKS PASSED        $(NC)"
 	@echo "$(GREEN)        🎯 ALWAYS Requirements Validated                $(NC)"

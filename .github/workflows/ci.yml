@@ -209,6 +209,11 @@ jobs:
         # Force install latest cargo-audit to support CVSS 4.0
         cargo install cargo-audit --force
 
+    - name: Install cargo-deny (make quality-gate chains purity-check, which needs it)
+      uses: taiki-e/install-action@v2
+      with:
+        tool: cargo-deny
+
     - name: Check disk space before quality gate
       run: df -h
 
@@ -276,21 +281,59 @@ jobs:
     - name: Check MSRV
       run: cargo check --all-features
 
+  # Phase 91 (WBRT-04) purity gate — fail-closed, per-crate, per-feature.
+  # Proves the Excel reader (umya/quick-xml/calamine) and the JS stack
+  # (swc_*/pmcp-code-mode) can never enter the reader-free served trees.
+  # `make purity-check` already loops crate × feature, fails closed, and runs the
+  # crate-local cargo-deny [bans] (Layer 2) — so cargo-deny must be installed here.
+  purity-check:
+    name: Purity Gate
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v6
+
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@stable
+
+    - name: Cache cargo
+      uses: actions/cache@v5
+      with:
+        # No ~/.cargo/bin/ here — taiki-e/install-action fetches a prebuilt
+        # cargo-deny in seconds and caches it itself; restore-keys keeps the
+        # registry warm across Cargo.lock bumps.
+        path: |
+          ~/.cargo/registry/index/
+          ~/.cargo/registry/cache/
+          ~/.cargo/git/db/
+        key: ${{ runner.os }}-cargo-purity-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-cargo-purity-
+
+    - name: Install cargo-deny (Layer 2 backstop)
+      uses: taiki-e/install-action@v2
+      with:
+        tool: cargo-deny
+
+    - name: Run purity gate (per-crate, per-feature, fail-closed; Layers 1+2)
+      run: make purity-check
+
   # Unified gate — single required check for org ruleset.
   # Reports as "gate" to match the org ruleset's required status check.
   gate:
     runs-on: ubuntu-latest
-    needs: [test, quality-gate]
+    needs: [test, quality-gate, purity-check]
     if: always()
     steps:
       - name: Evaluate required checks
         env:
           TEST_RESULT: ${{ needs.test.result }}
           QG_RESULT: ${{ needs.quality-gate.result }}
+          PURITY_RESULT: ${{ needs.purity-check.result }}
         run: |
           if [[ "$TEST_RESULT" != "success" ]] || \
-             [[ "$QG_RESULT" != "success" ]]; then
-            echo "Required checks failed: test=$TEST_RESULT, quality-gate=$QG_RESULT"
+             [[ "$QG_RESULT" != "success" ]] || \
+             [[ "$PURITY_RESULT" != "success" ]]; then
+            echo "Required checks failed: test=$TEST_RESULT, quality-gate=$QG_RESULT, purity-check=$PURITY_RESULT"
             exit 1
           fi
           echo "All required checks passed."

@@ -1,0 +1,7 @@
+{
+  "kind": "trusted-fixture",
+  "fixture": "leap1900-probe.xlsx",
+  "reason": "authored by rust_xlsxwriter; the 1900-leap serial offset encoded as whitelisted f64 arithmetic (NO date function) — honoured ONLY on the test/dev path. Production still refuses non-fresh provenance.",
+  "authored_by": "rust_xlsxwriter",
+  "scope": "test-path-only"
+}

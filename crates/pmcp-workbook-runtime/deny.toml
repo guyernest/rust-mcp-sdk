@@ -1,0 +1,50 @@
+# Crate-local cargo-deny config — Layer 2 of the Phase 91 purity gate (WBRT-04, D-09).
+#
+# Scope: this file is invoked ONLY via
+#   cargo deny --manifest-path crates/pmcp-workbook-runtime/Cargo.toml \
+#             --config crates/pmcp-workbook-runtime/deny.toml check bans
+# Per cargo-deny 0.18.3 `--manifest-path` semantics, specifying a workspace
+# member's manifest makes THAT crate the sole root of the crate graph: only
+# workspace members that are dependencies of pmcp-workbook-runtime are evaluated.
+# Phase 93's pmcp-workbook-compiler (a separate member, NOT a dependency of the
+# runtime) is therefore NEVER evaluated by this config — its legitimate
+# umya/quick-xml use is unaffected. The infra-managed workspace-global deny.toml
+# is NEVER touched by this file.
+#
+# This config governs ONLY [bans]. Advisories / licenses / sources stay under the
+# workspace-global deny.toml; the sections below are set to the most permissive
+# form so `check bans` evaluates the ban list and nothing else.
+
+[advisories]
+version = 2
+ignore = []
+
+[licenses]
+version = 2
+allow = []
+# Permissive: do not fail on unlicensed/unknown — license policy lives in the
+# workspace-global deny.toml; this crate-local file is bans-only.
+confidence-threshold = 0.0
+
+[sources]
+unknown-registry = "allow"
+unknown-git = "allow"
+
+[bans]
+# The Excel READER stack (umya/calamine/quick-xml) and the JS/code-mode stack
+# (swc_*/pmcp-code-mode) must NEVER enter the reader-free served runtime tree.
+# `pmcp` is intentionally NOT banned (D-09 — the SDK runtime may depend on pmcp).
+# `zip` is intentionally NOT banned (it enters legitimately via the writer-only
+# rust_xlsxwriter — a writer is not a reader).
+multiple-versions = "allow"
+wildcards = "allow"
+deny = [
+  { name = "umya-spreadsheet" },
+  { name = "calamine" },
+  { name = "quick-xml" },
+  { name = "swc_core" },
+  { name = "swc_common" },
+  { name = "swc_ecma_parser" },
+  { name = "swc_ecma_ast" },
+  { name = "pmcp-code-mode" },
+]
