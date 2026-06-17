@@ -357,14 +357,9 @@ fn f_search(args: &[EvalValue]) -> Result<CellValue, ExcelError> {
 /// Absent → `0`; present requires a positive integer, else `#VALUE!`.
 fn search_start_position(args: &[EvalValue]) -> Result<usize, ExcelError> {
     match args.get(2) {
-        Some(_) => {
-            let v = to_number(arg_scalar(args, 2)?)?;
-            if v >= 1.0 && v.fract() == 0.0 {
-                Ok((v as usize) - 1)
-            } else {
-                Err(ExcelError::Value)
-            }
-        },
+        // SEARCH wants a 0-based offset; `one_based_index` validates the shared
+        // "positive integer or #VALUE!" rule and returns the 1-based value.
+        Some(_) => one_based_index(to_number(arg_scalar(args, 2)?)?).map(|i| i - 1),
         None => Ok(0),
     }
 }
