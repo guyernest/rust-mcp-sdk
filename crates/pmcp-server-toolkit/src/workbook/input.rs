@@ -96,78 +96,15 @@ pub fn validate_input(
     let input: CalculateInput = serde_json::from_value(args)
         .map_err(|e| WorkbookToolError::invalid_input(format!("invalid arguments: {e}")))?;
 
-    let mut seeds: BTreeMap<String, Value> = BTreeMap::new();
-
     // 1. Seed every manifest input with its tier default (so an omitted input
-    //    still resolves), then overlay the caller-supplied values.
-    for role in &manifest.cells {
-        if matches!(role.role, Role::Input) {
-            if let Some(default) = tier_default(role) {
-                seeds.insert(role.cell.clone(), default);
-            }
-        }
-    }
+    //    still resolves), then overlay the caller-supplied + override values.
+    let mut seeds = seed_tier_defaults(manifest);
 
-    // 2. Map each supplied input key → seed_coord via the cell_map. WR-05: an
-    //    unknown input key is `invalid_input` (a bad FIELD).
-    for (key, value) in &input.inputs {
-        let entry = cell_map
-            .inputs
-            .iter()
-            .find(|e| &e.json_key == key)
-            .ok_or_else(|| {
-                WorkbookToolError::invalid_input_field(key.clone(), known_input_keys(cell_map))
-            })?;
-        // WR-05 (fail-closed): the supplied input's seed_coord MUST have a
-        // manifest role — `?`-or-reject, NEVER an if-let-Some skip. A roleless
-        // seed would bypass the dtype + enum gates below.
-        let role =
-            pmcp_workbook_runtime::role_for_cell(manifest, &entry.seed_coord).ok_or_else(|| {
-                WorkbookToolError::invalid_input(format!(
-                    "internal: input '{key}' maps to {} which has no manifest role",
-                    entry.seed_coord
-                ))
-            })?;
-        check_value_dtype(role, key, value)?;
-        seeds.insert(entry.seed_coord.clone(), value.clone());
-    }
+    // 2. Map each supplied input key → seed_coord via the cell_map (WR-05).
+    seed_supplied_inputs(&input.inputs, manifest, cell_map, &mut seeds)?;
 
     // 3. Tier-check each override; accept variable-tier, reject strict constants.
-    let mut accepted_overrides = Vec::new();
-    for (key, value) in &input.overrides {
-        match find_role_by_key(manifest, key) {
-            Some(r) if is_strict_constant(r) => {
-                return Err(WorkbookToolError::strict_constant_override(
-                    key.clone(),
-                    variable_tier_keys(manifest),
-                ));
-            },
-            // WR-02: reject an override targeting a computed cell — seeding one
-            // would (after 92-06's seed-preserving executor) let a caller pin a
-            // served output under a valid provenance stamp (output forging). The
-            // shared `is_computed` predicate is the same one `variable_tier_keys`
-            // filters on, so the reject gate and the advertised allow-list cannot
-            // drift. A forbidden-role override surfaces the same machine-actionable
-            // allowed-list as an unknown key.
-            Some(r) if is_computed(r) => {
-                return Err(WorkbookToolError::unsupported_option(
-                    key.clone(),
-                    variable_tier_keys(manifest),
-                ));
-            },
-            Some(r) => {
-                check_value_dtype(r, key, value)?;
-                seeds.insert(r.cell.clone(), value.clone());
-                accepted_overrides.push(key.clone());
-            },
-            None => {
-                return Err(WorkbookToolError::unsupported_option(
-                    key.clone(),
-                    variable_tier_keys(manifest),
-                ));
-            },
-        }
-    }
+    let accepted_overrides = seed_accepted_overrides(&input.overrides, manifest, &mut seeds)?;
 
     let canonical_dto = serde_json::json!({
         "inputs": &input.inputs,
@@ -179,6 +116,107 @@ pub fn validate_input(
         accepted_overrides,
         canonical_dto,
     })
+}
+
+/// Phase 1: seed each manifest `Role::Input` cell with its tier default, so an
+/// omitted input still resolves to a value before caller overlays.
+fn seed_tier_defaults(manifest: &Manifest) -> BTreeMap<String, Value> {
+    let mut seeds: BTreeMap<String, Value> = BTreeMap::new();
+    for role in &manifest.cells {
+        if matches!(role.role, Role::Input) {
+            if let Some(default) = tier_default(role) {
+                seeds.insert(role.cell.clone(), default);
+            }
+        }
+    }
+    seeds
+}
+
+/// Phase 2: map each supplied input key → its `seed_coord` via the cell_map and
+/// overlay its (dtype-checked) value onto `seeds`.
+///
+/// WR-05 (fail-closed): an unknown input key is `invalid_input` (a bad FIELD),
+/// and a supplied input's `seed_coord` MUST have a manifest role — `?`-or-reject,
+/// NEVER an if-let-Some skip. A roleless seed would bypass the dtype + enum gates.
+#[allow(clippy::result_large_err)]
+fn seed_supplied_inputs(
+    inputs: &BTreeMap<String, Value>,
+    manifest: &Manifest,
+    cell_map: &CellMap,
+    seeds: &mut BTreeMap<String, Value>,
+) -> Result<(), WorkbookToolError> {
+    for (key, value) in inputs {
+        let entry = cell_map
+            .inputs
+            .iter()
+            .find(|e| &e.json_key == key)
+            .ok_or_else(|| {
+                WorkbookToolError::invalid_input_field(key.clone(), known_input_keys(cell_map))
+            })?;
+        let role =
+            pmcp_workbook_runtime::role_for_cell(manifest, &entry.seed_coord).ok_or_else(|| {
+                WorkbookToolError::invalid_input(format!(
+                    "internal: input '{key}' maps to {} which has no manifest role",
+                    entry.seed_coord
+                ))
+            })?;
+        check_value_dtype(role, key, value)?;
+        seeds.insert(entry.seed_coord.clone(), value.clone());
+    }
+    Ok(())
+}
+
+/// Phase 3: tier-check each override, overlaying accepted variable-tier values
+/// onto `seeds` and returning the accepted keys (for explain/audit).
+///
+/// Each override is classified by [`classify_override`] into accept-or-reject;
+/// an accepted override is dtype-checked and seeded.
+#[allow(clippy::result_large_err)]
+fn seed_accepted_overrides(
+    overrides: &BTreeMap<String, Value>,
+    manifest: &Manifest,
+    seeds: &mut BTreeMap<String, Value>,
+) -> Result<Vec<String>, WorkbookToolError> {
+    let mut accepted_overrides = Vec::new();
+    for (key, value) in overrides {
+        let role = classify_override(manifest, key)?;
+        check_value_dtype(role, key, value)?;
+        seeds.insert(role.cell.clone(), value.clone());
+        accepted_overrides.push(key.clone());
+    }
+    Ok(accepted_overrides)
+}
+
+/// Classify an override key against the manifest, returning the target
+/// [`CellRole`] only when the override is acceptable (a variable-tier cell).
+///
+/// Rejections (all fail-closed):
+/// - a strict-constant key → `strict_constant_override` (V4);
+/// - a computed-cell key → `unsupported_option` (WR-02: blocks output forging);
+/// - an unknown key → `unsupported_option`.
+///
+/// The shared `is_computed` predicate is the same one `variable_tier_keys`
+/// filters on, so the reject gate and the advertised allow-list cannot drift.
+#[allow(clippy::result_large_err)]
+fn classify_override<'a>(
+    manifest: &'a Manifest,
+    key: &str,
+) -> Result<&'a CellRole, WorkbookToolError> {
+    match find_role_by_key(manifest, key) {
+        Some(r) if is_strict_constant(r) => Err(WorkbookToolError::strict_constant_override(
+            key.to_string(),
+            variable_tier_keys(manifest),
+        )),
+        Some(r) if is_computed(r) => Err(WorkbookToolError::unsupported_option(
+            key.to_string(),
+            variable_tier_keys(manifest),
+        )),
+        Some(r) => Ok(r),
+        None => Err(WorkbookToolError::unsupported_option(
+            key.to_string(),
+            variable_tier_keys(manifest),
+        )),
+    }
 }
 
 /// The tier default value for an input cell (`None` if the cell carries no tier).
