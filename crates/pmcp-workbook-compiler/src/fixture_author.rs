@@ -169,37 +169,14 @@ pub(crate) struct WorkbookSpec {
 /// Returns the underlying [`XlsxError`] on any write/save failure (test path —
 /// the caller `.expect`s it).
 pub(crate) fn author_xlsx(path: &Path, spec: &WorkbookSpec) -> Result<(), XlsxError> {
-    let input_fmt = Format::new().set_font_color(Color::RGB(INPUT_FONT_ARGB));
-    let constant_fmt = Format::new().set_background_color(Color::RGB(CONSTANT_FILL_ARGB));
+    let palette = CellFormats::new();
 
     let mut workbook = Workbook::new();
     let worksheet = workbook.add_worksheet();
     worksheet.set_name(spec.sheet)?;
 
     for cell in &spec.cells {
-        let (row, col) = parse_a1(cell.addr());
-        match cell {
-            AuthoredCell::Number { value, paint, .. } => match paint {
-                CellPaint::Input => {
-                    worksheet.write_number_with_format(row, col, *value, &input_fmt)?;
-                },
-                CellPaint::Constant => {
-                    worksheet.write_number_with_format(row, col, *value, &constant_fmt)?;
-                },
-                CellPaint::Plain => {
-                    worksheet.write_number(row, col, *value)?;
-                },
-            },
-            AuthoredCell::Text { text, .. } => {
-                worksheet.write_string(row, col, *text)?;
-            },
-            AuthoredCell::Formula {
-                formula, cached, ..
-            } => {
-                let f = Formula::new(*formula).set_result(*cached);
-                worksheet.write_formula(row, col, f)?;
-            },
-        }
+        write_cell(worksheet, cell, &palette)?;
     }
 
     for dn in &spec.defined_names {
@@ -208,6 +185,66 @@ pub(crate) fn author_xlsx(path: &Path, spec: &WorkbookSpec) -> Result<(), XlsxEr
 
     workbook.save(path)?;
     Ok(())
+}
+
+/// The two paint-driven cell formats authored fixtures use: the INPUT font
+/// colour and the CONSTANT fill colour. Built once per [`author_xlsx`] call.
+struct CellFormats {
+    input: Format,
+    constant: Format,
+}
+
+impl CellFormats {
+    fn new() -> Self {
+        Self {
+            input: Format::new().set_font_color(Color::RGB(INPUT_FONT_ARGB)),
+            constant: Format::new().set_background_color(Color::RGB(CONSTANT_FILL_ARGB)),
+        }
+    }
+}
+
+/// Write a single authored cell to `worksheet` at its A1 address, dispatching on
+/// the cell kind. Numbers carry their paint-driven format; formulas carry their
+/// authored cached `<v>` oracle. Surfaces any underlying [`XlsxError`].
+fn write_cell(
+    worksheet: &mut rust_xlsxwriter::Worksheet,
+    cell: &AuthoredCell,
+    palette: &CellFormats,
+) -> Result<(), XlsxError> {
+    let (row, col) = parse_a1(cell.addr());
+    match cell {
+        AuthoredCell::Number { value, paint, .. } => {
+            write_number_cell(worksheet, row, col, *value, *paint, palette)
+        },
+        AuthoredCell::Text { text, .. } => worksheet.write_string(row, col, *text).map(|_| ()),
+        AuthoredCell::Formula {
+            formula, cached, ..
+        } => {
+            let f = Formula::new(*formula).set_result(*cached);
+            worksheet.write_formula(row, col, f).map(|_| ())
+        },
+    }
+}
+
+/// Write a numeric cell, selecting the paint-driven format (INPUT font colour,
+/// CONSTANT fill, or PLAIN no-format).
+fn write_number_cell(
+    worksheet: &mut rust_xlsxwriter::Worksheet,
+    row: u32,
+    col: u16,
+    value: f64,
+    paint: CellPaint,
+    palette: &CellFormats,
+) -> Result<(), XlsxError> {
+    match paint {
+        CellPaint::Input => worksheet
+            .write_number_with_format(row, col, value, &palette.input)
+            .map(|_| ()),
+        CellPaint::Constant => worksheet
+            .write_number_with_format(row, col, value, &palette.constant)
+            .map(|_| ()),
+        CellPaint::Plain => worksheet.write_number(row, col, value).map(|_| ()),
+    }
 }
 
 /// Parse a simple `A1`-style address into zero-based `(row, col)` for
