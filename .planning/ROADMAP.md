@@ -2,97 +2,97 @@
 
 ## Milestones
 
-- ✅ **v1.0 MCP Tasks Foundation** — Phases 1-3 (shipped 2026-02-22)
-- ✅ **v1.1 Task-Prompt Bridge** — Phases 4-8 (shipped 2026-02-23)
-- ✅ **v1.2 Pluggable Storage Backends** — Phases 9-13 (shipped 2026-02-24)
-- ✅ **v1.3 MCP Apps Developer Experience** — Phases 14-19 (shipped 2026-02-26)
-- ✅ **v1.4 Book & Course Update** — Phases 20-24 (shipped 2026-02-28)
-- ✅ **v1.5 Cloud Load Testing Upload** — Phases 25-26 (shipped 2026-03-01)
-- **v1.6 CLI DX Overhaul** — Phases 27-32 (in progress)
-- ✅ **v1.7 SDK Maturation** — Phases 52-53 (shipped 2026-03-20)
-- **v2.0 Protocol Modernization** — Phases 54-59 (in progress)
-- **v2.1 rmcp Upgrades** — Phases 65-68 (in progress)
-- ✅ **v2.2 Configuration-Only MCP Servers (SQL + OpenAPI toolkits)** — Phases 82-90.2 (substantially shipped)
-- 🚧 **v2.3 Excel-as-Configuration MCP Servers (governed Excel CodeLanguage)** — Phases 91-96 (in progress)
+- â **v1.0 MCP Tasks Foundation** â Phases 1-3 (shipped 2026-02-22)
+- â **v1.1 Task-Prompt Bridge** â Phases 4-8 (shipped 2026-02-23)
+- â **v1.2 Pluggable Storage Backends** â Phases 9-13 (shipped 2026-02-24)
+- â **v1.3 MCP Apps Developer Experience** â Phases 14-19 (shipped 2026-02-26)
+- â **v1.4 Book & Course Update** â Phases 20-24 (shipped 2026-02-28)
+- â **v1.5 Cloud Load Testing Upload** â Phases 25-26 (shipped 2026-03-01)
+- **v1.6 CLI DX Overhaul** â Phases 27-32 (in progress)
+- â **v1.7 SDK Maturation** â Phases 52-53 (shipped 2026-03-20)
+- **v2.0 Protocol Modernization** â Phases 54-59 (in progress)
+- **v2.1 rmcp Upgrades** â Phases 65-68 (in progress)
+- â **v2.2 Configuration-Only MCP Servers (SQL + OpenAPI toolkits)** â Phases 82-90.2 (substantially shipped)
+- ð§ **v2.3 Excel-as-Configuration MCP Servers (governed Excel CodeLanguage)** â Phases 91-96 (in progress)
 
 ## Phases
 
 <details>
-<summary>v1.0 MCP Tasks Foundation (Phases 1-3) — SHIPPED 2026-02-22</summary>
+<summary>v1.0 MCP Tasks Foundation (Phases 1-3) â SHIPPED 2026-02-22</summary>
 
-- [x] Phase 1: Foundation Types and Store Contract (3/3 plans) — completed 2026-02-21
-- [x] Phase 2: In-Memory Backend and Owner Security (3/3 plans) — completed 2026-02-22
-- [x] Phase 3: Handler, Middleware, and Server Integration (3/3 plans) — completed 2026-02-22
+- [x] Phase 1: Foundation Types and Store Contract (3/3 plans) â completed 2026-02-21
+- [x] Phase 2: In-Memory Backend and Owner Security (3/3 plans) â completed 2026-02-22
+- [x] Phase 3: Handler, Middleware, and Server Integration (3/3 plans) â completed 2026-02-22
 
 See: `.planning/milestones/v1.0-ROADMAP.md` for full phase details
 
 </details>
 
 <details>
-<summary>v1.1 Task-Prompt Bridge (Phases 4-8) — SHIPPED 2026-02-23</summary>
+<summary>v1.1 Task-Prompt Bridge (Phases 4-8) â SHIPPED 2026-02-23</summary>
 
-- [x] Phase 4: Foundation Types and Contracts (2/2 plans) — completed 2026-02-22
-- [x] Phase 5: Partial Execution Engine (2/2 plans) — completed 2026-02-23
-- [x] Phase 6: Structured Handoff and Client Continuation (2/2 plans) — completed 2026-02-23
-- [x] Phase 7: Integration and End-to-End Validation (2/2 plans) — completed 2026-02-23
-- [x] Phase 8: Quality Polish and Test Coverage (2/2 plans) — completed 2026-02-23
+- [x] Phase 4: Foundation Types and Contracts (2/2 plans) â completed 2026-02-22
+- [x] Phase 5: Partial Execution Engine (2/2 plans) â completed 2026-02-23
+- [x] Phase 6: Structured Handoff and Client Continuation (2/2 plans) â completed 2026-02-23
+- [x] Phase 7: Integration and End-to-End Validation (2/2 plans) â completed 2026-02-23
+- [x] Phase 8: Quality Polish and Test Coverage (2/2 plans) â completed 2026-02-23
 
 See: `.planning/milestones/v1.1-ROADMAP.md` for full phase details
 
 </details>
 
 <details>
-<summary>v1.2 Pluggable Storage Backends (Phases 9-13) — SHIPPED 2026-02-24</summary>
+<summary>v1.2 Pluggable Storage Backends (Phases 9-13) â SHIPPED 2026-02-24</summary>
 
-- [x] Phase 9: Storage Abstraction Layer (2/2 plans) — completed 2026-02-24
-- [x] Phase 10: InMemory Backend Refactor (2/2 plans) — completed 2026-02-24
-- [x] Phase 11: DynamoDB Backend (2/2 plans) — completed 2026-02-24
-- [x] Phase 12: Redis Backend (2/2 plans) — completed 2026-02-24
-- [x] Phase 13: Feature Flag Verification (1/1 plans) — completed 2026-02-24
+- [x] Phase 9: Storage Abstraction Layer (2/2 plans) â completed 2026-02-24
+- [x] Phase 10: InMemory Backend Refactor (2/2 plans) â completed 2026-02-24
+- [x] Phase 11: DynamoDB Backend (2/2 plans) â completed 2026-02-24
+- [x] Phase 12: Redis Backend (2/2 plans) â completed 2026-02-24
+- [x] Phase 13: Feature Flag Verification (1/1 plans) â completed 2026-02-24
 
 See: `.planning/milestones/v1.2-ROADMAP.md` for full phase details
 
 </details>
 
 <details>
-<summary>v1.3 MCP Apps Developer Experience (Phases 14-19) — SHIPPED 2026-02-26</summary>
+<summary>v1.3 MCP Apps Developer Experience (Phases 14-19) â SHIPPED 2026-02-26</summary>
 
-- [x] Phase 14: Preview Bridge Infrastructure (2/2 plans) — completed 2026-02-24
-- [x] Phase 15: WASM Widget Bridge (2/2 plans) — completed 2026-02-25
-- [x] Phase 16: Shared Bridge Library (2/2 plans) — completed 2026-02-26
-- [x] Phase 17: Widget Authoring DX and Scaffolding (2/2 plans) — completed 2026-02-26
-- [x] Phase 18: Publishing Pipeline (2/2 plans) — completed 2026-02-26
-- [x] Phase 19: Ship Examples and Playwright E2E (2/2 plans) — completed 2026-02-26
+- [x] Phase 14: Preview Bridge Infrastructure (2/2 plans) â completed 2026-02-24
+- [x] Phase 15: WASM Widget Bridge (2/2 plans) â completed 2026-02-25
+- [x] Phase 16: Shared Bridge Library (2/2 plans) â completed 2026-02-26
+- [x] Phase 17: Widget Authoring DX and Scaffolding (2/2 plans) â completed 2026-02-26
+- [x] Phase 18: Publishing Pipeline (2/2 plans) â completed 2026-02-26
+- [x] Phase 19: Ship Examples and Playwright E2E (2/2 plans) â completed 2026-02-26
 
 See: `.planning/milestones/v1.3-ROADMAP.md` for full phase details
 
 </details>
 
 <details>
-<summary>v1.4 Book & Course Update (Phases 20-24) — SHIPPED 2026-02-28</summary>
+<summary>v1.4 Book & Course Update (Phases 20-24) â SHIPPED 2026-02-28</summary>
 
-- [x] Phase 20: Book Load Testing (2/2 plans) — completed 2026-02-28
-- [x] Phase 21: Book MCP Apps Refresh (2/2 plans) — completed 2026-02-28
-- [x] Phase 22: Course Load Testing (2/2 plans) — completed 2026-02-28
-- [x] Phase 23: Course MCP Apps Refresh (2/2 plans) — completed 2026-02-28
-- [x] Phase 24: Course Quizzes & Exercises (2/2 plans) — completed 2026-02-28
+- [x] Phase 20: Book Load Testing (2/2 plans) â completed 2026-02-28
+- [x] Phase 21: Book MCP Apps Refresh (2/2 plans) â completed 2026-02-28
+- [x] Phase 22: Course Load Testing (2/2 plans) â completed 2026-02-28
+- [x] Phase 23: Course MCP Apps Refresh (2/2 plans) â completed 2026-02-28
+- [x] Phase 24: Course Quizzes & Exercises (2/2 plans) â completed 2026-02-28
 
 See: `.planning/milestones/v1.4-ROADMAP.md` for full phase details
 
 </details>
 
 <details>
-<summary>v1.5 Cloud Load Testing Upload (Phases 25-26) — SHIPPED 2026-03-01</summary>
+<summary>v1.5 Cloud Load Testing Upload (Phases 25-26) â SHIPPED 2026-03-01</summary>
 
-- [x] Phase 25: Loadtest Config Upload (2/2 plans) — completed 2026-02-28
-- [x] Phase 26: Add OAuth Support to Load Testing (4/4 plans) — completed 2026-03-01
+- [x] Phase 25: Loadtest Config Upload (2/2 plans) â completed 2026-02-28
+- [x] Phase 26: Add OAuth Support to Load Testing (4/4 plans) â completed 2026-03-01
 
 See phase details in `.planning/phases/25-*` and `.planning/phases/26-*`
 
 </details>
 
 <details>
-<summary>v1.6 CLI DX Overhaul (In Progress — paused for v2.0)</summary>
+<summary>v1.6 CLI DX Overhaul (In Progress â paused for v2.0)</summary>
 
 **Milestone Goal:** Normalize the cargo pmcp CLI for consistency and developer experience ahead of course recording -- fix flag inconsistencies, propagate auth to all server-facing commands, surface mcp-tester via `cargo pmcp test`, and add doctor/completions commands.
 
@@ -108,7 +108,7 @@ See phase details in `.planning/phases/27-*` through `.planning/phases/32-*`
 </details>
 
 <details>
-<summary>v1.7 SDK Maturation — SHIPPED 2026-03-20</summary>
+<summary>v1.7 SDK Maturation â SHIPPED 2026-03-20</summary>
 
 **Milestone Goal:** Reduce dependency footprint and produce gap analysis against TypeScript SDK v2.
 
@@ -121,11 +121,11 @@ See phase details in `.planning/phases/52-*` and `.planning/phases/53-*`
 
 ### v2.0 Protocol Modernization (In Progress)
 
-**Milestone Goal:** Upgrade to MCP protocol 2025-11-25 with massive type cleanup, add Tasks with polling, Tower middleware with DNS rebinding protection, and conformance testing. Focus on streamable HTTP and stateless calls. SSE, elicitations, and notifications are de-prioritized — Tasks with status polling is the primary async pattern. This is a semver major bump enabling breaking changes for a cleaner API surface.
+**Milestone Goal:** Upgrade to MCP protocol 2025-11-25 with massive type cleanup, add Tasks with polling, Tower middleware with DNS rebinding protection, and conformance testing. Focus on streamable HTTP and stateless calls. SSE, elicitations, and notifications are de-prioritized â Tasks with status polling is the primary async pattern. This is a semver major bump enabling breaking changes for a cleaner API surface.
 
 - [x] **Phase 54: Protocol Version 2025-11-25 + Type Cleanup** - Add all 2025-11-25 types (TaskSchema, IconSchema, AudioContent, ResourceLink), expanded capabilities, version negotiation for latest 3 versions. Breaking change: clean up legacy type aliases and deprecated fields. (completed 2026-03-20)
 - [x] **Phase 54.1: Protocol Type Construction DX** - Default impls, builders, and constructors for all protocol types. Fix inconsistent construction patterns that break downstream on every upgrade. (INSERTED) (completed 2026-03-20)
-- [x] **Phase 55: Tasks with Polling** - Task capability negotiation, TaskStore trait, in-memory + DynamoDB backends, task status polling via streamable HTTP. No SSE-based notifications — polling is the pattern. (completed 2026-03-21)
+- [x] **Phase 55: Tasks with Polling** - Task capability negotiation, TaskStore trait, in-memory + DynamoDB backends, task status polling via streamable HTTP. No SSE-based notifications â polling is the pattern. (completed 2026-03-21)
 - [ ] **Phase 55.1: Fix MCP Tasks support** - Add execution/taskSupport to TypedTool API, wire task detection in ServerCore so standard task_store path returns CreateTaskResult instead of CallToolResult text. (INSERTED)
 - [x] **Phase 56: Tower Middleware + DNS Rebinding Protection** - Tower Layer for MCP protocol concerns (host validation, DNS rebinding protection, session management, JSON-RPC routing). Axum convenience adapter. Enterprise security focus.
 - [x] **Phase 57: Conformance Test Suite** - mcp-tester conformance command with core protocol, tools, resources, prompts, and tasks scenarios. Validates any MCP server against the spec. (completed 2026-03-21)
@@ -135,7 +135,7 @@ See phase details in `.planning/phases/52-*` and `.planning/phases/53-*`
 ## Phase Details
 
 <details>
-<summary>Phases 27-53 (v1.6 + v1.7 — prior milestones)</summary>
+<summary>Phases 27-53 (v1.6 + v1.7 â prior milestones)</summary>
 
 ### Phase 27: Global Flag Infrastructure
 
@@ -151,8 +151,8 @@ See phase details in `.planning/phases/52-*` and `.planning/phases/53-*`
 **Plans**: 2 plans
 Plans:
 
-- [ ] 27-01-PLAN.md — GlobalFlags struct, --no-color/--quiet CLI args, wire through all command dispatch, global color suppression
-- [ ] 27-02-PLAN.md — Quiet mode output filtering across all commands, verbose-wins-over-quiet precedence
+- [ ] 27-01-PLAN.md â GlobalFlags struct, --no-color/--quiet CLI args, wire through all command dispatch, global color suppression
+- [ ] 27-02-PLAN.md â Quiet mode output filtering across all commands, verbose-wins-over-quiet precedence
 
 ### Phase 28: Flag Normalization
 
@@ -171,9 +171,9 @@ Plans:
 
 Plans:
 
-- [ ] 28-01-PLAN.md — Create shared flag structs (FormatValue, OutputFlags, FormatFlags), convert deploy #[clap()] to #[arg()], clean up dead code
-- [ ] 28-02-PLAN.md — Normalize test/schema/preview/connect/validate/deploy flags: URL positional, verbose removal, format normalization
-- [ ] 28-03-PLAN.md — Normalize app/secret/loadtest/landing flags: URL positional, --force to --yes, -o alias, --server-id to --server
+- [ ] 28-01-PLAN.md â Create shared flag structs (FormatValue, OutputFlags, FormatFlags), convert deploy #[clap()] to #[arg()], clean up dead code
+- [ ] 28-02-PLAN.md â Normalize test/schema/preview/connect/validate/deploy flags: URL positional, verbose removal, format normalization
+- [ ] 28-03-PLAN.md â Normalize app/secret/loadtest/landing flags: URL positional, --force to --yes, -o alias, --server-id to --server
 
 ### Phase 29: Auth Flag Propagation
 
@@ -191,9 +191,9 @@ Plans:
 
 Plans:
 
-- [ ] 29-01-PLAN.md — Define AuthFlags struct, AuthMethod enum, resolve() method in flags.rs; create shared auth.rs with resolve_auth_middleware()
-- [ ] 29-02-PLAN.md — Flatten AuthFlags into test check/run/generate/apps, wire handlers; migrate loadtest inline auth to shared AuthFlags
-- [ ] 29-03-PLAN.md — Add AuthFlags to preview/schema export/connect; extend McpProxy with auth_header; wire connect config generation
+- [ ] 29-01-PLAN.md â Define AuthFlags struct, AuthMethod enum, resolve() method in flags.rs; create shared auth.rs with resolve_auth_middleware()
+- [ ] 29-02-PLAN.md â Flatten AuthFlags into test check/run/generate/apps, wire handlers; migrate loadtest inline auth to shared AuthFlags
+- [ ] 29-03-PLAN.md â Add AuthFlags to preview/schema export/connect; extend McpProxy with auth_header; wire connect config generation
 
 ### Phase 30: Tester CLI Integration
 
@@ -210,12 +210,12 @@ Plans:
 **Plans:** 6 plans
 Plans:
 
-- [x] 67.2-01-PLAN.md — Wire policy_evaluator into generated handlers + switch to async validation
-- [x] 67.2-02-PLAN.md — Add context_from and language darling attributes to derive macro
-- [x] 67.2-03-PLAN.md — HmacTokenGenerator::new returns Result + trybuild compile-fail tests
-- [x] 67.2-04-PLAN.md — eval.rs scope-chain optimization for array methods (P-01)
-- [x] 67.2-05-PLAN.md — Async GraphQL double-parse elimination (P-03)
-- [x] 67.2-06-PLAN.md — json_to_string unification + StepOutcome refactor + ValidationResponse wrapping + clippy cleanup
+- [x] 67.2-01-PLAN.md â Wire policy_evaluator into generated handlers + switch to async validation
+- [x] 67.2-02-PLAN.md â Add context_from and language darling attributes to derive macro
+- [x] 67.2-03-PLAN.md â HmacTokenGenerator::new returns Result + trybuild compile-fail tests
+- [x] 67.2-04-PLAN.md â eval.rs scope-chain optimization for array methods (P-01)
+- [x] 67.2-05-PLAN.md â Async GraphQL double-parse elimination (P-03)
+- [x] 67.2-06-PLAN.md â json_to_string unification + StepOutcome refactor + ValidationResponse wrapping + clippy cleanup
 
 ### Phase 31: New Commands
 
@@ -231,12 +231,12 @@ Plans:
 **Plans:** 6 plans
 Plans:
 
-- [x] 67.2-01-PLAN.md — Wire policy_evaluator into generated handlers + switch to async validation
-- [x] 67.2-02-PLAN.md — Add context_from and language darling attributes to derive macro
-- [x] 67.2-03-PLAN.md — HmacTokenGenerator::new returns Result + trybuild compile-fail tests
-- [x] 67.2-04-PLAN.md — eval.rs scope-chain optimization for array methods (P-01)
-- [x] 67.2-05-PLAN.md — Async GraphQL double-parse elimination (P-03)
-- [x] 67.2-06-PLAN.md — json_to_string unification + StepOutcome refactor + ValidationResponse wrapping + clippy cleanup
+- [x] 67.2-01-PLAN.md â Wire policy_evaluator into generated handlers + switch to async validation
+- [x] 67.2-02-PLAN.md â Add context_from and language darling attributes to derive macro
+- [x] 67.2-03-PLAN.md â HmacTokenGenerator::new returns Result + trybuild compile-fail tests
+- [x] 67.2-04-PLAN.md â eval.rs scope-chain optimization for array methods (P-01)
+- [x] 67.2-05-PLAN.md â Async GraphQL double-parse elimination (P-03)
+- [x] 67.2-06-PLAN.md â json_to_string unification + StepOutcome refactor + ValidationResponse wrapping + clippy cleanup
 
 ### Phase 32: Help Text Polish
 
@@ -252,12 +252,12 @@ Plans:
 **Plans:** 6 plans
 Plans:
 
-- [x] 67.2-01-PLAN.md — Wire policy_evaluator into generated handlers + switch to async validation
-- [x] 67.2-02-PLAN.md — Add context_from and language darling attributes to derive macro
-- [x] 67.2-03-PLAN.md — HmacTokenGenerator::new returns Result + trybuild compile-fail tests
-- [x] 67.2-04-PLAN.md — eval.rs scope-chain optimization for array methods (P-01)
-- [x] 67.2-05-PLAN.md — Async GraphQL double-parse elimination (P-03)
-- [ ] 67.2-06-PLAN.md — json_to_string unification + StepOutcome refactor + ValidationResponse wrapping + clippy cleanup
+- [x] 67.2-01-PLAN.md â Wire policy_evaluator into generated handlers + switch to async validation
+- [x] 67.2-02-PLAN.md â Add context_from and language darling attributes to derive macro
+- [x] 67.2-03-PLAN.md â HmacTokenGenerator::new returns Result + trybuild compile-fail tests
+- [x] 67.2-04-PLAN.md â eval.rs scope-chain optimization for array methods (P-01)
+- [x] 67.2-05-PLAN.md â Async GraphQL double-parse elimination (P-03)
+- [ ] 67.2-06-PLAN.md â json_to_string unification + StepOutcome refactor + ValidationResponse wrapping + clippy cleanup
 
 ## Progress
 
@@ -307,7 +307,7 @@ Plans:
 
 Plans:
 
-- [ ] 33-01-PLAN.md — Version bumps and crates.io publish
+- [ ] 33-01-PLAN.md â Version bumps and crates.io publish
 
 ### Phase 34: Fix MCP Apps ChatGPT compatibility
 
@@ -318,8 +318,8 @@ Plans:
 
 Plans:
 
-- [x] 34-01-PLAN.md — Fix tool _meta format (nested ui.resourceUri + openai/outputTemplate), add MIME type variant, dual-emit WidgetMeta
-- [ ] 34-02-PLAN.md — Fix mcp-preview axum 0.8 wildcard route panic
+- [x] 34-01-PLAN.md â Fix tool _meta format (nested ui.resourceUri + openai/outputTemplate), add MIME type variant, dual-emit WidgetMeta
+- [ ] 34-02-PLAN.md â Fix mcp-preview axum 0.8 wildcard route panic
 
 ### Phase 35: Add meta key constants module for UI/MCP Apps strings
 
@@ -341,7 +341,7 @@ Plans:
 
 Plans:
 
-- [ ] 36-01-PLAN.md — TDD: From<UIMimeType> for ExtendedUIMimeType and TryFrom<ExtendedUIMimeType> for UIMimeType
+- [ ] 36-01-PLAN.md â TDD: From<UIMimeType> for ExtendedUIMimeType and TryFrom<ExtendedUIMimeType> for UIMimeType
 
 ### Phase 37: Add with_ui support to TypedSyncTool
 
@@ -352,7 +352,7 @@ Plans:
 
 Plans:
 
-- [ ] 37-01-PLAN.md — Add ui_resource_uri field, with_ui() builder, and _meta emission to TypedSyncTool and WasmTypedTool
+- [ ] 37-01-PLAN.md â Add ui_resource_uri field, with_ui() builder, and _meta emission to TypedSyncTool and WasmTypedTool
 
 ### Phase 38: Cache ToolInfo at registration to avoid per-request cloning
 
@@ -363,7 +363,7 @@ Plans:
 
 Plans:
 
-- [ ] 38-01-PLAN.md — Add tool_infos/prompt_infos cache to builders, replace 6 per-request metadata() call sites with cache lookups
+- [ ] 38-01-PLAN.md â Add tool_infos/prompt_infos cache to builders, replace 6 per-request metadata() call sites with cache lookups
 
 ### Phase 39: Add deep-merge for ui meta key to prevent collision
 
@@ -374,8 +374,8 @@ Plans:
 
 Plans:
 
-- [x] 39-01-PLAN.md — Add deep_merge function in ui.rs and ToolInfo::with_meta_entry builder method
-- [ ] 39-02-PLAN.md — Update TypedTool, TypedSyncTool, TypedToolWithOutput, WasmTypedTool metadata() to use deep_merge; add with_ui() to TypedToolWithOutput
+- [x] 39-01-PLAN.md â Add deep_merge function in ui.rs and ToolInfo::with_meta_entry builder method
+- [ ] 39-02-PLAN.md â Update TypedTool, TypedSyncTool, TypedToolWithOutput, WasmTypedTool metadata() to use deep_merge; add with_ui() to TypedToolWithOutput
 
 ### Phase 40: Review ChatGPT Compatibility for Apps
 
@@ -386,8 +386,8 @@ Plans:
 
 Plans:
 
-- [ ] 40-01-PLAN.md — Add legacy flat key ui/resourceUri to build_meta_map() for ext-apps backward compat
-- [ ] 40-02-PLAN.md — Dual-emit nested ui.csp/ui.domain in WidgetMeta, add ModelOnly to ToolVisibility, emit ui.visibility array in ChatGptToolMeta
+- [ ] 40-01-PLAN.md â Add legacy flat key ui/resourceUri to build_meta_map() for ext-apps backward compat
+- [ ] 40-02-PLAN.md â Dual-emit nested ui.csp/ui.domain in WidgetMeta, add ModelOnly to ToolVisibility, emit ui.visibility array in ChatGptToolMeta
 
 ### Phase 41: ChatGPT MCP Apps Upgraded Version
 
@@ -398,9 +398,9 @@ Plans:
 
 Plans:
 
-- [ ] 41-01-PLAN.md — Add _meta to Content::Resource, fix ChatGptAdapter MIME type to HtmlMcpApp
-- [ ] 41-02-PLAN.md — Update bridge protocol method names in widget-runtime.mjs and index.html
-- [ ] 41-03-PLAN.md — Update scaffold template with correct MIME type, with_ui(), and resource _meta
+- [ ] 41-01-PLAN.md â Add _meta to Content::Resource, fix ChatGptAdapter MIME type to HtmlMcpApp
+- [ ] 41-02-PLAN.md â Update bridge protocol method names in widget-runtime.mjs and index.html
+- [ ] 41-03-PLAN.md â Update scaffold template with correct MIME type, with_ui(), and resource _meta
 
 ### Phase 42: Add outputSchema top level support
 
@@ -411,8 +411,8 @@ Plans:
 
 Plans:
 
-- [x] 42-01-PLAN.md — Core types migration: ToolAnnotations cleanup, ToolInfo field + builder, TypedToolWithOutput rewire, macro codegen
-- [ ] 42-02-PLAN.md — Consumers: cargo-pmcp schema structs, tests, example, docs update
+- [x] 42-01-PLAN.md â Core types migration: ToolAnnotations cleanup, ToolInfo field + builder, TypedToolWithOutput rewire, macro codegen
+- [ ] 42-02-PLAN.md â Consumers: cargo-pmcp schema structs, tests, example, docs update
 
 ### Phase 43: ChatGPT MCP Apps alignment
 
@@ -423,8 +423,8 @@ Plans:
 
 Plans:
 
-- [ ] 43-01-PLAN.md — Add _meta field to ResourceInfo, filter with_widget_enrichment to openai/toolInvocation/*, build URI-to-tool-meta index on ServerCore, update all struct literals
-- [ ] 43-02-PLAN.md — Post-process handle_list_resources and handle_read_resource to propagate tool _meta to resource responses
+- [ ] 43-01-PLAN.md â Add _meta field to ResourceInfo, filter with_widget_enrichment to openai/toolInvocation/*, build URI-to-tool-meta index on ServerCore, update all struct literals
+- [ ] 43-02-PLAN.md â Post-process handle_list_resources and handle_read_resource to propagate tool _meta to resource responses
 
 ### Phase 44: Improving mcp-preview to support ChatGPT version
 
@@ -435,8 +435,8 @@ Plans:
 
 Plans:
 
-- [x] 44-01-PLAN.md — Rust-side mode plumbing: PreviewMode enum, CLI --mode flag, ConfigResponse with keys, ResourceInfo _meta, banner
-- [x] 44-02-PLAN.md — Browser-side Protocol tab, ChatGPT postMessage emulation, window.openai stub, mode badge
+- [x] 44-01-PLAN.md â Rust-side mode plumbing: PreviewMode enum, CLI --mode flag, ConfigResponse with keys, ResourceInfo _meta, banner
+- [x] 44-02-PLAN.md â Browser-side Protocol tab, ChatGPT postMessage emulation, window.openai stub, mode badge
 
 ### Phase 45: Extend MCP Apps Support to Claude Desktop
 
@@ -447,9 +447,9 @@ Plans:
 
 Plans:
 
-- [ ] 45-01-PLAN.md — Refactor metadata emission to standard-only default + host layer enrichment pipeline on ServerCoreBuilder
-- [ ] 45-02-PLAN.md — Normalize widget-runtime bridge with extensions namespace for ChatGPT-specific APIs
-- [ ] 45-03-PLAN.md — Update mcp-preview standard mode default + verify examples render in both modes
+- [ ] 45-01-PLAN.md â Refactor metadata emission to standard-only default + host layer enrichment pipeline on ServerCoreBuilder
+- [ ] 45-02-PLAN.md â Normalize widget-runtime bridge with extensions namespace for ChatGPT-specific APIs
+- [ ] 45-03-PLAN.md â Update mcp-preview standard mode default + verify examples render in both modes
 
 ### Phase 46: MCP Bridge Review and Fixes
 
@@ -467,9 +467,9 @@ Plans:
 
 Plans:
 
-- [ ] 46-01-PLAN.md — Fix bridge protocol method name mismatch in adapter.rs and App class normalization
-- [ ] 46-02-PLAN.md — Fix mcp-preview tool result delivery with readiness signal and dual method emission
-- [ ] 46-03-PLAN.md — Add Bridge diagnostics tab to mcp-preview and verify complete fix with real widget
+- [ ] 46-01-PLAN.md â Fix bridge protocol method name mismatch in adapter.rs and App class normalization
+- [ ] 46-02-PLAN.md â Fix mcp-preview tool result delivery with readiness signal and dual method emission
+- [ ] 46-03-PLAN.md â Add Bridge diagnostics tab to mcp-preview and verify complete fix with real widget
 
 ### Phase 47: Add MCP App support to mcp-tester
 
@@ -507,9 +507,9 @@ Plans:
 
 Plans:
 
-- [ ] 48-01-PLAN.md — Update mcp-tester/mcp-preview READMEs and rewrite book ch12-5 MCP Apps chapter with GUIDE.md content
-- [ ] 48-02-PLAN.md — Update pmcp-course ch20 MCP Apps chapters and ch11-02 mcp-tester lesson to align with book
-- [ ] 48-03-PLAN.md — Add theme CSS variable palettes to mcp-preview host context for ext-apps widget theming
+- [ ] 48-01-PLAN.md â Update mcp-tester/mcp-preview READMEs and rewrite book ch12-5 MCP Apps chapter with GUIDE.md content
+- [ ] 48-02-PLAN.md â Update pmcp-course ch20 MCP Apps chapters and ch11-02 mcp-tester lesson to align with book
+- [ ] 48-03-PLAN.md â Add theme CSS variable palettes to mcp-preview host context for ext-apps widget theming
 
 ### Phase 49: Bump dependencies (reqwest 0.13, jsonschema 0.45)
 
@@ -527,7 +527,7 @@ Plans:
 
 Plans:
 
-- [ ] 49-01-PLAN.md — Update all Cargo.toml files, MSRV, deprecated methods, and template strings for reqwest 0.13 + jsonschema 0.45
+- [ ] 49-01-PLAN.md â Update all Cargo.toml files, MSRV, deprecated methods, and template strings for reqwest 0.13 + jsonschema 0.45
 
 ### Phase 50: Improve Binary Release
 
@@ -546,8 +546,8 @@ Plans:
 
 Plans:
 
-- [ ] 50-01-PLAN.md — Convert binary workflows to reusable workflow_call, fix runner labels, add ARM64 targets, add SHA256 checksums
-- [ ] 50-02-PLAN.md — Create install.sh and install.ps1 installer scripts, add cargo-binstall metadata to Cargo.toml files
+- [ ] 50-01-PLAN.md â Convert binary workflows to reusable workflow_call, fix runner labels, add ARM64 targets, add SHA256 checksums
+- [ ] 50-02-PLAN.md â Create install.sh and install.ps1 installer scripts, add cargo-binstall metadata to Cargo.toml files
 
 ### Phase 51: PMCP MCP Server
 
@@ -566,23 +566,23 @@ Plans:
 
 Plans:
 
-- [ ] 51-01-PLAN.md — Crate scaffold, workspace integration, server skeleton, ScenarioGenerator API addition
-- [ ] 51-02-PLAN.md — Testing tools: test_check, test_generate, test_apps wrapping mcp-tester library
-- [ ] 51-03-PLAN.md — Build tools: scaffold (code templates) and schema_export (schema discovery)
-- [ ] 51-04-PLAN.md — Embedded content, documentation resources handler, workflow prompt handlers
-- [ ] 51-05-PLAN.md — Wire all tools/resources/prompts into server builder, CI workflow updates
+- [ ] 51-01-PLAN.md â Crate scaffold, workspace integration, server skeleton, ScenarioGenerator API addition
+- [ ] 51-02-PLAN.md â Testing tools: test_check, test_generate, test_apps wrapping mcp-tester library
+- [ ] 51-03-PLAN.md â Build tools: scaffold (code templates) and schema_export (schema discovery)
+- [ ] 51-04-PLAN.md â Embedded content, documentation resources handler, workflow prompt handlers
+- [ ] 51-05-PLAN.md â Wire all tools/resources/prompts into server builder, CI workflow updates
 
 ### Phase 52: Reduce transitive dependencies
 
 **Goal:** Reduce pmcp crate's transitive dependency count from ~249 to ~150-185 by removing unused deps, slimming feature flags, making reqwest optional behind `http-client` feature, and making tracing-subscriber optional behind `logging` feature
 **Requirements**: DEP-REDUCE-01, DEP-REDUCE-02, DEP-REDUCE-03, DEP-REDUCE-04, DEP-REDUCE-05, DEP-REDUCE-06, DEP-REDUCE-07
 **Depends on:** Phase 51
-**Plans:** 2 plans — Complete (2026-03-18)
+**Plans:** 2 plans â Complete (2026-03-18)
 
 Plans:
 
-- [x] 52-01-PLAN.md — Cargo.toml: remove unused deps, slim features, make reqwest/tracing-subscriber optional
-- [x] 52-02-PLAN.md — Source code: cfg gates for optional deps, full feature matrix verification
+- [x] 52-01-PLAN.md â Cargo.toml: remove unused deps, slim features, make reqwest/tracing-subscriber optional
+- [x] 52-02-PLAN.md â Source code: cfg gates for optional deps, full feature matrix verification
 
 ### Phase 53: Review TypeScript SDK Updates
 
@@ -593,24 +593,24 @@ Plans:
 
 Plans:
 
-- [x] 53-01-PLAN.md — Deep verification of TypeScript vs Rust SDK source differences across 6 domains
-- [x] 53-02-PLAN.md — Gap analysis report with prioritized recommendations and proposed implementation phases
+- [x] 53-01-PLAN.md â Deep verification of TypeScript vs Rust SDK source differences across 6 domains
+- [x] 53-02-PLAN.md â Gap analysis report with prioritized recommendations and proposed implementation phases
 
 </details>
 
 ### Phase 54: Protocol Version 2025-11-25 + Type Cleanup
 
-**Goal:** Upgrade Rust SDK to MCP protocol 2025-11-25 with version negotiation (latest 3 versions). Add 20+ new types (TaskSchema, IconSchema, AudioContent, ResourceLink, expanded ServerCapabilities/ClientCapabilities). Clean up legacy type aliases and deprecated fields. Breaking change — part of the v2.0.0 semver bump.
+**Goal:** Upgrade Rust SDK to MCP protocol 2025-11-25 with version negotiation (latest 3 versions). Add 20+ new types (TaskSchema, IconSchema, AudioContent, ResourceLink, expanded ServerCapabilities/ClientCapabilities). Clean up legacy type aliases and deprecated fields. Breaking change â part of the v2.0.0 semver bump.
 **Requirements**: PROTO-2025-11-25, VERSION-NEGOTIATION, TYPE-CLEANUP
 **Depends on:** Phase 53
 **Plans:** 4/4 plans complete
 
 Plans:
 
-- [x] 54-01-PLAN.md — Module split (protocol.rs -> 7 domain sub-modules) + version negotiation update to 2025-11-25
-- [ ] 54-02-PLAN.md — Add 33 new types (task, content, sampling, elicitation, capabilities) + fix IncludeContext, LogLevel bugs
-- [ ] 54-03-PLAN.md — Fix internal src/ imports, remove 11 legacy type aliases
-- [ ] 54-04-PLAN.md — Fix external imports (examples/tests/workspace), write MIGRATION.md
+- [x] 54-01-PLAN.md â Module split (protocol.rs -> 7 domain sub-modules) + version negotiation update to 2025-11-25
+- [ ] 54-02-PLAN.md â Add 33 new types (task, content, sampling, elicitation, capabilities) + fix IncludeContext, LogLevel bugs
+- [ ] 54-03-PLAN.md â Fix internal src/ imports, remove 11 legacy type aliases
+- [ ] 54-04-PLAN.md â Fix external imports (examples/tests/workspace), write MIGRATION.md
 
 ### Phase 54.1: Protocol Type Construction DX (INSERTED)
 
@@ -621,9 +621,9 @@ Plans:
 
 Plans:
 
-- [x] 54.1-01-PLAN.md — Add constructors/Default/#[non_exhaustive]/.with_*() to resources.rs, prompts.rs, content.rs (Content enum helpers)
-- [x] 54.1-02-PLAN.md — Add constructors/Default/#[non_exhaustive]/.with_*() to protocol/mod.rs, tasks.rs, sampling.rs, notifications.rs, capabilities.rs, tools.rs
-- [x] 54.1-03-PLAN.md — Migrate all external consumers (src/, tests/, examples/, workspace crates) to constructors, update MIGRATION.md
+- [x] 54.1-01-PLAN.md â Add constructors/Default/#[non_exhaustive]/.with_*() to resources.rs, prompts.rs, content.rs (Content enum helpers)
+- [x] 54.1-02-PLAN.md â Add constructors/Default/#[non_exhaustive]/.with_*() to protocol/mod.rs, tasks.rs, sampling.rs, notifications.rs, capabilities.rs, tools.rs
+- [x] 54.1-03-PLAN.md â Migrate all external consumers (src/, tests/, examples/, workspace crates) to constructors, update MIGRATION.md
 
 ### Phase 55: Tasks with Polling
 
@@ -643,9 +643,9 @@ Plans:
 
 Plans:
 
-- [x] 55-01-PLAN.md — SDK task type reconciliation: add utility methods, fix TTL serialization
-- [x] 55-02-PLAN.md — TaskStore trait + InMemoryTaskStore in SDK core
-- [x] 55-03-PLAN.md — Server builder integration, core dispatch, capability negotiation, re-exports
+- [x] 55-01-PLAN.md â SDK task type reconciliation: add utility methods, fix TTL serialization
+- [x] 55-02-PLAN.md â TaskStore trait + InMemoryTaskStore in SDK core
+- [x] 55-03-PLAN.md â Server builder integration, core dispatch, capability negotiation, re-exports
 
 ### Phase 55.1: Fix MCP Tasks support (INSERTED)
 
@@ -656,8 +656,8 @@ Plans:
 
 Plans:
 
-- [x] 55.1-01-PLAN.md — Add execution field and with_execution() to all TypedTool variants
-- [x] 55.1-02-PLAN.md — Wire task detection in core.rs, return CreateTaskResult with _meta
+- [x] 55.1-01-PLAN.md â Add execution field and with_execution() to all TypedTool variants
+- [x] 55.1-02-PLAN.md â Wire task detection in core.rs, return CreateTaskResult with _meta
 
 ### Phase 56: Tower Middleware + DNS Rebinding Protection
 
@@ -689,8 +689,8 @@ Plans:
 
 Plans:
 
-- [x] 57-01-PLAN.md — Conformance module with ConformanceRunner orchestrator and 5 domain scenario groups (Core, Tools, Resources, Prompts, Tasks) (completed 2026-03-21)
-- [x] 57-02-PLAN.md — CLI integration: replace Compliance with Conformance in mcp-tester, add cargo pmcp test conformance (completed 2026-03-21)
+- [x] 57-01-PLAN.md â Conformance module with ConformanceRunner orchestrator and 5 domain scenario groups (Core, Tools, Resources, Prompts, Tasks) (completed 2026-03-21)
+- [x] 57-02-PLAN.md â CLI integration: replace Compliance with Conformance in mcp-tester, add cargo pmcp test conformance (completed 2026-03-21)
 
 ### Phase 58: #[mcp_tool] Proc Macro
 
@@ -701,9 +701,9 @@ Plans:
 
 Plans:
 
-- [x] 58-01-PLAN.md — State<T> type, parameter classification, standalone #[mcp_tool] macro
-- [x] 58-02-PLAN.md — #[mcp_server] impl-block macro with McpServer trait and builder extension
-- [x] 58-03-PLAN.md — Integration tests, compile-fail tests, and example 63
+- [x] 58-01-PLAN.md â State<T> type, parameter classification, standalone #[mcp_tool] macro
+- [x] 58-02-PLAN.md â #[mcp_server] impl-block macro with McpServer trait and builder extension
+- [x] 58-03-PLAN.md â Integration tests, compile-fail tests, and example 63
 
 ### Phase 59: TypedPrompt with Auto-Deserialization
 
@@ -714,8 +714,8 @@ Plans:
 
 Plans:
 
-- [x] 59-01-PLAN.md — TypedPrompt runtime type and standalone #[mcp_prompt] attribute macro
-- [x] 59-02-PLAN.md — #[mcp_server] prompt extension, integration tests, compile-fail tests, and example 64
+- [x] 59-01-PLAN.md â TypedPrompt runtime type and standalone #[mcp_prompt] attribute macro
+- [x] 59-02-PLAN.md â #[mcp_server] prompt extension, integration tests, compile-fail tests, and example 64
 
 ### Phase 60: Clean up mcp-preview side tabs
 
@@ -726,7 +726,7 @@ Plans:
 
 Plans:
 
-- [x] 60-01-PLAN.md — Remove Console tab, add resizable/collapsible panel with toggle button and global Clear All
+- [x] 60-01-PLAN.md â Remove Console tab, add resizable/collapsible panel with toggle button and global Clear All
 
 ### Phase 61: Add OAuth support to mcp-preview
 
@@ -769,7 +769,7 @@ Plans:
 
 ### Phase 64: secrets-deployment-integration
 
-**Goal:** Wire `cargo pmcp secret` into deployment targets so secrets are injected as environment variables at deploy time. Five workstreams: (1) AWS Lambda — resolve secrets from configured provider and inject as Lambda env vars in CDK context during `cargo pmcp deploy --target aws-lambda`. (2) pmcp.run — ensure `cargo pmcp secret set --server <id>` sends server ID for backend-side env var trigger, and `cargo pmcp deploy --target pmcp-run` transmits secret requirements to the backend. (3) SDK support — add thin `pmcp::secrets` module with `get`/`require` helpers that read env vars with helpful error messages pointing to `cargo pmcp secret set`. (4) Local dev — `cargo pmcp dev` reads local secrets and sets them as env vars for the child server process. (5) Documentation — update cargo-pmcp README, secret command help text, deployment docs, and add SDK-level rustdoc examples.
+**Goal:** Wire `cargo pmcp secret` into deployment targets so secrets are injected as environment variables at deploy time. Five workstreams: (1) AWS Lambda â resolve secrets from configured provider and inject as Lambda env vars in CDK context during `cargo pmcp deploy --target aws-lambda`. (2) pmcp.run â ensure `cargo pmcp secret set --server <id>` sends server ID for backend-side env var trigger, and `cargo pmcp deploy --target pmcp-run` transmits secret requirements to the backend. (3) SDK support â add thin `pmcp::secrets` module with `get`/`require` helpers that read env vars with helpful error messages pointing to `cargo pmcp secret set`. (4) Local dev â `cargo pmcp dev` reads local secrets and sets them as env vars for the child server process. (5) Documentation â update cargo-pmcp README, secret command help text, deployment docs, and add SDK-level rustdoc examples.
 **Requirements**: D-01 through D-17 (from CONTEXT.md)
 **Depends on:** Phase 63
 **Plans:** 3/3 plans complete
@@ -789,7 +789,7 @@ Plans:
 - [x] **Phase 67: docs.rs Pipeline and Feature Flags** - Enable doc_auto_cfg for automatic feature badges, explicit feature list in docs.rs metadata, feature flag table, zero rustdoc warnings (completed 2026-04-12)
 - [ ] **Phase 68: General Documentation Polish** - Update lib.rs doctests to TypedToolWithOutput pattern, add transport matrix, CI enforcement gates for drift prevention
 
-## Phase Details — Current Milestone
+## Phase Details â Current Milestone
 
 ### Phase 65: Examples Cleanup and Protocol Accuracy
 
@@ -806,9 +806,9 @@ Plans:
 **Plans:** 3/3 plans complete
 Plans:
 
-- [x] 65-01-PLAN.md — Audit orphan examples + fix protocol badge (EXMP-02, PROT-01)
-- [x] 65-02-PLAN.md — Renumber all examples with role-prefix scheme (EXMP-03)
-- [x] 65-03-PLAN.md — Write examples/README.md index (EXMP-01)
+- [x] 65-01-PLAN.md â Audit orphan examples + fix protocol badge (EXMP-02, PROT-01)
+- [x] 65-02-PLAN.md â Renumber all examples with role-prefix scheme (EXMP-03)
+- [x] 65-03-PLAN.md â Write examples/README.md index (EXMP-01)
 
 ### Phase 66: Macros Documentation Rewrite
 
@@ -825,12 +825,12 @@ Plans:
 **Plans:** 6 plans
 Plans:
 
-- [x] 67.2-01-PLAN.md — Wire policy_evaluator into generated handlers + switch to async validation
-- [x] 67.2-02-PLAN.md — Add context_from and language darling attributes to derive macro
-- [x] 67.2-03-PLAN.md — HmacTokenGenerator::new returns Result + trybuild compile-fail tests
-- [x] 67.2-04-PLAN.md — eval.rs scope-chain optimization for array methods (P-01)
-- [x] 67.2-05-PLAN.md — Async GraphQL double-parse elimination (P-03)
-- [ ] 67.2-06-PLAN.md — json_to_string unification + StepOutcome refactor + ValidationResponse wrapping + clippy cleanup
+- [x] 67.2-01-PLAN.md â Wire policy_evaluator into generated handlers + switch to async validation
+- [x] 67.2-02-PLAN.md â Add context_from and language darling attributes to derive macro
+- [x] 67.2-03-PLAN.md â HmacTokenGenerator::new returns Result + trybuild compile-fail tests
+- [x] 67.2-04-PLAN.md â eval.rs scope-chain optimization for array methods (P-01)
+- [x] 67.2-05-PLAN.md â Async GraphQL double-parse elimination (P-03)
+- [ ] 67.2-06-PLAN.md â json_to_string unification + StepOutcome refactor + ValidationResponse wrapping + clippy cleanup
 
 ### Phase 67: docs.rs Pipeline and Feature Flags
 
@@ -848,16 +848,16 @@ Plans:
 **Plans:** 6 plans
 Plans:
 
-- [x] 67.2-01-PLAN.md — Wire policy_evaluator into generated handlers + switch to async validation
-- [x] 67.2-02-PLAN.md — Add context_from and language darling attributes to derive macro
-- [x] 67.2-03-PLAN.md — HmacTokenGenerator::new returns Result + trybuild compile-fail tests
-- [ ] 67.2-04-PLAN.md — eval.rs scope-chain optimization for array methods (P-01)
-- [ ] 67.2-05-PLAN.md — Async GraphQL double-parse elimination (P-03)
-- [ ] 67.2-06-PLAN.md — json_to_string unification + StepOutcome refactor + ValidationResponse wrapping + clippy cleanup
+- [x] 67.2-01-PLAN.md â Wire policy_evaluator into generated handlers + switch to async validation
+- [x] 67.2-02-PLAN.md â Add context_from and language darling attributes to derive macro
+- [x] 67.2-03-PLAN.md â HmacTokenGenerator::new returns Result + trybuild compile-fail tests
+- [ ] 67.2-04-PLAN.md â eval.rs scope-chain optimization for array methods (P-01)
+- [ ] 67.2-05-PLAN.md â Async GraphQL double-parse elimination (P-03)
+- [ ] 67.2-06-PLAN.md â json_to_string unification + StepOutcome refactor + ValidationResponse wrapping + clippy cleanup
 
 ### Phase 67.1: Code Mode Support (INSERTED)
 
-**Goal:** External MCP server developers can add Code Mode (validate → approve → execute) to their servers using PMCP SDK crates, with a `#[derive(CodeMode)]` proc macro, pluggable `PolicyEvaluator` + `CodeExecutor` traits, zeroizing token secrets, and a complete worked example — unblocking an imminent MCP server launch that depends on this capability.
+**Goal:** External MCP server developers can add Code Mode (validate â approve â execute) to their servers using PMCP SDK crates, with a `#[derive(CodeMode)]` proc macro, pluggable `PolicyEvaluator` + `CodeExecutor` traits, zeroizing token secrets, and a complete worked example â unblocking an imminent MCP server launch that depends on this capability.
 **Depends on:** Phase 67
 **Requirements**: CMSUP-01, CMSUP-02, CMSUP-03, CMSUP-04, CMSUP-05, CMSUP-06
 **Success Criteria** (what must be TRUE):
@@ -865,7 +865,7 @@ Plans:
   1. `crates/pmcp-code-mode/` exists in the rust-mcp-sdk workspace containing the moved + hardened Code Mode core (validation pipeline, `PolicyEvaluator`, `CedarPolicyEvaluator`, `NoopPolicyEvaluator`, new `CodeExecutor` trait, new `TokenSecret` newtype with zeroization) and all existing tests pass
   2. `crates/pmcp-code-mode-derive/` exists and provides a working `#[derive(CodeMode)]` proc macro that emits a `register_code_mode_tools(builder)` method, enforces `Send + Sync` at compile time, and has `trybuild` compile-pass + compile-fail snapshot coverage
   3. `pmcp-code-mode/src/lib.rs` re-exports `async_trait` (`pub use async_trait::async_trait;`) and generated derive output uses `#[pmcp_code_mode::async_trait]` to avoid version conflicts
-  4. A complete worked example in `examples/` (e.g. `XX_code_mode_graphql.rs`) demonstrates: struct annotation → `register_code_mode_tools` → `validate_code` → approval token → `execute_code` round trip using `NoopPolicyEvaluator`
+  4. A complete worked example in `examples/` (e.g. `XX_code_mode_graphql.rs`) demonstrates: struct annotation â `register_code_mode_tools` â `validate_code` â approval token â `execute_code` round trip using `NoopPolicyEvaluator`
   5. Contract YAMLs for `pmcp-code-mode` and `pmcp-code-mode-derive` exist under `../provable-contracts/contracts/` and `pmat comply check` passes on both
   6. `make quality-gate` passes workspace-wide (zero clippy warnings, zero SATD, all tests green, format clean) and both new crates are positioned in the publishing order documented in CLAUDE.md, ready for the next release phase
 
@@ -873,12 +873,12 @@ Plans:
 
 Plans:
 
-- [x] 67.1-01-PLAN.md — Crate scaffolding + source move into workspace
-- [x] 67.1-02-PLAN.md — Security hardening (TokenSecret, NoopPolicyEvaluator, async_trait re-export)
-- [x] 67.1-03-PLAN.md — CodeExecutor high-level trait
-- [x] 67.1-04-PLAN.md — pmcp-code-mode-derive proc macro (#[derive(CodeMode)] + trybuild)
-- [x] 67.1-05-PLAN.md — Property tests + fuzz targets
-- [x] 67.1-06-PLAN.md — End-to-end example + CRATE-READMEs + SECURITY.md + quality-gate
+- [x] 67.1-01-PLAN.md â Crate scaffolding + source move into workspace
+- [x] 67.1-02-PLAN.md â Security hardening (TokenSecret, NoopPolicyEvaluator, async_trait re-export)
+- [x] 67.1-03-PLAN.md â CodeExecutor high-level trait
+- [x] 67.1-04-PLAN.md â pmcp-code-mode-derive proc macro (#[derive(CodeMode)] + trybuild)
+- [x] 67.1-05-PLAN.md â Property tests + fuzz targets
+- [x] 67.1-06-PLAN.md â End-to-end example + CRATE-READMEs + SECURITY.md + quality-gate
 
 ### Phase 67.2: Code Mode Derive Hardening (INSERTED)
 
@@ -886,12 +886,12 @@ Plans:
 **Depends on:** Phase 67.1
 **Requirements**: CMSUP-07, CMSUP-08, CMSUP-09, CMSUP-10
 **Success Criteria** (what must be TRUE):
-  **Derive macro — critical (pmcp.run review items 1-3):**
+  **Derive macro â critical (pmcp.run review items 1-3):**
 
-  1. Generated `ValidateCodeHandler` calls `policy_evaluator.evaluate_operation()` between pipeline validation and token generation — the security contract is enforced
+  1. Generated `ValidateCodeHandler` calls `policy_evaluator.evaluate_operation()` between pipeline validation and token generation â the security contract is enforced
   2. `#[code_mode(context_from = "method_name")]` attribute extracts real `ValidationContext` from `RequestHandlerExtra` or a struct method, replacing hardcoded placeholders
-  3. `#[code_mode(language = "graphql"|"javascript"|"sql")]` attribute parameterizes tool metadata — SQL/OpenAPI servers get correct tool schemas
-  **Derive macro — warnings (pmcp.run review items 4-8):**
+  3. `#[code_mode(language = "graphql"|"javascript"|"sql")]` attribute parameterizes tool metadata â SQL/OpenAPI servers get correct tool schemas
+  **Derive macro â warnings (pmcp.run review items 4-8):**
 
   4. `HmacTokenGenerator::new` returns `Result` instead of panicking on short secrets
   5. Trybuild compile-fail tests cover `token_secret` and `code_executor` absent fields
@@ -900,7 +900,7 @@ Plans:
 
   7. eval.rs array methods use scope-chain/push-pop instead of cloning entire HashMap per element (P-01)
   8. Async GraphQL validation fallback reuses parsed `query_info` instead of re-parsing (P-03)
-  *Deferred: P-02 (double SWC parse) requires new `ValidatedCode` type threading AST across javascript.rs/executor.rs — deferred to a future phase*
+  *Deferred: P-02 (double SWC parse) requires new `ValidatedCode` type threading AST across javascript.rs/executor.rs â deferred to a future phase*
   **Code quality (IMPROVEMENTS.md Q-01 through Q-04, R-01):**
 
   9. `json_to_string` / `value_to_string` unified into one function (Q-01)
@@ -914,12 +914,12 @@ Plans:
 **Plans:** 6/6 plans complete
 Plans:
 
-- [x] 67.2-01-PLAN.md — Wire policy_evaluator into generated handlers + switch to async validation
-- [x] 67.2-02-PLAN.md — Add context_from and language darling attributes to derive macro
-- [ ] 67.2-03-PLAN.md — HmacTokenGenerator::new returns Result + trybuild compile-fail tests
-- [ ] 67.2-04-PLAN.md — eval.rs scope-chain optimization for array methods (P-01)
-- [ ] 67.2-05-PLAN.md — Async GraphQL double-parse elimination (P-03)
-- [ ] 67.2-06-PLAN.md — json_to_string unification + StepOutcome refactor + ValidationResponse wrapping + clippy cleanup
+- [x] 67.2-01-PLAN.md â Wire policy_evaluator into generated handlers + switch to async validation
+- [x] 67.2-02-PLAN.md â Add context_from and language darling attributes to derive macro
+- [ ] 67.2-03-PLAN.md â HmacTokenGenerator::new returns Result + trybuild compile-fail tests
+- [ ] 67.2-04-PLAN.md â eval.rs scope-chain optimization for array methods (P-01)
+- [ ] 67.2-05-PLAN.md â Async GraphQL double-parse elimination (P-03)
+- [ ] 67.2-06-PLAN.md â json_to_string unification + StepOutcome refactor + ValidationResponse wrapping + clippy cleanup
 
 ### Phase 68: General Documentation Polish
 
@@ -936,14 +936,14 @@ Plans:
 **Plans:** 6 plans
 Plans:
 
-- [ ] 67.2-01-PLAN.md — Wire policy_evaluator into generated handlers + switch to async validation
-- [ ] 67.2-02-PLAN.md — Add context_from and language darling attributes to derive macro
-- [ ] 67.2-03-PLAN.md — HmacTokenGenerator::new returns Result + trybuild compile-fail tests
-- [ ] 67.2-04-PLAN.md — eval.rs scope-chain optimization for array methods (P-01)
-- [ ] 67.2-05-PLAN.md — Async GraphQL double-parse elimination (P-03)
-- [ ] 67.2-06-PLAN.md — json_to_string unification + StepOutcome refactor + ValidationResponse wrapping + clippy cleanup
+- [ ] 67.2-01-PLAN.md â Wire policy_evaluator into generated handlers + switch to async validation
+- [ ] 67.2-02-PLAN.md â Add context_from and language darling attributes to derive macro
+- [ ] 67.2-03-PLAN.md â HmacTokenGenerator::new returns Result + trybuild compile-fail tests
+- [ ] 67.2-04-PLAN.md â eval.rs scope-chain optimization for array methods (P-01)
+- [ ] 67.2-05-PLAN.md â Async GraphQL double-parse elimination (P-03)
+- [ ] 67.2-06-PLAN.md â json_to_string unification + StepOutcome refactor + ValidationResponse wrapping + clippy cleanup
 
-## Progress — Current Milestone
+## Progress â Current Milestone
 
 | Phase | Milestone | Plans Complete | Status | Completed |
 |-------|-----------|----------------|--------|-----------|
@@ -954,25 +954,25 @@ Plans:
 
 ## Backlog
 
-Parking lot for unsequenced ideas. Items here aren't scheduled — promote with `/gsd:review-backlog` when ready.
+Parking lot for unsequenced ideas. Items here aren't scheduled â promote with `/gsd:review-backlog` when ready.
 
 ### Phase 999.1: Delete DEFAULT_PROTOCOL_VERSION constant and make callsites explicit (BACKLOG)
 
-**Goal:** Remove the public `DEFAULT_PROTOCOL_VERSION` re-export and replace each of its ~15 callsites with an explicit choice — either `LATEST_PROTOCOL_VERSION` (where the code is advertising what this SDK supports) or a literal `"2025-03-26"` with a `// backward-compat fallback` comment (where the code genuinely wants the widest-compatible version for un-negotiated peers). The name `DEFAULT` is misleading: nothing is actually "default" about it — it's a specific compat choice that happens to be older than `LATEST`, and that distinction is invisible at every callsite.
+**Goal:** Remove the public `DEFAULT_PROTOCOL_VERSION` re-export and replace each of its ~15 callsites with an explicit choice â either `LATEST_PROTOCOL_VERSION` (where the code is advertising what this SDK supports) or a literal `"2025-03-26"` with a `// backward-compat fallback` comment (where the code genuinely wants the widest-compatible version for un-negotiated peers). The name `DEFAULT` is misleading: nothing is actually "default" about it â it's a specific compat choice that happens to be older than `LATEST`, and that distinction is invisible at every callsite.
 
 **Scope:**
 
-- Breaking API change (public re-export at `src/lib.rs:307` + `src/types/mod.rs:32`) — requires minor version bump and release note
+- Breaking API change (public re-export at `src/lib.rs:307` + `src/types/mod.rs:32`) â requires minor version bump and release note
 - Callsites to audit and convert:
-  - `src/types/protocol/mod.rs:32` — `impl Default for ProtocolVersion`
+  - `src/types/protocol/mod.rs:32` â `impl Default for ProtocolVersion`
   - `src/server/streamable_http_server.rs` lines 560, 971, 979, 981, 985, 1225, 1231, 1233, 1236
   - `src/server/core.rs:1329` and `:1376`
   - `src/shared/event_store.rs:367`
-  - `src/lib.rs:286` — public doctest asserting the value
-  - `src/types/protocol/version.rs:51,65` — unit tests
+  - `src/lib.rs:286` â public doctest asserting the value
+  - `src/types/protocol/version.rs:51,65` â unit tests
   - `benches/comprehensive_benchmarks.rs:421`
 
-**Why:** Phase 65 simplify review flagged the inconsistency — `LATEST_PROTOCOL_VERSION = "2025-11-25"` but `DEFAULT_PROTOCOL_VERSION = "2025-03-26"`. Mechanically bumping `DEFAULT` to match `LATEST` would be a silent behavior change for peers reaching the fallback path (they'd be assumed to speak the newer protocol before they've said so). The right fix is to delete the misleading abstraction, not flip its value.
+**Why:** Phase 65 simplify review flagged the inconsistency â `LATEST_PROTOCOL_VERSION = "2025-11-25"` but `DEFAULT_PROTOCOL_VERSION = "2025-03-26"`. Mechanically bumping `DEFAULT` to match `LATEST` would be a silent behavior change for peers reaching the fallback path (they'd be assumed to speak the newer protocol before they've said so). The right fix is to delete the misleading abstraction, not flip its value.
 
 **Requirements:** TBD
 
@@ -988,23 +988,23 @@ Plans:
 
 **Motivation:**
 
-- MCP Apps frequently serialize large structured payloads (tables, datasets, chart data) — the dataviz, hotel gallery, and venue map examples are all 10–100 KB of JSON per response
+- MCP Apps frequently serialize large structured payloads (tables, datasets, chart data) â the dataviz, hotel gallery, and venue map examples are all 10â100 KB of JSON per response
 - Both the LLM context window and the UI widget render path benefit from smaller payloads: fewer tokens consumed by tool output, faster postMessage bridge transfer, faster widget mount
-- TOON (Token-Oriented Object Notation) is designed explicitly for this use case — schema-aware compression that encodes repeated keys and types once, yielding ~30–60% size reductions on tabular data compared to JSON
+- TOON (Token-Oriented Object Notation) is designed explicitly for this use case â schema-aware compression that encodes repeated keys and types once, yielding ~30â60% size reductions on tabular data compared to JSON
 - If adoption works, MCP servers would flip a flag per-tool or per-resource to switch output format, and MCP Apps would transparently decode on the bridge side
 
 **Research questions (spike scope, not implementation):**
 
-1. Maturity of TOON — is the spec stable enough to commit a feature-gated SDK integration? Is there a Rust encoder/decoder crate, or would PMCP need to author one?
-2. Compatibility — can TOON payloads ride over existing MCP `Content` variants (probably via a new `TextContent` MIME type or a new `Content::Toon` variant), or does it need protocol changes that break v2025-11-25 compat?
-3. Measurement — what are the realistic size/token savings on representative MCP App payloads (dataviz, gallery, map from existing examples)? Do LLMs tokenize TOON efficiently, or does the token savings on the wire get lost when Claude/GPT re-tokenize the decoded content?
-4. Widget-side decoder — can the MCP App bridge (TypeScript) decode TOON in-browser without a heavy dependency, or is this a non-starter for the WASM/iframe sandbox?
-5. Opt-in UX — what does `#[mcp_tool(output_format = "toon")]` or equivalent look like on the server side? What's the per-call server-side negotiation story?
+1. Maturity of TOON â is the spec stable enough to commit a feature-gated SDK integration? Is there a Rust encoder/decoder crate, or would PMCP need to author one?
+2. Compatibility â can TOON payloads ride over existing MCP `Content` variants (probably via a new `TextContent` MIME type or a new `Content::Toon` variant), or does it need protocol changes that break v2025-11-25 compat?
+3. Measurement â what are the realistic size/token savings on representative MCP App payloads (dataviz, gallery, map from existing examples)? Do LLMs tokenize TOON efficiently, or does the token savings on the wire get lost when Claude/GPT re-tokenize the decoded content?
+4. Widget-side decoder â can the MCP App bridge (TypeScript) decode TOON in-browser without a heavy dependency, or is this a non-starter for the WASM/iframe sandbox?
+5. Opt-in UX â what does `#[mcp_tool(output_format = "toon")]` or equivalent look like on the server side? What's the per-call server-side negotiation story?
 
 **Why backlog (not an active phase):**
 
 - The user's framing is explicitly exploratory ("let's investigate if we can add it as a built-in support")
-- TOON is a newer format — the feasibility spike should happen before committing a phase slot
+- TOON is a newer format â the feasibility spike should happen before committing a phase slot
 - The v2.1 rmcp Upgrades milestone is scoped to documentation polish; runtime data-format work doesn't belong there
 - Natural home after spike: either seed of a "v2.2 Payload Optimization" milestone or early phase of a milestone focused on MCP Apps performance
 
@@ -1018,14 +1018,14 @@ Plans:
 
 - [ ] TBD (promote with `/gsd:review-backlog` when ready)
 
-### Phase 69: rmcp parity research — ergonomics gap analysis + follow-on phase proposals
+### Phase 69: rmcp parity research â ergonomics gap analysis + follow-on phase proposals
 
-**Goal:** Produce a rigorous, evidence-backed gap matrix comparing pmcp vs rmcp on *ergonomics* (macro DX, builder APIs, typed wrappers, handler shapes, state/extra patterns) and use it to propose 2–4 concrete follow-on phases to close the credibility/DX gap. Transports, examples polish, and docs coverage are intentionally out of scope — Phase 68 handles those surfaces at the polish layer.
+**Goal:** Produce a rigorous, evidence-backed gap matrix comparing pmcp vs rmcp on *ergonomics* (macro DX, builder APIs, typed wrappers, handler shapes, state/extra patterns) and use it to propose 2â4 concrete follow-on phases to close the credibility/DX gap. Transports, examples polish, and docs coverage are intentionally out of scope â Phase 68 handles those surfaces at the polish layer.
 
 **Deliverables:**
 
-- `69-RESEARCH.md` — gap matrix (per-feature: rmcp approach, pmcp approach, gap severity, evidence citations)
-- `69-PROPOSALS.md` — 2–4 follow-on phase proposals with goals, scope, and rough success criteria, ready to slot into v2.1 or seed v2.2
+- `69-RESEARCH.md` â gap matrix (per-feature: rmcp approach, pmcp approach, gap severity, evidence citations)
+- `69-PROPOSALS.md` â 2â4 follow-on phase proposals with goals, scope, and rough success criteria, ready to slot into v2.1 or seed v2.2
 
 **Requirements**: TBD (derived from research findings; expected to seed new v2.1/v2.2 requirement IDs)
 **Depends on:** Phase 68
@@ -1033,63 +1033,63 @@ Plans:
 
 Plans:
 
-- [x] 69-01-PLAN.md — Produce the rmcp vs pmcp ergonomics gap matrix (69-RESEARCH.md) across 6 surfaces
-- [x] 69-02-PLAN.md — Derive follow-on phase proposals from High-severity gaps (69-PROPOSALS.md)
-- [x] 69-03-PLAN.md — Quality gate + land PARITY-* requirement IDs + update STATE/PROJECT
+- [x] 69-01-PLAN.md â Produce the rmcp vs pmcp ergonomics gap matrix (69-RESEARCH.md) across 6 surfaces
+- [x] 69-02-PLAN.md â Derive follow-on phase proposals from High-severity gaps (69-PROPOSALS.md)
+- [x] 69-03-PLAN.md â Quality gate + land PARITY-* requirement IDs + update STATE/PROJECT
 
 ### Phase 70: Add Extensions typemap and peer back-channel to RequestHandlerExtra (PARITY-HANDLER-01)
 
-**Goal:** Extend `RequestHandlerExtra` with two drop-in additive capabilities — a typed-key `Extensions` map (HANDLER-02) for request-scoped user data crossing middleware/handler boundaries, and an optional `PeerHandle` back-channel (HANDLER-05) exposing `sample` / `list_roots` / `progress_notify` from inside tool/prompt/resource handlers — without breaking any existing `::new(...)` or `::with_session(...)` call site. Restructured from 3 plans to 4 plans after cross-AI review (70-REVIEWS.md) + codebase verification (70-REVIEW-VERIFICATION.md) confirmed 5 of Codex's HIGH findings: the original plan set assumed an outbound `ServerRequest` transport + response-correlation layer that does not exist in the live codebase. Plan 02 (NEW) builds that foundational plumbing before Plan 03 wires the peer.
+**Goal:** Extend `RequestHandlerExtra` with two drop-in additive capabilities â a typed-key `Extensions` map (HANDLER-02) for request-scoped user data crossing middleware/handler boundaries, and an optional `PeerHandle` back-channel (HANDLER-05) exposing `sample` / `list_roots` / `progress_notify` from inside tool/prompt/resource handlers â without breaking any existing `::new(...)` or `::with_session(...)` call site. Restructured from 3 plans to 4 plans after cross-AI review (70-REVIEWS.md) + codebase verification (70-REVIEW-VERIFICATION.md) confirmed 5 of Codex's HIGH findings: the original plan set assumed an outbound `ServerRequest` transport + response-correlation layer that does not exist in the live codebase. Plan 02 (NEW) builds that foundational plumbing before Plan 03 wires the peer.
 **Requirements**: PARITY-HANDLER-01
 **Depends on:** Phase 69
 **Plans:** 4 plans
 
 Plans:
 
-- [x] 70-01-PLAN.md — Extensions typemap on both RequestHandlerExtra structs + #[non_exhaustive] + accessor parity + 5 proptests + refactor 12 struct-literal test sites (Wave 1)
-- [x] 70-02-PLAN.md — ServerRequestDispatcher (outbound ServerRequest + response correlation) + Server::run drain-to-transport + route TransportMessage::Response through dispatcher (NEW plan from reviews replan — addresses Codex Findings 2+3) (Wave 2)
-- [x] 70-03-PLAN.md — PeerHandle trait + DispatchPeerHandle delegating to Plan 02 dispatcher + conditional .with_peer(...) at 9 dispatch sites + dispatch-path round-trip integration test (Wave 3)
-- [x] 70-04-PLAN.md — Examples s42 + s43 (s43 uses real ToolHandler per Codex Finding 5) + fuzz target + rustdoc migration prose with explicit semver posture + make quality-gate (Wave 4)
+- [x] 70-01-PLAN.md â Extensions typemap on both RequestHandlerExtra structs + #[non_exhaustive] + accessor parity + 5 proptests + refactor 12 struct-literal test sites (Wave 1)
+- [x] 70-02-PLAN.md â ServerRequestDispatcher (outbound ServerRequest + response correlation) + Server::run drain-to-transport + route TransportMessage::Response through dispatcher (NEW plan from reviews replan â addresses Codex Findings 2+3) (Wave 2)
+- [x] 70-03-PLAN.md â PeerHandle trait + DispatchPeerHandle delegating to Plan 02 dispatcher + conditional .with_peer(...) at 9 dispatch sites + dispatch-path round-trip integration test (Wave 3)
+- [x] 70-04-PLAN.md â Examples s42 + s43 (s43 uses real ToolHandler per Codex Finding 5) + fuzz target + rustdoc migration prose with explicit semver posture + make quality-gate (Wave 4)
 
 ### Phase 71: Rustdoc fallback for #[mcp_tool] tool descriptions (PARITY-MACRO-01)
 
-**Goal:** Enable `#[mcp_tool]` to harvest the attached function's rustdoc as the tool description when the `description = "..."` attribute is omitted — eliminating forced duplication where a well-documented tool fn must repeat its description in both the rustdoc block and the macro attribute. Preserves precedence (explicit attribute wins over rustdoc), fails with a clear error when neither is present, and remains backwards-compatible with all existing call sites. Derived from 69-PROPOSALS.md Proposal 3 (MACRO-02, High severity).
+**Goal:** Enable `#[mcp_tool]` to harvest the attached function's rustdoc as the tool description when the `description = "..."` attribute is omitted â eliminating forced duplication where a well-documented tool fn must repeat its description in both the rustdoc block and the macro attribute. Preserves precedence (explicit attribute wins over rustdoc), fails with a clear error when neither is present, and remains backwards-compatible with all existing call sites. Derived from 69-PROPOSALS.md Proposal 3 (MACRO-02, High severity).
 **Requirements**: PARITY-MACRO-01
 **Depends on:** Phase 70
 **Plans:** 4/4 plans complete
 
 Plans:
 
-- [x] 71-01-PLAN.md — Create new sibling crate `crates/pmcp-macros-support/` (non-proc-macro) holding the pure `extract_doc_description` normalization helper with unit tests + proptest invariants — resolves HIGH-1 via Option A so proc-macro crate API restrictions don't block property/fuzz consumers (Wave 1)
-- [x] 71-02-PLAN.md — `pmcp-macros` adds path dep on `pmcp-macros-support` + single shared `resolve_tool_args` resolver in `mcp_common.rs`; both parse sites (`mcp_tool.rs` standalone + `mcp_server.rs::parse_mcp_tool_attr` impl-block) delegate to it; integration tests lock symmetry (MEDIUM-1) (Wave 2)
-- [x] 71-03-PLAN.md — 4 trybuild compile-fail snapshots (existing regenerated + new empty-args + new non-empty-args + regenerated multi-args) + README migration section with Limitations subsection + mixed-shape fuzz target `rustdoc_normalize.rs` (MEDIUM-2 + MEDIUM-3 + LOW-3) (Wave 3)
-- [x] 71-04-PLAN.md — Workspace `pmcp`-dependency ripple audit + version bumps (pmcp 2.3.0→2.4.0 MINOR per MEDIUM-4, pmcp-macros 0.5.0→0.6.0, new pmcp-macros-support 0.1.0, concurrent downstream patch bumps cargo-pmcp 0.6.0→0.6.1 + mcp-tester 0.5.0→0.5.1 per CLAUDE.md §"Version Bump Rules") + CHANGELOG entry + REQUIREMENTS.md closure + `make quality-gate` (HIGH-2 + MEDIUM-4) (Wave 4)
+- [x] 71-01-PLAN.md â Create new sibling crate `crates/pmcp-macros-support/` (non-proc-macro) holding the pure `extract_doc_description` normalization helper with unit tests + proptest invariants â resolves HIGH-1 via Option A so proc-macro crate API restrictions don't block property/fuzz consumers (Wave 1)
+- [x] 71-02-PLAN.md â `pmcp-macros` adds path dep on `pmcp-macros-support` + single shared `resolve_tool_args` resolver in `mcp_common.rs`; both parse sites (`mcp_tool.rs` standalone + `mcp_server.rs::parse_mcp_tool_attr` impl-block) delegate to it; integration tests lock symmetry (MEDIUM-1) (Wave 2)
+- [x] 71-03-PLAN.md â 4 trybuild compile-fail snapshots (existing regenerated + new empty-args + new non-empty-args + regenerated multi-args) + README migration section with Limitations subsection + mixed-shape fuzz target `rustdoc_normalize.rs` (MEDIUM-2 + MEDIUM-3 + LOW-3) (Wave 3)
+- [x] 71-04-PLAN.md â Workspace `pmcp`-dependency ripple audit + version bumps (pmcp 2.3.0â2.4.0 MINOR per MEDIUM-4, pmcp-macros 0.5.0â0.6.0, new pmcp-macros-support 0.1.0, concurrent downstream patch bumps cargo-pmcp 0.6.0â0.6.1 + mcp-tester 0.5.0â0.5.1 per CLAUDE.md Â§"Version Bump Rules") + CHANGELOG entry + REQUIREMENTS.md closure + `make quality-gate` (HIGH-2 + MEDIUM-4) (Wave 4)
 
-### Phase 72: Investigate rmcp as foundations for pmcp - evaluate using rmcp for protocol level while focusing pmcp on pragmatic batteries-included SDK for enterprise use cases ✓ COMPLETE
+### Phase 72: Investigate rmcp as foundations for pmcp - evaluate using rmcp for protocol level while focusing pmcp on pragmatic batteries-included SDK for enterprise use cases â COMPLETE
 
-**Status:** COMPLETE (2026-04-19) — **Recommendation: D** (Maintain pmcp as authoritative Rust MCP SDK; do not migrate onto rmcp). 7/9 decision thresholds resolved; T6/T7 remain UNKNOWN per 72-CONTEXT.md. Slice 1 spike executed — serde `params: null` round-trip fails against rmcp 1.5.0, downgrading inventory row 1 from EXACT to compatible-via-adapter. Phase 69's parity phases (70, 71, CLIENT-02) remain the forward path. See `.planning/phases/72-investigate-rmcp-as-foundations-for-pmcp-evaluate-using-rmcp/72-RECOMMENDATION.md`.
+**Status:** COMPLETE (2026-04-19) â **Recommendation: D** (Maintain pmcp as authoritative Rust MCP SDK; do not migrate onto rmcp). 7/9 decision thresholds resolved; T6/T7 remain UNKNOWN per 72-CONTEXT.md. Slice 1 spike executed â serde `params: null` round-trip fails against rmcp 1.5.0, downgrading inventory row 1 from EXACT to compatible-via-adapter. Phase 69's parity phases (70, 71, CLIENT-02) remain the forward path. See `.planning/phases/72-investigate-rmcp-as-foundations-for-pmcp-evaluate-using-rmcp/72-RECOMMENDATION.md`.
 
-**Goal:** Produce a research/decision-only recommendation on whether pmcp's protocol layer should be refactored to sit on top of rmcp 1.5.0 — repositioning pmcp + mcp-tester + mcp-preview + cargo-pmcp as a pragmatic, batteries-included, enterprise-focused SDK built *on top of* rmcp rather than alongside it. Deliverables are 7 markdown documents (CONTEXT, inventory, strategy matrix, PoC proposal, PoC results, decision rubric, final recommendation). If the recommendation is adopt (A/B/C1/C2), migration itself is scoped as a separate future v3.0 phase; if stay (D), Phase 69's parity phases remain the path forward.
+**Goal:** Produce a research/decision-only recommendation on whether pmcp's protocol layer should be refactored to sit on top of rmcp 1.5.0 â repositioning pmcp + mcp-tester + mcp-preview + cargo-pmcp as a pragmatic, batteries-included, enterprise-focused SDK built *on top of* rmcp rather than alongside it. Deliverables are 7 markdown documents (CONTEXT, inventory, strategy matrix, PoC proposal, PoC results, decision rubric, final recommendation). If the recommendation is adopt (A/B/C1/C2), migration itself is scoped as a separate future v3.0 phase; if stay (D), Phase 69's parity phases remain the path forward.
 **Requirements**: RMCP-EVAL-01, RMCP-EVAL-02, RMCP-EVAL-03, RMCP-EVAL-04, RMCP-EVAL-05
 **Depends on:** Phase 71
 **Plans:** 3/3 plans complete
 
 Plans:
 
-- [x] 72-01-PLAN.md — Seed RMCP-EVAL-01..05 in REQUIREMENTS.md; produce 72-INVENTORY.md (inversion inventory, >=15 pmcp module families with file:line + rmcp evidence) and 72-STRATEGY-MATRIX.md (5 options x 5 criteria = 25 cells, no TBD) (Wave 1)
-- [x] 72-02-PLAN.md — Produce 72-POC-PROPOSAL.md (3 slices, each <=500 LOC, at least one <=3 days, with LOC/Files/Pass/Fail/Time-box fields) and 72-DECISION-RUBRIC.md (>=5 falsifiable thresholds, each followed by Data source) (Wave 2)
-- [x] 72-03-PLAN.md — Produce 72-RECOMMENDATION.md (RMCP-EVAL-05) — opens with `**Recommendation:** <A|B|C|D|E>`, contains 5 per-criterion justification subsections citing T-IDs + inventory/matrix rows, lists UNRESOLVED thresholds, and names the next-phase handoff (Wave 3)
+- [x] 72-01-PLAN.md â Seed RMCP-EVAL-01..05 in REQUIREMENTS.md; produce 72-INVENTORY.md (inversion inventory, >=15 pmcp module families with file:line + rmcp evidence) and 72-STRATEGY-MATRIX.md (5 options x 5 criteria = 25 cells, no TBD) (Wave 1)
+- [x] 72-02-PLAN.md â Produce 72-POC-PROPOSAL.md (3 slices, each <=500 LOC, at least one <=3 days, with LOC/Files/Pass/Fail/Time-box fields) and 72-DECISION-RUBRIC.md (>=5 falsifiable thresholds, each followed by Data source) (Wave 2)
+- [x] 72-03-PLAN.md â Produce 72-RECOMMENDATION.md (RMCP-EVAL-05) â opens with `**Recommendation:** <A|B|C|D|E>`, contains 5 per-criterion justification subsections citing T-IDs + inventory/matrix rows, lists UNRESOLVED thresholds, and names the next-phase handoff (Wave 3)
 
 ### Phase 72.1: Finalize landing support (INSERTED)
 
-**Goal:** Ship CR-03 rev-2 — replace build-time `NEXT_PUBLIC_*` env vars in the landing Next.js template with a runtime `fetch('/landing-config')` via a new required shared hook `useLandingConfig`, fix 3 stale rustdoc references in `cargo-pmcp/src/landing/config.rs`, and bump `cargo-pmcp` 0.8.0 -> 0.8.1 (patch, additive). Unblocks pmcp.run Phase 71 UAT Test 7 and Cost Coach production launch.
+**Goal:** Ship CR-03 rev-2 â replace build-time `NEXT_PUBLIC_*` env vars in the landing Next.js template with a runtime `fetch('/landing-config')` via a new required shared hook `useLandingConfig`, fix 3 stale rustdoc references in `cargo-pmcp/src/landing/config.rs`, and bump `cargo-pmcp` 0.8.0 -> 0.8.1 (patch, additive). Unblocks pmcp.run Phase 71 UAT Test 7 and Cost Coach production launch.
 **Requirements**: LAND-CR03-01
 **Depends on:** Phase 72
 **Plans:** 1/1 plans complete
 
 Plans:
 
-- [x] 72.1-01-PLAN.md — Create `lib/useLandingConfig.ts` hook; rewrite 4 consumers (signup, callback, connect [server->client flip], Header [conditional button]); fix 3 rustdoc comments in `src/landing/config.rs`; bump `Cargo.toml` 0.8.0 -> 0.8.1; run `make quality-gate` + `cargo doc` + template `tsc`/`next build` + grep guardrails G1..G6 + manual AC-11 offline gate (Wave 1)
+- [x] 72.1-01-PLAN.md â Create `lib/useLandingConfig.ts` hook; rewrite 4 consumers (signup, callback, connect [server->client flip], Header [conditional button]); fix 3 rustdoc comments in `src/landing/config.rs`; bump `Cargo.toml` 0.8.0 -> 0.8.1; run `make quality-gate` + `cargo doc` + template `tsc`/`next build` + grep guardrails G1..G6 + manual AC-11 offline gate (Wave 1)
 
 ### Phase 74: Add cargo pmcp auth subcommand with multi-server OAuth token management
 
@@ -1100,9 +1100,9 @@ Plans:
 
 Plans:
 
-- [x] 74-01-PLAN.md — SDK DCR: OAuthConfig refactor (client_id Option), DcrRequest/DcrResponse re-export, auto-fire DCR in OAuthHelper, unit/property/fuzz/mockito-integration tests, examples/c08_oauth_dcr.rs, CHANGELOG entry (Wave 1, pmcp crate)
-- [x] 74-02-PLAN.md — CLI auth group: new commands/auth_cmd/ module (login/logout/status/token/refresh + TokenCacheV1 cache with atomic writes & URL normalization), main.rs wiring, resolve_auth_middleware cache fallback with near-expiry auto-refresh, pentest.rs migration to shared AuthFlags, tempfile promoted to regular dep, mockito+cli integration tests (Wave 2, cargo-pmcp crate)
-- [x] 74-03-PLAN.md — Release coordination: bump pmcp 2.4.0→2.5.0 and cargo-pmcp 0.8.1→0.9.0, update cargo-pmcp pmcp dep pin to 2.5.0, finalize CHANGELOG date, run make quality-gate to match CI exactly (Wave 3)
+- [x] 74-01-PLAN.md â SDK DCR: OAuthConfig refactor (client_id Option), DcrRequest/DcrResponse re-export, auto-fire DCR in OAuthHelper, unit/property/fuzz/mockito-integration tests, examples/c08_oauth_dcr.rs, CHANGELOG entry (Wave 1, pmcp crate)
+- [x] 74-02-PLAN.md â CLI auth group: new commands/auth_cmd/ module (login/logout/status/token/refresh + TokenCacheV1 cache with atomic writes & URL normalization), main.rs wiring, resolve_auth_middleware cache fallback with near-expiry auto-refresh, pentest.rs migration to shared AuthFlags, tempfile promoted to regular dep, mockito+cli integration tests (Wave 2, cargo-pmcp crate)
+- [x] 74-03-PLAN.md â Release coordination: bump pmcp 2.4.0â2.5.0 and cargo-pmcp 0.8.1â0.9.0, update cargo-pmcp pmcp dep pin to 2.5.0, finalize CHANGELOG date, run make quality-gate to match CI exactly (Wave 3)
 
 ### Phase 73: Typed client helpers + list_all pagination (PARITY-CLIENT-01)
 
@@ -1113,9 +1113,9 @@ Plans:
 
 Plans:
 
-- [x] 73-01-PLAN.md — ClientOptions scaffold + new Client::with_client_options constructor + four typed helpers (call_tool_typed / _with_task / _and_poll / get_prompt_typed) with doctests, unit tests, and one property test (Wave 1, pmcp crate)
-- [x] 73-02-PLAN.md — Four list_all_* auto-paginating helpers with max_iterations cap enforcement (T-73-01 DoS mitigation); integration test file tests/list_all_pagination.rs; two property tests (flat-concatenation + cap-enforcement); new fuzz target fuzz/fuzz_targets/list_all_cursor_loop.rs (Wave 2, pmcp crate)
-- [x] 73-03-PLAN.md — Release coordination: examples/c09_client_list_all.rs (avoids c08 collision) + examples/c02_client_tools.rs update + README index; bump pmcp 2.5.0→2.6.0 across all 8 pin lines in 7 Cargo.toml files; CHANGELOG v2.6.0 entry; REQUIREMENTS.md §55 D-15 doc-fix (call_prompt_typed → get_prompt_typed); README Key Features bullet; make quality-gate (Wave 3)
+- [x] 73-01-PLAN.md â ClientOptions scaffold + new Client::with_client_options constructor + four typed helpers (call_tool_typed / _with_task / _and_poll / get_prompt_typed) with doctests, unit tests, and one property test (Wave 1, pmcp crate)
+- [x] 73-02-PLAN.md â Four list_all_* auto-paginating helpers with max_iterations cap enforcement (T-73-01 DoS mitigation); integration test file tests/list_all_pagination.rs; two property tests (flat-concatenation + cap-enforcement); new fuzz target fuzz/fuzz_targets/list_all_cursor_loop.rs (Wave 2, pmcp crate)
+- [x] 73-03-PLAN.md â Release coordination: examples/c09_client_list_all.rs (avoids c08 collision) + examples/c02_client_tools.rs update + README index; bump pmcp 2.5.0â2.6.0 across all 8 pin lines in 7 Cargo.toml files; CHANGELOG v2.6.0 entry; REQUIREMENTS.md Â§55 D-15 doc-fix (call_prompt_typed â get_prompt_typed); README Key Features bullet; make quality-gate (Wave 3)
 
 ### Phase 75: Fix PMAT issues
 
@@ -1126,38 +1126,38 @@ Plans:
 
 Plans:
 
-- [x] 75-00-PLAN.md — Wave 0: Baseline + spike (PMAT path-filter empirical test, insta snapshot baseline for pmcp-macros, semantic regression baseline for pmcp-code-mode, PMAT version pin in CI) — completed 2026-04-23 — D-09 resolved (include_works=false, .pmatignore is the only honored filter), D-10 resolved D-10-B (PMAT ignores #[allow] — SCOPE EXPANSION DETECTED), D-11 resolved D-11-B (bare gate fails on 5 dimensions — Wave 5 must patch quality-badges.yml)
-- [x] 75-01-PLAN.md — Wave 1: src/ + pmcp-macros/ refactors — completed 2026-04-24. 20 hotspots cleared to ≤25 via P1-P3 (zero P5 usage, zero escapees). Delta: PMAT complexity 94→75 (−19). Task 1a-C explicitly skipped per addendum Rule 1 (migrated to Phase 75.5 Category A); pre-existing bare #[allow] at streamable_http_server.rs:1004 removed. Macro expansion snapshots byte-identical (Wave 0 contract preserved).
-- [x] 75-02-PLAN.md — Wave 2: cargo-pmcp/ refactors — completed 2026-04-24. 40 hotspots cleared to ≤25 via P1-P4 (zero P5 usage, zero escapees). Both monsters (check.rs::execute cog 105→≤25, handle_oauth_action cog 91→≤25) decomposed. Delta: PMAT complexity-gate 75→29 (−46); cargo-pmcp cog>25 40→0. `make quality-gate` exits 0. Shared scan_for_package helper established in cloudflare/init.rs (3-bird kill).
-- [x] 75-03-PLAN.md — Wave 3: pmcp-code-mode/ refactors — completed 2026-04-24. All 5 named hotspots cleared to ≤25 via P6 (eval.rs) + P1 (policy_annotations.rs, schema_exposure.rs); zero P5 usage; zero escapees. Both eval-monsters decomposed: evaluate_with_scope 123→17, evaluate_array_method_with_scope 117→≤25. Delta: PMAT complexity-gate 29→22 (−7). Pre-existing pmcp-code-mode lint debt (18 lib + 28 test errors + 3 dead-code) cleared in opening sweep. `make quality-gate` exits 0. Wave 0 semantic-regression baseline byte-identical (34 passed throughout).
-- [x] 75-04-PLAN.md — Wave 4: scattered crate hotspots + examples/fuzz handling per Wave 0 spike + SATD triage per D-04 + final pre-Wave-5 gate verification — completed 2026-04-25. 5 plan-named hotspots cleared to ≤25 (P1+P4) plus 8 additional warning-level cog 24-25 violations refactored under Rule 3 (gate-counted but out-of-plan-list). `.pmatignore` configured for fuzz/+packages/+examples/ per Wave 0 chosen_path: (a). 11 in-scope SATDs migrated to `// See #NNN` refs against 3 umbrella issues (paiml/rust-mcp-sdk#247/#248/#249); 14 SATD matches classified as out-of-D-04-scope scaffold/template content. Delta: PMAT complexity-gate 22→0 (−22); aggregate Phase 75 delta 94→0. `pmat quality-gate --fail-on-violation --checks complexity` exits 0. Wave 5 can flip the README badge.
-- [~] 75-05-PLAN.md — Wave 5: D-07 enforcement (CI gate in ci.yml, regression-PR fail-closed test, badge-flip confirmation, CLAUDE.md docs update). NOTE (D-11-B): must also patch `.github/workflows/quality-badges.yml:~72` bare gate → `--checks complexity` per 75-ADDENDUM-D10B.md Rule 5. — substantially completed 2026-04-25. Tasks 5-01 (ci.yml gate + D-11-B quality-badges.yml alignment), 5-04 (CLAUDE.md docs) landed; Task 5-02 replanned mid-execution (option A → option B per user) — fork-internal CI did not fire due to fork-main divergence; switched to local-pmat empirical evidence (cog-77 fixture exits 1 by name) recorded in 75-05-GATE-VERIFICATION.md. Task 5-03 (badge flip on README) **deferred** until Wave 5 lands on `paiml/rust-mcp-sdk:main` — operator follow-up: trigger `gh workflow run quality-badges.yml -R paiml/rust-mcp-sdk` post-merge and append observation to GATE-VERIFICATION.md.
+- [x] 75-00-PLAN.md â Wave 0: Baseline + spike (PMAT path-filter empirical test, insta snapshot baseline for pmcp-macros, semantic regression baseline for pmcp-code-mode, PMAT version pin in CI) â completed 2026-04-23 â D-09 resolved (include_works=false, .pmatignore is the only honored filter), D-10 resolved D-10-B (PMAT ignores #[allow] â SCOPE EXPANSION DETECTED), D-11 resolved D-11-B (bare gate fails on 5 dimensions â Wave 5 must patch quality-badges.yml)
+- [x] 75-01-PLAN.md â Wave 1: src/ + pmcp-macros/ refactors â completed 2026-04-24. 20 hotspots cleared to â¤25 via P1-P3 (zero P5 usage, zero escapees). Delta: PMAT complexity 94â75 (â19). Task 1a-C explicitly skipped per addendum Rule 1 (migrated to Phase 75.5 Category A); pre-existing bare #[allow] at streamable_http_server.rs:1004 removed. Macro expansion snapshots byte-identical (Wave 0 contract preserved).
+- [x] 75-02-PLAN.md â Wave 2: cargo-pmcp/ refactors â completed 2026-04-24. 40 hotspots cleared to â¤25 via P1-P4 (zero P5 usage, zero escapees). Both monsters (check.rs::execute cog 105ââ¤25, handle_oauth_action cog 91ââ¤25) decomposed. Delta: PMAT complexity-gate 75â29 (â46); cargo-pmcp cog>25 40â0. `make quality-gate` exits 0. Shared scan_for_package helper established in cloudflare/init.rs (3-bird kill).
+- [x] 75-03-PLAN.md â Wave 3: pmcp-code-mode/ refactors â completed 2026-04-24. All 5 named hotspots cleared to â¤25 via P6 (eval.rs) + P1 (policy_annotations.rs, schema_exposure.rs); zero P5 usage; zero escapees. Both eval-monsters decomposed: evaluate_with_scope 123â17, evaluate_array_method_with_scope 117ââ¤25. Delta: PMAT complexity-gate 29â22 (â7). Pre-existing pmcp-code-mode lint debt (18 lib + 28 test errors + 3 dead-code) cleared in opening sweep. `make quality-gate` exits 0. Wave 0 semantic-regression baseline byte-identical (34 passed throughout).
+- [x] 75-04-PLAN.md â Wave 4: scattered crate hotspots + examples/fuzz handling per Wave 0 spike + SATD triage per D-04 + final pre-Wave-5 gate verification â completed 2026-04-25. 5 plan-named hotspots cleared to â¤25 (P1+P4) plus 8 additional warning-level cog 24-25 violations refactored under Rule 3 (gate-counted but out-of-plan-list). `.pmatignore` configured for fuzz/+packages/+examples/ per Wave 0 chosen_path: (a). 11 in-scope SATDs migrated to `// See #NNN` refs against 3 umbrella issues (paiml/rust-mcp-sdk#247/#248/#249); 14 SATD matches classified as out-of-D-04-scope scaffold/template content. Delta: PMAT complexity-gate 22â0 (â22); aggregate Phase 75 delta 94â0. `pmat quality-gate --fail-on-violation --checks complexity` exits 0. Wave 5 can flip the README badge.
+- [~] 75-05-PLAN.md â Wave 5: D-07 enforcement (CI gate in ci.yml, regression-PR fail-closed test, badge-flip confirmation, CLAUDE.md docs update). NOTE (D-11-B): must also patch `.github/workflows/quality-badges.yml:~72` bare gate â `--checks complexity` per 75-ADDENDUM-D10B.md Rule 5. â substantially completed 2026-04-25. Tasks 5-01 (ci.yml gate + D-11-B quality-badges.yml alignment), 5-04 (CLAUDE.md docs) landed; Task 5-02 replanned mid-execution (option A â option B per user) â fork-internal CI did not fire due to fork-main divergence; switched to local-pmat empirical evidence (cog-77 fixture exits 1 by name) recorded in 75-05-GATE-VERIFICATION.md. Task 5-03 (badge flip on README) **deferred** until Wave 5 lands on `paiml/rust-mcp-sdk:main` â operator follow-up: trigger `gh workflow run quality-badges.yml -R paiml/rust-mcp-sdk` post-merge and append observation to GATE-VERIFICATION.md.
 
 ### Phase 75.5: PMAT ex-P5 refactor backlog
 
-**Goal:** Absorb the refactor work that Phase 75 could not land under P5 (`#[allow(clippy::cognitive_complexity)]` + `// Why:`) because Wave 0 D-10 spike proved PMAT 3.15.0 ignores the allow attribute. Category A: the 12 pre-existing bare-allow sites in `src/` (orchestrator-verified count; PATTERNS.md said "13" but the 13th — `streamable_http_server.rs:1004 handle_post_with_middleware` — was already refactored in Phase 75 Wave 1a). Category B: escapees logged to `75.5-ESCAPEES.md` during Plans 75-01..75-04 — empty (zero entries logged across Phase 75 Waves 1-4). Each Category A site either refactors to ≤25 or has the ineffective `#[allow]` removed because the underlying function already simplified.
+**Goal:** Absorb the refactor work that Phase 75 could not land under P5 (`#[allow(clippy::cognitive_complexity)]` + `// Why:`) because Wave 0 D-10 spike proved PMAT 3.15.0 ignores the allow attribute. Category A: the 12 pre-existing bare-allow sites in `src/` (orchestrator-verified count; PATTERNS.md said "13" but the 13th â `streamable_http_server.rs:1004 handle_post_with_middleware` â was already refactored in Phase 75 Wave 1a). Category B: escapees logged to `75.5-ESCAPEES.md` during Plans 75-01..75-04 â empty (zero entries logged across Phase 75 Waves 1-4). Each Category A site either refactors to â¤25 or has the ineffective `#[allow]` removed because the underlying function already simplified.
 **Requirements**: None (quality-debt remediation, sibling of Phase 75)
-**Depends on:** Phase 75 Waves 1-4 complete (so Category B is known — confirmed empty as of 2026-04-25). MAY land in parallel with Phase 75 Wave 5 or before it.
+**Depends on:** Phase 75 Waves 1-4 complete (so Category B is known â confirmed empty as of 2026-04-25). MAY land in parallel with Phase 75 Wave 5 or before it.
 **Plans:** 1/1 plan complete
 
 Plans:
 
-- [x] 75.5-01-PLAN.md — Wave 1: 12 Category-A bare `#[allow(clippy::cognitive_complexity)]` attributes removed from src/ (server/, server/transport/, shared/, client/) — completed 2026-04-25. All 12 sites resolved by single-line attribute deletion (no refactor triggered — clippy pedantic+nursery quiet on `--features full` post-removal, confirming all underlying functions sit at cog ≤25). `make quality-gate` exit 0; `pmat quality-gate --fail-on-violation --checks complexity` exit 0 (PMAT 3.15.0); `grep -rn '#[allow(clippy::cognitive_complexity)]' src/` 0 matches. ESCAPEES.md (Category B) unchanged at 0 entries. Two pre-existing environmental test failures (mcp-e2e-tests::chess chromiumoxide browser archive missing; pmcp-tasks::store::redis/dynamodb Connection refused) classified out-of-scope per deviation-rules SCOPE BOUNDARY — neither touches src/server/, src/shared/, or src/client/. Commits: fae333fa (Task 1: server/+server/transport/), 7a0cc362 (Task 2: shared/+client/).
+- [x] 75.5-01-PLAN.md â Wave 1: 12 Category-A bare `#[allow(clippy::cognitive_complexity)]` attributes removed from src/ (server/, server/transport/, shared/, client/) â completed 2026-04-25. All 12 sites resolved by single-line attribute deletion (no refactor triggered â clippy pedantic+nursery quiet on `--features full` post-removal, confirming all underlying functions sit at cog â¤25). `make quality-gate` exit 0; `pmat quality-gate --fail-on-violation --checks complexity` exit 0 (PMAT 3.15.0); `grep -rn '#[allow(clippy::cognitive_complexity)]' src/` 0 matches. ESCAPEES.md (Category B) unchanged at 0 entries. Two pre-existing environmental test failures (mcp-e2e-tests::chess chromiumoxide browser archive missing; pmcp-tasks::store::redis/dynamodb Connection refused) classified out-of-scope per deviation-rules SCOPE BOUNDARY â neither touches src/server/, src/shared/, or src/client/. Commits: fae333fa (Task 1: server/+server/transport/), 7a0cc362 (Task 2: shared/+client/).
 
-### Phase 76: cargo-pmcp IAM declarations — servers declare IAM needs in deploy.toml
+### Phase 76: cargo-pmcp IAM declarations â servers declare IAM needs in deploy.toml
 
-**Goal:** Ship pmcp-run CR `CLI_IAM_CHANGE_REQUEST.md` in one phase — Part 1 adds a stable `McpRoleArn` CfnOutput (`Export.Name = pmcp-${serverName}-McpRoleArn`) to both generated CDK stack templates (pmcp-run + aws-lambda), unblocking bolt-on stacks via `Fn::ImportValue`. Part 2 adds an optional `[iam]` section to `.pmcp/deploy.toml` with three repeated tables (`[[iam.tables]]`, `[[iam.buckets]]`, `[[iam.statements]]`) that translate to `addToRolePolicy` calls on the Lambda execution role, plus a new `cargo pmcp validate deploy` subcommand that hard-errors on IAM footguns (Allow-*-*, bad effects, malformed actions). Backward compatible (empty default) per D-05 byte-identity. Target: cargo-pmcp 0.10.0 (additive minor bump).
+**Goal:** Ship pmcp-run CR `CLI_IAM_CHANGE_REQUEST.md` in one phase â Part 1 adds a stable `McpRoleArn` CfnOutput (`Export.Name = pmcp-${serverName}-McpRoleArn`) to both generated CDK stack templates (pmcp-run + aws-lambda), unblocking bolt-on stacks via `Fn::ImportValue`. Part 2 adds an optional `[iam]` section to `.pmcp/deploy.toml` with three repeated tables (`[[iam.tables]]`, `[[iam.buckets]]`, `[[iam.statements]]`) that translate to `addToRolePolicy` calls on the Lambda execution role, plus a new `cargo pmcp validate deploy` subcommand that hard-errors on IAM footguns (Allow-*-*, bad effects, malformed actions). Backward compatible (empty default) per D-05 byte-identity. Target: cargo-pmcp 0.10.0 (additive minor bump).
 **Requirements**: PART-1 (McpRoleArn export), PART-2 (declarative `[iam]` section + validator)
 **Depends on:** Phase 75
 **Plans:** 5/5 plans complete
 
 Plans:
 
-- [x] 76-01-PLAN.md — Wave 1: Part 1 — McpRoleArn CfnOutput in both template branches + `render_stack_ts` renderer extraction + D-03 aws-iam import fix + Wave 1 golden-file baseline (D-05 anchor)
-- [x] 76-02-PLAN.md — Wave 2: Full IamConfig schema (TablePermission / BucketPermission / IamStatement) wired into DeployConfig with `skip_serializing_if` to preserve D-05 + serde roundtrip integration tests
-- [x] 76-03-PLAN.md — Wave 3: Translation rules (`deployment/iam.rs::render_iam_block`) emitting D-02 4-action DynamoDB lists + S3 object-level ARNs + passthrough statements, wired into `render_stack_ts` via a single `{iam_block}` named placeholder + per-rule unit tests + 9 proptests
-- [x] 76-04-PLAN.md — Wave 4: Validator (`validate` + `Warning`) enforcing 6 CR-locked hard-error rules + 2 warning classes + `ValidateCommand::Deploy` subcommand + DeployExecutor hook blocking deploy on hard errors + 29 new tests covering T-76-02 mitigation
-- [x] 76-05-PLAN.md — Wave 5: `fuzz_iam_config` libfuzzer target + corpus seeds + `deploy_with_iam` runnable example + cost-coach fixture + DEPLOYMENT.md IAM Declarations section + README.md pointer + CHANGELOG 0.10.0 entry + version bump + final `make quality-gate`
+- [x] 76-01-PLAN.md â Wave 1: Part 1 â McpRoleArn CfnOutput in both template branches + `render_stack_ts` renderer extraction + D-03 aws-iam import fix + Wave 1 golden-file baseline (D-05 anchor)
+- [x] 76-02-PLAN.md â Wave 2: Full IamConfig schema (TablePermission / BucketPermission / IamStatement) wired into DeployConfig with `skip_serializing_if` to preserve D-05 + serde roundtrip integration tests
+- [x] 76-03-PLAN.md â Wave 3: Translation rules (`deployment/iam.rs::render_iam_block`) emitting D-02 4-action DynamoDB lists + S3 object-level ARNs + passthrough statements, wired into `render_stack_ts` via a single `{iam_block}` named placeholder + per-rule unit tests + 9 proptests
+- [x] 76-04-PLAN.md â Wave 4: Validator (`validate` + `Warning`) enforcing 6 CR-locked hard-error rules + 2 warning classes + `ValidateCommand::Deploy` subcommand + DeployExecutor hook blocking deploy on hard errors + 29 new tests covering T-76-02 mitigation
+- [x] 76-05-PLAN.md â Wave 5: `fuzz_iam_config` libfuzzer target + corpus seeds + `deploy_with_iam` runnable example + cost-coach fixture + DEPLOYMENT.md IAM Declarations section + README.md pointer + CHANGELOG 0.10.0 entry + version bump + final `make quality-gate`
 
 ### Phase 77: Add cargo pmcp configure commands
 
@@ -1180,15 +1180,15 @@ Scope likely includes: a config schema (TOML in workspace .pmcp/ or user ~/.conf
 
 Plans:
 
-- [x] 77-01-PLAN.md — Mint REQ-77-01..REQ-77-10 in REQUIREMENTS.md; bump cargo-pmcp 0.10.0 → 0.11.0; CHANGELOG stub
-- [x] 77-02-PLAN.md — Rename existing deploy `--target` to `--target-type` (with alias); add new global `--target` named-target flag on Cli
-- [x] 77-03-PLAN.md — Module skeleton + TargetConfigV1 schema (TOML, atomic write, 0o600) + workspace utility
-- [x] 77-04-PLAN.md — `configure add` (interactive + flag-driven, raw-credential validator) + `configure use` (workspace marker)
-- [x] 77-05-PLAN.md — `configure list` (text + stable JSON) + `configure show` (raw + merged-with-attribution placeholder)
-- [x] 77-06-PLAN.md — Resolver (precedence walk, env injection helper) + banner (D-13 fixed-order, OnceLock idempotent) + show.rs enrichment
-- [x] 77-07-PLAN.md — Top-level Cli wiring: register Configure variant, dispatch arm, env injection in main.rs, banner emission in deploy/mod.rs
-- [x] 77-08-PLAN.md — Integration tests (full lifecycle, zero-touch, concurrent writes) + fuzz target + working multi-target-monorepo example
-- [x] 77-09-PLAN.md — DRY cleanup (shared validate_target_name) + rustdoc audit + CHANGELOG date + `make quality-gate` certification + manual interactive UX checkpoint
+- [x] 77-01-PLAN.md â Mint REQ-77-01..REQ-77-10 in REQUIREMENTS.md; bump cargo-pmcp 0.10.0 â 0.11.0; CHANGELOG stub
+- [x] 77-02-PLAN.md â Rename existing deploy `--target` to `--target-type` (with alias); add new global `--target` named-target flag on Cli
+- [x] 77-03-PLAN.md â Module skeleton + TargetConfigV1 schema (TOML, atomic write, 0o600) + workspace utility
+- [x] 77-04-PLAN.md â `configure add` (interactive + flag-driven, raw-credential validator) + `configure use` (workspace marker)
+- [x] 77-05-PLAN.md â `configure list` (text + stable JSON) + `configure show` (raw + merged-with-attribution placeholder)
+- [x] 77-06-PLAN.md â Resolver (precedence walk, env injection helper) + banner (D-13 fixed-order, OnceLock idempotent) + show.rs enrichment
+- [x] 77-07-PLAN.md â Top-level Cli wiring: register Configure variant, dispatch arm, env injection in main.rs, banner emission in deploy/mod.rs
+- [x] 77-08-PLAN.md â Integration tests (full lifecycle, zero-touch, concurrent writes) + fuzz target + working multi-target-monorepo example
+- [x] 77-09-PLAN.md â DRY cleanup (shared validate_target_name) + rustdoc audit + CHANGELOG date + `make quality-gate` certification + manual interactive UX checkpoint
 
 ### Phase 78: cargo pmcp test apps --mode claude-desktop: detect missing MCP Apps SDK wiring in widgets
 
@@ -1233,7 +1233,7 @@ Acceptance criteria:
 - `--mode chatgpt` behavior unchanged.
 - README + `--help` document the new mode.
 
-**Goal:** Promote `AppValidationMode::ClaudeDesktop` from a placeholder to a real strict mode that statically inspects each App-capable widget HTML body (fetched via `resources/read`) for the `@modelcontextprotocol/ext-apps` import, the `new App({...})` constructor, the four required protocol handlers (`onteardown`, `ontoolinput`, `ontoolcancelled`, `onerror`), and the `app.connect()` call — emitting ERROR (vs WARN in Standard mode) on missing signals so widgets shipping to Claude Desktop / Claude.ai are caught before deploy.
+**Goal:** Promote `AppValidationMode::ClaudeDesktop` from a placeholder to a real strict mode that statically inspects each App-capable widget HTML body (fetched via `resources/read`) for the `@modelcontextprotocol/ext-apps` import, the `new App({...})` constructor, the four required protocol handlers (`onteardown`, `ontoolinput`, `ontoolcancelled`, `onerror`), and the `app.connect()` call â emitting ERROR (vs WARN in Standard mode) on missing signals so widgets shipping to Claude Desktop / Claude.ai are caught before deploy.
 **Requirements**: PHASE-78-AC-1, PHASE-78-AC-2, PHASE-78-AC-3, PHASE-78-AC-4, PHASE-78-AC-5, PHASE-78-ALWAYS-UNIT, PHASE-78-ALWAYS-PROPERTY, PHASE-78-ALWAYS-FUZZ, PHASE-78-ALWAYS-EXAMPLE
 **Depends on:** Phase 77
 **Plans:** 7/11 plans executed (cycle-1 03/04 done; cycle-1 wave 4 plan 08 paused at checkpoint; cycle-2 plans 09-11 added 2026-05-02)
@@ -1241,75 +1241,75 @@ Acceptance criteria:
 Plans:
 **Wave 1**
 
-- [x] 78-01-PLAN.md — Validator core: extend `AppValidator` with `validate_widgets`, regex-based scanner, mode-driven severity (Wave 1)
+- [x] 78-01-PLAN.md â Validator core: extend `AppValidator` with `validate_widgets`, regex-based scanner, mode-driven severity (Wave 1)
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [x] 78-02-PLAN.md — CLI plumbing: wire `read_widget_bodies` into `cargo pmcp test apps` (Wave 2)
-- [x] 78-04-PLAN.md — Docs polish: README sections, `--help` long-text, GUIDE.md anchor expander (Wave 3, parallel with 78-03)
+- [x] 78-02-PLAN.md â CLI plumbing: wire `read_widget_bodies` into `cargo pmcp test apps` (Wave 2)
+- [x] 78-04-PLAN.md â Docs polish: README sections, `--help` long-text, GUIDE.md anchor expander (Wave 3, parallel with 78-03)
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [x] 78-03-PLAN.md — ALWAYS requirements: fixtures, property tests, fuzz target, working example (Wave 3)
+- [x] 78-03-PLAN.md â ALWAYS requirements: fixtures, property tests, fuzz target, working example (Wave 3)
 
 ### Phase 79: cargo pmcp deploy: widget pre-build + post-deploy verification (build half: auto-detect widget/ and widgets/ only, package-manager runner, generated build.rs with cargo:rerun-if-changed via env-var path resolution, [[widgets]] config with explicit embedded_in_crates, doctor checks; verify half: warmup grace + test check + conformance + apps --mode claude-desktop, on_failure=fail default; depends on Phase 78; out of scope: auto-rollback, multi-target)
 
-**Goal:** Close two silent-failure gaps in `cargo pmcp deploy` proven by Cost Coach: (A) deploy ships stale `widget/dist/*.html` because nobody ran `npm run build`; (B) Cargo's incremental cache holds a stale `include_str!`-built binary; (C) widget JS SDK is misconfigured but deploy reports success because nothing probes the live endpoint. Build half auto-detects widget directories, runs the lockfile-determined package manager, sets `PMCP_WIDGET_DIR` for cache invalidation via a generated `build.rs`. Verify half runs warmup → check → conformance → apps lifecycle after Lambda hot-swap and surfaces a screaming-loud LIVE-but-broken banner on failure (`on_failure="fail"` default) with the manual rollback command pre-printed.
+**Goal:** Close two silent-failure gaps in `cargo pmcp deploy` proven by Cost Coach: (A) deploy ships stale `widget/dist/*.html` because nobody ran `npm run build`; (B) Cargo's incremental cache holds a stale `include_str!`-built binary; (C) widget JS SDK is misconfigured but deploy reports success because nothing probes the live endpoint. Build half auto-detects widget directories, runs the lockfile-determined package manager, sets `PMCP_WIDGET_DIR` for cache invalidation via a generated `build.rs`. Verify half runs warmup â check â conformance â apps lifecycle after Lambda hot-swap and surfaces a screaming-loud LIVE-but-broken banner on failure (`on_failure="fail"` default) with the manual rollback command pre-printed.
 **Requirements**: REQ-79-01..18 (locally-derived per CONTEXT.md "Implementation Decisions"; phase has no numbered REQUIREMENTS.md entries)
 **Depends on:** Phase 78
 **Plans:** 7/7 plans complete
 
 Plans:
 
-- [x] 79-00-PLAN.md — Master plan: wave structure, requirement-to-plan mapping, version bumps, locked planner decisions
-- [x] 79-01-PLAN.md — Wave 1: test fixtures + config schema (`WidgetsConfig`, `PostDeployTestsConfig`, `OnFailure`, `TestOutcome`)
-- [x] 79-02-PLAN.md — Wave 2: widget pre-build orchestrator + `--no-widget-build` / `--widgets-only` CLI flags + `PMCP_WIDGET_DIR` env-var contract
-- [x] 79-03-PLAN.md — Wave 3: post-deploy verifier (subprocess-spawn `cargo pmcp test {check,conformance,apps}` via `current_exe()`) + 4 verify-half flags + WARN-at-deploy-START for `OnFailure::Rollback`
-- [x] 79-04-PLAN.md — Wave 4: doctor `check_widget_rerun_if_changed` + `cargo pmcp app new` build.rs scaffold + runnable example + fuzz target + `cargo-pmcp 0.12.0` version bump + CHANGELOG
+- [x] 79-00-PLAN.md â Master plan: wave structure, requirement-to-plan mapping, version bumps, locked planner decisions
+- [x] 79-01-PLAN.md â Wave 1: test fixtures + config schema (`WidgetsConfig`, `PostDeployTestsConfig`, `OnFailure`, `TestOutcome`)
+- [x] 79-02-PLAN.md â Wave 2: widget pre-build orchestrator + `--no-widget-build` / `--widgets-only` CLI flags + `PMCP_WIDGET_DIR` env-var contract
+- [x] 79-03-PLAN.md â Wave 3: post-deploy verifier (subprocess-spawn `cargo pmcp test {check,conformance,apps}` via `current_exe()`) + 4 verify-half flags + WARN-at-deploy-START for `OnFailure::Rollback`
+- [x] 79-04-PLAN.md â Wave 4: doctor `check_widget_rerun_if_changed` + `cargo pmcp app new` build.rs scaffold + runnable example + fuzz target + `cargo-pmcp 0.12.0` version bump + CHANGELOG
 
 ---
 
-#### Phase 78 — Gap closure (Plans 05–08, added 2026-05-02)
+#### Phase 78 â Gap closure (Plans 05â08, added 2026-05-02)
 
-After cost-coach team UAT against prod (`https://cost-coach.us-west.pmcp.run/mcp`, 8 widgets, 97 tests, 33 failures — all confirmed false positives), 5 gaps were filed in 78-VERIFICATION.md and 4 gap-closure plans were spawned. AC-78-1, AC-78-2, AC-78-3 fail at the binary boundary against real prod; library-boundary verification (9/9 truths) was already passing. The cost-coach prod evidence: bundled widgets contain mangled constructor identifiers (e.g. `new yl({name:"cost-coach-cost-summary",version:"1.0.0"})`) that defeat the v1 `new App\(` regex, the `[ext-apps]` package name only survives as a log-prefix string (not the import literal `@modelcontextprotocol/ext-apps`), and the v1 SDK-detection failure cascades to all 8 handler/connect checks, producing `1 false negative → 8× false negatives` per affected widget.
+After cost-coach team UAT against prod (`https://cost-coach.us-west.pmcp.run/mcp`, 8 widgets, 97 tests, 33 failures â all confirmed false positives), 5 gaps were filed in 78-VERIFICATION.md and 4 gap-closure plans were spawned. AC-78-1, AC-78-2, AC-78-3 fail at the binary boundary against real prod; library-boundary verification (9/9 truths) was already passing. The cost-coach prod evidence: bundled widgets contain mangled constructor identifiers (e.g. `new yl({name:"cost-coach-cost-summary",version:"1.0.0"})`) that defeat the v1 `new App\(` regex, the `[ext-apps]` package name only survives as a log-prefix string (not the import literal `@modelcontextprotocol/ext-apps`), and the v1 SDK-detection failure cascades to all 8 handler/connect checks, producing `1 false negative â 8Ã false negatives` per affected widget.
 
 **Plans (all `gap_closure: true`):**
 
 **Wave 1**
 
-- [x] 78-05-PLAN.md — RED-phase regression fixtures: 3 bundled HTML fixtures + `app_validator_widgets_bundled.rs` integration tests asserting verdict shape per fixture × mode; tests MUST FAIL today (G5)
+- [x] 78-05-PLAN.md â RED-phase regression fixtures: 3 bundled HTML fixtures + `app_validator_widgets_bundled.rs` integration tests asserting verdict shape per fixture Ã mode; tests MUST FAIL today (G5)
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [x] 78-06-PLAN.md — Validator core fixes (G1+G2+G3): minification-resistant SDK-presence signals (`[ext-apps]` log prefix + `ui/initialize` + `ui/notifications/tool-result` method literals); mangled-id-tolerant constructor regex; eliminate SDK-to-handler/connect cascade
+- [x] 78-06-PLAN.md â Validator core fixes (G1+G2+G3): minification-resistant SDK-presence signals (`[ext-apps]` log prefix + `ui/initialize` + `ui/notifications/tool-result` method literals); mangled-id-tolerant constructor regex; eliminate SDK-to-handler/connect cascade
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [x] 78-07-PLAN.md — `cargo pmcp test apps --widgets-dir <path>` source-scan flag (G4): scan `<path>/*.html` instead of fetching via `resources/read`; mirrors `cargo pmcp preview --widgets-dir` semantics; 3 CLI-boundary integration tests via `assert_cmd`
+- [x] 78-07-PLAN.md â `cargo pmcp test apps --widgets-dir <path>` source-scan flag (G4): scan `<path>/*.html` instead of fetching via `resources/read`; mirrors `cargo pmcp preview --widgets-dir` semantics; 3 CLI-boundary integration tests via `assert_cmd`
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
-- [ ] 78-08-PLAN.md — ALWAYS coverage extension + docs + HUMAN-UAT re-bind: new `prop_g3_handler_detection_independent_of_sdk` proptest, `validate_widget_pair` example demos cost-coach prod-bundle shape, READMEs document `--widgets-dir`, `78-HUMAN-UAT.md` rewritten with 6 re-bound items including cost-coach prod re-verify (Test 6)
+- [ ] 78-08-PLAN.md â ALWAYS coverage extension + docs + HUMAN-UAT re-bind: new `prop_g3_handler_detection_independent_of_sdk` proptest, `validate_widget_pair` example demos cost-coach prod-bundle shape, READMEs document `--widgets-dir`, `78-HUMAN-UAT.md` rewritten with 6 re-bound items including cost-coach prod re-verify (Test 6)
 
 **Re-verification gate:** After Plan 06 lands, the cost-coach v1 run (97 tests, 33 false positives) must be re-executed and report zero false-positive failures on the 8 prod widgets. The 5 deferred AC-78-1..5 items are re-bound to the post-Plan-07 `--widgets-dir` path so binary-boundary verification no longer requires the deferred fixture binary `mcp_widget_server.rs.todo`.
 
-#### Phase 78 — Gap closure cycle 2 (Plans 09-11, added 2026-05-02)
+#### Phase 78 â Gap closure cycle 2 (Plans 09-11, added 2026-05-02)
 
-After cycle-1 closure (Plans 05-08 completed 2026-05-02), the operator re-ran Test 6 against `https://cost-coach.us-west.pmcp.run/mcp` and got the SAME 33 Failed rows. The cycle-1 synthetic fixtures didn't generalize to real Vite-singlefile prod output. Per-widget breakdown in `uat-evidence/2026-05-02-cost-coach-prod-rerun.md`: G2 constructor regex misses 8/8 prod widgets; G1 SDK signals miss 4/8. Diagnosis: Plan 05's fixtures were modeled from feedback-described shape, not bytes captured from prod — RED→GREEN passed against the model, missed reality. Cycle 2 binds the regression set to bytes captured from real prod.
+After cycle-1 closure (Plans 05-08 completed 2026-05-02), the operator re-ran Test 6 against `https://cost-coach.us-west.pmcp.run/mcp` and got the SAME 33 Failed rows. The cycle-1 synthetic fixtures didn't generalize to real Vite-singlefile prod output. Per-widget breakdown in `uat-evidence/2026-05-02-cost-coach-prod-rerun.md`: G2 constructor regex misses 8/8 prod widgets; G1 SDK signals miss 4/8. Diagnosis: Plan 05's fixtures were modeled from feedback-described shape, not bytes captured from prod â REDâGREEN passed against the model, missed reality. Cycle 2 binds the regression set to bytes captured from real prod.
 
 **Plans (all `gap_closure: true`):**
 
 **Wave 1**
 
-- [ ] 78-09-PLAN.md — Real-prod fixture capture (RED phase): 6 cost-coach prod widget bundles fetched from live cost-coach prod (or local checkout) into `tests/fixtures/widgets/bundled/real-prod/` + CAPTURE.md provenance + 7 RED-phase integration tests (6 real-prod fixtures × claude-desktop + 1 cycle-1 no-regression sentinel) bound to those bytes; tests MUST FAIL today (G6)
+- [ ] 78-09-PLAN.md â Real-prod fixture capture (RED phase): 6 cost-coach prod widget bundles fetched from live cost-coach prod (or local checkout) into `tests/fixtures/widgets/bundled/real-prod/` + CAPTURE.md provenance + 7 RED-phase integration tests (6 real-prod fixtures Ã claude-desktop + 1 cycle-1 no-regression sentinel) bound to those bytes; tests MUST FAIL today (G6)
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 78-10-PLAN.md — Validator G1+G2 generalization (GREEN phase): derive new SDK-presence + constructor patterns from real-prod CAPTURE.md grep evidence; widen mangled-id cap, add quoted-key tolerance + reordered-key support to G2; OR new G1 signals into has_sdk; preserve cycle-1 unit/property/integration tests; PMAT cog ≤ 25 + zero SATD; new G2-false-positive-guard property test guards against the widening risk
+- [ ] 78-10-PLAN.md â Validator G1+G2 generalization (GREEN phase): derive new SDK-presence + constructor patterns from real-prod CAPTURE.md grep evidence; widen mangled-id cap, add quoted-key tolerance + reordered-key support to G2; OR new G1 signals into has_sdk; preserve cycle-1 unit/property/integration tests; PMAT cog â¤ 25 + zero SATD; new G2-false-positive-guard property test guards against the widening risk
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [ ] 78-11-PLAN.md — ALWAYS-coverage extension + HUMAN-UAT cycle-2 rewrite + Test 6 re-verification checkpoint: extend `validate_widget_pair.rs` example with 6 cycle-2 real-prod widget runs + tally + success-path summary; rewrite `78-HUMAN-UAT.md` with cycle-2-explicit Test 6 acceptance bar (zero Failed rows on 8 cost-coach prod widgets); operator re-runs Test 6 against prod and resumes with `approved` (flips `gap_closure_validated: false → true`, routes to `/gsd-verify-work`) or `failed: <reason>` (routes to `/gsd-plan-phase 78 --gaps` for cycle 3)
+- [ ] 78-11-PLAN.md â ALWAYS-coverage extension + HUMAN-UAT cycle-2 rewrite + Test 6 re-verification checkpoint: extend `validate_widget_pair.rs` example with 6 cycle-2 real-prod widget runs + tally + success-path summary; rewrite `78-HUMAN-UAT.md` with cycle-2-explicit Test 6 acceptance bar (zero Failed rows on 8 cost-coach prod widgets); operator re-runs Test 6 against prod and resumes with `approved` (flips `gap_closure_validated: false â true`, routes to `/gsd-verify-work`) or `failed: <reason>` (routes to `/gsd-plan-phase 78 --gaps` for cycle 3)
 
 **Re-verification gate (cycle 2):** Plan 11 Task 3 is the load-bearing gate. Operator runs `cargo pmcp test apps --mode claude-desktop https://cost-coach.us-west.pmcp.run/mcp` against real prod and confirms zero Failed rows on the 8 production widgets. On pass: phase 78 closes via `/gsd-verify-work`. On fail: phase 78 routes to a third gap-closure cycle with diagnosis in a new `uat-evidence/<date>-cost-coach-prod-cycle3-rerun.md` evidence file.
 
@@ -1326,51 +1326,51 @@ Plans:
 
 **Cross-cutting constraints:**
 
-- Every behavioral-prose claim about Tasks (SSE, serverless, owner binding, experimental.tasks, TaskSupport::*, tasks/result, tasks/cancel, tasks/get, poll interval, pollInterval, CreateTaskResult) still accurately describes current `pmcp-tasks` behavior (revision R-5 — prose drift, not just type-name drift).
+- Every behavioral-prose claim about Tasks (SSE, serverless, owner binding, experimental.tasks, TaskSupport::*, tasks/result, tasks/cancel, tasks/get, poll interval, pollInterval, CreateTaskResult) still accurately describes current `pmcp-tasks` behavior (revision R-5 â prose drift, not just type-name drift).
 
 ---
 
 ### Phase 80: SEP-2640 Skills Support
 
-- [x] **Phase 80: SEP-2640 Skills Support** — Add the experimental Skills extension (SEP-2640) as a batteries-included PMCP feature. Includes (a) a one-line additive change to `ServerCapabilities` adding an `extensions` field parallel to `experimental`, (b) a new `Skill` / `SkillReference` / `Skills` DX layer behind a `skills` feature flag built as sugar over the existing `ResourceHandler` trait, (c) builder methods `.skill(...)` / `.skills(...)` / `.bootstrap_skill_and_prompt(...)` on `ServerCoreBuilder` with internal composition over any pre-existing `.resources(...)` handler, (d) the dual-surface pattern — same skill data exposed via both a SEP-2640 skill surface AND a parallel MCP prompt surface (for hosts that don't yet support SEP-2640) — with byte-equal-by-construction invariant, (e) paired `examples/s38_server_skills.rs` + `examples/c38_client_skills.rs` demonstrating three tiers of skills (hello-world, refunds, code-mode), and (f) integration test asserting both surfaces produce byte-equal content. (completed 2026-05-13)
+- [x] **Phase 80: SEP-2640 Skills Support** â Add the experimental Skills extension (SEP-2640) as a batteries-included PMCP feature. Includes (a) a one-line additive change to `ServerCapabilities` adding an `extensions` field parallel to `experimental`, (b) a new `Skill` / `SkillReference` / `Skills` DX layer behind a `skills` feature flag built as sugar over the existing `ResourceHandler` trait, (c) builder methods `.skill(...)` / `.skills(...)` / `.bootstrap_skill_and_prompt(...)` on `ServerCoreBuilder` with internal composition over any pre-existing `.resources(...)` handler, (d) the dual-surface pattern â same skill data exposed via both a SEP-2640 skill surface AND a parallel MCP prompt surface (for hosts that don't yet support SEP-2640) â with byte-equal-by-construction invariant, (e) paired `examples/s38_server_skills.rs` + `examples/c38_client_skills.rs` demonstrating three tiers of skills (hello-world, refunds, code-mode), and (f) integration test asserting both surfaces produce byte-equal content. (completed 2026-05-13)
 
 **Goal:** A PMCP server author can register an Agent Skill in ~5 lines of code, and the same skill content is automatically reachable via two parallel surfaces: SEP-2640 skill resources (for capable hosts) and an MCP prompt (for everyone else). The two surfaces are derived from a single `Skill` value so they cannot drift.
 
 **Depends on:** None (no protocol breaking change; additive `extensions` field is backward-compatible).
 
-**Source of truth:** Spike findings packaged at `.claude/skills/spike-findings-rust-mcp-sdk/` (spikes 001 + 002 both VALIDATED). Reference implementation lives at `.planning/spikes/002-skill-ergonomics-pragmatic/src/main.rs` — the `Skill`, `SkillReference`, `Skills`, `SkillsHandler`, and `ComposedResources` types lift near-verbatim into the real implementation.
+**Source of truth:** Spike findings packaged at `.claude/skills/spike-findings-rust-mcp-sdk/` (spikes 001 + 002 both VALIDATED). Reference implementation lives at `.planning/spikes/002-skill-ergonomics-pragmatic/src/main.rs` â the `Skill`, `SkillReference`, `Skills`, `SkillsHandler`, and `ComposedResources` types lift near-verbatim into the real implementation.
 
 **Out of scope (deferred to v2):**
 
-- SEP-2640 §4 archive distribution (`application/gzip` + base64 blob). Blocked by GAP #2 (`Content::Resource` has no `blob` field). The SEP marks archive mode as optional.
+- SEP-2640 Â§4 archive distribution (`application/gzip` + base64 blob). Blocked by GAP #2 (`Content::Resource` has no `blob` field). The SEP marks archive mode as optional.
 - `#[pmcp::skill]` procedural macro for compile-time SKILL.md validation. Worth a separate spike if compile-time validation is wanted.
 
 ## v2.2 Configuration-Only MCP Servers (In Progress)
 
-**Milestone Goal:** Shift PMCP from a code-based SDK to one that lets enterprise developers build production-grade MCP servers for SQL databases from configuration + schema files alone — without writing Rust — while preserving PMCP's security, tools/resources/prompts/tasks/skills standards and offering pmcp.run hosting as a deployment target.
+**Milestone Goal:** Shift PMCP from a code-based SDK to one that lets enterprise developers build production-grade MCP servers for SQL databases from configuration + schema files alone â without writing Rust â while preserving PMCP's security, tools/resources/prompts/tasks/skills standards and offering pmcp.run hosting as a deployment target.
 
-**Source of truth:** Validated spikes 003–006 (`.planning/spikes/00{3,4,5,6}-*/`) + auto-loaded `spike-findings-rust-mcp-sdk` skill. Reference implementation: the three production SQL-API servers under `pmcp-run/built-in/sql-api/servers/` (`open-images`, `imdb`, `msr-vtt`) — their `config.toml` shape is the load-bearing input contract for the toolkit lift.
+**Source of truth:** Validated spikes 003â006 (`.planning/spikes/00{3,4,5,6}-*/`) + auto-loaded `spike-findings-rust-mcp-sdk` skill. Reference implementation: the three production SQL-API servers under `pmcp-run/built-in/sql-api/servers/` (`open-images`, `imdb`, `msr-vtt`) â their `config.toml` shape is the load-bearing input contract for the toolkit lift.
 
 **Critical invariants encoded across phases:**
 
-- Toolkit `config.toml` schema is a **superset** of `pmcp-run/built-in/sql-api/servers/open-images/config.toml` — additive new keys allowed, **no renames** (REF-01).
-- Pure-Rust Lambda is the deployment target — **no Docker, no testcontainers** (per `feedback_avoid_docker_pure_rust_lambda` memory).
+- Toolkit `config.toml` schema is a **superset** of `pmcp-run/built-in/sql-api/servers/open-images/config.toml` â additive new keys allowed, **no renames** (REF-01).
+- Pure-Rust Lambda is the deployment target â **no Docker, no testcontainers** (per `feedback_avoid_docker_pure_rust_lambda` memory).
 - Dual-mode curated `[[tools]]` + `[code_mode]` long-tail split is **intentional**, not auto-conversion.
 - SEP-2640 dual-surface invariant: prompt body **byte-equals** SKILL.md (SKLL-05).
-- SEP-2640 §9: supporting files served via `resources/read` but **NOT** in `resources/list` (SKLL-06).
+- SEP-2640 Â§9: supporting files served via `resources/read` but **NOT** in `resources/list` (SKLL-06).
 
 ### v2.2 Phase Summary
 
-- [x] **Phase 82: Builder DX Prerequisites** — Lift `tool_arc` / `prompt_arc` to public `ServerBuilder` + document in-process driver pattern so external toolkit authors stop writing 20-line delegating shims (completed 2026-05-18)
-- [x] **Phase 83: Toolkit Core Lift (`pmcp-server-toolkit`)** — Promote `mcp-server-common` shape (~2.2k LoC) to a public crates.io-published SDK crate: AuthProvider, SecretsProvider, StaticResourceHandler, StaticPromptHandler, HMAC tokens, ToolInfo synthesis from `[[tools]]` config, code-mode policy wiring (completed 2026-05-18)
-- [x] **Phase 84: SQL Connectors (Postgres / MySQL / Athena / SQLite)** — `SqlConnector` trait + `Dialect` enum + 3 per-backend crates (pure-Rust drivers, Lambda-friendly) + SQLite feature flag, with placeholder translation and dialect-aware code-mode prompt assembly (completed 2026-05-26)
-- [x] **Phase 85: Shape A Pure-Config Binary + Reference Parity** — `pmcp-sql-server --config X --schema Y` zero-Rust binary; reproduce open-images end-to-end against the canonical reference scenarios (completed 2026-05-27)
-- [x] **Phase 86: Shapes B/C/D — Scaffold, Library Example, Deploy** — `cargo pmcp new --kind sql-server` scaffolding (Shape B), ≤15-line `main.rs` example (Shape C), `cargo pmcp deploy` config-only target wiring with Phase 77 configure system (Shape D) (completed 2026-05-27)
-- [ ] **Phase 87: Type 2 Authoring Skills MCP Server (`pmcp-config-helper`)** — SEP-2640 Skills MCP server for `config.toml` authoring: root SKILL.md + per-backend references + worked examples, byte-equal dual-surface invariant, §9 list-exclusion compliance, Type 1 `ai-agents/` updates
-- [ ] **Phase 88: Dogfood — `crates/pmcp-server` on Toolkit** — Rewrite the SDK's own dev-tools MCP server on top of `pmcp-server-toolkit` with at least one config-driven tool surface; behavioral parity verified
-- [ ] **Phase 89: Documentation, Migration Guide & Examples Index** — New book chapter + course tutorial covering the four shapes + per-backend recipes + deployment; README + crate-README config-first positioning; reference-implementation migration recipe (REF-03); examples/README + cargo-pmcp README polish
+- [x] **Phase 82: Builder DX Prerequisites** â Lift `tool_arc` / `prompt_arc` to public `ServerBuilder` + document in-process driver pattern so external toolkit authors stop writing 20-line delegating shims (completed 2026-05-18)
+- [x] **Phase 83: Toolkit Core Lift (`pmcp-server-toolkit`)** â Promote `mcp-server-common` shape (~2.2k LoC) to a public crates.io-published SDK crate: AuthProvider, SecretsProvider, StaticResourceHandler, StaticPromptHandler, HMAC tokens, ToolInfo synthesis from `[[tools]]` config, code-mode policy wiring (completed 2026-05-18)
+- [x] **Phase 84: SQL Connectors (Postgres / MySQL / Athena / SQLite)** â `SqlConnector` trait + `Dialect` enum + 3 per-backend crates (pure-Rust drivers, Lambda-friendly) + SQLite feature flag, with placeholder translation and dialect-aware code-mode prompt assembly (completed 2026-05-26)
+- [x] **Phase 85: Shape A Pure-Config Binary + Reference Parity** â `pmcp-sql-server --config X --schema Y` zero-Rust binary; reproduce open-images end-to-end against the canonical reference scenarios (completed 2026-05-27)
+- [x] **Phase 86: Shapes B/C/D â Scaffold, Library Example, Deploy** â `cargo pmcp new --kind sql-server` scaffolding (Shape B), â¤15-line `main.rs` example (Shape C), `cargo pmcp deploy` config-only target wiring with Phase 77 configure system (Shape D) (completed 2026-05-27)
+- [ ] **Phase 87: Type 2 Authoring Skills MCP Server (`pmcp-config-helper`)** â SEP-2640 Skills MCP server for `config.toml` authoring: root SKILL.md + per-backend references + worked examples, byte-equal dual-surface invariant, Â§9 list-exclusion compliance, Type 1 `ai-agents/` updates
+- [ ] **Phase 88: Dogfood â `crates/pmcp-server` on Toolkit** â Rewrite the SDK's own dev-tools MCP server on top of `pmcp-server-toolkit` with at least one config-driven tool surface; behavioral parity verified
+- [ ] **Phase 89: Documentation, Migration Guide & Examples Index** â New book chapter + course tutorial covering the four shapes + per-backend recipes + deployment; README + crate-README config-first positioning; reference-implementation migration recipe (REF-03); examples/README + cargo-pmcp README polish
 
-## Phase Details — v2.2 Milestone
+## Phase Details â v2.2 Milestone
 
 ### Phase 82: Builder DX Prerequisites
 
@@ -1379,19 +1379,19 @@ Plans:
 **Requirements**: BLDR-01, BLDR-02, BLDR-03, BLDR-04
 **Success Criteria** (what must be TRUE):
 
-  1. A toolkit author can call `pmcp::ServerBuilder::tool_arc(name, Arc::new(handler))` on the public builder and share that same `Arc` with an in-process handler map — no delegating wrapper required
+  1. A toolkit author can call `pmcp::ServerBuilder::tool_arc(name, Arc::new(handler))` on the public builder and share that same `Arc` with an in-process handler map â no delegating wrapper required
   2. A toolkit author can call `pmcp::ServerBuilder::prompt_arc(name, Arc::new(handler))` on the public builder with the same `Arc`-sharing semantics
-  3. A toolkit integration test can drive a built `pmcp::Server` end-to-end through `tools/list` / `tools/call` flow via a public in-process driver OR via an officially documented handler-level testing pattern — no poking at private `Server::handle_request`
-  4. The new builder methods are additive (no existing builder method signatures change) and ship as part of a minor `pmcp` version bump — the actual `Cargo.toml` version change and `CHANGELOG.md` entry are produced by the v2.2.x release branch per `CLAUDE.md` §"Release & Publish Workflow", NOT by Phase 82's implementation plans. (Phase 82 closes when its three plans land; the release that ships them is tagged separately.)
+  3. A toolkit integration test can drive a built `pmcp::Server` end-to-end through `tools/list` / `tools/call` flow via a public in-process driver OR via an officially documented handler-level testing pattern â no poking at private `Server::handle_request`
+  4. The new builder methods are additive (no existing builder method signatures change) and ship as part of a minor `pmcp` version bump â the actual `Cargo.toml` version change and `CHANGELOG.md` entry are produced by the v2.2.x release branch per `CLAUDE.md` Â§"Release & Publish Workflow", NOT by Phase 82's implementation plans. (Phase 82 closes when its three plans land; the release that ships them is tagged separately.)
   5. All six `_arc` handler-registration paths (`tool_arc`, `prompt_arc`, `resources_arc`, `sampling_arc`, `auth_provider_arc`, `tool_authorizer_arc`) reach parity with `ServerCoreBuilder`
   6. `pmcp::Server::get_tool(name) -> Option<&Arc<dyn ToolHandler>>` exists, symmetric with the existing `get_prompt(name)`
 
 **Plans**: 3 plans (1 complete)
 Plans:
 
-- [x] 82-01-PLAN.md — Lift six `_arc` methods + `Server::get_tool` + behavioral test + D-03 doctests (commits 8de9ad79..f0dc4b60; [SUMMARY](./phases/82-builder-dx-prerequisites/82-01-SUMMARY.md))
-- [x] 82-02-PLAN.md — Reference test `tests/in_process_handler_pattern.rs`
-- [x] 82-03-PLAN.md — Book section on handler-level testing pattern
+- [x] 82-01-PLAN.md â Lift six `_arc` methods + `Server::get_tool` + behavioral test + D-03 doctests (commits 8de9ad79..f0dc4b60; [SUMMARY](./phases/82-builder-dx-prerequisites/82-01-SUMMARY.md))
+- [x] 82-02-PLAN.md â Reference test `tests/in_process_handler_pattern.rs`
+- [x] 82-03-PLAN.md â Book section on handler-level testing pattern
 
 ### Phase 83: Toolkit Core Lift (`pmcp-server-toolkit`)
 
@@ -1401,8 +1401,8 @@ Plans:
 **Success Criteria** (what must be TRUE):
 
   1. A developer can add `pmcp-server-toolkit = "<published-version>"` to their `Cargo.toml` from crates.io and import `AuthProvider`, `SecretsProvider`, `StaticResourceHandler`, `StaticPromptHandler`, HMAC token helpers, and the `[[tools]]` `ToolInfo` synthesizer from a single crate
-  2. A `config.toml` matching `pmcp-run/built-in/sql-api/servers/open-images/config.toml` (or `imdb` / `msr-vtt`) parses without modification through the toolkit — `[[tools]]` entries with `[[tools.parameters]]` (type/description/required/default/min/max/max_length) and `[tools.annotations]` (read_only_hint/destructive_hint/idempotent_hint/open_world_hint/cost_hint) produce complete `ToolInfo` definitions with **zero** per-tool Rust handlers written
-  3. The `[code_mode]` block (enabled, allow_writes, allow_deletes, allow_ddl, require_limit, max_limit, blocked_tables, sensitive_columns, auto_approve_levels, token_ttl_seconds, token_secret) plus `[code_mode.limits]` (max_tables_per_query, max_join_depth, max_subquery_depth) wires into `pmcp-code-mode`'s validation pipeline + `CodeExecutor` with **zero** per-server Rust glue — same surface as open-images config.toml lines 97–127
+  2. A `config.toml` matching `pmcp-run/built-in/sql-api/servers/open-images/config.toml` (or `imdb` / `msr-vtt`) parses without modification through the toolkit â `[[tools]]` entries with `[[tools.parameters]]` (type/description/required/default/min/max/max_length) and `[tools.annotations]` (read_only_hint/destructive_hint/idempotent_hint/open_world_hint/cost_hint) produce complete `ToolInfo` definitions with **zero** per-tool Rust handlers written
+  3. The `[code_mode]` block (enabled, allow_writes, allow_deletes, allow_ddl, require_limit, max_limit, blocked_tables, sensitive_columns, auto_approve_levels, token_ttl_seconds, token_secret) plus `[code_mode.limits]` (max_tables_per_query, max_join_depth, max_subquery_depth) wires into `pmcp-code-mode`'s validation pipeline + `CodeExecutor` with **zero** per-server Rust glue â same surface as open-images config.toml lines 97â127
   4. Code-mode prompt body assembly combines dialect-aware schema text (CONN-04, from Phase 84) with `[[database.tables]]` curated table descriptions so the LLM is seeded with both raw DDL and semantic hints
   5. All three pmcp-run backend cores (`mcp-sql-server-core`, `mcp-graphql-server-core`, `mcp-openapi-server-core`) replace their `pmcp-run/built-in/shared/` path-deps with versioned crates.io `pmcp-server-toolkit` deps and continue to pass their existing tests unchanged
 
@@ -1411,65 +1411,65 @@ Plans:
 Plans:
 **Wave 1**
 
-- [x] 83-01-PLAN.md — Crate scaffold + workspace insertion + module skeleton + reference fixtures (TKIT-01) (Wave 1)
+- [x] 83-01-PLAN.md â Crate scaffold + workspace insertion + module skeleton + reference fixtures (TKIT-01) (Wave 1)
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [x] 83-02-PLAN.md — Lift auth.rs + secrets.rs from mcp-server-common (TKIT-02, TKIT-03) (Wave 2)
-- [x] 83-03-PLAN.md — Lift resources.rs + prompts.rs from mcp-server-common (TKIT-04, TKIT-05) (Wave 2)
-- [x] 83-04-PLAN.md — ServerConfig parser + REF-01 superset integration test (TKIT-01) (Wave 2)
+- [x] 83-02-PLAN.md â Lift auth.rs + secrets.rs from mcp-server-common (TKIT-02, TKIT-03) (Wave 2)
+- [x] 83-03-PLAN.md â Lift resources.rs + prompts.rs from mcp-server-common (TKIT-04, TKIT-05) (Wave 2)
+- [x] 83-04-PLAN.md â ServerConfig parser + REF-01 superset integration test (TKIT-01) (Wave 2)
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [x] 83-05-PLAN.md — [[tools]] → ToolInfo synthesizer with property test (TKIT-07, TEST-02) (Wave 3)
-- [x] 83-06-PLAN.md — Code-mode wiring + HMAC re-exports + policy integration test (TKIT-06, TKIT-09) (Wave 3)
+- [x] 83-05-PLAN.md â [[tools]] â ToolInfo synthesizer with property test (TKIT-07, TEST-02) (Wave 3)
+- [x] 83-06-PLAN.md â Code-mode wiring + HMAC re-exports + policy integration test (TKIT-06, TKIT-09) (Wave 3)
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
-- [x] 83-07-PLAN.md — SqlConnector trait stub + Dialect + assemble_code_mode_prompt (TKIT-10, TEST-02) (Wave 4)
+- [x] 83-07-PLAN.md â SqlConnector trait stub + Dialect + assemble_code_mode_prompt (TKIT-10, TEST-02) (Wave 4)
 
 **Wave 5** *(blocked on Wave 4 completion)*
 
-- [x] 83-08-PLAN.md — ServerBuilderExt + backend-core smoke test + ALWAYS example (TKIT-08, TEST-03) (Wave 5)
+- [x] 83-08-PLAN.md â ServerBuilderExt + backend-core smoke test + ALWAYS example (TKIT-08, TEST-03) (Wave 5)
 
 **Wave 6** *(blocked on Wave 5 completion)*
 
-- [x] 83-09-PLAN.md — Fuzz target + contract YAML + shim diff + migration guide + publish-gate (TKIT-01, TKIT-08, TEST-02) (Wave 6)
+- [x] 83-09-PLAN.md â Fuzz target + contract YAML + shim diff + migration guide + publish-gate (TKIT-01, TKIT-08, TEST-02) (Wave 6)
 
 ### Phase 84: SQL Connectors (Postgres / MySQL / Athena / SQLite)
 
-**Goal**: A toolkit consumer picks one or more backend crates (`pmcp-toolkit-postgres`, `pmcp-toolkit-mysql`, `pmcp-toolkit-athena`, or the `sqlite` feature flag) and gets a complete `SqlConnector` impl driven entirely by pure-Rust drivers (`tokio-postgres`, `sqlx`, `aws-sdk-athena`, bundled `rusqlite`) — no Docker, no testcontainers, Lambda-deployable as a pure-Rust binary.
+**Goal**: A toolkit consumer picks one or more backend crates (`pmcp-toolkit-postgres`, `pmcp-toolkit-mysql`, `pmcp-toolkit-athena`, or the `sqlite` feature flag) and gets a complete `SqlConnector` impl driven entirely by pure-Rust drivers (`tokio-postgres`, `sqlx`, `aws-sdk-athena`, bundled `rusqlite`) â no Docker, no testcontainers, Lambda-deployable as a pure-Rust binary.
 **Depends on**: Phase 83 (`SqlConnector` trait lives in toolkit core)
 **Requirements**: CONN-01, CONN-02, CONN-03, CONN-04, CONN-05, CONN-06, CONN-07, CONN-08, TEST-01, TEST-07
 **Success Criteria** (what must be TRUE):
 
   1. A `SqlConnector` trait with exactly **three** methods (`dialect()`, `execute(query, params)`, `schema_text()`) is in toolkit core, and `schema_text()` optionally folds in per-table descriptions from `[[database.tables]]` config entries so curated descriptions reach the code-mode prompt
-  2. Canonical `:name` placeholders in a single `config.toml` translate correctly to dialect-specific placeholder forms (`$1` for Postgres, `?` for MySQL, `?` for Athena, `:name` for SQLite) via the `translate_placeholders` free helper — verified by property tests
-  3. `build_code_mode_prompt(connector)` assembles a dialect-aware code-mode bootstrap prompt body whose schema section comes from the connector's `schema_text()` — verified for all four dialects
-  4. Each per-backend crate (Postgres / MySQL / Athena) is publishable to crates.io and integration-tested against an **authentic in-process mock** for that backend (Postgres `$1`+`information_schema`, MySQL `?`+`information_schema`, Athena `?`+Glue catalog) — no `testcontainers`, no Docker; SQLite tested against a real in-memory `rusqlite` DB
-  5. A fuzz target on the `config.toml` parser (extending Phase 77's `pmcp_config_toml_parser`) confirms malformed config never panics — runtime stress in CI/nightly per the same disposition as Phase 77 Plan 08
+  2. Canonical `:name` placeholders in a single `config.toml` translate correctly to dialect-specific placeholder forms (`$1` for Postgres, `?` for MySQL, `?` for Athena, `:name` for SQLite) via the `translate_placeholders` free helper â verified by property tests
+  3. `build_code_mode_prompt(connector)` assembles a dialect-aware code-mode bootstrap prompt body whose schema section comes from the connector's `schema_text()` â verified for all four dialects
+  4. Each per-backend crate (Postgres / MySQL / Athena) is publishable to crates.io and integration-tested against an **authentic in-process mock** for that backend (Postgres `$1`+`information_schema`, MySQL `?`+`information_schema`, Athena `?`+Glue catalog) â no `testcontainers`, no Docker; SQLite tested against a real in-memory `rusqlite` DB
+  5. A fuzz target on the `config.toml` parser (extending Phase 77's `pmcp_config_toml_parser`) confirms malformed config never panics â runtime stress in CI/nightly per the same disposition as Phase 77 Plan 08
 
 **Plans**: 9 plans
 
-- [x] 84-00-PLAN.md — Wave 0 scaffolding: 3 per-backend crate skeletons + translate.rs shell + property-test scaffold (RED) + fuzz corpus seed
-- [x] 84-01-PLAN.md — Extend SqlConnector trait to 3 methods (execute) + 4 ConnectorError variants
-- [x] 84-02-PLAN.md — translate_placeholders SqlWalker state machine + 5 property invariants (RED→GREEN→REFACTOR)
-- [x] 84-03-PLAN.md — build_code_mode_prompt alias + DatabaseSection.url field + synthesizer connector threading + widget_meta flip
-- [x] 84-04-PLAN.md — SqliteConnector promotion + sqlite_minimal Shape C example
-- [x] 84-05-PLAN.md — pmcp-toolkit-postgres (deadpool-postgres + PgParam ToSql + PostgresMock + 4 D-13 tests)
-- [x] 84-06-PLAN.md — pmcp-toolkit-mysql (sqlx pure-Rust TLS + MysqlMock + 4 D-13 tests)
-- [x] 84-07-PLAN.md — pmcp-toolkit-athena (aws-sdk-athena NO Glue + polling + AthenaMock + 4 D-13 tests)
-- [x] 84-08-PLAN.md — Fuzz corpus extension (3 backend seeds) + CLAUDE.md publish-order + REQUIREMENTS closure + verification sweep
+- [x] 84-00-PLAN.md â Wave 0 scaffolding: 3 per-backend crate skeletons + translate.rs shell + property-test scaffold (RED) + fuzz corpus seed
+- [x] 84-01-PLAN.md â Extend SqlConnector trait to 3 methods (execute) + 4 ConnectorError variants
+- [x] 84-02-PLAN.md â translate_placeholders SqlWalker state machine + 5 property invariants (REDâGREENâREFACTOR)
+- [x] 84-03-PLAN.md â build_code_mode_prompt alias + DatabaseSection.url field + synthesizer connector threading + widget_meta flip
+- [x] 84-04-PLAN.md â SqliteConnector promotion + sqlite_minimal Shape C example
+- [x] 84-05-PLAN.md â pmcp-toolkit-postgres (deadpool-postgres + PgParam ToSql + PostgresMock + 4 D-13 tests)
+- [x] 84-06-PLAN.md â pmcp-toolkit-mysql (sqlx pure-Rust TLS + MysqlMock + 4 D-13 tests)
+- [x] 84-07-PLAN.md â pmcp-toolkit-athena (aws-sdk-athena NO Glue + polling + AthenaMock + 4 D-13 tests)
+- [x] 84-08-PLAN.md â Fuzz corpus extension (3 backend seeds) + CLAUDE.md publish-order + REQUIREMENTS closure + verification sweep
 
 ### Phase 85: Shape A Pure-Config Binary + Reference Parity
 
-**Goal**: A non-developer can take any of the existing `pmcp-run/built-in/sql-api/servers/*/config.toml` files unchanged, run `pmcp-sql-server --config <file> --schema <file>`, and get a live MCP server with the same tools, same code-mode policy, and same observable behavior as the production pmcp-run server — proving the toolkit lift end-to-end.
+**Goal**: A non-developer can take any of the existing `pmcp-run/built-in/sql-api/servers/*/config.toml` files unchanged, run `pmcp-sql-server --config <file> --schema <file>`, and get a live MCP server with the same tools, same code-mode policy, and same observable behavior as the production pmcp-run server â proving the toolkit lift end-to-end.
 **Depends on**: Phase 84 (Shape A binary needs at least one backend connector to run against)
 **Requirements**: SHAP-A-01, REF-01, REF-02
 **Success Criteria** (what must be TRUE):
 
   1. Running `pmcp-sql-server --config pmcp-run/built-in/sql-api/servers/open-images/config.toml --schema <schema-file>` (or `imdb` / `msr-vtt`) produces a running MCP server with **zero** Rust written by the user
-  2. The toolkit's `config.toml` schema is a **superset** of the existing pmcp-run sql-api server configs — any of the three reference servers' configs parse cleanly, additive new keys are allowed, **renames are not**
+  2. The toolkit's `config.toml` schema is a **superset** of the existing pmcp-run sql-api server configs â any of the three reference servers' configs parse cleanly, additive new keys are allowed, **renames are not**
   3. The reproduced server responds to `tools/list`, `tools/call` for every `[[tools]]` entry, **and** the code-mode pair (`validate_code` / `execute_code`) with policy enforcement matching the production server's behavior
   4. Replaying a representative subset of `pmcp-run/built-in/sql-api/reference/scenarios/` against both the original pmcp-run server and the Shape A reproduction yields **result parity** on the asserted scenarios
 
@@ -1478,38 +1478,38 @@ Plans:
 Plans:
 **Wave 1**
 
-- [x] 85-01-PLAN.md — REF-01 superset config fields (file_path / is_reference / [shared_policy_store]) + ${VAR} expansion gate [wave 1]
-- [x] 85-03-PLAN.md — pmcp-sql-server crate skeleton + vendored Chinook DDL/scenarios/config fixtures [wave 1]
+- [x] 85-01-PLAN.md â REF-01 superset config fields (file_path / is_reference / [shared_policy_store]) + ${VAR} expansion gate [wave 1]
+- [x] 85-03-PLAN.md â pmcp-sql-server crate skeleton + vendored Chinook DDL/scenarios/config fixtures [wave 1]
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [x] 85-02-PLAN.md — Real code-mode tool registration + SqlCodeExecutor adapter + file-based prompt seam [wave 2]
-- [x] 85-04-PLAN.md — clap CLI + [database] type → connector dispatch [wave 2]
+- [x] 85-02-PLAN.md â Real code-mode tool registration + SqlCodeExecutor adapter + file-based prompt seam [wave 2]
+- [x] 85-04-PLAN.md â clap CLI + [database] type â connector dispatch [wave 2]
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [x] 85-05-PLAN.md — Server assembly + streamable-HTTP serving + SC-1 lazy-startup + SC-2 superset-parse tests [wave 3]
+- [x] 85-05-PLAN.md â Server assembly + streamable-HTTP serving + SC-1 lazy-startup + SC-2 superset-parse tests [wave 3]
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
-- [x] 85-06-PLAN.md — Chinook parity replay (REF-02/SC-3/SC-4) + Shape C example + doctests + publish-order + fuzz seed [wave 4]
+- [x] 85-06-PLAN.md â Chinook parity replay (REF-02/SC-3/SC-4) + Shape C example + doctests + publish-order + fuzz seed [wave 4]
 
-**Gap closure** *(SC-3 reopened by code review — see 85-VERIFICATION.md Gaps 1-3 + 85-REVIEW.md)*
+**Gap closure** *(SC-3 reopened by code review â see 85-VERIFICATION.md Gaps 1-3 + 85-REVIEW.md)*
 
-- [x] 85-07-PLAN.md — Gap 1: enforce `require_limit` (add+map `sql_require_limit`; no-LIMIT read rejected independent of `max_limit`) (SHAP-A-01) [gap, wave 1]
-- [x] 85-09-PLAN.md — Gap 3: synthesize `code-mode://instructions` + `code-mode://policies` resources during assembly + prompt-body content assertion (REF-02) [gap, wave 1]
-- [x] 85-08-PLAN.md — Gap 2: make policy-rejection scenarios individually gating in `parity_chinook.rs` (per-step assertion, fixtures unchanged) (REF-02, SHAP-A-01) [gap, wave 2, depends 85-07/85-09]
-- [x] 85-10-PLAN.md — Secondary fixes: execute_code variables, null-default bind, cached pipeline, JoinError exit, sqlite `database` form, empty AWS_REGION/token_secret (SHAP-A-01, REF-02) [gap, wave 2, depends 85-07/85-09]
+- [x] 85-07-PLAN.md â Gap 1: enforce `require_limit` (add+map `sql_require_limit`; no-LIMIT read rejected independent of `max_limit`) (SHAP-A-01) [gap, wave 1]
+- [x] 85-09-PLAN.md â Gap 3: synthesize `code-mode://instructions` + `code-mode://policies` resources during assembly + prompt-body content assertion (REF-02) [gap, wave 1]
+- [x] 85-08-PLAN.md â Gap 2: make policy-rejection scenarios individually gating in `parity_chinook.rs` (per-step assertion, fixtures unchanged) (REF-02, SHAP-A-01) [gap, wave 2, depends 85-07/85-09]
+- [x] 85-10-PLAN.md â Secondary fixes: execute_code variables, null-default bind, cached pipeline, JoinError exit, sqlite `database` form, empty AWS_REGION/token_secret (SHAP-A-01, REF-02) [gap, wave 2, depends 85-07/85-09]
 
-### Phase 86: Shapes B/C/D — Scaffold, Library Example, Deploy
+### Phase 86: Shapes B/C/D â Scaffold, Library Example, Deploy
 
-**Goal**: A developer can choose any of three ergonomics levels for non-pure-config use cases — scaffold a starter project with `cargo pmcp new --kind sql-server` (Shape B), wire a ≤15-line `main.rs` library use (Shape C), or `cargo pmcp deploy` a config-only server to pmcp.run as a hosted target (Shape D) — and Phase 77's `cargo pmcp configure` target system accommodates each without breaking changes.
+**Goal**: A developer can choose any of three ergonomics levels for non-pure-config use cases â scaffold a starter project with `cargo pmcp new --kind sql-server` (Shape B), wire a â¤15-line `main.rs` library use (Shape C), or `cargo pmcp deploy` a config-only server to pmcp.run as a hosted target (Shape D) â and Phase 77's `cargo pmcp configure` target system accommodates each without breaking changes.
 **Depends on**: Phase 85 (Shape A proves the binary surface before scaffolding spawns clones of it)
 **Requirements**: SHAP-B-01, SHAP-C-01, SHAP-D-01, TEST-05, TEST-06
 **Success Criteria** (what must be TRUE):
 
-  1. `cargo pmcp new --kind sql-server` scaffolds a starter project containing `Cargo.toml` (pinned `pmcp-server-toolkit` + chosen backend dep), `main.rs` (Shape C wiring in ≤15 lines), and `config.toml` (commented template); running `cargo run` against an embedded SQLite gets `tools/list` + at least one `tools/call` working — verified end-to-end by an integration test in a tempdir
-  2. A runnable example under `examples/` proves Shape C library use: a complete MCP server in **≤15 lines** of `main.rs` (toolkit + a chosen backend connector)
+  1. `cargo pmcp new --kind sql-server` scaffolds a starter project containing `Cargo.toml` (pinned `pmcp-server-toolkit` + chosen backend dep), `main.rs` (Shape C wiring in â¤15 lines), and `config.toml` (commented template); running `cargo run` against an embedded SQLite gets `tools/list` + at least one `tools/call` working â verified end-to-end by an integration test in a tempdir
+  2. A runnable example under `examples/` proves Shape C library use: a complete MCP server in **â¤15 lines** of `main.rs` (toolkit + a chosen backend connector)
   3. `cargo pmcp deploy` packages a config-only server as a pure-Rust Lambda binary and deploys it to pmcp.run; the Phase 77 `cargo pmcp configure` target system handles config-only-server targets with **no breaking changes** to existing target variants
   4. A deploy integration test exercises at least one config-only-server deploy against a mock or real pmcp.run target and confirms the post-deploy lifecycle (Phase 79 `check` + `conformance` + `apps` verifier) runs cleanly
 
@@ -1518,49 +1518,49 @@ Plans:
 Plans:
 **Wave 1**
 
-- [x] 86-01-PLAN.md — execute_batch bootstrap helper + `http` feature forward (pmcp/streamable-http) + asset/db-path resolver (demo_db_path, /var/task vs /tmp) + CONCRETE single-crate-deploy spike [wave 1]
+- [x] 86-01-PLAN.md â execute_batch bootstrap helper + `http` feature forward (pmcp/streamable-http) + asset/db-path resolver (demo_db_path, /var/task vs /tmp) + CONCRETE single-crate-deploy spike [wave 1]
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [x] 86-02-PLAN.md — Shape C: ≤15-line serving example (toolkit + SQLite connector) + spawn-poll integration test + body-count assertion [wave 2]
+- [x] 86-02-PLAN.md â Shape C: â¤15-line serving example (toolkit + SQLite connector) + spawn-poll integration test + body-count assertion [wave 2]
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [x] 86-03-PLAN.md — Shape B: `new --kind sql-server` single-crate emitter (emits the Shape C wiring) + scoped README docs [wave 3]
+- [x] 86-03-PLAN.md â Shape B: `new --kind sql-server` single-crate emitter (emits the Shape C wiring) + scoped README docs [wave 3]
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
-- [x] 86-04-PLAN.md — TEST-05: tempdir scaffold -> patch-deps -> real cargo run -> poll -> tools/list + tools/call [wave 4]
-- [x] 86-05-PLAN.md — Shape D: detection seam + single-crate Lambda build (builder.rs) + deploy.toml [assets]/pmcp-run + env-ref secret posture + packaging/D-10 tests [wave 4]
+- [x] 86-04-PLAN.md â TEST-05: tempdir scaffold -> patch-deps -> real cargo run -> poll -> tools/list + tools/call [wave 4]
+- [x] 86-05-PLAN.md â Shape D: detection seam + single-crate Lambda build (builder.rs) + deploy.toml [assets]/pmcp-run + env-ref secret posture + packaging/D-10 tests [wave 4]
 
 **Wave 5** *(blocked on Wave 4 completion)*
 
-- [x] 86-06-PLAN.md — TEST-06: env-gated real pmcp.run deploy + Phase 79 check/conformance/apps lifecycle (D-11) [wave 5]
+- [x] 86-06-PLAN.md â TEST-06: env-gated real pmcp.run deploy + Phase 79 check/conformance/apps lifecycle (D-11) [wave 5]
 
 ### Phase 87: Type 2 Authoring Skills MCP Server (`pmcp-config-helper`)
 
-**Goal**: A non-developer using a SEP-2640-capable MCP client gets canonical `config.toml` authoring guidance — root SKILL.md + per-backend references + at least one worked example — served by the `pmcp-config-helper` MCP server, with the SEP-2640 dual-surface invariant (prompt body byte-equals SKILL.md) and §9 list-exclusion compliance asserted in-binary. Coding agents writing Rust against the toolkit pick up the same canonical idioms via Type 1 `ai-agents/` updates.
+**Goal**: A non-developer using a SEP-2640-capable MCP client gets canonical `config.toml` authoring guidance â root SKILL.md + per-backend references + at least one worked example â served by the `pmcp-config-helper` MCP server, with the SEP-2640 dual-surface invariant (prompt body byte-equals SKILL.md) and Â§9 list-exclusion compliance asserted in-binary. Coding agents writing Rust against the toolkit pick up the same canonical idioms via Type 1 `ai-agents/` updates.
 **Depends on**: Phase 83 (Skills bundle teaches the toolkit's config shape; needs the public toolkit on crates.io to exist)
 **Requirements**: SKLL-01, SKLL-02, SKLL-03, SKLL-04, SKLL-05, SKLL-06, SKLL-07, TEST-04
 **Success Criteria** (what must be TRUE):
 
   1. A SEP-2640-capable MCP client connecting to the `pmcp-config-helper` binary sees the root SKILL.md (covering curated-tool pareto, secrets refs, auth surface, code-mode opt-in) and can `resources/read` per-backend references (`references/postgres.md`, `references/mysql.md`, `references/athena.md`, `references/sqlite.md`) plus at least one worked example bundle (`config.toml` + `schema.sql`)
-  2. **Dual-surface invariant** — `prompts/get` body for the bootstrap prompt is **byte-equal** to the root SKILL.md content, asserted by an in-binary integration test (spike 002's invariant)
-  3. **SEP-2640 §9 compliance** — supporting files (per-backend references, worked example bundle) are served via `resources/read` but **MUST NOT** appear in `resources/list`, asserted by an integration test against a representative client
-  4. The `pmcp-config-helper` crate is publishable to crates.io with a `pmcp-config-helper` binary that runs the server with default skills bundled — no extra setup required
+  2. **Dual-surface invariant** â `prompts/get` body for the bootstrap prompt is **byte-equal** to the root SKILL.md content, asserted by an in-binary integration test (spike 002's invariant)
+  3. **SEP-2640 Â§9 compliance** â supporting files (per-backend references, worked example bundle) are served via `resources/read` but **MUST NOT** appear in `resources/list`, asserted by an integration test against a representative client
+  4. The `pmcp-config-helper` crate is publishable to crates.io with a `pmcp-config-helper` binary that runs the server with default skills bundled â no extra setup required
   5. Type 1 build-time skills in `ai-agents/` are updated with toolkit-authoring patterns (config DSL, connector trait usage, secrets binding) so coding agents writing Rust against `pmcp-server-toolkit` pick up canonical idioms from their dev environment
 
 **Plans**: TBD
 
-### Phase 88: Dogfood — `crates/pmcp-server` on Toolkit
+### Phase 88: Dogfood â `crates/pmcp-server` on Toolkit
 
-**Goal**: The SDK's own dev-tools MCP server (`crates/pmcp-server`) is rewritten on top of `pmcp-server-toolkit` with at least one config-driven tool surface, demonstrating the toolkit's reach. Downstream users see **no functional regression** — the rewritten server passes the existing test suite (or a documented superset) unchanged.
+**Goal**: The SDK's own dev-tools MCP server (`crates/pmcp-server`) is rewritten on top of `pmcp-server-toolkit` with at least one config-driven tool surface, demonstrating the toolkit's reach. Downstream users see **no functional regression** â the rewritten server passes the existing test suite (or a documented superset) unchanged.
 **Depends on**: Phase 83 (uses the public toolkit), Phase 84 (uses at least one connector for the config-driven tool surface)
 **Requirements**: DOGF-01, DOGF-02
 **Success Criteria** (what must be TRUE):
 
   1. `crates/pmcp-server` is rewritten on top of `pmcp-server-toolkit` and exposes at least one tool defined via `[[tools]]` config rather than a hand-written Rust handler
-  2. The existing `pmcp-server` test suite (or a documented superset) passes unchanged — **no functional regression** for any current downstream user
+  2. The existing `pmcp-server` test suite (or a documented superset) passes unchanged â **no functional regression** for any current downstream user
   3. The dogfood rewrite surfaces and resolves any toolkit DX paper-cuts (logged as fold-back fixes into Phase 83 / 84 follow-ups before milestone close) before the toolkit's first published version
 
 **Plans**: TBD
@@ -1568,13 +1568,13 @@ Plans:
 ### Phase 89: Documentation, Migration Guide & Examples Index
 
 **Goal**: A developer landing on the PMCP repo or docs.rs sees config-first positioning ("build production MCP servers from config alone"), can follow a book chapter through the four DX shapes + per-backend recipes + deployment, can work through a hands-on course tutorial from `cargo pmcp new --kind sql-server` to a deployed pmcp.run server, and can find a one-page recipe for moving an existing pmcp-run sql-api server author from in-tree path-deps to the public toolkit.
-**Depends on**: Phase 86 (all four shapes shipped), Phase 87 (Type 2 authoring server shipped — book + course mention it), Phase 88 (dogfood validates the docs' usage claims)
+**Depends on**: Phase 86 (all four shapes shipped), Phase 87 (Type 2 authoring server shipped â book + course mention it), Phase 88 (dogfood validates the docs' usage claims)
 **Requirements**: DOCS-01, DOCS-02, DOCS-03, DOCS-04, DOCS-05, REF-03
 **Success Criteria** (what must be TRUE):
 
-  1. A new book chapter in `pmcp-book/src/` covers config-only MCP servers — overview, the four shapes, per-backend recipes (Postgres / MySQL / Athena / SQLite), deployment to pmcp.run
-  2. A new course tutorial in `pmcp-course/src/` walks a hands-on path from `cargo pmcp new --kind sql-server` → local `cargo run` → `cargo pmcp deploy` → live pmcp.run server
-  3. The book chapter includes a **migration note** (REF-03) — one-page recipe showing how a pmcp-run SQL-API server author swaps the path-dep for the public toolkit, drops the duplicate domain crates, and regenerates
+  1. A new book chapter in `pmcp-book/src/` covers config-only MCP servers â overview, the four shapes, per-backend recipes (Postgres / MySQL / Athena / SQLite), deployment to pmcp.run
+  2. A new course tutorial in `pmcp-course/src/` walks a hands-on path from `cargo pmcp new --kind sql-server` â local `cargo run` â `cargo pmcp deploy` â live pmcp.run server
+  3. The book chapter includes a **migration note** (REF-03) â one-page recipe showing how a pmcp-run SQL-API server author swaps the path-dep for the public toolkit, drops the duplicate domain crates, and regenerates
   4. The PMCP README and `CRATE-README.md` lead with config-first positioning ("build production MCP servers from config alone"), with the four shapes prominently introduced
   5. The `examples/README.md` index gains config-only entries (Shape A binary use, Shape C library use); the `cargo-pmcp` README documents `new --kind sql-server` scaffolding and `deploy` for config-only server targets
 
@@ -1582,20 +1582,20 @@ Plans:
 
 ### Phase 90: OpenAPI Built-In Server (`pmcp-openapi-server`)
 
-**Goal**: Deliver a config-driven **OpenAPI** MCP server that mirrors the completed SQL toolkit (Shape A binary `pmcp-sql-server`, Phases 83–86): a non-developer points a binary at a `config.toml` + an OpenAPI spec and gets a live MCP server — curated operation→tool mappings for the common ~20%, Code Mode (the existing `openapi-code-mode` feature in `pmcp-code-mode`) for the long-tail ~80% — with **zero Rust written**. The backend-agnostic toolkit (Phase 83) and the Shape A / scaffold / deploy patterns (Phases 85–86) are reused; only an OpenAPI connector model, the operation→tool config mapping, the `pmcp-openapi-server` binary, the `cargo pmcp new --kind openapi-server` scaffold, and docs are new.
+**Goal**: Deliver a config-driven **OpenAPI** MCP server that mirrors the completed SQL toolkit (Shape A binary `pmcp-sql-server`, Phases 83â86): a non-developer points a binary at a `config.toml` + an OpenAPI spec and gets a live MCP server â curated operationâtool mappings for the common ~20%, Code Mode (the existing `openapi-code-mode` feature in `pmcp-code-mode`) for the long-tail ~80% â with **zero Rust written**. The backend-agnostic toolkit (Phase 83) and the Shape A / scaffold / deploy patterns (Phases 85â86) are reused; only an OpenAPI connector model, the operationâtool config mapping, the `pmcp-openapi-server` binary, the `cargo pmcp new --kind openapi-server` scaffold, and docs are new.
 **Depends on**: Phase 83 (backend-agnostic toolkit core), Phase 85 (Shape A binary pattern), Phase 86 (scaffold + deploy). Reuses the existing `openapi-code-mode` feature in `pmcp-code-mode`.
-**Requirements**: OAPI-01 (HttpConnector trait), OAPI-02a (single-call tool synth), OAPI-02b (script tools — D-01), OAPI-03 (5-variant outgoing auth — D-05), OAPI-04 (openapiv3 --spec parser — D-03), OAPI-05 (HttpCodeExecutor seam), OAPI-06 (Shape A binary), OAPI-07 (--kind openapi-server scaffold + deploy), OAPI-08 (london-tube wiremock parity — D-04), OAPI-09 (docs in three shapes), OAPI-10 (generalize code_mode wiring to Arc<dyn CodeExecutor> + the one-engine parity proof — D-02). New scope added 2026-05-29; refined by the RESEARCH pass.
-**Reference to lift from (CONFIRMED)**: `~/Development/mcp/sdk/pmcp-run/built-in/openapi-api` — the OpenAPI sibling of the `sql-api` reference the SQL toolkit (Phases 83–86) was lifted from. This is the source-of-truth for Phase 90, exactly as `sql-api` was for SQL. Structure:
+**Requirements**: OAPI-01 (HttpConnector trait), OAPI-02a (single-call tool synth), OAPI-02b (script tools â D-01), OAPI-03 (5-variant outgoing auth â D-05), OAPI-04 (openapiv3 --spec parser â D-03), OAPI-05 (HttpCodeExecutor seam), OAPI-06 (Shape A binary), OAPI-07 (--kind openapi-server scaffold + deploy), OAPI-08 (london-tube wiremock parity â D-04), OAPI-09 (docs in three shapes), OAPI-10 (generalize code_mode wiring to Arc<dyn CodeExecutor> + the one-engine parity proof â D-02). New scope added 2026-05-29; refined by the RESEARCH pass.
+**Reference to lift from (CONFIRMED)**: `~/Development/mcp/sdk/pmcp-run/built-in/openapi-api` â the OpenAPI sibling of the `sql-api` reference the SQL toolkit (Phases 83â86) was lifted from. This is the source-of-truth for Phase 90, exactly as `sql-api` was for SQL. Structure:
 
-  - **`crates/mcp-openapi-server-core`** — the core to lift (analog of `mcp-sql-server-core`). Modules: `auth`, `code_mode`, `config`, `http`, `schema`, `secrets`, `templates`, `tools`, `pmcp_server`, `lambda`. Builds on `pmcp` (workspace), `openapiv3` (spec parse), `reqwest 0.13` (rustls), `serde_yaml`, and `pmcp-code-mode 0.4.0` with the **`js-runtime`** feature (long-tail = validated JS calling the API). Currently uses `shared/mcp-server-common` + `shared/mcp-lambda-proxy` path-deps to be replaced by the public `pmcp-server-toolkit` (the REF-style lift).
-  - **Config shape** (analog of SQL's `[database]`): `[backend] base_url` + `[backend.auth]` (`type = "bearer"`, `token = "${ENV}"`, `required`) + `[backend.http]` (timeout/retries/backoff) + `[[tools]]` mapping an operation via `path` / `method` / `base_url` (the operation→tool analog of SQL's `sql=`) + `[secrets]` + `[metadata]` + `[observability]`.
-  - **Instance configs (parity fixtures)**: `instances/{lichess,london-tube,dhl,rest-admin}.toml` and `servers/{lichess,london-tube,dhl,aws-cloudwatch,aws-billing,rest-admin}/`. `lichess` and `london-tube` are public / no-auth-friendly → best demo + parity candidates.
+  - **`crates/mcp-openapi-server-core`** â the core to lift (analog of `mcp-sql-server-core`). Modules: `auth`, `code_mode`, `config`, `http`, `schema`, `secrets`, `templates`, `tools`, `pmcp_server`, `lambda`. Builds on `pmcp` (workspace), `openapiv3` (spec parse), `reqwest 0.13` (rustls), `serde_yaml`, and `pmcp-code-mode 0.4.0` with the **`js-runtime`** feature (long-tail = validated JS calling the API). Currently uses `shared/mcp-server-common` + `shared/mcp-lambda-proxy` path-deps to be replaced by the public `pmcp-server-toolkit` (the REF-style lift).
+  - **Config shape** (analog of SQL's `[database]`): `[backend] base_url` + `[backend.auth]` (`type = "bearer"`, `token = "${ENV}"`, `required`) + `[backend.http]` (timeout/retries/backoff) + `[[tools]]` mapping an operation via `path` / `method` / `base_url` (the operationâtool analog of SQL's `sql=`) + `[secrets]` + `[metadata]` + `[observability]`.
+  - **Instance configs (parity fixtures)**: `instances/{lichess,london-tube,dhl,rest-admin}.toml` and `servers/{lichess,london-tube,dhl,aws-cloudwatch,aws-billing,rest-admin}/`. `lichess` and `london-tube` are public / no-auth-friendly â best demo + parity candidates.
   - **Design docs to mine**: `OPENAPI_CODE_MODE_DESIGN.md`, `OPENAPI_CODE_MODE_POLICY_DESIGN.md`, `OPENAPI_CODE_MODE_ACCESS_CONTROL.md`, `OPENAPI_SCRIPT_TOOLS.md`, `BUILTIN_SERVER_ARCHITECTURE.md`, `DEPLOYMENT.md`.
 
 **Scope (mirrors the SQL lift; confirm details in RESEARCH)**:
 
   - Lift `mcp-openapi-server-core`'s reusable glue into `pmcp-server-toolkit` (auth/secrets/config/code-mode wiring is largely shared; the NEW backend piece is an **HTTP/OpenAPI connector** analogous to `SqlConnector` at `crates/pmcp-server-toolkit/src/sql/mod.rs`).
-  - `[backend]`-driven config: curated `[[tools]]` → OpenAPI operations (`path`/`method`/`base_url`), bearer/`${ENV}` auth, retries/timeouts.
+  - `[backend]`-driven config: curated `[[tools]]` â OpenAPI operations (`path`/`method`/`base_url`), bearer/`${ENV}` auth, retries/timeouts.
   - A `pmcp-openapi-server` Shape A binary (`--config` + `--spec`), mirroring `pmcp-sql-server`.
   - A `cargo pmcp new --kind openapi-server` scaffold, mirroring `--kind sql-server`.
   - Reuse `pmcp-code-mode`'s `js-runtime` / `openapi-code-mode` feature for the Code Mode long-tail path.
@@ -1609,44 +1609,44 @@ Plans:
 Plans:
 **Wave 1**
 
-- [x] 90-01-PLAN.md — HttpConnector trait + reqwest client + 5-variant outgoing auth + http feature (OAPI-01/03)
-- [x] 90-02-PLAN.md — additive [backend]/[backend.auth]/[backend.http] + ToolDecl two-kind fields on ServerConfig (D-06, OAPI-02a/03)
+- [x] 90-01-PLAN.md â HttpConnector trait + reqwest client + 5-variant outgoing auth + http feature (OAPI-01/03)
+- [x] 90-02-PLAN.md â additive [backend]/[backend.auth]/[backend.http] + ToolDecl two-kind fields on ServerConfig (D-06, OAPI-02a/03)
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [x] 90-03-PLAN.md — openapiv3 --spec parser (optional at runtime) + single-call tool synthesizer (OAPI-04/02a)
-- [x] 90-04-PLAN.md — HttpCodeExecutor seam + generalize code_mode_tools_from_executor to Arc<dyn CodeExecutor>+flavor (OAPI-05/10)
+- [x] 90-03-PLAN.md â openapiv3 --spec parser (optional at runtime) + single-call tool synthesizer (OAPI-04/02a)
+- [x] 90-04-PLAN.md â HttpCodeExecutor seam + generalize code_mode_tools_from_executor to Arc<dyn CodeExecutor>+flavor (OAPI-05/10)
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [x] 90-05-PLAN.md — ScriptToolHandler (one engine, no token cycle) + the D-02 engine-parity proof (OAPI-02b/10)
+- [x] 90-05-PLAN.md â ScriptToolHandler (one engine, no token cycle) + the D-02 engine-parity proof (OAPI-02b/10)
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
-- [x] 90-06-PLAN.md — pmcp-openapi-server Shape A binary (cli/dispatch/assemble/lib, streamable HTTP, spec optional) (OAPI-06)
+- [x] 90-06-PLAN.md â pmcp-openapi-server Shape A binary (cli/dispatch/assemble/lib, streamable HTTP, spec optional) (OAPI-06)
 
 **Wave 5** *(blocked on Wave 4 completion)*
 
-- [x] 90-07-PLAN.md — london-tube wiremock parity replay + env-gated live test (OAPI-08, D-04)
-- [x] 90-08-PLAN.md — cargo pmcp new --kind openapi-server scaffold + deploy parity + scoped README (OAPI-07)
+- [x] 90-07-PLAN.md â london-tube wiremock parity replay + env-gated live test (OAPI-08, D-04)
+- [x] 90-08-PLAN.md â cargo pmcp new --kind openapi-server scaffold + deploy parity + scoped README (OAPI-07)
 
 **Wave 6** *(blocked on Wave 5 completion)*
 
-- [x] 90-09-PLAN.md — docs in three shapes (crate README + book + course chapters) (OAPI-09)
+- [x] 90-09-PLAN.md â docs in three shapes (crate README + book + course chapters) (OAPI-09)
 
 **Gap-Closure Wave 1** *(closing VERIFICATION gaps + REVIEW warnings; planned 2026-05-29)*
 
-- [x] 90-10-PLAN.md — oauth_passthrough per-request token made live at runtime: toolkit-resident request_executor_from_extra seam called by ScriptToolHandler + ExecuteCodeHandler; dispatch installs OAuthPassthroughAuth; e2e wiremock proof (closes VERIFICATION truths #3/#8, WR-01; OAPI-03/05)
-- [x] 90-11-PLAN.md — cross-variant ${VAR}/env:VAR secret resolution chokepoint applied to bearer/basic/oauth2 credential fields (closes altitude finding; OAPI-03)
-- [x] 90-12-PLAN.md — backend.base_url non-empty validation + oauth_passthrough trust-boundary docs (closes WR-02/WR-04; OAPI-03)
+- [x] 90-10-PLAN.md â oauth_passthrough per-request token made live at runtime: toolkit-resident request_executor_from_extra seam called by ScriptToolHandler + ExecuteCodeHandler; dispatch installs OAuthPassthroughAuth; e2e wiremock proof (closes VERIFICATION truths #3/#8, WR-01; OAPI-03/05)
+- [x] 90-11-PLAN.md â cross-variant ${VAR}/env:VAR secret resolution chokepoint applied to bearer/basic/oauth2 credential fields (closes altitude finding; OAPI-03)
+- [x] 90-12-PLAN.md â backend.base_url non-empty validation + oauth_passthrough trust-boundary docs (closes WR-02/WR-04; OAPI-03)
 
-**Gap-Closure Wave 2** *(blocked on 90-10 — shared code_mode.rs)*
+**Gap-Closure Wave 2** *(blocked on 90-10 â shared code_mode.rs)*
 
-- [x] 90-13-PLAN.md — reject non-scalar path/query/header params with a value-redacted error instead of silent JSON-stringification (closes WR-03; OAPI-02a/05)
+- [x] 90-13-PLAN.md â reject non-scalar path/query/header params with a value-redacted error instead of silent JSON-stringification (closes WR-03; OAPI-02a/05)
 
-## Progress — v2.2 Milestone
+## Progress â v2.2 Milestone
 
-**Execution order:** Phase 82 → Phase 83 → Phase 84 → Phase 85 → Phase 86 (Shapes B/C/D) and Phase 87 (Skills) in parallel after 83 lands → Phase 88 (dogfood) → Phase 89 (docs). Phase 90 (OpenAPI built-in, added 2026-05-29) is independent of 87–89 — it reuses the toolkit core (83) and Shape A/scaffold patterns (85–86), so it can proceed in parallel with the remaining SQL-milestone phases.
+**Execution order:** Phase 82 â Phase 83 â Phase 84 â Phase 85 â Phase 86 (Shapes B/C/D) and Phase 87 (Skills) in parallel after 83 lands â Phase 88 (dogfood) â Phase 89 (docs). Phase 90 (OpenAPI built-in, added 2026-05-29) is independent of 87â89 â it reuses the toolkit core (83) and Shape A/scaffold patterns (85â86), so it can proceed in parallel with the remaining SQL-milestone phases.
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
@@ -1660,13 +1660,13 @@ Plans:
 | 89. Documentation & Migration | 0/? | Not started | - |
 | 90. OpenAPI Built-In Server | 13/13 | Complete   | 2026-05-30 |
 
-### Phase 90.2: OpenAPI Built-In Server — Advanced Example (Contoso M365: OAuth passthrough + Excel-over-Graph) (INSERTED)
+### Phase 90.2: OpenAPI Built-In Server â Advanced Example (Contoso M365: OAuth passthrough + Excel-over-Graph) (INSERTED)
 
-**Goal:** Ship a second, advanced OpenAPI showcase that demonstrates enterprise OAuth and business-data access, distinct from London Tube's `api_key` (90.1). Vehicle: Microsoft Graph / M365 for a fictional org "Contoso", READ-ONLY. The headline narrative: *keep your existing Excel files, connect them to AI via MCP* — and the business analyst curates the relevant slice of a huge API rather than dumping full Graph metadata. Auth = `oauth_passthrough`: an org admin consents once to a bounded scope (the ceiling of what the server may request), and the signed-in user's forwarded token (from their MCP client, e.g. ChatGPT) governs per-file access — the server holds no standing credentials and can only ever act as the calling user.
+**Goal:** Ship a second, advanced OpenAPI showcase that demonstrates enterprise OAuth and business-data access, distinct from London Tube's `api_key` (90.1). Vehicle: Microsoft Graph / M365 for a fictional org "Contoso", READ-ONLY. The headline narrative: *keep your existing Excel files, connect them to AI via MCP* â and the business analyst curates the relevant slice of a huge API rather than dumping full Graph metadata. Auth = `oauth_passthrough`: an org admin consents once to a bounded scope (the ceiling of what the server may request), and the signed-in user's forwarded token (from their MCP client, e.g. ChatGPT) governs per-file access â the server holds no standing credentials and can only ever act as the calling user.
 
-Concrete shape: a demo Excel workbook in SharePoint/OneDrive with two sheets — **Customers** and **Orders** (orders belong to customers). Two explicit MCP tools over the Graph Excel range-read API — `get_customer` and `get_customer_orders` — with everything richer left to Code Mode (e.g. "customers who bought more than 100 in the last 3 months"). A curated/trimmed Graph OpenAPI spec (~3–4 read-only ops: list SharePoint files, file content, Excel worksheet range read), NOT the full metadata.
+Concrete shape: a demo Excel workbook in SharePoint/OneDrive with two sheets â **Customers** and **Orders** (orders belong to customers). Two explicit MCP tools over the Graph Excel range-read API â `get_customer` and `get_customer_orders` â with everything richer left to Code Mode (e.g. "customers who bought more than 100 in the last 3 months"). A curated/trimmed Graph OpenAPI spec (~3â4 read-only ops: list SharePoint files, file content, Excel worksheet range read), NOT the full metadata.
 
-This is config + curated spec + fixture + docs, NOT a feature build: `AuthConfig::OAuthPassthrough` (`crates/pmcp-server-toolkit/src/http/auth.rs:123`) and the full passthrough chain (`TokenCaptureAuthProvider → AuthContext → HttpCodeExecutor::with_inbound_token → outbound forward`, `crates/pmcp-openapi-server/src/assemble.rs:22-31,93`) already ship from Phase 90 (Plan 90-10). Mirror the London Tube structure (90.1): fixture + pointable example + book/course chapters + offline `parity_replay` (wiremock asserts the forwarded `Authorization: Bearer` reached the Graph backend), plus an `#[ignore]`+env-gated live test like `parity_live_tfl`. NOTE: `@odata.nextLink` pagination is NOT handled by the connector today and is NOT needed for a single demo workbook — explicitly out of scope (avoids turning this into a feature build).
+This is config + curated spec + fixture + docs, NOT a feature build: `AuthConfig::OAuthPassthrough` (`crates/pmcp-server-toolkit/src/http/auth.rs:123`) and the full passthrough chain (`TokenCaptureAuthProvider â AuthContext â HttpCodeExecutor::with_inbound_token â outbound forward`, `crates/pmcp-openapi-server/src/assemble.rs:22-31,93`) already ship from Phase 90 (Plan 90-10). Mirror the London Tube structure (90.1): fixture + pointable example + book/course chapters + offline `parity_replay` (wiremock asserts the forwarded `Authorization: Bearer` reached the Graph backend), plus an `#[ignore]`+env-gated live test like `parity_live_tfl`. NOTE: `@odata.nextLink` pagination is NOT handled by the connector today and is NOT needed for a single demo workbook â explicitly out of scope (avoids turning this into a feature build).
 
 **Decision:** READ-ONLY (no Excel write / workbook-session path); `oauth_passthrough` is the hero auth path (app-only client-credentials only mentioned as a documented contrast, if at all).
 **SQL/OpenAPI parallels (mirror these):** 90.1 london-tube fixture/example/chapters/`parity_replay.rs`; `crates/pmcp-sql-server/tests/fixtures/reference-config.toml`.
@@ -1676,18 +1676,18 @@ This is config + curated spec + fixture + docs, NOT a feature build: `AuthConfig
 
 Plans:
 
-- [x] 90.2-01-PLAN.md — Contoso M365 fixtures: CANONICAL workbook dataset (contoso-m365-workbook.json) + oauth_passthrough config + two customer_id-keyed script tools + curated Graph range-read spec + replay scenario (P902-SPEC, P902-CONFIG, P902-FIXTURE)
-- [x] 90.2-02-PLAN.md — Offline parity test (forwarded-bearer passthrough proof) + pointable examples/contoso-m365.toml + build-only example (P902-PARITY, P902-EXAMPLE)
-- [x] 90.2-03-PLAN.md — Deterministic headline Code Mode Rust test (>100-in-3-months, pinned reference date) (P902-CODEMODE)
-- [x] 90.2-04-PLAN.md — Dedicated book + course chapters (governance + Excel narrative) wired into both SUMMARYs (P902-DOCS-BOOK, P902-DOCS-COURSE)
+- [x] 90.2-01-PLAN.md â Contoso M365 fixtures: CANONICAL workbook dataset (contoso-m365-workbook.json) + oauth_passthrough config + two customer_id-keyed script tools + curated Graph range-read spec + replay scenario (P902-SPEC, P902-CONFIG, P902-FIXTURE)
+- [x] 90.2-02-PLAN.md â Offline parity test (forwarded-bearer passthrough proof) + pointable examples/contoso-m365.toml + build-only example (P902-PARITY, P902-EXAMPLE)
+- [x] 90.2-03-PLAN.md â Deterministic headline Code Mode Rust test (>100-in-3-months, pinned reference date) (P902-CODEMODE)
+- [x] 90.2-04-PLAN.md â Dedicated book + course chapters (governance + Excel narrative) wired into both SUMMARYs (P902-DOCS-BOOK, P902-DOCS-COURSE)
 
-### Phase 90.1: OpenAPI Built-In Server — Examples & Article Parity (INSERTED)
+### Phase 90.1: OpenAPI Built-In Server â Examples & Article Parity (INSERTED)
 
 **Goal:** Bring the OpenAPI built-in server's examples and documentation to full parity with the SQL server. Scope (locked via progress routing):
 
-1. Enrich `crates/pmcp-openapi-server/tests/fixtures/london-tube.toml` from a thin 114-line test fixture into the full annotated showcase reference instance — the OpenAPI equivalent of SQL's `chinook` `reference-config.toml`: add `[[resources]]` (TfL API schema docs + sample request/response payloads + example scripts), `[[prompts]]` (start-code-mode), and full per-tool `[tools.annotations]` (read_only_hint, idempotent_hint, cost_hint, auth hints).
+1. Enrich `crates/pmcp-openapi-server/tests/fixtures/london-tube.toml` from a thin 114-line test fixture into the full annotated showcase reference instance â the OpenAPI equivalent of SQL's `chinook` `reference-config.toml`: add `[[resources]]` (TfL API schema docs + sample request/response payloads + example scripts), `[[prompts]]` (start-code-mode), and full per-tool `[tools.annotations]` (read_only_hint, idempotent_hint, cost_hint, auth hints).
 2. Add a runnable example config users can point at.
-3. Deepen `pmcp-book/src/openapi-built-in-server.md` and `pmcp-course/src/openapi-built-in-server.md` with a resources/prompts config-walkthrough section — the one section SQL's chapters have that OpenAPI skips (chapter *structure* is already at parity from Phase 90-09; this adds the missing config-depth section).
+3. Deepen `pmcp-book/src/openapi-built-in-server.md` and `pmcp-course/src/openapi-built-in-server.md` with a resources/prompts config-walkthrough section â the one section SQL's chapters have that OpenAPI skips (chapter *structure* is already at parity from Phase 90-09; this adds the missing config-depth section).
 4. Add a replay/parity test covering the enriched fixture (ALWAYS requirements: parity test + example demonstration).
 
 **Decision:** Keep london-tube as the single showcase; do NOT add a second real-world API.
@@ -1698,94 +1698,94 @@ Plans:
 
 Plans:
 
-- [x] 90.1-01-PLAN.md — Enrich london-tube.toml (resources + prompt + full annotations) + fixture-validity asserts + build-only example (P901-FIXTURE, P901-EXAMPLE)
-- [x] 90.1-02-PLAN.md — Add Resources & Prompts config-walkthrough section to book + course OpenAPI chapters (P901-DOCS-BOOK, P901-DOCS-COURSE)
-- [x] 90.1-03-PLAN.md — Add list_resources + list_prompts replay steps to london-tube-scenarios.yaml (P901-PARITY)
+- [x] 90.1-01-PLAN.md â Enrich london-tube.toml (resources + prompt + full annotations) + fixture-validity asserts + build-only example (P901-FIXTURE, P901-EXAMPLE)
+- [x] 90.1-02-PLAN.md â Add Resources & Prompts config-walkthrough section to book + course OpenAPI chapters (P901-DOCS-BOOK, P901-DOCS-COURSE)
+- [x] 90.1-03-PLAN.md â Add list_resources + list_prompts replay steps to london-tube-scenarios.yaml (P901-PARITY)
 
 ## v2.3 Excel-as-Configuration MCP Servers (governed Excel CodeLanguage) (In Progress)
 
-**Milestone Goal:** Extract the proven Excel-workbook → MCP-server compiler from the `towelrads-quote-pricing` lighthouse (its milestone v0.5.0, phases 7–14, all green — golden quote penny-reconciled to ±£0.01) into the PMCP SDK as a third "governed Excel" CodeLanguage alongside the v2.2 SQL and OpenAPI toolkits. **Compile, never interpret:** the workbook is simultaneously the specification (formula DAG), the test oracle (cached cell values become assertions), and the output template. Any project can compile a governed Excel workbook into a tested, versioned, deterministic MCP server. Generalize the known lighthouse debt (RFC §5) — do not copy it.
+**Milestone Goal:** Extract the proven Excel-workbook â MCP-server compiler from the `towelrads-quote-pricing` lighthouse (its milestone v0.5.0, phases 7â14, all green â golden quote penny-reconciled to Â±Â£0.01) into the PMCP SDK as a third "governed Excel" CodeLanguage alongside the v2.2 SQL and OpenAPI toolkits. **Compile, never interpret:** the workbook is simultaneously the specification (formula DAG), the test oracle (cached cell values become assertions), and the output template. Any project can compile a governed Excel workbook into a tested, versioned, deterministic MCP server. Generalize the known lighthouse debt (RFC Â§5) â do not copy it.
 
 **Source of truth:** RFC `docs/sdk-issue-excel-workbook-compiler-extraction.md` + `.planning/research/` (STACK / FEATURES / ARCHITECTURE / PITFALLS / SUMMARY, all HIGH confidence, researched 2026-06-09). Reference implementation: the lighthouse `crates/workbook-runtime/`, `crates/workbook-compiler/`, and `crates/quote-pricing-server/src/workbook/` (the served layer is already ~95% workbook-agnostic).
 
 **Load-bearing invariants encoded across phases:**
 
 - **Purity invariant (Pitfall 1):** the Excel reader (`umya` / `quick-xml`) must NEVER enter the served-binary dependency tree. The served path links only `pmcp-workbook-runtime`; the reader lives only in `pmcp-workbook-compiler` (consumed only by `cargo-pmcp`). A `cargo tree` + `cargo-deny [bans]` purity gate stands up in Phase 91 (with the runtime, before any `umya` code lands) and is re-asserted in every later phase that touches the served tree. The writer (`rust_xlsxwriter`, pulls permitted `zip`) IS positively asserted present.
-- **Dependency-forced ordering:** runtime ← compiler ← CLI; runtime ← served-tool toolkit module ← Shape A binary ← Shape B scaffold. The served layer requires the bundle contract; the bundle contract requires the compiler; the compiler requires the dialect + runtime. Freeze the bundle contract from the consumer side (Phase 92) BEFORE the compiler is re-cut (Phase 93).
-- **§5 generalization, not copy:** kill hardcoded `build_reference_manifest` (manifest fully synth-driven), fix promote-path bugs CR-01 (demotion asymmetry) / CR-02 (version overwrite) / WR-01 (enum-input tiering), handle umya fabricated-provenance — all in the compiler-owning phase (93).
-- **Second-workbook test (WBEX-01) is the generalization gate:** it lands in Phase 96, after the compiler + served layer are manifest-driven, and its success proves the §5 manifest-driven fix actually generalized (no per-workbook Rust, no privileged single output).
-- **Mirror the v2.2 toolkit pattern:** `pmcp-server-toolkit` feature module + per-source crates + Shape A binary / Shape B scaffold, same `TypedToolWithOutput` → `outputSchema` → `structuredContent` discipline.
+- **Dependency-forced ordering:** runtime â compiler â CLI; runtime â served-tool toolkit module â Shape A binary â Shape B scaffold. The served layer requires the bundle contract; the bundle contract requires the compiler; the compiler requires the dialect + runtime. Freeze the bundle contract from the consumer side (Phase 92) BEFORE the compiler is re-cut (Phase 93).
+- **Â§5 generalization, not copy:** kill hardcoded `build_reference_manifest` (manifest fully synth-driven), fix promote-path bugs CR-01 (demotion asymmetry) / CR-02 (version overwrite) / WR-01 (enum-input tiering), handle umya fabricated-provenance â all in the compiler-owning phase (93).
+- **Second-workbook test (WBEX-01) is the generalization gate:** it lands in Phase 96, after the compiler + served layer are manifest-driven, and its success proves the Â§5 manifest-driven fix actually generalized (no per-workbook Rust, no privileged single output).
+- **Mirror the v2.2 toolkit pattern:** `pmcp-server-toolkit` feature module + per-source crates + Shape A binary / Shape B scaffold, same `TypedToolWithOutput` â `outputSchema` â `structuredContent` discipline.
 - **Explicitly NOT touched:** `pmcp-code-mode` (the untrusted long-tail path). A compiled workbook is curated config trusted by the promote gate + BA curation, not a runtime token. The two CodeLanguages coexist.
 
 ### v2.3 Phase Summary
 
-- [x] **Phase 91: Workbook Runtime + Purity Gate + Dialect Spec** — Port the reader-free `pmcp-workbook-runtime` leaf (owned IR/model types, deterministic evaluator, writer-only `.xlsx` renderer) and stand up the `cargo tree` + `cargo-deny` purity gate on day one; ship the SDK-owned versioned dialect spec + linter (completed 2026-06-10)
-- [x] **Phase 92: BundleSource + Served-Tool Toolkit Module** — Freeze the bundle contract from the consumer side: `BundleSource` trait (local-dir + embedded) + the generic, fully manifest-driven `workbook` feature module in `pmcp-server-toolkit` (all five tools, fail-closed validation, boot integrity gate) against a test bundle (verification: gaps found 2026-06-10) (completed 2026-06-11)
-- [x] **Phase 93: Workbook Compiler + §5 Generalization Fixes + Promote Gate** — Port `pmcp-workbook-compiler` (umya-isolated offline pipeline), do the §5 fixes here (manifest-driven emit, CR-01/CR-02/WR-01, umya fabricated-provenance), and ship the change-class + golden-corpus promote gate with the `--accept` approval flow (completed 2026-06-13)
-- [x] **Phase 94: CLI Subcommands + `pmcp.toml`** — `cargo pmcp compile-workbook` / `lint-workbook` / `emit-bundle` thin shells over the compiler, the gated `--accept --approver --effective-date` flow, and a project-level `pmcp.toml` mapping workbooks → bundle IDs (kills single-workbook assumptions) (completed 2026-06-14)
-- [x] **Phase 95: Shape A Binary `pmcp-workbook-server`** — A pure-config binary that stands up a live MCP server from a compiled bundle alone (no user Rust), mirroring `pmcp-sql-server` field-for-field (completed 2026-06-14)
-- [x] **Phase 96: Shape B Scaffold + Dialect-Version Declaration + Generalization Validation** — `cargo pmcp new --kind workbook-server` scaffold (Shape B), workbooks declare the dialect version they target, and the second-workbook + Excel-quirk-corpus generalization gates prove the manifest is truly synth-driven (completed 2026-06-15)
+- [x] **Phase 91: Workbook Runtime + Purity Gate + Dialect Spec** â Port the reader-free `pmcp-workbook-runtime` leaf (owned IR/model types, deterministic evaluator, writer-only `.xlsx` renderer) and stand up the `cargo tree` + `cargo-deny` purity gate on day one; ship the SDK-owned versioned dialect spec + linter (completed 2026-06-10)
+- [x] **Phase 92: BundleSource + Served-Tool Toolkit Module** â Freeze the bundle contract from the consumer side: `BundleSource` trait (local-dir + embedded) + the generic, fully manifest-driven `workbook` feature module in `pmcp-server-toolkit` (all five tools, fail-closed validation, boot integrity gate) against a test bundle (verification: gaps found 2026-06-10) (completed 2026-06-11)
+- [x] **Phase 93: Workbook Compiler + Â§5 Generalization Fixes + Promote Gate** â Port `pmcp-workbook-compiler` (umya-isolated offline pipeline), do the Â§5 fixes here (manifest-driven emit, CR-01/CR-02/WR-01, umya fabricated-provenance), and ship the change-class + golden-corpus promote gate with the `--accept` approval flow (completed 2026-06-13)
+- [x] **Phase 94: CLI Subcommands + `pmcp.toml`** â `cargo pmcp compile-workbook` / `lint-workbook` / `emit-bundle` thin shells over the compiler, the gated `--accept --approver --effective-date` flow, and a project-level `pmcp.toml` mapping workbooks â bundle IDs (kills single-workbook assumptions) (completed 2026-06-14)
+- [x] **Phase 95: Shape A Binary `pmcp-workbook-server`** â A pure-config binary that stands up a live MCP server from a compiled bundle alone (no user Rust), mirroring `pmcp-sql-server` field-for-field (completed 2026-06-14)
+- [x] **Phase 96: Shape B Scaffold + Dialect-Version Declaration + Generalization Validation** â `cargo pmcp new --kind workbook-server` scaffold (Shape B), workbooks declare the dialect version they target, and the second-workbook + Excel-quirk-corpus generalization gates prove the manifest is truly synth-driven (completed 2026-06-15)
 
-## Phase Details — v2.3 Milestone
+## Phase Details â v2.3 Milestone
 
 ### Phase 91: Workbook Runtime + Purity Gate + Dialect Spec
 
-**Goal**: A reader-free `pmcp-workbook-runtime` leaf crate owns every shared model/IR type, runs a compiled workbook's IR through a deterministic evaluator and a writer-only `.xlsx` renderer, and a mechanically-provable purity gate guarantees the Excel reader can never reach the served binary — established BEFORE any `umya` code exists. The SDK also owns a versioned dialect spec + linter.
-**Depends on**: Phase 90.2 (v2.2 close); pmcp core only — proves the purity boundary first (RFC §7 smallest cut)
+**Goal**: A reader-free `pmcp-workbook-runtime` leaf crate owns every shared model/IR type, runs a compiled workbook's IR through a deterministic evaluator and a writer-only `.xlsx` renderer, and a mechanically-provable purity gate guarantees the Excel reader can never reach the served binary â established BEFORE any `umya` code exists. The SDK also owns a versioned dialect spec + linter.
+**Depends on**: Phase 90.2 (v2.2 close); pmcp core only â proves the purity boundary first (RFC Â§7 smallest cut)
 **Requirements**: WBRT-01, WBRT-02, WBRT-03, WBRT-04, WBDL-01
 **Success Criteria** (what must be TRUE):
 
-  1. A developer can depend on `pmcp-workbook-runtime` (reader-free leaf, slot 2a) and deserialize the shared model types (`Manifest`, `CellMap`, `BundleLock`, `VersionChangelog`, IR `Cell`/`Expr`) identically to how the offline emitter produces them — serde/schemars-clean, zero reader dependency
+  1. A developer can depend on `pmcp-workbook-runtime` (reader-free leaf, slot 2a) and deserialize the shared model types (`Manifest`, `CellMap`, `BundleLock`, `VersionChangelog`, IR `Cell`/`Expr`) identically to how the offline emitter produces them â serde/schemars-clean, zero reader dependency
   2. The runtime runs a compiled IR through a deterministic topo executor producing typed outputs plus per-cell derivation traces, and renders a computed workbook back to `.xlsx` via the writer-only `rust_xlsxwriter` renderer
-  3. **PURITY GATE:** CI + `just purity-check` fail the build if `umya` / `quick-xml` appear in the runtime's (or any served-binary's) dependency tree, run per feature-combination (not just defaults), with a positive assertion that `rust_xlsxwriter` IS present and `zip` (writer container) is permitted — `cargo tree` assertions backed by a `cargo-deny [bans]` declaration
+  3. **PURITY GATE:** CI + `just purity-check` fail the build if `umya` / `quick-xml` appear in the runtime's (or any served-binary's) dependency tree, run per feature-combination (not just defaults), with a positive assertion that `rust_xlsxwriter` IS present and `zip` (writer container) is permitted â `cargo tree` assertions backed by a `cargo-deny [bans]` declaration
   4. The SDK owns a versioned dialect spec document (function whitelist + refuse-set) bound to the `WHITELIST` const by a test that fails if doc and code diverge
   5. A developer can lint a workbook against the dialect (whitelist-only, deny-by-default) and receive collect-all, located, BA-actionable findings with repair guidance
 
-> **Note (D-02):** WBDL-03 (the running linter + `WorkbookMap` ingest) is re-mapped to **Phase 93** — it needs a real `.xlsx` via umya. Phase 91 ships only the dialect *contract* (WHITELIST + spec doc + binding test).
+> **Note (D-02):** WBDL-03 (the running linter + `WorkbookMap` ingest) is re-mapped to **Phase 93** â it needs a real `.xlsx` via umya. Phase 91 ships only the dialect *contract* (WHITELIST + spec doc + binding test).
 
 **Plans**: 3 plans
 
 Plans:
 
-- [x] 91-01-PLAN.md — Lift the reader-free `pmcp-workbook-runtime` leaf crate (IR/model types, deterministic topo executor + traces, writer-only `.xlsx` renderer, finding model + D-08 Deserialize) (WBRT-01, WBRT-02, WBRT-03)
-- [x] 91-02-PLAN.md — Create `pmcp-workbook-dialect` leaf crate (flat-13 WHITELIST + DialectRules + re-exported findings) + port `docs/workbook-dialect-spec.md` + doc↔const binding test (WBDL-01)
-- [x] 91-03-PLAN.md — `make purity-check` (cargo-tree per-crate/per-feature reader-absence + writer-presence) + merge-blocking CI gate + WBDL-03 → Phase 93 re-map (WBRT-04, WBDL-03)
+- [x] 91-01-PLAN.md â Lift the reader-free `pmcp-workbook-runtime` leaf crate (IR/model types, deterministic topo executor + traces, writer-only `.xlsx` renderer, finding model + D-08 Deserialize) (WBRT-01, WBRT-02, WBRT-03)
+- [x] 91-02-PLAN.md â Create `pmcp-workbook-dialect` leaf crate (flat-13 WHITELIST + DialectRules + re-exported findings) + port `docs/workbook-dialect-spec.md` + docâconst binding test (WBDL-01)
+- [x] 91-03-PLAN.md â `make purity-check` (cargo-tree per-crate/per-feature reader-absence + writer-presence) + merge-blocking CI gate + WBDL-03 â Phase 93 re-map (WBRT-04, WBDL-03)
 
 ### Phase 92: BundleSource + Served-Tool Toolkit Module
 
-**Goal**: The compiled-bundle contract is frozen from the consumer side: a generic, fully manifest-driven `workbook` feature module in `pmcp-server-toolkit` registers all five tools against a test bundle loaded through a `BundleSource` trait, fails closed on any integrity or validation gap, and emits the same `outputSchema` → `structuredContent` discipline as the SQL/OpenAPI toolkits — with zero per-workbook Rust.
+**Goal**: The compiled-bundle contract is frozen from the consumer side: a generic, fully manifest-driven `workbook` feature module in `pmcp-server-toolkit` registers all five tools against a test bundle loaded through a `BundleSource` trait, fails closed on any integrity or validation gap, and emits the same `outputSchema` â `structuredContent` discipline as the SQL/OpenAPI toolkits â with zero per-workbook Rust.
 **Depends on**: Phase 91 (runtime types + purity gate)
 **Requirements**: WBSV-01, WBSV-02, WBSV-03, WBSV-04, WBSV-05, WBSV-06, WBSV-07, WBSV-08, WBSV-09
 **Success Criteria** (what must be TRUE):
 
-  1. An agent can call `calculate` with typed, tier-enforced, dtype-checked, enum-gated inputs and receive ALL named outputs (`{value,unit}` each) plus a provenance stamp — no single privileged "headline" output — and `explain` / `get_manifest` / `diff_version` / `render_workbook` each return their bundle-driven projections (per-cell trace, curated manifest, hash-verified changelog, provenance-bound `workbook://` resource)
-  2. Input and output schemas are projected entirely from the manifest (`additionalProperties:false`, per-column dtype/unit/meaning; mandatory non-empty `outputSchema`) — parity with the SQL/OpenAPI `TypedToolWithOutput` pattern; no per-workbook handler code
-  3. Every domain failure returns a structured `isError:true` envelope in `structuredContent` (never a protocol `Err`) carrying `code`, `reason`, and self-repair fields (`allowed`/`required`/`range`) plus the provenance stamp; validation is **fail-closed** (a missing manifest role for a supplied input is an error, not an `if let Some` skip — WR-05; non-string values on enum inputs rejected — WR-02)
+  1. An agent can call `calculate` with typed, tier-enforced, dtype-checked, enum-gated inputs and receive ALL named outputs (`{value,unit}` each) plus a provenance stamp â no single privileged "headline" output â and `explain` / `get_manifest` / `diff_version` / `render_workbook` each return their bundle-driven projections (per-cell trace, curated manifest, hash-verified changelog, provenance-bound `workbook://` resource)
+  2. Input and output schemas are projected entirely from the manifest (`additionalProperties:false`, per-column dtype/unit/meaning; mandatory non-empty `outputSchema`) â parity with the SQL/OpenAPI `TypedToolWithOutput` pattern; no per-workbook handler code
+  3. Every domain failure returns a structured `isError:true` envelope in `structuredContent` (never a protocol `Err`) carrying `code`, `reason`, and self-repair fields (`allowed`/`required`/`range`) plus the provenance stamp; validation is **fail-closed** (a missing manifest role for a supplied input is an error, not an `if let Some` skip â WR-05; non-string values on enum inputs rejected â WR-02)
   4. The server recomputes the `BUNDLE.lock` combined hash-of-hashes at boot and fails closed on any tampered or mismatched artifact before serving
   5. A server loads a bundle via the `BundleSource` trait with both local-directory and embedded (`include_dir!`) implementations; S3/registry is a documented extension seam, not shipped
 
-**Plans**: 7 plans (7 waves, strictly sequential — 92-06/92-07 close the gaps_found verification)
+**Plans**: 7 plans (7 waves, strictly sequential â 92-06/92-07 close the gaps_found verification)
 
-- [x] 92-01-PLAN.md — Runtime BundleSource trait (local-dir + embedded) + shared fail-closed BundleLoader + manifest annotations field + D-17/S-1 scrub
-- [x] 92-02-PLAN.md — Synthetic tax-calc golden fixture generator + committed byte-stable golden + tamper helpers
-- [x] 92-03-PLAN.md — Toolkit workbook served core: isError envelope, manifest→schema projection, fail-closed input validation, 4 handlers (calculate/explain/get_manifest/diff_version)
-- [x] 92-04-PLAN.md — render_workbook: workbook:// URI codec + stateless regen-on-read resource + published URI contract doc
-- [x] 92-05-PLAN.md — WorkbookBuilderExt wiring + boot-surface re-exports + workbook feature + streamable-HTTP example + integration tests + purity-gate extension
-- [x] 92-06-PLAN.md — Gap closure (CR-01): drop Role::Input cells from the golden IR + seed-preserving executor literal arm + regenerate golden + non-default-input regression test (unblocks WBSV-01/02/05)
-- [x] 92-07-PLAN.md — Gap closure (Blocker 2): fail-closed override role filter (WR-02) + fail-closed project_outputs (WR-04) + absent-anchor stamp gate (WR-07) (completes WBSV-06)
+- [x] 92-01-PLAN.md â Runtime BundleSource trait (local-dir + embedded) + shared fail-closed BundleLoader + manifest annotations field + D-17/S-1 scrub
+- [x] 92-02-PLAN.md â Synthetic tax-calc golden fixture generator + committed byte-stable golden + tamper helpers
+- [x] 92-03-PLAN.md â Toolkit workbook served core: isError envelope, manifestâschema projection, fail-closed input validation, 4 handlers (calculate/explain/get_manifest/diff_version)
+- [x] 92-04-PLAN.md â render_workbook: workbook:// URI codec + stateless regen-on-read resource + published URI contract doc
+- [x] 92-05-PLAN.md â WorkbookBuilderExt wiring + boot-surface re-exports + workbook feature + streamable-HTTP example + integration tests + purity-gate extension
+- [x] 92-06-PLAN.md â Gap closure (CR-01): drop Role::Input cells from the golden IR + seed-preserving executor literal arm + regenerate golden + non-default-input regression test (unblocks WBSV-01/02/05)
+- [x] 92-07-PLAN.md â Gap closure (Blocker 2): fail-closed override role filter (WR-02) + fail-closed project_outputs (WR-04) + absent-anchor stamp gate (WR-07) (completes WBSV-06)
 
 **UI hint**: yes
 
-### Phase 93: Workbook Compiler + §5 Generalization Fixes + Promote Gate
+### Phase 93: Workbook Compiler + Â§5 Generalization Fixes + Promote Gate
 
-**Goal**: `pmcp-workbook-compiler` ports the full offline pipeline (ingest → lint → manifest synth → formula parse → DAG compile → penny-reconcile → artifact emit → promote-time gate) with `umya` isolated to this crate, and ships the §5 generalization fixes at extraction time (not copied): a fully manifest-driven emit path, symmetric change-class classification, versioned non-overwriting bundle writes, enum-tiering correctness, umya fabricated-provenance refusal, and the change-class + golden-corpus promote gate with a BA approval flow.
+**Goal**: `pmcp-workbook-compiler` ports the full offline pipeline (ingest â lint â manifest synth â formula parse â DAG compile â penny-reconcile â artifact emit â promote-time gate) with `umya` isolated to this crate, and ships the Â§5 generalization fixes at extraction time (not copied): a fully manifest-driven emit path, symmetric change-class classification, versioned non-overwriting bundle writes, enum-tiering correctness, umya fabricated-provenance refusal, and the change-class + golden-corpus promote gate with a BA approval flow.
 **Depends on**: Phase 91 (re-exports runtime types); contract frozen by Phase 92
 **Requirements**: WBCO-01, WBCO-02, WBCO-03, WBCO-04, WBCO-05, WBCO-06, WBCO-07, WBGV-01, WBGV-02, WBGV-03, WBGV-04, WBGV-05, WBGV-06, WBGV-07, WBDL-03
 **Success Criteria** (what must be TRUE):
 
-  1. The compiler ingests a `.xlsx` (umya, compiler-isolated), captures cached cell values as a trusted oracle, parses formulas + reconstructs the dependency DAG (`sheet_ir`), compiles pure cells to executable IR, and **penny-reconciles** computed values against the oracle using operand-anchored rounding (never a naïve `delta.abs()` tolerance — grep-gated), emitting the complete seven-member bundle (manifest/IR/cell_map/layout/BUNDLE.lock/evidence)
-  2. The candidate semantic manifest is synthesized **fully workbook-driven** from colour/Guide/headers with BA ratification — `build_reference_manifest` is deleted from every non-test path (kills per-workbook Rust); closed JSON-Schema enums come from inline DV literals (≤10), with range/named-range sources rejected with precise reason codes
-  3. **CR-01 fix:** the change-class classifier is symmetric — demotion-direction changes (Input→Constant, source/assumption flips) each produce a non-empty class routing to BlockUntilAccept/NeverAutoPromote, never silent HotReload; the strictest-policy reducer hard-blocks any assumption (yellow-cell) change; numeric drift is distinguished from semantic redefinition via a stable canonical IR sub-DAG identity hash
+  1. The compiler ingests a `.xlsx` (umya, compiler-isolated), captures cached cell values as a trusted oracle, parses formulas + reconstructs the dependency DAG (`sheet_ir`), compiles pure cells to executable IR, and **penny-reconciles** computed values against the oracle using operand-anchored rounding (never a naÃ¯ve `delta.abs()` tolerance â grep-gated), emitting the complete seven-member bundle (manifest/IR/cell_map/layout/BUNDLE.lock/evidence)
+  2. The candidate semantic manifest is synthesized **fully workbook-driven** from colour/Guide/headers with BA ratification â `build_reference_manifest` is deleted from every non-test path (kills per-workbook Rust); closed JSON-Schema enums come from inline DV literals (â¤10), with range/named-range sources rejected with precise reason codes
+  3. **CR-01 fix:** the change-class classifier is symmetric â demotion-direction changes (InputâConstant, source/assumption flips) each produce a non-empty class routing to BlockUntilAccept/NeverAutoPromote, never silent HotReload; the strictest-policy reducer hard-blocks any assumption (yellow-cell) change; numeric drift is distinguished from semantic redefinition via a stable canonical IR sub-DAG identity hash
   4. **CR-02 fix:** promotion writes the new bundle to its own `@<next_version>` directory and never overwrites the baseline (promote-twice yields two distinct on-disk version dirs, prior baseline byte-identical, `BUNDLE.lock` version == `changelog.to_version`); the golden-corpus gate blocks any over-tolerance named-output delta unless a content-hash-fingerprinted `ApprovalRecord` covers the candidate, and a BA can record one via `--accept --approver <X> --effective-date <D>`
   5. **WR-01 fix + umya provenance:** enum inputs skip Variable-tier assignment so the default path can never seed an out-of-enum empty string (verified against the COMMITTED manifest, not the in-memory builder); the freshness gate assigns a distinct provenance class to umya-stamped (fabricated `<Application>Microsoft Excel</Application>`/`calcId`) workbooks and REFUSES them with `oracle/non-excel-app`
 
@@ -1794,122 +1794,122 @@ Plans:
 Plans:
 **Wave 1**
 
-- [x] 93-01-PLAN.md — Crate skeleton: Cargo.toml + re-export-surface lib.rs + generic compile_workbook stub + purity-gate extension (reader confined)
+- [x] 93-01-PLAN.md â Crate skeleton: Cargo.toml + re-export-surface lib.rs + generic compile_workbook stub + purity-gate extension (reader confined)
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [x] 93-02-PLAN.md — ingest (umya → WorkbookMap + cached oracle) + provenance (quarantined raw reader; REFUSE umya-fabricated identity, WBCO-07) + provenance fuzz target
-- [x] 93-03-PLAN.md — WBDL-03 running linter + formula parser (whitelist-at-parse) + Kahn DAG + formula-parser fuzz target
+- [x] 93-02-PLAN.md â ingest (umya â WorkbookMap + cached oracle) + provenance (quarantined raw reader; REFUSE umya-fabricated identity, WBCO-07) + provenance fuzz target
+- [x] 93-03-PLAN.md â WBDL-03 running linter + formula parser (whitelist-at-parse) + Kahn DAG + formula-parser fuzz target
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [x] 93-04-PLAN.md — manifest synth/ratify (annotations reconciled; inline-DV enums; range-DV warning) + operand-anchored reconcile (no delta.abs)
+- [x] 93-04-PLAN.md â manifest synth/ratify (annotations reconciled; inline-DV enums; range-DV warning) + operand-anchored reconcile (no delta.abs)
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
-- [x] 93-05-PLAN.md — seven-member artifact emit (bundle_id; WR-01 enum-tier skip) + symmetric change-class classifier + IR identity hash (lift WITH tests)
+- [x] 93-05-PLAN.md â seven-member artifact emit (bundle_id; WR-01 enum-tier skip) + symmetric change-class classifier + IR identity hash (lift WITH tests)
 
 **Wave 5** *(blocked on Wave 4 completion)*
 
-- [x] 93-06-PLAN.md — promote gate: auto-derived corpus (D-09) + fingerprint-bound ApprovalRecord + accept() + CR-02 versioned non-overwriting promote
+- [x] 93-06-PLAN.md â promote gate: auto-derived corpus (D-09) + fingerprint-bound ApprovalRecord + accept() + CR-02 versioned non-overwriting promote
 
 **Wave 6** *(blocked on Wave 5 completion)*
 
-- [x] 93-07-PLAN.md — stage1 + wired generic driver + neutral tax-calc.xlsx + producer/consumer byte-identical proof + example + full quality/purity gate
+- [x] 93-07-PLAN.md â stage1 + wired generic driver + neutral tax-calc.xlsx + producer/consumer byte-identical proof + example + full quality/purity gate
 
 ### Phase 94: CLI Subcommands + `pmcp.toml`
 
-**Goal**: The compiler's verbs become first-class `cargo pmcp` subcommands (thin shells over the Phase 93 compiler) carrying the gated BA approval flow, and a project-level `pmcp.toml` maps workbooks → bundle IDs, eliminating the lighthouse's single-workbook justfile/path assumptions so a second project can use the tooling.
+**Goal**: The compiler's verbs become first-class `cargo pmcp` subcommands (thin shells over the Phase 93 compiler) carrying the gated BA approval flow, and a project-level `pmcp.toml` maps workbooks â bundle IDs, eliminating the lighthouse's single-workbook justfile/path assumptions so a second project can use the tooling.
 **Depends on**: Phase 93 (the compiler)
 **Requirements**: WBCL-01, WBCL-02, WBCL-03, WBCL-04
 **Success Criteria** (what must be TRUE):
 
-  1. A developer can run `cargo pmcp compile-workbook <wb.xlsx>` to ingest → lint → synth → parse → compile → reconcile → **gate** → write a bundle, with the gate running before any write; and `cargo pmcp lint-workbook <wb.xlsx>` runs the dialect linter standalone (non-zero exit on errors)
+  1. A developer can run `cargo pmcp compile-workbook <wb.xlsx>` to ingest â lint â synth â parse â compile â reconcile â **gate** â write a bundle, with the gate running before any write; and `cargo pmcp lint-workbook <wb.xlsx>` runs the dialect linter standalone (non-zero exit on errors)
   2. A developer can run `cargo pmcp emit-bundle` to regenerate a bundle without the gate (dev/reference)
   3. The `--accept --approver <X> --effective-date <D>` flow records a fingerprint-bound `ApprovalRecord` and re-baselines the golden corpus through the CLI, with clear gate output stating the change class and the exact command to run
-  4. A project declares workbooks → bundle IDs in a project-level `pmcp.toml` (`[[workbook.workbooks]]` source → bundle_id), and the three CLI subcommands resolve sources through it — no lighthouse paths
+  4. A project declares workbooks â bundle IDs in a project-level `pmcp.toml` (`[[workbook.workbooks]]` source â bundle_id), and the three CLI subcommands resolve sources through it â no lighthouse paths
 
 **Plans**: 6 plans
 
 Plans:
 **Wave 0**
 
-- [x] 94-00-PLAN.md — library seams in pmcp-workbook-compiler: PUBLIC read_workbook_version + prepare_candidate (gated-update candidate facade) + write_gate_marker (hash-covered ungated marker channel) — exposes existing internals only (WBCL-01 gated half, WBCL-03 marker)
+- [x] 94-00-PLAN.md â library seams in pmcp-workbook-compiler: PUBLIC read_workbook_version + prepare_candidate (gated-update candidate facade) + write_gate_marker (hash-covered ungated marker channel) â exposes existing internals only (WBCL-01 gated half, WBCL-03 marker)
 
 **Wave 1**
 
-- [x] 94-01-PLAN.md — pmcp.toml parser (PmcpToml load/resolve/all_entries/validate) + cargo-pmcp→compiler dep edge (WBCL-04)
+- [x] 94-01-PLAN.md â pmcp.toml parser (PmcpToml load/resolve/all_entries/validate) + cargo-pmcpâcompiler dep edge (WBCL-04)
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [x] 94-02-PLAN.md — `workbook` subcommand group + main.rs wiring + `lint` handler with text/json + errors-fail exit codes (WBCL-02, D-04/D-09/D-10)
+- [x] 94-02-PLAN.md â `workbook` subcommand group + main.rs wiring + `lint` handler with text/json + errors-fail exit codes (WBCL-02, D-04/D-09/D-10)
 
 **Wave 3** *(blocked on Wave 0 + Wave 2 completion)*
 
-- [x] 94-03-PLAN.md — `compile` handler: seed/gated lane (prepare_candidate→gate::gate→block-or-promote), gate-before-write, mandatory --approver, --accept flow, compile-all (WBCL-01/04, D-06/D-07)
-- [x] 94-04-PLAN.md — `emit` handler: ungated bundle + loud banner + HASH-COVERED evidence gated:false marker via write_gate_marker (WBCL-03, D-08)
+- [x] 94-03-PLAN.md â `compile` handler: seed/gated lane (prepare_candidateâgate::gateâblock-or-promote), gate-before-write, mandatory --approver, --accept flow, compile-all (WBCL-01/04, D-06/D-07)
+- [x] 94-04-PLAN.md â `emit` handler: ungated bundle + loud banner + HASH-COVERED evidence gated:false marker via write_gate_marker (WBCL-03, D-08)
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
-- [x] 94-05-PLAN.md — end-to-end CLI integration test (incl. hash-covered emit marker) + purity-gate confirmation + runnable example (WBCL-01/02/03/04)
+- [x] 94-05-PLAN.md â end-to-end CLI integration test (incl. hash-covered emit marker) + purity-gate confirmation + runnable example (WBCL-01/02/03/04)
 
 ### Phase 95: Shape A Binary `pmcp-workbook-server`
 
-**Goal**: A `pmcp-workbook-server` pure-config binary stands up a live MCP server from a compiled bundle alone, with no user Rust — mirroring `pmcp-sql-server` field-for-field (lib `run`/`serve` + thin `main.rs` shim, `RunError` → non-zero exit), selecting a `BundleSource` from CLI args.
+**Goal**: A `pmcp-workbook-server` pure-config binary stands up a live MCP server from a compiled bundle alone, with no user Rust â mirroring `pmcp-sql-server` field-for-field (lib `run`/`serve` + thin `main.rs` shim, `RunError` â non-zero exit), selecting a `BundleSource` from CLI args.
 **Depends on**: Phase 92 (toolkit module + `BundleSource`) and Phase 94 (stable `pmcp.toml` contract)
 **Requirements**: WBCL-06
 **Success Criteria** (what must be TRUE):
 
-  1. Running `pmcp-workbook-server --bundle-dir <dir> --bundle-id <id>` (optionally `--http`) stands up a live MCP server whose five tools are served entirely from the compiled bundle — zero user Rust written
-  2. The binary selects a `BundleSource` from CLI args, runs the boot integrity gate, and surfaces a load/integrity failure as a typed `RunError` → non-zero exit (matching `pmcp-sql-server`'s behavior)
-  3. The published binary (slot 9a) links only `pmcp-server-toolkit[workbook]` + `pmcp-workbook-runtime` — the purity gate confirms no reader in its tree
+  1. Running `pmcp-workbook-server --bundle-dir <dir> --bundle-id <id>` (optionally `--http`) stands up a live MCP server whose five tools are served entirely from the compiled bundle â zero user Rust written
+  2. The binary selects a `BundleSource` from CLI args, runs the boot integrity gate, and surfaces a load/integrity failure as a typed `RunError` â non-zero exit (matching `pmcp-sql-server`'s behavior)
+  3. The published binary (slot 9a) links only `pmcp-server-toolkit[workbook]` + `pmcp-workbook-runtime` â the purity gate confirms no reader in its tree
 
 **Plans**: 2 plans
 Plans:
 **Wave 1**
 
-- [x] 95-01-PLAN.md — Re-skin the pmcp-sql-server crate as pmcp-workbook-server: lib (run/serve/run_serving + RunError incl. BundleIdMismatch), cli Args (--bundle-dir/--bundle-id/--http loopback), main shim, build_server seam (LocalDirSource + --bundle-id assert + try_with_workbook_bundle), workspace registration, runnable example over the synthetic golden bundle
+- [x] 95-01-PLAN.md â Re-skin the pmcp-sql-server crate as pmcp-workbook-server: lib (run/serve/run_serving + RunError incl. BundleIdMismatch), cli Args (--bundle-dir/--bundle-id/--http loopback), main shim, build_server seam (LocalDirSource + --bundle-id assert + try_with_workbook_bundle), workspace registration, runnable example over the synthetic golden bundle
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [x] 95-02-PLAN.md — Test trio (assemble surface / ephemeral-port HTTP smoke / mcp-tester parity through the real binary path) + proptest fuzz of the --bundle-id fail-closed guard + purity-check assertion for the reader-free served cone + CLAUDE.md slot-9a publish-order wiring
+- [x] 95-02-PLAN.md â Test trio (assemble surface / ephemeral-port HTTP smoke / mcp-tester parity through the real binary path) + proptest fuzz of the --bundle-id fail-closed guard + purity-check assertion for the reader-free served cone + CLAUDE.md slot-9a publish-order wiring
 
 ### Phase 96: Shape B Scaffold + Dialect-Version Declaration + Generalization Validation
 
-**Goal**: `cargo pmcp new --kind workbook-server` scaffolds a thin binary over `BundleSource` + the served-tool toolkit module (Shape B); workbooks declare the dialect version they target (forward-compatible evolution); and the generalization gates — a second, non-lighthouse workbook compiling and serving end-to-end, plus an Excel-quirk fixture corpus — prove the manifest is truly synth-driven with no per-workbook Rust and no privileged single output.
+**Goal**: `cargo pmcp new --kind workbook-server` scaffolds a thin binary over `BundleSource` + the served-tool toolkit module (Shape B); workbooks declare the dialect version they target (forward-compatible evolution); and the generalization gates â a second, non-lighthouse workbook compiling and serving end-to-end, plus an Excel-quirk fixture corpus â prove the manifest is truly synth-driven with no per-workbook Rust and no privileged single output.
 **Depends on**: Phase 95 (the scaffold targets the Shape A wiring)
 **Requirements**: WBCL-05, WBDL-02, WBEX-01, WBEX-02
 **Success Criteria** (what must be TRUE):
 
-  1. A developer can run `cargo pmcp new --kind workbook-server` to scaffold a runnable crate (Cargo.toml + `main.rs` using `EmbeddedSource` + sample `pmcp.toml` + sample bundle) — a thin shell over the toolkit module, mirroring `--kind sql-server`
-  2. A workbook declares the dialect version it targets, and the compiler validates that declaration — enabling forward-compatible dialect evolution
-  3. **GENERALIZATION GATE (WBEX-01):** a second, non-lighthouse example workbook compiles and serves end-to-end through the SDK path, and its server's `get_manifest` / `tools/list` schema reflects ITS OWN inputs with zero shared Rust and no privileged single output — proving the manifest-driven §5 fix generalized
-  4. ✅ An Excel-quirk fixture corpus (1900 leap-year, empty-cell coercion, error propagation, half-rounding boundaries) verifies reconcile determinism beyond the single golden case (WBEX-02, 96-05: 8 quirks across both layers — scalar_eval unit tests + penny-reconcile mini fixtures graded via within_tol)
+  1. A developer can run `cargo pmcp new --kind workbook-server` to scaffold a runnable crate (Cargo.toml + `main.rs` using `EmbeddedSource` + sample `pmcp.toml` + sample bundle) â a thin shell over the toolkit module, mirroring `--kind sql-server`
+  2. A workbook declares the dialect version it targets, and the compiler validates that declaration â enabling forward-compatible dialect evolution
+  3. **GENERALIZATION GATE (WBEX-01):** a second, non-lighthouse example workbook compiles and serves end-to-end through the SDK path, and its server's `get_manifest` / `tools/list` schema reflects ITS OWN inputs with zero shared Rust and no privileged single output â proving the manifest-driven Â§5 fix generalized
+  4. â An Excel-quirk fixture corpus (1900 leap-year, empty-cell coercion, error propagation, half-rounding boundaries) verifies reconcile determinism beyond the single golden case (WBEX-02, 96-05: 8 quirks across both layers â scalar_eval unit tests + penny-reconcile mini fixtures graded via within_tol)
 
 **Plans**: 5 plans
 
-- [x] 96-01-PLAN.md — WBDL-02 dialect-version declaration: pmcp_dialect_version reader + semver-compat (fail-closed) + dialect consts/spec drift guard + fuzz/property ✅ (commits 14047806, 45e4fa4f, 4702a329)
-- [x] 96-02-PLAN.md — WBCL-05 Shape B scaffold: `cargo pmcp new --kind workbook-server` template + dispatch + purity-safe Cargo.toml + EMBEDDED publish-safe assets (include_dir!) + lib seam + drift-lock/bundle-bytes/version-drift golden tests + scaffold-build & packaging smokes + example ✅ (commits 91933535, 736a1266, cf670b6b)
-- [x] 96-03-PLAN.md — WBEX critical-path spike: reusable #[cfg(test)] rust_xlsxwriter fixture author (Excel identity) + 1900-leap-year disposition spike
-- [x] 96-04-PLAN.md — WBEX-01 generalization gate: synthetic loan/mortgage rate-tier second workbook compiles via the generic driver + serves its OWN get_manifest/tools/list schema (loan keys present, tax keys absent, DISJOINT) behind the same five generic tool names; reemit_loan 9-assertion served-schema proof (incl. production-refusal T-96-10) + the in_* input-naming convention (mirrors out_*) ✅ (commits 6b622e95, a7529369)
-- [x] 96-05-PLAN.md — WBEX-02 Excel-quirk corpus: 8 quirks in BOTH layers — scalar_eval unit tests (excel_round source of truth; 1900-leap >59/+1 components per SPIKE, no DATE) + mini penny-reconcile fixtures graded by retrieving the recomputed value + cached oracle through within_tol (cannot pass on compile-success alone); 3 of 4 named quirks have a reconcile fixture (error propagation is the scalar_eval-only stand-in — runtime Div clamps NaN->0 / preflight short-circuit); production-refusal spot check + quirk->WBEX-02 traceability map ✅ (commits e3cce105, 7fa7458f)
+- [x] 96-01-PLAN.md â WBDL-02 dialect-version declaration: pmcp_dialect_version reader + semver-compat (fail-closed) + dialect consts/spec drift guard + fuzz/property â (commits 14047806, 45e4fa4f, 4702a329)
+- [x] 96-02-PLAN.md â WBCL-05 Shape B scaffold: `cargo pmcp new --kind workbook-server` template + dispatch + purity-safe Cargo.toml + EMBEDDED publish-safe assets (include_dir!) + lib seam + drift-lock/bundle-bytes/version-drift golden tests + scaffold-build & packaging smokes + example â (commits 91933535, 736a1266, cf670b6b)
+- [x] 96-03-PLAN.md â WBEX critical-path spike: reusable #[cfg(test)] rust_xlsxwriter fixture author (Excel identity) + 1900-leap-year disposition spike
+- [x] 96-04-PLAN.md â WBEX-01 generalization gate: synthetic loan/mortgage rate-tier second workbook compiles via the generic driver + serves its OWN get_manifest/tools/list schema (loan keys present, tax keys absent, DISJOINT) behind the same five generic tool names; reemit_loan 9-assertion served-schema proof (incl. production-refusal T-96-10) + the in_* input-naming convention (mirrors out_*) â (commits 6b622e95, a7529369)
+- [x] 96-05-PLAN.md â WBEX-02 Excel-quirk corpus: 8 quirks in BOTH layers â scalar_eval unit tests (excel_round source of truth; 1900-leap >59/+1 components per SPIKE, no DATE) + mini penny-reconcile fixtures graded by retrieving the recomputed value + cached oracle through within_tol (cannot pass on compile-success alone); 3 of 4 named quirks have a reconcile fixture (error propagation is the scalar_eval-only stand-in â runtime Div clamps NaN->0 / preflight short-circuit); production-refusal spot check + quirk->WBEX-02 traceability map â (commits e3cce105, 7fa7458f)
 
-## Progress — v2.3 Milestone
+## Progress â v2.3 Milestone
 
-**Execution order:** Phase 91 (runtime + purity gate + dialect) → Phase 92 (BundleSource + served-tool module, freezes the bundle contract) → Phase 93 (compiler + §5 fixes + promote gate) → Phase 94 (CLI + `pmcp.toml`) → Phase 95 (Shape A binary) → Phase 96 (Shape B scaffold + dialect-version + generalization gates). Strictly sequential: each phase's output is the next phase's dependency (runtime ← compiler/toolkit; contract frozen before compiler re-cut; CLI/binary/scaffold over the now-stable runtime+compiler).
+**Execution order:** Phase 91 (runtime + purity gate + dialect) â Phase 92 (BundleSource + served-tool module, freezes the bundle contract) â Phase 93 (compiler + Â§5 fixes + promote gate) â Phase 94 (CLI + `pmcp.toml`) â Phase 95 (Shape A binary) â Phase 96 (Shape B scaffold + dialect-version + generalization gates). Strictly sequential: each phase's output is the next phase's dependency (runtime â compiler/toolkit; contract frozen before compiler re-cut; CLI/binary/scaffold over the now-stable runtime+compiler).
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 91. Workbook Runtime + Purity Gate + Dialect | 3/3 | Complete    | 2026-06-10 |
 | 92. BundleSource + Served-Tool Toolkit Module | 7/7 | Complete    | 2026-06-11 |
-| 93. Workbook Compiler + §5 Fixes + Promote Gate | 7/7 | Complete    | 2026-06-13 |
+| 93. Workbook Compiler + Â§5 Fixes + Promote Gate | 7/7 | Complete    | 2026-06-13 |
 | 94. CLI Subcommands + `pmcp.toml` | 6/6 | Complete    | 2026-06-14 |
 | 95. Shape A Binary `pmcp-workbook-server` | 2/2 | Complete    | 2026-06-14 |
 | 96. Shape B Scaffold + Dialect-Version + Generalization | 5/5 | Complete    | 2026-06-15 |
 
-## Phase Details — v2.4 (cargo-pmcp deploy)
+## Phase Details â v2.4 (cargo-pmcp deploy)
 
-### Phase 98: `cargo pmcp deploy` — stack.ts Regeneration Guard + Config-Driven Metadata
+### Phase 98: `cargo pmcp deploy` â stack.ts Regeneration Guard + Config-Driven Metadata
 
 **Goal**: `cargo pmcp deploy` stops silently overwriting an operator-curated `deploy/lib/stack.ts`, and curated template metadata (`mcp:serverType`, `mcp:snapshotBaked`) becomes reproducible-from-config so it survives any regeneration. Closes the defect diagnosed in `.planning/debug/deploy-overwrites-stack-ts.md`: both deploy targets do an unconditional `std::fs::write(stack.ts)` (no exists-guard, no diff, no opt-out), and `mcp:serverType`/`mcp:snapshotBaked` cannot be driven from `.pmcp/deploy.toml` (serverType hardcoded `'custom'` for custom/pmcp.toml servers; snapshotBaked has zero representation).
 
@@ -1918,18 +1918,18 @@ Plans:
 **Success Criteria** (what must be TRUE):
 
   1. Running `cargo pmcp deploy` against a directory with a pre-existing, operator-edited `deploy/lib/stack.ts` leaves that file byte-for-byte unchanged on BOTH targets (pmcp-run + aws-lambda); IAM validation still runs and a "preserved existing stack.ts" notice is printed
-  2. Passing `--regenerate-stack` (or `--force`) re-renders `stack.ts` from the template as before — the opt-out is explicit, not the default
-  3. A `[metadata]` block in `.pmcp/deploy.toml` (`server_type = "graph-rag"`, `snapshot_baked = true`) flows through `render_stack_ts` / `McpMetadata` / `to_cdk_context` so the synthesized `stack.ts` advertises `mcp:serverType:'graph-rag'` + `mcp:snapshotBaked:'true'` — reproducible from config, surviving a regeneration
+  2. Passing `--regenerate-stack` (or `--force`) re-renders `stack.ts` from the template as before â the opt-out is explicit, not the default
+  3. A `[metadata]` block in `.pmcp/deploy.toml` (`server_type = "graph-rag"`, `snapshot_baked = true`) flows through `render_stack_ts` / `McpMetadata` / `to_cdk_context` so the synthesized `stack.ts` advertises `mcp:serverType:'graph-rag'` + `mcp:snapshotBaked:'true'` â reproducible from config, surviving a regeneration
   4. ALWAYS coverage present and green: exists-guard unit tests on both targets, config-survives-render unit/property tests, golden-file update in `tests/backward_compat_stack_ts.rs` for the new `mcp:snapshotBaked` line, `--regenerate-stack` documented in `cargo-pmcp/docs/commands/deploy.md`; `make quality-gate` passes
 
 **Source**: debug session `.planning/debug/deploy-overwrites-stack-ts.md` (root cause + recommended fix direction recorded under Resolution)
 
 **Plans:** 4/4 plans complete
 
-- [x] 98-01-PLAN.md — Config contract (`[metadata]` block + `regenerate_stack` runtime flag on DeployConfig) + RED regression tests reproducing the overwrite + config-metadata defects [DSTK-02] ✅ 2026-06-16
-- [x] 98-02-PLAN.md — DSTK-01 exists-guard + `--regenerate-stack`/`--force` flag on BOTH targets (shared guarded-write helper, IAM validation preserved, "preserved existing stack.ts" notice) [DSTK-01]
-- [x] 98-03-PLAN.md — DSTK-02 + DSTK-03 config-driven metadata (`McpMetadata.snapshot_baked` + `server_type` override → `to_cdk_context` `mcp:snapshotBaked` → template literal) [DSTK-02, DSTK-03]
-- [x] 98-04-PLAN.md — DSTK-04 ALWAYS coverage (property test, `[metadata]` fuzz target, golden-file update, runnable example, `--regenerate-stack` + `[metadata]` docs) + `make quality-gate` green [DSTK-04]
+- [x] 98-01-PLAN.md â Config contract (`[metadata]` block + `regenerate_stack` runtime flag on DeployConfig) + RED regression tests reproducing the overwrite + config-metadata defects [DSTK-02] â 2026-06-16
+- [x] 98-02-PLAN.md â DSTK-01 exists-guard + `--regenerate-stack`/`--force` flag on BOTH targets (shared guarded-write helper, IAM validation preserved, "preserved existing stack.ts" notice) [DSTK-01]
+- [x] 98-03-PLAN.md â DSTK-02 + DSTK-03 config-driven metadata (`McpMetadata.snapshot_baked` + `server_type` override â `to_cdk_context` `mcp:snapshotBaked` â template literal) [DSTK-02, DSTK-03]
+- [x] 98-04-PLAN.md â DSTK-04 ALWAYS coverage (property test, `[metadata]` fuzz target, golden-file update, runnable example, `--regenerate-stack` + `[metadata]` docs) + `make quality-gate` green [DSTK-04]
 
 ### Phase 99: Workbook-Crate Cognitive-Complexity Reduction (PMAT gate debt)
 
@@ -1940,8 +1940,23 @@ Plans:
 **Success Criteria** (what must be TRUE):
 
   1. `pmat quality-gate --fail-on-violation --checks complexity` exits 0 with ZERO violations across the workspace
-  2. All 21 flagged functions are refactored (the 5 over the cog-50 hard cap — `render_xlsx` 93, `classify_cell_roles` 74, `eval_expr` 58, `ingest` 57, `tokenize` 52 — by genuine decomposition); no production crate is added to `.pmatignore`; no `#[allow(clippy::cognitive_complexity)]` is relied on to clear the PMAT gate
-  3. No behavior regressions — full workspace test suite green (golden/reconcile/quirk fixtures, dialect linter, provenance gate) and `make quality-gate` green
+  2. All 21 flagged functions are refactored (the 5 over the cog-50 hard cap â `render_xlsx` 93, `classify_cell_roles` 74, `eval_expr` 58, `ingest` 57, `tokenize` 52 â by genuine decomposition); no production crate is added to `.pmatignore`; no `#[allow(clippy::cognitive_complexity)]` is relied on to clear the PMAT gate
+  3. No behavior regressions â full workspace test suite green (golden/reconcile/quirk fixtures, dialect linter, provenance gate) and `make quality-gate` green
   4. PR #279's CI complexity gate goes green on the next run
+
+**Plans:** 11 plans (10 parallel refactor plans in wave 1, 1 gate-closure verification in wave 2)
+
+Plans:
+- [ ] 99-01-PLAN.md — runtime render_xlsx (cog 93) decomposition
+- [ ] 99-02-PLAN.md — runtime eval_expr (58) + INDEX/SEARCH (24/31)
+- [ ] 99-03-PLAN.md — runtime bundle_loader::load (28)
+- [ ] 99-04-PLAN.md — compiler classify_cell_roles (74) + dependency_order (24)
+- [ ] 99-05-PLAN.md — compiler formula tokenizer: tokenize (52) + lex_quoted_sheet_ref (33) + scan_atom_run (30)
+- [ ] 99-06-PLAN.md — compiler ingest (57) + references_external_workbook (31)
+- [ ] 99-07-PLAN.md — compiler provenance: parse_calc_pr (44) + parse_app_props (39) + gate_inner (29)
+- [ ] 99-08-PLAN.md — compiler gate corpus: derive_case_grid (34) + no_seeded_value_outside_allowed (46)
+- [ ] 99-09-PLAN.md — compiler extract_function_tokens (29) + author_xlsx (29) + dag walk (25)
+- [ ] 99-10-PLAN.md — server-toolkit validate_input (33)
+- [ ] 99-11-PLAN.md — gate-closure verification (CPLX-04): zero-violation PMAT gate + full tests + make quality-gate
 
 **Source**: PR #279 CI failure (21 PMAT complexity violations); empirical PMAT-allow behavior in `.planning/phases/75-fix-pmat-issues/pmat-allow-behavior.md` (D-10-B)
