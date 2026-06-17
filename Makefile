@@ -1,6 +1,12 @@
 # Rust MCP SDK Makefile with pmat quality standards
 # Zero tolerance for technical debt
 
+# Recipes use bashisms (`set -euo pipefail`, `printf`, process substitution).
+# Make defaults SHELL to /bin/sh (dash on Ubuntu CI), which rejects
+# `set -o pipefail` — pin to bash so the fail-closed purity/quality recipes run
+# identically in CI and locally.
+SHELL := /bin/bash
+
 CARGO = cargo
 RUSTFLAGS = -D warnings
 RUST_LOG ?= debug
