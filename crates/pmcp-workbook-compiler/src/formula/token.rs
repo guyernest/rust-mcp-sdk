@@ -362,47 +362,57 @@ fn skip_quoted_segment(chars: &[char], start: usize) -> usize {
 /// `$`-anchors) is folded into ONE [`Token::CellRef`] — the `:` of a range is
 /// NOT consumed here.
 fn lex_quoted_sheet_ref(chars: &[char], start: usize) -> Result<(Token, usize), LexError> {
-    let mut i = start + 1; // past opening `'`
-    let mut sheet = String::from("'");
-    let mut closed = false;
-    while i < chars.len() {
-        let c = chars[i];
-        if c == '\'' {
-            if i + 1 < chars.len() && chars[i + 1] == '\'' {
-                sheet.push('\'');
-                sheet.push('\'');
-                i += 2;
-            } else {
-                sheet.push('\'');
-                i += 1;
-                closed = true;
-                break;
-            }
-        } else {
-            sheet.push(c);
-            i += 1;
-        }
-    }
-    if !closed {
-        return Err(LexError::UnterminatedQuotedSheet);
-    }
+    // Read the `'…'` sheet name (with `''` escaping) into the lexeme.
+    let (mut lexeme, mut i) = read_quoted_sheet_name(chars, start)?;
+
     // Expect `!addr`; if absent, this is a bare quoted name (still emit CellRef
     // text so the parser can decide). Consume `!` + an address run (no `:`).
-    let mut lexeme = sheet;
     if i < chars.len() && chars[i] == '!' {
         lexeme.push('!');
-        i += 1;
-        while i < chars.len() {
-            let c = chars[i];
-            if c.is_ascii_alphanumeric() || c == '_' || c == '$' {
-                lexeme.push(c);
-                i += 1;
-            } else {
-                break;
-            }
-        }
+        i = scan_addr_run(chars, i + 1, &mut lexeme);
     }
     Ok((Token::CellRef(lexeme), i))
+}
+
+/// Read a `'…'` quoted sheet name starting at the opening `'`, treating `''` as
+/// an escaped single quote. Returns the lexeme built so far (including BOTH
+/// quotes) and the index just past the closing `'`. Errors if never closed.
+fn read_quoted_sheet_name(chars: &[char], start: usize) -> Result<(String, usize), LexError> {
+    let mut i = start + 1; // past opening `'`
+    let mut sheet = String::from("'");
+    while i < chars.len() {
+        let c = chars[i];
+        if c != '\'' {
+            sheet.push(c);
+            i += 1;
+            continue;
+        }
+        // A doubled `''` is an escaped quote; a lone `'` closes the name.
+        if i + 1 < chars.len() && chars[i + 1] == '\'' {
+            sheet.push_str("''");
+            i += 2;
+        } else {
+            sheet.push('\'');
+            return Ok((sheet, i + 1));
+        }
+    }
+    Err(LexError::UnterminatedQuotedSheet)
+}
+
+/// Append the `[A-Za-z0-9_$]` address run (no `:`) starting at `start` onto
+/// `lexeme`, returning the index just past the run.
+fn scan_addr_run(chars: &[char], start: usize, lexeme: &mut String) -> usize {
+    let mut i = start;
+    while i < chars.len() {
+        let c = chars[i];
+        if c.is_ascii_alphanumeric() || c == '_' || c == '$' {
+            lexeme.push(c);
+            i += 1;
+        } else {
+            break;
+        }
+    }
+    i
 }
 
 /// Lex an Excel error literal `#…` (`#REF!`, `#N/A`, `#VALUE!`, `#DIV/0!`,
@@ -476,33 +486,55 @@ fn scan_atom_run(chars: &[char], start: usize) -> (usize, bool, bool) {
     let mut has_dollar = false;
     let mut all_numeric_shape = true;
     while i < chars.len() {
-        let c = chars[i];
-        if c == '$' {
-            has_dollar = true;
-            all_numeric_shape = false;
-            i += 1;
-        } else if c.is_ascii_digit() || c == '.' {
-            i += 1;
-        } else if (c == 'E' || c == 'e')
-            && all_numeric_shape
-            && i > start
-            && is_scientific_exp(chars, i)
-        {
-            // Scientific exponent `1.5E3` / `1.5E+3` / `1.5e-2`: consume the `E`
-            // and an optional sign; the digit run continues on next iterations.
-            if chars[i + 1] == '+' || chars[i + 1] == '-' {
-                i += 2;
-            } else {
-                i += 1;
-            }
-        } else if c.is_ascii_alphanumeric() || c == '_' {
-            all_numeric_shape = false;
-            i += 1;
-        } else {
-            break;
+        match classify_atom_char(chars, i, start, all_numeric_shape) {
+            AtomStep::Stop => break,
+            AtomStep::Advance { step, dollar, breaks_numeric } => {
+                has_dollar |= dollar;
+                all_numeric_shape &= !breaks_numeric;
+                i += step;
+            },
         }
     }
     (i, has_dollar, all_numeric_shape)
+}
+
+/// One step of the atom-run scan: stop, or advance `step` indices while
+/// recording whether a `$` was seen and whether the pure-numeric shape is broken.
+enum AtomStep {
+    /// The char does not continue the atom run.
+    Stop,
+    /// Consume `step` indices; `dollar`/`breaks_numeric` update the run flags.
+    Advance {
+        /// How many indices this step consumes (2 for a signed sci exponent).
+        step: usize,
+        /// Whether this step saw a `$` anchor.
+        dollar: bool,
+        /// Whether this step disqualifies the run from being a pure number.
+        breaks_numeric: bool,
+    },
+}
+
+/// Classify the char at `i` within an atom run beginning at `start`, given
+/// whether the run is still numeric-shaped. Mirrors the original accept ladder
+/// (`$`, digit/`.`, scientific `E`, alnum/`_`, else stop) exactly.
+fn classify_atom_char(chars: &[char], i: usize, start: usize, numeric: bool) -> AtomStep {
+    let c = chars[i];
+    if c == '$' {
+        return AtomStep::Advance { step: 1, dollar: true, breaks_numeric: true };
+    }
+    if c.is_ascii_digit() || c == '.' {
+        return AtomStep::Advance { step: 1, dollar: false, breaks_numeric: false };
+    }
+    if (c == 'E' || c == 'e') && numeric && i > start && is_scientific_exp(chars, i) {
+        // Scientific exponent `1.5E3` / `1.5E+3` / `1.5e-2`: consume the `E` plus
+        // an optional sign; the digit run continues on next iterations.
+        let step = if chars[i + 1] == '+' || chars[i + 1] == '-' { 2 } else { 1 };
+        return AtomStep::Advance { step, dollar: false, breaks_numeric: false };
+    }
+    if c.is_ascii_alphanumeric() || c == '_' {
+        return AtomStep::Advance { step: 1, dollar: false, breaks_numeric: true };
+    }
+    AtomStep::Stop
 }
 
 /// Is the `E`/`e` at index `i` a scientific exponent marker (followed by a digit
