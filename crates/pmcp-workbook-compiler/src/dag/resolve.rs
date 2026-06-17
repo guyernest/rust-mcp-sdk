@@ -137,29 +137,58 @@ fn walk(
     keys: &mut Vec<String>,
 ) -> Result<(), DagBuildError> {
     match expr {
+        Expr::Ref(_) | Expr::Range(_) | Expr::Name(_) => {
+            collect_leaf_refs(expr, current_sheet, names, keys)
+        },
+        Expr::BinaryOp { .. } | Expr::UnaryOp { .. } | Expr::Call { .. } => {
+            walk_children(expr, current_sheet, names, keys)
+        },
+        Expr::Number(_) | Expr::Str(_) | Expr::Bool(_) | Expr::ErrorLit(_) => Ok(()),
+    }
+}
+
+/// Resolve the three leaf reference forms ([`Expr::Ref`], [`Expr::Range`],
+/// [`Expr::Name`]) to canonical `cell_key`s, appending them to `keys`. Other
+/// variants are unreachable here (the [`walk`] dispatch guarantees the form).
+fn collect_leaf_refs(
+    expr: &Expr,
+    current_sheet: &str,
+    names: &[DefinedName],
+    keys: &mut Vec<String>,
+) -> Result<(), DagBuildError> {
+    match expr {
         Expr::Ref(reference) => {
             let (sheet, addr) = split_ref(reference, current_sheet);
             keys.push(cell_key(&sheet, &addr));
         },
-        Expr::Range(range) => {
-            keys.extend(expand_range_keys(range, current_sheet)?);
-        },
-        Expr::Name(name) => {
-            keys.extend(resolve_name(name, names, current_sheet)?);
-        },
+        Expr::Range(range) => keys.extend(expand_range_keys(range, current_sheet)?),
+        Expr::Name(name) => keys.extend(resolve_name(name, names, current_sheet)?),
+        _ => {},
+    }
+    Ok(())
+}
+
+/// Recurse into the operand-bearing variants ([`Expr::BinaryOp`],
+/// [`Expr::UnaryOp`], [`Expr::Call`]), walking each child. Other variants are
+/// unreachable here (the [`walk`] dispatch guarantees the form).
+fn walk_children(
+    expr: &Expr,
+    current_sheet: &str,
+    names: &[DefinedName],
+    keys: &mut Vec<String>,
+) -> Result<(), DagBuildError> {
+    match expr {
         Expr::BinaryOp { left, right, .. } => {
             walk(left, current_sheet, names, keys)?;
             walk(right, current_sheet, names, keys)?;
         },
-        Expr::UnaryOp { operand, .. } => {
-            walk(operand, current_sheet, names, keys)?;
-        },
+        Expr::UnaryOp { operand, .. } => walk(operand, current_sheet, names, keys)?,
         Expr::Call { args, .. } => {
             for arg in args {
                 walk(arg, current_sheet, names, keys)?;
             }
         },
-        Expr::Number(_) | Expr::Str(_) | Expr::Bool(_) | Expr::ErrorLit(_) => {},
+        _ => {},
     }
     Ok(())
 }
