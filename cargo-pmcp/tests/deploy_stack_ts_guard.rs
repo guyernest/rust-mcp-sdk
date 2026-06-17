@@ -195,20 +195,36 @@ fn absent_metadata_block_round_trips_byte_identically() {
     );
 }
 
-/// Test C — config-survives-render. EXPECTED RED until Plan 98-03 lands the
-/// metadata→render plumbing (DSTK-02/DSTK-03).
+/// Test C — config-survives-render (DSTK-02/DSTK-03).
 ///
-/// Reproduction: with `regenerate_stack = true` and a `[metadata]` block set,
-/// the rendered `stack.ts` / synth context must advertise
-/// `mcp:serverType = graph-rag` and `mcp:snapshotBaked = true`. FAILS today
-/// because the render path (`render_stack_ts_for_deploy`) threads only IAM.
+/// **DSTK-02/03 status:** SATISFIED in Plan 98-03. `render_stack_ts_for_deploy`
+/// now threads `MetadataConfig` → `StackMetadata` into both template branches,
+/// `McpMetadata::apply_config_overrides` feeds the pmcp-run synth context, and
+/// `McpMetadata::to_cdk_context` emits `mcp:snapshotBaked`. A `[metadata]`
+/// block with `server_type = "graph-rag"`, `snapshot_baked = true` reproduces
+/// both literals into the rendered `stack.ts`. This is proven by in-crate tests
+/// that can reach the bin-only `pub(crate)` renderer:
+///   - `commands::deploy::init::phase98_metadata_render_tests::{
+///       pmcp_run_render_reproduces_config_metadata_literals,
+///       aws_lambda_render_bakes_config_metadata_literals,
+///       absent_metadata_leaves_render_unchanged}` (the render path), and
+///   - `deployment::metadata::tests::{apply_config_overrides_replaces_server_type_and_sets_snapshot_baked,
+///       to_cdk_context_snapshot_baked_is_conditional,
+///       config_server_type_override_surfaces_in_cdk_context}` (the synth seam).
 ///
-/// `#[ignore]`: the render entry point is `pub(crate)` in the bin-only tree
-/// (see module doc). Plan 98-03 threads `MetadataConfig` through it and
-/// un-ignores this test.
+/// **Why this integration-level test stays `#[ignore]`:** the render entry point
+/// (`render_stack_ts_for_deploy`) and `InitCommand::render_stack_ts` are
+/// `pub(crate)` inside the bin-only `commands::deploy::init` tree the lib does
+/// not re-export (the same lib-boundary documented in the module header and in
+/// `backward_compat_stack_ts.rs`). An integration test in this external `tests/`
+/// crate therefore cannot invoke the real renderer. The in-crate tests above ARE
+/// the live DSTK-02/03 proof; this test documents the operator-facing
+/// reproduction. Plan 98-04 decides whether to expose a lib-public render entry
+/// point and flip this to a live black-box assertion.
 #[test]
-#[ignore = "RED until Plan 98-03 (DSTK-02/DSTK-03): render path is bin-only pub(crate) and \
-            threads only IAM today; 98-03 threads MetadataConfig and un-ignores this"]
+#[ignore = "DSTK-02/03 satisfied in 98-03 via in-crate render + cdk-context tests (see doc); \
+            the renderer is bin-only pub(crate) so this external integration test cannot reach \
+            it — 98-04 decides on a lib-public surface to flip this live"]
 fn config_metadata_survives_into_rendered_stack_ts() {
     let tmp = tempfile::tempdir().expect("create tempdir");
     let mut cfg = config_at(tmp.path().to_path_buf(), true);

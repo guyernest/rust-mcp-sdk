@@ -101,8 +101,13 @@ pub async fn deploy_to_pmcp_run(
     let deploy_dir = config.project_root.join("deploy");
     let cdk_out = deploy_dir.join("cdk.out");
 
-    // Step 0: Extract MCP metadata for the CloudFormation template
-    let metadata = extract_metadata_with_log(&config.project_root);
+    // Step 0: Extract MCP metadata for the CloudFormation template, then apply
+    // the operator `[metadata]` override (DSTK-02/DSTK-03) so config-declared
+    // server_type / snapshot_baked reach the synth context.
+    let metadata = extract_metadata_with_log(&config.project_root).map(|mut m| {
+        m.apply_config_overrides(&config.metadata);
+        m
+    });
 
     // Step 1: Synthesize CloudFormation template with metadata context
     println!("📝 Synthesizing CloudFormation template...");
@@ -737,6 +742,7 @@ fn validate_and_regenerate_stack_ts(config: &DeployConfig) -> Result<()> {
         &config.target.target_type,
         &config.server.name,
         &config.iam,
+        &config.metadata,
     );
     // DSTK-01: skip the write (preserving an operator-curated stack.ts) unless
     // `--regenerate-stack`/`--force` was passed. IAM validation above always

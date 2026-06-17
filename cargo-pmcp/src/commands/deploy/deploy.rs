@@ -101,6 +101,7 @@ impl DeployExecutor {
             &config.target.target_type,
             &config.server.name,
             &config.iam,
+            &config.metadata,
         );
         // DSTK-01: preserve an operator-curated stack.ts unless
         // `--regenerate-stack`/`--force` was passed. IAM validation already ran

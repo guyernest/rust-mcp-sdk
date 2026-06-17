@@ -20,6 +20,74 @@ pub struct OAuthOptions {
     pub social_providers: Vec<String>,
 }
 
+/// Operator-overridable stack metadata threaded into `render_stack_ts`
+/// (Phase 98, DSTK-02/DSTK-03).
+///
+/// Carries the optional `[metadata]` block from `.pmcp/deploy.toml` so curated
+/// `mcp:serverType` / `mcp:snapshotBaked` literals are reproducible-from-config
+/// and survive a regeneration. An empty carrier (both `None`) renders
+/// byte-identically to the pre-Phase-98 template — the backward-compat contract.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct StackMetadata {
+    /// Override for the `mcp:serverType` template literal (otherwise `'custom'`).
+    pub(crate) server_type: Option<String>,
+    /// When `Some(true)`, bakes `mcp:snapshotBaked: 'true'` into the template.
+    pub(crate) snapshot_baked: Option<bool>,
+}
+
+impl StackMetadata {
+    /// Build a `StackMetadata` from the config `[metadata]` block.
+    pub(crate) fn from_config(meta: &crate::deployment::config::MetadataConfig) -> Self {
+        Self {
+            server_type: meta.server_type.clone(),
+            snapshot_baked: meta.snapshot_baked,
+        }
+    }
+
+    /// The JS fallback literal for `mcpServerType` (config override or `custom`).
+    fn server_type_default(&self) -> &str {
+        self.server_type.as_deref().unwrap_or("custom")
+    }
+
+    /// `true` when the operator opted into `mcp:snapshotBaked`.
+    fn snapshot_baked_enabled(&self) -> bool {
+        self.snapshot_baked.unwrap_or(false)
+    }
+
+    /// `true` when no `[metadata]` override is set (both fields `None`).
+    fn is_empty(&self) -> bool {
+        self.server_type.is_none() && self.snapshot_baked.is_none()
+    }
+}
+
+/// Render the aws-lambda `templateOptions.metadata` block (DSTK-02/DSTK-03).
+///
+/// The aws-lambda template carries no metadata block by default and `cdk deploy`
+/// passes no `-c` context flags (see `run_cdk_deploy`), so the operator's
+/// `[metadata]` literals must be baked directly into the emitted TypeScript.
+/// Returns `""` when no override is set so non-opting servers' output is
+/// byte-identical to the pre-Phase-98 template (backward-compat).
+fn render_aws_lambda_metadata_block(meta: &StackMetadata) -> String {
+    if meta.is_empty() {
+        return String::new();
+    }
+
+    let mut lines = String::from(
+        "\n    // MCP METADATA (config-driven, Phase 98 DSTK-02/DSTK-03)\n\
+         \x20   const metadata: Record<string, any> = {",
+    );
+    lines.push_str(&format!(
+        "\n      'mcp:serverType': '{}',",
+        meta.server_type_default()
+    ));
+    lines.push_str("\n    };");
+    if meta.snapshot_baked_enabled() {
+        lines.push_str("\n    metadata['mcp:snapshotBaked'] = 'true';");
+    }
+    lines.push_str("\n    this.templateOptions.metadata = metadata;\n");
+    lines
+}
+
 pub struct InitCommand {
     project_root: PathBuf,
     region: String,
@@ -529,7 +597,7 @@ app.synth();
         let lib_dir = deploy_dir.join("lib");
         std::fs::create_dir_all(&lib_dir)?;
         let iam = crate::deployment::config::IamConfig::default();
-        let stack_ts = self.render_stack_ts(server_name, &iam);
+        let stack_ts = self.render_stack_ts(server_name, &iam, &StackMetadata::default());
         std::fs::write(lib_dir.join("stack.ts"), stack_ts)?;
         Ok(())
     }
@@ -538,13 +606,33 @@ app.synth();
     ///
     /// Operator-declared `[iam]` is spliced in at a single `{iam_block}` seam
     /// in each template branch; empty config renders as `""` so files with no
-    /// `[iam]` section produce byte-identical output.
+    /// `[iam]` section produce byte-identical output. Operator `[metadata]`
+    /// (`meta`) overrides the `mcp:serverType` default and bakes
+    /// `mcp:snapshotBaked` (Phase 98, DSTK-02/DSTK-03); an empty carrier renders
+    /// byte-identically to the pre-Phase-98 template.
     pub(crate) fn render_stack_ts(
         &self,
         server_name: &str,
         iam: &crate::deployment::config::IamConfig,
+        meta: &StackMetadata,
     ) -> String {
         let iam_block = crate::deployment::render_iam_block(iam);
+        // DSTK-02: the JS fallback for mcpServerType (config override or 'custom').
+        let server_type_default = meta.server_type_default();
+        // DSTK-03: conditional TS line that bakes mcp:snapshotBaked into the
+        // metadata object; "" when not opted in → byte-identical output.
+        let snapshot_baked_block = if meta.snapshot_baked_enabled() {
+            "\n    metadata['mcp:snapshotBaked'] = this.node.tryGetContext('mcp:snapshotBaked') || 'true';"
+        } else {
+            ""
+        };
+        // DSTK-02/03 (aws-lambda): the aws-lambda template has no metadata block
+        // by default. Inject one ONLY when the operator opted in via `[metadata]`,
+        // so non-opting servers' output is byte-identical. Unlike pmcp-run (which
+        // reaches the template via CDK synth context), `cdk deploy` on aws-lambda
+        // passes no `-c` flags (see run_cdk_deploy), so the literals are baked
+        // directly here from the config carrier.
+        let aws_metadata_block = render_aws_lambda_metadata_block(meta);
 
         // For pmcp-run target: Lambda-only stack (no API Gateway)
         // The shared pmcp.run API Gateway handles all routing
@@ -572,7 +660,7 @@ export class McpServerStack extends cdk.Stack {{
     // Platforms read this metadata to provision secrets, add IAM, etc.
     // ========================================================================
     const mcpVersion = this.node.tryGetContext('mcp:version') || '1.0';
-    const mcpServerType = this.node.tryGetContext('mcp:serverType') || 'custom';
+    const mcpServerType = this.node.tryGetContext('mcp:serverType') || '{server_type_default}';
     const mcpServerId = this.node.tryGetContext('mcp:serverId');
     const mcpTemplateId = this.node.tryGetContext('mcp:templateId');
     const mcpTemplateVersion = this.node.tryGetContext('mcp:templateVersion');
@@ -605,7 +693,7 @@ export class McpServerStack extends cdk.Stack {{
       }} catch (e) {{
         metadata['mcp:capabilities'] = mcpCapabilities;
       }}
-    }}
+    }}{snapshot_baked_block}
     this.templateOptions.metadata = metadata;
 
     // Get configuration from context or environment
@@ -719,7 +807,7 @@ import {{ Construct }} from 'constructs';
 export class McpServerStack extends cdk.Stack {{
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {{
     super(scope, id, props);
-
+{aws_metadata_block}
     const serverName = '{server_name}';
 
     // Cost allocation tags — propagate to all resources in this stack
@@ -1802,12 +1890,16 @@ export class McpServerStack extends cdk.Stack {{
 ///
 /// Used by `cargo pmcp deploy` to regenerate the stack file from the user's
 /// current `.pmcp/deploy.toml` before handing off to `cdk deploy`, so declared
-/// `[iam]` permissions land in the synthesised template.
+/// `[iam]` permissions land in the synthesised template. Operator `[metadata]`
+/// (`meta`) reproduces curated `mcp:serverType` / `mcp:snapshotBaked` literals
+/// from config so a regeneration is safe (Phase 98, DSTK-02/DSTK-03).
 pub(crate) fn render_stack_ts_for_deploy(
     target_type: &str,
     server_name: &str,
     iam: &crate::deployment::config::IamConfig,
+    meta: &crate::deployment::config::MetadataConfig,
 ) -> String {
+    let stack_meta = StackMetadata::from_config(meta);
     let init = InitCommand {
         project_root: PathBuf::new(),
         region: String::new(),
@@ -1815,7 +1907,7 @@ pub(crate) fn render_stack_ts_for_deploy(
         oauth_options: OAuthOptions::default(),
         target_type: target_type.to_string(),
     };
-    init.render_stack_ts(server_name, iam)
+    init.render_stack_ts(server_name, iam, &stack_meta)
 }
 
 #[cfg(test)]
@@ -1843,7 +1935,11 @@ mod wave1_stack_ts_tests {
     #[test]
     fn pmcp_run_stack_ts_emits_mcp_role_arn_output() {
         let init = make_init("pmcp-run");
-        let ts = init.render_stack_ts("demo-server", &IamConfig::default());
+        let ts = init.render_stack_ts(
+            "demo-server",
+            &IamConfig::default(),
+            &StackMetadata::default(),
+        );
         assert!(
             ts.contains("new cdk.CfnOutput(this, 'McpRoleArn', {"),
             "pmcp-run stack.ts missing McpRoleArn CfnOutput.\nGot:\n{ts}"
@@ -1861,7 +1957,11 @@ mod wave1_stack_ts_tests {
     #[test]
     fn aws_lambda_stack_ts_emits_mcp_role_arn_output() {
         let init = make_init("aws-lambda");
-        let ts = init.render_stack_ts("demo-server", &IamConfig::default());
+        let ts = init.render_stack_ts(
+            "demo-server",
+            &IamConfig::default(),
+            &StackMetadata::default(),
+        );
         assert!(
             ts.contains("new cdk.CfnOutput(this, 'McpRoleArn', {"),
             "aws-lambda stack.ts missing McpRoleArn CfnOutput"
@@ -1879,7 +1979,11 @@ mod wave1_stack_ts_tests {
     #[test]
     fn aws_lambda_stack_ts_imports_iam_module() {
         let init = make_init("aws-lambda");
-        let ts = init.render_stack_ts("demo-server", &IamConfig::default());
+        let ts = init.render_stack_ts(
+            "demo-server",
+            &IamConfig::default(),
+            &StackMetadata::default(),
+        );
         assert!(
             ts.contains("import * as iam from 'aws-cdk-lib/aws-iam';"),
             "aws-lambda stack.ts missing 'import * as iam from aws-cdk-lib/aws-iam' (D-03)"
@@ -1892,7 +1996,11 @@ mod wave1_stack_ts_tests {
         // backward-compat golden (Task 3) diff is minimal when future waves
         // regenerate the file.
         let init = make_init("pmcp-run");
-        let ts = init.render_stack_ts("demo-server", &IamConfig::default());
+        let ts = init.render_stack_ts(
+            "demo-server",
+            &IamConfig::default(),
+            &StackMetadata::default(),
+        );
         let dashboard_idx = ts.find("'DashboardUrl'").expect("DashboardUrl present");
         let role_idx = ts.find("'McpRoleArn'").expect("McpRoleArn present");
         assert!(
@@ -1963,14 +2071,22 @@ mod wave1_stack_ts_tests {
     #[test]
     fn golden_pmcp_run_stack_ts_empty_iam() {
         let init = make_init("pmcp-run");
-        let ts = init.render_stack_ts("demo-server", &IamConfig::default());
+        let ts = init.render_stack_ts(
+            "demo-server",
+            &IamConfig::default(),
+            &StackMetadata::default(),
+        );
         check_or_update_golden("pmcp-run-empty.ts", &ts);
     }
 
     #[test]
     fn golden_aws_lambda_stack_ts_empty_iam() {
         let init = make_init("aws-lambda");
-        let ts = init.render_stack_ts("demo-server", &IamConfig::default());
+        let ts = init.render_stack_ts(
+            "demo-server",
+            &IamConfig::default(),
+            &StackMetadata::default(),
+        );
         check_or_update_golden("aws-lambda-empty.ts", &ts);
     }
 
@@ -2011,7 +2127,7 @@ mod wave1_stack_ts_tests {
     #[test]
     fn wave3_pmcp_run_stack_ts_emits_iam_block_before_outputs() {
         let init = make_init("pmcp-run");
-        let ts = init.render_stack_ts("demo-server", &cost_coach_iam());
+        let ts = init.render_stack_ts("demo-server", &cost_coach_iam(), &StackMetadata::default());
 
         // Locate the operator-declared IAM banner.
         let banner_idx = ts
@@ -2059,7 +2175,7 @@ mod wave1_stack_ts_tests {
     #[test]
     fn wave3_aws_lambda_stack_ts_emits_iam_block_before_outputs() {
         let init = make_init("aws-lambda");
-        let ts = init.render_stack_ts("demo-server", &cost_coach_iam());
+        let ts = init.render_stack_ts("demo-server", &cost_coach_iam(), &StackMetadata::default());
 
         let banner_idx = ts
             .find("// Operator-declared IAM")
@@ -2098,10 +2214,104 @@ mod wave1_stack_ts_tests {
         // here as a Wave 3 guard: the iam_block placeholder must collapse to
         // the empty string without leaving residual whitespace.
         let init = make_init("pmcp-run");
-        let ts = init.render_stack_ts("demo-server", &IamConfig::default());
+        let ts = init.render_stack_ts(
+            "demo-server",
+            &IamConfig::default(),
+            &StackMetadata::default(),
+        );
         assert!(
             !ts.contains("// Operator-declared IAM"),
             "wave3: empty IamConfig must not emit the operator banner"
+        );
+    }
+}
+
+#[cfg(test)]
+mod phase98_metadata_render_tests {
+    //! Phase 98 Wave 3 (DSTK-02/DSTK-03): config-driven `mcp:serverType` /
+    //! `mcp:snapshotBaked` literals survive into the rendered `stack.ts`.
+    //!
+    //! These live in-crate because `render_stack_ts_for_deploy` and
+    //! `InitCommand::render_stack_ts` are `pub(crate)` in the bin-only
+    //! `commands::deploy::init` tree the lib does not re-export (the same
+    //! boundary documented for the Phase 76 golden tests and in
+    //! `tests/deploy_stack_ts_guard.rs`). The external integration Test C in
+    //! that file therefore stays `#[ignore]` and these are the live DSTK-02/03
+    //! config-survives-render proof.
+
+    use super::*;
+    use crate::deployment::config::{IamConfig, MetadataConfig};
+
+    fn graph_rag_metadata() -> MetadataConfig {
+        MetadataConfig {
+            server_type: Some("graph-rag".to_string()),
+            snapshot_baked: Some(true),
+        }
+    }
+
+    /// DSTK-02: a `[metadata].server_type = "graph-rag"` override surfaces as the
+    /// `mcpServerType` default in the rendered pmcp-run stack.ts (instead of the
+    /// hardcoded `'custom'`), and DSTK-03 bakes the `mcp:snapshotBaked` literal.
+    #[test]
+    fn pmcp_run_render_reproduces_config_metadata_literals() {
+        let ts = render_stack_ts_for_deploy(
+            "pmcp-run",
+            "graph-rag-demo",
+            &IamConfig::default(),
+            &graph_rag_metadata(),
+        );
+        assert!(
+            ts.contains("this.node.tryGetContext('mcp:serverType') || 'graph-rag'"),
+            "pmcp-run render must default mcp:serverType to the config override.\nGot:\n{ts}"
+        );
+        assert!(
+            ts.contains("metadata['mcp:snapshotBaked']"),
+            "pmcp-run render must bake mcp:snapshotBaked when snapshot_baked=true.\nGot:\n{ts}"
+        );
+    }
+
+    /// DSTK-02/DSTK-03 (aws-lambda): `cdk deploy` passes no `-c` context, so the
+    /// aws-lambda template must bake the literals directly. The rendered output
+    /// advertises `mcp:serverType: 'graph-rag'` and `mcp:snapshotBaked = 'true'`.
+    #[test]
+    fn aws_lambda_render_bakes_config_metadata_literals() {
+        let ts = render_stack_ts_for_deploy(
+            "aws-lambda",
+            "graph-rag-demo",
+            &IamConfig::default(),
+            &graph_rag_metadata(),
+        );
+        assert!(
+            ts.contains("'mcp:serverType': 'graph-rag'"),
+            "aws-lambda render must bake mcp:serverType: 'graph-rag'.\nGot:\n{ts}"
+        );
+        assert!(
+            ts.contains("metadata['mcp:snapshotBaked'] = 'true'"),
+            "aws-lambda render must bake mcp:snapshotBaked = 'true'.\nGot:\n{ts}"
+        );
+    }
+
+    /// Backward-compat: an absent `[metadata]` block (default carrier) emits NO
+    /// `mcp:snapshotBaked` literal and keeps the default `'custom'` serverType on
+    /// BOTH targets, and the aws-lambda template gains no metadata block at all.
+    #[test]
+    fn absent_metadata_leaves_render_unchanged() {
+        let empty = MetadataConfig::default();
+
+        let pmcp = render_stack_ts_for_deploy("pmcp-run", "demo", &IamConfig::default(), &empty);
+        assert!(
+            pmcp.contains("this.node.tryGetContext('mcp:serverType') || 'custom'"),
+            "absent [metadata] must keep the 'custom' serverType default (pmcp-run)"
+        );
+        assert!(
+            !pmcp.contains("mcp:snapshotBaked"),
+            "absent [metadata] must NOT emit mcp:snapshotBaked (pmcp-run)"
+        );
+
+        let aws = render_stack_ts_for_deploy("aws-lambda", "demo", &IamConfig::default(), &empty);
+        assert!(
+            !aws.contains("mcp:snapshotBaked") && !aws.contains("'mcp:serverType'"),
+            "absent [metadata] must add no metadata block to the aws-lambda template"
         );
     }
 }
