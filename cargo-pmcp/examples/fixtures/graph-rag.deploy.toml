@@ -1,0 +1,37 @@
+# Phase 98 reference fixture: config-driven stack.ts metadata.
+#
+# The `[metadata]` block makes the `mcp:serverType` / `mcp:snapshotBaked`
+# template literals reproducible-from-config, so regenerating `deploy/lib/stack.ts`
+# (with `--regenerate-stack`) safely reproduces the curated metadata instead of
+# falling back to the hardcoded `'custom'` server type.
+
+[target]
+type = "pmcp-run"
+version = "1.0"
+
+[aws]
+region = "us-west-2"
+
+[server]
+name = "graph-rag"
+memory_mb = 512
+timeout_seconds = 30
+
+[environment]
+RUST_LOG = "info"
+
+[auth]
+enabled = false
+provider = "none"
+
+[observability]
+log_retention_days = 30
+enable_xray = true
+create_dashboard = true
+
+# Config-driven stack metadata (Phase 98, DSTK-02/03).
+#   server_type   -> overrides the `mcp:serverType` literal (default 'custom')
+#   snapshot_baked -> drives the additive `mcp:snapshotBaked` literal
+[metadata]
+server_type = "graph-rag"
+snapshot_baked = true

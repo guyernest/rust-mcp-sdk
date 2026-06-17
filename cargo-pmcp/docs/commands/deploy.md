@@ -21,6 +21,7 @@ Deploy to AWS Lambda, Google Cloud Run, Cloudflare Workers, or pmcp.run. Include
 | `--target <TARGET>` | Deployment target: `aws-lambda`, `cloudflare-workers`, `google-cloud-run`, `pmcp-run` |
 | `--shared-pool <POOL>` | Use shared OAuth pool for SSO (pmcp-run only) |
 | `--no-oauth` | Skip OAuth configuration during deployment |
+| `--regenerate-stack` (alias `--force`) | Overwrite an existing `deploy/lib/stack.ts`. By default the file is **preserved** if it already exists (so an operator-curated stack is never silently clobbered); pass this flag to regenerate it from the loaded config. |
 
 ## Subcommands
 
@@ -57,7 +58,7 @@ For AWS Lambda targets, `cargo pmcp deploy` runs:
 1. Loads `.pmcp/deploy.toml` via `DeployConfig::load`.
 2. **Validates the `[iam]` section** — runs the same gate as [`cargo pmcp validate deploy`](validate.md#validate-deploy) and fails fast before any AWS API call if validation errors are present. Warnings print to stderr but don't block.
 3. Builds the Lambda binary.
-4. **Regenerates `deploy/lib/stack.ts` from the loaded config** — splices the `[iam]` declarations into the CDK template at a single seam. Changes to `.pmcp/deploy.toml` therefore take effect on the next `cargo pmcp deploy` without manual re-init.
+4. **Regenerates `deploy/lib/stack.ts` from the loaded config** — splices the `[iam]` and `[metadata]` declarations into the CDK template at single seams. Changes to `.pmcp/deploy.toml` therefore take effect on the next `cargo pmcp deploy` without manual re-init. **Guard:** if `deploy/lib/stack.ts` already exists, it is **preserved** (the write is skipped and a one-line `preserved existing deploy/lib/stack.ts` notice prints) so an operator-curated stack is never silently overwritten. Pass `--regenerate-stack` (alias `--force`) to overwrite it. A missing file is always scaffolded flag-free.
 5. Runs `cdk deploy` with `--require-approval never`.
 
 > Both generated stacks (`pmcp-run` and `aws-lambda`) emit a stable `McpRoleArn` CFN output with `exportName: pmcp-${serverName}-McpRoleArn` — consume it from external stacks via `Fn::ImportValue` instead of looking up the role by its CFN-generated name.
@@ -69,6 +70,25 @@ To give the deployed Lambda AWS permissions (DynamoDB, S3, SecretsManager, …),
 - [IAM.md](../IAM.md) — how-to guide with recipes, troubleshooting, and migration from hand-written bolt-on stacks
 - [DEPLOYMENT.md § IAM Declarations](../../DEPLOYMENT.md#iam-declarations-iam-section) — schema reference and full translation tables
 - [`cargo pmcp validate deploy`](validate.md#validate-deploy) — pre-flight the config before deploying
+
+### Config-driven stack metadata (`[metadata]`)
+
+The generated `deploy/lib/stack.ts` advertises two MCP metadata literals into the synthesized CDK stack: `mcp:serverType` and `mcp:snapshotBaked`. By default `mcp:serverType` is `'custom'` for pmcp.toml/custom servers and `mcp:snapshotBaked` is omitted. To make these **reproducible-from-config** — so regenerating the stack (`--regenerate-stack`) reproduces your curated values instead of the defaults — add a `[metadata]` block to `.pmcp/deploy.toml`:
+
+```toml
+[metadata]
+server_type = "graph-rag"   # overrides the mcp:serverType literal (default 'custom')
+snapshot_baked = true        # emits the additive mcp:snapshotBaked:'true' literal
+```
+
+| Key | Type | Effect |
+|-----|------|--------|
+| `server_type` | string | Overrides the `mcp:serverType` template literal. |
+| `snapshot_baked` | bool | When `true`, emits the additive `mcp:snapshotBaked` literal; when absent/`false`, the literal is omitted. |
+
+Both keys are optional. **Absent the `[metadata]` block, behavior is unchanged** and the generated stack is byte-identical to prior releases (non-opting servers emit no `mcp:snapshotBaked` and keep the default `mcp:serverType`). Because these are reproducible-from-config, regenerating `stack.ts` with `--regenerate-stack` is safe — your curated metadata is reproduced rather than lost.
+
+> See `cargo run -p cargo-pmcp --example deploy_stack_metadata` for a runnable walkthrough of the guard + `[metadata]` workflow.
 
 ---
 
