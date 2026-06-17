@@ -174,74 +174,126 @@ fn eval_expr(
 ) -> CellValue {
     trace.formula.get_or_insert_with(|| format!("{e:?}"));
     match e {
-        Expr::Call { name, args } => {
-            let vals: Vec<EvalValue> = args
-                .iter()
-                .map(|a| materialize_arg(a, env, errs, current_sheet, trace))
-                .collect();
-            trace.dispatched_fn = Some(name.clone());
-            for v in &vals {
-                match v {
-                    EvalValue::Scalar(cv) => trace.operand_values.push(cv.clone()),
-                    EvalValue::Range(rows) => {
-                        for row in rows {
-                            for cv in row {
-                                trace.operand_values.push(cv.clone());
-                            }
-                        }
-                    },
-                }
-            }
-            semantics::apply(name, &vals)
-        },
+        Expr::Call { name, args } => eval_call(name, args, env, errs, current_sheet, trace),
         Expr::BinaryOp { left, op, right } => {
-            if matches!(op, BinOp::Pow) {
-                let lv = eval_expr(left, env, errs, current_sheet, trace);
-                let rv = eval_expr(right, env, errs, current_sheet, trace);
-                let l = semantics::to_number(&lv);
-                let r = semantics::to_number(&rv);
-                return match (l, r) {
-                    (Ok(b), Ok(x)) => finite_or_num(powf(b, x)),
-                    (Err(e), _) | (_, Err(e)) => CellValue::Error(e),
-                };
-            }
-            if is_leaf_lowerable(left) && is_leaf_lowerable(right) {
-                record_refs(e, env, current_sheet, trace);
-                return eval_leaf(e, env, errs);
-            }
-            let l = eval_expr(left, env, errs, current_sheet, trace);
-            let r = eval_expr(right, env, errs, current_sheet, trace);
-            let lowered = Expr::BinaryOp {
-                left: Box::new(scalar_to_leaf(&l)),
-                op: *op,
-                right: Box::new(scalar_to_leaf(&r)),
-            };
-            eval_leaf(&lowered, env, errs)
+            eval_binary_op(e, left, *op, right, &mut Ctx { env, errs, current_sheet, trace })
         },
         Expr::UnaryOp { op, operand } => {
-            if matches!(op, UnOp::Percent) {
-                let v = eval_expr(operand, env, errs, current_sheet, trace);
-                return match semantics::to_number(&v) {
-                    Ok(x) => finite_or_num(percent(x)),
-                    Err(e) => CellValue::Error(e),
-                };
-            }
-            if is_leaf_lowerable(operand) {
-                record_refs(e, env, current_sheet, trace);
-                return eval_leaf(e, env, errs);
-            }
-            let v = eval_expr(operand, env, errs, current_sheet, trace);
-            let lowered = Expr::UnaryOp {
-                op: *op,
-                operand: Box::new(scalar_to_leaf(&v)),
-            };
-            eval_leaf(&lowered, env, errs)
+            eval_unary_op(e, *op, operand, &mut Ctx { env, errs, current_sheet, trace })
         },
         other => {
             record_refs(other, env, current_sheet, trace);
             eval_leaf(other, env, errs)
         },
     }
+}
+
+/// Evaluate an [`Expr::Call`]: materialize every argument, record the dispatched
+/// function name + flattened operand evidence into `trace`, then route through
+/// [`semantics::apply`]. Behavior-identical to the original inline `Call` arm.
+fn eval_call(
+    name: &str,
+    args: &[Expr],
+    env: &CellEnv,
+    errs: &HashMap<String, ExcelError>,
+    current_sheet: &str,
+    trace: &mut EvalTrace,
+) -> CellValue {
+    let vals: Vec<EvalValue> = args
+        .iter()
+        .map(|a| materialize_arg(a, env, errs, current_sheet, trace))
+        .collect();
+    trace.dispatched_fn = Some(name.to_string());
+    for v in &vals {
+        record_operand_values(v, trace);
+    }
+    semantics::apply(name, &vals)
+}
+
+/// Push the scalar/range-flattened operand values of one [`EvalValue`] into the
+/// trace evidence. A `Range` contributes every member in row-major order.
+fn record_operand_values(v: &EvalValue, trace: &mut EvalTrace) {
+    match v {
+        EvalValue::Scalar(cv) => trace.operand_values.push(cv.clone()),
+        EvalValue::Range(rows) => {
+            for row in rows {
+                for cv in row {
+                    trace.operand_values.push(cv.clone());
+                }
+            }
+        },
+    }
+}
+
+/// The borrowed evaluation context threaded through the per-variant `eval_*`
+/// helpers: the value env, the per-cell error map, the owning sheet (WR-04), and
+/// the mutable trace evidence record. Bundles four otherwise-redundant params so
+/// the helpers stay under clippy's argument-count bar without changing behavior.
+struct Ctx<'a> {
+    env: &'a CellEnv,
+    errs: &'a HashMap<String, ExcelError>,
+    current_sheet: &'a str,
+    trace: &'a mut EvalTrace,
+}
+
+impl Ctx<'_> {
+    /// Recursively evaluate `e` under this context (re-borrows the threaded refs).
+    fn eval(&mut self, e: &Expr) -> CellValue {
+        eval_expr(e, self.env, self.errs, self.current_sheet, self.trace)
+    }
+}
+
+/// Evaluate an [`Expr::BinaryOp`]. `^` routes through the off-evaluator `powf`
+/// helper; a fully leaf-lowerable pair lowers WHOLE through the scalar evaluator;
+/// otherwise each operand is recursively evaluated, re-lowered to a leaf, and the
+/// binary op is replayed through `eval_leaf`. `e` is the original node (passed so
+/// the leaf paths re-lower without rebuilding it). Behavior-identical.
+fn eval_binary_op(e: &Expr, left: &Expr, op: BinOp, right: &Expr, ctx: &mut Ctx) -> CellValue {
+    if matches!(op, BinOp::Pow) {
+        let lv = ctx.eval(left);
+        let rv = ctx.eval(right);
+        return match (semantics::to_number(&lv), semantics::to_number(&rv)) {
+            (Ok(b), Ok(x)) => finite_or_num(powf(b, x)),
+            (Err(e), _) | (_, Err(e)) => CellValue::Error(e),
+        };
+    }
+    if is_leaf_lowerable(left) && is_leaf_lowerable(right) {
+        record_refs(e, ctx.env, ctx.current_sheet, ctx.trace);
+        return eval_leaf(e, ctx.env, ctx.errs);
+    }
+    let l = ctx.eval(left);
+    let r = ctx.eval(right);
+    let lowered = Expr::BinaryOp {
+        left: Box::new(scalar_to_leaf(&l)),
+        op,
+        right: Box::new(scalar_to_leaf(&r)),
+    };
+    eval_leaf(&lowered, ctx.env, ctx.errs)
+}
+
+/// Evaluate an [`Expr::UnaryOp`]. `%` routes through the off-evaluator `percent`
+/// helper; a leaf-lowerable operand lowers WHOLE through the scalar evaluator;
+/// otherwise the operand is recursively evaluated, re-lowered to a leaf, and the
+/// unary op is replayed through `eval_leaf`. `e` is the original node.
+/// Behavior-identical.
+fn eval_unary_op(e: &Expr, op: UnOp, operand: &Expr, ctx: &mut Ctx) -> CellValue {
+    if matches!(op, UnOp::Percent) {
+        let v = ctx.eval(operand);
+        return match semantics::to_number(&v) {
+            Ok(x) => finite_or_num(percent(x)),
+            Err(e) => CellValue::Error(e),
+        };
+    }
+    if is_leaf_lowerable(operand) {
+        record_refs(e, ctx.env, ctx.current_sheet, ctx.trace);
+        return eval_leaf(e, ctx.env, ctx.errs);
+    }
+    let v = ctx.eval(operand);
+    let lowered = Expr::UnaryOp {
+        op,
+        operand: Box::new(scalar_to_leaf(&v)),
+    };
+    eval_leaf(&lowered, ctx.env, ctx.errs)
 }
 
 /// Normalize an `f64` result of an off-evaluator helper (`^`/`%`) to a typed
