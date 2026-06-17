@@ -350,121 +350,21 @@ fn gate_inner(
     };
 
     // COLLECT-ALL findings (NOT fail-fast). Each is a Severity::Error oracle/*
-    // located finding.
-
-    // fullCalcOnLoad == true → hard refuse.
-    if full_calc_on_load {
-        findings.push(LintFinding::new(
-            Severity::Error,
-            "oracle/stale-cache",
-            sheet.clone(),
-            None,
-            "the workbook is flagged for a full recalc on load \
-             (fullCalcOnLoad=1) — its cached values are not trusted",
-            "Re-open in Excel and save with a full recalc (this clears \
-             fullCalcOnLoad).",
-        ));
-    }
-
-    // Only calcMode == "auto" evidences a genuine full recalc.
-    if calc_mode != "auto" {
-        findings.push(LintFinding::new(
-            Severity::Error,
-            "oracle/no-recalc",
-            sheet.clone(),
-            None,
-            format!(
-                "calculation mode is `{calc_mode}` — not the trusted automatic \
-                 full-recalc mode, so the cache may not reflect the formulas"
-            ),
-            "Set Calculation Options to Automatic in Excel, recalc (F9), and save.",
-        ));
-    }
-
-    // calcId absent or zero → no-recalc.
-    if !calc_id_ok {
-        findings.push(LintFinding::new(
-            Severity::Error,
-            "oracle/no-recalc",
-            sheet.clone(),
-            None,
-            "no non-zero calcId — no full-recalc stamp is recorded for this cache",
-            "Re-save the workbook from Microsoft Excel so a full-recalc stamp is \
-             recorded.",
-        ));
-    }
-
-    // A formula cell with no cached <v> → missing-cache, LOCATED.
-    if let Some((m_sheet, m_addr)) = &missing_cache_loc {
-        findings.push(LintFinding::new(
-            Severity::Error,
-            "oracle/missing-cache",
-            m_sheet.clone(),
-            Some(m_addr.clone()),
-            format!(
-                "cell {m_addr} has a formula but no cached value — the oracle \
-                 cache is incomplete"
-            ),
-            format!(
-                "Cell {m_addr} has a formula but no cached value; recalc (F9) and save from Excel."
-            ),
-        ));
-    }
-
-    // WBCO-07 + CR-01: the provenance CLASS decides the identity refusal. A
-    // non-trusted class (NonExcel / UmyaFabricated / UnknownStale) is ALWAYS
-    // REFUSED with oracle/non-excel-app — the test trusted-fixture override does
-    // NOT exempt it (oracle/non-excel-app is not in SOFTENABLE_FRESHNESS_RULES, so
-    // it stays a blocking Error even under the override). The override may only
-    // demote genuine STALENESS; a fixture that needs trusted identity must carry a
-    // genuine Excel app.xml so it classifies as ExcelTrusted.
-    if class != ProvenanceClass::ExcelTrusted {
-        let app_name = app
-            .application
-            .as_deref()
-            .unwrap_or("an unknown application");
-        let reason = match class {
-            ProvenanceClass::UmyaFabricated => format!(
-                "the workbook carries a FABRICATED Excel identity ({app_name}, \
-                 calcId/AppVersion match the umya writer fingerprint), not a \
-                 genuine Excel save — its cached values were not Excel-computed"
-            ),
-            ProvenanceClass::NonExcel => format!(
-                "the workbook was last saved by {app_name}, not Microsoft Excel — \
-                 its cached values were not Excel-computed"
-            ),
-            ProvenanceClass::UnknownStale => {
-                "the workbook's authoring application could not be determined — \
-                 refusing fail-closed (provenance is not a genuine Excel save)"
-                    .to_string()
-            },
-            ProvenanceClass::ExcelTrusted => unreachable!("guarded by the class check"),
-        };
-        findings.push(LintFinding::new(
-            Severity::Error,
-            "oracle/non-excel-app",
-            sheet.clone(),
-            None,
-            reason,
-            "Re-save the workbook from Microsoft Excel (a genuine Excel save \
-             carries an Excel AppVersion build string and a real calcId).",
-        ));
-    }
-
-    // Coherence backstop: a stale cache can never be admitted, even if a future
-    // calc-axis slips past the enumerated findings.
-    let has_errors = findings.iter().any(|f| f.severity == Severity::Error);
-    if stale && !has_errors {
-        findings.push(LintFinding::new(
-            Severity::Error,
-            "oracle/stale-cache",
-            sheet.clone(),
-            None,
-            "the workbook cache is classified stale but no specific signal was \
-             reported — refusing fail-closed",
-            "Re-save the workbook from Microsoft Excel with a full recalc.",
-        ));
-    }
+    // located finding. The freshness/identity/coherence signals live in one
+    // helper so this orchestrator stays a thin pipeline.
+    collect_freshness_findings(
+        &mut findings,
+        &FreshnessSignals {
+            sheet: &sheet,
+            full_calc_on_load,
+            calc_mode: &calc_mode,
+            calc_id_ok,
+            missing_cache_loc: missing_cache_loc.as_ref(),
+            class,
+            app_name: app.application.as_deref(),
+            stale,
+        },
+    );
 
     // TRUSTED-FIXTURE FRESHNESS SOFTENING (#[cfg(test)] path ONLY): a committed
     // trusted fixture authored by a non-Excel WRITER (e.g. rust_xlsxwriter, which
@@ -492,8 +392,164 @@ fn gate_inner(
         return (provenance, Err(findings));
     }
 
-    // ACCEPT: produce the full corpus over EVERY CellRecord whose value is
-    // Some(_), keyed by cell_key.
+    // ACCEPT: produce the full corpus over EVERY CellRecord whose value is Some(_).
+    (provenance, Ok(build_oracle_corpus(map)))
+}
+
+/// The freshness/identity/coherence inputs for [`collect_freshness_findings`],
+/// borrowed from the gate body so no value is copied or re-derived.
+struct FreshnessSignals<'a> {
+    /// The sheet name the located findings attach to.
+    sheet: &'a str,
+    /// `calcPr@fullCalcOnLoad` — `true` hard-refuses (`oracle/stale-cache`).
+    full_calc_on_load: bool,
+    /// The effective `calcMode` (ECMA-376 default applied); only `"auto"` is trusted.
+    calc_mode: &'a str,
+    /// `true` when a non-zero `calcId` full-recalc stamp is present.
+    calc_id_ok: bool,
+    /// `Some((sheet, addr))` of the first formula cell lacking a cached value.
+    missing_cache_loc: Option<&'a (String, String)>,
+    /// The classified provenance; anything but `ExcelTrusted` refuses identity.
+    class: ProvenanceClass,
+    /// `<Application>` text, for the identity refusal message.
+    app_name: Option<&'a str>,
+    /// `true` when the cache is classified stale (drives the coherence backstop).
+    stale: bool,
+}
+
+/// Push every COLLECT-ALL `oracle/*` finding evidenced by `s` into `findings`.
+///
+/// Preserves the exact set, order, severity, and messages of the inlined gate
+/// checks: `fullCalcOnLoad`, non-`auto` `calcMode`, absent/zero `calcId`,
+/// missing-cache, the WBCO-07 identity refusal, and the stale-cache coherence
+/// backstop (which fires only when no other Error was already recorded).
+fn collect_freshness_findings(findings: &mut Vec<LintFinding>, s: &FreshnessSignals<'_>) {
+    // fullCalcOnLoad == true → hard refuse.
+    if s.full_calc_on_load {
+        findings.push(LintFinding::new(
+            Severity::Error,
+            "oracle/stale-cache",
+            s.sheet.to_string(),
+            None,
+            "the workbook is flagged for a full recalc on load \
+             (fullCalcOnLoad=1) — its cached values are not trusted",
+            "Re-open in Excel and save with a full recalc (this clears \
+             fullCalcOnLoad).",
+        ));
+    }
+
+    // Only calcMode == "auto" evidences a genuine full recalc.
+    if s.calc_mode != "auto" {
+        let calc_mode = s.calc_mode;
+        findings.push(LintFinding::new(
+            Severity::Error,
+            "oracle/no-recalc",
+            s.sheet.to_string(),
+            None,
+            format!(
+                "calculation mode is `{calc_mode}` — not the trusted automatic \
+                 full-recalc mode, so the cache may not reflect the formulas"
+            ),
+            "Set Calculation Options to Automatic in Excel, recalc (F9), and save.",
+        ));
+    }
+
+    // calcId absent or zero → no-recalc.
+    if !s.calc_id_ok {
+        findings.push(LintFinding::new(
+            Severity::Error,
+            "oracle/no-recalc",
+            s.sheet.to_string(),
+            None,
+            "no non-zero calcId — no full-recalc stamp is recorded for this cache",
+            "Re-save the workbook from Microsoft Excel so a full-recalc stamp is \
+             recorded.",
+        ));
+    }
+
+    // A formula cell with no cached <v> → missing-cache, LOCATED.
+    if let Some((m_sheet, m_addr)) = s.missing_cache_loc {
+        findings.push(LintFinding::new(
+            Severity::Error,
+            "oracle/missing-cache",
+            m_sheet.clone(),
+            Some(m_addr.clone()),
+            format!(
+                "cell {m_addr} has a formula but no cached value — the oracle \
+                 cache is incomplete"
+            ),
+            format!(
+                "Cell {m_addr} has a formula but no cached value; recalc (F9) and save from Excel."
+            ),
+        ));
+    }
+
+    // WBCO-07 + CR-01: the provenance CLASS decides the identity refusal.
+    push_identity_finding(findings, s.class, s.app_name, s.sheet);
+
+    // Coherence backstop: a stale cache can never be admitted, even if a future
+    // calc-axis slips past the enumerated findings.
+    let has_errors = findings.iter().any(|f| f.severity == Severity::Error);
+    if s.stale && !has_errors {
+        findings.push(LintFinding::new(
+            Severity::Error,
+            "oracle/stale-cache",
+            s.sheet.to_string(),
+            None,
+            "the workbook cache is classified stale but no specific signal was \
+             reported — refusing fail-closed",
+            "Re-save the workbook from Microsoft Excel with a full recalc.",
+        ));
+    }
+}
+
+/// Push the WBCO-07/CR-01 identity refusal when `class` is not `ExcelTrusted`.
+///
+/// A non-trusted class (`NonExcel` / `UmyaFabricated` / `UnknownStale`) is ALWAYS
+/// REFUSED with `oracle/non-excel-app` — it is not in [`SOFTENABLE_FRESHNESS_RULES`]
+/// so the test trusted-fixture override never demotes it. `ExcelTrusted` pushes
+/// nothing.
+fn push_identity_finding(
+    findings: &mut Vec<LintFinding>,
+    class: ProvenanceClass,
+    app_name: Option<&str>,
+    sheet: &str,
+) {
+    if class == ProvenanceClass::ExcelTrusted {
+        return;
+    }
+    let app_name = app_name.unwrap_or("an unknown application");
+    let reason = match class {
+        ProvenanceClass::UmyaFabricated => format!(
+            "the workbook carries a FABRICATED Excel identity ({app_name}, \
+             calcId/AppVersion match the umya writer fingerprint), not a \
+             genuine Excel save — its cached values were not Excel-computed"
+        ),
+        ProvenanceClass::NonExcel => format!(
+            "the workbook was last saved by {app_name}, not Microsoft Excel — \
+             its cached values were not Excel-computed"
+        ),
+        ProvenanceClass::UnknownStale => {
+            "the workbook's authoring application could not be determined — \
+             refusing fail-closed (provenance is not a genuine Excel save)"
+                .to_string()
+        },
+        ProvenanceClass::ExcelTrusted => unreachable!("guarded by the early return"),
+    };
+    findings.push(LintFinding::new(
+        Severity::Error,
+        "oracle/non-excel-app",
+        sheet.to_string(),
+        None,
+        reason,
+        "Re-save the workbook from Microsoft Excel (a genuine Excel save \
+         carries an Excel AppVersion build string and a real calcId).",
+    ));
+}
+
+/// Build the accept-path [`OracleCorpus`] over EVERY `CellRecord` whose value is
+/// `Some(_)`, keyed by `cell_key`.
+fn build_oracle_corpus(map: &WorkbookMap) -> OracleCorpus {
     let cells = map
         .sheets
         .iter()
@@ -504,7 +560,7 @@ fn gate_inner(
                 .map(|v| (cell_key(&s.name, &c.addr), v.clone()))
         })
         .collect();
-    (provenance, Ok(OracleCorpus { cells }))
+    OracleCorpus { cells }
 }
 
 /// Build an [`OracleProvenance`] for the raw-read-FAILED path: the raw-derived
