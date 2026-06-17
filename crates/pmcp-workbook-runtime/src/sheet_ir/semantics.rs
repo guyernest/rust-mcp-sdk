@@ -218,29 +218,30 @@ fn f_vlookup(args: &[EvalValue]) -> Result<CellValue, ExcelError> {
 /// `INDEX(range, row, col)` for a 2-D range. Bounds-checked → `#REF!`.
 fn f_index(args: &[EvalValue]) -> Result<CellValue, ExcelError> {
     let range = arg_range(args, 0)?;
-    let n = to_number(arg_scalar(args, 1)?)?;
-    if n < 1.0 || n.fract() != 0.0 {
-        return Err(ExcelError::Value);
-    }
-    let n = n as usize;
+    let n = one_based_index(to_number(arg_scalar(args, 1)?)?)?;
     // 2-D form: INDEX(range, row, col).
     if let Some(EvalValue::Scalar(_)) = args.get(2) {
-        let col = to_number(arg_scalar(args, 2)?)?;
-        if col < 1.0 || col.fract() != 0.0 {
-            return Err(ExcelError::Value);
-        }
-        return Ok(
-            match range.get(n - 1).and_then(|r| r.get((col as usize) - 1)) {
-                Some(cv) => cv.clone(),
-                None => CellValue::Error(ExcelError::Ref),
-            },
-        );
+        let col = one_based_index(to_number(arg_scalar(args, 2)?)?)?;
+        return Ok(match range.get(n - 1).and_then(|r| r.get(col - 1)) {
+            Some(cv) => cv.clone(),
+            None => CellValue::Error(ExcelError::Ref),
+        });
     }
     // 1-D form: take the n-th cell row-major without materializing the range.
     Ok(match flatten(range).nth(n - 1) {
         Some(cv) => cv.clone(),
         None => CellValue::Error(ExcelError::Ref),
     })
+}
+
+/// Validate a 1-based positive-integer position argument (`INDEX` row/col).
+/// `#VALUE!` for any value below 1 or with a fractional part; returns the value
+/// as a `usize` index on success.
+fn one_based_index(n: f64) -> Result<usize, ExcelError> {
+    if n < 1.0 || n.fract() != 0.0 {
+        return Err(ExcelError::Value);
+    }
+    Ok(n as usize)
 }
 
 /// `MATCH(lookup_value, range, [match_type])` — EXACT match only (we honour
@@ -339,33 +340,47 @@ fn f_isnumber(args: &[EvalValue]) -> Result<CellValue, ExcelError> {
 fn f_search(args: &[EvalValue]) -> Result<CellValue, ExcelError> {
     let needle = text_of(arg_scalar(args, 0)?)?;
     let haystack = text_of(arg_scalar(args, 1)?)?;
-    // Optional 1-based start position.
-    let start = match args.get(2) {
-        Some(_) => {
-            let v = to_number(arg_scalar(args, 2)?)?;
-            if v >= 1.0 && v.fract() == 0.0 {
-                (v as usize) - 1
-            } else {
-                return Err(ExcelError::Value);
-            }
-        },
-        None => 0,
-    };
-    let hay_lower = haystack.to_lowercase();
-    let needle_lower = needle.to_lowercase();
+    let start = search_start_position(args)?;
     // Search over CHARACTERS for a correct 1-based char position (not bytes).
-    let hay_chars: Vec<char> = hay_lower.chars().collect();
-    let needle_chars: Vec<char> = needle_lower.chars().collect();
+    let hay_chars: Vec<char> = haystack.to_lowercase().chars().collect();
+    let needle_chars: Vec<char> = needle.to_lowercase().chars().collect();
     if start > hay_chars.len() {
         return Err(ExcelError::Value);
     }
     if needle_chars.is_empty() {
         return Ok(CellValue::Number((start + 1) as f64));
     }
-    // A needle longer than the haystack can never match; guard BEFORE the loop
-    // so the `hay_chars[i..i + needle_len]` slice can never overrun (T-09-13:
-    // never a panic). Without this, `saturating_sub` floors the range end at 0
-    // and `0..=0` would still slice `[0..needle_len]` out of bounds.
+    search_char_position(&hay_chars, &needle_chars, start)
+}
+
+/// Parse `SEARCH`'s optional 1-based `start_num` arg into a 0-based start index.
+/// Absent → `0`; present requires a positive integer, else `#VALUE!`.
+fn search_start_position(args: &[EvalValue]) -> Result<usize, ExcelError> {
+    match args.get(2) {
+        Some(_) => {
+            let v = to_number(arg_scalar(args, 2)?)?;
+            if v >= 1.0 && v.fract() == 0.0 {
+                Ok((v as usize) - 1)
+            } else {
+                Err(ExcelError::Value)
+            }
+        },
+        None => Ok(0),
+    }
+}
+
+/// Scan `hay_chars` from 0-based `start` for the first occurrence of the
+/// (already-lowercased, non-empty) `needle_chars`, returning the 1-based char
+/// position; `#VALUE!` when not found. A needle longer than the haystack can
+/// never match — guarded BEFORE the loop so the `hay_chars[i..i + needle_len]`
+/// slice can never overrun (T-09-13: never a panic). Without this guard,
+/// `saturating_sub` would floor the range end at 0 and `0..=0` would still slice
+/// `[0..needle_len]` out of bounds.
+fn search_char_position(
+    hay_chars: &[char],
+    needle_chars: &[char],
+    start: usize,
+) -> Result<CellValue, ExcelError> {
     if needle_chars.len() > hay_chars.len() {
         return Err(ExcelError::Value);
     }
