@@ -504,6 +504,14 @@ PURITY_WRITER_CRATES := pmcp-workbook-runtime
 
 .PHONY: purity-check
 purity-check:
+	@# Pre-resolve Cargo.lock ONCE before the per-crate/per-feature tree loops below.
+	@# Every loop captures `cargo tree ... 2>&1`; on a fresh/stale lock (always in CI —
+	@# Cargo.lock is gitignored) cargo prints "Adding <crate> v.. (available: ..)" resolve
+	@# progress to stderr. Those lines name banned reader crates (e.g. "Adding quick-xml",
+	@# pulled by umya in the COMPILER, not the served runtime) and were matched by the BAN
+	@# grep — a false-positive boundary breach. Warming the lock here makes the grepped
+	@# trees contain only real dependency edges. Fails closed if the workspace won't resolve.
+	@cargo metadata --format-version 1 >/dev/null 2>&1 || { echo "purity-check FAILED: could not resolve Cargo.lock (failing closed)"; exit 1; }
 	@echo "$(BLUE)purity-check: Phase 91 reader-free boundary gate (fail-closed, per-crate/per-feature)$(NC)"
 	@set -euo pipefail; \
 	BAN='umya|calamine|quick-xml|swc_|pmcp-code-mode'; \
