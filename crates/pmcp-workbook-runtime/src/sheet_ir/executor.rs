@@ -175,12 +175,29 @@ fn eval_expr(
     trace.formula.get_or_insert_with(|| format!("{e:?}"));
     match e {
         Expr::Call { name, args } => eval_call(name, args, env, errs, current_sheet, trace),
-        Expr::BinaryOp { left, op, right } => {
-            eval_binary_op(e, left, *op, right, &mut Ctx { env, errs, current_sheet, trace })
-        },
-        Expr::UnaryOp { op, operand } => {
-            eval_unary_op(e, *op, operand, &mut Ctx { env, errs, current_sheet, trace })
-        },
+        Expr::BinaryOp { left, op, right } => eval_binary_op(
+            e,
+            left,
+            *op,
+            right,
+            &mut Ctx {
+                env,
+                errs,
+                current_sheet,
+                trace,
+            },
+        ),
+        Expr::UnaryOp { op, operand } => eval_unary_op(
+            e,
+            *op,
+            operand,
+            &mut Ctx {
+                env,
+                errs,
+                current_sheet,
+                trace,
+            },
+        ),
         other => {
             record_refs(other, env, current_sheet, trace);
             eval_leaf(other, env, errs)
