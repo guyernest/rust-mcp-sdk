@@ -261,49 +261,76 @@ pub fn derive_case_grid(manifest: &Manifest) -> Vec<(String, BTreeMap<String, Ce
     // (1) The default case — ALWAYS first.
     grid.push(("default".to_string(), base.clone()));
 
-    // Inputs in workbook (manifest) order for deterministic case ordering.
+    // Inputs in workbook (manifest) order for deterministic case ordering; each
+    // input contributes its enum cases then its numeric-boundary cases.
     for role in &manifest.cells {
         if !matches!(role.role, Role::Input) {
             continue;
         }
-
-        // (2) One case per ENUM member (others held at default).
-        if let Some(values) = role.allowed_values.as_ref() {
-            for member in values {
-                let mut seed = base.clone();
-                seed.insert(role.cell.clone(), CellValue::Text(member.clone()));
-                grid.push((format!("enum:{}={}", role.cell, member), seed));
-            }
-        }
-
-        // (3) NUMERIC-BOUNDARY cases: {default-step, default+step, min, max}.
-        if let Some(default_v) = input_default(role) {
-            if let Some(default) = as_number(default_v) {
-                let step = numeric_step(default);
-                let mut boundaries: Vec<(String, f64)> = vec![
-                    (format!("num:{}=default-step", role.cell), default - step),
-                    (format!("num:{}=default+step", role.cell), default + step),
-                ];
-                if let Some((min, max)) = input_bounds(role) {
-                    if let Some(min_n) = as_number(min) {
-                        boundaries.push((format!("num:{}=min", role.cell), min_n));
-                    }
-                    if let Some(max_n) = as_number(max) {
-                        boundaries.push((format!("num:{}=max", role.cell), max_n));
-                    }
-                }
-                for (case_id, value) in boundaries {
-                    let mut seed = base.clone();
-                    seed.insert(role.cell.clone(), CellValue::Number(value));
-                    grid.push((case_id, seed));
-                }
-            }
-        }
+        push_enum_cases(&mut grid, role, &base);
+        push_numeric_boundary_cases(&mut grid, role, &base);
     }
 
     // Deterministic truncation: the default is index 0 so it always survives.
     grid.truncate(MAX_CORPUS_CASES);
     grid
+}
+
+/// (2) One case per ENUM member of `role` (others held at the base default),
+/// appended in declared `allowed_values` order. A non-enum input contributes none.
+fn push_enum_cases(
+    grid: &mut Vec<(String, BTreeMap<String, CellValue>)>,
+    role: &CellRole,
+    base: &BTreeMap<String, CellValue>,
+) {
+    let Some(values) = role.allowed_values.as_ref() else {
+        return;
+    };
+    for member in values {
+        let mut seed = base.clone();
+        seed.insert(role.cell.clone(), CellValue::Text(member.clone()));
+        grid.push((format!("enum:{}={}", role.cell, member), seed));
+    }
+}
+
+/// (3) NUMERIC-BOUNDARY cases `{default-step, default+step, min, max}` for `role`
+/// (others held at the base default). A non-numeric / default-less input contributes
+/// none. Min/max are appended only when the manifest declares numeric bounds.
+fn push_numeric_boundary_cases(
+    grid: &mut Vec<(String, BTreeMap<String, CellValue>)>,
+    role: &CellRole,
+    base: &BTreeMap<String, CellValue>,
+) {
+    let Some(default_v) = input_default(role) else {
+        return;
+    };
+    let Some(default) = as_number(default_v) else {
+        return;
+    };
+    for (case_id, value) in numeric_boundaries(role, default) {
+        let mut seed = base.clone();
+        seed.insert(role.cell.clone(), CellValue::Number(value));
+        grid.push((case_id, seed));
+    }
+}
+
+/// The ordered `(case_id, value)` numeric-boundary rows for one numeric input:
+/// `default-step`, `default+step`, then declared `min` / `max` when present.
+fn numeric_boundaries(role: &CellRole, default: f64) -> Vec<(String, f64)> {
+    let step = numeric_step(default);
+    let mut boundaries: Vec<(String, f64)> = vec![
+        (format!("num:{}=default-step", role.cell), default - step),
+        (format!("num:{}=default+step", role.cell), default + step),
+    ];
+    if let Some((min, max)) = input_bounds(role) {
+        if let Some(min_n) = as_number(min) {
+            boundaries.push((format!("num:{}=min", role.cell), min_n));
+        }
+        if let Some(max_n) = as_number(max) {
+            boundaries.push((format!("num:{}=max", role.cell), max_n));
+        }
+    }
+    boundaries
 }
 
 /// The set of declared output regions (`Role::Output`) of a manifest — the named
