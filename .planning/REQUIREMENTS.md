@@ -96,7 +96,7 @@
 - [x] **DSTK-01**: `cargo pmcp deploy` does not overwrite an existing `deploy/lib/stack.ts` on EITHER target (pmcp-run `targets/pmcp_run/deploy.rs`, aws-lambda `commands/deploy/deploy.rs`) without an explicit `--regenerate-stack` (alias `--force`) opt-in; IAM validation still runs and a "preserved existing stack.ts" notice is printed when the write is skipped
 - [x] **DSTK-02**: `.pmcp/deploy.toml` gains an optional `[metadata]` block (`server_type`, `snapshot_baked`) on `DeployConfig`, threaded through `render_stack_ts_for_deploy` / `render_stack_ts` and `McpMetadata`, so a custom / pmcp.toml server's `mcp:serverType` is config-overridable instead of hardcoded `'custom'`
 - [x] **DSTK-03**: `mcp:snapshotBaked` is representable end-to-end — `McpMetadata` carries `snapshot_baked`, `to_cdk_context` emits `-c 'mcp:snapshotBaked=…'`, and the generated stack template emits the `mcp:snapshotBaked` metadata literal so curated values are reproducible from config
-- [ ] **DSTK-04**: ALWAYS coverage — exists-guard unit tests on BOTH deploy targets (preserved without flag, overwritten with flag), config-survives-render unit/property tests, golden-file update in `tests/backward_compat_stack_ts.rs` for the new `mcp:snapshotBaked` line, and `--regenerate-stack` documented in `cargo-pmcp/docs/commands/deploy.md`
+- [x] **DSTK-04**: ALWAYS coverage — exists-guard unit tests on BOTH deploy targets (preserved without flag, overwritten with flag), config-survives-render unit/property tests, golden-file update in `tests/backward_compat_stack_ts.rs` for the new `mcp:snapshotBaked` line, and `--regenerate-stack` documented in `cargo-pmcp/docs/commands/deploy.md`
 
 ## Out of Scope (explicit exclusions)
 
@@ -162,4 +162,4 @@
 | DSTK-01 | Phase 98 | Complete |
 | DSTK-02 | Phase 98 | Complete |
 | DSTK-03 | Phase 98 | Complete |
-| DSTK-04 | Phase 98 | Pending |
+| DSTK-04 | Phase 98 | Complete |
