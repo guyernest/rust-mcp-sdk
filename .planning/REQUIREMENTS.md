@@ -98,6 +98,15 @@
 - [x] **DSTK-03**: `mcp:snapshotBaked` is representable end-to-end — `McpMetadata` carries `snapshot_baked`, `to_cdk_context` emits `-c 'mcp:snapshotBaked=…'`, and the generated stack template emits the `mcp:snapshotBaked` metadata literal so curated values are reproducible from config
 - [x] **DSTK-04**: ALWAYS coverage — exists-guard unit tests on BOTH deploy targets (preserved without flag, overwritten with flag), config-survives-render unit/property tests, golden-file update in `tests/backward_compat_stack_ts.rs` for the new `mcp:snapshotBaked` line, and `--regenerate-stack` documented in `cargo-pmcp/docs/commands/deploy.md`
 
+## v2.4 Requirements - Workbook-Crate Cognitive-Complexity Reduction (PMAT gate debt)
+
+**Goal:** The v2.3 workbook crates carry 21 cognitive-complexity violations that the org-required PMAT gate (`pmat quality-gate --fail-on-violation --checks complexity`) blocks — surfaced on PR #279 because PMAT is CI-only (Phase 75 D-07) and the milestone never ran through a PMAT-gated CI. PMAT ignores `#[allow(clippy::cognitive_complexity)]` (Phase 75 D-10-B), so each function must be refactored to clear the gate. Behavior is preserved via the milestone's existing golden/reconcile/quirk test net. No `.pmatignore` weakening of production crates.
+
+- [ ] **CPLX-01**: All flagged `pmcp-workbook-runtime` functions pass the PMAT complexity gate — `render/mod.rs::render_xlsx` (93), `sheet_ir/executor.rs::eval_expr` (58), `bundle_loader.rs::load` (28), `sheet_ir/semantics.rs::f_index` (24) / `f_search` (31) — refactored to the gate threshold with golden/reconcile tests still green
+- [ ] **CPLX-02**: All flagged `pmcp-workbook-compiler` functions pass the gate — `change_class/mod.rs::classify_cell_roles` (74), `change_class/ir_identity.rs::dependency_order` (24), `ingest/mod.rs::ingest` (57) / `references_external_workbook` (31), `formula/token.rs::tokenize` (52) / `lex_quoted_sheet_ref` (33) / `scan_atom_run` (30), `dialect/linter.rs::extract_function_tokens` (29), `fixture_author.rs::author_xlsx` (29), `dag/resolve.rs::walk` (25), `gate/corpus.rs::derive_case_grid` (34) / `no_seeded_value_outside_allowed` (46), `provenance/gate.rs::gate_inner` (29), `provenance/raw_parts.rs::parse_calc_pr` (44) / `parse_app_props` (39) — refactored, behavior preserved
+- [ ] **CPLX-03**: The flagged `pmcp-server-toolkit` function `workbook/input.rs::validate_input` (33) passes the gate, with input-validation behavior preserved
+- [ ] **CPLX-04**: `pmat quality-gate --fail-on-violation --checks complexity` reports ZERO violations workspace-wide; no production crate added to `.pmatignore`; full test suite + `make quality-gate` green (no behavior regressions); PR #279 CI complexity gate green
+
 ## Out of Scope (explicit exclusions)
 
 - **Live workbook interpretation on the hot path** — dissolves the security message; compile-not-interpret is the whole point (reader never enters served binary)
@@ -163,3 +172,7 @@
 | DSTK-02 | Phase 98 | Complete |
 | DSTK-03 | Phase 98 | Complete |
 | DSTK-04 | Phase 98 | Complete |
+| CPLX-01 | Phase 99 | Pending |
+| CPLX-02 | Phase 99 | Pending |
+| CPLX-03 | Phase 99 | Pending |
+| CPLX-04 | Phase 99 | Pending |

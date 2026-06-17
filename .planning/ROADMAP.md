@@ -1930,3 +1930,18 @@ Plans:
 - [x] 98-02-PLAN.md — DSTK-01 exists-guard + `--regenerate-stack`/`--force` flag on BOTH targets (shared guarded-write helper, IAM validation preserved, "preserved existing stack.ts" notice) [DSTK-01]
 - [x] 98-03-PLAN.md — DSTK-02 + DSTK-03 config-driven metadata (`McpMetadata.snapshot_baked` + `server_type` override → `to_cdk_context` `mcp:snapshotBaked` → template literal) [DSTK-02, DSTK-03]
 - [x] 98-04-PLAN.md — DSTK-04 ALWAYS coverage (property test, `[metadata]` fuzz target, golden-file update, runnable example, `--regenerate-stack` + `[metadata]` docs) + `make quality-gate` green [DSTK-04]
+
+### Phase 99: Workbook-Crate Cognitive-Complexity Reduction (PMAT gate debt)
+
+**Goal**: Make `pmat quality-gate --fail-on-violation --checks complexity` pass workspace-wide by refactoring the 21 cognitive-complexity violations in the v2.3 workbook crates to the gate threshold, WITHOUT weakening the gate (`#[allow]` is a no-op for PMAT per Phase 75 D-10-B; no production crate goes into `.pmatignore`). Behavior is preserved by the milestone's existing golden/reconcile/quirk test net. Unblocks PR #279's complexity gate (the Makefile `SHELL := bash` fix already unblocked the separate purity-check gate).
+
+**Depends on**: none (refactor of already-merged-on-branch milestone code; independent of Phase 98)
+**Requirements**: CPLX-01, CPLX-02, CPLX-03, CPLX-04
+**Success Criteria** (what must be TRUE):
+
+  1. `pmat quality-gate --fail-on-violation --checks complexity` exits 0 with ZERO violations across the workspace
+  2. All 21 flagged functions are refactored (the 5 over the cog-50 hard cap — `render_xlsx` 93, `classify_cell_roles` 74, `eval_expr` 58, `ingest` 57, `tokenize` 52 — by genuine decomposition); no production crate is added to `.pmatignore`; no `#[allow(clippy::cognitive_complexity)]` is relied on to clear the PMAT gate
+  3. No behavior regressions — full workspace test suite green (golden/reconcile/quirk fixtures, dialect linter, provenance gate) and `make quality-gate` green
+  4. PR #279's CI complexity gate goes green on the next run
+
+**Source**: PR #279 CI failure (21 PMAT complexity violations); empirical PMAT-allow behavior in `.planning/phases/75-fix-pmat-issues/pmat-allow-behavior.md` (D-10-B)
