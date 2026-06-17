@@ -84,3 +84,10 @@ None.
 ## Threat Flags
 
 None — the refactor touches only an internal property-guard / case-grid builder; no new network, auth, file-access, or schema surface.
+
+## Self-Check: PASSED
+
+- FOUND: `.planning/phases/99-workbook-crate-cognitive-complexity-reduction/99-08-SUMMARY.md`
+- FOUND commit `767cedee` (Task 1: derive_case_grid)
+- FOUND commit `fc1ec8f6` (Task 2: no_seeded_value_outside_allowed)
+- FOUND commit `13036c4c` (SUMMARY)
