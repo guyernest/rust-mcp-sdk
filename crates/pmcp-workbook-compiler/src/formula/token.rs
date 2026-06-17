@@ -183,11 +183,7 @@ fn lex_next(chars: &[char], i: usize, tokens: &mut Vec<Token>) -> Result<usize, 
 /// returning `Some((Token, next_index))` (or `Some(Err)` on a lex error). Returns
 /// `None` when `c` does not open a delimited lexeme, so the caller falls through
 /// to atom/operator handling.
-fn lex_delimited(
-    chars: &[char],
-    i: usize,
-    c: char,
-) -> Option<Result<(Token, usize), LexError>> {
+fn lex_delimited(chars: &[char], i: usize, c: char) -> Option<Result<(Token, usize), LexError>> {
     match c {
         // String literal FIRST: consume `""` as one escaped quote.
         '"' => Some(lex_string(chars, i)),
@@ -488,7 +484,11 @@ fn scan_atom_run(chars: &[char], start: usize) -> (usize, bool, bool) {
     while i < chars.len() {
         match classify_atom_char(chars, i, start, all_numeric_shape) {
             AtomStep::Stop => break,
-            AtomStep::Advance { step, dollar, breaks_numeric } => {
+            AtomStep::Advance {
+                step,
+                dollar,
+                breaks_numeric,
+            } => {
                 has_dollar |= dollar;
                 all_numeric_shape &= !breaks_numeric;
                 i += step;
@@ -520,19 +520,39 @@ enum AtomStep {
 fn classify_atom_char(chars: &[char], i: usize, start: usize, numeric: bool) -> AtomStep {
     let c = chars[i];
     if c == '$' {
-        return AtomStep::Advance { step: 1, dollar: true, breaks_numeric: true };
+        return AtomStep::Advance {
+            step: 1,
+            dollar: true,
+            breaks_numeric: true,
+        };
     }
     if c.is_ascii_digit() || c == '.' {
-        return AtomStep::Advance { step: 1, dollar: false, breaks_numeric: false };
+        return AtomStep::Advance {
+            step: 1,
+            dollar: false,
+            breaks_numeric: false,
+        };
     }
     if (c == 'E' || c == 'e') && numeric && i > start && is_scientific_exp(chars, i) {
         // Scientific exponent `1.5E3` / `1.5E+3` / `1.5e-2`: consume the `E` plus
         // an optional sign; the digit run continues on next iterations.
-        let step = if chars[i + 1] == '+' || chars[i + 1] == '-' { 2 } else { 1 };
-        return AtomStep::Advance { step, dollar: false, breaks_numeric: false };
+        let step = if chars[i + 1] == '+' || chars[i + 1] == '-' {
+            2
+        } else {
+            1
+        };
+        return AtomStep::Advance {
+            step,
+            dollar: false,
+            breaks_numeric: false,
+        };
     }
     if c.is_ascii_alphanumeric() || c == '_' {
-        return AtomStep::Advance { step: 1, dollar: false, breaks_numeric: true };
+        return AtomStep::Advance {
+            step: 1,
+            dollar: false,
+            breaks_numeric: true,
+        };
     }
     AtomStep::Stop
 }
