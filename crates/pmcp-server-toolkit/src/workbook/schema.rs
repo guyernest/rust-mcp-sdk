@@ -74,10 +74,14 @@ fn output_column_schema(unit: Option<&str>, role: Option<&CellRole>) -> Value {
 /// `additionalProperties:true` and `required:["provenance"]`).
 #[must_use]
 pub fn output_schema_for_manifest(manifest: &Manifest, cell_map: &CellMap) -> Value {
-    // TRANSITIONAL (Plan 03→04): the flat `.outputs()` accessor unions every tool's
-    // outputs. Plan 04 reshapes this builder to per-tool schemas and drops the accessor.
-    #[allow(deprecated)]
-    let all_outputs = cell_map.outputs();
+    // The union of every tool's outputs (the workbook-WIDE output surface), kept for
+    // the meta/generalization consumers (the WBEX-01 reemit proofs). The per-TOOL
+    // served schema is `output_schema_for_tool`.
+    let all_outputs: Vec<CellEntry> = cell_map
+        .tools
+        .iter()
+        .flat_map(|t| t.outputs.iter().cloned())
+        .collect();
     let output_props = output_props_for_entries(manifest, &all_outputs);
 
     let mut success = Map::new();

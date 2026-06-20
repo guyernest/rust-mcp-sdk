@@ -132,51 +132,19 @@ pub(crate) fn render_at_boundary(
 // ---- per-tool handler (WBV2-04) ----------------------------------------------
 
 /// Sanitize a raw output-Table name into an MCP tool name matching
-/// `^[a-zA-Z0-9_-]{1,64}$` (T-100-10), with these EXACT, LOCKED rules (the
-/// security boundary Task 4 property-proves):
-///
-/// 1. **Lowercase** every ASCII letter (`Calculate_Tax` → `calculate_tax`).
-/// 2. **Collapse** each maximal RUN of illegal characters (anything not
-///    `[a-z0-9_-]` after lowercasing) to a SINGLE `_` (`"a  b"`/`"a@@b"` →
-///    `"a_b"`), never one `_` per illegal char.
-/// 3. **Trim** leading/trailing `_`/`-` (no governance-noise edges).
-/// 4. **Truncate** to 64 chars AFTER the above.
-/// 5. If the result is **empty** (the input was empty or all-illegal) return
-///    `Err(WorkbookToolError::unmappable_tool_name)` — fail-closed.
+/// `^[a-zA-Z0-9_-]{1,64}$` (T-100-10), wrapping the SINGLE shared runtime
+/// sanitizer ([`pmcp_workbook_runtime::sanitize_tool_name`]) so the served
+/// registration and the offline compiler's collision lint cannot drift on the
+/// locked five-rule semantics (lowercase, illegal-run → single `_`, trim edges,
+/// truncate 64, reject empty/all-illegal). A reject becomes the fail-closed
+/// `invalid_tool_name` domain error.
 ///
 /// # Errors
-/// Returns `Err` when the input has no character mappable to the charset (empty
-/// or all-illegal).
+/// Returns `Err(WorkbookToolError::unmappable_tool_name)` when the input has no
+/// character mappable to the charset (empty or all-illegal).
 #[allow(clippy::result_large_err)]
 pub fn sanitize_tool_name(raw: &str) -> Result<String, WorkbookToolError> {
-    let mut out = String::with_capacity(raw.len());
-    let mut pending_underscore = false;
-    for ch in raw.chars() {
-        let lc = ch.to_ascii_lowercase();
-        if lc.is_ascii_alphanumeric() || lc == '_' || lc == '-' {
-            // Flush a pending illegal-run as a single `_`, but never as a leading edge.
-            if pending_underscore && !out.is_empty() {
-                out.push('_');
-            }
-            pending_underscore = false;
-            out.push(lc);
-        } else {
-            // An illegal char: remember we owe a single `_` (run-collapse, rule 2).
-            pending_underscore = true;
-        }
-    }
-    // Rule 3: trim leading/trailing `_`/`-`. Rule 4: truncate to 64.
-    let trimmed: String = out
-        .trim_matches(|c| c == '_' || c == '-')
-        .chars()
-        .take(64)
-        .collect();
-    // Truncation may re-expose a trailing edge char; trim once more (still ≤64).
-    let trimmed = trimmed.trim_matches(|c| c == '_' || c == '-').to_string();
-    if trimmed.is_empty() {
-        return Err(WorkbookToolError::unmappable_tool_name(raw));
-    }
-    Ok(trimmed)
+    pmcp_workbook_runtime::sanitize_tool_name(raw).map_err(WorkbookToolError::unmappable_tool_name)
 }
 
 /// One served MCP tool per output Table (WBV2-04): validate → seed via cell_map →

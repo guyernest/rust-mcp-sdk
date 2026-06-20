@@ -74,10 +74,9 @@ fn golden_passes_boot_integrity() {
     assert_eq!(bundle.stamp.version, VERSION);
     assert_eq!(bundle.manifest.workflow, BUNDLE_ID);
     assert_eq!(bundle.changelog.to_version, VERSION);
-    // Full output surface (no privileged headline — WBSV-01): four named outputs.
-    // TRANSITIONAL (Plan 03→04): flat `.outputs()` accessor unions every tool's outputs.
-    #[allow(deprecated)]
-    let output_count = bundle.cell_map.outputs().len();
+    // Full output surface (no privileged headline — WBSV-01): the named outputs
+    // across every per-Table tool (WBV2-04 multi-tool model).
+    let output_count: usize = bundle.cell_map.tools.iter().map(|t| t.outputs.len()).sum();
     assert_eq!(output_count, 4, "golden carries four named outputs");
     assert_eq!(
         bundle.cell_map.inputs.len(),

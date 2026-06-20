@@ -109,8 +109,8 @@ fn structural_eq_check1_cell_map_seed_coords_equal() {
         c.sort();
         c
     };
-    // WBV2-03: output seed_coords now live under `tools[].outputs[]` (the multi-tool
-    // model lift); union across tools, matching the transitional `.outputs()` accessor.
+    // WBV2-03/04: output seed_coords live under `tools[].outputs[]` (the multi-tool
+    // model); union across tools by iterating each tool's outputs.
     let output_coords = |v: &Value| -> Vec<String> {
         let mut c: Vec<String> = v["tools"]
             .as_array()
@@ -197,8 +197,7 @@ fn structural_eq_check4_loads_via_toolkit() {
     assert_eq!(loaded.stamp.bundle_id, "tax-calc");
     assert_eq!(loaded.stamp.version, "1.1.0");
     assert_eq!(loaded.cell_map.inputs.len(), 3, "three inputs served");
-    #[allow(deprecated)]
-    let output_count = loaded.cell_map.outputs().len();
+    let output_count: usize = loaded.cell_map.tools.iter().map(|t| t.outputs.len()).sum();
     assert_eq!(output_count, 4, "four named outputs served");
 }
 

@@ -703,7 +703,9 @@ fn split_cell_key(cell: &str) -> (&str, Option<String>) {
     }
 }
 
-/// (a) The blocking finding for a `Role::Input` with no `in_*` named range.
+/// (a) The blocking finding for a `Role::Input` with no semantic key (WBV2-05 §8,
+/// F1 reshaped to a table-ROW lint — the repair points at the Inputs Table row's
+/// `name` cell, NOT an `in_*` named range).
 fn unnamed_input_finding(cell: &str) -> LintFinding {
     let (sheet, addr) = split_cell_key(cell);
     LintFinding::new(
@@ -712,18 +714,18 @@ fn unnamed_input_finding(cell: &str) -> LintFinding {
         sheet,
         addr,
         format!(
-            "input cell {cell} has no in_* named range; add one so it gets a semantic \
-             key (otherwise the served input key degenerates to the cell value and the \
-             tool is uncallable)"
+            "input cell {cell} has no semantic name; without one the served input key \
+             degenerates to the cell value and the tool is uncallable"
         ),
         format!(
-            "in Excel, define a single-cell named range `in_<name>` (e.g. `in_amount`) \
-             targeting {cell} so the served `calculate` input carries a stable key"
+            "fill the `name` column of the Inputs Table row at {cell} with a stable \
+             identifier (e.g. `amount`) so the served tool input carries a usable key"
         ),
     )
 }
 
-/// (b) The blocking finding for two+ inputs that collide on one served `json_key`.
+/// (b) The blocking finding for two+ inputs that collide on one served `json_key`
+/// (WBV2-05 §8, F1 reshaped — the repair names the Table rows, not `in_*` ranges).
 fn duplicate_input_key_finding(key: &str, coords: &[String]) -> LintFinding {
     let joined = coords.join(", ");
     LintFinding::new(
@@ -736,13 +738,14 @@ fn duplicate_input_key_finding(key: &str, coords: &[String]) -> LintFinding {
              could not address them independently"
         ),
         format!(
-            "rename the `in_*` named ranges so each input at {joined} resolves to a \
-             distinct served key"
+            "give each Inputs Table row at {joined} a DISTINCT `name` so they resolve \
+             to distinct served keys"
         ),
     )
 }
 
-/// (c) The blocking finding for an input whose served `json_key` is empty/whitespace.
+/// (c) The blocking finding for an input whose served `json_key` is empty/whitespace
+/// (WBV2-05 §8, F1 reshaped — the repair names the Table row's `name` cell).
 fn empty_input_key_finding(cell: &str) -> LintFinding {
     let (sheet, addr) = split_cell_key(cell);
     LintFinding::new(
@@ -754,7 +757,10 @@ fn empty_input_key_finding(cell: &str) -> LintFinding {
             "input cell {cell} resolves to an empty served key; a caller would have no \
              field name to set it under"
         ),
-        format!("give {cell} a non-empty `in_<name>` named range so it gets a usable served key"),
+        format!(
+            "fill the `name` column of the Inputs Table row at {cell} with a non-empty \
+             identifier so it gets a usable served key"
+        ),
     )
 }
 

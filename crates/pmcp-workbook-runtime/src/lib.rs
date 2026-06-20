@@ -85,9 +85,9 @@ pub use resolve::{
 };
 
 pub use manifest_model::{
-    is_computed, is_strict_constant, json_key_for_role, role_for_cell, AnnotationDecl,
-    CapabilityDecl, CellRole, ChangelogEntry, Dtype, GovernedDatum, InputTier, LoopDecl, Manifest,
-    Role,
+    is_computed, is_strict_constant, json_key_for_role, role_for_cell, sanitize_tool_name,
+    AnnotationDecl, CapabilityDecl, CellRole, ChangelogEntry, Dtype, GovernedDatum, InputTier,
+    LoopDecl, Manifest, Role,
 };
 
 pub use artifact_model::{

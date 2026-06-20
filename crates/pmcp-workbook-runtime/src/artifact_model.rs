@@ -91,25 +91,6 @@ pub struct CellMap {
     pub tools: Vec<Tool>,
 }
 
-impl CellMap {
-    /// TRANSITIONAL (Plan 03→04): the flattened union of every tool's `outputs`, so the
-    /// still-old single-tool served call sites (`schema.rs`/`handler.rs`/`lib.rs`) that
-    /// read "all the outputs" keep compiling against the multi-tool model until Plan 04
-    /// reshapes them to per-tool iteration. For the N=1 case this equals the single
-    /// tool's `outputs`. Removed by Plan 04 Task 1 (the served fan-out lands there).
-    #[deprecated(
-        note = "transitional shim — Plan 04 fan-out replaces .outputs() with per-tool \
-                iteration; removed in Plan 04 Task 1"
-    )]
-    #[must_use]
-    pub fn outputs(&self) -> Vec<CellEntry> {
-        self.tools
-            .iter()
-            .flat_map(|t| t.outputs.iter().cloned())
-            .collect()
-    }
-}
-
 /// The three per-artifact content hashes recorded in a [`BundleLock`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct ArtifactHashes {
@@ -281,7 +262,9 @@ mod tests {
     }
 
     #[test]
-    fn artifact_model_outputs_accessor_flattens_tools_outputs() {
+    fn artifact_model_per_tool_outputs_are_independent() {
+        // The shim is RETIRED (Plan 04): every consumer iterates `tools[].outputs`
+        // per-tool. Two tools own DISJOINT output sets — there is no union accessor.
         let map = CellMap {
             inputs: vec![],
             tools: vec![
@@ -301,35 +284,21 @@ mod tests {
                 },
             ],
         };
-        // The transitional accessor returns the union across tools.
-        #[allow(deprecated)]
-        let flat = map.outputs();
-        let keys: Vec<&str> = flat.iter().map(|e| e.json_key.as_str()).collect();
-        assert_eq!(
-            keys,
-            vec!["a1", "a2", "b1"],
-            "outputs() flattens tools[].outputs"
-        );
-    }
-
-    #[test]
-    fn artifact_model_outputs_accessor_n1_equals_single_tool() {
-        let map = CellMap {
-            inputs: vec![],
-            tools: vec![Tool {
-                name: "Only".to_string(),
-                description: None,
-                input_keys: vec![],
-                outputs: vec![entry("answer", "S!Z9", Some("USD"))],
-                oracle: BTreeMap::new(),
-            }],
-        };
-        #[allow(deprecated)]
-        let flat = map.outputs();
-        assert_eq!(
-            flat, map.tools[0].outputs,
-            "N=1: outputs() == the single tool's outputs"
-        );
+        let tool_a_keys: Vec<&str> = map.tools[0]
+            .outputs
+            .iter()
+            .map(|e| e.json_key.as_str())
+            .collect();
+        let tool_b_keys: Vec<&str> = map.tools[1]
+            .outputs
+            .iter()
+            .map(|e| e.json_key.as_str())
+            .collect();
+        assert_eq!(tool_a_keys, vec!["a1", "a2"], "tool A owns its outputs");
+        assert_eq!(tool_b_keys, vec!["b1"], "tool B owns its outputs");
+        // The per-tool union, computed inline by consumers (no accessor).
+        let total: usize = map.tools.iter().map(|t| t.outputs.len()).sum();
+        assert_eq!(total, 3, "three output cells across two tools");
     }
 
     #[test]

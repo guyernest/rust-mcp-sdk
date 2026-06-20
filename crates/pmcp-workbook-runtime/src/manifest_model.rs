@@ -197,6 +197,51 @@ fn strip_governance_prefix(name: &str) -> &str {
     name
 }
 
+/// Sanitize a raw output-Table name into an MCP tool name matching
+/// `^[a-zA-Z0-9_-]{1,64}$` (T-100-10). This is the SINGLE shared sanitizer — the
+/// served toolkit's registration AND the offline compiler's post-sanitize
+/// collision lint both call it, so "what we register" and "what we collision-check"
+/// cannot drift. The LOCKED five-rule semantics:
+///
+/// 1. **Lowercase** every ASCII letter (`Calculate_Tax` → `calculate_tax`).
+/// 2. **Collapse** each maximal RUN of illegal characters (anything not
+///    `[a-z0-9_-]` after lowercasing) to a SINGLE `_` (`"a  b"`/`"a@@b"` →
+///    `"a_b"`), never one `_` per illegal char.
+/// 3. **Trim** leading/trailing `_`/`-` (no governance-noise edges).
+/// 4. **Truncate** to 64 chars AFTER the above.
+/// 5. If the result is **empty** (the input was empty or all-illegal) return
+///    `Err` carrying the offending raw name — fail-closed.
+///
+/// # Errors
+/// Returns `Err(raw.to_string())` when the input has no character mappable to the
+/// charset (empty or all-illegal).
+pub fn sanitize_tool_name(raw: &str) -> Result<String, String> {
+    let mut out = String::with_capacity(raw.len());
+    let mut pending_underscore = false;
+    for ch in raw.chars() {
+        let lc = ch.to_ascii_lowercase();
+        if lc.is_ascii_alphanumeric() || lc == '_' || lc == '-' {
+            if pending_underscore && !out.is_empty() {
+                out.push('_');
+            }
+            pending_underscore = false;
+            out.push(lc);
+        } else {
+            pending_underscore = true;
+        }
+    }
+    let trimmed: String = out
+        .trim_matches(|c| c == '_' || c == '-')
+        .chars()
+        .take(64)
+        .collect();
+    let trimmed = trimmed.trim_matches(|c| c == '_' || c == '-').to_string();
+    if trimmed.is_empty() {
+        return Err(raw.to_string());
+    }
+    Ok(trimmed)
+}
+
 /// Whether a [`CellRole`] is a STRICT constant — a BA-only governed value that
 /// must be REJECTED if a caller tries to supply it as a `calculate` input
 /// (Codex HIGH #3). The rule keys on [`Role::Constant`] + `tier == None`, NOT on

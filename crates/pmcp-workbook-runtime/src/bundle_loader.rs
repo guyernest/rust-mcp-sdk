@@ -569,8 +569,7 @@ mod tests {
         let bundle = load(&source).expect("valid golden loads");
         assert_eq!(bundle.stamp.bundle_id, "tax-calc");
         assert_eq!(bundle.stamp.version, "1.0.0");
-        #[allow(deprecated)]
-        let output_count = bundle.cell_map.outputs().len();
+        let output_count: usize = bundle.cell_map.tools.iter().map(|t| t.outputs.len()).sum();
         assert_eq!(output_count, 1);
         assert_eq!(bundle.changelog.to_version, "1.0.0");
         assert_eq!(bundle.manifest.workflow, "tax-calc");

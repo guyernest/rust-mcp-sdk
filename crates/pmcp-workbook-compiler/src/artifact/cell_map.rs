@@ -22,9 +22,12 @@
 //! with zero output Tables cannot serve any tool), never on the absence of a single
 //! named "supply total."
 //!
-//! TRANSITIONAL (Plan 03→04): [`build_cell_map`] still wraps all outputs in ONE tool
-//! (the served call sites read them via the deprecated `.outputs()` accessor) until
-//! Plan 04 wires the per-Table [`build_tools`] fan-out into the orchestrator.
+//! [`build_cell_map`] is the single-tool transitional path (one tool wraps all
+//! outputs) the existing named-range compile orchestrator still emits;
+//! [`build_tools`] is the per-Table multi-tool primitive (WBV2-03/04) the served
+//! fan-out + per-tool reconcile ([`reconcile_tools`]) consume. The Plan 03 flat
+//! `.outputs()` accessor is RETIRED (Plan 04): every consumer iterates
+//! `tools[].outputs` per-tool.
 //!
 //! Built from the (tier-ratified) [`Manifest`] in `emit_bundle`; serialized
 //! through the deterministic [`crate::artifact::serialize`] choke point.
@@ -32,9 +35,11 @@
 use std::collections::{BTreeMap, HashSet};
 
 use pmcp_workbook_runtime::{
-    json_key_for_role, upstream_input_leaves, CellRole, CellValue, Dag, LintFinding, Manifest,
-    Role, Severity,
+    json_key_for_role, sanitize_tool_name, upstream_input_leaves, CellRole, CellValue, Dag,
+    LintFinding, Manifest, Role, Severity,
 };
+
+use crate::reconcile::within_tol;
 
 // Re-export the runtime-safe artifact shapes (the served loader deserializes the
 // SAME `CellMap`/`CellEntry`/`Tool`); never re-declared here.
@@ -194,6 +199,220 @@ fn feeds_no_tool_findings(
     findings
 }
 
+// ---- per-tool reconcile (WBV2-05, Open-Q2) -----------------------------------
+
+/// One graded output row in a tool's [`Comparison`]: the output `json_key`, the
+/// computed value, the authored oracle value, and whether they reconcile within
+/// the penny tolerance.
+#[derive(Debug, Clone)]
+pub struct ComparisonRow {
+    /// The output column's served `json_key`.
+    pub json_key: String,
+    /// The value the bundle IR computed for this output cell.
+    pub computed: CellValue,
+    /// The authored expected value (the cached `<v>` oracle).
+    pub oracle: CellValue,
+    /// `true` iff `computed` reconciles with `oracle` within tolerance.
+    pub reconciled: bool,
+}
+
+/// ONE tool's reconcile grade: its per-output [`ComparisonRow`]s. A tool reconciles
+/// iff EVERY graded row reconciles (`is_match`).
+#[derive(Debug, Clone, Default)]
+pub struct Comparison {
+    /// The per-output graded rows (one per oracle-bearing output cell).
+    pub rows: Vec<ComparisonRow>,
+}
+
+impl Comparison {
+    /// `true` iff every graded output row reconciled within tolerance (a tool with
+    /// no oracle rows trivially matches).
+    #[must_use]
+    pub fn is_match(&self) -> bool {
+        self.rows.iter().all(|r| r.reconciled)
+    }
+}
+
+/// Grade ONE tool's computed outputs against ITS OWN output-Table value oracle
+/// (Open-Q2): partition the run's `computed` map to ONLY this tool's
+/// `outputs[].seed_coord` keys, look up each output's authored oracle from
+/// `tool.oracle` (keyed by `json_key`), and grade them with the shared
+/// [`within_tol`] penny comparator. An output with no oracle entry contributes no
+/// graded row (nothing to reconcile against).
+#[must_use]
+pub fn comparison_from_outputs_for_tool(
+    computed: &BTreeMap<String, CellValue>,
+    tool: &Tool,
+) -> Comparison {
+    let mut rows = Vec::new();
+    for entry in &tool.outputs {
+        let Some(oracle) = tool.oracle.get(&entry.json_key) else {
+            continue;
+        };
+        let computed_value = computed
+            .get(&entry.seed_coord)
+            .cloned()
+            .unwrap_or(CellValue::Empty);
+        let reconciled = within_tol(&computed_value, oracle);
+        rows.push(ComparisonRow {
+            json_key: entry.json_key.clone(),
+            computed: computed_value,
+            oracle: oracle.clone(),
+            reconciled,
+        });
+    }
+    Comparison { rows }
+}
+
+/// The aggregated per-tool reconcile report (WBV2-05): one [`Comparison`] per tool,
+/// keyed by the sanitized tool name. The gate's non-zero exit derives from
+/// [`ToolReconcileReport::any_mismatch`] (ANY tool mismatch blocks); [`render`] emits
+/// one human-readable section per tool with FAILING tools first.
+///
+/// [`render`]: ToolReconcileReport::render
+#[derive(Debug, Clone, Default)]
+pub struct ToolReconcileReport {
+    /// `(sanitized tool name, that tool's Comparison)`, in build order.
+    pub per_tool: Vec<(String, Comparison)>,
+}
+
+impl ToolReconcileReport {
+    /// `true` iff ANY tool failed to reconcile (the gate's non-zero-exit signal).
+    #[must_use]
+    pub fn any_mismatch(&self) -> bool {
+        self.per_tool.iter().any(|(_, c)| !c.is_match())
+    }
+
+    /// Render one section per tool (a tool-name header + its graded rows), FAILING
+    /// tools listed first so the operator sees the blocking mismatches at the top.
+    #[must_use]
+    pub fn render(&self) -> String {
+        let mut ordered: Vec<&(String, Comparison)> = self.per_tool.iter().collect();
+        // Failing tools (is_match == false) sort before passing tools.
+        ordered.sort_by_key(|(_, c)| c.is_match());
+        let mut out = String::new();
+        for (name, comparison) in ordered {
+            let status = if comparison.is_match() {
+                "OK"
+            } else {
+                "MISMATCH"
+            };
+            out.push_str(&format!("tool `{name}`: {status}\n"));
+            for row in &comparison.rows {
+                let mark = if row.reconciled { "  ok " } else { "  XX " };
+                out.push_str(&format!(
+                    "{mark}{}: computed {:?} vs oracle {:?}\n",
+                    row.json_key, row.computed, row.oracle
+                ));
+            }
+        }
+        out
+    }
+}
+
+/// Build the aggregated [`ToolReconcileReport`] over every tool in `tools` (Open-Q2):
+/// grade each tool's outputs against its own oracle and key the result by the
+/// SANITIZED tool name (so a collision/charset issue surfaces here too). The gate
+/// derives its non-zero exit from [`ToolReconcileReport::any_mismatch`].
+///
+/// # Errors
+/// Returns `Err` if any tool's raw name is unmappable to the MCP tool-name charset
+/// (the same fail-closed reject the served registration applies).
+pub fn reconcile_tools(
+    computed: &BTreeMap<String, CellValue>,
+    tools: &[Tool],
+) -> Result<ToolReconcileReport, String> {
+    let mut per_tool = Vec::with_capacity(tools.len());
+    for tool in tools {
+        let name = sanitize_tool_name(&tool.name)
+            .map_err(|raw| format!("output Table '{raw}' has no MCP-mappable tool name"))?;
+        per_tool.push((name, comparison_from_outputs_for_tool(computed, tool)));
+    }
+    Ok(ToolReconcileReport { per_tool })
+}
+
+// ---- post-sanitize collision lint (WBV2-05, T-100-17) ------------------------
+
+/// Detect output Tables whose names SANITIZE to the same MCP tool name (T-100-17):
+/// two distinct source Tables (`Calculate Tax`, `calculate_tax`, `calculate-tax`)
+/// that all map to `calculate_tax` would silently collapse into one tool at
+/// registration. This runs in the compiler BEFORE tool registration so a collision
+/// is a clean, cell-precise compile failure, not a silent last-writer-wins.
+///
+/// Groups the `output_tables` by their sanitized name; any group with ≥2 source
+/// Tables emits ONE `Severity::Error` [`LintFinding`] naming ALL colliding source
+/// Tables and locating at each offender's first output cell. An UNMAPPABLE name
+/// (empty/all-illegal) emits a separate `tool-name-unmappable` error finding.
+#[must_use]
+pub fn tool_name_collision_findings(output_tables: &[OutputTable]) -> Vec<LintFinding> {
+    let mut by_sanitized: BTreeMap<String, Vec<&OutputTable>> = BTreeMap::new();
+    let mut findings = Vec::new();
+
+    for table in output_tables {
+        match sanitize_tool_name(&table.name) {
+            Ok(name) => by_sanitized.entry(name).or_default().push(table),
+            Err(_) => findings.push(unmappable_tool_name_finding(table)),
+        }
+    }
+
+    for (sanitized, group) in by_sanitized.iter().filter(|(_, g)| g.len() > 1) {
+        findings.push(collision_finding(sanitized, group));
+    }
+    findings
+}
+
+/// The located finding for an unmappable output-Table name (no MCP-charset chars).
+fn unmappable_tool_name_finding(table: &OutputTable) -> LintFinding {
+    let (sheet, addr) = table
+        .output_cells
+        .first()
+        .map_or(("manifest".to_string(), None), |c| split_cell_key(c));
+    LintFinding::new(
+        Severity::Error,
+        "manifest/tool-name-unmappable",
+        sheet,
+        addr,
+        format!(
+            "output Table '{}' has no characters mappable to the MCP tool-name charset \
+             [a-z0-9_-]; the tool would be uncallable",
+            table.name
+        ),
+        format!(
+            "rename output Table '{}' to include at least one ASCII letter or digit",
+            table.name
+        ),
+    )
+}
+
+/// The located finding for ≥2 output Tables colliding on one sanitized MCP name.
+fn collision_finding(sanitized: &str, group: &[&OutputTable]) -> LintFinding {
+    let names: Vec<&str> = group.iter().map(|t| t.name.as_str()).collect();
+    let locations: Vec<String> = group
+        .iter()
+        .filter_map(|t| t.output_cells.first().cloned())
+        .collect();
+    let (sheet, addr) = group
+        .first()
+        .and_then(|t| t.output_cells.first())
+        .map_or(("manifest".to_string(), None), |c| split_cell_key(c));
+    LintFinding::new(
+        Severity::Error,
+        "manifest/tool-name-collision",
+        sheet,
+        addr,
+        format!(
+            "output Tables [{}] all sanitize to the same MCP tool name `{sanitized}` \
+             (at {}); a caller could not address them independently",
+            names.join(", "),
+            locations.join(", ")
+        ),
+        format!(
+            "rename the output Tables [{}] so each sanitizes to a DISTINCT MCP tool name",
+            names.join(", ")
+        ),
+    )
+}
+
 /// The authored expected-result ORACLE value for an output cell, when the manifest
 /// carries a typed default (the harvested cached `<v>`). Currently sourced from the
 /// `InputTier::Variable` default the harvest stamps on output rows is `None`, so this
@@ -258,9 +477,9 @@ pub fn build_cell_map(manifest: &Manifest) -> Result<CellMap, String> {
         );
     }
 
-    // TRANSITIONAL (Plan 03→04): wrap all outputs in ONE tool. Plan 04 replaces this
-    // single-tool projection with the per-Table `build_tools` fan-out + the harvested
-    // tool name/description, and retires the `.outputs()` accessor the served side reads.
+    // Single-tool projection: wrap all outputs in ONE tool (the named-range compile
+    // orchestrator's transitional path). The per-Table `build_tools` fan-out (with the
+    // harvested tool name/description) is the multi-tool primitive the served side uses.
     Ok(CellMap {
         inputs,
         tools: vec![Tool {
@@ -354,8 +573,7 @@ mod tests {
         assert_eq!(map.inputs[0].json_key, "gross_income");
         assert_eq!(map.inputs[0].seed_coord, "1_Inputs!B2");
         assert_eq!(map.inputs[0].unit.as_deref(), Some("USD"));
-        #[allow(deprecated)]
-        let outputs = map.outputs();
+        let outputs = &map.tools[0].outputs;
         assert_eq!(outputs.len(), 1, "one Role::Output entry");
         assert_eq!(outputs[0].json_key, "tax_owed");
         assert_eq!(outputs[0].seed_coord, "3_Outputs!B3");
@@ -393,8 +611,7 @@ mod tests {
         ]);
         let map = build_cell_map(&manifest).expect("build");
         assert_eq!(map.inputs[0].json_key, "Filing status");
-        #[allow(deprecated)]
-        let outputs = map.outputs();
+        let outputs = &map.tools[0].outputs;
         assert_eq!(outputs[0].json_key, "3_Outputs!B2");
     }
 
@@ -419,8 +636,7 @@ mod tests {
             ),
         ]);
         let map = build_cell_map(&manifest).expect("build");
-        #[allow(deprecated)]
-        let outputs = map.outputs();
+        let outputs = &map.tools[0].outputs;
         assert_eq!(outputs.len(), 2, "both outputs are first-class");
     }
 
@@ -573,5 +789,144 @@ mod tests {
             "the finding names the orphan input: {}",
             findings[0].message
         );
+    }
+
+    // ---- per-tool reconcile (WBV2-05, Open-Q2) ---------------------------
+
+    fn entry(json_key: &str, seed: &str) -> CellEntry {
+        CellEntry {
+            json_key: json_key.to_string(),
+            seed_coord: seed.to_string(),
+            unit: None,
+        }
+    }
+
+    fn tool_with_oracle(name: &str, json_key: &str, seed: &str, oracle: f64) -> Tool {
+        let mut o = BTreeMap::new();
+        o.insert(json_key.to_string(), CellValue::Number(oracle));
+        Tool {
+            name: name.to_string(),
+            description: None,
+            input_keys: vec![],
+            outputs: vec![entry(json_key, seed)],
+            oracle: o,
+        }
+    }
+
+    #[test]
+    fn comparison_from_outputs_for_tool_grades_against_own_oracle() {
+        let tool = tool_with_oracle("Calculate_Tax", "tax", "Calc!B3", 18241.0);
+        let mut computed = BTreeMap::new();
+        computed.insert("Calc!B3".to_string(), CellValue::Number(18241.0));
+        let cmp = comparison_from_outputs_for_tool(&computed, &tool);
+        assert!(cmp.is_match(), "an exact oracle match reconciles");
+        assert_eq!(cmp.rows.len(), 1);
+        assert!(cmp.rows[0].reconciled);
+    }
+
+    #[test]
+    fn comparison_from_outputs_for_tool_detects_wrong_oracle() {
+        let tool = tool_with_oracle("Calculate_Tax", "tax", "Calc!B3", 18241.0);
+        let mut computed = BTreeMap::new();
+        computed.insert("Calc!B3".to_string(), CellValue::Number(99999.0));
+        let cmp = comparison_from_outputs_for_tool(&computed, &tool);
+        assert!(!cmp.is_match(), "a wrong computed value fails reconcile");
+    }
+
+    #[test]
+    fn reconcile_tools_any_mismatch_blocks_on_one_bad_tool() {
+        // Two tools; ONE has a wrong oracle → any_mismatch() is true.
+        let good = tool_with_oracle("Calculate_Tax", "tax", "Calc!B3", 100.0);
+        let bad = tool_with_oracle("Estimate_Refund", "refund", "Calc!B4", 50.0);
+        let mut computed = BTreeMap::new();
+        computed.insert("Calc!B3".to_string(), CellValue::Number(100.0));
+        computed.insert("Calc!B4".to_string(), CellValue::Number(999.0)); // != 50
+        let report = reconcile_tools(&computed, &[good, bad]).expect("reconcile");
+        assert!(
+            report.any_mismatch(),
+            "one bad tool makes the aggregated report mismatch (non-zero gate exit)"
+        );
+        // render() lists the FAILING tool first.
+        let rendered = report.render();
+        let first_line = rendered.lines().next().unwrap_or("");
+        assert!(
+            first_line.contains("estimate_refund") && first_line.contains("MISMATCH"),
+            "failing tool rendered first: {rendered}"
+        );
+    }
+
+    #[test]
+    fn reconcile_tools_all_match_is_clean() {
+        let a = tool_with_oracle("A", "x", "S!A1", 1.0);
+        let b = tool_with_oracle("B", "y", "S!A2", 2.0);
+        let mut computed = BTreeMap::new();
+        computed.insert("S!A1".to_string(), CellValue::Number(1.0));
+        computed.insert("S!A2".to_string(), CellValue::Number(2.0));
+        let report = reconcile_tools(&computed, &[a, b]).expect("reconcile");
+        assert!(!report.any_mismatch(), "all tools reconcile → clean gate");
+    }
+
+    // ---- post-sanitize collision lint (WBV2-05, T-100-17) ----------------
+
+    fn out_table(name: &str, cell: &str) -> OutputTable {
+        OutputTable {
+            name: name.to_string(),
+            description: None,
+            output_cells: vec![cell.to_string()],
+        }
+    }
+
+    #[test]
+    fn collision_lint_flags_tables_sanitizing_to_same_name() {
+        // Per the LOCKED sanitize semantics: a space → `_`, but a literal `-` is a
+        // LEGAL char (kept verbatim). So "Calculate Tax" and "calculate_tax" both
+        // sanitize to `calculate_tax` (a COLLISION), while "calculate-tax" stays
+        // distinct (`calculate-tax`). The collision finding names BOTH underscore
+        // offenders and their cell locations.
+        let tables = vec![
+            out_table("Calculate Tax", "3_Out!B2"),
+            out_table("calculate_tax", "3_Out!B3"),
+            out_table("calculate-tax", "3_Out!B4"),
+        ];
+        let findings = tool_name_collision_findings(&tables);
+        assert_eq!(
+            findings.len(),
+            1,
+            "exactly one collision (the two underscore-mapping Tables); calculate-tax is distinct"
+        );
+        assert_eq!(findings[0].rule, "manifest/tool-name-collision");
+        assert_eq!(findings[0].severity, Severity::Error);
+        for name in ["Calculate Tax", "calculate_tax"] {
+            assert!(
+                findings[0].message.contains(name),
+                "the collision names both offenders ({name}): {}",
+                findings[0].message
+            );
+        }
+        // Locates at each offending Table's output cell.
+        assert!(findings[0].message.contains("3_Out!B2"));
+        assert!(findings[0].message.contains("3_Out!B3"));
+    }
+
+    #[test]
+    fn collision_lint_passes_distinct_names() {
+        let tables = vec![
+            out_table("Calculate Tax", "3_Out!B2"),
+            out_table("Estimate Refund", "3_Out!B3"),
+        ];
+        let findings = tool_name_collision_findings(&tables);
+        assert!(
+            findings.is_empty(),
+            "two distinct sanitized names do not collide: {findings:?}"
+        );
+    }
+
+    #[test]
+    fn collision_lint_flags_unmappable_name() {
+        let tables = vec![out_table("@@@", "3_Out!B2")];
+        let findings = tool_name_collision_findings(&tables);
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].rule, "manifest/tool-name-unmappable");
+        assert_eq!(findings[0].severity, Severity::Error);
     }
 }
