@@ -404,7 +404,7 @@ pub fn load(source: &dyn BundleSource) -> Result<WorkbookBundle, BundleLoadError
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::artifact_model::{sha256_hex, CellEntry};
+    use crate::artifact_model::{sha256_hex, CellEntry, Tool};
     use crate::manifest_model::Manifest;
     use crate::render::LayoutDescriptor;
 
@@ -471,10 +471,16 @@ mod tests {
                 seed_coord: "1_Inputs!E6".to_string(),
                 unit: Some("ratio".to_string()),
             }],
-            outputs: vec![CellEntry {
-                json_key: "total".to_string(),
-                seed_coord: "7_Out!C11".to_string(),
-                unit: Some("GBP".to_string()),
+            tools: vec![Tool {
+                name: "Calculate".to_string(),
+                description: None,
+                input_keys: vec!["rate".to_string()],
+                outputs: vec![CellEntry {
+                    json_key: "total".to_string(),
+                    seed_coord: "7_Out!C11".to_string(),
+                    unit: Some("GBP".to_string()),
+                }],
+                oracle: std::collections::BTreeMap::new(),
             }],
         }
     }
@@ -563,7 +569,9 @@ mod tests {
         let bundle = load(&source).expect("valid golden loads");
         assert_eq!(bundle.stamp.bundle_id, "tax-calc");
         assert_eq!(bundle.stamp.version, "1.0.0");
-        assert_eq!(bundle.cell_map.outputs.len(), 1);
+        #[allow(deprecated)]
+        let output_count = bundle.cell_map.outputs().len();
+        assert_eq!(output_count, 1);
         assert_eq!(bundle.changelog.to_version, "1.0.0");
         assert_eq!(bundle.manifest.workflow, "tax-calc");
     }

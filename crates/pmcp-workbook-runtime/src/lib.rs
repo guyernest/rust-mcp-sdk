@@ -92,7 +92,7 @@ pub use manifest_model::{
 
 pub use artifact_model::{
     build_bundle_lock, fold_evidence_hash, sha256_hex, update_field, ArtifactHashes, BundleLock,
-    CellEntry, CellMap,
+    CellEntry, CellMap, Tool,
 };
 
 #[cfg(feature = "embedded")]
