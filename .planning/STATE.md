@@ -4,14 +4,14 @@ milestone: v2.3
 milestone_name: Excel-as-Configuration MCP Servers
 status: executing
 stopped_at: Completed 98-01-PLAN.md (DSTK-02 config contract + RED stack.ts-guard regression)
-last_updated: "2026-06-17T03:27:48.865Z"
-last_activity: 2026-06-17
+last_updated: "2026-06-20T17:50:08.938Z"
+last_activity: 2026-06-20 -- Phase 100 planning complete
 progress:
-  total_phases: 53
+  total_phases: 54
   completed_phases: 47
-  total_plans: 221
+  total_plans: 227
   completed_plans: 221
-  percent: 89
+  percent: 87
 ---
 
 # Project State
@@ -27,8 +27,8 @@ See: .planning/PROJECT.md (updated 2026-06-09) · .planning/ROADMAP.md (v2.3 mil
 
 Phase: 999.1
 Plan: Not started
-Status: Executing Phase 99
-Last activity: 2026-06-17
+Status: Ready to execute
+Last activity: 2026-06-20 -- Phase 100 planning complete
 
 Progress: [████████████████████] 286/290 plans (99%) · v2.3 phases 91–96 all Complete
 
@@ -46,6 +46,10 @@ Progress: [████████████████████] 286/290
 **Execution order:** 91 → 92 → 93 → 94 → 95 → 96 (strictly sequential — each phase's output is the next phase's dependency)
 
 ## Accumulated Context
+
+### Roadmap Evolution
+
+- Phase 100 added (2026-06-20): **Excel Workbook Built-in servers v2** — table-based authoring contract redesign (Excel Tables for inputs/outputs, multi-tool from output tables, DAG-derived per-tool input schemas, governance columns + template). Supersedes the per-cell `in_*`/`out_*` named-range model; retires merged F1 + F3-inputs, keeps F2. Plans + executes the pmcp.run dev-team improvements (F1/F2/F3 were merged on `fix/cargo-pmcp-deploy-stack-ts` but never PR'd). Spec: `docs/design/workbook-table-authoring-contract.md`.
 
 ### Decisions
 

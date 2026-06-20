@@ -64,16 +64,19 @@ phasing steps (§11) + a cross-cutting quality/purity gate. Every requirement is
 | 02-T1 | 100-02 | 2 | WBV2-02 | T-100-05 | TableRecord holds only owned String/RangeRef (no umya leak) | unit | `cargo test -p pmcp-workbook-compiler --lib ingest -- table_record` | ✅ ingest/cell_map.rs, ingest/mod.rs | ⬜ pending |
 | 02-T2 | 100-02 | 2 | WBV2-02 | — | Per-row type/unit/enum/tier harvest; ineligible DV → WARNING not error | unit | `cargo test -p pmcp-workbook-compiler --lib synth -- harvest` | ✅ manifest/synth.rs | ⬜ pending |
 | 02-T3 | 100-02 | 2 | WBV2-02 | T-100-03, T-100-04 | Malformed table XML → clean CompileError, never panic | fuzz | `cargo +nightly fuzz run workbook_table_ingest -- -runs=20000 -max_total_time=60` | ❌ fuzz/fuzz_targets/workbook_table_ingest.rs (Wave 0) | ⬜ pending |
+| 02-T4 | 100-02 | 2 | WBV2-02 | T-100-05 | Harvest projection total + stable (type/unit/enum/tier); unit∈{USD,rate,date,None}, tier∈{strict,variable} | property | `cargo test -p pmcp-workbook-compiler --test harvest_roundtrip_prop` | ❌ tests/harvest_roundtrip_prop.rs (Wave 0) | ⬜ pending |
 | 03-T1 | 100-03 | 3 | WBV2-03 | T-100-07 | Tool type lives in reader-free model (serde-only derive) | unit | `cargo test -p pmcp-workbook-runtime --lib artifact_model` | ✅ artifact_model.rs | ⬜ pending |
 | 03-T2 | 100-03 | 3 | WBV2-03 | T-100-06 | Derived leaves ⊆ inputs (no computed/constant cell becomes an input) | property | `cargo test -p pmcp-workbook-runtime --lib dag -- upstream_input_leaves` | ✅ dag.rs | ⬜ pending |
 | 03-T3 | 100-03 | 3 | WBV2-03 | T-100-06 | Per-tool input_keys minimal + DAG-derived; feeds-no-tool lint | unit | `cargo test -p pmcp-workbook-compiler --lib -- build_tools` | ✅ artifact/cell_map.rs | ⬜ pending |
+| 03-T4 | 100-03 | 3 | WBV2-03 | T-100-06 | upstream_input_leaves total over arbitrary (incl. cyclic) DAGs; result ⊆ inputs | fuzz | `cargo +nightly fuzz run dag_upstream_leaves -- -runs=20000 -max_total_time=60` | ❌ fuzz/fuzz_targets/dag_upstream_leaves.rs (Wave 0) | ⬜ pending |
 | 04-T1 | 100-04 | 4 | WBV2-04 | T-100-10, T-100-11 | Per-tool schema keeps additionalProperties:false; sanitize rejects empty name; F2 retained | unit | `cargo test -p pmcp-server-toolkit --lib workbook` | ✅ schema.rs, handler.rs, mod.rs | ⬜ pending |
 | 04-T2 | 100-04 | 4 | WBV2-05 | T-100-08, T-100-09 | Strict/computed cells never advertised as inputs; cell-precise row lints; per-tool reconcile | unit | `cargo test -p pmcp-workbook-compiler --lib -- row_lint reconcile json_key` | ✅ lib.rs, manifest_model.rs, fixture_author.rs | ⬜ pending |
 | 04-T3 | 100-04 | 4 | WBV2-04 | T-100-10 | tools/list returns N tools w/ disjoint DAG-derived I/O schemas | integration + example | `cargo test -p pmcp-server-toolkit --test workbook_multi_tool && cargo run --example workbook_table_authoring` | ❌ workbook_multi_tool.rs, examples/workbook_table_authoring.rs (Wave 0) | ⬜ pending |
-| 05-T1 | 100-05 | 5 | WBV2-06 | T-100-12, T-100-13 | explain inherits ingest umya-isolation; preview = runtime schema (no divergence) | integration + CLI | `cargo test -p cargo-pmcp --test workbook_explain && cargo run -p cargo-pmcp -- workbook explain crates/pmcp-workbook-compiler/tests/fixtures/template.xlsx` | ❌ explain.rs, workbook_explain.rs (Wave 0) | ⬜ pending |
-| 05-T2 | 100-05 | 5 | WBV2-07 | — | Chapters teach only the table model (no retired in_*/out_*) | doc-build | `cd pmcp-book && mdbook build && cd ../pmcp-course && mdbook build` | ❌ workbook-table-authoring.md ×2 (Wave 0) | ⬜ pending |
-| 06-T1 | 100-06 | 5 | WBV2-08 | T-100-15 | No cog>25 / SATD / clippy regression | gate | `make quality-gate` | n/a | ⬜ pending |
-| 06-T2 | 100-06 | 5 | WBV2-08 | T-100-14 | No umya/calamine/quick-xml/rust_xlsxwriter in any served tree | gate | `make purity-check` | n/a | ⬜ pending |
+| 04-T4 | 100-04 | 4 | WBV2-04, WBV2-05 | T-100-10, T-100-11 | sanitize_tool_name Ok⊆^[a-zA-Z0-9_-]{1,64}$ (else Err); every per-tool inputSchema additionalProperties=false | property | `cargo test -p pmcp-server-toolkit --test workbook_tool_name_prop` | ❌ tests/workbook_tool_name_prop.rs (Wave 0) | ⬜ pending |
+| 05-T1 | 100-05 | 5 | WBV2-06 | T-100-12, T-100-13 | explain inherits ingest umya-isolation; preview = runtime schema (no divergence) | integration + CLI + example | `cargo test -p cargo-pmcp --test workbook_explain && cargo run -p cargo-pmcp --example workbook_explain && cargo run -p cargo-pmcp -- workbook explain crates/pmcp-workbook-compiler/tests/fixtures/template.xlsx` | ❌ explain.rs, tests/workbook_explain.rs, examples/workbook_explain.rs (Wave 0) | ⬜ pending |
+| 05-T2 | 100-05 | 5 | WBV2-07 | — | Chapters teach only the table model; retired in_*/out_*/named-range/define_name terminology proven ABSENT (negative grep) | doc-build + negative-grep | `cd pmcp-book && mdbook build && cd ../pmcp-course && mdbook build && cd .. && ! grep -rniE 'in_[a-z]\|out_[a-z]\|named range\|define_name' pmcp-book/src/workbook-table-authoring.md pmcp-course/src/workbook-table-authoring.md` | ❌ workbook-table-authoring.md ×2 (Wave 0) | ⬜ pending |
+| 06-T1 | 100-06 | 6 | WBV2-08 | T-100-15 | No cog>25 / SATD / clippy regression | gate | `make quality-gate` | n/a | ⬜ pending |
+| 06-T2 | 100-06 | 6 | WBV2-08 | T-100-14 | No umya/calamine/quick-xml/rust_xlsxwriter in any served tree | gate | `make purity-check` | n/a | ⬜ pending |
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
 
@@ -84,10 +87,14 @@ phasing steps (§11) + a cross-cutting quality/purity gate. Every requirement is
 - [ ] Provenance-valid `template.xlsx` reference fixture (replaces misleading hand-authored fixtures) — gates Success Criterion 4 (Plan 01)
 - [ ] `crates/pmcp-workbook-compiler/tests/template_provenance.rs` — ExcelTrusted assertion (Plan 01)
 - [ ] `crates/pmcp-workbook-compiler/fuzz/fuzz_targets/workbook_table_ingest.rs` — malformed table XML → clean error (Plan 02, Pitfall 2)
+- [ ] `crates/pmcp-workbook-compiler/tests/harvest_roundtrip_prop.rs` — proptest: harvest projection total + stable (Plan 02, CLAUDE.md ALWAYS PROPERTY)
 - [ ] Property test harness for `Dag::upstream_input_leaves` (random DAG generator) (Plan 03)
+- [ ] `crates/pmcp-workbook-compiler/fuzz/fuzz_targets/dag_upstream_leaves.rs` — fuzz: upstream_input_leaves total over arbitrary/cyclic DAGs (Plan 03, CLAUDE.md ALWAYS FUZZ)
 - [ ] `crates/pmcp-server-toolkit/tests/workbook_multi_tool.rs` — `tools/list` returns one tool per output Table (Plan 04)
+- [ ] `crates/pmcp-server-toolkit/tests/workbook_tool_name_prop.rs` — proptest: sanitize_tool_name charset + per-tool additionalProperties:false (Plan 04, CLAUDE.md ALWAYS PROPERTY, T-100-10/11)
 - [ ] `examples/workbook_table_authoring.rs` — author template → compile → list tools (Plan 04)
 - [ ] `cargo-pmcp/tests/workbook_explain.rs` — snapshot fixture for `workbook explain` text output (Plan 05)
+- [ ] `cargo-pmcp/examples/workbook_explain.rs` — `cargo run --example` tool-surface demonstration (Plan 05, CLAUDE.md ALWAYS EXAMPLE)
 - [ ] Table-harvest unit fixtures (input/output Excel Tables with type/unit/enum/tier witnesses) (Plan 02)
 - [ ] Fail-helpful lint negative fixtures (blank name, duplicate key, value-less row, no-caption output, unmappable tool name, input-feeds-no-tool) (Plan 04)
 

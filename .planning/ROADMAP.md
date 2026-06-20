@@ -1352,11 +1352,28 @@ Plans:
 
 Plans:
 
+**Wave 1**
+
 - [ ] 100-01-PLAN.md — WBV2-01: provenance-valid template.xlsx (Inputs Table + tier/enum dropdowns + named output Tables) via rust_xlsxwriter; doubles as the honest reference fixture
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
 - [ ] 100-02-PLAN.md — WBV2-02: ingest harvests Excel Tables (TableRecord name/columns) + per-row type/unit/enum/tier; malformed-table-XML fuzz containment
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
 - [ ] 100-03-PLAN.md — WBV2-03: manifest model lift CellMap → {inputs[], tools[]} + Dag::upstream_input_leaves + DAG-derived per-tool input_keys
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
 - [ ] 100-04-PLAN.md — WBV2-04/05: single→multi served fan-out (per-tool schema + N handlers + registration loop, F2 retained) + per-tool reconcile + cell-precise row lints + retire F1/F3-input/strip/name_named_inputs
+
+**Wave 5** *(blocked on Wave 4 completion)*
+
 - [ ] 100-05-PLAN.md — WBV2-06/07: cargo pmcp workbook explain preview (text+json) + pmcp-book/pmcp-course chapters
+
+**Wave 6** *(blocked on Wave 5 completion)*
+
 - [ ] 100-06-PLAN.md — WBV2-08: make quality-gate + PMAT (cog<=25) + make purity-check all green; umya-isolation boundary asserted intact
 
 ---

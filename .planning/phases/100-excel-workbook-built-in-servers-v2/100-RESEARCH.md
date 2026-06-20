@@ -377,11 +377,12 @@ Mapped 1:1 to the spec's 7 phasing steps (§11). Suggested ID prefix `WBV2-` (wo
 | A5 | Existing reconcile stage can be re-keyed per-tool without a rewrite | WBV2-05 | MEDIUM — `comparison_from_outputs` (`lib.rs:567`) assumes one output set; per-tool partition may need restructuring |
 | A6 | No persisted datastore keys on `in_*`/`out_*` (Runtime State Inventory all-None except fixtures) | Runtime State | LOW — verified servers are stateless; confirm no downstream pmcp.run cache keys on tool names |
 
-## Open Questions
+## Open Questions (RESOLVED)
 
 1. **Does any consumer still need `Role::from_name_prefix`/`const_` after the input/output convention retires?**
+   - **RESOLVED:** No plan-time decision required — the fate of `Role::from_name_prefix`/`const_` is determined at execution time by the Plan 04 Task 2 call-site grep. If the `const_` (governed-constant) branch still has a non-table consumer (e.g. the D-04 overlap/Guide redundancy check), KEEP only that branch; otherwise DELETE the fn and its test (manifest_model.rs:371-376). The grep result and the resulting decision are recorded in 100-04-SUMMARY.md.
    - What we know: it maps `in_/const_/out_` → Role; used by the D-04 overlap/Guide redundancy check.
-   - What's unclear: whether `const_` (governed constant) still uses named ranges under the table model, or whether constants also move to a table column.
+   - What's unclear (deferred to execution-time grep, not a planning blocker): whether `const_` (governed constant) still uses named ranges under the table model, or whether constants also move to a table column.
    - Recommendation: grep call sites in the plan; if `const_` constants stay named-range-based, KEEP only that branch; else retire the whole fn.
 
 2. **Per-tool reconcile partitioning shape.**
