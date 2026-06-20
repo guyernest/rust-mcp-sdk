@@ -869,7 +869,7 @@ Plans:
   5. Contract YAMLs for `pmcp-code-mode` and `pmcp-code-mode-derive` exist under `../provable-contracts/contracts/` and `pmat comply check` passes on both
   6. `make quality-gate` passes workspace-wide (zero clippy warnings, zero SATD, all tests green, format clean) and both new crates are positioned in the publishing order documented in CLAUDE.md, ready for the next release phase
 
-**Plans:** 6/6 plans complete
+**Plans:** 6/6 complete + 1 gap-closure plan (100-07) created for WBV2-04 BLOCKER
 
 Plans:
 
@@ -1375,6 +1375,10 @@ Plans:
 **Wave 6** *(blocked on Wave 5 completion)*
 
 - [x] 100-06-PLAN.md — WBV2-08: make quality-gate + PMAT (cog<=25) + make purity-check all green; umya-isolation boundary asserted intact
+
+**Wave 7** *(gap closure — verification found WBV2-04 BLOCKER)*
+
+- [ ] 100-07-PLAN.md — WBV2-04 (gap): wire build_tools + tool_name_collision_findings + reconcile_tools into the production emit_bundle/compile_workbook_inner path (replacing single-tool build_cell_map); OutputTable membership from harvested table_records; CR-02 served-schema fallback; real-compile E2E (template.xlsx → calculate_tax + estimate_refund, disjoint populated input_keys) + tightened reemit proof
 
 ---
 
