@@ -1,0 +1,113 @@
+//! WBV2-06 — `cargo pmcp workbook explain <wb.xlsx>` snapshot coverage.
+//!
+//! Drives the read-only `explain_workbook` projection over the REAL shipped
+//! `template.xlsx` (the Inputs Table + the two output Tables `Calculate_Tax` +
+//! `Estimate_Refund`) and asserts the previewed tool surface against a committed
+//! text snapshot (the SC3 Wave-0 gap): the per-Table tool names, their captions, and
+//! their DAG-derived per-tool input/output schemas.
+//!
+//! The disjointness proof a BA can SEE: `calculate_tax` advertises `filing`/`income`
+//! while `estimate_refund` ALSO advertises `withheld` (only its `refund` formula —
+//! `withheld - tax_owed` — reaches that input). The text render is a PURE function,
+//! so the snapshot is exact (no stdout capture).
+
+use std::path::{Path, PathBuf};
+
+use cargo_pmcp::workbook_explain::{explain_workbook, format_tool_surface, ToolSurface};
+
+/// The committed compiler test-fixtures copy of the shipped template (Plan 01) — the
+/// single authored reference workbook this preview snapshots.
+fn template_fixture() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../crates/pmcp-workbook-compiler/tests/fixtures/template.xlsx")
+}
+
+/// The committed text snapshot of the template's previewed tool surface.
+const TEMPLATE_SURFACE_SNAPSHOT: &str = "\
+tool calculate_tax
+  description: Compute federal tax from income & filing
+  inputs:
+    filing: string [enum: single|married]
+    income: number [USD]
+  outputs:
+    tax_owed: number
+    effective_rate: number
+tool estimate_refund
+  description: Estimate refund given withholding
+  inputs:
+    filing: string [enum: single|married]
+    income: number [USD]
+    withheld: number [USD]
+  outputs:
+    refund: number
+";
+
+fn projected_tools(path: &Path) -> Vec<ToolSurface> {
+    explain_workbook(path).expect("project the template tool surface")
+}
+
+#[test]
+fn template_text_render_matches_committed_snapshot() {
+    let tools = projected_tools(&template_fixture());
+    let text = format_tool_surface(&tools, "text").expect("text render");
+    assert_eq!(
+        text, TEMPLATE_SURFACE_SNAPSHOT,
+        "the previewed tool surface drifted from the committed snapshot:\n{text}"
+    );
+}
+
+#[test]
+fn template_projects_exactly_the_two_output_table_tools() {
+    let tools = projected_tools(&template_fixture());
+    let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
+    assert_eq!(
+        names,
+        vec!["calculate_tax", "estimate_refund"],
+        "one tool per output Table (the Inputs Table is the shared pool, not a tool)"
+    );
+}
+
+#[test]
+fn per_tool_inputs_are_dag_derived_disjoint_on_withheld() {
+    let tools = projected_tools(&template_fixture());
+    let calc = tools.iter().find(|t| t.name == "calculate_tax").unwrap();
+    let refund = tools.iter().find(|t| t.name == "estimate_refund").unwrap();
+
+    let calc_keys: Vec<&str> = calc.inputs.iter().map(|p| p.key.as_str()).collect();
+    let refund_keys: Vec<&str> = refund.inputs.iter().map(|p| p.key.as_str()).collect();
+
+    assert_eq!(calc_keys, vec!["filing", "income"], "calculate_tax inputs");
+    assert_eq!(
+        refund_keys,
+        vec!["filing", "income", "withheld"],
+        "estimate_refund inputs"
+    );
+    // The disjointness the multi-tool surface proves: withheld reaches refund only.
+    assert!(
+        !calc_keys.contains(&"withheld"),
+        "withheld is NOT a calculate_tax input (its formula does not reach it)"
+    );
+}
+
+#[test]
+fn json_render_is_parseable_over_the_same_surface() {
+    let tools = projected_tools(&template_fixture());
+    let json = format_tool_surface(&tools, "json").expect("json render");
+    let back: Vec<ToolSurface> = serde_json::from_str(&json).expect("parse JSON surface");
+    assert_eq!(back, tools, "JSON round-trips the projected tool surface");
+    // The JSON carries the disjoint per-tool inputs too.
+    let refund = back.iter().find(|t| t.name == "estimate_refund").unwrap();
+    assert!(refund.inputs.iter().any(|p| p.key == "withheld"));
+}
+
+#[test]
+fn outputs_carry_their_authored_units() {
+    let tools = projected_tools(&template_fixture());
+    let refund = tools.iter().find(|t| t.name == "estimate_refund").unwrap();
+    let refund_field = refund.outputs.iter().find(|o| o.key == "refund").unwrap();
+    assert_eq!(refund_field.ty, "number");
+    // The refund output's `$#,##0`-style cells: this template authors the refund
+    // value cell without a currency format, so the unit is absent — the preview
+    // reflects exactly what is authored (no invented unit).
+    assert_eq!(refund_field.unit, None);
+}

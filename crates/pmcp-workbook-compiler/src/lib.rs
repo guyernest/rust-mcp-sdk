@@ -159,6 +159,12 @@ pub use pmcp_workbook_runtime::{
     load_bundle, BundleLoadError, BundleSource, BundleSourceError, LocalDirSource, WorkbookBundle,
 };
 
+// The single shared MCP tool-name sanitizer (the SAME definition the served
+// registration + the compiler's collision lint call) — re-exported so the offline
+// `workbook explain` preview sanitizes output-Table names identically (never a
+// second copy that could drift from registration).
+pub use pmcp_workbook_runtime::sanitize_tool_name;
+
 // The Excel rounding helpers the reconcile classifier anchors on.
 pub use pmcp_workbook_runtime::sheet_ir::rounding::{excel_ceiling, excel_round, excel_roundup};
 
