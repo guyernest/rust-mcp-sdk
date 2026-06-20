@@ -232,7 +232,11 @@ impl WorkbookBuilderExt for ServerBuilder {
         // Operator visibility (mirrors builder_ext.rs:273-279): a bundle that
         // declares zero outputs would serve tools that compute nothing useful —
         // surface that as a warning rather than a silently-empty server.
-        if bundle.cell_map.outputs.is_empty() {
+        // TRANSITIONAL (Plan 03→04): flat `.outputs()` accessor; Plan 04 reshapes the
+        // zero-output check per-tool and drops the accessor.
+        #[allow(deprecated)]
+        let has_no_outputs = bundle.cell_map.outputs().is_empty();
+        if has_no_outputs {
             tracing::warn!(
                 target: "pmcp_server_toolkit::workbook",
                 bundle_id = %bundle.stamp.bundle_id,

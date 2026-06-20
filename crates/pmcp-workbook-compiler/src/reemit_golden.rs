@@ -99,25 +99,38 @@ fn structural_eq_check1_cell_map_seed_coords_equal() {
     let emitted = read_json(&bundle, "cell_map.json");
     let golden = read_json(&golden_dir(), "cell_map.json");
 
-    let coords = |v: &Value, dir: &str| -> Vec<String> {
-        let mut c: Vec<String> = v[dir]
+    let input_coords = |v: &Value| -> Vec<String> {
+        let mut c: Vec<String> = v["inputs"]
             .as_array()
-            .expect("array")
+            .expect("inputs array")
             .iter()
             .map(|e| e["seed_coord"].as_str().expect("seed_coord").to_string())
             .collect();
         c.sort();
         c
     };
+    // WBV2-03: output seed_coords now live under `tools[].outputs[]` (the multi-tool
+    // model lift); union across tools, matching the transitional `.outputs()` accessor.
+    let output_coords = |v: &Value| -> Vec<String> {
+        let mut c: Vec<String> = v["tools"]
+            .as_array()
+            .expect("tools array")
+            .iter()
+            .flat_map(|t| t["outputs"].as_array().expect("tool.outputs array").iter())
+            .map(|e| e["seed_coord"].as_str().expect("seed_coord").to_string())
+            .collect();
+        c.sort();
+        c
+    };
     assert_eq!(
-        coords(&emitted, "inputs"),
-        coords(&golden, "inputs"),
+        input_coords(&emitted),
+        input_coords(&golden),
         "input seed_coords match the golden"
     );
     assert_eq!(
-        coords(&emitted, "outputs"),
-        coords(&golden, "outputs"),
-        "output seed_coords match the golden"
+        output_coords(&emitted),
+        output_coords(&golden),
+        "output seed_coords (across tools) match the golden"
     );
 }
 
@@ -184,11 +197,9 @@ fn structural_eq_check4_loads_via_toolkit() {
     assert_eq!(loaded.stamp.bundle_id, "tax-calc");
     assert_eq!(loaded.stamp.version, "1.1.0");
     assert_eq!(loaded.cell_map.inputs.len(), 3, "three inputs served");
-    assert_eq!(
-        loaded.cell_map.outputs.len(),
-        4,
-        "four named outputs served"
-    );
+    #[allow(deprecated)]
+    let output_count = loaded.cell_map.outputs().len();
+    assert_eq!(output_count, 4, "four named outputs served");
 }
 
 /// Check (5) — named-output names/dtypes/roles match the golden's.

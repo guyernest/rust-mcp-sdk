@@ -44,7 +44,7 @@ use pmcp_workbook_runtime::render::{CellLayout, LayoutDescriptor, SheetLayout};
 use pmcp_workbook_runtime::sheet_ir::value::CellValue;
 use pmcp_workbook_runtime::{
     build_bundle_lock, fold_evidence_hash, sha256_hex, BinOp, Cell, CellEntry, CellExpr, CellMap,
-    Expr, LAYOUT_DESCRIPTOR_VERSION,
+    Expr, Tool, LAYOUT_DESCRIPTOR_VERSION,
 };
 
 /// The neutral bundle identifier (D-17). The lock's `bundle_id` and the
@@ -336,28 +336,38 @@ fn build_cell_map() -> CellMap {
                 unit: Some("USD".to_string()),
             },
         ],
-        outputs: vec![
-            CellEntry {
-                json_key: "taxable_income".to_string(),
-                seed_coord: CELL_TAXABLE_INCOME.to_string(),
-                unit: Some("USD".to_string()),
-            },
-            CellEntry {
-                json_key: "tax_owed".to_string(),
-                seed_coord: CELL_TAX_OWED.to_string(),
-                unit: Some("USD".to_string()),
-            },
-            CellEntry {
-                json_key: "effective_rate".to_string(),
-                seed_coord: CELL_EFFECTIVE_RATE.to_string(),
-                unit: Some("ratio".to_string()),
-            },
-            CellEntry {
-                json_key: "marginal_rate".to_string(),
-                seed_coord: CELL_MARGINAL_RATE.to_string(),
-                unit: Some("ratio".to_string()),
-            },
-        ],
+        // TRANSITIONAL (Plan 03→04): one tool wraps all outputs (the WBV2-03 model
+        // lift; the served side reads them via the flat `.outputs()` accessor until
+        // Plan 04's per-Table fan-out). Plan 04 regenerates this golden with one tool
+        // per output Table + DAG-derived input_keys.
+        tools: vec![Tool {
+            name: "calculate".to_string(),
+            description: None,
+            input_keys: Vec::new(),
+            outputs: vec![
+                CellEntry {
+                    json_key: "taxable_income".to_string(),
+                    seed_coord: CELL_TAXABLE_INCOME.to_string(),
+                    unit: Some("USD".to_string()),
+                },
+                CellEntry {
+                    json_key: "tax_owed".to_string(),
+                    seed_coord: CELL_TAX_OWED.to_string(),
+                    unit: Some("USD".to_string()),
+                },
+                CellEntry {
+                    json_key: "effective_rate".to_string(),
+                    seed_coord: CELL_EFFECTIVE_RATE.to_string(),
+                    unit: Some("ratio".to_string()),
+                },
+                CellEntry {
+                    json_key: "marginal_rate".to_string(),
+                    seed_coord: CELL_MARGINAL_RATE.to_string(),
+                    unit: Some("ratio".to_string()),
+                },
+            ],
+            oracle: std::collections::BTreeMap::new(),
+        }],
     }
 }
 

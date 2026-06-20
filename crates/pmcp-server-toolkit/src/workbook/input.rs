@@ -318,7 +318,7 @@ fn known_input_keys(cell_map: &CellMap) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pmcp_workbook_runtime::{CellEntry, CellMap};
+    use pmcp_workbook_runtime::{CellEntry, CellMap, Tool};
     use proptest::prelude::*;
     use serde_json::json;
 
@@ -415,10 +415,16 @@ mod tests {
                     unit: None,
                 },
             ],
-            outputs: vec![CellEntry {
-                json_key: "tax_owed".to_string(),
-                seed_coord: "3_Outputs!B3".to_string(),
-                unit: Some("USD".to_string()),
+            tools: vec![Tool {
+                name: "calculate".to_string(),
+                description: None,
+                input_keys: Vec::new(),
+                outputs: vec![CellEntry {
+                    json_key: "tax_owed".to_string(),
+                    seed_coord: "3_Outputs!B3".to_string(),
+                    unit: Some("USD".to_string()),
+                }],
+                oracle: std::collections::BTreeMap::new(),
             }],
         }
     }

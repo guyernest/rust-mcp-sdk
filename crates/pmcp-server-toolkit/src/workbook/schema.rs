@@ -75,7 +75,11 @@ fn output_column_schema(unit: Option<&str>, role: Option<&CellRole>) -> Value {
 #[must_use]
 pub fn output_schema_for_manifest(manifest: &Manifest, cell_map: &CellMap) -> Value {
     let mut output_props = Map::new();
-    for entry in &cell_map.outputs {
+    // TRANSITIONAL (Plan 03→04): the flat `.outputs()` accessor unions every tool's
+    // outputs. Plan 04 reshapes this builder to per-tool schemas and drops the accessor.
+    #[allow(deprecated)]
+    let all_outputs = cell_map.outputs();
+    for entry in &all_outputs {
         let role = role_for_seed(manifest, &entry.seed_coord);
         output_props.insert(
             entry.json_key.clone(),
@@ -339,7 +343,7 @@ pub fn empty_input_schema() -> Value {
 mod tests {
     use super::*;
     use pmcp_workbook_runtime::CellValue;
-    use pmcp_workbook_runtime::{CellEntry, CellMap, InputTier, Role};
+    use pmcp_workbook_runtime::{CellEntry, CellMap, InputTier, Role, Tool};
 
     fn input_role(
         cell: &str,
@@ -428,18 +432,24 @@ mod tests {
                     unit: Some("USD".to_string()),
                 },
             ],
-            outputs: vec![
-                CellEntry {
-                    json_key: "taxable_income".to_string(),
-                    seed_coord: "3_Outputs!B2".to_string(),
-                    unit: Some("USD".to_string()),
-                },
-                CellEntry {
-                    json_key: "tax_owed".to_string(),
-                    seed_coord: "3_Outputs!B3".to_string(),
-                    unit: Some("USD".to_string()),
-                },
-            ],
+            tools: vec![Tool {
+                name: "calculate".to_string(),
+                description: None,
+                input_keys: Vec::new(),
+                outputs: vec![
+                    CellEntry {
+                        json_key: "taxable_income".to_string(),
+                        seed_coord: "3_Outputs!B2".to_string(),
+                        unit: Some("USD".to_string()),
+                    },
+                    CellEntry {
+                        json_key: "tax_owed".to_string(),
+                        seed_coord: "3_Outputs!B3".to_string(),
+                        unit: Some("USD".to_string()),
+                    },
+                ],
+                oracle: std::collections::BTreeMap::new(),
+            }],
         };
         (manifest, cell_map)
     }
@@ -574,10 +584,16 @@ mod tests {
                 seed_coord: "1_Inputs!B2".to_string(),
                 unit: Some("USD".to_string()),
             }],
-            outputs: vec![CellEntry {
-                json_key: "taxable_income".to_string(),
-                seed_coord: "3_Outputs!B2".to_string(),
-                unit: Some("USD".to_string()),
+            tools: vec![Tool {
+                name: "calculate".to_string(),
+                description: None,
+                input_keys: Vec::new(),
+                outputs: vec![CellEntry {
+                    json_key: "taxable_income".to_string(),
+                    seed_coord: "3_Outputs!B2".to_string(),
+                    unit: Some("USD".to_string()),
+                }],
+                oracle: std::collections::BTreeMap::new(),
             }],
         };
         let schema = input_schema_for_manifest(&m, &cm);

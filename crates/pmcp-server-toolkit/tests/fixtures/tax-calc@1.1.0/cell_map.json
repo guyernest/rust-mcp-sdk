@@ -16,26 +16,34 @@
       "unit": "USD"
     }
   ],
-  "outputs": [
+  "tools": [
     {
-      "json_key": "taxable_income",
-      "seed_coord": "3_Outputs!B2",
-      "unit": "USD"
-    },
-    {
-      "json_key": "tax_owed",
-      "seed_coord": "3_Outputs!B3",
-      "unit": "USD"
-    },
-    {
-      "json_key": "effective_rate",
-      "seed_coord": "3_Outputs!B4",
-      "unit": "ratio"
-    },
-    {
-      "json_key": "marginal_rate",
-      "seed_coord": "3_Outputs!B5",
-      "unit": "ratio"
+      "name": "calculate",
+      "description": null,
+      "input_keys": [],
+      "outputs": [
+        {
+          "json_key": "taxable_income",
+          "seed_coord": "3_Outputs!B2",
+          "unit": "USD"
+        },
+        {
+          "json_key": "tax_owed",
+          "seed_coord": "3_Outputs!B3",
+          "unit": "USD"
+        },
+        {
+          "json_key": "effective_rate",
+          "seed_coord": "3_Outputs!B4",
+          "unit": "ratio"
+        },
+        {
+          "json_key": "marginal_rate",
+          "seed_coord": "3_Outputs!B5",
+          "unit": "ratio"
+        }
+      ],
+      "oracle": {}
     }
   ]
 }

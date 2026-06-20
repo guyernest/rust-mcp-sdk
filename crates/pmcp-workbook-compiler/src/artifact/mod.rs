@@ -41,7 +41,7 @@ use pmcp_workbook_runtime::{CellRole, InputTier, Manifest, Role, VersionChangelo
 pub use bundle_lock::{
     build_bundle_lock, fold_evidence_hash, sha256_hex, ArtifactHashes, BundleLock,
 };
-pub use cell_map::{build_cell_map, CellEntry, CellMap};
+pub use cell_map::{build_cell_map, build_tools, CellEntry, CellMap, OutputTable, Tool};
 pub use evidence::{
     emit_evidence, parser_equivalence_json, read_gate_marker, write_gate_marker, EvidenceInputs,
     GateMarker, ParserEquivalence, EVIDENCE_GATE_DIGEST, EVIDENCE_GATE_MARKER,
@@ -533,6 +533,8 @@ mod tests {
         assert_eq!(bundle.stamp.bundle_id, "tax-calc");
         assert_eq!(bundle.stamp.version, "1.0.0");
         assert_eq!(bundle.cell_map.inputs.len(), 1);
-        assert_eq!(bundle.cell_map.outputs.len(), 1);
+        #[allow(deprecated)]
+        let output_count = bundle.cell_map.outputs().len();
+        assert_eq!(output_count, 1);
     }
 }

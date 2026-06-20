@@ -74,7 +74,11 @@ pub(crate) fn project_outputs(
     run: &RunResult,
 ) -> Result<Value, WorkbookToolError> {
     let mut outputs = serde_json::Map::new();
-    for entry in &bundle.cell_map.outputs {
+    // TRANSITIONAL (Plan 03→04): flat `.outputs()` unions every tool's outputs; Plan 04
+    // reshapes this handler per-tool and drops the accessor.
+    #[allow(deprecated)]
+    let all_outputs = bundle.cell_map.outputs();
+    for entry in &all_outputs {
         // WR-04: fail closed on a declared-but-uncomputed output. The boot gate
         // hash-covers the cell_map bytes but does NOT check that output seed_coords
         // exist in the IR, so an absent entry here is a cell_map/IR skew, not a
@@ -720,11 +724,10 @@ mod tests {
             err.reason
         );
         // The named, missing output is identified in the message.
+        #[allow(deprecated)]
+        let outs = bundle.cell_map.outputs();
         assert!(
-            bundle
-                .cell_map
-                .outputs
-                .iter()
+            outs.iter()
                 .any(|e| err.reason.contains(&e.json_key) || err.reason.contains(&e.seed_coord)),
             "the error identifies the uncomputed output: {}",
             err.reason
@@ -737,17 +740,15 @@ mod tests {
         // project_outputs returns the full { value, unit } map (no false positive).
         let bundle = golden_bundle();
         let mut run = RunResult::default();
-        for entry in &bundle.cell_map.outputs {
+        #[allow(deprecated)]
+        let outs = bundle.cell_map.outputs();
+        for entry in &outs {
             run.computed
                 .insert(entry.seed_coord.clone(), CellValue::Number(1.0));
         }
         let projected = project_outputs(&bundle, &run).expect("all-present projects");
         let obj = projected.as_object().expect("outputs is an object");
-        assert_eq!(
-            obj.len(),
-            bundle.cell_map.outputs.len(),
-            "every declared output is projected"
-        );
+        assert_eq!(obj.len(), outs.len(), "every declared output is projected");
     }
 
     #[test]
