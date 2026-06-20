@@ -1348,7 +1348,7 @@ Plans:
 
 **Source**: pmcp.run dev-team feedback + multi-turn design convergence (2026-06-20); spec at `docs/design/workbook-table-authoring-contract.md`.
 
-**Plans:** 6/6 plans complete
+**Plans:** 7/7 plans complete
 
 Plans:
 
@@ -1378,7 +1378,7 @@ Plans:
 
 **Wave 7** *(gap closure — verification found WBV2-04 BLOCKER)*
 
-- [ ] 100-07-PLAN.md — WBV2-04 (gap): wire build_tools + tool_name_collision_findings + reconcile_tools into the production emit_bundle/compile_workbook_inner path (replacing single-tool build_cell_map); OutputTable membership from harvested table_records; CR-02 served-schema fallback; real-compile E2E (template.xlsx → calculate_tax + estimate_refund, disjoint populated input_keys) + tightened reemit proof
+- [x] 100-07-PLAN.md — WBV2-04 (gap): wire build_tools + tool_name_collision_findings + reconcile_tools into the production emit_bundle/compile_workbook_inner path (replacing single-tool build_cell_map); OutputTable membership from harvested table_records; CR-02 served-schema fallback; real-compile E2E (template.xlsx → calculate_tax + estimate_refund, disjoint populated input_keys) + tightened reemit proof
 
 ---
 
