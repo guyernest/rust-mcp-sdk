@@ -1348,7 +1348,7 @@ Plans:
 
 **Source**: pmcp.run dev-team feedback + multi-turn design convergence (2026-06-20); spec at `docs/design/workbook-table-authoring-contract.md`.
 
-**Plans:** 2/6 plans executed
+**Plans:** 3/6 plans executed
 
 Plans:
 
@@ -1362,7 +1362,7 @@ Plans:
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [ ] 100-03-PLAN.md — WBV2-03: manifest model lift CellMap → {inputs[], tools[]} + Dag::upstream_input_leaves + DAG-derived per-tool input_keys
+- [x] 100-03-PLAN.md — WBV2-03: manifest model lift CellMap → {inputs[], tools[]} + Dag::upstream_input_leaves + DAG-derived per-tool input_keys
 
 **Wave 4** *(blocked on Wave 3 completion)*
 

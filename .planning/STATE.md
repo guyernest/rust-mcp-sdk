@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v2.3
 milestone_name: Excel-as-Configuration MCP Servers
 status: executing
-stopped_at: Completed 100-02-PLAN.md (WBV2-02 Table harvest name/columns + per-row type/unit/enum/tier + fuzz/property/e2e)
-last_updated: "2026-06-20T19:00:15.881Z"
+stopped_at: Completed 100-02-PLAN.md (WBV2-02 Table harvest + per-row type/unit/enum/tier + fuzz/property/e2e)
+last_updated: "2026-06-20T19:28:54.058Z"
 last_activity: 2026-06-20
 progress:
   total_phases: 54
   completed_phases: 47
   total_plans: 227
-  completed_plans: 223
+  completed_plans: 224
   percent: 87
 ---
 
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-06-09) · .planning/ROADMAP.md (v2.3 mil
 ## Current Position
 
 Phase: 100 (excel-workbook-built-in-servers-v2) — EXECUTING
-Plan: 3 of 6
+Plan: 4 of 6
 Status: Ready to execute
 Last activity: 2026-06-20
 
@@ -70,6 +70,7 @@ Decisions are logged in PROJECT.md Key Decisions table. Decisions framing this m
 - [Phase ?]: Phase 98 DSTK-01: shared exists-guard + --regenerate-stack/--force preserve curated stack.ts on both deploy targets (IAM validation kept outside the guard)
 - Phase 100-01 (WBV2-01): shipped a provenance-valid table-based template.xlsx authored by rust_xlsxwriter (Inputs Excel Table name|value|description|tier + tier {variable,strict} + sample enum {single,married} dropdowns + currency/percent number-format unit witnesses; Calculate_Tax/Estimate_Refund named output Tables each with a caption=tool-description). Classifies RAW ExcelTrusted with NO provenance-override sidecar (review finding #5); committed byte-identical in the CLI templates dir AND compiler tests/fixtures (review finding #8, drift-guarded by a byte-equality test). Extended fixture_author with a Table author surface (TableSpec/DataValidationSpec/DvKind/AuthoredCell::NumberFmt/TableSpec.body_rows; one helper fn per concern, cog <=25), stays #![cfg(test)] (Pitfall 4 option b — generated+committed, no rust_xlsxwriter in a prod build). Deviations: pinned a fixed DocProperties creation datetime for byte-deterministic regen (core.xml-only, provenance untouched); added public provenance::classify_xlsx_bytes (override-free RAW classify reachable from tests/). Legacy tax-calc/leap1900 fixtures left in place (removed in Plan 04).
 - Phase 100-02 (WBV2-02): ingest now HARVESTS each Excel Table's name+columns into an owned TableRecord{name,area,columns} on SheetRecord (additive — kept the area-only `tables`), via table_records() calling the non-deprecated umya 3.0.0 t.name()/t.columns()/t.area() (get_name/get_columns are #[deprecated], would trip the deny gate — Rule 3). Added per-row §3.3 projectors: number_format_to_unit (CLOSED {USD,rate,date,None}, percent-before-currency), harvest_dtype, harvest_tier (CLOSED {strict,variable}), harvest_input_row/harvest_output_row (strict→Role::Constant+tier None; variable→Role::Input+InputTier::Variable; outputs untiered), enum via the EXISTING freeze_or_reason (pub harvest_allowed_values). KEY DEVIATION (Rule 1 bug): the catch_unwind containment seam (T-100-03 DoS) wraps the EAGER reader::xlsx::read (read_workbook_contained), NOT just table_records — umya parses xl/tables/tableN.xml DURING the read and .unwrap()s there (a RED unit test panicked at umya reader/xlsx/table.rs:176, before any accessor); a caught panic → IngestError::MalformedTable → CompileError::Ingest. extract_tables_contained kept as belt-and-suspenders. ALWAYS set complete: unit + fuzz (workbook_table_ingest, 20k runs + a force-added corrupted-tableN.xml seed, corpus/ gitignored) + property (harvest_roundtrip_prop: total/stable/closed) + REAL-template e2e (template_harvest_e2e: income=USD/Number, filing enum=[single,married], rate=rate/strict, caption→tool-description linkage, cached-<v> oracle). proptest 1.7 dev-dep (existing workspace dep). make purity-check PASSED (no umya leak from TableRecord).
+- [Phase ?]: Phase 100-03 (WBV2-03): lifted the shared artifact model to multi-tool CellMap{inputs[], tools[]} — pub struct Tool{name, description, input_keys, outputs, oracle} (drops Eq) in reader-free artifact_model.rs. Added Dag::upstream_input_leaves (cycle-safe DFS, BTreeSet) deriving each tool's minimal input set, property- AND fuzz-proven derived⊆inputs over hostile/cyclic DAGs (T-100-06, dag_upstream_leaves 20k runs). build_tools(manifest, dag, output_tables)->(Vec<Tool>, Vec<LintFinding>): groups output cells by Table (OutputTable membership param — Rule 3 deviation: CellRole records no owning Table), unions upstream leaves->input_keys, WARNING feeds-no-tool lint, constant-only excluded; §4.2 example [filing,income]/[filing,income,withheld] proven. Transitional #[deprecated] CellMap::outputs() flattens tools[].outputs to keep the workbook cone compiling green end-of-wave-3 (Plan 04 Task 1 deletes it). Regenerated tax-calc@1.1.0 golden to {inputs, tools[]} (loader DESERIALIZES it). build_cell_map kept single-tool-transitional; Plan 04 owns the per-Table served fan-out. make purity-check PASSED (T-100-07). Pre-existing out-of-scope reds VERIFIED at HEAD: pmcp-toolkit-mysql sqlx E0277, cargo-pmcp embedded-mirror+auth-cache.
 
 ### Pending Todos
 
@@ -106,7 +107,7 @@ Items deferred by design for this milestone:
 
 ## Session Continuity
 
-Last session: 2026-06-20T19:00:15.875Z
+Last session: 2026-06-20T19:28:54.053Z
 Stopped at: Completed 100-02-PLAN.md (WBV2-02 Table harvest + per-row type/unit/enum/tier + fuzz/property/e2e)
 Resume file: None
 
@@ -126,3 +127,4 @@ Resume file: None
 | Phase 98 P03 | 40min | 2 tasks | 5 files |
 | Phase 100 P01 | ~45min | 2 tasks | 6 files |
 | Phase 100 P02 | ~55min | 5 tasks | 9 files |
+| Phase 100 P100-03 | ~70min | 5 tasks | 19 files |
