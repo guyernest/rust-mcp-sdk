@@ -41,3 +41,12 @@ path = "fuzz_targets/dialect_version_parse.rs"
 doc = false
 test = false
 bench = false
+
+# Phase 100 (WBV2-02): proves the malformed-table-XML umya panic is contained at
+# the ingest catch_unwind seam (T-100-03 DoS) — a clean CompileError, never an abort.
+[[bin]]
+name = "workbook_table_ingest"
+path = "fuzz_targets/workbook_table_ingest.rs"
+doc = false
+test = false
+bench = false
