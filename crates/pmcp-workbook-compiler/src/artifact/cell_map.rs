@@ -32,11 +32,11 @@
 //! Built from the (tier-ratified) [`Manifest`] in `emit_bundle`; serialized
 //! through the deterministic [`crate::artifact::serialize`] choke point.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use pmcp_workbook_runtime::{
-    json_key_for_role, sanitize_tool_name, upstream_input_leaves, CellRole, CellValue, Dag,
-    LintFinding, Manifest, Role, Severity,
+    json_key_for_role, role_for_cell, sanitize_tool_name, upstream_input_leaves, CellRole,
+    CellValue, Dag, LintFinding, Manifest, Role, Severity,
 };
 
 use crate::reconcile::within_tol;
@@ -116,14 +116,11 @@ pub fn build_tools(
     let mut fed_inputs: HashSet<String> = HashSet::new();
 
     for table in output_tables {
-        let tool = build_one_tool(manifest, dag, table, &input_cells, &input_key_of);
-        // Re-derive this tool's reached input CELLS to mark them fed (the tool only
-        // stores the mapped json_keys, so recompute the cell-level union here).
-        for cell in &table.output_cells {
-            for leaf in upstream_input_leaves(dag, cell, &input_cells) {
-                fed_inputs.insert(leaf);
-            }
-        }
+        // build_one_tool already walks each output's upstream input leaves to derive
+        // input_keys; it returns the reached input CELLS so we mark them fed without a
+        // second DAG traversal.
+        let (tool, reached) = build_one_tool(manifest, dag, table, &input_cells, &input_key_of);
+        fed_inputs.extend(reached);
         tools.push(tool);
     }
 
@@ -132,27 +129,32 @@ pub fn build_tools(
 }
 
 /// Build ONE [`Tool`] for an output Table: its outputs, DAG-derived `input_keys`,
-/// and reconcile oracle. Kept separate so `build_tools` stays a thin loop (cog ≤25).
+/// and reconcile oracle. Returns the tool plus the set of input CELLS it reached
+/// (so `build_tools` can mark them fed without re-walking the DAG). Kept separate so
+/// `build_tools` stays a thin loop (cog ≤25).
 fn build_one_tool(
     manifest: &Manifest,
     dag: &Dag,
     table: &OutputTable,
     input_cells: &HashSet<String>,
     input_key_of: &BTreeMap<String, String>,
-) -> Tool {
-    let mut input_keys: BTreeMap<String, ()> = BTreeMap::new();
+) -> (Tool, BTreeSet<String>) {
+    let mut input_keys: BTreeSet<String> = BTreeSet::new();
+    let mut reached_cells: BTreeSet<String> = BTreeSet::new();
     let mut outputs = Vec::new();
     let mut oracle = BTreeMap::new();
 
     for cell_key in &table.output_cells {
-        // input_keys = union of this output's upstream input leaves (mapped to keys).
+        // input_keys = union of this output's upstream input leaves (mapped to keys);
+        // reached_cells carries the same leaves at cell granularity for the fed-inputs lint.
         for leaf in upstream_input_leaves(dag, cell_key, input_cells) {
             if let Some(json_key) = input_key_of.get(&leaf) {
-                input_keys.insert(json_key.clone(), ());
+                input_keys.insert(json_key.clone());
             }
+            reached_cells.insert(leaf);
         }
         // outputs + oracle from the manifest CellRole for this output cell.
-        if let Some(role) = role_for(manifest, cell_key) {
+        if let Some(role) = role_for_cell(manifest, cell_key) {
             outputs.push(entry(role));
             if let Some(value) = oracle_value(role) {
                 oracle.insert(json_key_for_role(role), value);
@@ -160,13 +162,14 @@ fn build_one_tool(
         }
     }
 
-    Tool {
+    let tool = Tool {
         name: table.name.clone(),
         description: table.description.clone(),
-        input_keys: input_keys.into_keys().collect(),
+        input_keys: input_keys.into_iter().collect(),
         outputs,
         oracle,
-    }
+    };
+    (tool, reached_cells)
 }
 
 /// Emit one `WARNING` "feeds no tool" [`LintFinding`] per `Role::Input` cell that is
@@ -430,11 +433,6 @@ fn oracle_value(role: &CellRole) -> Option<CellValue> {
         },
         None => None,
     }
-}
-
-/// Find the manifest [`CellRole`] for a fully-qualified cell key.
-fn role_for<'a>(manifest: &'a Manifest, cell_key: &str) -> Option<&'a CellRole> {
-    manifest.cells.iter().find(|c| c.cell == cell_key)
 }
 
 /// Split a `sheet!addr` cell key into `(sheet, Some(addr))` for a located finding;

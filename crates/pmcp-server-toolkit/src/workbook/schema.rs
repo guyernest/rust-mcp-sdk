@@ -15,6 +15,8 @@
     deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)
 )]
 
+use std::collections::HashSet;
+
 use serde_json::{json, Map, Value};
 
 use pmcp_workbook_runtime::{CellEntry, CellMap, CellRole, Dtype, Manifest, Tool};
@@ -334,10 +336,13 @@ pub fn input_schema_for_manifest(manifest: &Manifest, cell_map: &CellMap) -> Val
 /// then rejects.
 #[must_use]
 pub fn input_schema_for_tool(manifest: &Manifest, cell_map: &CellMap, tool: &Tool) -> Value {
+    // O(1) membership for the per-tool key projection (was a linear scan of
+    // `input_keys` per input — O(inputs × keys)).
+    let reached: HashSet<&str> = tool.input_keys.iter().map(String::as_str).collect();
     let mut input_props = Map::new();
     for entry in &cell_map.inputs {
         // Project ONLY the keys this tool's DAG derivation reached.
-        if tool.input_keys.iter().any(|k| k == &entry.json_key) {
+        if reached.contains(entry.json_key.as_str()) {
             input_props.insert(
                 entry.json_key.clone(),
                 input_prop_for_entry(manifest, entry),
