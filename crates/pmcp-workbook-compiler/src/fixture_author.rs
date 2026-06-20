@@ -381,10 +381,18 @@ fn trivial_spec() -> WorkbookSpec {
                 cached: "20",
             },
         ],
-        defined_names: vec![DefinedNameSpec {
-            name: "out_result",
-            target: "'Calc'!$B$1",
-        }],
+        defined_names: vec![
+            // F1: every Role::Input cell needs an `in_*` named range so it gets a
+            // callable semantic key (otherwise compile now fails loud).
+            DefinedNameSpec {
+                name: "in_a1",
+                target: "'Calc'!$A$1",
+            },
+            DefinedNameSpec {
+                name: "out_result",
+                target: "'Calc'!$B$1",
+            },
+        ],
     }
 }
 
@@ -921,10 +929,17 @@ fn leap1900_probe_spec() -> WorkbookSpec {
                 cached: "62",
             },
         ],
-        defined_names: vec![DefinedNameSpec {
-            name: "out_excel_serial",
-            target: "'Serial'!$B$1",
-        }],
+        defined_names: vec![
+            // F1: the serial input needs an `in_*` named range for a callable key.
+            DefinedNameSpec {
+                name: "in_excel_serial",
+                target: "'Serial'!$A$1",
+            },
+            DefinedNameSpec {
+                name: "out_excel_serial",
+                target: "'Serial'!$B$1",
+            },
+        ],
     }
 }
 

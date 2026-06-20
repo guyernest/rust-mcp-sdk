@@ -227,6 +227,7 @@ pub use version::read_workbook_version;
 // just the convenience re-export of the resolve entry point.
 pub use dialect_version::resolve_dialect_version;
 
+use pmcp_workbook_runtime::json_key_for_role;
 use pmcp_workbook_runtime::sheet_ir::{Cell, CellExpr};
 
 /// Compile a governed Excel workbook into a served bundle.
@@ -322,6 +323,12 @@ fn compile_workbook_inner(
     // a stable semantic key (`loan_amount`) rather than the cell's numeric value.
     // The INPUT analogue of the `out_*` convention — naming only, never re-roling.
     name_named_inputs(&mut manifest, &map);
+
+    // (3c) Refuse loudly if any input is left without a callable semantic key
+    // (no `in_*` named range), or two inputs collide on one served key, or an
+    // input's served key is empty. The reconcile/gate stages grade OUTPUTS only,
+    // so without this an uncallable value-keyed input would ship silently (F1).
+    refuse_uncallable_inputs(&manifest)?;
 
     // (4) RATIFY the candidate manifest (a recorded sign-off). The sidecar lives
     // beside the output root so the audit trail is co-located with the bundle.
@@ -648,6 +655,130 @@ fn name_named_inputs(manifest: &mut Manifest, map: &ingest::WorkbookMap) {
     }
 }
 
+/// Validate that EVERY `Role::Input` cell carries a callable semantic key, pushing
+/// one `Severity::Error` [`LintFinding`] per defect into `report`.
+///
+/// This MUST run AFTER [`name_named_inputs`] (so a legitimately-named input has its
+/// `name` set) and AFTER F3's [`json_key_for_role`] stripping is in effect (so the
+/// served key is what a caller actually sees). Without it a `Role::Input` lacking an
+/// `in_*` named range keeps `name: None` and [`json_key_for_role`] falls through to
+/// the cell's `meaning` (= the cell VALUE) — a value-keyed, uncallable input the
+/// reconcile/gate stages never catch (they grade OUTPUTS only). Three distinct
+/// defects are flagged, each a blocking Error:
+///
+/// (a) an input with NO semantic `name` (no `in_*` named range);
+/// (b) two inputs whose served `json_key`s COLLIDE (after prefix stripping);
+/// (c) an input whose served `json_key` is empty/whitespace.
+///
+/// Findings feed the same [`LintReport::has_errors`] gate the rest of stage-1 uses,
+/// so a defective bundle is REFUSED rather than shipped uncallable.
+fn validate_input_keys(manifest: &Manifest, report: &mut LintReport) {
+    use std::collections::BTreeMap;
+
+    let mut by_key: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for role in manifest.cells.iter().filter(|c| c.role == Role::Input) {
+        if role.name.is_none() {
+            report.push(unnamed_input_finding(&role.cell));
+            continue;
+        }
+        let key = json_key_for_role(role);
+        if key.trim().is_empty() {
+            report.push(empty_input_key_finding(&role.cell));
+            continue;
+        }
+        by_key.entry(key).or_default().push(role.cell.clone());
+    }
+
+    for (key, coords) in by_key.iter().filter(|(_, c)| c.len() > 1) {
+        report.push(duplicate_input_key_finding(key, coords));
+    }
+}
+
+/// Split a fully-qualified `sheet!addr` cell key into `(sheet, Some(addr))` for a
+/// located [`LintFinding`]; a key without `!` becomes `(key, None)`.
+fn split_cell_key(cell: &str) -> (&str, Option<String>) {
+    match cell.split_once('!') {
+        Some((sheet, addr)) => (sheet, Some(addr.to_string())),
+        None => (cell, None),
+    }
+}
+
+/// (a) The blocking finding for a `Role::Input` with no `in_*` named range.
+fn unnamed_input_finding(cell: &str) -> LintFinding {
+    let (sheet, addr) = split_cell_key(cell);
+    LintFinding::new(
+        Severity::Error,
+        "manifest/input-no-semantic-key",
+        sheet,
+        addr,
+        format!(
+            "input cell {cell} has no in_* named range; add one so it gets a semantic \
+             key (otherwise the served input key degenerates to the cell value and the \
+             tool is uncallable)"
+        ),
+        format!(
+            "in Excel, define a single-cell named range `in_<name>` (e.g. `in_amount`) \
+             targeting {cell} so the served `calculate` input carries a stable key"
+        ),
+    )
+}
+
+/// (b) The blocking finding for two+ inputs that collide on one served `json_key`.
+fn duplicate_input_key_finding(key: &str, coords: &[String]) -> LintFinding {
+    let joined = coords.join(", ");
+    LintFinding::new(
+        Severity::Error,
+        "manifest/input-key-collision",
+        "manifest",
+        None,
+        format!(
+            "input cells {joined} all map to the same served key `{key}`; a caller \
+             could not address them independently"
+        ),
+        format!(
+            "rename the `in_*` named ranges so each input at {joined} resolves to a \
+             distinct served key"
+        ),
+    )
+}
+
+/// (c) The blocking finding for an input whose served `json_key` is empty/whitespace.
+fn empty_input_key_finding(cell: &str) -> LintFinding {
+    let (sheet, addr) = split_cell_key(cell);
+    LintFinding::new(
+        Severity::Error,
+        "manifest/input-empty-key",
+        sheet,
+        addr,
+        format!(
+            "input cell {cell} resolves to an empty served key; a caller would have no \
+             field name to set it under"
+        ),
+        format!("give {cell} a non-empty `in_<name>` named range so it gets a usable served key"),
+    )
+}
+
+/// Run [`validate_input_keys`] over `manifest` and, if it finds any blocking input-key
+/// defect, surface them as a single [`CompileError::Lint`] (the SHARED refusal both
+/// compile entry points use after `name_named_inputs`).
+///
+/// # Errors
+/// Returns [`CompileError::Lint`] if any `Role::Input` lacks a semantic key, two
+/// inputs collide on one served key, or an input's served key is empty.
+fn refuse_uncallable_inputs(manifest: &Manifest) -> Result<(), CompileError> {
+    let mut report = LintReport::new();
+    validate_input_keys(manifest, &mut report);
+    if report.has_errors() {
+        let errors: Vec<&LintFinding> = report
+            .findings
+            .iter()
+            .filter(|f| f.severity == Severity::Error)
+            .collect();
+        return Err(CompileError::Lint(stage1::render_aggregate(&errors)));
+    }
+    Ok(())
+}
+
 /// The gated-update CANDIDATE: everything [`gate::gate`] and
 /// [`gate::accept::promote`] need to grade and (if accepted) publish a re-compile,
 /// assembled by COMPOSING the existing private candidate-build internals — WITHOUT
@@ -759,6 +890,11 @@ fn prepare_candidate_inner(
     // (3b) Name `in_*` named-range INPUT cells (the input analogue of `out_*`).
     name_named_inputs(&mut manifest, &map);
 
+    // (3c) Refuse loudly on an uncallable input (no `in_*` named range), a served
+    // input-key collision, or an empty served key — the SAME F1 gate the seed lane
+    // runs after `name_named_inputs`; `prepare` does NOT relax it.
+    refuse_uncallable_inputs(&manifest)?;
+
     // (4) The candidate content anchor. NOTE: `prepare` does NOT ratify (ratify
     // writes a sidecar) — gate-before-write means `prepare` writes NOTHING; the
     // manifest's `Role`s alone drive build_ir_and_dag.
@@ -854,4 +990,139 @@ fn prepare_candidate_with_fixture_override(
         FreshnessPolicy::TrustedFixture,
         Some("1.1.0"),
     )
+}
+
+// ---- F1: input-key validation (the uncallable-input compile gate) ----------
+#[cfg(test)]
+mod input_key_validation_tests {
+    use super::*;
+    use pmcp_workbook_runtime::Dtype;
+
+    fn role(cell: &str, r: Role, name: Option<&str>, meaning: Option<&str>) -> CellRole {
+        CellRole {
+            cell: cell.to_string(),
+            role: r,
+            name: name.map(str::to_string),
+            unit: None,
+            meaning: meaning.map(str::to_string),
+            dtype: Dtype::Number,
+            colour_evidence: None,
+            source: "test".to_string(),
+            notes: None,
+            tier: None,
+            allowed_values: None,
+        }
+    }
+
+    fn manifest(cells: Vec<CellRole>) -> Manifest {
+        Manifest {
+            schema_version: 1,
+            workflow: "tax-calc".to_string(),
+            workbook_hash: None,
+            ratified: true,
+            ratified_by: None,
+            ratified_at: None,
+            cells,
+            loop_block: None,
+            governed_data: vec![],
+            changelog: vec![],
+            capability_calls: vec![],
+            annotations: vec![],
+        }
+    }
+
+    #[test]
+    fn named_input_passes() {
+        let m = manifest(vec![
+            role("1_Inputs!B2", Role::Input, Some("in_gross_income"), None),
+            role("3_Outputs!B2", Role::Output, Some("out_tax"), None),
+        ]);
+        assert!(
+            refuse_uncallable_inputs(&m).is_ok(),
+            "a well-named in_* input compiles"
+        );
+    }
+
+    #[test]
+    fn unnamed_input_fails_with_error() {
+        // name: None, meaning = the cell value (the degenerate value-keyed case).
+        let m = manifest(vec![role("1_Inputs!B2", Role::Input, None, Some("240000"))]);
+        let err = refuse_uncallable_inputs(&m).expect_err("unnamed input must block compile");
+        match err {
+            CompileError::Lint(msg) => {
+                assert!(
+                    msg.contains("input-no-semantic-key") && msg.contains("1_Inputs!B2"),
+                    "the refusal names the rule + the offending cell: {msg}"
+                );
+            },
+            other => panic!("expected CompileError::Lint, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn duplicate_served_keys_fail() {
+        // Two inputs whose served json_key collides AFTER F3 prefix stripping
+        // (`in_x` and `x` both strip/resolve to `x`).
+        let m = manifest(vec![
+            role("1_Inputs!B2", Role::Input, Some("in_x"), None),
+            role("1_Inputs!B3", Role::Input, Some("x"), None),
+        ]);
+        let err = refuse_uncallable_inputs(&m).expect_err("colliding served keys must block");
+        match err {
+            CompileError::Lint(msg) => assert!(
+                msg.contains("input-key-collision")
+                    && msg.contains("1_Inputs!B2")
+                    && msg.contains("1_Inputs!B3"),
+                "the collision refusal names both coords: {msg}"
+            ),
+            other => panic!("expected CompileError::Lint, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn empty_served_key_fails() {
+        // A name that is exactly the prefix strips to itself ("in_"), but a
+        // whitespace name resolves to an empty served key.
+        let m = manifest(vec![role("1_Inputs!B2", Role::Input, Some("   "), None)]);
+        let err = refuse_uncallable_inputs(&m).expect_err("empty served key must block");
+        match err {
+            CompileError::Lint(msg) => assert!(
+                msg.contains("input-empty-key") && msg.contains("1_Inputs!B2"),
+                "the empty-key refusal names the cell: {msg}"
+            ),
+            other => panic!("expected CompileError::Lint, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn all_unnamed_inputs_each_get_their_own_error() {
+        let m = manifest(vec![
+            role("1_Inputs!B2", Role::Input, None, Some("a")),
+            role("1_Inputs!B3", Role::Input, None, Some("b")),
+            role("3_Outputs!B2", Role::Output, Some("out_o"), None),
+        ]);
+        let mut report = LintReport::new();
+        validate_input_keys(&m, &mut report);
+        let errors = report
+            .findings
+            .iter()
+            .filter(|f| f.rule == "manifest/input-no-semantic-key")
+            .count();
+        assert_eq!(errors, 2, "each unnamed input is flagged independently");
+    }
+
+    #[test]
+    fn outputs_and_constants_are_not_input_checked() {
+        // An unnamed Output/Constant is NOT an input-key defect (the check is
+        // scoped to Role::Input).
+        let m = manifest(vec![
+            role("1_Inputs!B2", Role::Input, Some("in_amount"), None),
+            role("3_Outputs!B2", Role::Output, None, Some("Total")),
+            role("2_Const!B2", Role::Constant, None, None),
+        ]);
+        assert!(
+            refuse_uncallable_inputs(&m).is_ok(),
+            "only Role::Input cells are input-key validated"
+        );
+    }
 }
