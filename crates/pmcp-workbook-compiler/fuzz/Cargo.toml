@@ -16,6 +16,11 @@ cargo-fuzz = true
 [dependencies]
 libfuzzer-sys = "0.4"
 pmcp-workbook-compiler = { path = ".." }
+# The Dag + upstream_input_leaves under test live in the runtime crate. The fuzz
+# crate already depends on the compiler (which depends on runtime), so this path dep
+# is consistent — it just makes `pmcp_workbook_runtime::dag::upstream_input_leaves`
+# directly reachable from the target (WBV2-03 §4.2 fuzz arm).
+pmcp-workbook-runtime = { path = "../../pmcp-workbook-runtime" }
 
 # Prevent this Cargo.toml from being absorbed into the parent workspace — the
 # fuzz crate resolves its own deps.
@@ -47,6 +52,15 @@ bench = false
 [[bin]]
 name = "workbook_table_ingest"
 path = "fuzz_targets/workbook_table_ingest.rs"
+doc = false
+test = false
+bench = false
+
+# Phase 100 (WBV2-03): proves `upstream_input_leaves` is TOTAL + subset-correct over
+# arbitrary (incl. cyclic) DAGs — never panics/hangs/overflows; result ⊆ input_cells.
+[[bin]]
+name = "dag_upstream_leaves"
+path = "fuzz_targets/dag_upstream_leaves.rs"
 doc = false
 test = false
 bench = false
