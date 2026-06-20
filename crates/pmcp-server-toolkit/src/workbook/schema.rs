@@ -17,7 +17,7 @@
 
 use serde_json::{json, Map, Value};
 
-use pmcp_workbook_runtime::{CellMap, CellRole, Dtype, Manifest};
+use pmcp_workbook_runtime::{CellEntry, CellMap, CellRole, Dtype, Manifest, Tool};
 
 /// Map a manifest [`Dtype`] to its JSON Schema primitive type string. `pub(crate)`
 /// so input.rs's type-check reuses the SAME `Dtype`→string mapping (one place).
@@ -74,18 +74,51 @@ fn output_column_schema(unit: Option<&str>, role: Option<&CellRole>) -> Value {
 /// `additionalProperties:true` and `required:["provenance"]`).
 #[must_use]
 pub fn output_schema_for_manifest(manifest: &Manifest, cell_map: &CellMap) -> Value {
-    let mut output_props = Map::new();
     // TRANSITIONAL (Plan 03→04): the flat `.outputs()` accessor unions every tool's
     // outputs. Plan 04 reshapes this builder to per-tool schemas and drops the accessor.
     #[allow(deprecated)]
     let all_outputs = cell_map.outputs();
-    for entry in &all_outputs {
+    let output_props = output_props_for_entries(manifest, &all_outputs);
+
+    let mut success = Map::new();
+    success.insert(
+        "outputs".to_string(),
+        json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": Value::Object(output_props),
+        }),
+    );
+    success.insert(
+        "accepted_overrides".to_string(),
+        json!({ "type": "array", "items": { "type": "string" } }),
+    );
+    result_envelope_schema(success)
+}
+
+/// Build the per-output schema map for a set of [`CellEntry`] output columns —
+/// the shared projection [`output_schema_for_manifest`] and
+/// [`output_schema_for_tool`] both use.
+fn output_props_for_entries(manifest: &Manifest, outputs: &[CellEntry]) -> Map<String, Value> {
+    let mut output_props = Map::new();
+    for entry in outputs {
         let role = role_for_seed(manifest, &entry.seed_coord);
         output_props.insert(
             entry.json_key.clone(),
             output_column_schema(entry.unit.as_deref(), role),
         );
     }
+    output_props
+}
+
+/// Build ONE tool's non-empty `outputSchema` (WBSV-07 / WBV2-04) over the tool's
+/// OWN `outputs` only (NOT the union across tools). Each output Table becomes its
+/// own MCP tool, so its schema enumerates exactly that Table's output columns —
+/// the TypedToolWithOutput dual-surface invariant (every tool emits a non-empty
+/// outputSchema → `structuredContent`).
+#[must_use]
+pub fn output_schema_for_tool(manifest: &Manifest, tool: &Tool) -> Value {
+    let output_props = output_props_for_entries(manifest, &tool.outputs);
 
     let mut success = Map::new();
     success.insert(
@@ -279,25 +312,66 @@ pub fn provenance_schema() -> Value {
 pub fn input_schema_for_manifest(manifest: &Manifest, cell_map: &CellMap) -> Value {
     let mut input_props = Map::new();
     for entry in &cell_map.inputs {
-        let role = role_for_seed(manifest, &entry.seed_coord);
-        let dtype = role.map_or(Dtype::Number, |r| r.dtype);
-        let mut prop = Map::new();
-        prop.insert("type".to_string(), json!(dtype_json_type(dtype)));
-        if let Some(unit) = entry.unit.as_deref() {
-            prop.insert("unit".to_string(), json!(unit));
-        }
-        if let Some(meaning) = role.and_then(|r| r.meaning.as_deref()) {
-            prop.insert("description".to_string(), json!(meaning));
-        }
-        // A frozen input (allowed_values from the workbook) advertises its closed
-        // domain as a JSON-Schema enum, verbatim workbook order. The input stays
-        // OPTIONAL — this fn builds no `required` array.
-        if let Some(allowed) = role.and_then(|r| r.allowed_values.as_ref()) {
-            prop.insert("enum".to_string(), json!(allowed));
-        }
-        input_props.insert(entry.json_key.clone(), Value::Object(prop));
+        input_props.insert(
+            entry.json_key.clone(),
+            input_prop_for_entry(manifest, entry),
+        );
     }
+    assemble_input_schema(manifest, input_props)
+}
 
+/// Build the strict per-tool input schema (WBV2-04): an `object` with
+/// `additionalProperties:false` carrying ONLY this tool's DAG-derived
+/// `input_keys` (the subset of the shared `cell_map.inputs` pool transitively
+/// reachable upstream of this tool's outputs), plus the F2 `overrides` block.
+///
+/// The strict envelope (`additionalProperties:false`, V5) MUST survive: a client
+/// trusting the advertised schema must never be able to send a key the runtime
+/// then rejects.
+#[must_use]
+pub fn input_schema_for_tool(manifest: &Manifest, cell_map: &CellMap, tool: &Tool) -> Value {
+    let mut input_props = Map::new();
+    for entry in &cell_map.inputs {
+        // Project ONLY the keys this tool's DAG derivation reached.
+        if tool.input_keys.iter().any(|k| k == &entry.json_key) {
+            input_props.insert(
+                entry.json_key.clone(),
+                input_prop_for_entry(manifest, entry),
+            );
+        }
+    }
+    assemble_input_schema(manifest, input_props)
+}
+
+/// Build the typed JSON-Schema property for one input [`CellEntry`] — its dtype,
+/// unit, meaning, and (for a frozen input) closed-enum domain. Shared by the
+/// manifest-level and per-tool input-schema builders so the per-input shape
+/// cannot drift.
+fn input_prop_for_entry(manifest: &Manifest, entry: &CellEntry) -> Value {
+    let role = role_for_seed(manifest, &entry.seed_coord);
+    let dtype = role.map_or(Dtype::Number, |r| r.dtype);
+    let mut prop = Map::new();
+    prop.insert("type".to_string(), json!(dtype_json_type(dtype)));
+    if let Some(unit) = entry.unit.as_deref() {
+        prop.insert("unit".to_string(), json!(unit));
+    }
+    if let Some(meaning) = role.and_then(|r| r.meaning.as_deref()) {
+        prop.insert("description".to_string(), json!(meaning));
+    }
+    // A frozen input (allowed_values from the workbook) advertises its closed
+    // domain as a JSON-Schema enum, verbatim workbook order. The input stays
+    // OPTIONAL — this fn builds no `required` array.
+    if let Some(allowed) = role.and_then(|r| r.allowed_values.as_ref()) {
+        prop.insert("enum".to_string(), json!(allowed));
+    }
+    Value::Object(prop)
+}
+
+/// Assemble the strict input-schema envelope from the already-built per-input
+/// `properties` map: the `inputs` object (strict) + the F2 `overrides` block
+/// (advertising the variable-tier override keys). Shared by the manifest-level
+/// and per-tool builders.
+fn assemble_input_schema(manifest: &Manifest, input_props: Map<String, Value>) -> Value {
     // F2: ADVERTISE the legal override keys so an LLM/caller can DISCOVER them,
     // rather than leaving `overrides` an opaque open map described in prose only.
     // The keys are the SAME variable-tier list `validate_input` accepts (one source
