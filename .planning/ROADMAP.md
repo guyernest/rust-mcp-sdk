@@ -1348,7 +1348,7 @@ Plans:
 
 **Source**: pmcp.run dev-team feedback + multi-turn design convergence (2026-06-20); spec at `docs/design/workbook-table-authoring-contract.md`.
 
-**Plans:** 3/6 plans executed
+**Plans:** 4/6 plans executed
 
 Plans:
 
@@ -1366,7 +1366,7 @@ Plans:
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
-- [ ] 100-04-PLAN.md — WBV2-04/05: single→multi served fan-out (per-tool schema + N handlers + registration loop, F2 retained) + per-tool reconcile + cell-precise row lints + retire F1/F3-input/strip/name_named_inputs
+- [x] 100-04-PLAN.md — WBV2-04/05: single→multi served fan-out (per-tool schema + N handlers + registration loop, F2 retained) + per-tool reconcile + cell-precise row lints + retire F1/F3-input/strip/name_named_inputs
 
 **Wave 5** *(blocked on Wave 4 completion)*
 
