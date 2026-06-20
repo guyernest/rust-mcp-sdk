@@ -200,6 +200,14 @@ pub use artifact::{
     CellMap, EmitError, EvidenceInputs, LayoutDescriptor, ParserEquivalence,
 };
 
+// The per-Table multi-tool fan-out surface (WBV2-04/05): the OutputTable membership
+// type + the build_tools/collision-lint/per-tool-reconcile primitives the
+// production driver now wires in (replacing the dead-on-production single-tool path
+// — CR-01). Re-exported so the gated-update CLI lane reads the SAME types.
+pub use artifact::{
+    build_tools, reconcile_tools, tool_name_collision_findings, OutputTable, ToolReconcileReport,
+};
+
 // The hash-covered ungated/gated EMIT MARKER channel (WBCL-03 / D-08): the emit
 // status travels WITH the artifact. A SELF-CONTAINED additive channel — it does
 // NOT enter the served loader's FROZEN evidence fold / allow-set (T-94-00-FROZEN).
@@ -329,6 +337,12 @@ fn compile_workbook_inner(
     // a stable semantic key (`loan_amount`) rather than the cell's numeric value.
     // The INPUT analogue of the `out_*` convention — naming only, never re-roling.
     name_named_inputs(&mut manifest, &map);
+    // (3b-tables) ADDITIVELY promote a TABLE-AUTHORED workbook's harvested Excel
+    // Tables (template.xlsx): name input rows + re-role output-Table formula cells to
+    // Role::Output. A named-range workbook harvests zero Tables → no-op. This is what
+    // lets a Table-authored workbook flow through the SAME refuse/reconcile/emit gates
+    // and reach the WBV2-04 per-Table fan-out (CR-01).
+    promote_harvested_tables(&mut manifest, &map);
 
     // (3c) Refuse loudly if any input is left without a callable semantic key
     // (no `in_*` named range), or two inputs collide on one served key, or an
@@ -370,6 +384,19 @@ fn compile_workbook_inner(
         )));
     }
 
+    // (7a) Derive the per-Table OutputTable membership from the harvested Tables +
+    // the role-promoted manifest (WBV2-04). A named-range workbook harvests zero
+    // Tables → an EMPTY set → the single-tool `build_cell_map` fallback (corpus).
+    let output_tables = output_tables_from_harvest(&map, &manifest);
+    // (7b) Fold tool-name-collision Errors into the stage-1 gate (T-100-17): two
+    // output Tables sanitizing to one MCP name is a cell-precise compile failure
+    // BEFORE any bundle is written, not a silent last-writer-wins at served boot.
+    refuse_colliding_output_tables(&output_tables)?;
+    // (7c) On the multi-tool path, reconcile each derived tool against ITS OWN oracle
+    // (WBV2-05). Any per-tool mismatch blocks the emit. The named-range fallback
+    // (empty set) keeps the shared comparison_from_outputs reconcile above.
+    reconcile_output_tables(&output_tables, &dag, &manifest, &run)?;
+
     // (8) Emit the seven-member bundle through the SEED lane (first version: no
     // prior baseline). The manifest came SOLELY from synth→ratify (no hand-built
     // per-workbook reference manifest on this path — the WBCO-02 generalization).
@@ -389,6 +416,10 @@ fn compile_workbook_inner(
         changelog: &changelog,
         parser_equivalence: &stage1.parser_equivalence,
         workbook_hash,
+        // The harvest-derived per-Table membership (WBV2-04): NON-EMPTY → the
+        // build_tools fan-out; EMPTY (named-range corpus) → single-tool fallback.
+        output_tables: &output_tables,
+        dag: &dag,
     };
     let (lock, _dir) = gate::accept::promote(&gate::accept::EmitLane::Seed, out_root, &inputs)
         .map_err(|e| CompileError::Emit(e.to_string()))?;
@@ -661,6 +692,258 @@ fn name_named_inputs(manifest: &mut Manifest, map: &ingest::WorkbookMap) {
     }
 }
 
+/// Promote a TABLE-AUTHORED workbook's harvested Excel Tables into manifest roles
+/// (WBV2-04 — the ADDITIVE sibling of [`promote_named_outputs`]/[`name_named_inputs`]).
+///
+/// A Table-authored workbook (the §7 `template.xlsx`) declares NO `out_*`/`in_*`
+/// named ranges; its inputs/outputs live as named Excel Tables
+/// (`name | value | description [| tier]`). Synthesis classifies the `value` cells
+/// from colour alone — inputs as [`Role::Input`] (no `name`), output formulas as
+/// [`Role::Formula`] — so WITHOUT this step a Table-authored workbook never carries
+/// a callable input key or a single [`Role::Output`], and emits ONE empty-input tool.
+///
+/// For each harvested [`ingest::TableRecord`] this:
+/// - **Inputs Table** (one whose `value` cells are already `Role::Input`/`Constant`):
+///   sets each input cell's `name` from the row's `name` column (so the served key
+///   is `income`, not the cell value) — the Table analogue of `name_named_inputs`.
+/// - **Output Table** (one whose `value` cells are `Role::Formula`): re-roles each
+///   `value` cell to [`Role::Output`] and names it from the `name` column — the
+///   Table analogue of `promote_named_outputs`.
+///
+/// A named-range workbook harvests ZERO `table_records`, so this is a no-op there
+/// (the corpus keeps flowing through the named-range promotions unchanged).
+fn promote_harvested_tables(manifest: &mut Manifest, map: &ingest::WorkbookMap) {
+    for sheet in &map.sheets {
+        for table in &sheet.table_records {
+            promote_one_harvested_table(manifest, sheet, table);
+        }
+    }
+}
+
+/// Promote ONE harvested Table's `value`-column body cells into manifest roles
+/// (kept separate so [`promote_harvested_tables`] stays a thin loop, cog ≤25). The
+/// `value` column is the SECOND column of the Table area (col `area.start.col + 1`);
+/// body rows run from the row below the header (`area.start.row + 1`) to
+/// `area.end.row`. The `name` column is the FIRST (`area.start.col`).
+fn promote_one_harvested_table(
+    manifest: &mut Manifest,
+    sheet: &ingest::SheetRecord,
+    table: &ingest::TableRecord,
+) {
+    let Some((name_col, header_row)) = split_a1_col_row(&table.area.start) else {
+        return;
+    };
+    let Some((_, end_row)) = split_a1_col_row(&table.area.end) else {
+        return;
+    };
+    let value_col = next_col(&name_col);
+
+    for body_row in (header_row + 1)..=end_row {
+        let value_key = pmcp_workbook_runtime::range_ref::cell_key(
+            &sheet.name,
+            &format!("{value_col}{body_row}"),
+        );
+        let name_addr = format!("{name_col}{body_row}");
+        let row_name = cell_value_text(sheet, &name_addr);
+
+        let Some(role) = manifest.cells.iter_mut().find(|c| c.cell == value_key) else {
+            continue;
+        };
+        match role.role {
+            // An output formula cell → re-role to Output + name from the row.
+            Role::Formula => {
+                role.role = Role::Output;
+                if role.name.is_none() {
+                    role.name = row_name;
+                }
+            },
+            // An already-classified input/constant → just attach the semantic name
+            // (naming is never re-roling — the input analogue of name_named_inputs).
+            Role::Input | Role::Constant => {
+                if role.name.is_none() {
+                    role.name = row_name;
+                }
+            },
+            Role::Output => {},
+        }
+    }
+}
+
+/// The trimmed text of a sheet cell by A1 address (`None` when absent/blank).
+fn cell_value_text(sheet: &ingest::SheetRecord, addr: &str) -> Option<String> {
+    sheet
+        .cells
+        .iter()
+        .find(|c| c.addr == addr)
+        .and_then(|c| c.value.as_deref())
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+}
+
+/// Split an A1 address into `(column-letters, 1-based row)` — e.g. `"B11"` →
+/// `("B", 11)`. Mirrors `template_harvest_e2e::split_a1`.
+fn split_a1_col_row(addr: &str) -> Option<(String, u32)> {
+    let split = addr.find(|c: char| c.is_ascii_digit())?;
+    if split == 0 {
+        return None;
+    }
+    let (col, row) = addr.split_at(split);
+    Some((col.to_string(), row.parse().ok()?))
+}
+
+/// The next column letter after `col` (`"A"` → `"B"`, `"Z"` → `"AA"`) — bijective
+/// base-26 (`A`=1). The Table `value` column is one right of the `name` column.
+fn next_col(col: &str) -> String {
+    let mut n: u32 = 0;
+    for ch in col.bytes() {
+        n = n * 26 + u32::from(ch.to_ascii_uppercase().wrapping_sub(b'A') + 1);
+    }
+    n += 1; // the NEXT column
+    index_to_col(n)
+}
+
+/// Convert a 1-based column index into its A1 letter run (`1` → `"A"`, `27` → `"AA"`).
+fn index_to_col(mut index: u32) -> String {
+    let mut letters = Vec::new();
+    while index > 0 {
+        let rem = ((index - 1) % 26) as u8;
+        letters.push(b'A' + rem);
+        index = (index - 1) / 26;
+    }
+    letters.reverse();
+    String::from_utf8(letters).unwrap_or_default()
+}
+
+/// Derive the per-Table [`OutputTable`] membership (WBV2-04) from the harvested
+/// `table_records` + the (already role-promoted) manifest: one [`OutputTable`] per
+/// Table that contributes ≥1 [`Role::Output`] cell, named by the Table's ListObject
+/// `name`, described by the caption one row above the Table area, with `output_cells`
+/// = the Table's `value`-column cells present in the manifest as [`Role::Output`].
+///
+/// A Table whose body cells are all inputs (the `Inputs` Table) contributes ZERO
+/// output cells and is SKIPPED. A named-range workbook (zero `table_records`) yields
+/// an EMPTY `Vec` → the single-tool `build_cell_map` fallback (the corpus path).
+fn output_tables_from_harvest(map: &ingest::WorkbookMap, manifest: &Manifest) -> Vec<OutputTable> {
+    let output_keys: std::collections::HashSet<&str> = manifest
+        .cells
+        .iter()
+        .filter(|c| matches!(c.role, Role::Output))
+        .map(|c| c.cell.as_str())
+        .collect();
+
+    let mut tables = Vec::new();
+    for sheet in &map.sheets {
+        for table in &sheet.table_records {
+            let output_cells = output_cells_in_table(sheet, table, &output_keys);
+            if output_cells.is_empty() {
+                continue; // an all-input Table (Inputs) exposes no tool.
+            }
+            tables.push(OutputTable {
+                name: table.name.clone(),
+                description: caption_above_table(sheet, table),
+                output_cells,
+            });
+        }
+    }
+    tables
+}
+
+/// The fully-qualified `value`-column cell keys inside `table`'s area that the
+/// manifest carries as [`Role::Output`] (the Table's served output cells). Kept
+/// separate so [`output_tables_from_harvest`] stays a thin loop (cog ≤25).
+fn output_cells_in_table(
+    sheet: &ingest::SheetRecord,
+    table: &ingest::TableRecord,
+    output_keys: &std::collections::HashSet<&str>,
+) -> Vec<String> {
+    let Some((name_col, header_row)) = split_a1_col_row(&table.area.start) else {
+        return Vec::new();
+    };
+    let Some((_, end_row)) = split_a1_col_row(&table.area.end) else {
+        return Vec::new();
+    };
+    let value_col = next_col(&name_col);
+    let mut cells = Vec::new();
+    for body_row in (header_row + 1)..=end_row {
+        let key = pmcp_workbook_runtime::range_ref::cell_key(
+            &sheet.name,
+            &format!("{value_col}{body_row}"),
+        );
+        if output_keys.contains(key.as_str()) {
+            cells.push(key);
+        }
+    }
+    cells
+}
+
+/// The caption cell directly above a Table area (§4: caption = tool description) —
+/// the cell in the Table's first column, one row above its header row. Mirrors
+/// `template_harvest_e2e::caption_above`.
+fn caption_above_table(sheet: &ingest::SheetRecord, table: &ingest::TableRecord) -> Option<String> {
+    let (col, header_row) = split_a1_col_row(&table.area.start)?;
+    if header_row <= 1 {
+        return None;
+    }
+    cell_value_text(sheet, &format!("{col}{}", header_row - 1))
+}
+
+/// Fold tool-name-collision Errors into the stage-1 refuse gate (T-100-17): if any
+/// derived [`OutputTable`] sanitizes to a colliding or unmappable MCP tool name,
+/// surface it as a cell-precise [`CompileError::Lint`] BEFORE any bundle write
+/// (the SAME aggregate render `refuse_uncallable_inputs` uses). An empty set (the
+/// named-range fallback) never collides.
+///
+/// # Errors
+/// Returns [`CompileError::Lint`] if [`tool_name_collision_findings`] reports any
+/// `Severity::Error` finding.
+fn refuse_colliding_output_tables(output_tables: &[OutputTable]) -> Result<(), CompileError> {
+    let findings = tool_name_collision_findings(output_tables);
+    let errors: Vec<&LintFinding> = findings
+        .iter()
+        .filter(|f| f.severity == Severity::Error)
+        .collect();
+    if errors.is_empty() {
+        return Ok(());
+    }
+    Err(CompileError::Lint(stage1::render_aggregate(&errors)))
+}
+
+/// Reconcile each derived per-Table tool against ITS OWN output-cell oracle
+/// (WBV2-05) on the multi-tool path. Builds the tools via [`build_tools`], converts
+/// the run's computed values to the `&BTreeMap` [`reconcile_tools`] takes, and
+/// blocks the emit ([`CompileError::Reconcile`]) on any per-tool mismatch. An EMPTY
+/// `output_tables` set (the named-range fallback) is a no-op — that path keeps the
+/// shared `comparison_from_outputs` reconcile.
+///
+/// # Errors
+/// Returns [`CompileError::Reconcile`] on any per-tool oracle mismatch, or
+/// [`CompileError::Emit`] if [`build_tools`]/[`reconcile_tools`] fail (a malformed
+/// derived membership — e.g. an unmappable tool name slipping past the collision
+/// gate).
+fn reconcile_output_tables(
+    output_tables: &[OutputTable],
+    dag: &Dag,
+    manifest: &Manifest,
+    run: &RunResult,
+) -> Result<(), CompileError> {
+    if output_tables.is_empty() {
+        return Ok(());
+    }
+    let (tools, _lints) = build_tools(manifest, dag, output_tables).map_err(CompileError::Emit)?;
+    // RunResult exposes `computed: HashMap<String, CellValue>`; reconcile_tools takes
+    // a `&BTreeMap` — convert explicitly (there is no `computed_as_btreemap`).
+    let computed: BTreeMap<String, CellValue> = run
+        .computed
+        .iter()
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
+    let report = reconcile_tools(&computed, &tools).map_err(CompileError::Emit)?;
+    if report.any_mismatch() {
+        return Err(CompileError::Reconcile(report.render()));
+    }
+    Ok(())
+}
+
 /// Validate that EVERY `Role::Input` cell carries a callable semantic key, pushing
 /// one `Severity::Error` [`LintFinding`] per defect into `report`.
 ///
@@ -825,6 +1108,11 @@ pub struct Candidate {
     /// The workbook-DECLARED version (via [`read_workbook_version`]) — so the CLI
     /// never supplies a `--version` flag (D-02/D-11).
     pub version: String,
+    /// The harvest-derived per-Table [`OutputTable`] membership (WBV2-04): NON-EMPTY
+    /// for a Table-authored workbook (the gated-update lane fans out one served Tool
+    /// per output Table), EMPTY for the named-range corpus (single-tool fallback).
+    /// Threads straight into [`gate::accept::PromoteInputs::output_tables`].
+    pub output_tables: Vec<OutputTable>,
 }
 
 /// Build the gated-update [`Candidate`] for `workbook_path` by COMPOSING the
@@ -901,6 +1189,9 @@ fn prepare_candidate_inner(
     promote_named_outputs(&mut manifest, &map);
     // (3b) Name `in_*` named-range INPUT cells (the input analogue of `out_*`).
     name_named_inputs(&mut manifest, &map);
+    // (3b-tables) ADDITIVELY promote a Table-authored workbook's harvested Tables —
+    // the SAME step the seed lane runs (kept in lock-step so both lanes agree).
+    promote_harvested_tables(&mut manifest, &map);
 
     // (3c) Refuse loudly on an uncallable input (no `in_*` named range), a served
     // input-key collision, or an empty served key — the SAME F1 gate the seed lane
@@ -936,6 +1227,13 @@ fn prepare_candidate_inner(
         )));
     }
 
+    // (7a) Derive + gate the per-Table membership — the SAME WBV2-04 wiring the seed
+    // lane runs (collision Errors block; per-tool reconcile blocks). An empty set
+    // (named-range corpus) is a no-op on both gates.
+    let output_tables = output_tables_from_harvest(&map, &manifest);
+    refuse_colliding_output_tables(&output_tables)?;
+    reconcile_output_tables(&output_tables, &dag, &manifest, &run)?;
+
     // (8) Project the named-output computed values into the gate's grading map and
     // capture the layout + declared version. The candidate STOPS here (no promote).
     let computed = project_named_outputs(&manifest, &run.computed);
@@ -954,6 +1252,7 @@ fn prepare_candidate_inner(
         parser_equivalence: stage1.parser_equivalence,
         layout,
         version,
+        output_tables,
     })
 }
 

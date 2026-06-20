@@ -9,7 +9,7 @@
   "formula_oracles": [
     {
       "cell": "B11",
-      "formula": "ROUND(B4*G3-1759,0)",
+      "formula": "ROUND(B4*G3-3759,0)",
       "cached_oracle": "18241"
     },
     {

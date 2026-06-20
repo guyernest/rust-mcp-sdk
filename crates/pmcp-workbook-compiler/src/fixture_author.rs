@@ -1416,7 +1416,12 @@ fn template_spec() -> WorkbookSpec {
             },
             AuthoredCell::Formula {
                 addr: "B11",
-                formula: "ROUND(B4*G3-1759,0)",
+                // tax_owed = ROUND(income*rate - 3759, 0) = ROUND(100000*0.22 - 3759, 0)
+                // = ROUND(18241, 0) = 18241 — the cached <v> oracle. The constant is
+                // -3759 (NOT -1759) so the RECOMPUTATION equals the authored cached
+                // value; the production reconcile grades computed-formula vs cached-<v>,
+                // so the template MUST be self-consistent to compile (WBV2-04 E2E).
+                formula: "ROUND(B4*G3-3759,0)",
                 cached: "18241",
             },
             AuthoredCell::Text {

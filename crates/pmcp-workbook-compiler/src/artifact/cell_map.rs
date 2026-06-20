@@ -456,14 +456,12 @@ fn split_cell_key(cell: &str) -> (String, Option<String>) {
 /// # Errors
 /// Returns an error string if the manifest declares no `Role::Output` cell.
 pub fn build_cell_map(manifest: &Manifest) -> Result<CellMap, String> {
-    let mut inputs = Vec::new();
+    let inputs = shared_inputs(manifest);
     let mut outputs = Vec::new();
 
     for role in &manifest.cells {
-        match role.role {
-            Role::Input => inputs.push(entry(role)),
-            Role::Output => outputs.push(entry(role)),
-            Role::Constant | Role::Formula => {},
+        if matches!(role.role, Role::Output) {
+            outputs.push(entry(role));
         }
     }
 
@@ -492,12 +490,31 @@ pub fn build_cell_map(manifest: &Manifest) -> Result<CellMap, String> {
 
 /// Build a [`CellEntry`] for a role-bearing cell: the JSON key is the runtime's
 /// shared [`json_key_for_role`] precedence (name → meaning → cell key).
-fn entry(role: &CellRole) -> CellEntry {
+///
+/// `pub(crate)` so the multi-tool [`emit_bundle`](crate::artifact::emit_bundle)
+/// branch can derive the shared-input pool the SAME way [`build_cell_map`] does
+/// (one definition — the per-input `CellEntry` shape cannot drift between the
+/// single-tool fallback and the `build_tools` fan-out).
+pub(crate) fn entry(role: &CellRole) -> CellEntry {
     CellEntry {
         json_key: json_key_for_role(role),
         seed_coord: role.cell.clone(),
         unit: role.unit.clone(),
     }
+}
+
+/// The shared-input pool [`CellEntry`]s: one [`entry`] per `Role::Input` cell, in
+/// manifest order. The SINGLE source both the single-tool [`build_cell_map`]
+/// fallback and the multi-tool [`emit_bundle`](crate::artifact::emit_bundle) branch
+/// derive `CellMap.inputs` from, so the served shared-input pool is identical on
+/// both paths.
+pub(crate) fn shared_inputs(manifest: &Manifest) -> Vec<CellEntry> {
+    manifest
+        .cells
+        .iter()
+        .filter(|role| matches!(role.role, Role::Input))
+        .map(entry)
+        .collect()
 }
 
 #[cfg(test)]
