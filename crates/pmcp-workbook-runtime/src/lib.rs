@@ -78,7 +78,7 @@ pub use finding::{LintFinding, LintReport, Severity};
 pub use formula::{BinOp, Expr, UnOp};
 pub use range_ref::{cell_key, RangeRef};
 
-pub use dag::{toposort, Dag};
+pub use dag::{toposort, upstream_input_leaves, Dag};
 pub use resolve::{
     a1_to_zero_indexed_row_col, expand_range, parse_a1, split_ref, RangeShape, ResolveError,
     MAX_RANGE_CELLS,
