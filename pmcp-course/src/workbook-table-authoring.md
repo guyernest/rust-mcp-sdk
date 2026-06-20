@@ -110,7 +110,7 @@ Workbook → {
 The crucial mechanic: a tool advertises **only the inputs upstream of its output cells**
 in the formula DAG. In the template:
 
-- `calculate_tax`: `tax_owed = ROUND(income*rate - 1759, 0)` → reaches `income`.
+- `calculate_tax`: `tax_owed = ROUND(income*rate - 3759, 0)` → reaches `income`.
 - `estimate_refund`: `refund = ROUND(withheld - tax_owed, 0)` → reaches `withheld` and,
   through `tax_owed`, `income`.
 

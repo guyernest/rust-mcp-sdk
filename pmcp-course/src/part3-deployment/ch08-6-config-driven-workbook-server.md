@@ -26,7 +26,8 @@ This chapter walks the full lifecycle: **compile → serve → customize → dep
   deterministic `bundle@version` directory
 - The two ways to serve a bundle — the prebuilt `pmcp-workbook-server` binary
   (no Rust) and a `cargo pmcp new --kind workbook-server` scaffold (extendable)
-- The five workbook tools and the `workbook://` render resource you get for free
+- The workbook tool surface — one tool per output table plus four infrastructure
+  tools — and the `workbook://` render resource you get for free
 - The governance properties — fail-closed boot integrity and the reader/JS
   purity gate — that make the served binary safe to ship
 
@@ -172,14 +173,17 @@ Shape A and Shape B are siblings built on the same toolkit. The scaffold does
 **not** invoke the prebuilt binary — it links the same library primitives the
 binary uses.
 
-## Step 3: What You Get — Five Tools and a Render Resource
+## Step 3: What You Get — Per-Table Tools and a Render Resource
 
-Either way you serve it, a compiled bundle is exposed as five MCP tools plus one
-resource — no per-tool Rust:
+Either way you serve it, a compiled bundle is exposed as **one calculation tool
+per output Table** plus four fixed infrastructure tools and one resource — no
+per-tool Rust. Each output Table becomes its own named tool (e.g. `calculate_tax`,
+`estimate_refund`) advertising only the inputs its formulas use; preview the exact
+surface with `cargo pmcp workbook explain <wb.xlsx>`:
 
 | Tool              | Purpose |
 | ----------------- | ------- |
-| `calculate`       | Run the workbook's calculation against supplied inputs |
+| *(one per output Table, e.g.* `calculate_tax`*)* | Run that Table's calculation against supplied inputs |
 | `explain`         | Explain how a result was derived |
 | `get_manifest`    | Return the bundle manifest (identity, inputs, outputs) |
 | `diff_version`    | Compare results or definitions across versions |
@@ -190,8 +194,10 @@ URI. Its exact shape is defined in the
 [workbook URI spec](https://github.com/paiml/rust-mcp-sdk/blob/main/docs/workbook-uri-spec.md).
 
 Connect your MCP client (or `cargo pmcp test check <addr>`) to the served
-address and call `calculate` with the workbook's declared inputs; call
-`get_manifest` first if you want to discover what those inputs are.
+address and call one of the workbook's calculation tools (e.g. `calculate_tax`)
+with that Table's declared inputs; call `get_manifest` first — or run
+`cargo pmcp workbook explain` before you deploy — to discover the tool names and
+each tool's inputs.
 
 ## Step 4: Customize Through the Workbook
 
@@ -230,7 +236,8 @@ mismatch.
 
 **Reader/JS purity.** The Excel reader and the JS code-mode stack are
 **compile-time only**. They are mechanically absent from the served binary, which
-serves the fixed five-tool surface from the bundle alone. There is no spreadsheet
+serves the workbook tool surface (one tool per output table plus the four
+infrastructure tools) from the bundle alone. There is no spreadsheet
 parser and no script executor in the served cone. The mechanism is described in
 the
 [reader/JS purity gate](https://github.com/paiml/rust-mcp-sdk/blob/main/docs/workbook-purity-gate.md).
@@ -273,7 +280,7 @@ asset, so there is nothing workbook-specific to configure on the target.
 | The model already lives in a governed spreadsheet | Logic is bespoke Rust, not a calc model |
 | Domain owners maintain it in Excel | Engineers own every formula in code |
 | You need deterministic, versioned, gated bundles | You need custom transports / middleware |
-| Pure calculation (`calculate` / `explain` / `diff`) | The backend isn't a calculation workbook |
+| Pure calculation (per-table calculate tools / `explain` / `diff`) | The backend isn't a calculation workbook |
 
 For bespoke calculation logic, or anything that isn't a governed workbook, the
 hand-coded approach from Chapter 3 remains the right tool.
@@ -287,7 +294,8 @@ lifecycle.
    `cargo pmcp workbook compile tax-calc.xlsx --workflow tax-calc --approver <you>`
    and confirm a `bundles/tax-calc@<version>/` directory is written.
 2. Serve it with `pmcp-workbook-server --bundle-dir bundles/tax-calc@<version>`
-   and call `get_manifest`, then `calculate`, from your MCP client.
+   and call `get_manifest`, then one of the calculation tools (e.g.
+   `calculate_tax`), from your MCP client.
 3. Pass a deliberately wrong `--bundle-id` and confirm the binary exits non-zero
    **before** any tool registers (fail-closed identity).
 4. Edit the workbook to change a formula, bump its version, and recompile.
@@ -298,8 +306,9 @@ lifecycle.
    edit `deploy.toml` and run `cargo pmcp validate deploy`.
 
 **Success criteria:** the compile is deterministic and gated; the served binary
-exposes the five tools and the `workbook://` resource; a mismatched `--bundle-id`
-fails closed; and a workbook edit produces a new, comparable bundle version.
+exposes the workbook tool surface (per-table tools plus the four infrastructure
+tools) and the `workbook://` resource; a mismatched `--bundle-id` fails closed;
+and a workbook edit produces a new, comparable bundle version.
 
 ## Key Takeaways
 
@@ -310,8 +319,10 @@ fails closed; and a workbook edit produces a new, comparable bundle version.
 - There are two ways to serve: the prebuilt `pmcp-workbook-server` binary
   (`--bundle-dir`, no Rust) and a `cargo pmcp new --kind workbook-server`
   scaffold (an extendable crate over `pmcp-server-toolkit`).
-- Every bundle is served as five tools — `calculate`, `explain`, `get_manifest`,
-  `diff_version`, `render_workbook` — plus a `workbook://` render resource.
+- Every bundle is served as one calculation tool per output table (e.g.
+  `calculate_tax`, `estimate_refund`) plus four infrastructure tools —
+  `explain`, `get_manifest`, `diff_version`, `render_workbook` — and a
+  `workbook://` render resource.
 - Governance is built in: the boot gate re-verifies `BUNDLE.lock` before serving,
   `--bundle-id` is an optional fail-closed identity assertion, and the Excel
   reader and JS code-mode are compile-time only — absent from the served binary.

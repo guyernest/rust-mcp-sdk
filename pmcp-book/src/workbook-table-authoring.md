@@ -128,7 +128,7 @@ reachability gives each tool a precise, minimal schema.
 
 Concretely, in the shipped template:
 
-- `calculate_tax`'s `tax_owed = ROUND(income*rate - 1759, 0)` reaches **`income`**.
+- `calculate_tax`'s `tax_owed = ROUND(income*rate - 3759, 0)` reaches **`income`**.
 - `estimate_refund`'s `refund = ROUND(withheld - tax_owed, 0)` reaches **`withheld`**
   *and* (through `tax_owed`) `income`.
 

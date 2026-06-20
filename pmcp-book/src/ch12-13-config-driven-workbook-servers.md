@@ -9,7 +9,8 @@ of that family, and the source of truth is something most teams already have: a
 **governed Excel workbook**. You author the business logic as formulas in a
 spreadsheet; the `cargo pmcp` CLI compiles it into a deterministic, verifiable
 `bundle@version`; and a prebuilt binary serves that bundle as a live MCP server
-exposing five workbook tools — with no user Rust at all.
+exposing one MCP tool per output table plus four infrastructure tools — with no
+user Rust at all.
 
 After this chapter you should be able to lint a workbook against the governed
 dialect, compile it into a bundle, serve that bundle over MCP, and understand
@@ -36,9 +37,10 @@ fail-closed gate passes — writes a bundle. The analyst owns the logic; no one
 hand-codes it.
 
 ```text
-   workbook.xlsx ─► cargo pmcp workbook compile ─► bundle@version/ ─► pmcp-workbook-server ─► 5 MCP tools
-   (formulas,        ingest → lint → synth →        (deterministic,      (no Rust;            calculate / explain /
-    the source       compile → reconcile →           verifiable,          point at the dir)    get_manifest /
+   workbook.xlsx ─► cargo pmcp workbook compile ─► bundle@version/ ─► pmcp-workbook-server ─► MCP tools
+   (formulas,        ingest → lint → synth →        (deterministic,      (no Rust;            1 per output table
+    the source       compile → reconcile →           verifiable,          point at the dir)    + explain /
+                                                                                                 get_manifest /
     of truth)        GATE → write                    integrity-locked)                          diff_version /
                                                                                                  render_workbook
 ```
@@ -145,12 +147,16 @@ schema, no spec. Two optional flags refine the run:
   `127.0.0.1:8080` — **loopback**, so the out-of-the-box binary never exposes a
   public listener until you opt in.
 
-Point an MCP client at the address and you will see five tools plus a
-`workbook://` render-pointer resource:
+Point an MCP client at the address and you will see **one calculation tool per
+output Table** in the workbook, plus four fixed infrastructure tools and a
+`workbook://` render-pointer resource. Each output Table becomes its own named,
+typed tool (e.g. `calculate_tax`, `estimate_refund`) carrying only the inputs its
+formulas reference — preview the exact set with
+`cargo pmcp workbook explain <wb.xlsx>` before you deploy:
 
 | Tool | What it does |
 |---|---|
-| `calculate` | Run the compiled workbook for a set of inputs and return the results. |
+| *(one per output Table, e.g.* `calculate_tax`*)* | Run that Table's calculation for a set of inputs and return its results. |
 | `explain` | Return an ordered, cell-by-cell trace of how a result was computed. |
 | `get_manifest` | A curated, agent-facing projection of the bundle's manifest (inputs, outputs, metadata). |
 | `diff_version` | Serve the recorded previous→current delta for this workflow. |
@@ -180,7 +186,8 @@ binary does **not** contain. Reading an `.xlsx`, parsing formulas, and running
 the JavaScript code-mode machinery used during compilation are **compile-time
 only** — none of that stack is linked into `pmcp-workbook-server`. The binary
 depends solely on the toolkit's workbook *boot* surface (load a bundle, verify
-it, register the five tools), and a mechanical **purity gate** enforces that the
+it, register the workbook's tools — one per output table, plus the four
+infrastructure tools), and a mechanical **purity gate** enforces that the
 heavyweight reader and code-execution cones never reach the served binary.
 
 In practice this means the deployed attack surface is small and bounded: the
@@ -217,7 +224,7 @@ cargo run                        # serve the freshly compiled bundle
 Pick **Shape A** when you already have a compiled bundle and just want to serve
 it with zero build; pick **Shape B** when the workbook lives in your project and
 you want a crate you own, can extend, and can deploy. Both serve the identical
-five tools over the identical boot gate.
+tool surface over the identical boot gate.
 
 ## What You Built
 
@@ -228,8 +235,9 @@ You now have a workbook MCP server that:
 - compiles that workbook into a **deterministic, integrity-locked
   `bundle@version`** through a fail-closed pipeline that reconciles against Excel
   and gates updates before any write,
-- serves the bundle through five MCP tools with **no user Rust** (Shape A) or a
-  small crate you own (Shape B),
+- serves the bundle through its MCP tools — one per output table, plus four
+  infrastructure tools — with **no user Rust** (Shape A) or a small crate you own
+  (Shape B),
 - **re-verifies the bundle's integrity at every boot**, refusing to serve a
   tampered or incomplete bundle, and
 - ships a **reader-free, code-execution-free served cone** — mechanically gated —
