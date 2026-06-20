@@ -138,11 +138,14 @@ mod tests {
         ]);
         let map = build_cell_map(&manifest).expect("build cell map");
         assert_eq!(map.inputs.len(), 1, "one Role::Input entry");
-        assert_eq!(map.inputs[0].json_key, "in_gross_income");
+        // F3: the served json_key STRIPS the in_/out_ governance prefix that the
+        // workbook author uses on the named range (`in_gross_income` →
+        // `gross_income`); role.name itself stays prefixed for matching.
+        assert_eq!(map.inputs[0].json_key, "gross_income");
         assert_eq!(map.inputs[0].seed_coord, "1_Inputs!B2");
         assert_eq!(map.inputs[0].unit.as_deref(), Some("USD"));
         assert_eq!(map.outputs.len(), 1, "one Role::Output entry");
-        assert_eq!(map.outputs[0].json_key, "out_tax_owed");
+        assert_eq!(map.outputs[0].json_key, "tax_owed");
         assert_eq!(map.outputs[0].seed_coord, "3_Outputs!B3");
     }
 

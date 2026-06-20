@@ -164,11 +164,37 @@ pub enum InputTier {
 /// This is the SINGLE source of the name/meaning/cell precedence used to map a
 /// [`CellRole`] to the LLM-facing key — shared by the `cell_map` emitter and the
 /// served tools' input/output schema builders so the precedence cannot drift.
+///
+/// When the key comes from `role.name`, a SINGLE leading `in_`/`out_` GOVERNANCE
+/// prefix is STRIPPED from the served key (`in_gross_income` → `gross_income`): the
+/// prefix is a workbook-authoring convention (the named-range marker that
+/// `name_named_inputs`/`promote_named_outputs` match on) and must never leak into
+/// the caller-facing tool surface. The strip applies ONLY to the `name` branch —
+/// the `meaning` and `cell` fallbacks are returned verbatim. `role.name` itself is
+/// NOT mutated, so governance/named-range matching still sees the prefixed name.
 pub fn json_key_for_role(role: &CellRole) -> String {
-    role.name
-        .clone()
-        .or_else(|| role.meaning.clone())
-        .unwrap_or_else(|| role.cell.clone())
+    if let Some(name) = role.name.as_deref() {
+        return strip_governance_prefix(name).to_string();
+    }
+    role.meaning.clone().unwrap_or_else(|| role.cell.clone())
+}
+
+/// Strip a SINGLE leading `in_`/`out_` governance prefix from a served `json_key`.
+///
+/// Only the FIRST matching prefix is removed (`in_in_x` → `in_x`), and only from a
+/// `role.name`-sourced key (the caller guards that). A name that is EXACTLY the
+/// prefix (`in_`) or carries no prefix is returned unchanged, so the strip is
+/// idempotent on already-clean keys and never yields an empty string from a
+/// non-empty prefixed-only name.
+fn strip_governance_prefix(name: &str) -> &str {
+    for prefix in ["in_", "out_"] {
+        if let Some(rest) = name.strip_prefix(prefix) {
+            if !rest.is_empty() {
+                return rest;
+            }
+        }
+    }
+    name
 }
 
 /// Whether a [`CellRole`] is a STRICT constant — a BA-only governed value that
@@ -737,5 +763,111 @@ mod tests {
             !is_strict_constant(&tiered_const),
             "a Constant with an explicit tier is no longer strict"
         );
+    }
+
+    // ---- F3: governance-prefix stripping on the served json_key ------------
+
+    fn named_role(role: Role, name: &str) -> CellRole {
+        let mut r = role_with_tier(role, None);
+        r.name = Some(name.to_string());
+        r
+    }
+
+    #[test]
+    fn json_key_strips_leading_in_prefix_from_name() {
+        let r = named_role(Role::Input, "in_gross_income");
+        assert_eq!(
+            json_key_for_role(&r),
+            "gross_income",
+            "the served input key must drop the in_ governance prefix"
+        );
+    }
+
+    #[test]
+    fn json_key_strips_leading_out_prefix_from_name() {
+        let r = named_role(Role::Output, "out_tax_owed");
+        assert_eq!(json_key_for_role(&r), "tax_owed");
+    }
+
+    #[test]
+    fn json_key_does_not_mutate_role_name() {
+        let r = named_role(Role::Input, "in_gross_income");
+        let _ = json_key_for_role(&r);
+        assert_eq!(
+            r.name.as_deref(),
+            Some("in_gross_income"),
+            "role.name must stay prefixed for governance/named-range matching"
+        );
+    }
+
+    #[test]
+    fn json_key_strips_only_a_single_prefix() {
+        // Only the FIRST governance prefix is removed.
+        let r = named_role(Role::Input, "in_in_x");
+        assert_eq!(json_key_for_role(&r), "in_x");
+    }
+
+    #[test]
+    fn json_key_leaves_unprefixed_name_untouched() {
+        let r = named_role(Role::Input, "loan_amount");
+        assert_eq!(json_key_for_role(&r), "loan_amount");
+        // A substring-but-not-prefix match must NOT be stripped.
+        let r2 = named_role(Role::Input, "margin_in_pct");
+        assert_eq!(json_key_for_role(&r2), "margin_in_pct");
+    }
+
+    #[test]
+    fn json_key_does_not_strip_prefix_only_name() {
+        // A name that is EXACTLY the prefix must not degenerate to "".
+        let r = named_role(Role::Input, "in_");
+        assert_eq!(json_key_for_role(&r), "in_");
+        let r2 = named_role(Role::Output, "out_");
+        assert_eq!(json_key_for_role(&r2), "out_");
+    }
+
+    #[test]
+    fn json_key_strip_does_not_apply_to_meaning_or_cell_fallback() {
+        // name absent → meaning verbatim (NOT stripped even if it looks prefixed).
+        let mut r = role_with_tier(Role::Input, None);
+        r.name = None;
+        r.meaning = Some("in_some_label".to_string());
+        assert_eq!(json_key_for_role(&r), "in_some_label");
+        // name + meaning absent → cell key verbatim.
+        let mut r2 = role_with_tier(Role::Output, None);
+        r2.name = None;
+        r2.meaning = None;
+        assert_eq!(json_key_for_role(&r2), "1_Inputs!E6");
+    }
+
+    #[test]
+    fn prop_strip_is_idempotent_and_prefix_safe() {
+        // PROPERTY (deterministic corpus): stripping is idempotent, never
+        // touches a non-prefixed name, and never yields an empty key from a
+        // non-empty input.
+        let corpus = [
+            "in_gross_income",
+            "out_tax_owed",
+            "in_in_x",
+            "loan_amount",
+            "margin_in_pct",
+            "in_",
+            "out_",
+            "x",
+            "in_a",
+            "outflow", // starts with "out" but not the "out_" prefix
+            "inflow",  // starts with "in" but not the "in_" prefix
+        ];
+        for raw in corpus {
+            let once = strip_governance_prefix(raw);
+            let twice = strip_governance_prefix(once);
+            assert_eq!(once, twice, "strip must be idempotent for {raw:?}");
+            assert!(
+                !once.is_empty(),
+                "non-empty name {raw:?} must not strip to empty"
+            );
+            if !raw.starts_with("in_") && !raw.starts_with("out_") {
+                assert_eq!(once, raw, "non-prefixed {raw:?} must be returned verbatim");
+            }
+        }
     }
 }
