@@ -294,6 +294,21 @@ pub fn input_schema_for_manifest(manifest: &Manifest, cell_map: &CellMap) -> Val
         input_props.insert(entry.json_key.clone(), Value::Object(prop));
     }
 
+    // F2: ADVERTISE the legal override keys so an LLM/caller can DISCOVER them,
+    // rather than leaving `overrides` an opaque open map described in prose only.
+    // The keys are the SAME variable-tier list `validate_input` accepts (one source
+    // of truth — `crate::workbook::input::variable_tier_keys`), so advertisement and
+    // acceptance cannot drift. `additionalProperties` stays permissive (the open
+    // value-typed map) so this is a DISCOVERABILITY change only — `validate_input`'s
+    // accept/reject behavior is unchanged.
+    let mut override_props = Map::new();
+    for key in crate::workbook::input::variable_tier_keys(manifest) {
+        override_props.insert(
+            key,
+            json!({ "type": ["number", "string", "boolean", "null"] }),
+        );
+    }
+
     json!({
         "type": "object",
         "additionalProperties": false,
@@ -306,6 +321,7 @@ pub fn input_schema_for_manifest(manifest: &Manifest, cell_map: &CellMap) -> Val
             "overrides": {
                 "type": "object",
                 "additionalProperties": { "type": ["number", "string", "boolean", "null"] },
+                "properties": Value::Object(override_props),
                 "description": "Variable-tier parameter overrides, keyed by parameter \
                                 name or cell key. Strict (BA-governed) constants are rejected.",
             },
@@ -512,6 +528,83 @@ mod tests {
         assert_eq!(schema["additionalProperties"], true);
         // provenance is the only required field (present on both paths).
         assert_eq!(schema["required"], json!(["provenance"]));
+    }
+
+    #[test]
+    fn overrides_advertise_variable_tier_keys() {
+        // F2: the overrides block carries a `properties` map keyed by the legal
+        // variable-tier override keys (the SAME list validate_input accepts).
+        let (m, cm) = three_input_manifest_and_map();
+        let schema = input_schema_for_manifest(&m, &cm);
+        let override_props = &schema["properties"]["overrides"]["properties"];
+        let props = override_props
+            .as_object()
+            .expect("overrides.properties is an object");
+        // The three variable-tier inputs (Some(Variable) tier, not computed) are
+        // advertised by their `variable_tier_keys` identity (name.or(cell) — here
+        // the cell key, since these fixtures carry no `name`).
+        for key in ["1_Inputs!B2", "1_Inputs!B3", "1_Inputs!B4"] {
+            assert!(
+                props.contains_key(key),
+                "overrides advertises the variable-tier key `{key}` (got {props:?})"
+            );
+            assert_eq!(
+                override_props[key]["type"],
+                json!(["number", "string", "boolean", "null"]),
+                "each advertised override carries the permissive value-type union"
+            );
+        }
+        // Computed outputs are NEVER advertised as overridable (WR-02).
+        assert!(
+            !props.contains_key("3_Outputs!B2") && !props.contains_key("taxable_income"),
+            "a computed output is never an advertised override key"
+        );
+    }
+
+    #[test]
+    fn overrides_advertise_named_param_keys() {
+        // With a NAMED variable-tier input, the advertised override key is the
+        // human param name (variable_tier_keys uses name.or(cell)).
+        let mut named = input_role("1_Inputs!B2", Dtype::Number, "Gross income", None);
+        named.name = Some("in_gross_income".to_string());
+        let m = manifest_with(vec![named, output_role("3_Outputs!B2", "Taxable income")]);
+        let cm = CellMap {
+            inputs: vec![CellEntry {
+                json_key: "gross_income".to_string(),
+                seed_coord: "1_Inputs!B2".to_string(),
+                unit: Some("USD".to_string()),
+            }],
+            outputs: vec![CellEntry {
+                json_key: "taxable_income".to_string(),
+                seed_coord: "3_Outputs!B2".to_string(),
+                unit: Some("USD".to_string()),
+            }],
+        };
+        let schema = input_schema_for_manifest(&m, &cm);
+        let override_props = &schema["properties"]["overrides"]["properties"];
+        assert!(
+            override_props["in_gross_income"].is_object(),
+            "the named variable-tier param is advertised under its name"
+        );
+    }
+
+    #[test]
+    fn overrides_keep_open_additional_properties_for_discoverability_only() {
+        // F2 is advertisement-only: the open value-typed additionalProperties map
+        // is PRESERVED (validate_input's accept/reject behavior is unchanged) and
+        // the prose description stays.
+        let (m, cm) = three_input_manifest_and_map();
+        let schema = input_schema_for_manifest(&m, &cm);
+        let overrides = &schema["properties"]["overrides"];
+        assert_eq!(
+            overrides["additionalProperties"],
+            json!({ "type": ["number", "string", "boolean", "null"] }),
+            "the open value-typed additionalProperties map is preserved"
+        );
+        assert!(
+            overrides["description"].as_str().is_some(),
+            "the prose override description is retained"
+        );
     }
 
     #[test]

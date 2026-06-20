@@ -98,22 +98,25 @@ fn load_loan_bundle() -> (tempfile::TempDir, WorkbookBundle) {
 // ---- The loan's own served key sets vs tax-calc's (the disjointness oracle) ----
 
 /// The loan's served INPUT keys (the `cell_map.inputs` json_keys), authored in
-/// Task 1's `loan_calc_spec` via the `in_*` named-range convention.
+/// Task 1's `loan_calc_spec` via the `in_*` named-range convention. F3: the served
+/// key STRIPS the `in_` governance prefix (`in_loan_amount` → `loan_amount`); the
+/// underlying `role.name` stays prefixed for named-range matching.
 fn loan_input_keys() -> BTreeSet<String> {
-    ["in_loan_amount", "in_term_months", "in_credit_score"]
+    ["loan_amount", "term_months", "credit_score"]
         .into_iter()
         .map(String::from)
         .collect()
 }
 
 /// The loan's served OUTPUT keys (the `out_*` named ranges), authored in Task 1.
+/// F3: the served key STRIPS the `out_` governance prefix.
 fn loan_output_keys() -> BTreeSet<String> {
     [
-        "out_credit_tier",
-        "out_applied_rate",
-        "out_monthly_interest",
-        "out_total_interest",
-        "out_tier_rate",
+        "credit_tier",
+        "applied_rate",
+        "monthly_interest",
+        "total_interest",
+        "tier_rate",
     ]
     .into_iter()
     .map(String::from)

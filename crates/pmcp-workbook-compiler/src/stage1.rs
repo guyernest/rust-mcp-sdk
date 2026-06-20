@@ -221,7 +221,7 @@ fn trusted_fixture_gate(
 /// Render the collect-all aggregate of `Error` findings into one
 /// `CompileError::Lint` message string — every finding's `rule`, location, and
 /// message on its own line so the BA sees them all in one refusal.
-fn render_aggregate(errors: &[&LintFinding]) -> String {
+pub(crate) fn render_aggregate(errors: &[&LintFinding]) -> String {
     let mut out = format!("{} blocking finding(s):", errors.len());
     for f in errors {
         let loc = match &f.cell {

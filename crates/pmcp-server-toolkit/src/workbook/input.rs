@@ -296,7 +296,12 @@ fn find_role_by_key<'a>(manifest: &'a Manifest, key: &str) -> Option<&'a CellRol
 
 /// The variable-tier override keys a caller MAY set (the
 /// `strict_constant_override` allowed alternatives).
-fn variable_tier_keys(manifest: &Manifest) -> Vec<String> {
+///
+/// `pub(crate)` so the served `calculate` input schema builder
+/// ([`crate::workbook::schema::input_schema_for_manifest`]) can ADVERTISE the legal
+/// override keys as a `properties` map (F2) — the SAME list this validator and the
+/// reject path use, so "what we advertise" and "what we accept" cannot drift.
+pub(crate) fn variable_tier_keys(manifest: &Manifest) -> Vec<String> {
     manifest
         .cells
         .iter()
