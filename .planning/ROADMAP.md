@@ -1328,6 +1328,37 @@ Plans:
 
 - Every behavioral-prose claim about Tasks (SSE, serverless, owner binding, experimental.tasks, TaskSupport::*, tasks/result, tasks/cancel, tasks/get, poll interval, pollInterval, CreateTaskResult) still accurately describes current `pmcp-tasks` behavior (revision R-5 — prose drift, not just type-name drift).
 
+### Phase 100: Excel Workbook Built-in servers v2
+
+**Goal**: Redesign the workbook→MCP tool surface around a **table-based authoring contract** so a business analyst authors the contract in visible, standard Excel (named **Excel Tables** with columns `name | value | description | tier`) and the compiler derives a well-named, well-described, well-typed MCP tool surface an LLM can select and call correctly. Incorporates the pmcp.run dev-team feedback (`SDK-ISSUE-workbook-tool-surface.md`) and **supersedes the per-cell `in_*`/`out_*` named-range model** (retires merged F1 + F3-inputs; keeps F2). No legacy customers → clean break.
+
+**Design contract**: `docs/design/workbook-table-authoring-contract.md` (converged, locked decisions + cleanup ledger + 7-step phasing). umya 3.0.0 verified to read Excel Tables (no new dep; purity boundary intact).
+
+**Depends on**: Phase 96 (workbook compiler/served toolkit), Phase 99 (PMAT gate); the prior pmcp.run fixes (F1/F2/F3) were merged on `fix/cargo-pmcp-deploy-stack-ts` but never PR'd — this phase plans + executes the full improvement.
+
+**Requirements**: WBV2-01, WBV2-02, WBV2-03, WBV2-04, WBV2-05, WBV2-06, WBV2-07, WBV2-08 (locked 2026-06-20 from 100-RESEARCH.md; mapped 1:1 to the spec's 7 phasing steps + a cross-cutting quality/purity gate — see 100-VALIDATION.md "Locked Requirement Breakdown").
+
+**Success Criteria** (what must be TRUE):
+
+  1. A BA authors inputs/outputs as named Excel Tables (standard columns) — no per-cell named ranges — and the compiler synthesizes the tool surface by iterating rows (type/unit/enum/tier harvested).
+  2. Each output table becomes a distinct, named, described MCP tool with a DAG-derived input schema and an emitted output schema (`structuredContent`).
+  3. A structurally-broken workbook fails compile with a fail-helpful, cell-precise message; `cargo pmcp workbook explain` previews the emitted tool surface before deploy.
+  4. A shipped provenance-valid template `.xlsx` doubles as starting point, training artifact, and the honest reference fixture (replacing the misleading hand-authored ones).
+  5. Per-cell `in_*`/`out_*` model retired; F2 retained; `make quality-gate` + PMAT + purity all green.
+
+**Source**: pmcp.run dev-team feedback + multi-turn design convergence (2026-06-20); spec at `docs/design/workbook-table-authoring-contract.md`.
+
+**Plans:** 6 plans
+
+Plans:
+
+- [ ] 100-01-PLAN.md — WBV2-01: provenance-valid template.xlsx (Inputs Table + tier/enum dropdowns + named output Tables) via rust_xlsxwriter; doubles as the honest reference fixture
+- [ ] 100-02-PLAN.md — WBV2-02: ingest harvests Excel Tables (TableRecord name/columns) + per-row type/unit/enum/tier; malformed-table-XML fuzz containment
+- [ ] 100-03-PLAN.md — WBV2-03: manifest model lift CellMap → {inputs[], tools[]} + Dag::upstream_input_leaves + DAG-derived per-tool input_keys
+- [ ] 100-04-PLAN.md — WBV2-04/05: single→multi served fan-out (per-tool schema + N handlers + registration loop, F2 retained) + per-tool reconcile + cell-precise row lints + retire F1/F3-input/strip/name_named_inputs
+- [ ] 100-05-PLAN.md — WBV2-06/07: cargo pmcp workbook explain preview (text+json) + pmcp-book/pmcp-course chapters
+- [ ] 100-06-PLAN.md — WBV2-08: make quality-gate + PMAT (cog<=25) + make purity-check all green; umya-isolation boundary asserted intact
+
 ---
 
 ### Phase 80: SEP-2640 Skills Support
