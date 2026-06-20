@@ -840,10 +840,11 @@ mod tests {
     }
 
     #[test]
-    fn prop_strip_is_idempotent_and_prefix_safe() {
-        // PROPERTY (deterministic corpus): stripping is idempotent, never
-        // touches a non-prefixed name, and never yields an empty key from a
-        // non-empty input.
+    fn prop_strip_removes_at_most_one_prefix_and_is_loss_free() {
+        // PROPERTY (deterministic corpus): a SINGLE strip removes AT MOST one
+        // governance prefix (by design — the locked decision is "strip a single
+        // leading in_/out_"), never touches a non-prefixed name, and never yields
+        // an empty key from a non-empty input.
         let corpus = [
             "in_gross_income",
             "out_tax_owed",
@@ -859,15 +860,44 @@ mod tests {
         ];
         for raw in corpus {
             let once = strip_governance_prefix(raw);
-            let twice = strip_governance_prefix(once);
-            assert_eq!(once, twice, "strip must be idempotent for {raw:?}");
             assert!(
                 !once.is_empty(),
                 "non-empty name {raw:?} must not strip to empty"
             );
+            // A single strip removes 0 or 1 prefix: the result is either the input
+            // verbatim, or exactly the input with one in_/out_ prefix removed.
+            let removed_one = raw
+                .strip_prefix("in_")
+                .or_else(|| raw.strip_prefix("out_"))
+                .map_or(false, |rest| !rest.is_empty() && once == rest);
+            assert!(
+                once == raw || removed_one,
+                "strip removes at most one prefix for {raw:?} (got {once:?})"
+            );
             if !raw.starts_with("in_") && !raw.starts_with("out_") {
                 assert_eq!(once, raw, "non-prefixed {raw:?} must be returned verbatim");
             }
+        }
+    }
+
+    #[test]
+    fn prop_strip_is_idempotent_on_served_keys() {
+        // PROPERTY: on the keys callers actually see (single-prefixed or clean),
+        // stripping IS idempotent — re-stripping a served key is a no-op. This is
+        // the invariant the served-key path relies on (json_key_for_role applies
+        // the strip exactly once per role).
+        for served in [
+            "gross_income",
+            "tax_owed",
+            "loan_amount",
+            "x",
+            "in_", // prefix-only is preserved, so re-strip is a no-op
+        ] {
+            assert_eq!(
+                strip_governance_prefix(served),
+                served,
+                "an already-served key {served:?} must be a strip no-op"
+            );
         }
     }
 }
