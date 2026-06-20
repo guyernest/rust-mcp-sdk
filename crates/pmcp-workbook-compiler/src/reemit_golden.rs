@@ -78,59 +78,70 @@ fn read_json(dir: &Path, member: &str) -> Value {
     serde_json::from_slice(&bytes).unwrap_or_else(|e| panic!("parse {member}: {e}"))
 }
 
-/// Check (1) — normalized-JSON equality on a load-bearing semantic member.
+/// Check (1) — the re-emitted IR's formula DAG is a SUBSET of the golden's.
+///
+/// The committed served golden was regenerated (Plan 04, WBV2-04) into the
+/// two-Table shape — it carries an EXTRA `Estimate_Refund` tool (the `4_Refund!B2`
+/// refund cell + the `1_Inputs!B5` withheld input) the legacy named-range
+/// `tax-calc.xlsx` source does NOT declare. So the named-range compile output is
+/// the golden's TAX SUBSET: every cell it emits must match the golden byte-for-byte
+/// (the formula DAG is the load-bearing semantic member), but the golden may carry
+/// additional refund-tool cells.
 #[test]
-fn structural_eq_check1_executable_ir_normalized_json_equal() {
+fn structural_eq_check1_executable_ir_is_subset_of_golden() {
     let (_scratch, bundle) = compile_fixture();
     let emitted = read_json(&bundle, "executable.ir.json");
     let golden = read_json(&golden_dir(), "executable.ir.json");
-    assert_eq!(
-        emitted, golden,
-        "the re-emitted executable.ir.json must be normalized-JSON equal to the golden \
-         (the formula DAG is the load-bearing semantic member)"
-    );
+    let emitted_obj = emitted.as_object().expect("emitted IR is an object");
+    let golden_obj = golden.as_object().expect("golden IR is an object");
+    for (cell, expr) in emitted_obj {
+        assert_eq!(
+            Some(expr),
+            golden_obj.get(cell),
+            "re-emitted IR cell {cell} must match the golden (the formula DAG is the \
+             load-bearing semantic member)"
+        );
+    }
 }
 
-/// Check (1, cont.) — cell_map.json seed-coordinate equality (the served I/O
-/// contract: the executor seeds/reads each cell by its `seed_coord`).
+/// Check (1, cont.) — the re-emitted cell_map's seed coordinates are a SUBSET of
+/// the golden's (the served I/O contract: the executor seeds/reads each cell by its
+/// `seed_coord`). The regenerated served golden (WBV2-04 two-Table shape) carries an
+/// EXTRA refund input/output the legacy named-range source does not declare, so the
+/// compile output is the golden's TAX SUBSET.
 #[test]
-fn structural_eq_check1_cell_map_seed_coords_equal() {
+fn structural_eq_check1_cell_map_seed_coords_subset_of_golden() {
     let (_scratch, bundle) = compile_fixture();
     let emitted = read_json(&bundle, "cell_map.json");
     let golden = read_json(&golden_dir(), "cell_map.json");
 
-    let input_coords = |v: &Value| -> Vec<String> {
-        let mut c: Vec<String> = v["inputs"]
+    use std::collections::BTreeSet;
+    let input_coords = |v: &Value| -> BTreeSet<String> {
+        v["inputs"]
             .as_array()
             .expect("inputs array")
             .iter()
             .map(|e| e["seed_coord"].as_str().expect("seed_coord").to_string())
-            .collect();
-        c.sort();
-        c
+            .collect()
     };
     // WBV2-03/04: output seed_coords live under `tools[].outputs[]` (the multi-tool
     // model); union across tools by iterating each tool's outputs.
-    let output_coords = |v: &Value| -> Vec<String> {
-        let mut c: Vec<String> = v["tools"]
+    let output_coords = |v: &Value| -> BTreeSet<String> {
+        v["tools"]
             .as_array()
             .expect("tools array")
             .iter()
             .flat_map(|t| t["outputs"].as_array().expect("tool.outputs array").iter())
             .map(|e| e["seed_coord"].as_str().expect("seed_coord").to_string())
-            .collect();
-        c.sort();
-        c
+            .collect()
     };
-    assert_eq!(
-        input_coords(&emitted),
-        input_coords(&golden),
-        "input seed_coords match the golden"
+    assert!(
+        input_coords(&emitted).is_subset(&input_coords(&golden)),
+        "every re-emitted input seed_coord is present in the golden"
     );
-    assert_eq!(
-        output_coords(&emitted),
-        output_coords(&golden),
-        "output seed_coords (across tools) match the golden"
+    assert!(
+        output_coords(&emitted).is_subset(&output_coords(&golden)),
+        "every re-emitted output seed_coord is present in the golden"
     );
 }
 
@@ -229,13 +240,14 @@ fn structural_eq_check5_named_outputs_match() {
     };
     let emitted_outputs = outputs(&emitted);
     let golden_outputs = outputs(&golden);
-    assert_eq!(
-        emitted_outputs.keys().collect::<Vec<_>>(),
-        golden_outputs.keys().collect::<Vec<_>>(),
-        "the same output cells are declared"
-    );
+    // The regenerated served golden (WBV2-04 two-Table shape) declares an EXTRA
+    // refund output the legacy named-range source does not, so the compile output's
+    // outputs are a SUBSET of the golden's — but every shared output cell's
+    // role/dtype/name must match exactly.
     for (cell, (e_role, e_dtype, e_name)) in &emitted_outputs {
-        let (g_role, g_dtype, g_name) = &golden_outputs[cell];
+        let (g_role, g_dtype, g_name) = golden_outputs
+            .get(cell)
+            .unwrap_or_else(|| panic!("re-emitted output cell {cell} present in the golden"));
         assert_eq!(e_role, g_role, "output {cell} role matches");
         assert_eq!(e_dtype, g_dtype, "output {cell} dtype matches");
         assert_eq!(e_name, g_name, "output {cell} named-range name matches");
