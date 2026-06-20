@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v2.3
 milestone_name: Excel-as-Configuration MCP Servers
-status: executing
+status: verifying
 stopped_at: Completed 100-02-PLAN.md (WBV2-02 Table harvest + per-row type/unit/enum/tier + fuzz/property/e2e)
-last_updated: "2026-06-20T20:43:29.405Z"
+last_updated: "2026-06-20T20:53:29.877Z"
 last_activity: 2026-06-20
 progress:
   total_phases: 54
-  completed_phases: 47
+  completed_phases: 48
   total_plans: 227
-  completed_plans: 226
-  percent: 87
+  completed_plans: 227
+  percent: 89
 ---
 
 # Project State
@@ -27,7 +27,7 @@ See: .planning/PROJECT.md (updated 2026-06-09) · .planning/ROADMAP.md (v2.3 mil
 
 Phase: 100 (excel-workbook-built-in-servers-v2) — EXECUTING
 Plan: 6 of 6
-Status: Ready to execute
+Status: Phase complete — ready for verification
 Last activity: 2026-06-20
 
 Progress: [████████████████████] 286/290 plans (99%) · v2.3 phases 91–96 all Complete
@@ -72,6 +72,7 @@ Decisions are logged in PROJECT.md Key Decisions table. Decisions framing this m
 - Phase 100-02 (WBV2-02): ingest now HARVESTS each Excel Table's name+columns into an owned TableRecord{name,area,columns} on SheetRecord (additive — kept the area-only `tables`), via table_records() calling the non-deprecated umya 3.0.0 t.name()/t.columns()/t.area() (get_name/get_columns are #[deprecated], would trip the deny gate — Rule 3). Added per-row §3.3 projectors: number_format_to_unit (CLOSED {USD,rate,date,None}, percent-before-currency), harvest_dtype, harvest_tier (CLOSED {strict,variable}), harvest_input_row/harvest_output_row (strict→Role::Constant+tier None; variable→Role::Input+InputTier::Variable; outputs untiered), enum via the EXISTING freeze_or_reason (pub harvest_allowed_values). KEY DEVIATION (Rule 1 bug): the catch_unwind containment seam (T-100-03 DoS) wraps the EAGER reader::xlsx::read (read_workbook_contained), NOT just table_records — umya parses xl/tables/tableN.xml DURING the read and .unwrap()s there (a RED unit test panicked at umya reader/xlsx/table.rs:176, before any accessor); a caught panic → IngestError::MalformedTable → CompileError::Ingest. extract_tables_contained kept as belt-and-suspenders. ALWAYS set complete: unit + fuzz (workbook_table_ingest, 20k runs + a force-added corrupted-tableN.xml seed, corpus/ gitignored) + property (harvest_roundtrip_prop: total/stable/closed) + REAL-template e2e (template_harvest_e2e: income=USD/Number, filing enum=[single,married], rate=rate/strict, caption→tool-description linkage, cached-<v> oracle). proptest 1.7 dev-dep (existing workspace dep). make purity-check PASSED (no umya leak from TableRecord).
 - [Phase ?]: Phase 100-03 (WBV2-03): lifted the shared artifact model to multi-tool CellMap{inputs[], tools[]} — pub struct Tool{name, description, input_keys, outputs, oracle} (drops Eq) in reader-free artifact_model.rs. Added Dag::upstream_input_leaves (cycle-safe DFS, BTreeSet) deriving each tool's minimal input set, property- AND fuzz-proven derived⊆inputs over hostile/cyclic DAGs (T-100-06, dag_upstream_leaves 20k runs). build_tools(manifest, dag, output_tables)->(Vec<Tool>, Vec<LintFinding>): groups output cells by Table (OutputTable membership param — Rule 3 deviation: CellRole records no owning Table), unions upstream leaves->input_keys, WARNING feeds-no-tool lint, constant-only excluded; §4.2 example [filing,income]/[filing,income,withheld] proven. Transitional #[deprecated] CellMap::outputs() flattens tools[].outputs to keep the workbook cone compiling green end-of-wave-3 (Plan 04 Task 1 deletes it). Regenerated tax-calc@1.1.0 golden to {inputs, tools[]} (loader DESERIALIZES it). build_cell_map kept single-tool-transitional; Plan 04 owns the per-Table served fan-out. make purity-check PASSED (T-100-07). Pre-existing out-of-scope reds VERIFIED at HEAD: pmcp-toolkit-mysql sqlx E0277, cargo-pmcp embedded-mirror+auth-cache.
 - [Phase ?]: Phase 100-05 (WBV2-06/07): cargo pmcp workbook explain previews the served multi-tool surface from a raw .xlsx via DIRECT ingest-record harvest (NOT build_tools+DAG, respecting the Plan-04 named-range deferral); pure projection in explain_surface.rs mounted into the lib via #[path] as crate::workbook_explain; BA book Ch12.14 + course chapter teach the table model only
+- [Phase ?]: Phase 100-06 (WBV2-08): phase-wide gate verdict — make lint GREEN, make purity-check GREEN (umya/calamine not-in-tree on runtime, no reader in any served tree), PMAT cog<=25 zero src/-scope + zero workbook-path; retired-symbol sweep: CalculateHandler + Plan-03 outputs() shim GONE, no in_*/out_* injection; named-range trio recorded as Plan-04 Rule-4 deferral (still-consumed, not dead code); 3 pre-existing out-of-scope failures excluded (mysql E0277, auth-cache proptest, Phase-93 fuzz_provenance_reader drift)
 
 ### Pending Todos
 
@@ -108,7 +109,7 @@ Items deferred by design for this milestone:
 
 ## Session Continuity
 
-Last session: 2026-06-20T20:43:05.607Z
+Last session: 2026-06-20T20:52:58.442Z
 Stopped at: Completed 100-02-PLAN.md (WBV2-02 Table harvest + per-row type/unit/enum/tier + fuzz/property/e2e)
 Resume file: None
 
@@ -130,3 +131,4 @@ Resume file: None
 | Phase 100 P02 | ~55min | 5 tasks | 9 files |
 | Phase 100 P100-03 | ~70min | 5 tasks | 19 files |
 | Phase 100 P100-05 | 55min | 2 tasks | 11 files |
+| Phase 100 P06 | ~6min | 3 tasks | 1 files |

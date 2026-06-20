@@ -1348,7 +1348,7 @@ Plans:
 
 **Source**: pmcp.run dev-team feedback + multi-turn design convergence (2026-06-20); spec at `docs/design/workbook-table-authoring-contract.md`.
 
-**Plans:** 5/6 plans executed
+**Plans:** 6/6 plans complete
 
 Plans:
 
@@ -1374,7 +1374,7 @@ Plans:
 
 **Wave 6** *(blocked on Wave 5 completion)*
 
-- [ ] 100-06-PLAN.md — WBV2-08: make quality-gate + PMAT (cog<=25) + make purity-check all green; umya-isolation boundary asserted intact
+- [x] 100-06-PLAN.md — WBV2-08: make quality-gate + PMAT (cog<=25) + make purity-check all green; umya-isolation boundary asserted intact
 
 ---
 
