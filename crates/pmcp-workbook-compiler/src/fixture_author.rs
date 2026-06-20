@@ -53,7 +53,8 @@
 use std::path::Path;
 
 use rust_xlsxwriter::{
-    Color, DataValidation, Format, Formula, Table, TableColumn, Workbook, XlsxError,
+    Color, DataValidation, DocProperties, ExcelDateTime, Format, Formula, Table, TableColumn,
+    Workbook, XlsxError,
 };
 
 use crate::provenance::gate::{classify, ProvenanceClass};
@@ -104,6 +105,27 @@ pub(crate) enum AuthoredCell {
         /// The colour role to paint.
         paint: CellPaint,
     },
+    /// A numeric value cell carrying an Excel NUMBER FORMAT (the §3.3 unit
+    /// witness): a currency format (`"$#,##0"`) → USD, a percent format
+    /// (`"0.0%"`) → rate. Written via `write_number_with_format` over a format
+    /// that combines the paint (input/constant) with the number-format string,
+    /// so the §7 template's `value` cells carry their unit for the harvest to read.
+    ///
+    // Why a distinct variant (not a `num_format` field on `Number`): the existing
+    // quirk/loan/leap specs author bare numbers with no format and must stay
+    // byte-stable; this additive variant adds the unit witness ONLY where a
+    // template value cell needs it, with zero churn to the prior fixtures.
+    NumberFmt {
+        /// A1 address.
+        addr: &'static str,
+        /// The numeric value to write.
+        value: f64,
+        /// The colour role to paint.
+        paint: CellPaint,
+        /// The Excel number-format string (e.g. `"$#,##0"` currency → USD unit,
+        /// `"0.0%"` percent → rate unit).
+        num_format: &'static str,
+    },
     /// A text/label cell (`write_string`), always [`CellPaint::Plain`].
     Text {
         /// A1 address.
@@ -130,6 +152,7 @@ impl AuthoredCell {
     fn addr(&self) -> &'static str {
         match self {
             AuthoredCell::Number { addr, .. }
+            | AuthoredCell::NumberFmt { addr, .. }
             | AuthoredCell::Text { addr, .. }
             | AuthoredCell::Formula { addr, .. } => addr,
         }
@@ -203,8 +226,17 @@ pub(crate) struct TableSpec {
     /// The caption written directly above the header row (the tool description),
     /// or `None` for an input table.
     pub(crate) caption: Option<&'static str>,
-    /// The table body rows (each a row of [`AuthoredCell`]s).
+    /// The table body rows (each a row of [`AuthoredCell`]s) written by the table
+    /// path. May be empty when the body cells are authored via
+    /// [`WorkbookSpec::cells`] instead (the template path) — in that case
+    /// [`TableSpec::body_rows`] declares the body height so the ListObject area
+    /// still spans the body.
     pub(crate) rows: Vec<Vec<AuthoredCell>>,
+    /// The number of BODY rows below the header (the table area spans
+    /// `header_row ..= header_row + body_rows`). Defaults to `rows.len()` when the
+    /// body is authored inline via [`TableSpec::rows`]; set explicitly when the
+    /// body cells live in [`WorkbookSpec::cells`] (template path).
+    pub(crate) body_rows: u32,
     /// The tier/enum dropdowns over value cells.
     pub(crate) data_validations: Vec<DataValidationSpec>,
 }
@@ -237,6 +269,16 @@ pub(crate) fn author_xlsx(path: &Path, spec: &WorkbookSpec) -> Result<(), XlsxEr
     let palette = CellFormats::new();
 
     let mut workbook = Workbook::new();
+    // Pin a FIXED creation datetime so regeneration is byte-deterministic: the
+    // default `DocProperties` stamps `ExcelDateTime::utc_now()` into
+    // `docProps/core.xml`, which would make every regen produce different bytes
+    // (the reproducible-fixture discipline requires deterministic output). This
+    // touches core.xml ONLY — the provenance gate reads app.xml's
+    // `<Application>`/`<AppVersion>` + calcPr, so the ExcelTrusted identity is
+    // untouched.
+    let fixed_creation =
+        ExcelDateTime::from_ymd(2026, 1, 1).expect("fixed fixture creation date is valid");
+    workbook.set_properties(&DocProperties::new().set_creation_datetime(&fixed_creation));
     let worksheet = workbook.add_worksheet();
     worksheet.set_name(spec.sheet)?;
 
@@ -269,7 +311,13 @@ fn write_table(
     let (first_col, header_row) = spec.top_left;
     write_caption(worksheet, spec, first_col, header_row)?;
     write_table_body(worksheet, spec, palette)?;
-    let last_row = header_row + u32::try_from(spec.rows.len()).expect("row count fits a u32");
+    // The body height: an explicit `body_rows` (template path, body in
+    // `WorkbookSpec::cells`) else the inline `rows.len()` (self-test path). A
+    // table always spans at least the header + one body row.
+    let body_rows = spec
+        .body_rows
+        .max(u32::try_from(spec.rows.len()).expect("row count fits a u32"));
+    let last_row = header_row + body_rows;
     let last_col = first_col + col_span(spec.columns);
     let table = build_table(spec);
     worksheet.add_table(header_row, first_col, last_row, last_col, &table)?;
@@ -377,6 +425,17 @@ fn write_cell(
         AuthoredCell::Number { value, paint, .. } => {
             write_number_cell(worksheet, row, col, *value, *paint, palette)
         },
+        AuthoredCell::NumberFmt {
+            value,
+            paint,
+            num_format,
+            ..
+        } => {
+            let format = paint_format(*paint).set_num_format(*num_format);
+            worksheet
+                .write_number_with_format(row, col, *value, &format)
+                .map(|_| ())
+        },
         AuthoredCell::Text { text, .. } => worksheet.write_string(row, col, *text).map(|_| ()),
         AuthoredCell::Formula {
             formula, cached, ..
@@ -384,6 +443,17 @@ fn write_cell(
             let f = Formula::new(*formula).set_result(*cached);
             worksheet.write_formula(row, col, f).map(|_| ())
         },
+    }
+}
+
+/// Build the paint-driven base [`Format`] for a [`CellPaint`] (a blue INPUT
+/// font, a green CONSTANT fill, or a plain format). The [`AuthoredCell::NumberFmt`]
+/// path then layers its number-format string on top via `set_num_format`.
+fn paint_format(paint: CellPaint) -> Format {
+    match paint {
+        CellPaint::Input => Format::new().set_font_color(Color::RGB(INPUT_FONT_ARGB)),
+        CellPaint::Constant => Format::new().set_background_color(Color::RGB(CONSTANT_FILL_ARGB)),
+        CellPaint::Plain => Format::new(),
     }
 }
 
@@ -468,6 +538,11 @@ pub(crate) fn write_gen_metadata(
         .iter()
         .filter_map(|c| match c {
             AuthoredCell::Number {
+                addr,
+                paint: CellPaint::Input,
+                ..
+            }
+            | AuthoredCell::NumberFmt {
                 addr,
                 paint: CellPaint::Input,
                 ..
@@ -639,6 +714,70 @@ fn regenerate_fixtures() {
         write_gen_metadata(&path, generator_fn, &spec, reason).expect("quirk gen metadata");
         eprintln!("[regenerate_fixtures] wrote {}", path.display());
     }
+}
+
+/// REPRODUCIBLE, NON-MUTATING generator for the WBV2-01 shipped `template.xlsx`
+/// (§7), the env-gated sibling of [`regenerate_fixtures`]. It authors the
+/// CANONICAL template once under the CLI templates dir
+/// (`cargo-pmcp/src/templates/workbook_bundle/template.xlsx`), then copies the
+/// produced bytes BYTE-FOR-BYTE into the compiler test-fixtures dir
+/// (`crates/pmcp-workbook-compiler/tests/fixtures/template.xlsx`) — ONE generator,
+/// two identical copies (review finding #8). A `template.gen.json` sidecar is
+/// written beside the canonical copy for reproducibility. NO
+/// `template.provenance-override.json` is written: the template is genuinely
+/// `rust_xlsxwriter`-authored and classifies RAW
+/// [`ProvenanceClass::ExcelTrusted`] (review finding #5).
+///
+/// Run intentionally with:
+///
+/// ```text
+/// PMCP_REGEN_FIXTURES=1 cargo test -p pmcp-workbook-compiler \
+///     regenerate_template -- --ignored
+/// ```
+#[test]
+#[ignore = "writes the committed template.xlsx into the source tree; run only with PMCP_REGEN_FIXTURES=1"]
+fn regenerate_template() {
+    if std::env::var("PMCP_REGEN_FIXTURES").is_err() {
+        eprintln!(
+            "[regenerate_template] PMCP_REGEN_FIXTURES not set — no-op (the generator never \
+             mutates the committed template on a normal run)"
+        );
+        return;
+    }
+
+    // CARGO_MANIFEST_DIR = crates/pmcp-workbook-compiler; the workspace root is two
+    // levels up. The canonical template lives under the CLI templates dir; the
+    // test-fixtures copy lives in this crate's tests/fixtures.
+    let crate_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let workspace_root = crate_dir
+        .parent()
+        .and_then(Path::parent)
+        .expect("workspace root is two levels above the compiler crate");
+    let cli_templates = workspace_root.join("cargo-pmcp/src/templates/workbook_bundle");
+    std::fs::create_dir_all(&cli_templates).expect("CLI templates dir");
+    let fixtures = crate_dir.join("tests/fixtures");
+    std::fs::create_dir_all(&fixtures).expect("fixtures dir");
+
+    let spec = template_spec();
+    let canonical = cli_templates.join("template.xlsx");
+    author_xlsx(&canonical, &spec).expect("author the canonical template.xlsx");
+
+    // The .gen.json reproducibility sidecar beside the canonical copy. NO
+    // provenance-override sidecar — the template is RAW ExcelTrusted.
+    let gen_reason =
+        "authored by rust_xlsxwriter; the WBV2-01 shipped tax-suite template — the BA \
+                      starting point + training artifact + honest reference fixture (§7). \
+                      Classifies RAW ExcelTrusted with NO provenance-override sidecar.";
+    write_gen_metadata(&canonical, "template_spec", &spec, gen_reason)
+        .expect("template gen metadata");
+    eprintln!("[regenerate_template] wrote {}", canonical.display());
+
+    // Copy the canonical bytes BYTE-FOR-BYTE into the test-fixtures dir (review
+    // finding #8: one generator, two identical copies — the byte-equality test
+    // fails CI on any drift between them).
+    let fixture_copy = fixtures.join("template.xlsx");
+    std::fs::copy(&canonical, &fixture_copy).expect("copy template to fixtures dir");
+    eprintln!("[regenerate_template] copied to {}", fixture_copy.display());
 }
 
 /// The WBEX-02 quirk reconcile-fixture specs (Plan 96-05 Task 2): each is a tiny
@@ -1112,6 +1251,255 @@ fn leap1900_probe_spec() -> WorkbookSpec {
     }
 }
 
+/// The WBV2-01 shipped tax-suite TEMPLATE spec (§7 annotated reference diagram):
+/// the one `template.xlsx` that triples as the BA starting point, the
+/// training/documentation artifact, and the honest reference fixture replacing
+/// the misleading hand-authored `tax-calc`/`leap1900` fixtures.
+///
+/// # Layout (single `Data` sheet)
+///
+/// - `0_meta` (optional, OQ-1 minimal key set): `server: tax-suite`, `version: 1`
+///   in row 1.
+/// - `Inputs` Excel Table (`name|value|description|tier`, header row 3): `income`
+///   (currency → USD unit witness), `filing` (a `{single,married}` sample enum
+///   dropdown → enum-harvest demo), `withheld` (currency), `rate` (percent,
+///   `tier=strict` → NOT caller-exposed). The `tier` column carries a
+///   `{variable,strict}` dropdown (dogfooding the enum-from-dropdown mechanism).
+/// - a small VLOOKUP/rate REFERENCE region (cols F:G, the DAG interior — not
+///   exposed) the tax formula reads.
+/// - two named output Excel Tables, each with a caption (= tool description)
+///   directly above it:
+///   - `Calculate_Tax` — `tax_owed` (18241) / `effective_rate` (0.182) as
+///     `Formula::set_result` cached oracles reachable from `income`+`filing`,
+///   - `Estimate_Refund` — `refund` (-3241) reachable from `income`+`filing`+
+///     `withheld` (so Plan 03's DAG-derived inputs prove the §4.2 example).
+///
+/// # Provenance
+///
+/// Authored ENTIRELY by `rust_xlsxwriter`, so it classifies RAW
+/// [`ProvenanceClass::ExcelTrusted`] (§6 orthogonal provenance) with NO
+/// `template.provenance-override.json` sidecar — the `template_provenance.rs`
+/// test asserts the override-free RAW class.
+fn template_spec() -> WorkbookSpec {
+    WorkbookSpec {
+        sheet: "Data",
+        cells: vec![
+            // ---- 0_meta (optional, minimal {server, version}) ----
+            AuthoredCell::Text {
+                addr: "A1",
+                text: "server",
+            },
+            AuthoredCell::Text {
+                addr: "B1",
+                text: "tax-suite",
+            },
+            AuthoredCell::Text {
+                addr: "C1",
+                text: "version",
+            },
+            AuthoredCell::Number {
+                addr: "D1",
+                value: 1.0,
+                paint: CellPaint::Plain,
+            },
+            // ---- Inputs table BODY (header row 3 written by the Table) ----
+            // income (currency → USD unit witness), blue-font input.
+            AuthoredCell::Text {
+                addr: "A4",
+                text: "income",
+            },
+            AuthoredCell::NumberFmt {
+                addr: "B4",
+                value: 100_000.0,
+                paint: CellPaint::Input,
+                num_format: "$#,##0",
+            },
+            AuthoredCell::Text {
+                addr: "C4",
+                text: "annual gross (USD $)",
+            },
+            AuthoredCell::Text {
+                addr: "D4",
+                text: "variable",
+            },
+            // filing (a {single,married} sample enum dropdown), text value.
+            AuthoredCell::Text {
+                addr: "A5",
+                text: "filing",
+            },
+            AuthoredCell::Text {
+                addr: "B5",
+                text: "single",
+            },
+            AuthoredCell::Text {
+                addr: "C5",
+                text: "filing status",
+            },
+            AuthoredCell::Text {
+                addr: "D5",
+                text: "variable",
+            },
+            // withheld (currency → USD), blue-font input.
+            AuthoredCell::Text {
+                addr: "A6",
+                text: "withheld",
+            },
+            AuthoredCell::NumberFmt {
+                addr: "B6",
+                value: 15_000.0,
+                paint: CellPaint::Input,
+                num_format: "$#,##0",
+            },
+            AuthoredCell::Text {
+                addr: "C6",
+                text: "tax withheld YTD (USD)",
+            },
+            AuthoredCell::Text {
+                addr: "D6",
+                text: "variable",
+            },
+            // rate (percent → rate unit), tier=strict → NOT caller-exposed.
+            AuthoredCell::Text {
+                addr: "A7",
+                text: "rate",
+            },
+            AuthoredCell::NumberFmt {
+                addr: "B7",
+                value: 0.22,
+                paint: CellPaint::Constant,
+                num_format: "0.0%",
+            },
+            AuthoredCell::Text {
+                addr: "C7",
+                text: "statutory bracket rate",
+            },
+            AuthoredCell::Text {
+                addr: "D7",
+                text: "strict",
+            },
+            // ---- reference / lookup region (cols F:G, DAG interior) ----
+            AuthoredCell::Text {
+                addr: "F1",
+                text: "bracket",
+            },
+            AuthoredCell::Text {
+                addr: "G1",
+                text: "rate",
+            },
+            AuthoredCell::Number {
+                addr: "F2",
+                value: 0.0,
+                paint: CellPaint::Constant,
+            },
+            AuthoredCell::NumberFmt {
+                addr: "G2",
+                value: 0.10,
+                paint: CellPaint::Constant,
+                num_format: "0.0%",
+            },
+            AuthoredCell::Number {
+                addr: "F3",
+                value: 40_000.0,
+                paint: CellPaint::Constant,
+            },
+            AuthoredCell::NumberFmt {
+                addr: "G3",
+                value: 0.22,
+                paint: CellPaint::Constant,
+                num_format: "0.0%",
+            },
+            // ---- Calculate_Tax output table BODY (caption A9, header row 10) ----
+            // tax_owed reachable ONLY from income (B4) + the rate ref (G3).
+            AuthoredCell::Text {
+                addr: "A11",
+                text: "tax_owed",
+            },
+            AuthoredCell::Formula {
+                addr: "B11",
+                formula: "ROUND(B4*G3-1759,0)",
+                cached: "18241",
+            },
+            AuthoredCell::Text {
+                addr: "C11",
+                text: "federal tax liability (USD)",
+            },
+            // effective_rate reachable from income (B4) + tax_owed (B11).
+            AuthoredCell::Text {
+                addr: "A12",
+                text: "effective_rate",
+            },
+            AuthoredCell::Formula {
+                addr: "B12",
+                formula: "ROUND(B11/B4,3)",
+                cached: "0.182",
+            },
+            AuthoredCell::Text {
+                addr: "C12",
+                text: "effective tax rate (%)",
+            },
+            // ---- Estimate_Refund output table BODY (caption A15, header row 16) ----
+            // refund reachable from withheld (B6) + tax_owed (B11).
+            AuthoredCell::Text {
+                addr: "A17",
+                text: "refund",
+            },
+            AuthoredCell::Formula {
+                addr: "B17",
+                formula: "ROUND(B6-B11,0)",
+                cached: "-3241",
+            },
+            AuthoredCell::Text {
+                addr: "C17",
+                text: "estimated refund (neg = owed)",
+            },
+        ],
+        defined_names: vec![],
+        tables: vec![
+            TableSpec {
+                name: "Inputs",
+                sheet: "Data",
+                top_left: (0, 2), // header A3, body rows A4:D7
+                columns: &["name", "value", "description", "tier"],
+                caption: None,
+                rows: vec![],
+                body_rows: 4, // income, filing, withheld, rate
+                data_validations: vec![
+                    // tier column {variable, strict} over D4:D7.
+                    DataValidationSpec {
+                        range: "D4:D7",
+                        kind: DvKind::List(&["variable", "strict"]),
+                    },
+                    // sample enum {single, married} over the filing value B5.
+                    DataValidationSpec {
+                        range: "B5:B5",
+                        kind: DvKind::List(&["single", "married"]),
+                    },
+                ],
+            },
+            TableSpec {
+                name: "Calculate_Tax",
+                sheet: "Data",
+                top_left: (0, 9), // caption A9, header A10, body A11:C12
+                columns: &["name", "value", "description"],
+                caption: Some("Compute federal tax from income & filing"),
+                rows: vec![],
+                body_rows: 2, // tax_owed, effective_rate
+                data_validations: vec![],
+            },
+            TableSpec {
+                name: "Estimate_Refund",
+                sheet: "Data",
+                top_left: (0, 15), // caption A15, header A16, body A17:C17
+                columns: &["name", "value", "description"],
+                caption: Some("Estimate refund given withholding"),
+                rows: vec![],
+                body_rows: 1, // refund
+                data_validations: vec![],
+            },
+        ],
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1168,6 +1556,7 @@ mod tests {
                     },
                 ],
             ],
+            body_rows: 0, // inline rows above declare the body height
             data_validations: vec![
                 // tier column dropdown {variable, strict} over D2:D3
                 DataValidationSpec {
@@ -1202,6 +1591,7 @@ mod tests {
                     text: "federal tax liability",
                 },
             ]],
+            body_rows: 0, // inline row above declares the body height
             data_validations: vec![],
         };
         WorkbookSpec {

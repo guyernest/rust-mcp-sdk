@@ -1,0 +1,28 @@
+{
+  "generator_fn": "template_spec",
+  "authored_by": "rust_xlsxwriter",
+  "sheet": "Data",
+  "input_cells": [
+    "B4",
+    "B6"
+  ],
+  "formula_oracles": [
+    {
+      "cell": "B11",
+      "formula": "ROUND(B4*G3-1759,0)",
+      "cached_oracle": "18241"
+    },
+    {
+      "cell": "B12",
+      "formula": "ROUND(B11/B4,3)",
+      "cached_oracle": "0.182"
+    },
+    {
+      "cell": "B17",
+      "formula": "ROUND(B6-B11,0)",
+      "cached_oracle": "-3241"
+    }
+  ],
+  "expected_outputs": [],
+  "override_reason": "authored by rust_xlsxwriter; the WBV2-01 shipped tax-suite template — the BA starting point + training artifact + honest reference fixture (§7). Classifies RAW ExcelTrusted with NO provenance-override sidecar."
+}
