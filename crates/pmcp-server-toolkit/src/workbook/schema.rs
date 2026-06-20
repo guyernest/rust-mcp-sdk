@@ -339,10 +339,19 @@ pub fn input_schema_for_tool(manifest: &Manifest, cell_map: &CellMap, tool: &Too
     // O(1) membership for the per-tool key projection (was a linear scan of
     // `input_keys` per input — O(inputs × keys)).
     let reached: HashSet<&str> = tool.input_keys.iter().map(String::as_str).collect();
+    // CR-02 defense-in-depth: a tool with an EMPTY input_keys advertised an empty
+    // inputs.properties while `validate_input` accepts the full shared pool — the
+    // served schema was STRICTER than the runtime (the V5 invariant inverted). When
+    // no DAG derivation populated input_keys (a hand-built / single-tool fallback
+    // bundle), project the FULL shared-input pool ("no derivation" => "all shared
+    // inputs") so the advertised schema is never stricter than what the runtime
+    // accepts. The production multi-tool path always populates input_keys, so this
+    // fires only for the fallback shape.
+    let project_all = tool.input_keys.is_empty();
     let mut input_props = Map::new();
     for entry in &cell_map.inputs {
-        // Project ONLY the keys this tool's DAG derivation reached.
-        if reached.contains(entry.json_key.as_str()) {
+        // Project this tool's DAG-derived keys (or the full pool when empty — CR-02).
+        if project_all || reached.contains(entry.json_key.as_str()) {
             input_props.insert(
                 entry.json_key.clone(),
                 input_prop_for_entry(manifest, entry),
@@ -719,5 +728,56 @@ mod tests {
             schema["required"],
             json!(["bundle_id", "version", "combined_hash"])
         );
+    }
+
+    #[test]
+    fn empty_input_keys_projects_full_pool() {
+        // CR-02 defense-in-depth: a Tool with EMPTY input_keys must advertise the
+        // FULL shared-input pool (never an empty inputs.properties while
+        // validate_input accepts the pool — the served schema can never be stricter
+        // than the runtime). three_input_manifest_and_map's single tool has empty
+        // input_keys.
+        let (m, cm) = three_input_manifest_and_map();
+        let tool = &cm.tools[0];
+        assert!(
+            tool.input_keys.is_empty(),
+            "the fixture tool has no derived keys"
+        );
+        let schema = input_schema_for_tool(&m, &cm, tool);
+        let props = schema["properties"]["inputs"]["properties"]
+            .as_object()
+            .expect("inputs.properties object");
+        assert!(
+            !props.is_empty(),
+            "an empty-input_keys tool advertises the full pool, not an empty schema"
+        );
+        // Every shared input key is advertised (the full pool projection).
+        for key in ["gross_income", "filing_status", "deductions"] {
+            assert!(
+                props.contains_key(key),
+                "the full shared-input pool is advertised: missing {key}"
+            );
+        }
+        // The strict envelope survives (V5).
+        assert_eq!(
+            schema["properties"]["inputs"]["additionalProperties"],
+            json!(false),
+            "the strict per-tool envelope is preserved"
+        );
+    }
+
+    #[test]
+    fn populated_input_keys_projects_only_reached() {
+        // The complement: a populated input_keys projects EXACTLY those keys (the
+        // production multi-tool shape — unchanged by the CR-02 fallback).
+        let (m, mut cm) = three_input_manifest_and_map();
+        cm.tools[0].input_keys = vec!["gross_income".to_string()];
+        let schema = input_schema_for_tool(&m, &cm, &cm.tools[0]);
+        let props = schema["properties"]["inputs"]["properties"]
+            .as_object()
+            .expect("inputs.properties object");
+        assert_eq!(props.len(), 1, "only the reached key is projected");
+        assert!(props.contains_key("gross_income"));
+        assert!(!props.contains_key("deductions"));
     }
 }

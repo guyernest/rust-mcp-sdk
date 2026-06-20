@@ -89,6 +89,17 @@ pub mod dialect_version;
 #[cfg(test)]
 mod reemit_golden;
 
+// The WBV2-04 ACCEPTANCE proof (Plan 100-07): a REAL override-compile of the
+// Table-authored `template.xlsx` emits exactly TWO tools (calculate_tax +
+// estimate_refund) with disjoint populated input_keys + non-empty served schemas.
+// In-crate `#[cfg(test)]` for the SAME CR-01 reachability reason as `reemit_golden`:
+// it must reach the `#[cfg(test)]`-only `compile_workbook_with_fixture_override`,
+// which is invisible to an external `tests/` integration crate. (The frontmatter
+// names an external `tests/template_compile_e2e.rs`; that placement is superseded
+// by this in-`src` module for reachability — recorded in the SUMMARY.)
+#[cfg(test)]
+mod template_compile_e2e;
+
 // The reusable `#[cfg(test)]` rust_xlsxwriter fixture author (Plan 96-03 Task 1).
 // Lives in `src/` so its self-tests reach the `#[cfg(test)]`-only
 // `compile_workbook_with_fixture_override` (same CR-01 reachability reason as
@@ -1434,6 +1445,194 @@ mod input_key_validation_tests {
         assert!(
             refuse_uncallable_inputs(&m).is_ok(),
             "only Role::Input cells are input-key validated"
+        );
+    }
+}
+
+// ---- WBV2-04: harvest-derived OutputTable membership + collision gate ----------
+#[cfg(test)]
+mod harvest_output_table_tests {
+    use super::*;
+    use crate::ingest::{CellRecord, FormulaKind, RangeRef, SheetRecord, TableRecord, WorkbookMap};
+    use pmcp_workbook_runtime::Dtype;
+
+    fn cell(addr: &str, value: Option<&str>) -> CellRecord {
+        CellRecord {
+            addr: addr.to_string(),
+            formula: None,
+            value: value.map(str::to_string),
+            fill_argb: None,
+            font_argb: None,
+            number_format: None,
+            is_formula: false,
+            formula_kind: FormulaKind::Normal,
+        }
+    }
+
+    fn role(cell: &str, r: Role, name: Option<&str>) -> CellRole {
+        CellRole {
+            cell: cell.to_string(),
+            role: r,
+            name: name.map(str::to_string),
+            unit: None,
+            meaning: None,
+            dtype: Dtype::Number,
+            colour_evidence: None,
+            source: "test".to_string(),
+            notes: None,
+            tier: None,
+            allowed_values: None,
+        }
+    }
+
+    fn table(name: &str, sheet: &str, start: &str, end: &str) -> TableRecord {
+        TableRecord {
+            name: name.to_string(),
+            area: RangeRef {
+                sheet: sheet.to_string(),
+                start: start.to_string(),
+                end: end.to_string(),
+            },
+            columns: vec!["name".to_string(), "value".to_string()],
+        }
+    }
+
+    fn sheet(name: &str, tables: Vec<TableRecord>, cells: Vec<CellRecord>) -> SheetRecord {
+        SheetRecord {
+            name: name.to_string(),
+            state: "visible".to_string(),
+            hidden_rows: vec![],
+            hidden_cols: vec![],
+            col_widths: vec![],
+            merges: vec![],
+            cf_ranges: vec![],
+            tables: vec![],
+            table_records: tables,
+            data_validations: vec![],
+            notes: vec![],
+            cells,
+        }
+    }
+
+    fn workbook(sheets: Vec<SheetRecord>) -> WorkbookMap {
+        WorkbookMap {
+            sheets,
+            defined_names: vec![],
+            external_links: vec![],
+            has_macros: false,
+            source_extension: "xlsx".to_string(),
+            save_timestamp: None,
+        }
+    }
+
+    fn manifest_with(cells: Vec<CellRole>) -> Manifest {
+        Manifest {
+            schema_version: 1,
+            workflow: "tax-suite".to_string(),
+            workbook_hash: None,
+            ratified: true,
+            ratified_by: None,
+            ratified_at: None,
+            cells,
+            loop_block: None,
+            governed_data: vec![],
+            changelog: vec![],
+            capability_calls: vec![],
+            annotations: vec![],
+        }
+    }
+
+    #[test]
+    fn output_tables_from_harvest_groups_output_cells() {
+        // A Calculate_Tax Table (header A9, body A10:B11) covering two Role::Output
+        // value cells (B10, B11) and an Inputs Table (header A2, body A3:B4) covering
+        // only Role::Input cells. The helper returns exactly ONE OutputTable named
+        // Calculate_Tax with both output cell keys, and SKIPS the all-input Inputs.
+        let data = sheet(
+            "Data",
+            vec![
+                table("Inputs", "Data", "A2", "B4"),
+                table("Calculate_Tax", "Data", "A9", "B11"),
+            ],
+            vec![
+                cell("A8", Some("Compute the tax")), // caption one row above A9
+                cell("A10", Some("tax_owed")),
+                cell("A11", Some("effective_rate")),
+            ],
+        );
+        let map = workbook(vec![data]);
+        let manifest = manifest_with(vec![
+            role("Data!B3", Role::Input, Some("income")),
+            role("Data!B4", Role::Input, Some("withheld")),
+            role("Data!B10", Role::Output, Some("tax_owed")),
+            role("Data!B11", Role::Output, Some("effective_rate")),
+        ]);
+
+        let tables = output_tables_from_harvest(&map, &manifest);
+        assert_eq!(tables.len(), 1, "the all-input Inputs Table is skipped");
+        assert_eq!(tables[0].name, "Calculate_Tax");
+        assert_eq!(
+            tables[0].description.as_deref(),
+            Some("Compute the tax"),
+            "the caption one row above the area is the tool description"
+        );
+        let mut cells = tables[0].output_cells.clone();
+        cells.sort();
+        assert_eq!(
+            cells,
+            vec!["Data!B10".to_string(), "Data!B11".to_string()],
+            "both Role::Output value cells inside the Table area are grouped"
+        );
+    }
+
+    #[test]
+    fn colliding_output_tables_block_compile_path() {
+        // Two output Tables whose names sanitize to the SAME MCP name produce a
+        // Severity::Error finding that the stage-1 aggregate render includes — the
+        // exact gate compile_workbook_inner folds in (T-100-17). `Calculate Tax` and
+        // `calculate_tax` both sanitize to `calculate_tax`.
+        let tables = vec![
+            OutputTable {
+                name: "Calculate Tax".to_string(),
+                description: None,
+                output_cells: vec!["Data!B10".to_string()],
+            },
+            OutputTable {
+                name: "calculate_tax".to_string(),
+                description: None,
+                output_cells: vec!["Data!B11".to_string()],
+            },
+        ];
+        let err = refuse_colliding_output_tables(&tables)
+            .expect_err("colliding sanitized names block the compile");
+        match err {
+            CompileError::Lint(rendered) => {
+                assert!(
+                    rendered.contains("manifest/tool-name-collision"),
+                    "the collision rule is rendered into the stage-1 gate: {rendered}"
+                );
+            },
+            other => panic!("expected CompileError::Lint, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn distinct_output_tables_do_not_block() {
+        let tables = vec![
+            OutputTable {
+                name: "Calculate_Tax".to_string(),
+                description: None,
+                output_cells: vec!["Data!B10".to_string()],
+            },
+            OutputTable {
+                name: "Estimate_Refund".to_string(),
+                description: None,
+                output_cells: vec!["Data!B17".to_string()],
+            },
+        ];
+        assert!(
+            refuse_colliding_output_tables(&tables).is_ok(),
+            "two distinct sanitized names do not collide"
         );
     }
 }

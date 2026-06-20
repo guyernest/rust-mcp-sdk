@@ -45,6 +45,11 @@ fn golden_dir() -> PathBuf {
         .join("../pmcp-server-toolkit/tests/fixtures/tax-calc@1.1.0")
 }
 
+/// The committed Table-authored template (`tests/fixtures/template.xlsx`).
+fn committed_template() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/template.xlsx")
+}
+
 /// The committed neutral fixture (`tests/fixtures/tax-calc.xlsx`).
 fn committed_fixture() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/tax-calc.xlsx")
@@ -210,6 +215,70 @@ fn structural_eq_check4_loads_via_toolkit() {
     assert_eq!(loaded.cell_map.inputs.len(), 3, "three inputs served");
     let output_count: usize = loaded.cell_map.tools.iter().map(|t| t.outputs.len()).sum();
     assert_eq!(output_count, 4, "four named outputs served");
+}
+
+/// Anti-regression (Plan 100-07): the COMMITTED golden carries EXACTLY 2 tools, and
+/// every golden tool has a NON-EMPTY `input_keys`. This pins the proof's baseline so
+/// it can never silently degrade to a single-tool / empty-keys golden (the
+/// subset-only blindspot CR-01 exploited — a fresh single-tool compile was a valid
+/// SUBSET of a two-tool golden, so the subset checks passed vacuously).
+#[test]
+fn golden_carries_two_tools_with_populated_input_keys() {
+    let golden = read_json(&golden_dir(), "cell_map.json");
+    let tools = golden["tools"].as_array().expect("golden tools array");
+    assert_eq!(
+        tools.len(),
+        2,
+        "the committed golden carries exactly two tools (calculate_tax + estimate_refund)"
+    );
+    for tool in tools {
+        let input_keys = tool["input_keys"]
+            .as_array()
+            .expect("each golden tool carries an input_keys array");
+        assert!(
+            !input_keys.is_empty(),
+            "golden tool `{}` has a NON-EMPTY input_keys (no empty-keys regression)",
+            tool["name"]
+        );
+    }
+}
+
+/// Anti-regression (Plan 100-07): the POSITIVE multi-tool assertion the old
+/// subset-only checks lacked — a FRESH override-compile of the Table-authored
+/// `template.xlsx` emits ≥2 tools, each with a NON-EMPTY `input_keys`. This FAILS if
+/// `emit_bundle` ever reverts to the single-tool `build_cell_map` (one tool / empty
+/// input_keys), closing the gap that let a single-tool regression pass.
+#[test]
+fn fresh_template_compile_yields_multi_tool_with_populated_keys() {
+    let scratch = tempfile::TempDir::new().expect("scratch");
+    let xlsx = scratch.path().join("template.xlsx");
+    std::fs::copy(committed_template(), &xlsx).expect("copy committed template");
+    let out_root = scratch.path().join("out");
+    std::fs::create_dir_all(&out_root).expect("out root");
+    compile_workbook_with_fixture_override(
+        &xlsx,
+        &out_root,
+        "tax-suite",
+        "1.0.0",
+        "proof-approver",
+    )
+    .expect("compile template.xlsx via the trusted-fixture override");
+    let cell_map = read_json(&out_root.join("tax-suite@1.0.0"), "cell_map.json");
+    let tools = cell_map["tools"].as_array().expect("tools array");
+    assert!(
+        tools.len() >= 2,
+        "a fresh Table-authored compile fans out ≥2 tools (got {}); a single-tool \
+         regression FAILS here",
+        tools.len()
+    );
+    for tool in tools {
+        let input_keys = tool["input_keys"].as_array().expect("input_keys array");
+        assert!(
+            !input_keys.is_empty(),
+            "fresh tool `{}` carries a NON-EMPTY DAG-derived input_keys",
+            tool["name"]
+        );
+    }
 }
 
 /// Check (5) — named-output names/dtypes/roles match the golden's.
