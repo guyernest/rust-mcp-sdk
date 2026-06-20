@@ -1348,7 +1348,7 @@ Plans:
 
 **Source**: pmcp.run dev-team feedback + multi-turn design convergence (2026-06-20); spec at `docs/design/workbook-table-authoring-contract.md`.
 
-**Plans:** 1/6 plans executed
+**Plans:** 2/6 plans executed
 
 Plans:
 
@@ -1358,7 +1358,7 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 100-02-PLAN.md — WBV2-02: ingest harvests Excel Tables (TableRecord name/columns) + per-row type/unit/enum/tier; malformed-table-XML fuzz containment
+- [x] 100-02-PLAN.md — WBV2-02: ingest harvests Excel Tables (TableRecord name/columns) + per-row type/unit/enum/tier; malformed-table-XML fuzz containment
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
