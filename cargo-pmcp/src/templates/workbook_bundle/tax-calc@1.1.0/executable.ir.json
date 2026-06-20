@@ -86,5 +86,21 @@
         "Ref": "2_Brackets!B3"
       }
     }
+  },
+  "4_Refund!B2": {
+    "key": "4_Refund!B2",
+    "expr": {
+      "Formula": {
+        "BinaryOp": {
+          "left": {
+            "Ref": "1_Inputs!B5"
+          },
+          "op": "Sub",
+          "right": {
+            "Ref": "3_Outputs!B3"
+          }
+        }
+      }
+    }
   }
 }

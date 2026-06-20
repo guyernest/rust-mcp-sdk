@@ -923,10 +923,18 @@ mod tests {
         assert!(v["combined_hash"].is_string());
         // Curated inputs/outputs/governed_data/changelog projections.
         let inputs = v["inputs"].as_array().expect("inputs array");
-        assert_eq!(inputs.len(), 3, "three inputs projected");
+        assert_eq!(
+            inputs.len(),
+            4,
+            "four inputs projected (income, filing, deductions, withheld)"
+        );
         assert!(inputs.iter().all(|i| i["tier"].is_string()));
         let outputs = v["outputs"].as_array().expect("outputs array");
-        assert_eq!(outputs.len(), 4, "four outputs projected");
+        assert_eq!(
+            outputs.len(),
+            5,
+            "five outputs projected (4 tax + 1 refund) across the two tools"
+        );
         assert!(v["governed_data"].is_array());
         assert!(v["changelog"].is_array());
         assert!(v["provenance"]["combined_hash"].is_string());

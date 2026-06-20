@@ -165,6 +165,14 @@ required-features = ["sqlite", "code-mode", "http"]
 name = "workbook_server_http"
 required-features = ["workbook-embedded", "http"]
 
+# Phase 100 (WBV2-04/05) — the table-based authoring demonstration (the CLAUDE.md
+# ALWAYS `cargo run --example`): loads the embedded two-Table golden and prints the
+# emitted per-Table tool surface. Needs `workbook-embedded` (EmbeddedSource +
+# include_dir); no `http` (it prints, it does not serve a socket).
+[[example]]
+name = "workbook_table_authoring"
+required-features = ["workbook-embedded"]
+
 [dev-dependencies]
 proptest = "1.7"
 # Why: unit tests run with --test-threads=1 (project CLAUDE.md) where a

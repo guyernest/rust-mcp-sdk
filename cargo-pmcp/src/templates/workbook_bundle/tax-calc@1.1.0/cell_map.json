@@ -14,28 +14,78 @@
       "json_key": "deductions",
       "seed_coord": "1_Inputs!B4",
       "unit": "USD"
+    },
+    {
+      "json_key": "withheld",
+      "seed_coord": "1_Inputs!B5",
+      "unit": "USD"
     }
   ],
-  "outputs": [
+  "tools": [
     {
-      "json_key": "taxable_income",
-      "seed_coord": "3_Outputs!B2",
-      "unit": "USD"
+      "name": "Calculate_Tax",
+      "description": "Compute the tax owed and rates from gross income and deductions.",
+      "input_keys": [
+        "deductions",
+        "gross_income"
+      ],
+      "outputs": [
+        {
+          "json_key": "taxable_income",
+          "seed_coord": "3_Outputs!B2",
+          "unit": "USD"
+        },
+        {
+          "json_key": "tax_owed",
+          "seed_coord": "3_Outputs!B3",
+          "unit": "USD"
+        },
+        {
+          "json_key": "effective_rate",
+          "seed_coord": "3_Outputs!B4",
+          "unit": "ratio"
+        },
+        {
+          "json_key": "marginal_rate",
+          "seed_coord": "3_Outputs!B5",
+          "unit": "ratio"
+        }
+      ],
+      "oracle": {
+        "effective_rate": {
+          "Number": 0.08
+        },
+        "marginal_rate": {
+          "Number": 0.22
+        },
+        "tax_owed": {
+          "Number": 4800.0
+        },
+        "taxable_income": {
+          "Number": 48000.0
+        }
+      }
     },
     {
-      "json_key": "tax_owed",
-      "seed_coord": "3_Outputs!B3",
-      "unit": "USD"
-    },
-    {
-      "json_key": "effective_rate",
-      "seed_coord": "3_Outputs!B4",
-      "unit": "ratio"
-    },
-    {
-      "json_key": "marginal_rate",
-      "seed_coord": "3_Outputs!B5",
-      "unit": "ratio"
+      "name": "Estimate_Refund",
+      "description": "Estimate the refund (tax withheld minus tax owed).",
+      "input_keys": [
+        "deductions",
+        "gross_income",
+        "withheld"
+      ],
+      "outputs": [
+        {
+          "json_key": "refund",
+          "seed_coord": "4_Refund!B2",
+          "unit": "USD"
+        }
+      ],
+      "oracle": {
+        "refund": {
+          "Number": 200.0
+        }
+      }
     }
   ]
 }
