@@ -1348,7 +1348,7 @@ Plans:
 
 **Source**: pmcp.run dev-team feedback + multi-turn design convergence (2026-06-20); spec at `docs/design/workbook-table-authoring-contract.md`.
 
-**Plans:** 4/6 plans executed
+**Plans:** 5/6 plans executed
 
 Plans:
 
@@ -1370,7 +1370,7 @@ Plans:
 
 **Wave 5** *(blocked on Wave 4 completion)*
 
-- [ ] 100-05-PLAN.md — WBV2-06/07: cargo pmcp workbook explain preview (text+json) + pmcp-book/pmcp-course chapters
+- [x] 100-05-PLAN.md — WBV2-06/07: cargo pmcp workbook explain preview (text+json) + pmcp-book/pmcp-course chapters
 
 **Wave 6** *(blocked on Wave 5 completion)*
 
