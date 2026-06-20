@@ -52,7 +52,9 @@
 
 use std::path::Path;
 
-use rust_xlsxwriter::{Color, Format, Formula, Workbook, XlsxError};
+use rust_xlsxwriter::{
+    Color, DataValidation, Format, Formula, Table, TableColumn, Workbook, XlsxError,
+};
 
 use crate::provenance::gate::{classify, ProvenanceClass};
 use crate::provenance::raw_parts::{read_app_props, read_calc_pr};
@@ -146,6 +148,67 @@ pub(crate) struct DefinedNameSpec {
     pub(crate) target: &'static str,
 }
 
+/// The kind of an authored data-validation (the enum/governance dropdown
+/// source the harvest reads per §3.3). `List` dogfoods the enum-from-dropdown
+/// mechanism: the tier column `{variable, strict}` AND a sample enum dropdown
+/// are both authored as `List` validations.
+///
+// Why: `List` is the only kind the WBV2 template needs today (tier + enum
+// dropdowns). A future range/decimal validation is a trivial additive variant;
+// the enum keeps the author surface honest about what it emits.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum DvKind {
+    /// An inline-literal list dropdown — `rust_xlsxwriter`
+    /// `DataValidation::allow_list_strings(values)`. Reads back with
+    /// `dv_type == "list"`.
+    List(&'static [&'static str]),
+}
+
+/// A single authored data-validation: the A1 range it covers and its kind.
+/// `range` is a simple `A1:A1` / `A2:A3` form (the only shapes the WBV2 template
+/// uses). Authored via `worksheet.add_data_validation(...)` over the parsed
+/// range corners.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct DataValidationSpec {
+    /// The A1 range the validation applies to (e.g. `"D2:D3"`).
+    pub(crate) range: &'static str,
+    /// The validation kind (e.g. a `{variable, strict}` list dropdown).
+    pub(crate) kind: DvKind,
+}
+
+/// An authored Excel Table (ListObject) — the §3 declaration primitive. The
+/// table `name` is the served key surface (an Inputs table, or a tool name for
+/// an output table); `columns` are the standard header names
+/// (`name|value|description[|tier]`); `caption`, when present, is written in the
+/// cell DIRECTLY ABOVE the header row (the tool description per §3.2); `rows`
+/// are the body cells (reusing [`AuthoredCell`] so formula cells keep the
+/// cached-`<v>` oracle); `data_validations` carry the tier/enum dropdowns.
+//
+// Why `sheet` is `#[allow(dead_code)]`: the single-worksheet [`author_xlsx`] writes
+// every table onto the one worksheet [`WorkbookSpec::sheet`] names, so `sheet` is
+// not yet consulted. It is part of the table contract (the §7 template + Plan 03/04
+// multi-tool models declare which sheet a table lives on) and becomes load-bearing
+// the moment a multi-sheet author lands — kept now so the spec shape is stable.
+#[derive(Debug, Clone)]
+pub(crate) struct TableSpec {
+    /// The ListObject / tool name (e.g. `"Inputs"`, `"Calculate_Tax"`).
+    pub(crate) name: &'static str,
+    /// The worksheet the table lives on.
+    #[allow(dead_code)]
+    pub(crate) sheet: &'static str,
+    /// The zero-based `(col, row)` of the table's HEADER top-left corner.
+    pub(crate) top_left: (u16, u32),
+    /// The standard column header names (e.g. `["name","value","description","tier"]`).
+    pub(crate) columns: &'static [&'static str],
+    /// The caption written directly above the header row (the tool description),
+    /// or `None` for an input table.
+    pub(crate) caption: Option<&'static str>,
+    /// The table body rows (each a row of [`AuthoredCell`]s).
+    pub(crate) rows: Vec<Vec<AuthoredCell>>,
+    /// The tier/enum dropdowns over value cells.
+    pub(crate) data_validations: Vec<DataValidationSpec>,
+}
+
 /// A reusable workbook author spec consumed by [`author_xlsx`]. One sheet of
 /// authored cells plus its workbook-global defined names. (A single sheet covers
 /// every fixture this phase needs; a multi-sheet author is a trivial extension if
@@ -158,6 +221,8 @@ pub(crate) struct WorkbookSpec {
     pub(crate) cells: Vec<AuthoredCell>,
     /// The workbook-global defined names (named ranges).
     pub(crate) defined_names: Vec<DefinedNameSpec>,
+    /// The authored Excel Tables (ListObjects) — the §3 declaration primitive.
+    pub(crate) tables: Vec<TableSpec>,
 }
 
 /// Author a `.xlsx` at `path` from `spec` using `rust_xlsxwriter` (a pure
@@ -179,12 +244,108 @@ pub(crate) fn author_xlsx(path: &Path, spec: &WorkbookSpec) -> Result<(), XlsxEr
         write_cell(worksheet, cell, &palette)?;
     }
 
+    for table in &spec.tables {
+        write_table(worksheet, table, &palette)?;
+    }
+
     for dn in &spec.defined_names {
         workbook.define_name(dn.name, dn.target)?;
     }
 
     workbook.save(path)?;
     Ok(())
+}
+
+/// Author one Excel Table (ListObject) onto `worksheet`: write its caption (if
+/// any) directly above the header, write the body cells, overlay the
+/// `rust_xlsxwriter` [`Table`] with its name + column headers, then add its
+/// data-validation dropdowns. One helper per concern keeps cognitive complexity
+/// low (PMAT cog ≤25).
+fn write_table(
+    worksheet: &mut rust_xlsxwriter::Worksheet,
+    spec: &TableSpec,
+    palette: &CellFormats,
+) -> Result<(), XlsxError> {
+    let (first_col, header_row) = spec.top_left;
+    write_caption(worksheet, spec, first_col, header_row)?;
+    write_table_body(worksheet, spec, palette)?;
+    let last_row = header_row + u32::try_from(spec.rows.len()).expect("row count fits a u32");
+    let last_col = first_col + col_span(spec.columns);
+    let table = build_table(spec);
+    worksheet.add_table(header_row, first_col, last_row, last_col, &table)?;
+    write_data_validations(worksheet, spec)?;
+    Ok(())
+}
+
+/// Write the caption string (the tool description) in the cell directly above
+/// the table's header row, when the spec carries one.
+fn write_caption(
+    worksheet: &mut rust_xlsxwriter::Worksheet,
+    spec: &TableSpec,
+    first_col: u16,
+    header_row: u32,
+) -> Result<(), XlsxError> {
+    if let (Some(caption), Some(caption_row)) = (spec.caption, header_row.checked_sub(1)) {
+        worksheet.write_string(caption_row, first_col, caption)?;
+    }
+    Ok(())
+}
+
+/// Write the table body cells (each row reuses [`write_cell`] so formula cells
+/// keep their cached-`<v>` oracle and numbers keep their paint).
+fn write_table_body(
+    worksheet: &mut rust_xlsxwriter::Worksheet,
+    spec: &TableSpec,
+    palette: &CellFormats,
+) -> Result<(), XlsxError> {
+    for row in &spec.rows {
+        for cell in row {
+            write_cell(worksheet, cell, palette)?;
+        }
+    }
+    Ok(())
+}
+
+/// Build the `rust_xlsxwriter` [`Table`] for `spec`: its ListObject name plus one
+/// [`TableColumn`] per standard header.
+fn build_table(spec: &TableSpec) -> Table {
+    let columns: Vec<TableColumn> = spec
+        .columns
+        .iter()
+        .map(|h| TableColumn::new().set_header(*h))
+        .collect();
+    Table::new().set_name(spec.name).set_columns(&columns)
+}
+
+/// Add the tier/enum dropdown data-validations over their A1 ranges.
+fn write_data_validations(
+    worksheet: &mut rust_xlsxwriter::Worksheet,
+    spec: &TableSpec,
+) -> Result<(), XlsxError> {
+    for dv in &spec.data_validations {
+        let (first, last) = parse_a1_range(dv.range);
+        let validation = match dv.kind {
+            DvKind::List(values) => DataValidation::new().allow_list_strings(values)?,
+        };
+        worksheet.add_data_validation(first.0, first.1, last.0, last.1, &validation)?;
+    }
+    Ok(())
+}
+
+/// The zero-based column span of a header list, i.e. `len - 1` (the last column
+/// offset). A table always carries ≥1 column.
+fn col_span(columns: &[&str]) -> u16 {
+    u16::try_from(columns.len().saturating_sub(1)).expect("column span fits a u16")
+}
+
+/// Parse a simple `A1:B2` range into `((row,col), (row,col))` zero-based corners
+/// for `rust_xlsxwriter`. Test-only: a malformed range is a fixture-author bug
+/// and panics.
+fn parse_a1_range(range: &str) -> ((u32, u16), (u32, u16)) {
+    let (start, end) = range
+        .split_once(':')
+        .expect("authored range is `A1:B2` form");
+    (parse_a1(start), parse_a1(end))
 }
 
 /// The two paint-driven cell formats authored fixtures use: the INPUT font
@@ -393,6 +554,7 @@ fn trivial_spec() -> WorkbookSpec {
                 target: "'Calc'!$B$1",
             },
         ],
+        tables: vec![],
     }
 }
 
@@ -548,6 +710,7 @@ fn quirk_half_rounding_spec() -> WorkbookSpec {
                 target: "'Quirk'!$B$1",
             },
         ],
+        tables: vec![],
     }
 }
 
@@ -580,6 +743,7 @@ fn quirk_negative_rounding_spec() -> WorkbookSpec {
                 target: "'Quirk'!$B$1",
             },
         ],
+        tables: vec![],
     }
 }
 
@@ -627,6 +791,7 @@ fn quirk_empty_coercion_spec() -> WorkbookSpec {
                 target: "'Quirk'!$B$1",
             },
         ],
+        tables: vec![],
     }
 }
 
@@ -669,6 +834,7 @@ fn quirk_float_boundary_spec() -> WorkbookSpec {
                 target: "'Quirk'!$B$1",
             },
         ],
+        tables: vec![],
     }
 }
 
@@ -707,6 +873,7 @@ fn quirk_text_coercion_spec() -> WorkbookSpec {
                 target: "'Quirk'!$B$1",
             },
         ],
+        tables: vec![],
     }
 }
 
@@ -898,6 +1065,7 @@ fn loan_calc_spec() -> WorkbookSpec {
                 target: "'Loan'!$A$10",
             },
         ],
+        tables: vec![],
     }
 }
 
@@ -940,6 +1108,7 @@ fn leap1900_probe_spec() -> WorkbookSpec {
                 target: "'Serial'!$B$1",
             },
         ],
+        tables: vec![],
     }
 }
 
@@ -947,6 +1116,184 @@ fn leap1900_probe_spec() -> WorkbookSpec {
 mod tests {
     use super::*;
     use crate::{compile_workbook, compile_workbook_with_fixture_override};
+
+    /// A small WorkbookSpec carrying ONE input Excel Table named `Inputs` with the
+    /// standard `name|value|description|tier` columns, a `{variable,strict}` tier
+    /// dropdown + a sample `{single,married}` enum dropdown, and an output Table
+    /// `Calculate_Tax` with a caption directly above it. The minimal exerciser for
+    /// the Table-author surface round-trip self-tests.
+    fn table_spec_workbook() -> WorkbookSpec {
+        let inputs = TableSpec {
+            name: "Inputs",
+            sheet: "Data",
+            top_left: (0, 0), // header at A1; body rows below
+            columns: &["name", "value", "description", "tier"],
+            caption: None,
+            rows: vec![
+                vec![
+                    AuthoredCell::Text {
+                        addr: "A2",
+                        text: "income",
+                    },
+                    AuthoredCell::Number {
+                        addr: "B2",
+                        value: 100_000.0,
+                        paint: CellPaint::Input,
+                    },
+                    AuthoredCell::Text {
+                        addr: "C2",
+                        text: "annual gross",
+                    },
+                    AuthoredCell::Text {
+                        addr: "D2",
+                        text: "variable",
+                    },
+                ],
+                vec![
+                    AuthoredCell::Text {
+                        addr: "A3",
+                        text: "filing",
+                    },
+                    AuthoredCell::Text {
+                        addr: "B3",
+                        text: "single",
+                    },
+                    AuthoredCell::Text {
+                        addr: "C3",
+                        text: "filing status",
+                    },
+                    AuthoredCell::Text {
+                        addr: "D3",
+                        text: "variable",
+                    },
+                ],
+            ],
+            data_validations: vec![
+                // tier column dropdown {variable, strict} over D2:D3
+                DataValidationSpec {
+                    range: "D2:D3",
+                    kind: DvKind::List(&["variable", "strict"]),
+                },
+                // sample enum dropdown {single, married} over the filing value B3
+                DataValidationSpec {
+                    range: "B3:B3",
+                    kind: DvKind::List(&["single", "married"]),
+                },
+            ],
+        };
+        let output = TableSpec {
+            name: "Calculate_Tax",
+            sheet: "Data",
+            top_left: (0, 5), // (col=0=A, row=5) → header at A6, caption at A5
+            columns: &["name", "value", "description"],
+            caption: Some("Compute federal tax from income & filing"),
+            rows: vec![vec![
+                AuthoredCell::Text {
+                    addr: "A7",
+                    text: "tax_owed",
+                },
+                AuthoredCell::Number {
+                    addr: "B7",
+                    value: 18_241.0,
+                    paint: CellPaint::Plain,
+                },
+                AuthoredCell::Text {
+                    addr: "C7",
+                    text: "federal tax liability",
+                },
+            ]],
+            data_validations: vec![],
+        };
+        WorkbookSpec {
+            sheet: "Data",
+            cells: vec![],
+            defined_names: vec![],
+            tables: vec![inputs, output],
+        }
+    }
+
+    /// (Round-trip #1) A WorkbookSpec carrying TableSpecs authored via `author_xlsx`
+    /// produces an `.xlsx` whose worksheet, re-read by umya `tables()`, reports the
+    /// same table names and the same column header names.
+    #[test]
+    fn authored_tables_roundtrip_name_and_columns() {
+        let dir = tempfile::TempDir::new().expect("scratch dir");
+        let xlsx = dir.path().join("tables.xlsx");
+        author_xlsx(&xlsx, &table_spec_workbook()).expect("author tables workbook");
+
+        let book = umya_spreadsheet::reader::xlsx::read(&xlsx).expect("re-read authored workbook");
+        let ws = book.sheet_by_name("Data").expect("Data sheet exists");
+        let tables = ws.tables();
+
+        let names: Vec<&str> = tables.iter().map(umya_spreadsheet::Table::name).collect();
+        assert!(
+            names.contains(&"Inputs"),
+            "the Inputs table name round-trips (got {names:?})"
+        );
+        assert!(
+            names.contains(&"Calculate_Tax"),
+            "the Calculate_Tax table name round-trips (got {names:?})"
+        );
+
+        let inputs = tables
+            .iter()
+            .find(|t| t.name() == "Inputs")
+            .expect("Inputs table present");
+        let headers: Vec<&str> = inputs.columns().iter().map(|c| c.name()).collect();
+        assert_eq!(
+            headers,
+            vec!["name", "value", "description", "tier"],
+            "the Inputs table column headers round-trip"
+        );
+    }
+
+    /// (Round-trip #2) A TableSpec with a tier-column data-validation `{variable,
+    /// strict}` and a sample enum data-validation produces an `.xlsx` whose
+    /// `data_validations()` reports a `list` dv_type over the corresponding ranges.
+    #[test]
+    fn authored_tables_roundtrip_data_validations() {
+        let dir = tempfile::TempDir::new().expect("scratch dir");
+        let xlsx = dir.path().join("tables.xlsx");
+        author_xlsx(&xlsx, &table_spec_workbook()).expect("author tables workbook");
+
+        let book = umya_spreadsheet::reader::xlsx::read(&xlsx).expect("re-read authored workbook");
+        let ws = book.sheet_by_name("Data").expect("Data sheet exists");
+        let dvs = ws
+            .data_validations()
+            .expect("the sheet carries data validations");
+
+        let list_dvs: Vec<_> = dvs
+            .data_validation_list()
+            .iter()
+            .filter(|dv| {
+                use umya_spreadsheet::structs::EnumTrait;
+                dv.get_type().value_string() == "list"
+            })
+            .collect();
+        assert!(
+            list_dvs.len() >= 2,
+            "both the tier dropdown and the sample enum dropdown are `list` dvs (got {})",
+            list_dvs.len()
+        );
+    }
+
+    /// (Round-trip #3) An output TableSpec authored with a caption cell directly
+    /// above the table writes that caption string at `(header_row-1, first_col)`.
+    #[test]
+    fn authored_table_caption_written_above() {
+        let dir = tempfile::TempDir::new().expect("scratch dir");
+        let xlsx = dir.path().join("tables.xlsx");
+        author_xlsx(&xlsx, &table_spec_workbook()).expect("author tables workbook");
+
+        let book = umya_spreadsheet::reader::xlsx::read(&xlsx).expect("re-read authored workbook");
+        let ws = book.sheet_by_name("Data").expect("Data sheet exists");
+        // Calculate_Tax header is at A6 (row index 5), so the caption is at A5.
+        let caption = ws.value((1u32, 5u32)); // (col=1=A, row=5)
+        assert_eq!(
+            caption, "Compute federal tax from income & filing",
+            "the output table caption is written directly above the header row"
+        );
+    }
 
     /// (Direct provenance assertion #1) An authored workbook classifies
     /// `ProvenanceClass::ExcelTrusted` — read DIRECTLY from the authored bytes via
