@@ -1348,13 +1348,13 @@ Plans:
 
 **Source**: pmcp.run dev-team feedback + multi-turn design convergence (2026-06-20); spec at `docs/design/workbook-table-authoring-contract.md`.
 
-**Plans:** 6 plans
+**Plans:** 1/6 plans executed
 
 Plans:
 
 **Wave 1**
 
-- [ ] 100-01-PLAN.md — WBV2-01: provenance-valid template.xlsx (Inputs Table + tier/enum dropdowns + named output Tables) via rust_xlsxwriter; doubles as the honest reference fixture
+- [x] 100-01-PLAN.md — WBV2-01: provenance-valid template.xlsx (Inputs Table + tier/enum dropdowns + named output Tables) via rust_xlsxwriter; doubles as the honest reference fixture
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
