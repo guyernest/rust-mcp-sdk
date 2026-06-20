@@ -226,6 +226,26 @@ fn apply_dv_fork(
     }
 }
 
+/// Harvest the FROZEN closed-enum domain for a table-row `value` cell at
+/// `value_addr` on `sheet`, reusing the EXACT [`freeze_or_reason`] DV machinery
+/// (WBV2-02 §3.3 "enum ← data-validation list"). `Some(values)` when a covering
+/// inline-literal list DV freezes to a closed enum; `None` when there is no
+/// covering list DV OR it is ineligible (range/named/formula-backed/too-many/
+/// non-text — the DYNAMIC path). The pub entry the real-template integration test
+/// (Task 5) uses to read the enum domain off the harvested map without a CellRole.
+pub fn harvest_allowed_values(
+    sheet: &crate::ingest::SheetRecord,
+    value_addr: &str,
+    dtype: Dtype,
+    wb: &WorkbookMap,
+) -> Option<Vec<String>> {
+    let dv = sheet
+        .data_validations
+        .iter()
+        .find(|dv| addr_in_range(value_addr, &dv.target))?;
+    freeze_or_reason(dv, &sheet.name, wb, dtype).ok()
+}
+
 /// The D-06 disqualifier predicate: FREEZE (inline-literal token set) vs DYNAMIC
 /// (precise reason code) for one covering DV. Check order fixes reason precedence:
 /// `non_list` → `non_text_dtype` → inline-literal resolution (`too_many_values`) →
