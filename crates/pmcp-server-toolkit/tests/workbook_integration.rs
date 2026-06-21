@@ -2,8 +2,10 @@
 //! boot path THROUGH the builder (`WorkbookBuilderExt`):
 //!
 //! 1. **build-and-assert** — `with_workbook_bundle` over the committed golden
-//!    registers all FIVE tools (`calculate`/`explain`/`get_manifest`/
-//!    `diff_version`/`render_workbook`), asserted via `Server::get_tool`.
+//!    registers ONE named tool per output Table (`calculate_tax`/`estimate_refund`,
+//!    WBV2-04 multi-tool fan-out) PLUS the four workbook-wide meta tools
+//!    (`explain`/`get_manifest`/`diff_version`/`render_workbook`), asserted via
+//!    `Server::get_tool`.
 //! 2. **tamper-fails-boot** — `try_with_workbook_bundle` over a byte-flipped copy
 //!    of the golden returns `Err` (WBSV-08 fail-closed, end-to-end through the
 //!    builder, NOT just the loader unit). Uses the 92-02 tamper helpers.
@@ -22,10 +24,11 @@ mod support;
 
 use support::tamper::golden_dir;
 
-/// The five served tools every workbook server registers (the registration
-/// contract this plan freezes).
-const WORKBOOK_TOOLS: [&str; 5] = [
-    "calculate",
+/// The served tools the golden registers: the two per-Table compute tools (WBV2-04
+/// multi-tool fan-out) + the four workbook-wide meta tools.
+const WORKBOOK_TOOLS: [&str; 6] = [
+    "calculate_tax",
+    "estimate_refund",
     "explain",
     "get_manifest",
     "diff_version",

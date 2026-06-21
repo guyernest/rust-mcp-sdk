@@ -21,6 +21,8 @@
 pub mod compile;
 pub mod config;
 pub mod emit;
+pub mod explain;
+pub mod explain_surface;
 pub mod lint;
 mod targets;
 
@@ -79,6 +81,8 @@ pub enum WorkbookCommand {
     Lint(lint::LintArgs),
     /// Emit an UNGATED bundle for dev/reference (delivered by Plan 94-04).
     Emit(emit::EmitArgs),
+    /// Preview the served tool surface an AI will see BEFORE deploy (WBV2-06).
+    Explain(explain::ExplainArgs),
 }
 
 impl WorkbookCommand {
@@ -88,6 +92,7 @@ impl WorkbookCommand {
             WorkbookCommand::Compile(args) => compile::execute(args, global_flags),
             WorkbookCommand::Lint(args) => lint::execute(args, global_flags),
             WorkbookCommand::Emit(args) => emit::execute(args, global_flags),
+            WorkbookCommand::Explain(args) => explain::execute(args, global_flags),
         }
     }
 }

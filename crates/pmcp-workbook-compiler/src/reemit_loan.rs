@@ -46,7 +46,8 @@ use serde_json::Value;
 use crate::{build_bundle_lock, compile_workbook, compile_workbook_with_fixture_override};
 
 use pmcp_server_toolkit::workbook::handler::{
-    CalculateHandler, DiffVersionHandler, ExplainHandler, GetManifestHandler, RenderWorkbookHandler,
+    sanitize_tool_name, DiffVersionHandler, ExplainHandler, GetManifestHandler,
+    RenderWorkbookHandler,
 };
 use pmcp_server_toolkit::workbook::schema::{
     input_schema_for_manifest, output_schema_for_manifest,
@@ -98,22 +99,25 @@ fn load_loan_bundle() -> (tempfile::TempDir, WorkbookBundle) {
 // ---- The loan's own served key sets vs tax-calc's (the disjointness oracle) ----
 
 /// The loan's served INPUT keys (the `cell_map.inputs` json_keys), authored in
-/// Task 1's `loan_calc_spec` via the `in_*` named-range convention.
+/// Task 1's `loan_calc_spec` via the `in_*` named-range convention. F3: the served
+/// key STRIPS the `in_` governance prefix (`in_loan_amount` → `loan_amount`); the
+/// underlying `role.name` stays prefixed for named-range matching.
 fn loan_input_keys() -> BTreeSet<String> {
-    ["in_loan_amount", "in_term_months", "in_credit_score"]
+    ["loan_amount", "term_months", "credit_score"]
         .into_iter()
         .map(String::from)
         .collect()
 }
 
 /// The loan's served OUTPUT keys (the `out_*` named ranges), authored in Task 1.
+/// F3: the served key STRIPS the `out_` governance prefix.
 fn loan_output_keys() -> BTreeSet<String> {
     [
-        "out_credit_tier",
-        "out_applied_rate",
-        "out_monthly_interest",
-        "out_total_interest",
-        "out_tier_rate",
+        "credit_tier",
+        "applied_rate",
+        "monthly_interest",
+        "total_interest",
+        "tier_rate",
     ]
     .into_iter()
     .map(String::from)
@@ -213,13 +217,15 @@ fn loan_bundle_lock_recomputes() {
     );
 }
 
-/// (Generalization #3) The FIVE served tool NAMES are UNCHANGED vs tax-calc — the
-/// names are generic; only the payload behind them differs. Read off the handler
-/// `NAME` consts (the single registration source).
+/// (Generalization #3) The FOUR generic META tool names (`explain`/`get_manifest`/
+/// `diff_version`/`render_workbook`) are UNCHANGED vs tax-calc — they are
+/// workbook-wide, not per-Table. After the WBV2-04 multi-tool fan-out the generic
+/// single `calculate` is GONE: each output Table becomes its OWN named tool (the
+/// sanitized Table/workflow name). The loan's compute tool is the sanitized
+/// workflow name (`loan-calc`, via the transitional single-Table `build_cell_map`).
 #[test]
-fn five_generic_tool_names_unchanged() {
-    let served: BTreeSet<&str> = [
-        CalculateHandler::NAME,
+fn generic_meta_tool_names_unchanged_and_calculate_retired() {
+    let meta: BTreeSet<&str> = [
         ExplainHandler::NAME,
         GetManifestHandler::NAME,
         DiffVersionHandler::NAME,
@@ -227,19 +233,29 @@ fn five_generic_tool_names_unchanged() {
     ]
     .into_iter()
     .collect();
-    let expected: BTreeSet<&str> = [
-        "calculate",
-        "explain",
-        "get_manifest",
-        "diff_version",
-        "render_workbook",
-    ]
-    .into_iter()
-    .collect();
+    let expected: BTreeSet<&str> = ["explain", "get_manifest", "diff_version", "render_workbook"]
+        .into_iter()
+        .collect();
     assert_eq!(
-        served, expected,
-        "the loan serves the SAME five generic tool names as tax-calc — only the \
-         manifest/schema payload behind them differs (the WBEX-01 invariant)"
+        meta, expected,
+        "the four workbook-wide META tool names are unchanged vs tax-calc"
+    );
+    // The generic single `calculate` is retired — the loan's compute tool is its
+    // own NAMED tool (the sanitized workflow name).
+    let (_scratch, bundle) = load_loan_bundle();
+    let tool_names: Vec<String> = bundle
+        .cell_map
+        .tools
+        .iter()
+        .map(|t| sanitize_tool_name(&t.name).expect("a mappable tool name"))
+        .collect();
+    assert!(
+        !tool_names.iter().any(|n| n == "calculate"),
+        "the generic `calculate` tool is gone (multi-tool model); got {tool_names:?}"
+    );
+    assert!(
+        !tool_names.is_empty(),
+        "the loan serves at least one named compute tool"
     );
 }
 

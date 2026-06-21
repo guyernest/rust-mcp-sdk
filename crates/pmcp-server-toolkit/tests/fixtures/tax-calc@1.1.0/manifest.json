@@ -63,6 +63,23 @@
       }
     },
     {
+      "cell": "1_Inputs!B5",
+      "role": "input",
+      "name": "in_withheld",
+      "unit": "USD",
+      "meaning": "Total tax withheld during the year (feeds the refund estimate)",
+      "dtype": "number",
+      "colour_evidence": null,
+      "source": "synthetic-fixture",
+      "notes": null,
+      "tier": {
+        "kind": "variable",
+        "default": {
+          "Number": 5000.0
+        }
+      }
+    },
+    {
       "cell": "3_Outputs!B2",
       "role": "output",
       "name": "out_taxable_income",
@@ -104,6 +121,18 @@
       "name": "out_marginal_rate",
       "unit": "ratio",
       "meaning": "The rate applied to the next dollar of income",
+      "dtype": "number",
+      "colour_evidence": null,
+      "source": "synthetic-fixture",
+      "notes": null,
+      "tier": null
+    },
+    {
+      "cell": "4_Refund!B2",
+      "role": "output",
+      "name": "out_refund",
+      "unit": "USD",
+      "meaning": "Estimated refund (withheld minus tax owed)",
       "dtype": "number",
       "colour_evidence": null,
       "source": "synthetic-fixture",

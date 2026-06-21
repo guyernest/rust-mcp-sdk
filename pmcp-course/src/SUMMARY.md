@@ -78,6 +78,7 @@
 - [Config-Driven OpenAPI Servers: From Scaffold to Deploy](./openapi-built-in-server.md)
 - [OpenAPI over Microsoft Graph (Contoso M365)](./openapi-graph-m365.md)
 - [Config-Driven Workbook Servers: From Spreadsheet to Served MCP](./part3-deployment/ch08-6-config-driven-workbook-server.md)
+- [Authoring Workbooks as MCP Tools: The Table Contract](./workbook-table-authoring.md)
 
 - [Cloudflare Workers (WASM)](./part3-deployment/ch09-cloudflare.md)
   - [WASM Considerations](./part3-deployment/ch09-01-wasm-considerations.md)

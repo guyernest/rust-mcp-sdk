@@ -43,11 +43,12 @@ use crate::ingest::{
 };
 use crate::{LintFinding, Severity};
 
-use super::model::{CellRole, Dtype, Manifest, Role};
+use super::model::{CellRole, Dtype, InputTier, Manifest, Role};
 use super::projections::{
     is_inline_literal, resolve_inline_list, sanitize_opt, MAX_INPUT_COUNT, MAX_MEANING_LEN,
     MAX_OUTPUT_COUNT,
 };
+use pmcp_workbook_runtime::CellValue;
 
 /// The current manifest schema version synthesis stamps.
 const SCHEMA_VERSION: u32 = 1;
@@ -57,6 +58,8 @@ const SOURCE_COLOUR_GUIDE: &str = "colour+guide";
 const SOURCE_YELLOW_ASSUMPTION: &str = "yellow-assumption";
 /// The Guide legend sheet name (the spec-driven-from-data ARGB→role source).
 const GUIDE_SHEET: &str = "0_Guide";
+/// The provenance label for a §3 table-row-harvested role (WBV2-02).
+const SOURCE_TABLE_HARVEST: &str = "table-harvest";
 
 // ── The DV static→enum fork reason codes (D-06; the BA-actionable disqualifier) ──
 
@@ -221,6 +224,26 @@ fn apply_dv_fork(
         Ok(values) => cell_role.allowed_values = Some(values),
         Err(reason) => findings.push(dv_dynamic_finding(&sheet.name, &cell.addr, reason)),
     }
+}
+
+/// Harvest the FROZEN closed-enum domain for a table-row `value` cell at
+/// `value_addr` on `sheet`, reusing the EXACT [`freeze_or_reason`] DV machinery
+/// (WBV2-02 §3.3 "enum ← data-validation list"). `Some(values)` when a covering
+/// inline-literal list DV freezes to a closed enum; `None` when there is no
+/// covering list DV OR it is ineligible (range/named/formula-backed/too-many/
+/// non-text — the DYNAMIC path). The pub entry the real-template integration test
+/// (Task 5) uses to read the enum domain off the harvested map without a CellRole.
+pub fn harvest_allowed_values(
+    sheet: &crate::ingest::SheetRecord,
+    value_addr: &str,
+    dtype: Dtype,
+    wb: &WorkbookMap,
+) -> Option<Vec<String>> {
+    let dv = sheet
+        .data_validations
+        .iter()
+        .find(|dv| addr_in_range(value_addr, &dv.target))?;
+    freeze_or_reason(dv, &sheet.name, wb, dtype).ok()
 }
 
 /// The D-06 disqualifier predicate: FREEZE (inline-literal token set) vs DYNAMIC
@@ -446,6 +469,194 @@ fn infer_dtype(cell: &CellRecord) -> Dtype {
     }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// WBV2-02 per-row TABLE HARVEST (§3.3) — type / unit / enum / tier from the value
+// cell. This projection is ADDITIVE: it coexists with the named-range synth path
+// during the Plan 02→04 transition (Plan 04 retires `promote_named_outputs` /
+// `name_named_inputs`). The pure projectors (`number_format_to_unit`,
+// `harvest_dtype`, `harvest_tier`) are `pub` so the property test (Task 4) and the
+// real-template integration test (Task 5) drive the EXACT projection, not a copy.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// The harvested governance TIER of an input-table row (§3.2 / §3.3): the `tier`
+/// column dropdown `{variable, strict}`. `strict` = a BA-governed constant NOT
+/// caller-exposed; anything else (`variable`, blank, garbage) defaults to
+/// `Variable` (the projection is TOTAL + its codomain is CLOSED — never an
+/// undefined tier).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HarvestedTier {
+    /// A freely caller-overridable input (the default; `tier` blank/`variable`/any
+    /// non-`strict` token).
+    Variable,
+    /// A BA-governed constant (`tier == "strict"`), NOT caller-exposed.
+    Strict,
+}
+
+/// Project an input row's `tier` column cell into a [`HarvestedTier`] (§3.3).
+///
+/// TOTAL + CLOSED: only `"strict"` (case-insensitive, trimmed) maps to
+/// [`HarvestedTier::Strict`]; EVERY other input — `"variable"`, blank, `None`,
+/// arbitrary garbage — maps to [`HarvestedTier::Variable`]. Never panics, never an
+/// undefined tier (the tier-closure property Task 4 proves).
+pub fn harvest_tier(tier_cell: Option<&str>) -> HarvestedTier {
+    match tier_cell.map(|t| t.trim().to_ascii_lowercase()) {
+        Some(t) if t == "strict" => HarvestedTier::Strict,
+        _ => HarvestedTier::Variable,
+    }
+}
+
+/// Project an input/output row's `value` cell content into its declared [`Dtype`]
+/// (§3.3 "type ← value cell type"). The SAME parseability witness as [`infer_dtype`]
+/// (a numeric-parseable value is `Number`, else `Text`) but over the raw harvested
+/// value text rather than a [`CellRecord`].
+///
+/// TOTAL: every input (including `None`/blank) yields a defined `Dtype` (blank →
+/// `Text`), never a panic (the totality property Task 4 proves).
+pub fn harvest_dtype(value: Option<&str>) -> Dtype {
+    match value {
+        Some(v) if v.trim().parse::<f64>().is_ok() => Dtype::Number,
+        _ => Dtype::Text,
+    }
+}
+
+/// Project a `value` cell's NUMBER FORMAT code into a harvested `unit` (§3.3
+/// "unit ← value cell number format"): currency (`$` / a 3-letter currency code) →
+/// `"USD"`, a percent format (`%`) → `"rate"`, a date format → `"date"`, anything
+/// else → `None`.
+///
+/// CLOSED codomain: the ONLY values this returns are `Some("USD")`, `Some("rate")`,
+/// `Some("date")`, or `None` — no arbitrary format string ever leaks through as a
+/// unit (the unit-closure property Task 4 proves). A pure fn of the format string
+/// (cog ≤25), reading the EXISTING harvested [`CellRecord::number_format`] field.
+pub fn number_format_to_unit(fmt: &str) -> Option<String> {
+    let f = fmt.trim();
+    if f.is_empty() {
+        return None;
+    }
+    // Percent BEFORE currency: a `0.0%` format is a rate, never a currency.
+    if f.contains('%') {
+        return Some("rate".to_string());
+    }
+    if is_currency_format(f) {
+        return Some("USD".to_string());
+    }
+    if is_date_format(f) {
+        return Some("date".to_string());
+    }
+    None
+}
+
+/// Whether a number-format code denotes CURRENCY: it carries a `$` sign or an
+/// explicit ISO currency-code marker (`[$USD]`, `USD`, `EUR`, `GBP`). Date/percent
+/// are screened out by the caller's check order.
+fn is_currency_format(fmt: &str) -> bool {
+    let upper = fmt.to_ascii_uppercase();
+    upper.contains('$') || upper.contains("USD") || upper.contains("EUR") || upper.contains("GBP")
+}
+
+/// Whether a number-format code denotes a DATE: it carries a recognised Excel date
+/// token (`y`/`m`/`d` day-month-year placeholders) WITHOUT a time-only shape. A
+/// best-effort screen — the closed codomain means a miss simply yields `None`.
+fn is_date_format(fmt: &str) -> bool {
+    let lower = fmt.to_ascii_lowercase();
+    // Excel date placeholders; require a year or day token so a bare `m` (which is
+    // also the minutes token) does not false-positive a time format as a date.
+    lower.contains('y') || lower.contains('d')
+}
+
+/// One harvested input-table row's `value`-cell witnesses (§3.3): the raw value
+/// text (type witness + example/seed), the number-format code (unit source), and
+/// the `tier` column cell. Owned + plain — the per-row projection input.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct HarvestRow<'a> {
+    /// The `name` column cell — the semantic key (served `json_key`).
+    pub key: &'a str,
+    /// The `value` column cell content (type witness, example, reconcile seed).
+    pub value: Option<&'a str>,
+    /// The `value` cell's number-format code (the unit source).
+    pub number_format: Option<&'a str>,
+    /// The `description` column cell text.
+    pub description: Option<&'a str>,
+    /// The `tier` column cell (`{variable, strict}`); `None`/absent → `Variable`.
+    pub tier: Option<&'a str>,
+}
+
+/// Project ONE harvested input-table [`HarvestRow`] into a candidate [`CellRole`]
+/// (§3.3), WITHOUT the DV/enum step (the caller applies [`apply_dv_fork`] when a
+/// covering data-validation list exists, reusing the EXACT DV machinery so the
+/// enum domain harvest cannot drift). The `cell` key is the fully-qualified cell
+/// coordinate the caller supplies (`sheet!addr`).
+///
+/// TOTAL: every well-formed row yields a `CellRole` with a defined `dtype`, a unit
+/// drawn from the CLOSED `number_format_to_unit` codomain, and a defined tier
+/// (`strict` → `Role::Constant` + `tier: None`; `variable` → `Role::Input` +
+/// `InputTier::Variable`) — the totality/stability/closure invariants Task 4 proves.
+pub fn harvest_input_row(cell_key_value: String, row: &HarvestRow) -> CellRole {
+    let dtype = harvest_dtype(row.value);
+    let unit = row.number_format.and_then(number_format_to_unit);
+    let (role, tier) = match harvest_tier(row.tier) {
+        // A strict input is a BA-governed constant: NOT caller-exposed (the
+        // `Role::Constant` + `tier: None` shape `is_strict_constant` keys on).
+        HarvestedTier::Strict => (Role::Constant, None),
+        // A variable input carries a typed default (the harvested value, lowered to
+        // a CellValue by dtype); the served tool exposes it as an overridable input.
+        HarvestedTier::Variable => (
+            Role::Input,
+            Some(InputTier::Variable {
+                default: row_default(row.value, dtype),
+            }),
+        ),
+    };
+
+    CellRole {
+        cell: cell_key_value,
+        role,
+        name: Some(row.key.to_string()),
+        unit,
+        meaning: row.description.map(str::to_string),
+        dtype,
+        colour_evidence: None,
+        source: SOURCE_TABLE_HARVEST.to_string(),
+        notes: None,
+        tier,
+        allowed_values: None,
+    }
+}
+
+/// Project ONE harvested output-table [`HarvestRow`] into a candidate [`CellRole`]
+/// (§3.3): outputs carry `key`/`dtype`/`unit`/`description` (NO tier — outputs are
+/// never caller-tiered); the `value` cell is the authored expected-result ORACLE.
+pub fn harvest_output_row(cell_key_value: String, row: &HarvestRow) -> CellRole {
+    CellRole {
+        cell: cell_key_value,
+        role: Role::Output,
+        name: Some(row.key.to_string()),
+        unit: row.number_format.and_then(number_format_to_unit),
+        meaning: row.description.map(str::to_string),
+        dtype: harvest_dtype(row.value),
+        colour_evidence: None,
+        source: SOURCE_TABLE_HARVEST.to_string(),
+        notes: None,
+        tier: None,
+        allowed_values: None,
+    }
+}
+
+/// Lower a harvested `value` cell into a typed [`CellValue`] default per its
+/// inferred [`Dtype`]: a `Number` dtype parses the value as `f64` (falling back to
+/// `Empty` on an unparseable/blank value); any other dtype keeps the text (or
+/// `Empty` when blank).
+fn row_default(value: Option<&str>, dtype: Dtype) -> CellValue {
+    match (dtype, value) {
+        (Dtype::Number, Some(v)) => v
+            .trim()
+            .parse::<f64>()
+            .map_or(CellValue::Empty, CellValue::Number),
+        (_, Some(v)) if !v.trim().is_empty() => CellValue::Text(v.to_string()),
+        _ => CellValue::Empty,
+    }
+}
+
 /// The D-04 two-layer overlap consistency check: a named-range NAME prefix
 /// (`in_`/`const_`/`out_`) implies a role that MUST equal the manifest role at the
 /// range's target cell; a mismatch is a `Severity::Error` `manifest/role-conflict`
@@ -556,6 +767,7 @@ mod tests {
             merges: vec![],
             cf_ranges: vec![],
             tables: vec![],
+            table_records: vec![],
             data_validations: vec![],
             notes: vec![],
             cells,
@@ -865,6 +1077,152 @@ mod tests {
         assert_eq!(conflicts.len(), 1);
         assert_eq!(conflicts[0].severity, Severity::Error);
         assert!(conflicts[0].message.contains("in_total_area"));
+    }
+
+    // ── WBV2-02 per-row table harvest (§3.3): type / unit / enum / tier ──────
+
+    #[test]
+    fn harvest_currency_value_is_number_with_usd_unit() {
+        // An Inputs row whose value parses as f64 with a currency number format
+        // harvests dtype=Number, unit="USD".
+        let row = HarvestRow {
+            key: "income",
+            value: Some("100000"),
+            number_format: Some("$#,##0"),
+            description: Some("annual gross"),
+            tier: Some("variable"),
+        };
+        let role = harvest_input_row("1_Inputs!B4".to_string(), &row);
+        assert_eq!(role.dtype, Dtype::Number);
+        assert_eq!(role.unit.as_deref(), Some("USD"));
+        assert_eq!(role.name.as_deref(), Some("income"));
+        assert_eq!(role.role, Role::Input);
+    }
+
+    #[test]
+    fn harvest_percent_value_has_rate_unit() {
+        // A percent number format harvests unit="rate".
+        let row = HarvestRow {
+            key: "rate",
+            value: Some("0.22"),
+            number_format: Some("0.0%"),
+            description: None,
+            tier: Some("variable"),
+        };
+        let role = harvest_input_row("1_Inputs!B6".to_string(), &row);
+        assert_eq!(role.unit.as_deref(), Some("rate"));
+        assert_eq!(role.dtype, Dtype::Number);
+    }
+
+    #[test]
+    fn harvest_list_dv_freezes_enum_via_freeze_or_reason() {
+        // An Inputs row whose value cell carries a list data-validation harvests
+        // allowed_values=Some([...]) (enum), reusing the EXISTING apply_dv_fork /
+        // freeze_or_reason machinery (not a copy).
+        let row = HarvestRow {
+            key: "filing",
+            value: Some("single"),
+            number_format: None,
+            description: Some("filing status"),
+            tier: Some("variable"),
+        };
+        let mut role = harvest_input_row("1_Inputs!C6".to_string(), &row);
+        assert_eq!(role.dtype, Dtype::Text, "a text value enables enum freeze");
+
+        // Build the covering list DV on the value cell + drive the EXACT DV fork.
+        let mut s = sheet("1_Inputs", vec![input_cell("C6", Some("single"))]);
+        s.data_validations = vec![dv("C6", "C6", "list", Some("\"single,married\""))];
+        let map = wb(vec![s], vec![]);
+        let cell = input_cell("C6", Some("single"));
+        let mut findings = Vec::new();
+        apply_dv_fork(&mut role, &map.sheets[0], &cell, &map, &mut findings);
+
+        assert_eq!(
+            role.allowed_values,
+            Some(vec!["single".to_string(), "married".to_string()]),
+            "the covering inline list DV freezes to a closed enum"
+        );
+        assert!(
+            !findings.iter().any(|f| f.rule == "manifest/dv-dynamic"),
+            "an eligible inline list never emits a dynamic warning"
+        );
+    }
+
+    #[test]
+    fn harvest_tier_strict_is_constant_variable_otherwise() {
+        // tier="strict" → strict constant (Role::Constant, tier None → is_strict);
+        // "variable"/blank/garbage → variable input (Role::Input + Variable tier).
+        let strict = harvest_input_row(
+            "1_Inputs!B7".to_string(),
+            &HarvestRow {
+                key: "rate",
+                value: Some("0.22"),
+                number_format: Some("0.0%"),
+                description: None,
+                tier: Some("strict"),
+            },
+        );
+        assert_eq!(strict.role, Role::Constant);
+        assert_eq!(strict.tier, None, "a strict input is an untiered constant");
+
+        for variable_tier in [Some("variable"), None, Some(""), Some("nonsense")] {
+            let role = harvest_input_row(
+                "1_Inputs!B4".to_string(),
+                &HarvestRow {
+                    key: "income",
+                    value: Some("100"),
+                    number_format: None,
+                    description: None,
+                    tier: variable_tier,
+                },
+            );
+            assert_eq!(
+                role.role,
+                Role::Input,
+                "tier {variable_tier:?} → a variable input"
+            );
+            assert!(
+                matches!(role.tier, Some(InputTier::Variable { .. })),
+                "tier {variable_tier:?} → InputTier::Variable, got {:?}",
+                role.tier
+            );
+        }
+    }
+
+    #[test]
+    fn number_format_to_unit_closed_codomain() {
+        // The unit codomain is CLOSED: only USD / rate / date / None ever leak out.
+        assert_eq!(number_format_to_unit("$#,##0.00").as_deref(), Some("USD"));
+        assert_eq!(
+            number_format_to_unit("[$USD] #,##0").as_deref(),
+            Some("USD")
+        );
+        assert_eq!(number_format_to_unit("0.0%").as_deref(), Some("rate"));
+        assert_eq!(number_format_to_unit("yyyy-mm-dd").as_deref(), Some("date"));
+        assert_eq!(number_format_to_unit("dd/mm/yyyy").as_deref(), Some("date"));
+        assert_eq!(number_format_to_unit("General"), None);
+        assert_eq!(number_format_to_unit(""), None);
+        assert_eq!(number_format_to_unit("#,##0"), None);
+        // A percent format that also carries `$` stays a rate (percent precedence).
+        assert_eq!(number_format_to_unit("$0%").as_deref(), Some("rate"));
+    }
+
+    #[test]
+    fn harvest_output_row_has_no_tier_and_keeps_oracle_dtype() {
+        // Output rows carry key/dtype/unit/description, NEVER a tier.
+        let row = HarvestRow {
+            key: "tax_owed",
+            value: Some("18241"),
+            number_format: Some("$#,##0"),
+            description: Some("federal tax liability"),
+            tier: None,
+        };
+        let role = harvest_output_row("Calc!B2".to_string(), &row);
+        assert_eq!(role.role, Role::Output);
+        assert_eq!(role.tier, None);
+        assert_eq!(role.dtype, Dtype::Number);
+        assert_eq!(role.unit.as_deref(), Some("USD"));
+        assert_eq!(role.name.as_deref(), Some("tax_owed"));
     }
 
     #[test]

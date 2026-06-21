@@ -164,11 +164,97 @@ pub enum InputTier {
 /// This is the SINGLE source of the name/meaning/cell precedence used to map a
 /// [`CellRole`] to the LLM-facing key — shared by the `cell_map` emitter and the
 /// served tools' input/output schema builders so the precedence cannot drift.
+///
+/// When the key comes from `role.name`, a SINGLE leading `in_`/`out_` GOVERNANCE
+/// prefix is STRIPPED from the served key (`in_gross_income` → `gross_income`): the
+/// prefix is a workbook-authoring convention (the named-range marker that
+/// `name_named_inputs`/`promote_named_outputs` match on) and must never leak into
+/// the caller-facing tool surface. The strip applies ONLY to the `name` branch —
+/// the `meaning` and `cell` fallbacks are returned verbatim. `role.name` itself is
+/// NOT mutated, so governance/named-range matching still sees the prefixed name.
 pub fn json_key_for_role(role: &CellRole) -> String {
-    role.name
-        .clone()
-        .or_else(|| role.meaning.clone())
-        .unwrap_or_else(|| role.cell.clone())
+    if let Some(name) = role.name.as_deref() {
+        return strip_governance_prefix(name).to_string();
+    }
+    role.meaning.clone().unwrap_or_else(|| role.cell.clone())
+}
+
+/// Strip a SINGLE leading `in_`/`out_` governance prefix from a served `json_key`.
+///
+/// Only the FIRST matching prefix is removed (`in_in_x` → `in_x`), and only from a
+/// `role.name`-sourced key (the caller guards that). A name that is EXACTLY the
+/// prefix (`in_`) or carries no prefix is returned unchanged, so the strip is
+/// idempotent on already-clean keys and never yields an empty string from a
+/// non-empty prefixed-only name.
+fn strip_governance_prefix(name: &str) -> &str {
+    for prefix in ["in_", "out_"] {
+        if let Some(rest) = name.strip_prefix(prefix) {
+            if !rest.is_empty() {
+                return rest;
+            }
+        }
+    }
+    name
+}
+
+/// The reserved META-tool names the served workbook binary ALWAYS registers
+/// (`explain`, `get_manifest`, `diff_version`, `render_workbook`) — the SINGLE source
+/// of the reserved set (H3). An output-Table tool name that sanitizes to ANY of these
+/// would silently last-writer-wins over the meta tool at registration, so the offline
+/// compiler REJECTS it (a cell-precise compile failure) by checking against THIS
+/// const, not a hand-copied list. The served toolkit handlers' `NAME` constants
+/// (`ExplainHandler::NAME` etc.) are asserted EQUAL to these entries by a binding
+/// test in the toolkit, so the reserved set cannot drift from what is registered.
+///
+/// Lives in the runtime LEAF (not the toolkit) so the compiler reads it WITHOUT a
+/// compiler→toolkit dependency (which would breach the purity boundary / `make
+/// purity-check`); both the toolkit handlers and the compiler gate read the one const.
+pub const RESERVED_TOOL_NAMES: [&str; 4] =
+    ["explain", "get_manifest", "diff_version", "render_workbook"];
+
+/// Sanitize a raw output-Table name into an MCP tool name matching
+/// `^[a-zA-Z0-9_-]{1,64}$` (T-100-10). This is the SINGLE shared sanitizer — the
+/// served toolkit's registration AND the offline compiler's post-sanitize
+/// collision lint both call it, so "what we register" and "what we collision-check"
+/// cannot drift. The LOCKED five-rule semantics:
+///
+/// 1. **Lowercase** every ASCII letter (`Calculate_Tax` → `calculate_tax`).
+/// 2. **Collapse** each maximal RUN of illegal characters (anything not
+///    `[a-z0-9_-]` after lowercasing) to a SINGLE `_` (`"a  b"`/`"a@@b"` →
+///    `"a_b"`), never one `_` per illegal char.
+/// 3. **Trim** leading/trailing `_`/`-` (no governance-noise edges).
+/// 4. **Truncate** to 64 chars AFTER the above.
+/// 5. If the result is **empty** (the input was empty or all-illegal) return
+///    `Err` carrying the offending raw name — fail-closed.
+///
+/// # Errors
+/// Returns `Err(raw.to_string())` when the input has no character mappable to the
+/// charset (empty or all-illegal).
+pub fn sanitize_tool_name(raw: &str) -> Result<String, String> {
+    let mut out = String::with_capacity(raw.len());
+    let mut pending_underscore = false;
+    for ch in raw.chars() {
+        let lc = ch.to_ascii_lowercase();
+        if lc.is_ascii_alphanumeric() || lc == '_' || lc == '-' {
+            if pending_underscore && !out.is_empty() {
+                out.push('_');
+            }
+            pending_underscore = false;
+            out.push(lc);
+        } else {
+            pending_underscore = true;
+        }
+    }
+    let trimmed: String = out
+        .trim_matches(|c| c == '_' || c == '-')
+        .chars()
+        .take(64)
+        .collect();
+    let trimmed = trimmed.trim_matches(|c| c == '_' || c == '-').to_string();
+    if trimmed.is_empty() {
+        return Err(raw.to_string());
+    }
+    Ok(trimmed)
 }
 
 /// Whether a [`CellRole`] is a STRICT constant — a BA-only governed value that
@@ -737,5 +823,141 @@ mod tests {
             !is_strict_constant(&tiered_const),
             "a Constant with an explicit tier is no longer strict"
         );
+    }
+
+    // ---- F3: governance-prefix stripping on the served json_key ------------
+
+    fn named_role(role: Role, name: &str) -> CellRole {
+        let mut r = role_with_tier(role, None);
+        r.name = Some(name.to_string());
+        r
+    }
+
+    #[test]
+    fn json_key_strips_leading_in_prefix_from_name() {
+        let r = named_role(Role::Input, "in_gross_income");
+        assert_eq!(
+            json_key_for_role(&r),
+            "gross_income",
+            "the served input key must drop the in_ governance prefix"
+        );
+    }
+
+    #[test]
+    fn json_key_strips_leading_out_prefix_from_name() {
+        let r = named_role(Role::Output, "out_tax_owed");
+        assert_eq!(json_key_for_role(&r), "tax_owed");
+    }
+
+    #[test]
+    fn json_key_does_not_mutate_role_name() {
+        let r = named_role(Role::Input, "in_gross_income");
+        let _ = json_key_for_role(&r);
+        assert_eq!(
+            r.name.as_deref(),
+            Some("in_gross_income"),
+            "role.name must stay prefixed for governance/named-range matching"
+        );
+    }
+
+    #[test]
+    fn json_key_strips_only_a_single_prefix() {
+        // Only the FIRST governance prefix is removed.
+        let r = named_role(Role::Input, "in_in_x");
+        assert_eq!(json_key_for_role(&r), "in_x");
+    }
+
+    #[test]
+    fn json_key_leaves_unprefixed_name_untouched() {
+        let r = named_role(Role::Input, "loan_amount");
+        assert_eq!(json_key_for_role(&r), "loan_amount");
+        // A substring-but-not-prefix match must NOT be stripped.
+        let r2 = named_role(Role::Input, "margin_in_pct");
+        assert_eq!(json_key_for_role(&r2), "margin_in_pct");
+    }
+
+    #[test]
+    fn json_key_does_not_strip_prefix_only_name() {
+        // A name that is EXACTLY the prefix must not degenerate to "".
+        let r = named_role(Role::Input, "in_");
+        assert_eq!(json_key_for_role(&r), "in_");
+        let r2 = named_role(Role::Output, "out_");
+        assert_eq!(json_key_for_role(&r2), "out_");
+    }
+
+    #[test]
+    fn json_key_strip_does_not_apply_to_meaning_or_cell_fallback() {
+        // name absent → meaning verbatim (NOT stripped even if it looks prefixed).
+        let mut r = role_with_tier(Role::Input, None);
+        r.name = None;
+        r.meaning = Some("in_some_label".to_string());
+        assert_eq!(json_key_for_role(&r), "in_some_label");
+        // name + meaning absent → cell key verbatim.
+        let mut r2 = role_with_tier(Role::Output, None);
+        r2.name = None;
+        r2.meaning = None;
+        assert_eq!(json_key_for_role(&r2), "1_Inputs!E6");
+    }
+
+    #[test]
+    fn prop_strip_removes_at_most_one_prefix_and_is_loss_free() {
+        // PROPERTY (deterministic corpus): a SINGLE strip removes AT MOST one
+        // governance prefix (by design — the locked decision is "strip a single
+        // leading in_/out_"), never touches a non-prefixed name, and never yields
+        // an empty key from a non-empty input.
+        let corpus = [
+            "in_gross_income",
+            "out_tax_owed",
+            "in_in_x",
+            "loan_amount",
+            "margin_in_pct",
+            "in_",
+            "out_",
+            "x",
+            "in_a",
+            "outflow", // starts with "out" but not the "out_" prefix
+            "inflow",  // starts with "in" but not the "in_" prefix
+        ];
+        for raw in corpus {
+            let once = strip_governance_prefix(raw);
+            assert!(
+                !once.is_empty(),
+                "non-empty name {raw:?} must not strip to empty"
+            );
+            // A single strip removes 0 or 1 prefix: the result is either the input
+            // verbatim, or exactly the input with one in_/out_ prefix removed.
+            let removed_one = raw
+                .strip_prefix("in_")
+                .or_else(|| raw.strip_prefix("out_"))
+                .map_or(false, |rest| !rest.is_empty() && once == rest);
+            assert!(
+                once == raw || removed_one,
+                "strip removes at most one prefix for {raw:?} (got {once:?})"
+            );
+            if !raw.starts_with("in_") && !raw.starts_with("out_") {
+                assert_eq!(once, raw, "non-prefixed {raw:?} must be returned verbatim");
+            }
+        }
+    }
+
+    #[test]
+    fn prop_strip_is_idempotent_on_served_keys() {
+        // PROPERTY: on the keys callers actually see (single-prefixed or clean),
+        // stripping IS idempotent — re-stripping a served key is a no-op. This is
+        // the invariant the served-key path relies on (json_key_for_role applies
+        // the strip exactly once per role).
+        for served in [
+            "gross_income",
+            "tax_owed",
+            "loan_amount",
+            "x",
+            "in_", // prefix-only is preserved, so re-strip is a no-op
+        ] {
+            assert_eq!(
+                strip_governance_prefix(served),
+                served,
+                "an already-served key {served:?} must be a strip no-op"
+            );
+        }
     }
 }

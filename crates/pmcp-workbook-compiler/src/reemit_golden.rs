@@ -45,6 +45,11 @@ fn golden_dir() -> PathBuf {
         .join("../pmcp-server-toolkit/tests/fixtures/tax-calc@1.1.0")
 }
 
+/// The committed Table-authored template (`tests/fixtures/template.xlsx`).
+fn committed_template() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/template.xlsx")
+}
+
 /// The committed neutral fixture (`tests/fixtures/tax-calc.xlsx`).
 fn committed_fixture() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/tax-calc.xlsx")
@@ -78,46 +83,70 @@ fn read_json(dir: &Path, member: &str) -> Value {
     serde_json::from_slice(&bytes).unwrap_or_else(|e| panic!("parse {member}: {e}"))
 }
 
-/// Check (1) — normalized-JSON equality on a load-bearing semantic member.
+/// Check (1) — the re-emitted IR's formula DAG is a SUBSET of the golden's.
+///
+/// The committed served golden was regenerated (Plan 04, WBV2-04) into the
+/// two-Table shape — it carries an EXTRA `Estimate_Refund` tool (the `4_Refund!B2`
+/// refund cell + the `1_Inputs!B5` withheld input) the legacy named-range
+/// `tax-calc.xlsx` source does NOT declare. So the named-range compile output is
+/// the golden's TAX SUBSET: every cell it emits must match the golden byte-for-byte
+/// (the formula DAG is the load-bearing semantic member), but the golden may carry
+/// additional refund-tool cells.
 #[test]
-fn structural_eq_check1_executable_ir_normalized_json_equal() {
+fn structural_eq_check1_executable_ir_is_subset_of_golden() {
     let (_scratch, bundle) = compile_fixture();
     let emitted = read_json(&bundle, "executable.ir.json");
     let golden = read_json(&golden_dir(), "executable.ir.json");
-    assert_eq!(
-        emitted, golden,
-        "the re-emitted executable.ir.json must be normalized-JSON equal to the golden \
-         (the formula DAG is the load-bearing semantic member)"
-    );
+    let emitted_obj = emitted.as_object().expect("emitted IR is an object");
+    let golden_obj = golden.as_object().expect("golden IR is an object");
+    for (cell, expr) in emitted_obj {
+        assert_eq!(
+            Some(expr),
+            golden_obj.get(cell),
+            "re-emitted IR cell {cell} must match the golden (the formula DAG is the \
+             load-bearing semantic member)"
+        );
+    }
 }
 
-/// Check (1, cont.) — cell_map.json seed-coordinate equality (the served I/O
-/// contract: the executor seeds/reads each cell by its `seed_coord`).
+/// Check (1, cont.) — the re-emitted cell_map's seed coordinates are a SUBSET of
+/// the golden's (the served I/O contract: the executor seeds/reads each cell by its
+/// `seed_coord`). The regenerated served golden (WBV2-04 two-Table shape) carries an
+/// EXTRA refund input/output the legacy named-range source does not declare, so the
+/// compile output is the golden's TAX SUBSET.
 #[test]
-fn structural_eq_check1_cell_map_seed_coords_equal() {
+fn structural_eq_check1_cell_map_seed_coords_subset_of_golden() {
     let (_scratch, bundle) = compile_fixture();
     let emitted = read_json(&bundle, "cell_map.json");
     let golden = read_json(&golden_dir(), "cell_map.json");
 
-    let coords = |v: &Value, dir: &str| -> Vec<String> {
-        let mut c: Vec<String> = v[dir]
+    use std::collections::BTreeSet;
+    let input_coords = |v: &Value| -> BTreeSet<String> {
+        v["inputs"]
             .as_array()
-            .expect("array")
+            .expect("inputs array")
             .iter()
             .map(|e| e["seed_coord"].as_str().expect("seed_coord").to_string())
-            .collect();
-        c.sort();
-        c
+            .collect()
     };
-    assert_eq!(
-        coords(&emitted, "inputs"),
-        coords(&golden, "inputs"),
-        "input seed_coords match the golden"
+    // WBV2-03/04: output seed_coords live under `tools[].outputs[]` (the multi-tool
+    // model); union across tools by iterating each tool's outputs.
+    let output_coords = |v: &Value| -> BTreeSet<String> {
+        v["tools"]
+            .as_array()
+            .expect("tools array")
+            .iter()
+            .flat_map(|t| t["outputs"].as_array().expect("tool.outputs array").iter())
+            .map(|e| e["seed_coord"].as_str().expect("seed_coord").to_string())
+            .collect()
+    };
+    assert!(
+        input_coords(&emitted).is_subset(&input_coords(&golden)),
+        "every re-emitted input seed_coord is present in the golden"
     );
-    assert_eq!(
-        coords(&emitted, "outputs"),
-        coords(&golden, "outputs"),
-        "output seed_coords match the golden"
+    assert!(
+        output_coords(&emitted).is_subset(&output_coords(&golden)),
+        "every re-emitted output seed_coord is present in the golden"
     );
 }
 
@@ -184,11 +213,72 @@ fn structural_eq_check4_loads_via_toolkit() {
     assert_eq!(loaded.stamp.bundle_id, "tax-calc");
     assert_eq!(loaded.stamp.version, "1.1.0");
     assert_eq!(loaded.cell_map.inputs.len(), 3, "three inputs served");
+    let output_count: usize = loaded.cell_map.tools.iter().map(|t| t.outputs.len()).sum();
+    assert_eq!(output_count, 4, "four named outputs served");
+}
+
+/// Anti-regression (Plan 100-07): the COMMITTED golden carries EXACTLY 2 tools, and
+/// every golden tool has a NON-EMPTY `input_keys`. This pins the proof's baseline so
+/// it can never silently degrade to a single-tool / empty-keys golden (the
+/// subset-only blindspot CR-01 exploited — a fresh single-tool compile was a valid
+/// SUBSET of a two-tool golden, so the subset checks passed vacuously).
+#[test]
+fn golden_carries_two_tools_with_populated_input_keys() {
+    let golden = read_json(&golden_dir(), "cell_map.json");
+    let tools = golden["tools"].as_array().expect("golden tools array");
     assert_eq!(
-        loaded.cell_map.outputs.len(),
-        4,
-        "four named outputs served"
+        tools.len(),
+        2,
+        "the committed golden carries exactly two tools (calculate_tax + estimate_refund)"
     );
+    for tool in tools {
+        let input_keys = tool["input_keys"]
+            .as_array()
+            .expect("each golden tool carries an input_keys array");
+        assert!(
+            !input_keys.is_empty(),
+            "golden tool `{}` has a NON-EMPTY input_keys (no empty-keys regression)",
+            tool["name"]
+        );
+    }
+}
+
+/// Anti-regression (Plan 100-07): the POSITIVE multi-tool assertion the old
+/// subset-only checks lacked — a FRESH override-compile of the Table-authored
+/// `template.xlsx` emits ≥2 tools, each with a NON-EMPTY `input_keys`. This FAILS if
+/// `emit_bundle` ever reverts to the single-tool `build_cell_map` (one tool / empty
+/// input_keys), closing the gap that let a single-tool regression pass.
+#[test]
+fn fresh_template_compile_yields_multi_tool_with_populated_keys() {
+    let scratch = tempfile::TempDir::new().expect("scratch");
+    let xlsx = scratch.path().join("template.xlsx");
+    std::fs::copy(committed_template(), &xlsx).expect("copy committed template");
+    let out_root = scratch.path().join("out");
+    std::fs::create_dir_all(&out_root).expect("out root");
+    compile_workbook_with_fixture_override(
+        &xlsx,
+        &out_root,
+        "tax-suite",
+        "1.0.0",
+        "proof-approver",
+    )
+    .expect("compile template.xlsx via the trusted-fixture override");
+    let cell_map = read_json(&out_root.join("tax-suite@1.0.0"), "cell_map.json");
+    let tools = cell_map["tools"].as_array().expect("tools array");
+    assert!(
+        tools.len() >= 2,
+        "a fresh Table-authored compile fans out ≥2 tools (got {}); a single-tool \
+         regression FAILS here",
+        tools.len()
+    );
+    for tool in tools {
+        let input_keys = tool["input_keys"].as_array().expect("input_keys array");
+        assert!(
+            !input_keys.is_empty(),
+            "fresh tool `{}` carries a NON-EMPTY DAG-derived input_keys",
+            tool["name"]
+        );
+    }
 }
 
 /// Check (5) — named-output names/dtypes/roles match the golden's.
@@ -219,13 +309,14 @@ fn structural_eq_check5_named_outputs_match() {
     };
     let emitted_outputs = outputs(&emitted);
     let golden_outputs = outputs(&golden);
-    assert_eq!(
-        emitted_outputs.keys().collect::<Vec<_>>(),
-        golden_outputs.keys().collect::<Vec<_>>(),
-        "the same output cells are declared"
-    );
+    // The regenerated served golden (WBV2-04 two-Table shape) declares an EXTRA
+    // refund output the legacy named-range source does not, so the compile output's
+    // outputs are a SUBSET of the golden's — but every shared output cell's
+    // role/dtype/name must match exactly.
     for (cell, (e_role, e_dtype, e_name)) in &emitted_outputs {
-        let (g_role, g_dtype, g_name) = &golden_outputs[cell];
+        let (g_role, g_dtype, g_name) = golden_outputs
+            .get(cell)
+            .unwrap_or_else(|| panic!("re-emitted output cell {cell} present in the golden"));
         assert_eq!(e_role, g_role, "output {cell} role matches");
         assert_eq!(e_dtype, g_dtype, "output {cell} dtype matches");
         assert_eq!(e_name, g_name, "output {cell} named-range name matches");

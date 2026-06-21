@@ -36,12 +36,17 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use pmcp_workbook_runtime::sheet_ir::Cell;
-use pmcp_workbook_runtime::{CellRole, InputTier, Manifest, Role, VersionChangelog};
+use pmcp_workbook_runtime::{CellRole, Dag, InputTier, Manifest, Role, VersionChangelog};
 
 pub use bundle_lock::{
     build_bundle_lock, fold_evidence_hash, sha256_hex, ArtifactHashes, BundleLock,
 };
-pub use cell_map::{build_cell_map, CellEntry, CellMap};
+use cell_map::shared_inputs;
+pub use cell_map::{
+    build_cell_map, build_tools, comparison_from_outputs_for_tool, reconcile_tools,
+    tool_name_collision_findings, CellEntry, CellMap, Comparison, ComparisonRow, OutputTable, Tool,
+    ToolReconcileReport,
+};
 pub use evidence::{
     emit_evidence, parser_equivalence_json, read_gate_marker, write_gate_marker, EvidenceInputs,
     GateMarker, ParserEquivalence, EVIDENCE_GATE_DIGEST, EVIDENCE_GATE_MARKER,
@@ -160,6 +165,8 @@ pub fn emit_bundle(
     changelog: &VersionChangelog,
     parser_equivalence: &ParserEquivalence,
     workbook_hash: String,
+    output_tables: &[OutputTable],
+    dag: &Dag,
     out_root: &Path,
 ) -> Result<BundleLock, EmitError> {
     // (0) Ratify tiers on a clone (fail loud on an untierable input).
@@ -173,7 +180,11 @@ pub fn emit_bundle(
     })?;
 
     // (1) cell_map.json — manifest-driven, through the deterministic choke point.
-    let cell_map = build_cell_map(&ratified).map_err(EmitError::CellMap)?;
+    // A NON-EMPTY output-Table set drives the per-Table `build_tools` fan-out (one
+    // Tool per output Table, DAG-derived populated input_keys — WBV2-04); an EMPTY
+    // set falls back to the transitional single-tool `build_cell_map` (the
+    // named-range corpus path).
+    let cell_map = cell_map_for_emit(&ratified, output_tables, dag)?;
     let cell_map_json = to_bundle_json(&cell_map, "cell_map.json")?;
     write_file(&dir.join("cell_map.json"), &cell_map_json)?;
 
@@ -215,6 +226,38 @@ pub fn emit_bundle(
     write_file(&dir.join("BUNDLE.lock"), &lock_json)?;
 
     Ok(lock)
+}
+
+/// Build the emitted [`CellMap`] for a (tier-ratified) manifest: the per-Table
+/// multi-tool fan-out when `output_tables` is non-empty (WBV2-04 — each output
+/// Table becomes its own [`Tool`] with a DAG-derived populated `input_keys`), or
+/// the transitional single-tool [`build_cell_map`] fallback when empty (the
+/// named-range corpus, which harvests zero output Tables).
+///
+/// The `build_tools` lint findings (collision / feeds-no-tool) are DISCARDED here:
+/// the compile driver folds the `Severity::Error` collision findings into the
+/// stage-1 gate BEFORE reaching emit (so a collision is a clean compile failure,
+/// not an emit-time surprise — see `compile_workbook_inner`).
+///
+/// Kept a thin branch (cog ≤25) so `emit_bundle` reads as a linear member walk.
+fn cell_map_for_emit(
+    ratified: &Manifest,
+    output_tables: &[OutputTable],
+    dag: &Dag,
+) -> Result<CellMap, EmitError> {
+    if output_tables.is_empty() {
+        return build_cell_map(ratified).map_err(EmitError::CellMap);
+    }
+    // The served bundle's tools carry no graded oracle (the per-tool reconcile is a
+    // compile-time gate the driver already ran via `reconcile_output_tables`); pass an
+    // empty oracle map (M6 — the cached `<v>` oracle is not a served-payload field).
+    let no_oracles = std::collections::BTreeMap::new();
+    let (tools, _lints) =
+        build_tools(ratified, dag, output_tables, &no_oracles).map_err(EmitError::CellMap)?;
+    Ok(CellMap {
+        inputs: shared_inputs(ratified),
+        tools,
+    })
 }
 
 /// Write `contents` to `path`, mapping an I/O failure to [`EmitError::Io`].
@@ -327,6 +370,8 @@ mod tests {
             ],
         );
         let hash = sha256_hex(b"workbook-content");
+        // The named-range corpus path: an EMPTY output-Table set + a trivial DAG
+        // exercises the single-tool `build_cell_map` fallback unchanged.
         emit_bundle(
             "tax-calc",
             "1.0.0",
@@ -336,6 +381,8 @@ mod tests {
             &sample_changelog("1.0.0"),
             &sample_parser_equiv(),
             hash,
+            &[],
+            &Dag::new(),
             out_root,
         )
         .expect("emit bundle")
@@ -533,6 +580,88 @@ mod tests {
         assert_eq!(bundle.stamp.bundle_id, "tax-calc");
         assert_eq!(bundle.stamp.version, "1.0.0");
         assert_eq!(bundle.cell_map.inputs.len(), 1);
-        assert_eq!(bundle.cell_map.outputs.len(), 1);
+        let output_count: usize = bundle.cell_map.tools.iter().map(|t| t.outputs.len()).sum();
+        assert_eq!(output_count, 1);
+    }
+
+    #[test]
+    fn emit_with_output_tables_fans_out() {
+        // A NON-EMPTY output-Table set makes emit_bundle fan out one Tool per output
+        // Table (build_tools), each with a DAG-derived populated input_keys; an EMPTY
+        // set falls back to the single transitional tool (build_cell_map). This is
+        // the WBV2-04 wiring proof: emit_bundle now reaches build_tools on the
+        // non-test call site.
+        use pmcp_workbook_runtime::CellValue;
+
+        // Two inputs (income, withheld) + two output cells (tax, refund). tax reaches
+        // income only; refund reaches income + withheld → DISJOINT on withheld.
+        let mut manifest = manifest_of(
+            "tax-suite",
+            vec![
+                input_role("Data!B4", Dtype::Number, None),
+                input_role("Data!B6", Dtype::Number, None),
+                {
+                    let mut r = output_role("Data!B11", "tax_owed");
+                    r.tier = Some(InputTier::Variable {
+                        default: CellValue::Number(18241.0),
+                    });
+                    r
+                },
+                {
+                    let mut r = output_role("Data!B17", "refund");
+                    r.tier = Some(InputTier::Variable {
+                        default: CellValue::Number(-3241.0),
+                    });
+                    r
+                },
+            ],
+        );
+        // Name the inputs so input_keys carry semantic keys.
+        for c in &mut manifest.cells {
+            if c.cell == "Data!B4" {
+                c.name = Some("income".to_string());
+            }
+            if c.cell == "Data!B6" {
+                c.name = Some("withheld".to_string());
+            }
+        }
+
+        let mut dag = Dag::new();
+        dag.add_edge("Data!B11", "Data!B4"); // tax <- income
+        dag.add_edge("Data!B17", "Data!B11"); // refund <- tax
+        dag.add_edge("Data!B17", "Data!B6"); // refund <- withheld
+
+        let tables = vec![
+            OutputTable {
+                name: "Calculate_Tax".to_string(),
+                description: Some("Compute tax".to_string()),
+                output_cells: vec!["Data!B11".to_string()],
+            },
+            OutputTable {
+                name: "Estimate_Refund".to_string(),
+                description: None,
+                output_cells: vec!["Data!B17".to_string()],
+            },
+        ];
+
+        let ratified = ratify_tiers(&manifest).expect("ratify");
+        let fanned = cell_map_for_emit(&ratified, &tables, &dag).expect("multi-tool emit");
+        assert_eq!(fanned.tools.len(), 2, "two output Tables → two Tools");
+        assert_eq!(fanned.tools[0].name, "Calculate_Tax");
+        assert_eq!(fanned.tools[1].name, "Estimate_Refund");
+        assert_eq!(
+            fanned.tools[0].input_keys,
+            vec!["income".to_string()],
+            "calculate_tax reaches income only"
+        );
+        assert_eq!(
+            fanned.tools[1].input_keys,
+            vec!["income".to_string(), "withheld".to_string()],
+            "estimate_refund reaches income + withheld"
+        );
+
+        // The EMPTY set falls back to ONE transitional tool (the corpus path).
+        let fallback = cell_map_for_emit(&ratified, &[], &Dag::new()).expect("fallback");
+        assert_eq!(fallback.tools.len(), 1, "empty output set → single tool");
     }
 }

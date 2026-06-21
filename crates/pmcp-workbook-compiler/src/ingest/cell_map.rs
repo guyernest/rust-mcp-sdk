@@ -107,6 +107,30 @@ pub struct DataValidationRecord {
     pub formula1: Option<String>,
 }
 
+/// One owned Excel Table (ListObject) harvested from a worksheet: its ListObject
+/// `name` (the §4 TOOL-name candidate), its `area`, and its ordered column header
+/// `name`s (the §3.2 standard columns `name | value | description [| tier]`).
+///
+/// This is the WBV2-02 metadata `table_ranges` (areas only, Pitfall 1) drops: the
+/// harvested name + columns are the raw material the manifest model lift (Plan 03)
+/// and multi-tool emission (Plan 04) consume — without the harvested name there is
+/// no tool name and no per-row schema. Owned `String`/[`RangeRef`] only — NO `umya`
+/// type crosses (the module-doc quarantine invariant); the `umya` `Table`/`TableColumn`
+/// reads are converted to owned data at the [`super`] boundary inside the
+/// panic-contained extraction seam.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, schemars::JsonSchema)]
+pub struct TableRecord {
+    /// The Excel Table (ListObject) name (`t.get_name()`) — the §4 tool-name
+    /// candidate (e.g. `"Inputs"`, `"Calculate_Tax"`, `"Estimate_Refund"`).
+    pub name: String,
+    /// The Table's area (`t.get_area()` start/end) as an owned [`RangeRef`].
+    pub area: RangeRef,
+    /// The ordered column header names (`t.get_columns().map(get_name)`); the §3.2
+    /// standard columns start `["name","value","description"]` (input tables add
+    /// `"tier"`).
+    pub columns: Vec<String>,
+}
+
 /// One owned cell: its address + formula/value text + the fill/font ARGBs +
 /// formula classification. Colour ARGBs are `Some` only when the cell carries a
 /// meaningful (non-transparent) colour — an unset colour reads as `None` so the
@@ -160,8 +184,15 @@ pub struct SheetRecord {
     /// Conditional-formatting ranges as owned [`RangeRef`]s (NOT a bool) so
     /// synthesis can intersect CF with role cells.
     pub cf_ranges: Vec<RangeRef>,
-    /// Excel table ranges as owned [`RangeRef`]s.
+    /// Excel table ranges as owned [`RangeRef`]s (areas ONLY — the legacy
+    /// metadata-dropping harvest; kept additive alongside [`table_records`] for
+    /// existing area-only consumers).
     pub tables: Vec<RangeRef>,
+    /// Excel Tables harvested as owned [`TableRecord`]s carrying the ListObject
+    /// `name` + column header names (WBV2-02) — the §4 tool-name + §3.2 schema
+    /// raw material the manifest lift and multi-tool emission consume. Empty when
+    /// the sheet declares no Excel Table.
+    pub table_records: Vec<TableRecord>,
     /// Data validations as owned [`DataValidationRecord`]s — ONE record per
     /// (data validation × `sqref` range), so a multi-range sqref is never
     /// silently collapsed. Empty when the sheet has none.
@@ -221,6 +252,34 @@ mod tests {
     }
 
     #[test]
+    fn table_record_round_trips_through_serde_owned_only() {
+        // A TableRecord carries only owned String/RangeRef — no umya type. That it
+        // derives Serialize + schemars (the reader-free serde set) and round-trips
+        // is the owned-only proof.
+        let rec = TableRecord {
+            name: "Inputs".to_string(),
+            area: RangeRef {
+                sheet: "1_Inputs".to_string(),
+                start: "A1".to_string(),
+                end: "D5".to_string(),
+            },
+            columns: vec![
+                "name".to_string(),
+                "value".to_string(),
+                "description".to_string(),
+                "tier".to_string(),
+            ],
+        };
+        let v = serde_json::to_value(&rec).expect("serialize TableRecord");
+        assert_eq!(v["name"], "Inputs");
+        assert_eq!(v["columns"][0], "name");
+        assert_eq!(v["columns"][3], "tier");
+        assert_eq!(v["area"]["start"], "A1");
+        // Eq is derivable (owned only) — clone equality holds.
+        assert_eq!(rec.clone(), rec);
+    }
+
+    #[test]
     fn sheet_record_with_notes_and_hidden_cols_satisfies_partial_eq() {
         let make = || SheetRecord {
             name: "1_Inputs".to_string(),
@@ -231,6 +290,7 @@ mod tests {
             merges: Vec::new(),
             cf_ranges: Vec::new(),
             tables: Vec::new(),
+            table_records: Vec::new(),
             data_validations: Vec::new(),
             notes: vec![NoteRecord {
                 addr: "C16".to_string(),

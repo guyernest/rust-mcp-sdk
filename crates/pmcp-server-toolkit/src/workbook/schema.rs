@@ -15,9 +15,11 @@
     deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)
 )]
 
+use std::collections::HashSet;
+
 use serde_json::{json, Map, Value};
 
-use pmcp_workbook_runtime::{CellMap, CellRole, Dtype, Manifest};
+use pmcp_workbook_runtime::{CellEntry, CellMap, CellRole, Dtype, Manifest, Tool};
 
 /// Map a manifest [`Dtype`] to its JSON Schema primitive type string. `pub(crate)`
 /// so input.rs's type-check reuses the SAME `Dtype`→string mapping (one place).
@@ -74,14 +76,55 @@ fn output_column_schema(unit: Option<&str>, role: Option<&CellRole>) -> Value {
 /// `additionalProperties:true` and `required:["provenance"]`).
 #[must_use]
 pub fn output_schema_for_manifest(manifest: &Manifest, cell_map: &CellMap) -> Value {
+    // The union of every tool's outputs (the workbook-WIDE output surface), kept for
+    // the meta/generalization consumers (the WBEX-01 reemit proofs). The per-TOOL
+    // served schema is `output_schema_for_tool`.
+    let all_outputs: Vec<CellEntry> = cell_map
+        .tools
+        .iter()
+        .flat_map(|t| t.outputs.iter().cloned())
+        .collect();
+    let output_props = output_props_for_entries(manifest, &all_outputs);
+
+    let mut success = Map::new();
+    success.insert(
+        "outputs".to_string(),
+        json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": Value::Object(output_props),
+        }),
+    );
+    success.insert(
+        "accepted_overrides".to_string(),
+        json!({ "type": "array", "items": { "type": "string" } }),
+    );
+    result_envelope_schema(success)
+}
+
+/// Build the per-output schema map for a set of [`CellEntry`] output columns —
+/// the shared projection [`output_schema_for_manifest`] and
+/// [`output_schema_for_tool`] both use.
+fn output_props_for_entries(manifest: &Manifest, outputs: &[CellEntry]) -> Map<String, Value> {
     let mut output_props = Map::new();
-    for entry in &cell_map.outputs {
+    for entry in outputs {
         let role = role_for_seed(manifest, &entry.seed_coord);
         output_props.insert(
             entry.json_key.clone(),
             output_column_schema(entry.unit.as_deref(), role),
         );
     }
+    output_props
+}
+
+/// Build ONE tool's non-empty `outputSchema` (WBSV-07 / WBV2-04) over the tool's
+/// OWN `outputs` only (NOT the union across tools). Each output Table becomes its
+/// own MCP tool, so its schema enumerates exactly that Table's output columns —
+/// the TypedToolWithOutput dual-surface invariant (every tool emits a non-empty
+/// outputSchema → `structuredContent`).
+#[must_use]
+pub fn output_schema_for_tool(manifest: &Manifest, tool: &Tool) -> Value {
+    let output_props = output_props_for_entries(manifest, &tool.outputs);
 
     let mut success = Map::new();
     success.insert(
@@ -275,23 +318,91 @@ pub fn provenance_schema() -> Value {
 pub fn input_schema_for_manifest(manifest: &Manifest, cell_map: &CellMap) -> Value {
     let mut input_props = Map::new();
     for entry in &cell_map.inputs {
-        let role = role_for_seed(manifest, &entry.seed_coord);
-        let dtype = role.map_or(Dtype::Number, |r| r.dtype);
-        let mut prop = Map::new();
-        prop.insert("type".to_string(), json!(dtype_json_type(dtype)));
-        if let Some(unit) = entry.unit.as_deref() {
-            prop.insert("unit".to_string(), json!(unit));
+        input_props.insert(
+            entry.json_key.clone(),
+            input_prop_for_entry(manifest, entry),
+        );
+    }
+    assemble_input_schema(manifest, input_props)
+}
+
+/// Build the strict per-tool input schema (WBV2-04): an `object` with
+/// `additionalProperties:false` carrying ONLY this tool's DAG-derived
+/// `input_keys` (the subset of the shared `cell_map.inputs` pool transitively
+/// reachable upstream of this tool's outputs), plus the F2 `overrides` block.
+///
+/// The strict envelope (`additionalProperties:false`, V5) MUST survive: a client
+/// trusting the advertised schema must never be able to send a key the runtime
+/// then rejects.
+#[must_use]
+pub fn input_schema_for_tool(manifest: &Manifest, cell_map: &CellMap, tool: &Tool) -> Value {
+    // O(1) membership for the per-tool key projection (was a linear scan of
+    // `input_keys` per input — O(inputs × keys)).
+    let reached: HashSet<&str> = tool.input_keys.iter().map(String::as_str).collect();
+    // CR-02 defense-in-depth: a tool with an EMPTY input_keys advertised an empty
+    // inputs.properties while `validate_input` accepts the full shared pool — the
+    // served schema was STRICTER than the runtime (the V5 invariant inverted). When
+    // no DAG derivation populated input_keys (a hand-built / single-tool fallback
+    // bundle), project the FULL shared-input pool ("no derivation" => "all shared
+    // inputs") so the advertised schema is never stricter than what the runtime
+    // accepts. The production multi-tool path always populates input_keys, so this
+    // fires only for the fallback shape.
+    let project_all = tool.input_keys.is_empty();
+    let mut input_props = Map::new();
+    for entry in &cell_map.inputs {
+        // Project this tool's DAG-derived keys (or the full pool when empty — CR-02).
+        if project_all || reached.contains(entry.json_key.as_str()) {
+            input_props.insert(
+                entry.json_key.clone(),
+                input_prop_for_entry(manifest, entry),
+            );
         }
-        if let Some(meaning) = role.and_then(|r| r.meaning.as_deref()) {
-            prop.insert("description".to_string(), json!(meaning));
-        }
-        // A frozen input (allowed_values from the workbook) advertises its closed
-        // domain as a JSON-Schema enum, verbatim workbook order. The input stays
-        // OPTIONAL — this fn builds no `required` array.
-        if let Some(allowed) = role.and_then(|r| r.allowed_values.as_ref()) {
-            prop.insert("enum".to_string(), json!(allowed));
-        }
-        input_props.insert(entry.json_key.clone(), Value::Object(prop));
+    }
+    assemble_input_schema(manifest, input_props)
+}
+
+/// Build the typed JSON-Schema property for one input [`CellEntry`] — its dtype,
+/// unit, meaning, and (for a frozen input) closed-enum domain. Shared by the
+/// manifest-level and per-tool input-schema builders so the per-input shape
+/// cannot drift.
+fn input_prop_for_entry(manifest: &Manifest, entry: &CellEntry) -> Value {
+    let role = role_for_seed(manifest, &entry.seed_coord);
+    let dtype = role.map_or(Dtype::Number, |r| r.dtype);
+    let mut prop = Map::new();
+    prop.insert("type".to_string(), json!(dtype_json_type(dtype)));
+    if let Some(unit) = entry.unit.as_deref() {
+        prop.insert("unit".to_string(), json!(unit));
+    }
+    if let Some(meaning) = role.and_then(|r| r.meaning.as_deref()) {
+        prop.insert("description".to_string(), json!(meaning));
+    }
+    // A frozen input (allowed_values from the workbook) advertises its closed
+    // domain as a JSON-Schema enum, verbatim workbook order. The input stays
+    // OPTIONAL — this fn builds no `required` array.
+    if let Some(allowed) = role.and_then(|r| r.allowed_values.as_ref()) {
+        prop.insert("enum".to_string(), json!(allowed));
+    }
+    Value::Object(prop)
+}
+
+/// Assemble the strict input-schema envelope from the already-built per-input
+/// `properties` map: the `inputs` object (strict) + the F2 `overrides` block
+/// (advertising the variable-tier override keys). Shared by the manifest-level
+/// and per-tool builders.
+fn assemble_input_schema(manifest: &Manifest, input_props: Map<String, Value>) -> Value {
+    // F2: ADVERTISE the legal override keys so an LLM/caller can DISCOVER them,
+    // rather than leaving `overrides` an opaque open map described in prose only.
+    // The keys are the SAME variable-tier list `validate_input` accepts (one source
+    // of truth — `crate::workbook::input::variable_tier_keys`), so advertisement and
+    // acceptance cannot drift. `additionalProperties` stays permissive (the open
+    // value-typed map) so this is a DISCOVERABILITY change only — `validate_input`'s
+    // accept/reject behavior is unchanged.
+    let mut override_props = Map::new();
+    for key in crate::workbook::input::variable_tier_keys(manifest) {
+        override_props.insert(
+            key,
+            json!({ "type": ["number", "string", "boolean", "null"] }),
+        );
     }
 
     json!({
@@ -306,6 +417,7 @@ pub fn input_schema_for_manifest(manifest: &Manifest, cell_map: &CellMap) -> Val
             "overrides": {
                 "type": "object",
                 "additionalProperties": { "type": ["number", "string", "boolean", "null"] },
+                "properties": Value::Object(override_props),
                 "description": "Variable-tier parameter overrides, keyed by parameter \
                                 name or cell key. Strict (BA-governed) constants are rejected.",
             },
@@ -323,7 +435,7 @@ pub fn empty_input_schema() -> Value {
 mod tests {
     use super::*;
     use pmcp_workbook_runtime::CellValue;
-    use pmcp_workbook_runtime::{CellEntry, CellMap, InputTier, Role};
+    use pmcp_workbook_runtime::{CellEntry, CellMap, InputTier, Role, Tool};
 
     fn input_role(
         cell: &str,
@@ -412,18 +524,24 @@ mod tests {
                     unit: Some("USD".to_string()),
                 },
             ],
-            outputs: vec![
-                CellEntry {
-                    json_key: "taxable_income".to_string(),
-                    seed_coord: "3_Outputs!B2".to_string(),
-                    unit: Some("USD".to_string()),
-                },
-                CellEntry {
-                    json_key: "tax_owed".to_string(),
-                    seed_coord: "3_Outputs!B3".to_string(),
-                    unit: Some("USD".to_string()),
-                },
-            ],
+            tools: vec![Tool {
+                name: "calculate".to_string(),
+                description: None,
+                input_keys: Vec::new(),
+                outputs: vec![
+                    CellEntry {
+                        json_key: "taxable_income".to_string(),
+                        seed_coord: "3_Outputs!B2".to_string(),
+                        unit: Some("USD".to_string()),
+                    },
+                    CellEntry {
+                        json_key: "tax_owed".to_string(),
+                        seed_coord: "3_Outputs!B3".to_string(),
+                        unit: Some("USD".to_string()),
+                    },
+                ],
+                oracle: std::collections::BTreeMap::new(),
+            }],
         };
         (manifest, cell_map)
     }
@@ -515,6 +633,89 @@ mod tests {
     }
 
     #[test]
+    fn overrides_advertise_variable_tier_keys() {
+        // F2: the overrides block carries a `properties` map keyed by the legal
+        // variable-tier override keys (the SAME list validate_input accepts).
+        let (m, cm) = three_input_manifest_and_map();
+        let schema = input_schema_for_manifest(&m, &cm);
+        let override_props = &schema["properties"]["overrides"]["properties"];
+        let props = override_props
+            .as_object()
+            .expect("overrides.properties is an object");
+        // The three variable-tier inputs (Some(Variable) tier, not computed) are
+        // advertised by their `variable_tier_keys` identity (name.or(cell) — here
+        // the cell key, since these fixtures carry no `name`).
+        for key in ["1_Inputs!B2", "1_Inputs!B3", "1_Inputs!B4"] {
+            assert!(
+                props.contains_key(key),
+                "overrides advertises the variable-tier key `{key}` (got {props:?})"
+            );
+            assert_eq!(
+                override_props[key]["type"],
+                json!(["number", "string", "boolean", "null"]),
+                "each advertised override carries the permissive value-type union"
+            );
+        }
+        // Computed outputs are NEVER advertised as overridable (WR-02).
+        assert!(
+            !props.contains_key("3_Outputs!B2") && !props.contains_key("taxable_income"),
+            "a computed output is never an advertised override key"
+        );
+    }
+
+    #[test]
+    fn overrides_advertise_named_param_keys() {
+        // With a NAMED variable-tier input, the advertised override key is the
+        // human param name (variable_tier_keys uses name.or(cell)).
+        let mut named = input_role("1_Inputs!B2", Dtype::Number, "Gross income", None);
+        named.name = Some("in_gross_income".to_string());
+        let m = manifest_with(vec![named, output_role("3_Outputs!B2", "Taxable income")]);
+        let cm = CellMap {
+            inputs: vec![CellEntry {
+                json_key: "gross_income".to_string(),
+                seed_coord: "1_Inputs!B2".to_string(),
+                unit: Some("USD".to_string()),
+            }],
+            tools: vec![Tool {
+                name: "calculate".to_string(),
+                description: None,
+                input_keys: Vec::new(),
+                outputs: vec![CellEntry {
+                    json_key: "taxable_income".to_string(),
+                    seed_coord: "3_Outputs!B2".to_string(),
+                    unit: Some("USD".to_string()),
+                }],
+                oracle: std::collections::BTreeMap::new(),
+            }],
+        };
+        let schema = input_schema_for_manifest(&m, &cm);
+        let override_props = &schema["properties"]["overrides"]["properties"];
+        assert!(
+            override_props["in_gross_income"].is_object(),
+            "the named variable-tier param is advertised under its name"
+        );
+    }
+
+    #[test]
+    fn overrides_keep_open_additional_properties_for_discoverability_only() {
+        // F2 is advertisement-only: the open value-typed additionalProperties map
+        // is PRESERVED (validate_input's accept/reject behavior is unchanged) and
+        // the prose description stays.
+        let (m, cm) = three_input_manifest_and_map();
+        let schema = input_schema_for_manifest(&m, &cm);
+        let overrides = &schema["properties"]["overrides"];
+        assert_eq!(
+            overrides["additionalProperties"],
+            json!({ "type": ["number", "string", "boolean", "null"] }),
+            "the open value-typed additionalProperties map is preserved"
+        );
+        assert!(
+            overrides["description"].as_str().is_some(),
+            "the prose override description is retained"
+        );
+    }
+
+    #[test]
     fn provenance_schema_uses_combined_hash_never_workbook_hash() {
         let schema = provenance_schema();
         let props = &schema["properties"];
@@ -527,5 +728,56 @@ mod tests {
             schema["required"],
             json!(["bundle_id", "version", "combined_hash"])
         );
+    }
+
+    #[test]
+    fn empty_input_keys_projects_full_pool() {
+        // CR-02 defense-in-depth: a Tool with EMPTY input_keys must advertise the
+        // FULL shared-input pool (never an empty inputs.properties while
+        // validate_input accepts the pool — the served schema can never be stricter
+        // than the runtime). three_input_manifest_and_map's single tool has empty
+        // input_keys.
+        let (m, cm) = three_input_manifest_and_map();
+        let tool = &cm.tools[0];
+        assert!(
+            tool.input_keys.is_empty(),
+            "the fixture tool has no derived keys"
+        );
+        let schema = input_schema_for_tool(&m, &cm, tool);
+        let props = schema["properties"]["inputs"]["properties"]
+            .as_object()
+            .expect("inputs.properties object");
+        assert!(
+            !props.is_empty(),
+            "an empty-input_keys tool advertises the full pool, not an empty schema"
+        );
+        // Every shared input key is advertised (the full pool projection).
+        for key in ["gross_income", "filing_status", "deductions"] {
+            assert!(
+                props.contains_key(key),
+                "the full shared-input pool is advertised: missing {key}"
+            );
+        }
+        // The strict envelope survives (V5).
+        assert_eq!(
+            schema["properties"]["inputs"]["additionalProperties"],
+            json!(false),
+            "the strict per-tool envelope is preserved"
+        );
+    }
+
+    #[test]
+    fn populated_input_keys_projects_only_reached() {
+        // The complement: a populated input_keys projects EXACTLY those keys (the
+        // production multi-tool shape — unchanged by the CR-02 fallback).
+        let (m, mut cm) = three_input_manifest_and_map();
+        cm.tools[0].input_keys = vec!["gross_income".to_string()];
+        let schema = input_schema_for_tool(&m, &cm, &cm.tools[0]);
+        let props = schema["properties"]["inputs"]["properties"]
+            .as_object()
+            .expect("inputs.properties object");
+        assert_eq!(props.len(), 1, "only the reached key is projected");
+        assert!(props.contains_key("gross_income"));
+        assert!(!props.contains_key("deductions"));
     }
 }

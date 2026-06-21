@@ -301,6 +301,7 @@ mod tests {
                 merges: vec![],
                 cf_ranges: vec![],
                 tables: vec![],
+                table_records: vec![],
                 data_validations: vec![],
                 notes: vec![],
                 cells: vec![cell(addr, cell_value)],
@@ -480,6 +481,7 @@ mod tests {
                 merges: vec![],
                 cf_ranges: vec![],
                 tables: vec![],
+                table_records: vec![],
                 data_validations: vec![],
                 notes: vec![],
                 cells: vec![cell("B1", Some("2.0"))],
@@ -560,6 +562,7 @@ mod wired_path_integration {
                 merges: vec![],
                 cf_ranges: vec![],
                 tables: vec![],
+                table_records: vec![],
                 data_validations: vec![],
                 notes: vec![],
                 cells: vec![CellRecord {

@@ -25,7 +25,7 @@ use crate::{LintFinding, Severity};
 
 pub use cell_map::{
     cell_key, CellRecord, DataValidationRecord, DefinedNameRecord, DefinedNameScope, FormulaKind,
-    NoteRecord, RangeRef, SheetRecord, WorkbookMap,
+    NoteRecord, RangeRef, SheetRecord, TableRecord, WorkbookMap,
 };
 use umya_spreadsheet::structs::Comment;
 
@@ -42,6 +42,20 @@ pub enum IngestError {
         path: String,
         /// The underlying `umya` error rendered as text.
         detail: String,
+    },
+    /// `umya` PANICKED while extracting an Excel Table (it `.unwrap()`s on
+    /// malformed `xl/tables/tableN.xml`; §2 caveat 1 / Pitfall 2). The panic was
+    /// CONTAINED at a `catch_unwind` seam ([`read_workbook_contained`] for the
+    /// eager read, [`extract_tables_contained`] for the worksheet accessor span)
+    /// and mapped to this clean typed error — a bad workbook is a clean compile
+    /// error, NEVER a process abort (T-100-03 DoS mitigation). `lib.rs` maps this
+    /// to `CompileError::Ingest`.
+    #[error("malformed table XML while ingesting {location}")]
+    MalformedTable {
+        /// The location whose Table parse/extraction panicked inside `umya` (the
+        /// workbook path for the eager-read seam, or the sheet name for the
+        /// worksheet accessor seam).
+        location: String,
     },
 }
 
@@ -118,10 +132,14 @@ fn is_external_bracket(inner: &str, prev_is_ident: bool) -> bool {
 /// Every `umya` `Option`/`Result` on the value path is matched into
 /// `None`/empty/`Normal` or a finding — NEVER `.unwrap()`-ed.
 pub fn ingest(path: &Path) -> Result<(WorkbookMap, Vec<LintFinding>), IngestError> {
-    let book = reader::xlsx::read(path).map_err(|e| IngestError::Read {
-        path: path.display().to_string(),
-        detail: format!("{e:?}"),
-    })?;
+    // PANIC-CONTAINMENT seam (T-100-03 DoS): umya parses `xl/tables/tableN.xml`
+    // EAGERLY inside `reader::xlsx::read` and `.unwrap()`s on malformed table XML
+    // (§2 caveat 1 / Pitfall 2). The read is therefore wrapped in `catch_unwind` so
+    // a malformed-table workbook is a clean typed `IngestError` (which `lib.rs` maps
+    // to `CompileError::Ingest`), NEVER a process abort. The fuzz target
+    // `workbook_table_ingest` (Task 3) asserts THIS boundary holds over arbitrary
+    // bytes.
+    let book = read_workbook_contained(path)?;
 
     let mut findings: Vec<LintFinding> = Vec::new();
     let mut external_links: Vec<String> = Vec::new();
@@ -132,8 +150,12 @@ pub fn ingest(path: &Path) -> Result<(WorkbookMap, Vec<LintFinding>), IngestErro
     let mut cell_cap_hit = false;
 
     for ws in book.sheet_collection() {
-        let (sheet, hit_cap) =
+        let (mut sheet, hit_cap) =
             collect_sheet(ws, &mut external_links, &mut findings, &mut total_cells);
+        // WBV2-02: harvest each Excel Table's name + columns inside the
+        // panic-containment seam so malformed table XML is a clean typed error,
+        // never a `umya` `.unwrap()` abort (T-100-03 DoS mitigation).
+        sheet.table_records = extract_tables_contained(ws, &sheet.name)?;
         sheets.push(sheet);
         if hit_cap {
             cell_cap_hit = true;
@@ -159,6 +181,36 @@ pub fn ingest(path: &Path) -> Result<(WorkbookMap, Vec<LintFinding>), IngestErro
     };
 
     Ok((map, findings))
+}
+
+/// Read a workbook through `umya`'s `reader::xlsx::read`, CONTAINING the malformed-
+/// table-XML panic (§2 caveat 1) at a [`std::panic::catch_unwind`] seam.
+///
+/// `umya` parses every `xl/tables/tableN.xml` eagerly during the read and
+/// `.unwrap()`s on a syntactically broken table part — that panic would otherwise
+/// cross the umya-isolation boundary and abort the process (T-100-03 DoS). Here a
+/// caught panic maps to a clean [`IngestError::MalformedTable`]; a normal read
+/// error stays an [`IngestError::Read`]. The default panic print is suppressed for
+/// the contained span only via a temporary no-op hook (restored afterwards) so a
+/// malformed workbook does not spew an internal `umya` backtrace.
+fn read_workbook_contained(path: &Path) -> Result<umya_spreadsheet::Workbook, IngestError> {
+    let prev_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(|_| {}));
+    let read_result =
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| reader::xlsx::read(path)));
+    std::panic::set_hook(prev_hook);
+
+    match read_result {
+        // The read ran without panicking — surface umya's own typed read error.
+        Ok(inner) => inner.map_err(|e| IngestError::Read {
+            path: path.display().to_string(),
+            detail: format!("{e:?}"),
+        }),
+        // umya panicked parsing a malformed table part — contained to a clean error.
+        Err(_) => Err(IngestError::MalformedTable {
+            location: path.display().to_string(),
+        }),
+    }
 }
 
 /// The lower-cased file extension (`"xlsx"`/`"xlsm"`/…) of the source path, or
@@ -244,6 +296,9 @@ fn collect_sheet(
         merges: merge_ranges(ws, &sheet_name),
         cf_ranges: conditional_format_ranges(ws, &sheet_name),
         tables: table_ranges(ws, &sheet_name),
+        // WBV2-02 harvest is filled by `extract_tables_contained` (the panic seam)
+        // at the `ingest()` entry-point loop, not here (this fn is infallible).
+        table_records: Vec::new(),
         data_validations: data_validations(ws, &sheet_name),
         notes: sheet_notes(ws),
         cells,
@@ -320,6 +375,61 @@ fn table_ranges(ws: &umya_spreadsheet::Worksheet, sheet_name: &str) -> Vec<Range
             }
         })
         .collect()
+}
+
+/// Harvest each Excel Table's `name` + column header names + `area` into owned
+/// [`TableRecord`]s (WBV2-02 — the §4 tool-name + §3.2 schema raw material).
+///
+/// Modeled on [`table_ranges`] but additionally calling `t.name()` and
+/// `t.columns()` (umya 3.0.0; the non-deprecated accessors). NEVER `.unwrap()`s a
+/// `umya` accessor (the crate deny gate) — `name`/`columns`/`area` are total reads.
+/// The MALFORMED-table-XML panic that `umya` raises internally (§2 caveat 1) is
+/// contained one level up in [`extract_tables_contained`], NOT here — this fn only
+/// runs once the containment seam has driven the read.
+fn table_records(ws: &umya_spreadsheet::Worksheet, sheet_name: &str) -> Vec<TableRecord> {
+    ws.tables()
+        .iter()
+        .map(|t| {
+            let (start, end) = t.area();
+            TableRecord {
+                name: t.name().to_string(),
+                area: RangeRef {
+                    sheet: sheet_name.to_string(),
+                    start: start.get_coordinate(),
+                    end: end.get_coordinate(),
+                },
+                columns: t.columns().iter().map(|c| c.name().to_string()).collect(),
+            }
+        })
+        .collect()
+}
+
+/// The PANIC-CONTAINMENT seam (T-100-03 DoS mitigation): `umya` `.unwrap()`s
+/// internally on malformed `xl/tables/tableN.xml` (§2 caveat 1 / Pitfall 2), so a
+/// defensive accessor discipline in [`table_records`] is necessary but NOT
+/// sufficient — a panic can still originate inside `umya`'s own
+/// `tables()`/`Table` accessors. Wrap the WHOLE `umya`-touching table-extraction
+/// span in [`std::panic::catch_unwind`] and map a caught panic (an `Err`) to a
+/// clean [`IngestError::MalformedTable`] (which `lib.rs` maps to
+/// `CompileError::Ingest`). The default panic print is suppressed for the duration
+/// via a temporary no-op panic hook so a malformed workbook does not spew an
+/// internal `umya` backtrace to stderr. The fuzz target `workbook_table_ingest`
+/// (Task 3) asserts THIS boundary holds over arbitrary bytes.
+fn extract_tables_contained(
+    ws: &umya_spreadsheet::Worksheet,
+    sheet_name: &str,
+) -> Result<Vec<TableRecord>, IngestError> {
+    // Suppress the default panic print for the contained span only (restored after).
+    let prev_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(|_| {}));
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        table_records(ws, sheet_name)
+    }));
+    std::panic::set_hook(prev_hook);
+
+    result.map_err(|_| IngestError::MalformedTable {
+        location: sheet_name.to_string(),
+    })
 }
 
 /// Data validations → owned [`DataValidationRecord`]s, ONE record per
@@ -819,6 +929,156 @@ mod tests {
         assert_eq!(sheet.data_validations.len(), 3);
     }
 
+    /// The committed shipped template fixture (Plan 01) carrying the Inputs +
+    /// Calculate_Tax + Estimate_Refund Excel Tables.
+    fn template_fixture_path() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/template.xlsx")
+    }
+
+    #[test]
+    fn table_records_harvest_template_names_and_columns() {
+        // WBV2-02: ingesting the REAL shipped template.xlsx harvests each Excel
+        // Table's NAME + COLUMN HEADERS (not just its area) into owned TableRecords.
+        let result = ingest(&template_fixture_path());
+        let (map, _findings) = result.expect("ingest the shipped template");
+
+        let all_tables: Vec<&TableRecord> =
+            map.sheets.iter().flat_map(|s| &s.table_records).collect();
+
+        let by_name = |name: &str| all_tables.iter().find(|t| t.name == name).copied();
+
+        let inputs = by_name("Inputs").expect("the Inputs Table is harvested");
+        assert!(
+            inputs.columns.starts_with(&[
+                "name".to_string(),
+                "value".to_string(),
+                "description".to_string()
+            ]),
+            "Inputs columns start name|value|description, got {:?}",
+            inputs.columns
+        );
+        assert!(
+            inputs.columns.contains(&"tier".to_string()),
+            "the Inputs Table carries a `tier` governance column, got {:?}",
+            inputs.columns
+        );
+
+        for tool_table in ["Calculate_Tax", "Estimate_Refund"] {
+            let t = by_name(tool_table)
+                .unwrap_or_else(|| panic!("the {tool_table} output Table is harvested"));
+            assert!(
+                t.columns.starts_with(&[
+                    "name".to_string(),
+                    "value".to_string(),
+                    "description".to_string()
+                ]),
+                "{tool_table} columns start name|value|description, got {:?}",
+                t.columns
+            );
+        }
+    }
+
+    #[test]
+    fn workbook_with_zero_tables_yields_empty_table_records() {
+        use umya_spreadsheet::writer;
+
+        let out = tmp_out("no-tables");
+        {
+            let mut book = umya_spreadsheet::new_file();
+            let ws = book.sheet_by_name_mut("Sheet1").expect("Sheet1 exists");
+            ws.cell_mut("A1").set_value_string("plain");
+            writer::xlsx::write(&book, &out).expect("write a table-free workbook");
+        }
+        let result = ingest(&out);
+        let _ = std::fs::remove_file(&out);
+        let (map, _findings) = result.expect("ingest the table-free workbook");
+
+        assert!(
+            map.sheets.iter().all(|s| s.table_records.is_empty()),
+            "a workbook with zero Excel Tables harvests an empty table_records vec (no panic)"
+        );
+    }
+
+    #[test]
+    fn corrupted_table_xml_returns_clean_ingest_error_not_a_panic() {
+        // T-100-03 DoS mitigation: a workbook whose `xl/tables/tableN.xml` is
+        // corrupted/truncated must return `Err(IngestError::MalformedTable)` via the
+        // `extract_tables_contained` catch_unwind seam — NOT a panic/abort. We take
+        // the real shipped template (which carries table parts), rewrite every
+        // `xl/tables/*.xml` with garbage, and assert ingest returns a clean error.
+        use std::io::{Read, Write};
+
+        let original = std::fs::read(template_fixture_path()).expect("read the template fixture");
+        let mut had_table_part = false;
+        let corrupted = {
+            let mut archive = zip::ZipArchive::new(std::io::Cursor::new(&original))
+                .expect("the template is a valid zip");
+            let mut out_buf = Vec::new();
+            {
+                let cursor = std::io::Cursor::new(&mut out_buf);
+                let mut w = zip::ZipWriter::new(cursor);
+                let opts: zip::write::FileOptions<()> = zip::write::FileOptions::default();
+                for i in 0..archive.len() {
+                    let mut entry = archive.by_index(i).expect("zip entry");
+                    let name = entry.name().to_string();
+                    w.start_file(&name, opts).expect("start entry");
+                    if name.starts_with("xl/tables/") && name.ends_with(".xml") {
+                        had_table_part = true;
+                        // Truncated/garbage table XML — umya `.unwrap()`s on this.
+                        w.write_all(b"<table><<<NOT-VALID-TABLE-XML")
+                            .expect("write garbage table part");
+                    } else {
+                        let mut content = Vec::new();
+                        entry.read_to_end(&mut content).expect("read entry");
+                        w.write_all(&content).expect("copy entry");
+                    }
+                }
+                w.finish().expect("finish corrupted zip");
+            }
+            out_buf
+        };
+        assert!(
+            had_table_part,
+            "the template fixture must carry at least one xl/tables/*.xml to corrupt"
+        );
+
+        let out = tmp_out("corrupt-table");
+        std::fs::write(&out, &corrupted).expect("write the corrupted workbook");
+        let result = ingest(&out);
+        let _ = std::fs::remove_file(&out);
+
+        // The contract: a clean typed error, NEVER a panic/abort. (Either the read
+        // fails outright with Read, or the table-extraction seam catches the umya
+        // panic and maps it to MalformedTable — both are clean `Err`, no panic.)
+        match result {
+            Ok((map, _)) => {
+                // If umya tolerated the garbage without panicking, the harvest must
+                // still be sound (no panic crossed the boundary) — acceptable, but
+                // assert we did not silently fabricate table records from garbage.
+                let any_garbage_named = map
+                    .sheets
+                    .iter()
+                    .flat_map(|s| &s.table_records)
+                    .any(|t| t.name.contains("NOT-VALID"));
+                assert!(
+                    !any_garbage_named,
+                    "garbage table XML must not produce a fabricated named TableRecord"
+                );
+            },
+            Err(e) => {
+                // The expected path: a clean typed error (Read or MalformedTable),
+                // proving no panic crossed the umya-isolation boundary.
+                assert!(
+                    matches!(
+                        e,
+                        IngestError::MalformedTable { .. } | IngestError::Read { .. }
+                    ),
+                    "corrupted table XML must surface as a clean IngestError, got {e:?}"
+                );
+            },
+        }
+    }
+
     #[test]
     fn sheet_with_zero_data_validations_yields_empty_vec() {
         use umya_spreadsheet::writer;
@@ -932,6 +1192,7 @@ mod tests {
                 merges: vec![],
                 cf_ranges: vec![],
                 tables: vec![],
+                table_records: vec![],
                 data_validations: vec![],
                 notes: vec![],
                 cells,

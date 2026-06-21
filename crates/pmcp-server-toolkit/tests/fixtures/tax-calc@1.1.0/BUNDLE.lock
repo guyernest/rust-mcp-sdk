@@ -3,9 +3,9 @@
   "version": "1.1.0",
   "workbook_hash": "b0b85e69dcae2c353faeee2ddf4c94e1f3c493549330ee7733cc02c650e12c09",
   "artifacts": {
-    "executable": "f041a219a8474e9388a055de1f7e6b138545eaa9c4b06ff78362616e4b6708d1",
-    "manifest": "28915b548b7b489586c7d561385dfcb37426cc927d7ac344685359719995e895",
-    "evidence": "d7ef67828cbc9418dbcd163256912388acdf513a914d9e2c1e5cce70a1de5580"
+    "executable": "02a57f75e177b8cf45aefcd9d2ebc6205f27078a387dc904c86891433d2e7cd2",
+    "manifest": "9adc8cb51278dc204e3ff2393e1c3f597bba486d66188946c5c54e2fdc7cd65b",
+    "evidence": "ed3affcd28367849c9c0127cbb594ca6e3c9544e102959e3487975fdea36ffee"
   },
-  "combined": "5e7d79df5c787682c50a994616084e6f2a7b907f60d69bbde52b0e5d5a53948a"
+  "combined": "eaa683dcab6e0a832819034a4ca45aacfda1e809de66d401194114f19fe43262"
 }

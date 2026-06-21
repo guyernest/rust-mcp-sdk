@@ -21,8 +21,12 @@
 //! are the SINGLE source the emitter and the server-side integrity check share —
 //! they MUST byte-reproduce each other or the integrity check false-positives.
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+
+use crate::sheet_ir::value::CellValue;
 
 /// One input/output cell entry in a [`CellMap`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -35,17 +39,56 @@ pub struct CellEntry {
     pub unit: Option<String>,
 }
 
-/// The manifest-driven I/O cell map (Codex HIGH #5): the inputs/outputs the served
-/// `calculate` seeds and projects.
+/// One served tool — the multi-tool model lift (WBV2-03, §4.1): each output Table in
+/// the source workbook becomes its OWN [`Tool`], owning its `outputs` projection and a
+/// minimal, DAG-derived `input_keys` schema (the subset of the shared [`CellMap::inputs`]
+/// pool transitively reachable upstream of this tool's output cells).
 ///
-/// There is NO privileged-headline field (S-1): the served all-outputs path
-/// iterates [`CellMap::outputs`] independently, so no single output is elevated.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct CellMap {
-    /// One entry per `Role::Input` cell (the seedable per-call inputs).
-    pub inputs: Vec<CellEntry>,
-    /// One entry per `Role::Output` cell (the projected answers).
+/// This type crosses the reader-free boundary (it lives HERE, beside [`CellMap`], not
+/// re-declared on the served side): both the offline compiler emitter and the served
+/// binary deserialize ONE definition (artifact_model.rs module doc).
+///
+/// Derive note: `Eq` is DROPPED — `oracle` carries [`CellValue`] (an `f64`-bearing
+/// `Number`), so this type is `PartialEq` but NOT `Eq` (the [`crate::manifest_model`]
+/// `GovernedDatum` precedent).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct Tool {
+    /// The tool name — derived from the owning output Table's name (raw; MCP-charset
+    /// sanitization happens in the served emit, Plan 04).
+    pub name: String,
+    /// The tool description — the caption cell above the output Table, when authored.
+    pub description: Option<String>,
+    /// The minimal input schema: the LLM-facing `json_key`s of the [`CellMap::inputs`]
+    /// pool entries transitively reachable upstream of this tool's outputs (constant-only
+    /// paths excluded; shared intermediates yield the union of this tool's own upstream
+    /// leaves). DAG-derived via [`crate::dag::upstream_input_leaves`].
+    pub input_keys: Vec<String>,
+    /// One entry per output cell this tool projects (reuses [`CellEntry`] — the same
+    /// `{json_key, seed_coord, unit}` shape the inputs use).
     pub outputs: Vec<CellEntry>,
+    /// The per-tool reconcile oracle: `<output json_key>` → the authored expected value
+    /// (the cached `<v>` cell value). Carries a typed [`CellValue`] (the `f64`-bearing
+    /// `Number` that drops `Eq`).
+    pub oracle: BTreeMap<String, CellValue>,
+}
+
+/// The manifest-driven I/O cell map (Codex HIGH #5): the shared inputs pool + the
+/// per-Table [`Tool`]s the served binary fans out into one MCP tool each (WBV2-03 §4.1).
+///
+/// The single-tool `outputs: Vec<CellEntry>` FIELD was lifted to `tools: Vec<Tool>`:
+/// each [`Tool`] owns its own outputs + minimal `input_keys`, so the N=1 (single output
+/// Table) case is just `tools.len() == 1` — never special-cased. `inputs` stays the
+/// shared pool every tool draws its `input_keys` from.
+///
+/// Derive note: `Eq` is DROPPED because [`Tool::oracle`] carries an `f64`-bearing
+/// [`CellValue`]; the map is `PartialEq` but NOT `Eq`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct CellMap {
+    /// One entry per `Role::Input` cell (the shared seedable per-call input pool every
+    /// tool's `input_keys` draws from).
+    pub inputs: Vec<CellEntry>,
+    /// One [`Tool`] per output Table (WBV2-03 §4.1) — the multi-tool fan-out.
+    pub tools: Vec<Tool>,
 }
 
 /// The three per-artifact content hashes recorded in a [`BundleLock`].
@@ -157,6 +200,105 @@ mod tests {
 
     fn workbook_hash() -> String {
         sha256_hex(b"S!A1|10|\nS!B1|0.37|")
+    }
+
+    fn entry(json_key: &str, seed: &str, unit: Option<&str>) -> CellEntry {
+        CellEntry {
+            json_key: json_key.to_string(),
+            seed_coord: seed.to_string(),
+            unit: unit.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn artifact_model_tool_round_trips_through_serde() {
+        let mut oracle = BTreeMap::new();
+        oracle.insert("tax_owed".to_string(), CellValue::Number(18241.0));
+        let tool = Tool {
+            name: "Calculate_Tax".to_string(),
+            description: Some("Compute the tax owed".to_string()),
+            input_keys: vec!["income".to_string(), "filing".to_string()],
+            outputs: vec![entry("tax_owed", "Calc!B3", Some("USD"))],
+            oracle,
+        };
+        let json = serde_json::to_string(&tool).expect("serialize Tool");
+        let back: Tool = serde_json::from_str(&json).expect("deserialize Tool");
+        assert_eq!(
+            tool, back,
+            "Tool must serde round-trip preserving all fields"
+        );
+        assert_eq!(back.name, "Calculate_Tax");
+        assert_eq!(back.description.as_deref(), Some("Compute the tax owed"));
+        assert_eq!(back.input_keys, vec!["income", "filing"]);
+        assert_eq!(back.outputs.len(), 1);
+        assert_eq!(
+            back.oracle.get("tax_owed"),
+            Some(&CellValue::Number(18241.0))
+        );
+    }
+
+    #[test]
+    fn artifact_model_cell_map_with_tools_round_trips() {
+        let map = CellMap {
+            inputs: vec![entry("income", "In!B4", Some("USD"))],
+            tools: vec![Tool {
+                name: "Calculate_Tax".to_string(),
+                description: None,
+                input_keys: vec!["income".to_string()],
+                outputs: vec![entry("tax_owed", "Calc!B3", Some("USD"))],
+                oracle: BTreeMap::new(),
+            }],
+        };
+        let json = serde_json::to_string(&map).expect("serialize CellMap");
+        let back: CellMap = serde_json::from_str(&json).expect("deserialize CellMap");
+        assert_eq!(back.inputs.len(), 1);
+        // The N=1 (single output Table) case is just one tool — no special path.
+        assert_eq!(
+            back.tools.len(),
+            1,
+            "a one-Table manifest yields exactly one Tool"
+        );
+        assert_eq!(back.tools[0].name, "Calculate_Tax");
+    }
+
+    #[test]
+    fn artifact_model_per_tool_outputs_are_independent() {
+        // The shim is RETIRED (Plan 04): every consumer iterates `tools[].outputs`
+        // per-tool. Two tools own DISJOINT output sets — there is no union accessor.
+        let map = CellMap {
+            inputs: vec![],
+            tools: vec![
+                Tool {
+                    name: "A".to_string(),
+                    description: None,
+                    input_keys: vec![],
+                    outputs: vec![entry("a1", "S!A1", None), entry("a2", "S!A2", None)],
+                    oracle: BTreeMap::new(),
+                },
+                Tool {
+                    name: "B".to_string(),
+                    description: None,
+                    input_keys: vec![],
+                    outputs: vec![entry("b1", "S!B1", None)],
+                    oracle: BTreeMap::new(),
+                },
+            ],
+        };
+        let tool_a_keys: Vec<&str> = map.tools[0]
+            .outputs
+            .iter()
+            .map(|e| e.json_key.as_str())
+            .collect();
+        let tool_b_keys: Vec<&str> = map.tools[1]
+            .outputs
+            .iter()
+            .map(|e| e.json_key.as_str())
+            .collect();
+        assert_eq!(tool_a_keys, vec!["a1", "a2"], "tool A owns its outputs");
+        assert_eq!(tool_b_keys, vec!["b1"], "tool B owns its outputs");
+        // The per-tool union, computed inline by consumers (no accessor).
+        let total: usize = map.tools.iter().map(|t| t.outputs.len()).sum();
+        assert_eq!(total, 3, "three output cells across two tools");
     }
 
     #[test]

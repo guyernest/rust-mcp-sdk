@@ -102,3 +102,13 @@ pub mod test_support {
 // test reach `generate` through this seam, NOT the bin-only `templates::*`.
 #[path = "templates/workbook_server.rs"]
 pub mod templates_workbook_server;
+
+// WBV2-06: expose ONLY the PURE `workbook explain` tool-surface projection + render
+// to the lib target (mirrors the `templates_workbook_server` `#[path]` convention).
+// This leaf is dependency-light (pmcp-workbook-compiler `ingest`/`synth` + serde +
+// anyhow; NO `clap`/`GlobalFlags`), so it compiles in the lib target without dragging
+// in the bin-only command layer. The `workbook_explain` example + the
+// `workbook_explain` integration test reach `explain_workbook`/`format_tool_surface`
+// through this seam, NOT the bin-only `commands::workbook::explain` arm.
+#[path = "commands/workbook/explain_surface.rs"]
+pub mod workbook_explain;
