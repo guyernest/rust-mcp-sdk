@@ -1348,7 +1348,7 @@ Plans:
 
 **Source**: pmcp.run dev-team feedback + multi-turn design convergence (2026-06-20); spec at `docs/design/workbook-table-authoring-contract.md`.
 
-**Plans:** 7/7 plans complete
+**Plans:** 8 plans (7/7 complete + 100-08 gap closure)
 
 Plans:
 
@@ -1379,6 +1379,10 @@ Plans:
 **Wave 7** *(gap closure — verification found WBV2-04 BLOCKER)*
 
 - [x] 100-07-PLAN.md — WBV2-04 (gap): wire build_tools + tool_name_collision_findings + reconcile_tools into the production emit_bundle/compile_workbook_inner path (replacing single-tool build_cell_map); OutputTable membership from harvested table_records; CR-02 served-schema fallback; real-compile E2E (template.xlsx → calculate_tax + estimate_refund, disjoint populated input_keys) + tightened reemit proof
+
+**Wave 8** *(gap closure — pmcp.run dev-team review: 3 HIGH publish-blockers + 3 MEDIUM)*
+
+- [ ] 100-08-PLAN.md — WBV2-04/05/06 (gap): re-point `cargo pmcp workbook explain` at the PRODUCTION build_tools projection (delete bespoke walker; explain↔served parity test on template.xlsx) [H1]; reject value-shaped input names [H2] + reserved meta-tool-name output Tables [H3] + colliding output keys [M4] at compile (both lanes); get_manifest surfaces the stripped json_key == served schema [M5]; wire each tool's oracle from cached cell values so per-tool reconcile blocks on a perturbed output [M6]. 4 LOW findings deferred.
 
 ---
 
