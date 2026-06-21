@@ -2,7 +2,7 @@
 source: pmcp.run dev-team review of fix/cargo-pmcp-deploy-stack-ts (post-Phase-100)
 reviewed: 2026-06-20
 verified_against_code: true
-status: gaps_found
+status: resolved
 scope_for_100-08: [H1, H2, H3, M4, M5, M6]
 deferred_low: [L-i, L-ii, L-iii, L-iv]
 ---
