@@ -58,12 +58,11 @@ cargo pmcp workbook explain <WORKBOOK_PATH> [--format <text|json>]
 ### Example
 
 ```
-$ cargo pmcp workbook explain pricing.xlsx
+$ cargo pmcp workbook explain template.xlsx
 tool calculate_tax
   description: Compute federal tax from income & filing
   inputs:
-    income: number [USD]
-    filing: string [enum: single|married]
+    income: number
   outputs:
     tax_owed: number
     effective_rate: number
@@ -71,8 +70,8 @@ tool calculate_tax
 tool estimate_refund
   description: Estimate refund given withholding
   inputs:
-    income: number [USD]
-    withheld: number [USD]
+    income: number
+    withheld: number
   outputs:
     refund: number
 ```

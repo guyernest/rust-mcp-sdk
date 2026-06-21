@@ -208,25 +208,27 @@ cargo pmcp workbook explain template.xlsx
 tool calculate_tax
   description: Compute federal tax from income & filing
   inputs:
-    filing: string [enum: single|married]
-    income: number [USD]
+    income: number
   outputs:
     tax_owed: number
     effective_rate: number
 tool estimate_refund
   description: Estimate refund given withholding
   inputs:
-    filing: string [enum: single|married]
-    income: number [USD]
-    withheld: number [USD]
+    income: number
+    withheld: number
   outputs:
     refund: number
 ```
 
-This is **exactly the tool surface an AI will see**: the tool names, their descriptions
-(your captions), and the per-tool input/output schemas (DAG-derived, typed, with units
-and enums). Read it as a coherent "what I do / how to call me" — that is what an LLM
-reads. For tooling, `--format json` emits the same surface as JSON:
+This is **exactly the tool surface an AI will see** — the preview is projected through the
+same compiler path the server registers, so it cannot drift from what gets served: the
+tool names, their descriptions (your captions), and the per-tool input/output schemas
+(DAG-derived and typed; units and enums appear when the workbook declares them on a tool's
+reached inputs). Note `calculate_tax` advertises only `income`, not `filing` — `filing`'s
+cell isn't referenced by any tax formula, so the DAG doesn't surface it on that tool; that
+minimal, per-tool input set is the contract working. Read it as a coherent "what I do / how
+to call me" — that is what an LLM reads. For tooling, `--format json` emits the same surface as JSON:
 
 ```sh
 cargo pmcp workbook explain template.xlsx --format json

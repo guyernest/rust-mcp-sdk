@@ -174,24 +174,25 @@ cargo pmcp workbook explain template.xlsx
 tool calculate_tax
   description: Compute federal tax from income & filing
   inputs:
-    filing: string [enum: single|married]
-    income: number [USD]
+    income: number
   outputs:
     tax_owed: number
     effective_rate: number
 tool estimate_refund
   description: Estimate refund given withholding
   inputs:
-    filing: string [enum: single|married]
-    income: number [USD]
-    withheld: number [USD]
+    income: number
+    withheld: number
   outputs:
     refund: number
 ```
 
-Read this the way an LLM does — as a coherent "what I do / how to call me." If a tool
-name is cryptic, a description is missing, or an input is unexpected, you fix the *Excel*
-and re-run. For tooling, `--format json` emits the same surface:
+Read this the way an LLM does — as a coherent "what I do / how to call me." The preview is
+projected through the same compiler path the server registers, so it can't drift from what
+gets served. Note `calculate_tax` advertises only `income`, not `filing` — `filing` isn't
+referenced by any tax formula, so the DAG doesn't surface it on that tool (the per-tool
+minimal-input contract). If a tool name is cryptic, a description is missing, or an input is
+unexpected, you fix the *Excel* and re-run. For tooling, `--format json` emits the same surface:
 
 ```sh
 cargo pmcp workbook explain template.xlsx --format json
