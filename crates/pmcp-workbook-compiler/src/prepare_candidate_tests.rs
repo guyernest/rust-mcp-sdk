@@ -213,6 +213,8 @@ fn candidate_fields_assemble_a_promote_inputs() {
         changelog: &changelog,
         parser_equivalence: &candidate.parser_equivalence,
         workbook_hash: candidate.candidate_workbook_hash.clone(),
+        output_tables: &candidate.output_tables,
+        dag: &candidate.dag,
     };
 
     // Sanity: the assembled PromoteInputs reflects the candidate's stamp-binding

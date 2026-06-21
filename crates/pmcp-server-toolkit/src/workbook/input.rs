@@ -296,7 +296,12 @@ fn find_role_by_key<'a>(manifest: &'a Manifest, key: &str) -> Option<&'a CellRol
 
 /// The variable-tier override keys a caller MAY set (the
 /// `strict_constant_override` allowed alternatives).
-fn variable_tier_keys(manifest: &Manifest) -> Vec<String> {
+///
+/// `pub(crate)` so the served `calculate` input schema builder
+/// ([`crate::workbook::schema::input_schema_for_manifest`]) can ADVERTISE the legal
+/// override keys as a `properties` map (F2) — the SAME list this validator and the
+/// reject path use, so "what we advertise" and "what we accept" cannot drift.
+pub(crate) fn variable_tier_keys(manifest: &Manifest) -> Vec<String> {
     manifest
         .cells
         .iter()
@@ -313,7 +318,7 @@ fn known_input_keys(cell_map: &CellMap) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pmcp_workbook_runtime::{CellEntry, CellMap};
+    use pmcp_workbook_runtime::{CellEntry, CellMap, Tool};
     use proptest::prelude::*;
     use serde_json::json;
 
@@ -410,10 +415,16 @@ mod tests {
                     unit: None,
                 },
             ],
-            outputs: vec![CellEntry {
-                json_key: "tax_owed".to_string(),
-                seed_coord: "3_Outputs!B3".to_string(),
-                unit: Some("USD".to_string()),
+            tools: vec![Tool {
+                name: "calculate".to_string(),
+                description: None,
+                input_keys: Vec::new(),
+                outputs: vec![CellEntry {
+                    json_key: "tax_owed".to_string(),
+                    seed_coord: "3_Outputs!B3".to_string(),
+                    unit: Some("USD".to_string()),
+                }],
+                oracle: std::collections::BTreeMap::new(),
             }],
         }
     }

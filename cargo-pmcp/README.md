@@ -225,6 +225,49 @@ production** — `cargo pmcp deploy` substitutes one automatically.
 > add a local `[patch.crates-io]` (or path dependencies) so `cargo run` resolves
 > against your in-repo build.
 
+## Config-Driven Workbook Server (`new --kind workbook-server`)
+
+The spreadsheet sibling of `--kind sql-server`: a business analyst authors the
+contract in **standard Excel** — name the inputs and each result block as Excel
+**Tables** with columns `name | value | description | tier` — and the compiler
+derives a well-named, well-typed MCP tool surface. **Each output table becomes
+its own MCP tool** (e.g. `calculate_tax`, `estimate_refund`), each advertising a
+DAG-derived input schema (only the inputs that table's formulas actually use) and
+an emitted output schema. No per-cell named ranges, **no Rust required**.
+
+> **Two shapes, same toolkit.** `cargo pmcp new my-workbook --kind workbook-server`
+> ("Shape B") scaffolds a small crate you own and can extend. There is also a
+> prebuilt `pmcp-workbook-server` *binary* ("Shape A") you point at a compiled
+> bundle and never recompile — see [`crates/pmcp-workbook-server`](../crates/pmcp-workbook-server).
+> Unlike the SQL/OpenAPI kinds, a workbook server takes **no `config.toml` and no
+> schema file**: the single input is a compiled `bundle@version` directory.
+
+The `cargo pmcp workbook` command turns an `.xlsx` into that bundle (and lets you
+preview the surface before you commit to it):
+
+```bash
+# 1. Preview the exact tool surface an AI will see — read-only, writes nothing:
+cargo pmcp workbook explain pricing.xlsx              # text; add --format json for machines
+
+# 2. Lint the workbook against the dialect (cell-precise, fail-helpful):
+cargo pmcp workbook lint pricing.xlsx
+
+# 3. Compile to a governed, gated bundle (records an approver-bound acceptance):
+cargo pmcp workbook compile pricing.xlsx --workflow quote --approver alice
+
+# (dev) Emit an UNGATED bundle for local iteration — no approver required:
+cargo pmcp workbook emit pricing.xlsx --workflow quote
+
+# 4. Serve it — Shape A binary, or your scaffolded Shape B crate:
+pmcp-workbook-server --bundle-dir bundles/quote@1.0.0
+```
+
+`workbook explain` is the habit that prevents a silently-wrong deploy: it runs the
+real ingest → tool-surface projection and prints each tool's name, description,
+inputs (type / unit / enum), and outputs — so you confirm the AI-facing contract
+*before* compiling or shipping. See the **Workbook Table Authoring** chapter in the
+[pmcp-book](https://paiml.github.io/rust-mcp-sdk/book/) for the full authoring guide.
+
 ## End-to-End Example
 
 Walk through the full lifecycle using the `complete` template calculator server.
@@ -321,7 +364,7 @@ cargo pmcp deploy test --verbose
 
 | Command | Description | Reference |
 |---------|-------------|-----------|
-| `new` | Create a new MCP workspace (or `--kind sql-server` / `--kind openapi-server` for a single config-driven crate) | [docs/commands/new.md](docs/commands/new.md) |
+| `new` | Create a new MCP workspace (or `--kind sql-server` / `--kind openapi-server` / `--kind workbook-server` for a single config-driven crate) | [docs/commands/new.md](docs/commands/new.md) |
 | `add` | Add server, tool, or workflow to workspace | [docs/commands/add.md](docs/commands/add.md) |
 | `dev` | Start development server with HTTP transport | [docs/commands/dev.md](docs/commands/dev.md) |
 | `connect` | Connect server to Claude Code, Cursor, or Inspector | [docs/commands/connect.md](docs/commands/connect.md) |
@@ -329,6 +372,7 @@ cargo pmcp deploy test --verbose
 | `loadtest` | Load test with virtual users and performance reports | [docs/commands/loadtest.md](docs/commands/loadtest.md) |
 | `pentest` | Security penetration testing with 32 checks across 7 categories | [src/pentest/README.md](src/pentest/README.md) |
 | `doctor` | Workspace diagnostics — toolchain, dependencies, connectivity | |
+| `workbook` | Preview (`explain`), lint, compile, and emit governed Excel-workbook bundles | [docs/commands/workbook.md](docs/commands/workbook.md) |
 | `schema` | Export, validate, and diff MCP server schemas | [docs/commands/schema.md](docs/commands/schema.md) |
 | `validate` | Validate workflows and server components | [docs/commands/validate.md](docs/commands/validate.md) |
 | `deploy` | Deploy to AWS Lambda, Cloud Run, Azure Container Apps, Workers, pmcp.run | [docs/commands/deploy.md](docs/commands/deploy.md) |

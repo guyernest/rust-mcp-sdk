@@ -44,6 +44,34 @@ use std::collections::BTreeMap;
 
 use serde::Serialize;
 
+/// Classify a workbook's provenance directly from its ORIGINAL on-disk `.xlsx`
+/// bytes — the RAW classification the production [`gate`] performs internally,
+/// exposed as a standalone read so a caller (or a CI fixture test) can assert a
+/// `.xlsx`'s provenance class WITHOUT running a full compile and WITHOUT
+/// consulting any trusted-fixture override sidecar.
+///
+/// This reads `docProps/app.xml` (`<Application>`/`<AppVersion>`) and
+/// `xl/workbook.xml` (`calcPr@calcId`) via the quarantined raw reader
+/// ([`raw_parts`]) and feeds them to the same anchored-identity classifier the
+/// gate uses. The result is the override-free truth: a genuinely
+/// `rust_xlsxwriter`/Excel-authored workbook returns
+/// [`ProvenanceClass::ExcelTrusted`]; a umya-fabricated one returns
+/// [`ProvenanceClass::UmyaFabricated`].
+///
+/// # Errors
+/// Returns a [`ProvenanceError`] when the raw `.xlsx` parts are missing,
+/// malformed, oversize, or otherwise unreadable (fail-closed — never defaults
+/// to trusted).
+pub fn classify_xlsx_bytes(xlsx_bytes: &[u8]) -> Result<ProvenanceClass, ProvenanceError> {
+    let app = raw_parts::read_app_props(xlsx_bytes)?;
+    let calc = raw_parts::read_calc_pr(xlsx_bytes)?;
+    Ok(gate::classify(
+        app.application.as_deref(),
+        app.app_version.as_deref(),
+        calc.calc_id,
+    ))
+}
+
 /// A recoverable provenance-read error. Every variant is the typed outcome of a
 /// malformed / missing / oversize OOXML part — the quarantined reader
 /// ([`raw_parts`]) NEVER `.unwrap()`s a `quick_xml`/`zip` `Result` (the crate

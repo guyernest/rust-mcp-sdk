@@ -1,0 +1,7 @@
+{
+  "kind": "trusted-fixture",
+  "fixture": "range-cross-sheet.xlsx",
+  "reason": "authored by rust_xlsxwriter; the WR-01 hardening multi-sheet fixture (a SUM(range)-reached input AND a cross-sheet-reached input through a REAL compile) — honoured ONLY on the test/dev path. Production still refuses non-fresh provenance.",
+  "authored_by": "rust_xlsxwriter",
+  "scope": "test-path-only"
+}

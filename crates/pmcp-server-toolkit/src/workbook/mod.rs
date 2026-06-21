@@ -49,7 +49,8 @@ pub mod schema;
 pub use error::{to_iserror_result, WorkbookToolError};
 #[doc(inline)]
 pub use handler::{
-    CalculateHandler, DiffVersionHandler, ExplainHandler, GetManifestHandler, RenderWorkbookHandler,
+    sanitize_tool_name, DiffVersionHandler, ExplainHandler, GetManifestHandler,
+    RenderWorkbookHandler, WorkbookToolHandler,
 };
 #[doc(inline)]
 pub use input::{validate_input, ValidatedInput};
@@ -230,26 +231,40 @@ impl WorkbookBuilderExt for ServerBuilder {
         let bundle = Arc::new(load_bundle(source)?);
 
         // Operator visibility (mirrors builder_ext.rs:273-279): a bundle that
-        // declares zero outputs would serve tools that compute nothing useful —
-        // surface that as a warning rather than a silently-empty server.
-        if bundle.cell_map.outputs.is_empty() {
+        // declares zero tools would serve nothing useful — surface that as a
+        // warning rather than a silently-empty server (WBV2-04).
+        if bundle.cell_map.tools.is_empty() {
             tracing::warn!(
                 target: "pmcp_server_toolkit::workbook",
                 bundle_id = %bundle.stamp.bundle_id,
                 version = %bundle.stamp.version,
-                "with_workbook_bundle: bundle declares zero outputs — the served \
-                 tools will compute no output projections (set RUST_LOG=warn to \
-                 surface this)"
+                "with_workbook_bundle: bundle declares zero tools — the server will \
+                 register no workbook compute tools (set RUST_LOG=warn to surface this)"
             );
         }
 
-        // Register the five served tools over the shared verified bundle. Each
-        // handler is `Arc`-cloned so they share ONE verified bundle (no copies).
-        let builder = self
-            .tool_arc(
-                CalculateHandler::NAME,
-                Arc::new(CalculateHandler::new(bundle.clone())),
-            )
+        // WBV2-04 fan-out: register ONE named MCP tool per output Table (each a
+        // WorkbookToolHandler with a per-tool DAG-derived inputSchema + a non-empty
+        // outputSchema). An unmappable tool name fails the boot fail-closed (T-100-10)
+        // rather than registering an uncallable tool. Each handler is `Arc`-cloned so
+        // they share ONE verified bundle (no copies).
+        let mut builder = self;
+        for tool in &bundle.cell_map.tools {
+            let name = sanitize_tool_name(&tool.name).map_err(|e| {
+                crate::error::ToolkitError::Synth(format!(
+                    "workbook output Table '{}' has no MCP-mappable tool name: {}",
+                    tool.name, e.reason
+                ))
+            })?;
+            builder = builder.tool_arc(
+                &name,
+                Arc::new(WorkbookToolHandler::new(bundle.clone(), tool.clone())),
+            );
+        }
+
+        // The four META tools (Explain / GetManifest / DiffVersion / RenderWorkbook)
+        // are workbook-wide (not per-Table), registered UNCHANGED.
+        let builder = builder
             .tool_arc(
                 ExplainHandler::NAME,
                 Arc::new(ExplainHandler::new(bundle.clone())),

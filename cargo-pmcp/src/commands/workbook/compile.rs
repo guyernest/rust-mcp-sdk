@@ -470,6 +470,11 @@ fn promote_candidate(
         changelog: &changelog,
         parser_equivalence: &candidate.parser_equivalence,
         workbook_hash: candidate.candidate_workbook_hash.clone(),
+        // The gated-update CLI lane carries the candidate's harvested output Tables
+        // (empty for the named-range corpus → single-tool fallback; populated for a
+        // Table-authored workbook → per-Table fan-out, WBV2-04).
+        output_tables: &candidate.output_tables,
+        dag: &candidate.dag,
     };
     let lane = EmitLane::GatedUpdate {
         prior_version: prior.version.clone(),

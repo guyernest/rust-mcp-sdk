@@ -264,7 +264,12 @@ impl SqlConnector for MysqlConnector {
             sql: translated,
             ordered_params,
         } = translate_placeholders(sql, Dialect::MySql);
-        let mut q = sqlx::query(&translated);
+        // Why: sqlx 0.9's `SqlSafeStr` bound only accepts `&'static str`; this SQL is
+        // necessarily dynamic (the caller's query, placeholder-translated). It is
+        // injection-safe by construction — `translate_placeholders` emits positional `?`
+        // markers and every value is bound via `bind_one` below (never interpolated) —
+        // so `AssertSqlSafe` is the audited, correct escape hatch.
+        let mut q = sqlx::query(sqlx::AssertSqlSafe(translated));
         for name in &ordered_params {
             let v = params
                 .iter()

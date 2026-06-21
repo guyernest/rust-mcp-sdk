@@ -29,6 +29,14 @@
           "number_format": "#,##0.00",
           "fill_argb": null,
           "font_argb": null
+        },
+        {
+          "addr": "B5",
+          "formula": null,
+          "value": "5000",
+          "number_format": "#,##0.00",
+          "fill_argb": null,
+          "font_argb": null
         }
       ],
       "merges": [],
@@ -127,6 +135,32 @@
           "formula": "2_Brackets!B3",
           "value": "0.22",
           "number_format": "0.00%",
+          "fill_argb": null,
+          "font_argb": null
+        }
+      ],
+      "merges": [],
+      "col_widths": [
+        [
+          1,
+          22.0
+        ],
+        [
+          2,
+          14.0
+        ]
+      ],
+      "hidden_cols": []
+    },
+    {
+      "name": "4_Refund",
+      "hidden": false,
+      "cells": [
+        {
+          "addr": "B2",
+          "formula": "1_Inputs!B5-3_Outputs!B3",
+          "value": "200",
+          "number_format": "#,##0.00",
           "fill_argb": null,
           "font_argb": null
         }

@@ -627,6 +627,7 @@ mod tests {
                 merges: vec![],
                 cf_ranges: vec![],
                 tables: vec![],
+                table_records: vec![],
                 data_validations: vec![],
                 notes: vec![],
                 cells,

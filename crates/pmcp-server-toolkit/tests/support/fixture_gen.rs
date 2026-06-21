@@ -44,7 +44,7 @@ use pmcp_workbook_runtime::render::{CellLayout, LayoutDescriptor, SheetLayout};
 use pmcp_workbook_runtime::sheet_ir::value::CellValue;
 use pmcp_workbook_runtime::{
     build_bundle_lock, fold_evidence_hash, sha256_hex, BinOp, Cell, CellEntry, CellExpr, CellMap,
-    Expr, LAYOUT_DESCRIPTOR_VERSION,
+    Expr, Tool, LAYOUT_DESCRIPTOR_VERSION,
 };
 
 /// The neutral bundle identifier (D-17). The lock's `bundle_id` and the
@@ -60,16 +60,23 @@ pub const PREV_VERSION: &str = "1.0.0";
 const CELL_GROSS_INCOME: &str = "1_Inputs!B2";
 const CELL_FILING_STATUS: &str = "1_Inputs!B3";
 const CELL_DEDUCTIONS: &str = "1_Inputs!B4";
+/// WBV2-04: a second-tool input (tax withheld) — feeds ONLY the refund tool, so the
+/// two tools' DAG-derived input sets are DISJOINT (the multi-tool proof).
+const CELL_WITHHELD: &str = "1_Inputs!B5";
 /// The governed bracket rate-table cells.
 const CELL_BRACKET1_RATE: &str = "2_Brackets!B2";
 const CELL_BRACKET2_RATE: &str = "2_Brackets!B3";
 const CELL_BRACKET1_BOUND: &str = "2_Brackets!A2";
 const CELL_BRACKET2_BOUND: &str = "2_Brackets!A3";
 /// The output-sheet cell keys (multiple named outputs — no headline).
+/// The `Calculate_Tax` output Table (income/deductions → tax).
 const CELL_TAXABLE_INCOME: &str = "3_Outputs!B2";
 const CELL_TAX_OWED: &str = "3_Outputs!B3";
 const CELL_EFFECTIVE_RATE: &str = "3_Outputs!B4";
 const CELL_MARGINAL_RATE: &str = "3_Outputs!B5";
+/// The `Estimate_Refund` output Table (tax + withheld → refund); `refund =
+/// withheld - tax_owed`, so it depends on `withheld` AND (transitively) income.
+const CELL_REFUND: &str = "4_Refund!B2";
 
 /// A deterministic pretty-print of any artifact (the SINGLE serializer config —
 /// Codex MEDIUM #8). `serde_json::to_string_pretty` is fixed two-space indent,
@@ -159,6 +166,10 @@ fn build_ir() -> BTreeMap<String, Cell> {
             expr: CellExpr::Formula(Expr::Ref(CELL_BRACKET2_RATE.to_string())),
         },
     );
+    // refund = withheld - tax_owed (the Estimate_Refund tool's output; depends on
+    // `withheld` AND, transitively via tax_owed, income+deductions).
+    let (k, c) = binop_refs(CELL_REFUND, CELL_WITHHELD, BinOp::Sub, CELL_TAX_OWED);
+    ir.insert(k, c);
     ir
 }
 
@@ -254,6 +265,17 @@ fn build_manifest(workbook_hash: &str) -> Manifest {
                 },
                 None,
             ),
+            input_role(
+                CELL_WITHHELD,
+                "in_withheld",
+                Some("USD"),
+                "Total tax withheld during the year (feeds the refund estimate)",
+                Dtype::Number,
+                InputTier::Variable {
+                    default: CellValue::Number(5_000.0),
+                },
+                None,
+            ),
             output_role(
                 CELL_TAXABLE_INCOME,
                 "out_taxable_income",
@@ -277,6 +299,12 @@ fn build_manifest(workbook_hash: &str) -> Manifest {
                 "out_marginal_rate",
                 "ratio",
                 "The rate applied to the next dollar of income",
+            ),
+            output_role(
+                CELL_REFUND,
+                "out_refund",
+                "USD",
+                "Estimated refund (withheld minus tax owed)",
             ),
         ],
         loop_block: None,
@@ -315,47 +343,69 @@ fn build_manifest(workbook_hash: &str) -> Manifest {
     }
 }
 
-/// Build the I/O cell map (NO `supply_total_cell` after 92-01). Uses the neutral
-/// `json_key` field on every entry (S-4).
+/// Build the I/O cell map in the WBV2-04 MULTI-TOOL shape: ONE [`Tool`] per output
+/// Table, each with its OWN DAG-derived `input_keys`, `outputs`, and reconcile
+/// `oracle`. Two tools:
+///
+/// - `Calculate_Tax` — taxable_income/tax_owed/effective_rate/marginal_rate, derived
+///   from `gross_income` + `deductions` (marginal_rate is constant-only; filing_status
+///   feeds no formula). Does NOT depend on `withheld`.
+/// - `Estimate_Refund` — `refund = withheld - tax_owed`, derived from `withheld` +
+///   `gross_income` + `deductions` (transitively via tax_owed). This is the input set
+///   that makes the two tools' keys DISJOINT on `withheld` (the multi-tool proof).
+///
+/// Each `oracle` carries the authored cached `<v>` for its outputs (the per-tool
+/// reconcile target). Uses the neutral `json_key` field on every entry (S-4).
 fn build_cell_map() -> CellMap {
+    let entry = |json_key: &str, seed: &str, unit: Option<&str>| CellEntry {
+        json_key: json_key.to_string(),
+        seed_coord: seed.to_string(),
+        unit: unit.map(str::to_string),
+    };
+    let num = |v: f64| CellValue::Number(v);
+
+    let mut tax_oracle = BTreeMap::new();
+    tax_oracle.insert("taxable_income".to_string(), num(48_000.0));
+    tax_oracle.insert("tax_owed".to_string(), num(4_800.0));
+    tax_oracle.insert("effective_rate".to_string(), num(0.08));
+    tax_oracle.insert("marginal_rate".to_string(), num(0.22));
+
+    let mut refund_oracle = BTreeMap::new();
+    // refund = withheld(5000) - tax_owed(4800) = 200.
+    refund_oracle.insert("refund".to_string(), num(200.0));
+
     CellMap {
         inputs: vec![
-            CellEntry {
-                json_key: "gross_income".to_string(),
-                seed_coord: CELL_GROSS_INCOME.to_string(),
-                unit: Some("USD".to_string()),
-            },
-            CellEntry {
-                json_key: "filing_status".to_string(),
-                seed_coord: CELL_FILING_STATUS.to_string(),
-                unit: None,
-            },
-            CellEntry {
-                json_key: "deductions".to_string(),
-                seed_coord: CELL_DEDUCTIONS.to_string(),
-                unit: Some("USD".to_string()),
-            },
+            entry("gross_income", CELL_GROSS_INCOME, Some("USD")),
+            entry("filing_status", CELL_FILING_STATUS, None),
+            entry("deductions", CELL_DEDUCTIONS, Some("USD")),
+            entry("withheld", CELL_WITHHELD, Some("USD")),
         ],
-        outputs: vec![
-            CellEntry {
-                json_key: "taxable_income".to_string(),
-                seed_coord: CELL_TAXABLE_INCOME.to_string(),
-                unit: Some("USD".to_string()),
+        tools: vec![
+            Tool {
+                name: "Calculate_Tax".to_string(),
+                description: Some(
+                    "Compute the tax owed and rates from gross income and deductions.".to_string(),
+                ),
+                input_keys: vec!["deductions".to_string(), "gross_income".to_string()],
+                outputs: vec![
+                    entry("taxable_income", CELL_TAXABLE_INCOME, Some("USD")),
+                    entry("tax_owed", CELL_TAX_OWED, Some("USD")),
+                    entry("effective_rate", CELL_EFFECTIVE_RATE, Some("ratio")),
+                    entry("marginal_rate", CELL_MARGINAL_RATE, Some("ratio")),
+                ],
+                oracle: tax_oracle,
             },
-            CellEntry {
-                json_key: "tax_owed".to_string(),
-                seed_coord: CELL_TAX_OWED.to_string(),
-                unit: Some("USD".to_string()),
-            },
-            CellEntry {
-                json_key: "effective_rate".to_string(),
-                seed_coord: CELL_EFFECTIVE_RATE.to_string(),
-                unit: Some("ratio".to_string()),
-            },
-            CellEntry {
-                json_key: "marginal_rate".to_string(),
-                seed_coord: CELL_MARGINAL_RATE.to_string(),
-                unit: Some("ratio".to_string()),
+            Tool {
+                name: "Estimate_Refund".to_string(),
+                description: Some("Estimate the refund (tax withheld minus tax owed).".to_string()),
+                input_keys: vec![
+                    "deductions".to_string(),
+                    "gross_income".to_string(),
+                    "withheld".to_string(),
+                ],
+                outputs: vec![entry("refund", CELL_REFUND, Some("USD"))],
+                oracle: refund_oracle,
             },
         ],
     }
@@ -393,6 +443,7 @@ fn build_layout(workbook_hash: &str) -> LayoutDescriptor {
                     layout_cell("B2", None, "60000", Some("#,##0.00")),
                     layout_cell("B3", None, "single", None),
                     layout_cell("B4", None, "12000", Some("#,##0.00")),
+                    layout_cell("B5", None, "5000", Some("#,##0.00")),
                 ],
                 merges: vec![],
                 col_widths: vec![(1, 18.0), (2, 14.0)],
@@ -439,6 +490,19 @@ fn build_layout(workbook_hash: &str) -> LayoutDescriptor {
                 col_widths: vec![(1, 22.0), (2, 14.0)],
                 hidden_cols: vec![],
             },
+            SheetLayout {
+                name: "4_Refund".to_string(),
+                hidden: false,
+                cells: vec![layout_cell(
+                    "B2",
+                    Some("1_Inputs!B5-3_Outputs!B3"),
+                    "200",
+                    Some("#,##0.00"),
+                )],
+                merges: vec![],
+                col_widths: vec![(1, 22.0), (2, 14.0)],
+                hidden_cols: vec![],
+            },
         ],
     }
 }
@@ -480,7 +544,7 @@ fn build_parser_equivalence() -> BTreeMap<String, serde_json::Value> {
     );
     m.insert(
         "checked_cells".to_string(),
-        serde_json::Value::Number(11u32.into()),
+        serde_json::Value::Number(13u32.into()),
     );
     m
 }

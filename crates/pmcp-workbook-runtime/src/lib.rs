@@ -78,21 +78,21 @@ pub use finding::{LintFinding, LintReport, Severity};
 pub use formula::{BinOp, Expr, UnOp};
 pub use range_ref::{cell_key, RangeRef};
 
-pub use dag::{toposort, Dag};
+pub use dag::{toposort, upstream_input_leaves, Dag};
 pub use resolve::{
     a1_to_zero_indexed_row_col, expand_range, parse_a1, split_ref, RangeShape, ResolveError,
     MAX_RANGE_CELLS,
 };
 
 pub use manifest_model::{
-    is_computed, is_strict_constant, json_key_for_role, role_for_cell, AnnotationDecl,
-    CapabilityDecl, CellRole, ChangelogEntry, Dtype, GovernedDatum, InputTier, LoopDecl, Manifest,
-    Role,
+    is_computed, is_strict_constant, json_key_for_role, role_for_cell, sanitize_tool_name,
+    AnnotationDecl, CapabilityDecl, CellRole, ChangelogEntry, Dtype, GovernedDatum, InputTier,
+    LoopDecl, Manifest, Role, RESERVED_TOOL_NAMES,
 };
 
 pub use artifact_model::{
     build_bundle_lock, fold_evidence_hash, sha256_hex, update_field, ArtifactHashes, BundleLock,
-    CellEntry, CellMap,
+    CellEntry, CellMap, Tool,
 };
 
 #[cfg(feature = "embedded")]

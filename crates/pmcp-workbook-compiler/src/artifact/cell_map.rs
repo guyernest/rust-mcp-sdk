@@ -16,39 +16,477 @@
 //!
 //! The lighthouse `CellMap` carried a hardcoded `supply_total_cell` (a customer
 //! "headline output" assumption). The SDK [`CellMap`] is the runtime's
-//! `{inputs, outputs}` shape with NO privileged-headline field: the served
-//! all-outputs path iterates [`CellMap::outputs`] independently, so no single
-//! output is elevated. `build_cell_map` therefore fails loud ONLY when there is no
-//! output at all (a workbook with zero outputs cannot serve a `calculate`), never
-//! on the absence of a single named "supply total."
+//! `{inputs, tools[]}` shape (WBV2-03 §4.1) with NO privileged-headline field: each
+//! output Table becomes its own [`Tool`], so no single output is elevated.
+//! [`build_tools`] fails loud ONLY when there is no output Table at all (a workbook
+//! with zero output Tables cannot serve any tool), never on the absence of a single
+//! named "supply total."
+//!
+//! [`build_cell_map`] is the single-tool transitional path (one tool wraps all
+//! outputs) the existing named-range compile orchestrator still emits;
+//! [`build_tools`] is the per-Table multi-tool primitive (WBV2-03/04) the served
+//! fan-out + per-tool reconcile ([`reconcile_tools`]) consume. The Plan 03 flat
+//! `.outputs()` accessor is RETIRED (Plan 04): every consumer iterates
+//! `tools[].outputs` per-tool.
 //!
 //! Built from the (tier-ratified) [`Manifest`] in `emit_bundle`; serialized
 //! through the deterministic [`crate::artifact::serialize`] choke point.
 
-use pmcp_workbook_runtime::{json_key_for_role, CellRole, Manifest, Role};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
+
+use pmcp_workbook_runtime::{
+    json_key_for_role, role_for_cell, sanitize_tool_name, upstream_input_leaves, CellRole,
+    CellValue, Dag, LintFinding, Manifest, Role, Severity,
+};
+
+use crate::reconcile::within_tol;
 
 // Re-export the runtime-safe artifact shapes (the served loader deserializes the
-// SAME `CellMap`/`CellEntry`); never re-declared here.
-pub use pmcp_workbook_runtime::{CellEntry, CellMap};
+// SAME `CellMap`/`CellEntry`/`Tool`); never re-declared here.
+pub use pmcp_workbook_runtime::{CellEntry, CellMap, Tool};
 
-/// Build the [`CellMap`] from a (tier-ratified) [`Manifest`].
+/// One output Table's identity + membership (WBV2-03 §4.1), supplied by the
+/// orchestrator from the harvested `TableRecord`s: which output CELLS belong to
+/// which output Table, plus the Table's tool `name` + `description` (caption).
 ///
-/// For each `Role::Input`/`Role::Output` [`CellRole`] derives a [`CellEntry`]
-/// (`json_key` via [`json_key_for_role`], `seed_coord` = the cell key, `unit`). Fails loud
-/// (returns `Err`) ONLY if the manifest declares NO `Role::Output` cell — a served
-/// workbook with no output cannot answer a `calculate`.
+/// This is the grouping the manifest alone cannot supply — a `CellRole` does not
+/// record its owning Table — so the offline caller (which harvested the Table
+/// areas) passes membership explicitly. The unit tests build it synthetically.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OutputTable {
+    /// The raw output-Table name → the tool `name` (MCP-charset sanitization in
+    /// the served emit, Plan 04).
+    pub name: String,
+    /// The caption cell above the Table → the tool `description`, when authored.
+    pub description: Option<String>,
+    /// The fully-qualified `sheet!addr` cell keys of this Table's output cells.
+    pub output_cells: Vec<String>,
+}
+
+/// Build the per-Table [`Tool`]s with DAG-derived minimal `input_keys` (WBV2-03 §4.2).
+///
+/// Groups the manifest's `Role::Output` cells by their owning output Table (via the
+/// caller-supplied `output_tables` membership). For each Table, the tool's
+/// `input_keys` is the UNION over that Table's output cells of
+/// [`upstream_input_leaves`] — the minimal subset of the manifest's `Role::Input`
+/// cells transitively reachable upstream — mapped from cell key to its served
+/// `json_key` via the shared [`json_key_for_role`]. The tool's `outputs` reuse
+/// [`entry`] per output cell; its `oracle` carries each output cell's authored
+/// expected value, sourced (M6) from `output_oracles` — the orchestrator's authored
+/// cached-`<v>` value-by-CELL-key map (falling back to a role's tier default when the
+/// map is silent). Pass an EMPTY map when no per-tool reconcile is intended (the
+/// served-bundle emit / read-only preview, where the oracle is not graded).
+///
+/// Edge cases (§4.2): a constant-only upstream path contributes NO input (excluded
+/// by [`upstream_input_leaves`], no lint); an input cell reachable by NO tool yields
+/// a "feeds no tool" `WARNING` [`LintFinding`].
+///
+/// Returns the tools (in `output_tables` order) plus the collected edge-case lints.
+///
+/// # Errors
+/// Returns `Err` if `output_tables` is empty (a served workbook with zero output
+/// Tables cannot answer any tool — the fail-loud-on-zero-outputs check generalized).
+pub fn build_tools(
+    manifest: &Manifest,
+    dag: &Dag,
+    output_tables: &[OutputTable],
+    output_oracles: &BTreeMap<String, CellValue>,
+) -> Result<(Vec<Tool>, Vec<LintFinding>), String> {
+    if output_tables.is_empty() {
+        return Err(
+            "the manifest declares no output Table — a served workbook must have at \
+             least one output Table to expose a tool"
+                .to_string(),
+        );
+    }
+
+    // The shared input pool: the cell keys of every Role::Input, plus a lookup from
+    // a cell key to its served json_key (so input_keys carry semantic keys).
+    let input_cells: HashSet<String> = manifest
+        .cells
+        .iter()
+        .filter(|c| c.role == Role::Input)
+        .map(|c| c.cell.clone())
+        .collect();
+    let input_key_of: BTreeMap<String, String> = manifest
+        .cells
+        .iter()
+        .filter(|c| c.role == Role::Input)
+        .map(|c| (c.cell.clone(), json_key_for_role(c)))
+        .collect();
+
+    let mut tools = Vec::with_capacity(output_tables.len());
+    // Track which input cells feed at least one tool (the "feeds no tool" lint).
+    let mut fed_inputs: HashSet<String> = HashSet::new();
+
+    for table in output_tables {
+        // build_one_tool already walks each output's upstream input leaves to derive
+        // input_keys; it returns the reached input CELLS so we mark them fed without a
+        // second DAG traversal.
+        let (tool, reached) = build_one_tool(
+            manifest,
+            dag,
+            table,
+            &input_cells,
+            &input_key_of,
+            output_oracles,
+        );
+        fed_inputs.extend(reached);
+        tools.push(tool);
+    }
+
+    let findings = feeds_no_tool_findings(manifest, &input_cells, &fed_inputs);
+    Ok((tools, findings))
+}
+
+/// Build ONE [`Tool`] for an output Table: its outputs, DAG-derived `input_keys`,
+/// and reconcile oracle. Returns the tool plus the set of input CELLS it reached
+/// (so `build_tools` can mark them fed without re-walking the DAG). Kept separate so
+/// `build_tools` stays a thin loop (cog ≤25).
+///
+/// The per-output `oracle` (M6) is filled PRIMARILY from `output_oracles` — the
+/// authored cached `<v>` value-by-CELL-key map the orchestrator built from the
+/// workbook's cached output cells (`comparison_from_outputs`). When the cached map
+/// carries no entry for an output cell, the role's tier-carried default
+/// ([`oracle_value`], the pre-M6 fallback) is used, so the existing tier-based unit
+/// tests keep grading. With the cached map wired, the per-tool reconcile is no longer
+/// vacuous: a perturbed cached value blocks the emit.
+fn build_one_tool(
+    manifest: &Manifest,
+    dag: &Dag,
+    table: &OutputTable,
+    input_cells: &HashSet<String>,
+    input_key_of: &BTreeMap<String, String>,
+    output_oracles: &BTreeMap<String, CellValue>,
+) -> (Tool, BTreeSet<String>) {
+    let mut input_keys: BTreeSet<String> = BTreeSet::new();
+    let mut reached_cells: BTreeSet<String> = BTreeSet::new();
+    let mut outputs = Vec::new();
+    let mut oracle = BTreeMap::new();
+
+    for cell_key in &table.output_cells {
+        // input_keys = union of this output's upstream input leaves (mapped to keys);
+        // reached_cells carries the same leaves at cell granularity for the fed-inputs lint.
+        for leaf in upstream_input_leaves(dag, cell_key, input_cells) {
+            if let Some(json_key) = input_key_of.get(&leaf) {
+                input_keys.insert(json_key.clone());
+            }
+            reached_cells.insert(leaf);
+        }
+        // outputs + oracle from the manifest CellRole for this output cell. M6: the
+        // oracle value comes from the authored cached `<v>` map (keyed by cell key),
+        // falling back to the role's tier default when the cached map is silent.
+        if let Some(role) = role_for_cell(manifest, cell_key) {
+            outputs.push(entry(role));
+            if let Some(value) = output_oracles
+                .get(cell_key)
+                .cloned()
+                .or_else(|| oracle_value(role))
+            {
+                oracle.insert(json_key_for_role(role), value);
+            }
+        }
+    }
+
+    let tool = Tool {
+        name: table.name.clone(),
+        description: table.description.clone(),
+        input_keys: input_keys.into_iter().collect(),
+        outputs,
+        oracle,
+    };
+    (tool, reached_cells)
+}
+
+/// Emit one `WARNING` "feeds no tool" [`LintFinding`] per `Role::Input` cell that is
+/// NOT upstream of any tool (§4.2). A constant-only path is NOT flagged (constants
+/// are not in `input_cells`). Located on the input cell for BA-actionable repair.
+fn feeds_no_tool_findings(
+    manifest: &Manifest,
+    input_cells: &HashSet<String>,
+    fed_inputs: &HashSet<String>,
+) -> Vec<LintFinding> {
+    let mut findings = Vec::new();
+    for cell in manifest.cells.iter().filter(|c| c.role == Role::Input) {
+        if input_cells.contains(&cell.cell) && !fed_inputs.contains(&cell.cell) {
+            let (sheet, addr) = split_cell_key(&cell.cell);
+            findings.push(LintFinding::new(
+                Severity::Warning,
+                "manifest/input-feeds-no-tool",
+                sheet,
+                addr,
+                format!(
+                    "input cell {} is not upstream of any output Table — no served \
+                     tool consumes it",
+                    cell.cell
+                ),
+                "remove the unused input row, or reference it from an output Table's \
+                 formula so a tool consumes it",
+            ));
+        }
+    }
+    findings
+}
+
+// ---- per-tool reconcile (WBV2-05, Open-Q2) -----------------------------------
+
+/// One graded output row in a tool's [`Comparison`]: the output `json_key`, the
+/// computed value, the authored oracle value, and whether they reconcile within
+/// the penny tolerance.
+#[derive(Debug, Clone)]
+pub struct ComparisonRow {
+    /// The output column's served `json_key`.
+    pub json_key: String,
+    /// The value the bundle IR computed for this output cell.
+    pub computed: CellValue,
+    /// The authored expected value (the cached `<v>` oracle).
+    pub oracle: CellValue,
+    /// `true` iff `computed` reconciles with `oracle` within tolerance.
+    pub reconciled: bool,
+}
+
+/// ONE tool's reconcile grade: its per-output [`ComparisonRow`]s. A tool reconciles
+/// iff EVERY graded row reconciles (`is_match`).
+#[derive(Debug, Clone, Default)]
+pub struct Comparison {
+    /// The per-output graded rows (one per oracle-bearing output cell).
+    pub rows: Vec<ComparisonRow>,
+}
+
+impl Comparison {
+    /// `true` iff every graded output row reconciled within tolerance (a tool with
+    /// no oracle rows trivially matches).
+    #[must_use]
+    pub fn is_match(&self) -> bool {
+        self.rows.iter().all(|r| r.reconciled)
+    }
+}
+
+/// Grade ONE tool's computed outputs against ITS OWN output-Table value oracle
+/// (Open-Q2): partition the run's `computed` map to ONLY this tool's
+/// `outputs[].seed_coord` keys, look up each output's authored oracle from
+/// `tool.oracle` (keyed by `json_key`), and grade them with the shared
+/// [`within_tol`] penny comparator. An output with no oracle entry contributes no
+/// graded row (nothing to reconcile against).
+#[must_use]
+pub fn comparison_from_outputs_for_tool(
+    computed: &BTreeMap<String, CellValue>,
+    tool: &Tool,
+) -> Comparison {
+    let mut rows = Vec::new();
+    for entry in &tool.outputs {
+        let Some(oracle) = tool.oracle.get(&entry.json_key) else {
+            continue;
+        };
+        let computed_value = computed
+            .get(&entry.seed_coord)
+            .cloned()
+            .unwrap_or(CellValue::Empty);
+        let reconciled = within_tol(&computed_value, oracle);
+        rows.push(ComparisonRow {
+            json_key: entry.json_key.clone(),
+            computed: computed_value,
+            oracle: oracle.clone(),
+            reconciled,
+        });
+    }
+    Comparison { rows }
+}
+
+/// The aggregated per-tool reconcile report (WBV2-05): one [`Comparison`] per tool,
+/// keyed by the sanitized tool name. The gate's non-zero exit derives from
+/// [`ToolReconcileReport::any_mismatch`] (ANY tool mismatch blocks); [`render`] emits
+/// one human-readable section per tool with FAILING tools first.
+///
+/// [`render`]: ToolReconcileReport::render
+#[derive(Debug, Clone, Default)]
+pub struct ToolReconcileReport {
+    /// `(sanitized tool name, that tool's Comparison)`, in build order.
+    pub per_tool: Vec<(String, Comparison)>,
+}
+
+impl ToolReconcileReport {
+    /// `true` iff ANY tool failed to reconcile (the gate's non-zero-exit signal).
+    #[must_use]
+    pub fn any_mismatch(&self) -> bool {
+        self.per_tool.iter().any(|(_, c)| !c.is_match())
+    }
+
+    /// Render one section per tool (a tool-name header + its graded rows), FAILING
+    /// tools listed first so the operator sees the blocking mismatches at the top.
+    #[must_use]
+    pub fn render(&self) -> String {
+        let mut ordered: Vec<&(String, Comparison)> = self.per_tool.iter().collect();
+        // Failing tools (is_match == false) sort before passing tools.
+        ordered.sort_by_key(|(_, c)| c.is_match());
+        let mut out = String::new();
+        for (name, comparison) in ordered {
+            let status = if comparison.is_match() {
+                "OK"
+            } else {
+                "MISMATCH"
+            };
+            out.push_str(&format!("tool `{name}`: {status}\n"));
+            for row in &comparison.rows {
+                let mark = if row.reconciled { "  ok " } else { "  XX " };
+                out.push_str(&format!(
+                    "{mark}{}: computed {:?} vs oracle {:?}\n",
+                    row.json_key, row.computed, row.oracle
+                ));
+            }
+        }
+        out
+    }
+}
+
+/// Build the aggregated [`ToolReconcileReport`] over every tool in `tools` (Open-Q2):
+/// grade each tool's outputs against its own oracle and key the result by the
+/// SANITIZED tool name (so a collision/charset issue surfaces here too). The gate
+/// derives its non-zero exit from [`ToolReconcileReport::any_mismatch`].
+///
+/// # Errors
+/// Returns `Err` if any tool's raw name is unmappable to the MCP tool-name charset
+/// (the same fail-closed reject the served registration applies).
+pub fn reconcile_tools(
+    computed: &BTreeMap<String, CellValue>,
+    tools: &[Tool],
+) -> Result<ToolReconcileReport, String> {
+    let mut per_tool = Vec::with_capacity(tools.len());
+    for tool in tools {
+        let name = sanitize_tool_name(&tool.name)
+            .map_err(|raw| format!("output Table '{raw}' has no MCP-mappable tool name"))?;
+        per_tool.push((name, comparison_from_outputs_for_tool(computed, tool)));
+    }
+    Ok(ToolReconcileReport { per_tool })
+}
+
+// ---- post-sanitize collision lint (WBV2-05, T-100-17) ------------------------
+
+/// Detect output Tables whose names SANITIZE to the same MCP tool name (T-100-17):
+/// two distinct source Tables (`Calculate Tax`, `calculate_tax`, `calculate-tax`)
+/// that all map to `calculate_tax` would silently collapse into one tool at
+/// registration. This runs in the compiler BEFORE tool registration so a collision
+/// is a clean, cell-precise compile failure, not a silent last-writer-wins.
+///
+/// Groups the `output_tables` by their sanitized name; any group with ≥2 source
+/// Tables emits ONE `Severity::Error` [`LintFinding`] naming ALL colliding source
+/// Tables and locating at each offender's first output cell. An UNMAPPABLE name
+/// (empty/all-illegal) emits a separate `tool-name-unmappable` error finding.
+#[must_use]
+pub fn tool_name_collision_findings(output_tables: &[OutputTable]) -> Vec<LintFinding> {
+    let mut by_sanitized: BTreeMap<String, Vec<&OutputTable>> = BTreeMap::new();
+    let mut findings = Vec::new();
+
+    for table in output_tables {
+        match sanitize_tool_name(&table.name) {
+            Ok(name) => by_sanitized.entry(name).or_default().push(table),
+            Err(_) => findings.push(unmappable_tool_name_finding(table)),
+        }
+    }
+
+    for (sanitized, group) in by_sanitized.iter().filter(|(_, g)| g.len() > 1) {
+        findings.push(collision_finding(sanitized, group));
+    }
+    findings
+}
+
+/// The located finding for an unmappable output-Table name (no MCP-charset chars).
+fn unmappable_tool_name_finding(table: &OutputTable) -> LintFinding {
+    let (sheet, addr) = table
+        .output_cells
+        .first()
+        .map_or(("manifest".to_string(), None), |c| split_cell_key(c));
+    LintFinding::new(
+        Severity::Error,
+        "manifest/tool-name-unmappable",
+        sheet,
+        addr,
+        format!(
+            "output Table '{}' has no characters mappable to the MCP tool-name charset \
+             [a-z0-9_-]; the tool would be uncallable",
+            table.name
+        ),
+        format!(
+            "rename output Table '{}' to include at least one ASCII letter or digit",
+            table.name
+        ),
+    )
+}
+
+/// The located finding for ≥2 output Tables colliding on one sanitized MCP name.
+fn collision_finding(sanitized: &str, group: &[&OutputTable]) -> LintFinding {
+    let names: Vec<&str> = group.iter().map(|t| t.name.as_str()).collect();
+    let locations: Vec<String> = group
+        .iter()
+        .filter_map(|t| t.output_cells.first().cloned())
+        .collect();
+    let (sheet, addr) = group
+        .first()
+        .and_then(|t| t.output_cells.first())
+        .map_or(("manifest".to_string(), None), |c| split_cell_key(c));
+    LintFinding::new(
+        Severity::Error,
+        "manifest/tool-name-collision",
+        sheet,
+        addr,
+        format!(
+            "output Tables [{}] all sanitize to the same MCP tool name `{sanitized}` \
+             (at {}); a caller could not address them independently",
+            names.join(", "),
+            locations.join(", ")
+        ),
+        format!(
+            "rename the output Tables [{}] so each sanitizes to a DISTINCT MCP tool name",
+            names.join(", ")
+        ),
+    )
+}
+
+/// The FALLBACK oracle value for an output cell from its role's tier-carried default
+/// (M6): the PRIMARY oracle source is now the orchestrator's authored cached-`<v>`
+/// value-by-cell-key map, threaded into [`build_tools`] as `output_oracles` and
+/// preferred in [`build_one_tool`]. This fallback only fires when the cached map is
+/// silent for a cell (e.g. a synthetic test that stamps a `Variable` tier default on
+/// an output role). Harvested outputs carry no tier default, so for them this returns
+/// `None` and the cached map is the sole, NON-vacuous oracle source — a perturbed
+/// cached value now blocks the per-tool reconcile.
+fn oracle_value(role: &CellRole) -> Option<CellValue> {
+    match &role.tier {
+        Some(pmcp_workbook_runtime::InputTier::Variable { default }) => Some(default.clone()),
+        Some(pmcp_workbook_runtime::InputTier::BoundedVariable { default, .. }) => {
+            Some(default.clone())
+        },
+        None => None,
+    }
+}
+
+/// Split a `sheet!addr` cell key into `(sheet, Some(addr))` for a located finding;
+/// a key without `!` locates at the sheet level (`None` addr).
+fn split_cell_key(cell: &str) -> (String, Option<String>) {
+    match cell.split_once('!') {
+        Some((sheet, addr)) => (sheet.to_string(), Some(addr.to_string())),
+        None => (cell.to_string(), None),
+    }
+}
+
+/// Build the [`CellMap`] from a (tier-ratified) [`Manifest`] — the TRANSITIONAL
+/// single-tool path (Plan 03→04).
+///
+/// For each `Role::Input` cell derives a shared-pool [`CellEntry`]; all `Role::Output`
+/// cells are wrapped in ONE transitional [`Tool`] (so the existing single-tool emit +
+/// served call sites keep working until Plan 04 wires the multi-tool [`build_tools`]
+/// fan-out). Fails loud (returns `Err`) ONLY if the manifest declares NO `Role::Output`
+/// cell — a served workbook with no output cannot answer a `calculate`.
 ///
 /// # Errors
 /// Returns an error string if the manifest declares no `Role::Output` cell.
 pub fn build_cell_map(manifest: &Manifest) -> Result<CellMap, String> {
-    let mut inputs = Vec::new();
+    let inputs = shared_inputs(manifest);
     let mut outputs = Vec::new();
 
     for role in &manifest.cells {
-        match role.role {
-            Role::Input => inputs.push(entry(role)),
-            Role::Output => outputs.push(entry(role)),
-            Role::Constant | Role::Formula => {},
+        if matches!(role.role, Role::Output) {
+            outputs.push(entry(role));
         }
     }
 
@@ -60,17 +498,48 @@ pub fn build_cell_map(manifest: &Manifest) -> Result<CellMap, String> {
         );
     }
 
-    Ok(CellMap { inputs, outputs })
+    // Single-tool projection: wrap all outputs in ONE tool (the named-range compile
+    // orchestrator's transitional path). The per-Table `build_tools` fan-out (with the
+    // harvested tool name/description) is the multi-tool primitive the served side uses.
+    Ok(CellMap {
+        inputs,
+        tools: vec![Tool {
+            name: manifest.workflow.clone(),
+            description: None,
+            input_keys: Vec::new(),
+            outputs,
+            oracle: BTreeMap::new(),
+        }],
+    })
 }
 
 /// Build a [`CellEntry`] for a role-bearing cell: the JSON key is the runtime's
 /// shared [`json_key_for_role`] precedence (name → meaning → cell key).
-fn entry(role: &CellRole) -> CellEntry {
+///
+/// `pub(crate)` so the multi-tool [`emit_bundle`](crate::artifact::emit_bundle)
+/// branch can derive the shared-input pool the SAME way [`build_cell_map`] does
+/// (one definition — the per-input `CellEntry` shape cannot drift between the
+/// single-tool fallback and the `build_tools` fan-out).
+pub(crate) fn entry(role: &CellRole) -> CellEntry {
     CellEntry {
         json_key: json_key_for_role(role),
         seed_coord: role.cell.clone(),
         unit: role.unit.clone(),
     }
+}
+
+/// The shared-input pool [`CellEntry`]s: one [`entry`] per `Role::Input` cell, in
+/// manifest order. The SINGLE source both the single-tool [`build_cell_map`]
+/// fallback and the multi-tool [`emit_bundle`](crate::artifact::emit_bundle) branch
+/// derive `CellMap.inputs` from, so the served shared-input pool is identical on
+/// both paths.
+pub(crate) fn shared_inputs(manifest: &Manifest) -> Vec<CellEntry> {
+    manifest
+        .cells
+        .iter()
+        .filter(|role| matches!(role.role, Role::Input))
+        .map(entry)
+        .collect()
 }
 
 #[cfg(test)]
@@ -138,12 +607,16 @@ mod tests {
         ]);
         let map = build_cell_map(&manifest).expect("build cell map");
         assert_eq!(map.inputs.len(), 1, "one Role::Input entry");
-        assert_eq!(map.inputs[0].json_key, "in_gross_income");
+        // F3: the served json_key STRIPS the in_/out_ governance prefix that the
+        // workbook author uses on the named range (`in_gross_income` →
+        // `gross_income`); role.name itself stays prefixed for matching.
+        assert_eq!(map.inputs[0].json_key, "gross_income");
         assert_eq!(map.inputs[0].seed_coord, "1_Inputs!B2");
         assert_eq!(map.inputs[0].unit.as_deref(), Some("USD"));
-        assert_eq!(map.outputs.len(), 1, "one Role::Output entry");
-        assert_eq!(map.outputs[0].json_key, "out_tax_owed");
-        assert_eq!(map.outputs[0].seed_coord, "3_Outputs!B3");
+        let outputs = &map.tools[0].outputs;
+        assert_eq!(outputs.len(), 1, "one Role::Output entry");
+        assert_eq!(outputs[0].json_key, "tax_owed");
+        assert_eq!(outputs[0].seed_coord, "3_Outputs!B3");
     }
 
     #[test]
@@ -178,7 +651,8 @@ mod tests {
         ]);
         let map = build_cell_map(&manifest).expect("build");
         assert_eq!(map.inputs[0].json_key, "Filing status");
-        assert_eq!(map.outputs[0].json_key, "3_Outputs!B2");
+        let outputs = &map.tools[0].outputs;
+        assert_eq!(outputs[0].json_key, "3_Outputs!B2");
     }
 
     #[test]
@@ -202,6 +676,424 @@ mod tests {
             ),
         ]);
         let map = build_cell_map(&manifest).expect("build");
-        assert_eq!(map.outputs.len(), 2, "both outputs are first-class");
+        let outputs = &map.tools[0].outputs;
+        assert_eq!(outputs.len(), 2, "both outputs are first-class");
+    }
+
+    // ---- build_tools (WBV2-03 §4.2 — DAG-derived per-Table input schemas) ----
+
+    use pmcp_workbook_runtime::{CellValue, Dag, InputTier, Severity};
+
+    /// The §4.2 motivating manifest: three inputs (income, filing, withheld) + two
+    /// output Tables (Calculate_Tax over income+filing; Estimate_Refund over
+    /// income+filing+withheld via a shared `taxable` intermediate).
+    fn motivating_manifest() -> Manifest {
+        manifest_with(vec![
+            role("In!income", Role::Input, Some("income"), None, Some("USD")),
+            role("In!filing", Role::Input, Some("filing"), None, None),
+            role(
+                "In!withheld",
+                Role::Input,
+                Some("withheld"),
+                None,
+                Some("USD"),
+            ),
+            // outputs carry an authored expected value via a Variable tier default
+            // (the `oracle_value` fallback path — exercises the no-cached-map case).
+            output_role("Calc!tax", "tax", CellValue::Number(18241.0)),
+            output_role("Calc!refund", "refund", CellValue::Number(-3241.0)),
+        ])
+    }
+
+    /// An EMPTY cached-`<v>` oracle map: `build_tools` then falls back to the role's
+    /// tier default (`oracle_value`) — the pre-M6 behaviour these tier-based tests
+    /// assert. The M6 cached-map path is exercised by `*_cached_oracle*` tests below.
+    fn no_oracle() -> BTreeMap<String, CellValue> {
+        BTreeMap::new()
+    }
+
+    fn output_role(cell: &str, name: &str, oracle: CellValue) -> CellRole {
+        let mut r = role(cell, Role::Output, Some(name), None, Some("USD"));
+        r.tier = Some(InputTier::Variable { default: oracle });
+        r
+    }
+
+    /// The §4.2 DAG: tax <- taxable <- (income, filing); refund <- (taxable, withheld).
+    fn motivating_dag() -> Dag {
+        let mut dag = Dag::new();
+        dag.add_edge("Calc!tax", "Calc!taxable");
+        dag.add_edge("Calc!taxable", "In!income");
+        dag.add_edge("Calc!taxable", "In!filing");
+        dag.add_edge("Calc!refund", "Calc!taxable");
+        dag.add_edge("Calc!refund", "In!withheld");
+        dag
+    }
+
+    #[test]
+    fn build_tools_derives_two_tools_with_minimal_input_keys() {
+        let manifest = motivating_manifest();
+        let dag = motivating_dag();
+        let tables = vec![
+            OutputTable {
+                name: "Calculate_Tax".to_string(),
+                description: Some("Compute tax".to_string()),
+                output_cells: vec!["Calc!tax".to_string()],
+            },
+            OutputTable {
+                name: "Estimate_Refund".to_string(),
+                description: None,
+                output_cells: vec!["Calc!refund".to_string()],
+            },
+        ];
+        let (tools, findings) =
+            build_tools(&manifest, &dag, &tables, &no_oracle()).expect("build tools");
+        assert_eq!(tools.len(), 2, "two output Tables → two Tools");
+
+        let tax = &tools[0];
+        assert_eq!(tax.name, "Calculate_Tax");
+        assert_eq!(tax.description.as_deref(), Some("Compute tax"));
+        assert_eq!(
+            tax.input_keys,
+            vec!["filing".to_string(), "income".to_string()],
+            "Calculate_Tax.input_keys == [filing, income] (sorted; NOT withheld)"
+        );
+
+        let refund = &tools[1];
+        assert_eq!(refund.name, "Estimate_Refund");
+        assert_eq!(
+            refund.input_keys,
+            vec![
+                "filing".to_string(),
+                "income".to_string(),
+                "withheld".to_string()
+            ],
+            "Estimate_Refund.input_keys == [filing, income, withheld]"
+        );
+        // No input feeds no tool here.
+        assert!(
+            findings.is_empty(),
+            "every input feeds a tool: {findings:?}"
+        );
+    }
+
+    #[test]
+    fn build_tools_oracle_carries_authored_expected_per_tool() {
+        let manifest = motivating_manifest();
+        let dag = motivating_dag();
+        let tables = vec![OutputTable {
+            name: "Calculate_Tax".to_string(),
+            description: None,
+            output_cells: vec!["Calc!tax".to_string()],
+        }];
+        let (tools, _) = build_tools(&manifest, &dag, &tables, &no_oracle()).expect("build tools");
+        assert_eq!(
+            tools[0].oracle.get("tax"),
+            Some(&CellValue::Number(18241.0)),
+            "the tool's oracle carries its output's authored expected value"
+        );
+    }
+
+    // ---- M6: per-tool oracle wired from the cached `<v>` map -----------------
+
+    /// A manifest whose harvested output rows carry NO tier default (the production
+    /// shape) — so the ONLY oracle source is the cached-`<v>` map (M6). Without the
+    /// cached map, the per-tool reconcile would be vacuous (empty oracle).
+    fn harvested_manifest() -> Manifest {
+        manifest_with(vec![
+            role("In!income", Role::Input, Some("income"), None, Some("USD")),
+            // a plain Role::Output (no tier) — oracle_value returns None for it.
+            role("Calc!tax", Role::Output, Some("tax"), None, Some("USD")),
+        ])
+    }
+
+    fn single_tax_table() -> Vec<OutputTable> {
+        vec![OutputTable {
+            name: "Calculate_Tax".to_string(),
+            description: None,
+            output_cells: vec!["Calc!tax".to_string()],
+        }]
+    }
+
+    #[test]
+    fn cached_oracle_map_populates_a_non_tiered_outputs_oracle() {
+        // The harvested output carries no tier default → no_oracle() yields an EMPTY
+        // per-tool oracle (the pre-M6 vacuous net)…
+        let manifest = harvested_manifest();
+        let mut dag = Dag::new();
+        dag.add_edge("Calc!tax", "In!income");
+        let (vacuous, _) =
+            build_tools(&manifest, &dag, &single_tax_table(), &no_oracle()).expect("build");
+        assert!(
+            vacuous[0].oracle.is_empty(),
+            "without the cached map a non-tiered output has an EMPTY oracle (vacuous)"
+        );
+
+        // …but feeding the authored cached `<v>` map makes the oracle NON-empty (M6).
+        let mut cached = BTreeMap::new();
+        cached.insert("Calc!tax".to_string(), CellValue::Number(18241.0));
+        let (wired, _) = build_tools(&manifest, &dag, &single_tax_table(), &cached).expect("build");
+        assert_eq!(
+            wired[0].oracle.get("tax"),
+            Some(&CellValue::Number(18241.0)),
+            "the cached `<v>` map populates the per-tool oracle (M6 — no longer vacuous)"
+        );
+    }
+
+    #[test]
+    fn perturbed_cached_output_blocks_per_tool_reconcile() {
+        // With the cached oracle wired, a per-tool reconcile against a COMPUTED value
+        // that disagrees with the cached `<v>` now genuinely mismatches (M6).
+        let manifest = harvested_manifest();
+        let mut dag = Dag::new();
+        dag.add_edge("Calc!tax", "In!income");
+
+        // The authored cached oracle says tax == 18241.
+        let mut cached = BTreeMap::new();
+        cached.insert("Calc!tax".to_string(), CellValue::Number(18241.0));
+        let (tools, _) = build_tools(&manifest, &dag, &single_tax_table(), &cached).expect("build");
+
+        // A PERTURBED computed value (the executor produced 99999, not 18241) → the
+        // per-tool reconcile mismatches → the emit is blocked.
+        let mut computed = BTreeMap::new();
+        computed.insert("Calc!tax".to_string(), CellValue::Number(99999.0));
+        let report = reconcile_tools(&computed, &tools).expect("reconcile");
+        assert!(
+            report.any_mismatch(),
+            "a perturbed output (computed != cached oracle) BLOCKS the per-tool reconcile"
+        );
+
+        // The matching computed value reconciles cleanly (the gate is not stuck-on).
+        let mut ok = BTreeMap::new();
+        ok.insert("Calc!tax".to_string(), CellValue::Number(18241.0));
+        let clean = reconcile_tools(&ok, &tools).expect("reconcile");
+        assert!(
+            !clean.any_mismatch(),
+            "the unperturbed computed value reconciles against the cached oracle"
+        );
+    }
+
+    #[test]
+    fn build_tools_surfaces_range_and_cross_sheet_inputs() {
+        // WR-01: the OLD bespoke explain walker (`extract_a1_refs`) DROPPED range
+        // members (`SUM(B2:B9)`) and cross-sheet refs (`Sheet2!B5`). The production
+        // `build_tools` derives inputs from the formula DAG (`upstream_input_leaves`),
+        // which carries range-expanded + cross-sheet edges natively — so an input
+        // reached ONLY through a range OR a cross-sheet ref IS surfaced on the tool.
+        let manifest = manifest_with(vec![
+            // a range member (reached via SUM(B2:B9) → the DAG holds per-cell edges)
+            role("In!B2", Role::Input, Some("first_qtr"), None, Some("USD")),
+            // a cross-sheet input (reached via Sheet2!B5)
+            role(
+                "Other!B5",
+                Role::Input,
+                Some("adjustment"),
+                None,
+                Some("USD"),
+            ),
+            output_role("Calc!total", "total", CellValue::Number(0.0)),
+        ]);
+        let mut dag = Dag::new();
+        // total = SUM(In!B2:In!B9) + Other!B5 — the DAG records the range member
+        // In!B2 and the cross-sheet leaf Other!B5 as direct dependencies of total.
+        dag.add_edge("Calc!total", "In!B2"); // a range-expanded member
+        dag.add_edge("Calc!total", "Other!B5"); // a cross-sheet ref
+        let tables = vec![OutputTable {
+            name: "Sum_It".to_string(),
+            description: None,
+            output_cells: vec!["Calc!total".to_string()],
+        }];
+        let (tools, _findings) =
+            build_tools(&manifest, &dag, &tables, &no_oracle()).expect("build tools");
+        assert_eq!(
+            tools[0].input_keys,
+            vec!["adjustment".to_string(), "first_qtr".to_string()],
+            "BOTH the range-member input (first_qtr) AND the cross-sheet input \
+             (adjustment) are surfaced — the WR-01 inputs the old walker dropped"
+        );
+    }
+
+    #[test]
+    fn build_tools_fails_loud_on_zero_output_tables() {
+        let manifest = motivating_manifest();
+        let dag = motivating_dag();
+        let err = build_tools(&manifest, &dag, &[], &no_oracle()).expect_err("zero Tables => Err");
+        assert!(
+            err.contains("no output Table"),
+            "fail-loud message names the gap: {err}"
+        );
+    }
+
+    #[test]
+    fn build_tools_flags_input_feeding_no_tool_but_not_constant_only() {
+        // `orphan` is a Role::Input that NO output Table references → "feeds no tool".
+        // `Const!base` is a constant on a path → naturally excluded, NO lint.
+        let manifest = manifest_with(vec![
+            role("In!income", Role::Input, Some("income"), None, None),
+            role("In!orphan", Role::Input, Some("orphan"), None, None),
+            role("Const!base", Role::Constant, None, None, None),
+            output_role("Calc!out", "answer", CellValue::Number(1.0)),
+        ]);
+        let mut dag = Dag::new();
+        dag.add_edge("Calc!out", "In!income");
+        dag.add_edge("Calc!out", "Const!base"); // constant-only contributes nothing
+                                                // In!orphan is never referenced by any output.
+        let tables = vec![OutputTable {
+            name: "T".to_string(),
+            description: None,
+            output_cells: vec!["Calc!out".to_string()],
+        }];
+        let (tools, findings) = build_tools(&manifest, &dag, &tables, &no_oracle()).expect("build");
+        assert_eq!(
+            tools[0].input_keys,
+            vec!["income".to_string()],
+            "constant-only path excluded; orphan absent (not upstream)"
+        );
+        assert_eq!(findings.len(), 1, "exactly one feeds-no-tool finding");
+        assert_eq!(findings[0].severity, Severity::Warning);
+        assert_eq!(findings[0].rule, "manifest/input-feeds-no-tool");
+        assert!(
+            findings[0].message.contains("In!orphan"),
+            "the finding names the orphan input: {}",
+            findings[0].message
+        );
+    }
+
+    // ---- per-tool reconcile (WBV2-05, Open-Q2) ---------------------------
+
+    fn entry(json_key: &str, seed: &str) -> CellEntry {
+        CellEntry {
+            json_key: json_key.to_string(),
+            seed_coord: seed.to_string(),
+            unit: None,
+        }
+    }
+
+    fn tool_with_oracle(name: &str, json_key: &str, seed: &str, oracle: f64) -> Tool {
+        let mut o = BTreeMap::new();
+        o.insert(json_key.to_string(), CellValue::Number(oracle));
+        Tool {
+            name: name.to_string(),
+            description: None,
+            input_keys: vec![],
+            outputs: vec![entry(json_key, seed)],
+            oracle: o,
+        }
+    }
+
+    #[test]
+    fn comparison_from_outputs_for_tool_grades_against_own_oracle() {
+        let tool = tool_with_oracle("Calculate_Tax", "tax", "Calc!B3", 18241.0);
+        let mut computed = BTreeMap::new();
+        computed.insert("Calc!B3".to_string(), CellValue::Number(18241.0));
+        let cmp = comparison_from_outputs_for_tool(&computed, &tool);
+        assert!(cmp.is_match(), "an exact oracle match reconciles");
+        assert_eq!(cmp.rows.len(), 1);
+        assert!(cmp.rows[0].reconciled);
+    }
+
+    #[test]
+    fn comparison_from_outputs_for_tool_detects_wrong_oracle() {
+        let tool = tool_with_oracle("Calculate_Tax", "tax", "Calc!B3", 18241.0);
+        let mut computed = BTreeMap::new();
+        computed.insert("Calc!B3".to_string(), CellValue::Number(99999.0));
+        let cmp = comparison_from_outputs_for_tool(&computed, &tool);
+        assert!(!cmp.is_match(), "a wrong computed value fails reconcile");
+    }
+
+    #[test]
+    fn reconcile_tools_any_mismatch_blocks_on_one_bad_tool() {
+        // Two tools; ONE has a wrong oracle → any_mismatch() is true.
+        let good = tool_with_oracle("Calculate_Tax", "tax", "Calc!B3", 100.0);
+        let bad = tool_with_oracle("Estimate_Refund", "refund", "Calc!B4", 50.0);
+        let mut computed = BTreeMap::new();
+        computed.insert("Calc!B3".to_string(), CellValue::Number(100.0));
+        computed.insert("Calc!B4".to_string(), CellValue::Number(999.0)); // != 50
+        let report = reconcile_tools(&computed, &[good, bad]).expect("reconcile");
+        assert!(
+            report.any_mismatch(),
+            "one bad tool makes the aggregated report mismatch (non-zero gate exit)"
+        );
+        // render() lists the FAILING tool first.
+        let rendered = report.render();
+        let first_line = rendered.lines().next().unwrap_or("");
+        assert!(
+            first_line.contains("estimate_refund") && first_line.contains("MISMATCH"),
+            "failing tool rendered first: {rendered}"
+        );
+    }
+
+    #[test]
+    fn reconcile_tools_all_match_is_clean() {
+        let a = tool_with_oracle("A", "x", "S!A1", 1.0);
+        let b = tool_with_oracle("B", "y", "S!A2", 2.0);
+        let mut computed = BTreeMap::new();
+        computed.insert("S!A1".to_string(), CellValue::Number(1.0));
+        computed.insert("S!A2".to_string(), CellValue::Number(2.0));
+        let report = reconcile_tools(&computed, &[a, b]).expect("reconcile");
+        assert!(!report.any_mismatch(), "all tools reconcile → clean gate");
+    }
+
+    // ---- post-sanitize collision lint (WBV2-05, T-100-17) ----------------
+
+    fn out_table(name: &str, cell: &str) -> OutputTable {
+        OutputTable {
+            name: name.to_string(),
+            description: None,
+            output_cells: vec![cell.to_string()],
+        }
+    }
+
+    #[test]
+    fn collision_lint_flags_tables_sanitizing_to_same_name() {
+        // Per the LOCKED sanitize semantics: a space → `_`, but a literal `-` is a
+        // LEGAL char (kept verbatim). So "Calculate Tax" and "calculate_tax" both
+        // sanitize to `calculate_tax` (a COLLISION), while "calculate-tax" stays
+        // distinct (`calculate-tax`). The collision finding names BOTH underscore
+        // offenders and their cell locations.
+        let tables = vec![
+            out_table("Calculate Tax", "3_Out!B2"),
+            out_table("calculate_tax", "3_Out!B3"),
+            out_table("calculate-tax", "3_Out!B4"),
+        ];
+        let findings = tool_name_collision_findings(&tables);
+        assert_eq!(
+            findings.len(),
+            1,
+            "exactly one collision (the two underscore-mapping Tables); calculate-tax is distinct"
+        );
+        assert_eq!(findings[0].rule, "manifest/tool-name-collision");
+        assert_eq!(findings[0].severity, Severity::Error);
+        for name in ["Calculate Tax", "calculate_tax"] {
+            assert!(
+                findings[0].message.contains(name),
+                "the collision names both offenders ({name}): {}",
+                findings[0].message
+            );
+        }
+        // Locates at each offending Table's output cell.
+        assert!(findings[0].message.contains("3_Out!B2"));
+        assert!(findings[0].message.contains("3_Out!B3"));
+    }
+
+    #[test]
+    fn collision_lint_passes_distinct_names() {
+        let tables = vec![
+            out_table("Calculate Tax", "3_Out!B2"),
+            out_table("Estimate Refund", "3_Out!B3"),
+        ];
+        let findings = tool_name_collision_findings(&tables);
+        assert!(
+            findings.is_empty(),
+            "two distinct sanitized names do not collide: {findings:?}"
+        );
+    }
+
+    #[test]
+    fn collision_lint_flags_unmappable_name() {
+        let tables = vec![out_table("@@@", "3_Out!B2")];
+        let findings = tool_name_collision_findings(&tables);
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].rule, "manifest/tool-name-unmappable");
+        assert_eq!(findings[0].severity, Severity::Error);
     }
 }

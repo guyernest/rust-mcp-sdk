@@ -158,6 +158,26 @@ impl WorkbookToolError {
         }
     }
 
+    /// `invalid_tool_name` — an output Table name that cannot be sanitized to the
+    /// MCP tool-name charset `^[a-zA-Z0-9_-]{1,64}$` (empty or all-illegal). A
+    /// fail-closed reject (T-100-10): an uncallable / charset-illegal tool can
+    /// never be registered. `field` carries the offending raw name.
+    #[must_use]
+    pub fn unmappable_tool_name(raw: impl Into<String>) -> Self {
+        let raw = raw.into();
+        Self {
+            code: "invalid_tool_name".to_string(),
+            reason: format!(
+                "output Table name '{raw}' has no characters mappable to the MCP \
+                 tool-name charset [a-z0-9_-]; give it at least one alphanumeric"
+            ),
+            field: Some(raw),
+            allowed: None,
+            range: None,
+            required: None,
+        }
+    }
+
     /// A bare code+reason error with no repair-field detail.
     fn bare(code: &str, reason: impl Into<String>) -> Self {
         Self {

@@ -7,11 +7,11 @@
 //! non-empty `outputSchema` (WBSV-07). Domain failures return the `isError:true`
 //! envelope via [`to_iserror_result`] — NEVER a protocol-level error (T-92-10).
 //!
-//! `calculate`/`explain` re-run the SERVE-time
-//! [`pmcp_workbook_runtime::run_executor`] over the pre-built `bundle.dag`
-//! (no compiler, no second evaluator), seeding the `CellEnv` via the embedded
-//! `cell_map`. There is NO privileged headline output (S-1): [`project_outputs`]
-//! iterates ALL `cell_map.outputs` uniformly.
+//! The per-Table [`WorkbookToolHandler`]s (WBV2-04) + `explain` re-run the
+//! SERVE-time [`pmcp_workbook_runtime::run_executor`] over the pre-built
+//! `bundle.dag` (no compiler, no second evaluator), seeding the `CellEnv` via the
+//! embedded `cell_map`. Each per-Table handler projects ONLY its own Table's
+//! outputs via [`project_tool_outputs`] — one named MCP tool per output Table.
 
 // Compiler/clippy-enforced panic-freedom on the value path (mirrors the runtime).
 #![cfg_attr(
@@ -27,15 +27,15 @@ use pmcp::types::ToolInfo;
 use pmcp::{RequestHandlerExtra, ToolHandler};
 use serde_json::{json, Value};
 
-use pmcp_workbook_runtime::{run_executor, CellEnv, CellValue, RunResult};
+use pmcp_workbook_runtime::{run_executor, CellEnv, CellValue, RunResult, Tool};
 
 use super::error::{to_iserror_result, WorkbookToolError};
 use super::input::validate_input;
 use super::render_uri;
 use super::schema::{
     diff_version_output_schema, empty_input_schema, explain_output_schema,
-    get_manifest_output_schema, input_schema_for_manifest, output_schema_for_manifest,
-    render_workbook_output_schema,
+    get_manifest_output_schema, input_schema_for_manifest, input_schema_for_tool,
+    output_schema_for_tool, render_workbook_output_schema,
 };
 use super::{ProvStamp, WorkbookBundle, WORKBOOK_TOOL_UI};
 
@@ -60,27 +60,19 @@ pub(crate) fn run_bundle(
     })
 }
 
-/// Project the computed outputs into the typed `{ <json_key>: { value, unit } }`
-/// map carrying units (read from the cell_map). ALL named outputs are projected
-/// uniformly (S-1 — no privileged headline).
+/// Project ONLY one tool's outputs into the typed `{ <json_key>: { value, unit } }`
+/// map (WBV2-04). Each output Table is its own MCP tool, so its handler projects
+/// exactly that Table's output cells — never the union across tools.
 ///
-/// WR-06: every projected numeric output is finiteness-checked — a non-finite
-/// f64 cannot be represented in JSON (serde_json substitutes `null`), so a
-/// non-finite output cell surfaces as an `invalid_input` error rather than a
-/// silent `null` masquerading as a success value.
+/// WR-04: fail closed on a declared-but-uncomputed output (a cell_map/IR skew).
+/// WR-06: every numeric output is finiteness-checked.
 #[allow(clippy::result_large_err)]
-pub(crate) fn project_outputs(
-    bundle: &WorkbookBundle,
+pub(crate) fn project_tool_outputs(
+    tool: &Tool,
     run: &RunResult,
 ) -> Result<Value, WorkbookToolError> {
     let mut outputs = serde_json::Map::new();
-    for entry in &bundle.cell_map.outputs {
-        // WR-04: fail closed on a declared-but-uncomputed output. The boot gate
-        // hash-covers the cell_map bytes but does NOT check that output seed_coords
-        // exist in the IR, so an absent entry here is a cell_map/IR skew, not a
-        // success — silently dropping it would let the served payload diverge from
-        // the advertised outputSchema (WBSV-07). Surface it as an `invalid_input`
-        // error so the contract and the payload can never disagree.
+    for entry in &tool.outputs {
         let Some(value) = run.computed.get(&entry.seed_coord) else {
             return Err(WorkbookToolError::invalid_input(format!(
                 "internal: declared output '{}' ({}) was not computed by the bundle IR",
@@ -137,32 +129,80 @@ pub(crate) fn render_at_boundary(
     result.unwrap_or_else(|e| to_iserror_result(&e, stamp))
 }
 
-// ---- calculate ---------------------------------------------------------------
+// ---- per-tool handler (WBV2-04) ----------------------------------------------
 
-/// The `calculate` handler (WBSV-01): validate → seed via cell_map → re-run the
-/// embedded IR → project ALL outputs (finite) → stamp.
-pub struct CalculateHandler {
+/// Sanitize a raw output-Table name into an MCP tool name matching
+/// `^[a-zA-Z0-9_-]{1,64}$` (T-100-10), wrapping the SINGLE shared runtime
+/// sanitizer ([`pmcp_workbook_runtime::sanitize_tool_name`]) so the served
+/// registration and the offline compiler's collision lint cannot drift on the
+/// locked five-rule semantics (lowercase, illegal-run → single `_`, trim edges,
+/// truncate 64, reject empty/all-illegal). A reject becomes the fail-closed
+/// `invalid_tool_name` domain error.
+///
+/// # Errors
+/// Returns `Err(WorkbookToolError::unmappable_tool_name)` when the input has no
+/// character mappable to the charset (empty or all-illegal).
+#[allow(clippy::result_large_err)]
+pub fn sanitize_tool_name(raw: &str) -> Result<String, WorkbookToolError> {
+    pmcp_workbook_runtime::sanitize_tool_name(raw).map_err(WorkbookToolError::unmappable_tool_name)
+}
+
+/// One served MCP tool per output Table (WBV2-04): validate → seed via cell_map →
+/// re-run the embedded IR → project ONLY this tool's outputs (finite) → stamp.
+///
+/// Each handler advertises a per-tool I/O schema: an inputSchema carrying ONLY
+/// this tool's DAG-derived `input_keys`, and a non-empty outputSchema over this
+/// tool's own outputs (TypedToolWithOutput). The generic single `calculate` is
+/// retired (§4 — an LLM selects a NAMED tool per output Table).
+pub struct WorkbookToolHandler {
     bundle: Arc<WorkbookBundle>,
+    tool: Tool,
     stamp: ProvStamp,
 }
 
-impl CalculateHandler {
-    /// The registered tool name — the single source for registration + metadata.
-    pub const NAME: &str = "calculate";
-
-    /// Build over the shared verified bundle.
+impl WorkbookToolHandler {
+    /// Build over the shared verified bundle + this tool's projection.
     #[must_use]
-    pub fn new(bundle: Arc<WorkbookBundle>) -> Self {
+    pub fn new(bundle: Arc<WorkbookBundle>, tool: Tool) -> Self {
         let stamp = ProvStamp::from_bundle(&bundle);
-        Self { bundle, stamp }
+        Self {
+            bundle,
+            tool,
+            stamp,
+        }
     }
 
-    /// The linear `?`-chained `calculate` pipeline.
+    /// The sanitized MCP tool name (the registered name + the metadata name —
+    /// ONE source so they cannot drift).
+    ///
+    /// # Errors
+    /// Returns `Err` if this tool's raw name is unmappable to the MCP charset.
+    #[allow(clippy::result_large_err)]
+    pub fn registered_name(&self) -> Result<String, WorkbookToolError> {
+        sanitize_tool_name(&self.tool.name)
+    }
+
+    /// The per-tool description (the output Table's caption), falling back to a
+    /// generic one when the Table carried no caption.
+    fn description(&self) -> String {
+        self.tool.description.clone().unwrap_or_else(|| {
+            format!(
+                "Compute the '{}' workbook outputs from the declared inputs by re-running \
+                 the compiled workbook IR. Returns each output as a units-bearing \
+                 {{ value, unit }} projection plus a provenance stamp. Strict \
+                 (BA-governed) constants cannot be overridden.",
+                self.tool.name
+            )
+        })
+    }
+
+    /// The linear `?`-chained per-tool pipeline: validate → re-run → project ONLY
+    /// this tool's outputs → stamp.
     #[allow(clippy::result_large_err)]
     fn compute(&self, args: Value) -> Result<Value, WorkbookToolError> {
         let validated = validate_input(args, &self.bundle.manifest, &self.bundle.cell_map)?;
         let run = run_bundle(&self.bundle, validated.seeds)?;
-        let outputs = project_outputs(&self.bundle, &run)?;
+        let outputs = project_tool_outputs(&self.tool, &run)?;
         let payload = json!({
             "outputs": outputs,
             "accepted_overrides": validated.accepted_overrides,
@@ -172,30 +212,26 @@ impl CalculateHandler {
 }
 
 #[async_trait]
-impl ToolHandler for CalculateHandler {
+impl ToolHandler for WorkbookToolHandler {
     async fn handle(&self, args: Value, _extra: RequestHandlerExtra) -> pmcp::Result<Value> {
         Ok(render_at_boundary(self.compute(args), &self.stamp))
     }
 
     fn metadata(&self) -> Option<ToolInfo> {
+        // The sanitized name is the metadata name. If it is somehow unmappable
+        // (registration would have already rejected it), fall back to the raw
+        // name so metadata() stays infallible — registration is the fail-closed gate.
+        let name = self
+            .registered_name()
+            .unwrap_or_else(|_| self.tool.name.clone());
         Some(
             ToolInfo::with_ui(
-                Self::NAME,
-                Some(
-                    "Compute the workbook outputs from the declared inputs by re-running \
-                     the compiled workbook IR. Returns every named output as a \
-                     units-bearing { value, unit } projection plus a \
-                     bundle_id@version+combined_hash provenance stamp. Strict \
-                     (BA-governed) constants cannot be overridden."
-                        .into(),
-                ),
-                input_schema_for_manifest(&self.bundle.manifest, &self.bundle.cell_map),
+                name,
+                Some(self.description()),
+                input_schema_for_tool(&self.bundle.manifest, &self.bundle.cell_map, &self.tool),
                 WORKBOOK_TOOL_UI,
             )
-            .with_output_schema(output_schema_for_manifest(
-                &self.bundle.manifest,
-                &self.bundle.cell_map,
-            )),
+            .with_output_schema(output_schema_for_tool(&self.bundle.manifest, &self.tool)),
         )
     }
 }
@@ -341,9 +377,16 @@ impl GetManifestHandler {
     }
 }
 
-/// Project one manifest input cell into its curated agent-facing record.
+/// Project one manifest input cell into its curated agent-facing record (M5).
+///
+/// The advertised `name` is the STRIPPED served key
+/// ([`json_key_for_role`](pmcp_workbook_runtime::json_key_for_role)) — the SAME key
+/// the served tool schema (`input_schema_for_tool`) advertises and `validate_input`
+/// accepts — so an agent that reads `get_manifest` then calls the tool with the
+/// discovered name is NOT rejected. The raw prefixed `role.name` (`in_income`) is kept
+/// only as internal `governance_name` for the named-range/governance audit trail.
 fn input_projection(role: &pmcp_workbook_runtime::CellRole) -> Value {
-    use pmcp_workbook_runtime::InputTier;
+    use pmcp_workbook_runtime::{json_key_for_role, InputTier};
     let (tier_kind, default) = match &role.tier {
         Some(InputTier::Variable { default }) => ("variable", cell_value_display(default)),
         Some(InputTier::BoundedVariable { default, .. }) => {
@@ -352,7 +395,8 @@ fn input_projection(role: &pmcp_workbook_runtime::CellRole) -> Value {
         None => ("variable", Value::Null),
     };
     json!({
-        "name": role.name,
+        "name": json_key_for_role(role),
+        "governance_name": role.name,
         "unit": role.unit,
         "meaning": role.meaning,
         "tier": tier_kind,
@@ -361,8 +405,12 @@ fn input_projection(role: &pmcp_workbook_runtime::CellRole) -> Value {
 }
 
 /// Build the curated agent-facing manifest projection (WBSV-03) + stamp.
+///
+/// M5: BOTH the input and output projections advertise the STRIPPED served key (the
+/// `json_key`) as `name`, so the discovery surface == the call surface — never the
+/// raw `in_`/`out_` prefixed name (which is kept only as `governance_name`).
 fn curated_manifest(bundle: &WorkbookBundle, stamp: &ProvStamp) -> Value {
-    use pmcp_workbook_runtime::Role;
+    use pmcp_workbook_runtime::{json_key_for_role, Role};
 
     let mut inputs = Vec::new();
     let mut outputs = Vec::new();
@@ -370,7 +418,8 @@ fn curated_manifest(bundle: &WorkbookBundle, stamp: &ProvStamp) -> Value {
         match role.role {
             Role::Input => inputs.push(input_projection(role)),
             Role::Output => outputs.push(json!({
-                "name": role.name,
+                "name": json_key_for_role(role),
+                "governance_name": role.name,
                 "unit": role.unit,
                 "meaning": role.meaning,
             })),
@@ -603,25 +652,52 @@ mod tests {
         Arc::new(load_bundle(&source).expect("golden bundle boots"))
     }
 
+    /// A per-tool handler over the golden's FIRST output Table (the multi-tool
+    /// model lift — Plan 04). The served compute path is shared across tools, so a
+    /// handler over the first tool exercises the same validate→run→project pipeline
+    /// the single `calculate` handler used to.
+    fn calc_handler() -> WorkbookToolHandler {
+        let bundle = golden_bundle();
+        let tool = bundle.cell_map.tools[0].clone();
+        WorkbookToolHandler::new(bundle, tool)
+    }
+
+    /// H3 BINDING: the reserved-tool-name set the offline compiler rejects against
+    /// (`RESERVED_TOOL_NAMES`, in the runtime leaf) is EXACTLY the four meta tools
+    /// this toolkit registers — derived from their `NAME` constants. If a handler's
+    /// `NAME` ever changes (or a fifth meta tool is added) WITHOUT updating the shared
+    /// const, this binding test fails, so the compiler gate cannot silently drift from
+    /// what is registered.
     #[test]
-    fn calculate_returns_all_outputs_with_provenance_no_headline() {
-        let handler = CalculateHandler::new(golden_bundle());
+    fn reserved_tool_names_match_the_registered_meta_tool_names() {
+        let registered = [
+            ExplainHandler::NAME,
+            GetManifestHandler::NAME,
+            DiffVersionHandler::NAME,
+            RenderWorkbookHandler::NAME,
+        ];
+        assert_eq!(
+            pmcp_workbook_runtime::RESERVED_TOOL_NAMES,
+            registered,
+            "the shared RESERVED_TOOL_NAMES const must equal the four registered meta \
+             tool NAME constants (H3 — derive, never hand-copy)"
+        );
+    }
+
+    #[test]
+    fn calculate_returns_tool_outputs_with_provenance_no_headline() {
+        let handler = calc_handler();
         let v = handler
             .compute(json!({ "inputs": { "gross_income": 60000.0, "filing_status": "single" } }))
             .expect("calculate succeeds");
 
-        // Every named output is present as a { value, unit } pair.
+        // Each of this tool's named outputs is present as a { value, unit } pair.
         let outputs = v["outputs"].as_object().expect("outputs is an object");
-        for key in [
-            "taxable_income",
-            "tax_owed",
-            "effective_rate",
-            "marginal_rate",
-        ] {
-            assert!(outputs.contains_key(key), "output {key} present");
+        assert!(!outputs.is_empty(), "the tool projects its outputs");
+        for (_key, col) in outputs {
             assert!(
-                outputs[key]["value"].is_number() || outputs[key]["value"].is_null(),
-                "output {key} carries a value"
+                col["value"].is_number() || col["value"].is_null(),
+                "each output carries a value"
             );
         }
         // S-1: the success payload has EXACTLY outputs/accepted_overrides/
@@ -645,7 +721,7 @@ mod tests {
         // CR-01: a caller-supplied input MUST drive the computation, not be
         // silently discarded in favour of the bundle's baked-in default
         // (gross_income=60000).
-        let handler = CalculateHandler::new(golden_bundle());
+        let handler = calc_handler();
 
         // gross_income 100000, default deduction 12000 => taxable_income 88000.
         let v = handler
@@ -672,7 +748,8 @@ mod tests {
     #[test]
     fn calculate_invalid_input_returns_iserror_in_structured_content() {
         let bundle = golden_bundle();
-        let handler = CalculateHandler::new(bundle.clone());
+        let tool = bundle.cell_map.tools[0].clone();
+        let handler = WorkbookToolHandler::new(bundle.clone(), tool);
         // An out-of-enum filing_status is a domain failure.
         let v = render_at_boundary(
             handler.compute(json!({ "inputs": { "filing_status": "alien" } })),
@@ -702,16 +779,17 @@ mod tests {
     }
 
     #[test]
-    fn project_outputs_fails_closed_on_missing_declared_output() {
+    fn project_tool_outputs_fails_closed_on_missing_declared_output() {
         // WR-04: a declared output (verified in cell_map at boot) absent from the run
-        // result is a cell_map/IR skew, NOT a success. project_outputs must fail
+        // result is a cell_map/IR skew, NOT a success. project_tool_outputs must fail
         // closed with invalid_input so the served payload can never silently diverge
         // from the advertised outputSchema (WBSV-07) — never an `else { continue }`.
         let bundle = golden_bundle();
+        let tool = &bundle.cell_map.tools[0];
         // A crafted RunResult whose `computed` map is EMPTY — every declared output's
         // seed_coord is therefore absent.
         let run = RunResult::default();
-        let err = project_outputs(&bundle, &run)
+        let err = project_tool_outputs(tool, &run)
             .expect_err("a missing declared output fails closed (WR-04)");
         assert_eq!(err.code, "invalid_input");
         assert!(
@@ -721,9 +799,7 @@ mod tests {
         );
         // The named, missing output is identified in the message.
         assert!(
-            bundle
-                .cell_map
-                .outputs
+            tool.outputs
                 .iter()
                 .any(|e| err.reason.contains(&e.json_key) || err.reason.contains(&e.seed_coord)),
             "the error identifies the uncomputed output: {}",
@@ -732,27 +808,28 @@ mod tests {
     }
 
     #[test]
-    fn project_outputs_succeeds_when_all_declared_outputs_present() {
+    fn project_tool_outputs_succeeds_when_all_declared_outputs_present() {
         // Companion to the fail-closed test: when every declared output IS computed,
-        // project_outputs returns the full { value, unit } map (no false positive).
+        // project_tool_outputs returns the full { value, unit } map (no false positive).
         let bundle = golden_bundle();
+        let tool = &bundle.cell_map.tools[0];
         let mut run = RunResult::default();
-        for entry in &bundle.cell_map.outputs {
+        for entry in &tool.outputs {
             run.computed
                 .insert(entry.seed_coord.clone(), CellValue::Number(1.0));
         }
-        let projected = project_outputs(&bundle, &run).expect("all-present projects");
+        let projected = project_tool_outputs(tool, &run).expect("all-present projects");
         let obj = projected.as_object().expect("outputs is an object");
         assert_eq!(
             obj.len(),
-            bundle.cell_map.outputs.len(),
+            tool.outputs.len(),
             "every declared output is projected"
         );
     }
 
     #[test]
-    fn calculate_advertises_non_empty_output_schema() {
-        let handler = CalculateHandler::new(golden_bundle());
+    fn tool_advertises_non_empty_output_schema() {
+        let handler = calc_handler();
         let meta = handler.metadata().expect("metadata present");
         let schema = meta
             .output_schema
@@ -762,6 +839,68 @@ mod tests {
             outputs.as_object().is_some_and(|o| !o.is_empty()),
             "outputSchema enumerates the named outputs"
         );
+    }
+
+    // ---- sanitize_tool_name (WBV2-04, T-100-10 locked semantics) ----------
+
+    #[test]
+    fn sanitize_lowercases_and_maps_space_to_underscore() {
+        assert_eq!(
+            sanitize_tool_name("Calculate Tax").unwrap(),
+            "calculate_tax"
+        );
+    }
+
+    #[test]
+    fn sanitize_lowercases_existing_underscore_name() {
+        assert_eq!(
+            sanitize_tool_name("Calculate_Tax").unwrap(),
+            "calculate_tax"
+        );
+    }
+
+    #[test]
+    fn sanitize_collapses_illegal_runs_to_single_underscore() {
+        assert_eq!(sanitize_tool_name("a  b").unwrap(), "a_b");
+        assert_eq!(sanitize_tool_name("a@@b").unwrap(), "a_b");
+        assert_eq!(sanitize_tool_name("a@ @b").unwrap(), "a_b");
+    }
+
+    #[test]
+    fn sanitize_trims_leading_and_trailing_edges() {
+        assert_eq!(sanitize_tool_name("  hello  ").unwrap(), "hello");
+        assert_eq!(sanitize_tool_name("__hi__").unwrap(), "hi");
+        assert_eq!(sanitize_tool_name("-hi-").unwrap(), "hi");
+    }
+
+    #[test]
+    fn sanitize_truncates_to_64() {
+        let long = "a".repeat(200);
+        let out = sanitize_tool_name(&long).unwrap();
+        assert_eq!(out.len(), 64);
+        assert!(out.chars().all(|c| c == 'a'));
+    }
+
+    #[test]
+    fn sanitize_rejects_empty_and_all_illegal() {
+        assert!(sanitize_tool_name("").is_err());
+        assert!(sanitize_tool_name("   ").is_err());
+        assert!(sanitize_tool_name("@@@").is_err());
+        assert!(sanitize_tool_name("日本語").is_err());
+    }
+
+    #[test]
+    fn workbook_tool_handler_metadata_carries_both_schemas() {
+        let handler = calc_handler();
+        let meta = handler.metadata().expect("metadata present");
+        // Name is the sanitized tool name.
+        assert_eq!(
+            meta.name,
+            sanitize_tool_name(&handler.tool.name).unwrap(),
+            "metadata name is the sanitized tool name"
+        );
+        assert!(meta.input_schema.is_object(), "carries an input schema");
+        assert!(meta.output_schema.is_some(), "carries an output schema");
     }
 
     // ---- explain (WBSV-02, S-2) ------------------------------------------
@@ -819,13 +958,93 @@ mod tests {
         assert!(v["combined_hash"].is_string());
         // Curated inputs/outputs/governed_data/changelog projections.
         let inputs = v["inputs"].as_array().expect("inputs array");
-        assert_eq!(inputs.len(), 3, "three inputs projected");
+        assert_eq!(
+            inputs.len(),
+            4,
+            "four inputs projected (income, filing, deductions, withheld)"
+        );
         assert!(inputs.iter().all(|i| i["tier"].is_string()));
         let outputs = v["outputs"].as_array().expect("outputs array");
-        assert_eq!(outputs.len(), 4, "four outputs projected");
+        assert_eq!(
+            outputs.len(),
+            5,
+            "five outputs projected (4 tax + 1 refund) across the two tools"
+        );
         assert!(v["governed_data"].is_array());
         assert!(v["changelog"].is_array());
         assert!(v["provenance"]["combined_hash"].is_string());
+    }
+
+    /// M5: `get_manifest` advertises the STRIPPED served key (the `json_key`) as the
+    /// input/output `name` — EXACTLY the keys the served tool schemas advertise — never
+    /// the raw `in_`/`out_` prefixed name. An agent that reads `get_manifest` then calls
+    /// the tool with the discovered name is therefore NOT rejected.
+    #[test]
+    fn get_manifest_advertises_the_stripped_served_keys() {
+        use super::super::schema::output_schema_for_manifest;
+        use std::collections::BTreeSet;
+        let bundle = golden_bundle();
+        let v = curated_manifest(&bundle, &ProvStamp::from_bundle(&bundle));
+
+        // The advertised input/output names from get_manifest.
+        let manifest_inputs: BTreeSet<String> = v["inputs"]
+            .as_array()
+            .expect("inputs array")
+            .iter()
+            .map(|i| i["name"].as_str().expect("input name string").to_string())
+            .collect();
+        let manifest_outputs: BTreeSet<String> = v["outputs"]
+            .as_array()
+            .expect("outputs array")
+            .iter()
+            .map(|o| o["name"].as_str().expect("output name string").to_string())
+            .collect();
+
+        // NO advertised name carries an in_/out_ governance prefix (stripped).
+        for name in manifest_inputs.iter().chain(manifest_outputs.iter()) {
+            assert!(
+                !name.starts_with("in_") && !name.starts_with("out_"),
+                "advertised get_manifest name `{name}` is stripped (no governance prefix)"
+            );
+        }
+
+        // The WORKBOOK-WIDE served schema keys (get_manifest is a workbook-wide
+        // projection — every manifest input/output, NOT a single tool's DAG-scoped
+        // subset). M5 asserts get_manifest's advertised names EQUAL these served keys.
+        let wide_in = input_schema_for_manifest(&bundle.manifest, &bundle.cell_map);
+        let served_inputs: BTreeSet<String> = wide_in["properties"]["inputs"]["properties"]
+            .as_object()
+            .map(|m| m.keys().cloned().collect())
+            .unwrap_or_default();
+        let wide_out = output_schema_for_manifest(&bundle.manifest, &bundle.cell_map);
+        let served_outputs: BTreeSet<String> = wide_out["properties"]["outputs"]["properties"]
+            .as_object()
+            .map(|m| m.keys().cloned().collect())
+            .unwrap_or_default();
+
+        assert_eq!(
+            manifest_inputs, served_inputs,
+            "get_manifest input names == the workbook-wide served input keys (stripped)"
+        );
+        assert_eq!(
+            manifest_outputs, served_outputs,
+            "get_manifest output names == the workbook-wide served output keys (stripped)"
+        );
+
+        // And every PER-TOOL served key is discoverable in get_manifest (a tool's
+        // DAG-scoped subset is always covered by the workbook-wide advertised names),
+        // so a discovered name is always callable.
+        for tool in &bundle.cell_map.tools {
+            let in_schema = input_schema_for_tool(&bundle.manifest, &bundle.cell_map, tool);
+            if let Some(props) = in_schema["properties"]["inputs"]["properties"].as_object() {
+                for key in props.keys() {
+                    assert!(
+                        manifest_inputs.contains(key),
+                        "served per-tool input key `{key}` is discoverable in get_manifest"
+                    );
+                }
+            }
+        }
     }
 
     // ---- diff_version (WBSV-04) ------------------------------------------

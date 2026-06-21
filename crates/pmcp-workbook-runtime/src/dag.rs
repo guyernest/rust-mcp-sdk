@@ -15,7 +15,7 @@
 //! Owned, serde/schemars-clean (the umya-quarantine invariant): keys are plain
 //! `String`s; no foreign type appears in any public signature.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 
 use serde::Serialize;
 
@@ -145,6 +145,51 @@ pub fn toposort(dag: &Dag) -> Result<Vec<String>, Vec<String>> {
     }
 }
 
+/// Collect the `Role::Input` LEAF cells transitively reachable UPSTREAM of
+/// `output_cell` — each tool's minimal, DAG-derived input set (WBV2-03 §4.2).
+///
+/// Walks the "depends on" edge ([`Dag::dependencies_of`]) from `output_cell`
+/// inward. A cell present in `input_cells` is a LEAF: it is collected and the
+/// traversal stops there (an input never recurses into its own dependencies). A
+/// cell NOT in `input_cells` (a constant or an intermediate formula) is NOT
+/// collected — the traversal recurses through it — so a constant-only upstream
+/// path is naturally EXCLUDED (constants are never in `input_cells`). When several
+/// outputs share an intermediate, each output's call returns the union of ITS OWN
+/// upstream leaves.
+///
+/// Determinism: results land in a [`BTreeSet`] (sorted by construction — the same
+/// determinism discipline [`toposort`]'s `ready.sort()`/`newly_ready.sort()` use).
+///
+/// Total + cycle-safe: a `seen` guard prevents revisiting a node, so an arbitrary
+/// (even CYCLIC) edge set TERMINATES — never recursing infinitely or overflowing
+/// the stack. This is the totality Task 4's fuzz target proves over hostile DAGs.
+pub fn upstream_input_leaves(
+    dag: &Dag,
+    output_cell: &str,
+    input_cells: &HashSet<String>,
+) -> BTreeSet<String> {
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut leaves: BTreeSet<String> = BTreeSet::new();
+    let mut stack: Vec<String> = vec![output_cell.to_string()];
+    while let Some(cell) = stack.pop() {
+        // The `seen` guard makes the traversal terminate on a cyclic edge set.
+        if !seen.insert(cell.clone()) {
+            continue;
+        }
+        if input_cells.contains(&cell) {
+            // A Role::Input cell is a LEAF — collect it and STOP (do not recurse
+            // into its own dependencies).
+            leaves.insert(cell);
+            continue;
+        }
+        // A constant / intermediate: recurse through it (not collected).
+        for dep in dag.dependencies_of(&cell) {
+            stack.push(dep.clone());
+        }
+    }
+    leaves
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -210,5 +255,165 @@ mod tests {
         dag.add_edge("S!B", "S!A");
         let residual = toposort(&dag).expect_err("a cycle must be Err");
         assert_eq!(residual, vec!["S!A".to_string(), "S!B".to_string()]);
+    }
+
+    // ---- upstream_input_leaves (WBV2-03 §4.2) ------------------------------
+
+    fn inputs(keys: &[&str]) -> HashSet<String> {
+        keys.iter().map(|k| (*k).to_string()).collect()
+    }
+
+    fn leaves(set: &BTreeSet<String>) -> Vec<String> {
+        set.iter().cloned().collect()
+    }
+
+    #[test]
+    fn upstream_input_leaves_returns_exactly_reachable_inputs() {
+        // out depends on f1; f1 depends on income + filing (both inputs).
+        let mut dag = Dag::new();
+        dag.add_edge("Calc!out", "Calc!f1");
+        dag.add_edge("Calc!f1", "In!income");
+        dag.add_edge("Calc!f1", "In!filing");
+        let input_cells = inputs(&["In!income", "In!filing", "In!withheld"]);
+        let got = upstream_input_leaves(&dag, "Calc!out", &input_cells);
+        // withheld is an input but NOT upstream of out → excluded (minimal).
+        assert_eq!(leaves(&got), vec!["In!filing", "In!income"]);
+    }
+
+    #[test]
+    fn upstream_input_leaves_excludes_constant_only_path() {
+        // out depends on a constant (const_rate) that depends on nothing in
+        // input_cells → the constant path contributes NO leaf.
+        let mut dag = Dag::new();
+        dag.add_edge("Calc!out", "In!income");
+        dag.add_edge("Calc!out", "Const!rate"); // a constant cell (not an input)
+        dag.add_edge("Const!rate", "Const!base"); // constant-only upstream
+        let input_cells = inputs(&["In!income"]);
+        let got = upstream_input_leaves(&dag, "Calc!out", &input_cells);
+        assert_eq!(
+            leaves(&got),
+            vec!["In!income"],
+            "a constant-only upstream path yields no input leaf"
+        );
+    }
+
+    #[test]
+    fn upstream_input_leaves_input_is_a_leaf_traversal_stops() {
+        // An input cell that itself has upstream edges (pathological) must still be
+        // a LEAF — the traversal stops at it and does NOT collect its dependencies.
+        let mut dag = Dag::new();
+        dag.add_edge("Calc!out", "In!income");
+        dag.add_edge("In!income", "Const!hidden"); // never followed past the input
+        let input_cells = inputs(&["In!income"]);
+        let got = upstream_input_leaves(&dag, "Calc!out", &input_cells);
+        assert_eq!(leaves(&got), vec!["In!income"]);
+    }
+
+    #[test]
+    fn upstream_input_leaves_shared_intermediate_unions_per_output() {
+        // A shared intermediate `shared` feeds two outputs; each output gets the
+        // union of ITS OWN upstream input leaves.
+        //   tax  = shared + filing   (shared <- income)
+        //   refund = shared + withheld
+        let mut dag = Dag::new();
+        dag.add_edge("Calc!tax", "Calc!shared");
+        dag.add_edge("Calc!tax", "In!filing");
+        dag.add_edge("Calc!refund", "Calc!shared");
+        dag.add_edge("Calc!refund", "In!withheld");
+        dag.add_edge("Calc!shared", "In!income");
+        let input_cells = inputs(&["In!income", "In!filing", "In!withheld"]);
+
+        let tax = upstream_input_leaves(&dag, "Calc!tax", &input_cells);
+        assert_eq!(
+            leaves(&tax),
+            vec!["In!filing", "In!income"],
+            "tax = its own upstream leaves (income via shared + filing)"
+        );
+        let refund = upstream_input_leaves(&dag, "Calc!refund", &input_cells);
+        assert_eq!(
+            leaves(&refund),
+            vec!["In!income", "In!withheld"],
+            "refund = its own upstream leaves (income via shared + withheld)"
+        );
+    }
+
+    #[test]
+    fn upstream_input_leaves_terminates_on_a_cycle() {
+        // A cyclic edge set must terminate (the seen-guard) — Task 4's fuzz relies
+        // on this. a <-> b cycle upstream of out, with one real input leaf.
+        let mut dag = Dag::new();
+        dag.add_edge("Calc!out", "Calc!a");
+        dag.add_edge("Calc!a", "Calc!b");
+        dag.add_edge("Calc!b", "Calc!a"); // cycle
+        dag.add_edge("Calc!a", "In!income");
+        let input_cells = inputs(&["In!income"]);
+        let got = upstream_input_leaves(&dag, "Calc!out", &input_cells);
+        assert_eq!(leaves(&got), vec!["In!income"]);
+    }
+
+    // PROPERTY (SC2 Wave-0 gap): over a RANDOM acyclic DAG + a random input-cell
+    // subset, the derived set is a SUBSET of input_cells AND every member has a
+    // directed dependency path to the output (⊆ inputs ∧ reachable ∧ minimal).
+    proptest::proptest! {
+        #[test]
+        fn prop_upstream_leaves_subset_and_reachable(
+            // A layered acyclic DAG: node i may depend only on lower-indexed nodes
+            // (so the generated graph is ALWAYS acyclic), plus a random input mask.
+            edges in proptest::collection::vec(
+                (0usize..12, 0usize..12),
+                0..40,
+            ),
+            input_mask in proptest::collection::vec(proptest::bool::ANY, 12),
+        ) {
+            let node = |i: usize| format!("N{i}");
+            let mut dag = Dag::new();
+            for i in 0..12 {
+                dag.add_node(&node(i));
+            }
+            // Keep only lower-index dependencies → guaranteed acyclic.
+            for (from, dep) in &edges {
+                if dep < from {
+                    dag.add_edge(&node(*from), &node(*dep));
+                }
+            }
+            let input_cells: HashSet<String> = (0..12)
+                .filter(|i| input_mask[*i])
+                .map(node)
+                .collect();
+            let output = node(11);
+            let got = upstream_input_leaves(&dag, &output, &input_cells);
+
+            // ⊆ inputs: every derived leaf is a declared input cell.
+            for leaf in &got {
+                proptest::prop_assert!(
+                    input_cells.contains(leaf),
+                    "derived leaf {leaf} must be an input cell"
+                );
+            }
+
+            // reachable: every derived leaf has a directed depends-on path to the
+            // output (re-walk dependencies_of independently of the impl under test).
+            for leaf in &got {
+                let mut seen: HashSet<String> = HashSet::new();
+                let mut stack = vec![output.clone()];
+                let mut reached = false;
+                while let Some(c) = stack.pop() {
+                    if c == *leaf {
+                        reached = true;
+                        break;
+                    }
+                    if !seen.insert(c.clone()) {
+                        continue;
+                    }
+                    for d in dag.dependencies_of(&c) {
+                        stack.push(d.clone());
+                    }
+                }
+                proptest::prop_assert!(
+                    reached,
+                    "derived leaf {leaf} must be reachable upstream of {output}"
+                );
+            }
+        }
     }
 }

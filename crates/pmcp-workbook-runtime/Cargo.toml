@@ -52,3 +52,11 @@ include_dir = { version = "0.7.4", optional = true }
 [features]
 # Bake a bundle directory tree into the binary via `EmbeddedSource` (WBSV-09).
 embedded = ["dep:include_dir"]
+
+[dev-dependencies]
+# Property-based test harness for the `upstream_input_leaves` reachability property
+# (WBV2-03, SC2). DEV-ONLY: stripped from the published artifact, never on the
+# reader-free runtime cone (`make purity-check` reads the non-dev tree). proptest
+# 1.11 is an EXISTING workspace dependency (the Plan 02 compiler harness already
+# pins it; T-100-SC accept — no new package install / legitimacy concern).
+proptest = "1"

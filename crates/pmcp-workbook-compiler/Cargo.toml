@@ -95,3 +95,7 @@ rust_xlsxwriter = { version = "0.95", default-features = false }
 # fail-closed BundleLoader. Dev-only — the compiler never depends on the toolkit
 # at runtime (the purity boundary keeps umya out of the served tree).
 pmcp-server-toolkit = { version = "0.1.0", path = "../pmcp-server-toolkit", default-features = false, features = ["workbook"] }
+# PROPERTY testing (CLAUDE.md ALWAYS: PROPERTY) — `harvest_roundtrip_prop.rs`
+# proves the §3.3 per-row harvest projection (Plan 02) is total + stable + closed
+# over arbitrary well-formed rows. Workspace-standard pin. Dev-only.
+proptest = "1.7"

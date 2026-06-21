@@ -25,11 +25,11 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use pmcp_workbook_runtime::sheet_ir::Cell;
-use pmcp_workbook_runtime::{ChangeClass, LayoutDescriptor, Manifest, VersionChangelog};
+use pmcp_workbook_runtime::{ChangeClass, Dag, LayoutDescriptor, Manifest, VersionChangelog};
 
 use super::corpus::{ApprovalCase, ApprovalRecord, CorpusError, RegionDelta};
 use super::governed_artifact::{atomic_promote_dir, write_approval};
-use crate::artifact::{emit_bundle, ParserEquivalence};
+use crate::artifact::{emit_bundle, OutputTable, ParserEquivalence};
 use crate::BundleLock;
 
 /// An accept / promote failure — owned `String` detail only (no foreign type at the
@@ -184,6 +184,14 @@ pub struct PromoteInputs<'a> {
     pub parser_equivalence: &'a ParserEquivalence,
     /// The canonical workbook content hash.
     pub workbook_hash: String,
+    /// The per-Table output membership (WBV2-04): when NON-EMPTY, [`emit_bundle`]
+    /// fans out one served Tool per output Table with a DAG-derived populated
+    /// `input_keys`; when EMPTY (the named-range corpus, zero harvested output
+    /// Tables) it falls back to the transitional single-tool `build_cell_map`.
+    pub output_tables: &'a [OutputTable],
+    /// The dependency [`Dag`] the per-Table `input_keys` are derived from (the SAME
+    /// DAG `compile_workbook_inner` built; only read on the multi-tool path).
+    pub dag: &'a Dag,
 }
 
 /// CR-02 versioned NON-OVERWRITING promote (WBGV-06): write the candidate bundle to
@@ -245,6 +253,8 @@ pub fn promote(
         inputs.changelog,
         inputs.parser_equivalence,
         inputs.workbook_hash.clone(),
+        inputs.output_tables,
+        inputs.dag,
         &staging_root,
     )
     .map_err(|e| {
@@ -377,6 +387,11 @@ mod tests {
         }
     }
 
+    /// An EMPTY output-Table set + a trivial DAG: these accept/promote fixtures
+    /// exercise the single-tool `build_cell_map` fallback (the named-range corpus
+    /// path), unchanged by the multi-tool wiring.
+    static EMPTY_TABLES: &[OutputTable] = &[];
+
     #[allow(clippy::too_many_arguments)]
     fn promote_inputs<'a>(
         bundle_id: &'a str,
@@ -387,6 +402,7 @@ mod tests {
         changelog: &'a VersionChangelog,
         pe: &'a ParserEquivalence,
         hash: String,
+        dag: &'a Dag,
     ) -> PromoteInputs<'a> {
         PromoteInputs {
             bundle_id,
@@ -397,6 +413,8 @@ mod tests {
             changelog,
             parser_equivalence: pe,
             workbook_hash: hash,
+            output_tables: EMPTY_TABLES,
+            dag,
         }
     }
 
@@ -457,7 +475,8 @@ mod tests {
         let layout = sample_layout(&hash);
         let cl = changelog("", "1.0.0"); // empty from_version under GatedUpdate = bad
         let pe = parser_equiv();
-        let inputs = promote_inputs("tax-calc", "1.0.0", &ir, &m, &layout, &cl, &pe, hash);
+        let dag = Dag::new();
+        let inputs = promote_inputs("tax-calc", "1.0.0", &ir, &m, &layout, &cl, &pe, hash, &dag);
         let lane = EmitLane::GatedUpdate {
             prior_version: "0.9.0".to_string(),
         };
@@ -493,7 +512,8 @@ mod tests {
         let layout = sample_layout(&hash);
         let cl = changelog("", "1.0.0"); // Seed: empty from_version
         let pe = parser_equiv();
-        let inputs = promote_inputs("tax-calc", "1.0.0", &ir, &m, &layout, &cl, &pe, hash);
+        let dag = Dag::new();
+        let inputs = promote_inputs("tax-calc", "1.0.0", &ir, &m, &layout, &cl, &pe, hash, &dag);
         let (lock, final_dir) = promote(&EmitLane::Seed, &dir, &inputs).expect("seed promote");
         assert_eq!(lock.version, "1.0.0");
         assert!(
@@ -518,7 +538,8 @@ mod tests {
         let layout1 = sample_layout(&h1);
         let cl1 = changelog("", "1.0.0");
         let pe = parser_equiv();
-        let in1 = promote_inputs("tax-calc", "1.0.0", &ir, &m, &layout1, &cl1, &pe, h1);
+        let dag = Dag::new();
+        let in1 = promote_inputs("tax-calc", "1.0.0", &ir, &m, &layout1, &cl1, &pe, h1, &dag);
         let (lock1, dir1) = promote(&EmitLane::Seed, &dir, &in1).expect("promote v1");
         assert_eq!(lock1.version, "1.0.0");
         let v1_lock_before = std::fs::read(dir1.join("BUNDLE.lock")).expect("v1 lock");
@@ -527,7 +548,7 @@ mod tests {
         let h2 = sha256_hex(b"wb-v2");
         let layout2 = sample_layout(&h2);
         let cl2 = changelog("1.0.0", "1.1.0");
-        let in2 = promote_inputs("tax-calc", "1.1.0", &ir, &m, &layout2, &cl2, &pe, h2);
+        let in2 = promote_inputs("tax-calc", "1.1.0", &ir, &m, &layout2, &cl2, &pe, h2, &dag);
         let lane2 = EmitLane::GatedUpdate {
             prior_version: "1.0.0".to_string(),
         };
@@ -561,11 +582,22 @@ mod tests {
         let layout = sample_layout(&h);
         let cl = changelog("", "1.0.0");
         let pe = parser_equiv();
-        let in1 = promote_inputs("tax-calc", "1.0.0", &ir, &m, &layout, &cl, &pe, h.clone());
+        let dag = Dag::new();
+        let in1 = promote_inputs(
+            "tax-calc",
+            "1.0.0",
+            &ir,
+            &m,
+            &layout,
+            &cl,
+            &pe,
+            h.clone(),
+            &dag,
+        );
         promote(&EmitLane::Seed, &dir, &in1).expect("first promote");
 
         // A second promote into the SAME version dir is refused (no partial state).
-        let in2 = promote_inputs("tax-calc", "1.0.0", &ir, &m, &layout, &cl, &pe, h);
+        let in2 = promote_inputs("tax-calc", "1.0.0", &ir, &m, &layout, &cl, &pe, h, &dag);
         let err = promote(&EmitLane::Seed, &dir, &in2).expect_err("re-promote refused");
         assert!(matches!(err, AcceptError::Store(_)));
         // No staging dir leaked.

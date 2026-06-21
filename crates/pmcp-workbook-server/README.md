@@ -1,6 +1,6 @@
 # pmcp-workbook-server
 
-Shape A pure-config workbook MCP server binary — point it at a compiled `bundle@version` directory and serve five workbook tools with **no Rust required**.
+Shape A pure-config workbook MCP server binary — point it at a compiled `bundle@version` directory and serve one named MCP tool per output table (plus infrastructure tools) with **no Rust required**.
 
 **Status:** 0.1.0 — early access. The boot pipeline is fully implemented; the public CLI surface may still evolve.
 
@@ -36,15 +36,25 @@ It is the runnable binary built on top of the [`pmcp-server-toolkit`](../pmcp-se
 - **Not the library.** The reusable building blocks (the bundle loader, the integrity gate, the workbook tool surface) live in [`pmcp-server-toolkit`](../pmcp-server-toolkit). This crate is the runnable binary on top of it.
 - **Not the compiler.** It does not turn an Excel file into a bundle — it only *serves* an already-compiled bundle. Use `cargo pmcp workbook compile` to produce the bundle (see [Where bundles come from](#where-bundles-come-from)).
 - **Not a SQL / database toolkit.** It serves pre-compiled calculation bundles, not live database queries.
-- **Not a code-mode server.** The served binary contains no SWC/JS code-mode stack; it serves the fixed five-tool workbook surface from the bundle alone.
+- **Not a code-mode server.** The served binary contains no SWC/JS code-mode stack; it serves the per-table workbook surface (one tool per output table plus the infrastructure tools below) from the bundle alone.
 
 ## The served surface
 
-A compiled bundle is served as five MCP tools plus one resource:
+Each output Excel **Table** in the workbook becomes its own MCP tool (the multi-tool fan-out, WBV2-04), named after the table and carrying a DAG-derived input schema — only the inputs that table's formulas actually reference. Alongside those, four fixed infrastructure tools and one resource are always served:
+
+**Calculation tools — one per output table (dynamic):**
+
+| Tool (example)    | Purpose                                                          |
+| ----------------- | --------------------------------------------------------------- |
+| `calculate_tax`   | Run one output table's calculation against supplied inputs       |
+| `estimate_refund` | …another output table → another named tool, with its own inputs  |
+
+The exact set and names come from the workbook's output tables (sanitized to the MCP tool-name charset). Preview them before deploy with `cargo pmcp workbook explain <wb.xlsx>`.
+
+**Infrastructure tools — fixed, workbook-wide:**
 
 | Tool              | Purpose                                                          |
 | ----------------- | --------------------------------------------------------------- |
-| `calculate`       | Run the workbook's calculation against supplied inputs          |
 | `explain`         | Explain how a result was derived                                |
 | `get_manifest`    | Return the bundle manifest (identity, inputs, outputs)          |
 | `diff_version`    | Compare results or definitions across versions                  |
@@ -70,8 +80,8 @@ The reader/JS purity of the served binary (no SWC/JS code-mode, no spreadsheet r
 > ```
 >
 > A successful run proves the fail-closed boot gate verified the bundle and all
-> five tools registered. The walkthrough below builds the same shape against a
-> bundle of your own.
+> of the workbook's tools registered (one per output table, plus the infrastructure
+> tools). The walkthrough below builds the same shape against a bundle of your own.
 
 ### 1. Build / install
 
