@@ -1348,7 +1348,7 @@ Plans:
 
 **Source**: pmcp.run dev-team feedback + multi-turn design convergence (2026-06-20); spec at `docs/design/workbook-table-authoring-contract.md`.
 
-**Plans:** 8 plans (7/7 complete + 100-08 gap closure)
+**Plans:** 8/8 plans complete
 
 Plans:
 
@@ -1382,7 +1382,7 @@ Plans:
 
 **Wave 8** *(gap closure — pmcp.run dev-team review: 3 HIGH publish-blockers + 3 MEDIUM)*
 
-- [ ] 100-08-PLAN.md — WBV2-04/05/06 (gap): re-point `cargo pmcp workbook explain` at the PRODUCTION build_tools projection (delete bespoke walker; explain↔served parity test on template.xlsx) [H1]; reject value-shaped input names [H2] + reserved meta-tool-name output Tables [H3] + colliding output keys [M4] at compile (both lanes); get_manifest surfaces the stripped json_key == served schema [M5]; wire each tool's oracle from cached cell values so per-tool reconcile blocks on a perturbed output [M6]. 4 LOW findings deferred.
+- [x] 100-08-PLAN.md — WBV2-04/05/06 (gap): re-point `cargo pmcp workbook explain` at the PRODUCTION build_tools projection (delete bespoke walker; explain↔served parity test on template.xlsx) [H1]; reject value-shaped input names [H2] + reserved meta-tool-name output Tables [H3] + colliding output keys [M4] at compile (both lanes); get_manifest surfaces the stripped json_key == served schema [M5]; wire each tool's oracle from cached cell values so per-tool reconcile blocks on a perturbed output [M6]. 4 LOW findings deferred.
 
 ---
 

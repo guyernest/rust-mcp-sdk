@@ -4,13 +4,13 @@ milestone: v2.3
 milestone_name: Excel-as-Configuration MCP Servers
 status: verifying
 stopped_at: Completed 100-02-PLAN.md (WBV2-02 Table harvest + per-row type/unit/enum/tier + fuzz/property/e2e)
-last_updated: "2026-06-20T22:33:40.749Z"
+last_updated: "2026-06-21T02:08:23.316Z"
 last_activity: 2026-06-20
 progress:
   total_phases: 54
   completed_phases: 48
-  total_plans: 228
-  completed_plans: 228
+  total_plans: 229
+  completed_plans: 229
   percent: 89
 ---
 
@@ -73,6 +73,7 @@ Decisions are logged in PROJECT.md Key Decisions table. Decisions framing this m
 - [Phase ?]: Phase 100-03 (WBV2-03): lifted the shared artifact model to multi-tool CellMap{inputs[], tools[]} — pub struct Tool{name, description, input_keys, outputs, oracle} (drops Eq) in reader-free artifact_model.rs. Added Dag::upstream_input_leaves (cycle-safe DFS, BTreeSet) deriving each tool's minimal input set, property- AND fuzz-proven derived⊆inputs over hostile/cyclic DAGs (T-100-06, dag_upstream_leaves 20k runs). build_tools(manifest, dag, output_tables)->(Vec<Tool>, Vec<LintFinding>): groups output cells by Table (OutputTable membership param — Rule 3 deviation: CellRole records no owning Table), unions upstream leaves->input_keys, WARNING feeds-no-tool lint, constant-only excluded; §4.2 example [filing,income]/[filing,income,withheld] proven. Transitional #[deprecated] CellMap::outputs() flattens tools[].outputs to keep the workbook cone compiling green end-of-wave-3 (Plan 04 Task 1 deletes it). Regenerated tax-calc@1.1.0 golden to {inputs, tools[]} (loader DESERIALIZES it). build_cell_map kept single-tool-transitional; Plan 04 owns the per-Table served fan-out. make purity-check PASSED (T-100-07). Pre-existing out-of-scope reds VERIFIED at HEAD: pmcp-toolkit-mysql sqlx E0277, cargo-pmcp embedded-mirror+auth-cache.
 - [Phase ?]: Phase 100-05 (WBV2-06/07): cargo pmcp workbook explain previews the served multi-tool surface from a raw .xlsx via DIRECT ingest-record harvest (NOT build_tools+DAG, respecting the Plan-04 named-range deferral); pure projection in explain_surface.rs mounted into the lib via #[path] as crate::workbook_explain; BA book Ch12.14 + course chapter teach the table model only
 - [Phase ?]: Phase 100-06 (WBV2-08): phase-wide gate verdict — make lint GREEN, make purity-check GREEN (umya/calamine not-in-tree on runtime, no reader in any served tree), PMAT cog<=25 zero src/-scope + zero workbook-path; retired-symbol sweep: CalculateHandler + Plan-03 outputs() shim GONE, no in_*/out_* injection; named-range trio recorded as Plan-04 Rule-4 deferral (still-consumed, not dead code); 3 pre-existing out-of-scope failures excluded (mysql E0277, auth-cache proptest, Phase-93 fuzz_provenance_reader drift)
+- [Phase ?]: Phase 100-08 gap closure: explain drives the production projection (walker deleted); reserved-name/value-shaped/output-key compile gates; get_manifest stripped key; per-tool oracle wired from cached <v>.
 
 ### Pending Todos
 
@@ -109,7 +110,7 @@ Items deferred by design for this milestone:
 
 ## Session Continuity
 
-Last session: 2026-06-20T22:27:25.969Z
+Last session: 2026-06-21T02:07:44.450Z
 Stopped at: Completed 100-02-PLAN.md (WBV2-02 Table harvest + per-row type/unit/enum/tier + fuzz/property/e2e)
 Resume file: None
 
@@ -132,3 +133,4 @@ Resume file: None
 | Phase 100 P100-03 | ~70min | 5 tasks | 19 files |
 | Phase 100 P100-05 | 55min | 2 tasks | 11 files |
 | Phase 100 P06 | ~6min | 3 tasks | 1 files |
+| Phase 100 P100-08 | ~135min | 3 tasks | 10 files |
