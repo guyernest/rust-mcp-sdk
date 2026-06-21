@@ -278,7 +278,7 @@ pub trait TaskStore: Send + Sync {
     /// Returns a reference to the store's configuration.
     fn config(&self) -> &StoreConfig;
 
-    /// Persist the terminal [`CallToolResult`](crate::types::CallToolResult)
+    /// Persist the terminal [`CallToolResult`]
     /// for a completed task, scoped to `owner_id`.
     ///
     /// This is an **additive** trait method with a default implementation, so
@@ -330,7 +330,7 @@ pub trait TaskStore: Send + Sync {
     }
 
     /// Retrieve the persisted terminal
-    /// [`CallToolResult`](crate::types::CallToolResult) for a task, scoped to
+    /// [`CallToolResult`] for a task, scoped to
     /// `owner_id`.
     ///
     /// This is an **additive** trait method with a default implementation. The
