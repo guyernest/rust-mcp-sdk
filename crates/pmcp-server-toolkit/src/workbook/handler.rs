@@ -377,9 +377,16 @@ impl GetManifestHandler {
     }
 }
 
-/// Project one manifest input cell into its curated agent-facing record.
+/// Project one manifest input cell into its curated agent-facing record (M5).
+///
+/// The advertised `name` is the STRIPPED served key
+/// ([`json_key_for_role`](pmcp_workbook_runtime::json_key_for_role)) — the SAME key
+/// the served tool schema (`input_schema_for_tool`) advertises and `validate_input`
+/// accepts — so an agent that reads `get_manifest` then calls the tool with the
+/// discovered name is NOT rejected. The raw prefixed `role.name` (`in_income`) is kept
+/// only as internal `governance_name` for the named-range/governance audit trail.
 fn input_projection(role: &pmcp_workbook_runtime::CellRole) -> Value {
-    use pmcp_workbook_runtime::InputTier;
+    use pmcp_workbook_runtime::{json_key_for_role, InputTier};
     let (tier_kind, default) = match &role.tier {
         Some(InputTier::Variable { default }) => ("variable", cell_value_display(default)),
         Some(InputTier::BoundedVariable { default, .. }) => {
@@ -388,7 +395,8 @@ fn input_projection(role: &pmcp_workbook_runtime::CellRole) -> Value {
         None => ("variable", Value::Null),
     };
     json!({
-        "name": role.name,
+        "name": json_key_for_role(role),
+        "governance_name": role.name,
         "unit": role.unit,
         "meaning": role.meaning,
         "tier": tier_kind,
@@ -397,8 +405,12 @@ fn input_projection(role: &pmcp_workbook_runtime::CellRole) -> Value {
 }
 
 /// Build the curated agent-facing manifest projection (WBSV-03) + stamp.
+///
+/// M5: BOTH the input and output projections advertise the STRIPPED served key (the
+/// `json_key`) as `name`, so the discovery surface == the call surface — never the
+/// raw `in_`/`out_` prefixed name (which is kept only as `governance_name`).
 fn curated_manifest(bundle: &WorkbookBundle, stamp: &ProvStamp) -> Value {
-    use pmcp_workbook_runtime::Role;
+    use pmcp_workbook_runtime::{json_key_for_role, Role};
 
     let mut inputs = Vec::new();
     let mut outputs = Vec::new();
@@ -406,7 +418,8 @@ fn curated_manifest(bundle: &WorkbookBundle, stamp: &ProvStamp) -> Value {
         match role.role {
             Role::Input => inputs.push(input_projection(role)),
             Role::Output => outputs.push(json!({
-                "name": role.name,
+                "name": json_key_for_role(role),
+                "governance_name": role.name,
                 "unit": role.unit,
                 "meaning": role.meaning,
             })),
@@ -960,6 +973,78 @@ mod tests {
         assert!(v["governed_data"].is_array());
         assert!(v["changelog"].is_array());
         assert!(v["provenance"]["combined_hash"].is_string());
+    }
+
+    /// M5: `get_manifest` advertises the STRIPPED served key (the `json_key`) as the
+    /// input/output `name` — EXACTLY the keys the served tool schemas advertise — never
+    /// the raw `in_`/`out_` prefixed name. An agent that reads `get_manifest` then calls
+    /// the tool with the discovered name is therefore NOT rejected.
+    #[test]
+    fn get_manifest_advertises_the_stripped_served_keys() {
+        use super::super::schema::output_schema_for_manifest;
+        use std::collections::BTreeSet;
+        let bundle = golden_bundle();
+        let v = curated_manifest(&bundle, &ProvStamp::from_bundle(&bundle));
+
+        // The advertised input/output names from get_manifest.
+        let manifest_inputs: BTreeSet<String> = v["inputs"]
+            .as_array()
+            .expect("inputs array")
+            .iter()
+            .map(|i| i["name"].as_str().expect("input name string").to_string())
+            .collect();
+        let manifest_outputs: BTreeSet<String> = v["outputs"]
+            .as_array()
+            .expect("outputs array")
+            .iter()
+            .map(|o| o["name"].as_str().expect("output name string").to_string())
+            .collect();
+
+        // NO advertised name carries an in_/out_ governance prefix (stripped).
+        for name in manifest_inputs.iter().chain(manifest_outputs.iter()) {
+            assert!(
+                !name.starts_with("in_") && !name.starts_with("out_"),
+                "advertised get_manifest name `{name}` is stripped (no governance prefix)"
+            );
+        }
+
+        // The WORKBOOK-WIDE served schema keys (get_manifest is a workbook-wide
+        // projection — every manifest input/output, NOT a single tool's DAG-scoped
+        // subset). M5 asserts get_manifest's advertised names EQUAL these served keys.
+        let wide_in = input_schema_for_manifest(&bundle.manifest, &bundle.cell_map);
+        let served_inputs: BTreeSet<String> = wide_in["properties"]["inputs"]["properties"]
+            .as_object()
+            .map(|m| m.keys().cloned().collect())
+            .unwrap_or_default();
+        let wide_out = output_schema_for_manifest(&bundle.manifest, &bundle.cell_map);
+        let served_outputs: BTreeSet<String> = wide_out["properties"]["outputs"]["properties"]
+            .as_object()
+            .map(|m| m.keys().cloned().collect())
+            .unwrap_or_default();
+
+        assert_eq!(
+            manifest_inputs, served_inputs,
+            "get_manifest input names == the workbook-wide served input keys (stripped)"
+        );
+        assert_eq!(
+            manifest_outputs, served_outputs,
+            "get_manifest output names == the workbook-wide served output keys (stripped)"
+        );
+
+        // And every PER-TOOL served key is discoverable in get_manifest (a tool's
+        // DAG-scoped subset is always covered by the workbook-wide advertised names),
+        // so a discovered name is always callable.
+        for tool in &bundle.cell_map.tools {
+            let in_schema = input_schema_for_tool(&bundle.manifest, &bundle.cell_map, tool);
+            if let Some(props) = in_schema["properties"]["inputs"]["properties"].as_object() {
+                for key in props.keys() {
+                    assert!(
+                        manifest_inputs.contains(key),
+                        "served per-tool input key `{key}` is discoverable in get_manifest"
+                    );
+                }
+            }
+        }
     }
 
     // ---- diff_version (WBSV-04) ------------------------------------------

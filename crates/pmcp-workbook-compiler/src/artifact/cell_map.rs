@@ -72,7 +72,10 @@ pub struct OutputTable {
 /// cells transitively reachable upstream — mapped from cell key to its served
 /// `json_key` via the shared [`json_key_for_role`]. The tool's `outputs` reuse
 /// [`entry`] per output cell; its `oracle` carries each output cell's authored
-/// expected value.
+/// expected value, sourced (M6) from `output_oracles` — the orchestrator's authored
+/// cached-`<v>` value-by-CELL-key map (falling back to a role's tier default when the
+/// map is silent). Pass an EMPTY map when no per-tool reconcile is intended (the
+/// served-bundle emit / read-only preview, where the oracle is not graded).
 ///
 /// Edge cases (§4.2): a constant-only upstream path contributes NO input (excluded
 /// by [`upstream_input_leaves`], no lint); an input cell reachable by NO tool yields
@@ -87,6 +90,7 @@ pub fn build_tools(
     manifest: &Manifest,
     dag: &Dag,
     output_tables: &[OutputTable],
+    output_oracles: &BTreeMap<String, CellValue>,
 ) -> Result<(Vec<Tool>, Vec<LintFinding>), String> {
     if output_tables.is_empty() {
         return Err(
@@ -119,7 +123,14 @@ pub fn build_tools(
         // build_one_tool already walks each output's upstream input leaves to derive
         // input_keys; it returns the reached input CELLS so we mark them fed without a
         // second DAG traversal.
-        let (tool, reached) = build_one_tool(manifest, dag, table, &input_cells, &input_key_of);
+        let (tool, reached) = build_one_tool(
+            manifest,
+            dag,
+            table,
+            &input_cells,
+            &input_key_of,
+            output_oracles,
+        );
         fed_inputs.extend(reached);
         tools.push(tool);
     }
@@ -132,12 +143,21 @@ pub fn build_tools(
 /// and reconcile oracle. Returns the tool plus the set of input CELLS it reached
 /// (so `build_tools` can mark them fed without re-walking the DAG). Kept separate so
 /// `build_tools` stays a thin loop (cog ≤25).
+///
+/// The per-output `oracle` (M6) is filled PRIMARILY from `output_oracles` — the
+/// authored cached `<v>` value-by-CELL-key map the orchestrator built from the
+/// workbook's cached output cells (`comparison_from_outputs`). When the cached map
+/// carries no entry for an output cell, the role's tier-carried default
+/// ([`oracle_value`], the pre-M6 fallback) is used, so the existing tier-based unit
+/// tests keep grading. With the cached map wired, the per-tool reconcile is no longer
+/// vacuous: a perturbed cached value blocks the emit.
 fn build_one_tool(
     manifest: &Manifest,
     dag: &Dag,
     table: &OutputTable,
     input_cells: &HashSet<String>,
     input_key_of: &BTreeMap<String, String>,
+    output_oracles: &BTreeMap<String, CellValue>,
 ) -> (Tool, BTreeSet<String>) {
     let mut input_keys: BTreeSet<String> = BTreeSet::new();
     let mut reached_cells: BTreeSet<String> = BTreeSet::new();
@@ -153,10 +173,16 @@ fn build_one_tool(
             }
             reached_cells.insert(leaf);
         }
-        // outputs + oracle from the manifest CellRole for this output cell.
+        // outputs + oracle from the manifest CellRole for this output cell. M6: the
+        // oracle value comes from the authored cached `<v>` map (keyed by cell key),
+        // falling back to the role's tier default when the cached map is silent.
         if let Some(role) = role_for_cell(manifest, cell_key) {
             outputs.push(entry(role));
-            if let Some(value) = oracle_value(role) {
+            if let Some(value) = output_oracles
+                .get(cell_key)
+                .cloned()
+                .or_else(|| oracle_value(role))
+            {
                 oracle.insert(json_key_for_role(role), value);
             }
         }
@@ -416,16 +442,15 @@ fn collision_finding(sanitized: &str, group: &[&OutputTable]) -> LintFinding {
     )
 }
 
-/// The authored expected-result ORACLE value for an output cell, when the manifest
-/// carries a typed default (the harvested cached `<v>`). Currently sourced from the
-/// `InputTier::Variable` default the harvest stamps on output rows is `None`, so this
-/// reads the cell's value via the manifest when present; outputs without a recorded
-/// value contribute no oracle entry.
+/// The FALLBACK oracle value for an output cell from its role's tier-carried default
+/// (M6): the PRIMARY oracle source is now the orchestrator's authored cached-`<v>`
+/// value-by-cell-key map, threaded into [`build_tools`] as `output_oracles` and
+/// preferred in [`build_one_tool`]. This fallback only fires when the cached map is
+/// silent for a cell (e.g. a synthetic test that stamps a `Variable` tier default on
+/// an output role). Harvested outputs carry no tier default, so for them this returns
+/// `None` and the cached map is the sole, NON-vacuous oracle source — a perturbed
+/// cached value now blocks the per-tool reconcile.
 fn oracle_value(role: &CellRole) -> Option<CellValue> {
-    // Outputs are never tiered; the harvested expected value rides on the role's
-    // tier default ONLY for inputs. Output oracle values are supplied by the
-    // orchestrator's reconcile partition (Plan 04 wires the cached <v>); here we
-    // surface any tier-carried default for symmetry with inputs.
     match &role.tier {
         Some(pmcp_workbook_runtime::InputTier::Variable { default }) => Some(default.clone()),
         Some(pmcp_workbook_runtime::InputTier::BoundedVariable { default, .. }) => {
@@ -674,10 +699,17 @@ mod tests {
                 Some("USD"),
             ),
             // outputs carry an authored expected value via a Variable tier default
-            // (stand-in for the harvested cached <v> oracle until Plan 04 wiring).
+            // (the `oracle_value` fallback path — exercises the no-cached-map case).
             output_role("Calc!tax", "tax", CellValue::Number(18241.0)),
             output_role("Calc!refund", "refund", CellValue::Number(-3241.0)),
         ])
+    }
+
+    /// An EMPTY cached-`<v>` oracle map: `build_tools` then falls back to the role's
+    /// tier default (`oracle_value`) — the pre-M6 behaviour these tier-based tests
+    /// assert. The M6 cached-map path is exercised by `*_cached_oracle*` tests below.
+    fn no_oracle() -> BTreeMap<String, CellValue> {
+        BTreeMap::new()
     }
 
     fn output_role(cell: &str, name: &str, oracle: CellValue) -> CellRole {
@@ -713,7 +745,8 @@ mod tests {
                 output_cells: vec!["Calc!refund".to_string()],
             },
         ];
-        let (tools, findings) = build_tools(&manifest, &dag, &tables).expect("build tools");
+        let (tools, findings) =
+            build_tools(&manifest, &dag, &tables, &no_oracle()).expect("build tools");
         assert_eq!(tools.len(), 2, "two output Tables → two Tools");
 
         let tax = &tools[0];
@@ -752,11 +785,90 @@ mod tests {
             description: None,
             output_cells: vec!["Calc!tax".to_string()],
         }];
-        let (tools, _) = build_tools(&manifest, &dag, &tables).expect("build tools");
+        let (tools, _) = build_tools(&manifest, &dag, &tables, &no_oracle()).expect("build tools");
         assert_eq!(
             tools[0].oracle.get("tax"),
             Some(&CellValue::Number(18241.0)),
             "the tool's oracle carries its output's authored expected value"
+        );
+    }
+
+    // ---- M6: per-tool oracle wired from the cached `<v>` map -----------------
+
+    /// A manifest whose harvested output rows carry NO tier default (the production
+    /// shape) — so the ONLY oracle source is the cached-`<v>` map (M6). Without the
+    /// cached map, the per-tool reconcile would be vacuous (empty oracle).
+    fn harvested_manifest() -> Manifest {
+        manifest_with(vec![
+            role("In!income", Role::Input, Some("income"), None, Some("USD")),
+            // a plain Role::Output (no tier) — oracle_value returns None for it.
+            role("Calc!tax", Role::Output, Some("tax"), None, Some("USD")),
+        ])
+    }
+
+    fn single_tax_table() -> Vec<OutputTable> {
+        vec![OutputTable {
+            name: "Calculate_Tax".to_string(),
+            description: None,
+            output_cells: vec!["Calc!tax".to_string()],
+        }]
+    }
+
+    #[test]
+    fn cached_oracle_map_populates_a_non_tiered_outputs_oracle() {
+        // The harvested output carries no tier default → no_oracle() yields an EMPTY
+        // per-tool oracle (the pre-M6 vacuous net)…
+        let manifest = harvested_manifest();
+        let mut dag = Dag::new();
+        dag.add_edge("Calc!tax", "In!income");
+        let (vacuous, _) =
+            build_tools(&manifest, &dag, &single_tax_table(), &no_oracle()).expect("build");
+        assert!(
+            vacuous[0].oracle.is_empty(),
+            "without the cached map a non-tiered output has an EMPTY oracle (vacuous)"
+        );
+
+        // …but feeding the authored cached `<v>` map makes the oracle NON-empty (M6).
+        let mut cached = BTreeMap::new();
+        cached.insert("Calc!tax".to_string(), CellValue::Number(18241.0));
+        let (wired, _) = build_tools(&manifest, &dag, &single_tax_table(), &cached).expect("build");
+        assert_eq!(
+            wired[0].oracle.get("tax"),
+            Some(&CellValue::Number(18241.0)),
+            "the cached `<v>` map populates the per-tool oracle (M6 — no longer vacuous)"
+        );
+    }
+
+    #[test]
+    fn perturbed_cached_output_blocks_per_tool_reconcile() {
+        // With the cached oracle wired, a per-tool reconcile against a COMPUTED value
+        // that disagrees with the cached `<v>` now genuinely mismatches (M6).
+        let manifest = harvested_manifest();
+        let mut dag = Dag::new();
+        dag.add_edge("Calc!tax", "In!income");
+
+        // The authored cached oracle says tax == 18241.
+        let mut cached = BTreeMap::new();
+        cached.insert("Calc!tax".to_string(), CellValue::Number(18241.0));
+        let (tools, _) = build_tools(&manifest, &dag, &single_tax_table(), &cached).expect("build");
+
+        // A PERTURBED computed value (the executor produced 99999, not 18241) → the
+        // per-tool reconcile mismatches → the emit is blocked.
+        let mut computed = BTreeMap::new();
+        computed.insert("Calc!tax".to_string(), CellValue::Number(99999.0));
+        let report = reconcile_tools(&computed, &tools).expect("reconcile");
+        assert!(
+            report.any_mismatch(),
+            "a perturbed output (computed != cached oracle) BLOCKS the per-tool reconcile"
+        );
+
+        // The matching computed value reconciles cleanly (the gate is not stuck-on).
+        let mut ok = BTreeMap::new();
+        ok.insert("Calc!tax".to_string(), CellValue::Number(18241.0));
+        let clean = reconcile_tools(&ok, &tools).expect("reconcile");
+        assert!(
+            !clean.any_mismatch(),
+            "the unperturbed computed value reconciles against the cached oracle"
         );
     }
 
@@ -790,7 +902,8 @@ mod tests {
             description: None,
             output_cells: vec!["Calc!total".to_string()],
         }];
-        let (tools, _findings) = build_tools(&manifest, &dag, &tables).expect("build tools");
+        let (tools, _findings) =
+            build_tools(&manifest, &dag, &tables, &no_oracle()).expect("build tools");
         assert_eq!(
             tools[0].input_keys,
             vec!["adjustment".to_string(), "first_qtr".to_string()],
@@ -803,7 +916,7 @@ mod tests {
     fn build_tools_fails_loud_on_zero_output_tables() {
         let manifest = motivating_manifest();
         let dag = motivating_dag();
-        let err = build_tools(&manifest, &dag, &[]).expect_err("zero Tables => Err");
+        let err = build_tools(&manifest, &dag, &[], &no_oracle()).expect_err("zero Tables => Err");
         assert!(
             err.contains("no output Table"),
             "fail-loud message names the gap: {err}"
@@ -829,7 +942,7 @@ mod tests {
             description: None,
             output_cells: vec!["Calc!out".to_string()],
         }];
-        let (tools, findings) = build_tools(&manifest, &dag, &tables).expect("build");
+        let (tools, findings) = build_tools(&manifest, &dag, &tables, &no_oracle()).expect("build");
         assert_eq!(
             tools[0].input_keys,
             vec!["income".to_string()],

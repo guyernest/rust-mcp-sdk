@@ -427,9 +427,12 @@ fn compile_workbook_inner(
     // silently overwrite the built-in meta tool at registration. Same stage-1 gate.
     refuse_reserved_output_table_names(&output_tables)?;
     // (7c) On the multi-tool path, reconcile each derived tool against ITS OWN oracle
-    // (WBV2-05). Any per-tool mismatch blocks the emit. The named-range fallback
-    // (empty set) keeps the shared comparison_from_outputs reconcile above.
-    reconcile_output_tables(&output_tables, &dag, &manifest, &run)?;
+    // (WBV2-05/M6). The per-tool oracle is the authored cached-`<v>` map, so the
+    // per-tool reconcile genuinely grades the table path (a perturbed cached value
+    // blocks). Any per-tool mismatch blocks the emit. The named-range fallback (empty
+    // set) keeps the shared comparison_from_outputs reconcile above.
+    let output_oracles = output_oracle_map(&map, &manifest);
+    reconcile_output_tables(&output_tables, &dag, &manifest, &run, &output_oracles)?;
 
     // (8) Emit the seven-member bundle through the SEED lane (first version: no
     // prior baseline). The manifest came SOLELY from synth→ratify (no hand-built
@@ -579,7 +582,12 @@ fn tools_for_surface(
         // Named-range corpus: no harvested Table → the single-tool fallback.
         return Ok(build_cell_map(manifest).map_err(CompileError::Emit)?.tools);
     }
-    let (tools, _lints) = build_tools(manifest, dag, output_tables).map_err(CompileError::Emit)?;
+    // The read-only preview grades NO oracle, so pass an empty oracle map (M6: the
+    // cached-`<v>` oracle is a compile-time reconcile artifact, irrelevant to the
+    // structural surface the preview projects).
+    let empty_oracles = BTreeMap::new();
+    let (tools, _lints) =
+        build_tools(manifest, dag, output_tables, &empty_oracles).map_err(CompileError::Emit)?;
     Ok(tools)
 }
 
@@ -754,6 +762,38 @@ fn comparison_from_outputs(
         }
     }
     comparison
+}
+
+/// The authored cached-`<v>` ORACLE map for the per-tool reconcile (M6): each
+/// `Role::Output` cell's cached value, keyed by its fully-qualified CELL key — the
+/// SAME cached values [`comparison_from_outputs`] grades the shared named-output
+/// reconcile against, projected into the `{cell_key -> CellValue}` shape
+/// [`build_tools`] takes as `output_oracles`. Threading this in makes each tool's
+/// oracle NON-empty so the per-tool reconcile genuinely grades the table path (a
+/// perturbed cached value blocks the emit), no longer a vacuous net.
+fn output_oracle_map(
+    map: &ingest::WorkbookMap,
+    manifest: &Manifest,
+) -> BTreeMap<String, CellValue> {
+    let mut value_by_key: HashMap<String, CellValue> = HashMap::new();
+    for sheet in &map.sheets {
+        for cell in &sheet.cells {
+            if let Some(value) = &cell.value {
+                let key = pmcp_workbook_runtime::range_ref::cell_key(&sheet.name, &cell.addr);
+                value_by_key.insert(key, parse_cell_value(value));
+            }
+        }
+    }
+
+    let mut oracles = BTreeMap::new();
+    for role in &manifest.cells {
+        if matches!(role.role, Role::Output) {
+            if let Some(value) = value_by_key.get(&role.cell) {
+                oracles.insert(role.cell.clone(), value.clone());
+            }
+        }
+    }
+    oracles
 }
 
 /// Promote every `out_*` named-range target cell in `manifest` to [`Role::Output`].
@@ -1055,11 +1095,16 @@ fn reconcile_output_tables(
     dag: &Dag,
     manifest: &Manifest,
     run: &RunResult,
+    output_oracles: &BTreeMap<String, CellValue>,
 ) -> Result<(), CompileError> {
     if output_tables.is_empty() {
         return Ok(());
     }
-    let (tools, _lints) = build_tools(manifest, dag, output_tables).map_err(CompileError::Emit)?;
+    // M6: pass the authored cached-`<v>` oracle map so each tool's oracle is NON-empty
+    // — the per-tool reconcile now genuinely grades the table path (a perturbed cached
+    // value blocks the emit), no longer a vacuous net.
+    let (tools, _lints) =
+        build_tools(manifest, dag, output_tables, output_oracles).map_err(CompileError::Emit)?;
     // RunResult exposes `computed: HashMap<String, CellValue>`; reconcile_tools takes
     // a `&BTreeMap` — convert explicitly (there is no `computed_as_btreemap`).
     let computed: BTreeMap<String, CellValue> = run
@@ -1576,7 +1621,9 @@ fn prepare_candidate_inner(
     refuse_colliding_output_tables(&output_tables)?;
     // H3: the SAME reserved-name gate the seed lane runs (dual-lane, no drift).
     refuse_reserved_output_table_names(&output_tables)?;
-    reconcile_output_tables(&output_tables, &dag, &manifest, &run)?;
+    // M6: the SAME cached-`<v>` per-tool oracle the seed lane wires (dual-lane).
+    let output_oracles = output_oracle_map(&map, &manifest);
+    reconcile_output_tables(&output_tables, &dag, &manifest, &run, &output_oracles)?;
 
     // (8) Project the named-output computed values into the gate's grading map and
     // capture the layout + declared version. The candidate STOPS here (no promote).

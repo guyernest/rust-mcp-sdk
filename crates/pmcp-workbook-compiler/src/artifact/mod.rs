@@ -248,7 +248,12 @@ fn cell_map_for_emit(
     if output_tables.is_empty() {
         return build_cell_map(ratified).map_err(EmitError::CellMap);
     }
-    let (tools, _lints) = build_tools(ratified, dag, output_tables).map_err(EmitError::CellMap)?;
+    // The served bundle's tools carry no graded oracle (the per-tool reconcile is a
+    // compile-time gate the driver already ran via `reconcile_output_tables`); pass an
+    // empty oracle map (M6 — the cached `<v>` oracle is not a served-payload field).
+    let no_oracles = std::collections::BTreeMap::new();
+    let (tools, _lints) =
+        build_tools(ratified, dag, output_tables, &no_oracles).map_err(EmitError::CellMap)?;
     Ok(CellMap {
         inputs: shared_inputs(ratified),
         tools,
