@@ -5,6 +5,41 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.9.2] - 2026-06-20
+
+Excel-as-Configuration workbook servers: the table-based authoring contract, and
+the first crates.io release of the workbook crate tree.
+
+### Added
+
+- **Table-based workbook authoring** — author inputs and outputs as named Excel
+  Tables (`name | value | description | tier`); each output Table becomes its own
+  named, DAG-typed MCP tool (multi-tool fan-out, one tool per output Table with a
+  per-tool input schema reaching only the inputs its formulas use). Supersedes the
+  per-cell `in_*`/`out_*` named-range model.
+- **`cargo pmcp workbook explain <file>`** (`cargo-pmcp` 0.17.0) — read-only,
+  pre-deploy preview of the exact served tool surface, projected through the same
+  production compiler path the server registers (so it cannot drift); text +
+  `--format json`.
+- **First crates.io release of the workbook crate tree** — `pmcp-workbook-dialect`,
+  `pmcp-workbook-runtime`, `pmcp-workbook-compiler`, and `pmcp-workbook-server`
+  at 0.1.0. The Excel reader (umya) stays confined to the compiler; the served
+  crates are reader-free (purity gate).
+
+### Changed
+
+- **`pmcp-server-toolkit` 0.1.1** — the served workbook surface fans out to one
+  tool per output Table with DAG-derived per-tool input schemas; `get_manifest`
+  advertises the stripped served keys; compile-time gates reject reserved-tool-name
+  and output-key collisions. (Additive behind the `workbook` feature — the SQL
+  connectors' `^0.1.0` pins are unaffected.)
+
+### Fixed
+
+- **`pmcp-toolkit-mysql` 0.1.1** — sqlx 0.9 `SqlSafeStr`: wrap the audited dynamic
+  query in `AssertSqlSafe` (the SQL is placeholder-translated and every value is
+  bound via `bind_one`, never interpolated).
+
 ## [2.9.1] - 2026-05-31
 
 Completes the v2.9.0 release and fixes a yanked-dependency breakage.
