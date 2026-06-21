@@ -151,6 +151,17 @@ impl ToolExecution {
     }
 
     /// Set the task support level.
+    ///
+    /// Marking a tool with [`TaskSupport::Required`] and registering a
+    /// [`TaskStore`](crate::server::task_store::TaskStore) on the server (via
+    /// [`ServerCoreBuilder::task_store`](crate::server::builder::ServerCoreBuilder::task_store))
+    /// is how you expose a tool as an async MCP Task: the SDK then serves
+    /// `tasks/get`, `tasks/result`, `tasks/list`, and `tasks/cancel` typed from
+    /// the store. See `examples/s45_tool_as_task_lifecycle.rs` for the full
+    /// pattern.
+    ///
+    /// A `Required` tool with no task backend makes the server's `build()`
+    /// return an error (never a hollow `tasks` capability).
     pub fn with_task_support(mut self, support: TaskSupport) -> Self {
         self.task_support = Some(support);
         self
@@ -158,6 +169,13 @@ impl ToolExecution {
 }
 
 /// Task support level for a tool.
+///
+/// Set this via
+/// [`ToolExecution::with_task_support`]. Pairing
+/// [`TaskSupport::Required`] with a
+/// [`TaskStore`](crate::server::task_store::TaskStore) on the server is the
+/// recommended way to expose a tool as an async MCP Task — see
+/// `examples/s45_tool_as_task_lifecycle.rs`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum TaskSupport {

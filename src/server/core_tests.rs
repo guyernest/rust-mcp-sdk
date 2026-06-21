@@ -865,17 +865,31 @@ mod tests {
                     "Response should NOT have 'content' field (that would be CallToolResult)"
                 );
 
-                // Verify task fields
-                assert_eq!(result["task"]["taskId"], "t-test-123");
+                // D-STORE-MINTS-ID (finding #3): the wire task.taskId is the
+                // STORE-minted id, NOT the tool's fabricated "t-test-123".
+                let wire_task_id = result["task"]["taskId"]
+                    .as_str()
+                    .expect("task.taskId must be a string");
+                assert_ne!(
+                    wire_task_id, "t-test-123",
+                    "wire id must be the store-minted id, not the tool's fabricated id"
+                );
+                // The tool's value carried no result content, so the task stays
+                // Working (pending) -- no synchronous completion.
                 assert_eq!(result["task"]["status"], "working");
 
-                // Verify _meta with related-task reference (D-08, D-09)
+                // Verify _meta with related-task reference (D-08, D-09) and that
+                // it equals the store-minted wire id.
                 assert!(
                     result.get("_meta").is_some(),
                     "Response should have '_meta' with related-task"
                 );
                 let related = &result["_meta"][RELATED_TASK_META_KEY];
-                assert_eq!(related["taskId"], "t-test-123");
+                assert_eq!(
+                    related["taskId"].as_str(),
+                    Some(wire_task_id),
+                    "_meta task id must equal the wire task.taskId (store-minted)"
+                );
             },
             _ => panic!("Expected successful tool call with CreateTaskResult"),
         }
@@ -994,6 +1008,295 @@ mod tests {
             },
             _ => panic!("Expected successful tool call with CallToolResult"),
         }
+    }
+
+    /// Helper: extract the `Result` payload Value or panic.
+    fn expect_result_payload(
+        response: crate::types::jsonrpc::JSONRPCResponse,
+    ) -> serde_json::Value {
+        match response.payload {
+            crate::types::jsonrpc::ResponsePayload::Result(v) => v,
+            other => panic!("expected Result payload, got: {other:?}"),
+        }
+    }
+
+    /// Helper: extract the error code from an `Error` payload or panic.
+    fn expect_error_code(response: crate::types::jsonrpc::JSONRPCResponse) -> i32 {
+        match response.payload {
+            crate::types::jsonrpc::ResponsePayload::Error(e) => e.code,
+            other => panic!("expected Error payload, got: {other:?}"),
+        }
+    }
+
+    /// Finding #1 + #3 acceptance: a synchronously-completing task tool drives
+    /// create -> the wire id is the store-minted id reflected in BOTH
+    /// `task.taskId` AND `_meta` -> `tasks/get` finds it (not `NotFound`) and
+    /// shows `Completed` -> `tasks/result` returns non-empty
+    /// `CallToolResult.content`.
+    #[tokio::test]
+    async fn test_task_create_roundtrip_store_minted_id_and_typed_result() {
+        use crate::server::task_store::InMemoryTaskStore;
+        use crate::server::typed_tool::TypedTool;
+        use crate::types::tasks::{GetTaskPayloadRequest, GetTaskRequest, RELATED_TASK_META_KEY};
+        use crate::types::{TaskSupport, ToolExecution};
+
+        // Tool returns a Task-shaped value that ALSO carries terminal `content`
+        // (synchronous completion per D-TERMINAL-RESULT-CONTRACT).
+        let task_tool = TypedTool::new_with_schema(
+            "task_tool",
+            json!({"type": "object"}),
+            |_args: serde_json::Value, _extra| {
+                Box::pin(async {
+                    Ok(json!({
+                        "taskId": "tool-fabricated-id",
+                        "status": "working",
+                        "content": [{ "type": "text", "text": "the answer is 42" }]
+                    }))
+                })
+            },
+        )
+        .with_description("A synchronously-completing task tool")
+        .with_execution(ToolExecution::new().with_task_support(TaskSupport::Required));
+
+        let task_store =
+            Arc::new(InMemoryTaskStore::new()) as Arc<dyn crate::server::task_store::TaskStore>;
+
+        let server = ServerCoreBuilder::new()
+            .name("test-server")
+            .version("1.0.0")
+            .tool("task_tool", task_tool)
+            .task_store(task_store)
+            .build()
+            .unwrap();
+
+        server
+            .handle_request(RequestId::from(0i64), create_init_request(), None)
+            .await;
+
+        // create
+        let mut call_req = CallToolRequest::new("task_tool", json!({}));
+        call_req.task = Some(json!({}));
+        let request = Request::Client(Box::new(ClientRequest::CallTool(call_req)));
+        let create = expect_result_payload(
+            server
+                .handle_request(RequestId::from(1i64), request, None)
+                .await,
+        );
+
+        // finding #3: wire task.taskId == _meta id == store-minted (not the tool's)
+        let wire_id = create["task"]["taskId"]
+            .as_str()
+            .expect("task.taskId string")
+            .to_string();
+        assert_ne!(wire_id, "tool-fabricated-id");
+        assert_eq!(
+            create["_meta"][RELATED_TASK_META_KEY]["taskId"].as_str(),
+            Some(wire_id.as_str())
+        );
+        // synchronous completion visible on the create envelope
+        assert_eq!(create["task"]["status"], "completed");
+
+        // tasks/get with the store-minted id finds the task (NOT NotFound)
+        let get_req = Request::Client(Box::new(ClientRequest::TasksGet(GetTaskRequest {
+            task_id: wire_id.clone(),
+        })));
+        let got = expect_result_payload(
+            server
+                .handle_request(RequestId::from(2i64), get_req, None)
+                .await,
+        );
+        assert_eq!(got["task"]["taskId"].as_str(), Some(wire_id.as_str()));
+        assert_eq!(got["task"]["status"], "completed");
+
+        // finding #1: tasks/result returns a typed, NON-EMPTY CallToolResult
+        let result_req = Request::Client(Box::new(ClientRequest::TasksResult(
+            GetTaskPayloadRequest {
+                task_id: wire_id.clone(),
+            },
+        )));
+        let result = expect_result_payload(
+            server
+                .handle_request(RequestId::from(3i64), result_req, None)
+                .await,
+        );
+        let content = result["content"]
+            .as_array()
+            .expect("CallToolResult.content array");
+        assert!(
+            !content.is_empty(),
+            "tasks/result must return non-empty terminal content"
+        );
+        assert_eq!(content[0]["text"], "the answer is 42");
+    }
+
+    /// MED refinement: a pending task (no synchronous result) with a store but
+    /// NO router yields the SPECIFIED not-completed error (-32002), not
+    /// `NotFound` and not the no-backend -32601.
+    #[tokio::test]
+    async fn test_tasks_result_pending_task_returns_specified_error() {
+        use crate::server::task_store::InMemoryTaskStore;
+        use crate::server::typed_tool::TypedTool;
+        use crate::types::tasks::GetTaskPayloadRequest;
+        use crate::types::{TaskSupport, ToolExecution};
+
+        // Tool returns a Task-shaped value with NO content -> task stays pending.
+        let task_tool = TypedTool::new_with_schema(
+            "task_tool",
+            json!({"type": "object"}),
+            |_args: serde_json::Value, _extra| {
+                Box::pin(async { Ok(json!({ "taskId": "pending", "status": "working" })) })
+            },
+        )
+        .with_description("A pending task tool")
+        .with_execution(ToolExecution::new().with_task_support(TaskSupport::Required));
+
+        let task_store =
+            Arc::new(InMemoryTaskStore::new()) as Arc<dyn crate::server::task_store::TaskStore>;
+
+        let server = ServerCoreBuilder::new()
+            .name("test-server")
+            .version("1.0.0")
+            .tool("task_tool", task_tool)
+            .task_store(task_store)
+            .build()
+            .unwrap();
+
+        server
+            .handle_request(RequestId::from(0i64), create_init_request(), None)
+            .await;
+
+        let mut call_req = CallToolRequest::new("task_tool", json!({}));
+        call_req.task = Some(json!({}));
+        let create = expect_result_payload(
+            server
+                .handle_request(
+                    RequestId::from(1i64),
+                    Request::Client(Box::new(ClientRequest::CallTool(call_req))),
+                    None,
+                )
+                .await,
+        );
+        let wire_id = create["task"]["taskId"].as_str().unwrap().to_string();
+        assert_eq!(create["task"]["status"], "working");
+
+        let result_req = Request::Client(Box::new(ClientRequest::TasksResult(
+            GetTaskPayloadRequest { task_id: wire_id },
+        )));
+        let code = expect_error_code(
+            server
+                .handle_request(RequestId::from(2i64), result_req, None)
+                .await,
+        );
+        assert_eq!(
+            code, -32002,
+            "pending task must return the specified not-completed error"
+        );
+    }
+
+    /// Finding #2: with BOTH a `TaskStore` (which has no result for the polled
+    /// id) AND a `TaskRouter`, `tasks/result` FALLS THROUGH to the router
+    /// (router serves it) rather than returning a hard error.
+    #[tokio::test]
+    async fn test_tasks_result_falls_through_to_router_on_store_miss() {
+        use crate::server::task_store::InMemoryTaskStore;
+        use crate::server::tasks::TaskRouter;
+        use crate::types::tasks::GetTaskPayloadRequest;
+
+        // Minimal router that serves tasks/result with a sentinel payload.
+        struct FallbackRouter;
+        #[async_trait]
+        impl TaskRouter for FallbackRouter {
+            async fn handle_task_call(
+                &self,
+                _tool_name: &str,
+                _arguments: serde_json::Value,
+                _task_params: serde_json::Value,
+                _owner_id: &str,
+                _progress_token: Option<serde_json::Value>,
+            ) -> Result<serde_json::Value> {
+                Ok(Value::Null)
+            }
+            async fn handle_tasks_get(
+                &self,
+                _params: serde_json::Value,
+                _owner_id: &str,
+            ) -> Result<serde_json::Value> {
+                Ok(json!({}))
+            }
+            async fn handle_tasks_result(
+                &self,
+                _params: serde_json::Value,
+                _owner_id: &str,
+            ) -> Result<serde_json::Value> {
+                Ok(json!({ "content": [{ "type": "text", "text": "from-router" }] }))
+            }
+            async fn handle_tasks_list(
+                &self,
+                _params: serde_json::Value,
+                _owner_id: &str,
+            ) -> Result<serde_json::Value> {
+                Ok(json!({ "tasks": [] }))
+            }
+            async fn handle_tasks_cancel(
+                &self,
+                _params: serde_json::Value,
+                _owner_id: &str,
+            ) -> Result<serde_json::Value> {
+                Ok(json!({}))
+            }
+            fn resolve_owner(
+                &self,
+                _subject: Option<&str>,
+                _client_id: Option<&str>,
+                _session_id: Option<&str>,
+            ) -> String {
+                "local".to_string()
+            }
+            fn tool_requires_task(
+                &self,
+                _tool_name: &str,
+                _tool_execution: Option<&Value>,
+            ) -> bool {
+                false
+            }
+            fn task_capabilities(&self) -> Value {
+                json!({ "supported": true })
+            }
+        }
+
+        let task_store =
+            Arc::new(InMemoryTaskStore::new()) as Arc<dyn crate::server::task_store::TaskStore>;
+        let router = Arc::new(FallbackRouter) as Arc<dyn crate::server::tasks::TaskRouter>;
+
+        // `with_task_store(Arc<dyn TaskRouter>)` is the (legacy-named) router
+        // setter; `task_store(..)` sets the store. Configure BOTH.
+        let server = ServerCoreBuilder::new()
+            .name("test-server")
+            .version("1.0.0")
+            .task_store(task_store)
+            .with_task_store(router)
+            .build()
+            .unwrap();
+
+        server
+            .handle_request(RequestId::from(0i64), create_init_request(), None)
+            .await;
+
+        // The store has no result for this id -> NotFound -> fall through.
+        let result_req = Request::Client(Box::new(ClientRequest::TasksResult(
+            GetTaskPayloadRequest {
+                task_id: "unknown-to-store".to_string(),
+            },
+        )));
+        let result = expect_result_payload(
+            server
+                .handle_request(RequestId::from(1i64), result_req, None)
+                .await,
+        );
+        assert_eq!(
+            result["content"][0]["text"], "from-router",
+            "tasks/result must fall through to the router on store miss"
+        );
     }
 
     #[tokio::test]

@@ -35,6 +35,15 @@ pub mod shared;
 pub mod types;
 pub mod utils;
 
+/// Conformance helpers for proving the `tasks/*` wire surface round-trips
+/// through the real client deserialization types.
+///
+/// Feature-gated behind `testing` (folded into `full`) so it is available to
+/// integration tests, examples, and the quality gate, but omitted from lean
+/// default release builds. See [`testing::assert_roundtrips_through_client`].
+#[cfg(any(test, feature = "testing"))]
+pub mod testing;
+
 #[cfg(feature = "simd")]
 pub mod simd;
 

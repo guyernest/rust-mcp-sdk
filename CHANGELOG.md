@@ -5,6 +5,44 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.10.0] - 2026-06-21
+
+### Added — Tools-as-Tasks server DX (correct-by-construction task lifecycle)
+
+Make a server that exposes a tool as an MCP **Task** (async, pollable)
+correct-by-construction: the entire `tasks/*` wire surface is served from the
+SDK's typed structs, eliminating the class of silent shape-mismatch bugs that
+came from hand-writing the protocol. Extends the existing `TaskStore` path with
+no breaking changes.
+
+- `tasks/result` is now served typed (`CallToolResult`) from the configured
+  `TaskStore`, with `TaskRouter` fall-through for the legacy path. A tool-created
+  task is now actually pollable: the store mints the task id and it is written to
+  both the wire `task.taskId` and the `_meta` related-task link.
+- New additive `TaskStore` methods — `set_result` / `get_result` /
+  `supports_results` — all with default impls (existing stores keep compiling);
+  a not-yet-completed `tasks/result` returns a specified error.
+- Registering a `TaskStore` (or a `with_task_support` tool) now auto-advertises
+  the server-level `tasks` capability; a `TaskSupport::Required` tool with no
+  backing store/router makes `build()` return an error instead of advertising a
+  hollow capability.
+- The client emits a `WARN` (method + transport identity + serde error) on any
+  `tasks/*` deserialize failure instead of silently folding it into the result.
+- New feature-gated `pmcp::testing` module with
+  `assert_roundtrips_through_client`, a conformance helper that feeds real server
+  dispatch output through the client deserialization types (`testing` is folded
+  into `full`, omitted from `default`).
+- New worked example `s45_tool_as_task_lifecycle` and a live in-process
+  round-trip acceptance test driving `initialize → call(task) → tasks/get →
+  tasks/result`.
+- Docs: the book/course/design task chapters and rustdoc now lead with the
+  recommended `task_store` + `with_task_support` pattern; the hand-rolled
+  `TaskRouter` / hand-written task JSON path is reframed as legacy.
+
+Note: task dispatch + `TaskStore` currently live on `ServerCoreBuilder` /
+`ServerCore`; the high-level `pmcp::Server` (and `StreamableHttpServer`) does not
+yet carry a `TaskStore` (tracked as a follow-up).
+
 ## [2.9.2] - 2026-06-20
 
 Excel-as-Configuration workbook servers: the table-based authoring contract, and

@@ -1151,6 +1151,35 @@ impl DynamoDbTaskStore {
 
 ## 8. Integration with Existing SDK
 
+> **Current recommended pattern (Phase 101) — shipped API.** The integration sketched in this section has since landed in a cleaner, *typed, correct-by-construction* form. You declare task support on a tool and register a `TaskStore`; the SDK mints the task id, auto-advertises the capability, and serves every `tasks/*` response from typed structs — **no hand-written `tasks/*` wire JSON**:
+>
+> ```rust,ignore
+> use std::sync::Arc;
+> use pmcp::server::builder::ServerCoreBuilder;
+> use pmcp::server::task_store::{InMemoryTaskStore, TaskStore};
+> use pmcp::server::typed_tool::TypedTool;
+> use pmcp::types::{ToolExecution, TaskSupport};
+>
+> let task_tool = TypedTool::new_with_schema("summarize", schema, handler)
+>     .with_description("Summarize asynchronously as an MCP Task")
+>     .with_execution(ToolExecution::new().with_task_support(TaskSupport::Required));
+>
+> let store = Arc::new(InMemoryTaskStore::new()) as Arc<dyn TaskStore>;
+> let server = ServerCoreBuilder::new()
+>     .name("my-server").version("1.0.0")
+>     .tool("summarize", task_tool)
+>     .task_store(store)        // presence of a store auto-advertises the `tasks` capability
+>     .build()?;
+> ```
+>
+> Client side: `client.call_tool_with_task(name, args).await?` → `ToolCallResponse::Task(task)` with the store-minted `task.task_id`; poll typed `client.tasks_get(&id).await?` until `task.status.is_terminal()`; then `client.tasks_result(&id).await?` for the typed terminal `CallToolResult`.
+>
+> Notes vs. the design sketch below:
+> - The capability now ships as a **dedicated top-level `ServerCapabilities.tasks` field** (not `experimental.tasks`) when registered via `task_store(...)` — the "Future (post-stabilization)" path in §8.1 is the shipped path. (`with_task_store(Arc<dyn TaskRouter>)` remains the legacy experimental wiring and still advertises under `experimental.tasks`.)
+> - A `TaskSupport::Required` tool with **no** `TaskStore`/`TaskRouter` is a build-time error (`build()` → `Err`) rather than a hollow capability.
+> - **Scope caveat:** the `TaskStore` path lives on `ServerCoreBuilder` / `ServerCore`; the high-level `pmcp::Server` (and `StreamableHttpServer`) does not yet carry a `TaskStore`.
+> - Reference example: [`examples/s45_tool_as_task_lifecycle.rs`](../../examples/s45_tool_as_task_lifecycle.rs).
+
 ### 8.1 Capability Negotiation
 
 Tasks capabilities must be added to `ServerCapabilities` and `ClientCapabilities`.
@@ -1360,6 +1389,8 @@ impl Default for TaskSecurityConfig {
 ---
 
 ## 10. Examples
+
+> **Shipped reference example (Phase 101):** the canonical, runnable end-to-end round-trip is [`examples/s45_tool_as_task_lifecycle.rs`](../../examples/s45_tool_as_task_lifecycle.rs). It registers a `with_task_support` tool plus an `InMemoryTaskStore`, then drives a live `pmcp::Client` through `initialize → call_tool_with_task → tasks_get` (poll) `→ tasks_result` — all typed, no hand-written `tasks/*` JSON. Prefer it over the sketched examples below as the source of truth for the current API. The numbered examples below remain the original design sketch.
 
 ### Example 60: Basic Task-Augmented Tool Call
 

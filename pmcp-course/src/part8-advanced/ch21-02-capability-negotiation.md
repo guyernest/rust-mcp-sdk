@@ -8,6 +8,7 @@ By the end of this section, you will be able to:
 
 - Explain why MCP uses per-request capability signals instead of per-session negotiation
 - Describe how `req.task` serves as the capability signal
+- Explain why the **server's** `tasks` capability follows the backend (a `TaskStore`) -- and why an unbacked `TaskSupport::Required` tool is a build-time error
 - List the three client profiles and the code path each takes
 - Compare task negotiation with HTTP content negotiation
 - Identify when Lambda timeout limitations make tasks mandatory vs optional
@@ -54,6 +55,29 @@ async fn handle(args: AnalyzeArgs, extra: RequestHandlerExtra) -> Result<Value> 
 ```
 
 This is the entire negotiation. No handshake. No feature flags stored in session state. The request carries its own capability declaration.
+
+## The Other Half: The Server's Capability Follows Its Backend
+
+Per-request negotiation describes the *client's* signal. The *server* makes a matching declaration during `initialize`, and the SDK derives it for you: the `tasks` capability is advertised **only when a real backend exists** to serve the `tasks/*` endpoints — i.e. when you registered a `TaskStore` via `task_store(...)`. This is the same correctness principle as the client side: the advertised capability is never a hollow claim. The endpoints it promises are always backed.
+
+Two consequences fall directly out of this rule:
+
+1. **Register a `task_store` → the `tasks` capability is auto-advertised.** You never set it by hand. (Tool metadata alone — a `taskSupport` value in `tools/list` — does *not* advertise the capability; only a backend does.)
+
+2. **A `TaskSupport::Required` tool with *no* backend is a build-time error.** `ServerCoreBuilder::build()` returns an `Err` rather than advertising `tasks/*` endpoints that cannot work:
+
+   ```rust,ignore
+   // No task_store() — build() fails because a Required tool has nothing to back it.
+   let result = ServerCoreBuilder::new()
+       .name("svc").version("1.0.0")
+       .tool("analyze_imagery", required_task_tool) // with_task_support(Required)
+       .build();
+   assert!(result.is_err()); // "a tool declares TaskSupport::Required but no TaskStore ... is configured"
+   ```
+
+   An `Optional` or `Forbidden` tool with no backend is *not* an error — it simply does not advertise (or use) the task path.
+
+So capability follows the backend on both ends: the client advertises per-request via the `task` field, and the server advertises via the presence of a `TaskStore`. Neither side can claim support it cannot honor.
 
 ## How the Signal Flows
 
@@ -255,7 +279,8 @@ if extra.is_task_request() {
 ## Key Takeaways
 
 - Task negotiation is per-request, not per-session -- the `task` field in the request is the only signal
-- `extra.is_task_request()` is the single branch point in your handler code
+- The **server's** `tasks` capability follows the backend: registering a `TaskStore` auto-advertises it, and a `TaskSupport::Required` tool with no store is a build-time error (no hollow capability)
+- `extra.is_task_request()` is the single branch point in the hand-rolled dual-path handler; the recommended pattern lets the SDK serve `tasks/*` typed instead
 - No session state, no client registry, no feature flag database needed
 - Three client profiles (task-native, tool-polling, sync-only) are all served by the same dual-path handler plus `get_task_result`
 - For serverless: match `TaskSupport` level to your Lambda timeout and expected operation duration
