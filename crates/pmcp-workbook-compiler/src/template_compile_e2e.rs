@@ -247,6 +247,107 @@ fn explain_projection_matches_the_served_tool_surface() {
     }
 }
 
+/// WR-01 HARDENING (Plan 100-08-HARDENING) — author the REAL multi-sheet
+/// range+cross-sheet fixture ([`crate::fixture_author::range_cross_sheet_spec`]) into
+/// a scratch dir, compile it via the `#[cfg(test)]` trusted-fixture override, and load
+/// the emitted bundle through the toolkit. The fixture's `total` formula
+/// (`ROUND(SUM(B2:B3)+Aux!B2,0)`) reaches `q1`/`q2` ONLY via a `SUM(range)` and
+/// `adjustment` ONLY via a cross-sheet ref, so the compiled bundle is the production
+/// stand-in for the synthetic `build_tools_surfaces_range_and_cross_sheet_inputs`.
+fn compile_range_cross_sheet() -> (tempfile::TempDir, PathBuf, WorkbookBundle) {
+    let scratch = tempfile::TempDir::new().expect("scratch dir");
+    let xlsx = scratch.path().join("range-cross-sheet.xlsx");
+    crate::fixture_author::author_multi_sheet_xlsx(
+        &xlsx,
+        &crate::fixture_author::range_cross_sheet_spec(),
+    )
+    .expect("author the multi-sheet range+cross-sheet fixture");
+
+    let out_root = scratch.path().join("out");
+    std::fs::create_dir_all(&out_root).expect("out root");
+    compile_workbook_with_fixture_override(&xlsx, &out_root, "range-xs", "1.0.0", "wr01-hardening")
+        .expect("compile the range+cross-sheet fixture via the trusted-fixture override");
+
+    let bundle_dir = out_root.join("range-xs@1.0.0");
+    let source = LocalDirSource::new(&bundle_dir);
+    let bundle = load_bundle(&source).expect("the emitted range+cross-sheet bundle loads");
+    (scratch, xlsx, bundle)
+}
+
+/// WR-01 HARDENING — the load-bearing assertion: explain↔served PARITY over a REAL
+/// `SUM(range)` + cross-sheet workbook compiled through the production pipeline.
+///
+/// The synthetic `build_tools_surfaces_range_and_cross_sheet_inputs` proves
+/// `build_tools` DIRECTLY surfaces a range-member + cross-sheet input; THIS test
+/// proves the SAME holds THROUGH the explain projection
+/// ([`project_tool_surface_from_workbook`]) over a real compile, AND that those
+/// per-tool input keys EQUAL the SERVED `input_schema_for_tool` keys. It MUST fail if
+/// explain ever diverges from the served surface on ranges/cross-sheet — so H1(d) is
+/// met by construction, not just by the projection-equivalence proptest.
+#[test]
+fn explain_projection_matches_served_surface_over_range_and_cross_sheet() {
+    let (_scratch, xlsx, bundle) = compile_range_cross_sheet();
+
+    // Exactly one output Table → one tool `total_sales`.
+    assert_eq!(
+        bundle.cell_map.tools.len(),
+        1,
+        "the fixture has one output Table (Total_Sales) → one tool"
+    );
+    let served_tool = &bundle.cell_map.tools[0];
+    assert_eq!(
+        sanitize_tool_name(&served_tool.name).as_deref(),
+        Ok("total_sales"),
+        "the output Table sanitizes to `total_sales`"
+    );
+
+    // (a) The served per-tool input keys INCLUDE both the range-reached inputs
+    // (q1, q2 via SUM(B2:B3)) AND the cross-sheet-reached input (adjustment via
+    // Aux!B2) — exactly the inputs the OLD bespoke explain walker would have dropped.
+    let served_inputs = served_input_keys(&bundle, served_tool);
+    assert_eq!(
+        served_inputs,
+        vec!["adjustment".to_string(), "q1".to_string(), "q2".to_string()],
+        "the served tool surfaces BOTH the SUM(range) members (q1, q2) AND the \
+         cross-sheet input (adjustment)"
+    );
+
+    // The OFFLINE explain projection (the SAME production projection the CLI drives).
+    let preview = project_tool_surface_from_workbook(&xlsx)
+        .expect("project the served surface of the range+cross-sheet fixture (preview)");
+    assert_eq!(preview.tools.len(), 1, "the preview carries the one tool");
+    let preview_tool = &preview.tools[0];
+    assert_eq!(
+        sanitize_tool_name(&preview_tool.name).as_deref(),
+        Ok("total_sales"),
+        "the preview tool sanitizes to `total_sales`"
+    );
+
+    // (b) The LOAD-BEARING parity: the explain projection's per-tool input keys EQUAL
+    // the SERVED input_schema_for_tool keys — including BOTH the range and cross-sheet
+    // inputs. If explain ever diverged on ranges/cross-sheet, this fails.
+    let mut preview_inputs: Vec<String> = preview_tool.input_keys.clone();
+    preview_inputs.sort();
+    assert_eq!(
+        preview_inputs, served_inputs,
+        "explain input keys == served input_schema_for_tool keys over a real \
+         SUM(range) + cross-sheet workbook (true explain↔served parity, WR-01)"
+    );
+
+    // And the output parity (the single `total` output) holds on the same workbook.
+    let mut preview_outputs: Vec<String> = preview_tool
+        .outputs
+        .iter()
+        .map(|e| e.json_key.clone())
+        .collect();
+    preview_outputs.sort();
+    assert_eq!(
+        preview_outputs,
+        served_output_keys(&bundle, served_tool),
+        "explain output keys == served output_schema_for_tool keys (total)"
+    );
+}
+
 #[test]
 fn template_compile_served_schema_is_non_empty_per_tool() {
     let (_scratch, bundle) = compile_template();

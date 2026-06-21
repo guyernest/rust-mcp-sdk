@@ -1,0 +1,29 @@
+{
+  "generator_fn": "range_cross_sheet_spec",
+  "authored_by": "rust_xlsxwriter",
+  "multi_sheet": true,
+  "sheets": [
+    {
+      "sheet": "Data",
+      "input_cells": [
+        "B2",
+        "B3"
+      ],
+      "formula_oracles": [
+        {
+          "cell": "B7",
+          "formula": "ROUND(SUM(B2:B3)+Aux!B2,0)",
+          "cached_oracle": "350"
+        }
+      ]
+    },
+    {
+      "sheet": "Aux",
+      "input_cells": [
+        "B2"
+      ],
+      "formula_oracles": []
+    }
+  ],
+  "override_reason": "authored by rust_xlsxwriter; the WR-01 hardening multi-sheet fixture (a SUM(range)-reached input AND a cross-sheet-reached input through a REAL compile) — honoured ONLY on the test/dev path. Production still refuses non-fresh provenance."
+}

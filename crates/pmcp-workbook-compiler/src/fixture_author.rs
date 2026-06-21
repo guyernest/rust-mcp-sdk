@@ -207,17 +207,16 @@ pub(crate) struct DataValidationSpec {
 /// are the body cells (reusing [`AuthoredCell`] so formula cells keep the
 /// cached-`<v>` oracle); `data_validations` carry the tier/enum dropdowns.
 //
-// Why `sheet` is `#[allow(dead_code)]`: the single-worksheet [`author_xlsx`] writes
-// every table onto the one worksheet [`WorkbookSpec::sheet`] names, so `sheet` is
-// not yet consulted. It is part of the table contract (the §7 template + Plan 03/04
-// multi-tool models declare which sheet a table lives on) and becomes load-bearing
-// the moment a multi-sheet author lands — kept now so the spec shape is stable.
+// `sheet` is now LOAD-BEARING: the multi-sheet [`author_multi_sheet_xlsx`] consults
+// it (via `write_sheet_contents`' `debug_assert_eq!`) to confirm each table is
+// authored onto the worksheet it declares. The single-worksheet [`author_xlsx`]
+// still writes every table onto the one [`WorkbookSpec::sheet`] it names (where the
+// assertion is a tautology), so existing single-sheet fixtures are byte-unchanged.
 #[derive(Debug, Clone)]
 pub(crate) struct TableSpec {
     /// The ListObject / tool name (e.g. `"Inputs"`, `"Calculate_Tax"`).
     pub(crate) name: &'static str,
-    /// The worksheet the table lives on.
-    #[allow(dead_code)]
+    /// The worksheet the table lives on (consulted by the multi-sheet author).
     pub(crate) sheet: &'static str,
     /// The zero-based `(col, row)` of the table's HEADER top-left corner.
     pub(crate) top_left: (u16, u32),
@@ -268,26 +267,74 @@ pub(crate) struct WorkbookSpec {
 pub(crate) fn author_xlsx(path: &Path, spec: &WorkbookSpec) -> Result<(), XlsxError> {
     let palette = CellFormats::new();
 
-    let mut workbook = Workbook::new();
-    // Pin a FIXED creation datetime so regeneration is byte-deterministic: the
-    // default `DocProperties` stamps `ExcelDateTime::utc_now()` into
-    // `docProps/core.xml`, which would make every regen produce different bytes
-    // (the reproducible-fixture discipline requires deterministic output). This
-    // touches core.xml ONLY — the provenance gate reads app.xml's
-    // `<Application>`/`<AppVersion>` + calcPr, so the ExcelTrusted identity is
-    // untouched.
-    let fixed_creation =
-        ExcelDateTime::from_ymd(2026, 1, 1).expect("fixed fixture creation date is valid");
-    workbook.set_properties(&DocProperties::new().set_creation_datetime(&fixed_creation));
+    let mut workbook = new_deterministic_workbook();
     let worksheet = workbook.add_worksheet();
     worksheet.set_name(spec.sheet)?;
+    write_sheet_contents(worksheet, spec.sheet, &spec.cells, &spec.tables, &palette)?;
 
-    for cell in &spec.cells {
-        write_cell(worksheet, cell, &palette)?;
+    for dn in &spec.defined_names {
+        workbook.define_name(dn.name, dn.target)?;
     }
 
-    for table in &spec.tables {
-        write_table(worksheet, table, &palette)?;
+    workbook.save(path)?;
+    Ok(())
+}
+
+/// One worksheet of a [`MultiSheetSpec`]: its name plus its loose cells and Excel
+/// Tables. The per-sheet content shape mirrors the single-sheet [`WorkbookSpec`]
+/// (cells + tables); workbook-global defined names live on the [`MultiSheetSpec`].
+///
+/// Cell/table A1 addresses are LOCAL to this sheet — `author_multi_sheet_xlsx`
+/// writes them onto THIS sheet, so a fixture can carry the SAME `B2` on two sheets
+/// and a formula on one sheet can reach the other via a cross-sheet `'Sheet'!B2`.
+#[derive(Debug, Clone)]
+pub(crate) struct SheetSpec {
+    /// The worksheet name (e.g. `"Data"`, `"Aux"`).
+    pub(crate) name: &'static str,
+    /// The loose authored cells on this sheet (non-table cells).
+    pub(crate) cells: Vec<AuthoredCell>,
+    /// The authored Excel Tables (ListObjects) on this sheet.
+    pub(crate) tables: Vec<TableSpec>,
+}
+
+/// A MULTI-SHEET workbook author spec (the additive sibling of [`WorkbookSpec`],
+/// consumed by [`author_multi_sheet_xlsx`]). Each [`SheetSpec`] is written onto its
+/// own worksheet IN ORDER, honouring the per-cell/per-table sheet so a fixture can
+/// carry a cross-sheet reference (an input on a SECOND sheet reached only via
+/// `'Sheet'!Bx`) and a `SUM(range)`-reached input on the first.
+///
+/// Defined names are workbook-global (the `target` carries its own `'Sheet'!$A$1`
+/// qualification), exactly as [`WorkbookSpec::defined_names`].
+#[derive(Debug, Clone)]
+pub(crate) struct MultiSheetSpec {
+    /// The worksheets, written in order (the first is the primary sheet).
+    pub(crate) sheets: Vec<SheetSpec>,
+    /// The workbook-global defined names (named ranges), fully `'Sheet'!$A$1`-qualified.
+    pub(crate) defined_names: Vec<DefinedNameSpec>,
+}
+
+/// Author a MULTI-SHEET `.xlsx` at `path` from `spec` using `rust_xlsxwriter` (a
+/// pure writer) — the additive sibling of [`author_xlsx`] for fixtures that need a
+/// `SUM(range)` input AND a cross-sheet-reached input. Each [`SheetSpec`] becomes
+/// its own worksheet, honouring its per-cell/per-table sheet (the single-sheet
+/// author wrote every table onto the one [`WorkbookSpec::sheet`]; this consults the
+/// sheet so a cross-sheet ref resolves to a REAL second worksheet).
+///
+/// Carries the SAME genuine Excel identity ([`ProvenanceClass::ExcelTrusted`]) and
+/// byte-deterministic creation datetime as [`author_xlsx`] (shared helpers), so a
+/// multi-sheet fixture stays as reproducible + trusted as the single-sheet corpus.
+///
+/// # Errors
+/// Returns the underlying [`XlsxError`] on any write/save failure (test path —
+/// the caller `.expect`s it).
+pub(crate) fn author_multi_sheet_xlsx(path: &Path, spec: &MultiSheetSpec) -> Result<(), XlsxError> {
+    let palette = CellFormats::new();
+    let mut workbook = new_deterministic_workbook();
+
+    for sheet in &spec.sheets {
+        let worksheet = workbook.add_worksheet();
+        worksheet.set_name(sheet.name)?;
+        write_sheet_contents(worksheet, sheet.name, &sheet.cells, &sheet.tables, &palette)?;
     }
 
     for dn in &spec.defined_names {
@@ -295,6 +342,45 @@ pub(crate) fn author_xlsx(path: &Path, spec: &WorkbookSpec) -> Result<(), XlsxEr
     }
 
     workbook.save(path)?;
+    Ok(())
+}
+
+/// Build a fresh [`Workbook`] with the PINNED creation datetime so regeneration is
+/// byte-deterministic: the default `DocProperties` stamps `ExcelDateTime::utc_now()`
+/// into `docProps/core.xml`, which would make every regen produce different bytes
+/// (the reproducible-fixture discipline requires deterministic output). This touches
+/// core.xml ONLY — the provenance gate reads app.xml's `<Application>`/`<AppVersion>`
+/// and the calcPr, so the ExcelTrusted identity is untouched. Shared by the
+/// single-sheet [`author_xlsx`] and the multi-sheet [`author_multi_sheet_xlsx`] so
+/// BOTH carry the identical deterministic identity.
+fn new_deterministic_workbook() -> Workbook {
+    let mut workbook = Workbook::new();
+    let fixed_creation =
+        ExcelDateTime::from_ymd(2026, 1, 1).expect("fixed fixture creation date is valid");
+    workbook.set_properties(&DocProperties::new().set_creation_datetime(&fixed_creation));
+    workbook
+}
+
+/// Write one worksheet's loose cells then its Excel Tables (the shared per-sheet
+/// body the single-sheet and multi-sheet authors both run). Kept separate so each
+/// author stays a thin orchestrator (PMAT cog ≤25).
+fn write_sheet_contents(
+    worksheet: &mut rust_xlsxwriter::Worksheet,
+    sheet_name: &str,
+    cells: &[AuthoredCell],
+    tables: &[TableSpec],
+    palette: &CellFormats,
+) -> Result<(), XlsxError> {
+    for cell in cells {
+        write_cell(worksheet, cell, palette)?;
+    }
+    for table in tables {
+        debug_assert_eq!(
+            table.sheet, sheet_name,
+            "a TableSpec's `sheet` must match the worksheet it is authored onto"
+        );
+        write_table(worksheet, table, palette)?;
+    }
     Ok(())
 }
 
@@ -714,6 +800,95 @@ fn regenerate_fixtures() {
         write_gen_metadata(&path, generator_fn, &spec, reason).expect("quirk gen metadata");
         eprintln!("[regenerate_fixtures] wrote {}", path.display());
     }
+
+    // The WR-01 HARDENING range+cross-sheet fixture (Plan 100-08-HARDENING): a REAL
+    // multi-sheet, Table-authored workbook whose output `total` reaches q1/q2 ONLY via
+    // SUM(B2:B3) and `adjustment` ONLY via the cross-sheet Aux!B2 ref. Committed so the
+    // cargo-pmcp `workbook_explain` integration test can drive `explain_workbook` over
+    // it (the explain CLI reads a real .xlsx via the read-only Preview policy — no
+    // override marker needed there; the marker below arms the compiler override path).
+    let rx = range_cross_sheet_spec();
+    let rx_path = fixtures.join("range-cross-sheet.xlsx");
+    let rx_reason = "authored by rust_xlsxwriter; the WR-01 hardening multi-sheet fixture (a \
+                     SUM(range)-reached input AND a cross-sheet-reached input through a REAL \
+                     compile) — honoured ONLY on the test/dev path. Production still refuses \
+                     non-fresh provenance.";
+    author_multi_sheet_xlsx(&rx_path, &rx).expect("author the range+cross-sheet fixture");
+    write_override_marker(&rx_path, rx_reason).expect("range+cross-sheet marker");
+    write_multi_sheet_gen_metadata(&rx_path, "range_cross_sheet_spec", &rx, rx_reason)
+        .expect("range+cross-sheet gen metadata");
+    eprintln!("[regenerate_fixtures] wrote {}", rx_path.display());
+}
+
+/// Write a generation-metadata sidecar (`*.gen.json`) for a MULTI-SHEET fixture (the
+/// [`MultiSheetSpec`] analogue of [`write_gen_metadata`]): records the generator fn,
+/// the per-sheet input cells, the formula oracles, and the override reason so a
+/// committed multi-sheet `.xlsx` stays reproducible + traceable.
+///
+/// # Errors
+/// Returns the underlying I/O / serialization error on failure.
+pub(crate) fn write_multi_sheet_gen_metadata(
+    xlsx_path: &Path,
+    generator_fn: &str,
+    spec: &MultiSheetSpec,
+    override_reason: &str,
+) -> Result<(), std::io::Error> {
+    let sheets: Vec<serde_json::Value> = spec
+        .sheets
+        .iter()
+        .map(|sheet| {
+            let cells: Vec<&AuthoredCell> = sheet
+                .tables
+                .iter()
+                .flat_map(|t| t.rows.iter().flatten())
+                .chain(sheet.cells.iter())
+                .collect();
+            let inputs: Vec<&str> = cells
+                .iter()
+                .filter_map(|c| match c {
+                    AuthoredCell::Number {
+                        addr,
+                        paint: CellPaint::Input,
+                        ..
+                    }
+                    | AuthoredCell::NumberFmt {
+                        addr,
+                        paint: CellPaint::Input,
+                        ..
+                    } => Some(*addr),
+                    _ => None,
+                })
+                .collect();
+            let formulas: Vec<serde_json::Value> = cells
+                .iter()
+                .filter_map(|c| match c {
+                    AuthoredCell::Formula {
+                        addr,
+                        formula,
+                        cached,
+                    } => Some(serde_json::json!({
+                        "cell": addr, "formula": formula, "cached_oracle": cached,
+                    })),
+                    _ => None,
+                })
+                .collect();
+            serde_json::json!({
+                "sheet": sheet.name,
+                "input_cells": inputs,
+                "formula_oracles": formulas,
+            })
+        })
+        .collect();
+    let meta = serde_json::json!({
+        "generator_fn": generator_fn,
+        "authored_by": "rust_xlsxwriter",
+        "multi_sheet": true,
+        "sheets": sheets,
+        "override_reason": override_reason,
+    });
+    let gen_path = xlsx_path.with_extension("gen.json");
+    let body = serde_json::to_string_pretty(&meta)?;
+    std::fs::write(gen_path, body)
 }
 
 /// REPRODUCIBLE, NON-MUTATING generator for the WBV2-01 shipped `template.xlsx`
@@ -1505,6 +1680,159 @@ fn template_spec() -> WorkbookSpec {
     }
 }
 
+/// The WR-01 HARDENING fixture (Plan 100-08-HARDENING): a REAL multi-sheet,
+/// Table-authored workbook that mirrors the synthetic
+/// `build_tools_surfaces_range_and_cross_sheet_inputs`
+/// ([`crate::artifact::cell_map`]) shape — but compiled THROUGH the production
+/// pipeline so the explain↔served parity is met BY CONSTRUCTION, not only by the
+/// projection-equivalence proptest.
+///
+/// # Why this fixture exists
+///
+/// The H1 parity test (`explain_projection_matches_the_served_tool_surface`) runs
+/// over `template.xlsx`, which is single-sheet and has NO `SUM(range)` and NO
+/// cross-sheet ref. So the range/cross-sheet coverage lived ONLY in a
+/// `build_tools`-DIRECT synthetic test (never exercised THROUGH the explain
+/// projection over a real compile). This fixture closes that gap: a tool input
+/// reached ONLY via `SUM(range)` AND a tool input reached ONLY via a cross-sheet
+/// ref are BOTH surfaced on the production projection (== the served surface).
+///
+/// # Shape (two sheets, all whitelist-legal)
+///
+/// - Sheet `Data`: an `Inputs` Excel Table with two blue-font inputs `q1` (B2=100)
+///   and `q2` (B3=200) — reached by the output ONLY via `SUM(B2:B3)` (the §3 range
+///   case) — and an output Table `Total_Sales` whose `total` formula is
+///   `ROUND(SUM(B2:B3)+Aux!B2,0)`.
+/// - Sheet `Aux`: an `Adjustments` Excel Table with ONE blue-font input
+///   `adjustment` (B2=50) — reached by the output ONLY via the cross-sheet `Aux!B2`
+///   reference (the §3 cross-sheet case).
+///
+/// # The reconcile oracle (cached `<v>`)
+///
+/// `total = ROUND(SUM(100,200)+50, 0) = ROUND(350, 0) = 350` — the authored cached
+/// `<v>` the production reconcile grades the executor's recomputation against. The
+/// workbook is therefore self-consistent and compiles green via the trusted-fixture
+/// override (its `fullCalcOnLoad=1` staleness is demoted on the test path only).
+///
+/// # Served surface this produces
+///
+/// ONE tool `total_sales` whose DAG-derived `input_keys` are exactly
+/// `{q1, q2, adjustment}` — the range members AND the cross-sheet input — and whose
+/// single output is `total`. The parity test asserts these per-tool input keys EQUAL
+/// the served `input_schema_for_tool` keys (true explain↔served parity over a real
+/// range + cross-sheet workbook).
+pub(crate) fn range_cross_sheet_spec() -> MultiSheetSpec {
+    let data = SheetSpec {
+        name: "Data",
+        cells: vec![],
+        tables: vec![
+            // The Inputs Table: q1/q2 reached ONLY via SUM(B2:B3) (a range).
+            TableSpec {
+                name: "Inputs",
+                sheet: "Data",
+                top_left: (0, 0), // header A1, body A2:C3
+                columns: &["name", "value", "description"],
+                caption: None,
+                rows: vec![
+                    vec![
+                        AuthoredCell::Text {
+                            addr: "A2",
+                            text: "q1",
+                        },
+                        AuthoredCell::Number {
+                            addr: "B2",
+                            value: 100.0,
+                            paint: CellPaint::Input,
+                        },
+                        AuthoredCell::Text {
+                            addr: "C2",
+                            text: "first-quarter sales",
+                        },
+                    ],
+                    vec![
+                        AuthoredCell::Text {
+                            addr: "A3",
+                            text: "q2",
+                        },
+                        AuthoredCell::Number {
+                            addr: "B3",
+                            value: 200.0,
+                            paint: CellPaint::Input,
+                        },
+                        AuthoredCell::Text {
+                            addr: "C3",
+                            text: "second-quarter sales",
+                        },
+                    ],
+                ],
+                body_rows: 0, // inline rows declare the body height
+                data_validations: vec![],
+            },
+            // The output Table: `total` reaches q1/q2 ONLY via SUM(B2:B3) and
+            // `adjustment` ONLY via the cross-sheet Aux!B2 ref.
+            TableSpec {
+                name: "Total_Sales",
+                sheet: "Data",
+                top_left: (0, 5), // caption A5, header A6, body A7:C7
+                columns: &["name", "value", "description"],
+                caption: Some("Total sales across quarters plus the cross-sheet adjustment"),
+                rows: vec![vec![
+                    AuthoredCell::Text {
+                        addr: "A7",
+                        text: "total",
+                    },
+                    AuthoredCell::Formula {
+                        addr: "B7",
+                        // total = ROUND(SUM(100,200) + 50, 0) = 350 (the cached <v>
+                        // oracle). q1/q2 are reached ONLY through SUM(B2:B3); the
+                        // adjustment ONLY through the cross-sheet Aux!B2 reference.
+                        formula: "ROUND(SUM(B2:B3)+Aux!B2,0)",
+                        cached: "350",
+                    },
+                    AuthoredCell::Text {
+                        addr: "C7",
+                        text: "total sales (USD)",
+                    },
+                ]],
+                body_rows: 0, // inline row declares the body height
+                data_validations: vec![],
+            },
+        ],
+    };
+    let aux = SheetSpec {
+        name: "Aux",
+        cells: vec![],
+        tables: vec![TableSpec {
+            name: "Adjustments",
+            sheet: "Aux",
+            top_left: (0, 0), // header A1, body A2:C2
+            columns: &["name", "value", "description"],
+            caption: None,
+            rows: vec![vec![
+                AuthoredCell::Text {
+                    addr: "A2",
+                    text: "adjustment",
+                },
+                AuthoredCell::Number {
+                    addr: "B2",
+                    value: 50.0,
+                    paint: CellPaint::Input,
+                },
+                AuthoredCell::Text {
+                    addr: "C2",
+                    text: "manual cross-sheet adjustment",
+                },
+            ]],
+            body_rows: 0,
+            data_validations: vec![],
+        }],
+    };
+    MultiSheetSpec {
+        sheets: vec![data, aux],
+        defined_names: vec![],
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1687,6 +2015,102 @@ mod tests {
         assert_eq!(
             caption, "Compute federal tax from income & filing",
             "the output table caption is written directly above the header row"
+        );
+    }
+
+    /// (Multi-sheet round-trip) The WR-01 hardening fixture
+    /// ([`range_cross_sheet_spec`]) authored via [`author_multi_sheet_xlsx`] writes
+    /// REAL second worksheet: re-read by umya, `Data` carries `Inputs`+`Total_Sales`
+    /// and `Aux` carries `Adjustments` — the `Aux` sheet that the `Total_Sales`
+    /// formula reaches via the cross-sheet `Aux!B2` ref genuinely exists.
+    #[test]
+    fn multi_sheet_author_writes_both_sheets_and_their_tables() {
+        let dir = tempfile::TempDir::new().expect("scratch dir");
+        let xlsx = dir.path().join("range-cross-sheet.xlsx");
+        author_multi_sheet_xlsx(&xlsx, &range_cross_sheet_spec())
+            .expect("author the multi-sheet fixture");
+
+        let book = umya_spreadsheet::reader::xlsx::read(&xlsx).expect("re-read authored workbook");
+
+        // Both worksheets exist (the cross-sheet ref target Aux is a REAL sheet).
+        let data = book.sheet_by_name("Data").expect("Data sheet exists");
+        let aux = book.sheet_by_name("Aux").expect("Aux sheet exists");
+
+        let data_tables: Vec<&str> = data
+            .tables()
+            .iter()
+            .map(umya_spreadsheet::Table::name)
+            .collect();
+        assert!(
+            data_tables.contains(&"Inputs") && data_tables.contains(&"Total_Sales"),
+            "Data carries the Inputs + Total_Sales tables (got {data_tables:?})"
+        );
+        let aux_tables: Vec<&str> = aux
+            .tables()
+            .iter()
+            .map(umya_spreadsheet::Table::name)
+            .collect();
+        assert!(
+            aux_tables.contains(&"Adjustments"),
+            "Aux carries the Adjustments table on the SECOND sheet (got {aux_tables:?})"
+        );
+
+        // The cross-sheet input value lives on the Aux sheet at B2 (the Aux!B2 the
+        // Total_Sales formula reaches).
+        assert_eq!(
+            aux.value((2u32, 2u32)),
+            "50",
+            "Aux!B2 = the adjustment input"
+        );
+        // The Total_Sales output formula (B7) reaches q1/q2 via SUM(range) AND the
+        // adjustment via the cross-sheet Aux!B2 ref.
+        let formula = data
+            .cell("B7")
+            .map(|c| c.formula().to_string())
+            .unwrap_or_default();
+        assert!(
+            formula.contains("Aux!B2") && formula.contains("SUM(B2:B3)"),
+            "the Total_Sales formula reaches q1/q2 via SUM(range) AND adjustment via \
+             cross-sheet Aux!B2 (got {formula:?})"
+        );
+    }
+
+    /// (Byte-determinism) [`author_multi_sheet_xlsx`] is byte-deterministic — the
+    /// PINNED creation datetime means authoring the SAME spec twice produces
+    /// byte-identical `.xlsx` output (the reproducible-fixture discipline the
+    /// single-sheet author already holds, now shared with the multi-sheet author).
+    #[test]
+    fn multi_sheet_author_is_byte_deterministic() {
+        let dir = tempfile::TempDir::new().expect("scratch dir");
+        let a = dir.path().join("a.xlsx");
+        let b = dir.path().join("b.xlsx");
+        let spec = range_cross_sheet_spec();
+        author_multi_sheet_xlsx(&a, &spec).expect("author a");
+        author_multi_sheet_xlsx(&b, &spec).expect("author b");
+        let bytes_a = std::fs::read(&a).expect("read a");
+        let bytes_b = std::fs::read(&b).expect("read b");
+        assert_eq!(
+            bytes_a, bytes_b,
+            "two authorings of the same multi-sheet spec are byte-identical \
+             (deterministic creation datetime)"
+        );
+    }
+
+    /// (Direct provenance assertion — multi-sheet) The multi-sheet authored workbook
+    /// classifies `ProvenanceClass::ExcelTrusted` directly from its bytes, exactly as
+    /// the single-sheet author does (the genuine Excel identity is workbook-global,
+    /// independent of sheet count).
+    #[test]
+    fn multi_sheet_author_classifies_excel_trusted_directly() {
+        let dir = tempfile::TempDir::new().expect("scratch dir");
+        let xlsx = dir.path().join("range-cross-sheet.xlsx");
+        author_multi_sheet_xlsx(&xlsx, &range_cross_sheet_spec()).expect("author");
+        let bytes = std::fs::read(&xlsx).expect("read authored bytes");
+        assert_eq!(
+            classify_authored(&bytes),
+            ProvenanceClass::ExcelTrusted,
+            "a multi-sheet rust_xlsxwriter-authored workbook carries genuine Excel \
+             identity and MUST classify ExcelTrusted directly"
         );
     }
 
