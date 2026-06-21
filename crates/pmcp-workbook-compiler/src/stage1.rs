@@ -53,6 +53,18 @@ pub enum FreshnessPolicy {
     /// trusted fixture so the producer/consumer proof can compile a neutral,
     /// non-Excel-authored `.xlsx`. Never reachable on the production path.
     TrustedFixture,
+    /// READ-ONLY PREVIEW (`workbook explain`, H1): run the freshness gate for
+    /// provenance, but DEMOTE its `oracle/*` staleness refusal to non-blocking. A
+    /// structural tool-surface preview never reconciles or grades cached oracle
+    /// values — it derives tool names, per-tool input keys, and output keys from
+    /// roles + the formula DAG alone — so the "cached values are not trusted"
+    /// staleness signal is irrelevant to the preview's correctness. This is
+    /// production-safe: it is reachable ONLY from the read-only
+    /// [`project_tool_surface_from_workbook`](crate::project_tool_surface_from_workbook)
+    /// projection, which writes NO bundle and runs NO emit/promote gate. The
+    /// compile/emit path NEVER constructs `Preview`, so it cannot weaken the
+    /// oracle-trust refusal that gates an actual served bundle.
+    Preview,
 }
 
 /// Everything stage 1 produces on a clean pass — the evidence the driver projects
@@ -179,6 +191,19 @@ fn gate_with_policy(
             // override is reachable only through this crate's `#[cfg(test)]`
             // override entry — production NEVER constructs `TrustedFixture`.
             trusted_fixture_gate(original_bytes, map, manifest)
+        },
+        FreshnessPolicy::Preview => {
+            // READ-ONLY PREVIEW (H1): run the production gate for provenance, then
+            // DEMOTE its refusal findings to non-blocking. The preview derives the
+            // tool surface from roles + the formula DAG alone (never the cached
+            // oracle), so a staleness signal must not block a structural preview.
+            // Production-safe — only the read-only projection constructs `Preview`.
+            let (provenance, result) = freshness_gate(original_bytes, map, manifest);
+            // Drop the corpus on accept and the staleness findings on refuse — both
+            // irrelevant to a structural preview that grades no oracle value. The
+            // preview always proceeds to the projection (Ok with NO blocking finding).
+            let _ = result;
+            (provenance, Ok(()))
         },
     }
 }

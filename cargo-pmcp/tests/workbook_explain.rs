@@ -6,10 +6,25 @@
 //! text snapshot (the SC3 Wave-0 gap): the per-Table tool names, their captions, and
 //! their DAG-derived per-tool input/output schemas.
 //!
-//! The disjointness proof a BA can SEE: `calculate_tax` advertises `filing`/`income`
-//! while `estimate_refund` ALSO advertises `withheld` (only its `refund` formula —
+//! The disjointness proof a BA can SEE: `calculate_tax` advertises `income` while
+//! `estimate_refund` ALSO advertises `withheld` (only its `refund` formula —
 //! `withheld - tax_owed` — reaches that input). The text render is a PURE function,
 //! so the snapshot is exact (no stdout capture).
+//!
+//! ## H1 — the preview now equals the SERVED surface (no walker lie)
+//!
+//! Phase 100-08 re-pointed `explain` at the production projection
+//! (`pmcp_workbook_compiler::project_tool_surface_from_workbook` → `build_tools` /
+//! `json_key_for_role`). The previous bespoke A1 walker SURFACED `filing` on every
+//! tool (a "workbook-wide governed input" heuristic) and decorated `income` with a
+//! `[USD]` unit harvested from its number format — but the SERVED binary advertises
+//! NEITHER: `filing`'s value cell is not referenced by any output formula (the DAG
+//! does not reach it, so it is a "feeds-no-tool" input, not a served param), and the
+//! colour-synth role for `income` carries no unit (the unit lived only on the old
+//! walker's table-harvest projector). The snapshot below is the TRUE served surface;
+//! the old snapshot encoded the divergence H1 eliminates. The parity test that proves
+//! preview == served lives in `pmcp-workbook-compiler`'s `template_compile_e2e`
+//! (`explain_projection_matches_the_served_tool_surface`).
 
 use std::path::{Path, PathBuf};
 
@@ -27,17 +42,15 @@ const TEMPLATE_SURFACE_SNAPSHOT: &str = "\
 tool calculate_tax
   description: Compute federal tax from income & filing
   inputs:
-    filing: string [enum: single|married]
-    income: number [USD]
+    income: number
   outputs:
     tax_owed: number
     effective_rate: number
 tool estimate_refund
   description: Estimate refund given withholding
   inputs:
-    filing: string [enum: single|married]
-    income: number [USD]
-    withheld: number [USD]
+    income: number
+    withheld: number
   outputs:
     refund: number
 ";
@@ -76,10 +89,13 @@ fn per_tool_inputs_are_dag_derived_disjoint_on_withheld() {
     let calc_keys: Vec<&str> = calc.inputs.iter().map(|p| p.key.as_str()).collect();
     let refund_keys: Vec<&str> = refund.inputs.iter().map(|p| p.key.as_str()).collect();
 
-    assert_eq!(calc_keys, vec!["filing", "income"], "calculate_tax inputs");
+    // The SERVED surface (H1): only DAG-reached inputs. tax_owed = ROUND(B4*G3-3759)
+    // reaches income (B4) but NOT filing (B5) — so the served calculate_tax advertises
+    // only `income`, and the preview matches it (no walker-invented `filing`).
+    assert_eq!(calc_keys, vec!["income"], "calculate_tax inputs");
     assert_eq!(
         refund_keys,
-        vec!["filing", "income", "withheld"],
+        vec!["income", "withheld"],
         "estimate_refund inputs"
     );
     // The disjointness the multi-tool surface proves: withheld reaches refund only.

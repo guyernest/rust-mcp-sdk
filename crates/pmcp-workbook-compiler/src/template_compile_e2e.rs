@@ -33,11 +33,11 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use pmcp_server_toolkit::workbook::schema::input_schema_for_tool;
+use pmcp_server_toolkit::workbook::schema::{input_schema_for_tool, output_schema_for_tool};
 use pmcp_server_toolkit::workbook::{load_bundle, LocalDirSource};
 use pmcp_workbook_runtime::{sanitize_tool_name, WorkbookBundle};
 
-use crate::compile_workbook_with_fixture_override;
+use crate::{compile_workbook_with_fixture_override, project_tool_surface_from_workbook};
 
 /// The committed Table-authored template (`tests/fixtures/template.xlsx`).
 fn committed_template() -> PathBuf {
@@ -138,6 +138,113 @@ fn template_compile_input_keys_are_populated_and_disjoint_on_withheld() {
         "calculate_tax does NOT consume withheld (disjoint): {:?}",
         calc.input_keys
     );
+}
+
+/// The sorted served INPUT keys a tool advertises (the `inputs.properties` keys of
+/// `input_schema_for_tool`).
+fn served_input_keys(bundle: &WorkbookBundle, tool: &pmcp_workbook_runtime::Tool) -> Vec<String> {
+    let schema = input_schema_for_tool(&bundle.manifest, &bundle.cell_map, tool);
+    let mut keys: Vec<String> = schema["properties"]["inputs"]["properties"]
+        .as_object()
+        .map(|m| m.keys().cloned().collect())
+        .unwrap_or_default();
+    keys.sort();
+    keys
+}
+
+/// The sorted served OUTPUT keys a tool advertises (the `outputs.properties` keys of
+/// `output_schema_for_tool`).
+fn served_output_keys(bundle: &WorkbookBundle, tool: &pmcp_workbook_runtime::Tool) -> Vec<String> {
+    let schema = output_schema_for_tool(&bundle.manifest, tool);
+    let mut keys: Vec<String> = schema["properties"]["outputs"]["properties"]
+        .as_object()
+        .map(|m| m.keys().cloned().collect())
+        .unwrap_or_default();
+    keys.sort();
+    keys
+}
+
+/// H1 PARITY — the load-bearing acceptance: the OFFLINE `explain` projection
+/// ([`project_tool_surface_from_workbook`], the SAME function the `workbook explain`
+/// CLI drives) advertises EXACTLY the served tool surface — the same tool names and,
+/// per tool, the same input keys (== `input_schema_for_tool` keys) and output keys
+/// (== `output_schema_for_tool` keys), stripped (no `in_`/`out_`). Because explain
+/// drives this projection directly, the preview cannot lie about the served surface.
+#[test]
+fn explain_projection_matches_the_served_tool_surface() {
+    let (scratch, bundle) = compile_template();
+    let xlsx = scratch.path().join("template.xlsx");
+
+    // The OFFLINE preview projection (the H1 production projection explain drives).
+    let preview = project_tool_surface_from_workbook(&xlsx)
+        .expect("project the served surface of template.xlsx (preview)");
+
+    // Same sanitized tool-name SET.
+    let preview_names: BTreeSet<String> = preview
+        .tools
+        .iter()
+        .map(|t| sanitize_tool_name(&t.name).expect("preview tool name sanitizes"))
+        .collect();
+    let served_names: BTreeSet<String> = bundle
+        .cell_map
+        .tools
+        .iter()
+        .map(|t| sanitize_tool_name(&t.name).expect("served tool name sanitizes"))
+        .collect();
+    assert_eq!(
+        preview_names, served_names,
+        "explain previews EXACTLY the served tool names"
+    );
+
+    // Per tool: the preview's input/output keys equal the served schema's keys.
+    for served_tool in &bundle.cell_map.tools {
+        let sanitized = sanitize_tool_name(&served_tool.name).expect("served name sanitizes");
+        let preview_tool = preview
+            .tools
+            .iter()
+            .find(|t| sanitize_tool_name(&t.name).as_deref() == Ok(sanitized.as_str()))
+            .unwrap_or_else(|| panic!("preview carries tool {sanitized}"));
+
+        let mut preview_inputs: Vec<String> = preview_tool.input_keys.clone();
+        preview_inputs.sort();
+        assert_eq!(
+            preview_inputs,
+            served_input_keys(&bundle, served_tool),
+            "tool {sanitized}: explain input keys == served input_schema_for_tool keys \
+             (stripped, DAG-derived)"
+        );
+
+        let mut preview_outputs: Vec<String> = preview_tool
+            .outputs
+            .iter()
+            .map(|e| e.json_key.clone())
+            .collect();
+        preview_outputs.sort();
+        assert_eq!(
+            preview_outputs,
+            served_output_keys(&bundle, served_tool),
+            "tool {sanitized}: explain output keys == served output_schema_for_tool keys \
+             (stripped)"
+        );
+    }
+
+    // The stripped-key invariant the F3 strip guarantees on BOTH surfaces: no served
+    // key (preview or schema) carries an `in_`/`out_` governance prefix.
+    for tool in &preview.tools {
+        for key in &tool.input_keys {
+            assert!(
+                !key.starts_with("in_") && !key.starts_with("out_"),
+                "preview input key `{key}` is stripped (no governance prefix)"
+            );
+        }
+        for entry in &tool.outputs {
+            assert!(
+                !entry.json_key.starts_with("in_") && !entry.json_key.starts_with("out_"),
+                "preview output key `{}` is stripped",
+                entry.json_key
+            );
+        }
+    }
 }
 
 #[test]

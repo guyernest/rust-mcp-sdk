@@ -761,6 +761,45 @@ mod tests {
     }
 
     #[test]
+    fn build_tools_surfaces_range_and_cross_sheet_inputs() {
+        // WR-01: the OLD bespoke explain walker (`extract_a1_refs`) DROPPED range
+        // members (`SUM(B2:B9)`) and cross-sheet refs (`Sheet2!B5`). The production
+        // `build_tools` derives inputs from the formula DAG (`upstream_input_leaves`),
+        // which carries range-expanded + cross-sheet edges natively — so an input
+        // reached ONLY through a range OR a cross-sheet ref IS surfaced on the tool.
+        let manifest = manifest_with(vec![
+            // a range member (reached via SUM(B2:B9) → the DAG holds per-cell edges)
+            role("In!B2", Role::Input, Some("first_qtr"), None, Some("USD")),
+            // a cross-sheet input (reached via Sheet2!B5)
+            role(
+                "Other!B5",
+                Role::Input,
+                Some("adjustment"),
+                None,
+                Some("USD"),
+            ),
+            output_role("Calc!total", "total", CellValue::Number(0.0)),
+        ]);
+        let mut dag = Dag::new();
+        // total = SUM(In!B2:In!B9) + Other!B5 — the DAG records the range member
+        // In!B2 and the cross-sheet leaf Other!B5 as direct dependencies of total.
+        dag.add_edge("Calc!total", "In!B2"); // a range-expanded member
+        dag.add_edge("Calc!total", "Other!B5"); // a cross-sheet ref
+        let tables = vec![OutputTable {
+            name: "Sum_It".to_string(),
+            description: None,
+            output_cells: vec!["Calc!total".to_string()],
+        }];
+        let (tools, _findings) = build_tools(&manifest, &dag, &tables).expect("build tools");
+        assert_eq!(
+            tools[0].input_keys,
+            vec!["adjustment".to_string(), "first_qtr".to_string()],
+            "BOTH the range-member input (first_qtr) AND the cross-sheet input \
+             (adjustment) are surfaced — the WR-01 inputs the old walker dropped"
+        );
+    }
+
+    #[test]
     fn build_tools_fails_loud_on_zero_output_tables() {
         let manifest = motivating_manifest();
         let dag = motivating_dag();

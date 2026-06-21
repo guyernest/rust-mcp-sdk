@@ -176,6 +176,16 @@ pub use pmcp_workbook_runtime::{
 // second copy that could drift from registration).
 pub use pmcp_workbook_runtime::sanitize_tool_name;
 
+// The served-key projector (the F3 in_/out_ strip) — re-exported so the offline
+// `workbook explain` preview resolves each tool's served input/output key through the
+// SAME function the served schema builder uses (it cannot resolve a different key).
+pub use pmcp_workbook_runtime::json_key_for_role;
+
+// The served `Tool` artifact shape — re-exported at the compiler root so the offline
+// preview maps the production tool list (names + DAG-derived `input_keys` + `outputs`)
+// without naming `pmcp-workbook-runtime` directly.
+pub use pmcp_workbook_runtime::Tool;
+
 // The Excel rounding helpers the reconcile classifier anchors on.
 pub use pmcp_workbook_runtime::sheet_ir::rounding::{excel_ceiling, excel_round, excel_roundup};
 
@@ -252,7 +262,6 @@ pub use version::read_workbook_version;
 // just the convenience re-export of the resolve entry point.
 pub use dialect_version::resolve_dialect_version;
 
-use pmcp_workbook_runtime::json_key_for_role;
 use pmcp_workbook_runtime::sheet_ir::{Cell, CellExpr};
 
 /// Compile a governed Excel workbook into a served bundle.
@@ -462,6 +471,102 @@ fn compile_workbook_with_fixture_override(
         approver,
         FreshnessPolicy::TrustedFixture,
     )
+}
+
+/// The READ-ONLY served tool-surface projection of a workbook (H1): the production
+/// [`Manifest`] (with the SAME harvest/named-range role promotions the compile path
+/// applies) plus the production [`Tool`] list [`build_tools`] derives. This is what
+/// the offline `workbook explain` preview drives, so the preview CANNOT diverge from
+/// the served surface by construction (it runs the SAME pre-emit pipeline functions).
+#[derive(Debug, Clone)]
+pub struct ToolSurfaceProjection {
+    /// The role-promoted manifest (the input/output `CellRole`s the served schema
+    /// resolves dtype/unit/enum from, by `json_key`/`seed_coord`).
+    pub manifest: Manifest,
+    /// The production per-Table tools — each with its DAG-derived `input_keys`
+    /// (`upstream_input_leaves`, ranges + cross-sheet refs native) and `outputs`
+    /// (`CellEntry` carrying the stripped `json_key`).
+    pub tools: Vec<Tool>,
+}
+
+/// Project a workbook's SERVED tool surface WITHOUT writing any bundle or running
+/// any compile gate (H1) — the production projection the `workbook explain` preview
+/// drives so it cannot lie about what the served binary registers.
+///
+/// Runs the EXACT pre-emit pipeline [`compile_workbook_inner`] uses, then STOPS
+/// before ratify/reconcile/emit: [`ingest::ingest`] → [`stage1::run_stage1`] (synth)
+/// → [`promote_named_outputs`] → [`name_named_inputs`] → [`promote_harvested_tables`]
+/// → [`build_ir_and_dag`] → [`output_tables_from_harvest`] → [`build_tools`]. The
+/// per-tool inputs come from `build_tools`' DAG-derived `input_keys`
+/// ([`upstream_input_leaves`](pmcp_workbook_runtime::upstream_input_leaves)); the
+/// per-tool input/output keys are the stripped served keys
+/// ([`json_key_for_role`](pmcp_workbook_runtime::json_key_for_role)); the tool names
+/// are the raw output-Table names (the caller sanitizes via
+/// [`sanitize_tool_name`](pmcp_workbook_runtime::sanitize_tool_name)).
+///
+/// Uses [`FreshnessPolicy::Preview`] so a workbook whose cached oracle values are
+/// flagged stale (`fullCalcOnLoad`) is still previewable: the preview is read-only —
+/// it writes nothing, grades NO oracle value, and runs NO emit/promote gate — so the
+/// "cached values not trusted" staleness signal is irrelevant to the structural tool
+/// surface. `Preview` is production-safe (only this read-only projection constructs
+/// it; the compile/emit path always enforces the oracle-trust refusal).
+///
+/// # Errors
+/// Returns the per-stage [`CompileError`] on a malformed workbook (ingest/synth/parse
+/// failure), or [`CompileError::Emit`] if a Table-authored workbook with output
+/// Tables fails [`build_tools`] (an unmappable derived membership). A NAMED-RANGE
+/// (zero-Table) workbook yields a single fallback tool wrapping all outputs.
+pub fn project_tool_surface_from_workbook(
+    workbook_path: &Path,
+) -> Result<ToolSurfaceProjection, CompileError> {
+    // (1) ORIGINAL bytes + (2) umya ingest — the SAME read the compile path runs.
+    let bytes = std::fs::read(workbook_path)?;
+    let (map, ingest_findings) =
+        ingest::ingest(workbook_path).map_err(|e| CompileError::Ingest(e.to_string()))?;
+
+    // (2a) Dialect-version gate + (3) stage-1 synth — the SAME pre-emit steps. The
+    // preview is read-only, so it honours TrustedFixture freshness (a dry-run preview
+    // of an un-saved workbook must not be blocked by the staleness signal).
+    dialect_version::validate_dialect_version_step(&map)?;
+    let stage1 = stage1::run_stage1(
+        &bytes,
+        &map,
+        &ingest_findings,
+        "explain-preview",
+        FreshnessPolicy::Preview,
+    )?;
+
+    // (3a-3b-tables) The SAME role promotions the compile path applies.
+    let mut manifest = stage1.synth_manifest;
+    promote_named_outputs(&mut manifest, &map);
+    name_named_inputs(&mut manifest, &map);
+    promote_harvested_tables(&mut manifest, &map);
+
+    // (5) Build the DAG (the per-tool `upstream_input_leaves` source) and (7a) the
+    // per-Table membership, then (7) build_tools — the production served surface.
+    let (_ir, dag) = build_ir_and_dag(&map, &manifest)?;
+    let output_tables = output_tables_from_harvest(&map, &manifest);
+    let tools = tools_for_surface(&manifest, &dag, &output_tables)?;
+
+    Ok(ToolSurfaceProjection { manifest, tools })
+}
+
+/// Build the production [`Tool`] list for the preview projection: the multi-tool
+/// [`build_tools`] fan-out when the workbook harvested ≥1 output Table, else the
+/// single-tool [`build_cell_map`] fallback wrapping all outputs (the named-range
+/// corpus path — the SAME fallback `emit_bundle` routes an empty set to). Kept
+/// separate so [`project_tool_surface_from_workbook`] stays a thin pipeline (cog ≤25).
+fn tools_for_surface(
+    manifest: &Manifest,
+    dag: &Dag,
+    output_tables: &[OutputTable],
+) -> Result<Vec<Tool>, CompileError> {
+    if output_tables.is_empty() {
+        // Named-range corpus: no harvested Table → the single-tool fallback.
+        return Ok(build_cell_map(manifest).map_err(CompileError::Emit)?.tools);
+    }
+    let (tools, _lints) = build_tools(manifest, dag, output_tables).map_err(CompileError::Emit)?;
+    Ok(tools)
 }
 
 /// Build the executable IR (`{cell_key -> Cell}`) and its dependency [`Dag`] from
