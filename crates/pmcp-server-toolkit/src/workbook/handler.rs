@@ -649,6 +649,28 @@ mod tests {
         WorkbookToolHandler::new(bundle, tool)
     }
 
+    /// H3 BINDING: the reserved-tool-name set the offline compiler rejects against
+    /// (`RESERVED_TOOL_NAMES`, in the runtime leaf) is EXACTLY the four meta tools
+    /// this toolkit registers — derived from their `NAME` constants. If a handler's
+    /// `NAME` ever changes (or a fifth meta tool is added) WITHOUT updating the shared
+    /// const, this binding test fails, so the compiler gate cannot silently drift from
+    /// what is registered.
+    #[test]
+    fn reserved_tool_names_match_the_registered_meta_tool_names() {
+        let registered = [
+            ExplainHandler::NAME,
+            GetManifestHandler::NAME,
+            DiffVersionHandler::NAME,
+            RenderWorkbookHandler::NAME,
+        ];
+        assert_eq!(
+            pmcp_workbook_runtime::RESERVED_TOOL_NAMES,
+            registered,
+            "the shared RESERVED_TOOL_NAMES const must equal the four registered meta \
+             tool NAME constants (H3 — derive, never hand-copy)"
+        );
+    }
+
     #[test]
     fn calculate_returns_tool_outputs_with_provenance_no_headline() {
         let handler = calc_handler();

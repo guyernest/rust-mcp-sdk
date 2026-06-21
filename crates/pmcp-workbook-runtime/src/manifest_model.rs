@@ -197,6 +197,21 @@ fn strip_governance_prefix(name: &str) -> &str {
     name
 }
 
+/// The reserved META-tool names the served workbook binary ALWAYS registers
+/// (`explain`, `get_manifest`, `diff_version`, `render_workbook`) — the SINGLE source
+/// of the reserved set (H3). An output-Table tool name that sanitizes to ANY of these
+/// would silently last-writer-wins over the meta tool at registration, so the offline
+/// compiler REJECTS it (a cell-precise compile failure) by checking against THIS
+/// const, not a hand-copied list. The served toolkit handlers' `NAME` constants
+/// (`ExplainHandler::NAME` etc.) are asserted EQUAL to these entries by a binding
+/// test in the toolkit, so the reserved set cannot drift from what is registered.
+///
+/// Lives in the runtime LEAF (not the toolkit) so the compiler reads it WITHOUT a
+/// compiler→toolkit dependency (which would breach the purity boundary / `make
+/// purity-check`); both the toolkit handlers and the compiler gate read the one const.
+pub const RESERVED_TOOL_NAMES: [&str; 4] =
+    ["explain", "get_manifest", "diff_version", "render_workbook"];
+
 /// Sanitize a raw output-Table name into an MCP tool name matching
 /// `^[a-zA-Z0-9_-]{1,64}$` (T-100-10). This is the SINGLE shared sanitizer — the
 /// served toolkit's registration AND the offline compiler's post-sanitize

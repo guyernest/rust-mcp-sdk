@@ -186,6 +186,11 @@ pub use pmcp_workbook_runtime::json_key_for_role;
 // without naming `pmcp-workbook-runtime` directly.
 pub use pmcp_workbook_runtime::Tool;
 
+// The reserved meta-tool name set (H3) — the SINGLE source (runtime leaf) the
+// reserved-name output-Table gate checks against, so the compiler reads the SAME set
+// the served binary registers WITHOUT a compiler→toolkit dep (purity-safe).
+pub use pmcp_workbook_runtime::RESERVED_TOOL_NAMES;
+
 // The Excel rounding helpers the reconcile classifier anchors on.
 pub use pmcp_workbook_runtime::sheet_ir::rounding::{excel_ceiling, excel_round, excel_roundup};
 
@@ -366,9 +371,14 @@ fn compile_workbook_inner(
 
     // (3c) Refuse loudly if any input is left without a callable semantic key
     // (no `in_*` named range), or two inputs collide on one served key, or an
-    // input's served key is empty. The reconcile/gate stages grade OUTPUTS only,
-    // so without this an uncallable value-keyed input would ship silently (F1).
+    // input's served key is empty/value-shaped. The reconcile/gate stages grade
+    // OUTPUTS only, so without this an uncallable value-keyed input would ship
+    // silently (F1/H2).
     refuse_uncallable_inputs(&manifest)?;
+    // (3d) M4: the OUTPUT mirror — refuse two outputs colliding on one served key,
+    // an empty output key, or a value-shaped output key (the served outputSchema +
+    // payload would otherwise last-writer-wins silently).
+    refuse_uncallable_outputs(&manifest)?;
 
     // (4) RATIFY the candidate manifest (a recorded sign-off). The sidecar lives
     // beside the output root so the audit trail is co-located with the bundle.
@@ -412,6 +422,10 @@ fn compile_workbook_inner(
     // output Tables sanitizing to one MCP name is a cell-precise compile failure
     // BEFORE any bundle is written, not a silent last-writer-wins at served boot.
     refuse_colliding_output_tables(&output_tables)?;
+    // (7b-reserved) H3: reject an output Table whose name sanitizes to a RESERVED
+    // meta-tool name (explain/get_manifest/diff_version/render_workbook) — it would
+    // silently overwrite the built-in meta tool at registration. Same stage-1 gate.
+    refuse_reserved_output_table_names(&output_tables)?;
     // (7c) On the multi-tool path, reconcile each derived tool against ITS OWN oracle
     // (WBV2-05). Any per-tool mismatch blocks the emit. The named-range fallback
     // (empty set) keeps the shared comparison_from_outputs reconcile above.
@@ -1091,12 +1105,51 @@ fn validate_input_keys(manifest: &Manifest, report: &mut LintReport) {
             report.push(empty_input_key_finding(&role.cell));
             continue;
         }
+        // H2: a value-shaped served key (a bare number like `60000`) is the exact
+        // original F1 symptom — a BA typed a VALUE in the `name` column, so the served
+        // input key degenerates to that number. Reject it with a cell-precise Error.
+        if is_value_shaped_key(&key) {
+            report.push(value_shaped_input_key_finding(&role.cell, &key));
+            continue;
+        }
         by_key.entry(key).or_default().push(role.cell.clone());
     }
 
     for (key, coords) in by_key.iter().filter(|(_, c)| c.len() > 1) {
         report.push(duplicate_input_key_finding(key, coords));
     }
+}
+
+/// Whether a served `json_key` is VALUE-SHAPED — a finite numeric literal (integer or
+/// decimal, optional leading sign): `60000`, `1.5`, `-3` are value-shaped; a valid
+/// identifier (`income`, `q1_2024`) is NOT (H2/M4). The rule is NARROW (numeric-only,
+/// finite) — it deliberately does NOT reject "any key starting with a digit" so a
+/// legitimate identifier is never false-flagged. `NaN`/`inf` text is not value-shaped
+/// (those would be a different defect, and never a meaningful served key).
+fn is_value_shaped_key(key: &str) -> bool {
+    let trimmed = key.trim();
+    !trimmed.is_empty() && trimmed.parse::<f64>().map(f64::is_finite).unwrap_or(false)
+}
+
+/// (d) The blocking finding for a VALUE-SHAPED input served key (H2): a numeric
+/// `name` (e.g. `60000`) yields a value-keyed, uncallable input — the original F1
+/// symptom. Located at the offending Inputs Table row's `name` cell.
+fn value_shaped_input_key_finding(cell: &str, key: &str) -> LintFinding {
+    let (sheet, addr) = split_cell_key(cell);
+    LintFinding::new(
+        Severity::Error,
+        "manifest/input-value-shaped-key",
+        sheet,
+        addr,
+        format!(
+            "input cell {cell} resolves to the value-shaped served key `{key}`; a numeric \
+             name is a VALUE, not a callable identifier — the tool input is uncallable"
+        ),
+        format!(
+            "replace the numeric `name` of the Inputs Table row at {cell} with a stable \
+             identifier (e.g. `income`) so the served input carries a usable key"
+        ),
+    )
 }
 
 /// Split a fully-qualified `sheet!addr` cell key into `(sheet, Some(addr))` for a
@@ -1188,6 +1241,176 @@ fn refuse_uncallable_inputs(manifest: &Manifest) -> Result<(), CompileError> {
         return Err(CompileError::Lint(stage1::render_aggregate(&errors)));
     }
     Ok(())
+}
+
+/// Validate that EVERY `Role::Output` cell carries a callable served key (M4 — the
+/// OUTPUT mirror of [`validate_input_keys`]), pushing one `Severity::Error`
+/// [`LintFinding`] per defect into `report`. Without this, two outputs stripping to
+/// the same served key would silently last-writer-wins in the `outputSchema` + the
+/// runtime payload (inputs were guarded; outputs were not). Three defects, each
+/// blocking, mirroring the input gate:
+///
+/// (a) two outputs whose served `json_key`s COLLIDE (after prefix stripping);
+/// (b) an output whose served `json_key` is empty/whitespace;
+/// (c) an output whose served `json_key` is VALUE-SHAPED (a numeric literal).
+fn validate_output_keys(manifest: &Manifest, report: &mut LintReport) {
+    use std::collections::BTreeMap;
+
+    let mut by_key: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for role in manifest.cells.iter().filter(|c| c.role == Role::Output) {
+        let key = json_key_for_role(role);
+        if key.trim().is_empty() {
+            report.push(empty_output_key_finding(&role.cell));
+            continue;
+        }
+        if is_value_shaped_key(&key) {
+            report.push(value_shaped_output_key_finding(&role.cell, &key));
+            continue;
+        }
+        by_key.entry(key).or_default().push(role.cell.clone());
+    }
+
+    for (key, coords) in by_key.iter().filter(|(_, c)| c.len() > 1) {
+        report.push(duplicate_output_key_finding(key, coords));
+    }
+}
+
+/// (a) The blocking finding for two+ outputs colliding on one served `json_key` (M4).
+fn duplicate_output_key_finding(key: &str, coords: &[String]) -> LintFinding {
+    let joined = coords.join(", ");
+    LintFinding::new(
+        Severity::Error,
+        "manifest/output-key-collision",
+        "manifest",
+        None,
+        format!(
+            "output cells {joined} all map to the same served key `{key}`; the second \
+             would silently overwrite the first in the served outputSchema + payload"
+        ),
+        format!(
+            "give each output Table row at {joined} a DISTINCT `name` so they resolve \
+             to distinct served output keys"
+        ),
+    )
+}
+
+/// (b) The blocking finding for an output whose served `json_key` is empty (M4).
+fn empty_output_key_finding(cell: &str) -> LintFinding {
+    let (sheet, addr) = split_cell_key(cell);
+    LintFinding::new(
+        Severity::Error,
+        "manifest/output-empty-key",
+        sheet,
+        addr,
+        format!(
+            "output cell {cell} resolves to an empty served key; a caller would have no \
+             field name to read it under"
+        ),
+        format!(
+            "fill the `name` column of the output Table row at {cell} with a non-empty \
+             identifier so it gets a usable served output key"
+        ),
+    )
+}
+
+/// (c) The blocking finding for a VALUE-SHAPED output served key (M4 — the output
+/// mirror of [`value_shaped_input_key_finding`]).
+fn value_shaped_output_key_finding(cell: &str, key: &str) -> LintFinding {
+    let (sheet, addr) = split_cell_key(cell);
+    LintFinding::new(
+        Severity::Error,
+        "manifest/output-value-shaped-key",
+        sheet,
+        addr,
+        format!(
+            "output cell {cell} resolves to the value-shaped served key `{key}`; a numeric \
+             name is a VALUE, not a readable identifier — the output field is unreadable"
+        ),
+        format!(
+            "replace the numeric `name` of the output Table row at {cell} with a stable \
+             identifier (e.g. `tax_owed`) so the served output carries a usable key"
+        ),
+    )
+}
+
+/// Run [`validate_output_keys`] over `manifest` and surface any blocking output-key
+/// defect as a single [`CompileError::Lint`] (the SHARED refusal both compile lanes
+/// run next to [`refuse_uncallable_inputs`], M4).
+///
+/// # Errors
+/// Returns [`CompileError::Lint`] if two outputs collide on one served key, an output
+/// key is empty, or an output key is value-shaped.
+fn refuse_uncallable_outputs(manifest: &Manifest) -> Result<(), CompileError> {
+    let mut report = LintReport::new();
+    validate_output_keys(manifest, &mut report);
+    if report.has_errors() {
+        let errors: Vec<&LintFinding> = report
+            .findings
+            .iter()
+            .filter(|f| f.severity == Severity::Error)
+            .collect();
+        return Err(CompileError::Lint(stage1::render_aggregate(&errors)));
+    }
+    Ok(())
+}
+
+/// Reject any output-Table tool name that sanitizes to a RESERVED meta-tool name
+/// (H3): a Table named so [`sanitize_tool_name`] yields one of
+/// [`RESERVED_TOOL_NAMES`](pmcp_workbook_runtime::RESERVED_TOOL_NAMES) (`explain`,
+/// `get_manifest`, `diff_version`, `render_workbook`) would silently last-writer-wins
+/// over the meta tool at registration. This runs ALONGSIDE
+/// [`refuse_colliding_output_tables`] at stage-1 in BOTH compile lanes, surfacing a
+/// cell-precise [`CompileError::Lint`] located at the Table's first output cell BEFORE
+/// any bundle write. An unmappable name (no MCP-charset char) is left to the collision
+/// gate's `tool-name-unmappable` finding — here we only reject reserved COLLISIONS.
+///
+/// # Errors
+/// Returns [`CompileError::Lint`] if any output-Table name sanitizes into the reserved
+/// set.
+fn refuse_reserved_output_table_names(output_tables: &[OutputTable]) -> Result<(), CompileError> {
+    let mut report = LintReport::new();
+    for table in output_tables {
+        let Ok(name) = sanitize_tool_name(&table.name) else {
+            continue; // unmappable → the collision gate's unmappable finding handles it.
+        };
+        if RESERVED_TOOL_NAMES.contains(&name.as_str()) {
+            report.push(reserved_tool_name_finding(table, &name));
+        }
+    }
+    if report.has_errors() {
+        let errors: Vec<&LintFinding> = report
+            .findings
+            .iter()
+            .filter(|f| f.severity == Severity::Error)
+            .collect();
+        return Err(CompileError::Lint(stage1::render_aggregate(&errors)));
+    }
+    Ok(())
+}
+
+/// The blocking finding for an output Table whose name sanitizes to a reserved
+/// meta-tool name (H3), located at the Table's first output cell.
+fn reserved_tool_name_finding(table: &OutputTable, sanitized: &str) -> LintFinding {
+    let (sheet, addr) = table
+        .output_cells
+        .first()
+        .map_or(("manifest", None), |c| split_cell_key(c));
+    LintFinding::new(
+        Severity::Error,
+        "manifest/output-table-reserved-name",
+        sheet,
+        addr,
+        format!(
+            "output Table '{}' sanitizes to the reserved meta-tool name `{sanitized}`; it \
+             would silently overwrite the built-in `{sanitized}` tool at registration",
+            table.name
+        ),
+        format!(
+            "rename output Table '{}' so it does NOT sanitize to a reserved meta-tool name \
+             (explain / get_manifest / diff_version / render_workbook)",
+            table.name
+        ),
+    )
 }
 
 /// The gated-update CANDIDATE: everything [`gate::gate`] and
@@ -1310,9 +1533,12 @@ fn prepare_candidate_inner(
     promote_harvested_tables(&mut manifest, &map);
 
     // (3c) Refuse loudly on an uncallable input (no `in_*` named range), a served
-    // input-key collision, or an empty served key — the SAME F1 gate the seed lane
-    // runs after `name_named_inputs`; `prepare` does NOT relax it.
+    // input-key collision, an empty/value-shaped served key — the SAME F1/H2 gate the
+    // seed lane runs after `name_named_inputs`; `prepare` does NOT relax it.
     refuse_uncallable_inputs(&manifest)?;
+    // (3d) M4: the OUTPUT mirror — the SAME gate the seed lane runs (kept in lock-step
+    // so the seed/update paths cannot drift on output-key collisions).
+    refuse_uncallable_outputs(&manifest)?;
 
     // (4) The candidate content anchor. NOTE: `prepare` does NOT ratify (ratify
     // writes a sidecar) — gate-before-write means `prepare` writes NOTHING; the
@@ -1348,6 +1574,8 @@ fn prepare_candidate_inner(
     // (named-range corpus) is a no-op on both gates.
     let output_tables = output_tables_from_harvest(&map, &manifest);
     refuse_colliding_output_tables(&output_tables)?;
+    // H3: the SAME reserved-name gate the seed lane runs (dual-lane, no drift).
+    refuse_reserved_output_table_names(&output_tables)?;
     reconcile_output_tables(&output_tables, &dag, &manifest, &run)?;
 
     // (8) Project the named-output computed values into the gate's grading map and
@@ -1552,6 +1780,141 @@ mod input_key_validation_tests {
             "only Role::Input cells are input-key validated"
         );
     }
+
+    // ---- H2: value-shaped input name ----------------------------------------
+
+    #[test]
+    fn value_shaped_input_name_fails_with_cell_located_error() {
+        // A BA typed `60000` in the `name` column — the served key degenerates to a
+        // VALUE. The compile must fail with a cell-located reserved-rule Error.
+        let m = manifest(vec![role("1_Inputs!B2", Role::Input, Some("60000"), None)]);
+        let err = refuse_uncallable_inputs(&m).expect_err("value-shaped name must block");
+        match err {
+            CompileError::Lint(msg) => assert!(
+                msg.contains("input-value-shaped-key") && msg.contains("1_Inputs!B2"),
+                "the refusal names the rule + the offending cell: {msg}"
+            ),
+            other => panic!("expected CompileError::Lint, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn decimal_and_signed_value_shaped_names_fail() {
+        for bad in ["1.5", "-3", "+7", "0.0"] {
+            let m = manifest(vec![role("1_Inputs!B2", Role::Input, Some(bad), None)]);
+            assert!(
+                refuse_uncallable_inputs(&m).is_err(),
+                "value-shaped name `{bad}` must block compile"
+            );
+        }
+    }
+
+    #[test]
+    fn valid_identifier_name_compiles() {
+        for ok in ["income", "q1_2024", "tax_owed", "x1"] {
+            let m = manifest(vec![role("1_Inputs!B2", Role::Input, Some(ok), None)]);
+            assert!(
+                refuse_uncallable_inputs(&m).is_ok(),
+                "identifier `{ok}` is NOT value-shaped and compiles"
+            );
+        }
+    }
+
+    // ---- M4: output-key collision / empty / value-shaped --------------------
+
+    #[test]
+    fn duplicate_output_served_keys_fail() {
+        // Two outputs stripping to the same served key (`out_tax` and `tax`).
+        let m = manifest(vec![
+            role("3_Out!B2", Role::Output, Some("out_tax"), None),
+            role("3_Out!B3", Role::Output, Some("tax"), None),
+        ]);
+        let err = refuse_uncallable_outputs(&m).expect_err("colliding output keys must block");
+        match err {
+            CompileError::Lint(msg) => assert!(
+                msg.contains("output-key-collision")
+                    && msg.contains("3_Out!B2")
+                    && msg.contains("3_Out!B3"),
+                "the output collision names both coords: {msg}"
+            ),
+            other => panic!("expected CompileError::Lint, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn value_shaped_output_key_fails() {
+        let m = manifest(vec![role("3_Out!B2", Role::Output, Some("18241"), None)]);
+        let err = refuse_uncallable_outputs(&m).expect_err("value-shaped output key must block");
+        match err {
+            CompileError::Lint(msg) => assert!(
+                msg.contains("output-value-shaped-key") && msg.contains("3_Out!B2"),
+                "the refusal names the rule + cell: {msg}"
+            ),
+            other => panic!("expected CompileError::Lint, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn distinct_output_keys_compile() {
+        let m = manifest(vec![
+            role("3_Out!B2", Role::Output, Some("out_tax"), None),
+            role("3_Out!B3", Role::Output, Some("out_refund"), None),
+        ]);
+        assert!(
+            refuse_uncallable_outputs(&m).is_ok(),
+            "distinct stripped output keys compile"
+        );
+    }
+
+    // ---- the numeric-key reject predicate (property arm, H2/M4) --------------
+
+    #[test]
+    fn is_value_shaped_key_predicate_is_numeric_only() {
+        for numeric in ["0", "60000", "1.5", "-3", "+7", "3e4", "0.182"] {
+            assert!(
+                is_value_shaped_key(numeric),
+                "`{numeric}` is value-shaped (a finite numeric literal)"
+            );
+        }
+        for ident in [
+            "income", "q1_2024", "x1", "tax_owed", "", "  ", "NaN", "inf",
+        ] {
+            assert!(
+                !is_value_shaped_key(ident),
+                "`{ident}` is NOT value-shaped (an identifier / empty / non-finite)"
+            );
+        }
+    }
+
+    use proptest::prelude::*;
+
+    proptest! {
+        /// PROPERTY (H2/M4): ANY finite numeric literal, used as an input OR output
+        /// `name`, is rejected by the served-key gate — the reject predicate round-trips
+        /// over arbitrary finite f64s on BOTH the input and output lanes.
+        #[test]
+        fn finite_numeric_name_rejected_on_both_lanes(n in proptest::num::f64::NORMAL) {
+            let key = n.to_string();
+            prop_assume!(key.parse::<f64>().map(f64::is_finite).unwrap_or(false));
+            prop_assert!(is_value_shaped_key(&key), "predicate flags `{}`", key);
+
+            // input lane: a Role::Input whose name is the numeric string is refused.
+            let mi = manifest(vec![role("1_Inputs!B2", Role::Input, Some(&key), None)]);
+            prop_assert!(
+                refuse_uncallable_inputs(&mi).is_err(),
+                "validate_input_keys rejects value-shaped name `{}`",
+                key
+            );
+
+            // output lane: a Role::Output whose name is the numeric string is refused.
+            let mo = manifest(vec![role("3_Out!B2", Role::Output, Some(&key), None)]);
+            prop_assert!(
+                refuse_uncallable_outputs(&mo).is_err(),
+                "validate_output_keys rejects value-shaped name `{}`",
+                key
+            );
+        }
+    }
 }
 
 // ---- WBV2-04: harvest-derived OutputTable membership + collision gate ----------
@@ -1738,6 +2101,78 @@ mod harvest_output_table_tests {
         assert!(
             refuse_colliding_output_tables(&tables).is_ok(),
             "two distinct sanitized names do not collide"
+        );
+    }
+
+    // ---- H3: reserved meta-tool name collision ------------------------------
+
+    #[test]
+    fn output_table_sanitizing_to_reserved_name_fails() {
+        // `Explain`, `explain `, `EXPLAIN` all sanitize to `explain` — a reserved
+        // meta-tool name. (A space collapses to `_`, so `ex plain` → `ex_plain` is
+        // NOT reserved — the sanitizer's space→`_` rule, asserted elsewhere.)
+        for raw in ["Explain", "explain ", " explain", "EXPLAIN"] {
+            let tables = vec![OutputTable {
+                name: raw.to_string(),
+                description: None,
+                output_cells: vec!["Data!B10".to_string()],
+            }];
+            let err = match refuse_reserved_output_table_names(&tables) {
+                Err(CompileError::Lint(msg)) => msg,
+                other => panic!("reserved name `{raw}` should error with Lint, got {other:?}"),
+            };
+            assert!(
+                err.contains("output-table-reserved-name")
+                    && err.contains("Data!B10")
+                    && err.contains("explain"),
+                "the reserved-name refusal names the rule, the cell, and the reserved \
+                 name for `{raw}`: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn reserved_name_gate_covers_all_four_meta_tools() {
+        // Each raw name sanitizes (lowercase + space→`_`, literal `_` kept) to one of
+        // the four reserved meta-tool names.
+        for raw in [
+            "get manifest",
+            "Get_Manifest",
+            "Diff_Version",
+            "Render_Workbook",
+        ] {
+            let tables = vec![OutputTable {
+                name: raw.to_string(),
+                description: None,
+                output_cells: vec!["Data!B10".to_string()],
+            }];
+            assert!(
+                refuse_reserved_output_table_names(&tables).is_err(),
+                "`{raw}` sanitizes into the reserved set and must block"
+            );
+        }
+    }
+
+    #[test]
+    fn non_reserved_output_table_name_passes_reserved_gate() {
+        let tables = vec![OutputTable {
+            name: "Calculate_Tax".to_string(),
+            description: None,
+            output_cells: vec!["Data!B10".to_string()],
+        }];
+        assert!(
+            refuse_reserved_output_table_names(&tables).is_ok(),
+            "a normal output-Table name is not reserved"
+        );
+    }
+
+    #[test]
+    fn reserved_set_is_derived_from_the_shared_const() {
+        // The gate reads the SHARED RESERVED_TOOL_NAMES const (sourced from the
+        // handler NAME constants), NOT a hand-copied literal list.
+        assert_eq!(
+            pmcp_workbook_runtime::RESERVED_TOOL_NAMES,
+            ["explain", "get_manifest", "diff_version", "render_workbook"],
         );
     }
 }
