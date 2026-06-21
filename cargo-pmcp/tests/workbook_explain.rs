@@ -37,6 +37,14 @@ fn template_fixture() -> PathBuf {
         .join("../crates/pmcp-workbook-compiler/tests/fixtures/template.xlsx")
 }
 
+/// The committed WR-01 hardening multi-sheet fixture (Plan 100-08-HARDENING): a REAL
+/// `SUM(range)` + cross-sheet workbook whose `total_sales` tool reaches `q1`/`q2` ONLY
+/// via a range and `adjustment` ONLY via a cross-sheet ref.
+fn range_cross_sheet_fixture() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../crates/pmcp-workbook-compiler/tests/fixtures/range-cross-sheet.xlsx")
+}
+
 /// The committed text snapshot of the template's previewed tool surface.
 const TEMPLATE_SURFACE_SNAPSHOT: &str = "\
 tool calculate_tax
@@ -114,6 +122,46 @@ fn json_render_is_parseable_over_the_same_surface() {
     // The JSON carries the disjoint per-tool inputs too.
     let refund = back.iter().find(|t| t.name == "estimate_refund").unwrap();
     assert!(refund.inputs.iter().any(|p| p.key == "withheld"));
+}
+
+/// WR-01 HARDENING (Plan 100-08-HARDENING) — the explain CLI projection over a REAL
+/// `SUM(range)` + cross-sheet workbook surfaces BOTH the range-reached inputs
+/// (`q1`, `q2` via `SUM(B2:B3)`) AND the cross-sheet-reached input (`adjustment` via
+/// `Aux!B2`) on the served tool — exactly the inputs the OLD bespoke explain walker
+/// dropped.
+///
+/// This is the CLI-render half of the hardening: the load-bearing explain↔served
+/// PARITY assertion (these preview keys == the served `input_schema_for_tool` keys)
+/// lives in the compiler's `template_compile_e2e`
+/// (`explain_projection_matches_served_surface_over_range_and_cross_sheet`), where the
+/// trusted-fixture override compile + the served schema are reachable; here we prove
+/// the same `explain_workbook` CLI entrypoint surfaces both inputs over the committed
+/// fixture (the read-only `Preview` policy drives the SAME production projection).
+#[test]
+fn explain_surfaces_range_and_cross_sheet_inputs() {
+    let tools = projected_tools(&range_cross_sheet_fixture());
+
+    // Exactly one output Table (Total_Sales) → one tool.
+    let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
+    assert_eq!(
+        names,
+        vec!["total_sales"],
+        "the one output Table sanitizes to `total_sales`"
+    );
+
+    let total = tools.iter().find(|t| t.name == "total_sales").unwrap();
+    let mut input_keys: Vec<&str> = total.inputs.iter().map(|p| p.key.as_str()).collect();
+    input_keys.sort_unstable();
+    assert_eq!(
+        input_keys,
+        vec!["adjustment", "q1", "q2"],
+        "explain surfaces BOTH the SUM(range) members (q1, q2) AND the cross-sheet \
+         input (adjustment) — the inputs the old A1 walker dropped"
+    );
+
+    // The single output is `total`.
+    let output_keys: Vec<&str> = total.outputs.iter().map(|o| o.key.as_str()).collect();
+    assert_eq!(output_keys, vec!["total"], "the single output is `total`");
 }
 
 #[test]
