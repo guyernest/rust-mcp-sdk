@@ -991,7 +991,7 @@ Plans:
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [ ] 102-03-PLAN.md — Live HTTP loopback round-trip (HTASK-03) + worked `s46_http_tool_as_task` example + doctest + final gate
+- [x] 102-03-PLAN.md — Live HTTP loopback round-trip (HTASK-03) + worked `s46_http_tool_as_task` example + doctest + final gate
 
 ## Backlog
 
@@ -1017,7 +1017,7 @@ Parking lot for unsequenced ideas. Items here aren't scheduled — promote with 
 
 **Requirements:** TBD
 
-**Plans:** 2/3 plans executed
+**Plans:** 3/3 plans complete
 
 Plans:
 
