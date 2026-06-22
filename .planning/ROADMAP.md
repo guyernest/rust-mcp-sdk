@@ -983,7 +983,7 @@ Made tools-as-Tasks correct-by-construction on `ServerCore`: typed `tasks/result
 Plans:
 **Wave 1**
 
-- [ ] 102-01-PLAN.md — Extract the shared `task_dispatch` unit (capability rule free fn + TaskDispatch lifecycle logic); refactor ServerCore to delegate (no regression)
+- [x] 102-01-PLAN.md — Extract the shared `task_dispatch` unit (capability rule free fn + TaskDispatch lifecycle logic); refactor ServerCore to delegate (no regression)
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
@@ -1017,7 +1017,7 @@ Parking lot for unsequenced ideas. Items here aren't scheduled — promote with 
 
 **Requirements:** TBD
 
-**Plans:** 11/11 plans complete
+**Plans:** 1/3 plans executed
 
 Plans:
 
