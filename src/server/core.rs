@@ -8,16 +8,17 @@ use crate::error::{Error, Result};
 use crate::server::limits::PayloadLimits;
 use crate::shared::middleware::{EnhancedMiddlewareChain, MiddlewareContext};
 use crate::shared::protocol_helpers::{create_notification, create_request};
-// `ResponsePayload`/`JSONRPCError` are needed by the wasm-only envelope-builder
-// branch (the non-wasm path delegates to `task_dispatch`) and by the test module.
+// `ResponsePayload` is needed by the wasm-only envelope-builder branch (the
+// non-wasm path delegates to `task_dispatch`) and by the test module.
+// `JSONRPCError` is needed only by the wasm-only branch.
 #[cfg(any(target_arch = "wasm32", test))]
 use crate::types::jsonrpc::ResponsePayload;
-#[cfg(any(target_arch = "wasm32", test))]
+#[cfg(target_arch = "wasm32")]
 use crate::types::JSONRPCError;
 use crate::types::{
     CallToolRequest, CallToolResult, ClientCapabilities, ClientRequest, Content, GetPromptRequest,
-    GetPromptResult, Implementation, InitializeRequest, InitializeResult,
-    JSONRPCResponse, ListPromptsRequest, ListPromptsResult, ListResourceTemplatesRequest,
+    GetPromptResult, Implementation, InitializeRequest, InitializeResult, JSONRPCResponse,
+    ListPromptsRequest, ListPromptsResult, ListResourceTemplatesRequest,
     ListResourceTemplatesResult, ListResourcesRequest, ListResourcesResult, ListToolsRequest,
     ListToolsResult, Notification, PromptInfo, ProtocolVersion, ReadResourceRequest,
     ReadResourceResult, Request, RequestId, ServerCapabilities, ToolInfo,

@@ -23,6 +23,13 @@
 //! task item is non-wasm (mirrors `ServerCore`'s task fields/methods).
 
 #![cfg(not(target_arch = "wasm32"))]
+// Why: this is a `pub(crate) mod`, so `pub(crate)` on its items is correct
+// (internal-only, never part of the public API) but clippy's nursery
+// `redundant_pub_crate` flags it while the crate-level `unreachable_pub` warn
+// rejects plain `pub`. The two lints conflict for an internal `pub(crate)`
+// module; keeping `pub(crate)` items + this scoped allow is the idiomatic
+// resolution (mirrors intent, keeps the API surface crate-private).
+#![allow(clippy::redundant_pub_crate)]
 
 use crate::error::{Error, Result};
 use crate::server::auth::AuthContext;
@@ -143,19 +150,19 @@ pub(crate) fn error_response(id: RequestId, code: i32, message: String) -> JSONR
 /// lives HERE, once, never as a divergent second copy.
 pub(crate) struct TaskDispatch<'a> {
     /// Standard task backend (polling path). Presence flips `tasks` capability on.
-    pub task_store: &'a Option<Arc<dyn TaskStore>>,
+    pub(crate) task_store: &'a Option<Arc<dyn TaskStore>>,
     /// Legacy experimental router backend (fall-through path).
-    pub task_router: &'a Option<Arc<dyn TaskRouter>>,
+    pub(crate) task_router: &'a Option<Arc<dyn TaskRouter>>,
 }
 
 impl TaskDispatch<'_> {
     /// Resolve the owner ID from the authentication context.
     ///
     /// Returns `None` if no backend is configured. With a `TaskRouter`, delegates
-    /// to [`TaskRouter::resolve_owner`] (priority chain: OAuth subject > client ID
-    /// > session ID > "local"). With only a `TaskStore`, derives the owner from
-    /// the auth context directly. Owner is ALWAYS derived from auth/router, NEVER
-    /// from client params (IDOR mitigation, T-102-01).
+    /// to [`TaskRouter::resolve_owner`] (priority chain: OAuth subject, then client
+    /// ID, then session ID, then "local"). With only a `TaskStore`, derives the
+    /// owner from the auth context directly. Owner is ALWAYS derived from
+    /// auth/router, NEVER from client params (IDOR mitigation, T-102-01).
     pub(crate) fn resolve_owner(&self, auth_context: Option<&AuthContext>) -> Option<String> {
         // Legacy path: TaskRouter has its own resolve_owner logic.
         if let Some(router) = self.task_router {
@@ -315,8 +322,8 @@ impl TaskDispatch<'_> {
             return None;
         }
         // Task-shaped value check: must carry BOTH a taskId and a status.
-        let is_task_shaped = value.get("taskId").and_then(Value::as_str).is_some()
-            && value.get("status").is_some();
+        let is_task_shaped =
+            value.get("taskId").and_then(Value::as_str).is_some() && value.get("status").is_some();
         if !is_task_shaped {
             return None;
         }
@@ -520,6 +527,11 @@ impl TaskDispatch<'_> {
 }
 
 #[cfg(test)]
+// Test-ergonomic helpers: `///` summaries name gate-table inputs by their literal
+// arg/enum spelling (clippy::doc_markdown), and the `store_backend()` helper always
+// returns `Some` by design so each test reads as a backend-present row
+// (clippy::unnecessary_wraps). Both are noise in a truth-table test module.
+#[allow(clippy::doc_markdown, clippy::unnecessary_wraps)]
 mod gate_tests {
     use super::*;
     use crate::server::task_store::InMemoryTaskStore;
