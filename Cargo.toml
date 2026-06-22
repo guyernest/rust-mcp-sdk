@@ -543,6 +543,11 @@ name = "s45_tool_as_task_lifecycle"
 path = "examples/s45_tool_as_task_lifecycle.rs"
 required-features = ["full"]
 
+[[example]]
+name = "s46_http_tool_as_task"
+path = "examples/s46_http_tool_as_task.rs"
+required-features = ["full"]
+
 [[bench]]
 name = "comprehensive_benchmarks"
 harness = false
