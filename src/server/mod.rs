@@ -74,6 +74,9 @@ pub mod simple_resources;
 /// Simple tool implementations with schema support.
 #[cfg(not(target_arch = "wasm32"))]
 pub mod simple_tool;
+/// Shared task-lifecycle dispatch unit used by both Server and ServerCore.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) mod task_dispatch;
 /// SDK-level task store trait and in-memory implementation.
 #[cfg(not(target_arch = "wasm32"))]
 pub mod task_store;

@@ -837,27 +837,6 @@ impl ServerCoreBuilder {
         self
     }
 
-    /// Build the default server-level `tasks` capability advertised when a
-    /// task backend (a [`TaskStore`](crate::server::task_store::TaskStore) or a
-    /// [`TaskRouter`]) is present.
-    ///
-    /// This is the exact shape previously assigned inline by `task_store()`.
-    /// Centralizing it here lets `build()` inject the capability once, only when
-    /// an endpoint backend exists and the author has not already configured a
-    /// custom `tasks` capability (additive-only).
-    #[cfg(not(target_arch = "wasm32"))]
-    fn default_tasks_capability() -> crate::types::capabilities::ServerTasksCapability {
-        crate::types::capabilities::ServerTasksCapability {
-            list: Some(serde_json::json!({})),
-            cancel: Some(serde_json::json!({})),
-            requests: Some(crate::types::capabilities::ServerTasksRequestCapability {
-                tools: Some(crate::types::capabilities::ServerTasksToolsCapability {
-                    call: Some(serde_json::json!({})),
-                }),
-            }),
-        }
-    }
-
     /// Apply the endpoint-backed `tasks`-capability rule (D-CAPABILITY-ENDPOINT-BACKED).
     ///
     /// The `tasks` capability advertised in `initialize` represents REAL endpoint
@@ -879,28 +858,15 @@ impl ServerCoreBuilder {
     /// `tasks/*` endpoints.
     #[cfg(not(target_arch = "wasm32"))]
     fn apply_tasks_capability_rule(&mut self) -> Result<()> {
-        use crate::types::tools::TaskSupport;
-
+        // Delegate to the single shared free fn so the capability rule has ONE
+        // implementation across `ServerCoreBuilder` and (Plan 02) `ServerBuilder`
+        // — never a re-derived second copy (HTASK-01).
         let has_backend = self.task_store.is_some() || self.task_router.is_some();
-        let has_required_task_tool = self.tool_infos.values().any(|info| {
-            info.execution
-                .as_ref()
-                .and_then(|e| e.task_support)
-                .is_some_and(|ts| matches!(ts, TaskSupport::Required))
-        });
-
-        if has_required_task_tool && !has_backend {
-            return Err(Error::validation(
-                "a tool declares TaskSupport::Required but no TaskStore or TaskRouter \
-                 is configured to back the tasks/* endpoints",
-            ));
-        }
-
-        if self.capabilities.tasks.is_none() && has_backend {
-            self.capabilities.tasks = Some(Self::default_tasks_capability());
-        }
-
-        Ok(())
+        crate::server::task_dispatch::apply_tasks_capability_rule(
+            &mut self.capabilities,
+            &self.tool_infos,
+            has_backend,
+        )
     }
 
     /// Detect if running in a stateless/serverless environment.
