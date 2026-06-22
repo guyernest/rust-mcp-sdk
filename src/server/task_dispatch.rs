@@ -160,9 +160,11 @@ impl TaskDispatch<'_> {
     ///
     /// Returns `None` if no backend is configured. With a `TaskRouter`, delegates
     /// to [`TaskRouter::resolve_owner`] (priority chain: OAuth subject, then client
-    /// ID, then session ID, then "local"). With only a `TaskStore`, derives the
-    /// owner from the auth context directly. Owner is ALWAYS derived from
-    /// auth/router, NEVER from client params (IDOR mitigation, T-102-01).
+    /// ID, then session ID, then "local"). With only a `TaskStore`, the owner IS
+    /// the OAuth subject (consistent with the router's subject-first priority), so
+    /// a given authenticated user owns the same tasks across reconnects/sessions.
+    /// Owner is ALWAYS derived from auth/router, NEVER from client params (IDOR
+    /// mitigation, T-102-01).
     pub(crate) fn resolve_owner(&self, auth_context: Option<&AuthContext>) -> Option<String> {
         // Legacy path: TaskRouter has its own resolve_owner logic.
         if let Some(router) = self.task_router {
@@ -174,9 +176,12 @@ impl TaskDispatch<'_> {
             });
         }
         // Standard path: derive owner from auth context when task_store is configured.
+        // Key on the OAuth subject (the authenticated principal), matching the
+        // router's subject-first priority — NOT client_id, which is per-application
+        // (OAuth `azp`) and would collapse per-user isolation to per-app isolation.
         if self.task_store.is_some() {
             return Some(match auth_context {
-                Some(ctx) => ctx.client_id.clone().unwrap_or_else(|| ctx.subject.clone()),
+                Some(ctx) => ctx.subject.clone(),
                 None => "local".to_string(),
             });
         }
@@ -404,7 +409,7 @@ impl TaskDispatch<'_> {
             match store.get(&params.task_id, &owner_id).await {
                 Ok(task) => {
                     let result = crate::types::tasks::GetTaskResult::new(task);
-                    success_response(id, serde_json::to_value(result).unwrap())
+                    success_response(id, serde_json::to_value(result).unwrap_or_default())
                 },
                 Err(e) => error_response(id, -32603, e.to_string()),
             }
@@ -438,7 +443,7 @@ impl TaskDispatch<'_> {
                     if let Some(cursor) = next_cursor {
                         result = result.with_next_cursor(cursor);
                     }
-                    success_response(id, serde_json::to_value(result).unwrap())
+                    success_response(id, serde_json::to_value(result).unwrap_or_default())
                 },
                 Err(e) => error_response(id, -32603, e.to_string()),
             }
@@ -469,7 +474,7 @@ impl TaskDispatch<'_> {
             match store.cancel(&params.task_id, &owner_id).await {
                 Ok(task) => {
                     let result = crate::types::tasks::CancelTaskResult::new(task);
-                    success_response(id, serde_json::to_value(result).unwrap())
+                    success_response(id, serde_json::to_value(result).unwrap_or_default())
                 },
                 Err(e) => error_response(id, -32603, e.to_string()),
             }

@@ -815,6 +815,15 @@ impl Server {
     /// # }
     /// ```
     ///
+    /// # Security: task isolation
+    ///
+    /// Stdio (and any transport that does not resolve a per-request
+    /// `AuthContext`) carries no authenticated principal, so every `tasks/*`
+    /// request on a [`task_store`](ServerBuilder::task_store)-backed server is
+    /// owned by the single `"local"` owner — there is NO per-user task isolation.
+    /// This is correct for single-user CLI use; for multi-tenant deployments use
+    /// an HTTP transport whose auth layer populates the OAuth subject.
+    ///
     /// # Errors
     ///
     /// Returns an error if:
@@ -866,6 +875,13 @@ impl Server {
     /// # Ok(())
     /// # }
     /// ```
+    ///
+    /// # Security: task isolation
+    ///
+    /// Per-user `tasks/*` isolation requires the transport to resolve a per-request
+    /// `AuthContext` carrying the OAuth subject. Transports without one (stdio and
+    /// the like) own every task under the single `"local"` owner — no per-user
+    /// isolation. Use an authenticating HTTP transport for multi-tenant task servers.
     ///
     /// # Errors
     ///
