@@ -981,8 +981,16 @@ Made tools-as-Tasks correct-by-construction on `ServerCore`: typed `tasks/result
 **Plans**: 3 plans
 
 Plans:
+**Wave 1**
+
 - [ ] 102-01-PLAN.md — Extract the shared `task_dispatch` unit (capability rule free fn + TaskDispatch lifecycle logic); refactor ServerCore to delegate (no regression)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
 - [ ] 102-02-PLAN.md — Wire the shared unit into Server/ServerBuilder: task backend fields/setters, build-time capability rule, tasks/* delegation, create-path branch
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
 - [ ] 102-03-PLAN.md — Live HTTP loopback round-trip (HTASK-03) + worked `s46_http_tool_as_task` example + doctest + final gate
 
 ## Backlog
