@@ -978,7 +978,12 @@ Made tools-as-Tasks correct-by-construction on `ServerCore`: typed `tasks/result
 
 **Source**: Phase 101 execution discovery + PRD at `.planning/phases/102-http-task-dispatch/102-PRD.md`; verified against `src/server/mod.rs` (tasks reject :1166-1169), `src/server/core.rs` (task dispatch to share), `src/server/streamable_http_server.rs` (`Arc<Mutex<Server>>` → `server.handle_request`).
 
-**Plans**: TBD (set by `/gsd:plan-phase 102`)
+**Plans**: 3 plans
+
+Plans:
+- [ ] 102-01-PLAN.md — Extract the shared `task_dispatch` unit (capability rule free fn + TaskDispatch lifecycle logic); refactor ServerCore to delegate (no regression)
+- [ ] 102-02-PLAN.md — Wire the shared unit into Server/ServerBuilder: task backend fields/setters, build-time capability rule, tasks/* delegation, create-path branch
+- [ ] 102-03-PLAN.md — Live HTTP loopback round-trip (HTASK-03) + worked `s46_http_tool_as_task` example + doctest + final gate
 
 ## Backlog
 
