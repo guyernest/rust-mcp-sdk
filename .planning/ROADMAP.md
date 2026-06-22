@@ -14,6 +14,7 @@
 - **v2.1 rmcp Upgrades** — Phases 65-68 (in progress)
 - ✅ **v2.2 Configuration-Only MCP Servers (SQL + OpenAPI toolkits)** — Phases 82-90.2 (substantially shipped)
 - 🚧 **v2.3 Excel-as-Configuration MCP Servers (governed Excel CodeLanguage)** — Phases 91-96 (in progress)
+- 🚧 **v2.10 SDK DX** — Phase 101 tools-as-Tasks server DX (✅ shipped, pmcp 2.10.0), Phase 102 lift TaskStore onto the HTTP path (scoping)
 
 ## Phases
 
@@ -951,6 +952,33 @@ Plans:
 | 66. Macros Documentation Rewrite | v2.1 | 5/5 | Complete    | 2026-04-11 |
 | 67. docs.rs Pipeline + Feature Flags | v2.1 | 6/6 | Complete    | 2026-04-12 |
 | 68. General Documentation Polish | v2.1 | 0/? | Not started | - |
+
+## v2.10 SDK DX
+
+### Phase 101: Tools-as-Tasks Server DX — SHIPPED (pmcp 2.10.0, PR #284)
+
+Made tools-as-Tasks correct-by-construction on `ServerCore`: typed `tasks/result` from the `TaskStore`, store-minted id, endpoint-backed `tasks` capability, client WARN, `pmcp::testing` conformance helper. Released as `pmcp 2.10.0`. (Planning artifacts were filtered out of the upstream PR; this is the milestone reference.)
+
+### Phase 102: Lift the task lifecycle onto the high-level `Server` / HTTP path
+
+**Goal**: Make the SDK's `tasks/*` lifecycle available over the high-level `Server` and `StreamableHttpServer`, so an HTTP-hosted server (e.g. pmcp.run's Lambdas) can serve task-based tools with NO `ServerCore::handle_request` shim. Phase 101 put the whole lifecycle on `ServerCore` only; `Server::handle_request` (the HTTP-facing dispatcher, used by `StreamableHttpServer`) currently HARD-REJECTS `tasks/*` (`src/server/mod.rs:1166-1169`). The deliverable shares ONE task-lifecycle implementation between `Server` and `ServerCore` (retiring the two-dispatcher drift), not a second copy.
+
+**Depends on**: Phase 101 (shipped — the `TaskStore` path + capability rule + create-path this phase lifts/shares)
+**Requirements**: HTASK-01, HTASK-02, HTASK-03, HTASK-04
+**Success Criteria** (what must be TRUE):
+
+  1. `Server::builder().tool(t, task_tool).task_store(store).build()?` served via `StreamableHttpServer` serves `initialize → call(task) → tasks/get → tasks/result` over REAL HTTP — verified by a live HTTP loopback round-trip (not the in-process duplex shim, not a fixture)
+  2. The high-level `initialize` auto-advertises `tasks` when a store/router backs it; an unbacked `TaskSupport::Required` tool errors at `build()` (Phase 101's endpoint-backed capability rule, reused)
+  3. The task lifecycle is a SINGLE shared implementation used by both `Server` and `ServerCore` (no duplicated dispatch body); both paths' tests pass
+  4. All Phase 101 `ServerCore` task tests still green; no change to the public `tasks/*` wire shapes or the `Server`/`ServerBuilder` public API (additive); WASM boundary preserved
+  5. Worked HTTP example (`s46_http_tool_as_task`) + ALWAYS coverage; `make quality-gate` AND `make doc-check` green; new minor `pmcp` version publishable
+  6. A pmcp.run-shaped HTTP server serves tasks with NO `ServerCore::handle_request` shim
+
+**Scope fences (LOCKED)**: do NOT change the `tasks/*` wire contract (Phase 101 froze it); do NOT duplicate the task logic into a divergent third copy (SHARE it — the whole point); do NOT break the existing `ServerCore` path or `TaskRouter` fallback; out of scope = durable `TaskStore` backends (consumer's impl), SSE/WebSocket task streaming, the legacy `pmcp-tasks` crate; keep non-wasm.
+
+**Source**: Phase 101 execution discovery + PRD at `.planning/phases/102-http-task-dispatch/102-PRD.md`; verified against `src/server/mod.rs` (tasks reject :1166-1169), `src/server/core.rs` (task dispatch to share), `src/server/streamable_http_server.rs` (`Arc<Mutex<Server>>` → `server.handle_request`).
+
+**Plans**: TBD (set by `/gsd:plan-phase 102`)
 
 ## Backlog
 
