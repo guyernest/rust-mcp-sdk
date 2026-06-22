@@ -987,7 +987,7 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 102-02-PLAN.md — Wire the shared unit into Server/ServerBuilder: task backend fields/setters, build-time capability rule, tasks/* delegation, create-path branch
+- [x] 102-02-PLAN.md — Wire the shared unit into Server/ServerBuilder: task backend fields/setters, build-time capability rule, tasks/* delegation, create-path branch
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
@@ -1017,7 +1017,7 @@ Parking lot for unsequenced ideas. Items here aren't scheduled — promote with 
 
 **Requirements:** TBD
 
-**Plans:** 1/3 plans executed
+**Plans:** 2/3 plans executed
 
 Plans:
 
