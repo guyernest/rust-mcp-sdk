@@ -9,11 +9,12 @@ MCP Tasks solve this with a two-phase model: the server accepts the request imme
 By the end of this chapter, you will be able to:
 
 - Explain why polling is preferred over SSE for serverless deployments
-- Configure a `TaskStore` on your server builder
+- Use the recommended pattern: register a `with_task_support` tool + a `TaskStore` on `ServerCoreBuilder` and let the SDK serve `tasks/*` typed -- so you never hand-write `tasks/*` wire JSON
+- Drive the typed client round-trip: `call_tool_with_task` → poll `tasks_get` → `tasks_result`
 - Declare `TaskSupport::Optional` on tools using `.with_execution()`
-- Write a dual-path tool handler that branches on `extra.is_task_request()`
+- Write a dual-path tool handler that branches on `extra.is_task_request()` (the advanced manual alternative)
 - Build a `get_task_result` fallback tool for clients that do not support tasks natively
-- Describe how capability negotiation works at the per-request level
+- Describe how capability negotiation works at the per-request level, and why the server's `tasks` capability follows its backend
 
 ## Why Tasks Matter for Enterprise MCP
 
@@ -96,6 +97,8 @@ let store = Arc::new(InMemoryTaskStore::new());
 ```
 
 The SDK provides `InMemoryTaskStore` for development. For production, the `pmcp-tasks` crate provides DynamoDB and Redis backends that survive Lambda cold starts and container restarts.
+
+> **Recommended pattern (read the next section with this in mind).** The clean way to expose a tool as a Task is to declare `with_task_support` on the tool and register the store with `task_store(...)` on `ServerCoreBuilder`. The SDK then mints the task id, auto-advertises the `tasks` capability, and serves `tasks/get | result | list | cancel` typed from the store -- **you never hand-write `tasks/*` wire JSON**. The runnable reference is [`examples/s45_tool_as_task_lifecycle.rs`](https://github.com/paiml/rust-mcp-sdk/blob/main/examples/s45_tool_as_task_lifecycle.rs). Note the task path lives on `ServerCoreBuilder` / `ServerCore`; the high-level `pmcp::Server` (and `StreamableHttpServer`) does not yet carry a `TaskStore`.
 
 | Backend | Crate | Use Case |
 |---------|-------|----------|

@@ -14,24 +14,26 @@ By the end of this section, you will be able to:
 
 ## Setting Up TaskStore in the Server Builder
 
-The builder's `.task_store()` method does two things: it stores the backend and it auto-configures the server's capabilities so clients can discover task support during initialization.
+The builder's `.task_store()` method does two things: it records the backend, and it makes the server **auto-advertise** the `tasks` capability so clients can discover task support during initialization. The capability follows the backend — you never set it by hand. (We will see in [Capability Negotiation](./ch21-02-capability-negotiation.md) that a `TaskSupport::Required` tool with *no* store is a build-time error, precisely so the advertised capability is never hollow.)
+
+> **Which builder?** The task path lives on `ServerCoreBuilder` (the lower-level core builder), and `.task_store()` is a method on it. The high-level `Server::builder()` (and `StreamableHttpServer`) does **not** yet carry a `TaskStore`, so wire the task path through `ServerCoreBuilder` / `ServerCore` for now. The runnable reference is [`examples/s45_tool_as_task_lifecycle.rs`](https://github.com/paiml/rust-mcp-sdk/blob/main/examples/s45_tool_as_task_lifecycle.rs).
 
 ```rust
-use pmcp::prelude::*;
-use pmcp::server::task_store::InMemoryTaskStore;
+use pmcp::server::builder::ServerCoreBuilder;
+use pmcp::server::task_store::{InMemoryTaskStore, TaskStore};
 use std::sync::Arc;
 
-let store = Arc::new(InMemoryTaskStore::new());
+let store = Arc::new(InMemoryTaskStore::new()) as Arc<dyn TaskStore>;
 
-let server = Server::builder()
+let server = ServerCoreBuilder::new()
     .name("satellite-analysis")
     .version("1.0.0")
     .task_store(store.clone())
-    // ... register tools ...
+    // ... register a task tool with .with_task_support(...) ...
     .build()?;
 ```
 
-After calling `.task_store()`, the server advertises these capabilities during `initialize`:
+After calling `.task_store()`, the server advertises these capabilities during `initialize` (the standard top-level `tasks` capability):
 
 ```json
 {
@@ -95,7 +97,53 @@ The `execution` field appears in the `tools/list` response:
 }
 ```
 
-## Writing a Dual-Path Tool Handler
+## Recommended Pattern: Let the SDK Own the Wire Protocol
+
+The cleanest way to expose a tool as a Task is to declare `with_task_support` and register a `TaskStore` — then **let the SDK mint the task id, advertise the capability, and serialize every `tasks/*` response from typed structs.** Your handler does *not* hand-write `tasks/*` JSON, does *not* mint ids, and does *not* construct a `CreateTaskResult`. It just registers the tool:
+
+```rust
+use pmcp::server::typed_tool::TypedTool;
+use pmcp::types::{ToolExecution, TaskSupport};
+use serde_json::json;
+
+let task_tool = TypedTool::new_with_schema(
+    "analyze_imagery",
+    json!({ "type": "object", "properties": { "image_uri": { "type": "string" } } }),
+    |_args, _extra| Box::pin(async {
+        // Do the work; return a CallToolResult-shaped value.
+        Ok(json!({ "content": [{ "type": "text", "text": "terrain classified" }] }))
+    }),
+)
+.with_description("Analyze satellite imagery for terrain classification")
+.with_execution(ToolExecution::new().with_task_support(TaskSupport::Required));
+```
+
+Register that tool plus a `task_store(...)` on `ServerCoreBuilder` (as shown above) and the SDK serves `tasks/get | result | list | cancel` for you. On the client, the round-trip is fully typed:
+
+```rust
+use pmcp::ToolCallResponse;
+
+let task_id = match client
+    .call_tool_with_task("analyze_imagery".to_string(), serde_json::json!({ "image_uri": "s3://..." }))
+    .await?
+{
+    ToolCallResponse::Task(task) => task.task_id, // store-minted id
+    ToolCallResponse::Result(_) => unreachable!("Required task tool always creates a task"),
+};
+
+let mut task = client.tasks_get(&task_id).await?;
+while !task.status.is_terminal() {
+    tokio::time::sleep(std::time::Duration::from_millis(task.poll_interval.unwrap_or(2000))).await;
+    task = client.tasks_get(&task_id).await?;
+}
+let result = client.tasks_result(&task_id).await?; // typed CallToolResult
+```
+
+This is the pattern to reach for. **You never assemble `tasks/*` wire JSON by hand**, so the server and client agree by construction — eliminating an entire class of silent wire-shape bugs (mismatched ids, malformed `tasks/result` payloads). The runnable end-to-end version is [`examples/s45_tool_as_task_lifecycle.rs`](https://github.com/paiml/rust-mcp-sdk/blob/main/examples/s45_tool_as_task_lifecycle.rs).
+
+## Advanced: Hand-Rolled Dual-Path Handler (`is_task_request`)
+
+> The pattern below predates the recommended path above. It hand-constructs the `task` payload and branches with `extra.is_task_request()`. Study it to understand what the SDK now does *for* you — and prefer the recommended pattern in new code. It remains useful when you need full manual control over background scheduling (for example, enqueueing to SQS instead of `tokio::spawn`).
 
 The core pattern for `TaskSupport::Optional` tools is a branch inside the handler. When `extra.is_task_request()` returns `true`, the client sent a `task` parameter and expects a `CreateTaskResult`. When it returns `false`, the client expects a synchronous `CallToolResult`.
 
@@ -334,38 +382,38 @@ Non-task-aware client flow:
 
 ## Putting It All Together
 
-Here is how the pieces connect in a complete server:
+Here is how the pieces connect in a complete server. The task path lives on `ServerCoreBuilder` (see the "Which builder?" note above):
 
 ```rust
-use pmcp::prelude::*;
-use pmcp::server::task_store::InMemoryTaskStore;
+use pmcp::server::builder::ServerCoreBuilder;
+use pmcp::server::task_store::{InMemoryTaskStore, TaskStore};
 use std::sync::Arc;
 
-#[tokio::main]
-async fn main() -> Result<()> {
-    let store = Arc::new(InMemoryTaskStore::new());
+# fn build() -> pmcp::Result<()> {
+let store = Arc::new(InMemoryTaskStore::new()) as Arc<dyn TaskStore>;
 
-    let server = Server::builder()
-        .name("satellite-analysis")
-        .version("1.0.0")
-        .task_store(store.clone())
-        .tool("analyze_imagery", build_analyze_tool(store.clone()))
-        .tool("get_task_result", build_get_task_result_tool(store.clone()))
-        .build()?;
-
-    server.run_stdio().await
-}
+let server = ServerCoreBuilder::new()
+    .name("satellite-analysis")
+    .version("1.0.0")
+    .task_store(store.clone())
+    .tool("analyze_imagery", build_analyze_tool(store.clone()))
+    .tool("get_task_result", build_get_task_result_tool(store.clone()))
+    .build()?;
+# let _ = server;
+# Ok(())
+# }
 ```
 
-The server advertises task support in its capabilities. The `analyze_imagery` tool declares `Optional` task support. Clients that send the `task` parameter get immediate acknowledgment. Clients that do not get synchronous results. And any client can use `get_task_result` as a universal polling mechanism.
+`build_analyze_tool` here registers `analyze_imagery` with `with_task_support(...)`. Because a `task_store` backs it, the server auto-advertises the `tasks` capability and serves `tasks/get | result | list | cancel` typed. The `get_task_result` fallback tool below remains useful for clients that cannot speak the native `tasks/*` methods at all (it is a plain `Forbidden` tool that reads the store).
 
 ## Key Takeaways
 
-- `.task_store()` on the builder auto-configures server capabilities -- you do not set them manually
+- **Recommended pattern:** register a `with_task_support` tool + `task_store(...)` on `ServerCoreBuilder`, and let the SDK mint the id, advertise the capability, and serve `tasks/*` typed. You never hand-write `tasks/*` wire JSON. (Client side: `call_tool_with_task` → poll `tasks_get` → `tasks_result`.)
+- `.task_store()` on `ServerCoreBuilder` auto-advertises the standard `tasks` capability -- you do not set it manually. (`Server::builder()` does not yet carry a `TaskStore`.)
 - `.with_execution(ToolExecution::new().with_task_support(...))` on the tool declares per-tool task behavior
-- `extra.is_task_request()` is the branch point in your handler -- one handler, two execution paths
-- The `get_task_result` fallback tool ensures every client can access async results, regardless of task support
-- The `TaskStore` enforces the state machine -- your handler only calls `create`, `update_status`, and `get`
+- `extra.is_task_request()` is the branch point in the *hand-rolled* dual-path handler -- a more advanced, manual alternative to the recommended pattern
+- The `get_task_result` fallback tool ensures even clients that cannot speak `tasks/*` natively can access async results
+- The `TaskStore` enforces the state machine -- transitions like `completed -> working` are rejected at the store level
 
 ---
 

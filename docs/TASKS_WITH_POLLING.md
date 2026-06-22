@@ -4,33 +4,74 @@ MCP Tasks let servers manage long-running operations that outlive a single reque
 
 In v2.0, task detection is **requestor-driven**: the SDK returns `CreateTaskResult` only when the client sends a `task` field in the `tools/call` request. Without it, the tool result is wrapped as a normal `CallToolResult`. This is capability-based negotiation, not client sniffing.
 
-## Quick Start
+## Recommended Server Setup
+
+Register a task-capable tool (`with_task_support`) and back it with a `TaskStore` via `task_store(...)`. The SDK serves `tasks/get | result | list | cancel` typed from your store — **you never hand-write `tasks/*` wire JSON**, and the `tasks` capability is auto-advertised because a store backs it.
 
 ```rust
 use pmcp::server::builder::ServerCoreBuilder;
+use pmcp::server::task_store::{InMemoryTaskStore, TaskStore};
+use pmcp::server::typed_tool::TypedTool;
 use pmcp::types::{ToolExecution, TaskSupport};
-use pmcp_tasks::{InMemoryTaskStore, TaskRouterImpl, TaskSecurityConfig};
+use serde_json::json;
 use std::sync::Arc;
 
-let store = Arc::new(
-    InMemoryTaskStore::new()
-        .with_security(TaskSecurityConfig::default().with_allow_anonymous(true)),
-);
-let router = Arc::new(TaskRouterImpl::new(store.clone()));
+let task_tool = TypedTool::new_with_schema(
+    "long_analysis",
+    json!({ "type": "object" }),
+    |_args, _extra| Box::pin(async { Ok(json!({ "content": [] })) }),
+)
+.with_description("Run a long analysis as an MCP Task")
+.with_execution(ToolExecution::new().with_task_support(TaskSupport::Required));
+
+let store = Arc::new(InMemoryTaskStore::new()) as Arc<dyn TaskStore>;
 
 let server = ServerCoreBuilder::new()
     .name("my-server")
     .version("1.0.0")
-    .with_task_store(router)
-    // ... register tools with .with_execution() ...
+    .tool("long_analysis", task_tool)
+    .task_store(store)   // presence of a store auto-advertises the `tasks` capability
     .build()?;
 ```
 
 The builder:
-- Sets `ServerCapabilities.tasks` automatically (list, cancel, tools/call)
-- Dispatches `tasks/get`, `tasks/list`, `tasks/cancel` through your store
+- Sets the standard top-level `ServerCapabilities.tasks` automatically (list, cancel, tools/call) **because a store backs the endpoints** — a `TaskSupport::Required` tool with **no** store makes `build()` return `Err` (no hollow capability)
+- Dispatches `tasks/get`, `tasks/list`, `tasks/cancel`, and `tasks/result` through your store, serialized from typed structs
 - Resolves task owners from auth context for multi-tenant isolation
-- Returns `CreateTaskResult` or `CallToolResult` based on the client's request
+- Mints the task id in the store and returns it to the client; returns `CreateTaskResult` or `CallToolResult` based on the client's request
+
+> **Scope caveat (current SDK):** the `TaskStore` path lives on `ServerCoreBuilder` / `ServerCore`. The high-level `pmcp::Server` (and `StreamableHttpServer`) does not yet carry a `TaskStore`. For a complete runnable round-trip, see [`examples/s45_tool_as_task_lifecycle.rs`](../examples/s45_tool_as_task_lifecycle.rs).
+
+> **Legacy path:** `with_task_store(Arc<dyn TaskRouter>)` (wrapping a store in `pmcp_tasks::TaskRouterImpl`) is the older experimental wiring; it advertises under `experimental.tasks` and expects hand-emitted `task` JSON. Prefer `task_store(...)` + `with_task_support` for new code.
+
+## Recommended Client Walkthrough
+
+The typed client never touches `tasks/*` JSON either:
+
+```rust
+use pmcp::ToolCallResponse;
+
+// 1) Call the tool as a task — receive the STORE-MINTED id.
+let task_id = match client
+    .call_tool_with_task("long_analysis".to_string(), serde_json::json!({}))
+    .await?
+{
+    ToolCallResponse::Task(task) => task.task_id,
+    ToolCallResponse::Result(_) => unreachable!("Required task tool always creates a task"),
+};
+
+// 2) Poll the typed `Task` until it reaches a terminal status.
+let mut task = client.tasks_get(&task_id).await?;
+while !task.status.is_terminal() {
+    tokio::time::sleep(std::time::Duration::from_millis(task.poll_interval.unwrap_or(2000))).await;
+    task = client.tasks_get(&task_id).await?;
+}
+
+// 3) Fetch the typed terminal `CallToolResult`.
+let result = client.tasks_result(&task_id).await?;
+```
+
+`client.tasks_list(cursor)` and `client.tasks_cancel(&task_id)` complete the typed client surface.
 
 ## Declaring Task Support on Tools
 

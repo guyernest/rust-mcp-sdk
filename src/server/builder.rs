@@ -720,7 +720,14 @@ impl ServerCoreBuilder {
         self
     }
 
-    /// Enable experimental MCP Tasks support with a task router.
+    /// Enable experimental MCP Tasks support with a task router (LEGACY).
+    ///
+    /// **Legacy / experimental.** This is the older `pmcp-tasks`
+    /// `TaskRouter` path and advertises `experimental.tasks` rather than the
+    /// standard `ServerCapabilities.tasks`. For the recommended, all-typed
+    /// tools-as-Tasks pattern, register a
+    /// [`TaskStore`](crate::server::task_store::TaskStore) via
+    /// [`Self::task_store`] instead (see `examples/s45_tool_as_task_lifecycle.rs`).
     ///
     /// The task router handles task lifecycle operations (`tasks/get`, `tasks/result`,
     /// `tasks/list`, `tasks/cancel`) and task-augmented `tools/call` requests.
@@ -759,33 +766,88 @@ impl ServerCoreBuilder {
         self
     }
 
-    /// Register a task store for MCP Tasks with polling.
+    /// Register a [`TaskStore`](crate::server::task_store::TaskStore) for MCP
+    /// Tasks (RECOMMENDED tools-as-Tasks path).
+    ///
+    /// This is the recommended, all-typed path for exposing a tool as an async
+    /// MCP Task: pair a task-capable
+    /// [`TypedTool`](crate::server::typed_tool::TypedTool) (marked
+    /// [`with_task_support(TaskSupport::Required)`](crate::types::ToolExecution::with_task_support))
+    /// with a store here, and the SDK serves `tasks/*` typed from the store —
+    /// you never hand-write `tasks/*` wire JSON, and the store mints the task id.
+    /// For the legacy experimental router path via `pmcp-tasks`, use
+    /// [`Self::with_task_store`].
     ///
     /// When a task store is registered, the server:
-    /// - Advertises `ServerCapabilities.tasks` with list and cancel support
-    /// - Handles `tasks/get`, `tasks/list`, `tasks/cancel` requests via the store
+    /// - **Auto-advertises** `ServerCapabilities.tasks` (with list and cancel
+    ///   support) in `initialize` — the mere presence of a store flips the
+    ///   capability on, unless an explicit `tasks` capability was already
+    ///   configured (additive-only; an explicit value is preserved verbatim).
+    /// - Handles `tasks/get`, `tasks/result`, `tasks/list`, `tasks/cancel`
+    ///   requests via the store
     /// - Resolves task owner from auth context (OAuth subject, client ID, or session ID)
     ///
-    /// This is the standard capability path (uses `ServerCapabilities.tasks`).
-    /// For the legacy experimental path via `pmcp-tasks`, use [`Self::with_task_store`].
+    /// A tool declaring
+    /// [`TaskSupport::Required`](crate::types::tools::TaskSupport::Required)
+    /// with NO store (or router) makes [`Self::build`] return an `Err`, rather
+    /// than advertising a hollow `tasks` capability whose endpoints cannot work.
+    ///
+    /// See `examples/s45_tool_as_task_lifecycle.rs` for the full client
+    /// round-trip.
     ///
     /// # Examples
     ///
-    /// ```rust,ignore
-    /// use pmcp::server::task_store::InMemoryTaskStore;
+    /// ```no_run
     /// use std::sync::Arc;
+    /// use pmcp::server::builder::ServerCoreBuilder;
+    /// use pmcp::server::task_store::{InMemoryTaskStore, TaskStore};
+    /// use pmcp::server::typed_tool::TypedTool;
+    /// use pmcp::types::{TaskSupport, ToolExecution};
     ///
-    /// let store = Arc::new(InMemoryTaskStore::new());
-    /// let server = Server::builder()
+    /// # fn build() -> pmcp::Result<()> {
+    /// let task_tool = TypedTool::new_with_schema(
+    ///     "summarize",
+    ///     serde_json::json!({ "type": "object" }),
+    ///     |_args: serde_json::Value, _extra| {
+    ///         Box::pin(async { Ok(serde_json::json!({ "status": "completed" })) })
+    ///     },
+    /// )
+    /// .with_description("Summarize asynchronously as an MCP Task")
+    /// .with_execution(ToolExecution::new().with_task_support(TaskSupport::Required));
+    ///
+    /// let store = Arc::new(InMemoryTaskStore::new()) as Arc<dyn TaskStore>;
+    /// let server = ServerCoreBuilder::new()
     ///     .name("my-server")
     ///     .version("1.0.0")
-    ///     .task_store(store)
+    ///     .tool("summarize", task_tool)
+    ///     .task_store(store) // presence of a store auto-advertises the `tasks` capability
     ///     .build()?;
+    /// # let _ = server;
+    /// # Ok(())
+    /// # }
     /// ```
     #[cfg(not(target_arch = "wasm32"))]
     pub fn task_store(mut self, store: Arc<dyn crate::server::task_store::TaskStore>) -> Self {
-        // Set ServerCapabilities.tasks (standard, not experimental)
-        self.capabilities.tasks = Some(crate::types::capabilities::ServerTasksCapability {
+        // Capability advertisement is centralized in `build()` (see
+        // `default_tasks_capability` and the endpoint-backed injection rule).
+        // Registering a store records the backend; it does NOT itself set
+        // `capabilities.tasks` so an explicitly-configured capability is never
+        // clobbered (additive-only, per D-CAPABILITY-ENDPOINT-BACKED).
+        self.task_store = Some(store);
+        self
+    }
+
+    /// Build the default server-level `tasks` capability advertised when a
+    /// task backend (a [`TaskStore`](crate::server::task_store::TaskStore) or a
+    /// [`TaskRouter`]) is present.
+    ///
+    /// This is the exact shape previously assigned inline by `task_store()`.
+    /// Centralizing it here lets `build()` inject the capability once, only when
+    /// an endpoint backend exists and the author has not already configured a
+    /// custom `tasks` capability (additive-only).
+    #[cfg(not(target_arch = "wasm32"))]
+    fn default_tasks_capability() -> crate::types::capabilities::ServerTasksCapability {
+        crate::types::capabilities::ServerTasksCapability {
             list: Some(serde_json::json!({})),
             cancel: Some(serde_json::json!({})),
             requests: Some(crate::types::capabilities::ServerTasksRequestCapability {
@@ -793,10 +855,52 @@ impl ServerCoreBuilder {
                     call: Some(serde_json::json!({})),
                 }),
             }),
+        }
+    }
+
+    /// Apply the endpoint-backed `tasks`-capability rule (D-CAPABILITY-ENDPOINT-BACKED).
+    ///
+    /// The `tasks` capability advertised in `initialize` represents REAL endpoint
+    /// support, never tool metadata alone:
+    /// - It is auto-advertised only when a backend exists
+    ///   (`task_store.is_some() || task_router.is_some()`) and the author has not
+    ///   already configured a custom `tasks` capability (additive-only — an
+    ///   explicit value is preserved verbatim).
+    /// - A tool declaring [`TaskSupport::Required`](crate::types::tools::TaskSupport)
+    ///   with NO backend is a build-time validation error (rather than a hollow
+    ///   capability that advertises `tasks/*` endpoints that cannot work).
+    /// - An `Optional`/`Forbidden` task tool with no backend is NOT an error and
+    ///   does NOT by itself trigger advertisement.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation error if any registered tool declares
+    /// [`TaskSupport::Required`] but no `TaskStore` or `TaskRouter` backs the
+    /// `tasks/*` endpoints.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn apply_tasks_capability_rule(&mut self) -> Result<()> {
+        use crate::types::tools::TaskSupport;
+
+        let has_backend = self.task_store.is_some() || self.task_router.is_some();
+        let has_required_task_tool = self.tool_infos.values().any(|info| {
+            info.execution
+                .as_ref()
+                .and_then(|e| e.task_support)
+                .is_some_and(|ts| matches!(ts, TaskSupport::Required))
         });
 
-        self.task_store = Some(store);
-        self
+        if has_required_task_tool && !has_backend {
+            return Err(Error::validation(
+                "a tool declares TaskSupport::Required but no TaskStore or TaskRouter \
+                 is configured to back the tasks/* endpoints",
+            ));
+        }
+
+        if self.capabilities.tasks.is_none() && has_backend {
+            self.capabilities.tasks = Some(Self::default_tasks_capability());
+        }
+
+        Ok(())
     }
 
     /// Detect if running in a stateless/serverless environment.
@@ -955,6 +1059,13 @@ impl ServerCoreBuilder {
     /// Returns an error if required fields (name, version) are not set.
     #[allow(unused_mut)]
     pub fn build(mut self) -> Result<ServerCore> {
+        // Endpoint-backed `tasks` capability injection (D-CAPABILITY-ENDPOINT-BACKED):
+        // advertise `tasks` only when a store/router backend exists, error on a
+        // Required task tool with no backend, and never clobber an explicit value.
+        // Done first, before any partial move of `self` below.
+        #[cfg(not(target_arch = "wasm32"))]
+        self.apply_tasks_capability_rule()?;
+
         let name = self
             .name
             .ok_or_else(|| Error::validation("Server name is required"))?;
@@ -1323,24 +1434,179 @@ mod tests {
 
     #[test]
     fn test_builder_task_store_sets_capabilities() {
+        // Capability injection is centralized in build() (endpoint-backed rule),
+        // so the store records the backend but does NOT set the capability on the
+        // builder itself — it appears on the BUILT capabilities.
         let store = Arc::new(crate::server::task_store::InMemoryTaskStore::new());
         let builder = ServerCoreBuilder::new()
             .name("test")
             .version("1.0.0")
             .task_store(store);
-        // Verify capabilities were set by the builder method
-        assert!(
-            builder.capabilities.tasks.is_some(),
-            "ServerCapabilities.tasks should be set"
-        );
-        let tasks_cap = builder.capabilities.tasks.as_ref().unwrap();
-        assert!(tasks_cap.list.is_some(), "tasks.list should be set");
-        assert!(tasks_cap.cancel.is_some(), "tasks.cancel should be set");
-        assert!(tasks_cap.requests.is_some(), "tasks.requests should be set");
-        // Verify task_store field is populated
+        // task_store field is populated, but capability is not yet injected.
         assert!(
             builder.task_store.is_some(),
             "task_store field should be set"
+        );
+        assert!(
+            builder.capabilities.tasks.is_none(),
+            "capability injection is deferred to build()"
+        );
+
+        let server = builder.build().unwrap();
+        let tasks_cap = server
+            .capabilities()
+            .tasks
+            .as_ref()
+            .expect("ServerCapabilities.tasks should be set after build()");
+        assert!(tasks_cap.list.is_some(), "tasks.list should be set");
+        assert!(tasks_cap.cancel.is_some(), "tasks.cancel should be set");
+        assert!(tasks_cap.requests.is_some(), "tasks.requests should be set");
+    }
+
+    /// A `TaskRouter` (with no store) is a valid backend — `build()` must
+    /// advertise the `tasks` capability.
+    #[test]
+    fn test_builder_task_router_only_advertises_tasks() {
+        let server = ServerCoreBuilder::new()
+            .name("test")
+            .version("1.0.0")
+            .with_task_store(Arc::new(WorkflowMockTaskRouter))
+            .build()
+            .unwrap();
+        assert!(
+            server.capabilities().tasks.is_some(),
+            "router-only backend should advertise tasks"
+        );
+    }
+
+    /// Helper tool exposing a configurable `TaskSupport` via its execution metadata.
+    struct TaskSupportTool(crate::types::tools::TaskSupport);
+
+    #[async_trait]
+    impl ToolHandler for TaskSupportTool {
+        async fn handle(&self, _args: Value, _extra: RequestHandlerExtra) -> Result<Value> {
+            Ok(Value::Null)
+        }
+        fn metadata(&self) -> Option<ToolInfo> {
+            let mut info = ToolInfo::new("task-tool", None, serde_json::json!({"type": "object"}));
+            info.execution =
+                Some(crate::types::tools::ToolExecution::new().with_task_support(self.0));
+            Some(info)
+        }
+    }
+
+    /// A `Required` task tool with NO backend is a build-time validation error,
+    /// not a hollow capability.
+    #[test]
+    fn test_builder_required_task_tool_without_backend_errors() {
+        use crate::types::tools::TaskSupport;
+
+        let result = ServerCoreBuilder::new()
+            .name("test")
+            .version("1.0.0")
+            .tool("task-tool", TaskSupportTool(TaskSupport::Required))
+            .build();
+        assert!(
+            result.is_err(),
+            "Required task tool with no backend must fail build()"
+        );
+    }
+
+    /// A `Required` task tool WITH a store backend builds successfully and
+    /// advertises the capability.
+    #[test]
+    fn test_builder_required_task_tool_with_store_builds() {
+        use crate::types::tools::TaskSupport;
+
+        let store = Arc::new(crate::server::task_store::InMemoryTaskStore::new());
+        let server = ServerCoreBuilder::new()
+            .name("test")
+            .version("1.0.0")
+            .tool("task-tool", TaskSupportTool(TaskSupport::Required))
+            .task_store(store)
+            .build()
+            .unwrap();
+        assert!(
+            server.capabilities().tasks.is_some(),
+            "Required task tool with a store backend should advertise tasks"
+        );
+    }
+
+    /// An `Optional` task tool with NO backend is NOT an error and does NOT
+    /// trigger a false-positive capability.
+    #[test]
+    fn test_builder_optional_task_tool_without_backend_no_capability() {
+        use crate::types::tools::TaskSupport;
+
+        let server = ServerCoreBuilder::new()
+            .name("test")
+            .version("1.0.0")
+            .tool("task-tool", TaskSupportTool(TaskSupport::Optional))
+            .build()
+            .unwrap();
+        assert!(
+            server.capabilities().tasks.is_none(),
+            "Optional task tool with no backend must not advertise tasks"
+        );
+    }
+
+    /// A `Forbidden`-only task tool with NO backend is NOT an error and does NOT
+    /// trigger a false-positive capability.
+    #[test]
+    fn test_builder_forbidden_task_tool_without_backend_no_capability() {
+        use crate::types::tools::TaskSupport;
+
+        let server = ServerCoreBuilder::new()
+            .name("test")
+            .version("1.0.0")
+            .tool("task-tool", TaskSupportTool(TaskSupport::Forbidden))
+            .build()
+            .unwrap();
+        assert!(
+            server.capabilities().tasks.is_none(),
+            "Forbidden task tool with no backend must not advertise tasks"
+        );
+    }
+
+    /// An explicitly-configured custom `tasks` capability is preserved verbatim
+    /// even when a store backend is present (additive-only).
+    #[test]
+    fn test_builder_explicit_tasks_capability_not_clobbered() {
+        use crate::types::capabilities::ServerTasksCapability;
+
+        // A distinctive custom capability (list omitted) so we can prove it survives.
+        let custom = ServerTasksCapability {
+            list: None,
+            cancel: Some(serde_json::json!({"custom": true})),
+            requests: None,
+        };
+        let capabilities = crate::types::ServerCapabilities {
+            tasks: Some(custom),
+            ..Default::default()
+        };
+
+        let store = Arc::new(crate::server::task_store::InMemoryTaskStore::new());
+        let server = ServerCoreBuilder::new()
+            .name("test")
+            .version("1.0.0")
+            .capabilities(capabilities)
+            .task_store(store)
+            .build()
+            .unwrap();
+
+        let built = server
+            .capabilities()
+            .tasks
+            .as_ref()
+            .expect("explicit tasks capability should remain set");
+        assert!(
+            built.list.is_none(),
+            "explicit capability must not be replaced by the default (which sets list)"
+        );
+        assert_eq!(
+            built.cancel,
+            Some(serde_json::json!({"custom": true})),
+            "explicit custom cancel value must survive build()"
         );
     }
 

@@ -260,6 +260,21 @@ don't yet speak SEP-2640 — the two surfaces are byte-equal by construction.
 cargo run --example s44_server_skills --features skills,full
 ```
 
+### MCP Tasks
+
+**s45_tool_as_task_lifecycle** — THE canonical tools-as-Tasks example: the
+recommended, all-typed pattern for exposing a tool as an async MCP Task. Register
+a `with_task_support(TaskSupport::Required)` tool plus an `InMemoryTaskStore` on
+`ServerCoreBuilder` (the store auto-advertises the `tasks` capability and mints
+the task id) — you never hand-write any `tasks/*` wire JSON. Drives the full path
+through a LIVE in-process client round-trip (`initialize → call(task) → tasks/get
+poll → tasks/result`), proving the four original tools-as-tasks wire-shape bugs
+are impossible on the SDK path: store-minted id consistency, auto-advertised
+`tasks` capability, typed `tasks/get`, and a typed non-empty `tasks/result`.
+```bash
+cargo run --example s45_tool_as_task_lifecycle --features full
+```
+
 ---
 
 ## Client Examples

@@ -2,7 +2,86 @@
 
 When a tool takes five seconds, request/response is fine. When it takes five minutes -- deploying infrastructure, processing a large dataset, running a multi-step pipeline -- the caller needs more than silence followed by a result. MCP Tasks solve this with a stateless polling model that works everywhere from local development to serverless Lambda functions.
 
-This chapter covers the design rationale, the protocol flow, and how to integrate tasks into your PMCP server using the `pmcp-tasks` crate.
+This chapter covers the design rationale, the protocol flow, and how to integrate tasks into your PMCP server.
+
+> **Read this first.** PMCP ships a *typed, correct-by-construction* task path: you register a task-capable tool plus a `TaskStore`, and the SDK serves `tasks/get | result | list | cancel` for you from typed structs. **You never hand-write `tasks/*` wire JSON.** Start with the [Recommended Pattern](#recommended-pattern-tools-as-tasks) below. The hand-rolled `pmcp-tasks` / `TaskRouter` approach shown later in this chapter is the **legacy experimental path** — kept for reference, but not what you should reach for in new code.
+
+---
+
+## Recommended Pattern: Tools as Tasks
+
+The clean way to expose a long-running tool as an async MCP **Task** is to declare task support on the tool and back it with a `TaskStore`. The SDK does the rest — it mints the task id, advertises the `tasks` capability, and serializes every `tasks/*` response from typed structs (`GetTaskResult`, `CreateTaskResult`, `CallToolResult`). Because both server and client speak the same typed shapes, an entire class of silent wire-shape bugs (mismatched ids, hollow capabilities, malformed `tasks/result` payloads) becomes impossible.
+
+### Server
+
+The task path lives on `ServerCoreBuilder` / `ServerCore`:
+
+```rust,ignore
+use std::sync::Arc;
+use pmcp::server::builder::ServerCoreBuilder;
+use pmcp::server::task_store::{InMemoryTaskStore, TaskStore};
+use pmcp::server::typed_tool::TypedTool;
+use pmcp::types::{TaskSupport, ToolExecution};
+use serde_json::json;
+
+let schema = json!({ "type": "object" });
+
+let task_tool = TypedTool::new_with_schema("summarize", schema, |_args, _extra| {
+    Box::pin(async {
+        // ... do the work, return a CallToolResult-shaped value ...
+        Ok(json!({ "content": [{ "type": "text", "text": "done" }] }))
+    })
+})
+.with_description("Summarize asynchronously as an MCP Task")
+.with_execution(ToolExecution::new().with_task_support(TaskSupport::Required));
+
+let store = Arc::new(InMemoryTaskStore::new()) as Arc<dyn TaskStore>;
+
+let server = ServerCoreBuilder::new()
+    .name("my-server")
+    .version("1.0.0")
+    .tool("summarize", task_tool)
+    .task_store(store)   // presence of a store auto-advertises the `tasks` capability
+    .build()?;
+```
+
+Four things the SDK guarantees here:
+
+1. **You never hand-write `tasks/*` JSON.** The SDK serializes every response from typed structs, so server and client agree by construction.
+2. **`task_store(...)` auto-advertises the `tasks` capability.** A `TaskSupport::Required` tool with **no** store (or router) makes `build()` return an `Err` — no hollow capability that advertises endpoints which cannot work.
+3. **The store mints the task id.** The id returned to the client is the store-minted id, and it is exactly the id the client polls.
+4. **`tasks/result` is served typed from the store** (with `TaskRouter` fall-through for the legacy path).
+
+### Client
+
+```rust,ignore
+use pmcp::ToolCallResponse;
+
+// 1) Call the tool as a task — get back the store-minted id.
+let task_id = match client
+    .call_tool_with_task("summarize".to_string(), serde_json::json!({}))
+    .await?
+{
+    ToolCallResponse::Task(task) => task.task_id,
+    ToolCallResponse::Result(_) => unreachable!("Required task tool always creates a task"),
+};
+
+// 2) Poll the typed `Task` until it reaches a terminal status.
+let mut task = client.tasks_get(&task_id).await?;
+while !task.status.is_terminal() {
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    task = client.tasks_get(&task_id).await?;
+}
+
+// 3) Fetch the typed terminal `CallToolResult`.
+let result = client.tasks_result(&task_id).await?;
+```
+
+`client.tasks_list(cursor)` and `client.tasks_cancel(&task_id)` round out the typed client surface.
+
+> **Scope caveat (current SDK).** Task dispatch and the `TaskStore` live on `ServerCoreBuilder` / `ServerCore`. The high-level `pmcp::Server` (and `StreamableHttpServer`) does **not** yet carry a `TaskStore` — wire the task path through `ServerCore` for now. For a complete, runnable end-to-end round-trip (initialize → call-with-task → poll → result), see the reference example [`examples/s45_tool_as_task_lifecycle.rs`](https://github.com/paiml/rust-mcp-sdk/blob/main/examples/s45_tool_as_task_lifecycle.rs).
+
+The rest of this chapter explains *why* the polling model exists, the task state machine, and the legacy `pmcp-tasks` path you may still encounter in older code.
 
 ---
 
@@ -111,7 +190,9 @@ The client can also list all its tasks with `tasks/list` and cancel an in-progre
 
 ---
 
-## Setting Up TaskStore
+## Legacy: Setting Up TaskStore via `pmcp-tasks`
+
+> **Legacy / experimental path.** The sections from here through "Writing Dual-Path Tool Handlers" describe the older `pmcp-tasks` + `TaskRouter` approach, where you hand-construct the store, wire it with `with_task_store(...)`, and emit `task` JSON by hand inside the handler. New code should prefer the [Recommended Pattern](#recommended-pattern-tools-as-tasks) above (`task_store(...)` + `with_task_support`), which removes the hand-rolled JSON entirely. The material below is retained because you may encounter it in existing servers and because the production backends (DynamoDB, Redis) documented here are still the way to persist tasks.
 
 Tasks need persistent storage. The `pmcp-tasks` crate provides the `TaskStore` trait and two ready-made backends:
 
@@ -168,7 +249,9 @@ let store = Arc::new(
 
 All domain logic -- state machine validation, owner isolation, variable merge, TTL enforcement -- lives in `GenericTaskStore`. The backend is a dumb key-value store. This means switching from in-memory to DynamoDB requires zero changes to your tool handlers.
 
-### Wiring the Store to the Server
+### Wiring the Store to the Server (legacy `with_task_store`)
+
+> The `with_task_store(Arc<dyn TaskRouter>)` builder method shown here is the **legacy experimental** wiring. It advertises under `experimental.tasks` and expects you to emit `task` JSON by hand. The recommended path is `task_store(Arc<dyn TaskStore>)` (see the [Recommended Pattern](#recommended-pattern-tools-as-tasks)), which advertises the standard top-level `tasks` capability and serves every `tasks/*` response typed.
 
 The `pmcp-tasks` crate ships a `TaskRouterImpl` that bridges any `TaskStore` to the `TaskRouter` trait the SDK consumes. Wrap the store in `TaskRouterImpl`, then register it with `ServerCoreBuilder::with_task_store(...)`:
 
@@ -360,19 +443,17 @@ This principle applies beyond tasks. It is the same pattern used for progress to
 
 ### Server Capability Advertisement
 
-The server side of negotiation happens during initialization. When you call `.with_task_store(router)` on the builder, PMCP automatically advertises task support under `experimental.tasks`:
+The server side of negotiation happens during initialization. With the recommended `task_store(...)` path, PMCP advertises task support under the **standard top-level `tasks` capability** (`ServerCapabilities.tasks`) as soon as a store backs the endpoints — you do not set it manually:
 
 ```json
 {
   "capabilities": {
-    "experimental": {
-      "tasks": {
-        "list": {},
-        "cancel": {},
-        "requests": {
-          "tools": {
-            "call": {}
-          }
+    "tasks": {
+      "list": {},
+      "cancel": {},
+      "requests": {
+        "tools": {
+          "call": {}
         }
       }
     }
@@ -381,6 +462,8 @@ The server side of negotiation happens during initialization. When you call `.wi
 ```
 
 This tells clients: "I support tasks for `tools/call`, and I support `tasks/list` and `tasks/cancel`." Clients that understand tasks will include the `task` field when calling tools that advertise `TaskSupport::Optional` or `TaskSupport::Required`.
+
+The advertisement follows the backend, not tool metadata alone: it appears only when a store (or, on the legacy path, a router) is present. A tool declaring `TaskSupport::Required` with **no** backend is a build-time error rather than a hollow capability — `build()` returns an `Err`. (The legacy `with_task_store(router)` path instead advertises under `experimental.tasks`.)
 
 ---
 
@@ -587,6 +670,7 @@ MCP Tasks extend the request/response model with durable, pollable operations th
 
 **Key concepts:**
 
+- **Recommended pattern:** declare `with_task_support` on the tool and register a `TaskStore` with `task_store(...)`. The SDK mints the id, auto-advertises the `tasks` capability, and serves every `tasks/*` response typed — you never hand-write `tasks/*` wire JSON. See [`examples/s45_tool_as_task_lifecycle.rs`](https://github.com/paiml/rust-mcp-sdk/blob/main/examples/s45_tool_as_task_lifecycle.rs).
 - **Two-phase flow:** `tools/call` returns a task, `tasks/get` polls status, `tasks/result` retrieves the outcome.
 - **Stateless negotiation:** The `task` field in each request is the capability signal. No session state required.
 - **Dual-path handlers:** `extra.is_task_request()` lets the same tool handler serve both task-aware and non-task-aware clients.

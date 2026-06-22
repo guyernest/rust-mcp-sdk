@@ -562,16 +562,8 @@ impl<T: Transport> Client<T> {
         let request_id = RequestId::String(Uuid::new_v4().to_string());
         let response = self.send_request(request_id, request).await?;
 
-        match response.payload {
-            crate::types::jsonrpc::ResponsePayload::Result(result) => {
-                let task_result: GetTaskResult =
-                    serde_json::from_value(result).map_err(|e| Error::parse(e.to_string()))?;
-                Ok(task_result.task)
-            },
-            crate::types::jsonrpc::ResponsePayload::Error(error) => {
-                Err(Error::from_jsonrpc_error(error))
-            },
-        }
+        let task_result: GetTaskResult = self.parse_task_payload(response, "tasks/get").await?;
+        Ok(task_result.task)
     }
 
     /// Get the final result of a completed task.
@@ -591,14 +583,8 @@ impl<T: Transport> Client<T> {
         let request_id = RequestId::String(Uuid::new_v4().to_string());
         let response = self.send_request(request_id, request).await?;
 
-        match response.payload {
-            crate::types::jsonrpc::ResponsePayload::Result(result) => {
-                serde_json::from_value(result).map_err(|e| Error::parse(e.to_string()))
-            },
-            crate::types::jsonrpc::ResponsePayload::Error(error) => {
-                Err(Error::from_jsonrpc_error(error))
-            },
-        }
+        self.parse_task_payload::<CallToolResult>(response, "tasks/result")
+            .await
     }
 
     /// List tasks owned by the current client.
@@ -612,14 +598,8 @@ impl<T: Transport> Client<T> {
         let request_id = RequestId::String(Uuid::new_v4().to_string());
         let response = self.send_request(request_id, request).await?;
 
-        match response.payload {
-            crate::types::jsonrpc::ResponsePayload::Result(result) => {
-                serde_json::from_value(result).map_err(|e| Error::parse(e.to_string()))
-            },
-            crate::types::jsonrpc::ResponsePayload::Error(error) => {
-                Err(Error::from_jsonrpc_error(error))
-            },
-        }
+        self.parse_task_payload::<ListTasksResult>(response, "tasks/list")
+            .await
     }
 
     /// Cancel a running task.
@@ -634,11 +614,38 @@ impl<T: Transport> Client<T> {
         let request_id = RequestId::String(Uuid::new_v4().to_string());
         let response = self.send_request(request_id, request).await?;
 
+        let cancel_result: CancelTaskResult =
+            self.parse_task_payload(response, "tasks/cancel").await?;
+        Ok(cancel_result.task)
+    }
+
+    /// Deserialize a `tasks/*` response payload into `T`, emitting a structured
+    /// WARN (method + transport identity + serde error) on a deserialize failure
+    /// before surfacing it. Centralizes the four task endpoints' identical
+    /// result-vs-error handling.
+    ///
+    /// Lock-on-error: the transport identity is read only on the cold failure
+    /// path (D-LOCK-ON-ERROR — no cached field on `Client`).
+    async fn parse_task_payload<D: serde::de::DeserializeOwned>(
+        &self,
+        response: crate::types::JSONRPCResponse,
+        method: &'static str,
+    ) -> Result<D> {
         match response.payload {
             crate::types::jsonrpc::ResponsePayload::Result(result) => {
-                let cancel_result: CancelTaskResult =
-                    serde_json::from_value(result).map_err(|e| Error::parse(e.to_string()))?;
-                Ok(cancel_result.task)
+                match serde_json::from_value::<D>(result) {
+                    Ok(value) => Ok(value),
+                    Err(e) => {
+                        let transport = self.transport.read().await.transport_type();
+                        Self::log_task_deserialize_error(
+                            method,
+                            std::any::type_name::<D>(),
+                            transport,
+                            &e,
+                        );
+                        Err(Error::parse(e.to_string()))
+                    },
+                }
             },
             crate::types::jsonrpc::ResponsePayload::Error(error) => {
                 Err(Error::from_jsonrpc_error(error))
@@ -1860,6 +1867,34 @@ impl<T: Transport> Client<T> {
             .await
     }
 
+    /// Emit a `WARN` when a `tasks/*` response fails to deserialize.
+    ///
+    /// This is the single shared observability helper for all four task
+    /// deserialize sites (`tasks/get`, `tasks/result`, `tasks/list`,
+    /// `tasks/cancel`). It logs the originating `method`, the available
+    /// transport identity, the deserialize `target` type, and the serde
+    /// `error` — then the caller still returns `Err` (control flow is
+    /// unchanged; this only adds observability, closing TASKDX-03).
+    ///
+    /// `transport` is [`Transport::transport_type`] (e.g. `"stdio"`,
+    /// `"http"`) — the only server identity available here, because the
+    /// `Transport` trait exposes no per-instance URL. TASKDX-03 logs this
+    /// identity, not a genuine endpoint URL.
+    fn log_task_deserialize_error(
+        method: &'static str,
+        target_type: &'static str,
+        transport: &'static str,
+        error: &serde_json::Error,
+    ) {
+        tracing::warn!(
+            method = method,
+            transport = transport,
+            target = target_type,
+            error = %error,
+            "task response failed to deserialize",
+        );
+    }
+
     /// Check if client is initialized.
     fn ensure_initialized(&self) -> Result<()> {
         if self.initialized {
@@ -2955,5 +2990,209 @@ mod tests {
         let all = client.list_all_resource_templates().await.expect("ok");
         let names: Vec<_> = all.into_iter().map(|t| t.name).collect();
         assert_eq!(names, vec!["ta", "tb"]);
+    }
+
+    // === TASKDX-03: WARN on task deserialize failure ===
+
+    /// A single captured tracing event's structured fields.
+    #[derive(Debug, Clone, Default)]
+    struct CapturedEvent {
+        level: String,
+        fields: std::collections::HashMap<String, String>,
+        message: String,
+    }
+
+    /// Minimal in-test recording subscriber that captures events' structured
+    /// fields into a shared `Vec`, with NO dependency on `tracing-subscriber`.
+    ///
+    /// Installed via `tracing::subscriber::with_default` (scoped, never a global
+    /// `init()`), so it cannot leak across tests run under `--test-threads=1`.
+    #[derive(Clone, Default)]
+    struct RecordingSubscriber {
+        events: Arc<Mutex<Vec<CapturedEvent>>>,
+    }
+
+    struct FieldCollector<'a>(&'a mut CapturedEvent);
+
+    impl tracing::field::Visit for FieldCollector<'_> {
+        fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+            let rendered = format!("{value:?}");
+            if field.name() == "message" {
+                // Debug-rendered messages are wrapped in quotes; strip them.
+                self.0.message = rendered.trim_matches('"').to_string();
+            } else {
+                self.0.fields.insert(
+                    field.name().to_string(),
+                    rendered.trim_matches('"').to_string(),
+                );
+            }
+        }
+
+        fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+            if field.name() == "message" {
+                self.0.message = value.to_string();
+            } else {
+                self.0
+                    .fields
+                    .insert(field.name().to_string(), value.to_string());
+            }
+        }
+    }
+
+    impl tracing::Subscriber for RecordingSubscriber {
+        fn enabled(&self, _metadata: &tracing::Metadata<'_>) -> bool {
+            true
+        }
+
+        fn new_span(&self, _span: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+            tracing::span::Id::from_u64(1)
+        }
+
+        fn record(&self, _span: &tracing::span::Id, _values: &tracing::span::Record<'_>) {}
+
+        fn record_follows_from(&self, _span: &tracing::span::Id, _follows: &tracing::span::Id) {}
+
+        fn event(&self, event: &tracing::Event<'_>) {
+            let mut captured = CapturedEvent {
+                level: event.metadata().level().to_string(),
+                ..Default::default()
+            };
+            event.record(&mut FieldCollector(&mut captured));
+            self.events.lock().unwrap().push(captured);
+        }
+
+        fn enter(&self, _span: &tracing::span::Id) {}
+        fn exit(&self, _span: &tracing::span::Id) {}
+    }
+
+    /// Build an init response advertising the `tasks` capability.
+    fn tasks_init_response() -> TransportMessage {
+        TransportMessage::Response(JSONRPCResponse {
+            jsonrpc: "2.0".to_string(),
+            id: RequestId::from(1i64),
+            payload: ResponsePayload::Result(json!({
+                "protocolVersion": "2025-06-18",
+                "capabilities": { "tasks": {} },
+                "serverInfo": { "name": "test-server", "version": "1.0.0" }
+            })),
+        })
+    }
+
+    #[test]
+    fn test_tasks_get_malformed_response_emits_warn_and_errs() {
+        // A flat Task missing the required `task` wrapper — the deliberately
+        // wrong shape for GetTaskResult (incident bug #3).
+        let malformed = TransportMessage::Response(JSONRPCResponse {
+            jsonrpc: "2.0".to_string(),
+            id: RequestId::from(2i64),
+            payload: ResponsePayload::Result(json!({
+                "taskId": "abc",
+                "status": "completed"
+            })),
+        });
+        let transport = MockTransport::with_responses(vec![malformed, tasks_init_response()]);
+        let mut client = Client::new(transport);
+        let _ = futures::executor::block_on(client.initialize(ClientCapabilities::default()));
+
+        let recorder = RecordingSubscriber::default();
+        let sink = recorder.events.clone();
+        let result = tracing::subscriber::with_default(recorder, || {
+            futures::executor::block_on(client.tasks_get("abc"))
+        });
+
+        // Control flow unchanged: still returns Err (a parse error).
+        assert!(result.is_err(), "malformed tasks/get must still return Err");
+
+        // Structural WARN assertion (not a substring of the message text).
+        let events = sink.lock().unwrap();
+        let warn = events
+            .iter()
+            .find(|e| e.fields.get("method").map(String::as_str) == Some("tasks/get"))
+            .expect("a WARN naming method=tasks/get must be captured");
+        assert_eq!(warn.level, "WARN", "must be a WARN level event");
+        assert!(
+            warn.fields.contains_key("error"),
+            "WARN must carry the serde error field, got: {:?}",
+            warn.fields
+        );
+        assert!(
+            warn.fields.contains_key("transport"),
+            "WARN must carry the transport identity field, got: {:?}",
+            warn.fields
+        );
+    }
+
+    #[test]
+    fn test_tasks_result_malformed_response_emits_warn_and_errs() {
+        // CallToolResult requires `content`; a bare bool is the wrong shape.
+        let malformed = TransportMessage::Response(JSONRPCResponse {
+            jsonrpc: "2.0".to_string(),
+            id: RequestId::from(2i64),
+            payload: ResponsePayload::Result(json!(true)),
+        });
+        let transport = MockTransport::with_responses(vec![malformed, tasks_init_response()]);
+        let mut client = Client::new(transport);
+        let _ = futures::executor::block_on(client.initialize(ClientCapabilities::default()));
+
+        let recorder = RecordingSubscriber::default();
+        let sink = recorder.events.clone();
+        let result = tracing::subscriber::with_default(recorder, || {
+            futures::executor::block_on(client.tasks_result("abc"))
+        });
+
+        assert!(
+            result.is_err(),
+            "malformed tasks/result must still return Err"
+        );
+
+        let events = sink.lock().unwrap();
+        let warn = events
+            .iter()
+            .find(|e| e.fields.get("method").map(String::as_str) == Some("tasks/result"))
+            .expect("a WARN naming method=tasks/result must be captured");
+        assert_eq!(warn.level, "WARN");
+        assert!(warn.fields.contains_key("error"), "got: {:?}", warn.fields);
+        assert!(
+            warn.fields.contains_key("transport"),
+            "got: {:?}",
+            warn.fields
+        );
+    }
+
+    #[test]
+    fn test_tasks_get_well_formed_response_emits_no_warn() {
+        let well_formed = TransportMessage::Response(JSONRPCResponse {
+            jsonrpc: "2.0".to_string(),
+            id: RequestId::from(2i64),
+            payload: ResponsePayload::Result(json!({
+                "task": {
+                    "taskId": "abc",
+                    "status": "completed",
+                    "createdAt": "2026-06-21T00:00:00Z",
+                    "lastUpdatedAt": "2026-06-21T00:00:00Z"
+                }
+            })),
+        });
+        let transport = MockTransport::with_responses(vec![well_formed, tasks_init_response()]);
+        let mut client = Client::new(transport);
+        let _ = futures::executor::block_on(client.initialize(ClientCapabilities::default()));
+
+        let recorder = RecordingSubscriber::default();
+        let sink = recorder.events.clone();
+        let result = tracing::subscriber::with_default(recorder, || {
+            futures::executor::block_on(client.tasks_get("abc"))
+        });
+
+        assert!(
+            result.is_ok(),
+            "well-formed tasks/get must succeed: {result:?}"
+        );
+        let events = sink.lock().unwrap();
+        assert!(
+            !events
+                .iter()
+                .any(|e| e.fields.get("method").map(String::as_str) == Some("tasks/get")),
+            "no task-deserialize WARN must fire on a well-formed response"
+        );
     }
 }

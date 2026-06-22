@@ -22,6 +22,66 @@
 //! These PMCP extensions remain in `pmcp-tasks`. The SDK trait covers
 //! the core MCP spec operations only.
 //!
+//! # Recommended usage: expose a tool as an MCP Task
+//!
+//! The clean, correct-by-construction pattern (Phase 101) is: register a
+//! task-capable tool (a [`TypedTool`](crate::server::typed_tool::TypedTool)
+//! marked [`with_task_support(TaskSupport::Required)`](crate::types::ToolExecution::with_task_support))
+//! plus a [`TaskStore`](crate::server::task_store::TaskStore) on
+//! [`ServerCoreBuilder`](crate::server::builder::ServerCoreBuilder),
+//! then let the SDK serve `tasks/get`, `tasks/result`, `tasks/list`, and
+//! `tasks/cancel` typed. You never hand-write any `tasks/*` wire JSON — the SDK
+//! serializes from the typed structs — and the store mints the task id.
+//!
+//! Registering a store via [`task_store`](crate::server::builder::ServerCoreBuilder::task_store)
+//! also auto-advertises the `tasks` capability in `initialize` (a
+//! [`TaskSupport::Required`](crate::types::tools::TaskSupport::Required) tool
+//! with NO store makes [`build()`](crate::server::builder::ServerCoreBuilder::build)
+//! return an error, never a hollow capability).
+//!
+//! ```no_run
+//! use std::sync::Arc;
+//! use pmcp::server::builder::ServerCoreBuilder;
+//! use pmcp::server::task_store::{InMemoryTaskStore, TaskStore};
+//! use pmcp::server::typed_tool::TypedTool;
+//! use pmcp::types::{TaskSupport, ToolExecution};
+//!
+//! # fn build() -> pmcp::Result<()> {
+//! let task_tool = TypedTool::new_with_schema(
+//!     "summarize",
+//!     serde_json::json!({ "type": "object" }),
+//!     |_args: serde_json::Value, _extra| {
+//!         Box::pin(async { Ok(serde_json::json!({ "status": "completed" })) })
+//!     },
+//! )
+//! .with_description("Summarize asynchronously as an MCP Task")
+//! .with_execution(ToolExecution::new().with_task_support(TaskSupport::Required));
+//!
+//! let store = Arc::new(InMemoryTaskStore::new()) as Arc<dyn TaskStore>;
+//! let server = ServerCoreBuilder::new()
+//!     .name("my-server")
+//!     .version("1.0.0")
+//!     .tool("summarize", task_tool)
+//!     .task_store(store) // presence of a store auto-advertises the `tasks` capability
+//!     .build()?;
+//! # let _ = server;
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! The task path currently lives on
+//! [`ServerCoreBuilder`](crate::server::builder::ServerCoreBuilder) /
+//! [`ServerCore`](crate::server::core::ServerCore); the high-level
+//! `pmcp::Server` (and `StreamableHttpServer`) does not yet carry a
+//! [`TaskStore`](crate::server::task_store::TaskStore). See
+//! `examples/s45_tool_as_task_lifecycle.rs` for the full client round-trip
+//! (`initialize → call(task) → tasks/get poll → tasks/result`).
+//!
+//! Note: [`with_task_store(Arc<dyn TaskRouter>)`](crate::server::builder::ServerCoreBuilder::with_task_store)
+//! is the LEGACY experimental (`pmcp-tasks`) path — prefer
+//! [`task_store(...)`](crate::server::builder::ServerCoreBuilder::task_store) +
+//! `with_task_support`.
+//!
 //! # Examples
 //!
 //! ```no_run
@@ -39,6 +99,7 @@ use dashmap::DashMap;
 use std::time::Instant;
 
 use crate::types::tasks::{Task, TaskStatus};
+use crate::types::CallToolResult;
 
 // ---------------------------------------------------------------------------
 // TaskStoreError
@@ -160,6 +221,17 @@ impl Default for StoreConfig {
 /// Implementations must be `Send + Sync` for concurrent access from
 /// multiple request handlers.
 ///
+/// # Recommended usage
+///
+/// To expose a tool as an async MCP Task, register a task-capable
+/// [`TypedTool`](crate::server::typed_tool::TypedTool) plus an implementation
+/// of this trait (e.g. [`InMemoryTaskStore`]) on
+/// [`ServerCoreBuilder::task_store`](crate::server::builder::ServerCoreBuilder::task_store);
+/// the SDK then serves `tasks/get`, `tasks/result`, `tasks/list`, and
+/// `tasks/cancel` typed from the store — you never hand-write `tasks/*` wire
+/// JSON, and the store mints the task id. See the module-level docs and
+/// `examples/s45_tool_as_task_lifecycle.rs` for the full pattern.
+///
 /// # Owner Isolation
 ///
 /// All methods that access a specific task require an `owner_id`. If the
@@ -205,6 +277,117 @@ pub trait TaskStore: Send + Sync {
 
     /// Returns a reference to the store's configuration.
     fn config(&self) -> &StoreConfig;
+
+    /// Persist the terminal [`CallToolResult`]
+    /// for a completed task, scoped to `owner_id`.
+    ///
+    /// This is an **additive** trait method with a default implementation, so
+    /// existing out-of-tree [`TaskStore`] implementations keep compiling. The
+    /// default returns [`TaskStoreError::Internal`] to signal — explicitly,
+    /// never silently — that the store does not persist terminal results.
+    /// Stores that DO persist results (e.g. [`InMemoryTaskStore`]) override
+    /// this method and also override [`TaskStore::supports_results`] to return
+    /// `true`.
+    ///
+    /// Implementations MUST scope the write by `owner_id` (mirroring
+    /// [`TaskStore::get`] / [`TaskStore::cancel`]) so one owner cannot set a
+    /// result on another owner's task.
+    ///
+    /// # Errors
+    ///
+    /// The default implementation always returns [`TaskStoreError::Internal`]
+    /// ("store does not support terminal results"). Overriding implementations
+    /// return [`TaskStoreError::NotFound`] when the task does not exist or
+    /// belongs to a different owner.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use pmcp::server::task_store::{InMemoryTaskStore, TaskStore};
+    /// use pmcp::types::CallToolResult;
+    /// use pmcp::types::Content;
+    ///
+    /// # async fn example() {
+    /// let store = InMemoryTaskStore::new();
+    /// let task = store.create("owner-1", None).await.unwrap();
+    /// let result = CallToolResult::new(vec![Content::text("done")]);
+    /// store
+    ///     .set_result(&task.task_id, "owner-1", result)
+    ///     .await
+    ///     .unwrap();
+    /// # }
+    /// ```
+    async fn set_result(
+        &self,
+        task_id: &str,
+        _owner_id: &str,
+        _result: crate::types::CallToolResult,
+    ) -> Result<(), TaskStoreError> {
+        let _ = task_id;
+        Err(TaskStoreError::Internal {
+            message: "store does not support terminal results".to_string(),
+        })
+    }
+
+    /// Retrieve the persisted terminal
+    /// [`CallToolResult`] for a task, scoped to
+    /// `owner_id`.
+    ///
+    /// This is an **additive** trait method with a default implementation. The
+    /// default returns [`TaskStoreError::NotFound`] — a store that does not
+    /// persist results has none to return. Stores that persist results
+    /// override this method.
+    ///
+    /// Implementations MUST return [`TaskStoreError::NotFound`] (never a
+    /// distinct error) on owner mismatch, so the existence of another owner's
+    /// task is never revealed. A task that exists but has no stored result yet
+    /// (still pending) also returns [`TaskStoreError::NotFound`]; the dispatch
+    /// layer turns that signal into a specified "not completed" error.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TaskStoreError::NotFound`] when no result is available for the
+    /// task under the given owner (task absent, owner mismatch, or pending).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use pmcp::server::task_store::{InMemoryTaskStore, TaskStore};
+    /// use pmcp::types::{CallToolResult, Content};
+    ///
+    /// # async fn example() {
+    /// let store = InMemoryTaskStore::new();
+    /// let task = store.create("owner-1", None).await.unwrap();
+    /// let result = CallToolResult::new(vec![Content::text("done")]);
+    /// store
+    ///     .set_result(&task.task_id, "owner-1", result)
+    ///     .await
+    ///     .unwrap();
+    ///
+    /// let fetched = store.get_result(&task.task_id, "owner-1").await.unwrap();
+    /// assert_eq!(fetched.content.len(), 1);
+    /// # }
+    /// ```
+    async fn get_result(
+        &self,
+        task_id: &str,
+        _owner_id: &str,
+    ) -> Result<crate::types::CallToolResult, TaskStoreError> {
+        Err(TaskStoreError::NotFound {
+            task_id: task_id.to_string(),
+        })
+    }
+
+    /// Whether this store persists terminal results
+    /// (i.e. [`TaskStore::set_result`] / [`TaskStore::get_result`] are real).
+    ///
+    /// Defaults to `false`. The dispatch layer consults this before serving the
+    /// store-result path, so a store that cannot persist results falls through
+    /// to the [`TaskRouter`](crate::server::tasks::TaskRouter) instead of
+    /// silently dropping or serving empty results.
+    fn supports_results(&self) -> bool {
+        false
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -212,11 +395,17 @@ pub trait TaskStore: Send + Sync {
 // ---------------------------------------------------------------------------
 
 /// Internal record wrapping a [`Task`] with owner and expiration metadata.
+///
+/// The `result` field holds the terminal [`CallToolResult`] for a completed
+/// task. It lives on this INTERNAL record (never on the wire [`Task`], whose
+/// shape is locked) so it is purged together with the task by
+/// [`InMemoryTaskStore::cleanup_expired`] — no separate unexpiring map.
 #[derive(Debug)]
 struct TaskRecord {
     task: Task,
     owner_id: String,
     expires_at: Option<Instant>,
+    result: Option<CallToolResult>,
 }
 
 // ---------------------------------------------------------------------------
@@ -340,6 +529,7 @@ impl TaskStore for InMemoryTaskStore {
             task: task.clone(),
             owner_id: owner_id.to_string(),
             expires_at,
+            result: None,
         };
 
         self.records.insert(task_id, record);
@@ -442,6 +632,51 @@ impl TaskStore for InMemoryTaskStore {
 
     fn config(&self) -> &StoreConfig {
         &self.config
+    }
+
+    async fn set_result(
+        &self,
+        task_id: &str,
+        owner_id: &str,
+        result: CallToolResult,
+    ) -> Result<(), TaskStoreError> {
+        let mut entry = self
+            .records
+            .get_mut(task_id)
+            .ok_or_else(|| TaskStoreError::NotFound {
+                task_id: task_id.to_string(),
+            })?;
+        let record = entry.value_mut();
+        Self::validate_access(record, task_id, owner_id)?;
+        record.result = Some(result);
+        Ok(())
+    }
+
+    async fn get_result(
+        &self,
+        task_id: &str,
+        owner_id: &str,
+    ) -> Result<CallToolResult, TaskStoreError> {
+        let entry = self
+            .records
+            .get(task_id)
+            .ok_or_else(|| TaskStoreError::NotFound {
+                task_id: task_id.to_string(),
+            })?;
+        Self::validate_access(entry.value(), task_id, owner_id)?;
+        // A task that exists but has no stored result yet is "pending" — signal
+        // NotFound so the dispatch layer can map it to a specified error.
+        entry
+            .value()
+            .result
+            .clone()
+            .ok_or_else(|| TaskStoreError::NotFound {
+                task_id: task_id.to_string(),
+            })
+    }
+
+    fn supports_results(&self) -> bool {
+        true
     }
 }
 
@@ -828,5 +1063,154 @@ mod tests {
         // Owner B should still be able to create
         let result = store.create("owner-b", None).await;
         assert!(result.is_ok());
+    }
+
+    // -- Terminal result (set_result / get_result / supports_results) tests --
+
+    use crate::types::{CallToolResult, Content};
+
+    fn sample_result(text: &str) -> CallToolResult {
+        CallToolResult::new(vec![Content::text(text)])
+    }
+
+    #[tokio::test]
+    async fn set_then_get_result_round_trips() {
+        let store = InMemoryTaskStore::new();
+        let created = store.create("owner-1", None).await.unwrap();
+        store
+            .set_result(&created.task_id, "owner-1", sample_result("hello"))
+            .await
+            .unwrap();
+        let fetched = store.get_result(&created.task_id, "owner-1").await.unwrap();
+        assert_eq!(fetched.content.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn get_result_owner_mismatch_returns_not_found() {
+        let store = InMemoryTaskStore::new();
+        let created = store.create("owner-1", None).await.unwrap();
+        store
+            .set_result(&created.task_id, "owner-1", sample_result("secret"))
+            .await
+            .unwrap();
+        let result = store.get_result(&created.task_id, "owner-2").await;
+        assert!(
+            matches!(result, Err(TaskStoreError::NotFound { .. })),
+            "cross-owner read must be NotFound, got: {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn set_result_owner_mismatch_returns_not_found() {
+        let store = InMemoryTaskStore::new();
+        let created = store.create("owner-1", None).await.unwrap();
+        let result = store
+            .set_result(&created.task_id, "owner-2", sample_result("x"))
+            .await;
+        assert!(
+            matches!(result, Err(TaskStoreError::NotFound { .. })),
+            "cross-owner set must be NotFound, got: {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn get_result_existing_task_no_result_returns_not_found() {
+        let store = InMemoryTaskStore::new();
+        let created = store.create("owner-1", None).await.unwrap();
+        // Task exists but no result was ever set -> pending signal.
+        let result = store.get_result(&created.task_id, "owner-1").await;
+        assert!(
+            matches!(result, Err(TaskStoreError::NotFound { .. })),
+            "pending task (no result) must be NotFound, got: {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn in_memory_store_supports_results() {
+        let store = InMemoryTaskStore::new();
+        assert!(store.supports_results());
+    }
+
+    #[tokio::test]
+    async fn cleanup_expired_drops_result() {
+        let store = InMemoryTaskStore::with_config(StoreConfig {
+            default_ttl_ms: Some(1),
+            ..StoreConfig::default()
+        });
+        let created = store.create("owner-1", Some(1)).await.unwrap();
+        store
+            .set_result(&created.task_id, "owner-1", sample_result("ephemeral"))
+            .await
+            .unwrap();
+
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+
+        let removed = store.cleanup_expired().await.unwrap();
+        assert_eq!(removed, 1);
+        // Result is gone along with the task (no separate unexpiring map).
+        let result = store.get_result(&created.task_id, "owner-1").await;
+        assert!(matches!(result, Err(TaskStoreError::NotFound { .. })));
+    }
+
+    /// A store that does NOT override the additive result methods — exercises
+    /// the explicit-unsupported defaults.
+    struct DefaultOnlyStore {
+        config: StoreConfig,
+    }
+
+    #[async_trait]
+    impl TaskStore for DefaultOnlyStore {
+        async fn create(&self, _owner_id: &str, _ttl: Option<u64>) -> Result<Task, TaskStoreError> {
+            Ok(Task::new("default-only", TaskStatus::Working))
+        }
+        async fn get(&self, task_id: &str, _owner_id: &str) -> Result<Task, TaskStoreError> {
+            Ok(Task::new(task_id, TaskStatus::Working))
+        }
+        async fn update_status(
+            &self,
+            task_id: &str,
+            _owner_id: &str,
+            status: TaskStatus,
+            _message: Option<String>,
+        ) -> Result<Task, TaskStoreError> {
+            Ok(Task::new(task_id, status))
+        }
+        async fn list(
+            &self,
+            _owner_id: &str,
+            _cursor: Option<&str>,
+        ) -> Result<(Vec<Task>, Option<String>), TaskStoreError> {
+            Ok((Vec::new(), None))
+        }
+        async fn cancel(&self, task_id: &str, _owner_id: &str) -> Result<Task, TaskStoreError> {
+            Ok(Task::new(task_id, TaskStatus::Cancelled))
+        }
+        async fn cleanup_expired(&self) -> Result<usize, TaskStoreError> {
+            Ok(0)
+        }
+        fn config(&self) -> &StoreConfig {
+            &self.config
+        }
+        // Deliberately does NOT override set_result/get_result/supports_results.
+    }
+
+    #[tokio::test]
+    async fn default_impl_store_reports_unsupported() {
+        let store = DefaultOnlyStore {
+            config: StoreConfig::default(),
+        };
+        assert!(!store.supports_results());
+
+        let set = store.set_result("t", "owner-1", sample_result("x")).await;
+        assert!(
+            matches!(set, Err(TaskStoreError::Internal { .. })),
+            "default set_result must be an explicit unsupported error, got: {set:?}"
+        );
+
+        let get = store.get_result("t", "owner-1").await;
+        assert!(
+            matches!(get, Err(TaskStoreError::NotFound { .. })),
+            "default get_result must be NotFound, got: {get:?}"
+        );
     }
 }

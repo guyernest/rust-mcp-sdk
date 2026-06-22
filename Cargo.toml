@@ -1,6 +1,6 @@
 [package]
 name = "pmcp"
-version = "2.9.0"
+version = "2.10.0"
 edition = "2021"
 authors = ["PAIML Team"]
 description = "High-quality Rust SDK for Model Context Protocol (MCP) with full TypeScript SDK compatibility"
@@ -150,7 +150,7 @@ pmcp-code-mode-derive = { version = "0.2.0", path = "crates/pmcp-code-mode-deriv
 
 [features]
 default = ["logging"]
-full = ["websocket", "http", "streamable-http", "sse", "validation", "resource-watcher", "rayon", "schema-generation", "jwt-auth", "composition", "mcp-apps", "http-client", "logging", "macros"]
+full = ["websocket", "http", "streamable-http", "sse", "validation", "resource-watcher", "rayon", "schema-generation", "jwt-auth", "composition", "mcp-apps", "http-client", "logging", "macros", "testing"]
 composition = ["streamable-http"]
 # MCP Apps Extension - Interactive UI support for ChatGPT Apps, MCP-UI, and standard MCP hosts
 mcp-apps = []
@@ -187,6 +187,10 @@ rayon = ["dep:rayon"]
 
 # Testing support
 test-helpers = []
+# Conformance helpers (pmcp::testing) — folded into `full` so the quality gate
+# compiles the module AND runs the tasks-lifecycle integration test. NOT in
+# `default`, so lean release builds omit it.
+testing = []
 
 [[bench]]
 name = "simple_test"
@@ -533,6 +537,11 @@ required-features = ["skills", "full"]
 name = "c10_client_skills"
 path = "examples/c10_client_skills.rs"
 required-features = ["skills", "full"]
+
+[[example]]
+name = "s45_tool_as_task_lifecycle"
+path = "examples/s45_tool_as_task_lifecycle.rs"
+required-features = ["full"]
 
 [[bench]]
 name = "comprehensive_benchmarks"
