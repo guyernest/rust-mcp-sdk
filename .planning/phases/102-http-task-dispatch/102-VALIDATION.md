@@ -1,9 +1,9 @@
 ---
 phase: 102
 slug: http-task-dispatch
-status: draft
-nyquist_compliant: false
-wave_0_complete: false
+status: complete
+nyquist_compliant: true
+wave_0_complete: true
 created: 2026-06-21
 ---
 
@@ -42,14 +42,14 @@ created: 2026-06-21
 
 | Req | Behavior | Test Type | Automated Command | File Exists | Status |
 |-----|----------|-----------|-------------------|-------------|--------|
-| HTASK-01 | store-backed `Server` advertises `tasks`; `Required`-no-backend → `build()` Err; explicit caps preserved | unit | `cargo test --features full server_builder_tasks_capability` | ❌ W0 | ⬜ pending |
-| HTASK-02 | `Server` serves create-path + `tasks/get\|result\|list\|cancel` via the shared unit | integration | `cargo test --features full tasks_dispatch_shared` | ❌ W0 | ⬜ pending |
-| HTASK-02 | shared unit produces identical output for `ServerCore` (no regression) | integration | `cargo test --features full tool_as_task_lifecycle` | ✅ `tests/tool_as_task_lifecycle.rs` | ⬜ pending |
-| HTASK-03 | live HTTP round-trip: 3-way id match, non-empty content, advertised `tasks`, `-32002` pending | integration (HTTP loopback) | `cargo test --features full tool_as_task_lifecycle_http` | ❌ W0 | ⬜ pending |
-| HTASK-04 | plain `tools/call` over HTTP unchanged (no task-envelope leakage) | integration | `cargo test --features full server_call_tool_non_task` | ❌ W0 | ⬜ pending |
-| HTASK-04 | worked example compiles/runs | example | `cargo run --example s46_http_tool_as_task --features full` | ❌ W0 | ⬜ pending |
-| HTASK-04 | property: any non-task tool `Value` never becomes a `CreateTaskResult` | property | `cargo test --features full proptest_task_branch_gate` | ❌ W0 | ⬜ pending |
-| HTASK-04 | doctest on new `task_store()`/`with_task_store()` on `ServerBuilder` | doctest | `make doc-check` | ❌ W0 | ⬜ pending |
+| HTASK-01 | store-backed `Server` advertises `tasks`; `Required`-no-backend → `build()` Err; explicit caps preserved | unit | `cargo test --features full server_builder_tasks_capability` | ✅ `src/server/task_dispatch_tests.rs` | ✅ green |
+| HTASK-02 | `Server` serves create-path + `tasks/get\|result\|list\|cancel` via the shared unit | integration | `cargo test --features full tasks_dispatch_shared` | ✅ `src/server/task_dispatch_tests.rs` | ✅ green |
+| HTASK-02 | shared unit produces identical output for `ServerCore` (no regression) | integration | `cargo test --features full tool_as_task_lifecycle` | ✅ `tests/tool_as_task_lifecycle.rs` | ✅ green |
+| HTASK-03 | live HTTP round-trip: 3-way id match, non-empty content, advertised `tasks`, `-32002` pending | integration (HTTP loopback) | `cargo test --features full tool_as_task_lifecycle_http` | ✅ `tests/tool_as_task_lifecycle_http.rs` | ✅ green |
+| HTASK-04 | plain `tools/call` over HTTP unchanged (no task-envelope leakage) | integration | `cargo test --features full server_call_tool_non_task` | ✅ `src/server/task_dispatch_tests.rs` | ✅ green |
+| HTASK-04 | worked example compiles/runs | example | `cargo run --example s46_http_tool_as_task --features full` | ✅ `examples/s46_http_tool_as_task.rs` | ✅ green |
+| HTASK-04 | property: any non-task tool `Value` never becomes a `CreateTaskResult` | property | `cargo test --features full proptest_task_branch_gate` | ✅ `src/server/task_dispatch_tests.rs` | ✅ green |
+| HTASK-04 | doctest on new `task_store()`/`with_task_store()` on `ServerBuilder` | doctest | `make doc-check` | ✅ `src/server/mod.rs` | ✅ green |
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
 
@@ -57,11 +57,11 @@ created: 2026-06-21
 
 ## Wave 0 Requirements
 
-- [ ] `tests/tool_as_task_lifecycle_http.rs` — HTASK-03 live HTTP round-trip (mirror `tool_as_task_lifecycle.rs` + the `workflow_prompt_e2e_test.rs:54-97` loopback harness)
-- [ ] Unit tests for the shared capability rule against `ServerBuilder` (HTASK-01) — mirror the existing `ServerCoreBuilder` capability tests
-- [ ] `examples/s46_http_tool_as_task.rs` + `Cargo.toml` `[[example]]` block (mirror `Cargo.toml:541-544`)
-- [ ] Property test that the create-path gate (`req.task` + `taskId`+`status` + `TaskSupport`) never mis-fires
-- [ ] No framework install needed (Rust built-in test harness + existing `proptest`)
+- [x] `tests/tool_as_task_lifecycle_http.rs` — HTASK-03 live HTTP round-trip (`StreamableHttpServer::start()` ephemeral-port readback + `JoinHandle::abort()` shutdown; also HTTP-level cross-owner isolation via the `x-pmcp-user-id` proxy header)
+- [x] Unit tests for the shared capability rule against `ServerBuilder` (HTASK-01) — `src/server/task_dispatch_tests.rs::server_builder_tasks_capability` (Plan 02)
+- [x] `examples/s46_http_tool_as_task.rs` + `Cargo.toml` `[[example]]` block (registered after the `s45` block)
+- [x] Property test that the create-path gate (`req.task` + `taskId`+`status` + `TaskSupport`) never mis-fires — `proptest_task_branch_gate` (Plan 02)
+- [x] No framework install needed (Rust built-in test harness + existing `proptest`)
 
 ---
 
@@ -77,11 +77,11 @@ created: 2026-06-21
 
 ## Validation Sign-Off
 
-- [ ] All tasks have `<automated>` verify or Wave 0 dependencies
-- [ ] Sampling continuity: no 3 consecutive tasks without automated verify
-- [ ] Wave 0 covers all MISSING references
-- [ ] No watch-mode flags
-- [ ] Feedback latency < 180s
-- [ ] `nyquist_compliant: true` set in frontmatter
+- [x] All tasks have `<automated>` verify or Wave 0 dependencies
+- [x] Sampling continuity: no 3 consecutive tasks without automated verify
+- [x] Wave 0 covers all MISSING references
+- [x] No watch-mode flags
+- [x] Feedback latency < 180s
+- [x] `nyquist_compliant: true` set in frontmatter
 
-**Approval:** pending
+**Approval:** approved — `make quality-gate` + `make doc-check` green; HTTP round-trip + HTTP-level cross-owner isolation + worked example all green; PMAT cog-25 clean on touched `src/server/*`; `git diff src/types/tasks.rs` empty (wire frozen); public API additive-only; wasm boundary intact.
