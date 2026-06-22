@@ -223,17 +223,15 @@ impl TaskDispatch<'_> {
         value: Value,
         auth_context: Option<&AuthContext>,
     ) -> JSONRPCResponse {
-        // Re-extract the tool-fabricated task id and the terminal result from the
-        // raw value (see SIGNATURE NOTE above). `task_id` here is only used for the
-        // legacy no-store fallback envelope; with a store, the store-minted id wins.
-        let tool_task_id = value
-            .get("taskId")
-            .and_then(|v| v.as_str())
-            .unwrap_or_default()
-            .to_string();
-
         let Some(store) = self.task_store.as_ref() else {
-            // No store: preserve the legacy tool-fabricated envelope.
+            // No store: preserve the legacy tool-fabricated envelope. The
+            // tool-fabricated task id is only needed on THIS path; with a store
+            // the store-minted id wins, so don't allocate it otherwise.
+            let tool_task_id = value
+                .get("taskId")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string();
             let result_value = serde_json::json!({
                 "task": value,
                 "_meta": { RELATED_TASK_META_KEY: { "taskId": tool_task_id } }
@@ -399,10 +397,10 @@ impl TaskDispatch<'_> {
         params: &crate::types::tasks::GetTaskRequest,
         auth_context: Option<&AuthContext>,
     ) -> JSONRPCResponse {
+        let owner_id = self
+            .resolve_owner(auth_context)
+            .unwrap_or_else(|| "local".to_string());
         if let Some(store) = self.task_store {
-            let owner_id = self
-                .resolve_owner(auth_context)
-                .unwrap_or_else(|| "local".to_string());
             match store.get(&params.task_id, &owner_id).await {
                 Ok(task) => {
                     let result = crate::types::tasks::GetTaskResult::new(task);
@@ -411,9 +409,6 @@ impl TaskDispatch<'_> {
                 Err(e) => error_response(id, -32603, e.to_string()),
             }
         } else if let Some(task_router) = self.task_router {
-            let owner_id = self
-                .resolve_owner(auth_context)
-                .unwrap_or_else(|| "local".to_string());
             match task_router
                 .handle_tasks_get(serde_json::to_value(params).unwrap_or_default(), &owner_id)
                 .await
@@ -433,10 +428,10 @@ impl TaskDispatch<'_> {
         params: &crate::types::tasks::ListTasksRequest,
         auth_context: Option<&AuthContext>,
     ) -> JSONRPCResponse {
+        let owner_id = self
+            .resolve_owner(auth_context)
+            .unwrap_or_else(|| "local".to_string());
         if let Some(store) = self.task_store {
-            let owner_id = self
-                .resolve_owner(auth_context)
-                .unwrap_or_else(|| "local".to_string());
             match store.list(&owner_id, params.cursor.as_deref()).await {
                 Ok((tasks, next_cursor)) => {
                     let mut result = crate::types::tasks::ListTasksResult::new(tasks);
@@ -448,9 +443,6 @@ impl TaskDispatch<'_> {
                 Err(e) => error_response(id, -32603, e.to_string()),
             }
         } else if let Some(task_router) = self.task_router {
-            let owner_id = self
-                .resolve_owner(auth_context)
-                .unwrap_or_else(|| "local".to_string());
             match task_router
                 .handle_tasks_list(serde_json::to_value(params).unwrap_or_default(), &owner_id)
                 .await
@@ -470,10 +462,10 @@ impl TaskDispatch<'_> {
         params: &crate::types::tasks::CancelTaskRequest,
         auth_context: Option<&AuthContext>,
     ) -> JSONRPCResponse {
+        let owner_id = self
+            .resolve_owner(auth_context)
+            .unwrap_or_else(|| "local".to_string());
         if let Some(store) = self.task_store {
-            let owner_id = self
-                .resolve_owner(auth_context)
-                .unwrap_or_else(|| "local".to_string());
             match store.cancel(&params.task_id, &owner_id).await {
                 Ok(task) => {
                     let result = crate::types::tasks::CancelTaskResult::new(task);
@@ -482,9 +474,6 @@ impl TaskDispatch<'_> {
                 Err(e) => error_response(id, -32603, e.to_string()),
             }
         } else if let Some(task_router) = self.task_router {
-            let owner_id = self
-                .resolve_owner(auth_context)
-                .unwrap_or_else(|| "local".to_string());
             match task_router
                 .handle_tasks_cancel(serde_json::to_value(params).unwrap_or_default(), &owner_id)
                 .await

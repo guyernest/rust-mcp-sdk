@@ -613,6 +613,12 @@ mod proptest_task_branch_gate {
         }
     }
 
+    // One shared runtime for all proptest cases — `Runtime::new()` spins up an OS
+    // thread pool, so building it per case (64x) is pure waste. `block_on` only
+    // needs `&self`.
+    static PROPTEST_RT: std::sync::LazyLock<tokio::runtime::Runtime> =
+        std::sync::LazyLock::new(|| tokio::runtime::Runtime::new().unwrap());
+
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(64))]
 
@@ -626,7 +632,6 @@ mod proptest_task_branch_gate {
             with_task in any::<bool>(),
             shaped in any::<bool>(),
         ) {
-            let rt = tokio::runtime::Runtime::new().unwrap();
             let server = grid_server();
             let name = tool_name(support_ix, shaped);
 
@@ -635,7 +640,7 @@ mod proptest_task_branch_gate {
             let support_allows = support_ix == 0 || support_ix == 1; // Required | Optional
             let expect_envelope = with_task && support_allows && effective_shaped;
 
-            let resp = rt.block_on(server.handle_request(
+            let resp = PROPTEST_RT.block_on(server.handle_request(
                 rid(1),
                 call_tool_request(name, with_task),
                 None,

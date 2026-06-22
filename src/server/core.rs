@@ -597,14 +597,14 @@ impl ServerCore {
                     .is_some_and(|ts| matches!(ts, TaskSupport::Required | TaskSupport::Optional));
 
             if has_task_support {
-                if let Some(task_id) = value.get("taskId").and_then(|v| v.as_str()) {
-                    if value.get("status").is_some() {
-                        let _ = task_id;
-                        // The shared create-path (build_task_created_response)
-                        // re-extracts the task id + terminal CallToolResult from the
-                        // value, so only the raw task-shaped value crosses here.
-                        return Ok(ToolCallOutcome::TaskCreated { task_value: value });
-                    }
+                // Task-shaped iff it carries both a `taskId` and a `status` (same
+                // shape gate as `task_dispatch::maybe_build_task_created`). The
+                // shared create-path re-extracts the task id + terminal
+                // CallToolResult from the value, so only the raw value crosses here.
+                let is_task_shaped = value.get("taskId").and_then(|v| v.as_str()).is_some()
+                    && value.get("status").is_some();
+                if is_task_shaped {
+                    return Ok(ToolCallOutcome::TaskCreated { task_value: value });
                 }
                 // Tool declares task support but didn't return a Task — fall through to normal path
                 // (handles the "optional" case where the tool might not create a task).

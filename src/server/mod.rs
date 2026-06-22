@@ -1154,11 +1154,8 @@ impl Server {
                 | ClientRequest::TasksList(_)
                 | ClientRequest::TasksCancel(_)
         ) {
-            let dispatch = crate::server::task_dispatch::TaskDispatch {
-                task_store: &self.task_store,
-                task_router: &self.task_router,
-            };
-            return dispatch
+            return self
+                .task_dispatch()
                 .route_tasks_endpoint(id, &request, auth_context.as_ref())
                 .await;
         }
@@ -1221,6 +1218,17 @@ impl Server {
                 crate::ErrorCode::METHOD_NOT_FOUND,
                 "Tasks not supported on this build",
             )),
+        }
+    }
+
+    /// Borrow this server's task backends as a [`TaskDispatch`] for the shared
+    /// task-lifecycle unit. Single construction point so the `tasks/*` and
+    /// create-path call sites don't re-inline the struct literal.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn task_dispatch(&self) -> crate::server::task_dispatch::TaskDispatch<'_> {
+        crate::server::task_dispatch::TaskDispatch {
+            task_store: &self.task_store,
+            task_router: &self.task_router,
         }
     }
 
@@ -1438,11 +1446,8 @@ impl Server {
         // surface as JSON-RPC errors).
         #[cfg(not(target_arch = "wasm32"))]
         {
-            let dispatch = crate::server::task_dispatch::TaskDispatch {
-                task_store: &self.task_store,
-                task_router: &self.task_router,
-            };
-            if let Some(response) = dispatch
+            if let Some(response) = self
+                .task_dispatch()
                 .maybe_build_task_created(
                     create_path_id,
                     &result,
