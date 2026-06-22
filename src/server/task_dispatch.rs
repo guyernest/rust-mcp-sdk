@@ -295,6 +295,10 @@ impl TaskDispatch<'_> {
     /// `TaskSupport::Forbidden`/`None`, `task_requested == false`, an absent
     /// backend, or a non-task-shaped value ALL return `None` ("fall through to a
     /// normal `CallToolResult`") with NO error leak (T-102-11).
+    // Why: proven by the in-module `gate_tests` truth-table in Plan 01; both
+    // dispatchers (`ServerCore` + `Server`) wire it into their create-path in
+    // Plan 02. The shared gate must exist and be proven HERE first.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) async fn maybe_build_task_created(
         &self,
         id: RequestId,
