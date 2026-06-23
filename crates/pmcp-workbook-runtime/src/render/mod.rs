@@ -384,10 +384,33 @@ fn write_computed_value(
             if !n.is_finite() {
                 return Err(RenderError::NonFiniteValue { cell: key });
             }
-            write_number_cell(ws, row, col, cell, *n, fmt)?;
+            let n = *n;
+            write_formula_or_value(
+                ws,
+                row,
+                col,
+                &cell.formula,
+                format_number(n),
+                fmt,
+                |ws, fmt| write_number_literal(ws, row, col, n, fmt),
+            )?;
         },
-        Some(CellValue::Text(s)) => write_string_cell(ws, row, col, s, fmt)?,
-        Some(CellValue::Bool(b)) => write_string_cell(ws, row, col, &b.to_string(), fmt)?,
+        Some(CellValue::Text(s)) => {
+            // WBVER-01: a TEXT formula output carries <f>+<v> (cached result = s);
+            // a non-formula text cell stays a plain string literal.
+            write_formula_or_value(ws, row, col, &cell.formula, s.clone(), fmt, |ws, fmt| {
+                write_string_cell(ws, row, col, s, fmt)
+            })?;
+        },
+        Some(CellValue::Bool(b)) => {
+            // WBVER-01: a BOOL formula output carries <f>+<v> (cached result =
+            // TRUE/FALSE); a non-formula bool stays its existing string literal.
+            let literal = b.to_string();
+            let cached = if *b { "TRUE" } else { "FALSE" }.to_string();
+            write_formula_or_value(ws, row, col, &cell.formula, cached, fmt, |ws, fmt| {
+                write_string_cell(ws, row, col, &literal, fmt)
+            })?;
+        },
         // Error / Empty / not-computed: fall back to the captured value text (the
         // descriptor's "copy of the workbook" content) so a non-output cell still
         // renders its original literal.
@@ -408,37 +431,59 @@ fn format_number(n: f64) -> String {
     format!("{n}")
 }
 
-/// Write a numeric cell. Default lean (D-05): a cell that HAS a formula and a
-/// finite numeric result is written as a formula-with-cached-result
-/// (`Formula::set_result`); otherwise a plain number. Format applied when present.
-fn write_number_cell(
+/// Write a cell as a formula-with-cached-result when it HAS a formula, else as a
+/// plain literal (default lean D-05; WBVER-01 extends this to text/bool outputs).
+///
+/// The 4-arm `(cell.formula, fmt)` matrix is shared across Number/Text/Bool: the
+/// formula arms write `Formula::new(normalize_formula_for_writer(f)).set_result(..)`
+/// so Excel's `fullCalcOnLoad` can independently recompute the output; the
+/// non-formula arms invoke `write_literal` — a TYPED per-value-type closure that
+/// the caller supplies. Keeping the value-type knowledge in the closure means this
+/// helper never `match`es on `CellValue`, so it stays a flat 4-arm dispatcher under
+/// cog-25.
+fn write_formula_or_value<W>(
     ws: &mut rust_xlsxwriter::Worksheet,
     row: u32,
     col: u16,
-    cell: &CellLayout,
-    n: f64,
+    formula: &Option<String>,
+    cached_result: String,
     fmt: Option<&Format>,
-) -> Result<(), RenderError> {
-    match (&cell.formula, fmt) {
+    write_literal: W,
+) -> Result<(), RenderError>
+where
+    W: FnOnce(&mut rust_xlsxwriter::Worksheet, Option<&Format>) -> Result<(), RenderError>,
+{
+    match (formula, fmt) {
         (Some(f), Some(fmt)) => {
-            let formula =
-                Formula::new(normalize_formula_for_writer(f)).set_result(format_number(n));
+            let formula = Formula::new(normalize_formula_for_writer(f)).set_result(cached_result);
             ws.write_formula_with_format(row, col, formula, fmt)
                 .map_err(writer_err)?;
         },
         (Some(f), None) => {
-            let formula =
-                Formula::new(normalize_formula_for_writer(f)).set_result(format_number(n));
+            let formula = Formula::new(normalize_formula_for_writer(f)).set_result(cached_result);
             ws.write_formula(row, col, formula).map_err(writer_err)?;
         },
-        (None, Some(fmt)) => {
-            ws.write_number_with_format(row, col, n, fmt)
-                .map_err(writer_err)?;
-        },
-        (None, None) => {
-            ws.write_number(row, col, n).map_err(writer_err)?;
-        },
+        (None, _) => write_literal(ws, fmt)?,
     }
+    Ok(())
+}
+
+/// Write a plain numeric literal (format applied when present). The non-formula
+/// arm of the Number value type, passed to `write_formula_or_value` as its typed
+/// literal-writer.
+fn write_number_literal(
+    ws: &mut rust_xlsxwriter::Worksheet,
+    row: u32,
+    col: u16,
+    n: f64,
+    fmt: Option<&Format>,
+) -> Result<(), RenderError> {
+    match fmt {
+        Some(fmt) => ws
+            .write_number_with_format(row, col, n, fmt)
+            .map_err(writer_err)?,
+        None => ws.write_number(row, col, n).map_err(writer_err)?,
+    };
     Ok(())
 }
 
