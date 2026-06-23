@@ -663,11 +663,11 @@ mod tests {
     }
 
     /// H3 BINDING: the reserved-tool-name set the offline compiler rejects against
-    /// (`RESERVED_TOOL_NAMES`, in the runtime leaf) is EXACTLY the four meta tools
-    /// this toolkit registers — derived from their `NAME` constants. If a handler's
-    /// `NAME` ever changes (or a fifth meta tool is added) WITHOUT updating the shared
-    /// const, this binding test fails, so the compiler gate cannot silently drift from
-    /// what is registered.
+    /// (`RESERVED_TOOL_NAMES`, in the runtime leaf) is EXACTLY the meta tools this
+    /// toolkit registers — derived from their `NAME` constants. If a handler's `NAME`
+    /// ever changes (or a meta tool is added) WITHOUT updating the shared const, this
+    /// binding test fails, so the compiler gate cannot silently drift from what is
+    /// registered.
     #[test]
     fn reserved_tool_names_match_the_registered_meta_tool_names() {
         let registered = [
@@ -675,12 +675,19 @@ mod tests {
             GetManifestHandler::NAME,
             DiffVersionHandler::NAME,
             RenderWorkbookHandler::NAME,
+            // Why: PLACEHOLDER (Phase 100 Plan 01, non-releasable intermediate). The
+            // 5th meta tool `verify_accuracy` is reserved in RESERVED_TOOL_NAMES now,
+            // but its VerifyAccuracyHandler (and thus a ::NAME constant) lands only in
+            // Plan 04. Plan 04 Task 2 swaps this string literal for
+            // `VerifyAccuracyHandler::NAME` so the test binds to the real handler
+            // constant once it exists — closing the drift this placeholder bridges.
+            "verify_accuracy",
         ];
         assert_eq!(
             pmcp_workbook_runtime::RESERVED_TOOL_NAMES,
             registered,
-            "the shared RESERVED_TOOL_NAMES const must equal the four registered meta \
-             tool NAME constants (H3 — derive, never hand-copy)"
+            "the shared RESERVED_TOOL_NAMES const must equal the registered meta tool \
+             NAME constants (H3 — derive, never hand-copy)"
         );
     }
 

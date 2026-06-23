@@ -1402,7 +1402,8 @@ fn refuse_uncallable_outputs(manifest: &Manifest) -> Result<(), CompileError> {
 /// Reject any output-Table tool name that sanitizes to a RESERVED meta-tool name
 /// (H3): a Table named so [`sanitize_tool_name`] yields one of
 /// [`RESERVED_TOOL_NAMES`](pmcp_workbook_runtime::RESERVED_TOOL_NAMES) (`explain`,
-/// `get_manifest`, `diff_version`, `render_workbook`) would silently last-writer-wins
+/// `get_manifest`, `diff_version`, `render_workbook`, `verify_accuracy`) would silently
+/// last-writer-wins
 /// over the meta tool at registration. This runs ALONGSIDE
 /// [`refuse_colliding_output_tables`] at stage-1 in BOTH compile lanes, surfacing a
 /// cell-precise [`CompileError::Lint`] located at the Table's first output cell BEFORE
@@ -2216,10 +2217,18 @@ mod harvest_output_table_tests {
     #[test]
     fn reserved_set_is_derived_from_the_shared_const() {
         // The gate reads the SHARED RESERVED_TOOL_NAMES const (sourced from the
-        // handler NAME constants), NOT a hand-copied literal list.
+        // handler NAME constants), NOT a hand-copied literal list. The 5th entry
+        // `verify_accuracy` is reserved as of Phase 100 Plan 01 (its handler lands
+        // in Plan 04 — see the RESERVED_TOOL_NAMES doc).
         assert_eq!(
             pmcp_workbook_runtime::RESERVED_TOOL_NAMES,
-            ["explain", "get_manifest", "diff_version", "render_workbook"],
+            [
+                "explain",
+                "get_manifest",
+                "diff_version",
+                "render_workbook",
+                "verify_accuracy"
+            ],
         );
     }
 }
