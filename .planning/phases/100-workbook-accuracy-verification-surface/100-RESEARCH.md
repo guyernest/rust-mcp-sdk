@@ -338,7 +338,7 @@ let projected = finite_output_value(value, &entry.seed_coord, &entry.json_key)?;
 | A3 | A fixture-regeneration path exists (or hand-folding `BUNDLE.lock` via `build_bundle_lock`/`fold_evidence_hash` is feasible) for the D-07 fixture edit. | D-07 / Pitfall 2 | If no generator exists, hand-folding the lock is error-prone but doable using the runtime's hashing helpers. Planner adds a Wave-0 task to locate the generator. |
 | A4 | `rust_xlsxwriter::Formula::set_result` signature is `impl Into<String>` in the workspace-pinned version. | Code Examples | Stated by design §3 ("VERIFIED technical facts") and consistent with the existing numeric `.set_result(format_number(n))` call. If the pinned version differs, the text/bool result type must be adjusted. Confirm against the locked `Cargo.lock` version. |
 
-## Open Questions
+## Open Questions (RESOLVED)
 
 1. **Where exactly should the text/bool formula outputs live in the fixture — extend an existing tool's outputs, or add a 3rd tool?**
    - What we know: D-06 wants one cohesive narrative; the tax bundle has two tools (`Calculate_Tax`, `Estimate_Refund`).
