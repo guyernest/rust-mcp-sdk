@@ -40,6 +40,7 @@ use pmcp::types::{Content, ListResourcesResult, ReadResourceResult, ResourceInfo
 use pmcp::ResourceHandler;
 
 use pmcp_workbook_runtime::render::render_xlsx;
+use pmcp_workbook_runtime::RenderMode;
 
 use super::input::validate_input;
 use super::render_uri::{self, WORKBOOK_XLSX_MIME};
@@ -94,13 +95,17 @@ impl RenderWorkbookResource {
         {
             return Err(RegenError::CrossProvenance);
         }
+        // WBVER-02: capture the render mode (Copy) before `dto` is moved into
+        // validate_input. `mode` is a RENDER parameter, not a manifest input, so it
+        // is NOT re-validated against the manifest.
+        let mode = decoded.mode;
         // 3. RE-VALIDATE the decoded inputs (injected/out-of-range guard).
         let validated = validate_input(decoded.dto, &self.bundle.manifest, &self.bundle.cell_map)
             .map_err(|e| RegenError::Invalid(e.reason))?;
-        // 4. Re-run + render (writer-only, reader-free).
+        // 4. Re-run + render (writer-only, reader-free) in the URI's chosen mode.
         let run = super::handler::run_bundle(&self.bundle, validated.seeds)
             .map_err(|e| RegenError::Invalid(e.reason))?;
-        let bytes = render_xlsx(&self.bundle.layout, &run)
+        let bytes = render_xlsx(&self.bundle.layout, &run, mode)
             .map_err(|e| RegenError::Render(e.to_string()))?;
         // 5. base64 STANDARD the bytes (the xlsx payload — STANDARD, not the
         //    URL-safe alphabet the URI itself uses).
@@ -196,8 +201,12 @@ mod tests {
     fn valid_uri(bundle: &Arc<WorkbookBundle>, inputs: serde_json::Value) -> String {
         let validated = validate_input(inputs, &bundle.manifest, &bundle.cell_map)
             .expect("inputs validate for fixture");
-        render_uri::encode(&validated.canonical_dto, &ProvStamp::from_bundle(bundle))
-            .expect("encode fixture uri")
+        render_uri::encode(
+            &validated.canonical_dto,
+            &ProvStamp::from_bundle(bundle),
+            RenderMode::Filled,
+        )
+        .expect("encode fixture uri")
     }
 
     #[test]
@@ -236,7 +245,7 @@ mod tests {
             combined_hash: "f".repeat(64), // != the real combined_hash
         };
         let dto = json!({ "inputs": { "gross_income": 60000.0, "filing_status": "single" }, "overrides": {} });
-        let uri = render_uri::encode(&dto, &forged).expect("encode forged uri");
+        let uri = render_uri::encode(&dto, &forged, RenderMode::Filled).expect("encode forged uri");
 
         let err = res.regenerate(&uri).expect_err("cross-provenance rejected");
         assert!(
@@ -252,7 +261,7 @@ mod tests {
         // Hand-encode a URI carrying an OUT-OF-ENUM filing_status with the REAL
         // provenance (so it passes the provenance gate but must fail re-validation).
         let dto = json!({ "inputs": { "filing_status": "alien" }, "overrides": {} });
-        let uri = render_uri::encode(&dto, &ProvStamp::from_bundle(&bundle))
+        let uri = render_uri::encode(&dto, &ProvStamp::from_bundle(&bundle), RenderMode::Filled)
             .expect("encode out-of-range uri");
 
         let err = res.regenerate(&uri).expect_err("out-of-range rejected");

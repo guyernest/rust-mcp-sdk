@@ -601,7 +601,11 @@ impl RenderWorkbookHandler {
     #[allow(clippy::result_large_err)]
     fn compute(&self, args: Value) -> Result<Value, WorkbookToolError> {
         let validated = validate_input(args, &self.bundle.manifest, &self.bundle.cell_map)?;
-        let uri = render_uri::encode(&validated.canonical_dto, &self.stamp)?;
+        let uri = render_uri::encode(
+            &validated.canonical_dto,
+            &self.stamp,
+            pmcp_workbook_runtime::RenderMode::Filled,
+        )?;
         let payload = json!({
             "resource_uri": uri,
             "mime_type": render_uri::WORKBOOK_XLSX_MIME,

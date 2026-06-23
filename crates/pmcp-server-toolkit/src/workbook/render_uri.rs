@@ -39,6 +39,7 @@
 )]
 
 use base64::Engine;
+use pmcp_workbook_runtime::RenderMode;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -80,6 +81,10 @@ pub struct DecodedRender {
     /// rejects the URI if this does not equal the live bundle stamp
     /// (cross-provenance spoofing guard, T-92-15).
     pub provenance: ProvStamp,
+    /// The render mode bound into the URI at encode time (WBVER-02). A pre-phase
+    /// URI (no `mode` key) decodes to [`RenderMode::Filled`] (back-compat); a
+    /// present-but-malformed value is a decode `Err` (never a silent `Filled`).
+    pub mode: RenderMode,
 }
 
 /// The on-wire JSON payload (pre-base64). Kept private — callers go through
@@ -94,14 +99,24 @@ struct RenderPayload {
     dto: Value,
     /// The provenance stamp bound into the URI at encode time.
     provenance: ProvStamp,
+    /// The render mode (WBVER-02). `#[serde(default)]` makes an ABSENT `mode` key
+    /// deserialize to [`RenderMode::default()`] == `Filled` (Pitfall 1
+    /// back-compat: pre-phase URIs have no `mode` key). A PRESENT value is decoded
+    /// by `RenderMode`'s own `Deserialize`, so a malformed string surfaces as a
+    /// decode `Err` — there is deliberately no field-level catch-all.
+    #[serde(default)]
+    mode: RenderMode,
 }
 
 /// Borrowing serialize-only twin of [`RenderPayload`] — same field names and
 /// order, so the encoded bytes are identical without cloning the DTO + stamp.
+/// `mode` is appended LAST so the existing `dto`/`provenance` byte order is
+/// unchanged (keeps `encode_is_deterministic` byte-identical).
 #[derive(Serialize)]
 struct RenderPayloadRef<'a> {
     dto: &'a Value,
     provenance: &'a ProvStamp,
+    mode: RenderMode,
 }
 
 /// Encode a validated input DTO + provenance stamp into a `workbook://` render
@@ -118,8 +133,16 @@ struct RenderPayloadRef<'a> {
 /// be serialized (it always can for a [`super::input::ValidatedInput`] DTO; the
 /// fallible signature keeps the call site `?`-chained and panic-free).
 #[allow(clippy::result_large_err)]
-pub fn encode(dto: &Value, provenance: &ProvStamp) -> Result<String, WorkbookToolError> {
-    let payload = RenderPayloadRef { dto, provenance };
+pub fn encode(
+    dto: &Value,
+    provenance: &ProvStamp,
+    mode: RenderMode,
+) -> Result<String, WorkbookToolError> {
+    let payload = RenderPayloadRef {
+        dto,
+        provenance,
+        mode,
+    };
     let json = serde_json::to_vec(&payload).map_err(|e| {
         WorkbookToolError::invalid_input(format!("could not encode render payload: {e}"))
     })?;
@@ -168,6 +191,7 @@ pub fn decode(uri: &str) -> Result<DecodedRender, WorkbookToolError> {
     Ok(DecodedRender {
         dto: payload.dto,
         provenance: payload.provenance,
+        mode: payload.mode,
     })
 }
 
@@ -194,19 +218,66 @@ mod tests {
 
     #[test]
     fn round_trip_yields_same_dto_and_provenance() {
-        let uri = encode(&dto(), &stamp()).expect("encode");
+        let uri = encode(&dto(), &stamp(), RenderMode::Filled).expect("encode");
         assert!(uri.starts_with(RENDER_URI_PREFIX), "carries the scheme");
         let decoded = decode(&uri).expect("decode");
         assert_eq!(decoded.dto, dto(), "dto round-trips");
         assert_eq!(decoded.provenance, stamp(), "provenance round-trips");
+        assert_eq!(decoded.mode, RenderMode::Filled, "mode round-trips");
+    }
+
+    #[test]
+    fn round_trip_carries_inputs_only_mode() {
+        // WBVER-02: the chosen mode rides inside the payload and round-trips.
+        let uri = encode(&dto(), &stamp(), RenderMode::InputsOnly).expect("encode");
+        let decoded = decode(&uri).expect("decode");
+        assert_eq!(
+            decoded.mode,
+            RenderMode::InputsOnly,
+            "inputs_only mode round-trips through the URI"
+        );
+        assert!(
+            uri.len() < MAX_ENCODED_URI_LEN,
+            "a mode-carrying URI stays under the 64 KiB cap"
+        );
+    }
+
+    #[test]
+    fn prephase_payload_without_mode_key_decodes_to_filled() {
+        // BACK-COMPAT (LOW): a LITERAL pre-phase payload string minted WITHOUT a
+        // `mode` key (NOT a freshly-serialized struct that merely omits the field)
+        // must still decode, defaulting to Filled. This proves `#[serde(default)]`
+        // on the DECODE struct keeps old URIs valid.
+        let literal_payload = r#"{"dto":{"inputs":{"gross_income":60000.0},"overrides":{}},"provenance":{"bundle_id":"tax-calc","version":"1.1.0","combined_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}"#;
+        let b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(literal_payload);
+        let uri = format!("{RENDER_URI_PREFIX}{b64}");
+        let decoded = decode(&uri).expect("a pre-phase (no-mode) payload still decodes");
+        assert_eq!(
+            decoded.mode,
+            RenderMode::Filled,
+            "an ABSENT mode key defaults to Filled (back-compat)"
+        );
+        assert_eq!(decoded.provenance, stamp(), "the rest still decodes");
+    }
+
+    #[test]
+    fn payload_with_malformed_mode_value_is_a_decode_err() {
+        // MEDIUM #3: a payload carrying a PRESENT-but-malformed `mode` value
+        // (e.g. a forged/old URI with "mode":"bogus") is a serde DECODE ERROR —
+        // decode returns Err, never a silent Filled, never a panic.
+        let bad_payload = r#"{"dto":{"inputs":{},"overrides":{}},"provenance":{"bundle_id":"tax-calc","version":"1.1.0","combined_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"mode":"bogus"}"#;
+        let b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bad_payload);
+        let uri = format!("{RENDER_URI_PREFIX}{b64}");
+        let err = decode(&uri).expect_err("a malformed mode value is a decode Err");
+        assert_eq!(err.code, "invalid_input");
     }
 
     #[test]
     fn encode_is_deterministic() {
         // The same (dto, provenance) always encodes to the SAME URI — required for
         // stateless regen-on-read byte-identity downstream.
-        let a = encode(&dto(), &stamp()).expect("encode a");
-        let b = encode(&dto(), &stamp()).expect("encode b");
+        let a = encode(&dto(), &stamp(), RenderMode::Filled).expect("encode a");
+        let b = encode(&dto(), &stamp(), RenderMode::Filled).expect("encode b");
         assert_eq!(a, b, "encode is deterministic");
     }
 
@@ -230,7 +301,7 @@ mod tests {
     #[test]
     fn corrupted_uri_decodes_to_err_never_panics() {
         // A truncated / garbage body is an Err, never a panic.
-        let uri = encode(&dto(), &stamp()).expect("encode");
+        let uri = encode(&dto(), &stamp(), RenderMode::Filled).expect("encode");
         let truncated = &uri[..uri.len() - 5];
         let _ = decode(truncated); // may be Ok-shaped-but-Err or Err; must not panic
         let garbage = format!("{RENDER_URI_PREFIX}!!!not base64!!!");
@@ -248,23 +319,28 @@ mod tests {
     proptest! {
         /// Round-trip + determinism over arbitrary valid input maps: any
         /// string-keyed scalar input map encodes then decodes to the SAME dto +
-        /// provenance, and encode is deterministic.
+        /// provenance + MODE (WBVER-02), encode is deterministic, and the encoded
+        /// URI stays under MAX_ENCODED_URI_LEN.
         #[test]
         fn prop_encode_decode_identity(
             keys in proptest::collection::vec("[a-z_]{1,12}", 0..6),
             nums in proptest::collection::vec(any::<i32>(), 0..6),
+            inputs_only in any::<bool>(),
         ) {
+            let mode = if inputs_only { RenderMode::InputsOnly } else { RenderMode::Filled };
             let mut inputs = serde_json::Map::new();
             for (k, n) in keys.iter().zip(nums.iter()) {
                 inputs.insert(k.clone(), json!(n));
             }
             let d = json!({ "inputs": inputs, "overrides": {} });
-            let uri = encode(&d, &stamp()).expect("encode");
-            let again = encode(&d, &stamp()).expect("encode again");
+            let uri = encode(&d, &stamp(), mode).expect("encode");
+            let again = encode(&d, &stamp(), mode).expect("encode again");
             prop_assert_eq!(&uri, &again, "encode deterministic");
+            prop_assert!(uri.len() < MAX_ENCODED_URI_LEN, "encoded URI under the 64 KiB cap");
             let decoded = decode(&uri).expect("decode");
             prop_assert_eq!(decoded.dto, d, "dto identity");
             prop_assert_eq!(decoded.provenance, stamp(), "provenance identity");
+            prop_assert_eq!(decoded.mode, mode, "mode identity");
         }
 
         /// Decode totality (the CLAUDE.md ALWAYS-fuzz requirement, via proptest):
