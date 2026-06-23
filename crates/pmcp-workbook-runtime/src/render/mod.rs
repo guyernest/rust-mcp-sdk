@@ -731,6 +731,88 @@ mod tests {
     }
 
     #[test]
+    fn render_xlsx_text_and_bool_formula_cells_carry_f_and_v_per_cell() {
+        // WBVER-01: a TEXT formula output (cell.formula = Some) and a BOOL formula
+        // output must each render as a formula-with-cached-result — their OWN <c>
+        // element carries BOTH an <f> (the formula) AND a <v> (the cached result),
+        // exactly like the proven numeric formula cell. Scoped per cell BY A1 ADDRESS
+        // via cell_xml (NOT a whole-sheet count — shared/inline strings false-positive
+        // a global tally, MEDIUM #6).
+        let layout = one_sheet(
+            "3_Outputs",
+            vec![
+                // bracket_label: a text formula output (Plan-01 fixture B6).
+                cell(
+                    "B6",
+                    Some("IF(taxable_income>=40000,\"bracket_2\",\"bracket_1\")"),
+                    None,
+                ),
+                // is_taxable: a bool formula output (Plan-01 fixture B7).
+                cell("B7", Some("taxable_income>0"), None),
+            ],
+            vec![],
+        );
+        let run = run_with(&[
+            (
+                "3_Outputs!B6",
+                CellValue::Text("bracket_2".to_string()),
+            ),
+            ("3_Outputs!B7", CellValue::Bool(true)),
+        ]);
+        let bytes = render_xlsx(&layout, &run).expect("render");
+
+        let sheet_xml = extract_sheet_xml(&bytes, "xl/worksheets/sheet1.xml");
+
+        let b6 = cell_xml(&sheet_xml, "B6").expect("the B6 text-formula cell is present");
+        assert!(
+            b6.contains("<f>") || b6.contains("<f "),
+            "the TEXT formula cell carries an <f> element within its own <c>: {b6}"
+        );
+        assert!(
+            b6.contains("<v>"),
+            "the TEXT formula cell carries a cached <v> within its own <c>: {b6}"
+        );
+
+        let b7 = cell_xml(&sheet_xml, "B7").expect("the B7 bool-formula cell is present");
+        assert!(
+            b7.contains("<f>") || b7.contains("<f "),
+            "the BOOL formula cell carries an <f> element within its own <c>: {b7}"
+        );
+        assert!(
+            b7.contains("<v>"),
+            "the BOOL formula cell carries a cached <v> within its own <c>: {b7}"
+        );
+    }
+
+    #[test]
+    fn render_xlsx_non_formula_text_and_bool_remain_plain_literals() {
+        // No-regression: a text/bool cell with cell.formula = None still renders as a
+        // plain value (NO <f>) — unchanged behavior.
+        let layout = one_sheet(
+            "3_Outputs",
+            vec![cell("A1", None, None), cell("A2", None, None)],
+            vec![],
+        );
+        let run = run_with(&[
+            ("3_Outputs!A1", CellValue::Text("plain".to_string())),
+            ("3_Outputs!A2", CellValue::Bool(false)),
+        ]);
+        let bytes = render_xlsx(&layout, &run).expect("render");
+        let sheet_xml = extract_sheet_xml(&bytes, "xl/worksheets/sheet1.xml");
+
+        let a1 = cell_xml(&sheet_xml, "A1").expect("A1 plain text cell present");
+        assert!(
+            !a1.contains("<f>") && !a1.contains("<f "),
+            "a non-formula text cell carries NO <f>: {a1}"
+        );
+        let a2 = cell_xml(&sheet_xml, "A2").expect("A2 plain bool cell present");
+        assert!(
+            !a2.contains("<f>") && !a2.contains("<f "),
+            "a non-formula bool cell carries NO <f>: {a2}"
+        );
+    }
+
+    #[test]
     fn argb_to_color_non_ascii_eight_byte_input_is_none_not_a_panic() {
         // CR-01 regression: "€abcde" is 8 BYTES (3 + 5) but byte index 2 falls
         // inside the multibyte '€' — the old `&hex[2..]` slice panicked. The
