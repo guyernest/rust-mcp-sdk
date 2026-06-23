@@ -1952,7 +1952,13 @@ Plans:
 
 **Source**: design doc `docs/design/2026-06-22-workbook-accuracy-verification-design.md` (Approach A, approved 2026-06-22); grounded against `crates/pmcp-workbook-runtime/src/render/mod.rs`, `crates/pmcp-workbook-runtime/src/artifact_model.rs` (`Tool.oracle`), and `crates/pmcp-server-toolkit/src/workbook/{render_uri,render_resource,mod}.rs`.
 
-**Plans**: not planned yet — run `/gsd:plan-phase 100`
+**Plans**: 5 plans (5 waves — strictly sequential due to shared render/mod.rs + handler.rs/schema.rs/mod.rs ownership)
+
+- [ ] 100-01-PLAN.md — Wave-0 prerequisites: tax fixture text+bool formula outputs (D-07) + re-fold BUNDLE.lock; RESERVED_TOOL_NAMES→verify_accuracy + H3 binding + five→six doc/count; xlsx-XML test helper [WBVER-01, WBVER-02, WBVER-03, WBVER-04]
+- [ ] 100-02-PLAN.md — Item 1 (WBVER-01): write_formula_or_value helper so text & bool formula cells render formula-with-cached-result (<f>+<v>) [WBVER-01]
+- [ ] 100-03-PLAN.md — Item 2 (WBVER-02): RenderMode { Filled, InputsOnly } threaded through render_xlsx + the workbook:// URI payload + render_workbook mode arg (strip before validate_input) + input schema [WBVER-02]
+- [ ] 100-04-PLAN.md — Item 3 (WBVER-03): pure reader-free reconcile.rs (reconcile_reference + ReconcileReport, D-01 cell address) + VerifyAccuracyHandler 6th meta tool (D-03 unknown filter → Err, D-04 empty oracle vacuous) [WBVER-03]
+- [ ] 100-05-PLAN.md — Final (WBVER-04): extend the tax example to demo filled/inputs_only/verify_accuracy + phase gate (quality-gate + purity-check + doc-check + PMAT cog-25, no wire regression) [WBVER-04]
 
 ## Progress — v2.3 Milestone
 
@@ -1966,7 +1972,7 @@ Plans:
 | 94. CLI Subcommands + `pmcp.toml` | 6/6 | Complete    | 2026-06-14 |
 | 95. Shape A Binary `pmcp-workbook-server` | 2/2 | Complete    | 2026-06-14 |
 | 96. Shape B Scaffold + Dialect-Version + Generalization | 5/5 | Complete    | 2026-06-15 |
-| 100. Workbook Accuracy-Verification Surface (BA Trust Tools) | 0/? | Not planned | — |
+| 100. Workbook Accuracy-Verification Surface (BA Trust Tools) | 0/5 | Planned | — |
 
 ## Phase Details — v2.4 (cargo-pmcp deploy)
 
