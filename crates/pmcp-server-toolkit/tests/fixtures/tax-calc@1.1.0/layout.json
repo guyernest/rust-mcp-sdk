@@ -137,6 +137,22 @@
           "number_format": "0.00%",
           "fill_argb": null,
           "font_argb": null
+        },
+        {
+          "addr": "B6",
+          "formula": "IF(3_Outputs!B2>=40000,\"bracket_2\",\"bracket_1\")",
+          "value": "bracket_2",
+          "number_format": null,
+          "fill_argb": null,
+          "font_argb": null
+        },
+        {
+          "addr": "B7",
+          "formula": "3_Outputs!B2>0",
+          "value": "TRUE",
+          "number_format": null,
+          "fill_argb": null,
+          "font_argb": null
         }
       ],
       "merges": [],

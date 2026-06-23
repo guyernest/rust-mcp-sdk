@@ -76,11 +76,13 @@ fn golden_passes_boot_integrity() {
     assert_eq!(bundle.changelog.to_version, VERSION);
     // Full output surface (no privileged headline — WBSV-01): the named outputs
     // across every per-Table tool (WBV2-04 multi-tool model). Two tools:
-    // Calculate_Tax (4 outputs) + Estimate_Refund (1 output) = 5.
+    // Calculate_Tax (6 outputs — 4 numeric + the WBVER-01 D-07 text + bool formula
+    // outputs bracket_label/is_taxable) + Estimate_Refund (1 output) = 7.
     let output_count: usize = bundle.cell_map.tools.iter().map(|t| t.outputs.len()).sum();
     assert_eq!(
-        output_count, 5,
-        "golden carries five named outputs across two tools"
+        output_count, 7,
+        "golden carries seven named outputs across two tools \
+         (incl. the text + bool formula outputs added for WBVER-01 / D-07)"
     );
     assert_eq!(
         bundle.cell_map.tools.len(),

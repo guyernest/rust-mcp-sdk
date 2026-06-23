@@ -692,14 +692,30 @@ mod tests {
             .expect("calculate succeeds");
 
         // Each of this tool's named outputs is present as a { value, unit } pair.
+        // The Calculate_Tax tool now projects numeric outputs PLUS the WBVER-01/D-07
+        // text (bracket_label) and bool (is_taxable) formula outputs, so a value may
+        // be a number, string, bool, or null (an Empty cell).
         let outputs = v["outputs"].as_object().expect("outputs is an object");
         assert!(!outputs.is_empty(), "the tool projects its outputs");
         for (_key, col) in outputs {
+            let val = &col["value"];
             assert!(
-                col["value"].is_number() || col["value"].is_null(),
-                "each output carries a value"
+                val.is_number() || val.is_string() || val.is_boolean() || val.is_null(),
+                "each output carries a value (number/text/bool/null)"
             );
         }
+        // The text + bool formula outputs project their authored cached values at
+        // the reference inputs (WBVER-01 / D-07).
+        assert_eq!(
+            outputs["bracket_label"]["value"],
+            json!("bracket_2"),
+            "the text formula output computes its authored oracle"
+        );
+        assert_eq!(
+            outputs["is_taxable"]["value"],
+            json!(true),
+            "the bool formula output computes its authored oracle"
+        );
         // S-1: the success payload has EXACTLY outputs/accepted_overrides/
         // provenance — no privileged headline scalar elevated above the
         // uniform all-outputs projection.
@@ -967,8 +983,9 @@ mod tests {
         let outputs = v["outputs"].as_array().expect("outputs array");
         assert_eq!(
             outputs.len(),
-            5,
-            "five outputs projected (4 tax + 1 refund) across the two tools"
+            7,
+            "seven outputs projected (4 numeric tax + the WBVER-01/D-07 text+bool \
+             formula outputs + 1 refund) across the two tools"
         );
         assert!(v["governed_data"].is_array());
         assert!(v["changelog"].is_array());

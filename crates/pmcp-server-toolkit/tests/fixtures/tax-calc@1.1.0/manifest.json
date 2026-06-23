@@ -128,6 +128,30 @@
       "tier": null
     },
     {
+      "cell": "3_Outputs!B6",
+      "role": "output",
+      "name": "out_bracket_label",
+      "unit": null,
+      "meaning": "Which progressive-tax bracket the taxable income falls into (text formula output)",
+      "dtype": "text",
+      "colour_evidence": null,
+      "source": "synthetic-fixture",
+      "notes": null,
+      "tier": null
+    },
+    {
+      "cell": "3_Outputs!B7",
+      "role": "output",
+      "name": "out_is_taxable",
+      "unit": null,
+      "meaning": "Whether any income is subject to tax (boolean formula output)",
+      "dtype": "bool",
+      "colour_evidence": null,
+      "source": "synthetic-fixture",
+      "notes": null,
+      "tier": null
+    },
+    {
       "cell": "4_Refund!B2",
       "role": "output",
       "name": "out_refund",
