@@ -425,6 +425,39 @@ fn assemble_input_schema(manifest: &Manifest, input_props: Map<String, Value>) -
     })
 }
 
+/// The `render_workbook` input schema (WBVER-02): the manifest-level input
+/// envelope PLUS an optional, render-ONLY top-level `mode` enum
+/// `["filled","inputs_only"]`.
+///
+/// This is a thin wrapper over [`input_schema_for_manifest`] that injects the
+/// `mode` property so the advertised RENDER schema matches what the handler
+/// accepts (advertise == accept, the same precedent the `overrides` block uses).
+/// `mode` is added ONLY here — NEVER on the shared `calculate`/`explain` schemas
+/// (which call [`input_schema_for_manifest`] directly) — and `CalculateInput`
+/// carries no `mode` field, so `mode` stays render-only. The envelope keeps
+/// `additionalProperties:false` (mode is now a KNOWN top-level property).
+#[must_use]
+pub fn render_input_schema_for_manifest(manifest: &Manifest, cell_map: &CellMap) -> Value {
+    let mut schema = input_schema_for_manifest(manifest, cell_map);
+    if let Some(props) = schema
+        .get_mut("properties")
+        .and_then(Value::as_object_mut)
+    {
+        props.insert(
+            "mode".to_string(),
+            json!({
+                "type": "string",
+                "enum": ["filled", "inputs_only"],
+                "description": "Render mode (WBVER-02). 'filled' (default) writes \
+                                formula cells with their cached result; 'inputs_only' \
+                                writes bare formulas so Excel recomputes every output \
+                                (double-entry verification copy).",
+            }),
+        );
+    }
+    schema
+}
+
 /// `get_manifest`/`diff_version` have no input — an empty strict object schema.
 #[must_use]
 pub fn empty_input_schema() -> Value {

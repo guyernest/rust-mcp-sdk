@@ -27,7 +27,7 @@ use pmcp::types::ToolInfo;
 use pmcp::{RequestHandlerExtra, ToolHandler};
 use serde_json::{json, Value};
 
-use pmcp_workbook_runtime::{run_executor, CellEnv, CellValue, RunResult, Tool};
+use pmcp_workbook_runtime::{run_executor, CellEnv, CellValue, RenderMode, RunResult, Tool};
 
 use super::error::{to_iserror_result, WorkbookToolError};
 use super::input::validate_input;
@@ -35,7 +35,7 @@ use super::render_uri;
 use super::schema::{
     diff_version_output_schema, empty_input_schema, explain_output_schema,
     get_manifest_output_schema, input_schema_for_manifest, input_schema_for_tool,
-    output_schema_for_tool, render_workbook_output_schema,
+    output_schema_for_tool, render_input_schema_for_manifest, render_workbook_output_schema,
 };
 use super::{ProvStamp, WorkbookBundle, WORKBOOK_TOOL_UI};
 
@@ -595,22 +595,49 @@ impl RenderWorkbookHandler {
         Self { bundle, stamp }
     }
 
-    /// The linear `?`-chained `render_workbook` pipeline: validate → encode the
-    /// canonical DTO + provenance into a `workbook://` URI → return the POINTER
-    /// (plus the stamp), NOT the bytes.
+    /// The linear `?`-chained `render_workbook` pipeline: parse+strip the
+    /// render-only `mode` arg → validate the REMAINING inputs → encode the
+    /// canonical DTO + provenance + mode into a `workbook://` URI → return the
+    /// POINTER (plus the stamp), NOT the bytes.
     #[allow(clippy::result_large_err)]
-    fn compute(&self, args: Value) -> Result<Value, WorkbookToolError> {
+    fn compute(&self, mut args: Value) -> Result<Value, WorkbookToolError> {
+        // WBVER-02: lift `mode` out FIRST (CalculateInput is deny_unknown_fields,
+        // so a `mode` key would otherwise be rejected). An unknown value is an Err
+        // here, NOT a validate_input rejection of the remaining inputs.
+        let mode = parse_render_mode(&mut args)?;
         let validated = validate_input(args, &self.bundle.manifest, &self.bundle.cell_map)?;
-        let uri = render_uri::encode(
-            &validated.canonical_dto,
-            &self.stamp,
-            pmcp_workbook_runtime::RenderMode::Filled,
-        )?;
+        let uri = render_uri::encode(&validated.canonical_dto, &self.stamp, mode)?;
         let payload = json!({
             "resource_uri": uri,
             "mime_type": render_uri::WORKBOOK_XLSX_MIME,
         });
         Ok(with_provenance(payload, &self.stamp))
+    }
+}
+
+/// Lift the render-only `mode` arg out of the raw `render_workbook` args and map
+/// it to a [`RenderMode`], REMOVING the key so the remaining `{inputs, overrides}`
+/// passes `validate_input`'s `deny_unknown_fields` (WBVER-02).
+///
+/// Mapping: absent / `null` → [`RenderMode::Filled`]; `"filled"` → `Filled`;
+/// `"inputs_only"` → `InputsOnly`; ANY other value → `Err` (the locked
+/// "unknown mode → Err" decision). Total + panic-free (no unwrap/expect).
+#[allow(clippy::result_large_err)]
+fn parse_render_mode(args: &mut Value) -> Result<RenderMode, WorkbookToolError> {
+    let Some(obj) = args.as_object_mut() else {
+        // Non-object args carry no `mode`; let validate_input report the shape.
+        return Ok(RenderMode::Filled);
+    };
+    let Some(raw) = obj.remove("mode") else {
+        return Ok(RenderMode::Filled); // absent → Filled
+    };
+    match raw {
+        Value::Null => Ok(RenderMode::Filled),
+        Value::String(s) if s == "filled" => Ok(RenderMode::Filled),
+        Value::String(s) if s == "inputs_only" => Ok(RenderMode::InputsOnly),
+        other => Err(WorkbookToolError::invalid_input(format!(
+            "unknown render mode {other}; expected \"filled\" or \"inputs_only\""
+        ))),
     }
 }
 
@@ -632,7 +659,7 @@ impl ToolHandler for RenderWorkbookHandler {
                      encodes the inputs; treat it as sensitive."
                         .into(),
                 ),
-                input_schema_for_manifest(&self.bundle.manifest, &self.bundle.cell_map),
+                render_input_schema_for_manifest(&self.bundle.manifest, &self.bundle.cell_map),
                 WORKBOOK_TOOL_UI,
             )
             .with_output_schema(render_workbook_output_schema()),
@@ -1166,6 +1193,112 @@ mod tests {
         assert_eq!(
             schema["properties"]["resource_uri"]["type"],
             json!("string")
+        );
+    }
+
+    #[test]
+    fn render_workbook_inputs_only_mode_encodes_into_uri() {
+        // WBVER-02 happy path: render_workbook with mode:"inputs_only" produces a
+        // URI whose decoded payload carries InputsOnly; with no mode it carries
+        // Filled (default). Proven by decoding the returned URI.
+        let bundle = golden_bundle();
+        let handler = RenderWorkbookHandler::new(bundle.clone());
+
+        let io = handler
+            .compute(json!({
+                "inputs": { "gross_income": 60000.0, "filing_status": "single" },
+                "mode": "inputs_only",
+            }))
+            .expect("inputs_only render_workbook succeeds");
+        let io_uri = io["resource_uri"].as_str().expect("resource_uri string");
+        let io_decoded = render_uri::decode(io_uri).expect("pointer decodes");
+        assert_eq!(
+            io_decoded.mode,
+            RenderMode::InputsOnly,
+            "mode:inputs_only rides into the URI payload"
+        );
+
+        let default = handler
+            .compute(json!({
+                "inputs": { "gross_income": 60000.0, "filing_status": "single" }
+            }))
+            .expect("no-mode render_workbook succeeds");
+        let d_uri = default["resource_uri"].as_str().expect("resource_uri string");
+        let d_decoded = render_uri::decode(d_uri).expect("pointer decodes");
+        assert_eq!(
+            d_decoded.mode,
+            RenderMode::Filled,
+            "no mode arg defaults to Filled (no regression)"
+        );
+    }
+
+    #[test]
+    fn render_workbook_unknown_mode_is_iserror_not_panic() {
+        // WBVER-02 (MEDIUM #3 / T-100-06): an unknown `mode` value is an Err /
+        // isError envelope at the boundary — NOT a panic, and NOT a deny_unknown_fields
+        // rejection of the remaining inputs.
+        let bundle = golden_bundle();
+        let handler = RenderWorkbookHandler::new(bundle.clone());
+        let v = render_at_boundary(
+            handler.compute(json!({
+                "inputs": { "gross_income": 60000.0, "filing_status": "single" },
+                "mode": "bogus",
+            })),
+            &ProvStamp::from_bundle(&bundle),
+        );
+        assert_eq!(v["isError"], json!(true), "unknown mode is an isError envelope");
+        assert_eq!(v["code"], json!("invalid_input"));
+        // The compute path returns Err directly too (not a silent Filled).
+        assert!(
+            handler
+                .compute(json!({
+                    "inputs": { "gross_income": 60000.0, "filing_status": "single" },
+                    "mode": "bogus",
+                }))
+                .is_err(),
+            "unknown mode → Err, never a silent Filled"
+        );
+    }
+
+    #[test]
+    fn mode_is_render_only_and_never_leaks_into_calculate_or_explain() {
+        // WBVER-02 (T-100-07): the calculate (per-tool) and explain (manifest-level)
+        // input schemas do NOT advertise `mode`, while the render schema DOES; and
+        // calculate/explain REJECT a `{"mode":...}` key via deny_unknown_fields
+        // (CalculateInput carries no mode field). mode is render-only.
+        let bundle = golden_bundle();
+
+        // The render schema advertises mode; calculate + explain do NOT.
+        let render_schema =
+            render_input_schema_for_manifest(&bundle.manifest, &bundle.cell_map);
+        assert!(
+            render_schema["properties"]["mode"].is_object(),
+            "render schema advertises mode"
+        );
+        assert_eq!(
+            render_schema["properties"]["mode"]["enum"],
+            json!(["filled", "inputs_only"]),
+            "advertise == accept: the render mode enum matches the handler's accepted values"
+        );
+
+        let calc = calc_handler();
+        let calc_schema = calc.metadata().expect("calc meta").input_schema;
+        assert!(
+            calc_schema["properties"].get("mode").is_none(),
+            "calculate schema does NOT advertise mode"
+        );
+        let explain = ExplainHandler::new(bundle.clone());
+        let explain_schema = explain.metadata().expect("explain meta").input_schema;
+        assert!(
+            explain_schema["properties"].get("mode").is_none(),
+            "explain schema does NOT advertise mode"
+        );
+
+        // calculate/explain REJECT a `mode` key (deny_unknown_fields on CalculateInput).
+        let with_mode = json!({ "inputs": { "gross_income": 60000.0 }, "mode": "inputs_only" });
+        assert!(
+            validate_input(with_mode.clone(), &bundle.manifest, &bundle.cell_map).is_err(),
+            "a mode key is rejected by validate_input (deny_unknown_fields)"
         );
     }
 }
