@@ -47,6 +47,10 @@ Progress: [████████████████████] 286/290
 
 ## Accumulated Context
 
+### Roadmap Evolution
+
+- Phase 100 added (2026-06-22): Workbook Accuracy-Verification Surface (BA trust tools) — v2.3 milestone; extends the existing `render_workbook`/`workbook://` download with WBVER-01..04 (text/bool formula re-verify, `inputs_only` render mode, `verify_accuracy` reference reconciliation). Design: `docs/design/2026-06-22-workbook-accuracy-verification-design.md`. Placed at Phase 100 (free gap after workbook phases 91-96) since `phase.add` max+1 would mint 1000. Next: `/gsd:plan-phase 100`.
+
 ### Decisions
 
 Decisions are logged in PROJECT.md Key Decisions table. Decisions framing this milestone:

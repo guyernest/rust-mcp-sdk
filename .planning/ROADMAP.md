@@ -13,7 +13,7 @@
 - **v2.0 Protocol Modernization** — Phases 54-59 (in progress)
 - **v2.1 rmcp Upgrades** — Phases 65-68 (in progress)
 - ✅ **v2.2 Configuration-Only MCP Servers (SQL + OpenAPI toolkits)** — Phases 82-90.2 (substantially shipped)
-- 🚧 **v2.3 Excel-as-Configuration MCP Servers (governed Excel CodeLanguage)** — Phases 91-96 (in progress)
+- 🚧 **v2.3 Excel-as-Configuration MCP Servers (governed Excel CodeLanguage)** — Phases 91-96 + Phase 100 (BA accuracy-verification trust tools) (in progress)
 - 🚧 **v2.10 SDK DX** — Phase 101 tools-as-Tasks server DX (✅ shipped, pmcp 2.10.0), Phase 102 lift TaskStore onto the HTTP path (scoping)
 
 ## Phases
@@ -1935,6 +1935,25 @@ Plans:
 - [x] 96-04-PLAN.md — WBEX-01 generalization gate: synthetic loan/mortgage rate-tier second workbook compiles via the generic driver + serves its OWN get_manifest/tools/list schema (loan keys present, tax keys absent, DISJOINT) behind the same five generic tool names; reemit_loan 9-assertion served-schema proof (incl. production-refusal T-96-10) + the in_* input-naming convention (mirrors out_*) ✅ (commits 6b622e95, a7529369)
 - [x] 96-05-PLAN.md — WBEX-02 Excel-quirk corpus: 8 quirks in BOTH layers — scalar_eval unit tests (excel_round source of truth; 1900-leap >59/+1 components per SPIKE, no DATE) + mini penny-reconcile fixtures graded by retrieving the recomputed value + cached oracle through within_tol (cannot pass on compile-success alone); 3 of 4 named quirks have a reconcile fixture (error propagation is the scalar_eval-only stand-in — runtime Div clamps NaN->0 / preflight short-circuit); production-refusal spot check + quirk->WBEX-02 traceability map ✅ (commits e3cce105, 7fa7458f)
 
+### Phase 100: Workbook Accuracy-Verification Surface (BA Trust Tools)
+
+**Goal**: Give business analysts a way to TRUST that the generated MCP server reproduces their Excel workbook, and to probe it with their own inputs, by extending the existing `render_workbook` / `workbook://` download path (Phase 92) with three additive capabilities: (1) text/boolean formula outputs render as formula-with-cached-result so Excel independently recomputes ALL output types on open — today only numeric formulas do; (2) a `render_workbook` `inputs_only` mode that fills inputs only and leaves every formula for Excel to compute from scratch (double-entry — the server contributes zero output values); and (3) a `verify_accuracy` meta-tool that re-runs the engine at the workbook's reference inputs and reports, per output, whether it matches Excel's authored value (`Tool.oracle`) within `TOL`. Reader-free, stateless/Lambda-safe, purity-gate preserved. Framed as a customer-trial PoC: the re-version loop and arbitrary-input server-side delta are explicit non-goals this round.
+
+**Depends on**: Phase 96 (the generalized, manifest-driven workbook runtime + the served `render_workbook` tool / `workbook://` resource / `render_xlsx` writer this extends)
+**Requirements**: WBVER-01, WBVER-02, WBVER-03, WBVER-04
+**Success Criteria** (what must be TRUE):
+
+  1. Text & boolean formula output cells render as formula-with-cached-result (`Formula::set_result`), so Excel's `fullCalcOnLoad="1"` recomputes all output types on open — closing the trust blind spot where only numeric formulas were re-verifiable (WBVER-01)
+  2. `render_workbook` accepts `mode: filled | inputs_only` (default `filled`, additive — existing callers unaffected); `inputs_only` emits bare formulas with NO cached results, deterministically; unknown mode → `Err` (never a panic); the encoded `workbook://` URI stays ≤ 64 KiB (WBVER-02)
+  3. A `verify_accuracy` meta-tool re-runs the executor at the workbook's reference inputs and returns a per-output reconciliation report (`{key, server_value, oracle_value, abs_delta, within_tol}`) vs. `Tool.oracle` within `TOL` — stateless, reader-free, the compile-time penny-reconcile made runtime-inspectable (WBVER-03)
+  4. No regression to existing `render_workbook` / `workbook://` behavior or wire shapes; ALWAYS coverage (fuzz/property/unit/example); `make quality-gate` + `make purity-check` + `make doc-check` green; PMAT cog-25 (WBVER-04)
+
+**Scope fences (LOCKED)**: keep the served runtime READER-FREE (no `umya`/`quick-xml`/`calamine` enters the served tree — `make purity-check` stays green); keep the server STATELESS/Lambda-safe (pointer-then-regenerate; no render cache/session); `mode` and `verify_accuracy` are ADDITIVE (do not break the existing `render_workbook`/`workbook://` contract); out of scope this round = the re-version loop (`diff_version` ↔ freshly-uploaded workbook on pmcp.run), arbitrary-input server-side delta (impossible without a runtime Excel reader), and compile-time golden-vector capture.
+
+**Source**: design doc `docs/design/2026-06-22-workbook-accuracy-verification-design.md` (Approach A, approved 2026-06-22); grounded against `crates/pmcp-workbook-runtime/src/render/mod.rs`, `crates/pmcp-workbook-runtime/src/artifact_model.rs` (`Tool.oracle`), and `crates/pmcp-server-toolkit/src/workbook/{render_uri,render_resource,mod}.rs`.
+
+**Plans**: not planned yet — run `/gsd:plan-phase 100`
+
 ## Progress — v2.3 Milestone
 
 **Execution order:** Phase 91 (runtime + purity gate + dialect) → Phase 92 (BundleSource + served-tool module, freezes the bundle contract) → Phase 93 (compiler + §5 fixes + promote gate) → Phase 94 (CLI + `pmcp.toml`) → Phase 95 (Shape A binary) → Phase 96 (Shape B scaffold + dialect-version + generalization gates). Strictly sequential: each phase's output is the next phase's dependency (runtime ← compiler/toolkit; contract frozen before compiler re-cut; CLI/binary/scaffold over the now-stable runtime+compiler).
@@ -1947,6 +1966,7 @@ Plans:
 | 94. CLI Subcommands + `pmcp.toml` | 6/6 | Complete    | 2026-06-14 |
 | 95. Shape A Binary `pmcp-workbook-server` | 2/2 | Complete    | 2026-06-14 |
 | 96. Shape B Scaffold + Dialect-Version + Generalization | 5/5 | Complete    | 2026-06-15 |
+| 100. Workbook Accuracy-Verification Surface (BA Trust Tools) | 0/? | Not planned | — |
 
 ## Phase Details — v2.4 (cargo-pmcp deploy)
 
