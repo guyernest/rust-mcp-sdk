@@ -490,6 +490,53 @@ mod tests {
         }
     }
 
+    /// Unzip an in-memory `.xlsx` buffer (the writer's output is a ZIP container)
+    /// and return the UTF-8 XML of a named worksheet entry (e.g.
+    /// `"xl/worksheets/sheet1.xml"`). DEV-ONLY: consumed by the WBVER-01/02 unit
+    /// tests (Plans 02/03) to assert `<f>`/`<v>` presence/absence on SPECIFIC known
+    /// cells. Current render tests only check the ZIP magic — this opens the
+    /// container so callers can read worksheet XML.
+    ///
+    /// Total against the well-formed buffers `render_xlsx` produces; a test-local
+    /// `expect` surfaces a malformed buffer / missing entry as a test failure.
+    fn extract_sheet_xml(buf: &[u8], sheet_path: &str) -> String {
+        use std::io::Read;
+        let reader = std::io::Cursor::new(buf.to_vec());
+        let mut archive = zip::ZipArchive::new(reader).expect("xlsx buffer is a valid ZIP");
+        let mut entry = archive
+            .by_name(sheet_path)
+            .unwrap_or_else(|_| panic!("worksheet entry {sheet_path} present in the xlsx"));
+        let mut xml = String::new();
+        entry
+            .read_to_string(&mut xml)
+            .expect("worksheet entry is UTF-8 XML");
+        xml
+    }
+
+    /// Return the `<c r="A1"> … </c>` element SLICE for a given A1 address within a
+    /// worksheet XML string, or `None` when that cell is absent. Lets consumers
+    /// assert `<f>`/`<v>` presence/absence WITHIN one known cell rather than a
+    /// whole-sheet count (MEDIUM #6 — shared/inline strings false-positive a global
+    /// `<f>`/`<v>` tally). Scans for `<c r="<a1>"` and returns up to the matching
+    /// `</c>` (or the self-closing `/>` for an empty cell).
+    fn cell_xml<'a>(sheet_xml: &'a str, a1: &str) -> Option<&'a str> {
+        let needle = format!("<c r=\"{a1}\"");
+        let start = sheet_xml.find(&needle)?;
+        let rest = &sheet_xml[start..];
+        // A cell element ends at the first "</c>" (a cell with children) OR a
+        // self-closing "/>" that precedes any "</c>" / "<c " boundary (empty cell).
+        let close = rest.find("</c>").map(|i| i + "</c>".len());
+        let next_open = rest.find("<c ").unwrap_or(rest.len());
+        let self_close = rest[..next_open.min(rest.len())].find("/>").map(|i| i + 2);
+        let end = match (close, self_close) {
+            (Some(c), Some(s)) => c.min(s),
+            (Some(c), None) => c,
+            (None, Some(s)) => s,
+            (None, None) => return None,
+        };
+        Some(&rest[..end])
+    }
+
     fn one_sheet(name: &str, cells: Vec<CellLayout>, merges: Vec<String>) -> LayoutDescriptor {
         LayoutDescriptor {
             descriptor_version: LAYOUT_DESCRIPTOR_VERSION,
@@ -648,6 +695,39 @@ mod tests {
         ]);
         let bytes = render_xlsx(&layout, &run).expect("render");
         assert_eq!(&bytes[..4], ZIP_MAGIC);
+    }
+
+    #[test]
+    fn extract_sheet_xml_locates_formula_and_value_on_a_specific_cell() {
+        // WBVER-01/02 groundwork: the Filled render of a SPECIFIC numeric formula
+        // cell carries BOTH an <f> (the formula) and a <v> (the cached result)
+        // WITHIN that cell's <c> element. The self-test scopes the assertion to the
+        // cell BY A1 ADDRESS via `cell_xml` (NOT a brittle whole-sheet <f>/<v> count
+        // — shared/inline strings false-positive a global count, MEDIUM #6).
+        let layout = one_sheet(
+            "7_Quote",
+            vec![cell("C11", Some("SUM(C9:C10)"), Some("0"))],
+            vec![],
+        );
+        let run = run_with(&[("7_Quote!C11", CellValue::Number(1594.93))]);
+        let bytes = render_xlsx(&layout, &run).expect("render");
+
+        let sheet_xml = extract_sheet_xml(&bytes, "xl/worksheets/sheet1.xml");
+        let c11 = cell_xml(&sheet_xml, "C11").expect("the C11 cell element is present");
+        assert!(
+            c11.contains("<f>") || c11.contains("<f "),
+            "the numeric formula cell carries an <f> element within its own <c>"
+        );
+        assert!(
+            c11.contains("<v>"),
+            "the numeric formula cell carries a cached <v> within its own <c>"
+        );
+
+        // A non-existent address yields None (total against well-formed buffers).
+        assert!(
+            cell_xml(&sheet_xml, "Z99").is_none(),
+            "an absent cell address resolves to None, never a panic"
+        );
     }
 
     #[test]
