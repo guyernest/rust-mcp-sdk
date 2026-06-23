@@ -93,3 +93,9 @@ None.
 ## Next
 
 Plan 100-03 (WBVER-02): `inputs_only` render mode — the next leg of the accuracy-verification surface, reusing the same cell-scoped XML assertion approach.
+
+## Self-Check: PASSED
+
+- SUMMARY.md present at expected path.
+- All 3 commits (8c9b5a53 RED, 88ed730d GREEN, 4871e285 docs) present in git history.
+- `write_formula_or_value` grep count = 5 (≥ 2).

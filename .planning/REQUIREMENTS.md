@@ -71,7 +71,7 @@
 
 ### Workbook Accuracy Verification — BA trust tools (Phase 100)
 
-- [ ] **WBVER-01**: Text & boolean formula output cells render as formula-with-cached-result (`Formula::set_result`), so Excel (`fullCalcOnLoad="1"`) independently recomputes ALL output types on open — not just numeric formulas
+- [x] **WBVER-01**: Text & boolean formula output cells render as formula-with-cached-result (`Formula::set_result`), so Excel (`fullCalcOnLoad="1"`) independently recomputes ALL output types on open — not just numeric formulas
 - [ ] **WBVER-02**: `render_workbook` accepts `mode: filled | inputs_only` (default `filled`, additive); `inputs_only` emits bare formulas with NO cached results, deterministically; unknown mode → `Err` (never a panic); the encoded `workbook://` URI stays ≤ 64 KiB
 - [ ] **WBVER-03**: A `verify_accuracy` meta-tool re-runs the executor at the workbook's reference inputs and returns a per-output reconciliation report (`{key, server_value, oracle_value, abs_delta, within_tol}`) vs. `Tool.oracle` within `TOL` — stateless, reader-free, the compile-time penny-reconcile made runtime-inspectable
 - [ ] **WBVER-04**: No regression to existing `render_workbook` / `workbook://` behavior or wire shapes; ALWAYS coverage (fuzz/property/unit/example); `make quality-gate` + `make purity-check` + `make doc-check` green; PMAT cog-25
@@ -196,7 +196,7 @@
 | CPLX-02 | Phase 99 | Complete |
 | CPLX-03 | Phase 99 | Complete |
 | CPLX-04 | Phase 99 | Complete |
-| WBVER-01 | Phase 100 | Pending |
+| WBVER-01 | Phase 100 | Complete |
 | WBVER-02 | Phase 100 | Pending |
 | WBVER-03 | Phase 100 | Pending |
 | WBVER-04 | Phase 100 | Pending |
