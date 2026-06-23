@@ -101,7 +101,9 @@ pub use bundle_source::{BundleSource, BundleSourceError, LocalDirSource};
 
 pub use bundle_loader::{load as load_bundle, BundleLoadError, WorkbookBundle};
 
-pub use render::{CellLayout, LayoutDescriptor, SheetLayout, LAYOUT_DESCRIPTOR_VERSION};
+pub use render::{
+    CellLayout, LayoutDescriptor, RenderMode, SheetLayout, LAYOUT_DESCRIPTOR_VERSION,
+};
 
 // NOTE: `changelog::Severity` is INTENTIONALLY not re-exported at the crate root —
 // `finding::Severity` (the lint-finding tier) already occupies the bare `Severity`
