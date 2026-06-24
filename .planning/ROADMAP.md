@@ -1972,7 +1972,7 @@ Plans:
 | 94. CLI Subcommands + `pmcp.toml` | 6/6 | Complete    | 2026-06-14 |
 | 95. Shape A Binary `pmcp-workbook-server` | 2/2 | Complete    | 2026-06-14 |
 | 96. Shape B Scaffold + Dialect-Version + Generalization | 5/5 | Complete    | 2026-06-15 |
-| 100. Workbook Accuracy-Verification Surface (BA Trust Tools) | 5/5 | Complete   | 2026-06-24 |
+| 100. Workbook Accuracy-Verification Surface (BA Trust Tools) | 5/5 | Complete    | 2026-06-24 |
 
 ## Phase Details — v2.4 (cargo-pmcp deploy)
 
