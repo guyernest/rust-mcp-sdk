@@ -21,7 +21,7 @@
 //! total comparison over every [`CellValue`] variant (numeric, Text, Bool,
 //! Empty, Error, type-mismatch) and never yields a `NaN`/unspecified delta.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
@@ -210,14 +210,17 @@ fn discrete_eq(equal: bool) -> (f64, bool) {
 /// contributing 0 to the comparison count.
 fn reconcile_tool(tool: &Tool, computed: &HashMap<String, CellValue>) -> (ToolReport, u32) {
     let mut rows = Vec::new();
-    let mut matched_keys = Vec::new();
+    // Borrowed output keys we have already graded — used to skip oracle-only keys
+    // in the D-02 loop below. Borrowed (`&str`) + set membership avoids a per-key
+    // String clone and the O(outputs × oracle) linear scan.
+    let mut matched_keys: HashSet<&str> = HashSet::new();
 
     // Rows for declared outputs (the common path: cell = Some(seed_coord)).
     for entry in &tool.outputs {
         let Some(oracle_value) = tool.oracle.get(&entry.json_key) else {
             continue; // an output with no authored oracle is not graded here.
         };
-        matched_keys.push(entry.json_key.clone());
+        matched_keys.insert(entry.json_key.as_str());
         let server_value = computed.get(&entry.seed_coord).cloned();
         let (abs_delta, within_tol) = compare_output(server_value.as_ref(), Some(oracle_value));
         rows.push(OutputRow {
@@ -232,7 +235,7 @@ fn reconcile_tool(tool: &Tool, computed: &HashMap<String, CellValue>) -> (ToolRe
 
     // D-02: any oracle key WITHOUT a matching outputs entry → cell = None, graded.
     for (key, oracle_value) in &tool.oracle {
-        if matched_keys.iter().any(|k| k == key) {
+        if matched_keys.contains(key.as_str()) {
             continue;
         }
         let (abs_delta, within_tol) = compare_output(None, Some(oracle_value));
