@@ -1956,7 +1956,7 @@ Plans:
 
 - [x] 100-01-PLAN.md — Wave-0 prerequisites: tax fixture text+bool formula outputs (D-07) + re-fold BUNDLE.lock; RESERVED_TOOL_NAMES→verify_accuracy + H3 binding + five→six doc/count; xlsx-XML test helper [WBVER-01, WBVER-02, WBVER-03, WBVER-04]
 - [x] 100-02-PLAN.md — Item 1 (WBVER-01): write_formula_or_value helper so text & bool formula cells render formula-with-cached-result (<f>+<v>) [WBVER-01]
-- [ ] 100-03-PLAN.md — Item 2 (WBVER-02): RenderMode { Filled, InputsOnly } threaded through render_xlsx + the workbook:// URI payload + render_workbook mode arg (strip before validate_input) + input schema [WBVER-02]
+- [x] 100-03-PLAN.md — Item 2 (WBVER-02): RenderMode { Filled, InputsOnly } threaded through render_xlsx + the workbook:// URI payload + render_workbook mode arg (strip before validate_input) + input schema [WBVER-02]
 - [ ] 100-04-PLAN.md — Item 3 (WBVER-03): pure reader-free reconcile.rs (reconcile_reference + ReconcileReport, D-01 cell address) + VerifyAccuracyHandler 6th meta tool (D-03 unknown filter → Err, D-04 empty oracle vacuous) [WBVER-03]
 - [ ] 100-05-PLAN.md — Final (WBVER-04): extend the tax example to demo filled/inputs_only/verify_accuracy + phase gate (quality-gate + purity-check + doc-check + PMAT cog-25, no wire regression) [WBVER-04]
 
@@ -1972,7 +1972,7 @@ Plans:
 | 94. CLI Subcommands + `pmcp.toml` | 6/6 | Complete    | 2026-06-14 |
 | 95. Shape A Binary `pmcp-workbook-server` | 2/2 | Complete    | 2026-06-14 |
 | 96. Shape B Scaffold + Dialect-Version + Generalization | 5/5 | Complete    | 2026-06-15 |
-| 100. Workbook Accuracy-Verification Surface (BA Trust Tools) | 2/5 | In Progress|  |
+| 100. Workbook Accuracy-Verification Surface (BA Trust Tools) | 3/5 | In Progress|  |
 
 ## Phase Details — v2.4 (cargo-pmcp deploy)
 
@@ -1991,7 +1991,7 @@ Plans:
 
 **Source**: debug session `.planning/debug/deploy-overwrites-stack-ts.md` (root cause + recommended fix direction recorded under Resolution)
 
-**Plans:** 2/5 plans executed
+**Plans:** 3/5 plans executed
 
 - [x] 98-01-PLAN.md — Config contract (`[metadata]` block + `regenerate_stack` runtime flag on DeployConfig) + RED regression tests reproducing the overwrite + config-metadata defects [DSTK-02] ✅ 2026-06-16
 - [x] 98-02-PLAN.md — DSTK-01 exists-guard + `--regenerate-stack`/`--force` flag on BOTH targets (shared guarded-write helper, IAM validation preserved, "preserved existing stack.ts" notice) [DSTK-01]
