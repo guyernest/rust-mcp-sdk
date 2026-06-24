@@ -449,9 +449,16 @@ fn write_computed_value(
         Some(CellValue::Text(s)) => {
             // WBVER-01: a TEXT formula output carries <f>+<v> (cached result = s);
             // a non-formula text cell stays a plain string literal.
-            write_formula_or_value(ws, row, col, &cell.formula, s.clone(), fmt, mode, |ws, fmt| {
-                write_string_cell(ws, row, col, s, fmt)
-            })?;
+            write_formula_or_value(
+                ws,
+                row,
+                col,
+                &cell.formula,
+                s.clone(),
+                fmt,
+                mode,
+                |ws, fmt| write_string_cell(ws, row, col, s, fmt),
+            )?;
         },
         Some(CellValue::Bool(b)) => {
             // WBVER-01: a BOOL formula output carries <f>+<v> (cached result =
@@ -701,7 +708,10 @@ mod tests {
         let run = run_with(&[("7_Quote!C11", CellValue::Number(1594.93))]);
         let a = render_xlsx(&layout, &run, RenderMode::Filled).expect("render a");
         let b = render_xlsx(&layout, &run, RenderMode::Filled).expect("render b");
-        assert_eq!(a, b, "two Filled renders of the same input are byte-identical");
+        assert_eq!(
+            a, b,
+            "two Filled renders of the same input are byte-identical"
+        );
 
         let io_a = render_xlsx(&layout, &run, RenderMode::InputsOnly).expect("render io a");
         let io_b = render_xlsx(&layout, &run, RenderMode::InputsOnly).expect("render io b");
@@ -731,7 +741,8 @@ mod tests {
         let layout = one_sheet("7_Quote", vec![cell("C11", None, None)], vec![]);
         for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
             let run = run_with(&[("7_Quote!C11", CellValue::Number(bad))]);
-            let err = render_xlsx(&layout, &run, RenderMode::Filled).expect_err("non-finite must be Err");
+            let err =
+                render_xlsx(&layout, &run, RenderMode::Filled).expect_err("non-finite must be Err");
             assert!(
                 matches!(err, RenderError::NonFiniteValue { .. }),
                 "got {err:?}"
@@ -744,7 +755,8 @@ mod tests {
         // A malformed descriptor addr is a RenderError (the value path is panic-free).
         let layout = one_sheet("7_Quote", vec![cell("1A", None, Some("x"))], vec![]);
         let run = run_with(&[]);
-        let err = render_xlsx(&layout, &run, RenderMode::Filled).expect_err("malformed addr must be Err");
+        let err =
+            render_xlsx(&layout, &run, RenderMode::Filled).expect_err("malformed addr must be Err");
         assert!(
             matches!(err, RenderError::MalformedAddr { .. }),
             "got {err:?}"
@@ -799,7 +811,8 @@ mod tests {
             vec!["A1:A1".to_string()],
         );
         let run = run_with(&[]);
-        let err = render_xlsx(&layout, &run, RenderMode::Filled).expect_err("single-cell merge must be Err");
+        let err = render_xlsx(&layout, &run, RenderMode::Filled)
+            .expect_err("single-cell merge must be Err");
         assert!(
             matches!(err, RenderError::MalformedMerge { .. }),
             "got {err:?}"
@@ -884,10 +897,7 @@ mod tests {
             vec![],
         );
         let run = run_with(&[
-            (
-                "3_Outputs!B6",
-                CellValue::Text("bracket_2".to_string()),
-            ),
+            ("3_Outputs!B6", CellValue::Text("bracket_2".to_string())),
             ("3_Outputs!B7", CellValue::Bool(true)),
         ]);
         let bytes = render_xlsx(&layout, &run, RenderMode::Filled).expect("render");
@@ -993,7 +1003,8 @@ mod tests {
         // must NOT carry these; Filled MUST.
         let formula_cells = [("B5", "123"), ("B6", "bracket_2"), ("B7", "1")];
         for (a1, exec_val) in formula_cells {
-            let io = cell_xml(&io_xml, a1).unwrap_or_else(|| panic!("{a1} io formula cell present"));
+            let io =
+                cell_xml(&io_xml, a1).unwrap_or_else(|| panic!("{a1} io formula cell present"));
             assert!(
                 io.contains("<f>") || io.contains("<f "),
                 "InputsOnly: {a1} carries a bare <f>: {io}"
@@ -1054,7 +1065,11 @@ mod tests {
             serde_json::to_string(&RenderMode::InputsOnly).expect("serialize"),
             "\"inputs_only\""
         );
-        assert_eq!(RenderMode::default(), RenderMode::Filled, "Default is Filled");
+        assert_eq!(
+            RenderMode::default(),
+            RenderMode::Filled,
+            "Default is Filled"
+        );
 
         // A present malformed string is an Err (the URI/handler layers rely on this).
         let bogus = serde_json::from_str::<RenderMode>("\"bogus\"");
