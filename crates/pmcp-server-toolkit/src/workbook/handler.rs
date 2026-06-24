@@ -36,6 +36,7 @@ use super::schema::{
     diff_version_output_schema, empty_input_schema, explain_output_schema,
     get_manifest_output_schema, input_schema_for_manifest, input_schema_for_tool,
     output_schema_for_tool, render_input_schema_for_manifest, render_workbook_output_schema,
+    verify_accuracy_input_schema, verify_accuracy_output_schema,
 };
 use super::{ProvStamp, WorkbookBundle, WORKBOOK_TOOL_UI};
 
@@ -667,6 +668,175 @@ impl ToolHandler for RenderWorkbookHandler {
     }
 }
 
+// ---- verify_accuracy (WBVER-03) ----------------------------------------------
+
+/// The `verify_accuracy` meta-tool (the 6th served tool): re-run the executor at
+/// the workbook's REFERENCE inputs (the manifest tier defaults — verified the
+/// oracle was computed there) and return a per-output [`ReconcileReport`] vs each
+/// `Tool.oracle` within `TOL`.
+///
+/// This makes the compile-time penny-reconcile RUNTIME-inspectable: a queryable,
+/// HONESTLY-framed attestation that the served engine reproduces Excel's authored
+/// values at the reference inputs. It does NOT attest arbitrary inputs — for those
+/// the BA downloads the formula workbook via `render_workbook` (`filled` /
+/// `inputs_only`), where Excel is the oracle.
+///
+/// Reader-free + stateless: calls the pure
+/// [`pmcp_workbook_runtime::reconcile_reference`] over the in-memory bundle (no
+/// reader, no toolkit-side seeding, no caller-supplied seeds). An optional
+/// `tool`-name filter scopes the report; an unknown filter is an `Err` listing the
+/// available tool names (D-03) — never a silent empty pass.
+pub struct VerifyAccuracyHandler {
+    bundle: Arc<WorkbookBundle>,
+    stamp: ProvStamp,
+}
+
+impl VerifyAccuracyHandler {
+    /// The registered tool name — the single source for registration + the H3
+    /// binding test + metadata.
+    pub const NAME: &str = "verify_accuracy";
+
+    /// Build over the shared verified bundle.
+    #[must_use]
+    pub fn new(bundle: Arc<WorkbookBundle>) -> Self {
+        let stamp = ProvStamp::from_bundle(&bundle);
+        Self { bundle, stamp }
+    }
+
+    /// The `verify_accuracy` pipeline: parse the optional tool filter (D-03) →
+    /// reconcile at the reference inputs → optionally scope to the filtered tool
+    /// (recomputing the top-level aggregates over the FILTERED set) → stamp.
+    #[allow(clippy::result_large_err)]
+    fn compute(&self, args: Value) -> Result<Value, WorkbookToolError> {
+        let filter = parse_tool_filter(&args)?;
+        if let Some(name) = filter.as_deref() {
+            self.ensure_known_tool(name)?;
+        }
+
+        let report = pmcp_workbook_runtime::reconcile_reference(
+            &self.bundle.cell_map,
+            &self.bundle.manifest,
+            &self.bundle.ir,
+            &self.bundle.dag,
+            pmcp_workbook_runtime::reconcile::TOL,
+        )
+        .map_err(|f| {
+            WorkbookToolError::invalid_input(format!(
+                "reconcile failed: {} ({})",
+                f.message, f.rule
+            ))
+        })?;
+
+        let scoped = scope_report(report, filter.as_deref());
+        let payload = serde_json::to_value(&scoped).map_err(|e| {
+            WorkbookToolError::invalid_input(format!("internal: report not serializable: {e}"))
+        })?;
+        Ok(with_provenance(payload, &self.stamp))
+    }
+
+    /// D-03: a `tool`-name filter that names no registered tool is an `Err`
+    /// listing the available tool names (never a silent empty report). The
+    /// available names are the bundle's per-Table tool names.
+    #[allow(clippy::result_large_err)]
+    fn ensure_known_tool(&self, name: &str) -> Result<(), WorkbookToolError> {
+        if self.bundle.cell_map.tools.iter().any(|t| t.name == name) {
+            return Ok(());
+        }
+        let available: Vec<String> = self
+            .bundle
+            .cell_map
+            .tools
+            .iter()
+            .map(|t| t.name.clone())
+            .collect();
+        Err(WorkbookToolError::invalid_enum(
+            "tool",
+            available,
+            format!("unknown tool '{name}'; verify_accuracy accepts only a registered tool name"),
+        ))
+    }
+}
+
+/// Lift the OPTIONAL `tool`-name filter from the raw `verify_accuracy` args.
+///
+/// Absent / `null` → no filter (all tools). A `tool` string → that filter. A
+/// non-string `tool` value → `Err` (panic-free; the locked `deny(panic)`
+/// discipline). Any other top-level key is ignored — `verify_accuracy` has no
+/// other inputs.
+#[allow(clippy::result_large_err)]
+fn parse_tool_filter(args: &Value) -> Result<Option<String>, WorkbookToolError> {
+    let Some(obj) = args.as_object() else {
+        return Ok(None); // non-object args carry no filter
+    };
+    match obj.get("tool") {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(s)) => Ok(Some(s.clone())),
+        Some(other) => Err(WorkbookToolError::invalid_input(format!(
+            "the 'tool' filter must be a string tool name, got {other}"
+        ))),
+    }
+}
+
+/// Scope a full [`pmcp_workbook_runtime::ReconcileReport`] to a single named tool
+/// (D-03 caller guarantees the name exists), RECOMPUTING the top-level
+/// `cells_checked` + `all_within_tol` over the FILTERED set so a partial filter
+/// never leaves stale full-bundle aggregates (MEDIUM #4 / T-100-08). With no
+/// filter the report is returned unchanged.
+fn scope_report(
+    report: pmcp_workbook_runtime::ReconcileReport,
+    filter: Option<&str>,
+) -> pmcp_workbook_runtime::ReconcileReport {
+    let Some(name) = filter else {
+        return report;
+    };
+    let tools: Vec<_> = report
+        .tools
+        .into_iter()
+        .filter(|t| t.tool == name)
+        .collect();
+    let cells_checked = tools
+        .iter()
+        .map(|t| u32::try_from(t.outputs.len()).unwrap_or(u32::MAX))
+        .fold(0u32, u32::saturating_add);
+    let all_within_tol = tools.iter().all(|t| t.all_within_tol);
+    pmcp_workbook_runtime::ReconcileReport {
+        tolerance: report.tolerance,
+        all_within_tol,
+        cells_checked,
+        tools,
+    }
+}
+
+#[async_trait]
+impl ToolHandler for VerifyAccuracyHandler {
+    async fn handle(&self, args: Value, _extra: RequestHandlerExtra) -> pmcp::Result<Value> {
+        Ok(render_at_boundary(self.compute(args), &self.stamp))
+    }
+
+    fn metadata(&self) -> Option<ToolInfo> {
+        Some(
+            ToolInfo::with_ui(
+                Self::NAME,
+                Some(
+                    "Verify the served engine reproduces the workbook's authored \
+                     (Excel-cached) output values AT THE REFERENCE INPUTS — the \
+                     compile-time penny-reconcile, made runtime-inspectable. Returns a \
+                     per-output report (server value vs authored oracle, abs delta, \
+                     within-tolerance) plus rollup flags, stamped + stateless. This \
+                     attests ONLY the reference point; for arbitrary inputs download the \
+                     formula workbook via render_workbook (filled / inputs_only) where \
+                     Excel is the oracle. Optional 'tool' filter scopes the report to one \
+                     tool (an unknown name returns an error listing the available tools)."
+                        .into(),
+                ),
+                verify_accuracy_input_schema(),
+                WORKBOOK_TOOL_UI,
+            )
+            .with_output_schema(verify_accuracy_output_schema()),
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -706,13 +876,11 @@ mod tests {
             GetManifestHandler::NAME,
             DiffVersionHandler::NAME,
             RenderWorkbookHandler::NAME,
-            // Why: PLACEHOLDER (Phase 100 Plan 01, non-releasable intermediate). The
-            // 5th meta tool `verify_accuracy` is reserved in RESERVED_TOOL_NAMES now,
-            // but its VerifyAccuracyHandler (and thus a ::NAME constant) lands only in
-            // Plan 04. Plan 04 Task 2 swaps this string literal for
-            // `VerifyAccuracyHandler::NAME` so the test binds to the real handler
-            // constant once it exists — closing the drift this placeholder bridges.
-            "verify_accuracy",
+            // Plan 04 (this plan) landed the handler: the Plan-01 placeholder string
+            // literal is now the real `VerifyAccuracyHandler::NAME` constant, so this
+            // binding test derives from the registered handler (H3 — never hand-copy)
+            // and the drift Plan 01 deliberately left is closed.
+            VerifyAccuracyHandler::NAME,
         ];
         assert_eq!(
             pmcp_workbook_runtime::RESERVED_TOOL_NAMES,
@@ -1223,7 +1391,9 @@ mod tests {
                 "inputs": { "gross_income": 60000.0, "filing_status": "single" }
             }))
             .expect("no-mode render_workbook succeeds");
-        let d_uri = default["resource_uri"].as_str().expect("resource_uri string");
+        let d_uri = default["resource_uri"]
+            .as_str()
+            .expect("resource_uri string");
         let d_decoded = render_uri::decode(d_uri).expect("pointer decodes");
         assert_eq!(
             d_decoded.mode,
@@ -1246,7 +1416,11 @@ mod tests {
             })),
             &ProvStamp::from_bundle(&bundle),
         );
-        assert_eq!(v["isError"], json!(true), "unknown mode is an isError envelope");
+        assert_eq!(
+            v["isError"],
+            json!(true),
+            "unknown mode is an isError envelope"
+        );
         assert_eq!(v["code"], json!("invalid_input"));
         // The compute path returns Err directly too (not a silent Filled).
         assert!(
@@ -1269,8 +1443,7 @@ mod tests {
         let bundle = golden_bundle();
 
         // The render schema advertises mode; calculate + explain do NOT.
-        let render_schema =
-            render_input_schema_for_manifest(&bundle.manifest, &bundle.cell_map);
+        let render_schema = render_input_schema_for_manifest(&bundle.manifest, &bundle.cell_map);
         assert!(
             render_schema["properties"]["mode"].is_object(),
             "render schema advertises mode"
@@ -1300,5 +1473,145 @@ mod tests {
             validate_input(with_mode.clone(), &bundle.manifest, &bundle.cell_map).is_err(),
             "a mode key is rejected by validate_input (deny_unknown_fields)"
         );
+    }
+
+    // ---- verify_accuracy (WBVER-03) ------------------------------------------
+
+    /// WBVER-03 golden handler: no filter reconciles every tool of the Plan-01
+    /// fixture green, INCLUDING the text + bool formula outputs.
+    #[test]
+    fn verify_accuracy_no_filter_reconciles_golden_green() {
+        let handler = VerifyAccuracyHandler::new(golden_bundle());
+        let v = handler
+            .compute(json!({}))
+            .expect("verify_accuracy succeeds");
+
+        assert_eq!(
+            v["all_within_tol"],
+            json!(true),
+            "the golden reconciles green"
+        );
+        // The fixture authors two tools (Calculate_Tax with 6 outputs, Estimate_Refund
+        // with 1) — every one of the 7 oracle rows is compared.
+        assert_eq!(
+            v["cells_checked"],
+            json!(7),
+            "all authored oracle rows are checked"
+        );
+
+        let tools = v["tools"].as_array().expect("tools array");
+        let calc = tools
+            .iter()
+            .find(|t| t["tool"] == json!("Calculate_Tax"))
+            .expect("Calculate_Tax present");
+        let keys: Vec<&str> = calc["outputs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r["key"].as_str().unwrap())
+            .collect();
+        assert!(
+            keys.contains(&"bracket_label"),
+            "the text output is reconciled"
+        );
+        assert!(
+            keys.contains(&"is_taxable"),
+            "the bool output is reconciled"
+        );
+        // Every row carries its D-01 sheet-qualified A1 cell address.
+        for row in calc["outputs"].as_array().unwrap() {
+            assert!(
+                row["cell"].as_str().is_some_and(|c| c.contains('!')),
+                "each output row carries its A1 cell address"
+            );
+            assert_eq!(row["within_tol"], json!(true));
+        }
+    }
+
+    /// MEDIUM #4 filtered rollup: a filter naming ONE tool scopes the report AND
+    /// recomputes the top-level aggregates over the filtered set (never stale
+    /// full-bundle counts).
+    #[test]
+    fn verify_accuracy_filter_scopes_and_recomputes_aggregates() {
+        let handler = VerifyAccuracyHandler::new(golden_bundle());
+        let v = handler
+            .compute(json!({ "tool": "Estimate_Refund" }))
+            .expect("filtered verify_accuracy succeeds");
+
+        let tools = v["tools"].as_array().expect("tools array");
+        assert_eq!(tools.len(), 1, "only the filtered tool is reported");
+        assert_eq!(tools[0]["tool"], json!("Estimate_Refund"));
+        // Estimate_Refund has ONE output — cells_checked reflects ONLY that tool,
+        // NOT the full-bundle 7.
+        assert_eq!(
+            v["cells_checked"],
+            json!(1),
+            "cells_checked is the filtered tool's compared-row count, not the full rollup"
+        );
+        assert_eq!(v["all_within_tol"], json!(true));
+    }
+
+    /// D-03: an unknown `tool` filter returns an isError envelope listing the
+    /// available tools — never a silent empty pass, never a panic.
+    #[test]
+    fn verify_accuracy_unknown_filter_errors_listing_tools() {
+        let handler = VerifyAccuracyHandler::new(golden_bundle());
+        let err = handler
+            .compute(json!({ "tool": "nonexistent" }))
+            .expect_err("an unknown tool filter is an Err (D-03)");
+        assert_eq!(err.code, "invalid_input");
+        // The error carries the available tool names so the caller can repair.
+        let names = err.allowed.clone().unwrap_or_default();
+        assert!(
+            names.contains(&"Calculate_Tax".to_string())
+                && names.contains(&"Estimate_Refund".to_string()),
+            "the D-03 error lists the available tool names, got {names:?}"
+        );
+    }
+
+    /// Via the async boundary an unknown filter renders as an isError envelope,
+    /// never a protocol-level error (T-92-10).
+    #[tokio::test]
+    async fn verify_accuracy_unknown_filter_renders_iserror_envelope() {
+        let handler = VerifyAccuracyHandler::new(golden_bundle());
+        let rendered = handler
+            .handle(json!({ "tool": "nope" }), RequestHandlerExtra::default())
+            .await
+            .expect("handle never returns a protocol error");
+        assert_eq!(
+            rendered["isError"],
+            json!(true),
+            "renders as an isError envelope"
+        );
+    }
+
+    /// A non-string `tool` filter is rejected panic-free (deny(panic)).
+    #[test]
+    fn verify_accuracy_non_string_filter_errors() {
+        let handler = VerifyAccuracyHandler::new(golden_bundle());
+        assert!(
+            handler.compute(json!({ "tool": 42 })).is_err(),
+            "a non-string tool filter is an Err, not a panic"
+        );
+    }
+
+    /// The verify_accuracy output schema advertises the ReconcileReport rollups +
+    /// per-tool rows, and its input schema advertises the optional `tool` filter.
+    #[test]
+    fn verify_accuracy_schemas_advertise_report_and_filter() {
+        let handler = VerifyAccuracyHandler::new(golden_bundle());
+        let meta = handler.metadata().expect("verify_accuracy metadata");
+        assert_eq!(meta.name, "verify_accuracy");
+        assert!(
+            meta.input_schema["properties"].get("tool").is_some(),
+            "the input schema advertises the optional tool filter (advertise == accept)"
+        );
+        let out = meta.output_schema.expect("output schema present");
+        for field in ["tolerance", "all_within_tol", "cells_checked", "tools"] {
+            assert!(
+                out["properties"].get(field).is_some(),
+                "output schema advertises {field}"
+            );
+        }
     }
 }

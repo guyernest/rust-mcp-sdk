@@ -56,7 +56,7 @@ pub use error::{to_iserror_result, WorkbookToolError};
 #[doc(inline)]
 pub use handler::{
     sanitize_tool_name, DiffVersionHandler, ExplainHandler, GetManifestHandler,
-    RenderWorkbookHandler, WorkbookToolHandler,
+    RenderWorkbookHandler, VerifyAccuracyHandler, WorkbookToolHandler,
 };
 #[doc(inline)]
 pub use input::{validate_input, ValidatedInput};
@@ -289,6 +289,11 @@ impl WorkbookBuilderExt for ServerBuilder {
             .tool_arc(
                 RenderWorkbookHandler::NAME,
                 Arc::new(RenderWorkbookHandler::new(bundle.clone())),
+            )
+            // WBVER-03: the 6th served (5th meta) tool — reference reconciliation.
+            .tool_arc(
+                VerifyAccuracyHandler::NAME,
+                Arc::new(VerifyAccuracyHandler::new(bundle.clone())),
             )
             // The single `workbook://` render resource (A3 — no DispatchingResource
             // wrapper, exactly one resource handler).

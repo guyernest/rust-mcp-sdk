@@ -293,6 +293,85 @@ pub fn render_workbook_output_schema() -> Value {
     result_envelope_schema(success)
 }
 
+/// The `verify_accuracy` INPUT schema (WBVER-03): an OPTIONAL `tool`-name filter
+/// (advertise == accept). Absent → reconcile every tool; a registered tool name →
+/// scope the report to that tool (an unknown name is rejected by the handler,
+/// D-03). `additionalProperties:false` keeps the surface closed.
+#[must_use]
+pub fn verify_accuracy_input_schema() -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "tool": {
+                "type": "string",
+                "description": "Optional. Scope the report to one registered tool by name. \
+                                Omit to reconcile every tool. An unknown name returns an \
+                                error listing the available tools.",
+            },
+        },
+    })
+}
+
+/// The `verify_accuracy` result `outputSchema` (WBVER-03, WBSV-07): the
+/// [`pmcp_workbook_runtime::ReconcileReport`] shape composed over the shared
+/// result envelope — `tolerance`, the `all_within_tol` + `cells_checked` rollups,
+/// and the per-tool `tools[]` (each with its `outputs[]` rows carrying the D-01
+/// `cell` A1 address, server/oracle values, `abs_delta`, `within_tol`).
+#[must_use]
+pub fn verify_accuracy_output_schema() -> Value {
+    let mut success = Map::new();
+    success.insert(
+        "tolerance".to_string(),
+        json!({ "type": "number", "description": "The tolerance the report was graded at (±)." }),
+    );
+    success.insert(
+        "all_within_tol".to_string(),
+        json!({
+            "type": "boolean",
+            "description": "True iff every compared output across the reported tools is \
+                            within tolerance.",
+        }),
+    );
+    success.insert(
+        "cells_checked".to_string(),
+        json!({
+            "type": "integer",
+            "description": "The number of output rows actually compared (an empty-oracle \
+                            tool contributes 0).",
+        }),
+    );
+    success.insert(
+        "tools".to_string(),
+        json!({
+            "type": "array",
+            "description": "One report per reconciled tool.",
+            "items": {
+                "type": "object",
+                "additionalProperties": true,
+                "properties": {
+                    "tool": { "type": "string" },
+                    "all_within_tol": { "type": "boolean" },
+                    "outputs": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "additionalProperties": true,
+                            "properties": {
+                                "key": { "type": "string" },
+                                "cell": { "type": ["string", "null"] },
+                                "abs_delta": { "type": "number" },
+                                "within_tol": { "type": "boolean" },
+                            },
+                        },
+                    },
+                },
+            },
+        }),
+    );
+    result_envelope_schema(success)
+}
+
 /// The provenance stamp sub-schema — present on every result. Carries
 /// `bundle_id`/`version`/`combined_hash` (NEVER `workbook_hash` — Codex HIGH #3).
 #[must_use]
@@ -439,10 +518,7 @@ fn assemble_input_schema(manifest: &Manifest, input_props: Map<String, Value>) -
 #[must_use]
 pub fn render_input_schema_for_manifest(manifest: &Manifest, cell_map: &CellMap) -> Value {
     let mut schema = input_schema_for_manifest(manifest, cell_map);
-    if let Some(props) = schema
-        .get_mut("properties")
-        .and_then(Value::as_object_mut)
-    {
+    if let Some(props) = schema.get_mut("properties").and_then(Value::as_object_mut) {
         props.insert(
             "mode".to_string(),
             json!({
