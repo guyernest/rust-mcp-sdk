@@ -16,7 +16,12 @@ findings:
   warning: 3
   info: 2
   total: 6
-status: issues_found
+status: resolved
+resolution:
+  commit: 342d9653
+  fixed: [CR-01, WR-01, WR-03]
+  deferred: [WR-02]
+  accepted_tradeoffs: [IN-01, IN-02]
 ---
 
 # Phase 103: Code Review Report
@@ -24,7 +29,23 @@ status: issues_found
 **Reviewed:** 2026-06-30
 **Depth:** standard
 **Files Reviewed:** 7
-**Status:** issues_found
+**Status:** resolved (security findings fixed in commit 342d9653)
+
+> ## Resolution (commit `342d9653`)
+> - **CR-01 (Critical) — FIXED:** `oauth_authorize` now validates the client-supplied
+>   `redirect_uri` against a `DEMO_REDIRECT_URI` allowlist and returns `400` WITHOUT
+>   redirecting on mismatch (no code is ever delivered to an arbitrary URL). The
+>   misleading docstring was corrected to describe the explicit check.
+> - **WR-01 (Warning) — FIXED:** `complete_login` now removes the single-use
+>   `code_verifier` and `state` from sessionStorage immediately after a successful
+>   token exchange (new `storage_remove` helper).
+> - **WR-03 (Warning) — FIXED:** the `authorize` redirect query is now built with
+>   `form_urlencoded::Serializer`, percent-encoding `code`/`state`.
+> - **WR-02 (Warning) — DEFERRED:** Cancel-button UI transient inconsistency (cosmetic;
+>   the 500ms poll loop self-corrects). Left as a known polish item.
+> - **IN-01 / IN-02 — ACCEPTED:** sessionStorage tokens and the hardcoded demo
+>   `client_id`/`response_type` are deliberate, documented demo tradeoffs.
+> `make quality-gate` green after the fixes; server crate + wasm client both build clean.
 
 ## Summary
 
