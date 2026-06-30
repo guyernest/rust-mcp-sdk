@@ -56,7 +56,11 @@ created: 2026-06-30
 
 ## Wave 0 Requirements
 
-- [ ] PKCE helper test module (unit + property; fuzz target or proptest fallback) — stubs for WEBCH-01/02
+> "Wave 0" here = pre-dependency setup/spike work landed inside **Wave 1** (the 103-03 spike +
+> the PKCE/transport test stubs in 103-01/103-02). The ROADMAP and plan frontmatter use `wave: 1`
+> for these; there is no literal wave index 0 in this phase.
+
+- [ ] PKCE helper test module (unit + property + real `cargo fuzz` target `pkce_helper`) — stubs for WEBCH-01
 - [ ] `WasmHttpTransport` correlation test (one-slot pending-response buffer) — stub for WEBCH-04
 - [ ] Spike: OAuth2 IdP route-merge with MCP router on one origin + CORS (RESEARCH Open Question 1)
 - [ ] Spike: confirm `AuthContext.subject` from bundled IdP bearer matches `store.list(owner)` (Open Question 2)
