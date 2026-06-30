@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v2.3
 milestone_name: Excel-as-Configuration MCP Servers
 status: executing
-stopped_at: Completed 103-01-PLAN.md (wasm-safe PKCE crypto helper)
-last_updated: "2026-06-30T22:13:02.186Z"
+stopped_at: Completed 103-03-PLAN.md (Wave-0 de-risking spike)
+last_updated: "2026-06-30T22:22:58.570Z"
 last_activity: 2026-06-30
 progress:
   total_phases: 57
   completed_phases: 49
   total_plans: 235
-  completed_plans: 231
+  completed_plans: 232
   percent: 86
 ---
 
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-06-09) · .planning/ROADMAP.md (v2.3 mil
 ## Current Position
 
 Phase: 103 (web-channel-wasm-client-reference-oauth-browser-pkce-mcp-tas) — EXECUTING
-Plan: 3 of 6
+Plan: 4 of 6
 Status: Ready to execute
 Last activity: 2026-06-30
 
@@ -73,6 +73,8 @@ Decisions are logged in PROJECT.md Key Decisions table. Decisions framing this m
 - [Phase ?]: Phase 103-01 (WEBCH-01): wasm-safe PKCE helper `src/shared/pkce.rs` (generate_code_verifier/code_challenge_s256/generate_state) backed by `getrandom::fill`; getrandom MOVED to the cross-target `[dependencies]` table (HIGH-1) so the ungated module links on host AND wasm32; S256 challenge helper infallible (`#[must_use] String`), only RNG-backed fns return Result (no unwrap/expect in production); ungated crate-root re-export; ALWAYS coverage = RFC 7636 Appendix-B vector + 3 proptests (charset/len, determinism, base64url roundtrip) + cargo-fuzz no-panic target. `cargo fuzz build` needs nightly on this host (-Z sanitizer) so validated via the bin-build fallback; plain `cargo fuzz run pkce_helper` form retained (LOW-7).
 - [Phase ?]: Phase 100-04 (WBVER-03): verify_accuracy is the 6th served meta tool; reconcile_reference re-runs the SHARED executor at runtime-native reference inputs (seed_reference_inputs reads InputTier defaults as CellValue, NO toolkit dep — layering fence held); compare_output total/panic-free with deterministic Text/Bool abs_delta; D-03 unknown filter -> Err listing tools; filtered aggregates recomputed (T-100-08); H3 placeholder closed (string literal -> VerifyAccuracyHandler::NAME)
 - [Phase ?]: 103-02: WasmHttpTransport send/receive correlation fixed via host-testable pub(crate) PendingSlot one-slot buffer; put() errors on occupied slot (MEDIUM-4); send->store->receive contract proven by host cargo test (MEDIUM-5)
+- [Phase ?]: 103-03: route-merge seam is PUBLIC — pmcp::axum::router(server).merge(oauth_routes) serves OAuth IdP + MCP on one origin, no SDK change (Open Question 1)
+- [Phase ?]: 103-03: task owner = AuthContext.subject = IdP user_id; store.list(subject) finds the task; getrandom 0.4.2 cfg-needed=NO
 
 ### Pending Todos
 
@@ -109,8 +111,8 @@ Items deferred by design for this milestone:
 
 ## Session Continuity
 
-Last session: 2026-06-30T22:12:57.682Z
-Stopped at: Completed 103-01-PLAN.md (wasm-safe PKCE crypto helper)
+Last session: 2026-06-30T22:22:58.565Z
+Stopped at: Completed 103-03-PLAN.md (Wave-0 de-risking spike)
 Resume file: None
 
 ## Performance Metrics
@@ -132,3 +134,4 @@ Resume file: None
 | Phase 100 P04 | 8min | 2 tasks | 5 files |
 | Phase 103 P01 | ~6min | 2 tasks | 7 files |
 | Phase 103 P02 | 18min | 2 tasks | 3 files |
+| Phase 103 P03 | 18min | 2 tasks | 2 files |
