@@ -79,6 +79,13 @@ const DEMO_USER_ID: &str = "demo-user";
 /// The OAuth client id the browser PKCE flow registers under.
 const DEMO_CLIENT_ID: &str = "web-channel-client";
 
+/// The single redirect URI the demo client is registered with. The browser example
+/// serves itself on loopback, so the IdP accepts ONLY this callback. Used BOTH at client
+/// registration AND as the allowlist `oauth_authorize` validates the client-supplied
+/// `redirect_uri` against (T-103-OPENREDIR), so a code is never delivered to an arbitrary
+/// attacker URL.
+const DEMO_REDIRECT_URI: &str = "http://127.0.0.1:8080/callback";
+
 /// How long the demo task stays `Working` before the updater completes it. Long enough
 /// for the browser to poll `tasks/get` several times and to demonstrate `tasks/cancel`.
 const TASK_WORK_DURATION: Duration = Duration::from_secs(3);
@@ -140,8 +147,8 @@ async fn build_idp() -> Result<Arc<InMemoryOAuthProvider>> {
         client_id: DEMO_CLIENT_ID.to_string(),
         client_secret: None,
         client_name: "Web Channel Demo Client".to_string(),
-        // The browser example serves itself on loopback; accept the loopback callback.
-        redirect_uris: vec!["http://127.0.0.1:8080/callback".to_string()],
+        // The browser example serves itself on loopback; accept ONLY the loopback callback.
+        redirect_uris: vec![DEMO_REDIRECT_URI.to_string()],
         grant_types: vec![GrantType::AuthorizationCode],
         response_types: vec![ResponseType::Code],
         scopes: vec!["read".to_string(), "write".to_string()],
@@ -151,16 +158,26 @@ async fn build_idp() -> Result<Arc<InMemoryOAuthProvider>> {
     Ok(Arc::new(idp))
 }
 
-/// `GET /oauth2/authorize`: mint an authorization code bound to the PKCE `S256`
-/// challenge and 302-redirect back to the client's `redirect_uri` with `?code=&state=`.
+/// `GET /oauth2/authorize`: validate the client-supplied `redirect_uri` against the
+/// registered allowlist, then mint an authorization code bound to the PKCE `S256`
+/// challenge and 302-redirect back to that (allowlisted) `redirect_uri` with
+/// `?code=&state=`.
 ///
-/// The `redirect_uri` is validated against the registered client by
-/// `create_authorization_code`'s upstream `validate_authorization`; the demo does NOT
-/// echo an arbitrary client-supplied redirect (T-103-OPENREDIR).
+/// **T-103-OPENREDIR:** `InMemoryOAuthProvider::create_authorization_code` does NOT itself
+/// check the supplied `redirect_uri` against the client's registered whitelist, so this
+/// endpoint performs that check explicitly: a `redirect_uri` that is not the registered
+/// [`DEMO_REDIRECT_URI`] is rejected with `400` WITHOUT any redirect, so an attacker can
+/// never have the authorization code delivered to an arbitrary URL.
 async fn oauth_authorize(
     idp: Arc<InMemoryOAuthProvider>,
     query: AuthorizeQuery,
 ) -> std::result::Result<Redirect, axum::http::StatusCode> {
+    // T-103-OPENREDIR: only ever mint+redirect for the registered callback. Any other
+    // redirect_uri is rejected (400, no redirect) so a code is never sent to an attacker URL.
+    if query.redirect_uri != DEMO_REDIRECT_URI {
+        return Err(axum::http::StatusCode::BAD_REQUEST);
+    }
+
     let scopes = query
         .scope
         .as_deref()
@@ -181,10 +198,15 @@ async fn oauth_authorize(
         .await
         .map_err(|_| axum::http::StatusCode::BAD_REQUEST)?;
 
-    let mut location = format!("{}?code={}", query.redirect_uri, code);
-    if let Some(state) = query.state {
-        location.push_str(&format!("&state={state}"));
+    // WR-03: percent-encode the query values so a `state` containing `&`, `=`, `#`, or
+    // non-ASCII cannot produce a malformed redirect URL. `redirect_uri` is the validated
+    // allowlisted callback (no existing query string), so a bare `?` join is safe here.
+    let mut serializer = form_urlencoded::Serializer::new(String::new());
+    serializer.append_pair("code", &code);
+    if let Some(state) = query.state.as_deref() {
+        serializer.append_pair("state", state);
     }
+    let location = format!("{}?{}", query.redirect_uri, serializer.finish());
     Ok(Redirect::to(&location))
 }
 

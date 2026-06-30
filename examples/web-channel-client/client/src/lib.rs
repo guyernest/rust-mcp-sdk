@@ -122,6 +122,12 @@ fn storage_get(key: &str) -> std::result::Result<Option<String>, JsValue> {
         .map_err(|e| js_error(format!("sessionStorage get {key} failed: {e:?}")))
 }
 
+fn storage_remove(key: &str) -> std::result::Result<(), JsValue> {
+    session_storage()?
+        .remove_item(key)
+        .map_err(|e| js_error(format!("sessionStorage remove {key} failed: {e:?}")))
+}
+
 // ---------------------------------------------------------------------------
 // WasmClient
 // ---------------------------------------------------------------------------
@@ -238,6 +244,12 @@ impl WasmClient {
             exchange_code(&token_url, &code, &verifier, &redirect_uri, &client_id).await?;
 
         storage_set(KEY_TOKEN, &access_token)?;
+
+        // WR-01: the verifier and state are single-use and consumed by this exchange.
+        // Remove them so they cannot be read back from sessionStorage after login.
+        storage_remove(KEY_VERIFIER)?;
+        storage_remove(KEY_STATE)?;
+
         self.client_id = Some(client_id);
         self.redirect_uri = Some(redirect_uri);
         Ok(())
