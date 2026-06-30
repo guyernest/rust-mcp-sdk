@@ -100,7 +100,7 @@ pub fn generate_code_verifier() -> Result<String> {
 ///
 /// Returns the base64url (no-pad) encoding of `SHA-256(verifier)`. This is
 /// deterministic: the same verifier always yields the same challenge, matching
-/// the `code_challenge_method=S256` convention validated by the bundled IdP in
+/// the `code_challenge_method=S256` convention validated by the bundled `IdP` in
 /// [`crate::server::auth`].
 ///
 /// # Examples

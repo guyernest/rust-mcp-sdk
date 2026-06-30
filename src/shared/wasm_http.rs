@@ -6,6 +6,7 @@
 #![cfg(target_arch = "wasm32")]
 
 use crate::error::{Error, Result};
+use crate::shared::pending_slot::PendingSlot;
 use crate::shared::transport::{Transport, TransportMessage};
 use async_trait::async_trait;
 use wasm_bindgen::prelude::*;
@@ -46,6 +47,10 @@ pub struct WasmHttpTransport {
     config: WasmHttpConfig,
     session_id: Option<String>,
     protocol_version: Option<String>,
+    /// One-slot buffer holding the response parsed by `send()` until
+    /// `receive()` pops it — bridges the high-level client's
+    /// send-then-loop-receive correlation onto one-shot Fetch.
+    pending: PendingSlot,
 }
 
 impl WasmHttpTransport {
@@ -55,6 +60,7 @@ impl WasmHttpTransport {
             config,
             session_id: None,
             protocol_version: None,
+            pending: PendingSlot::new(),
         }
     }
 
@@ -190,30 +196,22 @@ impl WasmHttpTransport {
 #[async_trait(?Send)]
 impl Transport for WasmHttpTransport {
     async fn send(&mut self, message: TransportMessage) -> Result<()> {
-        // For HTTP transport, we need to send and receive in one operation
-        // Store the message for the next receive call
-        // This is a simplified approach - in practice you might want to queue messages
-
-        // Actually, for stateless HTTP, send and receive are coupled
-        // We'll handle this in receive() by sending the queued message
-
-        // For now, we'll do a request-response immediately
-        let _response = self.do_request(&message).await?;
-
-        // Store response for next receive() call
-        // This is a limitation of the Transport trait design for HTTP
-        // In a real implementation, you might want to use a different pattern
-
-        Ok(())
+        // One-shot HTTP: POST the message and BUFFER the parsed response so the
+        // high-level client's subsequent `receive()` can correlate it. `do_request`
+        // already injects `extra_headers` (the bearer), manages `mcp-session-id`,
+        // and parses the response into a `TransportMessage`.
+        //
+        // `put` propagates an error when a prior response is still buffered (a
+        // double `send()` before `receive()`) — the first response is never
+        // silently dropped (MEDIUM-4).
+        let response = self.do_request(&message).await?;
+        self.pending.put(response)
     }
 
     async fn receive(&mut self) -> Result<TransportMessage> {
-        // In HTTP transport, receive() doesn't make sense without a prior send()
-        // This is a limitation of using the Transport trait for HTTP
-        // For now, return an error
-        Err(Error::internal(
-            "HTTP transport requires send() before receive()",
-        ))
+        // Return the response buffered by the matching `send()`. Errors only when
+        // called before any `send()` populated the slot.
+        self.pending.take()
     }
 
     async fn close(&mut self) -> Result<()> {
