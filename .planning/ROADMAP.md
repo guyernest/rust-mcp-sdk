@@ -1411,7 +1411,7 @@ Plans:
 
 **Wave 4** (release + gate)
 
-- [ ] 103-06-PLAN.md — pmcp 2.11.0 bump + CHANGELOG (D-02+D-08 public API) + BOTH make quality-gate AND make wasm-build (SC-4, WEBCH-08/09)
+- [x] 103-06-PLAN.md — pmcp 2.11.0 bump + CHANGELOG (D-02+D-08 public API) + BOTH make quality-gate AND make wasm-build (SC-4, WEBCH-08/09)
 
 ---
 

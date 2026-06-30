@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v2.3
 milestone_name: Excel-as-Configuration MCP Servers
 status: executing
-stopped_at: Completed 103-03-PLAN.md (Wave-0 de-risking spike)
-last_updated: "2026-06-30T23:09:08.878Z"
+stopped_at: Completed 103-06-PLAN.md (pmcp 2.11.0 release cut + SC-4 BOTH-gates green)
+last_updated: "2026-06-30T23:30:00.000Z"
 last_activity: 2026-06-30
 progress:
   total_phases: 57
   completed_phases: 49
   total_plans: 235
-  completed_plans: 234
+  completed_plans: 235
   percent: 86
 ---
 
@@ -26,11 +26,11 @@ See: .planning/PROJECT.md (updated 2026-06-09) · .planning/ROADMAP.md (v2.3 mil
 ## Current Position
 
 Phase: 103 (web-channel-wasm-client-reference-oauth-browser-pkce-mcp-tas) — EXECUTING
-Plan: 6 of 6
-Status: Ready to execute
+Plan: 6 of 6 — COMPLETE (all 6 plans done)
+Status: Phase 103 plans 6/6 complete; pmcp 2.11.0 cut (NOT yet tagged/published — separate release-branch step)
 Last activity: 2026-06-30
 
-Progress: [████████████████████] 286/290 plans (99%) · v2.3 phases 91–96 all Complete
+Progress: [████████████████████] 290/290 plans (100%) · v2.3 phases 91–96 all Complete · Phase 103 plans 6/6
 
 ## v2.3 Phase Plan (6 phases, 38 requirements)
 
@@ -79,6 +79,7 @@ Decisions are logged in PROJECT.md Key Decisions table. Decisions framing this m
 - [Phase ?]: 103-04: MEDIUM-6 = DOCUMENTED single-user/no-concurrency limitation — the SDK create-path/Task surface cannot carry a tool-set correlation marker (Task has no tool-writable variable field; build_task_created_response propagates only ttl + terminal result), so the D-05 background updater diffs a pre-create Working-id snapshot to find the single NEW minted id and declines under concurrent same-owner creates (never "most recent Working"); flagged for plan-05 README. slow_summarize returns status "working" (no nested result) -> store mints Working -> tokio::spawn updater set_result+Completed after ~3s; proven over live HTTP (-32002 before, Completed+content after, cancel, bearer-required)
 - [Phase ?]: 103-05: Browser WASM client crate (HIGH-2 split) drives PKCE + high-level Client task lifecycle over Fetch with zero native HTTP deps
 - [Phase ?]: 103-05: No .cargo/config.toml needed — getrandom 0.4 wasm_js feature satisfies the wasm backend (no rustflag), confirmed by wasm-pack build
+- [Phase ?]: 103-06: pmcp 2.10.0 -> 2.11.0 minor (additive) — PKCE helper (D-02/D-03) + functional WasmHttpTransport (D-08); CHANGELOG entry added. KEEP-PINS verdict (human checkpoint): mcp-tester (pmcp pin 2.8.1, path ../../) and cargo-pmcp (pmcp pin 2.9.0, path ..) both pin via path override and neither consumes the new 2.11.0 API, so per CLAUDE.md no downstream bump this release — NO downstream Cargo.toml edits. SC-4 BOTH-gates green: make quality-gate=0, make wasm-build=0, make wasm-release=0. NOT tagged/published (separate release-branch step).
 
 ### Pending Todos
 
@@ -115,8 +116,8 @@ Items deferred by design for this milestone:
 
 ## Session Continuity
 
-Last session: 2026-06-30T23:08:40.924Z
-Stopped at: Completed 103-03-PLAN.md (Wave-0 de-risking spike)
+Last session: 2026-06-30T23:30:00.000Z
+Stopped at: Completed 103-06-PLAN.md (pmcp 2.11.0 release cut + SC-4 BOTH-gates green; KEEP-PINS recorded)
 Resume file: None
 
 ## Performance Metrics
@@ -141,3 +142,4 @@ Resume file: None
 | Phase 103 P03 | 18min | 2 tasks | 2 files |
 | Phase 103 P04 | ~35min | 2 tasks | 5 files |
 | Phase 103 P05 | ~25min | 2 tasks | 10 files |
+| Phase 103 P06 | ~12min | 3 tasks | 3 files |
