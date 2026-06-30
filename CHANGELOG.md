@@ -5,6 +5,45 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.11.0] - 2026-06-30
+
+Reusable browser-channel building blocks for the web-app MCP client: a
+target-agnostic OAuth PKCE crypto helper and a now-functional WASM HTTP
+transport. Both are purely additive public API — no breaking changes.
+
+### Added
+
+- **Wasm-safe PKCE crypto helper** —
+  `pmcp::shared::pkce::{generate_code_verifier, code_challenge_s256, generate_state}`.
+  A target-agnostic OAuth 2.0 PKCE primitive (RFC 7636) backed by
+  `getrandom` + `sha2` + `base64`. The S256 challenge helper is infallible
+  (`#[must_use] String`); only the RNG-backed verifier/state generators return
+  `Result` — no `unwrap`/`expect` in production. Links on both host and
+  `wasm32-unknown-unknown`, so a browser client can drive the OAuth
+  authorization-code-with-PKCE flow without a server round-trip for the
+  challenge (D-02/D-03).
+- New reference example `examples/web-channel-client` — a browser MCP client
+  split into a `client/` wasm `cdylib` crate (zero native HTTP deps) and a
+  bundled `server/` native crate (OAuth IdP merged with MCP via the public
+  `pmcp::axum::router().merge()` seam), demonstrating PKCE + the high-level
+  `Client` task lifecycle over browser Fetch.
+
+### Fixed
+
+- **`WasmHttpTransport` now correlates `send()` / `receive()`** — the
+  `Transport` impl was a non-functional stub; it now buffers the Fetch
+  response in a one-slot pending buffer (with a double-send guard that errors
+  on an occupied slot) so the high-level `Client` and its typed task helpers
+  work over browser Fetch (D-08). The `WasmHttpTransport` symbol was already
+  exported; this is a behavior change that makes it usable.
+
+### Changed
+
+- `getrandom` was relocated into the cross-target `[dependencies]` table
+  (dependency hygiene, HIGH-1) so the ungated PKCE helper links on host as
+  well as wasm32. No new external dependency is added — this is a manifest
+  relocation only.
+
 ## [2.10.0] - 2026-06-21
 
 ### Added — Tools-as-Tasks server DX (correct-by-construction task lifecycle)
