@@ -1,0 +1,53 @@
+body {
+    font-family: sans-serif;
+    margin: 2em;
+}
+.container {
+    max-width: 800px;
+    margin: 0 auto;
+    display: flex;
+    flex-direction: column;
+    gap: 1em;
+}
+.subtitle {
+    color: #555;
+    margin: 0;
+}
+.controls, .actions {
+    display: flex;
+    gap: 1em;
+    align-items: center;
+    flex-wrap: wrap;
+}
+input {
+    padding: 0.4em;
+}
+button {
+    padding: 0.5em 1em;
+}
+#status {
+    font-style: italic;
+    color: #155724;
+}
+#task-status {
+    font-weight: bold;
+}
+.output {
+    border-top: 1px solid #ccc;
+    padding-top: 1em;
+}
+#result {
+    background-color: #eef7ee;
+    border: 1px solid #cde3cd;
+    padding: 1em;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    min-height: 1em;
+}
+#logs {
+    background-color: #f4f4f4;
+    border: 1px solid #ddd;
+    padding: 1em;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+}
