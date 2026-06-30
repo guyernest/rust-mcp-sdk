@@ -1391,22 +1391,26 @@ Plans:
 **Source:** This session's WASM-client investigation (2026-06-30): foundation at `examples/wasm-client/src/lib.rs` (tools-only; resources/prompts HTTP-only; no auth/tasks), SDK transports `src/shared/wasm_http.rs` + `src/shared/wasm_websocket.rs`, auth/oauth wasm-gated off at `src/client/mod.rs:35-40`. Server-side prerequisite confirmed delivered by Phase 102.
 
 **Requirements:** WEBCH-01..09 (assigned during plan-phase 103; map to the 4 success criteria + D-01..D-09)
-**Plans:** 6 plans in 4 waves
+**Plans:** 1/6 plans executed
 
 Plans:
 
 **Wave 1** (parallel — disjoint files)
-- [ ] 103-01-PLAN.md — Pure wasm-safe PKCE crypto helper in pmcp (D-02/D-03) + unit/property/roundtrip coverage (WEBCH-01)
+
+- [x] 103-01-PLAN.md — Pure wasm-safe PKCE crypto helper in pmcp (D-02/D-03) + unit/property/roundtrip coverage (WEBCH-01)
 - [ ] 103-02-PLAN.md — Fix WasmHttpTransport send/receive correlation so high-level Client works over Fetch (D-08, WEBCH-02)
 - [ ] 103-03-PLAN.md — Wave-0 spike: IdP route-merge + owner resolution + getrandom wasm backend cfg (Open Questions 1/2/4, WEBCH-04/05/07)
 
 **Wave 2** (after spike)
+
 - [ ] 103-04-PLAN.md — Bundled offline demo server: time-delayed Working->Completed task + IdP routes + bearer + integration test (D-04/D-05, WEBCH-04/05)
 
 **Wave 3** (after helper + transport + server)
+
 - [ ] 103-05-PLAN.md — Browser WasmClient + harness: full-page-redirect PKCE, sessionStorage, 500ms poll loop + Cancel over Fetch (D-01/D-06/D-07/D-09, WEBCH-03/06/07)
 
 **Wave 4** (release + gate)
+
 - [ ] 103-06-PLAN.md — pmcp 2.11.0 bump + CHANGELOG (D-02+D-08 public API) + BOTH make quality-gate AND make wasm-build (SC-4, WEBCH-08/09)
 
 ---
