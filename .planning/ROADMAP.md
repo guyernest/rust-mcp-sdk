@@ -1391,7 +1391,7 @@ Plans:
 **Source:** This session's WASM-client investigation (2026-06-30): foundation at `examples/wasm-client/src/lib.rs` (tools-only; resources/prompts HTTP-only; no auth/tasks), SDK transports `src/shared/wasm_http.rs` + `src/shared/wasm_websocket.rs`, auth/oauth wasm-gated off at `src/client/mod.rs:35-40`. Server-side prerequisite confirmed delivered by Phase 102.
 
 **Requirements:** WEBCH-01..09 (assigned during plan-phase 103; map to the 4 success criteria + D-01..D-09)
-**Plans:** 4/6 plans executed
+**Plans:** 5/6 plans executed
 
 Plans:
 
@@ -1407,7 +1407,7 @@ Plans:
 
 **Wave 3** (after helper + transport + server)
 
-- [ ] 103-05-PLAN.md — Browser WasmClient + harness: full-page-redirect PKCE, sessionStorage, 500ms poll loop + Cancel over Fetch (D-01/D-06/D-07/D-09, WEBCH-03/06/07)
+- [x] 103-05-PLAN.md — Browser WasmClient + harness: full-page-redirect PKCE, sessionStorage, 500ms poll loop + Cancel over Fetch (D-01/D-06/D-07/D-09, WEBCH-03/06/07)
 
 **Wave 4** (release + gate)
 

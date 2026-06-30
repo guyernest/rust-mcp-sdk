@@ -4,13 +4,13 @@ milestone: v2.3
 milestone_name: Excel-as-Configuration MCP Servers
 status: executing
 stopped_at: Completed 103-03-PLAN.md (Wave-0 de-risking spike)
-last_updated: "2026-06-30T22:47:00.399Z"
+last_updated: "2026-06-30T23:09:08.878Z"
 last_activity: 2026-06-30
 progress:
   total_phases: 57
   completed_phases: 49
   total_plans: 235
-  completed_plans: 233
+  completed_plans: 234
   percent: 86
 ---
 
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-06-09) · .planning/ROADMAP.md (v2.3 mil
 ## Current Position
 
 Phase: 103 (web-channel-wasm-client-reference-oauth-browser-pkce-mcp-tas) — EXECUTING
-Plan: 5 of 6
+Plan: 6 of 6
 Status: Ready to execute
 Last activity: 2026-06-30
 
@@ -77,6 +77,8 @@ Decisions are logged in PROJECT.md Key Decisions table. Decisions framing this m
 - [Phase ?]: 103-03: task owner = AuthContext.subject = IdP user_id; store.list(subject) finds the task; getrandom 0.4.2 cfg-needed=NO
 - [Phase ?]: 103-04: bundled offline demo server is its OWN native crate (examples/web-channel-client/server/, workspace-excluded, axum 0.8.5 to match pmcp's re-exported Router); OAuth2 IdP merged with MCP via the public pmcp::axum::router().merge() seam; BearerAuthAdapter maps InMemoryOAuthProvider TokenInfo.user_id -> AuthContext.subject for bearer validation AND task owner (no public concrete bearer AuthProvider in the SDK)
 - [Phase ?]: 103-04: MEDIUM-6 = DOCUMENTED single-user/no-concurrency limitation — the SDK create-path/Task surface cannot carry a tool-set correlation marker (Task has no tool-writable variable field; build_task_created_response propagates only ttl + terminal result), so the D-05 background updater diffs a pre-create Working-id snapshot to find the single NEW minted id and declines under concurrent same-owner creates (never "most recent Working"); flagged for plan-05 README. slow_summarize returns status "working" (no nested result) -> store mints Working -> tokio::spawn updater set_result+Completed after ~3s; proven over live HTTP (-32002 before, Completed+content after, cancel, bearer-required)
+- [Phase ?]: 103-05: Browser WASM client crate (HIGH-2 split) drives PKCE + high-level Client task lifecycle over Fetch with zero native HTTP deps
+- [Phase ?]: 103-05: No .cargo/config.toml needed — getrandom 0.4 wasm_js feature satisfies the wasm backend (no rustflag), confirmed by wasm-pack build
 
 ### Pending Todos
 
@@ -113,7 +115,7 @@ Items deferred by design for this milestone:
 
 ## Session Continuity
 
-Last session: 2026-06-30T22:47:00.394Z
+Last session: 2026-06-30T23:08:40.924Z
 Stopped at: Completed 103-03-PLAN.md (Wave-0 de-risking spike)
 Resume file: None
 
@@ -138,3 +140,4 @@ Resume file: None
 | Phase 103 P02 | 18min | 2 tasks | 3 files |
 | Phase 103 P03 | 18min | 2 tasks | 2 files |
 | Phase 103 P04 | ~35min | 2 tasks | 5 files |
+| Phase 103 P05 | ~25min | 2 tasks | 10 files |
