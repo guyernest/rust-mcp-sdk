@@ -1,0 +1,29 @@
+[package]
+name = "web-channel-demo-server"
+version = "0.1.0"
+edition = "2021"
+description = "Phase 103 bundled offline demo server: long-running MCP Task + merged OAuth2 IdP for the web-channel WASM client."
+license = "MIT"
+repository = "https://github.com/paiml/pmcp"
+publish = false
+
+# HIGH-2 PACKAGE SPLIT: this is the NATIVE server half of the web-channel example.
+# It is a plain binary crate (no cdylib, no wasm target). It depends on pmcp with
+# the native HTTP stack (`full` => streamable-http + oauth). Keeping it in its OWN
+# package means per-package Cargo feature unification can never pull hyper/tokio/axum
+# into the sibling wasm client crate's cdylib build (examples/web-channel-client/client,
+# plan 05). See examples/web-channel-client/README.md (plan 05) for the split rationale.
+
+[[bin]]
+name = "web-channel-demo-server"
+path = "src/main.rs"
+
+[dependencies]
+pmcp = { path = "../../..", features = ["full"] }
+async-trait = "0.1"
+axum = "0.8.5"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "net"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
