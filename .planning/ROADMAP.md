@@ -14,7 +14,7 @@
 - **v2.1 rmcp Upgrades** — Phases 65-68 (in progress)
 - ✅ **v2.2 Configuration-Only MCP Servers (SQL + OpenAPI toolkits)** — Phases 82-90.2 (substantially shipped)
 - 🚧 **v2.3 Excel-as-Configuration MCP Servers (governed Excel CodeLanguage)** — Phases 91-96 + Phase 100 (BA accuracy-verification trust tools) (in progress)
-- 🚧 **v2.10 SDK DX** — Phase 101 tools-as-Tasks server DX (✅ shipped, pmcp 2.10.0), Phase 102 lift TaskStore onto the HTTP path (scoping)
+- 🚧 **v2.10 SDK DX** — Phase 101 tools-as-Tasks server DX (✅ shipped, pmcp 2.10.0), Phase 102 lift TaskStore onto the high-level `Server` / HTTP path (✅ executed + verified 7/7; HTTP `tasks/*` dispatch shipped in tree)
 
 ## Phases
 
@@ -959,9 +959,11 @@ Plans:
 
 Made tools-as-Tasks correct-by-construction on `ServerCore`: typed `tasks/result` from the `TaskStore`, store-minted id, endpoint-backed `tasks` capability, client WARN, `pmcp::testing` conformance helper. Released as `pmcp 2.10.0`. (Planning artifacts were filtered out of the upstream PR; this is the milestone reference.)
 
-### Phase 102: Lift the task lifecycle onto the high-level `Server` / HTTP path
+### Phase 102: Lift the task lifecycle onto the high-level `Server` / HTTP path — EXECUTED + VERIFIED (7/7)
 
-**Goal**: Make the SDK's `tasks/*` lifecycle available over the high-level `Server` and `StreamableHttpServer`, so an HTTP-hosted server (e.g. pmcp.run's Lambdas) can serve task-based tools with NO `ServerCore::handle_request` shim. Phase 101 put the whole lifecycle on `ServerCore` only; `Server::handle_request` (the HTTP-facing dispatcher, used by `StreamableHttpServer`) currently HARD-REJECTS `tasks/*` (`src/server/mod.rs:1166-1169`). The deliverable shares ONE task-lifecycle implementation between `Server` and `ServerCore` (retiring the two-dispatcher drift), not a second copy.
+**Status**: Complete and in HEAD ancestry (commits `2abd03cf`/`434d996e` feat, `9f9d19b5` review-fix, `e774d5aa` phase complete). `102-VERIFICATION.md` → PASSED 7/7. `Server::handle_request` now serves all four `tasks/*` variants via the shared `task_dispatch` unit at `src/server/mod.rs:1165-1177` (post-auth); the old reject is gone (only the wasm32 fall-through remains, `mod.rs:1230-1236`). Live HTTP round-trip test `tests/tool_as_task_lifecycle_http.rs` (2/2) and worked example `s46` ship in tree. NOT yet cut as a standalone published pmcp version beyond 2.10.0.
+
+**Goal**: Make the SDK's `tasks/*` lifecycle available over the high-level `Server` and `StreamableHttpServer`, so an HTTP-hosted server (e.g. pmcp.run's Lambdas) can serve task-based tools with NO `ServerCore::handle_request` shim. Phase 101 put the whole lifecycle on `ServerCore` only. The deliverable shares ONE task-lifecycle implementation between `Server` and `ServerCore` (retiring the two-dispatcher drift), not a second copy. **Delivered.**
 
 **Depends on**: Phase 101 (shipped — the `TaskStore` path + capability rule + create-path this phase lifts/shares)
 **Requirements**: HTASK-01, HTASK-02, HTASK-03, HTASK-04
@@ -1368,6 +1370,44 @@ Plans:
 **Cross-cutting constraints:**
 
 - Every behavioral-prose claim about Tasks (SSE, serverless, owner binding, experimental.tasks, TaskSupport::*, tasks/result, tasks/cancel, tasks/get, poll interval, pollInterval, CreateTaskResult) still accurately describes current `pmcp-tasks` behavior (revision R-5 — prose drift, not just type-name drift).
+
+### Phase 103: Web-channel WASM client reference (OAuth browser-PKCE + MCP Tasks)
+
+**Goal:** Ship a new dedicated, adaptable browser MCP client — `examples/web-channel-client/` — that the pmcp.run dev team can lift to build a web-application "channel." It demonstrates two advanced MCP features the existing `examples/wasm-client` lacks, both drivable from the browser today: (1) **OAuth via browser PKCE**, and (2) the **MCP Tasks** lifecycle over plain HTTP. The existing `examples/wasm-client` stays as the minimal tools-only demo; this is the "strong reference" sibling.
+
+**Shape decision (LOCKED):** NEW dedicated example (`examples/web-channel-client/`), not an in-place extension of `examples/wasm-client` and not (yet) a published `crates/` library. Built on the existing foundation — reuse `examples/wasm-client/src/lib.rs` (538-line dual-transport `WasmClient`), `src/shared/wasm_http.rs` (Fetch transport), `src/shared/wasm_websocket.rs` — don't rewrite the transport layer.
+
+**Depends on:** Phase 102 (COMPLETE — high-level `Server`/`StreamableHttpServer` already serves all four `tasks/*` variants via the shared `task_dispatch` unit, `src/server/mod.rs:1165-1177`; verified 7/7 with live HTTP test `tests/tool_as_task_lifecycle_http.rs` + worked example `s46`). **No server-side blocker — both features are buildable now.**
+**Requirements**: TBD (assign during plan-phase)
+**Success Criteria** (what must be TRUE):
+
+  1. **OAuth (browser PKCE)**: `client::auth`/`client::oauth` (or a wasm-specific auth module) compiles for `wasm32` — today both are `#[cfg(not(target_arch = "wasm32"))]`. The example performs a real PKCE redirect flow, stores tokens in the browser (sessionStorage/IndexedDB) via `web-sys`, and threads the bearer token into the Fetch transport request headers.
+  2. **MCP Tasks over HTTP**: the browser client drives `call(task) → poll tasks/get → tasks/result` (plus `tasks/cancel`) against a real `StreamableHttpServer` using plain Fetch request/response — NO SSE. The wire shapes mirror `s46` / `tests/tool_as_task_lifecycle_http.rs`.
+  3. The example runs end-to-end in a browser against a live server (build script + `index.html` demo, like `examples/wasm-client`), and is documented for the pmcp.run team to adapt as a web-app channel.
+  4. ALWAYS coverage per CLAUDE.md: unit + property + fuzz where applicable; the working browser example IS the EXAMPLE deliverable. `make quality-gate` green; WASM boundary preserved (no regression to non-wasm builds).
+
+**Scope fences (LOCKED):** do NOT modify `examples/wasm-client` (it stays the minimal demo); do NOT change the `tasks/*` wire contract (Phase 101 froze it; Phase 102 serves it); **out of scope = streaming HTTP / SSE, elicitation, sampling, progress** (Tasks works via request/response polling, so SSE is not required here); do NOT promote to a published `crates/` library in this phase (example only).
+
+**Source:** This session's WASM-client investigation (2026-06-30): foundation at `examples/wasm-client/src/lib.rs` (tools-only; resources/prompts HTTP-only; no auth/tasks), SDK transports `src/shared/wasm_http.rs` + `src/shared/wasm_websocket.rs`, auth/oauth wasm-gated off at `src/client/mod.rs:35-40`. Server-side prerequisite confirmed delivered by Phase 102.
+
+**Requirements:** WEBCH-01..09 (assigned during plan-phase 103; map to the 4 success criteria + D-01..D-09)
+**Plans:** 6 plans in 4 waves
+
+Plans:
+
+**Wave 1** (parallel — disjoint files)
+- [ ] 103-01-PLAN.md — Pure wasm-safe PKCE crypto helper in pmcp (D-02/D-03) + unit/property/roundtrip coverage (WEBCH-01)
+- [ ] 103-02-PLAN.md — Fix WasmHttpTransport send/receive correlation so high-level Client works over Fetch (D-08, WEBCH-02)
+- [ ] 103-03-PLAN.md — Wave-0 spike: IdP route-merge + owner resolution + getrandom wasm backend cfg (Open Questions 1/2/4, WEBCH-04/05/07)
+
+**Wave 2** (after spike)
+- [ ] 103-04-PLAN.md — Bundled offline demo server: time-delayed Working->Completed task + IdP routes + bearer + integration test (D-04/D-05, WEBCH-04/05)
+
+**Wave 3** (after helper + transport + server)
+- [ ] 103-05-PLAN.md — Browser WasmClient + harness: full-page-redirect PKCE, sessionStorage, 500ms poll loop + Cancel over Fetch (D-01/D-06/D-07/D-09, WEBCH-03/06/07)
+
+**Wave 4** (release + gate)
+- [ ] 103-06-PLAN.md — pmcp 2.11.0 bump + CHANGELOG (D-02+D-08 public API) + BOTH make quality-gate AND make wasm-build (SC-4, WEBCH-08/09)
 
 ---
 
