@@ -46,6 +46,9 @@
     feature = "http-client",
     not(target_arch = "wasm32")
 ))]
+// Prose in this test refers to acronyms (OAuth2, IdP, PKCE) the pedantic doc-markdown
+// lint flags; the narrative reads better unbackticked here.
+#![allow(clippy::doc_markdown)]
 
 use std::net::SocketAddr;
 use std::sync::Arc;
