@@ -82,6 +82,12 @@ sha2 = "0.11"
 base64 = "0.22"
 jsonwebtoken = { version = "10.3", optional = true }
 
+# Cross-target CSPRNG for the wasm-safe PKCE helper (src/shared/pkce.rs).
+# HIGH-1: must be a NORMAL [dependencies] entry so the ungated pkce module links
+# on the HOST target too — the wasm32 target below keeps the `wasm_js` backend
+# feature; getrandom 0.4 selects its backend per-target (host uses the OS backend).
+getrandom = "0.4"
+
 # OAuth CLI helper dependencies (feature-gated)
 webbrowser = { version = "1", optional = true }
 dirs = { version = "6", optional = true }

@@ -10,6 +10,11 @@ pub mod middleware_presets;
 /// Peer back-channel trait for server-to-client RPCs from inside request handlers.
 #[cfg(not(target_arch = "wasm32"))]
 pub mod peer;
+/// Target-agnostic PKCE (RFC 7636) crypto helper (verifier/challenge/state).
+///
+/// Ungated on purpose — compiles on host AND wasm32 via `getrandom::fill`
+/// (contrast the `#[cfg(not(target_arch = "wasm32"))]` peer/stdio entries).
+pub mod pkce;
 pub mod protocol;
 pub mod protocol_helpers;
 #[cfg(not(target_arch = "wasm32"))]
