@@ -133,12 +133,12 @@ fn storage_remove(key: &str) -> std::result::Result<(), JsValue> {
 // ---------------------------------------------------------------------------
 
 /// Browser MCP client: PKCE login orchestration + high-level task lifecycle.
+///
+/// The OAuth `client_id` and `redirect_uri` are not held on the struct — JS passes
+/// them in at each `begin_login`/`complete_login` call (the IdP binds the code to the
+/// `redirect_uri` supplied at the token exchange), so there is no per-tab identity to cache.
 #[wasm_bindgen]
 pub struct WasmClient {
-    /// The OAuth `client_id` and `redirect_uri` captured at login-begin so
-    /// the token exchange can replay them (the IdP binds the code to both).
-    client_id: Option<String>,
-    redirect_uri: Option<String>,
     /// High-level MCP client over the fixed Fetch transport (set by `connect`).
     client: Option<Client<WasmHttpTransport>>,
 }
@@ -161,11 +161,7 @@ impl WasmClient {
             tracing_wasm::set_as_global_default();
         });
 
-        Self {
-            client_id: None,
-            redirect_uri: None,
-            client: None,
-        }
+        Self { client: None }
     }
 
     /// Begin the OAuth Authorization Code + PKCE flow (D-01/D-07).
@@ -188,9 +184,6 @@ impl WasmClient {
 
         storage_set(KEY_VERIFIER, &verifier)?;
         storage_set(KEY_STATE, &state)?;
-
-        self.client_id = Some(client_id.clone());
-        self.redirect_uri = Some(redirect_uri.clone());
 
         // Assemble the authorize URL HERE (D-01) — append response_type,
         // client_id, redirect_uri, the S256 challenge, and state. Mirrors the
@@ -250,8 +243,6 @@ impl WasmClient {
         storage_remove(KEY_VERIFIER)?;
         storage_remove(KEY_STATE)?;
 
-        self.client_id = Some(client_id);
-        self.redirect_uri = Some(redirect_uri);
         Ok(())
     }
 
@@ -342,11 +333,8 @@ impl WasmClient {
     /// Clear the stored bearer (and the transient PKCE secrets), e.g. on logout.
     #[wasm_bindgen]
     pub fn logout(&mut self) -> std::result::Result<(), JsValue> {
-        let storage = session_storage()?;
         for key in [KEY_TOKEN, KEY_VERIFIER, KEY_STATE] {
-            storage
-                .remove_item(key)
-                .map_err(|e| js_error(format!("sessionStorage remove {key} failed: {e:?}")))?;
+            storage_remove(key)?;
         }
         self.client = None;
         Ok(())

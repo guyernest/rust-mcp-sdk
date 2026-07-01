@@ -211,6 +211,11 @@ impl Transport for WasmHttpTransport {
     async fn receive(&mut self) -> Result<TransportMessage> {
         // Return the response buffered by the matching `send()`. Errors only when
         // called before any `send()` populated the slot.
+        //
+        // The single slot is the correct cardinality for a one-shot request/response
+        // Fetch: one POST yields exactly one JSON-RPC response object. This transport
+        // is intentionally non-SSE, so it does NOT deliver server-initiated
+        // notifications — a streaming/SSE transport is the vehicle for those.
         self.pending.take()
     }
 
