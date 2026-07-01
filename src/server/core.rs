@@ -8,11 +8,17 @@ use crate::error::{Error, Result};
 use crate::server::limits::PayloadLimits;
 use crate::shared::middleware::{EnhancedMiddlewareChain, MiddlewareContext};
 use crate::shared::protocol_helpers::{create_notification, create_request};
+// `ResponsePayload` is needed by the wasm-only envelope-builder branch (the
+// non-wasm path delegates to `task_dispatch`) and by the test module.
+// `JSONRPCError` is needed only by the wasm-only branch.
+#[cfg(any(target_arch = "wasm32", test))]
 use crate::types::jsonrpc::ResponsePayload;
+#[cfg(target_arch = "wasm32")]
+use crate::types::JSONRPCError;
 use crate::types::{
     CallToolRequest, CallToolResult, ClientCapabilities, ClientRequest, Content, GetPromptRequest,
-    GetPromptResult, Implementation, InitializeRequest, InitializeResult, JSONRPCError,
-    JSONRPCResponse, ListPromptsRequest, ListPromptsResult, ListResourceTemplatesRequest,
+    GetPromptResult, Implementation, InitializeRequest, InitializeResult, JSONRPCResponse,
+    ListPromptsRequest, ListPromptsResult, ListResourceTemplatesRequest,
     ListResourceTemplatesResult, ListResourcesRequest, ListResourcesResult, ListToolsRequest,
     ListToolsResult, Notification, PromptInfo, ProtocolVersion, ReadResourceRequest,
     ReadResourceResult, Request, RequestId, ServerCapabilities, ToolInfo,
@@ -37,8 +43,6 @@ use super::tasks::TaskRouter;
 #[cfg(not(target_arch = "wasm32"))]
 use super::tool_middleware::{ToolContext, ToolMiddlewareChain};
 use super::{PromptHandler, ResourceHandler, SamplingHandler, ToolHandler};
-#[cfg(not(target_arch = "wasm32"))]
-use crate::types::tasks::{TaskStatus, RELATED_TASK_META_KEY};
 #[cfg(not(target_arch = "wasm32"))]
 use crate::types::tools::TaskSupport;
 
@@ -301,16 +305,12 @@ enum ToolCallOutcome {
     Result(CallToolResult),
     /// Tool returned a Task-shaped value — returned as `CreateTaskResult` with `_meta`.
     ///
-    /// `result` carries the explicit terminal [`CallToolResult`] when the tool
-    /// completed synchronously (the tool value carried a `result`/`content`
-    /// payload). When `None`, the task is genuinely pending and is completed
-    /// asynchronously elsewhere.
+    /// Carries the raw task-shaped tool `Value`. The shared
+    /// `task_dispatch::TaskDispatch::build_task_created_response` re-extracts the
+    /// task id and the terminal [`CallToolResult`] from this value (store mints the
+    /// canonical id; terminal result drives synchronous-completion persistence).
     #[cfg(not(target_arch = "wasm32"))]
-    TaskCreated {
-        task_id: String,
-        task_value: Value,
-        result: Option<CallToolResult>,
-    },
+    TaskCreated { task_value: Value },
 }
 
 impl ServerCore {
@@ -447,24 +447,6 @@ impl ServerCore {
             tools,
             next_cursor: None,
         })
-    }
-
-    /// Extract the terminal [`CallToolResult`] from a task-shaped tool value.
-    ///
-    /// Per `D-TERMINAL-RESULT-CONTRACT`: if the value carries a `result` object
-    /// or a `content` array, deserialize it into a [`CallToolResult`]; otherwise
-    /// the task is genuinely pending and there is no synchronous terminal result.
-    #[cfg(not(target_arch = "wasm32"))]
-    fn extract_terminal_result(value: &Value) -> Option<CallToolResult> {
-        // Prefer an explicit nested `result` payload, else a top-level `content`
-        // array (the conventional CallToolResult shape).
-        if let Some(result_value) = value.get("result") {
-            return serde_json::from_value::<CallToolResult>(result_value.clone()).ok();
-        }
-        if value.get("content").is_some() {
-            return serde_json::from_value::<CallToolResult>(value.clone()).ok();
-        }
-        None
     }
 
     /// Handle call tool request.
@@ -615,20 +597,14 @@ impl ServerCore {
                     .is_some_and(|ts| matches!(ts, TaskSupport::Required | TaskSupport::Optional));
 
             if has_task_support {
-                if let Some(task_id) = value.get("taskId").and_then(|v| v.as_str()) {
-                    if value.get("status").is_some() {
-                        let task_id = task_id.to_string();
-                        // D-TERMINAL-RESULT-CONTRACT: the terminal CallToolResult
-                        // is born HERE, explicitly, when the tool value carries a
-                        // result/content payload. Otherwise the task is genuinely
-                        // pending (completed asynchronously elsewhere).
-                        let result = Self::extract_terminal_result(&value);
-                        return Ok(ToolCallOutcome::TaskCreated {
-                            task_id,
-                            task_value: value,
-                            result,
-                        });
-                    }
+                // Task-shaped iff it carries both a `taskId` and a `status` (same
+                // shape gate as `task_dispatch::maybe_build_task_created`). The
+                // shared create-path re-extracts the task id + terminal
+                // CallToolResult from the value, so only the raw value crosses here.
+                let is_task_shaped = value.get("taskId").and_then(|v| v.as_str()).is_some()
+                    && value.get("status").is_some();
+                if is_task_shaped {
+                    return Ok(ToolCallOutcome::TaskCreated { task_value: value });
                 }
                 // Tool declares task support but didn't return a Task — fall through to normal path
                 // (handles the "optional" case where the tool might not create a task).
@@ -789,25 +765,45 @@ impl ServerCore {
     }
 
     /// Create an error response.
+    ///
+    /// Delegates to the SINGLE-SOURCE envelope builder in `task_dispatch` so the
+    /// shared task unit and `ServerCore` cannot drift (Concern #3 — envelope drift).
     fn error_response(id: RequestId, code: i32, message: String) -> JSONRPCResponse {
         contract_pre_error_code_mapping!();
-        JSONRPCResponse {
-            jsonrpc: "2.0".to_string(),
-            id,
-            payload: ResponsePayload::Error(JSONRPCError {
-                code,
-                message,
-                data: None,
-            }),
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            crate::server::task_dispatch::error_response(id, code, message)
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            JSONRPCResponse {
+                jsonrpc: "2.0".to_string(),
+                id,
+                payload: ResponsePayload::Error(JSONRPCError {
+                    code,
+                    message,
+                    data: None,
+                }),
+            }
         }
     }
 
     /// Create a success response.
+    ///
+    /// Delegates to the SINGLE-SOURCE envelope builder in `task_dispatch` so the
+    /// shared task unit and `ServerCore` cannot drift (Concern #3 — envelope drift).
     fn success_response(id: RequestId, result: Value) -> JSONRPCResponse {
-        JSONRPCResponse {
-            jsonrpc: "2.0".to_string(),
-            id,
-            payload: ResponsePayload::Result(result),
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            crate::server::task_dispatch::success_response(id, result)
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            JSONRPCResponse {
+                jsonrpc: "2.0".to_string(),
+                id,
+                payload: ResponsePayload::Result(result),
+            }
         }
     }
 }
@@ -970,23 +966,18 @@ impl ServerCore {
     /// the owner from the auth context directly.
     #[cfg(not(target_arch = "wasm32"))]
     fn resolve_task_owner(&self, auth_context: Option<&AuthContext>) -> Option<String> {
-        // Legacy path: TaskRouter has its own resolve_owner logic
-        if let Some(ref router) = self.task_router {
-            return Some(match auth_context {
-                Some(ctx) => {
-                    router.resolve_owner(Some(&ctx.subject), ctx.client_id.as_deref(), None)
-                },
-                None => router.resolve_owner(None, None, None),
-            });
+        // Delegate to the shared TaskDispatch unit (owner-resolution lives there,
+        // once, for both dispatchers).
+        self.task_dispatch().resolve_owner(auth_context)
+    }
+
+    /// Borrow this `ServerCore`'s task backends into the shared dispatch unit.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn task_dispatch(&self) -> crate::server::task_dispatch::TaskDispatch<'_> {
+        crate::server::task_dispatch::TaskDispatch {
+            task_store: &self.task_store,
+            task_router: &self.task_router,
         }
-        // Standard path: derive owner from auth context when task_store is configured
-        if self.task_store.is_some() {
-            return Some(match auth_context {
-                Some(ctx) => ctx.client_id.clone().unwrap_or_else(|| ctx.subject.clone()),
-                None => "local".to_string(),
-            });
-        }
-        None
     }
 
     /// Build the `tools/call` create-task response for a `TaskCreated` outcome.
@@ -1007,60 +998,17 @@ impl ServerCore {
     async fn build_task_created_response(
         &self,
         id: RequestId,
-        task_id: &str,
-        task_value: &Value,
-        result: Option<CallToolResult>,
+        task_value: Value,
         auth_context: Option<&AuthContext>,
     ) -> JSONRPCResponse {
-        let Some(store) = self.task_store.as_ref() else {
-            // No store: preserve the legacy tool-fabricated envelope.
-            let result_value = serde_json::json!({
-                "task": task_value,
-                "_meta": { RELATED_TASK_META_KEY: { "taskId": task_id } }
-            });
-            return Self::success_response(id, result_value);
-        };
-
-        let owner_id = self
-            .resolve_task_owner(auth_context)
-            .unwrap_or_else(|| "local".to_string());
-
-        // Carry the tool's requested TTL onto the store-minted task, if present.
-        let ttl = task_value.get("ttl").and_then(serde_json::Value::as_u64);
-
-        let created = match store.create(&owner_id, ttl).await {
-            Ok(task) => task,
-            Err(e) => return Self::error_response(id, -32603, e.to_string()),
-        };
-        let store_id = created.task_id.clone();
-
-        // Synchronous completion: persist the terminal result and complete.
-        let final_task = if let Some(call_result) = result {
-            if let Err(e) = store.set_result(&store_id, &owner_id, call_result).await {
-                return Self::error_response(id, -32603, e.to_string());
-            }
-            match store
-                .update_status(&store_id, &owner_id, TaskStatus::Completed, None)
-                .await
-            {
-                Ok(task) => task,
-                Err(e) => return Self::error_response(id, -32603, e.to_string()),
-            }
-        } else {
-            created
-        };
-
-        // Build the wire envelope from the STORE-minted task (typed, no
-        // hand-written task JSON) so task.taskId == _meta id == store id.
-        let create_result = crate::types::tasks::CreateTaskResult::new(final_task);
-        let mut envelope = serde_json::to_value(create_result).unwrap_or_default();
-        if let Some(obj) = envelope.as_object_mut() {
-            obj.insert(
-                "_meta".to_string(),
-                serde_json::json!({ RELATED_TASK_META_KEY: { "taskId": store_id } }),
-            );
-        }
-        Self::success_response(id, envelope)
+        // Delegate to the shared TaskDispatch unit. It RE-EXTRACTS the task id and
+        // the terminal result from `task_value` internally (store mints the id;
+        // `extract_terminal_result` recovers the terminal CallToolResult), so the
+        // store-minted-id and synchronous-completion-persistence invariants live in
+        // exactly one place.
+        self.task_dispatch()
+            .build_task_created_response(id, task_value, auth_context)
+            .await
     }
 
     /// Handle a `tasks/result` request.
@@ -1072,59 +1020,6 @@ impl ServerCore {
     /// When the store has no result and NO router is configured, returns a
     /// SPECIFIED "task not completed" error (`-32002`), distinct from the
     /// truly-no-backend `-32601`.
-    #[cfg(not(target_arch = "wasm32"))]
-    async fn handle_tasks_result(
-        &self,
-        id: RequestId,
-        params: &crate::types::tasks::GetTaskPayloadRequest,
-        auth_context: Option<&AuthContext>,
-    ) -> JSONRPCResponse {
-        let owner_id = self
-            .resolve_task_owner(auth_context)
-            .unwrap_or_else(|| "local".to_string());
-
-        // Store-first: serve a typed CallToolResult when the store persists one.
-        if let Some(ref store) = self.task_store {
-            if store.supports_results() {
-                match store.get_result(&params.task_id, &owner_id).await {
-                    Ok(call_result) => {
-                        return Self::success_response(
-                            id,
-                            serde_json::to_value(call_result).unwrap_or_default(),
-                        );
-                    },
-                    // NotFound = store doesn't have it (absent / pending /
-                    // owner mismatch): fall through to the router below.
-                    Err(crate::server::task_store::TaskStoreError::NotFound { .. }) => {},
-                    Err(e) => return Self::error_response(id, -32603, e.to_string()),
-                }
-            }
-        }
-
-        // Router fallback — behavior UNCHANGED for router-backed servers.
-        if let Some(ref task_router) = self.task_router {
-            return match task_router
-                .handle_tasks_result(serde_json::to_value(params).unwrap_or_default(), &owner_id)
-                .await
-            {
-                Ok(result) => Self::success_response(id, result),
-                Err(e) => Self::error_response(id, -32603, e.to_string()),
-            };
-        }
-
-        // No router: distinguish "store exists but task not completed yet"
-        // (specified error) from "no task backend at all".
-        if self.task_store.is_some() {
-            Self::error_response(
-                id,
-                -32002,
-                "task result not available: task not completed".to_string(),
-            )
-        } else {
-            Self::error_response(id, -32601, "tasks/result not supported".to_string())
-        }
-    }
-
     /// Internal request handler without middleware processing.
     async fn handle_request_internal(
         &self,
@@ -1219,16 +1114,12 @@ impl ServerCore {
                         match self.handle_call_tool(req, auth_context.clone()).await {
                             Ok(outcome) => match outcome {
                                 #[cfg(not(target_arch = "wasm32"))]
-                                ToolCallOutcome::TaskCreated {
-                                    task_id,
-                                    task_value,
-                                    result,
-                                } => {
+                                ToolCallOutcome::TaskCreated { task_value } => {
+                                    // The shared unit re-extracts task_id + terminal
+                                    // result from task_value (single-source create path).
                                     self.build_task_created_response(
                                         id,
-                                        &task_id,
-                                        &task_value,
-                                        result,
+                                        task_value,
                                         auth_context.as_ref(),
                                     )
                                     .await
@@ -1307,117 +1198,17 @@ impl ServerCore {
                             Err(e) => Self::error_response(id, -32603, e.to_string()),
                         }
                     },
-                    // Task endpoint routing (TaskStore preferred, TaskRouter fallback)
+                    // Task endpoint routing (TaskStore preferred, TaskRouter
+                    // fallback) — delegated to the shared TaskDispatch unit so the
+                    // routing logic lives in exactly one place (HTASK-02).
                     #[cfg(not(target_arch = "wasm32"))]
-                    ClientRequest::TasksGet(params) => {
-                        if let Some(ref store) = self.task_store {
-                            let owner_id = self
-                                .resolve_task_owner(auth_context.as_ref())
-                                .unwrap_or_else(|| "local".to_string());
-                            match store.get(&params.task_id, &owner_id).await {
-                                Ok(task) => {
-                                    let result = crate::types::tasks::GetTaskResult::new(task);
-                                    Self::success_response(
-                                        id,
-                                        serde_json::to_value(result).unwrap(),
-                                    )
-                                },
-                                Err(e) => Self::error_response(id, -32603, e.to_string()),
-                            }
-                        } else if let Some(ref task_router) = self.task_router {
-                            let owner_id = self
-                                .resolve_task_owner(auth_context.as_ref())
-                                .unwrap_or_else(|| "local".to_string());
-                            match task_router
-                                .handle_tasks_get(
-                                    serde_json::to_value(params).unwrap_or_default(),
-                                    &owner_id,
-                                )
-                                .await
-                            {
-                                Ok(result) => Self::success_response(id, result),
-                                Err(e) => Self::error_response(id, -32603, e.to_string()),
-                            }
-                        } else {
-                            Self::error_response(id, -32601, "Tasks not enabled".to_string())
-                        }
-                    },
-                    #[cfg(not(target_arch = "wasm32"))]
-                    ClientRequest::TasksResult(params) => {
-                        self.handle_tasks_result(id, params, auth_context.as_ref())
+                    request @ (ClientRequest::TasksGet(_)
+                    | ClientRequest::TasksResult(_)
+                    | ClientRequest::TasksList(_)
+                    | ClientRequest::TasksCancel(_)) => {
+                        self.task_dispatch()
+                            .route_tasks_endpoint(id, request, auth_context.as_ref())
                             .await
-                    },
-                    #[cfg(not(target_arch = "wasm32"))]
-                    ClientRequest::TasksList(params) => {
-                        if let Some(ref store) = self.task_store {
-                            let owner_id = self
-                                .resolve_task_owner(auth_context.as_ref())
-                                .unwrap_or_else(|| "local".to_string());
-                            match store.list(&owner_id, params.cursor.as_deref()).await {
-                                Ok((tasks, next_cursor)) => {
-                                    let mut result =
-                                        crate::types::tasks::ListTasksResult::new(tasks);
-                                    if let Some(cursor) = next_cursor {
-                                        result = result.with_next_cursor(cursor);
-                                    }
-                                    Self::success_response(
-                                        id,
-                                        serde_json::to_value(result).unwrap(),
-                                    )
-                                },
-                                Err(e) => Self::error_response(id, -32603, e.to_string()),
-                            }
-                        } else if let Some(ref task_router) = self.task_router {
-                            let owner_id = self
-                                .resolve_task_owner(auth_context.as_ref())
-                                .unwrap_or_else(|| "local".to_string());
-                            match task_router
-                                .handle_tasks_list(
-                                    serde_json::to_value(params).unwrap_or_default(),
-                                    &owner_id,
-                                )
-                                .await
-                            {
-                                Ok(result) => Self::success_response(id, result),
-                                Err(e) => Self::error_response(id, -32603, e.to_string()),
-                            }
-                        } else {
-                            Self::error_response(id, -32601, "Tasks not enabled".to_string())
-                        }
-                    },
-                    #[cfg(not(target_arch = "wasm32"))]
-                    ClientRequest::TasksCancel(params) => {
-                        if let Some(ref store) = self.task_store {
-                            let owner_id = self
-                                .resolve_task_owner(auth_context.as_ref())
-                                .unwrap_or_else(|| "local".to_string());
-                            match store.cancel(&params.task_id, &owner_id).await {
-                                Ok(task) => {
-                                    let result = crate::types::tasks::CancelTaskResult::new(task);
-                                    Self::success_response(
-                                        id,
-                                        serde_json::to_value(result).unwrap(),
-                                    )
-                                },
-                                Err(e) => Self::error_response(id, -32603, e.to_string()),
-                            }
-                        } else if let Some(ref task_router) = self.task_router {
-                            let owner_id = self
-                                .resolve_task_owner(auth_context.as_ref())
-                                .unwrap_or_else(|| "local".to_string());
-                            match task_router
-                                .handle_tasks_cancel(
-                                    serde_json::to_value(params).unwrap_or_default(),
-                                    &owner_id,
-                                )
-                                .await
-                            {
-                                Ok(result) => Self::success_response(id, result),
-                                Err(e) => Self::error_response(id, -32603, e.to_string()),
-                            }
-                        } else {
-                            Self::error_response(id, -32601, "Tasks not enabled".to_string())
-                        }
                     },
                     _ => Self::error_response(id, -32601, "Method not supported".to_string()),
                 }

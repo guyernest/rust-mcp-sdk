@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Web-Channel MCP Client — OAuth browser-PKCE + MCP Tasks</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <h1>Web-Channel MCP Client</h1>
+        <p class="subtitle">
+            Browser PKCE login against a bundled OAuth IdP, then the MCP Tasks
+            lifecycle (call &rarr; poll &rarr; result, plus Cancel) over plain
+            Fetch using the high-level <code>pmcp::Client</code>.
+        </p>
+
+        <!-- Step 1: OAuth browser-PKCE login (full-page redirect). -->
+        <section class="controls">
+            <label>
+                Server origin:
+                <input type="text" id="server-origin" value="http://127.0.0.1:8787" />
+            </label>
+            <button id="login-btn">Login (PKCE redirect)</button>
+            <button id="logout-btn" disabled>Logout</button>
+        </section>
+
+        <div id="status">Not logged in.</div>
+
+        <!-- Step 2: drive the long-running MCP Task. -->
+        <section class="actions">
+            <button id="invoke-btn" disabled>Run slow_summarize task</button>
+            <button id="cancel-btn" disabled>Cancel task</button>
+        </section>
+
+        <div id="task-status">Task status: idle</div>
+
+        <div class="output">
+            <h3>Result</h3>
+            <div id="result"></div>
+            <h3>Logs</h3>
+            <pre id="logs"></pre>
+        </div>
+    </div>
+
+    <script type="module" src="main.js"></script>
+</body>
+</html>

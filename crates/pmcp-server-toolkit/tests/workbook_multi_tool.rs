@@ -77,13 +77,17 @@ fn tools_list_returns_one_named_tool_per_output_table() {
         "each tool enumerates at least one output column"
     );
 
-    // calculate_tax projects the four tax outputs; estimate_refund projects refund.
+    // calculate_tax projects the four numeric tax outputs PLUS the WBVER-01/D-07
+    // text (bracket_label) and bool (is_taxable) formula outputs; estimate_refund
+    // projects refund.
     let mut calc_out = output_keys(&calc);
     calc_out.sort();
     assert_eq!(
         calc_out,
         vec![
+            "bracket_label",
             "effective_rate",
+            "is_taxable",
             "marginal_rate",
             "tax_owed",
             "taxable_income"

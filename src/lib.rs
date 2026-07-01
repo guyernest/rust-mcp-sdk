@@ -99,6 +99,11 @@ pub use pmcp_macros::{mcp_prompt, mcp_server, mcp_tool};
 #[cfg(not(target_arch = "wasm32"))]
 pub use shared::StdioTransport;
 
+/// Target-agnostic PKCE (RFC 7636) crypto helper — re-exported UNGATED so the
+/// path resolves on both host and wasm32 (model: `StdioTransport` above, NOT the
+/// wasm-gated transport re-exports below).
+pub use shared::pkce::{code_challenge_s256, generate_code_verifier, generate_state};
+
 /// Peer back-channel trait for server-to-client RPCs from inside request handlers.
 #[cfg(not(target_arch = "wasm32"))]
 pub use shared::peer::PeerHandle;

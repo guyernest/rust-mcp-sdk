@@ -27,7 +27,7 @@ use pmcp::types::ToolInfo;
 use pmcp::{RequestHandlerExtra, ToolHandler};
 use serde_json::{json, Value};
 
-use pmcp_workbook_runtime::{run_executor, CellEnv, CellValue, RunResult, Tool};
+use pmcp_workbook_runtime::{run_executor, CellEnv, CellValue, RenderMode, RunResult, Tool};
 
 use super::error::{to_iserror_result, WorkbookToolError};
 use super::input::validate_input;
@@ -35,7 +35,8 @@ use super::render_uri;
 use super::schema::{
     diff_version_output_schema, empty_input_schema, explain_output_schema,
     get_manifest_output_schema, input_schema_for_manifest, input_schema_for_tool,
-    output_schema_for_tool, render_workbook_output_schema,
+    output_schema_for_tool, render_input_schema_for_manifest, render_workbook_output_schema,
+    verify_accuracy_input_schema, verify_accuracy_output_schema,
 };
 use super::{ProvStamp, WorkbookBundle, WORKBOOK_TOOL_UI};
 
@@ -595,18 +596,49 @@ impl RenderWorkbookHandler {
         Self { bundle, stamp }
     }
 
-    /// The linear `?`-chained `render_workbook` pipeline: validate → encode the
-    /// canonical DTO + provenance into a `workbook://` URI → return the POINTER
-    /// (plus the stamp), NOT the bytes.
+    /// The linear `?`-chained `render_workbook` pipeline: parse+strip the
+    /// render-only `mode` arg → validate the REMAINING inputs → encode the
+    /// canonical DTO + provenance + mode into a `workbook://` URI → return the
+    /// POINTER (plus the stamp), NOT the bytes.
     #[allow(clippy::result_large_err)]
-    fn compute(&self, args: Value) -> Result<Value, WorkbookToolError> {
+    fn compute(&self, mut args: Value) -> Result<Value, WorkbookToolError> {
+        // WBVER-02: lift `mode` out FIRST (CalculateInput is deny_unknown_fields,
+        // so a `mode` key would otherwise be rejected). An unknown value is an Err
+        // here, NOT a validate_input rejection of the remaining inputs.
+        let mode = parse_render_mode(&mut args)?;
         let validated = validate_input(args, &self.bundle.manifest, &self.bundle.cell_map)?;
-        let uri = render_uri::encode(&validated.canonical_dto, &self.stamp)?;
+        let uri = render_uri::encode(&validated.canonical_dto, &self.stamp, mode)?;
         let payload = json!({
             "resource_uri": uri,
             "mime_type": render_uri::WORKBOOK_XLSX_MIME,
         });
         Ok(with_provenance(payload, &self.stamp))
+    }
+}
+
+/// Lift the render-only `mode` arg out of the raw `render_workbook` args and map
+/// it to a [`RenderMode`], REMOVING the key so the remaining `{inputs, overrides}`
+/// passes `validate_input`'s `deny_unknown_fields` (WBVER-02).
+///
+/// Mapping: absent / `null` → [`RenderMode::Filled`]; `"filled"` → `Filled`;
+/// `"inputs_only"` → `InputsOnly`; ANY other value → `Err` (the locked
+/// "unknown mode → Err" decision). Total + panic-free (no unwrap/expect).
+#[allow(clippy::result_large_err)]
+fn parse_render_mode(args: &mut Value) -> Result<RenderMode, WorkbookToolError> {
+    let Some(obj) = args.as_object_mut() else {
+        // Non-object args carry no `mode`; let validate_input report the shape.
+        return Ok(RenderMode::Filled);
+    };
+    let Some(raw) = obj.remove("mode") else {
+        return Ok(RenderMode::Filled); // absent → Filled
+    };
+    match raw {
+        Value::Null => Ok(RenderMode::Filled),
+        Value::String(s) if s == "filled" => Ok(RenderMode::Filled),
+        Value::String(s) if s == "inputs_only" => Ok(RenderMode::InputsOnly),
+        other => Err(WorkbookToolError::invalid_input(format!(
+            "unknown render mode {other}; expected \"filled\" or \"inputs_only\""
+        ))),
     }
 }
 
@@ -628,10 +660,179 @@ impl ToolHandler for RenderWorkbookHandler {
                      encodes the inputs; treat it as sensitive."
                         .into(),
                 ),
-                input_schema_for_manifest(&self.bundle.manifest, &self.bundle.cell_map),
+                render_input_schema_for_manifest(&self.bundle.manifest, &self.bundle.cell_map),
                 WORKBOOK_TOOL_UI,
             )
             .with_output_schema(render_workbook_output_schema()),
+        )
+    }
+}
+
+// ---- verify_accuracy (WBVER-03) ----------------------------------------------
+
+/// The `verify_accuracy` meta-tool (the 6th served tool): re-run the executor at
+/// the workbook's REFERENCE inputs (the manifest tier defaults — verified the
+/// oracle was computed there) and return a per-output [`ReconcileReport`] vs each
+/// `Tool.oracle` within `TOL`.
+///
+/// This makes the compile-time penny-reconcile RUNTIME-inspectable: a queryable,
+/// HONESTLY-framed attestation that the served engine reproduces Excel's authored
+/// values at the reference inputs. It does NOT attest arbitrary inputs — for those
+/// the BA downloads the formula workbook via `render_workbook` (`filled` /
+/// `inputs_only`), where Excel is the oracle.
+///
+/// Reader-free + stateless: calls the pure
+/// [`pmcp_workbook_runtime::reconcile_reference`] over the in-memory bundle (no
+/// reader, no toolkit-side seeding, no caller-supplied seeds). An optional
+/// `tool`-name filter scopes the report; an unknown filter is an `Err` listing the
+/// available tool names (D-03) — never a silent empty pass.
+pub struct VerifyAccuracyHandler {
+    bundle: Arc<WorkbookBundle>,
+    stamp: ProvStamp,
+}
+
+impl VerifyAccuracyHandler {
+    /// The registered tool name — the single source for registration + the H3
+    /// binding test + metadata.
+    pub const NAME: &str = "verify_accuracy";
+
+    /// Build over the shared verified bundle.
+    #[must_use]
+    pub fn new(bundle: Arc<WorkbookBundle>) -> Self {
+        let stamp = ProvStamp::from_bundle(&bundle);
+        Self { bundle, stamp }
+    }
+
+    /// The `verify_accuracy` pipeline: parse the optional tool filter (D-03) →
+    /// reconcile at the reference inputs → optionally scope to the filtered tool
+    /// (recomputing the top-level aggregates over the FILTERED set) → stamp.
+    #[allow(clippy::result_large_err)]
+    fn compute(&self, args: Value) -> Result<Value, WorkbookToolError> {
+        let filter = parse_tool_filter(&args)?;
+        if let Some(name) = filter.as_deref() {
+            self.ensure_known_tool(name)?;
+        }
+
+        let report = pmcp_workbook_runtime::reconcile_reference(
+            &self.bundle.cell_map,
+            &self.bundle.manifest,
+            &self.bundle.ir,
+            &self.bundle.dag,
+            pmcp_workbook_runtime::reconcile::TOL,
+        )
+        .map_err(|f| {
+            WorkbookToolError::invalid_input(format!(
+                "reconcile failed: {} ({})",
+                f.message, f.rule
+            ))
+        })?;
+
+        let scoped = scope_report(report, filter.as_deref());
+        let payload = serde_json::to_value(&scoped).map_err(|e| {
+            WorkbookToolError::invalid_input(format!("internal: report not serializable: {e}"))
+        })?;
+        Ok(with_provenance(payload, &self.stamp))
+    }
+
+    /// D-03: a `tool`-name filter that names no registered tool is an `Err`
+    /// listing the available tool names (never a silent empty report). The
+    /// available names are the bundle's per-Table tool names.
+    #[allow(clippy::result_large_err)]
+    fn ensure_known_tool(&self, name: &str) -> Result<(), WorkbookToolError> {
+        if self.bundle.cell_map.tools.iter().any(|t| t.name == name) {
+            return Ok(());
+        }
+        let available: Vec<String> = self
+            .bundle
+            .cell_map
+            .tools
+            .iter()
+            .map(|t| t.name.clone())
+            .collect();
+        Err(WorkbookToolError::invalid_enum(
+            "tool",
+            available,
+            format!("unknown tool '{name}'; verify_accuracy accepts only a registered tool name"),
+        ))
+    }
+}
+
+/// Lift the OPTIONAL `tool`-name filter from the raw `verify_accuracy` args.
+///
+/// Absent / `null` → no filter (all tools). A `tool` string → that filter. A
+/// non-string `tool` value → `Err` (panic-free; the locked `deny(panic)`
+/// discipline). Any other top-level key is ignored — `verify_accuracy` has no
+/// other inputs.
+#[allow(clippy::result_large_err)]
+fn parse_tool_filter(args: &Value) -> Result<Option<String>, WorkbookToolError> {
+    let Some(obj) = args.as_object() else {
+        return Ok(None); // non-object args carry no filter
+    };
+    match obj.get("tool") {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(s)) => Ok(Some(s.clone())),
+        Some(other) => Err(WorkbookToolError::invalid_input(format!(
+            "the 'tool' filter must be a string tool name, got {other}"
+        ))),
+    }
+}
+
+/// Scope a full [`pmcp_workbook_runtime::ReconcileReport`] to a single named tool
+/// (D-03 caller guarantees the name exists), RECOMPUTING the top-level
+/// `cells_checked` + `all_within_tol` over the FILTERED set so a partial filter
+/// never leaves stale full-bundle aggregates (MEDIUM #4 / T-100-08). With no
+/// filter the report is returned unchanged.
+fn scope_report(
+    report: pmcp_workbook_runtime::ReconcileReport,
+    filter: Option<&str>,
+) -> pmcp_workbook_runtime::ReconcileReport {
+    let Some(name) = filter else {
+        return report;
+    };
+    let tools: Vec<_> = report
+        .tools
+        .into_iter()
+        .filter(|t| t.tool == name)
+        .collect();
+    let cells_checked = tools
+        .iter()
+        .map(|t| u32::try_from(t.outputs.len()).unwrap_or(u32::MAX))
+        .fold(0u32, u32::saturating_add);
+    let all_within_tol = tools.iter().all(|t| t.all_within_tol);
+    pmcp_workbook_runtime::ReconcileReport {
+        tolerance: report.tolerance,
+        all_within_tol,
+        cells_checked,
+        tools,
+    }
+}
+
+#[async_trait]
+impl ToolHandler for VerifyAccuracyHandler {
+    async fn handle(&self, args: Value, _extra: RequestHandlerExtra) -> pmcp::Result<Value> {
+        Ok(render_at_boundary(self.compute(args), &self.stamp))
+    }
+
+    fn metadata(&self) -> Option<ToolInfo> {
+        Some(
+            ToolInfo::with_ui(
+                Self::NAME,
+                Some(
+                    "Verify the served engine reproduces the workbook's authored \
+                     (Excel-cached) output values AT THE REFERENCE INPUTS — the \
+                     compile-time penny-reconcile, made runtime-inspectable. Returns a \
+                     per-output report (server value vs authored oracle, abs delta, \
+                     within-tolerance) plus rollup flags, stamped + stateless. This \
+                     attests ONLY the reference point; for arbitrary inputs download the \
+                     formula workbook via render_workbook (filled / inputs_only) where \
+                     Excel is the oracle. Optional 'tool' filter scopes the report to one \
+                     tool (an unknown name returns an error listing the available tools)."
+                        .into(),
+                ),
+                verify_accuracy_input_schema(),
+                WORKBOOK_TOOL_UI,
+            )
+            .with_output_schema(verify_accuracy_output_schema()),
         )
     }
 }
@@ -663,11 +864,11 @@ mod tests {
     }
 
     /// H3 BINDING: the reserved-tool-name set the offline compiler rejects against
-    /// (`RESERVED_TOOL_NAMES`, in the runtime leaf) is EXACTLY the four meta tools
-    /// this toolkit registers — derived from their `NAME` constants. If a handler's
-    /// `NAME` ever changes (or a fifth meta tool is added) WITHOUT updating the shared
-    /// const, this binding test fails, so the compiler gate cannot silently drift from
-    /// what is registered.
+    /// (`RESERVED_TOOL_NAMES`, in the runtime leaf) is EXACTLY the meta tools this
+    /// toolkit registers — derived from their `NAME` constants. If a handler's `NAME`
+    /// ever changes (or a meta tool is added) WITHOUT updating the shared const, this
+    /// binding test fails, so the compiler gate cannot silently drift from what is
+    /// registered.
     #[test]
     fn reserved_tool_names_match_the_registered_meta_tool_names() {
         let registered = [
@@ -675,12 +876,17 @@ mod tests {
             GetManifestHandler::NAME,
             DiffVersionHandler::NAME,
             RenderWorkbookHandler::NAME,
+            // Plan 04 (this plan) landed the handler: the Plan-01 placeholder string
+            // literal is now the real `VerifyAccuracyHandler::NAME` constant, so this
+            // binding test derives from the registered handler (H3 — never hand-copy)
+            // and the drift Plan 01 deliberately left is closed.
+            VerifyAccuracyHandler::NAME,
         ];
         assert_eq!(
             pmcp_workbook_runtime::RESERVED_TOOL_NAMES,
             registered,
-            "the shared RESERVED_TOOL_NAMES const must equal the four registered meta \
-             tool NAME constants (H3 — derive, never hand-copy)"
+            "the shared RESERVED_TOOL_NAMES const must equal the registered meta tool \
+             NAME constants (H3 — derive, never hand-copy)"
         );
     }
 
@@ -692,14 +898,30 @@ mod tests {
             .expect("calculate succeeds");
 
         // Each of this tool's named outputs is present as a { value, unit } pair.
+        // The Calculate_Tax tool now projects numeric outputs PLUS the WBVER-01/D-07
+        // text (bracket_label) and bool (is_taxable) formula outputs, so a value may
+        // be a number, string, bool, or null (an Empty cell).
         let outputs = v["outputs"].as_object().expect("outputs is an object");
         assert!(!outputs.is_empty(), "the tool projects its outputs");
         for (_key, col) in outputs {
+            let val = &col["value"];
             assert!(
-                col["value"].is_number() || col["value"].is_null(),
-                "each output carries a value"
+                val.is_number() || val.is_string() || val.is_boolean() || val.is_null(),
+                "each output carries a value (number/text/bool/null)"
             );
         }
+        // The text + bool formula outputs project their authored cached values at
+        // the reference inputs (WBVER-01 / D-07).
+        assert_eq!(
+            outputs["bracket_label"]["value"],
+            json!("bracket_2"),
+            "the text formula output computes its authored oracle"
+        );
+        assert_eq!(
+            outputs["is_taxable"]["value"],
+            json!(true),
+            "the bool formula output computes its authored oracle"
+        );
         // S-1: the success payload has EXACTLY outputs/accepted_overrides/
         // provenance — no privileged headline scalar elevated above the
         // uniform all-outputs projection.
@@ -967,8 +1189,9 @@ mod tests {
         let outputs = v["outputs"].as_array().expect("outputs array");
         assert_eq!(
             outputs.len(),
-            5,
-            "five outputs projected (4 tax + 1 refund) across the two tools"
+            7,
+            "seven outputs projected (4 numeric tax + the WBVER-01/D-07 text+bool \
+             formula outputs + 1 refund) across the two tools"
         );
         assert!(v["governed_data"].is_array());
         assert!(v["changelog"].is_array());
@@ -1139,5 +1362,256 @@ mod tests {
             schema["properties"]["resource_uri"]["type"],
             json!("string")
         );
+    }
+
+    #[test]
+    fn render_workbook_inputs_only_mode_encodes_into_uri() {
+        // WBVER-02 happy path: render_workbook with mode:"inputs_only" produces a
+        // URI whose decoded payload carries InputsOnly; with no mode it carries
+        // Filled (default). Proven by decoding the returned URI.
+        let bundle = golden_bundle();
+        let handler = RenderWorkbookHandler::new(bundle.clone());
+
+        let io = handler
+            .compute(json!({
+                "inputs": { "gross_income": 60000.0, "filing_status": "single" },
+                "mode": "inputs_only",
+            }))
+            .expect("inputs_only render_workbook succeeds");
+        let io_uri = io["resource_uri"].as_str().expect("resource_uri string");
+        let io_decoded = render_uri::decode(io_uri).expect("pointer decodes");
+        assert_eq!(
+            io_decoded.mode,
+            RenderMode::InputsOnly,
+            "mode:inputs_only rides into the URI payload"
+        );
+
+        let default = handler
+            .compute(json!({
+                "inputs": { "gross_income": 60000.0, "filing_status": "single" }
+            }))
+            .expect("no-mode render_workbook succeeds");
+        let d_uri = default["resource_uri"]
+            .as_str()
+            .expect("resource_uri string");
+        let d_decoded = render_uri::decode(d_uri).expect("pointer decodes");
+        assert_eq!(
+            d_decoded.mode,
+            RenderMode::Filled,
+            "no mode arg defaults to Filled (no regression)"
+        );
+    }
+
+    #[test]
+    fn render_workbook_unknown_mode_is_iserror_not_panic() {
+        // WBVER-02 (MEDIUM #3 / T-100-06): an unknown `mode` value is an Err /
+        // isError envelope at the boundary — NOT a panic, and NOT a deny_unknown_fields
+        // rejection of the remaining inputs.
+        let bundle = golden_bundle();
+        let handler = RenderWorkbookHandler::new(bundle.clone());
+        let v = render_at_boundary(
+            handler.compute(json!({
+                "inputs": { "gross_income": 60000.0, "filing_status": "single" },
+                "mode": "bogus",
+            })),
+            &ProvStamp::from_bundle(&bundle),
+        );
+        assert_eq!(
+            v["isError"],
+            json!(true),
+            "unknown mode is an isError envelope"
+        );
+        assert_eq!(v["code"], json!("invalid_input"));
+        // The compute path returns Err directly too (not a silent Filled).
+        assert!(
+            handler
+                .compute(json!({
+                    "inputs": { "gross_income": 60000.0, "filing_status": "single" },
+                    "mode": "bogus",
+                }))
+                .is_err(),
+            "unknown mode → Err, never a silent Filled"
+        );
+    }
+
+    #[test]
+    fn mode_is_render_only_and_never_leaks_into_calculate_or_explain() {
+        // WBVER-02 (T-100-07): the calculate (per-tool) and explain (manifest-level)
+        // input schemas do NOT advertise `mode`, while the render schema DOES; and
+        // calculate/explain REJECT a `{"mode":...}` key via deny_unknown_fields
+        // (CalculateInput carries no mode field). mode is render-only.
+        let bundle = golden_bundle();
+
+        // The render schema advertises mode; calculate + explain do NOT.
+        let render_schema = render_input_schema_for_manifest(&bundle.manifest, &bundle.cell_map);
+        assert!(
+            render_schema["properties"]["mode"].is_object(),
+            "render schema advertises mode"
+        );
+        assert_eq!(
+            render_schema["properties"]["mode"]["enum"],
+            json!(["filled", "inputs_only"]),
+            "advertise == accept: the render mode enum matches the handler's accepted values"
+        );
+
+        let calc = calc_handler();
+        let calc_schema = calc.metadata().expect("calc meta").input_schema;
+        assert!(
+            calc_schema["properties"].get("mode").is_none(),
+            "calculate schema does NOT advertise mode"
+        );
+        let explain = ExplainHandler::new(bundle.clone());
+        let explain_schema = explain.metadata().expect("explain meta").input_schema;
+        assert!(
+            explain_schema["properties"].get("mode").is_none(),
+            "explain schema does NOT advertise mode"
+        );
+
+        // calculate/explain REJECT a `mode` key (deny_unknown_fields on CalculateInput).
+        let with_mode = json!({ "inputs": { "gross_income": 60000.0 }, "mode": "inputs_only" });
+        assert!(
+            validate_input(with_mode.clone(), &bundle.manifest, &bundle.cell_map).is_err(),
+            "a mode key is rejected by validate_input (deny_unknown_fields)"
+        );
+    }
+
+    // ---- verify_accuracy (WBVER-03) ------------------------------------------
+
+    /// WBVER-03 golden handler: no filter reconciles every tool of the Plan-01
+    /// fixture green, INCLUDING the text + bool formula outputs.
+    #[test]
+    fn verify_accuracy_no_filter_reconciles_golden_green() {
+        let handler = VerifyAccuracyHandler::new(golden_bundle());
+        let v = handler
+            .compute(json!({}))
+            .expect("verify_accuracy succeeds");
+
+        assert_eq!(
+            v["all_within_tol"],
+            json!(true),
+            "the golden reconciles green"
+        );
+        // The fixture authors two tools (Calculate_Tax with 6 outputs, Estimate_Refund
+        // with 1) — every one of the 7 oracle rows is compared.
+        assert_eq!(
+            v["cells_checked"],
+            json!(7),
+            "all authored oracle rows are checked"
+        );
+
+        let tools = v["tools"].as_array().expect("tools array");
+        let calc = tools
+            .iter()
+            .find(|t| t["tool"] == json!("Calculate_Tax"))
+            .expect("Calculate_Tax present");
+        let keys: Vec<&str> = calc["outputs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r["key"].as_str().unwrap())
+            .collect();
+        assert!(
+            keys.contains(&"bracket_label"),
+            "the text output is reconciled"
+        );
+        assert!(
+            keys.contains(&"is_taxable"),
+            "the bool output is reconciled"
+        );
+        // Every row carries its D-01 sheet-qualified A1 cell address.
+        for row in calc["outputs"].as_array().unwrap() {
+            assert!(
+                row["cell"].as_str().is_some_and(|c| c.contains('!')),
+                "each output row carries its A1 cell address"
+            );
+            assert_eq!(row["within_tol"], json!(true));
+        }
+    }
+
+    /// MEDIUM #4 filtered rollup: a filter naming ONE tool scopes the report AND
+    /// recomputes the top-level aggregates over the filtered set (never stale
+    /// full-bundle counts).
+    #[test]
+    fn verify_accuracy_filter_scopes_and_recomputes_aggregates() {
+        let handler = VerifyAccuracyHandler::new(golden_bundle());
+        let v = handler
+            .compute(json!({ "tool": "Estimate_Refund" }))
+            .expect("filtered verify_accuracy succeeds");
+
+        let tools = v["tools"].as_array().expect("tools array");
+        assert_eq!(tools.len(), 1, "only the filtered tool is reported");
+        assert_eq!(tools[0]["tool"], json!("Estimate_Refund"));
+        // Estimate_Refund has ONE output — cells_checked reflects ONLY that tool,
+        // NOT the full-bundle 7.
+        assert_eq!(
+            v["cells_checked"],
+            json!(1),
+            "cells_checked is the filtered tool's compared-row count, not the full rollup"
+        );
+        assert_eq!(v["all_within_tol"], json!(true));
+    }
+
+    /// D-03: an unknown `tool` filter returns an isError envelope listing the
+    /// available tools — never a silent empty pass, never a panic.
+    #[test]
+    fn verify_accuracy_unknown_filter_errors_listing_tools() {
+        let handler = VerifyAccuracyHandler::new(golden_bundle());
+        let err = handler
+            .compute(json!({ "tool": "nonexistent" }))
+            .expect_err("an unknown tool filter is an Err (D-03)");
+        assert_eq!(err.code, "invalid_input");
+        // The error carries the available tool names so the caller can repair.
+        let names = err.allowed.clone().unwrap_or_default();
+        assert!(
+            names.contains(&"Calculate_Tax".to_string())
+                && names.contains(&"Estimate_Refund".to_string()),
+            "the D-03 error lists the available tool names, got {names:?}"
+        );
+    }
+
+    /// Via the async boundary an unknown filter renders as an isError envelope,
+    /// never a protocol-level error (T-92-10).
+    #[tokio::test]
+    async fn verify_accuracy_unknown_filter_renders_iserror_envelope() {
+        let handler = VerifyAccuracyHandler::new(golden_bundle());
+        let rendered = handler
+            .handle(json!({ "tool": "nope" }), RequestHandlerExtra::default())
+            .await
+            .expect("handle never returns a protocol error");
+        assert_eq!(
+            rendered["isError"],
+            json!(true),
+            "renders as an isError envelope"
+        );
+    }
+
+    /// A non-string `tool` filter is rejected panic-free (deny(panic)).
+    #[test]
+    fn verify_accuracy_non_string_filter_errors() {
+        let handler = VerifyAccuracyHandler::new(golden_bundle());
+        assert!(
+            handler.compute(json!({ "tool": 42 })).is_err(),
+            "a non-string tool filter is an Err, not a panic"
+        );
+    }
+
+    /// The verify_accuracy output schema advertises the ReconcileReport rollups +
+    /// per-tool rows, and its input schema advertises the optional `tool` filter.
+    #[test]
+    fn verify_accuracy_schemas_advertise_report_and_filter() {
+        let handler = VerifyAccuracyHandler::new(golden_bundle());
+        let meta = handler.metadata().expect("verify_accuracy metadata");
+        assert_eq!(meta.name, "verify_accuracy");
+        assert!(
+            meta.input_schema["properties"].get("tool").is_some(),
+            "the input schema advertises the optional tool filter (advertise == accept)"
+        );
+        let out = meta.output_schema.expect("output schema present");
+        for field in ["tolerance", "all_within_tol", "cells_checked", "tools"] {
+            assert!(
+                out["properties"].get(field).is_some(),
+                "output schema advertises {field}"
+            );
+        }
     }
 }

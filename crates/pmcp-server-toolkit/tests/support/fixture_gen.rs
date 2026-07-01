@@ -74,6 +74,14 @@ const CELL_TAXABLE_INCOME: &str = "3_Outputs!B2";
 const CELL_TAX_OWED: &str = "3_Outputs!B3";
 const CELL_EFFECTIVE_RATE: &str = "3_Outputs!B4";
 const CELL_MARGINAL_RATE: &str = "3_Outputs!B5";
+/// WBVER-01 (D-07): a TEXT formula output — `bracket_label =
+/// IF(taxable_income>=40000,"bracket_2","bracket_1")`. At the tier defaults
+/// taxable_income=48000 ⇒ `"bracket_2"`. Proves the text formula-with-cached-result
+/// re-verification path (the all-numeric oracle could not exercise it).
+const CELL_BRACKET_LABEL: &str = "3_Outputs!B6";
+/// WBVER-01 (D-07): a BOOLEAN formula output — `is_taxable = taxable_income>0`.
+/// At the defaults ⇒ `true`. Proves the bool formula-with-cached-result path.
+const CELL_IS_TAXABLE: &str = "3_Outputs!B7";
 /// The `Estimate_Refund` output Table (tax + withheld → refund); `refund =
 /// withheld - tax_owed`, so it depends on `withheld` AND (transitively) income.
 const CELL_REFUND: &str = "4_Refund!B2";
@@ -166,6 +174,43 @@ fn build_ir() -> BTreeMap<String, Cell> {
             expr: CellExpr::Formula(Expr::Ref(CELL_BRACKET2_RATE.to_string())),
         },
     );
+    // bracket_label is a TEXT formula output (WBVER-01 / D-07):
+    // IF(taxable_income >= 40000, "bracket_2", "bracket_1"). `IF` is a generic
+    // `Expr::Call`; the `>=` condition is a comparison `BinaryOp` that the scalar
+    // evaluator returns as a Bool. At taxable_income=48000 the IF yields the Text
+    // "bracket_2".
+    ir.insert(
+        CELL_BRACKET_LABEL.to_string(),
+        Cell {
+            key: CELL_BRACKET_LABEL.to_string(),
+            expr: CellExpr::Formula(Expr::Call {
+                name: "IF".to_string(),
+                args: vec![
+                    Expr::BinaryOp {
+                        left: Box::new(Expr::Ref(CELL_TAXABLE_INCOME.to_string())),
+                        op: BinOp::Ge,
+                        right: Box::new(Expr::Number(40_000.0)),
+                    },
+                    Expr::Str("bracket_2".to_string()),
+                    Expr::Str("bracket_1".to_string()),
+                ],
+            }),
+        },
+    );
+    // is_taxable is a BOOLEAN formula output (WBVER-01 / D-07): taxable_income > 0,
+    // a comparison `BinaryOp` the scalar evaluator returns as a Bool. At
+    // taxable_income=48000 ⇒ true.
+    ir.insert(
+        CELL_IS_TAXABLE.to_string(),
+        Cell {
+            key: CELL_IS_TAXABLE.to_string(),
+            expr: CellExpr::Formula(Expr::BinaryOp {
+                left: Box::new(Expr::Ref(CELL_TAXABLE_INCOME.to_string())),
+                op: BinOp::Gt,
+                right: Box::new(Expr::Number(0.0)),
+            }),
+        },
+    );
     // refund = withheld - tax_owed (the Estimate_Refund tool's output; depends on
     // `withheld` AND, transitively via tax_owed, income+deductions).
     let (k, c) = binop_refs(CELL_REFUND, CELL_WITHHELD, BinOp::Sub, CELL_TAX_OWED);
@@ -200,13 +245,25 @@ fn input_role(
 
 /// One output `CellRole` row.
 fn output_role(cell: &str, name: &str, unit: &str, meaning: &str) -> CellRole {
+    typed_output_role(cell, name, Some(unit), meaning, Dtype::Number)
+}
+
+/// One output `CellRole` row with an explicit `dtype` and nullable `unit` — used
+/// for the WBVER-01 text/bool formula outputs (D-07), whose units are `None`.
+fn typed_output_role(
+    cell: &str,
+    name: &str,
+    unit: Option<&str>,
+    meaning: &str,
+    dtype: Dtype,
+) -> CellRole {
     CellRole {
         cell: cell.to_string(),
         role: Role::Output,
         name: Some(name.to_string()),
-        unit: Some(unit.to_string()),
+        unit: unit.map(str::to_string),
         meaning: Some(meaning.to_string()),
-        dtype: Dtype::Number,
+        dtype,
         colour_evidence: None,
         source: "synthetic-fixture".to_string(),
         notes: None,
@@ -300,6 +357,20 @@ fn build_manifest(workbook_hash: &str) -> Manifest {
                 "ratio",
                 "The rate applied to the next dollar of income",
             ),
+            typed_output_role(
+                CELL_BRACKET_LABEL,
+                "out_bracket_label",
+                None,
+                "Which progressive-tax bracket the taxable income falls into (text formula output)",
+                Dtype::Text,
+            ),
+            typed_output_role(
+                CELL_IS_TAXABLE,
+                "out_is_taxable",
+                None,
+                "Whether any income is subject to tax (boolean formula output)",
+                Dtype::Bool,
+            ),
             output_role(
                 CELL_REFUND,
                 "out_refund",
@@ -369,6 +440,13 @@ fn build_cell_map() -> CellMap {
     tax_oracle.insert("tax_owed".to_string(), num(4_800.0));
     tax_oracle.insert("effective_rate".to_string(), num(0.08));
     tax_oracle.insert("marginal_rate".to_string(), num(0.22));
+    // WBVER-01 / D-07 — the text + bool formula-output oracles (the cached `<v>`
+    // Excel authored): IF(taxable_income>=40000,…) ⇒ "bracket_2", taxable_income>0 ⇒ true.
+    tax_oracle.insert(
+        "bracket_label".to_string(),
+        CellValue::Text("bracket_2".to_string()),
+    );
+    tax_oracle.insert("is_taxable".to_string(), CellValue::Bool(true));
 
     let mut refund_oracle = BTreeMap::new();
     // refund = withheld(5000) - tax_owed(4800) = 200.
@@ -393,6 +471,8 @@ fn build_cell_map() -> CellMap {
                     entry("tax_owed", CELL_TAX_OWED, Some("USD")),
                     entry("effective_rate", CELL_EFFECTIVE_RATE, Some("ratio")),
                     entry("marginal_rate", CELL_MARGINAL_RATE, Some("ratio")),
+                    entry("bracket_label", CELL_BRACKET_LABEL, None),
+                    entry("is_taxable", CELL_IS_TAXABLE, None),
                 ],
                 oracle: tax_oracle,
             },
@@ -485,6 +565,15 @@ fn build_layout(workbook_hash: &str) -> LayoutDescriptor {
                         Some("0.00%"),
                     ),
                     layout_cell("B5", Some("2_Brackets!B3"), "0.22", Some("0.00%")),
+                    // WBVER-01 / D-07: the text + bool formula outputs carry a
+                    // NON-NULL `formula` (the cached `<v>` re-verification surface).
+                    layout_cell(
+                        "B6",
+                        Some("IF(3_Outputs!B2>=40000,\"bracket_2\",\"bracket_1\")"),
+                        "bracket_2",
+                        None,
+                    ),
+                    layout_cell("B7", Some("3_Outputs!B2>0"), "TRUE", None),
                 ],
                 merges: vec![],
                 col_widths: vec![(1, 22.0), (2, 14.0)],
@@ -544,7 +633,7 @@ fn build_parser_equivalence() -> BTreeMap<String, serde_json::Value> {
     );
     m.insert(
         "checked_cells".to_string(),
-        serde_json::Value::Number(13u32.into()),
+        serde_json::Value::Number(15u32.into()),
     );
     m
 }

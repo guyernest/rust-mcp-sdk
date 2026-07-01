@@ -5,6 +5,98 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.11.0] - 2026-06-30
+
+Three additive feature sets, no breaking changes: (1) reusable browser web-channel
+building blocks — a target-agnostic OAuth PKCE crypto helper and a now-functional
+WASM HTTP transport; (2) MCP **task dispatch on the high-level `Server` / HTTP**,
+closing the 2.10.0 follow-up; and (3) a **workbook accuracy-verification surface**
+for the config-driven workbook toolkit.
+
+### Added — Web-channel browser client (PKCE + Tasks over Fetch)
+
+- **Wasm-safe PKCE crypto helper** —
+  `pmcp::shared::pkce::{generate_code_verifier, code_challenge_s256, generate_state}`.
+  A target-agnostic OAuth 2.0 PKCE primitive (RFC 7636) backed by
+  `getrandom` + `sha2` + `base64`. The S256 challenge helper is infallible
+  (`#[must_use] String`); only the RNG-backed verifier/state generators return
+  `Result` — no `unwrap`/`expect` in production. Links on both host and
+  `wasm32-unknown-unknown`, so a browser client can drive the OAuth
+  authorization-code-with-PKCE flow without a server round-trip for the
+  challenge (D-02/D-03).
+- New reference example `examples/web-channel-client` — a browser MCP client
+  split into a `client/` wasm `cdylib` crate (zero native HTTP deps) and a
+  bundled `server/` native crate (OAuth IdP merged with MCP via the public
+  `pmcp::axum::router().merge()` seam), demonstrating PKCE + the high-level
+  `Client` task lifecycle over browser Fetch.
+
+### Fixed
+
+- **`WasmHttpTransport` now correlates `send()` / `receive()`** — the
+  `Transport` impl was a non-functional stub; it now buffers the Fetch
+  response in a one-slot pending buffer (with a double-send guard that errors
+  on an occupied slot) so the high-level `Client` and its typed task helpers
+  work over browser Fetch (D-08). The `WasmHttpTransport` symbol was already
+  exported; this is a behavior change that makes it usable.
+- **`Instant::now()` no longer panics on `wasm32`** — `MiddlewareContext`
+  stamped a `std::time::Instant`, which panics with "time not implemented on
+  this platform" on `wasm32-unknown-unknown`. Because `Client::send_request`
+  builds a `MiddlewareContext` per request, *every* MCP request aborted in the
+  browser. `src/shared/middleware.rs` now uses `web_time::Instant` (a drop-in
+  that is `std::time::Instant` on native and `performance.now()`-backed on
+  wasm). Adds the lightweight `web-time` dependency.
+- **`WasmHttpTransport` puts a valid JSON-RPC frame on the wire** — it
+  serialized the untagged `TransportMessage` enum directly, so a request went
+  out as `{"id":…,"request":…}` and servers rejected it with `-32700`
+  "Unknown message type". The pure JSON-RPC codec
+  (`serialize_message`/`parse_message`) is now the single source of truth in
+  `pmcp::shared::transport`; `StdioTransport` delegates to it and
+  `WasmHttpTransport` uses it for both directions.
+- **`WasmHttpTransport` reads SSE tool responses** — the streamable-HTTP
+  server answers `initialize` as `application/json` but streams `tools/call` /
+  `tasks/*` results as a single `text/event-stream` frame. A browser Fetch
+  cannot negotiate SSE streaming, so the transport now accepts *both* a raw
+  JSON body and a single SSE `data:` frame before parsing.
+
+  These last three fixes were surfaced by end-to-end browser UAT of the
+  `web-channel-client` example; they are invisible to `wasm-pack build` and to
+  the native HTTP tests, which run on a host target with SSE-aware transports.
+
+### Changed
+
+- `getrandom` was relocated into the cross-target `[dependencies]` table
+  (dependency hygiene, HIGH-1) so the ungated PKCE helper links on host as
+  well as wasm32. No new external dependency is added — this is a manifest
+  relocation only.
+
+### Added — HTTP task dispatch on the high-level server
+
+Closes the 2.10.0 follow-up ("the high-level `pmcp::Server` / `StreamableHttpServer`
+does not yet carry a `TaskStore`"). A tool exposed as an MCP Task is now pollable
+over HTTP end to end, not just on `ServerCore`.
+
+- `ServerBuilder::with_task_store(...)` wires a `TaskStore` into the high-level
+  `pmcp::Server`, so `pmcp::axum::router(server)` serves the full `tasks/*` surface
+  (`tasks/get`, `tasks/result`, `tasks/cancel`) over streamable HTTP.
+- New worked example `examples/s46_http_tool_as_task.rs` and a live HTTP
+  acceptance test (`tests/tool_as_task_lifecycle_http.rs`) driving
+  `initialize → call(task) → tasks/get → tasks/result` over the wire.
+
+### Added — Workbook accuracy-verification surface (config-driven workbook toolkit)
+
+Trust tooling for the Excel-as-configuration workbook servers: let a business
+analyst re-verify that a compiled workbook still reproduces its authored results.
+
+- New `verify_accuracy` meta tool — re-runs the shared executor at the workbook's
+  reference inputs and reconciles the recomputed outputs against the cached oracle
+  values, reporting per-output deltas.
+- `render_workbook` gains an `inputs_only` mode, and text/bool formula outputs now
+  render as formula-with-cached-result (not just a literal value) so a downloaded
+  workbook re-verifies in Excel.
+- Runtime `reconcile` + render support in `pmcp-workbook-runtime`; served through
+  the toolkit `workbook` module. Design:
+  `docs/design/2026-06-22-workbook-accuracy-verification-design.md`.
+
 ## [2.10.0] - 2026-06-21
 
 ### Added — Tools-as-Tasks server DX (correct-by-construction task lifecycle)

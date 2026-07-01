@@ -17,7 +17,12 @@ use parking_lot::RwLock;
 use std::fmt;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+// Wasm-safe monotonic clock: `web_time::Instant` re-exports `std::time::Instant` on
+// native targets and is backed by `performance.now()` on wasm32. `std::time::Instant`
+// panics on wasm ("time not implemented on this platform"), which would abort every
+// `Client::send_request` since it stamps `MiddlewareContext::start_time`.
+use web_time::Instant;
 
 /// Execution context for middleware chains with performance tracking.
 #[derive(Debug, Clone)]

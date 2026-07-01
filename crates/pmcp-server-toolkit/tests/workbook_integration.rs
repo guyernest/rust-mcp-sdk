@@ -3,15 +3,16 @@
 //!
 //! 1. **build-and-assert** — `with_workbook_bundle` over the committed golden
 //!    registers ONE named tool per output Table (`calculate_tax`/`estimate_refund`,
-//!    WBV2-04 multi-tool fan-out) PLUS the four workbook-wide meta tools
-//!    (`explain`/`get_manifest`/`diff_version`/`render_workbook`), asserted via
+//!    WBV2-04 multi-tool fan-out) PLUS the five workbook-wide meta tools
+//!    (`explain`/`get_manifest`/`diff_version`/`render_workbook`/`verify_accuracy` —
+//!    the last is the Phase 100 WBVER-03 additive tool), asserted via
 //!    `Server::get_tool`.
 //! 2. **tamper-fails-boot** — `try_with_workbook_bundle` over a byte-flipped copy
 //!    of the golden returns `Err` (WBSV-08 fail-closed, end-to-end through the
 //!    builder, NOT just the loader unit). Uses the 92-02 tamper helpers.
 //! 3. **example smoke-run** (Codex MEDIUM #11) — boots the SAME server the
 //!    `workbook_server_http` example builds (embedded bundle) on an ephemeral
-//!    streamable-HTTP port within a BOUNDED timeout, asserts all five tools are
+//!    streamable-HTTP port within a BOUNDED timeout, asserts all seven tools are
 //!    registered, then shuts the server down cleanly (no hang, no leaked socket).
 //!    This proves the `cargo run --example` path actually serves, satisfying the
 //!    CLAUDE.md "cargo run --example" ALWAYS requirement.
@@ -25,18 +26,22 @@ mod support;
 use support::tamper::golden_dir;
 
 /// The served tools the golden registers: the two per-Table compute tools (WBV2-04
-/// multi-tool fan-out) + the four workbook-wide meta tools.
-const WORKBOOK_TOOLS: [&str; 6] = [
+/// multi-tool fan-out) + the five workbook-wide meta tools. The fifth meta tool,
+/// `verify_accuracy`, is the Phase 100 WBVER-03 additive sixth meta / seventh served
+/// tool — asserted here as a names-subset so the builder boot path proves it is
+/// registered, not just the handler unit test.
+const WORKBOOK_TOOLS: [&str; 7] = [
     "calculate_tax",
     "estimate_refund",
     "explain",
     "get_manifest",
     "diff_version",
     "render_workbook",
+    "verify_accuracy",
 ];
 
 #[test]
-fn with_workbook_bundle_registers_all_five_tools() {
+fn with_workbook_bundle_registers_all_seven_tools() {
     let server = Server::builder()
         .name("workbook-tax-calc")
         .version("1.1.0")
@@ -73,12 +78,12 @@ fn tamper_fails_boot_through_the_builder() {
 }
 
 /// Codex MEDIUM #11 — boot the example's server on an ephemeral streamable-HTTP
-/// port within a bounded timeout, assert all five tools are registered, then
+/// port within a bounded timeout, assert all seven tools are registered, then
 /// shut down cleanly. Gated on `workbook-embedded` + `http` because it builds the
 /// EmbeddedSource-backed server the example serves and binds a real socket.
 #[cfg(all(feature = "workbook-embedded", feature = "http"))]
 #[tokio::test]
-async fn example_server_boots_serves_five_tools_and_shuts_down() {
+async fn example_server_boots_serves_seven_tools_and_shuts_down() {
     use std::sync::Arc;
     use std::time::Duration;
 
@@ -90,7 +95,7 @@ async fn example_server_boots_serves_five_tools_and_shuts_down() {
     // The SAME committed golden the example bakes in (include_dir over @1.1.0).
     static EMBEDDED_BUNDLE: Dir = include_dir!("$CARGO_MANIFEST_DIR/tests/fixtures/tax-calc@1.1.0");
 
-    // Build the same server the example builds (embedded bundle, all five tools).
+    // Build the same server the example builds (embedded bundle, all seven tools).
     let server = Server::builder()
         .name("workbook-tax-calc")
         .version("1.1.0")

@@ -2,9 +2,15 @@
 //! `bundlesource-served-tool-toolkit-module`).
 //!
 //! This is the toolkit-side home for the served `calculate` / `explain` /
-//! `get_manifest` / `diff_version` / `render_workbook` tools that operate on a
-//! verified [`pmcp_workbook_runtime::WorkbookBundle`] (loaded fail-closed via
-//! the runtime's `BundleSource` + `BundleLoader`).
+//! `get_manifest` / `diff_version` / `render_workbook` / `verify_accuracy` tools
+//! that operate on a verified [`pmcp_workbook_runtime::WorkbookBundle`] (loaded
+//! fail-closed via the runtime's `BundleSource` + `BundleLoader`).
+//!
+//! NOTE (Phase 100 Plan 01, non-releasable intermediate): the six-tool count is
+//! reflected here ahead of `verify_accuracy`'s handler, which is registered in
+//! Plan 04. Until then `RESERVED_TOOL_NAMES` reserves the name but no
+//! `.tool_arc(VerifyAccuracyHandler::NAME, ...)` is wired below — do NOT ship the
+//! repo between this plan and Plan 04 completion.
 //!
 //! # Domain failure vs infrastructure failure (Codex LOW)
 //!
@@ -50,7 +56,7 @@ pub use error::{to_iserror_result, WorkbookToolError};
 #[doc(inline)]
 pub use handler::{
     sanitize_tool_name, DiffVersionHandler, ExplainHandler, GetManifestHandler,
-    RenderWorkbookHandler, WorkbookToolHandler,
+    RenderWorkbookHandler, VerifyAccuracyHandler, WorkbookToolHandler,
 };
 #[doc(inline)]
 pub use input::{validate_input, ValidatedInput};
@@ -149,9 +155,11 @@ impl ProvStamp {
 /// [`WorkbookBuilderExt::with_workbook_bundle`] /
 /// [`WorkbookBuilderExt::try_with_workbook_bundle`] load + integrity-verify a
 /// [`BundleSource`] at boot (fail-closed — a tampered bundle aborts the boot,
-/// WBSV-08), then register all FIVE served tools (`calculate`, `explain`,
-/// `get_manifest`, `diff_version`, `render_workbook`) plus the `workbook://`
-/// render resource. Mirrors [`crate::builder_ext::ServerBuilderExt`]'s
+/// WBSV-08), then register all SIX served tools (`calculate`, `explain`,
+/// `get_manifest`, `diff_version`, `render_workbook`, `verify_accuracy`) plus the
+/// `workbook://` render resource (the `verify_accuracy` handler is wired in Plan
+/// 04; this count reflects the Phase 100 target). Mirrors
+/// [`crate::builder_ext::ServerBuilderExt`]'s
 /// panicking-convenience + fallible-companion pair (review R7): production
 /// servers should prefer the `try_` form so a tampered/malformed bundle surfaces
 /// as a `Result`, not a crash.
@@ -161,8 +169,9 @@ impl ProvStamp {
 /// source impls, and error types are re-exported at this module / the crate
 /// root, D-11).
 pub trait WorkbookBuilderExt: Sized {
-    /// Load + verify `source` and register all five workbook tools + the
-    /// `workbook://` resource. Panicking convenience wrapping
+    /// Load + verify `source` and register all six workbook tools + the
+    /// `workbook://` resource (the `verify_accuracy` handler lands in Plan 04).
+    /// Panicking convenience wrapping
     /// [`WorkbookBuilderExt::try_with_workbook_bundle`].
     ///
     /// # Panics
@@ -280,6 +289,11 @@ impl WorkbookBuilderExt for ServerBuilder {
             .tool_arc(
                 RenderWorkbookHandler::NAME,
                 Arc::new(RenderWorkbookHandler::new(bundle.clone())),
+            )
+            // WBVER-03: the 6th served (5th meta) tool — reference reconciliation.
+            .tool_arc(
+                VerifyAccuracyHandler::NAME,
+                Arc::new(VerifyAccuracyHandler::new(bundle.clone())),
             )
             // The single `workbook://` render resource (A3 — no DispatchingResource
             // wrapper, exactly one resource handler).

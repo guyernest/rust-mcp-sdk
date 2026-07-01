@@ -60,3 +60,12 @@ embedded = ["dep:include_dir"]
 # 1.11 is an EXISTING workspace dependency (the Plan 02 compiler harness already
 # pins it; T-100-SC accept — no new package install / legitimacy concern).
 proptest = "1"
+
+# DEV-ONLY .xlsx ZIP reader for the WBVER-01/02 sheet-XML extraction test helper
+# (Phase 100). `zip` v7 is ALREADY resolved transitively (the rust_xlsxwriter 0.95
+# writer pulls it — `cargo tree -i zip` => zip v7.2.0), so this adds NO new package
+# to the lock and NO new legitimacy surface (T-100-SC accept). It is a [dev-dependency],
+# so `make purity-check` (which reads the NON-dev tree) is unaffected and the served
+# runtime cone stays reader-free. default-features keep `deflate` so the writer's
+# deflated worksheet entries can be inflated back to XML in tests.
+zip = "7"
