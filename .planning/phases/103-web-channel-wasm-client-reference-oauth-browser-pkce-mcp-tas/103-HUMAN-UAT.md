@@ -51,10 +51,17 @@ at line 1 column 1".
 Fix: `WasmHttpTransport::extract_jsonrpc_payload` now accepts BOTH a raw JSON body and
 a single SSE `data:` frame before parsing.
 
-### Secondary (logged, NOT fixed this pass — recommend follow-up)
-- **A (MAJOR, example):** `WasmClient`'s all-`&mut self` async methods cause a wasm-bindgen
-  "recursive use of an object" aliasing panic when a load-time auto-reconnect overlaps a
-  user click. Recommend a re-entrancy/busy guard + disabling controls during in-flight ops.
+### Secondary
+- **A (MAJOR, example) — FIXED (F4):** `WasmClient`'s all-`&mut self` async methods caused a
+  wasm-bindgen "recursive use of an object" aliasing panic when a load-time auto-reconnect
+  overlapped a user click. Fix: every exported `WasmClient` method now takes `&self` with the
+  connected client held behind `RefCell<Option<Rc<Client>>>`. wasm-bindgen therefore only ever
+  takes SHARED borrows (the aliasing-panic class is structurally impossible), and genuine
+  contention degrades to a graceful "client busy" error via `try_borrow`/`try_borrow_mut`. Task
+  methods clone the `Rc` out under a brief borrow and drop it before `.await` (no borrow across a
+  suspension point — clippy `await_holding_refcell_ref` clean). `main.js` also disables Login
+  during an in-flight connect (re-enabled on failure) so the normal path never surfaces "busy".
+  Structural guarantee; browser re-verify recommended (timing-dependent to reproduce the old panic).
 - **B (MINOR, docs):** README quickstart hits the `/callback` 404 + extensionless-file
   download trap with plain `python3 -m http.server`. Recommend shipping a callback-aware
   static server snippet, or registering the redirect_uri as `/index.html`.

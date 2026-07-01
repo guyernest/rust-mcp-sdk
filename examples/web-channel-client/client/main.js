@@ -50,8 +50,19 @@ function originUrls() {
 // Connect the high-level Client with the stored bearer, then enable task actions.
 async function connectAndReady() {
     const { mcp } = originUrls();
+    // Disable Login while the connect is in flight so a click can't kick off an
+    // overlapping begin_login/connect on the same client. The WasmClient tolerates
+    // overlap (it returns a "client busy" error instead of aborting), but keeping
+    // the button disabled avoids surfacing that error on the normal path.
+    $('login-btn').disabled = true;
     log(`Connecting MCP client to ${mcp} ...`);
-    await client.connect(mcp);
+    try {
+        await client.connect(mcp);
+    } catch (e) {
+        // Connect failed (e.g. stale bearer) — re-enable Login so the user can retry.
+        $('login-btn').disabled = false;
+        throw e;
+    }
     setStatus('Logged in and connected.');
     $('invoke-btn').disabled = false;
     $('logout-btn').disabled = false;

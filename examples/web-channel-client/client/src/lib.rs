@@ -28,6 +28,9 @@
 
 #![cfg(target_arch = "wasm32")]
 
+use std::cell::RefCell;
+use std::rc::Rc;
+
 use pmcp::client::Client;
 use pmcp::shared::pkce::{code_challenge_s256, generate_code_verifier, generate_state};
 use pmcp::types::ClientCapabilities;
@@ -140,7 +143,23 @@ fn storage_remove(key: &str) -> std::result::Result<(), JsValue> {
 #[wasm_bindgen]
 pub struct WasmClient {
     /// High-level MCP client over the fixed Fetch transport (set by `connect`).
-    client: Option<Client<WasmHttpTransport>>,
+    ///
+    /// Held in a `RefCell` so that EVERY exported method can take `&self`. That is
+    /// the re-entrancy guard: under wasm-bindgen an exported `async fn(&mut self)`
+    /// holds a MUTABLE borrow of the JS object for the whole lifetime of the
+    /// returned promise, so a second call while one is in flight — e.g. a
+    /// load-time auto-reconnect (`connect`) overlapping a user's Login click —
+    /// aborts the module with "recursive use of an object detected which would
+    /// lead to unsafe aliasing in rust". With `&self` methods wasm-bindgen only
+    /// ever takes SHARED borrows, so overlap can never trip that check; genuine
+    /// contention for the connected client is instead funnelled through
+    /// `try_borrow`/`try_borrow_mut` on this cell and surfaced as a graceful
+    /// "client busy" error.
+    ///
+    /// The client is stored behind an `Rc` so a task method can clone the handle
+    /// out under a brief synchronous borrow and then `.await` on the clone — the
+    /// `RefCell` borrow is never held across a suspension point.
+    client: RefCell<Option<Rc<Client<WasmHttpTransport>>>>,
 }
 
 impl Default for WasmClient {
@@ -161,7 +180,9 @@ impl WasmClient {
             tracing_wasm::set_as_global_default();
         });
 
-        Self { client: None }
+        Self {
+            client: RefCell::new(None),
+        }
     }
 
     /// Begin the OAuth Authorization Code + PKCE flow (D-01/D-07).
@@ -173,7 +194,7 @@ impl WasmClient {
     /// (`window.location = authorize_url`).
     #[wasm_bindgen]
     pub fn begin_login(
-        &mut self,
+        &self,
         authorize_base: String,
         client_id: String,
         redirect_uri: String,
@@ -216,7 +237,7 @@ impl WasmClient {
     /// and stored as the bearer.
     #[wasm_bindgen]
     pub async fn complete_login(
-        &mut self,
+        &self,
         token_url: String,
         code: String,
         state: String,
@@ -261,7 +282,7 @@ impl WasmClient {
     /// threading the bearer into `extra_headers` as `Authorization: Bearer ...`
     /// (injected by the transport on every Fetch), then runs `initialize`.
     #[wasm_bindgen]
-    pub async fn connect(&mut self, url: String) -> std::result::Result<(), JsValue> {
+    pub async fn connect(&self, url: String) -> std::result::Result<(), JsValue> {
         let token = storage_get(KEY_TOKEN)?
             .ok_or_else(|| js_error("not logged in — complete the PKCE flow first"))?;
 
@@ -269,12 +290,21 @@ impl WasmClient {
             url,
             extra_headers: vec![("Authorization".to_string(), format!("Bearer {token}"))],
         };
+        // Build and initialize a LOCAL client — the handshake `.await` runs before
+        // the client is stored, so no borrow of `self.client` is held across it.
         let mut client = Client::new(WasmHttpTransport::new(config));
         client
             .initialize(ClientCapabilities::default())
             .await
             .map_err(to_js_error)?;
-        self.client = Some(client);
+        // Publish the connected client. `try_borrow_mut` fails only if another
+        // operation currently holds the cell (a concurrent task call) — surface
+        // that as a busy error rather than panicking.
+        *self
+            .client
+            .try_borrow_mut()
+            .map_err(|_| js_error("client busy — another operation is in progress"))? =
+            Some(Rc::new(client));
         Ok(())
     }
 
@@ -284,7 +314,7 @@ impl WasmClient {
     /// immediate result instead.
     #[wasm_bindgen]
     pub async fn invoke_task(
-        &mut self,
+        &self,
         name: String,
         args: JsValue,
     ) -> std::result::Result<String, JsValue> {
@@ -293,7 +323,7 @@ impl WasmClient {
         } else {
             serde_wasm_bindgen::from_value(args)?
         };
-        let client = self.client()?;
+        let client = self.connected_client()?;
         match client
             .call_tool_with_task(name, arguments)
             .await
@@ -310,16 +340,16 @@ impl WasmClient {
     /// (`working`, `completed`, `failed`, `cancelled`, `input_required`) so the
     /// JS poll loop can decide whether to stop.
     #[wasm_bindgen]
-    pub async fn poll_task(&mut self, task_id: String) -> std::result::Result<String, JsValue> {
-        let client = self.client()?;
+    pub async fn poll_task(&self, task_id: String) -> std::result::Result<String, JsValue> {
+        let client = self.connected_client()?;
         let task = client.tasks_get(&task_id).await.map_err(to_js_error)?;
         Ok(task.status.to_string())
     }
 
     /// Fetch a completed task's result as JSON (call once the status is terminal).
     #[wasm_bindgen]
-    pub async fn task_result(&mut self, task_id: String) -> std::result::Result<JsValue, JsValue> {
-        let client = self.client()?;
+    pub async fn task_result(&self, task_id: String) -> std::result::Result<JsValue, JsValue> {
+        let client = self.connected_client()?;
         let result = client.tasks_result(&task_id).await.map_err(to_js_error)?;
         serde_wasm_bindgen::to_value(&result).map_err(Into::into)
     }
@@ -327,28 +357,42 @@ impl WasmClient {
     /// Cancel a running task (D-09, the Cancel button). Returns the resulting
     /// status string.
     #[wasm_bindgen]
-    pub async fn cancel_task(&mut self, task_id: String) -> std::result::Result<String, JsValue> {
-        let client = self.client()?;
+    pub async fn cancel_task(&self, task_id: String) -> std::result::Result<String, JsValue> {
+        let client = self.connected_client()?;
         let task = client.tasks_cancel(&task_id).await.map_err(to_js_error)?;
         Ok(task.status.to_string())
     }
 
     /// Clear the stored bearer (and the transient PKCE secrets), e.g. on logout.
     #[wasm_bindgen]
-    pub fn logout(&mut self) -> std::result::Result<(), JsValue> {
+    pub fn logout(&self) -> std::result::Result<(), JsValue> {
         for key in [KEY_TOKEN, KEY_VERIFIER, KEY_STATE] {
             storage_remove(key)?;
         }
-        self.client = None;
+        // Best-effort drop of the connected client. If an operation is in flight
+        // (cell borrowed), the tokens are already cleared and the client is
+        // dropped when that op completes — no panic, no blocking.
+        if let Ok(mut slot) = self.client.try_borrow_mut() {
+            *slot = None;
+        }
         Ok(())
     }
 }
 
 impl WasmClient {
-    /// Borrow the connected high-level client, or error if `connect` was not run.
-    fn client(&mut self) -> std::result::Result<&mut Client<WasmHttpTransport>, JsValue> {
+    /// Clone out an `Rc` handle to the connected client for the duration of one
+    /// task call. The `RefCell` borrow is released before the caller `.await`s (so
+    /// no borrow is held across a suspension point), and a concurrent `connect`
+    /// or `logout` (which want `try_borrow_mut`) degrades to a graceful "client
+    /// busy" error rather than a `RefCell` panic. `None` maps to "not connected".
+    fn connected_client(
+        &self,
+    ) -> std::result::Result<Rc<Client<WasmHttpTransport>>, JsValue> {
         self.client
-            .as_mut()
+            .try_borrow()
+            .map_err(|_| js_error("client busy — another operation is in progress"))?
+            .as_ref()
+            .cloned()
             .ok_or_else(|| js_error("not connected — call connect() after login"))
     }
 }
