@@ -233,15 +233,18 @@ impl WasmClient {
         let verifier = storage_get(KEY_VERIFIER)?
             .ok_or_else(|| js_error("no stored PKCE verifier — start login again"))?;
 
+        // WR-01: the verifier and CSRF state are single-use. Consume them from
+        // sessionStorage NOW — before the exchange — so that a FAILED exchange cannot
+        // leave reusable secrets behind, and any retry is forced through a fresh
+        // `begin_login` (which mints a new verifier + state). We already hold the
+        // verifier in a local, so the exchange below still has what it needs.
+        storage_remove(KEY_VERIFIER)?;
+        storage_remove(KEY_STATE)?;
+
         let access_token =
             exchange_code(&token_url, &code, &verifier, &redirect_uri, &client_id).await?;
 
         storage_set(KEY_TOKEN, &access_token)?;
-
-        // WR-01: the verifier and state are single-use and consumed by this exchange.
-        // Remove them so they cannot be read back from sessionStorage after login.
-        storage_remove(KEY_VERIFIER)?;
-        storage_remove(KEY_STATE)?;
 
         Ok(())
     }

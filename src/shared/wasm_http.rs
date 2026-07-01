@@ -196,16 +196,34 @@ impl WasmHttpTransport {
 #[async_trait(?Send)]
 impl Transport for WasmHttpTransport {
     async fn send(&mut self, message: TransportMessage) -> Result<()> {
-        // One-shot HTTP: POST the message and BUFFER the parsed response so the
-        // high-level client's subsequent `receive()` can correlate it. `do_request`
-        // already injects `extra_headers` (the bearer), manages `mcp-session-id`,
-        // and parses the response into a `TransportMessage`.
-        //
-        // `put` propagates an error when a prior response is still buffered (a
-        // double `send()` before `receive()`) — the first response is never
-        // silently dropped (MEDIUM-4).
-        let response = self.do_request(&message).await?;
-        self.pending.put(response)
+        match message {
+            // A Request expects exactly one JSON-RPC response. POST it, parse the
+            // response, and BUFFER it so the client's subsequent `receive()` can
+            // correlate it. `do_request` injects `extra_headers` (the bearer) and
+            // manages `mcp-session-id`.
+            //
+            // `put` propagates an error when a prior response is still buffered (a
+            // double `send()` before `receive()`) — the first response is never
+            // silently dropped (MEDIUM-4).
+            TransportMessage::Request { .. } => {
+                let response = self.do_request(&message).await?;
+                self.pending.put(response)
+            },
+            // A Notification (or an outbound Response to a server-initiated request)
+            // gets an HTTP 202 with an EMPTY body — there is no JSON-RPC response to
+            // parse or correlate. POST it and ignore the empty body; do NOT occupy the
+            // pending slot, or the next Request's `receive()` would drain this instead
+            // of its own response. Without this arm, `initialize`'s trailing
+            // `notifications/initialized` POST would try to parse an empty 202 body and
+            // fail the whole handshake, so `Client::initialize` (and thus every browser
+            // login) would error.
+            TransportMessage::Notification(_) | TransportMessage::Response(_) => {
+                let body = serde_json::to_string(&message)
+                    .map_err(|e| Error::internal(format!("Failed to serialize message: {}", e)))?;
+                self.do_http_request(&body).await?;
+                Ok(())
+            },
+        }
     }
 
     async fn receive(&mut self) -> Result<TransportMessage> {

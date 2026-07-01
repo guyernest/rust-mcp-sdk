@@ -137,8 +137,15 @@ async function pollOnce() {
         }
         currentTaskId = null;
     } catch (e) {
-        log(`Poll error: ${e.message || e}`);
-        setTimeout(pollOnce, POLL_INTERVAL_MS);
+        // A poll failure is terminal for this loop (e.g. the bearer expired or the
+        // server went away). Stop rather than re-arming every 500ms forever — an
+        // unbounded retry would spin indefinitely and leave the buttons stuck. Surface
+        // it and restore the controls so the user can retry.
+        log(`Poll error, stopping: ${e.message || e}`);
+        setTaskStatus('error');
+        $('cancel-btn').disabled = true;
+        $('invoke-btn').disabled = false;
+        currentTaskId = null;
     }
 }
 

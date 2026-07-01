@@ -251,14 +251,27 @@ fn oauth_routes(idp: Arc<InMemoryOAuthProvider>) -> Router {
 /// "what existed BEFORE me" so the updater can identify the single NEW Working task it
 /// minted (MEDIUM-6 race-narrowing without a marker).
 async fn working_task_ids(store: &Arc<dyn TaskStore>, owner: &str) -> HashSet<String> {
-    match store.list(owner, None).await {
-        Ok((tasks, _cursor)) => tasks
-            .into_iter()
-            .filter(|t| t.status == TaskStatus::Working)
-            .map(|t| t.task_id)
-            .collect(),
-        Err(_) => HashSet::new(),
+    // Page through the ENTIRE owner task set — `store.list` returns one page
+    // (PAGE_SIZE = 20) and a cursor. Stopping at the first page would miss the newly
+    // minted Working task once an owner accumulates >20 tasks (completed tasks are not
+    // evicted here), causing the updater to never observe the mint and the task to hang.
+    let mut ids = HashSet::new();
+    let mut cursor: Option<String> = None;
+    // `while let Ok(...)` stops on a store error; the inner `None` cursor breaks at the
+    // last page.
+    while let Ok((tasks, next)) = store.list(owner, cursor.as_deref()).await {
+        ids.extend(
+            tasks
+                .into_iter()
+                .filter(|t| t.status == TaskStatus::Working)
+                .map(|t| t.task_id),
+        );
+        match next {
+            Some(c) => cursor = Some(c),
+            None => break,
+        }
     }
+    ids
 }
 
 /// Background updater: complete the single new `Working` task that appeared for `owner`
@@ -276,14 +289,16 @@ async fn complete_delayed_task(store: Arc<dyn TaskStore>, owner: String, before:
     for _ in 0..50 {
         tokio::time::sleep(Duration::from_millis(20)).await;
         let now = working_task_ids(&store, &owner).await;
-        let new_ids: Vec<String> = now.difference(&before).cloned().collect();
-        match new_ids.as_slice() {
-            [] => continue,
-            [only] => {
+        // Detect zero / exactly-one / more-than-one new Working id via the iterator
+        // directly — no intermediate Vec/clone just to count cardinality.
+        let mut new_ids = now.difference(&before);
+        match (new_ids.next(), new_ids.next()) {
+            (None, _) => continue, // not landed yet — keep polling within the window
+            (Some(only), None) => {
                 minted_id = Some(only.clone());
                 break;
             },
-            _ => {
+            (Some(_), Some(_)) => {
                 // Concurrent same-owner creates: cannot safely correlate without a
                 // marker (MEDIUM-6 limitation). Decline rather than risk the wrong task.
                 tracing::warn!(
@@ -302,6 +317,24 @@ async fn complete_delayed_task(store: Arc<dyn TaskStore>, owner: String, before:
 
     // Simulate multi-second work so the browser polls Working several times.
     tokio::time::sleep(TASK_WORK_DURATION).await;
+
+    // A concurrent `tasks/cancel` may have finalized the task during the work delay.
+    // Only complete it if it is STILL `Working` — writing a result onto an already
+    // `Cancelled` task would leave contradictory terminal state (a cancelled task
+    // whose `tasks/result` returns "completed" content), because `set_result` does not
+    // itself check status. This narrows the race to the get→set_result window; the
+    // `update_status` transition guard below is the backstop for that remainder.
+    match store.get(&task_id, &owner).await {
+        Ok(task) if task.status == TaskStatus::Working => {},
+        Ok(task) => {
+            tracing::info!(%task_id, status = ?task.status, "task already terminal (e.g. cancelled) — not completing");
+            return;
+        },
+        Err(e) => {
+            tracing::warn!(%task_id, error = %e, "task no longer retrievable — not completing");
+            return;
+        },
+    }
 
     let result = CallToolResult::new(vec![Content::text(
         "summary: processed the request and produced a 3-point summary",
