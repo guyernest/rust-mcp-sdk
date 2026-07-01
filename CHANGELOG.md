@@ -36,6 +36,29 @@ transport. Both are purely additive public API — no breaking changes.
   on an occupied slot) so the high-level `Client` and its typed task helpers
   work over browser Fetch (D-08). The `WasmHttpTransport` symbol was already
   exported; this is a behavior change that makes it usable.
+- **`Instant::now()` no longer panics on `wasm32`** — `MiddlewareContext`
+  stamped a `std::time::Instant`, which panics with "time not implemented on
+  this platform" on `wasm32-unknown-unknown`. Because `Client::send_request`
+  builds a `MiddlewareContext` per request, *every* MCP request aborted in the
+  browser. `src/shared/middleware.rs` now uses `web_time::Instant` (a drop-in
+  that is `std::time::Instant` on native and `performance.now()`-backed on
+  wasm). Adds the lightweight `web-time` dependency.
+- **`WasmHttpTransport` puts a valid JSON-RPC frame on the wire** — it
+  serialized the untagged `TransportMessage` enum directly, so a request went
+  out as `{"id":…,"request":…}` and servers rejected it with `-32700`
+  "Unknown message type". The pure JSON-RPC codec
+  (`serialize_message`/`parse_message`) is now the single source of truth in
+  `pmcp::shared::transport`; `StdioTransport` delegates to it and
+  `WasmHttpTransport` uses it for both directions.
+- **`WasmHttpTransport` reads SSE tool responses** — the streamable-HTTP
+  server answers `initialize` as `application/json` but streams `tools/call` /
+  `tasks/*` results as a single `text/event-stream` frame. A browser Fetch
+  cannot negotiate SSE streaming, so the transport now accepts *both* a raw
+  JSON body and a single SSE `data:` frame before parsing.
+
+  These last three fixes were surfaced by end-to-end browser UAT of the
+  `web-channel-client` example; they are invisible to `wasm-pack build` and to
+  the native HTTP tests, which run on a host target with SSE-aware transports.
 
 ### Changed
 

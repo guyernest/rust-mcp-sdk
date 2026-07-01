@@ -88,6 +88,14 @@ jsonwebtoken = { version = "10.3", optional = true }
 # feature; getrandom 0.4 selects its backend per-target (host uses the OS backend).
 getrandom = "0.4"
 
+# Cross-target monotonic clock. `std::time::Instant::now()` PANICS on
+# wasm32-unknown-unknown ("time not implemented on this platform"), which aborts
+# every `Client::send_request` in the browser because `MiddlewareContext::default()`
+# stamps a `start_time: Instant`. `web_time::Instant` IS `std::time::Instant` on
+# native targets (zero behavior change) and is backed by `performance.now()` on wasm.
+# Normal [dependencies] entry so the shared `middleware` module links on host AND wasm.
+web-time = "1"
+
 # OAuth CLI helper dependencies (feature-gated)
 webbrowser = { version = "1", optional = true }
 dirs = { version = "6", optional = true }

@@ -76,15 +76,58 @@ impl WasmHttpTransport {
 
     /// Perform an HTTP request and handle the response.
     async fn do_request(&mut self, message: &TransportMessage) -> Result<TransportMessage> {
-        // Serialize the message
-        let body = serde_json::to_string(message)
-            .map_err(|e| Error::internal(format!("Failed to serialize message: {}", e)))?;
+        // Encode as a JSON-RPC 2.0 frame via the shared codec. Serializing the
+        // untagged `TransportMessage` directly would emit `{"id":…,"request":…}`,
+        // which the server rejects with -32700 "Unknown message type".
+        let json_bytes = crate::shared::transport::serialize_message(message)?;
+        let body = String::from_utf8(json_bytes)
+            .map_err(|e| Error::internal(format!("Serialized message is not UTF-8: {}", e)))?;
 
         let response_text = self.do_http_request(&body).await?;
 
-        // Parse as TransportMessage
-        serde_json::from_str(&response_text)
-            .map_err(|e| Error::internal(format!("Failed to parse response: {}", e)))
+        // The streamable-HTTP server answers `initialize` as a raw JSON body but
+        // streams request/response results (e.g. `tools/call`, `tasks/*`) as a
+        // single Server-Sent Events frame — `text/event-stream` — regardless of
+        // the `Accept` header. A browser Fetch cannot negotiate SSE streaming, so
+        // accept BOTH shapes here and unwrap the JSON-RPC payload before parsing.
+        let payload = Self::extract_jsonrpc_payload(&response_text)?;
+        crate::shared::transport::parse_message(payload.as_bytes())
+    }
+
+    /// Unwrap the JSON-RPC payload from an HTTP response body that is either a
+    /// raw JSON object or a single Server-Sent Events (`text/event-stream`) frame.
+    ///
+    /// A JSON body is returned verbatim. For an SSE frame we return the `data:`
+    /// field of the first event (per the SSE spec, multiple `data:` lines within
+    /// one event are joined with `\n`), which carries the JSON-RPC response.
+    fn extract_jsonrpc_payload(body: &str) -> Result<String> {
+        let trimmed = body.trim_start();
+        if trimmed.starts_with('{') || trimmed.starts_with('[') {
+            return Ok(body.to_string());
+        }
+
+        let mut data = String::new();
+        for line in body.lines() {
+            if let Some(rest) = line.strip_prefix("data:") {
+                if !data.is_empty() {
+                    data.push('\n');
+                }
+                // A single optional leading space after the colon is part of the
+                // SSE framing, not the payload.
+                data.push_str(rest.strip_prefix(' ').unwrap_or(rest));
+            } else if line.is_empty() && !data.is_empty() {
+                // Blank line terminates the first event that carried data.
+                break;
+            }
+        }
+
+        if data.is_empty() {
+            return Err(Error::internal(format!(
+                "Response body is neither JSON nor an SSE data frame (first 120 chars): {}",
+                body.chars().take(120).collect::<String>()
+            )));
+        }
+        Ok(data)
     }
 
     /// Perform an HTTP request and return the raw response text.
@@ -218,8 +261,10 @@ impl Transport for WasmHttpTransport {
             // fail the whole handshake, so `Client::initialize` (and thus every browser
             // login) would error.
             TransportMessage::Notification(_) | TransportMessage::Response(_) => {
-                let body = serde_json::to_string(&message)
-                    .map_err(|e| Error::internal(format!("Failed to serialize message: {}", e)))?;
+                let json_bytes = crate::shared::transport::serialize_message(&message)?;
+                let body = String::from_utf8(json_bytes).map_err(|e| {
+                    Error::internal(format!("Serialized message is not UTF-8: {}", e))
+                })?;
                 self.do_http_request(&body).await?;
                 Ok(())
             },
