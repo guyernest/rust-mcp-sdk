@@ -24,6 +24,7 @@ examples/web-channel-client/
 │   ├── src/lib.rs   #   #[wasm_bindgen] WasmClient: PKCE + high-level task helpers
 │   ├── src/utils.js #   structured-error glue
 │   ├── build.sh     #   wasm-pack build --target web
+│   ├── serve.py     #   callback-aware static server (maps /callback -> index.html)
 │   ├── index.html   #   Login + task status + Cancel UI
 │   ├── main.js      #   redirect-detect + explicit 500ms poll loop
 │   └── style.css
@@ -56,9 +57,11 @@ cd examples/web-channel-client/client
 cargo run --manifest-path examples/web-channel-client/server/Cargo.toml
 
 # 3. Serve the client page on http://127.0.0.1:8080 (the registered redirect
-#    origin) and open it.
+#    origin) and open it. Use the bundled serve.py — it maps the OAuth
+#    /callback path to index.html (see "The redirect URI" below); a plain
+#    `python3 -m http.server 8080` 404s on the redirect return.
 cd examples/web-channel-client/client
-python3 -m http.server 8080
+python3 serve.py
 # open http://127.0.0.1:8080/index.html
 ```
 
@@ -73,13 +76,20 @@ task**. Click it and watch the task status flip `working → completed` across t
 
 The bundled IdP pre-registers the client `redirect_uri` as
 `http://127.0.0.1:8080/callback`. PKCE requires the `redirect_uri` sent at
-authorize-time to match a registered URI exactly. For the simplest run, serve
-the client so that path resolves to `index.html` — e.g. copy `index.html` to a
-file named `callback`, or use any static server that serves `index.html` for
-`/callback`. The page's JS handles `?code=&state=` regardless of the path it is
-served from. Alternatively, change the registered `redirect_uri` in
-`server/src/main.rs` and the `REDIRECT_URI` constant in `main.js` to match your
-serving setup.
+authorize-time to match a registered URI exactly, so the OAuth redirect returns
+the browser to `/callback?code=&state=`. The page's JS handles `?code=&state=`
+regardless of the path it is served from — the only requirement is that
+`/callback` resolves to the app HTML.
+
+The bundled **`serve.py`** does exactly that: it maps a GET on `/callback` to
+`index.html` (served as `text/html`). Do NOT reach for a plain
+`python3 -m http.server 8080` here — it 404s on `/callback`, and the obvious
+workaround (copying `index.html` to a file named `callback`) makes the server
+send it as `application/octet-stream`, so the browser downloads the file instead
+of rendering it. If you prefer your own static server, make it serve the app
+HTML for `/callback` with a `text/html` content type. Alternatively, change the
+registered `redirect_uri` in `server/src/main.rs` and the `REDIRECT_URI`
+constant in `main.js` (e.g. to `.../index.html`) to match your serving setup.
 
 ## How the pieces fit (adapting this as a web-app channel)
 

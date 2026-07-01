@@ -62,9 +62,12 @@ a single SSE `data:` frame before parsing.
   suspension point — clippy `await_holding_refcell_ref` clean). `main.js` also disables Login
   during an in-flight connect (re-enabled on failure) so the normal path never surfaces "busy".
   Structural guarantee; browser re-verify recommended (timing-dependent to reproduce the old panic).
-- **B (MINOR, docs):** README quickstart hits the `/callback` 404 + extensionless-file
-  download trap with plain `python3 -m http.server`. Recommend shipping a callback-aware
-  static server snippet, or registering the redirect_uri as `/index.html`.
+- **B (MINOR, docs) — FIXED (F5):** README quickstart hit the `/callback` 404 +
+  extensionless-file download trap with plain `python3 -m http.server`. Fix: ship
+  `client/serve.py`, a callback-aware static server that maps GET `/callback` to
+  `index.html` as `text/html`; `build.sh` and the README quickstart + "The redirect URI"
+  section now point to it and explain why the stock server fails. Verified: `serve.py`
+  returns `/callback` → 200 `text/html`.
 
 ## Summary
 
