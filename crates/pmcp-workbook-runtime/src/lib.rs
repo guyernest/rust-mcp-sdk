@@ -71,6 +71,11 @@ pub mod render;
 /// the served binary deserializes it — the crate-purity invariant.
 pub mod changelog;
 
+/// Reference-input reconciliation (WBVER-03): re-run the executor at the
+/// workbook's reference inputs and diff each output against `Tool.oracle` within
+/// `TOL` — the reader-free, pure-diff core of the `verify_accuracy` meta-tool.
+pub mod reconcile;
+
 // ---- Curated re-export surface (matches the names workbook-compiler exported) ----
 
 pub use excel_error::ExcelError;
@@ -101,7 +106,9 @@ pub use bundle_source::{BundleSource, BundleSourceError, LocalDirSource};
 
 pub use bundle_loader::{load as load_bundle, BundleLoadError, WorkbookBundle};
 
-pub use render::{CellLayout, LayoutDescriptor, SheetLayout, LAYOUT_DESCRIPTOR_VERSION};
+pub use render::{
+    CellLayout, LayoutDescriptor, RenderMode, SheetLayout, LAYOUT_DESCRIPTOR_VERSION,
+};
 
 // NOTE: `changelog::Severity` is INTENTIONALLY not re-exported at the crate root —
 // `finding::Severity` (the lint-finding tier) already occupies the bare `Severity`
@@ -109,6 +116,10 @@ pub use render::{CellLayout, LayoutDescriptor, SheetLayout, LAYOUT_DESCRIPTOR_VE
 // module path `pmcp_workbook_runtime::changelog::Severity` (Rule 3 — blocking name
 // collision resolved without aliasing the historical lint `Severity`).
 pub use changelog::{ChangeClass, OutputDelta, OutputMeta, VersionChangelog};
+
+pub use reconcile::{
+    reconcile_reference, seed_reference_inputs, OutputRow, ReconcileReport, ToolReport,
+};
 
 pub use scalar_eval::eval_scalar;
 

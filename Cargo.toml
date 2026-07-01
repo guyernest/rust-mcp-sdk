@@ -1,6 +1,6 @@
 [package]
 name = "pmcp"
-version = "2.10.0"
+version = "2.11.0"
 edition = "2021"
 authors = ["PAIML Team"]
 description = "High-quality Rust SDK for Model Context Protocol (MCP) with full TypeScript SDK compatibility"
@@ -81,6 +81,20 @@ http-body-util = "0.1"
 sha2 = "0.11"
 base64 = "0.22"
 jsonwebtoken = { version = "10.3", optional = true }
+
+# Cross-target CSPRNG for the wasm-safe PKCE helper (src/shared/pkce.rs).
+# HIGH-1: must be a NORMAL [dependencies] entry so the ungated pkce module links
+# on the HOST target too — the wasm32 target below keeps the `wasm_js` backend
+# feature; getrandom 0.4 selects its backend per-target (host uses the OS backend).
+getrandom = "0.4"
+
+# Cross-target monotonic clock. `std::time::Instant::now()` PANICS on
+# wasm32-unknown-unknown ("time not implemented on this platform"), which aborts
+# every `Client::send_request` in the browser because `MiddlewareContext::default()`
+# stamps a `start_time: Instant`. `web_time::Instant` IS `std::time::Instant` on
+# native targets (zero behavior change) and is backed by `performance.now()` on wasm.
+# Normal [dependencies] entry so the shared `middleware` module links on host AND wasm.
+web-time = "1"
 
 # OAuth CLI helper dependencies (feature-gated)
 webbrowser = { version = "1", optional = true }
@@ -543,13 +557,18 @@ name = "s45_tool_as_task_lifecycle"
 path = "examples/s45_tool_as_task_lifecycle.rs"
 required-features = ["full"]
 
+[[example]]
+name = "s46_http_tool_as_task"
+path = "examples/s46_http_tool_as_task.rs"
+required-features = ["full"]
+
 [[bench]]
 name = "comprehensive_benchmarks"
 harness = false
 [workspace]
 members = ["pmcp-macros", "crates/pmcp-macros-support", "crates/mcp-tester", "crates/mcp-preview", "crates/pmcp-server", "crates/pmcp-server/pmcp-server-lambda", "crates/pmcp-tasks", "crates/mcp-e2e-tests", "crates/pmcp-widget-utils", "crates/pmcp-code-mode", "crates/pmcp-code-mode-derive", "crates/pmcp-server-toolkit", "crates/pmcp-toolkit-postgres", "crates/pmcp-toolkit-mysql", "crates/pmcp-toolkit-athena", "crates/pmcp-sql-server", "crates/pmcp-workbook-server", "crates/pmcp-openapi-server", "crates/pmcp-workbook-runtime", "crates/pmcp-workbook-dialect", "crates/pmcp-workbook-compiler", "examples/25-oauth-basic", "examples/test-basic", "cargo-pmcp"]
 # WASM examples and standalone examples are excluded from regular workspace tests
-exclude = ["fuzz", "examples/cloudflare-worker-mcp", "examples/26-server-tester", "examples/27-course-server-minimal", "examples/wasm-client", "examples/mcp-apps-chess", "examples/mcp-apps-map", "examples/mcp-apps-dataviz"]
+exclude = ["fuzz", "examples/cloudflare-worker-mcp", "examples/26-server-tester", "examples/27-course-server-minimal", "examples/wasm-client", "examples/web-channel-client/client", "examples/web-channel-client/server", "examples/mcp-apps-chess", "examples/mcp-apps-map", "examples/mcp-apps-dataviz"]
 
 [package.metadata.docs.rs]
 features = [

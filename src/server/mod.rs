@@ -74,6 +74,9 @@ pub mod simple_resources;
 /// Simple tool implementations with schema support.
 #[cfg(not(target_arch = "wasm32"))]
 pub mod simple_tool;
+/// Shared task-lifecycle dispatch unit used by both Server and ServerCore.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) mod task_dispatch;
 /// SDK-level task store trait and in-memory implementation.
 #[cfg(not(target_arch = "wasm32"))]
 pub mod task_store;
@@ -217,6 +220,8 @@ mod wasi_protocol {
 mod adapter_tests;
 #[cfg(test)]
 mod core_tests;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod task_dispatch_tests;
 
 /// Handler for tool execution.
 #[cfg(not(target_arch = "wasm32"))]
@@ -352,6 +357,16 @@ pub struct Server {
     /// HTTP middleware chain for `StreamableHttpServer` (configured via `ServerBuilder`)
     #[cfg(feature = "streamable-http")]
     http_middleware: Option<Arc<http_middleware::ServerHttpMiddlewareChain>>,
+    /// Legacy experimental task router backend (fall-through path). Mirrors
+    /// `ServerCore`'s field; presence backs the `tasks/*` endpoints over the
+    /// router. Both backends feed the shared `task_dispatch` unit.
+    #[cfg(not(target_arch = "wasm32"))]
+    task_router: Option<Arc<dyn crate::server::tasks::TaskRouter>>,
+    /// Standard task store backend (polling path). Mirrors `ServerCore`'s field;
+    /// presence flips the `tasks` capability on at `build()` and backs the
+    /// `tasks/*` endpoints + create-path via the shared `task_dispatch` unit.
+    #[cfg(not(target_arch = "wasm32"))]
+    task_store: Option<Arc<dyn crate::server::task_store::TaskStore>>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -800,6 +815,15 @@ impl Server {
     /// # }
     /// ```
     ///
+    /// # Security: task isolation
+    ///
+    /// Stdio (and any transport that does not resolve a per-request
+    /// `AuthContext`) carries no authenticated principal, so every `tasks/*`
+    /// request on a [`task_store`](ServerBuilder::task_store)-backed server is
+    /// owned by the single `"local"` owner — there is NO per-user task isolation.
+    /// This is correct for single-user CLI use; for multi-tenant deployments use
+    /// an HTTP transport whose auth layer populates the OAuth subject.
+    ///
     /// # Errors
     ///
     /// Returns an error if:
@@ -851,6 +875,13 @@ impl Server {
     /// # Ok(())
     /// # }
     /// ```
+    ///
+    /// # Security: task isolation
+    ///
+    /// Per-user `tasks/*` isolation requires the transport to resolve a per-request
+    /// `AuthContext` carrying the OAuth subject. Transports without one (stdio and
+    /// the like) own every task under the single `"local"` owner — no per-user
+    /// isolation. Use an authenticating HTTP transport for multi-tenant task servers.
     ///
     /// # Errors
     ///
@@ -1116,6 +1147,35 @@ impl Server {
         request: ClientRequest,
         auth_context: Option<auth::AuthContext>,
     ) -> JSONRPCResponse {
+        // ADAPTER (a) — tasks/* dispatch at the post-auth assembly layer.
+        //
+        // The four `tasks/*` variants are served by the SHARED `task_dispatch`
+        // unit (the SAME `route_tasks_endpoint` `ServerCore` uses), returning a
+        // full `JSONRPCResponse` DIRECTLY — no `JSONRPCResponse -> Result<Value>`
+        // round-trip and no double-wrap, so the FROZEN `-32002` pending code
+        // survives unchanged (T-102-07).
+        //
+        // SECURITY (T-102-04): this interception sits DOWNSTREAM of auth
+        // resolution — `auth_context` is the already-resolved context the
+        // transport layer passed into `handle_request`, threaded here unchanged.
+        // The tasks/* path is therefore subject to the SAME auth as every other
+        // request; owner-scoping inside `route_tasks_endpoint` derives the owner
+        // from this `AuthContext` ONLY (never client params), enforcing
+        // cross-owner isolation (T-102-05).
+        #[cfg(not(target_arch = "wasm32"))]
+        if matches!(
+            request,
+            ClientRequest::TasksGet(_)
+                | ClientRequest::TasksResult(_)
+                | ClientRequest::TasksList(_)
+                | ClientRequest::TasksCancel(_)
+        ) {
+            return self
+                .task_dispatch()
+                .route_tasks_endpoint(id, &request, auth_context.as_ref())
+                .await;
+        }
+
         let result = self
             .process_client_request(id.clone(), request, auth_context)
             .await;
@@ -1162,14 +1222,29 @@ impl Server {
             // Note: Elicitation responses are now handled as the response to
             // ServerRequest::ElicitationCreate in the JSON-RPC response flow,
             // not as a separate client request variant.
-            // Task requests (experimental MCP Tasks) — routed directly in each arm below
+            // Task requests (experimental MCP Tasks). On non-wasm these are
+            // intercepted UPSTREAM in `handle_client_request` (adapter (a)) and
+            // served by the shared `task_dispatch` unit, so they never reach
+            // here. This arm is the wasm32 fall-through (the task lifecycle is
+            // non-wasm-gated): the endpoints are genuinely unsupported there.
             ClientRequest::TasksGet(_)
             | ClientRequest::TasksResult(_)
             | ClientRequest::TasksList(_)
             | ClientRequest::TasksCancel(_) => Err(crate::Error::protocol(
                 crate::ErrorCode::METHOD_NOT_FOUND,
-                "Tasks not supported: no task router configured",
+                "Tasks not supported on this build",
             )),
+        }
+    }
+
+    /// Borrow this server's task backends as a [`TaskDispatch`] for the shared
+    /// task-lifecycle unit. Single construction point so the `tasks/*` and
+    /// create-path call sites don't re-inline the struct literal.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn task_dispatch(&self) -> crate::server::task_dispatch::TaskDispatch<'_> {
+        crate::server::task_dispatch::TaskDispatch {
+            task_store: &self.task_store,
+            task_router: &self.task_router,
         }
     }
 
@@ -1214,6 +1289,24 @@ impl Server {
             .tools
             .get(&req.name)
             .ok_or_else(|| Error::not_found(format!("Tool '{}' not found", req.name)))?;
+
+        // Capture the create-path inputs BEFORE `req` is partially moved
+        // (arguments are consumed by the middleware/handler below). The
+        // create-path gate (Phase 102) reads:
+        //   - whether the client requested task augmentation (`req.task`), and
+        //   - the tool's declared `TaskSupport` (from the cached `tool_infos`).
+        // The SHARED `maybe_build_task_created` enforces the FULL gate
+        // internally — we pass these RAW facts, never a pre-filtered precondition.
+        #[cfg(not(target_arch = "wasm32"))]
+        let task_requested = req.task.is_some();
+        #[cfg(not(target_arch = "wasm32"))]
+        let tool_task_support = self
+            .tool_infos
+            .get(&req.name)
+            .and_then(|info| info.execution.as_ref())
+            .and_then(|exec| exec.task_support);
+        #[cfg(not(target_arch = "wasm32"))]
+        let create_path_id = request_id.clone();
 
         let request_id_str = request_id.to_string();
         let cancellation_token = self
@@ -1264,6 +1357,12 @@ impl Server {
                     Arc::new(reporter) as Arc<dyn crate::server::progress::ProgressReporter>
                 })
             });
+
+        // Clone the validated auth context for the create-path owner resolution
+        // (the original is moved into `extra` below). This guarantees the
+        // create-path scopes the minted task to the SAME owner the tool ran as.
+        #[cfg(not(target_arch = "wasm32"))]
+        let create_path_auth = validated_auth_context.clone();
 
         let mut extra = self.attach_peer(
             crate::server::cancellation::RequestHandlerExtra::new(
@@ -1343,6 +1442,53 @@ impl Server {
             },
             Err(e) => return Err(e),
         };
+
+        // CREATE-PATH (Phase 102, HTASK-02): a task-augmented `tools/call` over
+        // the high-level `Server` mints a store task and returns a
+        // `CreateTaskResult` envelope. The SHARED `maybe_build_task_created`
+        // gate is the SINGLE source of truth: it returns `Some` ONLY when the
+        // client requested a task AND a store backend exists AND the tool's
+        // `TaskSupport ∈ {Required, Optional}` AND the produced value is
+        // task-shaped (`taskId` + `status`); otherwise `None` (fall through to a
+        // normal `CallToolResult`, no leakage — incl. `Forbidden`/`None`).
+        //
+        // The store mints the canonical id (D-STORE-MINTS-ID); the tool's
+        // fabricated `taskId` is never trusted on the wire. We pass the RAW
+        // facts (`task_requested`, `tool_task_support`) — the gate enforces the
+        // complete precondition internally. The gate returns a full
+        // `JSONRPCResponse`; we decompose it back into this fn's `Result<Value>`
+        // contract (the caller re-wraps with the SAME request id via
+        // `create_response`, so the id is preserved and `-32603` store errors
+        // surface as JSON-RPC errors).
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            if let Some(response) = self
+                .task_dispatch()
+                .maybe_build_task_created(
+                    create_path_id,
+                    &result,
+                    tool_task_support,
+                    task_requested,
+                    create_path_auth.as_ref(),
+                )
+                .await
+            {
+                return match response.payload {
+                    crate::types::jsonrpc::ResponsePayload::Result(value) => Ok(value),
+                    // The create-path only emits `-32603` store errors here; the
+                    // caller's `create_response` re-wraps `Err` as `-32603`, so
+                    // the code is preserved. Surface the store's message.
+                    crate::types::jsonrpc::ResponsePayload::Error(err) => {
+                        Err(crate::Error::Protocol {
+                            code: crate::error::ErrorCode(err.code),
+                            message: err.message,
+                            data: err.data,
+                        })
+                    },
+                };
+            }
+        }
+
         // Build CallToolResult, adding structured_content for widget tools
         let text = result.to_string();
         let mut call_result = CallToolResult::new(vec![crate::types::Content::text(text)]);
@@ -1911,6 +2057,13 @@ pub struct ServerBuilder {
     /// `.skill(...)` / `.skills(...)` calls never produce nested wrappers.
     #[cfg(feature = "skills")]
     pending_skills: Option<skills::Skills>,
+    /// Legacy experimental task router backend (set via [`Self::with_task_store`]).
+    #[cfg(not(target_arch = "wasm32"))]
+    task_router: Option<Arc<dyn crate::server::tasks::TaskRouter>>,
+    /// Standard task store backend (set via [`Self::task_store`]). Presence
+    /// auto-advertises the `tasks` capability at `build()`.
+    #[cfg(not(target_arch = "wasm32"))]
+    task_store: Option<Arc<dyn crate::server::task_store::TaskStore>>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -1974,6 +2127,10 @@ impl ServerBuilder {
             icons: None,
             #[cfg(feature = "skills")]
             pending_skills: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            task_router: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            task_store: None,
         }
     }
 
@@ -3523,10 +3680,111 @@ impl ServerBuilder {
     ///
     /// # Errors
     ///
+    /// Register a [`TaskStore`](crate::server::task_store::TaskStore) for MCP
+    /// Tasks on the high-level HTTP-facing `Server` (RECOMMENDED tools-as-Tasks
+    /// path).
+    ///
+    /// This is the recommended, all-typed path for exposing a tool as an async
+    /// MCP Task over the `Server` / `StreamableHttpServer` path: pair a
+    /// task-capable [`TypedTool`](crate::server::typed_tool::TypedTool) (marked
+    /// [`with_task_support(TaskSupport::Required)`](crate::types::ToolExecution::with_task_support))
+    /// with a store here, and the SDK serves `tasks/*` typed from the store —
+    /// you never hand-write `tasks/*` wire JSON, and the store mints the task id.
+    /// For the legacy experimental router path, use [`Self::with_task_store`]
+    /// (which takes a [`TaskRouter`](crate::server::tasks::TaskRouter), NOT a
+    /// `TaskStore`).
+    ///
+    /// When a task store is registered, the server:
+    /// - **Auto-advertises** `ServerCapabilities.tasks` (with list and cancel
+    ///   support) in `initialize` — the mere presence of a store flips the
+    ///   capability on, unless an explicit `tasks` capability was already
+    ///   configured (additive-only; an explicit value is preserved verbatim).
+    /// - Handles `tasks/get`, `tasks/result`, `tasks/list`, `tasks/cancel`
+    ///   requests via the store
+    /// - Resolves task owner from auth context (OAuth subject, client ID, or session ID)
+    ///
+    /// A tool declaring
+    /// [`TaskSupport::Required`](crate::types::tools::TaskSupport::Required)
+    /// with NO store (or router) makes [`Self::build`] return an `Err`, rather
+    /// than advertising a hollow `tasks` capability whose endpoints cannot work.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use std::sync::Arc;
+    /// use pmcp::Server;
+    /// use pmcp::server::task_store::{InMemoryTaskStore, TaskStore};
+    /// use pmcp::server::typed_tool::TypedTool;
+    /// use pmcp::types::{TaskSupport, ToolExecution};
+    ///
+    /// # fn build() -> pmcp::Result<()> {
+    /// let task_tool = TypedTool::new_with_schema(
+    ///     "summarize",
+    ///     serde_json::json!({ "type": "object" }),
+    ///     |_args: serde_json::Value, _extra| {
+    ///         Box::pin(async { Ok(serde_json::json!({ "status": "completed" })) })
+    ///     },
+    /// )
+    /// .with_description("Summarize asynchronously as an MCP Task")
+    /// .with_execution(ToolExecution::new().with_task_support(TaskSupport::Required));
+    ///
+    /// let store = Arc::new(InMemoryTaskStore::new()) as Arc<dyn TaskStore>;
+    /// let server = Server::builder()
+    ///     .name("my-server")
+    ///     .version("1.0.0")
+    ///     .tool("summarize", task_tool)
+    ///     .task_store(store) // presence of a store auto-advertises the `tasks` capability
+    ///     .build()?;
+    /// # let _ = server;
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn task_store(mut self, store: Arc<dyn crate::server::task_store::TaskStore>) -> Self {
+        // Capability advertisement is centralized in `build()` (see
+        // `task_dispatch::apply_tasks_capability_rule`). Registering a store
+        // records the backend; it does NOT itself set `capabilities.tasks`, so
+        // an explicitly-configured capability is never clobbered (additive-only,
+        // per D-CAPABILITY-ENDPOINT-BACKED).
+        self.task_store = Some(store);
+        self
+    }
+
+    /// Register a legacy experimental
+    /// [`TaskRouter`](crate::server::tasks::TaskRouter) for MCP Tasks on the
+    /// high-level `Server`.
+    ///
+    /// NAMING NOTE: despite the `with_task_store` name, this setter accepts a
+    /// **[`TaskRouter`](crate::server::tasks::TaskRouter)** (the legacy,
+    /// experimental router-backed path), NOT a
+    /// [`TaskStore`](crate::server::task_store::TaskStore). The setter for an
+    /// actual `TaskStore` (the RECOMMENDED polling path) is
+    /// [`Self::task_store`]. This carried-over naming mirrors
+    /// `ServerCoreBuilder::with_task_store`; the API is additive-only, so the
+    /// confusing pair is documented here rather than renamed.
+    ///
+    /// Registering a router auto-configures the `experimental.tasks` capability
+    /// from the router's `task_capabilities()`.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn with_task_store(mut self, router: Arc<dyn crate::server::tasks::TaskRouter>) -> Self {
+        // Auto-configure experimental.tasks capability from the router.
+        let experimental = self
+            .capabilities
+            .experimental
+            .get_or_insert_with(HashMap::new);
+        experimental.insert("tasks".to_string(), router.task_capabilities());
+
+        self.task_router = Some(router);
+        self
+    }
+
     /// Returns an error if:
     /// - The server name is not set
     /// - The server version is not set
-    pub fn build(self) -> Result<Server> {
+    /// - A tool declares `TaskSupport::Required` but no `TaskStore`/`TaskRouter`
+    ///   backend is configured (see [`Self::task_store`])
+    #[allow(unused_mut)] // `self` is mutated only on non-wasm (capability rule).
+    pub fn build(mut self) -> Result<Server> {
         let name = self
             .name
             .ok_or_else(|| crate::Error::validation("Server name is required"))?;
@@ -3598,6 +3856,21 @@ impl ServerBuilder {
         // Build URI-to-tool-meta index for widget resource _meta propagation
         let uri_to_tool_meta = core::build_uri_to_tool_meta(&tool_infos);
 
+        // Apply the SHARED endpoint-backed `tasks`-capability rule (the SAME
+        // free fn `ServerCoreBuilder::build` uses) now that `tool_infos` is
+        // finalized: a store-backed `Server` auto-advertises `tasks`, and a
+        // `TaskSupport::Required` tool with no backend is a build-time error.
+        // Runs BEFORE `self.capabilities` is moved into the `Server` literal.
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let has_backend = self.task_store.is_some() || self.task_router.is_some();
+            crate::server::task_dispatch::apply_tasks_capability_rule(
+                &mut self.capabilities,
+                &tool_infos,
+                has_backend,
+            )?;
+        }
+
         // Finalize accumulated skills exactly once and compose with the
         // user's `.resources(...)` slot if both are set. `.resources(...)`
         // itself stays "last write wins" — composition lives here so the
@@ -3642,6 +3915,10 @@ impl ServerBuilder {
             tool_middleware_chain,
             #[cfg(feature = "streamable-http")]
             http_middleware: self.http_middleware,
+            #[cfg(not(target_arch = "wasm32"))]
+            task_router: self.task_router,
+            #[cfg(not(target_arch = "wasm32"))]
+            task_store: self.task_store,
         })
     }
 }

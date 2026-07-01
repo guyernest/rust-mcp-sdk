@@ -6,6 +6,7 @@
 #![cfg(target_arch = "wasm32")]
 
 use crate::error::{Error, Result};
+use crate::shared::pending_slot::PendingSlot;
 use crate::shared::transport::{Transport, TransportMessage};
 use async_trait::async_trait;
 use wasm_bindgen::prelude::*;
@@ -46,6 +47,10 @@ pub struct WasmHttpTransport {
     config: WasmHttpConfig,
     session_id: Option<String>,
     protocol_version: Option<String>,
+    /// One-slot buffer holding the response parsed by `send()` until
+    /// `receive()` pops it — bridges the high-level client's
+    /// send-then-loop-receive correlation onto one-shot Fetch.
+    pending: PendingSlot,
 }
 
 impl WasmHttpTransport {
@@ -55,6 +60,7 @@ impl WasmHttpTransport {
             config,
             session_id: None,
             protocol_version: None,
+            pending: PendingSlot::new(),
         }
     }
 
@@ -70,15 +76,58 @@ impl WasmHttpTransport {
 
     /// Perform an HTTP request and handle the response.
     async fn do_request(&mut self, message: &TransportMessage) -> Result<TransportMessage> {
-        // Serialize the message
-        let body = serde_json::to_string(message)
-            .map_err(|e| Error::internal(format!("Failed to serialize message: {}", e)))?;
+        // Encode as a JSON-RPC 2.0 frame via the shared codec. Serializing the
+        // untagged `TransportMessage` directly would emit `{"id":…,"request":…}`,
+        // which the server rejects with -32700 "Unknown message type".
+        let json_bytes = crate::shared::transport::serialize_message(message)?;
+        let body = String::from_utf8(json_bytes)
+            .map_err(|e| Error::internal(format!("Serialized message is not UTF-8: {}", e)))?;
 
         let response_text = self.do_http_request(&body).await?;
 
-        // Parse as TransportMessage
-        serde_json::from_str(&response_text)
-            .map_err(|e| Error::internal(format!("Failed to parse response: {}", e)))
+        // The streamable-HTTP server answers `initialize` as a raw JSON body but
+        // streams request/response results (e.g. `tools/call`, `tasks/*`) as a
+        // single Server-Sent Events frame — `text/event-stream` — regardless of
+        // the `Accept` header. A browser Fetch cannot negotiate SSE streaming, so
+        // accept BOTH shapes here and unwrap the JSON-RPC payload before parsing.
+        let payload = Self::extract_jsonrpc_payload(&response_text)?;
+        crate::shared::transport::parse_message(payload.as_bytes())
+    }
+
+    /// Unwrap the JSON-RPC payload from an HTTP response body that is either a
+    /// raw JSON object or a single Server-Sent Events (`text/event-stream`) frame.
+    ///
+    /// A JSON body is returned verbatim. For an SSE frame we return the `data:`
+    /// field of the first event (per the SSE spec, multiple `data:` lines within
+    /// one event are joined with `\n`), which carries the JSON-RPC response.
+    fn extract_jsonrpc_payload(body: &str) -> Result<String> {
+        let trimmed = body.trim_start();
+        if trimmed.starts_with('{') || trimmed.starts_with('[') {
+            return Ok(body.to_string());
+        }
+
+        let mut data = String::new();
+        for line in body.lines() {
+            if let Some(rest) = line.strip_prefix("data:") {
+                if !data.is_empty() {
+                    data.push('\n');
+                }
+                // A single optional leading space after the colon is part of the
+                // SSE framing, not the payload.
+                data.push_str(rest.strip_prefix(' ').unwrap_or(rest));
+            } else if line.is_empty() && !data.is_empty() {
+                // Blank line terminates the first event that carried data.
+                break;
+            }
+        }
+
+        if data.is_empty() {
+            return Err(Error::internal(format!(
+                "Response body is neither JSON nor an SSE data frame (first 120 chars): {}",
+                body.chars().take(120).collect::<String>()
+            )));
+        }
+        Ok(data)
     }
 
     /// Perform an HTTP request and return the raw response text.
@@ -190,30 +239,47 @@ impl WasmHttpTransport {
 #[async_trait(?Send)]
 impl Transport for WasmHttpTransport {
     async fn send(&mut self, message: TransportMessage) -> Result<()> {
-        // For HTTP transport, we need to send and receive in one operation
-        // Store the message for the next receive call
-        // This is a simplified approach - in practice you might want to queue messages
-
-        // Actually, for stateless HTTP, send and receive are coupled
-        // We'll handle this in receive() by sending the queued message
-
-        // For now, we'll do a request-response immediately
-        let _response = self.do_request(&message).await?;
-
-        // Store response for next receive() call
-        // This is a limitation of the Transport trait design for HTTP
-        // In a real implementation, you might want to use a different pattern
-
-        Ok(())
+        match message {
+            // A Request expects exactly one JSON-RPC response. POST it, parse the
+            // response, and BUFFER it so the client's subsequent `receive()` can
+            // correlate it. `do_request` injects `extra_headers` (the bearer) and
+            // manages `mcp-session-id`.
+            //
+            // `put` propagates an error when a prior response is still buffered (a
+            // double `send()` before `receive()`) — the first response is never
+            // silently dropped (MEDIUM-4).
+            TransportMessage::Request { .. } => {
+                let response = self.do_request(&message).await?;
+                self.pending.put(response)
+            },
+            // A Notification (or an outbound Response to a server-initiated request)
+            // gets an HTTP 202 with an EMPTY body — there is no JSON-RPC response to
+            // parse or correlate. POST it and ignore the empty body; do NOT occupy the
+            // pending slot, or the next Request's `receive()` would drain this instead
+            // of its own response. Without this arm, `initialize`'s trailing
+            // `notifications/initialized` POST would try to parse an empty 202 body and
+            // fail the whole handshake, so `Client::initialize` (and thus every browser
+            // login) would error.
+            TransportMessage::Notification(_) | TransportMessage::Response(_) => {
+                let json_bytes = crate::shared::transport::serialize_message(&message)?;
+                let body = String::from_utf8(json_bytes).map_err(|e| {
+                    Error::internal(format!("Serialized message is not UTF-8: {}", e))
+                })?;
+                self.do_http_request(&body).await?;
+                Ok(())
+            },
+        }
     }
 
     async fn receive(&mut self) -> Result<TransportMessage> {
-        // In HTTP transport, receive() doesn't make sense without a prior send()
-        // This is a limitation of using the Transport trait for HTTP
-        // For now, return an error
-        Err(Error::internal(
-            "HTTP transport requires send() before receive()",
-        ))
+        // Return the response buffered by the matching `send()`. Errors only when
+        // called before any `send()` populated the slot.
+        //
+        // The single slot is the correct cardinality for a one-shot request/response
+        // Fetch: one POST yields exactly one JSON-RPC response object. This transport
+        // is intentionally non-SSE, so it does NOT deliver server-initiated
+        // notifications — a streaming/SSE transport is the vehicle for those.
+        self.pending.take()
     }
 
     async fn close(&mut self) -> Result<()> {

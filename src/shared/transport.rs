@@ -77,6 +77,88 @@ pub enum TransportMessage {
     Notification(crate::types::Notification),
 }
 
+/// Serialize a [`TransportMessage`] into a JSON-RPC 2.0 wire frame.
+///
+/// This is the single source of truth for the on-the-wire encoding shared by
+/// every transport (stdio, native HTTP, WASM Fetch, WebSocket). A `Request` is
+/// flattened into a proper `{"jsonrpc":"2.0","id":…,"method":…,"params":…}`
+/// frame via [`create_request`](crate::shared::create_request) — serializing the
+/// untagged `TransportMessage` enum directly would instead emit
+/// `{"id":…,"request":…}`, which no MCP server can parse ("Unknown message type").
+pub fn serialize_message(message: &TransportMessage) -> Result<Vec<u8>> {
+    use crate::error::TransportError;
+    match message {
+        TransportMessage::Request { id, request } => {
+            let jsonrpc_request = crate::shared::create_request(id.clone(), request.clone());
+            serde_json::to_vec(&jsonrpc_request).map_err(|e| {
+                TransportError::InvalidMessage(format!("Failed to serialize request: {}", e)).into()
+            })
+        },
+        TransportMessage::Response(response) => serde_json::to_vec(response).map_err(|e| {
+            TransportError::InvalidMessage(format!("Failed to serialize response: {}", e)).into()
+        }),
+        TransportMessage::Notification(notification) => {
+            let jsonrpc_notification = crate::shared::create_notification(notification.clone());
+            serde_json::to_vec(&jsonrpc_notification).map_err(|e| {
+                TransportError::InvalidMessage(format!("Failed to serialize notification: {}", e))
+                    .into()
+            })
+        },
+    }
+}
+
+/// Parse a JSON-RPC 2.0 wire frame into a [`TransportMessage`].
+///
+/// Classifies the frame as a request, notification, or response by inspecting the
+/// `method`/`result`/`error` fields. Mirror of [`serialize_message`]; shared by all
+/// transports.
+pub fn parse_message(buffer: &[u8]) -> Result<TransportMessage> {
+    use crate::error::TransportError;
+    let json_value: serde_json::Value = serde_json::from_slice(buffer)
+        .map_err(|e| TransportError::InvalidMessage(format!("Invalid JSON: {}", e)))?;
+
+    if json_value.get("method").is_some() {
+        parse_method_message(json_value)
+    } else if json_value.get("result").is_some() || json_value.get("error").is_some() {
+        parse_response_message(json_value)
+    } else {
+        Err(TransportError::InvalidMessage("Unknown message type".to_string()).into())
+    }
+}
+
+/// Parse a frame that carries a `method` field (request when `id` is present,
+/// otherwise a notification).
+fn parse_method_message(json_value: serde_json::Value) -> Result<TransportMessage> {
+    use crate::error::TransportError;
+    if json_value.get("id").is_some() {
+        let request: crate::types::JSONRPCRequest<serde_json::Value> =
+            serde_json::from_value(json_value)
+                .map_err(|e| TransportError::InvalidMessage(format!("Invalid request: {}", e)))?;
+
+        let parsed_request = crate::shared::parse_request(request)
+            .map_err(|e| TransportError::InvalidMessage(format!("Invalid request: {}", e)))?;
+
+        Ok(TransportMessage::Request {
+            id: parsed_request.0,
+            request: parsed_request.1,
+        })
+    } else {
+        let parsed_notification = crate::shared::parse_notification(json_value)
+            .map_err(|e| TransportError::InvalidMessage(format!("Invalid notification: {}", e)))?;
+
+        Ok(TransportMessage::Notification(parsed_notification))
+    }
+}
+
+/// Parse a frame that carries a `result`/`error` field into a response.
+fn parse_response_message(json_value: serde_json::Value) -> Result<TransportMessage> {
+    use crate::error::TransportError;
+    let response: crate::types::JSONRPCResponse = serde_json::from_value(json_value)
+        .map_err(|e| TransportError::InvalidMessage(format!("Invalid response: {}", e)))?;
+
+    Ok(TransportMessage::Response(response))
+}
+
 /// Metadata associated with a transport message.
 ///
 /// # Examples
@@ -305,5 +387,55 @@ mod tests {
     fn priority_ordering() {
         assert!(MessagePriority::Low < MessagePriority::Normal);
         assert!(MessagePriority::Normal < MessagePriority::High);
+    }
+
+    // Regression (Phase 103 UAT, F2): a Request must serialize to a flat JSON-RPC
+    // frame, NOT the untagged `{"id":…,"request":…}` shape. Serializing the
+    // `TransportMessage` enum directly produced the latter, which every MCP server
+    // rejected with -32700 "Unknown message type".
+    #[test]
+    fn serialize_request_is_flat_jsonrpc_frame() {
+        use crate::types::{Request, RequestId};
+
+        let msg = TransportMessage::Request {
+            id: RequestId::from(1i64),
+            request: Request::Client(Box::new(crate::types::ClientRequest::Ping)),
+        };
+        let bytes = serialize_message(&msg).expect("serialize");
+        let v: serde_json::Value = serde_json::from_slice(&bytes).expect("valid json");
+
+        assert_eq!(v["jsonrpc"], "2.0", "must carry the JSON-RPC version");
+        assert!(v.get("method").is_some(), "must have a top-level method");
+        assert!(
+            v.get("request").is_none(),
+            "must NOT emit the untagged enum wrapper: {v}"
+        );
+    }
+
+    // Regression (Phase 103 UAT, F2): parse_message classifies the three frame
+    // kinds and round-trips a request through serialize→parse.
+    #[test]
+    fn parse_message_roundtrips_request_and_classifies() {
+        use crate::types::{Request, RequestId};
+
+        let msg = TransportMessage::Request {
+            id: RequestId::from(7i64),
+            request: Request::Client(Box::new(crate::types::ClientRequest::Ping)),
+        };
+        let bytes = serialize_message(&msg).expect("serialize");
+        match parse_message(&bytes).expect("parse") {
+            TransportMessage::Request { id, .. } => assert_eq!(id, RequestId::from(7i64)),
+            other => panic!("expected Request, got {other:?}"),
+        }
+
+        // A response frame classifies as Response.
+        let resp = br#"{"jsonrpc":"2.0","id":1,"result":{}}"#;
+        assert!(matches!(
+            parse_message(resp).expect("parse response"),
+            TransportMessage::Response(_)
+        ));
+
+        // A frame with none of method/result/error is rejected.
+        assert!(parse_message(br#"{"id":1,"request":{}}"#).is_err());
     }
 }

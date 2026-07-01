@@ -49,11 +49,27 @@
           "json_key": "marginal_rate",
           "seed_coord": "3_Outputs!B5",
           "unit": "ratio"
+        },
+        {
+          "json_key": "bracket_label",
+          "seed_coord": "3_Outputs!B6",
+          "unit": null
+        },
+        {
+          "json_key": "is_taxable",
+          "seed_coord": "3_Outputs!B7",
+          "unit": null
         }
       ],
       "oracle": {
+        "bracket_label": {
+          "Text": "bracket_2"
+        },
         "effective_rate": {
           "Number": 0.08
+        },
+        "is_taxable": {
+          "Bool": true
         },
         "marginal_rate": {
           "Number": 0.22

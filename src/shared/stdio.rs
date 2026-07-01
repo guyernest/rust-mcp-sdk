@@ -111,30 +111,11 @@ impl Transport for StdioTransport {
 
 impl StdioTransport {
     /// Serialize transport message to JSON bytes.
+    ///
+    /// Delegates to [`crate::shared::transport::serialize_message`] — the single
+    /// source of truth for the JSON-RPC wire encoding shared by all transports.
     pub fn serialize_message(message: &TransportMessage) -> Result<Vec<u8>> {
-        match message {
-            TransportMessage::Request { id, request } => {
-                let jsonrpc_request = crate::shared::create_request(id.clone(), request.clone());
-                serde_json::to_vec(&jsonrpc_request).map_err(|e| {
-                    TransportError::InvalidMessage(format!("Failed to serialize request: {}", e))
-                        .into()
-                })
-            },
-            TransportMessage::Response(response) => serde_json::to_vec(response).map_err(|e| {
-                TransportError::InvalidMessage(format!("Failed to serialize response: {}", e))
-                    .into()
-            }),
-            TransportMessage::Notification(notification) => {
-                let jsonrpc_notification = crate::shared::create_notification(notification.clone());
-                serde_json::to_vec(&jsonrpc_notification).map_err(|e| {
-                    TransportError::InvalidMessage(format!(
-                        "Failed to serialize notification: {}",
-                        e
-                    ))
-                    .into()
-                })
-            },
-        }
+        crate::shared::transport::serialize_message(message)
     }
 
     /// Write message to stdout with newline delimiter.
@@ -193,52 +174,11 @@ impl StdioTransport {
     }
 
     /// Parse JSON message and determine its type.
+    ///
+    /// Delegates to [`crate::shared::transport::parse_message`] — the single
+    /// source of truth for JSON-RPC frame classification shared by all transports.
     pub fn parse_message(buffer: &[u8]) -> Result<TransportMessage> {
-        let json_value: serde_json::Value = serde_json::from_slice(buffer)
-            .map_err(|e| TransportError::InvalidMessage(format!("Invalid JSON: {}", e)))?;
-
-        if json_value.get("method").is_some() {
-            Self::parse_method_message(json_value)
-        } else if json_value.get("result").is_some() || json_value.get("error").is_some() {
-            Self::parse_response_message(json_value)
-        } else {
-            Err(TransportError::InvalidMessage("Unknown message type".to_string()).into())
-        }
-    }
-
-    /// Parse message with method field (request or notification).
-    fn parse_method_message(json_value: serde_json::Value) -> Result<TransportMessage> {
-        if json_value.get("id").is_some() {
-            // It's a request
-            let request: crate::types::JSONRPCRequest<serde_json::Value> =
-                serde_json::from_value(json_value).map_err(|e| {
-                    TransportError::InvalidMessage(format!("Invalid request: {}", e))
-                })?;
-
-            let parsed_request = crate::shared::parse_request(request)
-                .map_err(|e| TransportError::InvalidMessage(format!("Invalid request: {}", e)))?;
-
-            Ok(TransportMessage::Request {
-                id: parsed_request.0,
-                request: parsed_request.1,
-            })
-        } else {
-            // It's a notification
-            let parsed_notification =
-                crate::shared::parse_notification(json_value).map_err(|e| {
-                    TransportError::InvalidMessage(format!("Invalid notification: {}", e))
-                })?;
-
-            Ok(TransportMessage::Notification(parsed_notification))
-        }
-    }
-
-    /// Parse response message.
-    fn parse_response_message(json_value: serde_json::Value) -> Result<TransportMessage> {
-        let response: crate::types::JSONRPCResponse = serde_json::from_value(json_value)
-            .map_err(|e| TransportError::InvalidMessage(format!("Invalid response: {}", e)))?;
-
-        Ok(TransportMessage::Response(response))
+        crate::shared::transport::parse_message(buffer)
     }
 }
 
