@@ -223,6 +223,56 @@ mod core_tests;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod task_dispatch_tests;
 
+/// Output of a [`ToolHandler`] call: either a plain value the server wraps into a
+/// `CallToolResult`, or a fully-formed `CallToolResult` the handler owns end-to-end.
+///
+/// A handler that implements only [`ToolHandler::handle`] (the common case) never
+/// constructs this enum — the default [`ToolHandler::handle_output`] wraps the
+/// returned value in [`ToolOutput::Payload`], preserving today's behavior exactly.
+///
+/// This is a *control* enum consumed inside the server dispatch tail, NOT a wire
+/// type — it deliberately does not derive `Serialize`/`Deserialize`.
+///
+/// Marked `#[non_exhaustive]`: additional output modes may be added in a
+/// backwards-compatible way, so downstream `match`es must include a wildcard arm.
+#[cfg(not(target_arch = "wasm32"))]
+#[non_exhaustive]
+#[derive(Debug)]
+pub enum ToolOutput {
+    /// A plain value. The server runs it through the existing tail: response
+    /// middleware (redaction/sanitization), the Phase 102 task create-path gate,
+    /// and text-wrap / widget enrichment — byte-identical to returning a `Value`
+    /// from [`ToolHandler::handle`] today.
+    Payload(serde_json::Value),
+
+    /// A fully-formed `CallToolResult` the handler owns.
+    ///
+    /// # ⚠️ BYPASS WARNING — this variant is sent to the wire VERBATIM
+    ///
+    /// The contained [`CallToolResult`](crate::types::CallToolResult) is
+    /// serialized and returned to the client **exactly as provided**. It
+    /// **BYPASSES**:
+    /// - **response middleware** — redaction, sanitization, and audit hooks
+    ///   (`ToolMiddleware::on_response`) DO NOT run for this variant;
+    /// - **text-wrapping** — `content` is not synthesized from a stringified value;
+    /// - **widget enrichment** — `structured_content` / `_meta` are not injected.
+    ///
+    /// The handler is therefore responsible for its OWN redaction and
+    /// sanitization of both `content` and `_meta`, at the same trust level as
+    /// returning a raw `Value` today. This is a deliberate, user-approved design
+    /// choice (D-04a): a handler that needs to own the full envelope (e.g. to set
+    /// `_meta[relatedTask]`) opts into owning its security posture too.
+    ///
+    /// What is **NOT** bypassed: **request** middleware
+    /// (`ToolMiddleware::on_request`) still runs before the handler executes, and
+    /// handler errors still route through the normal error path. Only the
+    /// successful `Result` arm skips response middleware.
+    ///
+    /// See the phase migration guide for how to move a hand-written handler onto
+    /// this variant safely.
+    Result(crate::types::CallToolResult),
+}
+
 /// Handler for tool execution.
 #[cfg(not(target_arch = "wasm32"))]
 #[async_trait]
@@ -234,6 +284,24 @@ pub trait ToolHandler: Send + Sync {
     /// Returns None to use default empty metadata.
     fn metadata(&self) -> Option<crate::types::ToolInfo> {
         None
+    }
+
+    /// Produce the tool's [`ToolOutput`] for a call.
+    ///
+    /// The DEFAULT delegates to [`ToolHandler::handle`] and wraps the returned
+    /// value in [`ToolOutput::Payload`], so existing handlers (which implement
+    /// only `handle`) keep their exact current behavior — response middleware,
+    /// the create-path gate, and text-wrap all apply unchanged.
+    ///
+    /// Override this to return [`ToolOutput::Result`] and own the full
+    /// `CallToolResult` envelope. Read the [`ToolOutput::Result`] docs FIRST —
+    /// that path bypasses response middleware and you own your own redaction.
+    async fn handle_output(
+        &self,
+        args: Value,
+        extra: cancellation::RequestHandlerExtra,
+    ) -> Result<ToolOutput> {
+        self.handle(args, extra).await.map(ToolOutput::Payload)
     }
 }
 
@@ -5244,6 +5312,44 @@ mod skills_builder_tests {
         let ext = server.capabilities.extensions.as_ref();
         if let Some(ext_map) = ext {
             assert!(!ext_map.contains_key("io.modelcontextprotocol/skills"));
+        }
+    }
+}
+
+#[cfg(test)]
+#[cfg(not(target_arch = "wasm32"))]
+mod tool_output_tests {
+    use super::*;
+    use crate::server::cancellation::RequestHandlerExtra;
+    use async_trait::async_trait;
+
+    /// A handler that implements ONLY `handle` (no `handle_output` override) —
+    /// the common case. It must route through the default `handle_output` and
+    /// come back as `ToolOutput::Payload` equal to what `handle` returned.
+    struct PlainHandler;
+
+    #[async_trait]
+    impl ToolHandler for PlainHandler {
+        async fn handle(&self, args: Value, _extra: RequestHandlerExtra) -> Result<Value> {
+            Ok(serde_json::json!({ "echo": args }))
+        }
+    }
+
+    #[tokio::test]
+    async fn default_handle_output_delegates_to_handle_as_payload() {
+        let handler = PlainHandler;
+        let extra = RequestHandlerExtra::new("req-1".to_string(), Default::default());
+        let args = serde_json::json!({ "n": 42 });
+
+        let value_via_handle = handler.handle(args.clone(), extra.clone()).await.unwrap();
+        let output = handler.handle_output(args, extra).await.unwrap();
+
+        match output {
+            ToolOutput::Payload(v) => assert_eq!(
+                v, value_via_handle,
+                "default handle_output must wrap handle()'s value as Payload"
+            ),
+            other => panic!("expected ToolOutput::Payload, got {other:?}"),
         }
     }
 }
