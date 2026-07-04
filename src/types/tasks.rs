@@ -213,16 +213,17 @@ pub struct RelatedTaskMetadata {
 /// The two `Option` polling fields default to `None`, so the minimal native
 /// emit shape `{ "taskId": "t1" }` deserializes cleanly (extra fields absent).
 ///
-/// # Example
+/// # Backward Compatibility
+///
+/// This struct is `#[non_exhaustive]`. Construct it via [`TaskMetadata::new`]
+/// and the builder methods to stay forward-compatible:
 ///
 /// ```rust
 /// use pmcp::types::tasks::TaskMetadata;
 ///
-/// let meta = TaskMetadata {
-///     task_id: "t-123".to_string(),
-///     poll_interval: Some(5000),
-///     max_poll_duration_secs: Some(300),
-/// };
+/// let meta = TaskMetadata::new("t-123")
+///     .with_poll_interval(5000)
+///     .with_max_poll_duration_secs(300);
 /// let json = serde_json::to_value(&meta).unwrap();
 /// assert_eq!(json["taskId"], "t-123");
 /// assert_eq!(json["pollInterval"], 5000);
@@ -245,6 +246,33 @@ pub struct TaskMetadata {
     /// milliseconds): this is a coarse overall budget expressed in seconds.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_poll_duration_secs: Option<u64>,
+}
+
+impl TaskMetadata {
+    /// Create related-task metadata referencing `task_id`.
+    ///
+    /// Both polling hints default to `None`; set them via
+    /// [`TaskMetadata::with_poll_interval`] and
+    /// [`TaskMetadata::with_max_poll_duration_secs`].
+    pub fn new(task_id: impl Into<String>) -> Self {
+        Self {
+            task_id: task_id.into(),
+            poll_interval: None,
+            max_poll_duration_secs: None,
+        }
+    }
+
+    /// Set the suggested polling interval, in **milliseconds**.
+    pub fn with_poll_interval(mut self, interval_ms: u64) -> Self {
+        self.poll_interval = Some(interval_ms);
+        self
+    }
+
+    /// Set the maximum total polling duration, in **seconds**.
+    pub fn with_max_poll_duration_secs(mut self, secs: u64) -> Self {
+        self.max_poll_duration_secs = Some(secs);
+        self
+    }
 }
 
 /// Result of creating a task.
