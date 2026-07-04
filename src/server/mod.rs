@@ -19,6 +19,8 @@ use serde_json::Value;
 #[cfg(not(target_arch = "wasm32"))]
 use std::collections::HashMap;
 #[cfg(not(target_arch = "wasm32"))]
+use std::collections::HashSet;
+#[cfg(not(target_arch = "wasm32"))]
 use std::sync::Arc;
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -435,6 +437,12 @@ pub struct Server {
     /// `tasks/*` endpoints + create-path via the shared `task_dispatch` unit.
     #[cfg(not(target_arch = "wasm32"))]
     task_store: Option<Arc<dyn crate::server::task_store::TaskStore>>,
+    /// Per-tool TOUT-02 double-wrap tripwire opt-out set (D-08). A tool named
+    /// here has the tripwire suppressed at the Payload wrap site. Threaded from
+    /// `ServerBuilder::suppress_double_wrap_check`; `ServerCore` carries an
+    /// IDENTICAL set so both dispatchers consult the same suppression rule.
+    #[cfg(not(target_arch = "wasm32"))]
+    suppress_double_wrap: HashSet<String>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -1586,6 +1594,18 @@ impl Server {
             }
         }
 
+        // TOUT-02 double-wrap tripwire: BEFORE stringifying `result` into text
+        // content, WARN (+ debug_assert in debug/CI) if it structurally resembles
+        // an already-built `CallToolResult` — the silent double-wrap bug. Honors
+        // the per-tool `suppress_double_wrap_check` opt-out (D-08). Non-wasm only
+        // (the `task_dispatch` unit is non-wasm, matching the create-path above).
+        #[cfg(not(target_arch = "wasm32"))]
+        task_dispatch::double_wrap_tripwire(
+            &req.name,
+            &result,
+            self.suppress_double_wrap.contains(req.name.as_str()),
+        );
+
         // Build CallToolResult, adding structured_content for widget tools
         let text = result.to_string();
         let mut call_result = CallToolResult::new(vec![crate::types::Content::text(text)]);
@@ -2161,6 +2181,11 @@ pub struct ServerBuilder {
     /// auto-advertises the `tasks` capability at `build()`.
     #[cfg(not(target_arch = "wasm32"))]
     task_store: Option<Arc<dyn crate::server::task_store::TaskStore>>,
+    /// Tool names opting out of the TOUT-02 double-wrap tripwire (D-08), set via
+    /// [`Self::suppress_double_wrap_check`]. Carried into the built `Server` and
+    /// consulted at the Payload wrap site.
+    #[cfg(not(target_arch = "wasm32"))]
+    suppress_double_wrap: HashSet<String>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -2228,6 +2253,8 @@ impl ServerBuilder {
             task_router: None,
             #[cfg(not(target_arch = "wasm32"))]
             task_store: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            suppress_double_wrap: HashSet::new(),
         }
     }
 
@@ -3875,6 +3902,30 @@ impl ServerBuilder {
         self
     }
 
+    /// Opt a tool OUT of the TOUT-02 double-wrap tripwire (D-08).
+    ///
+    /// The tripwire WARNs (every build) and `debug_assert!`-fails (debug/CI)
+    /// when a tool returns a `ToolOutput::Payload` `Value` that STRUCTURALLY
+    /// resembles an already-built `CallToolResult` (a non-empty `content` array
+    /// of `Content`, or a `_meta` related-task envelope) — the silent
+    /// double-wrap bug. Naming a tool here suppresses that check for it.
+    ///
+    /// SUPPRESSION SHOULD BE RARE AND REVIEWED: it disables a safety tripwire for
+    /// one tool whose LEGITIMATE payload happens to trip the heuristic. Prefer
+    /// returning [`ToolOutput::Result`](crate::server::ToolOutput::Result) so the
+    /// handler owns the full envelope verbatim, rather than suppressing. Reach
+    /// for this only when a tool genuinely produces a plain `Value` that mimics a
+    /// result shape and cannot be restructured.
+    ///
+    /// The same suppression set is carried into `ServerCore`, so both native
+    /// dispatchers honor the opt-out identically (no drift).
+    #[cfg(not(target_arch = "wasm32"))]
+    #[must_use]
+    pub fn suppress_double_wrap_check(mut self, name: impl Into<String>) -> Self {
+        self.suppress_double_wrap.insert(name.into());
+        self
+    }
+
     /// Returns an error if:
     /// - The server name is not set
     /// - The server version is not set
@@ -4016,6 +4067,8 @@ impl ServerBuilder {
             task_router: self.task_router,
             #[cfg(not(target_arch = "wasm32"))]
             task_store: self.task_store,
+            #[cfg(not(target_arch = "wasm32"))]
+            suppress_double_wrap: self.suppress_double_wrap,
         })
     }
 }

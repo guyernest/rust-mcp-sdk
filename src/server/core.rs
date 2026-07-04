@@ -26,6 +26,8 @@ use crate::types::{
 use async_trait::async_trait;
 use serde_json::Value;
 use std::collections::HashMap;
+#[cfg(not(target_arch = "wasm32"))]
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use crate::runtime::RwLock;
@@ -265,6 +267,14 @@ pub struct ServerCore {
     #[cfg(not(target_arch = "wasm32"))]
     task_store: Option<Arc<dyn crate::server::task_store::TaskStore>>,
 
+    /// Per-tool TOUT-02 double-wrap tripwire opt-out set (D-08). A tool named
+    /// here has the tripwire suppressed at the Payload wrap tail. Populated via
+    /// [`ServerCore::with_suppress_double_wrap`] from
+    /// `ServerCoreBuilder::suppress_double_wrap_check`; the high-level `Server`
+    /// carries an IDENTICAL set so both dispatchers consult the same rule.
+    #[cfg(not(target_arch = "wasm32"))]
+    suppress_double_wrap: HashSet<String>,
+
     /// Stateless mode flag for serverless deployments
     ///
     /// When true, the server skips initialization state checking, allowing
@@ -361,6 +371,8 @@ impl ServerCore {
             task_router,
             #[cfg(not(target_arch = "wasm32"))]
             task_store,
+            #[cfg(not(target_arch = "wasm32"))]
+            suppress_double_wrap: HashSet::new(),
             stateless_mode,
             payload_limits,
             #[cfg(not(target_arch = "wasm32"))]
@@ -391,6 +403,20 @@ impl ServerCore {
         );
         self.peer_handle = Some(peer);
         self.server_request_dispatcher = Some(dispatcher);
+        self
+    }
+
+    /// Carry the per-tool TOUT-02 double-wrap tripwire opt-out set (D-08) from
+    /// the builder into the running `ServerCore`.
+    ///
+    /// Threaded from `ServerCoreBuilder::build` so the tripwire at the Payload
+    /// wrap tail consults the SAME suppression set the high-level `Server` uses —
+    /// the two dispatchers can never drift on which tools are suppressed. An
+    /// empty set (the default) preserves the tripwire for every tool.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[must_use]
+    pub fn with_suppress_double_wrap(mut self, suppress: HashSet<String>) -> Self {
+        self.suppress_double_wrap = suppress;
         self
     }
 
@@ -632,6 +658,19 @@ impl ServerCore {
                 );
             }
         }
+
+        // TOUT-02 double-wrap tripwire: BEFORE this tail text-wraps `value` into
+        // content, WARN (+ debug_assert in debug/CI) if it structurally resembles
+        // an already-built `CallToolResult` — the silent double-wrap bug. Honors
+        // the per-tool `suppress_double_wrap_check` opt-out (D-08) via the SAME
+        // suppression set the high-level `Server` uses, so the two dispatchers
+        // never drift. Non-wasm only (mirrors the create-path gate above).
+        #[cfg(not(target_arch = "wasm32"))]
+        crate::server::task_dispatch::double_wrap_tripwire(
+            &req.name,
+            &value,
+            self.suppress_double_wrap.contains(req.name.as_str()),
+        );
 
         let call_result = if let Some(info) = tool_info.filter(|i| i.widget_meta().is_some()) {
             // Widget tool: structured data goes in structuredContent,

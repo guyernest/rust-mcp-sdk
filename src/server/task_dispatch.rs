@@ -253,6 +253,58 @@ pub fn looks_like_call_tool_result(v: &Value) -> Option<DoubleWrapMarker> {
     None
 }
 
+/// The TOUT-02 double-wrap tripwire: the SINGLE decision fn both Payload wrap
+/// sites (`Server::handle_call_tool` in mod.rs and `ServerCore::handle_call_tool`
+/// in core.rs) call BEFORE stringifying a produced `Value` into a
+/// `CallToolResult`'s text content.
+///
+/// Behavior:
+/// - `suppressed == true` → returns `None`, emits NOTHING (the tool opted out of
+///   the check via `suppress_double_wrap_check`; D-08).
+/// - otherwise, if [`looks_like_call_tool_result`] returns `Some(marker)`:
+///   emits a `tracing::warn!` (EVERY build) AND `debug_assert!(false, ..)`
+///   (debug/CI builds hard-fail; D-06: release compiles the assert out and NEVER
+///   panics), then returns `Some(marker)`.
+/// - benign value → returns `None`, emits nothing.
+///
+/// Returning the `Option<DoubleWrapMarker>` makes the decision unit-testable in
+/// isolation: a RELEASE test asserts the return value (no panic), a DEBUG test
+/// asserts the `debug_assert!` panic via `catch_unwind` — NEITHER spins up a
+/// dispatch that the assert would abort mid-call (Codex MEDIUM: such end-to-end
+/// debug-assert tests are brittle).
+///
+/// The identical helper is called from BOTH dispatchers, so the WARN/panic rule
+/// can never drift between the high-level `Server` and `ServerCore`.
+// Why: called at both Payload wrap sites (mod.rs + core.rs) guarded by the
+// per-tool suppression check; production-reachable, no dead_code allow needed.
+pub fn double_wrap_tripwire(
+    tool_name: &str,
+    value: &Value,
+    suppressed: bool,
+) -> Option<DoubleWrapMarker> {
+    if suppressed {
+        return None;
+    }
+    let marker = looks_like_call_tool_result(value)?;
+    tracing::warn!(
+        tool = %tool_name,
+        ?marker,
+        "value being text-wrapped structurally resembles a built CallToolResult \
+         — did you mean ToolOutput::Result? (TOUT-02)"
+    );
+    // D-06: `debug_assert!` (NOT `assert!`) so release builds compile this out and
+    // never panic in production; debug/CI builds hard-fail so the double-wrap is
+    // caught by "one local run".
+    debug_assert!(
+        false,
+        "double-wrap tripwire (TOUT-02): tool `{tool_name}` produced a value that \
+         structurally resembles a built CallToolResult ({marker:?}); return \
+         ToolOutput::Result to send it verbatim, or call \
+         suppress_double_wrap_check(\"{tool_name}\") if this payload is legitimate"
+    );
+    Some(marker)
+}
+
 /// Borrow-struct holding the two task backend handles a dispatcher owns.
 ///
 /// Both `Server` and `ServerCore` construct a `TaskDispatch` borrowing their own

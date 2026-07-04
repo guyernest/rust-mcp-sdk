@@ -123,10 +123,13 @@ pub mod __test_support {
         spawn_server_request_drain, ServerRequestDispatcher, DEFAULT_DISPATCH_TIMEOUT,
     };
     // TOUT-02 double-wrap tripwire seam: the `looks_like_call_tool_result`
-    // marker fn lives in the crate-private `task_dispatch` module, so the
-    // `tests/double_wrap_tripwire.rs` integration binary reaches it here for
-    // the helper-level precision tests without spinning up a full dispatch.
-    pub use crate::server::task_dispatch::{looks_like_call_tool_result, DoubleWrapMarker};
+    // marker fn + `double_wrap_tripwire` decision fn live in the crate-private
+    // `task_dispatch` module, so the `tests/double_wrap_tripwire.rs` integration
+    // binary reaches them here for the helper-level precision + debug-panic
+    // tests without spinning up a full dispatch.
+    pub use crate::server::task_dispatch::{
+        double_wrap_tripwire, looks_like_call_tool_result, DoubleWrapMarker,
+    };
     pub use crate::types::ServerRequest;
 }
 
