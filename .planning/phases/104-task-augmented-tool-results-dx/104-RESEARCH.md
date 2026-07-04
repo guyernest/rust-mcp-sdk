@@ -428,23 +428,30 @@ Ok(serde_json::to_value(call_result)?)
 | A5 | Empty `content: []` should NOT trip the tripwire; non-empty all-valid-`Content` should | Pattern 3 / Pitfall 5 | If the desired policy differs, false-positive rate changes. LOW-MEDIUM — "near-zero false positive" (D-07) implies conservative firing; confirm with planner. |
 | A6 | The wasm delay for `wait_for_task` (D-10) can reuse already-transitive `web-time`/`wasm-bindgen-futures` without a new crate | Standard Stack / Pattern 4 | If a new timer crate is needed, it must pass the Package Legitimacy Gate. LOW — `web-time` precedent exists (Cargo.toml:97). |
 
-## Open Questions
+## Open Questions (RESOLVED)
+
+> All four resolved during planning. Inline `RESOLVED:` markers below cite the plan/task that carries each decision.
+
 
 1. **How does `set_result_meta` (D-03.3) reach the dispatcher across the by-value `extra` move?**
+   - **RESOLVED: 104-04 Task 2** — shared `Arc<Mutex<Option<Map>>>` result-meta slot on `RequestHandlerExtra`, pre-cloned by the dispatcher before the by-value move, read+merged after `handle_output` on the Payload path only (documented merge-not-overwrite).
    - What we know: `handle(&self, args, extra)` takes `extra` by value (mod.rs:231); mutations are dropped inside the handler.
    - What's unclear: exact mechanism — shared `Arc<Mutex<Option<Map>>>` slot the dispatcher pre-clones, vs. a returned-`extra` signature change (breaking), vs. reading back via `http::Extensions` (also moved).
    - Recommendation: shared interior-mutable result-meta slot on `RequestHandlerExtra`, set by the handler, read+merged by the dispatcher after `handle_output` returns. Because `handle_output`'s DEFAULT calls `handle`, this slot must be populated before the default delegates, or `set_result_meta` only works on the `Payload` (default) path — document the interaction. This is the sharpest plan-shaping decision; spike it first.
 
 2. **What is the canonical `TaskMetadata` shape, and should the native create-path emit `pollInterval`/`maxPollDurationSecs` (not just `taskId`)?**
+   - **RESOLVED: 104-01 Task 1** — new `TaskMetadata { task_id, poll_interval?, max_poll_duration_secs? }` (camelCase, `#[non_exhaustive]`, skip-if-none); `related_task()` tolerates the minimal `{taskId}` shape; native emission stays minimal.
    - What we know: native emission is `_meta[related-task] = { "taskId": store_id }` (core_tests.rs:881); `Task` already carries `poll_interval` (tasks.rs:108). `RelatedTaskMetadata` has only `task_id`.
    - What's unclear: whether `related_task()`/`wait_for_task` should read `pollInterval` from `_meta` (needs the create-path to emit it) or fall back to `tasks_get`'s `task.poll_interval`.
    - Recommendation: define `TaskMetadata` with optional `poll_interval`/`max_poll_duration_secs`; `related_task()` tolerates the minimal `{taskId}` shape; `wait_for_task` prefers `_meta` value, falls back to the polled `Task.poll_interval`, then a default. Keep native emission minimal (`{taskId}`) unless the guide needs richer `_meta` — a wire-compat decision for D-12.
 
 3. **One shared wrap+tripwire tail, or per-dispatcher with a shared helper?**
+   - **RESOLVED: 104-02 Task 2 (+ 104-03 Task 2)** — single shared decision helper in `src/server/task_dispatch.rs` called by both dispatchers (Payload-vs-Result + middleware-bypass rule); tripwire wired into the same shared Payload wrap site; parity test asserts byte-identical output.
    - What we know: the two `handle_call_tool` tails are still separate (only the create-path gate is shared).
    - Recommendation: extract the `match ToolOutput { … } + tripwire + wrap` into ONE free fn in `task_dispatch.rs` (D-05), called by both. Test byte-identical output across dispatchers.
 
 4. **Does pmcp's own client swallow task deserialize errors elsewhere (deferred ask #5 check)?**
+   - **RESOLVED: 104-05 Task 3** — audit conclusion documented in the migration guide: SDK client is clean (`parse_task_payload` WARNs; `call_tool_with_task` maps via `Error::parse`); the ask #5 gap is on the pmcp.run durable-client side.
    - What we know: `parse_task_payload` already WARNs on deserialize failure (client/mod.rs:629-640) — the SDK side is already good.
    - Recommendation: quick audit of `call_tool_with_task` (mod.rs:508-542) confirms it maps parse errors via `Error::parse` (not swallowed). Note in the guide that the SDK client is clean; the ask #5 gap is in THEIR durable client.
 
