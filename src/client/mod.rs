@@ -6,7 +6,7 @@ use crate::shared::{
 };
 use crate::types::tasks::{
     CancelTaskRequest, CancelTaskResult, CreateTaskResult, GetTaskPayloadRequest, GetTaskRequest,
-    GetTaskResult, ListTasksRequest, ListTasksResult, Task, TaskStatus,
+    GetTaskResult, ListTasksRequest, ListTasksResult, Task, TaskMetadata, TaskStatus,
 };
 use crate::types::{
     CallToolRequest, CallToolResult, CancelledNotification, ClientCapabilities, ClientNotification,
@@ -56,6 +56,48 @@ pub enum ToolCallResponse {
     /// until the task reaches a terminal status, then call
     /// [`Client::tasks_result`] to get the final `CallToolResult`.
     Task(Task),
+}
+
+/// Options controlling [`Client::wait_for_task`] polling.
+///
+/// A caller who holds a [`TaskMetadata`] (e.g. from
+/// [`CallToolResult::related_task`](crate::types::CallToolResult::related_task))
+/// composes options directly via [`WaitForTaskOptions::from_metadata`] /
+/// [`From<TaskMetadata>`] — no hand-copying of poll fields.
+#[derive(Debug, Clone, Default)]
+pub struct WaitForTaskOptions {
+    /// Override polling interval, in **milliseconds**. When `None`, the
+    /// task-reported `pollInterval` (then a built-in default) is used. The
+    /// effective interval is clamped to a small floor so a zero value cannot
+    /// hot-spin the poll loop.
+    pub poll_interval: Option<u64>,
+    /// Maximum total time to poll before returning a timeout error, in
+    /// **seconds**. When `None`, polling continues until the task is terminal.
+    pub max_poll_duration_secs: Option<u64>,
+}
+
+impl WaitForTaskOptions {
+    /// Build options from a [`TaskMetadata`], copying its poll fields verbatim.
+    pub fn from_metadata(meta: &TaskMetadata) -> Self {
+        Self {
+            poll_interval: meta.poll_interval,
+            max_poll_duration_secs: meta.max_poll_duration_secs,
+        }
+    }
+
+    /// Fill any unset fields from `meta`; existing `self` values take precedence.
+    #[must_use]
+    pub fn or_from_metadata(mut self, meta: &TaskMetadata) -> Self {
+        self.poll_interval = self.poll_interval.or(meta.poll_interval);
+        self.max_poll_duration_secs = self.max_poll_duration_secs.or(meta.max_poll_duration_secs);
+        self
+    }
+}
+
+impl From<TaskMetadata> for WaitForTaskOptions {
+    fn from(meta: TaskMetadata) -> Self {
+        Self::from_metadata(&meta)
+    }
 }
 
 /// MCP client for connecting to servers.
@@ -584,6 +626,103 @@ impl<T: Transport> Client<T> {
         let response = self.send_request(request_id, request).await?;
 
         self.parse_task_payload::<CallToolResult>(response, "tasks/result")
+            .await
+    }
+
+    /// Poll a task to terminal status, then return its `tasks/result`.
+    ///
+    /// Drives `tasks/get` in a loop until [`TaskStatus::is_terminal`], honoring
+    /// the polling interval (caller override, else the task-reported
+    /// `pollInterval`, else a built-in default) and an optional overall timeout.
+    /// On terminal status it fetches and returns the persisted
+    /// [`CallToolResult`] via [`Client::tasks_result`].
+    ///
+    /// # Wasm safety
+    ///
+    /// The delay between polls uses [`crate::runtime::sleep`] (not
+    /// `tokio::time::sleep` directly) and the timeout is measured with
+    /// [`web_time::Instant`] (not `std::time::Instant`, which panics on
+    /// `wasm32`), so this compiles and runs in the browser.
+    ///
+    /// # Hot-loop protection
+    ///
+    /// The effective interval is clamped to a small floor (50 ms), so a zero or
+    /// absent `pollInterval` cannot turn the loop into a busy spin.
+    ///
+    /// # Errors
+    ///
+    /// - Propagates `tasks/get` / `tasks/result` transport and protocol errors.
+    /// - Returns [`Error::Timeout`] when `opts.max_poll_duration_secs` elapses
+    ///   before the task reaches a terminal status.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// use pmcp::client::WaitForTaskOptions;
+    ///
+    /// // `result` came from a task-augmented tools/call.
+    /// if let Some(meta) = result.related_task() {
+    ///     let final_result = client
+    ///         .wait_for_related_task(&meta, WaitForTaskOptions::default())
+    ///         .await?;
+    /// }
+    /// ```
+    pub async fn wait_for_task(
+        &self,
+        task_id: &str,
+        opts: WaitForTaskOptions,
+    ) -> Result<CallToolResult> {
+        /// Default poll interval when neither the caller nor the task specify one.
+        const DEFAULT_POLL_MS: u64 = 1000;
+        /// Floor applied to any interval so a zero value cannot hot-spin.
+        const MIN_POLL_MS: u64 = 50;
+
+        self.ensure_initialized()?;
+        self.assert_capability("tasks", "tasks/get")?;
+
+        // Wasm-safe monotonic clock: IS std::time::Instant on native, browser-safe on wasm.
+        let start = web_time::Instant::now();
+        loop {
+            let task = self.tasks_get(task_id).await?;
+            if task.status.is_terminal() {
+                break;
+            }
+
+            // Enforce the overall polling budget before sleeping again.
+            if let Some(max_secs) = opts.max_poll_duration_secs {
+                if start.elapsed().as_secs() >= max_secs {
+                    return Err(Error::timeout(max_secs.saturating_mul(1000)));
+                }
+            }
+
+            let interval = opts
+                .poll_interval
+                .or(task.poll_interval)
+                .unwrap_or(DEFAULT_POLL_MS)
+                .max(MIN_POLL_MS);
+            crate::runtime::sleep(std::time::Duration::from_millis(interval)).await;
+        }
+
+        self.tasks_result(task_id).await
+    }
+
+    /// Poll a task referenced by [`TaskMetadata`] to terminal, then return its
+    /// `tasks/result` — the zero-glue counterpart of [`Client::wait_for_task`].
+    ///
+    /// Any fields left unset in `opts` are filled from `meta`
+    /// ([`WaitForTaskOptions::or_from_metadata`]) so a caller who holds a
+    /// [`CallToolResult::related_task`](crate::types::CallToolResult::related_task)
+    /// result composes without hand-copying poll fields.
+    ///
+    /// # Errors
+    ///
+    /// Same as [`Client::wait_for_task`].
+    pub async fn wait_for_related_task(
+        &self,
+        meta: &TaskMetadata,
+        opts: WaitForTaskOptions,
+    ) -> Result<CallToolResult> {
+        self.wait_for_task(&meta.task_id, opts.or_from_metadata(meta))
             .await
     }
 
