@@ -1964,3 +1964,19 @@ Plans:
 **Wave 2** *(blocked on all of Wave 1)*
 
 - [x] 99-11-PLAN.md — gate-closure verification: `pmat quality-gate --checks complexity` zero violations + full workspace tests + `make quality-gate` green; assert no `.pmatignore`/`#[allow]` weakening [CPLX-01/02/03/04]
+
+### Phase 104: Task-Augmented Tool Results DX (SEP-1686 junction)
+
+**Goal**: Close the junction between the tool contract and the tasks layer so a tool can return a task-augmented (or otherwise full) `CallToolResult` — `_meta` included — through the normal `Server` dispatch front door, instead of dispatch stringifying it into `content[0].text`. Kills the silent double-wrap bug class documented by the pmcp.run team (5 incident variants, incl. a 2-week silent production outage), and lets their three hand-rolled pre-2.11 task servers migrate onto native TaskSupport.
+
+**Depends on**: Phase 101 (tools-as-Tasks DX, pmcp 2.10.0), Phase 102 (HTTP task dispatch, pmcp 2.11.0)
+**Requirements**: TOUT-01, TOUT-02, TOUT-03, TOUT-04
+**Success Criteria** (what must be TRUE):
+
+  1. A `ToolHandler` has a typed, explicit way to return a full `CallToolResult` (with `_meta`) that lands on the wire un-re-wrapped through normal `Server` dispatch (TOUT-01) — implicit "parses as CallToolResult" sniffing is explicitly rejected (fully-defaulted serde makes any JSON object parse)
+  2. Dispatch emits a WARN (debug-fail optional) when about to text-wrap a `Value` that structurally looks like an already-built `CallToolResult` (high-precision markers: valid `content` array of Content items, or `_meta` containing `RELATED_TASK_META_KEY`) (TOUT-02)
+  3. The client exposes a typed `related_task()` accessor on tool-call results (SEP-1686 `_meta["io.modelcontextprotocol/related-task"]` → `TaskMetadata`) so integrators stop hand-rolling task detection (TOUT-03)
+  4. A migration guide documents hand-rolled `_meta` task patterns → native 2.11 `with_task_store()` machinery, incl. the Required-without-store build validation and confirmation that native `CreateTaskResult` `_meta` emission (D-08/D-09) is compatible with `_meta`-sniffing clients (TOUT-04)
+  5. ALWAYS requirements met (unit + property + fuzz + runnable example) and `make quality-gate` green
+
+**Source**: pmcp.run team issue `pmcp-run/.planning/notes/sdk-issue-tool-as-task-dx.md` (2026-06-21 + 2026-07-04 addendum); verified against `src/server/mod.rs:1493` (unconditional text-wrap) and `src/server/core_tests.rs:881` (native `_meta` emission)
