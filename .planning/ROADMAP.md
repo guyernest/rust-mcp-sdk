@@ -1981,7 +1981,7 @@ Plans:
 
 **Source**: pmcp.run team issue `pmcp-run/.planning/notes/sdk-issue-tool-as-task-dx.md` (2026-06-21 + 2026-07-04 addendum); verified against `src/server/mod.rs:1493` (unconditional text-wrap) and `src/server/core_tests.rs:881` (native `_meta` emission)
 
-**Plans:** 2/5 plans executed
+**Plans:** 3/5 plans executed
 
 Plans:
 
@@ -1992,7 +1992,7 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 104-03-PLAN.md — Double-wrap tripwire (looks_like_call_tool_result WARN+debug_assert) + per-tool suppress_double_wrap_check [TOUT-02]
+- [x] 104-03-PLAN.md — Double-wrap tripwire (looks_like_call_tool_result WARN+debug_assert) + per-tool suppress_double_wrap_check [TOUT-02]
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
