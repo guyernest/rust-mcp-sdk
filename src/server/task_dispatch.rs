@@ -40,7 +40,7 @@ use crate::types::jsonrpc::ResponsePayload;
 use crate::types::tasks::{TaskStatus, RELATED_TASK_META_KEY};
 use crate::types::tools::TaskSupport;
 use crate::types::{
-    CallToolResult, ClientRequest, JSONRPCError, JSONRPCResponse, RequestId, ToolInfo,
+    CallToolResult, ClientRequest, Content, JSONRPCError, JSONRPCResponse, RequestId, ToolInfo,
 };
 use serde_json::Value;
 use std::collections::HashMap;
@@ -188,6 +188,69 @@ pub(crate) fn resolve_tool_output(output: Result<crate::server::ToolOutput>) -> 
         Ok(crate::server::ToolOutput::Payload(value)) => DispatchOutput::Middleware(Ok(value)),
         Err(e) => DispatchOutput::Middleware(Err(e)),
     }
+}
+
+/// Which high-precision structural marker tripped the double-wrap detector.
+///
+/// Reported in the TOUT-02 WARN / `debug_assert!` so an author immediately sees
+/// WHY a `Value` about to be text-wrapped looked like an already-built
+/// [`CallToolResult`]. `Copy` (two field-less variants); it never escapes the
+/// server crate (exposed to integration tests only via the hidden
+/// `pmcp::__test_support` seam, mirroring `ServerRequestDispatcher`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DoubleWrapMarker {
+    /// The value carries a `_meta` object holding [`RELATED_TASK_META_KEY`] — the
+    /// envelope key only a built task-augmented `CallToolResult` sets.
+    RelatedTaskMeta,
+    /// The value carries a NON-EMPTY `content` array whose every element
+    /// deserializes as [`Content`] (the internally `#[serde(tag = "type")]`
+    /// enum), i.e. it is already a wire-shaped result body.
+    ContentArray,
+}
+
+/// Structural, high-precision detector for "this `Value` is ALREADY a built
+/// [`CallToolResult`] and is about to be WRONGLY text-wrapped a second time"
+/// (TOUT-02 — the exact silent bug behind the agent-lake 2-week outage).
+///
+/// Returns `Some(marker)` only for a value carrying an unambiguous built-result
+/// marker; `None` otherwise. Deliberately NOT a full
+/// `from_value::<CallToolResult>` parse (D-02): it checks two cheap, precise
+/// structural markers in cost order, so a benign tool payload almost never trips.
+///
+/// Precision rationale (near-zero false positives):
+/// - [`Content`] is internally tagged (`#[serde(tag = "type")]`), so an object
+///   lacking a valid `"type"` NEVER deserializes as `Content` — the content-array
+///   marker is high precision.
+/// - An empty `content: []` is NOT a built-result marker (a benign payload can
+///   carry an empty array), so it must NOT fire — hence the `!arr.is_empty()`
+///   guard.
+///
+/// Order matters: the single-lookup `_meta` key check runs first (cheapest and
+/// also short-circuits pathological large `content` arrays, T-104-03-02).
+// Why: called at BOTH Payload wrap sites (mod.rs + core.rs) through
+// `double_wrap_tripwire`; production-reachable, so no `dead_code` allow needed.
+pub fn looks_like_call_tool_result(v: &Value) -> Option<DoubleWrapMarker> {
+    let obj = v.as_object()?;
+    // (b) Cheapest first: the task-envelope meta key — a single map lookup.
+    if obj
+        .get("_meta")
+        .and_then(Value::as_object)
+        .is_some_and(|meta| meta.contains_key(RELATED_TASK_META_KEY))
+    {
+        return Some(DoubleWrapMarker::RelatedTaskMeta);
+    }
+    // (a) A NON-EMPTY `content` array whose every element parses as `Content`.
+    // The `!arr.is_empty()` guard keeps a benign empty array from firing.
+    if let Some(arr) = obj.get("content").and_then(Value::as_array) {
+        if !arr.is_empty()
+            && arr
+                .iter()
+                .all(|e| serde_json::from_value::<Content>(e.clone()).is_ok())
+        {
+            return Some(DoubleWrapMarker::ContentArray);
+        }
+    }
+    None
 }
 
 /// Borrow-struct holding the two task backend handles a dispatcher owns.
