@@ -1980,3 +1980,13 @@ Plans:
   5. ALWAYS requirements met (unit + property + fuzz + runnable example) and `make quality-gate` green
 
 **Source**: pmcp.run team issue `pmcp-run/.planning/notes/sdk-issue-tool-as-task-dx.md` (2026-06-21 + 2026-07-04 addendum); verified against `src/server/mod.rs:1493` (unconditional text-wrap) and `src/server/core_tests.rs:881` (native `_meta` emission)
+
+**Plans:** 5 plans
+
+Plans:
+
+- [ ] 104-01-PLAN.md — TaskMetadata + CallToolResult::{with_related_task, related_task} + Client::wait_for_task (wasm-safe, runtime::sleep) [TOUT-03, TOUT-01/D-03.1]
+- [ ] 104-02-PLAN.md — ToolOutput enum + ToolHandler::handle_output default + shared verbatim pass-through in both dispatchers (D-04/D-05) [TOUT-01]
+- [ ] 104-03-PLAN.md — Double-wrap tripwire (looks_like_call_tool_result WARN+debug_assert) + per-tool suppress_double_wrap_check [TOUT-02]
+- [ ] 104-04-PLAN.md — ServerBuilder::tool_with_result + RequestHandlerExtra::set_result_meta (interior-mut slot) [TOUT-01/D-03.2/D-03.3]
+- [ ] 104-05-PLAN.md — s47 BEFORE/AFTER example + live-HTTP _meta-at-top-level acceptance gate + migration guide (docs/design + pmcp-book + README) [TOUT-04]
