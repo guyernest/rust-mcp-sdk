@@ -103,10 +103,9 @@ mod precision {
         leaf.prop_recursive(3, 16, 4, |inner| {
             prop_oneof![
                 prop::collection::vec(inner.clone(), 0..4).prop_map(serde_json::Value::from),
-                prop::collection::hash_map("[a-z]{1,6}", inner, 0..4)
-                    .prop_map(|m| serde_json::Value::from(
-                        m.into_iter().collect::<serde_json::Map<_, _>>()
-                    )),
+                prop::collection::hash_map("[a-z]{1,6}", inner, 0..4).prop_map(|m| {
+                    serde_json::Value::from(m.into_iter().collect::<serde_json::Map<_, _>>())
+                }),
             ]
         })
     }
