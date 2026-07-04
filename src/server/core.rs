@@ -496,8 +496,10 @@ impl ServerCore {
             // Clone arguments for middleware processing
             let mut args = req.arguments.clone();
 
-            // Process request through tool middleware chain
-            // Middleware rejection short-circuits tool execution (on_error already called by chain)
+            // Process request through tool middleware chain.
+            // Middleware rejection short-circuits tool execution (on_error already
+            // called by chain). REQUEST middleware runs BEFORE the handler for
+            // EVERY tool, regardless of the ToolOutput variant it returns.
             self.tool_middleware
                 .read()
                 .await
@@ -515,31 +517,47 @@ impl ServerCore {
                 }
             }
 
-            // Execute the tool with potentially modified args and extra
-            let mut result = handler.handle(args, extra).await;
+            // Execute the tool. `handle_output` returns `Result<ToolOutput>`; the
+            // SHARED `resolve_tool_output` (D-05) is the SINGLE place that decides
+            // Payload-vs-Result and encodes the response-middleware-bypass rule, so
+            // this dispatcher and the high-level `Server` can never drift on it.
+            let output = handler.handle_output(args, extra).await;
+            match crate::server::task_dispatch::resolve_tool_output(output) {
+                // VERBATIM (D-04 + D-04a — USER-APPROVED and LOCKED: "keep the
+                // bypass, harden it"): the handler owns the full `CallToolResult`
+                // envelope, including its own redaction/sanitization. Emit it as-is
+                // — bypassing RESPONSE middleware (redaction/sanitization/audit),
+                // the create-path gate, and the text-wrap / widget-enrichment tail.
+                // REQUEST middleware already fired above for every tool, and a
+                // handler `Err(_)` still routes through the Middleware arm below.
+                crate::server::task_dispatch::DispatchOutput::Verbatim(call_result) => {
+                    return Ok(ToolCallOutcome::Result(call_result));
+                },
+                crate::server::task_dispatch::DispatchOutput::Middleware(mut result) => {
+                    // Process response through tool middleware chain (Payload/error only)
+                    if let Err(e) = self
+                        .tool_middleware
+                        .read()
+                        .await
+                        .process_response(&req.name, &mut result, &context)
+                        .await
+                    {
+                        // Log error but continue with original result
+                        tracing::warn!("Tool response middleware processing failed: {}", e);
+                    }
 
-            // Process response through tool middleware chain
-            if let Err(e) = self
-                .tool_middleware
-                .read()
-                .await
-                .process_response(&req.name, &mut result, &context)
-                .await
-            {
-                // Log error but continue with original result
-                tracing::warn!("Tool response middleware processing failed: {}", e);
+                    // If tool execution failed, call handle_tool_error
+                    if let Err(ref e) = result {
+                        self.tool_middleware
+                            .read()
+                            .await
+                            .handle_tool_error(&req.name, e, &context)
+                            .await;
+                    }
+
+                    result
+                },
             }
-
-            // If tool execution failed, call handle_tool_error
-            if let Err(ref e) = result {
-                self.tool_middleware
-                    .read()
-                    .await
-                    .handle_tool_error(&req.name, e, &context)
-                    .await;
-            }
-
-            result
         };
 
         #[cfg(target_arch = "wasm32")]

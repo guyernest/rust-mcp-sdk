@@ -1443,46 +1443,64 @@ impl Server {
 
         // Execute tool with middleware (native-only)
         #[cfg(not(target_arch = "wasm32"))]
-        let result = {
+        let dispatch_output = {
             // Create tool context for middleware
             let context = tool_middleware::ToolContext::new(&req.name, &request_id_str);
 
             // Clone arguments for middleware processing
             let mut args = req.arguments;
 
-            // Process request through tool middleware chain
-            // Middleware rejection short-circuits tool execution
+            // Process request through tool middleware chain.
+            // Middleware rejection short-circuits tool execution. REQUEST
+            // middleware runs BEFORE the handler for EVERY tool, regardless of the
+            // ToolOutput variant it will return (kept here so it fires on both the
+            // Payload and the verbatim Result path).
             self.tool_middleware_chain
                 .read()
                 .await
                 .process_request(&req.name, &mut args, &mut extra, &context)
                 .await?;
 
-            // Execute the tool with potentially modified args and extra
-            let mut result = handler.handle(args, extra).await;
+            // Execute the tool. `handle_output` returns `Result<ToolOutput>`; the
+            // SHARED `resolve_tool_output` (D-05) is the SINGLE place that decides
+            // Payload-vs-Result and encodes the response-middleware-bypass rule, so
+            // this dispatcher and `ServerCore` can never drift on it.
+            let output = handler.handle_output(args, extra).await;
+            let mut resolved = task_dispatch::resolve_tool_output(output);
 
-            // Process response through tool middleware chain
-            if let Err(e) = self
-                .tool_middleware_chain
-                .read()
-                .await
-                .process_response(&req.name, &mut result, &context)
-                .await
-            {
-                // Log error but continue with original result
-                tracing::warn!("Tool response middleware processing failed: {}", e);
-            }
-
-            // If tool execution failed, call handle_tool_error
-            if let Err(ref e) = result {
-                self.tool_middleware_chain
+            // Why: `ToolOutput::Result` deliberately BYPASSES RESPONSE middleware
+            // (D-04 + D-04a — USER-APPROVED and LOCKED: "keep the bypass, harden
+            // it"). The handler owns the full envelope, including its own
+            // redaction/sanitization, at the same trust level as returning a raw
+            // Value today. RESPONSE middleware (redaction/sanitization/audit) +
+            // `handle_tool_error` therefore run ONLY for the Payload/error arm
+            // below; REQUEST middleware already fired above for EVERY tool, and a
+            // handler `Err(_)` still routes through `handle_tool_error` via this
+            // arm (the bypass is scoped to the successful `Verbatim` arm only).
+            if let task_dispatch::DispatchOutput::Middleware(ref mut result) = resolved {
+                // Process response through tool middleware chain
+                if let Err(e) = self
+                    .tool_middleware_chain
                     .read()
                     .await
-                    .handle_tool_error(&req.name, e, &context)
-                    .await;
+                    .process_response(&req.name, result, &context)
+                    .await
+                {
+                    // Log error but continue with original result
+                    tracing::warn!("Tool response middleware processing failed: {}", e);
+                }
+
+                // If tool execution failed, call handle_tool_error
+                if let Err(ref e) = result {
+                    self.tool_middleware_chain
+                        .read()
+                        .await
+                        .handle_tool_error(&req.name, e, &context)
+                        .await;
+                }
             }
 
-            result
+            resolved
         };
 
         // On WASM, execute tool directly without middleware
@@ -1490,25 +1508,36 @@ impl Server {
         let result = handler.handle(req.arguments, extra).await;
 
         // Token cleanup is unconditional (success or failure) and does not
-        // touch `result`, so it runs once before the value/error split.
+        // touch the outcome, so it runs once before the value/error split —
+        // preserving cleanup parity for the verbatim `ToolOutput::Result` arm.
         self.cancellation_manager
             .remove_token(&request_id_str)
             .await;
-        let result = match result {
-            Ok(v) => v,
-            // `Error::ToolRejected` is an APPLICATION-level rejection (e.g.
-            // Code Mode policy: a SELECT missing its LIMIT), not a protocol
-            // fault. Map it to a successful `CallToolResult { isError: true }`
-            // (message → content, details → structuredContent) so the model
-            // reads the reason and retries with corrected input, instead of
-            // `?`-propagating a JSON-RPC error that reads as a server crash.
-            // All other errors keep propagating as protocol errors.
-            Err(Error::ToolRejected { message, details }) => {
-                return Ok(serde_json::to_value(CallToolResult::rejected(
-                    message, details,
-                ))?);
+        let result = match dispatch_output {
+            // VERBATIM (D-04 + D-04a): the handler owns the full `CallToolResult`
+            // envelope — emit it to the wire as-is. RESPONSE middleware, the
+            // create-path gate, text-wrap, and widget enrichment are ALL bypassed
+            // (mirrors the `ToolRejected` verbatim early-return below, which also
+            // returns after the unconditional token cleanup).
+            task_dispatch::DispatchOutput::Verbatim(call_result) => {
+                return Ok(serde_json::to_value(call_result)?);
             },
-            Err(e) => return Err(e),
+            task_dispatch::DispatchOutput::Middleware(result) => match result {
+                Ok(v) => v,
+                // `Error::ToolRejected` is an APPLICATION-level rejection (e.g.
+                // Code Mode policy: a SELECT missing its LIMIT), not a protocol
+                // fault. Map it to a successful `CallToolResult { isError: true }`
+                // (message → content, details → structuredContent) so the model
+                // reads the reason and retries with corrected input, instead of
+                // `?`-propagating a JSON-RPC error that reads as a server crash.
+                // All other errors keep propagating as protocol errors.
+                Err(Error::ToolRejected { message, details }) => {
+                    return Ok(serde_json::to_value(CallToolResult::rejected(
+                        message, details,
+                    ))?);
+                },
+                Err(e) => return Err(e),
+            },
         };
 
         // CREATE-PATH (Phase 102, HTASK-02): a task-augmented `tools/call` over

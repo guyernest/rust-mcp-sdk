@@ -143,6 +143,53 @@ pub(crate) fn error_response(id: RequestId, code: i32, message: String) -> JSONR
     }
 }
 
+/// Resolution of a [`ToolHandler`](crate::server::ToolHandler)'s
+/// [`ToolOutput`](crate::server::ToolOutput) at a NATIVE dispatch tail.
+///
+/// This is the SINGLE place (D-05 anti-drift) where the `Payload`-vs-`Result`
+/// decision AND the response-middleware-bypass rule live. BOTH native dispatchers
+/// (`Server::handle_call_tool` and `ServerCore::handle_call_tool`) resolve their
+/// handler's `Result<ToolOutput>` through [`resolve_tool_output`] and branch on
+/// this enum identically, so the two dispatchers can never drift on the rule.
+pub(crate) enum DispatchOutput {
+    /// `ToolOutput::Result` — send this `CallToolResult` to the wire VERBATIM.
+    ///
+    /// The dispatcher must BYPASS response middleware, the create-path gate, and
+    /// text-wrap / widget enrichment for this arm (D-04 + D-04a, USER-APPROVED and
+    /// LOCKED — the handler owns the full envelope, including its own redaction).
+    /// REQUEST middleware and the handler-error path are unaffected: they run
+    /// before this resolution, so only the SUCCESSFUL `Result` arm is verbatim.
+    Verbatim(CallToolResult),
+
+    /// `ToolOutput::Payload(v)` OR a handler `Err(_)` — coerced back into the
+    /// existing `Result<Value>` middleware variable and fed through the UNCHANGED
+    /// tail: response middleware, `handle_tool_error`, the create-path gate, and
+    /// the text-wrap / widget enrichment, exactly as before this feature existed.
+    Middleware(Result<Value>),
+}
+
+/// Resolve a handler's `Result<ToolOutput>` into the shared [`DispatchOutput`]
+/// decision (D-05: one copy of the Payload-vs-Result + bypass rule).
+///
+/// - `Ok(ToolOutput::Result(r))` → [`DispatchOutput::Verbatim`] (wire-verbatim,
+///   bypasses RESPONSE middleware + create-path + wrap);
+/// - `Ok(ToolOutput::Payload(v))` → [`DispatchOutput::Middleware(Ok(v))`];
+/// - `Err(e)` → [`DispatchOutput::Middleware(Err(e))`] (handler errors STILL flow
+///   through `process_response` / `handle_tool_error` — the bypass is scoped to
+///   the `Ok(Result(_))` arm only).
+///
+/// Matching a `#[non_exhaustive]` enum from WITHIN the defining crate is exhaustive
+/// (the attribute only constrains downstream crates), so no wildcard arm is needed.
+// Why: called by both native dispatch tails (mod.rs + core.rs handle_call_tool);
+// production-reachable, no dead_code allow needed.
+pub(crate) fn resolve_tool_output(output: Result<crate::server::ToolOutput>) -> DispatchOutput {
+    match output {
+        Ok(crate::server::ToolOutput::Result(call_result)) => DispatchOutput::Verbatim(call_result),
+        Ok(crate::server::ToolOutput::Payload(value)) => DispatchOutput::Middleware(Ok(value)),
+        Err(e) => DispatchOutput::Middleware(Err(e)),
+    }
+}
+
 /// Borrow-struct holding the two task backend handles a dispatcher owns.
 ///
 /// Both `Server` and `ServerCore` construct a `TaskDispatch` borrowing their own

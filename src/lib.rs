@@ -78,6 +78,7 @@ pub use server::{
     typed_tool::{SimpleToolExt, SyncToolExt, TypedSyncTool, TypedTool, TypedToolWithOutput},
     ui::UIResourceBuilder,
     McpServer, PromptHandler, ResourceHandler, SamplingHandler, Server, ServerBuilder, ToolHandler,
+    ToolOutput,
 };
 #[cfg(target_arch = "wasm32")]
 pub use server::{
