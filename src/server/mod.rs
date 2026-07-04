@@ -2810,6 +2810,92 @@ impl ServerBuilder {
         self
     }
 
+    /// Register a tool whose async closure returns a full [`CallToolResult`] the
+    /// handler owns end-to-end, emitted to the wire **VERBATIM**.
+    ///
+    /// This mirrors [`tool_typed_with_output`](Self::tool_typed_with_output) but
+    /// fixes the return type to
+    /// [`CallToolResult`](crate::types::CallToolResult), so a handler can attach
+    /// task augmentation (`CallToolResult::with_related_task(...)`), custom
+    /// `_meta`, structured content, or an error envelope in ONE call — no
+    /// hand-written [`ToolHandler`](crate::ToolHandler) `impl` required. The input
+    /// arg type `TIn` deserializes from the tool arguments exactly as with
+    /// [`tool_typed`](Self::tool_typed).
+    ///
+    /// # ⚠️ BYPASS WARNING — the returned result is sent to the wire VERBATIM
+    ///
+    /// The closure's [`CallToolResult`](crate::types::CallToolResult) is routed
+    /// through [`ToolOutput::Result`](crate::server::ToolOutput::Result) and
+    /// therefore **BYPASSES response middleware** — redaction, sanitization, and
+    /// audit hooks (`ToolMiddleware::on_response`) DO NOT run — as well as
+    /// text-wrapping and widget enrichment. The handler owns its OWN redaction
+    /// and sanitization of both `content` and `_meta`, at the same trust level as
+    /// returning a raw `Value` today (D-04a). **Request** middleware still runs
+    /// before the handler, and handler errors still route through the normal
+    /// error path.
+    ///
+    /// # Example
+    /// ```no_run
+    /// # #[cfg(feature = "schema-generation")]
+    /// # {
+    /// use pmcp::ServerBuilder;
+    /// use pmcp::types::CallToolResult;
+    /// use pmcp::types::tasks::TaskMetadata;
+    /// use pmcp::types::Content;
+    /// use schemars::JsonSchema;
+    /// use serde::Deserialize;
+    ///
+    /// #[derive(JsonSchema, Deserialize)]
+    /// struct RunArgs { job: String }
+    ///
+    /// let server = ServerBuilder::new()
+    ///     .name("example")
+    ///     .tool_with_result("start_job", |args: RunArgs, _extra| {
+    ///         Box::pin(async move {
+    ///             Ok(CallToolResult::new(vec![Content::text(
+    ///                 format!("started {}", args.job),
+    ///             )])
+    ///             .with_related_task(TaskMetadata::new("t1")))
+    ///         })
+    ///     })
+    ///     .build();
+    /// # }
+    /// ```
+    #[cfg(feature = "schema-generation")]
+    pub fn tool_with_result<TIn>(
+        mut self,
+        name: impl Into<String>,
+        handler: impl Fn(
+                TIn,
+                crate::RequestHandlerExtra,
+            ) -> std::pin::Pin<
+                Box<
+                    dyn std::future::Future<Output = crate::Result<crate::types::CallToolResult>>
+                        + Send,
+                >,
+            > + Send
+            + Sync
+            + 'static,
+    ) -> Self
+    where
+        TIn: serde::de::DeserializeOwned + schemars::JsonSchema + Send + Sync + 'static,
+    {
+        use crate::server::typed_tool::TypedToolWithResult;
+
+        let name_str = name.into();
+        let tool = TypedToolWithResult::new(name_str.clone(), handler);
+        self.tools.insert(name_str, Arc::new(tool));
+
+        // Update capabilities to include tools
+        if self.capabilities.tools.is_none() {
+            self.capabilities.tools = Some(crate::types::ToolCapabilities {
+                list_changed: Some(false),
+            });
+        }
+
+        self
+    }
+
     /// Add a type-safe tool handler with both input and output typing and description.
     ///
     /// This is a convenience overload that allows setting a description directly
