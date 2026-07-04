@@ -1449,6 +1449,12 @@ impl Server {
             .with_progress_reporter(progress_reporter),
         );
 
+        // D-03.3 (TOUT-01): clone the interior-mutable result-`_meta` slot BEFORE
+        // `extra` is moved into `handle_output`, so any `extra.set_result_meta(..)`
+        // the handler performs can be drained back onto the Payload-path result.
+        #[cfg(not(target_arch = "wasm32"))]
+        let result_meta_handle = extra.result_meta_handle();
+
         // Execute tool with middleware (native-only)
         #[cfg(not(target_arch = "wasm32"))]
         let dispatch_output = {
@@ -1612,6 +1618,16 @@ impl Server {
 
         if let Some(info) = self.tool_infos.get(&req.name) {
             call_result = call_result.with_widget_enrichment(info, result);
+        }
+
+        // D-03.3: drain any handler-set result `_meta` (via extra.set_result_meta)
+        // and merge it onto the Payload-built envelope with handler-key-wins
+        // precedence (unrelated widget/native keys preserved). Payload path ONLY —
+        // the verbatim `ToolOutput::Result` arm above returns earlier and owns its
+        // own `_meta`, so it never reaches here.
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(handler_meta) = result_meta_handle.take_result_meta() {
+            crate::server::cancellation::merge_result_meta(&mut call_result, handler_meta);
         }
 
         Ok(serde_json::to_value(call_result)?)

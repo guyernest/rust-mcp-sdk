@@ -18,10 +18,11 @@
 #![cfg(all(not(target_arch = "wasm32"), feature = "schema-generation"))]
 
 use async_trait::async_trait;
+use pmcp::server::typed_tool::TypedTool;
 use pmcp::shared::{Transport, TransportMessage};
 use pmcp::types::tasks::{TaskMetadata, RELATED_TASK_META_KEY};
-use pmcp::types::{CallToolResult, ClientCapabilities, Content};
-use pmcp::{Client, Error, Result, Server};
+use pmcp::types::{CallToolResult, ClientCapabilities, Content, ToolInfo};
+use pmcp::{Client, Error, RequestHandlerExtra, Result, Server, ToolHandler};
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -171,5 +172,191 @@ async fn tool_with_result_deserializes_typed_input() {
 }
 
 // ---------------------------------------------------------------------------
-// Task 2 handlers + tests are appended below.
+// Task 2: RequestHandlerExtra::set_result_meta — Payload-path _meta retrofit.
 // ---------------------------------------------------------------------------
+
+/// A Payload-path tool (returns a plain Value) that stamps a single `_meta` key
+/// via `set_result_meta` — the one-call retrofit for an existing handler.
+fn meta_setting_tool() -> impl ToolHandler {
+    TypedTool::new_with_schema(
+        "set_meta",
+        json!({ "type": "object" }),
+        |_args: Value, extra: RequestHandlerExtra| {
+            Box::pin(async move {
+                let mut m = serde_json::Map::new();
+                m.insert("x".to_string(), json!(1));
+                extra.set_result_meta(m);
+                Ok(json!({ "ok": true }))
+            })
+        },
+    )
+}
+
+/// A Payload-path tool that calls `set_result_meta` TWICE — proving repeated
+/// calls accumulate into the same slot and a later colliding key wins.
+fn repeated_meta_tool() -> impl ToolHandler {
+    TypedTool::new_with_schema(
+        "repeat_meta",
+        json!({ "type": "object" }),
+        |_args: Value, extra: RequestHandlerExtra| {
+            Box::pin(async move {
+                let mut first = serde_json::Map::new();
+                first.insert("k".to_string(), json!(1));
+                first.insert("keep".to_string(), json!("a"));
+                extra.set_result_meta(first);
+
+                let mut second = serde_json::Map::new();
+                second.insert("k".to_string(), json!(2)); // collides -> later wins
+                second.insert("added".to_string(), json!("b"));
+                extra.set_result_meta(second);
+
+                Ok(json!({ "ok": true }))
+            })
+        },
+    )
+}
+
+/// A plain Payload-path tool that never touches `set_result_meta` — proves no
+/// `_meta` is injected (no regression for existing handlers).
+fn plain_tool() -> impl ToolHandler {
+    TypedTool::new_with_schema(
+        "plain",
+        json!({ "type": "object" }),
+        |_args: Value, _extra| Box::pin(async { Ok(json!({ "answer": 42 })) }),
+    )
+}
+
+/// A widget tool (its metadata `_meta` carries widget + `openai/toolInvocation/*`
+/// keys, so the dispatch tail pre-populates the result `_meta`) whose handler
+/// also calls `set_result_meta`, colliding on ONE widget key and adding another.
+/// Proves handler-key-wins on collision while unrelated widget keys survive.
+struct WidgetCollisionTool;
+
+#[async_trait]
+impl ToolHandler for WidgetCollisionTool {
+    async fn handle(&self, _args: Value, extra: RequestHandlerExtra) -> Result<Value> {
+        let mut m = serde_json::Map::new();
+        m.insert(
+            "openai/toolInvocation/foo".to_string(),
+            json!("handler-wins"),
+        );
+        m.insert("custom".to_string(), json!(99));
+        extra.set_result_meta(m);
+        Ok(json!({ "answer": 1 }))
+    }
+
+    fn metadata(&self) -> Option<ToolInfo> {
+        Some(
+            ToolInfo::new("widget_collide", None, json!({ "type": "object" }))
+                // Triggers widget_meta() so with_widget_enrichment fires.
+                .with_meta_entry("openai/outputTemplate", json!("ui://widget"))
+                // Copied verbatim into the result _meta by with_widget_enrichment.
+                .with_meta_entry("openai/toolInvocation/foo", json!("widget-original"))
+                .with_meta_entry("openai/toolInvocation/keep", json!("preserved")),
+        )
+    }
+}
+
+/// A `tool_with_result` (verbatim `ToolOutput::Result`) tool that ALSO calls
+/// `set_result_meta` — proving the slot is IGNORED on the Result path (the
+/// handler owns its full envelope).
+fn result_path_ignores_set_meta_tool(server_name: &str) -> Server {
+    Server::builder()
+        .name(server_name)
+        .version("1.0.0")
+        .tool_with_result("verbatim_ignore", |_args: StartArgs, extra| {
+            Box::pin(async move {
+                let mut m = serde_json::Map::new();
+                m.insert("ignored".to_string(), json!(true));
+                extra.set_result_meta(m);
+                Ok(CallToolResult::new(vec![Content::text("owned")]))
+            })
+        })
+        .build()
+        .expect("server builds")
+}
+
+fn server_with(name: &str, tool_name: &str, handler: impl ToolHandler + 'static) -> Server {
+    Server::builder()
+        .name(name)
+        .version("1.0.0")
+        .tool(tool_name, handler)
+        .build()
+        .expect("server builds")
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn set_result_meta_key_lands_on_payload_result() {
+    let server = server_with("set-meta-server", "set_meta", meta_setting_tool());
+    let result = call_via_server(server, "set_meta", json!({})).await;
+    let v = serde_json::to_value(&result).expect("serialize");
+    assert_eq!(
+        v["_meta"]["x"], 1,
+        "handler-set _meta key must land on the Payload-built result"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn set_result_meta_repeated_calls_accumulate_and_later_wins() {
+    let server = server_with("repeat-meta-server", "repeat_meta", repeated_meta_tool());
+    let result = call_via_server(server, "repeat_meta", json!({})).await;
+    let v = serde_json::to_value(&result).expect("serialize");
+    assert_eq!(v["_meta"]["k"], 2, "later colliding key must win");
+    assert_eq!(
+        v["_meta"]["keep"], "a",
+        "non-colliding key from the first call must survive"
+    );
+    assert_eq!(
+        v["_meta"]["added"], "b",
+        "non-colliding key from the second call must survive"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn set_result_meta_collision_overwrites_widget_key_preserves_unrelated() {
+    let server = server_with(
+        "widget-collide-server",
+        "widget_collide",
+        WidgetCollisionTool,
+    );
+    let result = call_via_server(server, "widget_collide", json!({})).await;
+    let v = serde_json::to_value(&result).expect("serialize");
+    // Handler-set key overwrites the same-name widget key...
+    assert_eq!(
+        v["_meta"]["openai/toolInvocation/foo"], "handler-wins",
+        "handler-set key must overwrite the same-name widget _meta key"
+    );
+    // ...unrelated widget key preserved (never a whole-map replace)...
+    assert_eq!(
+        v["_meta"]["openai/toolInvocation/keep"], "preserved",
+        "unrelated widget _meta key must be preserved"
+    );
+    // ...and the new handler key is added.
+    assert_eq!(
+        v["_meta"]["custom"], 99,
+        "new handler-set key must be added alongside preserved widget keys"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn no_set_result_meta_injects_nothing() {
+    let server = server_with("plain-server", "plain", plain_tool());
+    let result = call_via_server(server, "plain", json!({})).await;
+    let v = serde_json::to_value(&result).expect("serialize");
+    assert!(
+        v.get("_meta").is_none_or(Value::is_null),
+        "a handler that never calls set_result_meta must inject no _meta"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn set_result_meta_ignored_on_tool_output_result_path() {
+    let server = result_path_ignores_set_meta_tool("verbatim-ignore-server");
+    let result = call_via_server(server, "verbatim_ignore", json!({ "job": "x" })).await;
+    let v = serde_json::to_value(&result).expect("serialize");
+    assert_eq!(v["content"][0]["text"], "owned");
+    assert!(
+        v.get("_meta").is_none_or(Value::is_null),
+        "set_result_meta must be IGNORED on the ToolOutput::Result path (handler owns the envelope)"
+    );
+}

@@ -513,6 +513,12 @@ impl ServerCore {
             .with_task_request(req.task.clone()),
         );
 
+        // D-03.3 (TOUT-01): clone the result-`_meta` slot before `extra` moves
+        // into `handle_output` (see the high-level `Server` dispatcher for the
+        // twin); drained onto the Payload envelope after the handler returns.
+        #[cfg(not(target_arch = "wasm32"))]
+        let result_meta_handle = extra.result_meta_handle();
+
         // Execute tool with or without middleware depending on platform
         #[cfg(not(target_arch = "wasm32"))]
         let result = {
@@ -680,6 +686,19 @@ impl ServerCore {
         } else {
             let text = serde_json::to_string_pretty(&value)?;
             CallToolResult::new(vec![Content::text(text)])
+        };
+
+        // D-03.3: drain any handler-set result `_meta` onto the Payload envelope
+        // with handler-key-wins precedence (Payload path only; the Verbatim,
+        // create-path, and error arms all returned earlier). Shadow-rebind so the
+        // wasm branch, which never sets the slot, needs no `mut`.
+        #[cfg(not(target_arch = "wasm32"))]
+        let call_result = {
+            let mut call_result = call_result;
+            if let Some(handler_meta) = result_meta_handle.take_result_meta() {
+                crate::server::cancellation::merge_result_meta(&mut call_result, handler_meta);
+            }
+            call_result
         };
 
         Ok(ToolCallOutcome::Result(call_result))
