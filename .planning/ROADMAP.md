@@ -1981,7 +1981,7 @@ Plans:
 
 **Source**: pmcp.run team issue `pmcp-run/.planning/notes/sdk-issue-tool-as-task-dx.md` (2026-06-21 + 2026-07-04 addendum); verified against `src/server/mod.rs:1493` (unconditional text-wrap) and `src/server/core_tests.rs:881` (native `_meta` emission)
 
-**Plans:** 3/5 plans executed
+**Plans:** 4/5 plans executed
 
 Plans:
 
@@ -1996,7 +1996,7 @@ Plans:
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [ ] 104-04-PLAN.md — ServerBuilder::tool_with_result + RequestHandlerExtra::set_result_meta (interior-mut slot) [TOUT-01/D-03.2/D-03.3]
+- [x] 104-04-PLAN.md — ServerBuilder::tool_with_result + RequestHandlerExtra::set_result_meta (interior-mut slot) [TOUT-01/D-03.2/D-03.3]
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
