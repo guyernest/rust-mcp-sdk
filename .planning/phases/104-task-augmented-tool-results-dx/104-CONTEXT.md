@@ -1,6 +1,7 @@
 # Phase 104: Task-Augmented Tool Results DX (SEP-1686 junction) - Context
 
 **Gathered:** 2026-07-04
+**Amended:** 2026-07-04 (D-04a added after cross-AI review — user-approved bypass hardening)
 **Status:** Ready for planning
 
 <domain>
@@ -59,6 +60,30 @@ shapes.
   so the gate naturally passes). Then `ToolOutput::Result(...)` goes to the
   wire verbatim: NO text-wrap, NO widget enrichment. The handler owns the full
   envelope.
+- **D-04a (USER-APPROVED during cross-AI review, 2026-07-04 — LOCKED):**
+  Codex flagged (HIGH) that `ToolOutput::Result` bypassing RESPONSE middleware
+  (redaction/sanitization/audit) is a security-relevant escape path that D-04
+  only implied. The user's decision: **"Keep the bypass, harden it."** The
+  `ToolOutput::Result` response-middleware bypass is now an EXPLICITLY
+  user-approved, locked decision — the handler owns the full envelope at the
+  same trust level as today's raw `Value` return. There is deliberately NO
+  result-aware response-middleware hook. The bypass ships WITH these four
+  mandatory hardening mitigations:
+  1. **Loud rustdoc** on the `ToolOutput::Result` variant AND on
+     `tool_with_result` (not only the migration guide) stating that the value
+     goes to the wire verbatim and bypasses response middleware — the tool is
+     responsible for its OWN redaction/sanitization.
+  2. A **request-middleware-still-runs test** proving REQUEST middleware
+     (`process_request`) still fires before a `ToolOutput::Result` tool
+     executes (only RESPONSE middleware is bypassed).
+  3. A **handler-error-path regression test** proving handler errors returned
+     from `handle_output()` still route through the existing error handling
+     (`handle_tool_error` / the response-middleware error path), i.e. the
+     bypass applies ONLY to the successful `Ok(ToolOutput::Result(_))` arm.
+  4. A **migration-guide + rustdoc callout** that a
+     `tool_with_result`/`ToolOutput::Result` tool is responsible for its own
+     redaction (surfaced where authors read it, not buried).
+  This amendment survives future replans: the bypass is settled, not open.
 - **D-05:** The change lands in the SHARED task-dispatch seam (Phase 102
   anti-drift rule): `Server` and `ServerCore` dispatch must honor `ToolOutput`
   identically — no divergent second copy of the pass-through logic.
@@ -77,6 +102,9 @@ shapes.
 - **D-08:** Escape hatch: per-tool registration-time opt-out flag (e.g.
   `.suppress_double_wrap_check()`) for tools whose legitimate payload trips
   the heuristic. Explicit and reviewable; no env-var global kill switch.
+  Suppression should be RARE and reviewed (rustdoc must say so), and the
+  suppression set MUST survive the builder→`ServerCore` conversion so both
+  dispatchers agree.
 
 ### Client accessor scope (TOUT-03)
 - **D-09:** Ship BOTH the typed accessor
@@ -85,10 +113,15 @@ shapes.
   `wait_for_task(task_id, opts)` client convenience that drives `tasks/get`
   polling until a terminal status, then fetches `tasks/result`. Honors
   `pollInterval`/`maxPollDurationSecs` from `TaskMetadata` with caller
-  overrides.
+  overrides. `wait_for_task` MUST compose directly with `TaskMetadata` (a
+  `From<TaskMetadata> for WaitForTaskOptions` / `WaitForTaskOptions::from_metadata`
+  or a `wait_for_related_task(meta, opts)` convenience) so a caller who has a
+  `related_task()` result never hand-copies poll fields (cross-AI review,
+  Plan 01 MEDIUM).
 - **D-10:** `wait_for_task` must be wasm32-compatible: platform-abstracted
-  delay (`tokio::time::sleep` native / wasm-bindgen-futures- or gloo-timers-
-  based delay on wasm — precedent: `web-time` already adopted for `Instant`).
+  delay via `crate::runtime::sleep` (tokio native / wasm-bindgen-futures on
+  wasm — no new dep) AND a wasm-safe ELAPSED-TIME source for the timeout,
+  `web_time::Instant` (precedent: `src/shared/middleware.rs:25`, Cargo.toml:97).
   The Phase 103 web-channel browser client is a direct consumer; its
   hand-rolled JS poll loop can shrink.
 - **D-11:** A `Stream`-based poll API is rejected for now (bigger surface,
@@ -100,12 +133,19 @@ shapes.
   D-08/D-09 wire-compat confirmation (native `CreateTaskResult` carries
   `_meta[related-task]` with the store-minted id — `_meta`-sniffing clients
   detect it unchanged). README gets a short pointer. Course chapter deferred
-  until the API has met users.
+  until the API has met users. The guide MUST also call out the D-04a
+  response-middleware bypass semantics (a `ToolOutput::Result` tool owns its
+  own redaction).
 - **D-13:** One new numbered runnable example (next free slot, likely `s47`)
   showing BEFORE (hand-rolled `_meta` task tool) and AFTER (same tool on
   native `with_task_store()` + `ToolOutput`) — the diff IS the migration
   guide; it doubles as the ALWAYS-required example and as a regression harness
-  proving `_meta`-sniffing clients detect both shapes.
+  proving `_meta`-sniffing clients detect both shapes. The BEFORE tool (which
+  intentionally emits a `CallToolResult`-shaped `Value` on the Payload path)
+  MUST be registered with `suppress_double_wrap_check()` so the demo does not
+  trip the Plan 03 debug-assert; the AFTER tool MUST use a REAL store-minted
+  task via `with_task_store()`, not a hand-minted task id, so the example
+  teaches the native pattern (cross-AI review, Plan 05 MEDIUM).
 - **D-14:** Acceptance gate for wire-shape correctness: extend the Phase 102
   live HTTP loopback harness (real `StreamableHttpServer` +
   `StreamableHttpTransport`) with a `ToolOutput::Result` tool, asserting the
@@ -121,9 +161,12 @@ shapes.
   `src/server/` / `src/client/` — provided the shared-seam rule (D-05) holds.
 - Internal signature of the pass-through in the shared dispatch unit.
 - WARN message contents (should include tool name and which marker fired).
-- Wasm timer mechanism selection for D-10.
-- Whether `set_result_meta` merges or overwrites on key collision (document
-  whichever is chosen).
+- Wasm timer mechanism selection for D-10 (reuse `crate::runtime::sleep` +
+  `web_time::Instant`; no new crate).
+- Whether `set_result_meta` merges or overwrites on key collision — RESOLVED
+  by cross-AI review to MERGE with precise precedence (D-03.3 / Plan 04):
+  handler-set keys overwrite same-name keys, unrelated existing `_meta` keys
+  (widget/native emission) are preserved.
 - Test file organization (mirror `tests/tool_as_task_lifecycle.rs` / Phase 102
   HTTP harness conventions).
 
@@ -181,8 +224,9 @@ shapes.
   SEP-1686 pieces; D-03.1/D-09 just add the builder/accessor around them.
 - Phase 102 HTTP loopback harness + `s46_http_tool_as_task` example: the
   bases for D-14's sniffer test and D-13's s47 example.
-- `web-time` dependency (added Phase 103): precedent for platform-abstracted
-  time on wasm (D-10).
+- `crate::runtime::sleep` (src/runtime/mod.rs:38) + `web_time::Instant`
+  (src/shared/middleware.rs:25): platform-abstracted delay + wasm-safe elapsed
+  clock for D-10.
 - Phase 103 web-channel client (`examples/web-channel-client/`): hand-rolled
   poll loop that becomes a `wait_for_task` consumer.
 
@@ -238,6 +282,8 @@ shapes.
   stabilizes.
 - Coordinated pmcp.run-side UAT as a formal gate (D-14) — invited, not
   required for phase closure.
+- A result-aware `process_call_tool_result` response-middleware hook —
+  explicitly REJECTED by D-04a (user chose "keep the bypass, harden it").
 - Their June asks #1–#5 that are already shipped (server task lifecycle,
   capability coupling — Phase 101/102) or out of SDK scope (their durable
   client's WARN-on-deserialize-failure, ask #5, lives in THEIR client code —
@@ -249,4 +295,4 @@ shapes.
 ---
 
 *Phase: 104-task-augmented-tool-results-dx*
-*Context gathered: 2026-07-04*
+*Context gathered: 2026-07-04 · Amended 2026-07-04 (D-04a)*
