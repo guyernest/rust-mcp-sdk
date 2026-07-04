@@ -292,7 +292,7 @@ async fn payload_path_text_wraps_and_has_no_verbatim_meta_on_server() {
     assert_eq!(parsed, json!({ "answer": 42 }), "payload value round-trips");
     // Non-widget, non-verbatim payload tool carries no handler-owned _meta.
     assert!(
-        v.get("_meta").map_or(true, Value::is_null),
+        v.get("_meta").is_none_or(Value::is_null),
         "payload path must not inject a verbatim _meta"
     );
 }
@@ -360,4 +360,229 @@ async fn server_and_core_emit_equal_verbatim_result() {
         sv, cv,
         "Server and ServerCore must emit byte-equal serialized results for the same ToolOutput::Result"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Task 3: D-04a middleware/error regression battery.
+// ---------------------------------------------------------------------------
+
+use pmcp::server::tool_middleware::{ToolContext, ToolMiddleware};
+use std::sync::Mutex;
+
+const MW_RESPONSE_MARKER: &str = "_mw_response_marker";
+
+/// Shared recording buffer of tool names seen by a middleware hook.
+type Recorder = Arc<Mutex<Vec<String>>>;
+
+/// A test-only `ToolMiddleware` that RECORDS which tools its request- and
+/// response-hooks saw, and stamps a marker into the response Value. Used to prove
+/// the D-04a hardening: RESPONSE hook fires for Payload tools + handler errors but
+/// is BYPASSED for a successful `ToolOutput::Result`; the REQUEST hook still fires
+/// for the Result tool.
+struct RecordingMiddleware {
+    requests_seen: Recorder,
+    responses_seen: Recorder,
+}
+
+#[async_trait]
+impl ToolMiddleware for RecordingMiddleware {
+    async fn on_request(
+        &self,
+        tool_name: &str,
+        args: &mut Value,
+        _extra: &mut RequestHandlerExtra,
+        _context: &ToolContext,
+    ) -> Result<()> {
+        self.requests_seen
+            .lock()
+            .unwrap()
+            .push(tool_name.to_string());
+        if let Value::Object(map) = args {
+            map.insert("_mw_request_marker".to_string(), json!(tool_name));
+        }
+        Ok(())
+    }
+
+    async fn on_response(
+        &self,
+        tool_name: &str,
+        result: &mut Result<Value>,
+        _context: &ToolContext,
+    ) -> Result<()> {
+        self.responses_seen
+            .lock()
+            .unwrap()
+            .push(tool_name.to_string());
+        if let Ok(Value::Object(map)) = result {
+            map.insert(MW_RESPONSE_MARKER.to_string(), json!(tool_name));
+        }
+        Ok(())
+    }
+}
+
+/// A hand-written `ToolHandler` whose `handle_output` returns `Err(_)` — proves
+/// the bypass is scoped to `Ok(ToolOutput::Result(_))`, NOT the `Err` arm.
+struct ErrorResultTool;
+
+#[async_trait]
+impl ToolHandler for ErrorResultTool {
+    async fn handle(&self, _args: Value, _extra: RequestHandlerExtra) -> Result<Value> {
+        Err(Error::internal("boom from handle"))
+    }
+
+    async fn handle_output(&self, _args: Value, _extra: RequestHandlerExtra) -> Result<ToolOutput> {
+        Err(Error::internal("boom from handle_output"))
+    }
+}
+
+/// Recorded outcome of driving the full battery against one dispatcher.
+struct BatteryOutcome {
+    requests_seen: Vec<String>,
+    responses_seen: Vec<String>,
+    payload_result: CallToolResult,
+    verbatim_result: CallToolResult,
+    error_is_err: bool,
+}
+
+/// Assert the D-04a invariants hold for a dispatcher's [`BatteryOutcome`].
+fn assert_d04a(outcome: &BatteryOutcome, dispatcher: &str) {
+    // (1) RESPONSE middleware fired for the Payload tool and mutated it...
+    assert!(
+        outcome.responses_seen.iter().any(|t| t == "payload_tool"),
+        "[{dispatcher}] response middleware must fire for the Payload tool"
+    );
+    let payload_v = serde_json::to_value(&outcome.payload_result).expect("serialize payload");
+    let payload_text = payload_v["content"][0]["text"]
+        .as_str()
+        .expect("payload text");
+    assert!(
+        payload_text.contains(MW_RESPONSE_MARKER),
+        "[{dispatcher}] the Payload result must show the response-middleware mutation"
+    );
+
+    // (1, cont.) ...but was BYPASSED for the successful ToolOutput::Result tool.
+    assert!(
+        !outcome.responses_seen.iter().any(|t| t == "verbatim_tool"),
+        "[{dispatcher}] response middleware must be BYPASSED for the successful Result tool (D-04a #1)"
+    );
+    assert_verbatim(&outcome.verbatim_result);
+    let verbatim_v = serde_json::to_value(&outcome.verbatim_result).expect("serialize verbatim");
+    assert!(
+        !serde_json::to_string(&verbatim_v)
+            .unwrap()
+            .contains(MW_RESPONSE_MARKER),
+        "[{dispatcher}] the verbatim Result must carry no response-middleware marker"
+    );
+
+    // (2) REQUEST middleware STILL fired for the Result tool before it executed.
+    assert!(
+        outcome.requests_seen.iter().any(|t| t == "verbatim_tool"),
+        "[{dispatcher}] request middleware must still fire for the Result tool (D-04a #2)"
+    );
+
+    // (3) A ToolOutput::Result handler returning Err still routes through the
+    // error path (yields an error response), and the response hook saw it — the
+    // bypass does not swallow handler errors (D-04a #3).
+    assert!(
+        outcome.error_is_err,
+        "[{dispatcher}] an erroring Result handler must still yield an error response (D-04a #3)"
+    );
+    assert!(
+        outcome
+            .responses_seen
+            .iter()
+            .any(|t| t == "error_result_tool"),
+        "[{dispatcher}] the erroring Result tool must flow through response middleware / error path"
+    );
+}
+
+fn recording_middleware() -> (Arc<RecordingMiddleware>, Recorder, Recorder) {
+    let requests_seen = Arc::new(Mutex::new(Vec::new()));
+    let responses_seen = Arc::new(Mutex::new(Vec::new()));
+    let mw = Arc::new(RecordingMiddleware {
+        requests_seen: requests_seen.clone(),
+        responses_seen: responses_seen.clone(),
+    });
+    (mw, requests_seen, responses_seen)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn d04a_middleware_and_error_battery_on_server() {
+    let (mw, requests_seen, responses_seen) = recording_middleware();
+    let server = Server::builder()
+        .name("d04a-server")
+        .version("1.0.0")
+        .tool("payload_tool", payload_tool())
+        .tool("verbatim_tool", VerbatimTool)
+        .tool("error_result_tool", ErrorResultTool)
+        .tool_middleware(mw as Arc<dyn ToolMiddleware>)
+        .build()
+        .expect("server builds");
+
+    let (client_t, server_t) = DuplexTransport::pair();
+    tokio::spawn(async move {
+        let _ = server.run(server_t).await;
+    });
+    let mut client = Client::new(client_t);
+    client
+        .initialize(ClientCapabilities::default())
+        .await
+        .expect("client initializes");
+
+    let mut outcome = drive_battery_reuse(&mut client).await;
+    outcome.requests_seen = requests_seen.lock().unwrap().clone();
+    outcome.responses_seen = responses_seen.lock().unwrap().clone();
+    assert_d04a(&outcome, "Server");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn d04a_middleware_and_error_battery_on_core() {
+    let (mw, requests_seen, responses_seen) = recording_middleware();
+    let core: Arc<dyn ProtocolHandler> = Arc::new(
+        ServerCoreBuilder::new()
+            .name("d04a-core")
+            .version("1.0.0")
+            .tool("payload_tool", payload_tool())
+            .tool("verbatim_tool", VerbatimTool)
+            .tool("error_result_tool", ErrorResultTool)
+            .tool_middleware(mw as Arc<dyn ToolMiddleware>)
+            .build()
+            .expect("core builds"),
+    );
+
+    let (client_t, server_t) = DuplexTransport::pair();
+    spawn_core_pump(server_t, core);
+    let mut client = Client::new(client_t);
+    client
+        .initialize(ClientCapabilities::default())
+        .await
+        .expect("client initializes");
+
+    let mut outcome = drive_battery_reuse(&mut client).await;
+    outcome.requests_seen = requests_seen.lock().unwrap().clone();
+    outcome.responses_seen = responses_seen.lock().unwrap().clone();
+    assert_d04a(&outcome, "ServerCore");
+}
+
+/// Drive the three battery tools over a persistent client connection.
+async fn drive_battery_reuse(client: &mut Client<DuplexTransport>) -> BatteryOutcome {
+    let payload_result = client
+        .call_tool("payload_tool".to_string(), json!({}))
+        .await
+        .expect("payload tool call succeeds");
+    let verbatim_result = client
+        .call_tool("verbatim_tool".to_string(), json!({}))
+        .await
+        .expect("verbatim tool call succeeds");
+    let error_is_err = client
+        .call_tool("error_result_tool".to_string(), json!({}))
+        .await
+        .is_err();
+    BatteryOutcome {
+        requests_seen: Vec::new(),
+        responses_seen: Vec::new(),
+        payload_result,
+        verbatim_result,
+        error_is_err,
+    }
 }
