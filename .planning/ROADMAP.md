@@ -1981,14 +1981,14 @@ Plans:
 
 **Source**: pmcp.run team issue `pmcp-run/.planning/notes/sdk-issue-tool-as-task-dx.md` (2026-06-21 + 2026-07-04 addendum); verified against `src/server/mod.rs:1493` (unconditional text-wrap) and `src/server/core_tests.rs:881` (native `_meta` emission)
 
-**Plans:** 5 plans
+**Plans:** 2/5 plans executed
 
 Plans:
 
 **Wave 1**
 
-- [ ] 104-01-PLAN.md — TaskMetadata + CallToolResult::{with_related_task, related_task} + Client::wait_for_task (wasm-safe, runtime::sleep) [TOUT-03, TOUT-01/D-03.1]
-- [ ] 104-02-PLAN.md — ToolOutput enum + ToolHandler::handle_output default + shared verbatim pass-through in both dispatchers (D-04/D-05) [TOUT-01]
+- [x] 104-01-PLAN.md — TaskMetadata + CallToolResult::{with_related_task, related_task} + Client::wait_for_task (wasm-safe, runtime::sleep) [TOUT-03, TOUT-01/D-03.1]
+- [x] 104-02-PLAN.md — ToolOutput enum + ToolHandler::handle_output default + shared verbatim pass-through in both dispatchers (D-04/D-05) [TOUT-01]
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
