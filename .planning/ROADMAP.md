@@ -1338,7 +1338,7 @@ Plans:
 
 **Requirements**: D-01..D-16 (CONTEXT.md decision set; no separate REQ IDs mapped)
 **Depends on:** Phase 104 (shipped in pmcp 2.12.0)
-**Plans:** 1/3 plans executed
+**Plans:** 3/3 plans complete
 
 Plans:
 
@@ -1348,8 +1348,8 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 105-02-PLAN.md — Rewrite `wait_for_task` as `match task.poll_decision()` + drift-pin regression test (Wave 2)
-- [ ] 105-03-PLAN.md — Runnable s48 example + "Durable and replay consumers" book section (Wave 2)
+- [x] 105-02-PLAN.md — Rewrite `wait_for_task` as `match task.poll_decision()` + drift-pin regression test (Wave 2)
+- [x] 105-03-PLAN.md — Runnable s48 example + "Durable and replay consumers" book section (Wave 2)
 
 ---
 
