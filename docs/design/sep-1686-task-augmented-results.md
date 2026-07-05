@@ -200,10 +200,18 @@ hook. The bypass ships WITH these hardening mitigations:
 4. This callout, surfaced where authors read it (guide + book chapter + rustdoc),
    not buried.
 
-What is NOT bypassed: **request** middleware still runs, the Phase 102 task
-create-path gate keeps precedence (a `Result` output is not task-shaped, so the
-gate naturally passes), unconditional token cleanup still runs, and handler
-errors still route through error handling.
+What is NOT bypassed: **request** middleware still runs, unconditional token
+cleanup still runs, and handler errors still route through error handling.
+
+What IS bypassed — including the create-path gate: in BOTH dispatchers the
+`DispatchOutput::Verbatim` arm returns BEFORE the Phase 102 task create-path
+gate ever executes; the gate is structurally bypassed, never consulted.
+Client-visible consequence: a **task-augmented** `tools/call` to a
+`tool_with_result` / `handle_output`-overriding tool receives the plain
+`CallToolResult` verbatim and NO task is minted — even if the tool declares
+`TaskSupport::Required` (the two contracts conflict; do not combine them).
+This is regression-tested in `tests/tool_output_passthrough.rs`
+(`task_augmented_call_to_verbatim_tool_returns_plain_result`).
 
 **Rule of thumb:** if your tool returns `ToolOutput::Result` / uses
 `tool_with_result`, redact/sanitize inside the handler BEFORE building the

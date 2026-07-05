@@ -27,7 +27,9 @@ use pmcp::server::task_store::{InMemoryTaskStore, TaskStore};
 use pmcp::server::typed_tool::TypedTool;
 use pmcp::shared::{Transport, TransportMessage};
 use pmcp::types::tasks::RELATED_TASK_META_KEY;
-use pmcp::types::{CallToolResult, ClientCapabilities, Content, TaskSupport, ToolExecution};
+use pmcp::types::{
+    CallToolResult, ClientCapabilities, Content, TaskSupport, ToolExecution, ToolInfo,
+};
 use pmcp::{Client, Error, RequestHandlerExtra, Result, Server, ToolHandler, ToolOutput};
 use serde_json::{json, Value};
 use tokio::sync::mpsc;
@@ -139,6 +141,30 @@ impl ToolHandler for VerbatimTool {
         );
         let result = CallToolResult::new(vec![Content::text("verbatim content")]).with_meta(meta);
         Ok(ToolOutput::Result(result))
+    }
+}
+
+/// [`VerbatimTool`] with a DECLARED `TaskSupport::Required` — pins the
+/// documented (WR-03) precedence: the `ToolOutput::Result` verbatim arm returns
+/// BEFORE the task create-path gate, so a task-augmented call receives the
+/// plain `CallToolResult` verbatim and NO task is minted, even for a tool that
+/// declares `TaskSupport::Required`.
+struct VerbatimTaskRequiredTool;
+
+#[async_trait]
+impl ToolHandler for VerbatimTaskRequiredTool {
+    async fn handle(&self, args: Value, extra: RequestHandlerExtra) -> Result<Value> {
+        VerbatimTool.handle(args, extra).await
+    }
+
+    async fn handle_output(&self, args: Value, extra: RequestHandlerExtra) -> Result<ToolOutput> {
+        VerbatimTool.handle_output(args, extra).await
+    }
+
+    fn metadata(&self) -> Option<ToolInfo> {
+        let mut info = ToolInfo::new("verbatim_required", None, json!({ "type": "object" }));
+        info.execution = Some(ToolExecution::new().with_task_support(TaskSupport::Required));
+        Some(info)
     }
 }
 
@@ -344,6 +370,48 @@ async fn task_shaped_payload_still_routes_through_create_path() {
         },
         pmcp::client::ToolCallResponse::Result(r) => {
             panic!("create-path precedence lost — got a CallToolResult: {r:?}");
+        },
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn task_augmented_call_to_verbatim_tool_returns_plain_result() {
+    // Documented WR-03 behavior: the Verbatim arm returns BEFORE the create-path
+    // gate ever executes, so even a TaskSupport::Required verbatim tool answers
+    // a task-augmented tools/call with its plain CallToolResult — no task minted.
+    let store = Arc::new(InMemoryTaskStore::new()) as Arc<dyn TaskStore>;
+    let core: Arc<dyn ProtocolHandler> = Arc::new(
+        ServerCoreBuilder::new()
+            .name("verbatim-gate-core")
+            .version("1.0.0")
+            .tool("verbatim_required", VerbatimTaskRequiredTool)
+            .task_store(store)
+            .build()
+            .expect("core builds"),
+    );
+
+    let (client_t, server_t) = DuplexTransport::pair();
+    spawn_core_pump(server_t, core);
+    let mut client = Client::new(client_t);
+    client
+        .initialize(ClientCapabilities::default())
+        .await
+        .expect("client initializes");
+
+    let response = client
+        .call_tool_with_task("verbatim_required".to_string(), json!({}))
+        .await
+        .expect("task-augmented tools/call succeeds");
+
+    match response {
+        pmcp::client::ToolCallResponse::Result(result) => {
+            // The plain verbatim envelope, exactly as on a non-task call.
+            assert_verbatim(&result);
+        },
+        pmcp::client::ToolCallResponse::Task(task) => {
+            panic!(
+                "verbatim path must return BEFORE the create-path gate — got a minted task: {task:?}"
+            );
         },
     }
 }
