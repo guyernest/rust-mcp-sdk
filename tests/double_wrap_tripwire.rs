@@ -51,6 +51,42 @@ fn looks_like_fires_on_content_array() {
     );
 }
 
+/// The full envelope shape (`content` + other `CallToolResult` keys) fires —
+/// the envelope-keys guard admits every legitimate `CallToolResult` key.
+#[test]
+fn looks_like_fires_on_full_envelope_keys() {
+    let v = json!({
+        "content": [ { "type": "text", "text": "hi" } ],
+        "isError": false,
+        "structuredContent": { "answer": 42 }
+    });
+    assert_eq!(
+        looks_like_call_tool_result(&v),
+        Some(DoubleWrapMarker::ContentArray)
+    );
+}
+
+/// A chat-message-shaped payload (`role` + `content` array of Content-parsable
+/// elements — Anthropic/OpenAI style, ubiquitous in LLM-proxying tools) must
+/// NOT fire: foreign keys mark it as NOT a `CallToolResult` envelope (WR-02).
+#[test]
+fn looks_like_ignores_chat_message_payload() {
+    let v = json!({
+        "role": "assistant",
+        "content": [ { "type": "text", "text": "hello from the model" } ]
+    });
+    assert_eq!(looks_like_call_tool_result(&v), None);
+
+    // Same with extra LLM-response keys.
+    let v = json!({
+        "role": "assistant",
+        "model": "some-model",
+        "stopReason": "end_turn",
+        "content": [ { "type": "text", "text": "hello" } ]
+    });
+    assert_eq!(looks_like_call_tool_result(&v), None);
+}
+
 /// An EMPTY `content: []` must NOT fire (a benign payload can carry one).
 #[test]
 fn looks_like_ignores_empty_content_array() {

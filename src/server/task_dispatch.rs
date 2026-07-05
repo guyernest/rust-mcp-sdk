@@ -202,9 +202,11 @@ pub enum DoubleWrapMarker {
     /// The value carries a `_meta` object holding [`RELATED_TASK_META_KEY`] — the
     /// envelope key only a built task-augmented `CallToolResult` sets.
     RelatedTaskMeta,
-    /// The value carries a NON-EMPTY `content` array whose every element
-    /// deserializes as [`Content`] (the internally `#[serde(tag = "type")]`
-    /// enum), i.e. it is already a wire-shaped result body.
+    /// The value is a `CallToolResult`-envelope-shaped object (ONLY envelope
+    /// keys: `content`/`isError`/`structuredContent`/`_meta`) carrying a
+    /// NON-EMPTY `content` array whose every element deserializes as
+    /// [`Content`] (the internally `#[serde(tag = "type")]` enum), i.e. it is
+    /// already a wire-shaped result body.
     ContentArray,
 }
 
@@ -218,6 +220,13 @@ pub enum DoubleWrapMarker {
 /// structural markers in cost order, so a benign tool payload almost never trips.
 ///
 /// Precision rationale (near-zero false positives):
+/// - The content-array marker only fires on a `CallToolResult` *envelope*: an
+///   object whose keys are ALL envelope keys (`content`, `isError`,
+///   `structuredContent`, `_meta`). A hand-built double-wrap was authored to
+///   BE a `CallToolResult`, so only envelope keys accompany its `content`; a
+///   chat-message-style payload (`role`, `model`, `stopReason`, ... — common
+///   for tools that proxy LLM/sampling APIs) carries foreign keys and must
+///   NOT trip.
 /// - [`Content`] is internally tagged (`#[serde(tag = "type")]`), so an object
 ///   lacking a valid `"type"` NEVER deserializes as `Content` — the content-array
 ///   marker is high precision.
@@ -230,8 +239,12 @@ pub enum DoubleWrapMarker {
 // Why: called at BOTH Payload wrap sites (mod.rs + core.rs) through
 // `double_wrap_tripwire`; production-reachable, so no `dead_code` allow needed.
 pub fn looks_like_call_tool_result(v: &Value) -> Option<DoubleWrapMarker> {
+    /// Only these `CallToolResult` wire keys may accompany the `content` array
+    /// for the envelope-shaped marker to fire (WR-02 precision fix).
+    const RESULT_ENVELOPE_KEYS: [&str; 4] = ["content", "isError", "structuredContent", "_meta"];
+
     let obj = v.as_object()?;
-    // (b) Cheapest first: the task-envelope meta key — a single map lookup.
+    // Cheapest first: the task-envelope meta key — a single map lookup.
     if obj
         .get("_meta")
         .and_then(Value::as_object)
@@ -239,16 +252,24 @@ pub fn looks_like_call_tool_result(v: &Value) -> Option<DoubleWrapMarker> {
     {
         return Some(DoubleWrapMarker::RelatedTaskMeta);
     }
-    // (a) A NON-EMPTY `content` array whose every element parses as `Content`.
-    // The `!arr.is_empty()` guard keeps a benign empty array from firing.
-    if let Some(arr) = obj.get("content").and_then(Value::as_array) {
-        if !arr.is_empty()
-            && arr
-                .iter()
-                .all(|e| serde_json::from_value::<Content>(e.clone()).is_ok())
-        {
-            return Some(DoubleWrapMarker::ContentArray);
-        }
+    // An envelope-shaped object (only `CallToolResult` keys) with a NON-EMPTY
+    // `content` array whose every element parses as `Content`. The
+    // `!arr.is_empty()` guard keeps a benign empty array from firing; the
+    // envelope-keys guard keeps chat-message payloads from firing.
+    if obj
+        .keys()
+        .all(|k| RESULT_ENVELOPE_KEYS.contains(&k.as_str()))
+        && obj
+            .get("content")
+            .and_then(Value::as_array)
+            .is_some_and(|arr| {
+                !arr.is_empty()
+                    && arr
+                        .iter()
+                        .all(|e| serde_json::from_value::<Content>(e.clone()).is_ok())
+            })
+    {
+        return Some(DoubleWrapMarker::ContentArray);
     }
     None
 }
