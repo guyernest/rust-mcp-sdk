@@ -116,6 +116,12 @@ None - no external service configuration required.
 - The no-drift guarantee is now structural: the poll decision lives only in `Task::poll_decision()` and is consumed by `wait_for_task`. Plan 03 can author the pmcp-book "Durable and replay consumers" section that this plan's rustdoc already cross-links; the referenced heading text (`## Durable and replay consumers`) is the stable anchor to create.
 - `call_tool_and_poll` was deliberately left untouched (out of this phase's locked scope, D-02/D-13).
 
+## Self-Check: PASSED
+
+- FOUND: `.planning/phases/105-task-poll-decision-classifier-and-durable-consumer-docs/105-02-SUMMARY.md`
+- FOUND: `src/client/mod.rs`, `tests/task_augmented_result.rs`
+- FOUND commits: `649e6422` (Task 1), `8e419bb2` (Task 2), `ea38e93e` (auto-fix), `883b4fb9` (SUMMARY)
+
 ---
 *Phase: 105-task-poll-decision-classifier-and-durable-consumer-docs*
 *Completed: 2026-07-05*
