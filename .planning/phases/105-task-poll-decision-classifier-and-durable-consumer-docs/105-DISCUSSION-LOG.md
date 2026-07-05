@@ -69,3 +69,21 @@
 
 - Ask B (task elicitation round-trip: `tasks/provide_input`, `task.input_request()`, `on_input_required` option) — deferred pending upstream spec standardization; `InputRequired` variant is the adoption seam
 - Co-signing an upstream spec issue on polling-client input provision with pmcp.run's flow as the motivating example
+
+---
+
+## Review Fold — Codex (2026-07-05, `/gsd:review --codex` → `/gsd:discuss-phase 105 --reviews`)
+
+Codex reviewed the design pre-planning; endorsed all locked decisions (risk LOW–MEDIUM). One genuine gray area surfaced and was decided; the rest folded as locked planner guidance.
+
+| Review item | Severity | Disposition |
+|-------------|----------|-------------|
+| Resolver return type `u64` ms vs `Duration` | LOW | **User chose `u64` ms** (cross-API consistency) → D-12 |
+| `wait_for_task` must structurally `match poll_decision()` | MEDIUM | Folded → D-13 |
+| Replay-determinism claim must be scoped in docs | MEDIUM | Folded → D-14 |
+| Semver honesty (`TaskStatus` exhaustive today) | MEDIUM | Folded → D-15 |
+| Do-not-wrap warning + `Terminal` rustdoc | LOW | Folded → D-16 |
+| Test matrix (status map, precedence, error pin, clamp) | — | Folded → Verification guidance |
+| Re-export `resolve_poll_interval` near `TaskPollDecision` | LOW | Noted in Claude's Discretion |
+
+**User's choice (resolver type):** u64 ms — symmetric with `Option<u64>` inputs and consistent with every existing public `poll_interval` field; caller wraps `Duration::from_millis` at the sleep site.

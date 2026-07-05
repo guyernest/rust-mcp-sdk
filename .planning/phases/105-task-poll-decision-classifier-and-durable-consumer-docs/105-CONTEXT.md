@@ -1,6 +1,7 @@
 # Phase 105: Task poll-decision classifier and durable-consumer docs - Context
 
 **Gathered:** 2026-07-05
+**Updated:** 2026-07-05 — folded Codex cross-AI review (`105-REVIEWS.md`): +D-12..D-16, verification guidance
 **Status:** Ready for planning
 
 <domain>
@@ -72,6 +73,13 @@ when the WG standardizes it); no new `TaskStatus` variants; no change to
 - **D-09:** Budget clamping (clamp sleep to remaining `max_poll_duration_secs`
   budget, WR-01 fix) **stays inside `wait_for_task`** — it is loop state, not
   task state. Not part of the classifier or resolver.
+- **D-12 (review, 2026-07-05):** `resolve_poll_interval` returns **`u64`
+  milliseconds**, not `Duration` — symmetric with its `Option<u64>` inputs and
+  consistent with every existing public interval field (`TaskMetadata.poll_interval`,
+  `WaitForTaskOptions.poll_interval`). Callers wrap with `Duration::from_millis`
+  at the sleep site (one line, exactly what `wait_for_task` does today). Codex
+  raised `Duration` as a LOW ergonomics option; rejected for cross-API
+  consistency.
 
 ### Docs & example shape
 - **D-10:** One **light runnable example** (`examples/s48_*`, next free
@@ -90,13 +98,54 @@ when the WG standardizes it); no new `TaskStatus` variants; no change to
   (`pmcp-book/src/task-augmented-results.md`) and from the `wait_for_task`
   rustdoc.
 
+### Review-driven locks (Codex, `105-REVIEWS.md`, 2026-07-05)
+Codex endorsed every decision above (risk LOW–MEDIUM); its concerns are folded
+here as LOCKED planner guidance, not open questions:
+
+- **D-13 (no-drift is STRUCTURAL, not incidental):** `wait_for_task` MUST be
+  rewritten as an explicit `match task.poll_decision() { Terminal => break,
+  InputRequired => return Err(...), InProgress { poll_hint } => ... }` — calling
+  the classifier "somewhere" is insufficient. The match arms ARE the loop's
+  status handling; no parallel `is_terminal()` / status comparison may remain
+  inline. This is the mechanism that makes D-02's parity real. A regression test
+  MUST pin `wait_for_task`'s current `input_required`-error and terminal
+  behavior byte-identical across the refactor.
+- **D-14 (replay-determinism claim scoped precisely in docs):** `poll_decision()`
+  is replay-deterministic ONLY as a pure function over an already-deserialized
+  `Task`. The network `tasks/get` call AND the serde decode must sit INSIDE the
+  durable runtime's memoized step — the docs (D-11) must state this explicitly,
+  and note that an unknown/future status fails at deserialization BEFORE
+  classification ever runs.
+- **D-15 (semver honesty):** `TaskStatus` is exhaustive today. Docs and rustdoc
+  must NOT imply unknown statuses are handled gracefully at runtime.
+  `TaskPollDecision` is `#[non_exhaustive]` (D-04) so the SDK can ADD a variant
+  later without a break — but that is a future-proofing affordance, not a
+  present runtime capability. Keep the two claims distinct.
+- **D-16 (doc sharpness):** the durable section (D-11) MUST carry an explicit
+  "do NOT wrap `wait_for_task` inside a replay workflow" warning (it sleeps,
+  loops, and owns the polling lifecycle — non-deterministic under replay). The
+  `TaskPollDecision::Terminal` rustdoc MUST state that the caller still issues a
+  separate `tasks/result` to retrieve the final `CallToolResult`.
+
+### Verification guidance (from review — carry into plan `<verification>`)
+Codex's requested test matrix (fold into the plan, not exhaustive of ALWAYS reqs):
+- Exhaustive map: every current `TaskStatus` → its expected `TaskPollDecision`
+  (property or table test; guards D-15's exhaustiveness claim)
+- Resolver precedence: caller override beats server hint; hint beats 1000 ms
+  default; zero/low interval floors to 50 ms
+- `wait_for_task` `input_required` error behavior byte-identical post-refactor
+  (D-13 regression pin)
+- Budget clamp still prevents oversleep AND remains OUTSIDE the resolver (D-09)
+
 ### Claude's Discretion
 - Exact enum/helper naming polish (`TaskPollDecision` and
   `resolve_poll_interval` are the working names from discussion — keep unless
   a strong codebase-consistency reason emerges during planning).
 - Where `resolve_poll_interval` lives (client mod vs types) — pick whichever
   keeps the wasm boundary clean; it must be callable by both `wait_for_task`
-  and external consumers.
+  and external consumers. Codex suggests re-exporting it near `TaskPollDecision`
+  so consumers who import task APIs find it — adopt if it doesn't cross the wasm
+  boundary awkwardly.
 - Test composition (unit + property mix) per house ALWAYS rules.
 
 </decisions>
@@ -109,6 +158,9 @@ when the WG standardizes it); no new `TaskStatus` variants; no change to
 ### Origin request + SDK response (the contract this phase fulfills)
 - `~/Development/mcp/sdk/pmcp-run/.planning/notes/sdk-issue-durable-task-consumer-and-input-required.md` — Ask A (classifier + durable docs), the durable-consumer shape (Temporal-style replay, out-of-band completion), and their reference implementation pointers
 - `~/Development/mcp/sdk/pmcp-run/.planning/notes/sdk-response-durable-task-consumer-and-input-required.md` — what the SDK promised (classifier shape sketch, Ask B deferral rationale, non-goals)
+
+### Cross-AI review (folded into decisions above)
+- `.planning/phases/105-task-poll-decision-classifier-and-durable-consumer-docs/105-REVIEWS.md` — Codex pre-planning design review; concerns folded as D-13..D-16 + verification guidance
 
 ### Prior-phase decisions that constrain this one
 - `.planning/phases/104-task-augmented-tool-results-dx/104-CONTEXT.md` — D-05 single-decision discipline, D-02 no-implicit-sniffing philosophy, D-04a middleware-bypass posture
