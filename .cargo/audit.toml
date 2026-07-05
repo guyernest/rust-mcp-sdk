@@ -49,4 +49,16 @@ ignore = [
     # connector). Low practical risk for the connector's use; tracking an upstream
     # `rsa` fix or a sqlx-mysql path that avoids it.
     "RUSTSEC-2023-0071",
+
+    # quick-xml 0.37.5: quadratic run time checking start tags for duplicate
+    # attribute names (DoS on malformed XML). Fix requires quick-xml >= 0.41,
+    # but umya-spreadsheet 3.0.0 (latest published) pins quick-xml 0.37.x.
+    # Path: pmcp-workbook-compiler -> umya-spreadsheet 3.0.0 -> quick-xml 0.37.5.
+    # Published 2026-06-29. Impact bounded to the workbook COMPILER parsing a
+    # developer-supplied .xlsx at build time (not a served runtime surface).
+    # Tracking: remove when umya-spreadsheet releases against quick-xml >= 0.41.
+    "RUSTSEC-2026-0194",
+
+    # quick-xml 0.37.5: same crate/pin/path/tracking as RUSTSEC-2026-0194 above.
+    "RUSTSEC-2026-0195",
 ]
