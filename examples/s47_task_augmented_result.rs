@@ -5,7 +5,7 @@
 //! task" tool written TWICE against a live HTTP loopback, so the diff between the
 //! two handlers is the whole story.
 //!
-//! ## BEFORE — the hand-rolled `_meta` anti-pattern (pre-2.11)
+//! ## BEFORE — the hand-rolled `_meta` anti-pattern (pre-2.12)
 //!
 //! The tool returns a `serde_json::Value` that is ALREADY shaped like a
 //! `CallToolResult` (it carries `content` plus an
@@ -24,7 +24,7 @@
 //! the process. Real tools should MIGRATE to the AFTER pattern, not suppress the
 //! tripwire — suppression is documented as rare-and-reviewed for a reason.
 //!
-//! ## AFTER — the native `task_store()` + `ToolOutput::Result` pattern (2.11+)
+//! ## AFTER — the native `task_store()` + `ToolOutput::Result` pattern (2.12+)
 //!
 //! The tool references a REAL, store-minted task id (obtained from
 //! [`TaskStore::create`](pmcp::server::task_store::TaskStore::create) — the same
@@ -111,7 +111,7 @@ async fn main() -> pmcp::Result<()> {
                     "content": [
                         { "type": "text", "text": "processing started (hand-rolled)" }
                     ],
-                    // The pre-2.11 workaround: stuff related-task into `_meta`
+                    // The pre-2.12 workaround: stuff related-task into `_meta`
                     // and hope it survives. It does NOT — it gets stringified.
                     "_meta": {
                         "io.modelcontextprotocol/related-task": {

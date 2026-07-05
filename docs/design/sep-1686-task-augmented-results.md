@@ -1,6 +1,6 @@
 # SEP-1686 — Task-Augmented Tool Results (junction rationale + migration guide)
 
-**Status**: Implemented (pmcp 2.11+)
+**Status**: Implemented (pmcp 2.12+)
 **Protocol area**: MCP Tasks (2025-11-25) × tool results
 **Phase**: 104 — Task-Augmented Tool Results DX
 **Date**: 2026-07-04
@@ -9,7 +9,7 @@
 > MCP Tasks design). This document records ONLY the SEP-1686 junction — how a
 > tool returns a full `CallToolResult` (`_meta` included) through the normal
 > `Server` dispatch front door — plus the migration path off the three
-> hand-rolled pre-2.11 `_meta` workarounds. It does not restate the tasks
+> hand-rolled pre-2.12 `_meta` workarounds. It does not restate the tasks
 > lifecycle; see the base doc for that.
 
 ---
@@ -23,7 +23,7 @@ NOT cover is the OTHER direction: a normal, synchronous `tools/call` whose
 `_meta["io.modelcontextprotocol/related-task"]` envelope pointing the caller at
 a task the tool just kicked off.
 
-Before 2.11 there was no supported way to do that. A `ToolHandler` returns a
+Before 2.12 there was no supported way to do that. A `ToolHandler` returns a
 `serde_json::Value`, and dispatch UNCONDITIONALLY stringified that value into
 `content[0].text` (the text-wrap at `src/server/mod.rs`). A handler that
 hand-built a `CallToolResult`-shaped `Value` (with its own `content` and
@@ -66,7 +66,7 @@ payloads and recreate the bug class. Detection is therefore EXPLICIT
 
 ## 2. Migration: hand-rolled `_meta` → native `with_task_store()` + `ToolOutput::Result`
 
-The three pre-2.11 hand-rolled patterns and their native replacements:
+The three pre-2.12 hand-rolled patterns and their native replacements:
 
 ### Pattern A — hand-built `CallToolResult`-shaped `Value` on the Payload path
 

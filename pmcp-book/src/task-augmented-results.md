@@ -4,7 +4,7 @@ A normal, synchronous tool sometimes needs to hand the caller a pointer to a
 task it just kicked off — "I started the export; poll THIS task for the result."
 In MCP that pointer lives in the tool result's `_meta` under
 `io.modelcontextprotocol/related-task`. This chapter shows how to emit it the
-native way (pmcp 2.11+) and how to migrate off the hand-rolled workarounds that
+native way (pmcp 2.12+) and how to migrate off the hand-rolled workarounds that
 used to lose it silently.
 
 > This is the SEP-1686 junction. It is the complement of
@@ -14,7 +14,7 @@ used to lose it silently.
 
 ## The bug this replaces
 
-A `ToolHandler` returns a `serde_json::Value`, and before 2.11 dispatch
+A `ToolHandler` returns a `serde_json::Value`, and before 2.12 dispatch
 UNCONDITIONALLY stringified that value into `content[0].text`. A handler that
 hand-built a `CallToolResult`-shaped `Value` (with its own `content` and `_meta`)
 had the whole object serialized into one text block — the top-level `_meta`
