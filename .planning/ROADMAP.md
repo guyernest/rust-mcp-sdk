@@ -1981,7 +1981,7 @@ Plans:
 
 **Source**: pmcp.run team issue `pmcp-run/.planning/notes/sdk-issue-tool-as-task-dx.md` (2026-06-21 + 2026-07-04 addendum); verified against `src/server/mod.rs:1493` (unconditional text-wrap) and `src/server/core_tests.rs:881` (native `_meta` emission)
 
-**Plans:** 4/5 plans executed
+**Plans:** 5/5 plans complete
 
 Plans:
 
@@ -2000,4 +2000,4 @@ Plans:
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
-- [ ] 104-05-PLAN.md — s47 BEFORE/AFTER example + live-HTTP _meta-at-top-level acceptance gate + migration guide (docs/design + pmcp-book + README) [TOUT-04]
+- [x] 104-05-PLAN.md — s47 BEFORE/AFTER example + live-HTTP _meta-at-top-level acceptance gate + migration guide (docs/design + pmcp-book + README) [TOUT-04]
