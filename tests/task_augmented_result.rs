@@ -128,7 +128,7 @@ mod live {
     use pmcp::server::typed_tool::TypedTool;
     use pmcp::shared::{Transport, TransportMessage};
     use pmcp::types::tasks::{TaskMetadata, TaskStatus};
-    use pmcp::types::{ClientCapabilities, TaskSupport, ToolExecution};
+    use pmcp::types::{ClientCapabilities, ClientRequest, Request, TaskSupport, ToolExecution};
     use pmcp::{Client, Error, WaitForTaskOptions};
     use tokio::sync::mpsc;
 
@@ -199,6 +199,36 @@ mod live {
             while let Ok(message) = server_transport.receive().await {
                 if let TransportMessage::Request { id, request } = message {
                     request_count.fetch_add(1, Ordering::SeqCst);
+                    let response = handler.handle_request(id, request, None).await;
+                    if server_transport
+                        .send(TransportMessage::Response(response))
+                        .await
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+            }
+        });
+    }
+
+    /// Like [`spawn_counting_pump`], but additionally tallies how many
+    /// `tasks/result` requests the server observed. Used to prove the
+    /// `input_required` path returns the typed error BEFORE any result fetch
+    /// (the A2 invariant), which a bare total-request count cannot show.
+    fn spawn_method_tallying_pump(
+        mut server_transport: DuplexTransport,
+        handler: Arc<dyn ProtocolHandler>,
+        tasks_result_count: Arc<AtomicUsize>,
+    ) {
+        tokio::spawn(async move {
+            while let Ok(message) = server_transport.receive().await {
+                if let TransportMessage::Request { id, request } = message {
+                    if let Request::Client(client_request) = &request {
+                        if matches!(client_request.as_ref(), ClientRequest::TasksResult(_)) {
+                            tasks_result_count.fetch_add(1, Ordering::SeqCst);
+                        }
+                    }
                     let response = handler.handle_request(id, request, None).await;
                     if server_transport
                         .send(TransportMessage::Response(response))
@@ -426,7 +456,10 @@ mod live {
                 .expect("server builds"),
         );
         let (client_transport, server_transport) = DuplexTransport::pair();
-        spawn_counting_pump(server_transport, server, Arc::new(AtomicUsize::new(0)));
+        // Tally `tasks/result` requests so we can prove the input_required path
+        // returns the typed error BEFORE any result fetch (A2).
+        let tasks_result_count = Arc::new(AtomicUsize::new(0));
+        spawn_method_tallying_pump(server_transport, server, tasks_result_count.clone());
 
         let mut client = Client::new(client_transport);
         client
@@ -442,6 +475,10 @@ mod live {
             .await
             .expect("transition to input_required");
 
+        // Snapshot the tasks/result tally after setup so the assertion isolates
+        // the wait_for_task poll path (create_task issues no tasks/result).
+        let results_before = tasks_result_count.load(Ordering::SeqCst);
+
         // The outer timeout is a CI safety net: on regression (poller ignores
         // input_required) this call would otherwise hang forever.
         let err = tokio::time::timeout(
@@ -454,6 +491,21 @@ mod live {
         assert!(
             matches!(err, Error::Validation(_)),
             "expected a validation error, got: {err}"
+        );
+        // Drift pin (D-13): the CR-01 typed-error message is preserved
+        // substring-identical across the poll_decision() refactor.
+        assert!(
+            err.to_string()
+                .contains("is input_required; wait_for_task cannot provide"),
+            "input_required error must carry the CR-01 message substring, got: {err}"
+        );
+        // Drift pin (A2): the typed error is returned BEFORE any tasks/result
+        // fetch — the input_required branch performs no result fetch at all.
+        let results_after = tasks_result_count.load(Ordering::SeqCst);
+        assert_eq!(
+            results_after - results_before,
+            0,
+            "wait_for_task must NOT fetch tasks/result on the input_required path (A2)"
         );
     }
 }
