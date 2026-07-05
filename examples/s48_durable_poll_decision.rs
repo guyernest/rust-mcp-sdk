@@ -41,7 +41,7 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use pmcp::server::builder::ServerCoreBuilder;
@@ -208,12 +208,17 @@ async fn main() -> pmcp::Result<()> {
     tokio::spawn(async move {
         pmcp::runtime::sleep(Duration::from_millis(120)).await;
         let terminal = CallToolResult::new(vec![Content::text("durable job finished")]);
-        let _ = worker_store
+        // Assert the mutations rather than swallowing them: if the store's owner
+        // assumption ever drifts (e.g. "local" stops resolving), this panics loudly
+        // in the worker task instead of silently leaving the task Working forever.
+        worker_store
             .set_result(&worker_task_id, "local", terminal)
-            .await;
-        let _ = worker_store
+            .await
+            .expect("worker: set_result on the durable task must succeed");
+        worker_store
             .update_status(&worker_task_id, "local", TaskStatus::Completed, None)
-            .await;
+            .await
+            .expect("worker: Working -> Completed transition must succeed");
     });
 
     // ---- The pattern: a PLAIN poll loop over the loop-free classifier. ----
@@ -221,7 +226,17 @@ async fn main() -> pmcp::Result<()> {
     // A durable runtime would memoize each `tasks_get` as a `ctx.step` and replace
     // the sleep with `ctx.wait(interval)`; here we use the concrete equivalents.
     let mut terminal = false;
+    // Wall-clock deadline so a setup regression (e.g. the worker failing to reach
+    // Completed) makes this harness FAIL loudly instead of spinning forever and
+    // hanging `make test-examples`. The worker completes in ~120 ms; 10 s is ample.
+    let deadline = Instant::now() + Duration::from_secs(10);
     loop {
+        if Instant::now() >= deadline {
+            return Err(Error::internal(
+                "poll loop did not reach a terminal/input-required decision within 10s \
+                 — the durable worker likely never transitioned the task to Completed",
+            ));
+        }
         // The network fetch + serde decode happen HERE, inside tasks_get. What we
         // classify below is an already-deserialized Task (the replay-deterministic
         // property a durable step relies on — see the book section).
