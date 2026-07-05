@@ -1,3 +1,13 @@
+---
+phase: 104
+slug: task-augmented-tool-results-dx
+status: secured
+threats_open: 0
+threats_closed: 22
+asvs_level: 1
+created: 2026-07-04
+---
+
 # SECURITY.md — Phase 104: Task-Augmented Tool-Result DX
 
 **Audit date:** 2026-07-04
