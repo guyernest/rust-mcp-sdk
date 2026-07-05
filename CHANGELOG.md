@@ -5,6 +5,51 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.13.0] - 2026-07-05
+
+Loop-free task poll-decision classifier + durable/replay-consumer docs. One
+additive, wire-neutral feature set (no breaking changes): the terminal /
+pollable / input-required poll decision is factored OUT of `Client::wait_for_task`'s
+loop into a shared classifier that `wait_for_task` consumes internally (so the two
+poller shapes cannot drift) and durable/replay consumers can call per-poll without
+blocking. Motivated by a pmcp.run dev-team request (their durable poller cannot
+use the blocking `wait_for_task` and had to re-derive terminal/input-required
+detection by hand).
+
+### Added — Task poll-decision classifier (`src/types/tasks.rs`)
+
+- **`TaskPollDecision`** — a `#[non_exhaustive]` enum with three variants
+  (`Terminal { status } | InProgress { poll_hint } | InputRequired`). Deliberately
+  carries no `serde` derives: it is a returned classifier value, not a wire type.
+- **`Task::poll_decision(&self) -> TaskPollDecision`** — a pure, total function over
+  the five `TaskStatus` variants (no `_` arm, no I/O, no `CallToolResult` fetch).
+  Safe to call on every replay of a durable workflow because it classifies an
+  already-deserialized `Task`. The terminal `CallToolResult` still comes from a
+  separate `tasks/result` call the consumer owns.
+- **`resolve_poll_interval(caller, hint) -> u64`** plus **`pub const DEFAULT_POLL_MS`
+  (1000) / `MIN_POLL_MS` (50)** — the poll-interval precedence chain
+  (caller override → server hint → default → 50 ms floor), now a single shared
+  source of truth documented as stable public defaults.
+
+### Changed — `Client::wait_for_task` (`src/client/mod.rs`)
+
+- The poll loop is now an explicit `match task.poll_decision()` that consumes the
+  shared classifier instead of re-deriving `is_terminal()` / `== InputRequired`
+  inline. Blocking behavior, the budget clamp, and the `input_required` typed-error
+  message are **byte-identical** to 2.12.0 (pinned by a strengthened regression
+  test that also asserts no `tasks/result` fetch happens on the `input_required`
+  path). No wire changes; no new `TaskStatus` variants.
+
+### Added — Docs & example
+
+- **`examples/s48_durable_poll_decision.rs`** — a runnable plain classifier poll
+  loop (no `wait_for_task`, no fake durable runtime), with the `tasks/result` fetch
+  guarded so it is unreachable on the `InputRequired` path.
+- **"Durable and replay consumers"** section in the Tasks chapter (pmcp-book)
+  covering the `ctx.step`/`ctx.wait` typed-accessors-without-the-loop pattern, the
+  replay-determinism caveat, the two distinct semver claims, and an explicit
+  "when NOT to use `wait_for_task`" warning.
+
 ## [2.12.0] - 2026-07-05
 
 Task-Augmented Tool Results DX (SEP-1686 junction). One additive feature set, no
