@@ -72,6 +72,68 @@ impl TaskStatus {
     }
 }
 
+/// The classification of a polled [`Task`], derived purely from its
+/// already-deserialized [`TaskStatus`] — the single decision primitive every
+/// task poller consumes so the branch logic cannot drift.
+///
+/// Produced by [`Task::poll_decision`]. It answers the one question a poll loop
+/// asks each tick: *stop, ask the user, or sleep and poll again?* — without a
+/// network round-trip, a [`CallToolResult`](crate::types::CallToolResult)
+/// fetch, or any I/O. It is a pure, replay-deterministic function of the polled
+/// `Task`, so it is safe to call inside a memoized durable/replay step (D-01,
+/// D-03).
+///
+/// # Non-exhaustive
+///
+/// This enum is `#[non_exhaustive]` for future-proofing (D-04): adding a variant
+/// later is a non-breaking change, so external `match` sites must carry a
+/// wildcard `_ =>` arm. This is a distinct claim from [`TaskStatus`], which is
+/// deliberately **exhaustive** today (D-15): `#[non_exhaustive]` here does NOT
+/// imply that unknown or future wire statuses are handled gracefully at runtime.
+/// An unknown status fails at serde deserialization during `tasks/get`, BEFORE
+/// classification ever runs — `poll_decision()` only ever sees one of the five
+/// known `TaskStatus` values.
+///
+/// Unlike every other type in this module, `TaskPollDecision` intentionally
+/// derives neither `Serialize` nor `Deserialize`: it is a returned classifier
+/// value consumed in-process, never a wire type.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum TaskPollDecision {
+    /// The task has reached a terminal status ([`TaskStatus::Completed`],
+    /// [`TaskStatus::Failed`], or [`TaskStatus::Cancelled`]) and will not
+    /// transition further — the poll loop should stop.
+    ///
+    /// The classifier carries the terminal [`TaskStatus`] by value (it is
+    /// `Copy`) but deliberately does NOT carry the final
+    /// [`CallToolResult`](crate::types::CallToolResult): to retrieve the
+    /// result the caller still issues a **separate `tasks/result`** call
+    /// (D-06/D-16). This keeps classification a pure, I/O-free decision.
+    Terminal {
+        /// The terminal status that ended the task.
+        status: TaskStatus,
+    },
+    /// The task is still running ([`TaskStatus::Working`]) — the poll loop
+    /// should sleep and poll again.
+    ///
+    /// `poll_hint` is the raw server-reported `pollInterval` in **milliseconds**
+    /// ([`Task::poll_interval`]), passed through verbatim including `None`
+    /// (D-07). Feed it to [`resolve_poll_interval`] to obtain the concrete sleep
+    /// duration honoring the caller override, this hint, the default, and the
+    /// hot-loop floor.
+    InProgress {
+        /// The raw server-reported `pollInterval` in ms, verbatim (`None` when
+        /// the server suggested no interval).
+        poll_hint: Option<u64>,
+    },
+    /// The task is blocked on user input ([`TaskStatus::InputRequired`]).
+    ///
+    /// This is a unit variant carrying no payload (D-05): the caller already
+    /// holds the polled `Task`, and a blocking poller cannot supply the input,
+    /// so it must route to elicitation rather than continue spinning.
+    InputRequired,
+}
+
 /// A task resource representing an in-progress or completed operation.
 ///
 /// # Backward Compatibility
@@ -155,6 +217,55 @@ impl Task {
     pub fn with_status_message(mut self, message: impl Into<String>) -> Self {
         self.status_message = Some(message.into());
         self
+    }
+
+    /// Classify this already-polled task into a [`TaskPollDecision`] without any
+    /// I/O — the single decision primitive every task poller consumes.
+    ///
+    /// This is a pure, total function of the polled `Task`'s [`TaskStatus`]:
+    /// there is no `_` wildcard arm because `TaskStatus` is exhaustive (five
+    /// known variants), so the mapping cannot silently drift. Because it touches
+    /// nothing but the in-hand `Task`, it is replay-deterministic and safe to
+    /// call inside a memoized durable/replay step — provided the `tasks/get`
+    /// network call and its serde decode sit INSIDE the memoized step, so an
+    /// unknown/future status fails at deserialization before this runs (D-01,
+    /// D-04, D-14, D-15).
+    ///
+    /// Mapping:
+    /// - [`TaskStatus::Working`] → [`TaskPollDecision::InProgress`] carrying the
+    ///   task's `poll_interval` verbatim as `poll_hint` (D-07).
+    /// - [`TaskStatus::InputRequired`] → [`TaskPollDecision::InputRequired`].
+    /// - [`TaskStatus::Completed`] / [`TaskStatus::Failed`] /
+    ///   [`TaskStatus::Cancelled`] → [`TaskPollDecision::Terminal`] carrying the
+    ///   terminal status. The final
+    ///   [`CallToolResult`](crate::types::CallToolResult) is NOT fetched here —
+    ///   the caller issues a separate `tasks/result` call (D-06/D-16).
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use pmcp::types::tasks::{Task, TaskStatus, TaskPollDecision};
+    ///
+    /// let task = Task::new("t-123", TaskStatus::Working).with_poll_interval(2000);
+    /// match task.poll_decision() {
+    ///     TaskPollDecision::InProgress { poll_hint } => assert_eq!(poll_hint, Some(2000)),
+    ///     // `TaskPollDecision` is `#[non_exhaustive]`, so external callers
+    ///     // need a wildcard arm.
+    ///     _ => panic!("a Working task must classify as InProgress"),
+    /// }
+    /// ```
+    pub fn poll_decision(&self) -> TaskPollDecision {
+        match self.status {
+            TaskStatus::Working => TaskPollDecision::InProgress {
+                poll_hint: self.poll_interval,
+            },
+            TaskStatus::InputRequired => TaskPollDecision::InputRequired,
+            TaskStatus::Completed | TaskStatus::Failed | TaskStatus::Cancelled => {
+                TaskPollDecision::Terminal {
+                    status: self.status,
+                }
+            },
+        }
     }
 }
 
@@ -603,5 +714,96 @@ mod tests {
         assert_eq!(TaskStatus::Completed.to_string(), "completed");
         assert_eq!(TaskStatus::Failed.to_string(), "failed");
         assert_eq!(TaskStatus::Cancelled.to_string(), "cancelled");
+    }
+
+    /// All five `TaskStatus` values, for exhaustive table tests.
+    const ALL_STATUSES: [TaskStatus; 5] = [
+        TaskStatus::Working,
+        TaskStatus::InputRequired,
+        TaskStatus::Completed,
+        TaskStatus::Failed,
+        TaskStatus::Cancelled,
+    ];
+
+    /// The expected `poll_decision()` classification for a status, given the
+    /// task's `poll_interval` (only consulted for the `Working` case).
+    fn expected_decision(status: TaskStatus, poll_interval: Option<u64>) -> TaskPollDecision {
+        match status {
+            TaskStatus::Working => TaskPollDecision::InProgress {
+                poll_hint: poll_interval,
+            },
+            TaskStatus::InputRequired => TaskPollDecision::InputRequired,
+            TaskStatus::Completed | TaskStatus::Failed | TaskStatus::Cancelled => {
+                TaskPollDecision::Terminal { status }
+            },
+        }
+    }
+
+    #[test]
+    fn poll_decision_maps_every_status() {
+        // Working -> InProgress carrying the poll_interval verbatim.
+        let working = Task::new("t-w", TaskStatus::Working).with_poll_interval(2500);
+        assert_eq!(
+            working.poll_decision(),
+            TaskPollDecision::InProgress {
+                poll_hint: Some(2500)
+            }
+        );
+
+        // Working with no poll_interval -> InProgress { poll_hint: None }.
+        let working_none = Task::new("t-wn", TaskStatus::Working);
+        assert_eq!(
+            working_none.poll_decision(),
+            TaskPollDecision::InProgress { poll_hint: None }
+        );
+
+        // InputRequired -> unit variant.
+        let waiting = Task::new("t-i", TaskStatus::InputRequired);
+        assert_eq!(waiting.poll_decision(), TaskPollDecision::InputRequired);
+
+        // Each terminal status -> Terminal carrying that status.
+        for status in [
+            TaskStatus::Completed,
+            TaskStatus::Failed,
+            TaskStatus::Cancelled,
+        ] {
+            let task = Task::new("t-term", status);
+            assert_eq!(
+                task.poll_decision(),
+                TaskPollDecision::Terminal { status },
+                "{status:?} must classify as Terminal"
+            );
+        }
+    }
+
+    #[test]
+    fn poll_decision_covers_all_statuses_exhaustively() {
+        // Table drive across EVERY TaskStatus value (guards D-15 exhaustiveness).
+        for status in ALL_STATUSES {
+            let task = Task::new("t-x", status).with_poll_interval(1234);
+            assert_eq!(
+                task.poll_decision(),
+                expected_decision(status, Some(1234)),
+                "poll_decision() drifted for {status:?}"
+            );
+        }
+    }
+
+    proptest::proptest! {
+        /// For every TaskStatus and any poll_interval, poll_decision() returns
+        /// exactly the mapped variant — the classifier never drifts.
+        #[test]
+        fn poll_decision_matches_expected_map(
+            status_idx in 0usize..ALL_STATUSES.len(),
+            poll_interval in proptest::option::of(proptest::prelude::any::<u64>()),
+        ) {
+            let status = ALL_STATUSES[status_idx];
+            let mut task = Task::new("t-prop", status);
+            task.poll_interval = poll_interval;
+            proptest::prop_assert_eq!(
+                task.poll_decision(),
+                expected_decision(status, poll_interval)
+            );
+        }
     }
 }
