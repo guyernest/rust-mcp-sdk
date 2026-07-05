@@ -5,8 +5,9 @@ use crate::shared::{
     EnhancedMiddlewareChain, MiddlewareContext, Protocol, ProtocolOptions, Transport,
 };
 use crate::types::tasks::{
-    CancelTaskRequest, CancelTaskResult, CreateTaskResult, GetTaskPayloadRequest, GetTaskRequest,
-    GetTaskResult, ListTasksRequest, ListTasksResult, Task, TaskMetadata, TaskStatus,
+    resolve_poll_interval, CancelTaskRequest, CancelTaskResult, CreateTaskResult,
+    GetTaskPayloadRequest, GetTaskRequest, GetTaskResult, ListTasksRequest, ListTasksResult, Task,
+    TaskMetadata, TaskPollDecision, TaskStatus, MIN_POLL_MS,
 };
 use crate::types::{
     CallToolRequest, CallToolResult, CancelledNotification, ClientCapabilities, ClientNotification,
@@ -665,6 +666,25 @@ impl<T: Transport> Client<T> {
     ///   polling on would hang forever under the default (unbounded) options.
     ///   Handle the required input, then resume polling.
     ///
+    /// # Durable and replay consumers
+    ///
+    /// Do **not** wrap `wait_for_task` inside a durable / replay workflow step.
+    /// It sleeps, loops, and owns the whole polling lifecycle, which is
+    /// non-deterministic under replay (each re-execution would re-sleep and
+    /// re-poll). A durable consumer should instead call
+    /// [`Task::poll_decision`](crate::types::tasks::Task::poll_decision) plus
+    /// [`resolve_poll_interval`](crate::types::tasks::resolve_poll_interval)
+    /// once per tick inside its own memoized step and persist the decision
+    /// between ticks — those are pure, replay-deterministic functions of the
+    /// polled task, unlike this blocking poller (D-11 / D-16).
+    ///
+    /// See the pmcp-book "Durable and replay consumers" section
+    /// (heading `## Durable and replay consumers` in
+    /// `pmcp-book/src/ch12-7-tasks.md`) for the full per-poll pattern:
+    /// <https://paiml.github.io/rust-mcp-sdk/ch12-7-tasks.html#durable-and-replay-consumers>.
+    /// (This is a deliberate plain-text/URL reference, not a rustdoc intra-doc
+    /// link, so it never fails `cargo doc` even before that page ships.)
+    ///
     /// # Example
     ///
     /// ```ignore
@@ -682,11 +702,6 @@ impl<T: Transport> Client<T> {
         task_id: &str,
         opts: WaitForTaskOptions,
     ) -> Result<CallToolResult> {
-        /// Default poll interval when neither the caller nor the task specify one.
-        const DEFAULT_POLL_MS: u64 = 1000;
-        /// Floor applied to any interval so a zero value cannot hot-spin.
-        const MIN_POLL_MS: u64 = 50;
-
         self.ensure_initialized()?;
         self.assert_capability("tasks", "tasks/get")?;
 
@@ -694,42 +709,54 @@ impl<T: Transport> Client<T> {
         let start = web_time::Instant::now();
         loop {
             let task = self.tasks_get(task_id).await?;
-            if task.status.is_terminal() {
-                break;
-            }
 
-            // `input_required` is NOT terminal, and the task cannot progress
-            // without client-side action this poller does not perform —
-            // surface it instead of spinning until a (possibly absent)
-            // timeout (CR-01).
-            if task.status == TaskStatus::InputRequired {
-                return Err(Error::validation(format!(
-                    "task {task_id} is input_required; wait_for_task cannot provide \
-                     input — handle the elicitation, then resume polling"
-                )));
-            }
+            // Single source of truth for the stop / ask / sleep decision: the
+            // `poll_decision()` classifier in src/types/tasks.rs (D-13). No
+            // parallel terminal-status or input-required comparison lives here,
+            // so the poller and the classifier cannot drift. This matches the
+            // `#[non_exhaustive]` `TaskPollDecision` exhaustively (no `_` arm)
+            // because it is in-crate — a future variant becomes a compile error
+            // here, forcing an explicit decision.
+            match task.poll_decision() {
+                // Terminal — stop polling and fetch the persisted result below.
+                TaskPollDecision::Terminal { .. } => break,
+                // `input_required` is NOT terminal, and the task cannot progress
+                // without client-side action this poller does not perform —
+                // surface it (returning BEFORE any tasks/result fetch) instead
+                // of spinning until a (possibly absent) timeout (CR-01).
+                TaskPollDecision::InputRequired => {
+                    return Err(Error::validation(format!(
+                        "task {task_id} is input_required; wait_for_task cannot provide \
+                         input — handle the elicitation, then resume polling"
+                    )));
+                },
+                // Still running — resolve the next sleep through the shared
+                // resolver (D-02: caller override, else the server-reported
+                // pollInterval hint, else the default, floored to MIN_POLL_MS).
+                TaskPollDecision::InProgress { poll_hint } => {
+                    let mut interval = resolve_poll_interval(opts.poll_interval, poll_hint);
 
-            let mut interval = opts
-                .poll_interval
-                .or(task.poll_interval)
-                .unwrap_or(DEFAULT_POLL_MS)
-                .max(MIN_POLL_MS);
-
-            // Enforce the overall polling budget (millisecond precision) and
-            // clamp the next sleep to the REMAINING budget — the interval may
-            // be server-chosen (task-reported pollInterval), and an unclamped
-            // sleep would overshoot a caller-specified budget by up to one
-            // arbitrary server interval (WR-01).
-            if let Some(max_secs) = opts.max_poll_duration_secs {
-                let budget_ms = max_secs.saturating_mul(1000);
-                let elapsed_ms = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX);
-                let remaining_ms = budget_ms.saturating_sub(elapsed_ms);
-                if remaining_ms == 0 {
-                    return Err(Error::timeout(budget_ms));
-                }
-                interval = interval.min(remaining_ms.max(MIN_POLL_MS));
+                    // Enforce the overall polling budget (millisecond precision)
+                    // and clamp the next sleep to the REMAINING budget — the
+                    // interval may be server-chosen (task-reported pollInterval),
+                    // and an unclamped sleep would overshoot a caller-specified
+                    // budget by up to one arbitrary server interval. This clamp
+                    // is loop state (not task state), so it stays INLINE here
+                    // rather than moving into the classifier or resolver (WR-01 /
+                    // D-09).
+                    if let Some(max_secs) = opts.max_poll_duration_secs {
+                        let budget_ms = max_secs.saturating_mul(1000);
+                        let elapsed_ms =
+                            u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX);
+                        let remaining_ms = budget_ms.saturating_sub(elapsed_ms);
+                        if remaining_ms == 0 {
+                            return Err(Error::timeout(budget_ms));
+                        }
+                        interval = interval.min(remaining_ms.max(MIN_POLL_MS));
+                    }
+                    crate::runtime::sleep(std::time::Duration::from_millis(interval)).await;
+                },
             }
-            crate::runtime::sleep(std::time::Duration::from_millis(interval)).await;
         }
 
         self.tasks_result(task_id).await
