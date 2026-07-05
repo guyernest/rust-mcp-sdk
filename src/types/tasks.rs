@@ -134,6 +134,63 @@ pub enum TaskPollDecision {
     InputRequired,
 }
 
+/// The default poll interval, in **milliseconds**, used when neither the caller
+/// nor the server-reported `pollInterval` specifies one.
+///
+/// This is a **stable, supported public default** — the documented fallback in
+/// the poll-interval policy (1000 ms), not an internal tunable. Its value is a
+/// public API contract: changing it is a semver-relevant change, not a silent
+/// implementation detail. It is the single source of truth shared by
+/// [`resolve_poll_interval`] and every task poller (D-08).
+pub const DEFAULT_POLL_MS: u64 = 1000;
+
+/// The floor, in **milliseconds**, applied to any resolved poll interval so a
+/// zero or very small value cannot hot-spin the poll loop.
+///
+/// This is a **stable, supported public default** — the documented 50 ms
+/// hot-loop-protection floor in the poll-interval policy, not an internal
+/// tunable. Its value is a public API contract: changing it is a
+/// semver-relevant change. It is the single source of truth shared by
+/// [`resolve_poll_interval`] and the budget clamp in blocking pollers (D-08,
+/// T-105-01 mitigation).
+pub const MIN_POLL_MS: u64 = 50;
+
+/// Resolve the concrete poll interval, in **milliseconds**, from a caller
+/// override and a server-reported hint, applying the documented precedence and
+/// the hot-loop-protection floor.
+///
+/// Precedence: `caller_override` wins if present, else the server `hint`, else
+/// [`DEFAULT_POLL_MS`] (1000 ms); the result is then floored to at least
+/// [`MIN_POLL_MS`] (50 ms) so a zero or tiny value cannot busy-spin the poll
+/// loop (T-105-01 mitigation). This is the single source of truth for interval
+/// resolution, consumed by every task poller so the policy cannot drift (D-08).
+///
+/// Returns `u64` milliseconds — NOT a [`Duration`](std::time::Duration) — to
+/// stay symmetric with the `Option<u64>` inputs and consistent with
+/// [`Task::poll_interval`] and [`TaskMetadata::poll_interval`] (D-12). Callers
+/// wrap with `Duration::from_millis` at the sleep site.
+///
+/// # Examples
+///
+/// ```rust
+/// use pmcp::types::tasks::resolve_poll_interval;
+///
+/// // Caller override always wins.
+/// assert_eq!(resolve_poll_interval(Some(200), Some(999)), 200);
+/// // Server hint used when there is no override.
+/// assert_eq!(resolve_poll_interval(None, Some(300)), 300);
+/// // Falls back to the 1000 ms default when neither is set.
+/// assert_eq!(resolve_poll_interval(None, None), 1000);
+/// // A zero (or tiny) value is floored to 50 ms so it cannot hot-spin.
+/// assert_eq!(resolve_poll_interval(Some(0), None), 50);
+/// ```
+pub fn resolve_poll_interval(caller_override: Option<u64>, hint: Option<u64>) -> u64 {
+    caller_override
+        .or(hint)
+        .unwrap_or(DEFAULT_POLL_MS)
+        .max(MIN_POLL_MS)
+}
+
 /// A task resource representing an in-progress or completed operation.
 ///
 /// # Backward Compatibility
@@ -789,6 +846,28 @@ mod tests {
         }
     }
 
+    #[test]
+    fn resolve_poll_interval_precedence() {
+        // Caller override wins over the server hint.
+        assert_eq!(resolve_poll_interval(Some(200), Some(999)), 200);
+        // Server hint used when there is no caller override.
+        assert_eq!(resolve_poll_interval(None, Some(300)), 300);
+        // Falls back to DEFAULT_POLL_MS when neither is specified.
+        assert_eq!(resolve_poll_interval(None, None), DEFAULT_POLL_MS);
+        assert_eq!(resolve_poll_interval(None, None), 1000);
+    }
+
+    #[test]
+    fn resolve_poll_interval_floors_zero() {
+        // A zero override cannot hot-spin — floored to MIN_POLL_MS.
+        assert_eq!(resolve_poll_interval(Some(0), None), MIN_POLL_MS);
+        assert_eq!(resolve_poll_interval(Some(0), None), 50);
+        // The floor also applies to a low server hint.
+        assert_eq!(resolve_poll_interval(None, Some(10)), 50);
+        // And to a zero hint.
+        assert_eq!(resolve_poll_interval(None, Some(0)), 50);
+    }
+
     proptest::proptest! {
         /// For every TaskStatus and any poll_interval, poll_decision() returns
         /// exactly the mapped variant — the classifier never drifts.
@@ -804,6 +883,16 @@ mod tests {
                 task.poll_decision(),
                 expected_decision(status, poll_interval)
             );
+        }
+
+        /// The 50 ms floor holds for ALL caller/hint inputs, not just the
+        /// tabled cases (T-105-01 invariant).
+        #[test]
+        fn resolve_poll_interval_never_below_floor(
+            caller in proptest::option::of(proptest::prelude::any::<u64>()),
+            hint in proptest::option::of(proptest::prelude::any::<u64>()),
+        ) {
+            proptest::prop_assert!(resolve_poll_interval(caller, hint) >= MIN_POLL_MS);
         }
     }
 }
