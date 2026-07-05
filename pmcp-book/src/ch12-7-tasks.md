@@ -600,6 +600,119 @@ async fn process_with_context(ctx: &TaskContext) -> Result<(), Box<dyn std::erro
 
 ---
 
+## Durable and replay consumers
+
+The [polling model](#the-polling-model) above assumes an ordinary client that
+sleeps between `tasks/get` calls. A **durable / replay-shaped** consumer — a
+Temporal-style workflow, or the pmcp.run durable poller that motivated this
+section — cannot sleep or loop freely: on replay, the runtime re-executes the
+workflow function from the top and must observe the *same* decisions it made the
+first time. Blocking sleeps and hidden loops are non-deterministic under replay,
+so these consumers need the poll *decision* as a small, pure primitive they can
+drive one step at a time.
+
+That primitive is `Task::poll_decision()`, paired with `resolve_poll_interval()`.
+For a runnable, compiling version of the loop below, see
+`examples/s48_durable_poll_decision.rs`
+(`cargo run --example s48_durable_poll_decision --features full`).
+
+### The typed-accessors-without-the-loop pattern
+
+A durable runtime exposes two building blocks: `ctx.step(...)`, which runs an
+effect **once** and memoizes its result into the workflow history (so replays
+return the recorded value instead of re-running the effect), and `ctx.wait(...)`,
+which suspends the workflow deterministically instead of sleeping a thread. You
+compose the classifier out of those instead of calling a blocking
+poll-to-terminal helper:
+
+```rust,ignore
+// Illustrative only — `ctx` is your durable runtime's step/wait context.
+loop {
+    // ONE memoized step: the network tasks/get AND its serde decode happen
+    // inside ctx.step, so the workflow history records the decoded Task.
+    let task = ctx.step("tasks/get", || client.tasks_get(&task_id)).await?;
+
+    // Pure, per-poll, no I/O — safe to run on every replay.
+    match task.poll_decision() {
+        TaskPollDecision::Terminal { status } => {
+            // Terminal carries ONLY the status. Fetch the payload separately
+            // (see below) — as its own memoized step.
+            break status;
+        }
+        TaskPollDecision::InputRequired => {
+            // NOT terminal: route to elicitation, then resume polling. Never
+            // fetch a result here.
+            handle_input_required(&task_id).await?;
+        }
+        TaskPollDecision::InProgress { poll_hint } => {
+            // Deterministic suspend instead of a thread sleep.
+            let interval = resolve_poll_interval(None, poll_hint);
+            ctx.wait(Duration::from_millis(interval)).await;
+        }
+        // TaskPollDecision is #[non_exhaustive] — carry a wildcard (see semver
+        // note below) and treat an unrecognized decision as "keep polling".
+        _ => ctx.wait(Duration::from_millis(resolve_poll_interval(None, None))).await,
+    }
+}
+```
+
+### Replay determinism (scoped precisely)
+
+`poll_decision()` is replay-deterministic **only** as a pure function over an
+**already-deserialized** `Task`. The determinism guarantee stops at the struct
+boundary: the network `tasks/get` call and the serde decode of its response are
+**not** pure, so they must sit **inside** the runtime's memoized step (the
+`ctx.step("tasks/get", ...)` above). Once the `Task` is decoded and recorded in
+history, classifying it is a pure `match` that yields the same
+`TaskPollDecision` on every replay.
+
+A corollary: an unknown or future task status fails at **deserialization**, before
+classification ever runs. `poll_decision()` never sees an unrecognized status —
+by the time it is called, the `Task` has already been decoded into the known
+`TaskStatus` variants (or the decode step has already errored inside `ctx.step`).
+
+### Semver: two distinct claims
+
+These are separate facts; do not conflate them:
+
+- **`TaskStatus` is exhaustive today.** The five variants (`Working`,
+  `InputRequired`, `Completed`, `Failed`, `Cancelled`) are the complete set, and
+  `poll_decision()` matches all of them exhaustively.
+- **`TaskPollDecision` is `#[non_exhaustive]`.** This is a *future-proofing
+  affordance* — it lets the SDK add a decision variant in a future release
+  without a breaking change, which is why external `match`es must carry a
+  wildcard arm. It is **not** present runtime graceful handling of unknown
+  statuses (there are none to handle — see the determinism note above). The
+  wildcard exists for source-compatibility across SDK versions, nothing more.
+
+### Terminal → a separate `tasks/result` step
+
+The `Terminal { status }` decision carries only the status. To retrieve the
+final `CallToolResult`, the consumer issues a **separate** `tasks/result` call —
+itself a memoized durable step:
+
+```rust,ignore
+let result = ctx.step("tasks/result", || client.tasks_result(&task_id)).await?;
+```
+
+A durable consumer **must not** fetch a result on the `input_required` path: an
+`input_required` task is not terminal and has no result yet. The `s48` example
+guards the `tasks/result` fetch behind a terminal flag so that path is
+unreachable — mirror that guard in your own workflow.
+
+### When NOT to use the blocking waiter
+
+> ⚠️ **Do not wrap the blocking poll-to-terminal helper inside a replay/durable
+> workflow.** The `Client::wait_for_task` convenience owns the entire polling
+> lifecycle — it sleeps, loops, and blocks until the task is terminal. That is
+> exactly the non-deterministic behavior a replay runtime cannot tolerate: the
+> sleep durations and loop iterations are not recorded in history, so a replay
+> would diverge. It is the right tool for an ordinary synchronous client, and the
+> wrong tool inside `ctx.step`/`ctx.wait`. Durable consumers should drive the
+> per-poll classifier shown above instead, exactly as `s48` demonstrates.
+
+---
+
 ## Configuration
 
 ### StoreConfig
