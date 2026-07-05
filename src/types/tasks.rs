@@ -72,6 +72,125 @@ impl TaskStatus {
     }
 }
 
+/// The classification of a polled [`Task`], derived purely from its
+/// already-deserialized [`TaskStatus`] — the single decision primitive every
+/// task poller consumes so the branch logic cannot drift.
+///
+/// Produced by [`Task::poll_decision`]. It answers the one question a poll loop
+/// asks each tick: *stop, ask the user, or sleep and poll again?* — without a
+/// network round-trip, a [`CallToolResult`](crate::types::CallToolResult)
+/// fetch, or any I/O. It is a pure, replay-deterministic function of the polled
+/// `Task`, so it is safe to call inside a memoized durable/replay step (D-01,
+/// D-03).
+///
+/// # Non-exhaustive
+///
+/// This enum is `#[non_exhaustive]` for future-proofing (D-04): adding a variant
+/// later is a non-breaking change, so external `match` sites must carry a
+/// wildcard `_ =>` arm. This is a distinct claim from [`TaskStatus`], which is
+/// deliberately **exhaustive** today (D-15): `#[non_exhaustive]` here does NOT
+/// imply that unknown or future wire statuses are handled gracefully at runtime.
+/// An unknown status fails at serde deserialization during `tasks/get`, BEFORE
+/// classification ever runs — `poll_decision()` only ever sees one of the five
+/// known `TaskStatus` values.
+///
+/// Unlike every other type in this module, `TaskPollDecision` intentionally
+/// derives neither `Serialize` nor `Deserialize`: it is a returned classifier
+/// value consumed in-process, never a wire type.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum TaskPollDecision {
+    /// The task has reached a terminal status ([`TaskStatus::Completed`],
+    /// [`TaskStatus::Failed`], or [`TaskStatus::Cancelled`]) and will not
+    /// transition further — the poll loop should stop.
+    ///
+    /// The classifier carries the terminal [`TaskStatus`] by value (it is
+    /// `Copy`) but deliberately does NOT carry the final
+    /// [`CallToolResult`](crate::types::CallToolResult): to retrieve the
+    /// result the caller still issues a **separate `tasks/result`** call
+    /// (D-06/D-16). This keeps classification a pure, I/O-free decision.
+    Terminal {
+        /// The terminal status that ended the task.
+        status: TaskStatus,
+    },
+    /// The task is still running ([`TaskStatus::Working`]) — the poll loop
+    /// should sleep and poll again.
+    ///
+    /// `poll_hint` is the raw server-reported `pollInterval` in **milliseconds**
+    /// ([`Task::poll_interval`]), passed through verbatim including `None`
+    /// (D-07). Feed it to [`resolve_poll_interval`] to obtain the concrete sleep
+    /// duration honoring the caller override, this hint, the default, and the
+    /// hot-loop floor.
+    InProgress {
+        /// The raw server-reported `pollInterval` in ms, verbatim (`None` when
+        /// the server suggested no interval).
+        poll_hint: Option<u64>,
+    },
+    /// The task is blocked on user input ([`TaskStatus::InputRequired`]).
+    ///
+    /// This is a unit variant carrying no payload (D-05): the caller already
+    /// holds the polled `Task`, and a blocking poller cannot supply the input,
+    /// so it must route to elicitation rather than continue spinning.
+    InputRequired,
+}
+
+/// The default poll interval, in **milliseconds**, used when neither the caller
+/// nor the server-reported `pollInterval` specifies one.
+///
+/// This is a **stable, supported public default** — the documented fallback in
+/// the poll-interval policy (1000 ms), not an internal tunable. Its value is a
+/// public API contract: changing it is a semver-relevant change, not a silent
+/// implementation detail. It is the single source of truth shared by
+/// [`resolve_poll_interval`] and every task poller (D-08).
+pub const DEFAULT_POLL_MS: u64 = 1000;
+
+/// The floor, in **milliseconds**, applied to any resolved poll interval so a
+/// zero or very small value cannot hot-spin the poll loop.
+///
+/// This is a **stable, supported public default** — the documented 50 ms
+/// hot-loop-protection floor in the poll-interval policy, not an internal
+/// tunable. Its value is a public API contract: changing it is a
+/// semver-relevant change. It is the single source of truth shared by
+/// [`resolve_poll_interval`] and the budget clamp in blocking pollers (D-08,
+/// T-105-01 mitigation).
+pub const MIN_POLL_MS: u64 = 50;
+
+/// Resolve the concrete poll interval, in **milliseconds**, from a caller
+/// override and a server-reported hint, applying the documented precedence and
+/// the hot-loop-protection floor.
+///
+/// Precedence: `caller_override` wins if present, else the server `hint`, else
+/// [`DEFAULT_POLL_MS`] (1000 ms); the result is then floored to at least
+/// [`MIN_POLL_MS`] (50 ms) so a zero or tiny value cannot busy-spin the poll
+/// loop (T-105-01 mitigation). This is the single source of truth for interval
+/// resolution, consumed by every task poller so the policy cannot drift (D-08).
+///
+/// Returns `u64` milliseconds — NOT a [`Duration`](std::time::Duration) — to
+/// stay symmetric with the `Option<u64>` inputs and consistent with
+/// [`Task::poll_interval`] and [`TaskMetadata::poll_interval`] (D-12). Callers
+/// wrap with `Duration::from_millis` at the sleep site.
+///
+/// # Examples
+///
+/// ```rust
+/// use pmcp::types::tasks::resolve_poll_interval;
+///
+/// // Caller override always wins.
+/// assert_eq!(resolve_poll_interval(Some(200), Some(999)), 200);
+/// // Server hint used when there is no override.
+/// assert_eq!(resolve_poll_interval(None, Some(300)), 300);
+/// // Falls back to the 1000 ms default when neither is set.
+/// assert_eq!(resolve_poll_interval(None, None), 1000);
+/// // A zero (or tiny) value is floored to 50 ms so it cannot hot-spin.
+/// assert_eq!(resolve_poll_interval(Some(0), None), 50);
+/// ```
+pub fn resolve_poll_interval(caller_override: Option<u64>, hint: Option<u64>) -> u64 {
+    caller_override
+        .or(hint)
+        .unwrap_or(DEFAULT_POLL_MS)
+        .max(MIN_POLL_MS)
+}
+
 /// A task resource representing an in-progress or completed operation.
 ///
 /// # Backward Compatibility
@@ -155,6 +274,55 @@ impl Task {
     pub fn with_status_message(mut self, message: impl Into<String>) -> Self {
         self.status_message = Some(message.into());
         self
+    }
+
+    /// Classify this already-polled task into a [`TaskPollDecision`] without any
+    /// I/O — the single decision primitive every task poller consumes.
+    ///
+    /// This is a pure, total function of the polled `Task`'s [`TaskStatus`]:
+    /// there is no `_` wildcard arm because `TaskStatus` is exhaustive (five
+    /// known variants), so the mapping cannot silently drift. Because it touches
+    /// nothing but the in-hand `Task`, it is replay-deterministic and safe to
+    /// call inside a memoized durable/replay step — provided the `tasks/get`
+    /// network call and its serde decode sit INSIDE the memoized step, so an
+    /// unknown/future status fails at deserialization before this runs (D-01,
+    /// D-04, D-14, D-15).
+    ///
+    /// Mapping:
+    /// - [`TaskStatus::Working`] → [`TaskPollDecision::InProgress`] carrying the
+    ///   task's `poll_interval` verbatim as `poll_hint` (D-07).
+    /// - [`TaskStatus::InputRequired`] → [`TaskPollDecision::InputRequired`].
+    /// - [`TaskStatus::Completed`] / [`TaskStatus::Failed`] /
+    ///   [`TaskStatus::Cancelled`] → [`TaskPollDecision::Terminal`] carrying the
+    ///   terminal status. The final
+    ///   [`CallToolResult`](crate::types::CallToolResult) is NOT fetched here —
+    ///   the caller issues a separate `tasks/result` call (D-06/D-16).
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use pmcp::types::tasks::{Task, TaskStatus, TaskPollDecision};
+    ///
+    /// let task = Task::new("t-123", TaskStatus::Working).with_poll_interval(2000);
+    /// match task.poll_decision() {
+    ///     TaskPollDecision::InProgress { poll_hint } => assert_eq!(poll_hint, Some(2000)),
+    ///     // `TaskPollDecision` is `#[non_exhaustive]`, so external callers
+    ///     // need a wildcard arm.
+    ///     _ => panic!("a Working task must classify as InProgress"),
+    /// }
+    /// ```
+    pub fn poll_decision(&self) -> TaskPollDecision {
+        match self.status {
+            TaskStatus::Working => TaskPollDecision::InProgress {
+                poll_hint: self.poll_interval,
+            },
+            TaskStatus::InputRequired => TaskPollDecision::InputRequired,
+            TaskStatus::Completed | TaskStatus::Failed | TaskStatus::Cancelled => {
+                TaskPollDecision::Terminal {
+                    status: self.status,
+                }
+            },
+        }
     }
 }
 
@@ -603,5 +771,128 @@ mod tests {
         assert_eq!(TaskStatus::Completed.to_string(), "completed");
         assert_eq!(TaskStatus::Failed.to_string(), "failed");
         assert_eq!(TaskStatus::Cancelled.to_string(), "cancelled");
+    }
+
+    /// All five `TaskStatus` values, for exhaustive table tests.
+    const ALL_STATUSES: [TaskStatus; 5] = [
+        TaskStatus::Working,
+        TaskStatus::InputRequired,
+        TaskStatus::Completed,
+        TaskStatus::Failed,
+        TaskStatus::Cancelled,
+    ];
+
+    /// The expected `poll_decision()` classification for a status, given the
+    /// task's `poll_interval` (only consulted for the `Working` case).
+    fn expected_decision(status: TaskStatus, poll_interval: Option<u64>) -> TaskPollDecision {
+        match status {
+            TaskStatus::Working => TaskPollDecision::InProgress {
+                poll_hint: poll_interval,
+            },
+            TaskStatus::InputRequired => TaskPollDecision::InputRequired,
+            TaskStatus::Completed | TaskStatus::Failed | TaskStatus::Cancelled => {
+                TaskPollDecision::Terminal { status }
+            },
+        }
+    }
+
+    #[test]
+    fn poll_decision_maps_every_status() {
+        // Working -> InProgress carrying the poll_interval verbatim.
+        let working = Task::new("t-w", TaskStatus::Working).with_poll_interval(2500);
+        assert_eq!(
+            working.poll_decision(),
+            TaskPollDecision::InProgress {
+                poll_hint: Some(2500)
+            }
+        );
+
+        // Working with no poll_interval -> InProgress { poll_hint: None }.
+        let working_none = Task::new("t-wn", TaskStatus::Working);
+        assert_eq!(
+            working_none.poll_decision(),
+            TaskPollDecision::InProgress { poll_hint: None }
+        );
+
+        // InputRequired -> unit variant.
+        let waiting = Task::new("t-i", TaskStatus::InputRequired);
+        assert_eq!(waiting.poll_decision(), TaskPollDecision::InputRequired);
+
+        // Each terminal status -> Terminal carrying that status.
+        for status in [
+            TaskStatus::Completed,
+            TaskStatus::Failed,
+            TaskStatus::Cancelled,
+        ] {
+            let task = Task::new("t-term", status);
+            assert_eq!(
+                task.poll_decision(),
+                TaskPollDecision::Terminal { status },
+                "{status:?} must classify as Terminal"
+            );
+        }
+    }
+
+    #[test]
+    fn poll_decision_covers_all_statuses_exhaustively() {
+        // Table drive across EVERY TaskStatus value (guards D-15 exhaustiveness).
+        for status in ALL_STATUSES {
+            let task = Task::new("t-x", status).with_poll_interval(1234);
+            assert_eq!(
+                task.poll_decision(),
+                expected_decision(status, Some(1234)),
+                "poll_decision() drifted for {status:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn resolve_poll_interval_precedence() {
+        // Caller override wins over the server hint.
+        assert_eq!(resolve_poll_interval(Some(200), Some(999)), 200);
+        // Server hint used when there is no caller override.
+        assert_eq!(resolve_poll_interval(None, Some(300)), 300);
+        // Falls back to DEFAULT_POLL_MS when neither is specified.
+        assert_eq!(resolve_poll_interval(None, None), DEFAULT_POLL_MS);
+        assert_eq!(resolve_poll_interval(None, None), 1000);
+    }
+
+    #[test]
+    fn resolve_poll_interval_floors_zero() {
+        // A zero override cannot hot-spin — floored to MIN_POLL_MS.
+        assert_eq!(resolve_poll_interval(Some(0), None), MIN_POLL_MS);
+        assert_eq!(resolve_poll_interval(Some(0), None), 50);
+        // The floor also applies to a low server hint.
+        assert_eq!(resolve_poll_interval(None, Some(10)), 50);
+        // And to a zero hint.
+        assert_eq!(resolve_poll_interval(None, Some(0)), 50);
+    }
+
+    proptest::proptest! {
+        /// For every TaskStatus and any poll_interval, poll_decision() returns
+        /// exactly the mapped variant — the classifier never drifts.
+        #[test]
+        fn poll_decision_matches_expected_map(
+            status_idx in 0usize..ALL_STATUSES.len(),
+            poll_interval in proptest::option::of(proptest::prelude::any::<u64>()),
+        ) {
+            let status = ALL_STATUSES[status_idx];
+            let mut task = Task::new("t-prop", status);
+            task.poll_interval = poll_interval;
+            proptest::prop_assert_eq!(
+                task.poll_decision(),
+                expected_decision(status, poll_interval)
+            );
+        }
+
+        /// The 50 ms floor holds for ALL caller/hint inputs, not just the
+        /// tabled cases (T-105-01 invariant).
+        #[test]
+        fn resolve_poll_interval_never_below_floor(
+            caller in proptest::option::of(proptest::prelude::any::<u64>()),
+            hint in proptest::option::of(proptest::prelude::any::<u64>()),
+        ) {
+            proptest::prop_assert!(resolve_poll_interval(caller, hint) >= MIN_POLL_MS);
+        }
     }
 }
