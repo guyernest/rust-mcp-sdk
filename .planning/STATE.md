@@ -47,6 +47,10 @@ Progress: [████████████████████] 286/290
 
 ## Accumulated Context
 
+### Roadmap Evolution
+
+- Phase 105 added (2026-07-05): Task poll-decision classifier + durable-consumer docs — pmcp.run Ask A accepted (loop-free classifier shared with `wait_for_task`, durable/replay consumer doc page); Ask B (`tasks/provide_input` elicitation round-trip) deliberately deferred as spec-invention risk
+
 ### Decisions
 
 Decisions are logged in PROJECT.md Key Decisions table. Decisions framing this milestone:

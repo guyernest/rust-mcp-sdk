@@ -1328,6 +1328,22 @@ Plans:
 
 - Every behavioral-prose claim about Tasks (SSE, serverless, owner binding, experimental.tasks, TaskSupport::*, tasks/result, tasks/cancel, tasks/get, poll interval, pollInterval, CreateTaskResult) still accurately describes current `pmcp-tasks` behavior (revision R-5 — prose drift, not just type-name drift).
 
+### Phase 105: Task poll-decision classifier and durable-consumer docs
+
+**Goal**: Make `TaskStatus::InputRequired` an actionable state for every consumer shape by factoring the terminal/pollable/input-required poll decision OUT of `Client::wait_for_task`'s loop into a shared, loop-free classifier — `Terminal { status } | InProgress { poll_hint } | InputRequired { task } | Unpollable { reason }` — consumed internally by `wait_for_task` (D-05 single-decision discipline: the two poller shapes cannot drift) and callable per-poll by durable/replay consumers (Temporal-style `ctx.step`/`ctx.wait` loops that cannot block). Plus the docs half: a "Consuming tasks from a durable/replay workflow" page (rustdoc next to `wait_for_task` + pmcp-book) covering the typed-accessors-without-the-loop pattern, the replay-determinism caveat, and an explicit "when NOT to use `wait_for_task`" section. Note the classifier is a pure function of the polled `Task` — the terminal `CallToolResult` still comes from a separate `tasks/result` call the consumer owns (e.g., as its own memoized durable step).
+
+**Scope fences (LOCKED):** no wire changes (`tasks/provide_input` explicitly REJECTED as spec-invention — polling-client input provision is an upstream spec gap; the classifier's `InputRequired { task }` variant is the seam for when the WG standardizes it); no new `TaskStatus` variants; no change to `wait_for_task` blocking behavior or its `input_required` typed-error default (2.12.0 CR-01 fix stays).
+
+**Origin:** pmcp.run dev-team request `~/Development/mcp/sdk/pmcp-run/.planning/notes/sdk-issue-durable-task-consumer-and-input-required.md` — Ask A accepted (this phase), Ask B (task elicitation round-trip) deferred as spec-shaped, Ask C answered; SDK response at `pmcp-run/.planning/notes/sdk-response-durable-task-consumer-and-input-required.md`.
+
+**Requirements**: TBD
+**Depends on:** Phase 104 (shipped in pmcp 2.12.0)
+**Plans:** 0 plans
+
+Plans:
+
+- [ ] TBD (run /gsd:plan-phase 105 to break down)
+
 ---
 
 ### Phase 80: SEP-2640 Skills Support
