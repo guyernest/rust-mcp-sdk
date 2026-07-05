@@ -427,7 +427,9 @@ above are the only genuinely open choices, both LOW risk.
 
 ## Open Questions
 
-1. **Should `MIN_POLL_MS`/`DEFAULT_POLL_MS` become `pub const`?**
+*(Both resolved during planning — plans implement the recommendations below.)*
+
+1. **(RESOLVED — Plan 105-01 Task 2 exposes them as `pub const`)** **Should `MIN_POLL_MS`/`DEFAULT_POLL_MS` become `pub const`?**
    - What we know: They're private inline consts in `wait_for_task` (`src/client/mod.rs:686-688`);
      `MIN_POLL_MS` is referenced twice (resolver logic + budget clamp).
    - What's unclear: Whether to expose them (single source of truth, discoverable defaults) or
@@ -435,7 +437,7 @@ above are the only genuinely open choices, both LOW risk.
    - Recommendation: Expose as `pub const` in `src/types/tasks.rs` next to the resolver — makes
      the "50 ms floor / 1000 ms default" contract documentable and testable. Low risk.
 
-2. **Does the example (`s48`) need a distinct integration test, or does it double as one?**
+2. **(RESOLVED — Plan 105-03 follows the recommendation: pure unit/property test + runnable example; drift-pin stays in `tests/task_augmented_result.rs`)** **Does the example (`s48`) need a distinct integration test, or does it double as one?**
    - What we know: House ALWAYS rule wants example + unit + property + fuzz/proptest. The
      existing 11-test suite already covers `wait_for_task`.
    - What's unclear: Whether a separate `poll_decision` integration test over the duplex harness

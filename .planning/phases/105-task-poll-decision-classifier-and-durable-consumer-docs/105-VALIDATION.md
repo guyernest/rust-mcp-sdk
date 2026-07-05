@@ -1,8 +1,8 @@
 ---
 phase: 105
 slug: task-poll-decision-classifier-and-durable-consumer-docs
-status: draft
-nyquist_compliant: false
+status: approved
+nyquist_compliant: true
 wave_0_complete: false
 created: 2026-07-05
 ---
@@ -71,11 +71,11 @@ created: 2026-07-05
 
 ## Validation Sign-Off
 
-- [ ] All tasks have `<automated>` verify or Wave 0 dependencies
-- [ ] Sampling continuity: no 3 consecutive tasks without automated verify
-- [ ] Wave 0 covers all MISSING references
-- [ ] No watch-mode flags
-- [ ] Feedback latency < 60s
-- [ ] `nyquist_compliant: true` set in frontmatter
+- [x] All tasks have `<automated>` verify or Wave 0 dependencies (6/6 tasks carry automated verify — plan-checker Dimension 8a/8b PASS)
+- [x] Sampling continuity: no 3 consecutive tasks without automated verify (100% coverage — 8c PASS)
+- [x] Wave 0 covers all MISSING references (no `<automated>MISSING</automated>` markers — 8d PASS)
+- [x] No watch-mode flags
+- [x] Feedback latency < 60s
+- [x] `nyquist_compliant: true` set in frontmatter
 
-**Approval:** pending
+**Approval:** approved 2026-07-05 (gsd-plan-checker Dimension 8 PASS)
