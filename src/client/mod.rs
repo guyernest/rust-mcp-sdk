@@ -655,7 +655,10 @@ impl<T: Transport> Client<T> {
     ///
     /// - Propagates `tasks/get` / `tasks/result` transport and protocol errors.
     /// - Returns [`Error::Timeout`] when `opts.max_poll_duration_secs` elapses
-    ///   before the task reaches a terminal status.
+    ///   before the task reaches a terminal status. Each sleep is clamped to
+    ///   the remaining budget, so a large (possibly server-reported) poll
+    ///   interval cannot overshoot the caller's budget by more than roughly
+    ///   the 50 ms clamp floor.
     /// - Returns [`Error::Validation`] when the task enters
     ///   [`TaskStatus::InputRequired`]: that state is NOT terminal and needs
     ///   client-side action (elicitation) this poller cannot provide, so
@@ -706,18 +709,26 @@ impl<T: Transport> Client<T> {
                 )));
             }
 
-            // Enforce the overall polling budget before sleeping again.
-            if let Some(max_secs) = opts.max_poll_duration_secs {
-                if start.elapsed().as_secs() >= max_secs {
-                    return Err(Error::timeout(max_secs.saturating_mul(1000)));
-                }
-            }
-
-            let interval = opts
+            let mut interval = opts
                 .poll_interval
                 .or(task.poll_interval)
                 .unwrap_or(DEFAULT_POLL_MS)
                 .max(MIN_POLL_MS);
+
+            // Enforce the overall polling budget (millisecond precision) and
+            // clamp the next sleep to the REMAINING budget — the interval may
+            // be server-chosen (task-reported pollInterval), and an unclamped
+            // sleep would overshoot a caller-specified budget by up to one
+            // arbitrary server interval (WR-01).
+            if let Some(max_secs) = opts.max_poll_duration_secs {
+                let budget_ms = max_secs.saturating_mul(1000);
+                let elapsed_ms = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX);
+                let remaining_ms = budget_ms.saturating_sub(elapsed_ms);
+                if remaining_ms == 0 {
+                    return Err(Error::timeout(budget_ms));
+                }
+                interval = interval.min(remaining_ms.max(MIN_POLL_MS));
+            }
             crate::runtime::sleep(std::time::Duration::from_millis(interval)).await;
         }
 

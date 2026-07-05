@@ -372,6 +372,43 @@ mod live {
         );
     }
 
+    /// The sleep is clamped to the remaining budget: a huge poll interval must
+    /// not overshoot `max_poll_duration_secs` by an unbounded factor (WR-01).
+    /// With a 60 s interval and a 1 s budget, the timeout must be reported
+    /// near the budget, not after the first full interval.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn wait_for_task_timeout_is_not_overshot_by_large_interval() {
+        let server = build_server("stay_pending", pending_task_tool());
+        let (client_transport, server_transport) = DuplexTransport::pair();
+        spawn_counting_pump(server_transport, server, Arc::new(AtomicUsize::new(0)));
+
+        let mut client = Client::new(client_transport);
+        client
+            .initialize(ClientCapabilities::default())
+            .await
+            .expect("initialize");
+
+        let task_id = create_task(&mut client, "stay_pending").await;
+        let opts = WaitForTaskOptions {
+            poll_interval: Some(60_000),
+            max_poll_duration_secs: Some(1),
+        };
+        let started = std::time::Instant::now();
+        let err = client
+            .wait_for_task(&task_id, opts)
+            .await
+            .expect_err("a never-terminal task must time out");
+        assert!(
+            matches!(err, Error::Timeout(_)),
+            "expected a Timeout error, got: {err}"
+        );
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(5),
+            "timeout must be honored near the 1s budget, not the 60s interval; took {:?}",
+            started.elapsed()
+        );
+    }
+
     /// A task that enters `input_required` surfaces an error instead of
     /// spinning forever under the default (unbounded) options (CR-01):
     /// `input_required` is NOT terminal and needs client-side action the
