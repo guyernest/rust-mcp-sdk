@@ -65,7 +65,7 @@ created: 2026-07-05
 
 | Behavior | Requirement | Why Manual | Test Instructions |
 |----------|-------------|------------|-------------------|
-| pmcp-book durable-consumer page reads correctly and renders | D-11 | Prose quality/rendering not automatable beyond link check | `make doc-check`; open `pmcp-book/src/ch12-7-tasks.md` rendered output and review the new durable-consumer section |
+| pmcp-book durable-consumer page reads correctly and renders | D-11 | Prose quality not automatable; `make doc-check` checks only rustdoc (not mdbook anchors), `make book` only compiles the book — neither validates the intra-page anchor | `make book` (compiles book) + grep the `#durable-and-replay-consumers` slug matches the heading; then open the rendered `pmcp-book/src/ch12-7-tasks.md` and review the new durable-consumer section |
 
 ---
 
