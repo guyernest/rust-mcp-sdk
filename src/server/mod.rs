@@ -2850,6 +2850,9 @@ impl ServerBuilder {
     /// before the handler, and handler errors still route through the normal
     /// error path.
     ///
+    /// To advertise a human-readable tool description in `tools/list`, use
+    /// [`tool_with_result_and_description`](Self::tool_with_result_and_description).
+    ///
     /// # Example
     /// ```no_run
     /// # #[cfg(feature = "schema-generation")]
@@ -2900,6 +2903,87 @@ impl ServerBuilder {
 
         let name_str = name.into();
         let tool = TypedToolWithResult::new(name_str.clone(), handler);
+        self.tools.insert(name_str, Arc::new(tool));
+
+        // Update capabilities to include tools
+        if self.capabilities.tools.is_none() {
+            self.capabilities.tools = Some(crate::types::ToolCapabilities {
+                list_changed: Some(false),
+            });
+        }
+
+        self
+    }
+
+    /// [`tool_with_result`](Self::tool_with_result) WITH a human-readable
+    /// description advertised in `tools/list`.
+    ///
+    /// Identical to [`tool_with_result`](Self::tool_with_result) — including
+    /// the **BYPASS WARNING** documented there (the returned
+    /// [`CallToolResult`](crate::types::CallToolResult) goes to the wire
+    /// VERBATIM and skips response middleware) — but also sets the tool
+    /// description, mirroring
+    /// [`tool_typed_with_description`](Self::tool_typed_with_description).
+    /// A description materially improves LLM tool selection; prefer this
+    /// overload over the description-less
+    /// [`tool_with_result`](Self::tool_with_result).
+    ///
+    /// # Example
+    /// ```no_run
+    /// # #[cfg(feature = "schema-generation")]
+    /// # {
+    /// use pmcp::ServerBuilder;
+    /// use pmcp::types::CallToolResult;
+    /// use pmcp::types::tasks::TaskMetadata;
+    /// use pmcp::types::Content;
+    /// use schemars::JsonSchema;
+    /// use serde::Deserialize;
+    ///
+    /// #[derive(JsonSchema, Deserialize)]
+    /// struct RunArgs { job: String }
+    ///
+    /// let server = ServerBuilder::new()
+    ///     .name("example")
+    ///     .tool_with_result_and_description(
+    ///         "start_job",
+    ///         "Start a background export job and return its task handle",
+    ///         |args: RunArgs, _extra| {
+    ///             Box::pin(async move {
+    ///                 Ok(CallToolResult::new(vec![Content::text(
+    ///                     format!("started {}", args.job),
+    ///                 )])
+    ///                 .with_related_task(TaskMetadata::new("t1")))
+    ///             })
+    ///         },
+    ///     )
+    ///     .build();
+    /// # }
+    /// ```
+    #[cfg(feature = "schema-generation")]
+    pub fn tool_with_result_and_description<TIn>(
+        mut self,
+        name: impl Into<String>,
+        description: impl Into<String>,
+        handler: impl Fn(
+                TIn,
+                crate::RequestHandlerExtra,
+            ) -> std::pin::Pin<
+                Box<
+                    dyn std::future::Future<Output = crate::Result<crate::types::CallToolResult>>
+                        + Send,
+                >,
+            > + Send
+            + Sync
+            + 'static,
+    ) -> Self
+    where
+        TIn: serde::de::DeserializeOwned + schemars::JsonSchema + Send + Sync + 'static,
+    {
+        use crate::server::typed_tool::TypedToolWithResult;
+
+        let name_str = name.into();
+        let tool =
+            TypedToolWithResult::new(name_str.clone(), handler).with_description(description);
         self.tools.insert(name_str, Arc::new(tool));
 
         // Update capabilities to include tools

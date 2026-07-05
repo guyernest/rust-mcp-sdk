@@ -171,6 +171,57 @@ async fn tool_with_result_deserializes_typed_input() {
     assert_eq!(v["content"][0]["text"], "hello-typed");
 }
 
+/// `tool_with_result_and_description` advertises the description in
+/// `tools/list` AND keeps the verbatim `ToolOutput::Result` semantics (WR-04:
+/// the flagship migration sugar must not register description-less tools).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn tool_with_result_and_description_advertises_description() {
+    const DESCRIPTION: &str = "Starts a background export job";
+    let server = Server::builder()
+        .name("desc-server")
+        .version("1.0.0")
+        .tool_with_result_and_description("start_job", DESCRIPTION, |args: StartArgs, _extra| {
+            Box::pin(async move {
+                Ok(CallToolResult::new(vec![Content::text(args.job)])
+                    .with_related_task(TaskMetadata::new("t1")))
+            })
+        })
+        .build()
+        .expect("server builds");
+
+    let (client_t, server_t) = DuplexTransport::pair();
+    tokio::spawn(async move {
+        let _ = server.run(server_t).await;
+    });
+    let mut client = Client::new(client_t);
+    client
+        .initialize(ClientCapabilities::default())
+        .await
+        .expect("client initializes against server");
+
+    // The description lands in tools/list.
+    let tools = client.list_tools(None).await.expect("tools/list succeeds");
+    let tool = tools
+        .tools
+        .iter()
+        .find(|t| t.name == "start_job")
+        .expect("start_job must be advertised");
+    assert_eq!(
+        tool.description.as_deref(),
+        Some(DESCRIPTION),
+        "tool_with_result_and_description must advertise the description in tools/list"
+    );
+
+    // And the verbatim Result semantics are unchanged.
+    let result = client
+        .call_tool("start_job".to_string(), json!({ "job": "backfill" }))
+        .await
+        .expect("tools/call succeeds");
+    let v = serde_json::to_value(&result).expect("serialize");
+    assert_eq!(v["_meta"][RELATED_TASK_META_KEY]["taskId"], "t1");
+    assert_eq!(v["content"][0]["text"], "backfill");
+}
+
 // ---------------------------------------------------------------------------
 // Task 2: RequestHandlerExtra::set_result_meta — Payload-path _meta retrofit.
 // ---------------------------------------------------------------------------
