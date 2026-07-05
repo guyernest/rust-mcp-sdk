@@ -5,6 +5,49 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.12.0] - 2026-07-05
+
+Task-Augmented Tool Results DX (SEP-1686 junction). One additive feature set, no
+breaking changes: a tool can now return a full, task-augmented `CallToolResult`
+(`_meta` included) through normal `Server`/`ServerCore` dispatch without it being
+re-stringified into `content[0].text` — killing the silent double-wrap bug class
+(5 incident variants documented by the pmcp.run team, including a 2-week silent
+production outage).
+
+### Added — Task-augmented tool results (SEP-1686)
+
+- **`ToolOutput` enum + `ToolHandler::handle_output()`** — a handler can return
+  `ToolOutput::Result(CallToolResult)` to land its envelope on the wire VERBATIM
+  (`_meta` preserved, no text-wrap, no widget enrichment). The default
+  `handle_output()` delegates to `handle()` → `ToolOutput::Payload`, so every
+  existing handler is unchanged. Both native dispatchers (`Server` and
+  `ServerCore`) branch through one shared decision helper so they cannot drift.
+  ⚠ `ToolOutput::Result` deliberately **bypasses response middleware**
+  (redaction/sanitization/audit) — the handler owns its own redaction (D-04a);
+  request middleware, auth, and error routing are unchanged.
+- **`ServerBuilder::tool_with_result()` / `tool_with_result_and_description()`** —
+  typed-closure sugar (mirrors `tool_typed_with_output`) whose closure returns a
+  full `CallToolResult`; routed through `ToolOutput::Result`.
+- **`RequestHandlerExtra::set_result_meta()`** — lowest-friction `_meta` retrofit
+  for existing Payload-path handlers: merged into the outgoing result with
+  handler-key-wins precedence (unrelated widget/native `_meta` keys preserved).
+- **Double-wrap tripwire** — dispatch now emits a `tracing::warn!` (all builds)
+  and `debug_assert!`-fails (debug builds only; release never panics) when about
+  to text-wrap a `Value` that structurally IS an already-built `CallToolResult`
+  (high-precision envelope-key markers, no full deserialize). Per-tool opt-out:
+  `suppress_double_wrap_check(name)` on both builders.
+- **Client-side SEP-1686 surface** — typed `TaskMetadata`
+  (`_meta["io.modelcontextprotocol/related-task"]`),
+  `CallToolResult::with_related_task()` / `related_task()` accessor twins, and a
+  wasm-safe `Client::wait_for_task()` / `wait_for_related_task()` polling
+  convenience (`WaitForTaskOptions::from_metadata` composes straight from
+  `TaskMetadata`; timeout budget strictly honored; 50 ms interval floor;
+  non-terminal `input_required` surfaces as a typed error instead of hanging).
+- **Migration guide + example** — runnable BEFORE/AFTER example
+  `s47_task_augmented_result`, live-HTTP `_meta`-at-top-level regression test
+  consuming real dispatch output, `docs/design/sep-1686-task-augmented-results.md`,
+  and pmcp-book chapter 12.7 (Task-Augmented Tool Results).
+
 ## [2.11.0] - 2026-06-30
 
 Three additive feature sets, no breaking changes: (1) reusable browser web-channel

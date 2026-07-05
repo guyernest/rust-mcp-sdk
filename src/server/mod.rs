@@ -19,6 +19,8 @@ use serde_json::Value;
 #[cfg(not(target_arch = "wasm32"))]
 use std::collections::HashMap;
 #[cfg(not(target_arch = "wasm32"))]
+use std::collections::HashSet;
+#[cfg(not(target_arch = "wasm32"))]
 use std::sync::Arc;
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -223,6 +225,56 @@ mod core_tests;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod task_dispatch_tests;
 
+/// Output of a [`ToolHandler`] call: either a plain value the server wraps into a
+/// `CallToolResult`, or a fully-formed `CallToolResult` the handler owns end-to-end.
+///
+/// A handler that implements only [`ToolHandler::handle`] (the common case) never
+/// constructs this enum — the default [`ToolHandler::handle_output`] wraps the
+/// returned value in [`ToolOutput::Payload`], preserving today's behavior exactly.
+///
+/// This is a *control* enum consumed inside the server dispatch tail, NOT a wire
+/// type — it deliberately does not derive `Serialize`/`Deserialize`.
+///
+/// Marked `#[non_exhaustive]`: additional output modes may be added in a
+/// backwards-compatible way, so downstream `match`es must include a wildcard arm.
+#[cfg(not(target_arch = "wasm32"))]
+#[non_exhaustive]
+#[derive(Debug)]
+pub enum ToolOutput {
+    /// A plain value. The server runs it through the existing tail: response
+    /// middleware (redaction/sanitization), the Phase 102 task create-path gate,
+    /// and text-wrap / widget enrichment — byte-identical to returning a `Value`
+    /// from [`ToolHandler::handle`] today.
+    Payload(serde_json::Value),
+
+    /// A fully-formed `CallToolResult` the handler owns.
+    ///
+    /// # ⚠️ BYPASS WARNING — this variant is sent to the wire VERBATIM
+    ///
+    /// The contained [`CallToolResult`] is
+    /// serialized and returned to the client **exactly as provided**. It
+    /// **BYPASSES**:
+    /// - **response middleware** — redaction, sanitization, and audit hooks
+    ///   (`ToolMiddleware::on_response`) DO NOT run for this variant;
+    /// - **text-wrapping** — `content` is not synthesized from a stringified value;
+    /// - **widget enrichment** — `structured_content` / `_meta` are not injected.
+    ///
+    /// The handler is therefore responsible for its OWN redaction and
+    /// sanitization of both `content` and `_meta`, at the same trust level as
+    /// returning a raw `Value` today. This is a deliberate, user-approved design
+    /// choice (D-04a): a handler that needs to own the full envelope (e.g. to set
+    /// `_meta[relatedTask]`) opts into owning its security posture too.
+    ///
+    /// What is **NOT** bypassed: **request** middleware
+    /// (`ToolMiddleware::on_request`) still runs before the handler executes, and
+    /// handler errors still route through the normal error path. Only the
+    /// successful `Result` arm skips response middleware.
+    ///
+    /// See the phase migration guide for how to move a hand-written handler onto
+    /// this variant safely.
+    Result(crate::types::CallToolResult),
+}
+
 /// Handler for tool execution.
 #[cfg(not(target_arch = "wasm32"))]
 #[async_trait]
@@ -234,6 +286,24 @@ pub trait ToolHandler: Send + Sync {
     /// Returns None to use default empty metadata.
     fn metadata(&self) -> Option<crate::types::ToolInfo> {
         None
+    }
+
+    /// Produce the tool's [`ToolOutput`] for a call.
+    ///
+    /// The DEFAULT delegates to [`ToolHandler::handle`] and wraps the returned
+    /// value in [`ToolOutput::Payload`], so existing handlers (which implement
+    /// only `handle`) keep their exact current behavior — response middleware,
+    /// the create-path gate, and text-wrap all apply unchanged.
+    ///
+    /// Override this to return [`ToolOutput::Result`] and own the full
+    /// `CallToolResult` envelope. Read the [`ToolOutput::Result`] docs FIRST —
+    /// that path bypasses response middleware and you own your own redaction.
+    async fn handle_output(
+        &self,
+        args: Value,
+        extra: cancellation::RequestHandlerExtra,
+    ) -> Result<ToolOutput> {
+        self.handle(args, extra).await.map(ToolOutput::Payload)
     }
 }
 
@@ -367,6 +437,12 @@ pub struct Server {
     /// `tasks/*` endpoints + create-path via the shared `task_dispatch` unit.
     #[cfg(not(target_arch = "wasm32"))]
     task_store: Option<Arc<dyn crate::server::task_store::TaskStore>>,
+    /// Per-tool TOUT-02 double-wrap tripwire opt-out set (D-08). A tool named
+    /// here has the tripwire suppressed at the Payload wrap site. Threaded from
+    /// `ServerBuilder::suppress_double_wrap_check`; `ServerCore` carries an
+    /// IDENTICAL set so both dispatchers consult the same suppression rule.
+    #[cfg(not(target_arch = "wasm32"))]
+    suppress_double_wrap: HashSet<String>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -1373,48 +1449,72 @@ impl Server {
             .with_progress_reporter(progress_reporter),
         );
 
+        // D-03.3 (TOUT-01): clone the interior-mutable result-`_meta` slot BEFORE
+        // `extra` is moved into `handle_output`, so any `extra.set_result_meta(..)`
+        // the handler performs can be drained back onto the Payload-path result.
+        #[cfg(not(target_arch = "wasm32"))]
+        let result_meta_handle = extra.result_meta_handle();
+
         // Execute tool with middleware (native-only)
         #[cfg(not(target_arch = "wasm32"))]
-        let result = {
+        let dispatch_output = {
             // Create tool context for middleware
             let context = tool_middleware::ToolContext::new(&req.name, &request_id_str);
 
             // Clone arguments for middleware processing
             let mut args = req.arguments;
 
-            // Process request through tool middleware chain
-            // Middleware rejection short-circuits tool execution
+            // Process request through tool middleware chain.
+            // Middleware rejection short-circuits tool execution. REQUEST
+            // middleware runs BEFORE the handler for EVERY tool, regardless of the
+            // ToolOutput variant it will return (kept here so it fires on both the
+            // Payload and the verbatim Result path).
             self.tool_middleware_chain
                 .read()
                 .await
                 .process_request(&req.name, &mut args, &mut extra, &context)
                 .await?;
 
-            // Execute the tool with potentially modified args and extra
-            let mut result = handler.handle(args, extra).await;
+            // Execute the tool. `handle_output` returns `Result<ToolOutput>`; the
+            // SHARED `resolve_tool_output` (D-05) is the SINGLE place that decides
+            // Payload-vs-Result and encodes the response-middleware-bypass rule, so
+            // this dispatcher and `ServerCore` can never drift on it.
+            let output = handler.handle_output(args, extra).await;
+            let mut resolved = task_dispatch::resolve_tool_output(output);
 
-            // Process response through tool middleware chain
-            if let Err(e) = self
-                .tool_middleware_chain
-                .read()
-                .await
-                .process_response(&req.name, &mut result, &context)
-                .await
-            {
-                // Log error but continue with original result
-                tracing::warn!("Tool response middleware processing failed: {}", e);
-            }
-
-            // If tool execution failed, call handle_tool_error
-            if let Err(ref e) = result {
-                self.tool_middleware_chain
+            // Why: `ToolOutput::Result` deliberately BYPASSES RESPONSE middleware
+            // (D-04 + D-04a — USER-APPROVED and LOCKED: "keep the bypass, harden
+            // it"). The handler owns the full envelope, including its own
+            // redaction/sanitization, at the same trust level as returning a raw
+            // Value today. RESPONSE middleware (redaction/sanitization/audit) +
+            // `handle_tool_error` therefore run ONLY for the Payload/error arm
+            // below; REQUEST middleware already fired above for EVERY tool, and a
+            // handler `Err(_)` still routes through `handle_tool_error` via this
+            // arm (the bypass is scoped to the successful `Verbatim` arm only).
+            if let task_dispatch::DispatchOutput::Middleware(ref mut result) = resolved {
+                // Process response through tool middleware chain
+                if let Err(e) = self
+                    .tool_middleware_chain
                     .read()
                     .await
-                    .handle_tool_error(&req.name, e, &context)
-                    .await;
+                    .process_response(&req.name, result, &context)
+                    .await
+                {
+                    // Log error but continue with original result
+                    tracing::warn!("Tool response middleware processing failed: {}", e);
+                }
+
+                // If tool execution failed, call handle_tool_error
+                if let Err(ref e) = result {
+                    self.tool_middleware_chain
+                        .read()
+                        .await
+                        .handle_tool_error(&req.name, e, &context)
+                        .await;
+                }
             }
 
-            result
+            resolved
         };
 
         // On WASM, execute tool directly without middleware
@@ -1422,25 +1522,36 @@ impl Server {
         let result = handler.handle(req.arguments, extra).await;
 
         // Token cleanup is unconditional (success or failure) and does not
-        // touch `result`, so it runs once before the value/error split.
+        // touch the outcome, so it runs once before the value/error split —
+        // preserving cleanup parity for the verbatim `ToolOutput::Result` arm.
         self.cancellation_manager
             .remove_token(&request_id_str)
             .await;
-        let result = match result {
-            Ok(v) => v,
-            // `Error::ToolRejected` is an APPLICATION-level rejection (e.g.
-            // Code Mode policy: a SELECT missing its LIMIT), not a protocol
-            // fault. Map it to a successful `CallToolResult { isError: true }`
-            // (message → content, details → structuredContent) so the model
-            // reads the reason and retries with corrected input, instead of
-            // `?`-propagating a JSON-RPC error that reads as a server crash.
-            // All other errors keep propagating as protocol errors.
-            Err(Error::ToolRejected { message, details }) => {
-                return Ok(serde_json::to_value(CallToolResult::rejected(
-                    message, details,
-                ))?);
+        let result = match dispatch_output {
+            // VERBATIM (D-04 + D-04a): the handler owns the full `CallToolResult`
+            // envelope — emit it to the wire as-is. RESPONSE middleware, the
+            // create-path gate, text-wrap, and widget enrichment are ALL bypassed
+            // (mirrors the `ToolRejected` verbatim early-return below, which also
+            // returns after the unconditional token cleanup).
+            task_dispatch::DispatchOutput::Verbatim(call_result) => {
+                return Ok(serde_json::to_value(call_result)?);
             },
-            Err(e) => return Err(e),
+            task_dispatch::DispatchOutput::Middleware(result) => match result {
+                Ok(v) => v,
+                // `Error::ToolRejected` is an APPLICATION-level rejection (e.g.
+                // Code Mode policy: a SELECT missing its LIMIT), not a protocol
+                // fault. Map it to a successful `CallToolResult { isError: true }`
+                // (message → content, details → structuredContent) so the model
+                // reads the reason and retries with corrected input, instead of
+                // `?`-propagating a JSON-RPC error that reads as a server crash.
+                // All other errors keep propagating as protocol errors.
+                Err(Error::ToolRejected { message, details }) => {
+                    return Ok(serde_json::to_value(CallToolResult::rejected(
+                        message, details,
+                    ))?);
+                },
+                Err(e) => return Err(e),
+            },
         };
 
         // CREATE-PATH (Phase 102, HTASK-02): a task-augmented `tools/call` over
@@ -1489,12 +1600,34 @@ impl Server {
             }
         }
 
+        // TOUT-02 double-wrap tripwire: BEFORE stringifying `result` into text
+        // content, WARN (+ debug_assert in debug/CI) if it structurally resembles
+        // an already-built `CallToolResult` — the silent double-wrap bug. Honors
+        // the per-tool `suppress_double_wrap_check` opt-out (D-08). Non-wasm only
+        // (the `task_dispatch` unit is non-wasm, matching the create-path above).
+        #[cfg(not(target_arch = "wasm32"))]
+        task_dispatch::double_wrap_tripwire(
+            &req.name,
+            &result,
+            self.suppress_double_wrap.contains(req.name.as_str()),
+        );
+
         // Build CallToolResult, adding structured_content for widget tools
         let text = result.to_string();
         let mut call_result = CallToolResult::new(vec![crate::types::Content::text(text)]);
 
         if let Some(info) = self.tool_infos.get(&req.name) {
             call_result = call_result.with_widget_enrichment(info, result);
+        }
+
+        // D-03.3: drain any handler-set result `_meta` (via extra.set_result_meta)
+        // and merge it onto the Payload-built envelope with handler-key-wins
+        // precedence (unrelated widget/native keys preserved). Payload path ONLY —
+        // the verbatim `ToolOutput::Result` arm above returns earlier and owns its
+        // own `_meta`, so it never reaches here.
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(handler_meta) = result_meta_handle.take_result_meta() {
+            crate::server::cancellation::merge_result_meta(&mut call_result, handler_meta);
         }
 
         Ok(serde_json::to_value(call_result)?)
@@ -2064,6 +2197,11 @@ pub struct ServerBuilder {
     /// auto-advertises the `tasks` capability at `build()`.
     #[cfg(not(target_arch = "wasm32"))]
     task_store: Option<Arc<dyn crate::server::task_store::TaskStore>>,
+    /// Tool names opting out of the TOUT-02 double-wrap tripwire (D-08), set via
+    /// [`Self::suppress_double_wrap_check`]. Carried into the built `Server` and
+    /// consulted at the Payload wrap site.
+    #[cfg(not(target_arch = "wasm32"))]
+    suppress_double_wrap: HashSet<String>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -2131,6 +2269,8 @@ impl ServerBuilder {
             task_router: None,
             #[cfg(not(target_arch = "wasm32"))]
             task_store: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            suppress_double_wrap: HashSet::new(),
         }
     }
 
@@ -2674,6 +2814,176 @@ impl ServerBuilder {
 
         let name_str = name.into();
         let tool = TypedToolWithOutput::new(name_str.clone(), handler);
+        self.tools.insert(name_str, Arc::new(tool));
+
+        // Update capabilities to include tools
+        if self.capabilities.tools.is_none() {
+            self.capabilities.tools = Some(crate::types::ToolCapabilities {
+                list_changed: Some(false),
+            });
+        }
+
+        self
+    }
+
+    /// Register a tool whose async closure returns a full [`CallToolResult`] the
+    /// handler owns end-to-end, emitted to the wire **VERBATIM**.
+    ///
+    /// This mirrors [`tool_typed_with_output`](Self::tool_typed_with_output) but
+    /// fixes the return type to
+    /// [`CallToolResult`], so a handler can attach
+    /// task augmentation (`CallToolResult::with_related_task(...)`), custom
+    /// `_meta`, structured content, or an error envelope in ONE call — no
+    /// hand-written [`ToolHandler`] `impl` required. The input
+    /// arg type `TIn` deserializes from the tool arguments exactly as with
+    /// [`tool_typed`](Self::tool_typed).
+    ///
+    /// # ⚠️ BYPASS WARNING — the returned result is sent to the wire VERBATIM
+    ///
+    /// The closure's [`CallToolResult`] is routed
+    /// through [`ToolOutput::Result`] and
+    /// therefore **BYPASSES response middleware** — redaction, sanitization, and
+    /// audit hooks (`ToolMiddleware::on_response`) DO NOT run — as well as
+    /// text-wrapping and widget enrichment. The handler owns its OWN redaction
+    /// and sanitization of both `content` and `_meta`, at the same trust level as
+    /// returning a raw `Value` today (D-04a). **Request** middleware still runs
+    /// before the handler, and handler errors still route through the normal
+    /// error path.
+    ///
+    /// To advertise a human-readable tool description in `tools/list`, use
+    /// [`tool_with_result_and_description`](Self::tool_with_result_and_description).
+    ///
+    /// # Example
+    /// ```no_run
+    /// # #[cfg(feature = "schema-generation")]
+    /// # {
+    /// use pmcp::ServerBuilder;
+    /// use pmcp::types::CallToolResult;
+    /// use pmcp::types::tasks::TaskMetadata;
+    /// use pmcp::types::Content;
+    /// use schemars::JsonSchema;
+    /// use serde::Deserialize;
+    ///
+    /// #[derive(JsonSchema, Deserialize)]
+    /// struct RunArgs { job: String }
+    ///
+    /// let server = ServerBuilder::new()
+    ///     .name("example")
+    ///     .tool_with_result("start_job", |args: RunArgs, _extra| {
+    ///         Box::pin(async move {
+    ///             Ok(CallToolResult::new(vec![Content::text(
+    ///                 format!("started {}", args.job),
+    ///             )])
+    ///             .with_related_task(TaskMetadata::new("t1")))
+    ///         })
+    ///     })
+    ///     .build();
+    /// # }
+    /// ```
+    #[cfg(feature = "schema-generation")]
+    pub fn tool_with_result<TIn>(
+        mut self,
+        name: impl Into<String>,
+        handler: impl Fn(
+                TIn,
+                crate::RequestHandlerExtra,
+            ) -> std::pin::Pin<
+                Box<
+                    dyn std::future::Future<Output = crate::Result<crate::types::CallToolResult>>
+                        + Send,
+                >,
+            > + Send
+            + Sync
+            + 'static,
+    ) -> Self
+    where
+        TIn: serde::de::DeserializeOwned + schemars::JsonSchema + Send + Sync + 'static,
+    {
+        use crate::server::typed_tool::TypedToolWithResult;
+
+        let name_str = name.into();
+        let tool = TypedToolWithResult::new(name_str.clone(), handler);
+        self.tools.insert(name_str, Arc::new(tool));
+
+        // Update capabilities to include tools
+        if self.capabilities.tools.is_none() {
+            self.capabilities.tools = Some(crate::types::ToolCapabilities {
+                list_changed: Some(false),
+            });
+        }
+
+        self
+    }
+
+    /// [`tool_with_result`](Self::tool_with_result) WITH a human-readable
+    /// description advertised in `tools/list`.
+    ///
+    /// Identical to [`tool_with_result`](Self::tool_with_result) — including
+    /// the **BYPASS WARNING** documented there (the returned
+    /// [`CallToolResult`] goes to the wire
+    /// VERBATIM and skips response middleware) — but also sets the tool
+    /// description, mirroring
+    /// [`tool_typed_with_description`](Self::tool_typed_with_description).
+    /// A description materially improves LLM tool selection; prefer this
+    /// overload over the description-less
+    /// [`tool_with_result`](Self::tool_with_result).
+    ///
+    /// # Example
+    /// ```no_run
+    /// # #[cfg(feature = "schema-generation")]
+    /// # {
+    /// use pmcp::ServerBuilder;
+    /// use pmcp::types::CallToolResult;
+    /// use pmcp::types::tasks::TaskMetadata;
+    /// use pmcp::types::Content;
+    /// use schemars::JsonSchema;
+    /// use serde::Deserialize;
+    ///
+    /// #[derive(JsonSchema, Deserialize)]
+    /// struct RunArgs { job: String }
+    ///
+    /// let server = ServerBuilder::new()
+    ///     .name("example")
+    ///     .tool_with_result_and_description(
+    ///         "start_job",
+    ///         "Start a background export job and return its task handle",
+    ///         |args: RunArgs, _extra| {
+    ///             Box::pin(async move {
+    ///                 Ok(CallToolResult::new(vec![Content::text(
+    ///                     format!("started {}", args.job),
+    ///                 )])
+    ///                 .with_related_task(TaskMetadata::new("t1")))
+    ///             })
+    ///         },
+    ///     )
+    ///     .build();
+    /// # }
+    /// ```
+    #[cfg(feature = "schema-generation")]
+    pub fn tool_with_result_and_description<TIn>(
+        mut self,
+        name: impl Into<String>,
+        description: impl Into<String>,
+        handler: impl Fn(
+                TIn,
+                crate::RequestHandlerExtra,
+            ) -> std::pin::Pin<
+                Box<
+                    dyn std::future::Future<Output = crate::Result<crate::types::CallToolResult>>
+                        + Send,
+                >,
+            > + Send
+            + Sync
+            + 'static,
+    ) -> Self
+    where
+        TIn: serde::de::DeserializeOwned + schemars::JsonSchema + Send + Sync + 'static,
+    {
+        use crate::server::typed_tool::TypedToolWithResult;
+
+        let name_str = name.into();
+        let tool =
+            TypedToolWithResult::new(name_str.clone(), handler).with_description(description);
         self.tools.insert(name_str, Arc::new(tool));
 
         // Update capabilities to include tools
@@ -3778,6 +4088,30 @@ impl ServerBuilder {
         self
     }
 
+    /// Opt a tool OUT of the TOUT-02 double-wrap tripwire (D-08).
+    ///
+    /// The tripwire WARNs (every build) and `debug_assert!`-fails (debug/CI)
+    /// when a tool returns a `ToolOutput::Payload` `Value` that STRUCTURALLY
+    /// resembles an already-built `CallToolResult` (a non-empty `content` array
+    /// of `Content`, or a `_meta` related-task envelope) — the silent
+    /// double-wrap bug. Naming a tool here suppresses that check for it.
+    ///
+    /// SUPPRESSION SHOULD BE RARE AND REVIEWED: it disables a safety tripwire for
+    /// one tool whose LEGITIMATE payload happens to trip the heuristic. Prefer
+    /// returning [`ToolOutput::Result`] so the
+    /// handler owns the full envelope verbatim, rather than suppressing. Reach
+    /// for this only when a tool genuinely produces a plain `Value` that mimics a
+    /// result shape and cannot be restructured.
+    ///
+    /// The same suppression set is carried into `ServerCore`, so both native
+    /// dispatchers honor the opt-out identically (no drift).
+    #[cfg(not(target_arch = "wasm32"))]
+    #[must_use]
+    pub fn suppress_double_wrap_check(mut self, name: impl Into<String>) -> Self {
+        self.suppress_double_wrap.insert(name.into());
+        self
+    }
+
     /// Returns an error if:
     /// - The server name is not set
     /// - The server version is not set
@@ -3919,6 +4253,8 @@ impl ServerBuilder {
             task_router: self.task_router,
             #[cfg(not(target_arch = "wasm32"))]
             task_store: self.task_store,
+            #[cfg(not(target_arch = "wasm32"))]
+            suppress_double_wrap: self.suppress_double_wrap,
         })
     }
 }
@@ -5244,6 +5580,44 @@ mod skills_builder_tests {
         let ext = server.capabilities.extensions.as_ref();
         if let Some(ext_map) = ext {
             assert!(!ext_map.contains_key("io.modelcontextprotocol/skills"));
+        }
+    }
+}
+
+#[cfg(test)]
+#[cfg(not(target_arch = "wasm32"))]
+mod tool_output_tests {
+    use super::*;
+    use crate::server::cancellation::RequestHandlerExtra;
+    use async_trait::async_trait;
+
+    /// A handler that implements ONLY `handle` (no `handle_output` override) —
+    /// the common case. It must route through the default `handle_output` and
+    /// come back as `ToolOutput::Payload` equal to what `handle` returned.
+    struct PlainHandler;
+
+    #[async_trait]
+    impl ToolHandler for PlainHandler {
+        async fn handle(&self, args: Value, _extra: RequestHandlerExtra) -> Result<Value> {
+            Ok(serde_json::json!({ "echo": args }))
+        }
+    }
+
+    #[tokio::test]
+    async fn default_handle_output_delegates_to_handle_as_payload() {
+        let handler = PlainHandler;
+        let extra = RequestHandlerExtra::new("req-1".to_string(), Default::default());
+        let args = serde_json::json!({ "n": 42 });
+
+        let value_via_handle = handler.handle(args.clone(), extra.clone()).await.unwrap();
+        let output = handler.handle_output(args, extra).await.unwrap();
+
+        match output {
+            ToolOutput::Payload(v) => assert_eq!(
+                v, value_via_handle,
+                "default handle_output must wrap handle()'s value as Payload"
+            ),
+            other => panic!("expected ToolOutput::Payload, got {other:?}"),
         }
     }
 }

@@ -4,7 +4,7 @@
 //! input and output typing support. For WASM environments, see `wasm_typed_tool.rs`
 //! which provides input typing only due to async constraints.
 
-use crate::types::{ToolAnnotations, ToolExecution, ToolInfo};
+use crate::types::{CallToolResult, ToolAnnotations, ToolExecution, ToolInfo};
 use crate::{Error, Result};
 use async_trait::async_trait;
 use serde::de::DeserializeOwned;
@@ -16,7 +16,7 @@ use std::marker::PhantomData;
 use std::pin::Pin;
 
 use super::cancellation::RequestHandlerExtra;
-use super::ToolHandler;
+use super::{ToolHandler, ToolOutput};
 
 #[cfg(feature = "schema-generation")]
 use schemars::JsonSchema;
@@ -781,6 +781,142 @@ where
             icons: None,
             _meta: crate::types::ui::build_ui_meta(self.ui_resource_uri.as_deref()),
             execution: self.execution.clone(),
+        })
+    }
+}
+
+/// A typed tool whose async closure returns a full [`CallToolResult`] the handler
+/// owns end-to-end, emitted to the wire **VERBATIM**.
+///
+/// Registered by
+/// [`ServerBuilder::tool_with_result`](crate::server::ServerBuilder::tool_with_result).
+/// Unlike [`TypedToolWithOutput`] — which serializes a typed `TOut` into a value
+/// the server then text-wraps / widget-enriches — this wrapper's
+/// [`ToolHandler::handle_output`] override returns
+/// [`ToolOutput::Result`], so the closure's
+/// `CallToolResult` reaches the wire exactly as provided.
+///
+/// # ⚠️ Bypass warning
+///
+/// Because the result is emitted verbatim (see
+/// [`ToolOutput::Result`]), it **bypasses
+/// response middleware** (redaction / sanitization / audit) as well as
+/// text-wrapping and widget enrichment. The closure owns its OWN redaction and
+/// sanitization of both `content` and `_meta`, at the same trust level as
+/// returning a raw `Value` today (D-04a).
+pub struct TypedToolWithResult<TIn, F>
+where
+    TIn: DeserializeOwned + Send + Sync + 'static,
+    F: Fn(TIn, RequestHandlerExtra) -> Pin<Box<dyn Future<Output = Result<CallToolResult>> + Send>>
+        + Send
+        + Sync,
+{
+    name: String,
+    description: Option<String>,
+    input_schema: Value,
+    handler: F,
+    _phantom: PhantomData<TIn>,
+}
+
+impl<TIn, F> fmt::Debug for TypedToolWithResult<TIn, F>
+where
+    TIn: DeserializeOwned + Send + Sync + 'static,
+    F: Fn(TIn, RequestHandlerExtra) -> Pin<Box<dyn Future<Output = Result<CallToolResult>> + Send>>
+        + Send
+        + Sync,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TypedToolWithResult")
+            .field("name", &self.name)
+            .field("description", &self.description)
+            .field("input_schema", &self.input_schema)
+            .finish()
+    }
+}
+
+impl<TIn, F> TypedToolWithResult<TIn, F>
+where
+    TIn: DeserializeOwned + Send + Sync + 'static,
+    F: Fn(TIn, RequestHandlerExtra) -> Pin<Box<dyn Future<Output = Result<CallToolResult>> + Send>>
+        + Send
+        + Sync,
+{
+    /// Create a new full-result tool with automatic input schema generation.
+    #[cfg(feature = "schema-generation")]
+    pub fn new(name: impl Into<String>, handler: F) -> Self
+    where
+        TIn: JsonSchema,
+    {
+        Self {
+            name: name.into(),
+            description: None,
+            input_schema: generate_schema::<TIn>(),
+            handler,
+            _phantom: PhantomData,
+        }
+    }
+
+    /// Create with a manually provided input schema.
+    pub fn new_with_schema(name: impl Into<String>, input_schema: Value, handler: F) -> Self {
+        Self {
+            name: name.into(),
+            description: None,
+            input_schema,
+            handler,
+            _phantom: PhantomData,
+        }
+    }
+
+    /// Set the description for this tool.
+    pub fn with_description(mut self, description: impl Into<String>) -> Self {
+        self.description = Some(description.into());
+        self
+    }
+
+    /// Deserialize the arguments and run the closure, producing the owned
+    /// `CallToolResult`. Shared by `handle` (fallback) and `handle_output` (the
+    /// real verbatim path).
+    async fn run(&self, args: Value, extra: RequestHandlerExtra) -> Result<CallToolResult> {
+        let typed_args: TIn = serde_json::from_value(args).map_err(|e| {
+            Error::Validation(format!("Invalid arguments for tool '{}': {}", self.name, e))
+        })?;
+        (self.handler)(typed_args, extra).await
+    }
+}
+
+#[async_trait]
+impl<TIn, F> ToolHandler for TypedToolWithResult<TIn, F>
+where
+    TIn: DeserializeOwned + Send + Sync + 'static,
+    F: Fn(TIn, RequestHandlerExtra) -> Pin<Box<dyn Future<Output = Result<CallToolResult>> + Send>>
+        + Send
+        + Sync,
+{
+    async fn handle(&self, args: Value, extra: RequestHandlerExtra) -> Result<Value> {
+        // Fallback for callers that only invoke `handle` (e.g. workflow-internal
+        // tool steps): serialize the owned envelope to a Value. The real
+        // dispatch path is `handle_output` below, which emits the envelope
+        // VERBATIM as `ToolOutput::Result`.
+        let result = self.run(args, extra).await?;
+        serde_json::to_value(result)
+            .map_err(|e| Error::Internal(format!("Failed to serialize CallToolResult: {}", e)))
+    }
+
+    async fn handle_output(&self, args: Value, extra: RequestHandlerExtra) -> Result<ToolOutput> {
+        Ok(ToolOutput::Result(self.run(args, extra).await?))
+    }
+
+    fn metadata(&self) -> Option<ToolInfo> {
+        Some(ToolInfo {
+            name: self.name.clone(),
+            title: None,
+            description: self.description.clone(),
+            input_schema: self.input_schema.clone(),
+            output_schema: None,
+            annotations: None,
+            icons: None,
+            _meta: None,
+            execution: None,
         })
     }
 }

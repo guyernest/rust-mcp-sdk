@@ -40,7 +40,7 @@ use crate::types::jsonrpc::ResponsePayload;
 use crate::types::tasks::{TaskStatus, RELATED_TASK_META_KEY};
 use crate::types::tools::TaskSupport;
 use crate::types::{
-    CallToolResult, ClientRequest, JSONRPCError, JSONRPCResponse, RequestId, ToolInfo,
+    CallToolResult, ClientRequest, Content, JSONRPCError, JSONRPCResponse, RequestId, ToolInfo,
 };
 use serde_json::Value;
 use std::collections::HashMap;
@@ -141,6 +141,192 @@ pub(crate) fn error_response(id: RequestId, code: i32, message: String) -> JSONR
             data: None,
         }),
     }
+}
+
+/// Resolution of a [`ToolHandler`](crate::server::ToolHandler)'s
+/// [`ToolOutput`](crate::server::ToolOutput) at a NATIVE dispatch tail.
+///
+/// This is the SINGLE place (D-05 anti-drift) where the `Payload`-vs-`Result`
+/// decision AND the response-middleware-bypass rule live. BOTH native dispatchers
+/// (`Server::handle_call_tool` and `ServerCore::handle_call_tool`) resolve their
+/// handler's `Result<ToolOutput>` through [`resolve_tool_output`] and branch on
+/// this enum identically, so the two dispatchers can never drift on the rule.
+pub(crate) enum DispatchOutput {
+    /// `ToolOutput::Result` — send this `CallToolResult` to the wire VERBATIM.
+    ///
+    /// The dispatcher must BYPASS response middleware, the create-path gate, and
+    /// text-wrap / widget enrichment for this arm (D-04 + D-04a, USER-APPROVED and
+    /// LOCKED — the handler owns the full envelope, including its own redaction).
+    /// REQUEST middleware and the handler-error path are unaffected: they run
+    /// before this resolution, so only the SUCCESSFUL `Result` arm is verbatim.
+    Verbatim(CallToolResult),
+
+    /// `ToolOutput::Payload(v)` OR a handler `Err(_)` — coerced back into the
+    /// existing `Result<Value>` middleware variable and fed through the UNCHANGED
+    /// tail: response middleware, `handle_tool_error`, the create-path gate, and
+    /// the text-wrap / widget enrichment, exactly as before this feature existed.
+    Middleware(Result<Value>),
+}
+
+/// Resolve a handler's `Result<ToolOutput>` into the shared [`DispatchOutput`]
+/// decision (D-05: one copy of the Payload-vs-Result + bypass rule).
+///
+/// - `Ok(ToolOutput::Result(r))` → [`DispatchOutput::Verbatim`] (wire-verbatim,
+///   bypasses RESPONSE middleware + create-path + wrap);
+/// - `Ok(ToolOutput::Payload(v))` → [`DispatchOutput::Middleware(Ok(v))`];
+/// - `Err(e)` → [`DispatchOutput::Middleware(Err(e))`] (handler errors STILL flow
+///   through `process_response` / `handle_tool_error` — the bypass is scoped to
+///   the `Ok(Result(_))` arm only).
+///
+/// Matching a `#[non_exhaustive]` enum from WITHIN the defining crate is exhaustive
+/// (the attribute only constrains downstream crates), so no wildcard arm is needed.
+// Why: called by both native dispatch tails (mod.rs + core.rs handle_call_tool);
+// production-reachable, no dead_code allow needed.
+pub(crate) fn resolve_tool_output(output: Result<crate::server::ToolOutput>) -> DispatchOutput {
+    match output {
+        Ok(crate::server::ToolOutput::Result(call_result)) => DispatchOutput::Verbatim(call_result),
+        Ok(crate::server::ToolOutput::Payload(value)) => DispatchOutput::Middleware(Ok(value)),
+        Err(e) => DispatchOutput::Middleware(Err(e)),
+    }
+}
+
+/// Which high-precision structural marker tripped the double-wrap detector.
+///
+/// Reported in the TOUT-02 WARN / `debug_assert!` so an author immediately sees
+/// WHY a `Value` about to be text-wrapped looked like an already-built
+/// [`CallToolResult`]. `Copy` (two field-less variants); it never escapes the
+/// server crate (exposed to integration tests only via the hidden
+/// `pmcp::__test_support` seam, mirroring `ServerRequestDispatcher`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DoubleWrapMarker {
+    /// The value carries a `_meta` object holding [`RELATED_TASK_META_KEY`] — the
+    /// envelope key only a built task-augmented `CallToolResult` sets.
+    RelatedTaskMeta,
+    /// The value is a `CallToolResult`-envelope-shaped object (ONLY envelope
+    /// keys: `content`/`isError`/`structuredContent`/`_meta`) carrying a
+    /// NON-EMPTY `content` array whose every element deserializes as
+    /// [`Content`] (the internally `#[serde(tag = "type")]` enum), i.e. it is
+    /// already a wire-shaped result body.
+    ContentArray,
+}
+
+/// Structural, high-precision detector for an about-to-be-double-wrapped result.
+///
+/// Detects "this `Value` is ALREADY a built [`CallToolResult`] and is about to
+/// be WRONGLY text-wrapped a second time" (TOUT-02 — the exact silent bug
+/// behind the agent-lake 2-week outage).
+///
+/// Returns `Some(marker)` only for a value carrying an unambiguous built-result
+/// marker; `None` otherwise. Deliberately NOT a full
+/// `from_value::<CallToolResult>` parse (D-02): it checks two cheap, precise
+/// structural markers in cost order, so a benign tool payload almost never trips.
+///
+/// Precision rationale (near-zero false positives):
+/// - The content-array marker only fires on a `CallToolResult` *envelope*: an
+///   object whose keys are ALL envelope keys (`content`, `isError`,
+///   `structuredContent`, `_meta`). A hand-built double-wrap was authored to
+///   BE a `CallToolResult`, so only envelope keys accompany its `content`; a
+///   chat-message-style payload (`role`, `model`, `stopReason`, ... — common
+///   for tools that proxy LLM/sampling APIs) carries foreign keys and must
+///   NOT trip.
+/// - [`Content`] is internally tagged (`#[serde(tag = "type")]`), so an object
+///   lacking a valid `"type"` NEVER deserializes as `Content` — the content-array
+///   marker is high precision.
+/// - An empty `content: []` is NOT a built-result marker (a benign payload can
+///   carry an empty array), so it must NOT fire — hence the `!arr.is_empty()`
+///   guard.
+///
+/// Order matters: the single-lookup `_meta` key check runs first (cheapest and
+/// also short-circuits pathological large `content` arrays, T-104-03-02).
+// Why: called at BOTH Payload wrap sites (mod.rs + core.rs) through
+// `double_wrap_tripwire`; production-reachable, so no `dead_code` allow needed.
+pub fn looks_like_call_tool_result(v: &Value) -> Option<DoubleWrapMarker> {
+    /// Only these `CallToolResult` wire keys may accompany the `content` array
+    /// for the envelope-shaped marker to fire (WR-02 precision fix).
+    const RESULT_ENVELOPE_KEYS: [&str; 4] = ["content", "isError", "structuredContent", "_meta"];
+
+    let obj = v.as_object()?;
+    // Cheapest first: the task-envelope meta key — a single map lookup.
+    if obj
+        .get("_meta")
+        .and_then(Value::as_object)
+        .is_some_and(|meta| meta.contains_key(RELATED_TASK_META_KEY))
+    {
+        return Some(DoubleWrapMarker::RelatedTaskMeta);
+    }
+    // An envelope-shaped object (only `CallToolResult` keys) with a NON-EMPTY
+    // `content` array whose every element parses as `Content`. The
+    // `!arr.is_empty()` guard keeps a benign empty array from firing; the
+    // envelope-keys guard keeps chat-message payloads from firing.
+    if obj
+        .keys()
+        .all(|k| RESULT_ENVELOPE_KEYS.contains(&k.as_str()))
+        && obj
+            .get("content")
+            .and_then(Value::as_array)
+            .is_some_and(|arr| {
+                !arr.is_empty()
+                    && arr
+                        .iter()
+                        .all(|e| serde_json::from_value::<Content>(e.clone()).is_ok())
+            })
+    {
+        return Some(DoubleWrapMarker::ContentArray);
+    }
+    None
+}
+
+/// The TOUT-02 double-wrap tripwire decision function.
+///
+/// The SINGLE decision fn both Payload wrap sites (`Server::handle_call_tool`
+/// in mod.rs and `ServerCore::handle_call_tool` in core.rs) call BEFORE
+/// stringifying a produced `Value` into a `CallToolResult`'s text content.
+///
+/// Behavior:
+/// - `suppressed == true` → returns `None`, emits NOTHING (the tool opted out of
+///   the check via `suppress_double_wrap_check`; D-08).
+/// - otherwise, if [`looks_like_call_tool_result`] returns `Some(marker)`:
+///   emits a `tracing::warn!` (EVERY build) AND `debug_assert!(false, ..)`
+///   (debug/CI builds hard-fail; D-06: release compiles the assert out and NEVER
+///   panics), then returns `Some(marker)`.
+/// - benign value → returns `None`, emits nothing.
+///
+/// Returning the `Option<DoubleWrapMarker>` makes the decision unit-testable in
+/// isolation: a RELEASE test asserts the return value (no panic), a DEBUG test
+/// asserts the `debug_assert!` panic via `catch_unwind` — NEITHER spins up a
+/// dispatch that the assert would abort mid-call (Codex MEDIUM: such end-to-end
+/// debug-assert tests are brittle).
+///
+/// The identical helper is called from BOTH dispatchers, so the WARN/panic rule
+/// can never drift between the high-level `Server` and `ServerCore`.
+// Why: called at both Payload wrap sites (mod.rs + core.rs) guarded by the
+// per-tool suppression check; production-reachable, no dead_code allow needed.
+pub fn double_wrap_tripwire(
+    tool_name: &str,
+    value: &Value,
+    suppressed: bool,
+) -> Option<DoubleWrapMarker> {
+    if suppressed {
+        return None;
+    }
+    let marker = looks_like_call_tool_result(value)?;
+    tracing::warn!(
+        tool = %tool_name,
+        ?marker,
+        "value being text-wrapped structurally resembles a built CallToolResult \
+         — did you mean ToolOutput::Result? (TOUT-02)"
+    );
+    // D-06: `debug_assert!` (NOT `assert!`) so release builds compile this out and
+    // never panic in production; debug/CI builds hard-fail so the double-wrap is
+    // caught by "one local run".
+    debug_assert!(
+        false,
+        "double-wrap tripwire (TOUT-02): tool `{tool_name}` produced a value that \
+         structurally resembles a built CallToolResult ({marker:?}); return \
+         ToolOutput::Result to send it verbatim, or call \
+         suppress_double_wrap_check(\"{tool_name}\") if this payload is legitimate"
+    );
+    Some(marker)
 }
 
 /// Borrow-struct holding the two task backend handles a dispatcher owns.

@@ -26,6 +26,8 @@ use crate::types::{
 use async_trait::async_trait;
 use serde_json::Value;
 use std::collections::HashMap;
+#[cfg(not(target_arch = "wasm32"))]
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use crate::runtime::RwLock;
@@ -265,6 +267,14 @@ pub struct ServerCore {
     #[cfg(not(target_arch = "wasm32"))]
     task_store: Option<Arc<dyn crate::server::task_store::TaskStore>>,
 
+    /// Per-tool TOUT-02 double-wrap tripwire opt-out set (D-08). A tool named
+    /// here has the tripwire suppressed at the Payload wrap tail. Populated via
+    /// [`ServerCore::with_suppress_double_wrap`] from
+    /// `ServerCoreBuilder::suppress_double_wrap_check`; the high-level `Server`
+    /// carries an IDENTICAL set so both dispatchers consult the same rule.
+    #[cfg(not(target_arch = "wasm32"))]
+    suppress_double_wrap: HashSet<String>,
+
     /// Stateless mode flag for serverless deployments
     ///
     /// When true, the server skips initialization state checking, allowing
@@ -361,6 +371,8 @@ impl ServerCore {
             task_router,
             #[cfg(not(target_arch = "wasm32"))]
             task_store,
+            #[cfg(not(target_arch = "wasm32"))]
+            suppress_double_wrap: HashSet::new(),
             stateless_mode,
             payload_limits,
             #[cfg(not(target_arch = "wasm32"))]
@@ -391,6 +403,20 @@ impl ServerCore {
         );
         self.peer_handle = Some(peer);
         self.server_request_dispatcher = Some(dispatcher);
+        self
+    }
+
+    /// Carry the per-tool TOUT-02 double-wrap tripwire opt-out set (D-08) from
+    /// the builder into the running `ServerCore`.
+    ///
+    /// Threaded from `ServerCoreBuilder::build` so the tripwire at the Payload
+    /// wrap tail consults the SAME suppression set the high-level `Server` uses —
+    /// the two dispatchers can never drift on which tools are suppressed. An
+    /// empty set (the default) preserves the tripwire for every tool.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[must_use]
+    pub fn with_suppress_double_wrap(mut self, suppress: HashSet<String>) -> Self {
+        self.suppress_double_wrap = suppress;
         self
     }
 
@@ -487,6 +513,12 @@ impl ServerCore {
             .with_task_request(req.task.clone()),
         );
 
+        // D-03.3 (TOUT-01): clone the result-`_meta` slot before `extra` moves
+        // into `handle_output` (see the high-level `Server` dispatcher for the
+        // twin); drained onto the Payload envelope after the handler returns.
+        #[cfg(not(target_arch = "wasm32"))]
+        let result_meta_handle = extra.result_meta_handle();
+
         // Execute tool with or without middleware depending on platform
         #[cfg(not(target_arch = "wasm32"))]
         let result = {
@@ -496,8 +528,10 @@ impl ServerCore {
             // Clone arguments for middleware processing
             let mut args = req.arguments.clone();
 
-            // Process request through tool middleware chain
-            // Middleware rejection short-circuits tool execution (on_error already called by chain)
+            // Process request through tool middleware chain.
+            // Middleware rejection short-circuits tool execution (on_error already
+            // called by chain). REQUEST middleware runs BEFORE the handler for
+            // EVERY tool, regardless of the ToolOutput variant it returns.
             self.tool_middleware
                 .read()
                 .await
@@ -515,31 +549,47 @@ impl ServerCore {
                 }
             }
 
-            // Execute the tool with potentially modified args and extra
-            let mut result = handler.handle(args, extra).await;
+            // Execute the tool. `handle_output` returns `Result<ToolOutput>`; the
+            // SHARED `resolve_tool_output` (D-05) is the SINGLE place that decides
+            // Payload-vs-Result and encodes the response-middleware-bypass rule, so
+            // this dispatcher and the high-level `Server` can never drift on it.
+            let output = handler.handle_output(args, extra).await;
+            match crate::server::task_dispatch::resolve_tool_output(output) {
+                // VERBATIM (D-04 + D-04a — USER-APPROVED and LOCKED: "keep the
+                // bypass, harden it"): the handler owns the full `CallToolResult`
+                // envelope, including its own redaction/sanitization. Emit it as-is
+                // — bypassing RESPONSE middleware (redaction/sanitization/audit),
+                // the create-path gate, and the text-wrap / widget-enrichment tail.
+                // REQUEST middleware already fired above for every tool, and a
+                // handler `Err(_)` still routes through the Middleware arm below.
+                crate::server::task_dispatch::DispatchOutput::Verbatim(call_result) => {
+                    return Ok(ToolCallOutcome::Result(call_result));
+                },
+                crate::server::task_dispatch::DispatchOutput::Middleware(mut result) => {
+                    // Process response through tool middleware chain (Payload/error only)
+                    if let Err(e) = self
+                        .tool_middleware
+                        .read()
+                        .await
+                        .process_response(&req.name, &mut result, &context)
+                        .await
+                    {
+                        // Log error but continue with original result
+                        tracing::warn!("Tool response middleware processing failed: {}", e);
+                    }
 
-            // Process response through tool middleware chain
-            if let Err(e) = self
-                .tool_middleware
-                .read()
-                .await
-                .process_response(&req.name, &mut result, &context)
-                .await
-            {
-                // Log error but continue with original result
-                tracing::warn!("Tool response middleware processing failed: {}", e);
+                    // If tool execution failed, call handle_tool_error
+                    if let Err(ref e) = result {
+                        self.tool_middleware
+                            .read()
+                            .await
+                            .handle_tool_error(&req.name, e, &context)
+                            .await;
+                    }
+
+                    result
+                },
             }
-
-            // If tool execution failed, call handle_tool_error
-            if let Err(ref e) = result {
-                self.tool_middleware
-                    .read()
-                    .await
-                    .handle_tool_error(&req.name, e, &context)
-                    .await;
-            }
-
-            result
         };
 
         #[cfg(target_arch = "wasm32")]
@@ -615,6 +665,19 @@ impl ServerCore {
             }
         }
 
+        // TOUT-02 double-wrap tripwire: BEFORE this tail text-wraps `value` into
+        // content, WARN (+ debug_assert in debug/CI) if it structurally resembles
+        // an already-built `CallToolResult` — the silent double-wrap bug. Honors
+        // the per-tool `suppress_double_wrap_check` opt-out (D-08) via the SAME
+        // suppression set the high-level `Server` uses, so the two dispatchers
+        // never drift. Non-wasm only (mirrors the create-path gate above).
+        #[cfg(not(target_arch = "wasm32"))]
+        crate::server::task_dispatch::double_wrap_tripwire(
+            &req.name,
+            &value,
+            self.suppress_double_wrap.contains(req.name.as_str()),
+        );
+
         let call_result = if let Some(info) = tool_info.filter(|i| i.widget_meta().is_some()) {
             // Widget tool: structured data goes in structuredContent,
             // text is a brief summary to avoid duplication in `ChatGPT`
@@ -623,6 +686,19 @@ impl ServerCore {
         } else {
             let text = serde_json::to_string_pretty(&value)?;
             CallToolResult::new(vec![Content::text(text)])
+        };
+
+        // D-03.3: drain any handler-set result `_meta` onto the Payload envelope
+        // with handler-key-wins precedence (Payload path only; the Verbatim,
+        // create-path, and error arms all returned earlier). Shadow-rebind so the
+        // wasm branch, which never sets the slot, needs no `mut`.
+        #[cfg(not(target_arch = "wasm32"))]
+        let call_result = {
+            let mut call_result = call_result;
+            if let Some(handler_meta) = result_meta_handle.take_result_meta() {
+                crate::server::cancellation::merge_result_meta(&mut call_result, handler_meta);
+            }
+            call_result
         };
 
         Ok(ToolCallOutcome::Result(call_result))

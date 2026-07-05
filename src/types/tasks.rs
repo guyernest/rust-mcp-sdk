@@ -198,6 +198,83 @@ pub struct RelatedTaskMetadata {
     pub task_id: String,
 }
 
+/// Typed metadata carried on a `CallToolResult` under
+/// [`RELATED_TASK_META_KEY`], linking a synchronous tool result to the async
+/// task that produced (or is producing) it (SEP-1686).
+///
+/// This is the richer twin of [`RelatedTaskMetadata`]: it carries the optional
+/// polling hints a client needs to drive
+/// [`Client::wait_for_task`](crate::Client::wait_for_task) without hand-copying
+/// fields. Server code builds it via
+/// [`CallToolResult::with_related_task`](crate::types::CallToolResult::with_related_task);
+/// client code reads it via
+/// [`CallToolResult::related_task`](crate::types::CallToolResult::related_task).
+///
+/// The two `Option` polling fields default to `None`, so the minimal native
+/// emit shape `{ "taskId": "t1" }` deserializes cleanly (extra fields absent).
+///
+/// # Backward Compatibility
+///
+/// This struct is `#[non_exhaustive]`. Construct it via [`TaskMetadata::new`]
+/// and the builder methods to stay forward-compatible:
+///
+/// ```rust
+/// use pmcp::types::tasks::TaskMetadata;
+///
+/// let meta = TaskMetadata::new("t-123")
+///     .with_poll_interval(5000)
+///     .with_max_poll_duration_secs(300);
+/// let json = serde_json::to_value(&meta).unwrap();
+/// assert_eq!(json["taskId"], "t-123");
+/// assert_eq!(json["pollInterval"], 5000);
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
+#[serde(rename_all = "camelCase")]
+pub struct TaskMetadata {
+    /// The referenced task ID.
+    pub task_id: String,
+    /// Suggested polling interval, in **milliseconds**.
+    ///
+    /// This is the same unit as [`Task::poll_interval`]. A client poller uses
+    /// it as the delay between `tasks/get` calls.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub poll_interval: Option<u64>,
+    /// Maximum total time to poll before giving up, in **seconds**.
+    ///
+    /// Note the unit differs from [`TaskMetadata::poll_interval`] (which is
+    /// milliseconds): this is a coarse overall budget expressed in seconds.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_poll_duration_secs: Option<u64>,
+}
+
+impl TaskMetadata {
+    /// Create related-task metadata referencing `task_id`.
+    ///
+    /// Both polling hints default to `None`; set them via
+    /// [`TaskMetadata::with_poll_interval`] and
+    /// [`TaskMetadata::with_max_poll_duration_secs`].
+    pub fn new(task_id: impl Into<String>) -> Self {
+        Self {
+            task_id: task_id.into(),
+            poll_interval: None,
+            max_poll_duration_secs: None,
+        }
+    }
+
+    /// Set the suggested polling interval, in **milliseconds**.
+    pub fn with_poll_interval(mut self, interval_ms: u64) -> Self {
+        self.poll_interval = Some(interval_ms);
+        self
+    }
+
+    /// Set the maximum total polling duration, in **seconds**.
+    pub fn with_max_poll_duration_secs(mut self, secs: u64) -> Self {
+        self.max_poll_duration_secs = Some(secs);
+        self
+    }
+}
+
 /// Result of creating a task.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[non_exhaustive]
@@ -399,6 +476,37 @@ mod tests {
         assert_eq!(task.task_id, "task-abc");
         assert_eq!(task.status, TaskStatus::InputRequired);
         assert_eq!(task.poll_interval, Some(3000));
+    }
+
+    #[test]
+    fn task_metadata_serde_round_trip() {
+        let meta = TaskMetadata {
+            task_id: "t1".to_string(),
+            poll_interval: Some(5000),
+            max_poll_duration_secs: None,
+        };
+        let json = serde_json::to_value(&meta).unwrap();
+        assert_eq!(json["taskId"], "t1");
+        assert_eq!(json["pollInterval"], 5000);
+        // maxPollDurationSecs omitted (skip_serializing_if = None)
+        assert!(
+            json.get("maxPollDurationSecs").is_none(),
+            "maxPollDurationSecs should be omitted when None"
+        );
+
+        let roundtrip: TaskMetadata = serde_json::from_value(json).unwrap();
+        assert_eq!(roundtrip.task_id, "t1");
+        assert_eq!(roundtrip.poll_interval, Some(5000));
+        assert_eq!(roundtrip.max_poll_duration_secs, None);
+    }
+
+    #[test]
+    fn task_metadata_minimal_shape_deserializes() {
+        // The minimal native emit shape carries only taskId.
+        let meta: TaskMetadata = serde_json::from_value(json!({ "taskId": "t1" })).unwrap();
+        assert_eq!(meta.task_id, "t1");
+        assert_eq!(meta.poll_interval, None);
+        assert_eq!(meta.max_poll_duration_secs, None);
     }
 
     #[test]

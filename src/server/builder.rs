@@ -19,6 +19,8 @@ use crate::server::{PromptHandler, ResourceHandler, SamplingHandler, ToolHandler
 use crate::shared::middleware::EnhancedMiddlewareChain;
 use crate::types::{Implementation, PromptInfo, ServerCapabilities, ToolInfo};
 use std::collections::HashMap;
+#[cfg(not(target_arch = "wasm32"))]
+use std::collections::HashSet;
 use std::sync::Arc;
 
 /// Builder for constructing a `ServerCore` instance.
@@ -78,6 +80,11 @@ pub struct ServerCoreBuilder {
     /// Task store for MCP Tasks with polling (optional, standard capability path)
     #[cfg(not(target_arch = "wasm32"))]
     task_store: Option<Arc<dyn crate::server::task_store::TaskStore>>,
+    /// Tool names opting out of the TOUT-02 double-wrap tripwire (D-08), set via
+    /// [`Self::suppress_double_wrap_check`]. Threaded into `ServerCore` so its
+    /// dispatcher honors the same opt-out as the high-level `Server`.
+    #[cfg(not(target_arch = "wasm32"))]
+    suppress_double_wrap: HashSet<String>,
     /// Stateless mode for serverless deployments (None = auto-detect)
     stateless_mode: Option<bool>,
     /// Host-specific metadata layers (e.g., `ChatGpt` for openai/* keys)
@@ -124,6 +131,8 @@ impl ServerCoreBuilder {
             task_router: None,
             #[cfg(not(target_arch = "wasm32"))]
             task_store: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            suppress_double_wrap: HashSet::new(),
             stateless_mode: None, // Auto-detect by default
             #[cfg(feature = "mcp-apps")]
             host_layers: Vec::new(),
@@ -837,6 +846,29 @@ impl ServerCoreBuilder {
         self
     }
 
+    /// Opt a tool OUT of the TOUT-02 double-wrap tripwire (D-08).
+    ///
+    /// The tripwire WARNs (every build) and `debug_assert!`-fails (debug/CI) when
+    /// a tool returns a `ToolOutput::Payload` `Value` that STRUCTURALLY resembles
+    /// an already-built `CallToolResult` (a non-empty `content` array of
+    /// `Content`, or a `_meta` related-task envelope) — the silent double-wrap
+    /// bug. Naming a tool here suppresses that check for it.
+    ///
+    /// SUPPRESSION SHOULD BE RARE AND REVIEWED: it disables a safety tripwire for
+    /// one tool whose LEGITIMATE payload happens to trip the heuristic. Prefer
+    /// returning [`ToolOutput::Result`](crate::server::ToolOutput::Result) so the
+    /// handler owns the full envelope verbatim, rather than suppressing.
+    ///
+    /// The set is threaded into the built `ServerCore`, and the high-level
+    /// `ServerBuilder` exposes the same method, so both native dispatchers honor
+    /// the opt-out identically (no drift).
+    #[cfg(not(target_arch = "wasm32"))]
+    #[must_use]
+    pub fn suppress_double_wrap_check(mut self, name: impl Into<String>) -> Self {
+        self.suppress_double_wrap.insert(name.into());
+        self
+    }
+
     /// Apply the endpoint-backed `tasks`-capability rule (D-CAPABILITY-ENDPOINT-BACKED).
     ///
     /// The `tasks` capability advertised in `initialize` represents REAL endpoint
@@ -1086,7 +1118,7 @@ impl ServerCoreBuilder {
         #[cfg(not(all(feature = "skills", not(target_arch = "wasm32"))))]
         let final_resources = self.resources.take();
 
-        Ok(ServerCore::new(
+        let core = ServerCore::new(
             info,
             self.capabilities,
             self.tools,
@@ -1106,7 +1138,13 @@ impl ServerCoreBuilder {
             self.task_store,
             stateless_mode,
             self.payload_limits,
-        ))
+        );
+        // Thread the per-tool double-wrap suppression set (D-08) into the running
+        // core so its Payload wrap tail honors the SAME opt-out the high-level
+        // `Server` uses (no drift between the two dispatchers).
+        #[cfg(not(target_arch = "wasm32"))]
+        let core = core.with_suppress_double_wrap(self.suppress_double_wrap);
+        Ok(core)
     }
 }
 

@@ -607,6 +607,64 @@ impl CallToolResult {
         self
     }
 
+    /// Attach related-task metadata under
+    /// [`RELATED_TASK_META_KEY`](crate::types::tasks::RELATED_TASK_META_KEY) (SEP-1686).
+    ///
+    /// This is the server-emit twin of [`CallToolResult::related_task`]: it
+    /// records a [`TaskMetadata`](crate::types::tasks::TaskMetadata) into
+    /// `_meta` so a client can recover it and
+    /// drive [`Client::wait_for_task`](crate::Client::wait_for_task) without
+    /// hand-reading `_meta`. Existing `_meta` entries are preserved.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use pmcp::types::CallToolResult;
+    /// use pmcp::types::tasks::TaskMetadata;
+    ///
+    /// let meta = TaskMetadata::new("t9").with_poll_interval(1000);
+    /// let result = CallToolResult::new(vec![]).with_related_task(meta);
+    /// assert_eq!(result.related_task().unwrap().task_id, "t9");
+    /// ```
+    #[allow(clippy::used_underscore_binding)] // _meta is valid MCP protocol field name
+    pub fn with_related_task(mut self, meta: crate::types::tasks::TaskMetadata) -> Self {
+        let map = self._meta.get_or_insert_with(serde_json::Map::new);
+        // Serialization of TaskMetadata (a plain struct of String/Option<u64>)
+        // is infallible; fall back to Null rather than panicking on the
+        // impossible error path.
+        let value = serde_json::to_value(meta).unwrap_or(Value::Null);
+        map.insert(
+            crate::types::tasks::RELATED_TASK_META_KEY.to_string(),
+            value,
+        );
+        self
+    }
+
+    /// Read related-task metadata from `_meta` under
+    /// [`RELATED_TASK_META_KEY`](crate::types::tasks::RELATED_TASK_META_KEY).
+    ///
+    /// Returns `Some(TaskMetadata)` when the result carries a well-formed
+    /// related-task entry, `None` when `_meta` is absent, the key is missing,
+    /// or the value does not deserialize (tamper-tolerant: never panics). The
+    /// minimal native shape `{ "taskId": "t9" }` yields `Some` with the poll
+    /// fields defaulting to `None`.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use pmcp::types::CallToolResult;
+    ///
+    /// let result = CallToolResult::new(vec![]);
+    /// assert!(result.related_task().is_none());
+    /// ```
+    #[allow(clippy::used_underscore_binding)] // _meta is valid MCP protocol field name
+    pub fn related_task(&self) -> Option<crate::types::tasks::TaskMetadata> {
+        self._meta
+            .as_ref()?
+            .get(crate::types::tasks::RELATED_TASK_META_KEY)
+            .and_then(|v| serde_json::from_value(v.clone()).ok())
+    }
+
     /// Enrich with widget metadata from a [`ToolInfo`] if it has widget meta.
     ///
     /// Sets `structured_content` and `_meta` so widgets can access tool

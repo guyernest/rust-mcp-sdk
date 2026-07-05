@@ -1,6 +1,6 @@
 [package]
 name = "pmcp"
-version = "2.11.0"
+version = "2.12.0"
 edition = "2021"
 authors = ["PAIML Team"]
 description = "High-quality Rust SDK for Model Context Protocol (MCP) with full TypeScript SDK compatibility"
@@ -560,6 +560,11 @@ required-features = ["full"]
 [[example]]
 name = "s46_http_tool_as_task"
 path = "examples/s46_http_tool_as_task.rs"
+required-features = ["full"]
+
+[[example]]
+name = "s47_task_augmented_result"
+path = "examples/s47_task_augmented_result.rs"
 required-features = ["full"]
 
 [[bench]]

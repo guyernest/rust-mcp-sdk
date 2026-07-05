@@ -226,6 +226,20 @@ pub struct RequestHandlerExtra {
     /// the enclosing `Server` — cross-session confusion requires cross-process access.
     #[cfg(not(target_arch = "wasm32"))]
     pub peer: Option<Arc<dyn crate::shared::peer::PeerHandle>>,
+    /// Handler-authored result `_meta` accumulator (interior-mutable).
+    ///
+    /// `RequestHandlerExtra` is moved BY VALUE into
+    /// [`ToolHandler::handle_output`](crate::server::ToolHandler::handle_output),
+    /// so a handler cannot write back to a field the dispatcher still owns. This
+    /// shared `Arc<std::sync::Mutex<Option<..>>>` slot bridges the gap: the
+    /// dispatcher clones the `Arc` before the move (via
+    /// [`RequestHandlerExtra::result_meta_handle`]) and drains it after the
+    /// handler returns, merging the drained keys onto the built `CallToolResult`.
+    /// See [`RequestHandlerExtra::set_result_meta`]. Cloning `RequestHandlerExtra`
+    /// shares the SAME slot (the `Arc` survives the by-value clone, mirroring
+    /// `peer`), so any clone the handler receives writes to the observed slot.
+    #[cfg(not(target_arch = "wasm32"))]
+    result_meta: Arc<std::sync::Mutex<Option<serde_json::Map<String, serde_json::Value>>>>,
 }
 
 impl RequestHandlerExtra {
@@ -243,6 +257,8 @@ impl RequestHandlerExtra {
             extensions: http::Extensions::new(),
             #[cfg(not(target_arch = "wasm32"))]
             peer: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            result_meta: Arc::new(std::sync::Mutex::new(None)),
         }
     }
 
@@ -346,6 +362,61 @@ impl RequestHandlerExtra {
         self.peer.as_ref()
     }
 
+    /// Merge handler-authored keys into the result `_meta` for this call.
+    ///
+    /// This is the lowest-friction way for an existing hand-written handler (one
+    /// that returns a plain `Value` and does NOT override
+    /// [`ToolHandler::handle_output`](crate::server::ToolHandler::handle_output))
+    /// to attach task augmentation or custom `_meta` without owning the full
+    /// envelope. The keys are accumulated in an interior-mutable slot and, on the
+    /// **Payload dispatch path**, merged onto the server-built `CallToolResult`'s
+    /// `_meta` after the handler returns.
+    ///
+    /// Takes `&self`: the slot is interior-mutable, so this works even though the
+    /// handler receives `RequestHandlerExtra` by value (the slot `Arc` is shared
+    /// with the clone the dispatcher retained before the by-value move).
+    ///
+    /// # Merge precedence
+    ///
+    /// Keys MERGE — never a whole-map replace:
+    /// - a handler-set key **overwrites** a same-name key (whether set by an
+    ///   earlier `set_result_meta` call or emitted by widget/native enrichment);
+    /// - all unrelated existing `_meta` keys (widget/native emission) are
+    ///   **preserved**;
+    /// - repeated calls accumulate into the same slot — a later call's colliding
+    ///   keys win, non-colliding keys from both calls survive.
+    ///
+    /// # Path scope
+    ///
+    /// This affects the **Payload path ONLY**. It is **IGNORED** on the
+    /// [`ToolOutput::Result`](crate::server::ToolOutput::Result) path — a handler
+    /// that returns a full `CallToolResult` owns its entire envelope (including
+    /// `_meta`) and must set related-task metadata on that value directly, e.g.
+    /// via
+    /// [`CallToolResult::with_related_task`](crate::types::CallToolResult::with_related_task).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn set_result_meta(&self, meta: serde_json::Map<String, serde_json::Value>) {
+        let mut guard = self
+            .result_meta
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let slot = guard.get_or_insert_with(serde_json::Map::new);
+        for (key, value) in meta {
+            slot.insert(key, value);
+        }
+    }
+
+    /// Clone the interior-mutable result-`_meta` slot into a drain handle.
+    ///
+    /// The dispatcher calls this BEFORE moving `self` into `handle_output`, then
+    /// drains the handle via [`ResultMetaHandle::take_result_meta`] after the
+    /// handler returns. Keeping slot access behind these small methods means
+    /// dispatch code never touches the lock directly.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn result_meta_handle(&self) -> ResultMetaHandle {
+        ResultMetaHandle(Arc::clone(&self.result_meta))
+    }
+
     /// Returns `true` if the client requested task-augmented behavior.
     pub fn is_task_request(&self) -> bool {
         self.task_request.is_some()
@@ -437,7 +508,60 @@ impl Default for RequestHandlerExtra {
             extensions: http::Extensions::new(),
             #[cfg(not(target_arch = "wasm32"))]
             peer: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            result_meta: Arc::new(std::sync::Mutex::new(None)),
         }
+    }
+}
+
+/// Drain handle for the handler-authored result-`_meta` slot.
+///
+/// Cloned cheaply out of [`RequestHandlerExtra::result_meta_handle`] BEFORE the
+/// `RequestHandlerExtra` is moved into
+/// [`ToolHandler::handle_output`](crate::server::ToolHandler::handle_output),
+/// then drained by the dispatcher after the handler returns. Encapsulates all
+/// lock access so the dispatchers never touch `Mutex` internals directly.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone)]
+pub(crate) struct ResultMetaHandle(
+    Arc<std::sync::Mutex<Option<serde_json::Map<String, serde_json::Value>>>>,
+);
+
+#[cfg(not(target_arch = "wasm32"))]
+impl ResultMetaHandle {
+    /// Take the accumulated handler-set `_meta`, leaving the slot empty.
+    ///
+    /// Returns `None` when the handler never called
+    /// [`RequestHandlerExtra::set_result_meta`] — so a handler that does not opt
+    /// in injects no `_meta` (no regression). Recovers from a poisoned lock
+    /// rather than panicking (T-104-04-03): the slot holds handler-owned data at
+    /// the same trust level as the returned value.
+    pub(crate) fn take_result_meta(&self) -> Option<serde_json::Map<String, serde_json::Value>> {
+        let mut guard = self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        guard.take()
+    }
+}
+
+/// Merge handler-authored `_meta` (drained via
+/// [`ResultMetaHandle::take_result_meta`]) onto a dispatch-built
+/// [`CallToolResult`](crate::types::CallToolResult) with **handler-key-wins**
+/// precedence: a handler key overwrites the same-name existing key, while all
+/// unrelated (widget/native) keys are preserved. Never a whole-map replace.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn merge_result_meta(
+    result: &mut crate::types::CallToolResult,
+    meta: serde_json::Map<String, serde_json::Value>,
+) {
+    if meta.is_empty() {
+        return;
+    }
+    #[allow(clippy::used_underscore_binding)]
+    let slot = result._meta.get_or_insert_with(serde_json::Map::new);
+    for (key, value) in meta {
+        slot.insert(key, value);
     }
 }
 

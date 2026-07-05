@@ -264,7 +264,7 @@ High-performance Rust implementation of the MCP protocol.
 - **OAuth Support**: Full auth context pass-through
 - **Workflows**: Multi-step orchestration with array indexing support
 - **MCP Apps**: Rich HTML UI widgets with live preview and browser DevTools
-- **MCP Tasks**: Shared client/server state with task lifecycle management
+- **MCP Tasks**: Shared client/server state with task lifecycle management — see the [*Task-Augmented Tool Results (SEP-1686)*](https://paiml.github.io/rust-mcp-sdk/book/task-augmented-results.html) chapter for returning a `CallToolResult` that points at a related task
 - **Agent Skills (SEP-2640)**: Register an Agent Skill in ~5 lines and serve it on BOTH a SEP-2640 skill surface AND a parallel MCP prompt fallback — byte-equal by construction (`skills` feature, opt-in)
 - **Tower Middleware**: DNS rebinding protection, CORS, security headers
 - **Typed Client Helpers**: `call_tool_typed`, `get_prompt_typed`, and auto-paginating `list_all_*` with bounded safety cap
