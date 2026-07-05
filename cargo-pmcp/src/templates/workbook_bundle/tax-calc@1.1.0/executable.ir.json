@@ -87,6 +87,51 @@
       }
     }
   },
+  "3_Outputs!B6": {
+    "key": "3_Outputs!B6",
+    "expr": {
+      "Formula": {
+        "Call": {
+          "name": "IF",
+          "args": [
+            {
+              "BinaryOp": {
+                "left": {
+                  "Ref": "3_Outputs!B2"
+                },
+                "op": "Ge",
+                "right": {
+                  "Number": 40000.0
+                }
+              }
+            },
+            {
+              "Str": "bracket_2"
+            },
+            {
+              "Str": "bracket_1"
+            }
+          ]
+        }
+      }
+    }
+  },
+  "3_Outputs!B7": {
+    "key": "3_Outputs!B7",
+    "expr": {
+      "Formula": {
+        "BinaryOp": {
+          "left": {
+            "Ref": "3_Outputs!B2"
+          },
+          "op": "Gt",
+          "right": {
+            "Number": 0.0
+          }
+        }
+      }
+    }
+  },
   "4_Refund!B2": {
     "key": "4_Refund!B2",
     "expr": {
