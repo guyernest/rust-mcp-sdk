@@ -793,13 +793,13 @@ where
 /// Unlike [`TypedToolWithOutput`] — which serializes a typed `TOut` into a value
 /// the server then text-wraps / widget-enriches — this wrapper's
 /// [`ToolHandler::handle_output`] override returns
-/// [`ToolOutput::Result`](crate::server::ToolOutput::Result), so the closure's
+/// [`ToolOutput::Result`], so the closure's
 /// `CallToolResult` reaches the wire exactly as provided.
 ///
 /// # ⚠️ Bypass warning
 ///
 /// Because the result is emitted verbatim (see
-/// [`ToolOutput::Result`](crate::server::ToolOutput::Result)), it **bypasses
+/// [`ToolOutput::Result`]), it **bypasses
 /// response middleware** (redaction / sanitization / audit) as well as
 /// text-wrapping and widget enrichment. The closure owns its OWN redaction and
 /// sanitization of both `content` and `_meta`, at the same trust level as

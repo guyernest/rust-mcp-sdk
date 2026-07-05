@@ -96,7 +96,7 @@ impl Transport for DuplexTransport {
     }
 }
 
-/// Spawn a server pump that serves a `ProtocolHandler` (ServerCore) over the
+/// Spawn a server pump that serves a `ProtocolHandler` (`ServerCore`) over the
 /// server side of a duplex transport: receive Request, dispatch, send Response.
 fn spawn_core_pump(mut server_transport: DuplexTransport, handler: Arc<dyn ProtocolHandler>) {
     tokio::spawn(async move {
@@ -178,7 +178,7 @@ fn payload_tool() -> impl ToolHandler {
     .with_description("A plain Payload-path tool")
 }
 
-/// A task-shaped tool (TaskSupport::Required) that returns a synchronously
+/// A task-shaped tool (`TaskSupport::Required`) that returns a synchronously
 /// completing task value — used to prove the Payload create-path gate still wins.
 fn completing_task_tool() -> impl ToolHandler {
     TypedTool::new_with_schema(
@@ -229,7 +229,7 @@ fn build_server_with_verbatim() -> Server {
         .expect("server builds")
 }
 
-/// Drive a `tools/call` through a real `pmcp::Client` against a ServerCore pump.
+/// Drive a `tools/call` through a real `pmcp::Client` against a `ServerCore` pump.
 async fn call_via_core(core: Arc<dyn ProtocolHandler>, name: &str, args: Value) -> CallToolResult {
     let (client_t, server_t) = DuplexTransport::pair();
     spawn_core_pump(server_t, core);
@@ -266,7 +266,7 @@ async fn call_via_server(server: Server, name: &str, args: Value) -> CallToolRes
 // Assertions helpers.
 // ---------------------------------------------------------------------------
 
-/// Assert a verbatim ToolOutput::Result: top-level `_meta[relatedTask].taskId`
+/// Assert a verbatim `ToolOutput::Result`: top-level `_meta[relatedTask].taskId`
 /// present AND `content[0].text` is the verbatim string, NOT a stringified
 /// envelope (i.e. it does not contain the `_meta` key text).
 fn assert_verbatim(result: &CallToolResult) {
@@ -597,7 +597,7 @@ async fn d04a_middleware_and_error_battery_on_server() {
         .await
         .expect("client initializes");
 
-    let mut outcome = drive_battery_reuse(&mut client).await;
+    let mut outcome = drive_battery_reuse(&client).await;
     outcome.requests_seen = requests_seen.lock().unwrap().clone();
     outcome.responses_seen = responses_seen.lock().unwrap().clone();
     assert_d04a(&outcome, "Server");
@@ -626,14 +626,14 @@ async fn d04a_middleware_and_error_battery_on_core() {
         .await
         .expect("client initializes");
 
-    let mut outcome = drive_battery_reuse(&mut client).await;
+    let mut outcome = drive_battery_reuse(&client).await;
     outcome.requests_seen = requests_seen.lock().unwrap().clone();
     outcome.responses_seen = responses_seen.lock().unwrap().clone();
     assert_d04a(&outcome, "ServerCore");
 }
 
 /// Drive the three battery tools over a persistent client connection.
-async fn drive_battery_reuse(client: &mut Client<DuplexTransport>) -> BatteryOutcome {
+async fn drive_battery_reuse(client: &Client<DuplexTransport>) -> BatteryOutcome {
     let payload_result = client
         .call_tool("payload_tool".to_string(), json!({}))
         .await

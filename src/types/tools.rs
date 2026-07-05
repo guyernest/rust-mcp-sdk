@@ -607,10 +607,12 @@ impl CallToolResult {
         self
     }
 
-    /// Attach related-task metadata under [`RELATED_TASK_META_KEY`] (SEP-1686).
+    /// Attach related-task metadata under
+    /// [`RELATED_TASK_META_KEY`](crate::types::tasks::RELATED_TASK_META_KEY) (SEP-1686).
     ///
     /// This is the server-emit twin of [`CallToolResult::related_task`]: it
-    /// records a [`TaskMetadata`] into `_meta` so a client can recover it and
+    /// records a [`TaskMetadata`](crate::types::tasks::TaskMetadata) into
+    /// `_meta` so a client can recover it and
     /// drive [`Client::wait_for_task`](crate::Client::wait_for_task) without
     /// hand-reading `_meta`. Existing `_meta` entries are preserved.
     ///
@@ -638,7 +640,8 @@ impl CallToolResult {
         self
     }
 
-    /// Read related-task metadata from `_meta` under [`RELATED_TASK_META_KEY`].
+    /// Read related-task metadata from `_meta` under
+    /// [`RELATED_TASK_META_KEY`](crate::types::tasks::RELATED_TASK_META_KEY).
     ///
     /// Returns `Some(TaskMetadata)` when the result carries a well-formed
     /// related-task entry, `None` when `_meta` is absent, the key is missing,

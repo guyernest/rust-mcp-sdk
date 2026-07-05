@@ -132,7 +132,7 @@ mod live {
     use pmcp::{Client, Error, WaitForTaskOptions};
     use tokio::sync::mpsc;
 
-    /// In-process duplex transport (client <-> ServerCore), mpsc-backed.
+    /// In-process duplex transport (client <-> `ServerCore`), mpsc-backed.
     #[derive(Debug)]
     struct DuplexTransport {
         tx: mpsc::UnboundedSender<TransportMessage>,
@@ -273,7 +273,7 @@ mod live {
         )
     }
 
-    async fn create_task(client: &mut Client<DuplexTransport>, tool: &str) -> String {
+    async fn create_task(client: &Client<DuplexTransport>, tool: &str) -> String {
         let response = client
             .call_tool_with_task(tool.to_string(), serde_json::json!({}))
             .await
@@ -284,8 +284,8 @@ mod live {
         }
     }
 
-    /// wait_for_task drives a completing task to terminal and returns the
-    /// persisted, non-empty tasks/result CallToolResult.
+    /// `wait_for_task` drives a completing task to terminal and returns the
+    /// persisted, non-empty tasks/result `CallToolResult`.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn wait_for_task_returns_terminal_result() {
         let server = build_server("complete_now", completing_task_tool());
@@ -298,7 +298,7 @@ mod live {
             .await
             .expect("initialize");
 
-        let task_id = create_task(&mut client, "complete_now").await;
+        let task_id = create_task(&client, "complete_now").await;
         let result = client
             .wait_for_task(&task_id, WaitForTaskOptions::default())
             .await
@@ -309,7 +309,7 @@ mod live {
         );
     }
 
-    /// wait_for_related_task composes directly from TaskMetadata (no hand-copy):
+    /// `wait_for_related_task` composes directly from `TaskMetadata` (no hand-copy):
     /// a related-task handle drives the poller to the same terminal result.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn wait_for_related_task_from_metadata_composes() {
@@ -323,7 +323,7 @@ mod live {
             .await
             .expect("initialize");
 
-        let task_id = create_task(&mut client, "complete_now").await;
+        let task_id = create_task(&client, "complete_now").await;
         let meta = TaskMetadata::new(task_id).with_poll_interval(50);
         let result = client
             .wait_for_related_task(&meta, WaitForTaskOptions::default())
@@ -332,7 +332,7 @@ mod live {
         assert!(!result.content.is_empty());
     }
 
-    /// A never-terminal task with max_poll_duration_secs returns a Timeout error
+    /// A never-terminal task with `max_poll_duration_secs` returns a Timeout error
     /// rather than looping forever, and (with a clamped zero poll interval) does
     /// NOT hot-spin — bounded by a sane number of polls in the timeout window.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -348,7 +348,7 @@ mod live {
             .await
             .expect("initialize");
 
-        let task_id = create_task(&mut client, "stay_pending").await;
+        let task_id = create_task(&client, "stay_pending").await;
         // Zero poll interval MUST be clamped to the floor (50 ms). Over a 1 s
         // budget that is ~20 polls; without the clamp it would be thousands.
         let opts = WaitForTaskOptions {
@@ -388,7 +388,7 @@ mod live {
             .await
             .expect("initialize");
 
-        let task_id = create_task(&mut client, "stay_pending").await;
+        let task_id = create_task(&client, "stay_pending").await;
         let opts = WaitForTaskOptions {
             poll_interval: Some(60_000),
             max_poll_duration_secs: Some(1),
@@ -434,7 +434,7 @@ mod live {
             .await
             .expect("initialize");
 
-        let task_id = create_task(&mut client, "stay_pending").await;
+        let task_id = create_task(&client, "stay_pending").await;
         // `Working -> InputRequired` is a legal transition; "local" is the
         // owner an unauthenticated (duplex) session resolves to.
         store

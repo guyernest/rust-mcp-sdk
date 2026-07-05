@@ -210,9 +210,11 @@ pub enum DoubleWrapMarker {
     ContentArray,
 }
 
-/// Structural, high-precision detector for "this `Value` is ALREADY a built
-/// [`CallToolResult`] and is about to be WRONGLY text-wrapped a second time"
-/// (TOUT-02 — the exact silent bug behind the agent-lake 2-week outage).
+/// Structural, high-precision detector for an about-to-be-double-wrapped result.
+///
+/// Detects "this `Value` is ALREADY a built [`CallToolResult`] and is about to
+/// be WRONGLY text-wrapped a second time" (TOUT-02 — the exact silent bug
+/// behind the agent-lake 2-week outage).
 ///
 /// Returns `Some(marker)` only for a value carrying an unambiguous built-result
 /// marker; `None` otherwise. Deliberately NOT a full
@@ -274,10 +276,11 @@ pub fn looks_like_call_tool_result(v: &Value) -> Option<DoubleWrapMarker> {
     None
 }
 
-/// The TOUT-02 double-wrap tripwire: the SINGLE decision fn both Payload wrap
-/// sites (`Server::handle_call_tool` in mod.rs and `ServerCore::handle_call_tool`
-/// in core.rs) call BEFORE stringifying a produced `Value` into a
-/// `CallToolResult`'s text content.
+/// The TOUT-02 double-wrap tripwire decision function.
+///
+/// The SINGLE decision fn both Payload wrap sites (`Server::handle_call_tool`
+/// in mod.rs and `ServerCore::handle_call_tool` in core.rs) call BEFORE
+/// stringifying a produced `Value` into a `CallToolResult`'s text content.
 ///
 /// Behavior:
 /// - `suppressed == true` → returns `None`, emits NOTHING (the tool opted out of

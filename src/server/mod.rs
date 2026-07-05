@@ -251,7 +251,7 @@ pub enum ToolOutput {
     ///
     /// # ⚠️ BYPASS WARNING — this variant is sent to the wire VERBATIM
     ///
-    /// The contained [`CallToolResult`](crate::types::CallToolResult) is
+    /// The contained [`CallToolResult`] is
     /// serialized and returned to the client **exactly as provided**. It
     /// **BYPASSES**:
     /// - **response middleware** — redaction, sanitization, and audit hooks
@@ -2831,17 +2831,17 @@ impl ServerBuilder {
     ///
     /// This mirrors [`tool_typed_with_output`](Self::tool_typed_with_output) but
     /// fixes the return type to
-    /// [`CallToolResult`](crate::types::CallToolResult), so a handler can attach
+    /// [`CallToolResult`], so a handler can attach
     /// task augmentation (`CallToolResult::with_related_task(...)`), custom
     /// `_meta`, structured content, or an error envelope in ONE call — no
-    /// hand-written [`ToolHandler`](crate::ToolHandler) `impl` required. The input
+    /// hand-written [`ToolHandler`] `impl` required. The input
     /// arg type `TIn` deserializes from the tool arguments exactly as with
     /// [`tool_typed`](Self::tool_typed).
     ///
     /// # ⚠️ BYPASS WARNING — the returned result is sent to the wire VERBATIM
     ///
-    /// The closure's [`CallToolResult`](crate::types::CallToolResult) is routed
-    /// through [`ToolOutput::Result`](crate::server::ToolOutput::Result) and
+    /// The closure's [`CallToolResult`] is routed
+    /// through [`ToolOutput::Result`] and
     /// therefore **BYPASSES response middleware** — redaction, sanitization, and
     /// audit hooks (`ToolMiddleware::on_response`) DO NOT run — as well as
     /// text-wrapping and widget enrichment. The handler owns its OWN redaction
@@ -2920,7 +2920,7 @@ impl ServerBuilder {
     ///
     /// Identical to [`tool_with_result`](Self::tool_with_result) — including
     /// the **BYPASS WARNING** documented there (the returned
-    /// [`CallToolResult`](crate::types::CallToolResult) goes to the wire
+    /// [`CallToolResult`] goes to the wire
     /// VERBATIM and skips response middleware) — but also sets the tool
     /// description, mirroring
     /// [`tool_typed_with_description`](Self::tool_typed_with_description).
@@ -4098,7 +4098,7 @@ impl ServerBuilder {
     ///
     /// SUPPRESSION SHOULD BE RARE AND REVIEWED: it disables a safety tripwire for
     /// one tool whose LEGITIMATE payload happens to trip the heuristic. Prefer
-    /// returning [`ToolOutput::Result`](crate::server::ToolOutput::Result) so the
+    /// returning [`ToolOutput::Result`] so the
     /// handler owns the full envelope verbatim, rather than suppressing. Reach
     /// for this only when a tool genuinely produces a plain `Value` that mimics a
     /// result shape and cannot be restructured.

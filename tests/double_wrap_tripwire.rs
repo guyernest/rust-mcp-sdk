@@ -386,8 +386,8 @@ mod parity {
         );
     }
 
-    /// ServerCore honors `suppress_double_wrap_check`: the wrapper tool completes
-    /// (no debug_assert panic) and its payload is text-wrapped.
+    /// `ServerCore` honors `suppress_double_wrap_check`: the wrapper tool completes
+    /// (no `debug_assert` panic) and its payload is text-wrapped.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn core_honors_suppression() {
         let core: Arc<dyn ProtocolHandler> = Arc::new(

@@ -3,7 +3,7 @@
 //! This is the phase's wire-shape regression lock: a REAL HTTP round-trip (no
 //! in-process shim) that drives a `tools/call` against a high-level, store-less
 //! `pmcp::Server` whose tool returns
-//! [`ToolOutput::Result`](pmcp::ToolOutput::Result)`(CallToolResult)` — the
+//! [`ToolOutput::Result`](pmcp::ToolOutput::Result) carrying a `CallToolResult` — the
 //! SEP-1686 task-augmented result path (Plan 02/04). It consumes the REAL
 //! dispatch output over `StreamableHttpServer` + `StreamableHttpTransport` and
 //! asserts on the RAW wire JSON that:
