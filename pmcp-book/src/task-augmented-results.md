@@ -109,6 +109,13 @@ shape can be demonstrated without aborting on the debug-build tripwire — real
 tools should migrate, not suppress. The wire shape is locked in CI by
 `tests/tool_output_result_http.rs` over a real HTTP round-trip.
 
+Consuming a task-augmented result from a **durable or replay-shaped** client
+(Temporal-style workflows, the pmcp.run durable poller) is a different job: you
+drive the poll *decision* one memoized step at a time instead of blocking on a
+waiter. See
+[Durable and replay consumers](ch12-7-tasks.md#durable-and-replay-consumers) in
+the Tasks chapter, and the runnable `examples/s48_durable_poll_decision.rs`.
+
 > ⚠️ **A `tool_with_result` / `ToolOutput::Result` tool bypasses RESPONSE
 > middleware.** Redaction, sanitization, and audit hooks (`ToolMiddleware`
 > `on_response`) DO NOT run for a verbatim result — the handler owns its OWN
