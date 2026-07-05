@@ -1338,13 +1338,13 @@ Plans:
 
 **Requirements**: D-01..D-16 (CONTEXT.md decision set; no separate REQ IDs mapped)
 **Depends on:** Phase 104 (shipped in pmcp 2.12.0)
-**Plans:** 3 plans
+**Plans:** 1/3 plans executed
 
 Plans:
 
 **Wave 1**
 
-- [ ] 105-01-PLAN.md — Pure poll-decision primitive: `TaskPollDecision` enum + `Task::poll_decision()` + `resolve_poll_interval()` in `src/types/tasks.rs` (Wave 1)
+- [x] 105-01-PLAN.md — Pure poll-decision primitive: `TaskPollDecision` enum + `Task::poll_decision()` + `resolve_poll_interval()` in `src/types/tasks.rs` (Wave 1)
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
