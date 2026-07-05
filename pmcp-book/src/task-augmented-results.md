@@ -57,6 +57,11 @@ if let Some(meta) = result.related_task() {
 }
 ```
 
+> **Note:** `wait_for_task` / `wait_for_related_task` return an error if the
+> task enters `input_required` — that state is not terminal and needs
+> client-side action (elicitation) the poller cannot provide. Handle the
+> required input, then resume polling.
+
 ## Migrating a hand-written handler
 
 If you have a hand-written `ToolHandler`, override `handle_output` to return

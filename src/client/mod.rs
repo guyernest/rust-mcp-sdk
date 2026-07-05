@@ -72,7 +72,9 @@ pub struct WaitForTaskOptions {
     /// hot-spin the poll loop.
     pub poll_interval: Option<u64>,
     /// Maximum total time to poll before returning a timeout error, in
-    /// **seconds**. When `None`, polling continues until the task is terminal.
+    /// **seconds**. When `None`, polling continues until the task is terminal
+    /// (or enters `input_required`, which surfaces an error immediately — see
+    /// [`Client::wait_for_task`]).
     pub max_poll_duration_secs: Option<u64>,
 }
 
@@ -654,6 +656,11 @@ impl<T: Transport> Client<T> {
     /// - Propagates `tasks/get` / `tasks/result` transport and protocol errors.
     /// - Returns [`Error::Timeout`] when `opts.max_poll_duration_secs` elapses
     ///   before the task reaches a terminal status.
+    /// - Returns [`Error::Validation`] when the task enters
+    ///   [`TaskStatus::InputRequired`]: that state is NOT terminal and needs
+    ///   client-side action (elicitation) this poller cannot provide, so
+    ///   polling on would hang forever under the default (unbounded) options.
+    ///   Handle the required input, then resume polling.
     ///
     /// # Example
     ///
@@ -686,6 +693,17 @@ impl<T: Transport> Client<T> {
             let task = self.tasks_get(task_id).await?;
             if task.status.is_terminal() {
                 break;
+            }
+
+            // `input_required` is NOT terminal, and the task cannot progress
+            // without client-side action this poller does not perform —
+            // surface it instead of spinning until a (possibly absent)
+            // timeout (CR-01).
+            if task.status == TaskStatus::InputRequired {
+                return Err(Error::validation(format!(
+                    "task {task_id} is input_required; wait_for_task cannot provide \
+                     input — handle the elicitation, then resume polling"
+                )));
             }
 
             // Enforce the overall polling budget before sleeping again.

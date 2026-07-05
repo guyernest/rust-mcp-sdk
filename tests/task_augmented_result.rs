@@ -127,7 +127,7 @@ mod live {
     use pmcp::server::task_store::{InMemoryTaskStore, TaskStore};
     use pmcp::server::typed_tool::TypedTool;
     use pmcp::shared::{Transport, TransportMessage};
-    use pmcp::types::tasks::TaskMetadata;
+    use pmcp::types::tasks::{TaskMetadata, TaskStatus};
     use pmcp::types::{ClientCapabilities, TaskSupport, ToolExecution};
     use pmcp::{Client, Error, WaitForTaskOptions};
     use tokio::sync::mpsc;
@@ -369,6 +369,54 @@ mod live {
         assert!(
             polls < 200,
             "zero poll_interval must be clamped to a floor (no hot spin); saw {polls} polls in ~1s"
+        );
+    }
+
+    /// A task that enters `input_required` surfaces an error instead of
+    /// spinning forever under the default (unbounded) options (CR-01):
+    /// `input_required` is NOT terminal and needs client-side action the
+    /// poller cannot provide.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn wait_for_task_surfaces_input_required_instead_of_hanging() {
+        let store = Arc::new(InMemoryTaskStore::new());
+        let server: Arc<dyn ProtocolHandler> = Arc::new(
+            ServerCoreBuilder::new()
+                .name("wait-for-task-server")
+                .version("1.0.0")
+                .tool("stay_pending", pending_task_tool())
+                .task_store(store.clone() as Arc<dyn TaskStore>)
+                .build()
+                .expect("server builds"),
+        );
+        let (client_transport, server_transport) = DuplexTransport::pair();
+        spawn_counting_pump(server_transport, server, Arc::new(AtomicUsize::new(0)));
+
+        let mut client = Client::new(client_transport);
+        client
+            .initialize(ClientCapabilities::default())
+            .await
+            .expect("initialize");
+
+        let task_id = create_task(&mut client, "stay_pending").await;
+        // `Working -> InputRequired` is a legal transition; "local" is the
+        // owner an unauthenticated (duplex) session resolves to.
+        store
+            .update_status(&task_id, "local", TaskStatus::InputRequired, None)
+            .await
+            .expect("transition to input_required");
+
+        // The outer timeout is a CI safety net: on regression (poller ignores
+        // input_required) this call would otherwise hang forever.
+        let err = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            client.wait_for_task(&task_id, WaitForTaskOptions::default()),
+        )
+        .await
+        .expect("wait_for_task must return promptly on input_required, not hang")
+        .expect_err("input_required must surface as an error");
+        assert!(
+            matches!(err, Error::Validation(_)),
+            "expected a validation error, got: {err}"
         );
     }
 }
