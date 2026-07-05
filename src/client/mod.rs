@@ -673,8 +673,8 @@ impl<T: Transport> Client<T> {
     /// non-deterministic under replay (each re-execution would re-sleep and
     /// re-poll). A durable consumer should instead call
     /// [`Task::poll_decision`](crate::types::tasks::Task::poll_decision) plus
-    /// [`resolve_poll_interval`](crate::types::tasks::resolve_poll_interval)
-    /// once per tick inside its own memoized step and persist the decision
+    /// [`resolve_poll_interval`] once per tick inside its own memoized step and
+    /// persist the decision
     /// between ticks — those are pure, replay-deterministic functions of the
     /// polled task, unlike this blocking poller (D-11 / D-16).
     ///
