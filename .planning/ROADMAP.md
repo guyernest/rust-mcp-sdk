@@ -1336,13 +1336,15 @@ Plans:
 
 **Origin:** pmcp.run dev-team request `~/Development/mcp/sdk/pmcp-run/.planning/notes/sdk-issue-durable-task-consumer-and-input-required.md` — Ask A accepted (this phase), Ask B (task elicitation round-trip) deferred as spec-shaped, Ask C answered; SDK response at `pmcp-run/.planning/notes/sdk-response-durable-task-consumer-and-input-required.md`.
 
-**Requirements**: TBD
+**Requirements**: D-01..D-16 (CONTEXT.md decision set; no separate REQ IDs mapped)
 **Depends on:** Phase 104 (shipped in pmcp 2.12.0)
-**Plans:** 0 plans
+**Plans:** 3 plans
 
 Plans:
 
-- [ ] TBD (run /gsd:plan-phase 105 to break down)
+- [ ] 105-01-PLAN.md — Pure poll-decision primitive: `TaskPollDecision` enum + `Task::poll_decision()` + `resolve_poll_interval()` in `src/types/tasks.rs` (Wave 1)
+- [ ] 105-02-PLAN.md — Rewrite `wait_for_task` as `match task.poll_decision()` + drift-pin regression test (Wave 2)
+- [ ] 105-03-PLAN.md — Runnable s48 example + "Durable and replay consumers" book section (Wave 2)
 
 ---
 
