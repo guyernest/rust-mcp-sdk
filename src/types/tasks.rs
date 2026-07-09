@@ -228,6 +228,33 @@ pub struct Task {
     /// Human-readable status message
     #[serde(skip_serializing_if = "Option::is_none")]
     pub status_message: Option<String>,
+    /// Full operator-facing diagnostic detail (step ids, URLs, internal error
+    /// text) for this task.
+    ///
+    /// **PMCP EXTENSION — not an MCP-spec field (D-17).** The MCP `Task` type
+    /// carries a single [`status_message`](Task::status_message) voice, which
+    /// PMCP treats as the business-friendly, user-facing voice (D-17/D-18).
+    /// `diagnostic_detail` is a second, separate voice this SDK adds for
+    /// operator/developer consumption — full detail that would be
+    /// inappropriate to show a business user by default (see the
+    /// Information-Disclosure disposition on this field: producers MUST
+    /// redact secrets/tokens before setting it). Consuming UIs typically
+    /// render it behind an expandable "details" affordance.
+    ///
+    /// Because `Task` has no `deny_unknown_fields` (see the module's serde
+    /// round-trip and consumer-tolerance tests), existing/strict consumers
+    /// that don't know this field simply ignore the extra `diagnosticDetail`
+    /// key on the wire — this is additive and non-breaking. When absent
+    /// (`None`), it is skip-serialized, so callers that never set it produce
+    /// byte-identical JSON to before this field existed.
+    ///
+    /// **Future migration note:** if/when the MCP spec grows a `_meta`
+    /// extension slot on `Task` (mirroring `CallToolResult._meta` /
+    /// [`RELATED_TASK_META_KEY`]), this field is a candidate to migrate under
+    /// that slot instead of a top-level struct field, to keep `Task` itself
+    /// spec-pure. Until then, this is the pragmatic wire slot.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub diagnostic_detail: Option<String>,
 }
 
 impl Task {
@@ -244,6 +271,7 @@ impl Task {
             last_updated_at: String::new(),
             poll_interval: None,
             status_message: None,
+            diagnostic_detail: None,
         }
     }
 
@@ -273,6 +301,13 @@ impl Task {
     /// Set a human-readable status message.
     pub fn with_status_message(mut self, message: impl Into<String>) -> Self {
         self.status_message = Some(message.into());
+        self
+    }
+
+    /// Set the full operator-facing diagnostic detail (PMCP extension — D-17;
+    /// see the field doc comment on [`Task::diagnostic_detail`]).
+    pub fn with_diagnostic_detail(mut self, detail: impl Into<String>) -> Self {
+        self.diagnostic_detail = Some(detail.into());
         self
     }
 
@@ -762,6 +797,84 @@ mod tests {
             .with_ttl(60000);
         let json = serde_json::to_value(&task).unwrap();
         assert_eq!(json["ttl"], 60000);
+    }
+
+    #[test]
+    fn task_diagnostic_detail_absent_when_none() {
+        // D-17 PMCP extension: diagnostic_detail defaults to None and MUST be
+        // skip-serialized — byte-identical to pre-field JSON for callers that
+        // never set it.
+        let task = Task::new("t-diag-none", TaskStatus::Working)
+            .with_timestamps("2025-11-25T00:00:00Z", "2025-11-25T00:01:00Z");
+        assert_eq!(task.diagnostic_detail, None);
+        let json = serde_json::to_value(&task).unwrap();
+        assert!(
+            json.get("diagnosticDetail").is_none(),
+            "diagnosticDetail must be omitted from JSON when None"
+        );
+    }
+
+    #[test]
+    fn task_diagnostic_detail_round_trip() {
+        // D-17 PMCP extension serde round-trip: Some(...) serializes under the
+        // camelCase `diagnosticDetail` key and deserializes back unchanged.
+        let task = Task::new("t-diag-some", TaskStatus::Failed)
+            .with_timestamps("2025-11-25T00:00:00Z", "2025-11-25T00:01:00Z")
+            .with_status_message("The AI service was temporarily unavailable")
+            .with_diagnostic_detail(
+                "step=call_tool op=propose_schema url=https://api.example/v1/x error=timeout",
+            );
+        let json = serde_json::to_value(&task).unwrap();
+        assert_eq!(
+            json["diagnosticDetail"],
+            "step=call_tool op=propose_schema url=https://api.example/v1/x error=timeout"
+        );
+        // Both voices ride independently — statusMessage stays the friendly one.
+        assert_eq!(
+            json["statusMessage"],
+            "The AI service was temporarily unavailable"
+        );
+
+        let roundtrip: Task = serde_json::from_value(json).unwrap();
+        assert_eq!(
+            roundtrip.diagnostic_detail.as_deref(),
+            Some("step=call_tool op=propose_schema url=https://api.example/v1/x error=timeout")
+        );
+        assert_eq!(
+            roundtrip.status_message.as_deref(),
+            Some("The AI service was temporarily unavailable")
+        );
+    }
+
+    #[test]
+    fn task_diagnostic_detail_consumer_tolerance() {
+        // Review concern #3 / T-162-05-COMPAT: a Task JSON carrying the NEW
+        // diagnosticDetail key (plus a hypothetical extra unknown key a
+        // strict/older consumer wouldn't recognize) deserializes cleanly into
+        // `Task` — proving Task does NOT use deny_unknown_fields and existing
+        // consumers tolerate additive wire fields.
+        let wire_json = json!({
+            "taskId": "task-tolerant",
+            "status": "failed",
+            "ttl": null,
+            "createdAt": "2025-11-25T12:00:00.000Z",
+            "lastUpdatedAt": "2025-11-25T12:01:00.000Z",
+            "statusMessage": "The AI service was temporarily unavailable",
+            "diagnosticDetail": "step=call_tool op=propose_schema error=timeout",
+            "someFutureUnknownField": { "nested": "value" }
+        });
+        let task: Task = serde_json::from_value(wire_json)
+            .expect("Task must tolerate diagnosticDetail + an unrelated unknown field");
+        assert_eq!(task.task_id, "task-tolerant");
+        assert_eq!(task.status, TaskStatus::Failed);
+        assert_eq!(
+            task.diagnostic_detail.as_deref(),
+            Some("step=call_tool op=propose_schema error=timeout")
+        );
+        assert_eq!(
+            task.status_message.as_deref(),
+            Some("The AI service was temporarily unavailable")
+        );
     }
 
     #[test]

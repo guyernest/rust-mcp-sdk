@@ -5,6 +5,16 @@ All notable changes to the `cargo-pmcp` crate will be documented in this file.
 The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html).
 
+## [0.17.2] - 2026-07-08
+
+### Changed
+
+- Bumped the `workbook-server` scaffold's hardcoded `PMCP_VERSION` pin from
+  `2.13.0` to `2.14.0` to track the workspace-root `pmcp` release (the
+  `emitted_pmcp_version_matches_workspace_pin` drift guard enforces this). The
+  emitted `Cargo.toml` now declares `pmcp = "2.14.0"`; older-pin scaffolds still
+  resolved via caret, so this is a cosmetic sync, not a behavior fix.
+
 ## [0.16.0] - 2026-06-08
 
 ### Added
