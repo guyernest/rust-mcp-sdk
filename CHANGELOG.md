@@ -5,6 +5,38 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.14.0] - 2026-07-08
+
+`Task.diagnostic_detail` — a PMCP extension field for two-voice task status.
+One additive, wire-neutral change (no breaking changes): `Task` gains an
+optional second status voice so producers can carry a business-friendly
+`status_message` and a full operator/developer diagnostic independently.
+Motivated by a pmcp.run dev-team request (their task servers need a redacted,
+end-user message plus an expandable operator detail behind a "details"
+affordance).
+
+### Added — `Task.diagnostic_detail` (`src/types/tasks.rs`)
+
+- **`Task.diagnostic_detail: Option<String>`** (wire key `diagnosticDetail`, D-17)
+  — a **PMCP extension, not an MCP-spec field**. The MCP `Task` type carries a
+  single `status_message` voice, which PMCP treats as the business-friendly,
+  user-facing voice; `diagnostic_detail` is a separate operator/developer voice
+  (step ids, URLs, internal error text) meant for an expandable-detail UI.
+  Producers MUST redact secrets/tokens before setting it (documented on the
+  field).
+- **`Task::with_diagnostic_detail(detail)`** builder — mirrors
+  `with_status_message` exactly.
+- Additive and non-breaking: `Task` is `#[non_exhaustive]` and built via
+  `Task::new()` + builders (no struct-literal breakage), the field is
+  `skip_serializing_if = "Option::is_none"` (callers that never set it produce
+  byte-identical JSON to 2.13.0), and `Task` has no `deny_unknown_fields` so
+  strict/older consumers ignore the extra key. Covered by three serde tests
+  (absent-when-`None`, `Some(..)` round-trip, and consumer-tolerance of the new
+  key plus an unrelated unknown field).
+- **Future migration note:** if the MCP spec grows a `_meta` extension slot on
+  `Task`, this field is a candidate to move under it rather than staying a
+  top-level struct field.
+
 ## [2.13.0] - 2026-07-05
 
 Loop-free task poll-decision classifier + durable/replay-consumer docs. One
