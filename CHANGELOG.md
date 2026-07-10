@@ -35,6 +35,8 @@ carrying `structuredContent`).
   failure mode.
 - Docs: "Typed Output on the Wire" section in pmcp-book ch05; shared duplex
   test harness extracted to `tests/common/duplex.rs`.
+- `cargo-pmcp` 0.17.2 → 0.17.3: workbook scaffold's emitted `pmcp` pin bumped
+  to 2.15.0 (tripwire-enforced against the workspace root version).
 
 ### Changed (behavior, non-breaking API)
 
