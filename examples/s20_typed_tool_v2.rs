@@ -4,6 +4,11 @@
 //! for tools with both input and output type safety. It also demonstrates
 //! the new description variants for better tool documentation.
 //!
+//! Because these tools declare an `outputSchema` (derived from the Rust output
+//! type), the server automatically emits each result value as
+//! `structuredContent` alongside the serialized text voice — structured-aware
+//! clients read the typed value directly, text-only clients keep working.
+//!
 //! Available description methods:
 //! - `.tool_typed_with_description(name, desc, handler)` - For input typing only
 //! - `.tool_typed_sync_with_description(name, desc, handler)` - For sync input typing

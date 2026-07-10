@@ -678,11 +678,24 @@ impl ServerCore {
             self.suppress_double_wrap.contains(req.name.as_str()),
         );
 
+        // A declared outputSchema means structuredContent is emitted below
+        // (via widget enrichment or the schema bridge) — validate the value
+        // against it regardless of which branch does the emitting.
+        if let Some(schema) = tool_info.and_then(|i| i.output_schema.as_ref()) {
+            crate::server::output_validation::warn_on_schema_mismatch(&req.name, schema, &value);
+        }
+
         let call_result = if let Some(info) = tool_info.filter(|i| i.widget_meta().is_some()) {
             // Widget tool: structured data goes in structuredContent,
             // text is a brief summary to avoid duplication in `ChatGPT`
             let summary = summarize_structured_output(&value);
             CallToolResult::new(vec![Content::text(summary)]).with_widget_enrichment(info, value)
+        } else if tool_info.is_some_and(|i| i.output_schema.is_some()) {
+            // Declared outputSchema: bridge it to the wire (MCP spec — a tool
+            // that declares an outputSchema SHOULD return structuredContent
+            // conforming to it). Dual-emit (compact text voice, matching the
+            // high-level `Server` dispatcher) keeps text-only clients working.
+            CallToolResult::structured(value)
         } else {
             let text = serde_json::to_string_pretty(&value)?;
             CallToolResult::new(vec![Content::text(text)])

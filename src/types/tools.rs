@@ -594,6 +594,64 @@ impl CallToolResult {
         }
     }
 
+    /// Create a structured success result — the success-side counterpart of
+    /// [`rejected`](Self::rejected).
+    ///
+    /// One value, one call, both voices: `structuredContent` carries `value`
+    /// verbatim for structured-aware clients, and `content` carries the
+    /// canonical JSON serialization of the same value as text, so text-only
+    /// clients (older hosts, log pipelines) keep working. Per the MCP spec, a
+    /// tool that declares an `outputSchema` SHOULD return `structuredContent`
+    /// conforming to it — this constructor is the one-call way to do that
+    /// from handlers that own their [`CallToolResult`] envelope.
+    ///
+    /// Use [`structured_with_text`](Self::structured_with_text) when the
+    /// human-readable voice should differ from the raw serialization.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use pmcp::types::CallToolResult;
+    /// use serde_json::json;
+    ///
+    /// let value = json!({ "rows": [1, 2, 3] });
+    /// let result = CallToolResult::structured(value.clone());
+    ///
+    /// assert!(!result.is_error);
+    /// assert_eq!(result.structured_content, Some(value.clone()));
+    /// // The text voice round-trips to the same value.
+    /// let pmcp::types::Content::Text { text } = &result.content[0] else {
+    ///     unreachable!()
+    /// };
+    /// assert_eq!(serde_json::from_str::<serde_json::Value>(text).unwrap(), value);
+    /// ```
+    pub fn structured(value: Value) -> Self {
+        let text = value.to_string();
+        Self::new(vec![Content::text(text)]).with_structured_content(value)
+    }
+
+    /// Create a structured success result with a distinct human-readable voice.
+    ///
+    /// Like [`structured`](Self::structured), but `content` carries `text`
+    /// instead of the raw JSON serialization — mirroring the two-voice
+    /// separation [`rejected`](Self::rejected) has on the error side.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use pmcp::types::CallToolResult;
+    /// use serde_json::json;
+    ///
+    /// let result = CallToolResult::structured_with_text(
+    ///     json!({ "matches": 42 }),
+    ///     "Found 42 matches.",
+    /// );
+    /// assert_eq!(result.structured_content, Some(json!({ "matches": 42 })));
+    /// ```
+    pub fn structured_with_text(value: Value, text: impl Into<String>) -> Self {
+        Self::new(vec![Content::text(text.into())]).with_structured_content(value)
+    }
+
     /// Add structured content for both model and widget.
     pub fn with_structured_content(mut self, content: Value) -> Self {
         self.structured_content = Some(content);
