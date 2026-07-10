@@ -5,6 +5,55 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.15.0] - 2026-07-10
+
+Typed tool output on the wire — a declared `outputSchema` now automatically
+produces `structuredContent`. Per the MCP spec, a tool that declares an
+`outputSchema` SHOULD return `structuredContent` conforming to it; previously
+the SDK published the schema in `tools/list` but stringified every result into
+`content[0].text`, setting `structured_content` only for UI widget tools.
+Structured-output consumers (web apps, durable agents, codegen clients) had to
+`JSON.parse` an undocumented text blob. Motivated by a pmcp.run dev-team
+filing (their web-channel typed-results track was blocked on results actually
+carrying `structuredContent`).
+
+### Added
+
+- **`CallToolResult::structured(value)`** (`src/types/tools.rs`) — the
+  success-side counterpart of `CallToolResult::rejected`: one value, one call,
+  both voices. `structuredContent` carries the value verbatim;
+  `content[0].text` carries its canonical JSON serialization for text-only
+  clients. **`CallToolResult::structured_with_text(value, text)`** keeps a
+  distinct human-readable text voice. Intended for handlers that own their
+  full envelope (the verbatim `ToolOutput::Result` path, hand-rolled servers).
+- **Warn-only output validation** (`src/server/output_validation.rs`, gated on
+  the existing `validation` feature) — when a tool declares an `outputSchema`
+  and the dispatcher emits `structuredContent`, the value is validated against
+  the schema and mismatches log a `tracing` WARNING (never an error result).
+  Compiled validators are cached per schema; conforming values take an
+  `is_valid` short-circuit. Catches schema drift in dev/CI with no production
+  failure mode.
+- Docs: "Typed Output on the Wire" section in pmcp-book ch05; shared duplex
+  test harness extracted to `tests/common/duplex.rs`.
+
+### Changed (behavior, non-breaking API)
+
+- **Both native dispatchers** (high-level `Server` and `ServerCore`, so
+  stdio/HTTP/WASM deployments alike) now bridge a declared `outputSchema` to
+  the wire: Payload-path results from tools with an `outputSchema` (e.g.
+  `TypedToolWithOutput`, `tool_typed_with_output`, `#[mcp_tool]` functions
+  returning typed `Result<T>`) are dual-emitted — the serialized text voice
+  plus `structuredContent`. Tools without a declared schema keep the
+  text-only envelope, byte-for-byte unchanged. Widget enrichment precedence
+  is preserved.
+- **Heads-up for drifted schemas**: clients that validate `structuredContent`
+  against the declared schema will now see mismatches that were previously
+  hidden by text-only emission. That is the spec-correct outcome; enable the
+  `validation` feature in dev/CI to catch drift server-side first.
+- `ServerCore`'s text voice for schema-declaring tools is now compact JSON
+  (was pretty-printed), matching the high-level `Server` dispatcher and
+  shrinking dual-emit payloads.
+
 ## [2.14.0] - 2026-07-08
 
 `Task.diagnostic_detail` — a PMCP extension field for two-voice task status.

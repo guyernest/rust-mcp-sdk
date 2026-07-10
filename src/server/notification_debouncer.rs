@@ -299,7 +299,7 @@ async fn flush_all(
 ) {
     let pending_map = pending.write().await;
 
-    for (_, pending_notif) in pending_map.iter() {
+    for pending_notif in pending_map.values() {
         // Send the main notification
         let _ = output_tx.send(pending_notif.notification.clone()).await;
 
