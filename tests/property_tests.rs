@@ -655,3 +655,68 @@ mod list_all_pagination_properties {
         }
     }
 }
+
+#[cfg(test)]
+mod structured_output_invariants {
+    use super::*;
+
+    /// Arbitrary JSON value (no floats — NaN/precision break equality
+    /// round-trips and the invariant under test is structural, not numeric).
+    fn arb_json() -> impl Strategy<Value = serde_json::Value> {
+        let leaf = prop_oneof![
+            Just(serde_json::Value::Null),
+            any::<bool>().prop_map(serde_json::Value::Bool),
+            any::<i64>().prop_map(|n| serde_json::json!(n)),
+            "[a-zA-Z0-9 _-]{0,12}".prop_map(serde_json::Value::String),
+        ];
+        leaf.prop_recursive(3, 32, 4, |inner| {
+            prop_oneof![
+                prop::collection::vec(inner.clone(), 0..4).prop_map(serde_json::Value::Array),
+                prop::collection::hash_map("[a-zA-Z_][a-zA-Z0-9_]{0,8}", inner, 0..4)
+                    .prop_map(|m| serde_json::Value::Object(m.into_iter().collect())),
+            ]
+        })
+    }
+
+    proptest! {
+        /// Property: `CallToolResult::structured(v)` dual-emits ONE value in
+        /// both voices — `structuredContent` carries `v` verbatim, the text
+        /// voice parses back to `v`, and the wire (serde) shape exposes the
+        /// camelCase `structuredContent` field with the same value.
+        #[test]
+        fn property_structured_dual_emit_roundtrip(value in arb_json()) {
+            let result = CallToolResult::structured(value.clone());
+
+            prop_assert!(!result.is_error);
+            prop_assert_eq!(result.structured_content.as_ref(), Some(&value));
+
+            let Content::Text { text } = &result.content[0] else {
+                return Err(TestCaseError::fail("structured() must emit a text voice"));
+            };
+            let parsed: serde_json::Value = serde_json::from_str(text)
+                .map_err(|e| TestCaseError::fail(format!("text voice must be valid JSON: {e}")))?;
+            prop_assert_eq!(&parsed, &value);
+
+            let wire = serde_json::to_value(&result)
+                .map_err(|e| TestCaseError::fail(format!("result must serialize: {e}")))?;
+            prop_assert_eq!(wire.get("structuredContent"), Some(&value));
+        }
+
+        /// Property: `structured_with_text` keeps the human voice verbatim and
+        /// never leaks it into `structuredContent`.
+        #[test]
+        fn property_structured_with_text_two_voices(
+            value in arb_json(),
+            human in "[a-zA-Z0-9 .,!?-]{1,40}"
+        ) {
+            let result = CallToolResult::structured_with_text(value.clone(), human.clone());
+
+            prop_assert!(!result.is_error);
+            prop_assert_eq!(result.structured_content.as_ref(), Some(&value));
+            let Content::Text { text } = &result.content[0] else {
+                return Err(TestCaseError::fail("structured_with_text must emit a text voice"));
+            };
+            prop_assert_eq!(text, &human);
+        }
+    }
+}

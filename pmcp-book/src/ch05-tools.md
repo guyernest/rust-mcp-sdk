@@ -263,6 +263,52 @@ Ok(serde_json::to_value(CalculatorResult { result: 15.0, ... })?)
 
 Your code stays simple—just return your data structure. PMCP handles protocol details.
 
+### Typed Output on the Wire: `outputSchema` → `structuredContent`
+
+Per the MCP spec, a tool that declares an `outputSchema` SHOULD return
+`structuredContent` conforming to it. PMCP bridges this automatically: when a
+tool's `ToolInfo` declares an `outputSchema` (e.g. registered via
+`tool_typed_with_output`, `TypedToolWithOutput`, or an `#[mcp_tool]` function
+returning a typed `Result<T>`), the server emits the handler's value **twice**
+on success:
+
+```rust
+// Your handler returns:
+Ok(CalculatorResult { result: 15.0, /* ... */ })
+
+// The wire result carries BOTH voices:
+// {
+//   "content": [{ "type": "text", "text": "{\"result\":15.0,...}" }],  // text-only clients
+//   "structuredContent": { "result": 15.0, ... },                       // typed clients
+//   "isError": false
+// }
+```
+
+Structured-aware clients (web apps, durable agents) read
+`result.structured_content` directly — no `JSON.parse` of an undocumented text
+blob. Text-only hosts keep working from `content`. Tools *without* a declared
+`outputSchema` keep the text-only envelope, so existing servers are unchanged.
+
+Handlers that own their full `CallToolResult` envelope (returning
+`ToolOutput::Result`) can dual-emit in one call with the success-side
+counterpart of `CallToolResult::rejected`:
+
+```rust
+use pmcp::types::CallToolResult;
+use serde_json::json;
+
+// One value, one call, both voices:
+CallToolResult::structured(json!({ "rows": [1, 2, 3] }));
+
+// Or with a distinct human-readable voice:
+CallToolResult::structured_with_text(json!({ "matches": 42 }), "Found 42 matches.");
+```
+
+**Catching schema drift**: with the `validation` feature enabled, the server
+validates each bridged value against the declared `outputSchema` at emit time
+and logs a **warning** (never an error result) on mismatch — surfacing drift
+in dev/CI without adding a production failure mode.
+
 ### Step 4: Validation
 
 Validate inputs before processing:

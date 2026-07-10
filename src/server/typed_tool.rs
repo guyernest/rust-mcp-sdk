@@ -514,8 +514,11 @@ where
 /// A typed tool with both input and output type safety
 ///
 /// This variant provides type safety for both input arguments and return values.
-/// While output schemas are not part of the MCP protocol, they're useful for
-/// testing, documentation, and API contracts.
+/// The derived output schema is published as the tool's `outputSchema` in
+/// `tools/list`, and the server dispatchers bridge it onto the wire: a tool
+/// with a declared `outputSchema` has its result value emitted as
+/// `structuredContent` (alongside the serialized text voice), per the MCP
+/// spec's "SHOULD return structuredContent conforming to it".
 pub struct TypedToolWithOutput<TIn, TOut, F>
 where
     TIn: DeserializeOwned + Send + Sync + 'static,

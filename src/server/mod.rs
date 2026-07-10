@@ -55,6 +55,9 @@ pub mod http_middleware;
 /// Middleware executor abstraction for consistent tool execution.
 #[cfg(not(target_arch = "wasm32"))]
 pub mod middleware_executor;
+/// Warn-only emit-time validation of `structuredContent` against a declared
+/// `outputSchema` (no-op unless the `validation` feature is enabled).
+pub(crate) mod output_validation;
 /// Concrete `PeerHandle` implementation delegating to the
 /// `ServerRequestDispatcher`.
 #[cfg(not(target_arch = "wasm32"))]
@@ -1612,12 +1615,26 @@ impl Server {
             self.suppress_double_wrap.contains(req.name.as_str()),
         );
 
-        // Build CallToolResult, adding structured_content for widget tools
+        // Build CallToolResult, adding structured_content for widget tools and
+        // for tools with a declared outputSchema (MCP spec: a tool that
+        // declares an outputSchema SHOULD return structuredContent conforming
+        // to it). The text voice always carries the serialized value so
+        // text-only clients keep working.
         let text = result.to_string();
         let mut call_result = CallToolResult::new(vec![crate::types::Content::text(text)]);
 
         if let Some(info) = self.tool_infos.get(&req.name) {
-            call_result = call_result.with_widget_enrichment(info, result);
+            // A declared outputSchema means structuredContent is emitted below
+            // (via widget enrichment or the schema bridge) — validate the value
+            // against it regardless of which branch does the emitting.
+            if let Some(schema) = &info.output_schema {
+                output_validation::warn_on_schema_mismatch(&req.name, schema, &result);
+            }
+            if info.widget_meta().is_some() {
+                call_result = call_result.with_widget_enrichment(info, result);
+            } else if info.output_schema.is_some() {
+                call_result = call_result.with_structured_content(result);
+            }
         }
 
         // D-03.3: drain any handler-set result `_meta` (via extra.set_result_meta)
