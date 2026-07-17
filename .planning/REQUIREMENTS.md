@@ -79,13 +79,45 @@
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| (populated by roadmap) | | |
+| HOST-01 | Phase 106 | Pending |
+| HOST-02 | Phase 106 | Pending |
+| HOST-03 | Phase 106 | Pending |
+| HOST-04 | Phase 106 | Pending |
+| HOST-05 | Phase 106 | Pending |
+| HOST-06 | Phase 106 | Pending |
+| PKG-01 | Phase 107 | Pending |
+| PKG-02 | Phase 107 | Pending |
+| PKG-03 | Phase 107 | Pending |
+| AGNT-01 | Phase 108 | Pending |
+| AGNT-02 | Phase 108 | Pending |
+| AGNT-03 | Phase 108 | Pending |
+| AGNT-04 | Phase 108 | Pending |
+| AGNT-05 | Phase 108 | Pending |
+| AGNT-06 | Phase 108 | Pending |
+| AGNT-07 | Phase 108 | Pending |
+| AGNT-08 | Phase 108 | Pending |
+| AGNT-09 | Phase 108 | Pending |
+| TEAM-01 | Phase 109 | Pending |
+| TEAM-02 | Phase 109 | Pending |
+| TEAM-03 | Phase 109 | Pending |
+| TEAM-04 | Phase 109 | Pending |
+| TEAM-05 | Phase 109 | Pending |
+| TEAM-06 | Phase 109 | Pending |
+| CLI-01 | Phase 110 | Pending |
+| CLI-02 | Phase 110 | Pending |
+| CLI-03 | Phase 110 | Pending |
+| CLI-04 | Phase 110 | Pending |
+| DOCS-01 | Phase 111 | Pending |
+| DOCS-02 | Phase 111 | Pending |
+| DOCS-03 | Phase 111 | Pending |
 
 **Coverage:**
 - v1 requirements: 31 total
-- Mapped to phases: 0
-- Unmapped: 31 ⚠️ (pre-roadmap)
+- Mapped to phases: 31 ✓
+- Unmapped: 0 ✓
+
+Phase distribution: Phase 106 (HOST, 6) · Phase 107 (PKG, 3) · Phase 108 (AGNT, 9) · Phase 109 (TEAM, 6) · Phase 110 (CLI, 4) · Phase 111 (DOCS, 3)
 
 ---
 *Requirements defined: 2026-07-17*
-*Last updated: 2026-07-17 after initial definition (from approved design doc)*
+*Last updated: 2026-07-17 — roadmap created, all 31 v1 requirements mapped to Phases 106-111 (100% coverage)*

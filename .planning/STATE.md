@@ -6,7 +6,7 @@ status: planning
 last_updated: "2026-07-17T20:04:07.857Z"
 last_activity: 2026-07-17
 progress:
-  total_phases: 0
+  total_phases: 6
   completed_phases: 0
   total_plans: 0
   completed_plans: 0
@@ -17,54 +17,50 @@ progress:
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-06-09) · .planning/ROADMAP.md (v2.3 milestone, Phases 91-96)
+See: .planning/PROJECT.md (updated 2026-07-17) · .planning/ROADMAP.md (v2.4 milestone, Phases 106-111) · docs/design/agents-teams-sdk-extraction-plan.md (approved)
 
-**Core value:** Compile, never interpret — any project can compile a governed Excel workbook into a tested, versioned, deterministic MCP server where the workbook is simultaneously the specification (formula DAG), the test oracle (cached cell values = assertions), and the output template.
-**Current focus:** Phase 105 complete — no phase in progress
+**Core value:** The PMCP SDK is the reference implementation for agents-as-MCP-clients and agent teams — one open agent loop and one portable package format that run identically on a laptop, any deploy target, and pmcp.run (contracts + reference implementations in the SDK; operation + scale on the platform).
+**Current focus:** v2.4 roadmap created — no phase in progress. Next: `/gsd:plan-phase 106` (or plan 106 and 107 in parallel — they are independent).
 
 ## Current Position
 
-Phase: Not started (defining requirements)
+Phase: Not started (roadmap approved, Phases 106-111 mapped)
 Plan: —
-Status: Defining requirements
-Last activity: 2026-07-17 — Milestone v2.4 started
+Status: Roadmap created
+Last activity: 2026-07-17 — Milestone v2.4 roadmap created (6 phases, 31 requirements, 100% coverage)
 
-## v2.3 Phase Plan (6 phases, 38 requirements)
+## v2.4 Phase Plan (6 phases, 31 requirements)
 
-| Phase | Goal | Reqs | Critical-path |
-|-------|------|------|---------------|
-| 91 | Workbook Runtime + Purity Gate + Dialect Spec — reader-free leaf, `cargo tree`/`cargo-deny` purity gate on day one, dialect spec + linter | 6 | yes — proves the boundary, blocks all |
-| 92 | BundleSource + Served-Tool Toolkit Module — freeze the bundle contract from the consumer side, 5 tools fully manifest-driven, fail-closed | 9 | yes — locks contract before compiler re-cut |
-| 93 | Workbook Compiler + §5 Fixes + Promote Gate — umya-isolated pipeline, manifest-driven emit, CR-01/CR-02/WR-01, umya provenance, change-class + golden gate | 14 | yes — heaviest lift |
-| 94 | CLI Subcommands + `pmcp.toml` — compile/lint/emit thin shells, `--accept` flow, project config kills single-workbook assumptions | 4 | over stable compiler |
-| 95 | Shape A Binary `pmcp-workbook-server` — pure-config binary from a bundle alone, mirrors `pmcp-sql-server` | 1 | over toolkit module + `pmcp.toml` |
-| 96 | Shape B Scaffold + Dialect-Version + Generalization Validation — `--kind workbook-server`, second-workbook gate, Excel-quirk corpus | 4 | proves generalization |
+| Phase | Name | Goal | Reqs | Depends on |
+|-------|------|------|------|------------|
+| 106 | Client Host Surface | Client hosts server→client sampling/elicitation/roots + HITL hook; legacy inverted sampling documented as "LLM-server pattern" (design Phase A) | HOST-01..06 (6) | none (parallel with 107) |
+| 107 | Contracts & Package Format | `pmcp-package` adopted into repo + published 0.1.0 (wire-frozen); team tool contracts as provable-contracts YAML (design Phase B) | PKG-01..03 (3) | none (parallel with 106) |
+| 108 | `pmcp-agent` Loop Crate | Pure agent loop between effect seams, 3 CompletionSources, agent-as-server adapter, tasks-aware ToolInvoker, AgentPackage-configured (design Phase C) | AGNT-01..09 (9) | 106 + 107 |
+| 109 | Team Reference Servers | `pmcp-team-servers` (feature-flagged) with dev-grade team-fs/approval-mcp/mem-mcp/team-mcp + conformance vs PKG-03 (design Phase D) | TEAM-01..06 (6) | 108 (+107 fixtures) |
+| 110 | cargo-pmcp Agent & Team Verbs | `agent new`/`agent dev`, `team dev`, `package capture\|show` with version-pin tripwires (design Phase E) | CLI-01..04 (4) | 107, 108, 109 |
+| 111 | Docs in Three Shapes + Examples | pmcp-book chapters + runnable examples + README/course, cargo-pmcp-first (design Phase F) | DOCS-01..03 (3) | 106-110 |
 
-**Execution order:** 91 → 92 → 93 → 94 → 95 → 96 (strictly sequential — each phase's output is the next phase's dependency)
+**Execution order:** 106 ∥ 107 → 108 → 109 → 110 → 111. Phases 106 and 107 are independent and may run in parallel. Contract-first (house rule): Phase 107 contracts precede the Phase 108/109 implementations. Phase 106 is small, independently shippable (pmcp minor bump), and unblocks Phase 108's `SamplingSource`.
+
+**Publish-order impact (design §5):** new entries `pmcp-package` (leaf, before cargo-pmcp), `pmcp-agent` (after `pmcp`), `pmcp-team-servers` (after `pmcp-agent`); cargo-pmcp moves after all three. New version-pin tripwires: cargo-pmcp ↔ `pmcp-package`, agent scaffold ↔ `pmcp-agent`. All new crates 0.x/experimental; `pmcp` core changes (Phase 106) are additive minor bumps.
 
 ## Accumulated Context
 
 ### Roadmap Evolution
 
-- Phase 105 added (2026-07-05): Task poll-decision classifier + durable-consumer docs — pmcp.run Ask A accepted (loop-free classifier shared with `wait_for_task`, durable/replay consumer doc page); Ask B (`tasks/provide_input` elicitation round-trip) deliberately deferred as spec-invention risk
+- v2.4 milestone roadmap created (2026-07-17): 6 phases (106-111) map 1:1 to the approved design doc's §4 phases A-F along the compliance→contracts→agent→teams→CLI→docs spine; all 31 v1 requirements mapped (100% coverage, no orphans).
 
 ### Decisions
 
-Decisions are logged in PROJECT.md Key Decisions table. Decisions framing this milestone:
+Decisions are logged in PROJECT.md Key Decisions table. Decisions framing this milestone (from design §6 recommendations, approved):
 
-- v2.3: Runtime-first build order (RFC §7) — port `pmcp-workbook-runtime` before any `umya` code so the purity gate defends the boundary from day one.
-- v2.3: Freeze the bundle contract from the consumer side (Phase 92) BEFORE re-cutting the compiler (Phase 93).
-- v2.3: §5 generalization fixes (manifest-driven emit, CR-01/CR-02/WR-01, umya provenance) land in the compiler-owning phase (93), not deferred.
-- v2.3: Mirror the v2.2 toolkit pattern (toolkit feature module + Shape A binary + Shape B scaffold); explicitly does NOT touch `pmcp-code-mode`.
-- [Phase ?]: Phase 91-01: pmcp-workbook-runtime lifted reader-free from lighthouse; D-08 adds Deserialize to finding types; no pmcp dep (D-09 permits but runtime is pmcp-free); writer-only rust_xlsxwriter — zip enters only via the writer
-- [Phase ?]: Phase 91-02: pmcp-workbook-dialect reader-free slot 2b; flat 13-fn WHITELIST (D-05); doc-const binding test enforces WBDL-01; re-exports runtime findings (D-03); linter/WorkbookMap deferred to Phase 93 (D-02)
-- [Phase ?]: Phase 91-03: WBRT-04 fail-closed three-layer purity gate (cargo-tree per-crate/per-feature negative+positive + crate-local cargo-deny bans + crate split); merge-blocking CI gate; just+make entrypoints (D-09); WBDL-03 re-mapped to Phase 93 (D-02)
-- Phase 96-02 (WBCL-05): `cargo pmcp new --kind workbook-server` Shape B scaffold; scaffold assets EMBEDDED under the cargo-pmcp package root via include_dir!/include_bytes! (publish-safe, NOT copied from crates/* at generate-time); narrow #[path] lib seam (templates_workbook_server) exposes the generator to the example+integration test; emitted Cargo.toml is purity-safe (default-features=false, workbook-embedded+http); reuses the tax-calc@1.1.0 golden (D-07, no new .xlsx)
-- Phase 96-03 (WBEX-01/02 de-risk): reusable #[cfg(test)] rust_xlsxwriter fixture author (fixture_author.rs) retires the .xlsx authoring landmine -- genuine Excel identity (rust_xlsxwriter 0.95 defaults: Application=Microsoft Excel + AppVersion=12.0000 + non-sentinel calcId 124519 => ExcelTrusted, no DocProperties needed) asserted DIRECTLY via classify_authored(), cached-<v> reconcile oracle via Formula::set_result, env-gated #[ignore] regenerate_fixtures generator (normal tests use TempDir), production-refusal guard (T-96-07). Per-fixture *.provenance-override.json + *.gen.json sidecars
-- Phase 96-03: 1900-leap disposition (A) DAG-expressible -- IF(serial>59, serial+1, serial) over f64 with whitelisted ops only; NO DATE/DATEVALUE added (WBDL-01 doc-const binding + deferred-functions boundary held; dialect crate byte-clean); committed leap1900-probe.xlsx reconcile fixture compiles+reconciles; SPIKE-1900-leap.md carries ## WBEX-02 Traceability for Plan 96-05
-- Phase 96-04 (WBEX-01 generalization gate PROVEN): a second synthetic loan rate-tier workbook compiles via the GENERIC compile_workbook driver and serves its OWN get_manifest/tools/list schema (loan input/output keys present, tax-calc keys absent, the two key sets DISJOINT) behind the SAME five generic tool names -- the disjointness read off the generic toolkit fns (input_schema_for_manifest/output_schema_for_manifest/GetManifestHandler) IS the proof (T-96-11), zero per-workbook served Rust. Whitelist-legal (VLOOKUP + INDEX-MATCH cross-check, IFERROR, nested-IF tiering, ROUND/CEILING; NO PMT/POWER/exponentiation, D-02). Added name_named_inputs() -- the in_* input named-range convention mirroring out_* -- so the served input schema carries semantic keys (loan_amount) not the cell's numeric value (Rule 2 deviation). Custom-unit acceptance item NOT achievable via the compile path (synth sets role.unit=None; cell_map reads role.unit) -> asserted the generic { value, unit } projection RUNS per output instead. reemit_loan.rs (9 #[cfg(test)] assertions incl. production-refusal T-96-10) + committed synthetic loan-calc.xlsx (zero customer/TowelRads material, T-96-12)
-- Phase 96-05 (WBEX-02 Excel-quirk corpus COMPLETE): 8 quirks in BOTH D-08 layers -- scalar_eval unit tests (runtime crate, 8 #[test] each with a {formula+context, oracle, expected} tuple; half-rounding asserts excel_round source of truth; 1900-leap asserts the >59 boundary + +1 offset components per SPIKE, no DATE) + penny-reconcile mini fixtures (quirks_reconcile.rs harness: compile via override -> load bundle -> seed inputs -> run_executor -> RETRIEVE recomputed value + cached oracle -> within_tol, cannot pass on compile-success alone T-96-14b; a wrong-oracle negative test proves the value is graded; production-refusal spot check T-96-13). 3 of 4 NAMED quirks have a real reconcile fixture (1900-leap reuses leap1900-probe.xlsx; empty-cell coercion via A2+(A1=IF(A2>9999,1)->Empty) since an absent range member is a hard #REF! not Empty; half-rounding). Error propagation (named) is the plan-sanctioned scalar_eval-only stand-in: the runtime Div clamps zero-divisor NaN->0 (WR-02/IN-03) and errors short-circuit at preflight_error, so a numeric reconcile fixture is not expressible. Quirk->WBEX-02 traceability map in the quirks_reconcile.rs module doc. Reverted incidental regenerate_fixtures rewrites of existing leap/loan fixtures (no edits to existing fixtures). make quality-gate DEFERRED to the phase verifier.
-- [Phase ?]: Phase 98 DSTK-01: shared exists-guard + --regenerate-stack/--force preserve curated stack.ts on both deploy targets (IAM validation kept outside the guard)
+- Boundary razor: contracts + reference implementations in the open SDK; operation + scale stay on pmcp.run.
+- Crate name `pmcp-agent` (not `pmcp-agents`); one `pmcp-team-servers` crate with per-server feature flags (not four crates).
+- `pmcp-package` adopted into this repo first, published 0.1.0 from here (source: `~/Development/mcp/sdk/pmcp-run/crates/pmcp-package` — import + publish-hygiene, not a rewrite); caret `"0.1"` dep, not `=0.1.0`.
+- Legacy inverted sampling kept and documented as the "LLM-server pattern" (no breaking change / no deprecation).
+- Sampling-first, not sampling-only: `SamplingSource` (zero-dep) first-class; `OpenAiCompatSource` + `AnthropicSource` feature-gated; three sources maximum, the trait is the extension point.
+- The trait seams double as durability seams — the loop stays pure/replay-safe (mirrors the 2.13.0 `poll_decision` non-determinism-inside-the-step design).
+- Team-tool contracts as provable-contracts YAML (house convention), namespaced provisional PMCP extensions.
 
 ### Pending Todos
 
@@ -72,20 +68,18 @@ None yet.
 
 ### Blockers/Concerns
 
-- [Phase 93 research flag] Confirm whether the SWC/`pmcp-code-mode` JS oracle is still load-bearing for offline penny-reconcile parity, or whether pure-Rust `scalar_eval` fully covers it (LOW-MEDIUM confidence; verify against the lighthouse Phase-10 reconcile path during Phase 93 planning).
-- [Phase 91] Re-derive the `quick-xml` / `zip` transitive pins via `cargo tree -p umya-spreadsheet -i quick-xml` against the actual resolved workspace (do not fork a second copy).
+None yet. (Research flags per phase to be surfaced during `/gsd:plan-phase`.)
 
 ## Deferred Items
 
-Items deferred by design for this milestone:
+Items deferred by design for this milestone (design §7 / REQUIREMENTS v2):
 
 | Category | Item | Status | Deferred At |
 |----------|------|--------|-------------|
-| BundleSource | S3 / registry bundle store (documented seam on the trait) | Deferred | v2.3 scope |
-| Dialect | Named-range-backed validation lists (inline-literal DV enums only ship) | Deferred | v2.3 scope |
-| Compiler | Capability cells (Rust/remote/MCP escape hatches) | Deferred | v2.3 scope |
-| Compiler | Row-block iteration / arbitrary-N loops | Deferred | v2.3 scope |
-| Served | Wire deferred error triggers (`stale_oracle`, `unapproved_assumption`) | Deferred | v2.x |
+| Deploy | AgentCore deploy adapter (`cargo pmcp deploy` target) | Deferred (DEFER-01) | v2.4 scope |
+| Sources | Additional `CompletionSource` impls beyond the three shipped | Deferred (DEFER-02) | v2.4 scope |
+| Memory | Scaled team-memory backends (embeddings/vector stores) in the open SDK | Deferred (DEFER-03) | v2.4 scope |
+| Platform | pmcp.run adopting the loop/traits (companion §8 note) | Deferred (DEFER-04) | not SDK work |
 
 ## Shipped Milestones
 
@@ -98,24 +92,16 @@ Items deferred by design for this milestone:
 | v1.4 | Book & Course Update | 20-24 | 2026-02-28 |
 | v2.0 | Protocol Modernization | 54-59 | — |
 | v2.2 | Configuration-Only MCP Servers (SQL + OpenAPI) | 82-90.2 | substantially shipped |
+| v2.3 | Excel-as-Configuration MCP Servers + Tasks DX arc | 91-96, 101-105 | 2026-07-05 |
 
 ## Session Continuity
 
-Last session: 2026-07-05T16:13:23.543Z
-Stopped at: Phase 105 context gathered
-Resume file: .planning/phases/105-task-poll-decision-classifier-and-durable-consumer-docs/105-CONTEXT.md
+Last session: 2026-07-17 — v2.4 roadmap created
+Stopped at: Roadmap approved and written; Phases 106-111 mapped
+Resume file: .planning/ROADMAP.md (v2.4 Agents & Teams section, Phases 106-111)
 
 ## Performance Metrics
 
 | Phase | Plan | Duration | Notes |
 |-------|------|----------|-------|
-| Phase 91 P01 | 14 | 3 tasks | 21 files |
-| Phase 91 P02 | 9min | 3 tasks | 4 files |
-| Phase 91 P03 | 22min | 3 tasks | 9 files |
-| Phase 96 P02 | 38min | 3 tasks | 15 files |
-| Phase 96 P03 | 35min | 2 tasks | 6 files |
-| Phase 96 P04 | ~40min | 2 tasks | 6 files |
-| Phase 96 P05 | ~40min | 2 tasks | 9 files |
-| Phase 98 P01 | ~12min | 2 tasks | 2 files |
-| Phase 98 P98-02 | 25min | 2 tasks | 6 files |
-| Phase 98 P03 | 40min | 2 tasks | 5 files |
+| (v2.4 phases not yet planned) | — | — | — |
