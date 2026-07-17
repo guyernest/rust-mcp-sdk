@@ -2194,6 +2194,17 @@ impl<T: Transport> Client<T> {
                 .server_capabilities
                 .as_ref()
                 .is_some_and(|c| c.tasks.is_some()),
+            // The LLM-server pattern: `create_message` asks a server whose
+            // `SamplingHandler` runs the LLM. A pmcp `Server` built with
+            // `.sampling(handler)` advertises this by setting
+            // `ServerCapabilities.sampling = Some(..)` (see
+            // `src/server/mod.rs` `ServerBuilder::sampling`), so the check
+            // mirrors that field. Without this arm every `create_message`
+            // call fell through to `_ => false` and unconditionally errored.
+            "sampling" => self
+                .server_capabilities
+                .as_ref()
+                .is_some_and(|c| c.sampling.is_some()),
             _ => false,
         };
 
@@ -3562,6 +3573,37 @@ mod tests {
         let result = client.list_tools(None).await;
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("not supported"));
+    }
+
+    #[test]
+    fn test_assert_capability_sampling_present_when_server_advertises() {
+        // Regression for CR-01: a server advertising `sampling` must satisfy
+        // the capability assertion `create_message` performs.
+        let mut client = Client::new(MockTransport::new());
+        client.server_capabilities = Some(ServerCapabilities {
+            sampling: Some(crate::types::SamplingCapabilities::default()),
+            ..Default::default()
+        });
+        assert!(
+            client
+                .assert_capability("sampling", "sampling/createMessage")
+                .is_ok(),
+            "sampling capability must be recognized when the server advertises it"
+        );
+    }
+
+    #[test]
+    fn test_assert_capability_sampling_absent_errors() {
+        // Negative half of CR-01: no `sampling` advertised => capability error.
+        let mut client = Client::new(MockTransport::new());
+        client.server_capabilities = Some(ServerCapabilities::default());
+        let err = client
+            .assert_capability("sampling", "sampling/createMessage")
+            .expect_err("missing sampling capability must error");
+        assert!(
+            err.to_string().contains("does not support sampling"),
+            "unexpected error message: {err}"
+        );
     }
 
     #[tokio::test]
