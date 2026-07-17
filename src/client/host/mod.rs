@@ -70,8 +70,12 @@ impl std::fmt::Debug for ClientHostRegistry {
 ///
 /// Pure, synchronous, and side-effect free so it can be property/fuzz tested
 /// independently of the async dispatch path.
+///
+/// Exposed as `#[doc(hidden)] pub` (not part of the public API surface) solely
+/// so the routing fuzz target can drive [`classify_host_request`] directly.
+#[doc(hidden)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum HostRequestKind {
+pub enum HostRequestKind {
     /// `sampling/createMessage` (either parse variant — see below).
     Sampling,
     /// `elicitation/create`.
@@ -90,7 +94,11 @@ pub(crate) enum HostRequestKind {
 /// `parse_request` tries the client grammar first) as well as the
 /// `Request::Server(ServerRequest::CreateMessage)` shape. Both map to
 /// [`HostRequestKind::Sampling`].
-pub(crate) fn classify_host_request(request: &Request) -> HostRequestKind {
+///
+/// Exposed as `#[doc(hidden)] pub` (not part of the stable public API) so the
+/// routing fuzz target can exercise the real dispatch classification path.
+#[doc(hidden)]
+pub fn classify_host_request(request: &Request) -> HostRequestKind {
     match request {
         Request::Client(client) => match client.as_ref() {
             ClientRequest::CreateMessage(_) => HostRequestKind::Sampling,
