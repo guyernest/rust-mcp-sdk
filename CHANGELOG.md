@@ -5,6 +5,50 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.16.0] - Unreleased
+
+Client host surface (Phase 106): a pmcp `Client` can now **answer**
+server→client requests — the MCP spec host direction. Register host handlers on
+`ClientBuilder` (`on_sampling`, `on_elicitation`, `on_roots`) plus optional
+sampling approval hooks (`on_sampling_approval`, `on_sampling_result_review`),
+and the client answers inbound `sampling/createMessage`, `elicitation/create`,
+and `roots/list` while one of its own requests is in flight. The legacy inverted
+`Client::create_message` path is kept and documented as the distinct
+"LLM-server pattern".
+
+### Added
+
+- `pmcp::client::host` module: `HostSamplingHandler`, `HostElicitationHandler`,
+  `RootsProvider`, and the two-stage sampling approval seam (`PreflightApproval`,
+  `SamplingResultReview`) with `ApprovalDecision`.
+- `ClientBuilder` registration methods: `on_sampling`, `on_elicitation`,
+  `on_roots`, `on_sampling_approval`, `on_sampling_result_review`.
+
+### Fixed
+
+- `Client::create_message` no longer always fails: `assert_capability` gained
+  the missing `"sampling"` arm, so the LLM-server pattern works against any
+  server advertising `sampling`.
+- Inbound server→client `ping` is now answered with an empty result per the
+  spec MUST instead of `-32601`, so keepalive pings no longer fail.
+- A failed host-response send no longer leaks the in-flight request's
+  `active_requests` entry.
+
+### Changed / Behavior notes
+
+- **Registry-derived host capabilities (HOST-05, potential silent change for
+  `Client::new` users).** The `sampling`, `elicitation`, and `roots` capability
+  fields sent on `initialize` are now **derived from the registered host
+  handlers**, not from the `ClientCapabilities` passed to `initialize`. If no
+  matching handler is registered, that field is forced to `None` on the wire
+  even when the caller set it (anti-capability-lie: a client must not advertise
+  a host capability it cannot service). Code built via `Client::new` that set
+  `capabilities.roots`/`sampling`/`elicitation` by hand will no longer advertise
+  those capabilities unless it registers the corresponding handler via
+  `ClientBuilder`. When a handler *is* registered, caller-configured detail
+  (e.g. `roots.list_changed`) is preserved. All other capability fields are
+  unaffected.
+
 ## [2.15.0] - 2026-07-10
 
 Typed tool output on the wire — a declared `outputSchema` now automatically
