@@ -2624,7 +2624,7 @@ impl<T: Transport> ClientBuilder<T> {
     ///
     /// The provider is generic over any closure returning a future that yields
     /// `Result<ListRootsResult>`, so callers never construct the
-    /// [`RootsProvider`](host::RootsProvider) alias by hand.
+    /// [`RootsProvider`] alias by hand.
     pub fn on_roots<F, Fut>(mut self, provider: F) -> Self
     where
         F: Fn() -> Fut + Send + Sync + 'static,
@@ -2640,7 +2640,7 @@ impl<T: Transport> ClientBuilder<T> {
     ///
     /// The callback is generic over any closure taking owned
     /// [`CreateMessageParams`] and returning a future that yields an
-    /// [`ApprovalDecision`](host::ApprovalDecision). Its INVOCATION lands in a
+    /// [`ApprovalDecision`]. Its INVOCATION lands in a
     /// follow-on plan; registering it here is additive.
     pub fn on_sampling_approval<F, Fut>(mut self, callback: F) -> Self
     where
@@ -2655,7 +2655,7 @@ impl<T: Transport> ClientBuilder<T> {
     ///
     /// The callback receives the owned request params and the produced
     /// [`CreateMessageResult`] and returns a future yielding an
-    /// [`ApprovalDecision`](host::ApprovalDecision). Its INVOCATION lands in a
+    /// [`ApprovalDecision`]. Its INVOCATION lands in a
     /// follow-on plan; registering it here is additive.
     pub fn on_sampling_result_review<F, Fut>(mut self, callback: F) -> Self
     where
