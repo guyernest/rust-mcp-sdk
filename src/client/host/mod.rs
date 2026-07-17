@@ -82,6 +82,9 @@ pub enum HostRequestKind {
     Elicitation,
     /// `roots/list`.
     Roots,
+    /// Inbound `ping` (server -> client keepalive). Answered with an empty
+    /// result per the MCP spec MUST, independent of the host registry.
+    Ping,
     /// A known-but-unroutable request kind.
     Unhandled,
 }
@@ -102,6 +105,11 @@ pub fn classify_host_request(request: &Request) -> HostRequestKind {
     match request {
         Request::Client(client) => match client.as_ref() {
             ClientRequest::CreateMessage(_) => HostRequestKind::Sampling,
+            // A server -> client `ping` parses via the client grammar
+            // (`ClientRequest::Ping`). The MCP spec requires the receiver to
+            // respond promptly with an empty result, so it must not fall
+            // through to method-not-found.
+            ClientRequest::Ping => HostRequestKind::Ping,
             _ => HostRequestKind::Unhandled,
         },
         Request::Server(server) => match server.as_ref() {
@@ -171,5 +179,14 @@ mod tests {
     fn classify_unhandled_client_request() {
         let req = Request::Client(Box::new(ClientRequest::ListTools(Default::default())));
         assert_eq!(classify_host_request(&req), HostRequestKind::Unhandled);
+    }
+
+    #[test]
+    fn classify_inbound_ping_is_ping_not_unhandled() {
+        // WR-01: server -> client ping parses as ClientRequest::Ping and must
+        // classify as Ping (spec MUST: answered with an empty result), never
+        // fall through to Unhandled / method-not-found.
+        let req = Request::Client(Box::new(ClientRequest::Ping));
+        assert_eq!(classify_host_request(&req), HostRequestKind::Ping);
     }
 }

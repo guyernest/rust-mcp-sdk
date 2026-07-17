@@ -2344,6 +2344,12 @@ impl<T: Transport> Client<T> {
             HostRequestKind::Sampling => self.dispatch_host_sampling(id, request).await,
             HostRequestKind::Elicitation => self.dispatch_host_elicitation(id, request).await,
             HostRequestKind::Roots => self.dispatch_host_roots(id).await,
+            // Spec MUST: answer inbound `ping` with an empty-object success
+            // result so keepalive pings from servers/proxies do not fail (and
+            // do not tear down the connection).
+            HostRequestKind::Ping => {
+                crate::types::JSONRPCResponse::success(id, serde_json::json!({}))
+            },
             HostRequestKind::Unhandled => Self::host_method_not_found(id),
         }
     }
