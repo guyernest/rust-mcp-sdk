@@ -312,11 +312,15 @@ impl<T: Transport> Client<T> {
     /// - Communication with the server fails
     pub async fn initialize(
         &mut self,
-        capabilities: ClientCapabilities,
+        mut capabilities: ClientCapabilities,
     ) -> Result<InitializeResult> {
         if self.initialized {
             return Err(Error::InvalidState("Client already initialized".into()));
         }
+
+        // HOST-05: make the three host capability fields reflect the registry
+        // (registry-authoritative anti-capability-lie) before advertising them.
+        self.derive_host_capabilities(&mut capabilities);
 
         self.capabilities = Some(capabilities.clone());
 
@@ -360,6 +364,46 @@ impl<T: Transport> Client<T> {
             crate::types::jsonrpc::ResponsePayload::Error(error) => {
                 Err(Error::from_jsonrpc_error(error))
             },
+        }
+    }
+
+    /// Apply the HOST-05 registry-authoritative rule to the three host
+    /// capability fields (`sampling`/`elicitation`/`roots`), leaving every other
+    /// field (`tasks`, `experimental`, ...) untouched.
+    ///
+    /// Per field:
+    /// - **Handler absent** => force `None` (locked anti-capability-lie: a
+    ///   caller-set value with no registered handler is discarded, closing the
+    ///   spoofing hole where a client advertises a host capability it cannot
+    ///   actually service).
+    /// - **Handler present, caller left `None`** => insert `Some(default())`.
+    /// - **Handler present, caller configured detail** => preserve the caller's
+    ///   value unchanged (keeps configured sampling tool support / roots
+    ///   `list_changed` / elicitation modes).
+    ///
+    /// There is deliberately no independent public setter for these three
+    /// fields — advertisement is derived, never independently assertable.
+    fn derive_host_capabilities(&self, capabilities: &mut ClientCapabilities) {
+        use crate::types::capabilities::{
+            ElicitationCapabilities, RootsCapabilities, SamplingCapabilities,
+        };
+
+        if self.host_registry.sampling.is_none() {
+            capabilities.sampling = None;
+        } else if capabilities.sampling.is_none() {
+            capabilities.sampling = Some(SamplingCapabilities::default());
+        }
+
+        if self.host_registry.elicitation.is_none() {
+            capabilities.elicitation = None;
+        } else if capabilities.elicitation.is_none() {
+            capabilities.elicitation = Some(ElicitationCapabilities::default());
+        }
+
+        if self.host_registry.roots.is_none() {
+            capabilities.roots = None;
+        } else if capabilities.roots.is_none() {
+            capabilities.roots = Some(RootsCapabilities::default());
         }
     }
 
@@ -3119,6 +3163,119 @@ mod tests {
         assert!(
             response.is_success(),
             "absent result_review must pass through"
+        );
+    }
+
+    // === Capability derivation unit tests (HOST-05) ===
+
+    struct MockHostElicit;
+
+    #[async_trait]
+    impl host::HostElicitationHandler for MockHostElicit {
+        async fn handle_elicitation(
+            &self,
+            _params: crate::types::elicitation::ElicitRequestParams,
+        ) -> Result<crate::types::elicitation::ElicitResult> {
+            Ok(crate::types::elicitation::ElicitResult {
+                action: crate::types::elicitation::ElicitAction::Accept,
+                content: None,
+            })
+        }
+    }
+
+    #[test]
+    fn test_capability_sampling_registered_is_present() {
+        // (a) handler registered + default caps => sampling present.
+        let client = ClientBuilder::new(MockTransport::new())
+            .on_sampling(MockHostSampling)
+            .build();
+        let mut caps = ClientCapabilities::default();
+        client.derive_host_capabilities(&mut caps);
+        assert!(caps.sampling.is_some(), "registered sampling => present");
+    }
+
+    #[test]
+    fn test_capability_sampling_unregistered_default_is_absent() {
+        // (b) no handler + default caps => sampling absent.
+        let client = Client::new(MockTransport::new());
+        let mut caps = ClientCapabilities::default();
+        client.derive_host_capabilities(&mut caps);
+        assert!(caps.sampling.is_none(), "unregistered sampling => absent");
+    }
+
+    #[test]
+    fn test_capability_sampling_anti_lie_discards_caller_value() {
+        // (c) ANTI-LIE: no handler + caller-set sampling => forced None.
+        let client = Client::new(MockTransport::new());
+        let mut caps = ClientCapabilities::default();
+        caps.sampling = Some(crate::types::capabilities::SamplingCapabilities::default());
+        client.derive_host_capabilities(&mut caps);
+        assert!(
+            caps.sampling.is_none(),
+            "caller-set sampling with no handler must be discarded (anti-capability-lie)"
+        );
+    }
+
+    #[test]
+    fn test_capability_sampling_preserves_caller_detail() {
+        // (d) PRESERVATION: handler present + caller-configured sub-field =>
+        // that exact detail is preserved (not reset to default()).
+        let client = ClientBuilder::new(MockTransport::new())
+            .on_sampling(MockHostSampling)
+            .build();
+        let mut caps = ClientCapabilities::default();
+        caps.sampling = Some(crate::types::capabilities::SamplingCapabilities {
+            models: Some(vec!["gpt-4o".to_string()]),
+            ..Default::default()
+        });
+        client.derive_host_capabilities(&mut caps);
+        let sampling = caps.sampling.expect("handler present => sampling kept");
+        assert_eq!(
+            sampling.models,
+            Some(vec!["gpt-4o".to_string()]),
+            "caller-configured models must be preserved, not reset to default"
+        );
+    }
+
+    #[test]
+    fn test_capability_elicitation_and_roots_parallel() {
+        // (e) elicitation + roots follow the same rule.
+        // Registered => present.
+        let client = ClientBuilder::new(MockTransport::new())
+            .on_elicitation(MockHostElicit)
+            .on_roots(|| async { Ok(crate::types::roots::ListRootsResult { roots: Vec::new() }) })
+            .build();
+        let mut caps = ClientCapabilities::default();
+        client.derive_host_capabilities(&mut caps);
+        assert!(caps.elicitation.is_some(), "registered elicitation => present");
+        assert!(caps.roots.is_some(), "registered roots => present");
+
+        // Unregistered + caller-set => discarded (anti-lie) for both.
+        let bare = Client::new(MockTransport::new());
+        let mut caps2 = ClientCapabilities::default();
+        caps2.elicitation =
+            Some(crate::types::capabilities::ElicitationCapabilities::default());
+        caps2.roots = Some(crate::types::capabilities::RootsCapabilities::default());
+        bare.derive_host_capabilities(&mut caps2);
+        assert!(caps2.elicitation.is_none(), "elicitation anti-lie");
+        assert!(caps2.roots.is_none(), "roots anti-lie");
+    }
+
+    #[test]
+    fn test_capability_derivation_leaves_tasks_and_experimental_untouched() {
+        // (f) tasks / experimental are never modified by host derivation.
+        let client = Client::new(MockTransport::new());
+        let mut caps = ClientCapabilities::default();
+        caps.tasks = Some(crate::types::capabilities::ClientTasksCapability::default());
+        let mut experimental = HashMap::new();
+        experimental.insert("custom".to_string(), serde_json::json!(true));
+        caps.experimental = Some(experimental);
+        client.derive_host_capabilities(&mut caps);
+        assert!(caps.tasks.is_some(), "tasks must be preserved");
+        assert_eq!(
+            caps.experimental.and_then(|e| e.get("custom").cloned()),
+            Some(serde_json::json!(true)),
+            "experimental must be preserved"
         );
     }
 
