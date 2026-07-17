@@ -312,11 +312,15 @@ impl<T: Transport> Client<T> {
     /// - Communication with the server fails
     pub async fn initialize(
         &mut self,
-        capabilities: ClientCapabilities,
+        mut capabilities: ClientCapabilities,
     ) -> Result<InitializeResult> {
         if self.initialized {
             return Err(Error::InvalidState("Client already initialized".into()));
         }
+
+        // HOST-05: make the three host capability fields reflect the registry
+        // (registry-authoritative anti-capability-lie) before advertising them.
+        self.derive_host_capabilities(&mut capabilities);
 
         self.capabilities = Some(capabilities.clone());
 
@@ -360,6 +364,46 @@ impl<T: Transport> Client<T> {
             crate::types::jsonrpc::ResponsePayload::Error(error) => {
                 Err(Error::from_jsonrpc_error(error))
             },
+        }
+    }
+
+    /// Apply the HOST-05 registry-authoritative rule to the three host
+    /// capability fields (`sampling`/`elicitation`/`roots`), leaving every other
+    /// field (`tasks`, `experimental`, ...) untouched.
+    ///
+    /// Per field:
+    /// - **Handler absent** => force `None` (locked anti-capability-lie: a
+    ///   caller-set value with no registered handler is discarded, closing the
+    ///   spoofing hole where a client advertises a host capability it cannot
+    ///   actually service).
+    /// - **Handler present, caller left `None`** => insert `Some(default())`.
+    /// - **Handler present, caller configured detail** => preserve the caller's
+    ///   value unchanged (keeps configured sampling tool support / roots
+    ///   `list_changed` / elicitation modes).
+    ///
+    /// There is deliberately no independent public setter for these three
+    /// fields — advertisement is derived, never independently assertable.
+    fn derive_host_capabilities(&self, capabilities: &mut ClientCapabilities) {
+        use crate::types::capabilities::{
+            ElicitationCapabilities, RootsCapabilities, SamplingCapabilities,
+        };
+
+        if self.host_registry.sampling.is_none() {
+            capabilities.sampling = None;
+        } else if capabilities.sampling.is_none() {
+            capabilities.sampling = Some(SamplingCapabilities::default());
+        }
+
+        if self.host_registry.elicitation.is_none() {
+            capabilities.elicitation = None;
+        } else if capabilities.elicitation.is_none() {
+            capabilities.elicitation = Some(ElicitationCapabilities::default());
+        }
+
+        if self.host_registry.roots.is_none() {
+            capabilities.roots = None;
+        } else if capabilities.roots.is_none() {
+            capabilities.roots = Some(RootsCapabilities::default());
         }
     }
 
@@ -2293,7 +2337,29 @@ impl<T: Transport> Client<T> {
         }
     }
 
-    /// Route a classified sampling request to the registered host handler.
+    /// Route a classified sampling request through the two-stage host approval
+    /// model and the registered sampling handler.
+    ///
+    /// # Policy-denial taxonomy
+    ///
+    /// Sampling has two host-side access-control stages, both applied ONLY to
+    /// the sampling path (never elicitation/roots):
+    ///
+    /// 1. **Preflight** ([`ClientBuilder::on_sampling_approval`]): a mandatory
+    ///    gate that runs BEFORE the handler. A [`ApprovalDecision::Deny`] here
+    ///    prevents the LLM call entirely — no tokens are billed — genuinely
+    ///    mitigating coerced / denial-of-wallet sampling. When no preflight
+    ///    callback is registered, the handler runs (default allow).
+    /// 2. **Result review** ([`ClientBuilder::on_sampling_result_review`]): an
+    ///    optional post-generation stage that sees the produced completion and
+    ///    can deny after the fact. Its default (no callback) is pass-through.
+    ///
+    /// A denial from either stage returns a sanitized `-32603` response with the
+    /// GENERIC message `"request denied by host policy"`. The callback's
+    /// `Deny(reason)` is logged locally via `tracing::warn!` and is NEVER
+    /// forwarded to the remote server (avoids leaking local host policy). The
+    /// connection is kept alive — a denial is a normal JSON-RPC error response,
+    /// not a transport failure.
     async fn dispatch_host_sampling(
         &self,
         id: RequestId,
@@ -2305,10 +2371,33 @@ impl<T: Transport> Client<T> {
         let Some(params) = Self::extract_sampling_params(request) else {
             return Self::host_method_not_found(id);
         };
-        match handler.handle_create_message(params).await {
-            Ok(result) => Self::host_ok(id, &result),
-            Err(e) => Self::host_handler_error(id, "sampling/createMessage", &e),
+
+        // (1) PREFLIGHT approval gate — runs BEFORE the handler so a denial
+        // prevents the LLM call entirely (no tokens billed). Owned params are
+        // cloned once up front so both the gate and the handler get their own.
+        if let Some(approval) = self.host_registry.approval.clone() {
+            if let ApprovalDecision::Deny(reason) = approval(params.clone()).await {
+                tracing::warn!(%reason, "sampling denied by host preflight");
+                return Self::host_policy_denied(id);
+            }
         }
+
+        // (2) HANDLER — produce the completion.
+        let result = match handler.handle_create_message(params.clone()).await {
+            Ok(result) => result,
+            Err(e) => return Self::host_handler_error(id, "sampling/createMessage", &e),
+        };
+
+        // (3) RESULT REVIEW — optional post-generation review (default
+        // pass-through when no callback is registered).
+        if let Some(review) = self.host_registry.result_review.clone() {
+            if let ApprovalDecision::Deny(reason) = review(params, result.clone()).await {
+                tracing::warn!(%reason, "sampling denied by host result review");
+                return Self::host_policy_denied(id);
+            }
+        }
+
+        Self::host_ok(id, &result)
     }
 
     /// Route a classified elicitation request to the registered host handler.
@@ -2386,6 +2475,21 @@ impl<T: Transport> Client<T> {
             crate::types::jsonrpc::JSONRPCError {
                 code: -32601,
                 message: "Method not found".to_string(),
+                data: None,
+            },
+        )
+    }
+
+    /// Sanitized `-32603` policy-denial response. Used when a host preflight or
+    /// result-review callback returns [`ApprovalDecision::Deny`]. The raw deny
+    /// reason is logged locally by the caller; only this generic message crosses
+    /// the wire so local host policy is not leaked to the remote server.
+    fn host_policy_denied(id: RequestId) -> crate::types::JSONRPCResponse {
+        crate::types::JSONRPCResponse::error(
+            id,
+            crate::types::jsonrpc::JSONRPCError {
+                code: -32603,
+                message: "request denied by host policy".to_string(),
                 data: None,
             },
         )
@@ -2911,6 +3015,280 @@ mod tests {
         assert!(
             response.is_success(),
             "roots provider must answer roots/list"
+        );
+    }
+
+    // === Sampling approval (preflight + result-review) unit tests (HOST-04) ===
+
+    /// Host sampling handler that flips an `AtomicBool` when invoked, so tests
+    /// can prove whether the LLM call happened.
+    struct TrackingHostSampling {
+        invoked: Arc<std::sync::atomic::AtomicBool>,
+    }
+
+    #[async_trait]
+    impl host::HostSamplingHandler for TrackingHostSampling {
+        async fn handle_create_message(
+            &self,
+            _params: CreateMessageParams,
+        ) -> Result<CreateMessageResult> {
+            self.invoked
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+            Ok(CreateMessageResult::new(
+                crate::types::Content::text("tracked completion"),
+                "tracked-model",
+            ))
+        }
+    }
+
+    fn assert_policy_denied(response: &JSONRPCResponse) {
+        match &response.payload {
+            ResponsePayload::Error(e) => {
+                assert_eq!(e.code, -32603, "policy denial must be -32603");
+                assert_eq!(
+                    e.message, "request denied by host policy",
+                    "policy denial message must be the generic sanitized string"
+                );
+            },
+            ResponsePayload::Result(r) => panic!("expected -32603 denial, got result: {r:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_sampling_no_preflight_runs_handler() {
+        // (a) No preflight callback => handler runs, completion returned.
+        let invoked = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let client = ClientBuilder::new(MockTransport::new())
+            .on_sampling(TrackingHostSampling {
+                invoked: invoked.clone(),
+            })
+            .build();
+        let response = client
+            .dispatch_host_request(RequestId::from(10i64), sampling_client_alias_request())
+            .await;
+        assert!(response.is_success(), "default (no preflight) must allow");
+        assert!(
+            invoked.load(std::sync::atomic::Ordering::SeqCst),
+            "handler must run when no preflight is registered"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_sampling_preflight_deny_skips_handler() {
+        // (b) Preflight Deny => handler is NOT called (denial-of-wallet fix) and
+        // the raw deny reason must NOT cross the wire.
+        let invoked = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let client = ClientBuilder::new(MockTransport::new())
+            .on_sampling(TrackingHostSampling {
+                invoked: invoked.clone(),
+            })
+            .on_sampling_approval(|_params| async {
+                host::ApprovalDecision::Deny("local-secret-reason".to_string())
+            })
+            .build();
+        let response = client
+            .dispatch_host_request(RequestId::from(11i64), sampling_client_alias_request())
+            .await;
+        assert_policy_denied(&response);
+        assert!(
+            !invoked.load(std::sync::atomic::Ordering::SeqCst),
+            "handler must NOT run when preflight denies (no LLM call, no tokens)"
+        );
+        // The raw deny reason must never be forwarded.
+        if let ResponsePayload::Error(e) = &response.payload {
+            assert!(
+                !e.message.contains("local-secret-reason"),
+                "deny reason must be logged locally, not forwarded: {}",
+                e.message
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_sampling_preflight_allow_runs_handler() {
+        // (c) Preflight Allow => completion returned.
+        let invoked = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let client = ClientBuilder::new(MockTransport::new())
+            .on_sampling(TrackingHostSampling {
+                invoked: invoked.clone(),
+            })
+            .on_sampling_approval(|_params| async { host::ApprovalDecision::Allow })
+            .build();
+        let response = client
+            .dispatch_host_request(RequestId::from(12i64), sampling_client_alias_request())
+            .await;
+        assert!(
+            response.is_success(),
+            "preflight Allow must return completion"
+        );
+        assert!(
+            invoked.load(std::sync::atomic::Ordering::SeqCst),
+            "handler must run after preflight Allow"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_sampling_result_review_deny_after_handler() {
+        // (d) result_review Deny after an allowed preflight => -32603, but the
+        // handler WAS called (generation happened, then was suppressed).
+        let invoked = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let client = ClientBuilder::new(MockTransport::new())
+            .on_sampling(TrackingHostSampling {
+                invoked: invoked.clone(),
+            })
+            .on_sampling_result_review(|_params, _result| async {
+                host::ApprovalDecision::Deny("post-gen-reason".to_string())
+            })
+            .build();
+        let response = client
+            .dispatch_host_request(RequestId::from(13i64), sampling_client_alias_request())
+            .await;
+        assert_policy_denied(&response);
+        assert!(
+            invoked.load(std::sync::atomic::Ordering::SeqCst),
+            "handler runs before result review can deny"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_sampling_result_review_absent_is_passthrough() {
+        // (e) result_review absent => pass-through (Allow), completion returned.
+        let invoked = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let client = ClientBuilder::new(MockTransport::new())
+            .on_sampling(TrackingHostSampling {
+                invoked: invoked.clone(),
+            })
+            .on_sampling_approval(|_params| async { host::ApprovalDecision::Allow })
+            .build();
+        let response = client
+            .dispatch_host_request(RequestId::from(14i64), sampling_client_alias_request())
+            .await;
+        assert!(
+            response.is_success(),
+            "absent result_review must pass through"
+        );
+    }
+
+    // === Capability derivation unit tests (HOST-05) ===
+
+    struct MockHostElicit;
+
+    #[async_trait]
+    impl host::HostElicitationHandler for MockHostElicit {
+        async fn handle_elicitation(
+            &self,
+            _params: crate::types::elicitation::ElicitRequestParams,
+        ) -> Result<crate::types::elicitation::ElicitResult> {
+            Ok(crate::types::elicitation::ElicitResult {
+                action: crate::types::elicitation::ElicitAction::Accept,
+                content: None,
+            })
+        }
+    }
+
+    #[test]
+    fn test_capability_sampling_registered_is_present() {
+        // (a) handler registered + default caps => sampling present.
+        let client = ClientBuilder::new(MockTransport::new())
+            .on_sampling(MockHostSampling)
+            .build();
+        let mut caps = ClientCapabilities::default();
+        client.derive_host_capabilities(&mut caps);
+        assert!(caps.sampling.is_some(), "registered sampling => present");
+    }
+
+    #[test]
+    fn test_capability_sampling_unregistered_default_is_absent() {
+        // (b) no handler + default caps => sampling absent.
+        let client = Client::new(MockTransport::new());
+        let mut caps = ClientCapabilities::default();
+        client.derive_host_capabilities(&mut caps);
+        assert!(caps.sampling.is_none(), "unregistered sampling => absent");
+    }
+
+    #[test]
+    fn test_capability_sampling_anti_lie_discards_caller_value() {
+        // (c) ANTI-LIE: no handler + caller-set sampling => forced None.
+        let client = Client::new(MockTransport::new());
+        let mut caps = ClientCapabilities {
+            sampling: Some(crate::types::capabilities::SamplingCapabilities::default()),
+            ..Default::default()
+        };
+        client.derive_host_capabilities(&mut caps);
+        assert!(
+            caps.sampling.is_none(),
+            "caller-set sampling with no handler must be discarded (anti-capability-lie)"
+        );
+    }
+
+    #[test]
+    fn test_capability_sampling_preserves_caller_detail() {
+        // (d) PRESERVATION: handler present + caller-configured sub-field =>
+        // that exact detail is preserved (not reset to default()).
+        let client = ClientBuilder::new(MockTransport::new())
+            .on_sampling(MockHostSampling)
+            .build();
+        let mut caps = ClientCapabilities {
+            sampling: Some(crate::types::capabilities::SamplingCapabilities {
+                models: Some(vec!["gpt-4o".to_string()]),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        client.derive_host_capabilities(&mut caps);
+        let sampling = caps.sampling.expect("handler present => sampling kept");
+        assert_eq!(
+            sampling.models,
+            Some(vec!["gpt-4o".to_string()]),
+            "caller-configured models must be preserved, not reset to default"
+        );
+    }
+
+    #[test]
+    fn test_capability_elicitation_and_roots_parallel() {
+        // (e) elicitation + roots follow the same rule.
+        // Registered => present.
+        let client = ClientBuilder::new(MockTransport::new())
+            .on_elicitation(MockHostElicit)
+            .on_roots(|| async { Ok(crate::types::roots::ListRootsResult { roots: Vec::new() }) })
+            .build();
+        let mut caps = ClientCapabilities::default();
+        client.derive_host_capabilities(&mut caps);
+        assert!(
+            caps.elicitation.is_some(),
+            "registered elicitation => present"
+        );
+        assert!(caps.roots.is_some(), "registered roots => present");
+
+        // Unregistered + caller-set => discarded (anti-lie) for both.
+        let bare = Client::new(MockTransport::new());
+        let mut caps2 = ClientCapabilities {
+            elicitation: Some(crate::types::capabilities::ElicitationCapabilities::default()),
+            roots: Some(crate::types::capabilities::RootsCapabilities::default()),
+            ..Default::default()
+        };
+        bare.derive_host_capabilities(&mut caps2);
+        assert!(caps2.elicitation.is_none(), "elicitation anti-lie");
+        assert!(caps2.roots.is_none(), "roots anti-lie");
+    }
+
+    #[test]
+    fn test_capability_derivation_leaves_tasks_and_experimental_untouched() {
+        // (f) tasks / experimental are never modified by host derivation.
+        let client = Client::new(MockTransport::new());
+        let mut experimental = HashMap::new();
+        experimental.insert("custom".to_string(), serde_json::json!(true));
+        let mut caps = ClientCapabilities {
+            tasks: Some(crate::types::capabilities::ClientTasksCapability::default()),
+            experimental: Some(experimental),
+            ..Default::default()
+        };
+        client.derive_host_capabilities(&mut caps);
+        assert!(caps.tasks.is_some(), "tasks must be preserved");
+        assert_eq!(
+            caps.experimental.and_then(|e| e.get("custom").cloned()),
+            Some(serde_json::json!(true)),
+            "experimental must be preserved"
         );
     }
 

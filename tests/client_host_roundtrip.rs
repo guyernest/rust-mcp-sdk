@@ -306,8 +306,8 @@ async fn elicitation_answered_via_raw_pump() {
 // Passthrough proptest: params observed by the host handler == server sent
 // ---------------------------------------------------------------------------
 
-/// Build a varied [`CreateMessageParams`] exercising tools / tool_choice and
-/// tool_use / tool_result content blocks.
+/// Build a varied [`CreateMessageParams`] exercising tools / `tool_choice` and
+/// `tool_use` / `tool_result` content blocks.
 fn arb_params() -> impl Strategy<Value = CreateMessageParams> {
     (
         proptest::option::of("[a-z ]{0,16}"),
