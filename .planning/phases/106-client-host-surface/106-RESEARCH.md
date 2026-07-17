@@ -263,19 +263,21 @@ let peer: Arc<dyn PeerHandle> = Arc::new(DispatchPeerHandle::new(dispatcher.clon
 
 **Note:** No `[ASSUMED]` package or version claims — this phase adds no dependencies.
 
-## Open Questions
+## Open Questions (RESOLVED)
 
-1. **Idle-host support scope.**
+*All three resolved 2026-07-17 during `/gsd:plan-phase 106` (locked in CONTEXT + adopted in the 106-01/106-02 plans).*
+
+1. **Idle-host support scope.** — RESOLVED: nested-only. No background receive pump is built this phase; the limitation is documented in rustdoc (106-01) and the pmcp-book Sampling & Hosting page (106-03), and flagged to Phase 108 planning.
    - What we know: no background receive loop; nested flow covers the agent/tool use case.
    - What's unclear: whether Phase 108's `SamplingSource` (design says it uses "the agent's server-side peer") needs the client to host while idle. Design §3/§8.5 imply sampling happens *while the hosted agent is servicing a request*, i.e. nested — so the constraint is likely fine.
    - Recommendation: implement nested-only; document the limitation in rustdoc; flag to Phase 108 planning. Do not build a pump now.
 
-2. **WASM surface: apply now or defer?**
+2. **WASM surface: apply now or defer?** — RESOLVED: cfg-agnostic, compile-clean surface now; example + duplex tests native-only. 106-01 keeps `client::host` free of tokio-only types (uses `async_trait` + `futures::BoxFuture`) and adds a `cargo check --target wasm32-unknown-unknown` step; the sampling-host example and roundtrip tests are gated `#[cfg(not(target_arch = "wasm32"))]`.
    - What we know: `src/client/mod.rs` compiles for wasm; the dispatch site is shared.
    - What's unclear: whether the sampling-host example and duplex test (both `#[cfg(not(target_arch = "wasm32"))]`) leave any wasm-specific gap.
    - Recommendation: make the registry + traits cfg-agnostic and compile-clean on wasm (Send+Sync per design §8.5); scope the example/test to native; add a wasm `cargo check` to verification. Document that the host surface *compiles* on wasm and the nested-flow constraint is identical there.
 
-3. **Approval hook ordering.** Before calling the handler vs. after producing the result. Recommendation: after the handler produces the `CreateMessageResult`, before returning it (lets the approver see the actual completion), unless the planner reads the spec SHOULD as gating the *request*. Low risk; either is defensible — pick one and test it.
+3. **Approval hook ordering.** — RESOLVED: approve after the handler produces the `CreateMessageResult`, before returning it (lets the approver see the actual completion). Implemented in 106-02 Task 1; `Deny` returns a -32603 error response (connection stays alive), default is allow.
 
 ## Environment Availability
 
