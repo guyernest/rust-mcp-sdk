@@ -3676,7 +3676,8 @@ mod tests {
         }
 
         async fn receive(&mut self) -> Result<TransportMessage> {
-            if let Some(msg) = self.inbound.lock().unwrap().take() {
+            let msg = self.inbound.lock().unwrap().take();
+            if let Some(msg) = msg {
                 Ok(msg)
             } else {
                 Err(Error::internal("no more messages"))
