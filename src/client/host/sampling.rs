@@ -49,9 +49,10 @@ pub trait HostSamplingHandler: Send + Sync {
 
 /// Outcome of a human-in-the-loop approval callback.
 ///
-/// The approval seam is a host-side access-control hook on sampling. This phase
-/// defines the type; its INVOCATION (gating an LLM call before/after the
-/// handler runs) lands in the follow-on plan.
+/// The approval seam is a host-side access-control hook on sampling. Both hooks
+/// ([`PreflightApproval`] and [`SamplingResultReview`]) are invoked by
+/// `dispatch_host_sampling` as of this phase — an [`ApprovalDecision::Deny`]
+/// from either gates the LLM call / suppresses the completion.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ApprovalDecision {
     /// Allow the sampling call to proceed / the completion to be returned.
@@ -60,14 +61,18 @@ pub enum ApprovalDecision {
     Deny(String),
 }
 
-/// Mandatory pre-handler approval gate for sampling.
+/// Optional pre-handler approval gate for sampling.
 ///
 /// Invoked with owned [`CreateMessageParams`] (owned so the value moves cleanly
 /// into a `'static` future) BEFORE the [`HostSamplingHandler`] runs. Returning
 /// [`ApprovalDecision::Deny`] prevents the LLM call.
 ///
-/// The type is defined here; wiring the invocation into dispatch is the
-/// follow-on plan's responsibility.
+/// The gate is optional with a default-allow posture: when no callback is
+/// registered, every inbound sampling request reaches the handler unchallenged.
+/// Register one via
+/// [`ClientBuilder::on_sampling_approval`](crate::ClientBuilder::on_sampling_approval)
+/// to require human/policy approval before any tokens are billed. It is invoked
+/// by `dispatch_host_sampling` as of this phase.
 pub type PreflightApproval =
     Arc<dyn Fn(CreateMessageParams) -> BoxFuture<'static, ApprovalDecision> + Send + Sync>;
 
@@ -78,8 +83,9 @@ pub type PreflightApproval =
 /// approver inspect the actual completion before it is returned. Returning
 /// [`ApprovalDecision::Deny`] suppresses the completion.
 ///
-/// The type is defined here; wiring the invocation into dispatch is the
-/// follow-on plan's responsibility.
+/// Optional with a default pass-through posture: when no callback is
+/// registered the produced completion is returned as-is. It is invoked by
+/// `dispatch_host_sampling` as of this phase.
 pub type SamplingResultReview = Arc<
     dyn Fn(CreateMessageParams, CreateMessageResult) -> BoxFuture<'static, ApprovalDecision>
         + Send

@@ -2767,12 +2767,15 @@ impl<T: Transport> ClientBuilder<T> {
         self
     }
 
-    /// Register a mandatory pre-handler sampling approval gate.
+    /// Register an optional pre-handler sampling approval gate.
     ///
     /// The callback is generic over any closure taking owned
     /// [`CreateMessageParams`] and returning a future that yields an
-    /// [`ApprovalDecision`]. Its INVOCATION lands in a
-    /// follow-on plan; registering it here is additive.
+    /// [`ApprovalDecision`]. It is invoked by `dispatch_host_sampling` BEFORE
+    /// the sampling handler runs as of this phase, so an
+    /// [`ApprovalDecision::Deny`] prevents the LLM
+    /// call entirely. The gate is optional and default-allow: when none is
+    /// registered, inbound sampling reaches the handler unchallenged.
     pub fn on_sampling_approval<F, Fut>(mut self, callback: F) -> Self
     where
         F: Fn(CreateMessageParams) -> Fut + Send + Sync + 'static,
@@ -2786,8 +2789,11 @@ impl<T: Transport> ClientBuilder<T> {
     ///
     /// The callback receives the owned request params and the produced
     /// [`CreateMessageResult`] and returns a future yielding an
-    /// [`ApprovalDecision`]. Its INVOCATION lands in a
-    /// follow-on plan; registering it here is additive.
+    /// [`ApprovalDecision`]. It is invoked by `dispatch_host_sampling` AFTER the
+    /// sampling handler runs as of this phase, so an
+    /// [`ApprovalDecision::Deny`] suppresses the
+    /// completion. It is optional and default pass-through: when none is
+    /// registered the completion is returned as-is.
     pub fn on_sampling_result_review<F, Fut>(mut self, callback: F) -> Self
     where
         F: Fn(CreateMessageParams, CreateMessageResult) -> Fut + Send + Sync + 'static,
