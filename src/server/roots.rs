@@ -11,22 +11,11 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::info;
 
-/// Represents a root directory or file that the server can operate on.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct Root {
-    /// The URI identifying the root. This must start with file:// for now.
-    pub uri: String,
-    /// An optional name for the root.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
-}
-
-/// Result of listing roots.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ListRootsResult {
-    /// The list of roots.
-    pub roots: Vec<Root>,
-}
+// `Root` and `ListRootsResult` were relocated to `crate::types::roots` so they
+// compile on every target (including wasm32) and can be shared with the client
+// host surface. Re-exported here to preserve the historical
+// `pmcp::server::roots::{Root, ListRootsResult}` path.
+pub use crate::types::roots::{ListRootsResult, Root};
 
 /// Parameters for roots list changed notification.
 #[derive(Debug, Clone, Serialize, Deserialize)]

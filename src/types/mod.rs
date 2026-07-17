@@ -13,6 +13,7 @@ pub mod notifications;
 pub mod prompts;
 pub mod protocol;
 pub mod resources;
+pub mod roots;
 pub mod sampling;
 pub mod tasks;
 pub mod tools;
