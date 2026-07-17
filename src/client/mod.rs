@@ -35,6 +35,7 @@ use futures_locks::RwLock;
 
 #[cfg(all(not(target_arch = "wasm32"), feature = "http-client"))]
 pub mod auth;
+pub mod host;
 pub mod http_logging_middleware;
 pub mod http_middleware;
 #[cfg(all(not(target_arch = "wasm32"), feature = "oauth"))]
@@ -44,6 +45,11 @@ mod options;
 pub mod transport;
 
 pub use options::ClientOptions;
+
+pub use host::{
+    ApprovalDecision, ClientHostRegistry, HostElicitationHandler, HostSamplingHandler,
+    PreflightApproval, RootsProvider, SamplingResultReview,
+};
 
 /// Response from a task-augmented `tools/call`.
 ///
