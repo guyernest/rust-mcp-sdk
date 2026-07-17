@@ -70,9 +70,6 @@ impl std::fmt::Debug for ClientHostRegistry {
 ///
 /// Pure, synchronous, and side-effect free so it can be property/fuzz tested
 /// independently of the async dispatch path.
-// Why: consumed by `Client::dispatch_host_request` (wired in the next task of
-// this plan); the annotation is removed there.
-#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum HostRequestKind {
     /// `sampling/createMessage` (either parse variant — see below).
@@ -93,9 +90,6 @@ pub(crate) enum HostRequestKind {
 /// `parse_request` tries the client grammar first) as well as the
 /// `Request::Server(ServerRequest::CreateMessage)` shape. Both map to
 /// [`HostRequestKind::Sampling`].
-// Why: consumed by `Client::dispatch_host_request` (wired in the next task of
-// this plan); the annotation is removed there.
-#[allow(dead_code)]
 pub(crate) fn classify_host_request(request: &Request) -> HostRequestKind {
     match request {
         Request::Client(client) => match client.as_ref() {
