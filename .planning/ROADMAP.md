@@ -2036,7 +2036,7 @@ Plans:
 
 **Publish-order impact (design §5):** new entries `pmcp-package` (leaf, before cargo-pmcp), `pmcp-agent` (after `pmcp`), `pmcp-team-servers` (after `pmcp-agent`); cargo-pmcp moves after all three. All new crates are 0.x/experimental; `pmcp` core changes (Phase 106) are additive minor bumps.
 
-- [ ] **Phase 106: Client Host Surface** — a pmcp `Client` can host server→client sampling/elicitation/roots with a human-in-the-loop hook; legacy inverted sampling documented as the "LLM-server pattern" (design Phase A)
+- [x] **Phase 106: Client Host Surface** — a pmcp `Client` can host server→client sampling/elicitation/roots with a human-in-the-loop hook; legacy inverted sampling documented as the "LLM-server pattern" (design Phase A) (completed 2026-07-17)
 - [ ] **Phase 107: Contracts & Package Format** — `pmcp-package` adopted into this repo + published 0.1.0 (wire-frozen), team-server tool contracts captured as provable-contracts YAML (design Phase B)
 - [ ] **Phase 108: `pmcp-agent` Loop Crate** — the pure agent loop between effect seams, three CompletionSources, agent-as-server adapter, tasks-aware ToolInvoker, configured from an AgentPackage (design Phase C)
 - [ ] **Phase 109: Team Reference Servers** — `pmcp-team-servers` (one feature-flagged crate) with dev-grade team-fs/approval-mcp/mem-mcp/team-mcp + conformance tests against the PKG-03 contracts (design Phase D)
@@ -2061,8 +2061,8 @@ Plans:
 **Plans**: 3 plans
 
 - [x] 106-01-PLAN.md — client::host module (traits, registry, preflight/result-review approval types, Result-returning roots provider) + roots wire-type relocation for wasm-clean surface + Client dispatch (classify_host_request, sanitized -32603) across all ctors/Clone + duplex round-trips (elicitation via raw pump) + registered s49 example + create_message LLM-server rustdoc (HOST-01/02/03 + HOST-06 rustdoc)
-- [ ] 106-02-PLAN.md — preflight approval gate (deny before the LLM runs) + optional result-review + registry-authoritative capabilities preserving caller sub-cap detail + parse_request->classify routing fuzz + pmcp 2.16.0 bump with cargo-pmcp pin tripwire (HOST-04, HOST-05)
-- [ ] 106-03-PLAN.md — pmcp-book Sampling & Hosting disambiguation page (real pmcp::SamplingHandler paths, preflight gate described) + SUMMARY link (HOST-06 book)
+- [x] 106-02-PLAN.md — preflight approval gate (deny before the LLM runs) + optional result-review + registry-authoritative capabilities preserving caller sub-cap detail + parse_request->classify routing fuzz + pmcp 2.16.0 bump with cargo-pmcp pin tripwire (HOST-04, HOST-05)
+- [x] 106-03-PLAN.md — pmcp-book Sampling & Hosting disambiguation page (real pmcp::SamplingHandler paths, preflight gate described) + SUMMARY link (HOST-06 book)
 
 ### Phase 107: Contracts & Package Format
 
@@ -2140,7 +2140,7 @@ Plans:
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 106. Client Host Surface | 1/3 | In Progress|  |
+| 106. Client Host Surface | 3/3 | Complete   | 2026-07-17 |
 | 107. Contracts & Package Format | 0/TBD | Not started | - |
 | 108. `pmcp-agent` Loop Crate | 0/TBD | Not started | - |
 | 109. Team Reference Servers | 0/TBD | Not started | - |
