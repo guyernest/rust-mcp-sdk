@@ -1,178 +1,91 @@
-# Requirements — Milestone v2.3: Excel-as-Configuration MCP Servers
+# Requirements: PMCP SDK — Milestone v2.4 Agents & Teams
 
-**Goal:** Extract the proven Excel-workbook → MCP-server compiler from the `towelrads-quote-pricing` lighthouse into the PMCP SDK as a new "governed Excel" CodeLanguage — alongside the v2.2 SQL and OpenAPI toolkits — so any project can **compile, not interpret** a governed workbook into a tested, versioned, deterministic MCP server. Generalize the known lighthouse debt (RFC §5) rather than copy it.
+**Defined:** 2026-07-17
+**Core Value:** The PMCP SDK is the reference implementation for agents-as-MCP-clients and agent teams — one open agent loop and one portable package format that run identically on a laptop, any deploy target, and pmcp.run (contracts + reference implementations in the SDK; operation + scale on the platform).
+**Design doc:** `docs/design/agents-teams-sdk-extraction-plan.md` (approved 2026-07-17 incl. §6 recommendations)
 
-**Source:** RFC `sdk-issue-excel-workbook-compiler-extraction.md` + `.planning/research/` (STACK / FEATURES / ARCHITECTURE / PITFALLS / SUMMARY).
+## v1 Requirements
 
-**Load-bearing invariant (applies to every requirement):** the Excel reader (`umya`) must NEVER enter the served-binary tree. The served path links only `pmcp-workbook-runtime`; the reader lives only in `pmcp-workbook-compiler`.
+### Client Host Surface (HOST)
 
----
+- [ ] **HOST-01**: A pmcp `Client` can register a client-side `SamplingHandler` that answers incoming spec-direction `sampling/createMessage` requests from servers (tools/tool_choice included), instead of erroring "Unexpected message type"
+- [ ] **HOST-02**: A pmcp `Client` can register an `ElicitationHandler` that answers incoming `elicitation/create` requests
+- [ ] **HOST-03**: A pmcp `Client` answers `roots/list` from a registered roots provider
+- [ ] **HOST-04**: The client sampling path exposes a human-in-the-loop approval hook (async callback slot, default allow) per the spec SHOULD
+- [ ] **HOST-05**: `ClientCapabilities` advertised on initialize reflect which host handlers are registered (sampling/elicitation/roots)
+- [ ] **HOST-06**: The legacy inverted sampling path (`Client::create_message` → server `SamplingHandler`) is documented as the distinct "LLM-server pattern" with no breaking changes, disambiguated from spec sampling in rustdoc and book
 
-## v2.3 Requirements
+### Contracts & Package Format (PKG)
 
-### Workbook Runtime — `pmcp-workbook-runtime` crate (reader-free leaf)
+- [ ] **PKG-01**: `pmcp-package` lives in this repo as its canonical home (standalone workspace-excluded crate) with publish-ready metadata: public-facing description, README, license files, docs.rs-verified rustdoc
+- [ ] **PKG-02**: `pmcp-package` 0.1.0 is published to crates.io with the wire-freeze policy documented (0.1.x = digest/serialization-stable enforced by golden fixtures; serialized-shape changes bump 0.2.0)
+- [ ] **PKG-03**: Team-server tool contracts (`fs__*`, `mem__*`, `team_mcp__<member>` dispatch semantics, `resolve_approval`/`get_approval` + dynamic `team_approval__ask_*`) are captured as versioned provable-contracts YAML with shared conformance fixtures, marked as namespaced provisional PMCP extensions
 
-- [x] **WBRT-01**: Developer can depend on a reader-free crate owning the shared model types (Manifest, CellMap, BundleLock, VersionChangelog, IR `Cell`/`Expr`), serde/schemars-clean, deserialized identically by the offline emitter and the served binary
-- [x] **WBRT-02**: Server can run a compiled workbook's IR through a deterministic evaluator producing typed outputs plus per-cell derivation traces
-- [x] **WBRT-03**: Server can render a computed workbook back to `.xlsx` via a writer-only renderer (`rust_xlsxwriter`) that keeps the served binary reader-free
-- [x] **WBRT-04**: CI/`just` purity gate fails the build if the Excel reader (`umya`/`quick-xml`) appears in the runtime or any served-binary dependency tree (cargo-tree assertion + `cargo-deny [bans]` backstop)
+### Agent Runtime (AGNT)
 
-### Workbook Dialect — SDK-owned, versioned
+- [ ] **AGNT-01**: `crates/pmcp-agent` (0.x experimental) defines object-safe async effect-seam traits: `CompletionSource`, `ToolInvoker`, `ConversationStore` — reusing SDK sampling types verbatim for `CompletionSource`
+- [ ] **AGNT-02**: The agent iteration loop (LLM call → tool-call decision → parallel tool dispatch → result digestion → end-turn detection → iteration/budget limits) runs pure between effect seams, with retry classification exposed as data (no retry/backoff policy inside the loop)
+- [ ] **AGNT-03**: Replay-safety invariant is property-tested: identical effect results ⇒ identical loop decisions (proptest over recorded effect traces)
+- [ ] **AGNT-04**: `SamplingSource` implements `CompletionSource` over spec sampling via the agent's server-side peer with zero additional dependencies
+- [ ] **AGNT-05**: `OpenAiCompatSource` (feature-gated) implements `CompletionSource` against any OpenAI-compatible endpoint (Ollama/vLLM/OpenRouter/xAI/DeepSeek)
+- [ ] **AGNT-06**: `AnthropicSource` (feature-gated) implements `CompletionSource` against the Anthropic Messages API
+- [ ] **AGNT-07**: An agent can be exposed as an MCP server (agent-as-server adapter on `ServerCore`), deployable through existing target adapters (Lambda/Docker/WASM)
+- [ ] **AGNT-08**: The `ToolInvoker` over `pmcp::Client` honors task-augmented tool results via `poll_decision` (SEP-1686) — long tool calls surface as pollable state
+- [ ] **AGNT-09**: An agent is configured from an `AgentPackage` (pmcp-package) plus resolved config slots — the same definition drives laptop, deploy targets, and platform
 
-- [x] **WBDL-01**: SDK owns a versioned dialect spec document (function whitelist + refuse-set) bound to the `WHITELIST` const by a test that fails if doc and code diverge
-- [x] **WBDL-02**: A workbook declares the dialect version it targets, enabling forward-compatible dialect evolution
-- [x] **WBDL-03**: Developer can lint a workbook against the dialect (whitelist-only, deny-by-default) and receive collect-all, located, BA-actionable findings with repair guidance
+### Team Reference Servers (TEAM)
 
-### Workbook Compiler — `pmcp-workbook-compiler` crate (umya-owning, offline only)
+- [ ] **TEAM-01**: `crates/pmcp-team-servers` exists with per-server feature flags and runnable dev binaries for all four servers
+- [ ] **TEAM-02**: team-fs reference serves the `fs__*` contract over a `TeamFsBackend` trait with a local-directory dev backend
+- [ ] **TEAM-03**: approval-mcp reference serves the approval contract over an in-memory `TaskStore` with console (dev) and webhook (CI) approval channels
+- [ ] **TEAM-04**: mem-mcp reference serves the `mem__*` contract over a `TeamMemoryBackend` trait with a keyword/BM25 in-memory dev backend (no embedder dependency)
+- [ ] **TEAM-05**: team-mcp reference composes agent-as-server members as per-member tools returning `ToolOutput::Result` with top-level `related_task` `_meta` (the migration template replacing the platform's raw-JSON-RPC bypass)
+- [ ] **TEAM-06**: Conformance tests prove each reference server's tool surface matches the PKG-03 contracts (same fixtures the platform servers can run)
 
-- [x] **WBCO-01**: Compiler ingests a `.xlsx` (umya, compiler-isolated) and captures cached cell values as a trusted oracle
-- [x] **WBCO-02**: Compiler synthesizes a candidate semantic manifest (inputs/outputs/dtypes/units/meanings/tiers) from colour/Guide/headers with BA ratification — **fully workbook-driven, no per-workbook Rust** (kills the hardcoded `build_reference_manifest`)
-- [x] **WBCO-03**: Compiler parses formulas and reconstructs the dependency DAG with an Excel-semantics layer (`sheet_ir`)
-- [x] **WBCO-04**: Compiler compiles pure cells to executable IR and penny-reconciles computed values against the oracle (operand-anchored rounding, not a naïve abs-delta tolerance)
-- [x] **WBCO-05**: Compiler emits the compiled bundle (manifest.json, executable.ir.json, cell_map.json, layout.json, BUNDLE.lock, evidence/) — the complete compiler↔server contract
-- [x] **WBCO-06**: Compiler synthesizes closed JSON-Schema enums from inline Excel data-validation lists (inline `formula1` quoted literals, ≤10 values); range/named-range sources are rejected with precise reason codes
-- [x] **WBCO-07**: The oracle staleness/freshness gate assigns a **distinct provenance class** to programmatically-authored (umya-stamped, fabricated `<Application>Microsoft Excel</Application>`/`calcId`) workbooks so they cannot pass the freshness gate on fabricated Excel identity
+### CLI (CLI)
 
-### Workbook Governance — promote-time gate (the differentiating moat)
+- [ ] **CLI-01**: `cargo pmcp agent new` scaffolds an agent project (AgentPackage manifest + standalone runner) with a version-pin tripwire test against `pmcp-agent`
+- [ ] **CLI-02**: `cargo pmcp agent dev` runs an agent locally against an OpenAI-compat endpoint or as a sampling-hosted server
+- [ ] **CLI-03**: `cargo pmcp team dev` runs an in-process small team (member agents + all four reference team servers with dev backends) wired from a `TeamPackage`
+- [ ] **CLI-04**: `cargo pmcp package capture|show` subcommands work as thin clients to the platform capture API with `pmcp-package = "0.1"` (caret) and a pin tripwire test
 
-- [x] **WBGV-01**: Compiler auto-derives a change class (HotReload / BlockUntilAccept / NeverAutoPromote) from a prior-vs-current manifest+IR diff, with **symmetric coverage of demotion-direction changes** (Input→Constant, source flips) — fixes CR-01
-- [x] **WBGV-02**: A strictest-policy reducer ensures an assumption (yellow-cell) change hard-blocks even when other deltas are hot-reloadable
-- [x] **WBGV-03**: The gate distinguishes numeric drift from semantic redefinition via a stable canonical IR sub-DAG identity hash
-- [x] **WBGV-04**: The golden-corpus gate blocks any over-tolerance named-output delta unless a fingerprint-matching `ApprovalRecord` covers the candidate
-- [x] **WBGV-05**: A BA can record an approval via `--accept --approver <X> --effective-date <D>`, re-baselining the golden corpus and writing a fingerprint-bound `ApprovalRecord`
-- [x] **WBGV-06**: Promotion writes the new bundle to its own `@<next_version>` directory and never overwrites the baseline — fixes CR-02
-- [x] **WBGV-07**: Enum inputs skip Variable-tier assignment so the default path can never seed an out-of-enum empty string — fixes WR-01
+### Documentation & Examples (DOCS)
 
-### Workbook Served-tool layer — `pmcp-server-toolkit` module (bundle-driven)
+- [ ] **DOCS-01**: pmcp-book chapters: "Agents as MCP Clients", "Agent Teams", "Sampling & Hosting" (incl. LLM-server pattern disambiguation)
+- [ ] **DOCS-02**: Runnable examples: sampling host, standalone-vs-hosted agent (same loop, two sources), small team end-to-end
+- [ ] **DOCS-03**: README + pmcp-course updated per the three-shapes rule, leading with the `cargo pmcp` workflow and the deploy-anywhere/preferred-pmcp.run positioning
 
-- [x] **WBSV-01**: Agent can call `calculate` with typed, tier-enforced, dtype-checked, enum-gated inputs and receive **all named outputs** (`{value,unit}` each) plus a provenance stamp — no single privileged "headline" output
-- [x] **WBSV-02**: Agent can call `explain` to get an ordered per-cell business-language derivation trace (formula + operand values + manifest meaning), with reconciliation annotations generalized from the lighthouse `coil_band` field
-- [x] **WBSV-03**: Agent can call `get_manifest` to discover input meanings/tiers/defaults/units, output units/meanings, governed data, versions, and changelog
-- [x] **WBSV-04**: Agent can call `diff_version` to read the recorded, hash-verified prev→current changelog (per-output deltas, change class, severity, summary)
-- [x] **WBSV-05**: Agent can call `render_workbook` to receive a provenance-bound `workbook://` resource URI whose `resources/read` statelessly regenerates the computed `.xlsx` (provenance-verified, re-validated, re-run, rendered)
-- [x] **WBSV-06**: Every domain failure returns a structured `isError:true` envelope (in `structuredContent`, never a protocol `Err`) carrying `code`, `reason`, and self-repair fields (`allowed` / `required` / `range`) plus the provenance stamp
-- [x] **WBSV-07**: Input and output schemas are projected entirely from the manifest (`additionalProperties:false`, per-column dtype/unit/meaning; mandatory non-empty `outputSchema`) — parity with the SQL/OpenAPI `TypedToolWithOutput` pattern
-- [x] **WBSV-08**: The server recomputes the `BUNDLE.lock` combined hash at boot and fails closed on any tampered or mismatched artifact before serving
-- [x] **WBSV-09**: A server loads a bundle via a `BundleSource` trait with local-directory and embedded (`include_dir!`) implementations; S3/registry is a documented extension seam, not shipped
+## v2 Requirements
 
-### Workbook CLI & Developer Experience
+### Deferred (design doc follow-ons)
 
-- [x] **WBCL-01**: Developer can run `cargo pmcp compile-workbook <wb.xlsx>` to ingest→lint→synth→parse→compile→reconcile→**gate**→write a bundle (gate runs before any write)
-- [x] **WBCL-02**: Developer can run `cargo pmcp lint-workbook <wb.xlsx>` to run the dialect linter standalone
-- [x] **WBCL-03**: Developer can run `cargo pmcp emit-bundle` to regenerate a bundle without the gate (dev/reference)
-- [x] **WBCL-04**: A project declares workbooks → bundle IDs in a project-level `pmcp.toml`, replacing the lighthouse's single-workbook justfile/path assumptions
-- [x] **WBCL-05**: Developer can run `cargo pmcp new --kind workbook-server` to scaffold a thin binary over `BundleSource` + the served-tool toolkit module (Shape B)
-- [x] **WBCL-06**: A `pmcp-workbook-server` pure-config binary stands up a live MCP server from a compiled bundle alone, no user Rust (Shape A, mirroring `pmcp-sql-server`)
+- **DEFER-01**: AgentCore deploy adapter (`cargo pmcp deploy` target)
+- **DEFER-02**: Additional `CompletionSource` implementations beyond the three shipped
+- **DEFER-03**: Scaled team-memory backends (embeddings/vector stores) in the open SDK
+- **DEFER-04**: Platform-side migrations (pmcp.run adopting the loop/traits) — coordinated via the §8 companion note, not SDK work
 
-### Generalization Validation
+## Out of Scope
 
-- [x] **WBEX-01**: A second, non-lighthouse example workbook compiles and serves end-to-end through the SDK path — the generalization gate proving the manifest is truly synth-driven (no per-workbook Rust, no privileged single output)
-- [x] **WBEX-02**: An Excel-quirk fixture corpus (1900 leap-year, empty-cell coercion, error propagation) verifies reconcile determinism beyond the single golden case
-
----
-
-## Future Requirements (deferred to v2.x)
-
-- [ ] Wire the two shape-only error triggers end-to-end (`stale_oracle` oracle-freshness re-gate runtime trigger; `unapproved_assumption`)
-- [ ] Multi-bundle / N-workbook server with tool-name namespacing per bundle ID
-- [ ] Multi-output generalization hardening once many N-output workbooks beyond the lighthouse are validated
-- [ ] `cargo pmcp deploy` integration baking embedded bundles into Lambda (EmbeddedSource parity)
-
-## v2.4 Requirements - GitHub-Native Deployment Automation
-
-**Goal:** Provide two complementary GitHub deployment paths: portable GitHub Actions scaffolding in the open-source `cargo-pmcp` CLI for all supported targets, and a pmcp.run managed connected-repository path for hosted builds, deploy logs, rollbacks, and previews.
-
-- [ ] **GHDEP-01**: Developer can run `cargo pmcp github init --target-type <target>` to generate an idempotent `.github/workflows/pmcp-deploy.yml` for each cargo-pmcp deployment target (`pmcp-run`, `aws-lambda`, `google-cloud-run`, `azure-container-apps`, `cloudflare-workers`)
-- [ ] **GHDEP-02**: The generated workflow reuses `.pmcp/deploy.toml`, named target conventions, and `cargo pmcp deploy`; no second deployment config file is introduced for GitHub automation
-- [ ] **GHDEP-03**: pmcp.run GitHub Actions deployments prefer GitHub OIDC (`id-token: write`) and exchange the GitHub OIDC JWT for a short-lived pmcp.run deploy credential instead of requiring long-lived PMCP secrets
-- [ ] **GHDEP-04**: The pmcp.run OIDC trust contract is represented explicitly in SDK-side command/help/docs so the service can validate repository, ref, audience, and environment claims before minting deploy credentials
-- [ ] **GHDEP-05**: Non-pmcp.run targets get transparent GitHub Actions workflows that keep cloud credentials in the user's GitHub/cloud account and do not route AWS/GCP/Azure/Cloudflare credentials through pmcp.run
-- [ ] **GHDEP-06**: Documentation and examples distinguish the open-source GitHub Actions path from the pmcp.run connected-repository path, including trigger behavior, authentication, logs, rollbacks, and preview deployment ownership
-
-## v2.4 Requirements - Deploy `stack.ts` Regeneration Safety (cargo-pmcp)
-
-**Goal:** `cargo pmcp deploy` must stop silently clobbering an operator-curated `deploy/lib/stack.ts`, and curated template metadata (`mcp:serverType`, `mcp:snapshotBaked`) must be reproducible-from-config so it survives any regeneration. Source: debug session `.planning/debug/deploy-overwrites-stack-ts.md`.
-
-- [x] **DSTK-01**: `cargo pmcp deploy` does not overwrite an existing `deploy/lib/stack.ts` on EITHER target (pmcp-run `targets/pmcp_run/deploy.rs`, aws-lambda `commands/deploy/deploy.rs`) without an explicit `--regenerate-stack` (alias `--force`) opt-in; IAM validation still runs and a "preserved existing stack.ts" notice is printed when the write is skipped
-- [x] **DSTK-02**: `.pmcp/deploy.toml` gains an optional `[metadata]` block (`server_type`, `snapshot_baked`) on `DeployConfig`, threaded through `render_stack_ts_for_deploy` / `render_stack_ts` and `McpMetadata`, so a custom / pmcp.toml server's `mcp:serverType` is config-overridable instead of hardcoded `'custom'`
-- [x] **DSTK-03**: `mcp:snapshotBaked` is representable end-to-end — `McpMetadata` carries `snapshot_baked`, `to_cdk_context` emits `-c 'mcp:snapshotBaked=…'`, and the generated stack template emits the `mcp:snapshotBaked` metadata literal so curated values are reproducible from config
-- [x] **DSTK-04**: ALWAYS coverage — exists-guard unit tests on BOTH deploy targets (preserved without flag, overwritten with flag), config-survives-render unit/property tests, golden-file update in `tests/backward_compat_stack_ts.rs` for the new `mcp:snapshotBaked` line, and `--regenerate-stack` documented in `cargo-pmcp/docs/commands/deploy.md`
-
-## v2.4 Requirements - Workbook-Crate Cognitive-Complexity Reduction (PMAT gate debt)
-
-**Goal:** The v2.3 workbook crates carry 21 cognitive-complexity violations that the org-required PMAT gate (`pmat quality-gate --fail-on-violation --checks complexity`) blocks — surfaced on PR #279 because PMAT is CI-only (Phase 75 D-07) and the milestone never ran through a PMAT-gated CI. PMAT ignores `#[allow(clippy::cognitive_complexity)]` (Phase 75 D-10-B), so each function must be refactored to clear the gate. Behavior is preserved via the milestone's existing golden/reconcile/quirk test net. No `.pmatignore` weakening of production crates.
-
-- [x] **CPLX-01**: All flagged `pmcp-workbook-runtime` functions pass the PMAT complexity gate — `render/mod.rs::render_xlsx` (93), `sheet_ir/executor.rs::eval_expr` (58), `bundle_loader.rs::load` (28), `sheet_ir/semantics.rs::f_index` (24) / `f_search` (31) — refactored to the gate threshold with golden/reconcile tests still green
-- [x] **CPLX-02**: All flagged `pmcp-workbook-compiler` functions pass the gate — `change_class/mod.rs::classify_cell_roles` (74), `change_class/ir_identity.rs::dependency_order` (24), `ingest/mod.rs::ingest` (57) / `references_external_workbook` (31), `formula/token.rs::tokenize` (52) / `lex_quoted_sheet_ref` (33) / `scan_atom_run` (30), `dialect/linter.rs::extract_function_tokens` (29), `fixture_author.rs::author_xlsx` (29), `dag/resolve.rs::walk` (25), `gate/corpus.rs::derive_case_grid` (34) / `no_seeded_value_outside_allowed` (46), `provenance/gate.rs::gate_inner` (29), `provenance/raw_parts.rs::parse_calc_pr` (44) / `parse_app_props` (39) — refactored, behavior preserved
-- [x] **CPLX-03**: The flagged `pmcp-server-toolkit` function `workbook/input.rs::validate_input` (33) passes the gate, with input-validation behavior preserved
-- [x] **CPLX-04**: `pmat quality-gate --fail-on-violation --checks complexity` reports ZERO violations workspace-wide; no production crate added to `.pmatignore`; full test suite + `make quality-gate` green (no behavior regressions); PR #279 CI complexity gate green
-
-## Out of Scope (explicit exclusions)
-
-- **Live workbook interpretation on the hot path** — dissolves the security message; compile-not-interpret is the whole point (reader never enters served binary)
-- **Named-range-backed validation lists** — range source unresolved at synth time; deferred by design with a documented extension seam (only inline-literal DV enums ship)
-- **S3 / registry `BundleSource`** — adds a network trust + cache-invalidation surface before the local case is proven; `BundleSource` trait leaves the seam
-- **Code-mode `validate → token → execute` ceremony for workbooks** — a compiled workbook is curated config trusted by the promote gate + BA curation, not an untrusted runtime token; this explicitly does NOT touch `pmcp-code-mode`
-- **Capability cells** (Rust/remote/MCP escape hatches) — non-deterministic, contract-tested not value-tested, needs Cedar/AVP policy wiring; the pure-cell penny-golden path ships first
-- **Row-block iteration / "for each room" loops** — arbitrary-N generalization is the hardest parser problem; a later milestone
-- **Google Sheets ingest** — alternate front-end into the same dialect; future
-- **Widening the function whitelist on demand** — coverage-vs-guarantee law; grow the whitelist deliberately one verified function at a time, route the tail to a developer
-
----
+| Feature | Reason |
+|---------|--------|
+| LLM provider matrix in the SDK | `CompletionSource` trait is the extension point; 3 sources max (design §7) |
+| Open-sourcing mem0-rust / UnifiedLLMService / durable Lambda / capture service | Operation and scale are the platform's product (boundary razor) |
+| Distributed-team portability | Deploy-anywhere teams = "small team, one process"; scale-out is pmcp.run |
+| New wire methods in MCP WG territory | Extensions stay namespaced/provisional (matches tasks Ask-B posture) |
+| Folding new crates into pmcp core | 0.x experimental isolation until contracts stabilize (pmcp-tasks precedent) |
+| `=0.1.0` exact pin for pmcp-package in cargo-pmcp | Caret `"0.1"` + wire-freeze contract; exact pin adds lockstep churn for no guarantee |
 
 ## Traceability
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| WBRT-01 | Phase 91 | Complete |
-| WBRT-02 | Phase 91 | Complete |
-| WBRT-03 | Phase 91 | Complete |
-| WBRT-04 | Phase 91 | Complete |
-| WBDL-01 | Phase 91 | Complete |
-| WBDL-03 | Phase 93 | Complete |
-| WBSV-01 | Phase 92 | Complete |
-| WBSV-02 | Phase 92 | Complete |
-| WBSV-03 | Phase 92 | Complete |
-| WBSV-04 | Phase 92 | Complete |
-| WBSV-05 | Phase 92 | Complete |
-| WBSV-06 | Phase 92 | Complete |
-| WBSV-07 | Phase 92 | Complete |
-| WBSV-08 | Phase 92 | Complete |
-| WBSV-09 | Phase 92 | Complete |
-| WBCO-01 | Phase 93 | Complete |
-| WBCO-02 | Phase 93 | Complete |
-| WBCO-03 | Phase 93 | Complete |
-| WBCO-04 | Phase 93 | Complete |
-| WBCO-05 | Phase 93 | Complete |
-| WBCO-06 | Phase 93 | Complete |
-| WBCO-07 | Phase 93 | Complete |
-| WBGV-01 | Phase 93 | Complete |
-| WBGV-02 | Phase 93 | Complete |
-| WBGV-03 | Phase 93 | Complete |
-| WBGV-04 | Phase 93 | Complete |
-| WBGV-05 | Phase 93 | Complete |
-| WBGV-06 | Phase 93 | Complete |
-| WBGV-07 | Phase 93 | Complete |
-| WBCL-01 | Phase 94 | Complete |
-| WBCL-02 | Phase 94 | Complete |
-| WBCL-03 | Phase 94 | Complete |
-| WBCL-04 | Phase 94 | Complete |
-| WBCL-06 | Phase 95 | Complete |
-| WBCL-05 | Phase 96 | Complete (96-02) |
-| WBDL-02 | Phase 96 | Complete (96-01) |
-| WBEX-01 | Phase 96 | Complete |
-| WBEX-02 | Phase 96 | Complete (96-05) |
-| GHDEP-01 | Phase 97 | Pending |
-| GHDEP-02 | Phase 97 | Pending |
-| GHDEP-03 | Phase 97 | Pending |
-| GHDEP-04 | Phase 97 | Pending |
-| GHDEP-05 | Phase 97 | Pending |
-| GHDEP-06 | Phase 97 | Pending |
-| DSTK-01 | Phase 98 | Complete |
-| DSTK-02 | Phase 98 | Complete |
-| DSTK-03 | Phase 98 | Complete |
-| DSTK-04 | Phase 98 | Complete |
-| CPLX-01 | Phase 99 | Complete |
-| CPLX-02 | Phase 99 | Complete |
-| CPLX-03 | Phase 99 | Complete |
-| CPLX-04 | Phase 99 | Complete |
+| (populated by roadmap) | | |
+
+**Coverage:**
+- v1 requirements: 31 total
+- Mapped to phases: 0
+- Unmapped: 31 ⚠️ (pre-roadmap)
+
+---
+*Requirements defined: 2026-07-17*
+*Last updated: 2026-07-17 after initial definition (from approved design doc)*
