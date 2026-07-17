@@ -4,8 +4,8 @@ milestone: v2.4
 milestone_name: Agents & Teams — SDK Extraction
 status: executing
 stopped_at: Roadmap approved and written; Phases 106-111 mapped
-last_updated: "2026-07-17T21:07:09.802Z"
-last_activity: 2026-07-17 -- Phase 106 planning complete
+last_updated: "2026-07-17T21:55:41.436Z"
+last_activity: 2026-07-17 -- Phase 106 execution started
 progress:
   total_phases: 57
   completed_phases: 0
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-07-17) · .planning/ROADMAP.md (v2.4 milestone, Phases 106-111) · docs/design/agents-teams-sdk-extraction-plan.md (approved)
 
 **Core value:** The PMCP SDK is the reference implementation for agents-as-MCP-clients and agent teams — one open agent loop and one portable package format that run identically on a laptop, any deploy target, and pmcp.run (contracts + reference implementations in the SDK; operation + scale on the platform).
-**Current focus:** v2.4 roadmap created — no phase in progress. Next: `/gsd:plan-phase 106` (or plan 106 and 107 in parallel — they are independent).
+**Current focus:** Phase 106 — client-host-surface
 
 ## Current Position
 
-Phase: Not started (roadmap approved, Phases 106-111 mapped)
-Plan: —
-Status: Ready to execute
-Last activity: 2026-07-17 -- Phase 106 planning complete
+Phase: 106 (client-host-surface) — EXECUTING
+Plan: 1 of 3
+Status: Executing Phase 106
+Last activity: 2026-07-17 -- Phase 106 execution started
 
 ## v2.4 Phase Plan (6 phases, 31 requirements)
 

@@ -2026,7 +2026,6 @@ Plans:
 
 - [x] 104-05-PLAN.md — s47 BEFORE/AFTER example + live-HTTP _meta-at-top-level acceptance gate + migration guide (docs/design + pmcp-book + README) [TOUT-04]
 
-
 ---
 
 ## v2.4 Agents & Teams — SDK Extraction (Phases 106-111)
@@ -2047,73 +2046,92 @@ Plans:
 ## Phase Details — v2.4 (Agents & Teams)
 
 ### Phase 106: Client Host Surface
+
 **Goal**: A pmcp `Client` can answer server→client requests (spec-direction `sampling/createMessage` incl. tools/tool_choice, `elicitation/create`, `roots/list`) through a client-side handler registry with a human-in-the-loop approval hook, and the legacy inverted sampling path is documented as the distinct "LLM-server pattern" — all additive (pmcp minor bump). Small, independently shippable, and unblocks Phase 108's `SamplingSource`.
 **Depends on**: Nothing (first phase of milestone; parallelizable with Phase 107)
 **Requirements**: HOST-01, HOST-02, HOST-03, HOST-04, HOST-05, HOST-06
 **Success Criteria** (what must be TRUE):
+
   1. A developer registers a client-side `SamplingHandler` and a sampling-requesting server's `sampling/createMessage` (tools/tool_choice included) is answered instead of erroring "Unexpected message type" — proven by a duplex round-trip harness test (HOST-01)
   2. A developer registers an `ElicitationHandler` and a roots provider, and the client answers `elicitation/create` and `roots/list` (HOST-02, HOST-03)
   3. The sampling path invokes an async human-in-the-loop approval callback (default allow) before returning a completion, per the spec SHOULD (HOST-04)
   4. `ClientCapabilities` advertised on initialize reflect which host handlers are registered — sampling/elicitation/roots (HOST-05)
   5. The legacy `Client::create_message` → server `SamplingHandler` path is documented as the "LLM-server pattern", disambiguated from spec sampling in rustdoc and book, with zero breaking changes (HOST-06)
+
 **Plans**: 3 plans
-- [ ] 106-01-PLAN.md — client::host module (traits, registry, preflight/result-review approval types, Result-returning roots provider) + roots wire-type relocation for wasm-clean surface + Client dispatch (classify_host_request, sanitized -32603) across all ctors/Clone + duplex round-trips (elicitation via raw pump) + registered s49 example + create_message LLM-server rustdoc (HOST-01/02/03 + HOST-06 rustdoc)
+
+- [x] 106-01-PLAN.md — client::host module (traits, registry, preflight/result-review approval types, Result-returning roots provider) + roots wire-type relocation for wasm-clean surface + Client dispatch (classify_host_request, sanitized -32603) across all ctors/Clone + duplex round-trips (elicitation via raw pump) + registered s49 example + create_message LLM-server rustdoc (HOST-01/02/03 + HOST-06 rustdoc)
 - [ ] 106-02-PLAN.md — preflight approval gate (deny before the LLM runs) + optional result-review + registry-authoritative capabilities preserving caller sub-cap detail + parse_request->classify routing fuzz + pmcp 2.16.0 bump with cargo-pmcp pin tripwire (HOST-04, HOST-05)
 - [ ] 106-03-PLAN.md — pmcp-book Sampling & Hosting disambiguation page (real pmcp::SamplingHandler paths, preflight gate described) + SUMMARY link (HOST-06 book)
 
 ### Phase 107: Contracts & Package Format
+
 **Goal**: The portability contracts exist, versioned and wire-frozen, with this repo as the canonical home — `pmcp-package` adopted (from `~/Development/mcp/sdk/pmcp-run/crates/pmcp-package`) and published 0.1.0, plus the four team servers' tool surfaces captured as provable-contracts YAML with shared conformance fixtures.
 **Depends on**: Nothing (parallelizable with Phase 106; contract-first, precedes Phase 108/109 implementations per house rule)
 **Requirements**: PKG-01, PKG-02, PKG-03
 **Success Criteria** (what must be TRUE):
+
   1. `pmcp-package` builds in this repo as a standalone workspace-excluded crate with publish-ready metadata — public-facing description, README, license files, and docs.rs-verified rustdoc (PKG-01)
   2. A developer can depend on `pmcp-package = "0.1"` from crates.io; the wire-freeze policy (0.1.x = digest/serialization-stable, serialized-shape changes bump 0.2.0) is documented and enforced by passing golden fixtures (PKG-02)
   3. The team-server tool contracts — `fs__*`, `mem__*`, `team_mcp__<member>` dispatch, `resolve_approval`/`get_approval` + dynamic `team_approval__ask_*` — are captured as versioned provable-contracts YAML with shared conformance fixtures, marked as namespaced provisional PMCP extensions (PKG-03)
+
 **Plans**: TBD
 
 ### Phase 108: `pmcp-agent` Loop Crate
+
 **Goal**: The agent runtime ships as an open, deploy-anywhere `crates/pmcp-agent` (0.x, experimental, isolated from `pmcp` core) — a pure decision loop between object-safe effect seams, three CompletionSources (sampling-first), an agent-as-server adapter, and a tasks-aware ToolInvoker, all configured from an `AgentPackage`. pmcp.run's `handler/iteration.rs` becomes a platform-specific composition of this loop.
 **Depends on**: Phase 106 (`SamplingSource` uses the client host surface), Phase 107 (`AgentPackage` from `pmcp-package`)
 **Requirements**: AGNT-01, AGNT-02, AGNT-03, AGNT-04, AGNT-05, AGNT-06, AGNT-07, AGNT-08, AGNT-09
 **Success Criteria** (what must be TRUE):
+
   1. A developer implements against object-safe async `CompletionSource`/`ToolInvoker`/`ConversationStore` seams, with `CompletionSource` reusing the SDK sampling types verbatim (AGNT-01)
   2. The replay-safety invariant is property-tested over recorded effect traces: identical effect results ⇒ identical loop decisions, and the iteration loop runs pure between seams with retry classification exposed as data (no retry/backoff policy inside the loop) (AGNT-02, AGNT-03)
   3. The same loop runs against `SamplingSource` (zero-dep spec sampling incl. tools/tool_choice), feature-gated `OpenAiCompatSource`, and feature-gated `AnthropicSource` — proven by the standalone-vs-sampled example (AGNT-04, AGNT-05, AGNT-06)
   4. An agent is exposed as an MCP server via a `ServerCore` adapter (deployable through existing Lambda/Docker/WASM target adapters), and its `ToolInvoker` over `pmcp::Client` honors task-augmented tool results via `poll_decision` (SEP-1686) (AGNT-07, AGNT-08)
   5. An agent is fully configured from an `AgentPackage` plus resolved config slots — the same definition drives laptop, deploy targets, and platform (AGNT-09)
+
 **Plans**: TBD
 
 ### Phase 109: Team Reference Servers
+
 **Goal**: The four team servers exist as open reference implementations with dev-grade backends in one feature-flagged crate `crates/pmcp-team-servers`; "small team, one process" works locally, and conformance tests prove each server's tool surface matches the Phase 107 (PKG-03) contract fixtures — the same fixtures the platform servers can run.
 **Depends on**: Phase 108 (team-mcp composes agent-as-server members), Phase 107 (contract fixtures)
 **Requirements**: TEAM-01, TEAM-02, TEAM-03, TEAM-04, TEAM-05, TEAM-06
 **Success Criteria** (what must be TRUE):
+
   1. `crates/pmcp-team-servers` builds with per-server feature flags and runnable dev binaries for all four servers (TEAM-01)
   2. team-fs serves `fs__*` over a `TeamFsBackend` trait with a local-directory dev backend, and mem-mcp serves `mem__*` over a `TeamMemoryBackend` trait with a keyword/BM25 in-memory dev backend (no embedder dependency) (TEAM-02, TEAM-04)
   3. approval-mcp serves the approval contract over an in-memory `TaskStore` with console (dev) and webhook (CI) approval channels (TEAM-03)
   4. team-mcp composes Phase 108 agent-as-server members as per-member tools returning `ToolOutput::Result` with top-level `related_task` `_meta` — the worked migration template replacing the platform's raw-JSON-RPC bypass (TEAM-05)
   5. Conformance tests prove each reference server's tool surface matches the PKG-03 contracts (TEAM-06)
+
 **Plans**: TBD
 
 ### Phase 110: cargo-pmcp Agent & Team Verbs
+
 **Goal**: cargo-pmcp is the on-ramp for agents and teams, matching its server story — `agent new`/`agent dev`, `team dev` (in-process small team from a `TeamPackage`), and `package capture|show` (thin clients to the platform capture API), each with version-pin tripwires. Agents deploy through the existing target adapters (an agent-as-server is just a server binary; AgentCore is a deferred follow-on adapter).
 **Depends on**: Phase 107 (`package capture` uses `pmcp-package`), Phase 108 (`agent new`/`agent dev`), Phase 109 (`team dev` wires the four reference servers)
 **Requirements**: CLI-01, CLI-02, CLI-03, CLI-04
 **Success Criteria** (what must be TRUE):
+
   1. `cargo pmcp agent new` scaffolds an agent project (AgentPackage manifest + standalone runner) with a version-pin tripwire test against `pmcp-agent` (CLI-01)
   2. `cargo pmcp agent dev` runs an agent locally against an OpenAI-compat endpoint or as a sampling-hosted server (CLI-02)
   3. `cargo pmcp team dev` runs an in-process small team — member agents + all four reference team servers with dev backends — wired from a `TeamPackage` (CLI-03)
   4. `cargo pmcp package capture|show` work as thin clients to the platform capture API with `pmcp-package = "0.1"` (caret) and a pin tripwire test against version drift (CLI-04)
+
 **Plans**: TBD
 
 ### Phase 111: Docs in Three Shapes + Examples
+
 **Goal**: The milestone is documented in three shapes per the house rule (README + pmcp-book chapter + pmcp-course chapter), leading with the `cargo pmcp` workflow and the deploy-anywhere/preferred-pmcp.run positioning, with runnable examples verified against the shipped Phase 106-110 code.
 **Depends on**: Phases 106-110 (documents shipped code)
 **Requirements**: DOCS-01, DOCS-02, DOCS-03
 **Success Criteria** (what must be TRUE):
+
   1. pmcp-book ships the "Agents as MCP Clients", "Agent Teams", and "Sampling & Hosting" chapters (incl. the LLM-server pattern disambiguation) (DOCS-01)
   2. Runnable examples ship and pass: sampling host, standalone-vs-hosted agent (same loop, two sources), and small team end-to-end (DOCS-02)
   3. README + pmcp-course are updated per the three-shapes rule, leading with the `cargo pmcp` workflow and the deploy-anywhere/preferred-pmcp.run positioning (DOCS-03)
+
 **Plans**: TBD
 
 ## Progress — v2.4 Milestone (Agents & Teams — SDK Extraction)
@@ -2122,7 +2140,7 @@ Plans:
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 106. Client Host Surface | 0/TBD | Not started | - |
+| 106. Client Host Surface | 1/3 | In Progress|  |
 | 107. Contracts & Package Format | 0/TBD | Not started | - |
 | 108. `pmcp-agent` Loop Crate | 0/TBD | Not started | - |
 | 109. Team Reference Servers | 0/TBD | Not started | - |
