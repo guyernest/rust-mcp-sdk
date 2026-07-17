@@ -2316,11 +2316,21 @@ impl<T: Transport> Client<T> {
                     // registered host handlers, then keep waiting for the
                     // original response (request_id stays pending).
                     let response = self.dispatch_host_request(id, request).await;
-                    self.transport
+                    if let Err(e) = self
+                        .transport
                         .write()
                         .await
                         .send(crate::types::TransportMessage::Response(response))
-                        .await?;
+                        .await
+                    {
+                        // Match the `Response` arm's cleanup: remove the
+                        // pending entry (and its oneshot cancel sender) before
+                        // surfacing the transport error, so a `Client` that
+                        // outlives this failed request does not leak the id or
+                        // collide with stale state on a later reused id.
+                        self.active_requests.write().await.remove(&request_id);
+                        return Err(e);
+                    }
                 },
             }
         }
@@ -3609,6 +3619,69 @@ mod tests {
         assert!(
             err.to_string().contains("does not support sampling"),
             "unexpected error message: {err}"
+        );
+    }
+
+    /// Transport whose first `send` (the outgoing request) succeeds and whose
+    /// second `send` (the host response) fails, returning a single inbound
+    /// request from `receive` in between. Drives the WR-04 leak path.
+    #[derive(Debug)]
+    struct FailSecondSend {
+        sends: Arc<Mutex<usize>>,
+        inbound: Arc<Mutex<Option<TransportMessage>>>,
+    }
+
+    #[async_trait]
+    impl Transport for FailSecondSend {
+        async fn send(&mut self, _message: TransportMessage) -> Result<()> {
+            let mut n = self.sends.lock().unwrap();
+            *n += 1;
+            if *n >= 2 {
+                Err(Error::internal("host response send failed"))
+            } else {
+                Ok(())
+            }
+        }
+
+        async fn receive(&mut self) -> Result<TransportMessage> {
+            if let Some(msg) = self.inbound.lock().unwrap().take() {
+                Ok(msg)
+            } else {
+                Err(Error::internal("no more messages"))
+            }
+        }
+
+        async fn close(&mut self) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn test_host_response_send_failure_cleans_active_requests() {
+        // WR-04: when sending the host response fails, the in-flight request's
+        // entry (and its oneshot cancel sender) must be removed from
+        // active_requests before the error propagates, matching the Response
+        // arm's cleanup.
+        let inbound = TransportMessage::Request {
+            id: RequestId::from("inbound-1".to_string()),
+            request: Request::Client(Box::new(ClientRequest::Ping)),
+        };
+        let client = Client::new(FailSecondSend {
+            sends: Arc::new(Mutex::new(0)),
+            inbound: Arc::new(Mutex::new(Some(inbound))),
+        });
+
+        let req_id = RequestId::from("outgoing-1".to_string());
+        let request = Request::Client(Box::new(ClientRequest::Ping));
+        let result = client.send_request(req_id.clone(), request).await;
+
+        assert!(
+            result.is_err(),
+            "host-response send failure must propagate as an error"
+        );
+        assert!(
+            !client.active_requests.read().await.contains_key(&req_id),
+            "pending entry must be removed when the host response send fails"
         );
     }
 
