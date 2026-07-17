@@ -2057,9 +2057,9 @@ Plans:
   4. `ClientCapabilities` advertised on initialize reflect which host handlers are registered — sampling/elicitation/roots (HOST-05)
   5. The legacy `Client::create_message` → server `SamplingHandler` path is documented as the "LLM-server pattern", disambiguated from spec sampling in rustdoc and book, with zero breaking changes (HOST-06)
 **Plans**: 3 plans
-- [ ] 106-01-PLAN.md — client::host module (HostSampling/Elicitation handlers, roots provider, registry), Client dispatch replacing the :2234 error arm, duplex round-trips + s49 example, create_message LLM-server-pattern rustdoc (HOST-01/02/03, HOST-06 rustdoc)
-- [ ] 106-02-PLAN.md — sampling approval hook (default allow, deny→error) + ClientCapabilities derived from the registry + inbound-params fuzz target (HOST-04, HOST-05)
-- [ ] 106-03-PLAN.md — pmcp-book Sampling & Hosting disambiguation page + SUMMARY link (HOST-06 book)
+- [ ] 106-01-PLAN.md — client::host module (traits, registry, preflight/result-review approval types, Result-returning roots provider) + roots wire-type relocation for wasm-clean surface + Client dispatch (classify_host_request, sanitized -32603) across all ctors/Clone + duplex round-trips (elicitation via raw pump) + registered s49 example + create_message LLM-server rustdoc (HOST-01/02/03 + HOST-06 rustdoc)
+- [ ] 106-02-PLAN.md — preflight approval gate (deny before the LLM runs) + optional result-review + registry-authoritative capabilities preserving caller sub-cap detail + parse_request->classify routing fuzz + pmcp 2.16.0 bump with cargo-pmcp pin tripwire (HOST-04, HOST-05)
+- [ ] 106-03-PLAN.md — pmcp-book Sampling & Hosting disambiguation page (real pmcp::SamplingHandler paths, preflight gate described) + SUMMARY link (HOST-06 book)
 
 ### Phase 107: Contracts & Package Format
 **Goal**: The portability contracts exist, versioned and wire-frozen, with this repo as the canonical home — `pmcp-package` adopted (from `~/Development/mcp/sdk/pmcp-run/crates/pmcp-package`) and published 0.1.0, plus the four team servers' tool surfaces captured as provable-contracts YAML with shared conformance fixtures.
