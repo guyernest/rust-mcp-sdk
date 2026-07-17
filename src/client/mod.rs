@@ -3117,7 +3117,10 @@ mod tests {
         let response = client
             .dispatch_host_request(RequestId::from(12i64), sampling_client_alias_request())
             .await;
-        assert!(response.is_success(), "preflight Allow must return completion");
+        assert!(
+            response.is_success(),
+            "preflight Allow must return completion"
+        );
         assert!(
             invoked.load(std::sync::atomic::Ordering::SeqCst),
             "handler must run after preflight Allow"
@@ -3207,8 +3210,10 @@ mod tests {
     fn test_capability_sampling_anti_lie_discards_caller_value() {
         // (c) ANTI-LIE: no handler + caller-set sampling => forced None.
         let client = Client::new(MockTransport::new());
-        let mut caps = ClientCapabilities::default();
-        caps.sampling = Some(crate::types::capabilities::SamplingCapabilities::default());
+        let mut caps = ClientCapabilities {
+            sampling: Some(crate::types::capabilities::SamplingCapabilities::default()),
+            ..Default::default()
+        };
         client.derive_host_capabilities(&mut caps);
         assert!(
             caps.sampling.is_none(),
@@ -3223,11 +3228,13 @@ mod tests {
         let client = ClientBuilder::new(MockTransport::new())
             .on_sampling(MockHostSampling)
             .build();
-        let mut caps = ClientCapabilities::default();
-        caps.sampling = Some(crate::types::capabilities::SamplingCapabilities {
-            models: Some(vec!["gpt-4o".to_string()]),
+        let mut caps = ClientCapabilities {
+            sampling: Some(crate::types::capabilities::SamplingCapabilities {
+                models: Some(vec!["gpt-4o".to_string()]),
+                ..Default::default()
+            }),
             ..Default::default()
-        });
+        };
         client.derive_host_capabilities(&mut caps);
         let sampling = caps.sampling.expect("handler present => sampling kept");
         assert_eq!(
@@ -3247,15 +3254,19 @@ mod tests {
             .build();
         let mut caps = ClientCapabilities::default();
         client.derive_host_capabilities(&mut caps);
-        assert!(caps.elicitation.is_some(), "registered elicitation => present");
+        assert!(
+            caps.elicitation.is_some(),
+            "registered elicitation => present"
+        );
         assert!(caps.roots.is_some(), "registered roots => present");
 
         // Unregistered + caller-set => discarded (anti-lie) for both.
         let bare = Client::new(MockTransport::new());
-        let mut caps2 = ClientCapabilities::default();
-        caps2.elicitation =
-            Some(crate::types::capabilities::ElicitationCapabilities::default());
-        caps2.roots = Some(crate::types::capabilities::RootsCapabilities::default());
+        let mut caps2 = ClientCapabilities {
+            elicitation: Some(crate::types::capabilities::ElicitationCapabilities::default()),
+            roots: Some(crate::types::capabilities::RootsCapabilities::default()),
+            ..Default::default()
+        };
         bare.derive_host_capabilities(&mut caps2);
         assert!(caps2.elicitation.is_none(), "elicitation anti-lie");
         assert!(caps2.roots.is_none(), "roots anti-lie");
@@ -3265,11 +3276,13 @@ mod tests {
     fn test_capability_derivation_leaves_tasks_and_experimental_untouched() {
         // (f) tasks / experimental are never modified by host derivation.
         let client = Client::new(MockTransport::new());
-        let mut caps = ClientCapabilities::default();
-        caps.tasks = Some(crate::types::capabilities::ClientTasksCapability::default());
         let mut experimental = HashMap::new();
         experimental.insert("custom".to_string(), serde_json::json!(true));
-        caps.experimental = Some(experimental);
+        let mut caps = ClientCapabilities {
+            tasks: Some(crate::types::capabilities::ClientTasksCapability::default()),
+            experimental: Some(experimental),
+            ..Default::default()
+        };
         client.derive_host_capabilities(&mut caps);
         assert!(caps.tasks.is_some(), "tasks must be preserved");
         assert_eq!(
