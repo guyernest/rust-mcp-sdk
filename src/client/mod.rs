@@ -285,6 +285,20 @@ impl<T: Transport> Client<T> {
     /// receiving server information. This must be called before using other
     /// client methods.
     ///
+    /// # Host capabilities are registry-derived (`sampling` / `elicitation` / `roots`)
+    ///
+    /// The three host-side capability fields — `sampling`, `elicitation`, and
+    /// `roots` — are **derived from the handlers registered on
+    /// [`ClientBuilder`]**, not from the value passed here. If no matching host
+    /// handler is registered, the corresponding field is forced to `None` on the
+    /// wire even when the caller set it (the anti-capability-lie rule: a client
+    /// must not advertise a host capability it cannot service). Register handlers
+    /// via [`ClientBuilder::on_sampling`], [`ClientBuilder::on_elicitation`], and
+    /// [`ClientBuilder::on_roots`] to advertise these capabilities. When a
+    /// handler *is* registered, any caller-configured detail for that field
+    /// (e.g. `roots.list_changed`) is preserved. All other capability fields
+    /// (`tasks`, `experimental`, ...) pass through unchanged.
+    ///
     /// # Examples
     ///
     /// ```rust,no_run
@@ -1937,17 +1951,29 @@ impl<T: Transport> Client<T> {
     /// # Examples
     ///
     /// ```rust,no_run
-    /// use pmcp::{Client, StdioTransport, ClientCapabilities};
+    /// use pmcp::{ClientBuilder, StdioTransport, ClientCapabilities};
+    /// use pmcp::types::roots::{ListRootsResult, Root};
     ///
     /// # async fn example() -> pmcp::Result<()> {
-    /// let mut capabilities = ClientCapabilities::default();
-    /// // Enable roots list changed capability
-    /// capabilities.roots = Some(pmcp::RootsCapabilities {
-    ///     list_changed: true,
-    /// });
-    ///
+    /// // Roots advertisement is registry-derived (HOST-05): the client must
+    /// // register a roots provider for the `roots` capability to reach the
+    /// // wire. Build via `ClientBuilder` and register one with `on_roots`.
     /// let transport = StdioTransport::new();
-    /// let mut client = Client::new(transport);
+    /// let mut client = ClientBuilder::new(transport)
+    ///     .on_roots(|| async {
+    ///         Ok(ListRootsResult {
+    ///             roots: vec![Root {
+    ///                 uri: "file:///workspace".to_string(),
+    ///                 name: Some("workspace".to_string()),
+    ///             }],
+    ///         })
+    ///     })
+    ///     .build();
+    ///
+    /// // With a provider registered, a caller-set `list_changed` is preserved,
+    /// // so the client advertises that it emits roots-list-changed notices.
+    /// let mut capabilities = ClientCapabilities::default();
+    /// capabilities.roots = Some(pmcp::RootsCapabilities { list_changed: true });
     /// client.initialize(capabilities).await?;
     ///
     /// // Notify server when project roots change
