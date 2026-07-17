@@ -147,6 +147,23 @@ if let Err(e) = self
 
 ---
 
+## Fix Outcomes
+
+**Fixed at:** 2026-07-17 — scope: 1 Critical + 4 Warnings (Info deferred).
+
+| Finding | Status | Commit | Notes |
+|---------|--------|--------|-------|
+| CR-01 | fixed | `96987bbf` | Added `"sampling"` arm to `assert_capability` (mirrors `ServerCapabilities.sampling`, which `ServerBuilder::sampling` sets). Added positive/negative lib unit tests plus an end-to-end duplex regression (`tests/client_create_message_llm_server.rs`) proving `create_message` round-trips against `Server::builder().sampling(..)`. |
+| WR-01 | fixed | `ee3415d5` | Added `HostRequestKind::Ping`; inbound `ClientRequest::Ping` now answered with `{}` success per spec MUST, independent of the registry. Classify unit test + duplex test (ping returns `{}`, connection survives). |
+| WR-02 | fixed | `606bbcf3` | Docs only. Rewrote `sampling.rs` type docs and both builder-method docs: hooks are invoked by `dispatch_host_sampling` as of this phase (not deferred); `PreflightApproval` re-described as optional/default-allow (was "Mandatory"). |
+| WR-03 | fixed (docs only, behavior UNCHANGED) | `9cea2f7a` | Registry-authoritative derivation kept as the locked phase decision. Added rustdoc on `initialize` explaining sampling/elicitation/roots are derived and caller-set values overridden; rewrote the contradicting `send_roots_list_changed` doc example to register a roots provider via `on_roots` and preserve `list_changed`; added CHANGELOG 2.16.0 entry flagging the silent-change risk for `Client::new` callers. Per orchestrator directive, no `tracing::warn` / no capability-exemption behavior change. |
+| WR-04 | fixed | `5c95fecb` | Host-response send failure now removes the pending `active_requests` entry before propagating the error (matches the `Response` arm). Unit test drives a transport whose host-response send fails and asserts the entry is gone. |
+| IN-01..IN-04 | skipped | — | Info-tier, out of the requested fix scope (critical + warnings only). |
+
+**Verification (all green):** `cargo test --lib client` (107 passed), `cargo test --test client_host_roundtrip --test client_host_approval --test client_create_message_llm_server` (8 passed), `cargo clippy --lib --tests --features full -- -D warnings` (clean), `cargo fmt --all -- --check` (clean). The `send_roots_list_changed` doctest was re-run and passes.
+
+---
+
 _Reviewed: 2026-07-17T23:18:49Z_
 _Reviewer: Claude (gsd-code-reviewer)_
 _Depth: standard_
