@@ -303,6 +303,46 @@ async fn elicitation_answered_via_raw_pump() {
 }
 
 // ---------------------------------------------------------------------------
+// WR-01: inbound `ping` answered with an empty result, connection survives
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn inbound_ping_answered_with_empty_result() {
+    let (client_t, server_t) = duplex::DuplexTransport::pair();
+
+    let inbound_id = RequestId::from("ping-1".to_string());
+    // A server -> client ping parses via the client grammar.
+    let inbound = Request::Client(Box::new(ClientRequest::Ping));
+    let server_task = tokio::spawn(pump_one_inbound(server_t, inbound_id.clone(), inbound));
+
+    // No host handlers registered: ping must still succeed (it is spec-level,
+    // not registry-dependent).
+    let mut client = ClientBuilder::new(client_t).build();
+    client
+        .initialize(ClientCapabilities::default())
+        .await
+        .expect("initialize");
+    // The connection survives the inbound ping: the client's own request still
+    // completes normally.
+    let _ = client
+        .list_tools(None)
+        .await
+        .expect("list_tools succeeds after inbound ping");
+
+    let response = server_task.await.expect("server task");
+    assert_eq!(response.id, inbound_id);
+    assert!(
+        response.is_success(),
+        "inbound ping must be answered with a success result, got: {response:?}"
+    );
+    assert_eq!(
+        result_payload(&response),
+        json!({}),
+        "ping response must be an empty object per the MCP spec"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Passthrough proptest: params observed by the host handler == server sent
 // ---------------------------------------------------------------------------
 
