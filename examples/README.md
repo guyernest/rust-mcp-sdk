@@ -260,6 +260,18 @@ don't yet speak SEP-2640 — the two surfaces are byte-equal by construction.
 cargo run --example s44_server_skills --features skills,full
 ```
 
+### Client Host Surface (Sampling / Elicitation / Roots)
+
+**s49_sampling_host** — A sampling **host**: a `Client` that ANSWERS an inbound
+spec-direction `sampling/createMessage` from its registered
+`pmcp::client::host::HostSamplingHandler` (the MCP host direction — the inverse
+of the legacy LLM-server pattern used by `Client::create_message`). Registers the
+handler via `ClientBuilder::on_sampling(..)` and drives a nested round-trip over
+an in-process duplex transport, printing the completion the host handler produced.
+```bash
+cargo run --example s49_sampling_host
+```
+
 ### MCP Tasks
 
 **s45_tool_as_task_lifecycle** — THE canonical tools-as-Tasks example: the

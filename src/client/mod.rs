@@ -35,6 +35,7 @@ use futures_locks::RwLock;
 
 #[cfg(all(not(target_arch = "wasm32"), feature = "http-client"))]
 pub mod auth;
+pub mod host;
 pub mod http_logging_middleware;
 pub mod http_middleware;
 #[cfg(all(not(target_arch = "wasm32"), feature = "oauth"))]
@@ -44,6 +45,11 @@ mod options;
 pub mod transport;
 
 pub use options::ClientOptions;
+
+pub use host::{
+    ApprovalDecision, ClientHostRegistry, HostElicitationHandler, HostSamplingHandler,
+    PreflightApproval, RootsProvider, SamplingResultReview,
+};
 
 /// Response from a task-augmented `tools/call`.
 ///
@@ -117,6 +123,9 @@ pub struct Client<T: Transport> {
     notification_tx: Option<mpsc::Sender<Notification>>,
     active_requests: Arc<RwLock<HashMap<RequestId, oneshot::Sender<()>>>>,
     options: ClientOptions,
+    /// Registered host handlers answering inbound server -> client requests
+    /// (sampling / elicitation / roots). Immutable after construction.
+    host_registry: crate::client::host::ClientHostRegistry,
 }
 
 impl<T: Transport> std::fmt::Debug for Client<T> {
@@ -128,6 +137,7 @@ impl<T: Transport> std::fmt::Debug for Client<T> {
             .field("server_capabilities", &self.server_capabilities)
             .field("initialized", &self.initialized)
             .field("info", &self.info)
+            .field("host_registry", &self.host_registry)
             .finish()
     }
 }
@@ -181,6 +191,7 @@ impl<T: Transport> Client<T> {
             notification_tx: None,
             active_requests: Arc::new(RwLock::new(HashMap::new())),
             options: ClientOptions::default(),
+            host_registry: crate::client::host::ClientHostRegistry::default(),
         }
     }
 
@@ -224,6 +235,7 @@ impl<T: Transport> Client<T> {
             notification_tx: None,
             active_requests: Arc::new(RwLock::new(HashMap::new())),
             options: ClientOptions::default(),
+            host_registry: crate::client::host::ClientHostRegistry::default(),
         }
     }
 
@@ -263,6 +275,7 @@ impl<T: Transport> Client<T> {
             notification_tx: None,
             active_requests: Arc::new(RwLock::new(HashMap::new())),
             options,
+            host_registry: crate::client::host::ClientHostRegistry::default(),
         }
     }
 
@@ -1796,6 +1809,17 @@ impl<T: Transport> Client<T> {
     /// Requests the server to generate a message using its language model capabilities.
     /// This is typically used by servers that provide LLM functionality.
     ///
+    /// # The "LLM-server pattern" (INVERSE of spec host sampling)
+    ///
+    /// This method is the **LLM-server pattern**: the *client* asks a *server*
+    /// whose [`pmcp::SamplingHandler`](crate::SamplingHandler) runs the LLM. It
+    /// is the **inverse** of MCP spec host sampling, where a server requests
+    /// sampling and the client answers via a
+    /// [`pmcp::client::host::HostSamplingHandler`](crate::client::host::HostSamplingHandler).
+    /// Both directions are supported and neither is deprecated — pick the one
+    /// that matches who owns the model. This path is unchanged by the client
+    /// host surface.
+    ///
     /// # Examples
     ///
     /// ```rust,no_run
@@ -2231,15 +2255,163 @@ impl<T: Transport> Client<T> {
 
                     // Continue loop to wait for the actual response
                 },
-                crate::types::TransportMessage::Request { .. } => {
-                    // Unexpected message type
-                    self.active_requests.write().await.remove(&request_id);
-                    return Err(Error::protocol_msg(
-                        "Unexpected message type while waiting for response",
-                    ));
+                crate::types::TransportMessage::Request { id, request } => {
+                    // Any inbound request at a client is server -> client by
+                    // definition (the MCP host direction). Answer it from the
+                    // registered host handlers, then keep waiting for the
+                    // original response (request_id stays pending).
+                    let response = self.dispatch_host_request(id, request).await;
+                    self.transport
+                        .write()
+                        .await
+                        .send(crate::types::TransportMessage::Response(response))
+                        .await?;
                 },
             }
         }
+    }
+
+    /// Answer an inbound server -> client request from the host registry.
+    ///
+    /// Returns a [`JSONRPCResponse`](crate::types::JSONRPCResponse) that the
+    /// caller sends back over the transport. A known request kind with no
+    /// registered handler yields `-32601` (method-not-found); a
+    /// handler/provider failure yields a sanitized `-32603` (the raw error is
+    /// logged locally, never forwarded to the remote server). The connection is
+    /// never dropped.
+    async fn dispatch_host_request(
+        &self,
+        id: RequestId,
+        request: Request,
+    ) -> crate::types::JSONRPCResponse {
+        use crate::client::host::{classify_host_request, HostRequestKind};
+        match classify_host_request(&request) {
+            HostRequestKind::Sampling => self.dispatch_host_sampling(id, request).await,
+            HostRequestKind::Elicitation => self.dispatch_host_elicitation(id, request).await,
+            HostRequestKind::Roots => self.dispatch_host_roots(id).await,
+            HostRequestKind::Unhandled => Self::host_method_not_found(id),
+        }
+    }
+
+    /// Route a classified sampling request to the registered host handler.
+    async fn dispatch_host_sampling(
+        &self,
+        id: RequestId,
+        request: Request,
+    ) -> crate::types::JSONRPCResponse {
+        let Some(handler) = self.host_registry.sampling.clone() else {
+            return Self::host_method_not_found(id);
+        };
+        let Some(params) = Self::extract_sampling_params(request) else {
+            return Self::host_method_not_found(id);
+        };
+        match handler.handle_create_message(params).await {
+            Ok(result) => Self::host_ok(id, &result),
+            Err(e) => Self::host_handler_error(id, "sampling/createMessage", &e),
+        }
+    }
+
+    /// Route a classified elicitation request to the registered host handler.
+    async fn dispatch_host_elicitation(
+        &self,
+        id: RequestId,
+        request: Request,
+    ) -> crate::types::JSONRPCResponse {
+        let Some(handler) = self.host_registry.elicitation.clone() else {
+            return Self::host_method_not_found(id);
+        };
+        let Some(params) = Self::extract_elicitation_params(request) else {
+            return Self::host_method_not_found(id);
+        };
+        match handler.handle_elicitation(params).await {
+            Ok(result) => Self::host_ok(id, &result),
+            Err(e) => Self::host_handler_error(id, "elicitation/create", &e),
+        }
+    }
+
+    /// Answer a classified `roots/list` request from the registered provider.
+    async fn dispatch_host_roots(&self, id: RequestId) -> crate::types::JSONRPCResponse {
+        let Some(provider) = self.host_registry.roots.clone() else {
+            return Self::host_method_not_found(id);
+        };
+        match provider().await {
+            Ok(result) => Self::host_ok(id, &result),
+            Err(e) => Self::host_handler_error(id, "roots/list", &e),
+        }
+    }
+
+    /// Extract [`CreateMessageParams`] from either inbound sampling parse
+    /// variant (client-alias or server), handling the parse ambiguity.
+    fn extract_sampling_params(request: Request) -> Option<CreateMessageParams> {
+        match request {
+            Request::Client(client) => match *client {
+                ClientRequest::CreateMessage(params) => Some(*params),
+                _ => None,
+            },
+            Request::Server(server) => match *server {
+                crate::types::ServerRequest::CreateMessage(params) => Some(*params),
+                _ => None,
+            },
+        }
+    }
+
+    /// Extract [`ElicitRequestParams`] from an inbound elicitation request.
+    fn extract_elicitation_params(
+        request: Request,
+    ) -> Option<crate::types::elicitation::ElicitRequestParams> {
+        match request {
+            Request::Server(server) => match *server {
+                crate::types::ServerRequest::ElicitationCreate(params) => Some(*params),
+                _ => None,
+            },
+            Request::Client(_) => None,
+        }
+    }
+
+    /// Build a successful host response, serializing the handler result.
+    fn host_ok<S: serde::Serialize>(id: RequestId, value: &S) -> crate::types::JSONRPCResponse {
+        match serde_json::to_value(value) {
+            Ok(v) => crate::types::JSONRPCResponse::success(id, v),
+            Err(e) => {
+                tracing::error!("failed to serialize host response: {e}");
+                Self::host_internal_error(id)
+            },
+        }
+    }
+
+    /// `-32601` method-not-found response (keeps the connection alive).
+    fn host_method_not_found(id: RequestId) -> crate::types::JSONRPCResponse {
+        crate::types::JSONRPCResponse::error(
+            id,
+            crate::types::jsonrpc::JSONRPCError {
+                code: -32601,
+                message: "Method not found".to_string(),
+                data: None,
+            },
+        )
+    }
+
+    /// Sanitized `-32603` internal-error response. The raw error is logged
+    /// locally by the caller; only a generic message crosses the wire.
+    fn host_internal_error(id: RequestId) -> crate::types::JSONRPCResponse {
+        crate::types::JSONRPCResponse::error(
+            id,
+            crate::types::jsonrpc::JSONRPCError {
+                code: -32603,
+                message: "Internal error handling host request".to_string(),
+                data: None,
+            },
+        )
+    }
+
+    /// Log a handler/provider failure locally and return a sanitized `-32603`.
+    fn host_handler_error(
+        id: RequestId,
+        method: &str,
+        err: &Error,
+    ) -> crate::types::JSONRPCResponse {
+        tracing::error!("host handler for {method} failed: {err}");
+        Self::host_internal_error(id)
     }
 
     /// Send a notification.
@@ -2286,6 +2458,7 @@ pub struct ClientBuilder<T: Transport> {
     transport: T,
     options: ProtocolOptions,
     middleware_chain: EnhancedMiddlewareChain,
+    host_registry: crate::client::host::ClientHostRegistry,
 }
 
 impl<T: Transport> std::fmt::Debug for ClientBuilder<T> {
@@ -2304,6 +2477,7 @@ impl<T: Transport> ClientBuilder<T> {
             transport,
             options: ProtocolOptions::default(),
             middleware_chain: EnhancedMiddlewareChain::new(),
+            host_registry: crate::client::host::ClientHostRegistry::default(),
         }
     }
 
@@ -2404,6 +2578,96 @@ impl<T: Transport> ClientBuilder<T> {
         self
     }
 
+    /// Register a host sampling handler answering inbound
+    /// `sampling/createMessage` requests (the MCP host direction).
+    ///
+    /// This is the INVERSE of [`Client::create_message`] (the LLM-server
+    /// pattern). See [`crate::client::host`] for the full disambiguation.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// use pmcp::{ClientBuilder, StdioTransport};
+    /// use pmcp::client::host::HostSamplingHandler;
+    /// use pmcp::types::sampling::{CreateMessageParams, CreateMessageResult};
+    /// use pmcp::types::Content;
+    /// use async_trait::async_trait;
+    ///
+    /// struct MyHost;
+    /// #[async_trait]
+    /// impl HostSamplingHandler for MyHost {
+    ///     async fn handle_create_message(
+    ///         &self,
+    ///         _params: CreateMessageParams,
+    ///     ) -> pmcp::Result<CreateMessageResult> {
+    ///         Ok(CreateMessageResult::new(Content::text("hi"), "my-model"))
+    ///     }
+    /// }
+    ///
+    /// let client = ClientBuilder::new(StdioTransport::new())
+    ///     .on_sampling(MyHost)
+    ///     .build();
+    /// ```
+    pub fn on_sampling(mut self, handler: impl host::HostSamplingHandler + 'static) -> Self {
+        self.host_registry.sampling = Some(Arc::new(handler));
+        self
+    }
+
+    /// Register a host elicitation handler answering inbound
+    /// `elicitation/create` requests.
+    pub fn on_elicitation(mut self, handler: impl host::HostElicitationHandler + 'static) -> Self {
+        self.host_registry.elicitation = Some(Arc::new(handler));
+        self
+    }
+
+    /// Register a roots provider answering inbound `roots/list` requests.
+    ///
+    /// The provider is generic over any closure returning a future that yields
+    /// `Result<ListRootsResult>`, so callers never construct the
+    /// [`RootsProvider`] alias by hand.
+    pub fn on_roots<F, Fut>(mut self, provider: F) -> Self
+    where
+        F: Fn() -> Fut + Send + Sync + 'static,
+        Fut: std::future::Future<Output = Result<crate::types::roots::ListRootsResult>>
+            + Send
+            + 'static,
+    {
+        self.host_registry.roots = Some(Arc::new(move || Box::pin(provider())));
+        self
+    }
+
+    /// Register a mandatory pre-handler sampling approval gate.
+    ///
+    /// The callback is generic over any closure taking owned
+    /// [`CreateMessageParams`] and returning a future that yields an
+    /// [`ApprovalDecision`]. Its INVOCATION lands in a
+    /// follow-on plan; registering it here is additive.
+    pub fn on_sampling_approval<F, Fut>(mut self, callback: F) -> Self
+    where
+        F: Fn(CreateMessageParams) -> Fut + Send + Sync + 'static,
+        Fut: std::future::Future<Output = host::ApprovalDecision> + Send + 'static,
+    {
+        self.host_registry.approval = Some(Arc::new(move |params| Box::pin(callback(params))));
+        self
+    }
+
+    /// Register an optional post-handler sampling result review.
+    ///
+    /// The callback receives the owned request params and the produced
+    /// [`CreateMessageResult`] and returns a future yielding an
+    /// [`ApprovalDecision`]. Its INVOCATION lands in a
+    /// follow-on plan; registering it here is additive.
+    pub fn on_sampling_result_review<F, Fut>(mut self, callback: F) -> Self
+    where
+        F: Fn(CreateMessageParams, CreateMessageResult) -> Fut + Send + Sync + 'static,
+        Fut: std::future::Future<Output = host::ApprovalDecision> + Send + 'static,
+    {
+        self.host_registry.result_review = Some(Arc::new(move |params, result| {
+            Box::pin(callback(params, result))
+        }));
+        self
+    }
+
     /// Build the client.
     pub fn build(self) -> Client<T> {
         let mut client = Client::with_options(
@@ -2413,6 +2677,8 @@ impl<T: Transport> ClientBuilder<T> {
         );
         // Replace the default middleware chain with the configured one
         client.middleware_chain = Arc::new(RwLock::new(self.middleware_chain));
+        // Thread the configured host registry onto the client.
+        client.host_registry = self.host_registry;
         client
     }
 }
@@ -2432,6 +2698,7 @@ impl<T: Transport> Clone for Client<T> {
             notification_tx: self.notification_tx.clone(),
             active_requests: self.active_requests.clone(),
             options: self.options.clone(),
+            host_registry: self.host_registry.clone(),
         }
     }
 }
@@ -2542,6 +2809,109 @@ mod tests {
             ProtocolOptions::default(),
         );
         assert_eq!(client.options.max_iterations, 100);
+    }
+
+    // === Client host dispatch unit tests (HOST-01/HOST-05) ===
+
+    struct MockHostSampling;
+
+    #[async_trait]
+    impl host::HostSamplingHandler for MockHostSampling {
+        async fn handle_create_message(
+            &self,
+            _params: CreateMessageParams,
+        ) -> Result<CreateMessageResult> {
+            Ok(CreateMessageResult::new(
+                crate::types::Content::text("mock host completion"),
+                "mock-host-model",
+            ))
+        }
+    }
+
+    struct FailingHostSampling;
+
+    #[async_trait]
+    impl host::HostSamplingHandler for FailingHostSampling {
+        async fn handle_create_message(
+            &self,
+            _params: CreateMessageParams,
+        ) -> Result<CreateMessageResult> {
+            Err(Error::protocol_msg(
+                "secret path /etc/passwd leaked in error",
+            ))
+        }
+    }
+
+    fn sampling_client_alias_request() -> Request {
+        // Inbound sampling parses as the CLIENT variant (parse ambiguity).
+        Request::Client(Box::new(ClientRequest::CreateMessage(Box::new(
+            CreateMessageParams::new(Vec::new()),
+        ))))
+    }
+
+    #[tokio::test]
+    async fn test_dispatch_sampling_alias_reaches_handler() {
+        let client = ClientBuilder::new(MockTransport::new())
+            .on_sampling(MockHostSampling)
+            .build();
+        let id = RequestId::from(1i64);
+        let response = client
+            .dispatch_host_request(id, sampling_client_alias_request())
+            .await;
+        assert!(
+            response.is_success(),
+            "inbound sampling (client-alias parse) must reach the host handler, got: {response:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_dispatch_known_unhandled_returns_method_not_found() {
+        // No handlers registered; a KNOWN roots/list request must yield -32601.
+        let client = Client::new(MockTransport::new());
+        let id = RequestId::from(2i64);
+        let request = Request::Server(Box::new(crate::types::ServerRequest::ListRoots));
+        let response = client.dispatch_host_request(id, request).await;
+        match response.payload {
+            ResponsePayload::Error(e) => assert_eq!(e.code, -32601),
+            ResponsePayload::Result(r) => panic!("expected -32601 error, got result: {r:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_dispatch_handler_error_is_sanitized_32603() {
+        let client = ClientBuilder::new(MockTransport::new())
+            .on_sampling(FailingHostSampling)
+            .build();
+        let id = RequestId::from(3i64);
+        let response = client
+            .dispatch_host_request(id, sampling_client_alias_request())
+            .await;
+        match response.payload {
+            ResponsePayload::Error(e) => {
+                assert_eq!(e.code, -32603);
+                // Sanitized: the raw handler error text must NOT cross the wire.
+                assert!(
+                    !e.message.contains("/etc/passwd"),
+                    "handler error text must be sanitized, got: {}",
+                    e.message
+                );
+            },
+            ResponsePayload::Result(r) => panic!("expected -32603 error, got result: {r:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_dispatch_roots_provider_answers() {
+        let client = ClientBuilder::new(MockTransport::new())
+            .on_roots(|| async { Ok(crate::types::roots::ListRootsResult { roots: Vec::new() }) })
+            .build();
+        let id = RequestId::from(4i64);
+        let request = Request::Server(Box::new(crate::types::ServerRequest::ListRoots));
+        let response = client.dispatch_host_request(id, request).await;
+        assert!(
+            response.is_success(),
+            "roots provider must answer roots/list"
+        );
     }
 
     // === Typed-helper unit tests ===
