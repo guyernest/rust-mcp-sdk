@@ -54,6 +54,7 @@
   - [Multiple Parallel Clients](ch17-01-parallel-clients.md)
   - [Structured Output Schemas](ch17-02-structured-output.md)
   - [Tool with Sampling](ch17-03-sampling-tools.md)
+  - [Sampling & Hosting](ch17-04-sampling-hosting.md)
 - [Chapter 18: Design Patterns](ch18-patterns.md)
 - [Chapter 19: Integration Patterns](ch19-integration.md)
 
