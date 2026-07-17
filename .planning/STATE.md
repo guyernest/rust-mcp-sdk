@@ -1,17 +1,16 @@
 ---
 gsd_state_version: 1.0
-milestone: v2.3
-milestone_name: Excel-as-Configuration MCP Servers
-status: ready
-stopped_at: Phase 105 complete (verified passed, human UAT approved)
-last_updated: "2026-07-05T18:49:21.054Z"
-last_activity: 2026-07-05
+milestone: v2.4
+milestone_name: Agents & Teams — SDK Extraction
+status: planning
+last_updated: "2026-07-17T20:04:07.857Z"
+last_activity: 2026-07-17
 progress:
-  total_phases: 54
-  completed_phases: 48
-  total_plans: 224
-  completed_plans: 224
-  percent: 89
+  total_phases: 0
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
+  percent: 0
 ---
 
 # Project State
@@ -25,12 +24,10 @@ See: .planning/PROJECT.md (updated 2026-06-09) · .planning/ROADMAP.md (v2.3 mil
 
 ## Current Position
 
-Phase: 999.1
-Plan: Not started
-Status: Phase 105 complete — ready for next phase
-Last activity: 2026-07-05
-
-Progress: [████████████████████] 286/290 plans (99%) · v2.3 phases 91–96 all Complete
+Phase: Not started (defining requirements)
+Plan: —
+Status: Defining requirements
+Last activity: 2026-07-17 — Milestone v2.4 started
 
 ## v2.3 Phase Plan (6 phases, 38 requirements)
 

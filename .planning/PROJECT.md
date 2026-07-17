@@ -60,20 +60,19 @@ Tool handlers can manage long-running operations through a durable task lifecycl
 
 ### Active
 
-## Current Milestone: v2.3 Excel-as-Configuration MCP Servers (governed Excel CodeLanguage)
+## Current Milestone: v2.4 Agents & Teams — SDK Extraction
 
-**Goal:** Extract the Excel-workbook → MCP-server compiler from the TowelRads `quote-pricing` lighthouse into the SDK so that *any* project can compile a governed Excel workbook into a tested, versioned, deterministic MCP server — a new "governed Excel" CodeLanguage alongside the v2.2 SQL and OpenAPI toolkits. Compile-not-interpret: the workbook is simultaneously the specification (formula DAG), the test oracle (cached cell values become assertions), and the output template.
+**Goal:** Make the PMCP SDK the reference implementation for agents-as-MCP-clients and agent teams — spec-compliant client host surface, portable contracts, the `pmcp-agent` loop crate, team reference servers, and cargo-pmcp verbs — per the approved design `docs/design/agents-teams-sdk-extraction-plan.md` (boundary razor: contracts + reference implementations in the SDK; operation + scale stay on pmcp.run).
 
-**Target features:**
-- `pmcp-workbook-runtime` crate — owned model types + deterministic evaluator + output-template renderer, **reader-free**; CI/just purity gate asserts the Excel reader (`umya`) never enters the runtime/served-binary tree
-- `pmcp-workbook-compiler` crate — offline pipeline (ingest → lint → manifest synth → formula parse → DAG compile → penny-reconcile → artifact emission → promote-time gate); `umya` reader isolated here
-- `cargo pmcp compile-workbook` + `lint-workbook` + `emit-bundle` subcommands, with the gated `--accept --approver --effective-date` approval flow in the CLI
-- Generic served-tool layer as a `pmcp-server-toolkit` module (`calculate`/`explain`/`get_manifest`/`diff_version`/`render_workbook`), fully bundle-driven; `cargo pmcp new --kind workbook-server` scaffold
-- `BundleSource` trait with local-dir + embedded impls (S3/registry left as documented extension seam)
-- SDK-owned versioned dialect spec; workbooks declare a dialect version they target
-- Generalization fixes (do not copy lighthouse debt as-is): manifest-driven tool schema (kill hardcoded `build_reference_manifest`); fix promote-path bugs CR-01 (change-class demotion asymmetry) / CR-02 (version-overwrite) / WR-01 (enum-input tiering); umya fabricated-provenance handling; project-level `pmcp.toml` mapping workbooks → bundle IDs
-- Complements `pmcp-code-mode` (untrusted long-tail path) — explicitly does NOT touch it
-- Named-range-backed validation lists deferred by design (Phase-14 extension seam documented); S3/registry bundle store deferred
+**Target features (design-doc phases A–F):**
+- Client host surface (spec compliance): client-side handler registry for server→client requests — `SamplingHandler` (host semantics, human-in-the-loop hook), `ElicitationHandler`, roots provider; legacy inverted sampling documented as the distinct "LLM-server pattern"
+- Contracts: `pmcp-package` adopted into this repo + published 0.1.0 (wire-frozen 0.1.x, caret dep); team-server tool contracts as provable-contracts YAML + conformance fixtures (`fs__*`, `mem__*`, `team_mcp__<member>`, approval tools) — namespaced provisional PMCP extensions
+- `crates/pmcp-agent` (0.x experimental): agent loop pure between effect seams (`CompletionSource`/`ToolInvoker`/`ConversationStore` — seams double as durability seams); `SamplingSource` (zero-dep, spec sampling incl. tools/tool_choice per MCP 2025-11-25) + feature-gated `OpenAiCompatSource` + `AnthropicSource`; agent-as-server adapter on `ServerCore`; tasks-aware `ToolInvoker` (`poll_decision`); configured by `AgentPackage` + resolved slots
+- `crates/pmcp-team-servers` (one crate, per-server features): team-fs (local-dir backend), approval-mcp (in-memory `TaskStore` + console/webhook channels), mem-mcp (BM25/keyword dev backend — no embedder, no mem0-rust), team-mcp (members as agent-as-server tools via `ToolOutput::Result`)
+- cargo-pmcp verbs: `agent new`/`agent dev`, `team dev` (in-process small team from a `TeamPackage`), `package capture|show` (pin tripwire); agents deploy via existing target adapters
+- Docs in three shapes + examples: sampling host, standalone vs hosted agent, small team end-to-end; book chapters (Agents as MCP Clients / Agent Teams / Sampling & Hosting)
+
+**Non-goals (design §7):** no provider matrix (3 sources max), no mem0-rust/UnifiedLLMService/durable-Lambda open-sourcing, no distributed-team portability claim, no invented wire methods in WG territory, no AgentCore adapter in first pass.
 
 ### Future
 
@@ -104,6 +103,9 @@ v2.3 extracts the proven Excel-as-Configuration compiler from the `ai-on-cloud/t
 - v1.4: Book & Course Update (load testing docs, MCP Apps chapter refresh, quizzes, exercises)
 - v1.5: Cloud Load Testing Upload (loadtest config upload, OAuth for load testing)
 - v2.0: Protocol Modernization (protocol 2025-11-25, Tower middleware, conformance, proc macros, pentest, secrets)
+- v2.1: Examples & Docs Hygiene (examples cleanup, macros rewrite, docs.rs pipeline)
+- v2.2: Configuration-Only MCP Servers (SQL + OpenAPI toolkits, four DX shapes, pmcp-server-toolkit)
+- v2.3: Excel-as-Configuration MCP Servers (workbook runtime/compiler/CLI, purity gate, Shape A/B) + Tasks DX arc (phases 101–105: tools-as-Tasks, HTTP tasks, SEP-1686 task-augmented results, poll-decision classifier)
 
 ### Out of Scope
 
@@ -196,4 +198,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-07-05 — Phase 104 complete (Task-Augmented Tool Results DX, SEP-1686 junction; ToolOutput verbatim pass-through + double-wrap tripwire + client TaskMetadata surface + migration guide; re-verified 7/7, make quality-gate green); previously 2026-06-15 — Phase 96 complete (Shape B `cargo pmcp new --kind workbook-server` scaffold + dialect-version declaration with both-lane fail-closed gate + WBEX-01 second-workbook served-schema generalization gate + WBEX-02 8-quirk corpus; WBCL-05/WBDL-02/WBEX-01/WBEX-02 validated, make quality-gate + purity-check green); previously 2026-06-14 — Phase 95 complete (pmcp-workbook-server Shape A pure-config binary mirroring pmcp-sql-server; test trio + --bundle-id proptest + reader-free purity gate + slot-9a wiring; requirement WBCL-06 validated)*
+*Last updated: 2026-07-17 — Milestone v2.4 (Agents & Teams — SDK Extraction) started; design doc `docs/design/agents-teams-sdk-extraction-plan.md` approved incl. §6 recommendations; previously 2026-07-05 — Phase 104 complete (Task-Augmented Tool Results DX, SEP-1686 junction; ToolOutput verbatim pass-through + double-wrap tripwire + client TaskMetadata surface + migration guide; re-verified 7/7, make quality-gate green); previously 2026-06-15 — Phase 96 complete (Shape B `cargo pmcp new --kind workbook-server` scaffold + dialect-version declaration with both-lane fail-closed gate + WBEX-01 second-workbook served-schema generalization gate + WBEX-02 8-quirk corpus; WBCL-05/WBDL-02/WBEX-01/WBEX-02 validated, make quality-gate + purity-check green); previously 2026-06-14 — Phase 95 complete (pmcp-workbook-server Shape A pure-config binary mirroring pmcp-sql-server; test trio + --bundle-id proptest + reader-free purity gate + slot-9a wiring; requirement WBCL-06 validated)*
