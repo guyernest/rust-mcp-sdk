@@ -101,3 +101,7 @@ Ported the dependency-clean `pmcp-package` crate into `rust-mcp-sdk` as its cano
 ## Threat Flags
 
 None. No new security-relevant surface introduced beyond the ported format code covered by the plan's threat register (T-107-01 mitigated by the scrub; T-107-09 satisfied by the byte-identical LICENSE-APACHE + NOTICE).
+
+## Self-Check: PASSED
+
+All created files verified present (Cargo.toml, README.md, CHANGELOG.md, NOTICE, LICENSE-MIT, LICENSE-APACHE, src/lib.rs, tests/digest_stability.rs, 107-01-SUMMARY.md) and all commits verified in git log (b7fa50b0, 8c2fe36e, a16cff97, eecc0836).
