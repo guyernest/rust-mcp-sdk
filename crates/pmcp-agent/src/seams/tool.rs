@@ -1,5 +1,7 @@
 //! The tool-invocation seam — dispatch tool calls.
 
+use std::sync::Arc;
+
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
@@ -88,6 +90,26 @@ pub trait ToolInvoker: Send + Sync {
             out.push(self.invoke(call).await);
         }
         out
+    }
+}
+
+/// Forward the seam through a shared `Arc<dyn ToolInvoker>`.
+///
+/// The 108-06 adapter shares ONE invoker across every agent run while building a
+/// fresh completion source per request. This blanket impl lets the generic
+/// [`AgentEngine`](crate::iteration::AgentEngine) hold an erased
+/// `Arc<dyn ToolInvoker>` — and it forwards BOTH methods so a concrete
+/// invoker's `invoke_batch` override (e.g. the bounded-concurrency
+/// [`ClientToolInvoker`](crate::invoker::ClientToolInvoker)) is preserved rather
+/// than falling back to the sequential default.
+#[async_trait]
+impl ToolInvoker for Arc<dyn ToolInvoker> {
+    async fn invoke(&self, call: ToolCall) -> ToolCallResult {
+        (**self).invoke(call).await
+    }
+
+    async fn invoke_batch(&self, calls: Vec<ToolCall>) -> Vec<ToolCallResult> {
+        (**self).invoke_batch(calls).await
     }
 }
 
