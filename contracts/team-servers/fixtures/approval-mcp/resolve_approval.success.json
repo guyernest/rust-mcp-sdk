@@ -1,0 +1,20 @@
+{
+  "schema_version": "1",
+  "case_id": "approval-mcp.resolve_approval.positive-static-legacy",
+  "server": "approval-mcp",
+  "request": {
+    "name": "resolve_approval",
+    "arguments": { "approval_id": "appr-42", "decision": "approve" }
+  },
+  "expect": {
+    "outcome": "success",
+    "match": "subset",
+    "response": {
+      "content": [
+        { "type": "text", "text": "approval appr-42 resolved: approve" }
+      ],
+      "isError": false,
+      "_note": "resolve_approval is a provisional UNNAMESPACED static (legacy) name"
+    }
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "schema_version": "1",
+  "case_id": "team-fs.fs__write.negative-invalid-arguments",
+  "server": "team-fs",
+  "request": {
+    "name": "fs__write",
+    "arguments": { "path": "notes.txt" }
+  },
+  "expect": {
+    "outcome": "error",
+    "match": "subset",
+    "response": {
+      "error": {
+        "code": -32602,
+        "message": "invalid arguments: missing required field 'content'"
+      },
+      "_note": "advertised schema == enforced schema; missing 'content' fails validation before any write"
+    }
+  }
+}

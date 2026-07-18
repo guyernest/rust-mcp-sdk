@@ -1,0 +1,20 @@
+{
+  "schema_version": "1",
+  "case_id": "approval-mcp.team_approval__ask_alice.positive-dynamic-family",
+  "server": "approval-mcp",
+  "request": {
+    "name": "team_approval__ask_alice",
+    "arguments": { "question": "Approve deploy to prod?" }
+  },
+  "expect": {
+    "outcome": "success",
+    "match": "subset",
+    "response": {
+      "content": [
+        { "type": "text", "text": "asked alice; approval appr-99 created (pending)" }
+      ],
+      "isError": false,
+      "_note": "team_approval__ask_<member> is a dynamic namespaced family, one tool per human roster member"
+    }
+  }
+}

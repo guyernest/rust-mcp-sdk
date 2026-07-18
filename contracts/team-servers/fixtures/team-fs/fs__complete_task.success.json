@@ -1,0 +1,22 @@
+{
+  "schema_version": "1",
+  "case_id": "team-fs.fs__complete_task.positive-related-task-meta",
+  "server": "team-fs",
+  "request": {
+    "name": "fs__complete_task",
+    "arguments": { "summary": "wrote report.md" }
+  },
+  "expect": {
+    "outcome": "success",
+    "match": "subset",
+    "response": {
+      "content": [
+        { "type": "text", "text": "task completed" }
+      ],
+      "isError": false,
+      "_meta": {
+        "related_task": { "taskId": "task-abc123" }
+      }
+    }
+  }
+}

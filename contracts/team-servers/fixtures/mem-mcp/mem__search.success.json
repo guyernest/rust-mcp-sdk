@@ -1,0 +1,19 @@
+{
+  "schema_version": "1",
+  "case_id": "mem-mcp.mem__search.positive",
+  "server": "mem-mcp",
+  "request": {
+    "name": "mem__search",
+    "arguments": { "query": "deploy target", "limit": 5 }
+  },
+  "expect": {
+    "outcome": "success",
+    "match": "subset",
+    "response": {
+      "content": [
+        { "type": "text", "text": "1 match: mem-001 'deploy target is Cloud Run'" }
+      ],
+      "isError": false
+    }
+  }
+}
