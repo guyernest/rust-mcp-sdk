@@ -92,14 +92,11 @@ jobs:
     - name: Run tests
       run: cargo test --all-features --verbose -- --test-threads=1
 
-    - name: pmcp-package standalone checks
-      # pmcp-package has its own [workspace] table and is NOT a root workspace
-      # member, so the fmt/clippy/test steps above IGNORE it. Reach it explicitly
-      # via --manifest-path to close the workspace-exclusion CI blind spot.
-      run: |
-        cargo fmt --manifest-path crates/pmcp-package/Cargo.toml --all -- --check
-        cargo clippy --manifest-path crates/pmcp-package/Cargo.toml --all-targets -- -D warnings
-        cargo test --manifest-path crates/pmcp-package/Cargo.toml
+    # NOTE: pmcp-package (workspace-EXCLUDED, own [workspace] table) is gated in
+    # the `quality-gate` job via `make quality-gate` -> `pmcp-package-gate`
+    # (fmt/clippy/test --manifest-path), which is the single source of truth and
+    # is reused by the local `make quality-gate`. It is intentionally NOT
+    # re-run here to avoid a duplicate from-scratch compile of the crate's tree.
 
     - name: Run doctests
       run: cargo test --doc --all-features --verbose
