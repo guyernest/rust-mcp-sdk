@@ -12,6 +12,7 @@
 //!   only exposed when building the `Authorization` header — never logged.
 //!
 //! No streaming this phase.
+#![cfg(feature = "openai-compat")]
 
 use async_trait::async_trait;
 use pmcp::types::sampling::{
