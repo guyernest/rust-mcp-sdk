@@ -453,21 +453,23 @@ struct Args {
 | A3 | `pmat comply check` accepts a binding.yaml of the same shape as `contracts/binding.yaml` and can be invoked standalone | Pitfall 2 / Open Q1 | MEDIUM — affects D-18; confirm CLI early |
 | A4 | HTTP edge mapping `x-pmcp-team-depth` header → `_meta` has no existing helper and must be written at the binary layer | D-14 | Low — additive edge code |
 
-## Open Questions
+## Open Questions (RESOLVED)
 
-1. **How is `pmat comply check` invoked and where should it be wired?**
+> All three open questions were resolved during planning and folded into concrete plan tasks. Retained here with resolution markers for traceability.
+
+1. **How is `pmat comply check` invoked and where should it be wired?** — **RESOLVED (folded into 109-08 Task 1/2).**
    - What we know: `contracts/binding.yaml` exists for `mcp-protocol-sdk-v1.yaml` with a clear schema (`version`, `target_crate`, `bindings[]{contract,equation,function,module_path,signature,status,notes}`). CLAUDE.md references `pmat comply check` as the house rule.
    - What's unclear: No Makefile/CI target runs `pmat comply` today; the exact CLI (`pmat comply check <binding.yaml>`?) and whether it resolves `function`/`module_path` against a compiled crate or source.
-   - Recommendation: First Wave 0 task — run `pmat comply --help`/`pmat comply check` against the *existing* binding.yaml to learn the contract, THEN author `team-servers/binding.yaml` to match, then add a `make comply` target chained into `quality-gate` (D-18). Do not author bindings blind.
+   - **Resolution:** 109-08 Task 1 probes `pmat comply --help` / `pmat comply check contracts/binding.yaml` against the *existing* binding to learn the CLI + schema BEFORE authoring `team-servers/binding.yaml`, and falls back to mirroring the existing `contracts/binding.yaml` shape byte-for-byte if `pmat` is absent. 109-08 Task 2 adds the `make comply` target chained into `quality-gate`, guarded by `command -v pmat` (warns, does not hard-fail) so a pmat-absent machine still passes the gate (D-18). No bindings authored blind.
 
-2. **Exact task-augmented client call for the member hop (A2).**
+2. **Exact task-augmented client call for the member hop (A2).** — **RESOLVED (verified).**
    - What we know: member `AgentServer` is `with_task_support(TaskSupport::Required)` and returns the task envelope only for task requests.
    - What's unclear: the precise `pmcp::Client` method/param to issue a task-augmented `tools/call` and read back `related_task`.
-   - Recommendation: Wave 0 spike — grep the pmcp Client surface + `tests/tool_with_result.rs`/`tests/tool_output_passthrough.rs` for the task-call helper before planning team-mcp tasks.
+   - **Resolution:** `Client::call_tool_with_task` is **VERIFIED present at `src/client/mod.rs:624`** (returns `ToolCallResponse::Result(CallToolResult)` carrying top-level `_meta[related_task]`), contrasted with the plain `call_tool` at `src/client/mod.rs:577` which drops it (see 109-PATTERNS.md "Key verification wins" and the `src/team/member.rs` interface block in 109-05). Assumption A2 is discharged — the phase's top execution risk is retired; 109-05 Task 2 uses `call_tool_with_task` for the member hop.
 
-3. **Contract YAML rev mechanics for the additive `subject_task_id` field + `_meta` depth doc (D-12/D-14).**
+3. **Contract YAML rev mechanics for the additive `subject_task_id` field + `_meta` depth doc (D-12/D-14).** — **RESOLVED (folded into 109-01 Task 4).**
    - What we know: metadata `version: 1.0.0`; additive change.
-   - Recommendation: bump to `1.1.0` (additive minor), add `subject_task_id`/`subject_ref` to the approval equation invariants and document the `x-pmcp-team-depth` `_meta` field in `team_dispatch_surface`. Keep the 19-static-tool-name conformance test green.
+   - **Resolution:** 109-01 Task 4 (contract rev) bumps `team-servers-v1.yaml` `metadata.version` to `1.1.0` (additive minor), adds `subject_task_id`/`subject_ref` to the `approval_tool_surface` invariants (D-12), and documents the `x-pmcp-team-depth` `_meta` field in `team_dispatch_surface` (D-14) — all purely additive so the 19-static-tool-name / 2-dynamic-prefix conformance test stays green.
 
 ## Environment Availability
 
