@@ -2080,8 +2080,8 @@ Plans:
 Plans:
 **Wave 1**
 
-- [ ] 107-01-PLAN.md — Adopt pmcp-package into the repo with publish-ready metadata, license files, README (wire-freeze policy), and docs.rs-clean scrubbed rustdoc (PKG-01)
-- [ ] 107-03-PLAN.md — Author team-servers-v1.yaml (4 tool-surface equations) + shared conformance fixtures + structural conformance test (PKG-03)
+- [x] 107-01-PLAN.md — Adopt pmcp-package into the repo with publish-ready metadata, license files, README (wire-freeze policy), and docs.rs-clean scrubbed rustdoc (PKG-01)
+- [x] 107-03-PLAN.md — Author team-servers-v1.yaml (4 tool-surface equations) + shared conformance fixtures + structural conformance test (PKG-03)
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
@@ -2151,7 +2151,7 @@ Plans:
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 106. Client Host Surface | 3/3 | Complete    | 2026-07-18 |
-| 107. Contracts & Package Format | 0/TBD | Not started | - |
+| 107. Contracts & Package Format | 2/3 | In Progress|  |
 | 108. `pmcp-agent` Loop Crate | 0/TBD | Not started | - |
 | 109. Team Reference Servers | 0/TBD | Not started | - |
 | 110. cargo-pmcp Agent & Team Verbs | 0/TBD | Not started | - |
