@@ -27,6 +27,10 @@ jsonschema = { version = "0.46", default-features = false }
 uuid = { version = "1.17", features = ["v4"] }
 # Optional HTTP client for the feature-gated completion sources (108-04).
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"], optional = true }
+# Needed only to construct pmcp's `StreamableHttpTransportConfig` (its `url`
+# field is a `url::Url`) in the `url-connector` factory (108-05). Already in the
+# workspace tree via pmcp; gated so the default/wasm build never pulls it.
+url = { version = "2.5", optional = true }
 
 [features]
 # All optional features stay OUT of `default` so the default + wasm32 builds
@@ -36,7 +40,7 @@ anthropic = ["dep:reqwest"]
 # The concrete URL connector-client impl (108-05) needs pmcp's native-only
 # `StreamableHttpTransport` (`#[cfg(not(target_arch = "wasm32"))]`). Gating it
 # behind a non-default feature keeps the default/wasm32 build clean (BLOCKER-2).
-url-connector = ["pmcp/streamable-http"]
+url-connector = ["pmcp/streamable-http", "dep:url"]
 
 [dev-dependencies]
 pmcp = { version = "2.17.0", path = "../..", features = ["full"] }

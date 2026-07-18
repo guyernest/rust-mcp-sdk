@@ -25,6 +25,7 @@ pub mod sources;
 pub mod trace;
 
 pub use config::ResolvedAgentConfig;
+pub use invoker::{ClientToolInvoker, ConnectorClient, ConnectorClientFactory, InvokerError};
 pub use seams::{
     CompletionError, CompletionSource, ConversationStore, InMemoryStore, RetryClass, RunPhase,
     RunState, StoreError, ToolCall, ToolCallResult, ToolError, ToolInvoker,
