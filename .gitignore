@@ -49,3 +49,6 @@ examples/spin
 
 # MCP Registry tokens
 .mcpregistry_*
+
+# PMAT/pv lint cache (machine-generated tooling scratch — never commit)
+.pv/
