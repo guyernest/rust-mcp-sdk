@@ -2122,7 +2122,23 @@ Plans:
   4. team-mcp composes Phase 108 agent-as-server members as per-member tools returning `ToolOutput::Result` with top-level `related_task` `_meta` — the worked migration template replacing the platform's raw-JSON-RPC bypass (TEAM-05)
   5. Conformance tests prove each reference server's tool surface matches the PKG-03 contracts (TEAM-06)
 
-**Plans**: TBD
+**Plans**: 8 plans in 4 waves
+
+Wave 1:
+- [ ] 109-01-PLAN.md — Crate scaffold + module skeleton + exported in-memory transport + `derive_attachment` (D-05/D-07) + additive contract rev to v1.1.0 (D-12/D-14)
+
+Wave 2 (parallel):
+- [ ] 109-02-PLAN.md — team-fs reference server: `TeamFsBackend` + `LocalDirBackend` (file:// + review/ sync + path containment) + HTTP-first binary (TEAM-02)
+- [ ] 109-03-PLAN.md — mem-mcp reference server: `TeamMemoryBackend` + zero-dep BM25 scorer + HTTP-first binary (TEAM-04)
+- [ ] 109-04-PLAN.md — approval-mcp reference server: InMemoryTaskStore + console/webhook notify-only channels + subject-ref linkage + HTTP-first binary (TEAM-03)
+- [ ] 109-05-PLAN.md — team-mcp reference server: task-augmented member hop → `ToolOutput::Result` + `related_task`, four guards, fuzz target, HTTP-first binary (TEAM-05)
+
+Wave 3 (parallel):
+- [ ] 109-06-PLAN.md — In-process `TeamRuntime` wiring API + "small team, one process" integration test (D-01/D-04/D-06/D-15, TEAM-01)
+- [ ] 109-07-PLAN.md — Exportable wire-level conformance runner + every-tool/every-guard fixtures (TEAM-06, D-17/D-19/D-20)
+
+Wave 4:
+- [ ] 109-08-PLAN.md — binding.yaml + `make comply` (pmat comply) wiring + doc-review E2E example (D-16/D-18)
 
 ### Phase 110: cargo-pmcp Agent & Team Verbs
 
