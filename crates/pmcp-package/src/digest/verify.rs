@@ -1,4 +1,4 @@
-//! Digest tamper-detection primitive (I-1/I-2 core).
+//! Digest tamper-detection primitive (core).
 //!
 //! # Threat Model
 //!
@@ -12,7 +12,7 @@
 //! A single-byte difference between the actual and expected bytes is
 //! detected and reported as a structured [`PackageError::DigestMismatch`].
 //!
-//! Plan 05 obtains `expected` from an OCI `Descriptor`'s digest via
+//! Callers obtain `expected` from an OCI `Descriptor`'s digest via
 //! `ManifestDigest::try_from(&descriptor_digest)` (see
 //! `crate::digest::canonical`) before calling this function — the OCI
 //! interop boundary is validated there, not here; `verify()` only ever
@@ -55,7 +55,7 @@ mod tests {
         let mut tampered = original.clone();
         tampered[0] ^= 0x01; // flip a single bit — content differs by one byte
         let err = verify(&digest, &tampered).unwrap_err();
-        assert!(matches!(err, PackageError::DigestMismatch { .. }));
+        assert!(matches!(err, PackageError::DigestMismatch {.. }));
     }
 
     #[test]

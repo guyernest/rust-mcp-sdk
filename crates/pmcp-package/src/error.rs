@@ -1,8 +1,8 @@
 //! Crate-wide error surface for `pmcp-package`.
 //!
 //! One flat, structured `PackageError` enum covers every failure mode the
-//! crate's modules produce: digest/verify (I-1/I-2), allowlist enforcement
-//! (I-4), reference parsing, slot-conflict detection (I-5), OCI layout I/O,
+//! crate's modules produce: digest/verify, allowlist enforcement
+//!, reference parsing, slot-conflict detection, OCI layout I/O,
 //! and (de)serialization. Variants carry concrete structured fields (not bare
 //! `String`-wrapped messages), following the `PathError`
 //! (`built-in/agents-api/crates/mcp-builtin-server-core/src/path_validator.rs`)
@@ -11,11 +11,11 @@
 //! precedents.
 //!
 //! There is deliberately NO `SlotDeviation` variant: behavior-relevant
-//! deviation detection (Plan 03) returns `Option<Deviation>` — a value, not
+//! deviation detection returns `Option<Deviation>` — a value, not
 //! an error — so an error variant for it would be dead code. `SlotConflict`
 //! is the one slot-related error variant; it is returned by
 //! `slot::aggregate()` when the same behavior-relevant slot (kind+name)
-//! carries different tested values across components (I-5 — a silent
+//! carries different tested values across components (a silent
 //! discard would mask a behavioral change).
 //!
 //! `serde_json::Error` has a single type covering both serialize and
@@ -41,7 +41,7 @@ pub enum PackageError {
     Io(#[from] std::io::Error),
 
     /// A recomputed digest did not match the digest declared in a manifest
-    /// or descriptor (I-1/I-2 tamper detection).
+    /// or descriptor (tamper detection).
     #[error("digest mismatch: expected {expected}, got {actual}")]
     DigestMismatch { expected: String, actual: String },
 
@@ -50,7 +50,7 @@ pub enum PackageError {
     MalformedDigest { reason: String },
 
     /// A deploy descriptor requested a CloudFormation resource type not on
-    /// the I-4 allowlist.
+    /// the allowlist.
     #[error("allowlist violation: {resource}")]
     AllowlistViolation { resource: String },
 
@@ -60,7 +60,7 @@ pub enum PackageError {
     InvalidReference { reason: String },
 
     /// The same behavior-relevant slot (kind+name) carried different tested
-    /// values across components during aggregation (I-5).
+    /// values across components during aggregation.
     #[error("slot conflict on '{slot}': tested={tested}, proposed={proposed}")]
     SlotConflict {
         slot: String,
@@ -105,7 +105,7 @@ mod tests {
     #[test]
     fn serialize_variant_wraps_serde_json_error_via_from() {
         let json_err = serde_json::from_str::<serde_json::Value>("{not valid json")
-            .expect_err("must fail to parse");
+.expect_err("must fail to parse");
         let err: PackageError = json_err.into();
         assert!(matches!(err, PackageError::Serialize(_)));
     }

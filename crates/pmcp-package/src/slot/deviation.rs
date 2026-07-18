@@ -1,4 +1,4 @@
-//! Behavior-relevant deviation detection (I-5): flags a behavior-relevant slot whose
+//! Behavior-relevant deviation detection: flags a behavior-relevant slot whose
 //! proposed value differs from the value that was exercised when the package was tested,
 //! and never flags an identity-bearing slot.
 
@@ -21,7 +21,7 @@ pub struct Deviation {
 /// `None`.
 ///
 /// Gated through `classification::classify` so the identity-bearing short-circuit is
-/// explicit and testable (I-5: bindings supply identity, never behavior). A detected
+/// explicit and testable (bindings supply identity, never behavior). A detected
 /// deviation is a *value* the caller decides to surface/acknowledge, not a hard error —
 /// contrast with `aggregate`'s `SlotConflict`, which IS a hard error because a silent
 /// discard there would mask the same kind of behavioral change at capture time.
@@ -113,7 +113,7 @@ mod tests {
         assert_eq!(detect_deviation(&tested, &proposed), None);
     }
 
-    // Sanity: `classify` must ensure this gate is testable (I-5 — bindings supply identity,
+    // Sanity: `classify` must ensure this gate is testable (bindings supply identity,
     // never behavior).
     #[test]
     fn identity_bearing_variants_are_never_behavior_relevant() {
@@ -122,6 +122,6 @@ mod tests {
                 name: "n".to_string()
             }),
             SlotClass::BehaviorRelevant
-        );
+       );
     }
 }

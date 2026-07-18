@@ -1,6 +1,6 @@
 //! `unpack_server`/`unpack_agent`/`unpack_team`/`unpack_workflow` — read a
 //! local [`OciLayout`] back into a typed package struct, verifying every
-//! blob's digest BEFORE deserializing (I-1/I-2 — RESEARCH System
+//! blob's digest BEFORE deserializing (RESEARCH System
 //! Architecture Diagram, unpack() steps 1-3):
 //!
 //! 1. Read the manifest + blobs from the layout.
@@ -8,7 +8,7 @@
 //!    digest (`verify()` — a tampered blob fails HERE, before any
 //!    deserialize).
 //! 3. Deserialize each verified layer back to its typed struct
-//!    (`deny_unknown_fields` on `DeployDescriptor` enforces I-4).
+//!    (`deny_unknown_fields` on `DeployDescriptor` enforces).
 //!
 //! Layer order mirrors [`super::pack`]'s push order exactly: for a
 //! `ServerPackage`, `[bootstrap, envelope, deploy, cedar, tools,
@@ -26,9 +26,9 @@ use oci_spec::image::{Descriptor, ImageManifest};
 
 /// Read+verify a blob's bytes given its `Descriptor`: convert the
 /// Descriptor's OCI digest into a [`ManifestDigest`] (the validated
-/// boundary conversion — T-168 threat register: "OCI Descriptor digest →
-/// ManifestDigest"), then [`verify`] it against the actual bytes read from
-/// disk (I-1/I-2 — a byte-flipped blob fails HERE, before any deserialize
+/// boundary conversion — threat register: "OCI Descriptor digest →
+/// ManifestDigest"), then [`crate::digest::verify()`] it against the actual bytes read from
+/// disk (a byte-flipped blob fails HERE, before any deserialize
 /// is attempted).
 fn read_verified_blob(layout: &OciLayout, descriptor: &Descriptor) -> Result<Vec<u8>> {
     let expected = ManifestDigest::try_from(descriptor.digest())?;
@@ -47,7 +47,7 @@ fn read_the_one_manifest(layout: &OciLayout) -> Result<ImageManifest> {
             reason: format!(
                 "expected exactly one manifest in index.json, found {}",
                 manifests.len()
-            ),
+           ),
         });
     }
     let bytes = read_verified_blob(layout, &manifests[0])?;
@@ -79,14 +79,14 @@ pub fn unpack_server(layout: &OciLayout) -> Result<(ServerPackage, Vec<u8>)> {
     let bootstrap_descriptor = layers.first().ok_or_else(|| missing_layer("bootstrap"))?;
     let envelope_descriptor = layers.get(1).ok_or_else(|| missing_layer("envelope"))?;
     let deploy_descriptor = layers
-        .get(2)
-        .ok_or_else(|| missing_layer("deploy-descriptor"))?;
+.get(2)
+.ok_or_else(|| missing_layer("deploy-descriptor"))?;
     let cedar_descriptor = layers
-        .get(3)
-        .ok_or_else(|| missing_layer("cedar-policy-set"))?;
+.get(3)
+.ok_or_else(|| missing_layer("cedar-policy-set"))?;
     let tools_descriptor = layers
-        .get(4)
-        .ok_or_else(|| missing_layer("tool-metadata"))?;
+.get(4)
+.ok_or_else(|| missing_layer("tool-metadata"))?;
     let config_slots_descriptor = layers.get(5).ok_or_else(|| missing_layer("config-slots"))?;
 
     // The bootstrap layer stays raw bytes — it is NEVER deserialized.
@@ -130,9 +130,9 @@ fn unpack_single_layer<P: SingleLayerPackage>(layout: &OciLayout) -> Result<P> {
     let manifest = read_the_one_manifest(layout)?;
     verify_config_blob(layout, &manifest)?;
     let layer = manifest
-        .layers()
-        .first()
-        .ok_or_else(|| missing_layer(P::LAYER_NAME))?;
+.layers()
+.first()
+.ok_or_else(|| missing_layer(P::LAYER_NAME))?;
     let bytes = read_verified_blob(layout, layer)?;
     Ok(serde_json::from_slice(&bytes)?)
 }
@@ -323,7 +323,7 @@ pub(crate) mod tests_support {
         }
     }
 
-    /// A representative `WorkflowManifest` (fully pinned, per I-1), for
+    /// A representative `WorkflowManifest` (fully pinned, per), for
     /// pack/unpack round-trip tests.
     pub(crate) fn sample_workflow_manifest() -> WorkflowManifest {
         WorkflowManifest::new(
@@ -355,7 +355,7 @@ pub(crate) mod tests_support {
                 timestamp: "2026-07-16T00:00:00Z".to_string(),
                 root_team_id: "support-team".to_string(),
             },
-        )
+       )
     }
 }
 
@@ -437,9 +437,9 @@ mod tests {
 
         let err = unpack_server(&layout).unwrap_err();
         assert!(
-            matches!(err, PackageError::DigestMismatch { .. }),
+            matches!(err, PackageError::DigestMismatch {.. }),
             "expected DigestMismatch, got {err:?}"
-        );
+       );
     }
 
     #[test]
@@ -458,7 +458,7 @@ mod tests {
         std::fs::write(&blob_path, bytes).unwrap();
 
         let err = unpack_agent(&layout).unwrap_err();
-        assert!(matches!(err, PackageError::DigestMismatch { .. }));
+        assert!(matches!(err, PackageError::DigestMismatch {.. }));
     }
 
     #[test]
@@ -479,13 +479,13 @@ mod tests {
         let bytes = crate::digest::canonicalize(&manifest).unwrap();
         let new_descriptor = layout.write_manifest(&bytes).unwrap();
         let new_index = oci_spec::image::ImageIndexBuilder::default()
-            .schema_version(oci_spec::image::SCHEMA_VERSION)
-            .manifests(vec![new_descriptor])
-            .build()
-            .unwrap();
+.schema_version(oci_spec::image::SCHEMA_VERSION)
+.manifests(vec![new_descriptor])
+.build()
+.unwrap();
         layout.write_index(&new_index).unwrap();
 
         let err = unpack_agent(&layout).unwrap_err();
-        assert!(matches!(err, PackageError::Layout { .. }));
+        assert!(matches!(err, PackageError::Layout {.. }));
     }
 }

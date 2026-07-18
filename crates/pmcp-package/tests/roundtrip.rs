@@ -1,6 +1,6 @@
 //! Integration test: golden-fixture-based + programmatically-built
-//! round-trip tests for all four AI-Package types (D-8 losslessness), plus
-//! the I-2 canonical-byte-identity assertion against the two checked-in
+//! round-trip tests for all four AI-Package types (losslessness), plus
+//! the canonical-byte-identity assertion against the two checked-in
 //! golden fixtures (`tests/golden_fixtures/*.json`).
 //!
 //! `server_team_fs_v1.json` and `workflow_claims_triage_v1.json` are stored
@@ -32,9 +32,9 @@ use std::path::Path;
 /// Read a checked-in golden fixture's raw bytes from `tests/golden_fixtures/`.
 fn read_fixture(name: &str) -> Vec<u8> {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests")
-        .join("golden_fixtures")
-        .join(name);
+.join("tests")
+.join("golden_fixtures")
+.join(name);
     std::fs::read(&path).unwrap_or_else(|e| panic!("failed to read fixture {path:?}: {e}"))
 }
 
@@ -48,13 +48,13 @@ fn server_package_fixture_round_trips_and_matches_canonical_bytes() {
     let parsed: ServerPackage =
         serde_json::from_slice(&fixture_bytes).expect("fixture must parse as ServerPackage");
 
-    // I-2 canonicality: the checked-in fixture bytes ARE canonicalize(&parsed)'s
+    // canonicality: the checked-in fixture bytes ARE canonicalize(&parsed)'s
     // output, byte-for-byte — no re-pretty-printing, no key reordering.
     let recanonicalized = canonicalize(&parsed).expect("ServerPackage must canonicalize");
     assert_eq!(
         recanonicalized, fixture_bytes,
         "server_team_fs_v1.json must be stored in canonical byte form"
-    );
+   );
 
     let bootstrap = b"fake-arm64-bootstrap-binary-bytes-for-testing".to_vec();
     let dir = tempfile::tempdir().unwrap();
@@ -64,12 +64,12 @@ fn server_package_fixture_round_trips_and_matches_canonical_bytes() {
 
     assert_eq!(
         unpacked, parsed,
-        "ServerPackage must round-trip pack/unpack losslessly (D-8)"
-    );
+        "ServerPackage must round-trip pack/unpack losslessly"
+   );
     assert_eq!(
         unpacked_bootstrap, bootstrap,
-        "bootstrap bytes must round-trip pack/unpack losslessly (D-8)"
-    );
+        "bootstrap bytes must round-trip pack/unpack losslessly"
+   );
 }
 
 #[test]
@@ -82,7 +82,7 @@ fn workflow_manifest_fixture_round_trips_and_matches_canonical_bytes() {
     assert_eq!(
         recanonicalized, fixture_bytes,
         "workflow_claims_triage_v1.json must be stored in canonical byte form"
-    );
+   );
 
     let dir = tempfile::tempdir().unwrap();
     let layout = OciLayout::create(dir.path()).unwrap();
@@ -91,12 +91,12 @@ fn workflow_manifest_fixture_round_trips_and_matches_canonical_bytes() {
 
     assert_eq!(
         unpacked, parsed,
-        "WorkflowManifest must round-trip pack/unpack losslessly (D-8)"
-    );
+        "WorkflowManifest must round-trip pack/unpack losslessly"
+   );
     assert!(
         unpacked.validate_all_pinned().is_ok(),
-        "the fixture manifest must be fully pinned (I-1)"
-    );
+        "the fixture manifest must be fully pinned"
+   );
 }
 
 // ---------------------------------------------------------------------
@@ -108,7 +108,7 @@ fn sample_agent_package() -> AgentPackage {
         name: "claims-triage-agent".to_string(),
         version: semver::Version::parse("1.2.0").unwrap(),
         instructions: "You triage incoming insurance claims and route them to specialists."
-            .to_string(),
+.to_string(),
         llm: ConfigSlot {
             slot: SlotType::LlmProvider {
                 name: "primary-llm".to_string(),
@@ -147,8 +147,8 @@ fn agent_package_round_trips_losslessly() {
 
     assert_eq!(
         unpacked, package,
-        "AgentPackage must round-trip pack/unpack losslessly (D-8)"
-    );
+        "AgentPackage must round-trip pack/unpack losslessly"
+   );
 }
 
 fn sample_team_package() -> TeamPackage {
@@ -200,6 +200,6 @@ fn team_package_round_trips_losslessly() {
 
     assert_eq!(
         unpacked, package,
-        "TeamPackage must round-trip pack/unpack losslessly (D-8)"
-    );
+        "TeamPackage must round-trip pack/unpack losslessly"
+   );
 }

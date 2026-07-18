@@ -2,7 +2,7 @@
 //! `index.json` (`ImageIndex`), and content-addressed blobs under
 //! `blobs/sha256/<hex>` (opencontainers/image-spec `image-layout.md`).
 //!
-//! Pure local-disk I/O — no network calls. Phase 169's `oci-client`
+//! Pure local-disk I/O — no network calls. the `oci-client`
 //! push/pull consumes the exact `oci_spec::image` types this module
 //! reads/writes, with zero translation layer.
 //!
@@ -47,10 +47,10 @@ impl OciLayout {
         let layout = Self { root };
         fs::write(layout.root.join("oci-layout"), OCI_LAYOUT_FILE_CONTENTS)?;
         let empty_index = ImageIndexBuilder::default()
-            .schema_version(SCHEMA_VERSION)
-            .manifests(Vec::<Descriptor>::new())
-            .build()
-            .map_err(|e| PackageError::Layout {
+.schema_version(SCHEMA_VERSION)
+.manifests(Vec::<Descriptor>::new())
+.build()
+.map_err(|e| PackageError::Layout {
                 reason: format!("failed to build empty ImageIndex: {e}"),
             })?;
         layout.write_index(&empty_index)?;
@@ -81,13 +81,13 @@ impl OciLayout {
             media_type,
             bytes.len() as u64,
             oci_digest(&digest),
-        ))
+       ))
     }
 
     /// Read the blob addressed by `descriptor`'s digest. This looks the
     /// blob up by its content-addressed path only — it does NOT re-verify
     /// the bytes against the descriptor's declared digest (that tamper
-    /// check is [`crate::digest::verify`], called explicitly by
+    /// check is [`crate::digest::verify()`], called explicitly by
     /// `oci::unpack` before any deserialize — see that module's docs for
     /// why the check belongs there, not here).
     pub fn read_blob(&self, descriptor: &Descriptor) -> Result<Vec<u8>> {
@@ -124,8 +124,8 @@ impl OciLayout {
 
     /// Read the manifest blob referenced by `descriptor` and parse it. Like
     /// [`Self::read_blob`], this does not itself verify the digest — callers
-    /// that need I-1/I-2 tamper detection should verify the raw bytes (via
-    /// [`Self::read_blob`] + [`crate::digest::verify`]) before parsing.
+    /// that need tamper detection should verify the raw bytes (via
+    /// [`Self::read_blob`] + [`crate::digest::verify()`]) before parsing.
     pub fn read_manifest(&self, descriptor: &Descriptor) -> Result<ImageManifest> {
         let bytes = self.read_blob(descriptor)?;
         let manifest = serde_json::from_slice(&bytes)?;
@@ -134,7 +134,7 @@ impl OciLayout {
 
     /// Derive the `blobs/sha256/<hex>` path for `digest`.
     ///
-    /// Path-traversal guard (T-168-10): the hex segment comes ONLY from an
+    /// Path-traversal guard: the hex segment comes ONLY from an
     /// already-validated [`ManifestDigest`] (exactly 64 lowercase ASCII-hex
     /// characters — `ManifestDigest::parse`/`from_bytes`/`TryFrom<&Digest>`
     /// are its only constructors, and none of them can produce a `/`, `.`,
@@ -143,9 +143,9 @@ impl OciLayout {
     /// that invariant explicitly rather than relying on it silently.
     fn blob_path(&self, digest: &ManifestDigest) -> Result<PathBuf> {
         let hex = digest
-            .as_str()
-            .strip_prefix("sha256:")
-            .ok_or_else(|| PackageError::Layout {
+.as_str()
+.strip_prefix("sha256:")
+.ok_or_else(|| PackageError::Layout {
                 reason: format!("expected a sha256 digest, got: {digest}"),
             })?;
         let dir = blobs_sha256_dir(&self.root);
@@ -168,7 +168,7 @@ fn blobs_sha256_dir(root: &Path) -> PathBuf {
 /// guarantees the `sha256:<64-hex>` form `Digest::from_str` accepts.
 fn oci_digest(digest: &ManifestDigest) -> oci_spec::image::Digest {
     oci_spec::image::Digest::from_str(digest.as_str())
-        .expect("ManifestDigest always parses as a valid oci_spec::image::Digest")
+.expect("ManifestDigest always parses as a valid oci_spec::image::Digest")
 }
 
 #[cfg(test)]
@@ -198,11 +198,11 @@ mod tests {
 
         let bytes = b"hello oci layout";
         let descriptor = layout
-            .write_blob(
+.write_blob(
                 MediaType::Other("application/vnd.pmcp.test.v1+json".to_string()),
                 bytes,
-            )
-            .unwrap();
+           )
+.unwrap();
 
         let expected_digest = ManifestDigest::from_bytes(bytes);
         let hex = expected_digest.as_str().strip_prefix("sha256:").unwrap();
@@ -210,7 +210,7 @@ mod tests {
         assert!(
             blob_path.is_file(),
             "blob must be written under blobs/sha256/<hex>"
-        );
+       );
 
         let read_back = layout.read_blob(&descriptor).unwrap();
         assert_eq!(read_back, bytes);
@@ -224,20 +224,20 @@ mod tests {
         let layout = OciLayout::create(dir.path()).unwrap();
 
         let config = layout
-            .write_blob(MediaType::from(MT_EMPTY_CONFIG), EMPTY_CONFIG_BLOB)
-            .unwrap();
+.write_blob(MediaType::from(MT_EMPTY_CONFIG), EMPTY_CONFIG_BLOB)
+.unwrap();
         let layer = layout
-            .write_blob(
+.write_blob(
                 MediaType::Other("application/vnd.pmcp.test.v1+json".to_string()),
                 b"{}",
-            )
-            .unwrap();
+           )
+.unwrap();
         let manifest = oci_spec::image::ImageManifestBuilder::default()
-            .schema_version(SCHEMA_VERSION)
-            .config(config)
-            .layers(vec![layer])
-            .build()
-            .unwrap();
+.schema_version(SCHEMA_VERSION)
+.config(config)
+.layers(vec![layer])
+.build()
+.unwrap();
 
         let manifest_bytes = serde_json::to_vec(&manifest).unwrap();
         let manifest_descriptor = layout.write_manifest(&manifest_bytes).unwrap();

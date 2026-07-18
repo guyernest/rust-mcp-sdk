@@ -1,7 +1,7 @@
-//! Typed component references (I-1).
+//! Typed component references.
 //!
-//! A [`ComponentRef`] encodes the range-vs-pin distinction that makes I-1's
-//! "converge on exact digests" computable:
+//! A [`ComponentRef`] encodes the range-vs-pin distinction that makes the
+//! "converge on exact digests" property computable:
 //!
 //! - [`ComponentRef::Range`] — a capture-time semver range (e.g.
 //!   `london-tube@^1.2`), used while authoring/discovering components.
@@ -12,7 +12,7 @@
 //!   that could be forgotten at some call site.
 //!
 //! `PinnedRef` is a dedicated struct (not an inline enum-variant struct) so
-//! downstream helpers (Plan 04's `pinned_components() -> Result<Vec<&PinnedRef>>`)
+//! downstream helpers (e.g. `pinned_components() -> Result<Vec<&PinnedRef>>`)
 //! can name the pin body directly.
 //!
 //! ## Component identity (D-D)
@@ -42,7 +42,7 @@ pub enum ComponentType {
 }
 
 /// An exact, digest-verified component pin. `version` and `digest` are both
-/// mandatory (non-`Option`) — a pin always carries both (I-1).
+/// mandatory (non-`Option`) — a pin always carries both.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PinnedRef {
     pub name: String,
@@ -70,7 +70,7 @@ impl ComponentRef {
     /// The component name, regardless of variant.
     pub fn name(&self) -> &str {
         match self {
-            ComponentRef::Range { name, .. } => name,
+            ComponentRef::Range { name,.. } => name,
             ComponentRef::Pinned(pinned) => &pinned.name,
         }
     }
@@ -78,7 +78,7 @@ impl ComponentRef {
     /// The component type, regardless of variant (D-D identity axis).
     pub fn component_type(&self) -> ComponentType {
         match self {
-            ComponentRef::Range { component_type, .. } => *component_type,
+            ComponentRef::Range { component_type,.. } => *component_type,
             ComponentRef::Pinned(pinned) => pinned.component_type,
         }
     }
@@ -92,7 +92,7 @@ impl ComponentRef {
     pub fn as_pinned(&self) -> Option<&PinnedRef> {
         match self {
             ComponentRef::Pinned(pinned) => Some(pinned),
-            ComponentRef::Range { .. } => None,
+            ComponentRef::Range {.. } => None,
         }
     }
 }
@@ -117,11 +117,11 @@ mod tests {
         assert_eq!(
             json.get("name").and_then(|v| v.as_str()),
             Some("london-tube")
-        );
+       );
         assert_eq!(
             json.get("component_type").and_then(|v| v.as_str()),
             Some("server")
-        );
+       );
         let back: ComponentRef = serde_json::from_value(json).unwrap();
         assert_eq!(back, r);
     }
@@ -145,22 +145,22 @@ mod tests {
         assert_eq!(
             keys,
             vec!["component_type", "digest", "kind", "name", "version"]
-        );
+       );
         assert_eq!(obj.get("kind").and_then(|v| v.as_str()), Some("pinned"));
         assert_eq!(
             obj.get("name").and_then(|v| v.as_str()),
             Some("london-tube")
-        );
+       );
         assert_eq!(obj.get("version").and_then(|v| v.as_str()), Some("1.2.3"));
         assert_eq!(
             obj.get("component_type").and_then(|v| v.as_str()),
             Some("server")
-        );
+       );
         assert!(obj
-            .get("digest")
-            .and_then(|v| v.as_str())
-            .unwrap()
-            .starts_with("sha256:"));
+.get("digest")
+.and_then(|v| v.as_str())
+.unwrap()
+.starts_with("sha256:"));
 
         let back: ComponentRef = serde_json::from_value(json).unwrap();
         assert_eq!(back, r);

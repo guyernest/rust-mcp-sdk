@@ -1,13 +1,15 @@
 //! # pmcp-package
 //!
-//! The AI-Package format crate (Phase 168).
+//! The AI-Package format for portable MCP packages: typed manifest schemas,
+//! config-slot aggregation, local OCI pack/unpack, and canonical-digest
+//! computation.
 //!
-//! ## Dual-consumer contract (D-10)
+//! ## Dual-consumer contract
 //!
 //! This crate is consumed by **two** independent call sites:
-//! - `cargo-pmcp` (the CLI, published from the sibling `rust-mcp-sdk` repo) —
-//!   packs local server/agent/team/workflow artifacts for publish.
-//! - The `pmcp.run` platform (this repo) — unpacks and validates packages at
+//! - `cargo-pmcp` (the CLI) — packs local server/agent/team/workflow artifacts
+//!   for publish.
+//! - The `pmcp.run` platform — unpacks and validates packages at
 //!   import/pre-flight time.
 //!
 //! Both call sites MUST resolve identical validation/digest behavior from the
@@ -15,30 +17,25 @@
 //! shared, standalone, publishable library rather than being duplicated in
 //! each consumer.
 //!
-//! ## Scope fence (I-4 / §11)
+//! ## Scope fence
 //!
 //! This crate is **format only**:
 //! - Typed manifest schemas for the four package kinds (mcp-server, agent,
 //!   team, workflow).
 //! - Config-slot type system: classification, aggregation, deviation
-//!   detection (I-5).
+//!   detection.
 //! - Local OCI artifact pack/unpack (construct manifests + content-addressed
 //!   blobs on disk — no registry calls).
-//! - Canonical-digest computation for approval-record keying (I-2).
+//! - Canonical-digest computation for approval-record keying.
 //!
 //! It explicitly does **NOT** contain:
 //! - Agent runtime semantics (no execution, no LLM calls, no tool dispatch).
 //! - Network or AWS SDK dependencies (no `reqwest`, no `tokio`, no
-//!   `oci-client`, no `aws-sdk-*` crate). Registry push/pull is a Phase 169+
+//!   `oci-client`, no `aws-sdk-*` crate). Registry push/pull is a caller-side
 //!   concern at the *caller's* call site, not this crate's.
 //! - Secret **values** — config slots may declare that a secret is required
 //!   by *name*, but the crate's types are structurally incapable of holding
 //!   a resolved secret value (see `slot` module docs).
-//!
-//! Downstream plans (digest, slots, packages, OCI, tests) fill in the stub
-//! modules declared below. This module tree and the `error` contract are
-//! established first (Wave 0) so later, parallel Wave-2 plans never need to
-//! edit `lib.rs` and never collide with each other over module wiring.
 
 pub mod digest;
 pub mod error;
@@ -49,7 +46,7 @@ pub mod slot;
 pub mod validation;
 
 // ---------------------------------------------------------------------
-// Crate-root re-exports (D-10 — dual-consumer ergonomics)
+// Crate-root re-exports (dual-consumer ergonomics)
 // ---------------------------------------------------------------------
 //
 // `cargo-pmcp` and the `pmcp.run` platform both consume this crate's primary
