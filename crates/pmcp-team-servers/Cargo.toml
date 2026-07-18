@@ -52,9 +52,17 @@ team-mcp = []
 conformance = []
 # Outbound approval-notification webhook (109-04) needs reqwest.
 webhook = ["dep:reqwest"]
+# team-mcp members run against a real LLM over an OpenAI-compatible endpoint
+# (Ollama / OpenAI-compat). OFF by default so the default + wasm32 build never
+# pulls reqwest via pmcp-agent; `resolve_member_factory`'s concrete-source
+# branch is gated on this. Tests/CI use an INJECTED FixedSource override and
+# never need it.
+member-llm = ["pmcp-agent/openai-compat"]
 # HTTP serve path for the server binaries needs pmcp's native-only
-# StreamableHttpTransport. Gated so a stdio-only build stays clean.
-http = ["pmcp/streamable-http"]
+# StreamableHttpTransport. The HTTP-first team-mcp binary also serves members
+# against a real LLM, so `http` pulls in `member-llm`. Gated so a stdio-only
+# build stays clean.
+http = ["pmcp/streamable-http", "member-llm"]
 # Aggregate: all four server surfaces attached at once. compose::wiring (109-06)
 # cfg-gates its attachment branches behind this.
 runtime = ["team-fs", "mem-mcp", "approval-mcp", "team-mcp"]
