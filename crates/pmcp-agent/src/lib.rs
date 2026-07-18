@@ -26,6 +26,6 @@ pub mod trace;
 
 pub use config::ResolvedAgentConfig;
 pub use seams::{
-    CompletionError, CompletionSource, RetryClass, ToolCall, ToolCallResult, ToolError, ToolInvoker,
+    CompletionError, CompletionSource, ConversationStore, InMemoryStore, RetryClass, RunPhase,
+    RunState, StoreError, ToolCall, ToolCallResult, ToolError, ToolInvoker,
 };
-// ConversationStore/RunState re-exports are added in plan 108-02 Task 3.

@@ -9,10 +9,11 @@
 //! never sleeps or applies a backoff policy; the host does.
 
 mod completion;
+mod store;
 mod tool;
-// `store` (ConversationStore + RunState) is added in plan 108-02 Task 3.
 
 pub use completion::{CompletionError, CompletionSource};
+pub use store::{ConversationStore, InMemoryStore, RunPhase, RunState, StoreError};
 pub use tool::{ToolCall, ToolCallResult, ToolError, ToolInvoker};
 
 use serde::{Deserialize, Serialize};
