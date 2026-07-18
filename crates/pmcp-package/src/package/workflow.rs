@@ -68,11 +68,11 @@ impl WorkflowManifest {
         mut components: Vec<ComponentRef>,
         mut aggregated_slots: Vec<ConfigSlot>,
         provenance: Provenance,
-   ) -> Self {
+    ) -> Self {
         components.sort_by(|a, b| {
             a.component_type()
-.cmp(&b.component_type())
-.then_with(|| a.name().cmp(b.name()))
+                .cmp(&b.component_type())
+                .then_with(|| a.name().cmp(b.name()))
         });
         aggregated_slots.sort_by(|a, b| a.slot.key().cmp(&b.slot.key()));
         Self {
@@ -123,7 +123,11 @@ mod tests {
         sample_pinned_typed(name, version, ComponentType::Server)
     }
 
-    fn sample_pinned_typed(name: &str, version: &str, component_type: ComponentType) -> ComponentRef {
+    fn sample_pinned_typed(
+        name: &str,
+        version: &str,
+        component_type: ComponentType,
+    ) -> ComponentRef {
         ComponentRef::Pinned(PinnedRef {
             name: name.to_string(),
             component_type,
@@ -169,7 +173,7 @@ mod tests {
             ],
             vec![sample_slot()],
             sample_provenance(),
-       );
+        );
         let json = serde_json::to_string(&manifest).unwrap();
         let back: WorkflowManifest = serde_json::from_str(&json).unwrap();
         assert_eq!(back, manifest);
@@ -186,7 +190,7 @@ mod tests {
             ],
             vec![],
             sample_provenance(),
-       );
+        );
         let names: Vec<&str> = manifest.components.iter().map(|c| c.name()).collect();
         assert_eq!(names, vec!["alpha", "zeta"]);
     }
@@ -206,7 +210,7 @@ mod tests {
             ],
             vec![],
             sample_provenance(),
-       );
+        );
 
         // Both entries survive — same name is NOT deduplicated/collapsed.
         assert_eq!(manifest.components.len(), 2);
@@ -214,10 +218,10 @@ mod tests {
         // Deterministic order: server < agent, so the server-typed "x" sorts
         // first even though both share the same name.
         let types: Vec<ComponentType> = manifest
-.components
-.iter()
-.map(|c| c.component_type())
-.collect();
+            .components
+            .iter()
+            .map(|c| c.component_type())
+            .collect();
         assert_eq!(types, vec![ComponentType::Server, ComponentType::Agent]);
 
         // Identity is unambiguous: the two "x" entries differ in
@@ -225,18 +229,26 @@ mod tests {
         // cannot distinguish them. (server "x" is version 2.0.0, agent "x"
         // is version 1.0.0 — order above already proved server sorts first.)
         assert_eq!(
-            manifest.components[0].as_pinned().unwrap().version.to_string(),
+            manifest.components[0]
+                .as_pinned()
+                .unwrap()
+                .version
+                .to_string(),
             "2.0.0"
-       );
+        );
         assert_eq!(
-            manifest.components[1].as_pinned().unwrap().version.to_string(),
+            manifest.components[1]
+                .as_pinned()
+                .unwrap()
+                .version
+                .to_string(),
             "1.0.0"
-       );
+        );
         assert_ne!(
             manifest.components[0].as_pinned().unwrap().digest,
             manifest.components[1].as_pinned().unwrap().digest,
             "same-named server and agent must carry distinct digests (unambiguous identity)"
-       );
+        );
 
         // Round-trips losslessly through JSON with both entries intact.
         let json = serde_json::to_string(&manifest).unwrap();
@@ -255,12 +267,12 @@ mod tests {
             ],
             vec![],
             sample_provenance(),
-       );
+        );
         let err = manifest.pinned_components().unwrap_err();
-        assert!(matches!(err, PackageError::InvalidReference {.. }));
+        assert!(matches!(err, PackageError::InvalidReference { .. }));
 
         let err = manifest.validate_all_pinned().unwrap_err();
-        assert!(matches!(err, PackageError::InvalidReference {.. }));
+        assert!(matches!(err, PackageError::InvalidReference { .. }));
     }
 
     #[test]
@@ -274,7 +286,7 @@ mod tests {
             ],
             vec![],
             sample_provenance(),
-       );
+        );
         let pins = manifest.pinned_components().unwrap();
         assert_eq!(pins.len(), 2);
         assert!(manifest.validate_all_pinned().is_ok());
@@ -288,7 +300,7 @@ mod tests {
             vec![sample_pinned("triage-agent", "1.2.0")],
             vec![],
             sample_provenance(),
-       );
+        );
         let first = manifest.manifest_digest().unwrap();
         let second = manifest.manifest_digest().unwrap();
         assert_eq!(first, second);

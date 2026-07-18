@@ -91,7 +91,16 @@ jobs:
     
     - name: Run tests
       run: cargo test --all-features --verbose -- --test-threads=1
-    
+
+    - name: pmcp-package standalone checks
+      # pmcp-package has its own [workspace] table and is NOT a root workspace
+      # member, so the fmt/clippy/test steps above IGNORE it. Reach it explicitly
+      # via --manifest-path to close the workspace-exclusion CI blind spot.
+      run: |
+        cargo fmt --manifest-path crates/pmcp-package/Cargo.toml --all -- --check
+        cargo clippy --manifest-path crates/pmcp-package/Cargo.toml --all-targets -- -D warnings
+        cargo test --manifest-path crates/pmcp-package/Cargo.toml
+
     - name: Run doctests
       run: cargo test --doc --all-features --verbose
     

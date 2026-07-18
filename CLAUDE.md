@@ -222,6 +222,13 @@ make test-integration   # Integration tests
 
 ### Workspace Crates (publish order)
 1. `pmcp-widget-utils` (leaf, no internal deps)
+1b. `pmcp-package` (leaf, no internal deps; the AI-Package format crate at
+   `crates/pmcp-package/`). It is standalone / **workspace-excluded** — it has
+   its own `[workspace]` table and is NOT a root member, so root
+   `cargo fmt/clippy/test` and `cargo publish -p pmcp-package` do NOT reach it.
+   Publish it via `cargo publish --manifest-path crates/pmcp-package/Cargo.toml`.
+   It must publish BEFORE `cargo-pmcp` (which pins `pmcp-package = "0.1"` in
+   Phase 110).
 2. `pmcp` (core SDK, depends on widget-utils)
 3. `pmcp-code-mode` (depends on pmcp)
 4. `pmcp-code-mode-derive` (depends on pmcp-code-mode)

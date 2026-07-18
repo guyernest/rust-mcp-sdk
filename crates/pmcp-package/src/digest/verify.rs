@@ -55,7 +55,7 @@ mod tests {
         let mut tampered = original.clone();
         tampered[0] ^= 0x01; // flip a single bit — content differs by one byte
         let err = verify(&digest, &tampered).unwrap_err();
-        assert!(matches!(err, PackageError::DigestMismatch {.. }));
+        assert!(matches!(err, PackageError::DigestMismatch { .. }));
     }
 
     #[test]
@@ -67,7 +67,7 @@ mod tests {
             Err(PackageError::DigestMismatch { expected, actual }) => {
                 assert_eq!(expected, digest.as_str());
                 assert_ne!(actual, expected);
-            }
+            },
             other => panic!("expected DigestMismatch, got {other:?}"),
         }
     }

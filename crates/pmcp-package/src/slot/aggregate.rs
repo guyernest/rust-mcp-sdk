@@ -29,9 +29,9 @@ pub fn aggregate<'a>(slots: impl IntoIterator<Item = &'a ConfigSlot>) -> Result<
         match map.entry(key) {
             Entry::Vacant(e) => {
                 e.insert(slot.clone());
-            }
+            },
             // Byte-equal declaration — pure dedup, keep the one already present.
-            Entry::Occupied(e) if e.get().slot == slot.slot => {}
+            Entry::Occupied(e) if e.get().slot == slot.slot => {},
             Entry::Occupied(e) => {
                 // Same `(kind, name)` but a different declaration. A conflict only
                 // exists when BOTH carry a differing `tested_value` (a real
@@ -48,7 +48,7 @@ pub fn aggregate<'a>(slots: impl IntoIterator<Item = &'a ConfigSlot>) -> Result<
                         });
                     }
                 }
-            }
+            },
         }
     }
     Ok(map.into_values().collect())
@@ -88,13 +88,13 @@ mod tests {
         };
         let err = aggregate([&a, &b]).unwrap_err();
         assert!(matches!(
-            err,
-            PackageError::SlotConflict {
-                tested,
-                proposed,
-..
-            } if tested == "anthropic" && proposed == "openai"
-       ));
+                    err,
+                    PackageError::SlotConflict {
+                        tested,
+                        proposed,
+        ..
+                    } if tested == "anthropic" && proposed == "openai"
+               ));
     }
 
     #[test]
@@ -114,27 +114,27 @@ mod tests {
     }
 
     proptest! {
-        /// /: aggregating any permutation of a conflict-free slot set yields
-        /// identical `Vec` output — the aggregated order must never depend on input order
-        /// (so the digest stays stable regardless of which component contributed a slot
-        /// first).
-        #[test]
-        fn aggregate_ordering_is_stable_under_permutation(seed in proptest::collection::vec(0u32..1000, 6)) {
-            let slots: Vec<ConfigSlot> = (0..6)
-.map(|i| ConfigSlot {
-                    slot: SlotType::Secret {
-                        name: format!("SECRET_{i}"),
-                    },
-                })
-.collect();
+            /// /: aggregating any permutation of a conflict-free slot set yields
+            /// identical `Vec` output — the aggregated order must never depend on input order
+            /// (so the digest stays stable regardless of which component contributed a slot
+            /// first).
+            #[test]
+            fn aggregate_ordering_is_stable_under_permutation(seed in proptest::collection::vec(0u32..1000, 6)) {
+                let slots: Vec<ConfigSlot> = (0..6)
+    .map(|i| ConfigSlot {
+                        slot: SlotType::Secret {
+                            name: format!("SECRET_{i}"),
+                        },
+                    })
+    .collect();
 
-            let mut indices: Vec<usize> = (0..6).collect();
-            indices.sort_by_key(|&i| seed[i]);
-            let permuted: Vec<&ConfigSlot> = indices.iter().map(|&i| &slots[i]).collect();
+                let mut indices: Vec<usize> = (0..6).collect();
+                indices.sort_by_key(|&i| seed[i]);
+                let permuted: Vec<&ConfigSlot> = indices.iter().map(|&i| &slots[i]).collect();
 
-            let baseline = aggregate(slots.iter()).unwrap();
-            let shuffled = aggregate(permuted).unwrap();
-            prop_assert_eq!(baseline, shuffled);
+                let baseline = aggregate(slots.iter()).unwrap();
+                let shuffled = aggregate(permuted).unwrap();
+                prop_assert_eq!(baseline, shuffled);
+            }
         }
-    }
 }

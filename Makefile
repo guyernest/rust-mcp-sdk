@@ -656,6 +656,19 @@ purity-check:
 	done
 	@echo "$(GREEN)purity-check PASSED: reader-free (umya/calamine/quick-xml/swc_/pmcp-code-mode absent) + writer-present (rust_xlsxwriter, per-feature) + zip-permitted + cargo-deny-bans-clean$(NC)"
 
+# Standalone quality gate for the workspace-EXCLUDED `pmcp-package` crate.
+# `pmcp-package` has its own [workspace] table and is NOT a root workspace
+# member, so root `cargo fmt/clippy/test` IGNORE it. Every command that must
+# reach it uses `--manifest-path crates/pmcp-package/Cargo.toml`. This target
+# closes that blind spot and is chained into `quality-gate` below.
+.PHONY: pmcp-package-gate
+pmcp-package-gate:
+	@echo "$(BLUE)🔍 pmcp-package standalone gate (workspace-excluded crate)$(NC)"
+	$(CARGO) fmt --manifest-path crates/pmcp-package/Cargo.toml --all -- --check
+	$(CARGO) clippy --manifest-path crates/pmcp-package/Cargo.toml --all-targets -- -D warnings
+	$(CARGO) test --manifest-path crates/pmcp-package/Cargo.toml
+	@echo "$(GREEN)✓ pmcp-package fmt/clippy/test OK$(NC)"
+
 .PHONY: quality-gate
 quality-gate:
 	@echo "$(YELLOW)═══════════════════════════════════════════════════════$(NC)"
@@ -667,6 +680,7 @@ quality-gate:
 	@$(MAKE) lint
 	@$(MAKE) build
 	@$(MAKE) test-all
+	@$(MAKE) pmcp-package-gate
 	@$(MAKE) audit
 	@$(MAKE) unused-deps
 	@$(MAKE) check-todos

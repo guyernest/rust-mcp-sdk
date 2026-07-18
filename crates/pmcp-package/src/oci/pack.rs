@@ -22,9 +22,9 @@ use crate::digest::{canonicalize, ManifestDigest};
 use crate::error::{PackageError, Result};
 use crate::oci::layout::OciLayout;
 use crate::oci::media_types::{
-    vendor_media_type, ARTIFACT_TYPE_SERVER, EMPTY_CONFIG_BLOB, MT_EMPTY_CONFIG, MT_SERVER_BOOTSTRAP,
-    MT_SERVER_CEDAR_POLICY_SET, MT_SERVER_CONFIG_SLOTS, MT_SERVER_DEPLOY_DESCRIPTOR,
-    MT_SERVER_ENVELOPE, MT_SERVER_TOOL_METADATA,
+    vendor_media_type, ARTIFACT_TYPE_SERVER, EMPTY_CONFIG_BLOB, MT_EMPTY_CONFIG,
+    MT_SERVER_BOOTSTRAP, MT_SERVER_CEDAR_POLICY_SET, MT_SERVER_CONFIG_SLOTS,
+    MT_SERVER_DEPLOY_DESCRIPTOR, MT_SERVER_ENVELOPE, MT_SERVER_TOOL_METADATA,
 };
 use crate::oci::SingleLayerPackage;
 use crate::package::{AgentPackage, BinaryRef, ServerPackage, TeamPackage, WorkflowManifest};
@@ -65,23 +65,23 @@ pub fn pack_server(
     let envelope_descriptor = layout.write_blob(
         vendor_media_type(MT_SERVER_ENVELOPE),
         &canonicalize(&envelope)?,
-   )?;
+    )?;
     let deploy_descriptor = layout.write_blob(
         vendor_media_type(MT_SERVER_DEPLOY_DESCRIPTOR),
         &canonicalize(&package.deploy)?,
-   )?;
+    )?;
     let cedar_descriptor = layout.write_blob(
         vendor_media_type(MT_SERVER_CEDAR_POLICY_SET),
         &canonicalize(&package.policies)?,
-   )?;
+    )?;
     let tools_descriptor = layout.write_blob(
         vendor_media_type(MT_SERVER_TOOL_METADATA),
         &canonicalize(&package.tools)?,
-   )?;
+    )?;
     let config_slots_descriptor = layout.write_blob(
         vendor_media_type(MT_SERVER_CONFIG_SLOTS),
         &canonicalize(&package.config_slots)?,
-   )?;
+    )?;
 
     let layers = vec![
         bootstrap_descriptor,
@@ -98,7 +98,7 @@ pub fn pack_server(
         ARTIFACT_TYPE_SERVER,
         &package.name,
         &package.version,
-   )
+    )
 }
 
 /// Pack any single-layer package (agent/team/workflow) into `layout`:
@@ -110,15 +110,17 @@ fn pack_single_layer<P: SingleLayerPackage>(
     package: &P,
     layout: &OciLayout,
 ) -> Result<ManifestDigest> {
-    let layer_descriptor =
-        layout.write_blob(vendor_media_type(P::LAYER_MEDIA_TYPE), &canonicalize(package)?)?;
+    let layer_descriptor = layout.write_blob(
+        vendor_media_type(P::LAYER_MEDIA_TYPE),
+        &canonicalize(package)?,
+    )?;
     finalize_pack(
         layout,
         vec![layer_descriptor],
         P::ARTIFACT_TYPE,
         package.name(),
         package.version(),
-   )
+    )
 }
 
 /// Pack an `AgentPackage` into `layout` as a single-layer local OCI artifact.
@@ -155,13 +157,13 @@ fn finalize_pack(
         layout.write_blob(MediaType::from(MT_EMPTY_CONFIG), EMPTY_CONFIG_BLOB)?;
 
     let manifest = ImageManifestBuilder::default()
-.schema_version(SCHEMA_VERSION)
-.media_type(MediaType::ImageManifest)
-.artifact_type(MediaType::Other(artifact_type.to_string()))
-.config(config_descriptor)
-.layers(layers)
-.build()
-.map_err(|e| PackageError::Layout {
+        .schema_version(SCHEMA_VERSION)
+        .media_type(MediaType::ImageManifest)
+        .artifact_type(MediaType::Other(artifact_type.to_string()))
+        .config(config_descriptor)
+        .layers(layers)
+        .build()
+        .map_err(|e| PackageError::Layout {
             reason: format!("failed to build ImageManifest: {e}"),
         })?;
 
@@ -208,7 +210,7 @@ mod tests {
         assert_eq!(
             manifest.layers()[0].media_type().to_string(),
             MT_SERVER_BOOTSTRAP
-       );
+        );
         assert_eq!(manifest.layers()[0].size(), bootstrap.len() as u64);
     }
 
@@ -241,7 +243,7 @@ mod tests {
         assert_eq!(
             digest_a, digest_b,
             ": packing identical input must yield an identical digest"
-       );
+        );
     }
 
     #[test]
@@ -258,6 +260,6 @@ mod tests {
         assert_eq!(
             annotations.get("version"),
             Some(&package.version.to_string())
-       );
+        );
     }
 }

@@ -82,9 +82,9 @@ impl SlotType {
             SlotType::Secret { name } => ("secret", name.as_str()),
             SlotType::OauthClient { name } => ("oauth_client", name.as_str()),
             SlotType::ChannelBinding { name } => ("channel_binding", name.as_str()),
-            SlotType::HumanRole { role,.. } => ("human_role", role.as_str()),
-            SlotType::LlmProvider { name,.. } => ("llm_provider", name.as_str()),
-            SlotType::BudgetOverride { name,.. } => ("budget_override", name.as_str()),
+            SlotType::HumanRole { role, .. } => ("human_role", role.as_str()),
+            SlotType::LlmProvider { name, .. } => ("llm_provider", name.as_str()),
+            SlotType::BudgetOverride { name, .. } => ("budget_override", name.as_str()),
         }
     }
 
@@ -92,8 +92,8 @@ impl SlotType {
     /// identity-bearing variant (which has no such field at all).
     pub fn tested_value(&self) -> Option<&str> {
         match self {
-            SlotType::LlmProvider { tested_value,.. }
-            | SlotType::BudgetOverride { tested_value,.. } => Some(tested_value.as_str()),
+            SlotType::LlmProvider { tested_value, .. }
+            | SlotType::BudgetOverride { tested_value, .. } => Some(tested_value.as_str()),
             _ => None,
         }
     }
