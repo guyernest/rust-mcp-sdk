@@ -26,7 +26,9 @@
 
 use crate::error::Result;
 use crate::server::roots::ListRootsResult;
-use crate::types::sampling::{CreateMessageParams, CreateMessageResult};
+use crate::types::sampling::{
+    CreateMessageParams, CreateMessageResult, CreateMessageResultWithTools,
+};
 use crate::types::ProgressToken;
 use async_trait::async_trait;
 
@@ -55,6 +57,28 @@ pub trait PeerHandle: Send + Sync {
     /// [`CreateMessageResult`]; malformed responses surface as a protocol
     /// error (`INTERNAL_ERROR`).
     async fn sample(&self, params: CreateMessageParams) -> Result<CreateMessageResult>;
+
+    /// Request the client to sample its LLM with tool support
+    /// (`sampling/createMessage`, MCP 2025-11-25).
+    ///
+    /// Returns a [`CreateMessageResultWithTools`], whose `content` is an array
+    /// that can carry `tool_use` / `tool_result` blocks — unlike the
+    /// single-`Content` [`CreateMessageResult`] from [`PeerHandle::sample`].
+    ///
+    /// This is an ADDITIVE trait method with a default body that delegates to
+    /// [`PeerHandle::sample`] and lifts the single result into the `WithTools`
+    /// shape (via [`CreateMessageResultWithTools::from_single`]). Existing
+    /// `PeerHandle` implementors therefore keep compiling unchanged; the
+    /// dispatch-backed [`crate::server::peer_impl::DispatchPeerHandle`] overrides
+    /// it to decode a real `CreateMessageResultWithTools` (with a legacy
+    /// single-content fallback).
+    async fn sample_with_tools(
+        &self,
+        params: CreateMessageParams,
+    ) -> Result<CreateMessageResultWithTools> {
+        let legacy = self.sample(params).await?;
+        Ok(CreateMessageResultWithTools::from_single(legacy))
+    }
 
     /// Request the client's root list (`roots/list`).
     ///

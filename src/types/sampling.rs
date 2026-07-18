@@ -376,6 +376,63 @@ impl CreateMessageResultWithTools {
         self.meta = Some(meta);
         self
     }
+
+    /// Lift a legacy single-content [`CreateMessageResult`] into the `WithTools`
+    /// shape (MCP 2025-11-25).
+    ///
+    /// The single `content` becomes a one-element `Vec<SamplingMessageContent>`;
+    /// `model` and `stop_reason` carry over verbatim and `role` defaults to
+    /// [`Role::Assistant`] (a sampled completion is an assistant message). This
+    /// is the single source of truth for the legacy → `WithTools` conversion used
+    /// by both the client-host adapter and the peer `sample_with_tools` default.
+    #[must_use]
+    pub fn from_single(result: CreateMessageResult) -> Self {
+        Self {
+            model: result.model,
+            stop_reason: result.stop_reason,
+            role: Role::Assistant,
+            content: vec![SamplingMessageContent::from_content(result.content)],
+            meta: None,
+        }
+    }
+}
+
+impl SamplingMessageContent {
+    /// Lift a response [`Content`](super::content::Content) into its
+    /// [`SamplingMessageContent`] counterpart.
+    ///
+    /// Text/image/audio map one-to-one. `Content` has no `tool_use` /
+    /// `tool_result` variants, so the mapping is total. `Resource` /
+    /// `ResourceLink` have no `WithTools` counterpart and are rendered as text
+    /// (their inline text when present, else their URI) — a legacy sampling
+    /// handler returning a resource is extraordinarily rare.
+    #[must_use]
+    pub fn from_content(content: super::content::Content) -> Self {
+        use super::content::Content;
+        match content {
+            Content::Text { text } => Self::Text { text, meta: None },
+            Content::Image { data, mime_type } => Self::Image {
+                data,
+                mime_type,
+                meta: None,
+            },
+            Content::Audio {
+                data, mime_type, ..
+            } => Self::Audio {
+                data,
+                mime_type,
+                meta: None,
+            },
+            Content::Resource { uri, text, .. } => Self::Text {
+                text: text.unwrap_or(uri),
+                meta: None,
+            },
+            Content::ResourceLink(link) => Self::Text {
+                text: link.uri,
+                meta: None,
+            },
+        }
+    }
 }
 
 /// Token usage information.
