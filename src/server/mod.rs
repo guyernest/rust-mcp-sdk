@@ -1522,7 +1522,12 @@ impl Server {
                 cancellation_token,
             )
             .with_auth_context(validated_auth_context)
-            .with_progress_reporter(progress_reporter),
+            .with_progress_reporter(progress_reporter)
+            // Surface whether the client requested task augmentation so handlers
+            // can branch on `extra.is_task_request()` in the high-level `Server`
+            // path too (ServerCore already wires this at core.rs). Additive: the
+            // dispatcher's own task-creation decision still reads `req.task`.
+            .with_task_request(req.task.clone()),
         );
 
         // D-03.3 (TOUT-01): clone the interior-mutable result-`_meta` slot BEFORE

@@ -312,6 +312,21 @@ async fn run_agent_tool(
     let outcome = engine.run(&run_id).await;
 
     let call_result = outcome_to_result(&run_id, outcome);
+
+    // A non-task-aware client (no `task` field in the request) must receive the
+    // agent's ANSWER as normal tool output. Returning the task-shaped envelope
+    // below would make the SDK text-wrap `{taskId,status,ttl,result}` as the
+    // whole tool output (verified: `ServerCore::on_tool_call` only takes the
+    // TaskCreated path when `req.task.is_some()`), so the client would get a
+    // JSON blob instead of the answer. Return the structured answer directly;
+    // the `runId` rides along for D-12 resume.
+    if !extra.is_task_request() {
+        return Ok(call_result
+            .structured_content
+            .clone()
+            .unwrap_or_else(|| json!({ "runId": run_id })));
+    }
+
     let result_value = serde_json::to_value(&call_result)
         .map_err(|e| pmcp::Error::internal(format!("serialize agent result: {e}")))?;
 
@@ -347,9 +362,13 @@ fn outcome_to_result(run_id: &str, outcome: RunOutcome) -> CallToolResult {
 }
 
 /// Build an error [`CallToolResult`] that still carries the resumable `run_id`.
+///
+/// The message is mirrored into `structuredContent.text` so a non-task-aware
+/// client (which receives the structured content directly, not the task
+/// envelope) still sees why the run stopped.
 fn error_result(run_id: &str, message: &str) -> CallToolResult {
     let mut result = CallToolResult::error(vec![Content::text(message.to_string())]);
-    result.structured_content = Some(json!({ "runId": run_id }));
+    result.structured_content = Some(json!({ "runId": run_id, "text": message }));
     result
 }
 
