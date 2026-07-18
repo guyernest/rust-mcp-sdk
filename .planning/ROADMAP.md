@@ -2037,7 +2037,7 @@ Plans:
 **Publish-order impact (design §5):** new entries `pmcp-package` (leaf, before cargo-pmcp), `pmcp-agent` (after `pmcp`), `pmcp-team-servers` (after `pmcp-agent`); cargo-pmcp moves after all three. All new crates are 0.x/experimental; `pmcp` core changes (Phase 106) are additive minor bumps.
 
 - [x] **Phase 106: Client Host Surface** — a pmcp `Client` can host server→client sampling/elicitation/roots with a human-in-the-loop hook; legacy inverted sampling documented as the "LLM-server pattern" (design Phase A) (completed 2026-07-17)
-- [ ] **Phase 107: Contracts & Package Format** — `pmcp-package` adopted into this repo + published 0.1.0 (wire-frozen), team-server tool contracts captured as provable-contracts YAML (design Phase B)
+- [x] **Phase 107: Contracts & Package Format** — `pmcp-package` adopted into this repo + published 0.1.0 (wire-frozen), team-server tool contracts captured as provable-contracts YAML (design Phase B) (completed 2026-07-18)
 - [ ] **Phase 108: `pmcp-agent` Loop Crate** — the pure agent loop between effect seams, three CompletionSources, agent-as-server adapter, tasks-aware ToolInvoker, configured from an AgentPackage (design Phase C)
 - [ ] **Phase 109: Team Reference Servers** — `pmcp-team-servers` (one feature-flagged crate) with dev-grade team-fs/approval-mcp/mem-mcp/team-mcp + conformance tests against the PKG-03 contracts (design Phase D)
 - [ ] **Phase 110: cargo-pmcp Agent & Team Verbs** — `agent new`/`agent dev`, `team dev`, `package capture|show` with version-pin tripwires (design Phase E)
@@ -2085,7 +2085,7 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 107-02-PLAN.md — Extend golden fixtures to all four package kinds + wire pmcp-package into publish order and release.yml (PKG-02)
+- [x] 107-02-PLAN.md — Extend golden fixtures to all four package kinds + wire pmcp-package into publish order and release.yml (PKG-02)
 
 ### Phase 108: `pmcp-agent` Loop Crate
 
@@ -2151,7 +2151,7 @@ Plans:
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 106. Client Host Surface | 3/3 | Complete    | 2026-07-18 |
-| 107. Contracts & Package Format | 2/3 | In Progress|  |
+| 107. Contracts & Package Format | 3/3 | Complete   | 2026-07-18 |
 | 108. `pmcp-agent` Loop Crate | 0/TBD | Not started | - |
 | 109. Team Reference Servers | 0/TBD | Not started | - |
 | 110. cargo-pmcp Agent & Team Verbs | 0/TBD | Not started | - |
