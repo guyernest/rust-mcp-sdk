@@ -104,8 +104,8 @@ pub fn validate(descriptor: &DeployDescriptor) -> Result<()> {
             for action in &statement.actions {
                 let allowed = action != "*"
                     && ALLOWED_IAM_ACTION_PREFIXES
-.iter()
-.any(|prefix| action.starts_with(prefix));
+                        .iter()
+                        .any(|prefix| action.starts_with(prefix));
                 if !allowed {
                     return Err(PackageError::AllowlistViolation {
                         resource: format!("iam.statements.actions:{action}"),
@@ -129,8 +129,8 @@ pub fn validate(descriptor: &DeployDescriptor) -> Result<()> {
 mod tests {
     use super::*;
     use crate::package::{
-        AuthDcrSection, AuthSection, AwsSection, CompositionSection, DeployDescriptor,
-        IamSection, IamStatement, ObservabilitySection, ServerSection, TargetSection,
+        AuthDcrSection, AuthSection, AwsSection, CompositionSection, DeployDescriptor, IamSection,
+        IamStatement, ObservabilitySection, ServerSection, TargetSection,
     };
     use std::collections::BTreeMap;
 
@@ -205,7 +205,7 @@ mod tests {
         let mut descriptor = allowed_descriptor();
         descriptor.composition.as_mut().unwrap().tier = "enterprise".to_string();
         let err = validate(&descriptor).unwrap_err();
-        assert!(matches!(err, PackageError::AllowlistViolation {.. }));
+        assert!(matches!(err, PackageError::AllowlistViolation { .. }));
     }
 
     #[test]
@@ -213,7 +213,7 @@ mod tests {
         let mut descriptor = allowed_descriptor();
         descriptor.target.target_type = "bare-metal".to_string();
         let err = validate(&descriptor).unwrap_err();
-        assert!(matches!(err, PackageError::AllowlistViolation {.. }));
+        assert!(matches!(err, PackageError::AllowlistViolation { .. }));
     }
 
     #[test]
@@ -227,7 +227,7 @@ mod tests {
             }],
         });
         let err = validate(&descriptor).unwrap_err();
-        assert!(matches!(err, PackageError::AllowlistViolation {.. }));
+        assert!(matches!(err, PackageError::AllowlistViolation { .. }));
     }
 
     #[test]
@@ -241,7 +241,7 @@ mod tests {
             }],
         });
         let err = validate(&descriptor).unwrap_err();
-        assert!(matches!(err, PackageError::AllowlistViolation {.. }));
+        assert!(matches!(err, PackageError::AllowlistViolation { .. }));
     }
 
     #[test]
@@ -255,7 +255,7 @@ mod tests {
             }],
         });
         let err = validate(&descriptor).unwrap_err();
-        assert!(matches!(err, PackageError::AllowlistViolation {.. }));
+        assert!(matches!(err, PackageError::AllowlistViolation { .. }));
     }
 
     #[test]

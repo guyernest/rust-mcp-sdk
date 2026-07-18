@@ -105,7 +105,7 @@ mod tests {
     #[test]
     fn serialize_variant_wraps_serde_json_error_via_from() {
         let json_err = serde_json::from_str::<serde_json::Value>("{not valid json")
-.expect_err("must fail to parse");
+            .expect_err("must fail to parse");
         let err: PackageError = json_err.into();
         assert!(matches!(err, PackageError::Serialize(_)));
     }

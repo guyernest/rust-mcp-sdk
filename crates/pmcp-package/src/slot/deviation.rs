@@ -122,6 +122,6 @@ mod tests {
                 name: "n".to_string()
             }),
             SlotClass::BehaviorRelevant
-       );
+        );
     }
 }

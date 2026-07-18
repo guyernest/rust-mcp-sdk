@@ -39,6 +39,10 @@ exclude = [
     ".pmat/",
     ".pv/",
     "contracts/",
+    # Reads contracts/team-servers-v1.yaml at runtime; contracts/ is excluded
+    # above (crates.io size limit), so shipping this test would break a
+    # downstream `cargo test` on the published crate — keep it out too.
+    "tests/team_contracts_conformance.rs",
     # GSD phase planning (6.3MB) and presentation decks (5.6MB) — workspace
     # scaffolding, not crate content. Also blew the 10MB limit during v2.2.0.
     ".planning/",

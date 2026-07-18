@@ -21,9 +21,9 @@ use std::path::Path;
 
 fn read_fixture(name: &str) -> Vec<u8> {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-.join("tests")
-.join("golden_fixtures")
-.join(name);
+        .join("tests")
+        .join("golden_fixtures")
+        .join(name);
     std::fs::read(&path).unwrap_or_else(|e| panic!("failed to read fixture {path:?}: {e}"))
 }
 
@@ -51,8 +51,7 @@ const EXPECTED_TEAM_DIGEST: &str =
     "sha256:79cb29da5025528681674866d006f3bbc8ac63991fb0557cb97b5755fa34bd73";
 
 // Checked-in canonical-JSON snapshots (secondary gate).
-const SERVER_CANONICAL: &[u8] =
-    include_bytes!("golden_fixtures/canonical/server.canonical.json");
+const SERVER_CANONICAL: &[u8] = include_bytes!("golden_fixtures/canonical/server.canonical.json");
 const WORKFLOW_CANONICAL: &[u8] =
     include_bytes!("golden_fixtures/canonical/workflow.canonical.json");
 const AGENT_CANONICAL: &[u8] = include_bytes!("golden_fixtures/canonical/agent.canonical.json");
@@ -80,7 +79,7 @@ fn server_fixture_digest_matches_pinned_wire_freeze_constant() {
         EXPECTED_SERVER_DIGEST,
         "ServerPackage serialized shape changed — this is a wire-freeze break (bump 0.2.0 \
          intentionally, do not silently repin)"
-   );
+    );
 }
 
 #[test]
@@ -89,7 +88,7 @@ fn workflow_fixture_digest_matches_pinned_wire_freeze_constant() {
         manifest_digest(&workflow_fixture()).unwrap().as_str(),
         EXPECTED_WORKFLOW_DIGEST,
         "WorkflowManifest serialized shape changed — wire-freeze break (bump 0.2.0 intentionally)"
-   );
+    );
 }
 
 #[test]
@@ -98,7 +97,7 @@ fn agent_fixture_digest_matches_pinned_wire_freeze_constant() {
         manifest_digest(&agent_fixture()).unwrap().as_str(),
         EXPECTED_AGENT_DIGEST,
         "AgentPackage serialized shape changed — wire-freeze break (bump 0.2.0 intentionally)"
-   );
+    );
 }
 
 #[test]
@@ -107,7 +106,7 @@ fn team_fixture_digest_matches_pinned_wire_freeze_constant() {
         manifest_digest(&team_fixture()).unwrap().as_str(),
         EXPECTED_TEAM_DIGEST,
         "TeamPackage serialized shape changed — wire-freeze break (bump 0.2.0 intentionally)"
-   );
+    );
 }
 
 // --- SECONDARY gate: canonical-bytes snapshot per kind ---------------------
@@ -118,7 +117,7 @@ fn server_canonical_bytes_match_checked_in_snapshot() {
         canonicalize(&server_fixture()).unwrap(),
         SERVER_CANONICAL,
         "ServerPackage canonical bytes diverged from the checked-in snapshot"
-   );
+    );
 }
 
 #[test]
@@ -127,7 +126,7 @@ fn workflow_canonical_bytes_match_checked_in_snapshot() {
         canonicalize(&workflow_fixture()).unwrap(),
         WORKFLOW_CANONICAL,
         "WorkflowManifest canonical bytes diverged from the checked-in snapshot"
-   );
+    );
 }
 
 #[test]
@@ -136,7 +135,7 @@ fn agent_canonical_bytes_match_checked_in_snapshot() {
         canonicalize(&agent_fixture()).unwrap(),
         AGENT_CANONICAL,
         "AgentPackage canonical bytes diverged from the checked-in snapshot"
-   );
+    );
 }
 
 #[test]
@@ -145,7 +144,7 @@ fn team_canonical_bytes_match_checked_in_snapshot() {
         canonicalize(&team_fixture()).unwrap(),
         TEAM_CANONICAL,
         "TeamPackage canonical bytes diverged from the checked-in snapshot"
-   );
+    );
 }
 
 // --- Round-trip parse checks for the two new kinds -------------------------
@@ -198,7 +197,7 @@ fn server_fixture_digest_is_stable_across_100_computations() {
         assert_eq!(
             next, first,
             "manifest_digest must be stable across repeated computation"
-       );
+        );
     }
 }
 
@@ -213,7 +212,7 @@ fn workflow_fixture_digest_is_stable_across_100_computations() {
         assert_eq!(
             next, first,
             "manifest_digest must be stable across repeated computation"
-       );
+        );
     }
 }
 
@@ -256,13 +255,13 @@ fn agent_package_digest_is_stable_across_100_computations_via_canonicalize() {
     };
 
     let first = manifest_digest(&package)
-.expect("AgentPackage must be canonicalize()-able now that it carries no bare float");
+        .expect("AgentPackage must be canonicalize()-able now that it carries no bare float");
     for _ in 0..100 {
         let next = manifest_digest(&package).unwrap();
         assert_eq!(
             next, first,
             "manifest_digest must be stable across repeated computation"
-       );
+        );
     }
 }
 
@@ -276,7 +275,7 @@ fn reordering_deploy_descriptor_environment_map_does_not_change_digest() {
     assert!(
         package.deploy.environment.len() >= 2,
         "fixture must declare at least 2 environment entries to make reordering meaningful"
-   );
+    );
 
     let mut forward = BTreeMap::new();
     for (k, v) in package.deploy.environment.iter() {
@@ -297,7 +296,7 @@ fn reordering_deploy_descriptor_environment_map_does_not_change_digest() {
     assert_eq!(
         digest_forward, digest_backward,
         "canonical digest must not depend on map insertion order"
-   );
+    );
 }
 
 #[test]
@@ -311,7 +310,7 @@ fn reordering_workflow_components_and_slots_via_new_yields_same_digest() {
     assert!(
         manifest.components.len() >= 2,
         "fixture must declare at least 2 components to make reordering meaningful"
-   );
+    );
 
     let forward = WorkflowManifest::new(
         manifest.name.clone(),
@@ -319,7 +318,7 @@ fn reordering_workflow_components_and_slots_via_new_yields_same_digest() {
         manifest.components.clone(),
         manifest.aggregated_slots.clone(),
         manifest.provenance.clone(),
-   );
+    );
 
     let mut reversed_components = manifest.components.clone();
     reversed_components.reverse();
@@ -331,12 +330,12 @@ fn reordering_workflow_components_and_slots_via_new_yields_same_digest() {
         reversed_components,
         reversed_slots,
         manifest.provenance.clone(),
-   );
+    );
 
     let digest_forward = manifest_digest(&forward).unwrap();
     let digest_backward = manifest_digest(&backward).unwrap();
     assert_eq!(
         digest_forward, digest_backward,
         "WorkflowManifest::new must sort deterministically regardless of input order"
-   );
+    );
 }

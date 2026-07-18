@@ -64,14 +64,16 @@ impl ManifestDigest {
     /// missing, or if the remainder is not exactly 64 lowercase ASCII-hex
     /// characters.
     pub fn parse(s: &str) -> Result<Self> {
-        let hex_part = s.strip_prefix("sha256:").ok_or_else(|| PackageError::MalformedDigest {
-            reason: format!("missing 'sha256:' prefix: {s:?}"),
-        })?;
+        let hex_part = s
+            .strip_prefix("sha256:")
+            .ok_or_else(|| PackageError::MalformedDigest {
+                reason: format!("missing 'sha256:' prefix: {s:?}"),
+            })?;
         if !is_lowercase_sha256_hex(hex_part) {
             return Err(PackageError::MalformedDigest {
                 reason: format!(
                     "expected 64 lowercase hex chars after 'sha256:', got: {hex_part:?}"
-               ),
+                ),
             });
         }
         Ok(ManifestDigest(s.to_string()))
@@ -116,10 +118,7 @@ impl TryFrom<&oci_spec::image::Digest> for ManifestDigest {
     fn try_from(digest: &oci_spec::image::Digest) -> Result<Self> {
         if digest.algorithm() != &oci_spec::image::DigestAlgorithm::Sha256 {
             return Err(PackageError::MalformedDigest {
-                reason: format!(
-                    "expected sha256 algorithm, got: {}",
-                    digest.algorithm()
-               ),
+                reason: format!("expected sha256 algorithm, got: {}", digest.algorithm()),
             });
         }
         Self::parse(&format!("sha256:{}", digest.digest()))
@@ -179,7 +178,10 @@ mod tests {
 
     #[test]
     fn canonicalize_is_byte_stable_across_repeated_calls() {
-        let s = Sample { b: 1, a: "x".to_string() };
+        let s = Sample {
+            b: 1,
+            a: "x".to_string(),
+        };
         let first = canonicalize(&s).unwrap();
         let second = canonicalize(&s).unwrap();
         assert_eq!(first, second);
@@ -189,7 +191,10 @@ mod tests {
     fn canonicalize_sorts_object_keys_independent_of_declaration_order() {
         // `Sample` declares `b` before `a`; canonical JSON must still emit
         // keys in sorted order.
-        let s = Sample { b: 1, a: "x".to_string() };
+        let s = Sample {
+            b: 1,
+            a: "x".to_string(),
+        };
         let bytes = canonicalize(&s).unwrap();
         let text = String::from_utf8(bytes).unwrap();
         assert_eq!(text, r#"{"a":"x","b":1}"#);
@@ -233,7 +238,9 @@ mod tests {
         assert!(s.starts_with("sha256:"));
         let hex_part = s.strip_prefix("sha256:").unwrap();
         assert_eq!(hex_part.len(), 64);
-        assert!(hex_part.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')));
+        assert!(hex_part
+            .bytes()
+            .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')));
     }
 
     // --- ManifestDigest::parse (format validation) ---
@@ -249,35 +256,38 @@ mod tests {
     #[test]
     fn parse_rejects_missing_prefix() {
         let err = ManifestDigest::parse(&"a".repeat(64)).unwrap_err();
-        assert!(matches!(err, PackageError::MalformedDigest {.. }));
+        assert!(matches!(err, PackageError::MalformedDigest { .. }));
     }
 
     #[test]
     fn parse_rejects_wrong_length() {
         // "sha256:zz" — short, non-hex remainder.
         let err = ManifestDigest::parse("sha256:zz").unwrap_err();
-        assert!(matches!(err, PackageError::MalformedDigest {.. }));
+        assert!(matches!(err, PackageError::MalformedDigest { .. }));
     }
 
     #[test]
     fn parse_rejects_non_hex() {
         let bad = format!("sha256:{}", "g".repeat(64));
         let err = ManifestDigest::parse(&bad).unwrap_err();
-        assert!(matches!(err, PackageError::MalformedDigest {.. }));
+        assert!(matches!(err, PackageError::MalformedDigest { .. }));
     }
 
     #[test]
     fn parse_rejects_uppercase_hex() {
         let bad = format!("sha256:{}", "A".repeat(64));
         let err = ManifestDigest::parse(&bad).unwrap_err();
-        assert!(matches!(err, PackageError::MalformedDigest {.. }));
+        assert!(matches!(err, PackageError::MalformedDigest { .. }));
     }
 
     // --- manifest_digest (canonicalize-then-hash path) ---
 
     #[test]
     fn manifest_digest_is_stable_across_repeated_calls() {
-        let s = Sample { b: 1, a: "x".to_string() };
+        let s = Sample {
+            b: 1,
+            a: "x".to_string(),
+        };
         let first = manifest_digest(&s).unwrap();
         let second = manifest_digest(&s).unwrap();
         assert_eq!(first, second);
@@ -285,7 +295,10 @@ mod tests {
 
     #[test]
     fn manifest_digest_canonicalizes_then_hashes() {
-        let s = Sample { b: 1, a: "x".to_string() };
+        let s = Sample {
+            b: 1,
+            a: "x".to_string(),
+        };
         let canonical_bytes = canonicalize(&s).unwrap();
         let expected = ManifestDigest::from_bytes(&canonical_bytes);
         let actual = manifest_digest(&s).unwrap();
@@ -305,7 +318,10 @@ mod tests {
     #[test]
     fn deserialize_rejects_malformed_string_via_parse() {
         let result = serde_json::from_str::<ManifestDigest>("\"not-a-digest\"");
-        assert!(result.is_err(), "malformed digest string must fail to deserialize");
+        assert!(
+            result.is_err(),
+            "malformed digest string must fail to deserialize"
+        );
     }
 
     #[test]
@@ -346,6 +362,6 @@ mod tests {
         let hex = "c".repeat(128);
         let oci_digest = oci_spec::image::Digest::from_str(&format!("sha512:{hex}")).unwrap();
         let err = ManifestDigest::try_from(&oci_digest).unwrap_err();
-        assert!(matches!(err, PackageError::MalformedDigest {.. }));
+        assert!(matches!(err, PackageError::MalformedDigest { .. }));
     }
 }
