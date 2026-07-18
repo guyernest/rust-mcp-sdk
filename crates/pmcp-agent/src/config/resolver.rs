@@ -119,6 +119,47 @@ fn warn_if_deviates(tested: &SlotType, resolved: &str) {
     }
 }
 
+/// Shared slot-resolution policy for the two [`SlotResolver`] impls.
+///
+/// The only per-resolver difference is where a value comes from, so both
+/// resolvers supply two lookups: `lookup_plain` for behavior-relevant slots
+/// (which fall back to the tested default and warn on deviation, D-15) and
+/// `lookup_secret` for identity-bearing slots (which must be present and are
+/// returned redacted). `kind` names the resolver in the human-role error.
+fn resolve_slot_with<P, S>(
+    slot: &ConfigSlot,
+    kind: &str,
+    lookup_plain: P,
+    lookup_secret: S,
+) -> Result<ResolvedValue, ResolveError>
+where
+    P: FnOnce(&str) -> Option<String>,
+    S: FnOnce(&str) -> Option<String>,
+{
+    let (_, name) = slot.slot.key();
+    match &slot.slot {
+        // Behavior-relevant: a supplied override, else the tested default. Either
+        // way the run proceeds; a differing value only warns.
+        SlotType::LlmProvider { tested_value, .. }
+        | SlotType::BudgetOverride { tested_value, .. } => {
+            let value = lookup_plain(name).unwrap_or_else(|| tested_value.clone());
+            warn_if_deviates(&slot.slot, &value);
+            Ok(ResolvedValue::Plain(value))
+        },
+        // Identity-bearing: must be supplied; absence is fatal.
+        SlotType::Secret { .. }
+        | SlotType::OauthClient { .. }
+        | SlotType::ChannelBinding { .. } => {
+            let value =
+                lookup_secret(name).ok_or_else(|| ResolveError::MissingSlot(name.to_string()))?;
+            Ok(ResolvedValue::Secret(RedactedSecret::new(value)))
+        },
+        SlotType::HumanRole { role, .. } => Err(ResolveError::Invalid(format!(
+            "human role '{role}' is a team binding, not a {kind}-resolvable slot"
+        ))),
+    }
+}
+
 /// Resolves slots from conventionally-named environment variables.
 ///
 /// A slot named `primary-llm` maps to `{PREFIX}PRIMARY_LLM`; a connector named
@@ -159,29 +200,10 @@ impl EnvVarResolver {
 #[async_trait]
 impl SlotResolver for EnvVarResolver {
     async fn resolve_slot(&self, slot: &ConfigSlot) -> Result<ResolvedValue, ResolveError> {
-        let (_, name) = slot.slot.key();
-        let env_name = self.env_name(name);
-        match &slot.slot {
-            // Behavior-relevant: an env override, else the tested default. Either
-            // way the run proceeds; a differing value only warns.
-            SlotType::LlmProvider { tested_value, .. }
-            | SlotType::BudgetOverride { tested_value, .. } => {
-                let value = std::env::var(&env_name).unwrap_or_else(|_| tested_value.clone());
-                warn_if_deviates(&slot.slot, &value);
-                Ok(ResolvedValue::Plain(value))
-            },
-            // Identity-bearing: must come from the environment; absence is fatal.
-            SlotType::Secret { .. }
-            | SlotType::OauthClient { .. }
-            | SlotType::ChannelBinding { .. } => {
-                let value = std::env::var(&env_name)
-                    .map_err(|_| ResolveError::MissingSlot(name.to_string()))?;
-                Ok(ResolvedValue::Secret(RedactedSecret::new(value)))
-            },
-            SlotType::HumanRole { role, .. } => Err(ResolveError::Invalid(format!(
-                "human role '{role}' is a team binding, not an env-resolvable slot"
-            ))),
-        }
+        // Env resolution reads the same conventional variable for both plain and
+        // secret slots; the shared policy decides fallback vs. required.
+        let lookup = |name: &str| std::env::var(self.env_name(name)).ok();
+        resolve_slot_with(slot, "env", lookup, lookup)
     }
 
     async fn resolve_endpoint(&self, name: &str) -> Result<String, ResolveError> {
@@ -230,32 +252,12 @@ impl ProgrammaticBuilder {
 #[async_trait]
 impl SlotResolver for ProgrammaticBuilder {
     async fn resolve_slot(&self, slot: &ConfigSlot) -> Result<ResolvedValue, ResolveError> {
-        let (_, name) = slot.slot.key();
-        match &slot.slot {
-            SlotType::LlmProvider { tested_value, .. }
-            | SlotType::BudgetOverride { tested_value, .. } => {
-                let value = self
-                    .values
-                    .get(name)
-                    .cloned()
-                    .unwrap_or_else(|| tested_value.clone());
-                warn_if_deviates(&slot.slot, &value);
-                Ok(ResolvedValue::Plain(value))
-            },
-            SlotType::Secret { .. }
-            | SlotType::OauthClient { .. }
-            | SlotType::ChannelBinding { .. } => {
-                let value = self
-                    .secrets
-                    .get(name)
-                    .cloned()
-                    .ok_or_else(|| ResolveError::MissingSlot(name.to_string()))?;
-                Ok(ResolvedValue::Secret(RedactedSecret::new(value)))
-            },
-            SlotType::HumanRole { role, .. } => Err(ResolveError::Invalid(format!(
-                "human role '{role}' is a team binding, not a programmatic slot"
-            ))),
-        }
+        resolve_slot_with(
+            slot,
+            "programmatic",
+            |name| self.values.get(name).cloned(),
+            |name| self.secrets.get(name).cloned(),
+        )
     }
 
     async fn resolve_endpoint(&self, name: &str) -> Result<String, ResolveError> {

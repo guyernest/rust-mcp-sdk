@@ -19,13 +19,13 @@ use pmcp::types::sampling::{
     CreateMessageParams, CreateMessageResultWithTools, SamplingMessage, SamplingMessageContent,
     ToolChoiceMode,
 };
-use pmcp::types::{Content, Role};
+use pmcp::types::Role;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use super::http_common::{
-    build_client, classify_status, map_reqwest_error, read_bounded_body, validate_endpoint,
-    HttpSourceOptions,
+    build_client, classify_status, map_reqwest_error, read_bounded_body, tool_result_text,
+    validate_endpoint, HttpSourceOptions,
 };
 use super::SecretString;
 use crate::seams::{CompletionError, CompletionSource};
@@ -196,20 +196,6 @@ fn message_to_openai(msg: &SamplingMessage) -> Value {
     }
 }
 
-/// Flatten tool-result content items into a single text blob for the `tool` role.
-fn tool_result_text(content: &[Content]) -> String {
-    let mut out = String::new();
-    for item in content {
-        if let Content::Text { text } = item {
-            if !out.is_empty() {
-                out.push('\n');
-            }
-            out.push_str(text);
-        }
-    }
-    out
-}
-
 /// Map MCP tool definitions into OpenAI `tools`.
 fn tools_to_openai(tools: &[pmcp::types::tools::ToolInfo]) -> Value {
     let arr: Vec<Value> = tools
@@ -333,6 +319,7 @@ fn tool_call_to_content(call: RespToolCall) -> Result<SamplingMessageContent, Co
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pmcp::types::Content;
 
     fn params_with_tools() -> CreateMessageParams {
         use pmcp::types::sampling::ToolChoice;
