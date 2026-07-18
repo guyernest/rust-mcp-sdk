@@ -26,6 +26,11 @@ mod openai_compat;
 #[cfg(feature = "openai-compat")]
 pub use openai_compat::OpenAiCompatSource;
 
+#[cfg(feature = "anthropic")]
+mod anthropic;
+#[cfg(feature = "anthropic")]
+pub use anthropic::AnthropicSource;
+
 // Shared HTTP-source plumbing (endpoint policy, client build, bounded body,
 // status classification) is enabled whenever either HTTP source is compiled.
 #[cfg(any(feature = "openai-compat", feature = "anthropic"))]
