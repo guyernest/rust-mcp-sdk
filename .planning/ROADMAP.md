@@ -2104,9 +2104,9 @@ Plans:
 
 - [x] 108-01-PLAN.md — pmcp 2.17.0 core: D-106-A response pump + `sample_with_tools` peer path (wave 1)
 - [x] 108-02-PLAN.md — `pmcp-agent` crate scaffold + three object-safe effect seams (AGNT-01) (wave 2)
-- [ ] 108-03-PLAN.md — pure decision core + iteration engine + EffectTrace replay-safety + fuzz (AGNT-02, AGNT-03) (wave 3)
-- [ ] 108-04-PLAN.md — three CompletionSources: SamplingSource + OpenAiCompatSource + AnthropicSource (AGNT-04/05/06) (wave 3)
-- [ ] 108-05-PLAN.md — tasks-aware ClientToolInvoker + SlotResolver/endpoint config (AGNT-08, AGNT-09) (wave 3)
+- [x] 108-03-PLAN.md — pure decision core + iteration engine + EffectTrace replay-safety + fuzz (AGNT-02, AGNT-03) (wave 3)
+- [x] 108-04-PLAN.md — three CompletionSources: SamplingSource + OpenAiCompatSource + AnthropicSource (AGNT-04/05/06) (wave 3)
+- [x] 108-05-PLAN.md — tasks-aware ClientToolInvoker + SlotResolver/endpoint config (AGNT-08, AGNT-09) (wave 3)
 - [ ] 108-06-PLAN.md — agent-as-server adapter + standalone-vs-sampled example + wasm32 gate + D-09 mapping (AGNT-07, AGNT-04/05/06 proof) (wave 4)
 
 ### Phase 109: Team Reference Servers
@@ -2159,7 +2159,7 @@ Plans:
 |-------|----------------|--------|-----------|
 | 106. Client Host Surface | 3/3 | Complete    | 2026-07-18 |
 | 107. Contracts & Package Format | 3/3 | Complete    | 2026-07-18 |
-| 108. `pmcp-agent` Loop Crate | 2/6 | In Progress|  |
+| 108. `pmcp-agent` Loop Crate | 5/6 | In Progress|  |
 | 109. Team Reference Servers | 0/TBD | Not started | - |
 | 110. cargo-pmcp Agent & Team Verbs | 0/TBD | Not started | - |
 | 111. Docs in Three Shapes + Examples | 0/TBD | Not started | - |
