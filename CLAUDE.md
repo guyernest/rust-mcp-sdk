@@ -222,13 +222,6 @@ make test-integration   # Integration tests
 
 ### Workspace Crates (publish order)
 1. `pmcp-widget-utils` (leaf, no internal deps)
-1b. `pmcp-package` (leaf, no internal deps; the AI-Package format crate at
-   `crates/pmcp-package/`). It is standalone / **workspace-excluded** — it has
-   its own `[workspace]` table and is NOT a root member, so root
-   `cargo fmt/clippy/test` and `cargo publish -p pmcp-package` do NOT reach it.
-   Publish it via `cargo publish --manifest-path crates/pmcp-package/Cargo.toml`.
-   It must publish BEFORE `cargo-pmcp` (which pins `pmcp-package = "0.1"` in
-   Phase 110).
 2. `pmcp` (core SDK, depends on widget-utils)
 3. `pmcp-code-mode` (depends on pmcp)
 4. `pmcp-code-mode-derive` (depends on pmcp-code-mode)
@@ -241,6 +234,16 @@ make test-integration   # Integration tests
 10. `mcp-tester` (depends on pmcp)
 11. `mcp-preview` (depends on widget-utils)
 12. `cargo-pmcp` (depends on pmcp, mcp-tester, mcp-preview)
+13. `pmcp-package` (the AI-Package format crate at `crates/pmcp-package/`). It is
+   standalone / **workspace-excluded** — it has its own `[workspace]` table and is
+   NOT a root member, so root `cargo fmt/clippy/test` and `cargo publish -p
+   pmcp-package` do NOT reach it; publish via
+   `cargo publish --manifest-path crates/pmcp-package/Cargo.toml`. It has **no
+   in-repo consumers yet**, so it publishes **last** — a failure in this
+   experimental 0.x leaf must not gate the core SDK release. Once a shipped crate
+   actually pins `pmcp-package = "0.1"` (planned for `cargo-pmcp` in Phase 110),
+   move it BEFORE that consumer and add the real dependency so cargo enforces the
+   order.
 
 The three per-backend connector crates (`pmcp-toolkit-postgres`, `-mysql`, `-athena`)
 have no inter-dependencies — they may publish in any order relative to each other,
