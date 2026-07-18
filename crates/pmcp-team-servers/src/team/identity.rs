@@ -36,6 +36,19 @@ impl MemberId {
         Self(format!("{}@{}", r.name(), version))
     }
 
+    /// Reconstruct a `MemberId` from its already-serialized wire form.
+    ///
+    /// Guard state (caller id, ancestor chain) travels across a `tools/call` as
+    /// namespaced `_meta` strings, each the `name@version` form produced by
+    /// [`MemberId::as_str`] / [`fmt::Display`]. The 109-05 dispatch guards
+    /// reconstruct a `MemberId` from those strings so identity comparison stays
+    /// id-based (never display-name based). This is the inverse of
+    /// [`MemberId::as_str`]: `MemberId::from_wire(id.as_str()) == *id`.
+    #[must_use]
+    pub fn from_wire(raw: impl Into<String>) -> Self {
+        Self(raw.into())
+    }
+
     /// The identity as a string slice.
     #[must_use]
     pub fn as_str(&self) -> &str {
@@ -107,6 +120,14 @@ mod tests {
         let id = MemberId::from_ref(&pinned_ref("formatter", "0.3.1"));
         assert_eq!(id.to_string(), id.as_str());
         assert_eq!(id.to_string(), "formatter@0.3.1");
+    }
+
+    #[test]
+    fn from_wire_is_the_inverse_of_as_str() {
+        let id = MemberId::from_ref(&pinned_ref("triage", "1.0.0"));
+        let round = MemberId::from_wire(id.as_str());
+        assert_eq!(round, id);
+        assert_eq!(round.as_str(), "triage@1.0.0");
     }
 
     #[test]
