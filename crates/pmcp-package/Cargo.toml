@@ -1,0 +1,50 @@
+# This crate is a member of NEITHER the root workspace nor any built-in/*-api workspace.
+# The empty [workspace] table prevents Cargo from walking up to a parent workspace.
+# Each consuming workspace adds it as a path dep and resolves its own pinned versions.
+# Pattern: mirrors response-card-contract / observability/pmcp-flow-emit /
+# built-in/shared/mcp-server-common exactly (standalone crate with own [workspace]
+# table, excluded from the root workspace, consumed as a path dep) — required so
+# `cd crates/pmcp-package && cargo test` can run standalone without escaping into
+# an unrelated ancestor workspace.
+[workspace]
+
+[package]
+name = "pmcp-package"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Phase 168 — AI-Package format crate: typed manifest schemas, config-slot aggregation/deviation detection, local OCI pack/unpack, and canonical-digest computation. Dual-consumer contract (cargo-pmcp + pmcp.run platform, D-10). Format only — no agent runtime semantics, no network/AWS, no secret values (I-4)."
+repository = "https://github.com/guyernest/pmcp-run"
+publish = true
+
+[dependencies]
+# OCI Image/Distribution spec types: Descriptor, Digest, MediaType — the same
+# types oci-client (Phase 169+) natively consumes, zero translation layer.
+oci-spec = "0.10"
+# Canonical JSON formatter (OLPC/Docker/Notary/TUF-compatible) for I-2's stable
+# manifest digest. Already a transitive dependency of oci-client.
+olpc-cjson = "0.1.4"
+# SHA-256 digest computation. Pinned to 0.10 to match the repo-wide workspace
+# pin (root Cargo.toml:96) — do NOT bump to 0.11 (breaking API change).
+sha2 = "0.10"
+# Version/VersionReq for component ranges (e.g. london-tube@^1.2) and exact
+# pins. The `serde` feature is REQUIRED: semver::Version/VersionReq are
+# embedded in serializable structs (Plan 02's ComponentRef) — without it
+# those derives fail to compile.
+semver = { version = "1", features = ["serde"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+# Hex-encoding sha256 output into the `sha256:<hex>` digest string form.
+# Same crate oci-client depends on for the same purpose (T-168-SC — approved).
+hex = "0.4"
+
+[dev-dependencies]
+proptest = "1.11"
+# Explicit temp-dir dev-dep for the OCI layout tests in Plan 05 — do NOT
+# hand-roll temp dirs.
+tempfile = "3"
+# Dev-only: the crate's runtime format is JSON; TOML parsing is used ONLY by
+# Plan 04's fixture-coverage test that parses the real tracked .pmcp/deploy.toml
+# files. Never a runtime dependency.
+toml = "0.8"
