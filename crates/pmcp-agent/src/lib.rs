@@ -25,4 +25,7 @@ pub mod sources;
 pub mod trace;
 
 pub use config::ResolvedAgentConfig;
-// Seam re-exports are added by plans 108-02 Task 2/3 as the seams land.
+pub use seams::{
+    CompletionError, CompletionSource, RetryClass, ToolCall, ToolCallResult, ToolError, ToolInvoker,
+};
+// ConversationStore/RunState re-exports are added in plan 108-02 Task 3.
