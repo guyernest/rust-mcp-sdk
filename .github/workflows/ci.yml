@@ -323,11 +323,48 @@ jobs:
     - name: Run purity gate (per-crate, per-feature, fail-closed; Layers 1+2)
       run: make purity-check
 
+  # Phase 108 (D-13) pmcp-agent target matrix. Two independent guarantees:
+  #  1. The LOOP + SEAMS + config path compiles for wasm32 under DEFAULT features
+  #     (no url-connector/reqwest/StreamableHttpTransport). The agent-as-server
+  #     adapter + SamplingSource are native-only (they ride native-only pmcp APIs)
+  #     and are `cfg`-excluded on wasm32, so this gate proves target-cleanliness of
+  #     the loop/seam path, NOT adapter-on-wasm.
+  #  2. The feature-gated HTTP sources (openai-compat/anthropic) AND the native-only
+  #     UrlConnectorClientFactory (url-connector) compile on native.
+  pmcp-agent-targets:
+    name: pmcp-agent target matrix (wasm32 default + native features)
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v7
+
+    - name: Install Rust (+ wasm32 target)
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        targets: wasm32-unknown-unknown
+
+    - name: Cache cargo
+      uses: actions/cache@v6
+      with:
+        path: |
+          ~/.cargo/registry/index/
+          ~/.cargo/registry/cache/
+          ~/.cargo/git/db/
+          target/
+        key: ${{ runner.os }}-cargo-pmcp-agent-targets-${{ hashFiles('**/Cargo.lock') }}
+
+    - name: Build pmcp-agent for wasm32 (DEFAULT features — loop + seams + config)
+      run: |
+        rustup target add wasm32-unknown-unknown
+        cargo build -p pmcp-agent --target wasm32-unknown-unknown
+
+    - name: Build pmcp-agent native (HTTP sources + URL connector)
+      run: cargo build -p pmcp-agent --features openai-compat,anthropic,url-connector
+
   # Unified gate — single required check for org ruleset.
   # Reports as "gate" to match the org ruleset's required status check.
   gate:
     runs-on: ubuntu-latest
-    needs: [test, quality-gate, purity-check]
+    needs: [test, quality-gate, purity-check, pmcp-agent-targets]
     if: always()
     steps:
       - name: Evaluate required checks
@@ -335,11 +372,13 @@ jobs:
           TEST_RESULT: ${{ needs.test.result }}
           QG_RESULT: ${{ needs.quality-gate.result }}
           PURITY_RESULT: ${{ needs.purity-check.result }}
+          AGENT_TARGETS_RESULT: ${{ needs.pmcp-agent-targets.result }}
         run: |
           if [[ "$TEST_RESULT" != "success" ]] || \
              [[ "$QG_RESULT" != "success" ]] || \
-             [[ "$PURITY_RESULT" != "success" ]]; then
-            echo "Required checks failed: test=$TEST_RESULT, quality-gate=$QG_RESULT, purity-check=$PURITY_RESULT"
+             [[ "$PURITY_RESULT" != "success" ]] || \
+             [[ "$AGENT_TARGETS_RESULT" != "success" ]]; then
+            echo "Required checks failed: test=$TEST_RESULT, quality-gate=$QG_RESULT, purity-check=$PURITY_RESULT, pmcp-agent-targets=$AGENT_TARGETS_RESULT"
             exit 1
           fi
           echo "All required checks passed."
