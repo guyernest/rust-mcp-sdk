@@ -309,7 +309,7 @@ let server = Server::builder()
 Ask/resolve records carry optional `subject_task_id`/`subject_ref` (D-12), echoed by `get_approval`/`resolve_approval`. Webhook channel is a `reqwest` POST behind the `webhook` feature; console channel is a `tracing`/`println` notification. **No stdin prompting.**
 
 ### Pattern 4: team-mcp member dispatch — real MCP hop → ToolOutput::Result (TEAM-05)
-**What:** Each roster member is a Phase 108 `AgentServer` run over one half of a `DuplexTransport` pair; team-mcp holds a `pmcp::Client` per member. `team_mcp__<member>` dispatch validates guards, forwards the call over the hop, and re-emits the member's `CallToolResult` **verbatim** via `ToolOutput::Result`, preserving top-level `_meta[related_task]`.
+**What:** Each roster member is a Phase 108 `AgentServer` run over one half of a `DuplexTransport` pair; team-mcp holds a `pmcp::Client` per member. `team_mcp__<member>` dispatch validates guards, forwards the call over the hop via the 109-00 `call_tool_with_task_and_meta` API (task + guard `_meta` in one call), then applies the explicit `MemberTaskForwarding` contract (re-emit a `ToolCallResponse::Result`, or `wait_for_task`+synthesize a `ToolCallResponse::Task`) and returns the member's `CallToolResult` via `ToolOutput::Result`, surfacing top-level related-task metadata under `RELATED_TASK_META_KEY`.
 **When to use:** team-mcp only.
 **Example:**
 ```rust
@@ -320,9 +320,13 @@ async fn handle_output(&self, args: Value, extra: RequestHandlerExtra) -> Result
     guard_depth(depth, self.max_team_depth)?;           // depth > max → Error
     guard_self_call(self.target_id, caller_id(&extra))?;// compare IDs not names
     guard_ancestor_cycle(self.target_id, ancestors(&extra))?;
-    // full MCP hop to the member AgentServer as a TASK-AUGMENTED call (see Pitfall 1)
-    let result: CallToolResult = self.member_client.call_tool_with_task(...).await?;
-    Ok(ToolOutput::Result(result))  // owns full envelope incl. _meta[related_task] verbatim
+    // full MCP hop as a TASK + guard-_meta call (109-00 API; see Pitfall 1)
+    let resp = self.member_client.call_tool_with_task_and_meta(name, args, forward_meta).await?;
+    let result: CallToolResult = match resp {                      // explicit MemberTaskForwarding contract
+        ToolCallResponse::Result(r) => r,                          // re-emit (strip member _meta to related-task)
+        ToolCallResponse::Task(t) => synthesize_from_task(&self.member_client, t).await?, // wait_for_task + synthesize
+    };
+    Ok(ToolOutput::Result(result))  // surfaces _meta[RELATED_TASK_META_KEY] (never a bare related_task)
 }
 ```
 `ToolOutput::Result` bypasses response middleware — the handler owns its own redaction (acceptable for a dev reference server; documented in `src/server/mod.rs`).
@@ -365,7 +369,7 @@ Fixtures stay canonical in `contracts/team-servers/fixtures/`; embed into the ex
 ### Pitfall 1: team-mcp member hop drops `related_task` unless dispatched as a task-augmented call
 **What goes wrong:** The Phase 108 `AgentServer` tool handler returns the agent's **bare answer** (not a task envelope with `related_task`) when `!extra.is_task_request()` — this was a deliberate 108 fix (commit `fe7e68bf` "agent adapter returns the answer to non-task clients"). If team-mcp calls the member as an ordinary `tools/call`, the member never mints/surfaces a store task and the fixture expectation `_meta.related_task.taskId` will be absent, failing TEAM-05 and the `team_mcp__member.success` fixture.
 **Why it happens:** `ServerCore::on_tool_call` only takes the TaskCreated path when `req.task.is_some()` (documented in `crates/pmcp-agent/src/adapter/server.rs:323`).
-**How to avoid:** team-mcp must dispatch to the member as a **task-augmented** `tools/call` (set the request `task` field), then forward the resulting `CallToolResult` — which carries top-level `_meta[related_task]` — verbatim via `ToolOutput::Result`. Verify the exact client API for task-augmented calls (`call_tool_with_task` / task param) against the pmcp `Client` surface during Wave 0; confirm the member `AgentServer` is built `with_task_support(TaskSupport::Required)` (it is, per `server.rs:242`).
+**How to avoid:** team-mcp must dispatch to the member via the 109-00 `Client::call_tool_with_task_and_meta` API (task-augmented AND carrying the guard `_meta`), then apply the explicit `MemberTaskForwarding` contract: re-emit a `ToolCallResponse::Result` via `ToolOutput::Result`, or on a `ToolCallResponse::Task` `wait_for_task` to terminal and synthesize a `CallToolResult` — either way surfacing top-level related-task metadata under `RELATED_TASK_META_KEY`. The plain `call_tool_with_task` (`src/client/mod.rs:624`) is INSUFFICIENT: it hardcodes `_meta: None` (cannot carry the D-14 guard `_meta`) and may return `ToolCallResponse::Task`. Confirm the member `AgentServer` is built `with_task_support(TaskSupport::Required)` (it is, per `server.rs:242`).
 **Warning signs:** `team_mcp__<member>` fixture passes on content but `_meta.related_task` is null; `tasks/get` on the member shows no task.
 
 ### Pitfall 2: `pmat comply check` is not currently wired into any build target
@@ -462,10 +466,10 @@ struct Args {
    - What's unclear: No Makefile/CI target runs `pmat comply` today; the exact CLI (`pmat comply check <binding.yaml>`?) and whether it resolves `function`/`module_path` against a compiled crate or source.
    - **Resolution:** 109-08 Task 1 probes `pmat comply --help` / `pmat comply check contracts/binding.yaml` against the *existing* binding to learn the CLI + schema BEFORE authoring `team-servers/binding.yaml`, and falls back to mirroring the existing `contracts/binding.yaml` shape byte-for-byte if `pmat` is absent. 109-08 Task 2 adds the `make comply` target chained into `quality-gate`, guarded by `command -v pmat` (warns, does not hard-fail) so a pmat-absent machine still passes the gate (D-18). No bindings authored blind.
 
-2. **Exact task-augmented client call for the member hop (A2).** — **RESOLVED (verified).**
+2. **Exact task-augmented + guard-`_meta` client call for the member hop (A2).** — **RESOLVED (re-scoped in replan; see prerequisite plan 109-00).**
    - What we know: member `AgentServer` is `with_task_support(TaskSupport::Required)` and returns the task envelope only for task requests.
-   - What's unclear: the precise `pmcp::Client` method/param to issue a task-augmented `tools/call` and read back `related_task`.
-   - **Resolution:** `Client::call_tool_with_task` is **VERIFIED present at `src/client/mod.rs:624`** (returns `ToolCallResponse::Result(CallToolResult)` carrying top-level `_meta[related_task]`), contrasted with the plain `call_tool` at `src/client/mod.rs:577` which drops it (see 109-PATTERNS.md "Key verification wins" and the `src/team/member.rs` interface block in 109-05). Assumption A2 is discharged — the phase's top execution risk is retired; 109-05 Task 2 uses `call_tool_with_task` for the member hop.
+   - What's unclear: the precise `pmcp::Client` method to issue a task-augmented `tools/call` that ALSO carries the namespaced guard `_meta` (D-14 depth/ancestry), and how to guarantee top-level related-task metadata surfaces.
+   - **Resolution:** The plain `Client::call_tool_with_task` (`src/client/mod.rs:624`) is **NOT sufficient** — it hardcodes `_meta: None` (so it cannot carry the D-14 guard `_meta`) and may return EITHER `ToolCallResponse::Result` OR `ToolCallResponse::Task` (it does not by itself guarantee a `CallToolResult` with top-level related-task metadata). The replan therefore adds prerequisite plan **109-00** (pmcp-core enablement): (a) `RequestMeta` gains a `#[serde(flatten)]` `other` map so arbitrary namespaced keys (`x-pmcp-team-depth`, ancestor chain) survive round-trip; (b) the request `_meta` is propagated into `RequestHandlerExtra.request_meta` so guards can read it; (c) a NEW client API `Client::call_tool_with_task_and_meta(name, args, meta: RequestMeta)` forwards task augmentation AND the guard `_meta` in one call. team-mcp (109-05) dispatches the member via `call_tool_with_task_and_meta`, then applies the EXPLICIT `MemberTaskForwarding` contract (109-01 `identity.rs`): `ToolCallResponse::Result(r)` → re-emit `r` (stripping member `_meta` to related-task only); `ToolCallResponse::Task(t)` → `Client::wait_for_task` to terminal and SYNTHESIZE a `CallToolResult` carrying related-task `_meta`. The related-task key is the SDK constant `RELATED_TASK_META_KEY` = `io.modelcontextprotocol/related-task` (`src/types/tasks.rs:9`), never a bare `related_task`. Assumption A2 is discharged via 109-00 + the 109-05 forwarding contract — NOT via `call_tool_with_task` alone.
 
 3. **Contract YAML rev mechanics for the additive `subject_task_id` field + `_meta` depth doc (D-12/D-14).** — **RESOLVED (folded into 109-01 Task 4).**
    - What we know: metadata `version: 1.0.0`; additive change.
