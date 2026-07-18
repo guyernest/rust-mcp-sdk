@@ -49,3 +49,7 @@ proptest = "1.7"
 pretty_assertions = "1.4"
 futures = "0.3"
 async-trait = "0.1"
+# Only to construct `AgentPackage { version, connectors }` in config_resolver
+# tests (its fields are `semver::Version`/`VersionReq`). Already in the workspace
+# tree via pmcp-package; test-only, so it never affects the published build.
+semver = "1"
