@@ -2038,7 +2038,7 @@ Plans:
 
 - [x] **Phase 106: Client Host Surface** — a pmcp `Client` can host server→client sampling/elicitation/roots with a human-in-the-loop hook; legacy inverted sampling documented as the "LLM-server pattern" (design Phase A) (completed 2026-07-17)
 - [x] **Phase 107: Contracts & Package Format** — `pmcp-package` adopted into this repo + published 0.1.0 (wire-frozen), team-server tool contracts captured as provable-contracts YAML (design Phase B) (completed 2026-07-18)
-- [ ] **Phase 108: `pmcp-agent` Loop Crate** — the pure agent loop between effect seams, three CompletionSources, agent-as-server adapter, tasks-aware ToolInvoker, configured from an AgentPackage (design Phase C)
+- [x] **Phase 108: `pmcp-agent` Loop Crate** — the pure agent loop between effect seams, three CompletionSources, agent-as-server adapter, tasks-aware ToolInvoker, configured from an AgentPackage (design Phase C) (completed 2026-07-18)
 - [ ] **Phase 109: Team Reference Servers** — `pmcp-team-servers` (one feature-flagged crate) with dev-grade team-fs/approval-mcp/mem-mcp/team-mcp + conformance tests against the PKG-03 contracts (design Phase D)
 - [ ] **Phase 110: cargo-pmcp Agent & Team Verbs** — `agent new`/`agent dev`, `team dev`, `package capture|show` with version-pin tripwires (design Phase E)
 - [ ] **Phase 111: Docs in Three Shapes + Examples** — pmcp-book chapters, runnable examples, README + course updates leading with the cargo pmcp workflow (design Phase F)
@@ -2107,7 +2107,7 @@ Plans:
 - [x] 108-03-PLAN.md — pure decision core + iteration engine + EffectTrace replay-safety + fuzz (AGNT-02, AGNT-03) (wave 3)
 - [x] 108-04-PLAN.md — three CompletionSources: SamplingSource + OpenAiCompatSource + AnthropicSource (AGNT-04/05/06) (wave 3)
 - [x] 108-05-PLAN.md — tasks-aware ClientToolInvoker + SlotResolver/endpoint config (AGNT-08, AGNT-09) (wave 3)
-- [ ] 108-06-PLAN.md — agent-as-server adapter + standalone-vs-sampled example + wasm32 gate + D-09 mapping (AGNT-07, AGNT-04/05/06 proof) (wave 4)
+- [x] 108-06-PLAN.md — agent-as-server adapter + standalone-vs-sampled example + wasm32 gate + D-09 mapping (AGNT-07, AGNT-04/05/06 proof) (wave 4)
 
 ### Phase 109: Team Reference Servers
 
@@ -2159,7 +2159,7 @@ Plans:
 |-------|----------------|--------|-----------|
 | 106. Client Host Surface | 3/3 | Complete    | 2026-07-18 |
 | 107. Contracts & Package Format | 3/3 | Complete    | 2026-07-18 |
-| 108. `pmcp-agent` Loop Crate | 5/6 | In Progress|  |
+| 108. `pmcp-agent` Loop Crate | 6/6 | Complete   | 2026-07-18 |
 | 109. Team Reference Servers | 0/TBD | Not started | - |
 | 110. cargo-pmcp Agent & Team Verbs | 0/TBD | Not started | - |
 | 111. Docs in Three Shapes + Examples | 0/TBD | Not started | - |
