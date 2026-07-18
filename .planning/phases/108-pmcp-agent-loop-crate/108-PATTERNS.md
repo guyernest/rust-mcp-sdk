@@ -1,5 +1,11 @@
 # Phase 108: `pmcp-agent` Loop Crate - Pattern Map
 
+> **⚠ Superseded in part by the `--reviews` replan (2026-07-17).** Two corrections override any stale references below:
+> 1. The iteration module directory is **`src/iteration/`** (not `src/loop/` — `loop` is a Rust keyword).
+> 2. The adapter/invoker use **`ServerCoreBuilder::task_store`** + **`Client::wait_for_related_task`** (NOT the legacy `with_task_store`/`wait_for_task` + `WaitForTaskOptions::default()`, which has no overall timeout).
+> Additional replan-hardening (transport-actor pump, WithTools end-to-end, checkpoint/RunOutcome, `url-connector` feature gate, stdio cancel-safety) lives in the 108-0N-PLAN.md files, which are authoritative.
+
+
 **Mapped:** 2026-07-17
 **Files analyzed:** 24 (21 new in `crates/pmcp-agent`, 3 modified in `pmcp` core + workspace)
 **Analogs found:** 22 / 24 (2 genuinely-new surfaces: D-106-A response pump + `sample_with_tools` peer path)
