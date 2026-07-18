@@ -1,0 +1,54 @@
+version: 1.1.0
+target_crate: pmcp-team-servers
+# Contract-first SKELETON authored ahead of implementation (Phase 109 Plan 01).
+# Every binding is `status: planned` and points at a PLANNED reference-server
+# function path; Plan 109-08 flips each to `status: implemented` with the real
+# signature once the server exists. Field names mirror contracts/binding.yaml
+# byte-for-byte so `pmat comply check --path .` resolves these bindings the same
+# way it resolves the core-SDK bindings.
+bindings:
+- contract: team-servers-v1.yaml
+  equation: fs_tool_surface
+  function: build_team_fs_server
+  module_path: pmcp_team_servers::fs::server
+  signature: <planned>
+  status: planned
+  notes: >-
+    TEAM-02 (Plan 109-02). Builds the team-fs pmcp::Server advertising the 11
+    fs__* tools over a local-directory backend. Signature finalized in 109-08.
+- contract: team-servers-v1.yaml
+  equation: mem_tool_surface
+  function: build_mem_mcp_server
+  module_path: pmcp_team_servers::mem::server
+  signature: <planned>
+  status: planned
+  notes: >-
+    TEAM-03 (Plan 109-03). Builds the mem-mcp pmcp::Server advertising the 6
+    mem__* tools over the in-memory BM25 backend. Signature finalized in 109-08.
+- contract: team-servers-v1.yaml
+  equation: approval_tool_surface
+  function: build_approval_mcp_server
+  module_path: pmcp_team_servers::approval::server
+  signature: <planned>
+  status: planned
+  notes: >-
+    TEAM-04 (Plan 109-04). Builds the approval-mcp pmcp::Server advertising the
+    two legacy static tools plus the dynamic team_approval__ask_<member> family,
+    echoing optional subject_task_id/subject_ref (D-12). Signature finalized in
+    109-08.
+- contract: team-servers-v1.yaml
+  equation: team_dispatch_surface
+  function: build_team_mcp_server
+  module_path: pmcp_team_servers::team::server
+  signature: <planned>
+  status: planned
+  notes: >-
+    TEAM-05 (Plan 109-05). Builds the team-mcp pmcp::Server that forwards member
+    tools/call under depth + self-call + ancestor-cycle guards, carrying guard
+    state as namespaced _meta (D-14) and surfacing related-task metadata under
+    io.modelcontextprotocol/related-task. Signature finalized in 109-08.
+critical_path:
+- fs_tool_surface
+- mem_tool_surface
+- approval_tool_surface
+- team_dispatch_surface
