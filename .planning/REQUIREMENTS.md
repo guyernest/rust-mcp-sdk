@@ -23,15 +23,15 @@
 
 ### Agent Runtime (AGNT)
 
-- [ ] **AGNT-01**: `crates/pmcp-agent` (0.x experimental) defines object-safe async effect-seam traits: `CompletionSource`, `ToolInvoker`, `ConversationStore` — reusing SDK sampling types verbatim for `CompletionSource`
-- [ ] **AGNT-02**: The agent iteration loop (LLM call → tool-call decision → parallel tool dispatch → result digestion → end-turn detection → iteration/budget limits) runs pure between effect seams, with retry classification exposed as data (no retry/backoff policy inside the loop)
-- [ ] **AGNT-03**: Replay-safety invariant is property-tested: identical effect results ⇒ identical loop decisions (proptest over recorded effect traces)
-- [ ] **AGNT-04**: `SamplingSource` implements `CompletionSource` over spec sampling via the agent's server-side peer with zero additional dependencies
-- [ ] **AGNT-05**: `OpenAiCompatSource` (feature-gated) implements `CompletionSource` against any OpenAI-compatible endpoint (Ollama/vLLM/OpenRouter/xAI/DeepSeek)
-- [ ] **AGNT-06**: `AnthropicSource` (feature-gated) implements `CompletionSource` against the Anthropic Messages API
-- [ ] **AGNT-07**: An agent can be exposed as an MCP server (agent-as-server adapter on `ServerCore`), deployable through existing target adapters (Lambda/Docker/WASM)
-- [ ] **AGNT-08**: The `ToolInvoker` over `pmcp::Client` honors task-augmented tool results via `poll_decision` (SEP-1686) — long tool calls surface as pollable state
-- [ ] **AGNT-09**: An agent is configured from an `AgentPackage` (pmcp-package) plus resolved config slots — the same definition drives laptop, deploy targets, and platform
+- [x] **AGNT-01**: `crates/pmcp-agent` (0.x experimental) defines object-safe async effect-seam traits: `CompletionSource`, `ToolInvoker`, `ConversationStore` — reusing SDK sampling types verbatim for `CompletionSource`
+- [x] **AGNT-02**: The agent iteration loop (LLM call → tool-call decision → parallel tool dispatch → result digestion → end-turn detection → iteration/budget limits) runs pure between effect seams, with retry classification exposed as data (no retry/backoff policy inside the loop)
+- [x] **AGNT-03**: Replay-safety invariant is property-tested: identical effect results ⇒ identical loop decisions (proptest over recorded effect traces)
+- [x] **AGNT-04**: `SamplingSource` implements `CompletionSource` over spec sampling via the agent's server-side peer with zero additional dependencies
+- [x] **AGNT-05**: `OpenAiCompatSource` (feature-gated) implements `CompletionSource` against any OpenAI-compatible endpoint (Ollama/vLLM/OpenRouter/xAI/DeepSeek)
+- [x] **AGNT-06**: `AnthropicSource` (feature-gated) implements `CompletionSource` against the Anthropic Messages API
+- [x] **AGNT-07**: An agent can be exposed as an MCP server (agent-as-server adapter on `ServerCore`), deployable through existing target adapters (Lambda/Docker/WASM)
+- [x] **AGNT-08**: The `ToolInvoker` over `pmcp::Client` honors task-augmented tool results via `poll_decision` (SEP-1686) — long tool calls surface as pollable state
+- [x] **AGNT-09**: An agent is configured from an `AgentPackage` (pmcp-package) plus resolved config slots — the same definition drives laptop, deploy targets, and platform
 
 ### Team Reference Servers (TEAM)
 
@@ -88,15 +88,15 @@
 | PKG-01 | Phase 107 | Complete |
 | PKG-02 | Phase 107 | Pending (STATE-1 readiness verified; STATE-2 crates.io publish is a release-tag checkpoint — see 107-HUMAN-UAT.md) |
 | PKG-03 | Phase 107 | Complete |
-| AGNT-01 | Phase 108 | Pending |
-| AGNT-02 | Phase 108 | Pending |
-| AGNT-03 | Phase 108 | Pending |
-| AGNT-04 | Phase 108 | Pending |
-| AGNT-05 | Phase 108 | Pending |
-| AGNT-06 | Phase 108 | Pending |
-| AGNT-07 | Phase 108 | Pending |
-| AGNT-08 | Phase 108 | Pending |
-| AGNT-09 | Phase 108 | Pending |
+| AGNT-01 | Phase 108 | Delivered |
+| AGNT-02 | Phase 108 | Delivered |
+| AGNT-03 | Phase 108 | Delivered |
+| AGNT-04 | Phase 108 | Delivered |
+| AGNT-05 | Phase 108 | Delivered |
+| AGNT-06 | Phase 108 | Delivered |
+| AGNT-07 | Phase 108 | Delivered |
+| AGNT-08 | Phase 108 | Delivered |
+| AGNT-09 | Phase 108 | Delivered |
 | TEAM-01 | Phase 109 | Pending |
 | TEAM-02 | Phase 109 | Pending |
 | TEAM-03 | Phase 109 | Pending |

@@ -2097,7 +2097,7 @@ Plans:
   1. A developer implements against object-safe async `CompletionSource`/`ToolInvoker`/`ConversationStore` seams, with `CompletionSource` reusing the SDK sampling types verbatim (AGNT-01)
   2. The replay-safety invariant is property-tested over recorded effect traces: identical effect results ⇒ identical loop decisions, and the iteration loop runs pure between seams with retry classification exposed as data (no retry/backoff policy inside the loop) (AGNT-02, AGNT-03)
   3. The same loop runs against `SamplingSource` (zero-dep spec sampling incl. tools/tool_choice), feature-gated `OpenAiCompatSource`, and feature-gated `AnthropicSource` — proven by the standalone-vs-sampled example (AGNT-04, AGNT-05, AGNT-06)
-  4. An agent is exposed as an MCP server via a `ServerCore` adapter (deployable through existing Lambda/Docker/WASM target adapters), and its `ToolInvoker` over `pmcp::Client` honors task-augmented tool results via `poll_decision` (SEP-1686) (AGNT-07, AGNT-08)
+  4. An agent is exposed as an MCP server via a high-level `pmcp::Server` adapter (native-only, deployable through the existing Lambda/Docker target adapters that host `pmcp::Server::run<T: Transport>`; per D-13 the wasm32 CI gate proves the loop + seams + config path is target-clean, and the adapter/SamplingSource are native-only because they ride pmcp's native-only `task_store`/`PeerHandle` — per-target deploy demos are Phase 110/111 scope), and its `ToolInvoker` over `pmcp::Client` honors task-augmented tool results via `poll_decision` (SEP-1686) (AGNT-07, AGNT-08)
   5. An agent is fully configured from an `AgentPackage` plus resolved config slots — the same definition drives laptop, deploy targets, and platform (AGNT-09)
 
 **Plans**: 6 plans in 4 waves
