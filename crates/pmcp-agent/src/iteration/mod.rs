@@ -8,6 +8,7 @@
 //! (AGNT-03) and its retry classification returnable as data (AGNT-02).
 
 pub mod decide;
+pub mod engine;
 pub mod result;
 
 pub use decide::{
@@ -15,4 +16,5 @@ pub use decide::{
     extract_token_usage, extract_tool_calls, is_end_turn, parse_completion, parse_tool_result,
     ErrorSignal,
 };
+pub use engine::AgentEngine;
 pub use result::{IterationResult, LimitDecision, RunOutcome, TurnMessage};
