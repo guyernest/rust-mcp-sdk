@@ -250,6 +250,14 @@ make test-integration   # Integration tests
    both. 0.x/experimental — a failure here must not gate the core SDK release. Its
    `openai-compat`/`anthropic`/`url-connector` features are all non-default, so the
    default publish build is reqwest-free and wasm-clean.
+15. `pmcp-team-servers` (the experimental 0.x reference-team-server crate at
+   `crates/pmcp-team-servers/`, Phase 109). A regular root workspace member that
+   pins `pmcp = "2.17"` (item 2), `pmcp-agent = "0.1"` (item 14), and
+   `pmcp-package = "0.1"` (item 13) via path deps, so it must publish AFTER all
+   three (i.e. after `pmcp-agent`). 0.x/experimental — a failure here must not
+   gate the core SDK release. Its `webhook` (reqwest) and `http`
+   (`pmcp/streamable-http`) features are non-default, so the default publish
+   build is reqwest-free and wasm-clean.
 
 The three per-backend connector crates (`pmcp-toolkit-postgres`, `-mysql`, `-athena`)
 have no inter-dependencies — they may publish in any order relative to each other,

@@ -1,0 +1,96 @@
+[package]
+name = "pmcp-team-servers"
+version = "0.1.0"
+edition = "2021"
+description = "Dev-grade reference team servers (team-fs, mem-mcp, approval-mcp, team-mcp) for the PMCP SDK (experimental)"
+license = "MIT"
+rust-version = "1.91.0"
+# .planning/ (GSD scaffolding), fuzz/ (workspace-excluded cargo-fuzz sub-package),
+# and tests/ (property fixtures) are never relevant to downstream consumers —
+# keep them out of the published crates.io tarball (mirrors pmcp-sql-server).
+exclude = [".planning/", "fuzz/", "tests/"]
+
+[dependencies]
+# The client/server/tasks/peer surface these reference servers need is NOT
+# feature-gated in pmcp — it compiles unconditionally on native (only
+# `not(target_arch = "wasm32")`-gated). `default-features = false` therefore
+# gives us everything while staying wasm-clean (no reqwest). The `_meta` carrier
+# (RequestHandlerExtra.request_meta) landed additively in the local 2.17.x via
+# 109-00; the path dep provides the source regardless of exact minor.
+pmcp = { version = "2.17.0", path = "../..", default-features = false }
+pmcp-agent = { version = "0.1", path = "../pmcp-agent" }
+pmcp-package = { version = "0.1", path = "../pmcp-package" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = { version = "1.0", features = ["preserve_order"] }
+async-trait = "0.1"
+thiserror = "2.0"
+uuid = { version = "1.17", features = ["v4"] }
+tracing = "0.1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+# The DECLARED sync primitive for the in-memory backends (109-03 review): already
+# vendored via pmcp, no new third-party registry package in the default build.
+parking_lot = "0.12"
+# clap + tracing-subscriber are used only by the `[[bin]]` targets. They are
+# wasm-compatible regular deps (no special class); the binaries are native-only
+# by nature of serving a transport.
+clap = { version = "4", features = ["derive", "env"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# Optional HTTP client for the webhook approval-notification path (109-04). OFF
+# by default so the default + wasm32 build never pulls reqwest.
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"], optional = true }
+
+[features]
+# default = the full reference-server set; this crate's purpose IS all four
+# servers plus the conformance harness. `webhook` + `http` are the ONLY
+# non-default toggles (off by default → the default/wasm32 build is
+# reqwest-free and pulls no native-only HTTP stack).
+default = ["team-fs", "mem-mcp", "approval-mcp", "team-mcp", "conformance"]
+team-fs = []
+mem-mcp = []
+approval-mcp = []
+team-mcp = []
+conformance = []
+# Outbound approval-notification webhook (109-04) needs reqwest.
+webhook = ["dep:reqwest"]
+# HTTP serve path for the server binaries needs pmcp's native-only
+# StreamableHttpTransport. Gated so a stdio-only build stays clean.
+http = ["pmcp/streamable-http"]
+# Aggregate: all four server surfaces attached at once. compose::wiring (109-06)
+# cfg-gates its attachment branches behind this.
+runtime = ["team-fs", "mem-mcp", "approval-mcp", "team-mcp"]
+
+# One bin per reference server. Explicit hyphenated `name` + underscored `path`
+# (following the pmcp-sql-server precedent) so downstream `--bin team-fs` /
+# `env!("CARGO_BIN_EXE_team-fs")` resolve. `required-features` is gated ONLY on
+# the server feature, NOT `http`, so a stdio-only build works without the HTTP
+# stack (each bin's HTTP serve path is `#[cfg(feature = "http")]`).
+[[bin]]
+name = "team-fs"
+path = "src/bin/team_fs.rs"
+required-features = ["team-fs"]
+
+[[bin]]
+name = "mem-mcp"
+path = "src/bin/mem_mcp.rs"
+required-features = ["mem-mcp"]
+
+[[bin]]
+name = "approval-mcp"
+path = "src/bin/approval_mcp.rs"
+required-features = ["approval-mcp"]
+
+[[bin]]
+name = "team-mcp"
+path = "src/bin/team_mcp.rs"
+required-features = ["team-mcp"]
+
+[dev-dependencies]
+pmcp = { version = "2.17.0", path = "../..", features = ["full"] }
+tokio = { version = "1", features = ["full"] }
+proptest = "1.7"
+pretty_assertions = "1.4"
+tempfile = "3"
+# Only to construct `TeamPackage { version, ... }` in derive property tests
+# (its fields are `semver::Version`/`VersionReq`). Already in the workspace tree
+# via pmcp-package; test-only, so it never affects the published build.
+semver = "1"
