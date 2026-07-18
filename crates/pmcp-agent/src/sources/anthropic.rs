@@ -16,6 +16,7 @@
 //!
 //! Endpoint policy, request timeout, bounded body, and `SecretString` key
 //! handling mirror [`OpenAiCompatSource`](super::OpenAiCompatSource).
+#![cfg(feature = "anthropic")]
 
 use async_trait::async_trait;
 use pmcp::types::sampling::{
