@@ -459,16 +459,21 @@ if let Some(dev) = pmcp_package::slot::detect_deviation(&tested_slot, &proposed_
 | A4 | `crates/pmcp-agent` is a REGULAR workspace member (root-listed), unlike workspace-excluded `pmcp-package` | Project structure / CONTEXT code_context | LOW — CONTEXT flags "decide in planning whether root gates lint it"; rust-1.95 gate reality: only root `pmcp` is clippy-gated today, so a regular member is fine |
 | A5 | No streaming needed in HTTP sources for this phase | Standard Stack | LOW — explicitly deferred in CONTEXT |
 
-## Open Questions
+## Open Questions (RESOLVED)
+
+> All three questions were resolved during Phase 108 planning (2026-07-17). Resolutions recorded inline below.
 
 1. **`CompletionSource` result type: `CreateMessageResultWithTools` vs `CreateMessageResult` — and the peer path to produce it.** (HIGH PRIORITY)
    - What we know: `CreateMessageParams` (input) is tool-calling-complete. But `PeerHandle::sample()` returns `CreateMessageResult` (single `Content`, no tool_use), as does `HostSamplingHandler::handle_create_message`. Only `CreateMessageResultWithTools` carries `Vec<SamplingMessageContent>` with `ToolUse`.
    - What's unclear: Whether the loop drives tools *through sampling* (implied by AGNT-04 "same loop, sampling source") — which requires WithTools — or only through `OpenAiCompatSource`/`AnthropicSource` (which build their own responses and can return WithTools freely).
    - Recommendation: Design `CompletionSource` to return the WithTools shape (or a crate-local mirror). Add a paired `pmcp` 2.17.0 addition so `SamplingSource` gets tool_use blocks back over the peer (e.g. `PeerHandle::sample_with_tools` returning `CreateMessageResultWithTools`, or SamplingSource issuing the `ServerRequest` and decoding WithTools). This is the single biggest design decision in the phase — resolve it in the plan's Wave 0.
+   - **RESOLVED:** `CompletionSource::create_message` returns `CreateMessageResultWithTools`; a paired zero-dep `PeerHandle::sample_with_tools` decode path is added in **plan 108-01 Task 2** (Wave 1), consumed by `SamplingSource` in plan 108-04 Task 1.
 
 2. **Should the D-106-A fix and the sampling-with-tools peer addition ship as one `Server::run`/peer change or two?** Both are `pmcp` 2.17.0 additive changes. Recommendation: treat them as sibling tasks in the same wave — the real-loop D-03 proof needs both to demonstrate a tool-calling hosted agent.
+   - **RESOLVED:** Both ship in ONE 2.17.0 release train (D-04) as sibling tasks in **plan 108-01** (Task 1 = D-106-A response pump, Task 2 = `sample_with_tools`); the tool_use round-trip test exercises both together.
 
 3. **`RunState` / `ConversationStore` granularity (D-06):** how much loop state (pending tool calls, per-class retry counters, iteration index) must persist for mid-iteration resume vs. what can be recomputed from message history? Recommendation: persist the minimum the reference checkpoints — message history + iteration counter + pending tool-call set — and derive the rest purely.
+   - **RESOLVED:** `RunState` = message history + iteration counter + pending tool-call set (no floats/time), defined in **plan 108-02 Task 3** (D-06); the rest is derived purely in plan 108-03.
 
 ## Environment Availability
 
