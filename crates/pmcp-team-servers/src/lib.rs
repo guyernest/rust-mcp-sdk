@@ -32,4 +32,5 @@ pub mod mem;
 #[cfg(feature = "team-mcp")]
 pub mod team;
 
+pub use compose::derive::{derive_attachment, AttachmentSet};
 pub use transport::DuplexTransport;
