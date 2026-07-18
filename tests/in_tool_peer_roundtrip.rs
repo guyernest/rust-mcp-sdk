@@ -25,10 +25,11 @@ use std::time::Duration;
 use async_trait::async_trait;
 use serde_json::{json, Value};
 
-use pmcp::client::host::HostSamplingHandler;
+use pmcp::client::host::{HostSamplingHandler, HostSamplingHandlerWithTools};
 use pmcp::shared::{Transport, TransportMessage};
 use pmcp::types::sampling::{
-    CreateMessageParams, CreateMessageResult, SamplingMessage, SamplingMessageContent,
+    CreateMessageParams, CreateMessageResult, CreateMessageResultWithTools, SamplingMessage,
+    SamplingMessageContent,
 };
 use pmcp::types::{ClientCapabilities, Content, JSONRPCResponse, Request, RequestId, Role};
 use pmcp::{ClientBuilder, RequestHandlerExtra, Result, Server, ToolHandler};
@@ -92,6 +93,34 @@ impl ToolHandler for RootsTool {
     }
 }
 
+/// Tool that awaits `extra.peer().sample_with_tools()` and reports the first
+/// `tool_use` block it received (Task 3 / AGNT-04 proof).
+struct SamplerWithToolsTool;
+
+#[async_trait]
+impl ToolHandler for SamplerWithToolsTool {
+    async fn handle(&self, _args: Value, extra: RequestHandlerExtra) -> pmcp::Result<Value> {
+        let peer = extra.peer().expect("peer must be attached").clone();
+        let params = CreateMessageParams::new(vec![SamplingMessage::new(
+            Role::User,
+            SamplingMessageContent::Text {
+                text: "pick a tool".to_string(),
+                meta: None,
+            },
+        )]);
+        let result: CreateMessageResultWithTools = peer.sample_with_tools(params).await?;
+        let tool_use = result
+            .content
+            .iter()
+            .find_map(|c| match c {
+                SamplingMessageContent::ToolUse { id, name, .. } => Some(format!("{name}#{id}")),
+                _ => None,
+            })
+            .unwrap_or_else(|| "none".to_string());
+        Ok(json!(format!("tooluse:{tool_use}")))
+    }
+}
+
 /// Trivial tool that returns immediately (no peer round-trip). Used to prove a
 /// second request is drained + processed while another handler is parked.
 struct FastTool;
@@ -109,6 +138,7 @@ fn build_server() -> Server {
         .version("0.1.0")
         .tool("sampler", SamplerTool)
         .tool("roots", RootsTool)
+        .tool("sampler_with_tools", SamplerWithToolsTool)
         .tool("fast", FastTool)
         .build()
         .expect("server builds")
@@ -354,4 +384,68 @@ async fn run_returns_when_transport_closes() {
         .expect("run() must return after the transport closes")
         .expect("server task joins");
     assert!(run_result.is_ok(), "run() returns Ok on clean shutdown");
+}
+
+// ---------------------------------------------------------------------------
+// (e) WithTools end-to-end (AGNT-04): a tool that awaits
+// peer.sample_with_tools() receives a ToolUse block from a WithTools host
+// handler, intact, on the stock loop.
+// ---------------------------------------------------------------------------
+
+/// `WithTools` host handler answering with a `tool_use` block.
+struct ToolUseSampling;
+
+#[async_trait]
+impl HostSamplingHandlerWithTools for ToolUseSampling {
+    async fn handle_create_message_with_tools(
+        &self,
+        _params: CreateMessageParams,
+    ) -> Result<CreateMessageResultWithTools> {
+        Ok(CreateMessageResultWithTools::new(
+            "tool-model",
+            Role::Assistant,
+            vec![SamplingMessageContent::ToolUse {
+                name: "search".to_string(),
+                id: "call-42".to_string(),
+                input: json!({ "q": "rust" }),
+                meta: None,
+            }],
+        ))
+    }
+}
+
+#[tokio::test]
+async fn in_tool_sample_with_tools_preserves_tool_use_end_to_end() {
+    let (client_t, server_t) = duplex::DuplexTransport::pair();
+    let server = build_server();
+    let server_handle = tokio::spawn(async move {
+        let _ = server.run(server_t).await;
+    });
+
+    let mut client = ClientBuilder::new(client_t)
+        .on_sampling_with_tools(ToolUseSampling)
+        .build();
+    client
+        .initialize(ClientCapabilities::default())
+        .await
+        .expect("initialize");
+
+    let result = tokio::time::timeout(
+        Duration::from_secs(5),
+        client.call_tool("sampler_with_tools".to_string(), json!({})),
+    )
+    .await
+    .expect("call must not hang")
+    .expect("tools/call succeeds");
+
+    // The ToolUse block (name + id) survives to the server-side
+    // CreateMessageResultWithTools.
+    assert!(
+        result_text(&result).contains("tooluse:search#call-42"),
+        "tool_use block (name + id) must survive end-to-end: {}",
+        result_text(&result)
+    );
+
+    drop(client);
+    server_handle.abort();
 }
