@@ -149,3 +149,9 @@ None - no external service configuration required.
 ---
 *Phase: 108-pmcp-agent-loop-crate*
 *Completed: 2026-07-18*
+
+## Self-Check: PASSED
+
+- Created files verified present: `tests/in_tool_peer_roundtrip.rs`, `108-01-SUMMARY.md`
+- All task commits verified in git log: 6d30621f, 0b5b461f, 9bd99f38, 7d86b07e
+- Acceptance greps verified: `Arc::new(RwLock::new(transport))` count 0, `unbounded_channel` present, stdio `partial` present, Cargo.toml 2.17.0, scaffold-pin "2.17.0"
