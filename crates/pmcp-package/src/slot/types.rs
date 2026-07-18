@@ -1,4 +1,4 @@
-//! Config-slot type system (I-5 / D-4 / D-9): typed slot declarations that structurally
+//! Config-slot type system (/ /): typed slot declarations that structurally
 //! cannot carry a secret or identity value.
 //!
 //! `SlotType` splits into two families (see `classification::classify` for the mapping):
@@ -41,7 +41,7 @@ pub enum SlotType {
         /// The channel binding's declared name.
         name: String,
     },
-    /// A human role a team component needs filled (D-9, from `AgentTeam`/`TeamHumanMember`).
+    /// A human role a team component needs filled (from `AgentTeam`/`TeamHumanMember`).
     /// Declares descriptive fields only — NEVER `userId`/`channelId`/`email` (those are
     /// identity, resolved at bind time, not representable here).
     HumanRole {
@@ -55,7 +55,7 @@ pub enum SlotType {
         channel_hints: Vec<String>,
     },
     /// A named LLM provider slot, carrying the `tested_value` (e.g. `"anthropic"`) that was
-    /// exercised when the package was tested. Behavior-relevant (I-5) — a proposed binding
+    /// exercised when the package was tested. Behavior-relevant — a proposed binding
     /// that differs from `tested_value` is a real behavioral change, not an identity swap.
     LlmProvider {
         /// The slot's declared name.
@@ -64,7 +64,7 @@ pub enum SlotType {
         tested_value: String,
     },
     /// A named budget-override slot, carrying the `tested_value` that was exercised when the
-    /// package was tested. Behavior-relevant (I-5).
+    /// package was tested. Behavior-relevant.
     BudgetOverride {
         /// The slot's declared name.
         name: String,
@@ -82,9 +82,9 @@ impl SlotType {
             SlotType::Secret { name } => ("secret", name.as_str()),
             SlotType::OauthClient { name } => ("oauth_client", name.as_str()),
             SlotType::ChannelBinding { name } => ("channel_binding", name.as_str()),
-            SlotType::HumanRole { role, .. } => ("human_role", role.as_str()),
-            SlotType::LlmProvider { name, .. } => ("llm_provider", name.as_str()),
-            SlotType::BudgetOverride { name, .. } => ("budget_override", name.as_str()),
+            SlotType::HumanRole { role,.. } => ("human_role", role.as_str()),
+            SlotType::LlmProvider { name,.. } => ("llm_provider", name.as_str()),
+            SlotType::BudgetOverride { name,.. } => ("budget_override", name.as_str()),
         }
     }
 
@@ -92,8 +92,8 @@ impl SlotType {
     /// identity-bearing variant (which has no such field at all).
     pub fn tested_value(&self) -> Option<&str> {
         match self {
-            SlotType::LlmProvider { tested_value, .. }
-            | SlotType::BudgetOverride { tested_value, .. } => Some(tested_value.as_str()),
+            SlotType::LlmProvider { tested_value,.. }
+            | SlotType::BudgetOverride { tested_value,.. } => Some(tested_value.as_str()),
             _ => None,
         }
     }
@@ -188,7 +188,7 @@ mod tests {
         assert_eq!(round, slot);
     }
 
-    /// Compile-documented proof (I-5): constructing `Secret` requires — and permits — only a
+    /// Compile-documented proof: constructing `Secret` requires — and permits — only a
     /// `name` field. If a future contributor added a `value`/`secret`/`credential` field to
     /// this variant, this call site (and every other Secret construction in this crate) would
     /// fail to compile until updated, making the structural guarantee impossible to silently

@@ -1,9 +1,9 @@
 //! Deterministic dedup + conflict-erroring aggregation of config slots across a component
-//! graph (I-5 / D-4).
+//! graph (/).
 //!
 //! The caller supplies the walk (e.g. `components.iter().flat_map(|c| c.slots())`); this
 //! module provides the dedup + conflict check. Ordering is via `BTreeMap` (never `HashMap`)
-//! so the aggregated `Vec` is stable across runs — required for I-2 digest + manifest-diff.
+//! so the aggregated `Vec` is stable across runs — required for digest + manifest-diff.
 
 use std::collections::btree_map::Entry;
 use std::collections::BTreeMap;
@@ -17,7 +17,7 @@ use crate::slot::types::ConfigSlot;
 /// - Two components declaring a byte-equal slot dedup silently into one entry.
 /// - Two components declaring the SAME behavior-relevant slot (same kind+name) with
 ///   DIFFERENT `tested_value`s return `Err(PackageError::SlotConflict)` — silently
-///   discarding one tested value would mask a real I-5 behavioral difference.
+///   discarding one tested value would mask a real behavioral difference.
 /// - Identity-bearing collisions with equal declaration fields dedup silently (identity
 ///   slots have no tested value to conflict over).
 pub fn aggregate<'a>(slots: impl IntoIterator<Item = &'a ConfigSlot>) -> Result<Vec<ConfigSlot>> {
@@ -34,7 +34,7 @@ pub fn aggregate<'a>(slots: impl IntoIterator<Item = &'a ConfigSlot>) -> Result<
             Entry::Occupied(e) if e.get().slot == slot.slot => {}
             Entry::Occupied(e) => {
                 // Same `(kind, name)` but a different declaration. A conflict only
-                // exists when BOTH carry a differing `tested_value` (a real I-5
+                // exists when BOTH carry a differing `tested_value` (a real
                 // behavioral difference); identity-bearing collisions have no tested
                 // value to conflict over and dedup silently.
                 if let (Some(existing_val), Some(incoming_val)) =
@@ -92,9 +92,9 @@ mod tests {
             PackageError::SlotConflict {
                 tested,
                 proposed,
-                ..
+..
             } if tested == "anthropic" && proposed == "openai"
-        ));
+       ));
     }
 
     #[test]
@@ -114,19 +114,19 @@ mod tests {
     }
 
     proptest! {
-        /// I-5 / T-168-06: aggregating any permutation of a conflict-free slot set yields
+        /// /: aggregating any permutation of a conflict-free slot set yields
         /// identical `Vec` output — the aggregated order must never depend on input order
         /// (so the digest stays stable regardless of which component contributed a slot
         /// first).
         #[test]
         fn aggregate_ordering_is_stable_under_permutation(seed in proptest::collection::vec(0u32..1000, 6)) {
             let slots: Vec<ConfigSlot> = (0..6)
-                .map(|i| ConfigSlot {
+.map(|i| ConfigSlot {
                     slot: SlotType::Secret {
                         name: format!("SECRET_{i}"),
                     },
                 })
-                .collect();
+.collect();
 
             let mut indices: Vec<usize> = (0..6).collect();
             indices.sort_by_key(|&i| seed[i]);

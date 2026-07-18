@@ -10,7 +10,7 @@
 //! 4. Canonicalize the manifest via `olpc-cjson`.
 //! 5. `sha256(canonical manifest bytes)` — stored as the manifest blob's own
 //!    content-addressed digest AND returned as the function's
-//!    [`ManifestDigest`] (I-2 identity key). One hash, one source of truth —
+//!    [`ManifestDigest`] (identity key). One hash, one source of truth —
 //!    no separate re-derivation of "the" manifest digest.
 //!
 //! The `ServerPackage` bootstrap binary is a SEPARATE `&[u8]` parameter to
@@ -47,7 +47,7 @@ pub(super) struct ServerEnvelope {
 }
 
 /// Pack `package` plus its `bootstrap` binary into `layout` as a local OCI
-/// artifact. Returns the canonical I-2 manifest digest.
+/// artifact. Returns the canonical manifest digest.
 pub fn pack_server(
     package: &ServerPackage,
     bootstrap: &[u8],
@@ -65,23 +65,23 @@ pub fn pack_server(
     let envelope_descriptor = layout.write_blob(
         vendor_media_type(MT_SERVER_ENVELOPE),
         &canonicalize(&envelope)?,
-    )?;
+   )?;
     let deploy_descriptor = layout.write_blob(
         vendor_media_type(MT_SERVER_DEPLOY_DESCRIPTOR),
         &canonicalize(&package.deploy)?,
-    )?;
+   )?;
     let cedar_descriptor = layout.write_blob(
         vendor_media_type(MT_SERVER_CEDAR_POLICY_SET),
         &canonicalize(&package.policies)?,
-    )?;
+   )?;
     let tools_descriptor = layout.write_blob(
         vendor_media_type(MT_SERVER_TOOL_METADATA),
         &canonicalize(&package.tools)?,
-    )?;
+   )?;
     let config_slots_descriptor = layout.write_blob(
         vendor_media_type(MT_SERVER_CONFIG_SLOTS),
         &canonicalize(&package.config_slots)?,
-    )?;
+   )?;
 
     let layers = vec![
         bootstrap_descriptor,
@@ -98,14 +98,14 @@ pub fn pack_server(
         ARTIFACT_TYPE_SERVER,
         &package.name,
         &package.version,
-    )
+   )
 }
 
 /// Pack any single-layer package (agent/team/workflow) into `layout`:
 /// serialize it to one canonical-JSON config layer under its vendor media
 /// type, then wrap it in a manifest with the kind's `artifactType`. The
 /// per-kind constants come from the [`SingleLayerPackage`] impl — one path,
-/// no per-kind copy-paste. Returns the canonical I-2 manifest digest.
+/// no per-kind copy-paste. Returns the canonical manifest digest.
 fn pack_single_layer<P: SingleLayerPackage>(
     package: &P,
     layout: &OciLayout,
@@ -118,23 +118,23 @@ fn pack_single_layer<P: SingleLayerPackage>(
         P::ARTIFACT_TYPE,
         package.name(),
         package.version(),
-    )
+   )
 }
 
 /// Pack an `AgentPackage` into `layout` as a single-layer local OCI artifact.
-/// Returns the canonical I-2 manifest digest.
+/// Returns the canonical manifest digest.
 pub fn pack_agent(package: &AgentPackage, layout: &OciLayout) -> Result<ManifestDigest> {
     pack_single_layer(package, layout)
 }
 
 /// Pack a `TeamPackage` into `layout` as a single-layer local OCI artifact.
-/// Returns the canonical I-2 manifest digest.
+/// Returns the canonical manifest digest.
 pub fn pack_team(package: &TeamPackage, layout: &OciLayout) -> Result<ManifestDigest> {
     pack_single_layer(package, layout)
 }
 
 /// Pack a `WorkflowManifest` into `layout` as a single-layer local OCI
-/// artifact. Returns the canonical I-2 manifest digest.
+/// artifact. Returns the canonical manifest digest.
 pub fn pack_workflow(package: &WorkflowManifest, layout: &OciLayout) -> Result<ManifestDigest> {
     pack_single_layer(package, layout)
 }
@@ -155,18 +155,18 @@ fn finalize_pack(
         layout.write_blob(MediaType::from(MT_EMPTY_CONFIG), EMPTY_CONFIG_BLOB)?;
 
     let manifest = ImageManifestBuilder::default()
-        .schema_version(SCHEMA_VERSION)
-        .media_type(MediaType::ImageManifest)
-        .artifact_type(MediaType::Other(artifact_type.to_string()))
-        .config(config_descriptor)
-        .layers(layers)
-        .build()
-        .map_err(|e| PackageError::Layout {
+.schema_version(SCHEMA_VERSION)
+.media_type(MediaType::ImageManifest)
+.artifact_type(MediaType::Other(artifact_type.to_string()))
+.config(config_descriptor)
+.layers(layers)
+.build()
+.map_err(|e| PackageError::Layout {
             reason: format!("failed to build ImageManifest: {e}"),
         })?;
 
     // Canonicalize (not plain serde_json) so the stored blob's own
-    // content-addressed digest doubles as the I-2 identity digest —
+    // content-addressed digest doubles as the identity digest —
     // one hash, one source of truth (RESEARCH steps 4-5).
     let manifest_bytes = canonicalize(&manifest)?;
     let mut manifest_descriptor = layout.write_manifest(&manifest_bytes)?;
@@ -208,7 +208,7 @@ mod tests {
         assert_eq!(
             manifest.layers()[0].media_type().to_string(),
             MT_SERVER_BOOTSTRAP
-        );
+       );
         assert_eq!(manifest.layers()[0].size(), bootstrap.len() as u64);
     }
 
@@ -240,8 +240,8 @@ mod tests {
 
         assert_eq!(
             digest_a, digest_b,
-            "I-2: packing identical input must yield an identical digest"
-        );
+            ": packing identical input must yield an identical digest"
+       );
     }
 
     #[test]
@@ -258,6 +258,6 @@ mod tests {
         assert_eq!(
             annotations.get("version"),
             Some(&package.version.to_string())
-        );
+       );
     }
 }

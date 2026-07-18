@@ -1,11 +1,11 @@
-//! Config-slot type system (I-5, D-4, D-9): typed slot declarations that structurally
+//! Config-slot type system (,): typed slot declarations that structurally
 //! cannot carry a secret/identity value, classification into identity-bearing vs
 //! behavior-relevant, aggregation across a component graph, and deviation detection for
 //! behavior-relevant slots.
 //!
 //! See `types`/`classification` module docs for the structural "secrets never travel"
 //! guarantee this module tree enforces, and `aggregate`/`deviation` for the pure functions
-//! Phase 171's pre-flight will call.
+//! the pre-flight will call.
 
 pub mod aggregate;
 pub mod classification;

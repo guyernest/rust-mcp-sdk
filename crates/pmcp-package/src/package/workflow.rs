@@ -1,10 +1,10 @@
 //! `WorkflowManifest` — the pinned, lockfile-style `workflow` AI-Package
-//! payload (D-2/D-8/I-1).
+//! payload.
 //!
 //! A workflow manifest is the fully-resolved, deployable form of a team-plus-
 //! its-dependency-graph: every component MUST be an exact
 //! `ComponentRef::Pinned` (name + version + digest) — a `Range` anywhere in
-//! the graph is a validation error, not merely discouraged (I-1: "converge
+//! the graph is a validation error, not merely discouraged ("converge
 //! on exact digests"). It also carries the pre-aggregated `ConfigSlot`s for
 //! the whole graph and capture [`Provenance`].
 //!
@@ -68,11 +68,11 @@ impl WorkflowManifest {
         mut components: Vec<ComponentRef>,
         mut aggregated_slots: Vec<ConfigSlot>,
         provenance: Provenance,
-    ) -> Self {
+   ) -> Self {
         components.sort_by(|a, b| {
             a.component_type()
-                .cmp(&b.component_type())
-                .then_with(|| a.name().cmp(b.name()))
+.cmp(&b.component_type())
+.then_with(|| a.name().cmp(b.name()))
         });
         aggregated_slots.sort_by(|a, b| a.slot.key().cmp(&b.slot.key()));
         Self {
@@ -86,19 +86,19 @@ impl WorkflowManifest {
 
     /// Borrow every component as a [`PinnedRef`], failing with
     /// `PackageError::InvalidReference` if ANY component in the graph is
-    /// still a `Range` (I-1: a workflow manifest carries only pins).
+    /// still a `Range` (a workflow manifest carries only pins).
     pub fn pinned_components(&self) -> Result<Vec<&PinnedRef>> {
         self.components
-            .iter()
-            .map(|component| {
+.iter()
+.map(|component| {
                 component.as_pinned().ok_or_else(|| PackageError::InvalidReference {
                     reason: format!(
-                        "component '{}' is a Range, not a Pin — a WorkflowManifest may only contain exact pins (I-1)",
+                        "component '{}' is a Range, not a Pin — a WorkflowManifest may only contain exact pins",
                         component.name()
-                    ),
+                   ),
                 })
             })
-            .collect()
+.collect()
     }
 
     /// `Ok(())` iff every component is pinned; `Err(InvalidReference)`
@@ -107,7 +107,7 @@ impl WorkflowManifest {
         self.pinned_components().map(|_| ())
     }
 
-    /// Convenience delegate to [`crate::digest::manifest_digest`] (I-2
+    /// Convenience delegate to [`crate::digest::manifest_digest`] (the
     /// identity key) over this manifest's canonical bytes.
     pub fn manifest_digest(&self) -> Result<ManifestDigest> {
         manifest_digest(self)
@@ -169,7 +169,7 @@ mod tests {
             ],
             vec![sample_slot()],
             sample_provenance(),
-        );
+       );
         let json = serde_json::to_string(&manifest).unwrap();
         let back: WorkflowManifest = serde_json::from_str(&json).unwrap();
         assert_eq!(back, manifest);
@@ -186,7 +186,7 @@ mod tests {
             ],
             vec![],
             sample_provenance(),
-        );
+       );
         let names: Vec<&str> = manifest.components.iter().map(|c| c.name()).collect();
         assert_eq!(names, vec!["alpha", "zeta"]);
     }
@@ -206,7 +206,7 @@ mod tests {
             ],
             vec![],
             sample_provenance(),
-        );
+       );
 
         // Both entries survive — same name is NOT deduplicated/collapsed.
         assert_eq!(manifest.components.len(), 2);
@@ -214,10 +214,10 @@ mod tests {
         // Deterministic order: server < agent, so the server-typed "x" sorts
         // first even though both share the same name.
         let types: Vec<ComponentType> = manifest
-            .components
-            .iter()
-            .map(|c| c.component_type())
-            .collect();
+.components
+.iter()
+.map(|c| c.component_type())
+.collect();
         assert_eq!(types, vec![ComponentType::Server, ComponentType::Agent]);
 
         // Identity is unambiguous: the two "x" entries differ in
@@ -227,16 +227,16 @@ mod tests {
         assert_eq!(
             manifest.components[0].as_pinned().unwrap().version.to_string(),
             "2.0.0"
-        );
+       );
         assert_eq!(
             manifest.components[1].as_pinned().unwrap().version.to_string(),
             "1.0.0"
-        );
+       );
         assert_ne!(
             manifest.components[0].as_pinned().unwrap().digest,
             manifest.components[1].as_pinned().unwrap().digest,
             "same-named server and agent must carry distinct digests (unambiguous identity)"
-        );
+       );
 
         // Round-trips losslessly through JSON with both entries intact.
         let json = serde_json::to_string(&manifest).unwrap();
@@ -255,12 +255,12 @@ mod tests {
             ],
             vec![],
             sample_provenance(),
-        );
+       );
         let err = manifest.pinned_components().unwrap_err();
-        assert!(matches!(err, PackageError::InvalidReference { .. }));
+        assert!(matches!(err, PackageError::InvalidReference {.. }));
 
         let err = manifest.validate_all_pinned().unwrap_err();
-        assert!(matches!(err, PackageError::InvalidReference { .. }));
+        assert!(matches!(err, PackageError::InvalidReference {.. }));
     }
 
     #[test]
@@ -274,7 +274,7 @@ mod tests {
             ],
             vec![],
             sample_provenance(),
-        );
+       );
         let pins = manifest.pinned_components().unwrap();
         assert_eq!(pins.len(), 2);
         assert!(manifest.validate_all_pinned().is_ok());
@@ -288,7 +288,7 @@ mod tests {
             vec![sample_pinned("triage-agent", "1.2.0")],
             vec![],
             sample_provenance(),
-        );
+       );
         let first = manifest.manifest_digest().unwrap();
         let second = manifest.manifest_digest().unwrap();
         assert_eq!(first, second);

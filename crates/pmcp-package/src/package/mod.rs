@@ -1,4 +1,4 @@
-//! The four AI-Package schema types (D-2/D-8): [`ServerPackage`] (Task 1),
+//! The four AI-Package schema types: [`ServerPackage`] (Task 1),
 //! `AgentPackage`/`TeamPackage` (Task 2), and `WorkflowManifest` (Task 3).
 //!
 //! Declared progressively across this plan's tasks so the crate compiles

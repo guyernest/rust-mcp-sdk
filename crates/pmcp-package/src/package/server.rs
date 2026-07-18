@@ -1,11 +1,11 @@
-//! `ServerPackage` — the closed, deployable `mcp-server` package type (D-2/D-8).
+//! `ServerPackage` — the closed, deployable `mcp-server` package type.
 //!
 //! A `ServerPackage` carries everything needed to deploy one built-in MCP
 //! server: a reference to its compiled bootstrap binary, its
 //! [`DeployDescriptor`] (the typed equivalent of a `.pmcp/deploy.toml`), its
 //! cedar-policy set, tool metadata, and its declared [`ConfigSlot`]s.
 //!
-//! # `DeployDescriptor` — I-4 closed-set enforcement
+//! # `DeployDescriptor` — closed-set enforcement
 //!
 //! `DeployDescriptor` losslessly represents the UNION of TOML tables observed
 //! across all 19 tracked `.pmcp/deploy.toml` files in this repo (see the
@@ -13,7 +13,7 @@
 //! discovers and parses every one of them via `git ls-files`). Every
 //! CFN-shaping sub-struct — the ones whose fields directly gate what
 //! CloudFormation resources a deploy produces — carries
-//! `#[serde(deny_unknown_fields)]` (I-4: a descriptor with an unrecognized
+//! `#[serde(deny_unknown_fields)]` (a descriptor with an unrecognized
 //! field must fail to parse rather than silently imply undeclared
 //! infrastructure). Tables that are open-ended by nature (`[environment]`,
 //! `[secrets]`, `[auth.groups]`, `[auth.scopes.custom]`) stay permissive
@@ -32,7 +32,7 @@
 //! `policy_file_path`/`path` field. Cedar policies are runtime state in
 //! Amazon Verified Permissions, mutated live via the admin UI's Code Mode
 //! policy editor — there is no on-disk `.cedar` file this crate could
-//! reference. Phase 170's capture step maps
+//! reference. The capture step maps
 //! `PolicyManager::list_policies(Some(server_id))`'s `PolicyMetadata` results
 //! into this shape; this phase only needs the shape to exist and round-trip.
 //!
@@ -41,7 +41,7 @@
 //! ECR's `Image.imageManifest` field has a documented ~4 MB max length. A
 //! realistic `ServerPackage`/`WorkflowManifest` (dozens of components, a few
 //! dozen slots) is nowhere near this — no action needed in this phase — but
-//! the composition model (D-8) already avoids the problem by construction:
+//! the composition model already avoids the problem by construction:
 //! the bootstrap binary is referenced by digest (an OCI layer), never
 //! inlined in the manifest (see [`BinaryRef`]).
 
@@ -50,7 +50,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 // ---------------------------------------------------------------------
-// DeployDescriptor and its sub-tables (I-4 closed-set enforcement)
+// DeployDescriptor and its sub-tables (closed-set enforcement)
 // ---------------------------------------------------------------------
 
 /// `[target]` — the deploy target selection. `target_type` maps to TOML's
@@ -233,9 +233,9 @@ pub struct LayoutSection {
     pub path_deps: Vec<String>,
 }
 
-/// The closed, typed equivalent of a `.pmcp/deploy.toml` file (I-4).
+/// The closed, typed equivalent of a `.pmcp/deploy.toml` file.
 ///
-/// `#[serde(deny_unknown_fields)]` on this outer struct is the actual I-4
+/// `#[serde(deny_unknown_fields)]` on this outer struct is the actual
 /// enforcement point: an unrecognized TOP-LEVEL table/field fails to parse.
 /// Every table observed across all 19 tracked descriptors (see the
 /// fixture-coverage test) is declared here — most as `Option<T>` since no
@@ -249,14 +249,14 @@ pub struct DeployDescriptor {
     pub aws: AwsSection,
     pub server: ServerSection,
     /// Env-var NAMES → literal (never-secret) values only — never a
-    /// resolved secret value (I-4/D-4). `BTreeMap` for stable ordering (no
-    /// `HashMap` — I-2 canonical-digest stability).
+    /// resolved secret value. `BTreeMap` for stable ordering (no
+    /// `HashMap` — canonical-digest stability).
     #[serde(default)]
     pub environment: BTreeMap<String, String>,
     /// Declared secret NAMES → (currently always empty) placeholder value.
     /// Secret VALUES are injected out-of-band at deploy time via
     /// `cargo pmcp secret set`/the platform secret-management surface —
-    /// never written here (I-4/D-4 — the payload declares required secret
+    /// never written here (the payload declares required secret
     /// *names*, never values).
     #[serde(default)]
     pub secrets: BTreeMap<String, String>,
@@ -296,7 +296,7 @@ pub struct CedarPolicy {
 /// A server's cedar-policy set. Deliberately a plain `Vec<CedarPolicy>`
 /// (`#[serde(transparent)]` — serializes as a flat JSON array) with NO
 /// `policy_file_path`/`path` field: policies come from AVP at capture time
-/// (Phase 170), never from a directory of `.cedar` files.
+///, never from a directory of `.cedar` files.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct CedarPolicySet(pub Vec<CedarPolicy>);
@@ -307,7 +307,7 @@ pub struct CedarPolicySet(pub Vec<CedarPolicy>);
 
 /// Tool/connector surface metadata. Kept permissive — `annotations` carries
 /// whatever additional per-tool fields (read_only_hint, cost_hint, schema
-/// hints, ...) the capture step produces, without this crate needing to
+/// hints,...) the capture step produces, without this crate needing to
 /// model every one as a typed field.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ToolMetadata {
@@ -322,7 +322,7 @@ pub struct ToolMetadata {
 // ---------------------------------------------------------------------
 
 /// A reference to the server's bootstrap Lambda binary. The binary bytes
-/// are NEVER inlined here — Plan 05's `pack_server(package, bootstrap,
+/// are NEVER inlined here — `pack_server(package, bootstrap,
 /// layout)` takes the raw bytes as a SEPARATE argument and turns them into a
 /// content-addressed OCI layer; this type only carries the resulting digest
 /// (once packed — `None` beforehand) plus a descriptive media-type hint.
@@ -337,12 +337,12 @@ pub struct BinaryRef {
 // ServerPackage
 // ---------------------------------------------------------------------
 
-/// The closed, deployable `mcp-server` AI-Package payload (D-2/D-8).
+/// The closed, deployable `mcp-server` AI-Package payload.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ServerPackage {
     pub name: String,
     pub version: semver::Version,
-    /// Set at pack time (Plan 05) — `None` before packing.
+    /// Set at pack time — `None` before packing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub digest: Option<crate::digest::ManifestDigest>,
     pub binary_ref: BinaryRef,
@@ -432,20 +432,20 @@ mod tests {
         }
     }
 
-    // --- DeployDescriptor: deny_unknown_fields (I-4) ---
+    // --- DeployDescriptor: deny_unknown_fields ---
 
     #[test]
     fn deploy_descriptor_rejects_unknown_top_level_field() {
         let mut value = serde_json::to_value(sample_deploy_descriptor()).unwrap();
         value
-            .as_object_mut()
-            .unwrap()
-            .insert("unexpected_field".to_string(), serde_json::json!(true));
+.as_object_mut()
+.unwrap()
+.insert("unexpected_field".to_string(), serde_json::json!(true));
         let result: std::result::Result<DeployDescriptor, _> = serde_json::from_value(value);
         assert!(
             result.is_err(),
-            "DeployDescriptor must reject an unrecognized top-level field (I-4)"
-        );
+            "DeployDescriptor must reject an unrecognized top-level field"
+       );
     }
 
     #[test]
@@ -483,7 +483,7 @@ mod tests {
             environment: BTreeMap::from([(
                 "EXPECTED_AUDIENCE".to_string(),
                 "placeholder".to_string(),
-            )]),
+           )]),
             secrets: BTreeMap::new(),
             auth: AuthSection {
                 enabled: false,
@@ -517,7 +517,7 @@ mod tests {
         assert_eq!(back, descriptor);
     }
 
-    /// I-4 fixture-coverage guard: discover EVERY tracked `.pmcp/deploy.toml`
+    /// fixture-coverage guard: discover EVERY tracked `.pmcp/deploy.toml`
     /// via `git ls-files` (not a hand-picked sample) and assert each one
     /// parses into `DeployDescriptor` without a `deny_unknown_fields`
     /// rejection. Dev-only (`toml` is a dev-dependency) — does not affect the
@@ -528,21 +528,21 @@ mod tests {
         use std::process::Command;
 
         let repo_root: PathBuf = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("..")
-            .join("..");
+.join("..")
+.join("..");
 
         let output = Command::new("git")
-            .arg("ls-files")
-            .arg("*/.pmcp/deploy.toml")
-            .current_dir(&repo_root)
-            .output()
-            .expect("git ls-files must run (dev-only coverage test)");
+.arg("ls-files")
+.arg("*/.pmcp/deploy.toml")
+.current_dir(&repo_root)
+.output()
+.expect("git ls-files must run (dev-only coverage test)");
         assert!(
             output.status.success(),
             "git ls-files failed: status={:?} stderr={}",
             output.status,
             String::from_utf8_lossy(&output.stderr)
-        );
+       );
 
         let stdout = String::from_utf8(output.stdout).expect("git ls-files output must be UTF-8");
         let files: Vec<&str> = stdout.lines().filter(|l| !l.is_empty()).collect();
@@ -555,13 +555,13 @@ mod tests {
         for rel_path in &files {
             let full_path = repo_root.join(rel_path);
             let contents = std::fs::read_to_string(&full_path)
-                .unwrap_or_else(|e| panic!("failed to read {full_path:?}: {e}"));
+.unwrap_or_else(|e| panic!("failed to read {full_path:?}: {e}"));
             let parsed: std::result::Result<DeployDescriptor, _> = toml::from_str(&contents);
             assert!(
                 parsed.is_ok(),
                 "DeployDescriptor failed to parse {rel_path}: {:?}",
                 parsed.err()
-            );
+           );
         }
     }
 
@@ -574,7 +574,7 @@ mod tests {
         assert!(
             json.is_array(),
             "CedarPolicySet must serialize as a flat JSON array (transparent newtype)"
-        );
+       );
         let back: CedarPolicySet = serde_json::from_value(json).unwrap();
         assert_eq!(back, set);
     }

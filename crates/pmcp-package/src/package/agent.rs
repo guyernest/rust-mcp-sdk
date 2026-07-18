@@ -1,8 +1,8 @@
-//! `AgentPackage` — the captured `AgentConfig` document (D-2/D-8).
+//! `AgentPackage` — the captured `AgentConfig` document.
 //!
 //! Field mapping is drawn from `amplify/data/resource.ts:1150-1227`'s
 //! `AgentConfig` model: `instructions` (system prompt), `modelId` (captured
-//! as the `llm` config slot's tested value, I-5), `maxTokens`/
+//! as the `llm` config slot's tested value,), `maxTokens`/
 //! `maxIterations`, `mcpServerIds` (connector refs, ranged — e.g.
 //! `london-tube@^1.2`), `toolSelection`/`inputSchema`/`outputSchema` (kept as
 //! open `serde_json::Value` — these are already-typed JSON documents in the
@@ -11,10 +11,10 @@
 //!
 //! `budget_defaults` are DEFAULTS captured at test time — overriding a
 //! budget-override slot's tested value at import time is a real behavioral
-//! change and surfaces as an I-5 deviation (`slot::detect_deviation`), not a
+//! change and surfaces as an deviation (`slot::detect_deviation`), not a
 //! silent override.
 //!
-//! # No bare floats — always `canonicalize()`-able (I-2)
+//! # No bare floats — always `canonicalize()`-able
 //!
 //! `AgentPackage` deliberately carries NO `f32`/`f64` field: all numeric
 //! config is either an integer (`max_tokens`/`max_iterations`) or, for any
@@ -22,7 +22,7 @@
 //! crate-wide policy — `olpc-cjson`'s `CanonicalFormatter` unconditionally
 //! rejects floating-point numbers ("floating point numbers are not allowed in
 //! canonical JSON"), so a bare float anywhere in a package schema would make
-//! that value un-`canonicalize()`-able and break its I-2 digest. Removing the
+//! that value un-`canonicalize()`-able and break its digest. Removing the
 //! former `temperature: f64` field lets `AgentPackage` route through
 //! `canonicalize()` uniformly with the other three package types (see
 //! `oci::pack::pack_agent`).
@@ -45,7 +45,7 @@ pub struct AgentPackage {
     pub instructions: String,
     /// The llm-provider config slot — `slot` is `SlotType::LlmProvider {
     /// name, tested_value }`, where `tested_value` is the `modelId` that was
-    /// exercised when this package was tested (I-5).
+    /// exercised when this package was tested.
     pub llm: ConfigSlot,
     pub max_tokens: i64,
     pub max_iterations: i64,
@@ -65,7 +65,7 @@ pub struct AgentPackage {
     pub finalizer_role: Option<String>,
     /// Budget-override DEFAULTS (`SlotType::BudgetOverride` entries) captured
     /// at test time. Overriding one of these at import is a real behavioral
-    /// change (I-5) — see module docs.
+    /// change — see module docs.
     #[serde(default)]
     pub budget_defaults: Vec<ConfigSlot>,
 }

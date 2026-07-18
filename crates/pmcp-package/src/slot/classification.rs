@@ -1,12 +1,12 @@
-//! Identity-bearing vs behavior-relevant slot classification (I-5 / §3.5).
+//! Identity-bearing vs behavior-relevant slot classification (/ §3.5).
 
 use crate::slot::types::SlotType;
 
-/// Which of the two I-5 slot families a `SlotType` belongs to.
+/// Which of the two slot families a `SlotType` belongs to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SlotClass {
     /// `Secret` / `OauthClient` / `ChannelBinding` / `HumanRole` — declares only identity,
-    /// never a value; never subject to deviation detection (I-5: binding identity is not
+    /// never a value; never subject to deviation detection (binding identity is not
     /// behavior).
     IdentityBearing,
     /// `LlmProvider` / `BudgetOverride` — carries a `tested_value`; a differing proposed
@@ -14,7 +14,7 @@ pub enum SlotClass {
     BehaviorRelevant,
 }
 
-/// Classify a `SlotType` into its I-5 family. Pure, no I/O.
+/// Classify a `SlotType` into its family. Pure, no I/O.
 ///
 /// The identity/behavior split has a single source of truth: a variant is
 /// behavior-relevant iff it carries a `tested_value` (see

@@ -1,4 +1,4 @@
-//! I-4 deterministic CFN-resource-allowlist validation of a `DeployDescriptor`.
+//! deterministic CFN-resource-allowlist validation of a `DeployDescriptor`.
 //!
 //! Mirrors `built-in/agents-api/crates/mcp-builtin-server-core/src/
 //! path_validator.rs`'s ordered-checks/first-violation-wins shape:
@@ -9,9 +9,9 @@
 //!
 //! `validate` is a pure function of its input: calling it twice with the
 //! same [`DeployDescriptor`] produces the same result every time. That
-//! determinism is the entire point — Phase 170 (publish) and Phase 171
-//! (pre-flight) call this SAME function at two independent call sites and
-//! must agree (I-4): identical descriptor in, identical Ok/Err out.
+//! determinism is the entire point — the publish and pre-flight call sites
+//! call this SAME function at two independent locations and must agree:
+//! identical descriptor in, identical Ok/Err out.
 
 use crate::error::{PackageError, Result};
 use crate::package::DeployDescriptor;
@@ -61,16 +61,16 @@ const ALLOWED_IAM_ACTION_PREFIXES: &[&str] = &[
 //      case they cover. If a negative test starts passing (no longer
 //      rejecting) after your expansion, the new prefix/tier is too broad;
 //      narrow it.
-//   4. This function is called at TWO independent sites (Phase 170 publish,
-//      Phase 171 pre-flight) — an expansion here changes behavior at BOTH
-//      simultaneously by construction (that is the I-4 guarantee working as
+//   4. This function is called at TWO independent sites (publish,
+//      pre-flight) — an expansion here changes behavior at BOTH
+//      simultaneously by construction (that is the guarantee working as
 //      intended, not a side effect to work around).
 //
 // DO NOT add a bare `"*"` to any of the three allowed sets above — a bare
 // wildcard tier/target/action-prefix defeats the entire allowlist.
 // =====================================================================
 
-/// Validate a [`DeployDescriptor`] against the platform's I-4 CFN-resource
+/// Validate a [`DeployDescriptor`] against the platform's CFN-resource
 /// allowlist. Returns `Ok(())` for an allowed descriptor; returns
 /// `Err(PackageError::AllowlistViolation)` on the first disallowed field
 /// found (ordered checks, first-violation-wins).
@@ -104,8 +104,8 @@ pub fn validate(descriptor: &DeployDescriptor) -> Result<()> {
             for action in &statement.actions {
                 let allowed = action != "*"
                     && ALLOWED_IAM_ACTION_PREFIXES
-                        .iter()
-                        .any(|prefix| action.starts_with(prefix));
+.iter()
+.any(|prefix| action.starts_with(prefix));
                 if !allowed {
                     return Err(PackageError::AllowlistViolation {
                         resource: format!("iam.statements.actions:{action}"),
@@ -205,7 +205,7 @@ mod tests {
         let mut descriptor = allowed_descriptor();
         descriptor.composition.as_mut().unwrap().tier = "enterprise".to_string();
         let err = validate(&descriptor).unwrap_err();
-        assert!(matches!(err, PackageError::AllowlistViolation { .. }));
+        assert!(matches!(err, PackageError::AllowlistViolation {.. }));
     }
 
     #[test]
@@ -213,7 +213,7 @@ mod tests {
         let mut descriptor = allowed_descriptor();
         descriptor.target.target_type = "bare-metal".to_string();
         let err = validate(&descriptor).unwrap_err();
-        assert!(matches!(err, PackageError::AllowlistViolation { .. }));
+        assert!(matches!(err, PackageError::AllowlistViolation {.. }));
     }
 
     #[test]
@@ -227,7 +227,7 @@ mod tests {
             }],
         });
         let err = validate(&descriptor).unwrap_err();
-        assert!(matches!(err, PackageError::AllowlistViolation { .. }));
+        assert!(matches!(err, PackageError::AllowlistViolation {.. }));
     }
 
     #[test]
@@ -241,7 +241,7 @@ mod tests {
             }],
         });
         let err = validate(&descriptor).unwrap_err();
-        assert!(matches!(err, PackageError::AllowlistViolation { .. }));
+        assert!(matches!(err, PackageError::AllowlistViolation {.. }));
     }
 
     #[test]
@@ -255,7 +255,7 @@ mod tests {
             }],
         });
         let err = validate(&descriptor).unwrap_err();
-        assert!(matches!(err, PackageError::AllowlistViolation { .. }));
+        assert!(matches!(err, PackageError::AllowlistViolation {.. }));
     }
 
     #[test]

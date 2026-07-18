@@ -1,4 +1,4 @@
-//! Integration test: I-2 digest-stability guarantees over the checked-in
+//! Integration test: digest-stability guarantees over the checked-in
 //! golden fixtures.
 //!
 //! - `manifest_digest()` computed repeatedly (≥100 times) over the same
@@ -21,9 +21,9 @@ use std::path::Path;
 
 fn read_fixture(name: &str) -> Vec<u8> {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests")
-        .join("golden_fixtures")
-        .join(name);
+.join("tests")
+.join("golden_fixtures")
+.join(name);
     std::fs::read(&path).unwrap_or_else(|e| panic!("failed to read fixture {path:?}: {e}"))
 }
 
@@ -37,8 +37,8 @@ fn server_fixture_digest_is_stable_across_100_computations() {
         let next = manifest_digest(&package).unwrap();
         assert_eq!(
             next, first,
-            "manifest_digest must be stable across repeated computation (I-2)"
-        );
+            "manifest_digest must be stable across repeated computation"
+       );
     }
 }
 
@@ -52,8 +52,8 @@ fn workflow_fixture_digest_is_stable_across_100_computations() {
         let next = manifest_digest(&manifest).unwrap();
         assert_eq!(
             next, first,
-            "manifest_digest must be stable across repeated computation (I-2)"
-        );
+            "manifest_digest must be stable across repeated computation"
+       );
     }
 }
 
@@ -96,27 +96,27 @@ fn agent_package_digest_is_stable_across_100_computations_via_canonicalize() {
     };
 
     let first = manifest_digest(&package)
-        .expect("AgentPackage must be canonicalize()-able now that it carries no bare float");
+.expect("AgentPackage must be canonicalize()-able now that it carries no bare float");
     for _ in 0..100 {
         let next = manifest_digest(&package).unwrap();
         assert_eq!(
             next, first,
-            "manifest_digest must be stable across repeated computation (I-2)"
-        );
+            "manifest_digest must be stable across repeated computation"
+       );
     }
 }
 
 #[test]
 fn reordering_deploy_descriptor_environment_map_does_not_change_digest() {
     // Build the SAME logical DeployDescriptor via two different BTreeMap
-    // insertion orders and confirm the digest matches (I-2 key-order
+    // insertion orders and confirm the digest matches (key-order
     // independence via olpc-cjson).
     let bytes = read_fixture("server_team_fs_v1.json");
     let package: ServerPackage = serde_json::from_slice(&bytes).unwrap();
     assert!(
         package.deploy.environment.len() >= 2,
         "fixture must declare at least 2 environment entries to make reordering meaningful"
-    );
+   );
 
     let mut forward = BTreeMap::new();
     for (k, v) in package.deploy.environment.iter() {
@@ -136,8 +136,8 @@ fn reordering_deploy_descriptor_environment_map_does_not_change_digest() {
     let digest_backward = manifest_digest(&package_backward).unwrap();
     assert_eq!(
         digest_forward, digest_backward,
-        "canonical digest must not depend on map insertion order (I-2)"
-    );
+        "canonical digest must not depend on map insertion order"
+   );
 }
 
 #[test]
@@ -151,7 +151,7 @@ fn reordering_workflow_components_and_slots_via_new_yields_same_digest() {
     assert!(
         manifest.components.len() >= 2,
         "fixture must declare at least 2 components to make reordering meaningful"
-    );
+   );
 
     let forward = WorkflowManifest::new(
         manifest.name.clone(),
@@ -159,7 +159,7 @@ fn reordering_workflow_components_and_slots_via_new_yields_same_digest() {
         manifest.components.clone(),
         manifest.aggregated_slots.clone(),
         manifest.provenance.clone(),
-    );
+   );
 
     let mut reversed_components = manifest.components.clone();
     reversed_components.reverse();
@@ -171,12 +171,12 @@ fn reordering_workflow_components_and_slots_via_new_yields_same_digest() {
         reversed_components,
         reversed_slots,
         manifest.provenance.clone(),
-    );
+   );
 
     let digest_forward = manifest_digest(&forward).unwrap();
     let digest_backward = manifest_digest(&backward).unwrap();
     assert_eq!(
         digest_forward, digest_backward,
-        "WorkflowManifest::new must sort deterministically regardless of input order (I-2)"
-    );
+        "WorkflowManifest::new must sort deterministically regardless of input order"
+   );
 }

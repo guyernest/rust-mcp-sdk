@@ -1,4 +1,4 @@
-//! Canonical-bytes-then-digest computation for AI-Package manifests (I-2).
+//! Canonical-bytes-then-digest computation for AI-Package manifests.
 //!
 //! # Two distinct hashing paths — do not conflate them
 //!
@@ -29,7 +29,7 @@
 //! field literal and no blanket `#[serde(transparent)]` — deserialization
 //! from an arbitrary JSON string is routed through `parse()` via
 //! `#[serde(try_from = "String")]`, so a malformed digest can never enter a
-//! typed struct undetected (T-168-02).
+//! typed struct undetected.
 
 use crate::error::{PackageError, Result};
 use olpc_cjson::CanonicalFormatter;
@@ -71,7 +71,7 @@ impl ManifestDigest {
             return Err(PackageError::MalformedDigest {
                 reason: format!(
                     "expected 64 lowercase hex chars after 'sha256:', got: {hex_part:?}"
-                ),
+               ),
             });
         }
         Ok(ManifestDigest(s.to_string()))
@@ -106,9 +106,9 @@ impl From<ManifestDigest> for String {
 /// Validated boundary conversion from an `oci_spec::image::Digest` (as
 /// carried on a `Descriptor`) into this crate's [`ManifestDigest`].
 ///
-/// Plan 05 uses this to turn an OCI-pulled `Descriptor`'s digest into a
-/// `ManifestDigest` before calling [`crate::digest::verify`] — no bare
-/// string cast crosses the OCI-interop trust boundary (T-168 threat
+/// Callers use this to turn an OCI-pulled `Descriptor`'s digest into a
+/// `ManifestDigest` before calling [`crate::digest::verify()`] — no bare
+/// string cast crosses the OCI-interop trust boundary (threat
 /// register: "oci_spec Descriptor digest → ManifestDigest").
 impl TryFrom<&oci_spec::image::Digest> for ManifestDigest {
     type Error = PackageError;
@@ -119,7 +119,7 @@ impl TryFrom<&oci_spec::image::Digest> for ManifestDigest {
                 reason: format!(
                     "expected sha256 algorithm, got: {}",
                     digest.algorithm()
-                ),
+               ),
             });
         }
         Self::parse(&format!("sha256:{}", digest.digest()))
@@ -148,7 +148,7 @@ pub fn canonicalize<T: Serialize>(value: &T) -> Result<Vec<u8>> {
 /// Canonicalize `value` then hash the canonical bytes — the struct-identity
 /// digest path (as opposed to [`ManifestDigest::from_bytes`]'s raw-blob
 /// path). `manifest_digest(&value) == manifest_digest(&value)` for the same
-/// logical value (I-2 stability).
+/// logical value (stability).
 pub fn manifest_digest<T: Serialize>(value: &T) -> Result<ManifestDigest> {
     let bytes = canonicalize(value)?;
     Ok(ManifestDigest::from_bytes(&bytes))
@@ -175,7 +175,7 @@ mod tests {
         values: BTreeMap<String, i64>,
     }
 
-    // --- canonicalize() byte-stability (I-2) ---
+    // --- canonicalize() byte-stability ---
 
     #[test]
     fn canonicalize_is_byte_stable_across_repeated_calls() {
@@ -198,11 +198,11 @@ mod tests {
     proptest! {
         /// Regardless of the ORDER pairs are inserted into a BTreeMap, the
         /// canonical bytes for a struct containing that map are identical —
-        /// the key-order-independence property I-2 requires.
+        /// the key-order-independence property requires.
         #[test]
         fn canonicalize_is_stable_regardless_of_map_insertion_order(
             mut pairs in prop::collection::vec(("[a-z]{1,8}", any::<i64>()), 0..8)
-        ) {
+       ) {
             pairs.sort_by(|a, b| a.0.cmp(&b.0));
             pairs.dedup_by(|a, b| a.0 == b.0);
 
@@ -249,28 +249,28 @@ mod tests {
     #[test]
     fn parse_rejects_missing_prefix() {
         let err = ManifestDigest::parse(&"a".repeat(64)).unwrap_err();
-        assert!(matches!(err, PackageError::MalformedDigest { .. }));
+        assert!(matches!(err, PackageError::MalformedDigest {.. }));
     }
 
     #[test]
     fn parse_rejects_wrong_length() {
         // "sha256:zz" — short, non-hex remainder.
         let err = ManifestDigest::parse("sha256:zz").unwrap_err();
-        assert!(matches!(err, PackageError::MalformedDigest { .. }));
+        assert!(matches!(err, PackageError::MalformedDigest {.. }));
     }
 
     #[test]
     fn parse_rejects_non_hex() {
         let bad = format!("sha256:{}", "g".repeat(64));
         let err = ManifestDigest::parse(&bad).unwrap_err();
-        assert!(matches!(err, PackageError::MalformedDigest { .. }));
+        assert!(matches!(err, PackageError::MalformedDigest {.. }));
     }
 
     #[test]
     fn parse_rejects_uppercase_hex() {
         let bad = format!("sha256:{}", "A".repeat(64));
         let err = ManifestDigest::parse(&bad).unwrap_err();
-        assert!(matches!(err, PackageError::MalformedDigest { .. }));
+        assert!(matches!(err, PackageError::MalformedDigest {.. }));
     }
 
     // --- manifest_digest (canonicalize-then-hash path) ---
@@ -330,7 +330,7 @@ mod tests {
         let _from_bytes: ManifestDigest = ManifestDigest::from_bytes(b"anything");
     }
 
-    // --- OCI digest interop (validated boundary, T-168-oci) ---
+    // --- OCI digest interop (validated boundary,) ---
 
     #[test]
     fn try_from_oci_digest_succeeds_for_sha256() {
@@ -346,6 +346,6 @@ mod tests {
         let hex = "c".repeat(128);
         let oci_digest = oci_spec::image::Digest::from_str(&format!("sha512:{hex}")).unwrap();
         let err = ManifestDigest::try_from(&oci_digest).unwrap_err();
-        assert!(matches!(err, PackageError::MalformedDigest { .. }));
+        assert!(matches!(err, PackageError::MalformedDigest {.. }));
     }
 }

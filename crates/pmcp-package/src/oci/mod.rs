@@ -1,9 +1,9 @@
-//! Local OCI Image Layout pack/unpack (Phase 168's titular scope): serialize
+//! Local OCI Image Layout pack/unpack (the titular scope): serialize
 //! each of the four package types into an OCI Image Layout on disk with
 //! custom `application/vnd.pmcp.*` media types per layer, content-address
 //! each blob by sha256, and verify every blob's digest before deserializing
-//! (I-1/I-2). Pure local disk I/O — no network, no `oci-client` — so
-//! Phase 169's registry push/pull can consume these exact `oci_spec::image`
+//!. Pure local disk I/O — no network, no `oci-client` — so
+//! the registry push/pull can consume these exact `oci_spec::image`
 //! types with zero translation.
 //!
 //! - [`media_types`] — vendor media-type constants per layer + the standard

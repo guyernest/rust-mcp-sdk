@@ -104,7 +104,7 @@ pub fn vendor_media_type(media_type: &str) -> MediaType {
 }
 
 /// Build the standard, shared empty-config `Descriptor` — non-null config,
-/// required by ECR/OCI-1.1-conformant registries and validators. Callers
+/// required by ECR/OCI 1.1-conformant registries and validators. Callers
 /// that actually WRITE the config blob to a layout should prefer
 /// `OciLayout::write_blob(MediaType::from(MT_EMPTY_CONFIG), EMPTY_CONFIG_BLOB)`
 /// (which persists the bytes AND returns an identical `Descriptor`, since
@@ -113,12 +113,12 @@ pub fn vendor_media_type(media_type: &str) -> MediaType {
 /// manifest that references an empty-config blob written elsewhere).
 pub fn empty_config_descriptor() -> Descriptor {
     let digest = oci_spec::image::Digest::from_str(EMPTY_CONFIG_DIGEST)
-        .expect("EMPTY_CONFIG_DIGEST is a well-formed sha256 digest string");
+.expect("EMPTY_CONFIG_DIGEST is a well-formed sha256 digest string");
     Descriptor::new(
         vendor_media_type(MT_EMPTY_CONFIG),
         EMPTY_CONFIG_SIZE,
         digest,
-    )
+   )
 }
 
 #[cfg(test)]

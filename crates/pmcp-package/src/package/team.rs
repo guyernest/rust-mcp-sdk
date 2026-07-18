@@ -1,9 +1,9 @@
 //! `TeamPackage` — the captured `AgentTeam` roster + human-role declarations
-//! (D-2/D-8/D-9).
+//!.
 //!
 //! Field mapping is drawn from `amplify/data/resource.ts:1591-1785`'s
 //! `AgentTeam`/`TeamMember`/`TeamHumanMember` models. The one hard structural
-//! rule (D-9, permanent non-goal §12): a captured `TeamPackage` NEVER carries
+//! rule (permanent non-goal §12): a captured `TeamPackage` NEVER carries
 //! a human identity. The source `TeamHumanMember` row DOES carry a real
 //! `userId`/`channelId`/`channelAddress`/`pendingApproverEmail`, but capture
 //! strips those down to a role declaration — [`HumanRole`] structurally
@@ -30,7 +30,7 @@ pub struct TeamMember {
     pub role: TeamRole,
 }
 
-/// A human role a team needs filled — role declaration ONLY (D-9). This
+/// A human role a team needs filled — role declaration ONLY. This
 /// struct's field list is closed and MUST NEVER gain a `user_id`/
 /// `channel_id`/`email`/`channel_address` (or any other identity) field: the
 /// source `TeamHumanMember` row's identity fields are resolved at BIND time
@@ -81,7 +81,7 @@ pub struct TeamPackage {
     /// The team's entry-point agent (from `AgentTeam.entryPointAgentId`).
     pub entry_point: ComponentRef,
     pub members: Vec<TeamMember>,
-    /// D-9: role declarations only — see [`HumanRole`] doc.
+    ///: role declarations only — see [`HumanRole`] doc.
     pub human_roles: Vec<HumanRole>,
     pub limits: TeamLimits,
     /// Built-in servers available to every member (from
@@ -89,7 +89,7 @@ pub struct TeamPackage {
     pub built_in_servers: Vec<ComponentRef>,
     /// Finalizer agents (from `AgentTeam.finalizerAgentIds`).
     pub finalizer_agents: Vec<ComponentRef>,
-    /// Budget-override DEFAULTS captured at test time (I-5 — same
+    /// Budget-override DEFAULTS captured at test time (same
     /// deviation-on-override semantics as `AgentPackage::budget_defaults`).
     pub budget_defaults: Vec<ConfigSlot>,
     /// All declared config slots for the team as a whole, INCLUDING each
@@ -160,7 +160,7 @@ mod tests {
         assert_eq!(back, TeamRole::EntryPoint);
     }
 
-    /// D-9 structural proof: `HumanRole` constructs with ONLY
+    /// structural proof: `HumanRole` constructs with ONLY
     /// role/description/responsibilities/channel_hints — there is no
     /// user_id/channel_id/email/channel_address field to populate, and the
     /// serialized form carries none of those keys either.
