@@ -1,0 +1,13 @@
+{
+  "completions": [
+    {
+      "model": "golden-model",
+      "stopReason": "end_turn",
+      "role": "assistant",
+      "content": [
+        { "type": "text", "text": "The answer is 42." }
+      ]
+    }
+  ],
+  "toolBatches": []
+}
