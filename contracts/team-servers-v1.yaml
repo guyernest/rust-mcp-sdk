@@ -1,5 +1,5 @@
 metadata:
-  version: 1.0.0
+  version: 1.1.0
   created: '2026-07-17'
   author: PAIML Engineering
   description: >-
@@ -11,9 +11,11 @@ metadata:
     UNNAMESPACED static (legacy) names — they are NOT namespaced and must not be
     treated as if they carried a namespace prefix. This contract documents the
     advertised tool surface and the team-mcp dispatch semantics as portable,
-    storage-agnostic equations. Bindings to concrete reference-server functions
-    (crates/pmcp-team-servers) and pmat comply gating are DEFERRED to Phase 109;
-    no binding.yaml is authored for these equations.
+    storage-agnostic equations. A contract-first binding.yaml skeleton
+    (contracts/team-servers/binding.yaml, status: planned) is authored in Phase
+    109 Plan 01 against the planned reference-server functions
+    (crates/pmcp-team-servers); Plan 109-08 flips each binding to implemented
+    with its real signature and enables pmat comply gating.
   references:
   - Model Context Protocol Specification (2025-11-25)
   - SEP-1686 task-augmented tool results (pmcp 2.12.0 ToolOutput::Result)
@@ -84,12 +86,14 @@ equations:
     - The team_approval__ask_<member> family is dynamic — one tool per human roster member, computed from config
     - A team_approval__ask_ call targeting a member absent from the configured roster errors, never panics
     - The advertised argument schema for each tool equals the enforced argument schema (advertised == enforced)
+    - An ask/resolve record MAY carry OPTIONAL subject_task_id and/or subject_ref fields linking the approval to the task/component it gates (D-12); when present on an ask, they are echoed verbatim by get_approval and resolve_approval (never dropped or rewritten)
     preconditions:
     - Server is initialized and a human roster is configured for the approval surface
     - tool_name is a non-empty string
     postconditions:
     - tools/list returns resolve_approval, get_approval, and one team_approval__ask_<member> per roster member
     - Dispatch to an unknown member yields an error outcome
+    - get_approval and resolve_approval echo any subject_task_id/subject_ref recorded at ask time unchanged (D-12)
 
   team_dispatch_surface:
     formula: |
@@ -109,7 +113,8 @@ equations:
     invariants:
     - tools/list is computed per-request from config; the team_mcp__<member> family is fully dynamic
     - Member lookup is by stable configured member ID, never by display name
-    - ToolOutput::Result owns the FULL CallToolResult, including top-level _meta[related_task] (pmcp 2.12.0)
+    - ToolOutput::Result owns the FULL CallToolResult, including top-level _meta keyed by the SDK constant io.modelcontextprotocol/related-task (RELATED_TASK_META_KEY, pmcp 2.12.0) — never a bare related_task key
+    - Depth + ancestor-chain guard state travels as namespaced _meta on the tools/call request (transport-agnostic, locked D-14 route A); the HTTP binary maps the x-pmcp-team-depth header into that _meta at the edge, so the guard logic never reads a raw header
     - x-pmcp-team-depth is parsed strictly as an integer; non-integer/garbage values are rejected
     - Team depth beyond max_team_depth is rejected (bounded recursion)
     - Self-call is rejected by comparing member IDs, not names (self-call guard)
@@ -117,7 +122,7 @@ equations:
     - The advertised argument schema equals the enforced argument schema (advertised == enforced)
     preconditions:
     - Server is initialized and a team roster with stable member IDs is configured
-    - Incoming request may carry an x-pmcp-team-depth value
+    - Incoming request may carry an x-pmcp-team-depth value (mapped to namespaced _meta at the HTTP edge)
     postconditions:
-    - A successful dispatch returns a ToolOutput::Result carrying the full CallToolResult with top-level _meta[related_task]
+    - A successful dispatch returns a ToolOutput::Result carrying the full CallToolResult with top-level _meta keyed by io.modelcontextprotocol/related-task
     - Unknown member, malformed depth, excessive depth, self-call, and ancestor-cycle all yield error outcomes
