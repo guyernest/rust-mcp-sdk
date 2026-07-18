@@ -72,3 +72,11 @@ for this client-host plan per the executor SCOPE BOUNDARY (Rule 4 territory).
 `purity-check` recipe to iterate version-qualified specs (e.g. run `cargo tree -i
 quick-xml@0.37.5` and `@0.41.0` separately) or add a lockfile alignment, so the
 check is robust to legitimate multi-version transitive trees.
+
+## D-106-C — /simplify recorded follow-ups (2026-07-17, post-phase cleanup)
+
+Deliberate skips from the 4-angle cleanup review (applied fixes are in commit a255be80):
+- **DuplexTransport promotion**: examples s45/s48/s49 each carry a byte-copy of the duplex transport (tests have `tests/common/duplex.rs`). 3+ copies now — promote to a shared example include or `pmcp::shared` test utility when next touched.
+- **Arc-typed sampling hook aliases**: `PreflightApproval`/`SamplingResultReview` take owned values, costing a deep clone per registered hook on multi-MB params. `Arc<CreateMessageParams>`-based aliases would eliminate clones — public API change, batch with the next breaking-ish 0.x-style revision of the host surface.
+- **classify/extract fusion**: the sampling parse ambiguity is encoded in two coupled matches (`classify_host_request` + `extract_sampling_params`) with a dead disagree branch. Fuse into a payload-carrying `HostRequest` enum when Phase 108 builds the background receive loop — that loop is also where direction-aware inbound parsing naturally lives.
+- **assert_capability accessor refactor**: still a stringly-typed match (~18 call sites); the fall-through is now loud (tracing::error + debug_assert) but the full fix is an accessor-closure or enum signature. Mechanical, single-file.
