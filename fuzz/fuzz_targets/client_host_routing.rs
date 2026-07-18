@@ -6,7 +6,8 @@ use pmcp::shared::parse_request;
 use pmcp::types::elicitation::ElicitRequestParams;
 use pmcp::types::jsonrpc::JSONRPCRequest;
 use pmcp::types::sampling::CreateMessageParams;
-use serde_json::{from_slice, from_value, Value};
+use serde::Deserialize;
+use serde_json::{from_slice, Value};
 
 // Fuzz the REAL inbound host-request routing path a client walks for every
 // server -> client request: raw bytes -> JSONRPCRequest<Value> -> parse_request
@@ -30,11 +31,12 @@ fuzz_target!(|data: &[u8]| {
     };
 
     // Also drive the raw param serde boundary directly (defensive: params may be
-    // present even when the envelope is not a host method).
-    let params_value = envelope.params.clone();
-    if let Some(pv) = params_value.clone() {
-        let _ = from_value::<CreateMessageParams>(pv.clone());
-        let _ = from_value::<ElicitRequestParams>(pv);
+    // present even when the envelope is not a host method). Probe both types
+    // from a borrow of the envelope's params via the `Deserializer` impl on
+    // `&Value` — no clones — before `parse_request` consumes the envelope below.
+    if let Some(pv) = envelope.params.as_ref() {
+        let _ = CreateMessageParams::deserialize(pv);
+        let _ = ElicitRequestParams::deserialize(pv);
     }
 
     // Stage 2: the real request grammar parse (client grammar tried first).

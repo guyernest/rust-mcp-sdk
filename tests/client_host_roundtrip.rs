@@ -29,6 +29,8 @@
 
 #[path = "common/duplex.rs"]
 mod duplex;
+#[path = "common/host_pump.rs"]
+mod host_pump;
 
 use std::sync::{Arc, Mutex};
 
@@ -37,19 +39,15 @@ use proptest::prelude::*;
 use serde_json::{json, Value};
 
 use pmcp::client::host::{HostElicitationHandler, HostSamplingHandler};
-use pmcp::shared::{Transport, TransportMessage};
 use pmcp::types::elicitation::{ElicitAction, ElicitRequestParams, ElicitResult};
-use pmcp::types::jsonrpc::JSONRPCResponse;
+use pmcp::types::jsonrpc::{JSONRPCResponse, ResponsePayload};
 use pmcp::types::protocol::{ClientRequest, Request, ServerRequest};
 use pmcp::types::roots::{ListRootsResult, Root};
 use pmcp::types::sampling::{
     CreateMessageParams, CreateMessageResult, SamplingMessage, SamplingMessageContent, ToolChoice,
 };
 use pmcp::types::tools::ToolInfo;
-use pmcp::types::{
-    ClientCapabilities, Content, Implementation, InitializeResult, RequestId, Role,
-    ServerCapabilities,
-};
+use pmcp::types::{ClientCapabilities, Content, RequestId, Role};
 use pmcp::{ClientBuilder, Result};
 
 // ---------------------------------------------------------------------------
@@ -97,77 +95,23 @@ impl HostElicitationHandler for MockElicit {
 // an in-flight client `tools/list`.
 // ---------------------------------------------------------------------------
 
-async fn recv_request_id(t: &mut duplex::DuplexTransport) -> RequestId {
-    loop {
-        if let TransportMessage::Request { id, .. } = t.receive().await.expect("recv request") {
-            return id;
-        }
-    }
-}
-
-async fn recv_response(t: &mut duplex::DuplexTransport) -> JSONRPCResponse {
-    loop {
-        if let TransportMessage::Response(r) = t.receive().await.expect("recv response") {
-            return r;
-        }
-    }
-}
-
-async fn send_success(t: &mut duplex::DuplexTransport, id: RequestId, result: Value) {
-    t.send(TransportMessage::Response(JSONRPCResponse::success(
-        id, result,
-    )))
-    .await
-    .expect("send response");
-}
-
-fn init_result_value() -> Value {
-    serde_json::to_value(InitializeResult::new(
-        Implementation::new("fake-server", "1.0.0"),
-        ServerCapabilities::tools_only(),
-    ))
-    .unwrap()
-}
-
 /// Drive: initialize handshake, wait for the client's in-flight `tools/list`,
 /// inject `inbound`, capture the client's `Response`, then answer the call so
-/// the client returns. Yields the captured inbound `Response`.
+/// the client returns. Yields the captured inbound `Response`. Thin wrapper
+/// over the shared [`host_pump::inject_and_capture`] prefix.
 async fn pump_one_inbound(
     mut server_t: duplex::DuplexTransport,
     inbound_id: RequestId,
     inbound: Request,
 ) -> JSONRPCResponse {
-    // 1. Answer initialize.
-    let init_id = recv_request_id(&mut server_t).await;
-    send_success(&mut server_t, init_id, init_result_value()).await;
-
-    // 2. Wait for the in-flight client request (skips the `initialized` note).
-    let call_id = recv_request_id(&mut server_t).await;
-
-    // 3. Push the raw inbound request while the call is in flight.
-    server_t
-        .send(TransportMessage::Request {
-            id: inbound_id,
-            request: inbound,
-        })
-        .await
-        .expect("send inbound request");
-
-    // 4. Capture the client's Response to the inbound request.
-    let response = recv_response(&mut server_t).await;
-
-    // 5. Answer the original call so the client returns.
-    send_success(&mut server_t, call_id, json!({ "tools": [] })).await;
-
-    response
+    host_pump::inject_and_capture(&mut server_t, inbound_id, inbound).await
 }
 
 fn result_payload(response: &JSONRPCResponse) -> Value {
-    serde_json::to_value(response)
-        .unwrap()
-        .get("result")
-        .expect("success response carries a result")
-        .clone()
+    match &response.payload {
+        ResponsePayload::Result(v) => v.clone(),
+        ResponsePayload::Error(e) => panic!("expected a success result, got error: {e:?}"),
+    }
 }
 
 // ---------------------------------------------------------------------------

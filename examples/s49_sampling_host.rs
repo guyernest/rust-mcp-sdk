@@ -29,7 +29,7 @@ use tokio::sync::mpsc;
 
 use pmcp::client::host::HostSamplingHandler;
 use pmcp::shared::{Transport, TransportMessage};
-use pmcp::types::jsonrpc::JSONRPCResponse;
+use pmcp::types::jsonrpc::{JSONRPCResponse, ResponsePayload};
 use pmcp::types::protocol::{ClientRequest, Request};
 use pmcp::types::sampling::{
     CreateMessageParams, CreateMessageResult, SamplingMessage, SamplingMessageContent,
@@ -181,13 +181,10 @@ async fn run_mock_server(mut server_t: DuplexTransport) -> Result<String> {
             break r;
         }
     };
-    let value = serde_json::to_value(&completion)?;
-    let result: CreateMessageResult = serde_json::from_value(
-        value
-            .get("result")
-            .ok_or_else(|| anyhow!("sampling response was an error"))?
-            .clone(),
-    )?;
+    let result: CreateMessageResult = match completion.payload {
+        ResponsePayload::Result(v) => serde_json::from_value(v)?,
+        ResponsePayload::Error(e) => return Err(anyhow!("sampling response was an error: {e:?}")),
+    };
     let text = match &result.content {
         Content::Text { text, .. } => text.clone(),
         _ => "<non-text completion>".to_string(),

@@ -398,27 +398,27 @@ impl<T: Transport> Client<T> {
     /// There is deliberately no independent public setter for these three
     /// fields — advertisement is derived, never independently assertable.
     fn derive_host_capabilities(&self, capabilities: &mut ClientCapabilities) {
-        use crate::types::capabilities::{
-            ElicitationCapabilities, RootsCapabilities, SamplingCapabilities,
-        };
-
-        if self.host_registry.sampling.is_none() {
-            capabilities.sampling = None;
-        } else if capabilities.sampling.is_none() {
-            capabilities.sampling = Some(SamplingCapabilities::default());
+        // Apply the HOST-05 rule to one capability field:
+        // - handler absent (`registered == false`) => force `None`,
+        // - handler present, caller left `None` => insert `Some(default())`,
+        // - handler present, caller configured detail => leave untouched.
+        fn sync_cap<C: Default>(slot: &mut Option<C>, registered: bool) {
+            if !registered {
+                *slot = None;
+            } else if slot.is_none() {
+                *slot = Some(C::default());
+            }
         }
 
-        if self.host_registry.elicitation.is_none() {
-            capabilities.elicitation = None;
-        } else if capabilities.elicitation.is_none() {
-            capabilities.elicitation = Some(ElicitationCapabilities::default());
-        }
-
-        if self.host_registry.roots.is_none() {
-            capabilities.roots = None;
-        } else if capabilities.roots.is_none() {
-            capabilities.roots = Some(RootsCapabilities::default());
-        }
+        sync_cap(
+            &mut capabilities.sampling,
+            self.host_registry.sampling.is_some(),
+        );
+        sync_cap(
+            &mut capabilities.elicitation,
+            self.host_registry.elicitation.is_some(),
+        );
+        sync_cap(&mut capabilities.roots, self.host_registry.roots.is_some());
     }
 
     /// Get server capabilities after initialization.
@@ -2231,7 +2231,21 @@ impl<T: Transport> Client<T> {
                 .server_capabilities
                 .as_ref()
                 .is_some_and(|c| c.sampling.is_some()),
-            _ => false,
+            _ => {
+                // A capability string reached here without a matching arm. This
+                // is a programming error (a new capability was wired without
+                // updating this match), not a server-side condition. Make it
+                // loud in tests/debug builds while preserving the conservative
+                // "not supported" behavior in release.
+                tracing::error!(
+                    "unknown capability string {method} — add an arm to assert_capability"
+                );
+                debug_assert!(
+                    false,
+                    "unknown capability string {method} — add an arm to assert_capability"
+                );
+                false
+            },
         };
 
         if has_capability {
@@ -2262,104 +2276,115 @@ impl<T: Transport> Client<T> {
         // Create middleware context
         let context = MiddlewareContext::with_request_id(request_id.to_string());
 
-        // Convert to JSONRPC request
-        let mut jsonrpc_request = create_request(request_id.clone(), request.clone());
+        // Everything after the `active_requests` registration runs inside this
+        // inner future so that EVERY error exit funnels through the single
+        // cleanup point below (WR-04). On any `Err` — middleware, outbound
+        // `send`, inbound `receive`, response middleware, or the host-dispatch
+        // reply `send` — the pending entry (and its oneshot cancel sender) is
+        // removed before the error propagates, so a `Client` that outlives a
+        // failed request never leaks the id or collides with stale state on a
+        // later reused id. The happy path still removes the entry inline when
+        // the matching response arrives.
+        let result = async {
+            // Convert to JSONRPC request
+            let mut jsonrpc_request = create_request(request_id.clone(), request.clone());
 
-        // Process request through middleware chain (read-only access)
-        self.middleware_chain
-            .read()
-            .await
-            .process_request_with_context(&mut jsonrpc_request, &context)
-            .await?;
+            // Process request through middleware chain (read-only access)
+            self.middleware_chain
+                .read()
+                .await
+                .process_request_with_context(&mut jsonrpc_request, &context)
+                .await?;
 
-        // Send request through transport
-        let message = crate::types::TransportMessage::Request {
-            id: request_id.clone(),
-            request,
-        };
+            // Send request through transport
+            let message = crate::types::TransportMessage::Request {
+                id: request_id.clone(),
+                request,
+            };
 
-        self.transport.write().await.send(message).await?;
+            self.transport.write().await.send(message).await?;
 
-        // Wait for response, dispatching any unsolicited notifications along the way
-        loop {
-            let response_message = self.transport.write().await.receive().await?;
+            // Wait for response, dispatching any unsolicited notifications along the way
+            loop {
+                let response_message = self.transport.write().await.receive().await?;
 
-            match response_message {
-                crate::types::TransportMessage::Response(mut response) => {
-                    // Remove from active requests
-                    self.active_requests.write().await.remove(&request_id);
-
-                    // Process response through middleware chain (read-only access)
-                    self.middleware_chain
-                        .read()
-                        .await
-                        .process_response_with_context(&mut response, &context)
-                        .await?;
-                    return Ok(response);
-                },
-                crate::types::TransportMessage::Notification(notification) => {
-                    // Unsolicited notification (e.g., progress, resource changes, SSE events)
-                    // Convert to JSONRPC notification for middleware processing
-                    use crate::shared::protocol_helpers::create_notification;
-                    let mut jsonrpc_notification = create_notification(notification.clone());
-
-                    // Process through protocol middleware chain
-                    let notif_context = MiddlewareContext::default();
-
-                    if let Err(e) = self
-                        .middleware_chain
-                        .write()
-                        .await
-                        .process_notification_with_context(
-                            &mut jsonrpc_notification,
-                            &notif_context,
-                        )
-                        .await
-                    {
-                        // Log error but don't terminate dispatcher - continue processing
-                        tracing::warn!(
-                            "Notification middleware processing failed for {}: {}",
-                            jsonrpc_notification.method,
-                            e
-                        );
-                    }
-
-                    // Forward to notification handler if registered
-                    if let Some(tx) = &self.notification_tx {
-                        // Clone the sender because send() requires &mut self
-                        #[allow(unused_mut)]
-                        let mut tx_clone = tx.clone();
-                        if let Err(e) = tx_clone.send(notification).await {
-                            tracing::debug!("Notification channel closed: {}", e);
-                        }
-                    }
-
-                    // Continue loop to wait for the actual response
-                },
-                crate::types::TransportMessage::Request { id, request } => {
-                    // Any inbound request at a client is server -> client by
-                    // definition (the MCP host direction). Answer it from the
-                    // registered host handlers, then keep waiting for the
-                    // original response (request_id stays pending).
-                    let response = self.dispatch_host_request(id, request).await;
-                    if let Err(e) = self
-                        .transport
-                        .write()
-                        .await
-                        .send(crate::types::TransportMessage::Response(response))
-                        .await
-                    {
-                        // Match the `Response` arm's cleanup: remove the
-                        // pending entry (and its oneshot cancel sender) before
-                        // surfacing the transport error, so a `Client` that
-                        // outlives this failed request does not leak the id or
-                        // collide with stale state on a later reused id.
+                match response_message {
+                    crate::types::TransportMessage::Response(mut response) => {
+                        // Remove from active requests (happy path)
                         self.active_requests.write().await.remove(&request_id);
-                        return Err(e);
-                    }
-                },
+
+                        // Process response through middleware chain (read-only access)
+                        self.middleware_chain
+                            .read()
+                            .await
+                            .process_response_with_context(&mut response, &context)
+                            .await?;
+                        return Ok(response);
+                    },
+                    crate::types::TransportMessage::Notification(notification) => {
+                        // Unsolicited notification (e.g., progress, resource changes, SSE events)
+                        // Convert to JSONRPC notification for middleware processing
+                        use crate::shared::protocol_helpers::create_notification;
+                        let mut jsonrpc_notification = create_notification(notification.clone());
+
+                        // Process through protocol middleware chain
+                        let notif_context = MiddlewareContext::default();
+
+                        if let Err(e) = self
+                            .middleware_chain
+                            .write()
+                            .await
+                            .process_notification_with_context(
+                                &mut jsonrpc_notification,
+                                &notif_context,
+                            )
+                            .await
+                        {
+                            // Log error but don't terminate dispatcher - continue processing
+                            tracing::warn!(
+                                "Notification middleware processing failed for {}: {}",
+                                jsonrpc_notification.method,
+                                e
+                            );
+                        }
+
+                        // Forward to notification handler if registered
+                        if let Some(tx) = &self.notification_tx {
+                            // Clone the sender because send() requires &mut self
+                            #[allow(unused_mut)]
+                            let mut tx_clone = tx.clone();
+                            if let Err(e) = tx_clone.send(notification).await {
+                                tracing::debug!("Notification channel closed: {}", e);
+                            }
+                        }
+
+                        // Continue loop to wait for the actual response
+                    },
+                    crate::types::TransportMessage::Request { id, request } => {
+                        // Any inbound request at a client is server -> client by
+                        // definition (the MCP host direction). Answer it from the
+                        // registered host handlers, then keep waiting for the
+                        // original response (request_id stays pending). A failed
+                        // reply `send` propagates via `?` and is cleaned up at
+                        // the single exit point below.
+                        let response = self.dispatch_host_request(id, request).await;
+                        self.transport
+                            .write()
+                            .await
+                            .send(crate::types::TransportMessage::Response(response))
+                            .await?;
+                    },
+                }
             }
         }
+        .await;
+
+        // Single WR-04 exit-cleanup invariant: remove the pending entry on any
+        // error path (the happy path already removed it above).
+        if result.is_err() {
+            self.active_requests.write().await.remove(&request_id);
+        }
+        result
     }
 
     /// Answer an inbound server -> client request from the host registry.
@@ -2386,7 +2411,11 @@ impl<T: Transport> Client<T> {
             HostRequestKind::Ping => {
                 crate::types::JSONRPCResponse::success(id, serde_json::json!({}))
             },
-            HostRequestKind::Unhandled => Self::host_method_not_found(id),
+            HostRequestKind::Unhandled => Self::host_error(
+                id,
+                crate::error::ErrorCode::METHOD_NOT_FOUND.as_i32(),
+                "Method not found",
+            ),
         }
     }
 
@@ -2418,35 +2447,60 @@ impl<T: Transport> Client<T> {
         id: RequestId,
         request: Request,
     ) -> crate::types::JSONRPCResponse {
-        let Some(handler) = self.host_registry.sampling.clone() else {
-            return Self::host_method_not_found(id);
+        let Some(handler) = &self.host_registry.sampling else {
+            return Self::host_error(
+                id,
+                crate::error::ErrorCode::METHOD_NOT_FOUND.as_i32(),
+                "Method not found",
+            );
         };
         let Some(params) = Self::extract_sampling_params(request) else {
-            return Self::host_method_not_found(id);
+            return Self::host_error(
+                id,
+                crate::error::ErrorCode::METHOD_NOT_FOUND.as_i32(),
+                "Method not found",
+            );
         };
 
         // (1) PREFLIGHT approval gate — runs BEFORE the handler so a denial
-        // prevents the LLM call entirely (no tokens billed). Owned params are
-        // cloned once up front so both the gate and the handler get their own.
-        if let Some(approval) = self.host_registry.approval.clone() {
+        // prevents the LLM call entirely (no tokens billed).
+        if let Some(approval) = &self.host_registry.approval {
             if let ApprovalDecision::Deny(reason) = approval(params.clone()).await {
                 tracing::warn!(%reason, "sampling denied by host preflight");
-                return Self::host_policy_denied(id);
+                return Self::host_error(
+                    id,
+                    crate::error::ErrorCode::INTERNAL_ERROR.as_i32(),
+                    "request denied by host policy",
+                );
             }
         }
 
+        // Capture an owned clone of the params for result review ONLY when a
+        // review callback is registered; otherwise the handler consumes
+        // `params` below with zero extra clones.
+        let review_params = self
+            .host_registry
+            .result_review
+            .is_some()
+            .then(|| params.clone());
+
         // (2) HANDLER — produce the completion.
-        let result = match handler.handle_create_message(params.clone()).await {
+        let result = match handler.handle_create_message(params).await {
             Ok(result) => result,
             Err(e) => return Self::host_handler_error(id, "sampling/createMessage", &e),
         };
 
         // (3) RESULT REVIEW — optional post-generation review (default
-        // pass-through when no callback is registered).
-        if let Some(review) = self.host_registry.result_review.clone() {
+        // pass-through when no callback is registered). `review_params` is
+        // `Some` exactly when `result_review` is `Some`, so the pair matches.
+        if let (Some(review), Some(params)) = (&self.host_registry.result_review, review_params) {
             if let ApprovalDecision::Deny(reason) = review(params, result.clone()).await {
                 tracing::warn!(%reason, "sampling denied by host result review");
-                return Self::host_policy_denied(id);
+                return Self::host_error(
+                    id,
+                    crate::error::ErrorCode::INTERNAL_ERROR.as_i32(),
+                    "request denied by host policy",
+                );
             }
         }
 
@@ -2459,13 +2513,30 @@ impl<T: Transport> Client<T> {
         id: RequestId,
         request: Request,
     ) -> crate::types::JSONRPCResponse {
-        let Some(handler) = self.host_registry.elicitation.clone() else {
-            return Self::host_method_not_found(id);
+        let Some(handler) = &self.host_registry.elicitation else {
+            return Self::host_error(
+                id,
+                crate::error::ErrorCode::METHOD_NOT_FOUND.as_i32(),
+                "Method not found",
+            );
         };
-        let Some(params) = Self::extract_elicitation_params(request) else {
-            return Self::host_method_not_found(id);
+        // Extract the single elicitation parse variant inline (server-side
+        // `elicitation/create`); anything else is not routable here.
+        let Request::Server(server) = request else {
+            return Self::host_error(
+                id,
+                crate::error::ErrorCode::METHOD_NOT_FOUND.as_i32(),
+                "Method not found",
+            );
         };
-        match handler.handle_elicitation(params).await {
+        let crate::types::ServerRequest::ElicitationCreate(params) = *server else {
+            return Self::host_error(
+                id,
+                crate::error::ErrorCode::METHOD_NOT_FOUND.as_i32(),
+                "Method not found",
+            );
+        };
+        match handler.handle_elicitation(*params).await {
             Ok(result) => Self::host_ok(id, &result),
             Err(e) => Self::host_handler_error(id, "elicitation/create", &e),
         }
@@ -2473,8 +2544,12 @@ impl<T: Transport> Client<T> {
 
     /// Answer a classified `roots/list` request from the registered provider.
     async fn dispatch_host_roots(&self, id: RequestId) -> crate::types::JSONRPCResponse {
-        let Some(provider) = self.host_registry.roots.clone() else {
-            return Self::host_method_not_found(id);
+        let Some(provider) = &self.host_registry.roots else {
+            return Self::host_error(
+                id,
+                crate::error::ErrorCode::METHOD_NOT_FOUND.as_i32(),
+                "Method not found",
+            );
         };
         match provider().await {
             Ok(result) => Self::host_ok(id, &result),
@@ -2497,78 +2572,52 @@ impl<T: Transport> Client<T> {
         }
     }
 
-    /// Extract [`ElicitRequestParams`] from an inbound elicitation request.
-    fn extract_elicitation_params(
-        request: Request,
-    ) -> Option<crate::types::elicitation::ElicitRequestParams> {
-        match request {
-            Request::Server(server) => match *server {
-                crate::types::ServerRequest::ElicitationCreate(params) => Some(*params),
-                _ => None,
-            },
-            Request::Client(_) => None,
-        }
-    }
-
     /// Build a successful host response, serializing the handler result.
     fn host_ok<S: serde::Serialize>(id: RequestId, value: &S) -> crate::types::JSONRPCResponse {
         match serde_json::to_value(value) {
             Ok(v) => crate::types::JSONRPCResponse::success(id, v),
             Err(e) => {
                 tracing::error!("failed to serialize host response: {e}");
-                Self::host_internal_error(id)
+                Self::host_error(
+                    id,
+                    crate::error::ErrorCode::INTERNAL_ERROR.as_i32(),
+                    "Internal error handling host request",
+                )
             },
         }
     }
 
-    /// `-32601` method-not-found response (keeps the connection alive).
-    fn host_method_not_found(id: RequestId) -> crate::types::JSONRPCResponse {
+    /// Build a JSON-RPC error response that keeps the connection alive.
+    ///
+    /// All host error responses are sanitized: only the generic `message`
+    /// passed here crosses the wire. Raw handler errors and policy-denial
+    /// reasons are logged locally by the caller (never forwarded to the remote
+    /// server), so local host policy is not leaked. Callers pass the
+    /// appropriate [`ErrorCode`](crate::error::ErrorCode) constant:
+    /// - `METHOD_NOT_FOUND` for a known request kind with no registered handler,
+    /// - `INTERNAL_ERROR` for a sanitized policy denial (a preflight or
+    ///   result-review callback returning [`ApprovalDecision::Deny`]) or a
+    ///   handler/provider/serialization failure.
+    fn host_error(id: RequestId, code: i32, message: &str) -> crate::types::JSONRPCResponse {
         crate::types::JSONRPCResponse::error(
             id,
-            crate::types::jsonrpc::JSONRPCError {
-                code: -32601,
-                message: "Method not found".to_string(),
-                data: None,
-            },
+            crate::types::jsonrpc::JSONRPCError::new(code, message),
         )
     }
 
-    /// Sanitized `-32603` policy-denial response. Used when a host preflight or
-    /// result-review callback returns [`ApprovalDecision::Deny`]. The raw deny
-    /// reason is logged locally by the caller; only this generic message crosses
-    /// the wire so local host policy is not leaked to the remote server.
-    fn host_policy_denied(id: RequestId) -> crate::types::JSONRPCResponse {
-        crate::types::JSONRPCResponse::error(
-            id,
-            crate::types::jsonrpc::JSONRPCError {
-                code: -32603,
-                message: "request denied by host policy".to_string(),
-                data: None,
-            },
-        )
-    }
-
-    /// Sanitized `-32603` internal-error response. The raw error is logged
-    /// locally by the caller; only a generic message crosses the wire.
-    fn host_internal_error(id: RequestId) -> crate::types::JSONRPCResponse {
-        crate::types::JSONRPCResponse::error(
-            id,
-            crate::types::jsonrpc::JSONRPCError {
-                code: -32603,
-                message: "Internal error handling host request".to_string(),
-                data: None,
-            },
-        )
-    }
-
-    /// Log a handler/provider failure locally and return a sanitized `-32603`.
+    /// Log a handler/provider failure locally and return a sanitized
+    /// `INTERNAL_ERROR`.
     fn host_handler_error(
         id: RequestId,
         method: &str,
         err: &Error,
     ) -> crate::types::JSONRPCResponse {
         tracing::error!("host handler for {method} failed: {err}");
-        Self::host_internal_error(id)
+        Self::host_error(
+            id,
+            crate::error::ErrorCode::INTERNAL_ERROR.as_i32(),
+            "Internal error handling host request",
+        )
     }
 
     /// Send a notification.
@@ -3715,6 +3764,32 @@ mod tests {
         assert!(
             !client.active_requests.read().await.contains_key(&req_id),
             "pending entry must be removed when the host response send fails"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_receive_failure_cleans_active_requests() {
+        // WR-04: a failure in the inbound `receive` (before any response
+        // arrives) must also funnel through the single exit-cleanup point, so
+        // the pending entry does not leak. `FailSecondSend` with no inbound
+        // message sends the outgoing request successfully (send #1) and then
+        // errors on `receive` ("no more messages").
+        let client = Client::new(FailSecondSend {
+            sends: Arc::new(Mutex::new(0)),
+            inbound: Arc::new(Mutex::new(None)),
+        });
+
+        let req_id = RequestId::from("outgoing-recv".to_string());
+        let request = Request::Client(Box::new(ClientRequest::Ping));
+        let result = client.send_request(req_id.clone(), request).await;
+
+        assert!(
+            result.is_err(),
+            "transport receive failure must propagate as an error"
+        );
+        assert!(
+            !client.active_requests.read().await.contains_key(&req_id),
+            "pending entry must be removed when the transport receive fails"
         );
     }
 
