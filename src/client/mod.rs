@@ -2448,13 +2448,15 @@ impl<T: Transport> Client<T> {
         id: RequestId,
         request: Request,
     ) -> crate::types::JSONRPCResponse {
-        let Some(handler) = &self.host_registry.sampling else {
+        // At least one sampling handler (legacy or WithTools) must be registered.
+        if self.host_registry.sampling.is_none() && self.host_registry.sampling_with_tools.is_none()
+        {
             return Self::host_error(
                 id,
                 crate::error::ErrorCode::METHOD_NOT_FOUND.as_i32(),
                 "Method not found",
             );
-        };
+        }
         let Some(params) = Self::extract_sampling_params(request) else {
             return Self::host_error(
                 id,
@@ -2463,8 +2465,10 @@ impl<T: Transport> Client<T> {
             );
         };
 
-        // (1) PREFLIGHT approval gate — runs BEFORE the handler so a denial
-        // prevents the LLM call entirely (no tokens billed).
+        // (1) PREFLIGHT approval gate — runs BEFORE any handler so a denial
+        // prevents the LLM call entirely (no tokens billed). It operates on the
+        // request params, so it is IDENTICAL for the legacy and WithTools paths
+        // (the wallet gate is never weakened by the WithTools surface).
         if let Some(approval) = &self.host_registry.approval {
             if let ApprovalDecision::Deny(reason) = approval(params.clone()).await {
                 tracing::warn!(%reason, "sampling denied by host preflight");
@@ -2476,6 +2480,28 @@ impl<T: Transport> Client<T> {
             }
         }
 
+        // Prefer the tool-aware handler; otherwise the legacy single-content one.
+        // A client that registered only a legacy handler keeps its EXACT current
+        // wire behavior (serializes a `CreateMessageResult`).
+        if self.host_registry.sampling_with_tools.is_some() {
+            self.answer_sampling_with_tools(id, params).await
+        } else {
+            self.answer_sampling_legacy(id, params).await
+        }
+    }
+
+    /// Legacy single-content sampling answer path (unchanged behavior).
+    async fn answer_sampling_legacy(
+        &self,
+        id: RequestId,
+        params: CreateMessageParams,
+    ) -> crate::types::JSONRPCResponse {
+        let handler = self
+            .host_registry
+            .sampling
+            .as_ref()
+            .expect("caller checked a legacy handler is present");
+
         // Capture an owned clone of the params for result review ONLY when a
         // review callback is registered; otherwise the handler consumes
         // `params` below with zero extra clones.
@@ -2485,15 +2511,13 @@ impl<T: Transport> Client<T> {
             .is_some()
             .then(|| params.clone());
 
-        // (2) HANDLER — produce the completion.
         let result = match handler.handle_create_message(params).await {
             Ok(result) => result,
             Err(e) => return Self::host_handler_error(id, "sampling/createMessage", &e),
         };
 
-        // (3) RESULT REVIEW — optional post-generation review (default
-        // pass-through when no callback is registered). `review_params` is
-        // `Some` exactly when `result_review` is `Some`, so the pair matches.
+        // Optional post-generation review (default pass-through). `review_params`
+        // is `Some` exactly when `result_review` is `Some`, so the pair matches.
         if let (Some(review), Some(params)) = (&self.host_registry.result_review, review_params) {
             if let ApprovalDecision::Deny(reason) = review(params, result.clone()).await {
                 tracing::warn!(%reason, "sampling denied by host result review");
@@ -2506,6 +2530,81 @@ impl<T: Transport> Client<T> {
         }
 
         Self::host_ok(id, &result)
+    }
+
+    /// Tool-aware (`WithTools`) sampling answer path.
+    ///
+    /// The preflight gate has already run in `dispatch_host_sampling`. The
+    /// optional result-review gate is NOT weakened: when a reviewer is
+    /// registered, the `WithTools` completion is projected to a single-content
+    /// [`CreateMessageResult`] (tool blocks rendered as a text summary) so the
+    /// reviewer still sees the completion and can deny it. The returned wire
+    /// value remains the full `CreateMessageResultWithTools`.
+    async fn answer_sampling_with_tools(
+        &self,
+        id: RequestId,
+        params: CreateMessageParams,
+    ) -> crate::types::JSONRPCResponse {
+        let handler = self
+            .host_registry
+            .sampling_with_tools
+            .as_ref()
+            .expect("caller checked a WithTools handler is present");
+
+        let review_params = self
+            .host_registry
+            .result_review
+            .is_some()
+            .then(|| params.clone());
+
+        let result = match handler.handle_create_message_with_tools(params).await {
+            Ok(result) => result,
+            Err(e) => return Self::host_handler_error(id, "sampling/createMessage", &e),
+        };
+
+        if let (Some(review), Some(params)) = (&self.host_registry.result_review, review_params) {
+            let projected = Self::project_with_tools_for_review(&result);
+            if let ApprovalDecision::Deny(reason) = review(params, projected).await {
+                tracing::warn!(%reason, "sampling denied by host result review");
+                return Self::host_error(
+                    id,
+                    crate::error::ErrorCode::INTERNAL_ERROR.as_i32(),
+                    "request denied by host policy",
+                );
+            }
+        }
+
+        Self::host_ok(id, &result)
+    }
+
+    /// Project a [`CreateMessageResultWithTools`] into a single-content
+    /// [`CreateMessageResult`] for the (optional) result-review gate. Tool
+    /// blocks have no single-`Content` counterpart, so they are rendered as a
+    /// short text marker; the reviewer still sees enough to allow or deny.
+    fn project_with_tools_for_review(
+        result: &crate::types::sampling::CreateMessageResultWithTools,
+    ) -> crate::types::sampling::CreateMessageResult {
+        use crate::types::sampling::SamplingMessageContent as Smc;
+        let text = result
+            .content
+            .iter()
+            .map(|c| match c {
+                Smc::Text { text, .. } => text.clone(),
+                Smc::Image { .. } => "[image]".to_string(),
+                Smc::Audio { .. } => "[audio]".to_string(),
+                Smc::ToolUse { name, id, .. } => format!("[tool_use {name} {id}]"),
+                Smc::ToolResult { tool_use_id, .. } => format!("[tool_result {tool_use_id}]"),
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
+        let mut cmr = crate::types::sampling::CreateMessageResult::new(
+            crate::types::Content::text(text),
+            &result.model,
+        );
+        if let Some(reason) = &result.stop_reason {
+            cmr = cmr.with_stop_reason(reason.clone());
+        }
+        cmr
     }
 
     /// Route a classified elicitation request to the registered host handler.
@@ -2817,6 +2916,27 @@ impl<T: Transport> ClientBuilder<T> {
     /// ```
     pub fn on_sampling(mut self, handler: impl host::HostSamplingHandler + 'static) -> Self {
         self.host_registry.sampling = Some(Arc::new(handler));
+        self
+    }
+
+    /// Register a **tool-aware** host sampling handler answering inbound
+    /// `sampling/createMessage` requests with a
+    /// [`CreateMessageResultWithTools`](crate::types::sampling::CreateMessageResultWithTools).
+    ///
+    /// This is the `WithTools` counterpart of [`ClientBuilder::on_sampling`]: the
+    /// handler can return `tool_use` / `tool_result` content blocks that the
+    /// legacy single-`Content` result cannot express (MCP 2025-11-25). When both
+    /// a legacy and a `WithTools` handler are registered, the `WithTools` handler is
+    /// preferred. The preflight approval gate
+    /// ([`ClientBuilder::on_sampling_approval`]) still runs unchanged; the
+    /// optional result-review gate sees a single-content projection of the
+    /// completion (tool blocks rendered as a text marker) so it is never
+    /// silently bypassed.
+    pub fn on_sampling_with_tools(
+        mut self,
+        handler: impl host::HostSamplingHandlerWithTools + 'static,
+    ) -> Self {
+        self.host_registry.sampling_with_tools = Some(Arc::new(handler));
         self
     }
 
