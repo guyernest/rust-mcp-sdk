@@ -1,7 +1,7 @@
 //! The conversation-store seam — load/save resumable run state.
 
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use pmcp::types::sampling::SamplingMessage;
@@ -93,6 +93,24 @@ pub trait ConversationStore: Send + Sync {
     async fn load(&self, run_id: &str) -> Result<Option<RunState>, StoreError>;
     /// Persist `state` for `run_id`, overwriting any prior state.
     async fn save(&self, run_id: &str, state: &RunState) -> Result<(), StoreError>;
+}
+
+/// Forward the seam through a shared `Arc<dyn ConversationStore>`.
+///
+/// The 108-06 adapter shares ONE conversation store across agent runs (so a
+/// `run_id` can resume prior history — D-12 continuity) while the generic
+/// [`AgentEngine`](crate::iteration::AgentEngine) takes its store by value. This
+/// blanket impl lets the engine be parameterised over an erased
+/// `Arc<dyn ConversationStore>`.
+#[async_trait]
+impl ConversationStore for Arc<dyn ConversationStore> {
+    async fn load(&self, run_id: &str) -> Result<Option<RunState>, StoreError> {
+        (**self).load(run_id).await
+    }
+
+    async fn save(&self, run_id: &str, state: &RunState) -> Result<(), StoreError> {
+        (**self).save(run_id, state).await
+    }
 }
 
 /// In-memory [`ConversationStore`] for laptops and tests.
