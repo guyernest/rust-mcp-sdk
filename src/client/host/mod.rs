@@ -37,7 +37,9 @@ use std::sync::Arc;
 pub use elicitation::HostElicitationHandler;
 pub use roots::RootsProvider;
 pub use sampling::{
-    ApprovalDecision, HostSamplingHandler, PreflightApproval, SamplingResultReview,
+    lift_content_to_sampling, lift_result_to_with_tools, ApprovalDecision, HostSamplingHandler,
+    HostSamplingHandlerWithTools, LegacyHostSamplingAdapter, PreflightApproval,
+    SamplingResultReview,
 };
 
 /// Immutable set of host handlers a [`Client`](crate::Client) answers with.
@@ -48,6 +50,10 @@ pub use sampling::{
 #[derive(Clone, Default)]
 pub struct ClientHostRegistry {
     pub(crate) sampling: Option<Arc<dyn HostSamplingHandler>>,
+    /// Tool-aware sampling handler (MCP 2025-11-25). Preferred over `sampling`
+    /// when both are present; when only `sampling` is set, a `WithTools` code path
+    /// adapts it via [`LegacyHostSamplingAdapter`].
+    pub(crate) sampling_with_tools: Option<Arc<dyn HostSamplingHandlerWithTools>>,
     pub(crate) elicitation: Option<Arc<dyn HostElicitationHandler>>,
     pub(crate) roots: Option<RootsProvider>,
     pub(crate) approval: Option<PreflightApproval>,
@@ -58,6 +64,10 @@ impl std::fmt::Debug for ClientHostRegistry {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ClientHostRegistry")
             .field("has_sampling", &self.sampling.is_some())
+            .field(
+                "has_sampling_with_tools",
+                &self.sampling_with_tools.is_some(),
+            )
             .field("has_elicitation", &self.elicitation.is_some())
             .field("has_roots", &self.roots.is_some())
             .field("has_approval", &self.approval.is_some())

@@ -22,7 +22,9 @@ use crate::error::{Error, ErrorCode, Result};
 use crate::server::roots::ListRootsResult;
 use crate::server::server_request_dispatcher::ServerRequestDispatcher;
 use crate::shared::peer::PeerHandle;
-use crate::types::sampling::{CreateMessageParams, CreateMessageResult};
+use crate::types::sampling::{
+    CreateMessageParams, CreateMessageResult, CreateMessageResultWithTools,
+};
 use crate::types::{ProgressToken, ServerRequest};
 
 /// [`PeerHandle`] that delegates outbound RPCs to a shared
@@ -63,6 +65,34 @@ impl PeerHandle for DispatchPeerHandle {
                 format!("Invalid sample response: {e}"),
             )
         })
+    }
+
+    async fn sample_with_tools(
+        &self,
+        params: CreateMessageParams,
+    ) -> Result<CreateMessageResultWithTools> {
+        // Dispatches the SAME `sampling/createMessage` request as `sample`; the
+        // hosting client answers with either a `CreateMessageResultWithTools`
+        // (tool-aware host) or a legacy `CreateMessageResult` (older host). We
+        // decode the WithTools shape first, then fall back to decoding the
+        // legacy single-content shape and lifting it — so an older client can
+        // never crash the tool call (Gemini legacy-decode fallback).
+        let value = self
+            .dispatcher
+            .dispatch(ServerRequest::CreateMessage(Box::new(params)))
+            .await?;
+        if let Ok(with_tools) =
+            serde_json::from_value::<CreateMessageResultWithTools>(value.clone())
+        {
+            return Ok(with_tools);
+        }
+        let legacy = serde_json::from_value::<CreateMessageResult>(value).map_err(|e| {
+            Error::protocol(
+                ErrorCode::INTERNAL_ERROR,
+                format!("Invalid sample_with_tools response: {e}"),
+            )
+        })?;
+        Ok(CreateMessageResultWithTools::from_single(legacy))
     }
 
     async fn list_roots(&self) -> Result<ListRootsResult> {
@@ -152,5 +182,92 @@ mod tests {
             "timeout must fire within 500ms (was {:?})",
             elapsed
         );
+    }
+
+    fn build_dispatcher_with_long_timeout() -> (
+        Arc<ServerRequestDispatcher>,
+        mpsc::Receiver<(String, ServerRequest)>,
+    ) {
+        let (tx, rx) = mpsc::channel::<(String, ServerRequest)>(4);
+        let dispatcher = Arc::new(
+            ServerRequestDispatcher::new_with_channel(tx).with_timeout(Duration::from_secs(2)),
+        );
+        (dispatcher, rx)
+    }
+
+    #[tokio::test]
+    async fn test_sample_with_tools_decodes_with_tools_response() {
+        let (dispatcher, mut rx) = build_dispatcher_with_long_timeout();
+        let peer = DispatchPeerHandle::new(dispatcher.clone());
+
+        let fut = tokio::spawn(async move {
+            peer.sample_with_tools(CreateMessageParams::new(Vec::new()))
+                .await
+        });
+
+        let (cid, _req) = rx.recv().await.expect("outbound dispatch");
+        // A tool-aware client answers with a CreateMessageResultWithTools that
+        // carries a tool_use block.
+        let response = serde_json::json!({
+            "model": "host-model",
+            "role": "assistant",
+            "content": [
+                { "type": "tool_use", "name": "search", "id": "call-1", "input": {"q": "rust"} }
+            ]
+        });
+        dispatcher
+            .handle_response(&cid, response)
+            .await
+            .expect("handle_response");
+
+        let result = fut.await.unwrap().expect("sample_with_tools succeeds");
+        assert_eq!(result.model, "host-model");
+        assert_eq!(result.content.len(), 1);
+        match &result.content[0] {
+            crate::types::sampling::SamplingMessageContent::ToolUse { name, id, .. } => {
+                assert_eq!(name, "search");
+                assert_eq!(id, "call-1");
+            },
+            other => panic!("tool_use block must survive decode, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_sample_with_tools_falls_back_to_legacy_result() {
+        let (dispatcher, mut rx) = build_dispatcher_with_long_timeout();
+        let peer = DispatchPeerHandle::new(dispatcher.clone());
+
+        let fut = tokio::spawn(async move {
+            peer.sample_with_tools(CreateMessageParams::new(Vec::new()))
+                .await
+        });
+
+        let (cid, _req) = rx.recv().await.expect("outbound dispatch");
+        // An OLDER client answers with a legacy single-content CreateMessageResult
+        // (content is an object, no `role`) — must NOT crash the tool call.
+        let response = serde_json::json!({
+            "content": { "type": "text", "text": "legacy answer" },
+            "model": "old-model",
+            "stopReason": "endTurn"
+        });
+        dispatcher
+            .handle_response(&cid, response)
+            .await
+            .expect("handle_response");
+
+        let result = fut.await.unwrap().expect("legacy fallback succeeds");
+        assert_eq!(result.model, "old-model");
+        assert_eq!(result.stop_reason.as_deref(), Some("endTurn"));
+        assert_eq!(
+            result.content.len(),
+            1,
+            "single content lifts to one element"
+        );
+        match &result.content[0] {
+            crate::types::sampling::SamplingMessageContent::Text { text, .. } => {
+                assert_eq!(text, "legacy answer");
+            },
+            other => panic!("legacy content must lift to Text, got {other:?}"),
+        }
     }
 }
