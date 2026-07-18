@@ -4,13 +4,13 @@ milestone: v2.4
 milestone_name: Agents & Teams — SDK Extraction
 status: executing
 stopped_at: Completed 109-02-PLAN.md
-last_updated: "2026-07-18T22:59:11.297Z"
+last_updated: "2026-07-18T23:18:43.165Z"
 last_activity: 2026-07-18
 progress:
   total_phases: 63
   completed_phases: 3
   total_plans: 21
-  completed_plans: 15
+  completed_plans: 17
   percent: 5
 ---
 
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-07-17) · .planning/ROADMAP.md (v2.4 mil
 ## Current Position
 
 Phase: 109 (team-reference-servers) — EXECUTING
-Plan: 5 of 9
+Plan: 6 of 9
 Status: Ready to execute
 Last activity: 2026-07-18
 
@@ -68,6 +68,8 @@ Decisions are logged in PROJECT.md Key Decisions table. Decisions framing this m
 - [Phase ?]: 109-01: MemberId identity IS the ComponentRef (name@version); PackageResolver + MemberTaskForwarding seams landed atomically; contract rev'd to v1.1.0 with io.modelcontextprotocol/related-task
 - [Phase ?]: team-fs: fs__complete_task lives in the server layer (custom ToolHandler with ToolOutput::Result under RELATED_TASK_META_KEY), NOT the TeamFsBackend trait — task completion is protocol behavior, not storage
 - [Phase ?]: team-fs local backend explicitly REJECTS symlink components (documented dev-backend TOCTOU stance); percent-encoded file:// URLs via a tested helper, not format!
+- [Phase ?]: 109-04: approval-mcp splits observable lifecycle (InMemoryTaskStore) from approval-domain state (ApprovalRepository); service-owned resolution from any client (D-10)
+- [Phase ?]: 109-04: double-resolve REJECTED via AlreadyResolved (first writer verdict preserved); decision validated against original option set under one mutex
 
 ### Pending Todos
 
@@ -103,7 +105,7 @@ Items deferred by design for this milestone (design §7 / REQUIREMENTS v2):
 
 ## Session Continuity
 
-Last session: 2026-07-18T22:59:05.360Z
+Last session: 2026-07-18T23:13:34.111Z
 Stopped at: Completed 109-02-PLAN.md
 Resume file: None
 
@@ -116,3 +118,4 @@ Resume file: None
 | Phase 109 P01 | 10min | 4 tasks | 38 files |
 | Phase 109 P02 | 35min | 2 tasks | 5 files |
 | Phase 109 P03 | 30min | 2 tasks | 5 files |
+| Phase 109 P04 | 25min | 2 tasks | 4 files |
