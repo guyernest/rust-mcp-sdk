@@ -1,0 +1,20 @@
+{
+  "schema_version": "1",
+  "case_id": "team-mcp.team_mcp__reviewer.negative-excessive-depth",
+  "server": "team-mcp",
+  "request": {
+    "name": "team_mcp__reviewer",
+    "arguments": { "message": "hi" },
+    "_meta": { "x-pmcp-team-depth": "99" }
+  },
+  "expect": {
+    "outcome": "error",
+    "match": "subset",
+    "response": {
+      "error": {
+        "code": -32602,
+        "message": "excessive team depth: 99 exceeds max_team_depth"
+      }
+    }
+  }
+}

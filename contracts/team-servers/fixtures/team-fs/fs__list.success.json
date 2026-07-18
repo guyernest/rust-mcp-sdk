@@ -1,0 +1,20 @@
+{
+  "schema_version": "1",
+  "case_id": "team-fs.fs__list.positive-read-only",
+  "server": "team-fs",
+  "request": {
+    "name": "fs__list",
+    "arguments": { "path": "." }
+  },
+  "expect": {
+    "outcome": "success",
+    "match": "subset",
+    "response": {
+      "content": [
+        { "type": "text", "text": "README.md\nsrc/" }
+      ],
+      "isError": false,
+      "_note": "fs__list is advertised with annotations.read_only_hint == true"
+    }
+  }
+}

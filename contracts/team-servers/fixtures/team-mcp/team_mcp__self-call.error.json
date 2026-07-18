@@ -1,0 +1,21 @@
+{
+  "schema_version": "1",
+  "case_id": "team-mcp.team_mcp__self.negative-self-call",
+  "server": "team-mcp",
+  "request": {
+    "name": "team_mcp__self",
+    "arguments": { "message": "loop" },
+    "_meta": { "x-pmcp-team-depth": "1", "caller_member_id": "member-7" }
+  },
+  "expect": {
+    "outcome": "error",
+    "match": "subset",
+    "response": {
+      "error": {
+        "code": -32602,
+        "message": "self-call rejected: target member id equals caller member id (member-7)"
+      },
+      "_note": "self-call guard compares stable member ids, not display names"
+    }
+  }
+}
