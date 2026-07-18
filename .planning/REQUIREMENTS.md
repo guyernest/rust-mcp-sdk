@@ -39,8 +39,8 @@
 - [ ] **TEAM-02**: team-fs reference serves the `fs__*` contract over a `TeamFsBackend` trait with a local-directory dev backend
 - [ ] **TEAM-03**: approval-mcp reference serves the approval contract over an in-memory `TaskStore` with console (dev) and webhook (CI) approval channels
 - [ ] **TEAM-04**: mem-mcp reference serves the `mem__*` contract over a `TeamMemoryBackend` trait with a keyword/BM25 in-memory dev backend (no embedder dependency)
-- [ ] **TEAM-05**: team-mcp reference composes agent-as-server members as per-member tools returning `ToolOutput::Result` with top-level `related_task` `_meta` (the migration template replacing the platform's raw-JSON-RPC bypass)
-- [ ] **TEAM-06**: Conformance tests prove each reference server's tool surface matches the PKG-03 contracts (same fixtures the platform servers can run)
+- [x] **TEAM-05**: team-mcp reference composes agent-as-server members as per-member tools returning `ToolOutput::Result` with top-level `related_task` `_meta` (the migration template replacing the platform's raw-JSON-RPC bypass)
+- [x] **TEAM-06**: Conformance tests prove each reference server's tool surface matches the PKG-03 contracts (same fixtures the platform servers can run)
 
 ### CLI (CLI)
 
@@ -101,8 +101,8 @@
 | TEAM-02 | Phase 109 | Pending |
 | TEAM-03 | Phase 109 | Pending |
 | TEAM-04 | Phase 109 | Pending |
-| TEAM-05 | Phase 109 | Pending |
-| TEAM-06 | Phase 109 | Pending |
+| TEAM-05 | Phase 109 | Complete |
+| TEAM-06 | Phase 109 | Complete |
 | CLI-01 | Phase 110 | Pending |
 | CLI-02 | Phase 110 | Pending |
 | CLI-03 | Phase 110 | Pending |

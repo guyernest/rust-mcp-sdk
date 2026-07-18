@@ -2125,20 +2125,24 @@ Plans:
 **Plans**: 9 plans in 4 waves (replanned 2026-07-18 from cross-AI review — added prerequisite pmcp-core `_meta` enablement plan 109-00)
 
 Wave 1 (parallel):
-- [ ] 109-00-PLAN.md — pmcp-core `_meta` enablement (prerequisite): extensible `RequestMeta` + `RequestHandlerExtra.request_meta` + `call_tool_with_task_and_meta`/`call_tool_with_meta` (unblocks D-14 guard `_meta`; 109-05/07 depend on it)
+
+- [x] 109-00-PLAN.md — pmcp-core `_meta` enablement (prerequisite): extensible `RequestMeta` + `RequestHandlerExtra.request_meta` + `call_tool_with_task_and_meta`/`call_tool_with_meta` (unblocks D-14 guard `_meta`; 109-05/07 depend on it)
 - [ ] 109-01-PLAN.md — Crate scaffold + documented module skeleton + exported transport + PackageResolver/MemberId seams + `derive_attachment` (atomic, D-05/D-07) + additive contract rev to v1.1.0 with CORRECT related-task key + contract-first binding.yaml skeleton (D-12/D-14/D-18)
 
 Wave 2 (parallel):
+
 - [ ] 109-02-PLAN.md — team-fs: `TeamFsBackend` + `LocalDirBackend` (pure lexical containment, symlink reject, percent-encoded file://, review/ sync) + HTTP-first binary (TEAM-02)
 - [ ] 109-03-PLAN.md — mem-mcp: `TeamMemoryBackend` + numerically-safe zero-dep BM25 (L_avg==0 short-circuit, IDF floor) + deterministic ids + HTTP-first binary (TEAM-04)
 - [ ] 109-04-PLAN.md — approval-mcp: InMemoryTaskStore + ApprovalRepository (service-owner, atomic option-validated resolve) + bounded-timeout notify-only channels + subject-ref linkage + HTTP-first binary (TEAM-03)
 - [ ] 109-05-PLAN.md — team-mcp: task+`_meta`-forwarding member hop (explicit Task/Result forwarding contract) → related-task under `RELATED_TASK_META_KEY`, MemberId guards, PackageResolver, injected-override LLM, fuzz, HTTP-first binary (TEAM-05; depends on 109-00)
 
 Wave 3 (parallel):
+
 - [ ] 109-06-PLAN.md — In-process `TeamRuntimeBuilder`/`TeamRuntime` (all seams, cfg-gated + fail-closed attachment, transactional startup) + "small team, one process" tests (D-01/D-04/D-06/D-15, TEAM-01)
 - [ ] 109-07-PLAN.md — Exportable wire-level conformance runner over a `ConformanceTarget` (in-mem+HTTP) + fixture schema v2 (deterministic ids, scenarios, expected schemas) + every-tool/every-guard fixtures + negative harness (TEAM-06, D-17/D-19/D-20; depends on 109-00)
 
 Wave 4:
+
 - [ ] 109-08-PLAN.md — finalize binding.yaml + correct `pmat comply check --path .` (fail-closed comply-ci in CI, graceful comply locally) + doc-review E2E example + all-four subprocess smoke via SDK stdio client (D-16/D-18)
 
 ### Phase 110: cargo-pmcp Agent & Team Verbs
@@ -2177,6 +2181,6 @@ Wave 4:
 | 106. Client Host Surface | 3/3 | Complete    | 2026-07-18 |
 | 107. Contracts & Package Format | 3/3 | Complete    | 2026-07-18 |
 | 108. `pmcp-agent` Loop Crate | 6/6 | Complete   | 2026-07-18 |
-| 109. Team Reference Servers | 0/TBD | Not started | - |
+| 109. Team Reference Servers | 1/9 | In Progress|  |
 | 110. cargo-pmcp Agent & Team Verbs | 0/TBD | Not started | - |
 | 111. Docs in Three Shapes + Examples | 0/TBD | Not started | - |

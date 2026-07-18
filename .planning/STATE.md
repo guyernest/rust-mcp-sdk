@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v2.4
 milestone_name: Agents & Teams — SDK Extraction
 status: executing
-stopped_at: Phase 109 context gathered
-last_updated: "2026-07-18T21:44:46.518Z"
-last_activity: 2026-07-18 -- Phase 109 planning complete
+stopped_at: Completed 109-00-PLAN.md
+last_updated: "2026-07-18T22:12:58.388Z"
+last_activity: 2026-07-18
 progress:
   total_phases: 63
   completed_phases: 3
   total_plans: 21
-  completed_plans: 12
+  completed_plans: 13
   percent: 5
 ---
 
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-07-17) · .planning/ROADMAP.md (v2.4 milestone, Phases 106-111) · docs/design/agents-teams-sdk-extraction-plan.md (approved)
 
 **Core value:** The PMCP SDK is the reference implementation for agents-as-MCP-clients and agent teams — one open agent loop and one portable package format that run identically on a laptop, any deploy target, and pmcp.run (contracts + reference implementations in the SDK; operation + scale on the platform).
-**Current focus:** Phase 108 — pmcp-agent-loop-crate
+**Current focus:** Phase 109 — team-reference-servers
 
 ## Current Position
 
-Phase: 108 — COMPLETE
-Plan: 1 of 6
+Phase: 109 (team-reference-servers) — EXECUTING
+Plan: 2 of 9
 Status: Ready to execute
-Last activity: 2026-07-18 -- Phase 109 planning complete
+Last activity: 2026-07-18
 
 ## v2.4 Phase Plan (6 phases, 31 requirements)
 
@@ -62,6 +62,8 @@ Decisions are logged in PROJECT.md Key Decisions table. Decisions framing this m
 - Sampling-first, not sampling-only: `SamplingSource` (zero-dep) first-class; `OpenAiCompatSource` + `AnthropicSource` feature-gated; three sources maximum, the trait is the extension point.
 - The trait seams double as durability seams — the loop stays pure/replay-safe (mirrors the 2.13.0 `poll_decision` non-determinism-inside-the-step design).
 - Team-tool contracts as provable-contracts YAML (house convention), namespaced provisional PMCP extensions.
+- [Phase ?]: 109-00: guard/namespaced state travels as _meta (locked D-14 route A), carried as raw JSON on RequestHandlerExtra; not smuggled in tool arguments
+- [Phase ?]: 109-00: per-request handler fields wired in BOTH core.rs and server/mod.rs dispatch sites (+ wasm mirror parity)
 
 ### Pending Todos
 
@@ -97,12 +99,13 @@ Items deferred by design for this milestone (design §7 / REQUIREMENTS v2):
 
 ## Session Continuity
 
-Last session: 2026-07-18T19:28:29.820Z
-Stopped at: Phase 109 context gathered
-Resume file: .planning/phases/109-team-reference-servers/109-CONTEXT.md
+Last session: 2026-07-18T22:12:58.383Z
+Stopped at: Completed 109-00-PLAN.md
+Resume file: None
 
 ## Performance Metrics
 
 | Phase | Plan | Duration | Notes |
 |-------|------|----------|-------|
 | (v2.4 phases not yet planned) | — | — | — |
+| Phase 109 P00 | 25min | 2 tasks | 7 files |
