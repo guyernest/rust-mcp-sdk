@@ -6,6 +6,15 @@
 //! endpoint map impls land in plan 108-05 (resolver.rs / endpoint.rs in this
 //! module).
 
+mod endpoint;
+mod resolver;
+
+pub use endpoint::build_endpoint_map;
+pub use resolver::{
+    resolve_agent, EnvVarResolver, ProgrammaticBuilder, RedactedSecret, ResolveError,
+    ResolvedValue, SlotResolver,
+};
+
 use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
