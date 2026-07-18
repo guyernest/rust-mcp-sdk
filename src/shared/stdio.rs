@@ -30,6 +30,17 @@ use tokio::sync::Mutex;
 #[derive(Debug)]
 pub struct StdioTransport {
     stdin: Mutex<BufReader<tokio::io::Stdin>>,
+    /// Persistent partial-line buffer for cancel-safe `receive()`.
+    ///
+    /// `AsyncBufReadExt::read_line` is NOT cancellation-safe: its future
+    /// accumulates bytes in an INTERNAL scratch `Vec` and only flushes them to
+    /// the destination string on completion, so a dropped receive future loses
+    /// everything it consumed — corrupting the next JSON-RPC line. We instead
+    /// use `read_until(b'\n', ..)`, which appends directly into THIS persistent
+    /// buffer (behind the same lock as `stdin`). A dropped read therefore
+    /// retains its consumed bytes and the next call resumes appending until a
+    /// full newline-delimited line is available.
+    partial: Mutex<Vec<u8>>,
     stdout: Mutex<tokio::io::Stdout>,
     closed: std::sync::atomic::AtomicBool,
 }
@@ -48,6 +59,7 @@ impl StdioTransport {
     pub fn new() -> Self {
         Self {
             stdin: Mutex::new(BufReader::new(tokio::io::stdin())),
+            partial: Mutex::new(Vec::new()),
             stdout: Mutex::new(tokio::io::stdout()),
             closed: std::sync::atomic::AtomicBool::new(false),
         }
@@ -141,36 +153,79 @@ impl StdioTransport {
         Ok(())
     }
 
-    /// Read a line from stdin (newline-delimited JSON per MCP spec)
+    /// Read a line from stdin (newline-delimited JSON per MCP spec).
+    ///
+    /// Cancel-safe: reads into the persistent [`Self::partial`] buffer via
+    /// [`Self::read_cancel_safe_line`], so a dropped receive future never loses
+    /// consumed bytes.
     async fn read_line(&self) -> Result<Vec<u8>> {
+        // Hold both guards for the whole read so the persistent buffer and the
+        // buffered reader advance atomically. A future dropped while awaiting
+        // more input releases these guards WITHOUT discarding `partial`.
         let mut stdin = self.stdin.lock().await;
-        let mut line = String::new();
+        let mut partial = self.partial.lock().await;
 
-        let bytes_read = stdin
-            .read_line(&mut line)
-            .await
-            .map_err(TransportError::from)?;
-
-        if bytes_read == 0 {
-            // EOF reached
-            drop(stdin);
+        if let Some(bytes) = Self::read_cancel_safe_line(&mut stdin, &mut partial).await? {
+            Ok(bytes)
+        } else {
+            // EOF reached.
             self.closed
                 .store(true, std::sync::atomic::Ordering::Release);
-            return Err(TransportError::ConnectionClosed.into());
+            Err(TransportError::ConnectionClosed.into())
         }
+    }
 
-        // Remove trailing newline and return as bytes
-        let line = line.trim_end_matches('\n').trim_end_matches('\r');
+    /// Cancel-safe newline-delimited line reader over any async buffered reader.
+    ///
+    /// Appends into the caller-owned persistent `partial` buffer via
+    /// `read_until(b'\n', ..)` (which writes directly into the buffer, unlike
+    /// `read_line`), so a dropped future retains already-consumed bytes; the
+    /// next call resumes appending until a complete `\n`-delimited line is
+    /// available. Returns:
+    /// - `Ok(Some(bytes))` — one complete, non-empty line (trailing `\r`/`\n`
+    ///   stripped);
+    /// - `Ok(None)` — EOF with no further complete line;
+    /// - `Err(InvalidMessage)` — an empty line (skipped per the MCP spec).
+    ///
+    /// Generic over the reader so the drop-mid-read cancel-safety property can
+    /// be exercised in tests against an in-memory duplex pipe.
+    async fn read_cancel_safe_line<R>(
+        reader: &mut BufReader<R>,
+        partial: &mut Vec<u8>,
+    ) -> Result<Option<Vec<u8>>>
+    where
+        R: tokio::io::AsyncRead + Unpin,
+    {
+        loop {
+            // A complete line may already be buffered from a prior (possibly
+            // cancelled) call — extract it before reading more.
+            if let Some(idx) = partial.iter().position(|&b| b == b'\n') {
+                let mut line: Vec<u8> = partial.drain(..=idx).collect();
+                // Strip the trailing '\n' and an optional '\r'.
+                line.pop();
+                if line.last() == Some(&b'\r') {
+                    line.pop();
+                }
+                if line.is_empty() {
+                    // Skip empty lines (per MCP spec: newline-delimited frames).
+                    return Err(
+                        TransportError::InvalidMessage("Empty line received".to_string()).into(),
+                    );
+                }
+                return Ok(Some(line));
+            }
 
-        // Skip empty lines (per MCP spec: messages are delimited by newlines)
-        if line.is_empty() {
-            drop(stdin);
-            return Err(TransportError::InvalidMessage("Empty line received".to_string()).into());
+            // No complete line yet — append more bytes into the PERSISTENT
+            // buffer. `read_until` writes straight into `partial`, so if this
+            // await is cancelled the consumed bytes are retained.
+            let bytes_read = reader
+                .read_until(b'\n', partial)
+                .await
+                .map_err(TransportError::from)?;
+            if bytes_read == 0 {
+                return Ok(None);
+            }
         }
-
-        let bytes = line.as_bytes().to_vec();
-        drop(stdin);
-        Ok(bytes)
     }
 
     /// Parse JSON message and determine its type.
@@ -224,5 +279,70 @@ mod tests {
         assert!(json_str.contains("jsonrpc\":\"2.0\""));
         assert!(!json_str.contains("Content-Length"));
         assert!(!json_str.contains("\r\n"));
+    }
+
+    /// Cancel-safety proof (Phase 108): a `receive()` future dropped mid-read
+    /// (when the transport actor's `select!` send branch wins) must lose NO
+    /// already-consumed bytes — the next read returns the WHOLE first line.
+    #[tokio::test]
+    async fn read_cancel_safe_line_retains_partial_across_drop() {
+        use tokio::io::{AsyncWriteExt, BufReader};
+
+        let (mut writer, reader) = tokio::io::duplex(64);
+        let mut reader = BufReader::new(reader);
+        let mut partial: Vec<u8> = Vec::new();
+
+        // Feed a partial line (no newline yet).
+        writer.write_all(b"hello wo").await.unwrap();
+
+        // Simulate the actor dropping the in-flight receive: race the read
+        // against a timer that wins because no newline ever arrives.
+        tokio::select! {
+            _ = StdioTransport::read_cancel_safe_line(&mut reader, &mut partial) => {
+                panic!("read must not complete without a newline");
+            }
+            () = tokio::time::sleep(std::time::Duration::from_millis(50)) => {}
+        }
+
+        // The consumed bytes were retained in the persistent buffer.
+        assert_eq!(
+            partial, b"hello wo",
+            "a dropped read must retain the bytes it already consumed"
+        );
+
+        // Feed the rest plus a second, fully-buffered line. The next read
+        // resumes and returns the WHOLE first line — no bytes lost.
+        writer.write_all(b"rld\nsecond\n").await.unwrap();
+        let line = StdioTransport::read_cancel_safe_line(&mut reader, &mut partial)
+            .await
+            .unwrap()
+            .expect("a complete first line");
+        assert_eq!(
+            line, b"hello world",
+            "no bytes lost across the dropped read"
+        );
+
+        // The pipelined second line is intact too.
+        let line2 = StdioTransport::read_cancel_safe_line(&mut reader, &mut partial)
+            .await
+            .unwrap()
+            .expect("a complete second line");
+        assert_eq!(line2, b"second");
+    }
+
+    /// EOF surfaces as `Ok(None)` from the cancel-safe reader.
+    #[tokio::test]
+    async fn read_cancel_safe_line_reports_eof() {
+        use tokio::io::BufReader;
+
+        let (writer, reader) = tokio::io::duplex(8);
+        drop(writer); // close the write half -> EOF on the read half
+        let mut reader = BufReader::new(reader);
+        let mut partial: Vec<u8> = Vec::new();
+
+        let eof = StdioTransport::read_cancel_safe_line(&mut reader, &mut partial)
+            .await
+            .unwrap();
+        assert!(eof.is_none(), "closed pipe must yield EOF (Ok(None))");
     }
 }

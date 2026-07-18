@@ -198,34 +198,34 @@ impl std::fmt::Debug for ServerRequestDispatcher {
     }
 }
 
-/// Drain outbound server-to-client requests and serialize them onto the
-/// transport as JSON-RPC `Request` messages.
+/// Drain outbound server-to-client requests and forward them to the transport
+/// actor as JSON-RPC `Request` frames.
 ///
-/// Spawned by `Server::run` once per server lifetime. Exits cleanly when
-/// the outbound channel is closed (dispatcher dropped) or on transport
-/// send failure (logged).
-pub fn spawn_server_request_drain<T>(
-    transport: Arc<crate::runtime::RwLock<T>>,
+/// Spawned by `Server::run` once per server lifetime. Since Phase 108 the drain
+/// no longer holds a transport write-lock across a send — it forwards each frame
+/// onto the actor's unbounded `send_tx`, so a server-initiated request can never
+/// starve behind an in-flight `receive()`. Exits cleanly when the outbound
+/// channel is closed (dispatcher dropped) or when the actor's send channel is
+/// gone (actor shut down).
+pub fn spawn_server_request_drain(
+    send_tx: mpsc::UnboundedSender<crate::shared::TransportMessage>,
     mut outbound_rx: mpsc::Receiver<(String, ServerRequest)>,
-) where
-    T: crate::shared::Transport + 'static,
-{
+) {
     tokio::spawn(async move {
         while let Some((correlation_id, server_request)) = outbound_rx.recv().await {
             let request = crate::types::Request::Server(Box::new(server_request));
             let id = crate::types::RequestId::from(correlation_id.clone());
 
-            let mut t = transport.write().await;
-            if let Err(e) = t
+            if send_tx
                 .send(crate::shared::TransportMessage::Request { id, request })
-                .await
+                .is_err()
             {
                 warn!(
-                    "Failed to dispatch server request {}: {}",
-                    correlation_id, e
+                    "Failed to forward server request {}: actor send channel closed",
+                    correlation_id
                 );
-                // Continue draining — transient transport failures
-                // shouldn't drop the entire drain loop.
+                // The actor is gone; nothing more can be sent.
+                break;
             }
         }
         debug!("Server-request drain task exited");
