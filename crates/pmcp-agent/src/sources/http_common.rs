@@ -7,7 +7,26 @@
 
 use std::time::Duration;
 
+use pmcp::types::Content;
+
 use crate::seams::CompletionError;
+
+/// Flatten tool-result content items into a single text blob.
+///
+/// Both HTTP sources render a `tool_result`'s content as plain text for the
+/// provider's `tool`/`user` message role; non-text content items are skipped.
+pub(crate) fn tool_result_text(content: &[Content]) -> String {
+    let mut out = String::new();
+    for item in content {
+        if let Content::Text { text } = item {
+            if !out.is_empty() {
+                out.push('\n');
+            }
+            out.push_str(text);
+        }
+    }
+    out
+}
 
 /// Default request timeout for the HTTP sources.
 pub(crate) const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60);

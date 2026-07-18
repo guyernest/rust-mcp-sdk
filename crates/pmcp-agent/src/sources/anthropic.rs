@@ -22,13 +22,13 @@ use async_trait::async_trait;
 use pmcp::types::sampling::{
     CreateMessageParams, CreateMessageResultWithTools, SamplingMessage, SamplingMessageContent,
 };
-use pmcp::types::{Content, Role};
+use pmcp::types::Role;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use super::http_common::{
-    build_client, classify_status, map_reqwest_error, read_bounded_body, validate_endpoint,
-    HttpSourceOptions,
+    build_client, classify_status, map_reqwest_error, read_bounded_body, tool_result_text,
+    validate_endpoint, HttpSourceOptions,
 };
 use super::SecretString;
 use crate::seams::{CompletionError, CompletionSource};
@@ -268,20 +268,6 @@ fn block_to_anthropic(block: &SamplingMessageContent) -> Value {
     }
 }
 
-/// Flatten tool-result content items into a text blob.
-fn tool_result_text(content: &[Content]) -> String {
-    let mut out = String::new();
-    for item in content {
-        if let Content::Text { text } = item {
-            if !out.is_empty() {
-                out.push('\n');
-            }
-            out.push_str(text);
-        }
-    }
-    out
-}
-
 /// Map MCP tool definitions into Anthropic `tools`.
 fn tools_to_anthropic(tools: &[pmcp::types::tools::ToolInfo]) -> Value {
     let arr: Vec<Value> = tools
@@ -369,6 +355,7 @@ fn response_to_result(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pmcp::types::Content;
     use serde_json::json;
 
     fn tool_use_msg(id: &str) -> SamplingMessage {
