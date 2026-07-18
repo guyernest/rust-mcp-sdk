@@ -24,7 +24,10 @@ pub mod seams;
 pub mod sources;
 pub mod trace;
 
-pub use config::ResolvedAgentConfig;
+pub use config::{
+    build_endpoint_map, resolve_agent, EnvVarResolver, ProgrammaticBuilder, RedactedSecret,
+    ResolveError, ResolvedAgentConfig, ResolvedValue, SlotResolver,
+};
 pub use invoker::{ClientToolInvoker, ConnectorClient, ConnectorClientFactory, InvokerError};
 pub use seams::{
     CompletionError, CompletionSource, ConversationStore, InMemoryStore, RetryClass, RunPhase,
