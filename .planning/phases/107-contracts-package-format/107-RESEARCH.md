@@ -438,13 +438,15 @@ team-mcp:      team_mcp__<member>                       (dynamic, one per member
 | A5 | Golden-fixture coverage should be extended to `agent` + `team` kinds for a complete PKG-02 wire-freeze | Pitfall 3 | If two fixtures are deemed sufficient, this is extra work; if not, an unguarded shape change ships | `[ASSUMED]` |
 | A6 | The `pmcp-package` version stays `0.1.0` for first publish (matches success criteria + design §4) | PKG-02 | none material — matches all sources | `[CITED: ROADMAP + design]` |
 
-## Open Questions
+## Open Questions (RESOLVED)
 
 1. **License reconciliation (A1)**
    - What we know: crate = `MIT OR Apache-2.0`; repo root `LICENSE` = MIT only; `mcp-tester` = MIT.
    - What's unclear: which the maintainer wants for a published SDK crate.
    - Recommendation: default to keeping dual-license (broadest downstream compatibility) + add both
      files; surface as a discuss-phase decision.
+   - RESOLVED: Keep dual-license `MIT OR Apache-2.0` and ship both `LICENSE-MIT` + `LICENSE-APACHE`
+     (conservative no-change default). Carried by Plan 107-01 (Task 2 adds both license files; A1 note).
 
 2. **Shared-fixture location + format (A2)**
    - What we know: fixtures must be runnable by both SDK reference servers and platform servers.
@@ -452,12 +454,17 @@ team-mcp:      team_mcp__<member>                       (dynamic, one per member
      richer conformance manifest.
    - Recommendation: request/response JSON pairs under `contracts/team-servers/fixtures/`, one dir per
      server; confirm with the platform team via the §8 companion note.
+   - RESOLVED: Request/response JSON pairs under `contracts/team-servers/fixtures/<server>/`, one
+     directory per server. Carried by Plan 107-03 (Task 2 authors fixtures + conformance test; A2 note).
 
 3. **PKG-03 contract granularity**
-   - What we know: 4 servers, ~19 static tools + 2 dynamic families.
+   - What we know: 4 servers, 19 static tools + 2 dynamic families.
    - What's unclear: one contract YAML with 4 equations (per server) vs one equation per tool.
    - Recommendation: one YAML (`team-servers-v1.yaml`), one equation per *server surface* (matching how
      `mcp-protocol-sdk-v1.yaml` groups by capability), with per-tool detail in the formula/invariants.
+   - RESOLVED: One YAML (`team-servers-v1.yaml`), one equation per *server surface* (4 equations), with
+     per-tool detail in `formula`/`invariants`; NO `binding.yaml` authored (A3 — deferred to Phase 109).
+     Carried by Plan 107-03 (Task 1).
 
 ## Environment Availability
 
