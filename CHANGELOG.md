@@ -5,6 +5,43 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.17.0] - Unreleased
+
+Hosted-agent loop enablement (Phase 108). Three paired, fully **additive** core
+changes that let a tool handler call back into its client mid-request without
+deadlocking, and let that round-trip carry tool calls:
+
+- **Transport Actor pump in `Server::run`.** The transport is now owned by a
+  single actor task instead of a shared `Arc<RwLock<T>>`. Inbound responses are
+  routed to the peer dispatcher immediately (unblocking an in-tool
+  `peer.sample()` / `.list_roots()`), inbound requests go to one sequential
+  worker via an unbounded queue, and all outbound frames funnel through one
+  channel — so the receive/drain path never blocks on request execution, queue
+  capacity, or a transport write-lock. Request handling stays serialized (zero
+  behavior change for existing servers).
+- **End-to-end WithTools sampling.** New `HostSamplingHandlerWithTools` +
+  `ClientBuilder::on_sampling_with_tools` let a client host answer with
+  `tool_use` / `tool_result` blocks; legacy `HostSamplingHandler`s keep working
+  via `LegacyHostSamplingAdapter`. New `PeerHandle::sample_with_tools` (additive
+  default method) returns `CreateMessageResultWithTools`, with a legacy
+  single-content decode fallback on `DispatchPeerHandle`.
+
+### Added
+
+- `PeerHandle::sample_with_tools` (additive default method) and its
+  `DispatchPeerHandle` override with a legacy `CreateMessageResult` fallback.
+- `pmcp::client::host::HostSamplingHandlerWithTools`, `LegacyHostSamplingAdapter`,
+  and `ClientBuilder::on_sampling_with_tools`.
+- `CreateMessageResultWithTools::from_single` /
+  `SamplingMessageContent::from_content` canonical conversions.
+- `Transport::receive` now documents a `# Cancellation` contract; `StdioTransport`
+  is cancel-safe via a persistent partial-line buffer.
+
+### Changed
+
+- `Server::run` internals refactored to the single-owner Transport Actor
+  (transport no longer wrapped in `Arc<RwLock<T>>`). No public API change.
+
 ## [2.16.0] - Unreleased
 
 Client host surface (Phase 106): a pmcp `Client` can now **answer**
