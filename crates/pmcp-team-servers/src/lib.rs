@@ -18,6 +18,18 @@
 //! stack (contracts + dev-grade impls), not a scaled production backend.
 //! Scaled team-memory/approval backends stay on the platform (design DEFER-03).
 
+pub mod compose;
 pub mod transport;
+
+#[cfg(feature = "approval-mcp")]
+pub mod approval;
+#[cfg(feature = "conformance")]
+pub mod conformance;
+#[cfg(feature = "team-fs")]
+pub mod fs;
+#[cfg(feature = "mem-mcp")]
+pub mod mem;
+#[cfg(feature = "team-mcp")]
+pub mod team;
 
 pub use transport::DuplexTransport;
