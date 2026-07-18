@@ -20,21 +20,20 @@
 
 #[path = "common/duplex.rs"]
 mod duplex;
+#[path = "common/host_pump.rs"]
+mod host_pump;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use serde_json::{json, Value};
+use serde_json::json;
 
 use pmcp::client::host::{ApprovalDecision, HostSamplingHandler};
-use pmcp::shared::{Transport, TransportMessage};
 use pmcp::types::jsonrpc::{JSONRPCResponse, ResponsePayload};
 use pmcp::types::protocol::{ClientRequest, Request, ServerRequest};
 use pmcp::types::sampling::{CreateMessageParams, CreateMessageResult};
-use pmcp::types::{
-    ClientCapabilities, Content, Implementation, InitializeResult, RequestId, ServerCapabilities,
-};
+use pmcp::types::{ClientCapabilities, Content, RequestId};
 use pmcp::ClientBuilder;
 
 // ---------------------------------------------------------------------------
@@ -60,75 +59,24 @@ impl HostSamplingHandler for TrackingSampling {
 }
 
 // ---------------------------------------------------------------------------
-// Raw duplex pump helpers.
+// Raw duplex pump driver (survival variant).
 // ---------------------------------------------------------------------------
 
-async fn recv_request_id(t: &mut duplex::DuplexTransport) -> RequestId {
-    loop {
-        if let TransportMessage::Request { id, .. } = t.receive().await.expect("recv request") {
-            return id;
-        }
-    }
-}
-
-async fn recv_response(t: &mut duplex::DuplexTransport) -> JSONRPCResponse {
-    loop {
-        if let TransportMessage::Response(r) = t.receive().await.expect("recv response") {
-            return r;
-        }
-    }
-}
-
-async fn send_success(t: &mut duplex::DuplexTransport, id: RequestId, result: Value) {
-    t.send(TransportMessage::Response(JSONRPCResponse::success(
-        id, result,
-    )))
-    .await
-    .expect("send response");
-}
-
-fn init_result_value() -> Value {
-    serde_json::to_value(InitializeResult::new(
-        Implementation::new("fake-server", "1.0.0"),
-        ServerCapabilities::tools_only(),
-    ))
-    .unwrap()
-}
-
-/// Drive: initialize, wait for the first in-flight `tools/list`, inject
-/// `inbound`, capture the client's `Response`, answer the first call, then
-/// answer a SECOND `tools/list` (the connection-survival probe). Returns the
-/// captured inbound `Response`.
+/// Drive the shared [`host_pump::inject_and_capture`] prefix (initialize, inject
+/// `inbound`, capture the client's `Response`, answer the first call), then add
+/// the connection-survival probe: answer a SECOND `tools/list` to prove the
+/// connection survived the inbound error. Returns the captured inbound
+/// `Response`.
 async fn pump_inbound_then_survive(
     mut server_t: duplex::DuplexTransport,
     inbound_id: RequestId,
     inbound: Request,
 ) -> JSONRPCResponse {
-    // 1. Answer initialize.
-    let init_id = recv_request_id(&mut server_t).await;
-    send_success(&mut server_t, init_id, init_result_value()).await;
+    let inbound_response = host_pump::inject_and_capture(&mut server_t, inbound_id, inbound).await;
 
-    // 2. Wait for the first in-flight client request (skips `initialized`).
-    let call_id_1 = recv_request_id(&mut server_t).await;
-
-    // 3. Inject the raw inbound request while the first call is in flight.
-    server_t
-        .send(TransportMessage::Request {
-            id: inbound_id,
-            request: inbound,
-        })
-        .await
-        .expect("send inbound request");
-
-    // 4. Capture the client's Response to the inbound request.
-    let inbound_response = recv_response(&mut server_t).await;
-
-    // 5. Answer the first call so the first `list_tools` returns.
-    send_success(&mut server_t, call_id_1, json!({ "tools": [] })).await;
-
-    // 6. Connection-survival probe: answer a SECOND `tools/list`.
-    let call_id_2 = recv_request_id(&mut server_t).await;
-    send_success(&mut server_t, call_id_2, json!({ "tools": [] })).await;
+    // Connection-survival probe: answer a SECOND `tools/list`.
+    let call_id_2 = host_pump::recv_request_id(&mut server_t).await;
+    host_pump::send_success(&mut server_t, call_id_2, json!({ "tools": [] })).await;
 
     inbound_response
 }
