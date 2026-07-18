@@ -1516,6 +1516,15 @@ impl Server {
         #[cfg(not(target_arch = "wasm32"))]
         let create_path_auth = validated_auth_context.clone();
 
+        // Propagate the request's `_meta` object (raw JSON incl. namespaced
+        // `other` keys) so handlers can read it via `extra.request_meta` in the
+        // high-level `Server` path too (ServerCore already wires this at core.rs).
+        #[allow(clippy::used_underscore_binding)] // _meta is part of MCP protocol spec
+        let request_meta_value = req
+            ._meta
+            .as_ref()
+            .and_then(|m| serde_json::to_value(m).ok());
+
         let mut extra = self.attach_peer(
             crate::server::cancellation::RequestHandlerExtra::new(
                 request_id.to_string(),
@@ -1527,7 +1536,8 @@ impl Server {
             // can branch on `extra.is_task_request()` in the high-level `Server`
             // path too (ServerCore already wires this at core.rs). Additive: the
             // dispatcher's own task-creation decision still reads `req.task`.
-            .with_task_request(req.task.clone()),
+            .with_task_request(req.task.clone())
+            .with_request_meta(request_meta_value),
         );
 
         // D-03.3 (TOUT-01): clone the interior-mutable result-`_meta` slot BEFORE
