@@ -2122,23 +2122,24 @@ Plans:
   4. team-mcp composes Phase 108 agent-as-server members as per-member tools returning `ToolOutput::Result` with top-level `related_task` `_meta` — the worked migration template replacing the platform's raw-JSON-RPC bypass (TEAM-05)
   5. Conformance tests prove each reference server's tool surface matches the PKG-03 contracts (TEAM-06)
 
-**Plans**: 8 plans in 4 waves
+**Plans**: 9 plans in 4 waves (replanned 2026-07-18 from cross-AI review — added prerequisite pmcp-core `_meta` enablement plan 109-00)
 
-Wave 1:
-- [ ] 109-01-PLAN.md — Crate scaffold + module skeleton + exported in-memory transport + `derive_attachment` (D-05/D-07) + additive contract rev to v1.1.0 (D-12/D-14)
+Wave 1 (parallel):
+- [ ] 109-00-PLAN.md — pmcp-core `_meta` enablement (prerequisite): extensible `RequestMeta` + `RequestHandlerExtra.request_meta` + `call_tool_with_task_and_meta`/`call_tool_with_meta` (unblocks D-14 guard `_meta`; 109-05/07 depend on it)
+- [ ] 109-01-PLAN.md — Crate scaffold + documented module skeleton + exported transport + PackageResolver/MemberId seams + `derive_attachment` (atomic, D-05/D-07) + additive contract rev to v1.1.0 with CORRECT related-task key + contract-first binding.yaml skeleton (D-12/D-14/D-18)
 
 Wave 2 (parallel):
-- [ ] 109-02-PLAN.md — team-fs reference server: `TeamFsBackend` + `LocalDirBackend` (file:// + review/ sync + path containment) + HTTP-first binary (TEAM-02)
-- [ ] 109-03-PLAN.md — mem-mcp reference server: `TeamMemoryBackend` + zero-dep BM25 scorer + HTTP-first binary (TEAM-04)
-- [ ] 109-04-PLAN.md — approval-mcp reference server: InMemoryTaskStore + console/webhook notify-only channels + subject-ref linkage + HTTP-first binary (TEAM-03)
-- [ ] 109-05-PLAN.md — team-mcp reference server: task-augmented member hop → `ToolOutput::Result` + `related_task`, four guards, fuzz target, HTTP-first binary (TEAM-05)
+- [ ] 109-02-PLAN.md — team-fs: `TeamFsBackend` + `LocalDirBackend` (pure lexical containment, symlink reject, percent-encoded file://, review/ sync) + HTTP-first binary (TEAM-02)
+- [ ] 109-03-PLAN.md — mem-mcp: `TeamMemoryBackend` + numerically-safe zero-dep BM25 (L_avg==0 short-circuit, IDF floor) + deterministic ids + HTTP-first binary (TEAM-04)
+- [ ] 109-04-PLAN.md — approval-mcp: InMemoryTaskStore + ApprovalRepository (service-owner, atomic option-validated resolve) + bounded-timeout notify-only channels + subject-ref linkage + HTTP-first binary (TEAM-03)
+- [ ] 109-05-PLAN.md — team-mcp: task+`_meta`-forwarding member hop (explicit Task/Result forwarding contract) → related-task under `RELATED_TASK_META_KEY`, MemberId guards, PackageResolver, injected-override LLM, fuzz, HTTP-first binary (TEAM-05; depends on 109-00)
 
 Wave 3 (parallel):
-- [ ] 109-06-PLAN.md — In-process `TeamRuntime` wiring API + "small team, one process" integration test (D-01/D-04/D-06/D-15, TEAM-01)
-- [ ] 109-07-PLAN.md — Exportable wire-level conformance runner + every-tool/every-guard fixtures (TEAM-06, D-17/D-19/D-20)
+- [ ] 109-06-PLAN.md — In-process `TeamRuntimeBuilder`/`TeamRuntime` (all seams, cfg-gated + fail-closed attachment, transactional startup) + "small team, one process" tests (D-01/D-04/D-06/D-15, TEAM-01)
+- [ ] 109-07-PLAN.md — Exportable wire-level conformance runner over a `ConformanceTarget` (in-mem+HTTP) + fixture schema v2 (deterministic ids, scenarios, expected schemas) + every-tool/every-guard fixtures + negative harness (TEAM-06, D-17/D-19/D-20; depends on 109-00)
 
 Wave 4:
-- [ ] 109-08-PLAN.md — binding.yaml + `make comply` (pmat comply) wiring + doc-review E2E example (D-16/D-18)
+- [ ] 109-08-PLAN.md — finalize binding.yaml + correct `pmat comply check --path .` (fail-closed comply-ci in CI, graceful comply locally) + doc-review E2E example + all-four subprocess smoke via SDK stdio client (D-16/D-18)
 
 ### Phase 110: cargo-pmcp Agent & Team Verbs
 
