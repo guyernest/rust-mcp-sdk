@@ -2100,7 +2100,14 @@ Plans:
   4. An agent is exposed as an MCP server via a `ServerCore` adapter (deployable through existing Lambda/Docker/WASM target adapters), and its `ToolInvoker` over `pmcp::Client` honors task-augmented tool results via `poll_decision` (SEP-1686) (AGNT-07, AGNT-08)
   5. An agent is fully configured from an `AgentPackage` plus resolved config slots — the same definition drives laptop, deploy targets, and platform (AGNT-09)
 
-**Plans**: TBD
+**Plans**: 6 plans in 4 waves
+
+- [ ] 108-01-PLAN.md — pmcp 2.17.0 core: D-106-A response pump + `sample_with_tools` peer path (wave 1)
+- [ ] 108-02-PLAN.md — `pmcp-agent` crate scaffold + three object-safe effect seams (AGNT-01) (wave 2)
+- [ ] 108-03-PLAN.md — pure decision core + iteration engine + EffectTrace replay-safety + fuzz (AGNT-02, AGNT-03) (wave 3)
+- [ ] 108-04-PLAN.md — three CompletionSources: SamplingSource + OpenAiCompatSource + AnthropicSource (AGNT-04/05/06) (wave 3)
+- [ ] 108-05-PLAN.md — tasks-aware ClientToolInvoker + SlotResolver/endpoint config (AGNT-08, AGNT-09) (wave 3)
+- [ ] 108-06-PLAN.md — agent-as-server adapter + standalone-vs-sampled example + wasm32 gate + D-09 mapping (AGNT-07, AGNT-04/05/06 proof) (wave 4)
 
 ### Phase 109: Team Reference Servers
 
