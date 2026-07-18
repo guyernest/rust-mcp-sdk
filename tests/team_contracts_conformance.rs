@@ -198,6 +198,24 @@ fn fixtures_conform_to_versioned_schema() {
             !v["expect"]["response"].is_null(),
             "{loc}: expect.response must be present"
         );
+
+        // Outcome <-> response shape: an 'error' case must carry a numeric
+        // error code; a 'success' case must carry a content array. Every
+        // fixture follows this MCP tool-result convention — enforce it so a
+        // malformed future fixture (e.g. an error case with a `content` body,
+        // or a success case missing `content`) is rejected instead of silently
+        // passing the shape-agnostic non-null check above.
+        match outcome {
+            "error" => assert!(
+                v["expect"]["response"]["error"]["code"].is_number(),
+                "{loc}: outcome 'error' requires response.error.code to be a number"
+            ),
+            "success" => assert!(
+                v["expect"]["response"]["content"].is_array(),
+                "{loc}: outcome 'success' requires response.content to be an array"
+            ),
+            _ => unreachable!("outcome already validated to be 'success' or 'error'"),
+        }
     }
 }
 
