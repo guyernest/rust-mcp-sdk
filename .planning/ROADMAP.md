@@ -2075,7 +2075,12 @@ Plans:
   2. A developer can depend on `pmcp-package = "0.1"` from crates.io; the wire-freeze policy (0.1.x = digest/serialization-stable, serialized-shape changes bump 0.2.0) is documented and enforced by passing golden fixtures (PKG-02)
   3. The team-server tool contracts — `fs__*`, `mem__*`, `team_mcp__<member>` dispatch, `resolve_approval`/`get_approval` + dynamic `team_approval__ask_*` — are captured as versioned provable-contracts YAML with shared conformance fixtures, marked as namespaced provisional PMCP extensions (PKG-03)
 
-**Plans**: TBD
+**Plans**: 3 plans
+
+Plans:
+- [ ] 107-01-PLAN.md — Adopt pmcp-package into the repo with publish-ready metadata, license files, README (wire-freeze policy), and docs.rs-clean scrubbed rustdoc (PKG-01)
+- [ ] 107-02-PLAN.md — Extend golden fixtures to all four package kinds + wire pmcp-package into publish order and release.yml (PKG-02)
+- [ ] 107-03-PLAN.md — Author team-servers-v1.yaml (4 tool-surface equations) + shared conformance fixtures + structural conformance test (PKG-03)
 
 ### Phase 108: `pmcp-agent` Loop Crate
 
