@@ -6,6 +6,8 @@
 //! provide a concrete local file/dir implementation. Defined atomically here
 //! (109-01) as a contract so downstream plans build against a stable signature.
 
+use std::path::{Path, PathBuf};
+
 use async_trait::async_trait;
 
 /// Why a [`PackageResolver::resolve_agent`] lookup failed.
@@ -39,4 +41,145 @@ pub trait PackageResolver: Send + Sync {
         &self,
         r: &pmcp_package::ComponentRef,
     ) -> Result<pmcp_package::AgentPackage, ResolveError>;
+}
+
+/// A dev-grade [`PackageResolver`] that loads [`AgentPackage`](pmcp_package::AgentPackage)
+/// JSON documents from a local directory.
+///
+/// # Layout
+///
+/// A member `ComponentRef` named `triage` pinned/ranged to `1.2.3` resolves to
+/// `<root>/triage@1.2.3.json`; if that exact file is absent the bare
+/// `<root>/triage.json` is tried as a fallback (so a dev can drop a single
+/// version-agnostic file per member). The file is a serialized `AgentPackage`.
+///
+/// This is a **dev/reference** resolver — it does no digest verification and
+/// trusts the local directory. Scaled resolution (OCI/registry-backed, digest
+/// verified) stays on the platform.
+#[derive(Debug, Clone)]
+pub struct LocalDirPackageResolver {
+    root: PathBuf,
+}
+
+impl LocalDirPackageResolver {
+    /// Create a resolver rooted at `root`.
+    #[must_use]
+    pub fn new(root: impl Into<PathBuf>) -> Self {
+        Self { root: root.into() }
+    }
+
+    /// The versioned filename (`<name>@<version>.json`) for a reference, if it
+    /// carries a concrete version (a pin, or a range whose serialization we
+    /// stringify), else `None`.
+    fn versioned_path(&self, r: &pmcp_package::ComponentRef) -> Option<PathBuf> {
+        r.as_pinned()
+            .map(|p| self.root.join(format!("{}@{}.json", p.name, p.version)))
+    }
+
+    fn bare_path(&self, r: &pmcp_package::ComponentRef) -> PathBuf {
+        self.root.join(format!("{}.json", r.name()))
+    }
+
+    fn load(path: &Path) -> Result<pmcp_package::AgentPackage, ResolveError> {
+        let bytes = std::fs::read(path).map_err(|e| ResolveError::Io(e.to_string()))?;
+        serde_json::from_slice(&bytes).map_err(|e| ResolveError::Parse(e.to_string()))
+    }
+}
+
+#[async_trait]
+impl PackageResolver for LocalDirPackageResolver {
+    async fn resolve_agent(
+        &self,
+        r: &pmcp_package::ComponentRef,
+    ) -> Result<pmcp_package::AgentPackage, ResolveError> {
+        // Prefer the exact-version file for a pin; fall back to the bare
+        // <name>.json (the common single-file-per-member dev layout).
+        if let Some(versioned) = self.versioned_path(r) {
+            if versioned.exists() {
+                return Self::load(&versioned);
+            }
+        }
+        let bare = self.bare_path(r);
+        if bare.exists() {
+            return Self::load(&bare);
+        }
+        Err(ResolveError::NotFound(r.name().to_string()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pmcp_package::reference::ComponentType;
+    use pmcp_package::slot::SlotType;
+    use pmcp_package::{AgentPackage, ComponentRef, ConfigSlot};
+
+    fn sample_pkg(name: &str) -> AgentPackage {
+        AgentPackage {
+            name: name.to_string(),
+            version: semver::Version::parse("1.0.0").unwrap(),
+            instructions: "You are a helpful reference member.".to_string(),
+            llm: ConfigSlot {
+                slot: SlotType::LlmProvider {
+                    name: "primary-llm".to_string(),
+                    tested_value: "test-model".to_string(),
+                },
+            },
+            max_tokens: 4096,
+            max_iterations: 5,
+            connectors: vec![],
+            tool_selection: None,
+            input_schema: None,
+            output_schema: None,
+            importance: None,
+            finalizer_role: None,
+            budget_defaults: vec![],
+        }
+    }
+
+    fn bare_ref(name: &str) -> ComponentRef {
+        ComponentRef::Range {
+            name: name.to_string(),
+            range: semver::VersionReq::parse("^1").unwrap(),
+            component_type: ComponentType::Agent,
+        }
+    }
+
+    #[tokio::test]
+    async fn round_trips_a_written_bare_package() {
+        let dir = tempfile::tempdir().unwrap();
+        let pkg = sample_pkg("triage");
+        std::fs::write(
+            dir.path().join("triage.json"),
+            serde_json::to_vec(&pkg).unwrap(),
+        )
+        .unwrap();
+
+        let resolver = LocalDirPackageResolver::new(dir.path());
+        let loaded = resolver.resolve_agent(&bare_ref("triage")).await.unwrap();
+        assert_eq!(loaded, pkg);
+    }
+
+    #[tokio::test]
+    async fn missing_package_is_not_found() {
+        let dir = tempfile::tempdir().unwrap();
+        let resolver = LocalDirPackageResolver::new(dir.path());
+        let err = resolver
+            .resolve_agent(&bare_ref("ghost"))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ResolveError::NotFound(_)));
+    }
+
+    #[tokio::test]
+    async fn malformed_package_is_a_parse_error() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("broken.json"), b"{ not valid json").unwrap();
+        let resolver = LocalDirPackageResolver::new(dir.path());
+        let err = resolver
+            .resolve_agent(&bare_ref("broken"))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ResolveError::Parse(_)));
+    }
 }
