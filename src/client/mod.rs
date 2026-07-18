@@ -657,6 +657,134 @@ impl<T: Transport> Client<T> {
         }
     }
 
+    /// Call a tool with task augmentation AND custom request `_meta`.
+    ///
+    /// Identical to [`call_tool_with_task`](Self::call_tool_with_task) except the
+    /// request carries the supplied [`RequestMeta`](crate::types::protocol::RequestMeta)
+    /// as `_meta`, so namespaced/guard state (attached via
+    /// [`RequestMeta::with_meta`](crate::types::protocol::RequestMeta::with_meta))
+    /// travels alongside the task augmentation in a single `tools/call`.
+    ///
+    /// Passing an empty `RequestMeta` behaves like `call_tool_with_task`.
+    ///
+    /// # Returns
+    ///
+    /// - `Ok(ToolCallResponse::Task(task))` if the server created an async task.
+    /// - `Ok(ToolCallResponse::Result(result))` if the server returned the
+    ///   result synchronously.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the client is not initialized, the server does not
+    /// support tools, or a network/protocol error occurs.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// # use pmcp::{Client, types::protocol::RequestMeta};
+    /// # async fn run(client: &Client<pmcp::StdioTransport>) -> pmcp::Result<()> {
+    /// let meta = RequestMeta::new()
+    ///     .with_meta("io.modelcontextprotocol/related-task", serde_json::json!({"taskId": "t-1"}));
+    /// let resp = client
+    ///     .call_tool_with_task_and_meta("member".to_string(), serde_json::json!({}), meta)
+    ///     .await?;
+    /// # let _ = resp;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn call_tool_with_task_and_meta(
+        &self,
+        name: String,
+        arguments: serde_json::Value,
+        meta: crate::types::protocol::RequestMeta,
+    ) -> Result<ToolCallResponse> {
+        self.ensure_initialized()?;
+        self.assert_capability("tools", "tools/call")?;
+
+        let request = Request::Client(Box::new(ClientRequest::CallTool(CallToolRequest {
+            name,
+            arguments,
+            _meta: Some(meta),
+            task: Some(serde_json::json!({})),
+        })));
+        let request_id = RequestId::String(Uuid::new_v4().to_string());
+        let response = self.send_request(request_id, request).await?;
+
+        match response.payload {
+            crate::types::jsonrpc::ResponsePayload::Result(result) => {
+                // Try CreateTaskResult first (more specific), fall back to CallToolResult.
+                if let Ok(task_result) = serde_json::from_value::<CreateTaskResult>(result.clone())
+                {
+                    Ok(ToolCallResponse::Task(task_result.task))
+                } else {
+                    let tool_result: CallToolResult =
+                        serde_json::from_value(result).map_err(|e| Error::parse(e.to_string()))?;
+                    Ok(ToolCallResponse::Result(tool_result))
+                }
+            },
+            crate::types::jsonrpc::ResponsePayload::Error(error) => {
+                Err(Error::from_jsonrpc_error(error))
+            },
+        }
+    }
+
+    /// Call a tool (non-task) with custom request `_meta`.
+    ///
+    /// Identical to [`call_tool`](Self::call_tool) except the request carries the
+    /// supplied [`RequestMeta`](crate::types::protocol::RequestMeta) as `_meta`.
+    /// Namespaced/guard state travels via
+    /// [`RequestMeta::with_meta`](crate::types::protocol::RequestMeta::with_meta)
+    /// and is visible to the server tool handler through `extra.request_meta`.
+    ///
+    /// Passing an empty `RequestMeta` behaves like `call_tool`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the client is not initialized, the server does not
+    /// support tools, the tool name does not exist, or a network/protocol error
+    /// occurs.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// # use pmcp::{Client, types::protocol::RequestMeta};
+    /// # async fn run(client: &Client<pmcp::StdioTransport>) -> pmcp::Result<()> {
+    /// let meta = RequestMeta::new().with_meta("x-pmcp-team-depth", serde_json::json!(1));
+    /// let result = client
+    ///     .call_tool_with_meta("echo".to_string(), serde_json::json!({}), meta)
+    ///     .await?;
+    /// # let _ = result;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn call_tool_with_meta(
+        &self,
+        name: String,
+        arguments: serde_json::Value,
+        meta: crate::types::protocol::RequestMeta,
+    ) -> Result<CallToolResult> {
+        self.ensure_initialized()?;
+        self.assert_capability("tools", "tools/call")?;
+
+        let request = Request::Client(Box::new(ClientRequest::CallTool(CallToolRequest {
+            name,
+            arguments,
+            _meta: Some(meta),
+            task: None,
+        })));
+        let request_id = RequestId::String(Uuid::new_v4().to_string());
+        let response = self.send_request(request_id, request).await?;
+
+        match response.payload {
+            crate::types::jsonrpc::ResponsePayload::Result(result) => {
+                serde_json::from_value(result).map_err(|e| Error::parse(e.to_string()))
+            },
+            crate::types::jsonrpc::ResponsePayload::Error(error) => {
+                Err(Error::from_jsonrpc_error(error))
+            },
+        }
+    }
+
     /// Get the current status of a task.
     ///
     /// Polls the server for the task's current state. Call this repeatedly
