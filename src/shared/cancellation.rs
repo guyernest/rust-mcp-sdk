@@ -59,6 +59,14 @@ pub struct RequestHandlerExtra {
     /// Validated authentication context (if auth is enabled)
     #[cfg(not(target_arch = "wasm32"))]
     pub auth_context: Option<crate::server::auth::AuthContext>,
+    /// The request's `_meta` object as raw JSON (MCP `_meta`).
+    ///
+    /// Parity mirror of the canonical
+    /// [`crate::server::cancellation::RequestHandlerExtra::request_meta`] so
+    /// handlers running on the runtime-agnostic (wasm) path can read arbitrary
+    /// namespaced `_meta` keys transport-agnostically. `None` when the request
+    /// carried no `_meta`.
+    pub request_meta: Option<serde_json::Value>,
     /// Typed request-scoped state for middleware→handler transfer.
     ///
     /// Inserting values requires `T: Clone + Send + Sync + 'static`. Debug prints type names only,
@@ -83,6 +91,7 @@ impl RequestHandlerExtra {
             auth_info: None,
             #[cfg(not(target_arch = "wasm32"))]
             auth_context: None,
+            request_meta: None,
             extensions: http::Extensions::new(),
         }
     }
@@ -96,6 +105,16 @@ impl RequestHandlerExtra {
     /// Set the auth info.
     pub fn with_auth_info(mut self, auth_info: Option<crate::types::auth::AuthInfo>) -> Self {
         self.auth_info = auth_info;
+        self
+    }
+
+    /// Attach the request's `_meta` object (raw JSON) for handler inspection.
+    ///
+    /// Parity mirror of the canonical
+    /// [`crate::server::cancellation::RequestHandlerExtra::with_request_meta`].
+    #[must_use]
+    pub fn with_request_meta(mut self, meta: Option<serde_json::Value>) -> Self {
+        self.request_meta = meta;
         self
     }
 

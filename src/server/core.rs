@@ -510,7 +510,12 @@ impl ServerCore {
                     .await,
             )
             .with_auth_context(auth_context)
-            .with_task_request(req.task.clone()),
+            .with_task_request(req.task.clone())
+            .with_request_meta(
+                req._meta
+                    .as_ref()
+                    .and_then(|m| serde_json::to_value(m).ok()),
+            ),
         );
 
         // D-03.3 (TOUT-01): clone the result-`_meta` slot before `extra` moves

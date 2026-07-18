@@ -329,6 +329,20 @@ pub struct RequestMeta {
     #[serde(skip_serializing_if = "Option::is_none", rename = "_task_id")]
     #[allow(clippy::pub_underscore_fields)]
     pub _task_id: Option<String>,
+
+    /// Arbitrary namespaced `_meta` keys (extensible catch-all).
+    ///
+    /// Any key on the `_meta` object that is not `progressToken` or `_task_id`
+    /// flows here on deserialize and is emitted back on serialize. This lets
+    /// callers carry namespaced extension state (e.g.
+    /// `io.modelcontextprotocol/*` keys or team-guard depth/ancestor state) on a
+    /// `tools/call` request without a typed dependency.
+    ///
+    /// Because this is `#[serde(flatten)]` over a map that is empty by default,
+    /// an empty `other` emits NO keys — existing `RequestMeta` serialization for
+    /// `progressToken`/`_task_id` is byte-for-byte unchanged (additive only).
+    #[serde(flatten)]
+    pub other: serde_json::Map<String, serde_json::Value>,
 }
 
 impl RequestMeta {
@@ -348,6 +362,25 @@ impl RequestMeta {
     pub fn with_task_id(mut self, task_id: impl Into<String>) -> Self {
         self._task_id = Some(task_id.into());
         self
+    }
+
+    /// Attach an arbitrary namespaced `_meta` key/value.
+    ///
+    /// The key is inserted into the flattened [`other`](Self::other) map and
+    /// round-trips through serialize/deserialize. Use namespaced keys (e.g.
+    /// `io.modelcontextprotocol/related-task`) to avoid collisions with the
+    /// typed `progressToken`/`_task_id` fields.
+    #[must_use]
+    pub fn with_meta(mut self, key: impl Into<String>, value: serde_json::Value) -> Self {
+        self.other.insert(key.into(), value);
+        self
+    }
+
+    /// Read a namespaced `_meta` key previously set via [`with_meta`](Self::with_meta)
+    /// or populated on deserialize.
+    #[must_use]
+    pub fn get_meta(&self, key: &str) -> Option<&serde_json::Value> {
+        self.other.get(key)
     }
 }
 
@@ -532,6 +565,58 @@ pub enum Request {
 #[allow(clippy::used_underscore_binding)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn request_meta_empty_other_serialization_unchanged() {
+        // A RequestMeta carrying only progress_token/_task_id must serialize to
+        // EXACTLY the pre-change JSON — no `other`/flatten key emitted when empty.
+        let meta = RequestMeta::new()
+            .with_progress_token(super::super::notifications::ProgressToken::String(
+                "tok-1".to_string(),
+            ))
+            .with_task_id("task-abc");
+        let json = serde_json::to_value(&meta).unwrap();
+        let expected = serde_json::json!({
+            "progressToken": "tok-1",
+            "_task_id": "task-abc",
+        });
+        assert_eq!(json, expected, "empty `other` must emit no extra keys");
+
+        // A fully-empty RequestMeta is an empty object.
+        let empty = serde_json::to_value(RequestMeta::new()).unwrap();
+        assert_eq!(empty, serde_json::json!({}));
+    }
+
+    #[test]
+    fn request_meta_custom_key_round_trips_via_other() {
+        let meta =
+            RequestMeta::new().with_meta("x-pmcp-team-depth", serde_json::json!(3));
+        let json = serde_json::to_value(&meta).unwrap();
+        assert_eq!(json["x-pmcp-team-depth"], serde_json::json!(3));
+
+        let back: RequestMeta = serde_json::from_value(json).unwrap();
+        assert_eq!(back.get_meta("x-pmcp-team-depth"), Some(&serde_json::json!(3)));
+        // Typed fields stay empty; custom key does NOT leak into them.
+        assert!(back.progress_token.is_none());
+        assert!(back._task_id.is_none());
+    }
+
+    #[test]
+    fn request_meta_typed_fields_do_not_leak_into_other() {
+        // Deserializing progressToken/_task_id must land in the typed fields,
+        // NOT in the `other` catch-all; unknown namespaced keys populate `other`.
+        let json = serde_json::json!({
+            "progressToken": "p1",
+            "_task_id": "t1",
+            "io.modelcontextprotocol/related-task": {"taskId": "abc"},
+        });
+        let meta: RequestMeta = serde_json::from_value(json).unwrap();
+        assert!(meta.progress_token.is_some());
+        assert_eq!(meta._task_id.as_deref(), Some("t1"));
+        assert!(!meta.other.contains_key("progressToken"));
+        assert!(!meta.other.contains_key("_task_id"));
+        assert!(meta.other.contains_key("io.modelcontextprotocol/related-task"));
+    }
 
     #[test]
     fn serialize_client_request() {
