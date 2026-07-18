@@ -112,6 +112,7 @@
 | DOCS-03 | Phase 111 | Pending |
 
 **Coverage:**
+
 - v1 requirements: 31 total
 - Mapped to phases: 31 ✓
 - Unmapped: 0 ✓
