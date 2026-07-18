@@ -24,12 +24,21 @@ pub mod seams;
 pub mod sources;
 pub mod trace;
 
+// The agent-as-server adapter is native-only (task_store + SamplingSource ride
+// native-only pmcp APIs); its top-level re-exports are gated to match.
+#[cfg(not(target_arch = "wasm32"))]
+pub use adapter::{
+    derive_tool_description, AgentServer, AgentServerBuilder, CompletionSourceFactory,
+    FixedSourceFactory, SamplingSourceFactory,
+};
 pub use config::{
     build_endpoint_map, resolve_agent, EnvVarResolver, ProgrammaticBuilder, RedactedSecret,
     ResolveError, ResolvedAgentConfig, ResolvedValue, SlotResolver,
 };
 pub use invoker::{ClientToolInvoker, ConnectorClient, ConnectorClientFactory, InvokerError};
+pub use iteration::{AgentEngine, IterationResult, LimitDecision, RunOutcome, TurnMessage};
 pub use seams::{
     CompletionError, CompletionSource, ConversationStore, InMemoryStore, RetryClass, RunPhase,
     RunState, StoreError, ToolCall, ToolCallResult, ToolError, ToolInvoker,
 };
+pub use trace::{DecisionTrace, EffectTrace, ReplayInvoker, ReplaySource};

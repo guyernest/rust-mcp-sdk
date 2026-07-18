@@ -1,5 +1,7 @@
 //! The completion seam — produce the next model completion.
 
+use std::sync::Arc;
+
 use async_trait::async_trait;
 use pmcp::types::sampling::{CreateMessageParams, CreateMessageResultWithTools};
 
@@ -21,6 +23,23 @@ pub trait CompletionSource: Send + Sync {
         &self,
         params: CreateMessageParams,
     ) -> Result<CreateMessageResultWithTools, CompletionError>;
+}
+
+/// Forward the seam through a shared `Arc<dyn CompletionSource>`.
+///
+/// The 108-06 adapter builds a fresh completion source PER request (a
+/// request-scoped `SamplingSource`, or a shared HTTP source) and hands it to a
+/// generic [`AgentEngine`](crate::iteration::AgentEngine). This blanket impl
+/// lets that engine be parameterised over an erased `Arc<dyn CompletionSource>`
+/// so the adapter need not name a concrete source type.
+#[async_trait]
+impl CompletionSource for Arc<dyn CompletionSource> {
+    async fn create_message(
+        &self,
+        params: CreateMessageParams,
+    ) -> Result<CreateMessageResultWithTools, CompletionError> {
+        (**self).create_message(params).await
+    }
 }
 
 /// Error from a [`CompletionSource`].
