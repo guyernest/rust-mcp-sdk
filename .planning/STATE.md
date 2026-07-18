@@ -4,8 +4,8 @@ milestone: v2.4
 milestone_name: Agents & Teams — SDK Extraction
 status: executing
 stopped_at: Phase 108 context gathered
-last_updated: "2026-07-18T06:47:08.798Z"
-last_activity: 2026-07-18 -- Phase 108 planning complete
+last_updated: "2026-07-18T13:38:19.512Z"
+last_activity: 2026-07-18 -- Phase 108 execution started
 progress:
   total_phases: 63
   completed_phases: 2
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-07-17) · .planning/ROADMAP.md (v2.4 milestone, Phases 106-111) · docs/design/agents-teams-sdk-extraction-plan.md (approved)
 
 **Core value:** The PMCP SDK is the reference implementation for agents-as-MCP-clients and agent teams — one open agent loop and one portable package format that run identically on a laptop, any deploy target, and pmcp.run (contracts + reference implementations in the SDK; operation + scale on the platform).
-**Current focus:** Phase 107 — contracts-package-format
+**Current focus:** Phase 108 — pmcp-agent-loop-crate
 
 ## Current Position
 
-Phase: 999.1
-Plan: Not started
-Status: Ready to execute
-Last activity: 2026-07-18 -- Phase 108 planning complete
+Phase: 108 (pmcp-agent-loop-crate) — EXECUTING
+Plan: 1 of 6
+Status: Executing Phase 108
+Last activity: 2026-07-18 -- Phase 108 execution started
 
 ## v2.4 Phase Plan (6 phases, 31 requirements)
 

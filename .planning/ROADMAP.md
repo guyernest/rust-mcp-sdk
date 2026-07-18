@@ -2102,7 +2102,7 @@ Plans:
 
 **Plans**: 6 plans in 4 waves
 
-- [ ] 108-01-PLAN.md — pmcp 2.17.0 core: D-106-A response pump + `sample_with_tools` peer path (wave 1)
+- [x] 108-01-PLAN.md — pmcp 2.17.0 core: D-106-A response pump + `sample_with_tools` peer path (wave 1)
 - [ ] 108-02-PLAN.md — `pmcp-agent` crate scaffold + three object-safe effect seams (AGNT-01) (wave 2)
 - [ ] 108-03-PLAN.md — pure decision core + iteration engine + EffectTrace replay-safety + fuzz (AGNT-02, AGNT-03) (wave 3)
 - [ ] 108-04-PLAN.md — three CompletionSources: SamplingSource + OpenAiCompatSource + AnthropicSource (AGNT-04/05/06) (wave 3)
@@ -2159,7 +2159,7 @@ Plans:
 |-------|----------------|--------|-----------|
 | 106. Client Host Surface | 3/3 | Complete    | 2026-07-18 |
 | 107. Contracts & Package Format | 3/3 | Complete    | 2026-07-18 |
-| 108. `pmcp-agent` Loop Crate | 0/TBD | Not started | - |
+| 108. `pmcp-agent` Loop Crate | 1/6 | In Progress|  |
 | 109. Team Reference Servers | 0/TBD | Not started | - |
 | 110. cargo-pmcp Agent & Team Verbs | 0/TBD | Not started | - |
 | 111. Docs in Three Shapes + Examples | 0/TBD | Not started | - |
