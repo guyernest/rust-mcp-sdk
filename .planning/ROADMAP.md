@@ -1931,7 +1931,7 @@ Plans:
 | 95. Shape A Binary `pmcp-workbook-server` | 2/2 | Complete    | 2026-06-14 |
 | 96. Shape B Scaffold + Dialect-Version + Generalization | 5/5 | Complete    | 2026-06-15 |
 
-## Phase Details — v2.4 (cargo-pmcp deploy)
+## Phase Details — cargo-pmcp deploy (Phases 98-104, pre-SDK-extraction)
 
 ### Phase 98: `cargo pmcp deploy` — stack.ts Regeneration Guard + Config-Driven Metadata
 
