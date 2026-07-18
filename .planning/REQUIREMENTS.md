@@ -85,9 +85,9 @@
 | HOST-04 | Phase 106 | Pending |
 | HOST-05 | Phase 106 | Pending |
 | HOST-06 | Phase 106 | Pending |
-| PKG-01 | Phase 107 | Pending |
-| PKG-02 | Phase 107 | Pending |
-| PKG-03 | Phase 107 | Pending |
+| PKG-01 | Phase 107 | Complete |
+| PKG-02 | Phase 107 | Pending (STATE-1 readiness verified; STATE-2 crates.io publish is a release-tag checkpoint — see 107-HUMAN-UAT.md) |
+| PKG-03 | Phase 107 | Complete |
 | AGNT-01 | Phase 108 | Pending |
 | AGNT-02 | Phase 108 | Pending |
 | AGNT-03 | Phase 108 | Pending |
@@ -110,6 +110,10 @@
 | DOCS-01 | Phase 111 | Pending |
 | DOCS-02 | Phase 111 | Pending |
 | DOCS-03 | Phase 111 | Pending |
+| DEFER-01 | Deferred (v2.4 scope) | Not scheduled — AgentCore deploy adapter |
+| DEFER-02 | Deferred (v2.4 scope) | Not scheduled — additional CompletionSource impls |
+| DEFER-03 | Deferred (v2.4 scope) | Not scheduled — scaled team-memory backends |
+| DEFER-04 | Deferred (not SDK work) | Not scheduled — pmcp.run adopting the loop/traits |
 
 **Coverage:**
 
