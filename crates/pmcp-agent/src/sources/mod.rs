@@ -20,3 +20,15 @@ mod secret;
 
 pub use sampling::SamplingSource;
 pub use secret::SecretString;
+
+#[cfg(feature = "openai-compat")]
+mod openai_compat;
+#[cfg(feature = "openai-compat")]
+pub use openai_compat::OpenAiCompatSource;
+
+// Shared HTTP-source plumbing (endpoint policy, client build, bounded body,
+// status classification) is enabled whenever either HTTP source is compiled.
+#[cfg(any(feature = "openai-compat", feature = "anthropic"))]
+mod http_common;
+#[cfg(any(feature = "openai-compat", feature = "anthropic"))]
+pub use http_common::HttpSourceOptions;
