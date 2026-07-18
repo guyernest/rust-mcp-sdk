@@ -23,8 +23,8 @@ pub use pack::{pack_agent, pack_server, pack_team, pack_workflow};
 pub use unpack::{unpack_agent, unpack_server, unpack_team, unpack_workflow};
 
 use crate::oci::media_types::{
-    ARTIFACT_TYPE_AGENT, ARTIFACT_TYPE_TEAM, ARTIFACT_TYPE_WORKFLOW, MT_AGENT_CONFIG, MT_TEAM_CONFIG,
-    MT_WORKFLOW_MANIFEST,
+    ARTIFACT_TYPE_AGENT, ARTIFACT_TYPE_TEAM, ARTIFACT_TYPE_WORKFLOW, MT_AGENT_CONFIG,
+    MT_TEAM_CONFIG, MT_WORKFLOW_MANIFEST,
 };
 use crate::package::{AgentPackage, TeamPackage, WorkflowManifest};
 

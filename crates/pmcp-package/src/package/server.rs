@@ -438,14 +438,14 @@ mod tests {
     fn deploy_descriptor_rejects_unknown_top_level_field() {
         let mut value = serde_json::to_value(sample_deploy_descriptor()).unwrap();
         value
-.as_object_mut()
-.unwrap()
-.insert("unexpected_field".to_string(), serde_json::json!(true));
+            .as_object_mut()
+            .unwrap()
+            .insert("unexpected_field".to_string(), serde_json::json!(true));
         let result: std::result::Result<DeployDescriptor, _> = serde_json::from_value(value);
         assert!(
             result.is_err(),
             "DeployDescriptor must reject an unrecognized top-level field"
-       );
+        );
     }
 
     #[test]
@@ -483,7 +483,7 @@ mod tests {
             environment: BTreeMap::from([(
                 "EXPECTED_AUDIENCE".to_string(),
                 "placeholder".to_string(),
-           )]),
+            )]),
             secrets: BTreeMap::new(),
             auth: AuthSection {
                 enabled: false,
@@ -528,21 +528,21 @@ mod tests {
         use std::process::Command;
 
         let repo_root: PathBuf = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-.join("..")
-.join("..");
+            .join("..")
+            .join("..");
 
         let output = Command::new("git")
-.arg("ls-files")
-.arg("*/.pmcp/deploy.toml")
-.current_dir(&repo_root)
-.output()
-.expect("git ls-files must run (dev-only coverage test)");
+            .arg("ls-files")
+            .arg("*/.pmcp/deploy.toml")
+            .current_dir(&repo_root)
+            .output()
+            .expect("git ls-files must run (dev-only coverage test)");
         assert!(
             output.status.success(),
             "git ls-files failed: status={:?} stderr={}",
             output.status,
             String::from_utf8_lossy(&output.stderr)
-       );
+        );
 
         let stdout = String::from_utf8(output.stdout).expect("git ls-files output must be UTF-8");
         let files: Vec<&str> = stdout.lines().filter(|l| !l.is_empty()).collect();
@@ -555,13 +555,13 @@ mod tests {
         for rel_path in &files {
             let full_path = repo_root.join(rel_path);
             let contents = std::fs::read_to_string(&full_path)
-.unwrap_or_else(|e| panic!("failed to read {full_path:?}: {e}"));
+                .unwrap_or_else(|e| panic!("failed to read {full_path:?}: {e}"));
             let parsed: std::result::Result<DeployDescriptor, _> = toml::from_str(&contents);
             assert!(
                 parsed.is_ok(),
                 "DeployDescriptor failed to parse {rel_path}: {:?}",
                 parsed.err()
-           );
+            );
         }
     }
 
@@ -574,7 +574,7 @@ mod tests {
         assert!(
             json.is_array(),
             "CedarPolicySet must serialize as a flat JSON array (transparent newtype)"
-       );
+        );
         let back: CedarPolicySet = serde_json::from_value(json).unwrap();
         assert_eq!(back, set);
     }
