@@ -27,7 +27,7 @@ use serde_json::json;
 use pmcp::types::sampling::{
     CreateMessageParams, CreateMessageResultWithTools, SamplingMessageContent,
 };
-use pmcp::types::{ClientCapabilities, Role};
+use pmcp::types::{ClientCapabilities, Content, Role};
 use pmcp::{Client, ToolCallResponse};
 
 use pmcp_agent::{
@@ -231,4 +231,72 @@ impl CompletionSource for EndTurnMock {
         )
         .with_stop_reason("end_turn"))
     }
+}
+
+/// A NON-task-aware client (plain `tools/call`, no `task` field) must receive the
+/// agent's ANSWER as normal tool output — NOT the `{taskId,status,ttl,result}`
+/// task-creation envelope. Before the `is_task_request()` branch, the SDK
+/// text-wrapped the whole envelope (a JSON blob) because its `TaskCreated` path
+/// only fires when `req.task.is_some()`. Regression test for that path.
+#[tokio::test]
+async fn agent_server_non_task_call_returns_answer_not_envelope() {
+    let source = Arc::new(EndTurnMock::default());
+    let factory: Arc<dyn CompletionSourceFactory> =
+        Arc::new(FixedSourceFactory::new(source as Arc<dyn CompletionSource>));
+    let store: Arc<dyn pmcp_agent::ConversationStore> = Arc::new(InMemoryStore::new());
+
+    let agent = AgentServer::builder(
+        test_package(),
+        config(),
+        factory,
+        Arc::new(NoopInvoker),
+        store,
+    )
+    .build()
+    .expect("agent server builds");
+    let tool_name = agent.tool_name().to_string();
+
+    let (client_t, server_t) = duplex::DuplexTransport::pair();
+    let server_handle = tokio::spawn(async move {
+        let _ = agent.run(server_t).await;
+    });
+
+    let mut client = Client::new(client_t);
+    client
+        .initialize(ClientCapabilities::default())
+        .await
+        .expect("initialize");
+
+    // Plain `tools/call`, no task augmentation.
+    let result = client
+        .call_tool(tool_name, json!({ "message": "hi" }))
+        .await
+        .expect("plain call_tool");
+
+    let text = result
+        .content
+        .iter()
+        .find_map(|c| match c {
+            Content::Text { text } => Some(text.clone()),
+            _ => None,
+        })
+        .expect("tool output carries text content");
+
+    // The agent's answer ("ok") reaches the client, with the runId for D-12 resume.
+    assert!(
+        text.contains("ok"),
+        "non-task client gets the answer text: {text}"
+    );
+    assert!(
+        text.contains("runId"),
+        "answer carries a resumable runId: {text}"
+    );
+    // ...and it is NOT the task-creation envelope (the pre-fix bug).
+    assert!(
+        !text.contains("taskId") && !text.contains("ttl"),
+        "non-task output must not be the task-creation envelope: {text}"
+    );
+
+    drop(client);
+    let _ = server_handle.await;
 }
