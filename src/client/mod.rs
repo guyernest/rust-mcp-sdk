@@ -2238,11 +2238,11 @@ impl<T: Transport> Client<T> {
                 // loud in tests/debug builds while preserving the conservative
                 // "not supported" behavior in release.
                 tracing::error!(
-                    "unknown capability string {method} — add an arm to assert_capability"
+                    "unknown capability string {capability:?} (required for {method}) — add an arm to assert_capability"
                 );
                 debug_assert!(
                     false,
-                    "unknown capability string {method} — add an arm to assert_capability"
+                    "unknown capability string {capability:?} (required for {method}) — add an arm to assert_capability"
                 );
                 false
             },
@@ -2427,11 +2427,12 @@ impl<T: Transport> Client<T> {
     /// Sampling has two host-side access-control stages, both applied ONLY to
     /// the sampling path (never elicitation/roots):
     ///
-    /// 1. **Preflight** ([`ClientBuilder::on_sampling_approval`]): a mandatory
-    ///    gate that runs BEFORE the handler. A [`ApprovalDecision::Deny`] here
-    ///    prevents the LLM call entirely — no tokens are billed — genuinely
-    ///    mitigating coerced / denial-of-wallet sampling. When no preflight
-    ///    callback is registered, the handler runs (default allow).
+    /// 1. **Preflight** ([`ClientBuilder::on_sampling_approval`]): an optional
+    ///    gate (default-allow) that, when registered, runs BEFORE the handler. A
+    ///    [`ApprovalDecision::Deny`] here prevents the LLM call entirely — no
+    ///    tokens are billed — genuinely mitigating coerced / denial-of-wallet
+    ///    sampling. When no preflight callback is registered, the handler runs
+    ///    (default allow).
     /// 2. **Result review** ([`ClientBuilder::on_sampling_result_review`]): an
     ///    optional post-generation stage that sees the produced completion and
     ///    can deny after the fact. Its default (no callback) is pass-through.
