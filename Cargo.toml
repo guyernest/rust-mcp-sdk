@@ -579,7 +579,7 @@ required-features = ["full"]
 name = "comprehensive_benchmarks"
 harness = false
 [workspace]
-members = ["pmcp-macros", "crates/pmcp-macros-support", "crates/mcp-tester", "crates/mcp-preview", "crates/pmcp-server", "crates/pmcp-server/pmcp-server-lambda", "crates/pmcp-tasks", "crates/pmcp-agent", "crates/mcp-e2e-tests", "crates/pmcp-widget-utils", "crates/pmcp-code-mode", "crates/pmcp-code-mode-derive", "crates/pmcp-server-toolkit", "crates/pmcp-toolkit-postgres", "crates/pmcp-toolkit-mysql", "crates/pmcp-toolkit-athena", "crates/pmcp-sql-server", "crates/pmcp-workbook-server", "crates/pmcp-openapi-server", "crates/pmcp-workbook-runtime", "crates/pmcp-workbook-dialect", "crates/pmcp-workbook-compiler", "examples/25-oauth-basic", "examples/test-basic", "cargo-pmcp"]
+members = ["pmcp-macros", "crates/pmcp-macros-support", "crates/mcp-tester", "crates/mcp-preview", "crates/pmcp-server", "crates/pmcp-server/pmcp-server-lambda", "crates/pmcp-tasks", "crates/pmcp-agent", "crates/mcp-e2e-tests", "crates/pmcp-widget-utils", "crates/pmcp-code-mode", "crates/pmcp-code-mode-derive", "crates/pmcp-server-toolkit", "crates/pmcp-toolkit-postgres", "crates/pmcp-toolkit-mysql", "crates/pmcp-toolkit-athena", "crates/pmcp-sql-server", "crates/pmcp-team-servers", "crates/pmcp-workbook-server", "crates/pmcp-openapi-server", "crates/pmcp-workbook-runtime", "crates/pmcp-workbook-dialect", "crates/pmcp-workbook-compiler", "examples/25-oauth-basic", "examples/test-basic", "cargo-pmcp"]
 # WASM examples and standalone examples are excluded from regular workspace tests.
 # crates/pmcp-package is workspace-excluded (it declares its own [workspace] table);
 # it must be listed here so pmcp-agent's path dependency on it does not trip
