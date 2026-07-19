@@ -9,7 +9,7 @@ Production-grade MCP server development toolkit.
 ## Features
 
 - **Project Scaffolding** - Create workspaces and add servers with best-practice templates
-- **Agents & Teams** - Scaffold and run deploy-anywhere agents (`agent new`/`agent dev`), run an in-process small team over the four reference servers (`team dev`), and inspect/capture portable AI-Package bundles (`package show`/`package capture`)
+- **Agents & Teams** - Scaffold and run deploy-anywhere agents (`agent new`/`agent dev`), run an in-process small team over the four reference servers (`team dev`), and inspect portable AI-Package bundles (`package inspect`)
 - **Development Mode** - Build and run servers with HTTP transport and live logs
 - **Client Connection** - One-command setup for Claude Code, Cursor, and MCP Inspector
 - **Automated Testing** - Generate and run scenario-based tests from server capabilities
@@ -290,10 +290,13 @@ cargo pmcp agent dev --endpoint https://api.example.com/v1 --api-key-env MY_KEY
 cargo pmcp team dev
 cargo pmcp team dev --serve --port 8080     # or serve team-mcp over HTTP
 
-# 4. Inspect a portable AI-Package, then capture (upload) it to a platform target:
-cargo pmcp package show ./my-agent.pmcp
-cargo pmcp package capture ./my-agent.pmcp --target prod
+# 4. Inspect a portable AI-Package bundle locally, fully offline:
+cargo pmcp package inspect ./some-agent.pmcp
 ```
+
+> `package inspect` reads an OCI image-layout `.pmcp` bundle. The remote
+> `capture`/`show` verbs (upload / fetch against the pmcp.run platform) are a
+> coordinated follow-on and are intentionally not shipped here yet.
 
 An agent deploys through the existing target adapters — an agent-as-server is just a
 server binary, so `cargo pmcp deploy` applies once you wrap it. See
@@ -417,7 +420,7 @@ cargo pmcp deploy test --verbose
 | `landing` | Create and deploy server landing pages | [docs/commands/landing.md](docs/commands/landing.md) |
 | `agent` | Scaffold (`new`) and run (`dev`) deploy-anywhere agents | [docs/commands/agent.md](docs/commands/agent.md) |
 | `team` | Run an in-process small team + the four reference team servers (`dev`) | [docs/commands/team.md](docs/commands/team.md) |
-| `package` | Inspect (`show`) and capture (`capture`) portable AI-Package bundles | [docs/commands/package.md](docs/commands/package.md) |
+| `package` | Inspect (`inspect`) a local AI-Package bundle, fully offline | [docs/commands/package.md](docs/commands/package.md) |
 
 ## App Validation
 

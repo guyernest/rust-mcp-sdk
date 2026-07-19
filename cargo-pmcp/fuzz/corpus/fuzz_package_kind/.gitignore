@@ -1,0 +1,5 @@
+# Only seed_* files are checked in as reference corpus. Auto-discovered
+# inputs from `cargo fuzz run` are local-only.
+*
+!.gitignore
+!seed_*.toml

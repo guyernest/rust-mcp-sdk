@@ -84,4 +84,4 @@ cargo pmcp team dev --package ./team.package.json --data-dir ./team-mcp-data
 
 - [`pmcp-team-servers`](../../../crates/pmcp-team-servers/README.md) — the four reference servers and the composition runtime
 - [`cargo pmcp agent`](agent.md) — scaffold and run the member agents
-- [`cargo pmcp package`](package.md) — inspect and capture the team package
+- [`cargo pmcp package`](package.md) — inspect a team package locally

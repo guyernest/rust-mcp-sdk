@@ -406,7 +406,7 @@ fn completion_factory(args: &DevArgs) -> Result<Arc<dyn CompletionSourceFactory>
             // Validate the endpoint shape up front (actionable, not a panic).
             url::Url::parse(endpoint)
                 .with_context(|| format!("invalid --llm endpoint URL: {endpoint}"))?;
-            let key = resolve_api_key(args.llm_api_key_env.as_deref());
+            let key = resolve_api_key(args.llm_api_key_env.as_deref())?;
             let source = build_openai_compat_source(
                 endpoint,
                 &args.model,
@@ -567,11 +567,14 @@ fn builtin_team_package() -> TeamPackage {
             responsibilities: vec![],
             channel_hints: vec![],
         }],
+        // Dev-harness limits: generous enough that `--llm` runs against a real
+        // model are not killed instantly (the offline transcript ends every turn
+        // immediately, so it never approaches these).
         limits: TeamLimits {
             max_team_depth: 3,
-            max_team_total_tokens: 1,
-            max_team_wall_clock_seconds: 1,
-            poll_interval_ms: 1,
+            max_team_total_tokens: 2_000_000,
+            max_team_wall_clock_seconds: 300,
+            poll_interval_ms: 50,
         },
         built_in_servers: vec![
             component_ref("team-fs", ComponentType::Server),

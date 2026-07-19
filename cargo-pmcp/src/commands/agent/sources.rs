@@ -12,10 +12,21 @@ use pmcp_agent::CompletionError;
 
 /// Resolve the API key from `--api-key-env <VAR>` (env-backed, never argv);
 /// default a placeholder for local unauthenticated Ollama. Never logged.
-pub fn resolve_api_key(api_key_env: Option<&str>) -> SecretString {
+///
+/// When `--api-key-env` names a variable that is unset or empty, this is an
+/// error rather than a silent empty key (which would otherwise surface as a
+/// confusing downstream 401).
+pub fn resolve_api_key(api_key_env: Option<&str>) -> Result<SecretString> {
     match api_key_env {
-        Some(var) => SecretString::new(std::env::var(var).unwrap_or_default()),
-        None => SecretString::new("ollama"),
+        Some(var) => match std::env::var(var) {
+            Ok(v) if !v.is_empty() => Ok(SecretString::new(v)),
+            _ => bail!(
+                "environment variable {var} (from --api-key-env) is unset or empty — \
+                 export it with the API key, or drop --api-key-env for a local \
+                 unauthenticated endpoint"
+            ),
+        },
+        None => Ok(SecretString::new("ollama")),
     }
 }
 
