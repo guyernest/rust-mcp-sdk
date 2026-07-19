@@ -2157,7 +2157,14 @@ Wave 4:
   3. `cargo pmcp team dev` runs an in-process small team — member agents + all four reference team servers with dev backends — wired from a `TeamPackage` (CLI-03)
   4. `cargo pmcp package capture|show` work as thin clients to the platform capture API with `pmcp-package = "0.1"` (caret) and a pin tripwire test against version drift (CLI-04)
 
-**Plans**: TBD
+**Plans**: 5 plans
+
+Plans:
+- [ ] 110-01-PLAN.md — Foundation: dependency wiring + agent/team/package command groups + main.rs arms (wave 1)
+- [ ] 110-02-PLAN.md — `agent new` scaffolder + AgentPackage manifest + pmcp-agent pin tripwire (CLI-01, wave 2)
+- [ ] 110-03-PLAN.md — `agent dev` --source openai-compat|sampling|fixed (CLI-02, wave 2)
+- [ ] 110-04-PLAN.md — `team dev` offline doc-review transcript + --serve/--llm (CLI-03, wave 2)
+- [ ] 110-05-PLAN.md — `package show|capture` + pmcp-package caret pin tripwire (CLI-04, wave 2)
 
 ### Phase 111: Docs in Three Shapes + Examples
 
