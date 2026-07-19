@@ -61,6 +61,26 @@ cargo pmcp agent dev --source fixed # run the loop offline
 See [`cargo pmcp agent`](../../cargo-pmcp/docs/commands/agent.md) for the full CLI
 workflow, and the `examples/` in this crate for direct library usage.
 
+## Known limitations (0.x)
+
+This is an experimental `0.x` crate. Two capabilities are on the `0.2` roadmap and
+are **not** wired in `0.1`:
+
+- **Provider-native opaque blocks are not preserved across turns.** The Anthropic
+  source drops unknown response blocks, so an agent that uses Anthropic *extended
+  thinking* (or Gemini `thought_signature`, or provider cache markers) will not
+  replay those blocks on the following turn. A first-class carrier for
+  provider-native extras on the completion result is planned for `0.2`.
+- **Durable-host seams are not final.** An iteration gate, step identity on seam
+  calls, a task-yield outcome, and conditional (fenced) stores — the hooks a
+  durable Lambda host needs to fully drive the loop — are being co-designed for
+  `0.2`.
+
+What *does* work in `0.1`: the pure loop with crash-safe checkpointing and
+retry-as-data; tool discovery (the loop advertises the connector's `tools/list`
+schemas to the model, filtered by the package's tool selection); and provider
+token-usage accounting (mapped into the run's cumulative token budget).
+
 ## See also
 
 - [`pmcp-package`](../pmcp-package/README.md) — the `AgentPackage` format this loop is configured from

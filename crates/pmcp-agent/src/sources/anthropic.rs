@@ -306,6 +306,19 @@ struct MessagesResponse {
     stop_reason: Option<String>,
     #[serde(default)]
     content: Vec<RespBlock>,
+    /// Provider token accounting — mapped into the result's `_meta` so the loop's
+    /// cumulative token budget can see it. Anthropic reports `input_tokens` +
+    /// `output_tokens` separately; the loop's budget reads their sum.
+    #[serde(default)]
+    usage: Option<AnthropicUsage>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct AnthropicUsage {
+    #[serde(default)]
+    input_tokens: Option<u64>,
+    #[serde(default)]
+    output_tokens: Option<u64>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -349,6 +362,12 @@ fn response_to_result(
     }
     let mut result = CreateMessageResultWithTools::new(model, Role::Assistant, content);
     result.stop_reason = resp.stop_reason;
+    if let Some(usage) = resp.usage {
+        let total = usage.input_tokens.unwrap_or(0) + usage.output_tokens.unwrap_or(0);
+        if total > 0 {
+            result.meta = Some(super::http_common::usage_meta(total));
+        }
+    }
     Ok(result)
 }
 
@@ -526,6 +545,24 @@ mod tests {
         .unwrap();
         let result = response_to_result("m", resp).unwrap();
         assert!(result.content.is_empty());
+    }
+
+    #[test]
+    fn response_maps_usage_into_meta_so_budget_can_read_it() {
+        // Anthropic reports input_tokens + output_tokens separately; the result's
+        // `_meta.usage.totalTokens` must carry their sum so the loop's cumulative
+        // token budget can trip (previously usage was discarded, so it never did).
+        let resp: MessagesResponse = serde_json::from_value(json!({
+            "content": [ { "type": "text", "text": "hi" } ],
+            "usage": { "input_tokens": 30, "output_tokens": 12 }
+        }))
+        .unwrap();
+        let result = response_to_result("m", resp).unwrap();
+        assert_eq!(
+            crate::iteration::extract_token_usage(&result),
+            42,
+            "input+output tokens must reach the budget via _meta"
+        );
     }
 
     #[test]

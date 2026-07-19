@@ -3,6 +3,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use pmcp::types::ToolInfo;
 use serde::{Deserialize, Serialize};
 
 use super::RetryClass;
@@ -91,6 +92,17 @@ pub trait ToolInvoker: Send + Sync {
         }
         out
     }
+
+    /// Advertise the tools this invoker can dispatch (name + input schema), so the
+    /// loop can pass them to the model in `CreateMessageParams.tools`.
+    ///
+    /// DEFAULT: empty — an invoker that does not support discovery (e.g. an
+    /// offline / no-op invoker) advertises nothing, and the loop sends no `tools`.
+    /// The SDK [`ClientToolInvoker`](crate::invoker::ClientToolInvoker) overrides
+    /// this to list its connector's tools via `tools/list`.
+    async fn list_tools(&self) -> Vec<ToolInfo> {
+        Vec::new()
+    }
 }
 
 /// Forward the seam through a shared `Arc<dyn ToolInvoker>`.
@@ -110,6 +122,10 @@ impl ToolInvoker for Arc<dyn ToolInvoker> {
 
     async fn invoke_batch(&self, calls: Vec<ToolCall>) -> Vec<ToolCallResult> {
         (**self).invoke_batch(calls).await
+    }
+
+    async fn list_tools(&self) -> Vec<ToolInfo> {
+        (**self).list_tools().await
     }
 }
 

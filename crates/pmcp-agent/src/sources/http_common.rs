@@ -28,6 +28,22 @@ pub(crate) fn tool_result_text(content: &[Content]) -> String {
     out
 }
 
+/// Build the advisory `_meta` map carrying provider token usage, in the exact
+/// shape the loop's `extract_token_usage` reads: `{"usage": {"totalTokens": N}}`.
+/// Setting it on a completion result is
+/// what lets the loop's cumulative token budget see real provider counts (before
+/// this, both HTTP sources discarded provider usage, so the budget never tripped).
+pub(crate) fn usage_meta(total_tokens: u64) -> serde_json::Map<String, serde_json::Value> {
+    let mut usage = serde_json::Map::new();
+    usage.insert(
+        "totalTokens".to_string(),
+        serde_json::Value::from(total_tokens),
+    );
+    let mut meta = serde_json::Map::new();
+    meta.insert("usage".to_string(), serde_json::Value::Object(usage));
+    meta
+}
+
 /// Default request timeout for the HTTP sources.
 pub(crate) const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60);
 

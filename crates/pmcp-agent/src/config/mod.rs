@@ -33,8 +33,16 @@ pub struct ResolvedAgentConfig {
     pub instructions: String,
     /// Names of the tools this agent may call (resolved tool selection).
     pub tools: Vec<String>,
-    /// Maximum tokens the completion may generate per turn.
+    /// Maximum tokens the completion may generate PER TURN (the provider
+    /// `max_tokens` request field). This is a per-turn output cap, NOT the
+    /// cumulative run budget — see [`token_budget`](Self::token_budget).
     pub max_tokens: u32,
+    /// Optional CUMULATIVE token budget for the whole run. When `Some(n)`, the
+    /// loop stops once the summed provider usage reaches `n`; when `None` (the
+    /// default), the run is bounded only by [`max_iterations`](Self::max_iterations).
+    /// Kept distinct from [`max_tokens`](Self::max_tokens) so the per-turn output
+    /// cap and the run budget are two different quantities, not one overloaded field.
+    pub token_budget: Option<u32>,
     /// Maximum loop iterations before the run is forced to stop.
     pub max_iterations: u32,
     /// Optional JSON Schema for the agent's tool input.
@@ -61,11 +69,19 @@ impl ResolvedAgentConfig {
             instructions: instructions.into(),
             tools: Vec::new(),
             max_tokens,
+            token_budget: None,
             max_iterations,
             input_schema: None,
             output_schema: None,
             model: model.into(),
             endpoints: HashMap::new(),
         }
+    }
+
+    /// Set the cumulative run [`token_budget`](Self::token_budget) (builder-style).
+    #[must_use]
+    pub fn with_token_budget(mut self, token_budget: u32) -> Self {
+        self.token_budget = Some(token_budget);
+        self
     }
 }

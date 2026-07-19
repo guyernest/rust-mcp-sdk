@@ -19,7 +19,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use futures::stream::{self, StreamExt};
 
-use pmcp::types::{CallToolResult, Content};
+use pmcp::types::{CallToolResult, Content, ToolInfo};
 use pmcp::WaitForTaskOptions;
 
 use super::factory::{ConnectorClient, InvokerError};
@@ -130,5 +130,12 @@ impl ToolInvoker for ClientToolInvoker {
             .buffered(self.max_concurrency)
             .collect()
             .await
+    }
+
+    /// List the connector's advertised tools. A discovery failure is soft: it
+    /// yields an empty list (advertise nothing) rather than aborting the run —
+    /// the loop can still proceed, it just tells the model of no tools.
+    async fn list_tools(&self) -> Vec<ToolInfo> {
+        self.connector.list_tools().await.unwrap_or_default()
     }
 }
