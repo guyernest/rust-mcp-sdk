@@ -6,6 +6,7 @@
 //! 110-05 fills both bodies.
 
 pub mod capture;
+pub mod kind;
 pub mod show;
 
 use anyhow::Result;
