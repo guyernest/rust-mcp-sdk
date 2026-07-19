@@ -158,5 +158,8 @@ pub mod package_kind;
 // `clap`/`GlobalFlags`), so it compiles in the lib target on its own — letting
 // its `mockito` success/non-2xx tests run under `cargo test --lib capture_upload`,
 // NOT only in the bin-only `commands::package::capture` handler.
+// `#[doc(hidden)]` (Codex 110-06 MEDIUM): an internal support seam, not a stable
+// public API — matches the `agent_run`/`package_kind` seams.
+#[doc(hidden)]
 #[path = "commands/package/capture_upload.rs"]
 pub mod package_capture;
