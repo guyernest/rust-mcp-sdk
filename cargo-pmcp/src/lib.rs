@@ -112,6 +112,16 @@ pub mod templates_workbook_server;
 #[path = "templates/agent.rs"]
 pub mod templates_agent;
 
+// CLI-02 (Phase 110-03): expose ONLY the lib-safe fixed-source agent runner to the
+// lib target (mirrors the `templates_agent` `#[path]` convention). `run.rs` is a
+// LEAF that references only `pmcp-agent` + `pmcp` types + std (NO `clap` /
+// `GlobalFlags` / the bin-only `commands::*` tree), so it compiles in the lib
+// target on its own. The offline `agent_dev` integration test (and the plan-110-06
+// example) reach `run_fixed_source` through this seam, NOT the bin-only
+// `commands::agent::run` module.
+#[path = "commands/agent/run.rs"]
+pub mod agent_run;
+
 // WBV2-06: expose ONLY the PURE `workbook explain` tool-surface projection + render
 // to the lib target (mirrors the `templates_workbook_server` `#[path]` convention).
 // This leaf is dependency-light (pmcp-workbook-compiler `ingest`/`synth` + serde +

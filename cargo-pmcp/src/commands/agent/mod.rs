@@ -7,6 +7,7 @@
 
 pub mod dev;
 pub mod new;
+pub mod run;
 
 use anyhow::Result;
 use clap::Subcommand;
