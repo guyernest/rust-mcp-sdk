@@ -675,10 +675,7 @@ fn execute_landing(
 
 /// Dispatcher for the `agent` subcommand group (async; owns its own tokio
 /// runtime because main.rs stays sync — mirrors [`execute_landing`]).
-fn execute_agent(
-    command: commands::agent::AgentCommand,
-    global_flags: &GlobalFlags,
-) -> Result<()> {
+fn execute_agent(command: commands::agent::AgentCommand, global_flags: &GlobalFlags) -> Result<()> {
     let runtime = tokio::runtime::Runtime::new()?;
     runtime.block_on(command.execute(global_flags))
 }
