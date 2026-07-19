@@ -198,9 +198,11 @@ fn generate_manifest(dir: &Path, name: &str) -> Result<()> {
 /// The emitted `tests/pin.rs`: an in-scaffold version-pin tripwire (D-05). It
 /// parses the scaffold's OWN `Cargo.toml` (via the `toml` dev-dep) and asserts
 /// the `pmcp-agent` dependency stays on the generated `0.1` major.minor line.
-fn emitted_pin_test() -> String {
-    format!(
-        r#"//! Version-pin tripwire (D-05): the scaffolded `pmcp-agent` dependency must
+fn emitted_pin_test() -> &'static str {
+    // A plain literal (NOT `format!`): the emitted file's own `{version}` /
+    // `{EXPECTED_LINE}` are real format args in the SCAFFOLD's assert!, so this
+    // template interpolates nothing itself.
+    r#"//! Version-pin tripwire (D-05): the scaffolded `pmcp-agent` dependency must
 //! stay pinned to the major.minor line this project was generated against. If a
 //! future `cargo pmcp agent new` bumps the pin, update the expectation here
 //! deliberately — a silent drift is a defect.
@@ -209,25 +211,24 @@ fn emitted_pin_test() -> String {
 const EXPECTED_LINE: &str = "0.1";
 
 #[test]
-fn pmcp_agent_pin_matches_generated_major_minor() {{
+fn pmcp_agent_pin_matches_generated_major_minor() {
     let manifest = include_str!("../Cargo.toml");
     let parsed: toml::Value = toml::from_str(manifest).expect("parse Cargo.toml");
     let dep = parsed
         .get("dependencies")
         .and_then(|d| d.get("pmcp-agent"))
         .expect("Cargo.toml has [dependencies] pmcp-agent");
-    // The dependency is a table: {{ version = "0.1.0", features = [...] }}.
+    // The dependency is a table: { version = "0.1.0", features = [...] }.
     let version = dep
         .get("version")
         .and_then(toml::Value::as_str)
         .expect("pmcp-agent dependency declares a version string");
     assert!(
         version.starts_with(EXPECTED_LINE),
-        "scaffolded pmcp-agent pin `{{version}}` drifted from the generated `{{EXPECTED_LINE}}` line"
+        "scaffolded pmcp-agent pin `{version}` drifted from the generated `{EXPECTED_LINE}` line"
     );
-}}
+}
 "#
-    )
 }
 
 fn generate_pin_test(dir: &Path) -> Result<()> {
