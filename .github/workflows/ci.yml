@@ -218,7 +218,11 @@ jobs:
     - name: Install cargo-deny (make quality-gate chains purity-check, which needs it)
       uses: taiki-e/install-action@v2
       with:
-        tool: cargo-deny
+        # Pinned: the Makefile purity-check Layer 2 invocation uses cargo-deny
+        # 0.18.3's CLI ordering (`check --config deny.toml bans`). Newer cargo-deny
+        # moved `--config` to a global flag (before `check`) and rejects the old
+        # form with a usage error, silently breaking the gate. Pin like PMAT_VERSION.
+        tool: cargo-deny@0.18.3
 
     - name: Check disk space before quality gate
       run: df -h
@@ -330,7 +334,10 @@ jobs:
     - name: Install cargo-deny (Layer 2 backstop)
       uses: taiki-e/install-action@v2
       with:
-        tool: cargo-deny
+        # Pinned to match the Makefile purity-check Layer 2 CLI form (see the
+        # quality-gate job's install step for the full rationale). Newer cargo-deny
+        # relocated `--config` and breaks `check --config deny.toml bans`.
+        tool: cargo-deny@0.18.3
 
     - name: Run purity gate (per-crate, per-feature, fail-closed; Layers 1+2)
       run: make purity-check
