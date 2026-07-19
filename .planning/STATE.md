@@ -4,7 +4,7 @@ milestone: v2.4
 milestone_name: Agents & Teams — SDK Extraction
 status: executing
 stopped_at: Phase 110 context gathered
-last_updated: "2026-07-19T07:23:47.773Z"
+last_updated: "2026-07-19T07:38:37.164Z"
 last_activity: 2026-07-19
 progress:
   total_phases: 63
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-07-17) · .planning/ROADMAP.md (v2.4 mil
 ## Current Position
 
 Phase: 110 (cargo-pmcp-agent-team-verbs) — EXECUTING
-Plan: 4 of 6
+Plan: 5 of 6
 Status: Ready to execute
 Last activity: 2026-07-19
 
@@ -77,6 +77,9 @@ Decisions are logged in PROJECT.md Key Decisions table. Decisions framing this m
 - [Phase ?]: 110-02: cargo pmcp agent new scaffolds a COMPILABLE agent crate — manifest built from the real AgentPackage struct (round-trip guaranteed), a manifest-driven runner that LOADS agent.package.json + resolve_agent, full deps, and an in-scaffold tests/pin.rs; two-level pin tripwire (D-05) + validate_crate_name promoted to pub(crate) (D-01a)
 - [Phase ?]: 110-03: cargo pmcp agent dev (CLI-02) wired for --source openai-compat|sampling|fixed (clap ValueEnum); loads a real AgentPackage (--package/./agent.package.json/built-in demo); correct pmcp-agent contract — Decode at source construction → --allow-insecure-http bail, non-Completed RunOutcome → --endpoint/--source fixed bail
 - [Phase ?]: 110-03: run_fixed_source is a lib-safe leaf (no clap/GlobalFlags) mounted into the lib target as cargo_pmcp::agent_run via a #[path] seam (commands::* is bin-only), reused by the CLI fixed arm and the 110-06 example
+- [Phase 110]: 110-04: cargo pmcp team dev (CLI-03) — default transcript delegates composition to TeamRuntime (D-02, no hand-rolled spin-up); --serve reuses the shipped team-mcp binary recipe (build_team_mcp_server + serve_streamable_http on 127.0.0.1:<port>, NOT TeamRuntime, no upstream change); --llm wraps a validated OpenAiCompatSource in the exported FixedSourceFactory (correct sync/infallible factory shape, not a custom fallible factory)
+- [Phase 110]: 110-04: behavioral tests characterize the composable primitives directly (commands::* is bin-only, so the bail! stub is unreachable from an integration test) — transcript + ephemeral-port --serve tools/list + mockito-endpoint --llm smoke, all offline/loopback
+- [Phase ?]: test decision xyz
 
 ### Pending Todos
 
@@ -112,7 +115,7 @@ Items deferred by design for this milestone (design §7 / REQUIREMENTS v2):
 
 ## Session Continuity
 
-Last session: 2026-07-19T07:23:27.031Z
+Last session: 2026-07-19T07:35:25.508Z
 Stopped at: Phase 110 context gathered
 Resume file: None
 
@@ -133,3 +136,4 @@ Resume file: None
 | Phase 110 P01 | 44min | 3 tasks | 12 files |
 | Phase 110 P02 | 38min | 3 tasks | 8 files |
 | Phase 110 P03 | 30min | 2 tasks | 5 files |
+| Phase 110 P04 | 40min | 2 tasks | 2 files |
