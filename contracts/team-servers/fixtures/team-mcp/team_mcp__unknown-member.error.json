@@ -1,9 +1,10 @@
 {
-  "schema_version": "1",
-  "case_id": "team-mcp.team_mcp__unknown_member.negative-unknown-member",
+  "schema_version": "2",
+  "kind": "tool_call",
+  "case_id": "team-mcp.team_mcp__ghost.negative-unknown-member",
   "server": "team-mcp",
   "request": {
-    "name": "team_mcp__ghost",
+    "name": "team_mcp__ghost__1",
     "arguments": { "message": "hi" },
     "_meta": { "x-pmcp-team-depth": "1" }
   },
@@ -11,10 +12,8 @@
     "outcome": "error",
     "match": "subset",
     "response": {
-      "error": {
-        "code": -32602,
-        "message": "unknown member: no configured member id for 'ghost'"
-      }
+      "error": { "message": "not found" },
+      "_note": "an unknown member is never advertised, so dispatch yields a tool-not-found error, never a panic (109-05: unknown => tool-not-found)"
     }
   }
 }

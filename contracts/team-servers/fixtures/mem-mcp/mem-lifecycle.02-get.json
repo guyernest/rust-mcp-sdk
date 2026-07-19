@@ -1,0 +1,20 @@
+{
+  "schema_version": "2",
+  "kind": "tool_call",
+  "case_id": "mem-mcp.mem__get.positive-substituted",
+  "server": "mem-mcp",
+  "scenario": "mem-lifecycle",
+  "order": 2,
+  "request": {
+    "name": "mem__get",
+    "arguments": { "id": "${mem_id}" }
+  },
+  "expect": {
+    "outcome": "success",
+    "match": "predicate",
+    "response": {
+      "content": [{ "type": "text", "text": "@contains:Cloud Run" }],
+      "isError": false
+    }
+  }
+}

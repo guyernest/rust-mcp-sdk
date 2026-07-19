@@ -3,15 +3,18 @@
 //! This is a dependency-free (`serde_json` + `std` only) schema-aware test suite that:
 //! 1. asserts the contract enumerates the four team-server tool surfaces and all 19
 //!    static tool names plus the two dynamic tool-family prefixes;
-//! 2. validates every fixture against the versioned fixture schema
-//!    (`schema_version`, `case_id`, `server`, `request.name`, `expect{outcome,match,response}`);
-//! 3. cross-references every fixture's `request.name` (or its `team_mcp__` /
+//! 2. validates every fixture against the versioned fixture schema v2
+//!    (`schema_version: "2"`, `kind`, `case_id`, `server`, and — per `kind` —
+//!    either `expect.tools_list_schema` or `request.name` + `expect{outcome,match,response}`);
+//! 3. cross-references every fixture's tool name(s) (or a `team_mcp__` /
 //!    `team_approval__` prefix) against the contract text;
 //! 4. asserts per-server coverage and the presence of high-value negative fixtures.
 //!
 //! Both the contract and the fixtures directory are resolved via `CARGO_MANIFEST_DIR`
-//! so the test is location-independent. Exhaustive executable behavior (running the
-//! fixtures against a live server) is deferred to Phase 109 (TEAM-06).
+//! so the test is location-independent. Exhaustive EXECUTABLE behavior (replaying
+//! the fixtures against live servers) lives in the `pmcp-team-servers` crate's
+//! `tests/conformance.rs` (Phase 109 Plan 07, TEAM-06); this suite is the
+//! structural/coverage gate over the same v2 fixtures.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -157,10 +160,20 @@ fn fixtures_conform_to_versioned_schema() {
         let v = &fx.value;
         let loc = fx.path.display();
 
+        // Fixture schema v2 (Phase 109 Plan 07): `kind`-discriminated cases
+        // (tools_list | tool_call), replayable by the wire-level runner.
         assert_eq!(
             v["schema_version"].as_str(),
-            Some("1"),
-            "{loc}: schema_version must be the string \"1\""
+            Some("2"),
+            "{loc}: schema_version must be the string \"2\""
+        );
+
+        let kind = v["kind"]
+            .as_str()
+            .unwrap_or_else(|| panic!("{loc}: kind must be a string"));
+        assert!(
+            matches!(kind, "tools_list" | "tool_call"),
+            "{loc}: kind must be 'tools_list' or 'tool_call', got '{kind}'"
         );
 
         let case_id = v["case_id"]
@@ -177,44 +190,58 @@ fn fixtures_conform_to_versioned_schema() {
             fx.server_dir
         );
 
-        let name = v["request"]["name"]
-            .as_str()
-            .unwrap_or_else(|| panic!("{loc}: request.name must be a string"));
-        assert!(!name.is_empty(), "{loc}: request.name must be non-empty");
+        match kind {
+            "tools_list" => {
+                // A tools_list case freezes the EXACT advertised surface: a
+                // non-empty per-tool input-schema map (its keys are the surface).
+                let schema = v["expect"]["tools_list_schema"]
+                    .as_object()
+                    .unwrap_or_else(|| panic!("{loc}: tools_list requires expect.tools_list_schema object"));
+                assert!(
+                    !schema.is_empty(),
+                    "{loc}: tools_list_schema must advertise at least one tool"
+                );
+            },
+            "tool_call" => {
+                let name = v["request"]["name"]
+                    .as_str()
+                    .unwrap_or_else(|| panic!("{loc}: tool_call requires request.name string"));
+                assert!(!name.is_empty(), "{loc}: request.name must be non-empty");
 
-        let outcome = v["expect"]["outcome"]
-            .as_str()
-            .unwrap_or_else(|| panic!("{loc}: expect.outcome must be a string"));
-        assert!(
-            matches!(outcome, "success" | "error"),
-            "{loc}: expect.outcome must be 'success' or 'error', got '{outcome}'"
-        );
+                let outcome = v["expect"]["outcome"]
+                    .as_str()
+                    .unwrap_or_else(|| panic!("{loc}: expect.outcome must be a string"));
+                assert!(
+                    matches!(outcome, "success" | "error"),
+                    "{loc}: expect.outcome must be 'success' or 'error', got '{outcome}'"
+                );
+                assert!(
+                    v["expect"]["match"].is_string(),
+                    "{loc}: expect.match must be present as a string"
+                );
+                assert!(
+                    !v["expect"]["response"].is_null(),
+                    "{loc}: expect.response must be present"
+                );
 
-        assert!(
-            v["expect"]["match"].is_string(),
-            "{loc}: expect.match must be present as a string"
-        );
-        assert!(
-            !v["expect"]["response"].is_null(),
-            "{loc}: expect.response must be present"
-        );
-
-        // Outcome <-> response shape: an 'error' case must carry a numeric
-        // error code; a 'success' case must carry a content array. Every
-        // fixture follows this MCP tool-result convention — enforce it so a
-        // malformed future fixture (e.g. an error case with a `content` body,
-        // or a success case missing `content`) is rejected instead of silently
-        // passing the shape-agnostic non-null check above.
-        match outcome {
-            "error" => assert!(
-                v["expect"]["response"]["error"]["code"].is_number(),
-                "{loc}: outcome 'error' requires response.error.code to be a number"
-            ),
-            "success" => assert!(
-                v["expect"]["response"]["content"].is_array(),
-                "{loc}: outcome 'success' requires response.content to be an array"
-            ),
-            _ => unreachable!("outcome already validated to be 'success' or 'error'"),
+                // Outcome <-> response shape: an 'error' case must describe the
+                // error (numeric code and/or message); a 'success' case asserts
+                // either content and/or a related-task `_meta` envelope. Enforce
+                // it so a malformed future fixture is rejected.
+                match outcome {
+                    "error" => assert!(
+                        v["expect"]["response"]["error"].is_object(),
+                        "{loc}: outcome 'error' requires a response.error object"
+                    ),
+                    "success" => assert!(
+                        v["expect"]["response"]["content"].is_array()
+                            || v["expect"]["response"]["_meta"].is_object(),
+                        "{loc}: outcome 'success' requires response.content and/or response._meta"
+                    ),
+                    _ => unreachable!("outcome already validated to be 'success' or 'error'"),
+                }
+            },
+            _ => unreachable!("kind already validated"),
         }
     }
 }
@@ -225,14 +252,35 @@ fn every_fixture_tool_is_captured_in_contract() {
     let fixtures = load_fixtures();
 
     for fx in &fixtures {
-        let name = fx.value["request"]["name"]
-            .as_str()
-            .expect("request.name checked by schema test");
-        assert!(
-            tool_is_captured(&contract, name),
-            "{}: tool '{name}' is not captured in the contract",
-            fx.path.display()
-        );
+        match fx.value["kind"].as_str() {
+            Some("tool_call") => {
+                let name = fx.value["request"]["name"]
+                    .as_str()
+                    .expect("request.name checked by schema test");
+                assert!(
+                    tool_is_captured(&contract, name),
+                    "{}: tool '{name}' is not captured in the contract",
+                    fx.path.display()
+                );
+            },
+            Some("tools_list") => {
+                // Every advertised tool name in the frozen surface is captured.
+                let schema = fx.value["expect"]["tools_list_schema"]
+                    .as_object()
+                    .expect("tools_list_schema checked by schema test");
+                for name in schema.keys() {
+                    assert!(
+                        tool_is_captured(&contract, name),
+                        "{}: advertised tool '{name}' is not captured in the contract",
+                        fx.path.display()
+                    );
+                }
+            },
+            other => panic!(
+                "{}: unexpected kind {other:?} (checked by schema test)",
+                fx.path.display()
+            ),
+        }
     }
 }
 
@@ -257,13 +305,17 @@ fn coverage_spans_all_servers_and_negative_cases() {
 
 #[test]
 fn at_least_one_related_task_meta_fixture() {
+    // The related task lives under the SDK constant key (RELATED_TASK_META_KEY),
+    // never a bare `related_task` key (contract v1.1.0 correction).
+    const RELATED_TASK_META_KEY: &str = "io.modelcontextprotocol/related-task";
     let fixtures = load_fixtures();
     let found = fixtures
         .iter()
-        .any(|f| !f.value["expect"]["response"]["_meta"]["related_task"].is_null());
+        .any(|f| !f.value["expect"]["response"]["_meta"][RELATED_TASK_META_KEY].is_null());
     assert!(
         found,
-        "expected at least one fixture placing related_task under a top-level _meta \
-         (fs__complete_task / team_mcp__<member> ToolOutput::Result surface)"
+        "expected at least one fixture placing the related task under a top-level \
+         _meta[{RELATED_TASK_META_KEY}] (fs__complete_task / team_mcp__<member> \
+         ToolOutput::Result surface)"
     );
 }

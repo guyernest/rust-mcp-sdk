@@ -1,0 +1,20 @@
+{
+  "schema_version": "2",
+  "kind": "tool_call",
+  "case_id": "mem-mcp.mem__list_recent.positive",
+  "server": "mem-mcp",
+  "scenario": "mem-lifecycle",
+  "order": 4,
+  "request": {
+    "name": "mem__list_recent",
+    "arguments": { "limit": 5 }
+  },
+  "expect": {
+    "outcome": "success",
+    "match": "predicate",
+    "response": {
+      "content": [{ "type": "text", "text": "@contains:mem-001" }],
+      "isError": false
+    }
+  }
+}

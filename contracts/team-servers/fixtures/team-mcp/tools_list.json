@@ -1,0 +1,22 @@
+{
+  "schema_version": "2",
+  "kind": "tools_list",
+  "case_id": "team-mcp.tools_list.exact-surface",
+  "server": "team-mcp",
+  "expect": {
+    "tools_list_schema": {
+      "team_mcp__reviewer__1": {
+        "type": "object",
+        "properties": {
+          "message": {
+            "type": "string",
+            "description": "The task/message to forward to the team member."
+          }
+        },
+        "required": [
+          "message"
+        ]
+      }
+    }
+  }
+}

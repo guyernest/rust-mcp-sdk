@@ -1,19 +1,19 @@
 {
   "schema_version": "2",
   "kind": "tool_call",
-  "case_id": "team-mcp.team_mcp__reviewer.negative-malformed-depth",
+  "case_id": "team-mcp.team_mcp__reviewer.negative-invalid-args",
   "server": "team-mcp",
   "request": {
     "name": "team_mcp__reviewer__1",
     "arguments": { "message": "hi" },
-    "_meta": { "x-pmcp-team-depth": "not-a-number" }
+    "_meta": { "x-pmcp-team-depth": 1.5 }
   },
   "expect": {
     "outcome": "error",
     "match": "subset",
     "response": {
       "error": { "message": "malformed team depth" },
-      "_note": "x-pmcp-team-depth is strict-integer parsed; a non-integer string is rejected, never silently treated as 0"
+      "_note": "a structurally-invalid (non-integer numeric) depth _meta value is rejected by strict parsing — complementary to the string malformed-depth case"
     }
   }
 }

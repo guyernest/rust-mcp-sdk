@@ -704,7 +704,9 @@ fn eval_predicate(tok: &str, actual: &Value) -> Option<Result<(), String>> {
         return Some(if hay.contains(needle) {
             Ok(())
         } else {
-            Err(format!("predicate `@contains:{needle}` failed for {actual}"))
+            Err(format!(
+                "predicate `@contains:{needle}` failed for {actual}"
+            ))
         });
     }
     match tok {
@@ -1143,7 +1145,10 @@ mod tests {
         // The reference servers wrap plain values into content[0].text as a
         // serialized JSON string; the selector transparently descends into it.
         let v = json!({ "content": [{ "type": "text", "text": "{\"id\":\"appr-001\"}" }] });
-        assert_eq!(select(&v, "$.content[0].text.id").unwrap(), json!("appr-001"));
+        assert_eq!(
+            select(&v, "$.content[0].text.id").unwrap(),
+            json!("appr-001")
+        );
     }
 
     #[test]

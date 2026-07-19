@@ -1,0 +1,19 @@
+{
+  "schema_version": "2",
+  "kind": "tool_call",
+  "case_id": "team-mcp.team_mcp__reviewer.negative-ancestor-cycle",
+  "server": "team-mcp",
+  "request": {
+    "name": "team_mcp__reviewer__1",
+    "arguments": { "message": "hi" },
+    "_meta": { "x-pmcp-team-depth": "1", "x-pmcp-team-ancestors": ["reviewer@^1"] }
+  },
+  "expect": {
+    "outcome": "error",
+    "match": "subset",
+    "response": {
+      "error": { "message": "ancestor-cycle rejected" },
+      "_note": "the target is already in the caller ancestor chain (cycle guard, MemberId-based)"
+    }
+  }
+}

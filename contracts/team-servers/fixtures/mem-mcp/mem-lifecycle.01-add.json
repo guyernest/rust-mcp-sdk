@@ -1,0 +1,21 @@
+{
+  "schema_version": "2",
+  "kind": "tool_call",
+  "case_id": "mem-mcp.mem__add.positive",
+  "server": "mem-mcp",
+  "scenario": "mem-lifecycle",
+  "order": 1,
+  "request": {
+    "name": "mem__add",
+    "arguments": { "text": "deploy target is Cloud Run", "tags": ["infra"] }
+  },
+  "capture": { "mem_id": "$.content[0].text.id" },
+  "expect": {
+    "outcome": "success",
+    "match": "predicate",
+    "response": {
+      "content": [{ "type": "text", "text": "@contains:mem-001" }],
+      "isError": false
+    }
+  }
+}
