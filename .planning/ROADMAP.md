@@ -2162,7 +2162,7 @@ Wave 4:
 Plans:
 **Wave 1**
 
-- [ ] 110-01-PLAN.md — Foundation: dependency wiring + agent/team/package command groups + main.rs arms (wave 1)
+- [x] 110-01-PLAN.md — Foundation: dependency wiring + agent/team/package command groups + main.rs arms (wave 1)
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
@@ -2198,5 +2198,5 @@ Plans:
 | 107. Contracts & Package Format | 3/3 | Complete    | 2026-07-18 |
 | 108. `pmcp-agent` Loop Crate | 6/6 | Complete   | 2026-07-18 |
 | 109. Team Reference Servers | 9/9 | Complete    | 2026-07-19 |
-| 110. cargo-pmcp Agent & Team Verbs | 0/TBD | Not started | - |
+| 110. cargo-pmcp Agent & Team Verbs | 1/6 | In Progress|  |
 | 111. Docs in Three Shapes + Examples | 0/TBD | Not started | - |
