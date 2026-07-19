@@ -18,9 +18,9 @@ use super::GlobalFlags;
 /// `cargo pmcp agent <subcommand>` — the agent command group.
 #[derive(Debug, Subcommand)]
 pub enum AgentCommand {
-    /// Scaffold a new agent package (delivered by Plan 110-02).
+    /// Scaffold a new agent package (AgentPackage manifest + runnable crate)
     New(new::NewArgs),
-    /// Run an agent loop against a completion source (delivered by Plan 110-03).
+    /// Run an agent loop against a completion source (openai-compat, sampling, or fixed)
     Dev(dev::DevArgs),
 }
 

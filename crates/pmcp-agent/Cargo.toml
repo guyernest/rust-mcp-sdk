@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 description = "Deploy-anywhere agent decision loop for the PMCP SDK (experimental)"
 license = "MIT"
+readme = "README.md"
 rust-version = "1.91.0"
 
 [dependencies]

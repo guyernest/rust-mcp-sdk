@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 description = "Dev-grade reference team servers (team-fs, mem-mcp, approval-mcp, team-mcp) for the PMCP SDK (experimental)"
 license = "MIT"
+readme = "README.md"
 rust-version = "1.91.0"
 # .planning/ (GSD scaffolding), fuzz/ (workspace-excluded cargo-fuzz sub-package),
 # and tests/ (property fixtures) are never relevant to downstream consumers —
