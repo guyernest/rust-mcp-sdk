@@ -2173,7 +2173,7 @@ Plans:
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [ ] 110-06-PLAN.md — ALWAYS deliverables: agent example (scaffold + fixed loop) + fuzz_package_kind + lib seams (CLI-01/02/04, wave 3)
+- [ ] 110-06-PLAN.md — ALWAYS deliverables: agent + team-dev examples (over production seams) + manifest-parse fuzz + #[doc(hidden)] lib seams (CLI-01/02/03/04, wave 3)
 
 ### Phase 111: Docs in Three Shapes + Examples
 
