@@ -19,6 +19,7 @@
 //! Scaled team-memory/approval backends stay on the platform (design DEFER-03).
 
 pub mod compose;
+pub mod dev_bin;
 pub mod transport;
 
 #[cfg(feature = "approval-mcp")]

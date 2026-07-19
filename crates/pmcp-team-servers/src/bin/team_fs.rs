@@ -48,12 +48,7 @@ struct Args {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
-        )
-        .init();
+    pmcp_team_servers::dev_bin::init_tracing();
 
     let args = Args::parse();
 
@@ -76,28 +71,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// Serve over HTTP by default, or stdio when requested / when built without HTTP.
 #[cfg(feature = "http")]
 async fn serve(server: pmcp::Server, args: &Args) -> Result<(), Box<dyn std::error::Error>> {
+    use pmcp::server::streamable_http_server::StreamableHttpServerConfig;
+    use pmcp_team_servers::dev_bin::{serve_stdio, serve_streamable_http};
+
     if args.stdio {
-        return serve_stdio(server).await;
+        return serve_stdio(server, "team-fs").await;
     }
-    use pmcp::server::streamable_http_server::{StreamableHttpServer, StreamableHttpServerConfig};
-    let addr = std::net::SocketAddr::from(([127, 0, 0, 1], args.port));
-    let shared = Arc::new(tokio::sync::Mutex::new(server));
-    let http =
-        StreamableHttpServer::with_config(addr, shared, StreamableHttpServerConfig::default());
-    let (bound, handle) = http.start().await?;
-    tracing::info!(%bound, "team-fs serving streamable HTTP");
-    handle.await?;
-    Ok(())
+    serve_streamable_http(
+        server,
+        "team-fs",
+        args.port,
+        StreamableHttpServerConfig::default(),
+    )
+    .await
 }
 
 /// Stdio-only build: the `http` feature is absent, so serve stdio unconditionally.
 #[cfg(not(feature = "http"))]
 async fn serve(server: pmcp::Server, _args: &Args) -> Result<(), Box<dyn std::error::Error>> {
-    serve_stdio(server).await
-}
-
-async fn serve_stdio(server: pmcp::Server) -> Result<(), Box<dyn std::error::Error>> {
-    tracing::info!("team-fs serving over stdio");
-    server.run(pmcp::StdioTransport::new()).await?;
-    Ok(())
+    pmcp_team_servers::dev_bin::serve_stdio(server, "team-fs").await
 }

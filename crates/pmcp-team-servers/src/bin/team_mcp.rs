@@ -66,12 +66,7 @@ struct Args {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
-        )
-        .init();
+    pmcp_team_servers::dev_bin::init_tracing();
 
     let args = Args::parse();
 
@@ -120,15 +115,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 /// Serve over HTTP by default, or stdio when requested / when built without HTTP.
+///
+/// The HTTP path installs the [`edge::TeamDepthHeaderMiddleware`] so the
+/// `x-pmcp-team-depth` header is mapped into the request `_meta` before dispatch
+/// (D-14) — the one respect in which this binary's serve path differs from the
+/// other three.
 #[cfg(feature = "http")]
 async fn serve(server: pmcp::Server, args: &Args) -> Result<(), Box<dyn std::error::Error>> {
     use std::sync::Arc;
 
     use pmcp::server::http_middleware::ServerHttpMiddlewareChain;
-    use pmcp::server::streamable_http_server::{StreamableHttpServer, StreamableHttpServerConfig};
+    use pmcp::server::streamable_http_server::StreamableHttpServerConfig;
+    use pmcp_team_servers::dev_bin::{serve_stdio, serve_streamable_http};
 
     if args.stdio {
-        return serve_stdio(server).await;
+        return serve_stdio(server, "team-mcp").await;
     }
 
     // Edge map (D-14): x-pmcp-team-depth header -> request _meta BEFORE dispatch.
@@ -138,26 +139,13 @@ async fn serve(server: pmcp::Server, args: &Args) -> Result<(), Box<dyn std::err
         http_middleware: Some(Arc::new(chain)),
         ..StreamableHttpServerConfig::default()
     };
-
-    let addr = std::net::SocketAddr::from(([127, 0, 0, 1], args.port));
-    let shared = Arc::new(tokio::sync::Mutex::new(server));
-    let http = StreamableHttpServer::with_config(addr, shared, config);
-    let (bound, handle) = http.start().await?;
-    tracing::info!(%bound, "team-mcp serving streamable HTTP (x-pmcp-team-depth mapped into _meta)");
-    handle.await?;
-    Ok(())
+    serve_streamable_http(server, "team-mcp", args.port, config).await
 }
 
 /// Stdio-only build: the `http` feature is absent, so serve stdio unconditionally.
 #[cfg(not(feature = "http"))]
 async fn serve(server: pmcp::Server, _args: &Args) -> Result<(), Box<dyn std::error::Error>> {
-    serve_stdio(server).await
-}
-
-async fn serve_stdio(server: pmcp::Server) -> Result<(), Box<dyn std::error::Error>> {
-    tracing::info!("team-mcp serving over stdio");
-    server.run(pmcp::StdioTransport::new()).await?;
-    Ok(())
+    pmcp_team_servers::dev_bin::serve_stdio(server, "team-mcp").await
 }
 
 /// HTTP-edge middleware: map the `x-pmcp-team-depth` header into the request's
