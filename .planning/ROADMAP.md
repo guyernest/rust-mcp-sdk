@@ -2040,7 +2040,7 @@ Plans:
 - [x] **Phase 107: Contracts & Package Format** — `pmcp-package` adopted into this repo + published 0.1.0 (wire-frozen), team-server tool contracts captured as provable-contracts YAML (design Phase B) (completed 2026-07-18)
 - [x] **Phase 108: `pmcp-agent` Loop Crate** — the pure agent loop between effect seams, three CompletionSources, agent-as-server adapter, tasks-aware ToolInvoker, configured from an AgentPackage (design Phase C) (completed 2026-07-18)
 - [x] **Phase 109: Team Reference Servers** — `pmcp-team-servers` (one feature-flagged crate) with dev-grade team-fs/approval-mcp/mem-mcp/team-mcp + conformance tests against the PKG-03 contracts (design Phase D) (completed 2026-07-19)
-- [ ] **Phase 110: cargo-pmcp Agent & Team Verbs** — `agent new`/`agent dev`, `team dev`, `package capture|show` with version-pin tripwires (design Phase E)
+- [x] **Phase 110: cargo-pmcp Agent & Team Verbs** — `agent new`/`agent dev`, `team dev`, `package capture|show` with version-pin tripwires (design Phase E) (completed 2026-07-19)
 - [ ] **Phase 111: Docs in Three Shapes + Examples** — pmcp-book chapters, runnable examples, README + course updates leading with the cargo pmcp workflow (design Phase F)
 
 ## Phase Details — v2.4 (Agents & Teams)
@@ -2169,11 +2169,11 @@ Plans:
 - [x] 110-02-PLAN.md — `agent new` scaffolder + AgentPackage manifest + pmcp-agent pin tripwire (CLI-01, wave 2)
 - [x] 110-03-PLAN.md — `agent dev` --source openai-compat|sampling|fixed + in-process sampling test (CLI-02, wave 2)
 - [x] 110-04-PLAN.md — `team dev` offline doc-review transcript + --serve/--llm (CLI-03, wave 2)
-- [ ] 110-05-PLAN.md — `package show|capture` + pure kind::detect_kind + pmcp-package caret pin tripwire (CLI-04, wave 2)
+- [x] 110-05-PLAN.md — `package show|capture` + pure kind::detect_kind + pmcp-package caret pin tripwire (CLI-04, wave 2)
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [ ] 110-06-PLAN.md — ALWAYS deliverables: agent + team-dev examples (over production seams) + manifest-parse fuzz + #[doc(hidden)] lib seams (CLI-01/02/03/04, wave 3)
+- [x] 110-06-PLAN.md — ALWAYS deliverables: agent + team-dev examples (over production seams) + manifest-parse fuzz + #[doc(hidden)] lib seams (CLI-01/02/03/04, wave 3)
 
 ### Phase 111: Docs in Three Shapes + Examples
 
@@ -2198,5 +2198,5 @@ Plans:
 | 107. Contracts & Package Format | 3/3 | Complete    | 2026-07-18 |
 | 108. `pmcp-agent` Loop Crate | 6/6 | Complete   | 2026-07-18 |
 | 109. Team Reference Servers | 9/9 | Complete    | 2026-07-19 |
-| 110. cargo-pmcp Agent & Team Verbs | 4/6 | In Progress|  |
+| 110. cargo-pmcp Agent & Team Verbs | 6/6 | Complete   | 2026-07-19 |
 | 111. Docs in Three Shapes + Examples | 0/TBD | Not started | - |

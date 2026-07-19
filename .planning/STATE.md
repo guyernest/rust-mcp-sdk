@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v2.4
 milestone_name: Agents & Teams — SDK Extraction
-status: executing
+status: verifying
 stopped_at: Phase 110 context gathered
-last_updated: "2026-07-19T07:59:04.656Z"
+last_updated: "2026-07-19T08:09:32.679Z"
 last_activity: 2026-07-19
 progress:
   total_phases: 63
-  completed_phases: 4
+  completed_phases: 5
   total_plans: 27
-  completed_plans: 25
-  percent: 6
+  completed_plans: 27
+  percent: 8
 ---
 
 # Project State
@@ -27,7 +27,7 @@ See: .planning/PROJECT.md (updated 2026-07-17) · .planning/ROADMAP.md (v2.4 mil
 
 Phase: 110 (cargo-pmcp-agent-team-verbs) — EXECUTING
 Plan: 6 of 6
-Status: Ready to execute
+Status: Phase complete — ready for verification
 Last activity: 2026-07-19
 
 ## v2.4 Phase Plan (6 phases, 31 requirements)
@@ -80,6 +80,9 @@ Decisions are logged in PROJECT.md Key Decisions table. Decisions framing this m
 - [Phase 110]: 110-04: cargo pmcp team dev (CLI-03) — default transcript delegates composition to TeamRuntime (D-02, no hand-rolled spin-up); --serve reuses the shipped team-mcp binary recipe (build_team_mcp_server + serve_streamable_http on 127.0.0.1:<port>, NOT TeamRuntime, no upstream change); --llm wraps a validated OpenAiCompatSource in the exported FixedSourceFactory (correct sync/infallible factory shape, not a custom fallible factory)
 - [Phase 110]: 110-04: behavioral tests characterize the composable primitives directly (commands::* is bin-only, so the bail! stub is unreachable from an integration test) — transcript + ephemeral-port --serve tools/list + mockito-endpoint --llm smoke, all offline/loopback
 - [Phase ?]: test decision xyz
+- [Phase ?]: 110-06: agent example drives the PRODUCTION run_fixed_source seam, not a re-implemented AgentEngine loop (Codex 110-06 HIGH)
+- [Phase ?]: 110-06: fuzz_package_kind targets the RAW-bytes untrusted manifest-parse boundary, the real package show seam
+- [Phase ?]: 110-06: the three lib seams are #[doc(hidden)] internal support surface for examples/fuzz, not stable API (Codex 110-06 MEDIUM)
 
 ### Pending Todos
 
@@ -115,7 +118,7 @@ Items deferred by design for this milestone (design §7 / REQUIREMENTS v2):
 
 ## Session Continuity
 
-Last session: 2026-07-19T07:56:15.997Z
+Last session: 2026-07-19T08:09:19.267Z
 Stopped at: Phase 110 context gathered
 Resume file: None
 
@@ -138,3 +141,4 @@ Resume file: None
 | Phase 110 P03 | 30min | 2 tasks | 5 files |
 | Phase 110 P04 | 40min | 2 tasks | 2 files |
 | Phase 110 P05 | 12min | 3 tasks | 8 files |
+| Phase 110 P06 | 20min | 3 tasks | 5 files |
