@@ -67,7 +67,8 @@ pub async fn execute(args: CaptureArgs, global_flags: &GlobalFlags) -> Result<()
     // wiring is a documented follow-on.
     if is_near_expiry(entry, REFRESH_WINDOW_SECS) {
         bail!(
-            "cached token for {api_url_str} is expired — run `cargo pmcp auth login {api_url_str}`"
+            "cached token for {api_url_str} is expired or about to expire — \
+             run `cargo pmcp auth login {api_url_str}`"
         );
     }
 

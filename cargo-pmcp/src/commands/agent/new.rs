@@ -77,6 +77,13 @@ fn ensure_destination_writable(dir: &Path, force: bool) -> Result<()> {
         );
     }
 
+    if !meta.is_dir() {
+        anyhow::bail!(
+            "destination '{}' already exists as a file — remove it or choose another name",
+            dir.display()
+        );
+    }
+
     let is_empty = fs::read_dir(dir)
         .map(|mut entries| entries.next().is_none())
         .unwrap_or(false);
