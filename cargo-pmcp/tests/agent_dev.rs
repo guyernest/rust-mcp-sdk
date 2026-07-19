@@ -89,8 +89,8 @@ async fn fixed_source_runs_offline() {
 
     // Via the REAL built binary — `agent dev --source fixed` must exit 0 with no
     // network access (the fixed source is scripted end-turn).
-    let mut cmd = assert_cmd::Command::cargo_bin("cargo-pmcp")
-        .expect("cargo-pmcp binary must be available");
+    let mut cmd =
+        assert_cmd::Command::cargo_bin("cargo-pmcp").expect("cargo-pmcp binary must be available");
     cmd.args(["agent", "dev", "--source", "fixed"]);
     cmd.assert().success();
 }
