@@ -14,7 +14,7 @@
 //! identical descriptor in, identical Ok/Err out.
 
 use crate::error::{PackageError, Result};
-use crate::package::DeployDescriptor;
+use crate::package::{DeployDescriptor, IamStatement};
 
 /// Allowed `[composition].tier` values — mirrors Amplify's `McpServerTier`
 /// enum. See the `registry-tier-enum-mismatch` incident documented in
@@ -75,14 +75,27 @@ const ALLOWED_IAM_ACTION_PREFIXES: &[&str] = &[
 /// `Err(PackageError::AllowlistViolation)` on the first disallowed field
 /// found (ordered checks, first-violation-wins).
 pub fn validate(descriptor: &DeployDescriptor) -> Result<()> {
-    // Check 1: deploy target.
+    // Ordered checks, first-violation-wins. Each helper owns one field so the
+    // fixed order (target → tier → iam) — the audited control flow — stays
+    // visible here while the per-check logic lives in its own function.
+    check_target(descriptor)?;
+    check_tier(descriptor)?;
+    check_iam(descriptor)?;
+    Ok(())
+}
+
+/// Check 1: deploy target.
+fn check_target(descriptor: &DeployDescriptor) -> Result<()> {
     if !ALLOWED_TARGET_TYPES.contains(&descriptor.target.target_type.as_str()) {
         return Err(PackageError::AllowlistViolation {
             resource: format!("target.type:{}", descriptor.target.target_type),
         });
     }
+    Ok(())
+}
 
-    // Check 2: composition tier (if declared).
+/// Check 2: composition tier (if declared).
+fn check_tier(descriptor: &DeployDescriptor) -> Result<()> {
     if let Some(composition) = &descriptor.composition {
         if !ALLOWED_TIERS.contains(&composition.tier.as_str()) {
             return Err(PackageError::AllowlistViolation {
@@ -90,38 +103,46 @@ pub fn validate(descriptor: &DeployDescriptor) -> Result<()> {
             });
         }
     }
+    Ok(())
+}
 
-    // Check 3: custom IAM statements (if declared) — effect must be
-    // "Allow", every action must match an allowed service prefix (and never
-    // be a bare "*"), and no resource may be a bare "*".
+/// Check 3: custom IAM statements (if declared).
+fn check_iam(descriptor: &DeployDescriptor) -> Result<()> {
     if let Some(iam) = &descriptor.iam {
         for statement in &iam.statements {
-            if statement.effect != "Allow" {
-                return Err(PackageError::AllowlistViolation {
-                    resource: format!("iam.statements.effect:{}", statement.effect),
-                });
-            }
-            for action in &statement.actions {
-                let allowed = action != "*"
-                    && ALLOWED_IAM_ACTION_PREFIXES
-                        .iter()
-                        .any(|prefix| action.starts_with(prefix));
-                if !allowed {
-                    return Err(PackageError::AllowlistViolation {
-                        resource: format!("iam.statements.actions:{action}"),
-                    });
-                }
-            }
-            for resource in &statement.resources {
-                if resource == "*" {
-                    return Err(PackageError::AllowlistViolation {
-                        resource: "iam.statements.resources:*".to_string(),
-                    });
-                }
-            }
+            check_statement(statement)?;
         }
     }
+    Ok(())
+}
 
+/// A single `[[iam.statements]]` entry: effect must be "Allow", every action
+/// must match an allowed service prefix (and never be a bare "*"), and no
+/// resource may be a bare "*".
+fn check_statement(statement: &IamStatement) -> Result<()> {
+    if statement.effect != "Allow" {
+        return Err(PackageError::AllowlistViolation {
+            resource: format!("iam.statements.effect:{}", statement.effect),
+        });
+    }
+    for action in &statement.actions {
+        let allowed = action != "*"
+            && ALLOWED_IAM_ACTION_PREFIXES
+                .iter()
+                .any(|prefix| action.starts_with(prefix));
+        if !allowed {
+            return Err(PackageError::AllowlistViolation {
+                resource: format!("iam.statements.actions:{action}"),
+            });
+        }
+    }
+    for resource in &statement.resources {
+        if resource == "*" {
+            return Err(PackageError::AllowlistViolation {
+                resource: "iam.statements.resources:*".to_string(),
+            });
+        }
+    }
     Ok(())
 }
 

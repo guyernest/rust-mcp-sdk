@@ -644,45 +644,60 @@ fn match_value(expected: &Value, actual: &Value, mode: MatchMode) -> Result<(), 
         }
     }
     match (expected, actual) {
-        (Value::Object(e), Value::Object(a)) => {
-            for (k, ev) in e {
-                if k.starts_with("_note") {
-                    continue;
-                }
-                let av = a
-                    .get(k)
-                    .ok_or_else(|| format!("missing key `{k}` in {actual}"))?;
-                match_value(ev, av, mode)?;
+        (Value::Object(e), Value::Object(a)) => match_object(e, a, actual, mode),
+        (Value::Array(e), Value::Array(a)) => match_array(e, a, mode),
+        _ => match_scalar(expected, actual),
+    }
+}
+
+/// Object arm of [`match_value`]: every expected key (except advisory `_note*`)
+/// must be present and match; under [`MatchMode::Exact`] no extra keys allowed.
+fn match_object(
+    e: &Map<String, Value>,
+    a: &Map<String, Value>,
+    actual: &Value,
+    mode: MatchMode,
+) -> Result<(), String> {
+    for (k, ev) in e {
+        if k.starts_with("_note") {
+            continue;
+        }
+        let av = a
+            .get(k)
+            .ok_or_else(|| format!("missing key `{k}` in {actual}"))?;
+        match_value(ev, av, mode)?;
+    }
+    if mode == MatchMode::Exact {
+        for k in a.keys() {
+            if !e.contains_key(k) {
+                return Err(format!("unexpected extra key `{k}` (exact match)"));
             }
-            if mode == MatchMode::Exact {
-                for k in a.keys() {
-                    if !e.contains_key(k) {
-                        return Err(format!("unexpected extra key `{k}` (exact match)"));
-                    }
-                }
-            }
-            Ok(())
-        },
-        (Value::Array(e), Value::Array(a)) => {
-            if e.len() != a.len() {
-                return Err(format!(
-                    "array length mismatch: expected {}, got {}",
-                    e.len(),
-                    a.len()
-                ));
-            }
-            for (i, (ev, av)) in e.iter().zip(a.iter()).enumerate() {
-                match_value(ev, av, mode).map_err(|err| format!("[{i}]: {err}"))?;
-            }
-            Ok(())
-        },
-        _ => {
-            if expected == actual {
-                Ok(())
-            } else {
-                Err(format!("value mismatch: expected {expected}, got {actual}"))
-            }
-        },
+        }
+    }
+    Ok(())
+}
+
+/// Array arm of [`match_value`]: same length, element-wise match (index-tagged).
+fn match_array(e: &[Value], a: &[Value], mode: MatchMode) -> Result<(), String> {
+    if e.len() != a.len() {
+        return Err(format!(
+            "array length mismatch: expected {}, got {}",
+            e.len(),
+            a.len()
+        ));
+    }
+    for (i, (ev, av)) in e.iter().zip(a.iter()).enumerate() {
+        match_value(ev, av, mode).map_err(|err| format!("[{i}]: {err}"))?;
+    }
+    Ok(())
+}
+
+/// Scalar arm of [`match_value`]: plain equality.
+fn match_scalar(expected: &Value, actual: &Value) -> Result<(), String> {
+    if expected == actual {
+        Ok(())
+    } else {
+        Err(format!("value mismatch: expected {expected}, got {actual}"))
     }
 }
 
@@ -821,20 +836,29 @@ fn select(root: &Value, selector: &str) -> Option<Value> {
         if raw.is_empty() {
             continue;
         }
-        // Split `name[idx]` into a key then any number of `[idx]` groups.
-        let (name, mut rest) = match raw.find('[') {
-            Some(b) => (&raw[..b], &raw[b..]),
-            None => (raw, ""),
-        };
-        if !name.is_empty() {
-            cur = step_into(&cur, name)?;
-        }
-        while rest.starts_with('[') {
-            let close = rest.find(']')?;
-            let idx: usize = rest[1..close].parse().ok()?;
-            cur = index_into(&cur, idx)?;
-            rest = &rest[close + 1..];
-        }
+        cur = descend(&cur, raw)?;
+    }
+    Some(cur)
+}
+
+/// Descend one `name[idx][idx]...` path segment: an optional object key followed
+/// by any number of `[idx]` array-index groups. Returns `None` on any miss.
+fn descend(value: &Value, raw: &str) -> Option<Value> {
+    // Split `name[idx]` into a key then any number of `[idx]` groups.
+    let (name, mut rest) = match raw.find('[') {
+        Some(b) => (&raw[..b], &raw[b..]),
+        None => (raw, ""),
+    };
+    let mut cur = if name.is_empty() {
+        value.clone()
+    } else {
+        step_into(value, name)?
+    };
+    while rest.starts_with('[') {
+        let close = rest.find(']')?;
+        let idx: usize = rest[1..close].parse().ok()?;
+        cur = index_into(&cur, idx)?;
+        rest = &rest[close + 1..];
     }
     Some(cur)
 }
