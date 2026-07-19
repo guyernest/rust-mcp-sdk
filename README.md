@@ -21,6 +21,7 @@
 PMCP is a complete MCP ecosystem for Rust, providing everything you need to build, test, and deploy production-grade MCP servers — in Rust, **or from configuration alone**:
 
 - **🧩 Config-Driven Servers** - Build SQL & OpenAPI/HTTP MCP servers from a `config.toml`, or serve a governed Excel workbook from a compiled bundle — all **no Rust required** (`pmcp-server-toolkit`, `pmcp-sql-server`, `pmcp-openapi-server`, `pmcp-workbook-server`)
+- **🤝 Agents & Teams** - Build deploy-anywhere agents and small teams: the agent loop (`pmcp-agent`), four reference team servers (`pmcp-team-servers`), and a portable AI-Package format (`pmcp-package`) — driven from the `cargo pmcp agent`/`team`/`package` verbs
 - **🦀 pmcp SDK** - High-performance Rust crate with full MCP protocol support
 - **⚡ cargo-pmcp** - CLI toolkit for scaffolding, testing, and development
 - **📚 pmcp-book** - Comprehensive reference guide with 27 chapters

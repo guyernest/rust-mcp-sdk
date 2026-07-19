@@ -30,7 +30,8 @@ use crate::commands::GlobalFlags;
 pub struct CaptureArgs {
     /// Path to the AI-Package (OCI image-layout directory) to capture.
     pub path: PathBuf,
-    /// Capture-local platform target selector (resolved via `resolve_target`).
+    /// Platform target to capture to (a `cargo pmcp configure` target name;
+    /// falls back to `PMCP_TARGET` and the active target).
     #[arg(long)]
     pub target: Option<String>,
 }

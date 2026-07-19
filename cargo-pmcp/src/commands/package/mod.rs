@@ -18,9 +18,9 @@ use super::GlobalFlags;
 /// `cargo pmcp package <subcommand>` — the package command group.
 #[derive(Debug, Subcommand)]
 pub enum PackageCommand {
-    /// Show the contents of an AI-Package manifest (delivered by Plan 110-05).
+    /// Show the kind and key fields of a local AI-Package, fully offline
     Show(show::ShowArgs),
-    /// Capture a package for a platform target (delivered by Plan 110-05).
+    /// Capture (upload) a local AI-Package to a configured platform target
     Capture(capture::CaptureArgs),
 }
 

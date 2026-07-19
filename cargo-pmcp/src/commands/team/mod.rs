@@ -15,7 +15,7 @@ use super::GlobalFlags;
 /// `cargo pmcp team <subcommand>` — the team command group.
 #[derive(Debug, Subcommand)]
 pub enum TeamCommand {
-    /// Run the reference team servers for local development (delivered by Plan 110-04).
+    /// Run an in-process small team (member agents + the four reference servers)
     Dev(dev::DevArgs),
 }
 

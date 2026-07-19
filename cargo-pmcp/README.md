@@ -9,6 +9,7 @@ Production-grade MCP server development toolkit.
 ## Features
 
 - **Project Scaffolding** - Create workspaces and add servers with best-practice templates
+- **Agents & Teams** - Scaffold and run deploy-anywhere agents (`agent new`/`agent dev`), run an in-process small team over the four reference servers (`team dev`), and inspect/capture portable AI-Package bundles (`package show`/`package capture`)
 - **Development Mode** - Build and run servers with HTTP transport and live logs
 - **Client Connection** - One-command setup for Claude Code, Cursor, and MCP Inspector
 - **Automated Testing** - Generate and run scenario-based tests from server capabilities
@@ -268,6 +269,40 @@ inputs (type / unit / enum), and outputs — so you confirm the AI-facing contra
 *before* compiling or shipping. See the **Workbook Table Authoring** chapter in the
 [pmcp-book](https://paiml.github.io/rust-mcp-sdk/book/) for the full authoring guide.
 
+## Agents & Teams (`agent`, `team`, `package`)
+
+`cargo-pmcp` is the on-ramp for agents and teams too — the same `new`/`dev` story as
+servers, plus a `package` verb for portable bundles. An **agent** is an MCP *client*
+with a loop; a **team** is a set of agents wired to the four reference team servers.
+
+```bash
+# 1. Scaffold a runnable agent crate (AgentPackage manifest + runner + pin tripwire):
+cargo pmcp agent new my-agent
+cd my-agent && cargo run                    # the generated runner drives the loop
+
+# 2. Run an agent loop locally — offline, against Ollama, or a remote endpoint:
+cargo pmcp agent dev --source fixed                          # offline smoke test
+cargo pmcp agent dev --model llama3.2                        # local Ollama (default)
+cargo pmcp agent dev --endpoint https://api.example.com/v1 --api-key-env MY_KEY
+
+# 3. Run a small team in one process — member agents + team-fs, approval-mcp,
+#    mem-mcp, team-mcp — and print the offline doc-review transcript:
+cargo pmcp team dev
+cargo pmcp team dev --serve --port 8080     # or serve team-mcp over HTTP
+
+# 4. Inspect a portable AI-Package, then capture (upload) it to a platform target:
+cargo pmcp package show ./my-agent.pmcp
+cargo pmcp package capture ./my-agent.pmcp --target prod
+```
+
+An agent deploys through the existing target adapters — an agent-as-server is just a
+server binary, so `cargo pmcp deploy` applies once you wrap it. See
+[`agent`](docs/commands/agent.md) · [`team`](docs/commands/team.md) ·
+[`package`](docs/commands/package.md), and the crates they build on:
+[`pmcp-agent`](../crates/pmcp-agent/README.md) ·
+[`pmcp-team-servers`](../crates/pmcp-team-servers/README.md) ·
+[`pmcp-package`](../crates/pmcp-package/README.md).
+
 ## End-to-End Example
 
 Walk through the full lifecycle using the `complete` template calculator server.
@@ -380,6 +415,9 @@ cargo pmcp deploy test --verbose
 | `app` | Scaffold MCP Apps projects with widgets | [docs/commands/app.md](docs/commands/app.md) |
 | `preview` | Browser-based widget preview with hot-reload | [docs/commands/preview.md](docs/commands/preview.md) |
 | `landing` | Create and deploy server landing pages | [docs/commands/landing.md](docs/commands/landing.md) |
+| `agent` | Scaffold (`new`) and run (`dev`) deploy-anywhere agents | [docs/commands/agent.md](docs/commands/agent.md) |
+| `team` | Run an in-process small team + the four reference team servers (`dev`) | [docs/commands/team.md](docs/commands/team.md) |
+| `package` | Inspect (`show`) and capture (`capture`) portable AI-Package bundles | [docs/commands/package.md](docs/commands/package.md) |
 
 ## App Validation
 
