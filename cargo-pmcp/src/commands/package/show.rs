@@ -16,7 +16,7 @@ use colored::Colorize;
 use pmcp_package::oci::{unpack_agent, unpack_server, unpack_team, unpack_workflow, OciLayout};
 use pmcp_package::{AgentPackage, ServerPackage, TeamPackage, WorkflowManifest};
 
-use super::kind::{detect_kind, PackageKind};
+use super::kind::{artifact_type_from_manifest_json, detect_kind, PackageKind};
 use crate::commands::GlobalFlags;
 
 /// Arguments for `cargo pmcp package show`.
@@ -64,6 +64,13 @@ pub fn execute(args: ShowArgs, global_flags: &GlobalFlags) -> Result<()> {
     if let Some(at) = descriptor.artifact_type() {
         candidates.push(at.to_string());
     }
+    // Run the pure, never-panic untrusted-parse leaf over the RAW manifest bytes
+    // (the exact boundary plan 110-06 fuzzes) as one candidate source.
+    if let Ok(raw) = layout.read_blob(descriptor) {
+        if let Some(at) = artifact_type_from_manifest_json(&raw) {
+            candidates.push(at);
+        }
+    }
     let manifest = layout
         .read_manifest(descriptor)
         .with_context(|| format!("read the package manifest from {}", path.display()))?;
@@ -78,7 +85,12 @@ pub fn execute(args: ShowArgs, global_flags: &GlobalFlags) -> Result<()> {
     let kind = candidates
         .iter()
         .find_map(|c| detect_kind(c))
-        .ok_or_else(|| anyhow!("unknown package kind: candidates=[{}]", candidates.join(", ")))?;
+        .ok_or_else(|| {
+            anyhow!(
+                "unknown package kind: candidates=[{}]",
+                candidates.join(", ")
+            )
+        })?;
 
     render_kind(&layout, kind, global_flags.should_output())
 }
