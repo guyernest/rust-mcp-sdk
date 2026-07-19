@@ -151,8 +151,10 @@ async fn run_openai_compat(
 }
 
 /// Map the engine's [`RunOutcome`] to a process result (T-110-03-03). `.run()`
-/// returns a `RunOutcome` — it never surfaces a `CompletionError` — so a
-/// non-`Completed` outcome is the unreachable/failed signal.
+/// returns a `RunOutcome` — it never surfaces a `CompletionError` — so each
+/// non-`Completed` outcome is mapped to a diagnostic that matches its cause
+/// (an unreachable endpoint is only ONE of them — a hit iteration/token limit
+/// or a requested retry are NOT connectivity failures).
 fn finish_engine_outcome(
     outcome: RunOutcome,
     endpoint: &str,
@@ -163,12 +165,20 @@ fn finish_engine_outcome(
             report_success(&outcome, "openai-compat", global_flags);
             Ok(())
         },
+        RunOutcome::LimitReached => bail!(
+            "agent run hit its iteration/token limit before completing (endpoint {endpoint} \
+             is reachable) — raise max_iterations / max_tokens in the agent package"
+        ),
+        RunOutcome::RetryRequired { .. } => bail!(
+            "agent run needs a retry (endpoint {endpoint} is reachable) — re-run `agent dev`; \
+             if it persists, check the model behind --endpoint"
+        ),
         RunOutcome::Failed { error } => bail!(
-            "agent run did not complete (endpoint {endpoint} may be unreachable) — \
+            "agent run failed (endpoint {endpoint} may be unreachable) — \
              check --endpoint <url> or use --source fixed: {error}"
         ),
         _ => bail!(
-            "agent run did not complete (endpoint {endpoint} may be unreachable) — \
+            "agent run did not complete (endpoint {endpoint}) — \
              check --endpoint <url> or use --source fixed"
         ),
     }
