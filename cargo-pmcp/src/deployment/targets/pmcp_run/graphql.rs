@@ -1248,3 +1248,182 @@ pub async fn upload_loadtest_scenario(
 
     Ok(response.upload_loadtest_scenario)
 }
+
+// ============================================================================
+// Package capture service (170-08 D-A/D-B/D-D) — the `cargo pmcp package
+// capture|show` remote thin client. Mirrors the create_deployment_from_s3 /
+// get_deployment async-job idiom above for a second job type.
+// ============================================================================
+
+/// Response from `submitPackageCapture` mutation (170-08 D-A).
+#[derive(Debug, Deserialize)]
+#[allow(dead_code)]
+pub struct CaptureInfo {
+    #[serde(rename = "captureId")]
+    pub capture_id: String,
+    pub status: String,
+    #[serde(rename = "createdAt")]
+    pub created_at: String,
+}
+
+/// Status from `getPackageCaptureStatus` query — the STRUCTURED D-B error
+/// contract (170-02's landed platform contract). The caller switches on
+/// `error_code` and reads `divergent_components` directly; `message` is
+/// display-only and MUST NEVER be parsed to detect `BUMP_REQUIRED` or any
+/// other error condition.
+#[derive(Debug, Deserialize)]
+#[allow(dead_code)]
+pub struct CaptureStatus {
+    pub id: String,
+    pub status: String,
+    pub message: Option<String>,
+    #[serde(rename = "errorCode")]
+    pub error_code: Option<String>,
+    #[serde(rename = "divergentComponents")]
+    pub divergent_components: Option<Vec<String>>,
+    #[serde(rename = "manifestDigest")]
+    pub manifest_digest: Option<String>,
+    #[serde(rename = "updatedAt")]
+    pub updated_at: Option<String>,
+}
+
+/// Response from `getWorkflowPackage` query — a published `WorkflowManifest`
+/// looked up by `name`+`version` (org-scoped server-side by the caller's own
+/// claim; the CLI never supplies an org id).
+#[derive(Debug, Deserialize)]
+#[allow(dead_code)]
+pub struct WorkflowPackageResp {
+    pub name: String,
+    pub version: String,
+    #[serde(rename = "manifestJson")]
+    pub manifest_json: String,
+    #[serde(rename = "manifestDigest")]
+    pub manifest_digest: String,
+}
+
+/// Submit an async package-capture job for a team's workflow dependency graph
+/// (170-08 D-A). `root_type` is always `"team"` in v1; `root_id` is the
+/// `AgentTeam` UUID. Never awaits the walk — returns the queued job id.
+pub async fn submit_package_capture(
+    access_token: &str,
+    root_type: &str,
+    root_id: &str,
+    version: &str,
+    bump: Option<&str>,
+) -> Result<CaptureInfo> {
+    let query = r#"
+        mutation SubmitPackageCapture(
+            $rootComponentType: String!,
+            $rootComponentId: String!,
+            $version: String!,
+            $bump: String
+        ) {
+            submitPackageCapture(
+                rootComponentType: $rootComponentType,
+                rootComponentId: $rootComponentId,
+                version: $version,
+                bump: $bump
+            ) {
+                captureId
+                status
+                createdAt
+            }
+        }
+    "#;
+
+    let variables = serde_json::json!({
+        "rootComponentType": root_type,
+        "rootComponentId": root_id,
+        "version": version,
+        "bump": bump,
+    });
+
+    #[derive(Debug, Deserialize)]
+    struct SubmitPackageCaptureResponse {
+        #[serde(rename = "submitPackageCapture")]
+        submit_package_capture: Option<CaptureInfo>,
+    }
+
+    let response: SubmitPackageCaptureResponse =
+        execute_graphql(access_token, query, variables).await?;
+
+    response
+        .submit_package_capture
+        .context("submitPackageCapture returned null - check pmcp.run service logs")
+}
+
+/// Poll a package-capture job's status once (170-08 D-A/D-B). The caller is
+/// responsible for looping/sleeping between calls — this fn does a single
+/// consistent-read-backed fetch.
+pub async fn get_package_capture_status(
+    access_token: &str,
+    capture_id: &str,
+) -> Result<CaptureStatus> {
+    let query = r#"
+        query GetPackageCaptureStatus($id: ID!) {
+            getPackageCaptureStatus(id: $id) {
+                id
+                status
+                message
+                errorCode
+                divergentComponents
+                manifestDigest
+                updatedAt
+            }
+        }
+    "#;
+
+    let variables = serde_json::json!({
+        "id": capture_id
+    });
+
+    #[derive(Debug, Deserialize)]
+    struct GetPackageCaptureStatusResponse {
+        #[serde(rename = "getPackageCaptureStatus")]
+        get_package_capture_status: Option<CaptureStatus>,
+    }
+
+    let response: GetPackageCaptureStatusResponse =
+        execute_graphql(access_token, query, variables).await?;
+
+    response
+        .get_package_capture_status
+        .context("Capture job not found")
+}
+
+/// Fetch a published workflow manifest by `name`+`version` (170-08 D-D
+/// `package show`) — a plain org-scoped DDB read server-side, NOT ECR.
+pub async fn get_workflow_package(
+    access_token: &str,
+    name: &str,
+    version: &str,
+) -> Result<WorkflowPackageResp> {
+    let query = r#"
+        query GetWorkflowPackage($name: String!, $version: String!) {
+            getWorkflowPackage(name: $name, version: $version) {
+                name
+                version
+                manifestJson
+                manifestDigest
+            }
+        }
+    "#;
+
+    let variables = serde_json::json!({
+        "name": name,
+        "version": version,
+    });
+
+    #[derive(Debug, Deserialize)]
+    struct GetWorkflowPackageResponse {
+        #[serde(rename = "getWorkflowPackage")]
+        get_workflow_package: Option<WorkflowPackageResp>,
+    }
+
+    let response: GetWorkflowPackageResponse =
+        execute_graphql(access_token, query, variables).await?;
+
+    response
+        .get_workflow_package
+        .with_context(|| format!("WorkflowPackage not found: {name}@{version}"))
+}
