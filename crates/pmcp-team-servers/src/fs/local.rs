@@ -229,26 +229,42 @@ fn to_file_url(path: &Path) -> String {
 /// documented partial state (already-copied entries remain). This is NOT a
 /// silent success.
 fn copy_recursive(src: &Path, dst: &Path) -> Result<(), FsError> {
-    let md = fs::symlink_metadata(src).map_err(|e| FsError::Io(e.to_string()))?;
+    let md = io_err(fs::symlink_metadata(src))?;
     if md.file_type().is_symlink() {
         return Err(FsError::Symlink(src.display().to_string()));
     }
     if md.is_dir() {
-        fs::create_dir_all(dst).map_err(|e| FsError::Io(e.to_string()))?;
-        for entry in fs::read_dir(src).map_err(|e| FsError::Io(e.to_string()))? {
-            let entry = entry.map_err(|e| FsError::Io(e.to_string()))?;
-            let child_dst = dst.join(entry.file_name());
-            copy_recursive(&entry.path(), &child_dst)?;
-        }
-        Ok(())
+        copy_dir(src, dst)
     } else {
-        if let Some(parent) = dst.parent() {
-            fs::create_dir_all(parent).map_err(|e| FsError::Io(e.to_string()))?;
-        }
-        // Overwrite semantics: fs::copy truncates/replaces the destination file.
-        fs::copy(src, dst).map_err(|e| FsError::Io(e.to_string()))?;
-        Ok(())
+        copy_file(src, dst)
     }
+}
+
+/// Wrap a `std::io` result into [`FsError::Io`] — the one error shape every
+/// filesystem op in [`copy_recursive`] and its helpers reports.
+fn io_err<T>(r: std::io::Result<T>) -> Result<T, FsError> {
+    r.map_err(|e| FsError::Io(e.to_string()))
+}
+
+/// Directory branch of [`copy_recursive`]: create `dst`, then recurse per entry.
+fn copy_dir(src: &Path, dst: &Path) -> Result<(), FsError> {
+    io_err(fs::create_dir_all(dst))?;
+    for entry in io_err(fs::read_dir(src))? {
+        let entry = io_err(entry)?;
+        let child_dst = dst.join(entry.file_name());
+        copy_recursive(&entry.path(), &child_dst)?;
+    }
+    Ok(())
+}
+
+/// File branch of [`copy_recursive`]: ensure the parent dir, then overwrite-copy.
+fn copy_file(src: &Path, dst: &Path) -> Result<(), FsError> {
+    if let Some(parent) = dst.parent() {
+        io_err(fs::create_dir_all(parent))?;
+    }
+    // Overwrite semantics: fs::copy truncates/replaces the destination file.
+    io_err(fs::copy(src, dst))?;
+    Ok(())
 }
 
 impl LocalDirBackend {
