@@ -1,0 +1,20 @@
+{
+  "schema_version": "2",
+  "kind": "tool_call",
+  "case_id": "team-fs.fs__head.positive",
+  "server": "team-fs",
+  "scenario": "fs-lifecycle",
+  "order": 3,
+  "request": {
+    "name": "fs__head",
+    "arguments": { "path": "notes.txt", "maxBytes": 5 }
+  },
+  "expect": {
+    "outcome": "success",
+    "match": "predicate",
+    "response": {
+      "content": [{ "type": "text", "text": "@contains:hello" }],
+      "isError": false
+    }
+  }
+}

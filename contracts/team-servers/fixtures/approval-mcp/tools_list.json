@@ -1,0 +1,97 @@
+{
+  "schema_version": "2",
+  "kind": "tools_list",
+  "case_id": "approval-mcp.tools_list.exact-surface",
+  "server": "approval-mcp",
+  "expect": {
+    "tools_list_schema": {
+      "get_approval": {
+        "type": "object",
+        "properties": {
+          "approvalId": {
+            "type": "string",
+            "description": "The approval id to fetch"
+          }
+        },
+        "required": [
+          "approvalId"
+        ]
+      },
+      "resolve_approval": {
+        "type": "object",
+        "properties": {
+          "approvalId": {
+            "type": "string",
+            "description": "The approval id to resolve"
+          },
+          "decision": {
+            "type": "string",
+            "description": "The chosen decision (must be one of the ask's options)"
+          }
+        },
+        "required": [
+          "approvalId",
+          "decision"
+        ]
+      },
+      "team_approval__ask_release_manager": {
+        "type": "object",
+        "properties": {
+          "question": {
+            "type": "string",
+            "description": "The question for the human role"
+          },
+          "options": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "minItems": 1,
+            "description": "The closed set of acceptable decisions"
+          },
+          "subjectTaskId": {
+            "type": "string",
+            "description": "Optional linked task id (D-12)"
+          },
+          "subjectRef": {
+            "type": "string",
+            "description": "Optional linked component/ref (D-12)"
+          }
+        },
+        "required": [
+          "question",
+          "options"
+        ]
+      },
+      "team_approval__ask_security_reviewer": {
+        "type": "object",
+        "properties": {
+          "question": {
+            "type": "string",
+            "description": "The question for the human role"
+          },
+          "options": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "minItems": 1,
+            "description": "The closed set of acceptable decisions"
+          },
+          "subjectTaskId": {
+            "type": "string",
+            "description": "Optional linked task id (D-12)"
+          },
+          "subjectRef": {
+            "type": "string",
+            "description": "Optional linked component/ref (D-12)"
+          }
+        },
+        "required": [
+          "question",
+          "options"
+        ]
+      }
+    }
+  }
+}

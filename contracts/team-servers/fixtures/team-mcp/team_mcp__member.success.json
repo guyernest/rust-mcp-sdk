@@ -1,24 +1,22 @@
 {
-  "schema_version": "1",
-  "case_id": "team-mcp.team_mcp__member.positive-related-task-meta",
+  "schema_version": "2",
+  "kind": "tool_call",
+  "case_id": "team-mcp.team_mcp__reviewer.positive-related-task-meta",
   "server": "team-mcp",
   "request": {
-    "name": "team_mcp__reviewer",
+    "name": "team_mcp__reviewer__1",
     "arguments": { "message": "please review PR 12" },
-    "_meta": { "x-pmcp-team-depth": "1" }
+    "_meta": { "x-pmcp-team-depth": "0" }
   },
   "expect": {
     "outcome": "success",
-    "match": "subset",
+    "match": "predicate",
     "response": {
-      "content": [
-        { "type": "text", "text": "dispatched to member id member-7" }
-      ],
       "isError": false,
       "_meta": {
-        "related_task": { "taskId": "task-xyz789" }
+        "io.modelcontextprotocol/related-task": { "taskId": "@nonempty" }
       },
-      "_note": "member lookup by stable configured member ID; ToolOutput::Result owns full CallToolResult incl top-level _meta[related_task]"
+      "_note": "member lookup by stable MemberId; ToolOutput::Result owns the full CallToolResult incl top-level _meta[related-task] under RELATED_TASK_META_KEY"
     }
   }
 }

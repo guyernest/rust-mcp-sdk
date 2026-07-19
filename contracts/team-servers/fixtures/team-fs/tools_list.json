@@ -1,0 +1,155 @@
+{
+  "schema_version": "2",
+  "kind": "tools_list",
+  "case_id": "team-fs.tools_list.exact-surface",
+  "server": "team-fs",
+  "expect": {
+    "tools_list_schema": {
+      "fs__append_file": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "content": {
+            "type": "string",
+            "description": "UTF-8 text to append"
+          }
+        },
+        "required": [
+          "path",
+          "content"
+        ]
+      },
+      "fs__complete_task": {
+        "type": "object",
+        "properties": {
+          "taskId": {
+            "type": "string",
+            "description": "The task to complete"
+          },
+          "relatedTaskId": {
+            "type": "string",
+            "description": "Optional related task id"
+          }
+        },
+        "required": [
+          "taskId"
+        ]
+      },
+      "fs__create_directory": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "Path relative to the workspace root"
+          }
+        },
+        "required": [
+          "path"
+        ]
+      },
+      "fs__get_download_url": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "Path relative to the workspace root"
+          }
+        },
+        "required": [
+          "path"
+        ]
+      },
+      "fs__head": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "maxBytes": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Byte cap (default 4096)"
+          }
+        },
+        "required": [
+          "path"
+        ]
+      },
+      "fs__list": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "Directory (default: root)"
+          }
+        }
+      },
+      "fs__read": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "Path relative to the workspace root"
+          }
+        },
+        "required": [
+          "path"
+        ]
+      },
+      "fs__stat": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "Path relative to the workspace root"
+          }
+        },
+        "required": [
+          "path"
+        ]
+      },
+      "fs__sync_from_review": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "Path relative to the workspace root"
+          }
+        },
+        "required": [
+          "path"
+        ]
+      },
+      "fs__sync_to_review": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "Path relative to the workspace root"
+          }
+        },
+        "required": [
+          "path"
+        ]
+      },
+      "fs__write": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "content": {
+            "type": "string",
+            "description": "UTF-8 text content to write"
+          }
+        },
+        "required": [
+          "path",
+          "content"
+        ]
+      }
+    }
+  }
+}

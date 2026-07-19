@@ -1,0 +1,20 @@
+{
+  "schema_version": "2",
+  "kind": "tool_call",
+  "case_id": "team-fs.fs__list.positive",
+  "server": "team-fs",
+  "scenario": "fs-lifecycle",
+  "order": 5,
+  "request": {
+    "name": "fs__list",
+    "arguments": { "path": "." }
+  },
+  "expect": {
+    "outcome": "success",
+    "match": "predicate",
+    "response": {
+      "content": [{ "type": "text", "text": "@contains:notes.txt" }],
+      "isError": false
+    }
+  }
+}
