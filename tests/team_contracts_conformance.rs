@@ -196,7 +196,9 @@ fn fixtures_conform_to_versioned_schema() {
                 // non-empty per-tool input-schema map (its keys are the surface).
                 let schema = v["expect"]["tools_list_schema"]
                     .as_object()
-                    .unwrap_or_else(|| panic!("{loc}: tools_list requires expect.tools_list_schema object"));
+                    .unwrap_or_else(|| {
+                        panic!("{loc}: tools_list requires expect.tools_list_schema object")
+                    });
                 assert!(
                     !schema.is_empty(),
                     "{loc}: tools_list_schema must advertise at least one tool"

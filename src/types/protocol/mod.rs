@@ -589,13 +589,15 @@ mod tests {
 
     #[test]
     fn request_meta_custom_key_round_trips_via_other() {
-        let meta =
-            RequestMeta::new().with_meta("x-pmcp-team-depth", serde_json::json!(3));
+        let meta = RequestMeta::new().with_meta("x-pmcp-team-depth", serde_json::json!(3));
         let json = serde_json::to_value(&meta).unwrap();
         assert_eq!(json["x-pmcp-team-depth"], serde_json::json!(3));
 
         let back: RequestMeta = serde_json::from_value(json).unwrap();
-        assert_eq!(back.get_meta("x-pmcp-team-depth"), Some(&serde_json::json!(3)));
+        assert_eq!(
+            back.get_meta("x-pmcp-team-depth"),
+            Some(&serde_json::json!(3))
+        );
         // Typed fields stay empty; custom key does NOT leak into them.
         assert!(back.progress_token.is_none());
         assert!(back._task_id.is_none());
@@ -615,7 +617,9 @@ mod tests {
         assert_eq!(meta._task_id.as_deref(), Some("t1"));
         assert!(!meta.other.contains_key("progressToken"));
         assert!(!meta.other.contains_key("_task_id"));
-        assert!(meta.other.contains_key("io.modelcontextprotocol/related-task"));
+        assert!(meta
+            .other
+            .contains_key("io.modelcontextprotocol/related-task"));
     }
 
     #[test]
