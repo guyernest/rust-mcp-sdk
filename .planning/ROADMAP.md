@@ -2160,11 +2160,19 @@ Wave 4:
 **Plans**: 6 plans
 
 Plans:
+**Wave 1**
+
 - [ ] 110-01-PLAN.md — Foundation: dependency wiring + agent/team/package command groups + main.rs arms (wave 1)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
 - [ ] 110-02-PLAN.md — `agent new` scaffolder + AgentPackage manifest + pmcp-agent pin tripwire (CLI-01, wave 2)
 - [ ] 110-03-PLAN.md — `agent dev` --source openai-compat|sampling|fixed + in-process sampling test (CLI-02, wave 2)
 - [ ] 110-04-PLAN.md — `team dev` offline doc-review transcript + --serve/--llm (CLI-03, wave 2)
 - [ ] 110-05-PLAN.md — `package show|capture` + pure kind::detect_kind + pmcp-package caret pin tripwire (CLI-04, wave 2)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
 - [ ] 110-06-PLAN.md — ALWAYS deliverables: agent example (scaffold + fixed loop) + fuzz_package_kind + lib seams (CLI-01/02/04, wave 3)
 
 ### Phase 111: Docs in Three Shapes + Examples
