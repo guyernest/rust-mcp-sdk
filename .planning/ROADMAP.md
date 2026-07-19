@@ -2181,6 +2181,6 @@ Wave 4:
 | 106. Client Host Surface | 3/3 | Complete    | 2026-07-18 |
 | 107. Contracts & Package Format | 3/3 | Complete    | 2026-07-18 |
 | 108. `pmcp-agent` Loop Crate | 6/6 | Complete   | 2026-07-18 |
-| 109. Team Reference Servers | 9/9 | Complete   | 2026-07-19 |
+| 109. Team Reference Servers | 9/9 | Complete    | 2026-07-19 |
 | 110. cargo-pmcp Agent & Team Verbs | 0/TBD | Not started | - |
 | 111. Docs in Three Shapes + Examples | 0/TBD | Not started | - |
