@@ -55,11 +55,16 @@ pub fn repo_root() -> PathBuf {
 /// - `pmcp-code-mode`     → `<repo>/crates/pmcp-code-mode`        (toolkit's optional dep)
 /// - `pmcp-widget-utils`  → `<repo>/crates/pmcp-widget-utils`     (pmcp's dep)
 /// - `pmcp-openapi-server`→ `<repo>/crates/pmcp-openapi-server`   (0.1.0, openapi-server scaffold's dispatch/build_server seam)
+/// - `pmcp-agent`         → `<repo>/crates/pmcp-agent`            (0.1.0, agent scaffold's runner, NOT yet on crates.io)
+/// - `pmcp-package`       → `<repo>/crates/pmcp-package`          (0.1.0, agent scaffold's manifest type, NOT yet on crates.io)
 ///
 /// The `pmcp-openapi-server` entry is unused by the `sql-server` scaffold's
 /// dependency graph (cargo emits a harmless unused-patch warning there) but is
 /// REQUIRED by the `openapi-server` scaffold, which depends on it for the
-/// `dispatch` + `build_server` orchestrators.
+/// `dispatch` + `build_server` orchestrators. Likewise the `pmcp-agent` /
+/// `pmcp-package` entries are unused by the sql/openapi scaffolds (harmless
+/// unused-patch warnings) but REQUIRED by the `agent` scaffold (Phase 110-02),
+/// whose emitted runner + manifest depend on those two unpublished 0.1.0 crates.
 ///
 /// `crate_dir` is the scaffolded crate root (the dir containing its `Cargo.toml`).
 pub fn append_crates_io_patch(crate_dir: &Path) {
@@ -84,12 +89,16 @@ pub fn append_crates_io_patch(crate_dir: &Path) {
          pmcp-server-toolkit = {{ path = \"{toolkit}\" }}\n\
          pmcp-code-mode = {{ path = \"{code_mode}\" }}\n\
          pmcp-widget-utils = {{ path = \"{widget}\" }}\n\
-         pmcp-openapi-server = {{ path = \"{openapi}\" }}\n",
+         pmcp-openapi-server = {{ path = \"{openapi}\" }}\n\
+         pmcp-agent = {{ path = \"{agent}\" }}\n\
+         pmcp-package = {{ path = \"{package}\" }}\n",
         pmcp = path_str(&root),
         toolkit = path_str(&root.join("crates/pmcp-server-toolkit")),
         code_mode = path_str(&root.join("crates/pmcp-code-mode")),
         widget = path_str(&root.join("crates/pmcp-widget-utils")),
         openapi = path_str(&root.join("crates/pmcp-openapi-server")),
+        agent = path_str(&root.join("crates/pmcp-agent")),
+        package = path_str(&root.join("crates/pmcp-package")),
     );
 
     content.push_str(&patch);
