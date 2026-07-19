@@ -691,22 +691,35 @@ impl TeamRuntime {
         self.solo_member.as_ref()
     }
 
+    /// The number of hosted-server tasks the runtime is tracking (one per
+    /// attached server). Useful to assert teardown accounted for every task.
+    #[must_use]
+    pub fn hosted_task_count(&self) -> usize {
+        self.tasks.len()
+    }
+
     /// Shut the runtime down explicitly: abort and join every hosting task, then
-    /// drop the clients (and any sole member), closing every in-memory
-    /// transport so member tasks self-terminate. This is the preferred teardown
-    /// path; [`Drop`] is only a safety net.
-    pub async fn shutdown(mut self) {
+    /// drop the clients (and any sole member), closing every in-memory transport
+    /// so the servers' inner actor tasks reach EOF and end. This is the preferred
+    /// teardown path; [`Drop`] is only a safety net.
+    ///
+    /// Returns the number of hosting tasks that were aborted and joined (so a
+    /// caller can assert no tracked task leaked).
+    pub async fn shutdown(mut self) -> usize {
         self.shut = true;
         for task in &self.tasks {
             task.abort();
         }
+        let mut joined = 0usize;
         for task in self.tasks.drain(..) {
             // Join the aborted task so teardown is observable (a cancelled task
-            // resolves to a `JoinError`).
+            // resolves to a `JoinError`); either way the task has stopped.
             let _ = task.await;
+            joined += 1;
         }
         // Dropping `self` here closes client transports and drops the sole
-        // member handle, ending any remaining member tasks.
+        // member handle, ending any remaining member/inner-actor tasks.
+        joined
     }
 }
 
