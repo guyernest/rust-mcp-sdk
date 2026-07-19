@@ -1287,7 +1287,7 @@ pub struct CaptureStatus {
     pub updated_at: Option<String>,
 }
 
-/// Response from `getWorkflowPackage` query — a published `WorkflowManifest`
+/// Response from `getWorkflowPackageManifest` query — a published `WorkflowManifest`
 /// looked up by `name`+`version` (org-scoped server-side by the caller's own
 /// claim; the CLI never supplies an org id).
 #[derive(Debug, Deserialize)]
@@ -1400,7 +1400,7 @@ pub async fn get_workflow_package(
 ) -> Result<WorkflowPackageResp> {
     let query = r#"
         query GetWorkflowPackage($name: String!, $version: String!) {
-            getWorkflowPackage(name: $name, version: $version) {
+            getWorkflowPackageManifest(name: $name, version: $version) {
                 name
                 version
                 manifestJson
@@ -1416,7 +1416,7 @@ pub async fn get_workflow_package(
 
     #[derive(Debug, Deserialize)]
     struct GetWorkflowPackageResponse {
-        #[serde(rename = "getWorkflowPackage")]
+        #[serde(rename = "getWorkflowPackageManifest")]
         get_workflow_package: Option<WorkflowPackageResp>,
     }
 
