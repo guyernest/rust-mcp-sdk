@@ -142,3 +142,12 @@ pub mod workbook_explain;
 // bin-only `commands::package::kind` module.
 #[path = "commands/package/kind.rs"]
 pub mod package_kind;
+
+// CLI-04 (Phase 110-05): expose ONLY the lib-safe HTTP-upload seam to the lib
+// target (mirrors the `agent_run`/`package_kind` `#[path]` convention).
+// `capture_upload.rs` references only `reqwest` + `anyhow` + std (NO
+// `clap`/`GlobalFlags`), so it compiles in the lib target on its own — letting
+// its `mockito` success/non-2xx tests run under `cargo test --lib capture_upload`,
+// NOT only in the bin-only `commands::package::capture` handler.
+#[path = "commands/package/capture_upload.rs"]
+pub mod package_capture;
