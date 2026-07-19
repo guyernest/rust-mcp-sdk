@@ -4,13 +4,13 @@ milestone: v2.4
 milestone_name: Agents & Teams — SDK Extraction
 status: executing
 stopped_at: Phase 110 context gathered
-last_updated: "2026-07-19T06:56:40.134Z"
+last_updated: "2026-07-19T07:11:54.172Z"
 last_activity: 2026-07-19
 progress:
   total_phases: 63
   completed_phases: 4
   total_plans: 27
-  completed_plans: 22
+  completed_plans: 23
   percent: 6
 ---
 
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-07-17) · .planning/ROADMAP.md (v2.4 mil
 ## Current Position
 
 Phase: 110 (cargo-pmcp-agent-team-verbs) — EXECUTING
-Plan: 2 of 6
+Plan: 3 of 6
 Status: Ready to execute
 Last activity: 2026-07-19
 
@@ -74,6 +74,7 @@ Decisions are logged in PROJECT.md Key Decisions table. Decisions framing this m
 - [Phase ?]: 109-08: subprocess smoke test drives spawned bins via a bespoke ChildStdioTransport reusing SDK stdio framing (SDK ships no child-bound transport); handshake otherwise 100% pmcp::Client
 - [Phase 110]: 110-01: cargo-pmcp foundation wired — agent/team/package command groups + 3 workspace deps (pmcp-agent openai-compat, pmcp-team-servers runtime+http→member-llm, pmcp-package caret 0.1); handlers stubbed via actionable bail! for disjoint Wave-2 fills; version 0.18.0
 - [Phase 110]: 110-01: package capture uses a capture-local --target (not GlobalFlags); Package kept OUT of is_target_consuming so it never clobbers PMCP_TARGET/AWS env
+- [Phase ?]: 110-02: cargo pmcp agent new scaffolds a COMPILABLE agent crate — manifest built from the real AgentPackage struct (round-trip guaranteed), a manifest-driven runner that LOADS agent.package.json + resolve_agent, full deps, and an in-scaffold tests/pin.rs; two-level pin tripwire (D-05) + validate_crate_name promoted to pub(crate) (D-01a)
 
 ### Pending Todos
 
@@ -109,7 +110,7 @@ Items deferred by design for this milestone (design §7 / REQUIREMENTS v2):
 
 ## Session Continuity
 
-Last session: 2026-07-19T06:56:17.018Z
+Last session: 2026-07-19T07:11:35.601Z
 Stopped at: Phase 110 context gathered
 Resume file: None
 
@@ -128,3 +129,4 @@ Resume file: None
 | Phase 109 P07 | 45min | 2 tasks | 35 files |
 | Phase 109 P08 | 95min | 4 tasks | 7 files |
 | Phase 110 P01 | 44min | 3 tasks | 12 files |
+| Phase 110 P02 | 38min | 3 tasks | 8 files |
