@@ -396,7 +396,10 @@ async fn execute_graphql<T>(
 where
     T: for<'de> Deserialize<'de>,
 {
-    let client = reqwest::Client::new();
+    // Process-wide client: reuses connections across calls (the capture poll
+    // loop hits this every 2s — a per-call client would redo TCP+TLS each time).
+    static CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+    let client = CLIENT.get_or_init(reqwest::Client::new);
     let graphql_url = get_graphql_url();
 
     let request = GraphQLRequest {

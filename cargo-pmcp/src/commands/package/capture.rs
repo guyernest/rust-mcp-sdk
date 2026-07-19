@@ -19,9 +19,11 @@ const ROOT_COMPONENT_TYPE_TEAM: &str = "team";
 /// Sleep between capture-status polls (matches `poll_deployment_status`).
 const POLL_INTERVAL: Duration = Duration::from_secs(2);
 
-/// Bounded max total wait for a capture job to reach a terminal status,
-/// matching the platform capture Lambda's own ceiling.
-const MAX_POLL_WAIT: Duration = Duration::from_secs(15 * 60);
+/// Bounded max total wait for a capture job to reach a terminal status —
+/// must exceed the platform capture Lambda's 15-min timeout (plus queue/retry
+/// slack): queue/retry time precedes the Lambda's clock, so an equal ceiling
+/// would time the CLI out on jobs that then complete.
+const MAX_POLL_WAIT: Duration = Duration::from_secs(20 * 60);
 
 /// Max consecutive TRANSPORT-level failures tolerated while polling before
 /// giving up. A `"failed"` job STATUS from a successful GraphQL call is
@@ -63,12 +65,6 @@ pub struct CaptureArgs {
     pub bump: Option<String>,
 }
 
-/// What to do after a `"failed"` terminal status is inspected.
-enum FailureAction {
-    /// Re-submit the capture with this bump level applied uniformly.
-    Resubmit(String),
-}
-
 /// Submit a capture job and poll it to a terminal status, resolving
 /// `--bump` interactively over a TTY (or failing loud non-interactively).
 pub async fn execute(args: CaptureArgs, global_flags: &GlobalFlags) -> Result<()> {
@@ -89,11 +85,9 @@ pub async fn execute(args: CaptureArgs, global_flags: &GlobalFlags) -> Result<()
                 report_success(&status, output);
                 return Ok(());
             },
-            "failed" => match handle_capture_failure(&status)? {
-                FailureAction::Resubmit(level) => {
-                    bump = Some(level);
-                    continue;
-                },
+            "failed" => {
+                bump = Some(handle_capture_failure(&status)?);
+                continue;
             },
             other => bail!("Unexpected terminal capture status: {other}"),
         }
@@ -143,16 +137,15 @@ fn report_success(status: &graphql::CaptureStatus, output: bool) {
 ///
 /// Switches on the STRUCTURED `error_code` (D-B) — NEVER parses `message` to
 /// detect `BUMP_REQUIRED` or any other condition. On `BUMP_REQUIRED`: prompts
-/// once over an interactive TTY and returns [`FailureAction::Resubmit`];
+/// once over an interactive TTY and returns the bump level to re-submit with;
 /// non-interactively, bails listing every divergent component and pointing
 /// at `--bump`. Any other error code (or none) bails with the message.
-fn handle_capture_failure(status: &graphql::CaptureStatus) -> Result<FailureAction> {
+fn handle_capture_failure(status: &graphql::CaptureStatus) -> Result<String> {
     match status.error_code.as_deref() {
         Some("BUMP_REQUIRED") => {
             let divergent = status.divergent_components.clone().unwrap_or_default();
             if io::stdin().is_terminal() && io::stdout().is_terminal() {
-                let level = prompt_bump_level(&divergent)?;
-                Ok(FailureAction::Resubmit(level))
+                prompt_bump_level(&divergent)
             } else {
                 bail!(
                     "Capture failed: bump required for {} divergent component(s): {}. \
@@ -211,6 +204,9 @@ async fn poll_capture_status(
     let start = Instant::now();
     let mut transient_failures = 0u32;
     let mut dots = 0u32;
+    // Statuses we've already warned about — unknown (likely newer-platform)
+    // statuses are treated as in-progress, warned once each, never fatal.
+    let mut warned_statuses: std::collections::HashSet<String> = std::collections::HashSet::new();
 
     loop {
         if start.elapsed() > MAX_POLL_WAIT {
@@ -241,7 +237,31 @@ async fn poll_capture_status(
         };
 
         match status.status.as_str() {
-            "queued" | "walking" | "extracting" | "publishing" => {
+            "completed" | "failed" => {
+                if output && dots > 0 {
+                    println!();
+                }
+                return Ok(status);
+            },
+            "not_found" => bail!("Capture job {capture_id} not found"),
+            in_progress => {
+                // Terminal detection stays exact ("completed"/"failed") — any
+                // other status is treated as in-progress so an older CLI keeps
+                // working when the platform adds intermediate statuses. Warn
+                // once per unrecognized status.
+                if !matches!(
+                    in_progress,
+                    "queued" | "walking" | "extracting" | "publishing"
+                ) && warned_statuses.insert(in_progress.to_string())
+                {
+                    if output && dots > 0 {
+                        println!();
+                        dots = 0;
+                    }
+                    eprintln!(
+                        "   warning: unrecognized capture status '{in_progress}' — treating as in-progress"
+                    );
+                }
                 if output {
                     print!(".");
                     dots += 1;
@@ -253,14 +273,6 @@ async fn poll_capture_status(
                 }
                 tokio::time::sleep(POLL_INTERVAL).await;
             },
-            "completed" | "failed" => {
-                if output && dots > 0 {
-                    println!();
-                }
-                return Ok(status);
-            },
-            "not_found" => bail!("Capture job {capture_id} not found"),
-            other => bail!("Unknown capture status: {other}"),
         }
     }
 }
