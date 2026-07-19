@@ -86,12 +86,33 @@ impl LocalDirPackageResolver {
     }
 }
 
+/// True iff `name` is a single, safe path component: non-empty and free of any
+/// path separator (`/`, `\`), parent-dir token (`..`), or embedded NUL.
+///
+/// The resolver joins a member reference's raw name into a filesystem path, so
+/// an unsanitized name containing `..` or a separator (e.g. `../../etc/hosts`)
+/// would escape `root` and read an arbitrary file. Rejecting such names before
+/// the join keeps the lookup contained to `root`.
+fn is_safe_component(name: &str) -> bool {
+    !(name.is_empty()
+        || name.contains('/')
+        || name.contains('\\')
+        || name.contains("..")
+        || name.contains('\0'))
+}
+
 #[async_trait]
 impl PackageResolver for LocalDirPackageResolver {
     async fn resolve_agent(
         &self,
         r: &pmcp_package::ComponentRef,
     ) -> Result<pmcp_package::AgentPackage, ResolveError> {
+        // Containment: reject any name that is not a single safe path component
+        // BEFORE it is joined into a filesystem path, so a traversal name
+        // (e.g. `../../../../etc/hosts`) can never escape `root`.
+        if !is_safe_component(r.name()) {
+            return Err(ResolveError::NotFound(r.name().to_string()));
+        }
         // Prefer the exact-version file for a pin; fall back to the bare
         // <name>.json (the common single-file-per-member dev layout).
         if let Some(versioned) = self.versioned_path(r) {
@@ -169,6 +190,33 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, ResolveError::NotFound(_)));
+    }
+
+    #[tokio::test]
+    async fn traversal_name_is_rejected_not_read() {
+        // A name that would escape `root` via `..`/separators must be rejected
+        // as NotFound BEFORE any filesystem read is attempted.
+        let dir = tempfile::tempdir().unwrap();
+        let resolver = LocalDirPackageResolver::new(dir.path());
+        let err = resolver
+            .resolve_agent(&bare_ref("../../../../etc/hosts"))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, ResolveError::NotFound(_)),
+            "traversal name must be rejected (not read), got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn is_safe_component_rejects_traversal_and_separators() {
+        assert!(is_safe_component("triage"));
+        assert!(is_safe_component("triage-1"));
+        assert!(!is_safe_component(""));
+        assert!(!is_safe_component("../etc"));
+        assert!(!is_safe_component("a/b"));
+        assert!(!is_safe_component("a\\b"));
+        assert!(!is_safe_component("a\0b"));
     }
 
     #[tokio::test]
