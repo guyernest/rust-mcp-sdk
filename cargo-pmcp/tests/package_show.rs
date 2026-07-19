@@ -9,10 +9,10 @@
 //! with a clear message rather than being indexed blindly.
 
 use assert_cmd::Command;
-use predicates::prelude::PredicateBooleanExt;
-use predicates::str::contains;
 use pmcp_package::oci::{pack_agent, OciLayout};
 use pmcp_package::{AgentPackage, ConfigSlot, SlotType};
+use predicates::prelude::PredicateBooleanExt;
+use predicates::str::contains;
 
 /// Build a minimal, valid `AgentPackage` fixture (mirrors the s50 shape used by
 /// the `agent new` scaffold — built from the real struct so it round-trips).
@@ -73,7 +73,11 @@ fn show_rejects_non_layout_path() {
         .args(["package", "show", dir.path().to_str().unwrap()])
         .assert()
         .failure()
-        .stderr(contains("OCI").or(contains("layout")).or(contains("index.json")));
+        .stderr(
+            contains("OCI")
+                .or(contains("layout"))
+                .or(contains("index.json")),
+        );
 }
 
 /// A zero-manifest layout (a freshly-created, empty OCI layout) is rejected with
