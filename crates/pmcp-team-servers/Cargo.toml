@@ -63,10 +63,14 @@ webhook = ["dep:reqwest"]
 # never need it.
 member-llm = ["pmcp-agent/openai-compat"]
 # HTTP serve path for the server binaries needs pmcp's native-only
-# StreamableHttpTransport. The HTTP-first team-mcp binary also serves members
-# against a real LLM, so `http` pulls in `member-llm`. Gated so a stdio-only
-# build stays clean.
-http = ["pmcp/streamable-http", "member-llm", "dep:url"]
+# StreamableHttpTransport (server side). The conformance runner's HTTP
+# `ClientTarget` (D-19) additionally needs pmcp's client-side `HttpTransport`,
+# which lives behind pmcp's separate `http` feature — enable both so a
+# dev-dependency-free `cargo build --all-features` / `cargo publish` compiles
+# (the `full` dev-dep previously masked this via feature unification). The
+# HTTP-first team-mcp binary also serves members against a real LLM, so `http`
+# pulls in `member-llm`. Gated so a stdio-only build stays clean.
+http = ["pmcp/streamable-http", "pmcp/http", "member-llm", "dep:url"]
 # Aggregate: all four server surfaces attached at once. compose::wiring (109-06)
 # cfg-gates its attachment branches behind this.
 runtime = ["team-fs", "mem-mcp", "approval-mcp", "team-mcp"]
