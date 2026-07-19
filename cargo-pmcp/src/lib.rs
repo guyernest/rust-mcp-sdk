@@ -103,6 +103,15 @@ pub mod test_support {
 #[path = "templates/workbook_server.rs"]
 pub mod templates_workbook_server;
 
+// CLI-01 (Phase 110-02): expose ONLY the `agent new` scaffold emitter to the lib
+// target (mirrors the `templates_workbook_server` `#[path]` convention). This
+// leaf is dependency-light (std::fs + format! + colored + pmcp-package + semver;
+// NO `clap`/`GlobalFlags`), so it compiles in the lib target without dragging in
+// the bin-only command layer. It lets the emitter's drift-guard + manifest
+// round-trip unit tests run under `cargo test --lib`, NOT only in the bin target.
+#[path = "templates/agent.rs"]
+pub mod templates_agent;
+
 // WBV2-06: expose ONLY the PURE `workbook explain` tool-surface projection + render
 // to the lib target (mirrors the `templates_workbook_server` `#[path]` convention).
 // This leaf is dependency-light (pmcp-workbook-compiler `ingest`/`synth` + serde +
