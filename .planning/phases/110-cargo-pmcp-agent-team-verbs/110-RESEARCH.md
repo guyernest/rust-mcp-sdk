@@ -376,21 +376,24 @@ AgentPackage {
 | A3 | Always-on `http`+`member-llm` features on the `pmcp-team-servers` dep are acceptable (no cargo-pmcp feature gating needed) | Standard Stack | If binary size / build time matters, planner may gate them behind a cargo-pmcp feature; low risk for a native dev CLI. |
 | A4 | CLI-01's "generated tripwire test against pmcp-agent" means a test **inside the scaffolded project** (plus an internal template drift-guard), not only the internal drift-guard | Pattern 4, Open Q1 | If it means only the internal guard, the scaffold need not emit a `tests/` file — less work. Surfaced as Q1 for discuss/plan confirmation. |
 
-## Open Questions
+## Open Questions (RESOLVED)
 
 1. **Does CLI-01's tripwire live in the generated project, in cargo-pmcp, or both?**
    - What we know: existing templates carry only an *internal* drift-guard (const + `include_str!` + `assert_eq!` against the workspace crate version); they do NOT emit a `tests/` file into the scaffold. CLI-01/D-05 wording says "a generated tripwire test pinning the scaffold's `pmcp-agent` dependency."
    - What's unclear: whether "generated" means emitted-into-the-scaffold or generated-by-the-template-author (i.e. the internal guard).
    - Recommendation: ship BOTH (safest, satisfies the literal wording) — an emitted `tests/pin.rs` in the agent scaffold asserting its `pmcp-agent` req, plus the internal drift-guard so the hardcoded pin can't drift from the released `pmcp-agent`. Confirm at plan time.
+   - **RESOLVED:** ship BOTH tripwire levels — an emitted in-scaffold `tests/pin.rs` AND the internal `emitted_agent_version_matches_workspace_pin` template drift-guard. Owned by plan **110-02 Task 2** (emitter) + Task 3 (wiring).
 
 2. **What is the platform capture API contract (endpoint path, method, payload, auth header)?**
    - What we know: it's platform-owned (design §"Package" ownership table; REQUIREMENTS Out of Scope); cargo-pmcp ships only a thin client reusing `configure` (api_url) + `auth_cmd` (Bearer token). The authenticated-call precedent is `deployment/targets/pmcp_run/deploy.rs`.
    - What's unclear: the exact route/body the capture service expects.
    - Recommendation: implement `capture` to resolve target+token and POST the packed package to a `{api_url}/…capture` path; make the path a constant/config the planner can confirm; ensure the unconfigured path errors with actionable guidance. Flag the endpoint as a platform-coordination item (does not block the CLI/config/auth/error-handling work).
+   - **RESOLVED:** `capture` resolves target+token (reusing `configure`/`auth`) and POSTs to a named `CAPTURE_PATH` constant, with actionable errors when unconfigured; the exact platform endpoint is flagged as a platform-coordination item (threat T-110-05-05, disposition *accept*). Owned by plan **110-05 Task 3**.
 
 3. **How much tool wiring does `agent dev` expose?**
    - What we know: `AgentEngine` needs a `ToolInvoker`; `ClientToolInvoker` connects to real MCP servers, but a demo run can use a no-op/empty invoker.
    - Recommendation: for the first pass, `agent dev` runs the loop with a minimal/no-op invoker (or connectors from the AgentPackage if present); richer tool-server attachment can be a discretionary enhancement. Planner's call.
+   - **RESOLVED:** first pass uses a minimal/no-op invoker (records + echoes ok) against the public `ToolInvoker` trait; richer attachment deferred. Owned by plan **110-03 Task 2**.
 
 ## Environment Availability
 
