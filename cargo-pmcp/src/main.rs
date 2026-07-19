@@ -171,6 +171,33 @@ enum Commands {
         command: commands::workbook::WorkbookCommand,
     },
 
+    /// Scaffold and run deploy-anywhere agents (agent-as-MCP-client)
+    ///
+    /// `agent new` scaffolds a `pmcp-agent` package; `agent dev` runs the agent
+    /// loop against an OpenAI-compatible completion source.
+    Agent {
+        #[command(subcommand)]
+        command: commands::agent::AgentCommand,
+    },
+
+    /// Run the reference team servers for local development
+    ///
+    /// `team dev` composes the `pmcp-team-servers` reference set (team-fs,
+    /// mem-mcp, approval-mcp, team-mcp) in-process or served over HTTP.
+    Team {
+        #[command(subcommand)]
+        command: commands::team::TeamCommand,
+    },
+
+    /// Inspect and capture portable AI-Package bundles
+    ///
+    /// `package show` prints an AI-Package manifest; `package capture` captures
+    /// a bundle for a platform target selected by the capture-local `--target`.
+    Package {
+        #[command(subcommand)]
+        command: commands::package::PackageCommand,
+    },
+
     /// Start development server
     ///
     /// Builds and runs the server with live logs
@@ -560,6 +587,9 @@ fn dispatch_trait_based(command: Commands, global_flags: &GlobalFlags) -> Option
         Commands::Auth { command } => command.execute(global_flags),
         Commands::Configure { command } => command.execute(global_flags),
         Commands::Workbook { command } => command.execute(global_flags),
+        Commands::Agent { command } => execute_agent(command, global_flags),
+        Commands::Team { command } => execute_team(command, global_flags),
+        Commands::Package { command } => execute_package(command, global_flags),
         Commands::Dev {
             server,
             port,
@@ -641,6 +671,33 @@ fn execute_landing(
     let runtime = tokio::runtime::Runtime::new()?;
     let project_root = std::env::current_dir()?;
     runtime.block_on(command.execute(project_root, global_flags))
+}
+
+/// Dispatcher for the `agent` subcommand group (async; owns its own tokio
+/// runtime because main.rs stays sync — mirrors [`execute_landing`]).
+fn execute_agent(
+    command: commands::agent::AgentCommand,
+    global_flags: &GlobalFlags,
+) -> Result<()> {
+    let runtime = tokio::runtime::Runtime::new()?;
+    runtime.block_on(command.execute(global_flags))
+}
+
+/// Dispatcher for the `team` subcommand group (async; owns its own tokio
+/// runtime because main.rs stays sync — mirrors [`execute_landing`]).
+fn execute_team(command: commands::team::TeamCommand, global_flags: &GlobalFlags) -> Result<()> {
+    let runtime = tokio::runtime::Runtime::new()?;
+    runtime.block_on(command.execute(global_flags))
+}
+
+/// Dispatcher for the `package` subcommand group (async; owns its own tokio
+/// runtime because main.rs stays sync — mirrors [`execute_landing`]).
+fn execute_package(
+    command: commands::package::PackageCommand,
+    global_flags: &GlobalFlags,
+) -> Result<()> {
+    let runtime = tokio::runtime::Runtime::new()?;
+    runtime.block_on(command.execute(global_flags))
 }
 
 #[cfg(test)]
