@@ -1,6 +1,6 @@
 [package]
 name = "cargo-pmcp"
-version = "0.17.4"
+version = "0.18.0"
 edition = "2021"
 authors = ["PMCP SDK Contributors"]
 description = "Production-grade MCP server development toolkit"
@@ -53,6 +53,17 @@ pmcp = { version = "2.9.0", path = "..", features = ["streamable-http", "oauth"]
 mcp-tester = { version = "0.7.0", path = "../crates/mcp-tester" }
 mcp-preview = { version = "0.3.1", path = "../crates/mcp-preview" }
 pmcp-workbook-compiler = { version = "0.1.0", path = "../crates/pmcp-workbook-compiler" }
+# Phase 110 agent/team/package verbs. Path wins locally; the version req applies
+# at publish (design §5: cargo-pmcp now publishes AFTER all three).
+# `openai-compat` enables the default `agent dev` completion source.
+pmcp-agent = { version = "0.1", path = "../crates/pmcp-agent", features = ["openai-compat"] }
+# `runtime` = the in-process team-dev server set; `http` = the HTTP-first
+# `team dev --serve` path AND transitively enables `member-llm` (so `team dev
+# --llm` works with `http` alone — do NOT list `member-llm` explicitly).
+pmcp-team-servers = { version = "0.1", path = "../crates/pmcp-team-servers", features = ["runtime", "http"] }
+# Caret "0.1" exactly (CLI-04 / D-04b — a tripwire test in 110-05 asserts this
+# literal string; do NOT use `=0.1.0`).
+pmcp-package = { version = "0.1", path = "../crates/pmcp-package" }
 # Why (WBCL-05): the `--kind workbook-server` scaffold embeds the sample
 # tax-calc bundle + source .xlsx INTO the published cargo-pmcp binary via
 # `include_dir!`/`include_bytes!` so the assets survive `cargo publish` (they
