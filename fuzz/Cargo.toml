@@ -4,11 +4,20 @@ version = "0.0.0"
 publish = false
 edition = "2021"
 
+# Standalone workspace root: the fuzz crate is intentionally excluded from the
+# parent pmcp workspace (see root Cargo.toml `workspace.exclude`). Declaring an
+# empty `[workspace]` here stops Cargo from walking further up the directory
+# tree, which is required when the repo is checked out as a git worktree (the
+# parallel-agent layout) where an ancestor Cargo.toml would otherwise be
+# mis-detected as this crate's workspace.
+[workspace]
+
 [package.metadata]
 cargo-fuzz = true
 
 [dependencies]
 libfuzzer-sys = "0.4"
+serde = "1.0"
 serde_json = "1.0"
 bytes = "1.0"
 base64 = "0.22"
@@ -83,6 +92,13 @@ bench = false
 [[bin]]
 name = "fuzz_peer_handle"
 path = "fuzz_targets/fuzz_peer_handle.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "client_host_routing"
+path = "fuzz_targets/client_host_routing.rs"
 test = false
 doc = false
 bench = false

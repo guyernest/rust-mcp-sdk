@@ -1,0 +1,20 @@
+{
+  "schema_version": "2",
+  "kind": "tool_call",
+  "case_id": "mem-mcp.mem__complete_task.positive-related-task-meta",
+  "server": "mem-mcp",
+  "request": {
+    "name": "mem__complete_task",
+    "arguments": { "taskId": "task-001", "relatedTaskId": "task-002" }
+  },
+  "expect": {
+    "outcome": "success",
+    "match": "predicate",
+    "response": {
+      "isError": false,
+      "_meta": {
+        "io.modelcontextprotocol/related-task": { "taskId": "task-002" }
+      }
+    }
+  }
+}

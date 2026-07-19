@@ -1,0 +1,44 @@
+//! Deploy-anywhere agent decision loop for the PMCP SDK (experimental, 0.x).
+//!
+//! `pmcp-agent` is a pure decision loop that runs between three object-safe
+//! async effect seams — [`CompletionSource`], [`ToolInvoker`], and
+//! [`ConversationStore`] — configured from an `AgentPackage`. It is isolated
+//! from `pmcp` core (like `pmcp-tasks`) so the experimental agent runtime can
+//! evolve on its own 0.x cadence.
+//!
+//! # Module Organization
+//!
+//! - [`seams`] — the three object-safe effect seams + shared `RetryClass`
+//! - [`config`] — [`ResolvedAgentConfig`] runtime-config contract (resolver in 108-05)
+//! - [`iteration`] — pure decision functions + async engine (108-03)
+//! - [`sources`] — the three `CompletionSource` implementations (108-04)
+//! - [`invoker`] — tasks-aware `ToolInvoker` + connector factory (108-05)
+//! - [`adapter`] — agent-as-server adapter on `ServerCore` (108-06)
+//! - [`trace`] — public `EffectTrace` replay artifact (108-03)
+
+pub mod adapter;
+pub mod config;
+pub mod invoker;
+pub mod iteration;
+pub mod seams;
+pub mod sources;
+pub mod trace;
+
+// The agent-as-server adapter is native-only (task_store + SamplingSource ride
+// native-only pmcp APIs); its top-level re-exports are gated to match.
+#[cfg(not(target_arch = "wasm32"))]
+pub use adapter::{
+    derive_tool_description, AgentServer, AgentServerBuilder, CompletionSourceFactory,
+    FixedSourceFactory, SamplingSourceFactory,
+};
+pub use config::{
+    build_endpoint_map, resolve_agent, EnvVarResolver, ProgrammaticBuilder, RedactedSecret,
+    ResolveError, ResolvedAgentConfig, ResolvedValue, SlotResolver,
+};
+pub use invoker::{ClientToolInvoker, ConnectorClient, ConnectorClientFactory, InvokerError};
+pub use iteration::{AgentEngine, IterationResult, LimitDecision, RunOutcome, TurnMessage};
+pub use seams::{
+    CompletionError, CompletionSource, ConversationStore, InMemoryStore, RetryClass, RunPhase,
+    RunState, StoreError, ToolCall, ToolCallResult, ToolError, ToolInvoker,
+};
+pub use trace::{DecisionTrace, EffectTrace, ReplayInvoker, ReplaySource};

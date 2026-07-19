@@ -1,6 +1,6 @@
 [package]
 name = "pmcp"
-version = "2.15.0"
+version = "2.17.0"
 edition = "2021"
 authors = ["PAIML Team"]
 description = "High-quality Rust SDK for Model Context Protocol (MCP) with full TypeScript SDK compatibility"
@@ -39,6 +39,10 @@ exclude = [
     ".pmat/",
     ".pv/",
     "contracts/",
+    # Reads contracts/team-servers-v1.yaml at runtime; contracts/ is excluded
+    # above (crates.io size limit), so shipping this test would break a
+    # downstream `cargo test` on the published crate — keep it out too.
+    "tests/team_contracts_conformance.rs",
     # GSD phase planning (6.3MB) and presentation decks (5.6MB) — workspace
     # scaffolding, not crate content. Also blew the 10MB limit during v2.2.0.
     ".planning/",
@@ -538,6 +542,10 @@ name = "s43_handler_peer_sample"
 path = "examples/s43_handler_peer_sample.rs"
 
 [[example]]
+name = "s49_sampling_host"
+path = "examples/s49_sampling_host.rs"
+
+[[example]]
 name = "c09_client_list_all"
 path = "examples/c09_client_list_all.rs"
 required-features = ["full"]
@@ -571,9 +579,12 @@ required-features = ["full"]
 name = "comprehensive_benchmarks"
 harness = false
 [workspace]
-members = ["pmcp-macros", "crates/pmcp-macros-support", "crates/mcp-tester", "crates/mcp-preview", "crates/pmcp-server", "crates/pmcp-server/pmcp-server-lambda", "crates/pmcp-tasks", "crates/mcp-e2e-tests", "crates/pmcp-widget-utils", "crates/pmcp-code-mode", "crates/pmcp-code-mode-derive", "crates/pmcp-server-toolkit", "crates/pmcp-toolkit-postgres", "crates/pmcp-toolkit-mysql", "crates/pmcp-toolkit-athena", "crates/pmcp-sql-server", "crates/pmcp-workbook-server", "crates/pmcp-openapi-server", "crates/pmcp-workbook-runtime", "crates/pmcp-workbook-dialect", "crates/pmcp-workbook-compiler", "examples/25-oauth-basic", "examples/test-basic", "cargo-pmcp"]
-# WASM examples and standalone examples are excluded from regular workspace tests
-exclude = ["fuzz", "examples/cloudflare-worker-mcp", "examples/26-server-tester", "examples/27-course-server-minimal", "examples/wasm-client", "examples/web-channel-client/client", "examples/web-channel-client/server", "examples/mcp-apps-chess", "examples/mcp-apps-map", "examples/mcp-apps-dataviz"]
+members = ["pmcp-macros", "crates/pmcp-macros-support", "crates/mcp-tester", "crates/mcp-preview", "crates/pmcp-server", "crates/pmcp-server/pmcp-server-lambda", "crates/pmcp-tasks", "crates/pmcp-agent", "crates/mcp-e2e-tests", "crates/pmcp-widget-utils", "crates/pmcp-code-mode", "crates/pmcp-code-mode-derive", "crates/pmcp-server-toolkit", "crates/pmcp-toolkit-postgres", "crates/pmcp-toolkit-mysql", "crates/pmcp-toolkit-athena", "crates/pmcp-sql-server", "crates/pmcp-team-servers", "crates/pmcp-workbook-server", "crates/pmcp-openapi-server", "crates/pmcp-workbook-runtime", "crates/pmcp-workbook-dialect", "crates/pmcp-workbook-compiler", "examples/25-oauth-basic", "examples/test-basic", "cargo-pmcp"]
+# WASM examples and standalone examples are excluded from regular workspace tests.
+# crates/pmcp-package is workspace-excluded (it declares its own [workspace] table);
+# it must be listed here so pmcp-agent's path dependency on it does not trip
+# cargo's "multiple workspace roots" error (pmcp-agent is its first in-repo consumer).
+exclude = ["fuzz", "crates/pmcp-package", "examples/cloudflare-worker-mcp", "examples/26-server-tester", "examples/27-course-server-minimal", "examples/wasm-client", "examples/web-channel-client/client", "examples/web-channel-client/server", "examples/mcp-apps-chess", "examples/mcp-apps-map", "examples/mcp-apps-dataviz"]
 
 [package.metadata.docs.rs]
 features = [

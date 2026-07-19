@@ -91,7 +91,13 @@ jobs:
     
     - name: Run tests
       run: cargo test --all-features --verbose -- --test-threads=1
-    
+
+    # NOTE: pmcp-package (workspace-EXCLUDED, own [workspace] table) is gated in
+    # the `quality-gate` job via `make quality-gate` -> `pmcp-package-gate`
+    # (fmt/clippy/test --manifest-path), which is the single source of truth and
+    # is reused by the local `make quality-gate`. It is intentionally NOT
+    # re-run here to avoid a duplicate from-scratch compile of the crate's tree.
+
     - name: Run doctests
       run: cargo test --doc --all-features --verbose
     
@@ -212,7 +218,11 @@ jobs:
     - name: Install cargo-deny (make quality-gate chains purity-check, which needs it)
       uses: taiki-e/install-action@v2
       with:
-        tool: cargo-deny
+        # Pinned: the Makefile purity-check Layer 2 invocation uses cargo-deny
+        # 0.18.3's CLI ordering (`check --config deny.toml bans`). Newer cargo-deny
+        # moved `--config` to a global flag (before `check`) and rejects the old
+        # form with a usage error, silently breaking the gate. Pin like PMAT_VERSION.
+        tool: cargo-deny@0.18.3
 
     - name: Check disk space before quality gate
       run: df -h
@@ -231,6 +241,18 @@ jobs:
 
     - name: Run PMAT quality gate (complexity only — see CONTEXT.md D-01 / D-11-B)
       run: pmat quality-gate --fail-on-violation --checks complexity
+
+    # Phase 109 Plan 08 (D-18): contract-first compliance for the team-servers
+    # bindings. `comply-ci` is FAIL-CLOSED (no `command -v pmat` guard) so a CI
+    # without pmat fails rather than passing vacuously; it runs the mandated
+    # `pmat comply check --path .` report and makes team-servers binding drift
+    # gate-blocking via a deterministic source-resolution check. Runs here AFTER
+    # PMAT is installed. `comply-negative` proves a broken binding is rejected.
+    - name: Run team-servers contract compliance (fail-closed)
+      run: make comply-ci
+
+    - name: Assert broken-binding rejection (negative compliance test)
+      run: make comply-negative
 
     - name: Check disk space after quality gate
       run: df -h
@@ -312,16 +334,56 @@ jobs:
     - name: Install cargo-deny (Layer 2 backstop)
       uses: taiki-e/install-action@v2
       with:
-        tool: cargo-deny
+        # Pinned to match the Makefile purity-check Layer 2 CLI form (see the
+        # quality-gate job's install step for the full rationale). Newer cargo-deny
+        # relocated `--config` and breaks `check --config deny.toml bans`.
+        tool: cargo-deny@0.18.3
 
     - name: Run purity gate (per-crate, per-feature, fail-closed; Layers 1+2)
       run: make purity-check
+
+  # Phase 108 (D-13) pmcp-agent target matrix. Two independent guarantees:
+  #  1. The LOOP + SEAMS + config path compiles for wasm32 under DEFAULT features
+  #     (no url-connector/reqwest/StreamableHttpTransport). The agent-as-server
+  #     adapter + SamplingSource are native-only (they ride native-only pmcp APIs)
+  #     and are `cfg`-excluded on wasm32, so this gate proves target-cleanliness of
+  #     the loop/seam path, NOT adapter-on-wasm.
+  #  2. The feature-gated HTTP sources (openai-compat/anthropic) AND the native-only
+  #     UrlConnectorClientFactory (url-connector) compile on native.
+  pmcp-agent-targets:
+    name: pmcp-agent target matrix (wasm32 default + native features)
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v7
+
+    - name: Install Rust (+ wasm32 target)
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        targets: wasm32-unknown-unknown
+
+    - name: Cache cargo
+      uses: actions/cache@v6
+      with:
+        path: |
+          ~/.cargo/registry/index/
+          ~/.cargo/registry/cache/
+          ~/.cargo/git/db/
+          target/
+        key: ${{ runner.os }}-cargo-pmcp-agent-targets-${{ hashFiles('**/Cargo.lock') }}
+
+    - name: Build pmcp-agent for wasm32 (DEFAULT features — loop + seams + config)
+      run: |
+        rustup target add wasm32-unknown-unknown
+        cargo build -p pmcp-agent --target wasm32-unknown-unknown
+
+    - name: Build pmcp-agent native (HTTP sources + URL connector)
+      run: cargo build -p pmcp-agent --features openai-compat,anthropic,url-connector
 
   # Unified gate — single required check for org ruleset.
   # Reports as "gate" to match the org ruleset's required status check.
   gate:
     runs-on: ubuntu-latest
-    needs: [test, quality-gate, purity-check]
+    needs: [test, quality-gate, purity-check, pmcp-agent-targets]
     if: always()
     steps:
       - name: Evaluate required checks
@@ -329,11 +391,13 @@ jobs:
           TEST_RESULT: ${{ needs.test.result }}
           QG_RESULT: ${{ needs.quality-gate.result }}
           PURITY_RESULT: ${{ needs.purity-check.result }}
+          AGENT_TARGETS_RESULT: ${{ needs.pmcp-agent-targets.result }}
         run: |
           if [[ "$TEST_RESULT" != "success" ]] || \
              [[ "$QG_RESULT" != "success" ]] || \
-             [[ "$PURITY_RESULT" != "success" ]]; then
-            echo "Required checks failed: test=$TEST_RESULT, quality-gate=$QG_RESULT, purity-check=$PURITY_RESULT"
+             [[ "$PURITY_RESULT" != "success" ]] || \
+             [[ "$AGENT_TARGETS_RESULT" != "success" ]]; then
+            echo "Required checks failed: test=$TEST_RESULT, quality-gate=$QG_RESULT, purity-check=$PURITY_RESULT, pmcp-agent-targets=$AGENT_TARGETS_RESULT"
             exit 1
           fi
           echo "All required checks passed."

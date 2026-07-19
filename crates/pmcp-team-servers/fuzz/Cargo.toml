@@ -1,0 +1,36 @@
+[package]
+name = "pmcp-team-servers-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+# Standalone workspace root: this cargo-fuzz sub-package is intentionally
+# EXCLUDED from the parent workspace (it is not a root member, and this empty
+# `[workspace]` table stops Cargo from walking up the directory tree). Required
+# so `cargo fuzz` builds it in isolation and so the parent workspace never tries
+# to resolve `libfuzzer-sys`.
+[workspace]
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+
+[dependencies.pmcp-team-servers]
+path = ".."
+features = ["team-fs", "team-mcp"]
+
+[[bin]]
+name = "team_guards"
+path = "fuzz_targets/team_guards.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fs_resolve"
+path = "fuzz_targets/fs_resolve.rs"
+test = false
+doc = false
+bench = false

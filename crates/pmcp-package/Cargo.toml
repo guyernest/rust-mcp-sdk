@@ -1,0 +1,56 @@
+# This crate is a standalone member of NEITHER the root workspace nor any other
+# workspace. The empty [workspace] table prevents Cargo from walking up to a
+# parent workspace, so `cd crates/pmcp-package && cargo test` runs standalone
+# without escaping into an unrelated ancestor workspace. Each consuming
+# workspace adds it as a path dep and resolves its own pinned versions.
+[workspace]
+
+[package]
+name = "pmcp-package"
+version = "0.1.0"
+edition = "2021"
+authors = ["PMCP SDK Contributors"]
+license = "MIT OR Apache-2.0"
+description = "AI-Package format for portable MCP agent/server/team/workflow packages: typed manifest schemas, config-slot aggregation, local OCI pack/unpack, and canonical-digest computation."
+repository = "https://github.com/paiml/rust-mcp-sdk"
+documentation = "https://docs.rs/pmcp-package"
+readme = "README.md"
+keywords = ["mcp", "packaging", "oci", "agent", "manifest"]
+categories = ["development-tools", "encoding"]
+publish = true
+
+[dependencies]
+# OCI Image/Distribution spec types: Descriptor, Digest, MediaType — the same
+# types oci-client natively consumes, zero translation layer.
+oci-spec = "0.10"
+# Canonical JSON formatter (OLPC/Docker/Notary/TUF-compatible) for a stable
+# manifest digest. Already a transitive dependency of oci-client.
+olpc-cjson = "0.1.4"
+# SHA-256 digest computation. Pinned to 0.10 to match the repo-wide workspace
+# pin — do NOT bump to 0.11 (breaking API change).
+sha2 = "0.10"
+# Version/VersionReq for component ranges (e.g. london-tube@^1.2) and exact
+# pins. The `serde` feature is REQUIRED: semver::Version/VersionReq are
+# embedded in serializable structs — without it those derives fail to compile.
+semver = { version = "1", features = ["serde"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+# Hex-encoding sha256 output into the `sha256:<hex>` digest string form.
+# Same crate oci-client depends on for the same purpose.
+hex = "0.4"
+
+[dev-dependencies]
+proptest = "1.11"
+# Explicit temp-dir dev-dep for the OCI layout tests — do NOT hand-roll temp dirs.
+tempfile = "3"
+# Dev-only: the crate's runtime format is JSON; TOML parsing is used ONLY by a
+# fixture-coverage test that parses tracked .pmcp/deploy.toml files. Never a
+# runtime dependency.
+toml = "0.8"
+
+# docs.rs build configuration (PKG-01): the crate has no cargo features, so
+# all-features is a no-op safety net; docsrs cfg enables doc_cfg badging if used.
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]

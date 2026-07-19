@@ -103,6 +103,31 @@ pub mod test_support {
 #[path = "templates/workbook_server.rs"]
 pub mod templates_workbook_server;
 
+// CLI-01 (Phase 110-02): expose ONLY the `agent new` scaffold emitter to the lib
+// target (mirrors the `templates_workbook_server` `#[path]` convention). This
+// leaf is dependency-light (std::fs + format! + colored + pmcp-package + semver;
+// NO `clap`/`GlobalFlags`), so it compiles in the lib target without dragging in
+// the bin-only command layer. It lets the emitter's drift-guard + manifest
+// round-trip unit tests run under `cargo test --lib`, NOT only in the bin target.
+// `#[doc(hidden)]` (Codex 110-06 MEDIUM): an internal support seam reached by the
+// plan-110-06 example, not a stable public API.
+#[doc(hidden)]
+#[path = "templates/agent.rs"]
+pub mod templates_agent;
+
+// CLI-02 (Phase 110-03): expose ONLY the lib-safe fixed-source agent runner to the
+// lib target (mirrors the `templates_agent` `#[path]` convention). `run.rs` is a
+// LEAF that references only `pmcp-agent` + `pmcp` types + std (NO `clap` /
+// `GlobalFlags` / the bin-only `commands::*` tree), so it compiles in the lib
+// target on its own. The offline `agent_dev` integration test (and the plan-110-06
+// example) reach `run_fixed_source` through this seam, NOT the bin-only
+// `commands::agent::run` module.
+// `#[doc(hidden)]` (Codex 110-06 MEDIUM): an internal support seam reached by the
+// plan-110-06 example + the offline integration test, not a stable public API.
+#[doc(hidden)]
+#[path = "commands/agent/run.rs"]
+pub mod agent_run;
+
 // WBV2-06: expose ONLY the PURE `workbook explain` tool-surface projection + render
 // to the lib target (mirrors the `templates_workbook_server` `#[path]` convention).
 // This leaf is dependency-light (pmcp-workbook-compiler `ingest`/`synth` + serde +
@@ -112,3 +137,17 @@ pub mod templates_workbook_server;
 // through this seam, NOT the bin-only `commands::workbook::explain` arm.
 #[path = "commands/workbook/explain_surface.rs"]
 pub mod workbook_explain;
+
+// CLI-04 (Phase 110-05): expose ONLY the PURE package-kind + manifest-parse leaf
+// to the lib target (mirrors the `agent_run` `#[path]` convention). `kind.rs`
+// references only `pmcp-package::oci::media_types` + `serde_json` + std (NO
+// `clap`/`GlobalFlags`/`OciLayout`), so it compiles in the lib target on its own.
+// This lets `detect_kind`'s proptest + `artifact_type_from_manifest_json`'s
+// never-panic unit tests run under `cargo test --lib`, AND gives plan 110-06 a
+// lib seam to mount + fuzz the untrusted manifest-parse boundary — NOT the
+// bin-only `commands::package::kind` module.
+// `#[doc(hidden)]` (Codex 110-06 MEDIUM): an internal support seam mounted + fuzzed
+// by the plan-110-06 fuzz target, not a stable public API.
+#[doc(hidden)]
+#[path = "commands/package/kind.rs"]
+pub mod package_kind;

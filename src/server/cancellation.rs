@@ -205,6 +205,13 @@ pub struct RequestHandlerExtra {
     /// When `None`, the client does not support tasks or did not request
     /// task mode — the tool should return results synchronously.
     pub task_request: Option<serde_json::Value>,
+    /// The request's `_meta` object as raw JSON (MCP `_meta`).
+    ///
+    /// Populated by the dispatcher from the incoming `tools/call` request so
+    /// handlers can read arbitrary namespaced `_meta` keys (beyond the typed
+    /// `progress_token`/`_task_id`) without a typed dependency on `RequestMeta`.
+    /// `None` when the request carried no `_meta`.
+    pub request_meta: Option<serde_json::Value>,
     /// Typed request-scoped state for middleware→handler transfer.
     ///
     /// Inserting values requires `T: Clone + Send + Sync + 'static`. Debug prints type names only,
@@ -254,6 +261,7 @@ impl RequestHandlerExtra {
             metadata: HashMap::new(),
             progress_reporter: None,
             task_request: None,
+            request_meta: None,
             extensions: http::Extensions::new(),
             #[cfg(not(target_arch = "wasm32"))]
             peer: None,
@@ -299,6 +307,17 @@ impl RequestHandlerExtra {
     /// instead of awaiting the full result.
     pub fn with_task_request(mut self, task_request: Option<serde_json::Value>) -> Self {
         self.task_request = task_request;
+        self
+    }
+
+    /// Attach the request's `_meta` object (raw JSON) for handler inspection.
+    ///
+    /// Handlers can then read arbitrary namespaced `_meta` keys (e.g. team-guard
+    /// depth/ancestor state) via `extra.request_meta`. Pass `None` when the
+    /// request carried no `_meta`.
+    #[must_use]
+    pub fn with_request_meta(mut self, meta: Option<serde_json::Value>) -> Self {
+        self.request_meta = meta;
         self
     }
 
@@ -505,6 +524,7 @@ impl Default for RequestHandlerExtra {
             metadata: HashMap::new(),
             progress_reporter: None,
             task_request: None,
+            request_meta: None,
             extensions: http::Extensions::new(),
             #[cfg(not(target_arch = "wasm32"))]
             peer: None,
@@ -604,6 +624,7 @@ impl std::fmt::Debug for RequestHandlerExtra {
             .field("auth_context", &self.auth_context)
             .field("metadata", &redacted_metadata)
             .field("task_request", &self.task_request.is_some())
+            .field("request_meta", &self.request_meta)
             .field("extensions", &self.extensions);
         #[cfg(not(target_arch = "wasm32"))]
         debug.field("peer", &self.peer.as_ref().map(|_| "Arc<dyn PeerHandle>"));

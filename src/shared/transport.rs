@@ -287,6 +287,21 @@ pub trait Transport: Send + Sync + Debug {
     ///
     /// This method should block until a complete message is available.
     /// It should handle any necessary buffering and framing internally.
+    ///
+    /// # Cancellation
+    ///
+    /// Implementors MUST make `receive` cancel-safe: if the returned future is
+    /// dropped before it resolves (for example when the server's single-owner
+    /// transport actor's `select!` drops the in-flight receive to service an
+    /// outbound send), NO already-consumed bytes may be lost. The next call to
+    /// `receive` must resume and return the next complete message intact, as if
+    /// the dropped call had never happened.
+    ///
+    /// Stream-based transports (`StreamExt::next`, `mpsc::Receiver::recv`) are
+    /// cancel-safe by construction. Byte-oriented transports that read into a
+    /// local buffer (e.g. `AsyncBufReadExt::read_line`) are NOT — they must
+    /// persist their partial-read buffer across calls to satisfy this contract
+    /// (see [`crate::shared::StdioTransport`]).
     async fn receive(&mut self) -> Result<TransportMessage>;
 
     /// Close the transport.

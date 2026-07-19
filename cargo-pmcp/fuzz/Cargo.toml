@@ -64,3 +64,10 @@ path = "fuzz_targets/fuzz_metadata_config.rs"
 doc = false
 test = false
 bench = false
+
+[[bin]]
+name = "fuzz_package_kind"
+path = "fuzz_targets/fuzz_package_kind.rs"
+doc = false
+test = false
+bench = false

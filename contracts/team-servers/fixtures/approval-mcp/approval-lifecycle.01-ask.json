@@ -1,0 +1,24 @@
+{
+  "schema_version": "2",
+  "kind": "tool_call",
+  "case_id": "approval-mcp.team_approval__ask_release_manager.positive",
+  "server": "approval-mcp",
+  "scenario": "approval-lifecycle",
+  "order": 1,
+  "request": {
+    "name": "team_approval__ask_release_manager",
+    "arguments": {
+      "question": "Approve deploy to prod?",
+      "options": ["approve", "reject"]
+    }
+  },
+  "capture": { "approval_id": "$.content[0].text.id" },
+  "expect": {
+    "outcome": "success",
+    "match": "predicate",
+    "response": {
+      "content": [{ "type": "text", "text": "@contains:appr-001" }],
+      "isError": false
+    }
+  }
+}

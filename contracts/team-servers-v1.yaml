@@ -1,0 +1,128 @@
+metadata:
+  version: 1.1.0
+  created: '2026-07-17'
+  author: PAIML Engineering
+  description: >-
+    Provisional PMCP extension contract for the four team-server tool surfaces
+    (team-fs, mem-mcp, approval-mcp, team-mcp). The fs__/mem__/team_mcp__/
+    team_approval__ tool families are NAMESPACED provisional extensions
+    (provisional per the working-group posture — names may change before any
+    stable freeze). NOTE: resolve_approval and get_approval are provisional
+    UNNAMESPACED static (legacy) names — they are NOT namespaced and must not be
+    treated as if they carried a namespace prefix. This contract documents the
+    advertised tool surface and the team-mcp dispatch semantics as portable,
+    storage-agnostic equations. A contract-first binding.yaml skeleton
+    (contracts/team-servers/binding.yaml, status: planned) is authored in Phase
+    109 Plan 01 against the planned reference-server functions
+    (crates/pmcp-team-servers); Plan 109-08 flips each binding to implemented
+    with its real signature and enables pmat comply gating.
+  references:
+  - Model Context Protocol Specification (2025-11-25)
+  - SEP-1686 task-augmented tool results (pmcp 2.12.0 ToolOutput::Result)
+  - pmcp crate docs (docs.rs/pmcp)
+  - 'pv-spec: MCP SDK boundary contracts'
+
+equations:
+  fs_tool_surface:
+    formula: |
+      advertise: team-fs -> ListToolsResult
+        static namespaced tools (11):
+          fs__list fs__read fs__write fs__append_file fs__head fs__stat
+          fs__create_directory fs__get_download_url
+          fs__sync_to_review fs__sync_from_review fs__complete_task
+      dispatch: (tool_name in fs__*, args) -> CallToolResult | Error
+        tool_name not in fs__* set => Error("Tool 'name' not found")
+    domain: team-fs tool names (fs__* namespace) x tool arguments
+    codomain: ListToolsResult advertising the 11 fs__* tools; CallToolResult or Error
+    invariants:
+    - The advertised fs__* surface is exactly these 11 namespaced tool names, no more, no fewer
+    - fs__list carries annotations.read_only_hint == true (read-only advertised hint)
+    - fs__complete_task follows SEP-1686 task-completion semantics (ToolOutput::Result surface)
+    - Every advertised fs__* tool has a corresponding handler; unknown fs__* names error, never panic
+    - The advertised argument schema for each tool equals the enforced argument schema (advertised == enforced)
+    preconditions:
+    - Server is initialized and a team-fs surface is configured
+    - tool_name is a non-empty string
+    postconditions:
+    - tools/list returns exactly the 11 fs__* tools
+    - A schema-invalid fs__* call returns an error before side effects, never a partial write
+
+  mem_tool_surface:
+    formula: |
+      advertise: mem-mcp -> ListToolsResult
+        static namespaced tools (6):
+          mem__add mem__get mem__search mem__list_recent mem__delete mem__complete_task
+      dispatch: (tool_name in mem__*, args) -> CallToolResult | Error
+        tool_name not in mem__* set => Error("Tool 'name' not found")
+    domain: mem-mcp tool names (mem__* namespace) x tool arguments
+    codomain: ListToolsResult advertising the 6 mem__* tools; CallToolResult or Error
+    invariants:
+    - The advertised mem__* surface is exactly these 6 namespaced tool names, no more, no fewer
+    - mem__complete_task follows SEP-1686 task-completion semantics (ToolOutput::Result surface)
+    - Every advertised mem__* tool has a corresponding handler; unknown mem__* names error, never panic
+    - The advertised argument schema for each tool equals the enforced argument schema (advertised == enforced)
+    preconditions:
+    - Server is initialized and a mem-mcp surface is configured
+    - tool_name is a non-empty string
+    postconditions:
+    - tools/list returns exactly the 6 mem__* tools
+    - A schema-invalid mem__* call returns an error before mutating memory state
+
+  approval_tool_surface:
+    formula: |
+      advertise: approval-mcp -> ListToolsResult
+        static UNNAMESPACED legacy tools (2):
+          resolve_approval  get_approval
+        dynamic namespaced family (one per human roster member):
+          team_approval__ask_<member>
+      dispatch: (tool_name, args) -> CallToolResult | Error
+        tool_name in {resolve_approval, get_approval}            => static handler
+        tool_name matches team_approval__ask_<member>            => ask handler for that member
+        member not in configured human roster                    => Error("unknown member")
+    domain: approval-mcp tool names (unnamespaced static + team_approval__ dynamic) x arguments
+    codomain: ListToolsResult (2 static + N dynamic ask tools); CallToolResult or Error
+    invariants:
+    - resolve_approval and get_approval are provisional UNNAMESPACED static (legacy) names — not namespaced
+    - The team_approval__ask_<member> family is dynamic — one tool per human roster member, computed from config
+    - A team_approval__ask_ call targeting a member absent from the configured roster errors, never panics
+    - The advertised argument schema for each tool equals the enforced argument schema (advertised == enforced)
+    - An ask/resolve record MAY carry OPTIONAL subject_task_id and/or subject_ref fields linking the approval to the task/component it gates (D-12); when present on an ask, they are echoed verbatim by get_approval and resolve_approval (never dropped or rewritten)
+    preconditions:
+    - Server is initialized and a human roster is configured for the approval surface
+    - tool_name is a non-empty string
+    postconditions:
+    - tools/list returns resolve_approval, get_approval, and one team_approval__ask_<member> per roster member
+    - Dispatch to an unknown member yields an error outcome
+    - get_approval and resolve_approval echo any subject_task_id/subject_ref recorded at ask time unchanged (D-12)
+
+  team_dispatch_surface:
+    formula: |
+      advertise: team-mcp -> ListToolsResult
+        dynamic namespaced family (computed per-request from config):
+          team_mcp__<member>
+      dispatch: (team_mcp__<member>, args, x-pmcp-team-depth) -> CallToolResult | Error
+        lookup member by STABLE CONFIGURED MEMBER ID (not by name)
+        member id not in config           => Error("unknown member")
+        parse(x-pmcp-team-depth) fails     => Error (strict integer parse; garbage rejected)
+        depth > max_team_depth             => Error (excessive team depth)
+        target id == caller id             => Error (self-call guard; compare ids not names)
+        target id in caller ancestor chain => Error (ancestor-cycle guard)
+        otherwise                          => ToolOutput::Result (full CallToolResult)
+    domain: team-mcp dynamic member dispatch (team_mcp__<member>) x arguments x x-pmcp-team-depth header
+    codomain: ListToolsResult (per-request member tools); CallToolResult via ToolOutput::Result, or Error
+    invariants:
+    - tools/list is computed per-request from config; the team_mcp__<member> family is fully dynamic
+    - Member lookup is by stable configured member ID, never by display name
+    - ToolOutput::Result owns the FULL CallToolResult, including top-level _meta keyed by the SDK constant io.modelcontextprotocol/related-task (RELATED_TASK_META_KEY, pmcp 2.12.0) — never a bare related_task key
+    - Depth + ancestor-chain guard state travels as namespaced _meta on the tools/call request (transport-agnostic, locked D-14 route A); the HTTP binary maps the x-pmcp-team-depth header into that _meta at the edge, so the guard logic never reads a raw header
+    - x-pmcp-team-depth is parsed strictly as an integer; non-integer/garbage values are rejected
+    - Team depth beyond max_team_depth is rejected (bounded recursion)
+    - Self-call is rejected by comparing member IDs, not names (self-call guard)
+    - Ancestor-cycle dispatch (target already in the caller ancestor chain) is rejected (cycle guard)
+    - The advertised argument schema equals the enforced argument schema (advertised == enforced)
+    preconditions:
+    - Server is initialized and a team roster with stable member IDs is configured
+    - Incoming request may carry an x-pmcp-team-depth value (mapped to namespaced _meta at the HTTP edge)
+    postconditions:
+    - A successful dispatch returns a ToolOutput::Result carrying the full CallToolResult with top-level _meta keyed by io.modelcontextprotocol/related-task
+    - Unknown member, malformed depth, excessive depth, self-call, and ancestor-cycle all yield error outcomes

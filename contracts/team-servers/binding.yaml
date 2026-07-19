@@ -1,0 +1,65 @@
+version: 1.1.0
+target_crate: pmcp-team-servers
+# Contract-first binding FINALIZED (Phase 109 Plan 08, D-18). The skeleton was
+# authored contract-first in 109-01 (every binding `status: planned`); now that
+# all four reference servers exist (109-02..05) each binding is flipped to
+# `status: implemented` and carries the REAL function signature resolved against
+# `crates/pmcp-team-servers/src`. Field names mirror contracts/binding.yaml
+# byte-for-byte so `pmat comply check --path .` resolves these bindings the same
+# way it resolves the core-SDK bindings.
+bindings:
+- contract: team-servers-v1.yaml
+  equation: fs_tool_surface
+  function: build_team_fs_server
+  module_path: pmcp_team_servers::fs::server
+  signature: 'pub fn build_team_fs_server(backend: Arc<dyn TeamFsBackend>) -> Result<Server>'
+  status: implemented
+  notes: >-
+    TEAM-02 (Plan 109-02). Builds the team-fs pmcp::Server advertising exactly
+    the 11 fs__* tools over an injected TeamFsBackend (LocalDirBackend dev impl);
+    the server-owned fs__complete_task emits related-task _meta. Satisfies the
+    fs_tool_surface equation (exact 11-tool surface; unknown fs__* names error,
+    never panic).
+- contract: team-servers-v1.yaml
+  equation: mem_tool_surface
+  function: build_mem_mcp_server
+  module_path: pmcp_team_servers::mem::server
+  signature: 'pub fn build_mem_mcp_server(backend: Arc<dyn TeamMemoryBackend>) -> Result<Server>'
+  status: implemented
+  notes: >-
+    TEAM-03 (Plan 109-03). Builds the mem-mcp pmcp::Server advertising exactly
+    the 6 mem__* tools over an injected TeamMemoryBackend (zero-dep BM25
+    InMemoryMemoryBackend dev impl); mem__complete_task emits related-task _meta.
+    Satisfies the mem_tool_surface equation (exact 6-tool surface).
+- contract: team-servers-v1.yaml
+  equation: approval_tool_surface
+  function: build_approval_mcp_server
+  module_path: pmcp_team_servers::approval::server
+  signature: 'pub fn build_approval_mcp_server(human_roles: &[HumanRole], channel: Arc<dyn ApprovalChannel>, repo: Arc<ApprovalRepository>) -> Result<Server>'
+  status: implemented
+  notes: >-
+    TEAM-04 (Plan 109-04). Builds the approval-mcp pmcp::Server advertising the
+    two UNNAMESPACED legacy static tools (resolve_approval, get_approval) plus
+    one team_approval__ask_<role> per human_roles entry, echoing optional
+    subject_task_id/subject_ref verbatim (D-12). Satisfies the
+    approval_tool_surface equation.
+- contract: team-servers-v1.yaml
+  equation: team_dispatch_surface
+  function: build_team_mcp_server
+  module_path: pmcp_team_servers::team::server
+  signature: 'pub fn build_team_mcp_server(members: Vec<MemberHandle>, max_team_depth: i64, roster: Vec<MemberId>) -> Result<Server>'
+  status: implemented
+  notes: >-
+    TEAM-05 (Plan 109-05). Builds the team-mcp pmcp::Server that forwards member
+    tools/call under depth + self-call + ancestor-cycle guards, carrying guard
+    state as namespaced _meta (D-14) and surfacing related-task metadata under
+    io.modelcontextprotocol/related-task. The composition rule that decides WHEN
+    team-mcp attaches is pmcp_team_servers::compose::derive::derive_attachment
+    (team-mcp iff >=2 members), wired in-process by
+    pmcp_team_servers::compose::wiring::TeamRuntime. Satisfies the
+    team_dispatch_surface equation.
+critical_path:
+- fs_tool_surface
+- mem_tool_surface
+- approval_tool_surface
+- team_dispatch_surface

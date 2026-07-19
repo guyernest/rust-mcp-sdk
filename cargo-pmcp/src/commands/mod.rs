@@ -1,4 +1,5 @@
 pub mod add;
+pub mod agent;
 pub mod app;
 pub mod auth;
 pub mod auth_cmd;
@@ -11,10 +12,12 @@ pub mod flags;
 pub mod landing;
 pub mod loadtest;
 pub mod new;
+pub mod package;
 pub mod pentest;
 pub mod preview;
 pub mod schema;
 pub mod secret;
+pub mod team;
 pub mod test;
 pub mod validate;
 pub mod workbook;

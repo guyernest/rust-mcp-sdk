@@ -1,0 +1,27 @@
+version: 1.1.0
+target_crate: pmcp-team-servers
+# DELIBERATELY BROKEN binding fixture for the NEGATIVE compliance test
+# (Phase 109 Plan 08, Task 1/2). This file is intentionally NOT named
+# `binding.yaml`, so `pmat comply check --path .` (which scans files named
+# exactly `binding.yaml`) NEVER reads it during a normal repo compliance run —
+# it would otherwise inject a ghost binding into the real check. The
+# `comply-negative` Makefile target copies this file into an isolated scratch
+# project AS `contracts/binding.yaml` and asserts `pmat comply check --strict`
+# rejects it with a NON-ZERO exit, proving the gate actually rejects a broken
+# binding rather than passing vacuously.
+#
+# The `function` below points at a symbol that DOES NOT EXIST anywhere in
+# `crates/pmcp-team-servers/src` — the exact "ghost binding" condition pmat's
+# binding-existence check (CB-1208 / CB-1338) is designed to reject.
+bindings:
+- contract: team-servers-v1.yaml
+  equation: fs_tool_surface
+  function: build_team_fs_server_THIS_FUNCTION_DOES_NOT_EXIST
+  module_path: pmcp_team_servers::fs::server
+  signature: 'pub fn build_team_fs_server_THIS_FUNCTION_DOES_NOT_EXIST() -> Nope'
+  status: implemented
+  notes: >-
+    Deliberately broken: references a non-existent reference-server function so
+    the negative compliance test can assert rejection.
+critical_path:
+- fs_tool_surface

@@ -1,0 +1,20 @@
+{
+  "schema_version": "2",
+  "kind": "tool_call",
+  "case_id": "approval-mcp.resolve_approval.positive",
+  "server": "approval-mcp",
+  "scenario": "approval-lifecycle",
+  "order": 3,
+  "request": {
+    "name": "resolve_approval",
+    "arguments": { "approvalId": "${approval_id}", "decision": "approve" }
+  },
+  "expect": {
+    "outcome": "success",
+    "match": "predicate",
+    "response": {
+      "content": [{ "type": "text", "text": "@contains:resolved" }],
+      "isError": false
+    }
+  }
+}

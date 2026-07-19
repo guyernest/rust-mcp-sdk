@@ -3,7 +3,7 @@
 #[cfg(not(target_arch = "wasm32"))]
 use crate::error::{Error, Result};
 #[cfg(not(target_arch = "wasm32"))]
-use crate::shared::{Protocol, ProtocolOptions, TransportMessage};
+use crate::shared::TransportMessage;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::types::{
     CallToolRequest, CallToolResult, ClientCapabilities, ClientRequest, GetPromptRequest,
@@ -998,15 +998,32 @@ impl Server {
         self.server_request_dispatcher = Some(dispatcher);
 
         let server = Arc::new(self);
-        let transport = Arc::new(RwLock::new(transport));
-        let protocol = Arc::new(RwLock::new(Protocol::new(ProtocolOptions::default())));
 
-        Self::spawn_notification_handler(transport.clone(), notification_rx);
-        server_request_dispatcher::spawn_server_request_drain(transport.clone(), outbound_rx);
-        Self::spawn_message_handler(server.clone(), transport.clone(), protocol);
+        // Transport Actor design (Phase 108, D-01/D-02): the transport is OWNED
+        // by exactly one actor task and is NEVER wrapped in a shared
+        // `Arc<RwLock<T>>`. ALL outbound frames (responses, server-requests,
+        // notifications) funnel through a single UNBOUNDED `send_tx`; inbound
+        // requests go to a SINGLE sequential worker via an UNBOUNDED
+        // `request_tx`. The receive/drain path therefore never blocks on request
+        // execution, request-queue capacity, or a transport write-lock, so an
+        // in-tool `peer.sample()` / `.list_roots()` round-trip cannot deadlock
+        // the loop. Request handling stays serialized (one worker) — zero
+        // behavior change for existing single-request servers.
+        let (send_tx, send_rx) = mpsc::unbounded_channel::<TransportMessage>();
+        let (request_tx, request_rx) = mpsc::unbounded_channel::<(RequestId, Request)>();
 
-        // Keep the main task alive
-        Self::run_main_loop().await
+        Self::spawn_notification_handler(send_tx.clone(), notification_rx);
+        server_request_dispatcher::spawn_server_request_drain(send_tx.clone(), outbound_rx);
+        Self::spawn_request_worker(server.clone(), request_rx, send_tx.clone());
+        let actor = tokio::spawn(Self::run_transport_actor(
+            server.clone(),
+            transport,
+            send_rx,
+            request_tx,
+        ));
+
+        // Return once the actor task ends (transport closed / all senders gone).
+        Self::run_main_loop(actor).await
     }
 
     /// Attach the cached peer handle to `extra` when a dispatcher is configured.
@@ -1023,127 +1040,181 @@ impl Server {
         extra
     }
 
-    /// Spawn task to handle outgoing notifications.
+    /// Spawn the outgoing-notification forwarder.
+    ///
+    /// Forwards each queued [`Notification`] onto the transport actor's
+    /// unbounded `send_tx` as a [`TransportMessage::Notification`]. It no longer
+    /// touches the transport directly — all outbound framing is serialized by
+    /// the single actor task, so notifications can never starve on a transport
+    /// write-lock held across an in-flight `receive()`.
     fn spawn_notification_handler(
-        transport: Arc<RwLock<impl crate::shared::Transport + 'static>>,
+        send_tx: mpsc::UnboundedSender<TransportMessage>,
         mut notification_rx: mpsc::Receiver<Notification>,
     ) {
         tokio::spawn(async move {
             while let Some(notification) = notification_rx.recv().await {
-                if let Err(e) =
-                    Self::send_notification_through_transport(&transport, notification).await
+                if send_tx
+                    .send(TransportMessage::Notification(notification))
+                    .is_err()
                 {
-                    Self::log_error(&format!("Failed to send notification: {}", e)).await;
-                }
-            }
-        });
-    }
-
-    /// Spawn task to handle incoming messages.
-    fn spawn_message_handler(
-        server: Arc<Self>,
-        transport: Arc<RwLock<impl crate::shared::Transport + 'static>>,
-        _protocol: Arc<RwLock<Protocol>>,
-    ) {
-        tokio::spawn(async move {
-            loop {
-                let message = match Self::receive_message_from_transport(&transport).await {
-                    Ok(msg) => msg,
-                    Err(e) => {
-                        Self::log_error(&format!("Transport receive error: {}", e)).await;
-                        break;
-                    },
-                };
-
-                if let Err(e) = Self::handle_transport_message(&server, &transport, message).await {
-                    Self::log_error(&format!("Message handling error: {}", e)).await;
+                    // Actor gone — nothing left to forward to.
                     break;
                 }
             }
         });
     }
 
-    /// Send a notification through the transport.
-    async fn send_notification_through_transport(
-        transport: &Arc<RwLock<impl crate::shared::Transport>>,
-        notification: Notification,
-    ) -> Result<()> {
-        let mut t = transport.write().await;
-        t.send(TransportMessage::Notification(notification)).await
+    /// Spawn the single sequential request worker.
+    ///
+    /// Consumes inbound requests one at a time and forwards each response back
+    /// through the actor's `send_tx`. Exactly ONE worker runs per server, so
+    /// request handling stays serialized exactly as before this refactor. The
+    /// actor merely decouples receiving from handling: a handler that awaits a
+    /// peer round-trip no longer blocks the receive path, so the correlated
+    /// client response can be read and routed while the handler is parked.
+    fn spawn_request_worker(
+        server: Arc<Self>,
+        mut request_rx: mpsc::UnboundedReceiver<(RequestId, Request)>,
+        send_tx: mpsc::UnboundedSender<TransportMessage>,
+    ) {
+        tokio::spawn(async move {
+            while let Some((id, request)) = request_rx.recv().await {
+                let response = server.handle_request(id, request, None).await;
+                if send_tx.send(TransportMessage::Response(response)).is_err() {
+                    // Actor gone — stop draining.
+                    break;
+                }
+            }
+        });
     }
 
-    /// Receive a message from the transport.
-    async fn receive_message_from_transport(
-        transport: &Arc<RwLock<impl crate::shared::Transport>>,
-    ) -> Result<TransportMessage> {
-        let mut t = transport.write().await;
-        t.receive().await
-    }
-
-    /// Handle a transport message.
-    async fn handle_transport_message(
-        server: &Arc<Self>,
-        transport: &Arc<RwLock<impl crate::shared::Transport>>,
-        message: TransportMessage,
-    ) -> Result<()> {
-        match message {
-            TransportMessage::Request { id, request } => {
-                Self::handle_request_message(server, transport, id, request).await
-            },
-            TransportMessage::Response(response) => {
-                // Route correlated client responses through the dispatcher so
-                // pending dispatches resolve.
-                if let Some(dispatcher) = &server.server_request_dispatcher {
-                    let correlation_id = response.id.to_string();
-                    let payload = match &response.payload {
-                        crate::types::jsonrpc::ResponsePayload::Result(value) => value.clone(),
-                        crate::types::jsonrpc::ResponsePayload::Error(err) => {
-                            // Represent errors as a JSON object so callers can
-                            // distinguish — dispatch() returns the Value as-is.
-                            serde_json::to_value(err).unwrap_or(Value::Null)
-                        },
-                    };
-                    if let Err(e) = dispatcher.handle_response(&correlation_id, payload).await {
-                        Self::log_warning(&format!(
-                            "Failed to route response {}: {}",
-                            correlation_id, e
-                        ))
-                        .await;
+    /// Own the transport and interleave receive + send from a single task.
+    ///
+    /// The actor `select!`s over (a) the outbound `send_rx` and (b)
+    /// `transport.receive()`. Inbound frames are routed by kind: a `Response`
+    /// resolves the awaiting dispatcher IMMEDIATELY (unblocking an in-tool
+    /// `peer.sample()`), a `Request` is queued to the sequential worker, and a
+    /// `Notification` is handled inline. Routing NEVER touches the transport.
+    ///
+    /// When the send branch wins, the in-flight `receive()` future is DROPPED,
+    /// so [`crate::shared::Transport::receive`] MUST be cancel-safe (see the
+    /// trait's `# Cancellation` contract) — the stock `StdioTransport` persists
+    /// its partial line across calls for exactly this reason. The real
+    /// `transport.send(..)` runs AFTER the `select!` block so the receive
+    /// future's mutable borrow is released first; this also keeps the borrow
+    /// checker satisfied for the single `&mut self` transport object.
+    async fn run_transport_actor<T: crate::shared::Transport + 'static>(
+        server: Arc<Self>,
+        mut transport: T,
+        mut send_rx: mpsc::UnboundedReceiver<TransportMessage>,
+        request_tx: mpsc::UnboundedSender<(RequestId, Request)>,
+    ) {
+        loop {
+            let mut outbound: Option<TransportMessage> = None;
+            tokio::select! {
+                biased;
+                maybe_frame = send_rx.recv() => {
+                    match maybe_frame {
+                        Some(frame) => outbound = Some(frame),
+                        // All senders dropped — shut the actor down.
+                        None => break,
                     }
-                } else {
-                    Self::log_warning("Server received response but no dispatcher configured")
-                        .await;
+                },
+                received = transport.receive() => {
+                    match received {
+                        Ok(message) => {
+                            if Self::route_inbound_message(&server, &request_tx, message)
+                                .await
+                                .is_break()
+                            {
+                                break;
+                            }
+                        },
+                        Err(e) => {
+                            Self::log_error(&format!("Transport receive error: {}", e)).await;
+                            break;
+                        },
+                    }
+                },
+            }
+            if let Some(frame) = outbound {
+                if let Err(e) = transport.send(frame).await {
+                    Self::log_error(&format!("Transport send error: {}", e)).await;
+                    break;
                 }
-                Ok(())
-            },
-            TransportMessage::Notification(notification) => {
-                // Handle client cancellation notifications
-                if let Notification::Client(crate::types::ClientNotification::Cancelled(params)) =
-                    &notification
-                {
-                    let request_id = params.request_id.to_string();
-                    server
-                        .cancellation_manager
-                        .cancel_request_silent(request_id)
-                        .await?;
-                }
-
-                Self::log_debug("Server received notification").await;
-                Ok(())
-            },
+            }
         }
     }
 
-    /// Handle a request message.
-    async fn handle_request_message(
+    /// Route one inbound transport frame. Never touches the transport, so it is
+    /// safe to call from inside the actor's `select!` receive arm. Returns
+    /// [`std::ops::ControlFlow::Break`] only when the request worker is gone.
+    async fn route_inbound_message(
         server: &Arc<Self>,
-        transport: &Arc<RwLock<impl crate::shared::Transport>>,
-        id: RequestId,
-        request: Request,
-    ) -> Result<()> {
-        let response = server.handle_request(id, request, None).await;
-        let mut t = transport.write().await;
-        t.send(TransportMessage::Response(response)).await
+        request_tx: &mpsc::UnboundedSender<(RequestId, Request)>,
+        message: TransportMessage,
+    ) -> std::ops::ControlFlow<()> {
+        match message {
+            TransportMessage::Request { id, request } => {
+                // Unbounded queue: the receive branch MUST NOT await capacity
+                // (the anti-deadlock invariant). A send error means the worker
+                // is gone, so the actor should stop.
+                if request_tx.send((id, request)).is_err() {
+                    return std::ops::ControlFlow::Break(());
+                }
+            },
+            TransportMessage::Response(response) => {
+                Self::route_response(server, response).await;
+            },
+            TransportMessage::Notification(notification) => {
+                Self::route_notification(server, notification).await;
+            },
+        }
+        std::ops::ControlFlow::Continue(())
+    }
+
+    /// Route a correlated client response through the dispatcher so a pending
+    /// in-tool peer dispatch resolves. Behavior is lifted verbatim from the
+    /// former `handle_transport_message` response arm — only the caller changed.
+    async fn route_response(server: &Arc<Self>, response: JSONRPCResponse) {
+        let Some(dispatcher) = &server.server_request_dispatcher else {
+            Self::log_warning("Server received response but no dispatcher configured").await;
+            return;
+        };
+        let correlation_id = response.id.to_string();
+        let payload = match &response.payload {
+            crate::types::jsonrpc::ResponsePayload::Result(value) => value.clone(),
+            crate::types::jsonrpc::ResponsePayload::Error(err) => {
+                // Represent errors as a JSON object so callers can distinguish —
+                // dispatch() returns the Value as-is.
+                serde_json::to_value(err).unwrap_or(Value::Null)
+            },
+        };
+        if let Err(e) = dispatcher.handle_response(&correlation_id, payload).await {
+            Self::log_warning(&format!(
+                "Failed to route response {}: {}",
+                correlation_id, e
+            ))
+            .await;
+        }
+    }
+
+    /// Handle an inbound notification (client cancellation). A failed
+    /// cancellation lookup is logged rather than tearing down the actor loop.
+    async fn route_notification(server: &Arc<Self>, notification: Notification) {
+        if let Notification::Client(crate::types::ClientNotification::Cancelled(params)) =
+            &notification
+        {
+            let request_id = params.request_id.to_string();
+            if let Err(e) = server
+                .cancellation_manager
+                .cancel_request_silent(request_id)
+                .await
+            {
+                Self::log_warning(&format!("Failed to process cancellation: {}", e)).await;
+            }
+        }
+        Self::log_debug("Server received notification").await;
     }
 
     /// Log an error message.
@@ -1161,11 +1232,13 @@ impl Server {
         crate::log(crate::types::LogLevel::Debug, message, None).await;
     }
 
-    /// Run the main event loop.
-    async fn run_main_loop() -> Result<()> {
-        loop {
-            tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+    /// Await the transport actor task; `run()` returns once it ends (transport
+    /// closed or all outbound senders dropped). This is the shutdown join point.
+    async fn run_main_loop(actor: tokio::task::JoinHandle<()>) -> Result<()> {
+        if let Err(e) = actor.await {
+            Self::log_error(&format!("Transport actor task ended abnormally: {}", e)).await;
         }
+        Ok(())
     }
 
     async fn handle_request(
@@ -1443,13 +1516,28 @@ impl Server {
         #[cfg(not(target_arch = "wasm32"))]
         let create_path_auth = validated_auth_context.clone();
 
+        // Propagate the request's `_meta` object (raw JSON incl. namespaced
+        // `other` keys) so handlers can read it via `extra.request_meta` in the
+        // high-level `Server` path too (ServerCore already wires this at core.rs).
+        #[allow(clippy::used_underscore_binding)] // _meta is part of MCP protocol spec
+        let request_meta_value = req
+            ._meta
+            .as_ref()
+            .and_then(|m| serde_json::to_value(m).ok());
+
         let mut extra = self.attach_peer(
             crate::server::cancellation::RequestHandlerExtra::new(
                 request_id.to_string(),
                 cancellation_token,
             )
             .with_auth_context(validated_auth_context)
-            .with_progress_reporter(progress_reporter),
+            .with_progress_reporter(progress_reporter)
+            // Surface whether the client requested task augmentation so handlers
+            // can branch on `extra.is_task_request()` in the high-level `Server`
+            // path too (ServerCore already wires this at core.rs). Additive: the
+            // dispatcher's own task-creation decision still reads `req.task`.
+            .with_task_request(req.task.clone())
+            .with_request_meta(request_meta_value),
         );
 
         // D-03.3 (TOUT-01): clone the interior-mutable result-`_meta` slot BEFORE
