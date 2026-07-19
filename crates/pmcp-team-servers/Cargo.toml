@@ -96,6 +96,14 @@ name = "team-mcp"
 path = "src/bin/team_mcp.rs"
 required-features = ["team-mcp"]
 
+# The doc-review E2E example (109-08, D-16) composes all four servers via the
+# in-process runtime, so it needs the full `runtime` server set. `required-features`
+# keeps a reduced-feature build (e.g. `--no-default-features --features team-fs`)
+# from trying — and failing — to compile it.
+[[example]]
+name = "doc_review_team"
+required-features = ["runtime"]
+
 [dev-dependencies]
 pmcp = { version = "2.17.0", path = "../..", features = ["full"] }
 tokio = { version = "1", features = ["full"] }
