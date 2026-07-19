@@ -35,7 +35,19 @@ findings:
   warning: 2
   info: 4
   total: 6
+  warning_resolved: 2
+  warning_open: 0
 status: issues_found
+fixes_applied:
+  - id: WR-01
+    status: resolved
+    commit: 60648c1a
+    note: "build_team_mcp_server / build_approval_mcp_server now fail loudly (pmcp::Error::validation) on a derived tool-name collision via a HashSet; +2 tests."
+  - id: WR-02
+    status: resolved
+    commit: 54489192
+    note: "LocalDirPackageResolver::resolve_agent rejects unsafe name components (empty / '/' / '\\' / '..' / NUL) via is_safe_component before any path join; +2 tests."
+info_open: [IN-01, IN-02, IN-03, IN-04]
 ---
 
 # Phase 109: Code Review Report
