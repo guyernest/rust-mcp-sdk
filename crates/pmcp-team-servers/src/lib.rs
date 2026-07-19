@@ -34,3 +34,11 @@ pub mod team;
 
 pub use compose::derive::{derive_attachment, AttachmentSet};
 pub use transport::DuplexTransport;
+
+/// Re-export the exportable wire-level conformance runner (TEAM-06, D-17/D-19)
+/// so the platform can `use pmcp_team_servers::conformance::{run_fixtures, ...}`
+/// to drive its own in-memory or HTTP servers against the v2 fixtures.
+#[cfg(feature = "conformance")]
+pub use conformance::runner::{
+    assert_conformant, run_fixtures, ClientTarget, ConformanceReport, ConformanceTarget,
+};
