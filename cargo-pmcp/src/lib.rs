@@ -131,3 +131,14 @@ pub mod agent_run;
 // through this seam, NOT the bin-only `commands::workbook::explain` arm.
 #[path = "commands/workbook/explain_surface.rs"]
 pub mod workbook_explain;
+
+// CLI-04 (Phase 110-05): expose ONLY the PURE package-kind + manifest-parse leaf
+// to the lib target (mirrors the `agent_run` `#[path]` convention). `kind.rs`
+// references only `pmcp-package::oci::media_types` + `serde_json` + std (NO
+// `clap`/`GlobalFlags`/`OciLayout`), so it compiles in the lib target on its own.
+// This lets `detect_kind`'s proptest + `artifact_type_from_manifest_json`'s
+// never-panic unit tests run under `cargo test --lib`, AND gives plan 110-06 a
+// lib seam to mount + fuzz the untrusted manifest-parse boundary — NOT the
+// bin-only `commands::package::kind` module.
+#[path = "commands/package/kind.rs"]
+pub mod package_kind;
