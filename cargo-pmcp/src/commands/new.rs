@@ -116,7 +116,10 @@ pub fn execute(
 /// Rejects: empty names, a leading digit, any character outside
 /// `[A-Za-z0-9_-]`, and any name containing a path separator (`/` or `\`) or a
 /// `..` parent-directory component (path-traversal guard, T-86-03-02).
-fn validate_crate_name(name: &str) -> Result<()> {
+///
+/// `pub(crate)` so the Phase 110 `agent new` scaffolder reuses the SAME hardened
+/// guard before any fs write, rather than re-implementing it (D-01a).
+pub(crate) fn validate_crate_name(name: &str) -> Result<()> {
     if name.is_empty() {
         anyhow::bail!("invalid crate name: name must not be empty");
     }
