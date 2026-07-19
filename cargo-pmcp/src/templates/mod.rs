@@ -1,3 +1,4 @@
+pub mod agent;
 pub mod calculator;
 pub mod complete_calculator;
 pub mod mcp_app;

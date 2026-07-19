@@ -64,6 +64,11 @@ pmcp-team-servers = { version = "0.1", path = "../crates/pmcp-team-servers", fea
 # Caret "0.1" exactly (CLI-04 / D-04b — a tripwire test in 110-05 asserts this
 # literal string; do NOT use `=0.1.0`).
 pmcp-package = { version = "0.1", path = "../crates/pmcp-package" }
+# The `agent new` scaffold builds a starter `AgentPackage` from the real struct
+# (guaranteeing the emitted agent.package.json round-trips); its `version` field
+# is a `semver::Version`, so cargo-pmcp needs semver directly (matches the
+# pmcp-package pin).
+semver = "1"
 # Why (WBCL-05): the `--kind workbook-server` scaffold embeds the sample
 # tax-calc bundle + source .xlsx INTO the published cargo-pmcp binary via
 # `include_dir!`/`include_bytes!` so the assets survive `cargo publish` (they
