@@ -124,7 +124,10 @@ fn record_to_json(record: &ApprovalRecord) -> Value {
 ///
 /// # Errors
 ///
-/// Propagates any [`Server`] construction error.
+/// Propagates any [`Server`] construction error, and fails loudly with a
+/// validation error if two distinct human roles slugify to the same
+/// `team_approval__ask_<role>` tool name (which would otherwise silently
+/// overwrite one ask handler in the builder's tool map, dropping a role).
 pub fn build_approval_mcp_server(
     human_roles: &[HumanRole],
     channel: Arc<dyn ApprovalChannel>,
@@ -141,8 +144,20 @@ pub fn build_approval_mcp_server(
         )
         .tool_arc(GET_APPROVAL_TOOL, get_tool(repo.clone()));
 
+    // Detect ask-tool-name collisions at build time: two distinct role labels
+    // can slugify to the same `team_approval__ask_<role>` name, and the
+    // builder's `HashMap::insert` would silently overwrite (dropping a role).
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+
     for role in human_roles {
         let name = ask_tool_name(&role.role);
+        if !seen.insert(name.clone()) {
+            return Err(Error::validation(format!(
+                "approval ask tool-name collision: '{name}' derived from two distinct roles \
+                 (role '{}' slugifies to an already-registered tool name)",
+                role.role
+            )));
+        }
         builder = builder.tool_arc(
             &name,
             ask_tool(
@@ -377,6 +392,41 @@ mod tests {
             "team_approval__ask_release_manager"
         );
         assert_eq!(ask_tool_name("Approver"), "team_approval__ask_approver");
+    }
+
+    #[test]
+    fn colliding_role_ask_tool_names_fail_the_build() {
+        // Two distinct role labels that slugify to the SAME ask tool name:
+        // `release-manager` and `release_manager` both ->
+        // `team_approval__ask_release_manager`.
+        let colliding = vec![
+            HumanRole {
+                role: "release-manager".to_string(),
+                description: String::new(),
+                responsibilities: vec![],
+                channel_hints: vec![],
+            },
+            HumanRole {
+                role: "release_manager".to_string(),
+                description: String::new(),
+                responsibilities: vec![],
+                channel_hints: vec![],
+            },
+        ];
+        // Sanity: the two labels really do collide.
+        assert_eq!(
+            ask_tool_name(&colliding[0].role),
+            ask_tool_name(&colliding[1].role)
+        );
+
+        let repo = Arc::new(ApprovalRepository::deterministic());
+        let err = build_approval_mcp_server(&colliding, Arc::new(ConsoleChannel::new()), repo)
+            .expect_err("colliding roles must fail the build, not silently drop an ask handler");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("collision"),
+            "expected a tool-name collision build error, got: {msg}"
+        );
     }
 
     #[tokio::test]

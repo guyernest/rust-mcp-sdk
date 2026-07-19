@@ -149,7 +149,10 @@ impl ToolHandler for MemberDispatchTool {
 /// `max_team_depth` bounds recursion.
 ///
 /// # Errors
-/// Propagates any [`Server`] construction error.
+/// Propagates any [`Server`] construction error, and fails loudly with a
+/// validation error if two distinct members slugify to the same
+/// `team_mcp__<member>` tool name (which would otherwise silently overwrite one
+/// handler in the builder's tool map, dropping a member from dispatch).
 pub fn build_team_mcp_server(
     members: Vec<MemberHandle>,
     max_team_depth: i64,
@@ -160,9 +163,20 @@ pub fn build_team_mcp_server(
         .name("team-mcp")
         .version(env!("CARGO_PKG_VERSION"));
 
+    // Detect tool-name collisions at build time: two distinct `MemberId`s can
+    // slugify to the same `team_mcp__<member>` name, and the builder's
+    // `HashMap::insert` would silently overwrite (dropping a member handler).
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+
     for handle in members {
         let target = handle.id().clone();
         let tool_name = team_tool_name(&target);
+        if !seen.insert(tool_name.clone()) {
+            return Err(Error::validation(format!(
+                "team tool-name collision: '{tool_name}' derived from two distinct members \
+                 (member '{target}' slugifies to an already-registered tool name)"
+            )));
+        }
         let tool: Arc<dyn ToolHandler> = Arc::new(MemberDispatchTool {
             target: target.clone(),
             tool_name: tool_name.clone(),
@@ -406,6 +420,25 @@ mod tests {
         assert_ne!(team_tool_name(&a), team_tool_name(&b));
         // "triage@^1" slugifies '@' and '^' to '_' each.
         assert_eq!(team_tool_name(&a), "team_mcp__triage__1");
+    }
+
+    #[tokio::test]
+    async fn colliding_member_tool_names_fail_the_build() {
+        // Two distinct members whose ids slugify to the SAME tool name:
+        // `triage-1@^1` and `triage_1@^1` both -> `team_mcp__triage_1__1`.
+        let (id_a, handle_a) = live_member("triage-1").await;
+        let (id_b, handle_b) = live_member("triage_1").await;
+        // Distinct identities, colliding derived tool names.
+        assert_ne!(id_a, id_b);
+        assert_eq!(team_tool_name(&id_a), team_tool_name(&id_b));
+
+        let err = build_team_mcp_server(vec![handle_a, handle_b], 3, vec![id_a, id_b])
+            .expect_err("colliding members must fail the build, not silently drop a handler");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("collision"),
+            "expected a tool-name collision build error, got: {msg}"
+        );
     }
 
     #[tokio::test]
