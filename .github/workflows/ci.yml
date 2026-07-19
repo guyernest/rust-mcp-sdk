@@ -238,6 +238,18 @@ jobs:
     - name: Run PMAT quality gate (complexity only — see CONTEXT.md D-01 / D-11-B)
       run: pmat quality-gate --fail-on-violation --checks complexity
 
+    # Phase 109 Plan 08 (D-18): contract-first compliance for the team-servers
+    # bindings. `comply-ci` is FAIL-CLOSED (no `command -v pmat` guard) so a CI
+    # without pmat fails rather than passing vacuously; it runs the mandated
+    # `pmat comply check --path .` report and makes team-servers binding drift
+    # gate-blocking via a deterministic source-resolution check. Runs here AFTER
+    # PMAT is installed. `comply-negative` proves a broken binding is rejected.
+    - name: Run team-servers contract compliance (fail-closed)
+      run: make comply-ci
+
+    - name: Assert broken-binding rejection (negative compliance test)
+      run: make comply-negative
+
     - name: Check disk space after quality gate
       run: df -h
 
