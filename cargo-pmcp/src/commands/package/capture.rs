@@ -13,13 +13,12 @@
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
 use clap::Args;
 use colored::Colorize;
 
-use super::capture_upload::{capture_upload, CAPTURE_TIMEOUT_SECS};
+use super::capture_upload::capture_upload;
 use crate::commands::auth_cmd::cache::{
     default_multi_cache_path, is_near_expiry, normalize_cache_key, TokenCacheV1,
     REFRESH_WINDOW_SECS,
@@ -76,10 +75,8 @@ pub async fn execute(args: CaptureArgs, global_flags: &GlobalFlags) -> Result<()
     // lib-safe `capture_upload` seam). `entry.access_token` is interpolated ONLY
     // into the Bearer header inside `capture_upload` — never printed here.
     let package_bytes = pack_layout_to_zip(&args.path)?;
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(CAPTURE_TIMEOUT_SECS))
-        .build()
-        .context("build HTTP client for package capture")?;
+    // The per-request timeout + non-2xx handling live in the `capture_upload` seam.
+    let client = reqwest::Client::new();
     capture_upload(&client, api_url_str, &entry.access_token, package_bytes).await?;
 
     if global_flags.should_output() {

@@ -11,8 +11,6 @@
 //! into the lib target via a `#[path]` seam (mirroring `templates_agent`) — which
 //! is how the offline integration test and the 110-06 example reach it.
 
-use std::sync::atomic::{AtomicUsize, Ordering};
-
 use async_trait::async_trait;
 use serde_json::json;
 
@@ -32,21 +30,13 @@ use pmcp_agent::{
 /// first completion, so the loop terminates in one iteration with
 /// [`RunOutcome::Completed`].
 pub async fn run_fixed_source(config: ResolvedAgentConfig) -> RunOutcome {
-    let engine = AgentEngine::new(
-        EndTurnSource::default(),
-        NoopInvoker,
-        InMemoryStore::new(),
-        config,
-    );
+    let engine = AgentEngine::new(EndTurnSource, NoopInvoker, InMemoryStore::new(), config);
     engine.run("agent-dev-run").await
 }
 
 /// A scripted [`CompletionSource`] that immediately ends the turn — the loop
 /// completes in one iteration, fully offline.
-#[derive(Default)]
-struct EndTurnSource {
-    calls: AtomicUsize,
-}
+struct EndTurnSource;
 
 #[async_trait]
 impl CompletionSource for EndTurnSource {
@@ -54,7 +44,6 @@ impl CompletionSource for EndTurnSource {
         &self,
         _params: CreateMessageParams,
     ) -> Result<CreateMessageResultWithTools, CompletionError> {
-        self.calls.fetch_add(1, Ordering::SeqCst);
         Ok(CreateMessageResultWithTools::new(
             "fixed-model",
             Role::Assistant,

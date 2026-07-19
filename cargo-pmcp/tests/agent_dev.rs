@@ -27,19 +27,19 @@ use async_trait::async_trait;
 use serde_json::json;
 
 use pmcp::client::host::HostSamplingHandlerWithTools;
-use pmcp::shared::{Transport, TransportMessage};
 use pmcp::types::sampling::{
     CreateMessageParams, CreateMessageResultWithTools, SamplingMessageContent,
 };
 use pmcp::types::{ClientCapabilities, Content, Role};
-use pmcp::{ClientBuilder, Error, ToolCallResponse};
-use tokio::sync::mpsc;
+use pmcp::{ClientBuilder, ToolCallResponse};
 
+use cargo_pmcp::agent_run::NoopInvoker;
 use pmcp_agent::{
     AgentServer, CompletionSourceFactory, InMemoryStore, ResolvedAgentConfig, RunOutcome,
-    SamplingSourceFactory, ToolCall, ToolCallResult, ToolInvoker,
+    SamplingSourceFactory,
 };
 use pmcp_package::{AgentPackage, ConfigSlot, SlotType};
+use pmcp_team_servers::transport::DuplexTransport;
 
 /// A demo resolved config shared by the tests (mirrors the built-in demo the CLI
 /// falls back to when no package is supplied).
@@ -166,18 +166,7 @@ async fn sampling_hosted_run_in_process() {
     server_handle.abort();
 }
 
-// ---- inline test doubles (example-local shapes, re-implemented) -------------
-
-/// A tool invoker that echoes an ok result (no side effects).
-#[derive(Clone, Default)]
-struct NoopInvoker;
-
-#[async_trait]
-impl ToolInvoker for NoopInvoker {
-    async fn invoke(&self, call: ToolCall) -> ToolCallResult {
-        ToolCallResult::ok(call.id, json!({ "result": format!("ran {}", call.name) }))
-    }
-}
+// ---- inline test double -----------------------------------------------------
 
 /// A host sampling handler that answers with an immediate `end_turn`, so the
 /// hosted loop terminates in one iteration.
@@ -201,63 +190,5 @@ impl HostSamplingHandlerWithTools for HostScript {
             }],
         )
         .with_stop_reason("end_turn"))
-    }
-}
-
-// ---- in-process duplex transport (self-contained, mirrors s50) --------------
-
-/// One half of an in-process duplex transport (client <-> server).
-#[derive(Debug)]
-struct DuplexTransport {
-    tx: mpsc::UnboundedSender<TransportMessage>,
-    rx: mpsc::UnboundedReceiver<TransportMessage>,
-    connected: bool,
-}
-
-impl DuplexTransport {
-    fn pair() -> (Self, Self) {
-        let (client_tx, server_rx) = mpsc::unbounded_channel();
-        let (server_tx, client_rx) = mpsc::unbounded_channel();
-        (
-            Self {
-                tx: client_tx,
-                rx: client_rx,
-                connected: true,
-            },
-            Self {
-                tx: server_tx,
-                rx: server_rx,
-                connected: true,
-            },
-        )
-    }
-}
-
-#[async_trait]
-impl Transport for DuplexTransport {
-    async fn send(&mut self, message: TransportMessage) -> pmcp::Result<()> {
-        self.tx
-            .send(message)
-            .map_err(|_| Error::internal("duplex peer dropped"))
-    }
-
-    async fn receive(&mut self) -> pmcp::Result<TransportMessage> {
-        self.rx
-            .recv()
-            .await
-            .ok_or_else(|| Error::internal("duplex peer closed"))
-    }
-
-    async fn close(&mut self) -> pmcp::Result<()> {
-        self.connected = false;
-        Ok(())
-    }
-
-    fn is_connected(&self) -> bool {
-        self.connected
-    }
-
-    fn transport_type(&self) -> &'static str {
-        "in-process-duplex"
     }
 }

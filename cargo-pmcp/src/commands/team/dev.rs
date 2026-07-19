@@ -21,7 +21,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use async_trait::async_trait;
 use clap::Args;
 use colored::Colorize;
@@ -35,7 +35,6 @@ use pmcp::types::tasks::RELATED_TASK_META_KEY;
 use pmcp::types::{CallToolResult, Content, Role};
 use pmcp::Client;
 
-use pmcp_agent::sources::{HttpSourceOptions, OpenAiCompatSource, SecretString};
 use pmcp_agent::{
     resolve_agent, CompletionError, CompletionSource, CompletionSourceFactory, EnvVarResolver,
     FixedSourceFactory,
@@ -55,6 +54,7 @@ use pmcp_team_servers::team::server::build_team_mcp_server;
 
 use pmcp_team_servers::transport::DuplexTransport;
 
+use crate::commands::agent::sources::{build_openai_compat_source, resolve_api_key};
 use crate::commands::GlobalFlags;
 
 /// The default member-resolver root when a `--package` is supplied without a
@@ -407,45 +407,17 @@ fn completion_factory(args: &DevArgs) -> Result<Arc<dyn CompletionSourceFactory>
             url::Url::parse(endpoint)
                 .with_context(|| format!("invalid --llm endpoint URL: {endpoint}"))?;
             let key = resolve_api_key(args.llm_api_key_env.as_deref());
-            let source = build_llm_source(endpoint, &args.model, key, args.allow_insecure_http)?;
+            let source = build_openai_compat_source(
+                endpoint,
+                &args.model,
+                key,
+                args.allow_insecure_http,
+                "--llm (or drop it for the offline default)",
+            )?;
             Ok(Arc::new(FixedSourceFactory::new(
                 Arc::new(source) as Arc<dyn CompletionSource>
             )))
         },
-    }
-}
-
-/// Build the `--llm` source, mapping the construction contract to actionable
-/// errors: a remote plain-http endpoint returns [`CompletionError::Decode`].
-fn build_llm_source(
-    endpoint: &str,
-    model: &str,
-    key: SecretString,
-    allow_insecure_http: bool,
-) -> Result<OpenAiCompatSource> {
-    let options = HttpSourceOptions {
-        allow_insecure_http,
-        ..Default::default()
-    };
-    match OpenAiCompatSource::with_options(endpoint, model, key, options) {
-        Ok(source) => Ok(source),
-        Err(CompletionError::Decode(_)) => bail!(
-            "remote non-HTTPS endpoint {endpoint} is blocked by default — use an https:// URL \
-             or pass --allow-insecure-http"
-        ),
-        Err(err) => bail!(
-            "failed to build the LLM source for {endpoint} — check --llm (or drop it for the \
-             offline default): {err}"
-        ),
-    }
-}
-
-/// Resolve the LLM API key from `--llm-api-key-env <VAR>` (env-backed, never
-/// argv); default a placeholder for local unauthenticated Ollama. Never logged.
-fn resolve_api_key(api_key_env: Option<&str>) -> SecretString {
-    match api_key_env {
-        Some(var) => SecretString::new(std::env::var(var).unwrap_or_default()),
-        None => SecretString::new("ollama"),
     }
 }
 
@@ -530,19 +502,13 @@ fn step(quiet: bool, n: u8, msg: &str) {
 // The built-in doc-review fixture (the D-02 locked default).
 // ---------------------------------------------------------------------------
 
-fn agent_ref(name: &str) -> ComponentRef {
+/// A `^1` component reference of the given kind (the doc-review fixture's members
+/// and built-in servers differ only by [`ComponentType`]).
+fn component_ref(name: &str, component_type: ComponentType) -> ComponentRef {
     ComponentRef::Range {
         name: name.to_string(),
         range: semver::VersionReq::parse("^1").expect("valid range"),
-        component_type: ComponentType::Agent,
-    }
-}
-
-fn server_ref(name: &str) -> ComponentRef {
-    ComponentRef::Range {
-        name: name.to_string(),
-        range: semver::VersionReq::parse("^1").expect("valid range"),
-        component_type: ComponentType::Server,
+        component_type,
     }
 }
 
@@ -584,14 +550,14 @@ fn builtin_team_package() -> TeamPackage {
     TeamPackage {
         name: "doc-review-team".to_string(),
         version: semver::Version::new(1, 0, 0),
-        entry_point: agent_ref("drafter"),
+        entry_point: component_ref("drafter", ComponentType::Agent),
         members: vec![
             TeamMember {
-                agent: agent_ref("drafter"),
+                agent: component_ref("drafter", ComponentType::Agent),
                 role: TeamRole::EntryPoint,
             },
             TeamMember {
-                agent: agent_ref("summarizer"),
+                agent: component_ref("summarizer", ComponentType::Agent),
                 role: TeamRole::Member,
             },
         ],
@@ -607,7 +573,10 @@ fn builtin_team_package() -> TeamPackage {
             max_team_wall_clock_seconds: 1,
             poll_interval_ms: 1,
         },
-        built_in_servers: vec![server_ref("team-fs"), server_ref("mem-mcp")],
+        built_in_servers: vec![
+            component_ref("team-fs", ComponentType::Server),
+            component_ref("mem-mcp", ComponentType::Server),
+        ],
         finalizer_agents: vec![],
         budget_defaults: vec![],
         config_slots: vec![],

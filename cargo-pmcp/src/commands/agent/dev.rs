@@ -22,14 +22,14 @@ use anyhow::{bail, Context, Result};
 use clap::{Args, ValueEnum};
 use colored::Colorize;
 
-use pmcp_agent::sources::{HttpSourceOptions, OpenAiCompatSource, SecretString};
 use pmcp_agent::{
-    resolve_agent, AgentEngine, AgentServer, CompletionError, CompletionSourceFactory,
-    EnvVarResolver, InMemoryStore, ResolvedAgentConfig, RunOutcome, SamplingSourceFactory,
+    resolve_agent, AgentEngine, AgentServer, CompletionSourceFactory, EnvVarResolver,
+    InMemoryStore, ResolvedAgentConfig, RunOutcome, SamplingSourceFactory,
 };
-use pmcp_package::{AgentPackage, ConfigSlot, SlotType};
+use pmcp_package::AgentPackage;
 
 use crate::commands::agent::run::{run_fixed_source, NoopInvoker};
+use crate::commands::agent::sources::{build_openai_compat_source, resolve_api_key};
 use crate::commands::GlobalFlags;
 
 /// The default OpenAI-compatible endpoint (local Ollama — D-03a, explicit, no
@@ -107,28 +107,10 @@ fn read_package(path: &Path) -> Result<AgentPackage> {
         .with_context(|| format!("parse {} as an AgentPackage", path.display()))
 }
 
-/// The offline fallback package (mirrors the `agent new` scaffold's starter shape).
+/// The offline fallback package — the SAME starter the `agent new` scaffold emits
+/// (D-01a), so `agent dev` with no package mirrors a freshly scaffolded project.
 fn builtin_demo_package() -> AgentPackage {
-    AgentPackage {
-        name: "demo-agent".to_string(),
-        version: semver::Version::new(1, 0, 0),
-        instructions: "You are a concise, helpful assistant. Use tools when helpful.".to_string(),
-        llm: ConfigSlot {
-            slot: SlotType::LlmProvider {
-                name: "primary-llm".to_string(),
-                tested_value: "llama3.2".to_string(),
-            },
-        },
-        max_tokens: 100_000,
-        max_iterations: 5,
-        connectors: vec![],
-        tool_selection: None,
-        input_schema: None,
-        output_schema: None,
-        importance: None,
-        finalizer_role: None,
-        budget_defaults: vec![],
-    }
+    crate::templates::agent::starter_package("demo-agent")
 }
 
 /// `--source fixed`: run the loop offline via the shared lib-safe runner seam.
@@ -150,7 +132,13 @@ async fn run_openai_compat(
         .clone()
         .unwrap_or_else(|| DEFAULT_ENDPOINT.to_string());
     let key = resolve_api_key(args.api_key_env.as_deref());
-    let source = build_openai_source(&endpoint, &args.model, key, args.allow_insecure_http)?;
+    let source = build_openai_compat_source(
+        &endpoint,
+        &args.model,
+        key,
+        args.allow_insecure_http,
+        "--endpoint (or use --source fixed)",
+    )?;
 
     if global_flags.should_output() {
         println!("Running agent against {}", endpoint.bright_cyan());
@@ -160,42 +148,6 @@ async fn run_openai_compat(
         .run("agent-dev-run")
         .await;
     finish_engine_outcome(outcome, &endpoint, global_flags)
-}
-
-/// Resolve the API key from `--api-key-env <VAR>` (env-backed, no plaintext CLI
-/// secret); default a placeholder for local unauthenticated Ollama. Never logged.
-fn resolve_api_key(api_key_env: Option<&str>) -> SecretString {
-    match api_key_env {
-        Some(var) => SecretString::new(std::env::var(var).unwrap_or_default()),
-        None => SecretString::new("ollama"),
-    }
-}
-
-/// Build the openai-compat source, mapping the construction contract to
-/// actionable errors (T-110-03-01): a remote plain-http endpoint returns
-/// `CompletionError::Decode`; a client-build failure returns
-/// `CompletionError::Transport`.
-fn build_openai_source(
-    endpoint: &str,
-    model: &str,
-    key: SecretString,
-    allow_insecure_http: bool,
-) -> Result<OpenAiCompatSource> {
-    let options = HttpSourceOptions {
-        allow_insecure_http,
-        ..Default::default()
-    };
-    match OpenAiCompatSource::with_options(endpoint, model, key, options) {
-        Ok(source) => Ok(source),
-        Err(CompletionError::Decode(_)) => bail!(
-            "remote non-HTTPS endpoint {endpoint} is blocked by default — use an https:// URL \
-             or pass --allow-insecure-http"
-        ),
-        Err(err) => bail!(
-            "failed to build the completion source for {endpoint} — check --endpoint \
-             (or use --source fixed): {err}"
-        ),
-    }
 }
 
 /// Map the engine's [`RunOutcome`] to a process result (T-110-03-03). `.run()`

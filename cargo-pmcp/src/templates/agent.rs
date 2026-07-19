@@ -162,8 +162,9 @@ fn generate_main_rs(dir: &Path) -> Result<()> {
 
 /// Build the starter [`AgentPackage`] for the scaffold. Built from the real
 /// struct (not hand-written JSON) so the emitted manifest is guaranteed to
-/// round-trip through the schema the runner loads (Codex 110-02 MEDIUM).
-fn starter_package(name: &str) -> AgentPackage {
+/// round-trip through the schema the runner loads (Codex 110-02 MEDIUM). Also the
+/// single source for `agent dev`'s built-in demo package.
+pub(crate) fn starter_package(name: &str) -> AgentPackage {
     AgentPackage {
         name: name.to_string(),
         version: semver::Version::new(1, 0, 0),
