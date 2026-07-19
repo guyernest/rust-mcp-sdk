@@ -2168,7 +2168,7 @@ Plans:
 
 - [x] 110-02-PLAN.md — `agent new` scaffolder + AgentPackage manifest + pmcp-agent pin tripwire (CLI-01, wave 2)
 - [x] 110-03-PLAN.md — `agent dev` --source openai-compat|sampling|fixed + in-process sampling test (CLI-02, wave 2)
-- [ ] 110-04-PLAN.md — `team dev` offline doc-review transcript + --serve/--llm (CLI-03, wave 2)
+- [x] 110-04-PLAN.md — `team dev` offline doc-review transcript + --serve/--llm (CLI-03, wave 2)
 - [ ] 110-05-PLAN.md — `package show|capture` + pure kind::detect_kind + pmcp-package caret pin tripwire (CLI-04, wave 2)
 
 **Wave 3** *(blocked on Wave 2 completion)*
@@ -2198,5 +2198,5 @@ Plans:
 | 107. Contracts & Package Format | 3/3 | Complete    | 2026-07-18 |
 | 108. `pmcp-agent` Loop Crate | 6/6 | Complete   | 2026-07-18 |
 | 109. Team Reference Servers | 9/9 | Complete    | 2026-07-19 |
-| 110. cargo-pmcp Agent & Team Verbs | 3/6 | In Progress|  |
+| 110. cargo-pmcp Agent & Team Verbs | 4/6 | In Progress|  |
 | 111. Docs in Three Shapes + Examples | 0/TBD | Not started | - |

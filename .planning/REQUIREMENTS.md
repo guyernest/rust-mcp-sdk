@@ -47,7 +47,7 @@
 - [x] **CLI-01**: `cargo pmcp agent new` scaffolds an agent project (AgentPackage manifest + standalone runner) with a version-pin tripwire test against `pmcp-agent`
 - [x] **CLI-02**: `cargo pmcp agent dev` runs an agent locally against an OpenAI-compat endpoint or as a sampling-hosted server
 - [x] **CLI-03**: `cargo pmcp team dev` runs an in-process small team (member agents + all four reference team servers with dev backends) wired from a `TeamPackage`
-- [ ] **CLI-04**: `cargo pmcp package capture|show` subcommands work as thin clients to the platform capture API with `pmcp-package = "0.1"` (caret) and a pin tripwire test
+- [x] **CLI-04**: `cargo pmcp package capture|show` subcommands work as thin clients to the platform capture API with `pmcp-package = "0.1"` (caret) and a pin tripwire test
 
 ### Documentation & Examples (DOCS)
 
@@ -106,7 +106,7 @@
 | CLI-01 | Phase 110 | Complete |
 | CLI-02 | Phase 110 | Complete |
 | CLI-03 | Phase 110 | Complete |
-| CLI-04 | Phase 110 | Pending |
+| CLI-04 | Phase 110 | Complete |
 | DOCS-01 | Phase 111 | Pending |
 | DOCS-02 | Phase 111 | Pending |
 | DOCS-03 | Phase 111 | Pending |
