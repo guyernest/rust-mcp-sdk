@@ -109,6 +109,9 @@ pub mod templates_workbook_server;
 // NO `clap`/`GlobalFlags`), so it compiles in the lib target without dragging in
 // the bin-only command layer. It lets the emitter's drift-guard + manifest
 // round-trip unit tests run under `cargo test --lib`, NOT only in the bin target.
+// `#[doc(hidden)]` (Codex 110-06 MEDIUM): an internal support seam reached by the
+// plan-110-06 example, not a stable public API.
+#[doc(hidden)]
 #[path = "templates/agent.rs"]
 pub mod templates_agent;
 
@@ -119,6 +122,9 @@ pub mod templates_agent;
 // target on its own. The offline `agent_dev` integration test (and the plan-110-06
 // example) reach `run_fixed_source` through this seam, NOT the bin-only
 // `commands::agent::run` module.
+// `#[doc(hidden)]` (Codex 110-06 MEDIUM): an internal support seam reached by the
+// plan-110-06 example + the offline integration test, not a stable public API.
+#[doc(hidden)]
 #[path = "commands/agent/run.rs"]
 pub mod agent_run;
 
@@ -140,6 +146,9 @@ pub mod workbook_explain;
 // never-panic unit tests run under `cargo test --lib`, AND gives plan 110-06 a
 // lib seam to mount + fuzz the untrusted manifest-parse boundary — NOT the
 // bin-only `commands::package::kind` module.
+// `#[doc(hidden)]` (Codex 110-06 MEDIUM): an internal support seam mounted + fuzzed
+// by the plan-110-06 fuzz target, not a stable public API.
+#[doc(hidden)]
 #[path = "commands/package/kind.rs"]
 pub mod package_kind;
 
