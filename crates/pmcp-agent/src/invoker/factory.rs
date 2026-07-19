@@ -20,7 +20,7 @@ use async_trait::async_trait;
 use std::sync::Arc;
 
 use pmcp::types::tasks::TaskMetadata;
-use pmcp::types::CallToolResult;
+use pmcp::types::{CallToolResult, ToolInfo};
 use pmcp::WaitForTaskOptions;
 
 /// An error establishing or using a connector client.
@@ -68,6 +68,16 @@ pub trait ConnectorClient: Send + Sync {
         meta: &TaskMetadata,
         opts: WaitForTaskOptions,
     ) -> Result<CallToolResult, InvokerError>;
+
+    /// Discover the tools this connector advertises (`tools/list`), so the loop
+    /// can tell the model what it may call.
+    ///
+    /// DEFAULT: `Ok(empty)` — a connector that does not support discovery
+    /// advertises nothing, which is backward-compatible (existing impls keep
+    /// compiling) and makes the loop simply send no `tools` to the model.
+    async fn list_tools(&self) -> Result<Vec<ToolInfo>, InvokerError> {
+        Ok(Vec::new())
+    }
 }
 
 /// Produces a [`ConnectorClient`] for a resolved endpoint (URL or, in a
@@ -94,7 +104,7 @@ mod url_impl {
         StreamableHttpTransport, StreamableHttpTransportConfigBuilder,
     };
     use pmcp::types::tasks::TaskMetadata;
-    use pmcp::types::CallToolResult;
+    use pmcp::types::{CallToolResult, ToolInfo};
     use pmcp::{Client, ClientCapabilities, WaitForTaskOptions};
 
     /// A [`ConnectorClientFactory`] that connects `http(s)://` endpoints over
@@ -161,6 +171,14 @@ mod url_impl {
             self.client
                 .wait_for_related_task(meta, opts)
                 .await
+                .map_err(|e| InvokerError::Transport(e.to_string()))
+        }
+
+        async fn list_tools(&self) -> Result<Vec<ToolInfo>, InvokerError> {
+            self.client
+                .list_tools(None)
+                .await
+                .map(|result| result.tools)
                 .map_err(|e| InvokerError::Transport(e.to_string()))
         }
     }

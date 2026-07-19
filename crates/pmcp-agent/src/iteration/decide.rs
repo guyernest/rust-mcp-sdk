@@ -33,9 +33,10 @@ pub fn check_limits(
     iteration: u32,
     max_iterations: u32,
     tokens_used: u32,
-    max_tokens: u32,
+    token_budget: Option<u32>,
 ) -> LimitDecision {
-    if iteration >= max_iterations || tokens_used >= max_tokens {
+    let over_budget = token_budget.is_some_and(|budget| tokens_used >= budget);
+    if iteration >= max_iterations || over_budget {
         LimitDecision::Stop
     } else {
         LimitDecision::Continue
@@ -265,14 +266,17 @@ mod tests {
 
     #[test]
     fn check_limits_stops_at_or_past_either_limit() {
-        assert_eq!(check_limits(0, 5, 0, 100), LimitDecision::Continue);
-        assert_eq!(check_limits(4, 5, 99, 100), LimitDecision::Continue);
+        assert_eq!(check_limits(0, 5, 0, Some(100)), LimitDecision::Continue);
+        assert_eq!(check_limits(4, 5, 99, Some(100)), LimitDecision::Continue);
         // iteration boundary
-        assert_eq!(check_limits(5, 5, 0, 100), LimitDecision::Stop);
-        assert_eq!(check_limits(6, 5, 0, 100), LimitDecision::Stop);
+        assert_eq!(check_limits(5, 5, 0, Some(100)), LimitDecision::Stop);
+        assert_eq!(check_limits(6, 5, 0, Some(100)), LimitDecision::Stop);
         // token boundary
-        assert_eq!(check_limits(0, 5, 100, 100), LimitDecision::Stop);
-        assert_eq!(check_limits(0, 5, 101, 100), LimitDecision::Stop);
+        assert_eq!(check_limits(0, 5, 100, Some(100)), LimitDecision::Stop);
+        assert_eq!(check_limits(0, 5, 101, Some(100)), LimitDecision::Stop);
+        // no budget → only iterations bound the run (tokens never stop it)
+        assert_eq!(check_limits(0, 5, 1_000_000, None), LimitDecision::Continue);
+        assert_eq!(check_limits(5, 5, 1_000_000, None), LimitDecision::Stop);
     }
 
     #[test]

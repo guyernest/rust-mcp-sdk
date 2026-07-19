@@ -240,6 +240,17 @@ struct ChatResponse {
     choices: Vec<Choice>,
     #[serde(default)]
     model: Option<String>,
+    /// Provider token accounting — mapped into the result's `_meta` so the loop's
+    /// cumulative token budget can see it (OpenAI-compatible endpoints return
+    /// `usage.total_tokens`).
+    #[serde(default)]
+    usage: Option<OpenAiUsage>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct OpenAiUsage {
+    #[serde(default)]
+    total_tokens: Option<u64>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -278,6 +289,7 @@ fn response_to_result(
     resp: ChatResponse,
 ) -> Result<CreateMessageResultWithTools, CompletionError> {
     let model = resp.model.unwrap_or_else(|| fallback_model.to_string());
+    let usage_total = resp.usage.and_then(|u| u.total_tokens);
     let choice = resp
         .choices
         .into_iter()
@@ -296,6 +308,9 @@ fn response_to_result(
 
     let mut result = CreateMessageResultWithTools::new(model, Role::Assistant, content);
     result.stop_reason = choice.finish_reason;
+    if let Some(total) = usage_total {
+        result.meta = Some(super::http_common::usage_meta(total));
+    }
     Ok(result)
 }
 
@@ -447,6 +462,21 @@ mod tests {
         let result = response_to_result("m", resp).unwrap();
         assert_eq!(result.model, "m");
         assert!(result.stop_reason.is_none());
+        // No usage reported → the budget reads 0 (only iterations bound the run).
+        assert_eq!(crate::iteration::extract_token_usage(&result), 0);
+    }
+
+    #[test]
+    fn response_maps_usage_total_tokens_into_meta() {
+        // `usage.total_tokens` must reach the result's `_meta.usage.totalTokens`
+        // so the loop's cumulative token budget can trip (previously discarded).
+        let resp: ChatResponse = serde_json::from_value(json!({
+            "choices": [{ "message": { "content": "ok" }, "finish_reason": "stop" }],
+            "usage": { "prompt_tokens": 40, "completion_tokens": 17, "total_tokens": 57 }
+        }))
+        .unwrap();
+        let result = response_to_result("m", resp).unwrap();
+        assert_eq!(crate::iteration::extract_token_usage(&result), 57);
     }
 
     #[test]

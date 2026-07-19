@@ -14,6 +14,7 @@
 //! - enforces limits from counters only (no wall-clock) via [`check_limits`].
 
 use pmcp::types::sampling::{CreateMessageParams, SamplingMessage};
+use pmcp::types::ToolInfo;
 
 use crate::config::ResolvedAgentConfig;
 use crate::seams::{
@@ -94,8 +95,13 @@ where
             }
         }
 
+        // Discover the tools to advertise ONCE per run (before the loop), so the
+        // model is actually told what it may call (AGNT tool-use). Resume re-runs
+        // discovery too — it is idempotent.
+        let tools = self.resolve_tools().await;
+
         loop {
-            match self.step(run_id, &mut state, trace).await {
+            match self.step(run_id, &mut state, trace, &tools).await {
                 Ok(StepControl::Continue) => {},
                 Ok(StepControl::Return(outcome)) | Err(outcome) => {
                     return finish(trace, outcome);
@@ -125,9 +131,10 @@ where
         run_id: &str,
         state: &mut RunState,
         trace: &mut DecisionTrace,
+        tools: &[ToolInfo],
     ) -> Result<StepControl, RunOutcome> {
         let step_index = state.iteration;
-        let params = self.build_params(state);
+        let params = self.build_params(state, tools);
 
         let result = match self.completion.create_message(params).await {
             Ok(result) => result,
@@ -170,7 +177,7 @@ where
             state.iteration,
             self.config.max_iterations,
             state.tokens_used,
-            self.config.max_tokens,
+            self.config.token_budget,
         );
         record_step(trace, step_index, ended, false, &tool_ids, Some(limit));
         match limit {
@@ -206,11 +213,35 @@ where
         Ok(tool_ids)
     }
 
-    /// Build the next completion params from history + config (pure).
-    fn build_params(&self, state: &RunState) -> CreateMessageParams {
-        CreateMessageParams::new(state.history.clone())
+    /// Build the next completion params from history + config + discovered tools
+    /// (pure). `tools` is the resolved advertise-set; when non-empty it is passed
+    /// to the model so it can actually request tool calls.
+    fn build_params(&self, state: &RunState, tools: &[ToolInfo]) -> CreateMessageParams {
+        let params = CreateMessageParams::new(state.history.clone())
             .with_system_prompt(self.config.instructions.clone())
-            .with_max_tokens(self.config.max_tokens)
+            .with_max_tokens(self.config.max_tokens);
+        if tools.is_empty() {
+            params
+        } else {
+            params.with_tools(tools.to_vec())
+        }
+    }
+
+    /// Discover the tools to advertise: everything the invoker lists via
+    /// `tools/list`, narrowed to the config's tool-selection allow-list when one
+    /// is present (an EMPTY selection advertises every discovered tool). Called
+    /// once per run; a discovery failure yields an empty set (no tools advertised).
+    async fn resolve_tools(&self) -> Vec<ToolInfo> {
+        let advertised = self.invoker.list_tools().await;
+        if self.config.tools.is_empty() {
+            return advertised;
+        }
+        let allow: std::collections::HashSet<&str> =
+            self.config.tools.iter().map(String::as_str).collect();
+        advertised
+            .into_iter()
+            .filter(|tool| allow.contains(tool.name.as_str()))
+            .collect()
     }
 
     /// Save `state`, mapping a store failure to a terminal `Failed` outcome.
@@ -417,6 +448,76 @@ mod tests {
             crate::iteration::RunOutcome::Completed { .. }
         ));
         assert_eq!(inv.dispatched.load(Ordering::SeqCst), 1);
+    }
+
+    fn tool_info(name: &str) -> pmcp::types::ToolInfo {
+        serde_json::from_value(json!({ "name": name, "inputSchema": { "type": "object" } }))
+            .expect("valid ToolInfo")
+    }
+
+    /// Records the tool names advertised in the params it receives, then ends.
+    struct CaptureSource {
+        seen: Arc<std::sync::Mutex<Vec<String>>>,
+    }
+    #[async_trait]
+    impl CompletionSource for CaptureSource {
+        async fn create_message(
+            &self,
+            params: CreateMessageParams,
+        ) -> Result<CreateMessageResultWithTools, CompletionError> {
+            let names = params
+                .tools
+                .unwrap_or_default()
+                .into_iter()
+                .map(|t| t.name)
+                .collect::<Vec<_>>();
+            *self.seen.lock().unwrap() = names;
+            Ok(text_completion("end_turn", "done"))
+        }
+    }
+
+    /// Invoker that advertises two tools via `tools/list` discovery.
+    struct DiscoveringInvoker;
+    #[async_trait]
+    impl ToolInvoker for DiscoveringInvoker {
+        async fn invoke(&self, call: ToolCall) -> ToolCallResult {
+            ToolCallResult::ok(call.id, json!({}))
+        }
+        async fn list_tools(&self) -> Vec<pmcp::types::ToolInfo> {
+            vec![tool_info("search"), tool_info("calculator")]
+        }
+    }
+
+    #[tokio::test]
+    async fn discovered_tools_are_advertised_to_the_model() {
+        // No config allow-list → every discovered tool is passed to the model.
+        let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let engine = AgentEngine::new(
+            CaptureSource { seen: seen.clone() },
+            DiscoveringInvoker,
+            InMemoryStore::new(),
+            cfg(),
+        );
+        let _ = engine.run("run-tools").await;
+        let mut names = seen.lock().unwrap().clone();
+        names.sort();
+        assert_eq!(names, vec!["calculator".to_string(), "search".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn tool_selection_allow_list_filters_discovered_tools() {
+        // A non-empty config.tools narrows discovery to the selected names.
+        let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut config = cfg();
+        config.tools = vec!["search".to_string()];
+        let engine = AgentEngine::new(
+            CaptureSource { seen: seen.clone() },
+            DiscoveringInvoker,
+            InMemoryStore::new(),
+            config,
+        );
+        let _ = engine.run("run-tools-2").await;
+        assert_eq!(*seen.lock().unwrap(), vec!["search".to_string()]);
     }
 
     #[tokio::test]
