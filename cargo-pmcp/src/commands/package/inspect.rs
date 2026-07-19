@@ -1,4 +1,4 @@
-//! `cargo pmcp package show <path>` — inspect a local `.pmcp` package offline.
+//! `cargo pmcp package inspect <path>` — inspect a local `.pmcp` package offline.
 //!
 //! Opens a local OCI image-layout `.pmcp` package, rejects a zero/multiple-
 //! manifest index, resolves the package kind by running the pure
@@ -7,6 +7,9 @@
 //! via `pmcp-package`'s own API (D-04 — fully offline, no network), and renders
 //! the kind + key fields. Digest verification lives inside `unpack_*`; failures
 //! surface verbatim (V6), never bypassed.
+//!
+//! Named `inspect` (not `show`): this is a LOCAL, offline operation. The verb
+//! `show` is reserved for the platform's remote manifest-fetch thin client.
 
 use std::path::PathBuf;
 
@@ -19,15 +22,15 @@ use pmcp_package::{AgentPackage, ServerPackage, TeamPackage, WorkflowManifest};
 use super::kind::{artifact_type_from_manifest_json, detect_kind, PackageKind};
 use crate::commands::GlobalFlags;
 
-/// Arguments for `cargo pmcp package show`.
+/// Arguments for `cargo pmcp package inspect`.
 #[derive(Debug, Args)]
-pub struct ShowArgs {
+pub struct InspectArgs {
     /// Path to the AI-Package (OCI image-layout directory) to inspect.
     pub path: PathBuf,
 }
 
-/// Show an AI-Package manifest, fully offline.
-pub fn execute(args: ShowArgs, global_flags: &GlobalFlags) -> Result<()> {
+/// Inspect an AI-Package manifest, fully offline.
+pub fn execute(args: InspectArgs, global_flags: &GlobalFlags) -> Result<()> {
     let path = &args.path;
 
     // V5: validate the path is a real OCI layout BEFORE any unpack. `index.json`

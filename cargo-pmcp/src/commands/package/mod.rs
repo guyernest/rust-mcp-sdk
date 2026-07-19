@@ -1,14 +1,14 @@
-//! `cargo pmcp package <subcommand>` — inspect and capture AI-Package bundles.
+//! `cargo pmcp package <subcommand>` — inspect local AI-Package bundles.
 //!
-//! Mirrors the `workbook` command-group shape (D-01) with an ASYNC `execute`:
-//! `show` is sync file-I/O; `capture` resolves a platform target and pulls a
-//! bundle asynchronously. Plan 110-01 lands the group + stubbed handlers; Plan
-//! 110-05 fills both bodies.
+//! Mirrors the `workbook` command-group shape (D-01) with an ASYNC `execute`.
+//! `inspect` is a LOCAL, offline OCI-layout inspector. The verbs `show` and
+//! `capture` are deliberately NOT defined here — they are reserved for the
+//! platform's REMOTE capture service (remote manifest fetch / dependency-graph
+//! capture), which has opposite (remote) semantics and will land as a
+//! coordinated thin client against the platform's contract.
 
-pub mod capture;
-pub mod capture_upload;
+pub mod inspect;
 pub mod kind;
-pub mod show;
 
 use anyhow::Result;
 use clap::Subcommand;
@@ -18,18 +18,15 @@ use super::GlobalFlags;
 /// `cargo pmcp package <subcommand>` — the package command group.
 #[derive(Debug, Subcommand)]
 pub enum PackageCommand {
-    /// Show the kind and key fields of a local AI-Package, fully offline
-    Show(show::ShowArgs),
-    /// Capture (upload) a local AI-Package to a configured platform target
-    Capture(capture::CaptureArgs),
+    /// Inspect the kind and key fields of a local AI-Package, fully offline
+    Inspect(inspect::InspectArgs),
 }
 
 impl PackageCommand {
     /// Dispatch the subcommand to its handler.
     pub async fn execute(self, global_flags: &GlobalFlags) -> Result<()> {
         match self {
-            PackageCommand::Show(args) => show::execute(args, global_flags),
-            PackageCommand::Capture(args) => capture::execute(args, global_flags).await,
+            PackageCommand::Inspect(args) => inspect::execute(args, global_flags),
         }
     }
 }

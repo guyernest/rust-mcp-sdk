@@ -33,7 +33,9 @@ fn team_help_lists_subcommands() {
         .stdout(contains("dev"));
 }
 
-/// `cargo pmcp package --help` exits 0 and lists `show` and `capture`.
+/// `cargo pmcp package --help` exits 0 and lists `inspect` (the local verb).
+/// `show`/`capture` are intentionally NOT defined here — reserved for the
+/// platform's remote capture service.
 #[test]
 fn package_help_lists_subcommands() {
     Command::cargo_bin("cargo-pmcp")
@@ -41,6 +43,5 @@ fn package_help_lists_subcommands() {
         .args(["package", "--help"])
         .assert()
         .success()
-        .stdout(contains("show"))
-        .stdout(contains("capture"));
+        .stdout(contains("inspect"));
 }

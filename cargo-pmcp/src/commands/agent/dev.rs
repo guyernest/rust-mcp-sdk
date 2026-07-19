@@ -131,7 +131,7 @@ async fn run_openai_compat(
         .endpoint
         .clone()
         .unwrap_or_else(|| DEFAULT_ENDPOINT.to_string());
-    let key = resolve_api_key(args.api_key_env.as_deref());
+    let key = resolve_api_key(args.api_key_env.as_deref())?;
     let source = build_openai_compat_source(
         &endpoint,
         &args.model,

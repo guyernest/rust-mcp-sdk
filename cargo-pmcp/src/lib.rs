@@ -151,15 +151,3 @@ pub mod workbook_explain;
 #[doc(hidden)]
 #[path = "commands/package/kind.rs"]
 pub mod package_kind;
-
-// CLI-04 (Phase 110-05): expose ONLY the lib-safe HTTP-upload seam to the lib
-// target (mirrors the `agent_run`/`package_kind` `#[path]` convention).
-// `capture_upload.rs` references only `reqwest` + `anyhow` + std (NO
-// `clap`/`GlobalFlags`), so it compiles in the lib target on its own — letting
-// its `mockito` success/non-2xx tests run under `cargo test --lib capture_upload`,
-// NOT only in the bin-only `commands::package::capture` handler.
-// `#[doc(hidden)]` (Codex 110-06 MEDIUM): an internal support seam, not a stable
-// public API — matches the `agent_run`/`package_kind` seams.
-#[doc(hidden)]
-#[path = "commands/package/capture_upload.rs"]
-pub mod package_capture;

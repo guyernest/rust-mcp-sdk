@@ -119,4 +119,4 @@ cargo pmcp agent dev --source sampling
 
 - [`pmcp-agent`](../../../crates/pmcp-agent/README.md) — the agent-loop crate the scaffold and runner build on
 - [`cargo pmcp team`](team.md) — run a small team of agents plus the reference servers
-- [`cargo pmcp package`](package.md) — inspect and capture the packaged agent
+- [`cargo pmcp package`](package.md) — inspect a packaged agent locally
