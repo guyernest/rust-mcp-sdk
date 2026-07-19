@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v2.4
 milestone_name: Agents & Teams — SDK Extraction
-status: executing
+status: verifying
 stopped_at: Completed 109-07-PLAN.md
-last_updated: "2026-07-19T01:29:18.550Z"
+last_updated: "2026-07-19T01:56:28.463Z"
 last_activity: 2026-07-19
 progress:
   total_phases: 63
-  completed_phases: 3
+  completed_phases: 4
   total_plans: 21
-  completed_plans: 20
-  percent: 5
+  completed_plans: 21
+  percent: 6
 ---
 
 # Project State
@@ -27,7 +27,7 @@ See: .planning/PROJECT.md (updated 2026-07-17) · .planning/ROADMAP.md (v2.4 mil
 
 Phase: 109 (team-reference-servers) — EXECUTING
 Plan: 9 of 9
-Status: Ready to execute
+Status: Phase complete — ready for verification
 Last activity: 2026-07-19
 
 ## v2.4 Phase Plan (6 phases, 31 requirements)
@@ -70,6 +70,8 @@ Decisions are logged in PROJECT.md Key Decisions table. Decisions framing this m
 - [Phase ?]: team-fs local backend explicitly REJECTS symlink components (documented dev-backend TOCTOU stance); percent-encoded file:// URLs via a tested helper, not format!
 - [Phase ?]: 109-04: approval-mcp splits observable lifecycle (InMemoryTaskStore) from approval-domain state (ApprovalRepository); service-owned resolution from any client (D-10)
 - [Phase ?]: 109-04: double-resolve REJECTED via AlreadyResolved (first writer verdict preserved); decision validated against original option set under one mutex
+- [Phase ?]: 109-08: team-servers binding drift enforced via deterministic source-resolution gate (comply-bindings-check); mandated pmat comply check --path . runs as informational report because pmat comply is holistic + cache-driven on this repo (D-07 alignment)
+- [Phase ?]: 109-08: subprocess smoke test drives spawned bins via a bespoke ChildStdioTransport reusing SDK stdio framing (SDK ships no child-bound transport); handshake otherwise 100% pmcp::Client
 
 ### Pending Todos
 
@@ -105,7 +107,7 @@ Items deferred by design for this milestone (design §7 / REQUIREMENTS v2):
 
 ## Session Continuity
 
-Last session: 2026-07-19T01:29:18.547Z
+Last session: 2026-07-19T01:55:54.027Z
 Stopped at: Completed 109-07-PLAN.md
 Resume file: None
 
@@ -122,3 +124,4 @@ Resume file: None
 | Phase 109 P05 | 55min | 3 tasks | 8 files |
 | Phase 109 P06 | 40min | 2 tasks | 3 files |
 | Phase 109 P07 | 45min | 2 tasks | 35 files |
+| Phase 109 P08 | 95min | 4 tasks | 7 files |

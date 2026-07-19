@@ -2039,7 +2039,7 @@ Plans:
 - [x] **Phase 106: Client Host Surface** — a pmcp `Client` can host server→client sampling/elicitation/roots with a human-in-the-loop hook; legacy inverted sampling documented as the "LLM-server pattern" (design Phase A) (completed 2026-07-17)
 - [x] **Phase 107: Contracts & Package Format** — `pmcp-package` adopted into this repo + published 0.1.0 (wire-frozen), team-server tool contracts captured as provable-contracts YAML (design Phase B) (completed 2026-07-18)
 - [x] **Phase 108: `pmcp-agent` Loop Crate** — the pure agent loop between effect seams, three CompletionSources, agent-as-server adapter, tasks-aware ToolInvoker, configured from an AgentPackage (design Phase C) (completed 2026-07-18)
-- [ ] **Phase 109: Team Reference Servers** — `pmcp-team-servers` (one feature-flagged crate) with dev-grade team-fs/approval-mcp/mem-mcp/team-mcp + conformance tests against the PKG-03 contracts (design Phase D)
+- [x] **Phase 109: Team Reference Servers** — `pmcp-team-servers` (one feature-flagged crate) with dev-grade team-fs/approval-mcp/mem-mcp/team-mcp + conformance tests against the PKG-03 contracts (design Phase D) (completed 2026-07-19)
 - [ ] **Phase 110: cargo-pmcp Agent & Team Verbs** — `agent new`/`agent dev`, `team dev`, `package capture|show` with version-pin tripwires (design Phase E)
 - [ ] **Phase 111: Docs in Three Shapes + Examples** — pmcp-book chapters, runnable examples, README + course updates leading with the cargo pmcp workflow (design Phase F)
 
@@ -2143,7 +2143,7 @@ Wave 3 (parallel):
 
 Wave 4:
 
-- [ ] 109-08-PLAN.md — finalize binding.yaml + correct `pmat comply check --path .` (fail-closed comply-ci in CI, graceful comply locally) + doc-review E2E example + all-four subprocess smoke via SDK stdio client (D-16/D-18)
+- [x] 109-08-PLAN.md — finalize binding.yaml + correct `pmat comply check --path .` (fail-closed comply-ci in CI, graceful comply locally) + doc-review E2E example + all-four subprocess smoke via SDK stdio client (D-16/D-18)
 
 ### Phase 110: cargo-pmcp Agent & Team Verbs
 
@@ -2181,6 +2181,6 @@ Wave 4:
 | 106. Client Host Surface | 3/3 | Complete    | 2026-07-18 |
 | 107. Contracts & Package Format | 3/3 | Complete    | 2026-07-18 |
 | 108. `pmcp-agent` Loop Crate | 6/6 | Complete   | 2026-07-18 |
-| 109. Team Reference Servers | 8/9 | In Progress|  |
+| 109. Team Reference Servers | 9/9 | Complete   | 2026-07-19 |
 | 110. cargo-pmcp Agent & Team Verbs | 0/TBD | Not started | - |
 | 111. Docs in Three Shapes + Examples | 0/TBD | Not started | - |
