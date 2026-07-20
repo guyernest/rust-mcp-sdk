@@ -1304,17 +1304,10 @@ pub struct WorkflowPackageResp {
     pub manifest_digest: String,
 }
 
-/// Submit an async package-capture job for a team's workflow dependency graph
-/// (170-08 D-A). `root_type` is always `"team"` in v1; `root_id` is the
-/// `AgentTeam` UUID. Never awaits the walk — returns the queued job id.
-pub async fn submit_package_capture(
-    access_token: &str,
-    root_type: &str,
-    root_id: &str,
-    version: &str,
-    bump: Option<&str>,
-) -> Result<CaptureInfo> {
-    let query = r#"
+/// The exact `submitPackageCapture` operation the CLI sends. Shared with the
+/// offline contract test (`tests/package_capture_contract.rs`) so the test
+/// validates the real runtime query against the vendored SDL.
+pub(crate) const SUBMIT_PACKAGE_CAPTURE_QUERY: &str = r#"
         mutation SubmitPackageCapture(
             $rootComponentType: String!,
             $rootComponentId: String!,
@@ -1333,6 +1326,34 @@ pub async fn submit_package_capture(
             }
         }
     "#;
+
+/// The exact `getPackageCaptureStatus` operation the CLI sends. Shared with the
+/// offline contract test.
+pub(crate) const GET_PACKAGE_CAPTURE_STATUS_QUERY: &str = r#"
+        query GetPackageCaptureStatus($id: ID!) {
+            getPackageCaptureStatus(id: $id) {
+                id
+                status
+                message
+                errorCode
+                divergentComponents
+                manifestDigest
+                updatedAt
+            }
+        }
+    "#;
+
+/// Submit an async package-capture job for a team's workflow dependency graph
+/// (170-08 D-A). `root_type` is always `"team"` in v1; `root_id` is the
+/// `AgentTeam` UUID. Never awaits the walk — returns the queued job id.
+pub async fn submit_package_capture(
+    access_token: &str,
+    root_type: &str,
+    root_id: &str,
+    version: &str,
+    bump: Option<&str>,
+) -> Result<CaptureInfo> {
+    let query = SUBMIT_PACKAGE_CAPTURE_QUERY;
 
     let variables = serde_json::json!({
         "rootComponentType": root_type,
@@ -1362,19 +1383,7 @@ pub async fn get_package_capture_status(
     access_token: &str,
     capture_id: &str,
 ) -> Result<CaptureStatus> {
-    let query = r#"
-        query GetPackageCaptureStatus($id: ID!) {
-            getPackageCaptureStatus(id: $id) {
-                id
-                status
-                message
-                errorCode
-                divergentComponents
-                manifestDigest
-                updatedAt
-            }
-        }
-    "#;
+    let query = GET_PACKAGE_CAPTURE_STATUS_QUERY;
 
     let variables = serde_json::json!({
         "id": capture_id
