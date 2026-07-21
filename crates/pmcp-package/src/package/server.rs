@@ -107,6 +107,32 @@ pub struct ServerSection {
     pub binary: Option<String>,
 }
 
+/// `[auth.cognito]` — Cognito-specific OAuth configuration, written by
+/// `cargo pmcp deploy init --oauth cognito` (`cargo-pmcp`'s
+/// `CognitoConfig`, `deployment/config.rs`). Not among the original 19
+/// tracked fixtures (none of them enable Cognito OAuth), but real —
+/// discovered by the `pmcp-cfn-renderer` Task 2 golden-generation script
+/// synthesizing a fresh `--oauth cognito` scaffold, whose emitted
+/// `.pmcp/deploy.toml` failed to parse before this section existed. Mirrors
+/// `CognitoConfig` field-for-field (including its defaults) so descriptors
+/// captured from either surface round-trip identically.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CognitoSection {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user_pool_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user_pool_name: Option<String>,
+    pub resource_server_id: String,
+    #[serde(default)]
+    pub social_providers: Vec<String>,
+    pub mfa: String,
+    pub access_token_ttl: String,
+    pub refresh_token_ttl: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub domain: Option<String>,
+}
+
 /// `[auth.dcr]` — dynamic client registration config. All fields but
 /// `enabled` default to empty (one tracked descriptor —
 /// `oauth-external-google/aws-lambda` — declares only `enabled = false`).
@@ -144,6 +170,11 @@ pub struct AuthSection {
     pub provider: String,
     #[serde(default)]
     pub callback_urls: Vec<String>,
+    /// Cognito-specific config, present only when `provider = "cognito"`
+    /// AND the deploy is a local (non-`pmcp-run`) `aws-lambda` OAuth stack
+    /// — see [`CognitoSection`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cognito: Option<CognitoSection>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dcr: Option<AuthDcrSection>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -388,6 +419,7 @@ mod tests {
                 enabled: false,
                 provider: "none".to_string(),
                 callback_urls: vec![],
+                cognito: None,
                 dcr: Some(AuthDcrSection {
                     enabled: true,
                     public_client_patterns: vec!["claude".to_string(), "desktop".to_string()],
@@ -489,6 +521,7 @@ mod tests {
                 enabled: false,
                 provider: "none".to_string(),
                 callback_urls: vec![],
+                cognito: None,
                 dcr: None,
                 groups: None,
                 scopes: None,
