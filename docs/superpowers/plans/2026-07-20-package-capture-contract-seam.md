@@ -270,48 +270,33 @@ git commit -m "test(capture): offline blocking contract test (ops + structs vs c
 
 ---
 
-### Task 4: Online drift job (scheduled, M2M, non-blocking)
+### Task 4: Online drift check — PLATFORM-OWNED (no SDK-side workflow)
 
-**Files:**
-- Create: `.github/workflows/capture-contract-drift.yml`
+**Status: no code in this repo.** Revised from the original "scheduled M2M CI job"
+after the source `amplifyData` API (apiId `q3gd4hrbabeytc2o2zazld6igy`) was confirmed
+IAM-auth'd from the platform backend and **not client-reachable**: no SDK-obtainable
+token (M2M client-credentials or PKCE user token) can introspect it, so a headless
+SDK CI job structurally cannot perform the diff. The online drift check therefore
+lives on the platform side (see revised spec §5b), and the SDK repo ships **no**
+`.github/workflows/capture-contract-drift.yml`.
 
-**Interfaces:**
-- Consumes: the Task 2 tool's `check <path>` mode; repo secrets `PMCP_CLIENT_ID`, `PMCP_CLIENT_SECRET`, and a `PMCP_SOURCE_GRAPHQL_URL` var pointing at the **source data API** (amplifyData) behind `api_url`.
+**What the platform owns (their counterpart ticket, filed by pmcp.run):**
+- Periodic (e.g. weekly) `aws appsync get-introspection-schema` against
+  apiId `q3gd4hrbabeytc2o2zazld6igy` → reduce to the capture subset → diff against
+  the vendored `contracts/pmcp-run/capture-v1.graphql`.
+- On drift: open a PR to `paiml/rust-mcp-sdk` updating `capture-v1.graphql`. That PR
+  trips the offline blocking test (Task 3), forcing the CLI's ops/structs to follow
+  in lockstep (spec §6).
 
-- [ ] **Step 1: Write the workflow** — scheduled + manual, never on PRs, so ordinary PRs never depend on network/secrets:
+**What stays in this repo:** the `capture_contract` dev tool (Task 2) remains a
+useful *manual* introspect/diff aid for anyone with source-API access, but nothing
+in SDK CI depends on it. The offline blocking test (Task 3) is the SDK's hard gate.
 
-```yaml
-name: Capture Contract Drift
-on:
-  schedule:
-    - cron: "0 7 * * 1"   # weekly, Mondays 07:00 UTC
-  workflow_dispatch:
-jobs:
-  drift:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
-      - name: Diff live source-API schema vs vendored capture-v1.graphql
-        env:
-          PMCP_CLIENT_ID: ${{ secrets.PMCP_CLIENT_ID }}
-          PMCP_CLIENT_SECRET: ${{ secrets.PMCP_CLIENT_SECRET }}
-          PMCP_SOURCE_GRAPHQL_URL: ${{ vars.PMCP_SOURCE_GRAPHQL_URL }}
-        run: |
-          cargo run -q -p cargo-pmcp --bin capture_contract -- \
-            check contracts/pmcp-run/capture-v1.graphql
-```
-
-- [ ] **Step 2: Verify non-blocking.** Confirm this workflow is NOT referenced by `pr-gate.yml`/`org-gate-checks.yml` (the required-checks aggregators) so a drift finding never blocks a PR — it opens a signal (job failure → notification), and the fix is a platform contract-update PR (see spec §6).
-
-- [ ] **Step 3: Manual dispatch smoke** (once secrets/vars are set in the repo): trigger via `workflow_dispatch`; expect exit 0 (no drift) against the just-generated SDL, and the right-endpoint assertion (Task 2 Step 3) implicitly passing.
-
-- [ ] **Step 4: Commit**
-
-```bash
-git add .github/workflows/capture-contract-drift.yml
-git commit -m "ci(capture): scheduled, M2M-authed contract-drift job vs source data API"
-```
+No implementation step, no commit. This task is satisfied by the spec §5b revision
+(recording platform ownership) and the request already sent to the platform in
+`docs/platform-requests/capture-sdl-export-request.md` (its "ongoing drift check"
+section asks them to own exactly this). The runbook (Task 5) references the
+platform-owned model rather than an SDK workflow.
 
 ---
 
@@ -365,7 +350,7 @@ git add docs/tickets/ 2>/dev/null && git commit -m "docs(capture): stub the two 
 - Spec §3 (generated SDL, String-not-enum, provenance) → Tasks 2, 2b + `status_field_is_string_not_enum` test. ✅
 - Spec §4 (Approach B, no codegen, offline test of ops + structs) → Tasks 1, 3. ✅
 - Spec §5a (offline blocking) → Task 3 (runs in normal `cargo test`). ✅
-- Spec §5b (online, M2M, source data API, right-endpoint assertion, non-blocking) → Tasks 2 (Step 3 assertion) + 4. ✅
+- Spec §5b (online drift check) → **platform-owned** (Task 4 revised: no SDK-side workflow; the source API isn't client-reachable). The `capture_contract` dev tool (Task 2) remains a manual aid. ✅
 - Spec §6 (platform PRs the contract; offline gate forces lockstep) → the blocking Task 3 test enforces it; documented in Task 5 invariant. ✅
 - Spec §7 (compat/versioning) → contract filename `capture-v1`; no code needed. ✅
 - Spec §8 (delivery invariant, steps in runbook) → Task 5. ✅

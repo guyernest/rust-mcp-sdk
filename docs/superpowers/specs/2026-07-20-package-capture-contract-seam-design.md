@@ -57,11 +57,19 @@ getPackageCaptureStatus(id: ID!): CaptureStatus
 A single file: **`contracts/pmcp-run/capture-v1.graphql`** — the **SDL subset** for
 exactly the two operations above and their input/output types.
 
-- **Generated, never hand-written.** It is produced by introspecting the live
-  source data API and extracting the capture subset (the same mechanism as the
-  online gate, §5b). Rationale: careful human transcription already drifted once
-  in this very design (a hand-authored field list dropped `id`/`updatedAt` and
-  mis-typed `status` as an enum). The artifact must reflect reality, not memory.
+- **Generated, never hand-written — exported by the platform.** It is produced by
+  the pmcp.run platform running `aws appsync get-introspection-schema` against the
+  live source `amplifyData` AppSync API (apiId `q3gd4hrbabeytc2o2zazld6igy`, us-east-1)
+  and reducing the result to the two capture operations + their return types. The
+  SDK does **not** introspect the source API itself: that API is IAM-auth'd from the
+  platform's backend resolvers and is not client-reachable (no user or M2M token
+  reaches it directly — see §5b), so the platform is the only party that can export
+  it. This also matches the ownership model: the platform owns the schema, therefore
+  it owns the contract's contents. Rationale for "generated, never transcribed":
+  careful human transcription already drifted once in this very design (a
+  hand-authored field list dropped `id`/`updatedAt` and mis-typed `status` as an
+  enum), and the platform export subsequently corrected three more field-shape
+  errors in the SDK-side sketch — proof the artifact must reflect reality, not memory.
 - **`status` is typed `String`** in the SDL to match the schema, with the known
   values recorded as an SDL doc-comment — NOT as a GraphQL `enum`. Typing it as an
   enum would make the online schema-vs-schema diff report permanent false drift
@@ -99,20 +107,29 @@ would force a codegen migration through a 52 KB hand-rolled client for two ops.)
 network. It catches CLI-vs-contract mismatch on every PR. This is the layer that
 forces a platform contract-update PR (§6) to also update the CLI in lockstep.
 
-**b. Online (gated / scheduled, non-blocking on normal PRs).** A separate job
-introspects the **live source data API**, extracts the capture subset, and diffs it
-against the vendored `capture-v1.graphql`. It flags *platform-ahead-of-contract*
-drift — the schema changed but the vendored contract wasn't updated yet. Two
-constraints:
+**b. Online (platform-owned, out-of-band).** A scheduled job introspects the **live
+source data API**, extracts the capture subset, and diffs it against the vendored
+`capture-v1.graphql`, flagging *platform-ahead-of-contract* drift — the schema
+changed but the vendored contract wasn't updated yet. **This job runs on the
+platform side, not in the SDK repo's CI**, because the source `amplifyData` API is
+IAM-auth'd from the platform's backend and is not client-reachable: no SDK-obtainable
+token (M2M client-credentials or PKCE user token) can introspect it, so a headless
+SDK CI job structurally cannot perform the diff. The platform already has the IAM
+introspection access, so it owns this layer:
 
-- **Auth: M2M client-credentials** (`PMCP_CLIENT_ID` / `PMCP_CLIENT_SECRET`), NOT
-  the interactive PKCE user token — the scheduled job must run with no human.
-- **Endpoint: the exact source data API behind the target's `api_url`**, NOT the
-  merged/front-door API. The two can diverge, and the CLI queries the source API,
-  so the diff must be against what the CLI actually talks to.
+- The platform runs the periodic introspect → extract-subset → diff against the
+  vendored SDL, and on drift **opens a PR to the SDK repo** updating
+  `capture-v1.graphql` (§6). That PR then trips the offline blocking test (§5a),
+  forcing the CLI's ops/structs to move in lockstep.
+- **Endpoint: the source `amplifyData` data API** (apiId `q3gd4hrbabeytc2o2zazld6igy`),
+  NOT the merged/front-door API. The two can diverge; the capture ops live in
+  `amplifyData`, so the diff must be against that schema.
 
-It is opt-in/scheduled (needs the dev endpoint + M2M secret) so ordinary PRs never
-depend on network or secrets; the offline layer is the hard gate.
+The SDK repo therefore ships **no** scheduled drift workflow of its own. The
+`capture_contract` dev tool (§4 tooling) remains a useful *manual* introspect/diff
+aid for anyone with source-API access, but nothing in SDK CI depends on it. The
+offline layer (§5a) is the SDK's hard gate; the platform's out-of-band check is the
+early-warning half of the same loop.
 
 ## 6. Ownership & change process
 
@@ -167,6 +184,7 @@ go stale on completion** and are intentionally kept out of this doc. See:
   `captureId`/`id` asymmetry.
 - The offline contract test fails the build if the CLI's capture ops/structs diverge
   from the contract.
-- The online gate (M2M-authed, against the source data API) reports platform-side
-  drift without blocking ordinary PRs.
+- The online drift check is **platform-owned** (the platform introspects the source
+  data API it alone can reach and PRs the vendored SDL on drift); the SDK repo ships
+  no scheduled drift workflow and ordinary SDK PRs never depend on network/secrets.
 - A platform schema change and its CLI update land as one contract-update PR.
