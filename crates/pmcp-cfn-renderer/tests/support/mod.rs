@@ -74,6 +74,21 @@
 //!   params bucket/key") without needing to thread `RenderParams` into
 //!   this function's signature (which the brief fixes as
 //!   `fn(&Value) -> Value`).
+//! - **`AWS::IAM::Policy.Properties.PolicyName` is replaced with a fixed
+//!   sentinel** (`"<policy-name>"`) rather than compared literally. CDK
+//!   derives this name from a content hash of the resource's construct path
+//!   (e.g. `McpFunctionServiceRoleDefaultPolicy29310C43`), which is
+//!   CDK-synthesis-specific identity, not renderer truth — the design spec
+//!   (§5) forbids CDK-style content hashes in renderer output. Different
+//!   fixtures produce different hash suffixes (compare the `plain-lambda`
+//!   golden's `McpFunctionServiceRoleDefaultPolicy29310C43` against
+//!   `oauth-cognito-dcr`'s second Lambda policy,
+//!   `OAuthProxyFunctionServiceRoleDefaultPolicy7EA1E8EC`), so literal
+//!   comparison would fail for a reason that has nothing to do with whether
+//!   the two templates describe the same infrastructure. The renderer emits
+//!   a stable literal (`"pmcp-declared"`) instead of a hash; this
+//!   sentinelization makes both sides comparable regardless of which
+//!   literal either side used.
 //!
 //! # Known limitation: tied fingerprints
 //!
@@ -166,9 +181,10 @@ fn take_object(root: &mut Map<String, Value>, key: &str) -> Map<String, Value> {
 
 /// Per-resource drops (step 2): `Metadata` unconditionally; `DeletionPolicy`/
 /// `UpdateReplacePolicy` when equal to the CFN-wide default (`"Delete"`);
-/// the `AWS::Lambda::Function` artifact-location sentinel substitution (see
-/// "Beyond the brief" in the module doc comment); and DependsOn sorting
-/// (final re-sort happens again after ID rewriting in [`rewrite_and_rekey`]).
+/// the `AWS::Lambda::Function` artifact-location sentinel substitution and
+/// the `AWS::IAM::Policy` name sentinel substitution (see "Beyond the
+/// brief" in the module doc comment); and DependsOn sorting (final re-sort
+/// happens again after ID rewriting in [`rewrite_and_rekey`]).
 fn normalize_resource(resource: &mut Value) {
     let Value::Object(fields) = resource else {
         return;
@@ -178,9 +194,15 @@ fn normalize_resource(resource: &mut Value) {
     remove_if_default_delete(fields, "UpdateReplacePolicy");
     sort_depends_on(fields);
 
-    let is_function = fields.get("Type").and_then(Value::as_str) == Some("AWS::Lambda::Function");
-    if is_function {
+    let type_ = fields
+        .get("Type")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    if type_.as_deref() == Some("AWS::Lambda::Function") {
         sentinelize_function_code(fields);
+    }
+    if type_.as_deref() == Some("AWS::IAM::Policy") {
+        sentinelize_policy_name(fields);
     }
 }
 
@@ -210,6 +232,23 @@ fn sentinelize_function_code(fields: &mut Map<String, Value>) {
         properties.insert(
             "Code".to_string(),
             serde_json::json!({"S3Bucket": "<artifact>", "S3Key": "<artifact>"}),
+        );
+    }
+}
+
+/// Replace `Properties.PolicyName` on an `AWS::IAM::Policy` with a fixed
+/// sentinel — see "Beyond the brief" in the module doc comment. CDK's
+/// content-hash-derived name and the renderer's stable `"pmcp-declared"`
+/// literal are both synthesis-specific labels, not renderer truth, so
+/// neither should participate in golden comparison.
+fn sentinelize_policy_name(fields: &mut Map<String, Value>) {
+    let Some(Value::Object(properties)) = fields.get_mut("Properties") else {
+        return;
+    };
+    if properties.contains_key("PolicyName") {
+        properties.insert(
+            "PolicyName".to_string(),
+            Value::String("<policy-name>".to_string()),
         );
     }
 }
@@ -514,6 +553,54 @@ mod tests {
             normalized["Resources"]["Function-0"]["Properties"]["Code"],
             json!({"S3Bucket": "<artifact>", "S3Key": "<artifact>"})
         );
+    }
+
+    /// Two templates whose ONLY difference is the IAM policy's
+    /// `PolicyName` (a CDK content-hash literal on one side, the
+    /// renderer's stable `"pmcp-declared"` literal on the other) must
+    /// normalize identically — this is the mechanism that lets the golden
+    /// harness compare cdk-synth output against renderer output without
+    /// hardcoding either side's synthesis-specific literal. See the
+    /// module doc comment's "Beyond the brief" section.
+    #[test]
+    fn sentinelizes_iam_policy_name() {
+        let cdk_hash_named = json!({
+            "Resources": {
+                "Policy": {
+                    "Type": "AWS::IAM::Policy",
+                    "Properties": {
+                        "PolicyName": "McpFunctionServiceRoleDefaultPolicy29310C43",
+                        "Roles": [{"Ref": "Role"}]
+                    }
+                },
+                "Role": {
+                    "Type": "AWS::IAM::Role",
+                    "Properties": {}
+                }
+            }
+        });
+        let renderer_named = json!({
+            "Resources": {
+                "Policy": {
+                    "Type": "AWS::IAM::Policy",
+                    "Properties": {
+                        "PolicyName": "pmcp-declared",
+                        "Roles": [{"Ref": "Role"}]
+                    }
+                },
+                "Role": {
+                    "Type": "AWS::IAM::Role",
+                    "Properties": {}
+                }
+            }
+        });
+
+        let normalized = normalize(&cdk_hash_named);
+        assert_eq!(
+            normalized["Resources"]["Policy-0"]["Properties"]["PolicyName"],
+            json!("<policy-name>")
+        );
+        assert_eq!(normalized, normalize(&renderer_named));
     }
 
     #[test]

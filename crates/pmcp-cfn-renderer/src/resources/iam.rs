@@ -28,16 +28,20 @@ use crate::{
 use pmcp_package::package::DeployDescriptor;
 use serde_json::json;
 
-/// CDK's construct-path-hash-derived name for the Lambda's default inline
-/// policy. CDK computes a resource's logical-ID hash from its construct
-/// path RELATIVE TO THE STACK (the stack's own id is excluded — see
-/// `Stack.allocateLogicalId` in aws-cdk-lib), so this value is identical
-/// for every `pmcp-run` server regardless of server/stack name — verified
-/// against the checked-in `plain-lambda` golden captured from a real `cdk
-/// synth`. This renderer is otherwise hash-free by design (see
-/// `logical_ids`); this one literal is kept so output stays byte-compatible
-/// with what already-deployed CDK-synthesized stacks carry.
-const DEFAULT_POLICY_NAME: &str = "McpFunctionServiceRoleDefaultPolicy29310C43";
+/// The Lambda's default inline policy's `PolicyName`. CDK derives this name
+/// from a content hash of the resource's construct path (e.g.
+/// `McpFunctionServiceRoleDefaultPolicy29310C43`), but that hash is
+/// CDK-synthesis-specific identity, not renderer truth — the design spec
+/// (§5) forbids CDK-style content hashes in renderer output, and different
+/// fixtures produce different hashes (the `oauth-cognito-dcr` golden's
+/// second Lambda policy is
+/// `OAuthProxyFunctionServiceRoleDefaultPolicy7EA1E8EC`), so hardcoding one
+/// hash per golden doesn't scale. This renderer is hash-free by design (see
+/// `logical_ids`); it emits a stable, declared name instead. The
+/// semantic-golden harness's normalizer sentinelizes `PolicyName` on both
+/// sides (see `tests/support/mod.rs::sentinelize_policy_name`), so this
+/// literal never needs to match what a real `cdk synth` produces.
+const DEFAULT_POLICY_NAME: &str = "pmcp-declared";
 
 /// Render the MCP server's Lambda execution role and its default inline
 /// policy: `[(role_id, role), (policy_id, policy)]`.

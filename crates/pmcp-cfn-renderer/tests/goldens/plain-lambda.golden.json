@@ -181,7 +181,7 @@
             ],
             "Version": "2012-10-17"
           },
-          "PolicyName": "McpFunctionServiceRoleDefaultPolicy29310C43",
+          "PolicyName": "<policy-name>",
           "Roles": [
             {
               "Ref": "Role-0"

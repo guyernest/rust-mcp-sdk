@@ -598,7 +598,7 @@
             ],
             "Version": "2012-10-17"
           },
-          "PolicyName": "OAuthProxyFunctionServiceRoleDefaultPolicy7EA1E8EC",
+          "PolicyName": "<policy-name>",
           "Roles": [
             {
               "Ref": "Role-2"
@@ -622,7 +622,7 @@
             ],
             "Version": "2012-10-17"
           },
-          "PolicyName": "McpFunctionServiceRoleDefaultPolicy29310C43",
+          "PolicyName": "<policy-name>",
           "Roles": [
             {
               "Ref": "Role-1"
