@@ -16,10 +16,13 @@
 //! `all_goldens_match_renderer_output` runs unconditionally as of Task 3:
 //! the `lambda`/`logs`/`outputs` modules (plus the base `iam` execution
 //! role/policy) make [`pmcp_cfn_renderer::render`] match
-//! `tests/goldens/plain-lambda.golden.json` (the only active — i.e.
-//! non-`pending/` — golden as of this task). The `pending/` goldens land as
-//! their resource-family modules (`iam`'s declared-statement expansion,
-//! `http_api`, `cognito`, `dynamodb`) are implemented in later tasks.
+//! `tests/goldens/plain-lambda.golden.json`. As of Task 4, `iam`'s declared
+//! `[[iam.statements]]` expansion is also active, pinned by
+//! `tests/goldens/iam-statements.golden.json` (a minimal, purpose-built
+//! fixture) and `tests/goldens/wild-msr-vtt.golden.json` (a real `pmcp-run`
+//! fixture with 4 declared statements, promoted from `pending/`). The
+//! remaining `pending/` goldens land as their resource-family modules
+//! (`http_api`, `cognito`, `dynamodb`) are implemented in later tasks.
 
 mod support;
 

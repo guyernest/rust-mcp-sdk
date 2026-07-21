@@ -37,14 +37,16 @@
 //! `lambda`, `iam`, `logs`, `http_api`, `cognito`, `dynamodb`, `outputs` (see
 //! [`resources`]). A descriptor requesting anything outside that surface
 //! fails loudly via [`RenderError::UnsupportedSection`], never a silent
-//! skip. As of the plain-Lambda kernel task, [`render`] wires `lambda`,
-//! `logs`, `outputs`, and the BASE execution role/policy from `iam` (see
-//! [`resources::iam`]'s doc comment) for the `pmcp-run` target — every
-//! other target type, a declared `[[iam.statements]]` section, and
-//! `auth.enabled = true` fail loudly via [`RenderError::UnsupportedSection`]
-//! rather than silently rendering an incomplete stack. `iam`'s
-//! declared-statement expansion, `http_api`, `cognito`, and `dynamodb` land
-//! in later tasks.
+//! skip. As of Task 4, [`render`] wires `lambda`, `logs`, `outputs`, and the
+//! full `iam` module — the BASE execution role/policy PLUS any declared
+//! `[[iam.statements]]` expansion, fail-closed validated first (see
+//! [`resources::iam`]'s doc comment) — for the `pmcp-run` target. Every
+//! other target type and `auth.enabled = true` still fail loudly via
+//! [`RenderError::UnsupportedSection`] rather than silently rendering an
+//! incomplete stack; a declared `[[iam.statements]]` entry that fails
+//! [`resources::iam::validate`]'s fail-closed rules fails loudly via
+//! [`RenderError::Invalid`] instead. `http_api`, `cognito`, and `dynamodb`
+//! land in later tasks.
 //!
 //! ## Logical IDs
 //!
@@ -78,22 +80,33 @@ use std::collections::BTreeMap;
 /// Returns [`RenderError::UnsupportedSection`] when the descriptor requests
 /// something the renderer doesn't implement yet: a `[target].type` other
 /// than `"pmcp-run"` (the only stack shape wired so far — `http_api`/
-/// `cognito` land in later tasks), `auth.enabled = true` (needs the
-/// `cognito`/`http_api` modules), or a non-empty `[[iam.statements]]`
-/// declaration (needs `iam`'s declared-statement expansion, Task 4). Never
-/// silently skips descriptor content.
+/// `cognito` land in later tasks) or `auth.enabled = true` (needs the
+/// `cognito`/`http_api` modules). Returns [`RenderError::Invalid`] when a
+/// declared `[[iam.statements]]` entry fails [`resources::iam::validate`]'s
+/// fail-closed rules (bad effect, empty actions/resources, malformed
+/// action, or a wildcard-escalation footgun — see that function's doc
+/// comment). Never silently skips descriptor content.
 ///
-/// # Current behavior (plain-Lambda kernel task)
+/// # Current behavior (Task 4)
 ///
-/// For a `pmcp-run`-target descriptor with no declared `[iam]` statements
-/// and `auth.enabled = false`, renders the plain-Lambda kernel: the
-/// function, its log group, its base execution role + default inline
-/// policy, and the fixed five-output set (see [`resources`]).
+/// For a `pmcp-run`-target descriptor with `auth.enabled = false`, renders
+/// the plain-Lambda kernel: the function, its log group, its base execution
+/// role + default inline policy (with any validated `[[iam.statements]]`
+/// appended), and the fixed five-output set (see [`resources`]).
 pub fn render(
     descriptor: &DeployDescriptor,
     params: &RenderParams,
 ) -> Result<CfnTemplate, RenderError> {
     guard_unsupported(descriptor)?;
+    if let Some(iam) = &descriptor.iam {
+        // Discard warnings here — `render` is the pure, side-effect-free
+        // entry point (no I/O to print them through). Hard errors still
+        // fail loudly via `?`. Callers that want the advisory findings
+        // (unknown service prefix, cross-account ARN pin) call
+        // `resources::iam::validate` directly, same as `render` does —
+        // it's a fully public, separately-callable function.
+        resources::iam::validate(iam)?;
+    }
 
     let mut resources = BTreeMap::new();
     for (id, resource) in resources::iam::render_execution_role(descriptor, params) {
@@ -141,14 +154,6 @@ fn guard_unsupported(d: &DeployDescriptor) -> Result<(), RenderError> {
             section: "auth".to_string(),
             detail: "auth.enabled = true requires the cognito/http_api resource modules, \
                      not yet implemented"
-                .to_string(),
-        });
-    }
-    if d.iam.as_ref().is_some_and(|iam| !iam.statements.is_empty()) {
-        return Err(RenderError::UnsupportedSection {
-            section: "iam".to_string(),
-            detail: "declared [[iam.statements]] require the iam module's \
-                     declared-statement expansion, not yet implemented (Task 4)"
                 .to_string(),
         });
     }
@@ -277,12 +282,49 @@ mod tests {
     }
 
     #[test]
-    fn render_rejects_declared_iam_statements() {
+    fn render_accepts_declared_iam_statements_and_appends_them_to_the_policy() {
         let iam_block = r#"
             [[iam.statements]]
             effect = "Allow"
             actions = ["s3:GetObject"]
             resources = ["arn:aws:s3:::example-bucket/*"]
+            "#;
+        let template = render(
+            &descriptor_with("my-server", "pmcp-run", false, iam_block),
+            &params(),
+        )
+        .expect("declared iam.statements now render, Task 4");
+        // Still exactly the same 4-resource plain-Lambda kernel — the
+        // declared statement lands inside ExecutionRoleDefaultPolicy's
+        // existing Statement array, not a new resource.
+        let mut resource_ids: Vec<&String> = template.resources.keys().collect();
+        resource_ids.sort();
+        assert_eq!(
+            resource_ids,
+            vec![
+                "ExecutionRole",
+                "ExecutionRoleDefaultPolicy",
+                "LogGroup",
+                "McpFunction"
+            ]
+        );
+        let statements = template.resources["ExecutionRoleDefaultPolicy"].properties
+            ["PolicyDocument"]["Statement"]
+            .as_array()
+            .unwrap();
+        assert_eq!(statements.len(), 4, "3 base + 1 declared statement");
+        assert_eq!(statements[3]["Action"], "s3:GetObject");
+    }
+
+    #[test]
+    fn render_rejects_an_invalid_declared_iam_statement() {
+        // Fail-closed: a wildcard-escalation statement must reject the
+        // whole render, not silently drop the offending statement.
+        let iam_block = r#"
+            [[iam.statements]]
+            effect = "Allow"
+            actions = ["*"]
+            resources = ["*"]
             "#;
         let err = render(
             &descriptor_with("my-server", "pmcp-run", false, iam_block),
@@ -291,10 +333,11 @@ mod tests {
         .unwrap_err();
         assert_eq!(
             err,
-            RenderError::UnsupportedSection {
+            RenderError::Invalid {
                 section: "iam".to_string(),
-                detail: "declared [[iam.statements]] require the iam module's \
-                          declared-statement expansion, not yet implemented (Task 4)"
+                field: "statements[0].actions".to_string(),
+                message: "Allow + actions=[\"*\"] + resources=[\"*\"] is a wildcard escalation \
+                          footgun — refuse to deploy. Tighten actions and resources."
                     .to_string(),
             }
         );
@@ -302,8 +345,8 @@ mod tests {
 
     #[test]
     fn render_accepts_an_empty_declared_iam_section() {
-        // `[iam]` present but with no `[[iam.statements]]` entries must NOT
-        // trip the guard — only a non-empty statements list is unsupported.
+        // `[iam]` present but with no `[[iam.statements]]` entries renders
+        // identically to no `[iam]` section at all.
         let template = render(
             &descriptor_with("my-server", "pmcp-run", false, "[iam]"),
             &params(),

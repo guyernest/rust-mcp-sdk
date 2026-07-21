@@ -188,11 +188,92 @@ generate http-api http-api-fixture "$PENDING_DIR/http-api.golden.json"
 scaffold_generated oauth-cognito-dcr aws-lambda --oauth cognito
 generate oauth-cognito-dcr oauth-cognito-dcr-fixture "$PENDING_DIR/oauth-cognito-dcr.golden.json"
 
+# --- Task 4 (iam module): a minimal, purpose-built [[iam.statements]]
+# fixture pinning the single-vs-array collapse rule (a single-action
+# wildcard statement collapses Action/Resource to a bare scalar; a
+# two-action/two-resource statement stays arrays). `deploy init`'s scaffold
+# takes a STATIC snapshot of stack.ts at scaffold time — it is not
+# regenerated from `.pmcp/deploy.toml` by `npx cdk synth` alone (only a full
+# `cargo pmcp deploy` build+deploy cycle re-renders it, which needs a real
+# Lambda-buildable crate, impractical for a throwaway fixture) — so this
+# helper appends the `[[iam.statements]]` block to deploy.toml AND splices
+# the matching `mcpFunction.addToRolePolicy(...)` calls into stack.ts by
+# hand, mirroring exactly what `cargo-pmcp/src/deployment/iam.rs::render_statement`
+# would emit for the same statements.
+scaffold_iam_statements() {
+  local slug="iam-statements"
+  local project="$WORKDIR/$slug"
+  write_stub_crate "$project" "$slug"
+  (cd "$project" && cargo_pmcp deploy --target-type pmcp-run init \
+    --skip-credentials-check --region "$REGION" >/dev/null)
+
+  cat >>"$project/.pmcp/deploy.toml" <<'IAMEOF'
+
+[[iam.statements]]
+effect = "Allow"
+actions = ["dynamodb:GetItem", "dynamodb:Query"]
+resources = [
+    "arn:aws:dynamodb:us-east-1:123456789012:table/orders",
+    "arn:aws:dynamodb:us-east-1:123456789012:table/customers",
+]
+
+[[iam.statements]]
+effect = "Allow"
+actions = ["*"]
+resources = ["arn:aws:s3:::iam-statements-fixture-bucket/*"]
+IAMEOF
+
+  local stack_ts="$project/deploy/lib/stack.ts"
+  local splice_file="$project/.iam-splice.ts"
+  cat >"$splice_file" <<'TSEOF'
+
+    // ========================================================================
+    // Operator-declared IAM (from .pmcp/deploy.toml [iam])
+    // ========================================================================
+    mcpFunction.addToRolePolicy(new iam.PolicyStatement({
+      effect: iam.Effect.ALLOW,
+      actions: ['dynamodb:GetItem', 'dynamodb:Query'],
+      resources: [
+        `arn:aws:dynamodb:us-east-1:123456789012:table/orders`,
+        `arn:aws:dynamodb:us-east-1:123456789012:table/customers`,
+      ],
+    }));
+    mcpFunction.addToRolePolicy(new iam.PolicyStatement({
+      effect: iam.Effect.ALLOW,
+      actions: ['*'],
+      resources: [
+        `arn:aws:s3:::iam-statements-fixture-bucket/*`,
+      ],
+    }));
+
+    // Outputs
+TSEOF
+  # Portable (macOS/BSD + GNU) in-place edit: rewrite the file inserting the
+  # splice text (read from a file via `getline`, not a `-v` string — BSD
+  # awk's `-v` mangles embedded literal newlines) just before the
+  # `// Outputs` line, rather than `sed -i` (whose in-place-backup-suffix
+  # argument differs between BSD and GNU sed).
+  awk -v splice_file="$splice_file" '
+    /^    \/\/ Outputs$/ {
+      while ((getline line < splice_file) > 0) print line
+      next
+    }
+    { print }
+  ' "$stack_ts" > "$stack_ts.new"
+  mv "$stack_ts.new" "$stack_ts"
+  rm -f "$splice_file"
+}
+scaffold_iam_statements
+generate iam-statements iam-statements-fixture "$GOLDEN_DIR/iam-statements.golden.json"
+
 # --- SECONDARY corpus: a real, custom-[[iam.statements]]-carrying fixture
-# from the sibling pmcp-run repo (read-only; copied, never modified) ---
+# from the sibling pmcp-run repo (read-only; copied, never modified). Its
+# stack.ts came from a real prior `cargo pmcp deploy` cycle in that repo, so
+# (unlike the generated fixtures above) it already reflects its declared
+# `[[iam.statements]]` without needing the splice-by-hand workaround. ---
 if [ -d "$PMCP_RUN_REPO/built-in/sql-api/servers/msr-vtt/deploy" ]; then
   scaffold_wild wild-msr-vtt "$PMCP_RUN_REPO/built-in/sql-api/servers/msr-vtt"
-  generate wild-msr-vtt msr-vtt "$PENDING_DIR/wild-msr-vtt.golden.json"
+  generate wild-msr-vtt msr-vtt "$GOLDEN_DIR/wild-msr-vtt.golden.json"
 else
   echo "skip wild-msr-vtt: $PMCP_RUN_REPO not found locally (set PMCP_RUN_REPO)" >&2
 fi

@@ -37,8 +37,23 @@ mechanism).
 | File | `target.type` | auth | Exercises | Status |
 |---|---|---|---|---|
 | `plain-lambda.golden.json` | `pmcp-run` | disabled | `lambda`/`logs`/`outputs` (Lambda-only stack, no API Gateway; CDK's own default execution role + the pmcp-run composition IAM sugar) | **Active** — Task 3's TDD driver |
+| `iam-statements.golden.json` | `pmcp-run` | disabled | `iam`'s declared-`[[iam.statements]]` expansion (Task 4): a minimal, purpose-built fixture with a two-action/two-resource statement (stays arrays) and a single-wildcard-action/single-resource statement (collapses `Action`/`Resource` to a bare scalar — the CDK `PolicyStatement.toJSON()` single-element-array collapse rule) | **Active** — Task 4's TDD driver |
 | `pending/http-api.golden.json` | `aws-lambda` | disabled | `http_api` (`HttpApi`/`Integration`/`Route`/`Stage`, `Lambda::Permission`) on top of the plain-Lambda shape | Pending Task 5 |
 | `pending/oauth-cognito-dcr.golden.json` | `aws-lambda` | `cognito` (`--oauth cognito`) | `cognito` (`UserPool`/`UserPoolResourceServer`/`UserPoolDomain`) + `dynamodb` (the DCR `ClientsTable`) + a 3-Lambda/authorizer `http_api` shape | Pending Task 6 |
+
+`iam-statements.golden.json`'s stack.ts needed a manual splice rather than a
+plain `scaffold_generated` call: `cargo pmcp deploy init` takes a STATIC
+snapshot of `stack.ts` at scaffold time — it is not re-rendered from
+`.pmcp/deploy.toml` by `npx cdk synth` alone. Only a full `cargo pmcp deploy`
+build+deploy cycle re-renders it (via `validate_and_regenerate_stack_ts`),
+which needs a real Lambda-buildable crate — impractical for a throwaway
+fixture. `scripts/generate-cfn-goldens.sh`'s `scaffold_iam_statements`
+function therefore appends the `[[iam.statements]]` block to `deploy.toml`
+AND splices the matching `mcpFunction.addToRolePolicy(...)` calls into
+`stack.ts` by hand, mirroring exactly what
+`cargo-pmcp/src/deployment/iam.rs::render_statement` would emit for the same
+statements — then `npx cdk synth` behaves identically to a real deploy's
+regenerated stack.
 
 `oauth-cognito-dcr` covers BOTH "OAuth/Cognito" and "DCR" from the brief's
 four named variants (plain Lambda, HTTP API, OAuth/Cognito, DCR) as a
@@ -59,7 +74,7 @@ locally with the same fake account as the generated corpus.
 
 | File | Source | Exercises | Status |
 |---|---|---|---|
-| `pending/wild-msr-vtt.golden.json` | `pmcp-run:built-in/sql-api/servers/msr-vtt` | `iam` (`[[iam.statements]]` — 4 real custom grants: Athena workgroup access, Glue catalog/database/table metadata, S3 read, S3 read/write for Athena query results) on top of the plain-Lambda (`pmcp-run` target) shape | Pending Task 4 |
+| `wild-msr-vtt.golden.json` | `pmcp-run:built-in/sql-api/servers/msr-vtt` | `iam` (`[[iam.statements]]` — 4 real custom grants: Athena workgroup access, Glue catalog/database/table metadata, S3 read, S3 read/write for Athena query results) on top of the plain-Lambda (`pmcp-run` target) shape. Its `stack.ts` came from a real prior `cargo pmcp deploy` cycle in the `pmcp-run` repo, so (unlike `iam-statements.golden.json` above) it already reflects its declared statements without needing the splice-by-hand workaround — real proof the `iam` module's declared-statement rendering matches production `cdk synth` output, not just a hand-crafted fixture. | **Active** — Task 4 (promoted from `pending/`) |
 
 ### Skipped / deferred (printed by the script, recorded here — no silent truncation)
 

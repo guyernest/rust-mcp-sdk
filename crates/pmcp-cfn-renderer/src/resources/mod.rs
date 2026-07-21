@@ -8,11 +8,12 @@
 //! never a silent skip, and this module must never grow toward
 //! CDK-completeness.
 //!
-//! Task 3 wires the plain-Lambda kernel: `lambda`, `logs`, `outputs`, plus
+//! Task 3 wired the plain-Lambda kernel: `lambda`, `logs`, `outputs`, plus
 //! the BASE execution role/policy in `iam` (every `pmcp-run` server gets
 //! one, regardless of any declared `[iam]` section — see that module's doc
-//! comment). `iam`'s declared-`[[iam.statements]]` expansion, `http_api`,
-//! `cognito`, and `dynamodb` land in later tasks.
+//! comment). Task 4 extended `iam` with the declared-`[[iam.statements]]`
+//! expansion (fail-closed validated first). `http_api`, `cognito`, and
+//! `dynamodb` land in later tasks.
 
 pub mod iam;
 pub mod lambda;
