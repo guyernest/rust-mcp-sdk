@@ -14,9 +14,15 @@
 //!   non-zero on drift.
 //!
 //! Deliberately kept as a `cargo-pmcp`-subcommand-free internal binary
-//! (`src/bin/capture_contract.rs`, auto-discovered by Cargo — no `[[bin]]`
-//! entry needed) so CI can invoke it directly without adding a public
-//! subcommand to the main CLI.
+//! (`src/bin/capture_contract.rs`) rather than a public CLI subcommand. It is
+//! a MANUAL dev/introspection aid, run by someone with source-API access
+//! (M2M `PMCP_CLIENT_ID`/`PMCP_CLIENT_SECRET` credentials) — it is NOT
+//! invoked by SDK CI, which cannot reach the source `amplifyData` API (see
+//! `docs/superpowers/plans/2026-07-20-package-capture-contract-seam.md` Task 4:
+//! the online drift check is platform-owned). Because end users installing
+//! `cargo-pmcp` have no use for this tool, it requires the non-default
+//! `capture-contract-tool` feature (see the `[[bin]]` entry in `Cargo.toml`),
+//! so a default `cargo install cargo-pmcp` does not build or install it.
 //!
 //! ## Why this does NOT call `auth::get_credentials()` directly
 //!
@@ -38,10 +44,17 @@
 //! So this file reimplements just the M2M branch directly against
 //! `PMCP_CLIENT_ID`/`PMCP_CLIENT_SECRET` (mirroring
 //! `auth::get_credentials_via_client_credentials`'s discovery + token
-//! exchange), self-contained, with no dependency on the `cargo_pmcp` lib
-//! surface at all.
+//! exchange), self-contained, with no dependency on the bin-only `deployment`
+//! module tree. It DOES depend on the `cargo_pmcp` lib crate's
+//! `#[doc(hidden)] pmcp_run_graphql` seam for the pure SDL-extraction helpers
+//! (`extract_capture_sdl`, `assert_capture_ops_present`,
+//! `strip_provenance_header`), which live there so their unit tests run
+//! under the default `cargo test -p cargo-pmcp`.
 
 use anyhow::{Context, Result};
+use cargo_pmcp::pmcp_run_graphql::{
+    assert_capture_ops_present, extract_capture_sdl, strip_provenance_header,
+};
 use clap::{Parser, Subcommand};
 use serde_json::Value;
 use std::path::PathBuf;
@@ -349,210 +362,18 @@ async fn introspect_source_schema(source_url: &str, token: &str) -> Result<Value
 }
 
 // ============================================================================
-// Step 3: the right-endpoint assertion (source vs merged API)
-// ============================================================================
-
-/// Guard against introspecting the wrong (merged) endpoint: assert the
-/// introspected schema actually contains both capture ops.
-fn assert_capture_ops_present(schema_data: &Value, source_url: &str) -> Result<()> {
-    if schema_has_capture_ops(schema_data) {
-        Ok(())
-    } else {
-        anyhow::bail!(
-            "error: introspected schema has no capture ops — wrong endpoint? expected the \
-             source data API (amplifyData) behind api_url, got {source_url}"
-        )
-    }
-}
-
-/// Pure check: does `schema_data["__schema"]` contain both
-/// `Mutation.submitPackageCapture` and `Query.getPackageCaptureStatus`?
-fn schema_has_capture_ops(schema_data: &Value) -> bool {
-    (|| -> Option<bool> {
-        let schema = schema_data.get("__schema")?;
-        let types = schema.get("types")?.as_array()?;
-        let mutation_name = schema.get("mutationType")?.get("name")?.as_str()?;
-        let query_name = schema.get("queryType")?.get("name")?.as_str()?;
-        let mutation_type = find_type(types, mutation_name)?;
-        let query_type = find_type(types, query_name)?;
-        let has_submit = find_field(mutation_type, "submitPackageCapture").is_some();
-        let has_status = find_field(query_type, "getPackageCaptureStatus").is_some();
-        Some(has_submit && has_status)
-    })()
-    .unwrap_or(false)
-}
-
-// ============================================================================
-// Step 2: the pure subset extractor
-// ============================================================================
-
-/// From an introspected schema (`schema_json["__schema"]`), select ONLY the
-/// `Mutation.submitPackageCapture` and `Query.getPackageCaptureStatus`
-/// fields, their argument types, and the two OBJECT types they return, and
-/// render the result as SDL.
-///
-/// Pure and offline-testable — no network, no auth. `status` fields render
-/// as whatever SCALAR the schema says (always `String` in practice) — this
-/// function never invents an enum.
-fn extract_capture_sdl(schema_json: &Value) -> Result<String> {
-    let schema = schema_json
-        .get("__schema")
-        .context("introspection response missing __schema key")?;
-    let types = schema
-        .get("types")
-        .and_then(Value::as_array)
-        .context("__schema missing types[]")?;
-
-    let mutation_type_name = schema
-        .get("mutationType")
-        .and_then(|m| m.get("name"))
-        .and_then(Value::as_str)
-        .context("__schema missing mutationType.name")?;
-    let query_type_name = schema
-        .get("queryType")
-        .and_then(|q| q.get("name"))
-        .and_then(Value::as_str)
-        .context("__schema missing queryType.name")?;
-
-    let mutation_type = find_type(types, mutation_type_name)
-        .with_context(|| format!("Mutation type '{mutation_type_name}' not found in types[]"))?;
-    let query_type = find_type(types, query_type_name)
-        .with_context(|| format!("Query type '{query_type_name}' not found in types[]"))?;
-
-    let submit_field = find_field(mutation_type, "submitPackageCapture")
-        .context("submitPackageCapture field not found on the Mutation type — wrong endpoint?")?;
-    let status_field = find_field(query_type, "getPackageCaptureStatus")
-        .context("getPackageCaptureStatus field not found on the Query type — wrong endpoint?")?;
-
-    let submit_type_ref = submit_field.get("type").unwrap_or(&Value::Null);
-    let status_type_ref = status_field.get("type").unwrap_or(&Value::Null);
-
-    let submit_ret_name = unwrap_named_type(submit_type_ref)
-        .context("submitPackageCapture return type could not be resolved to a named type")?;
-    let status_ret_name = unwrap_named_type(status_type_ref)
-        .context("getPackageCaptureStatus return type could not be resolved to a named type")?;
-
-    let submit_ret_type = find_type(types, submit_ret_name)
-        .with_context(|| format!("return type '{submit_ret_name}' not found in types[]"))?;
-    let status_ret_type = find_type(types, status_ret_name)
-        .with_context(|| format!("return type '{status_ret_name}' not found in types[]"))?;
-
-    let mut sdl = String::new();
-    sdl.push_str(&render_object_type(submit_ret_type));
-    sdl.push('\n');
-    sdl.push_str(&render_object_type(status_ret_type));
-    sdl.push('\n');
-    sdl.push_str(&format!(
-        "type {mutation_type_name} {{\n  submitPackageCapture({}): {}\n}}\n",
-        render_args(submit_field),
-        render_type_ref(submit_type_ref)
-    ));
-    sdl.push('\n');
-    sdl.push_str(&format!(
-        "type {query_type_name} {{\n  getPackageCaptureStatus({}): {}\n}}\n",
-        render_args(status_field),
-        render_type_ref(status_type_ref)
-    ));
-
-    Ok(sdl)
-}
-
-// ============================================================================
-// Introspection-JSON helpers (shared by extraction + the endpoint guard)
-// ============================================================================
-
-/// Find a type by name in `__schema.types[]`.
-fn find_type<'a>(types: &'a [Value], name: &str) -> Option<&'a Value> {
-    types
-        .iter()
-        .find(|t| t.get("name").and_then(Value::as_str) == Some(name))
-}
-
-/// Find a field by name on a type's `fields[]`.
-fn find_field<'a>(type_obj: &'a Value, field_name: &str) -> Option<&'a Value> {
-    type_obj
-        .get("fields")?
-        .as_array()?
-        .iter()
-        .find(|f| f.get("name").and_then(Value::as_str) == Some(field_name))
-}
-
-/// Render a GraphQL introspection type-ref as SDL, unwrapping `NON_NULL`/
-/// `LIST` nesting: `T`, `T!`, `[T]`, `[T!]!`, etc.
-fn render_type_ref(t: &Value) -> String {
-    match t.get("kind").and_then(Value::as_str) {
-        Some("NON_NULL") => format!(
-            "{}!",
-            render_type_ref(t.get("ofType").unwrap_or(&Value::Null))
-        ),
-        Some("LIST") => format!(
-            "[{}]",
-            render_type_ref(t.get("ofType").unwrap_or(&Value::Null))
-        ),
-        _ => t
-            .get("name")
-            .and_then(Value::as_str)
-            .unwrap_or("Unknown")
-            .to_string(),
-    }
-}
-
-/// Unwrap `NON_NULL`/`LIST` nesting down to the innermost named type (used to
-/// resolve a field's return OBJECT type for lookup in `types[]`).
-fn unwrap_named_type(t: &Value) -> Option<&str> {
-    match t.get("kind").and_then(Value::as_str) {
-        Some("NON_NULL") | Some("LIST") => unwrap_named_type(t.get("ofType")?),
-        _ => t.get("name").and_then(Value::as_str),
-    }
-}
-
-/// Render a field's `args[]` as a comma-separated SDL argument list.
-fn render_args(field: &Value) -> String {
-    let Some(args) = field.get("args").and_then(Value::as_array) else {
-        return String::new();
-    };
-    args.iter()
-        .map(|a| {
-            let name = a.get("name").and_then(Value::as_str).unwrap_or("");
-            let ty = render_type_ref(a.get("type").unwrap_or(&Value::Null));
-            format!("{name}: {ty}")
-        })
-        .collect::<Vec<_>>()
-        .join(", ")
-}
-
-/// Render an OBJECT type's `fields[]` (deterministic, introspection order) as
-/// a `type Name { ... }` SDL block.
-fn render_object_type(type_obj: &Value) -> String {
-    let name = type_obj
-        .get("name")
-        .and_then(Value::as_str)
-        .unwrap_or("Unknown");
-    let mut out = format!("type {name} {{\n");
-    if let Some(fields) = type_obj.get("fields").and_then(Value::as_array) {
-        for f in fields {
-            let fname = f.get("name").and_then(Value::as_str).unwrap_or("");
-            let fty = render_type_ref(f.get("type").unwrap_or(&Value::Null));
-            out.push_str(&format!("  {fname}: {fty}\n"));
-        }
-    }
-    out.push_str("}\n");
-    out
-}
-
-// ============================================================================
 // `check` mode helpers
 // ============================================================================
-
-/// Strip a vendored contract file's leading provenance header: lines
-/// starting with `#` and blank lines before the first SDL token.
-fn strip_provenance_header(content: &str) -> String {
-    content
-        .lines()
-        .skip_while(|line| line.trim().is_empty() || line.trim_start().starts_with('#'))
-        .collect::<Vec<_>>()
-        .join("\n")
-}
+//
+// NOTE: `assert_capture_ops_present`, `extract_capture_sdl`, and
+// `strip_provenance_header` moved to
+// `cargo-pmcp/src/deployment/targets/pmcp_run/graphql_contract.rs` (the
+// already-dual-mounted shared leaf) along with their pure helpers
+// (`find_type`, `find_field`, `render_type_ref`, `unwrap_named_type`,
+// `render_args`, `render_object_type`) and their unit tests, so those tests
+// run under the default `cargo test -p cargo-pmcp` even though this binary
+// is now feature-gated behind `capture-contract-tool`. Imported above via
+// `cargo_pmcp::pmcp_run_graphql::*`.
 
 /// Normalize an SDL body for comparison: trim trailing whitespace per line,
 /// trim leading/trailing blank lines. Still a plain string/line comparison —
@@ -593,182 +414,12 @@ fn print_line_diff(vendored: &str, live: &str) {
 // ============================================================================
 // Tests
 // ============================================================================
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// A canned `__schema` introspection fixture (the shape
-    /// `extract_capture_sdl` expects: a `data`-object-like value carrying a
-    /// top-level `__schema` key) modeled on the CLI's real
-    /// `submitPackageCapture`/`getPackageCaptureStatus` operations
-    /// (`cargo-pmcp/src/deployment/targets/pmcp_run/graphql.rs`).
-    fn capture_schema_fixture() -> Value {
-        serde_json::json!({
-            "__schema": {
-                "queryType": { "name": "Query" },
-                "mutationType": { "name": "Mutation" },
-                "types": [
-                    {
-                        "kind": "OBJECT",
-                        "name": "Mutation",
-                        "fields": [
-                            {
-                                "name": "submitPackageCapture",
-                                "args": [
-                                    { "name": "rootComponentType", "type": non_null(scalar("String")) },
-                                    { "name": "rootComponentId", "type": non_null(scalar("String")) },
-                                    { "name": "version", "type": non_null(scalar("String")) },
-                                    { "name": "bump", "type": scalar("String") },
-                                ],
-                                "type": non_null(object_ref("CaptureInfo")),
-                            }
-                        ],
-                    },
-                    {
-                        "kind": "OBJECT",
-                        "name": "Query",
-                        "fields": [
-                            {
-                                "name": "getPackageCaptureStatus",
-                                "args": [
-                                    { "name": "id", "type": non_null(scalar("ID")) },
-                                ],
-                                "type": object_ref("CaptureStatus"),
-                            }
-                        ],
-                    },
-                    {
-                        "kind": "OBJECT",
-                        "name": "CaptureInfo",
-                        "fields": [
-                            { "name": "captureId", "args": [], "type": non_null(scalar("String")) },
-                            { "name": "status", "args": [], "type": non_null(scalar("String")) },
-                            { "name": "createdAt", "args": [], "type": non_null(scalar("String")) },
-                        ],
-                    },
-                    {
-                        "kind": "OBJECT",
-                        "name": "CaptureStatus",
-                        "fields": [
-                            { "name": "id", "args": [], "type": non_null(scalar("ID")) },
-                            { "name": "status", "args": [], "type": scalar("String") },
-                            { "name": "message", "args": [], "type": scalar("String") },
-                            { "name": "errorCode", "args": [], "type": scalar("String") },
-                            { "name": "divergentComponents", "args": [], "type": list(non_null(scalar("String"))) },
-                            { "name": "manifestDigest", "args": [], "type": scalar("String") },
-                            { "name": "updatedAt", "args": [], "type": scalar("String") },
-                        ],
-                    },
-                ],
-            }
-        })
-    }
-
-    fn scalar(name: &str) -> Value {
-        serde_json::json!({ "kind": "SCALAR", "name": name, "ofType": null })
-    }
-
-    fn object_ref(name: &str) -> Value {
-        serde_json::json!({ "kind": "OBJECT", "name": name, "ofType": null })
-    }
-
-    fn non_null(inner: Value) -> Value {
-        serde_json::json!({ "kind": "NON_NULL", "name": null, "ofType": inner })
-    }
-
-    fn list(inner: Value) -> Value {
-        serde_json::json!({ "kind": "LIST", "name": null, "ofType": inner })
-    }
-
-    #[test]
-    fn extract_capture_sdl_renders_expected_shape() {
-        let sdl =
-            extract_capture_sdl(&capture_schema_fixture()).expect("extraction should succeed");
-
-        // The two ops, rendered on the Mutation/Query root types.
-        assert!(
-            sdl.contains("type Mutation {"),
-            "missing Mutation block:\n{sdl}"
-        );
-        assert!(
-            sdl.contains("submitPackageCapture("),
-            "missing submitPackageCapture:\n{sdl}"
-        );
-        assert!(sdl.contains("type Query {"), "missing Query block:\n{sdl}");
-        assert!(
-            sdl.contains("getPackageCaptureStatus(id: ID!)"),
-            "missing getPackageCaptureStatus(id: ID!):\n{sdl}"
-        );
-
-        // status is ALWAYS String, never an invented enum.
-        assert!(
-            sdl.contains("status: String") || sdl.contains("status: String!"),
-            "status must render as String (never an enum):\n{sdl}"
-        );
-        assert!(
-            !sdl.to_lowercase().contains("enum"),
-            "must not invent an enum type:\n{sdl}"
-        );
-
-        // Submit return type (CaptureInfo-equivalent) carries captureId + createdAt.
-        assert!(sdl.contains("captureId"), "missing captureId:\n{sdl}");
-        assert!(sdl.contains("createdAt"), "missing createdAt:\n{sdl}");
-
-        // Status return type (CaptureStatus-equivalent) carries id + updatedAt.
-        assert!(
-            sdl.contains("type CaptureStatus {"),
-            "missing CaptureStatus type:\n{sdl}"
-        );
-        assert!(sdl.contains("updatedAt"), "missing updatedAt:\n{sdl}");
-    }
-
-    #[test]
-    fn extract_capture_sdl_preserves_captureid_vs_id_distinction() {
-        // captureId (submit return) and id (status return) must not collapse
-        // into the same field name — regression guard for the extractor
-        // accidentally merging the two return types.
-        let sdl = extract_capture_sdl(&capture_schema_fixture()).unwrap();
-        assert!(sdl.contains("captureId: String!"), "got:\n{sdl}");
-        assert!(sdl.contains("id: ID!"), "got:\n{sdl}");
-    }
-
-    #[test]
-    fn assert_capture_ops_present_succeeds_when_ops_present() {
-        assert!(assert_capture_ops_present(
-            &capture_schema_fixture(),
-            "https://source.example/graphql"
-        )
-        .is_ok());
-    }
-
-    #[test]
-    fn assert_capture_ops_present_fails_on_wrong_endpoint() {
-        // A schema that simply lacks the two capture ops (e.g. introspecting
-        // the merged/default API instead of the source data API).
-        let wrong_endpoint_schema = serde_json::json!({
-            "__schema": {
-                "queryType": { "name": "Query" },
-                "mutationType": { "name": "Mutation" },
-                "types": [
-                    { "kind": "OBJECT", "name": "Mutation", "fields": [] },
-                    { "kind": "OBJECT", "name": "Query", "fields": [] },
-                ],
-            }
-        });
-
-        let err =
-            assert_capture_ops_present(&wrong_endpoint_schema, "https://merged.example/graphql")
-                .expect_err("must fail when capture ops are absent");
-        let msg = err.to_string();
-        assert!(msg.contains("wrong endpoint?"), "got: {msg}");
-        assert!(msg.contains("https://merged.example/graphql"), "got: {msg}");
-    }
-
-    #[test]
-    fn strip_provenance_header_skips_comments_and_blank_lines() {
-        let content = "# header line 1\n# header line 2\n\ntype Mutation {\n  foo: String\n}\n";
-        let body = strip_provenance_header(content);
-        assert_eq!(body, "type Mutation {\n  foo: String\n}");
-    }
-}
+//
+// The unit tests that used to live here (covering `extract_capture_sdl` /
+// `assert_capture_ops_present` / `strip_provenance_header`) moved along with
+// those functions to
+// `cargo-pmcp/src/deployment/targets/pmcp_run/graphql_contract.rs` — see the
+// note above `check`-mode helpers. This keeps that coverage running under
+// the default `cargo test -p cargo-pmcp` (lib target) even though this
+// binary itself now requires the non-default `capture-contract-tool`
+// feature.

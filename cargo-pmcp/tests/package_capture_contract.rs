@@ -64,6 +64,15 @@ fn status_field_is_string_not_enum() {
 
 /// The response structs' GraphQL field names must exactly equal each op's
 /// selection set (struct <-> query <-> schema all agree).
+///
+/// NOTE: this greps the hardcoded field-name lists below against the query
+/// STRINGS, not the actual `CaptureInfo`/`CaptureStatus` Rust struct
+/// definitions — it does NOT parse those structs. The query itself is
+/// separately validated against the vendored SDL by
+/// `capture_ops_validate_against_contract` (apollo-compiler, field-existence
+/// + type checking). So this test is a drift sanity check on the selection
+/// set, not a full struct-vs-schema proof: a struct-only serde `rename` with
+/// no accompanying query change would go uncaught here.
 #[test]
 fn response_structs_match_selection_sets() {
     // CaptureInfo (submit) selects: captureId, status, createdAt

@@ -32,6 +32,18 @@ test = false
 bench = false
 doctest = false
 
+# Package-capture contract seam (Finding 1, final-review fix wave): internal
+# M2M-auth introspection dev tool, NOT meant to ship to end users. Without an
+# explicit [[bin]] + `required-features`, Cargo auto-discovers every file
+# under src/bin/ as a default [[bin]], so `cargo install cargo-pmcp` would
+# install this onto users' PATH. `required-features` makes the default build
+# (and thus `cargo install` with default features) skip it entirely; it only
+# builds with `--features capture-contract-tool`.
+[[bin]]
+name = "capture_contract"
+path = "src/bin/capture_contract.rs"
+required-features = ["capture-contract-tool"]
+
 [dependencies]
 clap = { version = "4", features = ["derive", "env"] }
 clap_complete = "4"
@@ -126,3 +138,7 @@ apollo-compiler = "1"
 [features]
 default = []
 aws-secrets = ["aws-config", "aws-sdk-secretsmanager"]
+# Gates the `capture_contract` internal dev binary (see its [[bin]] entry
+# above and its module doc) — a manual M2M-auth GraphQL introspection aid,
+# not intended for end-user installs.
+capture-contract-tool = []

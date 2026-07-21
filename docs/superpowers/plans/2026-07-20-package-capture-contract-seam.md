@@ -4,17 +4,17 @@
 
 **Goal:** Bind `cargo pmcp package capture`'s two GraphQL operations to a versioned, platform-owned SDL contract enforced by a blocking test, so the CLI and pmcp.run cannot silently drift.
 
-**Architecture:** Approach B — vendored SDL + contract test, no runtime codegen. A `capture-v1.graphql` SDL subset is **generated from the live source data API** and checked in. An offline blocking test validates the CLI's actual runtime query strings and response structs against that SDL. A scheduled, M2M-authed online job re-introspects the live source API and diffs it against the vendored SDL to flag platform-ahead drift. One shared introspect+extract tool powers both generation and the online diff.
+**Architecture:** Approach B — vendored SDL + contract test, no runtime codegen. A `capture-v1.graphql` SDL subset is **platform-exported from the live source data API** and checked in. An offline blocking test validates the CLI's actual runtime query strings and response structs against that SDL. The online drift check is **PLATFORM-OWNED**: the platform introspects the source API it alone can reach and PRs the vendored SDL on drift; the SDK ships no scheduled job. One shared introspect+extract tool (`capture_contract`) remains in the SDK repo as a manual dev aid, reused for local generation and available to whoever runs the platform-side diff.
 
-**Tech Stack:** Rust, `reqwest` (existing hand-rolled GraphQL), `apollo-compiler` (new dev-dependency, operation-vs-schema validation), the existing `auth.rs` client_credentials (M2M) flow, GitHub Actions.
+**Tech Stack:** Rust, `reqwest` (existing hand-rolled GraphQL), `apollo-compiler` (new dev-dependency, operation-vs-schema validation), the existing `auth.rs` client_credentials (M2M) flow — used only by the manual `capture_contract` dev tool, not by any SDK CI workflow.
 
 ## Global Constraints
 
 - **Binding approach B only** — no `graphql-client`/`cynic` runtime codegen; the two ops stay hand-written in `graphql.rs`.
 - **`status` is typed `String`** in the SDL (NOT a GraphQL `enum`); known values live as an SDL doc-comment. A `status` enum is explicitly deferred to a future `capture-v2` (out of scope).
-- **The SDL is generated from the live schema, never hand-authored.**
+- **The SDL is platform-exported from the live schema, never hand-authored.**
 - **The contract's return types must preserve the asymmetry exactly:** `submitPackageCapture` → `captureId` + `createdAt`; `getPackageCaptureStatus` → `id` + `updatedAt`.
-- **Online job auth = M2M** (`PMCP_CLIENT_ID`/`PMCP_CLIENT_SECRET`), never the PKCE user token; it must introspect the **source data API behind `api_url`** (capture ops live in `amplifyData`), never the merged API.
+- **The online drift check is platform-owned**, not an SDK-side job: they introspect the **source `amplifyData` API** (capture ops live there, never the merged API) and PR the vendored SDL on drift. The SDK's `capture_contract` dev tool still authenticates via M2M (`PMCP_CLIENT_ID`/`PMCP_CLIENT_SECRET`, never the PKCE user token) for its manual local-generation use.
 - **Offline contract test is blocking (normal CI); online drift job is non-blocking/scheduled.**
 - All work is on branch `feat/package-remote-capture-show` in worktree `~/Development/mcp/sdk/rust-mcp-sdk-package-capture`. Paths below are relative to that worktree root.
 - Commit after every task. Match existing repo style (`cargo fmt`, clippy clean).
@@ -112,7 +112,7 @@ One reusable command that authenticates (M2M), introspects the **source data API
 
 - [ ] **Step 5: Manual smoke (requires dev M2M creds; skip in offline CI)**
 
-Run: `PMCP_CLIENT_ID=… PMCP_CLIENT_SECRET=… PMCP_SOURCE_GRAPHQL_URL=<source-api> cargo run -p cargo-pmcp --bin capture_contract -- emit`
+Run: `PMCP_CLIENT_ID=… PMCP_CLIENT_SECRET=… PMCP_SOURCE_GRAPHQL_URL=<source-api> cargo run -p cargo-pmcp --features capture-contract-tool --bin capture_contract -- emit`
 Expected: prints an SDL block containing `submitPackageCapture`, `getPackageCaptureStatus`, `status: String`, `captureId`, `createdAt`, `id`, `updatedAt`.
 
 - [ ] **Step 6: Commit**
@@ -142,7 +142,7 @@ mkdir -p contracts/pmcp-run
   echo "#       extracting, publishing, completed, failed, not_found."
   echo ""
   PMCP_CLIENT_ID=… PMCP_CLIENT_SECRET=… PMCP_SOURCE_GRAPHQL_URL=<source-api> \
-    cargo run -q -p cargo-pmcp --bin capture_contract -- emit
+    cargo run -q -p cargo-pmcp --features capture-contract-tool --bin capture_contract -- emit
 } > contracts/pmcp-run/capture-v1.graphql
 ```
 
