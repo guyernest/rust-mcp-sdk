@@ -151,3 +151,25 @@ pub mod workbook_explain;
 #[doc(hidden)]
 #[path = "commands/package/kind.rs"]
 pub mod package_kind;
+
+// Package-capture contract test seam (170-08 Task 3; extended in the
+// final-review fix wave with pure SDL-extraction helpers): expose the two
+// dependency-light capture GraphQL query consts, plus the pure,
+// IO-free SDL-extraction helpers (`extract_capture_sdl`,
+// `assert_capture_ops_present`, `strip_provenance_header`), to the lib target
+// (mirrors the `package_kind` / `templates_agent` `#[path]` convention).
+// `graphql_contract.rs` references only `&str` literals plus `anyhow`/
+// `serde_json` (NO `reqwest`/oauth2/the bin-only `pmcp_run` auth+deploy tree
+// that the rest of `deployment/targets/pmcp_run/graphql.rs` depends on), so
+// it compiles in the lib target on its own. This lets the offline blocking
+// contract test (`tests/package_capture_contract.rs`) validate the real
+// runtime `submitPackageCapture`/`getPackageCaptureStatus` queries against
+// the vendored SDL (`contracts/pmcp-run/capture-v1.graphql`) without pulling
+// in the bin-only command layer, AND lets the feature-gated `capture_contract`
+// dev binary (`src/bin/capture_contract.rs`) reuse these pure helpers (and
+// their unit tests run under the default `cargo test -p cargo-pmcp`) without
+// linking the bin-only `deployment` module tree.
+// `#[doc(hidden)]`: an internal test-facing seam, not a stable public API.
+#[doc(hidden)]
+#[path = "deployment/targets/pmcp_run/graphql_contract.rs"]
+pub mod pmcp_run_graphql;

@@ -5,6 +5,42 @@ All notable changes to the `cargo-pmcp` crate will be documented in this file.
 The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html).
 
+## [0.19.0] - 2026-07-20
+
+### Added
+
+- **Remote package-lifecycle verbs** — `cargo pmcp package capture` (plus its
+  `import` / `approve` siblings). These are **thin clients** of pmcp.run's
+  remote, already-deployed platform API: `capture` submits a team's workflow
+  dependency graph as an async job (`submitPackageCapture`) and polls
+  `getPackageCaptureStatus` to a terminal status, printing the resulting
+  `pmcp-package` manifest digest. All substantive work (graph walk, config-slot
+  extraction, OCI pack, ECR push) runs server-side; the CLI never performs the
+  walk. Verified end-to-end against the dev platform (deterministic manifest
+  digest across re-runs).
+- **Package-capture contract seam** — a versioned, platform-owned GraphQL
+  contract (`contracts/pmcp-run/capture-v1.graphql`, exported from the live
+  platform schema) plus an **offline blocking contract test**
+  (`tests/package_capture_contract.rs`, `apollo-compiler` dev-dependency) that
+  validates the CLI's two capture operations and their response structs against
+  the vendored SDL. A future platform schema change that the CLI hasn't tracked
+  fails the SDK build, so the thin client can never silently drift from the
+  platform API (the Phase-110 failure class). The online drift check is
+  platform-owned (the platform re-exports and PRs the SDL on change).
+
+### Changed
+
+- **`capture_contract` internal introspection tool is now feature-gated** behind
+  a non-default `capture-contract-tool` feature, so `cargo install cargo-pmcp`
+  no longer installs it onto users' `PATH`. Its pure SDL-extraction logic + unit
+  tests moved into the library so they still run under the default test gate.
+
+### Fixed
+
+- **`package capture <TEAM_ID>` help text** no longer claims the id is a UUID.
+  The argument is an AgentTeam **slug** id (e.g. `day-trip-planner-team`); the
+  corrected `--help` / `long_help` say so.
+
 ## [0.17.2] - 2026-07-08
 
 ### Changed
