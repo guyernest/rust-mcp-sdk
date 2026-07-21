@@ -20,6 +20,7 @@ All four verbs — `capture`, `show`, `import`, `approve` — live on one branch
 - [ ] Confirm PR [#303](https://github.com/paiml/rust-mcp-sdk/pull/303) (`ci(release): publish pmcp-package/agent/team-servers before cargo-pmcp`) is **merged**. It fixes a `release.yml` crate-ordering bug where `cargo-pmcp` published before its `pmcp-agent` / `pmcp-package` dependencies. As of this writing it is **still open** — do not tag a release relying on the automated publish order until it merges; if it's still open when you get here, either land it first or manually verify/adjust the publish order in `release.yml`.
 - [ ] You have either interactive pmcp.run credentials (for `cargo pmcp login`) or M2M env credentials for the dev environment, for the E2E phase.
 - [ ] You know which AgentTeam **slug id** (not UUID) you'll capture against for the E2E run (e.g. `day-trip-planner-team`).
+- [ ] **`import` E2E is green before you tag.** The release ships `capture`/`show`/`import`/`approve` together, but `import`'s happy path (`completed_dry_run` → the rendered pre-flight disposition table) had **never** run live as of 2026-07-21 — it was blocked server-side by the per-component pull-by-payload-digest bug (pmcp.run Phase-171 handoff `171-HANDOFF-import-component-pull-digest.md`; FIX #1 is platform-only, in their import Lambda `pull.rs`, no SDK change). The CLI verb is a correct thin client, but do not tag a release shipping a verb whose success path is unproven. Once the platform deploys their fix, run `cargo pmcp package import day-trip-planner-team@1.0.0` and confirm it returns `completed_dry_run` with all-`reuse` dispositions and a clean report. (`capture`/`approve` are already verified; this gate is `import`-specific.)
 - [ ] Use the **absolute git binary** (`/opt/homebrew/bin/git`) for every rebase/diff/status command in this runbook. The `rtk` shell proxy in this environment corrupts `git diff` / `git status` / `gh` output — a prior session lost time to this before identifying it. Prefer `/opt/homebrew/bin/gh` for the same reason if `gh` output looks garbled.
 
 ---
@@ -107,11 +108,15 @@ different URLs — do not conflate them:
   `https://6vlog1csj4.execute-api.us-east-1.amazonaws.com`. This is what
   `PMCP_API_URL` wants (see Auth below); it is the API-Gateway base, **not** the
   GraphQL URL.
-- **GraphQL endpoint** the capture ops POST to (`graphql_url`, resolved from the
-  discovery cache) —
-  `https://nieihn7yhjbzldmrm6b74ndcha.appsync-api.us-east-1.amazonaws.com/graphql`.
-  The CLI resolves this from your cached config; **no `PMCP_RUN_GRAPHQL_URL`
-  override is needed.**
+- **GraphQL endpoint** the capture ops POST to (`graphql_url`) — **the CLI
+  resolves this dynamically from your discovery cache; do not hardcode it.** In
+  one 2026-07 dev config it was an `…appsync-api.us-east-1.amazonaws.com/graphql`
+  merged-API URL, but the platform team has flagged specific merged-API ids as
+  rotating/dead (e.g. `nieihn7yhjbzldmrm6b74ndcha`, `pn5dorma2bdhzcdhascvc4xzka`
+  — the latter also being a wrong SDL-introspection source; the authoritative
+  source data API is `amplifyData` apiId `q3gd4hrbabeytc2o2zazld6igy`). So rely
+  on discovery: **no `PMCP_RUN_GRAPHQL_URL` override is needed**, and don't paste
+  a specific merged-API id anywhere as if it were stable.
 
 **Auth — the `PMCP_API_URL` token-refresh gotcha (real snag).** A fresh
 `cargo pmcp login` works, but when the cached **access token expires**, the
