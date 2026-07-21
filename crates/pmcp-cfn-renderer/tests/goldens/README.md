@@ -81,3 +81,11 @@ export PMCP_RUN_REPO=/path/to/pmcp-run
 
 Needs `node`/`npm`/`npx`, `jq`, `cargo`, and the `aws` CLI (used only as a
 harmless no-op — see the script's header comment). Never run in CI.
+
+## Cross-crate publish coupling (release sequencing)
+
+The `[auth.cognito]` field promotion (Task 2) extended `pmcp-package`'s
+closed set — bumped to **0.1.1** on this branch. The published `0.1.0`
+REJECTS `[auth.cognito]`-bearing descriptors (`deny_unknown_fields`), so
+`pmcp-package 0.1.1` must publish **before or with** `pmcp-cfn-renderer`
+(Task 10 wires the order into release.yml + CLAUDE.md item 13/13a).
