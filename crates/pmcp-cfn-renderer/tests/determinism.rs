@@ -18,11 +18,18 @@ fn minimal_descriptor() -> pmcp_package::package::DeployDescriptor {
     // draft fails to parse under `deny_unknown_fields`. This fixture matches
     // the real tracked `crates/pmcp-server/.pmcp/deploy.toml` shape, trimmed
     // to only the required fields.
+    //
+    // `[target].type = "pmcp-run"` (not the Task 1 draft's "aws-lambda"):
+    // Task 3's `render` guards non-"pmcp-run" targets with
+    // `RenderError::UnsupportedSection` (that stack shape needs the
+    // not-yet-implemented `http_api` module) — this determinism test needs
+    // `render` to actually succeed, so it uses the one target shape that
+    // renders today.
     toml::from_str(
         r#"
         [target]
-        type = "aws-lambda"
-        version = "1"
+        type = "pmcp-run"
+        version = "1.0.0"
         [aws]
         region = "us-east-1"
         [server]

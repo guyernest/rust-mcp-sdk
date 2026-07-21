@@ -36,6 +36,14 @@ pub fn for_execution_role() -> &'static str {
     "ExecutionRole"
 }
 
+/// Logical ID for the execution role's default inline policy — CDK renders
+/// a Lambda's attached (`addToRolePolicy`) permissions as a SEPARATE
+/// `AWS::IAM::Policy` resource, not inline `Policies:` on the role itself.
+#[must_use]
+pub fn for_execution_policy() -> &'static str {
+    "ExecutionRoleDefaultPolicy"
+}
+
 /// Logical ID for the HTTP API (API Gateway v2 `AWS::ApiGatewayV2::Api`).
 #[must_use]
 pub fn for_http_api() -> &'static str {
@@ -94,6 +102,12 @@ mod tests {
     #[test]
     fn for_execution_role_is_stable() {
         assert_eq!(for_execution_role(), "ExecutionRole");
+    }
+
+    #[test]
+    fn for_execution_policy_is_stable_and_distinct_from_the_role() {
+        assert_eq!(for_execution_policy(), "ExecutionRoleDefaultPolicy");
+        assert_ne!(for_execution_policy(), for_execution_role());
     }
 
     #[test]

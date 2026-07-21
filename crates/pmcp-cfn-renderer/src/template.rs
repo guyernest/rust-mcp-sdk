@@ -40,6 +40,18 @@ pub struct CfnOutput {
     /// The output's value (an intrinsic-function `Value`, e.g. `{"Fn::GetAtt": [...]}`).
     #[serde(rename = "Value")]
     pub value: serde_json::Value,
+    /// Cross-stack export, when this output is meant to be consumed by
+    /// downstream stacks (e.g. `McpRoleArn`). Omitted entirely when absent.
+    #[serde(rename = "Export", skip_serializing_if = "Option::is_none")]
+    pub export: Option<CfnExport>,
+}
+
+/// A CloudFormation `Export` block: `{"Name": "..."}`.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct CfnExport {
+    /// The exported name, importable from other stacks via `Fn::ImportValue`.
+    #[serde(rename = "Name")]
+    pub name: String,
 }
 
 /// A rendered CloudFormation template.
@@ -102,6 +114,7 @@ mod tests {
             CfnOutput {
                 description: Some("The function's ARN".to_string()),
                 value: serde_json::json!({"Fn::GetAtt": ["McpFunction", "Arn"]}),
+                export: None,
             },
         );
         CfnTemplate {

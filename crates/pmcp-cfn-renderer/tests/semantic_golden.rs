@@ -13,19 +13,19 @@
 //! goldens only change by regenerating from cdk via
 //! `scripts/generate-cfn-goldens.sh`).
 //!
-//! `all_goldens_match_renderer_output` is `#[ignore]`d as of Task 2: the
-//! renderer (Task 1's skeleton) always returns an empty-resource template,
-//! so it necessarily fails against `tests/goldens/plain-lambda.golden.json`
-//! (the only active — i.e. non-`pending/` — golden this task commits). That
-//! failure IS Task 3's TDD driver: un-ignore this test as the first step of
-//! implementing the `lambda`/`logs`/`outputs` modules.
+//! `all_goldens_match_renderer_output` runs unconditionally as of Task 3:
+//! the `lambda`/`logs`/`outputs` modules (plus the base `iam` execution
+//! role/policy) make [`pmcp_cfn_renderer::render`] match
+//! `tests/goldens/plain-lambda.golden.json` (the only active — i.e.
+//! non-`pending/` — golden as of this task). The `pending/` goldens land as
+//! their resource-family modules (`iam`'s declared-statement expansion,
+//! `http_api`, `cognito`, `dynamodb`) are implemented in later tasks.
 
 mod support;
 
 use std::path::PathBuf;
 
 #[test]
-#[ignore = "activated in Task 3 — lambda/logs/outputs modules make the plain-lambda golden pass"]
 fn all_goldens_match_renderer_output() {
     let golden_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/goldens");
     let mut checked = 0usize;
