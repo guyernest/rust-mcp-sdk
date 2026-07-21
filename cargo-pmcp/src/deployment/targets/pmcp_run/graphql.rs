@@ -396,7 +396,10 @@ async fn execute_graphql<T>(
 where
     T: for<'de> Deserialize<'de>,
 {
-    let client = reqwest::Client::new();
+    // Process-wide client: reuses connections across calls (the capture poll
+    // loop hits this every 2s — a per-call client would redo TCP+TLS each time).
+    static CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+    let client = CLIENT.get_or_init(reqwest::Client::new);
     let graphql_url = get_graphql_url();
 
     let request = GraphQLRequest {
@@ -1247,4 +1250,457 @@ pub async fn upload_loadtest_scenario(
         execute_graphql(access_token, query, variables).await?;
 
     Ok(response.upload_loadtest_scenario)
+}
+
+// ============================================================================
+// Package capture service (170-08 D-A/D-B/D-D) — the `cargo pmcp package
+// capture|show` remote thin client. Mirrors the create_deployment_from_s3 /
+// get_deployment async-job idiom above for a second job type.
+// ============================================================================
+
+/// Response from `submitPackageCapture` mutation (170-08 D-A).
+#[derive(Debug, Deserialize)]
+#[allow(dead_code)]
+pub struct CaptureInfo {
+    #[serde(rename = "captureId")]
+    pub capture_id: String,
+    pub status: String,
+    #[serde(rename = "createdAt")]
+    pub created_at: String,
+}
+
+/// Status from `getPackageCaptureStatus` query — the STRUCTURED D-B error
+/// contract (170-02's landed platform contract). The caller switches on
+/// `error_code` and reads `divergent_components` directly; `message` is
+/// display-only and MUST NEVER be parsed to detect `BUMP_REQUIRED` or any
+/// other error condition.
+#[derive(Debug, Deserialize)]
+#[allow(dead_code)]
+pub struct CaptureStatus {
+    pub id: String,
+    pub status: String,
+    pub message: Option<String>,
+    #[serde(rename = "errorCode")]
+    pub error_code: Option<String>,
+    #[serde(rename = "divergentComponents")]
+    pub divergent_components: Option<Vec<String>>,
+    #[serde(rename = "manifestDigest")]
+    pub manifest_digest: Option<String>,
+    #[serde(rename = "updatedAt")]
+    pub updated_at: Option<String>,
+}
+
+/// Response from `getWorkflowPackageManifest` query — a published `WorkflowManifest`
+/// looked up by `name`+`version` (org-scoped server-side by the caller's own
+/// claim; the CLI never supplies an org id).
+#[derive(Debug, Deserialize)]
+#[allow(dead_code)]
+pub struct WorkflowPackageResp {
+    pub name: String,
+    pub version: String,
+    #[serde(rename = "manifestJson")]
+    pub manifest_json: String,
+    #[serde(rename = "manifestDigest")]
+    pub manifest_digest: String,
+}
+
+// The two runtime queries below live in `graphql_contract.rs` — a
+// dependency-light leaf that's also mounted directly into the `cargo-pmcp`
+// lib target (via `#[path]` in `lib.rs`) so the offline blocking contract
+// test (`tests/package_capture_contract.rs`) can validate them against the
+// vendored SDL without pulling this file's `reqwest`/auth/deploy tree into
+// the lib target. Re-exported here so the rest of this file (and any other
+// `pmcp_run` code) can keep referring to them unqualified.
+pub(crate) use super::graphql_contract::{
+    GET_PACKAGE_CAPTURE_STATUS_QUERY, SUBMIT_PACKAGE_CAPTURE_QUERY,
+};
+
+/// Submit an async package-capture job for a team's workflow dependency graph
+/// (170-08 D-A). `root_type` is always `"team"` in v1; `root_id` is the
+/// `AgentTeam` UUID. Never awaits the walk — returns the queued job id.
+pub async fn submit_package_capture(
+    access_token: &str,
+    root_type: &str,
+    root_id: &str,
+    version: &str,
+    bump: Option<&str>,
+) -> Result<CaptureInfo> {
+    let query = SUBMIT_PACKAGE_CAPTURE_QUERY;
+
+    let variables = serde_json::json!({
+        "rootComponentType": root_type,
+        "rootComponentId": root_id,
+        "version": version,
+        "bump": bump,
+    });
+
+    #[derive(Debug, Deserialize)]
+    struct SubmitPackageCaptureResponse {
+        #[serde(rename = "submitPackageCapture")]
+        submit_package_capture: Option<CaptureInfo>,
+    }
+
+    let response: SubmitPackageCaptureResponse =
+        execute_graphql(access_token, query, variables).await?;
+
+    response
+        .submit_package_capture
+        .context("submitPackageCapture returned null - check pmcp.run service logs")
+}
+
+/// Poll a package-capture job's status once (170-08 D-A/D-B). The caller is
+/// responsible for looping/sleeping between calls — this fn does a single
+/// consistent-read-backed fetch.
+pub async fn get_package_capture_status(
+    access_token: &str,
+    capture_id: &str,
+) -> Result<CaptureStatus> {
+    let query = GET_PACKAGE_CAPTURE_STATUS_QUERY;
+
+    let variables = serde_json::json!({
+        "id": capture_id
+    });
+
+    #[derive(Debug, Deserialize)]
+    struct GetPackageCaptureStatusResponse {
+        #[serde(rename = "getPackageCaptureStatus")]
+        get_package_capture_status: Option<CaptureStatus>,
+    }
+
+    let response: GetPackageCaptureStatusResponse =
+        execute_graphql(access_token, query, variables).await?;
+
+    response
+        .get_package_capture_status
+        .context("Capture job not found")
+}
+
+/// Fetch a published workflow manifest by `name`+`version` (170-08 D-D
+/// `package show`) — a plain org-scoped DDB read server-side, NOT ECR.
+pub async fn get_workflow_package(
+    access_token: &str,
+    name: &str,
+    version: &str,
+) -> Result<WorkflowPackageResp> {
+    let query = r#"
+        query GetWorkflowPackage($name: String!, $version: String!) {
+            getWorkflowPackageManifest(name: $name, version: $version) {
+                name
+                version
+                manifestJson
+                manifestDigest
+            }
+        }
+    "#;
+
+    let variables = serde_json::json!({
+        "name": name,
+        "version": version,
+    });
+
+    #[derive(Debug, Deserialize)]
+    struct GetWorkflowPackageResponse {
+        #[serde(rename = "getWorkflowPackageManifest")]
+        get_workflow_package: Option<WorkflowPackageResp>,
+    }
+
+    let response: GetWorkflowPackageResponse =
+        execute_graphql(access_token, query, variables).await?;
+
+    response
+        .get_workflow_package
+        .with_context(|| format!("WorkflowPackage not found: {name}@{version}"))
+}
+
+// ============================================================================
+// AI-Package import control plane (Phase 171 D-02/D-04/D-05) — the
+// `cargo pmcp package import|approve` remote thin client. Mirrors the
+// capture/show idiom above for a second async job type (`ImportJob`) plus
+// one-shot governance mutations. Reference-based ONLY: the caller supplies a
+// workflow `name@version` reference (or an `organizationId`+`name`+`version`
+// triple for the governance mutations) — NEVER a payload/OCI digest (Codex
+// #1 / T-171-25b). The server resolves both digests server-side.
+// ============================================================================
+
+/// Response from `submitImport` mutation (D-04). `status` is always
+/// `"queued"` on success.
+#[derive(Debug, Deserialize)]
+#[allow(dead_code)]
+pub struct ImportInfo {
+    #[serde(rename = "importId")]
+    pub import_id: String,
+    pub status: String,
+}
+
+/// Status from `getImportStatus` query. `preflight_report_json` carries the
+/// full Codex #7 disposition/deviation/allowlist/impact report once a
+/// terminal status is reached (`completed_dry_run` / `blocked` /
+/// `awaiting_bind`). `error_code` (NEVER `error_message`) is the only field
+/// the CLI switches on for a `"failed"` terminal status (T-171-26).
+#[derive(Debug, Deserialize)]
+#[allow(dead_code)]
+pub struct ImportStatus {
+    pub status: String,
+    #[serde(rename = "errorCode")]
+    pub error_code: Option<String>,
+    #[serde(rename = "errorMessage")]
+    pub error_message: Option<String>,
+    #[serde(rename = "preflightReportJson")]
+    pub preflight_report_json: Option<String>,
+}
+
+/// Response from the `approvePackage` mutation (D-06/D-08).
+#[derive(Debug, Deserialize)]
+#[allow(dead_code)]
+pub struct ApprovalInfo {
+    pub id: String,
+    #[serde(rename = "approvedAt")]
+    pub approved_at: String,
+}
+
+/// Response from the `revokeApprovedPackage` mutation (D-08 — append-only;
+/// the server flips a `revoked` flag rather than deleting the row).
+#[derive(Debug, Deserialize)]
+#[allow(dead_code)]
+pub struct RevocationInfo {
+    pub id: String,
+    #[serde(rename = "revokedAt")]
+    pub revoked_at: String,
+}
+
+/// Response from the `setPackageBinding` mutation (D-09/D-12). `status` is
+/// always `"binding"` on success — the job resumes asynchronously; the
+/// caller must poll `getImportStatus` to observe the real outcome.
+#[derive(Debug, Deserialize)]
+#[allow(dead_code)]
+pub struct BindingInfo {
+    #[serde(rename = "importId")]
+    pub import_id: String,
+    pub status: String,
+}
+
+/// Submit an async dry-run pre-flight import job for a workflow REFERENCE
+/// (D-02/D-04). ALWAYS sends `dryRun: true` — the server rejects any submit
+/// where `dryRun` is not explicitly `true` (171-07); there is no client-side
+/// way to request real execution this phase (deferred to Phase 172).
+pub async fn submit_package_import(access_token: &str, reference: &str) -> Result<ImportInfo> {
+    let query = r#"
+        mutation SubmitImport($reference: String!, $dryRun: Boolean) {
+            submitImport(reference: $reference, dryRun: $dryRun) {
+                importId
+                status
+            }
+        }
+    "#;
+
+    let variables = serde_json::json!({
+        "reference": reference,
+        "dryRun": true,
+    });
+
+    #[derive(Debug, Deserialize)]
+    struct SubmitImportResponse {
+        #[serde(rename = "submitImport")]
+        submit_import: Option<ImportInfo>,
+    }
+
+    let response: SubmitImportResponse = execute_graphql(access_token, query, variables).await?;
+
+    response
+        .submit_import
+        .context("submitImport returned null - check pmcp.run service logs")
+}
+
+/// Poll an import job's status once (D-04). The caller is responsible for
+/// looping/sleeping between calls — this fn does a single
+/// consistent-read-backed fetch.
+pub async fn get_import_status(access_token: &str, import_id: &str) -> Result<ImportStatus> {
+    let query = r#"
+        query GetImportStatus($importId: String!) {
+            getImportStatus(importId: $importId) {
+                status
+                errorCode
+                errorMessage
+                preflightReportJson
+            }
+        }
+    "#;
+
+    let variables = serde_json::json!({
+        "importId": import_id,
+    });
+
+    #[derive(Debug, Deserialize)]
+    struct GetImportStatusResponse {
+        #[serde(rename = "getImportStatus")]
+        get_import_status: Option<ImportStatus>,
+    }
+
+    let response: GetImportStatusResponse = execute_graphql(access_token, query, variables).await?;
+
+    response.get_import_status.context("Import job not found")
+}
+
+/// Approve a workflow package by REFERENCE only (D-05/D-06/D-08) — the
+/// server resolves BOTH digests from the source `WorkflowPackage` row; the
+/// CLI never derives or sends a digest (Codex #1 / T-171-25b). `evidence` is
+/// an optional freeform link/note (D-07).
+pub async fn approve_package(
+    access_token: &str,
+    organization_id: &str,
+    workflow_name: &str,
+    workflow_version: &str,
+    evidence: Option<&str>,
+) -> Result<ApprovalInfo> {
+    let query = r#"
+        mutation ApprovePackage(
+            $organizationId: String!,
+            $workflowName: String!,
+            $workflowVersion: String!,
+            $evidence: String
+        ) {
+            approvePackage(
+                organizationId: $organizationId,
+                workflowName: $workflowName,
+                workflowVersion: $workflowVersion,
+                evidence: $evidence
+            ) {
+                id
+                approvedAt
+            }
+        }
+    "#;
+
+    let variables = serde_json::json!({
+        "organizationId": organization_id,
+        "workflowName": workflow_name,
+        "workflowVersion": workflow_version,
+        "evidence": evidence,
+    });
+
+    #[derive(Debug, Deserialize)]
+    struct ApprovePackageResponse {
+        #[serde(rename = "approvePackage")]
+        approve_package: Option<ApprovalInfo>,
+    }
+
+    let response: ApprovePackageResponse = execute_graphql(access_token, query, variables).await?;
+
+    response
+        .approve_package
+        .context("approvePackage returned null - check pmcp.run service logs")
+}
+
+/// Revoke a previously-approved workflow package by REFERENCE only (D-08).
+/// Not yet wired to a CLI verb (Plan 09 exposes `import`/`approve`, not
+/// `revoke`) — provided now so a future CLI verb or admin UI never needs a
+/// second, divergent client implementation of this mutation.
+#[allow(dead_code)]
+pub async fn revoke_approved_package(
+    access_token: &str,
+    organization_id: &str,
+    workflow_name: &str,
+    workflow_version: &str,
+) -> Result<RevocationInfo> {
+    let query = r#"
+        mutation RevokeApprovedPackage(
+            $organizationId: String!,
+            $workflowName: String!,
+            $workflowVersion: String!
+        ) {
+            revokeApprovedPackage(
+                organizationId: $organizationId,
+                workflowName: $workflowName,
+                workflowVersion: $workflowVersion
+            ) {
+                id
+                revokedAt
+            }
+        }
+    "#;
+
+    let variables = serde_json::json!({
+        "organizationId": organization_id,
+        "workflowName": workflow_name,
+        "workflowVersion": workflow_version,
+    });
+
+    #[derive(Debug, Deserialize)]
+    struct RevokeApprovedPackageResponse {
+        #[serde(rename = "revokeApprovedPackage")]
+        revoke_approved_package: Option<RevocationInfo>,
+    }
+
+    let response: RevokeApprovedPackageResponse =
+        execute_graphql(access_token, query, variables).await?;
+
+    response
+        .revoke_approved_package
+        .context("revokeApprovedPackage returned null - check pmcp.run service logs")
+}
+
+/// Stage a binding (+optional per-deviation acknowledgments) onto an import
+/// job and resume it (D-09/D-12). `status` is always `"binding"` on success —
+/// bindings are NOT visible immediately; poll `getImportStatus` for the real
+/// outcome (`completed_dry_run` / `blocked` / another `awaiting_bind`). Not
+/// yet wired to a CLI verb this phase — provided for the same forward-looking
+/// reason as `revoke_approved_package` above.
+#[allow(dead_code)]
+pub async fn set_package_binding(
+    access_token: &str,
+    import_id: &str,
+    organization_id: &str,
+    component_name: &str,
+    slot_kind: &str,
+    slot_name: &str,
+    bound_value: &str,
+    acknowledgments: Option<serde_json::Value>,
+) -> Result<BindingInfo> {
+    let query = r#"
+        mutation SetPackageBinding(
+            $importId: String!,
+            $organizationId: String!,
+            $componentName: String!,
+            $slotKind: String!,
+            $slotName: String!,
+            $boundValue: String!,
+            $acknowledgments: AWSJSON
+        ) {
+            setPackageBinding(
+                importId: $importId,
+                organizationId: $organizationId,
+                componentName: $componentName,
+                slotKind: $slotKind,
+                slotName: $slotName,
+                boundValue: $boundValue,
+                acknowledgments: $acknowledgments
+            ) {
+                importId
+                status
+            }
+        }
+    "#;
+
+    let variables = serde_json::json!({
+        "importId": import_id,
+        "organizationId": organization_id,
+        "componentName": component_name,
+        "slotKind": slot_kind,
+        "slotName": slot_name,
+        "boundValue": bound_value,
+        "acknowledgments": acknowledgments,
+    });
+
+    #[derive(Debug, Deserialize)]
+    struct SetPackageBindingResponse {
+        #[serde(rename = "setPackageBinding")]
+        set_package_binding: Option<BindingInfo>,
+    }
+
+    let response: SetPackageBindingResponse =
+        execute_graphql(access_token, query, variables).await?;
+
+    response
+        .set_package_binding
+        .context("setPackageBinding returned null - check pmcp.run service logs")
 }
