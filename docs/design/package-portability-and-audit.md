@@ -52,7 +52,9 @@ The division that has worked for capture/import/approve continues to govern:
 | Package **format** (`pmcp-package` crate: pack/unpack/digest/slots/validation) | **Open-source SDK** — stays pure: no network, no AWS, no policy logic |
 | CLI **verbs** (`pull`, `inspect`, future `audit`/`run --from-package`) | **Open-source SDK** (cargo-pmcp) — thin clients + local tooling |
 | Audit **tooling & reference auditor team** | **Open-source SDK** — runs anywhere, extensible by anyone |
+| Stack **renderer** (descriptor → CFN template; §7) | **Open-source SDK** — a library crate invoked by the CLI for self-managed targets *and* by platforms server-side for managed targets |
 | Artifact **egress** (authenticated download of the OCI layout) | **Hosting platform** (pmcp.run first; the op is a documented contract any host can implement) |
+| Deploy-time **synthesis policy** (allowlist over the descriptor, cost controls, account/region/VPC parameters) | **Hosting platform** — commercial surface (§7) |
 | **Attestation storage / admission control** (which attestations must exist for import) | **Hosting platform** — commercial policy surface |
 | Attestation **format** (digest-keyed report schema, referrer convention) | **Shared contract** — versioned, like `capture-v1.graphql` |
 
@@ -217,16 +219,38 @@ forces re-approval. The package ships its *permission contract*, not just its
 code. This is the strongest single property the format holds for the
 marketplace position.
 
-### IAM statements — format yes; capture population needs verification
+**Scope caveat (platform-confirmed):** the capture read is
+**single-store and server-filtered** — `walk.rs` reads only the store in the
+server's own `codeModeConfig.policyStoreId`, filtered to that server id. Two
+consequences: store-wide policies in the same store (default-deny/allow for
+all principals) are excluded but still enforce at runtime, and **team-level
+AVP authorization is not captured at all** — relevant precisely for team
+packages. Until that widens, the claim above holds for *per-server code-mode
+policies only*, and `authz-auditor` scenario suites must not overclaim.
+
+### IAM statements — format yes; capture population is a CONFIRMED gap
 
 `DeployDescriptor` models `[iam]` / `[[iam.statements]]` in its **closed set**
 (an unrecognized deploy.toml table fails to parse — a deliberate, loud
-tripwire). However, the platform's `slot_extract.rs` currently synthesizes
-descriptors with `iam: None`, so whether real IAM statements survive capture
-for platform-hosted servers is **unverified**. Action: capture a server that
-actually declares IAM statements and confirm the layer is populated (the
-determinism E2E proved digest stability, not field completeness — see open
-question 6).
+tripwire). The platform team has confirmed (no experiment needed) that IAM
+**deterministically does not survive capture**: `slot_extract.rs` synthesizes
+the whole descriptor from `ServerRecord` rows, and deploy.toml's `[iam]`
+never reaches the platform data model. Worse, the synthesized descriptor is
+**systematically lossy, not just IAM-lossy** — memory defaulted, auth
+hardcoded disabled, composition absent (`slot_extract.rs:290-340` documents
+the gaps).
+
+Two consequences adopted into this design:
+
+- **Fidelity disclosure (transition mechanism):** captured descriptors carry
+  an `authoritative | synthesized` provenance mark per section; the auditor
+  surfaces it, and an `infra-auditor` verdict over synthesized sections is
+  reported as *indicative, not authoritative* — an audit "pass" on an
+  under-representative descriptor is worse than no audit.
+- **The root fix is descriptor-verbatim persistence, not field harvest** (see
+  §7): once the descriptor is the deploy input, the platform persists it
+  verbatim and capture packs it — no synthesis, no per-field treadmill, and
+  fidelity marks are needed only for the pre-refactor back-catalog.
 
 ### Custom CDK/CFN resources — the real gap
 
@@ -297,7 +321,113 @@ with this built-in they become configurations, not code. Self-healing agents
 need exactly a governed command surface, not a shell. And the recursion
 extends: the auditor team is built from the built-in it audits.
 
-## 7. Phasing
+## 7. Single source of truth: the descriptor — synthesis moves to the deploying party
+
+The deepest simplification on the table, motivated by (but bigger than) the
+§5 gaps. **Proposed end state: the synthesized CDK/CFN stack is demoted from
+a *contract artifact* to a *derived artifact*.** The `DeployDescriptor`
+becomes the complete declaration of an MCP server — tools, policies, slots,
+IAM, **and owned resources** (`[[resources.*]]`) — and whoever deploys
+renders the stack from it at deploy time. Nothing else authors infrastructure.
+
+### Today's flow, and why it's the weak seam
+
+Currently the CLI synthesizes the stack per target; for pmcp.run it uploads
+the synthesized stack + binary, and the platform validates the stack against
+an AWS-resource allowlist (security/cost), possibly modifies it, then calls
+CFN. Three structural problems:
+
+1. **Validation of client-synthesized CFN is validating attacker-controlled
+   input in a hostile format** (conditions, intrinsics, `Fn::Sub`); the CLI
+   is open-source and replaceable. Validating the closed-set *descriptor* is
+   a small, semantic surface — and the stack the platform then generates is
+   trusted by construction.
+2. **Post-hoc stack modification means neither side owns the truth.** After
+   the flip, platform adjustments become explicit *synthesis inputs*
+   (account, region, VPC, naming/tagging policy): deployed infra =
+   `render(descriptor, platform-params)` — reproducible and auditable.
+3. **The implicit contract "the shape of a stack CLI version N synthesizes"
+   is huge, unversioned, and drift-prone** (the Phase-110 class, for infra).
+   After the flip, the contract is the descriptor schema — which is already
+   the package contract, enforced at the **type level** because the platform
+   already consumes the `pmcp-package` crate. One schema, three uses: deploy
+   input, package layer, audit subject.
+
+### The boundary resolution: mechanism open, policy commercial
+
+Synthesis does not "move to the platform" — it runs **at the deploying
+party**, using one shared renderer:
+
+- The renderer (descriptor → CFN template) is **extracted from cargo-pmcp
+  into an open-source library crate**, consumed by the CLI for self-managed
+  targets (user's own Lambda/GCR/Azure/Cloudflare) and by the platform's
+  Rust deploy path for managed targets. No duplication; the open SDK stays
+  complete (anyone can self-host or build a competing host with the same
+  mechanism).
+- The platform's value-add is **policy**: descriptor allowlisting, cost
+  controls, tenancy, environment parameters — never secret synthesis.
+- `cargo pmcp deploy --synth-preview` falls out for free: the CLI runs the
+  same renderer locally; the platform reports its renderer version;
+  determinism makes the preview honest.
+
+### Identity vs. environment — the split that keeps packages portable
+
+The descriptor enters the payload digest, so it must carry **identity, not
+environment**, or portability breaks (test→prod would change the digest of
+identical intent):
+
+- IAM statements reference package-declared resources **symbolically**
+  (`resource = "@resources.orders-table"`), resolved at render time when the
+  deploying party knows account/region. Concrete cross-account ARNs for
+  *external* resources are **slots** (the mechanism already exists: declared
+  requirement, environment-bound value).
+- Existing environment-ish fields (`region`, arguably memory/cpu sizing)
+  get the same audit: identity-bearing declarations in the digest;
+  environment bindings resolved at import/deploy.
+
+### Expressiveness ceiling — a priced escape hatch, not a silent hole
+
+The closed set chases the ~90% (tables, queues, buckets, topics, schedules)
+deliberately, table by table — never CDK-completeness. A server needing
+genuinely custom infra must declare `custom_stack = true`, which **taints the
+package visibly**: capture records it, the auditor flags
+`server.infra.non-declarative`, managed platforms may refuse or gate it
+(formalizing what the allowlist already enforces informally), and it remains
+deployable to self-managed targets. Same philosophy as the cli-server's
+"no run-anything tool."
+
+### Flavors — pragmatic, not cloud-abstract
+
+The descriptor already has target sections (`[aws]`, `[gcp]`, `[layout]`);
+flavors formalize that: a **target-neutral core** (tools, policies, slots,
+logical resource names) plus **target-flavored resource tables**
+(`[[resources.dynamodb]]` — deliberately AWS-native, no leaky "kv-table"
+abstraction layer). A package declares which flavors it provides; AWS/pmcp.run
+first; a second flavor is added when a real second target demands it.
+
+### Costs, named honestly
+
+1. **CDK-codegen → direct CFN emission.** The renderer today generates CDK
+   TypeScript; server-side synthesis wants hermetic **CFN-template emission
+   from Rust** (no Node toolchain in a Lambda). This is the substantive
+   rewrite — and what makes the auditor's re-render check bit-for-bit
+   meaningful.
+2. **Migration long tail:** existing deployments may rely on stack-level
+   behaviors the descriptor can't yet express (open question 11) — this
+   feeds directly into which `[[resources.*]]` tables land first.
+
+### Sequencing — must not gate `pull`/0.20
+
+Adopt the end state now (this section); ship Phase A as scoped (egress
+depends on none of this); extract the renderer + CFN emission as SDK work
+(independently useful to self-deploy targets immediately); flip the pmcp.run
+deploy endpoint to descriptor+binary when Phase 172/173 activation work
+naturally touches that path — convergence, not a standalone migration. Once
+flipped, deploy and import become **one activation path**
+(descriptor + binary in → synthesize → materialize), and §5's
+descriptor-verbatim persistence is free.
+
+## 8. Phasing
 
 Each phase is independently useful; nothing blocks the current release train.
 
@@ -313,36 +443,67 @@ Phase A is the gate for everything and is deliberately tiny — it repeats the
 capture-seam playbook (platform op + exported SDL + blocking CLI test) that
 both teams have now executed successfully once.
 
-Two items run **parallel** to this track, independent of Phase A:
+Three items run **parallel** to this track, independent of Phase A:
 
-- **Near-term hardening (§5):** verify IAM population in capture (platform)
-  and extend `DeployDescriptor` with declarative `[[resources.*]]` tables
-  (SDK format change, platform capture change). These harden what capture
-  already ships today.
+- **Near-term hardening (§5):** fidelity marks on synthesized descriptors
+  (platform) and the `[[resources.*]]` closed-set extension (SDK format,
+  platform capture) — superseded long-term by §7's descriptor-verbatim
+  persistence, but they harden what capture ships in the interim.
+- **Renderer extraction + CFN emission (§7):** SDK-side, independently
+  useful to self-deploy targets immediately; the pmcp.run endpoint flip
+  lands with Phase 172/173 activation work on the platform's schedule.
 - **`cli-server` built-in (§6):** SDK-side; naturally lands with Phase D,
   whose reference team is its first consumer.
 
-## 8. Security considerations
+**Release-bundling note:** the phases are technically independent — the
+contract seam exists precisely so the two teams release on their own
+cadences. Whether the next *published* CLI bundles the package verbs with
+`pull` (waiting on Phase A) or ships them now with `pull` following in the
+next minor is a release-management choice, not an engineering constraint;
+it is an explicit joint-review agenda item.
+
+## 9. Security considerations
 
 - **Egress is authorized and logged** — packages are org-scoped IP; the
   download trail is part of the compliance story, not an afterthought.
+  Precision matters here: a presigned URL is a **bearer token**, and the
+  platform's audit row records *issuance*, not *download*. Short expiry
+  (~5 min) plus S3 access logs where the compliance trail needs actual-GET
+  evidence — the platform specifies this, since it is their compliance
+  surface.
 - **Reviewers never receive secrets** — guaranteed by the format (slots carry
   no values), not by egress-time filtering.
-- **Dynamic probing is sandboxed** — unpacked servers run with no real
-  credentials (none exist in the package) and constrained egress; probe
-  findings must not require trusting the probed code.
+- **Dynamic probing is sandboxed — and its reach must be stated honestly.**
+  Unpacked servers run with no real credentials (none exist in the package)
+  and constrained egress. But "no secrets in the package" also means
+  **unresolved slots**: many servers won't boot meaningfully without the
+  env/config the platform injects at runtime, so naive probing exercises only
+  the unauthenticated surface. Phase C therefore includes **local slot
+  resolution with reviewer-supplied test bindings** as an explicit design
+  item, not an assumption; probe findings must not require trusting the
+  probed code.
 - **Reports bind to digests and name their policy versions** — a `pass` is
   meaningless without *which checks, which versions, against which bytes*.
 - **Revocation exists** — `revokeApprovedPackage` already gives the lifecycle
   endpoint attestation-based admission needs when a previously-passed package
   is found bad.
 
-## 9. Open questions (for the two-team review)
+## 10. Open questions (for the two-team review)
 
-1. Artifact packaging for egress: one tar per package produced at capture
-   time (cheap, immutable, cacheable) vs. assembled on demand?
-2. Does `getPackageArtifact` accept raw digests in addition to
-   `name@version` references? (Reviewers will want digest-addressed fetch.)
+Items with a **[proposed]** answer carry the platform team's recommendation
+from their design-note review (2026-07-21); the joint review ratifies them.
+Resolved items are kept for the record.
+
+1. Artifact packaging for egress — **[proposed: tar at capture time]**,
+   written digest-keyed to S3, presigned from there. On-demand assembly would
+   force an async submit/poll op (a blob-by-blob ECR pull + tar cannot fit
+   AppSync's resolver cap); tar-at-capture keeps the synchronous
+   `getPackageArtifact` shape viable. Decide **now** even though the op ships
+   later: the back-catalog is a handful of dev packages today, and the
+   backfill window closes as packages accumulate.
+2. Digest-addressed fetch — **[proposed: yes in v1]**. Admission is already
+   digest-asserted and attestations are digest-keyed; adding it later is
+   contract churn. Platform cost: a GSI on payload digest.
 3. Report signing in Phase B (SDK-side keypair? sigstore keyless?) or defer
    all signing to Phase E?
 4. Where does the reference auditor team live — this repo (like
@@ -350,14 +511,28 @@ Two items run **parallel** to this track, independent of Phase A:
 5. Marketplace namespace/identity model (org-scoped names vs. global) —
    Phase E, but the reference format for `subject.reference` should not
    foreclose it.
-6. **IAM population (platform):** `slot_extract.rs` synthesizes descriptors
-   with `iam: None` — do real IAM statements survive capture for
-   platform-hosted servers today? Capture a server that declares them and
-   confirm the layer is populated (§5).
-7. **`[[resources.*]]` shape:** which resource kinds enter the
-   `DeployDescriptor` closed set first (DynamoDB tables?), and does the
-   extension warrant a `deploy-descriptor.v2` media type or is it additive
-   under v1?
-8. **AVP read scope:** does the capture worker's `PolicySource` read cover
-   every policy store/scope a server's code-mode tools can be governed by,
-   or only the primary store?
+6. ~~IAM population~~ — **RESOLVED (platform-confirmed):** deterministically
+   not captured; the synthesized descriptor is systematically lossy (§5).
+   Successor question: fidelity-mark shape, and the §7 descriptor-verbatim
+   flip as the root fix (superseding field-by-field harvest).
+7. **`[[resources.*]]` shape:** which resource kinds enter the closed set
+   first (DynamoDB tables?), symbolic-reference syntax for IAM statements
+   (§7), and `deploy-descriptor.v2` media-type versioning.
+8. ~~AVP read scope~~ — **RESOLVED (platform-confirmed):** single store,
+   server-filtered (`codeModeConfig.policyStoreId` + `list_policies(server)`).
+   Successor question: capturing store-wide policies and **team-level authz
+   stores** (they enforce at runtime but are absent from team packages — §5
+   scope caveat).
+9. **Release bundling:** publish the CLI package verbs now (0.19.x) with
+   `pull` following in the next minor, or hold one bundled "portable
+   artifact" release gated on Phase A? Decision holder: SDK side; the
+   platform has argued for shipping now (it aids their 172/173 dogfood) and
+   Phase A's realistic slot is after their Phase 172.
+10. **§7 ratification:** adopt "descriptor is the contract, stack is
+    derived, renderer is a shared open-source crate" as the end state? If
+    yes: renderer-crate naming/extraction plan (SDK) and the deploy-endpoint
+    flip's placement in the 172/173 window (platform).
+11. **Migration long tail (§7):** do existing pmcp.run deployments rely on
+    stack-level behaviors (including platform post-edit of uploaded stacks)
+    that the descriptor cannot yet express? Inventory feeds the
+    `[[resources.*]]` priority list.
