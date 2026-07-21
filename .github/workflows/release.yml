@@ -423,10 +423,72 @@ jobs:
           fi
         }
 
-    # cargo-pmcp (the user-facing CLI) publishes BEFORE pmcp-server so that
-    # any future pmcp-server packaging issues cannot block the main CLI from
-    # shipping. cargo-pmcp depends on pmcp, mcp-tester, and mcp-preview — NOT
-    # on pmcp-server — so no dependency ordering is violated by this swap.
+    # pmcp-package + pmcp-agent + pmcp-team-servers publish BEFORE cargo-pmcp:
+    # cargo-pmcp 0.18.0 (Phase 110) pins all three (`pmcp-agent = "0.1"`,
+    # `pmcp-team-servers = "0.1"`, `pmcp-package = "0.1"`), so they MUST already
+    # exist on crates.io or `cargo publish -p cargo-pmcp` fails with
+    # "no matching package named `pmcp-agent`". Dependency order among the three:
+    # pmcp-package (leaf) -> pmcp-agent (pins pmcp-package) -> pmcp-team-servers
+    # (pins pmcp-agent + pmcp-package). All are experimental 0.x, so each keeps
+    # the same "already exists"-tolerant guard — a failure here must not gate the
+    # already-published core `pmcp` SDK.
+    #
+    # pmcp-package is workspace-EXCLUDED (own [workspace] table), so it publishes
+    # via --manifest-path, NOT `-p pmcp-package`.
+    - name: Publish pmcp-package
+      env:
+        CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+      run: |
+        echo "Publishing pmcp-package..."
+        OUTPUT=$(cargo publish --manifest-path crates/pmcp-package/Cargo.toml 2>&1) && echo "$OUTPUT" || {
+          echo "$OUTPUT"
+          if echo "$OUTPUT" | grep -q "already exists"; then
+            echo "pmcp-package already published, continuing..."
+          else
+            echo "::error::Failed to publish pmcp-package"
+            exit 1
+          fi
+        }
+
+    - name: Wait for crates.io to index pmcp-package
+      run: sleep 30
+
+    - name: Publish pmcp-agent
+      env:
+        CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+      run: |
+        echo "Publishing pmcp-agent..."
+        OUTPUT=$(cargo publish -p pmcp-agent 2>&1) && echo "$OUTPUT" || {
+          echo "$OUTPUT"
+          if echo "$OUTPUT" | grep -q "already exists"; then
+            echo "pmcp-agent already published, continuing..."
+          else
+            echo "::error::Failed to publish pmcp-agent"
+            exit 1
+          fi
+        }
+
+    - name: Publish pmcp-team-servers
+      env:
+        CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+      run: |
+        echo "Publishing pmcp-team-servers..."
+        OUTPUT=$(cargo publish -p pmcp-team-servers 2>&1) && echo "$OUTPUT" || {
+          echo "$OUTPUT"
+          if echo "$OUTPUT" | grep -q "already exists"; then
+            echo "pmcp-team-servers already published, continuing..."
+          else
+            echo "::error::Failed to publish pmcp-team-servers"
+            exit 1
+          fi
+        }
+
+    - name: Wait for crates.io to index the agent/team crates
+      run: sleep 30
+
+    # cargo-pmcp (the user-facing CLI) publishes AFTER its pmcp-agent/
+    # pmcp-team-servers/pmcp-package deps (above) and BEFORE pmcp-server, so a
+    # future pmcp-server packaging issue cannot block the main CLI from shipping.
     - name: Publish cargo-pmcp
       env:
         CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
@@ -456,27 +518,6 @@ jobs:
             echo "pmcp-server already published, continuing..."
           else
             echo "::error::Failed to publish pmcp-server"
-            exit 1
-          fi
-        }
-
-    # pmcp-package: standalone workspace-EXCLUDED leaf (has its own [workspace]
-    # table, so `-p pmcp-package` does NOT resolve — it must be reached via
-    # --manifest-path). It has NO in-repo consumers yet, so it is published LAST:
-    # a failure in this experimental 0.x crate must not abort the job before the
-    # core `pmcp` SDK and its dependents publish. Move it earlier (before its
-    # consumer) only once a shipped crate actually pins `pmcp-package = "0.1"`.
-    - name: Publish pmcp-package
-      env:
-        CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-      run: |
-        echo "Publishing pmcp-package..."
-        OUTPUT=$(cargo publish --manifest-path crates/pmcp-package/Cargo.toml 2>&1) && echo "$OUTPUT" || {
-          echo "$OUTPUT"
-          if echo "$OUTPUT" | grep -q "already exists"; then
-            echo "pmcp-package already published, continuing..."
-          else
-            echo "::error::Failed to publish pmcp-package"
             exit 1
           fi
         }
