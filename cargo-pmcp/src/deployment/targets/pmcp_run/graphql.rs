@@ -1304,44 +1304,16 @@ pub struct WorkflowPackageResp {
     pub manifest_digest: String,
 }
 
-/// The exact `submitPackageCapture` operation the CLI sends. Shared with the
-/// offline contract test (`tests/package_capture_contract.rs`) so the test
-/// validates the real runtime query against the vendored SDL.
-pub(crate) const SUBMIT_PACKAGE_CAPTURE_QUERY: &str = r#"
-        mutation SubmitPackageCapture(
-            $rootComponentType: String!,
-            $rootComponentId: String!,
-            $version: String!,
-            $bump: String
-        ) {
-            submitPackageCapture(
-                rootComponentType: $rootComponentType,
-                rootComponentId: $rootComponentId,
-                version: $version,
-                bump: $bump
-            ) {
-                captureId
-                status
-                createdAt
-            }
-        }
-    "#;
-
-/// The exact `getPackageCaptureStatus` operation the CLI sends. Shared with the
-/// offline contract test.
-pub(crate) const GET_PACKAGE_CAPTURE_STATUS_QUERY: &str = r#"
-        query GetPackageCaptureStatus($id: ID!) {
-            getPackageCaptureStatus(id: $id) {
-                id
-                status
-                message
-                errorCode
-                divergentComponents
-                manifestDigest
-                updatedAt
-            }
-        }
-    "#;
+// The two runtime queries below live in `graphql_contract.rs` — a
+// dependency-light leaf that's also mounted directly into the `cargo-pmcp`
+// lib target (via `#[path]` in `lib.rs`) so the offline blocking contract
+// test (`tests/package_capture_contract.rs`) can validate them against the
+// vendored SDL without pulling this file's `reqwest`/auth/deploy tree into
+// the lib target. Re-exported here so the rest of this file (and any other
+// `pmcp_run` code) can keep referring to them unqualified.
+pub(crate) use super::graphql_contract::{
+    GET_PACKAGE_CAPTURE_STATUS_QUERY, SUBMIT_PACKAGE_CAPTURE_QUERY,
+};
 
 /// Submit an async package-capture job for a team's workflow dependency graph
 /// (170-08 D-A). `root_type` is always `"team"` in v1; `root_id` is the

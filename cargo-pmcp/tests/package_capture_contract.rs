@@ -1,0 +1,92 @@
+//! Offline blocking contract test (170-08 Task 3).
+//!
+//! Validates that the CLI's two hand-written `package capture` GraphQL
+//! operations (`SUBMIT_PACKAGE_CAPTURE_QUERY` / `GET_PACKAGE_CAPTURE_STATUS_QUERY`
+//! in `src/deployment/targets/pmcp_run/graphql.rs`) — and the response structs
+//! that deserialize their results (`CaptureInfo` / `CaptureStatus`) — have not
+//! drifted from the platform-owned, vendored SDL contract at
+//! `contracts/pmcp-run/capture-v1.graphql`.
+//!
+//! This is a pure offline/static check: no network access, no pmcp.run
+//! credentials. It runs in the normal `cargo test` workspace gate, so any
+//! drift between the CLI's queries and the platform contract fails the SDK
+//! build immediately rather than surfacing at runtime against a live server.
+
+use apollo_compiler::validation::Valid;
+use apollo_compiler::{ExecutableDocument, Schema};
+
+const SDL_PATH: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../contracts/pmcp-run/capture-v1.graphql"
+);
+
+// `ExecutableDocument::parse_and_validate` requires `&Valid<Schema>` — keep the
+// `Valid` wrapper rather than unwrapping it, since apollo-compiler 1.x only
+// offers operation-vs-schema validation against an already-`Valid` schema.
+fn schema() -> Valid<Schema> {
+    let sdl = std::fs::read_to_string(SDL_PATH).expect("read capture-v1.graphql");
+    Schema::parse_and_validate(sdl, "capture-v1.graphql").expect("vendored SDL is itself valid")
+}
+
+/// Both runtime queries must validate against the vendored contract.
+#[test]
+fn capture_ops_validate_against_contract() {
+    let schema = schema();
+    for (name, op) in [
+        (
+            "submit",
+            cargo_pmcp::pmcp_run_graphql::SUBMIT_PACKAGE_CAPTURE_QUERY,
+        ),
+        (
+            "status",
+            cargo_pmcp::pmcp_run_graphql::GET_PACKAGE_CAPTURE_STATUS_QUERY,
+        ),
+    ] {
+        ExecutableDocument::parse_and_validate(&schema, op, format!("{name}.graphql"))
+            .unwrap_or_else(|e| panic!("`{name}` op does not match capture-v1.graphql: {e}"));
+    }
+}
+
+/// `status` must be a plain String in the contract — never a GraphQL enum
+/// (an enum would make the online schema-vs-schema diff show permanent drift).
+#[test]
+fn status_field_is_string_not_enum() {
+    let sdl = std::fs::read_to_string(SDL_PATH).unwrap();
+    assert!(
+        sdl.contains("status: String"),
+        "status must be typed String in capture-v1.graphql"
+    );
+    assert!(
+        !sdl.contains("enum CaptureStatusValue"),
+        "status must not be an enum in v1"
+    );
+}
+
+/// The response structs' GraphQL field names must exactly equal each op's
+/// selection set (struct <-> query <-> schema all agree).
+#[test]
+fn response_structs_match_selection_sets() {
+    // CaptureInfo (submit) selects: captureId, status, createdAt
+    for f in ["captureId", "status", "createdAt"] {
+        assert!(
+            cargo_pmcp::pmcp_run_graphql::SUBMIT_PACKAGE_CAPTURE_QUERY.contains(f),
+            "CaptureInfo field `{f}` missing from submit selection set"
+        );
+    }
+    // CaptureStatus (status) selects: id, status, message, errorCode,
+    // divergentComponents, manifestDigest, updatedAt
+    for f in [
+        "id",
+        "status",
+        "message",
+        "errorCode",
+        "divergentComponents",
+        "manifestDigest",
+        "updatedAt",
+    ] {
+        assert!(
+            cargo_pmcp::pmcp_run_graphql::GET_PACKAGE_CAPTURE_STATUS_QUERY.contains(f),
+            "CaptureStatus field `{f}` missing from status selection set"
+        );
+    }
+}
