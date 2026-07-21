@@ -1,0 +1,75 @@
+use pmcp_cfn_renderer::{render, ArtifactRef, RenderMetadata, RenderParams};
+use std::collections::BTreeMap;
+
+fn minimal_descriptor() -> pmcp_package::package::DeployDescriptor {
+    // Smallest shape that satisfies `DeployDescriptor`'s `deny_unknown_fields`
+    // + required-field set: [target] + [aws] + [server] (name,
+    // timeout_seconds) + [auth] (enabled, provider) + [observability]
+    // (log_retention_days, enable_xray, create_dashboard). Every other table
+    // (`[metadata]`, `[composition]`, `[assets]`, `[iam]`, `[gcp]`,
+    // `[layout]`, `[observability.alarms]`, `[auth.dcr]`, `[auth.groups]`,
+    // `[auth.scopes]`) is `Option`/defaulted and can be omitted entirely.
+    //
+    // NOTE: the brief's original draft fixture put `error_threshold` directly
+    // under `[observability]` and omitted `log_retention_days` /
+    // `enable_xray` / `create_dashboard` — those three are REQUIRED fields on
+    // `ObservabilitySection`, and `error_threshold` only exists on the
+    // optional nested `[observability.alarms]` sub-table, so the original
+    // draft fails to parse under `deny_unknown_fields`. This fixture matches
+    // the real tracked `crates/pmcp-server/.pmcp/deploy.toml` shape, trimmed
+    // to only the required fields.
+    toml::from_str(
+        r#"
+        [target]
+        type = "aws-lambda"
+        version = "1"
+        [aws]
+        region = "us-east-1"
+        [server]
+        name = "det-test"
+        timeout_seconds = 30
+        [auth]
+        enabled = false
+        provider = "none"
+        [observability]
+        log_retention_days = 30
+        enable_xray = false
+        create_dashboard = false
+        "#,
+    )
+    .expect("minimal descriptor parses")
+}
+
+fn params() -> RenderParams {
+    RenderParams {
+        account_id: "123456789012".into(),
+        region: "us-east-1".into(),
+        stack_name: "det-test-stack".into(),
+        artifact: ArtifactRef {
+            s3_bucket: "pmcp-deploy-123456789012-us-east-1".into(),
+            s3_key: "det-test/bootstrap.zip".into(),
+            digest: None,
+        },
+        environment: BTreeMap::new(),
+        metadata: RenderMetadata {
+            version: "1.0.0".into(),
+            server_type: None,
+            server_id: None,
+            template_id: None,
+            snapshot_baked: false,
+        },
+    }
+}
+
+#[test]
+fn render_is_byte_deterministic() {
+    let d = minimal_descriptor();
+    let p = params();
+    let a = render(&d, &p).unwrap().to_canonical_json();
+    let b = render(&d, &p).unwrap().to_canonical_json();
+    assert_eq!(a, b);
+    // canonical: sorted keys — serde_json::Value round-trip of the string
+    // must serialize back identically
+    let v: serde_json::Value = serde_json::from_str(&a).unwrap();
+    assert_eq!(serde_json::to_string_pretty(&v).unwrap(), a);
+}
