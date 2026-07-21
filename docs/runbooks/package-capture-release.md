@@ -90,19 +90,49 @@ quick `cargo test -p cargo-pmcp` here catches rebase breakage early).
 
 ---
 
-## Phase 2 — End-to-end test against dev (not yet run)
+## Phase 2 — End-to-end test against dev
 
-The capture verb has not yet been exercised end-to-end against a real
-backend. Do that before release.
+**Status: run and passing (2026-07-20).** A locally-built CLI ran
+`cargo pmcp package capture day-trip-planner-team --version 1.0.0` against the
+dev platform to a terminal `✅ Capture complete`, manifest digest
+`sha256:af0ae208cceb706a492c03ff0d79e970c76eaf54b9596d54b2229c7e2de1f249`. A
+re-run produced the **identical** digest, confirming the platform capture is
+deterministic (same team + version → byte-identical manifest). Re-run this
+before each release to confirm the deployed platform still answers.
 
-**Endpoint.** The deployed capture verb authenticates and POSTs to the dev
-GraphQL endpoint (API Gateway fronting the platform's GraphQL backend):
+**Endpoints (from the discovered `~/.pmcp/pmcp-run-config.json`).** Two
+different URLs — do not conflate them:
 
+- **Environment / discovery base** (`source_api_url` / `mcp_url`) —
+  `https://6vlog1csj4.execute-api.us-east-1.amazonaws.com`. This is what
+  `PMCP_API_URL` wants (see Auth below); it is the API-Gateway base, **not** the
+  GraphQL URL.
+- **GraphQL endpoint** the capture ops POST to (`graphql_url`, resolved from the
+  discovery cache) —
+  `https://nieihn7yhjbzldmrm6b74ndcha.appsync-api.us-east-1.amazonaws.com/graphql`.
+  The CLI resolves this from your cached config; **no `PMCP_RUN_GRAPHQL_URL`
+  override is needed.**
+
+**Auth — the `PMCP_API_URL` token-refresh gotcha (real snag).** A fresh
+`cargo pmcp login` works, but when the cached **access token expires**, the
+refresh path runs discovery against the prod default
+`https://api.pmcp.run/.well-known/pmcp-config` (which does not resolve for dev)
+**unless** you point it at the environment base. It does not reuse the cached
+config's endpoint for refresh. So for any dev run, set:
+
+```bash
+export PMCP_API_URL="https://6vlog1csj4.execute-api.us-east-1.amazonaws.com"
 ```
-https://6vlog1csj4.execute-api.us-east-1.amazonaws.com/graphql
+
+or persist it once so plain `cargo pmcp package capture …` just works:
+
+```bash
+cargo pmcp configure add dev --type pmcp-run \
+  --api-url https://6vlog1csj4.execute-api.us-east-1.amazonaws.com
+cargo pmcp configure use dev
 ```
 
-**Auth.** Either path works:
+Then authenticate (only needed if you have no valid refresh token):
 
 ```bash
 cargo pmcp login          # interactive PKCE flow
@@ -234,8 +264,9 @@ if one is pending) before continuing; do not weaken or skip the test.
 
 1. Rebase (`/opt/homebrew/bin/git rebase origin/main`) — expect low-conflict,
    badge-line-only; escalate anything else.
-2. E2E against dev (`https://6vlog1csj4.execute-api.us-east-1.amazonaws.com/graphql`)
-   until `completed` + a real manifest digest; use a slug id, not a UUID.
+2. E2E against dev — set `PMCP_API_URL=https://6vlog1csj4.execute-api.us-east-1.amazonaws.com`
+   (token-refresh base; the GraphQL URL resolves from discovery), run capture to
+   `completed` + a real manifest digest; use a slug id, not a UUID.
 3. Offline contract test green (`cargo test -p cargo-pmcp --test
    package_capture_contract`, 3 tests) — no SDL regeneration needed, that's
    platform-owned.

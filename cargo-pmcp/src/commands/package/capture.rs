@@ -36,7 +36,8 @@ const BUMP_LEVELS: [&str; 3] = ["major", "minor", "patch"];
 /// Arguments for `cargo pmcp package capture`.
 #[derive(Debug, Args)]
 pub struct CaptureArgs {
-    /// AgentTeam ID (UUID) — the team's id, not its display name.
+    /// AgentTeam id — a slug like `day-trip-planner-team`, not the display
+    /// name (and not a UUID).
     ///
     /// v1 requires the exact AgentTeam id: `submitPackageCapture` performs a
     /// DynamoDB `GetItem` by primary key against the `AgentTeam` table, so a
@@ -44,9 +45,10 @@ pub struct CaptureArgs {
     /// documented deferral, not supported in v1.
     #[arg(
         value_name = "TEAM_ID",
-        long_help = "AgentTeam ID (UUID) — the team's id, not its display name. v1 requires \
-                      the exact AgentTeam id (submitPackageCapture does a GetItem by primary \
-                      key); a name-to-id lookup is a documented deferral, not supported here."
+        long_help = "AgentTeam id — a slug like `day-trip-planner-team`, not the display name \
+                      (and not a UUID). v1 requires the exact AgentTeam id (submitPackageCapture \
+                      does a GetItem by primary key); a name-to-id lookup is a documented \
+                      deferral, not supported here."
     )]
     pub team_id: String,
 

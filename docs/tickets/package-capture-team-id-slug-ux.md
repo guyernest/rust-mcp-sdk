@@ -27,10 +27,10 @@ name** — both are arbitrary strings. So the guard must be conservative.
 
 ## Fix
 
-1. **Fix the help text** (`capture.rs`): change the `///` doc comment and `long_help`
-   to say the argument is an **AgentTeam id (slug)** — e.g. `day-trip-planner-team` —
-   **not the display name**, and drop the "(UUID)" / "GetItem by primary key /
-   display name will not resolve" framing.
+1. ✅ **DONE (cargo-pmcp 0.19.0)** — **Fixed the help text** (`capture.rs`): the `///`
+   doc comment and `long_help` now say the argument is an **AgentTeam id (slug)** —
+   e.g. `day-trip-planner-team` — **not the display name (and not a UUID)**. The
+   remaining items below (the conservative display-name guard) are still open.
 2. **Reject only OBVIOUS display names** with a clear, actionable message: input that
    **contains a space** or is **mixed-case** is almost certainly a display name, not a
    slug — reject those up front pointing the user at the slug form. Everything else
