@@ -412,9 +412,17 @@ first; a second flavor is added when a real second target demands it.
    from Rust** (no Node toolchain in a Lambda). This is the substantive
    rewrite — and what makes the auditor's re-render check bit-for-bit
    meaningful.
-2. **Migration long tail:** existing deployments may rely on stack-level
-   behaviors the descriptor can't yet express (open question 11) — this
-   feeds directly into which `[[resources.*]]` tables land first.
+2. **Migration — by fleet recreation, not renderer compatibility.** The
+   renderer carries **no CDK-compat requirement**: it never has to
+   reproduce the logical IDs or update semantics of existing CDK-generated
+   stacks (in-place CFN updates against foreign logical IDs are a classic
+   migration tarpit and would force resource replacement anyway). Instead
+   the platform **recreates the existing fleet through the new
+   descriptor→render path, in waves**, each server's wave gated on
+   `[[resources.*]]` being able to express that server's declarations
+   (open question 11). Stateful resources get a per-wave carry-over
+   treatment — a bounded, per-server operation rather than a renderer-wide
+   constraint.
 
 ### Sequencing — must not gate `pull`/0.20
 
@@ -532,7 +540,12 @@ Resolved items are kept for the record.
     derived, renderer is a shared open-source crate" as the end state? If
     yes: renderer-crate naming/extraction plan (SDK) and the deploy-endpoint
     flip's placement in the 172/173 window (platform).
-11. **Migration long tail (§7):** do existing pmcp.run deployments rely on
-    stack-level behaviors (including platform post-edit of uploaded stacks)
-    that the descriptor cannot yet express? Inventory feeds the
-    `[[resources.*]]` priority list.
+11. **Migration expressiveness inventory (§7):** with migration by **fleet
+    recreation** (platform commitment; the renderer carries no CDK-compat
+    requirement), this is rescoped from "what stack behaviors must the
+    renderer reproduce" to **"what must `[[resources.*]]` express before
+    each server's recreation wave."** Output: a per-wave expressiveness
+    checklist that orders both the closed-set tables and the wave schedule.
+    (Platform post-edits of uploaded stacks are covered the same way — as
+    declarations the descriptor must express, or synthesis params, not as
+    behaviors to reproduce.)

@@ -69,10 +69,18 @@ Why we think you'll want this:
   172/173 window on your schedule, not as a standalone migration.
 
 Costs we're naming up front: the renderer must move from CDK-TypeScript
-generation to **direct CFN emission from Rust** (that rewrite is ours), and
-there's a migration long tail — §10 Q11 asks you to inventory stack-level
-behaviors current deployments rely on (including your post-edits), which
-feeds the `[[resources.*]]` priority list. Portability is protected by an
+generation to **direct CFN emission from Rust** (that rewrite is ours).
+On migration, the proposed strategy is **fleet recreation, not renderer
+compatibility**: the renderer carries **no CDK-compat requirement** (no
+reproducing logical IDs or update semantics of existing CDK stacks — the
+classic tarpit), and the platform recreates the existing fleet through the
+new descriptor→render path **in waves**, each server's wave gated on
+`[[resources.*]]` expressing that server's declarations. §10 Q11 is
+therefore rescoped: not "what behaviors must the renderer reproduce" but
+**"what must `[[resources.*]]` express before each server's wave"** — a
+per-wave expressiveness checklist that orders both the closed-set tables and
+the wave schedule (your stack post-edits fold in the same way, as
+declarations or synthesis params). Portability is protected by an
 identity/environment split: IAM statements reference package-declared
 resources symbolically; external ARNs become slots; environment bindings stay
 out of the digest (§7).
@@ -117,14 +125,17 @@ come to the review with a decision, not a preference.
 ## Proposed joint-review agenda (60 min)
 
 1. **§7 ratification** — descriptor as the contract, synthesis at the
-   deploying party, shared renderer crate. (§10 Q10; the centerpiece.)
+   deploying party, shared renderer crate; **migration by fleet recreation
+   in waves (platform commitment), renderer free of any CDK-compat
+   requirement.** (§10 Q10; the centerpiece.)
 2. **Phase A ratification** — Q1 tar-at-capture + Q2 digest-fetch, op shape
    confirmed sync; timeline slot after 172 / into 173. (§10 Q1–Q2.)
 3. **Release bundling decision** — 0.19.x now vs. bundled with `pull`.
    (§10 Q9; we bring the decision.)
 4. **Ticket split** — yours: Phase-A op + SDL export, fidelity marks,
-   team-authz capture feasibility (Q8 successor), Q11 stack-behavior
-   inventory; ours: `pull` verb + contract-test scaffold, renderer
-   extraction + CFN emission plan, audit report schema v1, `[[resources.*]]`
-   + symbolic-reference format design.
+   team-authz capture feasibility (Q8 successor), **Q11 per-wave
+   expressiveness inventory + the fleet-recreation wave plan**; ours:
+   `pull` verb + contract-test scaffold, renderer extraction + CFN emission
+   plan, audit report schema v1, `[[resources.*]]` + symbolic-reference
+   format design.
 5. **If time:** auditor-team repo placement (Q4), report signing timing (Q3).
