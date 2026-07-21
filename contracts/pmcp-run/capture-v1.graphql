@@ -1,0 +1,50 @@
+# capture-v1.graphql — pmcp.run package-capture contract (SDL subset)
+# Source:   pmcp.run dev amplifyData AppSync API, apiId q3gd4hrbabeytc2o2zazld6igy (us-east-1)
+# Exported: 2026-07-20 via `aws appsync get-introspection-schema --format SDL`, reduced to
+#           the two capture operations + their return types by the pmcp.run platform team.
+# Version:  v1
+#
+# OWNERSHIP: the platform owns this file's CONTENTS. When the capture schema changes,
+# the platform re-exports and PRs an update here; the SDK's blocking contract test then
+# forces cargo-pmcp's queries/structs to follow in the same PR.
+#
+# `status` is String! (NOT a GraphQL enum) in BOTH return types — do NOT tidy it to an enum.
+# Known runtime values (documentation only, not schema-enforced):
+#   queued | walking | extracting | publishing | completed | failed | not_found
+#
+# BOUNDARY NOTE: getPackageCaptureStatus's ARGUMENT is `id: ID!`, but the value passed is the
+# `captureId` returned by submitPackageCapture (the CLI threads captureId -> id). The name
+# differs across the submit/status boundary by design.
+#
+# NOTE: the live schema's @aws_cognito_user_pools / @aws_iam field directives were stripped
+# from this vendored copy — they are auth config, not shape. A platform-side drift diff must
+# normalize them out on both sides.
+
+type Mutation {
+  submitPackageCapture(
+    rootComponentType: String!
+    rootComponentId: String!
+    version: String!
+    bump: String
+  ): SubmitPackageCaptureReturnType
+}
+
+type Query {
+  getPackageCaptureStatus(id: ID!): GetPackageCaptureStatusReturnType
+}
+
+type SubmitPackageCaptureReturnType {
+  captureId: String!
+  createdAt: String!
+  status: String!
+}
+
+type GetPackageCaptureStatusReturnType {
+  id: String!
+  status: String!
+  message: String
+  errorCode: String
+  divergentComponents: [String]
+  manifestDigest: String
+  updatedAt: String
+}
