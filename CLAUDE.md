@@ -244,6 +244,15 @@ make test-integration   # Integration tests
    hence its slot here just ahead of item 14. It remains an experimental 0.x leaf:
    a failure here must not gate the core SDK release, and it still publishes late
    in the overall order (after the core SDK and toolkit trees).
+13a. `pmcp-cfn-renderer` (the pure `DeployDescriptor -> CloudFormation` template
+   renderer crate at `crates/pmcp-cfn-renderer/`, CFN-renderer extraction). Depends
+   on `pmcp-package = "0.1"` (item 13, needs the ≥0.1.1 `[auth.cognito]`
+   promotion), so it must publish AFTER `pmcp-package` — hence its slot here,
+   just ahead of `pmcp-agent` (item 14). `cargo-pmcp` (item 12) pins
+   `pmcp-cfn-renderer = "0.1"` (it replaces `npx cdk synth`/`cdk deploy` for
+   unmodified scaffolds on the `pmcp-run` and `aws-lambda` deploy targets), so
+   this must ALSO publish before `cargo-pmcp` reaches crates.io. 0.x/
+   experimental — a failure here must not gate the core SDK release.
 14. `pmcp-agent` (the experimental 0.x agent-loop crate at `crates/pmcp-agent/`,
    Phase 108). A regular root workspace member that pins `pmcp = "2.17"` (item 2)
    and `pmcp-package = "0.1"` (item 13) via path deps, so it must publish AFTER

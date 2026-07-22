@@ -5,6 +5,49 @@ All notable changes to the `cargo-pmcp` crate will be documented in this file.
 The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html).
 
+## [0.20.0] - Unreleased
+
+### Added
+
+- **Node/CDK dropped for standard scaffolds** — `cargo pmcp deploy` on the
+  `pmcp-run` and `aws-lambda` targets now synthesizes CloudFormation directly
+  via the new `pmcp-cfn-renderer` crate (a pure `DeployDescriptor ->
+  CloudFormation` renderer) instead of shelling out to `npx cdk synth`,
+  whenever `deploy/lib/stack.ts` is byte-identical to the regenerated
+  scaffold. The `aws-lambda` target goes further: it also **applies** the
+  rendered template directly against `aws-sdk-cloudformation` (create/update,
+  poll-to-terminal, `Outputs` → `deploy/outputs.json`), so a plain, HTTP-API,
+  or Cognito+DCR/OAuth `aws-lambda` deploy needs **no Node.js, npm, or CDK
+  installed at all**. A hand-modified `stack.ts` is detected and always falls
+  back to the legacy `cdk synth`/`cdk deploy` path unchanged (see the
+  `custom_stack` taint note below) — this is additive, not a breaking
+  removal of the CDK path.
+- **Zero-tooling built-in-server deploys** — an `aws-lambda` project that
+  declares `[metadata].server_type` (`sql-server`/`openapi-server`/
+  `workbook-server`) now fetches the matching prebuilt Shape A binary
+  (`pmcp-sql-server`/`pmcp-workbook-server`/`pmcp-openapi-server`) from
+  GitHub Releases instead of requiring a local Rust build, wraps it in a
+  Lambda-deployable zip with a generated `bootstrap` shim, and attaches the
+  AWS Lambda Web Adapter layer so the plain HTTP server can run under the
+  Lambda Runtime API unmodified. No `cargo lambda` / Rust toolchain required
+  for this path.
+- **Custom-stack `cdk` fallback with taint** — any project whose
+  `deploy/lib/stack.ts` no longer matches the regenerated scaffold
+  transparently falls back to the pre-existing `cdk synth`/`cdk deploy`
+  path (unchanged behavior) and is tainted (`McpMetadata::custom_stack`) so
+  downstream tooling/platform can see that a deploy took the custom path.
+  The CLI only warns and records this — it does not enforce any policy
+  based on the taint.
+
+### Notes
+
+- See `docs/runbooks/cfn-renderer-switch-gate.md` for the pre-production
+  real-deploy gate, the required pmcp.run platform-validator acceptance
+  check, and known operational gaps (unbounded stack-poll loop, no
+  `ROLLBACK_COMPLETE` auto-recovery, inline `TemplateBody` size headroom,
+  the pinned Lambda Web Adapter layer version, and more) before relying on
+  this path in production.
+
 ## [0.19.0] - 2026-07-20
 
 ### Added
