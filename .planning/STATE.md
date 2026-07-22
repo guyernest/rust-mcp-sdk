@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v2.5
 milestone_name: MCP Spec 2026-07-28
 status: executing
-stopped_at: Completed 112-01-PLAN.md
-last_updated: "2026-07-22T22:35:13.680Z"
+stopped_at: Completed 112-06-PLAN.md
+last_updated: "2026-07-22T22:59:50.311Z"
 last_activity: 2026-07-22
 progress:
   total_phases: 71
   completed_phases: 0
   total_plans: 8
-  completed_plans: 5
+  completed_plans: 6
   percent: 0
 ---
 
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-07-22) · .planning/ROADMAP.md (v2.5 mil
 ## Current Position
 
 Phase: 112 (version-plumbing-spine) — EXECUTING
-Plan: 6 of 8
+Plan: 7 of 8
 Status: Ready to execute
 Last activity: 2026-07-22
 
@@ -96,6 +96,8 @@ Decisions are logged in PROJECT.md Key Decisions table. Decisions framing this m
 - [Phase ?]: [Phase 112]: 112-03: error::ErrorCode's 11 consts delegate to new error_codes:: table (Self(error_codes::NAME)) — centralizes ~210 call sites, names/values unchanged (semver minor); per-name consistency test is the drift guard
 - [Phase ?]: [Phase 112]: 112-03: both -32002 meanings kept by name (V1_TASK_PENDING frozen vs UNSUPPORTED_CAPABILITY), never reconciled; v2 codes structurally omitted (zero SATD), finalization tracked in planning
 - [Phase ?]: [Phase 112]: 112-03: server/discover routed via crate-private InternalClientRequest + classify_internal_method BEFORE public-enum conversion; NO public ClientRequest/Request variant (Codex HIGH #4); Plan 05 wires it
+- [Phase 112]: 112-06: v2 HTTP header gate CONSUMES Plan 04's resolved ProtocolContext era (resolved once in the HTTP layer, threaded into new pub(crate) Server::handle_request_with_context) — never a second raw-header era read (Pitfall 2 / D-11); seam lives on high-level Server since the HTTP path dispatches through it, not ServerCore
+- [Phase 112]: 112-06: full header/_meta matrix as cog-25-safe pure classifier, fail-closed on every conflict cell; strict all-three-headers reject (D-05) + Mcp-Method/Mcp-Name body cross-check (D-06); outbound emission on success AND error non-panicking; new errors from error_codes:: (VERS-06); gate runs BEFORE legacy validate_protocol_version; v1/non-opted-in zero enforcement (D-04)
 
 ### Pending Todos
 
@@ -131,8 +133,8 @@ Items deferred by design for this milestone (design §7 / REQUIREMENTS v2):
 
 ## Session Continuity
 
-Last session: 2026-07-22T22:34:52.588Z
-Stopped at: Completed 112-01-PLAN.md
+Last session: 2026-07-22T22:59:50.307Z
+Stopped at: Completed 112-06-PLAN.md
 Resume file: None
 
 ## Performance Metrics
@@ -160,3 +162,4 @@ Resume file: None
 | Phase 112 P03 | 5min | 2 tasks | 3 files |
 | Phase 112 P04 | 30 | 2 tasks | 4 files |
 | Phase 112 P5 | 35 | 2 tasks | 4 files |
+| Phase 112 P06 | 22min | 2 tasks | 4 files |
