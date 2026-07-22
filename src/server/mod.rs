@@ -1305,7 +1305,7 @@ impl Server {
                 };
             },
         };
-        match request {
+        let mut response = match request {
             Request::Client(ref boxed_req)
                 if matches!(**boxed_req, ClientRequest::Initialize(_)) =>
             {
@@ -1334,7 +1334,7 @@ impl Server {
                 }
             },
             Request::Client(boxed_req) => {
-                self.handle_client_request(id, *boxed_req, auth_context, protocol_context)
+                self.handle_client_request(id, *boxed_req, auth_context, protocol_context.clone())
                     .await
             },
             Request::Server(_) => JSONRPCResponse {
@@ -1348,7 +1348,18 @@ impl Server {
                     },
                 ),
             },
-        }
+        };
+
+        // Twin-site v2 envelope injection (VERS-07 / D-07 / D-08): the ONE shared
+        // helper in `core.rs` — v2-only, object-results-only, collision-safe;
+        // v1 / non-opted-in responses stay byte-identical.
+        crate::server::core::inject_v2_result_envelope(
+            &mut response,
+            protocol_context.as_ref(),
+            &self.info,
+            crate::server::core::ResponseDisposition::Complete,
+        );
+        response
     }
 
     async fn handle_client_request(
@@ -4884,6 +4895,59 @@ mod tests {
             },
             ResponsePayload::Error(e) => panic!("probe call failed: {}", e.message),
         }
+    }
+
+    /// Twin-site envelope parity (VERS-07): the high-level `Server` dispatch
+    /// site injects the SAME v2 `resultType`/`serverInfo` envelope `ServerCore`
+    /// does — via the ONE shared `core::inject_v2_result_envelope` helper — on a
+    /// v2 object result.
+    #[tokio::test]
+    async fn test_server_dispatch_injects_v2_result_envelope_parity() {
+        use crate::types::protocol::PROTOCOL_VERSION_2026_07_28;
+        use crate::types::ProtocolVersion;
+
+        let server = Server::builder()
+            .name("envelope-server")
+            .version("3.2.1")
+            .tool("probe", EraProbeServerTool)
+            .with_supported_protocol_versions([
+                ProtocolVersion("2025-11-25".to_string()),
+                ProtocolVersion(PROTOCOL_VERSION_2026_07_28.to_string()),
+            ])
+            .build()
+            .unwrap();
+
+        // v2 request → envelope injected.
+        let response = server
+            .handle_request(RequestId::from(1i64), v2_probe_call(), None)
+            .await;
+        let ResponsePayload::Result(v) = response.payload else {
+            panic!("expected result");
+        };
+        assert_eq!(v["resultType"], "complete");
+        assert_eq!(v["serverInfo"]["name"], "envelope-server");
+        assert_eq!(v["serverInfo"]["version"], "3.2.1");
+    }
+
+    /// v1 byte-identity at the twin site: a non-opted-in `Server` gains NO
+    /// `resultType`/`serverInfo` even with a v2 `_meta` signal (D-07).
+    #[tokio::test]
+    async fn test_server_dispatch_v1_no_envelope() {
+        let server = Server::builder()
+            .name("v1-envelope-server")
+            .version("1.0.0")
+            .tool("probe", EraProbeServerTool)
+            .build()
+            .unwrap();
+
+        let response = server
+            .handle_request(RequestId::from(1i64), v2_probe_call(), None)
+            .await;
+        let ResponsePayload::Result(v) = response.payload else {
+            panic!("expected result");
+        };
+        assert!(v.get("resultType").is_none(), "v1 must not gain resultType");
+        assert!(v.get("serverInfo").is_none(), "v1 must not gain serverInfo");
     }
 
     /// A non-opted-in high-level `Server` runs zero era-detection: the handler
