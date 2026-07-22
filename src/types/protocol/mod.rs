@@ -566,6 +566,78 @@ pub enum Request {
     Server(Box<ServerRequest>),
 }
 
+/// Parameters for the v2 `server/discover` request (VERS-04, MCP 2026-07-28).
+///
+/// `server/discover` takes no required parameters today. This struct is
+/// `#[non_exhaustive]` so future spec-defined fields can be added without a
+/// breaking change. Adding a new public STRUCT is a non-breaking minor addition
+/// — it introduces no new variant to any exhaustive public enum.
+///
+/// # Routing
+///
+/// `server/discover` is deliberately NOT a variant of the public exhaustive
+/// [`ClientRequest`] / [`Request`] enums: adding one would break downstream
+/// exhaustive `match` arms in the workspace crates (a source-level break that
+/// `cargo-semver-checks` classifies as "minor" but that violates the milestone's
+/// hard 2.x-minor promise). Instead it is carried by the crate-private
+/// [`InternalClientRequest`] and routed by matching the raw method string via
+/// [`classify_internal_method`] BEFORE conversion into the public enum. Plan 05
+/// wires this classifier into the server request path so v2 `server/discover`
+/// reaches the era-gated handler while v1 / non-opted-in requests fall through
+/// to the existing `parse_request` → `method_not_found` → `-32601` (D-10).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[non_exhaustive]
+#[serde(rename_all = "camelCase")]
+pub struct ServerDiscoverRequest {}
+
+impl ServerDiscoverRequest {
+    /// Create an empty `server/discover` request.
+    pub fn new() -> Self {
+        Self {}
+    }
+}
+
+/// Crate-private internal dispatch representation for methods that must be
+/// routable WITHOUT appearing in the public exhaustive [`ClientRequest`] /
+/// [`Request`] enums.
+///
+/// This enum is `pub(crate)`, so it is invisible to `cargo-semver-checks` /
+/// `cargo-public-api` and can grow variants freely without any public API or
+/// downstream exhaustive-match impact.
+// Why: the internal dispatch representation + classifier are the routing seam
+// for v2 `server/discover`; production wiring into the server request path
+// lands in Plan 05. Until then they are exercised only by the unit tests below,
+// so the non-test build sees them as unused. The allow is scoped and removed
+// when Plan 05 consumes them.
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub(crate) enum InternalClientRequest {
+    /// The v2 `server/discover` request (VERS-04).
+    ServerDiscover(ServerDiscoverRequest),
+}
+
+/// Classify a raw JSON-RPC method string into a crate-private internal request,
+/// if it is one of the internally-routed (non-public-enum) methods.
+///
+/// Returns `Some(InternalClientRequest::ServerDiscover(..))` for the exact
+/// method string `"server/discover"` and `None` for every other method (which
+/// then flows through the normal public-enum dispatch path). Plan 05 calls this
+/// from the server request path BEFORE the public-enum conversion.
+// Why: production caller lands in Plan 05 (see InternalClientRequest above);
+// exercised by unit tests until then.
+#[allow(dead_code)]
+pub(crate) fn classify_internal_method(
+    method: &str,
+    _params: &serde_json::Value,
+) -> Option<InternalClientRequest> {
+    match method {
+        "server/discover" => Some(InternalClientRequest::ServerDiscover(
+            ServerDiscoverRequest::new(),
+        )),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::used_underscore_binding)]
 mod tests {
@@ -625,6 +697,33 @@ mod tests {
         assert!(meta
             .other
             .contains_key("io.modelcontextprotocol/related-task"));
+    }
+
+    #[test]
+    fn server_discover_request_round_trips() {
+        // Empty-but-extensible struct serializes to `{}` and round-trips.
+        let req = ServerDiscoverRequest::new();
+        let json = serde_json::to_value(&req).unwrap();
+        assert_eq!(json, serde_json::json!({}));
+        let _back: ServerDiscoverRequest = serde_json::from_value(json).unwrap();
+        // Deserializing an object with unknown fields still succeeds (extensible).
+        let _back2: ServerDiscoverRequest = serde_json::from_value(serde_json::json!({})).unwrap();
+    }
+
+    #[test]
+    fn classify_internal_method_routes_server_discover() {
+        // Exact "server/discover" → Some(ServerDiscover).
+        let out = classify_internal_method("server/discover", &serde_json::json!({}));
+        assert!(matches!(
+            out,
+            Some(InternalClientRequest::ServerDiscover(_))
+        ));
+
+        // Any other method → None (falls through to public-enum dispatch).
+        assert!(classify_internal_method("tools/list", &serde_json::json!({})).is_none());
+        assert!(classify_internal_method("initialize", &serde_json::json!({})).is_none());
+        // Near-miss method names are NOT matched.
+        assert!(classify_internal_method("server/discovery", &serde_json::json!({})).is_none());
     }
 
     #[test]
