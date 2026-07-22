@@ -4,6 +4,7 @@
 //! version negotiation, request routing, and completion types.
 
 pub mod context;
+pub mod error_codes;
 pub mod version;
 
 use crate::types::capabilities::{ClientCapabilities, ServerCapabilities};

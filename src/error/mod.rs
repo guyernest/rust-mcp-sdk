@@ -112,28 +112,43 @@ pub enum Error {
 pub struct ErrorCode(pub i32);
 
 impl ErrorCode {
+    // The 11 associated consts below DELEGATE to the centralized version-gated
+    // table in `crate::types::protocol::error_codes` — the single source of
+    // truth for every protocol error code (VERS-06). Names and numeric values
+    // are unchanged (API-identical, so cargo-semver-checks classifies minor);
+    // only the literal is now sourced from the table so this dominant ~210-site
+    // surface no longer duplicates the numbers.
+
     /// Parse error (-32700)
-    pub const PARSE_ERROR: Self = Self(-32700);
+    pub const PARSE_ERROR: Self = Self(crate::types::protocol::error_codes::PARSE_ERROR);
     /// Invalid request (-32600)
-    pub const INVALID_REQUEST: Self = Self(-32600);
+    pub const INVALID_REQUEST: Self = Self(crate::types::protocol::error_codes::INVALID_REQUEST);
     /// Method not found (-32601)
-    pub const METHOD_NOT_FOUND: Self = Self(-32601);
+    pub const METHOD_NOT_FOUND: Self = Self(crate::types::protocol::error_codes::METHOD_NOT_FOUND);
     /// Invalid params (-32602)
-    pub const INVALID_PARAMS: Self = Self(-32602);
+    pub const INVALID_PARAMS: Self = Self(crate::types::protocol::error_codes::INVALID_PARAMS);
     /// Internal error (-32603)
-    pub const INTERNAL_ERROR: Self = Self(-32603);
+    pub const INTERNAL_ERROR: Self = Self(crate::types::protocol::error_codes::INTERNAL_ERROR);
     /// Request timeout (-32001)
-    pub const REQUEST_TIMEOUT: Self = Self(-32001);
-    /// Unsupported capability (-32002)
-    pub const UNSUPPORTED_CAPABILITY: Self = Self(-32002);
+    pub const REQUEST_TIMEOUT: Self = Self(crate::types::protocol::error_codes::REQUEST_TIMEOUT);
+    /// Unsupported capability (-32002).
+    ///
+    /// Delegates to `error_codes::UNSUPPORTED_CAPABILITY` — the capability
+    /// semantic of `-32002`, DISTINCT from the frozen `V1_TASK_PENDING` code
+    /// that shares the same number.
+    pub const UNSUPPORTED_CAPABILITY: Self =
+        Self(crate::types::protocol::error_codes::UNSUPPORTED_CAPABILITY);
     /// Authentication required (-32003)
-    pub const AUTHENTICATION_REQUIRED: Self = Self(-32003);
+    pub const AUTHENTICATION_REQUIRED: Self =
+        Self(crate::types::protocol::error_codes::AUTHENTICATION_REQUIRED);
     /// Permission denied (-32004)
-    pub const PERMISSION_DENIED: Self = Self(-32004);
+    pub const PERMISSION_DENIED: Self =
+        Self(crate::types::protocol::error_codes::PERMISSION_DENIED);
     /// Rate limit exceeded (-32005)
-    pub const RATE_LIMITED: Self = Self(-32005);
+    pub const RATE_LIMITED: Self = Self(crate::types::protocol::error_codes::RATE_LIMITED);
     /// Circuit breaker open (-32006)
-    pub const CIRCUIT_BREAKER_OPEN: Self = Self(-32006);
+    pub const CIRCUIT_BREAKER_OPEN: Self =
+        Self(crate::types::protocol::error_codes::CIRCUIT_BREAKER_OPEN);
 
     /// Create a custom error code.
     pub const fn other(code: i32) -> Self {
