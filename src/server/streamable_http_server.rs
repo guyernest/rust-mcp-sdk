@@ -7,7 +7,8 @@ use crate::server::http_middleware::{
 use crate::server::tower_layers::{AllowedOrigins, DnsRebindingLayer, SecurityHeadersLayer};
 use crate::server::Server;
 use crate::shared::http_constants::{
-    APPLICATION_JSON, LAST_EVENT_ID, MCP_PROTOCOL_VERSION, MCP_SESSION_ID, TEXT_EVENT_STREAM,
+    APPLICATION_JSON, LAST_EVENT_ID, MCP_METHOD, MCP_NAME, MCP_PROTOCOL_VERSION, MCP_SESSION_ID,
+    TEXT_EVENT_STREAM,
 };
 use crate::shared::TransportMessage;
 use crate::types::{ClientRequest, Request};
@@ -342,6 +343,265 @@ fn create_error_response(status: StatusCode, code: i32, message: &str) -> Respon
     });
 
     (status, Json(error_body)).into_response()
+}
+
+// ===========================================================================
+// v2 required-header gate (Plan 112-06, VERS-05 / D-05 / D-06 / D-11).
+//
+// The v2 verdict is Plan 04's RESOLVED `ProtocolContext.era`, CONSUMED here —
+// this layer never runs a second independent era resolver (Pitfall 2). The
+// streamable-HTTP inbound handler resolves the context ONCE (for this gate) and
+// threads that SAME value into `Server::handle_request_with_context`, so
+// dispatch is a pass-through, not a re-resolve.
+//
+// The classifier is decomposed into small single-responsibility helpers, each
+// well under cognitive-complexity 25 (PMAT CI gate — WARNING 4), composed by a
+// thin top-level `classify_v2_request`. Every new header-violation error sources
+// its JSON-RPC code from `error_codes::` (VERS-06); no new bare -326xx literal.
+// ===========================================================================
+
+/// Upper bound on a decoded header value we will consider (`DoS` guard, T-112-13).
+const MAX_V2_HEADER_VALUE_LEN: usize = 8192;
+
+/// The decoded `MCP-Protocol-Version` header, classified for the era matrix.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HeaderProtocolVersion {
+    /// Header not present.
+    Absent,
+    /// Present but non-UTF-8 or oversized — decoded without panicking.
+    Malformed,
+    /// Exactly `2026-07-28` (the v2 era).
+    V2,
+    /// Any other decodable value (v1 or unknown).
+    Other,
+}
+
+/// The classification of an opted-in request over the header/`_meta` matrix.
+enum V2Classification {
+    /// v1 / both signals non-v2 → run the legacy path with zero enforcement.
+    Legacy,
+    /// v2 on BOTH the header and the resolved `_meta` era → enforce headers.
+    Enforce,
+    /// A conflict cell (v2-header/non-v2-`_meta` or vice-versa) → fail closed.
+    Reject(i32, &'static str),
+}
+
+/// Outcome of the whole v2 gate for one request.
+enum V2GateOutcome {
+    /// Not a v2 request (v1 / non-opted-in) — dispatch normally, no v2 headers.
+    Passthrough,
+    /// Accepted v2 request — dispatch, then echo these headers outbound.
+    EnforceOk { method: String, name: String },
+    /// Rejected — build a 4xx structured JSON-RPC error with this code/message.
+    Reject(i32, String),
+}
+
+/// Decode the `MCP-Protocol-Version` header without panicking (T-112-13).
+fn decode_version_header(headers: &HeaderMap) -> HeaderProtocolVersion {
+    let Some(raw) = headers.get(MCP_PROTOCOL_VERSION) else {
+        return HeaderProtocolVersion::Absent;
+    };
+    if raw.as_bytes().len() > MAX_V2_HEADER_VALUE_LEN {
+        return HeaderProtocolVersion::Malformed;
+    }
+    match raw.to_str() {
+        Err(_) => HeaderProtocolVersion::Malformed,
+        Ok(s) if s == crate::types::protocol::PROTOCOL_VERSION_2026_07_28 => {
+            HeaderProtocolVersion::V2
+        },
+        Ok(_) => HeaderProtocolVersion::Other,
+    }
+}
+
+/// Read a header as a bounded UTF-8 string, or `None` if absent/malformed.
+fn bounded_header_str(headers: &HeaderMap, name: &str) -> Option<String> {
+    let raw = headers.get(name)?;
+    if raw.as_bytes().len() > MAX_V2_HEADER_VALUE_LEN {
+        return None;
+    }
+    raw.to_str().ok().map(str::to_string)
+}
+
+/// Classify one cell of the header/`_meta` matrix on an OPTED-IN server.
+///
+/// `meta_is_v2` is Plan 04's resolved `ProtocolContext.era == Era::V2` — the
+/// authoritative per-request verdict this layer CONSUMES (Pitfall 2 / D-11).
+fn classify_era_cell(header: HeaderProtocolVersion, meta_is_v2: bool) -> V2Classification {
+    let header_is_v2 = matches!(header, HeaderProtocolVersion::V2);
+    match (header_is_v2, meta_is_v2) {
+        (true, true) => V2Classification::Enforce,
+        (false, false) => V2Classification::Legacy,
+        (true, false) => V2Classification::Reject(
+            crate::types::protocol::error_codes::INVALID_REQUEST,
+            "MCP-Protocol-Version header claims v2 but _meta protocolVersion disagrees",
+        ),
+        (false, true) => V2Classification::Reject(
+            crate::types::protocol::error_codes::INVALID_REQUEST,
+            "_meta claims v2 but MCP-Protocol-Version header is absent or not 2026-07-28",
+        ),
+    }
+}
+
+/// Require all THREE v2 headers (VERS-05 / D-05); return `(method, name)`.
+fn require_three_headers(
+    headers: &HeaderMap,
+) -> std::result::Result<(String, String), &'static str> {
+    let version_present = headers.get(MCP_PROTOCOL_VERSION).is_some();
+    let method = bounded_header_str(headers, MCP_METHOD);
+    let name = bounded_header_str(headers, MCP_NAME);
+    match (version_present, method, name) {
+        (true, Some(m), Some(n)) => Ok((m, n)),
+        _ => Err("v2 requests must carry Mcp-Method, Mcp-Name and MCP-Protocol-Version headers"),
+    }
+}
+
+/// Cross-check `Mcp-Method` against the JSON-RPC body `method` (D-06).
+fn cross_check_method(
+    mcp_method: &str,
+    body_method: Option<&str>,
+) -> std::result::Result<(), &'static str> {
+    match body_method {
+        Some(bm) if bm == mcp_method => Ok(()),
+        _ => Err("Mcp-Method header does not match the JSON-RPC body method"),
+    }
+}
+
+/// Methods whose logical name lives in `params.name` and must be cross-checked.
+fn is_name_bearing_method(method: &str) -> bool {
+    matches!(method, "tools/call" | "prompts/get" | "resources/read")
+}
+
+/// Cross-check `Mcp-Name` against `params.name` for name-bearing methods (D-06).
+/// Name-less methods are presence-only (already enforced upstream).
+fn cross_check_name(
+    mcp_name: &str,
+    method: &str,
+    body_name: Option<&str>,
+) -> std::result::Result<(), &'static str> {
+    if !is_name_bearing_method(method) {
+        return Ok(());
+    }
+    match body_name {
+        Some(bn) if bn == mcp_name => Ok(()),
+        _ => Err("Mcp-Name header does not match the request's logical name (params.name)"),
+    }
+}
+
+/// The thin top-level classifier over the full matrix (cog-safe composition).
+///
+/// Inputs: decoded header signals + Plan-04 resolved `meta_is_v2` + the untrusted
+/// body `method`/`params.name`. Output: accept (with echo headers) | reject(code)
+/// | passthrough. Pure and non-panicking — property-tested.
+fn classify_v2_request(
+    headers: &HeaderMap,
+    meta_is_v2: bool,
+    body_method: Option<&str>,
+    body_name: Option<&str>,
+) -> V2GateOutcome {
+    use crate::types::protocol::error_codes::INVALID_REQUEST;
+    let header = decode_version_header(headers);
+    match classify_era_cell(header, meta_is_v2) {
+        V2Classification::Legacy => V2GateOutcome::Passthrough,
+        V2Classification::Reject(code, msg) => V2GateOutcome::Reject(code, msg.to_string()),
+        V2Classification::Enforce => {
+            let (method, name) = match require_three_headers(headers) {
+                Ok(pair) => pair,
+                Err(msg) => return V2GateOutcome::Reject(INVALID_REQUEST, msg.to_string()),
+            };
+            if let Err(msg) = cross_check_method(&method, body_method) {
+                return V2GateOutcome::Reject(INVALID_REQUEST, msg.to_string());
+            }
+            if let Err(msg) = cross_check_name(&name, &method, body_name) {
+                return V2GateOutcome::Reject(INVALID_REQUEST, msg.to_string());
+            }
+            V2GateOutcome::EnforceOk { method, name }
+        },
+    }
+}
+
+/// Extract the untrusted `(method, params.name)` pair from the raw JSON-RPC body.
+///
+/// Re-parses the raw bytes (the transport parse already succeeded) so the
+/// cross-check compares the header against the LITERAL wire `method`/`params.name`
+/// a WAF would see — the smuggling-relevant view (D-06). Never panics.
+fn extract_body_method_and_name(body: &[u8]) -> (Option<String>, Option<String>) {
+    let Ok(value) = serde_json::from_slice::<serde_json::Value>(body) else {
+        return (None, None);
+    };
+    let method = value
+        .get("method")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string);
+    let name = value
+        .get("params")
+        .and_then(|p| p.get("name"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string);
+    (method, name)
+}
+
+/// Emit the three required v2 headers outbound WITHOUT panicking (T-112-13).
+///
+/// Sets `Mcp-Method`, `Mcp-Name` and forces `MCP-Protocol-Version` to the v2
+/// value. Called on BOTH the success and structured-error response of an
+/// accepted v2 request. On an unrepresentable value the individual insert is
+/// skipped (caller already produced a valid response) rather than unwrapping.
+fn apply_v2_outbound_headers(headers: &mut HeaderMap, method: &str, name: &str) {
+    if let Ok(v) = HeaderValue::from_str(method) {
+        headers.insert(MCP_METHOD, v);
+    }
+    if let Ok(v) = HeaderValue::from_str(name) {
+        headers.insert(MCP_NAME, v);
+    }
+    if let Ok(v) = HeaderValue::from_str(crate::types::protocol::PROTOCOL_VERSION_2026_07_28) {
+        headers.insert(MCP_PROTOCOL_VERSION, v);
+    }
+}
+
+/// Run the v2 gate for a parsed `Request` on an opted-in server.
+///
+/// Resolves the `ProtocolContext` ONCE via the SAME shared resolver dispatch
+/// uses, and returns both that resolved context (to thread into
+/// `handle_request_with_context`) and the gate outcome. The HTTP layer CONSUMES
+/// the resolved era — it never re-derives "is v2" from the raw header alone.
+async fn run_v2_header_gate(
+    state: &ServerState,
+    request: &Request,
+    headers: &HeaderMap,
+    raw_body: &[u8],
+) -> (
+    Option<crate::types::protocol::ProtocolContext>,
+    V2GateOutcome,
+) {
+    let resolved = {
+        let server = state.server.lock().await;
+        // Non-opted-in servers run ZERO era-detection — v1 path byte-for-byte
+        // unchanged (D-04). `resolve_ingress_protocol_context` already
+        // short-circuits to `Ok(None)` there.
+        server.resolve_ingress_protocol_context(request)
+    };
+    let context = match resolved {
+        Ok(ctx) => ctx,
+        Err(err) => {
+            // Unsupported/malformed per-request version — reject via the SAME
+            // mapping dispatch uses (structured INVALID_PARAMS, VERS-06).
+            let (code, message) = crate::server::core::negotiation_error_to_rejection(&err);
+            return (None, V2GateOutcome::Reject(code, message));
+        },
+    };
+    // `Ok(None)` == not opted in → zero enforcement (D-04).
+    let Some(ref pc) = context else {
+        return (context.clone(), V2GateOutcome::Passthrough);
+    };
+    let meta_is_v2 = pc.era == crate::types::protocol::Era::V2;
+    let (body_method, body_name) = extract_body_method_and_name(raw_body);
+    let outcome = classify_v2_request(
+        headers,
+        meta_is_v2,
+        body_method.as_deref(),
+        body_name.as_deref(),
+    );
+    (context, outcome)
 }
 
 impl StreamableHttpServer {
@@ -740,13 +1000,16 @@ async fn handle_post_request(
     State(state): State<ServerState>,
     request: axum::extract::Request<Body>,
 ) -> impl IntoResponse {
-    // Fast path: No HTTP middleware chain
+    // Fast path: No HTTP middleware chain.
+    // `Box::pin` both dispatch futures: the v2 header gate (Plan 112-06) grows the
+    // POST future past clippy's large_future threshold; boxing keeps the axum
+    // handler future small without changing behavior.
     if state.config.http_middleware.is_none() {
-        return handle_post_fast_path(state, request).await;
+        return Box::pin(handle_post_fast_path(state, request)).await;
     }
 
     // Middleware path: Process through HTTP middleware chain
-    handle_post_with_middleware(state, request).await
+    Box::pin(handle_post_with_middleware(state, request)).await
 }
 
 /// Extract and validate authentication from headers.
@@ -1158,18 +1421,44 @@ fn parse_transport_message_fast(body: &[u8]) -> std::result::Result<TransportMes
 
 /// Handle the successful-request arm on the fast path: dispatch to the
 /// server, persist event, and attach session/version headers to the response.
+/// Per-request dispatch inputs threaded into the fast-path handler.
+///
+/// Bundles the response-shaping flags with the Plan-04-resolved
+/// `ProtocolContext` (threaded into dispatch, never re-resolved — Plan 06) and
+/// the optional v2 outbound headers to echo on success AND error.
+struct FastPathDispatch {
+    is_init_request: bool,
+    response_session_id: Option<String>,
+    /// Plan-04-resolved `ProtocolContext`, CONSUMED at dispatch (D-11).
+    protocol_context: Option<crate::types::protocol::ProtocolContext>,
+    /// When `Some((method, name))`, this is an accepted v2 request whose
+    /// response echoes `Mcp-Method`/`Mcp-Name`/`MCP-Protocol-Version`.
+    v2_outbound: Option<(String, String)>,
+}
+
 async fn handle_fast_path_request(
     state: &ServerState,
     id: crate::types::RequestId,
     request: Request,
     auth_context: Option<crate::server::auth::AuthContext>,
-    is_init_request: bool,
-    response_session_id: Option<String>,
+    dispatch: FastPathDispatch,
     session_id: Option<&String>,
 ) -> Response {
+    let FastPathDispatch {
+        is_init_request,
+        response_session_id,
+        protocol_context,
+        v2_outbound,
+    } = dispatch;
+
     let json_response = {
         let server = state.server.lock().await;
-        server.handle_request(id, request, auth_context).await
+        // Thread the ALREADY-RESOLVED ProtocolContext into dispatch — the HTTP
+        // layer resolved it once for the header gate; dispatch does NOT
+        // re-resolve (Plan 06 / D-11 / Pitfall 2).
+        server
+            .handle_request_with_context(id, request, auth_context, protocol_context)
+            .await
     };
 
     tracing::debug!(
@@ -1207,6 +1496,13 @@ async fn handle_fast_path_request(
     response
         .headers_mut()
         .insert(MCP_PROTOCOL_VERSION, version_to_send.parse().unwrap());
+
+    // v2 outbound headers (VERS-05): echoed on BOTH the handler's success and its
+    // structured JSON-RPC error, built without panicking. Overwrites the
+    // MCP-Protocol-Version above with the v2 value for an accepted v2 request.
+    if let Some((method, name)) = &v2_outbound {
+        apply_v2_outbound_headers(response.headers_mut(), method, name);
+    }
 
     response
 }
@@ -1253,7 +1549,30 @@ async fn handle_post_fast_path(
         Err(error_response) => return error_response,
     };
 
-    if !is_init_request {
+    // v2 required-header gate (VERS-05): resolve the ProtocolContext ONCE
+    // (consumed by dispatch), classify the header/_meta matrix fail-closed, and
+    // derive the outbound-header echo. Runs BEFORE the legacy protocol-version
+    // check because an accepted v2 request carries MCP-Protocol-Version:
+    // 2026-07-28, which the static-SUPPORTED check would otherwise reject. v1 /
+    // non-opted-in → Passthrough (zero enforcement, D-04).
+    let (protocol_context, v2_outbound) = match &message {
+        TransportMessage::Request { request, .. } => {
+            let (ctx, gate) = run_v2_header_gate(&state, request, &headers, body.as_bytes()).await;
+            match gate {
+                V2GateOutcome::Reject(code, msg) => {
+                    return create_error_response(StatusCode::BAD_REQUEST, code, &msg);
+                },
+                V2GateOutcome::Passthrough => (ctx, None),
+                V2GateOutcome::EnforceOk { method, name } => (ctx, Some((method, name))),
+            }
+        },
+        _ => (None, None),
+    };
+    let is_v2_request = v2_outbound.is_some();
+
+    // Legacy protocol-version validation applies to v1 non-init requests ONLY —
+    // an accepted v2 request is validated by the gate above (D-11 untouched v1).
+    if !is_init_request && !is_v2_request {
         if let Err(error_response) =
             validate_protocol_version(&state, session_id.as_ref(), protocol_version.as_ref())
         {
@@ -1273,8 +1592,12 @@ async fn handle_post_fast_path(
                 id,
                 request,
                 auth_context,
-                is_init_request,
-                response_session_id,
+                FastPathDispatch {
+                    is_init_request,
+                    response_session_id,
+                    protocol_context,
+                    v2_outbound,
+                },
                 session_id.as_ref(),
             )
             .await
@@ -1371,6 +1694,18 @@ async fn validate_protocol_version_with_error_hook(
     Ok(())
 }
 
+/// Per-request dispatch inputs threaded into the middleware-path handler.
+///
+/// The middleware-path twin of [`FastPathDispatch`]: carries the Plan-04-resolved
+/// `ProtocolContext` (CONSUMED at dispatch, never re-resolved) and the optional
+/// v2 outbound headers to echo on success AND error.
+struct MiddlewareDispatch {
+    is_init_request: bool,
+    response_session_id: Option<String>,
+    protocol_context: Option<crate::types::protocol::ProtocolContext>,
+    v2_outbound: Option<(String, String)>,
+}
+
 /// Dispatch the parsed `TransportMessage` on the middleware path.
 ///
 /// Handles `Request` (server-handled + response assembly), `Notification`
@@ -1378,17 +1713,26 @@ async fn validate_protocol_version_with_error_hook(
 async fn dispatch_message_with_middleware(
     state: &ServerState,
     message: TransportMessage,
-    is_init_request: bool,
-    response_session_id: Option<String>,
+    dispatch: MiddlewareDispatch,
     auth_context: Option<crate::server::auth::AuthContext>,
     http_middleware: &ServerHttpMiddlewareChain,
     http_context: &ServerHttpContext,
 ) -> Response {
+    let MiddlewareDispatch {
+        is_init_request,
+        response_session_id,
+        protocol_context,
+        v2_outbound,
+    } = dispatch;
     match message {
         TransportMessage::Request { id, request } => {
             let json_response = {
                 let server = state.server.lock().await;
-                server.handle_request(id, request, auth_context).await
+                // Thread the ALREADY-RESOLVED ProtocolContext into dispatch
+                // (Plan 06 / D-11): never re-resolved downstream.
+                server
+                    .handle_request_with_context(id, request, auth_context, protocol_context)
+                    .await
             };
             let response_msg = TransportMessage::Response(json_response);
 
@@ -1409,14 +1753,20 @@ async fn dispatch_message_with_middleware(
                 negotiated_version.as_deref(),
             );
 
-            build_success_response_with_middleware(
+            let mut response = build_success_response_with_middleware(
                 &response_msg,
                 response_session_id.as_ref(),
                 &version_to_send,
                 http_middleware,
                 http_context,
             )
-            .await
+            .await;
+
+            // v2 outbound headers on BOTH success and structured error (VERS-05).
+            if let Some((method, name)) = &v2_outbound {
+                apply_v2_outbound_headers(response.headers_mut(), method, name);
+            }
+            response
         },
         TransportMessage::Notification { .. } | TransportMessage::Response(_) => {
             StatusCode::ACCEPTED.into_response()
@@ -1490,17 +1840,51 @@ async fn handle_post_with_middleware(
         Err(response) => return response,
     };
 
-    if let Err(response) = validate_protocol_version_with_error_hook(
-        &state,
-        is_init_request,
-        session_id.as_ref(),
-        protocol_version.as_ref(),
-        http_middleware,
-        &http_context,
-    )
-    .await
+    // v2 required-header gate (VERS-05): resolve the ProtocolContext ONCE and
+    // classify the header/_meta matrix fail-closed before dispatch. Runs BEFORE
+    // the legacy protocol-version check because an accepted v2 request carries
+    // MCP-Protocol-Version: 2026-07-28 (which the static-SUPPORTED check would
+    // reject). Only Request messages carry a header contract; v1 / non-opted-in
+    // → Passthrough (zero enforcement, D-04).
+    let (protocol_context, v2_outbound) = if let TransportMessage::Request { request, .. } =
+        &message
     {
-        return response;
+        let (ctx, gate) = run_v2_header_gate(
+            &state,
+            request,
+            &server_request.headers,
+            &server_request.body,
+        )
+        .await;
+        match gate {
+            V2GateOutcome::Reject(code, msg) => {
+                report_middleware_error(http_middleware, &http_context, "v2 header gate rejected")
+                    .await;
+                return create_error_response(StatusCode::BAD_REQUEST, code, &msg);
+            },
+            V2GateOutcome::Passthrough => (ctx, None),
+            V2GateOutcome::EnforceOk { method, name } => (ctx, Some((method, name))),
+        }
+    } else {
+        (None, None)
+    };
+    let is_v2_request = v2_outbound.is_some();
+
+    // Legacy protocol-version validation applies to v1 non-init requests ONLY —
+    // an accepted v2 request is validated by the gate above (v1 path untouched).
+    if !is_v2_request {
+        if let Err(response) = validate_protocol_version_with_error_hook(
+            &state,
+            is_init_request,
+            session_id.as_ref(),
+            protocol_version.as_ref(),
+            http_middleware,
+            &http_context,
+        )
+        .await
+        {
+            return response;
+        }
     }
 
     let auth_context =
@@ -1514,8 +1898,12 @@ async fn handle_post_with_middleware(
     dispatch_message_with_middleware(
         &state,
         message,
-        is_init_request,
-        response_session_id,
+        MiddlewareDispatch {
+            is_init_request,
+            response_session_id,
+            protocol_context,
+            v2_outbound,
+        },
         auth_context,
         http_middleware,
         &http_context,
@@ -1776,5 +2164,206 @@ mod tests {
         assert_eq!(ctx.subject, "u");
         assert_eq!(ctx.claims["email"], "u@example.com");
         assert_eq!(ctx.claims["custom:tier"], "gold");
+    }
+
+    // ======================================================================
+    // v2 required-header classifier (Plan 112-06, VERS-05 / D-05 / D-06).
+    // Unit + property coverage of the PURE, non-panicking gate helpers.
+    // ======================================================================
+
+    use crate::types::protocol::error_codes::INVALID_REQUEST;
+    use crate::types::protocol::PROTOCOL_VERSION_2026_07_28 as V2;
+
+    /// Build a `HeaderMap` from `(name, value)` pairs for classifier tests.
+    fn headers_from(pairs: &[(&str, &str)]) -> HeaderMap {
+        let mut h = HeaderMap::new();
+        for (k, v) in pairs {
+            let name = http::header::HeaderName::from_bytes(k.as_bytes()).unwrap();
+            h.insert(name, HeaderValue::from_str(v).unwrap());
+        }
+        h
+    }
+
+    #[test]
+    fn decode_version_header_classifies_each_kind() {
+        assert_eq!(
+            decode_version_header(&headers_from(&[])),
+            HeaderProtocolVersion::Absent
+        );
+        assert_eq!(
+            decode_version_header(&headers_from(&[(MCP_PROTOCOL_VERSION, V2)])),
+            HeaderProtocolVersion::V2
+        );
+        assert_eq!(
+            decode_version_header(&headers_from(&[(MCP_PROTOCOL_VERSION, "2025-11-25")])),
+            HeaderProtocolVersion::Other
+        );
+        // Oversized value → Malformed, never a panic.
+        let big = "x".repeat(MAX_V2_HEADER_VALUE_LEN + 1);
+        assert_eq!(
+            decode_version_header(&headers_from(&[(MCP_PROTOCOL_VERSION, &big)])),
+            HeaderProtocolVersion::Malformed
+        );
+    }
+
+    #[test]
+    fn classify_era_cell_covers_every_matrix_cell() {
+        // v2/v2 → enforce
+        assert!(matches!(
+            classify_era_cell(HeaderProtocolVersion::V2, true),
+            V2Classification::Enforce
+        ));
+        // v1/v1 → legacy
+        assert!(matches!(
+            classify_era_cell(HeaderProtocolVersion::Other, false),
+            V2Classification::Legacy
+        ));
+        assert!(matches!(
+            classify_era_cell(HeaderProtocolVersion::Absent, false),
+            V2Classification::Legacy
+        ));
+        // v2-header / non-v2-meta → reject
+        assert!(matches!(
+            classify_era_cell(HeaderProtocolVersion::V2, false),
+            V2Classification::Reject(INVALID_REQUEST, _)
+        ));
+        // non-v2-header / v2-meta → reject
+        assert!(matches!(
+            classify_era_cell(HeaderProtocolVersion::Absent, true),
+            V2Classification::Reject(INVALID_REQUEST, _)
+        ));
+        assert!(matches!(
+            classify_era_cell(HeaderProtocolVersion::Malformed, true),
+            V2Classification::Reject(INVALID_REQUEST, _)
+        ));
+    }
+
+    #[test]
+    fn require_three_headers_needs_all_three() {
+        // All three present → Ok
+        let ok = headers_from(&[
+            (MCP_PROTOCOL_VERSION, V2),
+            (MCP_METHOD, "tools/call"),
+            (MCP_NAME, "search"),
+        ]);
+        assert_eq!(
+            require_three_headers(&ok).unwrap(),
+            ("tools/call".to_string(), "search".to_string())
+        );
+        // Missing Mcp-Name → Err
+        let missing = headers_from(&[(MCP_PROTOCOL_VERSION, V2), (MCP_METHOD, "tools/call")]);
+        assert!(require_three_headers(&missing).is_err());
+    }
+
+    #[test]
+    fn cross_check_method_and_name_fail_closed() {
+        assert!(cross_check_method("tools/call", Some("tools/call")).is_ok());
+        assert!(cross_check_method("tools/call", Some("resources/read")).is_err());
+        assert!(cross_check_method("tools/call", None).is_err());
+
+        // name-bearing: must match params.name
+        assert!(cross_check_name("search", "tools/call", Some("search")).is_ok());
+        assert!(cross_check_name("search", "tools/call", Some("other")).is_err());
+        assert!(cross_check_name("search", "tools/call", None).is_err());
+        // name-less method: presence-only, body name irrelevant
+        assert!(cross_check_name("anything", "tools/list", None).is_ok());
+    }
+
+    #[test]
+    fn classify_v2_request_accepts_well_formed_v2() {
+        let h = headers_from(&[
+            (MCP_PROTOCOL_VERSION, V2),
+            (MCP_METHOD, "tools/call"),
+            (MCP_NAME, "search"),
+        ]);
+        let out = classify_v2_request(&h, true, Some("tools/call"), Some("search"));
+        assert!(matches!(out, V2GateOutcome::EnforceOk { .. }));
+    }
+
+    #[test]
+    fn classify_v2_request_rejects_method_body_mismatch() {
+        let h = headers_from(&[
+            (MCP_PROTOCOL_VERSION, V2),
+            (MCP_METHOD, "tools/call"),
+            (MCP_NAME, "search"),
+        ]);
+        // body method disagrees with Mcp-Method (smuggling)
+        let out = classify_v2_request(&h, true, Some("resources/read"), Some("search"));
+        assert!(matches!(out, V2GateOutcome::Reject(INVALID_REQUEST, _)));
+    }
+
+    #[test]
+    fn extract_body_method_and_name_reads_wire_shape() {
+        let body = br#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search"}}"#;
+        let (m, n) = extract_body_method_and_name(body);
+        assert_eq!(m.as_deref(), Some("tools/call"));
+        assert_eq!(n.as_deref(), Some("search"));
+        // Garbage bytes → (None, None), never a panic.
+        assert_eq!(extract_body_method_and_name(b"not json"), (None, None));
+    }
+
+    #[test]
+    fn apply_v2_outbound_headers_sets_all_three_without_panic() {
+        let mut h = HeaderMap::new();
+        apply_v2_outbound_headers(&mut h, "tools/call", "search");
+        assert_eq!(h.get(MCP_METHOD).unwrap(), "tools/call");
+        assert_eq!(h.get(MCP_NAME).unwrap(), "search");
+        assert_eq!(h.get(MCP_PROTOCOL_VERSION).unwrap(), V2);
+    }
+
+    proptest::proptest! {
+        /// The classifier NEVER panics over arbitrary header bytes + signal
+        /// combinations, and holds the accept/reject invariants (T-112-13).
+        #[test]
+        fn v2_header_gate_proptest(
+            header_kind in 0u8..4,
+            meta_is_v2 in proptest::bool::ANY,
+            have_method in proptest::bool::ANY,
+            have_name in proptest::bool::ANY,
+            method_val in "[a-z/]{0,20}",
+            name_val in "[a-z]{0,20}",
+            body_method in proptest::option::of("[a-z/]{0,20}"),
+            body_name in proptest::option::of("[a-z]{0,20}"),
+        ) {
+            let mut pairs: Vec<(&str, String)> = Vec::new();
+            match header_kind {
+                0 => {}, // absent
+                1 => pairs.push((MCP_PROTOCOL_VERSION, V2.to_string())),
+                2 => pairs.push((MCP_PROTOCOL_VERSION, "2025-11-25".to_string())),
+                _ => pairs.push((MCP_PROTOCOL_VERSION, "\u{ff}bogus".to_string())),
+            }
+            if have_method {
+                pairs.push((MCP_METHOD, method_val.clone()));
+            }
+            if have_name {
+                pairs.push((MCP_NAME, name_val.clone()));
+            }
+            let mut h = HeaderMap::new();
+            for (k, v) in &pairs {
+                if let Ok(hv) = HeaderValue::from_str(v) {
+                    let name = http::header::HeaderName::from_bytes(k.as_bytes()).unwrap();
+                    h.insert(name, hv);
+                }
+            }
+
+            // Must not panic.
+            let out = classify_v2_request(&h, meta_is_v2, body_method.as_deref(), body_name.as_deref());
+
+            let header_is_v2 = decode_version_header(&h) == HeaderProtocolVersion::V2;
+            match out {
+                V2GateOutcome::Passthrough => {
+                    // Only when neither signal is v2.
+                    proptest::prop_assert!(!header_is_v2 && !meta_is_v2);
+                },
+                V2GateOutcome::EnforceOk { .. } => {
+                    // Only when BOTH signals are v2 AND all three headers present.
+                    proptest::prop_assert!(header_is_v2 && meta_is_v2);
+                    proptest::prop_assert!(have_method && have_name);
+                },
+                V2GateOutcome::Reject(code, _) => {
+                    proptest::prop_assert_eq!(code, INVALID_REQUEST);
+                },
+            }
+        }
     }
 }

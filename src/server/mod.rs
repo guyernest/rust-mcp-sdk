@@ -1251,7 +1251,7 @@ impl Server {
     ///
     /// The "run era-detection at all" gate (D-04); `false` skips the resolver so
     /// the v1 path is byte-for-byte unchanged.
-    fn is_v2_opted_in(&self) -> bool {
+    pub(crate) fn is_v2_opted_in(&self) -> bool {
         self.supported_protocol_versions
             .iter()
             .any(|v| v.as_str() == crate::types::protocol::PROTOCOL_VERSION_2026_07_28)
@@ -1261,7 +1261,13 @@ impl Server {
     /// ONCE at this dispatch site's ingress via the SAME shared resolver
     /// `ServerCore` uses — the twin wiring (Pitfall 3). `Ok(None)` for a
     /// non-opted-in server (zero era-detection, D-04).
-    fn resolve_ingress_protocol_context(
+    ///
+    /// `pub(crate)` so the streamable-HTTP layer (Plan 06) can resolve ONCE for
+    /// its header gate and thread the SAME value into
+    /// [`handle_request_with_context`](Self::handle_request_with_context) — the
+    /// HTTP layer CONSUMES the resolved era, it never runs a second resolver
+    /// (D-11 / Pitfall 2).
+    pub(crate) fn resolve_ingress_protocol_context(
         &self,
         request: &Request,
     ) -> std::result::Result<
@@ -1305,6 +1311,26 @@ impl Server {
                 };
             },
         };
+        self.handle_request_with_context(id, request, auth_context, protocol_context)
+            .await
+    }
+
+    /// Dispatch a request with an ALREADY-RESOLVED `ProtocolContext` threaded in.
+    ///
+    /// This is the pass-through seam Plan 06 relies on: the streamable-HTTP layer
+    /// resolves the `ProtocolContext` ONCE (via
+    /// [`resolve_ingress_protocol_context`](Self::resolve_ingress_protocol_context))
+    /// for its header gate, then passes that SAME value here so dispatch does NOT
+    /// re-resolve `_meta` — one authoritative era per request (D-11 / Pitfall 2).
+    /// [`handle_request`](Self::handle_request) is the thin wrapper that resolves
+    /// then calls this.
+    pub(crate) async fn handle_request_with_context(
+        &self,
+        id: RequestId,
+        request: Request,
+        auth_context: Option<auth::AuthContext>,
+        protocol_context: Option<crate::types::protocol::ProtocolContext>,
+    ) -> JSONRPCResponse {
         let mut response = match request {
             Request::Client(ref boxed_req)
                 if matches!(**boxed_req, ClientRequest::Initialize(_)) =>
