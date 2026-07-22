@@ -13,19 +13,11 @@ use pmcp_package::package::DeployDescriptor;
 use serde_json::json;
 use std::collections::BTreeMap;
 
-/// Render the plain-Lambda kernel's fixed output set: `ApiUrl`,
-/// `DashboardUrl`, `LambdaArn`, `LambdaName`, `McpRoleArn`.
-#[must_use]
-pub fn render_outputs(d: &DeployDescriptor, p: &RenderParams) -> BTreeMap<String, CfnOutput> {
+/// Build the output entries shared by every renderer target:
+/// `DashboardUrl`, `LambdaArn`, `McpRoleArn`. Callers add their own
+/// `ApiUrl` (and, for the plain-Lambda kernel, `LambdaName`) on top.
+fn common_outputs(d: &DeployDescriptor, p: &RenderParams) -> BTreeMap<String, CfnOutput> {
     let mut outputs = BTreeMap::new();
-    outputs.insert(
-        "ApiUrl".to_string(),
-        CfnOutput {
-            description: Some("MCP endpoint (construct from deployment ID)".to_string()),
-            value: json!("https://api.pmcp.run/{use-deployment-id}/mcp"),
-            export: None,
-        },
-    );
     outputs.insert(
         "DashboardUrl".to_string(),
         CfnOutput {
@@ -42,14 +34,6 @@ pub fn render_outputs(d: &DeployDescriptor, p: &RenderParams) -> BTreeMap<String
         CfnOutput {
             description: Some("MCP Server Lambda ARN".to_string()),
             value: json!({ "Fn::GetAtt": [logical_ids::for_function(), "Arn"] }),
-            export: None,
-        },
-    );
-    outputs.insert(
-        "LambdaName".to_string(),
-        CfnOutput {
-            description: Some("MCP Server Lambda Name".to_string()),
-            value: json!({ "Ref": logical_ids::for_function() }),
             export: None,
         },
     );
@@ -69,6 +53,30 @@ pub fn render_outputs(d: &DeployDescriptor, p: &RenderParams) -> BTreeMap<String
     outputs
 }
 
+/// Render the plain-Lambda kernel's fixed output set: `ApiUrl`,
+/// `DashboardUrl`, `LambdaArn`, `LambdaName`, `McpRoleArn`.
+#[must_use]
+pub fn render_outputs(d: &DeployDescriptor, p: &RenderParams) -> BTreeMap<String, CfnOutput> {
+    let mut outputs = common_outputs(d, p);
+    outputs.insert(
+        "ApiUrl".to_string(),
+        CfnOutput {
+            description: Some("MCP endpoint (construct from deployment ID)".to_string()),
+            value: json!("https://api.pmcp.run/{use-deployment-id}/mcp"),
+            export: None,
+        },
+    );
+    outputs.insert(
+        "LambdaName".to_string(),
+        CfnOutput {
+            description: Some("MCP Server Lambda Name".to_string()),
+            value: json!({ "Ref": logical_ids::for_function() }),
+            export: None,
+        },
+    );
+    outputs
+}
+
 /// Render the `aws-lambda` target's fixed output set: `ApiUrl` (this
 /// stack's own HTTP API endpoint, via `Fn::GetAtt` on the rendered
 /// `AWS::ApiGatewayV2::Api`'s `ApiEndpoint` attribute — unlike
@@ -83,45 +91,13 @@ pub fn render_http_api_outputs(
     p: &RenderParams,
     http_api_logical_id: &str,
 ) -> BTreeMap<String, CfnOutput> {
-    let mut outputs = BTreeMap::new();
+    let mut outputs = common_outputs(d, p);
     outputs.insert(
         "ApiUrl".to_string(),
         CfnOutput {
             description: Some("MCP Server API URL".to_string()),
             value: json!({ "Fn::GetAtt": [http_api_logical_id, "ApiEndpoint"] }),
             export: None,
-        },
-    );
-    outputs.insert(
-        "DashboardUrl".to_string(),
-        CfnOutput {
-            description: Some("CloudWatch Console".to_string()),
-            value: json!(format!(
-                "https://console.aws.amazon.com/cloudwatch/home?region={}",
-                p.region
-            )),
-            export: None,
-        },
-    );
-    outputs.insert(
-        "LambdaArn".to_string(),
-        CfnOutput {
-            description: Some("MCP Server Lambda ARN".to_string()),
-            value: json!({ "Fn::GetAtt": [logical_ids::for_function(), "Arn"] }),
-            export: None,
-        },
-    );
-    outputs.insert(
-        "McpRoleArn".to_string(),
-        CfnOutput {
-            description: Some(
-                "MCP Server Lambda execution role ARN (stable export for downstream stacks)"
-                    .to_string(),
-            ),
-            value: json!({ "Fn::GetAtt": [logical_ids::for_execution_role(), "Arn"] }),
-            export: Some(CfnExport {
-                name: format!("pmcp-{}-McpRoleArn", d.server.name),
-            }),
         },
     );
     outputs
