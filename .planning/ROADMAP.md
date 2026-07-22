@@ -15,6 +15,7 @@
 - ✅ **v2.2 Configuration-Only MCP Servers (SQL + OpenAPI toolkits)** — Phases 82-90.2 (substantially shipped)
 - 🚧 **v2.3 Excel-as-Configuration MCP Servers (governed Excel CodeLanguage)** — Phases 91-96 (in progress)
 - 📋 **v2.4 Agents & Teams — SDK Extraction** — Phases 106-111 (planned)
+- 📋 **v2.5 MCP Spec 2026-07-28 (v2) Support** — Phases 112-119 (planned)
 
 ## Phases
 
@@ -2200,3 +2201,150 @@ Plans:
 | 109. Team Reference Servers | 9/9 | Complete    | 2026-07-19 |
 | 110. cargo-pmcp Agent & Team Verbs | 6/6 | Complete    | 2026-07-19 |
 | 111. Docs in Three Shapes + Examples | 0/TBD | Not started | - |
+
+## v2.5 MCP Spec 2026-07-28 (v2) Support (Phases 112-119)
+
+**Milestone Goal:** Make pmcp a dual-version SDK that transparently serves both MCP 2025-11-25 and the 2026-07-28 (v2) spec from one binary via per-request negotiation — a stateless core, Tasks-as-extension, JSON Schema 2020-12, auth-hardening SEPs, and conformance against the official suite. v2 is the strategic primary path (stateless/Lambda-first) and v1 is a cleanly severable compatibility layer; the whole milestone stays a 2.x minor (additive, no 3.0).
+
+**Dependency spine (research-corroborated, all four passes):** version-plumbing spine (VERS) is the keystone and lands first and alone — nearly every other v2 behavior era-gates off it. Stateless HTTP + MRTR next (Tasks has a loose dependency on it for the shared stateless-identity/owner-binding pattern). JSON Schema and Auth parallelize with the HTTP/Tasks track once the spine lands. Client/agent tooling + v1 severability ride after the v2 server paths exist. Conformance is last (validates the union). Docs close it out.
+
+**Final-spec checkpoint:** The 2026-07-28 spec finalizes six days after roadmap creation. Wire-exact work (error-code values, `requestState` shape, caching-hint field names) is sequenced so it lands after final publication — VERS-06's error-code table is structure-first, values-from-final-schema.json only (open verification item: `-32002`→`-32602` rename direction MUST be re-verified against the final schema before touching the frozen `-32002` task-pending code; cross-cuts Phases 112 and 114).
+
+**Non-goals:** Hard cutover to v2 (dual-version now, sunset later per SMPL-01); removing Roots/Sampling/Logging (deprecated with a 12-month advisory window — CONF-03 runtime verification only); adding `oauth2`/`openidconnect` crates (auth SEPs land as source changes). Zero new runtime dependencies — only `jsonschema` 0.46→0.48 for Draft 2020-12; Node.js LTS 22.x is CI-only for the conformance suite.
+
+- [ ] **Phase 112: Version Plumbing Spine** — `ProtocolContext` resolved once at ingress + threaded through dispatch; 2026-07-28 as explicit opt-in (LATEST stays 2025-11-25); `server/discover`, extensions map, required v2 headers, `resultType` envelope, W3C trace-context, centralized version-gated error-code table
+- [ ] **Phase 113: Stateless HTTP + Multi-Round-Trip Elicitation** — v2 requests run handshake-free/session-free on the existing `stateless()` branch; MRTR (`input_required`/`requestState`/`inputResponses`) end-to-end; `subscriptions/listen`; no SSE resumability + id-replay regression test; the pmcp `Client` speaks v2 and fulfills MRTR
+- [ ] **Phase 114: Tasks Extension Migration** — Tasks negotiated via the extensions map, `tasks/update` added, `tasks/list` era-gated off on v2; `resultType:"task"` + 5-state→v2-enum mapping; stateless owner-binding fails closed; TaskStore/backends survive unchanged (wire reshape behind TaskRouter)
+- [ ] **Phase 115: JSON Schema 2020-12 + Structured Output + Caching Hints** — jsonschema 0.48 Draft 2020-12 explicitly pinned (wasm-clean, SEP-2106); `structuredContent` accepts any JSON value on v2; additive `ttlMs`/`cacheScope` on the five list/read results
+- [ ] **Phase 116: Auth Hardening SEPs** — RFC 9207 `iss` validation (strict v2 / lenient v1), DCR `application_type`, issuer-keyed credential storage + three clarifications — all source changes to the hand-rolled OAuth stack, no new crates
+- [ ] **Phase 117: Agents, Tester & v1 Severability** — `pmcp-agent` (ToolInvoker + task polling) and `mcp-tester` exercise a v2 server end-to-end; v1-only machinery isolated behind a severable era-gated layer with a documented sunset policy; v2 path carries no session/SSE baggage
+- [ ] **Phase 118: Conformance Against the Official Suite** — official `@modelcontextprotocol/conformance` (commit-pinned) in CI over real HTTP against a dual-version example; Phase-109 Rust harness gains v2 fixtures (v1 stays green, dev-dep-free build); deprecated caps verified functional under v2
+- [ ] **Phase 119: Documentation — Three Shapes + v2 Migration** — Agents & Teams docs in three shapes (carried from v2.4 Phase 111); v2 migration guide + dual-version story + sunset policy; runnable stateless-v2-server and v2-client/agent examples
+
+## Phase Details — v2.5 (MCP Spec 2026-07-28 v2 Support)
+
+### Phase 112: Version Plumbing Spine
+
+**Goal**: pmcp resolves a per-request protocol era once at transport ingress and threads it explicitly through dispatch, so one binary understands both 2025-11-25 and 2026-07-28 clients — with v2 strictly opt-in, no v1 behavior change, and the whole milestone kept additive (2.x minor). This is the keystone: nearly every other v2 behavior era-gates off it.
+**Depends on**: Nothing (keystone; lands first and alone)
+**Requirements**: VERS-01, VERS-02, VERS-03, VERS-04, VERS-05, VERS-06, VERS-07, VERS-08, VERS-09
+**Success Criteria** (what must be TRUE):
+
+  1. A v2-opt-in server resolves a `ProtocolContext` (era, negotiated version, clientInfo, clientCapabilities) once at transport ingress from per-request `_meta` (`io.modelcontextprotocol/protocolVersion`/`clientInfo`/`clientCapabilities`), a handler reads it via typed accessors on `RequestHandlerExtra`, and v2 results carry `serverInfo` (VERS-01, VERS-03)
+  2. An existing v1 client negotiates exactly as before — `LATEST_PROTOCOL_VERSION` stays pinned to 2025-11-25 and 2026-07-28 is reached only through explicit opt-in (VERS-02)
+  3. A v2 client calling `server/discover` receives a read-only projection of already-computed ServerCore capabilities, including the `extensions` capability map of reverse-DNS IDs (VERS-04, VERS-08)
+  4. On the v2 HTTP path the required headers `Mcp-Method`/`Mcp-Name` (alongside `MCP-Protocol-Version`) are enforced inbound and emitted outbound (VERS-05)
+  5. Every result carries the `resultType` envelope discriminator (`complete`/`input_required`/`task`), defaulting to `complete` when absent; W3C trace-context keys (`traceparent`/`tracestate`/`baggage`) in `_meta` are surfaced via typed accessors and propagated; and all error codes resolve from one centralized version-gated constant table with v2 values filled ONLY from the final 2026-07-28 schema.json and the frozen v1 `-32002` task-pending semantics unchanged (VERS-07, VERS-09, VERS-06)
+
+**Plans**: TBD
+
+### Phase 113: Stateless HTTP + Multi-Round-Trip Elicitation
+
+**Goal**: v2 HTTP requests run with no `initialize` handshake and no `Mcp-Session-Id`, era-gated onto pmcp's existing `stateless()` branch (not a transport fork); multi-round-trip elicitation works end-to-end; and the pmcp `Client` is the v2-speaking counterpart, folding the Phase-106 host handlers into the v2 flow. v1 session behavior is untouched.
+**Depends on**: Phase 112 (ProtocolContext / era gate)
+**Requirements**: HTTP-01, HTTP-02, HTTP-03, HTTP-04, HTTP-05, CLNT-01, CLNT-02
+**Success Criteria** (what must be TRUE):
+
+  1. A v2 HTTP request completes with no `initialize` handshake and no `Mcp-Session-Id`, era-gated onto the existing `stateless()` branch, while v1 session behavior is unchanged (HTTP-01)
+  2. A handler returns `input_required` with `inputRequests` and an opaque `requestState` that is integrity-protected, principal-bound, and TTL'd; a client retry carrying `inputResponses` + the echoed `requestState` resumes the operation correctly (multi-round-trip elicitation end-to-end) (HTTP-02, HTTP-03)
+  3. v2 clients receive change notifications via a `subscriptions/listen` long-lived stream (toolsListChanged/promptsListChanged/resourcesListChanged/resourceSubscriptions opt-ins, `subscriptionId` tagging), replacing HTTP GET + `resources/subscribe`/`unsubscribe` on the v2 path (HTTP-04)
+  4. SSE resumability (`Last-Event-ID`) is not offered on the v2 path, and a regression test proves response JSON-RPC ids are always derived from the live request — closing the id-replay / discovery-cache bug class (HTTP-05)
+  5. The pmcp `Client`, selected explicitly per connection, speaks v2 (per-request `_meta`, `server/discover`, required headers, no `initialize`) and fulfills MRTR `input_required` results by producing `inputResponses`, with the Phase-106 host handlers (sampling/elicitation/roots) folded into the v2 flow (CLNT-01, CLNT-02)
+
+**Plans**: TBD
+
+### Phase 114: Tasks Extension Migration
+
+**Goal**: Tasks become a v2 extension — a wire-API reshape behind the proven `serde_json::Value` `TaskRouter` boundary, not a storage rewrite — while v1 Tasks stay fully functional, all backends survive unchanged, and stateless v2 owner-binding fails closed (the critical no-session cross-caller-leak guard).
+**Depends on**: Phase 112 (era gate); Phase 113 (the stateless per-request-identity pattern owner-binding reuses)
+**Requirements**: TASK-01, TASK-02, TASK-03, TASK-04, TASK-05, TASK-06
+**Success Criteria** (what must be TRUE):
+
+  1. Tasks are negotiated on v2 via the extensions map (`io.modelcontextprotocol/tasks`) while v1 `experimental.tasks` negotiation continues to work (TASK-01)
+  2. A client feeds input into a running task via `tasks/update`; v2 task-augmented results use `resultType:"task"` with `CreateTaskResult{taskId,status,ttlMs,pollIntervalMs}`, and the v1 5-state machine maps deterministically to the v2 status enum (`working|input_required|completed|failed|cancelled`) (TASK-02, TASK-04)
+  3. `tasks/list` (and blocking `tasks/result` semantics per the final spec) are era-gated off on v2 while remaining fully functional for v1 consumers (TASK-03)
+  4. On v2, task owner binding requires OAuth `sub` or a stable per-request identity and fails closed when absent (no session-id fallback); a security test proves no cross-caller task visibility (TASK-05)
+  5. The `TaskStore` trait, state machine, and DynamoDB/Redis/in-memory backends are unchanged — the migration is a wire-API reshape behind the `TaskRouter` boundary, verified by the v1 storage/tasks test suite staying green (TASK-06)
+
+**Plans**: TBD
+
+### Phase 115: JSON Schema 2020-12 + Structured Output + Caching Hints
+
+**Goal**: Schema validation moves to an explicitly-pinned Draft 2020-12, v2 `structuredContent` accepts any JSON value (relaxing the 2.15 object-only bridge), and the list/read results carry additive caching hints — all wasm-clean and independent enough to parallelize with the HTTP/Tasks track.
+**Depends on**: Phase 112 (era gate for validation strictness; parallelizable with Phases 113/114)
+**Requirements**: SCHM-01, SCHM-02, SCHM-03
+**Success Criteria** (what must be TRUE):
+
+  1. Schema validation runs Draft 2020-12 explicitly pinned (jsonschema 0.48, no `$schema` auto-detect), staying wasm-clean and SEP-2106-compliant with no external `$ref` dereference (SCHM-01)
+  2. On v2, `structuredContent` accepts any JSON value (scalar/array/null/object) while v1-negotiated tools keep the existing object-shaped behavior — proven against the 2.15 structured-output bridge (SCHM-02)
+  3. The five list/read results carry additive `ttlMs`/`cacheScope` caching hints (SCHM-03)
+
+**Plans**: TBD
+
+### Phase 116: Auth Hardening SEPs
+
+**Goal**: The v2 auth-hardening SEPs land as hand-rolled source changes to the existing OAuth stack — strict on v2, lenient on v1 — so existing deployments (Lambda `oauth_passthrough`, the Graph/M365 example, documented proxy exceptions) keep working. Fully independent — parallelizes with Phases 113-115.
+**Depends on**: Phase 112 (era gate to keep v1 lenient; parallelizable with Phases 113-115)
+**Requirements**: AUTH-01, AUTH-02, AUTH-03
+**Success Criteria** (what must be TRUE):
+
+  1. The OAuth callback validates RFC 9207 `iss` — strict on v2, lenient on v1 to protect existing deployments (AUTH-01)
+  2. Dynamic client registration sends and accepts `application_type` (AUTH-02)
+  3. The remaining auth-hardening SEPs (issuer-keyed credential storage + the three clarifications) are applied without breaking existing v1 OAuth deployments, and no `oauth2`/`openidconnect` crates are added (AUTH-03)
+
+**Plans**: TBD
+
+### Phase 117: Agents, Tester & v1 Severability
+
+**Goal**: pmcp's own higher-level clients reach v2 (`pmcp-agent` incl. task polling, `mcp-tester` for dual-version testing), and v1-only machinery is isolated behind a clearly severable era-gated layer with a documented sunset policy — so a future major removal is a deletion, not a refactor — while the v2 path is simplified of session/SSE baggage.
+**Depends on**: Phase 113 (Client v2), Phase 114 (Tasks v2 for agent task polling)
+**Requirements**: CLNT-03, CLNT-04, SMPL-01, SMPL-02
+**Success Criteria** (what must be TRUE):
+
+  1. `pmcp-agent` (including its `ToolInvoker` and task polling) works end-to-end against a v2 server (CLNT-03)
+  2. `mcp-tester` can exercise a v2 server (headers, discover, stateless flow) for dual-version testing (CLNT-04)
+  3. v1-only machinery (initialize/session lifecycle, SSE resumability) is isolated behind a clearly severable era-gated layer with a documented legacy-support sunset policy — removal in a future major is a deletion, not a refactor (SMPL-01)
+  4. The v2 code path carries no session/SSE-resumability baggage, and a simplification pass removes code the v2 model obsoletes wherever v1 compatibility permits (SMPL-02)
+
+**Plans**: TBD
+
+### Phase 118: Conformance Against the Official Suite
+
+**Goal**: The dual-version claim is validated by construction — the official conformance suite plus the extended Rust harness both run against whatever the dual-version binary actually does, with v1 fixtures kept green and deprecated capabilities verified still-functional under v2. Runs last, over the union of all prior work.
+**Depends on**: Phases 112-117
+**Requirements**: CONF-01, CONF-02, CONF-03
+**Success Criteria** (what must be TRUE):
+
+  1. The official `@modelcontextprotocol/conformance` suite (pinned to a commit, re-pinned after the final spec) runs in CI against a dual-version pmcp server example over real HTTP (CONF-01)
+  2. The Phase-109 Rust conformance harness gains v2 fixtures while v1 fixtures stay green (dual conformance), verified with a dev-dependency-free build to avoid feature-unification false-greens (CONF-02)
+  3. Deprecated Roots/Sampling/Logging capabilities remain fully functional under v2 negotiation (advisory-only deprecation, 12-month window) (CONF-03)
+
+**Plans**: TBD
+
+### Phase 119: Documentation — Three Shapes + v2 Migration
+
+**Goal**: The milestone is documented per the house three-shapes rule (pmcp-book chapters + runnable examples + README/course), leading with the `cargo pmcp` workflow — covering both the v2.4 Agents & Teams surface (carried from Phase 111) and the v2 dual-version migration story, with runnable v2 examples verified against the shipped code.
+**Depends on**: Phases 112-118 (DOCS-05/06 document shipped v2 code; DOCS-04 has no v2 dependency and may land early)
+**Requirements**: DOCS-04, DOCS-05, DOCS-06
+**Success Criteria** (what must be TRUE):
+
+  1. Agents & Teams are documented in three shapes (pmcp-book chapters, runnable examples, README/course), cargo-pmcp-first — carried from v2.4 Phase 111 (DOCS-04)
+  2. A v2 migration guide + dual-version documentation ships: how to opt into v2, the dual-version story, Tasks extension migration, and the legacy sunset policy (DOCS-05)
+  3. Runnable v2 examples ship and pass: a stateless (Lambda-style) v2 server and a v2 client/agent example (DOCS-06)
+
+**Plans**: TBD
+
+## Progress — v2.5 Milestone (MCP Spec 2026-07-28 v2 Support)
+
+**Execution order:** Phase 112 first and alone → Phases 113, 115, 116 parallelize once the spine lands → Phase 114 sequenced close after 113 (shared stateless-identity/owner-binding pattern) → Phase 117 (needs 113 Client + 114 Tasks) → Phase 118 conformance (validates the union) → Phase 119 docs. Final-spec (2026-07-28) is a checkpoint gating wire-exact values in Phases 112/114.
+
+| Phase | Plans Complete | Status | Completed |
+|-------|----------------|--------|-----------|
+| 112. Version Plumbing Spine | 0/TBD | Not started | - |
+| 113. Stateless HTTP + MRTR | 0/TBD | Not started | - |
+| 114. Tasks Extension Migration | 0/TBD | Not started | - |
+| 115. JSON Schema 2020-12 + Caching Hints | 0/TBD | Not started | - |
+| 116. Auth Hardening SEPs | 0/TBD | Not started | - |
+| 117. Agents, Tester & v1 Severability | 0/TBD | Not started | - |
+| 118. Conformance Against the Official Suite | 0/TBD | Not started | - |
+| 119. Documentation — Three Shapes + v2 Migration | 0/TBD | Not started | - |

@@ -3,10 +3,10 @@ gsd_state_version: 1.0
 milestone: v2.5
 milestone_name: MCP Spec 2026-07-28 (v2) Support
 status: planning
-last_updated: "2026-07-22T17:16:36.386Z"
+last_updated: "2026-07-22T18:00:00.000Z"
 last_activity: 2026-07-22
 progress:
-  total_phases: 0
+  total_phases: 8
   completed_phases: 0
   total_plans: 0
   completed_plans: 0
@@ -17,37 +17,42 @@ progress:
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-07-17) · .planning/ROADMAP.md (v2.4 milestone, Phases 106-111) · docs/design/agents-teams-sdk-extraction-plan.md (approved)
+See: .planning/PROJECT.md (updated 2026-07-22) · .planning/ROADMAP.md (v2.5 milestone, Phases 112-119) · .planning/REQUIREMENTS.md (38 v1 reqs, 38/38 mapped) · .planning/research/SUMMARY.md (v2.5 research, HIGH confidence)
 
-**Core value:** The PMCP SDK is the reference implementation for agents-as-MCP-clients and agent teams — one open agent loop and one portable package format that run identically on a laptop, any deploy target, and pmcp.run (contracts + reference implementations in the SDK; operation + scale on the platform).
-**Current focus:** Phase 110 — cargo-pmcp-agent-team-verbs
+**Core value:** One pmcp server binary transparently serves both MCP 2025-11-25 and 2026-07-28 clients via per-request negotiation — v2 as the strategic primary path (stateless/Lambda-first, Tasks, MCP Apps), v1 as a cleanly severable compatibility layer. The whole milestone stays additive (2.x minor).
+**Current focus:** Phase 112 — Version Plumbing Spine (keystone; lands first and alone)
 
 ## Current Position
 
-Phase: Not started (defining requirements)
+Phase: 112 — Version Plumbing Spine (not started)
 Plan: —
-Status: Defining requirements
-Last activity: 2026-07-22 — Milestone v2.5 started
+Status: Roadmap created; awaiting `/gsd:plan-phase 112`
+Last activity: 2026-07-22 — v2.5 roadmap created (8 phases, 112-119, 38/38 requirements mapped)
 
-## v2.4 Phase Plan (6 phases, 31 requirements)
+## v2.5 Phase Plan (8 phases, 38 requirements)
 
 | Phase | Name | Goal | Reqs | Depends on |
 |-------|------|------|------|------------|
-| 106 | Client Host Surface | Client hosts server→client sampling/elicitation/roots + HITL hook; legacy inverted sampling documented as "LLM-server pattern" (design Phase A) | HOST-01..06 (6) | none (parallel with 107) |
-| 107 | Contracts & Package Format | `pmcp-package` adopted into repo + published 0.1.0 (wire-frozen); team tool contracts as provable-contracts YAML (design Phase B) | PKG-01..03 (3) | none (parallel with 106) |
-| 108 | `pmcp-agent` Loop Crate | Pure agent loop between effect seams, 3 CompletionSources, agent-as-server adapter, tasks-aware ToolInvoker, AgentPackage-configured (design Phase C) | AGNT-01..09 (9) | 106 + 107 |
-| 109 | Team Reference Servers | `pmcp-team-servers` (feature-flagged) with dev-grade team-fs/approval-mcp/mem-mcp/team-mcp + conformance vs PKG-03 (design Phase D) | TEAM-01..06 (6) | 108 (+107 fixtures) |
-| 110 | cargo-pmcp Agent & Team Verbs | `agent new`/`agent dev`, `team dev`, `package capture\|show` with version-pin tripwires (design Phase E) | CLI-01..04 (4) | 107, 108, 109 |
-| 111 | Docs in Three Shapes + Examples | pmcp-book chapters + runnable examples + README/course, cargo-pmcp-first (design Phase F) | DOCS-01..03 (3) | 106-110 |
+| 112 | Version Plumbing Spine | `ProtocolContext` resolved once at ingress + threaded through dispatch; v2 opt-in (LATEST stays 2025-11-25); discover/extensions/headers/`resultType`/trace-context/error-code table | VERS-01..09 (9) | none (keystone) |
+| 113 | Stateless HTTP + MRTR | Handshake-free/session-free v2 on the `stateless()` branch; MRTR end-to-end; `subscriptions/listen`; no SSE resumability + id-replay test; pmcp `Client` speaks v2 | HTTP-01..05, CLNT-01, CLNT-02 (7) | 112 |
+| 114 | Tasks Extension Migration | extensions-map negotiation, `tasks/update`, `tasks/list` era-gated off on v2, `resultType:"task"`, fail-closed owner-binding; backends unchanged | TASK-01..06 (6) | 112 (+113 identity pattern) |
+| 115 | JSON Schema 2020-12 + Caching | jsonschema 0.48 Draft 2020-12 pinned; any-JSON `structuredContent` on v2; additive `ttlMs`/`cacheScope` | SCHM-01..03 (3) | 112 (parallel) |
+| 116 | Auth Hardening SEPs | RFC 9207 `iss` (strict v2/lenient v1), DCR `application_type`, issuer-keyed creds + 3 clarifications; no new crates | AUTH-01..03 (3) | 112 (parallel) |
+| 117 | Agents, Tester & v1 Severability | `pmcp-agent` + `mcp-tester` on v2; v1 machinery severable + sunset policy; v2 path de-baggaged | CLNT-03, CLNT-04, SMPL-01, SMPL-02 (4) | 113, 114 |
+| 118 | Conformance | official `@modelcontextprotocol/conformance` in CI over HTTP; Phase-109 Rust harness gains v2 fixtures (v1 green); deprecated caps verified under v2 | CONF-01..03 (3) | 112-117 |
+| 119 | Documentation — Three Shapes + v2 Migration | Agents & Teams three-shapes (carried from v2.4 P111); v2 migration guide + dual-version story; runnable stateless-v2 + v2-client examples | DOCS-04..06 (3) | 112-118 |
 
-**Execution order:** 106 ∥ 107 → 108 → 109 → 110 → 111. Phases 106 and 107 are independent and may run in parallel. Contract-first (house rule): Phase 107 contracts precede the Phase 108/109 implementations. Phase 106 is small, independently shippable (pmcp minor bump), and unblocks Phase 108's `SamplingSource`.
+**Execution order:** 112 first and alone → {113, 115, 116} parallelize once the spine lands → 114 sequenced close after 113 (shared stateless-identity/owner-binding pattern) → 117 (needs 113 Client + 114 Tasks) → 118 conformance (validates the union) → 119 docs.
 
-**Publish-order impact (design §5):** new entries `pmcp-package` (leaf, before cargo-pmcp), `pmcp-agent` (after `pmcp`), `pmcp-team-servers` (after `pmcp-agent`); cargo-pmcp moves after all three. New version-pin tripwires: cargo-pmcp ↔ `pmcp-package`, agent scaffold ↔ `pmcp-agent`. All new crates 0.x/experimental; `pmcp` core changes (Phase 106) are additive minor bumps.
+**Final-spec checkpoint (2026-07-28, six days out):** wire-exact work (error-code values, `requestState` shape, caching-hint field names) sequenced after final publication. VERS-06 error-code table is structure-first, values-from-final-schema.json only. Open verification item (research): the `-32002`→`-32602` rename direction MUST be re-verified against the final schema before touching the frozen `-32002` task-pending code — cross-cuts Phases 112 and 114.
+
+**Dependency/zero-deps note (research HIGH confidence):** no new runtime crates — only `jsonschema` 0.46→0.48 for Draft 2020-12; Node.js LTS 22.x is CI-only for the conformance suite. Milestone stays additive (2.x minor); `cargo semver-checks`/`cargo public-api` should gate every phase, not just the last (Pitfall 5 — accidental 3.0).
 
 ## Accumulated Context
 
 ### Roadmap Evolution
 
+- v2.5 milestone roadmap created (2026-07-22): 8 phases (112-119) map the 38 v1 requirements along the research-corroborated dependency spine — version-plumbing keystone (112) first and alone, stateless HTTP + MRTR (113), Tasks-as-extension (114), parallel JSON Schema (115) and Auth (116), agents/tester + v1 severability (117), conformance (118), docs (119). 100% coverage, no orphans, no duplicates. v2.4 Phase 111 docs folded into v2.5 DOCS-04 (Phase 119). Continues numbering after v2.4's Phases 106-111 (Phase 111 never executed).
 - v2.4 milestone roadmap created (2026-07-17): 6 phases (106-111) map 1:1 to the approved design doc's §4 phases A-F along the compliance→contracts→agent→teams→CLI→docs spine; all 31 v1 requirements mapped (100% coverage, no orphans).
 
 ### Decisions
@@ -117,8 +122,8 @@ Items deferred by design for this milestone (design §7 / REQUIREMENTS v2):
 
 ## Session Continuity
 
-Last session: 2026-07-19T08:09:19.267Z
-Stopped at: Phase 110 context gathered
+Last session: 2026-07-22T18:00:00.000Z
+Stopped at: v2.5 roadmap created (Phases 112-119); next is `/gsd:plan-phase 112`
 Resume file: None
 
 ## Performance Metrics

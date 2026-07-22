@@ -103,13 +103,60 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| (populated by roadmap) | — | — |
+| VERS-01 | Phase 112 | Pending |
+| VERS-02 | Phase 112 | Pending |
+| VERS-03 | Phase 112 | Pending |
+| VERS-04 | Phase 112 | Pending |
+| VERS-05 | Phase 112 | Pending |
+| VERS-06 | Phase 112 | Pending |
+| VERS-07 | Phase 112 | Pending |
+| VERS-08 | Phase 112 | Pending |
+| VERS-09 | Phase 112 | Pending |
+| HTTP-01 | Phase 113 | Pending |
+| HTTP-02 | Phase 113 | Pending |
+| HTTP-03 | Phase 113 | Pending |
+| HTTP-04 | Phase 113 | Pending |
+| HTTP-05 | Phase 113 | Pending |
+| CLNT-01 | Phase 113 | Pending |
+| CLNT-02 | Phase 113 | Pending |
+| TASK-01 | Phase 114 | Pending |
+| TASK-02 | Phase 114 | Pending |
+| TASK-03 | Phase 114 | Pending |
+| TASK-04 | Phase 114 | Pending |
+| TASK-05 | Phase 114 | Pending |
+| TASK-06 | Phase 114 | Pending |
+| SCHM-01 | Phase 115 | Pending |
+| SCHM-02 | Phase 115 | Pending |
+| SCHM-03 | Phase 115 | Pending |
+| AUTH-01 | Phase 116 | Pending |
+| AUTH-02 | Phase 116 | Pending |
+| AUTH-03 | Phase 116 | Pending |
+| CLNT-03 | Phase 117 | Pending |
+| CLNT-04 | Phase 117 | Pending |
+| SMPL-01 | Phase 117 | Pending |
+| SMPL-02 | Phase 117 | Pending |
+| CONF-01 | Phase 118 | Pending |
+| CONF-02 | Phase 118 | Pending |
+| CONF-03 | Phase 118 | Pending |
+| DOCS-04 | Phase 119 | Pending |
+| DOCS-05 | Phase 119 | Pending |
+| DOCS-06 | Phase 119 | Pending |
 
 **Coverage:**
 - v1 requirements: 38 total
-- Mapped to phases: 0
-- Unmapped: 38 ⚠️ (pre-roadmap)
+- Mapped to phases: 38 ✓
+- Unmapped: 0
+
+**Phase map (8 phases, 112-119):**
+- Phase 112 Version Plumbing Spine — VERS-01..09 (9)
+- Phase 113 Stateless HTTP + MRTR — HTTP-01..05, CLNT-01, CLNT-02 (7)
+- Phase 114 Tasks Extension Migration — TASK-01..06 (6)
+- Phase 115 JSON Schema 2020-12 + Caching Hints — SCHM-01..03 (3)
+- Phase 116 Auth Hardening SEPs — AUTH-01..03 (3)
+- Phase 117 Agents, Tester & v1 Severability — CLNT-03, CLNT-04, SMPL-01, SMPL-02 (4)
+- Phase 118 Conformance — CONF-01..03 (3)
+- Phase 119 Documentation — DOCS-04..06 (3)
 
 ---
 *Requirements defined: 2026-07-22*
-*Last updated: 2026-07-22 after initial definition*
+*Last updated: 2026-07-22 — traceability populated by v2.5 roadmap (Phases 112-119, 38/38 mapped)*
