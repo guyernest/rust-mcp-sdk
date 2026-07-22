@@ -409,6 +409,28 @@ impl RequestHandlerExtra {
             .and_then(|ctx| ctx.client_capabilities.as_ref())
     }
 
+    /// Extracts the W3C trace-context self-reported in the request `_meta`
+    /// (MCP v2.5, VERS-09), reading the existing
+    /// [`request_meta`](Self::request_meta) — no dedicated field is stored.
+    ///
+    /// Returns `Some` only when `request_meta` carries an in-bounds
+    /// `traceparent` string; `None` when `request_meta` is `None` or lacks a
+    /// valid `traceparent`. Delegates to
+    /// [`TraceContext::from_meta`](crate::types::protocol::TraceContext::from_meta).
+    ///
+    /// **Security — raw, bounded, untrusted:** the returned
+    /// `traceparent`/`tracestate`/`baggage` values are RAW and UNVALIDATED
+    /// self-reported client data, only length-bounded at ingress
+    /// (`MAX_TRACE_VALUE_LEN`) per the Plan-01 contract — see
+    /// [`TraceContext`](crate::types::protocol::TraceContext). They MUST NOT be
+    /// treated as trusted or safe to interpolate into logs/queries without
+    /// independent sanitization.
+    #[must_use]
+    pub fn trace_context(&self) -> Option<crate::types::protocol::TraceContext> {
+        // RED stub — real body delegates to TraceContext::from_meta in GREEN.
+        None
+    }
+
     /// Returns a reference to the typed extensions map.
     ///
     /// # Example
@@ -944,6 +966,36 @@ mod tests {
         assert_eq!(info.name, "acme-client");
         assert_eq!(info.version, "1.2.3");
         assert!(extra.client_capabilities().is_some());
+    }
+
+    #[tokio::test]
+    async fn test_trace_context_from_request_meta() {
+        use serde_json::json;
+
+        // request_meta carrying full W3C trace values round-trips through
+        // trace_context().
+        let extra = RequestHandlerExtra::new("req-trace".to_string(), CancellationToken::new())
+            .with_request_meta(Some(json!({
+                "traceparent": "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
+                "tracestate": "rojo=00f067aa0ba902b7",
+                "baggage": "userId=alice"
+            })));
+        let tc = extra.trace_context().expect("traceparent present => Some");
+        assert_eq!(
+            tc.traceparent,
+            "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01"
+        );
+        assert_eq!(tc.tracestate.as_deref(), Some("rojo=00f067aa0ba902b7"));
+        assert_eq!(tc.baggage.as_deref(), Some("userId=alice"));
+
+        // Absent request_meta => None.
+        let bare = RequestHandlerExtra::new("req-bare".to_string(), CancellationToken::new());
+        assert!(bare.trace_context().is_none());
+
+        // request_meta without a traceparent => None.
+        let no_tp = RequestHandlerExtra::new("req-no-tp".to_string(), CancellationToken::new())
+            .with_request_meta(Some(json!({ "tracestate": "a=1" })));
+        assert!(no_tp.trace_context().is_none());
     }
 
     #[tokio::test]
