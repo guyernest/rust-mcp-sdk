@@ -39,14 +39,13 @@
 //!    error message rather than a silently wrong binary. **Promotion
 //!    candidate:** a dedicated `[metadata].server_version` (or similar)
 //!    field, scoped to built-in binary acquisition specifically.
-//! 2. **The release pipeline does not publish these binaries yet.**
-//!    `.github/workflows/release-binary.yml`'s `workflow_dispatch` only
-//!    offers `mcp-tester` / `pmcp-server` as `package_name` choices; there is
-//!    no `pmcp-sql-server-<triple>` / `pmcp-workbook-server-<triple>` /
-//!    `pmcp-openapi-server-<triple>` asset published anywhere today (verified
-//!    via `gh release view v0.19.0`). This module's fetch logic is shaped
-//!    correctly for when that gap closes, but a real deploy will 404 until
-//!    the release workflow is extended to build+upload these three crates.
+//! 2. **The release pipeline publishes these binaries as of the T10 wiring**
+//!    (`.github/workflows/release-binary.yml` matrix + the three caller jobs
+//!    in `release.yml` build `pmcp-sql-server-<triple>` /
+//!    `pmcp-workbook-server-<triple>` / `pmcp-openapi-server-<triple>` with
+//!    the same `<name>-<triple>` + `.sha256` convention). Assets exist only
+//!    for releases tagged AFTER that wiring shipped — fetches against older
+//!    tags (e.g. v0.19.0 and earlier) still 404 with a clear error message.
 //! 3. **`snapshot_baked = false` (runtime-fetched config).** The Shape A
 //!    binaries (`pmcp-sql-server`, `pmcp-openapi-server`) only accept
 //!    `--config`/`--schema`/`--spec` as REQUIRED CLI flags — there is no
