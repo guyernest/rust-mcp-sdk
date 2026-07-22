@@ -12,9 +12,9 @@
 - [x] **VERS-01**: Server resolves a `ProtocolContext` (era, negotiated version, clientInfo, clientCapabilities) once at transport ingress and threads it through dispatch; handlers read it via typed accessors on `RequestHandlerExtra`
 - [x] **VERS-02**: pmcp supports protocol version 2026-07-28 as an explicit opt-in; `LATEST_PROTOCOL_VERSION` stays pinned to 2025-11-25 and existing v1 clients negotiate exactly as before (milestone stays a 2.x minor)
 - [x] **VERS-03**: v2 requests self-describe via per-request `_meta` (`io.modelcontextprotocol/protocolVersion`, `clientInfo`, `clientCapabilities`); v2 results carry `serverInfo`
-- [ ] **VERS-04**: Server implements `server/discover` as a read-only projection of already-computed ServerCore capabilities
+- [x] **VERS-04**: Server implements `server/discover` as a read-only projection of already-computed ServerCore capabilities
 - [ ] **VERS-05**: Required headers `Mcp-Method`/`Mcp-Name` (alongside `MCP-Protocol-Version`) are enforced inbound and emitted outbound on the v2 HTTP path
-- [ ] **VERS-06**: All protocol error codes live in one centralized version-gated constant table; v2 values are filled ONLY from the final 2026-07-28 schema.json (resolving the `-32002`/`-32602` conflict), and the frozen v1 `-32002` task-pending semantics stay unchanged
+- [x] **VERS-06**: All protocol error codes live in one centralized version-gated constant table; v2 values are filled ONLY from the final 2026-07-28 schema.json (resolving the `-32002`/`-32602` conflict), and the frozen v1 `-32002` task-pending semantics stay unchanged
 - [ ] **VERS-07**: All results carry the `resultType` envelope discriminator (`complete`/`input_required`/`task`); a missing `resultType` defaults to `complete` for backcompat
 - [ ] **VERS-08**: The `extensions` capability map (reverse-DNS IDs) is supported in capability negotiation
 - [x] **VERS-09**: W3C trace-context keys (`traceparent`/`tracestate`/`baggage`) in `_meta` are surfaced via typed accessors and propagated through dispatch
@@ -106,9 +106,9 @@ Which phases cover which requirements. Updated during roadmap creation.
 | VERS-01 | Phase 112 | Complete |
 | VERS-02 | Phase 112 | Complete |
 | VERS-03 | Phase 112 | Complete |
-| VERS-04 | Phase 112 | Pending |
+| VERS-04 | Phase 112 | Complete |
 | VERS-05 | Phase 112 | Pending |
-| VERS-06 | Phase 112 | Pending |
+| VERS-06 | Phase 112 | Complete |
 | VERS-07 | Phase 112 | Pending |
 | VERS-08 | Phase 112 | Pending |
 | VERS-09 | Phase 112 | Complete |

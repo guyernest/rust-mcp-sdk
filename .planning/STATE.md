@@ -4,13 +4,13 @@ milestone: v2.5
 milestone_name: MCP Spec 2026-07-28
 status: executing
 stopped_at: Completed 112-01-PLAN.md
-last_updated: "2026-07-22T21:32:37.275Z"
+last_updated: "2026-07-22T21:40:29.006Z"
 last_activity: 2026-07-22
 progress:
   total_phases: 71
   completed_phases: 0
   total_plans: 8
-  completed_plans: 2
+  completed_plans: 3
   percent: 0
 ---
 
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-07-22) · .planning/ROADMAP.md (v2.5 mil
 ## Current Position
 
 Phase: 112 (version-plumbing-spine) — EXECUTING
-Plan: 3 of 8
+Plan: 4 of 8
 Status: Ready to execute
 Last activity: 2026-07-22
 
@@ -93,6 +93,9 @@ Decisions are logged in PROJECT.md Key Decisions table. Decisions framing this m
 - [Phase 112]: 112-01: semver tooling pinned (cargo-semver-checks 0.49.0, cargo-public-api 0.52.0); baseline pmcp 2.17.0; authoritative check-release MINOR assertion deferred to Plan 07/08
 - [Phase ?]: [Phase 112]: 112-02: protocol_context + era/protocol_version/client_info/client_capabilities/trace_context accessors added ONLY to native RequestHandlerExtra (src/server/cancellation.rs); wasm32 zero-field stub + orphan shared/cancellation.rs untouched
 - [Phase ?]: [Phase 112]: 112-02: trace_context() is a method over existing request_meta (no new field, VERS-09 keys in _meta); identity accessors rustdoc'd self-reported/not-for-authz (T-112-02 accept-documented); purely additive, wasm build green
+- [Phase ?]: [Phase 112]: 112-03: error::ErrorCode's 11 consts delegate to new error_codes:: table (Self(error_codes::NAME)) — centralizes ~210 call sites, names/values unchanged (semver minor); per-name consistency test is the drift guard
+- [Phase ?]: [Phase 112]: 112-03: both -32002 meanings kept by name (V1_TASK_PENDING frozen vs UNSUPPORTED_CAPABILITY), never reconciled; v2 codes structurally omitted (zero SATD), finalization tracked in planning
+- [Phase ?]: [Phase 112]: 112-03: server/discover routed via crate-private InternalClientRequest + classify_internal_method BEFORE public-enum conversion; NO public ClientRequest/Request variant (Codex HIGH #4); Plan 05 wires it
 
 ### Pending Todos
 
@@ -128,7 +131,7 @@ Items deferred by design for this milestone (design §7 / REQUIREMENTS v2):
 
 ## Session Continuity
 
-Last session: 2026-07-22T21:32:31.762Z
+Last session: 2026-07-22T21:40:21.112Z
 Stopped at: Completed 112-01-PLAN.md
 Resume file: None
 
@@ -154,3 +157,4 @@ Resume file: None
 | Phase 110 P06 | 20min | 3 tasks | 5 files |
 | Phase 112 P01 | 11min | 2 tasks | 6 files |
 | Phase 112 P02 | 6min | 2 tasks | 1 files |
+| Phase 112 P03 | 5min | 2 tasks | 3 files |
