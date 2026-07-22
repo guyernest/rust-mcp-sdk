@@ -652,7 +652,7 @@ fn validate_content_type_json(headers: &HeaderMap) -> std::result::Result<(), Re
     let Some(content_type) = headers.get(header::CONTENT_TYPE) else {
         return Err(create_error_response(
             StatusCode::UNSUPPORTED_MEDIA_TYPE,
-            -32700,
+            crate::types::protocol::error_codes::PARSE_ERROR,
             "Content-Type header is required",
         ));
     };
@@ -660,7 +660,7 @@ fn validate_content_type_json(headers: &HeaderMap) -> std::result::Result<(), Re
     if !ct.contains(APPLICATION_JSON) {
         return Err(create_error_response(
             StatusCode::UNSUPPORTED_MEDIA_TYPE,
-            -32700,
+            crate::types::protocol::error_codes::PARSE_ERROR,
             "Content-Type must be application/json",
         ));
     }
@@ -672,7 +672,7 @@ fn validate_accept_post(headers: &HeaderMap) -> std::result::Result<(), Response
     let Some(accept) = headers.get(header::ACCEPT) else {
         return Err(create_error_response(
             StatusCode::NOT_ACCEPTABLE,
-            -32700,
+            crate::types::protocol::error_codes::PARSE_ERROR,
             "Accept header is required",
         ));
     };
@@ -680,7 +680,7 @@ fn validate_accept_post(headers: &HeaderMap) -> std::result::Result<(), Response
     if !accept_str.contains(APPLICATION_JSON) && !accept_str.contains(TEXT_EVENT_STREAM) {
         return Err(create_error_response(
             StatusCode::NOT_ACCEPTABLE,
-            -32700,
+            crate::types::protocol::error_codes::PARSE_ERROR,
             "Accept header must include application/json or text/event-stream",
         ));
     }
@@ -692,7 +692,7 @@ fn validate_accept_sse(headers: &HeaderMap) -> std::result::Result<(), Response>
     let Some(accept) = headers.get(header::ACCEPT) else {
         return Err(create_error_response(
             StatusCode::NOT_ACCEPTABLE,
-            -32700,
+            crate::types::protocol::error_codes::PARSE_ERROR,
             "Accept header is required for SSE",
         ));
     };
@@ -700,7 +700,7 @@ fn validate_accept_sse(headers: &HeaderMap) -> std::result::Result<(), Response>
     if !accept_str.contains(TEXT_EVENT_STREAM) {
         return Err(create_error_response(
             StatusCode::NOT_ACCEPTABLE,
-            -32700,
+            crate::types::protocol::error_codes::PARSE_ERROR,
             "Accept header must be text/event-stream for SSE",
         ));
     }
@@ -739,7 +739,7 @@ fn process_init_session(
                     // Session already initialized - reject re-initialization
                     return Err(create_error_response(
                         StatusCode::BAD_REQUEST,
-                        -32600,
+                        crate::types::protocol::error_codes::INVALID_REQUEST,
                         "Session already initialized",
                     ));
                 }
@@ -780,7 +780,7 @@ fn validate_non_init_session(
                 // Missing session ID
                 Err(create_error_response(
                     StatusCode::BAD_REQUEST,
-                    -32600,
+                    crate::types::protocol::error_codes::INVALID_REQUEST,
                     "Session ID required for non-initialization requests",
                 ))
             },
@@ -790,7 +790,7 @@ fn validate_non_init_session(
                     // Unknown session ID
                     Err(create_error_response(
                         StatusCode::NOT_FOUND,
-                        -32600,
+                        crate::types::protocol::error_codes::INVALID_REQUEST,
                         "Unknown session ID",
                     ))
                 } else {
@@ -842,7 +842,7 @@ fn serialize_response_as_json_value(
     let json_bytes = crate::shared::StdioTransport::serialize_message(response).map_err(|e| {
         create_error_response(
             StatusCode::INTERNAL_SERVER_ERROR,
-            -32603,
+            crate::types::protocol::error_codes::INTERNAL_ERROR,
             &format!("Failed to serialize response: {}", e),
         )
     })?;
@@ -854,7 +854,7 @@ fn serialize_response_as_json_value(
     let json_value: serde_json::Value = serde_json::from_slice(&json_bytes).map_err(|e| {
         create_error_response(
             StatusCode::INTERNAL_SERVER_ERROR,
-            -32603,
+            crate::types::protocol::error_codes::INTERNAL_ERROR,
             &format!("Failed to parse JSON response: {}", e),
         )
     })?;
@@ -939,7 +939,7 @@ fn validate_protocol_version_supported(
     }
     Err(create_error_response(
         StatusCode::BAD_REQUEST,
-        -32600,
+        crate::types::protocol::error_codes::INVALID_REQUEST,
         &format!("Unsupported protocol version: {}", version),
     ))
 }
@@ -972,7 +972,7 @@ fn validate_protocol_version_matches_session(
     }
     Err(create_error_response(
         StatusCode::BAD_REQUEST,
-        -32600,
+        crate::types::protocol::error_codes::INVALID_REQUEST,
         &format!(
             "Protocol version mismatch: expected {}, got {}",
             negotiated_version, provided_version
@@ -1031,7 +1031,7 @@ async fn extract_and_validate_auth(
                 // Auth validation failed - return 401 Unauthorized
                 Err(create_error_response(
                     StatusCode::UNAUTHORIZED,
-                    -32003,
+                    crate::types::protocol::error_codes::AUTHENTICATION_REQUIRED,
                     &format!("Authentication failed: {}", e),
                 ))
             },
@@ -1258,7 +1258,7 @@ async fn run_request_middleware(
         let _ = http_middleware.handle_error(&e, context).await;
         return Err(create_error_response(
             StatusCode::INTERNAL_SERVER_ERROR,
-            -32603,
+            crate::types::protocol::error_codes::INTERNAL_ERROR,
             &format!("Middleware rejected request: {}", e),
         ));
     }
@@ -1315,7 +1315,7 @@ async fn extract_auth_with_middleware(
             let _ = http_middleware.handle_error(&auth_error, context).await;
             Err(create_error_response(
                 StatusCode::UNAUTHORIZED,
-                -32003,
+                crate::types::protocol::error_codes::AUTHENTICATION_REQUIRED,
                 &format!("Authentication failed: {}", e),
             ))
         },
@@ -1344,7 +1344,7 @@ async fn build_success_response_with_middleware(
                 .await;
             return create_error_response(
                 StatusCode::INTERNAL_SERVER_ERROR,
-                -32603,
+                crate::types::protocol::error_codes::INTERNAL_ERROR,
                 &format!("Failed to serialize response: {}", e),
             );
         },
@@ -1400,7 +1400,7 @@ async fn read_body_with_limit(
     let body_bytes = axum::body::to_bytes(body, max_bytes).await.map_err(|e| {
         create_error_response(
             StatusCode::PAYLOAD_TOO_LARGE,
-            -32600,
+            crate::types::protocol::error_codes::INVALID_REQUEST,
             &format!("Request body exceeds limit: {}", e),
         )
     })?;
@@ -1413,7 +1413,7 @@ fn parse_transport_message_fast(body: &[u8]) -> std::result::Result<TransportMes
     crate::shared::StdioTransport::parse_message(body).map_err(|e| {
         create_error_response(
             StatusCode::BAD_REQUEST,
-            -32700,
+            crate::types::protocol::error_codes::PARSE_ERROR,
             &format!("Invalid JSON: {}", e),
         )
     })
@@ -1637,7 +1637,7 @@ async fn convert_axum_to_middleware_request(
         .map_err(|e| {
             create_error_response(
                 StatusCode::PAYLOAD_TOO_LARGE,
-                -32600,
+                crate::types::protocol::error_codes::INVALID_REQUEST,
                 &format!("Request body exceeds limit: {}", e),
             )
         })
@@ -1925,7 +1925,7 @@ fn resolve_sse_session(
         {
             return Err(create_error_response(
                 StatusCode::NOT_FOUND,
-                -32600,
+                crate::types::protocol::error_codes::INVALID_REQUEST,
                 "Unknown session ID",
             ));
         }
@@ -1934,7 +1934,7 @@ fn resolve_sse_session(
     let Some(generator) = &state.config.session_id_generator else {
         return Err(create_error_response(
             StatusCode::METHOD_NOT_ALLOWED,
-            -32601,
+            crate::types::protocol::error_codes::METHOD_NOT_FOUND,
             "SSE not supported in stateless mode",
         ));
     };
@@ -2036,7 +2036,7 @@ async fn handle_get_sse(State(state): State<ServerState>, headers: HeaderMap) ->
     if state.sse_streams.read().contains_key(&session_id) {
         return create_error_response(
             StatusCode::CONFLICT,
-            -32600,
+            crate::types::protocol::error_codes::INVALID_REQUEST,
             "SSE stream already exists for this session",
         );
     }
@@ -2084,7 +2084,11 @@ async fn handle_delete_session(
 
         if !session_exists && state.config.session_id_generator.is_some() {
             // Unknown session in stateful mode
-            return create_error_response(StatusCode::NOT_FOUND, -32600, "Unknown session ID");
+            return create_error_response(
+                StatusCode::NOT_FOUND,
+                crate::types::protocol::error_codes::INVALID_REQUEST,
+                "Unknown session ID",
+            );
         }
 
         // Remove SSE stream if exists
@@ -2101,7 +2105,11 @@ async fn handle_delete_session(
         (StatusCode::OK, Json(json!({"status": "ok"}))).into_response()
     } else {
         // No session to delete
-        create_error_response(StatusCode::NOT_FOUND, -32600, "No session ID provided")
+        create_error_response(
+            StatusCode::NOT_FOUND,
+            crate::types::protocol::error_codes::INVALID_REQUEST,
+            "No session ID provided",
+        )
     }
 }
 
