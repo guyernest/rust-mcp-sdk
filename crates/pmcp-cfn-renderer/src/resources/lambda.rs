@@ -13,7 +13,7 @@ use crate::{
     template::CfnResource,
 };
 use pmcp_package::package::DeployDescriptor;
-use serde_json::json;
+use serde_json::{json, Value};
 use std::collections::BTreeMap;
 
 /// Fixed memory size for `pmcp-run`-target Lambdas. NOT driven by
@@ -54,28 +54,81 @@ const LWA_EXEC_WRAPPER_PATH: &str = "/opt/bootstrap";
 const LWA_PORT_ENV_VAR: &str = "PORT";
 const LWA_READINESS_CHECK_PATH_ENV_VAR: &str = "AWS_LWA_READINESS_CHECK_PATH";
 
-/// Render the MCP server's `AWS::Lambda::Function`: `(logical_id, resource)`.
+/// The values that vary across the FOUR `AWS::Lambda::Function` resources
+/// this crate renders: [`render_function`]/[`render_function_aws_lambda`]
+/// (this module's `pmcp-run`/`aws-lambda` kernel functions) and
+/// `resources::cognito`'s `render_oauth_proxy_function`/
+/// `render_authorizer_function` (the Cognito+DCR OAuth stack's other two
+/// functions). Every other part of the shape — `Runtime`, `Handler`,
+/// `Architectures`, `Code`, and `LoggingConfig` — is identical across all
+/// four and lives exactly once, in [`build_function_resource`].
+pub(crate) struct LambdaFunctionSpec {
+    pub function_name: String,
+    pub memory_mb: i64,
+    pub timeout_seconds: i64,
+    /// Logical id of the `AWS::IAM::Role` this function's `Role` property
+    /// references via `Fn::GetAtt`.
+    pub role_logical_id: &'static str,
+    /// The function's `Environment.Variables` object.
+    pub environment_variables: Value,
+    pub tags: Value,
+    /// `TracingConfig: {"Mode": "Active"}` — present for the `pmcp-run` and
+    /// `aws-lambda` kernel functions (CDK's `tracing: lambda.Tracing.ACTIVE`),
+    /// absent for the Cognito+DCR stack's OAuth-proxy/authorizer functions
+    /// (no such construct option on their TS scaffold branch).
+    pub tracing_active: bool,
+    /// `Layers` — `Some` only for [`render_function_aws_lambda`] when
+    /// `RenderParams::runtime_adapter` is populated (T8 review fix).
+    pub layers: Option<Value>,
+    pub depends_on: Vec<String>,
+}
+
+/// Build one `AWS::Lambda::Function` resource from `spec` — the single
+/// definition of the property-block shape all four call sites share. See
+/// [`LambdaFunctionSpec`]'s doc comment for which fields vary between them.
+/// `pub(crate)` so `resources::cognito` can call it directly.
 #[must_use]
-pub fn render_function(d: &DeployDescriptor, p: &RenderParams) -> (String, CfnResource) {
-    let properties = json!({
-        "FunctionName": d.server.name,
+pub(crate) fn build_function_resource(p: &RenderParams, spec: LambdaFunctionSpec) -> CfnResource {
+    let mut properties = json!({
+        "FunctionName": spec.function_name,
         "Runtime": "provided.al2023",
         "Handler": "bootstrap",
         "Architectures": ["arm64"],
-        "MemorySize": MEMORY_SIZE_MB,
-        "Timeout": d.server.timeout_seconds,
+        "MemorySize": spec.memory_mb,
+        "Timeout": spec.timeout_seconds,
         "Code": { "S3Bucket": p.artifact.s3_bucket, "S3Key": p.artifact.s3_key },
-        "Role": { "Fn::GetAtt": [logical_ids::for_execution_role(), "Arn"] },
-        "Environment": { "Variables": environment_variables(d, p) },
-        "TracingConfig": { "Mode": "Active" },
+        "Role": { "Fn::GetAtt": [spec.role_logical_id, "Arn"] },
+        "Environment": { "Variables": spec.environment_variables },
         "LoggingConfig": { "LogFormat": "JSON" },
-        "Tags": standard_tags(&d.server.name),
+        "Tags": spec.tags,
     });
-    (
-        logical_ids::for_function().to_string(),
-        CfnResource {
-            type_: "AWS::Lambda::Function".to_string(),
-            properties,
+    if spec.tracing_active {
+        properties["TracingConfig"] = json!({ "Mode": "Active" });
+    }
+    if let Some(layers) = spec.layers {
+        properties["Layers"] = layers;
+    }
+    CfnResource {
+        type_: "AWS::Lambda::Function".to_string(),
+        properties,
+        depends_on: spec.depends_on,
+    }
+}
+
+/// Render the MCP server's `AWS::Lambda::Function`: `(logical_id, resource)`.
+#[must_use]
+pub fn render_function(d: &DeployDescriptor, p: &RenderParams) -> (String, CfnResource) {
+    let resource = build_function_resource(
+        p,
+        LambdaFunctionSpec {
+            function_name: d.server.name.clone(),
+            memory_mb: MEMORY_SIZE_MB,
+            timeout_seconds: d.server.timeout_seconds,
+            role_logical_id: logical_ids::for_execution_role(),
+            environment_variables: json!(environment_variables(d, p)),
+            tags: standard_tags(&d.server.name),
+            tracing_active: true,
+            layers: None,
             // CDK adds an explicit dependency from the function onto its
             // execution role's default policy (IAM eventual-consistency
             // safety) as well as the role itself.
@@ -84,7 +137,8 @@ pub fn render_function(d: &DeployDescriptor, p: &RenderParams) -> (String, CfnRe
                 logical_ids::for_execution_role().to_string(),
             ],
         },
-    )
+    );
+    (logical_ids::for_function().to_string(), resource)
 }
 
 /// Render the MCP server's `AWS::Lambda::Function` for the `aws-lambda`
@@ -112,28 +166,21 @@ pub fn render_function(d: &DeployDescriptor, p: &RenderParams) -> (String, CfnRe
 /// `cloudformation_metadata` field's precedent).
 #[must_use]
 pub fn render_function_aws_lambda(d: &DeployDescriptor, p: &RenderParams) -> (String, CfnResource) {
-    let mut properties = json!({
-        "FunctionName": d.server.name,
-        "Runtime": "provided.al2023",
-        "Handler": "bootstrap",
-        "Architectures": ["arm64"],
-        "MemorySize": AWS_LAMBDA_MEMORY_SIZE_MB,
-        "Timeout": d.server.timeout_seconds,
-        "Code": { "S3Bucket": p.artifact.s3_bucket, "S3Key": p.artifact.s3_key },
-        "Role": { "Fn::GetAtt": [logical_ids::for_execution_role(), "Arn"] },
-        "Environment": { "Variables": environment_variables_aws_lambda(p) },
-        "TracingConfig": { "Mode": "Active" },
-        "LoggingConfig": { "LogFormat": "JSON" },
-        "Tags": aws_lambda_tags(&d.server.name),
-    });
-    if p.runtime_adapter.is_some() {
-        properties["Layers"] = json!([runtime_adapter_layer_arn()]);
-    }
-    (
-        logical_ids::for_function().to_string(),
-        CfnResource {
-            type_: "AWS::Lambda::Function".to_string(),
-            properties,
+    let layers = p
+        .runtime_adapter
+        .is_some()
+        .then(|| json!([runtime_adapter_layer_arn()]));
+    let resource = build_function_resource(
+        p,
+        LambdaFunctionSpec {
+            function_name: d.server.name.clone(),
+            memory_mb: AWS_LAMBDA_MEMORY_SIZE_MB,
+            timeout_seconds: d.server.timeout_seconds,
+            role_logical_id: logical_ids::for_execution_role(),
+            environment_variables: json!(environment_variables_aws_lambda(p)),
+            tags: aws_lambda_tags(&d.server.name),
+            tracing_active: true,
+            layers,
             // Same eventual-consistency dependency ordering as
             // `render_function` — see its own doc comment.
             depends_on: vec![
@@ -141,7 +188,22 @@ pub fn render_function_aws_lambda(d: &DeployDescriptor, p: &RenderParams) -> (St
                 logical_ids::for_execution_role().to_string(),
             ],
         },
-    )
+    );
+    (logical_ids::for_function().to_string(), resource)
+}
+
+/// `p.environment.clone()` with `extra` layered on top, `extra` winning on
+/// any same-named entry — the shared "clone the resolved env, then
+/// overlay fixed overrides" mechanic behind both
+/// [`environment_variables`]'s three pmcp-run composition vars and
+/// [`environment_variables_aws_lambda`]'s adapter vars.
+fn merged_environment(
+    p: &RenderParams,
+    extra: impl IntoIterator<Item = (String, String)>,
+) -> BTreeMap<String, String> {
+    let mut vars = p.environment.clone();
+    vars.extend(extra);
+    vars
 }
 
 /// The function's environment variables: `p.environment`'s resolved values
@@ -152,17 +214,20 @@ pub fn render_function_aws_lambda(d: &DeployDescriptor, p: &RenderParams) -> (St
 /// mirroring the TS scaffold's `environment: {...}` object. The three fixed
 /// vars win over any same-named entry in `p.environment`.
 fn environment_variables(d: &DeployDescriptor, p: &RenderParams) -> BTreeMap<String, String> {
-    let mut vars = p.environment.clone();
-    vars.insert(
-        "MCP_SERVERS_TABLE".to_string(),
-        MCP_SERVERS_TABLE.to_string(),
-    );
-    vars.insert(
-        "PMCP_ORGANIZATION_ID".to_string(),
-        DEFAULT_ORGANIZATION_ID.to_string(),
-    );
-    vars.insert("PMCP_SERVER_ID".to_string(), d.server.name.clone());
-    vars
+    merged_environment(
+        p,
+        [
+            (
+                "MCP_SERVERS_TABLE".to_string(),
+                MCP_SERVERS_TABLE.to_string(),
+            ),
+            (
+                "PMCP_ORGANIZATION_ID".to_string(),
+                DEFAULT_ORGANIZATION_ID.to_string(),
+            ),
+            ("PMCP_SERVER_ID".to_string(), d.server.name.clone()),
+        ],
+    )
 }
 
 /// The `aws-lambda`-target function's environment variables: `p.environment`
@@ -178,24 +243,26 @@ fn environment_variables(d: &DeployDescriptor, p: &RenderParams) -> BTreeMap<Str
 /// `p.environment`, same precedence rule as [`environment_variables`]'s
 /// fixed vars.
 fn environment_variables_aws_lambda(p: &RenderParams) -> BTreeMap<String, String> {
-    let mut vars = p.environment.clone();
-    if let Some(adapter) = &p.runtime_adapter {
-        insert_adapter_env_vars(&mut vars, adapter);
+    match &p.runtime_adapter {
+        Some(adapter) => merged_environment(p, adapter_env_vars(adapter)),
+        None => p.environment.clone(),
     }
-    vars
 }
 
-/// Insert the adapter's fixed env vars (see [`environment_variables_aws_lambda`]'s
-/// doc comment) into `vars`, overwriting any same-named entry.
-fn insert_adapter_env_vars(vars: &mut BTreeMap<String, String>, adapter: &RuntimeAdapterConfig) {
-    vars.insert(
-        LWA_EXEC_WRAPPER_ENV_VAR.to_string(),
-        LWA_EXEC_WRAPPER_PATH.to_string(),
-    );
-    vars.insert(LWA_PORT_ENV_VAR.to_string(), adapter.port.to_string());
+/// The adapter's fixed env vars (see [`environment_variables_aws_lambda`]'s
+/// doc comment), as `(key, value)` pairs ready for [`merged_environment`].
+fn adapter_env_vars(adapter: &RuntimeAdapterConfig) -> Vec<(String, String)> {
+    let mut vars = vec![
+        (
+            LWA_EXEC_WRAPPER_ENV_VAR.to_string(),
+            LWA_EXEC_WRAPPER_PATH.to_string(),
+        ),
+        (LWA_PORT_ENV_VAR.to_string(), adapter.port.to_string()),
+    ];
     if let Some(path) = &adapter.readiness_check_path {
-        vars.insert(LWA_READINESS_CHECK_PATH_ENV_VAR.to_string(), path.clone());
+        vars.push((LWA_READINESS_CHECK_PATH_ENV_VAR.to_string(), path.clone()));
     }
+    vars
 }
 
 /// The AWS Lambda Web Adapter's pinned ARM64 layer ARN, as a CFN `Fn::Sub`
@@ -213,7 +280,6 @@ fn runtime_adapter_layer_arn() -> serde_json::Value {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::params::{ArtifactRef, RenderMetadata};
 
     fn descriptor() -> DeployDescriptor {
         toml::from_str(
@@ -241,24 +307,8 @@ mod tests {
 
     fn params(environment: BTreeMap<String, String>) -> RenderParams {
         RenderParams {
-            account_id: "123456789012".to_string(),
-            region: "us-east-1".to_string(),
-            stack_name: "lambda-test-stack".to_string(),
-            artifact: ArtifactRef {
-                s3_bucket: "bucket".to_string(),
-                s3_key: "key.zip".to_string(),
-                digest: None,
-            },
             environment,
-            metadata: RenderMetadata {
-                version: "1.0.0".to_string(),
-                server_type: None,
-                server_id: None,
-                template_id: None,
-                snapshot_baked: false,
-            },
-            cloudformation_metadata: BTreeMap::new(),
-            runtime_adapter: None,
+            ..RenderParams::for_test("lambda-test-stack")
         }
     }
 

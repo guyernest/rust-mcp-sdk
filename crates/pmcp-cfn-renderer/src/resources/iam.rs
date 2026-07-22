@@ -150,7 +150,7 @@ fn render_role(d: &DeployDescriptor) -> (String, CfnResource) {
 /// [`render_policy_aws_lambda`] and in case a future family-internal
 /// resource here needs it again.
 fn render_policy(d: &DeployDescriptor, _p: &RenderParams) -> (String, CfnResource) {
-    let mut statements = vec![
+    let base_statements = vec![
         json!({
             "Effect": "Allow",
             "Action": ["xray:PutTraceSegments", "xray:PutTelemetryRecords"],
@@ -176,25 +176,7 @@ fn render_policy(d: &DeployDescriptor, _p: &RenderParams) -> (String, CfnResourc
             ),
         }),
     ];
-    if let Some(iam) = &d.iam {
-        statements.extend(iam.statements.iter().map(render_declared_statement));
-    }
-    let properties = json!({
-        "PolicyName": DEFAULT_POLICY_NAME,
-        "PolicyDocument": {
-            "Version": "2012-10-17",
-            "Statement": statements,
-        },
-        "Roles": [{ "Ref": logical_ids::for_execution_role() }],
-    });
-    (
-        logical_ids::for_execution_policy().to_string(),
-        CfnResource {
-            type_: "AWS::IAM::Policy".to_string(),
-            properties,
-            depends_on: vec![],
-        },
-    )
+    build_policy_resource(d, base_statements)
 }
 
 /// Render the MCP server's Lambda execution role and its default inline
@@ -240,19 +222,32 @@ fn render_role_aws_lambda(d: &DeployDescriptor) -> (String, CfnResource) {
 /// operator-declared `[[iam.statements]]` appended after it in descriptor
 /// order.
 fn render_policy_aws_lambda(d: &DeployDescriptor) -> (String, CfnResource) {
-    let mut statements = vec![json!({
+    let base_statements = vec![json!({
         "Effect": "Allow",
         "Action": ["xray:PutTraceSegments", "xray:PutTelemetryRecords"],
         "Resource": "*",
     })];
+    build_policy_resource(d, base_statements)
+}
+
+/// Build the default `AWS::IAM::Policy` resource shared by
+/// [`render_policy`]/[`render_policy_aws_lambda`]: append any declared
+/// `[[iam.statements]]` (in descriptor order) onto `base_statements`, then
+/// wrap the result in the standard `PolicyDocument`/`Roles` envelope. The
+/// two callers differ only in which fixed statements they seed
+/// `base_statements` with.
+fn build_policy_resource(
+    d: &DeployDescriptor,
+    mut base_statements: Vec<Value>,
+) -> (String, CfnResource) {
     if let Some(iam) = &d.iam {
-        statements.extend(iam.statements.iter().map(render_declared_statement));
+        base_statements.extend(iam.statements.iter().map(render_declared_statement));
     }
     let properties = json!({
         "PolicyName": DEFAULT_POLICY_NAME,
         "PolicyDocument": {
             "Version": "2012-10-17",
-            "Statement": statements,
+            "Statement": base_statements,
         },
         "Roles": [{ "Ref": logical_ids::for_execution_role() }],
     });
@@ -574,8 +569,6 @@ fn extract_account_from_arn(arn: &str) -> Option<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::params::{ArtifactRef, RenderMetadata};
-    use std::collections::BTreeMap;
 
     fn descriptor() -> DeployDescriptor {
         descriptor_with_iam("")
@@ -606,26 +599,7 @@ mod tests {
     }
 
     fn params() -> RenderParams {
-        RenderParams {
-            account_id: "123456789012".to_string(),
-            region: "us-east-1".to_string(),
-            stack_name: "iam-test-stack".to_string(),
-            artifact: ArtifactRef {
-                s3_bucket: "bucket".to_string(),
-                s3_key: "key.zip".to_string(),
-                digest: None,
-            },
-            environment: BTreeMap::new(),
-            metadata: RenderMetadata {
-                version: "1.0.0".to_string(),
-                server_type: None,
-                server_id: None,
-                template_id: None,
-                snapshot_baked: false,
-            },
-            cloudformation_metadata: BTreeMap::new(),
-            runtime_adapter: None,
-        }
+        RenderParams::for_test("iam-test-stack")
     }
 
     #[test]

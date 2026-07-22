@@ -11,11 +11,13 @@
 //!    convention `pmcp-deploy-{account_id}-{region}`, created private if
 //!    missing (idempotent: an "already exists, owned by you" race is
 //!    tolerated as success, never an error).
-//! 2. Upload the bootstrap zip to `{server}/bootstrap-{sha256-prefix}.zip`
-//!    ([`upload_artifact`] — the caller's [`artifact_s3_key`] call, BEFORE
-//!    this module ever runs, must derive the identical key so the
-//!    already-rendered template's `Code.S3Key` matches what actually lands
-//!    in the bucket).
+//! 2. Upload the bootstrap zip's already-read bytes to
+//!    `{server}/bootstrap-{sha256-prefix}.zip` ([`upload_artifact`]) — the
+//!    caller's single [`artifact_s3_key`] call (BEFORE this module ever
+//!    runs) derives both the key baked into the already-rendered template's
+//!    `Code.S3Key` AND the key `EngineParams::s3_key` threads through here,
+//!    so there is no second read-and-rehash of the zip and no derivation to
+//!    keep in sync.
 //! 3. Classify create-vs-update from `describe_stacks` and apply the
 //!    template ([`apply_stack`]) — "No updates are to be performed" is
 //!    success, not an error.
@@ -47,7 +49,6 @@
 
 use anyhow::{bail, Context, Result};
 use async_trait::async_trait;
-use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -68,25 +69,25 @@ const MAX_FAILURE_EVENTS: usize = 10;
 
 /// Public engine parameters (Task 9 interface).
 ///
-/// `project_root` and `server_name` are additive beyond the brief's
-/// illustrative 4-field sketch (`stack_name`, `region`, `artifact_zip`,
-/// `bucket`) — both are required for correctness, not convenience:
-/// `server_name` MUST match exactly what the caller used to derive the
-/// `ArtifactRef::s3_key` baked into `template_json` (see [`artifact_s3_key`]
-/// — this module re-derives the SAME key from `artifact_zip`'s bytes so the
-/// upload lands where the template says it will, and drift between the two
-/// derivations would silently break the deploy), and `project_root` is
-/// where `deploy/outputs.json` is written (step 5) — there is no other way
-/// to recover it from the other four fields.
+/// `artifact_bytes`/`s3_key` are threaded through from the caller's OWN
+/// single [`artifact_s3_key`] call (simplify-wave fix — this module used to
+/// re-read `artifact_zip` from disk and re-derive its digest/key a second
+/// time here, duplicating work the caller already did to build
+/// `ArtifactRef::s3_key`/`digest` for the template). `s3_key` MUST be the
+/// exact same key the caller baked into `template_json`'s `Code.S3Key` —
+/// since both now come from that ONE call, there is no drift risk to guard
+/// against. `project_root` is where `deploy/outputs.json` is written (step
+/// 5) — there is no other way to recover it from the other fields.
 #[derive(Debug, Clone)]
 pub struct EngineParams {
     pub stack_name: String,
     pub region: String,
-    pub artifact_zip: PathBuf,
+    /// The artifact zip's already-read bytes, uploaded verbatim to `s3_key`.
+    pub artifact_bytes: Vec<u8>,
+    /// The exact S3 key to upload `artifact_bytes` under — see the struct
+    /// doc comment for why this must match `template_json`'s `Code.S3Key`.
+    pub s3_key: String,
     pub bucket: String,
-    /// The MCP server name (`config.server.name`) — see the struct doc
-    /// comment for why this must match the render-time derivation exactly.
-    pub server_name: String,
     /// Project root, for writing `deploy/outputs.json` (step 5).
     pub project_root: PathBuf,
 }
@@ -95,7 +96,7 @@ pub struct EngineParams {
 /// documented on the module. Returns the stack's outputs, and ALSO writes
 /// `deploy/outputs.json` under `params.project_root` as a side effect (for
 /// `status`/other consumers that read it directly).
-pub async fn deploy_stack(template_json: &str, params: &EngineParams) -> Result<DeploymentOutputs> {
+pub async fn deploy_stack(template_json: &str, params: EngineParams) -> Result<DeploymentOutputs> {
     let aws_cfg = load_aws_config(&params.region).await;
     let s3 = aws_sdk_s3::Client::new(&aws_cfg);
     let cfn = aws_sdk_cloudformation::Client::new(&aws_cfg);
@@ -107,10 +108,7 @@ pub async fn deploy_stack(template_json: &str, params: &EngineParams) -> Result<
     )
     .await?;
 
-    let zip_bytes = std::fs::read(&params.artifact_zip)
-        .with_context(|| format!("failed to read {}", params.artifact_zip.display()))?;
-    let (_, key) = artifact_s3_key(&params.server_name, &zip_bytes);
-    upload_artifact(&s3, &params.bucket, &key, zip_bytes).await?;
+    upload_artifact(&s3, &params.bucket, &params.s3_key, params.artifact_bytes).await?;
 
     let describer = AwsStackDescriber { client: &cfn };
     apply_stack(&cfn, &params.stack_name, template_json, &describer).await?;
@@ -167,17 +165,23 @@ pub(crate) fn bucket_name(account_id: &str, region: &str) -> String {
 }
 
 /// Derive `(digest_hex, s3_key)` for an artifact zip's bytes:
-/// `{server_name}/bootstrap-{sha256-prefix}.zip`. MUST be called with
-/// IDENTICAL inputs (same `server_name`, same zip bytes) at both render
-/// time (building `ArtifactRef::s3_key`) and upload time ([`deploy_stack`])
-/// — see [`EngineParams`]'s doc comment for why drift here would silently
-/// break the deploy.
+/// `{server_name}/bootstrap-{sha256-prefix}.zip`. Called exactly ONCE by
+/// the caller (`aws_lambda::deploy::try_render_and_deploy`), which threads
+/// both the digest (as `ArtifactRef::digest`) and the key (as
+/// `ArtifactRef::s3_key`/`EngineParams::s3_key`) onward — see
+/// [`EngineParams`]'s doc comment. Hashes via
+/// [`pmcp_package::digest::ManifestDigest::from_bytes`] (this crate's
+/// shared content-digest primitive) rather than hand-rolling SHA-256; its
+/// `sha256:<hex>` output is stripped back to bare hex here to preserve this
+/// function's existing `(hex, key)` contract.
 #[must_use]
 pub(crate) fn artifact_s3_key(server_name: &str, zip_bytes: &[u8]) -> (String, String) {
-    let mut hasher = Sha256::new();
-    hasher.update(zip_bytes);
-    let digest = hasher.finalize();
-    let hex: String = digest.iter().map(|b| format!("{b:02x}")).collect();
+    let digest = pmcp_package::digest::ManifestDigest::from_bytes(zip_bytes);
+    let hex = digest
+        .as_str()
+        .strip_prefix("sha256:")
+        .expect("ManifestDigest::from_bytes always yields a sha256:-prefixed digest")
+        .to_string();
     let prefix = &hex[..ARTIFACT_KEY_DIGEST_PREFIX_LEN.min(hex.len())];
     let key = format!("{server_name}/bootstrap-{prefix}.zip");
     (hex, key)

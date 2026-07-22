@@ -120,36 +120,12 @@ pub(crate) fn emit_descriptor_warnings(descriptor: &DeployDescriptor) {
     }
 }
 
-/// Map `McpMetadata` 1:1 into [`pmcp_cfn_renderer::RenderMetadata`] — the
-/// same fields `McpMetadata::to_cdk_context` emits as `mcp:*` context args
-/// for the legacy path.
-pub(crate) fn render_metadata_from(
-    metadata: Option<&McpMetadata>,
-) -> pmcp_cfn_renderer::RenderMetadata {
-    match metadata {
-        Some(m) => pmcp_cfn_renderer::RenderMetadata {
-            version: m.version.clone(),
-            server_type: Some(m.server_type.clone()),
-            server_id: Some(m.server_id.clone()),
-            template_id: m.template_id.clone(),
-            snapshot_baked: m.snapshot_baked,
-        },
-        None => pmcp_cfn_renderer::RenderMetadata {
-            version: crate::deployment::metadata::MCP_METADATA_VERSION.to_string(),
-            server_type: None,
-            server_id: None,
-            template_id: None,
-            snapshot_baked: false,
-        },
-    }
-}
-
 /// Populate [`pmcp_cfn_renderer::RenderParams::cloudformation_metadata`]
 /// from the EXISTING maintained DSTK-03 shape,
 /// [`McpMetadata::to_cloudformation_metadata`] — the same `mcp:*`
 /// provenance object both the legacy `cdk` path (via `stack.ts`'s
-/// `this.node.tryGetContext` reads, fed by [`render_metadata_from`]'s
-/// sibling `to_cdk_context`) and any renderer-path caller share.
+/// `this.node.tryGetContext` reads, fed by `McpMetadata::to_cdk_context`)
+/// and any renderer-path caller share.
 ///
 /// `to_cloudformation_metadata` returns a `serde_json::Value::Object`; this
 /// flattens it into the `BTreeMap` `RenderParams::cloudformation_metadata`
@@ -302,14 +278,6 @@ mod tests {
             cfg_with_target_and_iam(tmp.path().to_path_buf(), "aws-lambda", IamConfig::default());
         let err = load_deploy_descriptor(&config).expect_err("missing file must error");
         assert!(err.to_string().contains("deploy.toml"));
-    }
-
-    #[test]
-    fn render_metadata_from_none_uses_schema_default() {
-        let m = render_metadata_from(None);
-        assert_eq!(m.version, crate::deployment::metadata::MCP_METADATA_VERSION);
-        assert_eq!(m.server_type, None);
-        assert!(!m.snapshot_baked);
     }
 
     #[test]

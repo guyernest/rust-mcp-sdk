@@ -7,7 +7,7 @@ use crate::deployment::{
     r#trait::{BuildArtifact, DeploymentOutputs},
     stack_routing::{
         cloudformation_metadata_from, custom_stack_ts_reason, emit_descriptor_warnings,
-        extract_metadata_with_log, load_deploy_descriptor, mark_custom_stack, render_metadata_from,
+        extract_metadata_with_log, load_deploy_descriptor, mark_custom_stack,
     },
     DeployConfig,
 };
@@ -143,10 +143,24 @@ async fn try_render_and_deploy(
         )
         .map_err(RenderOrDeployError::Deploy)?;
 
+    // Deliberate recompute (simplify-wave item 10): `mod.rs`'s `build()` also
+    // calls `detect_shape` to acquire the artifact, but `ServerShape` isn't
+    // threaded through `BuildArtifact` into this `deploy()` call — that enum
+    // is shared across every deploy target (pmcp-run, cloudflare,
+    // google-cloud-run, ...), so adding an `aws-lambda`-only shape field to
+    // it would ripple into every other target's construction/match sites.
+    // Recomputing here is cheap (two file-existence checks over an
+    // already-parsed, immutable `config`) and keeps `BuildArtifact` a clean
+    // cross-target type.
     let shape = detect_shape(config).map_err(RenderOrDeployError::Deploy)?;
     let runtime_adapter = runtime_adapter_for(&shape);
 
     let bucket = engine::bucket_name(&account_id, &region);
+    // Single hash of `zip_bytes` for this whole deploy — `digest`/`s3_key`
+    // feed BOTH the template's `ArtifactRef` (below) and `EngineParams`
+    // (further down), so `engine::deploy_stack` never needs to re-read the
+    // zip from disk or re-derive this key a second time (simplify-wave
+    // item 7).
     let (digest, s3_key) = engine::artifact_s3_key(&config.server.name, &zip_bytes);
 
     let metadata = extract_metadata_with_log(&config.project_root).map(|mut m| {
@@ -174,13 +188,13 @@ async fn try_render_and_deploy(
     let engine_params = EngineParams {
         stack_name: params.stack_name,
         region,
-        artifact_zip: zip_path,
+        artifact_bytes: zip_bytes,
+        s3_key,
         bucket,
-        server_name: config.server.name.clone(),
         project_root: config.project_root.clone(),
     };
 
-    let outputs = engine::deploy_stack(&template, &engine_params)
+    let outputs = engine::deploy_stack(&template, engine_params)
         .await
         .map_err(RenderOrDeployError::Deploy)?;
     outputs.display();
@@ -233,7 +247,6 @@ fn build_render_params(
         stack_name: format!("{}-stack", config.server.name),
         artifact,
         environment: scaffold_fixed_environment(),
-        metadata: render_metadata_from(metadata),
         cloudformation_metadata: cloudformation_metadata_from(metadata),
         runtime_adapter,
     }

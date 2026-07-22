@@ -8,7 +8,7 @@ use crate::deployment::{
     r#trait::{BuildArtifact, DeploymentOutputs},
     stack_routing::{
         cloudformation_metadata_from, custom_stack_ts_reason, emit_descriptor_warnings,
-        extract_metadata_with_log, load_deploy_descriptor, mark_custom_stack, render_metadata_from,
+        extract_metadata_with_log, load_deploy_descriptor, mark_custom_stack,
     },
     DeployConfig,
 };
@@ -374,7 +374,6 @@ fn build_render_params(
             .iter()
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect(),
-        metadata: render_metadata_from(metadata),
         cloudformation_metadata: cloudformation_metadata_from(metadata),
         // The `pmcp-run` target never routes through `aws_lambda::artifact`'s
         // `ServerShape` detection (that module is `aws-lambda`-target-only —
@@ -1508,52 +1507,6 @@ mod tests {
         assert_eq!(params.stack_name, "demo-server-stack");
     }
 
-    /// `render_metadata_from` maps every `McpMetadata` field 1:1 onto
-    /// `RenderMetadata`, mirroring `McpMetadata::to_cdk_context`'s
-    /// `mcp:version`/`mcp:serverType`/`mcp:serverId`/`mcp:templateId`/
-    /// `mcp:snapshotBaked` keys (Interfaces §4).
-    #[test]
-    fn render_metadata_from_maps_fields_one_to_one() {
-        let metadata = McpMetadata {
-            version: "1.0".to_string(),
-            server_type: "graphql-api".to_string(),
-            server_id: "srv-1".to_string(),
-            template_id: Some("types/graphql".to_string()),
-            template_version: None,
-            resources: crate::deployment::metadata::ResourceRequirements::default(),
-            capabilities: crate::deployment::metadata::ServerCapabilities::default(),
-            available_operations: None,
-            snapshot_baked: true,
-            custom_stack: false,
-        };
-
-        let params_metadata = render_metadata_from(Some(&metadata));
-        assert_eq!(params_metadata.version, "1.0");
-        assert_eq!(params_metadata.server_type, Some("graphql-api".to_string()));
-        assert_eq!(params_metadata.server_id, Some("srv-1".to_string()));
-        assert_eq!(
-            params_metadata.template_id,
-            Some("types/graphql".to_string())
-        );
-        assert!(params_metadata.snapshot_baked);
-    }
-
-    /// `render_metadata_from(None)` falls back to the schema-version default
-    /// with every other field absent/`false` — mirrors `to_cdk_context`'s
-    /// behavior when `extract_metadata_with_log` found nothing.
-    #[test]
-    fn render_metadata_from_none_uses_defaults() {
-        let params_metadata = render_metadata_from(None);
-        assert_eq!(
-            params_metadata.version,
-            crate::deployment::metadata::MCP_METADATA_VERSION
-        );
-        assert_eq!(params_metadata.server_type, None);
-        assert_eq!(params_metadata.server_id, None);
-        assert_eq!(params_metadata.template_id, None);
-        assert!(!params_metadata.snapshot_baked);
-    }
-
     /// T7 review fix: `cloudformation_metadata_from` populates
     /// `RenderParams::cloudformation_metadata` from the EXISTING maintained
     /// `McpMetadata::to_cloudformation_metadata` (DSTK-03 shape) —
@@ -1600,10 +1553,10 @@ mod tests {
         assert!(!cf_metadata.contains_key("mcp:snapshotBaked"));
     }
 
-    /// `cloudformation_metadata_from(None)` yields an empty map — mirrors
-    /// `render_metadata_from(None)`'s own "no metadata resolved yet"
-    /// fallback, and (via `CfnTemplate`'s envelope rule) results in no
-    /// `Metadata` key in the rendered template at all.
+    /// `cloudformation_metadata_from(None)` yields an empty map — "no
+    /// metadata resolved yet" falls back to an empty map, and (via
+    /// `CfnTemplate`'s envelope rule) results in no `Metadata` key in the
+    /// rendered template at all.
     #[test]
     fn cloudformation_metadata_from_none_is_empty() {
         assert!(cloudformation_metadata_from(None).is_empty());

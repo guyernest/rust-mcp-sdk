@@ -69,11 +69,7 @@ pub(crate) fn standard_tags(service: &str) -> serde_json::Value {
     tags.insert("project", "hosting");
     tags.insert("service", service);
     tags.insert("target", "pmcp-run");
-    serde_json::Value::Array(
-        tags.into_iter()
-            .map(|(key, value)| serde_json::json!({ "Key": key, "Value": value }))
-            .collect(),
-    )
+    array_tags(tags)
 }
 
 /// The `aws-lambda` target's tag set as an ordered `(key, value)` map,

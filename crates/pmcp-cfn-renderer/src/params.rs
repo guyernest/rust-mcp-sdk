@@ -30,32 +30,6 @@ pub struct ArtifactRef {
     pub digest: Option<String>,
 }
 
-/// Synth-time metadata injected into the rendered template.
-///
-/// Mirrors `cargo-pmcp`'s `metadata.rs::McpMetadata::to_cdk_context` keys:
-/// `version` -> `mcp:version`, `server_type` -> `mcp:serverType`,
-/// `server_id` -> `mcp:serverId`, `template_id` -> `mcp:templateId`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct RenderMetadata {
-    /// Metadata schema version (mirrors `mcp:version`).
-    pub version: String,
-    /// Server type, e.g. `graphql-api`/`openapi-api`/`custom` (mirrors
-    /// `mcp:serverType`).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub server_type: Option<String>,
-    /// Unique server identifier (mirrors `mcp:serverId`).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub server_id: Option<String>,
-    /// Template that generated this server, if applicable (mirrors
-    /// `mcp:templateId`).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub template_id: Option<String>,
-    /// Whether the server's snapshot is baked into the deployment artifact
-    /// (mirrors the conditionally emitted `mcp:snapshotBaked`).
-    #[serde(default)]
-    pub snapshot_baked: bool,
-}
-
 /// AWS Lambda Web Adapter bridge configuration for `ServerShape::BuiltIn`
 /// artifacts (T8 review fix — Critical finding).
 ///
@@ -119,8 +93,6 @@ pub struct RenderParams {
     /// references).
     #[serde(default)]
     pub environment: BTreeMap<String, String>,
-    /// Synth-time metadata for the rendered template.
-    pub metadata: RenderMetadata,
     /// The EXACT top-level CloudFormation template `Metadata` map [`crate::render`]
     /// should emit verbatim — e.g. the `mcp:*` provenance keys
     /// (`mcp:version`, `mcp:serverType`, `mcp:serverId`, `mcp:resources`,
@@ -128,13 +100,9 @@ pub struct RenderParams {
     /// `Stack.templateOptions.metadata`, one entry per key.
     ///
     /// T7 review fix: before this field existed, [`crate::render`] always
-    /// emitted an empty `CfnTemplate::metadata`, discarding
-    /// `RenderMetadata`'s fields entirely and losing ALL `mcp:*` provenance
-    /// from the uploaded template — the platform's sole provenance channel
-    /// for a renderer-synthesized stack. This field is additive alongside
-    /// [`RenderMetadata`] (kept for any internal/`cdk`-context use, e.g.
-    /// `cargo-pmcp`'s `to_cdk_context`) rather than replacing it, so this
-    /// struct's public shape stays backward compatible.
+    /// emitted an empty `CfnTemplate::metadata`, losing ALL `mcp:*`
+    /// provenance from the uploaded template — the platform's sole
+    /// provenance channel for a renderer-synthesized stack.
     ///
     /// The renderer treats this map as OPAQUE passthrough content: it
     /// copies it byte-for-byte into `CfnTemplate::metadata`
@@ -165,30 +133,51 @@ pub struct RenderParams {
     pub runtime_adapter: Option<RuntimeAdapterConfig>,
 }
 
+impl RenderParams {
+    /// Test-only fixture builder: account `123456789012`, region
+    /// `us-east-1`, a placeholder `bucket`/`key.zip` artifact (no digest),
+    /// empty `environment`/`cloudformation_metadata`, `runtime_adapter:
+    /// None`. Callers override the fields they care about via
+    /// struct-update syntax (`RenderParams { environment, ..
+    /// RenderParams::for_test("my-stack") }`).
+    ///
+    /// Deliberately NOT `#[cfg(test)]`: `tests/determinism.rs` (a separate
+    /// integration-test compilation unit) links against the lib built
+    /// WITHOUT `cfg(test)`, so a `cfg(test)`-gated constructor here would be
+    /// invisible to it. `#[doc(hidden)]` instead documents this as
+    /// test-only without making it a compile-time-conditional item.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn for_test(stack_name: &str) -> Self {
+        Self {
+            account_id: "123456789012".to_string(),
+            region: "us-east-1".to_string(),
+            stack_name: stack_name.to_string(),
+            artifact: ArtifactRef {
+                s3_bucket: "bucket".to_string(),
+                s3_key: "key.zip".to_string(),
+                digest: None,
+            },
+            environment: BTreeMap::new(),
+            cloudformation_metadata: BTreeMap::new(),
+            runtime_adapter: None,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn sample_params() -> RenderParams {
         RenderParams {
-            account_id: "123456789012".to_string(),
-            region: "us-east-1".to_string(),
-            stack_name: "det-test-stack".to_string(),
             artifact: ArtifactRef {
                 s3_bucket: "pmcp-deploy-123456789012-us-east-1".to_string(),
                 s3_key: "det-test/bootstrap.zip".to_string(),
                 digest: Some("sha256:abc".to_string()),
             },
             environment: BTreeMap::from([("RUST_LOG".to_string(), "info".to_string())]),
-            metadata: RenderMetadata {
-                version: "1.0.0".to_string(),
-                server_type: Some("custom".to_string()),
-                server_id: Some("det-test".to_string()),
-                template_id: None,
-                snapshot_baked: false,
-            },
-            cloudformation_metadata: BTreeMap::new(),
-            runtime_adapter: None,
+            ..RenderParams::for_test("det-test-stack")
         }
     }
 
@@ -229,8 +218,7 @@ mod tests {
             "account_id": "123456789012",
             "region": "us-east-1",
             "stack_name": "compat-test-stack",
-            "artifact": {"s3_bucket": "bucket", "s3_key": "key.zip"},
-            "metadata": {"version": "1.0.0", "snapshot_baked": false}
+            "artifact": {"s3_bucket": "bucket", "s3_key": "key.zip"}
         });
         let params: RenderParams =
             serde_json::from_value(json).expect("deserializes without cloudformation_metadata");
@@ -265,8 +253,7 @@ mod tests {
             "account_id": "123456789012",
             "region": "us-east-1",
             "stack_name": "compat-test-stack",
-            "artifact": {"s3_bucket": "bucket", "s3_key": "key.zip"},
-            "metadata": {"version": "1.0.0", "snapshot_baked": false}
+            "artifact": {"s3_bucket": "bucket", "s3_key": "key.zip"}
         });
         let params: RenderParams =
             serde_json::from_value(json).expect("deserializes without runtime_adapter");

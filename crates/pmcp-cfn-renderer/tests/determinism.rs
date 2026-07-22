@@ -1,5 +1,4 @@
-use pmcp_cfn_renderer::{render, ArtifactRef, RenderMetadata, RenderParams};
-use std::collections::BTreeMap;
+use pmcp_cfn_renderer::{render, ArtifactRef, RenderParams};
 
 fn minimal_descriptor() -> pmcp_package::package::DeployDescriptor {
     // Smallest shape that satisfies `DeployDescriptor`'s `deny_unknown_fields`
@@ -49,24 +48,12 @@ fn minimal_descriptor() -> pmcp_package::package::DeployDescriptor {
 
 fn params() -> RenderParams {
     RenderParams {
-        account_id: "123456789012".into(),
-        region: "us-east-1".into(),
-        stack_name: "det-test-stack".into(),
         artifact: ArtifactRef {
             s3_bucket: "pmcp-deploy-123456789012-us-east-1".into(),
             s3_key: "det-test/bootstrap.zip".into(),
             digest: None,
         },
-        environment: BTreeMap::new(),
-        metadata: RenderMetadata {
-            version: "1.0.0".into(),
-            server_type: None,
-            server_id: None,
-            template_id: None,
-            snapshot_baked: false,
-        },
-        cloudformation_metadata: BTreeMap::new(),
-        runtime_adapter: None,
+        ..RenderParams::for_test("det-test-stack")
     }
 }
 

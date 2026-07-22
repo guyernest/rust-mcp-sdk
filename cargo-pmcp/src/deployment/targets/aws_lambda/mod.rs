@@ -95,6 +95,14 @@ impl DeploymentTarget for AwsLambdaTarget {
         // pipeline via `artifact::acquire_custom_rust_artifact`'s delegation
         // to `build_lambda_binary` below — identical behavior to before this
         // wiring, just always wrapped in a zip.
+        //
+        // Deliberate recompute (simplify-wave item 10): `deploy()`
+        // (`deploy.rs::try_render_and_deploy`) calls `detect_shape` again
+        // rather than this call's result being threaded through
+        // `BuildArtifact` — that enum is shared across every deploy target,
+        // so adding an `aws-lambda`-only shape field would ripple into all
+        // of them. Recomputing is cheap (two file-existence checks over an
+        // immutable `config`), so the duplication is intentional.
         let shape = artifact::detect_shape(config)?;
         let zip_path = artifact::acquire_artifact(&shape, config).await?;
         let size = std::fs::metadata(&zip_path)

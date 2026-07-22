@@ -113,7 +113,6 @@
 
 use anyhow::{bail, Context, Result};
 use async_trait::async_trait;
-use sha2::{Digest, Sha256};
 use std::fmt::Write as _;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
@@ -319,16 +318,22 @@ impl Downloader for ReqwestDownloader {
     }
 }
 
-/// Hex-encoded SHA-256 digest of `bytes`.
+/// Hex-encoded SHA-256 digest of `bytes` — via
+/// [`pmcp_package::digest::ManifestDigest::from_bytes`] (this crate's
+/// shared content-digest primitive) rather than hand-rolled SHA-256; its
+/// `sha256:<hex>` output is stripped back to bare hex to preserve this
+/// function's existing contract (the sidecar `.sha256` files this compares
+/// against, via [`verify_checksum`], are bare hex — a `sha256sum` file has
+/// no `sha256:` prefix — so the comparison itself stays local rather than
+/// routing through `pmcp_package::digest::verify`, which expects a
+/// prefixed `ManifestDigest` on both sides).
 fn sha256_hex(bytes: &[u8]) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(bytes);
-    let digest = hasher.finalize();
-    let mut hex = String::with_capacity(64);
-    for b in &digest {
-        let _ = write!(hex, "{b:02x}");
-    }
-    hex
+    let digest = pmcp_package::digest::ManifestDigest::from_bytes(bytes);
+    digest
+        .as_str()
+        .strip_prefix("sha256:")
+        .expect("ManifestDigest::from_bytes always yields a sha256:-prefixed digest")
+        .to_string()
 }
 
 /// Parse a `sha256sum`-format checksum file's first whitespace-delimited hex
@@ -412,7 +417,9 @@ fn read_verified_cache(bin_path: &Path, sha_path: &Path) -> Result<Option<Vec<u8
 }
 
 /// Download the release asset + its `.sha256` sibling and verify them
-/// against each other.
+/// against each other. The two GETs are independent (different URLs, no
+/// shared state) so they run concurrently via `tokio::join!` rather than
+/// sequentially.
 async fn download_and_verify(
     downloader: &dyn Downloader,
     binary_name: &str,
@@ -422,14 +429,14 @@ async fn download_and_verify(
     let asset_url = release_asset_url(binary_name, tag, target_triple);
     let sha_url = format!("{asset_url}.sha256");
 
-    let bytes = downloader
-        .get_bytes(&asset_url)
-        .await
+    let (bytes_result, sha_bytes_result) = tokio::join!(
+        downloader.get_bytes(&asset_url),
+        downloader.get_bytes(&sha_url)
+    );
+    let bytes = bytes_result
         .with_context(|| format!("failed to download built-in binary from {asset_url}"))?;
-    let sha_bytes = downloader
-        .get_bytes(&sha_url)
-        .await
-        .with_context(|| format!("failed to download checksum from {sha_url}"))?;
+    let sha_bytes =
+        sha_bytes_result.with_context(|| format!("failed to download checksum from {sha_url}"))?;
     let sha_text = String::from_utf8(sha_bytes).context("checksum file was not valid UTF-8")?;
 
     verify_checksum(&bytes, &sha_text).with_context(|| {

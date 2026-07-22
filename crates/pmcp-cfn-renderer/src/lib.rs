@@ -82,7 +82,7 @@ pub mod template;
 // ---------------------------------------------------------------------
 
 pub use error::RenderError;
-pub use params::{ArtifactRef, RenderMetadata, RenderParams, RuntimeAdapterConfig};
+pub use params::{ArtifactRef, RenderParams, RuntimeAdapterConfig};
 pub use template::{CfnExport, CfnOutput, CfnResource, CfnTemplate};
 
 use pmcp_package::package::DeployDescriptor;
@@ -120,7 +120,8 @@ pub fn render(
     descriptor: &DeployDescriptor,
     params: &RenderParams,
 ) -> Result<CfnTemplate, RenderError> {
-    guard_unsupported(descriptor)?;
+    let target = resolve_target(descriptor)?;
+    guard_auth_support(descriptor, target)?;
     if let Some(iam) = &descriptor.iam {
         // Discard warnings here — `render` is the pure, side-effect-free
         // entry point (no I/O to print them through). Hard errors still
@@ -136,14 +137,12 @@ pub fn render(
     // to propagate.
     let _ = resources::cognito::validate(&descriptor.auth);
 
-    if descriptor.target.target_type == "aws-lambda" {
-        if descriptor.auth.enabled {
+    match target {
+        RenderTarget::AwsLambda if descriptor.auth.enabled => {
             render_aws_lambda_oauth(descriptor, params)
-        } else {
-            render_aws_lambda(descriptor, params)
-        }
-    } else {
-        render_pmcp_run(descriptor, params)
+        },
+        RenderTarget::AwsLambda => render_aws_lambda(descriptor, params),
+        RenderTarget::PmcpRun => render_pmcp_run(descriptor, params),
     }
 }
 
@@ -252,26 +251,46 @@ const PLAIN_LOG_RETENTION_DAYS: u32 = 7;
 /// `resources::cognito` can reuse the same constant for its 3 log groups.
 pub(crate) const AWS_LAMBDA_LOG_RETENTION_DAYS: u32 = 30;
 
-/// Fail loudly on descriptor content this task doesn't render yet, rather
-/// than silently producing an incomplete or wrong stack.
-fn guard_unsupported(d: &DeployDescriptor) -> Result<(), RenderError> {
-    if d.target.target_type != "pmcp-run" && d.target.target_type != "aws-lambda" {
-        return Err(RenderError::UnsupportedSection {
+/// The renderer's exactly-two supported deploy targets — the closed set
+/// [`resolve_target`] validates `descriptor.target.target_type` against.
+/// Resolved once per [`render`] call, then matched exhaustively instead of
+/// re-checking the raw string at each dispatch point.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RenderTarget {
+    PmcpRun,
+    AwsLambda,
+}
+
+/// Resolve `d.target.target_type` into the closed [`RenderTarget`] set, or
+/// fail loudly on anything else — rather than silently producing an
+/// incomplete or wrong stack. Replaces what used to be a pair of ad hoc
+/// string comparisons (one in this validation, one in [`render`]'s own
+/// dispatch) with a single string check whose result both call sites share.
+fn resolve_target(d: &DeployDescriptor) -> Result<RenderTarget, RenderError> {
+    match d.target.target_type.as_str() {
+        "pmcp-run" => Ok(RenderTarget::PmcpRun),
+        "aws-lambda" => Ok(RenderTarget::AwsLambda),
+        other => Err(RenderError::UnsupportedSection {
             section: "target".to_string(),
             detail: format!(
-                "target type '{}' is not yet rendered (only 'pmcp-run' plain-Lambda and \
-                 'aws-lambda' HTTP API rendering are implemented)",
-                d.target.target_type
+                "target type '{other}' is not yet rendered (only 'pmcp-run' plain-Lambda and \
+                 'aws-lambda' HTTP API rendering are implemented)"
             ),
-        });
+        }),
     }
-    // `auth.enabled = true` is implemented only for the `aws-lambda`
-    // target's Cognito OAuth+DCR stack shape (Task 6) — the `pmcp-run`
-    // target's own OAuth rendering isn't proven by any golden yet, so it
-    // stays guarded regardless of `auth.provider`. Provider validation for
-    // the `aws-lambda` case happens inside `resources::cognito::render`
-    // (a bad provider fails via `RenderError::Invalid`, not this guard).
-    if d.auth.enabled && d.target.target_type != "aws-lambda" {
+}
+
+/// Fail loudly when `d.auth.enabled` is set on a target that doesn't
+/// implement OAuth rendering yet.
+///
+/// `auth.enabled = true` is implemented only for the `aws-lambda` target's
+/// Cognito OAuth+DCR stack shape (Task 6) — the `pmcp-run` target's own
+/// OAuth rendering isn't proven by any golden yet, so it stays guarded
+/// regardless of `auth.provider`. Provider validation for the `aws-lambda`
+/// case happens inside `resources::cognito::render` (a bad provider fails
+/// via `RenderError::Invalid`, not this guard).
+fn guard_auth_support(d: &DeployDescriptor, target: RenderTarget) -> Result<(), RenderError> {
+    if d.auth.enabled && target != RenderTarget::AwsLambda {
         return Err(RenderError::UnsupportedSection {
             section: "auth".to_string(),
             detail: "auth.enabled = true is only implemented for the aws-lambda target's \
@@ -323,26 +342,7 @@ mod tests {
     }
 
     fn params() -> RenderParams {
-        RenderParams {
-            account_id: "123456789012".to_string(),
-            region: "us-east-1".to_string(),
-            stack_name: "unit-test-stack".to_string(),
-            artifact: ArtifactRef {
-                s3_bucket: "bucket".to_string(),
-                s3_key: "key.zip".to_string(),
-                digest: None,
-            },
-            environment: BTreeMap::new(),
-            metadata: RenderMetadata {
-                version: "1.0.0".to_string(),
-                server_type: None,
-                server_id: None,
-                template_id: None,
-                snapshot_baked: false,
-            },
-            cloudformation_metadata: BTreeMap::new(),
-            runtime_adapter: None,
-        }
+        RenderParams::for_test("unit-test-stack")
     }
 
     #[test]

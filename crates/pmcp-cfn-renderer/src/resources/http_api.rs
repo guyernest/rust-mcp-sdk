@@ -242,8 +242,6 @@ pub(crate) fn render_permission_for(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::params::{ArtifactRef, RenderMetadata};
-    use std::collections::BTreeMap;
 
     fn descriptor(name: &str) -> DeployDescriptor {
         toml::from_str(&format!(
@@ -269,26 +267,7 @@ mod tests {
     }
 
     fn params() -> RenderParams {
-        RenderParams {
-            account_id: "123456789012".to_string(),
-            region: "us-east-1".to_string(),
-            stack_name: "http-api-test-stack".to_string(),
-            artifact: ArtifactRef {
-                s3_bucket: "bucket".to_string(),
-                s3_key: "key.zip".to_string(),
-                digest: None,
-            },
-            environment: BTreeMap::new(),
-            metadata: RenderMetadata {
-                version: "1.0.0".to_string(),
-                server_type: None,
-                server_id: None,
-                template_id: None,
-                snapshot_baked: false,
-            },
-            cloudformation_metadata: BTreeMap::new(),
-            runtime_adapter: None,
-        }
+        RenderParams::for_test("http-api-test-stack")
     }
 
     #[test]

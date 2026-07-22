@@ -283,29 +283,28 @@ fn render_oauth_proxy_function(d: &DeployDescriptor, p: &RenderParams) -> (Strin
         "DCR_TABLE_NAME".to_string(),
         json!({ "Ref": logical_ids::for_table(&clients_table_name(d)) }),
     );
-    let properties = json!({
-        "FunctionName": format!("{}-oauth-proxy", d.server.name),
-        "Runtime": "provided.al2023",
-        "Handler": "bootstrap",
-        "Architectures": ["arm64"],
-        "MemorySize": OAUTH_PROXY_MEMORY_MB,
-        "Timeout": OAUTH_PROXY_TIMEOUT_SECONDS,
-        "Code": { "S3Bucket": p.artifact.s3_bucket, "S3Key": p.artifact.s3_key },
-        "Role": { "Fn::GetAtt": [logical_ids::for_oauth_proxy_role(), "Arn"] },
-        "Environment": { "Variables": Value::Object(variables) },
-        "LoggingConfig": { "LogFormat": "JSON" },
-        "Tags": aws_lambda_tags_with_component(&d.server.name, COMPONENT_TAG),
-    });
-    (
-        logical_ids::for_oauth_proxy_function().to_string(),
-        CfnResource {
-            type_: "AWS::Lambda::Function".to_string(),
-            properties,
+    let resource = lambda::build_function_resource(
+        p,
+        lambda::LambdaFunctionSpec {
+            function_name: format!("{}-oauth-proxy", d.server.name),
+            memory_mb: OAUTH_PROXY_MEMORY_MB,
+            timeout_seconds: OAUTH_PROXY_TIMEOUT_SECONDS,
+            role_logical_id: logical_ids::for_oauth_proxy_role(),
+            environment_variables: Value::Object(variables),
+            tags: aws_lambda_tags_with_component(&d.server.name, COMPONENT_TAG),
+            // No `tracing: lambda.Tracing.ACTIVE` in the TS scaffold's
+            // OAuth-proxy function construct.
+            tracing_active: false,
+            layers: None,
             depends_on: vec![
                 logical_ids::for_oauth_proxy_policy().to_string(),
                 logical_ids::for_oauth_proxy_role().to_string(),
             ],
         },
+    );
+    (
+        logical_ids::for_oauth_proxy_function().to_string(),
+        resource,
     )
 }
 
@@ -393,29 +392,25 @@ fn render_authorizer_lambda(d: &DeployDescriptor, p: &RenderParams) -> Vec<(Stri
 
 fn render_authorizer_function(d: &DeployDescriptor, p: &RenderParams) -> (String, CfnResource) {
     let variables = base_environment(p);
-    let properties = json!({
-        "FunctionName": format!("{}-authorizer", d.server.name),
-        "Runtime": "provided.al2023",
-        "Handler": "bootstrap",
-        "Architectures": ["arm64"],
-        "MemorySize": AUTHORIZER_MEMORY_MB,
-        "Timeout": AUTHORIZER_TIMEOUT_SECONDS,
-        "Code": { "S3Bucket": p.artifact.s3_bucket, "S3Key": p.artifact.s3_key },
-        "Role": { "Fn::GetAtt": [logical_ids::for_authorizer_role(), "Arn"] },
-        "Environment": { "Variables": Value::Object(variables) },
-        "LoggingConfig": { "LogFormat": "JSON" },
-        "Tags": aws_lambda_tags_with_component(&d.server.name, COMPONENT_TAG),
-    });
-    (
-        logical_ids::for_authorizer_function().to_string(),
-        CfnResource {
-            type_: "AWS::Lambda::Function".to_string(),
-            properties,
+    let resource = lambda::build_function_resource(
+        p,
+        lambda::LambdaFunctionSpec {
+            function_name: format!("{}-authorizer", d.server.name),
+            memory_mb: AUTHORIZER_MEMORY_MB,
+            timeout_seconds: AUTHORIZER_TIMEOUT_SECONDS,
+            role_logical_id: logical_ids::for_authorizer_role(),
+            environment_variables: Value::Object(variables),
+            tags: aws_lambda_tags_with_component(&d.server.name, COMPONENT_TAG),
+            // No `tracing: lambda.Tracing.ACTIVE` in the TS scaffold's
+            // authorizer function construct.
+            tracing_active: false,
+            layers: None,
             // No attached policy to depend on — unlike the MCP/OAuth-proxy
             // functions, this role gets no `addToRolePolicy` calls.
             depends_on: vec![logical_ids::for_authorizer_role().to_string()],
         },
-    )
+    );
+    (logical_ids::for_authorizer_function().to_string(), resource)
 }
 
 fn render_authorizer_role(d: &DeployDescriptor) -> (String, CfnResource) {
@@ -732,7 +727,6 @@ fn render_authorizer_resource(d: &DeployDescriptor, p: &RenderParams) -> (String
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::params::{ArtifactRef, RenderMetadata};
     use std::collections::BTreeMap;
 
     fn descriptor(provider: &str) -> DeployDescriptor {
@@ -770,24 +764,8 @@ mod tests {
 
     fn params() -> RenderParams {
         RenderParams {
-            account_id: "123456789012".to_string(),
-            region: "us-east-1".to_string(),
-            stack_name: "cognito-test-stack".to_string(),
-            artifact: ArtifactRef {
-                s3_bucket: "bucket".to_string(),
-                s3_key: "key.zip".to_string(),
-                digest: None,
-            },
             environment: BTreeMap::from([("RUST_LOG".to_string(), "info".to_string())]),
-            metadata: RenderMetadata {
-                version: "1.0.0".to_string(),
-                server_type: None,
-                server_id: None,
-                template_id: None,
-                snapshot_baked: false,
-            },
-            cloudformation_metadata: BTreeMap::new(),
-            runtime_adapter: None,
+            ..RenderParams::for_test("cognito-test-stack")
         }
     }
 
