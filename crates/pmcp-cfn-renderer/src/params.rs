@@ -56,6 +56,52 @@ pub struct RenderMetadata {
     pub snapshot_baked: bool,
 }
 
+/// AWS Lambda Web Adapter bridge configuration for `ServerShape::BuiltIn`
+/// artifacts (T8 review fix — Critical finding).
+///
+/// `cargo-pmcp`'s `aws_lambda::artifact` module fetches prebuilt Shape A
+/// binaries (`pmcp-sql-server` / `pmcp-openapi-server` / `pmcp-workbook-server`)
+/// that speak plain HTTP — none of them link `lambda_runtime`, so none of
+/// them poll the Lambda Runtime API. Without a bridge, `Runtime:
+/// provided.al2023` / `Handler: bootstrap` execs a process that never calls
+/// `/2018-06-01/runtime/invocation/next`, so every real invocation hangs to
+/// timeout. The [AWS Lambda Web Adapter](https://github.com/awslabs/aws-lambda-web-adapter)
+/// is the standard, zero-recompile fix: an AWS-managed Lambda Layer whose
+/// own `/opt/bootstrap` becomes the ACTUAL Runtime API client (activated via
+/// the `AWS_LAMBDA_EXEC_WRAPPER=/opt/bootstrap` env var), which execs the
+/// project's own `bootstrap` (the wrapper script `aws_lambda::artifact`
+/// generates) as a child process and proxies each invocation to it as a
+/// plain HTTP request.
+///
+/// `RenderParams::runtime_adapter: None` (the default) renders NO layer/env
+/// vars — the shape every existing custom-Rust deployment uses today (it
+/// links `lambda_runtime` directly and needs no bridge). `Some` is populated
+/// by the `aws-lambda` deploy engine (Task 9) once `ServerShape` has been
+/// detected — this is an ACQUISITION-time fact, not something the renderer
+/// infers from [`pmcp_package::package::DeployDescriptor`] (kept out of the
+/// descriptor's closed set, same rationale as every other `RenderParams`
+/// field).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RuntimeAdapterConfig {
+    /// Local TCP port the wrapped Shape A binary listens on. The adapter
+    /// proxies every invocation to `http://127.0.0.1:<port>` — this MUST
+    /// match the `PORT` value `cargo-pmcp`'s `aws_lambda::artifact` bootstrap
+    /// wrapper script passes to the binary's `--http` flag (both default to
+    /// `8080`, matching the adapter's own `AWS_LWA_PORT`/`PORT` default).
+    pub port: u16,
+    /// Optional HTTP path the adapter polls for readiness before routing
+    /// live invocations to the wrapped server (`AWS_LWA_READINESS_CHECK_PATH`).
+    /// `None` (the common case — none of the three Shape A binaries expose a
+    /// dedicated health route) leaves the adapter's own default in effect
+    /// (`GET /`, healthy on any `100`-`499` status), which already works:
+    /// the MCP streamable-HTTP transport mounts `GET /`
+    /// (`src/server/streamable_http_server.rs`) and returns a fast 4xx
+    /// without an `Accept: text/event-stream` header — a real response, not
+    /// a hang.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub readiness_check_path: Option<String>,
+}
+
 /// Everything environmental [`crate::render`] needs, kept OUT of the
 /// descriptor's closed set.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -108,6 +154,15 @@ pub struct RenderParams {
     /// this fix.
     #[serde(default)]
     pub cloudformation_metadata: BTreeMap<String, serde_json::Value>,
+
+    /// AWS Lambda Web Adapter bridge configuration for `ServerShape::BuiltIn`
+    /// artifacts — see [`RuntimeAdapterConfig`]. T8 review fix (Critical
+    /// finding). `#[serde(default)]` so every already-checked-in golden
+    /// `params` JSON fixture (predating this field) keeps deserializing
+    /// unchanged, defaulting to `None` — no `Layers`/adapter env vars, the
+    /// same rendered output every custom-Rust deployment gets today.
+    #[serde(default)]
+    pub runtime_adapter: Option<RuntimeAdapterConfig>,
 }
 
 #[cfg(test)]
@@ -133,6 +188,7 @@ mod tests {
                 snapshot_baked: false,
             },
             cloudformation_metadata: BTreeMap::new(),
+            runtime_adapter: None,
         }
     }
 
@@ -192,6 +248,65 @@ mod tests {
         assert!(
             !json.contains("digest"),
             "absent digest must be elided, got: {json}"
+        );
+    }
+
+    // -----------------------------------------------------------------
+    // runtime_adapter (T8 review fix — Critical finding)
+    // -----------------------------------------------------------------
+
+    /// Backward compat: `params` JSON that predates this field (every
+    /// checked-in golden fixture at the time this field was added) must
+    /// keep deserializing, defaulting to `None` — see
+    /// `RenderParams::runtime_adapter`'s doc comment.
+    #[test]
+    fn runtime_adapter_defaults_to_none_when_absent_from_json() {
+        let json = serde_json::json!({
+            "account_id": "123456789012",
+            "region": "us-east-1",
+            "stack_name": "compat-test-stack",
+            "artifact": {"s3_bucket": "bucket", "s3_key": "key.zip"},
+            "metadata": {"version": "1.0.0", "snapshot_baked": false}
+        });
+        let params: RenderParams =
+            serde_json::from_value(json).expect("deserializes without runtime_adapter");
+        assert_eq!(params.runtime_adapter, None);
+    }
+
+    #[test]
+    fn runtime_adapter_round_trips_through_json_with_readiness_path() {
+        let mut params = sample_params();
+        params.runtime_adapter = Some(RuntimeAdapterConfig {
+            port: 8080,
+            readiness_check_path: Some("/healthz".to_string()),
+        });
+        let json = serde_json::to_string(&params).expect("serialize");
+        let back: RenderParams = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(back, params);
+    }
+
+    #[test]
+    fn runtime_adapter_round_trips_through_json_without_readiness_path() {
+        let mut params = sample_params();
+        params.runtime_adapter = Some(RuntimeAdapterConfig {
+            port: 9000,
+            readiness_check_path: None,
+        });
+        let json = serde_json::to_string(&params).expect("serialize");
+        let back: RenderParams = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(back, params);
+    }
+
+    #[test]
+    fn runtime_adapter_config_omits_absent_readiness_path_from_json() {
+        let adapter = RuntimeAdapterConfig {
+            port: 8080,
+            readiness_check_path: None,
+        };
+        let json = serde_json::to_string(&adapter).expect("serialize");
+        assert!(
+            !json.contains("readiness_check_path"),
+            "absent readiness_check_path must be elided, got: {json}"
         );
     }
 }

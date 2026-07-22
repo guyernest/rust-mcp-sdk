@@ -8,7 +8,7 @@
 
 use crate::{
     logical_ids,
-    params::RenderParams,
+    params::{RenderParams, RuntimeAdapterConfig},
     resources::{aws_lambda_tags, standard_tags, DEFAULT_ORGANIZATION_ID, MCP_SERVERS_TABLE},
     template::CfnResource,
 };
@@ -27,6 +27,32 @@ const MEMORY_SIZE_MB: i64 = 256;
 /// hardcodes `memorySize: 512` for this branch (vs. `pmcp-run`'s
 /// [`MEMORY_SIZE_MB`] = 256). Also NOT driven by `[server].memory_mb`.
 const AWS_LAMBDA_MEMORY_SIZE_MB: i64 = 512;
+
+/// AWS account that publishes the [AWS Lambda Web Adapter](https://github.com/awslabs/aws-lambda-web-adapter)'s
+/// public Lambda Layers (T8 review fix — see [`RuntimeAdapterConfig`]'s doc
+/// comment for why this bridge exists). A fixed literal by design — the
+/// adapter's own publishing account, not this deployment's account (which is
+/// why the ARN below uses `Fn::Sub` only for `${AWS::Region}`, never for
+/// this).
+const LAMBDA_WEB_ADAPTER_ACCOUNT_ID: &str = "753240598075";
+
+/// Pinned [AWS Lambda Web Adapter](https://github.com/awslabs/aws-lambda-web-adapter)
+/// ARM64 zip-package layer version. Verified 2026-07-21 against the
+/// adapter's published README — `LambdaAdapterLayerArm64:28` (ARM64 to
+/// match `Architectures: ["arm64"]` below; the adapter also publishes an
+/// X86 sibling layer, unused here since this renderer never targets x86_64
+/// Lambdas). Bump this constant, with a fresh verification, when a newer
+/// adapter release ships — it is NOT descriptor-driven; the version lives in
+/// the renderer, not in `DeployDescriptor`.
+const LAMBDA_WEB_ADAPTER_LAYER_VERSION: u32 = 28;
+
+/// The env var the adapter's own `/opt/bootstrap` requires to be activated
+/// as the function's Runtime API client for a zip-packaged custom runtime
+/// (`provided.al2023`) — see [`RuntimeAdapterConfig`]'s doc comment.
+const LWA_EXEC_WRAPPER_ENV_VAR: &str = "AWS_LAMBDA_EXEC_WRAPPER";
+const LWA_EXEC_WRAPPER_PATH: &str = "/opt/bootstrap";
+const LWA_PORT_ENV_VAR: &str = "PORT";
+const LWA_READINESS_CHECK_PATH_ENV_VAR: &str = "AWS_LWA_READINESS_CHECK_PATH";
 
 /// Render the MCP server's `AWS::Lambda::Function`: `(logical_id, resource)`.
 #[must_use]
@@ -72,9 +98,21 @@ pub fn render_function(d: &DeployDescriptor, p: &RenderParams) -> (String, CfnRe
 /// foundation-server Lambdas), and `aws-lambda`-flavored tags (own
 /// `project`, `target = "aws-lambda"`) via
 /// [`crate::resources::aws_lambda_tags`].
+///
+/// When `p.runtime_adapter` is `Some` (T8 review fix — Critical finding:
+/// `ServerShape::BuiltIn` artifacts need the AWS Lambda Web Adapter to
+/// bridge plain-HTTP Shape A binaries onto the Lambda Runtime API), this
+/// also attaches the adapter's `Layers` entry and its required env vars —
+/// see [`RuntimeAdapterConfig`]'s doc comment. `None` (every existing
+/// custom-Rust deployment today) renders NEITHER, byte-identical to this
+/// function's pre-T8 output — this is a UNIT-TEST-OWNED property: the
+/// checked-in golden fixtures' `params` JSON predates this field and
+/// deserializes it to `None` via `#[serde(default)]`, so none of them
+/// exercise or need to change for this branch (mirrors the T7
+/// `cloudformation_metadata` field's precedent).
 #[must_use]
 pub fn render_function_aws_lambda(d: &DeployDescriptor, p: &RenderParams) -> (String, CfnResource) {
-    let properties = json!({
+    let mut properties = json!({
         "FunctionName": d.server.name,
         "Runtime": "provided.al2023",
         "Handler": "bootstrap",
@@ -83,11 +121,14 @@ pub fn render_function_aws_lambda(d: &DeployDescriptor, p: &RenderParams) -> (St
         "Timeout": d.server.timeout_seconds,
         "Code": { "S3Bucket": p.artifact.s3_bucket, "S3Key": p.artifact.s3_key },
         "Role": { "Fn::GetAtt": [logical_ids::for_execution_role(), "Arn"] },
-        "Environment": { "Variables": p.environment.clone() },
+        "Environment": { "Variables": environment_variables_aws_lambda(p) },
         "TracingConfig": { "Mode": "Active" },
         "LoggingConfig": { "LogFormat": "JSON" },
         "Tags": aws_lambda_tags(&d.server.name),
     });
+    if p.runtime_adapter.is_some() {
+        properties["Layers"] = json!([runtime_adapter_layer_arn()]);
+    }
     (
         logical_ids::for_function().to_string(),
         CfnResource {
@@ -122,6 +163,51 @@ fn environment_variables(d: &DeployDescriptor, p: &RenderParams) -> BTreeMap<Str
     );
     vars.insert("PMCP_SERVER_ID".to_string(), d.server.name.clone());
     vars
+}
+
+/// The `aws-lambda`-target function's environment variables: `p.environment`
+/// passed through (same as before T8; no `pmcp-run`-only composition vars —
+/// see [`render_function_aws_lambda`]'s doc comment), plus — only when
+/// `p.runtime_adapter` is `Some` — the [AWS Lambda Web Adapter](https://github.com/awslabs/aws-lambda-web-adapter)'s
+/// required env vars: `AWS_LAMBDA_EXEC_WRAPPER=/opt/bootstrap` (activates
+/// the layer's own Runtime API client), `PORT` (the local port the wrapped
+/// Shape A binary listens on — must match what `cargo-pmcp`'s
+/// `aws_lambda::artifact` bootstrap wrapper script passes to `--http`), and
+/// `AWS_LWA_READINESS_CHECK_PATH` when [`RuntimeAdapterConfig::readiness_check_path`]
+/// is configured. The adapter's fixed vars win over any same-named entry in
+/// `p.environment`, same precedence rule as [`environment_variables`]'s
+/// fixed vars.
+fn environment_variables_aws_lambda(p: &RenderParams) -> BTreeMap<String, String> {
+    let mut vars = p.environment.clone();
+    if let Some(adapter) = &p.runtime_adapter {
+        insert_adapter_env_vars(&mut vars, adapter);
+    }
+    vars
+}
+
+/// Insert the adapter's fixed env vars (see [`environment_variables_aws_lambda`]'s
+/// doc comment) into `vars`, overwriting any same-named entry.
+fn insert_adapter_env_vars(vars: &mut BTreeMap<String, String>, adapter: &RuntimeAdapterConfig) {
+    vars.insert(
+        LWA_EXEC_WRAPPER_ENV_VAR.to_string(),
+        LWA_EXEC_WRAPPER_PATH.to_string(),
+    );
+    vars.insert(LWA_PORT_ENV_VAR.to_string(), adapter.port.to_string());
+    if let Some(path) = &adapter.readiness_check_path {
+        vars.insert(LWA_READINESS_CHECK_PATH_ENV_VAR.to_string(), path.clone());
+    }
+}
+
+/// The AWS Lambda Web Adapter's pinned ARM64 layer ARN, as a CFN `Fn::Sub`
+/// value (`${AWS::Region}` resolves server-side; [`LAMBDA_WEB_ADAPTER_ACCOUNT_ID`]
+/// is a fixed literal — the adapter's own publishing account, not this
+/// deployment's).
+fn runtime_adapter_layer_arn() -> serde_json::Value {
+    json!({
+        "Fn::Sub": format!(
+            "arn:aws:lambda:${{AWS::Region}}:{LAMBDA_WEB_ADAPTER_ACCOUNT_ID}:layer:LambdaAdapterLayerArm64:{LAMBDA_WEB_ADAPTER_LAYER_VERSION}"
+        )
+    })
 }
 
 #[cfg(test)]
@@ -172,6 +258,15 @@ mod tests {
                 snapshot_baked: false,
             },
             cloudformation_metadata: BTreeMap::new(),
+            runtime_adapter: None,
+        }
+    }
+
+    /// [`params`] with a populated `runtime_adapter` — T8 review fix tests.
+    fn params_with_adapter(adapter: RuntimeAdapterConfig) -> RenderParams {
+        RenderParams {
+            runtime_adapter: Some(adapter),
+            ..params(BTreeMap::new())
         }
     }
 
@@ -281,6 +376,130 @@ mod tests {
                 logical_ids::for_execution_policy().to_string(),
                 logical_ids::for_execution_role().to_string(),
             ]
+        );
+    }
+
+    // -----------------------------------------------------------------
+    // runtime_adapter (T8 review fix — Critical finding: AWS Lambda Web
+    // Adapter layer for ServerShape::BuiltIn artifacts)
+    // -----------------------------------------------------------------
+
+    /// `runtime_adapter: None` (every existing custom-Rust deployment today,
+    /// and every checked-in golden fixture) must render NEITHER `Layers` nor
+    /// any adapter env var — proves the T8 fix is byte-identical to pre-fix
+    /// output on the untouched path, which is why the golden corpus itself
+    /// needed no changes.
+    #[test]
+    fn aws_lambda_function_omits_layers_and_adapter_env_vars_when_runtime_adapter_is_none() {
+        let (_, resource) =
+            render_function_aws_lambda(&aws_lambda_descriptor(), &params(BTreeMap::new()));
+        assert!(
+            resource.properties.get("Layers").is_none(),
+            "Layers must be entirely absent, not an empty array: {:?}",
+            resource.properties
+        );
+        let vars = &resource.properties["Environment"]["Variables"];
+        assert!(vars.get("AWS_LAMBDA_EXEC_WRAPPER").is_none());
+        assert!(vars.get("PORT").is_none());
+        assert!(vars.get("AWS_LWA_READINESS_CHECK_PATH").is_none());
+    }
+
+    /// `render_function` (the `pmcp-run` target's sibling) never wires the
+    /// adapter at all, even when `runtime_adapter` is populated — the T8 fix
+    /// is scoped to the `aws-lambda` target's own function only (see that
+    /// function's own doc comment; `pmcp-run` foundation servers are always
+    /// compiled Rust `lambda_runtime` binaries and never hit
+    /// `ServerShape::BuiltIn`).
+    #[test]
+    fn pmcp_run_render_function_ignores_runtime_adapter_entirely() {
+        let adapter_params = params_with_adapter(RuntimeAdapterConfig {
+            port: 8080,
+            readiness_check_path: None,
+        });
+        let (_, resource) = render_function(&descriptor(), &adapter_params);
+        assert!(resource.properties.get("Layers").is_none());
+        let vars = &resource.properties["Environment"]["Variables"];
+        assert!(vars.get("AWS_LAMBDA_EXEC_WRAPPER").is_none());
+    }
+
+    #[test]
+    fn aws_lambda_function_gains_the_pinned_adapter_layer_when_runtime_adapter_is_some() {
+        let adapter_params = params_with_adapter(RuntimeAdapterConfig {
+            port: 8080,
+            readiness_check_path: None,
+        });
+        let (_, resource) = render_function_aws_lambda(&aws_lambda_descriptor(), &adapter_params);
+        assert_eq!(
+            resource.properties["Layers"],
+            json!([
+                { "Fn::Sub": "arn:aws:lambda:${AWS::Region}:753240598075:layer:LambdaAdapterLayerArm64:28" }
+            ])
+        );
+    }
+
+    #[test]
+    fn aws_lambda_function_gains_exec_wrapper_and_port_env_vars_when_runtime_adapter_is_some() {
+        let environment = BTreeMap::from([("RUST_LOG".to_string(), "info".to_string())]);
+        let adapter_params = RenderParams {
+            environment,
+            runtime_adapter: Some(RuntimeAdapterConfig {
+                port: 9000,
+                readiness_check_path: None,
+            }),
+            ..params(BTreeMap::new())
+        };
+        let (_, resource) = render_function_aws_lambda(&aws_lambda_descriptor(), &adapter_params);
+        assert_eq!(
+            resource.properties["Environment"]["Variables"],
+            json!({
+                "RUST_LOG": "info",
+                "AWS_LAMBDA_EXEC_WRAPPER": "/opt/bootstrap",
+                "PORT": "9000",
+            })
+        );
+    }
+
+    #[test]
+    fn aws_lambda_function_omits_readiness_env_var_when_not_configured() {
+        let adapter_params = params_with_adapter(RuntimeAdapterConfig {
+            port: 8080,
+            readiness_check_path: None,
+        });
+        let (_, resource) = render_function_aws_lambda(&aws_lambda_descriptor(), &adapter_params);
+        assert!(resource.properties["Environment"]["Variables"]
+            .get("AWS_LWA_READINESS_CHECK_PATH")
+            .is_none());
+    }
+
+    #[test]
+    fn aws_lambda_function_sets_readiness_env_var_when_configured() {
+        let adapter_params = params_with_adapter(RuntimeAdapterConfig {
+            port: 8080,
+            readiness_check_path: Some("/healthz".to_string()),
+        });
+        let (_, resource) = render_function_aws_lambda(&aws_lambda_descriptor(), &adapter_params);
+        assert_eq!(
+            resource.properties["Environment"]["Variables"]["AWS_LWA_READINESS_CHECK_PATH"],
+            json!("/healthz")
+        );
+    }
+
+    #[test]
+    fn aws_lambda_function_adapter_env_vars_win_over_same_named_environment_entry() {
+        let environment = BTreeMap::from([("PORT".to_string(), "1234".to_string())]);
+        let adapter_params = RenderParams {
+            environment,
+            runtime_adapter: Some(RuntimeAdapterConfig {
+                port: 8080,
+                readiness_check_path: None,
+            }),
+            ..params(BTreeMap::new())
+        };
+        let (_, resource) = render_function_aws_lambda(&aws_lambda_descriptor(), &adapter_params);
+        assert_eq!(
+            resource.properties["Environment"]["Variables"]["PORT"],
+            json!("8080"),
+            "the adapter's own PORT must win over a same-named [environment] entry"
         );
     }
 }

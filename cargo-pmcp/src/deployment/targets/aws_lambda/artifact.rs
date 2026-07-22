@@ -70,6 +70,19 @@
 //!    path — which deliberately diverges from the `pmcp-run` target's
 //!    unrelated `unwrap_or(false)` convention for the same field (there,
 //!    `snapshot_baked` governs DATA-snapshot baking, a distinct concern).
+//!    T8 REVIEW FIX (Important finding): [`acquire_builtin_artifact`] now
+//!    proactively guards this path — before generating the wrapper script,
+//!    it measures the on-disk size of the same config file(s) the baked
+//!    path would bundle (`config.toml`[/`schema.sql`]) and fails loudly at
+//!    ACQUISITION time, naming `snapshot_baked = true` as the fix, when
+//!    their combined size exceeds [`UNBAKED_CONFIG_ENV_BUDGET_BYTES`] (3.5
+//!    KiB — headroom under Lambda's hard 4KB *combined* env-var ceiling for
+//!    everything else a deploy needs, e.g. `[environment]` entries). Files
+//!    absent from disk (an operator may supply the env var value out of
+//!    band, e.g. a CI secret) are not measurable and are silently skipped —
+//!    this is a proactive footgun guard, not an exhaustive runtime
+//!    guarantee (Lambda itself still enforces the real limit at deploy
+//!    time).
 //! 4. **`pmcp-workbook-server`'s bundle-dir layout for a pure-config
 //!    project.** There is no established on-disk convention for where a
 //!    compiled `bundle@version` directory lives in a built-in (no-Rust)
@@ -78,6 +91,26 @@
 //!    This module adopts `<project_root>/bundle/` as that convention;
 //!    flagged for confirmation against whatever `cargo pmcp workbook
 //!    compile` ends up defaulting to for config-only projects.
+//! 5. **`Runtime: provided.al2023` / `Handler: bootstrap` alone is not
+//!    enough (T8 review fix — Critical finding).** The `bootstrap` wrapper
+//!    script this module generates execs a plain Shape A HTTP server — none
+//!    of the three binaries link `lambda_runtime`, so none of them poll the
+//!    Lambda Runtime API (`/2018-06-01/runtime/invocation/next`). Without a
+//!    bridge, every real invocation would hang to timeout. The fix is the
+//!    [AWS Lambda Web Adapter](https://github.com/awslabs/aws-lambda-web-adapter),
+//!    a zero-recompile Lambda Layer — see
+//!    `pmcp_cfn_renderer::RuntimeAdapterConfig`'s doc comment for the full
+//!    mechanism. This module's job is only the HALF that lives on the
+//!    artifact side: the wrapper script binds the Shape A binary's `--http`
+//!    flag to `0.0.0.0:${PORT:-8080}` (see [`bootstrap_script_config_and_file`]/
+//!    [`bootstrap_script_workbook`]) so the adapter (which proxies each
+//!    invocation to `http://127.0.0.1:$PORT`) can always reach it regardless
+//!    of which loopback-adjacent interface the adapter's own process
+//!    resolves. Attaching the adapter's `Layers` entry and its
+//!    `AWS_LAMBDA_EXEC_WRAPPER`/`PORT` env vars is the RENDERER's job (via
+//!    `RenderParams::runtime_adapter`, populated by Task 9's deploy engine
+//!    once `ServerShape::BuiltIn` is known here) — this module does not
+//!    build a `RenderParams` at all, so it cannot set that knob itself.
 
 use anyhow::{bail, Context, Result};
 use async_trait::async_trait;
@@ -409,6 +442,13 @@ async fn download_and_verify(
 
 /// The public entrypoint's built-in path, parameterized over [`Downloader`]
 /// so it can be exercised without a real HTTP call from tests.
+///
+/// Note (T8 review, minor fix): the sha256-sidecar verification in
+/// [`fetch_builtin_binary`]/[`verify_checksum`] is what actually guarantees
+/// artifact integrity here — it substitutes for cross-checking
+/// `pmcp_cfn_renderer::ArtifactRef::digest`, which this function never
+/// reaches (this module builds a deployable zip, not a `RenderParams`; that
+/// wiring is Task 9's).
 async fn acquire_builtin_artifact(
     server_type: &str,
     config: &DeployConfig,
@@ -416,6 +456,9 @@ async fn acquire_builtin_artifact(
 ) -> Result<PathBuf> {
     let (binary_name, binary_bytes) = fetch_builtin_binary(downloader, server_type, config).await?;
     let baked = config.metadata.snapshot_baked.unwrap_or(true);
+    if !baked {
+        guard_unbaked_config_env_size(binary_name, config)?;
+    }
 
     let script = bootstrap_script(binary_name, baked)?;
 
@@ -432,6 +475,63 @@ async fn acquire_builtin_artifact(
         .join("deploy/.build/lambda-artifact.zip");
     write_zip(&zip_path, &entries)?;
     Ok(zip_path)
+}
+
+// ===========================================================================
+// snapshot_baked = false env-var size guard (T8 review, Important finding)
+// ===========================================================================
+
+/// Budget, in bytes, this tool proactively enforces for `snapshot_baked =
+/// false`'s raw-content env var(s) (`PMCP_CONFIG_TOML`[/`PMCP_SCHEMA_SQL`]).
+/// AWS Lambda's hard limit is 4KB *combined* across ALL environment
+/// variables on the function — this config content is never the only thing
+/// that has to fit (there's also `[environment]` entries, and for the
+/// `RuntimeAdapterConfig` path, `AWS_LAMBDA_EXEC_WRAPPER`/`PORT`/
+/// `AWS_LWA_READINESS_CHECK_PATH`), so 3.5 KiB reserves headroom under that
+/// ceiling rather than consuming it all. See module docs §3.
+const UNBAKED_CONFIG_ENV_BUDGET_BYTES: u64 = 3584; // 3.5 KiB
+
+/// Proactively guard the `snapshot_baked = false` runtime-fetch path: fail
+/// at ACQUISITION time (not at Lambda deploy/invoke time, and not silently
+/// at Lambda invocation time as a confusing runtime error) when the config
+/// file(s) that would need to travel via a raw-content env var already
+/// exceed [`UNBAKED_CONFIG_ENV_BUDGET_BYTES`] on disk.
+///
+/// Measures the SAME file(s) [`collect_baked_files`] would bundle for
+/// `binary_name` (`config.toml`[/`schema.sql`] — `pmcp-workbook-server` has
+/// no unbaked path at all, see [`bootstrap_script`], so it is a no-op here).
+/// A file absent from `config.project_root` is not measurable (an operator
+/// may supply the env var value out of band, e.g. a CI secret, without a
+/// local copy of the file) and is silently skipped — this is a proactive
+/// footgun guard against a common mistake, not an exhaustive runtime
+/// guarantee.
+fn guard_unbaked_config_env_size(binary_name: &str, config: &DeployConfig) -> Result<()> {
+    let candidates: &[&str] = match binary_name {
+        "pmcp-sql-server" => &["config.toml", "schema.sql"],
+        "pmcp-openapi-server" => &["config.toml"],
+        _ => return Ok(()),
+    };
+
+    let mut total_bytes: u64 = 0;
+    for name in candidates {
+        if let Ok(metadata) = std::fs::metadata(config.project_root.join(name)) {
+            total_bytes += metadata.len();
+        }
+    }
+
+    if total_bytes > UNBAKED_CONFIG_ENV_BUDGET_BYTES {
+        bail!(
+            "snapshot_baked = false for '{binary_name}': the combined size of {} \
+             ({total_bytes} bytes) exceeds the {UNBAKED_CONFIG_ENV_BUDGET_BYTES}-byte budget \
+             this tool enforces for content delivered via a raw Lambda environment variable \
+             (AWS Lambda's hard limit is 4KB combined across ALL environment variables on the \
+             function, and this content is not the only thing that has to fit). Set \
+             `[metadata]\\nsnapshot_baked = true` in .pmcp/deploy.toml to bake the config into \
+             the deployment zip instead.",
+            candidates.join(" + ")
+        );
+    }
+    Ok(())
 }
 
 // ===========================================================================
@@ -508,9 +608,12 @@ fn bootstrap_script_config_and_file(
          # Generated by cargo-pmcp — shape-aware artifact acquisition (T8).\n\
          # Execs the downloaded Shape A binary ({binary_name}) with the\n\
          # config file(s) this deployment bundles or provides at runtime.\n\
+         # Bound wide open (all interfaces) so the AWS Lambda Web Adapter\n\
+         # layer (attached by the renderer via RenderParams::runtime_adapter\n\
+         # — see module docs §5) can always reach it.\n\
          set -eu\n\
          LAMBDA_TASK_ROOT=\"${{LAMBDA_TASK_ROOT:-/var/task}}\"\n\
-         {prelude}exec \"$LAMBDA_TASK_ROOT\"/{binary_name} {args} --http \"127.0.0.1:${{PORT:-8080}}\"\n"
+         {prelude}exec \"$LAMBDA_TASK_ROOT\"/{binary_name} {args} --http \"0.0.0.0:${{PORT:-8080}}\"\n"
     )
 }
 
@@ -523,12 +626,14 @@ fn runtime_fetch_snippet(env_var: &str, dest_path: &str) -> String {
            echo \"error: {env_var} is required when snapshot_baked=false\" >&2\n  \
            exit 1\n\
          fi\n\
-         printf '%s' \"${env_var}\" > {dest_path}\n"
+         printf '%s' \"${{{env_var}:-}}\" > {dest_path}\n"
     )
 }
 
 /// `pmcp-workbook-server`'s bootstrap script — always baked (see
 /// [`bootstrap_script`]), bundle directory at `$LAMBDA_TASK_ROOT/bundle`.
+/// Bound to 0.0.0.0, same rationale as
+/// [`bootstrap_script_config_and_file`]'s own bind — see module docs §5.
 fn bootstrap_script_workbook() -> String {
     "#!/bin/sh\n\
      # Generated by cargo-pmcp — shape-aware artifact acquisition (T8).\n\
@@ -536,7 +641,7 @@ fn bootstrap_script_workbook() -> String {
      LAMBDA_TASK_ROOT=\"${LAMBDA_TASK_ROOT:-/var/task}\"\n\
      exec \"$LAMBDA_TASK_ROOT\"/pmcp-workbook-server \
        --bundle-dir \"$LAMBDA_TASK_ROOT\"/bundle \
-       --http \"127.0.0.1:${PORT:-8080}\"\n"
+       --http \"0.0.0.0:${PORT:-8080}\"\n"
         .to_string()
 }
 
@@ -940,6 +1045,109 @@ mod tests {
     }
 
     // -----------------------------------------------------------------
+    // guard_unbaked_config_env_size (T8 review, Important finding — both
+    // sides of the UNBAKED_CONFIG_ENV_BUDGET_BYTES bound, per the brief)
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn guard_unbaked_config_env_size_passes_exactly_at_the_budget() {
+        let project = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            project.path().join("config.toml"),
+            vec![b'x'; UNBAKED_CONFIG_ENV_BUDGET_BYTES as usize],
+        )
+        .unwrap();
+
+        let config = base_config(project.path());
+        guard_unbaked_config_env_size("pmcp-openapi-server", &config)
+            .expect("exactly at the budget must pass");
+    }
+
+    #[test]
+    fn guard_unbaked_config_env_size_fails_one_byte_over_the_budget() {
+        let project = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            project.path().join("config.toml"),
+            vec![b'x'; UNBAKED_CONFIG_ENV_BUDGET_BYTES as usize + 1],
+        )
+        .unwrap();
+
+        let config = base_config(project.path());
+        let err = guard_unbaked_config_env_size("pmcp-openapi-server", &config)
+            .expect_err("one byte over the budget must fail");
+        let msg = err.to_string();
+        assert!(msg.contains("snapshot_baked = true"), "{msg}");
+    }
+
+    /// `pmcp-sql-server` sums BOTH `config.toml` and `schema.sql` — neither
+    /// alone exceeds the budget, but their combination does.
+    #[test]
+    fn guard_unbaked_config_env_size_sums_config_and_schema_for_sql_server() {
+        let project = tempfile::tempdir().expect("tempdir");
+        let half = UNBAKED_CONFIG_ENV_BUDGET_BYTES as usize / 2 + 1;
+        std::fs::write(project.path().join("config.toml"), vec![b'x'; half]).unwrap();
+        std::fs::write(project.path().join("schema.sql"), vec![b'x'; half]).unwrap();
+
+        let config = base_config(project.path());
+        let err = guard_unbaked_config_env_size("pmcp-sql-server", &config)
+            .expect_err("combined config.toml + schema.sql over budget must fail");
+        assert!(err.to_string().contains("config.toml + schema.sql"));
+    }
+
+    /// Files absent from disk are not measurable (the operator may supply
+    /// the env var value out of band) and must not block acquisition.
+    #[test]
+    fn guard_unbaked_config_env_size_skips_files_absent_from_disk() {
+        let project = tempfile::tempdir().expect("tempdir");
+        // Deliberately no config.toml written.
+        let config = base_config(project.path());
+        guard_unbaked_config_env_size("pmcp-sql-server", &config)
+            .expect("absent files must not block the guard");
+    }
+
+    /// `pmcp-workbook-server` has no unbaked path at all ([`bootstrap_script`]
+    /// already rejects it) — the guard is a no-op for it rather than an
+    /// error, so [`bootstrap_script`]'s own rejection stays the single
+    /// source of truth for that error message.
+    #[test]
+    fn guard_unbaked_config_env_size_is_a_no_op_for_workbook_server() {
+        let project = tempfile::tempdir().expect("tempdir");
+        let config = base_config(project.path());
+        guard_unbaked_config_env_size("pmcp-workbook-server", &config)
+            .expect("workbook-server has no measurable unbaked config, so this must be a no-op");
+    }
+
+    /// End-to-end: `acquire_builtin_artifact` itself fails at acquisition
+    /// time (not later, at Lambda deploy/invoke time) when an oversized
+    /// config.toml is on disk for an unbaked deploy.
+    #[tokio::test]
+    async fn acquire_builtin_artifact_fails_fast_when_unbaked_config_exceeds_the_budget() {
+        let home = tempfile::tempdir().expect("tempdir");
+        let project = tempfile::tempdir().expect("tempdir");
+        let _env = ScopedHome::set(home.path());
+
+        std::fs::write(
+            project.path().join("config.toml"),
+            vec![b'x'; UNBAKED_CONFIG_ENV_BUDGET_BYTES as usize + 1],
+        )
+        .unwrap();
+
+        let mut config = base_config(project.path());
+        config.target.version = "v1.0.0".to_string();
+        config.metadata = MetadataConfig {
+            server_type: Some("openapi-server".to_string()),
+            snapshot_baked: Some(false),
+        };
+
+        let downloader = stub_release("pmcp-openapi-server", "v1.0.0", b"bin");
+
+        let err = acquire_builtin_artifact("openapi-server", &config, &downloader)
+            .await
+            .expect_err("oversized unbaked config must fail at acquisition time");
+        assert!(err.to_string().contains("snapshot_baked = true"));
+    }
+
+    // -----------------------------------------------------------------
     // bootstrap script content
     // -----------------------------------------------------------------
 
@@ -984,6 +1192,47 @@ mod tests {
     fn bootstrap_script_workbook_server_baked_uses_bundle_dir() {
         let script = bootstrap_script("pmcp-workbook-server", true).unwrap();
         assert!(script.contains("--bundle-dir \"$LAMBDA_TASK_ROOT\"/bundle"));
+    }
+
+    /// T8 review fix (Critical finding, artifact side): the wrapped server
+    /// must bind `0.0.0.0`, not `127.0.0.1`, so the AWS Lambda Web Adapter
+    /// layer can always reach it — see module docs §5.
+    #[test]
+    fn bootstrap_script_binds_0_0_0_0_for_both_config_and_file_binaries() {
+        for (binary_name, baked) in [
+            ("pmcp-sql-server", true),
+            ("pmcp-sql-server", false),
+            ("pmcp-openapi-server", true),
+        ] {
+            let script = bootstrap_script(binary_name, baked).unwrap();
+            assert!(
+                script.contains("--http \"0.0.0.0:${PORT:-8080}\""),
+                "{binary_name} (baked={baked}) must bind 0.0.0.0, got:\n{script}"
+            );
+            assert!(
+                !script.contains("127.0.0.1"),
+                "{binary_name} (baked={baked}) must not bind loopback-only, got:\n{script}"
+            );
+        }
+    }
+
+    #[test]
+    fn bootstrap_script_workbook_server_binds_0_0_0_0() {
+        let script = bootstrap_script("pmcp-workbook-server", true).unwrap();
+        assert!(script.contains("--http \"0.0.0.0:${PORT:-8080}\""));
+        assert!(!script.contains("127.0.0.1"));
+    }
+
+    /// T8 review fix (minor): the unbaked path's `printf` reads the env var
+    /// via the same braced `${VAR:-}` form the guard-clause check above it
+    /// already uses, not a bare `$VAR`.
+    #[test]
+    fn runtime_fetch_snippet_uses_braced_env_var_form_in_printf() {
+        let snippet = runtime_fetch_snippet("PMCP_CONFIG_TOML", "/tmp/config.toml");
+        assert!(
+            snippet.contains("printf '%s' \"${PMCP_CONFIG_TOML:-}\" > /tmp/config.toml"),
+            "printf must use the braced ${{VAR:-}} form, got:\n{snippet}"
+        );
     }
 
     // -----------------------------------------------------------------

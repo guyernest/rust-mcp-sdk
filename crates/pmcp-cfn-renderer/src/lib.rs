@@ -82,7 +82,7 @@ pub mod template;
 // ---------------------------------------------------------------------
 
 pub use error::RenderError;
-pub use params::{ArtifactRef, RenderMetadata, RenderParams};
+pub use params::{ArtifactRef, RenderMetadata, RenderParams, RuntimeAdapterConfig};
 pub use template::{CfnExport, CfnOutput, CfnResource, CfnTemplate};
 
 use pmcp_package::package::DeployDescriptor;
@@ -341,6 +341,7 @@ mod tests {
                 snapshot_baked: false,
             },
             cloudformation_metadata: BTreeMap::new(),
+            runtime_adapter: None,
         }
     }
 

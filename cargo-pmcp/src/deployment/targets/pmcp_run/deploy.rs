@@ -482,6 +482,12 @@ fn build_render_params(
             .collect(),
         metadata: render_metadata_from(metadata),
         cloudformation_metadata: cloudformation_metadata_from(metadata),
+        // The `pmcp-run` target never routes through `aws_lambda::artifact`'s
+        // `ServerShape` detection (that module is `aws-lambda`-target-only —
+        // see its own module doc), so a `pmcp-run` deploy never needs the
+        // AWS Lambda Web Adapter bridge (T8 review fix). `None` here renders
+        // byte-identical output to before that field existed.
+        runtime_adapter: None,
     }
 }
 

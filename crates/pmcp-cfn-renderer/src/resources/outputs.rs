@@ -233,6 +233,7 @@ mod tests {
                 snapshot_baked: false,
             },
             cloudformation_metadata: BTreeMap::new(),
+            runtime_adapter: None,
         }
     }
 
