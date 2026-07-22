@@ -2241,7 +2241,7 @@ Plans:
 Plans:
 **Wave 1**
 
-- [ ] 112-01-PLAN.md — Version era classifier (2026-07-28 const, Era, protocol_era) + ProtocolContext/TraceContext types + semver gate
+- [x] 112-01-PLAN.md — Version era classifier (2026-07-28 const, Era, protocol_era) + ProtocolContext/TraceContext types + semver gate
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
@@ -2364,7 +2364,7 @@ Plans:
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 112. Version Plumbing Spine | 0/TBD | Not started | - |
+| 112. Version Plumbing Spine | 1/8 | In Progress|  |
 | 113. Stateless HTTP + MRTR | 0/TBD | Not started | - |
 | 114. Tasks Extension Migration | 0/TBD | Not started | - |
 | 115. JSON Schema 2020-12 + Caching Hints | 0/TBD | Not started | - |

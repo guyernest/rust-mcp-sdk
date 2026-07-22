@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v2.5
 milestone_name: MCP Spec 2026-07-28
 status: executing
-stopped_at: Phase 112 context gathered
-last_updated: "2026-07-22T19:24:27.083Z"
-last_activity: 2026-07-22 -- Phase 112 planning complete
+stopped_at: Completed 112-01-PLAN.md
+last_updated: "2026-07-22T21:23:17.090Z"
+last_activity: 2026-07-22
 progress:
   total_phases: 71
   completed_phases: 0
   total_plans: 8
-  completed_plans: 0
+  completed_plans: 1
   percent: 0
 ---
 
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-07-22) · .planning/ROADMAP.md (v2.5 milestone, Phases 112-119) · .planning/REQUIREMENTS.md (38 v1 reqs, 38/38 mapped) · .planning/research/SUMMARY.md (v2.5 research, HIGH confidence)
 
 **Core value:** One pmcp server binary transparently serves both MCP 2025-11-25 and 2026-07-28 clients via per-request negotiation — v2 as the strategic primary path (stateless/Lambda-first, Tasks, MCP Apps), v1 as a cleanly severable compatibility layer. The whole milestone stays additive (2.x minor).
-**Current focus:** Phase 112 — Version Plumbing Spine (keystone; lands first and alone)
+**Current focus:** Phase 112 — version-plumbing-spine
 
 ## Current Position
 
-Phase: 112 — Version Plumbing Spine (not started)
-Plan: —
+Phase: 112 (version-plumbing-spine) — EXECUTING
+Plan: 2 of 8
 Status: Ready to execute
-Last activity: 2026-07-22 -- Phase 112 planning complete
+Last activity: 2026-07-22
 
 ## v2.5 Phase Plan (8 phases, 38 requirements)
 
@@ -88,6 +88,9 @@ Decisions are logged in PROJECT.md Key Decisions table. Decisions framing this m
 - [Phase ?]: 110-06: agent example drives the PRODUCTION run_fixed_source seam, not a re-implemented AgentEngine loop (Codex 110-06 HIGH)
 - [Phase ?]: 110-06: fuzz_package_kind targets the RAW-bytes untrusted manifest-parse boundary, the real package show seam
 - [Phase ?]: 110-06: the three lib seams are #[doc(hidden)] internal support surface for examples/fuzz, not stable API (Codex 110-06 MEDIUM)
+- [Phase 112]: 112-01: v2 reached only via opt-in accept-list; LATEST stays 2025-11-25, 2026-07-28 NOT in SUPPORTED (Pitfall 1); protocol_era classifies only exact 2026-07-28 as V2, unknown->V1
+- [Phase 112]: 112-01: TraceContext::from_meta bounds W3C values at 8192 (over-bound traceparent->None, tracestate/baggage dropped); values documented RAW/UNVALIDATED/untrusted; proptest + fuzz target added (T-112-09)
+- [Phase 112]: 112-01: semver tooling pinned (cargo-semver-checks 0.49.0, cargo-public-api 0.52.0); baseline pmcp 2.17.0; authoritative check-release MINOR assertion deferred to Plan 07/08
 
 ### Pending Todos
 
@@ -123,9 +126,9 @@ Items deferred by design for this milestone (design §7 / REQUIREMENTS v2):
 
 ## Session Continuity
 
-Last session: 2026-07-22T18:22:28.770Z
-Stopped at: Phase 112 context gathered
-Resume file: .planning/phases/112-version-plumbing-spine/112-CONTEXT.md
+Last session: 2026-07-22T21:23:17.085Z
+Stopped at: Completed 112-01-PLAN.md
+Resume file: None
 
 ## Performance Metrics
 
@@ -147,3 +150,4 @@ Resume file: .planning/phases/112-version-plumbing-spine/112-CONTEXT.md
 | Phase 110 P04 | 40min | 2 tasks | 2 files |
 | Phase 110 P05 | 12min | 3 tasks | 8 files |
 | Phase 110 P06 | 20min | 3 tasks | 5 files |
+| Phase 112 P01 | 11min | 2 tasks | 6 files |
