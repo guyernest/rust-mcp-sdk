@@ -19,7 +19,9 @@
 | `Era` enum NEW (in `version.rs`) | model/config | transform | `ProtocolErrorCode` C-style enum (`mod.rs:129`) | role-match |
 | `src/server/builder.rs` (MOD) | builder/config | request-response | itself — `capabilities()` / `stateless_mode` field pattern | exact |
 | `src/server/cancellation.rs` (MOD, native `RequestHandlerExtra`) | model (per-request carrier) | request-response | itself — `request_meta` field + `with_request_meta` (Phase-109) | exact |
-| `src/shared/cancellation.rs` (MOD, wasm mirror) | model (per-request carrier) | request-response | native `cancellation.rs` (mirror parity) | exact |
+| ~~`src/shared/cancellation.rs` (wasm mirror)~~ **CORRECTED — DO NOT EDIT** | — | — | — | **stale premise** |
+<!-- CORRECTION (post-review, verified against live tree): src/shared/cancellation.rs is a DEAD ORPHAN — not declared in src/shared/mod.rs (no `pub mod cancellation`), never compiled on any target. It is NOT a wasm mirror. The wasm32 RequestHandlerExtra is a zero-field stub at src/server/mod.rs:162. This phase's plumbing is NATIVE-ONLY; Plan 02 edits src/server/cancellation.rs only. See 112-02/112-04 scope notes. -->
+
 | `src/shared/http_constants.rs` (MOD) | config/constants | request-response | itself — `MCP_SESSION_ID` / `MCP_PROTOCOL_VERSION` | exact |
 | `src/server/streamable_http_server.rs` (MOD) | middleware/transport ingress | request-response | existing header-parse/`stateless()` branch (same file) | role-match |
 | `src/server/core.rs` (MOD, dispatch `:1118`) | controller/dispatch | request-response | itself — `handle_request_internal(auth_context)` + `with_request_meta` at `:514` | exact |

@@ -2245,17 +2245,17 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 112-02-PLAN.md — RequestHandlerExtra protocol_context field + era/identity/trace accessors (native + wasm parity)
-- [ ] 112-03-PLAN.md — Centralized version-gated error-code table (standard + pmcp -320xx family; frozen -32002 verbatim, v2 TODO) + error::ErrorCode's 11 consts DELEGATE to it (dominant 210-site surface sourced from the table) + ClientRequest::ServerDiscover variant
+- [ ] 112-02-PLAN.md — RequestHandlerExtra protocol_context field + era/identity/trace accessors (native only — src/server/cancellation.rs; wasm RequestHandlerExtra is a zero-field stub, out of scope)
+- [ ] 112-03-PLAN.md — Centralized version-gated error-code table (standard + pmcp -320xx family; frozen -32002 verbatim; v2 values structurally OMITTED, zero-SATD) + error::ErrorCode's 11 consts DELEGATE to it (dominant 210-site surface) + server/discover via CRATE-PRIVATE internal dispatch (public ClientRequest/Request UNCHANGED — no downstream exhaustive-match break)
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [ ] 112-04-PLAN.md — v2 opt-in accept-list builder + ProtocolContext ingress resolution & dispatch threading (both sites + wasm)
+- [ ] 112-04-PLAN.md — v2 opt-in accept-list builder + ONE shared resolve_protocol_context() enforcing the accept-list, resolved once at ingress & threaded (both native sites; native-only plumbing — resolver compiles on wasm32 with no wasm caller; malformed reserved _meta → typed error)
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
-- [ ] 112-05-PLAN.md — Era-gated dispatch: server/discover projection (v1 -32601), resultType envelope (v2-only), serverInfo
-- [ ] 112-06-PLAN.md — v2 HTTP header enforcement driven by the shared _meta signal: header/_meta reconciliation + Mcp-Method/Mcp-Name strict reject (D-05) + body cross-check (D-06) + outbound emission
+- [ ] 112-05-PLAN.md — Era-gated dispatch: server/discover projection via internal dispatch (v1 -32601), pinned resultType envelope model (v2-only, object-only; native-only — v2 unreachable on wasm), serverInfo, v1 byte-identity golden fixtures
+- [ ] 112-06-PLAN.md — v2 HTTP header enforcement CONSUMING Plan 04's resolved era (no 2nd resolver): FULL header/_meta classification matrix incl. required MCP-Protocol-Version + Mcp-Method/Mcp-Name strict reject (D-05) + body cross-check (D-06) + outbound emission on success AND error
 
 **Wave 5** *(blocked on Wave 4 completion)*
 

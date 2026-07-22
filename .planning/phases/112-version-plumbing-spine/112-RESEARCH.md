@@ -1,5 +1,13 @@
 # Phase 112: Version Plumbing Spine - Research
 
+> **⚠ CORRECTION (post-review, 2026-07-22) — supersedes all "wasm mirror" / "wasm parity" prose below.**
+> This research's recurring premise that there is a compiled **wasm `RequestHandlerExtra` mirror** at `src/shared/cancellation.rs:50` and a "wasm mirror" dispatch site is **FALSE** (verified against the live tree). Facts:
+> - `src/shared/cancellation.rs` is a **dead orphan** — not declared in `src/shared/mod.rs` (`grep 'pub mod cancellation'` → absent), never compiled on any target.
+> - `src/server/core.rs`, `src/server/mod.rs`'s `ServerCore`, `src/server/cancellation.rs`, and `src/server/builder.rs` are all `#[cfg(not(target_arch = "wasm32"))]` (src/server/mod.rs:37/49) — excluded from wasm32. There is **no "wasm build of core.rs"**.
+> - On wasm32, `RequestHandlerExtra` is a **zero-field stub** (`src/server/mod.rs:162`), and the only server is the out-of-scope `WasmServerCore` (`src/server/wasm_core.rs`).
+>
+> **Therefore this phase's server plumbing is NATIVE-ONLY.** Plan 02 edits `src/server/cancellation.rs` only; Plans 04/05 touch the native dispatch sites only; nothing edits `src/shared/cancellation.rs` or `src/server/wasm_core.rs`. The single wasm obligation is that the cfg-agnostic resolver in `src/types/protocol/context.rs` keeps `cargo build --lib --target wasm32-unknown-unknown` green (it compiles there with no wasm caller). Where the text below says "+ wasm mirror" / "wasm parity", read it as "native-only; wasm build stays green." The PLAN files (112-02/04/05) and 112-VALIDATION.md carry the authoritative, corrected scope.
+
 **Researched:** 2026-07-22
 **Domain:** Dual-version MCP protocol plumbing in the pmcp Rust SDK — resolving a per-request `ProtocolContext` (era) once at transport ingress and threading it through dispatch, so one binary serves both 2025-11-25 (v1) and 2026-07-28 (v2) clients, additively (2.x minor), v2 strictly opt-in.
 **Confidence:** HIGH on mechanism/integration points (read directly from the 2.17.0 tree); MEDIUM on the exact v2 wire-value details (final schema publishes 2026-07-28, six days after this research) — those are explicitly deferred to structure-only in this phase.
@@ -170,7 +178,7 @@ Trace the primary use case: a v2 `tools/call` enters at HTTP ingress → headers
 | `Era` enum | new (next to `protocol_era`) | NEW | `V1 { 2025-11-25/... }` / `V2 { 2026-07-28 }` classifier |
 | builder accept-list | `src/server/builder.rs` (`impl ServerCoreBuilder`, from :112) | MODIFIED | `.with_supported_protocol_versions([...])`; default = v1-only (D-04) |
 | `RequestHandlerExtra` (native) | `src/server/cancellation.rs:179` | MODIFIED | Add additive `protocol_context` field + typed accessors (`era()`, `protocol_version()`, `client_info()`, `client_capabilities()`, `trace_context()`) |
-| `RequestHandlerExtra` (wasm) | `src/shared/cancellation.rs:50` | MODIFIED | Mirror parity — same field + accessors (Phase-109 precedent) |
+| ~~`RequestHandlerExtra` (wasm)~~ **CORRECTED — NOT MODIFIED** | ~~`src/shared/cancellation.rs:50`~~ | **stale premise** | **DO NOT EDIT.** Post-review verification: `src/shared/cancellation.rs` is a DEAD ORPHAN (not declared in `src/shared/mod.rs`, never compiled). The wasm32 `RequestHandlerExtra` is a zero-field stub (`src/server/mod.rs:162`); extending it is out of scope. This phase's plumbing is NATIVE-ONLY — Plan 02 edits `src/server/cancellation.rs` only. |
 | `RequestMeta` | `src/types/protocol/mod.rs:315` | REUSED as-is | `#[serde(flatten)] other` already round-trips `io.modelcontextprotocol/*` + trace keys — no type change |
 | `http_constants.rs` | `src/shared/http_constants.rs` | MODIFIED | Add `MCP_METHOD = "mcp-method"`, `MCP_NAME = "mcp-name"` |
 | Streamable-HTTP inbound | `src/server/streamable_http_server.rs` | MODIFIED | v2 strict header reject (D-05) + `Mcp-Method` vs body method cross-check (D-06); emit headers outbound |
