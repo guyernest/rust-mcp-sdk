@@ -85,8 +85,7 @@ impl ProtocolContext {
 
 /// Reserved `_meta` key carrying the per-request self-reported protocol version
 /// (Phase 112, D-11). Read at ingress by [`resolve_protocol_context`].
-pub(crate) const RESERVED_PROTOCOL_VERSION_KEY: &str =
-    "io.modelcontextprotocol/protocolVersion";
+pub(crate) const RESERVED_PROTOCOL_VERSION_KEY: &str = "io.modelcontextprotocol/protocolVersion";
 
 /// Reserved `_meta` key carrying the per-request self-reported `clientInfo`.
 pub(crate) const RESERVED_CLIENT_INFO_KEY: &str = "io.modelcontextprotocol/clientInfo";
@@ -138,15 +137,87 @@ pub(crate) enum ProtocolNegotiationError {
 ///
 /// The per-request signal is authoritative over any session-stored version
 /// (Pitfall 2) — this function never consults session state.
-#[allow(dead_code)] // Why: consumed by the native dispatch ingress in the same plan (Task 2 GREEN).
 pub(crate) fn resolve_protocol_context(
     accept_list: &[ProtocolVersion],
     meta: Option<&serde_json::Value>,
 ) -> Result<Option<ProtocolContext>, ProtocolNegotiationError> {
-    let _ = accept_list;
-    let _ = meta;
-    // RED stub — GREEN implements accept-list enforcement + reserved-key parsing.
-    Ok(None)
+    // A present `_meta` MUST be an object; a non-object reserved carrier can never
+    // be reconciled with the wire, so fail closed rather than silently ignore it.
+    let meta_obj =
+        match meta {
+            Some(value) => Some(value.as_object().ok_or(
+                ProtocolNegotiationError::MalformedMeta("_meta is not an object"),
+            )?),
+            None => None,
+        };
+
+    // Resolve the negotiated version + era from the per-request signal, enforcing
+    // the accept-list. The per-request signal is authoritative over any session
+    // state (Pitfall 2) — session is never consulted here.
+    let negotiated_version = resolve_negotiated_version(accept_list, meta_obj)?;
+    let era = super::version::protocol_era(negotiated_version.as_str());
+
+    let mut ctx = ProtocolContext::new(era, negotiated_version);
+    if let Some(info) = parse_reserved_object::<Implementation>(
+        meta_obj,
+        RESERVED_CLIENT_INFO_KEY,
+        "clientInfo is not deserializable",
+    )? {
+        ctx = ctx.with_client_info(info);
+    }
+    if let Some(caps) = parse_reserved_object::<ClientCapabilities>(
+        meta_obj,
+        RESERVED_CLIENT_CAPABILITIES_KEY,
+        "clientCapabilities is not deserializable",
+    )? {
+        ctx = ctx.with_client_capabilities(caps);
+    }
+    Ok(Some(ctx))
+}
+
+/// Determine the negotiated [`ProtocolVersion`] from the per-request signal +
+/// accept-list, or the v1 fallback when no signal is present.
+fn resolve_negotiated_version(
+    accept_list: &[ProtocolVersion],
+    meta_obj: Option<&serde_json::Map<String, serde_json::Value>>,
+) -> Result<ProtocolVersion, ProtocolNegotiationError> {
+    match meta_obj.and_then(|m| m.get(RESERVED_PROTOCOL_VERSION_KEY)) {
+        Some(raw) => {
+            let requested = raw.as_str().ok_or(ProtocolNegotiationError::MalformedMeta(
+                "protocolVersion is not a string",
+            ))?;
+            if accept_list.iter().any(|v| v.as_str() == requested) {
+                Ok(ProtocolVersion(requested.to_string()))
+            } else {
+                Err(ProtocolNegotiationError::UnsupportedVersion(
+                    requested.to_string(),
+                ))
+            }
+        },
+        // Absent signal: fall back to the first v1 version in the accept-list.
+        // A v2-only accept-list (no v1 version) never silently serves v1.
+        None => accept_list
+            .iter()
+            .find(|v| super::version::protocol_era(v.as_str()) == Era::V1)
+            .cloned()
+            .ok_or(ProtocolNegotiationError::UnsupportedVersion(String::new())),
+    }
+}
+
+/// Deserialize a present RESERVED `_meta` object key into `T`, mapping a
+/// present-but-malformed value to [`ProtocolNegotiationError::MalformedMeta`].
+/// Absent keys return `Ok(None)`.
+fn parse_reserved_object<T: serde::de::DeserializeOwned>(
+    meta_obj: Option<&serde_json::Map<String, serde_json::Value>>,
+    key: &str,
+    malformed: &'static str,
+) -> Result<Option<T>, ProtocolNegotiationError> {
+    match meta_obj.and_then(|m| m.get(key)) {
+        Some(raw) => serde_json::from_value::<T>(raw.clone())
+            .map(Some)
+            .map_err(|_| ProtocolNegotiationError::MalformedMeta(malformed)),
+        None => Ok(None),
+    }
 }
 
 /// W3C trace-context values extracted from a request `_meta` object.
@@ -259,8 +330,7 @@ mod tests {
     fn resolve_v2_only_no_signal_errors() {
         // v2-only accept-list + no v2 signal => never silently serve v1.
         let v2_only = vec![ProtocolVersion("2026-07-28".to_string())];
-        let err = resolve_protocol_context(&v2_only, None)
-            .expect_err("v2-only + no signal => Err");
+        let err = resolve_protocol_context(&v2_only, None).expect_err("v2-only + no signal => Err");
         assert_eq!(
             err,
             ProtocolNegotiationError::UnsupportedVersion(String::new())

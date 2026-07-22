@@ -451,10 +451,6 @@ impl ServerCore {
     ///
     /// The shared resolver enforces this list; a per-request version not present
     /// here is rejected.
-    // Why: consumed by the ingress resolver wired in Plan 04 Task 2
-    // (`handle_request` calls `resolve_protocol_context(self.supported_protocol_versions(), ..)`).
-    // The `#[allow]` is removed once Task 2 lands the caller. Tests use it now.
-    #[allow(dead_code)]
     pub(crate) fn supported_protocol_versions(&self) -> &[ProtocolVersion] {
         &self.supported_protocol_versions
     }
@@ -465,13 +461,36 @@ impl ServerCore {
     /// ingress skips the resolver entirely and the v1 request path is
     /// byte-for-byte unchanged. The ACTUAL negotiation is the shared resolver,
     /// which consults the full accept-list.
-    // Why: consumed by the ingress "run era-detection at all" gate wired in Plan
-    // 04 Task 2; the `#[allow]` is removed once Task 2 lands the caller.
-    #[allow(dead_code)]
     pub(crate) fn is_v2_opted_in(&self) -> bool {
         self.supported_protocol_versions
             .iter()
             .any(|v| v.as_str() == crate::types::protocol::PROTOCOL_VERSION_2026_07_28)
+    }
+
+    /// Resolve the per-request [`ProtocolContext`](crate::types::protocol::ProtocolContext)
+    /// ONCE at native ingress (Phase 112, VERS-01).
+    ///
+    /// Returns `Ok(None)` immediately for a non-opted-in server so it runs ZERO
+    /// era-detection and its v1 path is byte-for-byte unchanged (D-04). For an
+    /// opted-in server, delegates to the single shared
+    /// [`resolve_protocol_context`](crate::types::protocol::context::resolve_protocol_context),
+    /// enforcing the configured accept-list against the request's `_meta`. The
+    /// `Err` is mapped to a structured rejection by the caller.
+    fn resolve_ingress_protocol_context(
+        &self,
+        request: &Request,
+    ) -> std::result::Result<
+        Option<crate::types::protocol::ProtocolContext>,
+        crate::types::protocol::context::ProtocolNegotiationError,
+    > {
+        if !self.is_v2_opted_in() {
+            return Ok(None);
+        }
+        let meta = extract_request_meta_value(request);
+        crate::types::protocol::context::resolve_protocol_context(
+            self.supported_protocol_versions(),
+            meta.as_ref(),
+        )
     }
 
     /// Attach the cached peer handle to `extra` when a dispatcher is configured.
@@ -534,6 +553,7 @@ impl ServerCore {
         &self,
         req: &CallToolRequest,
         auth_context: Option<AuthContext>,
+        protocol_context: Option<crate::types::protocol::ProtocolContext>,
     ) -> Result<ToolCallOutcome> {
         contract_pre_tool_dispatch_integrity!();
         let handler = self
@@ -569,7 +589,10 @@ impl ServerCore {
                 req._meta
                     .as_ref()
                     .and_then(|m| serde_json::to_value(m).ok()),
-            ),
+            )
+            // Thread the once-at-ingress resolved protocol context so handlers
+            // read era/identity via extra.era()/client_info() (Phase 112).
+            .with_protocol_context(protocol_context),
         );
 
         // D-03.3 (TOUT-01): clone the result-`_meta` slot before `extra` moves
@@ -1051,9 +1074,21 @@ impl ProtocolHandler for ServerCore {
             return Self::error_response(id, -32603, e.to_string());
         }
 
+        // Resolve the per-request ProtocolContext ONCE at native ingress
+        // (opted-in servers only — D-04). This is the single authoritative
+        // resolution threaded through dispatch; the HTTP layer (Plan 06) resolves
+        // once for its header gate and passes the same value in, never re-derived.
+        let protocol_context = match self.resolve_ingress_protocol_context(&request) {
+            Ok(ctx) => ctx,
+            Err(negotiation_error) => {
+                let (code, message) = negotiation_error_to_rejection(&negotiation_error);
+                return Self::error_response(id, code, message);
+            },
+        };
+
         // Execute the actual request handling with auth_context
         let mut response = self
-            .handle_request_internal(id.clone(), request, auth_context)
+            .handle_request_internal(id.clone(), request, auth_context, protocol_context)
             .await;
 
         // Process response through protocol middleware chain (read-only access)
@@ -1174,6 +1209,7 @@ impl ServerCore {
         id: RequestId,
         request: Request,
         auth_context: Option<AuthContext>,
+        protocol_context: Option<crate::types::protocol::ProtocolContext>,
     ) -> JSONRPCResponse {
         contract_pre_session_lifecycle!();
         match request {
@@ -1259,7 +1295,10 @@ impl ServerCore {
                             .and_then(|m| m._task_id.clone())
                             .map(|task_id| (task_id, req.name.clone()));
 
-                        match self.handle_call_tool(req, auth_context.clone()).await {
+                        match self
+                            .handle_call_tool(req, auth_context.clone(), protocol_context.clone())
+                            .await
+                        {
                             Ok(outcome) => match outcome {
                                 #[cfg(not(target_arch = "wasm32"))]
                                 ToolCallOutcome::TaskCreated { task_value } => {
@@ -1437,6 +1476,49 @@ fn json_serialized_len(value: &impl serde::Serialize) -> Result<usize> {
     Ok(counter.0)
 }
 
+/// Extract the request's `_meta` object as raw JSON for ingress era-resolution
+/// (Phase 112, D-11 — the per-request signal is transport-agnostic).
+///
+/// Only requests that carry a per-request `_meta` signal (currently `tools/call`)
+/// contribute a value; every other request yields `None` and resolves to the v1
+/// fallback on an opted-in server.
+pub(crate) fn extract_request_meta_value(request: &Request) -> Option<serde_json::Value> {
+    match request {
+        Request::Client(boxed) => match boxed.as_ref() {
+            ClientRequest::CallTool(req) => {
+                #[allow(clippy::used_underscore_binding)] // _meta is MCP protocol spec
+                let meta = req._meta.as_ref();
+                meta.and_then(|m| serde_json::to_value(m).ok())
+            },
+            _ => None,
+        },
+        Request::Server(_) => None,
+    }
+}
+
+/// Map a [`ProtocolNegotiationError`](crate::types::protocol::context::ProtocolNegotiationError)
+/// to a structured JSON-RPC rejection `(code, message)`.
+///
+/// Both variants surface as `INVALID_PARAMS` (-32602): a bad/unsupported
+/// per-request `protocolVersion` or a malformed reserved `_meta` key is an
+/// invalid method parameter. (v2 semantic error-code values are finalized from
+/// the 2026-07-28 schema; VERS-06.)
+pub(crate) fn negotiation_error_to_rejection(
+    error: &crate::types::protocol::context::ProtocolNegotiationError,
+) -> (i32, String) {
+    use crate::types::protocol::context::ProtocolNegotiationError;
+    use crate::types::protocol::error_codes::INVALID_PARAMS;
+    match error {
+        ProtocolNegotiationError::UnsupportedVersion(v) => (
+            INVALID_PARAMS,
+            format!("Unsupported protocol version: {v:?}"),
+        ),
+        ProtocolNegotiationError::MalformedMeta(reason) => {
+            (INVALID_PARAMS, format!("Malformed _meta: {reason}"))
+        },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1569,6 +1651,147 @@ mod tests {
                 assert_eq!(tools_result.tools[0].name, "test-tool");
             },
             ResponsePayload::Error(e) => panic!("List tools failed: {}", e.message),
+        }
+    }
+
+    struct EraProbeTool;
+
+    #[async_trait]
+    impl ToolHandler for EraProbeTool {
+        async fn handle(&self, _args: Value, extra: RequestHandlerExtra) -> Result<Value> {
+            // Prove the ingress-resolved context is visible IN the handler.
+            let era = extra.era().map(|e| format!("{e:?}"));
+            let traceparent = extra.trace_context().map(|tc| tc.traceparent);
+            Ok(serde_json::json!({ "era": era, "traceparent": traceparent }))
+        }
+    }
+
+    /// Extract the probe tool's JSON payload from a wrapped `CallToolResult`
+    /// (the dispatcher emits the handler value as text content).
+    fn probe_payload(result: &Value) -> Value {
+        let text = result["content"][0]["text"]
+            .as_str()
+            .expect("probe result carries text content");
+        serde_json::from_str(text).expect("probe text content is JSON")
+    }
+
+    fn probe_call_with_v2_meta() -> Request {
+        use crate::types::protocol::context::RESERVED_PROTOCOL_VERSION_KEY;
+        let meta = crate::types::protocol::RequestMeta::new()
+            .with_meta(
+                RESERVED_PROTOCOL_VERSION_KEY,
+                serde_json::json!("2026-07-28"),
+            )
+            .with_meta(
+                "traceparent",
+                serde_json::json!("00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01"),
+            );
+        Request::Client(Box::new(ClientRequest::CallTool(CallToolRequest {
+            name: "probe".to_string(),
+            arguments: serde_json::json!({}),
+            _meta: Some(meta),
+            task: None,
+        })))
+    }
+
+    /// End-to-end: a v2 `_meta` + `traceparent` presented at ingress is resolved
+    /// once and visible in the invoked handler via `extra.era()` /
+    /// `extra.trace_context()` (Codex MEDIUM — ingress→handler threading proven).
+    #[tokio::test]
+    async fn test_v2_meta_visible_in_handler_end_to_end() {
+        use crate::types::protocol::PROTOCOL_VERSION_2026_07_28;
+
+        let server = crate::server::builder::ServerCoreBuilder::new()
+            .name("probe-server")
+            .version("1.0.0")
+            .tool("probe", EraProbeTool)
+            .stateless_mode(true)
+            .with_supported_protocol_versions([
+                ProtocolVersion("2025-11-25".to_string()),
+                ProtocolVersion(PROTOCOL_VERSION_2026_07_28.to_string()),
+            ])
+            .build()
+            .unwrap();
+
+        let response = server
+            .handle_request(RequestId::from(7i64), probe_call_with_v2_meta(), None)
+            .await;
+        match response.payload {
+            ResponsePayload::Result(result) => {
+                let probe = probe_payload(&result);
+                assert_eq!(probe["era"], "V2");
+                assert_eq!(
+                    probe["traceparent"],
+                    "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01"
+                );
+            },
+            ResponsePayload::Error(e) => panic!("probe call failed: {}", e.message),
+        }
+    }
+
+    /// A non-opted-in (default v1-only) server runs ZERO era-detection: even a v2
+    /// `_meta` signal resolves to no context, so the handler reads `era()==None`
+    /// (D-04, byte-for-byte-unchanged v1 path).
+    #[tokio::test]
+    async fn test_non_opted_in_server_resolves_no_context() {
+        let server = crate::server::builder::ServerCoreBuilder::new()
+            .name("v1-server")
+            .version("1.0.0")
+            .tool("probe", EraProbeTool)
+            .stateless_mode(true)
+            .build()
+            .unwrap();
+
+        let response = server
+            .handle_request(RequestId::from(8i64), probe_call_with_v2_meta(), None)
+            .await;
+        match response.payload {
+            ResponsePayload::Result(result) => {
+                let probe = probe_payload(&result);
+                assert_eq!(probe["era"], serde_json::Value::Null);
+            },
+            ResponsePayload::Error(e) => panic!("probe call failed: {}", e.message),
+        }
+    }
+
+    /// An explicitly-unsupported per-request version is rejected with a structured
+    /// error rather than silently served (accept-list enforcement, Codex HIGH #2).
+    #[tokio::test]
+    async fn test_unsupported_version_rejected_at_ingress() {
+        use crate::types::protocol::context::RESERVED_PROTOCOL_VERSION_KEY;
+        use crate::types::protocol::PROTOCOL_VERSION_2026_07_28;
+
+        let server = crate::server::builder::ServerCoreBuilder::new()
+            .name("probe-server")
+            .version("1.0.0")
+            .tool("probe", EraProbeTool)
+            .stateless_mode(true)
+            .with_supported_protocol_versions([ProtocolVersion(
+                PROTOCOL_VERSION_2026_07_28.to_string(),
+            )])
+            .build()
+            .unwrap();
+
+        let meta = crate::types::protocol::RequestMeta::new().with_meta(
+            RESERVED_PROTOCOL_VERSION_KEY,
+            serde_json::json!("1999-01-01"),
+        );
+        let call = Request::Client(Box::new(ClientRequest::CallTool(CallToolRequest {
+            name: "probe".to_string(),
+            arguments: serde_json::json!({}),
+            _meta: Some(meta),
+            task: None,
+        })));
+        let response = server
+            .handle_request(RequestId::from(9i64), call, None)
+            .await;
+        match response.payload {
+            ResponsePayload::Error(e) => {
+                assert_eq!(e.code, crate::types::protocol::error_codes::INVALID_PARAMS);
+            },
+            ResponsePayload::Result(_) => {
+                panic!("unsupported version must be rejected, not served")
+            },
         }
     }
 

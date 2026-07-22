@@ -446,6 +446,12 @@ pub struct Server {
     /// IDENTICAL set so both dispatchers consult the same suppression rule.
     #[cfg(not(target_arch = "wasm32"))]
     suppress_double_wrap: HashSet<String>,
+    /// Configured protocol-version accept-list (Phase 112, VERS-01/02). Mirrors
+    /// `ServerCore`'s field so this high-level `Server` dispatch site resolves the
+    /// per-request [`ProtocolContext`](crate::types::protocol::ProtocolContext)
+    /// through the SAME shared resolver. Default is v1-only (excludes
+    /// `2026-07-28`) — an un-opted-in server is byte-for-byte unchanged.
+    supported_protocol_versions: Vec<ProtocolVersion>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -1241,12 +1247,64 @@ impl Server {
         Ok(())
     }
 
+    /// Whether this high-level `Server` opted into the v2 (`2026-07-28`) era.
+    ///
+    /// The "run era-detection at all" gate (D-04); `false` skips the resolver so
+    /// the v1 path is byte-for-byte unchanged.
+    fn is_v2_opted_in(&self) -> bool {
+        self.supported_protocol_versions
+            .iter()
+            .any(|v| v.as_str() == crate::types::protocol::PROTOCOL_VERSION_2026_07_28)
+    }
+
+    /// Resolve the per-request [`ProtocolContext`](crate::types::protocol::ProtocolContext)
+    /// ONCE at this dispatch site's ingress via the SAME shared resolver
+    /// `ServerCore` uses — the twin wiring (Pitfall 3). `Ok(None)` for a
+    /// non-opted-in server (zero era-detection, D-04).
+    fn resolve_ingress_protocol_context(
+        &self,
+        request: &Request,
+    ) -> std::result::Result<
+        Option<crate::types::protocol::ProtocolContext>,
+        crate::types::protocol::context::ProtocolNegotiationError,
+    > {
+        if !self.is_v2_opted_in() {
+            return Ok(None);
+        }
+        let meta = crate::server::core::extract_request_meta_value(request);
+        crate::types::protocol::context::resolve_protocol_context(
+            &self.supported_protocol_versions,
+            meta.as_ref(),
+        )
+    }
+
     async fn handle_request(
         &self,
         id: RequestId,
         request: Request,
         auth_context: Option<auth::AuthContext>,
     ) -> JSONRPCResponse {
+        // Resolve the per-request ProtocolContext ONCE at ingress (opted-in
+        // only — D-04), through the single shared resolver, and thread it into
+        // dispatch. Never re-derived downstream (D-11).
+        let protocol_context = match self.resolve_ingress_protocol_context(&request) {
+            Ok(ctx) => ctx,
+            Err(negotiation_error) => {
+                let (code, message) =
+                    crate::server::core::negotiation_error_to_rejection(&negotiation_error);
+                return JSONRPCResponse {
+                    jsonrpc: "2.0".to_string(),
+                    id,
+                    payload: crate::types::jsonrpc::ResponsePayload::Error(
+                        crate::types::jsonrpc::JSONRPCError {
+                            code,
+                            message,
+                            data: None,
+                        },
+                    ),
+                };
+            },
+        };
         match request {
             Request::Client(ref boxed_req)
                 if matches!(**boxed_req, ClientRequest::Initialize(_)) =>
@@ -1276,7 +1334,7 @@ impl Server {
                 }
             },
             Request::Client(boxed_req) => {
-                self.handle_client_request(id, *boxed_req, auth_context)
+                self.handle_client_request(id, *boxed_req, auth_context, protocol_context)
                     .await
             },
             Request::Server(_) => JSONRPCResponse {
@@ -1298,6 +1356,7 @@ impl Server {
         id: RequestId,
         request: ClientRequest,
         auth_context: Option<auth::AuthContext>,
+        protocol_context: Option<crate::types::protocol::ProtocolContext>,
     ) -> JSONRPCResponse {
         // ADAPTER (a) — tasks/* dispatch at the post-auth assembly layer.
         //
@@ -1329,7 +1388,7 @@ impl Server {
         }
 
         let result = self
-            .process_client_request(id.clone(), request, auth_context)
+            .process_client_request(id.clone(), request, auth_context, protocol_context)
             .await;
         Self::create_response(id, result)
     }
@@ -1340,6 +1399,7 @@ impl Server {
         request_id: RequestId,
         request: ClientRequest,
         auth_context: Option<auth::AuthContext>,
+        protocol_context: Option<crate::types::protocol::ProtocolContext>,
     ) -> Result<serde_json::Value> {
         match request {
             ClientRequest::Initialize(_) => {
@@ -1348,7 +1408,8 @@ impl Server {
             },
             ClientRequest::ListTools(req) => self.handle_list_tools(req),
             ClientRequest::CallTool(req) => {
-                self.handle_call_tool(request_id, req, auth_context).await
+                self.handle_call_tool(request_id, req, auth_context, protocol_context)
+                    .await
             },
             ClientRequest::ListPrompts(req) => self.handle_list_prompts(req),
             ClientRequest::GetPrompt(req) => {
@@ -1436,6 +1497,7 @@ impl Server {
         request_id: RequestId,
         req: CallToolRequest,
         auth_context: Option<auth::AuthContext>,
+        protocol_context: Option<crate::types::protocol::ProtocolContext>,
     ) -> Result<Value> {
         let handler = self
             .tools
@@ -1537,7 +1599,11 @@ impl Server {
             // path too (ServerCore already wires this at core.rs). Additive: the
             // dispatcher's own task-creation decision still reads `req.task`.
             .with_task_request(req.task.clone())
-            .with_request_meta(request_meta_value),
+            .with_request_meta(request_meta_value)
+            // Thread the once-at-ingress resolved protocol context (Phase 112) —
+            // the twin of the ServerCore wiring so handlers read the SAME
+            // era/identity on both dispatch sites.
+            .with_protocol_context(protocol_context),
         );
 
         // D-03.3 (TOUT-01): clone the interior-mutable result-`_meta` slot BEFORE
@@ -2307,6 +2373,10 @@ pub struct ServerBuilder {
     /// consulted at the Payload wrap site.
     #[cfg(not(target_arch = "wasm32"))]
     suppress_double_wrap: HashSet<String>,
+    /// Configured protocol-version accept-list (Phase 112, VERS-01/02). Defaults
+    /// to the v1-only legacy set (excludes `2026-07-28`); overridden via
+    /// [`Self::with_supported_protocol_versions`].
+    supported_protocol_versions: Vec<ProtocolVersion>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -2376,7 +2446,28 @@ impl ServerBuilder {
             task_store: None,
             #[cfg(not(target_arch = "wasm32"))]
             suppress_double_wrap: HashSet::new(),
+            supported_protocol_versions: crate::types::protocol::context::default_accept_list(),
         }
+    }
+
+    /// Opt into a protocol-version accept-list (Phase 112, VERS-01/02; D-02/D-04).
+    ///
+    /// The high-level `Server` twin of
+    /// [`ServerCoreBuilder::with_supported_protocol_versions`](crate::server::builder::ServerCoreBuilder::with_supported_protocol_versions).
+    /// With no call, the server is v1-only and behaves exactly as today. An empty
+    /// accept-list falls back to the v1-only default (never all-reject).
+    #[must_use]
+    pub fn with_supported_protocol_versions(
+        mut self,
+        versions: impl IntoIterator<Item = ProtocolVersion>,
+    ) -> Self {
+        let collected: Vec<ProtocolVersion> = versions.into_iter().collect();
+        self.supported_protocol_versions = if collected.is_empty() {
+            crate::types::protocol::context::default_accept_list()
+        } else {
+            collected
+        };
+        self
     }
 
     /// Set the server name.
@@ -4360,6 +4451,7 @@ impl ServerBuilder {
             task_store: self.task_store,
             #[cfg(not(target_arch = "wasm32"))]
             suppress_double_wrap: self.suppress_double_wrap,
+            supported_protocol_versions: self.supported_protocol_versions,
         })
     }
 }
@@ -4725,6 +4817,94 @@ mod tests {
                 assert_eq!(call_result.content.len(), 1);
             },
             ResponsePayload::Error(_) => panic!("Expected success response"),
+        }
+    }
+
+    /// Tool that reports the ingress-resolved era back through its result so a
+    /// dispatch test can prove ingress→handler protocol-context threading on the
+    /// high-level `Server` dispatch site.
+    struct EraProbeServerTool;
+
+    #[async_trait]
+    impl ToolHandler for EraProbeServerTool {
+        async fn handle(
+            &self,
+            _args: Value,
+            extra: crate::server::cancellation::RequestHandlerExtra,
+        ) -> Result<Value> {
+            Ok(json!({ "era": extra.era().map(|e| format!("{e:?}")) }))
+        }
+    }
+
+    fn probe_server_era(result: &Value) -> Value {
+        let text = result["content"][0]["text"]
+            .as_str()
+            .expect("probe result carries text content");
+        serde_json::from_str::<Value>(text).expect("probe text is JSON")["era"].clone()
+    }
+
+    fn v2_probe_call() -> Request {
+        let meta = crate::types::protocol::RequestMeta::new().with_meta(
+            "io.modelcontextprotocol/protocolVersion",
+            json!("2026-07-28"),
+        );
+        Request::Client(Box::new(ClientRequest::CallTool(CallToolRequest {
+            name: "probe".to_string(),
+            arguments: json!({}),
+            _meta: Some(meta),
+            task: None,
+        })))
+    }
+
+    /// Cross-site parity: the high-level `Server` dispatch site resolves the SAME
+    /// v2 era as `ServerCore` for identical `_meta` (both use the one shared
+    /// resolver), visible in the handler (Pitfall 3, twin wiring).
+    #[tokio::test]
+    async fn test_server_dispatch_resolves_v2_era_parity() {
+        use crate::types::protocol::PROTOCOL_VERSION_2026_07_28;
+        use crate::types::ProtocolVersion;
+
+        let server = Server::builder()
+            .name("probe-server")
+            .version("1.0.0")
+            .tool("probe", EraProbeServerTool)
+            .with_supported_protocol_versions([
+                ProtocolVersion("2025-11-25".to_string()),
+                ProtocolVersion(PROTOCOL_VERSION_2026_07_28.to_string()),
+            ])
+            .build()
+            .unwrap();
+
+        let response = server
+            .handle_request(RequestId::from(1i64), v2_probe_call(), None)
+            .await;
+        match response.payload {
+            ResponsePayload::Result(result) => {
+                assert_eq!(probe_server_era(&result), json!("V2"));
+            },
+            ResponsePayload::Error(e) => panic!("probe call failed: {}", e.message),
+        }
+    }
+
+    /// A non-opted-in high-level `Server` runs zero era-detection: the handler
+    /// reads `era()==None` even with a v2 `_meta` signal (D-04 parity).
+    #[tokio::test]
+    async fn test_server_dispatch_non_opted_in_yields_none() {
+        let server = Server::builder()
+            .name("v1-server")
+            .version("1.0.0")
+            .tool("probe", EraProbeServerTool)
+            .build()
+            .unwrap();
+
+        let response = server
+            .handle_request(RequestId::from(1i64), v2_probe_call(), None)
+            .await;
+        match response.payload {
+            ResponsePayload::Result(result) => {
+                assert_eq!(probe_server_era(&result), Value::Null);
+            },
+            ResponsePayload::Error(e) => panic!("probe call failed: {}", e.message),
         }
     }
 
