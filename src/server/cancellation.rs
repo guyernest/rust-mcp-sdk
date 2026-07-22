@@ -427,8 +427,7 @@ impl RequestHandlerExtra {
     /// independent sanitization.
     #[must_use]
     pub fn trace_context(&self) -> Option<crate::types::protocol::TraceContext> {
-        // RED stub — real body delegates to TraceContext::from_meta in GREEN.
-        None
+        crate::types::protocol::TraceContext::from_meta(self.request_meta.as_ref()?)
     }
 
     /// Returns a reference to the typed extensions map.
