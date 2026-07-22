@@ -1,17 +1,16 @@
 ---
 gsd_state_version: 1.0
-milestone: v2.4
-milestone_name: Agents & Teams — SDK Extraction
-status: verifying
-stopped_at: Phase 110 context gathered
-last_updated: "2026-07-19T08:22:53.803Z"
-last_activity: 2026-07-19
+milestone: v2.5
+milestone_name: MCP Spec 2026-07-28 (v2) Support
+status: planning
+last_updated: "2026-07-22T17:16:36.386Z"
+last_activity: 2026-07-22
 progress:
-  total_phases: 63
-  completed_phases: 5
-  total_plans: 27
-  completed_plans: 27
-  percent: 8
+  total_phases: 0
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
+  percent: 0
 ---
 
 # Project State
@@ -25,10 +24,10 @@ See: .planning/PROJECT.md (updated 2026-07-17) · .planning/ROADMAP.md (v2.4 mil
 
 ## Current Position
 
-Phase: 999.1
-Plan: Not started
-Status: Phase complete — ready for verification
-Last activity: 2026-07-19
+Phase: Not started (defining requirements)
+Plan: —
+Status: Defining requirements
+Last activity: 2026-07-22 — Milestone v2.5 started
 
 ## v2.4 Phase Plan (6 phases, 31 requirements)
 
