@@ -128,3 +128,7 @@ None.
 ---
 *Phase: 112-version-plumbing-spine*
 *Completed: 2026-07-22*
+
+## Self-Check: PASSED
+
+All created/modified files exist on disk (112-02-SUMMARY.md, deferred-items.md, src/server/cancellation.rs) and all four task commits (6a1275d3, 13faa944, 46cfeefe, 721cee9f) are present in git history.

@@ -4,13 +4,13 @@ milestone: v2.5
 milestone_name: MCP Spec 2026-07-28
 status: executing
 stopped_at: Completed 112-01-PLAN.md
-last_updated: "2026-07-22T21:23:17.090Z"
+last_updated: "2026-07-22T21:32:37.275Z"
 last_activity: 2026-07-22
 progress:
   total_phases: 71
   completed_phases: 0
   total_plans: 8
-  completed_plans: 1
+  completed_plans: 2
   percent: 0
 ---
 
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-07-22) · .planning/ROADMAP.md (v2.5 mil
 ## Current Position
 
 Phase: 112 (version-plumbing-spine) — EXECUTING
-Plan: 2 of 8
+Plan: 3 of 8
 Status: Ready to execute
 Last activity: 2026-07-22
 
@@ -91,6 +91,8 @@ Decisions are logged in PROJECT.md Key Decisions table. Decisions framing this m
 - [Phase 112]: 112-01: v2 reached only via opt-in accept-list; LATEST stays 2025-11-25, 2026-07-28 NOT in SUPPORTED (Pitfall 1); protocol_era classifies only exact 2026-07-28 as V2, unknown->V1
 - [Phase 112]: 112-01: TraceContext::from_meta bounds W3C values at 8192 (over-bound traceparent->None, tracestate/baggage dropped); values documented RAW/UNVALIDATED/untrusted; proptest + fuzz target added (T-112-09)
 - [Phase 112]: 112-01: semver tooling pinned (cargo-semver-checks 0.49.0, cargo-public-api 0.52.0); baseline pmcp 2.17.0; authoritative check-release MINOR assertion deferred to Plan 07/08
+- [Phase ?]: [Phase 112]: 112-02: protocol_context + era/protocol_version/client_info/client_capabilities/trace_context accessors added ONLY to native RequestHandlerExtra (src/server/cancellation.rs); wasm32 zero-field stub + orphan shared/cancellation.rs untouched
+- [Phase ?]: [Phase 112]: 112-02: trace_context() is a method over existing request_meta (no new field, VERS-09 keys in _meta); identity accessors rustdoc'd self-reported/not-for-authz (T-112-02 accept-documented); purely additive, wasm build green
 
 ### Pending Todos
 
@@ -126,7 +128,7 @@ Items deferred by design for this milestone (design §7 / REQUIREMENTS v2):
 
 ## Session Continuity
 
-Last session: 2026-07-22T21:23:17.085Z
+Last session: 2026-07-22T21:32:31.762Z
 Stopped at: Completed 112-01-PLAN.md
 Resume file: None
 
@@ -151,3 +153,4 @@ Resume file: None
 | Phase 110 P05 | 12min | 3 tasks | 8 files |
 | Phase 110 P06 | 20min | 3 tasks | 5 files |
 | Phase 112 P01 | 11min | 2 tasks | 6 files |
+| Phase 112 P02 | 6min | 2 tasks | 1 files |

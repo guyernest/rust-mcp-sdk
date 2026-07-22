@@ -2245,7 +2245,7 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 112-02-PLAN.md — RequestHandlerExtra protocol_context field + era/identity/trace accessors (native only — src/server/cancellation.rs; wasm RequestHandlerExtra is a zero-field stub, out of scope)
+- [x] 112-02-PLAN.md — RequestHandlerExtra protocol_context field + era/identity/trace accessors (native only — src/server/cancellation.rs; wasm RequestHandlerExtra is a zero-field stub, out of scope)
 - [ ] 112-03-PLAN.md — Centralized version-gated error-code table (standard + pmcp -320xx family; frozen -32002 verbatim; v2 values structurally OMITTED, zero-SATD) + error::ErrorCode's 11 consts DELEGATE to it (dominant 210-site surface) + server/discover via CRATE-PRIVATE internal dispatch (public ClientRequest/Request UNCHANGED — no downstream exhaustive-match break)
 
 **Wave 3** *(blocked on Wave 2 completion)*
@@ -2364,7 +2364,7 @@ Plans:
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 112. Version Plumbing Spine | 1/8 | In Progress|  |
+| 112. Version Plumbing Spine | 2/8 | In Progress|  |
 | 113. Stateless HTTP + MRTR | 0/TBD | Not started | - |
 | 114. Tasks Extension Migration | 0/TBD | Not started | - |
 | 115. JSON Schema 2020-12 + Caching Hints | 0/TBD | Not started | - |
