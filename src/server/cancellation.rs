@@ -212,6 +212,23 @@ pub struct RequestHandlerExtra {
     /// `progress_token`/`_task_id`) without a typed dependency on `RequestMeta`.
     /// `None` when the request carried no `_meta`.
     pub request_meta: Option<serde_json::Value>,
+    /// The per-request protocol context resolved once at ingress (MCP v2.5
+    /// version plumbing).
+    ///
+    /// When `Some`, the dispatcher resolved the negotiated protocol version into
+    /// an [`Era`](crate::types::protocol::Era) plus optional self-reported client
+    /// identity and surfaced it here so handlers can era-gate behavior via the
+    /// typed [`era`](RequestHandlerExtra::era) /
+    /// [`protocol_version`](RequestHandlerExtra::protocol_version) /
+    /// [`client_info`](RequestHandlerExtra::client_info) /
+    /// [`client_capabilities`](RequestHandlerExtra::client_capabilities)
+    /// accessors instead of reading ambient session state. `None` when no
+    /// context was resolved (unit-test fixtures, pre-v2.5 dispatch paths).
+    ///
+    /// **Security:** the client identity carried here is SELF-REPORTED and
+    /// informational only — see the accessor rustdoc. It MUST NOT be used as an
+    /// authorization anchor; real identity binds to the OAuth token.
+    pub protocol_context: Option<crate::types::protocol::ProtocolContext>,
     /// Typed request-scoped state for middleware→handler transfer.
     ///
     /// Inserting values requires `T: Clone + Send + Sync + 'static`. Debug prints type names only,
@@ -262,6 +279,7 @@ impl RequestHandlerExtra {
             progress_reporter: None,
             task_request: None,
             request_meta: None,
+            protocol_context: None,
             extensions: http::Extensions::new(),
             #[cfg(not(target_arch = "wasm32"))]
             peer: None,
@@ -319,6 +337,74 @@ impl RequestHandlerExtra {
     pub fn with_request_meta(mut self, meta: Option<serde_json::Value>) -> Self {
         self.request_meta = meta;
         self
+    }
+
+    /// Attach the per-request [`ProtocolContext`](crate::types::protocol::ProtocolContext)
+    /// resolved at ingress (MCP v2.5 version plumbing).
+    ///
+    /// Populated by the dispatch layer (Plan 04) after negotiating the protocol
+    /// version; handlers then read the era and client identity via the typed
+    /// [`era`](Self::era) / [`protocol_version`](Self::protocol_version) /
+    /// [`client_info`](Self::client_info) /
+    /// [`client_capabilities`](Self::client_capabilities) accessors. Pass `None`
+    /// when no context was resolved.
+    #[must_use]
+    pub fn with_protocol_context(
+        mut self,
+        ctx: Option<crate::types::protocol::ProtocolContext>,
+    ) -> Self {
+        self.protocol_context = ctx;
+        self
+    }
+
+    /// Returns the resolved protocol [`Era`](crate::types::protocol::Era) for
+    /// this request, or `None` when no [`ProtocolContext`](crate::types::protocol::ProtocolContext)
+    /// was attached.
+    ///
+    /// **Security:** the era is derived from the negotiated protocol version —
+    /// it is a behavioral switch, NOT an identity or authorization signal.
+    #[must_use]
+    pub fn era(&self) -> Option<crate::types::protocol::Era> {
+        // RED stub — real body reads self.protocol_context in GREEN.
+        None
+    }
+
+    /// Returns the exact negotiated
+    /// [`ProtocolVersion`](crate::types::ProtocolVersion) for this request, or
+    /// `None` when no [`ProtocolContext`](crate::types::protocol::ProtocolContext)
+    /// was attached.
+    #[must_use]
+    pub fn protocol_version(&self) -> Option<&crate::types::ProtocolVersion> {
+        // RED stub — real body reads self.protocol_context in GREEN.
+        None
+    }
+
+    /// Returns the client's SELF-REPORTED implementation info, or `None` when
+    /// absent.
+    ///
+    /// **Security — self-reported, not for authorization:** this value is the
+    /// client-supplied `clientInfo` surfaced verbatim from initialization. It is
+    /// informational ONLY (telemetry, feature-hints, logging) and MUST NOT be
+    /// used as an authorization anchor or trusted identity. Real identity binds
+    /// to the OAuth token, enforced in Phase 114 (TASK-05). No authorization
+    /// decision is made from this accessor in this phase.
+    #[must_use]
+    pub fn client_info(&self) -> Option<&crate::types::Implementation> {
+        // RED stub — real body reads self.protocol_context in GREEN.
+        None
+    }
+
+    /// Returns the client's SELF-REPORTED advertised capabilities, or `None`
+    /// when absent.
+    ///
+    /// **Security — self-reported, not for authorization:** like
+    /// [`client_info`](Self::client_info), these capabilities are client-supplied
+    /// and informational ONLY. They MUST NOT be used as an authorization anchor;
+    /// real identity binds to the OAuth token (Phase 114 / TASK-05).
+    #[must_use]
+    pub fn client_capabilities(&self) -> Option<&crate::types::ClientCapabilities> {
+        // RED stub — real body reads self.protocol_context in GREEN.
+        None
     }
 
     /// Returns a reference to the typed extensions map.
@@ -525,6 +611,7 @@ impl Default for RequestHandlerExtra {
             progress_reporter: None,
             task_request: None,
             request_meta: None,
+            protocol_context: None,
             extensions: http::Extensions::new(),
             #[cfg(not(target_arch = "wasm32"))]
             peer: None,
@@ -824,6 +911,36 @@ mod tests {
         assert_eq!(extra.extensions_mut().insert(42u64), None);
         assert_eq!(extra.extensions_mut().insert(99u64), Some(42u64));
         assert_eq!(extra.extensions().get::<u64>(), Some(&99u64));
+    }
+
+    #[tokio::test]
+    async fn test_protocol_context_era_and_identity_accessors() {
+        use crate::types::protocol::{Era, ProtocolContext};
+        use crate::types::{Implementation, ProtocolVersion};
+
+        // No context attached => all accessors return None.
+        let bare = RequestHandlerExtra::new("req-none".to_string(), CancellationToken::new());
+        assert!(bare.era().is_none());
+        assert!(bare.protocol_version().is_none());
+        assert!(bare.client_info().is_none());
+        assert!(bare.client_capabilities().is_none());
+
+        // Attach a v2 ProtocolContext with client identity.
+        let ctx = ProtocolContext::new(Era::V2, ProtocolVersion("2026-07-28".to_string()))
+            .with_client_info(Implementation::new("acme-client", "1.2.3"))
+            .with_client_capabilities(crate::types::ClientCapabilities::default());
+        let extra = RequestHandlerExtra::new("req-v2".to_string(), CancellationToken::new())
+            .with_protocol_context(Some(ctx));
+
+        assert_eq!(extra.era(), Some(Era::V2));
+        assert_eq!(
+            extra.protocol_version().map(ProtocolVersion::as_str),
+            Some("2026-07-28")
+        );
+        let info = extra.client_info().expect("client_info attached");
+        assert_eq!(info.name, "acme-client");
+        assert_eq!(info.version, "1.2.3");
+        assert!(extra.client_capabilities().is_some());
     }
 
     #[tokio::test]
