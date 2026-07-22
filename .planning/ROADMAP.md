@@ -2254,7 +2254,7 @@ Plans:
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
-- [ ] 112-05-PLAN.md — Era-gated dispatch: server/discover projection via internal dispatch (v1 -32601), pinned resultType envelope model (v2-only, object-only; native-only — v2 unreachable on wasm), serverInfo, v1 byte-identity golden fixtures
+- [x] 112-05-PLAN.md — Era-gated dispatch: server/discover projection via internal dispatch (v1 -32601), pinned resultType envelope model (v2-only, object-only; native-only — v2 unreachable on wasm), serverInfo, v1 byte-identity golden fixtures
 - [ ] 112-06-PLAN.md — v2 HTTP header enforcement CONSUMING Plan 04's resolved era (no 2nd resolver): FULL header/_meta classification matrix incl. required MCP-Protocol-Version + Mcp-Method/Mcp-Name strict reject (D-05) + body cross-check (D-06) + outbound emission on success AND error
 
 **Wave 5** *(blocked on Wave 4 completion)*
@@ -2364,7 +2364,7 @@ Plans:
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 112. Version Plumbing Spine | 4/8 | In Progress|  |
+| 112. Version Plumbing Spine | 5/8 | In Progress|  |
 | 113. Stateless HTTP + MRTR | 0/TBD | Not started | - |
 | 114. Tasks Extension Migration | 0/TBD | Not started | - |
 | 115. JSON Schema 2020-12 + Caching Hints | 0/TBD | Not started | - |
