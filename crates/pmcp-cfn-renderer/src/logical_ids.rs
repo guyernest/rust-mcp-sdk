@@ -85,6 +85,160 @@ pub fn for_table(name: &str) -> String {
     format!("{}Table", pascal(name))
 }
 
+// ---------------------------------------------------------------------
+// `cognito` family (Task 6) — the `aws-lambda` target's Cognito+DCR OAuth
+// stack shape: the Cognito resources themselves, the OAuth-proxy and
+// JWT-authorizer Lambdas (each with their own role/log-group), and the
+// 2-integration/7-route HTTP API wiring. The MCP function's own resources
+// reuse the fixed ids above (`for_function`, `for_execution_role`,
+// `for_execution_policy`, `for_log_group`, `for_http_api`,
+// `for_http_stage`, `for_http_permission`) — see `resources::cognito`'s
+// module doc comment.
+// ---------------------------------------------------------------------
+
+/// Logical ID for the Cognito `AWS::Cognito::UserPool`.
+#[must_use]
+pub fn for_user_pool() -> &'static str {
+    "UserPool"
+}
+
+/// Logical ID for the `AWS::Cognito::UserPoolResourceServer` carrying the
+/// MCP scopes.
+#[must_use]
+pub fn for_user_pool_resource_server() -> &'static str {
+    "UserPoolResourceServer"
+}
+
+/// Logical ID for the `AWS::Cognito::UserPoolDomain` (hosted UI domain).
+#[must_use]
+pub fn for_user_pool_domain() -> &'static str {
+    "UserPoolDomain"
+}
+
+/// Logical ID for the JWT `AWS::ApiGatewayV2::Authorizer` protecting the
+/// `/mcp` routes.
+#[must_use]
+pub fn for_authorizer() -> &'static str {
+    "Authorizer"
+}
+
+/// Logical ID for the token-validator Lambda backing [`for_authorizer`].
+#[must_use]
+pub fn for_authorizer_function() -> &'static str {
+    "AuthorizerFunction"
+}
+
+/// Logical ID for [`for_authorizer_function`]'s execution role. Unlike the
+/// MCP/OAuth-proxy functions, this role never gets an attached
+/// `AWS::IAM::Policy` — it needs no permissions beyond the base
+/// `AWSLambdaBasicExecutionRole` managed policy.
+#[must_use]
+pub fn for_authorizer_role() -> &'static str {
+    "AuthorizerRole"
+}
+
+/// Logical ID for [`for_authorizer_function`]'s CloudWatch log group.
+#[must_use]
+pub fn for_authorizer_log_group() -> &'static str {
+    "AuthorizerLogGroup"
+}
+
+/// Logical ID for the Dynamic-Client-Registration proxy Lambda (handles
+/// `/oauth2/*` and `/.well-known/*`).
+#[must_use]
+pub fn for_oauth_proxy_function() -> &'static str {
+    "OAuthProxyFunction"
+}
+
+/// Logical ID for [`for_oauth_proxy_function`]'s execution role.
+#[must_use]
+pub fn for_oauth_proxy_role() -> &'static str {
+    "OAuthProxyRole"
+}
+
+/// Logical ID for [`for_oauth_proxy_role`]'s default inline policy (DynamoDB
+/// `ClientsTable` CRUD + `cognito-idp` client-management grants).
+#[must_use]
+pub fn for_oauth_proxy_policy() -> &'static str {
+    "OAuthProxyRoleDefaultPolicy"
+}
+
+/// Logical ID for [`for_oauth_proxy_function`]'s CloudWatch log group.
+#[must_use]
+pub fn for_oauth_proxy_log_group() -> &'static str {
+    "OAuthProxyLogGroup"
+}
+
+/// Logical ID for the HTTP API integration targeting the MCP function.
+#[must_use]
+pub fn for_mcp_integration() -> &'static str {
+    "McpIntegration"
+}
+
+/// Logical ID for the HTTP API integration targeting
+/// [`for_oauth_proxy_function`].
+#[must_use]
+pub fn for_oauth_integration() -> &'static str {
+    "OAuthIntegration"
+}
+
+/// Logical ID for the protected `POST /mcp` route.
+#[must_use]
+pub fn for_mcp_route() -> &'static str {
+    "McpRoute"
+}
+
+/// Logical ID for the protected `POST /mcp/{proxy+}` route.
+#[must_use]
+pub fn for_mcp_proxy_route() -> &'static str {
+    "McpProxyRoute"
+}
+
+/// Logical ID for the public `GET /` health-check route.
+#[must_use]
+pub fn for_health_route() -> &'static str {
+    "HealthRoute"
+}
+
+/// Logical ID for the public `GET /.well-known/{proxy+}` OAuth-discovery
+/// route.
+#[must_use]
+pub fn for_oauth_discovery_route() -> &'static str {
+    "OAuthDiscoveryRoute"
+}
+
+/// Logical ID for the public `GET /oauth2/authorize` route.
+#[must_use]
+pub fn for_oauth_authorize_route() -> &'static str {
+    "OAuthAuthorizeRoute"
+}
+
+/// Logical ID for the public `POST /oauth2/register` (DCR) route.
+#[must_use]
+pub fn for_oauth_register_route() -> &'static str {
+    "OAuthRegisterRoute"
+}
+
+/// Logical ID for the public `POST /oauth2/token` route.
+#[must_use]
+pub fn for_oauth_token_route() -> &'static str {
+    "OAuthTokenRoute"
+}
+
+/// Logical ID for the `AWS::Lambda::Permission` letting API Gateway invoke
+/// [`for_oauth_proxy_function`].
+#[must_use]
+pub fn for_oauth_permission() -> &'static str {
+    "ApiGatewayInvokeOAuthPermission"
+}
+
+/// Logical ID for the `AWS::Lambda::Permission` letting API Gateway invoke
+/// [`for_authorizer_function`].
+#[must_use]
+pub fn for_authorizer_permission() -> &'static str {
+    "ApiGatewayInvokeAuthorizerPermission"
+}
+
 /// Split `name` on `-`/`_`, uppercase each segment's first character, and
 /// concatenate (PascalCase) — the transform every `for_*` function that
 /// takes a descriptor-supplied name is built on.
@@ -202,5 +356,47 @@ mod tests {
         // Not a full injectivity proof — a fast, cheap regression guard that
         // two distinct realistic names don't collide.
         assert_ne!(for_table("orders"), for_table("order"));
+    }
+
+    #[test]
+    fn cognito_family_ids_are_stable_and_distinct() {
+        let ids = [
+            for_user_pool(),
+            for_user_pool_resource_server(),
+            for_user_pool_domain(),
+            for_authorizer(),
+            for_authorizer_function(),
+            for_authorizer_role(),
+            for_authorizer_log_group(),
+            for_oauth_proxy_function(),
+            for_oauth_proxy_role(),
+            for_oauth_proxy_policy(),
+            for_oauth_proxy_log_group(),
+            for_mcp_integration(),
+            for_oauth_integration(),
+            for_mcp_route(),
+            for_mcp_proxy_route(),
+            for_health_route(),
+            for_oauth_discovery_route(),
+            for_oauth_authorize_route(),
+            for_oauth_register_route(),
+            for_oauth_token_route(),
+            for_oauth_permission(),
+            for_authorizer_permission(),
+        ];
+        let mut sorted = ids.to_vec();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(
+            sorted.len(),
+            ids.len(),
+            "expected all distinct, got {ids:?}"
+        );
+        // Also distinct from the fixed ids the cognito stack shape reuses
+        // for the MCP function's own resources (see `resources::cognito`'s
+        // module doc comment).
+        assert!(!ids.contains(&for_function()));
+        assert!(!ids.contains(&for_execution_role()));
+        assert!(!ids.contains(&for_http_api()));
     }
 }

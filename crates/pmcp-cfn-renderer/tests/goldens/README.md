@@ -13,6 +13,10 @@ resource-family module it needs hasn't been implemented yet; it moves up to
 `tests/goldens/` (and the harness's `#[ignore]` for that family, if any,
 comes off) in the plan task that implements that family.
 
+As of Task 6 (`cognito`/`dynamodb`, the last two resource-family modules),
+every golden in the corpus is **Active** — `tests/goldens/pending/` is
+empty and the full 5-golden corpus runs unconditionally.
+
 ## Corpus reality vs. the original design doc
 
 `docs/superpowers/specs/2026-07-21-cfn-renderer-extraction-design.md` §7
@@ -38,8 +42,8 @@ mechanism).
 |---|---|---|---|---|
 | `plain-lambda.golden.json` | `pmcp-run` | disabled | `lambda`/`logs`/`outputs` (Lambda-only stack, no API Gateway; CDK's own default execution role + the pmcp-run composition IAM sugar) | **Active** — Task 3's TDD driver |
 | `iam-statements.golden.json` | `pmcp-run` | disabled | `iam`'s declared-`[[iam.statements]]` expansion (Task 4): a minimal, purpose-built fixture with a two-action/two-resource statement (stays arrays) and a single-wildcard-action/single-resource statement (collapses `Action`/`Resource` to a bare scalar — the CDK `PolicyStatement.toJSON()` single-element-array collapse rule) | **Active** — Task 4's TDD driver |
-| `pending/http-api.golden.json` | `aws-lambda` | disabled | `http_api` (`HttpApi`/`Integration`/`Route`/`Stage`, `Lambda::Permission`) on top of the plain-Lambda shape | Pending Task 5 |
-| `pending/oauth-cognito-dcr.golden.json` | `aws-lambda` | `cognito` (`--oauth cognito`) | `cognito` (`UserPool`/`UserPoolResourceServer`/`UserPoolDomain`) + `dynamodb` (the DCR `ClientsTable`) + a 3-Lambda/authorizer `http_api` shape | Pending Task 6 |
+| `http-api.golden.json` | `aws-lambda` | disabled | `http_api` (`HttpApi`/`Integration`/`Route`/`Stage`, `Lambda::Permission`) on top of the plain-Lambda shape | **Active** — Task 5 (promoted from `pending/`) |
+| `oauth-cognito-dcr.golden.json` | `aws-lambda` | `cognito` (`--oauth cognito`) | `cognito` (`UserPool`/`UserPoolResourceServer`/`UserPoolDomain`/JWT `Authorizer`) + `dynamodb` (the DCR `ClientsTable`) + a 3-Lambda/2-integration/7-route `http_api` shape | **Active** — Task 6 (promoted from `pending/`) |
 
 `iam-statements.golden.json`'s stack.ts needed a manual splice rather than a
 plain `scaffold_generated` call: `cargo pmcp deploy init` takes a STATIC

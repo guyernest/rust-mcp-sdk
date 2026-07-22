@@ -7,6 +7,7 @@
 use crate::{
     logical_ids,
     params::RenderParams,
+    resources::cognito,
     template::{CfnExport, CfnOutput},
 };
 use pmcp_package::package::DeployDescriptor;
@@ -97,6 +98,88 @@ pub fn render_http_api_outputs(
         CfnOutput {
             description: Some("MCP Server API URL".to_string()),
             value: json!({ "Fn::GetAtt": [http_api_logical_id, "ApiEndpoint"] }),
+            export: None,
+        },
+    );
+    outputs
+}
+
+/// Render the `aws-lambda` target's Cognito+DCR OAuth stack shape's
+/// (Task 6) fixed output set: `ApiUrl`, `ClientsTableName`, `DashboardUrl`,
+/// `OAuthDiscoveryUrl`, `UserPoolDomainUrl`, `UserPoolId`. Unlike
+/// [`render_http_api_outputs`], this variant has no `LambdaArn`/`McpRoleArn`
+/// (the stack renders THREE Lambda functions/roles, not one — see
+/// `resources::cognito`'s module doc comment for why "the" execution role
+/// isn't a well-defined concept here) — mirrors the `CfnOutput` calls in the
+/// OAuth branch of `cargo-pmcp/src/commands/deploy/init.rs::create_oauth_stack_ts`
+/// exactly (6 outputs, no Lambda-identity ones).
+///
+/// # Panics
+///
+/// Panics if `d.auth.cognito` is `None`. Callers MUST only reach this
+/// function after [`crate::resources::cognito::render`] has already
+/// succeeded for the same descriptor (as `crate::render_aws_lambda_oauth`
+/// does) — that call already validated `d.auth.cognito.is_some()`.
+#[must_use]
+pub fn render_cognito_outputs(
+    d: &DeployDescriptor,
+    p: &RenderParams,
+) -> BTreeMap<String, CfnOutput> {
+    let cognito_cfg = d
+        .auth
+        .cognito
+        .as_ref()
+        .expect("cognito section present — validated by cognito::render before outputs run");
+
+    let mut outputs = common_outputs(d, p);
+    outputs.remove("LambdaArn");
+    outputs.remove("McpRoleArn");
+    outputs.insert(
+        "ApiUrl".to_string(),
+        CfnOutput {
+            description: Some("MCP Server API URL".to_string()),
+            value: json!({ "Fn::GetAtt": [logical_ids::for_http_api(), "ApiEndpoint"] }),
+            export: None,
+        },
+    );
+    outputs.insert(
+        "OAuthDiscoveryUrl".to_string(),
+        CfnOutput {
+            description: Some("OAuth Discovery URL".to_string()),
+            value: json!({
+                "Fn::Join": ["", [
+                    { "Fn::GetAtt": [logical_ids::for_http_api(), "ApiEndpoint"] },
+                    "/.well-known/openid-configuration",
+                ]],
+            }),
+            export: None,
+        },
+    );
+    outputs.insert(
+        "UserPoolId".to_string(),
+        CfnOutput {
+            description: Some("Cognito User Pool ID".to_string()),
+            value: json!({ "Ref": logical_ids::for_user_pool() }),
+            export: None,
+        },
+    );
+    outputs.insert(
+        "UserPoolDomainUrl".to_string(),
+        CfnOutput {
+            description: Some("Cognito Hosted UI Domain".to_string()),
+            value: json!(format!(
+                "https://{}.auth.{}.amazoncognito.com",
+                cognito::domain_prefix(d, p, cognito_cfg),
+                p.region,
+            )),
+            export: None,
+        },
+    );
+    outputs.insert(
+        "ClientsTableName".to_string(),
+        CfnOutput {
+            description: Some("DynamoDB table for registered OAuth clients".to_string()),
+            value: json!({ "Ref": logical_ids::for_table(&cognito::clients_table_name(d)) }),
             export: None,
         },
     );

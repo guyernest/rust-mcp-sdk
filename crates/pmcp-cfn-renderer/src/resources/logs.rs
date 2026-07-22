@@ -5,27 +5,35 @@ use crate::{
     resources::{aws_lambda_tags, standard_tags},
     template::CfnResource,
 };
-use serde_json::json;
+use serde_json::{json, Value};
 
-/// Render the function's CloudWatch log group: `(logical_id, resource)`.
+/// Render a Lambda function's CloudWatch log group: `(logical_id,
+/// resource)`. The log group's NAME references `function_logical_id` via
+/// `Fn::Join`/`Ref`, mirroring what `cdk synth` emits for `logGroupName:
+/// \`/aws/lambda/${fn.functionName}\`` (a token resolved at synth time, not
+/// a literal string interpolation of the server name).
 ///
-/// `service_name` is the descriptor's server name, used only for the
-/// standard cost-allocation tags — the log group's NAME itself references
-/// the function's logical id via `Fn::Join`/`Ref`, mirroring what
-/// `cdk synth` emits for `logGroupName:
-/// \`/aws/lambda/${mcpFunction.functionName}\`` (a token resolved at synth
-/// time, not a literal string interpolation of the server name).
+/// Shared primitive behind [`render_log_group`]/[`render_log_group_aws_lambda`]
+/// (both fixed to [`logical_ids::for_function`]/[`logical_ids::for_log_group`])
+/// and — Task 6 — `resources::cognito`'s per-function log groups (the
+/// OAuth-proxy and authorizer Lambdas, whose function/log-group logical ids
+/// differ from the MCP function's).
 #[must_use]
-pub fn render_log_group(service_name: &str, retention_days: u32) -> (String, CfnResource) {
+pub(crate) fn render_log_group_for(
+    function_logical_id: &str,
+    log_group_logical_id: &str,
+    tags: Value,
+    retention_days: u32,
+) -> (String, CfnResource) {
     let properties = json!({
         "LogGroupName": {
-            "Fn::Join": ["", ["/aws/lambda/", { "Ref": logical_ids::for_function() }]],
+            "Fn::Join": ["", ["/aws/lambda/", { "Ref": function_logical_id }]],
         },
         "RetentionInDays": retention_days,
-        "Tags": standard_tags(service_name),
+        "Tags": tags,
     });
     (
-        logical_ids::for_log_group().to_string(),
+        log_group_logical_id.to_string(),
         CfnResource {
             type_: "AWS::Logs::LogGroup".to_string(),
             properties,
@@ -34,30 +42,32 @@ pub fn render_log_group(service_name: &str, retention_days: u32) -> (String, Cfn
     )
 }
 
-/// Render the function's CloudWatch log group for the `aws-lambda` target's
-/// own stack shape: `(logical_id, resource)`. Same `LogGroupName`/`Ref`
-/// wiring as [`render_log_group`], but `aws-lambda`-flavored tags (own
-/// `project`, `target = "aws-lambda"`) via
+/// Render the MCP function's CloudWatch log group: `(logical_id, resource)`.
+#[must_use]
+pub fn render_log_group(service_name: &str, retention_days: u32) -> (String, CfnResource) {
+    render_log_group_for(
+        logical_ids::for_function(),
+        logical_ids::for_log_group(),
+        standard_tags(service_name),
+        retention_days,
+    )
+}
+
+/// Render the MCP function's CloudWatch log group for the `aws-lambda`
+/// target's own stack shape: `(logical_id, resource)`. Same
+/// `LogGroupName`/`Ref` wiring as [`render_log_group`], but
+/// `aws-lambda`-flavored tags (own `project`, `target = "aws-lambda"`) via
 /// [`crate::resources::aws_lambda_tags`] instead of [`standard_tags`].
 #[must_use]
 pub fn render_log_group_aws_lambda(
     service_name: &str,
     retention_days: u32,
 ) -> (String, CfnResource) {
-    let properties = json!({
-        "LogGroupName": {
-            "Fn::Join": ["", ["/aws/lambda/", { "Ref": logical_ids::for_function() }]],
-        },
-        "RetentionInDays": retention_days,
-        "Tags": aws_lambda_tags(service_name),
-    });
-    (
-        logical_ids::for_log_group().to_string(),
-        CfnResource {
-            type_: "AWS::Logs::LogGroup".to_string(),
-            properties,
-            depends_on: vec![],
-        },
+    render_log_group_for(
+        logical_ids::for_function(),
+        logical_ids::for_log_group(),
+        aws_lambda_tags(service_name),
+        retention_days,
     )
 }
 

@@ -20,9 +20,13 @@
 //! `[[iam.statements]]` expansion is also active, pinned by
 //! `tests/goldens/iam-statements.golden.json` (a minimal, purpose-built
 //! fixture) and `tests/goldens/wild-msr-vtt.golden.json` (a real `pmcp-run`
-//! fixture with 4 declared statements, promoted from `pending/`). The
-//! remaining `pending/` goldens land as their resource-family modules
-//! (`http_api`, `cognito`, `dynamodb`) are implemented in later tasks.
+//! fixture with 4 declared statements, promoted from `pending/`). As of
+//! Task 5, `http_api` is active too, pinned by
+//! `tests/goldens/http-api.golden.json`. As of Task 6 — the last two
+//! resource-family modules, `cognito` and `dynamodb` — the full 5-golden
+//! corpus is active: `tests/goldens/oauth-cognito-dcr.golden.json` pins the
+//! `aws-lambda` target's Cognito+DCR OAuth stack shape, and
+//! `tests/goldens/pending/` is now empty.
 
 mod support;
 

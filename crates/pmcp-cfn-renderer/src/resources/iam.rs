@@ -77,7 +77,35 @@ use serde_json::{json, Value};
 /// semantic-golden harness's normalizer sentinelizes `PolicyName` on both
 /// sides (see `tests/support/mod.rs::sentinelize_policy_name`), so this
 /// literal never needs to match what a real `cdk synth` produces.
-const DEFAULT_POLICY_NAME: &str = "pmcp-declared";
+pub(crate) const DEFAULT_POLICY_NAME: &str = "pmcp-declared";
+
+/// The Lambda execution role's trust-policy + managed-policy shape, shared
+/// by every `AWS::IAM::Role` this crate renders for a Lambda function's
+/// execution role — the `pmcp-run` kernel's role, the `aws-lambda` kernel's
+/// role, and (Task 6) the `cognito`/DCR OAuth stack's three roles (MCP
+/// function, OAuth-proxy, authorizer). Only `Tags` varies by caller — see
+/// [`render_role`]/[`render_role_aws_lambda`] and `resources::cognito`'s
+/// role builders.
+pub(crate) fn lambda_execution_role_properties(tags: Value) -> Value {
+    json!({
+        "AssumeRolePolicyDocument": {
+            "Version": "2012-10-17",
+            "Statement": [{
+                "Effect": "Allow",
+                "Action": "sts:AssumeRole",
+                "Principal": { "Service": "lambda.amazonaws.com" },
+            }],
+        },
+        "ManagedPolicyArns": [{
+            "Fn::Join": ["", [
+                "arn:",
+                { "Ref": "AWS::Partition" },
+                ":iam::aws:policy/service-role/AWSLambdaBasicExecutionRole",
+            ]],
+        }],
+        "Tags": tags,
+    })
+}
 
 /// Render the MCP server's Lambda execution role and its default inline
 /// policy: `[(role_id, role), (policy_id, policy)]`. Any `[[iam.statements]]`
@@ -96,29 +124,11 @@ pub fn render_execution_role(d: &DeployDescriptor, p: &RenderParams) -> Vec<(Str
 /// The base `AWS::IAM::Role`: Lambda service trust policy +
 /// `AWSLambdaBasicExecutionRole`.
 fn render_role(d: &DeployDescriptor) -> (String, CfnResource) {
-    let properties = json!({
-        "AssumeRolePolicyDocument": {
-            "Version": "2012-10-17",
-            "Statement": [{
-                "Effect": "Allow",
-                "Action": "sts:AssumeRole",
-                "Principal": { "Service": "lambda.amazonaws.com" },
-            }],
-        },
-        "ManagedPolicyArns": [{
-            "Fn::Join": ["", [
-                "arn:",
-                { "Ref": "AWS::Partition" },
-                ":iam::aws:policy/service-role/AWSLambdaBasicExecutionRole",
-            ]],
-        }],
-        "Tags": standard_tags(&d.server.name),
-    });
     (
         logical_ids::for_execution_role().to_string(),
         CfnResource {
             type_: "AWS::IAM::Role".to_string(),
-            properties,
+            properties: lambda_execution_role_properties(standard_tags(&d.server.name)),
             depends_on: vec![],
         },
     )
@@ -201,29 +211,11 @@ pub fn render_execution_role_aws_lambda(d: &DeployDescriptor) -> Vec<(String, Cf
 /// policy/managed-policy shape as [`render_role`], `aws-lambda`-flavored
 /// tags.
 fn render_role_aws_lambda(d: &DeployDescriptor) -> (String, CfnResource) {
-    let properties = json!({
-        "AssumeRolePolicyDocument": {
-            "Version": "2012-10-17",
-            "Statement": [{
-                "Effect": "Allow",
-                "Action": "sts:AssumeRole",
-                "Principal": { "Service": "lambda.amazonaws.com" },
-            }],
-        },
-        "ManagedPolicyArns": [{
-            "Fn::Join": ["", [
-                "arn:",
-                { "Ref": "AWS::Partition" },
-                ":iam::aws:policy/service-role/AWSLambdaBasicExecutionRole",
-            ]],
-        }],
-        "Tags": aws_lambda_tags(&d.server.name),
-    });
     (
         logical_ids::for_execution_role().to_string(),
         CfnResource {
             type_: "AWS::IAM::Role".to_string(),
-            properties,
+            properties: lambda_execution_role_properties(aws_lambda_tags(&d.server.name)),
             depends_on: vec![],
         },
     )

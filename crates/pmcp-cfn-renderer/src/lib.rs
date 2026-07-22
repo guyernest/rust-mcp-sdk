@@ -47,13 +47,22 @@
 //! different memory size/log retention — see e.g.
 //! [`resources::lambda::render_function_aws_lambda`]'s doc comment), PLUS
 //! `http_api` (`AWS::ApiGatewayV2::*` + the invoke `Lambda::Permission`).
-//! `auth.enabled = true` (needing `cognito`) and any target type other than
-//! `pmcp-run`/`aws-lambda` still fail loudly via
-//! [`RenderError::UnsupportedSection`] rather than silently rendering an
-//! incomplete stack; a declared `[[iam.statements]]` entry that fails
-//! [`resources::iam::validate`]'s fail-closed rules fails loudly via
-//! [`RenderError::Invalid`] instead. `cognito` and `dynamodb` land in a
-//! later task.
+//! As of Task 6, [`render`] also wires the `aws-lambda` target's
+//! Cognito+DCR OAuth stack shape: when `auth.enabled = true` AND
+//! `auth.provider = "cognito"`, [`resources::cognito::render`] builds the
+//! full resource graph (3 Lambda functions, the Cognito
+//! `UserPool`/`ResourceServer`/`Domain`, the DCR `ClientsTable` via
+//! `dynamodb::render_table`, and a JWT-authorizer-protected 7-route HTTP
+//! API — see that module's doc comment). This completes the v1
+//! seven-family resource surface. Any target type other than
+//! `pmcp-run`/`aws-lambda`, `auth.enabled = true` on the `pmcp-run` target
+//! (its own OAuth stack shape is not yet rendered), and `auth.enabled =
+//! true` on `aws-lambda` with a provider other than `"cognito"` still fail
+//! loudly — the first two via [`RenderError::UnsupportedSection`], the last
+//! via [`RenderError::Invalid`] naming the unsupported provider — rather
+//! than silently rendering an incomplete stack. A declared
+//! `[[iam.statements]]` entry that fails [`resources::iam::validate`]'s
+//! fail-closed rules also fails loudly via [`RenderError::Invalid`].
 //!
 //! ## Logical IDs
 //!
@@ -123,7 +132,11 @@ pub fn render(
     }
 
     if descriptor.target.target_type == "aws-lambda" {
-        render_aws_lambda(descriptor, params)
+        if descriptor.auth.enabled {
+            render_aws_lambda_oauth(descriptor, params)
+        } else {
+            render_aws_lambda(descriptor, params)
+        }
     } else {
         render_pmcp_run(descriptor, params)
     }
@@ -192,6 +205,33 @@ fn render_aws_lambda(
     })
 }
 
+/// The `aws-lambda` target's Cognito+DCR OAuth stack shape (Task 6):
+/// [`resources::cognito::render`] builds the full resource graph (3 Lambda
+/// functions + roles/policies/log groups, the Cognito
+/// `UserPool`/`ResourceServer`/`Domain`, the DCR `ClientsTable`, and the
+/// HTTP API + JWT-authorizer wiring) in one call — unlike
+/// [`render_aws_lambda`], this shape needs no separate `lambda`/`iam`/
+/// `logs`/`http_api` calls here because `cognito::render` already composes
+/// them internally.
+fn render_aws_lambda_oauth(
+    descriptor: &DeployDescriptor,
+    params: &RenderParams,
+) -> Result<CfnTemplate, RenderError> {
+    let mut resources = BTreeMap::new();
+    for (id, resource) in resources::cognito::render(descriptor, params)? {
+        resources.insert(id, resource);
+    }
+
+    let outputs = resources::outputs::render_cognito_outputs(descriptor, params);
+
+    Ok(CfnTemplate {
+        description: format!("MCP Server: {}", descriptor.server.name),
+        resources,
+        outputs,
+        metadata: BTreeMap::new(),
+    })
+}
+
 /// Log-retention days for the `pmcp-run` plain-Lambda kernel. NOT driven by
 /// `[observability].log_retention_days` — the TS scaffold's `pmcp-run`
 /// branch hardcodes `RetentionDays.ONE_WEEK` unconditionally (as it does
@@ -199,11 +239,13 @@ fn render_aws_lambda(
 /// `[observability]` section is not wired into this stack shape today.
 const PLAIN_LOG_RETENTION_DAYS: u32 = 7;
 
-/// Log-retention days for the `aws-lambda` target's kernel — the TS
-/// scaffold's `aws-lambda` branch hardcodes `RetentionDays.ONE_MONTH` (vs.
-/// `pmcp-run`'s [`PLAIN_LOG_RETENTION_DAYS`] = 7). Also not driven by
-/// `[observability].log_retention_days`.
-const AWS_LAMBDA_LOG_RETENTION_DAYS: u32 = 30;
+/// Log-retention days for the `aws-lambda` target's kernel (including its
+/// Cognito+DCR OAuth stack shape, Task 6) — the TS scaffold's `aws-lambda`
+/// branches hardcode `RetentionDays.ONE_MONTH` (vs. `pmcp-run`'s
+/// [`PLAIN_LOG_RETENTION_DAYS`] = 7). Also not driven by
+/// `[observability].log_retention_days`. `pub(crate)` so
+/// `resources::cognito` can reuse the same constant for its 3 log groups.
+pub(crate) const AWS_LAMBDA_LOG_RETENTION_DAYS: u32 = 30;
 
 /// Fail loudly on descriptor content this task doesn't render yet, rather
 /// than silently producing an incomplete or wrong stack.
@@ -218,11 +260,18 @@ fn guard_unsupported(d: &DeployDescriptor) -> Result<(), RenderError> {
             ),
         });
     }
-    if d.auth.enabled {
+    // `auth.enabled = true` is implemented only for the `aws-lambda`
+    // target's Cognito OAuth+DCR stack shape (Task 6) — the `pmcp-run`
+    // target's own OAuth rendering isn't proven by any golden yet, so it
+    // stays guarded regardless of `auth.provider`. Provider validation for
+    // the `aws-lambda` case happens inside `resources::cognito::render`
+    // (a bad provider fails via `RenderError::Invalid`, not this guard).
+    if d.auth.enabled && d.target.target_type != "aws-lambda" {
         return Err(RenderError::UnsupportedSection {
             section: "auth".to_string(),
-            detail: "auth.enabled = true requires the cognito resource module, \
-                     not yet implemented"
+            detail: "auth.enabled = true is only implemented for the aws-lambda target's \
+                     cognito OAuth+DCR stack shape; the pmcp-run target's OAuth rendering \
+                     is not yet implemented"
                 .to_string(),
         });
     }
@@ -334,6 +383,10 @@ mod tests {
 
     #[test]
     fn render_rejects_auth_enabled_on_pmcp_run() {
+        // The `aws-lambda` target's Cognito OAuth+DCR stack shape landed in
+        // Task 6 (see `render_accepts_cognito_oauth_on_aws_lambda` below) —
+        // the `pmcp-run` target's own OAuth rendering is not proven by any
+        // golden yet, so it stays guarded.
         let err = render(
             &descriptor_with("my-server", "pmcp-run", true, ""),
             &params(),
@@ -343,16 +396,20 @@ mod tests {
             err,
             RenderError::UnsupportedSection {
                 section: "auth".to_string(),
-                detail: "auth.enabled = true requires the cognito resource module, \
-                          not yet implemented"
+                detail: "auth.enabled = true is only implemented for the aws-lambda target's \
+                          cognito OAuth+DCR stack shape; the pmcp-run target's OAuth rendering \
+                          is not yet implemented"
                     .to_string(),
             }
         );
     }
 
     #[test]
-    fn render_rejects_auth_enabled_on_aws_lambda() {
-        // Task 6 territory (cognito) — still guarded, on either target.
+    fn render_rejects_unsupported_auth_provider_on_aws_lambda() {
+        // `descriptor_with`'s `[auth]` block always sets `provider = "none"`
+        // — Task 6 wires ONLY the `"cognito"` flavor on `aws-lambda`; any
+        // other provider must fail loudly naming itself, not silently
+        // render an incomplete/wrong OAuth stack.
         let err = render(
             &descriptor_with("my-server", "aws-lambda", true, ""),
             &params(),
@@ -360,13 +417,63 @@ mod tests {
         .unwrap_err();
         assert_eq!(
             err,
-            RenderError::UnsupportedSection {
+            RenderError::Invalid {
                 section: "auth".to_string(),
-                detail: "auth.enabled = true requires the cognito resource module, \
-                          not yet implemented"
+                field: "provider".to_string(),
+                message: "auth.enabled = true on the aws-lambda target requires provider = \
+                          \"cognito\" (got \"none\") — no other OAuth provider is implemented yet"
                     .to_string(),
             }
         );
+    }
+
+    #[test]
+    fn render_accepts_cognito_oauth_on_aws_lambda() {
+        let template = render(&cognito_oauth_descriptor("oauth-test"), &params()).unwrap();
+        assert!(
+            template.resources.contains_key("UserPool"),
+            "expected a UserPool resource, got {:?}",
+            template.resources.keys().collect::<Vec<_>>()
+        );
+        assert!(template.outputs.contains_key("UserPoolId"));
+        assert!(!template.outputs.contains_key("LambdaArn"));
+    }
+
+    /// A minimal `aws-lambda` + Cognito-OAuth descriptor — the shape
+    /// [`render_accepts_cognito_oauth_on_aws_lambda`] exercises. Full
+    /// resource-graph coverage lives in `resources::cognito`'s own tests
+    /// and the `oauth-cognito-dcr` golden.
+    fn cognito_oauth_descriptor(name: &str) -> DeployDescriptor {
+        toml::from_str(&format!(
+            r#"
+            [target]
+            type = "aws-lambda"
+            version = "1.0.0"
+            [aws]
+            region = "us-east-1"
+            [server]
+            name = "{name}"
+            timeout_seconds = 30
+            [auth]
+            enabled = true
+            provider = "cognito"
+            callback_urls = []
+            [auth.cognito]
+            user_pool_name = "{name}-users"
+            resource_server_id = "mcp"
+            social_providers = []
+            mfa = "optional"
+            access_token_ttl = "1h"
+            refresh_token_ttl = "30d"
+            [auth.dcr]
+            enabled = true
+            [observability]
+            log_retention_days = 30
+            enable_xray = true
+            create_dashboard = true
+            "#
+        ))
+        .expect("fixture descriptor parses")
     }
 
     #[test]

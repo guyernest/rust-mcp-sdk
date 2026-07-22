@@ -20,8 +20,16 @@
 //! `pmcp-run` kernel's (own tags, no composition IAM sugar, different fixed
 //! memory size/log retention — see each `*_aws_lambda` function's doc
 //! comment) even though both targets render the same 4 resource FAMILIES.
-//! `cognito` and `dynamodb` land in a later task.
+//! Task 6 added `cognito` (the `aws-lambda` target's Cognito+DCR OAuth stack
+//! shape — 3 Lambda functions, the Cognito `UserPool`/`ResourceServer`/
+//! `Domain`, a JWT `Authorizer` wired into a 7-route HTTP API, all composed
+//! from `lambda`/`iam`/`logs` primitives) and `dynamodb` (currently only the
+//! DCR `ClientsTable`, but descriptor-section-agnostic — the future
+//! `[[resources.dynamodb]]` landing zone). This completes the v1 seven-family
+//! resource surface.
 
+pub mod cognito;
+pub mod dynamodb;
 pub mod http_api;
 pub mod iam;
 pub mod lambda;
@@ -68,6 +76,29 @@ pub(crate) fn standard_tags(service: &str) -> serde_json::Value {
     )
 }
 
+/// The `aws-lambda` target's tag set as an ordered `(key, value)` map,
+/// optionally carrying one extra tag on top of the standard four
+/// (`managed-by`/`project`/`service`/`target`). `extra = None` is the shape
+/// [`aws_lambda_tags`]/[`aws_lambda_map_tags`] render; `extra = Some((k, v))`
+/// is what a stack-wide `cdk.Tags.of(this).add(k, v)` call layers on top —
+/// e.g. `cognito`'s `("component", "oauth")` (see that module's doc
+/// comment). Shared by both the array-of-`{Key,Value}` and flat-`Map` tag
+/// shapes below, so the 4-tag base never needs to be typed out twice.
+fn aws_lambda_tag_pairs<'a>(
+    service: &'a str,
+    extra: Option<(&'a str, &'a str)>,
+) -> BTreeMap<&'a str, &'a str> {
+    let mut tags = BTreeMap::new();
+    tags.insert("managed-by", "pmcp");
+    tags.insert("project", service);
+    tags.insert("service", service);
+    tags.insert("target", "aws-lambda");
+    if let Some((key, value)) = extra {
+        tags.insert(key, value);
+    }
+    tags
+}
+
 /// Standard cost-allocation tags for the `aws-lambda` target's own stack
 /// shape (array-of-`{Key,Value}` form — `AWS::Lambda::Function`,
 /// `AWS::IAM::Role`, `AWS::Logs::LogGroup`). Unlike [`standard_tags`]'s
@@ -78,16 +109,20 @@ pub(crate) fn standard_tags(service: &str) -> serde_json::Value {
 /// `cargo-pmcp/src/commands/deploy/init.rs::render_stack_ts`.
 #[must_use]
 pub(crate) fn aws_lambda_tags(service: &str) -> serde_json::Value {
-    let mut tags = BTreeMap::new();
-    tags.insert("managed-by", "pmcp");
-    tags.insert("project", service);
-    tags.insert("service", service);
-    tags.insert("target", "aws-lambda");
-    serde_json::Value::Array(
-        tags.into_iter()
-            .map(|(key, value)| serde_json::json!({ "Key": key, "Value": value }))
-            .collect(),
-    )
+    array_tags(aws_lambda_tag_pairs(service, None))
+}
+
+/// [`aws_lambda_tags`] plus one extra `(key, value)` tag — used by resource
+/// families whose stack shape adds a stack-wide marker tag on top of the
+/// standard four (e.g. `cognito`'s `"component": "oauth"`, mirroring
+/// `cdk.Tags.of(this).add('component', 'oauth')` in the OAuth branch of
+/// `cargo-pmcp/src/commands/deploy/init.rs::create_oauth_stack_ts`).
+#[must_use]
+pub(crate) fn aws_lambda_tags_with_component(service: &str, component: &str) -> serde_json::Value {
+    array_tags(aws_lambda_tag_pairs(
+        service,
+        Some(("component", component)),
+    ))
 }
 
 /// Same tag set as [`aws_lambda_tags`], but in the flat `Map` shape
@@ -100,17 +135,52 @@ pub(crate) fn aws_lambda_tags(service: &str) -> serde_json::Value {
 /// golden's `Api-0`/`Stage-0` `Tags` vs its `Function-0`/`Role-0` `Tags`).
 #[must_use]
 pub(crate) fn aws_lambda_map_tags(service: &str) -> serde_json::Value {
-    serde_json::json!({
-        "managed-by": "pmcp",
-        "project": service,
-        "service": service,
-        "target": "aws-lambda",
-    })
+    map_tags(aws_lambda_tag_pairs(service, None))
+}
+
+/// [`aws_lambda_map_tags`] plus one extra `(key, value)` tag — the `Map`-shape
+/// sibling of [`aws_lambda_tags_with_component`], for `AWS::ApiGatewayV2::*`
+/// resources in a stack that carries a stack-wide marker tag.
+#[must_use]
+pub(crate) fn aws_lambda_map_tags_with_component(
+    service: &str,
+    component: &str,
+) -> serde_json::Value {
+    map_tags(aws_lambda_tag_pairs(
+        service,
+        Some(("component", component)),
+    ))
+}
+
+/// Render an ordered tag map as CFN's array-of-`{Key,Value}` shape.
+fn array_tags(tags: BTreeMap<&str, &str>) -> serde_json::Value {
+    serde_json::Value::Array(
+        tags.into_iter()
+            .map(|(key, value)| serde_json::json!({ "Key": key, "Value": value }))
+            .collect(),
+    )
+}
+
+/// Render an ordered tag map as CFN's flat-`Map` shape.
+fn map_tags(tags: BTreeMap<&str, &str>) -> serde_json::Value {
+    serde_json::Value::Object(
+        tags.into_iter()
+            .map(|(key, value)| {
+                (
+                    key.to_string(),
+                    serde_json::Value::String(value.to_string()),
+                )
+            })
+            .collect(),
+    )
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{aws_lambda_map_tags, aws_lambda_tags, standard_tags};
+    use super::{
+        aws_lambda_map_tags, aws_lambda_map_tags_with_component, aws_lambda_tags,
+        aws_lambda_tags_with_component, standard_tags,
+    };
     use serde_json::json;
 
     #[test]
@@ -144,6 +214,34 @@ mod tests {
         assert_eq!(
             aws_lambda_map_tags("my-server"),
             json!({
+                "managed-by": "pmcp",
+                "project": "my-server",
+                "service": "my-server",
+                "target": "aws-lambda",
+            })
+        );
+    }
+
+    #[test]
+    fn aws_lambda_tags_with_component_adds_exactly_one_tag_on_top() {
+        assert_eq!(
+            aws_lambda_tags_with_component("my-server", "oauth"),
+            json!([
+                { "Key": "component", "Value": "oauth" },
+                { "Key": "managed-by", "Value": "pmcp" },
+                { "Key": "project", "Value": "my-server" },
+                { "Key": "service", "Value": "my-server" },
+                { "Key": "target", "Value": "aws-lambda" },
+            ])
+        );
+    }
+
+    #[test]
+    fn aws_lambda_map_tags_with_component_is_the_flat_map_shape_of_the_same_tag_set() {
+        assert_eq!(
+            aws_lambda_map_tags_with_component("my-server", "oauth"),
+            json!({
+                "component": "oauth",
                 "managed-by": "pmcp",
                 "project": "my-server",
                 "service": "my-server",
