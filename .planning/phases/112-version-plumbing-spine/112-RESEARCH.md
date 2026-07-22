@@ -377,18 +377,23 @@ pub const MCP_NAME: &str = "mcp-name";
 
 **These four items should be confirmed during planning/execution** — A1 is resolved by checking whether `schema.json` is published on the day execution begins; A2 by running the tool; A3 by cross-checking the stable rmcp release; A4 by a semver-checks dry run.
 
-## Open Questions
+## Open Questions (RESOLVED)
+
+*Resolved during Phase 112 planning (2026-07-22).*
 
 1. **Should `ClientRequest` and `ProtocolErrorCode` gain `#[non_exhaustive]` in this phase?**
    - What we know: neither is `#[non_exhaustive]` today; both will receive additive variants across v2.5 (discover/tasks-update here; more in 113/114).
    - What's unclear: whether adding the attribute now is worth the one-time minor churn vs. relying on additive-variant-is-minor each time.
    - Recommendation: run `cargo-semver-checks` both ways during planning; prefer adding `#[non_exhaustive]` once now if it classifies minor, to de-risk every later phase.
+   - **RESOLVED → Plan 112-03 Task 2 executes the decision procedure at build time:** run `cargo semver-checks check-release` on `ClientRequest` WITHOUT then WITH `#[non_exhaustive]`; add the attribute iff it classifies minor, otherwise rely on additive-variant-is-minor. The chosen path + semver classification are recorded in `112-03-SUMMARY.md`. (`ProtocolErrorCode` is intentionally NOT touched — Q2 keeps it untouched via a `pub const` table.)
 
 2. **Where does the centralized error-code table live?** (Discretion, per CONTEXT.)
    - Recommendation: a new `src/types/protocol/error_codes.rs` (or `src/error/codes.rs`) of `pub const i32`s re-exporting the frozen `-32002`, keeping the C-style `ProtocolErrorCode` enum untouched to avoid discriminant-surface semver risk.
+   - **RESOLVED → adopted `src/types/protocol/error_codes.rs`** as a module of `pub const i32` values (standard JSON-RPC codes + `PARSE_ERROR` + frozen `V1_TASK_PENDING = -32002`, v2 values commented TODO), defined in Plan 112-03 and adopted at every emitting call site in Plan 112-07. The `ProtocolErrorCode` enum is left untouched; a consistency test asserts the consts equal the enum values.
 
 3. **How deep does W3C trace-context propagation go?** (Explicit discretion, VERS-09.)
    - Recommendation: typed accessors + propagation through dispatch is the required floor; integration with the existing observability/`tracing` module (`with_observability`, `builder.rs:590`) is optional and can be a thin follow-up.
+   - **RESOLVED → per CONTEXT.md Claude's-Discretion:** implement the required floor only — `TraceContext::from_meta` + typed `extra.trace_context()` accessor over the existing `request_meta` (Plans 112-01/112-02), propagated through dispatch. Deep integration with the `tracing`/`with_observability` module is explicitly deferred as an optional thin follow-up (NOT in Phase 112 scope).
 
 ## Environment Availability
 
