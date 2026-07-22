@@ -1,12 +1,13 @@
 ---
 gsd_state_version: 1.0
 milestone: v2.5
-milestone_name: MCP Spec 2026-07-28 (v2) Support
-status: planning
-last_updated: "2026-07-22T18:00:00.000Z"
-last_activity: 2026-07-22
+milestone_name: MCP Spec 2026-07-28
+status: "Roadmap created; awaiting `/gsd:plan-phase 112`"
+stopped_at: Phase 112 context gathered
+last_updated: "2026-07-22T18:22:28.775Z"
+last_activity: 2026-07-22 — v2.5 roadmap created (8 phases, 112-119, 38/38 requirements mapped)
 progress:
-  total_phases: 8
+  total_phases: 71
   completed_phases: 0
   total_plans: 0
   completed_plans: 0
@@ -122,9 +123,9 @@ Items deferred by design for this milestone (design §7 / REQUIREMENTS v2):
 
 ## Session Continuity
 
-Last session: 2026-07-22T18:00:00.000Z
-Stopped at: v2.5 roadmap created (Phases 112-119); next is `/gsd:plan-phase 112`
-Resume file: None
+Last session: 2026-07-22T18:22:28.770Z
+Stopped at: Phase 112 context gathered
+Resume file: .planning/phases/112-version-plumbing-spine/112-CONTEXT.md
 
 ## Performance Metrics
 
