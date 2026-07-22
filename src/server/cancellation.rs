@@ -365,8 +365,7 @@ impl RequestHandlerExtra {
     /// it is a behavioral switch, NOT an identity or authorization signal.
     #[must_use]
     pub fn era(&self) -> Option<crate::types::protocol::Era> {
-        // RED stub — real body reads self.protocol_context in GREEN.
-        None
+        self.protocol_context.as_ref().map(|ctx| ctx.era)
     }
 
     /// Returns the exact negotiated
@@ -375,8 +374,9 @@ impl RequestHandlerExtra {
     /// was attached.
     #[must_use]
     pub fn protocol_version(&self) -> Option<&crate::types::ProtocolVersion> {
-        // RED stub — real body reads self.protocol_context in GREEN.
-        None
+        self.protocol_context
+            .as_ref()
+            .map(|ctx| &ctx.negotiated_version)
     }
 
     /// Returns the client's SELF-REPORTED implementation info, or `None` when
@@ -390,8 +390,9 @@ impl RequestHandlerExtra {
     /// decision is made from this accessor in this phase.
     #[must_use]
     pub fn client_info(&self) -> Option<&crate::types::Implementation> {
-        // RED stub — real body reads self.protocol_context in GREEN.
-        None
+        self.protocol_context
+            .as_ref()
+            .and_then(|ctx| ctx.client_info.as_ref())
     }
 
     /// Returns the client's SELF-REPORTED advertised capabilities, or `None`
@@ -403,8 +404,9 @@ impl RequestHandlerExtra {
     /// real identity binds to the OAuth token (Phase 114 / TASK-05).
     #[must_use]
     pub fn client_capabilities(&self) -> Option<&crate::types::ClientCapabilities> {
-        // RED stub — real body reads self.protocol_context in GREEN.
-        None
+        self.protocol_context
+            .as_ref()
+            .and_then(|ctx| ctx.client_capabilities.as_ref())
     }
 
     /// Returns a reference to the typed extensions map.
@@ -712,6 +714,7 @@ impl std::fmt::Debug for RequestHandlerExtra {
             .field("metadata", &redacted_metadata)
             .field("task_request", &self.task_request.is_some())
             .field("request_meta", &self.request_meta)
+            .field("protocol_context", &self.protocol_context)
             .field("extensions", &self.extensions);
         #[cfg(not(target_arch = "wasm32"))]
         debug.field("peer", &self.peer.as_ref().map(|_| "Arc<dyn PeerHandle>"));
