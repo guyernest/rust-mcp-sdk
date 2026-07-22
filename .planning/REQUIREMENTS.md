@@ -16,7 +16,7 @@
 - [ ] **VERS-05**: Required headers `Mcp-Method`/`Mcp-Name` (alongside `MCP-Protocol-Version`) are enforced inbound and emitted outbound on the v2 HTTP path
 - [x] **VERS-06**: All protocol error codes live in one centralized version-gated constant table; v2 values are filled ONLY from the final 2026-07-28 schema.json (resolving the `-32002`/`-32602` conflict), and the frozen v1 `-32002` task-pending semantics stay unchanged
 - [ ] **VERS-07**: All results carry the `resultType` envelope discriminator (`complete`/`input_required`/`task`); a missing `resultType` defaults to `complete` for backcompat
-- [ ] **VERS-08**: The `extensions` capability map (reverse-DNS IDs) is supported in capability negotiation
+- [x] **VERS-08**: The `extensions` capability map (reverse-DNS IDs) is supported in capability negotiation
 - [x] **VERS-09**: W3C trace-context keys (`traceparent`/`tracestate`/`baggage`) in `_meta` are surfaced via typed accessors and propagated through dispatch
 
 ### Stateless HTTP & Multi-Round-Trip (HTTP)
@@ -110,7 +110,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | VERS-05 | Phase 112 | Pending |
 | VERS-06 | Phase 112 | Complete |
 | VERS-07 | Phase 112 | Pending |
-| VERS-08 | Phase 112 | Pending |
+| VERS-08 | Phase 112 | Complete |
 | VERS-09 | Phase 112 | Complete |
 | HTTP-01 | Phase 113 | Pending |
 | HTTP-02 | Phase 113 | Pending |

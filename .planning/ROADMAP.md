@@ -2250,7 +2250,7 @@ Plans:
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [ ] 112-04-PLAN.md — v2 opt-in accept-list builder + ONE shared resolve_protocol_context() enforcing the accept-list, resolved once at ingress & threaded (both native sites; native-only plumbing — resolver compiles on wasm32 with no wasm caller; malformed reserved _meta → typed error)
+- [x] 112-04-PLAN.md — v2 opt-in accept-list builder + ONE shared resolve_protocol_context() enforcing the accept-list, resolved once at ingress & threaded (both native sites; native-only plumbing — resolver compiles on wasm32 with no wasm caller; malformed reserved _meta → typed error)
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
@@ -2364,7 +2364,7 @@ Plans:
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 112. Version Plumbing Spine | 3/8 | In Progress|  |
+| 112. Version Plumbing Spine | 4/8 | In Progress|  |
 | 113. Stateless HTTP + MRTR | 0/TBD | Not started | - |
 | 114. Tasks Extension Migration | 0/TBD | Not started | - |
 | 115. JSON Schema 2020-12 + Caching Hints | 0/TBD | Not started | - |
