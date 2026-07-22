@@ -6,9 +6,26 @@
 //! the W3C distributed-tracing headers a client self-reports through the request
 //! `_meta` object.
 
-use super::version::Era;
+use super::version::{Era, SUPPORTED_PROTOCOL_VERSIONS};
 use super::{Implementation, ProtocolVersion};
 use crate::types::capabilities::ClientCapabilities;
+
+/// The v1-only default protocol accept-list (Phase 112 D-02/D-04).
+///
+/// Maps the legacy [`SUPPORTED_PROTOCOL_VERSIONS`] string slice into owned
+/// [`ProtocolVersion`] values. This is the accept-list a server carries when the
+/// author never calls `.with_supported_protocol_versions(...)` — it deliberately
+/// EXCLUDES `2026-07-28` (v2), so an un-opted-in server runs zero era-detection
+/// and its v1 request path is byte-for-byte unchanged. It is also the safe
+/// fallback for an explicitly-empty accept-list (never produce an all-reject
+/// server).
+#[must_use]
+pub(crate) fn default_accept_list() -> Vec<ProtocolVersion> {
+    SUPPORTED_PROTOCOL_VERSIONS
+        .iter()
+        .map(|v| ProtocolVersion((*v).to_string()))
+        .collect()
+}
 
 /// Maximum accepted length, in bytes, for any single W3C trace value.
 ///

@@ -289,6 +289,16 @@ pub struct ServerCore {
     /// Payload and resource limits for denial-of-service protection
     payload_limits: PayloadLimits,
 
+    /// The configured protocol-version accept-list (Phase 112, VERS-01/02).
+    ///
+    /// Defaults to the v1-only legacy set ([`default_accept_list`](crate::types::protocol::context::default_accept_list),
+    /// which EXCLUDES `2026-07-28`) unless the author opts into v2 via
+    /// [`ServerCoreBuilder::with_supported_protocol_versions`](crate::server::builder::ServerCoreBuilder::with_supported_protocol_versions).
+    /// Read at ingress to decide whether to run era-detection at all
+    /// ([`is_v2_opted_in`](Self::is_v2_opted_in)) and to enforce the accept-list
+    /// in the shared resolver. A non-opted-in server behaves exactly as today.
+    supported_protocol_versions: Vec<ProtocolVersion>,
+
     /// Outbound server-to-client request dispatcher.
     ///
     /// Populated by the enclosing `Server` via
@@ -375,6 +385,7 @@ impl ServerCore {
             suppress_double_wrap: HashSet::new(),
             stateless_mode,
             payload_limits,
+            supported_protocol_versions: crate::types::protocol::context::default_accept_list(),
             #[cfg(not(target_arch = "wasm32"))]
             server_request_dispatcher: None,
             #[cfg(not(target_arch = "wasm32"))]
@@ -418,6 +429,49 @@ impl ServerCore {
     pub fn with_suppress_double_wrap(mut self, suppress: HashSet<String>) -> Self {
         self.suppress_double_wrap = suppress;
         self
+    }
+
+    /// Carry the configured protocol-version accept-list (Phase 112, VERS-01/02)
+    /// from the builder into the running `ServerCore`.
+    ///
+    /// Threaded from [`ServerCoreBuilder::build`](crate::server::builder::ServerCoreBuilder::build)
+    /// so ingress era-resolution reads the exact set the author opted into. The
+    /// builder guarantees a non-empty list (an explicitly-empty accept-list falls
+    /// back to the v1-only default), so this never installs an all-reject server.
+    #[must_use]
+    pub(crate) fn with_supported_protocol_versions(
+        mut self,
+        versions: Vec<ProtocolVersion>,
+    ) -> Self {
+        self.supported_protocol_versions = versions;
+        self
+    }
+
+    /// The configured protocol-version accept-list read at ingress.
+    ///
+    /// The shared resolver enforces this list; a per-request version not present
+    /// here is rejected.
+    // Why: consumed by the ingress resolver wired in Plan 04 Task 2
+    // (`handle_request` calls `resolve_protocol_context(self.supported_protocol_versions(), ..)`).
+    // The `#[allow]` is removed once Task 2 lands the caller. Tests use it now.
+    #[allow(dead_code)]
+    pub(crate) fn supported_protocol_versions(&self) -> &[ProtocolVersion] {
+        &self.supported_protocol_versions
+    }
+
+    /// Whether this server opted into the v2 (`2026-07-28`) era.
+    ///
+    /// This is the cheap "run era-detection at all" gate (D-04): when `false`,
+    /// ingress skips the resolver entirely and the v1 request path is
+    /// byte-for-byte unchanged. The ACTUAL negotiation is the shared resolver,
+    /// which consults the full accept-list.
+    // Why: consumed by the ingress "run era-detection at all" gate wired in Plan
+    // 04 Task 2; the `#[allow]` is removed once Task 2 lands the caller.
+    #[allow(dead_code)]
+    pub(crate) fn is_v2_opted_in(&self) -> bool {
+        self.supported_protocol_versions
+            .iter()
+            .any(|v| v.as_str() == crate::types::protocol::PROTOCOL_VERSION_2026_07_28)
     }
 
     /// Attach the cached peer handle to `extra` when a dispatcher is configured.

@@ -87,6 +87,13 @@ pub struct ServerCoreBuilder {
     suppress_double_wrap: HashSet<String>,
     /// Stateless mode for serverless deployments (None = auto-detect)
     stateless_mode: Option<bool>,
+    /// Configured protocol-version accept-list (Phase 112, VERS-01/02).
+    ///
+    /// Defaults to the v1-only legacy set (EXCLUDES `2026-07-28`) so an
+    /// un-opted-in server behaves exactly as today. Overridden via
+    /// [`Self::with_supported_protocol_versions`]; an explicitly-empty accept-list
+    /// falls back to this v1-only default (never an all-reject server).
+    supported_protocol_versions: Vec<crate::types::ProtocolVersion>,
     /// Host-specific metadata layers (e.g., `ChatGpt` for openai/* keys)
     #[cfg(feature = "mcp-apps")]
     host_layers: Vec<crate::types::mcp_apps::HostType>,
@@ -134,6 +141,7 @@ impl ServerCoreBuilder {
             #[cfg(not(target_arch = "wasm32"))]
             suppress_double_wrap: HashSet::new(),
             stateless_mode: None, // Auto-detect by default
+            supported_protocol_versions: crate::types::protocol::context::default_accept_list(),
             #[cfg(feature = "mcp-apps")]
             host_layers: Vec::new(),
             website_url: None,
@@ -729,6 +737,66 @@ impl ServerCoreBuilder {
         self
     }
 
+    /// Opt into a protocol-version accept-list (Phase 112, VERS-01/02; D-02/D-04).
+    ///
+    /// This is the v2 opt-in. With no call, the server is **v1-only** and behaves
+    /// exactly as today (the default set EXCLUDES `2026-07-28`). Pass a list
+    /// including [`PROTOCOL_VERSION_2026_07_28`](crate::types::protocol::PROTOCOL_VERSION_2026_07_28)
+    /// to serve v2 (dual, or v2-only). One API expresses v1-only, dual, and
+    /// v2-only — directly supporting the Phase 117 severability story.
+    ///
+    /// # Empty accept-list
+    ///
+    /// An EMPTY iterator falls back to the v1-only legacy default rather than
+    /// producing an all-reject server (documented safe fallback). De-duplication
+    /// is left to the resolver.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// use pmcp::server::builder::ServerCoreBuilder;
+    /// use pmcp::types::protocol::PROTOCOL_VERSION_2026_07_28;
+    /// use pmcp::types::ProtocolVersion;
+    ///
+    /// // Dual v1 + v2 server.
+    /// let builder = ServerCoreBuilder::new().with_supported_protocol_versions([
+    ///     ProtocolVersion("2025-11-25".to_string()),
+    ///     ProtocolVersion(PROTOCOL_VERSION_2026_07_28.to_string()),
+    /// ]);
+    /// ```
+    #[must_use]
+    pub fn with_supported_protocol_versions(
+        mut self,
+        versions: impl IntoIterator<Item = crate::types::ProtocolVersion>,
+    ) -> Self {
+        let collected: Vec<crate::types::ProtocolVersion> = versions.into_iter().collect();
+        // An explicitly-empty accept-list falls back to the v1-only legacy
+        // default — never an all-reject server (D-02/D-04). De-duplication is
+        // left to the resolver.
+        self.supported_protocol_versions = if collected.is_empty() {
+            crate::types::protocol::context::default_accept_list()
+        } else {
+            collected
+        };
+        self
+    }
+
+    /// Populate a reverse-DNS-keyed entry in the server's `extensions` capability
+    /// map (Phase 112, VERS-08).
+    ///
+    /// Convenience over mutating [`ServerCapabilities::extensions`](crate::types::ServerCapabilities)
+    /// directly. Use a namespaced reverse-DNS id (e.g.
+    /// `io.modelcontextprotocol/foo`). Does NOT change the `ServerCapabilities`
+    /// type.
+    #[must_use]
+    pub fn with_extension(mut self, id: impl Into<String>, value: serde_json::Value) -> Self {
+        self.capabilities
+            .extensions
+            .get_or_insert_with(HashMap::new)
+            .insert(id.into(), value);
+        self
+    }
+
     /// Enable experimental MCP Tasks support with a task router (LEGACY).
     ///
     /// **Legacy / experimental.** This is the older `pmcp-tasks`
@@ -1144,6 +1212,10 @@ impl ServerCoreBuilder {
         // `Server` uses (no drift between the two dispatchers).
         #[cfg(not(target_arch = "wasm32"))]
         let core = core.with_suppress_double_wrap(self.suppress_double_wrap);
+        // Thread the configured protocol-version accept-list (Phase 112,
+        // VERS-01/02) so ingress era-resolution enforces the exact set the author
+        // opted into. Default (unset) is v1-only — the server behaves as today.
+        let core = core.with_supported_protocol_versions(self.supported_protocol_versions);
         Ok(core)
     }
 }
@@ -1210,6 +1282,91 @@ mod tests {
             .version("1.0.0")
             .build();
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_default_builder_is_v1_only_not_v2_opted_in() {
+        // No .with_supported_protocol_versions() call => v1-only default: the
+        // stored set EXCLUDES 2026-07-28 and is_v2_opted_in() is false (D-04).
+        let server = ServerCoreBuilder::new()
+            .name("test")
+            .version("1.0.0")
+            .build()
+            .unwrap();
+        assert!(!server.is_v2_opted_in());
+        assert!(!server
+            .supported_protocol_versions()
+            .iter()
+            .any(|v| v.as_str() == crate::types::protocol::PROTOCOL_VERSION_2026_07_28));
+    }
+
+    #[test]
+    fn test_dual_accept_list_flips_is_v2_opted_in() {
+        use crate::types::protocol::PROTOCOL_VERSION_2026_07_28;
+        use crate::types::ProtocolVersion;
+
+        let server = ServerCoreBuilder::new()
+            .name("test")
+            .version("1.0.0")
+            .with_supported_protocol_versions([
+                ProtocolVersion("2025-11-25".to_string()),
+                ProtocolVersion(PROTOCOL_VERSION_2026_07_28.to_string()),
+            ])
+            .build()
+            .unwrap();
+        assert!(server.is_v2_opted_in());
+    }
+
+    #[test]
+    fn test_v2_only_accept_list_stores_exactly_2026() {
+        use crate::types::protocol::PROTOCOL_VERSION_2026_07_28;
+        use crate::types::ProtocolVersion;
+
+        let server = ServerCoreBuilder::new()
+            .name("test")
+            .version("1.0.0")
+            .with_supported_protocol_versions([ProtocolVersion(
+                PROTOCOL_VERSION_2026_07_28.to_string(),
+            )])
+            .build()
+            .unwrap();
+        assert!(server.is_v2_opted_in());
+        assert_eq!(server.supported_protocol_versions().len(), 1);
+        assert_eq!(
+            server.supported_protocol_versions()[0].as_str(),
+            PROTOCOL_VERSION_2026_07_28
+        );
+    }
+
+    #[test]
+    fn test_empty_accept_list_falls_back_to_v1_only_default() {
+        use crate::types::ProtocolVersion;
+
+        let server = ServerCoreBuilder::new()
+            .name("test")
+            .version("1.0.0")
+            .with_supported_protocol_versions(std::iter::empty::<ProtocolVersion>())
+            .build()
+            .unwrap();
+        // Empty => v1-only default (safe fallback, never all-reject).
+        assert!(!server.is_v2_opted_in());
+        assert_eq!(server.supported_protocol_versions().len(), 4);
+    }
+
+    #[test]
+    fn test_with_extension_populates_capabilities_extensions() {
+        let server = ServerCoreBuilder::new()
+            .name("test")
+            .version("1.0.0")
+            .with_extension("io.modelcontextprotocol/foo", serde_json::json!({}))
+            .build()
+            .unwrap();
+        let ext = server
+            .capabilities()
+            .extensions
+            .as_ref()
+            .expect("with_extension populates the extensions map");
+        assert!(ext.contains_key("io.modelcontextprotocol/foo"));
     }
 
     #[test]
