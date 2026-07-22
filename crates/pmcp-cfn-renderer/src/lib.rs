@@ -40,13 +40,20 @@
 //! skip. As of Task 4, [`render`] wires `lambda`, `logs`, `outputs`, and the
 //! full `iam` module — the BASE execution role/policy PLUS any declared
 //! `[[iam.statements]]` expansion, fail-closed validated first (see
-//! [`resources::iam`]'s doc comment) — for the `pmcp-run` target. Every
-//! other target type and `auth.enabled = true` still fail loudly via
+//! [`resources::iam`]'s doc comment) — for the `pmcp-run` target. As of
+//! Task 5, [`render`] also wires the `aws-lambda` target: the same 4
+//! resource families, but rendered by `*_aws_lambda` siblings with that
+//! target's own fixed constants (own tags, no composition IAM sugar,
+//! different memory size/log retention — see e.g.
+//! [`resources::lambda::render_function_aws_lambda`]'s doc comment), PLUS
+//! `http_api` (`AWS::ApiGatewayV2::*` + the invoke `Lambda::Permission`).
+//! `auth.enabled = true` (needing `cognito`) and any target type other than
+//! `pmcp-run`/`aws-lambda` still fail loudly via
 //! [`RenderError::UnsupportedSection`] rather than silently rendering an
 //! incomplete stack; a declared `[[iam.statements]]` entry that fails
 //! [`resources::iam::validate`]'s fail-closed rules fails loudly via
-//! [`RenderError::Invalid`] instead. `http_api`, `cognito`, and `dynamodb`
-//! land in later tasks.
+//! [`RenderError::Invalid`] instead. `cognito` and `dynamodb` land in a
+//! later task.
 //!
 //! ## Logical IDs
 //!
@@ -79,20 +86,27 @@ use std::collections::BTreeMap;
 ///
 /// Returns [`RenderError::UnsupportedSection`] when the descriptor requests
 /// something the renderer doesn't implement yet: a `[target].type` other
-/// than `"pmcp-run"` (the only stack shape wired so far — `http_api`/
-/// `cognito` land in later tasks) or `auth.enabled = true` (needs the
-/// `cognito`/`http_api` modules). Returns [`RenderError::Invalid`] when a
-/// declared `[[iam.statements]]` entry fails [`resources::iam::validate`]'s
+/// than `"pmcp-run"`/`"aws-lambda"` (the only two stack shapes wired so far
+/// — `cognito` lands in a later task) or `auth.enabled = true` (needs the
+/// `cognito` module). Returns [`RenderError::Invalid`] when a declared
+/// `[[iam.statements]]` entry fails [`resources::iam::validate`]'s
 /// fail-closed rules (bad effect, empty actions/resources, malformed
 /// action, or a wildcard-escalation footgun — see that function's doc
 /// comment). Never silently skips descriptor content.
 ///
-/// # Current behavior (Task 4)
+/// # Current behavior (Task 5)
 ///
 /// For a `pmcp-run`-target descriptor with `auth.enabled = false`, renders
 /// the plain-Lambda kernel: the function, its log group, its base execution
 /// role + default inline policy (with any validated `[[iam.statements]]`
 /// appended), and the fixed five-output set (see [`resources`]).
+///
+/// For an `aws-lambda`-target descriptor with `auth.enabled = false`,
+/// renders that target's own kernel (same function/log-group/role/policy
+/// shape, `aws-lambda`-flavored constants) PLUS the `http_api` resource
+/// family (`AWS::ApiGatewayV2::*` + the invoke `Lambda::Permission`) and
+/// the corresponding four-output set (no `LambdaName`, and `ApiUrl` points
+/// at this stack's own API instead of the fixed pmcp.run edge URL).
 pub fn render(
     descriptor: &DeployDescriptor,
     params: &RenderParams,
@@ -108,6 +122,19 @@ pub fn render(
         resources::iam::validate(iam)?;
     }
 
+    if descriptor.target.target_type == "aws-lambda" {
+        render_aws_lambda(descriptor, params)
+    } else {
+        render_pmcp_run(descriptor, params)
+    }
+}
+
+/// The `pmcp-run` target's plain-Lambda kernel (Task 3/4) — unchanged by
+/// Task 5.
+fn render_pmcp_run(
+    descriptor: &DeployDescriptor,
+    params: &RenderParams,
+) -> Result<CfnTemplate, RenderError> {
     let mut resources = BTreeMap::new();
     for (id, resource) in resources::iam::render_execution_role(descriptor, params) {
         resources.insert(id, resource);
@@ -128,6 +155,43 @@ pub fn render(
     })
 }
 
+/// The `aws-lambda` target's own kernel (Task 5): function/log-group/role/
+/// policy via the `*_aws_lambda` siblings, plus the `http_api` resource
+/// family.
+fn render_aws_lambda(
+    descriptor: &DeployDescriptor,
+    params: &RenderParams,
+) -> Result<CfnTemplate, RenderError> {
+    let mut resources = BTreeMap::new();
+    for (id, resource) in resources::iam::render_execution_role_aws_lambda(descriptor) {
+        resources.insert(id, resource);
+    }
+    let (function_id, function) = resources::lambda::render_function_aws_lambda(descriptor, params);
+    resources.insert(function_id.clone(), function);
+    let (log_group_id, log_group) = resources::logs::render_log_group_aws_lambda(
+        &descriptor.server.name,
+        AWS_LAMBDA_LOG_RETENTION_DAYS,
+    );
+    resources.insert(log_group_id, log_group);
+
+    for (id, resource) in resources::http_api::render(descriptor, params, &function_id)? {
+        resources.insert(id, resource);
+    }
+
+    let outputs = resources::outputs::render_http_api_outputs(
+        descriptor,
+        params,
+        logical_ids::for_http_api(),
+    );
+
+    Ok(CfnTemplate {
+        description: format!("MCP Server: {}", descriptor.server.name),
+        resources,
+        outputs,
+        metadata: BTreeMap::new(),
+    })
+}
+
 /// Log-retention days for the `pmcp-run` plain-Lambda kernel. NOT driven by
 /// `[observability].log_retention_days` — the TS scaffold's `pmcp-run`
 /// branch hardcodes `RetentionDays.ONE_WEEK` unconditionally (as it does
@@ -135,16 +199,21 @@ pub fn render(
 /// `[observability]` section is not wired into this stack shape today.
 const PLAIN_LOG_RETENTION_DAYS: u32 = 7;
 
+/// Log-retention days for the `aws-lambda` target's kernel — the TS
+/// scaffold's `aws-lambda` branch hardcodes `RetentionDays.ONE_MONTH` (vs.
+/// `pmcp-run`'s [`PLAIN_LOG_RETENTION_DAYS`] = 7). Also not driven by
+/// `[observability].log_retention_days`.
+const AWS_LAMBDA_LOG_RETENTION_DAYS: u32 = 30;
+
 /// Fail loudly on descriptor content this task doesn't render yet, rather
 /// than silently producing an incomplete or wrong stack.
 fn guard_unsupported(d: &DeployDescriptor) -> Result<(), RenderError> {
-    if d.target.target_type != "pmcp-run" {
+    if d.target.target_type != "pmcp-run" && d.target.target_type != "aws-lambda" {
         return Err(RenderError::UnsupportedSection {
             section: "target".to_string(),
             detail: format!(
-                "target type '{}' is not yet rendered (only 'pmcp-run' plain-Lambda \
-                 rendering is implemented; 'aws-lambda' needs the http_api module, \
-                 a later task)",
+                "target type '{}' is not yet rendered (only 'pmcp-run' plain-Lambda and \
+                 'aws-lambda' HTTP API rendering are implemented)",
                 d.target.target_type
             ),
         });
@@ -152,7 +221,7 @@ fn guard_unsupported(d: &DeployDescriptor) -> Result<(), RenderError> {
     if d.auth.enabled {
         return Err(RenderError::UnsupportedSection {
             section: "auth".to_string(),
-            detail: "auth.enabled = true requires the cognito/http_api resource modules, \
+            detail: "auth.enabled = true requires the cognito resource module, \
                      not yet implemented"
                 .to_string(),
         });
@@ -245,9 +314,9 @@ mod tests {
     }
 
     #[test]
-    fn render_rejects_a_target_type_other_than_pmcp_run() {
+    fn render_rejects_a_target_type_other_than_pmcp_run_or_aws_lambda() {
         let err = render(
-            &descriptor_with("my-server", "aws-lambda", false, ""),
+            &descriptor_with("my-server", "google-cloud-run", false, ""),
             &params(),
         )
         .unwrap_err();
@@ -255,16 +324,16 @@ mod tests {
             err,
             RenderError::UnsupportedSection {
                 section: "target".to_string(),
-                detail: "target type 'aws-lambda' is not yet rendered (only 'pmcp-run' \
-                          plain-Lambda rendering is implemented; 'aws-lambda' needs the \
-                          http_api module, a later task)"
+                detail: "target type 'google-cloud-run' is not yet rendered (only \
+                          'pmcp-run' plain-Lambda and 'aws-lambda' HTTP API rendering \
+                          are implemented)"
                     .to_string(),
             }
         );
     }
 
     #[test]
-    fn render_rejects_auth_enabled() {
+    fn render_rejects_auth_enabled_on_pmcp_run() {
         let err = render(
             &descriptor_with("my-server", "pmcp-run", true, ""),
             &params(),
@@ -274,11 +343,97 @@ mod tests {
             err,
             RenderError::UnsupportedSection {
                 section: "auth".to_string(),
-                detail: "auth.enabled = true requires the cognito/http_api resource \
-                          modules, not yet implemented"
+                detail: "auth.enabled = true requires the cognito resource module, \
+                          not yet implemented"
                     .to_string(),
             }
         );
+    }
+
+    #[test]
+    fn render_rejects_auth_enabled_on_aws_lambda() {
+        // Task 6 territory (cognito) — still guarded, on either target.
+        let err = render(
+            &descriptor_with("my-server", "aws-lambda", true, ""),
+            &params(),
+        )
+        .unwrap_err();
+        assert_eq!(
+            err,
+            RenderError::UnsupportedSection {
+                section: "auth".to_string(),
+                detail: "auth.enabled = true requires the cognito resource module, \
+                          not yet implemented"
+                    .to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn render_produces_the_http_api_resource_kernel_for_aws_lambda_target() {
+        let template = render(
+            &descriptor_with("my-server", "aws-lambda", false, ""),
+            &params(),
+        )
+        .unwrap();
+        let mut resource_ids: Vec<&String> = template.resources.keys().collect();
+        resource_ids.sort();
+        assert_eq!(
+            resource_ids,
+            vec![
+                "ApiGatewayInvokePermission",
+                "ExecutionRole",
+                "ExecutionRoleDefaultPolicy",
+                "HttpApi",
+                "HttpApiDefaultStage",
+                "HttpApiIntegration",
+                "HttpApiRoute",
+                "LogGroup",
+                "McpFunction",
+            ]
+        );
+        assert_eq!(template.outputs.len(), 4);
+        assert!(template.metadata.is_empty());
+    }
+
+    #[test]
+    fn render_aws_lambda_outputs_have_no_lambda_name_and_a_getatt_api_url() {
+        let template = render(
+            &descriptor_with("my-server", "aws-lambda", false, ""),
+            &params(),
+        )
+        .unwrap();
+        let mut names: Vec<&String> = template.outputs.keys().collect();
+        names.sort();
+        assert_eq!(
+            names,
+            vec!["ApiUrl", "DashboardUrl", "LambdaArn", "McpRoleArn"]
+        );
+        assert_eq!(
+            template.outputs["ApiUrl"].value,
+            serde_json::json!({ "Fn::GetAtt": ["HttpApi", "ApiEndpoint"] })
+        );
+    }
+
+    #[test]
+    fn render_aws_lambda_accepts_declared_iam_statements_after_the_single_xray_statement() {
+        let iam_block = r#"
+            [[iam.statements]]
+            effect = "Allow"
+            actions = ["s3:GetObject"]
+            resources = ["arn:aws:s3:::example-bucket/*"]
+            "#;
+        let template = render(
+            &descriptor_with("my-server", "aws-lambda", false, iam_block),
+            &params(),
+        )
+        .expect("declared iam.statements render on the aws-lambda target too");
+        let statements = template.resources["ExecutionRoleDefaultPolicy"].properties
+            ["PolicyDocument"]["Statement"]
+            .as_array()
+            .unwrap();
+        assert_eq!(statements.len(), 2, "1 xray base + 1 declared statement");
+        assert_eq!(statements[1]["Action"], "s3:GetObject");
     }
 
     #[test]

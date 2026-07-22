@@ -322,7 +322,7 @@
           "IntegrationType": "AWS_PROXY",
           "IntegrationUri": {
             "Fn::GetAtt": [
-              "Function-1",
+              "Function-0",
               "Arn"
             ]
           },
@@ -338,7 +338,7 @@
           "IntegrationType": "AWS_PROXY",
           "IntegrationUri": {
             "Fn::GetAtt": [
-              "Function-0",
+              "Function-1",
               "Arn"
             ]
           },
@@ -354,7 +354,7 @@
               [
                 "/aws/lambda/",
                 {
-                  "Ref": "Function-2"
+                  "Ref": "Function-0"
                 }
               ]
             ]
@@ -432,7 +432,7 @@
               [
                 "/aws/lambda/",
                 {
-                  "Ref": "Function-0"
+                  "Ref": "Function-2"
                 }
               ]
             ]
@@ -468,7 +468,7 @@
           "Action": "lambda:InvokeFunction",
           "FunctionName": {
             "Fn::GetAtt": [
-              "Function-2",
+              "Function-0",
               "Arn"
             ]
           },
@@ -518,7 +518,7 @@
           "Action": "lambda:InvokeFunction",
           "FunctionName": {
             "Fn::GetAtt": [
-              "Function-0",
+              "Function-2",
               "Arn"
             ]
           },
@@ -806,7 +806,7 @@
               [
                 "integrations/",
                 {
-                  "Ref": "Integration-0"
+                  "Ref": "Integration-1"
                 }
               ]
             ]
@@ -830,7 +830,7 @@
               [
                 "integrations/",
                 {
-                  "Ref": "Integration-0"
+                  "Ref": "Integration-1"
                 }
               ]
             ]
@@ -850,7 +850,7 @@
               [
                 "integrations/",
                 {
-                  "Ref": "Integration-0"
+                  "Ref": "Integration-1"
                 }
               ]
             ]
@@ -870,7 +870,7 @@
               [
                 "integrations/",
                 {
-                  "Ref": "Integration-1"
+                  "Ref": "Integration-0"
                 }
               ]
             ]
@@ -890,7 +890,7 @@
               [
                 "integrations/",
                 {
-                  "Ref": "Integration-1"
+                  "Ref": "Integration-0"
                 }
               ]
             ]
@@ -910,7 +910,7 @@
               [
                 "integrations/",
                 {
-                  "Ref": "Integration-1"
+                  "Ref": "Integration-0"
                 }
               ]
             ]
@@ -930,7 +930,7 @@
               [
                 "integrations/",
                 {
-                  "Ref": "Integration-1"
+                  "Ref": "Integration-0"
                 }
               ]
             ]

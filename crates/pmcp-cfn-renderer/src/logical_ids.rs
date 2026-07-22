@@ -50,6 +50,33 @@ pub fn for_http_api() -> &'static str {
     "HttpApi"
 }
 
+/// Logical ID for the HTTP API's Lambda-proxy integration
+/// (`AWS::ApiGatewayV2::Integration`).
+#[must_use]
+pub fn for_http_integration() -> &'static str {
+    "HttpApiIntegration"
+}
+
+/// Logical ID for the HTTP API's catch-all route (`AWS::ApiGatewayV2::Route`).
+#[must_use]
+pub fn for_http_route() -> &'static str {
+    "HttpApiRoute"
+}
+
+/// Logical ID for the HTTP API's `$default` auto-deploy stage
+/// (`AWS::ApiGatewayV2::Stage`).
+#[must_use]
+pub fn for_http_stage() -> &'static str {
+    "HttpApiDefaultStage"
+}
+
+/// Logical ID for the `AWS::Lambda::Permission` granting API Gateway
+/// permission to invoke the MCP server's function.
+#[must_use]
+pub fn for_http_permission() -> &'static str {
+    "ApiGatewayInvokePermission"
+}
+
 /// Logical ID for a named DynamoDB table: `PascalCase(name)` + `"Table"`.
 ///
 /// e.g. `for_table("audit-log")` -> `"AuditLogTable"`.
@@ -97,6 +124,35 @@ mod tests {
     #[test]
     fn for_http_api_is_stable() {
         assert_eq!(for_http_api(), "HttpApi");
+    }
+
+    #[test]
+    fn http_api_family_ids_are_stable_and_distinct() {
+        let ids = [
+            for_http_api(),
+            for_http_integration(),
+            for_http_route(),
+            for_http_stage(),
+            for_http_permission(),
+        ];
+        assert_eq!(
+            ids,
+            [
+                "HttpApi",
+                "HttpApiIntegration",
+                "HttpApiRoute",
+                "HttpApiDefaultStage",
+                "ApiGatewayInvokePermission",
+            ]
+        );
+        let mut sorted = ids.to_vec();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(
+            sorted.len(),
+            ids.len(),
+            "expected all distinct, got {ids:?}"
+        );
     }
 
     #[test]

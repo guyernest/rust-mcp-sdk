@@ -69,6 +69,64 @@ pub fn render_outputs(d: &DeployDescriptor, p: &RenderParams) -> BTreeMap<String
     outputs
 }
 
+/// Render the `aws-lambda` target's fixed output set: `ApiUrl` (this
+/// stack's own HTTP API endpoint, via `Fn::GetAtt` on the rendered
+/// `AWS::ApiGatewayV2::Api`'s `ApiEndpoint` attribute — unlike
+/// [`render_outputs`]'s fixed pmcp.run edge URL), `DashboardUrl`,
+/// `LambdaArn`, `McpRoleArn` — everything [`render_outputs`] emits EXCEPT
+/// `LambdaName` (the TS `aws-lambda` scaffold branch never emits it — see
+/// `cargo-pmcp/src/commands/deploy/init.rs::render_stack_ts`'s `aws-lambda`
+/// branch) and with a different `ApiUrl`.
+#[must_use]
+pub fn render_http_api_outputs(
+    d: &DeployDescriptor,
+    p: &RenderParams,
+    http_api_logical_id: &str,
+) -> BTreeMap<String, CfnOutput> {
+    let mut outputs = BTreeMap::new();
+    outputs.insert(
+        "ApiUrl".to_string(),
+        CfnOutput {
+            description: Some("MCP Server API URL".to_string()),
+            value: json!({ "Fn::GetAtt": [http_api_logical_id, "ApiEndpoint"] }),
+            export: None,
+        },
+    );
+    outputs.insert(
+        "DashboardUrl".to_string(),
+        CfnOutput {
+            description: Some("CloudWatch Console".to_string()),
+            value: json!(format!(
+                "https://console.aws.amazon.com/cloudwatch/home?region={}",
+                p.region
+            )),
+            export: None,
+        },
+    );
+    outputs.insert(
+        "LambdaArn".to_string(),
+        CfnOutput {
+            description: Some("MCP Server Lambda ARN".to_string()),
+            value: json!({ "Fn::GetAtt": [logical_ids::for_function(), "Arn"] }),
+            export: None,
+        },
+    );
+    outputs.insert(
+        "McpRoleArn".to_string(),
+        CfnOutput {
+            description: Some(
+                "MCP Server Lambda execution role ARN (stable export for downstream stacks)"
+                    .to_string(),
+            ),
+            value: json!({ "Fn::GetAtt": [logical_ids::for_execution_role(), "Arn"] }),
+            export: Some(CfnExport {
+                name: format!("pmcp-{}-McpRoleArn", d.server.name),
+            }),
+        },
+    );
+    outputs
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -164,5 +222,35 @@ mod tests {
                 assert!(output.export.is_none(), "{name} should have no Export");
             }
         }
+    }
+
+    #[test]
+    fn http_api_outputs_have_no_lambda_name() {
+        let outputs = render_http_api_outputs(&descriptor("out-test"), &params(), "HttpApi");
+        let mut names: Vec<&String> = outputs.keys().collect();
+        names.sort();
+        assert_eq!(
+            names,
+            vec!["ApiUrl", "DashboardUrl", "LambdaArn", "McpRoleArn"]
+        );
+    }
+
+    #[test]
+    fn http_api_outputs_api_url_is_a_getatt_on_the_given_logical_id() {
+        let outputs = render_http_api_outputs(&descriptor("out-test"), &params(), "HttpApi");
+        assert_eq!(
+            outputs["ApiUrl"].value,
+            json!({ "Fn::GetAtt": ["HttpApi", "ApiEndpoint"] })
+        );
+    }
+
+    #[test]
+    fn http_api_outputs_mcp_role_arn_carries_a_stable_export_name() {
+        let outputs = render_http_api_outputs(&descriptor("out-test"), &params(), "HttpApi");
+        let export = outputs["McpRoleArn"]
+            .export
+            .as_ref()
+            .expect("McpRoleArn has an Export");
+        assert_eq!(export.name, "pmcp-out-test-McpRoleArn");
     }
 }

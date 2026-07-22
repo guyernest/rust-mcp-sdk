@@ -58,7 +58,7 @@ use crate::{
     error::RenderError,
     logical_ids,
     params::RenderParams,
-    resources::{standard_tags, MCP_SERVERS_TABLE},
+    resources::{aws_lambda_tags, standard_tags, MCP_SERVERS_TABLE},
     template::CfnResource,
 };
 use pmcp_package::package::{DeployDescriptor, IamSection, IamStatement};
@@ -153,6 +153,93 @@ fn render_policy(d: &DeployDescriptor, p: &RenderParams) -> (String, CfnResource
             "Resource": format!("arn:aws:lambda:{region}:{account_id}:function:*"),
         }),
     ];
+    if let Some(iam) = &d.iam {
+        statements.extend(iam.statements.iter().map(render_declared_statement));
+    }
+    let properties = json!({
+        "PolicyName": DEFAULT_POLICY_NAME,
+        "PolicyDocument": {
+            "Version": "2012-10-17",
+            "Statement": statements,
+        },
+        "Roles": [{ "Ref": logical_ids::for_execution_role() }],
+    });
+    (
+        logical_ids::for_execution_policy().to_string(),
+        CfnResource {
+            type_: "AWS::IAM::Policy".to_string(),
+            properties,
+            depends_on: vec![],
+        },
+    )
+}
+
+/// Render the MCP server's Lambda execution role and its default inline
+/// policy for the `aws-lambda` target's own stack shape:
+/// `[(role_id, role), (policy_id, policy)]`. Unlike [`render_execution_role`]
+/// (`pmcp-run`'s composition-aware base policy — X-Ray plus DynamoDB
+/// discovery plus cross-Lambda invoke), this stack shape's Lambda has no
+/// `MCP_SERVERS_TABLE` discovery table to read and never calls other
+/// foundation-server Lambdas, so its ONLY fixed base statement is the X-Ray
+/// tracing grant CDK auto-attaches for `tracing: lambda.Tracing.ACTIVE`
+/// (mirrors the `aws-lambda` branch of
+/// `cargo-pmcp/src/commands/deploy/init.rs::render_stack_ts`, which has no
+/// `addToRolePolicy` calls of its own). Any `[[iam.statements]]` declared on
+/// `d.iam` are still appended after that one base statement, in descriptor
+/// order — same append contract as [`render_execution_role`]. Tags use
+/// [`crate::resources::aws_lambda_tags`] instead of [`standard_tags`] (own
+/// `project`, `target = "aws-lambda"`).
+///
+/// Callers MUST run [`validate`] on `d.iam` first, same caveat as
+/// [`render_execution_role`].
+#[must_use]
+pub fn render_execution_role_aws_lambda(d: &DeployDescriptor) -> Vec<(String, CfnResource)> {
+    vec![render_role_aws_lambda(d), render_policy_aws_lambda(d)]
+}
+
+/// The base `AWS::IAM::Role` for the `aws-lambda` target — same trust
+/// policy/managed-policy shape as [`render_role`], `aws-lambda`-flavored
+/// tags.
+fn render_role_aws_lambda(d: &DeployDescriptor) -> (String, CfnResource) {
+    let properties = json!({
+        "AssumeRolePolicyDocument": {
+            "Version": "2012-10-17",
+            "Statement": [{
+                "Effect": "Allow",
+                "Action": "sts:AssumeRole",
+                "Principal": { "Service": "lambda.amazonaws.com" },
+            }],
+        },
+        "ManagedPolicyArns": [{
+            "Fn::Join": ["", [
+                "arn:",
+                { "Ref": "AWS::Partition" },
+                ":iam::aws:policy/service-role/AWSLambdaBasicExecutionRole",
+            ]],
+        }],
+        "Tags": aws_lambda_tags(&d.server.name),
+    });
+    (
+        logical_ids::for_execution_role().to_string(),
+        CfnResource {
+            type_: "AWS::IAM::Role".to_string(),
+            properties,
+            depends_on: vec![],
+        },
+    )
+}
+
+/// The default `AWS::IAM::Policy` for the `aws-lambda` target: X-Ray
+/// tracing ONLY (no DynamoDB/cross-Lambda composition sugar — see
+/// [`render_execution_role_aws_lambda`]'s doc comment), plus any
+/// operator-declared `[[iam.statements]]` appended after it in descriptor
+/// order.
+fn render_policy_aws_lambda(d: &DeployDescriptor) -> (String, CfnResource) {
+    let mut statements = vec![json!({
+        "Effect": "Allow",
+        "Action": ["xray:PutTraceSegments", "xray:PutTelemetryRecords"],
+        "Resource": "*",
+    })];
     if let Some(iam) = &d.iam {
         statements.extend(iam.statements.iter().map(render_declared_statement));
     }
@@ -606,6 +693,90 @@ mod tests {
         let stmt = &resources[1].1.properties["PolicyDocument"]["Statement"][3];
         assert!(stmt["Action"].is_array(), "expected array, got {stmt}");
         assert!(stmt["Resource"].is_array(), "expected array, got {stmt}");
+    }
+
+    fn aws_lambda_descriptor() -> DeployDescriptor {
+        aws_lambda_descriptor_with_iam("")
+    }
+
+    fn aws_lambda_descriptor_with_iam(iam_block: &str) -> DeployDescriptor {
+        toml::from_str(&format!(
+            r#"
+            [target]
+            type = "aws-lambda"
+            version = "1.0.0"
+            [aws]
+            region = "us-east-1"
+            [server]
+            name = "http-api-test"
+            timeout_seconds = 30
+            [auth]
+            enabled = false
+            provider = "none"
+            [observability]
+            log_retention_days = 30
+            enable_xray = true
+            create_dashboard = true
+            {iam_block}
+            "#
+        ))
+        .expect("fixture descriptor parses")
+    }
+
+    #[test]
+    fn aws_lambda_execution_role_returns_role_then_policy() {
+        let resources = render_execution_role_aws_lambda(&aws_lambda_descriptor());
+        assert_eq!(resources.len(), 2);
+        assert_eq!(resources[0].0, logical_ids::for_execution_role());
+        assert_eq!(resources[0].1.type_, "AWS::IAM::Role");
+        assert_eq!(resources[1].0, logical_ids::for_execution_policy());
+        assert_eq!(resources[1].1.type_, "AWS::IAM::Policy");
+    }
+
+    #[test]
+    fn aws_lambda_role_tags_carry_the_server_name_as_project_and_aws_lambda_as_target() {
+        let resources = render_execution_role_aws_lambda(&aws_lambda_descriptor());
+        assert_eq!(
+            resources[0].1.properties["Tags"],
+            json!([
+                { "Key": "managed-by", "Value": "pmcp" },
+                { "Key": "project", "Value": "http-api-test" },
+                { "Key": "service", "Value": "http-api-test" },
+                { "Key": "target", "Value": "aws-lambda" },
+            ])
+        );
+    }
+
+    #[test]
+    fn aws_lambda_no_declared_iam_leaves_exactly_the_one_xray_base_statement() {
+        let resources = render_execution_role_aws_lambda(&aws_lambda_descriptor());
+        let statements = resources[1].1.properties["PolicyDocument"]["Statement"]
+            .as_array()
+            .unwrap();
+        assert_eq!(
+            statements.len(),
+            1,
+            "expected xray-only, got {statements:?}"
+        );
+        assert_eq!(statements[0]["Action"][0], "xray:PutTraceSegments");
+    }
+
+    #[test]
+    fn aws_lambda_declared_statements_append_after_the_single_base_statement() {
+        let d = aws_lambda_descriptor_with_iam(
+            r#"
+            [[iam.statements]]
+            effect = "Allow"
+            actions = ["secretsmanager:GetSecretValue"]
+            resources = ["arn:aws:secretsmanager:us-east-1:*:secret:foo-*"]
+            "#,
+        );
+        let resources = render_execution_role_aws_lambda(&d);
+        let statements = resources[1].1.properties["PolicyDocument"]["Statement"]
+            .as_array()
+            .unwrap();
+        assert_eq!(statements.len(), 2);
+        assert_eq!(statements[1]["Action"], "secretsmanager:GetSecretValue");
     }
 }
 

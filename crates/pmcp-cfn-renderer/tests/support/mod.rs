@@ -90,20 +90,42 @@
 //!   sentinelization makes both sides comparable regardless of which
 //!   literal either side used.
 //!
-//! # Known limitation: tied fingerprints
+//! # Tied fingerprints and the two-pass fixpoint's tiebreak
 //!
 //! When two resources of the same `Type` have identical `Properties`
-//! shapes up to their erased `Ref`/`Fn::GetAtt` targets (e.g. two
+//! shapes up to their `Ref`/`Fn::GetAtt` targets (e.g. two
 //! `AWS::ApiGatewayV2::Integration`s that differ only in which Lambda
-//! function they point at), the `(Type, fingerprint)` sort key ties, and
-//! the final tiebreak (original logical-ID string) is stable WITHIN one
-//! template but not guaranteed to line up ACROSS a cdk-synth template and a
-//! renderer template (their original logical IDs come from unrelated
-//! naming schemes). This is a real gap the brief's two-pass fixpoint does
-//! not close; it does not affect the plain-Lambda golden (no tied
-//! resources) but may need a smarter tiebreak (e.g. incorporating which
-//! *other* canonical resources point at a candidate) when Task 5/6 activate
-//! the `http_api`/`cognito` goldens parked under `tests/goldens/pending/`.
+//! function they point at), the naive `(Type, fingerprint)` sort key ties.
+//! Pass 1 MUST still erase `Ref`/`Fn::GetAtt` targets when computing that
+//! fingerprint (its resources carry each template's own arbitrary,
+//! tool-specific original logical IDs, so embedding them would make the
+//! sort key itself template-dependent) — but that means pass 1's tiebreak
+//! for genuinely-tied resources (the original logical-ID string) is stable
+//! WITHIN one template only, not guaranteed to agree ACROSS a cdk-synth
+//! template and a renderer template.
+//!
+//! Pass 2 closes this gap: by the time it runs, every resource is already
+//! keyed by pass 1's canonical id, and every `Ref`/`Fn::GetAtt` INSIDE
+//! `Properties` has already been rewritten to point at canonical ids too
+//! (see [`rewrite_and_rekey`]) — both template-independent, by construction
+//! of pass 1. So pass 2's fingerprint ([`fingerprint_properties`] called
+//! with `erase_ref_identity: false`) keeps those canonical reference
+//! targets INSTEAD of erasing them, which deterministically separates two
+//! same-Type, same-shape resources that point at two DIFFERENT (and
+//! therefore already distinctly canonicalized) targets — e.g. one
+//! `Integration` pointing at `Function-0` sorts before one pointing at
+//! `Function-1`, regardless of what either template's ORIGINAL logical IDs
+//! happened to spell or what order they were declared in.
+//!
+//! If two resources are STILL tied after pass 2 (identical `Type`,
+//! identical `Properties` INCLUDING their canonical reference targets),
+//! they are genuinely interchangeable: swapping which physical resource a
+//! template labels `Foo-0` vs `Foo-1` cannot change the normalized value,
+//! because both labels then map to equal content. The final id-string
+//! tiebreak in that case is just "some deterministic order," not a
+//! correctness requirement — see
+//! `tied_routes_under_different_original_ids_and_order_normalize_identically`
+//! below.
 
 use serde_json::{Map, Value};
 use std::collections::BTreeMap;
@@ -122,9 +144,15 @@ pub fn normalize(template: &Value) -> Value {
         normalize_resource(resource);
     }
 
-    // Two-pass fixpoint: canonicalize, rewrite, canonicalize again.
-    for _ in 0..2 {
-        let mapping = canonical_id_mapping(&resources);
+    // Two-pass fixpoint: canonicalize, rewrite, canonicalize again. Pass 1
+    // (index 0) must erase Ref/GetAtt target identity (original ids are
+    // template-specific); pass 2 (index 1) keeps it, now that every
+    // reference points at a canonical, template-independent id — this is
+    // what lets pass 2 break ties pass 1 couldn't. See the module doc
+    // comment's "Tied fingerprints" section.
+    for pass_index in 0..2 {
+        let erase_ref_identity = pass_index == 0;
+        let mapping = canonical_id_mapping(&resources, erase_ref_identity);
         resources = rewrite_and_rekey(resources, &mapping);
         if let Some(outputs) = root.get_mut("Outputs") {
             *outputs = rewrite_refs(outputs.clone(), &mapping);
@@ -259,13 +287,17 @@ fn sentinelize_policy_name(fields: &mut Map<String, Value>) {
 
 /// Build the `old-id -> "<TypeSuffix>-<n>"` mapping per the brief's sort
 /// rule: `(Type, fingerprint)` ascending, tie-broken by the original
-/// logical ID for determinism (see the module doc comment's "Known
-/// limitation" note on cross-template tie stability).
-fn canonical_id_mapping(resources: &Map<String, Value>) -> BTreeMap<String, String> {
+/// logical ID for determinism. `erase_ref_identity` selects which
+/// [`fingerprint_properties`] behavior pass 1 vs pass 2 needs — see the
+/// module doc comment's "Tied fingerprints" section.
+fn canonical_id_mapping(
+    resources: &Map<String, Value>,
+    erase_ref_identity: bool,
+) -> BTreeMap<String, String> {
     let mut ids: Vec<&String> = resources.keys().collect();
     ids.sort_by(|a, b| {
-        let key_a = sort_key(&resources[*a]);
-        let key_b = sort_key(&resources[*b]);
+        let key_a = sort_key(&resources[*a], erase_ref_identity);
+        let key_b = sort_key(&resources[*b], erase_ref_identity);
         key_a.cmp(&key_b).then_with(|| a.cmp(b))
     });
 
@@ -284,44 +316,61 @@ fn canonical_id_mapping(resources: &Map<String, Value>) -> BTreeMap<String, Stri
     mapping
 }
 
-/// `(Type, fingerprint-of-Properties-with-Ref/GetAtt-targets-erased)` — see
-/// [`fingerprint_properties`].
-fn sort_key(resource: &Value) -> (String, String) {
+/// `(Type, fingerprint-of-Properties)` — see [`fingerprint_properties`] for
+/// what `erase_ref_identity` does to `Ref`/`Fn::GetAtt` targets within.
+fn sort_key(resource: &Value, erase_ref_identity: bool) -> (String, String) {
     let type_ = resource
         .get("Type")
         .and_then(Value::as_str)
         .unwrap_or("")
         .to_string();
     let properties = resource.get("Properties").cloned().unwrap_or(Value::Null);
-    let fingerprint = fingerprint_properties(&properties);
+    let fingerprint = fingerprint_properties(&properties, erase_ref_identity);
     let json = serde_json::to_string(&sort_keys_deep(&fingerprint))
         .expect("a Value built from another Value always serializes");
     (type_, json)
 }
 
-/// Recursively erase `Ref`/`Fn::GetAtt` reference TARGETS (replacing the
-/// whole intrinsic with a placeholder that keeps the `Fn::GetAtt`
-/// attribute name for mild disambiguation) so the sort key depends only on
-/// a resource's own shape, never on which (necessarily non-canonical, at
-/// the time of the first pass) logical ID it happens to reference.
-fn fingerprint_properties(value: &Value) -> Value {
+/// Recursively fingerprint `value` for the canonical-id sort key.
+///
+/// When `erase_ref_identity` is `true` (pass 1), `Ref`/`Fn::GetAtt`
+/// reference TARGETS are erased (replaced with a placeholder that keeps
+/// only the `Fn::GetAtt` attribute name for mild disambiguation), so the
+/// fingerprint depends only on a resource's own shape, never on which
+/// (necessarily non-canonical, at pass 1) logical ID it happens to
+/// reference.
+///
+/// When `false` (pass 2), reference targets are kept AS-IS — by pass 2,
+/// every target is already a pass-1 canonical, template-independent id
+/// (see [`rewrite_and_rekey`]), so keeping it lets two same-Type,
+/// same-shape-when-erased resources that reference two DIFFERENT targets
+/// sort deterministically apart instead of tying. See the module doc
+/// comment's "Tied fingerprints" section.
+fn fingerprint_properties(value: &Value, erase_ref_identity: bool) -> Value {
     match value {
         Value::Object(map) => {
-            if map.len() == 1 && map.contains_key("Ref") {
-                return Value::String("<ref>".to_string());
-            }
-            if let Some(getatt) = map.get("Fn::GetAtt") {
-                if map.len() == 1 {
-                    return Value::String(format!("<getatt:{}>", getatt_attribute(getatt)));
+            if erase_ref_identity {
+                if map.len() == 1 && map.contains_key("Ref") {
+                    return Value::String("<ref>".to_string());
+                }
+                if let Some(getatt) = map.get("Fn::GetAtt") {
+                    if map.len() == 1 {
+                        return Value::String(format!("<getatt:{}>", getatt_attribute(getatt)));
+                    }
                 }
             }
             let mut out = Map::new();
             for (k, v) in map {
-                out.insert(k.clone(), fingerprint_properties(v));
+                out.insert(k.clone(), fingerprint_properties(v, erase_ref_identity));
             }
             Value::Object(out)
         },
-        Value::Array(items) => Value::Array(items.iter().map(fingerprint_properties).collect()),
+        Value::Array(items) => Value::Array(
+            items
+                .iter()
+                .map(|item| fingerprint_properties(item, erase_ref_identity))
+                .collect(),
+        ),
         other => other.clone(),
     }
 }
@@ -642,6 +691,123 @@ mod tests {
             "Outputs": {}
         });
         assert!(normalize(&template).get("Outputs").is_none());
+    }
+
+    /// Controller-mandated regression: two templates carrying the same TWO
+    /// `AWS::ApiGatewayV2::Route`s (genuinely interchangeable — identical
+    /// `Properties`, including which `Integration` they target), declared
+    /// under different original logical IDs and in different declaration
+    /// order, must normalize identically. Per the module doc comment's
+    /// "Tied fingerprints" section, resources this symmetric stay tied even
+    /// after pass 2's ref-identity-aware fingerprint — and that's fine,
+    /// because whichever physical Route a template labels `Route-0` vs
+    /// `Route-1`, both labels end up mapped to equal content.
+    #[test]
+    fn tied_routes_under_different_original_ids_and_order_normalize_identically() {
+        fn route(api_ref: &str, integration_ref: &str) -> Value {
+            json!({
+                "Type": "AWS::ApiGatewayV2::Route",
+                "Properties": {
+                    "ApiId": {"Ref": api_ref},
+                    "RouteKey": "POST /{proxy+}",
+                    "Target": {
+                        "Fn::Join": ["", ["integrations/", {"Ref": integration_ref}]]
+                    }
+                }
+            })
+        }
+
+        let template_a = json!({
+            "Resources": {
+                "RouteFoo": route("MyApi", "MyIntegration"),
+                "RouteBar": route("MyApi", "MyIntegration"),
+                "MyApi": {"Type": "AWS::ApiGatewayV2::Api", "Properties": {}},
+                "MyIntegration": {"Type": "AWS::ApiGatewayV2::Integration", "Properties": {}}
+            }
+        });
+        // Same graph: same two routes, different original ids, declared in
+        // the opposite order.
+        let template_b = json!({
+            "Resources": {
+                "MyIntegration": {"Type": "AWS::ApiGatewayV2::Integration", "Properties": {}},
+                "ZRoute": route("MyApi", "MyIntegration"),
+                "AnotherRoute": route("MyApi", "MyIntegration"),
+                "MyApi": {"Type": "AWS::ApiGatewayV2::Api", "Properties": {}}
+            }
+        });
+
+        assert_eq!(normalize(&template_a), normalize(&template_b));
+    }
+
+    /// Proves pass 2's fix actually has teeth: two `Integration`s that tie
+    /// under pass 1's erased fingerprint (same `IntegrationType`, same
+    /// erased `IntegrationUri`) but point at two DIFFERENT (non-tied,
+    /// deterministically-orderable-by-own-Properties) Lambda functions.
+    /// The two templates below name their resources so that a NAIVE
+    /// original-logical-ID tiebreak would disagree between them (in
+    /// `template_a`, `"AIntegration"` — alphabetically first — points at
+    /// the function that ends up `Function-0`; in `template_b`,
+    /// `"AIntegration"` points at the OTHER function instead). Without pass
+    /// 2's ref-identity-aware fingerprint, this pair would normalize
+    /// DIFFERENTLY; with it, both converge on "the Integration targeting
+    /// `Function-0` is always `Integration-0`," regardless of either
+    /// template's original spelling.
+    #[test]
+    fn tied_integrations_disambiguated_by_canonical_target_identity() {
+        fn integration(function_ref: &str) -> Value {
+            json!({
+                "Type": "AWS::ApiGatewayV2::Integration",
+                "Properties": {
+                    "IntegrationType": "AWS_PROXY",
+                    "IntegrationUri": {"Fn::GetAtt": [function_ref, "Arn"]}
+                }
+            })
+        }
+        fn function(name: &str) -> Value {
+            json!({
+                "Type": "AWS::Lambda::Function",
+                "Properties": {"FunctionName": name}
+            })
+        }
+
+        // "alpha" < "beta" as a fingerprint string, so AlphaFn always
+        // becomes Function-0 regardless of original id — independent of
+        // this test's fix.
+        let template_a = json!({
+            "Resources": {
+                "AIntegration": integration("AlphaFn"),
+                "ZIntegration": integration("BetaFn"),
+                "AlphaFn": function("alpha"),
+                "BetaFn": function("beta"),
+            }
+        });
+        // Same graph, but original ids point the OTHER way: here
+        // "AIntegration" (still alphabetically first) targets BetaFn
+        // instead of AlphaFn.
+        let template_b = json!({
+            "Resources": {
+                "AIntegration": integration("BetaFn"),
+                "ZIntegration": integration("AlphaFn"),
+                "AlphaFn": function("alpha"),
+                "BetaFn": function("beta"),
+            }
+        });
+
+        let normalized_a = normalize(&template_a);
+        let normalized_b = normalize(&template_b);
+        assert_eq!(normalized_a, normalized_b);
+
+        // Pin the actual disambiguation, not just cross-template equality:
+        // the Integration targeting Function-0 (AlphaFn) is Integration-0
+        // in both templates.
+        assert_eq!(
+            normalized_a["Resources"]["Integration-0"]["Properties"]["IntegrationUri"],
+            json!({"Fn::GetAtt": ["Function-0", "Arn"]})
+        );
+        assert_eq!(
+            normalized_a["Resources"]["Integration-1"]["Properties"]["IntegrationUri"],
+            json!({"Fn::GetAtt": ["Function-1", "Arn"]})
+        );
     }
 
     #[test]

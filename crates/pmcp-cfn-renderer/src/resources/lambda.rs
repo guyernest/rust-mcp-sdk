@@ -9,7 +9,7 @@
 use crate::{
     logical_ids,
     params::RenderParams,
-    resources::{standard_tags, DEFAULT_ORGANIZATION_ID, MCP_SERVERS_TABLE},
+    resources::{aws_lambda_tags, standard_tags, DEFAULT_ORGANIZATION_ID, MCP_SERVERS_TABLE},
     template::CfnResource,
 };
 use pmcp_package::package::DeployDescriptor;
@@ -22,6 +22,11 @@ use std::collections::BTreeMap;
 /// target's separate `[server].memory` string field, a non-CFN target this
 /// renderer never touches).
 const MEMORY_SIZE_MB: i64 = 256;
+
+/// Fixed memory size for `aws-lambda`-target Lambdas — the TS scaffold
+/// hardcodes `memorySize: 512` for this branch (vs. `pmcp-run`'s
+/// [`MEMORY_SIZE_MB`] = 256). Also NOT driven by `[server].memory_mb`.
+const AWS_LAMBDA_MEMORY_SIZE_MB: i64 = 512;
 
 /// Render the MCP server's `AWS::Lambda::Function`: `(logical_id, resource)`.
 #[must_use]
@@ -48,6 +53,48 @@ pub fn render_function(d: &DeployDescriptor, p: &RenderParams) -> (String, CfnRe
             // CDK adds an explicit dependency from the function onto its
             // execution role's default policy (IAM eventual-consistency
             // safety) as well as the role itself.
+            depends_on: vec![
+                logical_ids::for_execution_policy().to_string(),
+                logical_ids::for_execution_role().to_string(),
+            ],
+        },
+    )
+}
+
+/// Render the MCP server's `AWS::Lambda::Function` for the `aws-lambda`
+/// target's own (non-pmcp.run) stack shape: `(logical_id, resource)`.
+/// Mirrors the `aws-lambda` branch of
+/// `cargo-pmcp/src/commands/deploy/init.rs::render_stack_ts` — same
+/// `Runtime`/`Handler`/`Architectures`/`Role` wiring as [`render_function`],
+/// but a fixed 512 MB memory size, `p.environment` passed through UNCHANGED
+/// (no `pmcp-run`-only composition vars — this stack shape has no
+/// `MCP_SERVERS_TABLE` discovery table to read, and never calls other
+/// foundation-server Lambdas), and `aws-lambda`-flavored tags (own
+/// `project`, `target = "aws-lambda"`) via
+/// [`crate::resources::aws_lambda_tags`].
+#[must_use]
+pub fn render_function_aws_lambda(d: &DeployDescriptor, p: &RenderParams) -> (String, CfnResource) {
+    let properties = json!({
+        "FunctionName": d.server.name,
+        "Runtime": "provided.al2023",
+        "Handler": "bootstrap",
+        "Architectures": ["arm64"],
+        "MemorySize": AWS_LAMBDA_MEMORY_SIZE_MB,
+        "Timeout": d.server.timeout_seconds,
+        "Code": { "S3Bucket": p.artifact.s3_bucket, "S3Key": p.artifact.s3_key },
+        "Role": { "Fn::GetAtt": [logical_ids::for_execution_role(), "Arn"] },
+        "Environment": { "Variables": p.environment.clone() },
+        "TracingConfig": { "Mode": "Active" },
+        "LoggingConfig": { "LogFormat": "JSON" },
+        "Tags": aws_lambda_tags(&d.server.name),
+    });
+    (
+        logical_ids::for_function().to_string(),
+        CfnResource {
+            type_: "AWS::Lambda::Function".to_string(),
+            properties,
+            // Same eventual-consistency dependency ordering as
+            // `render_function` — see its own doc comment.
             depends_on: vec![
                 logical_ids::for_execution_policy().to_string(),
                 logical_ids::for_execution_role().to_string(),
@@ -157,6 +204,76 @@ mod tests {
     #[test]
     fn function_depends_on_the_execution_role_and_its_policy() {
         let (_, resource) = render_function(&descriptor(), &params(BTreeMap::new()));
+        assert_eq!(
+            resource.depends_on,
+            vec![
+                logical_ids::for_execution_policy().to_string(),
+                logical_ids::for_execution_role().to_string(),
+            ]
+        );
+    }
+
+    fn aws_lambda_descriptor() -> DeployDescriptor {
+        toml::from_str(
+            r#"
+            [target]
+            type = "aws-lambda"
+            version = "1.0.0"
+            [aws]
+            region = "us-east-1"
+            [server]
+            name = "http-api-test"
+            memory_mb = 512
+            timeout_seconds = 30
+            [auth]
+            enabled = false
+            provider = "none"
+            [observability]
+            log_retention_days = 30
+            enable_xray = true
+            create_dashboard = true
+            "#,
+        )
+        .expect("fixture descriptor parses")
+    }
+
+    #[test]
+    fn aws_lambda_memory_size_is_fixed_at_512_regardless_of_descriptor_memory_mb() {
+        let (_, resource) =
+            render_function_aws_lambda(&aws_lambda_descriptor(), &params(BTreeMap::new()));
+        assert_eq!(resource.properties["MemorySize"], 512);
+    }
+
+    #[test]
+    fn aws_lambda_environment_is_passed_through_with_no_composition_vars_added() {
+        let environment = BTreeMap::from([("RUST_LOG".to_string(), "info".to_string())]);
+        let (_, resource) =
+            render_function_aws_lambda(&aws_lambda_descriptor(), &params(environment));
+        assert_eq!(
+            resource.properties["Environment"]["Variables"],
+            json!({ "RUST_LOG": "info" })
+        );
+    }
+
+    #[test]
+    fn aws_lambda_tags_carry_the_server_name_as_project_and_aws_lambda_as_target() {
+        let (_, resource) =
+            render_function_aws_lambda(&aws_lambda_descriptor(), &params(BTreeMap::new()));
+        assert_eq!(
+            resource.properties["Tags"],
+            json!([
+                { "Key": "managed-by", "Value": "pmcp" },
+                { "Key": "project", "Value": "http-api-test" },
+                { "Key": "service", "Value": "http-api-test" },
+                { "Key": "target", "Value": "aws-lambda" },
+            ])
+        );
+    }
+
+    #[test]
+    fn aws_lambda_function_depends_on_the_execution_role_and_its_policy() {
+        let (_, resource) =
+            render_function_aws_lambda(&aws_lambda_descriptor(), &params(BTreeMap::new()));
         assert_eq!(
             resource.depends_on,
             vec![
