@@ -3,6 +3,7 @@
 //! This module contains the core protocol types including initialization,
 //! version negotiation, request routing, and completion types.
 
+pub mod context;
 pub mod version;
 
 use crate::types::capabilities::{ClientCapabilities, ServerCapabilities};
@@ -10,6 +11,9 @@ use serde::{Deserialize, Serialize};
 
 // Re-export version constants and negotiation function.
 pub use version::*;
+
+// Re-export the additive protocol-context value types (Phase 112).
+pub use context::{ProtocolContext, TraceContext};
 
 // Re-export domain modules' types for backward compatibility.
 // Types that were previously in this file are now in their own modules
