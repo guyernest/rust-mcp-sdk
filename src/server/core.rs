@@ -447,34 +447,24 @@ impl ServerCore {
         self
     }
 
-    /// The configured protocol-version accept-list read at ingress.
-    ///
-    /// The shared resolver enforces this list; a per-request version not present
-    /// here is rejected.
+    /// The configured protocol-version accept-list read at ingress (test-only
+    /// accessor; production reads the field directly via the shared resolver).
+    #[cfg(test)]
     pub(crate) fn supported_protocol_versions(&self) -> &[ProtocolVersion] {
         &self.supported_protocol_versions
     }
 
-    /// Whether this server opted into the v2 (`2026-07-28`) era.
-    ///
-    /// This is the cheap "run era-detection at all" gate (D-04): when `false`,
-    /// ingress skips the resolver entirely and the v1 request path is
-    /// byte-for-byte unchanged. The ACTUAL negotiation is the shared resolver,
-    /// which consults the full accept-list.
+    /// Whether this server opted into the v2 (`2026-07-28`) era (test-only
+    /// convenience over [`context::is_v2_opted_in`](crate::types::protocol::context::is_v2_opted_in);
+    /// production resolves opt-in inside the shared ingress resolver).
+    #[cfg(test)]
     pub(crate) fn is_v2_opted_in(&self) -> bool {
-        self.supported_protocol_versions
-            .iter()
-            .any(|v| v.as_str() == crate::types::protocol::PROTOCOL_VERSION_2026_07_28)
+        crate::types::protocol::context::is_v2_opted_in(&self.supported_protocol_versions)
     }
 
     /// Resolve the per-request [`ProtocolContext`](crate::types::protocol::ProtocolContext)
-    /// ONCE at native ingress (Phase 112, VERS-01).
-    ///
-    /// Returns `Ok(None)` immediately for a non-opted-in server so it runs ZERO
-    /// era-detection and its v1 path is byte-for-byte unchanged (D-04). For an
-    /// opted-in server, delegates to the single shared
-    /// [`resolve_protocol_context`](crate::types::protocol::context::resolve_protocol_context),
-    /// enforcing the configured accept-list against the request's `_meta`. The
+    /// ONCE at native ingress (Phase 112, VERS-01) via the shared free
+    /// [`resolve_ingress_protocol_context`] both dispatch surfaces call. The
     /// `Err` is mapped to a structured rejection by the caller.
     fn resolve_ingress_protocol_context(
         &self,
@@ -483,14 +473,7 @@ impl ServerCore {
         Option<crate::types::protocol::ProtocolContext>,
         crate::types::protocol::context::ProtocolNegotiationError,
     > {
-        if !self.is_v2_opted_in() {
-            return Ok(None);
-        }
-        let meta = extract_request_meta_value(request);
-        crate::types::protocol::context::resolve_protocol_context(
-            self.supported_protocol_versions(),
-            meta.as_ref(),
-        )
+        resolve_ingress_protocol_context(&self.supported_protocol_versions, request)
     }
 
     /// Attach the cached peer handle to `extra` when a dispatcher is configured.
@@ -1531,7 +1514,7 @@ impl ServerCore {
                             .map(|task_id| (task_id, req.name.clone()));
 
                         match self
-                            .handle_call_tool(req, auth_context.clone(), protocol_context.clone())
+                            .handle_call_tool(req, auth_context.clone(), protocol_context)
                             .await
                         {
                             Ok(outcome) => match outcome {
@@ -1759,6 +1742,30 @@ pub(crate) fn extract_request_meta_value(request: &Request) -> Option<serde_json
         },
         Request::Server(_) => None,
     }
+}
+
+/// Resolve the per-request [`ProtocolContext`](crate::types::protocol::ProtocolContext)
+/// ONCE at native ingress, shared by BOTH dispatch surfaces (`ServerCore` and the
+/// high-level `Server`) so the opt-in gate + resolver sequence lives in exactly
+/// one place (Pitfall 3 — twin-wiring drift).
+///
+/// Returns `Ok(None)` immediately for a non-opted-in server so it runs ZERO
+/// era-detection and its v1 path is byte-for-byte unchanged (D-04). For an
+/// opted-in server it delegates to the single shared
+/// [`resolve_protocol_context`](crate::types::protocol::context::resolve_protocol_context),
+/// enforcing the configured accept-list against the request's `_meta`.
+pub(crate) fn resolve_ingress_protocol_context(
+    accept_list: &[crate::types::ProtocolVersion],
+    request: &Request,
+) -> std::result::Result<
+    Option<crate::types::protocol::ProtocolContext>,
+    crate::types::protocol::context::ProtocolNegotiationError,
+> {
+    if !crate::types::protocol::context::is_v2_opted_in(accept_list) {
+        return Ok(None);
+    }
+    let meta = extract_request_meta_value(request);
+    crate::types::protocol::context::resolve_protocol_context(accept_list, meta.as_ref())
 }
 
 /// Map a [`ProtocolNegotiationError`](crate::types::protocol::context::ProtocolNegotiationError)

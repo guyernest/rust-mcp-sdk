@@ -1247,16 +1247,6 @@ impl Server {
         Ok(())
     }
 
-    /// Whether this high-level `Server` opted into the v2 (`2026-07-28`) era.
-    ///
-    /// The "run era-detection at all" gate (D-04); `false` skips the resolver so
-    /// the v1 path is byte-for-byte unchanged.
-    pub(crate) fn is_v2_opted_in(&self) -> bool {
-        self.supported_protocol_versions
-            .iter()
-            .any(|v| v.as_str() == crate::types::protocol::PROTOCOL_VERSION_2026_07_28)
-    }
-
     /// Resolve the per-request [`ProtocolContext`](crate::types::protocol::ProtocolContext)
     /// ONCE at this dispatch site's ingress via the SAME shared resolver
     /// `ServerCore` uses — the twin wiring (Pitfall 3). `Ok(None)` for a
@@ -1274,13 +1264,9 @@ impl Server {
         Option<crate::types::protocol::ProtocolContext>,
         crate::types::protocol::context::ProtocolNegotiationError,
     > {
-        if !self.is_v2_opted_in() {
-            return Ok(None);
-        }
-        let meta = crate::server::core::extract_request_meta_value(request);
-        crate::types::protocol::context::resolve_protocol_context(
+        crate::server::core::resolve_ingress_protocol_context(
             &self.supported_protocol_versions,
-            meta.as_ref(),
+            request,
         )
     }
 
@@ -2498,12 +2484,8 @@ impl ServerBuilder {
         mut self,
         versions: impl IntoIterator<Item = ProtocolVersion>,
     ) -> Self {
-        let collected: Vec<ProtocolVersion> = versions.into_iter().collect();
-        self.supported_protocol_versions = if collected.is_empty() {
-            crate::types::protocol::context::default_accept_list()
-        } else {
-            collected
-        };
+        self.supported_protocol_versions =
+            crate::types::protocol::context::normalize_accept_list(versions);
         self
     }
 

@@ -769,15 +769,11 @@ impl ServerCoreBuilder {
         mut self,
         versions: impl IntoIterator<Item = crate::types::ProtocolVersion>,
     ) -> Self {
-        let collected: Vec<crate::types::ProtocolVersion> = versions.into_iter().collect();
         // An explicitly-empty accept-list falls back to the v1-only legacy
         // default — never an all-reject server (D-02/D-04). De-duplication is
         // left to the resolver.
-        self.supported_protocol_versions = if collected.is_empty() {
-            crate::types::protocol::context::default_accept_list()
-        } else {
-            collected
-        };
+        self.supported_protocol_versions =
+            crate::types::protocol::context::normalize_accept_list(versions);
         self
     }
 

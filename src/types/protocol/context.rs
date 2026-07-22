@@ -27,6 +27,37 @@ pub(crate) fn default_accept_list() -> Vec<ProtocolVersion> {
         .collect()
 }
 
+/// Normalize a caller-supplied accept-list, falling back to the v1-only
+/// [`default_accept_list`] when it is empty.
+///
+/// The empty-means-v1 fallback is a documented safety invariant (D-02/D-04):
+/// an explicitly-empty accept-list must never produce an all-reject server.
+/// Shared by both server builders so the invariant lives in exactly one place.
+#[must_use]
+pub(crate) fn normalize_accept_list(
+    versions: impl IntoIterator<Item = ProtocolVersion>,
+) -> Vec<ProtocolVersion> {
+    let collected: Vec<ProtocolVersion> = versions.into_iter().collect();
+    if collected.is_empty() {
+        default_accept_list()
+    } else {
+        collected
+    }
+}
+
+/// Whether an accept-list opted into the v2 (`2026-07-28`) era.
+///
+/// The cheap "run era-detection at all" gate (D-04): when `false`, ingress
+/// skips the resolver entirely and the v1 request path is byte-for-byte
+/// unchanged. Classifies via the single [`protocol_era`](super::version::protocol_era)
+/// source of truth so the era rule is never re-derived by hand.
+#[must_use]
+pub(crate) fn is_v2_opted_in(accept_list: &[ProtocolVersion]) -> bool {
+    accept_list
+        .iter()
+        .any(|v| super::version::protocol_era(v.as_str()) == Era::V2)
+}
+
 /// Maximum accepted length, in bytes, for any single W3C trace value.
 ///
 /// A legitimate `traceparent` is a fixed ~55-byte string; `tracestate` and
