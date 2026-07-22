@@ -130,6 +130,11 @@ pub fn render(
         // it's a fully public, separately-callable function.
         resources::iam::validate(iam)?;
     }
+    // Same discard-here, call-directly-for-warnings pattern as
+    // `resources::iam::validate` above — `resources::cognito::validate` is
+    // infallible (advisory-only, no hard-error rules), so there is no `?`
+    // to propagate.
+    let _ = resources::cognito::validate(&descriptor.auth);
 
     if descriptor.target.target_type == "aws-lambda" {
         if descriptor.auth.enabled {

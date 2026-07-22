@@ -29,7 +29,16 @@
 //!   protected `/mcp*` + 1 public health check, both via the MCP
 //!   integration; 4 public `/oauth2/*`+`/.well-known/*` via the OAuth-proxy
 //!   integration), the JWT `Authorizer` wired onto the 2 protected routes,
-//!   and 3 `AWS::Lambda::Permission`s (one per function).
+//!   and 3 `AWS::Lambda::Permission`s (one per function). The `Api`/`Stage`/
+//!   `Integration`/`Permission` resources themselves are NOT re-typed
+//!   here — this module's own `render_api`/`render_stage` delegate to
+//!   `crate::resources::http_api`'s `pub(crate)` `render_api_with`/
+//!   `render_stage_with`, and its `render_http_api` calls that module's
+//!   `render_integration_for`/`render_permission_for` directly — the
+//!   plain `aws-lambda` HTTP API kernel (`resources::http_api`) and this
+//!   stack's own HTTP API share one definition of each resource shape,
+//!   parameterized by the handful of inputs that actually differ
+//!   (description, tags, logical id).
 //!
 //! There is deliberately no static `AWS::Cognito::UserPoolClient` resource:
 //! DCR clients register at RUNTIME via the OAuth-proxy Lambda's
@@ -60,18 +69,29 @@
 //! Cognito-without-DCR/DCR-without-Cognito scaffold variant exists), so
 //! this module renders the `ClientsTable`+OAuth-proxy pieces unconditionally
 //! too, without branching on `d.auth.dcr`.
+//!
+//! Because every real descriptor populates those four inert fields (they
+//! aren't `Option`s in [`pmcp_package::package::CognitoSection`], except
+//! `social_providers` which defaults to empty), silently ignoring them is
+//! correct — erroring would reject 100% of real inputs, and this module
+//! must stay golden-faithful. But silently dropping them with no signal at
+//! all is a footgun, so [`validate`] emits one advisory
+//! `"auth.cognito.inert_fields"` [`crate::resources::iam::Warning`]
+//! whenever `[auth.cognito]` is present, naming all four fields — wired
+//! into [`crate::render`]'s validation step alongside
+//! [`crate::resources::iam::validate`].
 
 use crate::{
     error::RenderError,
     logical_ids,
     params::RenderParams,
     resources::{
-        aws_lambda_map_tags_with_component, aws_lambda_tags_with_component, dynamodb, iam, lambda,
-        logs,
+        aws_lambda_map_tags_with_component, aws_lambda_tags_with_component, dynamodb, http_api,
+        iam, lambda, logs,
     },
     template::CfnResource,
 };
-use pmcp_package::package::{CognitoSection, DeployDescriptor};
+use pmcp_package::package::{AuthSection, CognitoSection, DeployDescriptor};
 use serde_json::{json, Map, Value};
 
 /// The stack-wide marker tag every taggable resource in this stack shape
@@ -155,6 +175,36 @@ fn require_cognito(d: &DeployDescriptor) -> Result<&CognitoSection, RenderError>
             section: "auth".to_string(),
             field: "cognito".to_string(),
         })
+}
+
+/// The four [`CognitoSection`] fields this module accepts but never wires
+/// into a rendered CFN property — see the module doc comment's "what
+/// fields this module reads" section for why silently ignoring them
+/// (rather than erroring) is the correct, golden-faithful behavior.
+const INERT_COGNITO_FIELDS: &str = "mfa, access_token_ttl, refresh_token_ttl, social_providers";
+
+/// Advisory-only validation for `[auth.cognito]`: whenever it is present,
+/// emits exactly one [`iam::Warning`] (code `"auth.cognito.inert_fields"`)
+/// naming the four fields (`INERT_COGNITO_FIELDS`) that are part of
+/// [`CognitoSection`]'s closed set but are silently dropped by this
+/// module's renderer rather than being wired into any CloudFormation
+/// property. Returns an empty `Vec` when `auth.cognito` is `None` — this is
+/// advisory-only and never blocks a render (mirrors [`iam::validate`]'s
+/// warning half; unlike that function this one is infallible, since there
+/// is no ill-formed shape to reject here).
+#[must_use]
+pub fn validate(auth: &AuthSection) -> Vec<iam::Warning> {
+    if auth.cognito.is_none() {
+        return Vec::new();
+    }
+    vec![iam::Warning {
+        code: "auth.cognito.inert_fields".to_string(),
+        message: format!(
+            "[auth.cognito] fields ({INERT_COGNITO_FIELDS}) are accepted but do not affect \
+             the rendered CloudFormation stack — the aws-lambda Cognito+DCR scaffold this \
+             renderer mirrors doesn't wire them into the template either."
+        ),
+    }]
 }
 
 // ---------------------------------------------------------------------
@@ -524,22 +574,25 @@ fn render_http_api(d: &DeployDescriptor, p: &RenderParams) -> Vec<(String, CfnRe
     let mut resources = vec![
         render_api(d),
         render_stage(d),
-        render_integration(mcp_integration, logical_ids::for_function()),
-        render_integration(oauth_integration, logical_ids::for_oauth_proxy_function()),
+        http_api::render_integration_for(mcp_integration, logical_ids::for_function()),
+        http_api::render_integration_for(
+            oauth_integration,
+            logical_ids::for_oauth_proxy_function(),
+        ),
     ];
     resources.extend(render_routes(mcp_integration, oauth_integration));
     resources.push(render_authorizer_resource(d, p));
-    resources.push(render_invoke_permission(
+    resources.push(http_api::render_permission_for(
         logical_ids::for_http_permission(),
         logical_ids::for_function(),
         p,
     ));
-    resources.push(render_invoke_permission(
+    resources.push(http_api::render_permission_for(
         logical_ids::for_oauth_permission(),
         logical_ids::for_oauth_proxy_function(),
         p,
     ));
-    resources.push(render_invoke_permission(
+    resources.push(http_api::render_permission_for(
         logical_ids::for_authorizer_permission(),
         logical_ids::for_authorizer_function(),
         p,
@@ -547,60 +600,25 @@ fn render_http_api(d: &DeployDescriptor, p: &RenderParams) -> Vec<(String, CfnRe
     resources
 }
 
+/// Delegates to [`http_api::render_api_with`] — see this module's Finding-1
+/// dedup note in the module doc comment. Only the description/tags differ
+/// from the plain `aws-lambda` HTTP API.
 fn render_api(d: &DeployDescriptor) -> (String, CfnResource) {
-    let properties = json!({
-        "Name": d.server.name,
-        "ProtocolType": "HTTP",
-        "Description": API_DESCRIPTION,
-        "CorsConfiguration": {
-            "AllowOrigins": ["*"],
-            "AllowMethods": ["GET", "POST", "OPTIONS"],
-            "AllowHeaders": ["*"],
-        },
-        "Tags": aws_lambda_map_tags_with_component(&d.server.name, COMPONENT_TAG),
-    });
-    (
-        logical_ids::for_http_api().to_string(),
-        CfnResource {
-            type_: "AWS::ApiGatewayV2::Api".to_string(),
-            properties,
-            depends_on: vec![],
-        },
+    http_api::render_api_with(
+        d,
+        API_DESCRIPTION,
+        aws_lambda_map_tags_with_component(&d.server.name, COMPONENT_TAG),
     )
 }
 
+/// Delegates to [`http_api::render_stage_with`] — see this module's
+/// Finding-1 dedup note in the module doc comment. Only the tags differ
+/// from the plain `aws-lambda` HTTP API's `$default` stage.
 fn render_stage(d: &DeployDescriptor) -> (String, CfnResource) {
-    let properties = json!({
-        "ApiId": { "Ref": logical_ids::for_http_api() },
-        "StageName": "$default",
-        "AutoDeploy": true,
-        "Tags": aws_lambda_map_tags_with_component(&d.server.name, COMPONENT_TAG),
-    });
-    (
-        logical_ids::for_http_stage().to_string(),
-        CfnResource {
-            type_: "AWS::ApiGatewayV2::Stage".to_string(),
-            properties,
-            depends_on: vec![],
-        },
-    )
-}
-
-fn render_integration(logical_id: &str, function_logical_id: &str) -> (String, CfnResource) {
-    let properties = json!({
-        "ApiId": { "Ref": logical_ids::for_http_api() },
-        "IntegrationType": "AWS_PROXY",
-        "IntegrationUri": { "Fn::GetAtt": [function_logical_id, "Arn"] },
-        "PayloadFormatVersion": "2.0",
-    });
-    (
-        logical_id.to_string(),
-        CfnResource {
-            type_: "AWS::ApiGatewayV2::Integration".to_string(),
-            properties,
-            depends_on: vec![],
-        },
-    )
+    http_api::render_stage_with(aws_lambda_map_tags_with_component(
+        &d.server.name,
+        COMPONENT_TAG,
+    ))
 }
 
 /// One `AWS::ApiGatewayV2::Route`. `authorizer_id = Some(_)` marks it
@@ -705,33 +723,6 @@ fn render_authorizer_resource(d: &DeployDescriptor, p: &RenderParams) -> (String
         logical_ids::for_authorizer().to_string(),
         CfnResource {
             type_: "AWS::ApiGatewayV2::Authorizer".to_string(),
-            properties,
-            depends_on: vec![],
-        },
-    )
-}
-
-fn render_invoke_permission(
-    logical_id: &str,
-    function_logical_id: &str,
-    p: &RenderParams,
-) -> (String, CfnResource) {
-    let properties = json!({
-        "Action": "lambda:InvokeFunction",
-        "FunctionName": { "Fn::GetAtt": [function_logical_id, "Arn"] },
-        "Principal": "apigateway.amazonaws.com",
-        "SourceArn": {
-            "Fn::Join": ["", [
-                format!("arn:aws:execute-api:{}:{}:", p.region, p.account_id),
-                { "Ref": logical_ids::for_http_api() },
-                "/*/*",
-            ]],
-        },
-    });
-    (
-        logical_id.to_string(),
-        CfnResource {
-            type_: "AWS::Lambda::Permission".to_string(),
             properties,
             depends_on: vec![],
         },
@@ -946,5 +937,47 @@ mod tests {
             clients_table_name(&descriptor("cognito")),
             "cognito-test-oauth-clients"
         );
+    }
+
+    fn auth_section_without_cognito() -> AuthSection {
+        AuthSection {
+            enabled: false,
+            provider: "none".to_string(),
+            callback_urls: vec![],
+            cognito: None,
+            dcr: None,
+            groups: None,
+            scopes: None,
+        }
+    }
+
+    #[test]
+    fn validate_fires_one_advisory_warning_when_cognito_is_present() {
+        let warnings = validate(&descriptor("cognito").auth);
+        assert_eq!(warnings.len(), 1);
+        assert_eq!(warnings[0].code, "auth.cognito.inert_fields");
+    }
+
+    #[test]
+    fn validate_is_silent_when_auth_cognito_is_absent() {
+        let warnings = validate(&auth_section_without_cognito());
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn validate_warning_names_all_four_inert_fields() {
+        let warnings = validate(&descriptor("cognito").auth);
+        let message = &warnings[0].message;
+        for field in [
+            "mfa",
+            "access_token_ttl",
+            "refresh_token_ttl",
+            "social_providers",
+        ] {
+            assert!(
+                message.contains(field),
+                "warning message should name `{field}`, got: {message}"
+            );
+        }
     }
 }

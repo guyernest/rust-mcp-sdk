@@ -15,13 +15,21 @@
 //!
 //! Pinned by `tests/goldens/http-api.golden.json` (promoted from
 //! `pending/` in Task 5).
+//!
+//! `resources::cognito`'s own (larger) HTTP API shares this same
+//! `Api`/`Stage`/`Integration`/`Lambda::Permission` resource shape — its
+//! `render_http_api` calls this module's `pub(crate)` `render_api_with`/
+//! `render_stage_with`/`render_integration_for`/`render_permission_for`
+//! builders rather than duplicating them, varying only the few inputs that
+//! actually differ (description string, tags, and — since that stack has
+//! two integrations and three permissions — the logical id).
 
 use crate::{
     error::RenderError, logical_ids, params::RenderParams, resources::aws_lambda_map_tags,
     template::CfnResource,
 };
 use pmcp_package::package::DeployDescriptor;
-use serde_json::json;
+use serde_json::{json, Value};
 
 /// The MCP server's single catch-all HTTP route. Fixed — see the module
 /// doc comment.
@@ -62,16 +70,37 @@ pub fn render(
 /// this resource type's `Tags` property requires — see
 /// [`crate::resources::aws_lambda_map_tags`]'s doc comment).
 fn render_api(d: &DeployDescriptor) -> (String, CfnResource) {
+    render_api_with(
+        d,
+        "MCP Server HTTP API",
+        aws_lambda_map_tags(&d.server.name),
+    )
+}
+
+/// Shared `AWS::ApiGatewayV2::Api` builder — reused by this module's own
+/// plain `aws-lambda` HTTP API kernel ([`render_api`]) and by
+/// `resources::cognito`'s Cognito+DCR OAuth stack shape, whose HTTP API is
+/// otherwise identical (same fixed logical id, `ProtocolType`, and CORS
+/// preflight configuration). The two callers differ only in the
+/// `Description` string and the `Tags` value (this target's plain four-tag
+/// map vs. the OAuth stack's `component: oauth`-tagged map) — both are
+/// taken as parameters so the resource shape itself is defined exactly
+/// once. `pub(crate)` so `resources::cognito::render_api` can call it.
+pub(crate) fn render_api_with(
+    d: &DeployDescriptor,
+    description: &str,
+    tags: Value,
+) -> (String, CfnResource) {
     let properties = json!({
         "Name": d.server.name,
         "ProtocolType": "HTTP",
-        "Description": "MCP Server HTTP API",
+        "Description": description,
         "CorsConfiguration": {
             "AllowOrigins": ["*"],
             "AllowMethods": ["GET", "POST", "OPTIONS"],
             "AllowHeaders": ["*"],
         },
-        "Tags": aws_lambda_map_tags(&d.server.name),
+        "Tags": tags,
     });
     (
         logical_ids::for_http_api().to_string(),
@@ -86,6 +115,19 @@ fn render_api(d: &DeployDescriptor) -> (String, CfnResource) {
 /// The `AWS::ApiGatewayV2::Integration`: `AWS_PROXY` to
 /// `function_logical_id`'s ARN, payload format `"2.0"`.
 fn render_integration(function_logical_id: &str) -> (String, CfnResource) {
+    render_integration_for(logical_ids::for_http_integration(), function_logical_id)
+}
+
+/// Shared `AWS::ApiGatewayV2::Integration` builder — reused by this
+/// module's single fixed integration ([`render_integration`]) and by
+/// `resources::cognito`'s HTTP API, which needs TWO integrations (one per
+/// backing Lambda function) and therefore already needs the logical id as
+/// a parameter. `pub(crate)` so `resources::cognito::render_http_api` can
+/// call it directly for both.
+pub(crate) fn render_integration_for(
+    logical_id: &str,
+    function_logical_id: &str,
+) -> (String, CfnResource) {
     let properties = json!({
         "ApiId": { "Ref": logical_ids::for_http_api() },
         "IntegrationType": "AWS_PROXY",
@@ -93,7 +135,7 @@ fn render_integration(function_logical_id: &str) -> (String, CfnResource) {
         "PayloadFormatVersion": "2.0",
     });
     (
-        logical_ids::for_http_integration().to_string(),
+        logical_id.to_string(),
         CfnResource {
             type_: "AWS::ApiGatewayV2::Integration".to_string(),
             properties,
@@ -127,11 +169,20 @@ fn render_route() -> (String, CfnResource) {
 /// call in the TS scaffold), but it is still a real, separately-tagged
 /// resource in the synthesized template.
 fn render_stage(d: &DeployDescriptor) -> (String, CfnResource) {
+    render_stage_with(aws_lambda_map_tags(&d.server.name))
+}
+
+/// Shared `AWS::ApiGatewayV2::Stage` builder — reused by [`render_stage`]
+/// and by `resources::cognito`'s HTTP API, whose `$default` stage is
+/// identical except for its `Tags` value (this target's plain four-tag map
+/// vs. the OAuth stack's `component: oauth`-tagged map). `pub(crate)` so
+/// `resources::cognito::render_stage` can call it.
+pub(crate) fn render_stage_with(tags: Value) -> (String, CfnResource) {
     let properties = json!({
         "ApiId": { "Ref": logical_ids::for_http_api() },
         "StageName": "$default",
         "AutoDeploy": true,
-        "Tags": aws_lambda_map_tags(&d.server.name),
+        "Tags": tags,
     });
     (
         logical_ids::for_http_stage().to_string(),
@@ -151,6 +202,21 @@ fn render_stage(d: &DeployDescriptor) -> (String, CfnResource) {
 /// strings, not CFN pseudo-parameters, because the TS stack is synthesized
 /// with an explicit `env: {account, region}`).
 fn render_permission(function_logical_id: &str, p: &RenderParams) -> (String, CfnResource) {
+    render_permission_for(logical_ids::for_http_permission(), function_logical_id, p)
+}
+
+/// Shared `AWS::Lambda::Permission` builder — reused by this module's
+/// single fixed permission ([`render_permission`]) and by
+/// `resources::cognito`'s HTTP API, which needs THREE such permissions (one
+/// per Lambda function: MCP, OAuth-proxy, authorizer) and therefore already
+/// needs the logical id as a parameter. `pub(crate)` so
+/// `resources::cognito::render_http_api` can call it directly for all
+/// three.
+pub(crate) fn render_permission_for(
+    logical_id: &str,
+    function_logical_id: &str,
+    p: &RenderParams,
+) -> (String, CfnResource) {
     let properties = json!({
         "Action": "lambda:InvokeFunction",
         "FunctionName": { "Fn::GetAtt": [function_logical_id, "Arn"] },
@@ -164,7 +230,7 @@ fn render_permission(function_logical_id: &str, p: &RenderParams) -> (String, Cf
         },
     });
     (
-        logical_ids::for_http_permission().to_string(),
+        logical_id.to_string(),
         CfnResource {
             type_: "AWS::Lambda::Permission".to_string(),
             properties,
