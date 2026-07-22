@@ -604,13 +604,12 @@ impl ServerDiscoverRequest {
 /// This enum is `pub(crate)`, so it is invisible to `cargo-semver-checks` /
 /// `cargo-public-api` and can grow variants freely without any public API or
 /// downstream exhaustive-match impact.
-// Why: the internal dispatch representation + classifier are the routing seam
-// for v2 `server/discover`; production wiring into the server request path
-// lands in Plan 05. Until then they are exercised only by the unit tests below,
-// so the non-test build sees them as unused. The allow is scoped and removed
-// when Plan 05 consumes them.
+// Consumed in production by the crate-private `parse_request_or_internal`
+// routing seam (Plan 05, `src/shared/protocol_helpers.rs`), which classifies
+// `server/discover` into this internal representation BEFORE the public-enum
+// conversion. The server dispatch (`dispatch_internal_client_request`) then
+// era-gates it to the v2 `handle_discover` projection.
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub(crate) enum InternalClientRequest {
     /// The v2 `server/discover` request (VERS-04).
     ServerDiscover(ServerDiscoverRequest),
@@ -622,10 +621,9 @@ pub(crate) enum InternalClientRequest {
 /// Returns `Some(InternalClientRequest::ServerDiscover(..))` for the exact
 /// method string `"server/discover"` and `None` for every other method (which
 /// then flows through the normal public-enum dispatch path). Plan 05 calls this
-/// from the server request path BEFORE the public-enum conversion.
-// Why: production caller lands in Plan 05 (see InternalClientRequest above);
-// exercised by unit tests until then.
-#[allow(dead_code)]
+/// from the server request path BEFORE the public-enum conversion. Consumed in
+/// production by [`parse_request_or_internal`](crate::shared::protocol_helpers)
+/// (Plan 05).
 pub(crate) fn classify_internal_method(
     method: &str,
     _params: &serde_json::Value,

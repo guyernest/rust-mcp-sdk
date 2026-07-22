@@ -12,23 +12,82 @@ use std::sync::LazyLock;
 /// Global SIMD JSON parser instance for high-performance parsing
 static SIMD_PARSER: LazyLock<SimdJsonParser> = LazyLock::new(SimdJsonParser::new);
 
-/// Parse a JSON-RPC request into a typed Request.
-pub fn parse_request(request: JSONRPCRequest<Value>) -> Result<(RequestId, Request)> {
+/// Crate-private ingress classification of a raw JSON-RPC request (Phase 112,
+/// VERS-04).
+///
+/// A raw request is either a public typed [`Request`] (the existing exhaustive
+/// enum path) or an internally-routed method that deliberately has NO public
+/// enum variant (e.g. v2 `server/discover`, carried by
+/// [`InternalClientRequest`](crate::types::protocol::InternalClientRequest)).
+///
+/// This is the single method-string interception seam: it consults
+/// [`classify_internal_method`](crate::types::protocol::classify_internal_method)
+/// BEFORE the public-enum conversion, so the routing decision lives in exactly
+/// one place. The public [`parse_request`] delegates here and maps the internal
+/// variant to `-32601` (v1 behavior, byte-identical); the era-gated server
+/// dispatch consumes the [`IngressRequest::Internal`] variant directly to reach
+/// the internal handler on the v2 path.
+pub(crate) enum IngressRequest {
+    /// A public typed request (the existing exhaustive-enum dispatch path).
+    Public(Request),
+    /// An internally-routed method with no public enum variant (v2-only).
+    Internal(crate::types::protocol::InternalClientRequest),
+}
+
+/// Parse a raw JSON-RPC request, intercepting internally-routed methods BEFORE
+/// the public-enum conversion (Phase 112, VERS-04).
+///
+/// This is the crate-private routing seam. `server/discover` (and any future
+/// internally-routed method) is classified via
+/// [`classify_internal_method`](crate::types::protocol::classify_internal_method)
+/// and returned as [`IngressRequest::Internal`]; every other method flows
+/// through the existing public-enum conversion as [`IngressRequest::Public`].
+/// Unknown methods still resolve to [`Error::method_not_found`].
+pub(crate) fn parse_request_or_internal(
+    request: JSONRPCRequest<Value>,
+) -> Result<(RequestId, IngressRequest)> {
     let id = request.id;
-    let method = &request.method;
+    let method = request.method;
     let params = request.params.unwrap_or(Value::Null);
 
+    // Intercept internally-routed methods (e.g. `server/discover`) BEFORE the
+    // public-enum conversion — one routing decision, one place.
+    if let Some(internal) = crate::types::protocol::classify_internal_method(&method, &params) {
+        return Ok((id, IngressRequest::Internal(internal)));
+    }
+
     // Try to parse as client request first
-    if let Ok(client_req) = parse_client_request(method, &params) {
-        return Ok((id, Request::Client(Box::new(client_req))));
+    if let Ok(client_req) = parse_client_request(&method, &params) {
+        return Ok((
+            id,
+            IngressRequest::Public(Request::Client(Box::new(client_req))),
+        ));
     }
 
     // Try to parse as server request
-    if let Ok(server_req) = parse_server_request(method, &params) {
-        return Ok((id, Request::Server(Box::new(server_req))));
+    if let Ok(server_req) = parse_server_request(&method, &params) {
+        return Ok((
+            id,
+            IngressRequest::Public(Request::Server(Box::new(server_req))),
+        ));
     }
 
-    Err(Error::method_not_found(method))
+    Err(Error::method_not_found(&method))
+}
+
+/// Parse a JSON-RPC request into a typed Request.
+///
+/// Internally-routed methods that have no public enum variant (e.g. v2
+/// `server/discover`) resolve to [`Error::method_not_found`] on this PUBLIC
+/// entrypoint — the v1 `-32601` behavior, byte-identical to before. The
+/// era-gated live routing to the internal handler is performed by the server
+/// dispatch via the crate-private [`parse_request_or_internal`] seam (D-10).
+pub fn parse_request(request: JSONRPCRequest<Value>) -> Result<(RequestId, Request)> {
+    let method = request.method.clone();
+    match parse_request_or_internal(request)? {
+        (id, IngressRequest::Public(req)) => Ok((id, req)),
+        (_, IngressRequest::Internal(_)) => Err(Error::method_not_found(&method)),
+    }
 }
 
 /// Parse a notification from JSON.
@@ -480,6 +539,39 @@ mod tests {
             Request::Client(ref boxed) if matches!(**boxed, ClientRequest::CreateMessage(_)) => (),
             _ => panic!("Expected CreateMessage request"),
         }
+    }
+
+    #[test]
+    fn test_parse_request_or_internal_routes_server_discover() {
+        // `server/discover` is intercepted as an Internal ingress request BEFORE
+        // the public-enum conversion (VERS-04 routing seam).
+        let req = JSONRPCRequest::new(
+            RequestId::from(1i64),
+            "server/discover".to_string(),
+            Some(json!({})),
+        );
+        let (_id, ingress) = parse_request_or_internal(req).unwrap();
+        assert!(matches!(ingress, IngressRequest::Internal(_)));
+
+        // A normal method flows through as Public.
+        let req2 = JSONRPCRequest::new(
+            RequestId::from(2i64),
+            "tools/list".to_string(),
+            Some(json!({})),
+        );
+        let (_id2, ingress2) = parse_request_or_internal(req2).unwrap();
+        assert!(matches!(ingress2, IngressRequest::Public(_)));
+
+        // On the PUBLIC entrypoint, `server/discover` still resolves to -32601.
+        let req3 = JSONRPCRequest::new(
+            RequestId::from(3i64),
+            "server/discover".to_string(),
+            Some(json!({})),
+        );
+        assert!(parse_request(req3)
+            .unwrap_err()
+            .to_string()
+            .contains("Method not found"));
     }
 
     #[test]

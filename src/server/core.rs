@@ -537,6 +537,81 @@ impl ServerCore {
         })
     }
 
+    /// Dispatch a crate-private [`InternalClientRequest`](crate::types::protocol::InternalClientRequest)
+    /// (Phase 112, VERS-04).
+    ///
+    /// This is the era-gated routing seam for methods that have NO public enum
+    /// variant. The live transport wiring — making the request path carry an
+    /// [`IngressRequest::Internal`](crate::shared::protocol_helpers) here — lands
+    /// in the dispatch/streamable-HTTP plans (112-07 / 112-08); this phase
+    /// establishes the handler + routing so those plans have one call target.
+    // Why: production transport caller lands in Plan 07/08 (see doc above); this
+    // phase unit-tests it directly through the crate-private entry. The allow is
+    // scoped and removed when the transport dispatch consumes it.
+    #[allow(dead_code)]
+    pub(crate) fn dispatch_internal_client_request(
+        &self,
+        id: RequestId,
+        request: &crate::types::protocol::InternalClientRequest,
+        protocol_context: Option<&crate::types::protocol::ProtocolContext>,
+    ) -> JSONRPCResponse {
+        match request {
+            crate::types::protocol::InternalClientRequest::ServerDiscover(_) => {
+                self.handle_discover(id, protocol_context)
+            },
+        }
+    }
+
+    /// Handle the v2 `server/discover` request (Phase 112, VERS-04, D-09/D-10).
+    ///
+    /// A READ-ONLY projection of the server's already-computed
+    /// [`capabilities`](Self::capabilities) (including the `extensions` map)
+    /// via the isolated [`discover_result_from_capabilities`] conversion fn —
+    /// it never recomputes capabilities and never triggers an initialize-style
+    /// side effect (no `is_initialized` mutation). It is era-gated: only an
+    /// `Era::V2` request is served; a v1 / non-opted-in request receives
+    /// standard `-32601` method-not-found (D-10), the same reject the public
+    /// `parse_request` produces for `server/discover`.
+    // Why: production transport caller lands in Plan 07/08 (see
+    // `dispatch_internal_client_request`); unit-tested directly this phase.
+    #[allow(dead_code)]
+    pub(crate) fn handle_discover(
+        &self,
+        id: RequestId,
+        protocol_context: Option<&crate::types::protocol::ProtocolContext>,
+    ) -> JSONRPCResponse {
+        // Era gate (D-10): v2 only. A v1 / non-opted-in request is method-not-found.
+        if !matches!(
+            protocol_context.map(|c| c.era),
+            Some(crate::types::protocol::Era::V2)
+        ) {
+            return Self::error_response(
+                id,
+                crate::types::protocol::error_codes::METHOD_NOT_FOUND,
+                "Method not found: server/discover".to_string(),
+            );
+        }
+
+        let negotiated_version = protocol_context.map_or_else(
+            || crate::types::protocol::PROTOCOL_VERSION_2026_07_28.to_string(),
+            |ctx| ctx.negotiated_version.as_str().to_string(),
+        );
+
+        // Read-only projection of the ALREADY-COMPUTED capabilities — no recompute.
+        let result =
+            discover_result_from_capabilities(&self.capabilities, &self.info, negotiated_version);
+        let mut response = Self::success_response(id, serde_json::to_value(result).unwrap());
+        // Parity: the v2 object result carries resultType + serverInfo via the
+        // SAME shared envelope helper every other v2 result uses.
+        inject_v2_result_envelope(
+            &mut response,
+            protocol_context,
+            &self.info,
+            ResponseDisposition::Complete,
+        );
+        response
+    }
+
     /// Handle list tools request.
     async fn handle_list_tools(&self, _req: &ListToolsRequest) -> Result<ListToolsResult> {
         contract_pre_tool_dispatch_integrity!();
@@ -1047,6 +1122,137 @@ impl crate::server::middleware_executor::MiddlewareExecutor for ServerCore {
     }
 }
 
+/// The wire result of a v2 `server/discover` request (Phase 112, VERS-04).
+///
+/// A read-only projection of the server's ALREADY-COMPUTED capabilities plus
+/// its implementation info. It reuses the existing [`ServerCapabilities`] /
+/// [`Implementation`] types — it does NOT invent a parallel capability model —
+/// and is produced ONLY through the isolated [`discover_result_from_capabilities`]
+/// conversion fn so a final-spec wire adjustment stays localized.
+///
+/// It is `#[non_exhaustive]` (spec-defined fields may be added without a break)
+/// and crate-private (server-produced wire output, not a client-constructed
+/// public API type this phase — the pmcp `Client` gains v2 discover parsing in
+/// Phase 113).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ServerDiscoverResult {
+    /// The negotiated protocol version this projection was produced under.
+    pub protocol_version: String,
+    /// The server's already-computed capabilities (incl. the `extensions` map).
+    pub capabilities: ServerCapabilities,
+    /// The server's self-reported implementation info.
+    pub server_info: Implementation,
+}
+
+/// Isolated conversion fn producing the [`ServerDiscoverResult`] wire shape
+/// (Phase 112, VERS-04).
+///
+/// This is the SINGLE place the discover wire shape is assembled: it projects
+/// the already-computed `capabilities` (including `extensions`) and `info`
+/// read-only — never recomputing capabilities and never triggering any
+/// initialize-style side effect. Keeping the shape behind one fn means a
+/// final-spec change is localized (Codex MEDIUM — "server/discover wire shape is
+/// provisional").
+pub(crate) fn discover_result_from_capabilities(
+    capabilities: &ServerCapabilities,
+    info: &Implementation,
+    negotiated_version: String,
+) -> ServerDiscoverResult {
+    ServerDiscoverResult {
+        protocol_version: negotiated_version,
+        capabilities: capabilities.clone(),
+        server_info: info.clone(),
+    }
+}
+
+/// Internal disposition discriminator for the v2 `resultType` envelope
+/// (Phase 112, VERS-07 / D-08).
+///
+/// This is NOT a public field on any Result struct — handlers keep returning
+/// today's types (semver-safe, zero public-API churn). This phase only ever
+/// emits [`ResponseDisposition::Complete`]; the [`InputRequired`](Self::InputRequired)
+/// and [`Task`](Self::Task) variants are the concrete path Phases 113 and 114
+/// select at dispatch: they thread a non-default disposition with the response
+/// and the SAME serialization helper ([`inject_v2_result_envelope`]) emits it,
+/// without touching this envelope code.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ResponseDisposition {
+    /// The result is a final, complete result (the default; absent-means-complete).
+    Complete,
+    // Why: the two non-Complete dispositions are the established selection path
+    // for Phases 113 (`input_required`) and 114 (`task`) — they are wired by
+    // those phases at dispatch and emitted by the shared helper below. Retained
+    // here (rather than added later) so the mechanism 113/114 depend on exists
+    // and is exercised by the `as_wire_str` unit test this phase.
+    /// The result requests further input before it can complete (Phase 113).
+    #[allow(dead_code)]
+    InputRequired,
+    /// The result is a task handle rather than a terminal result (Phase 114).
+    #[allow(dead_code)]
+    Task,
+}
+
+impl ResponseDisposition {
+    /// The wire `resultType` discriminator string.
+    pub(crate) fn as_wire_str(self) -> &'static str {
+        match self {
+            Self::Complete => "complete",
+            Self::InputRequired => "input_required",
+            Self::Task => "task",
+        }
+    }
+}
+
+/// Inject the v2-only response envelope (`resultType` + `serverInfo`) at the
+/// era-gated serialization boundary (Phase 112, VERS-07 / D-07 / D-08).
+///
+/// This is the ONE shared implementation BOTH native dispatch sites
+/// (`core.rs` and `server/mod.rs`) call — not a per-site copy. The envelope
+/// model is pinned (Codex HIGH #5):
+///
+/// - era != V2 (or no resolved context) → response left BYTE-IDENTICAL to
+///   today (the v1 promise — no key added, golden-fixtured).
+/// - error responses / notifications (no `result`) → NO injection.
+/// - `result` is a JSON object → insert `resultType` (from `disposition`,
+///   `complete` this phase) INTO the inner result object UNLESS the handler
+///   already set one (respected, never overwritten — the 113/114 path), and
+///   attach `serverInfo` (never overwritten).
+/// - `result` is scalar/array/null → left unchanged (cannot key a non-object;
+///   no in-scope v2 method returns a non-object).
+pub(crate) fn inject_v2_result_envelope(
+    response: &mut JSONRPCResponse,
+    protocol_context: Option<&crate::types::protocol::ProtocolContext>,
+    server_info: &Implementation,
+    disposition: ResponseDisposition,
+) {
+    // v2-only: a v1 (or non-opted-in) response is left byte-identical.
+    if !matches!(
+        protocol_context.map(|c| c.era),
+        Some(crate::types::protocol::Era::V2)
+    ) {
+        return;
+    }
+
+    // Only success results carry the envelope; errors / notifications do not.
+    let crate::types::jsonrpc::ResponsePayload::Result(ref mut value) = response.payload else {
+        return;
+    };
+
+    // A non-object result (scalar/array/null) cannot carry a key — leave it.
+    let Some(obj) = value.as_object_mut() else {
+        return;
+    };
+
+    // Collision-safe: respect a handler-set `resultType` (the 113/114 path).
+    obj.entry("resultType".to_string())
+        .or_insert_with(|| Value::String(disposition.as_wire_str().to_string()));
+    // Attach serverInfo on the v2 object result; never overwrite a handler value.
+    obj.entry("serverInfo".to_string())
+        .or_insert_with(|| serde_json::to_value(server_info).unwrap_or(Value::Null));
+}
+
 #[async_trait]
 impl ProtocolHandler for ServerCore {
     async fn handle_request(
@@ -1088,8 +1294,19 @@ impl ProtocolHandler for ServerCore {
 
         // Execute the actual request handling with auth_context
         let mut response = self
-            .handle_request_internal(id.clone(), request, auth_context, protocol_context)
+            .handle_request_internal(id.clone(), request, auth_context, protocol_context.clone())
             .await;
+
+        // Inject the v2-only response envelope (resultType + serverInfo) at the
+        // era-gated serialization boundary (VERS-07 / D-07 / D-08). This is a
+        // no-op for v1 / non-opted-in responses (byte-identical) and for
+        // error/notification/non-object results. This phase emits `complete`.
+        inject_v2_result_envelope(
+            &mut response,
+            protocol_context.as_ref(),
+            &self.info,
+            ResponseDisposition::Complete,
+        );
 
         // Process response through protocol middleware chain (read-only access)
         if let Err(e) = self
@@ -1793,6 +2010,290 @@ mod tests {
                 panic!("unsupported version must be rejected, not served")
             },
         }
+    }
+
+    // ---- Phase 112 Plan 05: server/discover (VERS-04) ----
+
+    fn v2_ctx() -> crate::types::protocol::ProtocolContext {
+        crate::types::protocol::ProtocolContext::new(
+            crate::types::protocol::Era::V2,
+            ProtocolVersion(crate::types::protocol::PROTOCOL_VERSION_2026_07_28.to_string()),
+        )
+    }
+
+    fn v1_ctx() -> crate::types::protocol::ProtocolContext {
+        crate::types::protocol::ProtocolContext::new(
+            crate::types::protocol::Era::V1,
+            ProtocolVersion("2025-11-25".to_string()),
+        )
+    }
+
+    /// Build a v2-opted-in server carrying a `.with_extension`-populated key.
+    fn discover_server() -> ServerCore {
+        crate::server::builder::ServerCoreBuilder::new()
+            .name("discover-server")
+            .version("9.9.9")
+            .tool("probe", EraProbeTool)
+            .stateless_mode(true)
+            .with_extension(
+                "io.example/experimental",
+                serde_json::json!({ "enabled": true }),
+            )
+            .with_supported_protocol_versions([
+                ProtocolVersion("2025-11-25".to_string()),
+                ProtocolVersion(crate::types::protocol::PROTOCOL_VERSION_2026_07_28.to_string()),
+            ])
+            .build()
+            .unwrap()
+    }
+
+    /// A v2 `server/discover` projects the already-computed capabilities INCLUDING
+    /// the `.with_extension`-populated extensions map, and carries serverInfo.
+    #[test]
+    fn server_discover_v2_projects_capabilities_with_extensions() {
+        let server = discover_server();
+        let internal = crate::types::protocol::classify_internal_method(
+            "server/discover",
+            &serde_json::json!({}),
+        )
+        .expect("server/discover classifies as internal");
+        let ctx = v2_ctx();
+        let response =
+            server.dispatch_internal_client_request(RequestId::from(1i64), &internal, Some(&ctx));
+
+        let ResponsePayload::Result(value) = response.payload else {
+            panic!("v2 server/discover must return a result");
+        };
+        // extensions map projected
+        assert_eq!(
+            value["capabilities"]["extensions"]["io.example/experimental"]["enabled"],
+            serde_json::json!(true)
+        );
+        // serverInfo present
+        assert_eq!(value["serverInfo"]["name"], "discover-server");
+        assert_eq!(value["serverInfo"]["version"], "9.9.9");
+        // negotiated version reflected
+        assert_eq!(value["protocolVersion"], "2026-07-28");
+    }
+
+    /// A v1 / non-opted-in `server/discover` receives standard -32601 (D-10).
+    #[test]
+    fn server_discover_v1_returns_method_not_found() {
+        let server = discover_server();
+        let internal = crate::types::protocol::classify_internal_method(
+            "server/discover",
+            &serde_json::json!({}),
+        )
+        .unwrap();
+
+        // v1 era context
+        let ctx = v1_ctx();
+        let resp =
+            server.dispatch_internal_client_request(RequestId::from(2i64), &internal, Some(&ctx));
+        let ResponsePayload::Error(e) = resp.payload else {
+            panic!("v1 server/discover must be an error");
+        };
+        assert_eq!(
+            e.code,
+            crate::types::protocol::error_codes::METHOD_NOT_FOUND
+        );
+        assert_eq!(e.code, -32601);
+
+        // no resolved context at all → also -32601
+        let resp_none =
+            server.dispatch_internal_client_request(RequestId::from(3i64), &internal, None);
+        let ResponsePayload::Error(e2) = resp_none.payload else {
+            panic!("context-less server/discover must be an error");
+        };
+        assert_eq!(e2.code, -32601);
+    }
+
+    /// The public `parse_request` maps `server/discover` to -32601 (v1 for free)
+    /// — proving the interception seam preserves the v1 wire behavior.
+    #[test]
+    fn server_discover_public_parse_is_method_not_found() {
+        let req = crate::types::JSONRPCRequest::new(
+            RequestId::from(1i64),
+            "server/discover".to_string(),
+            Some(serde_json::json!({})),
+        );
+        let err = crate::shared::parse_request(req).unwrap_err();
+        assert!(err.to_string().contains("Method not found"));
+    }
+
+    /// `server/discover` does NOT mutate initialization state (read-only, no
+    /// initialize-style side effect).
+    #[tokio::test]
+    async fn server_discover_does_not_mutate_init_state() {
+        // Non-stateless server so `is_initialized()` is meaningful.
+        let server = crate::server::builder::ServerCoreBuilder::new()
+            .name("discover-server")
+            .version("1.0.0")
+            .tool("probe", EraProbeTool)
+            .with_supported_protocol_versions([ProtocolVersion(
+                crate::types::protocol::PROTOCOL_VERSION_2026_07_28.to_string(),
+            )])
+            .build()
+            .unwrap();
+
+        assert!(!server.is_initialized().await);
+        let ctx = v2_ctx();
+        let _ = server.handle_discover(RequestId::from(1i64), Some(&ctx));
+        assert!(
+            !server.is_initialized().await,
+            "server/discover must not flip initialization state"
+        );
+    }
+
+    /// Golden fixture: pin the discover wire shape so a change is caught.
+    #[test]
+    fn server_discover_wire_shape_golden() {
+        let caps = ServerCapabilities::tools_only();
+        let info = Implementation::new("golden-server", "1.2.3");
+        let result = discover_result_from_capabilities(&caps, &info, "2026-07-28".to_string());
+        let value = serde_json::to_value(&result).unwrap();
+        let expected = serde_json::json!({
+            "protocolVersion": "2026-07-28",
+            "capabilities": { "tools": { "listChanged": true } },
+            "serverInfo": { "name": "golden-server", "version": "1.2.3" }
+        });
+        assert_eq!(value, expected, "discover wire shape drifted from golden");
+    }
+
+    // ---- Phase 112 Plan 05: resultType + serverInfo envelope (VERS-07) ----
+
+    fn result_response(id: i64, result: Value) -> JSONRPCResponse {
+        JSONRPCResponse {
+            jsonrpc: "2.0".to_string(),
+            id: RequestId::from(id),
+            payload: ResponsePayload::Result(result),
+        }
+    }
+
+    /// A v2 OBJECT success result gains inner-result `resultType:"complete"` and
+    /// a `serverInfo` object.
+    #[test]
+    fn result_type_envelope_v2_object_gets_complete_and_server_info() {
+        let info = Implementation::new("srv", "2.0.0");
+        let ctx = v2_ctx();
+        let mut resp = result_response(1, serde_json::json!({ "tools": [] }));
+        inject_v2_result_envelope(&mut resp, Some(&ctx), &info, ResponseDisposition::Complete);
+        let ResponsePayload::Result(v) = resp.payload else {
+            panic!("expected result");
+        };
+        assert_eq!(v["resultType"], "complete");
+        assert_eq!(v["serverInfo"]["name"], "srv");
+        assert_eq!(v["serverInfo"]["version"], "2.0.0");
+    }
+
+    /// A handler-set `resultType` is PRESERVED, never overwritten (the 113/114
+    /// path). This proves the disposition the serialization layer reads.
+    #[test]
+    fn result_type_envelope_preserves_handler_disposition() {
+        let info = Implementation::new("srv", "2.0.0");
+        let ctx = v2_ctx();
+        let mut resp = result_response(1, serde_json::json!({ "resultType": "task", "x": 1 }));
+        // Even though we ask for Complete, the handler's "task" must survive.
+        inject_v2_result_envelope(&mut resp, Some(&ctx), &info, ResponseDisposition::Complete);
+        let ResponsePayload::Result(v) = resp.payload else {
+            panic!("expected result");
+        };
+        assert_eq!(
+            v["resultType"], "task",
+            "handler disposition must be preserved"
+        );
+        // Non-default dispositions round-trip through the wire discriminator.
+        assert_eq!(
+            ResponseDisposition::InputRequired.as_wire_str(),
+            "input_required"
+        );
+        assert_eq!(ResponseDisposition::Task.as_wire_str(), "task");
+    }
+
+    /// A v2 scalar/null result is left unchanged (cannot key a non-object), and
+    /// error responses get no injection.
+    #[test]
+    fn result_type_envelope_non_object_and_error_untouched() {
+        let info = Implementation::new("srv", "2.0.0");
+        let ctx = v2_ctx();
+
+        // scalar
+        let mut scalar = result_response(1, serde_json::json!(42));
+        inject_v2_result_envelope(
+            &mut scalar,
+            Some(&ctx),
+            &info,
+            ResponseDisposition::Complete,
+        );
+        let ResponsePayload::Result(v) = scalar.payload else {
+            panic!("expected result");
+        };
+        assert_eq!(v, serde_json::json!(42));
+
+        // null
+        let mut null = result_response(2, Value::Null);
+        inject_v2_result_envelope(&mut null, Some(&ctx), &info, ResponseDisposition::Complete);
+        let ResponsePayload::Result(v) = null.payload else {
+            panic!("expected result");
+        };
+        assert_eq!(v, Value::Null);
+
+        // error → no injection
+        let mut err = ServerCore::error_response(RequestId::from(3i64), -32601, "nope".to_string());
+        inject_v2_result_envelope(&mut err, Some(&ctx), &info, ResponseDisposition::Complete);
+        assert!(matches!(err.payload, ResponsePayload::Error(_)));
+    }
+
+    /// Golden byte-identity: a v1 (or non-opted-in) response is UNCHANGED — no
+    /// resultType, no serverInfo — for both a success and an error.
+    #[test]
+    fn result_type_envelope_v1_byte_identical_golden() {
+        let info = Implementation::new("srv", "2.0.0");
+        let ctx = v1_ctx();
+
+        // v1 success — byte-identical
+        let original = serde_json::json!({ "tools": [], "nextCursor": null });
+        let mut resp = result_response(1, original.clone());
+        inject_v2_result_envelope(&mut resp, Some(&ctx), &info, ResponseDisposition::Complete);
+        let ResponsePayload::Result(v) = resp.payload else {
+            panic!("expected result");
+        };
+        assert_eq!(v, original, "v1 success must stay byte-identical");
+
+        // No context at all — also byte-identical.
+        let mut resp_none = result_response(2, original.clone());
+        inject_v2_result_envelope(&mut resp_none, None, &info, ResponseDisposition::Complete);
+        let ResponsePayload::Result(v2) = resp_none.payload else {
+            panic!("expected result");
+        };
+        assert_eq!(v2, original);
+
+        // v1 error/task-pending — byte-identical (frozen -32002 survives).
+        let mut err = ServerCore::error_response(
+            RequestId::from(3i64),
+            -32002,
+            "Task not completed".to_string(),
+        );
+        let before = serde_json::to_value(&err).unwrap();
+        inject_v2_result_envelope(&mut err, Some(&ctx), &info, ResponseDisposition::Complete);
+        let after = serde_json::to_value(&err).unwrap();
+        assert_eq!(before, after, "v1 error must stay byte-identical");
+    }
+
+    /// End-to-end through `handle_request`: a v2 tools/list carries the envelope.
+    #[tokio::test]
+    async fn result_type_envelope_end_to_end_v2_handle_request() {
+        let server = discover_server();
+        // `probe_call_with_v2_meta` carries the v2 `_meta` so ingress resolves
+        // Era::V2; the tool result is a JSON object → gains the envelope.
+        let response = server
+            .handle_request(RequestId::from(1i64), probe_call_with_v2_meta(), None)
+            .await;
+        let ResponsePayload::Result(v) = response.payload else {
+            panic!("expected result");
+        };
+        assert_eq!(v["resultType"], "complete");
+        assert_eq!(v["serverInfo"]["name"], "discover-server");
     }
 
     #[tokio::test]
