@@ -83,6 +83,72 @@ impl ProtocolContext {
     }
 }
 
+/// Reserved `_meta` key carrying the per-request self-reported protocol version
+/// (Phase 112, D-11). Read at ingress by [`resolve_protocol_context`].
+pub(crate) const RESERVED_PROTOCOL_VERSION_KEY: &str =
+    "io.modelcontextprotocol/protocolVersion";
+
+/// Reserved `_meta` key carrying the per-request self-reported `clientInfo`.
+pub(crate) const RESERVED_CLIENT_INFO_KEY: &str = "io.modelcontextprotocol/clientInfo";
+
+/// Reserved `_meta` key carrying the per-request self-reported `clientCapabilities`.
+pub(crate) const RESERVED_CLIENT_CAPABILITIES_KEY: &str =
+    "io.modelcontextprotocol/clientCapabilities";
+
+/// The outcome of protocol negotiation failing at ingress (Phase 112, VERS-01).
+///
+/// Produced by [`resolve_protocol_context`] when a per-request `_meta` signal
+/// cannot be honored. The caller (the native dispatch ingress) maps each variant
+/// to a structured JSON-RPC rejection rather than silently disagreeing with the
+/// wire.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ProtocolNegotiationError {
+    /// A per-request version was present but is not in the server's configured
+    /// accept-list (or a v2-only server received no v2 signal). Carries the
+    /// offending/absent version string.
+    UnsupportedVersion(String),
+    /// A RESERVED `_meta` key was present but malformed (non-string
+    /// `protocolVersion`, non-deserializable `clientInfo`/`clientCapabilities`,
+    /// or a non-object `_meta`). Carries a static description.
+    MalformedMeta(&'static str),
+}
+
+/// Resolve the per-request [`ProtocolContext`] ONCE at ingress from the server's
+/// configured accept-list and the request's `_meta` (Phase 112, VERS-01; the
+/// load-bearing spine).
+///
+/// This is a PURE, deterministic, `cfg`-agnostic function — the single source of
+/// era resolution. The native dispatch sites (`core.rs`, `server/mod.rs`) call it
+/// once and thread the result; the HTTP layer (Plan 06) resolves once for its
+/// header gate and passes the SAME value in — it is never re-derived downstream
+/// (D-11: `_meta`-authoritative, transport-agnostic). It compiles on wasm32 (no
+/// wasm caller this phase) so the wasm build stays green.
+///
+/// # Behavior
+///
+/// - A per-request `protocolVersion` present and in `accept_list` → classified
+///   via [`protocol_era`](super::version::protocol_era).
+/// - A per-request version present but NOT in `accept_list` →
+///   [`ProtocolNegotiationError::UnsupportedVersion`].
+/// - No per-request version → falls back to the first v1 version in
+///   `accept_list`; a v2-only accept-list with no v2 signal →
+///   `UnsupportedVersion("")` (a v2-only server never silently serves v1).
+/// - A malformed RESERVED `_meta` key → [`ProtocolNegotiationError::MalformedMeta`];
+///   unrelated/unknown extension keys are IGNORED.
+///
+/// The per-request signal is authoritative over any session-stored version
+/// (Pitfall 2) — this function never consults session state.
+#[allow(dead_code)] // Why: consumed by the native dispatch ingress in the same plan (Task 2 GREEN).
+pub(crate) fn resolve_protocol_context(
+    accept_list: &[ProtocolVersion],
+    meta: Option<&serde_json::Value>,
+) -> Result<Option<ProtocolContext>, ProtocolNegotiationError> {
+    let _ = accept_list;
+    let _ = meta;
+    // RED stub — GREEN implements accept-list enforcement + reserved-key parsing.
+    Ok(None)
+}
+
 /// W3C trace-context values extracted from a request `_meta` object.
 ///
 /// # Security: values are RAW, UNVALIDATED, and self-reported
@@ -149,6 +215,110 @@ fn bounded_trace_value(meta: &serde_json::Value, key: &str) -> Option<String> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    fn dual_accept_list() -> Vec<ProtocolVersion> {
+        vec![
+            ProtocolVersion("2025-11-25".to_string()),
+            ProtocolVersion("2026-07-28".to_string()),
+        ]
+    }
+
+    #[test]
+    fn resolve_in_list_v2_signal_classifies_v2() {
+        let meta = json!({ RESERVED_PROTOCOL_VERSION_KEY: "2026-07-28" });
+        let ctx = resolve_protocol_context(&dual_accept_list(), Some(&meta))
+            .expect("v2 in accept-list => Ok")
+            .expect("resolved => Some");
+        assert_eq!(ctx.era, Era::V2);
+        assert_eq!(ctx.negotiated_version.as_str(), "2026-07-28");
+    }
+
+    #[test]
+    fn resolve_absent_signal_falls_back_to_v1() {
+        // No per-request version + v1 present in the accept-list => v1 fallback.
+        let ctx = resolve_protocol_context(&dual_accept_list(), None)
+            .expect("v1 in accept-list => Ok")
+            .expect("resolved => Some");
+        assert_eq!(ctx.era, Era::V1);
+        assert_eq!(ctx.negotiated_version.as_str(), "2025-11-25");
+    }
+
+    #[test]
+    fn resolve_unsupported_version_errors() {
+        // A per-request version not in the accept-list => UnsupportedVersion.
+        let meta = json!({ RESERVED_PROTOCOL_VERSION_KEY: "1999-01-01" });
+        let err = resolve_protocol_context(&dual_accept_list(), Some(&meta))
+            .expect_err("version not in accept-list => Err");
+        assert_eq!(
+            err,
+            ProtocolNegotiationError::UnsupportedVersion("1999-01-01".to_string())
+        );
+    }
+
+    #[test]
+    fn resolve_v2_only_no_signal_errors() {
+        // v2-only accept-list + no v2 signal => never silently serve v1.
+        let v2_only = vec![ProtocolVersion("2026-07-28".to_string())];
+        let err = resolve_protocol_context(&v2_only, None)
+            .expect_err("v2-only + no signal => Err");
+        assert_eq!(
+            err,
+            ProtocolNegotiationError::UnsupportedVersion(String::new())
+        );
+    }
+
+    #[test]
+    fn resolve_malformed_reserved_key_errors() {
+        // protocolVersion present but not a string => MalformedMeta.
+        let meta = json!({ RESERVED_PROTOCOL_VERSION_KEY: 42 });
+        let err = resolve_protocol_context(&dual_accept_list(), Some(&meta))
+            .expect_err("non-string protocolVersion => Err");
+        assert!(matches!(err, ProtocolNegotiationError::MalformedMeta(_)));
+
+        // _meta present but not an object => MalformedMeta.
+        let non_object = json!("not-an-object");
+        let err = resolve_protocol_context(&dual_accept_list(), Some(&non_object))
+            .expect_err("non-object _meta => Err");
+        assert!(matches!(err, ProtocolNegotiationError::MalformedMeta(_)));
+
+        // clientInfo present but not deserializable => MalformedMeta.
+        let bad_info = json!({
+            RESERVED_PROTOCOL_VERSION_KEY: "2026-07-28",
+            RESERVED_CLIENT_INFO_KEY: "should-be-an-object",
+        });
+        let err = resolve_protocol_context(&dual_accept_list(), Some(&bad_info))
+            .expect_err("malformed clientInfo => Err");
+        assert!(matches!(err, ProtocolNegotiationError::MalformedMeta(_)));
+    }
+
+    #[test]
+    fn resolve_unknown_extension_key_is_ignored() {
+        // An unrelated extension key must NOT trip the resolver.
+        let meta = json!({
+            RESERVED_PROTOCOL_VERSION_KEY: "2026-07-28",
+            "com.example/whatever": { "anything": [1, 2, 3] },
+        });
+        let ctx = resolve_protocol_context(&dual_accept_list(), Some(&meta))
+            .expect("unknown key ignored => Ok")
+            .expect("resolved => Some");
+        assert_eq!(ctx.era, Era::V2);
+    }
+
+    #[test]
+    fn resolve_populates_client_identity_when_well_formed() {
+        let meta = json!({
+            RESERVED_PROTOCOL_VERSION_KEY: "2026-07-28",
+            RESERVED_CLIENT_INFO_KEY: { "name": "acme-client", "version": "1.2.3" },
+            RESERVED_CLIENT_CAPABILITIES_KEY: {},
+        });
+        let ctx = resolve_protocol_context(&dual_accept_list(), Some(&meta))
+            .expect("well-formed => Ok")
+            .expect("resolved => Some");
+        let info = ctx.client_info.expect("client_info populated");
+        assert_eq!(info.name, "acme-client");
+        assert_eq!(info.version, "1.2.3");
+        assert!(ctx.client_capabilities.is_some());
+    }
 
     #[test]
     fn protocol_context_new_defaults_optionals_to_none() {
