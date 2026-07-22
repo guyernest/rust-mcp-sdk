@@ -99,16 +99,32 @@ impl TraceContext {
     /// note.
     #[must_use]
     pub fn from_meta(meta: &serde_json::Value) -> Option<Self> {
-        let traceparent = meta.get("traceparent")?.as_str()?;
-        if traceparent.len() > MAX_TRACE_VALUE_LEN {
-            return None;
-        }
-        // RED: tracestate/baggage extraction is added in the GREEN phase.
+        // `traceparent` is required and gates the whole extraction: absent,
+        // non-string, or over-bound => no trace context at all.
+        let traceparent = bounded_trace_value(meta, "traceparent")?;
+        // `tracestate`/`baggage` are optional: an over-bound value is dropped
+        // (treated as absent for that field), never propagated.
+        let tracestate = bounded_trace_value(meta, "tracestate");
+        let baggage = bounded_trace_value(meta, "baggage");
         Some(Self {
-            traceparent: traceparent.to_string(),
-            tracestate: None,
-            baggage: None,
+            traceparent,
+            tracestate,
+            baggage,
         })
+    }
+}
+
+/// Read a string-valued key out of a `_meta` object, enforcing the
+/// [`MAX_TRACE_VALUE_LEN`] ingress bound.
+///
+/// Returns `None` when the key is absent, not a string, or over the bound so an
+/// attacker-controlled oversized value is never surfaced (threat T-112-09).
+fn bounded_trace_value(meta: &serde_json::Value, key: &str) -> Option<String> {
+    let value = meta.get(key)?.as_str()?;
+    if value.len() > MAX_TRACE_VALUE_LEN {
+        None
+    } else {
+        Some(value.to_string())
     }
 }
 

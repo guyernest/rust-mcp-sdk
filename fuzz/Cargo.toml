@@ -137,3 +137,10 @@ path = "fuzz_targets/pkce_helper.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "trace_context_from_meta"
+path = "fuzz_targets/trace_context_from_meta.rs"
+test = false
+doc = false
+bench = false
