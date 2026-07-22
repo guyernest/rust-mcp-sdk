@@ -2236,7 +2236,15 @@ Plans:
   4. On the v2 HTTP path the required headers `Mcp-Method`/`Mcp-Name` (alongside `MCP-Protocol-Version`) are enforced inbound and emitted outbound (VERS-05)
   5. Every result carries the `resultType` envelope discriminator (`complete`/`input_required`/`task`), defaulting to `complete` when absent; W3C trace-context keys (`traceparent`/`tracestate`/`baggage`) in `_meta` are surfaced via typed accessors and propagated; and all error codes resolve from one centralized version-gated constant table with v2 values filled ONLY from the final 2026-07-28 schema.json and the frozen v1 `-32002` task-pending semantics unchanged (VERS-07, VERS-09, VERS-06)
 
-**Plans**: TBD
+**Plans**: 6 plans
+
+Plans:
+- [ ] 112-01-PLAN.md — Version era classifier (2026-07-28 const, Era, protocol_era) + ProtocolContext/TraceContext types + semver gate
+- [ ] 112-02-PLAN.md — RequestHandlerExtra protocol_context field + era/identity/trace accessors (native + wasm parity)
+- [ ] 112-03-PLAN.md — Centralized version-gated error-code table (frozen -32002 verbatim, v2 TODO) + ClientRequest::ServerDiscover variant
+- [ ] 112-04-PLAN.md — v2 opt-in accept-list builder + ProtocolContext ingress resolution & dispatch threading (both sites + wasm)
+- [ ] 112-05-PLAN.md — Era-gated dispatch: server/discover projection (v1 -32601), resultType envelope (v2-only), serverInfo
+- [ ] 112-06-PLAN.md — v2 HTTP header enforcement: Mcp-Method/Mcp-Name strict reject (D-05) + body cross-check (D-06) + outbound emission
 
 ### Phase 113: Stateless HTTP + Multi-Round-Trip Elicitation
 
