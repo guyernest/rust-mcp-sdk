@@ -136,3 +136,7 @@ None — no new security-relevant surface. The register is addressed: T-112-06e 
 ---
 *Phase: 112-version-plumbing-spine*
 *Completed: 2026-07-22*
+
+## Self-Check: PASSED
+
+`src/server/streamable_http_server.rs` (modified) and this SUMMARY exist on disk; the task commit `a33246a0` and the docs commit `07c6375a` are both present in git history. VERS-06 is `[x]` complete in REQUIREMENTS.md (idempotent — also completed by Plans 03/07).
