@@ -423,14 +423,16 @@ jobs:
           fi
         }
 
-    # pmcp-package + pmcp-agent + pmcp-team-servers publish BEFORE cargo-pmcp:
-    # cargo-pmcp 0.18.0 (Phase 110) pins all three (`pmcp-agent = "0.1"`,
-    # `pmcp-team-servers = "0.1"`, `pmcp-package = "0.1"`), so they MUST already
+    # pmcp-package + pmcp-cfn-renderer + pmcp-agent + pmcp-team-servers publish
+    # BEFORE cargo-pmcp: cargo-pmcp (as of the CFN-renderer extraction) pins
+    # all four (`pmcp-package = "0.1"`, `pmcp-cfn-renderer = "0.1"`,
+    # `pmcp-agent = "0.1"`, `pmcp-team-servers = "0.1"`), so they MUST already
     # exist on crates.io or `cargo publish -p cargo-pmcp` fails with
-    # "no matching package named `pmcp-agent`". Dependency order among the three:
-    # pmcp-package (leaf) -> pmcp-agent (pins pmcp-package) -> pmcp-team-servers
-    # (pins pmcp-agent + pmcp-package). All are experimental 0.x, so each keeps
-    # the same "already exists"-tolerant guard — a failure here must not gate the
+    # "no matching package named `...`". Dependency order among the four:
+    # pmcp-package (leaf) -> pmcp-cfn-renderer (pins pmcp-package) ->
+    # pmcp-agent (pins pmcp-package) -> pmcp-team-servers (pins pmcp-agent +
+    # pmcp-package). All are experimental 0.x, so each keeps the same
+    # "already exists"-tolerant guard — a failure here must not gate the
     # already-published core `pmcp` SDK.
     #
     # pmcp-package is workspace-EXCLUDED (own [workspace] table), so it publishes
@@ -451,6 +453,32 @@ jobs:
         }
 
     - name: Wait for crates.io to index pmcp-package
+      run: sleep 30
+
+    # pmcp-cfn-renderer (CFN-renderer extraction) publishes right after
+    # pmcp-package, its only dependency (`pmcp-package = "0.1"`, needs the
+    # 0.1.1 [auth.cognito] promotion — see
+    # crates/pmcp-cfn-renderer/tests/goldens/README.md's "Cross-crate publish
+    # coupling" section), and BEFORE cargo-pmcp, which pins
+    # `pmcp-cfn-renderer = "0.1"` (replaces `npx cdk synth`/`cdk deploy` for
+    # unmodified scaffolds on the pmcp-run and aws-lambda deploy targets).
+    # Experimental 0.x — a failure here must not gate the core SDK release.
+    - name: Publish pmcp-cfn-renderer
+      env:
+        CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+      run: |
+        echo "Publishing pmcp-cfn-renderer..."
+        OUTPUT=$(cargo publish -p pmcp-cfn-renderer 2>&1) && echo "$OUTPUT" || {
+          echo "$OUTPUT"
+          if echo "$OUTPUT" | grep -q "already exists"; then
+            echo "pmcp-cfn-renderer already published, continuing..."
+          else
+            echo "::error::Failed to publish pmcp-cfn-renderer"
+            exit 1
+          fi
+        }
+
+    - name: Wait for crates.io to index pmcp-cfn-renderer
       run: sleep 30
 
     - name: Publish pmcp-agent
@@ -566,4 +594,39 @@ jobs:
     with:
       tag_name: ${{ needs.create-release.outputs.version }}
       package_name: pmcp-server
+    secrets: inherit
+
+  # Shape A pure-config connector binaries (CFN-renderer extraction, Task 10):
+  # `cargo pmcp deploy --target aws-lambda` on a `[metadata].server_type`
+  # project (ServerShape::BuiltIn — see
+  # cargo-pmcp/src/deployment/targets/aws_lambda/artifact.rs) fetches one of
+  # these three as a bare `<name>-<target-triple>` GitHub Release asset (same
+  # `.sha256` sidecar convention as mcp-tester/pmcp-server above). Before this
+  # job existed, none of the three were ever built by this workflow, so a
+  # real built-in deploy 404'd (T8/T10 gap, closed here).
+  build-pmcp-sql-server:
+    name: Build PMCP SQL Server Binaries
+    needs: create-release
+    uses: ./.github/workflows/release-binary.yml
+    with:
+      tag_name: ${{ needs.create-release.outputs.version }}
+      package_name: pmcp-sql-server
+    secrets: inherit
+
+  build-pmcp-workbook-server:
+    name: Build PMCP Workbook Server Binaries
+    needs: create-release
+    uses: ./.github/workflows/release-binary.yml
+    with:
+      tag_name: ${{ needs.create-release.outputs.version }}
+      package_name: pmcp-workbook-server
+    secrets: inherit
+
+  build-pmcp-openapi-server:
+    name: Build PMCP OpenAPI Server Binaries
+    needs: create-release
+    uses: ./.github/workflows/release-binary.yml
+    with:
+      tag_name: ${{ needs.create-release.outputs.version }}
+      package_name: pmcp-openapi-server
     secrets: inherit
