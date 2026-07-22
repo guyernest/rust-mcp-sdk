@@ -2,9 +2,9 @@
 gsd_state_version: 1.0
 milestone: v2.5
 milestone_name: MCP Spec 2026-07-28
-status: executing
+status: verifying
 stopped_at: Completed 112-06-PLAN.md
-last_updated: "2026-07-22T23:09:29.918Z"
+last_updated: "2026-07-22T23:22:19.586Z"
 last_activity: 2026-07-22
 progress:
   total_phases: 71
@@ -27,7 +27,7 @@ See: .planning/PROJECT.md (updated 2026-07-22) · .planning/ROADMAP.md (v2.5 mil
 
 Phase: 112 (version-plumbing-spine) — EXECUTING
 Plan: 8 of 8
-Status: Ready to execute
+Status: Phase complete — ready for verification
 Last activity: 2026-07-22
 
 ## v2.5 Phase Plan (8 phases, 38 requirements)
@@ -100,6 +100,9 @@ Decisions are logged in PROJECT.md Key Decisions table. Decisions framing this m
 - [Phase 112]: 112-06: full header/_meta matrix as cog-25-safe pure classifier, fail-closed on every conflict cell; strict all-three-headers reject (D-05) + Mcp-Method/Mcp-Name body cross-check (D-06); outbound emission on success AND error non-panicking; new errors from error_codes:: (VERS-06); gate runs BEFORE legacy validate_protocol_version; v1/non-opted-in zero enforcement (D-04)
 - [Phase ?]: [Phase 112]: 112-07: dispatch layer (core.rs/mod.rs/task_dispatch.rs) + jsonrpc.rs production error-emission sites migrated to error_codes:: constants — centralized table is now the ACTUAL wire source of truth (closes checker Blocker 1); name-for-value swaps only, wire bytes unchanged; frozen -32002->V1_TASK_PENDING / -32601->METHOD_NOT_FOUND byte-identical, locking test untouched+green
 - [Phase ?]: [Phase 112]: 112-07: repo-wide VERS-06 audit — batch.rs/parallel_batch.rs production literals migrated here (Rule 2, owned by no plan); only Plan 08 streamable_http_server.rs (25) + non-compiled orphan src/wasi.rs remain (recorded)
+- [Phase ?]: [Phase 112]: 112-08: streamable-HTTP transport's 25 production error-code literals migrated to error_codes:: (name-for-value swap, wire bytes identical); file now carries zero bare -32xxx; value oracle lives in Plan 03 error_codes.rs consistency tests
+- [Phase ?]: [Phase 112]: 112-08: repo-wide VERS-06 audit closed — no production protocol-error EMISSION literal outside the centralized table across compiled src/; remaining are the table, #[cfg(test)] oracle, Plan-03-owned ProtocolErrorCode enum discriminants, and non-compiled orphan src/wasi.rs
+- [Phase ?]: [Phase 112]: 112-08: authoritative phase-end gate GREEN — cargo semver-checks vs 2.17.0 no breaking change (no major, no enum_variant_added; 223 pass); make quality-gate passed (pmat comply advisories informational per D-07)
 
 ### Pending Todos
 
@@ -135,7 +138,7 @@ Items deferred by design for this milestone (design §7 / REQUIREMENTS v2):
 
 ## Session Continuity
 
-Last session: 2026-07-22T23:09:04.377Z
+Last session: 2026-07-22T23:21:57.441Z
 Stopped at: Completed 112-06-PLAN.md
 Resume file: None
 
@@ -166,3 +169,4 @@ Resume file: None
 | Phase 112 P5 | 35 | 2 tasks | 4 files |
 | Phase 112 P06 | 22min | 2 tasks | 4 files |
 | Phase 112 P07 | 12min | 2 tasks | 6 files |
+| Phase 112 P08 | 11min | 1 tasks | 1 files |
