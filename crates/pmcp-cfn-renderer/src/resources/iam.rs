@@ -140,9 +140,16 @@ fn render_role(d: &DeployDescriptor) -> (String, CfnResource) {
 /// sections are not wired into this stack shape today), PLUS any
 /// operator-declared `[[iam.statements]]` appended after them in descriptor
 /// order (see the module doc comment's sugar-deferral note).
-fn render_policy(d: &DeployDescriptor, p: &RenderParams) -> (String, CfnResource) {
-    let region = &p.region;
-    let account_id = &p.account_id;
+///
+/// `p` is currently unused: the DynamoDB discovery + cross-Lambda invoke
+/// ARNs below are CFN pseudo-parameter forms (see
+/// [`family_internal_pseudo_param_arn`]'s doc comment), not literal
+/// `p.region`/`p.account_id` interpolations — see that function's doc
+/// comment for why. Kept as a parameter (rather than dropped from this and
+/// [`render_execution_role`]'s public signature) for symmetry with
+/// [`render_policy_aws_lambda`] and in case a future family-internal
+/// resource here needs it again.
+fn render_policy(d: &DeployDescriptor, _p: &RenderParams) -> (String, CfnResource) {
     let mut statements = vec![
         json!({
             "Effect": "Allow",
@@ -153,14 +160,20 @@ fn render_policy(d: &DeployDescriptor, p: &RenderParams) -> (String, CfnResource
             "Effect": "Allow",
             "Action": ["dynamodb:GetItem", "dynamodb:Query"],
             "Resource": [
-                format!("arn:aws:dynamodb:{region}:{account_id}:table/{MCP_SERVERS_TABLE}"),
-                format!("arn:aws:dynamodb:{region}:{account_id}:table/{MCP_SERVERS_TABLE}/*"),
+                family_internal_pseudo_param_arn(format!(
+                    "arn:aws:dynamodb:${{AWS::Region}}:${{AWS::AccountId}}:table/{MCP_SERVERS_TABLE}"
+                )),
+                family_internal_pseudo_param_arn(format!(
+                    "arn:aws:dynamodb:${{AWS::Region}}:${{AWS::AccountId}}:table/{MCP_SERVERS_TABLE}/*"
+                )),
             ],
         }),
         json!({
             "Effect": "Allow",
             "Action": "lambda:InvokeFunction",
-            "Resource": format!("arn:aws:lambda:{region}:{account_id}:function:*"),
+            "Resource": family_internal_pseudo_param_arn(
+                "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:*"
+            ),
         }),
     ];
     if let Some(iam) = &d.iam {
@@ -251,6 +264,41 @@ fn render_policy_aws_lambda(d: &DeployDescriptor) -> (String, CfnResource) {
             depends_on: vec![],
         },
     )
+}
+
+/// Wrap an ARN template string as a CFN `Fn::Sub` intrinsic — `{"Fn::Sub":
+/// template}` — for [`render_policy`]'s two family-internal grants (the
+/// `MCP_SERVERS_TABLE` discovery reads and the cross-Lambda invoke
+/// wildcard).
+///
+/// These two resources are ALWAYS in the same AWS account/region the stack
+/// itself deploys into (this Lambda's own discovery table, and other
+/// `pmcp-run` family members' functions) — CloudFormation can resolve that
+/// at deploy time via the `AWS::Region`/`AWS::AccountId` pseudo-parameters,
+/// exactly what production `cdk synth` emits for an environment-agnostic
+/// stack (no explicit `env: {account}` pinned — see
+/// `cargo-pmcp/src/deployment/targets/pmcp_run/deploy.rs`'s
+/// `UNRESOLVED_ACCOUNT_ID` doc comment for the investigation that confirmed
+/// this). Baking [`RenderParams::account_id`] as a literal here — this
+/// module's pre-T7-review behavior — produced DEAD grants whenever that
+/// field isn't a real account (e.g. the `pmcp_run` deploy path's
+/// documented all-zeros sentinel): a policy statement scoped to
+/// `arn:aws:dynamodb:<region>:000000000000:table/...` can never match any
+/// real resource. Pseudo-params sidestep that failure mode entirely for
+/// resources that are always same-account by construction.
+///
+/// USER-DECLARED `[[iam.statements]]` ARNs are NEVER routed through this
+/// helper — [`render_declared_statement`] passes them through verbatim, as
+/// user content the renderer must not rewrite.
+///
+/// Other literal-account/region ARNs elsewhere in this crate (the
+/// `aws-lambda` target's `execute-api` `SourceArn`, `resources::cognito`'s
+/// domain-prefix naming suffix) stay literal on purpose — see
+/// `resources::http_api::render_permission_for`'s doc comment — because
+/// those are golden-pinned to a REAL account resolved via STS, not this
+/// same-account family-internal case.
+fn family_internal_pseudo_param_arn(template: impl Into<String>) -> Value {
+    json!({ "Fn::Sub": template.into() })
 }
 
 /// Render one validated, operator-declared `[[iam.statements]]` entry as a
@@ -575,6 +623,7 @@ mod tests {
                 template_id: None,
                 snapshot_baked: false,
             },
+            cloudformation_metadata: BTreeMap::new(),
         }
     }
 
@@ -589,16 +638,33 @@ mod tests {
     }
 
     #[test]
-    fn policy_references_region_and_account_in_dynamodb_arns() {
+    fn policy_uses_cfn_pseudo_params_for_the_family_internal_dynamodb_arns() {
+        // T7 review fix: family-internal ARNs (always same-account/region as
+        // the stack itself) use CFN pseudo-parameters, not a literal
+        // `RenderParams::account_id`/`region` — see
+        // `family_internal_pseudo_param_arn`'s doc comment. `params()` sets
+        // `account_id`/`region` to non-default values on purpose here (this
+        // test would have caught a regression back to literal interpolation
+        // if it still baked them in).
         let resources = render_execution_role(&descriptor(), &params());
         let policy_doc = &resources[1].1.properties["PolicyDocument"]["Statement"][1];
         assert_eq!(
             policy_doc["Resource"][0],
-            "arn:aws:dynamodb:us-east-1:123456789012:table/McpServer"
+            json!({"Fn::Sub": "arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/McpServer"})
         );
         assert_eq!(
             policy_doc["Resource"][1],
-            "arn:aws:dynamodb:us-east-1:123456789012:table/McpServer/*"
+            json!({"Fn::Sub": "arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/McpServer/*"})
+        );
+    }
+
+    #[test]
+    fn policy_uses_cfn_pseudo_params_for_the_family_internal_lambda_invoke_arn() {
+        let resources = render_execution_role(&descriptor(), &params());
+        let policy_doc = &resources[1].1.properties["PolicyDocument"]["Statement"][2];
+        assert_eq!(
+            policy_doc["Resource"],
+            json!({"Fn::Sub": "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:*"})
         );
     }
 

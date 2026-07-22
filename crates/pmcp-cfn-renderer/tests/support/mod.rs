@@ -89,6 +89,23 @@
 //!   a stable literal (`"pmcp-declared"`) instead of a hash; this
 //!   sentinelization makes both sides comparable regardless of which
 //!   literal either side used.
+//! - **The two family-internal IAM ARNs** (`resources::iam::render_policy`'s
+//!   `MCP_SERVERS_TABLE` discovery reads + cross-Lambda invoke wildcard) are
+//!   normalized to a shared `<region>`/`<account>`-sentinel form (T7
+//!   review). Post-fix, the renderer emits these as `{"Fn::Sub":
+//!   "arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/..."}`
+//!   pseudo-parameter forms, while a real `cdk synth` — synthesized here
+//!   with an explicit, fixed fake `env: {account, region}` (see
+//!   `scripts/generate-cfn-goldens.sh`) — bakes the SAME two ARNs as
+//!   literal `"arn:aws:dynamodb:us-east-1:123456789012:table/..."`
+//!   strings. Neither form is "renderer truth" any more than the other (see
+//!   `resources::iam::family_internal_pseudo_param_arn`'s doc comment for
+//!   why the renderer chose pseudo-params); [`sentinelize_family_internal_arns`]
+//!   collapses both to one comparable shape, scoped narrowly to just these
+//!   two ARN shapes so region/account literals elsewhere (Outputs URLs, the
+//!   golden-pinned `execute-api`/apigateway ARNs — see
+//!   `resources::http_api::render_permission_for`'s doc comment) still
+//!   compare literally.
 //!
 //! # Tied fingerprints and the two-pass fixpoint's tiebreak
 //!
@@ -171,6 +188,21 @@ pub fn normalize(template: &Value) -> Value {
 /// `AWSTemplateFormatVersion`, the whole `Metadata` block, `Rules`, any
 /// `Conditions` entry matching `CheckBootstrapVersion`, and
 /// `Parameters.BootstrapVersion`/`Parameters.AssetParameters*`.
+///
+/// The template-level `Metadata` drop is unconditional and stays that way
+/// even after the T7 review fix that made [`pmcp_cfn_renderer::render`]
+/// emit `RenderParams::cloudformation_metadata` verbatim as
+/// `CfnTemplate::metadata` (the `mcp:*` provenance block): a real
+/// `cdk synth`'s `Metadata` carries its OWN CDK-specific keys (`aws:cdk:*`
+/// path/analytics entries alongside whatever `mcp:*` keys `stack.ts` bakes
+/// in) with a structurally different shape than what this renderer emits,
+/// so literal comparison here would fail for reasons unrelated to whether
+/// the two templates describe the same infrastructure — same rationale as
+/// the per-resource `Metadata` drop below. That the renderer emits
+/// `cloudformation_metadata` verbatim and byte-deterministically is a
+/// UNIT-test-owned property (see `lib.rs`'s and `params.rs`'s own test
+/// modules), not something this semantic-golden harness's normalizer is
+/// positioned to check.
 fn drop_template_level_noise(root: &mut Map<String, Value>) {
     root.remove("AWSTemplateFormatVersion");
     root.remove("Metadata");
@@ -231,6 +263,7 @@ fn normalize_resource(resource: &mut Value) {
     }
     if type_.as_deref() == Some("AWS::IAM::Policy") {
         sentinelize_policy_name(fields);
+        sentinelize_family_internal_arns(fields);
     }
 }
 
@@ -279,6 +312,113 @@ fn sentinelize_policy_name(fields: &mut Map<String, Value>) {
             Value::String("<policy-name>".to_string()),
         );
     }
+}
+
+/// Normalize `resources::iam::render_policy`'s two family-internal ARNs
+/// (see the module doc comment's "Beyond the brief" section) wherever they
+/// appear inside an `AWS::IAM::Policy` resource's `Properties` — collapsing
+/// both the renderer's `{"Fn::Sub": "...${AWS::Region}...${AWS::AccountId}..."}`
+/// pseudo-parameter form and a real `cdk synth`'s literal-account/region
+/// string form to one comparable sentinel shape.
+///
+/// Recurses the WHOLE `Properties` value (not just
+/// `PolicyDocument.Statement[].Resource`) for simplicity —
+/// [`is_family_internal_arn`]'s shape gate (exact `table/McpServer(/*)?` /
+/// `function:*` suffixes) is narrow enough that it never matches anything
+/// else a policy resource could contain, including a USER-DECLARED
+/// `[[iam.statements]]` ARN: no golden fixture's declared statements target
+/// a table literally named `McpServer` or an unscoped Lambda `function:*`
+/// (checked against the full corpus, `tests/goldens/*.golden.json`) — those
+/// stay verbatim, compared literally, same as before this function existed.
+fn sentinelize_family_internal_arns(fields: &mut Map<String, Value>) {
+    if let Some(properties) = fields.get_mut("Properties") {
+        sentinelize_arns_in(properties);
+    }
+}
+
+/// Recursive worker for [`sentinelize_family_internal_arns`]. Checks (via a
+/// read-only borrow that ends before any write) whether `value` is either a
+/// bare family-internal ARN string or a `{"Fn::Sub": <family-internal ARN
+/// template>}` wrapper; the latter is collapsed to a bare sentinelized
+/// string so both source forms converge on identical JSON. Anything else is
+/// recursed into unchanged.
+fn sentinelize_arns_in(value: &mut Value) {
+    if let Value::String(s) = value {
+        if is_family_internal_arn(s) {
+            *s = sentinelize_arn_string(s);
+        }
+        return;
+    }
+
+    let sub_replacement = match value.as_object() {
+        Some(map) if map.len() == 1 => match map.get("Fn::Sub").and_then(Value::as_str) {
+            Some(template) if is_family_internal_arn(template) => {
+                Some(sentinelize_arn_string(template))
+            },
+            _ => None,
+        },
+        _ => None,
+    };
+    if let Some(sentinelized) = sub_replacement {
+        *value = Value::String(sentinelized);
+        return;
+    }
+
+    match value {
+        Value::Object(map) => {
+            for v in map.values_mut() {
+                sentinelize_arns_in(v);
+            }
+        },
+        Value::Array(items) => {
+            for item in items.iter_mut() {
+                sentinelize_arns_in(item);
+            }
+        },
+        _ => {},
+    }
+}
+
+/// `true` for exactly the two ARN shapes
+/// [`crate::support::sentinelize_family_internal_arns`] normalizes — an
+/// `arn:aws:dynamodb:...` ending in the fixed `MCP_SERVERS_TABLE` name
+/// (`"McpServer"`, either the base table or its `/*` index wildcard), or an
+/// `arn:aws:lambda:...` ending in the unscoped `function:*` invoke
+/// wildcard. Matches both the literal-account/region form and the
+/// `${AWS::Region}`/`${AWS::AccountId}` pseudo-parameter form (the suffix
+/// this checks is identical either way).
+fn is_family_internal_arn(s: &str) -> bool {
+    (s.starts_with("arn:aws:dynamodb:")
+        && (s.ends_with("table/McpServer") || s.ends_with("table/McpServer/*")))
+        || (s.starts_with("arn:aws:lambda:") && s.ends_with("function:*"))
+}
+
+/// Collapse an ARN string's region (segment 3) and account (segment 4) to
+/// `<region>`/`<account>` sentinels, regardless of which concrete form they
+/// arrived in.
+///
+/// Pseudo-param templates (`${AWS::Region}`/`${AWS::AccountId}`) are
+/// substituted via a plain textual replace FIRST — a naive `':'`-split
+/// would incorrectly treat the `::` inside `${AWS::Region}` itself as ARN
+/// field separators. Only when that substitution is a no-op (the literal
+/// form, with no `${AWS::...}` tokens) does this fall back to splitting on
+/// `':'` and overwriting the region/account POSITIONS directly — safe
+/// there because a literal ARN segment never itself contains `':'`.
+fn sentinelize_arn_string(s: &str) -> String {
+    let substituted = s
+        .replace("${AWS::Region}", "<region>")
+        .replace("${AWS::AccountId}", "<account>");
+    if substituted != s {
+        return substituted;
+    }
+
+    let mut parts: Vec<&str> = s.splitn(6, ':').collect();
+    if parts.len() < 6 || parts[0] != "arn" {
+        return s.to_string();
+    }
+    parts[3] = "<region>";
+    parts[4] = "<account>";
+    parts.join(":")
 }
 
 // ---------------------------------------------------------------------
@@ -807,6 +947,121 @@ mod tests {
         assert_eq!(
             normalized_a["Resources"]["Integration-1"]["Properties"]["IntegrationUri"],
             json!({"Fn::GetAtt": ["Function-1", "Arn"]})
+        );
+    }
+
+    /// T7 review fix: a template carrying the renderer's post-fix
+    /// `{"Fn::Sub": "...${AWS::Region}...${AWS::AccountId}..."}`
+    /// pseudo-parameter form for the two family-internal ARNs, and one
+    /// carrying a real `cdk synth`'s literal-account/region form for the
+    /// SAME two ARNs, must normalize identically — this is the mechanism
+    /// that lets the golden harness compare renderer output (pseudo-params)
+    /// against `cdk synth` output (literal, fixed fake account/region)
+    /// without hardcoding either side's form. See the module doc comment's
+    /// "Beyond the brief" section.
+    #[test]
+    fn sentinelizes_family_internal_arns_both_forms_identically() {
+        fn policy(dynamodb_arns: [Value; 2], lambda_arn: Value) -> Value {
+            json!({
+                "Resources": {
+                    "Policy": {
+                        "Type": "AWS::IAM::Policy",
+                        "Properties": {
+                            "PolicyName": "pmcp-declared",
+                            "PolicyDocument": {
+                                "Version": "2012-10-17",
+                                "Statement": [
+                                    {
+                                        "Effect": "Allow",
+                                        "Action": ["dynamodb:GetItem", "dynamodb:Query"],
+                                        "Resource": dynamodb_arns,
+                                    },
+                                    {
+                                        "Effect": "Allow",
+                                        "Action": "lambda:InvokeFunction",
+                                        "Resource": lambda_arn,
+                                    },
+                                ],
+                            },
+                            "Roles": [{"Ref": "Role"}]
+                        }
+                    },
+                    "Role": {"Type": "AWS::IAM::Role", "Properties": {}}
+                }
+            })
+        }
+
+        let pseudo_param_form = policy(
+            [
+                json!({"Fn::Sub": "arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/McpServer"}),
+                json!({"Fn::Sub": "arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/McpServer/*"}),
+            ],
+            json!({"Fn::Sub": "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:*"}),
+        );
+        let literal_form = policy(
+            [
+                json!("arn:aws:dynamodb:us-east-1:123456789012:table/McpServer"),
+                json!("arn:aws:dynamodb:us-east-1:123456789012:table/McpServer/*"),
+            ],
+            json!("arn:aws:lambda:us-east-1:123456789012:function:*"),
+        );
+
+        let normalized_pseudo = normalize(&pseudo_param_form);
+        let normalized_literal = normalize(&literal_form);
+        assert_eq!(normalized_pseudo, normalized_literal);
+
+        // Pin the actual sentinelized shape, not just cross-form equality.
+        let statements = normalized_pseudo["Resources"]["Policy-0"]["Properties"]["PolicyDocument"]
+            ["Statement"]
+            .as_array()
+            .unwrap();
+        assert_eq!(
+            statements[0]["Resource"],
+            json!([
+                "arn:aws:dynamodb:<region>:<account>:table/McpServer",
+                "arn:aws:dynamodb:<region>:<account>:table/McpServer/*",
+            ])
+        );
+        assert_eq!(
+            statements[1]["Resource"],
+            json!("arn:aws:lambda:<region>:<account>:function:*")
+        );
+    }
+
+    /// A user-declared `[[iam.statements]]` ARN that merely LOOKS like a
+    /// DynamoDB/Lambda ARN (but targets a different table / isn't the
+    /// unscoped `function:*` wildcard) must NOT be touched by
+    /// [`sentinelize_family_internal_arns`] — it stays comparable literally,
+    /// same as before this normalizer extension existed.
+    #[test]
+    fn does_not_sentinelize_a_user_declared_lookalike_arn() {
+        let template = json!({
+            "Resources": {
+                "Policy": {
+                    "Type": "AWS::IAM::Policy",
+                    "Properties": {
+                        "PolicyName": "pmcp-declared",
+                        "PolicyDocument": {
+                            "Version": "2012-10-17",
+                            "Statement": [{
+                                "Effect": "Allow",
+                                "Action": "dynamodb:GetItem",
+                                "Resource": "arn:aws:dynamodb:us-east-1:123456789012:table/orders",
+                            }],
+                        },
+                        "Roles": [{"Ref": "Role"}]
+                    }
+                },
+                "Role": {"Type": "AWS::IAM::Role", "Properties": {}}
+            }
+        });
+        let normalized = normalize(&template);
+        let statement =
+            &normalized["Resources"]["Policy-0"]["Properties"]["PolicyDocument"]["Statement"][0];
+        assert_eq!(
+            statement["Resource"],
+            json!("arn:aws:dynamodb:us-east-1:123456789012:table/orders"),
+            "a non-family-internal ARN must be compared literally, unmodified"
         );
     }
 

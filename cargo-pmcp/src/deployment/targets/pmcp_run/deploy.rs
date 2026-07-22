@@ -481,6 +481,7 @@ fn build_render_params(
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect(),
         metadata: render_metadata_from(metadata),
+        cloudformation_metadata: cloudformation_metadata_from(metadata),
     }
 }
 
@@ -504,6 +505,34 @@ fn render_metadata_from(metadata: Option<&McpMetadata>) -> pmcp_cfn_renderer::Re
             snapshot_baked: false,
         },
     }
+}
+
+/// Populate [`pmcp_cfn_renderer::RenderParams::cloudformation_metadata`]
+/// from the EXISTING maintained DSTK-03 shape,
+/// [`McpMetadata::to_cloudformation_metadata`] — the same `mcp:*`
+/// provenance object (`mcp:version`/`mcp:serverType`/`mcp:serverId`/
+/// `mcp:resources`/`mcp:capabilities`/...) both the legacy `cdk` path (via
+/// `stack.ts`'s `this.node.tryGetContext` reads, fed by
+/// [`render_metadata_from`]'s sibling `to_cdk_context`) and this renderer
+/// path now share (T7 review fix — before this function existed, the
+/// renderer path emitted NO template `Metadata` at all, discarding this
+/// provenance entirely).
+///
+/// `to_cloudformation_metadata` returns a `serde_json::Value::Object`;
+/// this flattens it into the `BTreeMap` `RenderParams::cloudformation_metadata`
+/// carries. `None` (no metadata resolved yet — mirrors
+/// [`render_metadata_from`]'s own `None` branch) yields an empty map, which
+/// `CfnTemplate`'s "omit `Metadata` when empty" envelope rule already
+/// treats as "no metadata block" — same behavior as before this fix for
+/// that case.
+fn cloudformation_metadata_from(
+    metadata: Option<&McpMetadata>,
+) -> std::collections::BTreeMap<String, serde_json::Value> {
+    metadata
+        .map(McpMetadata::to_cloudformation_metadata)
+        .and_then(|value| value.as_object().cloned())
+        .map(|object| object.into_iter().collect())
+        .unwrap_or_default()
 }
 
 /// Run the legacy `npx cdk synth` subprocess and read back the synthesized
@@ -1673,6 +1702,100 @@ mod tests {
         assert_eq!(params_metadata.server_id, None);
         assert_eq!(params_metadata.template_id, None);
         assert!(!params_metadata.snapshot_baked);
+    }
+
+    /// T7 review fix: `cloudformation_metadata_from` populates
+    /// `RenderParams::cloudformation_metadata` from the EXISTING maintained
+    /// `McpMetadata::to_cloudformation_metadata` (DSTK-03 shape) —
+    /// previously called nowhere in the renderer path, so the uploaded
+    /// template's `Metadata` block lost all `mcp:*` provenance. Asserts the
+    /// object's keys/values, not just that it's non-empty.
+    #[test]
+    fn cloudformation_metadata_from_maps_the_maintained_dstk03_shape() {
+        let metadata = McpMetadata {
+            version: "1.0".to_string(),
+            server_type: "graphql-api".to_string(),
+            server_id: "srv-1".to_string(),
+            template_id: Some("types/graphql".to_string()),
+            template_version: None,
+            resources: crate::deployment::metadata::ResourceRequirements::default(),
+            capabilities: crate::deployment::metadata::ServerCapabilities::default(),
+            available_operations: None,
+            snapshot_baked: false,
+            custom_stack: false,
+        };
+
+        let cf_metadata = cloudformation_metadata_from(Some(&metadata));
+        assert_eq!(
+            cf_metadata.get("mcp:version"),
+            Some(&serde_json::json!("1.0"))
+        );
+        assert_eq!(
+            cf_metadata.get("mcp:serverType"),
+            Some(&serde_json::json!("graphql-api"))
+        );
+        assert_eq!(
+            cf_metadata.get("mcp:serverId"),
+            Some(&serde_json::json!("srv-1"))
+        );
+        assert_eq!(
+            cf_metadata.get("mcp:templateId"),
+            Some(&serde_json::json!("types/graphql"))
+        );
+        assert!(cf_metadata.contains_key("mcp:resources"));
+        assert!(cf_metadata.contains_key("mcp:capabilities"));
+        // DSTK-03 conditional emission: not opted into snapshot_baked here,
+        // so that key must be absent, matching `to_cloudformation_metadata`'s
+        // own byte-identity-for-non-opting-servers rule.
+        assert!(!cf_metadata.contains_key("mcp:snapshotBaked"));
+    }
+
+    /// `cloudformation_metadata_from(None)` yields an empty map — mirrors
+    /// `render_metadata_from(None)`'s own "no metadata resolved yet"
+    /// fallback, and (via `CfnTemplate`'s envelope rule) results in no
+    /// `Metadata` key in the rendered template at all.
+    #[test]
+    fn cloudformation_metadata_from_none_is_empty() {
+        assert!(cloudformation_metadata_from(None).is_empty());
+    }
+
+    /// End-to-end: `build_render_params` actually wires
+    /// `cloudformation_metadata_from`'s output onto
+    /// `RenderParams::cloudformation_metadata` — not just that the helper
+    /// function works in isolation.
+    #[test]
+    fn build_render_params_populates_cloudformation_metadata_from_mcp_metadata() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let config =
+            cfg_with_target_and_iam(tmp.path().to_path_buf(), "pmcp-run", IamConfig::default());
+        let metadata = McpMetadata {
+            version: "1.0".to_string(),
+            server_type: "custom".to_string(),
+            server_id: "srv-build-params".to_string(),
+            template_id: None,
+            template_version: None,
+            resources: crate::deployment::metadata::ResourceRequirements::default(),
+            capabilities: crate::deployment::metadata::ServerCapabilities::default(),
+            available_operations: None,
+            snapshot_baked: false,
+            custom_stack: false,
+        };
+
+        let params = build_render_params(&config, Some(&metadata));
+        assert_eq!(
+            params.cloudformation_metadata,
+            metadata
+                .to_cloudformation_metadata()
+                .as_object()
+                .cloned()
+                .unwrap()
+                .into_iter()
+                .collect::<std::collections::BTreeMap<_, _>>()
+        );
+        assert_eq!(
+            params.cloudformation_metadata.get("mcp:serverId"),
+            Some(&serde_json::json!("srv-build-params"))
+        );
     }
 
     /// Item 3 (the tracked T4/T6 warnings-discard gap): `emit_descriptor_warnings`

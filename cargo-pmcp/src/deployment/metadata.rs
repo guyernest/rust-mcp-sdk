@@ -927,8 +927,11 @@ impl McpMetadata {
 
     /// Convert metadata to CloudFormation-style metadata object.
     ///
-    /// This format is used in CloudFormation template Metadata section.
-    #[allow(dead_code)]
+    /// This format is used in CloudFormation template Metadata section — the
+    /// `pmcp_run` renderer path's `build_render_params` (T7 review fix)
+    /// consumes this directly via `cloudformation_metadata_from`, so this is
+    /// no longer dead code (the `#[allow(dead_code)]` this carried before
+    /// that wiring is removed).
     pub fn to_cloudformation_metadata(&self) -> serde_json::Value {
         let mut metadata = serde_json::json!({
             "mcp:version": self.version,

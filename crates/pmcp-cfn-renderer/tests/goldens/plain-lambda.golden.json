@@ -169,14 +169,14 @@
                 ],
                 "Effect": "Allow",
                 "Resource": [
-                  "arn:aws:dynamodb:us-east-1:123456789012:table/McpServer",
-                  "arn:aws:dynamodb:us-east-1:123456789012:table/McpServer/*"
+                  "arn:aws:dynamodb:<region>:<account>:table/McpServer",
+                  "arn:aws:dynamodb:<region>:<account>:table/McpServer/*"
                 ]
               },
               {
                 "Action": "lambda:InvokeFunction",
                 "Effect": "Allow",
-                "Resource": "arn:aws:lambda:us-east-1:123456789012:function:*"
+                "Resource": "arn:aws:lambda:<region>:<account>:function:*"
               }
             ],
             "Version": "2012-10-17"

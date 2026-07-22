@@ -286,6 +286,7 @@ mod tests {
                 template_id: None,
                 snapshot_baked: false,
             },
+            cloudformation_metadata: BTreeMap::new(),
         }
     }
 

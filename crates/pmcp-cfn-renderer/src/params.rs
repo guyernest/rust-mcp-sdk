@@ -75,6 +75,39 @@ pub struct RenderParams {
     pub environment: BTreeMap<String, String>,
     /// Synth-time metadata for the rendered template.
     pub metadata: RenderMetadata,
+    /// The EXACT top-level CloudFormation template `Metadata` map [`crate::render`]
+    /// should emit verbatim — e.g. the `mcp:*` provenance keys
+    /// (`mcp:version`, `mcp:serverType`, `mcp:serverId`, `mcp:resources`,
+    /// `mcp:capabilities`, ...) production `cdk synth` bakes via
+    /// `Stack.templateOptions.metadata`, one entry per key.
+    ///
+    /// T7 review fix: before this field existed, [`crate::render`] always
+    /// emitted an empty `CfnTemplate::metadata`, discarding
+    /// `RenderMetadata`'s fields entirely and losing ALL `mcp:*` provenance
+    /// from the uploaded template — the platform's sole provenance channel
+    /// for a renderer-synthesized stack. This field is additive alongside
+    /// [`RenderMetadata`] (kept for any internal/`cdk`-context use, e.g.
+    /// `cargo-pmcp`'s `to_cdk_context`) rather than replacing it, so this
+    /// struct's public shape stays backward compatible.
+    ///
+    /// The renderer treats this map as OPAQUE passthrough content: it
+    /// copies it byte-for-byte into `CfnTemplate::metadata`
+    /// (`BTreeMap`-backed, so key order — and therefore
+    /// `to_canonical_json`'s byte output — is always sorted), never
+    /// inspects or derives from it. Populating it with real provenance is
+    /// the CALLER's job — see `cargo-pmcp`'s
+    /// `deployment::metadata::McpMetadata::to_cloudformation_metadata`, the
+    /// maintained DSTK-03 shape both the legacy `cdk` path and this
+    /// renderer's `pmcp_run` caller share (`deployment::targets::pmcp_run::deploy::build_render_params`).
+    ///
+    /// `#[serde(default)]` so already-checked-in golden `params` JSON
+    /// fixtures (predating this field) keep deserializing unchanged, into
+    /// an empty map — which [`crate::template::CfnTemplate`]'s own
+    /// "omit `Metadata` when empty" envelope rule already treats as "no
+    /// metadata block", the same behavior [`crate::render`] had before
+    /// this fix.
+    #[serde(default)]
+    pub cloudformation_metadata: BTreeMap<String, serde_json::Value>,
 }
 
 #[cfg(test)]
@@ -99,6 +132,7 @@ mod tests {
                 template_id: None,
                 snapshot_baked: false,
             },
+            cloudformation_metadata: BTreeMap::new(),
         }
     }
 
@@ -110,6 +144,41 @@ mod tests {
         let json = serde_json::to_string(&params).expect("serialize");
         let back: RenderParams = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(back, params);
+    }
+
+    /// T7 review fix: `cloudformation_metadata` round-trips like every
+    /// other field once populated.
+    #[test]
+    fn cloudformation_metadata_round_trips_through_json() {
+        let mut params = sample_params();
+        params.cloudformation_metadata = BTreeMap::from([
+            ("mcp:version".to_string(), serde_json::json!("1.0.0")),
+            (
+                "mcp:resources".to_string(),
+                serde_json::json!({"secrets": []}),
+            ),
+        ]);
+        let json = serde_json::to_string(&params).expect("serialize");
+        let back: RenderParams = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(back, params);
+    }
+
+    /// Backward compat: `params` JSON that predates this field (every
+    /// checked-in golden fixture at the time this field was added) must
+    /// keep deserializing, defaulting to an empty map — see
+    /// `RenderParams::cloudformation_metadata`'s doc comment.
+    #[test]
+    fn cloudformation_metadata_defaults_to_empty_when_absent_from_json() {
+        let json = serde_json::json!({
+            "account_id": "123456789012",
+            "region": "us-east-1",
+            "stack_name": "compat-test-stack",
+            "artifact": {"s3_bucket": "bucket", "s3_key": "key.zip"},
+            "metadata": {"version": "1.0.0", "snapshot_baked": false}
+        });
+        let params: RenderParams =
+            serde_json::from_value(json).expect("deserializes without cloudformation_metadata");
+        assert!(params.cloudformation_metadata.is_empty());
     }
 
     #[test]

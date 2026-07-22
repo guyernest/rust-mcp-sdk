@@ -169,7 +169,7 @@ fn render_pmcp_run(
         description: format!("MCP Server: {}", descriptor.server.name),
         resources,
         outputs,
-        metadata: BTreeMap::new(),
+        metadata: params.cloudformation_metadata.clone(),
     })
 }
 
@@ -206,7 +206,7 @@ fn render_aws_lambda(
         description: format!("MCP Server: {}", descriptor.server.name),
         resources,
         outputs,
-        metadata: BTreeMap::new(),
+        metadata: params.cloudformation_metadata.clone(),
     })
 }
 
@@ -233,7 +233,7 @@ fn render_aws_lambda_oauth(
         description: format!("MCP Server: {}", descriptor.server.name),
         resources,
         outputs,
-        metadata: BTreeMap::new(),
+        metadata: params.cloudformation_metadata.clone(),
     })
 }
 
@@ -340,6 +340,7 @@ mod tests {
                 template_id: None,
                 snapshot_baked: false,
             },
+            cloudformation_metadata: BTreeMap::new(),
         }
     }
 
@@ -365,6 +366,71 @@ mod tests {
         );
         assert_eq!(template.outputs.len(), 5);
         assert!(template.metadata.is_empty());
+    }
+
+    /// T7 review fix: `render`'s `pmcp-run` path must carry
+    /// `RenderParams::cloudformation_metadata` into `CfnTemplate::metadata`
+    /// byte-for-byte — no parsing/re-deriving, since `render` treats it as
+    /// opaque passthrough content (see `RenderParams::cloudformation_metadata`'s
+    /// doc comment). Before this fix, EVERY render path always emitted an
+    /// empty `BTreeMap`, discarding this field entirely.
+    #[test]
+    fn render_pmcp_run_emits_cloudformation_metadata_verbatim() {
+        let mut params = params();
+        params.cloudformation_metadata = BTreeMap::from([
+            ("mcp:version".to_string(), serde_json::json!("1.0.0")),
+            ("mcp:serverType".to_string(), serde_json::json!("custom")),
+            (
+                "mcp:resources".to_string(),
+                serde_json::json!({"secrets": ["API_TOKEN"]}),
+            ),
+        ]);
+        let template = render(&descriptor("my-server"), &params).unwrap();
+        assert_eq!(template.metadata, params.cloudformation_metadata);
+    }
+
+    /// Same verbatim-carriage contract as
+    /// [`render_pmcp_run_emits_cloudformation_metadata_verbatim`], for the
+    /// `aws-lambda` target's own kernel (`render_aws_lambda`) — a separate
+    /// `Ok(CfnTemplate { .. })` construction site, so it needs its own
+    /// coverage rather than relying on the `pmcp-run` case alone.
+    #[test]
+    fn render_aws_lambda_emits_cloudformation_metadata_verbatim() {
+        let mut params = params();
+        params.cloudformation_metadata =
+            BTreeMap::from([("mcp:serverId".to_string(), serde_json::json!("srv-1"))]);
+        let template = render(
+            &descriptor_with("my-server", "aws-lambda", false, ""),
+            &params,
+        )
+        .unwrap();
+        assert_eq!(template.metadata, params.cloudformation_metadata);
+    }
+
+    /// Same verbatim-carriage contract, for the `aws-lambda` target's
+    /// Cognito+DCR OAuth stack shape (`render_aws_lambda_oauth`) — the third
+    /// and last `Ok(CfnTemplate { .. })` construction site in this module.
+    #[test]
+    fn render_cognito_oauth_emits_cloudformation_metadata_verbatim() {
+        let mut params = params();
+        params.cloudformation_metadata = BTreeMap::from([(
+            "mcp:capabilities".to_string(),
+            serde_json::json!({"tools": ["search"]}),
+        )]);
+        let template = render(&cognito_oauth_descriptor("oauth-test"), &params).unwrap();
+        assert_eq!(template.metadata, params.cloudformation_metadata);
+    }
+
+    /// The "omit `Metadata` when empty" envelope rule ([`CfnTemplate::metadata`]'s
+    /// `skip_serializing_if`) still applies end-to-end through `render` —
+    /// an empty `RenderParams::cloudformation_metadata` (the default, and
+    /// every pre-T7-review caller's behavior) produces no `"Metadata"` key
+    /// in the canonical JSON at all, not an empty `{}` block.
+    #[test]
+    fn render_omits_the_metadata_key_when_cloudformation_metadata_is_empty() {
+        let template = render(&descriptor("my-server"), &params()).unwrap();
+        assert!(template.metadata.is_empty());
+        assert!(!template.to_canonical_json().contains("\"Metadata\""));
     }
 
     #[test]
