@@ -1,5 +1,6 @@
 pub mod artifact;
 mod deploy;
+pub(crate) mod engine;
 pub mod init;
 
 use anyhow::{bail, Context, Result};
@@ -109,14 +110,18 @@ impl DeploymentTarget for AwsLambdaTarget {
     async fn deploy(
         &self,
         config: &DeployConfig,
-        _artifact: BuildArtifact,
+        artifact: BuildArtifact,
     ) -> Result<DeploymentOutputs> {
-        // Thread developer-declared [environment] alongside resolved [secrets]
-        // through the same transient CDK-process-env path (fix for
-        // deploy-toml-inert-for-preserved-stack, FIX #2). `deploy_env_vars()`
-        // merges both maps (secrets win on collision); the stack.ts decides
-        // which keys it consumes via process.env.
-        deploy::deploy_aws_lambda(config, config.deploy_env_vars()).await
+        // Task 9 (CFN deploy engine): `artifact` (already acquired by
+        // `build()` above, via `artifact::acquire_artifact`) is now threaded
+        // through so the renderer+engine path can deploy it directly without
+        // a second (and, for a `ServerShape::BuiltIn` project, IMPOSSIBLE —
+        // no Cargo.toml to rebuild from) build. `deploy_env_vars()` (merged
+        // `[environment]` + resolved `[secrets]`, secrets win) is still
+        // threaded through for the legacy `DeployExecutor` fallback branch
+        // ONLY — see `deploy::deploy_aws_lambda`'s doc comment for why the
+        // renderer path does not use it.
+        deploy::deploy_aws_lambda(config, artifact, config.deploy_env_vars()).await
     }
 
     async fn destroy(&self, config: &DeployConfig, clean: bool) -> Result<()> {

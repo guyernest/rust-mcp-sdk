@@ -117,13 +117,25 @@ zeroize = "1"                           # Secure memory clearing
 rand = "0.10"                            # Random secret generation
 regex = "1"                             # Secret reference parsing
 
-# AWS Secrets Manager (optional, for AWS provider)
-# Why: default features enable `rustls` → aws-smithy-runtime/tls-rustls →
-# aws-smithy-http-client/legacy-rustls-ring → rustls 0.21 / rustls-webpki 0.101
-# (RUSTSEC-2026-0098/0099/0104). Opt into the modern `default-https-client`
-# path (rustls 0.23 via aws-lc-rs) instead.
-aws-config = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio", "credentials-process", "sso", "behavior-version-latest"], optional = true }
+# AWS SDK. `aws-config` is a REQUIRED (non-optional) base dependency as of
+# Task 9 (CFN deploy engine): the `aws-lambda` deploy target's default,
+# unmodified-scaffold path now deploys via real `aws-sdk-sts`/`aws-sdk-s3`/
+# `aws-sdk-cloudformation` calls instead of `npx cdk deploy` — that is the
+# whole point of the engine (switch the target off Node/CDK entirely), so it
+# cannot be gated behind an opt-in feature the way `aws-sdk-secretsmanager`
+# (a separate, still-optional AWS Secrets Manager *provider*) is.
+# Why default-features=false: default features enable `rustls` →
+# aws-smithy-runtime/tls-rustls → aws-smithy-http-client/legacy-rustls-ring →
+# rustls 0.21 / rustls-webpki 0.101 (RUSTSEC-2026-0098/0099/0104). Opt into
+# the modern `default-https-client` path (rustls 0.23 via aws-lc-rs) instead.
+aws-config = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio", "credentials-process", "sso", "behavior-version-latest"] }
 aws-sdk-secretsmanager = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio", "behavior-version-latest"], optional = true }
+# Task 9: account resolution (`GetCallerIdentity`), artifact upload + bucket
+# management, and stack create/update/describe/poll — see
+# `deployment/targets/aws_lambda/engine.rs`.
+aws-sdk-sts = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio", "behavior-version-latest"] }
+aws-sdk-s3 = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio", "behavior-version-latest"] }
+aws-sdk-cloudformation = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio", "behavior-version-latest"] }
 
 # For security penetration testing
 serde-sarif = "0.8"
@@ -141,7 +153,10 @@ apollo-compiler = "1"
 
 [features]
 default = []
-aws-secrets = ["aws-config", "aws-sdk-secretsmanager"]
+# `aws-config` moved to an always-on base dependency (Task 9) — no longer
+# listed here since Cargo rejects a non-optional dependency named as an
+# implicit feature.
+aws-secrets = ["aws-sdk-secretsmanager"]
 # Gates the `capture_contract` internal dev binary (see its [[bin]] entry
 # above and its module doc) — a manual M2M-auth GraphQL introspection aid,
 # not intended for end-user installs.

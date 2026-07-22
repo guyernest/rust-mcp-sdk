@@ -6,9 +6,12 @@ use std::time::Duration;
 use crate::deployment::{
     metadata::McpMetadata,
     r#trait::{BuildArtifact, DeploymentOutputs},
+    stack_routing::{
+        cloudformation_metadata_from, custom_stack_ts_reason, emit_descriptor_warnings,
+        extract_metadata_with_log, load_deploy_descriptor, mark_custom_stack, render_metadata_from,
+    },
     DeployConfig,
 };
-use pmcp_package::package::DeployDescriptor;
 
 use super::{auth, graphql};
 
@@ -206,28 +209,6 @@ pub async fn deploy_to_pmcp_run(
     ))
 }
 
-/// Extract MCP metadata and log what was found. Returns None when the project
-/// has no metadata (defaults apply).
-fn extract_metadata_with_log(project_root: &Path) -> Option<McpMetadata> {
-    println!("📋 Extracting MCP server metadata...");
-    match McpMetadata::extract(project_root) {
-        Ok(m) => {
-            println!("   Server: {} ({})", m.server_id, m.server_type);
-            if !m.resources.secrets.is_empty() {
-                println!("   Secrets: {}", m.resources.secrets.len());
-            }
-            if !m.capabilities.tools.is_empty() {
-                println!("   Tools: {}", m.capabilities.tools.len());
-            }
-            Some(m)
-        },
-        Err(_) => {
-            println!("   No metadata found (using defaults)");
-            None
-        },
-    }
-}
-
 // ============================================================================
 // Task 7 (CFN-renderer extraction): synth routing between the pure
 // `pmcp-cfn-renderer` crate and the legacy `npx cdk synth` subprocess.
@@ -310,58 +291,6 @@ fn warn_falling_back_to_cdk(reason: &str) {
     );
 }
 
-/// `Some(reason)` naming `deploy/lib/stack.ts` when it no longer matches
-/// what [`crate::commands::deploy::init::render_stack_ts_for_deploy`] would
-/// generate for the current `.pmcp/deploy.toml` (the Step 1 routing rule) —
-/// `None` when it still matches the scaffold, or the file is absent (before
-/// any synth has ever run; `validate_and_regenerate_stack_ts` always writes
-/// it first in practice, but this stays total).
-///
-/// Reuses `render_stack_ts_for_deploy` — the SAME function
-/// `validate_and_regenerate_stack_ts` already calls to (re)write the file —
-/// rather than re-deriving stack.ts content; this only adds the
-/// byte-equality comparison on top.
-fn custom_stack_ts_reason(config: &DeployConfig) -> Result<Option<String>> {
-    let stack_ts_path = config
-        .project_root
-        .join("deploy")
-        .join("lib")
-        .join("stack.ts");
-    if !stack_ts_path.exists() {
-        return Ok(None);
-    }
-    let on_disk = std::fs::read_to_string(&stack_ts_path)
-        .with_context(|| format!("Failed to read {}", stack_ts_path.display()))?;
-    let expected = crate::commands::deploy::init::render_stack_ts_for_deploy(
-        &config.target.target_type,
-        &config.server.name,
-        &config.iam,
-        &config.metadata,
-    );
-    if on_disk == expected {
-        Ok(None)
-    } else {
-        Ok(Some(format!(
-            "{} was hand-modified (no longer matches the regenerated scaffold)",
-            stack_ts_path.display()
-        )))
-    }
-}
-
-/// Clone `metadata` (if present) with `custom_stack` set.
-///
-/// This is the same `[metadata]`-derived map that `server_type`/
-/// `snapshot_baked` already ride on (Step 0's `apply_config_overrides` in
-/// `deploy_to_pmcp_run`) on its way into the synth context — see
-/// `McpMetadata::custom_stack`'s doc comment.
-fn mark_custom_stack(metadata: Option<&McpMetadata>) -> Option<McpMetadata> {
-    metadata.map(|m| {
-        let mut m = m.clone();
-        m.custom_stack = true;
-        m
-    })
-}
-
 /// Attempt the pure-renderer synth path.
 ///
 /// Parses `.pmcp/deploy.toml` as a [`DeployDescriptor`], surfaces the
@@ -387,41 +316,6 @@ fn try_render(config: &DeployConfig, metadata: Option<&McpMetadata>) -> Result<S
     pmcp_cfn_renderer::render(&descriptor, &params)
         .map(|template| template.to_canonical_json())
         .map_err(|e| format!("pmcp-cfn-renderer cannot render this descriptor yet: {e}"))
-}
-
-/// Parse `.pmcp/deploy.toml` as the renderer's closed-set [`DeployDescriptor`]
-/// — a NARROWER type than `DeployConfig` (Task 7, Interfaces §2): it fails to
-/// parse a table the renderer's descriptor doesn't model yet (e.g.
-/// `[aws].account_id`), which [`try_render`] treats as a graceful
-/// legacy-cdk fallback, never a hard error.
-fn load_deploy_descriptor(config: &DeployConfig) -> Result<DeployDescriptor> {
-    let path = config.project_root.join(".pmcp").join("deploy.toml");
-    let text = std::fs::read_to_string(&path)
-        .with_context(|| format!("Failed to read {}", path.display()))?;
-    toml::from_str(&text).with_context(|| format!("Failed to parse {}", path.display()))
-}
-
-/// Call `pmcp_cfn_renderer::resources::iam::validate`/`cognito::validate`
-/// directly on the descriptor and print every advisory finding — the fix
-/// for the tracked T4/T6 gap where `pmcp_cfn_renderer::render` discards
-/// these warnings (it is a pure function with no I/O to print them
-/// through). A hard `iam::validate` error is swallowed here: `try_render`'s
-/// subsequent `render()` call re-validates the same `[iam]` section and
-/// surfaces the identical failure as its own `Err` (routed to the legacy
-/// fallback), so this function only ever needs the `Ok` (warnings) case.
-fn emit_descriptor_warnings(descriptor: &DeployDescriptor) {
-    let mut warnings = Vec::new();
-    if let Some(iam) = &descriptor.iam {
-        if let Ok(iam_warnings) = pmcp_cfn_renderer::resources::iam::validate(iam) {
-            warnings.extend(iam_warnings);
-        }
-    }
-    warnings.extend(pmcp_cfn_renderer::resources::cognito::validate(
-        &descriptor.auth,
-    ));
-    for w in &warnings {
-        eprintln!("  {} {}", console::style("warning:").yellow(), w.message);
-    }
 }
 
 /// Sentinel used for [`pmcp_cfn_renderer::RenderParams::account_id`] when
@@ -489,56 +383,6 @@ fn build_render_params(
         // byte-identical output to before that field existed.
         runtime_adapter: None,
     }
-}
-
-/// Map `McpMetadata` 1:1 into [`pmcp_cfn_renderer::RenderMetadata`] — the
-/// same fields `McpMetadata::to_cdk_context` emits as `mcp:*` context args
-/// for the legacy path (Task 7, Interfaces §4).
-fn render_metadata_from(metadata: Option<&McpMetadata>) -> pmcp_cfn_renderer::RenderMetadata {
-    match metadata {
-        Some(m) => pmcp_cfn_renderer::RenderMetadata {
-            version: m.version.clone(),
-            server_type: Some(m.server_type.clone()),
-            server_id: Some(m.server_id.clone()),
-            template_id: m.template_id.clone(),
-            snapshot_baked: m.snapshot_baked,
-        },
-        None => pmcp_cfn_renderer::RenderMetadata {
-            version: crate::deployment::metadata::MCP_METADATA_VERSION.to_string(),
-            server_type: None,
-            server_id: None,
-            template_id: None,
-            snapshot_baked: false,
-        },
-    }
-}
-
-/// Populate [`pmcp_cfn_renderer::RenderParams::cloudformation_metadata`]
-/// from the EXISTING maintained DSTK-03 shape,
-/// [`McpMetadata::to_cloudformation_metadata`] — the same `mcp:*`
-/// provenance object (`mcp:version`/`mcp:serverType`/`mcp:serverId`/
-/// `mcp:resources`/`mcp:capabilities`/...) both the legacy `cdk` path (via
-/// `stack.ts`'s `this.node.tryGetContext` reads, fed by
-/// [`render_metadata_from`]'s sibling `to_cdk_context`) and this renderer
-/// path now share (T7 review fix — before this function existed, the
-/// renderer path emitted NO template `Metadata` at all, discarding this
-/// provenance entirely).
-///
-/// `to_cloudformation_metadata` returns a `serde_json::Value::Object`;
-/// this flattens it into the `BTreeMap` `RenderParams::cloudformation_metadata`
-/// carries. `None` (no metadata resolved yet — mirrors
-/// [`render_metadata_from`]'s own `None` branch) yields an empty map, which
-/// `CfnTemplate`'s "omit `Metadata` when empty" envelope rule already
-/// treats as "no metadata block" — same behavior as before this fix for
-/// that case.
-fn cloudformation_metadata_from(
-    metadata: Option<&McpMetadata>,
-) -> std::collections::BTreeMap<String, serde_json::Value> {
-    metadata
-        .map(McpMetadata::to_cloudformation_metadata)
-        .and_then(|value| value.as_object().cloned())
-        .map(|object| object.into_iter().collect())
-        .unwrap_or_default()
 }
 
 /// Run the legacy `npx cdk synth` subprocess and read back the synthesized
@@ -1814,7 +1658,7 @@ mod tests {
     /// itself). Run with `-- --nocapture` to see the printed advisories.
     #[test]
     fn emit_descriptor_warnings_prints_both_iam_warning_classes() {
-        use pmcp_package::package::{IamSection, IamStatement};
+        use pmcp_package::package::{DeployDescriptor, IamSection, IamStatement};
         let descriptor_iam = IamSection {
             statements: vec![IamStatement {
                 effect: "Allow".to_string(),
