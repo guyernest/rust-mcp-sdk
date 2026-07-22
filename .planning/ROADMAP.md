@@ -2259,7 +2259,7 @@ Plans:
 
 **Wave 5** *(blocked on Wave 4 completion)*
 
-- [ ] 112-07-PLAN.md — Migrate ~40 error-code literal call sites (core/mod/task_dispatch/jsonrpc) onto the centralized error_codes:: table; frozen -32002/-32601 byte-identical
+- [x] 112-07-PLAN.md — Migrate ~40 error-code literal call sites (core/mod/task_dispatch/jsonrpc) onto the centralized error_codes:: table; frozen -32002/-32601 byte-identical
 - [ ] 112-08-PLAN.md — Migrate the streamable-HTTP transport's 25 error-code literals onto the centralized error_codes:: table; wire byte-identical, #[cfg(test)] oracle preserved
 
 ### Phase 113: Stateless HTTP + Multi-Round-Trip Elicitation
@@ -2364,7 +2364,7 @@ Plans:
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 112. Version Plumbing Spine | 6/8 | In Progress|  |
+| 112. Version Plumbing Spine | 7/8 | In Progress|  |
 | 113. Stateless HTTP + MRTR | 0/TBD | Not started | - |
 | 114. Tasks Extension Migration | 0/TBD | Not started | - |
 | 115. JSON Schema 2020-12 + Caching Hints | 0/TBD | Not started | - |

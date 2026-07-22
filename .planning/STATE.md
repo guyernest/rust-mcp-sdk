@@ -4,13 +4,13 @@ milestone: v2.5
 milestone_name: MCP Spec 2026-07-28
 status: executing
 stopped_at: Completed 112-06-PLAN.md
-last_updated: "2026-07-22T22:59:50.311Z"
+last_updated: "2026-07-22T23:09:29.918Z"
 last_activity: 2026-07-22
 progress:
   total_phases: 71
   completed_phases: 0
   total_plans: 8
-  completed_plans: 6
+  completed_plans: 7
   percent: 0
 ---
 
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-07-22) · .planning/ROADMAP.md (v2.5 mil
 ## Current Position
 
 Phase: 112 (version-plumbing-spine) — EXECUTING
-Plan: 7 of 8
+Plan: 8 of 8
 Status: Ready to execute
 Last activity: 2026-07-22
 
@@ -98,6 +98,8 @@ Decisions are logged in PROJECT.md Key Decisions table. Decisions framing this m
 - [Phase ?]: [Phase 112]: 112-03: server/discover routed via crate-private InternalClientRequest + classify_internal_method BEFORE public-enum conversion; NO public ClientRequest/Request variant (Codex HIGH #4); Plan 05 wires it
 - [Phase 112]: 112-06: v2 HTTP header gate CONSUMES Plan 04's resolved ProtocolContext era (resolved once in the HTTP layer, threaded into new pub(crate) Server::handle_request_with_context) — never a second raw-header era read (Pitfall 2 / D-11); seam lives on high-level Server since the HTTP path dispatches through it, not ServerCore
 - [Phase 112]: 112-06: full header/_meta matrix as cog-25-safe pure classifier, fail-closed on every conflict cell; strict all-three-headers reject (D-05) + Mcp-Method/Mcp-Name body cross-check (D-06); outbound emission on success AND error non-panicking; new errors from error_codes:: (VERS-06); gate runs BEFORE legacy validate_protocol_version; v1/non-opted-in zero enforcement (D-04)
+- [Phase ?]: [Phase 112]: 112-07: dispatch layer (core.rs/mod.rs/task_dispatch.rs) + jsonrpc.rs production error-emission sites migrated to error_codes:: constants — centralized table is now the ACTUAL wire source of truth (closes checker Blocker 1); name-for-value swaps only, wire bytes unchanged; frozen -32002->V1_TASK_PENDING / -32601->METHOD_NOT_FOUND byte-identical, locking test untouched+green
+- [Phase ?]: [Phase 112]: 112-07: repo-wide VERS-06 audit — batch.rs/parallel_batch.rs production literals migrated here (Rule 2, owned by no plan); only Plan 08 streamable_http_server.rs (25) + non-compiled orphan src/wasi.rs remain (recorded)
 
 ### Pending Todos
 
@@ -133,7 +135,7 @@ Items deferred by design for this milestone (design §7 / REQUIREMENTS v2):
 
 ## Session Continuity
 
-Last session: 2026-07-22T22:59:50.307Z
+Last session: 2026-07-22T23:09:04.377Z
 Stopped at: Completed 112-06-PLAN.md
 Resume file: None
 
@@ -163,3 +165,4 @@ Resume file: None
 | Phase 112 P04 | 30 | 2 tasks | 4 files |
 | Phase 112 P5 | 35 | 2 tasks | 4 files |
 | Phase 112 P06 | 22min | 2 tasks | 4 files |
+| Phase 112 P07 | 12min | 2 tasks | 6 files |
