@@ -1277,7 +1277,11 @@ impl ProtocolHandler for ServerCore {
             .await
         {
             // Middleware rejected the request (on_error already called by chain)
-            return Self::error_response(id, -32603, e.to_string());
+            return Self::error_response(
+                id,
+                crate::types::protocol::error_codes::INTERNAL_ERROR,
+                e.to_string(),
+            );
         }
 
         // Resolve the per-request ProtocolContext ONCE at native ingress
@@ -1439,7 +1443,11 @@ impl ServerCore {
 
                 match self.handle_initialize(init_req).await {
                     Ok(result) => Self::success_response(id, serde_json::to_value(result).unwrap()),
-                    Err(e) => Self::error_response(id, -32603, e.to_string()),
+                    Err(e) => Self::error_response(
+                        id,
+                        crate::types::protocol::error_codes::INTERNAL_ERROR,
+                        e.to_string(),
+                    ),
                 }
             },
             Request::Client(ref boxed_req) => {
@@ -1449,7 +1457,9 @@ impl ServerCore {
                 if !self.stateless_mode && !self.is_initialized().await {
                     return Self::error_response(
                         id,
-                        -32002,
+                        // FROZEN wire value -32002 (byte-identical); read from the
+                        // centralized table by name (Pitfall 6).
+                        crate::types::protocol::error_codes::V1_TASK_PENDING,
                         "Server not initialized. Call initialize first.".to_string(),
                     );
                 }
@@ -1459,7 +1469,11 @@ impl ServerCore {
                         Ok(result) => {
                             Self::success_response(id, serde_json::to_value(result).unwrap())
                         },
-                        Err(e) => Self::error_response(id, -32603, e.to_string()),
+                        Err(e) => Self::error_response(
+                            id,
+                            crate::types::protocol::error_codes::INTERNAL_ERROR,
+                            e.to_string(),
+                        ),
                     },
                     ClientRequest::CallTool(req) => {
                         // Check for task-augmented call: explicit task field or tool requires task
@@ -1498,7 +1512,11 @@ impl ServerCore {
                                     .await
                                 {
                                     Ok(result) => Self::success_response(id, result),
-                                    Err(e) => Self::error_response(id, -32603, e.to_string()),
+                                    Err(e) => Self::error_response(
+                                        id,
+                                        crate::types::protocol::error_codes::INTERNAL_ERROR,
+                                        e.to_string(),
+                                    ),
                                 };
                             }
                         }
@@ -1561,21 +1579,33 @@ impl ServerCore {
                                     )
                                 },
                             },
-                            Err(e) => Self::error_response(id, -32603, e.to_string()),
+                            Err(e) => Self::error_response(
+                                id,
+                                crate::types::protocol::error_codes::INTERNAL_ERROR,
+                                e.to_string(),
+                            ),
                         }
                     },
                     ClientRequest::ListPrompts(req) => match self.handle_list_prompts(req).await {
                         Ok(result) => {
                             Self::success_response(id, serde_json::to_value(result).unwrap())
                         },
-                        Err(e) => Self::error_response(id, -32603, e.to_string()),
+                        Err(e) => Self::error_response(
+                            id,
+                            crate::types::protocol::error_codes::INTERNAL_ERROR,
+                            e.to_string(),
+                        ),
                     },
                     ClientRequest::GetPrompt(req) => {
                         match self.handle_get_prompt(req, auth_context.clone()).await {
                             Ok(result) => {
                                 Self::success_response(id, serde_json::to_value(result).unwrap())
                             },
-                            Err(e) => Self::error_response(id, -32603, e.to_string()),
+                            Err(e) => Self::error_response(
+                                id,
+                                crate::types::protocol::error_codes::INTERNAL_ERROR,
+                                e.to_string(),
+                            ),
                         }
                     },
                     ClientRequest::ListResources(req) => {
@@ -1583,7 +1613,11 @@ impl ServerCore {
                             Ok(result) => {
                                 Self::success_response(id, serde_json::to_value(result).unwrap())
                             },
-                            Err(e) => Self::error_response(id, -32603, e.to_string()),
+                            Err(e) => Self::error_response(
+                                id,
+                                crate::types::protocol::error_codes::INTERNAL_ERROR,
+                                e.to_string(),
+                            ),
                         }
                     },
                     ClientRequest::ReadResource(req) => {
@@ -1591,7 +1625,11 @@ impl ServerCore {
                             Ok(result) => {
                                 Self::success_response(id, serde_json::to_value(result).unwrap())
                             },
-                            Err(e) => Self::error_response(id, -32603, e.to_string()),
+                            Err(e) => Self::error_response(
+                                id,
+                                crate::types::protocol::error_codes::INTERNAL_ERROR,
+                                e.to_string(),
+                            ),
                         }
                     },
                     ClientRequest::ListResourceTemplates(req) => {
@@ -1599,7 +1637,11 @@ impl ServerCore {
                             Ok(result) => {
                                 Self::success_response(id, serde_json::to_value(result).unwrap())
                             },
-                            Err(e) => Self::error_response(id, -32603, e.to_string()),
+                            Err(e) => Self::error_response(
+                                id,
+                                crate::types::protocol::error_codes::INTERNAL_ERROR,
+                                e.to_string(),
+                            ),
                         }
                     },
                     // Task endpoint routing (TaskStore preferred, TaskRouter
@@ -1614,12 +1656,18 @@ impl ServerCore {
                             .route_tasks_endpoint(id, request, auth_context.as_ref())
                             .await
                     },
-                    _ => Self::error_response(id, -32601, "Method not supported".to_string()),
+                    _ => Self::error_response(
+                        id,
+                        crate::types::protocol::error_codes::METHOD_NOT_FOUND,
+                        "Method not supported".to_string(),
+                    ),
                 }
             },
-            Request::Server(_) => {
-                Self::error_response(id, -32601, "Method not supported".to_string())
-            },
+            Request::Server(_) => Self::error_response(
+                id,
+                crate::types::protocol::error_codes::METHOD_NOT_FOUND,
+                "Method not supported".to_string(),
+            ),
         }
     }
 

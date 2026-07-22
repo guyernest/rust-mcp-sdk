@@ -439,7 +439,13 @@ impl TaskDispatch<'_> {
 
         let created = match store.create(&owner_id, ttl).await {
             Ok(task) => task,
-            Err(e) => return error_response(id, -32603, e.to_string()),
+            Err(e) => {
+                return error_response(
+                    id,
+                    crate::types::protocol::error_codes::INTERNAL_ERROR,
+                    e.to_string(),
+                )
+            },
         };
         let store_id = created.task_id.clone();
 
@@ -447,14 +453,24 @@ impl TaskDispatch<'_> {
         let terminal_result = Self::extract_terminal_result(&value);
         let final_task = if let Some(call_result) = terminal_result {
             if let Err(e) = store.set_result(&store_id, &owner_id, call_result).await {
-                return error_response(id, -32603, e.to_string());
+                return error_response(
+                    id,
+                    crate::types::protocol::error_codes::INTERNAL_ERROR,
+                    e.to_string(),
+                );
             }
             match store
                 .update_status(&store_id, &owner_id, TaskStatus::Completed, None)
                 .await
             {
                 Ok(task) => task,
-                Err(e) => return error_response(id, -32603, e.to_string()),
+                Err(e) => {
+                    return error_response(
+                        id,
+                        crate::types::protocol::error_codes::INTERNAL_ERROR,
+                        e.to_string(),
+                    )
+                },
             }
         } else {
             created
@@ -552,7 +568,13 @@ impl TaskDispatch<'_> {
                     // NotFound = store doesn't have it (absent / pending / owner
                     // mismatch): fall through to the router below.
                     Err(crate::server::task_store::TaskStoreError::NotFound { .. }) => {},
-                    Err(e) => return error_response(id, -32603, e.to_string()),
+                    Err(e) => {
+                        return error_response(
+                            id,
+                            crate::types::protocol::error_codes::INTERNAL_ERROR,
+                            e.to_string(),
+                        )
+                    },
                 }
             }
         }
@@ -564,7 +586,11 @@ impl TaskDispatch<'_> {
                 .await
             {
                 Ok(result) => success_response(id, result),
-                Err(e) => error_response(id, -32603, e.to_string()),
+                Err(e) => error_response(
+                    id,
+                    crate::types::protocol::error_codes::INTERNAL_ERROR,
+                    e.to_string(),
+                ),
             };
         }
 
@@ -573,11 +599,18 @@ impl TaskDispatch<'_> {
         if self.task_store.is_some() {
             error_response(
                 id,
-                -32002,
+                // FROZEN wire value -32002 (byte-identical); read by name from the
+                // centralized table (Pitfall 6). The
+                // pending_tasks_result_preserves_minus_32002 test is the guard.
+                crate::types::protocol::error_codes::V1_TASK_PENDING,
                 "task result not available: task not completed".to_string(),
             )
         } else {
-            error_response(id, -32601, "tasks/result not supported".to_string())
+            error_response(
+                id,
+                crate::types::protocol::error_codes::METHOD_NOT_FOUND,
+                "tasks/result not supported".to_string(),
+            )
         }
     }
 
@@ -597,7 +630,11 @@ impl TaskDispatch<'_> {
                     let result = crate::types::tasks::GetTaskResult::new(task);
                     success_response(id, serde_json::to_value(result).unwrap_or_default())
                 },
-                Err(e) => error_response(id, -32603, e.to_string()),
+                Err(e) => error_response(
+                    id,
+                    crate::types::protocol::error_codes::INTERNAL_ERROR,
+                    e.to_string(),
+                ),
             }
         } else if let Some(task_router) = self.task_router {
             match task_router
@@ -605,10 +642,18 @@ impl TaskDispatch<'_> {
                 .await
             {
                 Ok(result) => success_response(id, result),
-                Err(e) => error_response(id, -32603, e.to_string()),
+                Err(e) => error_response(
+                    id,
+                    crate::types::protocol::error_codes::INTERNAL_ERROR,
+                    e.to_string(),
+                ),
             }
         } else {
-            error_response(id, -32601, "Tasks not enabled".to_string())
+            error_response(
+                id,
+                crate::types::protocol::error_codes::METHOD_NOT_FOUND,
+                "Tasks not enabled".to_string(),
+            )
         }
     }
 
@@ -631,7 +676,11 @@ impl TaskDispatch<'_> {
                     }
                     success_response(id, serde_json::to_value(result).unwrap_or_default())
                 },
-                Err(e) => error_response(id, -32603, e.to_string()),
+                Err(e) => error_response(
+                    id,
+                    crate::types::protocol::error_codes::INTERNAL_ERROR,
+                    e.to_string(),
+                ),
             }
         } else if let Some(task_router) = self.task_router {
             match task_router
@@ -639,10 +688,18 @@ impl TaskDispatch<'_> {
                 .await
             {
                 Ok(result) => success_response(id, result),
-                Err(e) => error_response(id, -32603, e.to_string()),
+                Err(e) => error_response(
+                    id,
+                    crate::types::protocol::error_codes::INTERNAL_ERROR,
+                    e.to_string(),
+                ),
             }
         } else {
-            error_response(id, -32601, "Tasks not enabled".to_string())
+            error_response(
+                id,
+                crate::types::protocol::error_codes::METHOD_NOT_FOUND,
+                "Tasks not enabled".to_string(),
+            )
         }
     }
 
@@ -662,7 +719,11 @@ impl TaskDispatch<'_> {
                     let result = crate::types::tasks::CancelTaskResult::new(task);
                     success_response(id, serde_json::to_value(result).unwrap_or_default())
                 },
-                Err(e) => error_response(id, -32603, e.to_string()),
+                Err(e) => error_response(
+                    id,
+                    crate::types::protocol::error_codes::INTERNAL_ERROR,
+                    e.to_string(),
+                ),
             }
         } else if let Some(task_router) = self.task_router {
             match task_router
@@ -670,10 +731,18 @@ impl TaskDispatch<'_> {
                 .await
             {
                 Ok(result) => success_response(id, result),
-                Err(e) => error_response(id, -32603, e.to_string()),
+                Err(e) => error_response(
+                    id,
+                    crate::types::protocol::error_codes::INTERNAL_ERROR,
+                    e.to_string(),
+                ),
             }
         } else {
-            error_response(id, -32601, "Tasks not enabled".to_string())
+            error_response(
+                id,
+                crate::types::protocol::error_codes::METHOD_NOT_FOUND,
+                "Tasks not enabled".to_string(),
+            )
         }
     }
 
@@ -700,7 +769,11 @@ impl TaskDispatch<'_> {
             ClientRequest::TasksCancel(params) => {
                 self.route_tasks_cancel(id, params, auth_context).await
             },
-            _ => error_response(id, -32601, "Method not supported".to_string()),
+            _ => error_response(
+                id,
+                crate::types::protocol::error_codes::METHOD_NOT_FOUND,
+                "Method not supported".to_string(),
+            ),
         }
     }
 }

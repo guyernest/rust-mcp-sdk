@@ -1368,7 +1368,7 @@ impl Server {
                 id,
                 payload: crate::types::jsonrpc::ResponsePayload::Error(
                     crate::types::jsonrpc::JSONRPCError {
-                        code: -32601,
+                        code: crate::types::protocol::error_codes::METHOD_NOT_FOUND,
                         message: "Server requests not supported by server".to_string(),
                         data: None,
                     },
@@ -1511,7 +1511,7 @@ impl Server {
                 id,
                 payload: crate::types::jsonrpc::ResponsePayload::Error(
                     crate::types::jsonrpc::JSONRPCError {
-                        code: -32603,
+                        code: crate::types::protocol::error_codes::INTERNAL_ERROR,
                         message: e.to_string(),
                         data: None,
                     },
