@@ -1,98 +1,28 @@
 ---
 phase: 112-version-plumbing-spine
-verified: 2026-07-22T23:35:35Z
-status: gaps_found
-score: 2/5 roadmap success criteria verified (2/9 requirements BLOCKED, 1 additional requirement partially blocked)
+verified: 2026-07-23T02:44:20Z
+status: passed
+score: 9/9 requirements verified; 5/5 roadmap success criteria verified
 overrides_applied: 0
-gaps:
-  - truth: "A v2 client calling server/discover receives a read-only projection of already-computed ServerCore capabilities, including the extensions map (VERS-04, VERS-08, ROADMAP SC#3)"
-    status: failed
-    reason: >
-      server/discover is completely unreachable in production on every transport, for every era.
-      The crate-private routing seam (parse_request_or_internal / IngressRequest::Internal /
-      dispatch_internal_client_request / handle_discover) built in Plans 03/05 is exercised only
-      by unit tests. Both production entry points — stdio (src/shared/transport.rs:138,
-      parse_method_message) and the streamable-HTTP fast path (src/server/streamable_http_server.rs,
-      via StdioTransport::parse_message) — call exclusively the PUBLIC
-      crate::shared::parse_request(), which unconditionally maps IngressRequest::Internal to
-      Error::method_not_found (-32601) regardless of the resolved era. Plan 05's own SUMMARY
-      states live-transport wiring was "deferred to Plan 07 (dispatch) / Plan 08
-      (streamable-http)" but the actual Plan 07/08 scope (per their PLAN frontmatter and
-      SUMMARYs) was exclusively the error-code-literal migration — neither plan added a
-      caller of dispatch_internal_client_request. handle_discover and
-      dispatch_internal_client_request still carry #[allow(dead_code)] in the shipped code.
-      REQUIREMENTS.md marks VERS-04 "[x] Complete" and the code-review classified this only as
-      Info (IN-01) — both understate the severity: this is not a documentation/comment
-      accuracy issue, it is the literal absence of the ROADMAP's success criterion #3.
-    artifacts:
-      - path: "src/shared/protocol_helpers.rs"
-        issue: "parse_request() (the only production entry point transports call) discards IngressRequest::Internal -> -32601, always, regardless of era. parse_request_or_internal (which preserves the Internal variant) has no production caller."
-      - path: "src/server/core.rs"
-        issue: "dispatch_internal_client_request (:552) and handle_discover (:578) are #[allow(dead_code)], called only from #[cfg(test)] (lines 2110/2140/2152/2189)."
-      - path: "src/shared/transport.rs"
-        issue: "parse_method_message (:138), the real stdio/HTTP message-parsing entry point, calls the public parse_request — never parse_request_or_internal."
-    missing:
-      - "A live call site (in core.rs's handle_request/handle_request_internal or the transport layer) that, for an era==V2 request, routes through parse_request_or_internal/classify_internal_method and invokes dispatch_internal_client_request instead of falling through to method_not_found."
-  - truth: "ProtocolContext resolved once at ingress is threaded through dispatch to EVERY handler (not just tools/call), and v2 requests self-describe via per-request _meta on any method (VERS-01, VERS-03, ROADMAP SC#1)"
-    status: failed
-    reason: >
-      The per-request `_meta` extraction that feeds era resolution, and the RequestHandlerExtra
-      protocol_context threading that makes it handler-visible, are BOTH wired for
-      tools/call only — not for the general dispatch layer the goal/requirement describes.
-      (1) src/server/core.rs:1750 extract_request_meta_value() — the single function both
-      native ingress sites (core.rs, mod.rs) call to read the per-request `_meta` signal before
-      resolving ProtocolContext — pattern-matches ONLY ClientRequest::CallTool; its own doc
-      comment states "every other request yields None and resolves to the v1 fallback." Verified
-      directly against GetPromptRequest/ReadResourceRequest, both of which DO carry a `_meta:
-      Option<RequestMeta>` field (src/types/prompts.rs:283, src/types/resources.rs:167) that is
-      silently ignored. (2) Independent of (1): handle_get_prompt / handle_read_resource in
-      BOTH src/server/core.rs (:894, :962) and src/server/mod.rs (:1866, :1978) construct
-      RequestHandlerExtra WITHOUT calling .with_protocol_context(...) or .with_request_meta(...)
-      at all — only handle_call_tool does (core.rs:663-670, mod.rs:1639/1643). So even if (1)
-      were fixed, a PromptHandler/ResourceHandler implementation still could not call
-      extra.era()/.client_info()/.client_capabilities()/.trace_context() — those accessors
-      always return None inside a prompt or resource handler today, regardless of what the v2
-      client sends. This is a materially larger gap than the code review's WR-01 (which scoped
-      the symptom to the HTTP header gate); it is a spine-completeness gap that also silently
-      degrades the top-level resultType/serverInfo envelope (VERS-07) and W3C trace-context
-      propagation (VERS-09) for the same two methods, on every transport (not just HTTP).
-    artifacts:
-      - path: "src/server/core.rs"
-        issue: "extract_request_meta_value (:1750-1762) only reads _meta from ClientRequest::CallTool; handle_get_prompt (:894) and handle_read_resource (:962) never call .with_protocol_context()/.with_request_meta()."
-      - path: "src/server/mod.rs"
-        issue: "handle_get_prompt (:1866) and handle_read_resource (:1978) never call .with_protocol_context()/.with_request_meta() (only handle_call_tool at :1639/1643 does)."
-    missing:
-      - "extract_request_meta_value must read _meta from every ClientRequest variant that carries the per-request signal (at minimum GetPrompt/ReadResource), not just CallTool."
-      - "handle_get_prompt/handle_read_resource at both native dispatch sites must thread the ingress-resolved protocol_context (and request_meta) into the RequestHandlerExtra passed to the handler, mirroring handle_call_tool."
-    related_review_finding: "WR-01 in 112-REVIEW.md (scoped narrowly to the HTTP header gate; the root cause and blast radius are broader — see reason above)."
-  - truth: "The required v2 HTTP headers are enforced correctly for all documented name-bearing methods (VERS-05, ROADMAP SC#4)"
-    status: failed
-    reason: >
-      Direct consequence of the gap above. src/server/streamable_http_server.rs:470
-      is_name_bearing_method() lists tools/call, prompts/get, and resources/read as
-      v2-enforced (MCP-Name cross-checked for all three, per the header docs at
-      src/shared/http_constants.rs:18). A compliant v2 client sending
-      MCP-Protocol-Version:2026-07-28 on prompts/get or resources/read is rejected with a live
-      400 because extract_request_meta_value never surfaces that method's _meta, so
-      resolve_protocol_context falls back to v1, and classify_era_cell(header=V2, meta=V1) hits
-      the fail-closed "REJECT — header claims v2 but _meta disagrees" cell. v2 is effectively
-      unreachable for 2 of the 3 documented name-bearing methods; only tools/call works.
-    artifacts:
-      - path: "src/server/core.rs"
-        issue: "Same extract_request_meta_value defect as the entry above; this is where the wire-visible symptom (400 on legitimate v2 requests) originates."
-    missing:
-      - "Fix extract_request_meta_value (see the entry above) so the header/_meta reconciliation has a correct _meta signal to reconcile against for prompts/get and resources/read."
-    related_review_finding: "WR-01 in 112-REVIEW.md."
+re_verification:
+  previous_status: gaps_found
+  previous_score: 2/5 roadmap success criteria verified (2/9 requirements BLOCKED, 1 additional requirement partially blocked)
+  gaps_closed:
+    - "Gap A: server/discover was 100% unreachable in production (VERS-04, ROADMAP SC#3) — closed by Plan 112-10 (classify-then-continue HttpIngress wiring on the real HTTP POST pipeline)"
+    - "Gap B: per-request _meta/ProtocolContext spine wired for tools/call ONLY, not GetPrompt/ReadResource (VERS-01/03/09) — closed by Plan 112-09 Task 1"
+    - "Gap C: HTTP header gate's logical-name extraction was not method-aware for resources/read, rejecting standards-shaped v2 requests (VERS-05) — closed by Plan 112-09 Task 2"
+  gaps_remaining: []
+  regressions: []
 deferred: []
 human_verification: []
 ---
 
 # Phase 112: Version Plumbing Spine Verification Report
 
-**Phase Goal:** ProtocolContext resolved once at ingress + threaded through dispatch; 2026-07-28 as explicit opt-in (LATEST stays 2025-11-25); server/discover, extensions map, required v2 headers, resultType envelope, W3C trace-context, centralized version-gated error-code table. v1 wire output must remain byte-identical.
-**Verified:** 2026-07-22T23:35:35Z
-**Status:** gaps_found
-**Re-verification:** No — initial verification
+**Phase Goal:** pmcp resolves a per-request protocol era once at transport ingress and threads it explicitly through dispatch, so one binary understands both 2025-11-25 and 2026-07-28 clients — with v2 strictly opt-in, no v1 behavior change, and the whole milestone kept additive (2.x minor).
+**Verified:** 2026-07-23T02:44:20Z
+**Status:** passed
+**Re-verification:** Yes — after gap closure (Plans 112-09, 112-10)
 
 ## Goal Achievement
 
@@ -100,106 +30,100 @@ human_verification: []
 
 | # | Truth | Status | Evidence |
 |---|-------|--------|----------|
-| 1 | v2-opt-in server resolves `ProtocolContext` once at ingress from per-request `_meta`; a handler reads it via typed accessors on `RequestHandlerExtra`; v2 results carry `serverInfo` (VERS-01, VERS-03) | ✗ FAILED | True ONLY for `tools/call`. `extract_request_meta_value` (core.rs:1750) reads `_meta` from `ClientRequest::CallTool` exclusively (own doc comment: "every other request yields `None`"); `handle_get_prompt`/`handle_read_resource` at both native dispatch sites (core.rs:894/962, mod.rs:1866/1978) never call `.with_protocol_context()`/`.with_request_meta()`. `extra.era()`/`.client_info()`/`.trace_context()` always return `None` inside a prompt/resource handler. |
-| 2 | An existing v1 client negotiates exactly as before — `LATEST_PROTOCOL_VERSION` stays pinned to `2025-11-25`; `2026-07-28` reached only via explicit opt-in (VERS-02) | ✓ VERIFIED | `src/types/protocol/version.rs:4` unchanged (`LATEST_PROTOCOL_VERSION = "2025-11-25"`); `SUPPORTED_PROTOCOL_VERSIONS` len 4, does NOT contain `2026-07-28` (tests `latest_version_is_2025_11_25`, line 134 assertion); `.with_supported_protocol_versions()` unset ⇒ v1-only default (builder.rs tests); non-opted-in ingress short-circuits to `Ok(None)` before any era detection (core.rs:483-491); `cargo semver-checks check-release` (v0.49.0, baseline 2.17.0) → `223 checks: 223 pass, 30 skip`, **no semver update required** (re-run independently, confirms Plan 08 SUMMARY claim). |
-| 3 | A v2 client calling `server/discover` receives a read-only projection of already-computed `ServerCore` capabilities, including the `extensions` map (VERS-04, VERS-08) | ✗ FAILED | `server/discover` is unreachable in production on every transport and every era. Confirmed by tracing both production entry points (`src/shared/transport.rs:138` stdio, and the streamable-HTTP fast path which reuses the same `StdioTransport::parse_message`) — both call only the PUBLIC `crate::shared::parse_request()`, which unconditionally discards `IngressRequest::Internal` → `-32601`. `dispatch_internal_client_request`/`handle_discover` carry `#[allow(dead_code)]` and are called only from `#[cfg(test)]`. |
-| 4 | On the v2 HTTP path, required headers `Mcp-Method`/`Mcp-Name` (alongside `MCP-Protocol-Version`) are enforced inbound and emitted outbound (VERS-05) | ✗ FAILED | Enforcement machinery (classification matrix, cog-25-safe helpers, outbound emission) is well-built and works correctly for `tools/call` (10/10 `v2_required_headers` integration tests pass). But it is broken for 2 of the 3 documented name-bearing methods (`prompts/get`, `resources/read`): a compliant v2 client is rejected 400 because the era resolver never sees `_meta` for those methods (same root cause as Truth #1) — `is_name_bearing_method` (streamable_http_server.rs:470) advertises coverage the resolver cannot deliver. |
-| 5 | Every result carries the `resultType` envelope discriminator defaulting to `complete`; W3C trace-context keys are surfaced via typed accessors and propagated through dispatch; all error codes resolve from one centralized version-gated table (VERS-06, VERS-07, VERS-09) | ⚠ PARTIAL (VERS-06 verified; VERS-07/09 fail outside `tools/call`) | **VERS-06 error-code centralization: VERIFIED** — `error_codes.rs` holds the full standard + pmcp `-320xx` family + frozen `V1_TASK_PENDING`, no SATD, no v2 numeric constant; `error::ErrorCode`'s 11 consts delegate via `Self(error_codes::NAME)` (confirmed in `src/error/mod.rs`); repo-wide audit (independently spot-checked) shows all compiled production emission sites migrated; frozen `-32002`/`-32601` byte-identical, locking test untouched and green. **VERS-07/VERS-09: same root-cause failure as Truth #1** — `resultType`/`serverInfo` injection and `trace_context()` both depend on the ingress-resolved `protocol_context`/`request_meta`, which is only correctly populated for `tools/call`; a v2 `prompts/get`/`resources/read` response silently gets NO envelope and the handler cannot see trace-context, even on a fully v2-negotiated connection. |
+| 1 | v2-opt-in server resolves `ProtocolContext` once at ingress from per-request `_meta`; a handler reads it via typed accessors on `RequestHandlerExtra`; v2 results carry `serverInfo` (VERS-01, VERS-03) | ✓ VERIFIED | Previously TRUE only for `tools/call`. Now `extract_request_meta_value` (`src/server/core.rs:1747`) matches `ClientRequest::CallTool`, `ClientRequest::GetPrompt`, AND `ClientRequest::ReadResource`. `handle_get_prompt`/`handle_read_resource` at BOTH native dispatch sites (`core.rs:802/881`, `mod.rs:1902/2028`) now call `.with_request_meta(..)` + `.with_protocol_context(..)`. Proven via real-dispatch-entrypoint tests (not leaf-handler calls): `core.rs` test `prompt_resource_protocol_context_via_dispatch_core` enters through `handle_request_internal`; `mod.rs` test `prompt_resource_protocol_context_via_dispatch_server` enters through `process_client_request`. Both distinguish `era==None` (non-opted-in) / `Some(Era::V1)` (opted-in v1 fallback) / `Some(Era::V2)`, and assert `client_info()`/`trace_context()` are populated on v2 — all pass (`cargo test --lib --features full`: 1229 passed, 0 failed). Live HTTP e2e (`v2_prompts_get_accepts_and_envelopes`, `v2_resources_read_accepts_and_envelopes`) confirm `serverInfo` + `resultType:"complete"` on real v2 responses over the real HTTP transport. |
+| 2 | An existing v1 client negotiates exactly as before — `LATEST_PROTOCOL_VERSION` stays pinned to `2025-11-25`; `2026-07-28` reached only via explicit opt-in (VERS-02) | ✓ VERIFIED | Regression-checked: `src/types/protocol/version.rs:4` unchanged (`LATEST_PROTOCOL_VERSION = "2025-11-25"`); `SUPPORTED_PROTOCOL_VERSIONS` (4 entries) still excludes 2026-07-28. `cargo semver-checks check-release --baseline-version 2.17.0 -p pmcp` (independently re-run) → `223 checks: 223 pass, 30 skip`, "no semver update required." |
+| 3 | A v2 client calling `server/discover` receives a read-only projection of already-computed `ServerCore` capabilities, including the `extensions` map (VERS-04, VERS-08) | ✓ VERIFIED | `server/discover` is now reachable in production over the real HTTP POST pipeline (previously 100% unreachable — every request returned `-32601`). Traced the full classify-then-continue wiring in `src/server/streamable_http_server.rs`: a crate-local `HttpIngress::{Public,Discover}` enum classifies the raw body (`classify_http_ingress`, line 655) at BOTH POST parse entrypoints (`parse_transport_message_fast:1541`, `parse_transport_message_with_middleware`); the real production router (`handle_post_request` → `handle_post_fast_path`/`handle_post_with_middleware`, both bound to `.route("/", post(handle_post_request))` at line 289) runs the `Discover` ingress through session resolution → the SAME `classify_v2_request` matrix via a raw-`_meta` counterpart (`run_v2_header_gate_raw`) → legacy-version validation → auth → dispatch, exactly mirroring every other method — confirmed by reading `handle_post_fast_path` end-to-end (lines 1708-1829). The `ServerCore` wrapper methods `dispatch_internal_client_request`/`handle_discover` are DELETED (`grep -rn 'dispatch_internal_client_request' src/` returns nothing); logic consolidated into one `build_discover_response` free fn (`core.rs:1201`) with no `#[allow(dead_code)]`. Live e2e proof (`tests/v2_required_headers.rs`, all pass): `server_discover_v2_returns_capability_projection_with_extensions` asserts the registered extension id IS present in the response `capabilities.extensions` map plus `serverInfo`+`resultType:"complete"`+preserved id; `server_discover_requires_auth_when_provider_installed` proves a real `AuthProvider` (`RejectingAuth`) still gates discover (401 when unauthenticated) — no auth bypass; `server_discover_runs_response_middleware` proves a real `ServerHttpMiddlewareChain` observes the discover response — no middleware bypass; 4 reject tests prove discover is subject to the SAME v2 header-classification matrix as `tools/call`; v1/non-opted-in tests confirm the documented D-10 `-32601@200` behavior with the original id preserved. |
+| 4 | On the v2 HTTP path, required headers `Mcp-Method`/`Mcp-Name` (alongside `MCP-Protocol-Version`) are enforced inbound and emitted outbound (VERS-05) | ✓ VERIFIED | Previously broken for 2 of 3 documented name-bearing methods. `extract_body_method_and_name` (`streamable_http_server.rs:537`) is now method-aware: `resources/read` resolves its logical name from `params.uri` (the field the real `ReadResourceRequest` actually carries — it has NO `name` field), `prompts/get`/`tools/call` unchanged at `params.name`. Unit tests `extract_body_method_and_name_uses_uri_for_resources_read` and `cross_check_name_accepts_resources_read_uri` pass. Live e2e `v2_resources_read_accepts_and_envelopes` sends a standards-shaped `ReadResourceRequest` body (uri only, no synthetic `params.name`) with `Mcp-Name` = the URI and gets HTTP 200 (previously would 400). `server/discover` (not name-bearing) is also enforced via the same matrix (`run_v2_header_gate_raw`), including a `server_discover_rejects_missing_mcp_name` presence-only test. All 25 tests in `tests/v2_required_headers.rs` pass, tools/call cells untouched. |
+| 5 | Every result carries the `resultType` envelope discriminator defaulting to `complete`; W3C trace-context keys are surfaced via typed accessors and propagated through dispatch; all error codes resolve from one centralized version-gated table (VERS-06, VERS-07, VERS-09) | ✓ VERIFIED | VERS-06 (error-code centralization) was already verified and is unaffected by this closure (regression-checked: `error_codes.rs` has 12 `pub const` covering the full standard + pmcp `-320xx` family + frozen `V1_TASK_PENDING`; `error::ErrorCode`'s 11 consts still delegate via `Self(error_codes::NAME)`, confirmed by `grep -c` = 11). VERS-07 (`resultType`)/VERS-09 (trace-context) previously failed outside `tools/call` — root cause was the same Gap B defect, now closed: `inject_v2_result_envelope` (`core.rs:1153`) is confirmed generic (era-gated only, no method-specific logic) and now genuinely fires for `prompts/get`/`resources/read` too, per the dispatch-entrypoint tests in Truth #1 (which explicitly assert `trace_context()` reflects the injected W3C `traceparent`, proving `.with_request_meta` threading) and the live e2e envelope assertions. |
 
-**Score:** 2/5 roadmap success criteria fully verified (Truth #2 clean; Truth #5 only its VERS-06 sub-claim clean). 3/5 FAILED.
+**Score:** 5/5 roadmap success criteria fully verified. All three previously-open gaps (A, B, C) are closed with direct code + live-HTTP-test evidence, not SUMMARY narrative.
 
 ### Requirements Coverage
 
 | Requirement | Source Plan(s) | Description | Status | Evidence |
 |---|---|---|---|---|
-| VERS-01 | 01, 02, 04 | ProtocolContext resolved once at ingress, threaded through dispatch, handler-readable | ✗ BLOCKED | Threading exists only for `tools/call` (see Truth #1) |
-| VERS-02 | 01, 04 | 2026-07-28 explicit opt-in; LATEST stays pinned | ✓ SATISFIED | Verified directly (Truth #2) |
-| VERS-03 | 01, 02, 04, 05 | v2 self-describes via per-request `_meta`; v2 results carry serverInfo | ✗ BLOCKED | `_meta` extraction is CallTool-only (see Truth #1); serverInfo injection inherits the same gap for non-CallTool methods |
-| VERS-04 | 03, 05 | `server/discover` read-only capability projection | ✗ BLOCKED | Unreachable in production on any transport/era (Truth #3) |
-| VERS-05 | 06 | Required v2 headers enforced inbound/outbound | ✗ BLOCKED | Broken for `prompts/get`/`resources/read` (Truth #4) |
-| VERS-06 | 03, 06, 07, 08 | Centralized version-gated error-code table | ✓ SATISFIED | Verified directly (Truth #5, VERS-06 sub-claim) |
-| VERS-07 | 05 | `resultType` envelope, default `complete` | ✗ BLOCKED | Only fires for `tools/call` v2 responses (Truth #5) |
-| VERS-08 | 04, 06 | `extensions` capability map supported in negotiation | ✓ SATISFIED | `.with_extension()` populates `ServerCapabilities.extensions` (builder.rs), which is surfaced via the pre-existing `initialize` handshake (`InitializeResult.capabilities`) — independent of the broken `server/discover` path; builder tests pass |
-| VERS-09 | 01, 02 | W3C trace-context surfaced via typed accessors, propagated through dispatch | ✗ BLOCKED | `TraceContext::from_meta`/`extra.trace_context()` mechanism is solid in isolation (proptest + fuzz + unit tests all pass), but `request_meta` is only populated on the `tools/call` dispatch arm at both native sites — unavailable in prompt/resource handlers regardless of client signal |
+| VERS-01 | 01, 02, 04, 09 | ProtocolContext resolved once at ingress, threaded through dispatch, handler-readable | ✓ SATISFIED | Threading now covers `tools/call`, `prompts/get`, `resources/read` at both native dispatch sites (Truth #1) |
+| VERS-02 | 01, 04 | 2026-07-28 explicit opt-in; LATEST stays pinned | ✓ SATISFIED | Regression-checked (Truth #2) |
+| VERS-03 | 01, 02, 04, 05, 09 | v2 self-describes via per-request `_meta`; v2 results carry serverInfo | ✓ SATISFIED | `_meta` extraction now covers `CallTool`+`GetPrompt`+`ReadResource` with an exhaustive-variant tripwire test (Truth #1) |
+| VERS-04 | 03, 05, 10 | `server/discover` read-only capability projection | ✓ SATISFIED | Reachable in production over the real HTTP POST pipeline; classify-then-continue proven via auth + middleware bypass tests (Truth #3) |
+| VERS-05 | 06, 09 | Required v2 headers enforced inbound/outbound | ✓ SATISFIED | Fixed for `prompts/get`/`resources/read`; method-aware logical-name extraction (Truth #4) |
+| VERS-06 | 03, 06, 07, 08 | Centralized version-gated error-code table | ✓ SATISFIED | Regression-checked, unaffected by this closure (Truth #5) |
+| VERS-07 | 05, 09 | `resultType` envelope, default `complete` | ✓ SATISFIED | Now fires for `prompts/get`/`resources/read` v2 responses too, not just `tools/call` (Truth #5) |
+| VERS-08 | 04, 06, 10 | `extensions` capability map supported in negotiation | ✓ SATISFIED | Surfaced via `initialize` (pre-existing) AND now via the live `server/discover` projection (Truth #3, extension id confirmed present in the wire response) |
+| VERS-09 | 01, 02, 09 | W3C trace-context surfaced via typed accessors, propagated through dispatch | ✓ SATISFIED | `trace_context()` now populated inside prompt/resource handlers on a v2 connection, proven via the dispatch-entrypoint tests asserting the injected `traceparent` (Truth #1/#5) |
 
-No orphaned requirements — all 9 VERS-01..09 IDs appear in at least one plan's `requirements:` frontmatter and are traced to Phase 112 in REQUIREMENTS.md. **However, REQUIREMENTS.md currently marks all 9 as `[x]` Complete and the traceability table lists all as "Complete" — this verification found VERS-01, VERS-03, VERS-04, VERS-05, VERS-07, VERS-09 (6 of 9) to be BLOCKED against the live codebase.**
+No orphaned requirements — all 9 VERS-01..09 IDs appear in the closure plans' `requirements:` frontmatter (112-09: VERS-01/03/05/07/09; 112-10: VERS-04) and are traced to Phase 112 in REQUIREMENTS.md, which marks all 9 as `[x]` Complete. This verification independently confirms all 9 as SATISFIED against the live codebase (previously 6 of 9 were BLOCKED).
 
 ### Required Artifacts
 
 | Artifact | Expected | Status | Details |
 |---|---|---|---|
-| `src/types/protocol/version.rs` | `PROTOCOL_VERSION_2026_07_28`, `Era`, `protocol_era()`, `LATEST_PROTOCOL_VERSION` unchanged | ✓ VERIFIED | All present; `SUPPORTED_PROTOCOL_VERSIONS` len 4, excludes 2026-07-28 |
-| `src/types/protocol/context.rs` | `ProtocolContext`, `TraceContext::from_meta`, `MAX_TRACE_VALUE_LEN`, `resolve_protocol_context`, `ProtocolNegotiationError` | ✓ VERIFIED | All present, bounded-validated, proptest+fuzz covered |
-| `src/server/cancellation.rs` | `protocol_context` field + `with_protocol_context` + `era()`/`client_info()`/`client_capabilities()`/`protocol_version()`/`trace_context()` accessors | ✓ VERIFIED (as a type/accessor surface) | All present and unit-tested. **NOTE:** the accessors are correct, but the field is only ever populated by the `tools/call` dispatch arm (see Truth #1) — the artifact is substantively built but its production callers under-wire it. |
-| `src/types/protocol/error_codes.rs` | Centralized version-gated table | ✓ VERIFIED | Full standard + pmcp `-320xx` family + frozen `V1_TASK_PENDING`/`UNSUPPORTED_CAPABILITY` coexisting by name; zero SATD |
-| `src/error/mod.rs` | `ErrorCode` consts delegate to `error_codes::` | ✓ VERIFIED | `grep` confirms `Self(crate::types::protocol::error_codes::NAME)` for all 11 consts |
-| `src/server/builder.rs` | `.with_supported_protocol_versions()`, `.with_extension()` | ✓ VERIFIED | Present, tested (default/dual/v2-only/empty-fallback all covered) |
-| `src/server/core.rs`, `src/server/mod.rs` | `resolve_protocol_context` threaded at both native sites; `handle_discover`; `inject_v2_result_envelope` | ⚠ ORPHANED (discover) / ⚠ HOLLOW (envelope+extra for non-CallTool) | `resolve_protocol_context`/envelope injection ARE wired generically at the top-level `handle_request` (correct machinery), but the *input* to that machinery (`extract_request_meta_value`) is CallTool-only, so the machinery silently produces v1 results for other methods even on v2 connections. `handle_discover`/`dispatch_internal_client_request` are present but have zero production callers (dead code). |
-| `src/shared/http_constants.rs`, `src/server/streamable_http_server.rs` | `MCP_METHOD`/`MCP_NAME` constants; full v2 classification matrix; error_codes:: migration | ✓ VERIFIED (headers/matrix machinery) / ✗ affected by Truth #1's root cause for 2/3 name-bearing methods | 25/25 literal migration confirmed (`error_codes::` count matches); classifier machinery well-tested; functional correctness for `prompts/get`/`resources/read` fails per Truth #4 |
-| `src/server/task_dispatch.rs`, `src/types/jsonrpc.rs` | Error-code literal migration | ✓ VERIFIED | `error_codes::V1_TASK_PENDING` present in both files; frozen locking test `pending_tasks_result_preserves_minus_32002` untouched and green |
+| `src/server/core.rs` — `extract_request_meta_value` | Matches `CallTool`, `GetPrompt`, `ReadResource` | ✓ VERIFIED | Lines 1747-1769; doc comment states the go-forward policy; exhaustive-variant tripwire test `all_meta_bearing_client_requests_are_extracted` passes |
+| `src/server/core.rs` — `handle_get_prompt`/`handle_read_resource` | Thread `protocol_context`+`request_meta` into `RequestHandlerExtra` | ✓ VERIFIED | Lines 802-836 (prompt), 881+ (resource); both call `.with_request_meta(..)`+`.with_protocol_context(..)` |
+| `src/server/mod.rs` — `handle_get_prompt`/`handle_read_resource` twins | Same threading at the high-level `Server` dispatch site | ✓ VERIFIED | Lines 1902-1975 (prompt), 2028-2111 (resource); both call `.with_request_meta(..)`+`.with_protocol_context(..)`, mirroring `handle_call_tool` |
+| `src/server/streamable_http_server.rs` — `extract_body_method_and_name` | Method-aware logical-name extraction (`resources/read` → `params.uri`) | ✓ VERIFIED | Lines 537-558; branches on method, `"uri"` key for `resources/read`, `"name"` otherwise |
+| `src/server/streamable_http_server.rs` — `HttpIngress`/`classify_http_ingress`/`run_v2_header_gate_raw`/`assemble_discover_response_*` | Classify-then-continue live `server/discover` wiring | ✓ VERIFIED | `HttpIngress` enum (line 633), `classify_http_ingress` (655), `run_v2_header_gate_raw` (685), `assemble_discover_response_fast`/`_with_middleware` (1661/1939); wired into the real router via `handle_post_request` → `handle_post_fast_path`/`handle_post_with_middleware` |
+| `src/server/core.rs` — `build_discover_response` | Single shared discover projection, no dead-code wrapper | ✓ VERIFIED | `core.rs:1201`, `pub(crate) fn build_discover_response`; `grep -c 'fn dispatch_internal_client_request' src/server/core.rs` = 0; `grep -c 'fn handle_discover' src/server/core.rs` = 0 (only `mod.rs`'s thin delegate remains) |
+| `src/server/mod.rs` — `Server::handle_discover` | Production discover caller delegating to `build_discover_response` | ✓ VERIFIED | `mod.rs:1309`, delegates to `crate::server::core::build_discover_response` |
+| `src/types/protocol/mod.rs` | Stale `dispatch_internal_client_request` doc reference removed | ✓ VERIFIED | Doc comment now names `classify_internal_method` → `IngressRequest::Internal` → `Server::handle_discover` → `build_discover_response` (lines 607-613); `grep -rn 'dispatch_internal_client_request' src/` returns nothing |
+| `tests/v2_required_headers.rs` | Live HTTP prompts/get + resources/read + server/discover matrix, v1 byte-identity | ✓ VERIFIED | 25 tests, all pass (`cargo test --test v2_required_headers --features full`) |
 
 ### Key Link Verification
 
 | From | To | Via | Status | Details |
 |---|---|---|---|---|
-| `src/server/cancellation.rs` | `src/types/protocol/context.rs` | `protocol_context: Option<ProtocolContext>` field | ✓ WIRED | Confirmed by grep + tests |
-| `src/error/mod.rs` | `src/types/protocol/error_codes.rs` | `Self(error_codes::NAME)` delegation | ✓ WIRED | Confirmed by grep on all 11 consts |
-| `src/server/builder.rs` | `src/server/core.rs` | `supported_protocol_versions` stored on `ServerCore` | ✓ WIRED | Confirmed via builder tests + `is_v2_opted_in()` |
-| `src/server/core.rs` | `src/types/protocol/context.rs` | `resolve_protocol_context(...)` called once at ingress | ✓ WIRED (but fed a defective `_meta` extraction for non-CallTool methods) | `resolve_ingress_protocol_context` calls `extract_request_meta_value` then `resolve_protocol_context` — the link itself is correct; the upstream input is incomplete (Truth #1) |
-| `src/server/streamable_http_server.rs` | `src/server/core.rs` | Resolves `ProtocolContext` once, passes into `handle_request_internal` (pass-through, not re-resolved) | ✓ WIRED | Confirmed: HTTP layer resolves once, core.rs does not re-resolve; `resolve_protocol_context` call-count is 1 per request |
-| `src/shared/protocol_helpers.rs` (`parse_request_or_internal`) | `src/server/core.rs` (`dispatch_internal_client_request`) | Live transport routing for `server/discover` | ✗ NOT_WIRED | No production caller anywhere in `src/` — confirmed by exhaustive grep across the transport layer (Truth #3) |
-| `src/server/core.rs`/`mod.rs` (`handle_get_prompt`/`handle_read_resource`) | `src/server/cancellation.rs` (`with_protocol_context`) | Threading `protocol_context` into non-tool handlers | ✗ NOT_WIRED | Confirmed absent at both native dispatch sites (Truth #1) |
+| `src/server/core.rs` (`handle_get_prompt`/`handle_read_resource`) | `src/server/cancellation.rs` (`with_protocol_context`) | Threading `protocol_context` into prompt/resource handlers | ✓ WIRED | Confirmed by grep + real-dispatch-entrypoint test `prompt_resource_protocol_context_via_dispatch_core` |
+| `src/server/mod.rs` (`handle_get_prompt`/`handle_read_resource`) | `src/server/cancellation.rs` (`with_protocol_context`) | Twin threading on the high-level `Server` | ✓ WIRED | Confirmed by grep + real-dispatch-entrypoint test `prompt_resource_protocol_context_via_dispatch_server` (enters through `process_client_request`) |
+| `src/server/streamable_http_server.rs` | `src/types/resources.rs` | `resources/read` logical name from `params.uri` | ✓ WIRED | `extract_body_method_and_name` method-aware branch; live e2e `v2_resources_read_accepts_and_envelopes` sends a uri-only body and gets 200 |
+| `src/server/streamable_http_server.rs` (`HttpIngress`) | `src/shared/protocol_helpers.rs` (`parse_request_or_internal`) | Live transport routing for `server/discover` | ✓ WIRED | `classify_http_ingress` calls `parse_request_or_internal`; a non-test production caller exists (both POST parse entrypoints); confirmed reachable via the real axum router |
+| `src/server/streamable_http_server.rs` (both POST orchestrators) | `src/server/mod.rs` (`Server::handle_discover`) | Per-path response assembly reached AFTER session/v2-gate/legacy-version/auth | ✓ WIRED | Traced `handle_post_fast_path` end-to-end: `Discover` arm is matched only after `resolve_session_for_request`, `run_v2_header_gate_raw`, `validate_protocol_version`, and `extract_and_validate_auth` all run; proven by `server_discover_requires_auth_when_provider_installed` (401 without auth) and `server_discover_runs_response_middleware` (middleware observes the response) |
+
+### Data-Flow Trace (Level 4)
+
+| Artifact | Data Variable | Source | Produces Real Data | Status |
+|---|---|---|---|---|
+| `server_discover_v2_returns_capability_projection_with_extensions` result | `capabilities.extensions[DISCOVER_EXTENSION_KEY]` | `Server::handle_discover` → `build_discover_response` → `discover_result_from_capabilities(&self.capabilities, ..)` reading the actually-registered `.capabilities(extensions_capabilities())` on the test server | Yes — asserted `== json!(true)` against a specific registered key, not an empty/static map | ✓ FLOWING |
+| `v2_prompts_get_accepts_and_envelopes` / `v2_resources_read_accepts_and_envelopes` result envelope | `resultType`/`serverInfo` | `inject_v2_result_envelope`, gated on live-resolved `protocol_context.era == V2` | Yes — asserted present only on v2 dispatch, absent on v1 (byte-identity tests) | ✓ FLOWING |
 
 ### Behavioral Spot-Checks
 
 | Behavior | Command | Result | Status |
 |---|---|---|---|
-| Library builds (native, full features) | `cargo build --lib --features full` | Clean, 0 warnings via targeted clippy | ✓ PASS |
+| Library builds (native, full features) | `cargo build --lib --features full` | Clean, 0 warnings | ✓ PASS |
 | Library builds (wasm32) | `cargo build --lib --target wasm32-unknown-unknown` | Exit 0 (pre-existing unrelated warnings only) | ✓ PASS |
-| Version/context/cancellation/builder unit tests | `cargo test --lib --features full -- server:: protocol:: cancellation` | 764 passed | ✓ PASS |
-| v2 HTTP header integration tests | `cargo test --test '*' --features full -- v2_required_headers` | 10 passed | ✓ PASS (covers `tools/call` cells only; does not cover `prompts/get`/`resources/read` live requests, which is exactly the gap found) |
-| `error::ErrorCode` delegates to `error_codes::` | `grep -n 'pub const .*Self(crate::types::protocol::error_codes' src/error/mod.rs` | 11 matches | ✓ PASS |
-| No production caller of `dispatch_internal_client_request`/`parse_request_or_internal` | `grep -rn 'parse_request_or_internal\|dispatch_internal_client_request' src/` (excl. definitions/tests) | 0 matches outside `protocol_helpers.rs` definitions and `core.rs` `#[cfg(test)]` | ✗ FAIL (confirms Truth #3) |
-| `extract_request_meta_value` handles `GetPrompt`/`ReadResource` | `grep -n 'ClientRequest::' -A2 src/server/core.rs \| sed -n '/extract_request_meta_value/,+12p'` | Only `ClientRequest::CallTool` matched; doc comment confirms "every other request yields None" | ✗ FAIL (confirms Truth #1/#4) |
+| Clippy (native, full features, `-D warnings`) | `cargo clippy --lib --features full -- -D warnings` | Clean | ✓ PASS |
+| Full lib test suite | `cargo test --lib --features full` | 1229 passed, 0 failed | ✓ PASS |
+| Gap B/C targeted unit + dispatch-entrypoint tests | `cargo test --lib --features full -- extract_request_meta_value prompt_resource_protocol_context_via_dispatch all_meta_bearing_client_requests_are_extracted extract_body_method_and_name cross_check_name run_v2_header_gate_raw classify_http_ingress build_discover` | 13 passed, 0 failed | ✓ PASS |
+| Gap A live HTTP e2e (real socket, real `StreamableHttpServer`, real `reqwest`) | `cargo test --test v2_required_headers --features full` | 25 passed, 0 failed (incl. 10 `server_discover_*` tests, 5 prompts/resources v2+v1 tests) | ✓ PASS |
 | `cargo semver-checks check-release` (independent re-run) | `cargo semver-checks check-release --baseline-version 2.17.0 -p pmcp` | `223 checks: 223 pass, 30 skip` — no semver update required | ✓ PASS |
+| No production caller of deleted `dispatch_internal_client_request` remains | `grep -rn 'dispatch_internal_client_request' src/` | 0 matches (function fully deleted, not just unreferenced) | ✓ PASS |
+| `extract_request_meta_value` handles `GetPrompt`/`ReadResource` | `grep -A18 'fn extract_request_meta_value' src/server/core.rs` | Both arms present, distinct from CallTool arm | ✓ PASS |
 
 ### Anti-Patterns Found
 
 | File | Line | Pattern | Severity | Impact |
 |---|---|---|---|---|
-| — | — | No `TBD`/`FIXME`/`XXX`/`TODO`/`HACK`/`PLACEHOLDER` found in the 14 phase-modified files scanned | — | None — zero-SATD discipline held |
-| `src/server/core.rs` | 551, 577 | `#[allow(dead_code)]` on `dispatch_internal_client_request`/`handle_discover` with a `// Why:` comment claiming "production transport caller lands in Plan 07/08" | 🛑 Blocker (traceability now false) | The comment names a specific follow-up (Plans 07/08) that did NOT deliver the wiring — this is a stale, now-incorrect justification, not a documented, tracked deferral. Matches code-review IN-01, but severity is elevated here because it also proves the SUMMARY's completion claim inaccurate. |
+| — | — | No `TBD`/`FIXME`/`XXX`/`TODO`/`HACK`/`PLACEHOLDER` found in any of the 5 files modified by Plans 112-09/112-10 | — | None — zero-SATD discipline held |
+| `src/server/core.rs` | 203, 1119, 1122 | `#[allow(dead_code)]` on the pre-existing `ServerCore` struct and on `ResponseDisposition::InputRequired`/`::Task` | ℹ️ Info | Unrelated to the Gap A/B/C closure — these are intentionally-retained mechanism for Phases 113/114, each with a `// Why:` comment explaining the forward-looking retention. Not a regression of the previously-flagged discover-path dead code (that code is now fully deleted). |
 
-## Cross-Check of Reviewer Warnings (as requested)
+## Cross-Check of Gap Closure Claims (as requested)
 
-**WR-01 (v2 header gate rejects `prompts/get`/`resources/read`):** CONFIRMED as real and reproducible, and the root cause is BROADER than the review scoped it. The review attributed the symptom to the HTTP header gate specifically; this verification traced the same `extract_request_meta_value` defect to the shared, transport-agnostic `resolve_ingress_protocol_context` used by both native dispatch sites (core.rs AND mod.rs, i.e. also the stdio path), and additionally found that `handle_get_prompt`/`handle_read_resource` never thread `protocol_context` into `RequestHandlerExtra` at all — a second, independent gap the review did not surface. This is **not a legitimate/documented deferral to Phase 113/114** — no SUMMARY, deferred-items.md, or Phase 113/114 ROADMAP goal text mentions fixing this; it is an unrecorded functional gap. **This blocks Phase-112 must-haves** (VERS-01/03/05/07/09 truths above) and is reflected as a BLOCKER-level gap in this report, not merely the review's advisory Warning.
+**Gap A (VERS-04, server/discover unreachable):** CONFIRMED CLOSED. Read `handle_post_fast_path` end-to-end and traced that a `server/discover` POST is classified as `HttpIngress::Discover` at the same parse step as every other request, then flows through session resolution, the raw-`_meta` v2 header-classification matrix (`run_v2_header_gate_raw`, which calls the SAME `classify_v2_request` function `run_v2_header_gate` uses), legacy-version validation, and `extract_and_validate_auth` before the `Discover` arm is ever reached — this is not an early-return shortcut. Live proof beyond unit tests: `server_discover_requires_auth_when_provider_installed` (a real `AuthProvider` that rejects unauthenticated requests) returns 401 for an unauthenticated v2 discover, and `server_discover_runs_response_middleware` (a real `ServerHttpMiddlewareChain`) observes the discover response — both would fail if discover bypassed the pipeline. The old `#[allow(dead_code)]` `ServerCore::dispatch_internal_client_request`/`handle_discover` wrapper methods are completely deleted from the codebase (`grep -rn` returns zero matches), consolidated into one `build_discover_response` free fn with no dead-code annotation.
 
-**WR-02 (`inject_v2_result_envelope` mutates handler-owned verbatim `ToolOutput::Result` envelopes):** CONFIRMED present as described (`core.rs:1224`/`:1308` and the `mod.rs` twin). Verified this does **not** affect v1 output — the injection is unconditionally gated on `era == Era::V2` (confirmed by reading `inject_v2_result_envelope`'s guard clause and the golden v1-byte-identity fixtures, which pass). Confined to the opt-in v2 path; `serverInfo` is non-sensitive (server's own `Implementation`, same data already exposed via `initialize`). Consistent with the review's classification: **WARNING, not a Phase-112 must-have blocker** — the phase's explicit "v1 wire output must remain byte-identical" contract is intact; the tension is with a different phase's (Task-dispatch D-04/D-04a) verbatim-envelope guarantee, and is appropriately a forward-looking risk for Phase 113/114 tool authors who rely on `ToolOutput::Result` verbatim semantics on the v2 path. Recommend tracking as a follow-up rather than blocking Phase 112 sign-off.
+**Gap B (VERS-01/03/09, spine wired for tools/call only):** CONFIRMED CLOSED. `extract_request_meta_value` now matches `ClientRequest::GetPrompt`/`ClientRequest::ReadResource` in addition to `CallTool` (core.rs:1747). `handle_get_prompt`/`handle_read_resource` in BOTH `src/server/core.rs` (lines 802, 881) AND `src/server/mod.rs` (lines 1902, 2028) now call `.with_protocol_context(..)`/`.with_request_meta(..)`. This was verified not by grep alone but by two dedicated tests that enter through the REAL dispatch entrypoints — `prompt_resource_protocol_context_via_dispatch_core` (via `core.rs::handle_request_internal`) and `prompt_resource_protocol_context_via_dispatch_server` (via `mod.rs::process_client_request`) — each of which registers a capturing `PromptHandler`/`ResourceHandler`, dispatches a v2 request with a `traceparent` in `_meta`, and asserts `era==Some(Era::V2)`, `client_info().is_some()`, AND `trace_context()` reflects the exact injected `traceparent` string (a dropped `.with_request_meta` call would fail this last assertion even if `.with_protocol_context` alone were present). Both tests also cover the `Some(Era::V1)` and `None` cases to prove they're distinguished, not collapsed. All pass.
+
+**Gap C (HTTP header gate not method-aware for resources/read):** CONFIRMED CLOSED. `extract_body_method_and_name` (streamable_http_server.rs:537) now derives the logical name from `params.uri` specifically for `resources/read` (the field `ReadResourceRequest` actually has — it has no `name` field at all), while `prompts/get`/`tools/call` remain on `params.name`. The regression guard the review demanded is present: the live e2e test `v2_resources_read_accepts_and_envelopes` builds its request body from the real typed `ReadResourceRequest` struct (uri only, no synthetic `params.name` injected) and confirms it is ACCEPTED (200) with `Mcp-Name` set to the URI — this is the exact standards-shaped request that would previously 400.
 
 ## Human Verification Required
 
-None — all findings in this report are directly observable and were confirmed by reading source, running the test suite, and re-running the semver gate; no visual/real-time/external-service behavior is in question.
+None — all findings in this report are directly observable and were confirmed by reading source, running the full test suite (native lib + wasm build + live-HTTP integration tests), and re-running the semver gate; no visual/real-time/external-service behavior is in question.
 
 ## Gaps Summary
 
-Phase 112 built solid, well-tested INFRASTRUCTURE for every deliverable in the phase goal — the `Era`/`ProtocolContext`/`TraceContext` types, the accept-list builder, the shared `resolve_protocol_context` resolver, the centralized `error_codes::` table (fully wired, VERIFIED), the v2 HTTP header classification matrix, and the `resultType`/`serverInfo` envelope injection point. Unit and property tests for each of these pieces, in isolation, are thorough and pass.
+None. All three gaps from the initial verification (`server/discover` production unreachability; the per-request `_meta`/`ProtocolContext` spine being wired for `tools/call` only; the HTTP header gate's non-method-aware logical-name extraction for `resources/read`) are closed with direct, independently-reproduced evidence: source reads at the exact defect sites named in the prior verification, targeted unit tests, real-dispatch-entrypoint tests (not leaf-handler shortcuts), and live HTTP integration tests against a real `StreamableHttpServer` instance including auth-bypass and middleware-bypass proofs for the previously-unreachable `server/discover` path. The full native test suite (1229 tests), the wasm32 build, `cargo clippy -- -D warnings`, and `cargo semver-checks` (still MINOR, no update required) all pass with zero regressions against the previously-verified truths (VERS-02, VERS-06, VERS-08).
 
-However, goal-backward verification against the live codebase found the actual WIRING of that infrastructure into the request-dispatch path is materially incomplete in two ways that make several of the phase's headline claims false in production:
-
-1. **`server/discover` (VERS-04) is 100% unreachable** — the crate-private internal-dispatch seam exists and is unit-tested, but no production transport (stdio or HTTP) ever calls it. Every `server/discover` request, on any era, returns `-32601`. The SUMMARY for Plan 05 explicitly deferred the live wiring to "Plan 07/08," but those plans' actual scope (confirmed by reading their PLAN frontmatter and SUMMARYs) was exclusively the error-code-literal migration — the wiring was never done by any plan in this phase.
-
-2. **Per-request `_meta`/`ProtocolContext` threading (VERS-01, VERS-03, and by extension VERS-05, VERS-07, VERS-09) only works for `tools/call`** — `extract_request_meta_value` reads `_meta` from `ClientRequest::CallTool` only (its own doc comment says so), and `handle_get_prompt`/`handle_read_resource` at both native dispatch sites never thread `protocol_context`/`request_meta` into the handler's `RequestHandlerExtra` at all. A v2 client calling `prompts/get` or `resources/read` — two of the three methods the codebase's own `is_name_bearing_method` list explicitly documents as v2-enforced — gets silently downgraded to v1 response shape (stdio) or an outright 400 rejection (HTTP), and the handler itself cannot see era/clientInfo/trace-context regardless of what the client sends.
-
-Both gaps are reproducible directly from source (multiple independent code reads: doc comments, match-arm exhaustiveness, absence of expected method calls, exhaustive grep for production callers) — this is not a UNCERTAIN/needs-human finding, it is directly falsifiable and falsified.
-
-REQUIREMENTS.md currently marks VERS-01, VERS-03, VERS-04, VERS-05, VERS-07, and VERS-09 as `[x]` Complete; this verification found all six to be BLOCKED against the live codebase (VERS-02, VERS-06, VERS-08 are genuinely satisfied).
-
-**Recommended fix scope for a closure plan:**
-- Extend `extract_request_meta_value` (src/server/core.rs) to read `_meta` from `ClientRequest::GetPrompt` and `ClientRequest::ReadResource` (at minimum; ideally document the policy for every method going forward) — mirrored at the `mod.rs` twin site if it has its own copy.
-- Thread `protocol_context`/`request_meta` into `RequestHandlerExtra` inside `handle_get_prompt`/`handle_read_resource` at both native dispatch sites (core.rs and mod.rs), mirroring the existing `handle_call_tool` pattern.
-- Wire a live production caller of `parse_request_or_internal`/`dispatch_internal_client_request` for `server/discover` — likely inside `handle_request`/`handle_request_internal` before/around the existing `parse_request` conversion, gated on the resolved era, per Plan 05/06's own design intent.
-- Re-run the full Phase-112 test suite plus the two golden-fixture / matrix tests extended to cover `prompts/get`/`resources/read`, and re-run this verification.
+REQUIREMENTS.md's `[x]` Complete marks for all 9 VERS-01..09 IDs are now independently confirmed accurate against the live codebase.
 
 ---
-*Verified: 2026-07-22T23:35:35Z*
+*Verified: 2026-07-23T02:44:20Z*
 *Verifier: Claude (gsd-verifier)*
