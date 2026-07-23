@@ -878,13 +878,18 @@ impl ServerCore {
         &self,
         req: &GetPromptRequest,
         auth_context: Option<AuthContext>,
+        protocol_context: Option<crate::types::protocol::ProtocolContext>,
     ) -> Result<GetPromptResult> {
         let handler = self
             .prompts
             .get(&req.name)
             .ok_or_else(|| Error::internal(format!("Prompt '{}' not found", req.name)))?;
 
-        // Create request handler extra data with auth_context
+        // Create request handler extra data with auth_context, the request `_meta`
+        // (so handlers read trace-context/namespaced keys via extra), and the
+        // once-at-ingress resolved protocol context (so handlers read
+        // era/client_info via extra.era()/client_info() — Phase 112, mirrors
+        // handle_call_tool).
         let request_id = format!("prompt_{}", req.name);
         let extra = self.attach_peer(
             RequestHandlerExtra::new(
@@ -893,7 +898,13 @@ impl ServerCore {
                     .create_token(request_id.clone())
                     .await,
             )
-            .with_auth_context(auth_context),
+            .with_auth_context(auth_context)
+            .with_request_meta(
+                req._meta
+                    .as_ref()
+                    .and_then(|m| serde_json::to_value(m).ok()),
+            )
+            .with_protocol_context(protocol_context),
         );
 
         handler.handle(req.arguments.clone(), extra).await
@@ -946,11 +957,15 @@ impl ServerCore {
         &self,
         req: &ReadResourceRequest,
         auth_context: Option<AuthContext>,
+        protocol_context: Option<crate::types::protocol::ProtocolContext>,
     ) -> Result<ReadResourceResult> {
         let handler = self.resources.as_ref().ok_or_else(|| {
             Error::internal(format!("Resource handler not available for '{}'", req.uri))
         })?;
 
+        // Thread the request `_meta` + once-at-ingress resolved protocol context
+        // into `extra` so resource handlers read era/client_info/trace_context on
+        // a v2 connection (Phase 112, mirrors handle_call_tool / handle_get_prompt).
         let request_id = format!("read_{}", req.uri);
         let extra = self.attach_peer(
             RequestHandlerExtra::new(
@@ -959,7 +974,13 @@ impl ServerCore {
                     .create_token(request_id.clone())
                     .await,
             )
-            .with_auth_context(auth_context),
+            .with_auth_context(auth_context)
+            .with_request_meta(
+                req._meta
+                    .as_ref()
+                    .and_then(|m| serde_json::to_value(m).ok()),
+            )
+            .with_protocol_context(protocol_context),
         );
 
         let mut result = handler.read(&req.uri, extra).await?;
@@ -1580,7 +1601,10 @@ impl ServerCore {
                         ),
                     },
                     ClientRequest::GetPrompt(req) => {
-                        match self.handle_get_prompt(req, auth_context.clone()).await {
+                        match self
+                            .handle_get_prompt(req, auth_context.clone(), protocol_context)
+                            .await
+                        {
                             Ok(result) => {
                                 Self::success_response(id, serde_json::to_value(result).unwrap())
                             },
@@ -1604,7 +1628,10 @@ impl ServerCore {
                         }
                     },
                     ClientRequest::ReadResource(req) => {
-                        match self.handle_read_resource(req, auth_context.clone()).await {
+                        match self
+                            .handle_read_resource(req, auth_context.clone(), protocol_context)
+                            .await
+                        {
                             Ok(result) => {
                                 Self::success_response(id, serde_json::to_value(result).unwrap())
                             },
@@ -1727,13 +1754,32 @@ fn json_serialized_len(value: &impl serde::Serialize) -> Result<usize> {
 /// Extract the request's `_meta` object as raw JSON for ingress era-resolution
 /// (Phase 112, D-11 — the per-request signal is transport-agnostic).
 ///
-/// Only requests that carry a per-request `_meta` signal (currently `tools/call`)
-/// contribute a value; every other request yields `None` and resolves to the v1
-/// fallback on an opted-in server.
+/// # Go-forward policy (Phase 112 Plan 09)
+///
+/// EVERY [`ClientRequest`] variant that carries a per-request
+/// `_meta: Option<RequestMeta>` field MUST be read here so its era/identity/trace
+/// signal reaches ingress resolution. As of this plan that is `CallTool`,
+/// `GetPrompt`, and `ReadResource` — the three name/uri-bearing methods. Variants
+/// with NO `_meta` field yield `None` and resolve to the v1 fallback by design
+/// (an opted-in server serves them as v1 unless a header/`_meta` signal says
+/// otherwise). A future method that adds a `_meta` field MUST be added BOTH to
+/// this match AND to the exhaustive-variant tripwire test
+/// (`all_meta_bearing_client_requests_are_extracted`), which fails closed if the
+/// two drift.
 pub(crate) fn extract_request_meta_value(request: &Request) -> Option<serde_json::Value> {
     match request {
         Request::Client(boxed) => match boxed.as_ref() {
             ClientRequest::CallTool(req) => {
+                #[allow(clippy::used_underscore_binding)] // _meta is MCP protocol spec
+                let meta = req._meta.as_ref();
+                meta.and_then(|m| serde_json::to_value(m).ok())
+            },
+            ClientRequest::GetPrompt(req) => {
+                #[allow(clippy::used_underscore_binding)] // _meta is MCP protocol spec
+                let meta = req._meta.as_ref();
+                meta.and_then(|m| serde_json::to_value(m).ok())
+            },
+            ClientRequest::ReadResource(req) => {
                 #[allow(clippy::used_underscore_binding)] // _meta is MCP protocol spec
                 let meta = req._meta.as_ref();
                 meta.and_then(|m| serde_json::to_value(m).ok())
@@ -2596,5 +2642,285 @@ mod tests {
         assert!(result.ends_with("..."));
         // Should not panic and should truncate at char boundary
         assert!(result.len() > 3);
+    }
+
+    // -----------------------------------------------------------------------
+    // Phase 112-09 (Gap B): per-request `_meta`/`ProtocolContext` spine wired for
+    // GetPrompt + ReadResource, not only CallTool.
+    // -----------------------------------------------------------------------
+    mod phase_112_09_context_spine {
+        use super::*;
+        use crate::types::protocol::{Era, ProtocolContext, RequestMeta};
+        use std::sync::Mutex;
+
+        fn get_prompt_request(name: &str, meta: Option<RequestMeta>) -> Request {
+            Request::Client(Box::new(ClientRequest::GetPrompt(GetPromptRequest {
+                name: name.to_string(),
+                arguments: HashMap::new(),
+                _meta: meta,
+            })))
+        }
+
+        fn read_resource_request(uri: &str, meta: Option<RequestMeta>) -> Request {
+            Request::Client(Box::new(ClientRequest::ReadResource(ReadResourceRequest {
+                uri: uri.to_string(),
+                _meta: meta,
+            })))
+        }
+
+        #[test]
+        fn extract_request_meta_value_reads_prompt_and_resource_meta() {
+            let meta = RequestMeta::new().with_meta("ns/key", serde_json::json!("v"));
+            let expected = serde_json::to_value(&meta).unwrap();
+
+            // GetPrompt with _meta → Some(json) equal to to_value(meta).
+            let got = extract_request_meta_value(&get_prompt_request("p", Some(meta.clone())));
+            assert_eq!(got, Some(expected.clone()));
+
+            // ReadResource with _meta → Some(json) equal to to_value(meta).
+            let got = extract_request_meta_value(&read_resource_request("mem://x", Some(meta)));
+            assert_eq!(got, Some(expected));
+
+            // _meta == None → None (v1 fallback preserved) for both methods.
+            assert_eq!(
+                extract_request_meta_value(&get_prompt_request("p", None)),
+                None
+            );
+            assert_eq!(
+                extract_request_meta_value(&read_resource_request("mem://x", None)),
+                None
+            );
+        }
+
+        #[test]
+        fn all_meta_bearing_client_requests_are_extracted() {
+            // Exhaustive-variant tripwire: EVERY ClientRequest variant that carries
+            // a `_meta: Option<RequestMeta>` field must be read by
+            // extract_request_meta_value. If a future variant adds `_meta` without
+            // being wired into the match, add it here too — this test fails closed.
+            let meta = RequestMeta::new().with_meta("io.example/x", serde_json::json!(1));
+            let expected = serde_json::to_value(&meta).unwrap();
+
+            let mut call_tool_req = CallToolRequest::new("t", serde_json::json!({}));
+            call_tool_req._meta = Some(meta.clone());
+            let call_tool = Request::Client(Box::new(ClientRequest::CallTool(call_tool_req)));
+            let get_prompt = get_prompt_request("p", Some(meta.clone()));
+            let read_resource = read_resource_request("mem://x", Some(meta));
+
+            for req in [&call_tool, &get_prompt, &read_resource] {
+                assert_eq!(
+                    extract_request_meta_value(req),
+                    Some(expected.clone()),
+                    "every _meta-bearing ClientRequest variant must extract Some"
+                );
+            }
+        }
+
+        proptest::proptest! {
+            #[test]
+            fn extract_request_meta_value_fuzz_never_panics(
+                key in "[a-zA-Z0-9._/-]{0,64}",
+                strval in ".{0,4096}",
+                use_prompt in proptest::prelude::any::<bool>(),
+            ) {
+                // Arbitrary namespaced key + oversized string value on a RequestMeta
+                // set on GetPrompt or ReadResource. extract must round-trip to the
+                // SAME serde_json::Value and never panic.
+                let meta = RequestMeta::new().with_meta(key, serde_json::json!(strval));
+                let expected = serde_json::to_value(&meta).unwrap();
+                let req = if use_prompt {
+                    get_prompt_request("p", Some(meta))
+                } else {
+                    read_resource_request("mem://x", Some(meta))
+                };
+                proptest::prop_assert_eq!(extract_request_meta_value(&req), Some(expected));
+            }
+        }
+
+        // Capturing handlers record the RequestHandlerExtra signals the REAL
+        // dispatch entrypoint threaded into them.
+        #[derive(Clone, Debug, Default, PartialEq)]
+        struct Captured {
+            era: Option<Era>,
+            has_client_info: bool,
+            traceparent: Option<String>,
+        }
+
+        struct CapturingPrompt(Arc<Mutex<Option<Captured>>>);
+
+        #[async_trait]
+        impl PromptHandler for CapturingPrompt {
+            async fn handle(
+                &self,
+                _args: HashMap<String, String>,
+                extra: RequestHandlerExtra,
+            ) -> Result<GetPromptResult> {
+                *self.0.lock().unwrap() = Some(Captured {
+                    era: extra.era(),
+                    has_client_info: extra.client_info().is_some(),
+                    traceparent: extra.trace_context().map(|t| t.traceparent),
+                });
+                Ok(GetPromptResult::new(vec![], None))
+            }
+        }
+
+        struct CapturingResource(Arc<Mutex<Option<Captured>>>);
+
+        #[async_trait]
+        impl ResourceHandler for CapturingResource {
+            async fn read(
+                &self,
+                _uri: &str,
+                extra: RequestHandlerExtra,
+            ) -> Result<ReadResourceResult> {
+                *self.0.lock().unwrap() = Some(Captured {
+                    era: extra.era(),
+                    has_client_info: extra.client_info().is_some(),
+                    traceparent: extra.trace_context().map(|t| t.traceparent),
+                });
+                Ok(ReadResourceResult::new(vec![Content::text("ok")]))
+            }
+
+            async fn list(
+                &self,
+                _cursor: Option<String>,
+                _extra: RequestHandlerExtra,
+            ) -> Result<ListResourcesResult> {
+                Ok(ListResourcesResult {
+                    resources: vec![],
+                    next_cursor: None,
+                })
+            }
+        }
+
+        fn build_core(
+            prompt_cap: Arc<Mutex<Option<Captured>>>,
+            resource_cap: Arc<Mutex<Option<Captured>>>,
+        ) -> ServerCore {
+            let mut prompts: HashMap<String, Arc<dyn PromptHandler>> = HashMap::new();
+            prompts.insert(
+                "greeting".to_string(),
+                Arc::new(CapturingPrompt(prompt_cap)) as Arc<dyn PromptHandler>,
+            );
+            let resources: Option<Arc<dyn ResourceHandler>> =
+                Some(Arc::new(CapturingResource(resource_cap)));
+
+            ServerCore::new(
+                Implementation::new("test-server", "1.0.0"),
+                ServerCapabilities::default(),
+                HashMap::new(),
+                prompts,
+                HashMap::new(),
+                HashMap::new(),
+                resources,
+                None,
+                None,
+                None,
+                Arc::new(RwLock::new(EnhancedMiddlewareChain::new())),
+                Arc::new(RwLock::new(ToolMiddlewareChain::new())),
+                None, // task_router
+                None, // task_store
+                true, // stateless_mode — skip the initialize gate
+                PayloadLimits::default(),
+            )
+            .with_supported_protocol_versions(vec![
+                ProtocolVersion("2025-11-25".to_string()),
+                ProtocolVersion(crate::types::protocol::PROTOCOL_VERSION_2026_07_28.to_string()),
+            ])
+        }
+
+        fn v2_meta_with_trace() -> RequestMeta {
+            RequestMeta::new().with_meta(
+                "traceparent",
+                serde_json::json!("00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01"),
+            )
+        }
+
+        fn v2_context() -> ProtocolContext {
+            ProtocolContext::new(
+                Era::V2,
+                ProtocolVersion(crate::types::protocol::PROTOCOL_VERSION_2026_07_28.to_string()),
+            )
+            .with_client_info(Implementation::new("test-client", "9.9.9"))
+        }
+
+        // Enter through the REAL core dispatch entrypoint (handle_request_internal),
+        // NOT the leaf handlers — a dropped dispatch-arm thread would regress this.
+        #[tokio::test]
+        async fn prompt_resource_protocol_context_via_dispatch_core() {
+            // --- v2 dispatch: era==V2, client_info==Some, trace_context populated.
+            let pcap = Arc::new(Mutex::new(None));
+            let rcap = Arc::new(Mutex::new(None));
+            let core = build_core(pcap.clone(), rcap.clone());
+
+            core.handle_request_internal(
+                RequestId::from(1i64),
+                get_prompt_request("greeting", Some(v2_meta_with_trace())),
+                None,
+                Some(v2_context()),
+            )
+            .await;
+            core.handle_request_internal(
+                RequestId::from(2i64),
+                read_resource_request("mem://greeting", Some(v2_meta_with_trace())),
+                None,
+                Some(v2_context()),
+            )
+            .await;
+
+            for cap in [&pcap, &rcap] {
+                let c = cap.lock().unwrap().clone().expect("handler ran");
+                assert_eq!(c.era, Some(Era::V2), "era must be V2 on a v2 dispatch");
+                assert!(c.has_client_info, "client_info must be visible on v2");
+                assert_eq!(
+                    c.traceparent.as_deref(),
+                    Some("00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01"),
+                    "trace_context must reflect the W3C traceparent (proves with_request_meta)"
+                );
+            }
+
+            // --- opted-in v1 fallback: era==Some(V1) (distinct from None).
+            let pcap = Arc::new(Mutex::new(None));
+            let rcap = Arc::new(Mutex::new(None));
+            let core = build_core(pcap.clone(), rcap.clone());
+            let v1 = ProtocolContext::new(Era::V1, ProtocolVersion("2025-11-25".to_string()));
+            core.handle_request_internal(
+                RequestId::from(3i64),
+                get_prompt_request("greeting", None),
+                None,
+                Some(v1.clone()),
+            )
+            .await;
+            core.handle_request_internal(
+                RequestId::from(4i64),
+                read_resource_request("mem://greeting", None),
+                None,
+                Some(v1),
+            )
+            .await;
+            assert_eq!(pcap.lock().unwrap().clone().unwrap().era, Some(Era::V1));
+            assert_eq!(rcap.lock().unwrap().clone().unwrap().era, Some(Era::V1));
+
+            // --- non-opted-in server (resolver returns None): era==None.
+            let pcap = Arc::new(Mutex::new(None));
+            let rcap = Arc::new(Mutex::new(None));
+            let core = build_core(pcap.clone(), rcap.clone());
+            core.handle_request_internal(
+                RequestId::from(5i64),
+                get_prompt_request("greeting", None),
+                None,
+                None,
+            )
+            .await;
+            core.handle_request_internal(
+                RequestId::from(6i64),
+                read_resource_request("mem://greeting", None),
+                None,
+                None,
+            )
+            .await;
+            assert_eq!(pcap.lock().unwrap().clone().unwrap().era, None);
+            assert_eq!(rcap.lock().unwrap().clone().unwrap().era, None);
+        }
     }
 }

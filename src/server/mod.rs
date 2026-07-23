@@ -1436,14 +1436,15 @@ impl Server {
             },
             ClientRequest::ListPrompts(req) => self.handle_list_prompts(req),
             ClientRequest::GetPrompt(req) => {
-                self.handle_get_prompt(request_id, req, auth_context).await
+                self.handle_get_prompt(request_id, req, auth_context, protocol_context)
+                    .await
             },
             ClientRequest::ListResources(req) => {
                 self.handle_list_resources(request_id, req, auth_context)
                     .await
             },
             ClientRequest::ReadResource(req) => {
-                self.handle_read_resource(request_id, req, auth_context)
+                self.handle_read_resource(request_id, req, auth_context, protocol_context)
                     .await
             },
             ClientRequest::ListResourceTemplates(req) => {
@@ -1854,6 +1855,7 @@ impl Server {
         request_id: RequestId,
         req: GetPromptRequest,
         auth_context: Option<auth::AuthContext>,
+        protocol_context: Option<crate::types::protocol::ProtocolContext>,
     ) -> Result<Value> {
         let handler = self
             .prompts
@@ -1885,13 +1887,26 @@ impl Server {
                 })
             });
 
+        // Propagate the request `_meta` (raw JSON) and the once-at-ingress
+        // resolved protocol context so prompt handlers read
+        // era/client_info/trace_context via `extra` on the high-level `Server`
+        // path too — the twin of the ServerCore wiring (Phase 112, mirrors the
+        // handle_call_tool twin).
+        #[allow(clippy::used_underscore_binding)] // _meta is part of MCP protocol spec
+        let request_meta_value = req
+            ._meta
+            .as_ref()
+            .and_then(|m| serde_json::to_value(m).ok());
+
         let extra = self.attach_peer(
             crate::server::cancellation::RequestHandlerExtra::new(
                 request_id_str.clone(),
                 cancellation_token,
             )
             .with_auth_context(auth_context)
-            .with_progress_reporter(progress_reporter),
+            .with_progress_reporter(progress_reporter)
+            .with_request_meta(request_meta_value)
+            .with_protocol_context(protocol_context),
         );
         let result = match handler.handle(req.arguments, extra).await {
             Ok(v) => {
@@ -1966,6 +1981,7 @@ impl Server {
         request_id: RequestId,
         req: ReadResourceRequest,
         auth_context: Option<auth::AuthContext>,
+        protocol_context: Option<crate::types::protocol::ProtocolContext>,
     ) -> Result<Value> {
         let handler = self
             .resources
@@ -1997,13 +2013,25 @@ impl Server {
                 })
             });
 
+        // Propagate the request `_meta` (raw JSON) and the once-at-ingress
+        // resolved protocol context so resource handlers read
+        // era/client_info/trace_context via `extra` on the high-level `Server`
+        // path too — the twin of the ServerCore wiring (Phase 112).
+        #[allow(clippy::used_underscore_binding)] // _meta is part of MCP protocol spec
+        let request_meta_value = req
+            ._meta
+            .as_ref()
+            .and_then(|m| serde_json::to_value(m).ok());
+
         let extra = self.attach_peer(
             crate::server::cancellation::RequestHandlerExtra::new(
                 request_id_str.clone(),
                 cancellation_token,
             )
             .with_auth_context(auth_context)
-            .with_progress_reporter(progress_reporter),
+            .with_progress_reporter(progress_reporter)
+            .with_request_meta(request_meta_value)
+            .with_protocol_context(protocol_context),
         );
         let mut result = match handler.read(&req.uri, extra).await {
             Ok(v) => {
@@ -5140,6 +5168,223 @@ mod tests {
             },
             ResponsePayload::Error(_) => panic!("Expected success response"),
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // Phase 112-09 (Gap B): the high-level `Server` twin threads protocol_context
+    // + request_meta into prompt/resource handlers. Enters through the REAL
+    // dispatch entrypoint (`process_client_request`), NOT the leaf handlers.
+    // -----------------------------------------------------------------------
+    #[derive(Clone, Debug, Default, PartialEq)]
+    struct DispatchCaptured {
+        era: Option<crate::types::protocol::Era>,
+        has_client_info: bool,
+        traceparent: Option<String>,
+    }
+
+    struct DispatchCapturingPrompt(Arc<Mutex<Option<DispatchCaptured>>>);
+
+    #[async_trait]
+    impl PromptHandler for DispatchCapturingPrompt {
+        async fn handle(
+            &self,
+            _args: HashMap<String, String>,
+            extra: crate::server::cancellation::RequestHandlerExtra,
+        ) -> Result<crate::types::GetPromptResult> {
+            *self.0.lock().unwrap() = Some(DispatchCaptured {
+                era: extra.era(),
+                has_client_info: extra.client_info().is_some(),
+                traceparent: extra.trace_context().map(|t| t.traceparent),
+            });
+            Ok(crate::types::GetPromptResult::new(vec![], None))
+        }
+    }
+
+    struct DispatchCapturingResource(Arc<Mutex<Option<DispatchCaptured>>>);
+
+    #[async_trait]
+    impl ResourceHandler for DispatchCapturingResource {
+        async fn read(
+            &self,
+            _uri: &str,
+            extra: crate::server::cancellation::RequestHandlerExtra,
+        ) -> Result<crate::types::ReadResourceResult> {
+            *self.0.lock().unwrap() = Some(DispatchCaptured {
+                era: extra.era(),
+                has_client_info: extra.client_info().is_some(),
+                traceparent: extra.trace_context().map(|t| t.traceparent),
+            });
+            Ok(crate::types::ReadResourceResult::new(vec![
+                crate::types::Content::text("ok"),
+            ]))
+        }
+
+        async fn list(
+            &self,
+            _cursor: Option<String>,
+            _extra: crate::server::cancellation::RequestHandlerExtra,
+        ) -> Result<crate::types::ListResourcesResult> {
+            Ok(crate::types::ListResourcesResult {
+                resources: vec![],
+                next_cursor: None,
+            })
+        }
+    }
+
+    fn dispatch_v2_meta() -> crate::types::protocol::RequestMeta {
+        crate::types::protocol::RequestMeta::new().with_meta(
+            "traceparent",
+            serde_json::json!("00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01"),
+        )
+    }
+
+    fn dispatch_v2_context() -> crate::types::protocol::ProtocolContext {
+        crate::types::protocol::ProtocolContext::new(
+            crate::types::protocol::Era::V2,
+            ProtocolVersion(crate::types::protocol::PROTOCOL_VERSION_2026_07_28.to_string()),
+        )
+        .with_client_info(crate::types::Implementation::new("test-client", "9.9.9"))
+    }
+
+    #[tokio::test]
+    async fn prompt_resource_protocol_context_via_dispatch_server() {
+        use crate::types::protocol::Era;
+
+        let pcap = Arc::new(Mutex::new(None));
+        let rcap = Arc::new(Mutex::new(None));
+        let server = Server::builder()
+            .name("dispatch-server")
+            .version("1.0.0")
+            .prompt("greeting", DispatchCapturingPrompt(pcap.clone()))
+            .resources(DispatchCapturingResource(rcap.clone()))
+            .with_supported_protocol_versions([
+                ProtocolVersion("2025-11-25".to_string()),
+                ProtocolVersion(crate::types::protocol::PROTOCOL_VERSION_2026_07_28.to_string()),
+            ])
+            .build()
+            .unwrap();
+
+        // --- v2 dispatch through process_client_request: era==V2, client_info,
+        // and a populated trace_context (proves .with_request_meta threading).
+        server
+            .process_client_request(
+                RequestId::from(1i64),
+                ClientRequest::GetPrompt(GetPromptRequest {
+                    name: "greeting".to_string(),
+                    arguments: HashMap::new(),
+                    _meta: Some(dispatch_v2_meta()),
+                }),
+                None,
+                Some(dispatch_v2_context()),
+            )
+            .await
+            .unwrap();
+        server
+            .process_client_request(
+                RequestId::from(2i64),
+                ClientRequest::ReadResource(ReadResourceRequest {
+                    uri: "mem://greeting".to_string(),
+                    _meta: Some(dispatch_v2_meta()),
+                }),
+                None,
+                Some(dispatch_v2_context()),
+            )
+            .await
+            .unwrap();
+
+        for cap in [&pcap, &rcap] {
+            let c = cap.lock().unwrap().clone().expect("handler ran");
+            assert_eq!(c.era, Some(Era::V2));
+            assert!(c.has_client_info);
+            assert_eq!(
+                c.traceparent.as_deref(),
+                Some("00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01")
+            );
+        }
+
+        // --- opted-in v1 fallback: era==Some(V1) (distinct from None).
+        let pcap = Arc::new(Mutex::new(None));
+        let rcap = Arc::new(Mutex::new(None));
+        let server = Server::builder()
+            .name("dispatch-server")
+            .version("1.0.0")
+            .prompt("greeting", DispatchCapturingPrompt(pcap.clone()))
+            .resources(DispatchCapturingResource(rcap.clone()))
+            .with_supported_protocol_versions([
+                ProtocolVersion("2025-11-25".to_string()),
+                ProtocolVersion(crate::types::protocol::PROTOCOL_VERSION_2026_07_28.to_string()),
+            ])
+            .build()
+            .unwrap();
+        let v1 = crate::types::protocol::ProtocolContext::new(
+            Era::V1,
+            ProtocolVersion("2025-11-25".to_string()),
+        );
+        server
+            .process_client_request(
+                RequestId::from(3i64),
+                ClientRequest::GetPrompt(GetPromptRequest {
+                    name: "greeting".to_string(),
+                    arguments: HashMap::new(),
+                    _meta: None,
+                }),
+                None,
+                Some(v1.clone()),
+            )
+            .await
+            .unwrap();
+        server
+            .process_client_request(
+                RequestId::from(4i64),
+                ClientRequest::ReadResource(ReadResourceRequest {
+                    uri: "mem://greeting".to_string(),
+                    _meta: None,
+                }),
+                None,
+                Some(v1),
+            )
+            .await
+            .unwrap();
+        assert_eq!(pcap.lock().unwrap().clone().unwrap().era, Some(Era::V1));
+        assert_eq!(rcap.lock().unwrap().clone().unwrap().era, Some(Era::V1));
+
+        // --- non-opted-in (protocol_context == None): era==None.
+        let pcap = Arc::new(Mutex::new(None));
+        let rcap = Arc::new(Mutex::new(None));
+        let server = Server::builder()
+            .name("dispatch-server")
+            .version("1.0.0")
+            .prompt("greeting", DispatchCapturingPrompt(pcap.clone()))
+            .resources(DispatchCapturingResource(rcap.clone()))
+            .build()
+            .unwrap();
+        server
+            .process_client_request(
+                RequestId::from(5i64),
+                ClientRequest::GetPrompt(GetPromptRequest {
+                    name: "greeting".to_string(),
+                    arguments: HashMap::new(),
+                    _meta: None,
+                }),
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        server
+            .process_client_request(
+                RequestId::from(6i64),
+                ClientRequest::ReadResource(ReadResourceRequest {
+                    uri: "mem://greeting".to_string(),
+                    _meta: None,
+                }),
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(pcap.lock().unwrap().clone().unwrap().era, None);
+        assert_eq!(rcap.lock().unwrap().clone().unwrap().era, None);
     }
 
     #[tokio::test]
