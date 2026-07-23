@@ -1,199 +1,206 @@
 ---
 phase: 112-version-plumbing-spine
-reviewed: 2026-07-22T00:00:00Z
+reviewed: 2026-07-23T02:46:56Z
 depth: standard
-files_reviewed: 16
+files_reviewed: 5
 files_reviewed_list:
-  - src/error/mod.rs
-  - src/server/batch.rs
-  - src/server/builder.rs
-  - src/server/cancellation.rs
   - src/server/core.rs
   - src/server/mod.rs
   - src/server/streamable_http_server.rs
-  - src/server/task_dispatch.rs
-  - src/shared/http_constants.rs
-  - src/shared/protocol_helpers.rs
-  - src/types/jsonrpc.rs
-  - src/types/protocol/context.rs
-  - src/types/protocol/error_codes.rs
   - src/types/protocol/mod.rs
-  - src/types/protocol/version.rs
-  - src/utils/parallel_batch.rs
+  - tests/v2_required_headers.rs
 findings:
   critical: 0
-  warning: 2
-  info: 3
-  total: 5
+  warning: 3
+  info: 0
+  total: 3
 status: issues_found
 ---
 
-# Phase 112: Code Review Report
+# Phase 112: Code Review Report (gap-closure re-review, plans 112-09 / 112-10)
 
-**Reviewed:** 2026-07-22
+**Reviewed:** 2026-07-23T02:46:56Z
 **Depth:** standard
-**Files Reviewed:** 16
+**Files Reviewed:** 5
 **Status:** issues_found
+
+> This is a SCOPED re-review of the two most recent gap-closure plans only
+> (112-09 and 112-10). It supersedes the phase-wide review dated 2026-07-22 for
+> those diffs; earlier findings on unrelated regions are unchanged.
 
 ## Summary
 
-Phase 112 adds v2 (`2026-07-28`) era-gating: `ProtocolContext` resolved once at ingress
-and threaded through both native dispatch sites, a centralized version-gated error-code
-table, required v2 HTTP headers with fail-closed header/`_meta` classification, and a
-`server/discover` internal-dispatch seam.
+Scope of the changes reviewed:
 
-The two areas I was asked to scrutinize most held up well:
+- **112-09** — `extract_request_meta_value` now reads `GetPrompt` + `ReadResource`;
+  `handle_get_prompt` / `handle_read_resource` thread `protocol_context` + request
+  `_meta` into `RequestHandlerExtra` at BOTH native dispatch sites (`ServerCore` in
+  `core.rs` and the high-level `Server` in `mod.rs`); the HTTP header-gate
+  logical-name extraction (`extract_body_method_and_name`) is now method-aware
+  (`resources/read` cross-checks `Mcp-Name` against `params.uri`).
+- **112-10** — `server/discover` is wired live on the HTTP POST pipeline via a
+  crate-local `HttpIngress::{Public,Discover}` classify-then-continue split;
+  `ServerCore::handle_discover` / `dispatch_internal_client_request` were deleted
+  and consolidated into one shared `build_discover_response` free fn (with a thin
+  `Server::handle_discover` delegate).
 
-- **v1 byte-identical output** — `inject_v2_result_envelope` and every ingress path are
-  correctly gated behind `Era::V2` AND `is_v2_opted_in()`. A default (non-opted-in)
-  server short-circuits to `Ok(None)` before any era detection, threads `protocol_context:
-  None`, and every v2 injection/gate is a no-op. I could not find a path where a v1 or
-  non-opted-in response gains or loses a byte.
-- **error-code literal→constant migration** — I traced all migrated sites
-  (`core.rs`, `mod.rs`, `streamable_http_server.rs`, `batch.rs`, `jsonrpc.rs`,
-  `parallel_batch.rs`). Every literal maps to a constant of the identical numeric value,
-  including the deliberately-preserved cases: `-32603` for the parallel-batch timeout
-  (mapped to `INTERNAL_ERROR`, NOT `REQUEST_TIMEOUT`), and `-32002` server-not-initialized
-  (mapped to `V1_TASK_PENDING`). The `error_codes` table is value-guarded by
-  `error_code_surface_delegates_to_table`. No value drift found.
+I traced the full control flow on all four affected code paths (ServerCore native
+dispatch, high-level `Server::process_client_request`, HTTP fast path, HTTP
+middleware path) plus the era/header matrix in `run_v2_header_gate_raw`. **The core
+logic is correct and consistently threaded.** Both HTTP paths route discover
+identically, auth is enforced before dispatch on both, the raw-`_meta` era gate
+matches the parsed-request matrix, and the D-10 `-32601@200` / non-opted-in
+`Passthrough` behavior is right. Live HTTP tests cover the fast path, middleware
+path, auth-required path, v1/non-opted rejection, and the header-mismatch matrix.
+No BLOCKER-class defect was found.
 
-The defects below are all confined to the opt-in v2 path (v1 is unaffected). The most
-substantive is an inconsistency between the v2 HTTP header gate and the `_meta` resolver
-that makes two of the three explicitly-supported name-bearing methods un-serveable on v2.
-
-## Narrative Findings (AI reviewer)
+Three WARNING-class defects remain, all in the maintainability / documentation-
+accuracy band. The most important (WR-01) is that a safety mechanism the code
+explicitly relies on and documents — an "exhaustive-variant tripwire" — does not
+actually exist, so the regression it claims to catch would ship silently.
 
 ## Warnings
 
-### WR-01: v2 header gate rejects legitimate `prompts/get` and `resources/read` requests (header/`_meta` resolver mismatch)
+### WR-01: The "exhaustive-variant tripwire" is not exhaustive and cannot detect drift
 
-**File:** `src/server/core.rs:1782` (`extract_request_meta_value`), interacting with `src/server/streamable_http_server.rs:430` (`classify_era_cell`) and `:470` (`is_name_bearing_method`)
+**File:** `src/server/core.rs:1755-1770` (docstring) and `src/server/core.rs:2691-2713` (test)
 
-**Issue:** `extract_request_meta_value` only extracts the per-request `_meta` signal from
-`ClientRequest::CallTool`:
+**Issue:** The `extract_request_meta_value` docstring states the go-forward policy
+that "EVERY `ClientRequest` variant that carries a per-request `_meta` field MUST be
+read here" and asserts this is enforced by "the exhaustive-variant tripwire test
+(`all_meta_bearing_client_requests_are_extracted`), which fails closed if the two
+drift." The test's own comment repeats the claim: "If a future variant adds `_meta`
+without being wired into the match, add it here too — this test fails closed."
 
-```rust
-Request::Client(boxed) => match boxed.as_ref() {
-    ClientRequest::CallTool(req) => { /* reads req._meta */ },
-    _ => None,
-},
-```
-
-Every other method — including `prompts/get` (`GetPromptRequest._meta`) and
-`resources/read` (`ReadResourceRequest._meta`), both of which DO carry a `_meta` field
-(confirmed in `src/types/prompts.rs:283` and `src/types/resources.rs`) — yields `None`.
-`resolve_protocol_context` therefore falls back to the first v1 version in the accept-list,
-so `ProtocolContext.era` is always `Era::V1` for those methods, i.e. `meta_is_v2 == false`.
-
-Meanwhile the HTTP gate's `is_name_bearing_method` explicitly lists `tools/call`,
-`prompts/get`, and `resources/read` as v2-enforced, and the `MCP_NAME` header doc
-(`src/shared/http_constants.rs:18`) says its value is cross-checked for all three. When a
-v2 client sends the spec-required `MCP-Protocol-Version: 2026-07-28` header on a
-`prompts/get`/`resources/read`, `classify_era_cell(V2, false)` hits the `(true, false)`
-cell and returns `V2Classification::Reject("MCP-Protocol-Version header claims v2 but
-_meta protocolVersion disagrees")` → a live `400`. So v2 is effectively unreachable for
-two of the three name-bearing methods, and clients that follow the header contract are
-actively rejected. This is a wired, production HTTP path on any opted-in server (not
-dead code).
-
-**Fix:** Extend `extract_request_meta_value` to read `_meta` from every request variant
-that carries the per-request protocol signal, at minimum the name-bearing methods:
+This protection does not exist. The match in `extract_request_meta_value` ends in a
+`_ => None` catch-all, and the "tripwire" test merely iterates over three hardcoded,
+manually-constructed requests (`CallTool`, `GetPrompt`, `ReadResource`):
 
 ```rust
-pub(crate) fn extract_request_meta_value(request: &Request) -> Option<serde_json::Value> {
-    match request {
-        Request::Client(boxed) => match boxed.as_ref() {
-            ClientRequest::CallTool(req) => req._meta.as_ref().and_then(|m| serde_json::to_value(m).ok()),
-            ClientRequest::GetPrompt(req) => req._meta.as_ref().and_then(|m| serde_json::to_value(m).ok()),
-            ClientRequest::ReadResource(req) => req._meta.as_ref().and_then(|m| serde_json::to_value(m).ok()),
-            _ => None,
-        },
-        Request::Server(_) => None,
-    }
+for req in [&call_tool, &get_prompt, &read_resource] {
+    assert_eq!(extract_request_meta_value(req), Some(expected.clone()), ...);
 }
 ```
 
-(Note the two `_meta` field types differ — `Option<RequestMeta>` vs
-`Option<serde_json::Map<..>>` — so the `to_value` bridge must handle both.) Alternatively,
-if v2 is intended to cover only `tools/call` this phase, remove `prompts/get`/`resources/read`
-from `is_name_bearing_method` and the header docs so the gate does not advertise coverage
-it cannot deliver.
+There is no compile-time exhaustiveness (no `match` over all `ClientRequest`
+variants with a forcing `_` arm). If a future `ClientRequest` variant gains a
+`_meta: Option<RequestMeta>` field, it falls into `_ => None` (silent v1 fallback —
+dropping the client's era/trace signal) and **this test continues to pass**. The
+documented "fails closed" guarantee is false.
 
-### WR-02: v2 envelope injection mutates handler-owned verbatim `ToolOutput::Result` envelopes
+Note: this is currently latent, not an active bug — I verified that today the only
+`_meta`-bearing `ClientRequest` variants are exactly `CallTool`, `GetPrompt`, and
+`ReadResource` (`CompleteRequest` has no `_meta`; `CreateMessageParams` has only an
+unrelated `metadata` field, no top-level `_meta`). So the three handled variants are
+complete as of this phase. The defect is that the stated regression guard is
+illusory.
 
-**File:** `src/server/core.rs:1224` (`inject_v2_result_envelope`), called at `:1308` and `src/server/mod.rs` twin site
+**Fix:** Make the test genuinely force-fail on drift by exhaustively matching every
+`ClientRequest` variant, so adding a new variant is a compile error until it is
+classified:
 
-**Issue:** `DispatchOutput::Verbatim` (a `ToolOutput::Result`) is contractually
-send-to-wire-VERBATIM: per `task_dispatch.rs:154-169` the dispatcher must "BYPASS response
-middleware, the create-path gate, and text-wrap / widget enrichment … the handler owns the
-full envelope, including its own redaction" (D-04/D-04a, marked USER-APPROVED and LOCKED).
-But `inject_v2_result_envelope` runs unconditionally at the `handle_request` boundary
-AFTER dispatch resolves, and for a v2 request it inserts `resultType` and `serverInfo` into
-the result object — including a verbatim `CallToolResult` the handler deliberately shaped.
-This re-introduces `serverInfo` a handler may have intentionally omitted, contradicting the
-verbatim/bypass guarantee. Impact is limited (v2-only; `serverInfo` is the server's own
-non-sensitive `Implementation`, same data as `initialize`), which is why this is a WARNING
-rather than a blocker — but it is a latent contract violation that will bite once v2 tools
-rely on owning their envelope.
+```rust
+#[test]
+fn every_client_request_variant_is_classified_for_meta_extraction() {
+    fn expects_meta(r: &ClientRequest) -> bool {
+        match r {
+            ClientRequest::CallTool(_)
+            | ClientRequest::GetPrompt(_)
+            | ClientRequest::ReadResource(_) => true,
+            // A NEW variant forces a compile error here; the author must decide
+            // whether it carries `_meta` and wire it into both places.
+            ClientRequest::Initialize(_)
+            | ClientRequest::ListTools(_)
+            /* ...all remaining variants explicitly... */
+            | ClientRequest::TasksCancel(_) => false,
+        }
+    }
+    // then assert extract_request_meta_value agrees with expects_meta for a
+    // constructed instance of each variant.
+}
+```
 
-**Fix:** Either scope the envelope injection to exclude verbatim results (thread the
-`Verbatim` disposition through so the injector can skip it), or explicitly document that the
-v2 `resultType`/`serverInfo` envelope is an exception to the verbatim-bypass contract and
-add a regression test asserting a verbatim v2 result still receives the envelope by design.
-Do not leave the two contracts silently in tension.
+At minimum, correct the docstring and the test comment to state the true (weaker)
+guarantee rather than claiming a non-existent tripwire.
 
-## Info
+### WR-02: `classify_http_ingress` re-parses every POST body, adding a redundant full deserialization on the non-discover hot path
 
-### IN-01: `server/discover` internal dispatch is never reachable in production
+**File:** `src/server/streamable_http_server.rs:655-673`, `1391-1404`, `1540-1555`
 
-**File:** `src/server/core.rs:552` (`dispatch_internal_client_request`), `:578` (`handle_discover`)
+**Issue:** `classify_http_ingress` runs `serde_json::from_slice::<JSONRPCRequest<Value>>(body)`
+on EVERY POST body (both the fast path via `parse_transport_message_fast` and the
+middleware path via `parse_transport_message_with_middleware`). For every
+non-discover request — i.e. the entire `tools/call` / `prompts/get` /
+`resources/read` hot path — this full deserialization is thrown away (returns
+`None`) and the body is then re-parsed by `StdioTransport::parse_message`. On an
+accepted v2 request a THIRD parse also occurs in `extract_body_method_and_name`.
 
-**Issue:** Both functions are `#[allow(dead_code)]` and are called ONLY from unit tests
-(`core.rs:2110-2189`). The routing seam `parse_request_or_internal`
-(`src/shared/protocol_helpers.rs:46`) is consumed exclusively by the public `parse_request`,
-which maps `IngressRequest::Internal` straight to `Error::method_not_found`
-(`protocol_helpers.rs:89`). No transport ever feeds an `IngressRequest::Internal` to
-`dispatch_internal_client_request`, so `server/discover` returns `-32601` everywhere in
-production. The `#[allow(dead_code)]` justification comments claim "production transport
-caller lands in Plan 07/08," but per the commit history Plans 07/08 were the error-code
-literal migrations — the promised caller never arrived. The scaffolding is fine as a staged
-rollout, but the traceability comment is now inaccurate and should point at the real
-follow-up phase (113+) so a future reader does not hunt for a wired caller that does not exist.
+Raw v1 performance is out of scope for this review, so this is flagged as a
+maintainability/robustness WARNING rather than a perf finding: (a) it establishes
+three parallel body-parsing code paths that must be kept behaviorally identical, and
+(b) `classify_http_ingress` silently swallows all parse errors via `.ok()?`, so any
+divergence between `from_slice::<JSONRPCRequest>` and `StdioTransport::parse_message`
+(recursion-limit, duplicate-key, or number-shape handling) would be masked rather
+than surfaced. Correctness holds today because both use serde_json defaults, but the
+coupling is fragile and untested.
 
-**Fix:** Update the `// Why:` comments on `dispatch_internal_client_request` /
-`handle_discover` to reference the actual phase that wires the transport, and add a tracking
-note that `server/discover` is intentionally inert until then.
+**Fix:** Parse the body ONCE into a single `serde_json::Value` / `JSONRPCRequest<Value>`
+and derive discover-classification, the public `TransportMessage`, and the
+`(method, name)` cross-check inputs from that one parse. If the single-parse refactor
+is deferred as out-of-scope, add a regression test asserting `classify_http_ingress`
+returns `None` for exactly the set of malformed bodies `StdioTransport::parse_message`
+rejects, pinning the two paths together.
 
-### IN-02: `V1_TASK_PENDING` constant name is misleading at the "Server not initialized" call site
+### WR-03: Stale/misleading doc comment in the discover live test references a non-existent `.skills` population
 
-**File:** `src/server/core.rs:1461` (uses `error_codes::V1_TASK_PENDING` for a not-initialized error); constant at `src/types/protocol/error_codes.rs:85`
+**File:** `tests/v2_required_headers.rs:809-811` (comment above `server_discover_v2_returns_capability_projection_with_extensions`)
 
-**Issue:** The `-32002` "Server not initialized. Call initialize first." rejection sources
-its code from a constant named `V1_TASK_PENDING`. The value is byte-identical and correct,
-and the collision is deliberately documented and test-locked
-(`both_minus_32002_meanings_coexist`, `pending_tasks_result_preserves_minus_32002`), but a
-constant literally named "task pending" reading out at a server-lifecycle error site is
-semantically confusing and invites a future "cleanup" that would break the frozen wire value.
+**Issue:** The test's doc comment states the projection returns "the
+`.skills`-populated extensions map", but neither the test nor the production code
+populates any `skills` field — `extensions_capabilities()` seeds
+`capabilities.extensions` directly with the `io.example/experimental` key, and the
+assertion reads `result["capabilities"]["extensions"][DISCOVER_EXTENSION_KEY]`.
+There is no `skills` concept in this path; the comment misdescribes what the test
+exercises and will mislead a future maintainer debugging the discover projection.
 
-**Fix:** Consider adding a second same-value alias (e.g.
-`SERVER_NOT_INITIALIZED: i32 = -32002;`) documented as sharing the number, so each call site
-reads by its own semantic name while the frozen value stays single-sourced — or add an
-inline comment at the `core.rs` call site clarifying why the task-pending constant is used
-for a not-initialized error.
-
-### IN-03: `negotiation_error_to_rejection` emits Debug-formatted version strings to clients
-
-**File:** `src/server/core.rs` (`negotiation_error_to_rejection`, `UnsupportedVersion` arm)
-
-**Issue:** `format!("Unsupported protocol version: {v:?}")` uses the Debug formatter on the
-version `String`, so a client-facing message renders the value quoted and escaped
-(e.g. `Unsupported protocol version: "1999-01-01"`) rather than as the plain token. Minor
-cosmetic/consistency issue in a wire-visible error message.
-
-**Fix:** Use Display formatting: `format!("Unsupported protocol version: {v}")`.
+**Fix:** Update the comment to describe the actual mechanism, e.g. "returns the
+capability projection INCLUDING the pre-seeded `capabilities.extensions` map, plus
+serverInfo + resultType:complete, and preserves the request id."
 
 ---
 
-_Reviewed: 2026-07-22_
+## Notes (verified correct — no finding)
+
+Checked adversarially and found sound; recorded so the next reviewer need not
+re-derive them:
+
+- **`protocol_context` move-vs-borrow across dispatch arms** (`core.rs:1460-1622`,
+  `mod.rs:1482-1498`): `Option<ProtocolContext>` is moved into each mutually-
+  exclusive match arm; it is not used after the match, and the central v2 envelope
+  injection (`core.rs:1290`, `mod.rs:1417`) uses a separately-cloned copy — so
+  prompts/resources still receive the `resultType`/`serverInfo` envelope centrally.
+- **Raw-`_meta` discover era gate** (`run_v2_header_gate_raw`,
+  `streamable_http_server.rs:685-724`): the D-04 non-opted-in short-circuit runs
+  before any `_meta` inspection; the era matrix, three-header requirement, and
+  `Mcp-Method` cross-check (hardcoded `"server/discover"`, robust against body
+  spoofing since classification already proved the method) all match the parsed
+  path. Live tests cover header-without-meta, meta-without-header, and
+  method-mismatch rejections.
+- **Auth + pipeline ordering:** discover is reached only after session resolution,
+  the v2 matrix, legacy-version validation, and auth on BOTH the fast path
+  (`extract_and_validate_auth`, `streamable_http_server.rs:1790`) and the middleware
+  path (`extract_auth_with_middleware`, `:2198`) — no bypass. Auth tests confirm.
+- **Consolidation:** `ServerCore::handle_discover` and
+  `dispatch_internal_client_request` are fully removed with no stale references; the
+  two remaining `handle_discover` call sites resolve to the surviving
+  `Server::handle_discover` delegate over the shared `build_discover_response`.
+- **Transport asymmetry (intentional):** `parse_request_or_internal` is consumed in
+  production only by the HTTP `classify_http_ingress`; the native/stdio path maps
+  `IngressRequest::Internal(_)` to `method_not_found` (`shared/protocol_helpers.rs:89`),
+  so stdio `server/discover` → `-32601` by design (D-10), not a wiring gap.
+
+---
+
+_Reviewed: 2026-07-23T02:46:56Z_
 _Reviewer: Claude (gsd-code-reviewer)_
 _Depth: standard_
