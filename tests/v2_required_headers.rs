@@ -18,14 +18,19 @@
     not(target_arch = "wasm32")
 ))]
 
+use std::collections::HashMap;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use pmcp::server::streamable_http_server::{StreamableHttpServer, StreamableHttpServerConfig};
-use pmcp::server::Server;
+use pmcp::server::{PromptHandler, ResourceHandler, Server};
+use pmcp::types::prompts::GetPromptRequest;
 use pmcp::types::protocol::{ProtocolVersion, PROTOCOL_VERSION_2026_07_28 as V2};
-use pmcp::types::{CallToolRequest, RequestMeta};
+use pmcp::types::resources::ReadResourceRequest;
+use pmcp::types::{
+    CallToolRequest, Content, GetPromptResult, ListResourcesResult, ReadResourceResult, RequestMeta,
+};
 use pmcp::{RequestHandlerExtra, ToolHandler};
 use tokio::sync::Mutex;
 
@@ -45,12 +50,55 @@ impl ToolHandler for SearchTool {
     }
 }
 
-/// Build a `Server` exposing the `search` tool, optionally v2-opted-in.
+/// A trivial prompt so `prompts/get` has a real dispatch target.
+struct GreetingPrompt;
+
+#[async_trait]
+impl PromptHandler for GreetingPrompt {
+    async fn handle(
+        &self,
+        _args: HashMap<String, String>,
+        _extra: RequestHandlerExtra,
+    ) -> pmcp::Result<GetPromptResult> {
+        Ok(GetPromptResult::new(vec![], Some("greeting".to_string())))
+    }
+}
+
+/// A trivial resource handler so `resources/read` has a real dispatch target.
+struct GreetingResource;
+
+#[async_trait]
+impl ResourceHandler for GreetingResource {
+    async fn read(
+        &self,
+        uri: &str,
+        _extra: RequestHandlerExtra,
+    ) -> pmcp::Result<ReadResourceResult> {
+        Ok(ReadResourceResult::new(vec![Content::resource_with_text(
+            uri.to_string(),
+            "hello".to_string(),
+            "text/plain".to_string(),
+        )]))
+    }
+
+    async fn list(
+        &self,
+        _cursor: Option<String>,
+        _extra: RequestHandlerExtra,
+    ) -> pmcp::Result<ListResourcesResult> {
+        Ok(ListResourcesResult::new(vec![]))
+    }
+}
+
+/// Build a `Server` exposing the `search` tool, a `greeting` prompt, and a
+/// `mem://greeting` resource, optionally v2-opted-in.
 fn build_server(opt_in_v2: bool) -> Server {
     let mut builder = Server::builder()
         .name("v2-required-headers")
         .version("1.0.0")
-        .tool("search", SearchTool);
+        .tool("search", SearchTool)
+        .prompt("greeting", GreetingPrompt)
+        .resources(GreetingResource);
     if opt_in_v2 {
         builder = builder.with_supported_protocol_versions([
             ProtocolVersion("2025-11-25".to_string()),
@@ -70,13 +118,16 @@ async fn spawn(opt_in_v2: bool) -> (SocketAddr, tokio::task::JoinHandle<()>) {
     http.start().await.expect("server starts")
 }
 
-/// Raw response view: HTTP status + the three v2 headers + the JSON body.
+/// Raw response view: HTTP status + the three v2 headers + the JSON body + the
+/// RAW response text (kept for byte-identity assertions — the parsed `body`
+/// alone cannot prove the v1 wire is byte-for-byte unchanged).
 struct Resp {
     status: u16,
     mcp_method: Option<String>,
     mcp_name: Option<String>,
     mcp_version: Option<String>,
     body: serde_json::Value,
+    raw: String,
 }
 
 /// POST a raw body with the given extra headers and return a [`Resp`].
@@ -112,6 +163,7 @@ async fn post(addr: SocketAddr, extra: &[(&str, &str)], body: &str) -> Resp {
         mcp_name,
         mcp_version,
         body,
+        raw: text,
     }
 }
 
@@ -136,6 +188,55 @@ fn call_body(tool: &str, meta_version: Option<&str>) -> String {
         "jsonrpc": "2.0",
         "id": 1,
         "method": "tools/call",
+        "params": params,
+    })
+    .to_string()
+}
+
+/// A raw `prompts/get` body built through the TYPED `GetPromptRequest` so the
+/// wire `_meta` camelCase spelling round-trips exactly what the server
+/// deserializes. `meta_version` carries the reserved protocol-version key.
+fn prompt_body(name: &str, meta_version: Option<&str>) -> String {
+    let mut req = GetPromptRequest {
+        name: name.to_string(),
+        arguments: HashMap::new(),
+        _meta: None,
+    };
+    if let Some(v) = meta_version {
+        req._meta = Some(RequestMeta::new().with_meta(
+            "io.modelcontextprotocol/protocolVersion",
+            serde_json::json!(v),
+        ));
+    }
+    let params = serde_json::to_value(&req).expect("params serialize");
+    serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "prompts/get",
+        "params": params,
+    })
+    .to_string()
+}
+
+/// A raw `resources/read` body built through the TYPED `ReadResourceRequest`
+/// carrying ONLY `uri` (no synthetic `params.name`) — this is the standards
+/// shape that exercises the finding #2 path (logical name from `params.uri`).
+fn resource_body(uri: &str, meta_version: Option<&str>) -> String {
+    let mut req = ReadResourceRequest {
+        uri: uri.to_string(),
+        _meta: None,
+    };
+    if let Some(v) = meta_version {
+        req._meta = Some(RequestMeta::new().with_meta(
+            "io.modelcontextprotocol/protocolVersion",
+            serde_json::json!(v),
+        ));
+    }
+    let params = serde_json::to_value(&req).expect("params serialize");
+    serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "resources/read",
         "params": params,
     })
     .to_string()
@@ -381,5 +482,190 @@ async fn v2_required_headers_non_opted_in_server_ignores_v2_headers() {
         r.body.get("result").is_some(),
         "expected a result: {}",
         r.body
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Phase 112-09 (Gap C): a well-formed v2 prompts/get is ACCEPTED (200) and its
+// inner result carries the resultType/serverInfo envelope (VERS-05 + VERS-07).
+// ---------------------------------------------------------------------------
+#[tokio::test]
+async fn v2_prompts_get_accepts_and_envelopes() {
+    let (addr, handle) = spawn(true).await;
+    let r = post(
+        addr,
+        &[
+            ("mcp-protocol-version", V2),
+            ("mcp-method", "prompts/get"),
+            ("mcp-name", "greeting"),
+        ],
+        &prompt_body("greeting", Some(V2)),
+    )
+    .await;
+    shutdown(handle).await;
+
+    assert_eq!(r.status, 200, "well-formed v2 prompts/get must be accepted");
+    let result = r.body.get("result").expect("expected a result");
+    assert_eq!(
+        result.get("resultType").and_then(|v| v.as_str()),
+        Some("complete"),
+        "v2 prompts/get result must carry resultType:complete: {}",
+        r.body
+    );
+    assert!(
+        result.get("serverInfo").is_some_and(|v| v.is_object()),
+        "v2 prompts/get result must carry a serverInfo object: {}",
+        r.body
+    );
+    // Outbound headers echoed on success.
+    assert_eq!(r.mcp_method.as_deref(), Some("prompts/get"));
+    assert_eq!(r.mcp_name.as_deref(), Some("greeting"));
+    assert_eq!(r.mcp_version.as_deref(), Some(V2));
+}
+
+// ---------------------------------------------------------------------------
+// Phase 112-09 (Gap C / finding #2): a standards-shaped v2 resources/read
+// (Mcp-Name = the URI, body built from a real ReadResourceRequest with ONLY
+// `uri` — NO synthetic params.name) is ACCEPTED (200) with the envelope. This
+// FAILS if Task 2's params.uri method-aware fix is missing (would reject 400).
+// ---------------------------------------------------------------------------
+#[tokio::test]
+async fn v2_resources_read_accepts_and_envelopes() {
+    let (addr, handle) = spawn(true).await;
+    let uri = "mem://greeting";
+    let r = post(
+        addr,
+        &[
+            ("mcp-protocol-version", V2),
+            ("mcp-method", "resources/read"),
+            ("mcp-name", uri), // Mcp-Name carries the resource URI
+        ],
+        &resource_body(uri, Some(V2)),
+    )
+    .await;
+    shutdown(handle).await;
+
+    assert_eq!(
+        r.status, 200,
+        "standards-shaped v2 resources/read (uri only) must be accepted: {}",
+        r.body
+    );
+    let result = r.body.get("result").expect("expected a result");
+    assert_eq!(
+        result.get("resultType").and_then(|v| v.as_str()),
+        Some("complete"),
+        "v2 resources/read result must carry resultType:complete: {}",
+        r.body
+    );
+    assert!(
+        result.get("serverInfo").is_some_and(|v| v.is_object()),
+        "v2 resources/read result must carry a serverInfo object: {}",
+        r.body
+    );
+    assert_eq!(r.mcp_method.as_deref(), Some("resources/read"));
+    assert_eq!(r.mcp_name.as_deref(), Some(uri));
+    assert_eq!(r.mcp_version.as_deref(), Some(V2));
+}
+
+// ---------------------------------------------------------------------------
+// Matrix consistency: a v2-header prompts/get with NON-v2 _meta is still
+// REJECTED (the fail-closed cell) — the fix did not loosen the gate.
+// ---------------------------------------------------------------------------
+#[tokio::test]
+async fn v2_prompts_get_rejects_v2_header_with_non_v2_meta() {
+    let (addr, handle) = spawn(true).await;
+    let r = post(
+        addr,
+        &[
+            ("mcp-protocol-version", V2),
+            ("mcp-method", "prompts/get"),
+            ("mcp-name", "greeting"),
+        ],
+        &prompt_body("greeting", None), // no v2 _meta → era resolves v1
+    )
+    .await;
+    shutdown(handle).await;
+
+    assert_eq!(
+        r.status, 400,
+        "v2-header prompts/get with non-v2 _meta must fail closed"
+    );
+    assert_eq!(r.body["error"]["code"], -32600);
+}
+
+/// Parse the raw v1 response text and assert full structural equality against a
+/// pinned golden JSON-RPC shape, plus assert the raw string carries no v2 keys.
+fn assert_v1_byte_identical(raw: &str, expected_result: &serde_json::Value) {
+    let parsed: serde_json::Value =
+        serde_json::from_str(raw).expect("v1 response must be valid JSON");
+    let expected = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": expected_result,
+    });
+    assert_eq!(
+        parsed, expected,
+        "v1 wire must be structurally identical to the golden fixture; got raw: {raw}"
+    );
+    // Byte-level guard: none of the v2-only keys leak onto the v1 wire.
+    assert!(
+        !raw.contains("resultType"),
+        "v1 raw must not contain resultType: {raw}"
+    );
+    assert!(
+        !raw.contains("serverInfo"),
+        "v1 raw must not contain serverInfo: {raw}"
+    );
+    assert!(
+        !raw.contains("_meta"),
+        "v1 raw must not contain _meta: {raw}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Phase 112-09 (v1 byte-identity, finding #5a): a v1 prompts/get on a
+// NON-opted-in server produces a response whose RAW bytes equal a pinned golden
+// fixture — full structural equality, not merely two-key absence.
+// ---------------------------------------------------------------------------
+#[tokio::test]
+async fn v1_prompts_get_byte_identical() {
+    let (addr, handle) = spawn(false).await; // NOT opted in
+    let r = post(addr, &[], &prompt_body("greeting", None)).await;
+    shutdown(handle).await;
+
+    assert_eq!(r.status, 200, "plain v1 prompts/get must still work");
+    // GreetingPrompt returns description "greeting" + empty messages; on v1 the
+    // wire omits None/empty _meta and carries NO envelope.
+    assert_v1_byte_identical(
+        &r.raw,
+        &serde_json::json!({
+            "description": "greeting",
+            "messages": [],
+        }),
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Phase 112-09 (v1 byte-identity): a v1 resources/read on a NON-opted-in server
+// is byte-for-byte the pinned golden fixture (no envelope, no _meta leak).
+// ---------------------------------------------------------------------------
+#[tokio::test]
+async fn v1_resources_read_byte_identical() {
+    let (addr, handle) = spawn(false).await; // NOT opted in
+    let uri = "mem://greeting";
+    let r = post(addr, &[], &resource_body(uri, None)).await;
+    shutdown(handle).await;
+
+    assert_eq!(r.status, 200, "plain v1 resources/read must still work");
+    // GreetingResource returns a single text resource content at the URI.
+    assert_v1_byte_identical(
+        &r.raw,
+        &serde_json::json!({
+            "contents": [{
+                "uri": uri,
+                "text": "hello",
+                "mimeType": "text/plain",
+            }],
+        }),
     );
 }
