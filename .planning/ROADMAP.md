@@ -2212,7 +2212,7 @@ Plans:
 
 **Non-goals:** Hard cutover to v2 (dual-version now, sunset later per SMPL-01); removing Roots/Sampling/Logging (deprecated with a 12-month advisory window — CONF-03 runtime verification only); adding `oauth2`/`openidconnect` crates (auth SEPs land as source changes). Zero new runtime dependencies — only `jsonschema` 0.46→0.48 for Draft 2020-12; Node.js LTS 22.x is CI-only for the conformance suite.
 
-- [ ] **Phase 112: Version Plumbing Spine** — `ProtocolContext` resolved once at ingress + threaded through dispatch; 2026-07-28 as explicit opt-in (LATEST stays 2025-11-25); `server/discover`, extensions map, required v2 headers, `resultType` envelope, W3C trace-context, centralized version-gated error-code table
+- [x] **Phase 112: Version Plumbing Spine** — `ProtocolContext` resolved once at ingress + threaded through dispatch; 2026-07-28 as explicit opt-in (LATEST stays 2025-11-25); `server/discover`, extensions map, required v2 headers, `resultType` envelope, W3C trace-context, centralized version-gated error-code table (completed 2026-07-23)
 - [ ] **Phase 113: Stateless HTTP + Multi-Round-Trip Elicitation** — v2 requests run handshake-free/session-free on the existing `stateless()` branch; MRTR (`input_required`/`requestState`/`inputResponses`) end-to-end; `subscriptions/listen`; no SSE resumability + id-replay regression test; the pmcp `Client` speaks v2 and fulfills MRTR
 - [ ] **Phase 114: Tasks Extension Migration** — Tasks negotiated via the extensions map, `tasks/update` added, `tasks/list` era-gated off on v2; `resultType:"task"` + 5-state→v2-enum mapping; stateless owner-binding fails closed; TaskStore/backends survive unchanged (wire reshape behind TaskRouter)
 - [ ] **Phase 115: JSON Schema 2020-12 + Structured Output + Caching Hints** — jsonschema 0.48 Draft 2020-12 explicitly pinned (wasm-clean, SEP-2106); `structuredContent` accepts any JSON value on v2; additive `ttlMs`/`cacheScope` on the five list/read results
@@ -2265,7 +2265,7 @@ Plans:
 **Wave 6** *(gap closure — from 112-VERIFICATION.md; dispatch-wiring completeness)*
 
 - [x] 112-09-PLAN.md — Gap B/C: generalize extract_request_meta_value to GetPrompt/ReadResource + thread protocol_context/request_meta into prompt & resource handlers at BOTH native sites; live HTTP prompts/get + resources/read v2 acceptance + v1 golden byte-identity (VERS-01/03/05/07/09)
-- [ ] 112-10-PLAN.md — Gap A: wire a live server/discover production caller on the HTTP POST path via parse_request_or_internal + shared capability projection (v2 → capabilities+extensions, v1 → -32601); remove stale #[allow(dead_code)] (VERS-04)
+- [x] 112-10-PLAN.md — Gap A: wire a live server/discover production caller on the HTTP POST path via parse_request_or_internal + shared capability projection (v2 → capabilities+extensions, v1 → -32601); remove stale #[allow(dead_code)] (VERS-04)
 
 ### Phase 113: Stateless HTTP + Multi-Round-Trip Elicitation
 
@@ -2369,7 +2369,7 @@ Plans:
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 112. Version Plumbing Spine | 9/10 | In Progress|  |
+| 112. Version Plumbing Spine | 10/10 | Complete   | 2026-07-23 |
 | 113. Stateless HTTP + MRTR | 0/TBD | Not started | - |
 | 114. Tasks Extension Migration | 0/TBD | Not started | - |
 | 115. JSON Schema 2020-12 + Caching Hints | 0/TBD | Not started | - |

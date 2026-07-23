@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v2.5
 milestone_name: MCP Spec 2026-07-28
 status: executing
-stopped_at: Completed 112-09-PLAN.md
-last_updated: "2026-07-23T02:03:52.719Z"
+stopped_at: Completed 112-10-PLAN.md
+last_updated: "2026-07-23T02:33:50.582Z"
 last_activity: 2026-07-23
 progress:
   total_phases: 71
   completed_phases: 0
   total_plans: 10
-  completed_plans: 9
-  percent: 0
+  completed_plans: 10
+  percent: 100
 ---
 
 # Project State
@@ -25,9 +25,9 @@ See: .planning/PROJECT.md (updated 2026-07-22) · .planning/ROADMAP.md (v2.5 mil
 
 ## Current Position
 
-Phase: 112 (version-plumbing-spine) — EXECUTING
-Plan: 2 of 10
-Status: Ready to execute
+Phase: 112 (version-plumbing-spine) — ALL 10 PLANS COMPLETE
+Plan: 10 of 10 (complete)
+Status: Phase 112 gap-closure done — server/discover live on HTTP (VERS-04)
 Last activity: 2026-07-23
 
 ## v2.5 Phase Plan (8 phases, 38 requirements)
@@ -105,6 +105,9 @@ Decisions are logged in PROJECT.md Key Decisions table. Decisions framing this m
 - [Phase ?]: [Phase 112]: 112-08: authoritative phase-end gate GREEN — cargo semver-checks vs 2.17.0 no breaking change (no major, no enum_variant_added; 223 pass); make quality-gate passed (pmat comply advisories informational per D-07)
 - [Phase ?]: [Phase 112]: 112-09: per-request _meta/ProtocolContext spine generalized from tools/call-only to GetPrompt + ReadResource at both native dispatch sites (core.rs + mod.rs); era()/client_info()/trace_context() now live inside prompt & resource handlers (Gap B closed)
 - [Phase ?]: [Phase 112]: 112-09: HTTP header gate resolves resources/read logical name method-awarely from params.uri (review finding #2 / Gap C closed); a standards-shaped v2 resources/read accepted not rejected 400; no synthetic params.name fallback
+- [Phase 112]: 112-10: server/discover made LIVE in production on the HTTP transport (Gap A closed, VERS-04/SC#3) via classify-then-continue — a crate-LOCAL HttpIngress::{Public,Discover} in BOTH POST parse entrypoints; TransportMessage public variants untouched so semver stays MINOR (223 checks pass)
+- [Phase 112]: 112-10: discover CONTINUES through the SAME pipeline (session → run_v2_header_gate_raw running the SAME classify_v2_request matrix → legacy-version → auth → dispatch → event store → per-path assembly); NOT an early return — auth-provider 401 + response-middleware e2e prove no bypass (findings #1/#3/#4)
+- [Phase 112]: 112-10: discover projection consolidated into ONE shared build_discover_response free fn (ServerCore wrappers dispatch_internal_client_request/handle_discover DELETED, no #[allow(dead_code)] remains); v1/non-opted-in discover → -32601@200 with original id (deliberate benign D-10 change from pre-112 PARSE_ERROR 400, documented in code)
 
 ### Pending Todos
 
@@ -140,8 +143,8 @@ Items deferred by design for this milestone (design §7 / REQUIREMENTS v2):
 
 ## Session Continuity
 
-Last session: 2026-07-23T02:03:52.715Z
-Stopped at: Completed 112-09-PLAN.md
+Last session: 2026-07-23T02:33:50.582Z
+Stopped at: Completed 112-10-PLAN.md
 Resume file: None
 
 ## Performance Metrics
@@ -173,3 +176,4 @@ Resume file: None
 | Phase 112 P07 | 12min | 2 tasks | 6 files |
 | Phase 112 P08 | 11min | 1 tasks | 1 files |
 | Phase 112 P9 | 40 | 3 tasks | 4 files |
+| Phase 112 P10 | 50 | 3 tasks | 5 files |
