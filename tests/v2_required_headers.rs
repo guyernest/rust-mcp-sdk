@@ -22,7 +22,13 @@ use std::collections::HashMap;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use async_trait::async_trait;
+use pmcp::server::auth::{AuthContext, AuthProvider};
+use pmcp::server::http_middleware::{
+    ServerHttpContext, ServerHttpMiddleware, ServerHttpMiddlewareChain, ServerHttpResponse,
+};
 use pmcp::server::streamable_http_server::{StreamableHttpServer, StreamableHttpServerConfig};
 use pmcp::server::{PromptHandler, ResourceHandler, Server};
 use pmcp::types::prompts::GetPromptRequest;
@@ -31,6 +37,7 @@ use pmcp::types::resources::ReadResourceRequest;
 use pmcp::types::{
     CallToolRequest, Content, GetPromptResult, ListResourcesResult, ReadResourceResult, RequestMeta,
 };
+use pmcp::ServerCapabilities;
 use pmcp::{RequestHandlerExtra, ToolHandler};
 use tokio::sync::Mutex;
 
@@ -90,22 +97,138 @@ impl ResourceHandler for GreetingResource {
     }
 }
 
+/// The reverse-DNS extension id the v2-opted-in server advertises in its
+/// `capabilities.extensions` map, so the `server/discover` projection has a
+/// non-empty `extensions` map to assert over the real HTTP wire (VERS-04).
+const DISCOVER_EXTENSION_KEY: &str = "io.example/experimental";
+
+/// A `ServerCapabilities` carrying ONLY the extensions map. Registering handlers
+/// after `.capabilities(..)` layers the tool/prompt/resource sub-capabilities on
+/// top (each set only when absent), so the extensions survive.
+fn extensions_capabilities() -> ServerCapabilities {
+    let mut caps = ServerCapabilities::default();
+    let mut ext = HashMap::new();
+    ext.insert(
+        DISCOVER_EXTENSION_KEY.to_string(),
+        serde_json::json!({ "enabled": true }),
+    );
+    caps.extensions = Some(ext);
+    caps
+}
+
 /// Build a `Server` exposing the `search` tool, a `greeting` prompt, and a
 /// `mem://greeting` resource, optionally v2-opted-in.
+///
+/// The v2-opted-in server pre-seeds a `capabilities.extensions` entry (BEFORE the
+/// handlers, which layer their own sub-capabilities on top) so the
+/// `server/discover` projection has a non-empty `extensions` map (Plan 112-10).
 fn build_server(opt_in_v2: bool) -> Server {
-    let mut builder = Server::builder()
-        .name("v2-required-headers")
-        .version("1.0.0")
+    let mut builder = Server::builder().name("v2-required-headers").version("1.0.0");
+    if opt_in_v2 {
+        builder = builder
+            .capabilities(extensions_capabilities())
+            .with_supported_protocol_versions([
+                ProtocolVersion("2025-11-25".to_string()),
+                ProtocolVersion(V2.to_string()),
+            ]);
+    }
+    builder
         .tool("search", SearchTool)
         .prompt("greeting", GreetingPrompt)
-        .resources(GreetingResource);
-    if opt_in_v2 {
-        builder = builder.with_supported_protocol_versions([
-            ProtocolVersion("2025-11-25".to_string()),
-            ProtocolVersion(V2.to_string()),
-        ]);
+        .resources(GreetingResource)
+        .build()
+        .expect("server builds")
+}
+
+/// A `server/discover` request body. `meta_version` (when `Some`) carries the
+/// reserved protocol-version key in `params._meta` so the raw-_meta gate resolves
+/// the era from the authoritative `_meta` signal.
+fn discover_body(meta_version: Option<&str>) -> String {
+    let mut params = serde_json::Map::new();
+    if let Some(v) = meta_version {
+        params.insert(
+            "_meta".to_string(),
+            serde_json::json!({ "io.modelcontextprotocol/protocolVersion": v }),
+        );
     }
-    builder.build().expect("server builds")
+    serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "server/discover",
+        "params": params,
+    })
+    .to_string()
+}
+
+/// An auth provider that REJECTS any request without a valid bearer token, used
+/// to prove `server/discover` is subject to auth (no bypass — finding #3/#6).
+struct RejectingAuth;
+
+#[async_trait]
+impl AuthProvider for RejectingAuth {
+    async fn validate_request(
+        &self,
+        authorization_header: Option<&str>,
+    ) -> pmcp::Result<Option<AuthContext>> {
+        match authorization_header {
+            Some(h) if h == "Bearer good-token" => Ok(None),
+            _ => Err(pmcp::Error::authentication("missing or invalid token")),
+        }
+    }
+}
+
+/// A response-middleware that records whether it observed a response, used to
+/// prove `server/discover` flows through the response-middleware path.
+struct RecordingMiddleware {
+    saw_response: Arc<AtomicBool>,
+}
+
+#[async_trait]
+impl ServerHttpMiddleware for RecordingMiddleware {
+    async fn on_response(
+        &self,
+        _response: &mut ServerHttpResponse,
+        _context: &ServerHttpContext,
+    ) -> pmcp::Result<()> {
+        self.saw_response.store(true, Ordering::SeqCst);
+        Ok(())
+    }
+}
+
+/// Spawn a v2-opted-in server with an auth provider installed (fast path).
+async fn spawn_with_auth() -> (SocketAddr, tokio::task::JoinHandle<()>) {
+    let server = Arc::new(Mutex::new(
+        Server::builder()
+            .name("v2-required-headers-auth")
+            .version("1.0.0")
+            .capabilities(extensions_capabilities())
+            .with_supported_protocol_versions([
+                ProtocolVersion("2025-11-25".to_string()),
+                ProtocolVersion(V2.to_string()),
+            ])
+            .tool("search", SearchTool)
+            .auth_provider(RejectingAuth)
+            .build()
+            .expect("server builds"),
+    ));
+    let addr = SocketAddr::new(Ipv4Addr::LOCALHOST.into(), 0);
+    let http =
+        StreamableHttpServer::with_config(addr, server, StreamableHttpServerConfig::stateless());
+    http.start().await.expect("server starts")
+}
+
+/// Spawn a v2-opted-in server with an HTTP middleware chain (middleware path).
+async fn spawn_with_middleware(
+    saw_response: Arc<AtomicBool>,
+) -> (SocketAddr, tokio::task::JoinHandle<()>) {
+    let server = Arc::new(Mutex::new(build_server(true)));
+    let mut chain = ServerHttpMiddlewareChain::new();
+    chain.add(Arc::new(RecordingMiddleware { saw_response }));
+    let mut config = StreamableHttpServerConfig::stateless();
+    config.http_middleware = Some(Arc::new(chain));
+    let addr = SocketAddr::new(Ipv4Addr::LOCALHOST.into(), 0);
+    let http = StreamableHttpServer::with_config(addr, server, config);
+    http.start().await.expect("server starts")
 }
 
 /// Stand the server up over REAL HTTP (stateless JSON mode); return the bound
@@ -667,5 +790,193 @@ async fn v1_resources_read_byte_identical() {
                 "mimeType": "text/plain",
             }],
         }),
+    );
+}
+
+// ===========================================================================
+// Phase 112-10 (VERS-04): LIVE server/discover over the real HTTP transport.
+// ===========================================================================
+
+/// Standard v2 headers for a `server/discover` request. `server/discover` is NOT
+/// a name-bearing method, so `Mcp-Name` is presence-only (any value); the
+/// `Mcp-Method`/body cross-check pins it to `server/discover`.
+fn discover_v2_headers() -> Vec<(&'static str, &'static str)> {
+    vec![
+        ("mcp-protocol-version", V2),
+        ("mcp-method", "server/discover"),
+        ("mcp-name", "server/discover"),
+    ]
+}
+
+// A v2 server/discover returns the capability projection INCLUDING the
+// `.skills`-populated extensions map, plus serverInfo + resultType:complete, and
+// preserves the request id.
+#[tokio::test]
+async fn server_discover_v2_returns_capability_projection_with_extensions() {
+    let (addr, handle) = spawn(true).await;
+    let r = post(addr, &discover_v2_headers(), &discover_body(Some(V2))).await;
+    shutdown(handle).await;
+
+    assert_eq!(r.status, 200, "v2 server/discover must be accepted: {}", r.body);
+    let result = r.body.get("result").expect("expected a result");
+    // The extensions map is projected (finding: reachable in production).
+    assert_eq!(
+        result["capabilities"]["extensions"][DISCOVER_EXTENSION_KEY]["enabled"],
+        serde_json::json!(true),
+        "discover projection must carry the registered extension id: {}",
+        r.body
+    );
+    // serverInfo + resultType envelope present.
+    assert!(
+        result.get("serverInfo").is_some_and(|v| v.is_object()),
+        "discover result must carry a serverInfo object: {}",
+        r.body
+    );
+    assert_eq!(
+        result.get("resultType").and_then(|v| v.as_str()),
+        Some("complete"),
+        "discover result must carry resultType:complete: {}",
+        r.body
+    );
+    // Negotiated version + preserved request id.
+    assert_eq!(result.get("protocolVersion").and_then(|v| v.as_str()), Some(V2));
+    assert_eq!(r.body["id"], 1, "the original request id must be preserved");
+    // Outbound v2 headers echoed on the accepted discover.
+    assert_eq!(r.mcp_version.as_deref(), Some(V2));
+    assert_eq!(r.mcp_method.as_deref(), Some("server/discover"));
+}
+
+// The SAME rejection matrix as tools/call: v2 _meta but NO version header.
+#[tokio::test]
+async fn server_discover_rejects_v2_meta_without_header() {
+    let (addr, handle) = spawn(true).await;
+    let r = post(
+        addr,
+        &[("mcp-method", "server/discover"), ("mcp-name", "server/discover")],
+        &discover_body(Some(V2)),
+    )
+    .await;
+    shutdown(handle).await;
+
+    assert_eq!(r.status, 400, "v2 _meta with no version header must reject");
+    assert_eq!(r.body["error"]["code"], -32600);
+}
+
+// v2 version header but NO v2 _meta → REJECT (fail closed).
+#[tokio::test]
+async fn server_discover_rejects_header_without_v2_meta() {
+    let (addr, handle) = spawn(true).await;
+    let r = post(addr, &discover_v2_headers(), &discover_body(None)).await;
+    shutdown(handle).await;
+
+    assert_eq!(r.status, 400, "v2 header with no v2 _meta must reject");
+    assert_eq!(r.body["error"]["code"], -32600);
+}
+
+// Mcp-Method header disagreeing with the fixed discover body method → REJECT.
+#[tokio::test]
+async fn server_discover_rejects_mismatched_mcp_method() {
+    let (addr, handle) = spawn(true).await;
+    let r = post(
+        addr,
+        &[
+            ("mcp-protocol-version", V2),
+            ("mcp-method", "tools/call"), // lies about the method
+            ("mcp-name", "server/discover"),
+        ],
+        &discover_body(Some(V2)),
+    )
+    .await;
+    shutdown(handle).await;
+
+    assert_eq!(r.status, 400, "mismatched Mcp-Method must reject");
+    assert_eq!(r.body["error"]["code"], -32600);
+}
+
+// Missing Mcp-Name on the v2 discover → REJECT (D-05 strict all-three-headers).
+#[tokio::test]
+async fn server_discover_rejects_missing_mcp_name() {
+    let (addr, handle) = spawn(true).await;
+    let r = post(
+        addr,
+        &[("mcp-protocol-version", V2), ("mcp-method", "server/discover")],
+        &discover_body(Some(V2)),
+    )
+    .await;
+    shutdown(handle).await;
+
+    assert_eq!(r.status, 400, "missing Mcp-Name must reject (D-05)");
+    assert_eq!(r.body["error"]["code"], -32600);
+}
+
+// A v1 discover (opted-in server, NO v2 signal) returns JSON-RPC -32601 at HTTP
+// 200 with the original id. This -32601@200 is the DELIBERATE, documented change
+// from the pre-112 incidental PARSE_ERROR 400 (id:null) — server/discover is a
+// v2-only method no conforming v1 client sends (finding #4 / D-10).
+#[tokio::test]
+async fn server_discover_v1_returns_method_not_found() {
+    let (addr, handle) = spawn(true).await;
+    let r = post(addr, &[], &discover_body(None)).await;
+    shutdown(handle).await;
+
+    assert_eq!(r.status, 200, "v1 discover is -32601 AT HTTP 200 (D-10)");
+    assert_eq!(r.body["error"]["code"], -32601);
+    assert_eq!(r.body["id"], 1, "the original request id must be preserved");
+}
+
+// A NON-opted-in server also returns -32601 for server/discover.
+#[tokio::test]
+async fn server_discover_non_opted_in_returns_method_not_found() {
+    let (addr, handle) = spawn(false).await;
+    let r = post(addr, &[], &discover_body(None)).await;
+    shutdown(handle).await;
+
+    assert_eq!(r.status, 200);
+    assert_eq!(r.body["error"]["code"], -32601);
+    assert_eq!(r.body["id"], 1);
+}
+
+// With an auth provider installed, an UNAUTHENTICATED v2 discover is rejected 401
+// — proving discover is NOT bypassing auth (classify-then-continue, finding #3).
+#[tokio::test]
+async fn server_discover_requires_auth_when_provider_installed() {
+    let (addr, handle) = spawn_with_auth().await;
+    let r = post(addr, &discover_v2_headers(), &discover_body(Some(V2))).await;
+    shutdown(handle).await;
+
+    assert_eq!(
+        r.status, 401,
+        "unauthenticated server/discover must be rejected 401 (no auth bypass)"
+    );
+}
+
+// A valid token lets the SAME discover through — the 401 above is auth, not a
+// discover-path failure.
+#[tokio::test]
+async fn server_discover_with_valid_token_is_served() {
+    let (addr, handle) = spawn_with_auth().await;
+    let mut headers = discover_v2_headers();
+    headers.push(("authorization", "Bearer good-token"));
+    let r = post(addr, &headers, &discover_body(Some(V2))).await;
+    shutdown(handle).await;
+
+    assert_eq!(r.status, 200, "authenticated v2 discover must be served: {}", r.body);
+    assert!(r.body.get("result").is_some(), "expected a result: {}", r.body);
+}
+
+// With HTTP middleware installed, the discover response passes through response
+// middleware — proving discover is NOT bypassing the middleware path (finding #3/#6).
+#[tokio::test]
+async fn server_discover_runs_response_middleware() {
+    let saw = Arc::new(AtomicBool::new(false));
+    let (addr, handle) = spawn_with_middleware(Arc::clone(&saw)).await;
+    let r = post(addr, &discover_v2_headers(), &discover_body(Some(V2))).await;
+    shutdown(handle).await;
+
+    assert_eq!(r.status, 200, "v2 discover on the middleware path must be served: {}", r.body);
+    assert!(r.body.get("result").is_some(), "expected a result: {}", r.body);
+    assert!(
+        saw.load(Ordering::SeqCst),
+        "discover response must pass through response middleware (no bypass)"
     );
 }
