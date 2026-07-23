@@ -2236,7 +2236,7 @@ Plans:
   4. On the v2 HTTP path the required headers `Mcp-Method`/`Mcp-Name` (alongside `MCP-Protocol-Version`) are enforced inbound and emitted outbound (VERS-05)
   5. Every result carries the `resultType` envelope discriminator (`complete`/`input_required`/`task`), defaulting to `complete` when absent; W3C trace-context keys (`traceparent`/`tracestate`/`baggage`) in `_meta` are surfaced via typed accessors and propagated; and all error codes resolve from one centralized version-gated constant table with v2 values filled ONLY from the final 2026-07-28 schema.json and the frozen v1 `-32002` task-pending semantics unchanged (VERS-07, VERS-09, VERS-06)
 
-**Plans**: 8 plans
+**Plans**: 10 plans (8 shipped + 2 gap-closure)
 
 Plans:
 **Wave 1**
@@ -2261,6 +2261,11 @@ Plans:
 
 - [x] 112-07-PLAN.md — Migrate ~40 error-code literal call sites (core/mod/task_dispatch/jsonrpc) onto the centralized error_codes:: table; frozen -32002/-32601 byte-identical
 - [ ] 112-08-PLAN.md — Migrate the streamable-HTTP transport's 25 error-code literals onto the centralized error_codes:: table; wire byte-identical, #[cfg(test)] oracle preserved
+
+**Wave 6** *(gap closure — from 112-VERIFICATION.md; dispatch-wiring completeness)*
+
+- [ ] 112-09-PLAN.md — Gap B/C: generalize extract_request_meta_value to GetPrompt/ReadResource + thread protocol_context/request_meta into prompt & resource handlers at BOTH native sites; live HTTP prompts/get + resources/read v2 acceptance + v1 golden byte-identity (VERS-01/03/05/07/09)
+- [ ] 112-10-PLAN.md — Gap A: wire a live server/discover production caller on the HTTP POST path via parse_request_or_internal + shared capability projection (v2 → capabilities+extensions, v1 → -32601); remove stale #[allow(dead_code)] (VERS-04)
 
 ### Phase 113: Stateless HTTP + Multi-Round-Trip Elicitation
 
