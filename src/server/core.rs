@@ -568,11 +568,7 @@ impl ServerCore {
             )
             .with_auth_context(auth_context)
             .with_task_request(req.task.clone())
-            .with_request_meta(
-                req._meta
-                    .as_ref()
-                    .and_then(|m| serde_json::to_value(m).ok()),
-            )
+            .with_request_meta(request_meta_to_value(req._meta.as_ref()))
             // Thread the once-at-ingress resolved protocol context so handlers
             // read era/identity via extra.era()/client_info() (Phase 112).
             .with_protocol_context(protocol_context),
@@ -824,11 +820,7 @@ impl ServerCore {
                     .await,
             )
             .with_auth_context(auth_context)
-            .with_request_meta(
-                req._meta
-                    .as_ref()
-                    .and_then(|m| serde_json::to_value(m).ok()),
-            )
+            .with_request_meta(request_meta_to_value(req._meta.as_ref()))
             .with_protocol_context(protocol_context),
         );
 
@@ -900,11 +892,7 @@ impl ServerCore {
                     .await,
             )
             .with_auth_context(auth_context)
-            .with_request_meta(
-                req._meta
-                    .as_ref()
-                    .and_then(|m| serde_json::to_value(m).ok()),
-            )
+            .with_request_meta(request_meta_to_value(req._meta.as_ref()))
             .with_protocol_context(protocol_context),
         );
 
@@ -1729,6 +1717,16 @@ fn json_serialized_len(value: &impl serde::Serialize) -> Result<usize> {
     Ok(counter.0)
 }
 
+/// Convert an optional per-request `_meta` into raw JSON for handler surfacing /
+/// ingress era-resolution (Phase 112). Centralizes the `RequestMeta -> Value`
+/// conversion that every prompt/resource/tool dispatch site would otherwise
+/// hand-roll.
+pub(crate) fn request_meta_to_value<T: serde::Serialize>(
+    meta: Option<&T>,
+) -> Option<serde_json::Value> {
+    meta.and_then(|m| serde_json::to_value(m).ok())
+}
+
 /// Extract the request's `_meta` object as raw JSON for ingress era-resolution
 /// (Phase 112, D-11 — the per-request signal is transport-agnostic).
 ///
@@ -1740,29 +1738,39 @@ fn json_serialized_len(value: &impl serde::Serialize) -> Result<usize> {
 /// `GetPrompt`, and `ReadResource` — the three name/uri-bearing methods. Variants
 /// with NO `_meta` field yield `None` and resolve to the v1 fallback by design
 /// (an opted-in server serves them as v1 unless a header/`_meta` signal says
-/// otherwise). A future method that adds a `_meta` field MUST be added BOTH to
-/// this match AND to the exhaustive-variant tripwire test
-/// (`all_meta_bearing_client_requests_are_extracted`), which fails closed if the
-/// two drift.
+/// otherwise).
+///
+/// The inner match is EXHAUSTIVE with no wildcard arm: a future `ClientRequest`
+/// variant is a `non-exhaustive patterns` COMPILE ERROR here, forcing the author
+/// to classify it as `_meta`-bearing or not. That compile-time tripwire — not a
+/// doc comment or a hand-maintained test — is what keeps this in sync with the
+/// enum.
+#[allow(clippy::used_underscore_binding)] // _meta is part of the MCP protocol spec
 pub(crate) fn extract_request_meta_value(request: &Request) -> Option<serde_json::Value> {
     match request {
         Request::Client(boxed) => match boxed.as_ref() {
-            ClientRequest::CallTool(req) => {
-                #[allow(clippy::used_underscore_binding)] // _meta is MCP protocol spec
-                let meta = req._meta.as_ref();
-                meta.and_then(|m| serde_json::to_value(m).ok())
-            },
-            ClientRequest::GetPrompt(req) => {
-                #[allow(clippy::used_underscore_binding)] // _meta is MCP protocol spec
-                let meta = req._meta.as_ref();
-                meta.and_then(|m| serde_json::to_value(m).ok())
-            },
-            ClientRequest::ReadResource(req) => {
-                #[allow(clippy::used_underscore_binding)] // _meta is MCP protocol spec
-                let meta = req._meta.as_ref();
-                meta.and_then(|m| serde_json::to_value(m).ok())
-            },
-            _ => None,
+            // `_meta`-bearing variants — read the per-request signal.
+            ClientRequest::CallTool(req) => request_meta_to_value(req._meta.as_ref()),
+            ClientRequest::GetPrompt(req) => request_meta_to_value(req._meta.as_ref()),
+            ClientRequest::ReadResource(req) => request_meta_to_value(req._meta.as_ref()),
+            // Non-`_meta`-bearing variants — enumerated explicitly (no wildcard)
+            // so adding a variant forces a decision above rather than silently
+            // dropping its signal.
+            ClientRequest::Initialize(_)
+            | ClientRequest::ListTools(_)
+            | ClientRequest::ListPrompts(_)
+            | ClientRequest::ListResources(_)
+            | ClientRequest::ListResourceTemplates(_)
+            | ClientRequest::Subscribe(_)
+            | ClientRequest::Unsubscribe(_)
+            | ClientRequest::Complete(_)
+            | ClientRequest::CreateMessage(_)
+            | ClientRequest::TasksGet(_)
+            | ClientRequest::TasksResult(_)
+            | ClientRequest::TasksList(_)
+            | ClientRequest::TasksCancel(_)
+            | ClientRequest::SetLoggingLevel { .. }
+            | ClientRequest::Ping => None,
         },
         Request::Server(_) => None,
     }
@@ -2690,10 +2698,10 @@ mod tests {
 
         #[test]
         fn all_meta_bearing_client_requests_are_extracted() {
-            // Exhaustive-variant tripwire: EVERY ClientRequest variant that carries
-            // a `_meta: Option<RequestMeta>` field must be read by
-            // extract_request_meta_value. If a future variant adds `_meta` without
-            // being wired into the match, add it here too — this test fails closed.
+            // Positive coverage for the three `_meta`-bearing variants. The real
+            // drift guard is the WILDCARD-FREE exhaustive match in
+            // extract_request_meta_value: a new variant is a compile error there,
+            // not a silent `None`, so this test need not enumerate the enum.
             let meta = RequestMeta::new().with_meta("io.example/x", serde_json::json!(1));
             let expected = serde_json::to_value(&meta).unwrap();
 

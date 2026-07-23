@@ -466,9 +466,25 @@ fn cross_check_method(
     }
 }
 
-/// Methods whose logical name lives in `params.name` and must be cross-checked.
+/// Single source of truth for a name-bearing method's logical-name location.
+///
+/// `tools/call` and `prompts/get` carry it in `params.name`; `resources/read` in
+/// `params.uri` (it has a `uri` field and NO `name` field); every other method is
+/// not name-bearing. Both [`is_name_bearing_method`] and the body-name extraction
+/// in [`extract_body_method_and_name`] derive from this one table so the
+/// "which methods are name-bearing" set and the "where the name lives" map can
+/// never drift (the drift that review finding #2 fixed for `resources/read`).
+fn logical_name_key(method: &str) -> Option<&'static str> {
+    match method {
+        "tools/call" | "prompts/get" => Some("name"),
+        "resources/read" => Some("uri"),
+        _ => None,
+    }
+}
+
+/// Methods whose logical name must be cross-checked against `Mcp-Name` (D-06).
 fn is_name_bearing_method(method: &str) -> bool {
-    matches!(method, "tools/call" | "prompts/get" | "resources/read")
+    logical_name_key(method).is_some()
 }
 
 /// Cross-check `Mcp-Name` against `params.name` for name-bearing methods (D-06).
@@ -542,16 +558,12 @@ fn extract_body_method_and_name(body: &[u8]) -> (Option<String>, Option<String>)
         .get("method")
         .and_then(serde_json::Value::as_str)
         .map(str::to_string);
-    // Select the params key by method: resources/read carries its logical name in
-    // `uri`, every other name-bearing method in `name`. Non-name-bearing methods
-    // resolve to `None` regardless (their key is absent).
-    let name_key = match method.as_deref() {
-        Some("resources/read") => "uri",
-        _ => "name",
-    };
-    let name = value
-        .get("params")
-        .and_then(|p| p.get(name_key))
+    // The logical-name params key is method-derived via the single `logical_name_key`
+    // table; non-name-bearing methods yield `None` (presence-only cross-check).
+    let name = method
+        .as_deref()
+        .and_then(logical_name_key)
+        .and_then(|name_key| value.get("params").and_then(|p| p.get(name_key)))
         .and_then(serde_json::Value::as_str)
         .map(str::to_string);
     (method, name)
@@ -575,12 +587,48 @@ fn apply_v2_outbound_headers(headers: &mut HeaderMap, method: &str, name: &str) 
     }
 }
 
-/// Run the v2 gate for a parsed `Request` on an opted-in server.
+/// Shared tail of BOTH v2 gates: map a resolved-context result to a
+/// `(ProtocolContext, V2GateOutcome)` pair via the SAME error-mapping, D-04
+/// passthrough ordering, and `classify_v2_request` matrix.
 ///
-/// Resolves the `ProtocolContext` ONCE via the SAME shared resolver dispatch
-/// uses, and returns both that resolved context (to thread into
-/// `handle_request_with_context`) and the gate outcome. The HTTP layer CONSUMES
-/// the resolved era — it never re-derives "is v2" from the raw header alone.
+/// The typed and raw gates differ ONLY in how they produce `resolved` and in
+/// `body_method_override` (a discover ingress pins `Some("server/discover")`;
+/// the typed path passes `None` to read the method from the wire body). Keeping
+/// the tail here means those two paths can never drift on the reject mapping,
+/// passthrough short-circuit, or cross-check wiring.
+fn finish_v2_gate(
+    resolved: std::result::Result<
+        Option<crate::types::protocol::ProtocolContext>,
+        crate::types::protocol::context::ProtocolNegotiationError,
+    >,
+    headers: &HeaderMap,
+    raw_body: &[u8],
+    body_method_override: Option<&str>,
+) -> (
+    Option<crate::types::protocol::ProtocolContext>,
+    V2GateOutcome,
+) {
+    let context = match resolved {
+        Ok(ctx) => ctx,
+        Err(err) => {
+            // Unsupported/malformed per-request version — reject via the SAME
+            // mapping dispatch uses (structured INVALID_PARAMS, VERS-06).
+            let (code, message) = crate::server::core::negotiation_error_to_rejection(&err);
+            return (None, V2GateOutcome::Reject(code, message));
+        },
+    };
+    // `Ok(None)` == not opted in → zero enforcement (D-04).
+    let Some(ref pc) = context else {
+        return (context.clone(), V2GateOutcome::Passthrough);
+    };
+    let meta_is_v2 = pc.era == crate::types::protocol::Era::V2;
+    let (extracted_method, body_name) = extract_body_method_and_name(raw_body);
+    let body_method = body_method_override.or(extracted_method.as_deref());
+    let outcome = classify_v2_request(headers, meta_is_v2, body_method, body_name.as_deref());
+    (context, outcome)
+}
+
+/// Run the v2 gate for a parsed `Request` on an opted-in server.
 async fn run_v2_header_gate(
     state: &ServerState,
     request: &Request,
@@ -597,28 +645,7 @@ async fn run_v2_header_gate(
         // short-circuits to `Ok(None)` there.
         server.resolve_ingress_protocol_context(request)
     };
-    let context = match resolved {
-        Ok(ctx) => ctx,
-        Err(err) => {
-            // Unsupported/malformed per-request version — reject via the SAME
-            // mapping dispatch uses (structured INVALID_PARAMS, VERS-06).
-            let (code, message) = crate::server::core::negotiation_error_to_rejection(&err);
-            return (None, V2GateOutcome::Reject(code, message));
-        },
-    };
-    // `Ok(None)` == not opted in → zero enforcement (D-04).
-    let Some(ref pc) = context else {
-        return (context.clone(), V2GateOutcome::Passthrough);
-    };
-    let meta_is_v2 = pc.era == crate::types::protocol::Era::V2;
-    let (body_method, body_name) = extract_body_method_and_name(raw_body);
-    let outcome = classify_v2_request(
-        headers,
-        meta_is_v2,
-        body_method.as_deref(),
-        body_name.as_deref(),
-    );
-    (context, outcome)
+    finish_v2_gate(resolved, headers, raw_body, None)
 }
 
 /// Crate-LOCAL ingress classification for the POST pipeline (Phase 112, VERS-04).
@@ -654,6 +681,15 @@ enum HttpIngress {
 /// to the existing public parse path with byte-identical behavior.
 fn classify_http_ingress(body: &[u8]) -> Option<HttpIngress> {
     let req: crate::types::JSONRPCRequest<serde_json::Value> = serde_json::from_slice(body).ok()?;
+    // Fast reject: `server/discover` is the only internally-routed method, so for
+    // ~100% of traffic we skip the typed `parse_client_request` conversion and the
+    // `_meta` clone below. `parse_request_or_internal` remains the authority for
+    // the discover case (its `IngressRequest::Internal(ServerDiscover)` arm is the
+    // only path that yields `Discover`), so this peek changes no classification —
+    // any non-discover method returned `None` before too, via `Public(_) => None`.
+    if req.method != "server/discover" {
+        return None;
+    }
     // Capture the raw `_meta` BEFORE the routing seam consumes `params`.
     let raw_meta = req.params.as_ref().and_then(|p| p.get("_meta")).cloned();
     let (id, ingress) = crate::shared::protocol_helpers::parse_request_or_internal(req).ok()?;
@@ -696,31 +732,10 @@ async fn run_v2_header_gate_raw(
         // Non-opted-in → `Ok(None)` WITHOUT touching the v2 `_meta` (D-04).
         server.resolve_discover_protocol_context(raw_meta)
     };
-    let context = match resolved {
-        Ok(ctx) => ctx,
-        Err(err) => {
-            // Unsupported/malformed per-request version — reject via the SAME
-            // mapping `run_v2_header_gate` uses (structured, VERS-06).
-            let (code, message) = crate::server::core::negotiation_error_to_rejection(&err);
-            return (None, V2GateOutcome::Reject(code, message));
-        },
-    };
-    // `Ok(None)` == not opted in → zero enforcement, before any header inspection.
-    let Some(ref pc) = context else {
-        return (context.clone(), V2GateOutcome::Passthrough);
-    };
-    let meta_is_v2 = pc.era == crate::types::protocol::Era::V2;
     // `server/discover` is NOT a name-bearing method, so `Mcp-Name` is
-    // presence-only (`require_three_headers` still requires it present); the body
-    // method is fixed so the header/body cross-check pins `Mcp-Method`.
-    let (_body_method, body_name) = extract_body_method_and_name(raw_body);
-    let outcome = classify_v2_request(
-        headers,
-        meta_is_v2,
-        Some("server/discover"),
-        body_name.as_deref(),
-    );
-    (context, outcome)
+    // presence-only; the body method is FIXED (override) so the header/body
+    // cross-check pins `Mcp-Method` regardless of the raw body's method field.
+    finish_v2_gate(resolved, headers, raw_body, Some("server/discover"))
 }
 
 impl StreamableHttpServer {

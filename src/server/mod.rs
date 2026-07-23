@@ -1655,10 +1655,7 @@ impl Server {
         // `other` keys) so handlers can read it via `extra.request_meta` in the
         // high-level `Server` path too (ServerCore already wires this at core.rs).
         #[allow(clippy::used_underscore_binding)] // _meta is part of MCP protocol spec
-        let request_meta_value = req
-            ._meta
-            .as_ref()
-            .and_then(|m| serde_json::to_value(m).ok());
+        let request_meta_value = crate::server::core::request_meta_to_value(req._meta.as_ref());
 
         let mut extra = self.attach_peer(
             crate::server::cancellation::RequestHandlerExtra::new(
@@ -1942,10 +1939,7 @@ impl Server {
         // path too — the twin of the ServerCore wiring (Phase 112, mirrors the
         // handle_call_tool twin).
         #[allow(clippy::used_underscore_binding)] // _meta is part of MCP protocol spec
-        let request_meta_value = req
-            ._meta
-            .as_ref()
-            .and_then(|m| serde_json::to_value(m).ok());
+        let request_meta_value = crate::server::core::request_meta_to_value(req._meta.as_ref());
 
         let extra = self.attach_peer(
             crate::server::cancellation::RequestHandlerExtra::new(
@@ -2067,10 +2061,7 @@ impl Server {
         // era/client_info/trace_context via `extra` on the high-level `Server`
         // path too — the twin of the ServerCore wiring (Phase 112).
         #[allow(clippy::used_underscore_binding)] // _meta is part of MCP protocol spec
-        let request_meta_value = req
-            ._meta
-            .as_ref()
-            .and_then(|m| serde_json::to_value(m).ok());
+        let request_meta_value = crate::server::core::request_meta_to_value(req._meta.as_ref());
 
         let extra = self.attach_peer(
             crate::server::cancellation::RequestHandlerExtra::new(
