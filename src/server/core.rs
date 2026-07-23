@@ -2187,8 +2187,12 @@ mod tests {
         assert_eq!(e.code, -32601);
 
         // no resolved context at all → also -32601
-        let resp_none =
-            build_discover_response(RequestId::from(3i64), &server.capabilities, &server.info, None);
+        let resp_none = build_discover_response(
+            RequestId::from(3i64),
+            &server.capabilities,
+            &server.info,
+            None,
+        );
         let ResponsePayload::Error(e2) = resp_none.payload else {
             panic!("context-less server/discover must be an error");
         };

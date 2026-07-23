@@ -655,11 +655,7 @@ enum HttpIngress {
 fn classify_http_ingress(body: &[u8]) -> Option<HttpIngress> {
     let req: crate::types::JSONRPCRequest<serde_json::Value> = serde_json::from_slice(body).ok()?;
     // Capture the raw `_meta` BEFORE the routing seam consumes `params`.
-    let raw_meta = req
-        .params
-        .as_ref()
-        .and_then(|p| p.get("_meta"))
-        .cloned();
+    let raw_meta = req.params.as_ref().and_then(|p| p.get("_meta")).cloned();
     let (id, ingress) = crate::shared::protocol_helpers::parse_request_or_internal(req).ok()?;
     match ingress {
         // The inner match is exhaustive over `InternalClientRequest`, so adding a
@@ -1687,7 +1683,8 @@ async fn assemble_discover_response_fast(
     }
 
     // Discover is never an init request → compute the outbound version normally.
-    let version_to_send = compute_outbound_protocol_version(state, response_session_id, false, None);
+    let version_to_send =
+        compute_outbound_protocol_version(state, response_session_id, false, None);
     response
         .headers_mut()
         .insert(MCP_PROTOCOL_VERSION, version_to_send.parse().unwrap());
@@ -1825,9 +1822,9 @@ async fn handle_post_fast_path(
             )
             .await
         },
-        HttpIngress::Public(TransportMessage::Notification { .. } | TransportMessage::Response(_)) => {
-            StatusCode::ACCEPTED.into_response()
-        },
+        HttpIngress::Public(
+            TransportMessage::Notification { .. } | TransportMessage::Response(_),
+        ) => StatusCode::ACCEPTED.into_response(),
     }
 }
 
@@ -1957,7 +1954,8 @@ async fn assemble_discover_response_with_middleware(
     store_response_event(state, response_session_id, &response_msg).await;
 
     // Discover is never an init request → compute the outbound version normally.
-    let version_to_send = compute_outbound_protocol_version(state, response_session_id, false, None);
+    let version_to_send =
+        compute_outbound_protocol_version(state, response_session_id, false, None);
 
     let mut response = build_success_response_with_middleware(
         &response_msg,
@@ -2205,7 +2203,10 @@ async fn handle_post_with_middleware(
             Err(response) => return response,
         };
 
-    dispatch_message_with_middleware(
+    // `Box::pin` the dispatch future: the discover per-path assembly (Plan 112-10)
+    // grows it past clippy's large_future threshold; boxing keeps the handler
+    // future small without changing behavior (mirrors the fast-path handler).
+    Box::pin(dispatch_message_with_middleware(
         &state,
         ingress,
         MiddlewareDispatch {
@@ -2217,7 +2218,7 @@ async fn handle_post_with_middleware(
         auth_context,
         http_middleware,
         &http_context,
-    )
+    ))
     .await
 }
 
@@ -2808,7 +2809,7 @@ mod tests {
     }
 
     /// An opted-in server with a well-formed v2 `_meta` + all three v2 headers
-    /// accepts the discover request via the SAME matrix (EnforceOk).
+    /// accepts the discover request via the SAME matrix (`EnforceOk`).
     #[tokio::test]
     async fn run_v2_header_gate_raw_v2_opted_in_enforces() {
         let state = state_with_accept(vec![

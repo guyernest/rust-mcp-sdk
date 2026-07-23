@@ -123,7 +123,9 @@ fn extensions_capabilities() -> ServerCapabilities {
 /// handlers, which layer their own sub-capabilities on top) so the
 /// `server/discover` projection has a non-empty `extensions` map (Plan 112-10).
 fn build_server(opt_in_v2: bool) -> Server {
-    let mut builder = Server::builder().name("v2-required-headers").version("1.0.0");
+    let mut builder = Server::builder()
+        .name("v2-required-headers")
+        .version("1.0.0");
     if opt_in_v2 {
         builder = builder
             .capabilities(extensions_capabilities())
@@ -171,7 +173,7 @@ impl AuthProvider for RejectingAuth {
         authorization_header: Option<&str>,
     ) -> pmcp::Result<Option<AuthContext>> {
         match authorization_header {
-            Some(h) if h == "Bearer good-token" => Ok(None),
+            Some("Bearer good-token") => Ok(None),
             _ => Err(pmcp::Error::authentication("missing or invalid token")),
         }
     }
@@ -817,7 +819,11 @@ async fn server_discover_v2_returns_capability_projection_with_extensions() {
     let r = post(addr, &discover_v2_headers(), &discover_body(Some(V2))).await;
     shutdown(handle).await;
 
-    assert_eq!(r.status, 200, "v2 server/discover must be accepted: {}", r.body);
+    assert_eq!(
+        r.status, 200,
+        "v2 server/discover must be accepted: {}",
+        r.body
+    );
     let result = r.body.get("result").expect("expected a result");
     // The extensions map is projected (finding: reachable in production).
     assert_eq!(
@@ -839,7 +845,10 @@ async fn server_discover_v2_returns_capability_projection_with_extensions() {
         r.body
     );
     // Negotiated version + preserved request id.
-    assert_eq!(result.get("protocolVersion").and_then(|v| v.as_str()), Some(V2));
+    assert_eq!(
+        result.get("protocolVersion").and_then(|v| v.as_str()),
+        Some(V2)
+    );
     assert_eq!(r.body["id"], 1, "the original request id must be preserved");
     // Outbound v2 headers echoed on the accepted discover.
     assert_eq!(r.mcp_version.as_deref(), Some(V2));
@@ -852,7 +861,10 @@ async fn server_discover_rejects_v2_meta_without_header() {
     let (addr, handle) = spawn(true).await;
     let r = post(
         addr,
-        &[("mcp-method", "server/discover"), ("mcp-name", "server/discover")],
+        &[
+            ("mcp-method", "server/discover"),
+            ("mcp-name", "server/discover"),
+        ],
         &discover_body(Some(V2)),
     )
     .await;
@@ -899,7 +911,10 @@ async fn server_discover_rejects_missing_mcp_name() {
     let (addr, handle) = spawn(true).await;
     let r = post(
         addr,
-        &[("mcp-protocol-version", V2), ("mcp-method", "server/discover")],
+        &[
+            ("mcp-protocol-version", V2),
+            ("mcp-method", "server/discover"),
+        ],
         &discover_body(Some(V2)),
     )
     .await;
@@ -960,8 +975,16 @@ async fn server_discover_with_valid_token_is_served() {
     let r = post(addr, &headers, &discover_body(Some(V2))).await;
     shutdown(handle).await;
 
-    assert_eq!(r.status, 200, "authenticated v2 discover must be served: {}", r.body);
-    assert!(r.body.get("result").is_some(), "expected a result: {}", r.body);
+    assert_eq!(
+        r.status, 200,
+        "authenticated v2 discover must be served: {}",
+        r.body
+    );
+    assert!(
+        r.body.get("result").is_some(),
+        "expected a result: {}",
+        r.body
+    );
 }
 
 // With HTTP middleware installed, the discover response passes through response
@@ -973,8 +996,16 @@ async fn server_discover_runs_response_middleware() {
     let r = post(addr, &discover_v2_headers(), &discover_body(Some(V2))).await;
     shutdown(handle).await;
 
-    assert_eq!(r.status, 200, "v2 discover on the middleware path must be served: {}", r.body);
-    assert!(r.body.get("result").is_some(), "expected a result: {}", r.body);
+    assert_eq!(
+        r.status, 200,
+        "v2 discover on the middleware path must be served: {}",
+        r.body
+    );
+    assert!(
+        r.body.get("result").is_some(),
+        "expected a result: {}",
+        r.body
+    );
     assert!(
         saw.load(Ordering::SeqCst),
         "discover response must pass through response middleware (no bypass)"
