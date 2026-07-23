@@ -1781,10 +1781,9 @@ pub(crate) fn negotiation_error_to_rejection(
     use crate::types::protocol::context::ProtocolNegotiationError;
     use crate::types::protocol::error_codes::INVALID_PARAMS;
     match error {
-        ProtocolNegotiationError::UnsupportedVersion(v) => (
-            INVALID_PARAMS,
-            format!("Unsupported protocol version: {v:?}"),
-        ),
+        ProtocolNegotiationError::UnsupportedVersion(v) => {
+            (INVALID_PARAMS, format!("Unsupported protocol version: {v}"))
+        },
         ProtocolNegotiationError::MalformedMeta(reason) => {
             (INVALID_PARAMS, format!("Malformed _meta: {reason}"))
         },
