@@ -604,11 +604,13 @@ impl ServerDiscoverRequest {
 /// This enum is `pub(crate)`, so it is invisible to `cargo-semver-checks` /
 /// `cargo-public-api` and can grow variants freely without any public API or
 /// downstream exhaustive-match impact.
-// Consumed in production by the crate-private `parse_request_or_internal`
-// routing seam (Plan 05, `src/shared/protocol_helpers.rs`), which classifies
+// Consumed in production via `classify_internal_method` →
+// `IngressRequest::Internal` (the crate-private `parse_request_or_internal`
+// routing seam in `src/shared/protocol_helpers.rs`), which classifies
 // `server/discover` into this internal representation BEFORE the public-enum
-// conversion. The server dispatch (`dispatch_internal_client_request`) then
-// era-gates it to the v2 `handle_discover` projection.
+// conversion. On the HTTP transport the streamable-HTTP `HttpIngress::Discover`
+// classifier then routes it to `Server::handle_discover`, which era-gates it via
+// the shared `build_discover_response` projection.
 #[derive(Debug, Clone)]
 pub(crate) enum InternalClientRequest {
     /// The v2 `server/discover` request (VERS-04).

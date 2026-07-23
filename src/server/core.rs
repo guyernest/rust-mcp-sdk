@@ -520,81 +520,6 @@ impl ServerCore {
         })
     }
 
-    /// Dispatch a crate-private [`InternalClientRequest`](crate::types::protocol::InternalClientRequest)
-    /// (Phase 112, VERS-04).
-    ///
-    /// This is the era-gated routing seam for methods that have NO public enum
-    /// variant. The live transport wiring — making the request path carry an
-    /// [`IngressRequest::Internal`](crate::shared::protocol_helpers) here — lands
-    /// in the dispatch/streamable-HTTP plans (112-07 / 112-08); this phase
-    /// establishes the handler + routing so those plans have one call target.
-    // Why: production transport caller lands in Plan 07/08 (see doc above); this
-    // phase unit-tests it directly through the crate-private entry. The allow is
-    // scoped and removed when the transport dispatch consumes it.
-    #[allow(dead_code)]
-    pub(crate) fn dispatch_internal_client_request(
-        &self,
-        id: RequestId,
-        request: &crate::types::protocol::InternalClientRequest,
-        protocol_context: Option<&crate::types::protocol::ProtocolContext>,
-    ) -> JSONRPCResponse {
-        match request {
-            crate::types::protocol::InternalClientRequest::ServerDiscover(_) => {
-                self.handle_discover(id, protocol_context)
-            },
-        }
-    }
-
-    /// Handle the v2 `server/discover` request (Phase 112, VERS-04, D-09/D-10).
-    ///
-    /// A READ-ONLY projection of the server's already-computed
-    /// [`capabilities`](Self::capabilities) (including the `extensions` map)
-    /// via the isolated [`discover_result_from_capabilities`] conversion fn —
-    /// it never recomputes capabilities and never triggers an initialize-style
-    /// side effect (no `is_initialized` mutation). It is era-gated: only an
-    /// `Era::V2` request is served; a v1 / non-opted-in request receives
-    /// standard `-32601` method-not-found (D-10), the same reject the public
-    /// `parse_request` produces for `server/discover`.
-    // Why: production transport caller lands in Plan 07/08 (see
-    // `dispatch_internal_client_request`); unit-tested directly this phase.
-    #[allow(dead_code)]
-    pub(crate) fn handle_discover(
-        &self,
-        id: RequestId,
-        protocol_context: Option<&crate::types::protocol::ProtocolContext>,
-    ) -> JSONRPCResponse {
-        // Era gate (D-10): v2 only. A v1 / non-opted-in request is method-not-found.
-        if !matches!(
-            protocol_context.map(|c| c.era),
-            Some(crate::types::protocol::Era::V2)
-        ) {
-            return Self::error_response(
-                id,
-                crate::types::protocol::error_codes::METHOD_NOT_FOUND,
-                "Method not found: server/discover".to_string(),
-            );
-        }
-
-        let negotiated_version = protocol_context.map_or_else(
-            || crate::types::protocol::PROTOCOL_VERSION_2026_07_28.to_string(),
-            |ctx| ctx.negotiated_version.as_str().to_string(),
-        );
-
-        // Read-only projection of the ALREADY-COMPUTED capabilities — no recompute.
-        let result =
-            discover_result_from_capabilities(&self.capabilities, &self.info, negotiated_version);
-        let mut response = Self::success_response(id, serde_json::to_value(result).unwrap());
-        // Parity: the v2 object result carries resultType + serverInfo via the
-        // SAME shared envelope helper every other v2 result uses.
-        inject_v2_result_envelope(
-            &mut response,
-            protocol_context,
-            &self.info,
-            ResponseDisposition::Complete,
-        );
-        response
-    }
-
     /// Handle list tools request.
     async fn handle_list_tools(&self, _req: &ListToolsRequest) -> Result<ListToolsResult> {
         contract_pre_tool_dispatch_integrity!();
@@ -1255,6 +1180,59 @@ pub(crate) fn inject_v2_result_envelope(
     // Attach serverInfo on the v2 object result; never overwrite a handler value.
     obj.entry("serverInfo".to_string())
         .or_insert_with(|| serde_json::to_value(server_info).unwrap_or(Value::Null));
+}
+
+/// Build the v2 `server/discover` response (Phase 112, VERS-04, D-09/D-10).
+///
+/// The SINGLE shared projection consumed by BOTH the production HTTP caller
+/// (`Server::handle_discover` → the streamable-HTTP `HttpIngress::Discover`
+/// classifier) and the discover unit tests — there is exactly one projection and
+/// one envelope path, no duplicate capability type and no `#[allow(dead_code)]`
+/// wrapper.
+///
+/// A READ-ONLY projection of the server's already-computed `capabilities`
+/// (including the `extensions` map) via the isolated
+/// [`discover_result_from_capabilities`] conversion fn — it never recomputes
+/// capabilities and never triggers an initialize-style side effect (no
+/// `is_initialized` mutation). It is era-gated: only an `Era::V2` request is
+/// served; a v1 / non-opted-in request receives standard `-32601`
+/// method-not-found (D-10), the same reject the public `parse_request` produces
+/// for `server/discover`.
+pub(crate) fn build_discover_response(
+    id: RequestId,
+    capabilities: &ServerCapabilities,
+    info: &Implementation,
+    protocol_context: Option<&crate::types::protocol::ProtocolContext>,
+) -> JSONRPCResponse {
+    // Era gate (D-10): v2 only. A v1 / non-opted-in request is method-not-found.
+    if !matches!(
+        protocol_context.map(|c| c.era),
+        Some(crate::types::protocol::Era::V2)
+    ) {
+        return ServerCore::error_response(
+            id,
+            crate::types::protocol::error_codes::METHOD_NOT_FOUND,
+            "Method not found: server/discover".to_string(),
+        );
+    }
+
+    let negotiated_version = protocol_context.map_or_else(
+        || crate::types::protocol::PROTOCOL_VERSION_2026_07_28.to_string(),
+        |ctx| ctx.negotiated_version.as_str().to_string(),
+    );
+
+    // Read-only projection of the ALREADY-COMPUTED capabilities — no recompute.
+    let result = discover_result_from_capabilities(capabilities, info, negotiated_version);
+    let mut response = ServerCore::success_response(id, serde_json::to_value(result).unwrap());
+    // Parity: the v2 object result carries resultType + serverInfo via the SAME
+    // shared envelope helper every other v2 result uses.
+    inject_v2_result_envelope(
+        &mut response,
+        protocol_context,
+        info,
+        ResponseDisposition::Complete,
+    );
+    response
 }
 
 #[async_trait]
@@ -2152,14 +2130,24 @@ mod tests {
     #[test]
     fn server_discover_v2_projects_capabilities_with_extensions() {
         let server = discover_server();
+        // The wire method still classifies as the internal (non-public-enum) request.
         let internal = crate::types::protocol::classify_internal_method(
             "server/discover",
             &serde_json::json!({}),
         )
         .expect("server/discover classifies as internal");
+        assert!(matches!(
+            internal,
+            crate::types::protocol::InternalClientRequest::ServerDiscover(_)
+        ));
         let ctx = v2_ctx();
-        let response =
-            server.dispatch_internal_client_request(RequestId::from(1i64), &internal, Some(&ctx));
+        // Projection is produced by the ONE shared free fn the production caller uses.
+        let response = build_discover_response(
+            RequestId::from(1i64),
+            &server.capabilities,
+            &server.info,
+            Some(&ctx),
+        );
 
         let ResponsePayload::Result(value) = response.payload else {
             panic!("v2 server/discover must return a result");
@@ -2180,16 +2168,15 @@ mod tests {
     #[test]
     fn server_discover_v1_returns_method_not_found() {
         let server = discover_server();
-        let internal = crate::types::protocol::classify_internal_method(
-            "server/discover",
-            &serde_json::json!({}),
-        )
-        .unwrap();
 
         // v1 era context
         let ctx = v1_ctx();
-        let resp =
-            server.dispatch_internal_client_request(RequestId::from(2i64), &internal, Some(&ctx));
+        let resp = build_discover_response(
+            RequestId::from(2i64),
+            &server.capabilities,
+            &server.info,
+            Some(&ctx),
+        );
         let ResponsePayload::Error(e) = resp.payload else {
             panic!("v1 server/discover must be an error");
         };
@@ -2201,7 +2188,7 @@ mod tests {
 
         // no resolved context at all → also -32601
         let resp_none =
-            server.dispatch_internal_client_request(RequestId::from(3i64), &internal, None);
+            build_discover_response(RequestId::from(3i64), &server.capabilities, &server.info, None);
         let ResponsePayload::Error(e2) = resp_none.payload else {
             panic!("context-less server/discover must be an error");
         };
@@ -2238,7 +2225,12 @@ mod tests {
 
         assert!(!server.is_initialized().await);
         let ctx = v2_ctx();
-        let _ = server.handle_discover(RequestId::from(1i64), Some(&ctx));
+        let _ = build_discover_response(
+            RequestId::from(1i64),
+            &server.capabilities,
+            &server.info,
+            Some(&ctx),
+        );
         assert!(
             !server.is_initialized().await,
             "server/discover must not flip initialization state"

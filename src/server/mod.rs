@@ -1270,6 +1270,29 @@ impl Server {
         )
     }
 
+    /// Handle the v2 `server/discover` request (Phase 112, VERS-04, D-09/D-10).
+    ///
+    /// The production discover caller: the streamable-HTTP transport classifies a
+    /// `server/discover` POST as `HttpIngress::Discover` and, at the per-path
+    /// response-assembly step, calls this THIN delegate. It projects the server's
+    /// already-computed capabilities (incl. the `extensions` map) read-only via
+    /// the ONE shared [`build_discover_response`](crate::server::core::build_discover_response)
+    /// free fn — one projection/one envelope path, no duplicate capability type,
+    /// no `is_initialized` mutation. The era gate inside the free fn yields the v2
+    /// projection for an `Era::V2` context and `-32601` for v1 / non-opted-in.
+    pub(crate) fn handle_discover(
+        &self,
+        id: RequestId,
+        protocol_context: Option<&crate::types::protocol::ProtocolContext>,
+    ) -> JSONRPCResponse {
+        crate::server::core::build_discover_response(
+            id,
+            &self.capabilities,
+            &self.info,
+            protocol_context,
+        )
+    }
+
     async fn handle_request(
         &self,
         id: RequestId,
