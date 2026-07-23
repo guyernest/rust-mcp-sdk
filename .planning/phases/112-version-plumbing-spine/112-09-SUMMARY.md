@@ -102,6 +102,10 @@ None - no external service configuration required.
 - All changes are crate-private/private (no public API surface changed) — the additive-only, semver-MINOR discipline holds.
 - `make quality-gate` green (fmt, clippy pedantic+nursery, build, tests, examples).
 
+## Self-Check: PASSED
+
+All modified files present; all task commits (89d7ef88, 73ba4976, eb3c0361) and the plan-metadata commit (65fa4623) exist in git history.
+
 ---
 *Phase: 112-version-plumbing-spine*
 *Completed: 2026-07-23*

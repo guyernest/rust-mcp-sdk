@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v2.5
 milestone_name: MCP Spec 2026-07-28
 status: executing
-stopped_at: Completed 112-06-PLAN.md
-last_updated: "2026-07-23T01:36:59.825Z"
-last_activity: 2026-07-23 -- Phase 112 planning complete
+stopped_at: Completed 112-09-PLAN.md
+last_updated: "2026-07-23T02:03:52.719Z"
+last_activity: 2026-07-23
 progress:
   total_phases: 71
   completed_phases: 0
   total_plans: 10
-  completed_plans: 8
+  completed_plans: 9
   percent: 0
 ---
 
@@ -26,9 +26,9 @@ See: .planning/PROJECT.md (updated 2026-07-22) · .planning/ROADMAP.md (v2.5 mil
 ## Current Position
 
 Phase: 112 (version-plumbing-spine) — EXECUTING
-Plan: 8 of 8
+Plan: 2 of 10
 Status: Ready to execute
-Last activity: 2026-07-23 -- Phase 112 planning complete
+Last activity: 2026-07-23
 
 ## v2.5 Phase Plan (8 phases, 38 requirements)
 
@@ -103,6 +103,8 @@ Decisions are logged in PROJECT.md Key Decisions table. Decisions framing this m
 - [Phase ?]: [Phase 112]: 112-08: streamable-HTTP transport's 25 production error-code literals migrated to error_codes:: (name-for-value swap, wire bytes identical); file now carries zero bare -32xxx; value oracle lives in Plan 03 error_codes.rs consistency tests
 - [Phase ?]: [Phase 112]: 112-08: repo-wide VERS-06 audit closed — no production protocol-error EMISSION literal outside the centralized table across compiled src/; remaining are the table, #[cfg(test)] oracle, Plan-03-owned ProtocolErrorCode enum discriminants, and non-compiled orphan src/wasi.rs
 - [Phase ?]: [Phase 112]: 112-08: authoritative phase-end gate GREEN — cargo semver-checks vs 2.17.0 no breaking change (no major, no enum_variant_added; 223 pass); make quality-gate passed (pmat comply advisories informational per D-07)
+- [Phase ?]: [Phase 112]: 112-09: per-request _meta/ProtocolContext spine generalized from tools/call-only to GetPrompt + ReadResource at both native dispatch sites (core.rs + mod.rs); era()/client_info()/trace_context() now live inside prompt & resource handlers (Gap B closed)
+- [Phase ?]: [Phase 112]: 112-09: HTTP header gate resolves resources/read logical name method-awarely from params.uri (review finding #2 / Gap C closed); a standards-shaped v2 resources/read accepted not rejected 400; no synthetic params.name fallback
 
 ### Pending Todos
 
@@ -138,8 +140,8 @@ Items deferred by design for this milestone (design §7 / REQUIREMENTS v2):
 
 ## Session Continuity
 
-Last session: 2026-07-22T23:21:57.441Z
-Stopped at: Completed 112-06-PLAN.md
+Last session: 2026-07-23T02:03:52.715Z
+Stopped at: Completed 112-09-PLAN.md
 Resume file: None
 
 ## Performance Metrics
@@ -170,3 +172,4 @@ Resume file: None
 | Phase 112 P06 | 22min | 2 tasks | 4 files |
 | Phase 112 P07 | 12min | 2 tasks | 6 files |
 | Phase 112 P08 | 11min | 1 tasks | 1 files |
+| Phase 112 P9 | 40 | 3 tasks | 4 files |
