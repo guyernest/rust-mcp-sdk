@@ -621,6 +621,112 @@ async fn run_v2_header_gate(
     (context, outcome)
 }
 
+/// Crate-LOCAL ingress classification for the POST pipeline (Phase 112, VERS-04).
+///
+/// This is NOT the public [`TransportMessage`] enum — it never adds a variant to
+/// that semver-sensitive type. It only distinguishes an internally-routed
+/// `server/discover` request (which has no public enum variant) from every other
+/// message, so both flow through the SAME POST stages (session → v2 header matrix
+/// → legacy-version → auth → dispatch → event store → response assembly) and
+/// `server/discover` is routed only at the final per-path response-assembly step
+/// (the classify-then-continue design — no pipeline bypass).
+enum HttpIngress {
+    /// Any normal message (typed request, notification, or response) — the
+    /// existing public-enum dispatch path, unchanged.
+    Public(TransportMessage),
+    /// A v2-only `server/discover` request carrying the ORIGINAL request id and
+    /// the RAW `_meta` value (for the raw-_meta v2 header gate + era resolution).
+    Discover {
+        id: crate::types::RequestId,
+        raw_meta: Option<serde_json::Value>,
+    },
+}
+
+/// Classify a raw POST body as an internally-routed `server/discover` request,
+/// if it is one (Phase 112, VERS-04). Never panics (T-112-13).
+///
+/// Returns `Some(HttpIngress::Discover{..})` ONLY when the raw body is a
+/// well-formed single JSON-RPC request whose method classifies — via the shared
+/// [`parse_request_or_internal`](crate::shared::protocol_helpers::parse_request_or_internal)
+/// seam — as [`InternalClientRequest::ServerDiscover`](crate::types::protocol::InternalClientRequest).
+/// Every other input (malformed JSON, a batch/notification with no `id`, a
+/// non-object, or any other method) returns `None`, so the caller falls through
+/// to the existing public parse path with byte-identical behavior.
+fn classify_http_ingress(body: &[u8]) -> Option<HttpIngress> {
+    let req: crate::types::JSONRPCRequest<serde_json::Value> = serde_json::from_slice(body).ok()?;
+    // Capture the raw `_meta` BEFORE the routing seam consumes `params`.
+    let raw_meta = req
+        .params
+        .as_ref()
+        .and_then(|p| p.get("_meta"))
+        .cloned();
+    let (id, ingress) = crate::shared::protocol_helpers::parse_request_or_internal(req).ok()?;
+    match ingress {
+        // The inner match is exhaustive over `InternalClientRequest`, so adding a
+        // future internally-routed method is a compile-time tripwire here.
+        crate::shared::protocol_helpers::IngressRequest::Internal(internal) => match internal {
+            crate::types::protocol::InternalClientRequest::ServerDiscover(_) => {
+                Some(HttpIngress::Discover { id, raw_meta })
+            },
+        },
+        // A public request re-parsed here is DISCARDED; the caller re-parses it via
+        // the existing `StdioTransport::parse_message` path so all non-discover
+        // bytes (incl. parse-error responses) stay exactly as before.
+        crate::shared::protocol_helpers::IngressRequest::Public(_) => None,
+    }
+}
+
+/// Run the v2 header gate for a `server/discover` ingress from its RAW `_meta`
+/// (Phase 112, VERS-04, findings #1/#3).
+///
+/// The raw-_meta counterpart of [`run_v2_header_gate`]: a discover ingress has NO
+/// parsed [`Request`], so the era is resolved from `params._meta` via
+/// [`Server::resolve_discover_protocol_context`](crate::server::Server::resolve_discover_protocol_context).
+/// It runs the SAME [`classify_v2_request`] matrix every other method runs, with
+/// `body_method` fixed to `"server/discover"`. A non-opted-in server
+/// short-circuits to [`V2GateOutcome::Passthrough`] FIRST, WITHOUT inspecting the
+/// v2 `_meta` (D-04 ordering).
+async fn run_v2_header_gate_raw(
+    state: &ServerState,
+    raw_meta: Option<&serde_json::Value>,
+    headers: &HeaderMap,
+    raw_body: &[u8],
+) -> (
+    Option<crate::types::protocol::ProtocolContext>,
+    V2GateOutcome,
+) {
+    let resolved = {
+        let server = state.server.lock().await;
+        // Non-opted-in → `Ok(None)` WITHOUT touching the v2 `_meta` (D-04).
+        server.resolve_discover_protocol_context(raw_meta)
+    };
+    let context = match resolved {
+        Ok(ctx) => ctx,
+        Err(err) => {
+            // Unsupported/malformed per-request version — reject via the SAME
+            // mapping `run_v2_header_gate` uses (structured, VERS-06).
+            let (code, message) = crate::server::core::negotiation_error_to_rejection(&err);
+            return (None, V2GateOutcome::Reject(code, message));
+        },
+    };
+    // `Ok(None)` == not opted in → zero enforcement, before any header inspection.
+    let Some(ref pc) = context else {
+        return (context.clone(), V2GateOutcome::Passthrough);
+    };
+    let meta_is_v2 = pc.era == crate::types::protocol::Era::V2;
+    // `server/discover` is NOT a name-bearing method, so `Mcp-Name` is
+    // presence-only (`require_three_headers` still requires it present); the body
+    // method is fixed so the header/body cross-check pins `Mcp-Method`.
+    let (_body_method, body_name) = extract_body_method_and_name(raw_body);
+    let outcome = classify_v2_request(
+        headers,
+        meta_is_v2,
+        Some("server/discover"),
+        body_name.as_deref(),
+    );
+    (context, outcome)
+}
+
 impl StreamableHttpServer {
     /// Creates a new `StreamableHttpServer` with default config
     pub fn new(addr: SocketAddr, server: Arc<tokio::sync::Mutex<Server>>) -> Self {
@@ -1291,9 +1397,14 @@ async fn parse_transport_message_with_middleware(
     body: &[u8],
     http_middleware: &ServerHttpMiddlewareChain,
     context: &ServerHttpContext,
-) -> std::result::Result<TransportMessage, Response> {
+) -> std::result::Result<HttpIngress, Response> {
+    // Classify an internally-routed `server/discover` request first; every other
+    // body keeps the existing middleware-aware parse + 400 assembly path.
+    if let Some(ingress) = classify_http_ingress(body) {
+        return Ok(ingress);
+    }
     match crate::shared::StdioTransport::parse_message(body) {
-        Ok(msg) => Ok(msg),
+        Ok(msg) => Ok(HttpIngress::Public(msg)),
         Err(e) => {
             let mut error_response = ServerHttpResponse::new(
                 StatusCode::BAD_REQUEST,
@@ -1426,14 +1537,24 @@ async fn read_body_with_limit(
 
 /// Parse a JSON-RPC message on the fast path, returning a 400 error response
 /// on failure.
-fn parse_transport_message_fast(body: &[u8]) -> std::result::Result<TransportMessage, Response> {
-    crate::shared::StdioTransport::parse_message(body).map_err(|e| {
-        create_error_response(
-            StatusCode::BAD_REQUEST,
-            crate::types::protocol::error_codes::PARSE_ERROR,
-            &format!("Invalid JSON: {}", e),
-        )
-    })
+///
+/// Classifies an internally-routed `server/discover` request as
+/// [`HttpIngress::Discover`] (which then CONTINUES the pipeline); every other
+/// body flows through the existing [`StdioTransport::parse_message`] path as
+/// [`HttpIngress::Public`], so all non-discover parse bytes are byte-identical.
+fn parse_transport_message_fast(body: &[u8]) -> std::result::Result<HttpIngress, Response> {
+    if let Some(ingress) = classify_http_ingress(body) {
+        return Ok(ingress);
+    }
+    crate::shared::StdioTransport::parse_message(body)
+        .map(HttpIngress::Public)
+        .map_err(|e| {
+            create_error_response(
+                StatusCode::BAD_REQUEST,
+                crate::types::protocol::error_codes::PARSE_ERROR,
+                &format!("Invalid JSON: {}", e),
+            )
+        })
 }
 
 /// Handle the successful-request arm on the fast path: dispatch to the
@@ -1524,6 +1645,61 @@ async fn handle_fast_path_request(
     response
 }
 
+/// Assemble the `server/discover` response on the fast path (Phase 112, VERS-04).
+///
+/// Runs the SAME response tail as any fast-path request — projects via
+/// [`Server::handle_discover`](crate::server::Server::handle_discover) (the ONE
+/// shared `build_discover_response` era gate), stores the response event, builds
+/// the response, and attaches session/version/outbound-v2 headers — preserving
+/// the ORIGINAL request id. This is reached only AFTER session resolution, the v2
+/// header matrix, legacy-version validation, and auth (classify-then-continue —
+/// no pipeline bypass).
+///
+/// D-10 decision (finding #4): a v2 connection projects the server's
+/// already-computed capabilities (incl. the `extensions` map); a v1 /
+/// non-opted-in connection returns JSON-RPC `-32601` at HTTP 200 with the
+/// original id. This `-32601@200` is a DELIBERATE, benign change from the
+/// pre-112 incidental `PARSE_ERROR` 400 (`id: null`) — justified because
+/// `server/discover` is a v2-only method NO conforming v1 client sends, so no
+/// v1-relied-upon response byte changes (milestone byte-identity reconciled).
+async fn assemble_discover_response_fast(
+    state: &ServerState,
+    id: crate::types::RequestId,
+    protocol_context: Option<&crate::types::protocol::ProtocolContext>,
+    response_session_id: Option<&String>,
+    session_id: Option<&String>,
+    v2_outbound: Option<(String, String)>,
+) -> Response {
+    let json_response = {
+        let server = state.server.lock().await;
+        server.handle_discover(id, protocol_context)
+    };
+    let response_msg = TransportMessage::Response(json_response);
+
+    store_response_event(state, response_session_id, &response_msg).await;
+
+    let mut response = build_response(state, response_msg, session_id);
+
+    if let Some(sid) = response_session_id {
+        response
+            .headers_mut()
+            .insert(MCP_SESSION_ID, sid.parse().unwrap());
+    }
+
+    // Discover is never an init request → compute the outbound version normally.
+    let version_to_send = compute_outbound_protocol_version(state, response_session_id, false, None);
+    response
+        .headers_mut()
+        .insert(MCP_PROTOCOL_VERSION, version_to_send.parse().unwrap());
+
+    // Echo the v2 outbound headers on an accepted v2 discover (VERS-05).
+    if let Some((method, name)) = &v2_outbound {
+        apply_v2_outbound_headers(response.headers_mut(), method, name);
+    }
+
+    response
+}
+
 /// Fast path handler without HTTP middleware.
 ///
 /// Refactored in 75-01 Task 1a-A: extracted [`read_body_with_limit`],
@@ -1548,13 +1724,17 @@ async fn handle_post_fast_path(
         return error_response;
     }
 
-    let message = match parse_transport_message_fast(body.as_bytes()) {
-        Ok(msg) => msg,
+    let ingress = match parse_transport_message_fast(body.as_bytes()) {
+        Ok(i) => i,
         Err(response) => return response,
     };
 
     let (session_id, protocol_version) = extract_session_and_protocol_headers(&headers);
-    let is_init_request = is_initialize_request(&message);
+    // `server/discover` is a non-init request (stateless capability projection).
+    let is_init_request = match &ingress {
+        HttpIngress::Public(msg) => is_initialize_request(msg),
+        HttpIngress::Discover { .. } => false,
+    };
 
     let response_session_id = match resolve_session_for_request(
         &state,
@@ -1571,9 +1751,10 @@ async fn handle_post_fast_path(
     // derive the outbound-header echo. Runs BEFORE the legacy protocol-version
     // check because an accepted v2 request carries MCP-Protocol-Version:
     // 2026-07-28, which the static-SUPPORTED check would otherwise reject. v1 /
-    // non-opted-in → Passthrough (zero enforcement, D-04).
-    let (protocol_context, v2_outbound) = match &message {
-        TransportMessage::Request { request, .. } => {
+    // non-opted-in → Passthrough (zero enforcement, D-04). A `server/discover`
+    // ingress runs the SAME matrix via the raw-_meta counterpart (finding #1).
+    let (protocol_context, v2_outbound) = match &ingress {
+        HttpIngress::Public(TransportMessage::Request { request, .. }) => {
             let (ctx, gate) = run_v2_header_gate(&state, request, &headers, body.as_bytes()).await;
             match gate {
                 V2GateOutcome::Reject(code, msg) => {
@@ -1583,12 +1764,24 @@ async fn handle_post_fast_path(
                 V2GateOutcome::EnforceOk { method, name } => (ctx, Some((method, name))),
             }
         },
-        _ => (None, None),
+        HttpIngress::Discover { raw_meta, .. } => {
+            let (ctx, gate) =
+                run_v2_header_gate_raw(&state, raw_meta.as_ref(), &headers, body.as_bytes()).await;
+            match gate {
+                V2GateOutcome::Reject(code, msg) => {
+                    return create_error_response(StatusCode::BAD_REQUEST, code, &msg);
+                },
+                V2GateOutcome::Passthrough => (ctx, None),
+                V2GateOutcome::EnforceOk { method, name } => (ctx, Some((method, name))),
+            }
+        },
+        HttpIngress::Public(_) => (None, None),
     };
     let is_v2_request = v2_outbound.is_some();
 
     // Legacy protocol-version validation applies to v1 non-init requests ONLY —
     // an accepted v2 request is validated by the gate above (D-11 untouched v1).
+    // A v1 / non-opted-in `server/discover` also flows through here (no bypass).
     if !is_init_request && !is_v2_request {
         if let Err(error_response) =
             validate_protocol_version(&state, session_id.as_ref(), protocol_version.as_ref())
@@ -1602,8 +1795,8 @@ async fn handle_post_fast_path(
         Err(response) => return response,
     };
 
-    match message {
-        TransportMessage::Request { id, request } => {
+    match ingress {
+        HttpIngress::Public(TransportMessage::Request { id, request }) => {
             handle_fast_path_request(
                 &state,
                 id,
@@ -1619,7 +1812,20 @@ async fn handle_post_fast_path(
             )
             .await
         },
-        TransportMessage::Notification { .. } | TransportMessage::Response(_) => {
+        // Per-path response assembly (finding #3/#4): reached AFTER session, the v2
+        // matrix, legacy-version validation, and auth — never an early return.
+        HttpIngress::Discover { id, .. } => {
+            assemble_discover_response_fast(
+                &state,
+                id,
+                protocol_context.as_ref(),
+                response_session_id.as_ref(),
+                session_id.as_ref(),
+                v2_outbound,
+            )
+            .await
+        },
+        HttpIngress::Public(TransportMessage::Notification { .. } | TransportMessage::Response(_)) => {
             StatusCode::ACCEPTED.into_response()
         },
     }
@@ -1723,13 +1929,59 @@ struct MiddlewareDispatch {
     v2_outbound: Option<(String, String)>,
 }
 
-/// Dispatch the parsed `TransportMessage` on the middleware path.
+/// Assemble the `server/discover` response on the middleware path (VERS-04).
 ///
-/// Handles `Request` (server-handled + response assembly), `Notification`
+/// The middleware-path twin of [`assemble_discover_response_fast`]: projects via
+/// [`Server::handle_discover`](crate::server::Server::handle_discover), stores the
+/// response event, runs the SAME response-middleware assembly every other
+/// response runs ([`build_success_response_with_middleware`]), and echoes the v2
+/// outbound headers on an accepted v2 discover — preserving the original id.
+/// Reached only AFTER session, the v2 matrix, legacy-version validation, and auth
+/// (no bypass). See [`assemble_discover_response_fast`] for the D-10 `-32601@200`
+/// decision on v1 / non-opted-in discover.
+async fn assemble_discover_response_with_middleware(
+    state: &ServerState,
+    id: crate::types::RequestId,
+    protocol_context: Option<&crate::types::protocol::ProtocolContext>,
+    response_session_id: Option<&String>,
+    v2_outbound: Option<(String, String)>,
+    http_middleware: &ServerHttpMiddlewareChain,
+    http_context: &ServerHttpContext,
+) -> Response {
+    let json_response = {
+        let server = state.server.lock().await;
+        server.handle_discover(id, protocol_context)
+    };
+    let response_msg = TransportMessage::Response(json_response);
+
+    store_response_event(state, response_session_id, &response_msg).await;
+
+    // Discover is never an init request → compute the outbound version normally.
+    let version_to_send = compute_outbound_protocol_version(state, response_session_id, false, None);
+
+    let mut response = build_success_response_with_middleware(
+        &response_msg,
+        response_session_id,
+        &version_to_send,
+        http_middleware,
+        http_context,
+    )
+    .await;
+
+    if let Some((method, name)) = &v2_outbound {
+        apply_v2_outbound_headers(response.headers_mut(), method, name);
+    }
+    response
+}
+
+/// Dispatch the classified ingress on the middleware path.
+///
+/// Handles a public `Request` (server-handled + response assembly), a
+/// `server/discover` ingress (the VERS-04 per-path assembly), `Notification`
 /// (202 Accepted), and `Response` (202 Accepted) in separate arms.
 async fn dispatch_message_with_middleware(
     state: &ServerState,
-    message: TransportMessage,
+    ingress: HttpIngress,
     dispatch: MiddlewareDispatch,
     auth_context: Option<crate::server::auth::AuthContext>,
     http_middleware: &ServerHttpMiddlewareChain,
@@ -1741,8 +1993,20 @@ async fn dispatch_message_with_middleware(
         protocol_context,
         v2_outbound,
     } = dispatch;
-    match message {
-        TransportMessage::Request { id, request } => {
+    match ingress {
+        HttpIngress::Discover { id, .. } => {
+            assemble_discover_response_with_middleware(
+                state,
+                id,
+                protocol_context.as_ref(),
+                response_session_id.as_ref(),
+                v2_outbound,
+                http_middleware,
+                http_context,
+            )
+            .await
+        },
+        HttpIngress::Public(TransportMessage::Request { id, request }) => {
             let json_response = {
                 let server = state.server.lock().await;
                 // Thread the ALREADY-RESOLVED ProtocolContext into dispatch
@@ -1785,9 +2049,9 @@ async fn dispatch_message_with_middleware(
             }
             response
         },
-        TransportMessage::Notification { .. } | TransportMessage::Response(_) => {
-            StatusCode::ACCEPTED.into_response()
-        },
+        HttpIngress::Public(
+            TransportMessage::Notification { .. } | TransportMessage::Response(_),
+        ) => StatusCode::ACCEPTED.into_response(),
     }
 }
 
@@ -1828,20 +2092,23 @@ async fn handle_post_with_middleware(
         return error_response;
     }
 
-    let message = match parse_transport_message_with_middleware(
+    let ingress = match parse_transport_message_with_middleware(
         &server_request.body,
         http_middleware,
         &http_context,
     )
     .await
     {
-        Ok(msg) => msg,
+        Ok(i) => i,
         Err(response) => return response,
     };
 
     let (session_id, protocol_version) =
         extract_session_and_protocol_headers(&server_request.headers);
-    let is_init_request = is_initialize_request(&message);
+    let is_init_request = match &ingress {
+        HttpIngress::Public(msg) => is_initialize_request(msg),
+        HttpIngress::Discover { .. } => false,
+    };
 
     let response_session_id = match resolve_session_with_error_hook(
         &state,
@@ -1861,29 +2128,55 @@ async fn handle_post_with_middleware(
     // classify the header/_meta matrix fail-closed before dispatch. Runs BEFORE
     // the legacy protocol-version check because an accepted v2 request carries
     // MCP-Protocol-Version: 2026-07-28 (which the static-SUPPORTED check would
-    // reject). Only Request messages carry a header contract; v1 / non-opted-in
-    // → Passthrough (zero enforcement, D-04).
-    let (protocol_context, v2_outbound) = if let TransportMessage::Request { request, .. } =
-        &message
-    {
-        let (ctx, gate) = run_v2_header_gate(
-            &state,
-            request,
-            &server_request.headers,
-            &server_request.body,
-        )
-        .await;
-        match gate {
-            V2GateOutcome::Reject(code, msg) => {
-                report_middleware_error(http_middleware, &http_context, "v2 header gate rejected")
+    // reject). Only Request / discover ingresses carry a header contract; v1 /
+    // non-opted-in → Passthrough (zero enforcement, D-04). A `server/discover`
+    // ingress runs the SAME matrix via the raw-_meta counterpart (finding #1).
+    let (protocol_context, v2_outbound) = match &ingress {
+        HttpIngress::Public(TransportMessage::Request { request, .. }) => {
+            let (ctx, gate) = run_v2_header_gate(
+                &state,
+                request,
+                &server_request.headers,
+                &server_request.body,
+            )
+            .await;
+            match gate {
+                V2GateOutcome::Reject(code, msg) => {
+                    report_middleware_error(
+                        http_middleware,
+                        &http_context,
+                        "v2 header gate rejected",
+                    )
                     .await;
-                return create_error_response(StatusCode::BAD_REQUEST, code, &msg);
-            },
-            V2GateOutcome::Passthrough => (ctx, None),
-            V2GateOutcome::EnforceOk { method, name } => (ctx, Some((method, name))),
-        }
-    } else {
-        (None, None)
+                    return create_error_response(StatusCode::BAD_REQUEST, code, &msg);
+                },
+                V2GateOutcome::Passthrough => (ctx, None),
+                V2GateOutcome::EnforceOk { method, name } => (ctx, Some((method, name))),
+            }
+        },
+        HttpIngress::Discover { raw_meta, .. } => {
+            let (ctx, gate) = run_v2_header_gate_raw(
+                &state,
+                raw_meta.as_ref(),
+                &server_request.headers,
+                &server_request.body,
+            )
+            .await;
+            match gate {
+                V2GateOutcome::Reject(code, msg) => {
+                    report_middleware_error(
+                        http_middleware,
+                        &http_context,
+                        "v2 header gate rejected",
+                    )
+                    .await;
+                    return create_error_response(StatusCode::BAD_REQUEST, code, &msg);
+                },
+                V2GateOutcome::Passthrough => (ctx, None),
+                V2GateOutcome::EnforceOk { method, name } => (ctx, Some((method, name))),
+            }
+        },
+        HttpIngress::Public(_) => (None, None),
     };
     let is_v2_request = v2_outbound.is_some();
 
@@ -1914,7 +2207,7 @@ async fn handle_post_with_middleware(
 
     dispatch_message_with_middleware(
         &state,
-        message,
+        ingress,
         MiddlewareDispatch {
             is_init_request,
             response_session_id,
@@ -2433,6 +2726,159 @@ mod tests {
                 V2GateOutcome::Reject(code, _) => {
                     proptest::prop_assert_eq!(code, INVALID_REQUEST);
                 },
+            }
+        }
+    }
+
+    // ---- Phase 112 Plan 10: HttpIngress classification + raw-_meta gate ----
+
+    use crate::types::ProtocolVersion;
+
+    fn v2_version() -> ProtocolVersion {
+        ProtocolVersion(crate::types::protocol::PROTOCOL_VERSION_2026_07_28.to_string())
+    }
+
+    /// Build a `ServerState` whose backing `Server` carries `accept` as its
+    /// supported-protocol accept-list (the only field the raw gate consults).
+    fn state_with_accept(accept: Vec<ProtocolVersion>) -> ServerState {
+        let server = Server::builder()
+            .name("raw-gate-test")
+            .version("1.0.0")
+            .with_supported_protocol_versions(accept)
+            .build()
+            .expect("server builds");
+        make_server_state(
+            Arc::new(tokio::sync::Mutex::new(server)),
+            StreamableHttpServerConfig::default(),
+        )
+    }
+
+    /// `server/discover` is NOT a name-bearing method — its logical name is
+    /// presence-only, so it must not appear in `is_name_bearing_method`.
+    #[test]
+    fn server_discover_is_not_name_bearing() {
+        assert!(!is_name_bearing_method("server/discover"));
+    }
+
+    /// A well-formed `server/discover` body classifies as `HttpIngress::Discover`
+    /// carrying the original id and the raw `_meta`; any other method or malformed
+    /// input classifies as `Public`/`None` (never `Discover`), and never panics.
+    #[test]
+    fn classify_http_ingress_routes_server_discover_only() {
+        let body = br#"{"jsonrpc":"2.0","id":7,"method":"server/discover","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}"#;
+        let ingress = classify_http_ingress(body).expect("server/discover classifies");
+        match ingress {
+            HttpIngress::Discover { id, raw_meta } => {
+                assert_eq!(id, crate::types::RequestId::from(7i64));
+                assert_eq!(
+                    raw_meta.unwrap()["io.modelcontextprotocol/protocolVersion"],
+                    "2026-07-28"
+                );
+            },
+            HttpIngress::Public(_) => panic!("server/discover must classify as Discover"),
+        }
+
+        // A normal method is NOT a discover ingress.
+        let tools = br#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"x"}}"#;
+        assert!(classify_http_ingress(tools).is_none());
+        // A notification (no id) is NOT a discover ingress.
+        let notif = br#"{"jsonrpc":"2.0","method":"server/discover"}"#;
+        assert!(classify_http_ingress(notif).is_none());
+        // Garbage never panics and never classifies as Discover.
+        assert!(classify_http_ingress(b"not json").is_none());
+    }
+
+    /// D-04 ordering: a NON-opted-in server short-circuits a discover request to
+    /// Passthrough EVEN WITH a v2 `_meta` present — it must NOT reject as an
+    /// unsupported version (the v2 `_meta` is never inspected).
+    #[tokio::test]
+    async fn run_v2_header_gate_raw_non_opted_in_passes_through() {
+        let state = state_with_accept(vec![ProtocolVersion("2025-11-25".to_string())]);
+        let raw_meta = serde_json::json!({
+            "io.modelcontextprotocol/protocolVersion": "2026-07-28"
+        });
+        let headers = headers_from(&[(MCP_PROTOCOL_VERSION, V2)]);
+        let body = br#"{"jsonrpc":"2.0","id":1,"method":"server/discover","params":{}}"#;
+        let (ctx, outcome) = run_v2_header_gate_raw(&state, Some(&raw_meta), &headers, body).await;
+        assert!(ctx.is_none(), "non-opted-in resolves no context");
+        assert!(
+            matches!(outcome, V2GateOutcome::Passthrough),
+            "non-opted-in + v2 _meta must Passthrough, not Reject"
+        );
+    }
+
+    /// An opted-in server with a well-formed v2 `_meta` + all three v2 headers
+    /// accepts the discover request via the SAME matrix (EnforceOk).
+    #[tokio::test]
+    async fn run_v2_header_gate_raw_v2_opted_in_enforces() {
+        let state = state_with_accept(vec![
+            ProtocolVersion("2025-11-25".to_string()),
+            v2_version(),
+        ]);
+        let raw_meta = serde_json::json!({
+            "io.modelcontextprotocol/protocolVersion": "2026-07-28"
+        });
+        // server/discover is presence-only for Mcp-Name (require_three_headers
+        // still requires it present).
+        let headers = headers_from(&[
+            (MCP_PROTOCOL_VERSION, V2),
+            (MCP_METHOD, "server/discover"),
+            (MCP_NAME, "server/discover"),
+        ]);
+        let body = br#"{"jsonrpc":"2.0","id":1,"method":"server/discover","params":{}}"#;
+        let (ctx, outcome) = run_v2_header_gate_raw(&state, Some(&raw_meta), &headers, body).await;
+        assert_eq!(ctx.map(|c| c.era), Some(crate::types::protocol::Era::V2));
+        assert!(matches!(outcome, V2GateOutcome::EnforceOk { .. }));
+    }
+
+    /// An opted-in server sees a discover request with a v2 `_meta` but NO
+    /// `MCP-Protocol-Version` header rejected by the SAME matrix cell that
+    /// rejects a tools/call with the same defect.
+    #[tokio::test]
+    async fn run_v2_header_gate_raw_v2_meta_without_header_rejects() {
+        let state = state_with_accept(vec![
+            ProtocolVersion("2025-11-25".to_string()),
+            v2_version(),
+        ]);
+        let raw_meta = serde_json::json!({
+            "io.modelcontextprotocol/protocolVersion": "2026-07-28"
+        });
+        // No MCP-Protocol-Version header → conflict cell → Reject.
+        let headers = headers_from(&[(MCP_METHOD, "server/discover"), (MCP_NAME, "x")]);
+        let body = br#"{"jsonrpc":"2.0","id":1,"method":"server/discover","params":{}}"#;
+        let (_ctx, outcome) = run_v2_header_gate_raw(&state, Some(&raw_meta), &headers, body).await;
+        assert!(matches!(outcome, V2GateOutcome::Reject(_, _)));
+    }
+
+    proptest::proptest! {
+        /// The raw-body ingress classifier NEVER panics over arbitrary bytes, and
+        /// a non-`server/discover` method NEVER classifies as Discover (T-112-13).
+        #[test]
+        fn classify_http_ingress_never_panics(
+            raw in proptest::collection::vec(proptest::num::u8::ANY, 0..512),
+            method in "[a-z/]{0,24}",
+            oversized in proptest::bool::ANY,
+        ) {
+            // Arbitrary bytes: must not panic.
+            let _ = classify_http_ingress(&raw);
+
+            // A structured request with an arbitrary method: only server/discover
+            // may ever classify as Discover.
+            let meta_val = if oversized { "x".repeat(20_000) } else { "2026-07-28".to_string() };
+            let body = serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": method,
+                "params": { "_meta": { "io.modelcontextprotocol/protocolVersion": meta_val } }
+            });
+            let bytes = serde_json::to_vec(&body).unwrap();
+            let classified = classify_http_ingress(&bytes);
+            if method != "server/discover" {
+                proptest::prop_assert!(
+                    !matches!(classified, Some(HttpIngress::Discover { .. })),
+                    "non-discover method {} must never classify as Discover",
+                    method
+                );
             }
         }
     }

@@ -1270,6 +1270,32 @@ impl Server {
         )
     }
 
+    /// Resolve the per-request `ProtocolContext` for an internally-routed
+    /// `server/discover` request from its RAW `_meta` value (Phase 112, VERS-04).
+    ///
+    /// The raw-body counterpart of
+    /// [`resolve_ingress_protocol_context`](Self::resolve_ingress_protocol_context):
+    /// a `server/discover` ingress carries no parsed [`Request`], so the
+    /// streamable-HTTP raw-_meta v2 gate resolves the era from the body's
+    /// `params._meta` here. Mirrors the same non-opted-in short-circuit (D-04):
+    /// a server that has NOT opted into v2 returns `Ok(None)` WITHOUT inspecting
+    /// the v2 `_meta`, so the v1 request path runs zero era detection.
+    pub(crate) fn resolve_discover_protocol_context(
+        &self,
+        raw_meta: Option<&serde_json::Value>,
+    ) -> std::result::Result<
+        Option<crate::types::protocol::ProtocolContext>,
+        crate::types::protocol::context::ProtocolNegotiationError,
+    > {
+        if !crate::types::protocol::context::is_v2_opted_in(&self.supported_protocol_versions) {
+            return Ok(None);
+        }
+        crate::types::protocol::context::resolve_protocol_context(
+            &self.supported_protocol_versions,
+            raw_meta,
+        )
+    }
+
     /// Handle the v2 `server/discover` request (Phase 112, VERS-04, D-09/D-10).
     ///
     /// The production discover caller: the streamable-HTTP transport classifies a
