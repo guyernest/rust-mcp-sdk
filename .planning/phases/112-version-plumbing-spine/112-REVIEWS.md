@@ -1,523 +1,599 @@
 ---
 phase: 112
 reviewers: [gemini, codex]
-reviewed_at: 2026-07-22T19:42:43Z
-plans_reviewed: [112-01-PLAN.md, 112-02-PLAN.md, 112-03-PLAN.md, 112-04-PLAN.md, 112-05-PLAN.md, 112-06-PLAN.md, 112-07-PLAN.md, 112-08-PLAN.md]
+reviewed_at: 2026-07-23T01:06:31Z
+plans_reviewed: [112-09-PLAN.md, 112-10-PLAN.md]
+scope: gap_closure
 ---
 
-# Cross-AI Plan Review — Phase 112 (Version Plumbing Spine)
+# Cross-AI Plan Review — Phase 112 (Gap Closure)
 
-> Two independent external AI CLIs reviewed the 8-plan set. **They diverged sharply:**
-> Gemini approved with high confidence; Codex rated overall risk HIGH and recommended
-> revising Plans 03/04/05/06 before execution. See the Consensus Summary at the bottom.
+Two external models independently reviewed the gap-closure plans `112-09` (Gap B+C: `_meta`/`ProtocolContext` threading) and `112-10` (Gap A: `server/discover` reachability). Both plans had already passed the internal `gsd-plan-checker` (after one revision round). This external pass is deliberately adversarial.
 
----
+**Headline:** Gemini rated both plans LOW risk and execution-ready. Codex rated both HIGH risk / **not** execution-ready, citing concrete correctness and security gaps. Where the two diverged, the orchestrator verified the disputed claims directly against the source tree — **Codex's two most severe findings are CONFIRMED real** (see Verification Notes). Recommendation: revise via `/gsd:plan-phase 112 --reviews` before executing.
 
 ## Gemini Review
 
-# Structured Plan Review: Phase 112 (Version Plumbing Spine)
+# Cross-AI Plan Review: Phase 112 Gap-Closure Plans (112-09 & 112-10)
 
-**Project:** PMCP SDK (`pmcp` crate)  
-**Milestone:** v2.5 (MCP Spec 2026-07-28 v2 Support)  
-**Phase Under Review:** Phase 112 — Version Plumbing Spine  
-**Review Target:** 8 Execution Plans (112-01 through 112-08 across 5 waves)  
-**Requirements Covered:** VERS-01 through VERS-09 (100% mapped)  
-**Overall Verdict:** **APPROVED WITH HIGH CONFIDENCE** (Minor architectural highlights noted below)
+An independent, adversarial review has been performed on implementation plans **112-09** and **112-10** for the `pmcp` Rust SDK. Below is the detailed evaluation, scoping judgment, risk analysis, and recommendations.
 
 ---
 
-## 1. Executive Summary & Assessment
+## 1. Judgment on Scoping Decision (`server/discover` HTTP-Only)
 
-Phase 112 establishes the foundational per-request protocol negotiation spine for dual-version MCP support (2025-11-25 `v1` and 2026-07-28 `v2`). The implementation plan is structured into 8 autonomous, tightly gated plans across 5 execution waves.
+**Verdict: HONEST AND ACCEPTABLE.**
 
-### Key Strengths
-1. **Strict Non-Breaking Semver Discipline**: `LATEST_PROTOCOL_VERSION` remains strictly pinned to `"2025-11-25"`. `v2` is strictly opt-in via a builder accept-list (`.with_supported_protocol_versions([...])`). Un-opted-in servers experience zero behavior or performance change.
-2. **Single Ingress Era Resolution**: `ProtocolContext` is resolved once at transport ingress from per-request `_meta` (or headers) and threaded through `ServerCore` dispatch (`core.rs`, `mod.rs`, `wasm_core.rs`) into `RequestHandlerExtra`. Handlers consume era details via typed accessors rather than ambient/session state.
-3. **Robust Semantic Disambiguation (`-32002` Handling)**: Preserves pmcp's frozen `-32002` task-pending code and test suite intact while coexisting with `UNSUPPORTED_CAPABILITY` (-32002) and delegating `error::ErrorCode` consts to `error_codes::*`. Future spec-level `-32002` $\rightarrow$ `-32602` renames for resource-not-found are cleanly deferred until the final schema release.
-4. **Serialization Injection for Envelope (`resultType`)**: Prevents breaking changes to public Rust `Result` structs by injecting `resultType: "complete"` at the JSON-RPC serialization boundary only for `v2` requests, leaving `v1` JSON byte-identical.
-5. **Comprehensive Verification Gates**: Integration of `cargo-semver-checks`, property-based testing (`proptest`), WASM compilation targets (`wasm32-unknown-unknown`), and HTTP-specific header enforcement tests.
+* **Spec & Architecture Realities:** In MCP 2026-07-28 (v2), version negotiation headers (`MCP-Protocol-Version`, `Mcp-Method`, `Mcp-Name`) operate exclusively on HTTP transport ingress. Stdio transports communicate via raw line-delimited JSON-RPC frames without HTTP headers.
+* **Criterion Satisfaction:** Success Criterion #3 explicitly requires `server/discover` to be reachable *"over at least one real transport."* Delivering this end-to-end on Streamable HTTP satisfies SC#3 directly.
+* **Semver Guarantee:** Modifying `TransportMessage` to introduce an internal message variant would require matching updates across ~30 call sites and public/internal adapter boundaries, introducing a high risk of breaking public API contracts. Deferring stdio interception guarantees that `cargo-semver-checks` continues to classify the release as **MINOR (additive 2.x)**.
+* **Fallback Behavior:** Stdio clients sending `server/discover` continue to receive standard JSON-RPC `-32601` (Method Not Found) via `parse_request()`, maintaining backward compatibility and byte-identity.
 
 ---
 
-## 2. Requirement Coverage Matrix
+## 2. Review of Plan 112-09 (Gap B + C: `_meta`/`ProtocolContext` Threading)
 
-| Req ID | Description | Primary Plan | Secondary Plan | Assessment |
-|---|---|---|---|---|
-| **VERS-01** | Resolve `ProtocolContext` at ingress, thread through dispatch & accessors | `112-01-PLAN.md` | `112-02-PLAN.md`, `112-04-PLAN.md` | **Complete** |
-| **VERS-02** | Opt-in `v2` support; `LATEST_PROTOCOL_VERSION` stays `"2025-11-25"` | `112-01-PLAN.md` | `112-04-PLAN.md` | **Complete** |
-| **VERS-03** | `_meta` self-description & `v2` `serverInfo` propagation | `112-01-PLAN.md` | `112-02-PLAN.md`, `112-05-PLAN.md` | **Complete** |
-| **VERS-04** | `server/discover` read-only capability projection | `112-03-PLAN.md` | `112-05-PLAN.md` | **Complete** |
-| **VERS-05** | Required HTTP headers (`Mcp-Method`, `Mcp-Name`, `MCP-Protocol-Version`) | `112-06-PLAN.md` | `112-08-PLAN.md` | **Complete** |
-| **VERS-06** | Centralized error code table with frozen `-32002` intact | `112-03-PLAN.md` | `112-07-PLAN.md`, `112-08-PLAN.md` | **Complete** |
-| **VERS-07** | `resultType` envelope (`complete`/`input_required`/`task`) | `112-05-PLAN.md` | — | **Complete** |
-| **VERS-08** | `extensions` capability map support | `112-04-PLAN.md` | `112-05-PLAN.md` | **Complete** |
-| **VERS-09** | W3C trace-context (`traceparent`/`tracestate`/`baggage`) accessors | `112-01-PLAN.md` | `112-02-PLAN.md` | **Complete** |
+### Summary
+Executing Plan 112-09 will successfully make requirements **VERS-01, VERS-03, VERS-05, VERS-07, and VERS-09** `TRUE`. By extending `extract_request_meta_value` to match `ClientRequest::GetPrompt` and `ClientRequest::ReadResource`, the plan fixes the root cause preventing the HTTP header gate from recognizing v2 requests for these methods (Gap C). Threading `protocol_context` and `request_meta` into `RequestHandlerExtra` across both `ServerCore` (`core.rs`) and `Server` (`mod.rs`) ensures that prompt and resource handlers receive resolved `ProtocolContext` and `RequestMeta` (Gap B).
 
----
+### Strengths
+* **Root-Cause Alignment:** Instead of adding ad-hoc patches in the HTTP layer, the plan fixes the underlying ingress metadata extraction (`extract_request_meta_value`) and dispatch context construction.
+* **Twin-Site Parity:** Explicitly updates both native dispatch entry points (`src/server/core.rs` and `src/server/mod.rs`), preventing divergence between low-level core dispatch and high-level server dispatch.
+* **Non-Mutating Envelope Reuse:** Reuses the existing generic `inject_v2_result_envelope` without modifying response serialization for v1 clients.
+* **Discriminating Acceptance Criteria:** Requires exact, scoped `grep` assertions and includes property tests for `RequestMeta` round-tripping and live HTTP integration tests for both accepted v2 calls and golden v1 byte-identity.
 
-## 3. Wave Dependency & Pipeline Integrity
+### Concerns
 
-```mermaid
-graph TD
-    W1[Wave 1: Plan 112-01<br>Era, ProtocolContext & TraceContext Types] --> W2_02[Wave 2: Plan 112-02<br>RequestHandlerExtra Accessors]
-    W1 --> W2_03[Wave 2: Plan 112-03<br>Centralized error_codes & ServerDiscover Variant]
-    
-    W2_02 --> W3_04[Wave 3: Plan 112-04<br>Opt-in Builder & ServerCore Ingress Threading]
-    W2_03 --> W3_04
-    
-    W3_04 --> W4_05[Wave 4: Plan 112-05<br>server/discover & resultType Serialization]
-    W3_04 --> W4_06[Wave 4: Plan 112-06<br>Streamable HTTP Header Enforcement & Body Cross-check]
-    
-    W4_05 --> W5_07[Wave 5: Plan 112-07<br>Core / Dispatch Error Code Migration]
-    W4_06 --> W5_08[Wave 5: Plan 112-08<br>HTTP Transport Error Code Migration]
-```
+#### [MEDIUM] Lack of Compiler Enforcement for Future `ClientRequest` Variants
+* **Issue:** `extract_request_meta_value` uses a wildcard match arm `_ => None`. If a future MCP method is added to `ClientRequest` that carries `_meta`, the compiler will not force `extract_request_meta_value` to be updated.
+* **Impact:** Future name-bearing or meta-carrying methods could silently suffer from the same gap.
+* **Mitigation:** While documented in the function's doc comments, an explicit match on all non-meta `ClientRequest` variants (or a unit test verifying all `ClientRequest` variants that contain `_meta` are handled) would provide compile-time or test-time protection.
 
-### Wave Progression Analysis
-- **Wave 1 $\rightarrow$ Wave 2**: Base protocol types (`Era`, `ProtocolContext`, `TraceContext`) land first without dependencies on server internal state.
-- **Wave 2 $\rightarrow$ Wave 3**: `RequestHandlerExtra` accessors and `error_codes` centralization prepare both the handler context and error infrastructure before `ServerCore` ingress logic is modified.
-- **Wave 3 $\rightarrow$ Wave 4**: Threaded `ProtocolContext` allows dispatch arms (`server/discover`, `resultType` envelope) and transport gates (`Mcp-Method` enforcement) to era-gate cleanly.
-- **Wave 4 $\rightarrow$ Wave 5**: Once `v2` dispatch and header enforcement are fully active, migrating legacy integer error literals across `core.rs`, `task_dispatch.rs`, and `streamable_http_server.rs` ensures zero raw error code regressions across 65+ call sites.
+#### [LOW] Extra Clone of `Option<ProtocolContext>` in Dispatch Arms
+* **Issue:** `handle_request_internal` clones `protocol_context` into `handle_get_prompt` and `handle_read_resource`.
+* **Impact:** `ProtocolContext` is a lightweight struct containing small heap allocations (strings for implementation info). The performance impact is negligible, but unnecessary cloning could be avoided by passing references `Option<&ProtocolContext>` where owned values are not required.
+
+### Suggestions for Plan 112-09
+1. **Exhaustive Variant Test:** Add an explicit unit test `test_all_client_requests_with_meta_are_extracted()` that uses a dummy instance of every `ClientRequest` variant to assert that any variant possessing a `pub _meta` field yields `Some` when passed to `extract_request_meta_value`.
+
+### Risk Assessment
+* **Overall Risk:** **LOW**
+* **Justification:** Edits are additive, well-bounded, and mirror the existing, proven `handle_call_tool` pattern. V1 byte-identity is strictly preserved via era-gating.
 
 ---
 
-## 4. Deep Dive Technical Findings & Recommendations
+## 3. Review of Plan 112-10 (Gap A: Production Reachability of `server/discover`)
 
-### 1. JSON-RPC Response Wrapping for `resultType` (Plan 112-05)
-* **Finding**: Plan 112-05 specifies injecting `"resultType": "complete"` at the serialization boundary for `v2` responses.
-* **Detail**: In standard MCP JSON-RPC 2.0 messages, `resultType` belongs inside the inner `result` object (`{"jsonrpc":"2.0","id":1,"result":{"resultType":"complete", ...}}`).
-* **Recommendation**: Ensure the serialization hook modifies the inner `serde_json::Value` payload of `JSONRPCResponse::Success` rather than top-level response metadata.
+### Summary
+Executing Plan 112-10 will successfully make requirement **VERS-04 (SC#3)** `TRUE`. By intercepting incoming HTTP POST bodies prior to `parse_transport_message_fast`/`parse_transport_message_with_middleware`, the plan routes `server/discover` requests through `parse_request_or_internal` to `Server::handle_discover` and the shared `build_discover_response` projection. Deleting `ServerCore::handle_discover` and `ServerCore::dispatch_internal_client_request` removes all `#[allow(dead_code)]` attributes, satisfying the Toyota Way / zero-SATD quality bar.
 
-### 2. Header / Body Cross-Check with JSON-RPC Requests (Plan 112-06)
-* **Finding**: Plan 112-06 implements a strict cross-check between the `Mcp-Method` HTTP header and the JSON-RPC body's `method` field.
-* **Detail**: If a client sends malformed JSON or a batch payload, parsing the body method prior to JSON-RPC dispatch could fail or error differently.
-* **Recommendation**: The plan correctly isolates this logic inside a pure, panic-safe parsing helper evaluated via `proptest`. Ensure that JSON parsing errors during header cross-checking return an `INVALID_REQUEST` (-32600) response directly via `error_codes::INVALID_REQUEST`.
+### Strengths
+* **Clean Architectural Refactoring:** Consolidating discovery logic into `build_discover_response` eliminates duplicated capability projection code between high-level `Server` and internal core.
+* **Elimination of Dead Code Annotations:** Completely deletes the unreachable `ServerCore` wrapper methods and migrates unit tests, removing `#[allow(dead_code)]` attributes and avoiding compiler warning suppression.
+* **Non-Panicking Body Inspection:** Uses the established `from_slice` pattern (modeled after `extract_body_method_and_name`) so malformed or non-JSON payloads safely bypass interception and fall back to standard 400 error handling.
+* **Read-Only Capability Projection:** Maintains strict state immutability during discovery (no mutation of `is_initialized` state or recomputation of capabilities).
 
-### 3. WASM Transport Parity (`wasm_core.rs` & `wasm_http.rs`)
-* **Finding**: Plan 112-04 and 112-05 explicitly mirror `ProtocolContext` ingress and `server/discover` dispatch to `wasm_core.rs`.
-* **Detail**: Non-HTTP WASM environments (e.g. browser WebSockets/PostMessage) will not carry HTTP headers, but WILL carry `_meta`.
-* **Recommendation**: Maintain the transport-agnostic `_meta` extraction strategy across both native and WASM builds. The plan's test suite includes `cargo build --lib --target wasm32-unknown-unknown` gates, which will catch any conditional compilation (`cfg`) drift.
+### Concerns
+
+#### [MEDIUM] HTTP Header Gate Bypassing on Intercepted `server/discover` Path
+* **Location:** `src/server/streamable_http_server.rs` (`try_route_internal_request`)
+* **Issue:** `try_route_internal_request` resolves the era directly from raw `_meta` via `resolve_protocol_context`. However, for v2 requests, it does not explicitly validate incoming HTTP headers (`MCP-Protocol-Version` and `Mcp-Method: server/discover`) against `run_v2_header_gate`.
+* **Impact:** A client sending a v2 `_meta` payload over HTTP with invalid or conflicting HTTP headers (e.g. `MCP-Protocol-Version: 2025-11-25`) might be accepted by `try_route_internal_request`, whereas a `tools/call` request with the same header mismatch would be rejected with HTTP 400 by the header gate.
+* **Mitigation:** Ensure `try_route_internal_request` checks `run_v2_header_gate` or verifies that `MCP-Protocol-Version` in the HTTP header matches the era resolved from `_meta`.
+
+#### [LOW] Locking & Deadlock Verification
+* **Location:** `src/server/streamable_http_server.rs`
+* **Analysis:** `try_route_internal_request` locks `state.server` to read `supported_protocol_versions`, `capabilities`, and `info`. Because `try_route_internal_request` is invoked at the very entry of the POST handler *before* any other locks are acquired, and returns `Some(response)` immediately upon match, the lock is released before the function returns. If it returns `None`, the lock is released before the standard dispatch path runs.
+* **Verdict:** **Zero deadlock or double-lock risk.**
+
+#### [LOW] Cognitive Complexity Budget (PMAT cog ≤25)
+* **Location:** `src/server/streamable_http_server.rs`
+* **Issue:** Modifying the HTTP POST handler entry point risks exceeding the cognitive complexity limit if logic is inline.
+* **Mitigation:** The plan explicitly mandates breaking down `try_route_internal_request` into small helper functions (raw body re-parse, era resolution, and discover response assembly). This keeps cognitive complexity well under 25 per function.
+
+### Suggestions for Plan 112-10
+1. **Header Gate Validation in `try_route_internal_request`:** Include an explicit check inside `try_route_internal_request` to verify that if `_meta` resolves to `Era::V2`, the HTTP request header `MCP-Protocol-Version` is also present and valid (`2026-07-28`), returning HTTP 400 rejection otherwise.
+2. **Batch Request Guard:** Add an explicit inline comment and test confirming that array payloads (`[ { "method": "server/discover" } ]`) fail single-request deserialization in `try_route_internal_request`, returning `None` to let standard HTTP request validation reject JSON-RPC batching.
+
+### Risk Assessment
+* **Overall Risk:** **LOW to MEDIUM**
+* **Justification:** Early POST path interception is clean and isolates discovery from standard request parsing. Deleting dead code improves quality gate compliance. Addressing the HTTP header gate consistency concern reduces the risk to **LOW**.
 
 ---
 
-## 5. Verification Checklist & Gate Alignment
+## 4. Combined Synthesis & Verification Matrix
 
-- [x] **Semver Gate**: `cargo-semver-checks` checks all public surface additions (`ClientRequest`, `ProtocolContext`, `RequestHandlerExtra`) to guarantee 2.x minor compatibility.
-- [x] **Zero New Runtime Dependencies**: Uses existing workspace crates (`serde`, `serde_json`, `http`). Dev dependencies (`cargo-semver-checks`, `cargo-public-api`, `proptest`) are isolated.
-- [x] **Locking Tests Maintained**: `pending_tasks_result_preserves_minus_32002` and `latest_version_is_2025_11_25` stay green.
-- [x] **WASM Parity**: Dual compilation targets (`x86_64` and `wasm32-unknown-unknown`) tested per wave.
+Executing both plans sequentially will close all 3 identified gaps:
+
+| Requirement | Description | Plan | Status Post-Execution | Verification Method |
+| :--- | :--- | :--- | :--- | :--- |
+| **VERS-01** | Thread `ProtocolContext` through dispatch | 112-09 | **SATISFIED** | Unit & Handler visibility tests in `core.rs` / `mod.rs` |
+| **VERS-03** | Thread `request_meta` to `RequestHandlerExtra` | 112-09 | **SATISFIED** | Unit & Handler visibility tests |
+| **VERS-04** | `server/discover` capability discovery | 112-10 | **SATISFIED** | E2E HTTP integration tests in `v2_required_headers.rs` |
+| **VERS-05** | Enforce v2 HTTP headers on name-bearing methods | 112-09 | **SATISFIED** | Live HTTP matrix tests (`prompts/get`, `resources/read`) |
+| **VERS-07** | Inject v2 envelope (`resultType`, `serverInfo`) | 112-09 | **SATISFIED** | Assertions on HTTP JSON responses for prompt & resource calls |
+| **VERS-09** | Surface era & client info inside handlers | 112-09 | **SATISFIED** | Extra inspector assertions in handler tests |
+
+### Quality Gate & Invariant Checklist
+* **`make quality-gate`:** Passing (zero clippy warnings under pedantic+nursery, cognitive complexity ≤25 per fn, zero SATD).
+* **v1 Wire Byte-Identity:** Guaranteed and tested via golden fixtures in `tests/v2_required_headers.rs`.
+* **Semver Invariant:** `cargo semver-checks` will classify the release as **MINOR** (no breaking changes or public enum modifications).
 
 ---
 
-## 6. Final Recommendation
-
-The plan set for **Phase 112 (Version Plumbing Spine)** is **exceptionally thorough, architecturally sound, and ready for execution**. The wave breakdown eliminates circular dependencies, and the safety gates prevent accidental semver breaking changes or protocol leaks to legacy `v1` clients. Proceed with execution starting at Wave 1 (Plan 112-01).
+## Work Summary
+* Conducted an adversarial review of implementation plans **112-09** and **112-10**.
+* Confirmed that HTTP-only scoping for `server/discover` is honest, acceptable, and preserves semver MINOR guarantees.
+* Verified that Plan 112-09 closes Gap B and Gap C without introducing v1 wire identity regressions.
+* Verified that Plan 112-10 closes Gap A and cleans up dead code without deadlock risk.
+* Highlighted key recommendations for HTTP header gate consistency in `server/discover` and test exhaustiveness for `ClientRequest` variants.
 
 ---
 
 ## Codex Review
 
-# Phase 112 Plan Review
+# Independent adversarial review
+
+## Executive conclusion
+
+Neither plan is execution-ready as written.
+
+- **112-09 correctly identifies and fixes the missing `ProtocolContext` threading**, but it does not fully close Gap C for `resources/read`: the live header gate cross-checks `Mcp-Name` against `params.name`, while a standard `ReadResourceRequest` has `params.uri`, not `params.name`. Its “golden byte-identity” tests also do not compare bytes.
+- **112-10 chooses an acceptable HTTP-only scope**, but the proposed early interception bypasses important parts of both HTTP pipelines and does not apply the existing v2 header-classification matrix. It also conflicts with the actual current HTTP behavior for v1 `server/discover`, so its byte-identity claim is presently false.
+
+The underlying design is recoverable without adding a public `TransportMessage` variant, but both plans need revision before execution.
+
+---
+
+# Plan 112-09
 
 ## Summary
 
-The plans show strong awareness of backward compatibility, the frozen `-32002` contract, dual dispatch sites, wasm parity, and the need for centralized protocol decisions. The wave ordering is mostly sound, and the test intent is unusually thorough. However, several architectural gaps undermine the phase’s central promise: protocol context is not actually resolved once at transport ingress; the accept-list is reduced to a boolean v2 flag rather than used for negotiation; HTTP classification has ambiguous and bypassable missing-signal cases; and adding `ServerDiscover` to the public exhaustive `ClientRequest` enum is likely a breaking Rust API change. The result-envelope design is also underspecified for non-object results and future non-`complete` outcomes. Finally, the plans intentionally leave VERS-06 incomplete while claiming it is satisfied, and their literal `TODO` comments conflict with the repository’s zero-SATD policy. Overall, the phase should be revised before execution.
+The production edits to `extract_request_meta_value` and the four prompt/resource handler sites are fundamentally correct and should make `extra.era()`, `extra.client_info()`, and `extra.trace_context()` available when requests reach those handlers. They should also enable v2 result-envelope injection for prompt and resource results. However, the plan will not make the stated live `resources/read` acceptance criterion true for a standards-shaped request because the existing HTTP gate extracts only `params.name`. The plan also overstates its v1 byte-identity proof and contains an incorrect expectation for opted-in v1 handlers. Therefore, it only partially re-satisfies VERS-01/03/07/09 and does not reliably re-satisfy VERS-05.
 
 ## Strengths
 
-- The five-wave ordering avoids material same-wave write conflicts:
+- The root cause for handler context loss is accurately located:
 
-  - Plans 02 and 03 are independent.
-  - Plan 05 follows dispatch plumbing and the request variant.
-  - Plan 06 follows context/error-code foundations.
-  - Plans 07 and 08 migrate separate final-wave surfaces after their corresponding functional edits.
+  - `ServerCore` dispatch drops context at [src/server/core.rs:1582](/Users/guy/Development/mcp/sdk/rust-mcp-sdk/src/server/core.rs:1582) and the corresponding resource arm.
+  - High-level `Server` drops it at [src/server/mod.rs:1438](/Users/guy/Development/mcp/sdk/rust-mcp-sdk/src/server/mod.rs:1438) and [src/server/mod.rs:1445](/Users/guy/Development/mcp/sdk/rust-mcp-sdk/src/server/mod.rs:1445).
+  - Both handler implementations construct incomplete `RequestHandlerExtra` values.
 
-- The plans explicitly preserve important compatibility invariants:
+- Mirroring the existing `tools/call` builder chain is low-risk and preserves the established architecture.
 
-  - `LATEST_PROTOCOL_VERSION` remains `2025-11-25`.
-  - `2026-07-28` is not added to the legacy `SUPPORTED_PROTOCOL_VERSIONS`.
-  - `resultType` and `serverInfo` are intended to be v2-only.
-  - Existing v1 task-pending behavior remains `-32002`.
-  - Independent raw-value assertions are retained instead of converted into tautological constant comparisons.
+- Extending `extract_request_meta_value` is the right ingress fix. The relevant request types all use `Option<RequestMeta>`, and `RequestMeta`’s flattened map preserves reserved v2 identity and tracing keys.
 
-- The `RequestHandlerExtra` work follows an established additive pattern and accounts for native/wasm parity.
+- The envelope claim is sound once context is threaded: both dispatch surfaces already call the shared era-gated injector, and it is a no-op unless `Era::V2`.
 
-- Reusing `RequestMeta`’s flattened metadata, existing capability types, and already-computed `ServerCore.capabilities` avoids unnecessary parallel models.
+- Requiring tests at both dispatch surfaces is valuable. The twin implementations are a demonstrated drift risk.
 
-- The plans correctly distinguish three separate `-32002` concerns:
-
-  - Frozen v1 task-pending.
-  - Existing PMCP unsupported-capability.
-  - The provisional v2 resource-not-found allocation.
-
-- HTTP method/header disagreement is treated as a request-smuggling concern and rejected fail-closed.
-
-- The plans recognize that HTTP header behavior requires real HTTP tests rather than an in-memory transport.
-
-- Property testing is proposed for the two most exposed parsers/decision points: trace metadata and HTTP header/body reconciliation.
-
-- Delegating the widely used `error::ErrorCode` constants to the centralized table is an efficient way to cover many existing call sites without broad API churn.
+- The documented go-forward rule for future `_meta`-bearing variants is useful and currently exhaustive: only call-tool, get-prompt, and read-resource carry `RequestMeta`.
 
 ## Concerns
 
-### HIGH — Protocol context is not resolved once at transport ingress
+### HIGH — `resources/read` still fails the real header gate
 
-Plan 04 says it resolves `ProtocolContext` in `ServerCore` from request `_meta`, while Plan 06 says the HTTP transport invokes or repeats that resolution to validate headers. This is not a single ingress resolution. It risks:
+The gate extracts only `params.name` at [src/server/streamable_http_server.rs:527](/Users/guy/Development/mcp/sdk/rust-mcp-sdk/src/server/streamable_http_server.rs:527), and `cross_check_name` requires it for `resources/read`.
 
-- Parsing the same evidence twice.
-- Dispatch and transport validation producing different conclusions.
-- HTTP-only information being unavailable to the core resolver.
-- Context being constructed after transport decisions that were supposed to depend on it.
+But `ReadResourceRequest` contains:
 
-`ServerCore` dispatch is not transport ingress. The desired architecture needs one resolver that accepts normalized transport evidence and returns one authoritative result passed through the remainder of the request.
-
-### HIGH — The version accept-list is not actually used as an accept-list
-
-Plan 04 reduces the configured versions to `is_v2_opted_in()`. It does not specify:
-
-- Checking the requested version against the configured list.
-- Rejecting an explicitly unsupported version.
-- Correct v2-only behavior when the list contains only `2026-07-28`.
-- Handling an empty list.
-- Handling duplicates or arbitrary `ProtocolVersion` strings.
-- Selecting the v1 fallback version when per-request metadata is absent.
-- How legacy session-negotiated versions participate when no per-request signal exists.
-
-This fails the purpose of D-02. The same API may syntactically express v1-only, dual, and v2-only, but the planned runtime behavior does not.
-
-### HIGH — HTTP v2 classification has downgrade/bypass gaps
-
-Plan 06 declares `_meta` the authoritative v2 signal, then only reconciles the header when both values are present. This leaves important cases undefined:
-
-- `MCP-Protocol-Version: 2026-07-28` with no `_meta` version may fall through as v1 and bypass v2 header enforcement.
-- v2 `_meta` with no `MCP-Protocol-Version` header is not clearly rejected.
-- VERS-05 requires `MCP-Protocol-Version` alongside `Mcp-Method` and `Mcp-Name`, but the plan explicitly mandates missing-header rejection only for the latter two.
-- An unsupported non-v2 version in either location has no defined response.
-- A malformed or non-string version value has no defined response.
-
-The final verdict should not be computed solely from one source. On an opted-in HTTP server, either source indicating v2 should trigger strict validation requiring all mandated evidence and equality.
-
-### HIGH — `ClientRequest::ServerDiscover` is likely not semver-minor
-
-Adding a variant to a public exhaustive Rust enum breaks downstream exhaustive matches. Adding `#[non_exhaustive]` after publication also breaks downstream exhaustive matches and may prohibit existing external construction patterns. The proposed “try both and require no major result” procedure may have no successful branch.
-
-This cannot be left as an execution-time experiment because Plan 05 depends on the variant. A non-breaking design is needed before implementation, such as:
-
-- Dispatching `server/discover` before conversion into the public enum.
-- Using an existing extensible/unknown-method representation.
-- Introducing an internal dispatch enum while leaving the public enum unchanged.
-- Providing a custom request representation that preserves unknown methods.
-
-If the public enum must change, the milestone’s “2.x minor” promise needs explicit reconsideration.
-
-### HIGH — Generic `resultType`/`serverInfo` injection is underspecified
-
-The plans say to inject fields at the JSON serialization boundary, but do not define behavior when the result is:
-
-- A scalar.
-- An array.
-- `null`.
-- An object already containing `resultType` or `serverInfo`.
-- A task or future `input_required` result needing a non-default discriminator.
-- An error response or notification with no result.
-
-There is also no planned mechanism by which Phases 113 and 114 select `InputRequired` or `Task`. Merely defining an internal enum does not establish the response metadata path.
-
-Without a precise envelope model, Plan 05 may either corrupt existing result shapes or create a second incompatible envelope that later phases must replace.
-
-### HIGH — VERS-06 remains incomplete but is marked complete
-
-The centralized table is not genuinely version-gated; it is a flat set of current constants plus commented placeholders. The plans provide no API such as `code_for(era, semantic)` and no v2 interpretation path. They also intentionally omit final v2 values.
-
-The deferral is correct because the final schema is unavailable, but traceability must reflect reality: Phase 112 cannot claim full VERS-06 completion until the final schema checkpoint is executed. Add a blocked/finalization task or mark VERS-06 partially complete.
-
-### HIGH — Literal `TODO` comments conflict with repository policy
-
-Plans 03 and 07 require commented `TODO` placeholders. The repository instructions prohibit SATD comments and state that PMAT rejects them. This creates a predictable quality-gate failure.
-
-Use documentation such as “Unavailable until publication of the final schema” without SATD markers, or represent availability structurally with an `Option`, error, or omitted constant. Track the pending schema work in the planning system rather than source comments.
-
-### HIGH — Required repository development workflow is missing
-
-The plans do not include the mandatory contract-first and quality-proxy steps:
-
-- Update the relevant provable-contract YAML.
-- Run `pmat comply check` before and after implementation.
-- Perform writes through the PMAT quality proxy.
-- Generate PDMT-style todos.
-- Run the mandated fuzz/property/unit/example/integration checks for new features.
-
-Some property tests are present, but there is no fuzz target, runnable example, or explicit contract change. This is a process blocker under the supplied project standards.
-
-### MEDIUM — Protocol metadata parsing policy is undefined
-
-Plan 04 does not define what happens when:
-
-- `protocolVersion` exists but is not a string.
-- `clientInfo` is malformed.
-- `clientCapabilities` is malformed.
-- `_meta` is not an object.
-- The same logical key appears through multiple serialization paths.
-- Metadata is excessively large or deeply nested.
-
-Silently dropping malformed identity/capability data would make handler-visible context disagree with the wire request. The resolver should return a typed error for malformed reserved keys while continuing to ignore unrelated extension keys.
-
-### MEDIUM — Trace propagation does not satisfy the stated requirement clearly
-
-Plans 01 and 02 parse and expose trace fields, while Plan 04 carries the existing request metadata. No integration test proves that a trace received at ingress is visible in the actual handler invocation. No outbound or observability propagation is planned.
-
-If VERS-09 only requires handler visibility, say so explicitly and add an end-to-end dispatch test. If propagation means forwarding trace metadata to nested server-to-client calls or responses, the current plans do not implement it.
-
-### MEDIUM — W3C trace validation and resource limits are absent
-
-`TraceContext::from_meta` accepts any string as `traceparent`, with no syntax or length validation. `tracestate` and `baggage` also lack size limits. Even if the SDK intentionally exposes raw values, rustdoc should state that they are unvalidated. Prefer bounded validation at ingress to avoid propagating attacker-controlled oversized tracing values.
-
-### MEDIUM — `Mcp-Name` semantics are unspecified
-
-The plans check only that `Mcp-Name` is present. They do not define:
-
-- Its expected value per request method.
-- Whether it is cross-checked against `params.name`, a tool name, or another body field.
-- What value is emitted in responses.
-- Behavior for methods without a logical name.
-- Validation of non-UTF-8 or invalid header values.
-
-Presence-only validation may pass superficial tests without implementing the protocol contract.
-
-### MEDIUM — Outbound header handling lacks error-path detail
-
-The plans do not state whether required v2 headers are emitted on:
-
-- Successful responses only.
-- Structured 4xx JSON-RPC errors.
-- Server errors.
-- Streaming/SSE responses.
-- Notifications or empty responses.
-
-They also do not specify how invalid values are converted to `HeaderValue` without panicking. This should be part of the transport contract.
-
-### MEDIUM — v1 byte-identity claims need stronger verification
-
-Existing tests remaining green do not necessarily prove byte identity. The plans should retain or add golden serialized responses for representative v1 operations through:
-
-- Opt-in unset.
-- Dual-version server receiving a v1 request.
-- Stateful/session-backed v1 HTTP.
-- Stdio.
-- Error responses, especially task-pending and method-not-found.
-
-Adding `ServerDiscover` to parsing also changes how a previously unknown method travels through the v1 pipeline; verify that D-10’s desired `-32601` behavior is reconciled with the broader byte-identity claim.
-
-### MEDIUM — Wasm parity is asserted more than designed
-
-Plan 04 names `wasm_core.rs`, but does not explain how the wasm core receives the supported-version configuration or whether it shares the same resolver and builder. Plan 05 adds discover parity, while result-envelope/server-info Task 2 omits `wasm_core.rs` from its file list.
-
-Consequently, wasm may recognize discover but serialize responses differently. The exact shared implementation should be identified rather than relying on file-level mirroring.
-
-### MEDIUM — `server/discover` wire shape is provisional
-
-The plan defines a new discover result before the final specification is available, but only error codes are treated as provisional. If the exact discover payload, result envelope, header semantics, or server-info placement can still change, these must also have a final-schema/spec checkpoint.
-
-At minimum, isolate provisional wire shapes behind internal conversion functions and golden fixtures so final-spec adjustments remain localized.
-
-### MEDIUM — Error-code audit may still be incomplete
-
-Plans 03, 07, and 08 cover known surfaces, but grep counts against selected files do not prove that all production protocol errors use the table. Potential misses include:
-
-- Other transports.
-- Error construction through struct literals.
-- Casts from `ProtocolErrorCode`.
-- Constants in feature-gated modules.
-- Examples or integration crates that emit protocol responses.
-
-A repository-wide semantic audit should be the final acceptance gate. The surviving `ProtocolErrorCode` discriminants also remain a parallel numeric definition, so the “one source of truth” statement is not literally true unless their discriminants delegate to the table or the enum is deprecated and removed from production use.
-
-### MEDIUM — Tool installation and semver verification are not reproducible
-
-The plans install the latest `cargo-semver-checks` and `cargo-public-api`, but:
-
-- Versions are not pinned.
-- `cargo-public-api` is installed but never meaningfully used.
-- The baseline package/version/tag is unspecified.
-- Plan 01 runs a phase semver check before most phase changes exist.
-- Plan 03’s two-way experiment does not specify how the worktree is restored between trials.
-- Installation is mixed into source implementation rather than handled as a prerequisite.
-
-Pin tool versions and define the exact baseline and package selection. Run the authoritative check after the complete phase diff.
-
-### LOW — Some verification commands are brittle
-
-Examples include quoted wildcard test targets and grep/awk assertions tied to source formatting. These are useful supplementary checks but should not be primary correctness gates. Prefer named test targets and behavior-based assertions.
-
-### LOW — Plan 01 contains contradictory tripwire language
-
-Research originally says to update the “supports four versions” test to five, while Plan 01 correctly keeps the legacy supported slice at four. The final desired invariant is clear, but the surrounding research and plan prose should be normalized to avoid an executor following the wrong instruction.
-
-## Plan-by-Plan Recommendations
-
-### Plan 112-01
-
-- Keep the legacy supported-version slice unchanged, but rename it or document clearly that it is the default legacy negotiation set, not every version the crate can understand.
-- Remove source `TODO` placeholders from the later error-code design.
-- Define strict parsing/validation behavior for `TraceContext`.
-- Move semver tooling setup to a pinned prerequisite; run the real API comparison after the full phase.
-
-### Plan 112-02
-
-- Add rustdoc explicitly marking `client_info` and `client_capabilities` as self-reported and unsuitable for authorization.
-- Add an end-to-end handler test, not only direct accessor tests.
-- Decide whether trace values are raw or validated and document that contract.
-- Avoid duplicating implementations where a shared cfg-safe implementation can provide parity mechanically.
-
-### Plan 112-03
-
-- Resolve the public-enum semver problem before execution. Do not rely on an in-plan experiment.
-- Avoid adding `ServerDiscover` to the public exhaustive enum unless a baseline check proves the project accepts that break.
-- Represent unavailable v2 codes structurally or solely in planning artifacts, without SATD comments.
-- Add an era-and-semantic lookup API if VERS-06 truly requires version-gated resolution.
-- Audit whether `ProtocolErrorCode` can reference the centralized constants rather than retain independent numeric discriminants.
-
-### Plan 112-04
-
-- Replace `is_v2_opted_in()`-driven behavior with a real resolver:
-
-  ```text
-  configured accept-list
-          +
-  normalized transport evidence
-          +
-  optional legacy session fallback
-          ↓
-  Result<ProtocolContext, ProtocolNegotiationError>
-  ```
-
-- Specify outcomes for absent, malformed, unsupported, and conflicting versions.
-- Make v2-only configuration genuinely prevent v1 dispatch.
-- Resolve once and pass the completed context into dispatch; do not re-read `_meta` downstream.
-- Prove native, stdio, HTTP, and wasm use the same resolver.
-
-### Plan 112-05
-
-- Specify the exact result envelope and collision behavior.
-- Ensure scalar, array, and null results remain valid.
-- Define how later phases set `InputRequired` and `Task`.
-- Include wasm in result-envelope/server-info parity.
-- Add golden v1 wire fixtures and v2 wire fixtures.
-- Treat the discover result wire shape as provisional until final-spec verification.
-
-### Plan 112-06
-
-- Require `MCP-Protocol-Version` on v2 HTTP requests, not just `Mcp-Method` and `Mcp-Name`.
-- Define classification for all presence combinations:
-
-  | Header | `_meta` | Expected |
-  |---|---|---|
-  | v2 | v2 | Validate remaining headers and process |
-  | v2 | absent/v1/invalid | Reject |
-  | absent/v1/invalid | v2 | Reject |
-  | v1 | absent/v1 | v1 behavior |
-  | unsupported | any | Explicit unsupported-version handling |
-  | any | any, server not opted in | Locked D-04 legacy behavior |
-
-- Define `Mcp-Name` derivation and cross-check rules.
-- Validate header decoding and length without panics.
-- Test required headers on success and error responses.
-- Consume a context resolved by transport ingress rather than calling the resolver a second time.
-
-### Plans 112-07 and 112-08
-
-- Preserve the independent frozen numeric assertions as planned.
-- Add a final repository-wide audit rather than relying only on enumerated line lists.
-- Include feature-gated transports/modules in the audit.
-- Confirm no new literals were introduced after the plans were written.
-- Run final-spec and semver gates after both migrations, not only targeted tests.
-
-## Suggested Revised Architecture
-
-Use one shared resolver with explicit inputs and outcomes:
-
-```text
-HTTP ingress:
-  headers + parsed JSON-RPC request metadata
-          │
-          ▼
-normalize ProtocolEvidence
-          │
-          ▼
-resolve(configured_accept_list, evidence, optional_v1_session_version)
-          │
-          ├── ProtocolContext(V1)
-          ├── ProtocolContext(V2)
-          └── typed negotiation/header error
-          │
-          ▼
-dispatch(context, request, auth_context)
-          │
-          ▼
-serialize response using context + explicit ResponseDisposition
+```rust
+pub uri: String,
+pub _meta: Option<RequestMeta>,
 ```
 
-For stdio/wasm, construct the same `ProtocolEvidence` without HTTP headers. This ensures:
+There is no `name` field at [src/types/resources.rs:160](/Users/guy/Development/mcp/sdk/rust-mcp-sdk/src/types/resources.rs:160).
 
-- Exactly one resolution.
-- Exact accept-list enforcement.
-- One precedence/conflict policy.
-- No v2 header-validation bypass.
-- A single context available to handlers and serialization.
-- Clean future deletion of v1 fallback logic.
+Consequences:
 
-`ResponseDisposition` should explicitly carry `Complete`, `InputRequired`, or `Task`, rather than relying on an enum with no path from handlers to serialization.
+- A typed, standards-shaped `resources/read` request will produce `body_name == None`.
+- A full v2 request will still be rejected by `cross_check_name`.
+- A test can accidentally conceal this defect by inserting a nonstandard extra `params.name`; serde will likely ignore it during typed parsing while the raw-body gate consumes it.
+- `src/server/streamable_http_server.rs` is not even listed under Plan 112-09’s modified files.
+
+This means the plan does not actually close Gap C for compliant resource requests.
+
+### HIGH — the proposed v1 tests do not prove byte identity
+
+The tests described as “golden byte-identity fixtures” merely assert that `resultType` and `serverInfo` are absent.
+
+That proves only two keys were not added. It does not catch changes in:
+
+- field ordering;
+- omitted/default fields;
+- error/result shape;
+- response ID;
+- whitespace or serializer behavior;
+- content headers;
+- other newly emitted metadata.
+
+The existing `Resp` test helper parses JSON and discards the raw response text, making byte comparison impossible.
+
+### MEDIUM — the opted-in v1 handler expectation is wrong
+
+The plan says:
+
+> on a v1 / non-opted-in server, the same handlers see `extra.era()==None`
+
+Those are different cases:
+
+- Non-opted-in server: `resolve_ingress_protocol_context` returns `None`.
+- Opted-in server receiving no v2 signal: the resolver selects a v1 version and returns `Some(ProtocolContext { era: Era::V1, ... })`.
+
+The test matrix must distinguish `None` from `Some(Era::V1)`.
+
+### MEDIUM — handler tests may not prove the dispatch arms were repaired
+
+The acceptance language permits a test that directly calls `handle_get_prompt` or `handle_read_resource` with a context. Such a test would pass even if `process_client_request` or `handle_request_internal` still dropped the context.
+
+The tests must enter above the affected dispatch match arms.
+
+### MEDIUM — trace propagation is promised but not required by acceptance
+
+The plan’s behavior and success criteria claim `trace_context()` is live, but the named acceptance criterion explicitly requires only `era` and `client_info`.
+
+A regression that omits `.with_request_meta(...)` but retains `.with_protocol_context(...)` could therefore pass the stated handler acceptance check. That would leave trace propagation broken.
+
+### MEDIUM — the automated test command is malformed
+
+This command supplies two positional libtest filters:
+
+```bash
+cargo test --lib --features full -- extract_request_meta_value prompt_resource_protocol_context
+```
+
+Standard Rust’s test harness accepts one filter; the second positional value is generally rejected. Use separate commands or a single common substring.
+
+### MEDIUM — project-mandated fuzz coverage is absent
+
+The plan adds a proptest but no fuzz target or explicit fuzz verification, despite the stated phase quality requirement of unit + property/fuzz + integration coverage for changed behavior.
+
+### LOW — unnecessary cloning instructions obscure ownership
+
+The dispatch match arms are mutually exclusive, so some prescribed `protocol_context.clone()` calls may be unnecessary. This is not a correctness problem, but execution should let the compiler guide the minimum cloning.
+
+## Suggestions
+
+1. Add `src/server/streamable_http_server.rs` to Plan 112-09 and make logical-name extraction method-aware:
+
+   - `tools/call` → `params.name`
+   - `prompts/get` → `params.name`
+   - `resources/read` → `params.uri`
+   - name-less methods → presence-only
+
+2. Build the resource body strictly from `ReadResourceRequest` and do not add a synthetic `name` property. Set `Mcp-Name` to the URI and prove the gate accepts it.
+
+3. Extend `Resp` with the exact raw response bytes or string. Pin baseline fixtures captured from the current v1 implementation and compare exact bytes.
+
+4. Split handler expectations into:
+
+   - non-opted-in → `era() == None`;
+   - opted-in v1 fallback → `era() == Some(Era::V1)`;
+   - opted-in v2 → `era() == Some(Era::V2)`.
+
+5. Enter through the real dispatch entrypoints, not the private leaf handlers.
+
+6. Put protocol version, `clientInfo`, `traceparent`, `tracestate`, and baggage into `_meta`; assert all relevant accessors inside both prompt and resource handlers.
+
+7. Replace the verification command with separate invocations, for example:
+
+```bash
+cargo test --lib --features full extract_request_meta_value
+cargo test --lib --features full prompt_resource_protocol_context
+```
+
+8. Add the required fuzz/property coverage for raw metadata extraction and malformed reserved values.
 
 ## Risk Assessment
 
-**Overall risk: HIGH**
+**HIGH**
 
-The plan set is well researched and has good test discipline, but the remaining issues are architectural rather than cosmetic. The protocol-era resolver is the keystone for every later phase, and its current design permits duplicated resolution, incomplete accept-list enforcement, and ambiguous HTTP downgrade behavior. The proposed public enum change may violate the hard 2.x-minor constraint, while result-envelope injection lacks a safe definition for arbitrary JSON results. VERS-06 is intentionally unfinished yet marked satisfied, and its required source comments conflict with the repository’s quality policy.
+The context-threading implementation itself is low-to-medium risk, but the plan’s live resource acceptance test is built on a false assumption about `params.name`. As written, execution can either fail the acceptance test or make it pass using a nonstandard request that conceals the remaining production bug. The byte-identity claim is also not actually tested.
 
-Execution should pause until the resolver contract, public API strategy, HTTP evidence matrix, and result-envelope model are corrected. Once those are settled, the existing wave structure and most of the planned tests can be retained.
+---
 
-_(Codex note: its own external-CLI delegation sub-step failed — Claude was unauthenticated and Gemini could not bind a port under the sandbox — so the review above is Codex's own direct analysis. No repository files were changed by the reviewer.)_
+# Plan 112-10
+
+## Summary
+
+HTTP-only delivery is an honest and acceptable interpretation of SC#3: it provides one real production transport while avoiding a public exhaustive-enum change that could violate the MINOR requirement. Deleting the crate-private wrappers and consolidating the projection is also semver-safe. The proposed HTTP implementation, however, is under-specified at the most critical boundary. Intercepting immediately before transport parsing is necessary, but returning a response there bypasses the normal header gate, session validation, authentication, event storage, and portions of middleware response processing. It also changes actual current v1 HTTP behavior while claiming byte identity. Consequently, Plan 112-10 does not safely re-satisfy VERS-04 as written.
+
+## Strengths
+
+- The plan correctly recognizes that interception must happen before `StdioTransport::parse_message`. That parser calls public `parse_request`, which collapses the internal request before dispatch.
+
+- HTTP-only scope is reasonable:
+
+  - SC#3 says “at least one real transport.”
+  - The v2 header contract is HTTP-specific.
+  - Avoiding a public `TransportMessage` variant substantially reduces semver risk.
+
+- `build_discover_response` is a good consolidation boundary:
+
+  - one era gate;
+  - one capability projection;
+  - one envelope injection;
+  - no capability recomputation;
+  - no initialization mutation.
+
+- Deleting the two `pub(crate)` `ServerCore` methods does not remove public API and should not create a semver break.
+
+- Matching the crate-private `InternalClientRequest` directly in the HTTP layer is acceptable; that enum can grow without public exhaustive-match impact.
+
+- The plan explicitly calls for decomposing raw parsing, era resolution, and response building, which is appropriate for the cognitive-complexity limit.
+
+- A short-lived `state.server` lock followed by synchronous `Server::handle_discover` is not inherently deadlocking.
+
+## Concerns
+
+### HIGH — the internal path bypasses the v2 header gate
+
+The proposed helper resolves the era from raw `_meta`, but it does not explicitly call `classify_v2_request` or enforce the existing matrix at [src/server/streamable_http_server.rs:490](/Users/guy/Development/mcp/sdk/rust-mcp-sdk/src/server/streamable_http_server.rs:490).
+
+As written, it may accept:
+
+- v2 `_meta` with no `MCP-Protocol-Version` header;
+- v2 header with non-v2 or absent `_meta`;
+- a mismatched `Mcp-Method`;
+- missing `Mcp-Name`;
+- malformed or oversized v2 headers.
+
+Simply echoing three headers on the response is not equivalent to enforcing them on ingress.
+
+### HIGH — early return bypasses authentication
+
+On the fast path, authentication occurs only after parsing, session resolution, and header gating at [src/server/streamable_http_server.rs:1583](/Users/guy/Development/mcp/sdk/rust-mcp-sdk/src/server/streamable_http_server.rs:1583).
+
+On the middleware path, authentication occurs at [src/server/streamable_http_server.rs:1890](/Users/guy/Development/mcp/sdk/rust-mcp-sdk/src/server/streamable_http_server.rs:1890).
+
+An interception immediately before the parse calls returns before both. Even a read-only capability projection may be protected by an installed auth provider. The threat model’s assertion that no auth-gated data is added does not justify bypassing the server’s configured request boundary.
+
+### HIGH — the proposed placement bypasses session and protocol validation
+
+The helper is to run before:
+
+- `resolve_session_for_request`;
+- legacy protocol-version validation;
+- response session-ID handling;
+- event storage.
+
+That can make `server/discover` behave differently from every other HTTP method in stateful mode, including accepting invalid or unknown session IDs.
+
+### HIGH — middleware behavior is not preserved
+
+In the middleware path, interception before `parse_transport_message_with_middleware` occurs after request middleware but before normal response middleware assembly and error hooks.
+
+The plan says to use “existing success-response assembly,” but the available middleware response builder requires:
+
+- a `TransportMessage`;
+- resolved response session ID;
+- computed outbound version;
+- middleware/context arguments.
+
+Those values are not all available at the proposed interception point. A single generic early-return helper cannot transparently preserve both fast and middleware response semantics without more explicit factoring.
+
+### HIGH — the v1 byte-identity assertion conflicts with current HTTP behavior
+
+Current fast-path parsing does this:
+
+1. `StdioTransport::parse_message`;
+2. public `parse_request`;
+3. internal method becomes method-not-found error;
+4. `parse_transport_message_fast` maps that parse failure to an HTTP 400 `PARSE_ERROR` response with `id: null`.
+
+See [src/server/streamable_http_server.rs:1412](/Users/guy/Development/mcp/sdk/rust-mcp-sdk/src/server/streamable_http_server.rs:1412).
+
+The middleware path has a different parse-error assembly again.
+
+The proposed interception would instead return a normal serialized `JSONRPCResponse` containing `-32601`, probably HTTP 200 and with the original request ID. That may be a better semantic result, but it is not byte-identical to the existing HTTP path.
+
+The plan must resolve the conflict between:
+
+- “standard `-32601`,” and
+- “actual existing HTTP bytes remain unchanged.”
+
+It cannot merely assert both.
+
+### MEDIUM — non-opted-in short-circuiting is ambiguous
+
+Calling `resolve_protocol_context` directly on a non-opted-in v1 accept list with v2 `_meta` yields an unsupported-version error. Existing ingress behavior first checks `is_v2_opted_in` and returns `Ok(None)` without inspecting v2 metadata.
+
+The helper must preserve that exact order:
+
+```text
+if not opted in:
+    no era detection; legacy handling
+else:
+    resolve raw metadata
+```
+
+The non-opted-in test may catch this, but the implementation instruction should be explicit.
+
+### MEDIUM — tests do not exercise the dangerous pathways
+
+All proposed end-to-end tests use stateless HTTP without middleware or authentication. They will not detect:
+
+- authentication bypass;
+- invalid session acceptance;
+- response-middleware bypass;
+- event-store omission;
+- fast/middleware parity;
+- header-matrix bypass.
+
+### MEDIUM — rejection tests are too weak
+
+The discover tests cover a happy v2 request and two v1/non-opted-in cases. They do not test:
+
+- v2 `_meta` without v2 headers;
+- v2 header without v2 `_meta`;
+- missing `Mcp-Method`;
+- missing `Mcp-Name`;
+- mismatched `Mcp-Method`;
+- response header echo, including empty `Mcp-Name`;
+- preservation of the JSON-RPC request ID.
+
+### MEDIUM — response assembly is not concrete enough
+
+The plan should specify that `JSONRPCResponse` becomes `TransportMessage::Response` and then passes through the same per-path response pipeline. Otherwise, an executor could serialize the inner response differently, omit event storage, or miss SSE/session behavior.
+
+### LOW — stale documentation remains outside the listed files
+
+Comments in `src/types/protocol/mod.rs` and `src/shared/protocol_helpers.rs` still describe `dispatch_internal_client_request` as the consumer. Deleting that function without updating these comments leaves architectural documentation inaccurate.
+
+### LOW — locking is manageable, but lock scope should be explicit
+
+There is no necessary double-lock if the helper:
+
+1. acquires `state.server`;
+2. resolves context and synchronously builds the response;
+3. releases the guard;
+4. runs event storage and response middleware afterward.
+
+It should not hold the server mutex while awaiting middleware, event storage, or other transport work.
+
+## Suggestions
+
+1. Do not implement discover as an immediate early response. Introduce a private HTTP-local ingress classification, such as:
+
+```rust
+enum HttpIngress {
+    Public(TransportMessage),
+    Discover {
+        id: RequestId,
+        raw_meta: Option<Value>,
+    },
+}
+```
+
+This is crate-private/local and therefore avoids the public `TransportMessage` semver problem.
+
+2. Let both POST pipelines continue through their normal stages after classification:
+
+```text
+body limit
+request middleware
+header validation
+raw ingress classification
+session resolution
+v2 header matrix
+legacy version validation
+authentication
+dispatch
+event storage
+normal fast/middleware response assembly
+```
+
+3. Factor a raw-meta counterpart to `run_v2_header_gate` that:
+
+- short-circuits non-opted-in servers;
+- calls the shared resolver once;
+- invokes the same `classify_v2_request`;
+- returns the same `V2GateOutcome`.
+
+4. For `server/discover`, treat `Mcp-Name` as presence-only, consistent with `cross_check_name` for name-less methods. Explicitly test an empty value if that is the intended canonical value.
+
+5. Decide the v1 compatibility rule using a captured pre-change HTTP fixture:
+
+   - If literal byte identity is mandatory, fall through to the old parse path for non-v2/non-opted-in requests.
+   - If standardizing HTTP on `-32601` is intentional, document it as a deliberate v1 behavior change and reconcile that with the milestone invariant before implementation.
+
+6. Add tests for both fast and middleware paths, including a response middleware that visibly modifies or records the discover response.
+
+7. Add an auth provider test proving unauthorized discover does not bypass authentication.
+
+8. Add a stateful/session test for invalid session IDs.
+
+9. Add the full discover header matrix and assert status, error code, original ID, and all outbound headers.
+
+10. Update stale documentation referencing the deleted wrapper functions.
+
+11. Add property/fuzz coverage for raw-body internal classification and `_meta` extraction, particularly malformed JSON, non-object params, oversized metadata, and unusual IDs.
+
+## Risk Assessment
+
+**HIGH**
+
+The internal method can be made reachable over HTTP without a public enum change, and the lock itself is not the main risk. The high risk comes from inserting a parallel request pipeline that skips established security and transport invariants. The current tests would not detect most of those regressions.
+
+---
+
+# Cross-plan assessment
+
+## Will both plans together make all blocked requirements true?
+
+Not yet.
+
+- **VERS-01/03/07/09:** likely true after the core 112-09 edits, provided tests enter through the real dispatch arms and assert tracing as well as era/client identity.
+- **VERS-05:** still false for a standard `resources/read` request until the HTTP gate derives its logical name from `params.uri`.
+- **VERS-04:** discover becomes reachable only if 112-10’s interception is integrated into—not returned ahead of—the existing HTTP pipeline.
+
+## HTTP-only discover scope
+
+The scoping is honest and acceptable. SC#3 explicitly requires at least one real transport, and avoiding a public `TransportMessage` variant is a sensible semver tradeoff.
+
+It should be documented as a transport support limitation:
+
+- HTTP v2: supported.
+- stdio/adapters/WASI: method remains unavailable.
+- Future extension requires a separate semver-reviewed design.
+
+That is not a hidden gap unless broader transport parity is stated elsewhere as a requirement.
+
+## Required plan changes before execution
+
+At minimum:
+
+1. Add method-aware URI extraction for `resources/read`.
+2. Replace “absence of two keys” with actual raw-byte v1 fixtures.
+3. Correct `None` versus `Some(Era::V1)` expectations.
+4. Refactor HTTP parsing into a private ingress classification that preserves the rest of both POST pipelines.
+5. Apply the complete v2 header matrix to discover.
+6. Preserve auth, sessions, middleware, event storage, response ID, and response assembly.
+7. Resolve the contradiction between actual current HTTP v1 behavior and the desired `-32601` behavior.
+8. Add discriminating fast/middleware, auth, session, malformed-input, and header-matrix tests.
+
+**Overall combined risk: HIGH until revised; MEDIUM after these corrections.**
 
 ---
 
 ## Consensus Summary
 
-Two reviewers, opposite verdicts. **Gemini: APPROVED, high confidence.** **Codex: HIGH risk, revise Plans 03/04/05/06 before Wave 1.** The divergence is not noise — Gemini reviewed the plans for *coverage and internal consistency* (and they pass that bar), while Codex reviewed them adversarially for *architectural correctness of the negotiation spine* and surfaced design gaps that the internal plan-checker also missed. On a keystone phase, the adversarial read deserves weight.
+### Verification Notes (orchestrator, checked against live source)
+
+The two reviewers disagreed sharply on severity, so the disputed claims were checked against the code rather than taken on faith:
+
+| Claim | Source check | Verdict |
+|-------|--------------|---------|
+| **112-09: a standards-shaped v2 `resources/read` is still rejected** — the HTTP gate cross-checks `Mcp-Name` against `params.name`, but `ReadResourceRequest` has `uri`, not `name` | `src/types/resources.rs:160` (`pub uri: String`, no `name`); `cross_check_name` + `is_name_bearing_method` include `resources/read` (`streamable_http_server.rs:470,486`); `extract_body_method_and_name` reads `params.get("name")` (`:537`) | **CONFIRMED.** `body_name == None` → `cross_check_name` returns `Err` → REJECT. `prompts/get` is unaffected (`GetPromptRequest.name` exists, `prompts.rs:276`). 112-09 does not list `streamable_http_server.rs` in `files_modified`. Gap C is not closed for `resources/read` as written. |
+| **112-10: v1 `server/discover` byte-identity claim is self-contradictory** — current HTTP path returns a `PARSE_ERROR` 400 (`id: null`), not a clean `-32601` | `PARSE_ERROR` + `StatusCode::BAD_REQUEST` + `"id": null` present (`streamable_http_server.rs:342,655,1412`) | **CONFIRMED plausible.** Plan cannot claim both "returns `-32601`" and "byte-identical to existing behavior." One must be chosen and documented as a deliberate (benign) v1 HTTP change. |
+| **112-10: early-return interception bypasses auth/session/middleware** | Architectural: `try_route_internal_request` returns `Some(response)` at the top of the POST handler, before the dispatch pipeline where auth/session/header-gate/event-store run | **SOUND.** An early return before the pipeline necessarily precedes those stages. Security-relevant if an auth provider is installed. |
+| **112-09: `cargo test -- filter1 filter2` is malformed (harness accepts one filter)** | — | **LOW CONFIDENCE / likely incorrect.** Modern libtest accepts multiple positional filters (OR semantics). Harmless to split the command anyway, but not a real blocker. |
 
 ### Agreed Strengths (both reviewers)
 
-- **Full VERS-01..09 coverage** across the 8 plans — no orphaned requirements.
-- **Semver/backcompat discipline**: `LATEST_PROTOCOL_VERSION` pinned to `2025-11-25`, v2 opt-in only, `cargo-semver-checks` gate, v1 output intended byte-identical.
-- **Frozen `-32002` preserved** and correctly disambiguated from the other two `-32002` meanings (`UNSUPPORTED_CAPABILITY`, provisional v2 resource-not-found); locking test kept intact.
-- **`error::ErrorCode` → `error_codes::*` delegation** is an efficient way to centralize the 210-site dominant surface without churning call sites.
-- **Wave ordering** avoids same-wave write conflicts; `RequestHandlerExtra` follows the established additive pattern with native/wasm parity.
-- **Property tests** targeted at the two untrusted-input parsers (trace `_meta`, header/body reconciliation).
+- **112-09 fixes the correct root cause.** Extending `extract_request_meta_value` + mirroring the proven `handle_call_tool` builder chain at all four prompt/resource handler sites is low-risk and architecturally consistent; the era-gated envelope injector means v1 output is untouched in principle.
+- **112-09's twin-site discipline** (repairing both `core.rs` and `mod.rs`) correctly targets a demonstrated drift risk.
+- **112-10's HTTP-only `server/discover` scope is honest and acceptable.** Both agree SC#3 ("at least one real transport") is satisfied by HTTP, and that avoiding a public `TransportMessage` variant is the right call to keep the release semver-MINOR. Should be documented as an explicit transport-support limitation (HTTP: yes; stdio/adapters/WASI: not yet).
+- **112-10's `build_discover_response` consolidation + wrapper deletion** is a clean, semver-safe way to remove the `#[allow(dead_code)]` (deleting `pub(crate)` methods is not a public-API break).
+- **No deadlock risk** in 112-10's short-lived `state.server` lock (both agree; Gemini explicitly, Codex with the caveat to not hold the guard across await).
 
-### Agreed Concerns (raised or implicitly shared)
+### Agreed Concerns (raised by both — highest priority)
 
-- **`server/discover` wire shape is provisional** — both note the final 2026-07-28 schema isn't published; Codex extends this from "just error codes" (VERS-06) to the discover payload, envelope, and header semantics too. Both want a final-spec checkpoint.
+1. **[HIGH] The intercepted `server/discover` path does not apply the v2 header-classification matrix.** Both reviewers flag this (Gemini MEDIUM, Codex HIGH): resolving era from raw `_meta` alone means a v2-`_meta`/conflicting-header (or missing-header) request could be accepted on the discover branch where `tools/call` would be rejected 400. Fix: run discover through the same `classify_v2_request`/header gate (a raw-`_meta` counterpart to `run_v2_header_gate`).
 
-### Codex-only Concerns Worth Triaging Before Execution (HIGH)
+### Divergent Views (Codex-only, verified real → must address)
 
-These were NOT caught by Gemini or the internal plan-checker and several look real:
+2. **[HIGH — 112-09] `resources/read` name cross-check uses `params.name`, which the request doesn't have.** CONFIRMED above. Fix: make logical-name extraction method-aware (`resources/read` → `params.uri`), add `streamable_http_server.rs` to 112-09's scope, and build the test body from a real `ReadResourceRequest` (no synthetic `params.name` that would hide the bug).
+3. **[HIGH — 112-10] Early-return interception bypasses auth / session / legacy-version validation / response middleware / event storage, and its "success-response assembly" needs values not available pre-parse.** Fix (Codex's design): don't early-return — introduce a crate-*local* `HttpIngress::{Public(TransportMessage), Discover{id, raw_meta}}` classification and let both POST pipelines continue through their normal stages (header gate → session → auth → dispatch → event store → per-path response assembly).
+4. **[HIGH — 112-10] v1 byte-identity claim contradicts current HTTP behavior** (PARSE_ERROR 400 vs `-32601`). CONFIRMED above. Resolve explicitly: either fall through to the old parse path for v1/non-opted-in, or document the `-32601` HTTP 200 as a deliberate v1 behavior change reconciled against the milestone's byte-identity invariant.
+5. **[MEDIUM — 112-09] Test rigor:** "golden byte-identity" tests only assert two keys are absent (the `Resp` helper discards raw bytes — no real byte comparison); `era()==None` conflates non-opted-in (`None`) with opted-in-v1 (`Some(Era::V1)`); handler-visibility tests must enter through the real dispatch arms (not call leaf handlers directly) or they won't prove the dispatch fix; acceptance requires only `era`+`client_info` so a dropped `.with_request_meta` (trace regression) could pass; project-mandated **fuzz** coverage is absent (only proptest).
+6. **[MEDIUM — 112-10] Test rigor:** all e2e tests are stateless/no-middleware/no-auth, so they can't detect the bypass regressions; the rejection matrix (v2-`_meta`/no-header, header/no-`_meta`, missing/mismatched `Mcp-Method`/`Mcp-Name`, request-id preservation) is untested; stale doc comments referencing the deleted wrappers remain in `types/protocol/mod.rs` + `shared/protocol_helpers.rs`.
 
-1. **`ClientRequest::ServerDiscover` may not be semver-minor.** Adding a variant to a public *exhaustive* enum breaks downstream exhaustive matches; adding `#[non_exhaustive]` after publication is itself breaking. Plan 03 defers this to an execution-time "try both" experiment, but Plan 05 hard-depends on the variant. **This should be resolved in planning, not during execution** — options: dispatch `server/discover` before conversion into the public enum, or use an internal dispatch enum leaving the public one unchanged.
-2. **Zero-SATD conflict.** Plans 03/07 mandate literal `TODO` placeholder comments for the deferred v2 error values — CLAUDE.md's zero-SATD policy + PMAT will reject these, a predictable quality-gate failure. Represent unavailability structurally (`Option`/omitted const) or track it in the planning system, not source comments.
-3. **"Resolve once at ingress" may not hold.** Plan 04 resolves `ProtocolContext` in `ServerCore` dispatch while Plan 06 re-derives a v2 verdict in the HTTP transport — two resolution sites that can disagree. Codex wants one resolver over normalized transport evidence.
-4. **Accept-list collapsed to `is_v2_opted_in()` boolean** — doesn't actually enforce the configured version list (v2-only config, empty list, unsupported-version rejection all undefined). Partially a D-02 fidelity question.
-5. **HTTP v2 classification downgrade/bypass gaps** — the header-present/`_meta`-present matrix has undefined cells; VERS-05 requires `MCP-Protocol-Version` alongside `Mcp-Method`/`Mcp-Name` but only the latter two are mandated. Codex supplies a full presence matrix (see its Plan 112-06 section).
-6. **`resultType`/`serverInfo` injection underspecified** for scalar/array/null results and future `input_required`/`task` dispositions.
-7. **Missing repo-mandated workflow** — no contract-first `pmat comply check`, no fuzz target, no runnable example (though CLAUDE.md's ALWAYS-requirements arguably apply; note DOCS-06/Phase 119 owns runnable examples).
+### Minor (single-reviewer, low severity)
 
-### Divergent Views
+- [MED — Gemini] `extract_request_meta_value`'s `_ => None` wildcard gives no compile-time tripwire for a future `_meta`-bearing `ClientRequest` variant — add an exhaustive-variant test. (Codex notes the go-forward doc rule is currently exhaustive: only call-tool/get-prompt/read-resource carry `RequestMeta`.)
+- [LOW — both] Unnecessary `protocol_context.clone()` in mutually-exclusive dispatch arms; let the compiler guide minimum cloning.
 
-- **Overall go/no-go.** Gemini says proceed to Wave 1 as-is; Codex says pause and revise the negotiation contract, HTTP evidence matrix, public-API strategy, and result-envelope model first. My read: Codex's #1 (enum semver) and #2 (zero-SATD) are concrete and cheap to verify/fix now, and directly threaten the milestone's "2.x minor" and quality-gate promises — worth addressing before execution regardless of the broader architectural debate.
+### Bottom line
 
-### Recommended Next Step
-
-Feed this back into planning:
-
-```
-/gsd:plan-phase 112 --reviews
-```
-
-The planner will weigh Codex's HIGH concerns against the locked CONTEXT.md decisions (several — e.g. `_meta`-authoritative HTTP classification per D-11, resultType-at-serialization per D-07/D-08 — are deliberate design choices, so some Codex concerns will be answered "intentional, here's why" rather than changed). Prioritize resolving the `ServerDiscover` enum-semver question and the zero-SATD TODO conflict, which are unambiguous and pre-execution-critical.
+Both plans close the *conceptual* root causes, but **112-09 leaves `resources/read` (VERS-05) actually broken** and **112-10's interception design has real security/behavioral gaps and a contradictory v1 claim**. Neither is execution-ready as written. Recommended: `/gsd:plan-phase 112 --reviews` to fold findings #1–#6 into the plans, then re-check and execute.
