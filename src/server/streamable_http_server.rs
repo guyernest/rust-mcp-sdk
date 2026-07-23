@@ -519,11 +519,21 @@ fn classify_v2_request(
     }
 }
 
-/// Extract the untrusted `(method, params.name)` pair from the raw JSON-RPC body.
+/// Extract the untrusted `(method, logical-name)` pair from the raw JSON-RPC body.
 ///
 /// Re-parses the raw bytes (the transport parse already succeeded) so the
-/// cross-check compares the header against the LITERAL wire `method`/`params.name`
-/// a WAF would see — the smuggling-relevant view (D-06). Never panics.
+/// cross-check compares the header against the LITERAL wire value a WAF would see
+/// — the smuggling-relevant view (D-06). Never panics.
+///
+/// The logical name is resolved METHOD-AWARELY because different name-bearing
+/// methods carry it in different params keys:
+/// - `tools/call` → `params.name`
+/// - `prompts/get` → `params.name`
+/// - `resources/read` → `params.uri` (a [`ReadResourceRequest`](crate::types::ReadResourceRequest)
+///   has a `uri` field and NO `name` field, so reading `params.name` would always
+///   yield `None` and wrongly reject a standards-shaped `resources/read`)
+/// - any other method → `None` (presence-only; `cross_check_name` returns Ok for
+///   non-name-bearing methods)
 fn extract_body_method_and_name(body: &[u8]) -> (Option<String>, Option<String>) {
     let Ok(value) = serde_json::from_slice::<serde_json::Value>(body) else {
         return (None, None);
@@ -532,9 +542,16 @@ fn extract_body_method_and_name(body: &[u8]) -> (Option<String>, Option<String>)
         .get("method")
         .and_then(serde_json::Value::as_str)
         .map(str::to_string);
+    // Select the params key by method: resources/read carries its logical name in
+    // `uri`, every other name-bearing method in `name`. Non-name-bearing methods
+    // resolve to `None` regardless (their key is absent).
+    let name_key = match method.as_deref() {
+        Some("resources/read") => "uri",
+        _ => "name",
+    };
     let name = value
         .get("params")
-        .and_then(|p| p.get("name"))
+        .and_then(|p| p.get(name_key))
         .and_then(serde_json::Value::as_str)
         .map(str::to_string);
     (method, name)
@@ -2308,6 +2325,51 @@ mod tests {
         assert_eq!(n.as_deref(), Some("search"));
         // Garbage bytes → (None, None), never a panic.
         assert_eq!(extract_body_method_and_name(b"not json"), (None, None));
+    }
+
+    #[test]
+    fn extract_body_method_and_name_uses_uri_for_resources_read() {
+        // resources/read carries its logical name in params.uri (NO params.name).
+        let body = br#"{"jsonrpc":"2.0","id":1,"method":"resources/read","params":{"uri":"mem://greeting"}}"#;
+        let (m, n) = extract_body_method_and_name(body);
+        assert_eq!(m.as_deref(), Some("resources/read"));
+        assert_eq!(
+            n.as_deref(),
+            Some("mem://greeting"),
+            "resources/read logical name must come from params.uri"
+        );
+
+        // prompts/get still resolves the logical name from params.name.
+        let body =
+            br#"{"jsonrpc":"2.0","id":1,"method":"prompts/get","params":{"name":"greeting"}}"#;
+        let (m, n) = extract_body_method_and_name(body);
+        assert_eq!(m.as_deref(), Some("prompts/get"));
+        assert_eq!(n.as_deref(), Some("greeting"));
+
+        // tools/call remains params.name (unchanged).
+        let body = br#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search"}}"#;
+        let (m, n) = extract_body_method_and_name(body);
+        assert_eq!(m.as_deref(), Some("tools/call"));
+        assert_eq!(n.as_deref(), Some("search"));
+
+        // A resources/read carrying only uri yields NO name under the old
+        // params.name view — the regression guard for review finding #2.
+        let body =
+            br#"{"jsonrpc":"2.0","id":1,"method":"resources/read","params":{"uri":"file:///x"}}"#;
+        let (_, n) = extract_body_method_and_name(body);
+        assert_eq!(n.as_deref(), Some("file:///x"));
+    }
+
+    #[test]
+    fn cross_check_name_accepts_resources_read_uri() {
+        // A standards-shaped resources/read cross-checks Mcp-Name against the URI.
+        let uri = "mem://greeting";
+        assert!(cross_check_name(uri, "resources/read", Some(uri)).is_ok());
+        // A disagreeing Mcp-Name is rejected.
+        assert!(cross_check_name(uri, "resources/read", Some("mem://other")).is_err());
+        // Absent body name (would happen if extraction wrongly read params.name)
+        // still fails closed for the name-bearing method.
+        assert!(cross_check_name(uri, "resources/read", None).is_err());
     }
 
     #[test]
