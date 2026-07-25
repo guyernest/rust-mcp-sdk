@@ -14,7 +14,7 @@
 //!    [`ACKNOWLEDGED_METHOD`] notification carrying
 //!    [`SubscriptionAcknowledgedParams`] — its `notifications` field is the
 //!    subset the server agreed to honor, never a superset of what was requested.
-//! 3. Every frame carries `_meta[`[`SUBSCRIPTION_ID_META_KEY`]`]`, equal to the
+//! 3. Every frame's `_meta` carries [`SUBSCRIPTION_ID_META_KEY`], equal to the
 //!    JSON-RPC id of the listen request.
 //! 4. On graceful teardown the server sends [`SubscriptionsListenResult`] as the
 //!    JSON-RPC response before closing.
@@ -484,30 +484,31 @@ mod tests {
     use crate::types::notifications::{LogMessageParams, LoggingLevel, ResourceUpdatedParams};
     use serde_json::json;
 
-    fn caps(
-        tools: bool,
-        prompts: bool,
-        resources_list: bool,
-        resources_sub: bool,
-    ) -> ServerCapabilities {
-        let mut capabilities = ServerCapabilities::default();
-        if tools {
-            capabilities.tools = Some(ToolCapabilities {
+    /// Index into the [`caps`] flag array, in the order the conformance
+    /// expression evaluates them.
+    const TOOLS: usize = 0;
+    const PROMPTS: usize = 1;
+    const RESOURCES_LIST: usize = 2;
+    const RESOURCES_SUB: usize = 3;
+
+    /// `ServerCapabilities` advertising exactly the flagged subset of the four
+    /// subscription-delivered capabilities.
+    fn caps(flags: [bool; 4]) -> ServerCapabilities {
+        let resources =
+            (flags[RESOURCES_LIST] || flags[RESOURCES_SUB]).then(|| ResourceCapabilities {
+                subscribe: flags[RESOURCES_SUB].then_some(true),
+                list_changed: flags[RESOURCES_LIST].then_some(true),
+            });
+        ServerCapabilities {
+            tools: flags[TOOLS].then_some(ToolCapabilities {
                 list_changed: Some(true),
-            });
-        }
-        if prompts {
-            capabilities.prompts = Some(PromptCapabilities {
+            }),
+            prompts: flags[PROMPTS].then_some(PromptCapabilities {
                 list_changed: Some(true),
-            });
+            }),
+            resources,
+            ..ServerCapabilities::default()
         }
-        if resources_list || resources_sub {
-            capabilities.resources = Some(ResourceCapabilities {
-                subscribe: resources_sub.then_some(true),
-                list_changed: resources_list.then_some(true),
-            });
-        }
-        capabilities
     }
 
     #[test]
@@ -686,13 +687,16 @@ mod tests {
     #[test]
     fn advertises_subscriptions_over_all_sixteen_capability_combinations() {
         for bits in 0u8..16 {
-            let tools = bits & 1 != 0;
-            let prompts = bits & 2 != 0;
-            let resources_list = bits & 4 != 0;
-            let resources_sub = bits & 8 != 0;
-            let expected = tools || prompts || resources_list || resources_sub;
+            let flags = [bits & 1 != 0, bits & 2 != 0, bits & 4 != 0, bits & 8 != 0];
+            let (tools, prompts, resources_list, resources_sub) = (
+                flags[TOOLS],
+                flags[PROMPTS],
+                flags[RESOURCES_LIST],
+                flags[RESOURCES_SUB],
+            );
+            let expected = flags.iter().any(|f| *f);
             assert_eq!(
-                advertises_subscriptions(&caps(tools, prompts, resources_list, resources_sub)),
+                advertises_subscriptions(&caps(flags)),
                 expected,
                 "bits={bits:04b} (tools={tools}, prompts={prompts}, \
                  resourcesListChanged={resources_list}, resourcesSubscribe={resources_sub})"
@@ -702,14 +706,16 @@ mod tests {
 
     #[test]
     fn a_false_capability_is_not_an_advertisement() {
-        let mut capabilities = ServerCapabilities::default();
-        capabilities.tools = Some(ToolCapabilities {
-            list_changed: Some(false),
-        });
-        capabilities.resources = Some(ResourceCapabilities {
-            subscribe: Some(false),
-            list_changed: Some(false),
-        });
+        let capabilities = ServerCapabilities {
+            tools: Some(ToolCapabilities {
+                list_changed: Some(false),
+            }),
+            resources: Some(ResourceCapabilities {
+                subscribe: Some(false),
+                list_changed: Some(false),
+            }),
+            ..ServerCapabilities::default()
+        };
         assert!(
             !advertises_subscriptions(&capabilities),
             "`listChanged: false` is falsy in the conformance expression too"
@@ -723,7 +729,7 @@ mod tests {
             ..SubscriptionFilter::default()
         };
         // Server supports EVERYTHING; the client asked for one thing.
-        let agreed = requested.intersect_with_capabilities(&caps(true, true, true, true));
+        let agreed = requested.intersect_with_capabilities(&caps([true, true, true, true]));
         assert_eq!(agreed.tools_list_changed, Some(true));
         assert_eq!(agreed.prompts_list_changed, None);
         assert_eq!(agreed.resources_list_changed, None);
@@ -739,7 +745,7 @@ mod tests {
             resource_subscriptions: Some(vec!["mem://a".to_string()]),
         };
         // Only tools.listChanged is supported.
-        let agreed = requested.intersect_with_capabilities(&caps(true, false, false, false));
+        let agreed = requested.intersect_with_capabilities(&caps([true, false, false, false]));
         assert_eq!(agreed.tools_list_changed, Some(true));
         assert_eq!(agreed.prompts_list_changed, None, "omitted, not `false`");
         assert_eq!(agreed.resources_list_changed, None);
@@ -753,7 +759,7 @@ mod tests {
             prompts_list_changed: Some(true),
             ..SubscriptionFilter::default()
         };
-        let agreed = requested.intersect_with_capabilities(&caps(true, false, false, false));
+        let agreed = requested.intersect_with_capabilities(&caps([true, false, false, false]));
         assert!(agreed.is_empty());
         assert_eq!(
             serde_json::to_value(&agreed).expect("serializes"),
@@ -769,14 +775,14 @@ mod tests {
         };
         assert_eq!(
             requested
-                .intersect_with_capabilities(&caps(false, false, false, true))
+                .intersect_with_capabilities(&caps([false, false, false, true]))
                 .resource_subscriptions
                 .as_deref(),
             Some(&["mem://a".to_string()][..])
         );
         assert_eq!(
             requested
-                .intersect_with_capabilities(&caps(false, false, true, false))
+                .intersect_with_capabilities(&caps([false, false, true, false]))
                 .resource_subscriptions,
             None,
             "resources.listChanged does NOT imply resources.subscribe"

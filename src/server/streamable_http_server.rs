@@ -2720,9 +2720,19 @@ fn listen_terminal_result_frame(
     serde_json::to_string(&response).unwrap_or_else(|_| "{}".to_string())
 }
 
-/// Frame one already-serialized listen payload as an SSE `message` event.
-fn listen_sse_event(payload: String) -> std::result::Result<Event, Infallible> {
-    Ok(Event::default().event("message").data(payload))
+/// Frame one queued listen payload as an SSE event.
+///
+/// A [`ListenFrame::Comment`](crate::server::subscriptions::ListenFrame) becomes
+/// an SSE comment line rather than a `message` event, which is how the
+/// buffer-overflow notice reaches a client without impersonating a protocol
+/// message.
+fn listen_sse_event(frame: crate::server::subscriptions::ListenFrame) -> Event {
+    match frame {
+        crate::server::subscriptions::ListenFrame::Message(payload) => {
+            Event::default().event("message").data(payload)
+        },
+        crate::server::subscriptions::ListenFrame::Comment(text) => Event::default().comment(text),
+    }
 }
 
 /// Attach the listen stream's response headers: the v2 outbound echo (VERS-05),
@@ -2743,6 +2753,35 @@ fn attach_listen_response_headers(response: &mut Response, v2_outbound: Option<&
     }
 }
 
+/// The AGREED filter of a `subscriptions/listen` request, or the rejection that
+/// answers it instead.
+///
+/// Extracted so [`assemble_subscriptions_listen`] stays a short pipeline well
+/// under the cognitive-complexity gate.
+fn resolve_agreed_filter(
+    params: Option<serde_json::Value>,
+    view: &ListenServerView,
+) -> std::result::Result<crate::types::subscriptions::SubscriptionFilter, (i32, String)> {
+    use crate::types::protocol::error_codes::INVALID_PARAMS;
+    use crate::types::subscriptions::SubscriptionsListenParams;
+
+    let Some(value) = params else {
+        return Err((
+            INVALID_PARAMS,
+            "Invalid subscriptions/listen params: `notifications` is required".to_string(),
+        ));
+    };
+    let parsed = serde_json::from_value::<SubscriptionsListenParams>(value).map_err(|e| {
+        (
+            INVALID_PARAMS,
+            format!("Invalid subscriptions/listen params: {e}"),
+        )
+    })?;
+    Ok(parsed
+        .notifications
+        .intersect_with_capabilities(&view.capabilities))
+}
+
 /// Serve — or conformantly reject — a `subscriptions/listen` request (HTTP-04).
 ///
 /// THE single implementation both POST entrypoints call, so the fast and
@@ -2751,21 +2790,47 @@ fn attach_listen_response_headers(response: &mut Response, v2_outbound: Option<&
 /// stream: it processes a complete `Vec<u8>` body, and this response has no
 /// complete body by construction.
 ///
-/// Rejection cases, in order:
+/// # Rejection cases, in order
+///
 /// 1. era is not v2 -> `-32601` (`subscriptions/listen` does not exist on v1);
 /// 2. no subscription-delivered capability advertised -> `-32601`, the
 ///    conformant-by-absence configuration;
 /// 3. `params` that do not deserialize (`notifications` is REQUIRED) ->
-///    `-32602`, AFTER the header gate and auth have already run.
+///    `-32602`, AFTER the header gate and auth have already run;
+/// 4. the per-principal or global concurrency cap is exhausted -> `-32005`.
+///
+/// # The three closure triggers
+///
+/// A served stream closes on exactly one of:
+/// * **client disconnect** — dropping the response drops the stream, drops the
+///   moved-in `ListenGuard`, and RAII removes the registry entry and releases
+///   both permits. No terminal result is sent: the peer is gone.
+/// * **server shutdown** — [`Server::close_subscription_streams`](crate::server::Server::close_subscription_streams)
+///   sends each stream its terminal [`SubscriptionsListenResult`](crate::types::subscriptions::SubscriptionsListenResult)
+///   and then ends it. This is the ONLY trigger that sends a terminal result.
+///   The result is pre-built HERE, at registration, because this is where the
+///   shared v2 envelope helpers live.
+/// * **buffer overflow** — a subscriber that fills its bounded channel is
+///   disconnected after one terminal SSE comment (see `LISTEN_CHANNEL_CAPACITY`).
+///
+/// # Resumability
+///
+/// The stream never reads `Last-Event-ID` and never touches the event store: it
+/// ASSERTS [`resumability_active`] is already false for a v2 request (plan 08)
+/// rather than re-deriving the rule.
 async fn assemble_subscriptions_listen(
     state: &ServerState,
     id: crate::types::RequestId,
     params: Option<serde_json::Value>,
     protocol_context: Option<&crate::types::protocol::ProtocolContext>,
     v2_outbound: Option<(String, String)>,
+    auth_context: Option<&crate::server::auth::AuthContext>,
 ) -> Response {
-    use crate::types::protocol::error_codes::{INVALID_PARAMS, METHOD_NOT_FOUND};
-    use crate::types::subscriptions::{SubscriptionsListenParams, SUBSCRIPTIONS_LISTEN_METHOD};
+    use crate::server::subscriptions::{
+        anonymous_principal, ListenFrame, ListenKey, LISTEN_CHANNEL_CAPACITY,
+    };
+    use crate::types::protocol::error_codes::{METHOD_NOT_FOUND, RATE_LIMITED};
+    use crate::types::subscriptions::SUBSCRIPTIONS_LISTEN_METHOD;
 
     let era = protocol_context.map(|pc| pc.era);
     if !matches!(era, Some(crate::types::protocol::Era::V2)) {
@@ -2776,6 +2841,11 @@ async fn assemble_subscriptions_listen(
             format!("Method not found: {SUBSCRIPTIONS_LISTEN_METHOD}"),
         );
     }
+    debug_assert!(
+        !resumability_active(state, era),
+        "a v2 request already has resumability off (plan 08); the listen stream asserts that \
+         rather than re-deriving it"
+    );
 
     let view = listen_server_view(state).await;
     if !view.advertises {
@@ -2795,42 +2865,67 @@ async fn assemble_subscriptions_listen(
         );
     }
 
-    let requested = match params {
-        Some(value) => match serde_json::from_value::<SubscriptionsListenParams>(value) {
-            Ok(parsed) => parsed.notifications,
-            Err(e) => {
-                return listen_rejection_response(
-                    era,
-                    id,
-                    INVALID_PARAMS,
-                    format!("Invalid subscriptions/listen params: {e}"),
-                )
-            },
-        },
-        None => {
+    let agreed = match resolve_agreed_filter(params, &view) {
+        Ok(filter) => filter,
+        Err((code, message)) => return listen_rejection_response(era, id, code, message),
+    };
+
+    // AUTH PLUMBING (the ONE threading site — do not re-resolve elsewhere): the
+    // POST pipeline already validated the request and produced this
+    // `AuthContext` before dispatch, and it is passed straight in here. Both the
+    // per-principal cap and the collision-free `ListenKey` key off its subject.
+    let principal = auth_context.map_or_else(anonymous_principal, |ctx| ctx.subject.clone());
+
+    let (sender, receiver) = mpsc::channel(LISTEN_CHANNEL_CAPACITY + 1);
+    // The acknowledgement goes into the channel BEFORE the entry exists, so
+    // nothing can possibly precede it — the spec MUST is structural here.
+    if sender
+        .try_send(ListenFrame::Message(listen_ack_frame(&agreed, &id)))
+        .is_err()
+    {
+        return listen_rejection_response(
+            era,
+            id,
+            crate::types::protocol::error_codes::INTERNAL_ERROR,
+            "failed to queue the subscription acknowledgement".to_string(),
+        );
+    }
+
+    let terminal = listen_terminal_result_frame(&id, protocol_context, &view.info);
+    let registry = {
+        let server = state.server.lock().await;
+        Arc::clone(server.listen_registry())
+    };
+    let key = ListenKey {
+        principal,
+        request_id: id.clone(),
+    };
+    let guard = match registry.register(key, agreed, sender, terminal) {
+        Ok(guard) => guard,
+        Err(rejection) => {
             return listen_rejection_response(
                 era,
                 id,
-                INVALID_PARAMS,
-                "Invalid subscriptions/listen params: `notifications` is required".to_string(),
+                RATE_LIMITED,
+                rejection.message().to_string(),
             )
         },
     };
-    let agreed = requested.intersect_with_capabilities(&view.capabilities);
 
-    // Frame order is the spec's MUST: the acknowledgement is FIRST, and no
-    // notification precedes it. Here that is structural — the ack is the first
-    // element of the stream, ahead of anything else that can ever be appended.
-    let ack = listen_ack_frame(&agreed, &id);
-    let terminal = listen_terminal_result_frame(&id, protocol_context, &view.info);
-    let stream = futures_util::stream::iter(vec![ack, terminal]).map(listen_sse_event);
+    // The guard is part of the stream's STATE, so a dropped SSE response drops
+    // it and RAII reclaims the registry entry and both permits — there is no
+    // unregister call anywhere that could be forgotten (T-113-63).
+    let frames =
+        futures_util::stream::unfold((receiver, guard), |(mut receiver, guard)| async move {
+            receiver
+                .recv()
+                .await
+                .map(|frame| (frame, (receiver, guard)))
+        });
 
-    let mut response = Sse::new(stream)
-        .keep_alive(
-            axum::response::sse::KeepAlive::new()
-                .interval(LISTEN_KEEP_ALIVE_INTERVAL)
-                .text(""),
-        )
+    let events = frames.map(|frame| Ok::<_, Infallible>(listen_sse_event(frame)));
+    let mut response = Sse::new(events)
+        .keep_alive(axum::response::sse::KeepAlive::new().interval(LISTEN_KEEP_ALIVE_INTERVAL))
         .into_response();
     attach_listen_response_headers(&mut response, v2_outbound.as_ref());
     response
@@ -2991,6 +3086,7 @@ async fn handle_post_fast_path(
                 params,
                 protocol_context.as_ref(),
                 v2_outbound,
+                auth_context.as_ref(),
             ))
             .await
         },
@@ -3201,8 +3297,15 @@ async fn dispatch_message_with_middleware(
         },
         // HTTP-04: the capability-gated listen route (see the fast-path twin).
         HttpIngress::SubscriptionsListen { id, params } => {
-            assemble_subscriptions_listen(state, id, params, protocol_context.as_ref(), v2_outbound)
-                .await
+            assemble_subscriptions_listen(
+                state,
+                id,
+                params,
+                protocol_context.as_ref(),
+                v2_outbound,
+                auth_context.as_ref(),
+            )
+            .await
         },
         HttpIngress::Public(TransportMessage::Request { id, request }) => {
             let era = protocol_context.as_ref().map(|pc| pc.era);

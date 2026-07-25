@@ -423,8 +423,17 @@ pub struct Server {
     cancellation_manager: cancellation::CancellationManager,
     /// Roots manager for directory/URI registration
     roots_manager: Arc<RwLock<roots::RootsManager>>,
-    /// Subscription manager for resource subscriptions
+    /// Subscription manager for resource subscriptions (v1 `resources/subscribe`)
     subscription_manager: Arc<RwLock<subscriptions::SubscriptionManager>>,
+    /// The v2 `subscriptions/listen` stream registry (Phase 113, HTTP-04).
+    ///
+    /// Shared by the streamable-HTTP transport (which REGISTERS a stream) and
+    /// [`send_notification`](Self::send_notification) (which FANS OUT to it), so
+    /// a change notification emitted through the server's real notification path
+    /// reaches every live listen stream whose agreed filter covers it. Empty —
+    /// and therefore a no-op — on any server that never served a v2 listen
+    /// request, which is every v1 server.
+    listen_registry: Arc<subscriptions::ListenRegistry>,
     /// Elicitation manager for user input requests
     elicitation_manager: Option<Arc<elicitation::ElicitationManager>>,
     /// Outbound server-to-client request dispatcher with response correlation.
@@ -814,9 +823,51 @@ impl Server {
     /// # }
     /// ```
     pub async fn send_notification(&self, notification: ServerNotification) {
+        // HTTP-04: fan out to every live v2 `subscriptions/listen` stream FIRST,
+        // then take the existing v1 transport path unchanged. The registry is
+        // empty on any server that never served a listen request, so this is a
+        // map lookup on a v1 server and no wire byte changes there.
+        self.listen_registry.fan_out(&notification);
         if let Some(tx) = &self.notification_tx {
             let _ = tx.send(Notification::Server(notification)).await;
         }
+    }
+
+    /// Gracefully close every open `subscriptions/listen` stream (HTTP-04).
+    ///
+    /// Call this from a shutdown handler: each stream receives its
+    /// [`SubscriptionsListenResult`](crate::types::subscriptions::SubscriptionsListenResult)
+    /// as the JSON-RPC response and is then ended. This is the ONLY one of the
+    /// three closure triggers that can send a terminal result — a client
+    /// disconnect cannot (the peer is gone) and the buffer-overflow policy cannot
+    /// (the buffer is full); both simply end the stream.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// # async fn example() -> pmcp::Result<()> {
+    /// let server = pmcp::Server::builder()
+    ///     .name("example-server")
+    ///     .version("1.0.0")
+    ///     .build()?;
+    ///
+    /// // ... on shutdown:
+    /// server.close_subscription_streams();
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn close_subscription_streams(&self) {
+        self.listen_registry.close_all();
+    }
+
+    /// The v2 `subscriptions/listen` registry this server fans notifications out
+    /// to.
+    ///
+    /// The streamable-HTTP transport clones this `Arc` to register a stream; the
+    /// `Arc` is cloned under the server lock and the lock is released
+    /// immediately, so a held-open stream never holds the server mutex.
+    pub(crate) fn listen_registry(&self) -> &Arc<subscriptions::ListenRegistry> {
+        &self.listen_registry
     }
 
     /// Get client capabilities.
@@ -4691,6 +4742,22 @@ impl ServerBuilder {
         #[cfg(not(feature = "skills"))]
         let final_resources = self.resources;
 
+        // HTTP-04: advertising ANY subscription-delivered capability opts this
+        // server into serving `subscriptions/listen`, whose registry is
+        // INSTANCE-LOCAL. Warn at BUILD time — this is startup, and a silent
+        // under-delivery behind a load balancer surfaces no error at runtime
+        // (T-113-64).
+        if crate::types::subscriptions::advertises_subscriptions(&self.capabilities) {
+            tracing::warn!(
+                target: "mcp.subscriptions",
+                "a subscription-delivered capability is advertised, so subscriptions/listen \
+                 will be SERVED; its registry is INSTANCE-LOCAL, so notifications generated on \
+                 another instance are not delivered — supported for single-instance or \
+                 sticky-routed deployments only. Polling over Tasks remains the recommended \
+                 pmcp enterprise mechanism (D-11)."
+            );
+        }
+
         // Resolve the server-owned `requestState` codec EXACTLY ONCE, here at
         // BUILD time (Phase 113, HTTP-02). A malformed CONFIGURED key fails the
         // build; an UNSET key falls back to a per-process key with a WARN emitted
@@ -4728,6 +4795,7 @@ impl ServerBuilder {
             cancellation_manager: self.cancellation_manager,
             roots_manager: Arc::new(RwLock::new(self.roots_manager)),
             subscription_manager: Arc::new(RwLock::new(subscriptions::SubscriptionManager::new())),
+            listen_registry: Arc::new(subscriptions::ListenRegistry::new()),
             elicitation_manager: None,
             server_request_dispatcher: None,
             peer_handle: None,
