@@ -214,19 +214,17 @@ async fn harness_always_declares_client_capabilities() {
     assert!(caps.get("roots").is_some(), "body: {narrow}");
 }
 
-/// FORWARD TRIPWIRE for HTTP-01, owned by plan 04.
+/// REGRESSION GUARD for HTTP-01 / D-113-C (was a forward tripwire before plan 04).
 ///
 /// [`spawn_default_config`] builds a STATEFUL server (`session_id_generator` is
-/// live). Today a v2 `tools/call` without an `Mcp-Session-Id` is rejected by the
-/// server-wide session gate, because the PER-REQUEST era gate that suppresses
-/// sessions on v2 does not exist yet — that is exactly what plan 04 (HTTP-01)
-/// builds. This test pins the CURRENT behaviour so plan 04 has to come here and
-/// flip it, rather than silently landing a change nothing observes.
-///
-/// When HTTP-01 lands: this must become `status == 200` with `mcp_session_id ==
-/// None`.
+/// live). Before plan 04, a v2 `tools/call` without an `Mcp-Session-Id` was
+/// rejected by the server-wide session gate, because `stateless()` is a
+/// BUILD-TIME config and every session decision keyed off it rather than off the
+/// per-request era (RESEARCH Pitfall 1). HTTP-01 makes the ERA, not the config,
+/// the decider — so this stateful-config server now runs a v2 request
+/// handshake-free and session-free.
 #[tokio::test]
-async fn forward_tripwire_stateful_config_still_demands_a_session_on_v2() {
+async fn stateful_config_runs_v2_session_free() {
     let (addr, handle) = spawn_default_config(build_v2_server()).await;
     let response = post(
         addr,
@@ -241,13 +239,13 @@ async fn forward_tripwire_stateful_config_still_demands_a_session_on_v2() {
     handle.abort();
 
     assert_eq!(
-        response.status, 400,
-        "HTTP-01 (plan 04) flips this to 200 with no Mcp-Session-Id; body: {}",
+        response.status, 200,
+        "a v2 request on a STATEFUL-config server must not demand a session; body: {}",
         response.raw
     );
-    assert!(
-        response.raw.contains("Session ID required"),
-        "expected the pre-HTTP-01 session gate, got: {}",
+    assert_eq!(
+        response.mcp_session_id, None,
+        "a v2 response must not carry Mcp-Session-Id; raw: {}",
         response.raw
     );
 }
