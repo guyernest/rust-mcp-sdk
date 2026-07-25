@@ -107,6 +107,31 @@ pub enum Error {
     Other(#[from] anyhow::Error),
 }
 
+// ===========================================================================
+// Client-local MRTR errors (Phase 113, CLNT-02 / D-06 / D-09).
+// ===========================================================================
+
+/// The stable programmatic identity of [`Error::mrtr_round_limit_exceeded`].
+///
+/// Carried in the error's `data.pmcpError`. It is the discriminator
+/// [`Error::is_mrtr_round_limit_exceeded`] matches on, so it is part of the
+/// crate's compatibility surface: **do not change this string**.
+pub const MRTR_ROUND_LIMIT_MARKER: &str = "MrtrRoundLimitExceeded";
+
+/// The stable programmatic identity of [`Error::input_required_unfulfilled`].
+///
+/// Carried in the error's `data.pmcpError`. See [`MRTR_ROUND_LIMIT_MARKER`].
+pub const MRTR_INPUT_REQUIRED_MARKER: &str = "InputRequiredUnfulfilled";
+
+/// The `data` member both MRTR markers ride under.
+const PMCP_ERROR_KEY: &str = "pmcpError";
+
+/// The `data` member carrying the exceeded round limit.
+const MRTR_LIMIT_KEY: &str = "limit";
+
+/// The `data` member carrying the verbatim unfulfilled `input_required` result.
+const MRTR_RESULT_KEY: &str = "result";
+
 /// JSON-RPC error code for custom errors.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ErrorCode(pub i32);
@@ -358,6 +383,171 @@ impl Error {
             data: None,
         }
     }
+
+    // =======================================================================
+    // Client-local MRTR errors (Phase 113, CLNT-02).
+    // =======================================================================
+    //
+    // # Why these are NOT `Error` enum variants
+    //
+    // `pmcp::Error` is deliberately NOT `#[non_exhaustive]`, so adding a
+    // variant is a MAJOR semver break (`cargo semver-checks` lint
+    // `enum_variant_added`), and the v2.5 milestone is scoped as additive
+    // (2.x minor). Both errors therefore ride the EXISTING
+    // [`Error::Protocol`] variant, discriminated by a stable marker string in
+    // `data.pmcpError` and read back through the named predicates below.
+    //
+    // A future contributor "fixing" these into enum variants would break every
+    // downstream `match` on `Error`. Don't.
+    //
+    // # Why they do not squat a spec-reserved error code
+    //
+    // Both are CLIENT-LOCAL: they are produced by the client's own MRTR loop
+    // and are never placed on the wire. They carry
+    // [`ErrorCode::INTERNAL_ERROR`]'s number because a local give-up is not a
+    // server-authored protocol condition — reserving a new `-32xxx` for
+    // something that never travels would pollute the protocol's namespace.
+
+    /// The MRTR gather→resend loop gave up after `limit` rounds (D-09).
+    ///
+    /// Returned by [`Client::call_tool`](crate::Client::call_tool) and the
+    /// `*_mrtr` methods when a server keeps answering `input_required`. The
+    /// bound protects BOTH client shapes: it stops a buggy or hostile server
+    /// from re-prompting a human indefinitely AND from spinning an autonomous
+    /// agent indefinitely. No handler is invoked for the round that trips it.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use pmcp::Error;
+    ///
+    /// let err = Error::mrtr_round_limit_exceeded(8);
+    /// assert!(err.is_mrtr_round_limit_exceeded());
+    /// assert_eq!(err.mrtr_round_limit(), Some(8));
+    /// assert!(!Error::internal("nope").is_mrtr_round_limit_exceeded());
+    /// ```
+    #[must_use]
+    pub fn mrtr_round_limit_exceeded(limit: usize) -> Self {
+        Self::Protocol {
+            // The field is `ErrorCode`, not a bare `i32` — the value comes
+            // from the centralized VERS-06 table and is WRAPPED here.
+            code: ErrorCode(crate::types::protocol::error_codes::INTERNAL_ERROR),
+            message: format!(
+                "MRTR round limit exceeded: gave up after {limit} rounds without a complete result"
+            ),
+            data: Some(serde_json::json!({
+                PMCP_ERROR_KEY: MRTR_ROUND_LIMIT_MARKER,
+                MRTR_LIMIT_KEY: limit,
+            })),
+        }
+    }
+
+    /// Whether this is the [`Error::mrtr_round_limit_exceeded`] give-up.
+    #[must_use]
+    pub fn is_mrtr_round_limit_exceeded(&self) -> bool {
+        self.pmcp_error_marker() == Some(MRTR_ROUND_LIMIT_MARKER)
+    }
+
+    /// The round limit that was exceeded, for an
+    /// [`Error::mrtr_round_limit_exceeded`]; `None` for any other error.
+    #[must_use]
+    pub fn mrtr_round_limit(&self) -> Option<usize> {
+        if !self.is_mrtr_round_limit_exceeded() {
+            return None;
+        }
+        let limit = self.protocol_data()?.get(MRTR_LIMIT_KEY)?.as_u64()?;
+        usize::try_from(limit).ok()
+    }
+
+    /// The server asked for input the client could not supply, so the
+    /// `input_required` result is handed back to the caller (D-06).
+    ///
+    /// This exists because the concrete result structs cannot carry an
+    /// `input_required` result:
+    /// [`CallToolResult::content`](crate::types::CallToolResult) has
+    /// `#[serde(default)]`, so such a result deserializes into a silently EMPTY
+    /// success, and `ReadResourceResult.contents` has no default, so the same
+    /// result fails to deserialize at all. Neither is "returns the result to the
+    /// caller".
+    ///
+    /// The full result — including its verbatim `raw` object — is recoverable
+    /// through [`Error::input_required_result`]. Prefer the additive
+    /// [`Client::call_tool_mrtr`](crate::Client::call_tool_mrtr) family when you
+    /// want this outcome as a value rather than an error.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use pmcp::Error;
+    ///
+    /// let result: pmcp::types::mrtr::InputRequiredResult = serde_json::from_value(
+    ///     serde_json::json!({ "resultType": "input_required", "requestState": "opaque" }),
+    /// )
+    /// .unwrap();
+    ///
+    /// let err = Error::input_required_unfulfilled(result);
+    /// assert!(err.is_input_required_unfulfilled());
+    /// assert_eq!(
+    ///     err.input_required_result().unwrap().request_state.as_deref(),
+    ///     Some("opaque"),
+    /// );
+    /// ```
+    #[must_use]
+    pub fn input_required_unfulfilled(result: crate::types::mrtr::InputRequiredResult) -> Self {
+        // `InputRequiredResult.raw` is `#[serde(skip_serializing)]`, and it is
+        // a SUPERSET of the modeled fields (the verbatim result object the
+        // server sent). Carry it whenever it is an object so nothing is lost;
+        // fall back to the modeled projection for a hand-built value.
+        let payload = if result.raw.is_object() {
+            result.raw
+        } else {
+            serde_json::to_value(&result).unwrap_or(serde_json::Value::Null)
+        };
+        Self::Protocol {
+            code: ErrorCode(crate::types::protocol::error_codes::INTERNAL_ERROR),
+            message: "the server requires more input, and no registered handler could supply it — \
+                 see Error::input_required_result() or the *_mrtr client methods"
+                .to_string(),
+            data: Some(serde_json::json!({
+                PMCP_ERROR_KEY: MRTR_INPUT_REQUIRED_MARKER,
+                MRTR_RESULT_KEY: payload,
+            })),
+        }
+    }
+
+    /// Whether this carries an unfulfilled `input_required` result.
+    #[must_use]
+    pub fn is_input_required_unfulfilled(&self) -> bool {
+        self.pmcp_error_marker() == Some(MRTR_INPUT_REQUIRED_MARKER)
+    }
+
+    /// The unfulfilled `input_required` result, for an
+    /// [`Error::input_required_unfulfilled`]; `None` for any other error.
+    ///
+    /// Returned by value (not by reference) because the payload is stored
+    /// serialized inside the error's `data`, which is what keeps this an
+    /// additive change to the existing [`Error::Protocol`] variant.
+    #[must_use]
+    pub fn input_required_result(&self) -> Option<crate::types::mrtr::InputRequiredResult> {
+        if !self.is_input_required_unfulfilled() {
+            return None;
+        }
+        let payload = self.protocol_data()?.get(MRTR_RESULT_KEY)?;
+        serde_json::from_value(payload.clone()).ok()
+    }
+
+    /// The `data` object of an [`Error::Protocol`], if it has one.
+    fn protocol_data(&self) -> Option<&serde_json::Map<String, serde_json::Value>> {
+        match self {
+            Self::Protocol { data, .. } => data.as_ref()?.as_object(),
+            _ => None,
+        }
+    }
+
+    /// The `data.pmcpError` marker string, if this error carries one.
+    fn pmcp_error_marker(&self) -> Option<&str> {
+        self.protocol_data()?.get(PMCP_ERROR_KEY)?.as_str()
+    }
 }
 
 #[cfg(test)]
@@ -378,5 +568,127 @@ mod tests {
         assert_eq!(ErrorCode::PARSE_ERROR.as_i32(), -32700);
         assert_eq!(ErrorCode::RATE_LIMITED.as_i32(), -32005);
         assert_eq!(ErrorCode::CIRCUIT_BREAKER_OPEN.as_i32(), -32006);
+    }
+
+    // =======================================================================
+    // Client-local MRTR errors (Phase 113, CLNT-02).
+    // =======================================================================
+
+    mod mrtr {
+        use super::*;
+        use crate::types::mrtr::InputRequiredResult;
+        use serde_json::json;
+
+        fn input_required(raw: serde_json::Value) -> InputRequiredResult {
+            serde_json::from_value(raw).expect("the fixture is a valid input_required result")
+        }
+
+        #[test]
+        fn round_limit_error_is_distinguishable() {
+            let err = Error::mrtr_round_limit_exceeded(8);
+            assert!(err.is_mrtr_round_limit_exceeded());
+            assert!(!err.is_input_required_unfulfilled());
+        }
+
+        #[test]
+        fn an_unrelated_error_is_not_the_round_limit() {
+            assert!(!Error::internal("x").is_mrtr_round_limit_exceeded());
+            assert!(!Error::internal("x").is_input_required_unfulfilled());
+            // A `Protocol` error with no `data` must not match either.
+            assert!(!Error::protocol(ErrorCode::INTERNAL_ERROR, "x").is_mrtr_round_limit_exceeded());
+        }
+
+        #[test]
+        fn round_limit_error_carries_the_limit() {
+            assert_eq!(
+                Error::mrtr_round_limit_exceeded(8).mrtr_round_limit(),
+                Some(8)
+            );
+            assert_eq!(Error::internal("x").mrtr_round_limit(), None);
+        }
+
+        #[test]
+        fn round_limit_display_names_the_bound() {
+            let rendered = Error::mrtr_round_limit_exceeded(8).to_string();
+            assert!(
+                rendered.contains('8'),
+                "the limit must be visible: {rendered}"
+            );
+            assert!(
+                rendered.contains("round limit"),
+                "the reason must be visible: {rendered}"
+            );
+        }
+
+        #[test]
+        fn input_required_error_is_distinguishable() {
+            let err = Error::input_required_unfulfilled(input_required(
+                json!({ "resultType": "input_required", "requestState": "opaque" }),
+            ));
+            assert!(err.is_input_required_unfulfilled());
+            assert!(!err.is_mrtr_round_limit_exceeded());
+        }
+
+        /// The plan's acceptance criterion: the accessor ROUND-TRIPS the
+        /// `requestState` (and the `inputRequests` map) the server sent, so a
+        /// caller loses nothing by receiving this as an error.
+        #[test]
+        fn input_required_error_round_trips_the_result() {
+            let raw = json!({
+                "resultType": "input_required",
+                "requestState": "opaque-token",
+                "inputRequests": {
+                    "user_name": {
+                        "method": "elicitation/create",
+                        "params": { "message": "who?", "requestedSchema": {} }
+                    }
+                },
+                "_meta": { "vendor/key": 1 },
+                "somethingUnmodelled": true
+            });
+            let err = Error::input_required_unfulfilled(input_required(raw.clone()));
+            let recovered = err.input_required_result().expect("the payload survives");
+
+            assert_eq!(recovered.request_state.as_deref(), Some("opaque-token"));
+            assert_eq!(recovered.result_type, "input_required");
+            let requests = recovered.input_requests.expect("inputRequests survive");
+            assert_eq!(requests.len(), 1);
+            assert!(requests.contains_key("user_name"));
+            assert_eq!(
+                recovered.raw, raw,
+                "the VERBATIM result object must survive, unmodelled keys included"
+            );
+        }
+
+        #[test]
+        fn input_required_result_is_none_for_other_errors() {
+            assert!(Error::internal("x").input_required_result().is_none());
+            assert!(Error::mrtr_round_limit_exceeded(8)
+                .input_required_result()
+                .is_none());
+        }
+
+        /// Both constructors build a `Protocol` error with a properly WRAPPED
+        /// `ErrorCode` (the field is `ErrorCode`, not a bare `i32`).
+        #[test]
+        fn both_errors_carry_a_wrapped_error_code() {
+            for err in [
+                Error::mrtr_round_limit_exceeded(3),
+                Error::input_required_unfulfilled(input_required(
+                    json!({ "resultType": "input_required" }),
+                )),
+            ] {
+                assert!(matches!(err, Error::Protocol { .. }));
+                assert_eq!(err.error_code(), Some(ErrorCode::INTERNAL_ERROR));
+            }
+        }
+
+        /// The markers are the programmatic identity — a rename is a silent
+        /// break for anyone matching on them.
+        #[test]
+        fn markers_are_stable_strings() {
+            assert_eq!(MRTR_ROUND_LIMIT_MARKER, "MrtrRoundLimitExceeded");
+            assert_eq!(MRTR_INPUT_REQUIRED_MARKER, "InputRequiredUnfulfilled");
+        }
     }
 }
