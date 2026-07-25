@@ -1160,6 +1160,7 @@ mod tests {
             id: RequestId::from(42i64),
             request: Request::Client(Box::new(ClientRequest::ListTools(ListToolsRequest {
                 cursor: None,
+                _meta: None,
             }))),
         }
     }

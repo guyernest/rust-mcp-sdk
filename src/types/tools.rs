@@ -404,6 +404,21 @@ pub struct ListToolsRequest {
     /// Pagination cursor
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cursor: Cursor,
+    /// Request metadata (per-request protocol context, D-113-B).
+    ///
+    /// A stateless v2 server runs no `initialize` handshake, so this per-request
+    /// object is the ONLY channel carrying the era / client identity /
+    /// capabilities signal. Every method a v2 client can call must therefore be
+    /// able to carry it — including the list-shaped ones. Absent by default, so
+    /// v1 wire bytes are unchanged.
+    #[serde(
+        rename = "_meta",
+        alias = "meta",
+        skip_serializing_if = "Option::is_none",
+        default
+    )]
+    #[allow(clippy::pub_underscore_fields)] // _meta is part of MCP protocol spec
+    pub _meta: Option<RequestMeta>,
 }
 
 /// List tools response.
@@ -457,8 +472,22 @@ pub struct CallToolRequest {
     /// Tool arguments (must match input schema)
     #[serde(default)]
     pub arguments: Value,
-    /// Request metadata (e.g., progress token)
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Request metadata (e.g., progress token, per-request protocol context).
+    ///
+    /// # Wire spelling
+    ///
+    /// The explicit `rename` is load-bearing: the struct-level
+    /// `#[serde(rename_all = "camelCase")]` above would otherwise rename this
+    /// FIELD to `meta`, which is not the MCP spelling. `alias = "meta"` keeps
+    /// ingress compatible with pmcp peers built before Phase 113, which emitted
+    /// the renamed spelling. See `src/types/protocol/mod.rs` §
+    /// `every_meta_bearing_request_uses_the_spec_spelling_and_accepts_the_legacy_alias`.
+    #[serde(
+        rename = "_meta",
+        alias = "meta",
+        skip_serializing_if = "Option::is_none",
+        default
+    )]
     #[allow(clippy::pub_underscore_fields)] // _meta is part of MCP protocol spec
     pub _meta: Option<RequestMeta>,
     /// Task augmentation parameters (experimental MCP Tasks).

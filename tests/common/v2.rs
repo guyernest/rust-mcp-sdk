@@ -233,42 +233,18 @@ pub fn v2_body(method: &str, id: Value, params: Value) -> String {
     v2_body_with_caps(method, id, params, default_client_capabilities())
 }
 
-/// The wire spelling pmcp's OWN typed request structs use for the `_meta` object.
+/// The spec spelling of the per-request reserved-metadata object.
 ///
-/// # Why this is probed rather than hard-coded
-///
-/// pmcp's request structs carry `#[serde(rename_all = "camelCase")]`, which renames
-/// the `_meta` FIELD — as of this phase `CallToolRequest` / `GetPromptRequest` /
-/// `ReadResourceRequest` serialize and accept **`meta`**, NOT the spec's `_meta`
-/// (verified by probing `serde_json::to_value(&CallToolRequest { _meta: Some(..) })`).
-/// The `server/discover` ingress, by contrast, reads a RAW `params._meta`.
-///
-/// Probing pmcp's own serialization means this harness follows the crate
-/// automatically: if a later plan fixes the rename, the probe returns `_meta` and
-/// nothing here changes. See `113-02-SUMMARY.md` § Findings.
-pub fn request_meta_key() -> String {
-    let mut probe = pmcp::types::CallToolRequest::new("probe", json!({}));
-    probe._meta = Some(RequestMeta::new());
-    let value = serde_json::to_value(&probe).expect("probe request serializes");
-    value
-        .as_object()
-        .and_then(|object| {
-            object
-                .keys()
-                .find(|key| key.as_str() != "name" && key.as_str() != "arguments")
-                .cloned()
-        })
-        .unwrap_or_else(|| "_meta".to_string())
-}
+/// Phase-113 plan 04 (finding D-113-A) fixed the typed request structs, which
+/// previously carried a struct-level `#[serde(rename_all = "camelCase")]` that
+/// renamed the `_meta` FIELD to `meta` and so silently dropped a conformant
+/// client's era signal. Both ingress paths — the raw `server/discover` read and
+/// every typed request — now agree on `_meta`, so this harness emits ONE
+/// spelling. `tests/common_harness_smoke.rs` carries the regression guard.
+pub const REQUEST_META_KEY: &str = "_meta";
 
 /// [`v2_body`] with an explicit `clientCapabilities` value, for tests that
 /// deliberately under-declare.
-///
-/// The reserved-key object is emitted under BOTH the spec spelling `_meta` (which
-/// the raw `server/discover` ingress reads) and [`request_meta_key`] (which the
-/// camelCase-renamed typed request structs read). The dual emission exists ONLY
-/// because those two spellings currently differ; once they converge, one of the two
-/// inserts becomes a harmless duplicate that serde ignores.
 pub fn v2_body_with_caps(method: &str, id: Value, params: Value, caps: Value) -> String {
     let mut params = match params {
         Value::Object(map) => Value::Object(map),
@@ -285,8 +261,7 @@ pub fn v2_body_with_caps(method: &str, id: Value, params: Value, caps: Value) ->
         .with_meta(META_CLIENT_CAPABILITIES, caps);
     let meta = serde_json::to_value(&meta).expect("request meta serializes");
     if let Some(object) = params.as_object_mut() {
-        object.insert("_meta".to_string(), meta.clone());
-        object.insert(request_meta_key(), meta);
+        object.insert(REQUEST_META_KEY.to_string(), meta);
     }
     jsonrpc_envelope(method, id, params)
 }
@@ -305,9 +280,11 @@ fn jsonrpc_envelope(method: &str, id: Value, params: Value) -> String {
     Value::Object(body).to_string()
 }
 
-/// A `server/discover` request body — the ONLY v2-capable method today that carries
-/// no logical name, and therefore the only one that can exercise the
-/// empty-`Mcp-Name` header rule end to end.
+/// A `server/discover` request body — a v2-capable method that carries no logical
+/// name, so it exercises the empty-`Mcp-Name` header rule end to end.
+///
+/// Since plan 04 closed D-113-B, `tools/list` (and every other list-shaped method)
+/// can also carry the v2 `_meta` signal and is equally usable for that rule.
 pub fn v2_discover_body(id: Value) -> String {
     v2_body("server/discover", id, json!({}))
 }

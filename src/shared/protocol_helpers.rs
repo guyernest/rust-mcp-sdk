@@ -708,6 +708,7 @@ mod tests {
         let id = RequestId::from(2i64);
         let request = Request::Client(Box::new(ClientRequest::ListTools(ListToolsRequest {
             cursor: None,
+            _meta: None,
         })));
 
         let jsonrpc_request = create_request(id.clone(), request);
@@ -848,7 +849,10 @@ mod tests {
         // Test all ClientRequest variants to ensure complete coverage
         let test_cases = vec![
             (
-                ClientRequest::ListPrompts(ListPromptsRequest { cursor: None }),
+                ClientRequest::ListPrompts(ListPromptsRequest {
+                    cursor: None,
+                    _meta: None,
+                }),
                 "prompts/list",
             ),
             (
@@ -860,11 +864,17 @@ mod tests {
                 "prompts/get",
             ),
             (
-                ClientRequest::ListResources(ListResourcesRequest { cursor: None }),
+                ClientRequest::ListResources(ListResourcesRequest {
+                    cursor: None,
+                    _meta: None,
+                }),
                 "resources/list",
             ),
             (
-                ClientRequest::ListResourceTemplates(ListResourceTemplatesRequest { cursor: None }),
+                ClientRequest::ListResourceTemplates(ListResourceTemplatesRequest {
+                    cursor: None,
+                    _meta: None,
+                }),
                 "resources/templates/list",
             ),
             (
@@ -895,6 +905,7 @@ mod tests {
                         name: "test".to_string(),
                         value: "val".to_string(),
                     },
+                    _meta: None,
                 }),
                 "completion/complete",
             ),

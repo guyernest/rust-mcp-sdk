@@ -14,11 +14,12 @@
 //!    `require_three_headers`, or the harness stops emitting the empty value, this
 //!    test is what notices.
 //!
-//! The name-less method used for (2) is `server/discover`, NOT `tools/list`: today
-//! `ListToolsRequest` carries no `_meta` field at all, so `extract_request_meta_value`
-//! returns `None` for it and a v2 `tools/list` is rejected as "header claims v2 but
-//! `_meta` disagrees" before any header rule is reached. That gap is pinned by
-//! [`forward_tripwire_tools_list_cannot_be_a_v2_request`] and is plan 04's to close.
+//! Two name-less methods exercise (2): `server/discover` and `tools/list`. Before
+//! plan 04 closed finding D-113-B, `ListToolsRequest` carried no `_meta` field at
+//! all, so `extract_request_meta_value` returned `None` for it and a v2
+//! `tools/list` was rejected as "header claims v2 but `_meta` disagrees" before any
+//! header rule was reached. [`tools_list_is_a_valid_v2_request`] is the regression
+//! guard for that fix.
 #![cfg(all(
     feature = "streamable-http",
     feature = "http-client",
@@ -28,8 +29,8 @@
 mod common;
 
 use common::v2::{
-    build_v2_server, post, request_meta_key, spawn_default_config, spawn_stateless_config, v2_body,
-    v2_body_with_caps, v2_discover_body, v2_headers, META_CLIENT_CAPABILITIES,
+    build_v2_server, post, spawn_default_config, spawn_stateless_config, v2_body,
+    v2_body_with_caps, v2_discover_body, v2_headers, META_CLIENT_CAPABILITIES, REQUEST_META_KEY,
 };
 use serde_json::json;
 
@@ -85,19 +86,15 @@ async fn harness_empty_mcp_name_is_accepted_for_a_name_less_method() {
     assert_eq!(response.mcp_method.as_deref(), Some("server/discover"));
 }
 
-/// FORWARD TRIPWIRE for plan 04.
-///
-/// `tools/list` is the natural name-less method to exercise the empty-`Mcp-Name`
-/// rule with, and the plan called for it — but `ListToolsRequest` carries NO
-/// `_meta` field, so `extract_request_meta_value` returns `None` for it and the era
-/// resolver falls back to v1. A v2 `tools/list` is therefore rejected as a
-/// header/`_meta` disagreement before any header rule is evaluated.
+/// REGRESSION GUARD for D-113-B (was a forward tripwire before plan 04).
 ///
 /// A stateless v2 server (HTTP-01) has no handshake, so EVERY method must be able
-/// to carry the per-request `_meta` signal — including `tools/list`. Plan 04 must
-/// close this and flip the assertion below to 200.
+/// to carry the per-request `_meta` signal — including the list-shaped ones.
+/// Before plan 04, `ListToolsRequest` had no `_meta` field, `extract_request_meta_value`
+/// returned `None`, and the fail-closed matrix rejected a v2 `tools/list` with 400
+/// "header claims v2 but `_meta` protocolVersion disagrees".
 #[tokio::test]
-async fn forward_tripwire_tools_list_cannot_be_a_v2_request() {
+async fn tools_list_is_a_valid_v2_request() {
     let (addr, handle) = spawn_stateless_config(build_v2_server()).await;
     let response = post(
         addr,
@@ -108,33 +105,53 @@ async fn forward_tripwire_tools_list_cannot_be_a_v2_request() {
     handle.abort();
 
     assert_eq!(
-        response.status, 400,
-        "plan 04 flips this to 200 once tools/list can carry _meta; body: {}",
+        response.status, 200,
+        "a v2 tools/list must be accepted (D-113-B); body: {}",
         response.raw
     );
     assert!(
-        response.raw.contains("_meta protocolVersion disagrees"),
-        "expected the era-disagreement rejection, got: {}",
+        response.body.get("result").is_some(),
+        "expected a result, got: {}",
         response.raw
     );
+    assert_eq!(response.mcp_method.as_deref(), Some("tools/list"));
 }
 
-/// FORWARD TRIPWIRE for plan 04 / plan 11 (conformance).
+/// REGRESSION GUARD for D-113-A (was a forward tripwire before plan 04).
 ///
-/// pmcp's typed request structs rename the `_meta` field via
-/// `#[serde(rename_all = "camelCase")]`, so they currently serialize and ACCEPT
-/// `meta` rather than the spec-mandated `_meta`. A conformant v2 client sending
-/// `_meta` therefore gets NO era detection at all. The harness works around it by
-/// emitting both spellings; this test pins the underlying spelling so the
-/// workaround cannot silently outlive the defect.
+/// pmcp's typed request structs carry `#[serde(rename_all = "camelCase")]`, which
+/// renamed the `_meta` FIELD to `meta` — so they emitted and accepted a spelling
+/// the MCP spec does not define, and a conformant v2 client sending `_meta` got NO
+/// era detection at all. Plan 04 pinned the field with
+/// `#[serde(rename = "_meta", alias = "meta")]`: conformant on egress,
+/// backward-compatible on ingress. This guard proves BOTH halves at the wire level
+/// so the fix cannot silently regress under a future `rename_all` edit.
 #[tokio::test]
-async fn forward_tripwire_typed_requests_rename_meta_away_from_the_spec_spelling() {
+async fn typed_requests_use_the_spec_meta_spelling() {
+    let mut probe = pmcp::types::CallToolRequest::new("probe", json!({}));
+    probe._meta = Some(pmcp::types::RequestMeta::new().with_meta("ns/key", json!("v")));
+    let wire = serde_json::to_value(&probe).expect("probe serializes");
+
     assert_eq!(
-        request_meta_key(),
-        "meta",
-        "if this is now `_meta`, the typed-request rename is fixed: \
-         drop the dual-spelling emission in tests/common/v2.rs::v2_body_with_caps"
+        wire.get(REQUEST_META_KEY),
+        Some(&json!({ "ns/key": "v" })),
+        "egress must use the spec spelling `_meta`: {wire}"
     );
+    assert!(
+        wire.get("meta").is_none(),
+        "the camelCase-renamed `meta` spelling must not be emitted: {wire}"
+    );
+
+    // Ingress accepts BOTH spellings (the `alias` half of the fix).
+    for key in [REQUEST_META_KEY, "meta"] {
+        let incoming = json!({ "name": "probe", "arguments": {}, key: { "ns/key": "v" } });
+        let back: pmcp::types::CallToolRequest =
+            serde_json::from_value(incoming).unwrap_or_else(|e| panic!("`{key}` must parse: {e}"));
+        assert!(
+            back._meta.is_some(),
+            "the `{key}` spelling must deserialize into `_meta`"
+        );
+    }
 }
 
 #[tokio::test]

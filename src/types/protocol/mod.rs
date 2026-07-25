@@ -397,6 +397,19 @@ pub struct CompleteRequest {
     pub r#ref: CompletionReference,
     /// The argument to complete
     pub argument: CompletionArgument,
+    /// Request metadata (per-request protocol context, D-113-B).
+    ///
+    /// A stateless v2 server runs no `initialize` handshake, so this per-request
+    /// object is the ONLY channel carrying the era signal. Absent by default, so
+    /// v1 wire bytes are unchanged.
+    #[serde(
+        rename = "_meta",
+        alias = "meta",
+        skip_serializing_if = "Option::is_none",
+        default
+    )]
+    #[allow(clippy::pub_underscore_fields)] // _meta is part of MCP protocol spec
+    pub _meta: Option<RequestMeta>,
 }
 
 /// Completion reference.

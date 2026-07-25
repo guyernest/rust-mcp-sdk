@@ -219,15 +219,15 @@ proptest! {
     ) {
         let request = match method_type {
             0 => ClientRequest::Ping,
-            1 => ClientRequest::ListTools(ListToolsRequest { cursor: cursor.clone() }),
+            1 => ClientRequest::ListTools(ListToolsRequest { cursor: cursor.clone(), _meta: None }),
             2 => ClientRequest::CallTool(CallToolRequest::new(tool_name, args)),
-            3 => ClientRequest::ListPrompts(ListPromptsRequest { cursor: cursor.clone() }),
+            3 => ClientRequest::ListPrompts(ListPromptsRequest { cursor: cursor.clone(), _meta: None }),
             4 => ClientRequest::GetPrompt(GetPromptRequest {
                 name: prompt_name,
                 arguments: Default::default(),
                 _meta: None,
             }),
-            5 => ClientRequest::ListResources(ListResourcesRequest { cursor }),
+            5 => ClientRequest::ListResources(ListResourcesRequest { cursor, _meta: None }),
             _ => ClientRequest::ReadResource(ReadResourceRequest { uri: resource_uri, _meta: None }),
         };
 

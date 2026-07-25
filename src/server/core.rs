@@ -1772,21 +1772,31 @@ pub(crate) fn request_meta_to_value<T: serde::Serialize>(
 /// Extract the request's `_meta` object as raw JSON for ingress era-resolution
 /// (Phase 112, D-11 — the per-request signal is transport-agnostic).
 ///
-/// # Go-forward policy (Phase 112 Plan 09)
+/// # Go-forward policy (Phase 112 Plan 09, widened by Phase 113 D-113-B)
 ///
 /// EVERY [`ClientRequest`] variant that carries a per-request
 /// `_meta: Option<RequestMeta>` field MUST be read here so its era/identity/trace
-/// signal reaches ingress resolution. As of this plan that is `CallTool`,
-/// `GetPrompt`, and `ReadResource` — the three name/uri-bearing methods. Variants
-/// with NO `_meta` field yield `None` and resolve to the v1 fallback by design
-/// (an opted-in server serves them as v1 unless a header/`_meta` signal says
-/// otherwise).
+/// signal reaches ingress resolution. As of Phase 113 that is the three
+/// name/uri-bearing methods (`CallTool`, `GetPrompt`, `ReadResource`) PLUS the
+/// list-shaped methods (`ListTools`, `ListPrompts`, `ListResources`,
+/// `ListResourceTemplates`, `Complete`).
+///
+/// The list-shaped widening is load-bearing for HTTP-01: a stateless v2 server
+/// runs NO `initialize` handshake, so the per-request `_meta` object is the ONLY
+/// era channel. Before D-113-B those methods had no `_meta` field at all, which
+/// meant a v2 `tools/list` could not be expressed — the header claimed v2 and
+/// `_meta` could not agree, so the fail-closed matrix rejected it with 400.
+///
+/// Variants with NO `_meta` field yield `None` and resolve to the v1 fallback by
+/// design (an opted-in server serves them as v1 unless a header/`_meta` signal
+/// says otherwise).
 ///
 /// The inner match is EXHAUSTIVE with no wildcard arm: a future `ClientRequest`
 /// variant is a `non-exhaustive patterns` COMPILE ERROR here, forcing the author
 /// to classify it as `_meta`-bearing or not. That compile-time tripwire — not a
 /// doc comment or a hand-maintained test — is what keeps this in sync with the
-/// enum.
+/// enum. `subscriptions/listen` (plan 10) lands as a new variant and MUST be
+/// classified as `_meta`-bearing here.
 #[allow(clippy::used_underscore_binding)] // _meta is part of the MCP protocol spec
 pub(crate) fn extract_request_meta_value(request: &Request) -> Option<serde_json::Value> {
     match request {
@@ -1795,17 +1805,23 @@ pub(crate) fn extract_request_meta_value(request: &Request) -> Option<serde_json
             ClientRequest::CallTool(req) => request_meta_to_value(req._meta.as_ref()),
             ClientRequest::GetPrompt(req) => request_meta_to_value(req._meta.as_ref()),
             ClientRequest::ReadResource(req) => request_meta_to_value(req._meta.as_ref()),
+            ClientRequest::ListTools(req) => request_meta_to_value(req._meta.as_ref()),
+            ClientRequest::ListPrompts(req) => request_meta_to_value(req._meta.as_ref()),
+            ClientRequest::ListResources(req) => request_meta_to_value(req._meta.as_ref()),
+            ClientRequest::ListResourceTemplates(req) => request_meta_to_value(req._meta.as_ref()),
+            ClientRequest::Complete(req) => request_meta_to_value(req._meta.as_ref()),
             // Non-`_meta`-bearing variants — enumerated explicitly (no wildcard)
             // so adding a variant forces a decision above rather than silently
             // dropping its signal.
+            //
+            // `Initialize` is v1-only (v2 has no handshake); `Subscribe` /
+            // `Unsubscribe` are removed on v2 (superseded by
+            // `subscriptions/listen`, HTTP-04); the `Tasks*` family is Phase
+            // 114's surface; `Ping` and `SetLoggingLevel` carry no params object
+            // that could hold `_meta`.
             ClientRequest::Initialize(_)
-            | ClientRequest::ListTools(_)
-            | ClientRequest::ListPrompts(_)
-            | ClientRequest::ListResources(_)
-            | ClientRequest::ListResourceTemplates(_)
             | ClientRequest::Subscribe(_)
             | ClientRequest::Unsubscribe(_)
-            | ClientRequest::Complete(_)
             | ClientRequest::CreateMessage(_)
             | ClientRequest::TasksGet(_)
             | ClientRequest::TasksResult(_)
@@ -1984,6 +2000,7 @@ mod tests {
         // List tools
         let list_req = Request::Client(Box::new(ClientRequest::ListTools(ListToolsRequest {
             cursor: None,
+            _meta: None,
         })));
         let response = server
             .handle_request(RequestId::from(2i64), list_req, None)
@@ -2474,6 +2491,7 @@ mod tests {
         // Try to list tools WITHOUT initializing first
         let list_req = Request::Client(Box::new(ClientRequest::ListTools(ListToolsRequest {
             cursor: None,
+            _meta: None,
         })));
         let response = server
             .handle_request(RequestId::from(1i64), list_req, None)
@@ -2525,6 +2543,7 @@ mod tests {
         // Try to list tools WITHOUT initializing first
         let list_req = Request::Client(Box::new(ClientRequest::ListTools(ListToolsRequest {
             cursor: None,
+            _meta: None,
         })));
         let response = server
             .handle_request(RequestId::from(1i64), list_req, None)

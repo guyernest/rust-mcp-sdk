@@ -4979,6 +4979,7 @@ mod tests {
 
         let request = Request::Client(Box::new(ClientRequest::ListTools(ListToolsRequest {
             cursor: None,
+            _meta: None,
         })));
         let response = server
             .handle_request(RequestId::from(1i64), request, None)
@@ -5277,6 +5278,7 @@ mod tests {
 
         let request = Request::Client(Box::new(ClientRequest::ListPrompts(ListPromptsRequest {
             cursor: None,
+            _meta: None,
         })));
         let response = server
             .handle_request(RequestId::from(1i64), request, None)
@@ -5561,7 +5563,10 @@ mod tests {
             .unwrap();
 
         let request = Request::Client(Box::new(ClientRequest::ListResources(
-            ListResourcesRequest { cursor: None },
+            ListResourcesRequest {
+                cursor: None,
+                _meta: None,
+            },
         )));
         let response = server
             .handle_request(RequestId::from(1i64), request, None)

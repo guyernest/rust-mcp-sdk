@@ -17,6 +17,19 @@ pub struct ListResourcesRequest {
     /// Pagination cursor
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cursor: Cursor,
+    /// Request metadata (per-request protocol context, D-113-B).
+    ///
+    /// A stateless v2 server runs no `initialize` handshake, so this per-request
+    /// object is the ONLY channel carrying the era signal. Absent by default, so
+    /// v1 wire bytes are unchanged.
+    #[serde(
+        rename = "_meta",
+        alias = "meta",
+        skip_serializing_if = "Option::is_none",
+        default
+    )]
+    #[allow(clippy::pub_underscore_fields)] // _meta is part of MCP protocol spec
+    pub _meta: Option<RequestMeta>,
 }
 
 /// Resource information.
@@ -161,8 +174,17 @@ impl ListResourcesResult {
 pub struct ReadResourceRequest {
     /// Resource URI
     pub uri: String,
-    /// Request metadata (e.g., progress token)
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Request metadata (e.g., progress token, per-request protocol context).
+    ///
+    /// The explicit `rename` defeats the struct-level `rename_all = "camelCase"`
+    /// (which would emit `meta`, not the MCP spelling); `alias = "meta"` keeps
+    /// ingress compatible with pre-Phase-113 pmcp peers.
+    #[serde(
+        rename = "_meta",
+        alias = "meta",
+        skip_serializing_if = "Option::is_none",
+        default
+    )]
     #[allow(clippy::pub_underscore_fields)] // _meta is part of MCP protocol spec
     pub _meta: Option<RequestMeta>,
 }
@@ -174,6 +196,19 @@ pub struct ListResourceTemplatesRequest {
     /// Pagination cursor
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cursor: Cursor,
+    /// Request metadata (per-request protocol context, D-113-B).
+    ///
+    /// A stateless v2 server runs no `initialize` handshake, so this per-request
+    /// object is the ONLY channel carrying the era signal. Absent by default, so
+    /// v1 wire bytes are unchanged.
+    #[serde(
+        rename = "_meta",
+        alias = "meta",
+        skip_serializing_if = "Option::is_none",
+        default
+    )]
+    #[allow(clippy::pub_underscore_fields)] // _meta is part of MCP protocol spec
+    pub _meta: Option<RequestMeta>,
 }
 
 /// Resource template.
