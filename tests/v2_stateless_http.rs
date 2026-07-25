@@ -34,6 +34,7 @@
 
 mod common;
 
+use async_trait::async_trait;
 use common::v2::{
     build_v2_server, default_client_capabilities, delete, get, header, post, post_raw,
     spawn_default_config, v1_body, v2_body, v2_headers, META_CLIENT_CAPABILITIES, META_CLIENT_INFO,
@@ -42,7 +43,11 @@ use common::v2::{
 use pmcp::types::protocol::error_codes::{
     HEADER_MISMATCH, METHOD_NOT_FOUND, PARSE_ERROR, UNSUPPORTED_PROTOCOL_VERSION,
 };
+use pmcp::types::protocol::ProtocolVersion;
+use pmcp::{RequestHandlerExtra, Server, ToolHandler};
 use serde_json::{json, Value};
+use std::net::SocketAddr;
+use std::sync::{Arc, Mutex, OnceLock};
 
 /// A v2-SHAPED request body whose reserved `_meta` claims `version` rather than
 /// [`V2`], for the unsupported-version rejection test.
@@ -568,5 +573,419 @@ async fn v2_string_id_preserved() {
         response.body["id"], "req-abc",
         "a string id must be preserved verbatim; body: {}",
         response.raw
+    );
+}
+
+// ===========================================================================
+// HTTP-05 (plan 08): no v2 resumability, and DIRECT-response ids that always
+// come from the live request.
+//
+// # The invariant, scoped precisely
+//
+// > Every DIRECT response to a live request carries THAT request's id, on both
+// > eras. A REPLAYED HISTORICAL EVENT is not a direct response and legitimately
+// > retains its ORIGINAL id.
+//
+// Stated without that scoping the claim contradicts v1 resumability, whose whole
+// point is to re-emit past events unchanged — so a literal reading would either
+// break v1 replay or make the assertion vacuous. The two halves are asserted
+// separately below: `response_id_always_from_live_request` and its siblings pin
+// the direct half, `v1_replayed_event_retains_original_id` pins the historical
+// half as CORRECT behavior rather than as a violation.
+// ===========================================================================
+
+/// The pointer address of the shared payload object each `cached` tool call
+/// actually returned, so a test can prove the SAME object was reused.
+static CACHED_PAYLOAD_PTRS: Mutex<Vec<usize>> = Mutex::new(Vec::new());
+
+/// The one payload object every `cached` call clones its result from.
+static CACHED_PAYLOAD: OnceLock<Arc<Value>> = OnceLock::new();
+
+/// A tool whose result is CLONED from a single long-lived payload object.
+///
+/// Two `tools/list` calls do not test the cached-envelope bug class if the server
+/// never caches that response, so the fixture has to force the reuse. Every call
+/// records the payload's pointer address; the test asserts both calls saw the
+/// same address, which is what makes "the payload was genuinely reused" a
+/// measurement rather than an assumption.
+struct CachedPayloadTool;
+
+#[async_trait]
+impl ToolHandler for CachedPayloadTool {
+    async fn handle(&self, _args: Value, _extra: RequestHandlerExtra) -> pmcp::Result<Value> {
+        let cached =
+            CACHED_PAYLOAD.get_or_init(|| Arc::new(json!({ "cached": true, "nonce": "reused" })));
+        CACHED_PAYLOAD_PTRS
+            .lock()
+            .expect("ptr log")
+            .push(Arc::as_ptr(cached) as usize);
+        Ok((**cached).clone())
+    }
+}
+
+/// A v2-opted-in server exposing only [`CachedPayloadTool`].
+fn build_cached_payload_server() -> Server {
+    Server::builder()
+        .name("v2-cached-payload")
+        .version("1.0.0")
+        .with_supported_protocol_versions([
+            ProtocolVersion(V1.to_string()),
+            ProtocolVersion(V2.to_string()),
+        ])
+        .tool("cached", CachedPayloadTool)
+        .build()
+        .expect("server builds")
+}
+
+/// Read a LIVE SSE stream until its first `data:` frame, or give up.
+///
+/// The shared harness's `get()` reads the body to EOF, which a live SSE stream
+/// never reaches — a v1 resumability assertion driven through it would hang
+/// forever. Kept local to this file on purpose: plan 13 owns the general
+/// streaming-client surface, and duplicating a bounded reader here is cheaper
+/// than pre-empting that design.
+async fn sse_first_data_frame(
+    addr: SocketAddr,
+    extra: &[(String, String)],
+) -> (u16, Option<String>, Option<Value>) {
+    let client = reqwest::Client::new();
+    let mut request = client
+        .get(format!("http://{addr}"))
+        .header("accept", "text/event-stream");
+    for (name, value) in extra {
+        request = request.header(name.as_str(), value.as_str());
+    }
+    let mut response = request.send().await.expect("request sent");
+    let status = response.status().as_u16();
+    let content_type = response
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_string);
+
+    let frame = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        let mut buffer = String::new();
+        while let Ok(Some(chunk)) = response.chunk().await {
+            buffer.push_str(&String::from_utf8_lossy(&chunk));
+            for line in buffer.lines() {
+                if let Some(payload) = line.strip_prefix("data:") {
+                    if let Ok(value) = serde_json::from_str::<Value>(payload.trim()) {
+                        return Some(value);
+                    }
+                }
+            }
+        }
+        None
+    })
+    .await
+    .unwrap_or(None);
+
+    (status, content_type, frame)
+}
+
+/// Several sequential v2 requests with distinct numeric ids each get their OWN
+/// id back.
+#[tokio::test]
+async fn response_id_always_from_live_request() {
+    let (addr, handle) = spawn_default_config(build_v2_server()).await;
+    for id in [101_i64, 102, 103, 104] {
+        let response = post(
+            addr,
+            &v2_headers("tools/call", "search"),
+            &v2_call_body(json!(id)),
+        )
+        .await;
+        assert_eq!(response.status, 200, "body: {}", response.raw);
+        assert_eq!(
+            response.body["id"], id,
+            "request {id} must get its OWN id back; body: {}",
+            response.raw
+        );
+    }
+    handle.abort();
+}
+
+/// **The test that would have caught the production bug.** Eight concurrent v2
+/// callers, each from its own task, each with a distinct id — no response may
+/// ever carry another caller's id (T-113-07).
+#[tokio::test]
+async fn response_id_concurrent_callers_do_not_cross() {
+    let (addr, handle) = spawn_default_config(build_v2_server()).await;
+
+    let mut tasks = Vec::new();
+    for id in 200_i64..212 {
+        tasks.push(tokio::spawn(async move {
+            let response = post(
+                addr,
+                &v2_headers("tools/call", "search"),
+                &v2_call_body(json!(id)),
+            )
+            .await;
+            (id, response)
+        }));
+    }
+
+    let mut seen = Vec::new();
+    for task in tasks {
+        let (id, response) = task.await.expect("request task joins");
+        assert_eq!(response.status, 200, "id {id}; body: {}", response.raw);
+        assert_eq!(
+            response.body["id"], id,
+            "concurrent caller {id} received another caller's id; body: {}",
+            response.raw
+        );
+        seen.push(response.body["id"].clone());
+    }
+    handle.abort();
+
+    assert_eq!(seen.len(), 12, "every concurrent caller answered");
+    let mut unique = seen.clone();
+    unique.sort_by_key(std::string::ToString::to_string);
+    unique.dedup();
+    assert_eq!(unique.len(), seen.len(), "no id was delivered twice");
+}
+
+/// A STRING id round-trips as the same string — the id TYPE is preserved, not
+/// coerced.
+#[tokio::test]
+async fn response_id_preserved_for_string_ids() {
+    let (addr, handle) = spawn_default_config(build_v2_server()).await;
+    let response = post(
+        addr,
+        &v2_headers("tools/call", "search"),
+        &v2_call_body(json!("caller-alpha")),
+    )
+    .await;
+    handle.abort();
+
+    assert_eq!(response.status, 200, "body: {}", response.raw);
+    assert!(
+        response.body["id"].is_string(),
+        "a string id must stay a STRING, not be coerced; body: {}",
+        response.raw
+    );
+    assert_eq!(response.body["id"], "caller-alpha");
+}
+
+/// An ERROR response carries the original request id too — on the raw-level
+/// unknown-method path (plan 04) AND on a handler-produced error.
+#[tokio::test]
+async fn response_id_preserved_on_error() {
+    let (addr, handle) = spawn_default_config(build_v2_server()).await;
+
+    // (a) The v2 unknown-method 404, whose body never typed-parses.
+    let unknown = post_raw(
+        addr,
+        &v2_headers("totally/unknown", ""),
+        &v2_body("totally/unknown", json!(4242), json!({})),
+    )
+    .await;
+
+    // (b) A handler-produced error on a KNOWN method (no such tool).
+    let no_such_tool = post(
+        addr,
+        &v2_headers("tools/call", "nope"),
+        &v2_body(
+            "tools/call",
+            json!("err-id"),
+            json!({ "name": "nope", "arguments": {} }),
+        ),
+    )
+    .await;
+    handle.abort();
+
+    assert_eq!(unknown.status, 404, "body: {}", unknown.raw);
+    assert_eq!(unknown.body["error"]["code"], METHOD_NOT_FOUND);
+    assert_eq!(
+        unknown.body["id"], 4242,
+        "an error response must carry the ORIGINAL id; body: {}",
+        unknown.raw
+    );
+
+    assert!(
+        no_such_tool.body.get("error").is_some(),
+        "an unknown tool must be an error; body: {}",
+        no_such_tool.raw
+    );
+    assert_eq!(
+        no_such_tool.body["id"], "err-id",
+        "a handler-produced error must carry the ORIGINAL id; body: {}",
+        no_such_tool.raw
+    );
+}
+
+/// A response whose PAYLOAD is a genuinely reused object is still re-enveloped
+/// with each caller's own live id — the fixture for the documented
+/// discovery-cache bug class.
+#[tokio::test]
+async fn cached_payload_is_reenveloped_with_live_id() {
+    CACHED_PAYLOAD_PTRS.lock().expect("ptr log").clear();
+    let (addr, handle) = spawn_default_config(build_cached_payload_server()).await;
+
+    let body = |id: Value| {
+        v2_body(
+            "tools/call",
+            id,
+            json!({ "name": "cached", "arguments": {} }),
+        )
+    };
+    let first = post(addr, &v2_headers("tools/call", "cached"), &body(json!(901))).await;
+    let second = post(
+        addr,
+        &v2_headers("tools/call", "cached"),
+        &body(json!("902-string")),
+    )
+    .await;
+    handle.abort();
+
+    assert_eq!(first.status, 200, "body: {}", first.raw);
+    assert_eq!(second.status, 200, "body: {}", second.raw);
+
+    // The payload really WAS the same object both times.
+    let ptrs = CACHED_PAYLOAD_PTRS.lock().expect("ptr log").clone();
+    assert_eq!(ptrs.len(), 2, "the cached tool ran exactly twice");
+    assert_eq!(
+        ptrs[0], ptrs[1],
+        "the fixture must reuse the SAME payload object, or it proves nothing"
+    );
+
+    // ...and each response still carries ITS OWN live id.
+    assert_eq!(
+        first.body["id"], 901,
+        "a reused payload must be re-enveloped with the live id; body: {}",
+        first.raw
+    );
+    assert_eq!(
+        second.body["id"], "902-string",
+        "...including when the live id is a string; body: {}",
+        second.raw
+    );
+    assert_ne!(
+        first.body["id"], second.body["id"],
+        "the two callers must NOT share an id"
+    );
+}
+
+/// Spec: a `Last-Event-ID` header on a v2 request — "ignore it". The request is
+/// served normally, with its OWN live id and a real result.
+#[tokio::test]
+async fn last_event_id_ignored() {
+    let (addr, handle) = spawn_default_config(build_v2_server()).await;
+    let mut headers = v2_headers("tools/call", "search");
+    headers.push(header("last-event-id", "12345"));
+    let response = post(addr, &headers, &v2_call_body(json!(777))).await;
+    handle.abort();
+
+    assert_eq!(
+        response.status, 200,
+        "a v2 request carrying Last-Event-ID must be served normally; body: {}",
+        response.raw
+    );
+    assert!(
+        response.body.get("result").is_some(),
+        "...with a real result; body: {}",
+        response.raw
+    );
+    assert_eq!(
+        response.body["id"], 777,
+        "...and its OWN live id, not a replayed one; body: {}",
+        response.raw
+    );
+}
+
+/// v1 resumability still works: a GET carrying `Last-Event-ID` on a live session
+/// opens an SSE stream and REPLAYS the events already stored for it (T-113-19).
+#[tokio::test]
+async fn v1_resumability_unchanged() {
+    let (addr, handle) = spawn_default_config(build_v2_server()).await;
+
+    let init = post(addr, &[], &v1_initialize_body()).await;
+    let session = init
+        .mcp_session_id
+        .clone()
+        .expect("v1 initialize mints a session");
+
+    let (status, content_type, frame) = sse_first_data_frame(
+        addr,
+        &[
+            header("mcp-session-id", &session),
+            header("last-event-id", "no-such-event"),
+        ],
+    )
+    .await;
+    handle.abort();
+
+    assert_eq!(status, 200, "a v1 resumable GET must open an SSE stream");
+    assert!(
+        content_type
+            .as_deref()
+            .is_some_and(|ct| ct.starts_with("text/event-stream")),
+        "...framed as SSE, got {content_type:?}"
+    );
+    assert!(
+        frame.is_some(),
+        "a v1 GET with Last-Event-ID must REPLAY the session's stored events"
+    );
+}
+
+/// The companion assertion that keeps [`response_id_always_from_live_request`]
+/// honest instead of vacuous: a REPLAYED historical event retains its ORIGINAL
+/// id. It is not a direct response, and re-stamping it would be the bug.
+#[tokio::test]
+async fn v1_replayed_event_retains_original_id() {
+    let (addr, handle) = spawn_default_config(build_v2_server()).await;
+
+    // The ORIGINAL request whose response gets stored, at a distinctive id.
+    let init = post(
+        addr,
+        &[],
+        &v1_body(
+            "initialize",
+            json!(4711),
+            json!({
+                "protocolVersion": V1,
+                "capabilities": {},
+                "clientInfo": { "name": "v1-client", "version": "1.0.0" },
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(init.status, 200, "v1 initialize: {}", init.raw);
+    assert_eq!(init.body["id"], 4711, "the DIRECT response carries 4711");
+    let session = init
+        .mcp_session_id
+        .clone()
+        .expect("v1 initialize mints a session");
+
+    // A LATER request on the same session, at a different id.
+    let listed = post(
+        addr,
+        &[header("mcp-session-id", &session)],
+        &v1_body("tools/list", json!(9999), json!({})),
+    )
+    .await;
+    assert_eq!(listed.status, 200, "v1 tools/list: {}", listed.raw);
+
+    // The GET that TRIGGERS the replay carries no id of its own.
+    let (status, _content_type, frame) = sse_first_data_frame(
+        addr,
+        &[
+            header("mcp-session-id", &session),
+            header("last-event-id", "no-such-event"),
+        ],
+    )
+    .await;
+    handle.abort();
+
+    assert_eq!(status, 200);
+    let replayed = frame.expect("the v1 replay must emit the stored event");
+    assert_eq!(
+        replayed["id"], 4711,
+        "a REPLAYED historical event keeps its ORIGINAL id — this is correct \
+         behavior, not a violation of the direct-response invariant; frame: {replayed}"
+    );
+    assert_ne!(
+        replayed["id"], 9999,
+        "...and is emphatically NOT re-stamped with a later request's id"
     );
 }
