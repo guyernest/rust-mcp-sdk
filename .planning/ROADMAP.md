@@ -2300,7 +2300,7 @@ Plans:
 
 **Wave 4** *(blocked on Wave 3)*
 
-- [ ] 113-07-PLAN.md — CLNT-02 client MRTR loop: typed `MrtrRoundLimitExceeded` and `InputRequiredUnfulfilled` without new `Error` variants, additive `*_mrtr` methods returning `MrtrOutcome`, preflight-before-invoke, the three-way fold through the FULL host pipeline (approval + result review), and the bounded gather→resend loop with a fresh id and stale-key-free params per round (mock transport only)
+- [x] 113-07-PLAN.md — CLNT-02 client MRTR loop: typed `MrtrRoundLimitExceeded` and `InputRequiredUnfulfilled` without new `Error` variants, additive `*_mrtr` methods returning `MrtrOutcome`, preflight-before-invoke, the three-way fold through the FULL host pipeline (approval + result review), and the bounded gather→resend loop with a fresh id and stale-key-free params per round (mock transport only)
 - [ ] 113-08-PLAN.md — HTTP-05: `resumability_active` era gate turning `Last-Event-ID`/EventStore reads AND writes off on v2 (proven by a spy), plus the STRUCTURAL `envelope_for_live_request(payload, live_id)` constructor scoping the id invariant to DIRECT responses while v1 historical replay keeps its original ids
 - [ ] 113-09-PLAN.md — MRTR server egress: handler `_meta` signal → capability precheck → AEAD mint → `resultType:"input_required"` at both dispatch sites, unconditional `strip_mrtr_signal` on EVERY path (v1 included), SERVER-OWNED reserved fields (`resultType`/`serverInfo`/`requestState`/`inputRequests` overwritten or removed), the exhaustive eligible-method tripwire, submode-aware `-32021`, and the `serverInfo`→`result._meta` placement fix
 
@@ -2405,7 +2405,7 @@ Plans:
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 112. Version Plumbing Spine | 10/10 | Complete    | 2026-07-23 |
-| 113. Stateless HTTP + MRTR | 6/13 | In Progress|  |
+| 113. Stateless HTTP + MRTR | 7/13 | In Progress|  |
 | 114. Tasks Extension Migration | 0/TBD | Not started | - |
 | 115. JSON Schema 2020-12 + Caching Hints | 0/TBD | Not started | - |
 | 116. Auth Hardening SEPs | 0/TBD | Not started | - |

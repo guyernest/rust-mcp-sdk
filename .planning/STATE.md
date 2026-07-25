@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v2.5
 milestone_name: MCP Spec 2026-07-28
 status: executing
-stopped_at: Completed 113-06-PLAN.md
-last_updated: "2026-07-25T17:48:55.138Z"
+stopped_at: Completed 113-07-PLAN.md
+last_updated: "2026-07-25T19:39:42.422Z"
 last_activity: 2026-07-25
 progress:
   total_phases: 71
   completed_phases: 57
   total_plans: 294
-  completed_plans: 287
+  completed_plans: 288
   percent: 80
 ---
 
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-07-22) · .planning/ROADMAP.md (v2.5 mil
 ## Current Position
 
 Phase: 113 (stateless-http-multi-round-trip-elicitation) — EXECUTING
-Plan: 7 of 13
+Plan: 8 of 13
 Status: Ready to execute
 Last activity: 2026-07-25
 
@@ -132,6 +132,12 @@ Decisions are logged in PROJECT.md Key Decisions table. Decisions framing this m
 - [Phase ?]: [Phase 113]: 113-05: with_protocol_version returns Result<Self> (build() cannot become fallible) and validates against SUPPORTED_PROTOCOL_VERSIONS UNION 2026-07-28 — the v2 constant is deliberately absent from that table (Phase-112 Pitfall 1)
 - [Phase ?]: [Phase 113]: 113-05: the transport v2 era is a PRIVATE latch written only by the client seam, never derived from protocol_version — process_response_headers overwrites that field from the server, so a rogue echo of MCP-Protocol-Version: 2026-07-28 would otherwise flip a v1 client into v2 mode and break its session
 - [Phase ?]: [Phase 113]: 113-05: server_discover takes &mut self and STORES its projection (that is what re-arms era-aware assert_capability); it is never called implicitly and never used to CHOOSE an era (D-08)
+- [Phase 113]: 113-07: the two MRTR client errors ride the EXISTING Error::Protocol variant discriminated by a stable data.pmcpError marker — pmcp::Error is not #[non_exhaustive], so a new variant is a MAJOR break; rustdoc'd so nobody "fixes" them into variants
+- [Phase 113]: 113-07: the EXISTING call_tool/get_prompt/read_resource now return Err(input_required_unfulfilled) on v2 instead of deserializing an input_required into a silently EMPTY CallToolResult (content is #[serde(default)]); the additive *_mrtr siblings return MrtrOutcome::InputRequired as a value
+- [Phase 113]: 113-07: the MRTR fold PREFLIGHTS every requested kind before invoking anything and routes each entry through the SAME host helpers the v1 dispatch uses, so on_sampling_approval and on_sampling_result_review apply identically on v2 (T-113-57); all-or-nothing, every refusal tracing::warn!-logged with the entry key
+- [Phase 113]: 113-07: a WithTools-only sampling handler answers an MRTR entry via project_with_tools_to_legacy — an inputResponses value is spec-typed as CreateMessageResult, while the v1 host response still carries the full CreateMessageResultWithTools (one pipeline, two renderers)
+- [Phase 113]: 113-07: D-113-E fixed — a v2 non-2xx whose body is a strict JSON-RPC 2.0 error envelope is fed through the normal response channel (so error.code is readable); v1 gated out by the transport v2_mode latch and byte-identical
+- [Phase 113]: 113-07: a missing or non-input_required resultType is TERMINAL, so Phase 114's "task" composes with the MRTR loop without touching it; rounds are counted per LOGICAL round and the resend always uses a fresh id plus splice_mrtr_params (stale-key-free)
 
 ### Pending Todos
 
@@ -172,8 +178,8 @@ Items deferred by design for this milestone (design §7 / REQUIREMENTS v2):
 
 ## Session Continuity
 
-Last session: 2026-07-25T17:48:55.129Z
-Stopped at: Completed 113-06-PLAN.md
+Last session: 2026-07-25T19:39:42.409Z
+Stopped at: Completed 113-07-PLAN.md
 Resume file: None
 
 ## Performance Metrics
@@ -212,3 +218,4 @@ Resume file: None
 | Phase 113 P04 | 165min | 5 tasks | 10 files |
 | Phase 113 P05 | 105min | 3 tasks | 6 files |
 | Phase 113 P06 | 95min | 3 tasks | 7 files |
+| Phase 113 P07 | 41min | 3 tasks tasks | 6 files files |
