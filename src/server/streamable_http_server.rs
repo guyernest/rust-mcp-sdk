@@ -602,10 +602,12 @@ async fn map_unparsed_body_for_v2(
     if envelope.get("id").is_none() {
         return v1_response;
     }
-    let raw_meta = envelope.get("params").and_then(|p| p.get("_meta")).cloned();
+    // The SAME raw-body reader the header gate uses, so an unknown method is
+    // classified against exactly the era its sibling requests would get.
+    let raw_meta = raw_params_meta(raw_body);
     let resolved = {
         let server = state.server.lock().await;
-        server.resolve_discover_protocol_context(raw_meta.as_ref())
+        server.resolve_raw_meta_protocol_context(raw_meta.as_ref())
     };
     let Ok(Some(context)) = resolved else {
         return v1_response;
@@ -948,21 +950,54 @@ fn negotiation_error_to_gate_reject(
     }
 }
 
-/// Shared tail of BOTH v2 gates: map a resolved-context result to a
-/// `(ProtocolContext, V2GateOutcome)` pair via the SAME error-mapping, D-04
-/// passthrough ordering, and `classify_v2_request` matrix.
+/// The RAW `params._meta` object of a JSON-RPC request body, if it has one.
 ///
-/// The typed and raw gates differ ONLY in how they produce `resolved` and in
-/// `body_method_override` (a discover ingress pins `Some("server/discover")`;
-/// the typed path passes `None` to read the method from the wire body). Keeping
-/// the tail here means those two paths can never drift on the reject mapping,
-/// passthrough short-circuit, or cross-check wiring.
-fn finish_v2_gate(
-    resolved: std::result::Result<
-        Option<crate::types::protocol::ProtocolContext>,
-        crate::types::protocol::context::ProtocolNegotiationError,
-    >,
-    accept_list: &[crate::types::ProtocolVersion],
+/// # Why the era is read from the RAW body and not from a typed field
+///
+/// A stateless v2 request has no `initialize` handshake, so `params._meta` is the
+/// ONLY era channel — every method must be able to carry it. Reading it from a
+/// typed `req._meta` field can only ever cover the three request structs that
+/// HAVE such a field, and adding the field to the rest is a MAJOR semver break
+/// (`cargo semver-checks` `constructible_struct_adds_field` on the `pub`,
+/// all-`pub`-fields, constructible `ListToolsRequest` and friends). Reading the
+/// body needs no public API change and covers every method, including the ones
+/// plan 10 has not written yet (Phase-113 D-113-B / D-113-D resolution).
+///
+/// The SPEC spelling `_meta` wins; `meta` is accepted as a fallback so this reader
+/// mirrors the `#[serde(rename = "_meta", alias = "meta")]` ingress contract the
+/// typed structs carry (D-113-A) and the two can never disagree about what counts
+/// as a `_meta` object. Never panics on adversarial bytes (T-112-13).
+fn raw_params_meta(body: &[u8]) -> Option<serde_json::Value> {
+    let value = serde_json::from_slice::<serde_json::Value>(body).ok()?;
+    let params = value.get("params")?;
+    params
+        .get("_meta")
+        .or_else(|| params.get("meta"))
+        .filter(|meta| !meta.is_null())
+        .cloned()
+}
+
+/// THE v2 header gate for the streamable-HTTP transport — one path, every method.
+///
+/// Resolves the per-request era from the RAW body's `params._meta` (see
+/// [`raw_params_meta`]), then runs the D-04 passthrough short-circuit, the
+/// negotiation-error mapping, and the [`classify_v2_request`] header/`_meta`
+/// matrix. The resolved [`ProtocolContext`](crate::types::protocol::ProtocolContext)
+/// it returns is the SAME value threaded into dispatch, so this layer resolves the
+/// era exactly ONCE and dispatch never re-resolves it (D-11 / Pitfall 2).
+///
+/// `body_method_override` exists for the one ingress whose method is fixed by
+/// classification rather than read from the wire: a `server/discover` request pins
+/// `Some("server/discover")` so the header/body cross-check cannot be fooled by a
+/// body whose `method` field disagrees with how the request was routed. Every
+/// other caller passes `None` and the method comes from the body.
+///
+/// Before Phase 113 plan 04 there were TWO gates here — a typed one reading
+/// `req._meta` for public requests and a raw one reading `params._meta` for
+/// discover — which meant the two ingress paths could (and did) disagree about
+/// which methods carried an era signal at all. There is now one.
+async fn run_v2_header_gate(
+    state: &ServerState,
     headers: &HeaderMap,
     raw_body: &[u8],
     body_method_override: Option<&str>,
@@ -970,9 +1005,20 @@ fn finish_v2_gate(
     Option<crate::types::protocol::ProtocolContext>,
     V2GateOutcome,
 ) {
+    let raw_meta = raw_params_meta(raw_body);
+    let (resolved, accept_list) = {
+        let server = state.server.lock().await;
+        // Non-opted-in servers run ZERO era-detection — the v1 path is
+        // byte-for-byte unchanged (D-04). `resolve_raw_meta_protocol_context`
+        // short-circuits to `Ok(None)` WITHOUT inspecting `_meta` at all.
+        (
+            server.resolve_raw_meta_protocol_context(raw_meta.as_ref()),
+            server.supported_protocol_versions().to_vec(),
+        )
+    };
     let context = match resolved {
         Ok(ctx) => ctx,
-        Err(err) => return (None, negotiation_error_to_gate_reject(&err, accept_list)),
+        Err(err) => return (None, negotiation_error_to_gate_reject(&err, &accept_list)),
     };
     // `Ok(None)` == not opted in → zero enforcement (D-04).
     let Some(ref pc) = context else {
@@ -983,29 +1029,6 @@ fn finish_v2_gate(
     let body_method = body_method_override.or(extracted_method.as_deref());
     let outcome = classify_v2_request(headers, meta_is_v2, body_method, body_name.as_deref());
     (context, outcome)
-}
-
-/// Run the v2 gate for a parsed `Request` on an opted-in server.
-async fn run_v2_header_gate(
-    state: &ServerState,
-    request: &Request,
-    headers: &HeaderMap,
-    raw_body: &[u8],
-) -> (
-    Option<crate::types::protocol::ProtocolContext>,
-    V2GateOutcome,
-) {
-    let (resolved, accept_list) = {
-        let server = state.server.lock().await;
-        // Non-opted-in servers run ZERO era-detection — v1 path byte-for-byte
-        // unchanged (D-04). `resolve_ingress_protocol_context` already
-        // short-circuits to `Ok(None)` there.
-        (
-            server.resolve_ingress_protocol_context(request),
-            server.supported_protocol_versions().to_vec(),
-        )
-    };
-    finish_v2_gate(resolved, &accept_list, headers, raw_body, None)
 }
 
 /// Crate-LOCAL ingress classification for the POST pipeline (Phase 112, VERS-04).
@@ -1021,12 +1044,13 @@ enum HttpIngress {
     /// Any normal message (typed request, notification, or response) — the
     /// existing public-enum dispatch path, unchanged.
     Public(TransportMessage),
-    /// A v2-only `server/discover` request carrying the ORIGINAL request id and
-    /// the RAW `_meta` value (for the raw-_meta v2 header gate + era resolution).
-    Discover {
-        id: crate::types::RequestId,
-        raw_meta: Option<serde_json::Value>,
-    },
+    /// A v2-only `server/discover` request, carrying the ORIGINAL request id.
+    ///
+    /// It does NOT carry a copy of `_meta`: since Phase 113 plan 04 the single
+    /// [`run_v2_header_gate`] reads `params._meta` from the raw body for every
+    /// ingress, so a second captured copy here would be a duplicate read that
+    /// could drift.
+    Discover { id: crate::types::RequestId },
 }
 
 /// Classify a raw POST body as an internally-routed `server/discover` request,
@@ -1047,18 +1071,16 @@ fn classify_http_ingress(body: &[u8]) -> Option<HttpIngress> {
     // the discover case (its `IngressRequest::Internal(ServerDiscover)` arm is the
     // only path that yields `Discover`), so this peek changes no classification —
     // any non-discover method returned `None` before too, via `Public(_) => None`.
-    if req.method != "server/discover" {
+    if req.method != crate::types::protocol::SERVER_DISCOVER_METHOD {
         return None;
     }
-    // Capture the raw `_meta` BEFORE the routing seam consumes `params`.
-    let raw_meta = req.params.as_ref().and_then(|p| p.get("_meta")).cloned();
     let (id, ingress) = crate::shared::protocol_helpers::parse_request_or_internal(req).ok()?;
     match ingress {
         // The inner match is exhaustive over `InternalClientRequest`, so adding a
         // future internally-routed method is a compile-time tripwire here.
         crate::shared::protocol_helpers::IngressRequest::Internal(internal) => match internal {
             crate::types::protocol::InternalClientRequest::ServerDiscover(_) => {
-                Some(HttpIngress::Discover { id, raw_meta })
+                Some(HttpIngress::Discover { id })
             },
         },
         // A public request re-parsed here is DISCARDED; the caller re-parses it via
@@ -1066,45 +1088,6 @@ fn classify_http_ingress(body: &[u8]) -> Option<HttpIngress> {
         // bytes (incl. parse-error responses) stay exactly as before.
         crate::shared::protocol_helpers::IngressRequest::Public(_) => None,
     }
-}
-
-/// Run the v2 header gate for a `server/discover` ingress from its RAW `_meta`
-/// (Phase 112, VERS-04, findings #1/#3).
-///
-/// The raw-_meta counterpart of [`run_v2_header_gate`]: a discover ingress has NO
-/// parsed [`Request`], so the era is resolved from `params._meta` via
-/// [`Server::resolve_discover_protocol_context`](crate::server::Server::resolve_discover_protocol_context).
-/// It runs the SAME [`classify_v2_request`] matrix every other method runs, with
-/// `body_method` fixed to `"server/discover"`. A non-opted-in server
-/// short-circuits to [`V2GateOutcome::Passthrough`] FIRST, WITHOUT inspecting the
-/// v2 `_meta` (D-04 ordering).
-async fn run_v2_header_gate_raw(
-    state: &ServerState,
-    raw_meta: Option<&serde_json::Value>,
-    headers: &HeaderMap,
-    raw_body: &[u8],
-) -> (
-    Option<crate::types::protocol::ProtocolContext>,
-    V2GateOutcome,
-) {
-    let (resolved, accept_list) = {
-        let server = state.server.lock().await;
-        // Non-opted-in → `Ok(None)` WITHOUT touching the v2 `_meta` (D-04).
-        (
-            server.resolve_discover_protocol_context(raw_meta),
-            server.supported_protocol_versions().to_vec(),
-        )
-    };
-    // `server/discover` is NOT a name-bearing method, so `Mcp-Name` is
-    // presence-only; the body method is FIXED (override) so the header/body
-    // cross-check pins `Mcp-Method` regardless of the raw body's method field.
-    finish_v2_gate(
-        resolved,
-        &accept_list,
-        headers,
-        raw_body,
-        Some("server/discover"),
-    )
 }
 
 impl StreamableHttpServer {
@@ -2206,24 +2189,14 @@ async fn handle_post_fast_path(
     // A `server/discover` ingress runs the SAME matrix via the raw-_meta
     // counterpart (finding #1).
     let (protocol_context, v2_outbound) = match &ingress {
-        HttpIngress::Public(TransportMessage::Request { request, .. }) => {
-            let (ctx, gate) = run_v2_header_gate(&state, request, &headers, body.as_bytes()).await;
-            match gate {
-                V2GateOutcome::Reject {
-                    code,
-                    message,
-                    data,
-                } => {
-                    let era = ctx.as_ref().map(|pc| pc.era);
-                    return v2_gate_reject_response(body.as_bytes(), era, code, &message, data);
-                },
-                V2GateOutcome::Passthrough => (ctx, None),
-                V2GateOutcome::EnforceOk { method, name } => (ctx, Some((method, name))),
-            }
-        },
-        HttpIngress::Discover { raw_meta, .. } => {
+        // Only a REQUEST carries a header contract. `server/discover` pins its
+        // method (it is routed by classification, not by the body's `method`
+        // field); every other request reads the method from the body.
+        HttpIngress::Public(TransportMessage::Request { .. }) | HttpIngress::Discover { .. } => {
+            let method_override = matches!(ingress, HttpIngress::Discover { .. })
+                .then_some(crate::types::protocol::SERVER_DISCOVER_METHOD);
             let (ctx, gate) =
-                run_v2_header_gate_raw(&state, raw_meta.as_ref(), &headers, body.as_bytes()).await;
+                run_v2_header_gate(&state, &headers, body.as_bytes(), method_override).await;
             match gate {
                 V2GateOutcome::Reject {
                     code,
@@ -2631,48 +2604,17 @@ async fn handle_post_with_middleware(
     // check because an accepted v2 request carries MCP-Protocol-Version:
     // 2026-07-28 (which the static-SUPPORTED check would reject). Only Request /
     // discover ingresses carry a header contract; v1 / non-opted-in →
-    // Passthrough (zero enforcement, D-04). A `server/discover` ingress runs the
-    // SAME matrix via the raw-_meta counterpart (finding #1).
+    // Passthrough (zero enforcement, D-04). Since Plan 113-04 there is ONE gate
+    // for every ingress, reading `params._meta` from the raw body.
     let (protocol_context, v2_outbound) = match &ingress {
-        HttpIngress::Public(TransportMessage::Request { request, .. }) => {
+        HttpIngress::Public(TransportMessage::Request { .. }) | HttpIngress::Discover { .. } => {
+            let method_override = matches!(ingress, HttpIngress::Discover { .. })
+                .then_some(crate::types::protocol::SERVER_DISCOVER_METHOD);
             let (ctx, gate) = run_v2_header_gate(
                 &state,
-                request,
                 &server_request.headers,
                 &server_request.body,
-            )
-            .await;
-            match gate {
-                V2GateOutcome::Reject {
-                    code,
-                    message,
-                    data,
-                } => {
-                    report_middleware_error(
-                        http_middleware,
-                        &http_context,
-                        "v2 header gate rejected",
-                    )
-                    .await;
-                    let era = ctx.as_ref().map(|pc| pc.era);
-                    return v2_gate_reject_response(
-                        &server_request.body,
-                        era,
-                        code,
-                        &message,
-                        data,
-                    );
-                },
-                V2GateOutcome::Passthrough => (ctx, None),
-                V2GateOutcome::EnforceOk { method, name } => (ctx, Some((method, name))),
-            }
-        },
-        HttpIngress::Discover { raw_meta, .. } => {
-            let (ctx, gate) = run_v2_header_gate_raw(
-                &state,
-                raw_meta.as_ref(),
-                &server_request.headers,
-                &server_request.body,
+                method_override,
             )
             .await;
             match gate {
@@ -3669,17 +3611,22 @@ mod tests {
     }
 
     /// A well-formed `server/discover` body classifies as `HttpIngress::Discover`
-    /// carrying the original id and the raw `_meta`; any other method or malformed
-    /// input classifies as `Public`/`None` (never `Discover`), and never panics.
+    /// carrying the original id; any other method or malformed input classifies
+    /// as `Public`/`None` (never `Discover`), and never panics.
+    ///
+    /// The `_meta` is NOT captured here — since Plan 113-04 the single
+    /// [`run_v2_header_gate`] reads it from the raw body for every ingress, so a
+    /// copy on this variant would be a duplicate read that could drift.
     #[test]
     fn classify_http_ingress_routes_server_discover_only() {
         let body = br#"{"jsonrpc":"2.0","id":7,"method":"server/discover","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}"#;
         let ingress = classify_http_ingress(body).expect("server/discover classifies");
         match ingress {
-            HttpIngress::Discover { id, raw_meta } => {
+            HttpIngress::Discover { id } => {
                 assert_eq!(id, crate::types::RequestId::from(7i64));
+                // The gate reads the era from the SAME bytes, independently.
                 assert_eq!(
-                    raw_meta.unwrap()["io.modelcontextprotocol/protocolVersion"],
+                    raw_params_meta(body).unwrap()["io.modelcontextprotocol/protocolVersion"],
                     "2026-07-28"
                 );
             },
@@ -3696,18 +3643,78 @@ mod tests {
         assert!(classify_http_ingress(b"not json").is_none());
     }
 
-    /// D-04 ordering: a NON-opted-in server short-circuits a discover request to
-    /// Passthrough EVEN WITH a v2 `_meta` present — it must NOT reject as an
-    /// unsupported version (the v2 `_meta` is never inspected).
+    /// A JSON-RPC body for `method` carrying a v2 `params._meta` under `key`.
+    fn v2_body_bytes(method: &str, key: &str) -> Vec<u8> {
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": method,
+            "params": { key: { "io.modelcontextprotocol/protocolVersion": "2026-07-28" } },
+        })
+        .to_string()
+        .into_bytes()
+    }
+
+    /// The three headers a v2 request for `method` sends (name-less → empty).
+    fn v2_headers_for(method: &str) -> HeaderMap {
+        headers_from(&[
+            (MCP_PROTOCOL_VERSION, V2),
+            (MCP_METHOD, method),
+            (MCP_NAME, ""),
+        ])
+    }
+
+    /// `raw_params_meta` reads the SPEC spelling, accepts the legacy `meta`
+    /// alias, and never panics on adversarial input.
+    #[test]
+    fn raw_params_meta_reads_the_spec_spelling_and_the_legacy_alias() {
+        let expected = serde_json::json!({ "k": "v" });
+        assert_eq!(
+            raw_params_meta(
+                br#"{"jsonrpc":"2.0","id":1,"method":"m","params":{"_meta":{"k":"v"}}}"#
+            ),
+            Some(expected.clone())
+        );
+        assert_eq!(
+            raw_params_meta(
+                br#"{"jsonrpc":"2.0","id":1,"method":"m","params":{"meta":{"k":"v"}}}"#
+            ),
+            Some(expected.clone()),
+            "the legacy `meta` spelling is accepted, mirroring the typed serde alias"
+        );
+        // The SPEC spelling wins when both are present.
+        assert_eq!(
+            raw_params_meta(
+                br#"{"jsonrpc":"2.0","id":1,"method":"m","params":{"_meta":{"k":"v"},"meta":{"k":"other"}}}"#
+            ),
+            Some(expected)
+        );
+        // Absent / null / no params / garbage → None, never a panic.
+        assert_eq!(raw_params_meta(br#"{"jsonrpc":"2.0","params":{}}"#), None);
+        assert_eq!(
+            raw_params_meta(br#"{"jsonrpc":"2.0","params":{"_meta":null}}"#),
+            None
+        );
+        assert_eq!(raw_params_meta(br#"{"jsonrpc":"2.0","id":1}"#), None);
+        assert_eq!(raw_params_meta(b"not json"), None);
+        assert_eq!(raw_params_meta(&[0xff, 0xfe, 0x00]), None);
+    }
+
+    /// D-04 ordering: a NON-opted-in server short-circuits to Passthrough EVEN
+    /// WITH a v2 `_meta` present — it must NOT reject as an unsupported version
+    /// (the v2 `_meta` is never inspected).
     #[tokio::test]
-    async fn run_v2_header_gate_raw_non_opted_in_passes_through() {
+    async fn v2_gate_non_opted_in_passes_through() {
         let state = state_with_accept(vec![ProtocolVersion("2025-11-25".to_string())]);
-        let raw_meta = serde_json::json!({
-            "io.modelcontextprotocol/protocolVersion": "2026-07-28"
-        });
         let headers = headers_from(&[(MCP_PROTOCOL_VERSION, V2)]);
-        let body = br#"{"jsonrpc":"2.0","id":1,"method":"server/discover","params":{}}"#;
-        let (ctx, outcome) = run_v2_header_gate_raw(&state, Some(&raw_meta), &headers, body).await;
+        let body = v2_body_bytes("server/discover", "_meta");
+        let (ctx, outcome) = run_v2_header_gate(
+            &state,
+            &headers,
+            &body,
+            Some(crate::types::protocol::SERVER_DISCOVER_METHOD),
+        )
+        .await;
         assert!(ctx.is_none(), "non-opted-in resolves no context");
         assert!(
             matches!(outcome, V2GateOutcome::Passthrough),
@@ -3715,46 +3722,73 @@ mod tests {
         );
     }
 
-    /// An opted-in server with a well-formed v2 `_meta` + all three v2 headers
-    /// accepts the discover request via the SAME matrix (`EnforceOk`).
+    /// D-113-B, the whole point of the raw-body read: EVERY method can be a v2
+    /// request, including the list-shaped ones that carry no typed `_meta` field
+    /// (and cannot be given one without a MAJOR semver break).
     #[tokio::test]
-    async fn run_v2_header_gate_raw_v2_opted_in_enforces() {
+    async fn v2_gate_accepts_every_method_from_the_raw_body() {
         let state = state_with_accept(vec![
             ProtocolVersion("2025-11-25".to_string()),
             v2_version(),
         ]);
-        let raw_meta = serde_json::json!({
-            "io.modelcontextprotocol/protocolVersion": "2026-07-28"
-        });
-        // server/discover is presence-only for Mcp-Name (require_three_headers
-        // still requires it present).
-        let headers = headers_from(&[
-            (MCP_PROTOCOL_VERSION, V2),
-            (MCP_METHOD, "server/discover"),
-            (MCP_NAME, "server/discover"),
+        for method in [
+            "tools/list",
+            "prompts/list",
+            "resources/list",
+            "resources/templates/list",
+            "completion/complete",
+        ] {
+            let body = v2_body_bytes(method, "_meta");
+            let (ctx, outcome) =
+                run_v2_header_gate(&state, &v2_headers_for(method), &body, None).await;
+            assert_eq!(
+                ctx.map(|c| c.era),
+                Some(crate::types::protocol::Era::V2),
+                "{method} must resolve to the v2 era from its raw params._meta"
+            );
+            assert!(
+                matches!(outcome, V2GateOutcome::EnforceOk { .. }),
+                "{method} must be accepted as a v2 request"
+            );
+        }
+    }
+
+    /// The discover ingress runs the SAME gate, with its method PINNED by
+    /// classification rather than read from the body.
+    #[tokio::test]
+    async fn v2_gate_discover_pins_its_method() {
+        let state = state_with_accept(vec![
+            ProtocolVersion("2025-11-25".to_string()),
+            v2_version(),
         ]);
-        let body = br#"{"jsonrpc":"2.0","id":1,"method":"server/discover","params":{}}"#;
-        let (ctx, outcome) = run_v2_header_gate_raw(&state, Some(&raw_meta), &headers, body).await;
+        let headers = v2_headers_for(crate::types::protocol::SERVER_DISCOVER_METHOD);
+        // A body whose `method` field disagrees cannot fool the cross-check:
+        // the override pins how the request was actually routed.
+        let body = v2_body_bytes("tools/call", "_meta");
+        let (ctx, outcome) = run_v2_header_gate(
+            &state,
+            &headers,
+            &body,
+            Some(crate::types::protocol::SERVER_DISCOVER_METHOD),
+        )
+        .await;
         assert_eq!(ctx.map(|c| c.era), Some(crate::types::protocol::Era::V2));
         assert!(matches!(outcome, V2GateOutcome::EnforceOk { .. }));
     }
 
-    /// An opted-in server sees a discover request with a v2 `_meta` but NO
-    /// `MCP-Protocol-Version` header rejected by the SAME matrix cell that
-    /// rejects a tools/call with the same defect.
+    /// An opted-in server sees a v2 `_meta` with NO `MCP-Protocol-Version` header
+    /// rejected by the SAME matrix cell that rejects a tools/call with the same
+    /// defect.
     #[tokio::test]
-    async fn run_v2_header_gate_raw_v2_meta_without_header_rejects() {
+    async fn v2_gate_v2_meta_without_header_rejects() {
         let state = state_with_accept(vec![
             ProtocolVersion("2025-11-25".to_string()),
             v2_version(),
         ]);
-        let raw_meta = serde_json::json!({
-            "io.modelcontextprotocol/protocolVersion": "2026-07-28"
-        });
         // No MCP-Protocol-Version header → conflict cell → Reject.
-        let headers = headers_from(&[(MCP_METHOD, "server/discover"), (MCP_NAME, "x")]);
-        let body = br#"{"jsonrpc":"2.0","id":1,"method":"server/discover","params":{}}"#;
-        let (_ctx, outcome) = run_v2_header_gate_raw(&state, Some(&raw_meta), &headers, body).await;
+        let headers = headers_from(&[(MCP_METHOD, "tools/list"), (MCP_NAME, "")]);
+        let body = v2_body_bytes("tools/list", "_meta");
+        let (_ctx, outcome) = run_v2_header_gate(&state, &headers, &body, None).await;
         assert!(matches!(outcome, V2GateOutcome::Reject { .. }));
     }
 

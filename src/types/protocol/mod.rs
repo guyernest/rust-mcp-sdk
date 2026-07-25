@@ -617,21 +617,28 @@ pub(crate) enum InternalClientRequest {
     ServerDiscover(ServerDiscoverRequest),
 }
 
+/// The wire method string of the v2 `server/discover` request (VERS-04).
+///
+/// Single-sourced here so the classifier and the streamable-HTTP transport's
+/// header cross-check (which pins this method rather than reading it from the
+/// body) can never disagree on the spelling.
+pub(crate) const SERVER_DISCOVER_METHOD: &str = "server/discover";
+
 /// Classify a raw JSON-RPC method string into a crate-private internal request,
 /// if it is one of the internally-routed (non-public-enum) methods.
 ///
 /// Returns `Some(InternalClientRequest::ServerDiscover(..))` for the exact
-/// method string `"server/discover"` and `None` for every other method (which
-/// then flows through the normal public-enum dispatch path). Plan 05 calls this
-/// from the server request path BEFORE the public-enum conversion. Consumed in
-/// production by [`parse_request_or_internal`](crate::shared::protocol_helpers)
+/// method string [`SERVER_DISCOVER_METHOD`] and `None` for every other method
+/// (which then flows through the normal public-enum dispatch path). Plan 05 calls
+/// this from the server request path BEFORE the public-enum conversion. Consumed
+/// in production by [`parse_request_or_internal`](crate::shared::protocol_helpers)
 /// (Plan 05).
 pub(crate) fn classify_internal_method(
     method: &str,
     _params: &serde_json::Value,
 ) -> Option<InternalClientRequest> {
     match method {
-        "server/discover" => Some(InternalClientRequest::ServerDiscover(
+        SERVER_DISCOVER_METHOD => Some(InternalClientRequest::ServerDiscover(
             ServerDiscoverRequest::new(),
         )),
         _ => None,

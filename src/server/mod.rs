@@ -1317,17 +1317,29 @@ impl Server {
         )
     }
 
-    /// Resolve the per-request `ProtocolContext` for an internally-routed
-    /// `server/discover` request from its RAW `_meta` value (Phase 112, VERS-04).
+    /// Resolve the per-request `ProtocolContext` from a request's RAW
+    /// `params._meta` value.
     ///
-    /// The raw-body counterpart of
-    /// [`resolve_ingress_protocol_context`](Self::resolve_ingress_protocol_context):
-    /// a `server/discover` ingress carries no parsed [`Request`], so the
-    /// streamable-HTTP raw-_meta v2 gate resolves the era from the body's
-    /// `params._meta` here. Mirrors the same non-opted-in short-circuit (D-04):
-    /// a server that has NOT opted into v2 returns `Ok(None)` WITHOUT inspecting
-    /// the v2 `_meta`, so the v1 request path runs zero era detection.
-    pub(crate) fn resolve_discover_protocol_context(
+    /// # This is the era resolver the streamable-HTTP transport uses, for EVERY method
+    ///
+    /// Introduced in Phase 112 for the `server/discover` ingress (which has no
+    /// parsed [`Request`] to read a typed field from), and generalized in Phase
+    /// 113 plan 04 to every method (finding D-113-B).
+    ///
+    /// The typed
+    /// [`resolve_ingress_protocol_context`](Self::resolve_ingress_protocol_context)
+    /// can only see the three request structs that carry a `_meta` FIELD, so a
+    /// stateless v2 `tools/list` — which has no handshake and therefore no other
+    /// era channel — could not be expressed at all. Widening those `pub` structs
+    /// would have been a MAJOR semver break (`cargo semver-checks`
+    /// `constructible_struct_adds_field`), and the v2.5 milestone is scoped
+    /// additive; reading the raw body needs no public API change and covers every
+    /// method, so the HTTP transport routes ALL era detection through here.
+    ///
+    /// Mirrors the same non-opted-in short-circuit (D-04): a server that has NOT
+    /// opted into v2 returns `Ok(None)` WITHOUT inspecting `_meta` at all, so the
+    /// v1 request path runs zero era detection.
+    pub(crate) fn resolve_raw_meta_protocol_context(
         &self,
         raw_meta: Option<&serde_json::Value>,
     ) -> std::result::Result<
