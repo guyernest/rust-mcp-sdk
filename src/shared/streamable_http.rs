@@ -790,6 +790,34 @@ impl StreamableHttpTransport {
         self.post_body(body_bytes, is_notification).await
     }
 
+    /// Read the JSON-RPC ERROR envelope out of a non-2xx response body (D-113-E).
+    ///
+    /// Returns `Some(TransportMessage::Response)` only when the body is a
+    /// well-formed JSON-RPC 2.0 frame carrying an `error` member — i.e. the
+    /// server deliberately answered with a structured protocol error that plan
+    /// 04 mapped onto a 4xx status. A proxy's HTML error page, a bare
+    /// `{"message":"..."}`, or a `result`-carrying frame all return `None`, so
+    /// the caller falls back to the status-only transport error.
+    ///
+    /// Deliberately strict about `jsonrpc == "2.0"` **and** the presence of
+    /// `error`: an intermediary's JSON error document must never be laundered
+    /// into what a caller reads as a server-authored protocol error.
+    async fn jsonrpc_error_envelope(
+        response: HyperResponse<hyper::body::Incoming>,
+    ) -> Option<TransportMessage> {
+        let body = response.collect().await.ok()?.to_bytes();
+        let value = serde_json::from_slice::<serde_json::Value>(&body).ok()?;
+        if value.get("jsonrpc").and_then(serde_json::Value::as_str) != Some("2.0")
+            || value.get("error").is_none()
+        {
+            return None;
+        }
+        match crate::shared::StdioTransport::parse_message(&body) {
+            Ok(message @ TransportMessage::Response(_)) => Some(message),
+            _ => None,
+        }
+    }
+
     /// POST an ALREADY-SERIALIZED JSON-RPC frame.
     ///
     /// The shared tail of [`Self::send_with_options`] and
@@ -902,6 +930,40 @@ impl StreamableHttpTransport {
                     let _ = self.start_sse(None).await;
                 }
                 return Ok(());
+            }
+
+            // D-113-E: on v2 a STRUCTURED JSON-RPC error rides a 4xx.
+            //
+            // Phase-113 plan 04 maps the v2 error codes onto HTTP statuses
+            // (`-32601` at 404; `-32020`/`-32021`/`-32022`/`-32602` at 400), so
+            // erroring on the status alone discards the very `error.code` the
+            // caller has to dispatch on — an MRTR retry loop cannot tell an
+            // expired-token `-32602` from a transport fault, and plan 09's
+            // `-32021 MissingRequiredClientCapability` becomes unactionable.
+            // When the body IS a JSON-RPC error envelope, feed it through the
+            // normal response channel so it surfaces as `Error::Protocol`.
+            //
+            // v2 ONLY: v1's behavior is byte-identical to every prior release.
+            if self.is_v2() {
+                let status = response.status();
+                match Self::jsonrpc_error_envelope(response).await {
+                    Some(message) => {
+                        tracing::debug!(
+                            %status,
+                            "v2 non-2xx carried a JSON-RPC error envelope — surfacing it structurally"
+                        );
+                        self.sender
+                            .send(message)
+                            .map_err(|e| Error::Transport(TransportError::Send(e.to_string())))?;
+                        return Ok(());
+                    },
+                    None => {
+                        return Err(Error::Transport(TransportError::Request(format!(
+                            "Request failed with status: {}",
+                            status
+                        ))));
+                    },
+                }
             }
 
             return Err(Error::Transport(TransportError::Request(format!(
@@ -1906,6 +1968,112 @@ mod tests {
                     let _ = StreamableHttpTransport::apply_v2_outbound_headers(builder, &m, &n);
                 }
             }
+        }
+    }
+
+    // ==================================================================
+    // Phase 113 / D-113-E — a structured JSON-RPC error on a v2 non-2xx.
+    // ==================================================================
+
+    mod v2_error_envelope {
+        use super::*;
+        use crate::types::jsonrpc::ResponsePayload;
+        use crate::types::protocol::PROTOCOL_VERSION_2026_07_28;
+
+        /// The exact shape plan 04 puts on the wire for an expired/tampered
+        /// `requestState`: `-32602` at HTTP 400.
+        const INVALID_PARAMS_BODY: &str = r#"{"jsonrpc":"2.0","id":"abc","error":{"code":-32602,"message":"requestState could not be accepted"}}"#;
+
+        fn transport_for(url: &str, v2: bool) -> StreamableHttpTransport {
+            let config =
+                StreamableHttpTransportConfigBuilder::new(Url::parse(url).unwrap()).build();
+            let mut transport = StreamableHttpTransport::new(config);
+            if v2 {
+                transport
+                    .set_negotiated_protocol_version(Some(PROTOCOL_VERSION_2026_07_28.to_string()));
+            }
+            transport
+        }
+
+        /// A `-32602` at HTTP 400 reaches the CLIENT as a JSON-RPC error, not as
+        /// an opaque `TransportError::Request("… status: 400 …")`. Without this
+        /// the MRTR retry loop cannot dispatch on `error.code` at all.
+        #[tokio::test]
+        async fn v2_surfaces_a_jsonrpc_error_carried_on_a_400() {
+            let mut server = MockServer::new_async().await;
+            let mock = server
+                .mock("POST", "/")
+                .with_status(400)
+                .with_header("content-type", "application/json")
+                .with_body(INVALID_PARAMS_BODY)
+                .create_async()
+                .await;
+
+            let mut transport = transport_for(&server.url(), true);
+            transport
+                .send_raw(br#"{"jsonrpc":"2.0","id":"abc","method":"tools/call","params":{"name":"x","arguments":{}}}"#.to_vec())
+                .await
+                .expect("a structured error must NOT be a transport failure");
+
+            let message = transport
+                .receive()
+                .await
+                .expect("the envelope is delivered");
+            let TransportMessage::Response(response) = message else {
+                panic!("expected a response, got {message:?}");
+            };
+            let ResponsePayload::Error(error) = response.payload else {
+                panic!("expected the error payload");
+            };
+            assert_eq!(error.code, -32602);
+            mock.assert_async().await;
+        }
+
+        /// A non-JSON-RPC 4xx body (a proxy's error page) still fails loudly on
+        /// the status — nothing is laundered into a "server-authored" error.
+        #[tokio::test]
+        async fn v2_falls_back_to_the_status_error_for_a_non_envelope_body() {
+            let mut server = MockServer::new_async().await;
+            let _mock = server
+                .mock("POST", "/")
+                .with_status(502)
+                .with_header("content-type", "text/html")
+                .with_body("<html>bad gateway</html>")
+                .create_async()
+                .await;
+
+            let mut transport = transport_for(&server.url(), true);
+            let error = transport
+                .send_raw(br#"{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}"#.to_vec())
+                .await
+                .expect_err("a proxy error page is still a transport failure");
+            assert!(
+                error.to_string().contains("502"),
+                "the status must survive: {error}"
+            );
+        }
+
+        /// v1 is UNCHANGED: a 400 is still an opaque transport error there.
+        #[tokio::test]
+        async fn v1_still_errors_on_the_status_alone() {
+            let mut server = MockServer::new_async().await;
+            let _mock = server
+                .mock("POST", "/")
+                .with_status(400)
+                .with_header("content-type", "application/json")
+                .with_body(INVALID_PARAMS_BODY)
+                .create_async()
+                .await;
+
+            let mut transport = transport_for(&server.url(), false);
+            let error = transport
+                .send(list_tools_message())
+                .await
+                .expect_err("v1 behavior must be byte-identical to prior releases");
+            assert!(
+                error.to_string().contains("400"),
+                "v1 must still report the status: {error}"
+            );
         }
     }
 }
