@@ -884,6 +884,13 @@ fn classify_v2_request(
 ///   yield `None` and wrongly reject a standards-shaped `resources/read`)
 /// - any other method → `None` (presence-only; `cross_check_name` returns Ok for
 ///   non-name-bearing methods)
+///
+/// Production goes through [`method_and_name_of`] instead: since Phase 113 plan
+/// 06 the gate parses the raw body EXACTLY ONCE and shares that value with the
+/// era read, this cross-check and the MRTR params read. This byte-slice wrapper
+/// survives as the test entry point, so the existing wire-shape assertions keep
+/// exercising the parse-and-read pair end to end.
+#[cfg(test)]
 fn extract_body_method_and_name(body: &[u8]) -> (Option<String>, Option<String>) {
     method_and_name_of(raw_body_json(body).as_ref())
 }
@@ -3824,7 +3831,7 @@ mod tests {
     }
 
     /// Body bytes for a `tools/call` carrying arbitrary extra top-level params.
-    fn mrtr_body(extra: serde_json::Value) -> Vec<u8> {
+    fn mrtr_body(extra: &serde_json::Value) -> Vec<u8> {
         let mut params = serde_json::json!({ "name": "search", "arguments": {} });
         if let (Some(target), Some(source)) = (params.as_object_mut(), extra.as_object()) {
             for (key, value) in source {
@@ -3841,7 +3848,7 @@ mod tests {
     /// The MRTR params of an accepted v2 body land on the threaded context.
     #[test]
     fn attach_v2_mrtr_params_lands_the_fields_on_the_context() {
-        let body = mrtr_body(serde_json::json!({
+        let body = mrtr_body(&serde_json::json!({
             "requestState": "opaque-token",
             "inputResponses": { "user_name": { "action": "accept" } },
         }));
@@ -3857,7 +3864,7 @@ mod tests {
     /// A v1 / non-accepted body never gets MRTR params extracted (D-04).
     #[test]
     fn attach_v2_mrtr_params_skips_a_non_accepted_request() {
-        let body = mrtr_body(serde_json::json!({ "requestState": "opaque-token" }));
+        let body = mrtr_body(&serde_json::json!({ "requestState": "opaque-token" }));
         let parsed = raw_body_json(&body);
         for outcome in [
             V2GateOutcome::Passthrough,
@@ -3881,7 +3888,7 @@ mod tests {
     /// dispatch treats identically to no context-carried MRTR at all.
     #[test]
     fn attach_v2_mrtr_params_absent_fields_are_the_default() {
-        let body = mrtr_body(serde_json::json!({}));
+        let body = mrtr_body(&serde_json::json!({}));
         let parsed = raw_body_json(&body);
         let (ctx, outcome) =
             attach_v2_mrtr_params(Some(v2_context()), accepted_v2(), parsed.as_ref());
@@ -3942,7 +3949,7 @@ mod tests {
             serde_json::json!({ "inputResponses": { "bad": { "totally": "wrong" } } }),
         ];
         for case in cases {
-            let body = mrtr_body(case.clone());
+            let body = mrtr_body(&case);
             let parsed = raw_body_json(&body);
             let (_, outcome) =
                 attach_v2_mrtr_params(Some(v2_context()), accepted_v2(), parsed.as_ref());
@@ -3968,7 +3975,7 @@ mod tests {
     #[test]
     fn attach_v2_mrtr_params_rejection_never_echoes_the_offending_value() {
         let secret = "x".repeat(crate::types::mrtr::MAX_REQUEST_STATE_LEN + 1);
-        let body = mrtr_body(serde_json::json!({
+        let body = mrtr_body(&serde_json::json!({
             "inputResponses": { "super-secret-key": { "totally": "wrong" } },
             "requestState": secret,
         }));

@@ -479,10 +479,11 @@ impl ServerCore {
 
     /// The server-owned `requestState` codec, or `None` when this core did not
     /// opt into the v2 (`2026-07-28`) era.
-    // Why: the production consumers land in plans 06 and 09; today only the
-    // build-time wiring tests read it. Plan 12 removes this allow.
+    ///
+    /// Read on the production MRTR path by [`mrtr_ingest`] (verify) and
+    /// [`mrtr_egress`] (mint) — borrowed from server state, never a
+    /// process-global.
     #[cfg(all(feature = "streamable-http", not(target_arch = "wasm32")))]
-    #[allow(dead_code)]
     pub(crate) fn request_state_codec(
         &self,
     ) -> Option<&crate::server::request_state::RequestStateCodec> {
@@ -1126,14 +1127,19 @@ pub(crate) fn discover_result_from_capabilities(
 pub(crate) enum ResponseDisposition {
     /// The result is a final, complete result (the default; absent-means-complete).
     Complete,
-    // Why: the two non-Complete dispositions are the established selection path
-    // for Phases 113 (`input_required`) and 114 (`task`) — they are wired by
-    // those phases at dispatch and emitted by the shared helper below. Retained
-    // here (rather than added later) so the mechanism 113/114 depend on exists
-    // and is exercised by the `as_wire_str` unit test this phase.
     /// The result requests further input before it can complete (Phase 113).
-    #[allow(dead_code)]
+    ///
+    /// Selected by `mrtr_egress` when a handler signalled that it needs more
+    /// input; the shared helper below then emits it as the wire `resultType`.
+    /// The conditional `allow` is feature-scoped: MRTR (and therefore the only
+    /// constructor of this variant) is `streamable-http`-only by D-14, and with
+    /// that feature on — what every lint and build gate uses — it is live code.
+    #[cfg_attr(not(feature = "streamable-http"), allow(dead_code))]
     InputRequired,
+    // Why: the `Task` disposition is the established selection path for Phase
+    // 114 — it is wired by that phase at dispatch and emitted by the shared
+    // helper below. Retained here (rather than added later) so the mechanism
+    // 114 depends on exists and is exercised by the `as_wire_str` unit test.
     /// The result is a task handle rather than a terminal result (Phase 114).
     #[allow(dead_code)]
     Task,
@@ -1251,6 +1257,449 @@ pub(crate) fn build_discover_response(
     response
 }
 
+// ===========================================================================
+// MRTR ingress + egress (Plan 113-06, HTTP-02 / HTTP-03).
+//
+// ONE shared unit, called from BOTH native dispatch sites — `ServerCore` below
+// and the high-level `Server` in `server/mod.rs`. That is the Phase-109/112
+// twin-site parity rule: `mod.rs` CALLS these helpers, it never defines its own.
+//
+// D-14 confines the AEAD `requestState` codec to native + `streamable-http`, so
+// the whole unit carries that gate and a build without the feature runs zero
+// MRTR code.
+// ===========================================================================
+
+/// The principal a server with NO auth provider configured binds continuations
+/// to.
+///
+/// Such a deployment has no principals to separate — every caller arrives as the
+/// same (absent) identity — so collapsing them onto one NAMED constant is honest
+/// rather than lossy, and it means the principal expression has exactly one
+/// source and no session-id branch (T-113-06). The TTL and the
+/// originating-request binding remain the residual replay controls.
+///
+/// A server that DOES configure an auth provider never reaches this value: an
+/// unauthenticated request is refused MRTR outright (T-113-22).
+#[cfg(all(feature = "streamable-http", not(target_arch = "wasm32")))]
+pub(crate) const ANONYMOUS_PRINCIPAL: &str = "";
+
+/// The ONE client-facing message for every `requestState` authentication
+/// failure.
+///
+/// Tamper, wrong principal and cross-request replay are deliberately
+/// indistinguishable to the client: all three live in the AEAD's additional
+/// authenticated data and fail `ring`'s constant-time tag check, and telling the
+/// client WHICH one failed would be a discrimination oracle (T-113-10). The
+/// discriminated reason is `tracing::warn!`-logged server-side only.
+#[cfg(all(feature = "streamable-http", not(target_arch = "wasm32")))]
+const MRTR_REJECT_MESSAGE: &str = "invalid requestState";
+
+/// The identity inputs MRTR binds a continuation to.
+///
+/// `AuthContext::subject` is the ONLY identity anchor — never `clientInfo`
+/// (self-reported), never a session id (v2 has none). Carried as a `&str` so
+/// both the ingress and the egress call site can pass the SAME value without
+/// cloning the whole `AuthContext`.
+#[cfg(all(feature = "streamable-http", not(target_arch = "wasm32")))]
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct MrtrPrincipal<'a> {
+    /// `AuthContext::subject`, or `None` when the request produced no
+    /// `AuthContext`.
+    pub authenticated_subject: Option<&'a str>,
+    /// Whether this server has an auth provider configured — the fail-closed
+    /// input (T-113-22).
+    pub has_auth_provider: bool,
+}
+
+/// Resolve the AAD principal, FAIL-CLOSED.
+///
+/// * an `AuthContext` is present → its `subject`;
+/// * no `AuthContext` but an auth provider IS configured → `None`, i.e. refuse
+///   MRTR entirely — a state-bearing continuation must not be mintable or
+///   redeemable by an unauthenticated caller on a server that expects
+///   authentication (T-113-22);
+/// * no auth provider at all → [`ANONYMOUS_PRINCIPAL`].
+#[cfg(all(feature = "streamable-http", not(target_arch = "wasm32")))]
+fn resolve_mrtr_principal(principal: MrtrPrincipal<'_>) -> Option<&str> {
+    match (principal.authenticated_subject, principal.has_auth_provider) {
+        (Some(subject), _) => Some(subject),
+        (None, true) => None,
+        (None, false) => Some(ANONYMOUS_PRINCIPAL),
+    }
+}
+
+/// The `(method, live params)` pair MRTR binds a `requestState` token to.
+///
+/// Derived from the TYPED request dispatch will ACTUALLY execute, never from an
+/// attacker-echoed copy of the params (T-113-03) — so a token minted for one
+/// tool + arguments cannot verify against another.
+///
+/// Returns `None` for every request outside the three MRTR-eligible methods,
+/// which is what makes a `requestState` presented on e.g. `tools/list` inert
+/// rather than verified (T-113-23).
+///
+/// # The strip half of the D-15 strip-and-re-run mechanic
+///
+/// [`splice_mrtr_params`](crate::types::mrtr::splice_mrtr_params) with the
+/// DEFAULT removes `inputResponses` and `requestState` unconditionally. On this
+/// path they are already absent — the typed request structs deliberately do not
+/// model them (D-113-D) — so this is belt-and-braces: the params handed to the
+/// digest, and therefore the shape a re-run handler is bound to, can never carry
+/// a client-echoed MRTR field even if the salient whitelist is widened later.
+#[cfg(all(feature = "streamable-http", not(target_arch = "wasm32")))]
+pub(crate) fn mrtr_binding_parts(request: &Request) -> Option<(&'static str, Value)> {
+    let Request::Client(boxed) = request else {
+        return None;
+    };
+    let (method, mut params) = match boxed.as_ref() {
+        ClientRequest::CallTool(req) => (
+            "tools/call",
+            serde_json::json!({ "name": req.name, "arguments": req.arguments }),
+        ),
+        ClientRequest::GetPrompt(req) => (
+            "prompts/get",
+            serde_json::json!({ "name": req.name, "arguments": req.arguments }),
+        ),
+        ClientRequest::ReadResource(req) => {
+            ("resources/read", serde_json::json!({ "uri": req.uri }))
+        },
+        _ => return None,
+    };
+    crate::types::mrtr::splice_mrtr_params(
+        &mut params,
+        &crate::types::mrtr::MrtrRequestParams::default(),
+    );
+    Some((method, params))
+}
+
+/// The routing decision for a presented `requestState` — LOCKED by D-15.
+///
+/// | Verdict | Route | Why |
+/// |---------|-------|-----|
+/// | `Ok(c)` | [`Proceed`](Self::Proceed) | resume from the decrypted continuation |
+/// | `AuthFailed` | [`Reject`](Self::Reject) | conformance `sep-2322-reject-tampered-state`: a complete result OR a re-prompt is a FAILURE |
+/// | `UnknownKey` | [`Reelicit`](Self::Reelicit) `{ round: 0 }` | D-04 degraded path — another instance's per-process key, nothing is decryptable, so start over |
+/// | `Expired(c)` | [`Reelicit`](Self::Reelicit) `{ round: c.round }` | D-05/D-15 — authentic, so the round SURVIVES and a hostile server cannot reset the client's D-09 bound by letting tokens expire (T-113-49) |
+#[cfg(all(feature = "streamable-http", not(target_arch = "wasm32")))]
+#[derive(Debug)]
+pub(crate) enum MrtrIngest {
+    /// MRTR does not apply to this request — dispatch is byte-for-byte unchanged.
+    Inert,
+    /// The token verified: resume with this continuation and round.
+    Proceed {
+        /// The DECRYPTED, server-minted continuation state.
+        continuation: Value,
+        /// The round the token was minted in.
+        round: u8,
+    },
+    /// The token failed authentication: answer a JSON-RPC error and NEVER invoke
+    /// the handler.
+    Reject {
+        /// The JSON-RPC error code (always `INVALID_PARAMS`).
+        code: i32,
+        /// The single generic client-facing message.
+        message: &'static str,
+    },
+    /// Strip the MRTR fields and RE-RUN the original handler from scratch, so
+    /// the response carries real `inputRequests` the client can answer.
+    Reelicit {
+        /// The round to carry into the freshly minted token — `0` for an unknown
+        /// key, the decrypted `round` for an expired one.
+        round: u8,
+    },
+}
+
+/// Inputs to [`mrtr_ingest`], bundled so both dispatch sites pass the same shape.
+#[cfg(all(feature = "streamable-http", not(target_arch = "wasm32")))]
+pub(crate) struct MrtrIngestInputs<'a> {
+    /// The [`mrtr_binding_parts`] pair for this request.
+    pub target: Option<&'a (&'static str, Value)>,
+    /// The once-at-ingress resolved protocol context, carrying the transport's
+    /// raw MRTR params.
+    pub protocol_context: Option<&'a crate::types::protocol::ProtocolContext>,
+    /// The identity inputs (see [`MrtrPrincipal`]).
+    pub principal: MrtrPrincipal<'a>,
+    /// The SERVER-OWNED codec, borrowed from server state — never a global.
+    pub codec: Option<&'a crate::server::request_state::RequestStateCodec>,
+}
+
+/// Verify a presented `requestState` against the LIVE principal and originating
+/// request, and route the verdict per D-15.
+///
+/// Short-circuits to [`MrtrIngest::Inert`] — running zero MRTR code — when the
+/// era is not v2, when the method is not MRTR-eligible, when no token was
+/// presented, or when this server holds no codec.
+#[cfg(all(feature = "streamable-http", not(target_arch = "wasm32")))]
+pub(crate) fn mrtr_ingest(inputs: &MrtrIngestInputs<'_>) -> MrtrIngest {
+    // v1 / non-opted-in requests run ZERO MRTR code (D-04).
+    let Some(context) = inputs.protocol_context else {
+        return MrtrIngest::Inert;
+    };
+    if context.era != crate::types::protocol::Era::V2 {
+        return MrtrIngest::Inert;
+    }
+    // T-113-23: the spec confines MRTR to three methods. A `requestState`
+    // presented on any other method is IGNORED — not verified, not errored.
+    let Some(target) = inputs.target else {
+        return MrtrIngest::Inert;
+    };
+    if !crate::types::mrtr::mrtr_eligible(target.0) {
+        return MrtrIngest::Inert;
+    }
+    // No token → nothing to verify. A request carrying `inputResponses` alone
+    // still reaches the handler with them populated.
+    let Some(token) = context.request_state_token() else {
+        return MrtrIngest::Inert;
+    };
+    let Some(principal) = resolve_mrtr_principal(inputs.principal) else {
+        tracing::warn!(
+            target: "mcp.mrtr",
+            method = target.0,
+            "refused a state-bearing request from an unauthenticated caller on an \
+             auth-configured server"
+        );
+        return MrtrIngest::Reject {
+            code: crate::types::protocol::error_codes::INVALID_PARAMS,
+            message: MRTR_REJECT_MESSAGE,
+        };
+    };
+    // A server with no codec never opted into v2 continuations.
+    let Some(codec) = inputs.codec else {
+        return MrtrIngest::Inert;
+    };
+    let binding =
+        crate::server::request_state::RequestBinding::from_request(principal, target.0, &target.1);
+    route_mrtr_verdict(codec.verify(token, &binding), target.0)
+}
+
+/// The D-15 verdict table, isolated so [`mrtr_ingest`] stays well under
+/// cognitive-complexity 25.
+#[cfg(all(feature = "streamable-http", not(target_arch = "wasm32")))]
+fn route_mrtr_verdict(verdict: crate::server::request_state::Verdict, method: &str) -> MrtrIngest {
+    use crate::server::request_state::Verdict;
+    match verdict {
+        Verdict::Ok(continuation) => MrtrIngest::Proceed {
+            continuation: continuation.state,
+            round: continuation.round,
+        },
+        Verdict::AuthFailed => {
+            tracing::warn!(
+                target: "mcp.mrtr",
+                method,
+                "rejected a requestState that failed authentication — tampered, minted \
+                 for a different principal, or replayed onto a different request"
+            );
+            MrtrIngest::Reject {
+                code: crate::types::protocol::error_codes::INVALID_PARAMS,
+                message: MRTR_REJECT_MESSAGE,
+            }
+        },
+        Verdict::UnknownKey => {
+            tracing::warn!(
+                target: "mcp.mrtr",
+                method,
+                "requestState carries a key id this instance does not hold — re-eliciting \
+                 from round 0 (D-04 multi-instance degradation)"
+            );
+            MrtrIngest::Reelicit { round: 0 }
+        },
+        // Authentic, so the round survives (T-113-49).
+        Verdict::Expired(continuation) => MrtrIngest::Reelicit {
+            round: continuation.round,
+        },
+    }
+}
+
+#[cfg(all(feature = "streamable-http", not(target_arch = "wasm32")))]
+impl MrtrIngest {
+    /// Fold this verdict into the [`ProtocolContext`](crate::types::protocol::ProtocolContext)
+    /// threaded into dispatch, returning it plus the round to carry to egress.
+    ///
+    /// `Err((code, message))` is a [`Reject`](Self::Reject): the caller answers a
+    /// JSON-RPC error and the handler is NEVER invoked.
+    ///
+    /// [`Reelicit`](Self::Reelicit) STRIPS every MRTR signal from the context, so
+    /// the re-run handler observes `input_responses()`, `mrtr_continuation()` and
+    /// `mrtr_round()` all `None` — a pristine FIRST call. MRTR-participating
+    /// handlers must therefore be idempotent up to the point of their first
+    /// `input_required` return, which is inherently true: a handler that returned
+    /// `input_required` had not completed the operation.
+    pub(crate) fn apply(
+        self,
+        context: Option<crate::types::protocol::ProtocolContext>,
+    ) -> std::result::Result<
+        (Option<crate::types::protocol::ProtocolContext>, u8),
+        (i32, &'static str),
+    > {
+        match self {
+            Self::Inert => Ok((context, 0)),
+            Self::Proceed {
+                continuation,
+                round,
+            } => Ok((
+                context.map(|ctx| ctx.with_verified_continuation(continuation, round)),
+                round,
+            )),
+            Self::Reelicit { round } => Ok((
+                context.map(crate::types::protocol::ProtocolContext::without_mrtr),
+                round,
+            )),
+            Self::Reject { code, message } => Err((code, message)),
+        }
+    }
+}
+
+/// Inputs to [`mrtr_egress`], bundled so both dispatch sites pass the same shape.
+#[cfg(all(feature = "streamable-http", not(target_arch = "wasm32")))]
+pub(crate) struct MrtrEgressInputs<'a> {
+    /// The [`mrtr_binding_parts`] pair for this request.
+    pub target: Option<&'a (&'static str, Value)>,
+    /// The once-at-ingress resolved protocol context.
+    pub protocol_context: Option<&'a crate::types::protocol::ProtocolContext>,
+    /// The identity inputs (see [`MrtrPrincipal`]).
+    pub principal: MrtrPrincipal<'a>,
+    /// The SERVER-OWNED codec, borrowed from server state.
+    pub codec: Option<&'a crate::server::request_state::RequestStateCodec>,
+    /// The round [`MrtrIngest::apply`] resolved; the fresh token is minted at
+    /// `round + 1`.
+    pub round: u8,
+}
+
+/// Take the pmcp-INTERNAL MRTR signal off a result's `_meta`, on EVERY path.
+///
+/// The removal is unconditional — v1, non-eligible method, ineligible era, all
+/// of it — because [`MRTR_SIGNAL_META_KEY`](crate::types::mrtr::MRTR_SIGNAL_META_KEY)
+/// carries the handler's PLAINTEXT continuation. Publishing it would hand the
+/// client the very state the AEAD token exists to seal. An `_meta` emptied by
+/// the removal is dropped, so a signalling handler's wire shape matches a
+/// non-signalling one exactly.
+#[cfg(all(feature = "streamable-http", not(target_arch = "wasm32")))]
+fn take_mrtr_signal(response: &mut JSONRPCResponse) -> Option<Value> {
+    let crate::types::jsonrpc::ResponsePayload::Result(ref mut value) = response.payload else {
+        return None;
+    };
+    let result = value.as_object_mut()?;
+    let signal = result
+        .get_mut("_meta")
+        .and_then(Value::as_object_mut)
+        .and_then(|meta| meta.remove(crate::types::mrtr::MRTR_SIGNAL_META_KEY))?;
+    if result
+        .get("_meta")
+        .and_then(Value::as_object)
+        .is_some_and(serde_json::Map::is_empty)
+    {
+        result.remove("_meta");
+    }
+    Some(signal)
+}
+
+/// Convert a handler's MRTR signal into a wire `input_required` result.
+///
+/// Returns the [`ResponseDisposition`] the shared envelope helper should emit.
+/// This is the MINIMAL egress plan 06 needs to make its own re-elicitation
+/// must-haves observable end-to-end; plan 09 hardens it (declared-capability
+/// precheck before minting, the exhaustive eligible-method tripwire, and the
+/// `serverInfo` relocation).
+///
+/// Fail-closed: any failure to seal the continuation replaces the response with
+/// a JSON-RPC `INTERNAL_ERROR` rather than emitting a bogus "complete" result
+/// for an operation the handler did not complete.
+#[cfg(all(feature = "streamable-http", not(target_arch = "wasm32")))]
+pub(crate) fn mrtr_egress(
+    response: &mut JSONRPCResponse,
+    inputs: &MrtrEgressInputs<'_>,
+) -> ResponseDisposition {
+    let Some(raw_signal) = take_mrtr_signal(response) else {
+        return ResponseDisposition::Complete;
+    };
+    // The signal is now stripped on every path; below this line it can only be
+    // CONSUMED, never leaked.
+    if !matches!(
+        inputs.protocol_context.map(|ctx| ctx.era),
+        Some(crate::types::protocol::Era::V2)
+    ) {
+        return ResponseDisposition::Complete;
+    }
+    let Some(target) = inputs
+        .target
+        .filter(|target| crate::types::mrtr::mrtr_eligible(target.0))
+    else {
+        tracing::warn!(
+            target: "mcp.mrtr",
+            "a handler signalled input_required on a method the spec forbids it on — \
+             the signal was dropped and the result emitted as complete"
+        );
+        return ResponseDisposition::Complete;
+    };
+    match seal_input_required(response, &raw_signal, target, inputs) {
+        Ok(disposition) => disposition,
+        Err(reason) => {
+            tracing::error!(target: "mcp.mrtr", reason, "could not emit an input_required result");
+            response.payload = crate::types::jsonrpc::ResponsePayload::Error(
+                crate::types::jsonrpc::JSONRPCError {
+                    code: crate::types::protocol::error_codes::INTERNAL_ERROR,
+                    message: reason.to_string(),
+                    data: None,
+                },
+            );
+            ResponseDisposition::Complete
+        },
+    }
+}
+
+/// Mint the continuation and write the three SERVER-OWNED `input_required`
+/// fields onto the result.
+///
+/// `resultType`, `inputRequests` and `requestState` are INSERTED (overwriting),
+/// never `entry().or_insert`-ed: they are server-owned reserved fields, and a
+/// handler-supplied value must never survive.
+#[cfg(all(feature = "streamable-http", not(target_arch = "wasm32")))]
+fn seal_input_required(
+    response: &mut JSONRPCResponse,
+    raw_signal: &Value,
+    target: &(&'static str, Value),
+    inputs: &MrtrEgressInputs<'_>,
+) -> std::result::Result<ResponseDisposition, &'static str> {
+    let signal: crate::types::mrtr::MrtrSignal = serde_json::from_value(raw_signal.clone())
+        .map_err(|_| "the handler's MRTR signal is not a well-formed MrtrSignal")?;
+    let principal = resolve_mrtr_principal(inputs.principal)
+        .ok_or("a requestState continuation cannot be minted for an unauthenticated caller")?;
+    let codec = inputs
+        .codec
+        .ok_or("this server has no requestState codec configured")?;
+    let binding =
+        crate::server::request_state::RequestBinding::from_request(principal, target.0, &target.1);
+    let token = codec
+        .mint(
+            &signal.continuation,
+            &binding,
+            inputs.round.saturating_add(1),
+        )
+        .map_err(|_| "the requestState continuation could not be sealed")?;
+    let input_requests = serde_json::to_value(&signal.input_requests)
+        .map_err(|_| "the handler's inputRequests map is not serializable")?;
+
+    let crate::types::jsonrpc::ResponsePayload::Result(ref mut value) = response.payload else {
+        return Err("an input_required signal cannot ride on an error response");
+    };
+    let result = value
+        .as_object_mut()
+        .ok_or("an input_required result must be a JSON object")?;
+    result.insert(
+        "resultType".to_string(),
+        Value::String(ResponseDisposition::InputRequired.as_wire_str().to_string()),
+    );
+    result.insert(
+        crate::types::mrtr::INPUT_REQUESTS_KEY.to_string(),
+        input_requests,
+    );
+    result.insert(
+        crate::types::mrtr::REQUEST_STATE_KEY.to_string(),
+        Value::String(token),
+    );
+    Ok(ResponseDisposition::InputRequired)
+}
+
 #[async_trait]
 impl ProtocolHandler for ServerCore {
     async fn handle_request(
@@ -1294,20 +1743,72 @@ impl ProtocolHandler for ServerCore {
             },
         };
 
+        // MRTR ingress (Plan 113-06, HTTP-03): verify a presented `requestState`
+        // against the LIVE principal and originating request through the ONE
+        // shared helper `server/mod.rs` also calls, and fold the D-15 verdict
+        // into the context threaded into dispatch. Inert on v1 / non-opted-in /
+        // non-eligible requests, so the legacy path is unchanged.
+        #[cfg(feature = "streamable-http")]
+        let mrtr_target = mrtr_binding_parts(&request);
+        #[cfg(feature = "streamable-http")]
+        let mrtr_principal = MrtrPrincipal {
+            authenticated_subject: auth_context.as_ref().map(|ctx| ctx.subject.as_str()),
+            has_auth_provider: self.auth_provider.is_some(),
+        };
+        // Owned copy of the ONE identity anchor, so egress can rebuild the same
+        // binding after `auth_context` has moved into dispatch.
+        #[cfg(feature = "streamable-http")]
+        let mrtr_subject: Option<String> = mrtr_target
+            .as_ref()
+            .and_then(|_| mrtr_principal.authenticated_subject.map(str::to_string));
+        #[cfg(feature = "streamable-http")]
+        let (protocol_context, mrtr_round) = match mrtr_ingest(&MrtrIngestInputs {
+            target: mrtr_target.as_ref(),
+            protocol_context: protocol_context.as_ref(),
+            principal: mrtr_principal,
+            codec: self.request_state_codec(),
+        })
+        .apply(protocol_context)
+        {
+            Ok(resolved) => resolved,
+            Err((code, message)) => return Self::error_response(id, code, message.to_string()),
+        };
+
         // Execute the actual request handling with auth_context
         let mut response = self
             .handle_request_internal(id.clone(), request, auth_context, protocol_context.clone())
             .await;
 
+        // MRTR egress (Plan 113-06): convert a handler's "I need more input"
+        // signal into an `input_required` result carrying a freshly minted
+        // `requestState`, and STRIP the pmcp-internal signal key on every other
+        // path so it never reaches the wire.
+        #[cfg(feature = "streamable-http")]
+        let disposition = mrtr_egress(
+            &mut response,
+            &MrtrEgressInputs {
+                target: mrtr_target.as_ref(),
+                protocol_context: protocol_context.as_ref(),
+                principal: MrtrPrincipal {
+                    authenticated_subject: mrtr_subject.as_deref(),
+                    has_auth_provider: self.auth_provider.is_some(),
+                },
+                codec: self.request_state_codec(),
+                round: mrtr_round,
+            },
+        );
+        #[cfg(not(feature = "streamable-http"))]
+        let disposition = ResponseDisposition::Complete;
+
         // Inject the v2-only response envelope (resultType + serverInfo) at the
         // era-gated serialization boundary (VERS-07 / D-07 / D-08). This is a
         // no-op for v1 / non-opted-in responses (byte-identical) and for
-        // error/notification/non-object results. This phase emits `complete`.
+        // error/notification/non-object results.
         inject_v2_result_envelope(
             &mut response,
             protocol_context.as_ref(),
             &self.info,
-            ResponseDisposition::Complete,
+            disposition,
         );
 
         // Process response through protocol middleware chain (read-only access)
@@ -3039,6 +3540,647 @@ mod tests {
             .await;
             assert_eq!(pcap.lock().unwrap().clone().unwrap().era, None);
             assert_eq!(rcap.lock().unwrap().clone().unwrap().era, None);
+        }
+    }
+
+    /// The D-15 verdict table and the `input_required` egress it feeds
+    /// (Plan 113-06, HTTP-02 / HTTP-03).
+    ///
+    /// Everything here is deterministic: the codec is built with an explicit
+    /// fixed key through [`RequestStateCodec::new`], and "expired" is expressed
+    /// as a zero-second TTL (`exp == now`, which the codec classifies as
+    /// expired) rather than by sleeping.
+    #[cfg(all(feature = "streamable-http", not(target_arch = "wasm32")))]
+    mod mrtr_ingest_tests {
+        use super::super::*;
+        use crate::server::request_state::{RequestBinding, RequestStateCodec};
+        use crate::types::protocol::{Era, ProtocolContext};
+        use crate::types::{CallToolRequest, ListToolsRequest, ProtocolVersion};
+        use serde_json::json;
+        use std::time::Duration;
+
+        const KEY_A: [u8; 32] = [0x11; 32];
+        const KEY_B: [u8; 32] = [0x22; 32];
+        const ALICE: &str = "alice";
+
+        fn codec(key: &[u8; 32], ttl_secs: u64) -> RequestStateCodec {
+            RequestStateCodec::new(key, Duration::from_secs(ttl_secs)).expect("codec builds")
+        }
+
+        /// A `tools/call` for `search` with the given arguments.
+        fn call_tool(arguments: Value) -> Request {
+            Request::Client(Box::new(ClientRequest::CallTool(CallToolRequest {
+                name: "search".to_string(),
+                arguments,
+                _meta: None,
+                task: None,
+            })))
+        }
+
+        fn v2_context() -> ProtocolContext {
+            ProtocolContext::new(Era::V2, ProtocolVersion("2026-07-28".to_string()))
+        }
+
+        /// Mint a token bound to `principal` + the SAME live params dispatch
+        /// will derive for `request`.
+        fn mint_for(
+            codec: &RequestStateCodec,
+            principal: &str,
+            request: &Request,
+            state: &Value,
+            round: u8,
+        ) -> String {
+            let target = mrtr_binding_parts(request).expect("an MRTR-eligible request");
+            let binding = RequestBinding::from_request(principal, target.0, &target.1);
+            codec.mint(state, &binding, round).expect("mint succeeds")
+        }
+
+        fn ingest(
+            request: &Request,
+            token: Option<&str>,
+            subject: Option<&str>,
+            has_auth_provider: bool,
+            codec: Option<&RequestStateCodec>,
+        ) -> MrtrIngest {
+            let mut context = v2_context();
+            if let Some(token) = token {
+                context = context.with_mrtr_params(crate::types::mrtr::MrtrRequestParams {
+                    input_responses: None,
+                    request_state: Some(token.to_string()),
+                });
+            }
+            let target = mrtr_binding_parts(request);
+            mrtr_ingest(&MrtrIngestInputs {
+                target: target.as_ref(),
+                protocol_context: Some(&context),
+                principal: MrtrPrincipal {
+                    authenticated_subject: subject,
+                    has_auth_provider,
+                },
+                codec,
+            })
+        }
+
+        // -----------------------------------------------------------------
+        // The four D-15 verdicts.
+        // -----------------------------------------------------------------
+
+        #[test]
+        fn mrtr_ingest_valid_token_proceeds_with_state_and_round() {
+            let codec = codec(&KEY_A, 300);
+            let request = call_tool(json!({}));
+            let token = mint_for(&codec, ALICE, &request, &json!({ "step": 7 }), 2);
+            let verdict = ingest(&request, Some(&token), Some(ALICE), false, Some(&codec));
+            let MrtrIngest::Proceed {
+                continuation,
+                round,
+            } = verdict
+            else {
+                panic!("a live, authentic token must Proceed, got {verdict:?}");
+            };
+            assert_eq!(continuation, json!({ "step": 7 }));
+            assert_eq!(round, 2);
+        }
+
+        /// The conformance mutation: a tampered token is a JSON-RPC ERROR, never
+        /// a re-prompt and never a complete result
+        /// (`sep-2322-reject-tampered-state`).
+        #[test]
+        fn mrtr_ingest_tampered_token_rejects_and_never_reelicits() {
+            let codec = codec(&KEY_A, 300);
+            let request = call_tool(json!({}));
+            let token = format!(
+                "{}-TAMPERED",
+                mint_for(&codec, ALICE, &request, &json!({}), 0)
+            );
+            let verdict = ingest(&request, Some(&token), Some(ALICE), false, Some(&codec));
+            let MrtrIngest::Reject { code, message } = verdict else {
+                panic!("a tampered token must Reject, got {verdict:?}");
+            };
+            assert_eq!(code, crate::types::protocol::error_codes::INVALID_PARAMS);
+            assert_eq!(message, MRTR_REJECT_MESSAGE);
+        }
+
+        /// A token minted for `alice` and presented by `bob` fails the AEAD tag
+        /// check — the principal lives in the AAD (T-113-02).
+        #[test]
+        fn mrtr_ingest_principal_mismatch_rejects() {
+            let codec = codec(&KEY_A, 300);
+            let request = call_tool(json!({}));
+            let token = mint_for(&codec, ALICE, &request, &json!({}), 0);
+            let verdict = ingest(&request, Some(&token), Some("bob"), false, Some(&codec));
+            assert!(
+                matches!(verdict, MrtrIngest::Reject { .. }),
+                "a cross-principal replay must Reject, got {verdict:?}"
+            );
+        }
+
+        /// A token minted for one set of salient arguments cannot be replayed
+        /// onto another, nor onto a different method (T-113-03).
+        #[test]
+        fn mrtr_ingest_originating_request_mismatch_rejects() {
+            let codec = codec(&KEY_A, 300);
+            let minted_for = call_tool(json!({ "q": "a" }));
+            let token = mint_for(&codec, ALICE, &minted_for, &json!({}), 0);
+
+            let other_args = call_tool(json!({ "q": "b" }));
+            assert!(
+                matches!(
+                    ingest(&other_args, Some(&token), Some(ALICE), false, Some(&codec)),
+                    MrtrIngest::Reject { .. }
+                ),
+                "a token replayed onto different arguments must Reject"
+            );
+
+            let other_method = Request::Client(Box::new(ClientRequest::GetPrompt(
+                crate::types::GetPromptRequest {
+                    name: "search".to_string(),
+                    arguments: HashMap::new(),
+                    _meta: None,
+                },
+            )));
+            assert!(
+                matches!(
+                    ingest(
+                        &other_method,
+                        Some(&token),
+                        Some(ALICE),
+                        false,
+                        Some(&codec)
+                    ),
+                    MrtrIngest::Reject { .. }
+                ),
+                "a tools/call token replayed onto prompts/get must Reject"
+            );
+        }
+
+        /// D-04 degraded path: another instance's per-process key is NOT
+        /// tampering — it re-elicits from round 0.
+        #[test]
+        fn mrtr_ingest_unknown_key_reelicits_from_round_zero() {
+            let minting = codec(&KEY_B, 300);
+            let serving = codec(&KEY_A, 300);
+            let request = call_tool(json!({}));
+            let token = mint_for(&minting, ALICE, &request, &json!({ "step": 4 }), 3);
+            let verdict = ingest(&request, Some(&token), Some(ALICE), false, Some(&serving));
+            assert!(
+                matches!(verdict, MrtrIngest::Reelicit { round: 0 }),
+                "an unknown key id must re-elicit from round 0, got {verdict:?}"
+            );
+        }
+
+        /// T-113-49: an authentic but expired token re-elicits while PRESERVING
+        /// the round, so a hostile server cannot reset the client's D-09 bound
+        /// by letting tokens expire.
+        #[test]
+        fn mrtr_ingest_expired_token_reelicits_preserving_the_round() {
+            // A zero-second TTL mints `exp == now`, which the codec classifies
+            // as expired — deterministic, no sleeping.
+            let minting = codec(&KEY_A, 0);
+            let serving = codec(&KEY_A, 300);
+            let request = call_tool(json!({}));
+            let token = mint_for(&minting, ALICE, &request, &json!({ "step": 1 }), 5);
+            let verdict = ingest(&request, Some(&token), Some(ALICE), false, Some(&serving));
+            assert!(
+                matches!(verdict, MrtrIngest::Reelicit { round: 5 }),
+                "an expired token must re-elicit at its own round, got {verdict:?}"
+            );
+        }
+
+        // -----------------------------------------------------------------
+        // Short-circuits: everything MRTR deliberately does not touch.
+        // -----------------------------------------------------------------
+
+        /// T-113-23: the spec confines MRTR to three methods. A `requestState`
+        /// on `tools/list` is IGNORED — not verified, not errored.
+        #[test]
+        fn mrtr_ingest_ignores_a_request_state_on_a_non_eligible_method() {
+            let codec = codec(&KEY_A, 300);
+            let list = Request::Client(Box::new(ClientRequest::ListTools(ListToolsRequest {
+                cursor: None,
+            })));
+            assert!(mrtr_binding_parts(&list).is_none());
+            let verdict = ingest(&list, Some("anything"), Some(ALICE), false, Some(&codec));
+            assert!(
+                matches!(verdict, MrtrIngest::Inert),
+                "MRTR must be inert outside the three eligible methods, got {verdict:?}"
+            );
+        }
+
+        #[test]
+        fn mrtr_ingest_is_inert_on_v1_and_without_a_token_or_codec() {
+            let codec = codec(&KEY_A, 300);
+            let request = call_tool(json!({}));
+            let token = mint_for(&codec, ALICE, &request, &json!({}), 0);
+            let target = mrtr_binding_parts(&request);
+
+            // v1 era → zero MRTR code (D-04).
+            let v1 = ProtocolContext::new(Era::V1, ProtocolVersion("2025-11-25".to_string()))
+                .with_mrtr_params(crate::types::mrtr::MrtrRequestParams {
+                    input_responses: None,
+                    request_state: Some(token.clone()),
+                });
+            assert!(matches!(
+                mrtr_ingest(&MrtrIngestInputs {
+                    target: target.as_ref(),
+                    protocol_context: Some(&v1),
+                    principal: MrtrPrincipal {
+                        authenticated_subject: Some(ALICE),
+                        has_auth_provider: false,
+                    },
+                    codec: Some(&codec),
+                }),
+                MrtrIngest::Inert
+            ));
+
+            // No resolved context at all.
+            assert!(matches!(
+                mrtr_ingest(&MrtrIngestInputs {
+                    target: target.as_ref(),
+                    protocol_context: None,
+                    principal: MrtrPrincipal {
+                        authenticated_subject: Some(ALICE),
+                        has_auth_provider: false,
+                    },
+                    codec: Some(&codec),
+                }),
+                MrtrIngest::Inert
+            ));
+
+            // No token presented.
+            assert!(matches!(
+                ingest(&request, None, Some(ALICE), false, Some(&codec)),
+                MrtrIngest::Inert
+            ));
+
+            // A v1-only server holds no codec.
+            assert!(matches!(
+                ingest(&request, Some(&token), Some(ALICE), false, None),
+                MrtrIngest::Inert
+            ));
+        }
+
+        // -----------------------------------------------------------------
+        // Principal resolution (T-113-06 / T-113-22).
+        // -----------------------------------------------------------------
+
+        /// A server WITH an auth provider refuses MRTR to an unauthenticated
+        /// caller: verification is never attempted and a `-32602` is returned.
+        #[test]
+        fn mrtr_ingest_auth_configured_server_refuses_an_unauthenticated_caller() {
+            let codec = codec(&KEY_A, 300);
+            let request = call_tool(json!({}));
+            let token = mint_for(&codec, ANONYMOUS_PRINCIPAL, &request, &json!({}), 0);
+            let verdict = ingest(&request, Some(&token), None, true, Some(&codec));
+            let MrtrIngest::Reject { code, .. } = verdict else {
+                panic!("an auth-configured server must refuse MRTR here, got {verdict:?}");
+            };
+            assert_eq!(code, crate::types::protocol::error_codes::INVALID_PARAMS);
+        }
+
+        /// A server with NO auth provider has no principals to separate, so the
+        /// documented anonymous constant is used and MRTR works.
+        #[test]
+        fn mrtr_ingest_anonymous_principal_is_used_only_without_an_auth_provider() {
+            assert_eq!(ANONYMOUS_PRINCIPAL, "");
+            assert_eq!(
+                resolve_mrtr_principal(MrtrPrincipal {
+                    authenticated_subject: None,
+                    has_auth_provider: false,
+                }),
+                Some(ANONYMOUS_PRINCIPAL)
+            );
+            assert_eq!(
+                resolve_mrtr_principal(MrtrPrincipal {
+                    authenticated_subject: None,
+                    has_auth_provider: true,
+                }),
+                None,
+                "fail closed on an auth-configured server"
+            );
+            assert_eq!(
+                resolve_mrtr_principal(MrtrPrincipal {
+                    authenticated_subject: Some(ALICE),
+                    has_auth_provider: true,
+                }),
+                Some(ALICE)
+            );
+
+            let codec = codec(&KEY_A, 300);
+            let request = call_tool(json!({}));
+            let token = mint_for(&codec, ANONYMOUS_PRINCIPAL, &request, &json!({ "a": 1 }), 0);
+            assert!(matches!(
+                ingest(&request, Some(&token), None, false, Some(&codec)),
+                MrtrIngest::Proceed { .. }
+            ));
+        }
+
+        // -----------------------------------------------------------------
+        // `apply`: how each verdict lands on the threaded context.
+        // -----------------------------------------------------------------
+
+        #[test]
+        fn mrtr_ingest_apply_proceed_surfaces_continuation_and_round() {
+            let (context, round) = MrtrIngest::Proceed {
+                continuation: json!({ "step": 3 }),
+                round: 2,
+            }
+            .apply(Some(v2_context()))
+            .expect("Proceed is not a rejection");
+            let context = context.expect("context survives");
+            assert_eq!(context.mrtr_continuation(), Some(&json!({ "step": 3 })));
+            assert_eq!(context.mrtr_round(), Some(2));
+            assert_eq!(round, 2, "egress mints the next token at round + 1");
+        }
+
+        /// The consensus fix: a re-run handler sees a PRISTINE first call — all
+        /// three MRTR accessors `None`.
+        #[test]
+        fn mrtr_ingest_apply_reelicit_strips_every_signal_and_keeps_the_round() {
+            let carried = v2_context()
+                .with_mrtr_params(crate::types::mrtr::MrtrRequestParams {
+                    input_responses: Some(crate::types::mrtr::InputResponses::new()),
+                    request_state: Some("token".to_string()),
+                })
+                .with_verified_continuation(json!({ "step": 1 }), 4);
+            let (context, round) = MrtrIngest::Reelicit { round: 4 }
+                .apply(Some(carried))
+                .expect("Reelicit is not a rejection");
+            let context = context.expect("context survives");
+            assert!(context.input_responses().is_none());
+            assert!(context.request_state_token().is_none());
+            assert!(context.mrtr_continuation().is_none());
+            assert!(context.mrtr_round().is_none());
+            assert_eq!(round, 4, "the expired token's round is preserved");
+        }
+
+        #[test]
+        fn mrtr_ingest_apply_reject_is_an_error_so_the_handler_never_runs() {
+            let outcome = MrtrIngest::Reject {
+                code: crate::types::protocol::error_codes::INVALID_PARAMS,
+                message: MRTR_REJECT_MESSAGE,
+            }
+            .apply(Some(v2_context()));
+            let Err((code, message)) = outcome else {
+                panic!("Reject must short-circuit dispatch");
+            };
+            assert_eq!(code, crate::types::protocol::error_codes::INVALID_PARAMS);
+            assert_eq!(message, MRTR_REJECT_MESSAGE);
+        }
+
+        #[test]
+        fn mrtr_ingest_apply_inert_leaves_the_context_untouched() {
+            let (context, round) = MrtrIngest::Inert
+                .apply(Some(v2_context()))
+                .expect("Inert is not a rejection");
+            let context = context.expect("context survives");
+            assert!(context.mrtr_continuation().is_none());
+            assert_eq!(round, 0);
+        }
+
+        // -----------------------------------------------------------------
+        // Egress: the signal never reaches the wire, and `input_required` is
+        // emitted with a token minted at round + 1.
+        // -----------------------------------------------------------------
+
+        fn signal_meta() -> Value {
+            let mut requests = crate::types::mrtr::InputRequests::new();
+            requests.insert(
+                "user_name".to_string(),
+                crate::types::mrtr::InputRequest::Elicitation(Box::new(
+                    crate::types::elicitation::ElicitRequestParams::Form {
+                        message: "Who are you?".to_string(),
+                        requested_schema: json!({ "type": "object" }),
+                    },
+                )),
+            );
+            serde_json::to_value(crate::types::mrtr::MrtrSignal {
+                input_requests: requests,
+                continuation: json!({ "step": 1 }),
+            })
+            .expect("signal serializes")
+        }
+
+        fn signalling_response() -> JSONRPCResponse {
+            ServerCore::success_response(
+                RequestId::from(1i64),
+                json!({
+                    "content": [],
+                    "_meta": { crate::types::mrtr::MRTR_SIGNAL_META_KEY: signal_meta() },
+                }),
+            )
+        }
+
+        fn result_of(response: &JSONRPCResponse) -> &Value {
+            match response.payload {
+                ResponsePayload::Result(ref value) => value,
+                ResponsePayload::Error(_) => panic!("expected a result payload"),
+            }
+        }
+
+        #[test]
+        fn mrtr_ingest_egress_emits_input_required_with_a_round_plus_one_token() {
+            let codec = codec(&KEY_A, 300);
+            let request = call_tool(json!({}));
+            let target = mrtr_binding_parts(&request);
+            let context = v2_context();
+            let mut response = signalling_response();
+            let disposition = mrtr_egress(
+                &mut response,
+                &MrtrEgressInputs {
+                    target: target.as_ref(),
+                    protocol_context: Some(&context),
+                    principal: MrtrPrincipal {
+                        authenticated_subject: Some(ALICE),
+                        has_auth_provider: false,
+                    },
+                    codec: Some(&codec),
+                    round: 4,
+                },
+            );
+            assert_eq!(disposition, ResponseDisposition::InputRequired);
+            let result = result_of(&response);
+            assert_eq!(result["resultType"], "input_required");
+            assert!(
+                result["inputRequests"]
+                    .as_object()
+                    .is_some_and(|m| !m.is_empty()),
+                "the re-elicitation must carry REAL inputRequests, got {result}"
+            );
+            let token = result["requestState"]
+                .as_str()
+                .expect("a fresh requestState is minted");
+            // The internal signal is gone, and the emptied `_meta` with it.
+            assert!(result.get("_meta").is_none(), "got {result}");
+
+            // Decrypt in-test: the fresh token carries round + 1.
+            let binding = RequestBinding::from_request(
+                ALICE,
+                target.as_ref().expect("eligible").0,
+                &target.as_ref().expect("eligible").1,
+            );
+            let crate::server::request_state::Verdict::Ok(continuation) =
+                codec.verify(token, &binding)
+            else {
+                panic!("the freshly minted token must verify");
+            };
+            assert_eq!(continuation.round, 5);
+            assert_eq!(continuation.state, json!({ "step": 1 }));
+        }
+
+        /// The pmcp-internal signal key must never reach the wire — not on v1,
+        /// and not on a method the spec forbids `input_required` on.
+        #[test]
+        fn mrtr_ingest_egress_strips_the_internal_signal_on_every_path() {
+            let codec = codec(&KEY_A, 300);
+            let request = call_tool(json!({}));
+            let target = mrtr_binding_parts(&request);
+            let v1 = ProtocolContext::new(Era::V1, ProtocolVersion("2025-11-25".to_string()));
+            let list = Request::Client(Box::new(ClientRequest::ListTools(ListToolsRequest {
+                cursor: None,
+            })));
+            let list_target = mrtr_binding_parts(&list);
+            let v2 = v2_context();
+
+            for (label, context, target) in [
+                ("v1 era", Some(&v1), target.as_ref()),
+                ("no resolved context", None, target.as_ref()),
+                ("non-eligible method", Some(&v2), list_target.as_ref()),
+            ] {
+                let mut response = signalling_response();
+                let disposition = mrtr_egress(
+                    &mut response,
+                    &MrtrEgressInputs {
+                        target,
+                        protocol_context: context,
+                        principal: MrtrPrincipal {
+                            authenticated_subject: Some(ALICE),
+                            has_auth_provider: false,
+                        },
+                        codec: Some(&codec),
+                        round: 0,
+                    },
+                );
+                assert_eq!(disposition, ResponseDisposition::Complete, "{label}");
+                let rendered = result_of(&response).to_string();
+                assert!(
+                    !rendered.contains(crate::types::mrtr::MRTR_SIGNAL_META_KEY),
+                    "{label}: the internal MRTR signal leaked onto the wire: {rendered}"
+                );
+                assert!(
+                    !rendered.contains("resultType"),
+                    "{label}: input_required must not be emitted here"
+                );
+            }
+        }
+
+        /// Fail closed: a server that cannot seal the continuation answers a
+        /// JSON-RPC error rather than a bogus "complete" result for an
+        /// operation the handler did not complete.
+        #[test]
+        fn mrtr_ingest_egress_fails_closed_when_it_cannot_mint() {
+            let request = call_tool(json!({}));
+            let target = mrtr_binding_parts(&request);
+            let context = v2_context();
+            let mut response = signalling_response();
+            let disposition = mrtr_egress(
+                &mut response,
+                &MrtrEgressInputs {
+                    target: target.as_ref(),
+                    protocol_context: Some(&context),
+                    // Unauthenticated on an auth-configured server (T-113-22).
+                    principal: MrtrPrincipal {
+                        authenticated_subject: None,
+                        has_auth_provider: true,
+                    },
+                    codec: None,
+                    round: 0,
+                },
+            );
+            assert_eq!(disposition, ResponseDisposition::Complete);
+            let ResponsePayload::Error(ref error) = response.payload else {
+                panic!("an unmintable continuation must fail closed with an error");
+            };
+            assert_eq!(
+                error.code,
+                crate::types::protocol::error_codes::INTERNAL_ERROR
+            );
+        }
+
+        /// A response with no signal is left byte-identical.
+        #[test]
+        fn mrtr_ingest_egress_is_a_noop_without_a_signal() {
+            let codec = codec(&KEY_A, 300);
+            let request = call_tool(json!({}));
+            let target = mrtr_binding_parts(&request);
+            let context = v2_context();
+            let original = json!({ "content": [], "_meta": { "vendor/key": 1 } });
+            let mut response =
+                ServerCore::success_response(RequestId::from(1i64), original.clone());
+            let disposition = mrtr_egress(
+                &mut response,
+                &MrtrEgressInputs {
+                    target: target.as_ref(),
+                    protocol_context: Some(&context),
+                    principal: MrtrPrincipal {
+                        authenticated_subject: Some(ALICE),
+                        has_auth_provider: false,
+                    },
+                    codec: Some(&codec),
+                    round: 0,
+                },
+            );
+            assert_eq!(disposition, ResponseDisposition::Complete);
+            assert_eq!(result_of(&response), &original);
+        }
+
+        // -----------------------------------------------------------------
+        // The binding is derived from the TYPED request (T-113-03).
+        // -----------------------------------------------------------------
+
+        #[test]
+        fn mrtr_ingest_binding_parts_cover_exactly_the_eligible_methods() {
+            for (request, method) in [
+                (call_tool(json!({})), "tools/call"),
+                (
+                    Request::Client(Box::new(ClientRequest::GetPrompt(
+                        crate::types::GetPromptRequest {
+                            name: "greeting".to_string(),
+                            arguments: HashMap::new(),
+                            _meta: None,
+                        },
+                    ))),
+                    "prompts/get",
+                ),
+                (
+                    Request::Client(Box::new(ClientRequest::ReadResource(
+                        crate::types::ReadResourceRequest {
+                            uri: "mem://greeting".to_string(),
+                            _meta: None,
+                        },
+                    ))),
+                    "resources/read",
+                ),
+            ] {
+                let (resolved, params) =
+                    mrtr_binding_parts(&request).expect("an MRTR-eligible request");
+                assert_eq!(resolved, method);
+                assert!(
+                    crate::types::mrtr::mrtr_eligible(resolved),
+                    "{method} must be in the ONE MRTR method table"
+                );
+                // The strip half of strip-and-re-run: the params the digest and
+                // the re-run are bound to carry no MRTR field.
+                assert!(params.get("inputResponses").is_none());
+                assert!(params.get("requestState").is_none());
+            }
+
+            assert!(
+                mrtr_binding_parts(&Request::Client(Box::new(ClientRequest::ListTools(
+                    ListToolsRequest { cursor: None }
+                ))))
+                .is_none()
+            );
         }
     }
 }

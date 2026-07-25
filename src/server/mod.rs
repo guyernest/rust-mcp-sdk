@@ -496,13 +496,10 @@ impl Server {
     /// The server-owned `requestState` codec, or `None` when this server did not
     /// opt into the v2 (`2026-07-28`) era.
     ///
-    /// Resolved once at build time; consumers (plan 06's dispatch-side `verify`,
-    /// plan 09's `mint`) borrow it from server state rather than reaching for a
-    /// process-global.
-    // Why: the production consumers land in plans 06 and 09; today only the
-    // build-time wiring tests read it. Plan 12 removes this allow.
+    /// Resolved once at build time; the production consumers
+    /// (`core::mrtr_ingest`'s `verify` and `core::mrtr_egress`'s `mint`) borrow
+    /// it from server state rather than reaching for a process-global.
     #[cfg(feature = "streamable-http")]
-    #[allow(dead_code)]
     pub(crate) fn request_state_codec(&self) -> Option<&request_state::RequestStateCodec> {
         self.request_state_codec.as_deref()
     }
@@ -1425,6 +1422,51 @@ impl Server {
         auth_context: Option<auth::AuthContext>,
         protocol_context: Option<crate::types::protocol::ProtocolContext>,
     ) -> JSONRPCResponse {
+        // MRTR ingress (Plan 113-06, HTTP-03) — the SAME shared helper
+        // `ServerCore` calls (twin-site parity; this site never defines its
+        // own). Verifies a presented `requestState` against the live principal
+        // and originating request, then folds the D-15 verdict into the context
+        // threaded into dispatch. Inert on v1 / non-opted-in / non-eligible
+        // requests, so the legacy path is byte-for-byte unchanged.
+        #[cfg(feature = "streamable-http")]
+        let mrtr_target = crate::server::core::mrtr_binding_parts(&request);
+        #[cfg(feature = "streamable-http")]
+        let mrtr_principal = crate::server::core::MrtrPrincipal {
+            authenticated_subject: auth_context.as_ref().map(|ctx| ctx.subject.as_str()),
+            has_auth_provider: self.auth_provider.is_some(),
+        };
+        // Owned copy of the ONE identity anchor, so egress can rebuild the same
+        // binding after `auth_context` has moved into dispatch.
+        #[cfg(feature = "streamable-http")]
+        let mrtr_subject: Option<String> = mrtr_target
+            .as_ref()
+            .and_then(|_| mrtr_principal.authenticated_subject.map(str::to_string));
+        #[cfg(feature = "streamable-http")]
+        let (protocol_context, mrtr_round) =
+            match crate::server::core::mrtr_ingest(&crate::server::core::MrtrIngestInputs {
+                target: mrtr_target.as_ref(),
+                protocol_context: protocol_context.as_ref(),
+                principal: mrtr_principal,
+                codec: self.request_state_codec(),
+            })
+            .apply(protocol_context)
+            {
+                Ok(resolved) => resolved,
+                Err((code, message)) => {
+                    return JSONRPCResponse {
+                        jsonrpc: "2.0".to_string(),
+                        id,
+                        payload: crate::types::jsonrpc::ResponsePayload::Error(
+                            crate::types::jsonrpc::JSONRPCError {
+                                code,
+                                message: message.to_string(),
+                                data: None,
+                            },
+                        ),
+                    };
+                },
+            };
+
         let mut response = match request {
             Request::Client(ref boxed_req)
                 if matches!(**boxed_req, ClientRequest::Initialize(_)) =>
@@ -1453,9 +1495,19 @@ impl Server {
                     ),
                 }
             },
+            // `Box::pin`: the MRTR ingress/egress locals (Plan 113-06) push this
+            // dispatch future past clippy's `large_futures` threshold. Boxing the
+            // inner future keeps every CALLER of this method small without
+            // changing behavior — the same treatment the two POST entrypoints and
+            // the discover assembly already get.
             Request::Client(boxed_req) => {
-                self.handle_client_request(id, *boxed_req, auth_context, protocol_context.clone())
-                    .await
+                Box::pin(self.handle_client_request(
+                    id,
+                    *boxed_req,
+                    auth_context,
+                    protocol_context.clone(),
+                ))
+                .await
             },
             Request::Server(_) => JSONRPCResponse {
                 jsonrpc: "2.0".to_string(),
@@ -1470,6 +1522,27 @@ impl Server {
             },
         };
 
+        // Twin-site MRTR egress (Plan 113-06): the SAME shared helper `ServerCore`
+        // calls. Converts a handler's "I need more input" signal into an
+        // `input_required` result carrying a freshly minted `requestState`, and
+        // STRIPS the pmcp-internal signal key on every other path.
+        #[cfg(feature = "streamable-http")]
+        let disposition = crate::server::core::mrtr_egress(
+            &mut response,
+            &crate::server::core::MrtrEgressInputs {
+                target: mrtr_target.as_ref(),
+                protocol_context: protocol_context.as_ref(),
+                principal: crate::server::core::MrtrPrincipal {
+                    authenticated_subject: mrtr_subject.as_deref(),
+                    has_auth_provider: self.auth_provider.is_some(),
+                },
+                codec: self.request_state_codec(),
+                round: mrtr_round,
+            },
+        );
+        #[cfg(not(feature = "streamable-http"))]
+        let disposition = crate::server::core::ResponseDisposition::Complete;
+
         // Twin-site v2 envelope injection (VERS-07 / D-07 / D-08): the ONE shared
         // helper in `core.rs` — v2-only, object-results-only, collision-safe;
         // v1 / non-opted-in responses stay byte-identical.
@@ -1477,7 +1550,7 @@ impl Server {
             &mut response,
             protocol_context.as_ref(),
             &self.info,
-            crate::server::core::ResponseDisposition::Complete,
+            disposition,
         );
         response
     }

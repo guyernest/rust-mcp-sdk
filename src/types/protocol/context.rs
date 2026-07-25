@@ -146,6 +146,32 @@ impl ProtocolContext {
         self
     }
 
+    /// The client-supplied `inputResponses` map, if any.
+    pub(crate) fn input_responses(&self) -> Option<&crate::types::mrtr::InputResponses> {
+        self.mrtr.as_ref()?.input_responses.as_ref()
+    }
+
+    /// The DECRYPTED continuation state from a verified token.
+    pub(crate) fn mrtr_continuation(&self) -> Option<&serde_json::Value> {
+        Some(&self.mrtr_verified.as_ref()?.state)
+    }
+
+    /// The round counter carried by a verified token.
+    pub(crate) fn mrtr_round(&self) -> Option<u8> {
+        Some(self.mrtr_verified.as_ref()?.round)
+    }
+}
+
+/// The MRTR WRITE surface (Phase 113, HTTP-02/HTTP-03).
+///
+/// Split into its own block because these four are reached only from the
+/// `streamable-http` MRTR path (D-14 confines the AEAD `requestState` codec to
+/// that feature on native), while the three READ accessors above are consumed
+/// unconditionally by `RequestHandlerExtra`. The conditional `allow` is
+/// feature-scoped, not blanket: with `streamable-http` on — which is what every
+/// lint and build gate uses — dead code here is still an error.
+#[cfg_attr(not(feature = "streamable-http"), allow(dead_code))]
+impl ProtocolContext {
     /// Attach the MRTR continuation signals read off the raw request `params`
     /// at transport ingress (Phase 113, HTTP-03).
     ///
@@ -185,24 +211,9 @@ impl ProtocolContext {
         self
     }
 
-    /// The client-supplied `inputResponses` map, if any.
-    pub(crate) fn input_responses(&self) -> Option<&crate::types::mrtr::InputResponses> {
-        self.mrtr.as_ref()?.input_responses.as_ref()
-    }
-
     /// The client-echoed `requestState` token, if any (still UNVERIFIED).
     pub(crate) fn request_state_token(&self) -> Option<&str> {
         self.mrtr.as_ref()?.request_state.as_deref()
-    }
-
-    /// The DECRYPTED continuation state from a verified token.
-    pub(crate) fn mrtr_continuation(&self) -> Option<&serde_json::Value> {
-        Some(&self.mrtr_verified.as_ref()?.state)
-    }
-
-    /// The round counter carried by a verified token.
-    pub(crate) fn mrtr_round(&self) -> Option<u8> {
-        Some(self.mrtr_verified.as_ref()?.round)
     }
 }
 
