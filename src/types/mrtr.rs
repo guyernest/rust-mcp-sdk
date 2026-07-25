@@ -132,6 +132,19 @@ pub(crate) const MRTR_METHODS: [MrtrMethod; 3] = [
     },
 ];
 
+/// `tools/call`, sourced from the ONE table so no caller spells it by hand.
+///
+/// The row order is pinned by
+/// `mrtr_method_constants_match_the_table` — reordering [`MRTR_METHODS`]
+/// without updating these indices fails that test loudly.
+pub(crate) const CALL_TOOL_METHOD: &str = MRTR_METHODS[0].method;
+
+/// `prompts/get`. See [`CALL_TOOL_METHOD`].
+pub(crate) const GET_PROMPT_METHOD: &str = MRTR_METHODS[1].method;
+
+/// `resources/read`. See [`CALL_TOOL_METHOD`].
+pub(crate) const READ_RESOURCE_METHOD: &str = MRTR_METHODS[2].method;
+
 /// The table row for `method`, if it is an MRTR method.
 ///
 /// A linear scan over three `&str` beats hashing at this size, and the table is
@@ -943,6 +956,21 @@ mod tests {
             message: "What is your name?".to_string(),
             requested_schema: json!({ "type": "object" }),
         }
+    }
+
+    /// The three named method constants are INDEX-derived from the ONE table,
+    /// so this pins the row order: reordering `MRTR_METHODS` without updating
+    /// the indices fails here rather than silently sending `prompts/get` params
+    /// to `tools/call`.
+    #[test]
+    fn mrtr_method_constants_match_the_table() {
+        assert_eq!(CALL_TOOL_METHOD, "tools/call");
+        assert_eq!(GET_PROMPT_METHOD, "prompts/get");
+        assert_eq!(READ_RESOURCE_METHOD, "resources/read");
+        for method in [CALL_TOOL_METHOD, GET_PROMPT_METHOD, READ_RESOURCE_METHOD] {
+            assert!(mrtr_eligible(method), "{method} must be in the table");
+        }
+        assert_eq!(MRTR_METHODS.len(), 3, "a new row needs a new constant");
     }
 
     #[test]

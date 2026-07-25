@@ -153,7 +153,9 @@ pub fn classify_host_request(request: &Request) -> HostRequestKind {
 #[doc(hidden)]
 #[must_use]
 pub fn classify_input_request(request: &InputRequest) -> HostRequestKind {
-    host_kind_of(request.kind())
+    // Routed through the STRING classifier so there is exactly one mapping and
+    // the production path is the one the property test exercises.
+    classify_input_method(request.kind().wire_method())
 }
 
 /// Classify an MRTR input-request METHOD STRING.

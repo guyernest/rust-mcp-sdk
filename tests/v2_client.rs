@@ -429,3 +429,613 @@ async fn mcp_name_from_name_for_prompts_get() {
         "the response must come from the registered GreetingPrompt handler"
     );
 }
+
+// ===========================================================================
+// Phase 113-07 (CLNT-02): the MRTR gather->resend loop, over a MOCK transport.
+// ===========================================================================
+//
+// # Why a mock and not the live server above
+//
+// No handler in this repo can emit an `input_required` result on demand until
+// plan 09 ships the egress hardening, and plan 07 deliberately does NOT depend
+// on plan 09 (Codex Plan-07 HIGH #2). The live client<->server MRTR acceptance
+// is plan 11's, which depends on both. What this suite must prove is the
+// CLIENT's own behavior against an adversarial script: fresh ids, stale-field-free
+// resends, verbatim `requestState`, the all-or-nothing fold, the terminal
+// non-`input_required` case, and the bound — none of which needs a real server.
+//
+// The mock records the frames the client actually put on the wire, so every
+// assertion is against observed bytes rather than against log output.
+
+mod mrtr {
+    use super::*;
+
+    use std::collections::{HashMap, VecDeque};
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::Mutex;
+
+    use pmcp::client::host::HostElicitationHandler;
+    use pmcp::shared::Transport;
+    use pmcp::types::elicitation::{ElicitAction, ElicitRequestParams, ElicitResult};
+    use pmcp::types::roots::{ListRootsResult, Root};
+    use pmcp::types::sampling::{CreateMessageParams, CreateMessageResult};
+    use pmcp::types::{Content, JSONRPCResponse, MrtrOutcome, RequestId, TransportMessage};
+
+    // ----------------------------------------------------------------------
+    // The mock transport.
+    // ----------------------------------------------------------------------
+
+    /// A transport that replays a canned sequence of JSON-RPC RESULTS and
+    /// records every frame the client sent.
+    ///
+    /// Deliberately answers on the RAW (`send_raw`) path only: that is the only
+    /// path a v2 client uses, so a regression that quietly fell back to the
+    /// typed `send` would fail here rather than pass silently.
+    #[derive(Debug, Clone)]
+    struct MockV2Transport {
+        /// `result` objects served in send order.
+        script: Arc<Vec<Value>>,
+        /// When the script runs out, repeat its last entry forever.
+        repeat_last: bool,
+        /// Every request frame the client put on the wire, in order.
+        sent: Arc<Mutex<Vec<Value>>>,
+        /// Responses waiting to be `receive`d.
+        inbox: Arc<Mutex<VecDeque<TransportMessage>>>,
+    }
+
+    impl MockV2Transport {
+        fn new(script: Vec<Value>, repeat_last: bool) -> Self {
+            Self {
+                script: Arc::new(script),
+                repeat_last,
+                sent: Arc::new(Mutex::new(Vec::new())),
+                inbox: Arc::new(Mutex::new(VecDeque::new())),
+            }
+        }
+
+        /// The frames observed so far.
+        fn sent(&self) -> Vec<Value> {
+            self.sent.lock().expect("no panic while holding").clone()
+        }
+
+        /// The `params` object of the `index`-th frame the client sent.
+        fn params(&self, index: usize) -> Value {
+            self.sent()
+                .get(index)
+                .unwrap_or_else(|| panic!("no frame at index {index}"))
+                .get("params")
+                .cloned()
+                .expect("a v2 frame always carries params")
+        }
+    }
+
+    #[async_trait]
+    impl Transport for MockV2Transport {
+        async fn send(&mut self, _message: TransportMessage) -> pmcp::Result<()> {
+            panic!("a v2 client must not use the TYPED send path");
+        }
+
+        async fn receive(&mut self) -> pmcp::Result<TransportMessage> {
+            self.inbox
+                .lock()
+                .expect("no panic while holding")
+                .pop_front()
+                .ok_or_else(|| pmcp::Error::internal("the mock script is exhausted"))
+        }
+
+        async fn close(&mut self) -> pmcp::Result<()> {
+            Ok(())
+        }
+
+        fn supports_negotiated_protocol_version(&self) -> bool {
+            true
+        }
+
+        async fn send_raw(&mut self, body: Vec<u8>) -> pmcp::Result<()> {
+            let frame: Value = serde_json::from_slice(&body).expect("the client sends valid JSON");
+            let id: RequestId =
+                serde_json::from_value(frame["id"].clone()).expect("every request carries an id");
+            let index = {
+                let mut sent = self.sent.lock().expect("no panic while holding");
+                sent.push(frame);
+                sent.len() - 1
+            };
+            let result = self
+                .script
+                .get(index)
+                .or_else(|| self.repeat_last.then(|| self.script.last()).flatten())
+                .unwrap_or_else(|| panic!("the script has no entry for send #{index}"))
+                .clone();
+            self.inbox
+                .lock()
+                .expect("no panic while holding")
+                .push_back(TransportMessage::Response(JSONRPCResponse::success(
+                    id, result,
+                )));
+            Ok(())
+        }
+    }
+
+    // ----------------------------------------------------------------------
+    // Script fixtures.
+    // ----------------------------------------------------------------------
+
+    /// An `input_required` result carrying `inputRequests` and a `requestState`.
+    fn input_required(entries: &Value, request_state: Option<&str>) -> Value {
+        let mut result = json!({
+            "resultType": "input_required",
+            "inputRequests": entries,
+        });
+        if let Some(state) = request_state {
+            result["requestState"] = json!(state);
+        }
+        result
+    }
+
+    /// A completed `tools/call` result.
+    fn complete() -> Value {
+        json!({ "resultType": "complete", "content": [{ "type": "text", "text": "done" }] })
+    }
+
+    fn elicitation_entry() -> Value {
+        json!({ "method": "elicitation/create", "params": { "message": "who?", "requestedSchema": {} } })
+    }
+
+    fn sampling_entry() -> Value {
+        json!({ "method": "sampling/createMessage", "params": { "messages": [], "maxTokens": 16 } })
+    }
+
+    fn roots_entry() -> Value {
+        json!({ "method": "roots/list" })
+    }
+
+    // ----------------------------------------------------------------------
+    // Stub host handlers with invocation counters.
+    // ----------------------------------------------------------------------
+
+    struct CountingElicitation {
+        calls: Arc<AtomicUsize>,
+        action: ElicitAction,
+    }
+
+    #[async_trait]
+    impl HostElicitationHandler for CountingElicitation {
+        async fn handle_elicitation(
+            &self,
+            _params: ElicitRequestParams,
+        ) -> pmcp::Result<ElicitResult> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            let mut content = HashMap::new();
+            content.insert("user_name".to_string(), json!("ada"));
+            Ok(ElicitResult {
+                action: self.action,
+                content: matches!(self.action, ElicitAction::Accept).then_some(content),
+            })
+        }
+    }
+
+    struct CountingSampling {
+        calls: Arc<AtomicUsize>,
+    }
+
+    #[async_trait]
+    impl pmcp::client::host::HostSamplingHandler for CountingSampling {
+        async fn handle_create_message(
+            &self,
+            _params: CreateMessageParams,
+        ) -> pmcp::Result<CreateMessageResult> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Ok(CreateMessageResult::new(
+                Content::text("sampled"),
+                "mock-model",
+            ))
+        }
+    }
+
+    /// A v2 client over the mock, with an accepting elicitation handler whose
+    /// invocations are counted.
+    fn client_with_elicitation(
+        transport: MockV2Transport,
+        calls: Arc<AtomicUsize>,
+        action: ElicitAction,
+    ) -> Client<MockV2Transport> {
+        ClientBuilder::new(transport)
+            .with_protocol_version(ProtocolVersion(V2.to_string()))
+            .expect("2026-07-28 is selectable")
+            .on_elicitation(CountingElicitation { calls, action })
+            .build()
+    }
+
+    /// A v2 client over the mock with NO host handlers at all.
+    fn bare_client(transport: MockV2Transport) -> Client<MockV2Transport> {
+        ClientBuilder::new(transport)
+            .with_protocol_version(ProtocolVersion(V2.to_string()))
+            .expect("2026-07-28 is selectable")
+            .build()
+    }
+
+    // ----------------------------------------------------------------------
+    // Tests.
+    // ----------------------------------------------------------------------
+
+    /// All three input kinds are fulfilled from the registry in ONE round, and
+    /// the resend carries the server's keys plus the echoed `requestState`.
+    #[tokio::test]
+    async fn mrtr_three_kinds() {
+        let entries = json!({
+            "who": elicitation_entry(),
+            "what": sampling_entry(),
+            "where": roots_entry(),
+        });
+        let transport = MockV2Transport::new(
+            vec![input_required(&entries, Some("state-1")), complete()],
+            false,
+        );
+        let elicit_calls = Arc::new(AtomicUsize::new(0));
+        let sample_calls = Arc::new(AtomicUsize::new(0));
+        let client = ClientBuilder::new(transport.clone())
+            .with_protocol_version(ProtocolVersion(V2.to_string()))
+            .expect("2026-07-28 is selectable")
+            .on_elicitation(CountingElicitation {
+                calls: elicit_calls.clone(),
+                action: ElicitAction::Accept,
+            })
+            .on_sampling(CountingSampling {
+                calls: sample_calls.clone(),
+            })
+            .on_roots(|| async {
+                Ok(ListRootsResult {
+                    roots: vec![Root {
+                        uri: "file:///tmp".to_string(),
+                        name: None,
+                    }],
+                })
+            })
+            .build();
+
+        let outcome = client
+            .call_tool_mrtr("search".to_string(), json!({}))
+            .await
+            .expect("the loop completes");
+        assert!(matches!(outcome, MrtrOutcome::Complete(_)));
+
+        assert_eq!(transport.sent().len(), 2, "exactly one resend");
+        assert_eq!(elicit_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(sample_calls.load(Ordering::SeqCst), 1);
+
+        let retry = transport.params(1);
+        let responses = retry["inputResponses"]
+            .as_object()
+            .expect("the resend carries inputResponses as a params sibling");
+        assert_eq!(responses.len(), 3);
+        for key in ["who", "what", "where"] {
+            assert!(
+                responses.contains_key(key),
+                "the SERVER's key {key} must be preserved verbatim: {responses:?}"
+            );
+        }
+        assert_eq!(
+            retry["requestState"], "state-1",
+            "requestState is echoed verbatim"
+        );
+        // ...and the original params survive the splice untouched.
+        assert_eq!(retry["name"], "search");
+    }
+
+    /// Three rounds with an EVOLVING `requestState`, each echoed verbatim.
+    #[tokio::test]
+    async fn mrtr_multi_round() {
+        let entries = json!({ "who": elicitation_entry() });
+        let transport = MockV2Transport::new(
+            vec![
+                input_required(&entries, Some("state-1")),
+                input_required(&entries, Some("state-2")),
+                complete(),
+            ],
+            false,
+        );
+        let calls = Arc::new(AtomicUsize::new(0));
+        let client =
+            client_with_elicitation(transport.clone(), calls.clone(), ElicitAction::Accept);
+
+        let outcome = client
+            .call_tool_mrtr("search".to_string(), json!({}))
+            .await
+            .expect("three rounds complete");
+        assert!(matches!(outcome, MrtrOutcome::Complete(_)));
+
+        assert_eq!(transport.sent().len(), 3);
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            2,
+            "one handler invocation per LOGICAL round"
+        );
+        assert_eq!(transport.params(1)["requestState"], "state-1");
+        assert_eq!(transport.params(2)["requestState"], "state-2");
+    }
+
+    /// `requestState` with NO `inputRequests` is server-side load shedding: the
+    /// client resends immediately and invokes NO handler.
+    #[tokio::test]
+    async fn mrtr_load_shedding() {
+        let transport = MockV2Transport::new(
+            vec![
+                json!({ "resultType": "input_required", "requestState": "shed-1" }),
+                complete(),
+            ],
+            false,
+        );
+        let calls = Arc::new(AtomicUsize::new(0));
+        let client =
+            client_with_elicitation(transport.clone(), calls.clone(), ElicitAction::Accept);
+
+        let outcome = client
+            .call_tool_mrtr("search".to_string(), json!({}))
+            .await
+            .expect("a state-only retry completes");
+        assert!(matches!(outcome, MrtrOutcome::Complete(_)));
+
+        assert_eq!(transport.sent().len(), 2);
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            0,
+            "load shedding asks no questions, so no handler may run"
+        );
+        let retry = transport.params(1);
+        assert_eq!(retry["requestState"], "shed-1");
+        assert!(
+            retry.get("inputResponses").is_none(),
+            "nothing was asked, so nothing may be answered: {retry}"
+        );
+    }
+
+    /// With NO registered handler the additive method returns the
+    /// `input_required` result as a VALUE, and does not resend.
+    #[tokio::test]
+    async fn no_handler_returns_outcome() {
+        let transport = MockV2Transport::new(
+            vec![input_required(
+                &json!({ "who": elicitation_entry() }),
+                Some("state-1"),
+            )],
+            false,
+        );
+        let client = bare_client(transport.clone());
+
+        let outcome = client
+            .call_tool_mrtr("search".to_string(), json!({}))
+            .await
+            .expect("an unfulfillable result is not an error on the *_mrtr path");
+        let MrtrOutcome::InputRequired(result) = outcome else {
+            panic!("expected InputRequired");
+        };
+        assert_eq!(result.request_state.as_deref(), Some("state-1"));
+        assert!(result.input_requests.is_some());
+        assert_eq!(
+            transport.sent().len(),
+            1,
+            "the client must NOT resend what it cannot answer"
+        );
+    }
+
+    /// The SAME scenario through the EXISTING `call_tool` is a typed error
+    /// carrying the full result — explicitly NOT an empty `CallToolResult`.
+    #[tokio::test]
+    async fn no_handler_existing_method_returns_typed_error() {
+        let transport = MockV2Transport::new(
+            vec![input_required(
+                &json!({ "who": elicitation_entry() }),
+                Some("state-1"),
+            )],
+            false,
+        );
+        let client = bare_client(transport.clone());
+
+        let outcome = client.call_tool("search".to_string(), json!({})).await;
+        let error = match outcome {
+            Ok(result) => panic!(
+                "an input_required result must NOT deserialize into a CallToolResult \
+                 (content is #[serde(default)], so this would be a silently EMPTY success): \
+                 {result:?}"
+            ),
+            Err(error) => error,
+        };
+        assert!(
+            error.is_input_required_unfulfilled(),
+            "the error must be programmatically distinguishable: {error}"
+        );
+        let recovered = error
+            .input_required_result()
+            .expect("the full result must be recoverable");
+        assert_eq!(recovered.request_state.as_deref(), Some("state-1"));
+        assert!(
+            recovered.input_requests.is_some(),
+            "the inputRequests the client could not answer must survive"
+        );
+        assert_eq!(transport.sent().len(), 1, "no resend");
+    }
+
+    /// A DECLINED elicitation is not a fulfilled input: no resend, and the
+    /// caller receives the `input_required` result.
+    #[tokio::test]
+    async fn declined_elicitation_returns_outcome() {
+        let transport = MockV2Transport::new(
+            vec![input_required(
+                &json!({ "who": elicitation_entry() }),
+                Some("state-1"),
+            )],
+            false,
+        );
+        let calls = Arc::new(AtomicUsize::new(0));
+        let client =
+            client_with_elicitation(transport.clone(), calls.clone(), ElicitAction::Decline);
+
+        let outcome = client
+            .call_tool_mrtr("search".to_string(), json!({}))
+            .await
+            .expect("a decline is a normal outcome, not a transport error");
+        assert!(matches!(outcome, MrtrOutcome::InputRequired(_)));
+        assert_eq!(calls.load(Ordering::SeqCst), 1, "the handler DID run");
+        assert_eq!(
+            transport.sent().len(),
+            1,
+            "the user said no — the client must not answer on their behalf"
+        );
+    }
+
+    /// Spec MUST: the JSON-RPC id differs between the initial request and every
+    /// retry. Asserted on the ids the mock actually OBSERVED.
+    #[tokio::test]
+    async fn retry_uses_new_id() {
+        let entries = json!({ "who": elicitation_entry() });
+        let transport = MockV2Transport::new(
+            vec![
+                input_required(&entries, Some("s1")),
+                input_required(&entries, Some("s2")),
+                complete(),
+            ],
+            false,
+        );
+        let calls = Arc::new(AtomicUsize::new(0));
+        let client = client_with_elicitation(transport.clone(), calls, ElicitAction::Accept);
+
+        client
+            .call_tool_mrtr("search".to_string(), json!({}))
+            .await
+            .expect("the loop completes");
+
+        let ids: Vec<Value> = transport
+            .sent()
+            .iter()
+            .map(|frame| frame["id"].clone())
+            .collect();
+        assert_eq!(ids.len(), 3);
+        for (i, left) in ids.iter().enumerate() {
+            for right in ids.iter().skip(i + 1) {
+                assert_ne!(left, right, "ids must be pairwise distinct: {ids:?}");
+            }
+        }
+    }
+
+    /// The resend carries EXACTLY the current round's MRTR fields — no key and
+    /// no `requestState` from an earlier round survives (T-113-28).
+    #[tokio::test]
+    async fn retry_carries_no_stale_mrtr_fields() {
+        let transport = MockV2Transport::new(
+            vec![
+                input_required(&json!({ "round_one_key": elicitation_entry() }), Some("s1")),
+                input_required(&json!({ "round_two_key": elicitation_entry() }), Some("s2")),
+                complete(),
+            ],
+            false,
+        );
+        let calls = Arc::new(AtomicUsize::new(0));
+        let client = client_with_elicitation(transport.clone(), calls, ElicitAction::Accept);
+
+        client
+            .call_tool_mrtr("search".to_string(), json!({}))
+            .await
+            .expect("the loop completes");
+
+        let third = transport.params(2);
+        let responses = third["inputResponses"]
+            .as_object()
+            .expect("round 3 answers round 2");
+        assert_eq!(
+            responses.keys().collect::<Vec<_>>(),
+            vec!["round_two_key"],
+            "round 3 must carry EXACTLY round 2's values: {responses:?}"
+        );
+        assert_eq!(third["requestState"], "s2");
+    }
+
+    /// A server that always re-elicits trips the bound: exactly `limit` sends,
+    /// then a programmatically distinguishable error. No handler runs for the
+    /// round that trips it.
+    #[tokio::test]
+    async fn round_limit() {
+        let transport = MockV2Transport::new(
+            vec![input_required(
+                &json!({ "who": elicitation_entry() }),
+                Some("forever"),
+            )],
+            true,
+        );
+        let calls = Arc::new(AtomicUsize::new(0));
+        let client = ClientBuilder::new(transport.clone())
+            .with_protocol_version(ProtocolVersion(V2.to_string()))
+            .expect("2026-07-28 is selectable")
+            .mrtr_round_limit(3)
+            .on_elicitation(CountingElicitation {
+                calls: calls.clone(),
+                action: ElicitAction::Accept,
+            })
+            .build();
+
+        let error = client
+            .call_tool("search".to_string(), json!({}))
+            .await
+            .expect_err("a looping server must not loop the client forever");
+        assert!(
+            error.is_mrtr_round_limit_exceeded(),
+            "the bound must be distinguishable: {error}"
+        );
+        assert_eq!(error.mrtr_round_limit(), Some(3));
+        assert_eq!(
+            transport.sent().len(),
+            3,
+            "exactly `limit` requests may leave the client"
+        );
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            3,
+            "one handler invocation per round, and none after the bound trips"
+        );
+    }
+
+    /// The default bound is 8 with no builder call.
+    #[tokio::test]
+    async fn default_round_limit_is_eight() {
+        let transport = MockV2Transport::new(
+            vec![input_required(
+                &json!({ "who": elicitation_entry() }),
+                Some("forever"),
+            )],
+            true,
+        );
+        let calls = Arc::new(AtomicUsize::new(0));
+        let client = client_with_elicitation(transport.clone(), calls, ElicitAction::Accept);
+
+        let error = client
+            .call_tool("search".to_string(), json!({}))
+            .await
+            .expect_err("the default bound still trips");
+        assert_eq!(error.mrtr_round_limit(), Some(8));
+        assert_eq!(transport.sent().len(), 8);
+    }
+
+    /// Any `resultType` other than `input_required` is TERMINAL — including
+    /// Phase 114's `"task"`, which this build has never heard of. The loop
+    /// composes with later result types without modification.
+    #[tokio::test]
+    async fn non_input_required_result_type_is_terminal() {
+        let transport = MockV2Transport::new(
+            vec![json!({
+                "resultType": "task",
+                "content": [{ "type": "text", "text": "queued" }]
+            })],
+            false,
+        );
+        let calls = Arc::new(AtomicUsize::new(0));
+        let client =
+            client_with_elicitation(transport.clone(), calls.clone(), ElicitAction::Accept);
+
+        let outcome = client
+            .call_tool_mrtr("search".to_string(), json!({}))
+            .await
+            .expect("an unknown result type is returned, not retried");
+        assert!(matches!(outcome, MrtrOutcome::Complete(_)));
+        assert_eq!(transport.sent().len(), 1, "no retry");
+        assert_eq!(calls.load(Ordering::SeqCst), 0, "no handler may run");
+    }
+}

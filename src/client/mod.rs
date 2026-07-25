@@ -4,6 +4,7 @@ use crate::error::{Error, Result};
 use crate::shared::{
     EnhancedMiddlewareChain, MiddlewareContext, Protocol, ProtocolOptions, Transport,
 };
+use crate::types::mrtr::{CALL_TOOL_METHOD, GET_PROMPT_METHOD, READ_RESOURCE_METHOD};
 use crate::types::tasks::{
     resolve_poll_interval, CancelTaskRequest, CancelTaskResult, CreateTaskResult,
     GetTaskPayloadRequest, GetTaskRequest, GetTaskResult, ListTasksRequest, ListTasksResult, Task,
@@ -133,6 +134,14 @@ const META_CLIENT_CAPABILITIES: &str =
 /// request never carries two spellings.
 const PARAMS_META_KEY: &str = "_meta";
 
+/// The default MRTR gather→resend round bound (Phase 113, D-09).
+///
+/// Small on purpose: eight rounds is generous for a real multi-round
+/// interaction and short enough that a buggy or hostile server cannot loop a
+/// human (or an autonomous agent) for long. Override with
+/// [`ClientBuilder::mrtr_round_limit`].
+const DEFAULT_MRTR_ROUND_LIMIT: usize = 8;
+
 /// The `sampling/createMessage` method name, sourced from the ONE MRTR kind
 /// table so the v1 host path and the v2 fold cannot spell it differently.
 const SAMPLING_METHOD: &str = crate::types::mrtr::InputRequestKind::Sampling.wire_method();
@@ -198,6 +207,31 @@ enum FoldOutcome {
     CannotFulfil,
 }
 
+/// What ONE MRTR round decided.
+#[derive(Debug)]
+enum RoundOutcome {
+    /// A non-`input_required` result — the operation is done.
+    Terminal(serde_json::Value),
+    /// The server needs input this client cannot supply — done, unfulfilled.
+    /// Boxed because the variant is far larger than the others.
+    Unfulfilled(Box<crate::types::mrtr::InputRequiredResult>),
+    /// Resend the original request carrying these MRTR fields.
+    Continue(crate::types::mrtr::MrtrRequestParams),
+}
+
+/// What the whole MRTR loop produced.
+///
+/// `unfulfilled` is `Some` exactly when the loop stopped because no registered
+/// handler could answer the server's `inputRequests` — the ONE case where
+/// `raw_result` is an `input_required` result rather than a completed one.
+#[derive(Debug)]
+struct MrtrLoopOutcome {
+    /// The verbatim `result` object of the final response.
+    raw_result: serde_json::Value,
+    /// The parsed unfulfilled continuation, when there is one.
+    unfulfilled: Option<crate::types::mrtr::InputRequiredResult>,
+}
+
 /// MCP client for connecting to servers.
 pub struct Client<T: Transport> {
     transport: Arc<RwLock<T>>,
@@ -222,6 +256,10 @@ pub struct Client<T: Transport> {
     /// call — means "behave exactly as pmcp always has": v1, full `initialize`
     /// handshake, no v2 headers, no per-request `_meta`.
     negotiated_protocol_version: Option<crate::types::ProtocolVersion>,
+    /// Maximum MRTR gather→resend rounds before giving up (Phase 113, D-09).
+    ///
+    /// See [`ClientBuilder::mrtr_round_limit`]. Dead on a v1 connection.
+    mrtr_round_limit: usize,
 }
 
 impl<T: Transport> std::fmt::Debug for Client<T> {
@@ -289,6 +327,7 @@ impl<T: Transport> Client<T> {
             options: ClientOptions::default(),
             host_registry: crate::client::host::ClientHostRegistry::default(),
             negotiated_protocol_version: None,
+            mrtr_round_limit: DEFAULT_MRTR_ROUND_LIMIT,
         }
     }
 
@@ -334,6 +373,7 @@ impl<T: Transport> Client<T> {
             options: ClientOptions::default(),
             host_registry: crate::client::host::ClientHostRegistry::default(),
             negotiated_protocol_version: None,
+            mrtr_round_limit: DEFAULT_MRTR_ROUND_LIMIT,
         }
     }
 
@@ -375,6 +415,7 @@ impl<T: Transport> Client<T> {
             options,
             host_registry: crate::client::host::ClientHostRegistry::default(),
             negotiated_protocol_version: None,
+            mrtr_round_limit: DEFAULT_MRTR_ROUND_LIMIT,
         }
     }
 
@@ -863,6 +904,26 @@ impl<T: Transport> Client<T> {
     /// - The tool name doesn't exist
     /// - The arguments are invalid for the tool
     /// - Network or protocol errors occur
+    ///
+    /// # v2 (`2026-07-28`) behavior
+    ///
+    /// On a connection that opted into `2026-07-28`, this method
+    /// auto-orchestrates Multi-Round-Trip Elicitation: an `input_required`
+    /// result is answered from the registered host handlers and the request is
+    /// resent, up to [`ClientBuilder::mrtr_round_limit`] rounds.
+    ///
+    /// Two v2-only error outcomes are therefore possible, both programmatically
+    /// distinguishable:
+    ///
+    /// - [`Error::is_input_required_unfulfilled`] — no handler could answer, so
+    ///   the full result is handed back via [`Error::input_required_result`].
+    ///   It is an ERROR here (rather than a value) because
+    ///   [`CallToolResult::content`] carries `#[serde(default)]` and would
+    ///   otherwise deserialize such a result into a silently EMPTY success. Use
+    ///   [`Self::call_tool_mrtr`] to receive it as a value instead.
+    /// - [`Error::is_mrtr_round_limit_exceeded`] — the server kept asking.
+    ///
+    /// On v1 this method is byte-identical to every prior release.
     pub async fn call_tool(
         &self,
         name: String,
@@ -870,6 +931,13 @@ impl<T: Transport> Client<T> {
     ) -> Result<CallToolResult> {
         self.ensure_initialized()?;
         self.assert_capability("tools", "tools/call")?;
+
+        if self.is_v2() {
+            let params = Self::call_tool_params(name, arguments)?;
+            return Self::mrtr_result_or_error(
+                self.send_with_mrtr(CALL_TOOL_METHOD, params).await?,
+            );
+        }
 
         let request = Request::Client(Box::new(ClientRequest::CallTool(CallToolRequest {
             name,
@@ -1557,6 +1625,14 @@ impl<T: Transport> Client<T> {
     /// - The prompt name doesn't exist
     /// - Required arguments are missing
     /// - Network or protocol errors occur
+    ///
+    /// # v2 (`2026-07-28`) behavior
+    ///
+    /// Auto-orchestrates MRTR exactly as [`Self::call_tool`] documents,
+    /// including the [`Error::is_input_required_unfulfilled`] and
+    /// [`Error::is_mrtr_round_limit_exceeded`] outcomes. See
+    /// [`Self::get_prompt_mrtr`] to receive an unfulfilled `input_required` as
+    /// a value. v1 is byte-identical to every prior release.
     pub async fn get_prompt(
         &self,
         name: String,
@@ -1564,6 +1640,13 @@ impl<T: Transport> Client<T> {
     ) -> Result<GetPromptResult> {
         self.ensure_initialized()?;
         self.assert_capability("prompts", "prompts/get")?;
+
+        if self.is_v2() {
+            let params = Self::get_prompt_params(name, arguments)?;
+            return Self::mrtr_result_or_error(
+                self.send_with_mrtr(GET_PROMPT_METHOD, params).await?,
+            );
+        }
 
         let request = Request::Client(Box::new(ClientRequest::GetPrompt(GetPromptRequest {
             name,
@@ -2078,9 +2161,27 @@ impl<T: Transport> Client<T> {
     /// - The resource URI doesn't exist
     /// - Access to the resource is denied
     /// - Network or protocol errors occur
+    ///
+    /// # v2 (`2026-07-28`) behavior
+    ///
+    /// Auto-orchestrates MRTR exactly as [`Self::call_tool`] documents. This
+    /// method is where the missing return type BIT the hardest:
+    /// `ReadResourceResult.contents` has no serde default, so an
+    /// `input_required` result cannot be deserialized into it at all and would
+    /// surface as an opaque parse error. It now surfaces as an
+    /// [`Error::is_input_required_unfulfilled`] carrying the full result, or —
+    /// via [`Self::read_resource_mrtr`] — as a value. v1 is byte-identical to
+    /// every prior release.
     pub async fn read_resource(&self, uri: String) -> Result<ReadResourceResult> {
         self.ensure_initialized()?;
         self.assert_capability("resources", "resources/read")?;
+
+        if self.is_v2() {
+            let params = Self::read_resource_params(uri)?;
+            return Self::mrtr_result_or_error(
+                self.send_with_mrtr(READ_RESOURCE_METHOD, params).await?,
+            );
+        }
 
         let request = Request::Client(Box::new(ClientRequest::ReadResource(ReadResourceRequest {
             uri,
@@ -3294,6 +3395,256 @@ impl<T: Transport> Client<T> {
         FoldOutcome::Fulfilled(responses)
     }
 
+    // =======================================================================
+    // The bounded MRTR gather→resend loop (Phase 113, CLNT-02).
+    // =======================================================================
+
+    /// Drive one MRTR round: read the result, and decide what happens next.
+    ///
+    /// Extracted from [`Self::send_with_mrtr`] so the loop body stays small.
+    async fn mrtr_round_step(&self, result: serde_json::Value) -> RoundOutcome {
+        use crate::types::mrtr::{
+            InputRequiredResult, MrtrRequestParams, INPUT_REQUIRED_RESULT_TYPE,
+        };
+
+        // Anything that is not `input_required` is TERMINAL — including a
+        // `resultType` this build has never heard of (e.g. Phase 114's
+        // `"task"`), and including a result with no `resultType` at all. That
+        // is what lets later result types compose without touching this loop.
+        if result.get("resultType").and_then(serde_json::Value::as_str)
+            != Some(INPUT_REQUIRED_RESULT_TYPE)
+        {
+            return RoundOutcome::Terminal(result);
+        }
+
+        let parsed = match serde_json::from_value::<InputRequiredResult>(result.clone()) {
+            Ok(parsed) => parsed,
+            Err(error) => {
+                // A malformed `input_required` is not something a retry can
+                // fix — hand the raw result back rather than resending blind.
+                tracing::warn!(%error, "MRTR: could not parse an input_required result");
+                return RoundOutcome::Terminal(result);
+            },
+        };
+
+        // `requestState` is ECHOED VERBATIM. The spec forbids the client
+        // inspecting, parsing or modifying it (it is the server's sealed,
+        // principal-bound continuation), so it is only ever moved — never read.
+        let request_state = parsed.request_state.clone();
+
+        let Some(requests) = parsed.input_requests.clone() else {
+            // Server-side load shedding: `requestState` only, no questions.
+            // The client MAY retry immediately, and no handler is invoked.
+            return RoundOutcome::Continue(MrtrRequestParams {
+                input_responses: None,
+                request_state,
+            });
+        };
+
+        match self.fold_input_requests(&requests).await {
+            FoldOutcome::Fulfilled(responses) => RoundOutcome::Continue(MrtrRequestParams {
+                input_responses: Some(responses),
+                request_state,
+            }),
+            // D-06: no handler, or a decline/error — do NOT resend, and do NOT
+            // fabricate. The caller receives the result.
+            FoldOutcome::CannotFulfil => RoundOutcome::Unfulfilled(Box::new(parsed)),
+        }
+    }
+
+    /// Send `method` with `params`, auto-orchestrating MRTR until the server
+    /// completes the operation, the client cannot fulfil, or the bound trips.
+    ///
+    /// Only reachable on v2: it sends RAW frames through
+    /// [`Self::send_untyped_request`], which is the only path that can carry
+    /// `params.inputResponses` / `params.requestState` (the typed request
+    /// structs deliberately have no such fields — D-113-D).
+    async fn send_with_mrtr(
+        &self,
+        method: &str,
+        mut params: serde_json::Value,
+    ) -> Result<MrtrLoopOutcome> {
+        // A zero limit would send nothing at all and report a round-limit
+        // breach for a request that never left, which is a confusing lie.
+        let limit = self.mrtr_round_limit.max(1);
+        for _round in 0..limit {
+            // A FRESH id every iteration. Spec MUST: "the JSON-RPC id MUST be
+            // different between the initial request and the retry" — they are
+            // independent requests, and reusing one re-creates the id-replay
+            // bug class HTTP-05 exists to close (T-113-07).
+            let request_id = RequestId::String(Uuid::new_v4().to_string());
+            let response = self
+                .send_untyped_request(request_id, method, params.clone())
+                .await?;
+            let result = match response.payload {
+                crate::types::jsonrpc::ResponsePayload::Result(result) => result,
+                crate::types::jsonrpc::ResponsePayload::Error(error) => {
+                    return Err(Error::from_jsonrpc_error(error))
+                },
+            };
+            match self.mrtr_round_step(result).await {
+                RoundOutcome::Terminal(raw_result) => {
+                    return Ok(MrtrLoopOutcome {
+                        raw_result,
+                        unfulfilled: None,
+                    })
+                },
+                RoundOutcome::Unfulfilled(parsed) => {
+                    return Ok(MrtrLoopOutcome {
+                        raw_result: parsed.raw.clone(),
+                        unfulfilled: Some(*parsed),
+                    })
+                },
+                RoundOutcome::Continue(mrtr) => {
+                    // `splice_mrtr_params` REMOVES both keys before inserting,
+                    // so no earlier round's `inputResponses` / `requestState`
+                    // can survive into this one (T-113-28). Everything else on
+                    // `params` — including the caller's `_meta` trace context —
+                    // is untouched, so spans stay linked across rounds.
+                    crate::types::mrtr::splice_mrtr_params(&mut params, &mrtr);
+                },
+            }
+        }
+        // The bound tripped. No handler ran for this round (the loop exits
+        // BEFORE sending), and the error is programmatically distinguishable.
+        Err(Error::mrtr_round_limit_exceeded(limit))
+    }
+
+    /// Deserialize a completed MRTR result, or convert an unfulfilled one into
+    /// the typed client-local error the EXISTING methods return.
+    fn mrtr_result_or_error<R: serde::de::DeserializeOwned>(outcome: MrtrLoopOutcome) -> Result<R> {
+        if let Some(unfulfilled) = outcome.unfulfilled {
+            return Err(Error::input_required_unfulfilled(unfulfilled));
+        }
+        serde_json::from_value(outcome.raw_result).map_err(|e| Error::parse(e.to_string()))
+    }
+
+    /// Map a loop outcome onto the additive [`MrtrOutcome`] return type.
+    fn mrtr_outcome<R: serde::de::DeserializeOwned>(
+        outcome: MrtrLoopOutcome,
+    ) -> Result<crate::types::mrtr::MrtrOutcome<R>> {
+        if let Some(unfulfilled) = outcome.unfulfilled {
+            return Ok(crate::types::mrtr::MrtrOutcome::InputRequired(unfulfilled));
+        }
+        serde_json::from_value(outcome.raw_result)
+            .map(crate::types::mrtr::MrtrOutcome::Complete)
+            .map_err(|e| Error::parse(e.to_string()))
+    }
+
+    /// The `tools/call` params object, byte-identical to what the typed path
+    /// would have serialized.
+    fn call_tool_params(name: String, arguments: serde_json::Value) -> Result<serde_json::Value> {
+        serde_json::to_value(CallToolRequest {
+            name,
+            arguments,
+            _meta: None,
+            task: None,
+        })
+        .map_err(|e| Error::parse(e.to_string()))
+    }
+
+    /// The `prompts/get` params object.
+    fn get_prompt_params(
+        name: String,
+        arguments: HashMap<String, String>,
+    ) -> Result<serde_json::Value> {
+        serde_json::to_value(GetPromptRequest {
+            name,
+            arguments,
+            _meta: None,
+        })
+        .map_err(|e| Error::parse(e.to_string()))
+    }
+
+    /// The `resources/read` params object.
+    fn read_resource_params(uri: String) -> Result<serde_json::Value> {
+        serde_json::to_value(ReadResourceRequest { uri, _meta: None })
+            .map_err(|e| Error::parse(e.to_string()))
+    }
+
+    /// Call a tool, auto-orchestrating MRTR, and observe an unfulfilled
+    /// `input_required` result instead of losing it (Phase 113, CLNT-02).
+    ///
+    /// The additive sibling of [`Self::call_tool`]. Use it whenever a
+    /// `MrtrOutcome::InputRequired` is a normal outcome for your application
+    /// rather than an error — for example when your client wants to surface the
+    /// server's `inputRequests` in its own UI instead of registering a
+    /// [`ClientBuilder::on_elicitation`] handler.
+    ///
+    /// On a v1 connection there is no MRTR, so this simply delegates to
+    /// [`Self::call_tool`] and always returns `MrtrOutcome::Complete`.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::call_tool`], plus [`Error::mrtr_round_limit_exceeded`] when
+    /// the server keeps asking for input past
+    /// [`ClientBuilder::mrtr_round_limit`].
+    pub async fn call_tool_mrtr(
+        &self,
+        name: String,
+        arguments: serde_json::Value,
+    ) -> Result<crate::types::mrtr::MrtrOutcome<CallToolResult>> {
+        self.ensure_initialized()?;
+        self.assert_capability("tools", "tools/call")?;
+        if !self.is_v2() {
+            return self
+                .call_tool(name, arguments)
+                .await
+                .map(crate::types::mrtr::MrtrOutcome::Complete);
+        }
+        let params = Self::call_tool_params(name, arguments)?;
+        Self::mrtr_outcome(self.send_with_mrtr(CALL_TOOL_METHOD, params).await?)
+    }
+
+    /// Get a prompt, auto-orchestrating MRTR. See [`Self::call_tool_mrtr`].
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::get_prompt`], plus [`Error::mrtr_round_limit_exceeded`].
+    pub async fn get_prompt_mrtr(
+        &self,
+        name: String,
+        arguments: HashMap<String, String>,
+    ) -> Result<crate::types::mrtr::MrtrOutcome<GetPromptResult>> {
+        self.ensure_initialized()?;
+        self.assert_capability("prompts", "prompts/get")?;
+        if !self.is_v2() {
+            return self
+                .get_prompt(name, arguments)
+                .await
+                .map(crate::types::mrtr::MrtrOutcome::Complete);
+        }
+        let params = Self::get_prompt_params(name, arguments)?;
+        Self::mrtr_outcome(self.send_with_mrtr(GET_PROMPT_METHOD, params).await?)
+    }
+
+    /// Read a resource, auto-orchestrating MRTR. See [`Self::call_tool_mrtr`].
+    ///
+    /// This one matters even more than the others: `ReadResourceResult.contents`
+    /// has no serde default, so an `input_required` result cannot be
+    /// deserialized into it at all — without this method (or
+    /// [`Error::input_required_unfulfilled`]) the outcome would surface as an
+    /// opaque parse error.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::read_resource`], plus [`Error::mrtr_round_limit_exceeded`].
+    pub async fn read_resource_mrtr(
+        &self,
+        uri: String,
+    ) -> Result<crate::types::mrtr::MrtrOutcome<ReadResourceResult>> {
+        self.ensure_initialized()?;
+        self.assert_capability("resources", "resources/read")?;
+        if !self.is_v2() {
+            return self
+                .read_resource(uri)
+                .await
+                .map(crate::types::mrtr::MrtrOutcome::Complete);
+        }
+        let params = Self::read_resource_params(uri)?;
+        Self::mrtr_outcome(self.send_with_mrtr(READ_RESOURCE_METHOD, params).await?)
+    }
+
     /// Extract [`CreateMessageParams`] from either inbound sampling parse
     /// variant (client-alias or server), handling the parse ambiguity.
     fn extract_sampling_params(request: Request) -> Option<CreateMessageParams> {
@@ -3432,6 +3783,9 @@ pub struct ClientBuilder<T: Transport> {
     /// The EXPLICIT per-connection protocol-version selection (Phase 113,
     /// CLNT-01). `None` with no [`ClientBuilder::with_protocol_version`] call.
     negotiated_protocol_version: Option<crate::types::ProtocolVersion>,
+    /// The MRTR round bound (Phase 113, D-09). See
+    /// [`ClientBuilder::mrtr_round_limit`].
+    mrtr_round_limit: usize,
 }
 
 impl<T: Transport> std::fmt::Debug for ClientBuilder<T> {
@@ -3452,6 +3806,7 @@ impl<T: Transport> ClientBuilder<T> {
             middleware_chain: EnhancedMiddlewareChain::new(),
             host_registry: crate::client::host::ClientHostRegistry::default(),
             negotiated_protocol_version: None,
+            mrtr_round_limit: DEFAULT_MRTR_ROUND_LIMIT,
         }
     }
 
@@ -3524,6 +3879,44 @@ impl<T: Transport> ClientBuilder<T> {
         // selectable automatically instead of silently failing opt-in.
         crate::types::SUPPORTED_PROTOCOL_VERSIONS.contains(&version)
             || crate::types::protocol::protocol_era(version) == crate::types::protocol::Era::V2
+    }
+
+    /// Bound the MRTR gather→resend loop (Phase 113, CLNT-02 / D-09).
+    ///
+    /// **With no call, the client behaves exactly as today**: the default is
+    /// `8`, and on a v1 connection the bound is dead code because MRTR does not
+    /// exist there.
+    ///
+    /// # Why a bound exists at all
+    ///
+    /// The spec tells a server to RE-REQUEST rather than error when a client
+    /// under-supplies (`input_required` obligation 9), so a buggy or hostile
+    /// server can answer `input_required` forever. The bound protects BOTH
+    /// first-class client shapes (D-07):
+    ///
+    /// - an **AI-chat client** with a human behind the handler, who would
+    ///   otherwise be re-prompted indefinitely;
+    /// - an **autonomous agent client** whose handler answers programmatically
+    ///   from other MCP servers, which would otherwise spin (and spend) forever.
+    ///
+    /// Exceeding it returns [`Error::mrtr_round_limit_exceeded`] — a
+    /// programmatically distinguishable error — **without** invoking any
+    /// handler for the round that trips it. Rounds are counted per LOGICAL
+    /// round, so an `inputRequests` map with five entries still costs one.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// use pmcp::{ClientBuilder, StdioTransport};
+    ///
+    /// let client = ClientBuilder::new(StdioTransport::new())
+    ///     .mrtr_round_limit(3)
+    ///     .build();
+    /// ```
+    #[must_use]
+    pub fn mrtr_round_limit(mut self, limit: usize) -> Self {
+        self.mrtr_round_limit = limit;
+        self
     }
 
     /// Set whether to enforce strict capabilities.
@@ -3773,6 +4166,7 @@ impl<T: Transport> ClientBuilder<T> {
         // Thread the configured host registry onto the client.
         client.host_registry = self.host_registry;
         client.negotiated_protocol_version = self.negotiated_protocol_version;
+        client.mrtr_round_limit = self.mrtr_round_limit;
         // v2 has NO handshake, so a v2 client is ready the moment it is built.
         // `ensure_initialized` therefore passes without an `initialize` round
         // trip, which is the whole point of the stateless era.
@@ -3800,6 +4194,7 @@ impl<T: Transport> Clone for Client<T> {
             options: self.options.clone(),
             host_registry: self.host_registry.clone(),
             negotiated_protocol_version: self.negotiated_protocol_version.clone(),
+            mrtr_round_limit: self.mrtr_round_limit,
         }
     }
 }
