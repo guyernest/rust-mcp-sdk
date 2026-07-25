@@ -321,16 +321,28 @@ impl RequestStateCodec {
     /// zeroized once the `UnboundKey` exists (threat T-113-05).
     pub(crate) fn from_env() -> Result<Self> {
         let ttl = ttl_from_env();
-        let mut codec = match env_var(ENV_REQUEST_STATE_KEY) {
+        let codec = match env_var(ENV_REQUEST_STATE_KEY) {
             Some(raw) => Self::from_configured_key(&raw, ttl)?,
             None => Self::from_generated_key(ttl)?,
         };
+        codec.with_env_previous_key()
+    }
+
+    /// Append the `PMCP_REQUEST_STATE_KEY_PREVIOUS` key to the accepting set, if
+    /// one is configured.
+    ///
+    /// Split out of [`Self::from_env`] because a BUILDER-supplied minting key
+    /// bypasses `from_env` entirely: the rotated-out key is an independent
+    /// operator setting, and skipping it there silently stranded every in-flight
+    /// continuation minted before the rotation (they degrade to
+    /// [`Verdict::UnknownKey`] and re-elicit) — while
+    /// [`resolve_codec_at_build`]'s own contract says the env value is honoured.
+    fn with_env_previous_key(mut self) -> Result<Self> {
         if let Some(raw) = env_var(ENV_REQUEST_STATE_KEY_PREVIOUS) {
-            codec
-                .accepting
+            self.accepting
                 .push(bind_scrubbed(&raw, ENV_REQUEST_STATE_KEY_PREVIOUS)?);
         }
-        Ok(codec)
+        Ok(self)
     }
 
     /// Build from an operator-configured key string, scrubbing both buffers.
@@ -609,14 +621,19 @@ fn open_sealed(
     sealed: &[u8],
 ) -> Option<Continuation> {
     let mut buffer = sealed.to_vec();
-    let plaintext = key
+    let opened = key
         .open_in_place(
             Nonce::assume_unique_for_key(nonce),
             Aad::from(aad),
             &mut buffer,
         )
-        .ok()?;
-    serde_json::from_slice::<Continuation>(plaintext).ok()
+        .ok()
+        .and_then(|plaintext| serde_json::from_slice::<Continuation>(plaintext).ok());
+    // The decrypted buffer holds the CONFIDENTIAL continuation (routinely
+    // partially collected tool arguments). Scrub it for the same T-113-05 reason
+    // the key buffers are scrubbed, rather than leaving it for the allocator.
+    buffer.zeroize();
+    opened
 }
 
 impl RequestStateCodec {
@@ -827,7 +844,12 @@ pub(crate) fn resolve_codec_at_build(
     }
     let effective_ttl = ttl.unwrap_or_else(ttl_from_env);
     let codec = match key {
-        Some(explicit) => RequestStateCodec::new(&explicit, effective_ttl)?,
+        // A builder key overrides `PMCP_REQUEST_STATE_KEY` — but NOT
+        // `PMCP_REQUEST_STATE_KEY_PREVIOUS`, which is a separate rotation
+        // setting this function's contract promises to honour either way.
+        Some(explicit) => {
+            RequestStateCodec::new(&explicit, effective_ttl)?.with_env_previous_key()?
+        },
         None => RequestStateCodec::from_env()?.with_ttl(effective_ttl),
     };
     let codec = codec.with_previous_keys(previous_keys.iter().copied())?;
@@ -911,14 +933,24 @@ mod tests {
     /// Any variable NOT listed in `pairs` reads as absent, so a test that wants
     /// "unset" gets it deterministically regardless of the ambient environment.
     fn with_env<T>(pairs: &[(&str, &str)], f: impl FnOnce() -> T) -> T {
+        /// RAII teardown: the repo runs `cargo test --test-threads=1`, where
+        /// libtest executes every test on the SAME thread. A `f()` that panics
+        /// (an assertion failure) would otherwise leave this thread's override
+        /// installed and silently reshape every later env test.
+        struct Restore;
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                ENV_OVERRIDE.with(|o| *o.borrow_mut() = None);
+            }
+        }
+
         let map: HashMap<String, String> = pairs
             .iter()
             .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
             .collect();
         ENV_OVERRIDE.with(|o| *o.borrow_mut() = Some(map));
-        let out = f();
-        ENV_OVERRIDE.with(|o| *o.borrow_mut() = None);
-        out
+        let _restore = Restore;
+        f()
     }
 
     fn b64(key: &[u8]) -> String {

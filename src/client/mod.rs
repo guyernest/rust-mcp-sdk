@@ -132,7 +132,7 @@ const META_CLIENT_CAPABILITIES: &str =
 /// Phase-113 D-113-A pinned `_meta` as pmcp's egress spelling on the typed
 /// request structs; the raw v2 injection below uses the same key so a single
 /// request never carries two spellings.
-const PARAMS_META_KEY: &str = "_meta";
+const PARAMS_META_KEY: &str = crate::types::mrtr::META_KEY;
 
 /// The default MRTR gather→resend round bound (Phase 113, D-09).
 ///
@@ -637,9 +637,28 @@ impl<T: Transport> Client<T> {
     /// client DECLARED, so an over-claiming client receives requests it cannot
     /// fulfil and an under-claiming one gets `-32021` where the round could have
     /// completed.
+    /// # The `sampling.tools` sub-field is declared, not defaulted away
+    ///
+    /// `derive_host_capabilities` inserts `SamplingCapabilities::default()`,
+    /// whose `tools` is `None`. On v1 that is fine — the caller passes its own
+    /// `ClientCapabilities` into `initialize` and any configured detail is
+    /// preserved. On v2 there is NO caller-supplied value at all, so the default
+    /// IS the declaration: a client that registered `on_sampling_with_tools`
+    /// would advertise `{"sampling": {}}`, and the server's
+    /// `missing_client_capabilities` precheck would answer `-32021` for a
+    /// tool-augmented `sampling/createMessage` the client can in fact service.
+    /// That is the same under-claim `derive_host_capabilities` already fixes one
+    /// level up for the `sampling` field itself.
     fn v2_client_capabilities(&self) -> ClientCapabilities {
         let mut capabilities = ClientCapabilities::default();
         self.derive_host_capabilities(&mut capabilities);
+        if self.host_registry.sampling_with_tools.is_some() {
+            if let Some(sampling) = capabilities.sampling.as_mut() {
+                if sampling.tools.is_none() {
+                    sampling.tools = Some(serde_json::Value::Object(serde_json::Map::new()));
+                }
+            }
+        }
         capabilities
     }
 

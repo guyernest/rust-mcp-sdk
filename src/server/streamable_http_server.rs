@@ -376,6 +376,10 @@ fn create_error_response(status: StatusCode, code: i32, message: &str) -> Respon
 // its JSON-RPC code from `error_codes::` (VERS-06); no new bare -326xx literal.
 // ===========================================================================
 
+/// Upper bound on a RAW `Mcp-Name`/`Mcp-Method` header, which may carry the
+/// `=?base64?…?=` sentinel expansion of a value bounded by
+/// [`MAX_V2_HEADER_VALUE_LEN`]. Re-exported for the same single-source reason.
+use crate::types::mrtr::MAX_HEADER_SENTINEL_LEN as MAX_V2_HEADER_SENTINEL_LEN;
 /// Upper bound on a header value we will consider (`DoS` guard, T-112-13).
 ///
 /// Re-exported from `types::mrtr` rather than redeclared: the ingress bound and the
@@ -898,9 +902,17 @@ fn decode_version_header(headers: &HeaderMap) -> HeaderProtocolVersion {
 }
 
 /// Read a header as a bounded UTF-8 string, or `None` if absent/malformed.
+///
+/// The bound is [`MAX_V2_HEADER_SENTINEL_LEN`], not `MAX_V2_HEADER_VALUE_LEN`:
+/// `Mcp-Name` legitimately travels in the `=?base64?…?=` sentinel form, which is
+/// a 4/3 expansion of the logical name. Admitting only the smaller bound here
+/// would reject a conformant request whose name is within
+/// `MAX_V2_HEADER_VALUE_LEN` but whose sentinel is not, which
+/// [`crate::types::mrtr::decode_header_value`] would then never get to see. The
+/// amplification bound is still enforced, on the DECODED value, by that decoder.
 fn bounded_header_str(headers: &HeaderMap, name: &str) -> Option<String> {
     let raw = headers.get(name)?;
-    if raw.as_bytes().len() > MAX_V2_HEADER_VALUE_LEN {
+    if raw.as_bytes().len() > MAX_V2_HEADER_SENTINEL_LEN {
         return None;
     }
     raw.to_str().ok().map(str::to_string)
@@ -1190,7 +1202,7 @@ fn raw_body_json(body: &[u8]) -> Option<serde_json::Value> {
 fn params_meta_of(value: Option<&serde_json::Value>) -> Option<serde_json::Value> {
     let params = value?.get("params")?;
     params
-        .get("_meta")
+        .get(crate::types::mrtr::META_KEY)
         .or_else(|| params.get("meta"))
         .filter(|meta| !meta.is_null())
         .cloned()
@@ -1305,19 +1317,24 @@ async fn run_v2_header_gate(
     // and the MRTR params read — they can never disagree about what it says.
     let body_json = raw_body_json(raw_body);
     let raw_meta = params_meta_of(body_json.as_ref());
-    let (resolved, accept_list) = {
+    // The rejection is built INSIDE the lock scope so the accept-list is only
+    // borrowed on the rare negotiation-failure branch. Cloning it into a `Vec`
+    // on every request — under the server mutex — bought nothing: the happy path
+    // never reads it.
+    let resolved = {
         let server = state.server.lock().await;
         // Non-opted-in servers run ZERO era-detection — the v1 path is
         // byte-for-byte unchanged (D-04). `resolve_raw_meta_protocol_context`
         // short-circuits to `Ok(None)` WITHOUT inspecting `_meta` at all.
-        (
-            server.resolve_raw_meta_protocol_context(raw_meta.as_ref()),
-            server.supported_protocol_versions().to_vec(),
-        )
+        server
+            .resolve_raw_meta_protocol_context(raw_meta.as_ref())
+            .map_err(|err| {
+                negotiation_error_to_gate_reject(&err, server.supported_protocol_versions())
+            })
     };
     let context = match resolved {
         Ok(ctx) => ctx,
-        Err(err) => return (None, negotiation_error_to_gate_reject(&err, &accept_list)),
+        Err(reject) => return (None, reject),
     };
     // `Ok(None)` == not opted in → zero enforcement (D-04).
     let Some(ref pc) = context else {

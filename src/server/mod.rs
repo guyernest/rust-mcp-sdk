@@ -1510,7 +1510,12 @@ impl Server {
             self.request_state_codec(),
         );
         #[cfg(not(feature = "streamable-http"))]
-        let disposition = crate::server::core::ResponseDisposition::Complete;
+        let disposition = {
+            // No `mrtr_egress` on this build — strip the reserved signal key
+            // here so it cannot reach the wire (see `core::scrub_mrtr_signal`).
+            crate::server::core::scrub_mrtr_signal(&mut response);
+            crate::server::core::ResponseDisposition::Complete
+        };
 
         // Twin-site v2 envelope injection (VERS-07 / D-07 / D-08): the ONE shared
         // helper in `core.rs` — v2-only, object-results-only, collision-safe;

@@ -1242,19 +1242,20 @@ pub(crate) fn inject_v2_result_envelope(
 pub(crate) fn result_meta_object_mut(
     result: &mut Value,
 ) -> Option<&mut serde_json::Map<String, Value>> {
+    use crate::types::mrtr::META_KEY;
     let object = result.as_object_mut()?;
-    let existing_is_object = matches!(object.get("_meta"), Some(Value::Object(_)));
+    let existing_is_object = matches!(object.get(META_KEY), Some(Value::Object(_)));
     if !existing_is_object {
-        if object.contains_key("_meta") {
+        if object.contains_key(META_KEY) {
             tracing::warn!(
                 target: "mcp.v2",
                 "a handler set result._meta to a non-object; replacing it with an object so \
                  the server-owned reserved keys can be attached"
             );
         }
-        object.insert("_meta".to_string(), Value::Object(serde_json::Map::new()));
+        object.insert(META_KEY.to_string(), Value::Object(serde_json::Map::new()));
     }
-    object.get_mut("_meta").and_then(Value::as_object_mut)
+    object.get_mut(META_KEY).and_then(Value::as_object_mut)
 }
 
 /// Assert SERVER OWNERSHIP over the closed set of reserved result fields
@@ -1818,26 +1819,37 @@ pub(crate) enum StrippedSignal {
 /// this is skipped (T-113-31 / T-113-60).
 #[cfg(all(feature = "streamable-http", not(target_arch = "wasm32")))]
 pub(crate) fn strip_mrtr_signal(result: &mut Value) -> StrippedSignal {
-    let Some(object) = result.as_object_mut() else {
+    // The removal itself lives in `types::mrtr`, UNGATED, so the
+    // `not(streamable-http)` build can reach it too — see `scrub_mrtr_signal`.
+    let Some(raw) = crate::types::mrtr::remove_mrtr_signal(result) else {
         return StrippedSignal::Absent;
     };
-    let Some(raw) = object
-        .get_mut("_meta")
-        .and_then(Value::as_object_mut)
-        .and_then(|meta| meta.remove(crate::types::mrtr::MRTR_SIGNAL_META_KEY))
-    else {
-        return StrippedSignal::Absent;
-    };
-    if object
-        .get("_meta")
-        .and_then(Value::as_object)
-        .is_some_and(serde_json::Map::is_empty)
-    {
-        object.remove("_meta");
-    }
     serde_json::from_value(raw).map_or(StrippedSignal::Malformed, |signal| {
         StrippedSignal::Present(Box::new(signal))
     })
+}
+
+/// The `not(streamable-http)` counterpart of [`strip_mrtr_signal`].
+///
+/// [`MrtrSignal`](crate::types::mrtr::MrtrSignal) and
+/// [`MRTR_SIGNAL_META_KEY`](crate::types::mrtr::MRTR_SIGNAL_META_KEY) are `pub`
+/// on every build, but [`mrtr_egress`] — the only thing that strips them — is
+/// `streamable-http`-only by D-14, and [`own_reserved_result_fields`]'s
+/// defense-in-depth removal only runs on a **v2** result. Without this, a handler
+/// on a stdio-only build that wrote the reserved key would publish its PLAINTEXT
+/// continuation verbatim, which is exactly what the module doc promises never
+/// happens ("STRIPS the key on EVERY path before serialization — v1 included").
+#[cfg(not(feature = "streamable-http"))]
+pub(crate) fn scrub_mrtr_signal(response: &mut JSONRPCResponse) {
+    if let crate::types::jsonrpc::ResponsePayload::Result(ref mut value) = response.payload {
+        if crate::types::mrtr::remove_mrtr_signal(value).is_some() {
+            tracing::warn!(
+                target: "mcp.mrtr",
+                field = crate::types::mrtr::MRTR_SIGNAL_META_KEY,
+                "removed the pmcp-internal MRTR signal from an outgoing result"
+            );
+        }
+    }
 }
 
 /// The MRTR target for this response, or `None` when `input_required` is
@@ -2104,8 +2116,16 @@ impl MissingCapabilities {
         declared: Option<&crate::types::capabilities::ElicitationCapabilities>,
     ) {
         match (params, declared) {
-            (_, None) => {
+            (crate::types::elicitation::ElicitRequestParams::Form { .. }, None) => {
                 self.0.insert(MissingCapability::Elicitation);
+            },
+            // Nothing declared AND a URL entry: BOTH are missing. Reporting only
+            // the base capability made `requiredCapabilities` incomplete, so a
+            // client that declared exactly what it was told (form-only
+            // elicitation) was refused again on its next attempt.
+            (crate::types::elicitation::ElicitRequestParams::Url { .. }, None) => {
+                self.0.insert(MissingCapability::Elicitation);
+                self.0.insert(MissingCapability::ElicitationUrl);
             },
             (crate::types::elicitation::ElicitRequestParams::Form { .. }, Some(_)) => {},
             // Declared, but form-only: the SUBMODE is what is missing.
@@ -2427,7 +2447,13 @@ impl ProtocolHandler for ServerCore {
             self.request_state_codec(),
         );
         #[cfg(not(feature = "streamable-http"))]
-        let disposition = ResponseDisposition::Complete;
+        let disposition = {
+            // No `mrtr_egress` on this build, so the unconditional strip has to
+            // happen here or the reserved key reaches the wire (see
+            // `scrub_mrtr_signal`).
+            scrub_mrtr_signal(&mut response);
+            ResponseDisposition::Complete
+        };
 
         // Inject the v2-only response envelope (resultType + serverInfo) at the
         // era-gated serialization boundary (VERS-07 / D-07 / D-08). This is a

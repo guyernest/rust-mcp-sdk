@@ -83,6 +83,15 @@ pub(crate) const REQUEST_STATE_KEY: &str = "requestState";
 /// Wire key for the server→client input-request map (inside `result`).
 pub(crate) const INPUT_REQUESTS_KEY: &str = "inputRequests";
 
+/// Wire key of the reserved metadata object, on BOTH a request's `params` and a
+/// result.
+///
+/// Declared here with its three siblings so the spelling exists once: the client's
+/// v2 `_meta` injection, the transport's raw `params._meta` reader, the result
+/// envelope and the signal strip all read it from this block rather than each
+/// re-typing the literal.
+pub(crate) const META_KEY: &str = "_meta";
+
 /// Wire KEY of the v2 result discriminator (top level, inside `result`).
 ///
 /// The one top-level reserved key that used to be spelled as a bare literal
@@ -251,6 +260,23 @@ pub(crate) const HEADER_SENTINEL_SUFFIX: &str = "?=";
 /// expands into a large allocation.
 pub(crate) const MAX_HEADER_VALUE_LEN: usize = 8192;
 
+/// Upper bound on the RAW `=?base64?…?=` sentinel form of a value that is itself
+/// within [`MAX_HEADER_VALUE_LEN`].
+///
+/// Base64 expands by 4/3, so bounding the raw header at [`MAX_HEADER_VALUE_LEN`]
+/// would reject the sentinel form of any non-header-safe logical name longer than
+/// ~6141 bytes — a value [`encode_header_value`] is perfectly willing to produce.
+/// The pair would then fail to round-trip and the server would answer a
+/// `HEADER_MISMATCH` for a well-formed conformant request (most plausibly a
+/// `resources/read` whose URI carries a `,`/`;`/non-ASCII byte).
+///
+/// The amplification bound the raw check exists for is preserved by the DECODED
+/// length check in [`decode_header_value`], which still enforces
+/// [`MAX_HEADER_VALUE_LEN`].
+pub(crate) const MAX_HEADER_SENTINEL_LEN: usize = HEADER_SENTINEL_PREFIX.len()
+    + MAX_HEADER_VALUE_LEN.div_ceil(3) * 4
+    + HEADER_SENTINEL_SUFFIX.len();
+
 /// Whether a byte may travel verbatim in an `Mcp-Name` header value.
 ///
 /// Printable US-ASCII (`0x20..=0x7E`) EXCLUDING the RFC 9110 field-value delimiters
@@ -284,15 +310,25 @@ pub(crate) fn encode_header_value(value: &str) -> String {
 /// Decode an `Mcp-Name` header value produced by [`encode_header_value`].
 ///
 /// Returns the input verbatim for a non-sentinel value, the decoded UTF-8 for a
-/// well-formed sentinel, and `None` for a malformed sentinel, invalid UTF-8, or a
-/// value/decoding longer than [`MAX_HEADER_VALUE_LEN`]. Never panics.
+/// well-formed sentinel, and `None` for a malformed sentinel, invalid UTF-8, a
+/// verbatim value longer than [`MAX_HEADER_VALUE_LEN`], a sentinel longer than
+/// [`MAX_HEADER_SENTINEL_LEN`], or a DECODING longer than
+/// [`MAX_HEADER_VALUE_LEN`]. Never panics.
+///
+/// The two raw bounds differ on purpose: a sentinel is a 4/3 expansion of the
+/// value it carries, so bounding it at the value bound would refuse to decode
+/// exactly the sentinels [`encode_header_value`] produces for long non-safe
+/// values. The decoded check below is the one that actually caps allocation.
 pub(crate) fn decode_header_value(raw: &str) -> Option<String> {
-    if raw.len() > MAX_HEADER_VALUE_LEN {
-        return None;
-    }
     let Some(rest) = raw.strip_prefix(HEADER_SENTINEL_PREFIX) else {
+        if raw.len() > MAX_HEADER_VALUE_LEN {
+            return None;
+        }
         return Some(raw.to_string());
     };
+    if raw.len() > MAX_HEADER_SENTINEL_LEN {
+        return None;
+    }
     let payload = rest.strip_suffix(HEADER_SENTINEL_SUFFIX)?;
     let bytes = BASE64_STANDARD.decode(payload).ok()?;
     if bytes.len() > MAX_HEADER_VALUE_LEN {
@@ -695,6 +731,32 @@ impl MrtrSignal {
             serde_json::to_value(self)?,
         ))
     }
+}
+
+/// Take [`MRTR_SIGNAL_META_KEY`] off a result's `_meta`, dropping an `_meta` the
+/// removal empties. Returns the removed payload, or `None` if the key was absent.
+///
+/// **Deliberately NOT feature-gated.** [`MrtrSignal`] and its key are `pub` on
+/// EVERY build, so a handler can write them on a target or a feature set that has
+/// no `streamable-http` MRTR egress to consume them (`server::core::mrtr_egress`
+/// is `streamable-http`-only by D-14, and `own_reserved_result_fields` only runs
+/// on v2 results). The payload is the handler's PLAINTEXT continuation — the very
+/// state the AEAD `requestState` token exists to seal — so the removal itself
+/// must be reachable everywhere the key is writable.
+pub(crate) fn remove_mrtr_signal(result: &mut Value) -> Option<Value> {
+    let object = result.as_object_mut()?;
+    let removed = object
+        .get_mut(META_KEY)
+        .and_then(Value::as_object_mut)
+        .and_then(|meta| meta.remove(MRTR_SIGNAL_META_KEY))?;
+    if object
+        .get(META_KEY)
+        .and_then(Value::as_object)
+        .is_some_and(serde_json::Map::is_empty)
+    {
+        object.remove(META_KEY);
+    }
+    Some(removed)
 }
 
 // ===========================================================================
