@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v2.5
 milestone_name: MCP Spec 2026-07-28
 status: executing
-stopped_at: Phase 113 context gathered
-last_updated: "2026-07-25T02:47:12.422Z"
-last_activity: 2026-07-25 -- Phase 113 planning complete
+stopped_at: Completed 113-01-PLAN.md
+last_updated: "2026-07-25T03:32:03.223Z"
+last_activity: 2026-07-25
 progress:
   total_phases: 71
-  completed_phases: 1
-  total_plans: 23
-  completed_plans: 10
-  percent: 1
+  completed_phases: 57
+  total_plans: 294
+  completed_plans: 282
+  percent: 80
 ---
 
 # Project State
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-07-22) · .planning/ROADMAP.md (v2.5 milestone, Phases 112-119) · .planning/REQUIREMENTS.md (38 v1 reqs, 38/38 mapped) · .planning/research/SUMMARY.md (v2.5 research, HIGH confidence)
 
 **Core value:** One pmcp server binary transparently serves both MCP 2025-11-25 and 2026-07-28 clients via per-request negotiation — v2 as the strategic primary path (stateless/Lambda-first, Tasks, MCP Apps), v1 as a cleanly severable compatibility layer. The whole milestone stays additive (2.x minor).
-**Current focus:** Phase 112 — version-plumbing-spine
+**Current focus:** Phase 113 — stateless-http-multi-round-trip-elicitation
 
 ## Current Position
 
-Phase: 999.1
-Plan: Not started
+Phase: 113 (stateless-http-multi-round-trip-elicitation) — EXECUTING
+Plan: 2 of 13
 Status: Ready to execute
-Last activity: 2026-07-25 -- Phase 113 planning complete
+Last activity: 2026-07-25
 
 ## v2.5 Phase Plan (8 phases, 38 requirements)
 
@@ -108,6 +108,10 @@ Decisions are logged in PROJECT.md Key Decisions table. Decisions framing this m
 - [Phase 112]: 112-10: server/discover made LIVE in production on the HTTP transport (Gap A closed, VERS-04/SC#3) via classify-then-continue — a crate-LOCAL HttpIngress::{Public,Discover} in BOTH POST parse entrypoints; TransportMessage public variants untouched so semver stays MINOR (223 checks pass)
 - [Phase 112]: 112-10: discover CONTINUES through the SAME pipeline (session → run_v2_header_gate_raw running the SAME classify_v2_request matrix → legacy-version → auth → dispatch → event store → per-path assembly); NOT an early return — auth-provider 401 + response-middleware e2e prove no bypass (findings #1/#3/#4)
 - [Phase 112]: 112-10: discover projection consolidated into ONE shared build_discover_response free fn (ServerCore wrappers dispatch_internal_client_request/handle_discover DELETED, no #[allow(dead_code)] remains); v1/non-opted-in discover → -32601@200 with original id (deliberate benign D-10 change from pre-112 PARSE_ERROR 400, documented in code)
+- [Phase ?]: 113-01: spec verdict held PENDING (no schema/2026-07-28); the three v2 transport error codes landed ONLY under a written ## Recorded Exception naming developer/date/source-commit, with a binding plan-12 re-verification whose failure mode is phase-reopening, not advisory
+- [Phase ?]: 113-01: DRIFT-1 adjudicated — Phase-112 D-05 stays LOCKED (Mcp-Name required on EVERY v2 request) despite the draft transport spec requiring it only for tools/call|resources/read|prompts/get; plan 04 keeps the rule, plan 11 marks affected conformance header scenarios KNOWN-FAILING rather than loosening the fail-closed gate
+- [Phase ?]: 113-01: ring 0.17 + zeroize 1.8 promoted to explicit optional deps under streamable-http with zeroize default=[alloc] ON / derive OFF; zero-new-crates proven as a MEASURED lockfile package-name delta (728->728 byte-identical) plus cargo tree -p pmcp cleanliness, never an absolute count against the workspace-shared lockfile
+- [Phase ?]: 113-01: plan 11 builds its conformance scenario manifest from 113-SPEC-RECHECK.md Section B (23 sep-2322 check ids / 14 classes @ pin a8651182), NOT the 113-RESEARCH.md table which omits 4 ids and misreports a class name as a check id
 
 ### Pending Todos
 
@@ -143,9 +147,9 @@ Items deferred by design for this milestone (design §7 / REQUIREMENTS v2):
 
 ## Session Continuity
 
-Last session: 2026-07-24T23:11:41.306Z
-Stopped at: Phase 113 context gathered
-Resume file: .planning/phases/113-stateless-http-multi-round-trip-elicitation/113-CONTEXT.md
+Last session: 2026-07-25T03:32:03.217Z
+Stopped at: Completed 113-01-PLAN.md
+Resume file: None
 
 ## Performance Metrics
 
@@ -177,3 +181,4 @@ Resume file: .planning/phases/113-stateless-http-multi-round-trip-elicitation/11
 | Phase 112 P08 | 11min | 1 tasks | 1 files |
 | Phase 112 P9 | 40 | 3 tasks | 4 files |
 | Phase 112 P10 | 50 | 3 tasks | 5 files |
+| Phase 113 P01 | 28min | 3 tasks | 3 files |
