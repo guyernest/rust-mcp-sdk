@@ -152,6 +152,110 @@ mod tests {
     }
 
     #[test]
+    fn elicit_request_form_mode_is_optional() {
+        // The 2026-07-28 schema makes `ElicitRequestFormParams.mode` OPTIONAL
+        // (implicit form). A conformant server omits it, and the derived
+        // internally-tagged Deserialize used to reject that with
+        // "missing field `mode`" — breaking the client half of CLNT-02.
+        let params: ElicitRequestParams = serde_json::from_value(json!({
+            "message": "What is your name?",
+            "requestedSchema": { "type": "object" }
+        }))
+        .expect("a mode-less form elicitation must deserialize");
+        match params {
+            ElicitRequestParams::Form {
+                message,
+                requested_schema,
+            } => {
+                assert_eq!(message, "What is your name?");
+                assert_eq!(requested_schema["type"], "object");
+            },
+            ElicitRequestParams::Url { .. } => panic!("Expected Form variant"),
+        }
+    }
+
+    #[test]
+    fn elicit_request_explicit_form_mode_still_deserializes() {
+        let params: ElicitRequestParams = serde_json::from_value(json!({
+            "mode": "form",
+            "message": "hi",
+            "requestedSchema": {}
+        }))
+        .expect("an explicit form mode must still deserialize");
+        assert!(matches!(params, ElicitRequestParams::Form { .. }));
+    }
+
+    #[test]
+    fn elicit_request_url_mode_still_requires_its_fields() {
+        let params: ElicitRequestParams = serde_json::from_value(json!({
+            "mode": "url",
+            "message": "auth",
+            "elicitationId": "auth-1",
+            "url": "https://example.com"
+        }))
+        .expect("a complete url elicitation must deserialize");
+        assert!(matches!(params, ElicitRequestParams::Url { .. }));
+
+        // `mode: "url"` stays REQUIRED and so do its fields — a url elicitation
+        // missing `elicitationId` or `url` must NOT silently fall back to form.
+        assert!(serde_json::from_value::<ElicitRequestParams>(
+            json!({ "mode": "url", "message": "auth", "url": "https://example.com" })
+        )
+        .is_err());
+        assert!(serde_json::from_value::<ElicitRequestParams>(
+            json!({ "mode": "url", "message": "auth", "elicitationId": "auth-1" })
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn elicit_request_rejects_an_unknown_mode() {
+        assert!(serde_json::from_value::<ElicitRequestParams>(json!({
+            "mode": "bogus",
+            "message": "hi",
+            "requestedSchema": {}
+        }))
+        .is_err());
+    }
+
+    #[test]
+    fn elicit_request_rejects_a_non_string_mode() {
+        assert!(serde_json::from_value::<ElicitRequestParams>(json!({
+            "mode": 7,
+            "message": "hi",
+            "requestedSchema": {}
+        }))
+        .is_err());
+    }
+
+    #[test]
+    fn elicit_request_form_still_serializes_the_mode_tag() {
+        // v1 byte compatibility (D-10): serialization is UNCHANGED — the enum must
+        // keep emitting `"mode":"form"` even though deserialization now tolerates
+        // its absence.
+        let params = ElicitRequestParams::Form {
+            message: "hi".to_string(),
+            requested_schema: json!({}),
+        };
+        let value = serde_json::to_value(&params).unwrap();
+        assert_eq!(value["mode"], "form");
+        assert_eq!(value["message"], "hi");
+        assert!(value["requestedSchema"].is_object());
+        assert_eq!(
+            serde_json::to_string(&params).unwrap(),
+            r#"{"mode":"form","message":"hi","requestedSchema":{}}"#
+        );
+    }
+
+    #[test]
+    fn elicit_request_form_missing_required_fields_is_an_error() {
+        // A mode-less object that is not a valid form must still fail — the
+        // implicit-form default must not swallow malformed input.
+        assert!(serde_json::from_value::<ElicitRequestParams>(json!({ "message": "hi" })).is_err());
+        assert!(serde_json::from_value::<ElicitRequestParams>(json!({})).is_err());
+    }
+
+    #[test]
     fn elicit_result_accept() {
         let mut content = HashMap::new();
         content.insert("name".to_string(), json!("Alice"));
