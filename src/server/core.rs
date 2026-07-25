@@ -1150,7 +1150,7 @@ impl ResponseDisposition {
     pub(crate) fn as_wire_str(self) -> &'static str {
         match self {
             Self::Complete => "complete",
-            Self::InputRequired => "input_required",
+            Self::InputRequired => crate::types::mrtr::INPUT_REQUIRED_RESULT_TYPE,
             Self::Task => "task",
         }
     }
@@ -1196,9 +1196,28 @@ pub(crate) fn inject_v2_result_envelope(
         return;
     };
 
-    // Collision-safe: respect a handler-set `resultType` (the 113/114 path).
-    obj.entry("resultType".to_string())
-        .or_insert_with(|| Value::String(disposition.as_wire_str().to_string()));
+    // The SOLE writer of `resultType`.
+    //
+    // A non-`Complete` disposition is server-SELECTED (phases 113/114 decide it
+    // at dispatch), so it is authoritative and overwrites: a handler cannot
+    // mislabel an `input_required` or `task` result by pre-setting the key.
+    // `Complete` stays collision-safe `or_insert`, preserving the Phase-112
+    // contract that a handler may label its own ordinary result.
+    //
+    // Previously `seal_input_required` ALSO wrote this key, which made that
+    // branch's `or_insert` a guaranteed no-op — the disposition looked
+    // load-bearing while the wire value actually came from the other writer.
+    // Plan 09's `serverInfo` relocation edits this function, so a second writer
+    // would have silently decided whether `input_required` results followed it.
+    if disposition == ResponseDisposition::Complete {
+        obj.entry("resultType".to_string())
+            .or_insert_with(|| Value::String(disposition.as_wire_str().to_string()));
+    } else {
+        obj.insert(
+            "resultType".to_string(),
+            Value::String(disposition.as_wire_str().to_string()),
+        );
+    }
     // Attach serverInfo on the v2 object result; never overwrite a handler value.
     obj.entry("serverInfo".to_string())
         .or_insert_with(|| serde_json::to_value(server_info).unwrap_or(Value::Null));
@@ -1351,20 +1370,24 @@ pub(crate) fn mrtr_binding_parts(request: &Request) -> Option<(&'static str, Val
     let Request::Client(boxed) = request else {
         return None;
     };
-    let (method, mut params) = match boxed.as_ref() {
-        ClientRequest::CallTool(req) => (
-            "tools/call",
-            serde_json::json!({ "name": req.name, "arguments": req.arguments }),
-        ),
-        ClientRequest::GetPrompt(req) => (
-            "prompts/get",
-            serde_json::json!({ "name": req.name, "arguments": req.arguments }),
-        ),
-        ClientRequest::ReadResource(req) => {
-            ("resources/read", serde_json::json!({ "uri": req.uri }))
-        },
-        _ => return None,
-    };
+    // Derive (method, params) from serde, NOT from a hand-written match.
+    //
+    // `ClientRequest` is `#[serde(tag = "method", content = "params")]`, so this
+    // IS the canonical variant->wire mapping and cannot fall behind a new
+    // variant. The previous three-arm match re-spelled the method strings and
+    // the salient keys that `MRTR_METHODS` already owns, which made the failure
+    // mode silent AND security-relevant: adding a fourth table row made
+    // `mrtr_eligible` and `logical_name_key` correct while this function still
+    // returned `None`, so `mrtr_ingest` short-circuited to `Inert` and a
+    // presented `requestState` was NEVER VERIFIED.
+    let mut frame = serde_json::to_value(boxed.as_ref()).ok()?;
+    // Resolve through the table so the returned `&'static str` IS the row's own
+    // spelling — adding a row is now the only edit a new MRTR method needs.
+    let method = crate::types::mrtr::mrtr_method_static(frame.get("method")?.as_str()?)?;
+    let mut params = frame.get_mut("params").map_or(Value::Null, Value::take);
+    // The digest whitelists only the row's salient keys, so the extra fields the
+    // serialized form carries (`_meta`, `task`) never reach it — the bound shape
+    // is byte-identical to the hand-built one.
     crate::types::mrtr::splice_mrtr_params(
         &mut params,
         &crate::types::mrtr::MrtrRequestParams::default(),
@@ -1685,10 +1708,9 @@ fn seal_input_required(
     let result = value
         .as_object_mut()
         .ok_or("an input_required result must be a JSON object")?;
-    result.insert(
-        "resultType".to_string(),
-        Value::String(ResponseDisposition::InputRequired.as_wire_str().to_string()),
-    );
+    // `resultType` is deliberately NOT written here: the returned
+    // `ResponseDisposition::InputRequired` is threaded to
+    // `inject_v2_result_envelope`, which is the single writer of that key.
     result.insert(
         crate::types::mrtr::INPUT_REQUESTS_KEY.to_string(),
         input_requests,
@@ -1749,7 +1771,10 @@ impl ProtocolHandler for ServerCore {
         // into the context threaded into dispatch. Inert on v1 / non-opted-in /
         // non-eligible requests, so the legacy path is unchanged.
         #[cfg(feature = "streamable-http")]
-        let mrtr_target = mrtr_binding_parts(&request);
+        let mrtr_target = protocol_context
+            .as_ref()
+            .filter(|context| context.era == crate::types::protocol::Era::V2)
+            .and_then(|_| mrtr_binding_parts(&request));
         #[cfg(feature = "streamable-http")]
         let mrtr_principal = MrtrPrincipal {
             authenticated_subject: auth_context.as_ref().map(|ctx| ctx.subject.as_str()),
@@ -3999,6 +4024,19 @@ mod tests {
                 },
             );
             assert_eq!(disposition, ResponseDisposition::InputRequired);
+
+            // `resultType` is written by the envelope step, NOT by egress —
+            // there is exactly one writer of that key. Run the real envelope
+            // here so this test pins the END-TO-END contract (egress SELECTS
+            // the disposition, `inject_v2_result_envelope` EMITS it) rather
+            // than asserting a field without pinning who produced it.
+            assert!(
+                result_of(&response).get("resultType").is_none(),
+                "egress must not write resultType — the envelope owns it"
+            );
+            let server_info = Implementation::new("test", "1.0.0");
+            inject_v2_result_envelope(&mut response, Some(&context), &server_info, disposition);
+
             let result = result_of(&response);
             assert_eq!(result["resultType"], "input_required");
             assert!(

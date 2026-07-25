@@ -205,12 +205,6 @@ pub fn open_request_state(
 #[cfg(all(feature = "streamable-http", not(target_arch = "wasm32")))]
 pub const ANONYMOUS_PRINCIPAL: &str = crate::server::core::ANONYMOUS_PRINCIPAL;
 
-/// The reserved result-`_meta` key a handler sets to signal "I need more input".
-///
-/// Re-exported for symmetry with the other MRTR test seams; the underlying
-/// constant is already `pub` at [`crate::types::mrtr::MRTR_SIGNAL_META_KEY`].
-pub const MRTR_SIGNAL_META_KEY: &str = crate::types::mrtr::MRTR_SIGNAL_META_KEY;
-
 #[cfg(test)]
 mod tests {
     use super::assert_roundtrips_through_client;

@@ -606,9 +606,12 @@ async fn map_unparsed_body_for_v2(
     if envelope.get("id").is_none() {
         return v1_response;
     }
-    // The SAME raw-body reader the header gate uses, so an unknown method is
-    // classified against exactly the era its sibling requests would get.
-    let raw_meta = raw_params_meta(raw_body);
+    // The SAME reader the header gate uses, so an unknown method is classified
+    // against exactly the era its sibling requests would get. Reads the
+    // ALREADY-PARSED `envelope` above rather than re-parsing `raw_body` — this
+    // is an attacker-supplied body, and parsing it twice per request bought
+    // nothing.
+    let raw_meta = params_meta_of(Some(&envelope));
     let resolved = {
         let server = state.server.lock().await;
         server.resolve_raw_meta_protocol_context(raw_meta.as_ref())
@@ -904,19 +907,14 @@ fn method_and_name_of(value: Option<&serde_json::Value>) -> (Option<String>, Opt
     let Some(value) = value else {
         return (None, None);
     };
-    let method = value
-        .get("method")
-        .and_then(serde_json::Value::as_str)
-        .map(str::to_string);
-    // The logical-name params key is method-derived via the single `logical_name_key`
-    // table; non-name-bearing methods yield `None` (presence-only cross-check).
-    let name = method
-        .as_deref()
-        .and_then(crate::types::mrtr::logical_name_key)
-        .and_then(|name_key| value.get("params").and_then(|p| p.get(name_key)))
-        .and_then(serde_json::Value::as_str)
-        .map(str::to_string);
-    (method, name)
+    // Read through the ONE shared routing-pair reader — the same function the
+    // CLIENT emits its `Mcp-Method` / `Mcp-Name` from. These two are halves of a
+    // single cross-check; deriving them separately is how they drift.
+    // Non-name-bearing methods yield `None` (presence-only cross-check).
+    match crate::types::mrtr::frame_routing_pair(value) {
+        Some((method, name)) => (Some(method.to_string()), name),
+        None => (None, None),
+    }
 }
 
 /// Emit the three required v2 headers outbound WITHOUT panicking (T-112-13).
@@ -987,6 +985,12 @@ fn negotiation_error_to_gate_reject(
 /// mirrors the `#[serde(rename = "_meta", alias = "meta")]` ingress contract the
 /// typed structs carry (D-113-A) and the two can never disagree about what counts
 /// as a `_meta` object. Never panics on adversarial bytes (T-112-13).
+///
+/// Test-only: every production caller now holds an already-parsed body and goes
+/// through [`params_meta_of`] instead, so this byte-slice form survives purely as
+/// the unit tests' entry point (its sibling `extract_body_method_and_name` is
+/// `#[cfg(test)]` for the same reason).
+#[cfg(test)]
 fn raw_params_meta(body: &[u8]) -> Option<serde_json::Value> {
     params_meta_of(raw_body_json(body).as_ref())
 }
@@ -1011,11 +1015,9 @@ fn params_meta_of(value: Option<&serde_json::Value>) -> Option<serde_json::Value
 /// `Null` is the "no MRTR fields" input for
 /// [`crate::types::mrtr::extract_mrtr_params`], which returns the default
 /// (both fields absent) for any non-object value.
-fn params_of(value: Option<&serde_json::Value>) -> serde_json::Value {
-    value
-        .and_then(|v| v.get("params"))
-        .cloned()
-        .unwrap_or(serde_json::Value::Null)
+fn params_of(value: Option<&serde_json::Value>) -> &serde_json::Value {
+    const NO_PARAMS: &serde_json::Value = &serde_json::Value::Null;
+    value.and_then(|v| v.get("params")).unwrap_or(NO_PARAMS)
 }
 
 // ---------------------------------------------------------------------------
@@ -1064,7 +1066,7 @@ fn attach_v2_mrtr_params(
     let Some(ctx) = context else {
         return (None, outcome);
     };
-    match crate::types::mrtr::extract_mrtr_params(&params_of(body_json)) {
+    match crate::types::mrtr::extract_mrtr_params(params_of(body_json)) {
         Ok(mrtr) => (Some(ctx.with_mrtr_params(mrtr)), outcome),
         Err(reason) => {
             tracing::warn!(

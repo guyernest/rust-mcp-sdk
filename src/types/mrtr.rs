@@ -147,6 +147,18 @@ pub(crate) fn mrtr_eligible(method: &str) -> bool {
     mrtr_row(method).is_some()
 }
 
+/// Resolve a wire method string to the TABLE's `&'static str` for that row.
+///
+/// Lets a caller that only has a borrowed method name (e.g. one read off a
+/// serialized request frame) obtain the table-owned spelling, so its result is
+/// derived from [`MRTR_METHODS`] rather than from a match the caller wrote. That
+/// is what keeps "add a row" the ONLY edit needed to make a new method bind: a
+/// caller resolving through here cannot return `None` for a method the table
+/// considers eligible.
+pub(crate) fn mrtr_method_static(method: &str) -> Option<&'static str> {
+    Some(mrtr_row(method)?.method)
+}
+
 /// Single source of truth for a name-bearing method's logical-name location.
 ///
 /// `tools/call` and `prompts/get` carry it in `params.name`; `resources/read` in
@@ -166,6 +178,28 @@ pub(crate) fn logical_name_key(method: &str) -> Option<&'static str> {
 pub(crate) fn logical_name_of(method: &str, params: &Value) -> Option<String> {
     let key = logical_name_key(method)?;
     params.get(key).and_then(Value::as_str).map(str::to_string)
+}
+
+/// Read the `(method, logical name)` routing pair off a raw JSON-RPC frame.
+///
+/// The ONE implementation of the `Mcp-Method` / `Mcp-Name` derivation, shared by
+/// the two ends of that contract: the client emits the pair as headers, the
+/// server reads it back and cross-checks it against the body. Those two are
+/// halves of a single cross-check, so they must not derive it separately — they
+/// previously each hand-rolled this traversal, which left
+/// [`logical_name_of`] with no production caller at all and let the two halves
+/// disagree (one yielding `""` for a missing name, the other `None`).
+///
+/// Returns `None` only when the frame carries no string `method`. A `Some` with
+/// a `None` name means the method is not name-bearing, or carries no string at
+/// its logical-name key — both of which the presence-only cross-check treats
+/// the same way.
+pub(crate) fn frame_routing_pair(frame: &Value) -> Option<(&str, Option<String>)> {
+    let method = frame.get("method")?.as_str()?;
+    let name = frame
+        .get("params")
+        .and_then(|params| logical_name_of(method, params));
+    Some((method, name))
 }
 
 // ===========================================================================

@@ -47,11 +47,9 @@ use async_trait::async_trait;
 use common::v2::{post, spawn_default_config, v2_body, v2_headers, V1, V2};
 use pmcp::server::auth::{AuthContext, AuthProvider};
 use pmcp::server::{PromptHandler, Server};
-use pmcp::testing::{
-    mint_request_state, open_request_state, ANONYMOUS_PRINCIPAL, MRTR_SIGNAL_META_KEY,
-};
+use pmcp::testing::{mint_request_state, open_request_state, ANONYMOUS_PRINCIPAL};
 use pmcp::types::elicitation::ElicitRequestParams;
-use pmcp::types::mrtr::{InputRequest, InputRequests, MrtrSignal};
+use pmcp::types::mrtr::{InputRequest, InputRequests, MrtrSignal, MRTR_SIGNAL_META_KEY};
 use pmcp::types::protocol::error_codes::INVALID_PARAMS;
 use pmcp::types::protocol::ProtocolVersion;
 use pmcp::types::GetPromptResult;

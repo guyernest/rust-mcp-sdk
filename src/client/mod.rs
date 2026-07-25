@@ -2638,6 +2638,17 @@ impl<T: Transport> Client<T> {
     ) -> Result<crate::types::JSONRPCResponse> {
         use crate::shared::protocol_helpers::create_request;
 
+        // `create_request` CONSUMES its argument, so the typed value has to be
+        // cloned to survive for the v1 branch — but the v2 branch of
+        // `dispatch_request` never reads `typed`, and the clone is a full deep
+        // copy of the request (arguments payload and all) held across the whole
+        // network round trip. Branch first so v2 pays nothing; v1 is unchanged.
+        if self.is_v2() {
+            let jsonrpc_request = create_request(request_id.clone(), request);
+            return self
+                .dispatch_request(request_id, None, jsonrpc_request)
+                .await;
+        }
         let jsonrpc_request = create_request(request_id.clone(), request.clone());
         self.dispatch_request(request_id, Some(request), jsonrpc_request)
             .await
@@ -3275,8 +3286,11 @@ impl<T: Transport> ClientBuilder<T> {
     /// never be picked by the v1 negotiation fallback), which is why the v2
     /// constant is unioned in here rather than added to that table.
     fn is_selectable_protocol_version(version: &str) -> bool {
+        // Union via the `protocol_era` classifier rather than an equality check
+        // against the v2 constant, so a second v2-generation version becomes
+        // selectable automatically instead of silently failing opt-in.
         crate::types::SUPPORTED_PROTOCOL_VERSIONS.contains(&version)
-            || version == crate::types::protocol::PROTOCOL_VERSION_2026_07_28
+            || crate::types::protocol::protocol_era(version) == crate::types::protocol::Era::V2
     }
 
     /// Set whether to enforce strict capabilities.

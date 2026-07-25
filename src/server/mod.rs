@@ -1429,7 +1429,10 @@ impl Server {
         // threaded into dispatch. Inert on v1 / non-opted-in / non-eligible
         // requests, so the legacy path is byte-for-byte unchanged.
         #[cfg(feature = "streamable-http")]
-        let mrtr_target = crate::server::core::mrtr_binding_parts(&request);
+        let mrtr_target = protocol_context
+            .as_ref()
+            .filter(|context| context.era == crate::types::protocol::Era::V2)
+            .and_then(|_| crate::server::core::mrtr_binding_parts(&request));
         #[cfg(feature = "streamable-http")]
         let mrtr_principal = crate::server::core::MrtrPrincipal {
             authenticated_subject: auth_context.as_ref().map(|ctx| ctx.subject.as_str()),

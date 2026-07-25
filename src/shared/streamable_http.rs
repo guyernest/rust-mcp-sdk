@@ -5,7 +5,7 @@ use crate::shared::http_constants::{
 };
 use crate::shared::sse_parser::SseParser;
 use crate::shared::{Transport, TransportMessage};
-use crate::types::mrtr::{encode_header_value, logical_name_key};
+use crate::types::mrtr::encode_header_value;
 use async_trait::async_trait;
 use bytes::Bytes;
 use http_body_util::{BodyExt, Full};
@@ -1152,7 +1152,16 @@ impl Transport for StreamableHttpTransport {
     /// separate [`Self::v2_mode`] flag that gates every v2-only behavior. The
     /// two are distinct on purpose — see that field's docs.
     fn set_negotiated_protocol_version(&mut self, version: Option<String>) {
-        let is_v2 = version.as_deref() == Some(crate::types::protocol::PROTOCOL_VERSION_2026_07_28);
+        // Classify through `protocol_era`, the single source of truth, NOT by
+        // string equality against the v2 constant. `Client::era()` already goes
+        // through it, and the two MUST agree: if a second v2-generation version
+        // string is ever added to the classifier, an equality check here would
+        // leave the client stamping `_meta` and calling `send_raw` while the
+        // transport silently stayed in v1 emission mode — no `Mcp-Method` /
+        // `Mcp-Name`, session id leaked back on — and every request would 400
+        // with `HEADER_MISMATCH`. Compile-time silent, runtime total.
+        let is_v2 = version.as_deref().map(crate::types::protocol::protocol_era)
+            == Some(crate::types::protocol::Era::V2);
         self.set_protocol_version(version);
         self.v2_mode.store(is_v2, Ordering::Relaxed);
     }
@@ -1189,12 +1198,13 @@ impl Transport for StreamableHttpTransport {
 /// Pure and non-panicking on arbitrary bytes.
 fn v2_routing_headers(body: &[u8]) -> Option<(String, String)> {
     let value = serde_json::from_slice::<serde_json::Value>(body).ok()?;
-    let method = value.get("method")?.as_str()?.to_string();
-    let name = logical_name_key(&method)
-        .and_then(|name_key| value.get("params").and_then(|params| params.get(name_key)))
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or_default();
-    Some((method, encode_header_value(name)))
+    // Derived through the ONE shared routing-pair reader, so the emitting half
+    // and the server's cross-checking half cannot drift apart.
+    let (method, name) = crate::types::mrtr::frame_routing_pair(&value)?;
+    Some((
+        method.to_string(),
+        encode_header_value(name.as_deref().unwrap_or_default()),
+    ))
 }
 
 /// A trait for providing authentication tokens.

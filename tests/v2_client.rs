@@ -421,8 +421,11 @@ async fn mcp_name_from_name_for_prompts_get() {
 
     handle.abort();
     let prompt = result.expect("a v2 prompts/get must be accepted");
-    assert!(
-        prompt.messages.is_empty() || !prompt.messages.is_empty(),
-        "the handler ran"
+    // Assert on something the handler actually produces. The previous
+    // `is_empty() || !is_empty()` was a tautology and pinned nothing.
+    assert_eq!(
+        prompt.description.as_deref(),
+        Some("greeting"),
+        "the response must come from the registered GreetingPrompt handler"
     );
 }
