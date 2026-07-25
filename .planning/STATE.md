@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v2.5
 milestone_name: MCP Spec 2026-07-28
 status: executing
-stopped_at: Completed 113-04-PLAN.md
-last_updated: "2026-07-25T14:34:24.260Z"
+stopped_at: Completed 113-05-PLAN.md
+last_updated: "2026-07-25T16:49:08.589Z"
 last_activity: 2026-07-25
 progress:
   total_phases: 71
   completed_phases: 57
   total_plans: 294
-  completed_plans: 285
+  completed_plans: 286
   percent: 80
 ---
 
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-07-22) · .planning/ROADMAP.md (v2.5 mil
 ## Current Position
 
 Phase: 113 (stateless-http-multi-round-trip-elicitation) — EXECUTING
-Plan: 5 of 13
+Plan: 6 of 13
 Status: Ready to execute
 Last activity: 2026-07-25
 
@@ -127,6 +127,11 @@ Decisions are logged in PROJECT.md Key Decisions table. Decisions framing this m
 - [Phase ?]: [Phase 113]: 113-04: D-113-D RESOLVED by owner option 3 — the five _meta field additions were REVERTED and D-113-B re-resolved by reading params._meta off the RAW body at HTTP ingress (resolve_raw_meta_protocol_context + raw_params_meta), which covers every method with ZERO public API change; semver-checks back to 223/223 pass, no update required, milestone stays additive 2.x
 - [Phase ?]: [Phase 113]: 113-04: the typed and raw v2 gates COLLAPSED into one — there is now a single era-detection path on the HTTP transport reading the spec-spelled _meta from the raw body, closing the plan-02 'two ingress paths disagree' defect; the typed extract_request_meta_value survives only for the non-HTTP transports that have no raw bytes, and both readers agree on spelling via D-113-A
 - [Phase ?]: [Phase 113]: 113-04: ACCEPTED COST (do not re-litigate in plans 06/09/10) — handlers reach the per-request _meta through the ProtocolContext-derived RequestHandlerExtra accessors, NOT through a typed _meta field on a list-request struct; adding such a field to a constructible pub struct is a MAJOR semver break
+- [Phase ?]: [Phase 113]: 113-05: the client mode seam is THREE defaulted Transport methods — set_negotiated_protocol_version + supports_negotiated_protocol_version + send_raw; the third exists because neither params._meta on list-shaped methods nor server/discover can travel through the typed TransportMessage::Request without a MAJOR semver break (D-113-D / Phase-112 D-10)
+- [Phase ?]: [Phase 113]: 113-05: on v2 the CLIENT assembles and sends the RAW JSON-RPC frame (splice_v2_meta then send_raw) so every method carries the reserved _meta era signal with zero public API change; v1 still sends the typed message and is byte-identical
+- [Phase ?]: [Phase 113]: 113-05: with_protocol_version returns Result<Self> (build() cannot become fallible) and validates against SUPPORTED_PROTOCOL_VERSIONS UNION 2026-07-28 — the v2 constant is deliberately absent from that table (Phase-112 Pitfall 1)
+- [Phase ?]: [Phase 113]: 113-05: the transport v2 era is a PRIVATE latch written only by the client seam, never derived from protocol_version — process_response_headers overwrites that field from the server, so a rogue echo of MCP-Protocol-Version: 2026-07-28 would otherwise flip a v1 client into v2 mode and break its session
+- [Phase ?]: [Phase 113]: 113-05: server_discover takes &mut self and STORES its projection (that is what re-arms era-aware assert_capability); it is never called implicitly and never used to CHOOSE an era (D-08)
 
 ### Pending Todos
 
@@ -167,8 +172,8 @@ Items deferred by design for this milestone (design §7 / REQUIREMENTS v2):
 
 ## Session Continuity
 
-Last session: 2026-07-25T14:34:24.254Z
-Stopped at: Completed 113-04-PLAN.md
+Last session: 2026-07-25T16:49:08.578Z
+Stopped at: Completed 113-05-PLAN.md
 Resume file: None
 
 ## Performance Metrics
@@ -205,3 +210,4 @@ Resume file: None
 | Phase 113 P02 | 42min | 3 tasks | 7 files |
 | Phase 113 P03 | 78min | 3 tasks tasks | 7 files files |
 | Phase 113 P04 | 165min | 5 tasks | 10 files |
+| Phase 113 P05 | 105min | 3 tasks | 6 files |

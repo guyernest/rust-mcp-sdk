@@ -2295,7 +2295,7 @@ Plans:
 
 **Wave 3** *(blocked on Wave 2)*
 
-- [ ] 113-05-PLAN.md — CLNT-01 client v2 transport: the additive defaulted `Transport::set_negotiated_protocol_version` mode seam, validated `with_protocol_version` opt-in, per-request `_meta` with registry-derived capabilities and trace-context merge, no-handshake path, ERA-AWARE capability enforcement, `server/discover`, the three required outbound headers (empty `Mcp-Name` for name-less methods) with sentinel encoding, and session-id suppression
+- [x] 113-05-PLAN.md — CLNT-01 client v2 transport: the additive defaulted `Transport::set_negotiated_protocol_version` mode seam, validated `with_protocol_version` opt-in, per-request `_meta` with registry-derived capabilities and trace-context merge, no-handshake path, ERA-AWARE capability enforcement, `server/discover`, the three required outbound headers (empty `Mcp-Name` for name-less methods) with sentinel encoding, and session-id suppression
 - [ ] 113-06-PLAN.md — MRTR server ingress: MRTR params carried on `ProtocolContext`, extracted once from the raw v2 body with malformed input REJECTED at -32602, verified against `AuthContext.subject` (fail-closed for unauthenticated callers on auth-configured servers) + live params, D-15 routing with `Reelicit` = strip-and-RE-RUN the handler (round preserved on expiry), `RequestHandlerExtra` accessors, and the live verdict suite
 
 **Wave 4** *(blocked on Wave 3)*
@@ -2405,7 +2405,7 @@ Plans:
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 112. Version Plumbing Spine | 10/10 | Complete    | 2026-07-23 |
-| 113. Stateless HTTP + MRTR | 4/13 | In Progress|  |
+| 113. Stateless HTTP + MRTR | 5/13 | In Progress|  |
 | 114. Tasks Extension Migration | 0/TBD | Not started | - |
 | 115. JSON Schema 2020-12 + Caching Hints | 0/TBD | Not started | - |
 | 116. Auth Hardening SEPs | 0/TBD | Not started | - |
