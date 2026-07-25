@@ -940,32 +940,70 @@ No framework install is needed.
 
 ---
 
-## Open Questions
+## Open Questions (RESOLVED)
+
+> **Status: all 6 resolved before planning was finalized (2026-07-24).** Questions 1, 2 and
+> 6 were answered by owner decisions D-13/D-14/D-15 in `113-CONTEXT.md`; questions 3, 4 and
+> 5 were adopted as-recommended and are cited to the specific plan and task that implements
+> them. No question is left open for the executor to decide.
 
 1. **Does MRTR need to work on the wasm server (`WasmServerCore`)?**
    - What we know: `src/server/core.rs` (where `ResponseDisposition`/`inject_v2_result_envelope` live) is `#[cfg(not(target_arch="wasm32"))]`; the wasm server is the separate minimal `WasmServerCore`. `ring` is native-only in practice.
    - What's unclear: whether Cloudflare-Workers-style wasm pmcp servers are expected to serve v2 MRTR.
    - Recommendation: assume **no** for this phase (HTTP is the mandated surface per CONTEXT.md). If yes, swap `ring` → `chacha20poly1305` and site the token module outside the native-only tree. Confirm with owner before Wave 1.
+   - **RESOLVED: no** — locked by **D-14** (`113-CONTEXT.md`): MRTR `requestState` AEAD is
+     native-only this phase using `ring`; `WasmServerCore` gets no MRTR in Phase 113.
+     Adopted by **plan 03 Task 1**, which gates `src/server/request_state.rs` on
+     `#[cfg(all(feature = "streamable-http", not(target_arch = "wasm32")))]` and verifies
+     `cargo build --lib --target wasm32-unknown-unknown`. The `chacha20poly1305` swap is
+     deferred until wasm MRTR is actually needed.
 
 2. **Opt-in `subscriptions/listen` stream: in or out of Phase 113?** (see A7)
    - What we know: conditional mandate; capabilities-off is conformant; there is no conformant polling alternative.
    - Recommendation: implement the capability-gating + the tripwire test **in this phase** (cheap, and it makes HTTP-04 honestly satisfiable), and treat the SSE stream implementation as a separately-plannable slice within the phase that can be descoped to a follow-on if the wave budget is tight. Reword HTTP-04 either way.
+   - **RESOLVED: in** — locked by **D-13** (`113-CONTEXT.md`), which also resolves D-12: the
+     opt-in, capability-gated `subscriptions/listen` SSE stream ships in Phase 113. Adopted
+     by **plan 10** — Task 1 (subscription types, capability gate, advertise-implies-serve
+     tripwire), Task 2 (the long-lived SSE stream), Task 3 (live-SSE acceptance). D-11's
+     polling-over-Tasks stance remains the recommended enterprise default. HTTP-04's roadmap
+     wording stands; the opt-in nuance is reconciled by **plan 12 Task 3**.
 
 3. **Should `-32021 MissingRequiredClientCapability` be emitted by Phase 113 or Phase 114?**
    - What we know: the conformance `stateless` scenario tests it via a `test_missing_capability` tool; it is directly entangled with MRTR obligation 7.
    - Recommendation: **113**, alongside `-32020`/`-32022`, because MRTR is the feature that needs it. Keep the constants in the Phase-112 centralized table with locking tests.
+   - **RESOLVED: 113**, as recommended. Adopted by **plan 01 Task 3**, which adds
+     `MISSING_REQUIRED_CLIENT_CAPABILITY: i32 = -32021` to
+     `src/types/protocol/error_codes.rs` alongside `-32020`/`-32022` with locking tests;
+     **plan 09 Task 2** emits it when a server signals for an undeclared capability; and
+     **plan 11 Task 1**'s `input_required_result_capability_check` asserts HTTP 400 with an
+     OBJECT-shaped `data.requiredCapabilities` (threat T-113-32).
 
 4. **`x-mcp-header` / `Mcp-Param-{Name}` (SEP-2243) — which phase?** (see A8)
    - What we know: clients **MUST** support it; servers **MAY** use it; the header-mismatch validator must handle it.
    - Recommendation: raise as a milestone requirements gap. It is closest to CLNT-01's header work but is not in any current requirement. Do not silently absorb it into 113.
+   - **RESOLVED: not absorbed into 113**, as recommended. Raised as a milestone-level
+     requirements gap and adopted by **plan 12 Task 3**, whose `<automated>` verify greps
+     for `x-mcp-header` in BOTH `.planning/REQUIREMENTS.md` and `.planning/ROADMAP.md`, so
+     the gap cannot ship undocumented (threat T-113-42). No Phase-113 plan implements
+     `Mcp-Param-{Name}` mirroring.
 
 5. **Is `resultType: "task"` reachable from an MRTR retry?**
    - What we know: `ResultType` is an open union (`"complete" | "input_required" | string`); Phase 114 owns `"task"`.
    - Recommendation: the client MRTR loop must treat any non-`input_required` `resultType` as terminal (return to caller) so Phase 114 composes without touching the loop.
+   - **RESOLVED: as recommended.** Adopted by **plan 07 Task 3** (the bounded gather→resend
+     loop): any `resultType` other than `input_required` is terminal and is returned to the
+     caller unmodified, so Phase 114's `"task"` result composes without a loop change.
 
 6. **Key rotation for `PMCP_REQUEST_STATE_KEY`.**
    - What we know: D-03 locks a single env var; the key-id design (Pattern 3) naturally supports a set.
    - Recommendation: accept an optional second/previous key (e.g. `PMCP_REQUEST_STATE_KEY_PREVIOUS`) now. Retrofitting a key-id scheme after tokens are in the wild is a breaking change.
+   - **RESOLVED: accepted**, as recommended. Adopted by **plan 03 Task 1**:
+     `PMCP_REQUEST_STATE_KEY_PREVIOUS` (that exact spelling — the shared
+     `PMCP_REQUEST_STATE_KEY` prefix groups both vars for secret scanning) is read into the
+     codec's `accepting` set as **verify-only, never for minting**. **Plan 03 Task 2**'s
+     behavior list asserts a token minted under the previous key still yields
+     `Verdict::Ok`, and that an unknown key-id yields `Verdict::UnknownKey` rather than
+     `AuthFailed` (D-15).
 
 ---
 
