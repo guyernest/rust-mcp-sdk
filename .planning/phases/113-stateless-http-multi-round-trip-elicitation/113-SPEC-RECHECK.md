@@ -250,6 +250,70 @@ exists below, written by the developer at the Task 2 checkpoint. The `Cargo.toml
 Task 3 (the `ring` + `zeroize` promotion) is unaffected by this verdict — it is gated only on
 the package-legitimacy half of the Task 2 checkpoint.
 
+**The exception WAS granted.** See `## Recorded Exception` immediately below.
+
+---
+
+## Recorded Exception
+
+This section is the deliberate spending of the REQUIREMENTS.md "Out of Scope" rule against
+hard-coding `-3202x` error codes before the final schema, and of the VERS-06
+values-from-final-schema-only rule. It exists so that the decision is traceable to a named
+person, a date, and a specific source — not buried in a commit message.
+
+| Field | Value |
+|-------|-------|
+| **Granted by** | Guy Ernest (user) |
+| **Granted via** | `/gsd-execute-phase 113` — plan 113-01 Task 2 `gate="blocking-human"` checkpoint |
+| **Decision** | `approved; verdict: exception` (dependency half: `approved` for BOTH `ring` and `zeroize`) |
+| **UTC date** | 2026-07-24 (as stated by the developer at the checkpoint; the executing machine's UTC clock read 2026-07-25T03:0xZ at execution — both recorded rather than reconciled, so the audit trail is exact) |
+| **Rule being excepted** | REQUIREMENTS.md → Out of Scope → "Hard-coding new `-3202x`/`-32602` error codes before the final schema"; and VERS-06 ("v2 values are filled ONLY from the final 2026-07-28 schema.json") |
+| **Verdict at time of grant** | `PENDING` (no `schema/2026-07-28` directory upstream) |
+
+### Values landed under this exception
+
+Landed in `src/types/protocol/error_codes.rs`:
+
+| Rust constant | Value | Source identifier | HTTP status |
+|---------------|-------|-------------------|-------------|
+| `HEADER_MISMATCH` | `-32020` | `export const HEADER_MISMATCH = -32020;` | 400 |
+| `MISSING_REQUIRED_CLIENT_CAPABILITY` | `-32021` | `export const MISSING_REQUIRED_CLIENT_CAPABILITY = -32021;` | 400 |
+| `UNSUPPORTED_PROTOCOL_VERSION` | `-32022` | `export const UNSUPPORTED_PROTOCOL_VERSION = -32022;` | 400 |
+
+**Source of these values:** `schema/draft/schema.ts` @ commit
+`71e306956a4959c9655e5036be215d41986596e6`, dated 2026-07-16, in the
+`modelcontextprotocol/modelcontextprotocol` repository — lines 434 / 442 / 450. This is the
+**draft/RC** schema, NOT the published `schema/2026-07-28`. Full token-by-token evidence is in
+Section A above (A.3, A.4).
+
+Each constant's Rust doc comment cites this record and its verdict as the provenance of its
+numeric value, and five locking tests pin the values, their pairwise distinctness from each
+other and from every pre-existing constant, and their containment in the spec-reserved
+`-32020..=-32099` sub-range.
+
+### Re-verification obligation (binding)
+
+**Plan 12 Task 3 MUST re-verify these three values against the published `schema/2026-07-28`
+before flipping HTTP-01 or HTTP-02 — or any other requirement — to complete.**
+
+A mismatch between any value landed here and the published schema is a **phase-reopening
+event, not a warning**. It does not get recorded as an advisory, deferred to a follow-up, or
+absorbed as a known-issue: the affected requirement stays incomplete and the phase reopens to
+correct the wire constant, because a pre-final value baked into a released SDK is a
+wire-visible break for every downstream client (threat T-113-43).
+
+Re-verification procedure for plan 12 Task 3:
+
+1. `gh api repos/modelcontextprotocol/modelcontextprotocol/contents/schema --jq '.[].name'`
+   and confirm `2026-07-28` now exists.
+2. Grep `schema/2026-07-28/schema.ts` for `HEADER_MISMATCH`,
+   `MISSING_REQUIRED_CLIENT_CAPABILITY`, `UNSUPPORTED_PROTOCOL_VERSION`.
+3. Assert each identifier still maps to `-32020` / `-32021` / `-32022` respectively, and that
+   the HTTP-400 mappings and the `requiredCapabilities`-is-an-object /
+   `supported`-is-a-string-array payload shapes are unchanged.
+4. Record the outcome by upgrading this file's `## Verdict` to `PUBLISHED-CONFIRMED` or
+   `PUBLISHED-DRIFT`. Only then may requirements be flipped.
+
 ---
 
 ## Conformance Suite Pin (Section B)
@@ -528,11 +592,34 @@ sent with `Mcp-Method` alone and **no** `Mcp-Name`:
 ```
 
 **Recorded consequence:** the conformance-suite header scenarios cannot pass against pmcp's
-current strict-presence rule. Because the RULE is locked by Phase-112 D-05 and explicitly not
-overridable by this phase, this is recorded here as a DRIFT item requiring a decision at
-phase or milestone level rather than a silent fix inside plan 04. Plans 02/04/05 must treat
-"pmcp requires `Mcp-Name` always" as a **known deviation from the draft spec**, not as settled
-behavior, and must re-verify it against the published 2026-07-28 transport spec.
+current strict-presence rule.
+
+#### ADJUDICATED — decision, not an open question
+
+Adjudicated by Guy Ernest at the plan 113-01 Task 2 blocking-human checkpoint, together with
+the Recorded Exception above. **Phase-112 D-05 stays LOCKED.** This is binding on downstream
+plans; they inherit it and must NOT re-litigate it:
+
+| Plan | Inherited obligation |
+|------|----------------------|
+| **Plan 04** | **Keeps the always-required rule** exactly as locked by D-05. Do NOT relax `require_three_headers` to make `Mcp-Name` conditional on `is_name_bearing_method`. pmcp continues to require `Mcp-Name` on every v2 request. |
+| **Plan 11** | Marks the affected conformance header scenarios **KNOWN-FAILING against this drift record**. They are NOT a plan-11 defect, and plan 11 must NOT "fix" them by silently loosening the rule. The manifest must cite DRIFT-1 as the cause. |
+| **Plans 02 / 05** | Treat "pmcp requires `Mcp-Name` always" as a known, deliberate deviation from the draft spec — settled behavior for this phase, but flagged for re-verification against the published 2026-07-28 transport spec. |
+
+Rationale for holding the stricter rule: relaxing it is a security-relevant loosening of a
+fail-closed header gate that Phase 112 landed deliberately, and the draft transport spec may
+still move before 2026-07-28. Holding strict and recording the failure is reversible;
+loosening and discovering the spec kept the requirement is not.
+
+#### Inventory note inherited by plan 11
+
+Independently of DRIFT-1: **plan 11 builds its scenario list from Section B of this file** —
+the 23 `sep-2322` check ids across 14 scenario classes enumerated at conformance pin
+`a865118206d4d8cc8dbc5f5201607839281d0c3b` — and **NOT** from the `113-RESEARCH.md` table,
+which omits four ids (`sep-2322-respect-client-capabilities`, `-ignore-unexpected-params`,
+`-validate-input-responses`, `-error-on-protocol-error`) and misreports
+`input-required-result-capability-check` — a scenario **class name** — as if it were a check
+id. See B.3 and B.4.
 
 ### D.3 DRIFT-2 — OWS trimming on `Mcp-Name` (OPEN VERIFICATION ITEM)
 
@@ -582,8 +669,8 @@ read from one place.
 | Record | Result |
 |--------|--------|
 | **Schema verdict** | **PENDING** — no `schema/2026-07-28`; draft used @ `71e3069` (2026-07-16); 13/13 tokens FOUND, 0 MISSING; values corroborate the research contract exactly |
-| **Task 3 error-code half** | **BLOCKED** unless a `## Recorded Exception` is written below |
-| **Task 3 Cargo.toml half** | Unaffected by the verdict; gated only on package legitimacy |
+| **Task 3 error-code half** | **UNBLOCKED by `## Recorded Exception`** — granted by Guy Ernest, 2026-07-24; all three constants landed; plan 12 Task 3 re-verification is binding and a mismatch reopens the phase |
+| **Task 3 Cargo.toml half** | Unaffected by the verdict; gated only on package legitimacy — `approved` for both crates |
 | **Conformance pin** | `a865118206d4d8cc8dbc5f5201607839281d0c3b` (2026-07-23), 23 `sep-2322` check ids across 14 scenario classes |
 | **Contract-first** | `../provable-contracts` ABSENT; `pdmt` ABSENT; `pmat` 3.15.0 PRESENT; three MANDATORY-directive deviations recorded with compensating controls |
 | **`Mcp-Name` rule** | Locked as presence-always / value-checked-only-for-name-bearing; **2 DRIFT items** recorded against it (DRIFT-1 HIGH, DRIFT-2 MEDIUM/open) |
