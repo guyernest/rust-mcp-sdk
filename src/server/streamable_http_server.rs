@@ -1369,26 +1369,52 @@ enum HttpIngress {
     /// ingress, so a second captured copy here would be a duplicate read that
     /// could drift.
     Discover { id: crate::types::RequestId },
+    /// A `subscriptions/listen` request (Phase 113 plan 10, HTTP-04), carrying
+    /// the ORIGINAL request id — which IS the stream's `subscriptionId` — and the
+    /// RAW `params` value the served branch deserializes into
+    /// [`SubscriptionsListenParams`](crate::types::subscriptions::SubscriptionsListenParams).
+    ///
+    /// Classified here rather than added as a public `ClientRequest` variant:
+    /// Phase 112 established that discipline precisely to keep semver MINOR
+    /// (`enum_variant_added` on a public exhaustive enum is a MAJOR break), and
+    /// `cargo semver-checks` catches a regression. The params stay RAW because
+    /// this classifier must never reject a body — a malformed `params` becomes a
+    /// structured `-32602` in the served branch, after the header gate and auth
+    /// have run, not a parse error before them.
+    SubscriptionsListen {
+        id: crate::types::RequestId,
+        params: Option<serde_json::Value>,
+    },
 }
 
-/// Classify a raw POST body as an internally-routed `server/discover` request,
-/// if it is one (Phase 112, VERS-04). Never panics (T-112-13).
+/// Classify a raw POST body as an internally-routed request, if it is one.
 ///
-/// Returns `Some(HttpIngress::Discover{..})` ONLY when the raw body is a
-/// well-formed single JSON-RPC request whose method classifies — via the shared
-/// [`parse_request_or_internal`](crate::shared::protocol_helpers::parse_request_or_internal)
-/// seam — as [`InternalClientRequest::ServerDiscover`](crate::types::protocol::InternalClientRequest).
+/// Two methods are internally routed, neither of which has a public
+/// `ClientRequest` variant: `server/discover` (Phase 112, VERS-04) and
+/// `subscriptions/listen` (Phase 113 plan 10, HTTP-04). Never panics (T-112-13).
+///
 /// Every other input (malformed JSON, a batch/notification with no `id`, a
 /// non-object, or any other method) returns `None`, so the caller falls through
 /// to the existing public parse path with byte-identical behavior.
 fn classify_http_ingress(body: &[u8]) -> Option<HttpIngress> {
     let req: crate::types::JSONRPCRequest<serde_json::Value> = serde_json::from_slice(body).ok()?;
-    // Fast reject: `server/discover` is the only internally-routed method, so for
-    // ~100% of traffic we skip the typed `parse_client_request` conversion and the
-    // `_meta` clone below. `parse_request_or_internal` remains the authority for
-    // the discover case (its `IngressRequest::Internal(ServerDiscover)` arm is the
-    // only path that yields `Discover`), so this peek changes no classification —
-    // any non-discover method returned `None` before too, via `Public(_) => None`.
+    // `subscriptions/listen` has no typed request at all: it is answered either by
+    // a long-lived SSE stream or by `-32601`, both assembled from the raw id and
+    // params. Classified BEFORE the discover peek so the two internally-routed
+    // methods share one entry point.
+    if req.method == crate::types::subscriptions::SUBSCRIPTIONS_LISTEN_METHOD {
+        return Some(HttpIngress::SubscriptionsListen {
+            id: req.id,
+            params: req.params,
+        });
+    }
+    // Fast reject: `server/discover` is the only remaining internally-routed
+    // method, so for ~100% of traffic we skip the typed `parse_client_request`
+    // conversion and the `_meta` clone below. `parse_request_or_internal` remains
+    // the authority for the discover case (its
+    // `IngressRequest::Internal(ServerDiscover)` arm is the only path that yields
+    // `Discover`), so this peek changes no classification — any non-discover
+    // method returned `None` before too, via `Public(_) => None`.
     if req.method != crate::types::protocol::SERVER_DISCOVER_METHOD {
         return None;
     }
@@ -2339,15 +2365,12 @@ async fn handle_fast_path_request(
     // Captured BEFORE dispatch consumes it: this is the LIVE request's id, and
     // it is the only id the direct response may carry (HTTP-05).
     let live_id = id.clone();
-    let json_response = {
-        let server = state.server.lock().await;
-        // Thread the ALREADY-RESOLVED ProtocolContext into dispatch — the HTTP
-        // layer resolved it once for the header gate; dispatch does NOT
-        // re-resolve (Plan 06 / D-11 / Pitfall 2).
-        server
-            .handle_request_with_context(id, request, auth_context, protocol_context)
-            .await
-    };
+    // Thread the ALREADY-RESOLVED ProtocolContext into dispatch — the HTTP layer
+    // resolved it once for the header gate; dispatch does NOT re-resolve (Plan 06
+    // / D-11 / Pitfall 2). The shared seam also retires the v2-removed
+    // `resources/subscribe`/`unsubscribe` (HTTP-04) identically on both paths.
+    let json_response =
+        dispatch_request_or_retire(state, id, request, auth_context, protocol_context).await;
 
     tracing::debug!(
         target: "mcp.http",
@@ -2485,6 +2508,334 @@ async fn assemble_discover_response_fast(
     response
 }
 
+// ===========================================================================
+// `subscriptions/listen` (Plan 113-10, HTTP-04).
+//
+// # Two conformant configurations, one predicate
+//
+// The official conformance suite gates the requirement on capability
+// advertisement (`src/scenarios/server/stateless.ts:975-1015`, quoted verbatim
+// in [`advertises_subscriptions`]):
+//
+//   * advertise NONE of `tools.listChanged` / `prompts.listChanged` /
+//     `resources.listChanged` / `resources.subscribe` -> `-32601` on
+//     `subscriptions/listen` is a legitimate feature absence (SKIPPED). This is
+//     pmcp's stateless enterprise DEFAULT, and it honors D-11.
+//   * advertise ANY of them -> the stream MUST be served; rejecting the method
+//     is a FAILURE ("claims a feature it does not serve").
+//
+// Both the `server/discover` projection (which publishes the capabilities) and
+// this route gate read the ONE shared `advertises_subscriptions` predicate over
+// the SAME `Server::capabilities()` value, so the advertisement and the
+// implementation cannot drift. `tests/v2_subscriptions.rs` carries the live
+// tripwire over all four capabilities individually.
+//
+// # `resources/subscribe` / `resources/unsubscribe` are retired on v2
+//
+// Both are GONE from the 2026-07-28 schema — the only surviving mention is the
+// "Replaces the former `resources/subscribe` RPC" comment on
+// `SubscriptionFilter.resourceSubscriptions`. On v2 they answer `404` + `-32601`
+// via [`v2_retired_method_of`]; the v1 path is completely untouched.
+// ===========================================================================
+
+/// Disable proxy response buffering so SSE frames reach the client immediately.
+///
+/// Spec, D-12 RESOLUTION item 6: servers "SHOULD set `X-Accel-Buffering: no`".
+const X_ACCEL_BUFFERING: &str = "x-accel-buffering";
+
+/// How often a quiet listen stream emits an SSE comment keep-alive.
+const LISTEN_KEEP_ALIVE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(15);
+
+/// The `resources/*` subscription RPC this request invokes, if it is one of the
+/// two the 2026-07-28 schema retired.
+///
+/// Returns the WIRE method name so the `-32601` message names what the client
+/// actually sent. `None` for every other request, which is therefore dispatched
+/// exactly as before on BOTH eras.
+fn v2_retired_method_of(request: &Request) -> Option<&'static str> {
+    let Request::Client(client) = request else {
+        return None;
+    };
+    match **client {
+        ClientRequest::Subscribe(_) => Some("resources/subscribe"),
+        ClientRequest::Unsubscribe(_) => Some("resources/unsubscribe"),
+        _ => None,
+    }
+}
+
+/// Dispatch a public request, first retiring the v2-removed `resources/*`
+/// subscription RPCs (HTTP-04).
+///
+/// THE single dispatch seam both POST entrypoints call, so the retirement rule
+/// cannot drift between the fast and middleware paths. On a non-v2 era this is a
+/// pure pass-through — `v2_retired_method_of` is consulted only inside the era
+/// gate, so a v1 `resources/subscribe` reaches its existing handler with
+/// byte-identical behavior.
+///
+/// The `-32601` it returns flows through the SAME
+/// [`v2_dispatch_response_status`] code-driven mapper every other dispatch error
+/// uses, which is what turns it into HTTP `404` on v2.
+async fn dispatch_request_or_retire(
+    state: &ServerState,
+    id: crate::types::RequestId,
+    request: Request,
+    auth_context: Option<crate::server::auth::AuthContext>,
+    protocol_context: Option<crate::types::protocol::ProtocolContext>,
+) -> crate::types::JSONRPCResponse {
+    if matches!(
+        protocol_context.as_ref().map(|pc| pc.era),
+        Some(crate::types::protocol::Era::V2)
+    ) {
+        if let Some(method) = v2_retired_method_of(&request) {
+            return crate::types::JSONRPCResponse::error(
+                id,
+                crate::types::jsonrpc::JSONRPCError {
+                    code: crate::types::protocol::error_codes::METHOD_NOT_FOUND,
+                    message: format!(
+                        "Method not found: {method} (retired in MCP 2026-07-28; use \
+                         subscriptions/listen)"
+                    ),
+                    data: None,
+                },
+            );
+        }
+    }
+    let server = state.server.lock().await;
+    server
+        .handle_request_with_context(id, request, auth_context, protocol_context)
+        .await
+}
+
+/// The capability projection + identity the listen route needs, read ONCE under
+/// the server lock.
+struct ListenServerView {
+    /// Whether ANY subscription-delivered capability is advertised.
+    advertises: bool,
+    /// The server's advertised capabilities, for the agreed-filter intersection.
+    capabilities: crate::types::ServerCapabilities,
+    /// The server identity the v2 result envelope publishes.
+    info: crate::types::Implementation,
+}
+
+/// Read the listen route's view of the server under ONE lock acquisition.
+async fn listen_server_view(state: &ServerState) -> ListenServerView {
+    let server = state.server.lock().await;
+    let capabilities = server.capabilities().clone();
+    ListenServerView {
+        advertises: crate::types::subscriptions::advertises_subscriptions(&capabilities),
+        capabilities,
+        info: server.info().clone(),
+    }
+}
+
+/// Assemble a JSON-RPC error for a `subscriptions/listen` request that is not
+/// served, with the ORIGINAL request id.
+///
+/// Built through plan 08's [`envelope_for_live_request`] — the ONE direct-response
+/// constructor on this transport — so a stale id is structurally unconstructible
+/// here too. The status is code-driven via [`v2_dispatch_response_status`]: `404`
+/// for `-32601` on v2, and the response's existing `200` on v1.
+///
+/// D-10 parity note: a v1 / non-opted-in `subscriptions/listen` previously fell
+/// out of the typed parse as `400` + `-32700`. It now answers `-32601` at `200`,
+/// the same DELIBERATE, benign change Phase 112 made for `server/discover` and
+/// for the same reason — `subscriptions/listen` is a v2-only method that no
+/// conforming v1 client sends, so no v1-relied-upon response byte changes.
+fn listen_rejection_response(
+    era: Option<crate::types::protocol::Era>,
+    id: crate::types::RequestId,
+    code: i32,
+    message: String,
+) -> Response {
+    let response = envelope_for_live_request(
+        crate::types::jsonrpc::ResponsePayload::Error(crate::types::jsonrpc::JSONRPCError {
+            code,
+            message,
+            data: None,
+        }),
+        id,
+    );
+    let status = v2_dispatch_response_status(era, &response);
+    let mut http = build_json_response(
+        &TransportMessage::Response(response),
+        "subscriptions/listen gate",
+    );
+    if let Some(status) = status {
+        *http.status_mut() = status;
+    }
+    http
+}
+
+/// The acknowledgement frame — the FIRST message on every listen stream.
+///
+/// Its `notifications` field is the AGREED filter (the intersection of what was
+/// requested and what this server supports), never a superset of the request,
+/// and its `_meta` carries [`SUBSCRIPTION_ID_META_KEY`](crate::types::subscriptions::SUBSCRIPTION_ID_META_KEY).
+///
+/// It is a NOTIFICATION, not a result, so it cannot carry the v2 result envelope
+/// ([`inject_v2_result_envelope`](crate::server::core::inject_v2_result_envelope)
+/// returns early on a non-`Result` payload by design). The `_meta` it does carry
+/// is built by the SAME `subscription_id_meta` helper the terminal result uses,
+/// so the two can never disagree on the key spelling.
+fn listen_ack_frame(
+    agreed: &crate::types::subscriptions::SubscriptionFilter,
+    subscription_id: &crate::types::RequestId,
+) -> String {
+    let params = crate::types::subscriptions::SubscriptionAcknowledgedParams::new(
+        agreed.clone(),
+        subscription_id,
+    );
+    json!({
+        "jsonrpc": "2.0",
+        "method": crate::types::subscriptions::ACKNOWLEDGED_METHOD,
+        "params": params,
+    })
+    .to_string()
+}
+
+/// The graceful-teardown JSON-RPC response for a listen stream.
+///
+/// Routed through plan 09's [`inject_v2_result_envelope`](crate::server::core::inject_v2_result_envelope)
+/// (which delegates to `own_reserved_result_fields`) exactly like every other v2
+/// result, so `resultType` and `io.modelcontextprotocol/serverInfo` are identical
+/// to any other v2 response instead of coming from a bespoke frame builder.
+fn listen_terminal_result_frame(
+    subscription_id: &crate::types::RequestId,
+    protocol_context: Option<&crate::types::protocol::ProtocolContext>,
+    server_info: &crate::types::Implementation,
+) -> String {
+    let result = crate::types::subscriptions::SubscriptionsListenResult::new(subscription_id);
+    let mut response = envelope_for_live_request(
+        crate::types::jsonrpc::ResponsePayload::Result(
+            serde_json::to_value(result).unwrap_or_else(|_| json!({})),
+        ),
+        subscription_id.clone(),
+    );
+    crate::server::core::inject_v2_result_envelope(
+        &mut response,
+        protocol_context,
+        server_info,
+        crate::server::core::ResponseDisposition::Complete,
+    );
+    serde_json::to_string(&response).unwrap_or_else(|_| "{}".to_string())
+}
+
+/// Frame one already-serialized listen payload as an SSE `message` event.
+fn listen_sse_event(payload: String) -> std::result::Result<Event, Infallible> {
+    Ok(Event::default().event("message").data(payload))
+}
+
+/// Attach the listen stream's response headers: the v2 outbound echo (VERS-05),
+/// `X-Accel-Buffering: no`, and no-transform caching.
+///
+/// The `Mcp-Session-Id` header is NEVER attached: there are no sessions on v2
+/// (HTTP-01), so [`attach_sse_response_headers`] — which requires one — is
+/// deliberately not reused here.
+fn attach_listen_response_headers(response: &mut Response, v2_outbound: Option<&(String, String)>) {
+    let headers = response.headers_mut();
+    headers.insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("no-cache, no-transform"),
+    );
+    headers.insert(X_ACCEL_BUFFERING, HeaderValue::from_static("no"));
+    if let Some((method, name)) = v2_outbound {
+        apply_v2_outbound_headers(headers, method, name);
+    }
+}
+
+/// Serve — or conformantly reject — a `subscriptions/listen` request (HTTP-04).
+///
+/// THE single implementation both POST entrypoints call, so the fast and
+/// middleware paths cannot drift on the gate, the agreed filter or the frame
+/// order. The response-middleware chain is deliberately NOT run over a listen
+/// stream: it processes a complete `Vec<u8>` body, and this response has no
+/// complete body by construction.
+///
+/// Rejection cases, in order:
+/// 1. era is not v2 -> `-32601` (`subscriptions/listen` does not exist on v1);
+/// 2. no subscription-delivered capability advertised -> `-32601`, the
+///    conformant-by-absence configuration;
+/// 3. `params` that do not deserialize (`notifications` is REQUIRED) ->
+///    `-32602`, AFTER the header gate and auth have already run.
+async fn assemble_subscriptions_listen(
+    state: &ServerState,
+    id: crate::types::RequestId,
+    params: Option<serde_json::Value>,
+    protocol_context: Option<&crate::types::protocol::ProtocolContext>,
+    v2_outbound: Option<(String, String)>,
+) -> Response {
+    use crate::types::protocol::error_codes::{INVALID_PARAMS, METHOD_NOT_FOUND};
+    use crate::types::subscriptions::{SubscriptionsListenParams, SUBSCRIPTIONS_LISTEN_METHOD};
+
+    let era = protocol_context.map(|pc| pc.era);
+    if !matches!(era, Some(crate::types::protocol::Era::V2)) {
+        return listen_rejection_response(
+            era,
+            id,
+            METHOD_NOT_FOUND,
+            format!("Method not found: {SUBSCRIPTIONS_LISTEN_METHOD}"),
+        );
+    }
+
+    let view = listen_server_view(state).await;
+    if !view.advertises {
+        // The conformant-by-absence configuration (D-12 RESOLUTION): this server
+        // advertises no subscription-delivered capability, so it has nothing to
+        // serve here and the conformance suite records SKIPPED. The tripwire is
+        // that `server/discover` publishes the SAME capabilities this predicate
+        // just read.
+        return listen_rejection_response(
+            era,
+            id,
+            METHOD_NOT_FOUND,
+            format!(
+                "Method not found: {SUBSCRIPTIONS_LISTEN_METHOD} (this server advertises no \
+                 subscription-delivered capability)"
+            ),
+        );
+    }
+
+    let requested = match params {
+        Some(value) => match serde_json::from_value::<SubscriptionsListenParams>(value) {
+            Ok(parsed) => parsed.notifications,
+            Err(e) => {
+                return listen_rejection_response(
+                    era,
+                    id,
+                    INVALID_PARAMS,
+                    format!("Invalid subscriptions/listen params: {e}"),
+                )
+            },
+        },
+        None => {
+            return listen_rejection_response(
+                era,
+                id,
+                INVALID_PARAMS,
+                "Invalid subscriptions/listen params: `notifications` is required".to_string(),
+            )
+        },
+    };
+    let agreed = requested.intersect_with_capabilities(&view.capabilities);
+
+    // Frame order is the spec's MUST: the acknowledgement is FIRST, and no
+    // notification precedes it. Here that is structural — the ack is the first
+    // element of the stream, ahead of anything else that can ever be appended.
+    let ack = listen_ack_frame(&agreed, &id);
+    let terminal = listen_terminal_result_frame(&id, protocol_context, &view.info);
+    let stream = futures_util::stream::iter(vec![ack, terminal]).map(listen_sse_event);
+
+    let mut response = Sse::new(stream)
+        .keep_alive(
+            axum::response::sse::KeepAlive::new()
+                .interval(LISTEN_KEEP_ALIVE_INTERVAL)
+                .text(""),
+        )
+        .into_response();
+    attach_listen_response_headers(&mut response, v2_outbound.as_ref());
+    response
+}
+
 /// Fast path handler without HTTP middleware.
 ///
 /// Refactored in 75-01 Task 1a-A: extracted [`read_body_with_limit`],
@@ -2517,10 +2868,11 @@ async fn handle_post_fast_path(
     };
 
     let (session_id, protocol_version) = extract_session_and_protocol_headers(&headers);
-    // `server/discover` is a non-init request (stateless capability projection).
+    // `server/discover` and `subscriptions/listen` are non-init requests (a
+    // stateless capability projection and a v2 stream opener respectively).
     let is_init_request = match &ingress {
         HttpIngress::Public(msg) => is_initialize_request(msg),
-        HttpIngress::Discover { .. } => false,
+        HttpIngress::Discover { .. } | HttpIngress::SubscriptionsListen { .. } => false,
     };
 
     // v2 required-header gate (VERS-05): resolve the ProtocolContext ONCE
@@ -2536,8 +2888,11 @@ async fn handle_post_fast_path(
     let (protocol_context, v2_outbound) = match &ingress {
         // Only a REQUEST carries a header contract. `server/discover` pins its
         // method (it is routed by classification, not by the body's `method`
-        // field); every other request reads the method from the body.
-        HttpIngress::Public(TransportMessage::Request { .. }) | HttpIngress::Discover { .. } => {
+        // field); every other request — including `subscriptions/listen`, whose
+        // body DOES carry its method — reads the method from the body.
+        HttpIngress::Public(TransportMessage::Request { .. })
+        | HttpIngress::Discover { .. }
+        | HttpIngress::SubscriptionsListen { .. } => {
             let method_override = matches!(ingress, HttpIngress::Discover { .. })
                 .then_some(crate::types::protocol::SERVER_DISCOVER_METHOD);
             let (ctx, gate) =
@@ -2624,6 +2979,19 @@ async fn handle_post_fast_path(
                 },
                 session_id.as_ref(),
             )
+            .await
+        },
+        // HTTP-04: the capability-gated listen route. Reached AFTER the same
+        // session / v2-matrix / legacy-version / auth pipeline as every other
+        // ingress — a held-open stream must not be a way around auth.
+        HttpIngress::SubscriptionsListen { id, params } => {
+            Box::pin(assemble_subscriptions_listen(
+                &state,
+                id,
+                params,
+                protocol_context.as_ref(),
+                v2_outbound,
+            ))
             .await
         },
         HttpIngress::Public(
@@ -2831,18 +3199,21 @@ async fn dispatch_message_with_middleware(
             )
             .await
         },
+        // HTTP-04: the capability-gated listen route (see the fast-path twin).
+        HttpIngress::SubscriptionsListen { id, params } => {
+            assemble_subscriptions_listen(state, id, params, protocol_context.as_ref(), v2_outbound)
+                .await
+        },
         HttpIngress::Public(TransportMessage::Request { id, request }) => {
             let era = protocol_context.as_ref().map(|pc| pc.era);
             // Captured BEFORE dispatch consumes it (see the fast-path twin).
             let live_id = id.clone();
-            let json_response = {
-                let server = state.server.lock().await;
-                // Thread the ALREADY-RESOLVED ProtocolContext into dispatch
-                // (Plan 06 / D-11): never re-resolved downstream.
-                server
-                    .handle_request_with_context(id, request, auth_context, protocol_context)
-                    .await
-            };
+            // Thread the ALREADY-RESOLVED ProtocolContext into dispatch (Plan 06
+            // / D-11): never re-resolved downstream. The shared seam also retires
+            // the v2-removed `resources/subscribe`/`unsubscribe` (HTTP-04).
+            let json_response =
+                dispatch_request_or_retire(state, id, request, auth_context, protocol_context)
+                    .await;
             // Code-driven v2 status (see the fast-path twin).
             let v2_status = v2_dispatch_response_status(era, &json_response);
             // Same structural guarantee as every other direct response (HTTP-05).
@@ -2949,7 +3320,7 @@ async fn handle_post_with_middleware(
         extract_session_and_protocol_headers(&server_request.headers);
     let is_init_request = match &ingress {
         HttpIngress::Public(msg) => is_initialize_request(msg),
-        HttpIngress::Discover { .. } => false,
+        HttpIngress::Discover { .. } | HttpIngress::SubscriptionsListen { .. } => false,
     };
 
     // v2 required-header gate (VERS-05): resolve the ProtocolContext ONCE and
@@ -2962,7 +3333,9 @@ async fn handle_post_with_middleware(
     // Passthrough (zero enforcement, D-04). Since Plan 113-04 there is ONE gate
     // for every ingress, reading `params._meta` from the raw body.
     let (protocol_context, v2_outbound) = match &ingress {
-        HttpIngress::Public(TransportMessage::Request { .. }) | HttpIngress::Discover { .. } => {
+        HttpIngress::Public(TransportMessage::Request { .. })
+        | HttpIngress::Discover { .. }
+        | HttpIngress::SubscriptionsListen { .. } => {
             let method_override = matches!(ingress, HttpIngress::Discover { .. })
                 .then_some(crate::types::protocol::SERVER_DISCOVER_METHOD);
             let (ctx, gate) = run_v2_header_gate(
@@ -4005,7 +4378,9 @@ mod tests {
                     "2026-07-28"
                 );
             },
-            HttpIngress::Public(_) => panic!("server/discover must classify as Discover"),
+            HttpIngress::Public(_) | HttpIngress::SubscriptionsListen { .. } => {
+                panic!("server/discover must classify as Discover")
+            },
         }
 
         // A normal method is NOT a discover ingress.
@@ -4773,6 +5148,220 @@ mod tests {
                     method
                 );
             }
+        }
+    }
+
+    // -------------------------------------------------------------------
+    // `subscriptions/listen` gate + wire frames (Plan 113-10, HTTP-04).
+    //
+    // Nested in a module NAMED after the production surface so
+    // `cargo test --lib -- subscriptions` actually selects these tests rather
+    // than passing vacuously (the plan-09 lesson).
+    // -------------------------------------------------------------------
+    mod subscriptions_listen {
+        use super::*;
+        use crate::types::capabilities::{
+            PromptCapabilities, ResourceCapabilities, ToolCapabilities,
+        };
+        use crate::types::subscriptions::{
+            advertises_subscriptions, SubscriptionFilter, ACKNOWLEDGED_METHOD,
+            SUBSCRIPTIONS_LISTEN_METHOD, SUBSCRIPTION_ID_META_KEY,
+        };
+        use crate::types::{Implementation, RequestId, ServerCapabilities};
+
+        /// A `ServerCapabilities` advertising exactly ONE of the four
+        /// subscription-delivered capabilities, or none for `None`.
+        fn only(which: Option<&str>) -> ServerCapabilities {
+            let mut caps = ServerCapabilities::default();
+            match which {
+                Some("tools.listChanged") => {
+                    caps.tools = Some(ToolCapabilities {
+                        list_changed: Some(true),
+                    });
+                },
+                Some("prompts.listChanged") => {
+                    caps.prompts = Some(PromptCapabilities {
+                        list_changed: Some(true),
+                    });
+                },
+                Some("resources.listChanged") => {
+                    caps.resources = Some(ResourceCapabilities {
+                        subscribe: None,
+                        list_changed: Some(true),
+                    });
+                },
+                Some("resources.subscribe") => {
+                    caps.resources = Some(ResourceCapabilities {
+                        subscribe: Some(true),
+                        list_changed: None,
+                    });
+                },
+                _ => {},
+            }
+            caps
+        }
+
+        /// The capabilities `server/discover` actually PUBLISHES for `caps`.
+        fn projected_capabilities(caps: &ServerCapabilities) -> ServerCapabilities {
+            let response = crate::server::core::build_discover_response(
+                RequestId::Number(1),
+                caps,
+                &Implementation::new("s", "1"),
+                Some(&v2_context()),
+            );
+            let crate::types::jsonrpc::ResponsePayload::Result(value) = response.payload else {
+                panic!("a v2 discover projects a result");
+            };
+            serde_json::from_value(value["capabilities"].clone())
+                .expect("the projection deserializes back into ServerCapabilities")
+        }
+
+        #[test]
+        fn discover_projection_and_listen_gate_read_the_same_predicate() {
+            // THE tripwire, at the unit level: whatever `server/discover`
+            // publishes is exactly what the listen gate reads, for each of the
+            // four capabilities INDIVIDUALLY plus the advertise-nothing default.
+            for which in [
+                None,
+                Some("tools.listChanged"),
+                Some("prompts.listChanged"),
+                Some("resources.listChanged"),
+                Some("resources.subscribe"),
+            ] {
+                let caps = only(which);
+                let expected = which.is_some();
+                assert_eq!(
+                    advertises_subscriptions(&caps),
+                    expected,
+                    "gate verdict for {which:?}"
+                );
+                assert_eq!(
+                    advertises_subscriptions(&projected_capabilities(&caps)),
+                    expected,
+                    "the discover projection must agree with the gate for {which:?}"
+                );
+            }
+        }
+
+        #[test]
+        fn classify_http_ingress_routes_subscriptions_listen() {
+            let body = serde_json::to_vec(&json!({
+                "jsonrpc": "2.0",
+                "id": 7,
+                "method": SUBSCRIPTIONS_LISTEN_METHOD,
+                "params": { "notifications": { "toolsListChanged": true } },
+            }))
+            .unwrap();
+            let Some(HttpIngress::SubscriptionsListen { id, params }) =
+                classify_http_ingress(&body)
+            else {
+                panic!("subscriptions/listen classifies as its own ingress");
+            };
+            assert_eq!(id, RequestId::Number(7), "the ORIGINAL id is preserved");
+            assert_eq!(
+                params.expect("params carried through")["notifications"]["toolsListChanged"],
+                json!(true)
+            );
+        }
+
+        #[test]
+        fn classify_http_ingress_leaves_other_methods_alone() {
+            for method in ["tools/call", "resources/subscribe", "initialize"] {
+                let body = serde_json::to_vec(&json!({
+                    "jsonrpc": "2.0", "id": 1, "method": method, "params": {},
+                }))
+                .unwrap();
+                assert!(
+                    !matches!(
+                        classify_http_ingress(&body),
+                        Some(HttpIngress::SubscriptionsListen { .. })
+                    ),
+                    "{method} must not classify as a listen ingress"
+                );
+            }
+        }
+
+        #[test]
+        fn only_the_two_retired_resource_rpcs_are_retired() {
+            let subscribe = Request::Client(Box::new(ClientRequest::Subscribe(
+                crate::types::resources::SubscribeRequest {
+                    uri: "mem://a".to_string(),
+                },
+            )));
+            let unsubscribe = Request::Client(Box::new(ClientRequest::Unsubscribe(
+                crate::types::resources::UnsubscribeRequest {
+                    uri: "mem://a".to_string(),
+                },
+            )));
+            let list = Request::Client(Box::new(ClientRequest::ListTools(
+                crate::types::tools::ListToolsRequest { cursor: None },
+            )));
+            assert_eq!(
+                v2_retired_method_of(&subscribe),
+                Some("resources/subscribe")
+            );
+            assert_eq!(
+                v2_retired_method_of(&unsubscribe),
+                Some("resources/unsubscribe")
+            );
+            assert_eq!(
+                v2_retired_method_of(&list),
+                None,
+                "no other method is retired by HTTP-04"
+            );
+        }
+
+        #[test]
+        fn the_ack_frame_is_the_acknowledged_notification() {
+            let agreed = SubscriptionFilter {
+                tools_list_changed: Some(true),
+                ..SubscriptionFilter::default()
+            };
+            let frame: serde_json::Value =
+                serde_json::from_str(&listen_ack_frame(&agreed, &RequestId::Number(1)))
+                    .expect("the ack frame is JSON");
+            assert_eq!(frame["jsonrpc"], json!("2.0"));
+            assert_eq!(frame["method"], json!(ACKNOWLEDGED_METHOD));
+            assert!(
+                frame.get("id").is_none(),
+                "the acknowledgement is a NOTIFICATION, so it carries no id"
+            );
+            assert_eq!(
+                frame["params"]["notifications"],
+                json!({ "toolsListChanged": true })
+            );
+            assert_eq!(
+                frame["params"]["_meta"][SUBSCRIPTION_ID_META_KEY],
+                json!(1),
+                "the subscriptionId equals the listen request's JSON-RPC id"
+            );
+        }
+
+        #[test]
+        fn the_terminal_result_goes_through_the_shared_v2_envelope() {
+            let info = Implementation::new("listen-server", "9.9");
+            let frame: serde_json::Value = serde_json::from_str(&listen_terminal_result_frame(
+                &RequestId::Number(3),
+                Some(&v2_context()),
+                &info,
+            ))
+            .expect("the terminal frame is JSON");
+            assert_eq!(frame["id"], json!(3), "the response id is the listen id");
+            assert_eq!(
+                frame["result"]["_meta"][SUBSCRIPTION_ID_META_KEY],
+                json!(3),
+                "SubscriptionsListenResult._meta carries the REQUIRED subscriptionId"
+            );
+            assert_eq!(
+                frame["result"]["resultType"],
+                json!("complete"),
+                "resultType comes from the SHARED envelope helper, not a bespoke builder"
+            );
+            assert_eq!(
+                frame["result"]["_meta"][crate::server::core::RESERVED_SERVER_INFO_KEY]["name"],
+                json!("listen-server"),
+                "serverInfo comes from the SHARED envelope helper too"
+            );
         }
     }
 }

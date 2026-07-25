@@ -16,6 +16,7 @@ pub mod protocol;
 pub mod resources;
 pub mod roots;
 pub mod sampling;
+pub mod subscriptions;
 pub mod tasks;
 pub mod tools;
 
@@ -53,6 +54,15 @@ pub use jsonrpc::{JSONRPCError, JSONRPCNotification, JSONRPCRequest, JSONRPCResp
 pub use mrtr::{
     InputRequest, InputRequestKind, InputRequests, InputRequiredResult, InputResponse,
     InputResponses, MrtrOutcome, MrtrSignal,
+};
+// `subscriptions/listen` wire types (HTTP-04). The classification helpers
+// (`subscription_kind_of`, `SubscriptionFilter::covers`) stay `pub(crate)` —
+// only the WIRE nouns, the two reserved-name constants and the one shared
+// capability predicate are public surface.
+pub use subscriptions::{
+    advertises_subscriptions, SubscriptionAcknowledgedParams, SubscriptionFilter,
+    SubscriptionsListenParams, SubscriptionsListenResult, ACKNOWLEDGED_METHOD,
+    SUBSCRIPTIONS_LISTEN_METHOD, SUBSCRIPTION_ID_META_KEY,
 };
 pub use ui::{ToolUIMetadata, UIMimeType, UIResource, UIResourceContents};
 

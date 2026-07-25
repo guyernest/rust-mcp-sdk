@@ -504,6 +504,26 @@ impl Server {
         self.request_state_codec.as_deref()
     }
 
+    /// The server's already-computed capabilities.
+    ///
+    /// A READ-ONLY borrow — the SAME value
+    /// [`handle_discover`](Self::handle_discover) projects onto the wire. The
+    /// `subscriptions/listen` gate reads it through
+    /// [`advertises_subscriptions`](crate::types::subscriptions::advertises_subscriptions)
+    /// so the advertisement and the implementation cannot drift (HTTP-04).
+    pub(crate) fn capabilities(&self) -> &ServerCapabilities {
+        &self.capabilities
+    }
+
+    /// The server's own [`Implementation`] identity.
+    ///
+    /// Borrowed by the v2 response envelope so a `subscriptions/listen` terminal
+    /// result carries the same `io.modelcontextprotocol/serverInfo` every other
+    /// v2 result carries.
+    pub(crate) fn info(&self) -> &Implementation {
+        &self.info
+    }
+
     /// Check if a tool exists
     pub fn has_tool(&self, name: &str) -> bool {
         self.tools.contains_key(name)
