@@ -288,7 +288,21 @@ pub fn v2_body_with_caps(method: &str, id: Value, params: Value, caps: Value) ->
         object.insert("_meta".to_string(), meta.clone());
         object.insert(request_meta_key(), meta);
     }
-    json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params }).to_string()
+    jsonrpc_envelope(method, id, params)
+}
+
+/// Assemble a JSON-RPC request envelope, CONSUMING `id` and `params`.
+///
+/// Built through a `serde_json::Map` rather than the `json!` macro because the
+/// macro borrows its interpolated values, which would leave `id`/`params` as
+/// pass-by-value-but-not-consumed parameters.
+fn jsonrpc_envelope(method: &str, id: Value, params: Value) -> String {
+    let mut body = serde_json::Map::new();
+    body.insert("jsonrpc".to_string(), json!("2.0"));
+    body.insert("id".to_string(), id);
+    body.insert("method".to_string(), json!(method));
+    body.insert("params".to_string(), params);
+    Value::Object(body).to_string()
 }
 
 /// A `server/discover` request body — the ONLY v2-capable method today that carries
@@ -300,7 +314,7 @@ pub fn v2_discover_body(id: Value) -> String {
 
 /// A JSON-RPC v1 request body — no reserved `_meta` keys at all.
 pub fn v1_body(method: &str, id: Value, params: Value) -> String {
-    json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params }).to_string()
+    jsonrpc_envelope(method, id, params)
 }
 
 // ===========================================================================

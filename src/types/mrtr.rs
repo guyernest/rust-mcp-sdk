@@ -142,7 +142,7 @@ pub(crate) const HEADER_SENTINEL_PREFIX: &str = "=?base64?";
 pub(crate) const HEADER_SENTINEL_SUFFIX: &str = "?=";
 
 /// Upper bound on a decoded `Mcp-Name` value, mirroring the transport's
-/// `MAX_V2_HEADER_VALUE_LEN`. Bounds a decompression-style amplification DoS
+/// `MAX_V2_HEADER_VALUE_LEN`. Bounds a decompression-style amplification `DoS`
 /// where a short base64 sentinel expands into a large allocation.
 pub(crate) const MAX_HEADER_VALUE_LEN: usize = 8192;
 
@@ -305,18 +305,21 @@ impl InputResponse {
     /// to. This tries the three shapes most-specific-first. Wherever the kind IS
     /// known, [`decode_for`](Self::decode_for) is the correct path.
     pub fn try_from_value_untagged(value: Value) -> Result<Self, serde_json::Error> {
-        for kind in [
-            InputRequestKind::Roots,
-            InputRequestKind::Sampling,
-            InputRequestKind::Elicitation,
-        ] {
-            if let Ok(decoded) = Self::decode_for(kind, value.clone()) {
-                return Ok(decoded);
-            }
+        // Most-specific-first: `ListRootsResult` requires `roots`,
+        // `CreateMessageResult` requires `content` + `model`, `ElicitResult`
+        // requires `action`. The last attempt CONSUMES `value` so the common path
+        // costs at most two clones.
+        if let Ok(decoded) = Self::decode_for(InputRequestKind::Roots, value.clone()) {
+            return Ok(decoded);
         }
-        Err(de::Error::custom(
-            "inputResponses value matches none of ElicitResult, CreateMessageResult, ListRootsResult",
-        ))
+        if let Ok(decoded) = Self::decode_for(InputRequestKind::Sampling, value.clone()) {
+            return Ok(decoded);
+        }
+        Self::decode_for(InputRequestKind::Elicitation, value).map_err(|_| {
+            de::Error::custom(
+                "inputResponses value matches none of ElicitResult, CreateMessageResult, ListRootsResult",
+            )
+        })
     }
 }
 
@@ -426,6 +429,12 @@ impl<'de> Deserialize<'de> for InputRequiredResult {
 /// This is the additive public return type the `*_mrtr` client methods use, so an
 /// `input_required` result reaches the caller instead of being flattened into an
 /// empty success.
+// Why: `T` is generic, so clippy sizes the `Complete` variant at 0 bytes and reports
+// a difference that does not exist in practice — every instantiation uses
+// `CallToolResult` / `GetPromptResult` / `ReadResourceResult`, all in the same size
+// class as `InputRequiredResult`. Boxing the payload would degrade the ergonomics of
+// a client-FACING return type to satisfy a measurement that cannot see `T`.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone)]
 pub enum MrtrOutcome<T> {
     /// The server completed the request.
@@ -486,24 +495,24 @@ pub struct MrtrSignal {
 // ===========================================================================
 
 /// Upper bound on an accepted `requestState` string. Bounds a memory-amplification
-/// DoS where a client posts a multi-megabyte token the server must buffer and
+/// `DoS` where a client posts a multi-megabyte token the server must buffer and
 /// attempt to authenticate (T-113-14).
 pub(crate) const MAX_REQUEST_STATE_LEN: usize = 8192;
 
 /// Upper bound on the number of `inputResponses` entries. Bounds a per-entry
-/// work-amplification DoS (each entry costs a decode) (T-113-14).
+/// work-amplification `DoS` (each entry costs a decode) (T-113-14).
 pub(crate) const MAX_INPUT_RESPONSES: usize = 64;
 
 /// Upper bound on ONE serialized `inputResponses` entry. Bounds a single-huge-value
-/// memory DoS (T-113-14).
+/// memory `DoS` (T-113-14).
 pub(crate) const MAX_INPUT_RESPONSE_BYTES: usize = 65_536;
 
 /// Upper bound on the TOTAL serialized size of all `inputResponses` entries. Bounds
-/// the many-medium-values DoS the per-entry cap alone would let through (T-113-14).
+/// the many-medium-values `DoS` the per-entry cap alone would let through (T-113-14).
 pub(crate) const MAX_INPUT_RESPONSES_TOTAL_BYTES: usize = 262_144;
 
 /// Upper bound on the nesting depth of ONE `inputResponses` entry. Bounds a
-/// stack-exhaustion DoS in recursive JSON walks (T-113-14).
+/// stack-exhaustion `DoS` in recursive JSON walks (T-113-14).
 pub(crate) const MAX_INPUT_RESPONSE_DEPTH: usize = 32;
 
 /// Upper bound on the nesting depth the canonicalizer will descend for the AAD
@@ -709,11 +718,8 @@ fn extract_input_responses(
                 max: MAX_INPUT_RESPONSES_TOTAL_BYTES,
             });
         }
-        let response = InputResponse::try_from_value_untagged(entry.clone()).map_err(|_| {
-            MrtrParseError::InputResponseUndecodable {
-                key: key.to_string(),
-            }
-        })?;
+        let response = InputResponse::try_from_value_untagged(entry.clone())
+            .map_err(|_| MrtrParseError::InputResponseUndecodable { key: key.clone() })?;
         decoded.insert(key.clone(), response);
     }
     Ok(Some(decoded))
