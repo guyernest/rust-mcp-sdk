@@ -68,7 +68,8 @@
 
 use crate::error::{Error, Result};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
-use ring::aead::{LessSafeKey, UnboundKey, CHACHA20_POLY1305};
+use ring::aead::{Aad, LessSafeKey, Nonce, UnboundKey, CHACHA20_POLY1305, NONCE_LEN};
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
 use std::time::Duration;
@@ -388,6 +389,211 @@ impl RequestStateCodec {
     /// The codec's current time, through its injected clock.
     pub(crate) fn now_unix(&self) -> i64 {
         self.clock.now_unix()
+    }
+
+    /// Force the minting key-id, so a key-id COLLISION can be constructed.
+    ///
+    /// SHA-256 pre-images cannot be chosen, so the collision branch of
+    /// [`KeyId`]'s documented policy is otherwise untestable.
+    #[cfg(test)]
+    fn with_forced_minting_key_id(mut self, id: KeyId) -> Self {
+        self.minting.0 = id;
+        if let Some(first) = self.accepting.first_mut() {
+            first.0 = id;
+        }
+        self
+    }
+
+    /// Append an accepting entry under a FORCED key-id (see
+    /// [`Self::with_forced_minting_key_id`]).
+    #[cfg(test)]
+    fn with_forced_accepting_key(mut self, id: KeyId, key: &[u8; KEY_LEN]) -> Result<Self> {
+        let (_, bound) = bind_key(key)?;
+        self.accepting.push((id, bound));
+        Ok(self)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Continuation, binding and verdict
+// ---------------------------------------------------------------------------
+
+/// The sealed payload of a `requestState` token.
+///
+/// Everything here is CONFIDENTIAL: `state` routinely holds partially collected
+/// tool arguments, and `round` is a security counter (D-09). The client sees only
+/// the opaque base64url token.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub(crate) struct Continuation {
+    /// Opaque server-authored continuation state.
+    pub state: serde_json::Value,
+    /// Absolute expiry, Unix seconds.
+    pub exp: i64,
+    /// Which multi-round-trip round this continuation belongs to (D-09).
+    pub round: u8,
+}
+
+/// The three values a `requestState` token is cryptographically bound to.
+///
+/// This struct is the ONLY way an AAD is composed, so [`RequestStateCodec::mint`]
+/// and [`RequestStateCodec::verify`] can never disagree about its layout.
+///
+/// The three bindings are exactly the spec's replay-prevention clauses:
+///
+/// | Clause | Binding |
+/// |--------|---------|
+/// | 5a — authenticated principal | `principal` (from `AuthContext::subject`) |
+/// | 5b — short expiry | the ttl baked into [`Continuation::exp`] |
+/// | 5c — identifier for the originating request | `method` + `param_digest` |
+#[derive(Debug, Clone)]
+pub(crate) struct RequestBinding<'a> {
+    /// The authenticated principal — `AuthContext::subject`, never a
+    /// client-asserted identity.
+    pub principal: &'a str,
+    /// The JSON-RPC method the token was minted for.
+    pub method: &'a str,
+    /// [`crate::types::mrtr::salient_param_digest`] over the originating params.
+    pub param_digest: [u8; 32],
+}
+
+impl<'a> RequestBinding<'a> {
+    /// Compose a binding from a live request.
+    pub(crate) fn from_request(
+        principal: &'a str,
+        method: &'a str,
+        params: &serde_json::Value,
+    ) -> Self {
+        Self {
+            principal,
+            method,
+            param_digest: crate::types::mrtr::salient_param_digest(method, params),
+        }
+    }
+
+    /// The AEAD additional authenticated data:
+    /// `principal || 0x00 || method || 0x00 || param_digest[32]`.
+    ///
+    /// # Why the plain concatenation is unambiguous
+    ///
+    /// The trailing 32 bytes are a fixed-length digest and the byte before them is
+    /// a `0x00` separator, so `principal || 0x00 || method` is recovered exactly.
+    /// Every method that can MINT is drawn from
+    /// [`crate::types::mrtr::MRTR_ELIGIBLE_METHODS`], all of which are NUL-free, so
+    /// `method` is unambiguously the segment after the LAST `0x00` and `principal`
+    /// is everything before it. Belt and braces: `param_digest` itself hashes the
+    /// method name, so even a contrived concatenation collision would still have to
+    /// agree on the method.
+    fn aad(&self) -> Vec<u8> {
+        let mut out =
+            Vec::with_capacity(self.principal.len() + self.method.len() + 2 + self.param_digest.len());
+        out.extend_from_slice(self.principal.as_bytes());
+        out.push(0x00);
+        out.extend_from_slice(self.method.as_bytes());
+        out.push(0x00);
+        out.extend_from_slice(&self.param_digest);
+        out
+    }
+}
+
+/// The outcome of presenting a `requestState` token — locked by D-15.
+///
+/// `verify` deliberately never returns a `Result`, so no caller can accidentally
+/// `?` a security decision into a 500.
+///
+/// | Condition | Verdict | Caller behaviour (plan 06 wires it) |
+/// |-----------|---------|-------------------------------------|
+/// | oversized, not base64url, or too short to hold key-id + nonce | [`Verdict::AuthFailed`] | JSON-RPC error |
+/// | no accepting entry's key-id matches | [`Verdict::UnknownKey`] | strip MRTR fields and RE-RUN the handler (D-04 degraded path) |
+/// | a key-id matches but the AEAD tag fails on every matching entry | [`Verdict::AuthFailed`] | JSON-RPC error (`sep-2322-reject-tampered-state`) |
+/// | decrypts, `exp` in the past | [`Verdict::Expired`] | re-elicit cleanly, PRESERVING `continuation.round` (D-15/D-05) |
+/// | decrypts, `exp` in the future | [`Verdict::Ok`] | resume |
+///
+/// # No discrimination oracle
+///
+/// A wrong principal, a token replayed onto a different method, and a token
+/// replayed onto different salient arguments ALL surface as
+/// [`Verdict::AuthFailed`] rather than as distinct verdicts — those values live in
+/// the AAD, so they fail `ring`'s constant-time tag check rather than an
+/// application-level comparison (T-113-10). That is deliberate: it removes an
+/// oracle, and it means no auxiliary `==` over a principal or a digest is needed
+/// anywhere in this module.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum Verdict {
+    /// Authentic and live — resume from the carried continuation.
+    Ok(Continuation),
+    /// Authentic but past its `exp`. Carries the DECRYPTED continuation: the tag
+    /// check already passed, so the plaintext is available, and plan 06 needs
+    /// `round` to re-elicit cleanly without resetting a client's D-09 bound
+    /// (T-113-49).
+    Expired(Continuation),
+    /// No accepting key-id matched — most likely another instance's per-process
+    /// key (D-04). Carries nothing secret: it says only "not my key".
+    UnknownKey,
+    /// Authentication failed: tampered, wrong principal, or replayed onto a
+    /// different request.
+    AuthFailed,
+}
+
+/// The three cleartext fields split off the front of a decoded token.
+struct TokenParts<'a> {
+    key_id: KeyId,
+    nonce: [u8; NONCE_LEN],
+    sealed: &'a [u8],
+}
+
+/// Length-bound and base64url-decode a presented token.
+fn decode_token(token: &str) -> Option<Vec<u8>> {
+    if token.is_empty() || token.len() > crate::types::mrtr::MAX_REQUEST_STATE_LEN {
+        return None;
+    }
+    URL_SAFE_NO_PAD.decode(token.as_bytes()).ok()
+}
+
+/// Split the cleartext key-id and nonce off a decoded token.
+fn split_key_id(raw: &[u8]) -> Option<TokenParts<'_>> {
+    let _ = raw;
+    unimplemented!("plan 113-03 task 2")
+}
+
+/// Open one sealed payload under one candidate key.
+fn open_sealed(
+    key: &LessSafeKey,
+    nonce: [u8; NONCE_LEN],
+    aad: &[u8],
+    sealed: &[u8],
+) -> Option<Continuation> {
+    let _ = (key, nonce, aad, sealed);
+    unimplemented!("plan 113-03 task 2")
+}
+
+impl RequestStateCodec {
+    /// Seal a continuation into an opaque `requestState` token.
+    pub(crate) fn mint(
+        &self,
+        state: &serde_json::Value,
+        binding: &RequestBinding<'_>,
+        round: u8,
+    ) -> Result<String> {
+        let _ = (state, binding, round);
+        unimplemented!("plan 113-03 task 2")
+    }
+
+    /// Verify a presented token against the binding of the CURRENT request.
+    pub(crate) fn verify(&self, token: &str, binding: &RequestBinding<'_>) -> Verdict {
+        let _ = (token, binding);
+        unimplemented!("plan 113-03 task 2")
+    }
+
+    /// Every accepting key whose key-id matches (see [`KeyId`]'s collision policy).
+    fn candidate_keys(&self, id: KeyId) -> Vec<&LessSafeKey> {
+        let _ = id;
+        unimplemented!("plan 113-03 task 2")
+    }
+
+    /// Classify an opened continuation as live or expired.
+    fn check_expiry(&self, continuation: Continuation) -> Verdict {
+        let _ = continuation;
+        unimplemented!("plan 113-03 task 2")
     }
 }
 
@@ -891,6 +1097,249 @@ mod tests {
                 .expect("v2 core has a codec")
                 .minting_key_id(),
             key_id_of(&KEY_A)
+        );
+    }
+
+    // -- mint / verify ------------------------------------------------------
+
+    const KEY_C: [u8; KEY_LEN] = [0x33; KEY_LEN];
+
+    /// A codec pinned to a fixed clock so expiry is deterministic.
+    fn codec_at(key: &[u8; KEY_LEN], now: i64, ttl_secs: u64) -> RequestStateCodec {
+        RequestStateCodec::new(key, Duration::from_secs(ttl_secs))
+            .expect("valid key")
+            .with_clock(Arc::new(FixedClock(now)))
+    }
+
+    fn tool_params(path: &str) -> serde_json::Value {
+        serde_json::json!({ "name": "read_file", "arguments": { "path": path } })
+    }
+
+    fn binding<'a>(principal: &'a str, method: &'a str, params: &serde_json::Value) -> RequestBinding<'a> {
+        RequestBinding::from_request(principal, method, params)
+    }
+
+    #[test]
+    fn mint_then_verify_round_trips_the_continuation_state() {
+        let codec = codec_at(&KEY_A, 1_000, 300);
+        let params = tool_params("/safe");
+        let bind = binding("alice", "tools/call", &params);
+        let state = serde_json::json!({ "collected": { "path": "/safe" }, "step": 2 });
+        let token = codec.mint(&state, &bind, 1).expect("mint");
+        match codec.verify(&token, &bind) {
+            Verdict::Ok(continuation) => {
+                assert_eq!(continuation.state, state);
+                assert_eq!(continuation.round, 1);
+                assert_eq!(continuation.exp, 1_300);
+            },
+            other => panic!("expected Ok, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn two_mints_of_identical_input_produce_different_tokens() {
+        let codec = codec_at(&KEY_A, 1_000, 300);
+        let params = tool_params("/safe");
+        let bind = binding("alice", "tools/call", &params);
+        let state = serde_json::json!({ "a": 1 });
+        let first = codec.mint(&state, &bind, 0).expect("mint");
+        let second = codec.mint(&state, &bind, 0).expect("mint");
+        assert_ne!(first, second, "a fresh nonce must be drawn per mint");
+    }
+
+    #[test]
+    fn token_layout_is_key_id_len_then_key_id_then_nonce() {
+        let codec = codec_at(&KEY_A, 1_000, 300);
+        let params = tool_params("/safe");
+        let bind = binding("alice", "tools/call", &params);
+        let token = codec.mint(&serde_json::json!({}), &bind, 0).expect("mint");
+        let raw = URL_SAFE_NO_PAD.decode(token.as_bytes()).expect("base64url");
+        assert_eq!(raw[0], KEY_ID_LEN_U8, "leading length byte");
+        assert_eq!(
+            &raw[1..1 + KEY_ID_LEN],
+            key_id_of(&KEY_A).as_bytes(),
+            "cleartext key-id prefix"
+        );
+        assert!(
+            raw.len() > 1 + KEY_ID_LEN + NONCE_LEN,
+            "a nonce plus a non-empty sealed body must follow"
+        );
+    }
+
+    #[test]
+    fn flipping_a_ciphertext_byte_yields_auth_failed() {
+        let codec = codec_at(&KEY_A, 1_000, 300);
+        let params = tool_params("/safe");
+        let bind = binding("alice", "tools/call", &params);
+        let token = codec.mint(&serde_json::json!({ "a": 1 }), &bind, 0).expect("mint");
+        let mut raw = URL_SAFE_NO_PAD.decode(token.as_bytes()).expect("base64url");
+        let last = raw.len() - 1;
+        raw[last] ^= 0xff;
+        let mutated = URL_SAFE_NO_PAD.encode(&raw);
+        assert_eq!(codec.verify(&mutated, &bind), Verdict::AuthFailed);
+    }
+
+    #[test]
+    fn sep_2322_reject_tampered_state_suffix_mutation_yields_auth_failed() {
+        // The EXACT mutation the conformance check `sep-2322-reject-tampered-state`
+        // applies: append a marker to an otherwise valid token.
+        let codec = codec_at(&KEY_A, 1_000, 300);
+        let params = tool_params("/safe");
+        let bind = binding("alice", "tools/call", &params);
+        let token = codec.mint(&serde_json::json!({ "a": 1 }), &bind, 0).expect("mint");
+        let tampered = format!("{token}-TAMPERED");
+        assert_eq!(codec.verify(&tampered, &bind), Verdict::AuthFailed);
+    }
+
+    #[test]
+    fn a_token_minted_for_another_principal_yields_auth_failed() {
+        let codec = codec_at(&KEY_A, 1_000, 300);
+        let params = tool_params("/safe");
+        let alice = binding("alice", "tools/call", &params);
+        let bob = binding("bob", "tools/call", &params);
+        let token = codec.mint(&serde_json::json!({ "a": 1 }), &alice, 0).expect("mint");
+        assert_eq!(codec.verify(&token, &bob), Verdict::AuthFailed);
+    }
+
+    #[test]
+    fn replaying_a_token_onto_different_arguments_yields_auth_failed() {
+        let codec = codec_at(&KEY_A, 1_000, 300);
+        let safe = tool_params("/safe");
+        let shadow = tool_params("/etc/shadow");
+        let minted_for = binding("alice", "tools/call", &safe);
+        let replayed_onto = binding("alice", "tools/call", &shadow);
+        let token = codec.mint(&serde_json::json!({ "a": 1 }), &minted_for, 0).expect("mint");
+        assert_eq!(codec.verify(&token, &replayed_onto), Verdict::AuthFailed);
+    }
+
+    #[test]
+    fn replaying_a_token_onto_a_different_method_yields_auth_failed() {
+        let codec = codec_at(&KEY_A, 1_000, 300);
+        let call = serde_json::json!({ "name": "x", "arguments": {} });
+        let prompt = serde_json::json!({ "name": "x", "arguments": {} });
+        let minted_for = binding("alice", "tools/call", &call);
+        let replayed_onto = binding("alice", "prompts/get", &prompt);
+        let token = codec.mint(&serde_json::json!({ "a": 1 }), &minted_for, 0).expect("mint");
+        assert_eq!(codec.verify(&token, &replayed_onto), Verdict::AuthFailed);
+    }
+
+    #[test]
+    fn an_expired_token_yields_expired_carrying_a_readable_continuation() {
+        // Produced with FixedClock, no sleeping and no hand-crafted ciphertext.
+        let minter = codec_at(&KEY_A, 1_000, 60);
+        let params = tool_params("/safe");
+        let bind = binding("alice", "tools/call", &params);
+        let state = serde_json::json!({ "collected": { "path": "/safe" } });
+        let token = minter.mint(&state, &bind, 3).expect("mint");
+
+        let verifier = codec_at(&KEY_A, 5_000, 60);
+        match verifier.verify(&token, &bind) {
+            Verdict::Expired(continuation) => {
+                assert_eq!(continuation.state, state, "state must be READABLE");
+                assert_eq!(continuation.round, 3, "round must survive so D-09 is not reset");
+            },
+            other => panic!("expected Expired, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_token_from_an_unknown_key_id_yields_unknown_key() {
+        let minter = codec_at(&KEY_A, 1_000, 300);
+        let verifier = codec_at(&KEY_B, 1_000, 300);
+        let params = tool_params("/safe");
+        let bind = binding("alice", "tools/call", &params);
+        let token = minter.mint(&serde_json::json!({ "a": 1 }), &bind, 0).expect("mint");
+        assert_eq!(
+            verifier.verify(&token, &bind),
+            Verdict::UnknownKey,
+            "an unshared key must be DISTINGUISHABLE from tampering (D-04)"
+        );
+    }
+
+    #[test]
+    fn a_token_minted_under_the_previous_key_still_verifies() {
+        let old = codec_at(&KEY_B, 1_000, 300);
+        let rotated = codec_at(&KEY_A, 1_000, 300)
+            .with_previous_keys([KEY_B])
+            .expect("previous key");
+        let params = tool_params("/safe");
+        let bind = binding("alice", "tools/call", &params);
+        let token = old.mint(&serde_json::json!({ "a": 1 }), &bind, 0).expect("mint");
+        assert!(matches!(rotated.verify(&token, &bind), Verdict::Ok(_)));
+    }
+
+    #[test]
+    fn colliding_key_ids_resolve_to_ok_or_auth_failed_never_unknown_key() {
+        let forced = key_id_of(b"a deliberately forced key id");
+        let params = tool_params("/safe");
+        let bind = binding("alice", "tools/call", &params);
+
+        // A verifier holding TWO different keys under the SAME key-id.
+        let verifier = codec_at(&KEY_A, 1_000, 300)
+            .with_forced_minting_key_id(forced)
+            .with_forced_accepting_key(forced, &KEY_B)
+            .expect("second entry");
+
+        // Minted under KEY_A -> the matching entry opens it.
+        let minter_a = codec_at(&KEY_A, 1_000, 300).with_forced_minting_key_id(forced);
+        let token_a = minter_a.mint(&serde_json::json!({ "a": 1 }), &bind, 0).expect("mint");
+        assert!(matches!(verifier.verify(&token_a, &bind), Verdict::Ok(_)));
+
+        // Minted under KEY_B -> the OTHER matching entry opens it.
+        let minter_b = codec_at(&KEY_B, 1_000, 300).with_forced_minting_key_id(forced);
+        let token_b = minter_b.mint(&serde_json::json!({ "b": 2 }), &bind, 0).expect("mint");
+        assert!(matches!(verifier.verify(&token_b, &bind), Verdict::Ok(_)));
+
+        // Minted under an unrelated third key wearing the SAME id -> AuthFailed,
+        // never UnknownKey and never a false Ok.
+        let minter_c = codec_at(&KEY_C, 1_000, 300).with_forced_minting_key_id(forced);
+        let token_c = minter_c.mint(&serde_json::json!({ "c": 3 }), &bind, 0).expect("mint");
+        assert_eq!(verifier.verify(&token_c, &bind), Verdict::AuthFailed);
+    }
+
+    #[test]
+    fn malformed_tokens_yield_auth_failed_and_never_panic() {
+        let codec = codec_at(&KEY_A, 1_000, 300);
+        let params = tool_params("/safe");
+        let bind = binding("alice", "tools/call", &params);
+
+        let oversized = "A".repeat(crate::types::mrtr::MAX_REQUEST_STATE_LEN + 1);
+        let too_short = URL_SAFE_NO_PAD.encode([KEY_ID_LEN_U8, 1, 2, 3]);
+        for candidate in [
+            "",
+            "!!!not base64!!!",
+            "AAAA",
+            oversized.as_str(),
+            too_short.as_str(),
+        ] {
+            assert_eq!(
+                codec.verify(candidate, &bind),
+                Verdict::AuthFailed,
+                "malformed input {candidate:?} must be a verdict, not a panic"
+            );
+        }
+    }
+
+    #[test]
+    fn a_minted_token_fits_inside_the_accepted_bound() {
+        let codec = codec_at(&KEY_A, 1_000, 300);
+        let params = tool_params("/safe");
+        let bind = binding("alice", "tools/call", &params);
+        let token = codec
+            .mint(&serde_json::json!({ "a": "x".repeat(64) }), &bind, 0)
+            .expect("mint");
+        assert!(token.len() <= crate::types::mrtr::MAX_REQUEST_STATE_LEN);
+    }
+
+    #[test]
+    fn minting_an_oversized_state_errors_rather_than_producing_a_self_rejecting_token() {
+        let codec = codec_at(&KEY_A, 1_000, 300);
+        let params = tool_params("/safe");
+        let bind = binding("alice", "tools/call", &params);
+        let huge = serde_json::json!({ "blob": "x".repeat(crate::types::mrtr::MAX_REQUEST_STATE_LEN) });
+        assert!(
+            codec.mint(&huge, &bind, 0).is_err(),
+            "a token the server would itself reject must never be minted"
         );
     }
 
