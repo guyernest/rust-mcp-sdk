@@ -553,6 +553,86 @@ fn resumability_store(
     state.event_store.as_ref()
 }
 
+// ---------------------------------------------------------------------------
+// Direct-response id ownership (Plan 113-08, HTTP-05).
+//
+// # The invariant, scoped precisely
+//
+//   Every DIRECT response to a live request carries THAT request's id, on BOTH
+//   eras. A REPLAYED HISTORICAL EVENT is not a direct response and legitimately
+//   retains its ORIGINAL id.
+//
+// The scoping is load-bearing. Stated as "every response id equals the live
+// request id on both eras" the claim contradicts v1 resumability, whose entire
+// purpose is to re-emit past events unchanged — so a literal implementation
+// would either break v1 replay or make the assertion vacuous. The two behaviors
+// are deliberately separated here so they are never conflated again:
+//
+//   * DIRECT response  -> assembled through `envelope_for_live_request`
+//   * HISTORICAL event -> re-emitted verbatim by `replay_sse_events_from_header`
+//
+// MRTR independently reinforces the direct half: a retry MUST use a different
+// JSON-RPC id, so any id replay becomes immediately visible to the client.
+//
+// # Audit — every site in this transport that assembles, clones, caches or
+// # stores a response, and its verdict
+//
+// | Site | Kind | Verdict |
+// |------|------|---------|
+// | `handle_fast_path_request` | direct | routed through `envelope_for_live_request` with the id captured at ingress |
+// | `dispatch_message_with_middleware` (Public Request arm) | direct | routed through `envelope_for_live_request` |
+// | `assemble_discover_response_fast` | direct | routed through `envelope_for_live_request` |
+// | `assemble_discover_response_with_middleware` | direct | routed through `envelope_for_live_request` |
+// | `build_response` | framing | dispatches an ALREADY-constructed envelope by transport mode; constructs none of its own |
+// | `build_json_response` / `build_sse_response_from_single_message` | framing | serialize/frame one already-constructed envelope; construct none of their own |
+// | `build_success_response_with_middleware` | framing | serializes one already-constructed envelope |
+// | `state.sse_streams` send inside `build_response` | routing | gated on `sessions_on`, so a v2 reply can never be handed to another caller's stream (the T-113-07 fix) |
+// | `store_response_event` | caching | gated on `resumability_active`; on v1 it retains a whole envelope, which is CORRECT — that is the historical-event record replay re-emits |
+// | `sse_event_for_message` | caching | same gate, same verdict |
+// | `replay_sse_events_from_header` | historical | re-emits stored events verbatim, ORIGINAL ids intact — intentional, and asserted by `v1_replayed_event_retains_original_id` |
+// | `create_error_response_with_id` + `v2_gate_reject_response` + `map_unparsed_body_for_v2` | direct (error) | cannot use the constructor: `RequestId` has no `Null` variant and a JSON-RPC error for an unparseable body legitimately carries `id: null`. Their id comes from `raw_request_id(<the LIVE body>)`, never from a cache, so the invariant holds by construction |
+// | `create_error_response` | direct (error) | pre-dispatch transport failure with no live id at all; emits `id: null`, unchanged since before v2 |
+//
+// No site was found reusing an envelope for a direct response. One site WAS
+// found handing a direct response to the WRONG caller — the `sse_streams` route
+// above — and it is fixed in `build_response`.
+// ---------------------------------------------------------------------------
+
+/// **The ONE constructor for a direct JSON-RPC response envelope on this
+/// transport.**
+///
+/// It takes the PAYLOAD (the `result`/`error` value) and the LIVE request id as
+/// SEPARATE arguments, so a caller physically cannot pass a whole cached envelope
+/// through and have its stale id survive. That argument shape is the actual
+/// guarantee; the `debug_assert!` below is only belt and braces.
+///
+/// A source-audit comment plus a `debug_assert!` would catch a regression solely
+/// in debug builds and solely if someone ran the right test (Codex Plan-08
+/// MEDIUM). Making the id a mandatory, separately-supplied parameter makes the
+/// stale-id response unconstructible instead.
+///
+/// This is deliberately NOT applied to a replayed historical event: see the
+/// audit block above.
+fn envelope_for_live_request(
+    payload: crate::types::jsonrpc::ResponsePayload<serde_json::Value, crate::types::JSONRPCError>,
+    live_id: crate::types::RequestId,
+) -> crate::types::JSONRPCResponse {
+    let expected = live_id.clone();
+    let response = match payload {
+        crate::types::jsonrpc::ResponsePayload::Result(result) => {
+            crate::types::JSONRPCResponse::success(live_id, result)
+        },
+        crate::types::jsonrpc::ResponsePayload::Error(error) => {
+            crate::types::JSONRPCResponse::error(live_id, error)
+        },
+    };
+    debug_assert_eq!(
+        response.id, expected,
+        "a direct response must carry the LIVE request id"
+    );
+    response
+}
+
 /// The decoded `MCP-Protocol-Version` header, classified for the era matrix.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum HeaderProtocolVersion {
@@ -2233,6 +2313,9 @@ async fn handle_fast_path_request(
     } = dispatch;
 
     let era = protocol_context.as_ref().map(|pc| pc.era);
+    // Captured BEFORE dispatch consumes it: this is the LIVE request's id, and
+    // it is the only id the direct response may carry (HTTP-05).
+    let live_id = id.clone();
     let json_response = {
         let server = state.server.lock().await;
         // Thread the ALREADY-RESOLVED ProtocolContext into dispatch — the HTTP
@@ -2254,7 +2337,11 @@ async fn handle_fast_path_request(
     // `None` on v1 / not-opted-in, so every legacy status is unchanged.
     let v2_status = v2_dispatch_response_status(era, &json_response);
 
-    let response_msg = TransportMessage::Response(json_response);
+    // Re-envelope the dispatch PAYLOAD onto the live id. Whatever produced the
+    // payload — a handler, a cache, a shared `Arc` — it reaches the wire inside
+    // an envelope that structurally cannot carry anyone else's id.
+    let response_msg =
+        TransportMessage::Response(envelope_for_live_request(json_response.payload, live_id));
 
     let negotiated_version = if is_init_request {
         let version = extract_negotiated_version(&response_msg);
@@ -2339,13 +2426,16 @@ async fn assemble_discover_response_fast(
         v2_outbound,
         sessions_on,
     } = shape;
+    let live_id = id.clone();
     let json_response = {
         let server = state.server.lock().await;
         server.handle_discover(id, protocol_context)
     };
     let era = protocol_context.map(|pc| pc.era);
     let v2_status = v2_dispatch_response_status(era, &json_response);
-    let response_msg = TransportMessage::Response(json_response);
+    // Same structural guarantee as every other direct response (HTTP-05).
+    let response_msg =
+        TransportMessage::Response(envelope_for_live_request(json_response.payload, live_id));
 
     store_response_event(state, era, response_session_id, &response_msg).await;
 
@@ -2646,13 +2736,16 @@ async fn assemble_discover_response_with_middleware(
         v2_outbound,
         sessions_on,
     } = shape;
+    let live_id = id.clone();
     let json_response = {
         let server = state.server.lock().await;
         server.handle_discover(id, protocol_context)
     };
     let era = protocol_context.map(|pc| pc.era);
     let v2_status = v2_dispatch_response_status(era, &json_response);
-    let response_msg = TransportMessage::Response(json_response);
+    // Same structural guarantee as every other direct response (HTTP-05).
+    let response_msg =
+        TransportMessage::Response(envelope_for_live_request(json_response.payload, live_id));
 
     store_response_event(state, era, response_session_id, &response_msg).await;
 
@@ -2717,6 +2810,8 @@ async fn dispatch_message_with_middleware(
         },
         HttpIngress::Public(TransportMessage::Request { id, request }) => {
             let era = protocol_context.as_ref().map(|pc| pc.era);
+            // Captured BEFORE dispatch consumes it (see the fast-path twin).
+            let live_id = id.clone();
             let json_response = {
                 let server = state.server.lock().await;
                 // Thread the ALREADY-RESOLVED ProtocolContext into dispatch
@@ -2727,7 +2822,11 @@ async fn dispatch_message_with_middleware(
             };
             // Code-driven v2 status (see the fast-path twin).
             let v2_status = v2_dispatch_response_status(era, &json_response);
-            let response_msg = TransportMessage::Response(json_response);
+            // Same structural guarantee as every other direct response (HTTP-05).
+            let response_msg = TransportMessage::Response(envelope_for_live_request(
+                json_response.payload,
+                live_id,
+            ));
 
             let negotiated_version = if is_init_request {
                 let version = extract_negotiated_version(&response_msg);
@@ -4543,6 +4642,82 @@ mod tests {
             StatusCode::OK,
             "the v2 caller must get its OWN response back"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // Direct-response id ownership (Plan 113-08, HTTP-05).
+    // -----------------------------------------------------------------------
+
+    /// The constructor takes a PAYLOAD, so a stale envelope's id cannot survive:
+    /// re-enveloping a cached response with a different live id yields the live
+    /// id and the SAME payload, on both the result and error arms.
+    #[test]
+    fn envelope_for_live_request_restamps_a_cached_payload() {
+        use crate::types::jsonrpc::ResponsePayload;
+
+        // A response cached from an EARLIER caller.
+        let cached = crate::types::JSONRPCResponse::success(
+            crate::types::RequestId::Number(1),
+            serde_json::json!({ "cached": true }),
+        );
+        let live = envelope_for_live_request(
+            cached.payload.clone(),
+            crate::types::RequestId::String("caller-2".to_string()),
+        );
+        assert_eq!(live.id, crate::types::RequestId::String("caller-2".into()));
+        assert_eq!(live.jsonrpc, "2.0");
+        match (&cached.payload, &live.payload) {
+            (ResponsePayload::Result(before), ResponsePayload::Result(after)) => {
+                assert_eq!(before, after, "the PAYLOAD survives verbatim");
+            },
+            _ => panic!("the result arm must stay a result"),
+        }
+
+        // The error arm is re-stamped identically.
+        let cached_error = crate::types::JSONRPCResponse::error(
+            crate::types::RequestId::Number(1),
+            crate::types::JSONRPCError::new(
+                crate::types::protocol::error_codes::METHOD_NOT_FOUND,
+                "nope",
+            ),
+        );
+        let live_error =
+            envelope_for_live_request(cached_error.payload, crate::types::RequestId::Number(99));
+        assert_eq!(live_error.id, crate::types::RequestId::Number(99));
+        let ResponsePayload::Error(error) = live_error.payload else {
+            panic!("the error arm must stay an error");
+        };
+        assert_eq!(
+            error.code,
+            crate::types::protocol::error_codes::METHOD_NOT_FOUND
+        );
+    }
+
+    proptest::proptest! {
+        /// Whatever id goes in comes out — the constructor never invents,
+        /// coerces or drops one, and never panics.
+        #[test]
+        fn envelope_for_live_request_always_carries_the_supplied_id(
+            numeric in proptest::prelude::any::<bool>(),
+            number in proptest::prelude::any::<i64>(),
+            text in "[a-zA-Z0-9-]{0,32}",
+            is_error in proptest::prelude::any::<bool>(),
+        ) {
+            let live_id = if numeric {
+                crate::types::RequestId::Number(number)
+            } else {
+                crate::types::RequestId::String(text)
+            };
+            let payload = if is_error {
+                crate::types::jsonrpc::ResponsePayload::Error(
+                    crate::types::JSONRPCError::new(-1, "e"),
+                )
+            } else {
+                crate::types::jsonrpc::ResponsePayload::Result(serde_json::json!({ "k": "v" }))
+            };
+            let response = envelope_for_live_request(payload, live_id.clone());
+            proptest::prop_assert_eq!(response.id, live_id);
+        }
     }
 
     proptest::proptest! {
