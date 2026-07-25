@@ -365,12 +365,36 @@ pub struct ReadResourceResult {
         deserialize_with = "crate::types::content::resource_contents_serde::deserialize"
     )]
     pub contents: Vec<Content>,
+
+    /// Optional per-result metadata (`_meta`).
+    ///
+    /// The explicit `rename` defeats the struct-level `rename_all = "camelCase"`
+    /// (which would emit `meta`, not the MCP spelling — the D-113-A defect);
+    /// `skip_serializing_if` keeps an absent value byte-identical to the
+    /// pre-Phase-113 wire, so a v1 `resources/read` response is unchanged.
+    ///
+    /// This is the third leg of the MRTR authoring surface. `CallToolResult` and
+    /// [`GetPromptResult`](crate::types::GetPromptResult) already carried a
+    /// `_meta`, so a tool or prompt handler could signal "I need more input" by
+    /// placing [`MRTR_SIGNAL_META_KEY`](crate::types::mrtr::MRTR_SIGNAL_META_KEY)
+    /// here; a resource handler could not. Adding it is additive rather than a
+    /// major bump because this struct is `#[non_exhaustive]` — `cargo
+    /// semver-checks`' `constructible_struct_adds_field` only fires on
+    /// externally-constructible structs (contrast D-113-D, where the five
+    /// list-request structs were NOT `#[non_exhaustive]` and the same edit was a
+    /// 3.0).
+    #[serde(rename = "_meta", skip_serializing_if = "Option::is_none", default)]
+    #[allow(clippy::pub_underscore_fields)] // _meta is part of the MCP protocol spec
+    pub _meta: Option<serde_json::Value>,
 }
 
 impl ReadResourceResult {
     /// Create a new read resource result.
     pub fn new(contents: Vec<Content>) -> Self {
-        Self { contents }
+        Self {
+            contents,
+            _meta: None,
+        }
     }
 }
 

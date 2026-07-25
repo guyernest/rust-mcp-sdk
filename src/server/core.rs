@@ -1140,8 +1140,14 @@ pub(crate) enum ResponseDisposition {
     // 114 — it is wired by that phase at dispatch and emitted by the shared
     // helper below. Retained here (rather than added later) so the mechanism
     // 114 depends on exists and is exercised by the `as_wire_str` unit test.
+    //
+    // The allow is SCOPED to `not(test)` rather than blanket, the same
+    // tightening plan 06 applied to `InputRequired`: the test build — which is
+    // what `make quality-gate` runs — still lints this variant, so if a future
+    // edit drops the unit test that constructs it AND Phase 114 has not yet
+    // wired it, the gate says so instead of the allow hiding it.
     /// The result is a task handle rather than a terminal result (Phase 114).
-    #[allow(dead_code)]
+    #[cfg_attr(not(test), allow(dead_code))]
     Task,
 }
 
@@ -1588,6 +1594,23 @@ pub(crate) struct MrtrEgressInputs<'a> {
     pub round: u8,
 }
 
+/// The outcome of the UNCONDITIONAL internal-signal strip.
+///
+/// Three states rather than an `Option`, because "the reserved key was present
+/// but did not parse" must not collapse into "no signal": a handler that meant
+/// to return `input_required` and got the shape wrong would otherwise ship a
+/// silently EMPTY success for an operation it never completed.
+#[cfg(all(feature = "streamable-http", not(target_arch = "wasm32")))]
+#[derive(Debug)]
+pub(crate) enum StrippedSignal {
+    /// The reserved key was not present.
+    Absent,
+    /// A well-formed signal was removed from `_meta`.
+    Present(Box<crate::types::mrtr::MrtrSignal>),
+    /// The reserved key was present but is not a well-formed `MrtrSignal`.
+    Malformed,
+}
+
 /// Take the pmcp-INTERNAL MRTR signal off a result's `_meta`, on EVERY path.
 ///
 /// The removal is unconditional — v1, non-eligible method, ineligible era, all
@@ -1596,95 +1619,390 @@ pub(crate) struct MrtrEgressInputs<'a> {
 /// client the very state the AEAD token exists to seal. An `_meta` emptied by
 /// the removal is dropped, so a signalling handler's wire shape matches a
 /// non-signalling one exactly.
+///
+/// This runs BEFORE any era or eligibility branch in [`mrtr_egress`]; there is
+/// no path on which publishing the key is correct, so there is no path on which
+/// this is skipped (T-113-31 / T-113-60).
 #[cfg(all(feature = "streamable-http", not(target_arch = "wasm32")))]
-fn take_mrtr_signal(response: &mut JSONRPCResponse) -> Option<Value> {
-    let crate::types::jsonrpc::ResponsePayload::Result(ref mut value) = response.payload else {
-        return None;
+pub(crate) fn strip_mrtr_signal(result: &mut Value) -> StrippedSignal {
+    let Some(object) = result.as_object_mut() else {
+        return StrippedSignal::Absent;
     };
-    let result = value.as_object_mut()?;
-    let signal = result
+    let Some(raw) = object
         .get_mut("_meta")
         .and_then(Value::as_object_mut)
-        .and_then(|meta| meta.remove(crate::types::mrtr::MRTR_SIGNAL_META_KEY))?;
-    if result
+        .and_then(|meta| meta.remove(crate::types::mrtr::MRTR_SIGNAL_META_KEY))
+    else {
+        return StrippedSignal::Absent;
+    };
+    if object
         .get("_meta")
         .and_then(Value::as_object)
         .is_some_and(serde_json::Map::is_empty)
     {
-        result.remove("_meta");
+        object.remove("_meta");
     }
-    Some(signal)
+    serde_json::from_value(raw).map_or(StrippedSignal::Malformed, |signal| {
+        StrippedSignal::Present(Box::new(signal))
+    })
+}
+
+/// The MRTR target for this response, or `None` when `input_required` is
+/// FORBIDDEN here.
+///
+/// Two independent gates, both of which must pass: the era must be v2, and the
+/// dispatched request must be one of the three methods the spec allows an
+/// `InputRequiredResult` on. `inputs.target` is itself produced by
+/// [`mrtr_binding_parts`], whose first gate is the exhaustive no-wildcard
+/// [`client_request_mrtr_eligible`] match — so a future `ClientRequest` variant
+/// cannot reach here without an explicit classification (T-113-23).
+#[cfg(all(feature = "streamable-http", not(target_arch = "wasm32")))]
+fn eligible_mrtr_target<'a>(inputs: &MrtrEgressInputs<'a>) -> Option<&'a (&'static str, Value)> {
+    if !matches!(
+        inputs.protocol_context.map(|ctx| ctx.era),
+        Some(crate::types::protocol::Era::V2)
+    ) {
+        return None;
+    }
+    inputs
+        .target
+        .filter(|target| crate::types::mrtr::mrtr_eligible(target.0))
+}
+
+/// Replace the response with a JSON-RPC error, discarding whatever the handler
+/// produced.
+///
+/// Used for every fail-closed MRTR egress path: a half-emitted `input_required`
+/// (requests without a token, or a token without requests) is strictly worse
+/// than an error, because the client cannot resume from it and cannot tell that
+/// it should not try (T-113-33).
+#[cfg(all(feature = "streamable-http", not(target_arch = "wasm32")))]
+fn fail_mrtr_egress(
+    response: &mut JSONRPCResponse,
+    code: i32,
+    message: String,
+    data: Option<Value>,
+) -> ResponseDisposition {
+    response.payload =
+        crate::types::jsonrpc::ResponsePayload::Error(crate::types::jsonrpc::JSONRPCError {
+            code,
+            message,
+            data,
+        });
+    ResponseDisposition::Complete
 }
 
 /// Convert a handler's MRTR signal into a wire `input_required` result.
 ///
 /// Returns the [`ResponseDisposition`] the shared envelope helper should emit.
-/// This is the MINIMAL egress plan 06 needs to make its own re-elicitation
-/// must-haves observable end-to-end; plan 09 hardens it (declared-capability
-/// precheck before minting, the exhaustive eligible-method tripwire, and the
-/// `serverInfo` relocation).
 ///
-/// Fail-closed: any failure to seal the continuation replaces the response with
-/// a JSON-RPC `INTERNAL_ERROR` rather than emitting a bogus "complete" result
-/// for an operation the handler did not complete.
+/// # The order of operations is load-bearing
+///
+/// 1. **Strip, unconditionally.** [`strip_mrtr_signal`] runs before any era or
+///    eligibility branch, so the pmcp-internal key and its plaintext
+///    continuation cannot reach the wire on ANY path (T-113-31 / T-113-60).
+/// 2. **Fail loudly where MRTR is impossible.** A signal on v1, on a
+///    non-opted-in request, or on a method outside the three eligible ones is a
+///    server BUG — no legitimate handler writes the reserved key — so it becomes
+///    an `INTERNAL_ERROR` rather than a silently mangled "complete" result.
+/// 3. **Check declared client capabilities BEFORE minting.** A rejected result
+///    costs zero cryptographic work, and the server never asks a client for
+///    something it cannot answer (T-113-32).
+/// 4. **Mint, then write.** A mint failure is an error, never a partial result.
 #[cfg(all(feature = "streamable-http", not(target_arch = "wasm32")))]
 pub(crate) fn mrtr_egress(
     response: &mut JSONRPCResponse,
     inputs: &MrtrEgressInputs<'_>,
 ) -> ResponseDisposition {
-    let Some(raw_signal) = take_mrtr_signal(response) else {
-        return ResponseDisposition::Complete;
+    // (1) UNCONDITIONAL strip — before the era check, before the eligibility
+    // check, on v1 as well as v2.
+    let stripped = match response.payload {
+        crate::types::jsonrpc::ResponsePayload::Result(ref mut value) => strip_mrtr_signal(value),
+        crate::types::jsonrpc::ResponsePayload::Error(_) => StrippedSignal::Absent,
     };
-    // The signal is now stripped on every path; below this line it can only be
-    // CONSUMED, never leaked.
-    if !matches!(
-        inputs.protocol_context.map(|ctx| ctx.era),
-        Some(crate::types::protocol::Era::V2)
-    ) {
-        return ResponseDisposition::Complete;
-    }
-    let Some(target) = inputs
-        .target
-        .filter(|target| crate::types::mrtr::mrtr_eligible(target.0))
-    else {
-        tracing::warn!(
+    let signal = match stripped {
+        StrippedSignal::Absent => return ResponseDisposition::Complete,
+        StrippedSignal::Malformed => {
+            tracing::error!(
+                target: "mcp.mrtr",
+                method = inputs.target.map(|target| target.0),
+                "a handler wrote the reserved MRTR signal key with a payload that is not a \
+                 well-formed MrtrSignal"
+            );
+            return fail_mrtr_egress(
+                response,
+                crate::types::protocol::error_codes::INTERNAL_ERROR,
+                MRTR_MALFORMED_SIGNAL_MESSAGE.to_string(),
+                None,
+            );
+        },
+        StrippedSignal::Present(signal) => signal,
+    };
+    // Below this line the signal can only be CONSUMED, never leaked.
+
+    // (2) A signal where MRTR is impossible is a server bug — fail loudly.
+    let Some(target) = eligible_mrtr_target(inputs) else {
+        tracing::error!(
             target: "mcp.mrtr",
-            "a handler signalled input_required on a method the spec forbids it on — \
-             the signal was dropped and the result emitted as complete"
+            method = inputs.target.map(|target| target.0),
+            "a handler signalled input_required where the spec forbids it — on v1, on a \
+             non-opted-in request, or on a method outside tools/call, prompts/get and \
+             resources/read"
         );
-        return ResponseDisposition::Complete;
+        return fail_mrtr_egress(
+            response,
+            crate::types::protocol::error_codes::INTERNAL_ERROR,
+            MRTR_FORBIDDEN_PATH_MESSAGE.to_string(),
+            None,
+        );
     };
-    match seal_input_required(response, &raw_signal, target, inputs) {
+
+    // (3) Declared-capability precheck, BEFORE any minting.
+    if let Some(rejection) = reject_undeclared_capabilities(&signal, inputs, target.0) {
+        return fail_mrtr_egress(
+            response,
+            crate::types::protocol::error_codes::MISSING_REQUIRED_CLIENT_CAPABILITY,
+            rejection.0,
+            Some(rejection.1),
+        );
+    }
+
+    // (4) Mint and write.
+    match seal_input_required(response, &signal, target, inputs) {
         Ok(disposition) => disposition,
         Err(reason) => {
             tracing::error!(target: "mcp.mrtr", reason, "could not emit an input_required result");
-            response.payload = crate::types::jsonrpc::ResponsePayload::Error(
-                crate::types::jsonrpc::JSONRPCError {
-                    code: crate::types::protocol::error_codes::INTERNAL_ERROR,
-                    message: reason.to_string(),
-                    data: None,
-                },
-            );
-            ResponseDisposition::Complete
+            fail_mrtr_egress(
+                response,
+                crate::types::protocol::error_codes::INTERNAL_ERROR,
+                reason.to_string(),
+                None,
+            )
         },
     }
 }
 
-/// Mint the continuation and write the three SERVER-OWNED `input_required`
-/// fields onto the result.
+/// The client-facing message for a signal on a path where MRTR is impossible.
+#[cfg(all(feature = "streamable-http", not(target_arch = "wasm32")))]
+const MRTR_FORBIDDEN_PATH_MESSAGE: &str =
+    "the server produced an input_required signal on a request that cannot carry one";
+
+/// The client-facing message for a reserved-key payload that is not an
+/// `MrtrSignal`.
+#[cfg(all(feature = "streamable-http", not(target_arch = "wasm32")))]
+const MRTR_MALFORMED_SIGNAL_MESSAGE: &str = "the server produced a malformed input_required signal";
+
+/// The client-facing message for `-32021`.
+#[cfg(all(feature = "streamable-http", not(target_arch = "wasm32")))]
+const MISSING_CAPABILITY_MESSAGE: &str =
+    "the server needs a client capability this client did not declare";
+
+/// Reject the whole response when any `inputRequests` entry needs a capability
+/// or submode the client did not declare (T-113-32).
 ///
-/// `resultType`, `inputRequests` and `requestState` are INSERTED (overwriting),
-/// never `entry().or_insert`-ed: they are server-owned reserved fields, and a
-/// handler-supplied value must never survive.
+/// Returns `Some((message, data))` for a rejection, where `data` is
+/// `{"requiredCapabilities": <ClientCapabilities OBJECT>}` — an OBJECT such as
+/// `{"elicitation": {}}`, never an array and never a list of strings. Emitting
+/// an array here is a wire-contract violation the official conformance suite
+/// grades.
+///
+/// **All-or-nothing.** A partial `inputRequests` map with the undeclared entries
+/// silently dropped is NOT an option: the spec's MUST NOT is about the whole
+/// result, and a client answering a subset would resume a continuation the
+/// handler cannot complete.
+///
+/// # `clientCapabilities` is NOT an authorization input
+///
+/// The declared capabilities are CLIENT-SUPPLIED and trivially forgeable. They
+/// say only what the client can ANSWER, never what it is allowed to reach. No
+/// access decision may read them; the AEAD `requestState` binding and
+/// [`resolve_mrtr_principal`] are the identity controls.
+#[cfg(all(feature = "streamable-http", not(target_arch = "wasm32")))]
+fn reject_undeclared_capabilities(
+    signal: &crate::types::mrtr::MrtrSignal,
+    inputs: &MrtrEgressInputs<'_>,
+    method: &str,
+) -> Option<(String, Value)> {
+    let declared = inputs
+        .protocol_context
+        .and_then(|context| context.client_capabilities.as_ref());
+    let missing = missing_client_capabilities(&signal.input_requests, declared)?;
+    let required =
+        serde_json::to_value(&missing).unwrap_or_else(|_| Value::Object(serde_json::Map::new()));
+    tracing::warn!(
+        target: "mcp.mrtr",
+        method,
+        required = %required,
+        "refused to emit inputRequests for a capability the client did not declare — no \
+         requestState was minted"
+    );
+    Some((
+        MISSING_CAPABILITY_MESSAGE.to_string(),
+        serde_json::json!({ "requiredCapabilities": required }),
+    ))
+}
+
+/// One capability-or-submode an `inputRequests` map needs.
+///
+/// A five-variant enum in a set rather than five `bool` fields: clippy's
+/// `struct_excessive_bools` caps a struct at three, and the set shape says the
+/// thing directly — these are the members of a domain, not independent switches.
+#[cfg(all(feature = "streamable-http", not(target_arch = "wasm32")))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum MissingCapability {
+    /// No `elicitation` capability at all was declared.
+    Elicitation,
+    /// `elicitation` was declared, but without URL-mode support.
+    ElicitationUrl,
+    /// No `sampling` capability at all was declared.
+    Sampling,
+    /// `sampling` was declared, but without tool-augmented support.
+    SamplingTools,
+    /// No `roots` capability was declared.
+    Roots,
+}
+
+/// Which client capabilities an `inputRequests` map needs but the client did not
+/// declare.
+///
+/// Accumulated as a SET rather than as partially-built capability objects, so
+/// the "two entries both need elicitation" case does not require merging two
+/// [`ElicitationCapabilities`](crate::types::capabilities::ElicitationCapabilities)
+/// values.
+#[cfg(all(feature = "streamable-http", not(target_arch = "wasm32")))]
+#[derive(Debug, Default)]
+struct MissingCapabilities(std::collections::BTreeSet<MissingCapability>);
+
+#[cfg(all(feature = "streamable-http", not(target_arch = "wasm32")))]
+impl MissingCapabilities {
+    /// Note whatever `request` needs and `declared` lacks.
+    fn note(
+        &mut self,
+        request: &crate::types::mrtr::InputRequest,
+        declared: Option<&crate::types::ClientCapabilities>,
+    ) {
+        match request {
+            crate::types::mrtr::InputRequest::Elicitation(params) => {
+                self.note_elicitation(params, declared.and_then(|caps| caps.elicitation.as_ref()));
+            },
+            crate::types::mrtr::InputRequest::Sampling(params) => {
+                self.note_sampling(params, declared.and_then(|caps| caps.sampling.as_ref()));
+            },
+            crate::types::mrtr::InputRequest::ListRoots => {
+                if declared.is_none_or(|caps| caps.roots.is_none()) {
+                    self.0.insert(MissingCapability::Roots);
+                }
+            },
+        }
+    }
+
+    /// Elicitation is SUBMODE-aware: a form entry needs only the capability
+    /// object, a URL entry needs the declared object to carry URL support.
+    ///
+    /// The submode signal read here is
+    /// [`ElicitationCapabilities::url`](crate::types::capabilities::ElicitationCapabilities::url),
+    /// which exists in the shipped 2025-11-25 capability type. `113-SPEC-RECHECK.md`
+    /// records the Phase-113 spec verdict as PENDING, so plan 12 must re-verify
+    /// that the final 2026-07-28 schema still expresses URL support as this
+    /// sub-field before any Phase-113 requirement is flipped complete.
+    fn note_elicitation(
+        &mut self,
+        params: &crate::types::elicitation::ElicitRequestParams,
+        declared: Option<&crate::types::capabilities::ElicitationCapabilities>,
+    ) {
+        match (params, declared) {
+            (_, None) => {
+                self.0.insert(MissingCapability::Elicitation);
+            },
+            (crate::types::elicitation::ElicitRequestParams::Form { .. }, Some(_)) => {},
+            // Declared, but form-only: the SUBMODE is what is missing.
+            (crate::types::elicitation::ElicitRequestParams::Url { .. }, Some(caps)) => {
+                if caps.url.is_none() {
+                    self.0.insert(MissingCapability::ElicitationUrl);
+                }
+            },
+        }
+    }
+
+    /// Sampling requires the `sampling` capability, and a tool-augmented request
+    /// additionally requires the client's declared `sampling.tools` sub-field.
+    fn note_sampling(
+        &mut self,
+        params: &crate::types::sampling::CreateMessageParams,
+        declared: Option<&crate::types::capabilities::SamplingCapabilities>,
+    ) {
+        let needs_tools = params.tools.is_some() || params.tool_choice.is_some();
+        let tools_declared = declared.is_some_and(|caps| caps.tools.is_some());
+        if declared.is_none() {
+            self.0.insert(MissingCapability::Sampling);
+        }
+        if needs_tools && !tools_declared {
+            self.0.insert(MissingCapability::SamplingTools);
+        }
+    }
+
+    /// Project the set into a `ClientCapabilities` OBJECT carrying ONLY what is
+    /// missing, or `None` when nothing is.
+    fn into_capabilities(self) -> Option<crate::types::ClientCapabilities> {
+        if self.0.is_empty() {
+            return None;
+        }
+        let empty = || Value::Object(serde_json::Map::new());
+        let has = |capability| self.0.contains(&capability);
+        let mut missing = crate::types::ClientCapabilities::default();
+        if has(MissingCapability::Elicitation) || has(MissingCapability::ElicitationUrl) {
+            missing.elicitation = Some(crate::types::capabilities::ElicitationCapabilities {
+                form: None,
+                url: has(MissingCapability::ElicitationUrl).then(empty),
+            });
+        }
+        if has(MissingCapability::Sampling) || has(MissingCapability::SamplingTools) {
+            missing.sampling = Some(crate::types::capabilities::SamplingCapabilities {
+                models: None,
+                context: None,
+                tools: has(MissingCapability::SamplingTools).then(empty),
+            });
+        }
+        if has(MissingCapability::Roots) {
+            missing.roots = Some(crate::types::capabilities::RootsCapabilities::default());
+        }
+        Some(missing)
+    }
+}
+
+/// The capabilities `requests` needs that `declared` does not offer, or `None`
+/// when every kind and submode is declared.
+#[cfg(all(feature = "streamable-http", not(target_arch = "wasm32")))]
+fn missing_client_capabilities(
+    requests: &crate::types::mrtr::InputRequests,
+    declared: Option<&crate::types::ClientCapabilities>,
+) -> Option<crate::types::ClientCapabilities> {
+    let mut missing = MissingCapabilities::default();
+    for request in requests.values() {
+        missing.note(request, declared);
+    }
+    missing.into_capabilities()
+}
+
+/// Mint the continuation and write the two SERVER-OWNED `input_required` fields
+/// onto the result.
+///
+/// `inputRequests` and `requestState` are INSERTED (overwriting), never
+/// `entry().or_insert`-ed: they are server-owned reserved fields, and a
+/// handler-supplied value must never survive. `resultType` is deliberately NOT
+/// written here — [`inject_v2_result_envelope`] is its single writer.
+///
+/// The spec requires an `InputRequiredResult` to carry at least one of
+/// `inputRequests` or `requestState`. Both are written unconditionally here and
+/// a mint failure short-circuits before either is, so the obligation holds by
+/// construction (T-113-33).
 #[cfg(all(feature = "streamable-http", not(target_arch = "wasm32")))]
 fn seal_input_required(
     response: &mut JSONRPCResponse,
-    raw_signal: &Value,
+    signal: &crate::types::mrtr::MrtrSignal,
     target: &(&'static str, Value),
     inputs: &MrtrEgressInputs<'_>,
 ) -> std::result::Result<ResponseDisposition, &'static str> {
-    let signal: crate::types::mrtr::MrtrSignal = serde_json::from_value(raw_signal.clone())
-        .map_err(|_| "the handler's MRTR signal is not a well-formed MrtrSignal")?;
     let principal = resolve_mrtr_principal(inputs.principal)
         .ok_or("a requestState continuation cannot be minted for an unauthenticated caller")?;
     let codec = inputs
@@ -3966,131 +4284,464 @@ mod tests {
         // -----------------------------------------------------------------
         // Egress: the signal never reaches the wire, and `input_required` is
         // emitted with a token minted at round + 1.
+        //
+        // Its OWN module so `cargo test -- mrtr_egress` selects exactly this
+        // suite; the ingress helpers above are reached through `use super::*`.
         // -----------------------------------------------------------------
+        mod mrtr_egress {
+            use super::*;
 
-        fn signal_meta() -> Value {
-            let mut requests = crate::types::mrtr::InputRequests::new();
-            requests.insert(
-                "user_name".to_string(),
-                crate::types::mrtr::InputRequest::Elicitation(Box::new(
-                    crate::types::elicitation::ElicitRequestParams::Form {
-                        message: "Who are you?".to_string(),
-                        requested_schema: json!({ "type": "object" }),
-                    },
-                )),
-            );
-            serde_json::to_value(crate::types::mrtr::MrtrSignal {
-                input_requests: requests,
-                continuation: json!({ "step": 1 }),
-            })
-            .expect("signal serializes")
-        }
-
-        fn signalling_response() -> JSONRPCResponse {
-            ServerCore::success_response(
-                RequestId::from(1i64),
-                json!({
-                    "content": [],
-                    "_meta": { crate::types::mrtr::MRTR_SIGNAL_META_KEY: signal_meta() },
-                }),
-            )
-        }
-
-        fn result_of(response: &JSONRPCResponse) -> &Value {
-            match response.payload {
-                ResponsePayload::Result(ref value) => value,
-                ResponsePayload::Error(_) => panic!("expected a result payload"),
+            /// A form-mode elicitation `inputRequests` map.
+            fn form_requests() -> crate::types::mrtr::InputRequests {
+                let mut requests = crate::types::mrtr::InputRequests::new();
+                requests.insert(
+                    "user_name".to_string(),
+                    crate::types::mrtr::InputRequest::Elicitation(Box::new(
+                        crate::types::elicitation::ElicitRequestParams::Form {
+                            message: "Who are you?".to_string(),
+                            requested_schema: json!({ "type": "object" }),
+                        },
+                    )),
+                );
+                requests
             }
-        }
 
-        #[test]
-        fn egress_emits_input_required_with_a_round_plus_one_token() {
-            let codec = codec(&KEY_A, 300);
-            let request = call_tool(json!({}));
-            let target = mrtr_binding_parts(&request);
-            let context = v2_context();
-            let mut response = signalling_response();
-            let disposition = mrtr_egress(
-                &mut response,
-                &MrtrEgressInputs {
-                    target: target.as_ref(),
-                    protocol_context: Some(&context),
-                    principal: MrtrPrincipal {
-                        authenticated_subject: Some(ALICE),
-                        has_auth_provider: false,
+            fn signal_meta() -> Value {
+                // Built through the PUBLIC authoring surface, so the doc'd handler
+                // path is the one under test.
+                let (_, value) = crate::types::mrtr::MrtrSignal {
+                    input_requests: form_requests(),
+                    continuation: json!({ "step": 1 }),
+                }
+                .into_meta_entry()
+                .expect("signal serializes");
+                value
+            }
+
+            fn signalling_response() -> JSONRPCResponse {
+                signalling_response_for(&signal_meta())
+            }
+
+            fn signalling_response_for(signal: &Value) -> JSONRPCResponse {
+                ServerCore::success_response(
+                    RequestId::from(1i64),
+                    json!({
+                        "content": [],
+                        "_meta": { crate::types::mrtr::MRTR_SIGNAL_META_KEY: signal },
+                    }),
+                )
+            }
+
+            /// A v2 context declaring every MRTR-fulfillable client capability.
+            ///
+            /// Without this the declared-capability precheck rejects before minting,
+            /// which is a DIFFERENT path from the happy one these tests pin.
+            fn v2_context_all_caps() -> ProtocolContext {
+                v2_context().with_client_capabilities(caps(
+                    Some(crate::types::capabilities::ElicitationCapabilities {
+                        form: None,
+                        url: Some(json!({})),
+                    }),
+                    Some(crate::types::capabilities::SamplingCapabilities::default()),
+                    Some(crate::types::capabilities::RootsCapabilities::default()),
+                ))
+            }
+
+            fn caps(
+                elicitation: Option<crate::types::capabilities::ElicitationCapabilities>,
+                sampling: Option<crate::types::capabilities::SamplingCapabilities>,
+                roots: Option<crate::types::capabilities::RootsCapabilities>,
+            ) -> crate::types::ClientCapabilities {
+                crate::types::ClientCapabilities {
+                    sampling,
+                    elicitation,
+                    roots,
+                    ..Default::default()
+                }
+            }
+
+            fn error_of(response: &JSONRPCResponse) -> &crate::types::jsonrpc::JSONRPCError {
+                match response.payload {
+                    ResponsePayload::Error(ref error) => error,
+                    ResponsePayload::Result(_) => panic!("expected an error payload"),
+                }
+            }
+
+            /// Run egress against a `tools/call` with the given context, and report
+            /// how many tokens the codec minted while doing so.
+            fn egress_with(
+                response: &mut JSONRPCResponse,
+                context: Option<&ProtocolContext>,
+                codec: Option<&RequestStateCodec>,
+                round: u8,
+            ) -> ResponseDisposition {
+                let request = call_tool(json!({}));
+                let target = mrtr_binding_parts(&request);
+                mrtr_egress(
+                    response,
+                    &MrtrEgressInputs {
+                        target: target.as_ref(),
+                        protocol_context: context,
+                        principal: MrtrPrincipal {
+                            authenticated_subject: Some(ALICE),
+                            has_auth_provider: false,
+                        },
+                        codec,
+                        round,
                     },
-                    codec: Some(&codec),
-                    round: 4,
-                },
-            );
-            assert_eq!(disposition, ResponseDisposition::InputRequired);
+                )
+            }
 
-            // `resultType` is written by the envelope step, NOT by egress —
-            // there is exactly one writer of that key. Run the real envelope
-            // here so this test pins the END-TO-END contract (egress SELECTS
-            // the disposition, `inject_v2_result_envelope` EMITS it) rather
-            // than asserting a field without pinning who produced it.
-            assert!(
-                result_of(&response).get("resultType").is_none(),
-                "egress must not write resultType — the envelope owns it"
-            );
-            let server_info = Implementation::new("test", "1.0.0");
-            inject_v2_result_envelope(&mut response, Some(&context), &server_info, disposition);
+            fn result_of(response: &JSONRPCResponse) -> &Value {
+                match response.payload {
+                    ResponsePayload::Result(ref value) => value,
+                    ResponsePayload::Error(_) => panic!("expected a result payload"),
+                }
+            }
 
-            let result = result_of(&response);
-            assert_eq!(result["resultType"], "input_required");
-            assert!(
-                result["inputRequests"]
-                    .as_object()
-                    .is_some_and(|m| !m.is_empty()),
-                "the re-elicitation must carry REAL inputRequests, got {result}"
-            );
-            let token = result["requestState"]
-                .as_str()
-                .expect("a fresh requestState is minted");
-            // The internal signal is gone, and the emptied `_meta` with it.
-            assert!(result.get("_meta").is_none(), "got {result}");
-
-            // Decrypt in-test: the fresh token carries round + 1.
-            let binding = RequestBinding::from_request(
-                ALICE,
-                target.as_ref().expect("eligible").0,
-                &target.as_ref().expect("eligible").1,
-            );
-            let crate::server::request_state::Verdict::Ok(continuation) =
-                codec.verify(token, &binding)
-            else {
-                panic!("the freshly minted token must verify");
-            };
-            assert_eq!(continuation.round, 5);
-            assert_eq!(continuation.state, json!({ "step": 1 }));
-        }
-
-        /// The pmcp-internal signal key must never reach the wire — not on v1,
-        /// and not on a method the spec forbids `input_required` on.
-        #[test]
-        fn egress_strips_the_internal_signal_on_every_path() {
-            let codec = codec(&KEY_A, 300);
-            let request = call_tool(json!({}));
-            let target = mrtr_binding_parts(&request);
-            let v1 = ProtocolContext::new(Era::V1, ProtocolVersion("2025-11-25".to_string()));
-            let list = Request::Client(Box::new(ClientRequest::ListTools(ListToolsRequest {
-                cursor: None,
-            })));
-            let list_target = mrtr_binding_parts(&list);
-            let v2 = v2_context();
-
-            for (label, context, target) in [
-                ("v1 era", Some(&v1), target.as_ref()),
-                ("no resolved context", None, target.as_ref()),
-                ("non-eligible method", Some(&v2), list_target.as_ref()),
-            ] {
+            #[test]
+            fn egress_emits_input_required_with_a_round_plus_one_token() {
+                let codec = codec(&KEY_A, 300);
+                let request = call_tool(json!({}));
+                let target = mrtr_binding_parts(&request);
+                let context = v2_context_all_caps();
                 let mut response = signalling_response();
                 let disposition = mrtr_egress(
                     &mut response,
                     &MrtrEgressInputs {
-                        target,
-                        protocol_context: context,
+                        target: target.as_ref(),
+                        protocol_context: Some(&context),
+                        principal: MrtrPrincipal {
+                            authenticated_subject: Some(ALICE),
+                            has_auth_provider: false,
+                        },
+                        codec: Some(&codec),
+                        round: 4,
+                    },
+                );
+                assert_eq!(disposition, ResponseDisposition::InputRequired);
+
+                // `resultType` is written by the envelope step, NOT by egress —
+                // there is exactly one writer of that key. Run the real envelope
+                // here so this test pins the END-TO-END contract (egress SELECTS
+                // the disposition, `inject_v2_result_envelope` EMITS it) rather
+                // than asserting a field without pinning who produced it.
+                assert!(
+                    result_of(&response).get("resultType").is_none(),
+                    "egress must not write resultType — the envelope owns it"
+                );
+                let server_info = Implementation::new("test", "1.0.0");
+                inject_v2_result_envelope(&mut response, Some(&context), &server_info, disposition);
+
+                let result = result_of(&response);
+                assert_eq!(result["resultType"], "input_required");
+                assert!(
+                    result["inputRequests"]
+                        .as_object()
+                        .is_some_and(|m| !m.is_empty()),
+                    "the re-elicitation must carry REAL inputRequests, got {result}"
+                );
+                let token = result["requestState"]
+                    .as_str()
+                    .expect("a fresh requestState is minted");
+                // The internal signal is gone, and the emptied `_meta` with it.
+                assert!(result.get("_meta").is_none(), "got {result}");
+
+                // Decrypt in-test: the fresh token carries round + 1.
+                let binding = RequestBinding::from_request(
+                    ALICE,
+                    target.as_ref().expect("eligible").0,
+                    &target.as_ref().expect("eligible").1,
+                );
+                let crate::server::request_state::Verdict::Ok(continuation) =
+                    codec.verify(token, &binding)
+                else {
+                    panic!("the freshly minted token must verify");
+                };
+                assert_eq!(continuation.round, 5);
+                assert_eq!(continuation.state, json!({ "step": 1 }));
+            }
+
+            /// The pmcp-internal signal key must never reach the wire — not on v1,
+            /// and not on a method the spec forbids `input_required` on — and a
+            /// signal on either path FAILS LOUDLY rather than shipping a mangled
+            /// "complete" result (Codex Plan-09 HIGH #1/#2).
+            #[test]
+            fn egress_strips_the_internal_signal_on_every_path() {
+                let codec = codec(&KEY_A, 300);
+                let request = call_tool(json!({}));
+                let target = mrtr_binding_parts(&request);
+                let v1 = ProtocolContext::new(Era::V1, ProtocolVersion("2025-11-25".to_string()));
+                let list = Request::Client(Box::new(ClientRequest::ListTools(ListToolsRequest {
+                    cursor: None,
+                })));
+                let list_target = mrtr_binding_parts(&list);
+                let v2 = v2_context_all_caps();
+
+                for (label, context, target) in [
+                    ("v1 era", Some(&v1), target.as_ref()),
+                    ("no resolved context", None, target.as_ref()),
+                    ("non-eligible method", Some(&v2), list_target.as_ref()),
+                ] {
+                    let mut response = signalling_response();
+                    let disposition = mrtr_egress(
+                        &mut response,
+                        &MrtrEgressInputs {
+                            target,
+                            protocol_context: context,
+                            principal: MrtrPrincipal {
+                                authenticated_subject: Some(ALICE),
+                                has_auth_provider: false,
+                            },
+                            codec: Some(&codec),
+                            round: 0,
+                        },
+                    );
+                    assert_eq!(disposition, ResponseDisposition::Complete, "{label}");
+                    // The ENTIRE serialized frame — not merely the result object,
+                    // which no longer exists on these paths.
+                    let rendered =
+                        serde_json::to_string(&response).expect("the response serializes");
+                    assert!(
+                        !rendered.contains(crate::types::mrtr::MRTR_SIGNAL_META_KEY),
+                        "{label}: the internal MRTR signal leaked onto the wire: {rendered}"
+                    );
+                    assert!(
+                        !rendered.contains("\"step\""),
+                        "{label}: the plaintext continuation leaked onto the wire: {rendered}"
+                    );
+                    assert!(
+                        !rendered.contains("resultType"),
+                        "{label}: input_required must not be emitted here"
+                    );
+                    // Fail LOUDLY: a handler writing the reserved key where MRTR is
+                    // impossible is a server bug, and a silently "complete" result
+                    // for an unfinished operation is strictly worse than an error.
+                    assert_eq!(
+                        error_of(&response).code,
+                        crate::types::protocol::error_codes::INTERNAL_ERROR,
+                        "{label}: a forbidden-path signal must fail loudly"
+                    );
+                    assert_eq!(error_of(&response).message, MRTR_FORBIDDEN_PATH_MESSAGE);
+                }
+            }
+
+            /// The reserved key carrying a payload that is not an `MrtrSignal` is a
+            /// server bug too — it must not degrade into "no signal", which would
+            /// ship an empty success for an operation the handler never completed.
+            #[test]
+            fn egress_fails_loudly_on_a_malformed_signal() {
+                let codec = codec(&KEY_A, 300);
+                let context = v2_context_all_caps();
+                let mut response = signalling_response_for(&json!("not-a-signal"));
+                let disposition = egress_with(&mut response, Some(&context), Some(&codec), 0);
+
+                assert_eq!(disposition, ResponseDisposition::Complete);
+                assert_eq!(
+                    error_of(&response).code,
+                    crate::types::protocol::error_codes::INTERNAL_ERROR
+                );
+                assert_eq!(error_of(&response).message, MRTR_MALFORMED_SIGNAL_MESSAGE);
+                let rendered = serde_json::to_string(&response).expect("serializes");
+                assert!(!rendered.contains(crate::types::mrtr::MRTR_SIGNAL_META_KEY));
+            }
+
+            /// All three MRTR-eligible handler kinds reach egress through ONE
+            /// authoring surface: `CallToolResult._meta`, `GetPromptResult._meta`
+            /// and the newly additive `ReadResourceResult._meta`.
+            #[test]
+            fn every_eligible_result_type_can_carry_the_signal() {
+                let (key, value) = crate::types::mrtr::MrtrSignal {
+                    input_requests: form_requests(),
+                    continuation: json!({ "step": 1 }),
+                }
+                .into_meta_entry()
+                .expect("signal serializes");
+
+                // resources/read — the leg this plan added.
+                let mut resource = crate::types::ReadResourceResult::new(vec![]);
+                let mut meta = serde_json::Map::new();
+                meta.insert(key.clone(), value.clone());
+                resource._meta = Some(Value::Object(meta.clone()));
+                let resource = serde_json::to_value(&resource).expect("serializes");
+                assert!(resource["_meta"][&key].is_object());
+
+                // prompts/get — the pre-existing `_meta` precedent.
+                let mut prompt = crate::types::GetPromptResult {
+                    description: None,
+                    messages: vec![],
+                    _meta: None,
+                };
+                prompt._meta = Some(meta.clone());
+                let prompt = serde_json::to_value(&prompt).expect("serializes");
+                assert!(prompt["_meta"][&key].is_object());
+
+                // Each of them survives the round trip THROUGH egress: strip finds
+                // the signal wherever the result object came from.
+                for shape in [resource, prompt] {
+                    let codec = codec(&KEY_A, 300);
+                    let context = v2_context_all_caps();
+                    let mut response = ServerCore::success_response(RequestId::from(1i64), shape);
+                    let disposition = egress_with(&mut response, Some(&context), Some(&codec), 0);
+                    assert_eq!(disposition, ResponseDisposition::InputRequired);
+                    let result = result_of(&response);
+                    assert!(result["requestState"].is_string());
+                    assert!(result["inputRequests"]["user_name"].is_object());
+                    assert!(!serde_json::to_string(result)
+                        .expect("serializes")
+                        .contains(crate::types::mrtr::MRTR_SIGNAL_META_KEY));
+                }
+            }
+
+            /// An absent `ReadResourceResult._meta` emits NO key, so the v1
+            /// `resources/read` wire shape is byte-identical to pre-Phase-113.
+            #[test]
+            fn absent_read_resource_meta_emits_no_key() {
+                let result = crate::types::ReadResourceResult::new(vec![]);
+                let value = serde_json::to_value(&result).expect("serializes");
+                assert_eq!(value, json!({ "contents": [] }));
+            }
+
+            /// The declared-capability precheck runs BEFORE any minting, proven
+            /// structurally rather than with a counter: the codec is ABSENT, so a
+            /// mint attempt would fail with `INTERNAL_ERROR`. Getting `-32021`
+            /// instead is only possible if the check short-circuited first.
+            #[test]
+            fn capability_precheck_precedes_minting() {
+                // Declares sampling + roots but NOT elicitation.
+                let context = v2_context().with_client_capabilities(caps(
+                    None,
+                    Some(crate::types::capabilities::SamplingCapabilities::default()),
+                    Some(crate::types::capabilities::RootsCapabilities::default()),
+                ));
+                let mut response = signalling_response();
+                let disposition = egress_with(&mut response, Some(&context), None, 0);
+
+                assert_eq!(disposition, ResponseDisposition::Complete);
+                let error = error_of(&response);
+                assert_eq!(
+                    error.code,
+                    crate::types::protocol::error_codes::MISSING_REQUIRED_CLIENT_CAPABILITY,
+                    "the capability check must precede the mint, which has no codec here"
+                );
+
+                // And with a codec present, ZERO tokens reach the wire.
+                let codec = codec(&KEY_A, 300);
+                let mut with_codec = signalling_response();
+                let _ = egress_with(&mut with_codec, Some(&context), Some(&codec), 0);
+                let rendered = serde_json::to_string(&with_codec).expect("serializes");
+                assert!(
+                    !rendered.contains("requestState"),
+                    "a rejected result must mint nothing: {rendered}"
+                );
+            }
+
+            /// A `Reelicit { round: 3 }` mints at 4 — an expired token's round
+            /// SURVIVES rather than resetting to 0 (T-113-49).
+            #[test]
+            fn reelicit_round_three_mints_round_four() {
+                let codec = codec(&KEY_A, 300);
+                let request = call_tool(json!({}));
+                let target = mrtr_binding_parts(&request).expect("eligible");
+                let context = v2_context_all_caps();
+                let mut response = signalling_response();
+                let disposition = egress_with(&mut response, Some(&context), Some(&codec), 3);
+
+                assert_eq!(disposition, ResponseDisposition::InputRequired);
+                let token = result_of(&response)["requestState"]
+                    .as_str()
+                    .expect("a token is minted");
+                let binding = RequestBinding::from_request(ALICE, target.0, &target.1);
+                let crate::server::request_state::Verdict::Ok(continuation) =
+                    codec.verify(token, &binding)
+                else {
+                    panic!("the freshly minted token must verify");
+                };
+                assert_eq!(continuation.round, 4);
+            }
+
+            /// Two consecutive rounds produce DIFFERENT tokens whose decrypted
+            /// rounds differ by one, and each verifies against the same live
+            /// request — the retry contract the client loop depends on.
+            #[test]
+            fn consecutive_rounds_mint_distinct_incrementing_tokens() {
+                let codec = codec(&KEY_A, 300);
+                let request = call_tool(json!({}));
+                let target = mrtr_binding_parts(&request).expect("eligible");
+                let binding = RequestBinding::from_request(ALICE, target.0, &target.1);
+                let context = v2_context_all_caps();
+
+                let mut first = signalling_response();
+                let _ = egress_with(&mut first, Some(&context), Some(&codec), 0);
+                let first_token = result_of(&first)["requestState"]
+                    .as_str()
+                    .expect("token")
+                    .to_string();
+
+                let mut second = signalling_response();
+                let _ = egress_with(&mut second, Some(&context), Some(&codec), 1);
+                let second_token = result_of(&second)["requestState"]
+                    .as_str()
+                    .expect("token")
+                    .to_string();
+
+                assert_ne!(first_token, second_token, "each round mints a fresh token");
+                let round_of = |token: &str| match codec.verify(token, &binding) {
+                    crate::server::request_state::Verdict::Ok(continuation) => continuation.round,
+                    other => panic!("a freshly minted token must verify, got {other:?}"),
+                };
+                assert_eq!(round_of(&first_token), 1);
+                assert_eq!(round_of(&second_token), 2);
+            }
+
+            /// Fail closed: a server that cannot seal the continuation answers a
+            /// JSON-RPC error rather than a bogus "complete" result for an
+            /// operation the handler did not complete.
+            #[test]
+            fn egress_fails_closed_when_it_cannot_mint() {
+                let request = call_tool(json!({}));
+                let target = mrtr_binding_parts(&request);
+                let context = v2_context_all_caps();
+                let mut response = signalling_response();
+                let disposition = mrtr_egress(
+                    &mut response,
+                    &MrtrEgressInputs {
+                        target: target.as_ref(),
+                        protocol_context: Some(&context),
+                        // Unauthenticated on an auth-configured server (T-113-22).
+                        principal: MrtrPrincipal {
+                            authenticated_subject: None,
+                            has_auth_provider: true,
+                        },
+                        codec: None,
+                        round: 0,
+                    },
+                );
+                assert_eq!(disposition, ResponseDisposition::Complete);
+                let ResponsePayload::Error(ref error) = response.payload else {
+                    panic!("an unmintable continuation must fail closed with an error");
+                };
+                assert_eq!(
+                    error.code,
+                    crate::types::protocol::error_codes::INTERNAL_ERROR
+                );
+            }
+
+            /// A response with no signal is left byte-identical.
+            #[test]
+            fn egress_is_a_noop_without_a_signal() {
+                let codec = codec(&KEY_A, 300);
+                let request = call_tool(json!({}));
+                let target = mrtr_binding_parts(&request);
+                let context = v2_context();
+                let original = json!({ "content": [], "_meta": { "vendor/key": 1 } });
+                let mut response =
+                    ServerCore::success_response(RequestId::from(1i64), original.clone());
+                let disposition = mrtr_egress(
+                    &mut response,
+                    &MrtrEgressInputs {
+                        target: target.as_ref(),
+                        protocol_context: Some(&context),
                         principal: MrtrPrincipal {
                             authenticated_subject: Some(ALICE),
                             has_auth_provider: false,
@@ -4099,77 +4750,9 @@ mod tests {
                         round: 0,
                     },
                 );
-                assert_eq!(disposition, ResponseDisposition::Complete, "{label}");
-                let rendered = result_of(&response).to_string();
-                assert!(
-                    !rendered.contains(crate::types::mrtr::MRTR_SIGNAL_META_KEY),
-                    "{label}: the internal MRTR signal leaked onto the wire: {rendered}"
-                );
-                assert!(
-                    !rendered.contains("resultType"),
-                    "{label}: input_required must not be emitted here"
-                );
+                assert_eq!(disposition, ResponseDisposition::Complete);
+                assert_eq!(result_of(&response), &original);
             }
-        }
-
-        /// Fail closed: a server that cannot seal the continuation answers a
-        /// JSON-RPC error rather than a bogus "complete" result for an
-        /// operation the handler did not complete.
-        #[test]
-        fn egress_fails_closed_when_it_cannot_mint() {
-            let request = call_tool(json!({}));
-            let target = mrtr_binding_parts(&request);
-            let context = v2_context();
-            let mut response = signalling_response();
-            let disposition = mrtr_egress(
-                &mut response,
-                &MrtrEgressInputs {
-                    target: target.as_ref(),
-                    protocol_context: Some(&context),
-                    // Unauthenticated on an auth-configured server (T-113-22).
-                    principal: MrtrPrincipal {
-                        authenticated_subject: None,
-                        has_auth_provider: true,
-                    },
-                    codec: None,
-                    round: 0,
-                },
-            );
-            assert_eq!(disposition, ResponseDisposition::Complete);
-            let ResponsePayload::Error(ref error) = response.payload else {
-                panic!("an unmintable continuation must fail closed with an error");
-            };
-            assert_eq!(
-                error.code,
-                crate::types::protocol::error_codes::INTERNAL_ERROR
-            );
-        }
-
-        /// A response with no signal is left byte-identical.
-        #[test]
-        fn egress_is_a_noop_without_a_signal() {
-            let codec = codec(&KEY_A, 300);
-            let request = call_tool(json!({}));
-            let target = mrtr_binding_parts(&request);
-            let context = v2_context();
-            let original = json!({ "content": [], "_meta": { "vendor/key": 1 } });
-            let mut response =
-                ServerCore::success_response(RequestId::from(1i64), original.clone());
-            let disposition = mrtr_egress(
-                &mut response,
-                &MrtrEgressInputs {
-                    target: target.as_ref(),
-                    protocol_context: Some(&context),
-                    principal: MrtrPrincipal {
-                        authenticated_subject: Some(ALICE),
-                        has_auth_provider: false,
-                    },
-                    codec: Some(&codec),
-                    round: 0,
-                },
-            );
-            assert_eq!(disposition, ResponseDisposition::Complete);
-            assert_eq!(result_of(&response), &original);
         }
 
         // -----------------------------------------------------------------

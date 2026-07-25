@@ -566,6 +566,36 @@ impl<T> MrtrOutcome<T> {
 /// dispatch layer converts the signal into a wire `InputRequiredResult` and
 /// **STRIPS the key on EVERY path before serialization — v1 included**. It never
 /// appears on the wire.
+///
+/// # The reserved-field registry
+///
+/// This key is one member of a closed set of SERVER-OWNED fields that a handler
+/// may write but never controls. The authoritative registry lives on
+/// `server::core::own_reserved_result_fields`; the set is:
+///
+/// | Reserved key | Location | Server behavior when a handler set it |
+/// |---|---|---|
+/// | `resultType` | top-level result | OVERWRITTEN with the server-computed disposition |
+/// | `io.modelcontextprotocol/serverInfo` | `result._meta` | OVERWRITTEN with the server's real `Implementation` |
+/// | `requestState` | top-level result | REMOVED unless this egress minted it |
+/// | `inputRequests` | top-level result | REMOVED unless this egress produced it |
+/// | `dev.pmcp/mrtr` (this key) | `result._meta` | REMOVED always, on EVERY path |
+///
+/// Every OTHER `_meta` key a handler sets is preserved untouched.
+///
+/// # Why the signal rides in `_meta` rather than a typed `HandlerOutcome`
+///
+/// Cross-AI review preferred an explicit internal `HandlerOutcome::InputRequired`
+/// over smuggling control flow through result metadata, and it is the cleaner
+/// design. It is not available here: it requires changing the return type of the
+/// public [`ToolHandler`](crate::ToolHandler) /
+/// [`PromptHandler`](crate::server::PromptHandler) /
+/// [`ResourceHandler`](crate::server::ResourceHandler) traits, which is a MAJOR
+/// semver break, and the v2.5 milestone is scoped additive with
+/// `cargo semver-checks` gating every phase. A typed outcome is the right shape
+/// for a future 3.0; until then this key is the seam, and the server owning it
+/// unconditionally is what keeps the smuggled control flow from becoming a
+/// handler-controlled wire field.
 pub const MRTR_SIGNAL_META_KEY: &str = "dev.pmcp/mrtr";
 
 /// The payload a handler places under [`MRTR_SIGNAL_META_KEY`].
@@ -581,6 +611,78 @@ pub struct MrtrSignal {
     /// Handler-owned continuation state, sealed into `requestState`.
     #[serde(default)]
     pub continuation: Value,
+}
+
+impl MrtrSignal {
+    /// Convert this signal into the `(key, value)` pair a handler inserts into
+    /// its result's `_meta`.
+    ///
+    /// This is the ENTIRE authoring surface for server-side MRTR: build the
+    /// requests you need answered, attach whatever continuation state lets you
+    /// resume, and put the returned pair on `_meta`. The dispatch layer takes it
+    /// from there — it seals `continuation` into an AEAD `requestState`, emits
+    /// `resultType: "input_required"` with your `inputRequests`, and removes this
+    /// key before serialization.
+    ///
+    /// # Handler requirements
+    ///
+    /// **A handler that returns this signal MUST be idempotent up to the point of
+    /// that return.** When a client presents a `requestState` this server cannot
+    /// decrypt — another instance's per-process key (D-04), or an expired token
+    /// (D-05) — the D-15 verdict router clears every MRTR signal from the request
+    /// context and RE-RUNS your handler from scratch as a pristine first call, so
+    /// that the re-elicitation carries real, answerable `inputRequests` instead of
+    /// a bare token. Any side effect you performed before returning the signal
+    /// will therefore happen again. This is inherently satisfiable: a handler that
+    /// returned `input_required` had not completed its operation.
+    ///
+    /// # Errors
+    ///
+    /// Returns the `serde_json` error if the signal cannot be serialized. This is
+    /// deliberately fallible rather than an infallible pair: `input_requests`
+    /// carries handler-supplied JSON schemas and sampling params, so serialization
+    /// CAN fail, and swallowing that with an `unwrap` would violate the repo's
+    /// `make check-unwraps` gate.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use pmcp::types::elicitation::ElicitRequestParams;
+    /// use pmcp::types::mrtr::{InputRequest, InputRequests, MrtrSignal};
+    /// use serde_json::json;
+    ///
+    /// // A tool handler that needs the caller's city before it can answer.
+    /// let mut input_requests = InputRequests::new();
+    /// input_requests.insert(
+    ///     "city".to_string(),
+    ///     InputRequest::Elicitation(Box::new(ElicitRequestParams::Form {
+    ///         message: "Which city should I check the weather for?".to_string(),
+    ///         requested_schema: json!({
+    ///             "type": "object",
+    ///             "properties": { "city": { "type": "string" } },
+    ///         }),
+    ///     })),
+    /// );
+    ///
+    /// let signal = MrtrSignal {
+    ///     input_requests,
+    ///     continuation: json!({ "units": "metric" }),
+    /// };
+    /// let (key, value) = signal.into_meta_entry()?;
+    /// assert_eq!(key, pmcp::types::mrtr::MRTR_SIGNAL_META_KEY);
+    ///
+    /// // Attach it to the result's `_meta` and return as normal.
+    /// let mut meta = serde_json::Map::new();
+    /// meta.insert(key, value);
+    /// assert!(meta.contains_key("dev.pmcp/mrtr"));
+    /// # Ok::<(), serde_json::Error>(())
+    /// ```
+    pub fn into_meta_entry(self) -> Result<(String, Value), serde_json::Error> {
+        Ok((
+            MRTR_SIGNAL_META_KEY.to_string(),
+            serde_json::to_value(self)?,
+        ))
+    }
 }
 
 // ===========================================================================
