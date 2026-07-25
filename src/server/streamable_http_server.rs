@@ -363,6 +363,92 @@ fn create_error_response(status: StatusCode, code: i32, message: &str) -> Respon
 /// Upper bound on a decoded header value we will consider (`DoS` guard, T-112-13).
 const MAX_V2_HEADER_VALUE_LEN: usize = 8192;
 
+// ---------------------------------------------------------------------------
+// Session era gate (Plan 113-04, HTTP-01).
+//
+// `stateless()` is a BUILD-TIME config: it clears `session_id_generator` once,
+// when the server is constructed. A dual-version server is built with
+// `Default::default()`, which keeps a live generator — so every session decision
+// that keys off the CONFIG would mint, demand and echo session ids for v2
+// requests too (RESEARCH Pitfall 1). HTTP-01 requires the opposite: on v2 there
+// is no handshake and no session at all.
+//
+// The fix is one predicate, not a transport fork. Every session decision routes
+// through `sessions_active`, which makes the ERA the decider and leaves the v1
+// path byte-for-byte unchanged.
+// ---------------------------------------------------------------------------
+
+/// The pure session-era rule: are sessions live for THIS request?
+///
+/// | `cfg_has_generator` | `era`            | result | why |
+/// |---------------------|------------------|--------|-----|
+/// | `true`              | `Some(Era::V2)`  | `false`| v2 is handshake-free and session-free (HTTP-01) |
+/// | `true`              | `Some(Era::V1)`  | `true` | v1 session behavior is untouched |
+/// | `true`              | `None`           | `true` | not opted into v2 → zero era code, v1 path unchanged (D-04) |
+/// | `false`             | anything         | `false`| an explicitly `stateless()` server stays stateless |
+///
+/// Split out from [`sessions_active`] so the RULE is unit- and property-testable
+/// without constructing a live [`ServerState`].
+const fn sessions_active_for(
+    cfg_has_generator: bool,
+    era: Option<crate::types::protocol::Era>,
+) -> bool {
+    !matches!(era, Some(crate::types::protocol::Era::V2)) && cfg_has_generator
+}
+
+/// Are sessions live for this request? THE single reader of
+/// `config.session_id_generator`'s presence.
+///
+/// `era` is the ALREADY-RESOLVED [`ProtocolContext::era`](crate::types::protocol::ProtocolContext)
+/// being CONSUMED here — this layer never runs a second era resolver (Pitfall 2 /
+/// D-11). The POST entrypoints resolve it once via the v2 header gate and thread
+/// that same value into every session decision below.
+///
+/// `None` means the server is NOT opted into v2, so no era detection ran at all
+/// and the v1 path executes with zero era code (D-04).
+fn sessions_active(state: &ServerState, era: Option<crate::types::protocol::Era>) -> bool {
+    sessions_active_for(state.config.session_id_generator.is_some(), era)
+}
+
+/// The session-id generator to use for THIS request, or `None` when sessions are
+/// not active for it.
+///
+/// The second (and last) permitted reader of `config.session_id_generator`: it
+/// gates the borrow behind [`sessions_active`] so no caller can reach the
+/// generator on a request whose era suppresses sessions.
+fn active_session_generator(
+    state: &ServerState,
+    era: Option<crate::types::protocol::Era>,
+) -> Option<&(dyn Fn() -> String + Send + Sync)> {
+    if !sessions_active(state, era) {
+        return None;
+    }
+    state.config.session_id_generator.as_deref()
+}
+
+/// The ONE place a `Mcp-Session-Id` response header is emitted.
+///
+/// `response_session_id` is already `None` for a v2 request (both session
+/// resolvers return `None` when [`sessions_active`] is false), so this is
+/// defense in depth: even a future caller that manufactured a session id could
+/// not leak it onto a v2 response. Non-panicking — an unrepresentable id is
+/// skipped rather than unwrapped (T-112-13 discipline).
+fn apply_session_header(
+    headers: &mut HeaderMap,
+    response_session_id: Option<&String>,
+    sessions_on: bool,
+) {
+    if !sessions_on {
+        return;
+    }
+    let Some(sid) = response_session_id else {
+        return;
+    };
+    if let Ok(value) = HeaderValue::from_str(sid) {
+        headers.insert(MCP_SESSION_ID, value);
+    }
+}
+
 /// The decoded `MCP-Protocol-Version` header, classified for the era matrix.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum HeaderProtocolVersion {
@@ -859,12 +945,17 @@ fn validate_headers(headers: &HeaderMap, method: &str) -> std::result::Result<()
 }
 
 /// Process session for initialization request.
+///
+/// `era` is the resolved per-request era (see [`sessions_active`]). A v2 request
+/// never reaches `initialize` — v2 has no handshake — but the site is defensive:
+/// with sessions inactive it mints nothing.
 fn process_init_session(
     state: &ServerState,
+    era: Option<crate::types::protocol::Era>,
     session_id: Option<String>,
     protocol_version: Option<String>,
 ) -> std::result::Result<(Option<String>, bool), Response> {
-    if let Some(generator) = &state.config.session_id_generator {
+    if let Some(generator) = active_session_generator(state, era) {
         // Stateful mode
         if let Some(sid) = session_id {
             // Check if session already exists and is initialized
@@ -897,17 +988,24 @@ fn process_init_session(
             Ok((Some(new_id), true))
         }
     } else {
-        // Stateless mode
+        // Sessions inactive (stateless config, or a v2 request) — mint nothing.
         Ok((None, false))
     }
 }
 
 /// Validate session for non-initialization request.
+///
+/// When sessions are inactive for this request — a `stateless()` server, or ANY
+/// v2 request regardless of config — nothing is required and nothing is
+/// validated. An inbound `Mcp-Session-Id` on a v2 request is IGNORED rather than
+/// rejected, per the transport spec: "An `Mcp-Session-Id` header on a request:
+/// ignore it, and do not mint or echo session IDs."
 fn validate_non_init_session(
     state: &ServerState,
+    era: Option<crate::types::protocol::Era>,
     session_id: Option<String>,
 ) -> std::result::Result<Option<String>, Response> {
-    if state.config.session_id_generator.is_some() {
+    if sessions_active(state, era) {
         // Stateful mode - require and validate session ID
         match session_id {
             None => {
@@ -933,7 +1031,8 @@ fn validate_non_init_session(
             },
         }
     } else {
-        // Stateless mode
+        // Sessions inactive (stateless config, or a v2 request) — any inbound
+        // `Mcp-Session-Id` is ignored, and none is echoed back.
         Ok(None)
     }
 }
@@ -1080,12 +1179,18 @@ fn validate_protocol_version_supported(
 
 /// In stateful mode, verify that a provided protocol version matches the
 /// session's recorded negotiated version (if any). Pure early-return chain.
+///
+/// Short-circuits `Ok(())` whenever sessions are inactive for this request. On v2
+/// that is not merely an optimization: there IS no session, and the PER-REQUEST
+/// version is authoritative over any session state (the Phase-112 lock), so a
+/// session-recorded version must never be consulted.
 fn validate_protocol_version_matches_session(
     state: &ServerState,
+    era: Option<crate::types::protocol::Era>,
     session_id: Option<&String>,
     protocol_version: Option<&String>,
 ) -> std::result::Result<(), Response> {
-    if state.config.session_id_generator.is_none() {
+    if !sessions_active(state, era) {
         return Ok(());
     }
     let Some(sid) = session_id else {
@@ -1122,11 +1227,12 @@ fn validate_protocol_version_matches_session(
 /// [`validate_protocol_version_matches_session`] as early-return chains.
 fn validate_protocol_version(
     state: &ServerState,
+    era: Option<crate::types::protocol::Era>,
     session_id: Option<&String>,
     protocol_version: Option<&String>,
 ) -> std::result::Result<(), Response> {
     validate_protocol_version_supported(protocol_version)?;
-    validate_protocol_version_matches_session(state, session_id, protocol_version)
+    validate_protocol_version_matches_session(state, era, session_id, protocol_version)
 }
 
 /// Handle POST requests
@@ -1320,15 +1426,16 @@ fn is_initialize_request(message: &TransportMessage) -> bool {
 /// handlers.
 fn resolve_session_for_request(
     state: &ServerState,
+    era: Option<crate::types::protocol::Era>,
     is_init_request: bool,
     session_id: Option<String>,
     protocol_version: Option<String>,
 ) -> std::result::Result<Option<String>, Response> {
     if is_init_request {
-        let (sid, _is_new) = process_init_session(state, session_id, protocol_version)?;
+        let (sid, _is_new) = process_init_session(state, era, session_id, protocol_version)?;
         Ok(sid)
     } else {
-        validate_non_init_session(state, session_id)
+        validate_non_init_session(state, era, session_id)
     }
 }
 
@@ -1470,6 +1577,7 @@ async fn build_success_response_with_middleware(
     response_msg: &TransportMessage,
     response_session_id: Option<&String>,
     version_to_send: &str,
+    sessions_on: bool,
     http_middleware: &ServerHttpMiddlewareChain,
     context: &ServerHttpContext,
 ) -> Response {
@@ -1491,9 +1599,7 @@ async fn build_success_response_with_middleware(
 
     let mut response_headers = HeaderMap::new();
     response_headers.insert(header::CONTENT_TYPE, APPLICATION_JSON.parse().unwrap());
-    if let Some(sid) = response_session_id {
-        response_headers.insert(MCP_SESSION_ID, sid.parse().unwrap());
-    }
+    apply_session_header(&mut response_headers, response_session_id, sessions_on);
     response_headers.insert(MCP_PROTOCOL_VERSION, version_to_send.parse().unwrap());
 
     let mut server_response =
@@ -1583,6 +1689,9 @@ struct FastPathDispatch {
     /// When `Some((method, name))`, this is an accepted v2 request whose
     /// response echoes `Mcp-Method`/`Mcp-Name`/`MCP-Protocol-Version`.
     v2_outbound: Option<(String, String)>,
+    /// [`sessions_active`] for THIS request — gates the `Mcp-Session-Id`
+    /// response header (HTTP-01).
+    sessions_on: bool,
 }
 
 async fn handle_fast_path_request(
@@ -1598,6 +1707,7 @@ async fn handle_fast_path_request(
         response_session_id,
         protocol_context,
         v2_outbound,
+        sessions_on,
     } = dispatch;
 
     let json_response = {
@@ -1630,11 +1740,11 @@ async fn handle_fast_path_request(
 
     let mut response = build_response(state, response_msg, session_id);
 
-    if let Some(sid) = &response_session_id {
-        response
-            .headers_mut()
-            .insert(MCP_SESSION_ID, sid.parse().unwrap());
-    }
+    apply_session_header(
+        response.headers_mut(),
+        response_session_id.as_ref(),
+        sessions_on,
+    );
 
     let version_to_send = compute_outbound_protocol_version(
         state,
@@ -1666,6 +1776,18 @@ async fn handle_fast_path_request(
 /// header matrix, legacy-version validation, and auth (classify-then-continue —
 /// no pipeline bypass).
 ///
+/// Response-shaping inputs shared by BOTH `server/discover` assemblers, so the
+/// fast and middleware paths can never drift on session-header gating or the v2
+/// outbound echo.
+struct DiscoverResponseShape<'a> {
+    /// The session id to echo, if any — already `None` on v2.
+    response_session_id: Option<&'a String>,
+    /// `Some((method, name))` for an accepted v2 discover (VERS-05 echo).
+    v2_outbound: Option<(String, String)>,
+    /// [`sessions_active`] for THIS request (HTTP-01).
+    sessions_on: bool,
+}
+
 /// D-10 decision (finding #4): a v2 connection projects the server's
 /// already-computed capabilities (incl. the `extensions` map); a v1 /
 /// non-opted-in connection returns JSON-RPC `-32601` at HTTP 200 with the
@@ -1677,10 +1799,14 @@ async fn assemble_discover_response_fast(
     state: &ServerState,
     id: crate::types::RequestId,
     protocol_context: Option<&crate::types::protocol::ProtocolContext>,
-    response_session_id: Option<&String>,
+    shape: DiscoverResponseShape<'_>,
     session_id: Option<&String>,
-    v2_outbound: Option<(String, String)>,
 ) -> Response {
+    let DiscoverResponseShape {
+        response_session_id,
+        v2_outbound,
+        sessions_on,
+    } = shape;
     let json_response = {
         let server = state.server.lock().await;
         server.handle_discover(id, protocol_context)
@@ -1691,11 +1817,7 @@ async fn assemble_discover_response_fast(
 
     let mut response = build_response(state, response_msg, session_id);
 
-    if let Some(sid) = response_session_id {
-        response
-            .headers_mut()
-            .insert(MCP_SESSION_ID, sid.parse().unwrap());
-    }
+    apply_session_header(response.headers_mut(), response_session_id, sessions_on);
 
     // Discover is never an init request → compute the outbound version normally.
     let version_to_send =
@@ -1748,23 +1870,16 @@ async fn handle_post_fast_path(
         HttpIngress::Discover { .. } => false,
     };
 
-    let response_session_id = match resolve_session_for_request(
-        &state,
-        is_init_request,
-        session_id.clone(),
-        protocol_version.clone(),
-    ) {
-        Ok(sid) => sid,
-        Err(error_response) => return error_response,
-    };
-
     // v2 required-header gate (VERS-05): resolve the ProtocolContext ONCE
     // (consumed by dispatch), classify the header/_meta matrix fail-closed, and
-    // derive the outbound-header echo. Runs BEFORE the legacy protocol-version
-    // check because an accepted v2 request carries MCP-Protocol-Version:
-    // 2026-07-28, which the static-SUPPORTED check would otherwise reject. v1 /
-    // non-opted-in → Passthrough (zero enforcement, D-04). A `server/discover`
-    // ingress runs the SAME matrix via the raw-_meta counterpart (finding #1).
+    // derive the outbound-header echo. Runs BEFORE session resolution (Plan
+    // 113-04 / HTTP-01): the ERA decides whether sessions apply at all, so it
+    // must be known before the first session decision. It also runs before the
+    // legacy protocol-version check because an accepted v2 request carries
+    // MCP-Protocol-Version: 2026-07-28, which the static-SUPPORTED check would
+    // otherwise reject. v1 / non-opted-in → Passthrough (zero enforcement, D-04).
+    // A `server/discover` ingress runs the SAME matrix via the raw-_meta
+    // counterpart (finding #1).
     let (protocol_context, v2_outbound) = match &ingress {
         HttpIngress::Public(TransportMessage::Request { request, .. }) => {
             let (ctx, gate) = run_v2_header_gate(&state, request, &headers, body.as_bytes()).await;
@@ -1790,13 +1905,26 @@ async fn handle_post_fast_path(
         HttpIngress::Public(_) => (None, None),
     };
     let is_v2_request = v2_outbound.is_some();
+    let era = protocol_context.as_ref().map(|pc| pc.era);
+    let sessions_on = sessions_active(&state, era);
+
+    let response_session_id = match resolve_session_for_request(
+        &state,
+        era,
+        is_init_request,
+        session_id.clone(),
+        protocol_version.clone(),
+    ) {
+        Ok(sid) => sid,
+        Err(error_response) => return error_response,
+    };
 
     // Legacy protocol-version validation applies to v1 non-init requests ONLY —
     // an accepted v2 request is validated by the gate above (D-11 untouched v1).
     // A v1 / non-opted-in `server/discover` also flows through here (no bypass).
     if !is_init_request && !is_v2_request {
         if let Err(error_response) =
-            validate_protocol_version(&state, session_id.as_ref(), protocol_version.as_ref())
+            validate_protocol_version(&state, era, session_id.as_ref(), protocol_version.as_ref())
         {
             return error_response;
         }
@@ -1819,6 +1947,7 @@ async fn handle_post_fast_path(
                     response_session_id,
                     protocol_context,
                     v2_outbound,
+                    sessions_on,
                 },
                 session_id.as_ref(),
             )
@@ -1831,9 +1960,12 @@ async fn handle_post_fast_path(
                 &state,
                 id,
                 protocol_context.as_ref(),
-                response_session_id.as_ref(),
+                DiscoverResponseShape {
+                    response_session_id: response_session_id.as_ref(),
+                    v2_outbound,
+                    sessions_on,
+                },
                 session_id.as_ref(),
-                v2_outbound,
             )
             .await
         },
@@ -1884,13 +2016,14 @@ async fn convert_axum_to_middleware_request(
 /// branch on `is_init_request` for the error-kind string.
 async fn resolve_session_with_error_hook(
     state: &ServerState,
+    era: Option<crate::types::protocol::Era>,
     is_init_request: bool,
     session_id: Option<String>,
     protocol_version: Option<String>,
     http_middleware: &ServerHttpMiddlewareChain,
     http_context: &ServerHttpContext,
 ) -> std::result::Result<Option<String>, Response> {
-    match resolve_session_for_request(state, is_init_request, session_id, protocol_version) {
+    match resolve_session_for_request(state, era, is_init_request, session_id, protocol_version) {
         Ok(sid) => Ok(sid),
         Err(error_response) => {
             let kind = if is_init_request {
@@ -1908,6 +2041,7 @@ async fn resolve_session_with_error_hook(
 /// error hook on failure. A no-op for init requests.
 async fn validate_protocol_version_with_error_hook(
     state: &ServerState,
+    era: Option<crate::types::protocol::Era>,
     is_init_request: bool,
     session_id: Option<&String>,
     protocol_version: Option<&String>,
@@ -1917,7 +2051,8 @@ async fn validate_protocol_version_with_error_hook(
     if is_init_request {
         return Ok(());
     }
-    if let Err(error_response) = validate_protocol_version(state, session_id, protocol_version) {
+    if let Err(error_response) = validate_protocol_version(state, era, session_id, protocol_version)
+    {
         report_middleware_error(
             http_middleware,
             http_context,
@@ -1939,6 +2074,9 @@ struct MiddlewareDispatch {
     response_session_id: Option<String>,
     protocol_context: Option<crate::types::protocol::ProtocolContext>,
     v2_outbound: Option<(String, String)>,
+    /// [`sessions_active`] for THIS request — gates the `Mcp-Session-Id`
+    /// response header (HTTP-01).
+    sessions_on: bool,
 }
 
 /// Assemble the `server/discover` response on the middleware path (VERS-04).
@@ -1955,11 +2093,15 @@ async fn assemble_discover_response_with_middleware(
     state: &ServerState,
     id: crate::types::RequestId,
     protocol_context: Option<&crate::types::protocol::ProtocolContext>,
-    response_session_id: Option<&String>,
-    v2_outbound: Option<(String, String)>,
+    shape: DiscoverResponseShape<'_>,
     http_middleware: &ServerHttpMiddlewareChain,
     http_context: &ServerHttpContext,
 ) -> Response {
+    let DiscoverResponseShape {
+        response_session_id,
+        v2_outbound,
+        sessions_on,
+    } = shape;
     let json_response = {
         let server = state.server.lock().await;
         server.handle_discover(id, protocol_context)
@@ -1976,6 +2118,7 @@ async fn assemble_discover_response_with_middleware(
         &response_msg,
         response_session_id,
         &version_to_send,
+        sessions_on,
         http_middleware,
         http_context,
     )
@@ -2005,6 +2148,7 @@ async fn dispatch_message_with_middleware(
         response_session_id,
         protocol_context,
         v2_outbound,
+        sessions_on,
     } = dispatch;
     match ingress {
         HttpIngress::Discover { id, .. } => {
@@ -2012,8 +2156,11 @@ async fn dispatch_message_with_middleware(
                 state,
                 id,
                 protocol_context.as_ref(),
-                response_session_id.as_ref(),
-                v2_outbound,
+                DiscoverResponseShape {
+                    response_session_id: response_session_id.as_ref(),
+                    v2_outbound,
+                    sessions_on,
+                },
                 http_middleware,
                 http_context,
             )
@@ -2051,6 +2198,7 @@ async fn dispatch_message_with_middleware(
                 &response_msg,
                 response_session_id.as_ref(),
                 &version_to_send,
+                sessions_on,
                 http_middleware,
                 http_context,
             )
@@ -2123,27 +2271,15 @@ async fn handle_post_with_middleware(
         HttpIngress::Discover { .. } => false,
     };
 
-    let response_session_id = match resolve_session_with_error_hook(
-        &state,
-        is_init_request,
-        session_id.clone(),
-        protocol_version.clone(),
-        http_middleware,
-        &http_context,
-    )
-    .await
-    {
-        Ok(sid) => sid,
-        Err(response) => return response,
-    };
-
     // v2 required-header gate (VERS-05): resolve the ProtocolContext ONCE and
     // classify the header/_meta matrix fail-closed before dispatch. Runs BEFORE
-    // the legacy protocol-version check because an accepted v2 request carries
-    // MCP-Protocol-Version: 2026-07-28 (which the static-SUPPORTED check would
-    // reject). Only Request / discover ingresses carry a header contract; v1 /
-    // non-opted-in → Passthrough (zero enforcement, D-04). A `server/discover`
-    // ingress runs the SAME matrix via the raw-_meta counterpart (finding #1).
+    // session resolution (Plan 113-04 / HTTP-01): the ERA decides whether
+    // sessions apply at all. It also runs before the legacy protocol-version
+    // check because an accepted v2 request carries MCP-Protocol-Version:
+    // 2026-07-28 (which the static-SUPPORTED check would reject). Only Request /
+    // discover ingresses carry a header contract; v1 / non-opted-in →
+    // Passthrough (zero enforcement, D-04). A `server/discover` ingress runs the
+    // SAME matrix via the raw-_meta counterpart (finding #1).
     let (protocol_context, v2_outbound) = match &ingress {
         HttpIngress::Public(TransportMessage::Request { request, .. }) => {
             let (ctx, gate) = run_v2_header_gate(
@@ -2192,12 +2328,30 @@ async fn handle_post_with_middleware(
         HttpIngress::Public(_) => (None, None),
     };
     let is_v2_request = v2_outbound.is_some();
+    let era = protocol_context.as_ref().map(|pc| pc.era);
+    let sessions_on = sessions_active(&state, era);
+
+    let response_session_id = match resolve_session_with_error_hook(
+        &state,
+        era,
+        is_init_request,
+        session_id.clone(),
+        protocol_version.clone(),
+        http_middleware,
+        &http_context,
+    )
+    .await
+    {
+        Ok(sid) => sid,
+        Err(response) => return response,
+    };
 
     // Legacy protocol-version validation applies to v1 non-init requests ONLY —
     // an accepted v2 request is validated by the gate above (v1 path untouched).
     if !is_v2_request {
         if let Err(response) = validate_protocol_version_with_error_hook(
             &state,
+            era,
             is_init_request,
             session_id.as_ref(),
             protocol_version.as_ref(),
@@ -2229,6 +2383,7 @@ async fn handle_post_with_middleware(
             response_session_id,
             protocol_context,
             v2_outbound,
+            sessions_on,
         },
         auth_context,
         http_middleware,
@@ -2242,13 +2397,18 @@ async fn handle_post_with_middleware(
 ///
 /// Returns `Ok(session_id)` on success, or an error response (404 unknown
 /// session, 405 stateless-mode).
+/// A GET carries no body and therefore no `_meta`, so the ONLY era signal is the
+/// `MCP-Protocol-Version` header — and a v2 GET is already answered `405` by
+/// [`handle_get_sse`] before this runs. Sessions are therefore evaluated at
+/// `era = None`, which [`sessions_active`] resolves to exactly the pre-113
+/// config-only behavior for the v1 / non-opted-in traffic that can reach here.
 fn resolve_sse_session(
     state: &ServerState,
     incoming_session_id: Option<String>,
 ) -> std::result::Result<String, Response> {
+    let sessions_on = sessions_active(state, None);
     if let Some(sid) = incoming_session_id {
-        if state.config.session_id_generator.is_some() && !state.sessions.read().contains_key(&sid)
-        {
+        if sessions_on && !state.sessions.read().contains_key(&sid) {
             return Err(create_error_response(
                 StatusCode::NOT_FOUND,
                 crate::types::protocol::error_codes::INVALID_REQUEST,
@@ -2257,7 +2417,7 @@ fn resolve_sse_session(
         }
         return Ok(sid);
     }
-    let Some(generator) = &state.config.session_id_generator else {
+    let Some(generator) = active_session_generator(state, None) else {
         return Err(create_error_response(
             StatusCode::METHOD_NOT_ALLOWED,
             crate::types::protocol::error_codes::METHOD_NOT_FOUND,
@@ -2408,7 +2568,10 @@ async fn handle_delete_session(
         // Check if session exists
         let session_exists = state.sessions.read().contains_key(&sid);
 
-        if !session_exists && state.config.session_id_generator.is_some() {
+        // A DELETE carries no body, so `era = None` — and a v2 DELETE is already
+        // answered `405` above, so only v1 / non-opted-in traffic reaches here.
+        // `sessions_active(state, None)` is exactly the pre-113 config-only read.
+        if !session_exists && sessions_active(&state, None) {
             // Unknown session in stateful mode
             return create_error_response(
                 StatusCode::NOT_FOUND,
@@ -2442,6 +2605,89 @@ async fn handle_delete_session(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::protocol::Era;
+
+    // -----------------------------------------------------------------------
+    // Session era gate (Plan 113-04, HTTP-01).
+    // -----------------------------------------------------------------------
+
+    /// The full four-row truth table from the plan's `<behavior>` block.
+    #[test]
+    fn sessions_active_truth_table() {
+        // A stateful config + a v2 request → sessions OFF (the whole point of
+        // HTTP-01: the era overrides the build-time config).
+        assert!(!sessions_active_for(true, Some(Era::V2)));
+        // A stateful config + a v1 request → sessions ON, exactly as before.
+        assert!(sessions_active_for(true, Some(Era::V1)));
+        // A stateful config on a server NOT opted into v2 → sessions ON. `None`
+        // means zero era code ran at all (D-04).
+        assert!(sessions_active_for(true, None));
+        // An explicitly `stateless()` server stays stateless in every era.
+        assert!(!sessions_active_for(false, Some(Era::V2)));
+        assert!(!sessions_active_for(false, Some(Era::V1)));
+        assert!(!sessions_active_for(false, None));
+    }
+
+    /// A v2 request NEVER has sessions, whatever the config says.
+    #[test]
+    fn v2_always_suppresses_sessions() {
+        for cfg in [true, false] {
+            assert!(
+                !sessions_active_for(cfg, Some(Era::V2)),
+                "v2 must be session-free with cfg_has_generator = {cfg}"
+            );
+        }
+    }
+
+    /// `apply_session_header` is the ONLY session-header emitter, and it emits
+    /// nothing when sessions are inactive — defense in depth for HTTP-01.
+    #[test]
+    fn session_header_is_never_emitted_when_sessions_are_inactive() {
+        let sid = "sess-123".to_string();
+
+        let mut headers = HeaderMap::new();
+        apply_session_header(&mut headers, Some(&sid), false);
+        assert!(
+            headers.get(MCP_SESSION_ID).is_none(),
+            "sessions inactive → no Mcp-Session-Id"
+        );
+
+        let mut headers = HeaderMap::new();
+        apply_session_header(&mut headers, Some(&sid), true);
+        assert_eq!(
+            headers.get(MCP_SESSION_ID).and_then(|v| v.to_str().ok()),
+            Some("sess-123"),
+        );
+
+        // No id to emit → nothing emitted, even with sessions active.
+        let mut headers = HeaderMap::new();
+        apply_session_header(&mut headers, None, true);
+        assert!(headers.get(MCP_SESSION_ID).is_none());
+
+        // A header-unrepresentable id is SKIPPED, never unwrapped (T-112-13).
+        let bad = "bad\nvalue".to_string();
+        let mut headers = HeaderMap::new();
+        apply_session_header(&mut headers, Some(&bad), true);
+        assert!(headers.get(MCP_SESSION_ID).is_none());
+    }
+
+    proptest::proptest! {
+        /// The predicate never panics and is EXACTLY the stated boolean
+        /// expression over arbitrary `(bool, Option<Era>)` inputs.
+        #[test]
+        fn sessions_active_is_exactly_its_stated_expression(
+            cfg_has_generator in proptest::prelude::any::<bool>(),
+            era_code in 0u8..3,
+        ) {
+            let era = match era_code {
+                0 => None,
+                1 => Some(Era::V1),
+                _ => Some(Era::V2),
+            };
+            let expected = !matches!(era, Some(Era::V2)) && cfg_has_generator;
+            proptest::prop_assert_eq!(sessions_active_for(cfg_has_generator, era), expected);
+        }
+    }
 
     #[test]
     fn extract_custom_claim_header_inserted_under_cognito_key() {
