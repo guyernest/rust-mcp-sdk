@@ -299,6 +299,18 @@ pub struct ServerCore {
     /// in the shared resolver. A non-opted-in server behaves exactly as today.
     supported_protocol_versions: Vec<ProtocolVersion>,
 
+    /// The server-owned `requestState` codec (Phase 113, HTTP-02).
+    ///
+    /// Resolved EXACTLY ONCE at
+    /// [`ServerCoreBuilder::build`](crate::server::builder::ServerCoreBuilder::build)
+    /// time and threaded in via [`ServerCore::with_request_state_codec`] — never a
+    /// process-global `OnceLock`, so two differently-configured cores can coexist
+    /// in one process and integration tests can inject a deterministic key and
+    /// clock. `None` for a core that did not opt into the v2 (`2026-07-28`) era:
+    /// such a core reads no MRTR environment variable and pays nothing (D-04).
+    #[cfg(all(feature = "streamable-http", not(target_arch = "wasm32")))]
+    request_state_codec: Option<Arc<crate::server::request_state::RequestStateCodec>>,
+
     /// Outbound server-to-client request dispatcher.
     ///
     /// Populated by the enclosing `Server` via
@@ -386,6 +398,8 @@ impl ServerCore {
             stateless_mode,
             payload_limits,
             supported_protocol_versions: crate::types::protocol::context::default_accept_list(),
+            #[cfg(all(feature = "streamable-http", not(target_arch = "wasm32")))]
+            request_state_codec: None,
             #[cfg(not(target_arch = "wasm32"))]
             server_request_dispatcher: None,
             #[cfg(not(target_arch = "wasm32"))]
@@ -445,6 +459,34 @@ impl ServerCore {
     ) -> Self {
         self.supported_protocol_versions = versions;
         self
+    }
+
+    /// Carry the server-owned `requestState` codec (Phase 113, HTTP-02) from the
+    /// builder into the running `ServerCore`.
+    ///
+    /// Threaded from [`ServerCoreBuilder::build`](crate::server::builder::ServerCoreBuilder::build),
+    /// which resolves the codec exactly once. `None` means "this core did not opt
+    /// into v2" — the MRTR paths are then never reachable.
+    #[cfg(all(feature = "streamable-http", not(target_arch = "wasm32")))]
+    #[must_use]
+    pub(crate) fn with_request_state_codec(
+        mut self,
+        codec: Option<Arc<crate::server::request_state::RequestStateCodec>>,
+    ) -> Self {
+        self.request_state_codec = codec;
+        self
+    }
+
+    /// The server-owned `requestState` codec, or `None` when this core did not
+    /// opt into the v2 (`2026-07-28`) era.
+    // Why: the production consumers land in plans 06 and 09; today only the
+    // build-time wiring tests read it. Plan 12 removes this allow.
+    #[cfg(all(feature = "streamable-http", not(target_arch = "wasm32")))]
+    #[allow(dead_code)]
+    pub(crate) fn request_state_codec(
+        &self,
+    ) -> Option<&crate::server::request_state::RequestStateCodec> {
+        self.request_state_codec.as_deref()
     }
 
     /// The configured protocol-version accept-list read at ingress (test-only

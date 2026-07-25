@@ -1,0 +1,761 @@
+//! Server-owned `requestState` continuation tokens for multi-round-trip
+//! requests (MRTR, MCP 2026-07-28).
+//!
+//! # What the token is
+//!
+//! A `requestState` token is a **self-contained continuation** (D-01): it carries
+//! everything the server needs to resume a multi-round-trip operation, so the
+//! server holds *nothing* between round trips. A stateless v2 server behind a load
+//! balancer can therefore answer a follow-up on **any** instance — the client
+//! carries the state, not the process.
+//!
+//! # Why AEAD and not sign-only
+//!
+//! The continuation is **encrypted**, not merely authenticated (D-02). Partially
+//! collected tool arguments and the authenticated principal are inside it, and the
+//! client — plus every proxy on the path — must not be able to read them. Sign-only
+//! (an HMAC over cleartext) would authenticate the blob while leaking its contents.
+//!
+//! # The multi-instance thesis
+//!
+//! Every instance that shares `PMCP_REQUEST_STATE_KEY` can resume every other
+//! instance's continuations (D-03). An instance that does *not* share the key
+//! recognises the situation from the token's cleartext key-id and re-elicits
+//! instead of erroring (D-04) — see [`Verdict::UnknownKey`].
+//!
+//! # Ownership: the codec belongs to the SERVER, not the process
+//!
+//! There is deliberately **no** `OnceLock` and **no** `fn codec()` free function.
+//! The codec is an `Arc<RequestStateCodec>` resolved exactly once at server
+//! **build** time and stored on the server instance. That is what makes all four
+//! of these possible at the same time:
+//!
+//! * builder configuration ([`crate::ServerBuilder::with_request_state_key`]),
+//! * two differently-configured servers in one process,
+//! * deterministic integration tests (an injected key **and** an injected clock),
+//! * key rotation without stranding in-flight tokens.
+//!
+//! # Token layout
+//!
+//! ```text
+//! base64url_nopad(
+//!     key_id_len : u8            // always 8; a length byte so the layout can evolve
+//!     key_id     : [u8; 8]       // first 8 bytes of SHA-256(key) — NON-SECRET, cleartext
+//!     nonce      : [u8; 12]      // fresh CSPRNG bytes per mint
+//!     sealed     : [..]          // CHACHA20_POLY1305(plaintext, aad) || tag[16]
+//! )
+//! ```
+//!
+//! * **plaintext** = `serde_json` of [`Continuation`] (`state`, `exp`, `round`).
+//! * **aad** = `principal || 0x00 || method || 0x00 || salient_param_digest[32]`.
+//!
+//! # Algorithm choice
+//!
+//! `CHACHA20_POLY1305` rather than AES-256-GCM: it has no AES-NI timing dependence
+//! (constant-time on every target `pmcp` builds for, including hosts without
+//! hardware AES), and at these payload sizes the API and cost are identical.
+//!
+//! # Feature gating
+//!
+//! `D-14` locks MRTR AEAD to native + `streamable-http`. `ring` is only enabled by
+//! that feature, and the wasm server (`WasmServerCore`) gets no MRTR this phase.
+
+// Why: this module lands in Wave 2, ahead of its production consumers (plan 06
+// wires `verify` into dispatch; plan 09 wires `mint` into the input-required
+// result path). Until then every `pub(crate)` item here is dead code under
+// `RUSTFLAGS = -D warnings`. Plan 12 removes this allow once both consumers exist.
+#![allow(dead_code)]
+
+use crate::error::{Error, Result};
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+use ring::aead::{LessSafeKey, UnboundKey, CHACHA20_POLY1305, NONCE_LEN};
+use sha2::{Digest, Sha256};
+use std::sync::Arc;
+use std::time::Duration;
+use zeroize::Zeroize;
+
+/// Length, in bytes, of the symmetric AEAD key.
+pub(crate) const KEY_LEN: usize = 32;
+
+/// Length of the cleartext key-id prefix, as the `u8` written on the wire.
+const KEY_ID_LEN_U8: u8 = 8;
+
+/// Length, in bytes, of the cleartext key-id prefix.
+pub(crate) const KEY_ID_LEN: usize = KEY_ID_LEN_U8 as usize;
+
+/// Default continuation lifetime in seconds (D-05).
+pub(crate) const DEFAULT_TTL_SECS: u64 = 300;
+
+/// Environment variable carrying the shared 32-byte minting key (D-03/D-04).
+pub(crate) const ENV_REQUEST_STATE_KEY: &str = "PMCP_REQUEST_STATE_KEY";
+
+/// Environment variable carrying a rotated-out key, accepted for **verification
+/// only** so a rotation does not strand in-flight tokens.
+pub(crate) const ENV_REQUEST_STATE_KEY_PREVIOUS: &str = "PMCP_REQUEST_STATE_KEY_PREVIOUS";
+
+/// Environment variable overriding [`DEFAULT_TTL_SECS`] (D-05).
+pub(crate) const ENV_REQUEST_STATE_TTL_SECS: &str = "PMCP_REQUEST_STATE_TTL_SECS";
+
+// ---------------------------------------------------------------------------
+// Environment access seam
+// ---------------------------------------------------------------------------
+
+/// Read a `PMCP_*` variable from the process environment.
+///
+/// Production always reads [`std::env::var`] directly (the house style). Under
+/// `cfg(test)` a **thread-local** override is consulted first, so the env-behaviour
+/// tests are deterministic under `cargo test`'s parallel thread pool instead of
+/// mutating process-global state that a concurrently-building server would observe.
+fn env_var(name: &str) -> Option<String> {
+    #[cfg(test)]
+    {
+        let overridden: Option<Option<String>> =
+            tests::ENV_OVERRIDE.with(|o| o.borrow().as_ref().map(|m| m.get(name).cloned()));
+        if let Some(value) = overridden {
+            return value;
+        }
+    }
+    std::env::var(name).ok()
+}
+
+// ---------------------------------------------------------------------------
+// Key identity
+// ---------------------------------------------------------------------------
+
+/// The non-secret, cleartext identifier for a `requestState` key.
+///
+/// It is the first [`KEY_ID_LEN`] bytes of `SHA-256(key)`. A pre-image of 8 bytes
+/// of SHA-256 output leaks nothing usable about the 32-byte key, and the id is
+/// carried in the clear on every token by design.
+///
+/// # Why it is load-bearing
+///
+/// The key-id is the **only** thing that distinguishes
+/// "this token was minted by an instance whose per-process key I do not share"
+/// (D-04 → strip MRTR fields and re-run the handler) from
+/// "this token was tampered with" (conformance `sep-2322-reject-tampered-state`
+/// → JSON-RPC error). Without it those two cases are indistinguishable and the
+/// D-04 degraded path cannot exist.
+///
+/// # Collision policy
+///
+/// Eight bytes can collide. The accepting set is therefore a `Vec` and
+/// [`RequestStateCodec::verify`] tries **every** entry whose key-id matches,
+/// returning on the first successful AEAD open. [`Verdict::UnknownKey`] is
+/// returned only when **no** entry's key-id matches. A colliding-but-different
+/// key therefore yields [`Verdict::AuthFailed`] (the tag check fails on every
+/// candidate) — never a false `Ok`, and never a misleading `UnknownKey`.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) struct KeyId([u8; KEY_ID_LEN]);
+
+impl KeyId {
+    /// The raw id bytes, as written into the token prefix.
+    pub(crate) const fn as_bytes(&self) -> &[u8; KEY_ID_LEN] {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for KeyId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for byte in &self.0 {
+            write!(f, "{byte:02x}")?;
+        }
+        Ok(())
+    }
+}
+
+impl std::fmt::Debug for KeyId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "KeyId({self})")
+    }
+}
+
+/// Derive the [`KeyId`] of a key: the first [`KEY_ID_LEN`] bytes of `SHA-256(key)`.
+pub(crate) fn key_id_of(key: &[u8]) -> KeyId {
+    let mut hasher = Sha256::new();
+    hasher.update(key);
+    let digest = hasher.finalize();
+    let mut id = [0u8; KEY_ID_LEN];
+    id.copy_from_slice(&digest[..KEY_ID_LEN]);
+    KeyId(id)
+}
+
+// ---------------------------------------------------------------------------
+// Clock
+// ---------------------------------------------------------------------------
+
+/// The clock [`RequestStateCodec`] reads for minting `exp` and for expiry checks.
+///
+/// Injectable so an expired token can be produced deterministically — with no
+/// sleeping and no hand-crafted ciphertext — by moving the clock forward.
+pub(crate) trait RequestStateClock: Send + Sync + std::fmt::Debug {
+    /// Current time as Unix seconds.
+    fn now_unix(&self) -> i64;
+}
+
+/// The production clock: wall-clock Unix seconds.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct SystemClock;
+
+impl RequestStateClock for SystemClock {
+    fn now_unix(&self) -> i64 {
+        chrono::Utc::now().timestamp()
+    }
+}
+
+/// A clock pinned to a fixed instant, for deterministic expiry tests.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct FixedClock(pub i64);
+
+impl RequestStateClock for FixedClock {
+    fn now_unix(&self) -> i64 {
+        self.0
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Codec
+// ---------------------------------------------------------------------------
+
+/// The server-owned `requestState` mint/verify codec.
+///
+/// See the [module docs](self) for the ownership rationale, token layout and
+/// algorithm choice.
+pub(crate) struct RequestStateCodec {
+    /// The single key new tokens are sealed with.
+    minting: (KeyId, LessSafeKey),
+    /// Every key a presented token may be opened with, including the minting key
+    /// and any rotated-out (verify-only) keys.
+    accepting: Vec<(KeyId, LessSafeKey)>,
+    /// Continuation lifetime baked into each minted token's `exp`.
+    ttl: Duration,
+    /// Injectable clock (see [`RequestStateClock`]).
+    clock: Arc<dyn RequestStateClock>,
+}
+
+impl std::fmt::Debug for RequestStateCodec {
+    /// Renders **only** key ids and the ttl. Key material is never printed
+    /// (threat T-113-05).
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RequestStateCodec")
+            .field("minting_key_id", &self.minting.0)
+            .field("accepting_key_ids", &self.accepting_key_ids())
+            .field("ttl", &self.ttl)
+            .finish()
+    }
+}
+
+/// Bind raw key bytes into a `ring` AEAD key plus its derived [`KeyId`].
+fn bind_key(key: &[u8]) -> Result<(KeyId, LessSafeKey)> {
+    let _ = key;
+    unimplemented!("plan 113-03 task 1")
+}
+
+impl RequestStateCodec {
+    /// Deterministic constructor: build a codec over one known key.
+    pub(crate) fn new(key: &[u8; KEY_LEN], ttl: Duration) -> Result<Self> {
+        let _ = (key, ttl);
+        unimplemented!("plan 113-03 task 1")
+    }
+
+    /// Resolve the codec from the process environment (D-03/D-04).
+    pub(crate) fn from_env() -> Result<Self> {
+        unimplemented!("plan 113-03 task 1")
+    }
+
+    /// Add verify-only keys to the accepting set.
+    pub(crate) fn with_previous_keys(
+        self,
+        keys: impl IntoIterator<Item = [u8; KEY_LEN]>,
+    ) -> Result<Self> {
+        let _ = keys;
+        unimplemented!("plan 113-03 task 1")
+    }
+
+    /// Replace the clock (see [`RequestStateClock`]).
+    #[must_use]
+    pub(crate) fn with_clock(self, clock: Arc<dyn RequestStateClock>) -> Self {
+        let _ = clock;
+        unimplemented!("plan 113-03 task 1")
+    }
+
+    /// Replace the continuation lifetime.
+    #[must_use]
+    pub(crate) fn with_ttl(self, ttl: Duration) -> Self {
+        let _ = ttl;
+        unimplemented!("plan 113-03 task 1")
+    }
+
+    /// The id of the key new tokens are minted under.
+    pub(crate) const fn minting_key_id(&self) -> KeyId {
+        self.minting.0
+    }
+
+    /// Every key-id a presented token may be opened under.
+    pub(crate) fn accepting_key_ids(&self) -> Vec<KeyId> {
+        self.accepting.iter().map(|(id, _)| *id).collect()
+    }
+
+    /// The configured continuation lifetime.
+    pub(crate) const fn ttl(&self) -> Duration {
+        self.ttl
+    }
+
+    /// The codec's current time, through its injected clock.
+    pub(crate) fn now_unix(&self) -> i64 {
+        self.clock.now_unix()
+    }
+}
+
+/// Decode configured key material: base64url-no-pad **or** hex, exactly
+/// [`KEY_LEN`] bytes after decoding.
+fn decode_key_material(raw: &str, var: &str) -> Result<Vec<u8>> {
+    let _ = (raw, var);
+    unimplemented!("plan 113-03 task 1")
+}
+
+/// Decode a lowercase/uppercase hex string, or `None` if it is not valid hex.
+fn decode_hex(s: &str) -> Option<Vec<u8>> {
+    let _ = s;
+    unimplemented!("plan 113-03 task 1")
+}
+
+/// Draw a fresh 32-byte key from the CSPRNG (no `unwrap`/`expect`).
+fn random_key() -> Result<[u8; KEY_LEN]> {
+    unimplemented!("plan 113-03 task 1")
+}
+
+/// Resolve the configured ttl, defaulting on absent or unparseable.
+fn ttl_from_env() -> Duration {
+    unimplemented!("plan 113-03 task 1")
+}
+
+/// Resolve the server's codec **once**, at build time.
+pub(crate) fn resolve_codec_at_build(
+    accept_list: &[crate::types::ProtocolVersion],
+    key: Option<[u8; KEY_LEN]>,
+    previous_keys: &[[u8; KEY_LEN]],
+    ttl: Option<Duration>,
+) -> Result<Option<Arc<RequestStateCodec>>> {
+    let _ = (accept_list, key, previous_keys, ttl);
+    Ok(None)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cell::RefCell;
+    use std::collections::HashMap;
+    use std::sync::{Arc as StdArc, Mutex};
+
+    thread_local! {
+        /// Thread-local `PMCP_*` override consulted by [`env_var`] under `cfg(test)`.
+        pub(super) static ENV_OVERRIDE: RefCell<Option<HashMap<String, String>>> =
+            const { RefCell::new(None) };
+    }
+
+    /// Serialises the one test that mutates the REAL process environment.
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    const KEY_A: [u8; KEY_LEN] = [0x11; KEY_LEN];
+    const KEY_B: [u8; KEY_LEN] = [0x22; KEY_LEN];
+
+    /// Run `f` with a thread-local view of the `PMCP_*` environment.
+    ///
+    /// Any variable NOT listed in `pairs` reads as absent, so a test that wants
+    /// "unset" gets it deterministically regardless of the ambient environment.
+    fn with_env<T>(pairs: &[(&str, &str)], f: impl FnOnce() -> T) -> T {
+        let map: HashMap<String, String> = pairs
+            .iter()
+            .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+            .collect();
+        ENV_OVERRIDE.with(|o| *o.borrow_mut() = Some(map));
+        let out = f();
+        ENV_OVERRIDE.with(|o| *o.borrow_mut() = None);
+        out
+    }
+
+    fn b64(key: &[u8]) -> String {
+        URL_SAFE_NO_PAD.encode(key)
+    }
+
+    fn hex(key: &[u8]) -> String {
+        key.iter().map(|b| format!("{b:02x}")).collect()
+    }
+
+    // -- WARN capture -------------------------------------------------------
+
+    #[derive(Clone, Default)]
+    struct WarnCounter {
+        warns: StdArc<Mutex<Vec<String>>>,
+    }
+
+    struct MessageVisitor<'a>(&'a mut String);
+
+    impl tracing::field::Visit for MessageVisitor<'_> {
+        fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+            if field.name() == "message" {
+                *self.0 = format!("{value:?}");
+            }
+        }
+        fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+            if field.name() == "message" {
+                *self.0 = value.to_string();
+            }
+        }
+    }
+
+    impl tracing::Subscriber for WarnCounter {
+        fn enabled(&self, _metadata: &tracing::Metadata<'_>) -> bool {
+            true
+        }
+        fn new_span(&self, _span: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+            tracing::span::Id::from_u64(1)
+        }
+        fn record(&self, _span: &tracing::span::Id, _values: &tracing::span::Record<'_>) {}
+        fn record_follows_from(&self, _span: &tracing::span::Id, _follows: &tracing::span::Id) {}
+        fn event(&self, event: &tracing::Event<'_>) {
+            if *event.metadata().level() != tracing::Level::WARN {
+                return;
+            }
+            let mut message = String::new();
+            event.record(&mut MessageVisitor(&mut message));
+            if let Ok(mut warns) = self.warns.lock() {
+                warns.push(message);
+            }
+        }
+        fn enter(&self, _span: &tracing::span::Id) {}
+        fn exit(&self, _span: &tracing::span::Id) {}
+    }
+
+    /// Run `f` with a WARN-counting subscriber installed, returning the captured
+    /// WARN messages alongside `f`'s output.
+    fn capture_warns<T>(f: impl FnOnce() -> T) -> (T, Vec<String>) {
+        let counter = WarnCounter::default();
+        let sink = counter.warns.clone();
+        let out = tracing::subscriber::with_default(counter, f);
+        let warns = sink.lock().map(|w| w.clone()).unwrap_or_default();
+        (out, warns)
+    }
+
+    fn v2_versions() -> Vec<crate::types::ProtocolVersion> {
+        vec![
+            crate::types::ProtocolVersion("2026-07-28".to_string()),
+            crate::types::ProtocolVersion("2025-11-25".to_string()),
+        ]
+    }
+
+    // -- key resolution -----------------------------------------------------
+
+    #[test]
+    fn from_env_with_valid_base64url_key_succeeds_and_key_id_is_deterministic() {
+        let codec = with_env(&[(ENV_REQUEST_STATE_KEY, &b64(&KEY_A))], || {
+            RequestStateCodec::from_env().expect("a valid 32-byte key must be accepted")
+        });
+        assert_eq!(codec.minting_key_id(), key_id_of(&KEY_A));
+
+        let again = with_env(&[(ENV_REQUEST_STATE_KEY, &b64(&KEY_A))], || {
+            RequestStateCodec::from_env().expect("a valid 32-byte key must be accepted")
+        });
+        assert_eq!(
+            codec.minting_key_id(),
+            again.minting_key_id(),
+            "key-id must be deterministic for a given key"
+        );
+    }
+
+    #[test]
+    fn from_env_accepts_a_hex_encoded_key() {
+        let codec = with_env(&[(ENV_REQUEST_STATE_KEY, &hex(&KEY_A))], || {
+            RequestStateCodec::from_env().expect("a hex 32-byte key must be accepted")
+        });
+        assert_eq!(codec.minting_key_id(), key_id_of(&KEY_A));
+    }
+
+    #[test]
+    fn from_env_unset_generates_a_key_and_warns_exactly_once() {
+        let (codec, warns) = capture_warns(|| with_env(&[], RequestStateCodec::from_env));
+        assert!(codec.is_ok(), "an unset key must NOT fail the build (D-04)");
+        assert_eq!(warns.len(), 1, "exactly one WARN must be emitted, got {warns:?}");
+        assert!(
+            warns[0].contains(ENV_REQUEST_STATE_KEY),
+            "the WARN must name the env var: {}",
+            warns[0]
+        );
+    }
+
+    #[test]
+    fn from_env_with_malformed_key_errors_naming_the_expected_length() {
+        let err = with_env(&[(ENV_REQUEST_STATE_KEY, "not-a-valid-key")], || {
+            RequestStateCodec::from_env()
+                .expect_err("a malformed CONFIGURED key must fail, not silently fall back")
+        });
+        let rendered = err.to_string();
+        assert!(
+            rendered.contains("32"),
+            "the error must name the expected byte length: {rendered}"
+        );
+        assert!(
+            rendered.contains(ENV_REQUEST_STATE_KEY),
+            "the error must name the offending variable: {rendered}"
+        );
+    }
+
+    #[test]
+    fn from_env_fallback_keys_are_distinct_across_calls() {
+        let (a, b) = with_env(&[], || {
+            (
+                RequestStateCodec::from_env().expect("fallback key"),
+                RequestStateCodec::from_env().expect("fallback key"),
+            )
+        });
+        assert_ne!(
+            a.minting_key_id(),
+            b.minting_key_id(),
+            "two CSPRNG fallback draws must not collide"
+        );
+    }
+
+    #[test]
+    fn from_env_reads_the_real_process_environment() {
+        // The ONE test that touches process-global state. It sets a VALID key, so
+        // even if a concurrently-building server observes it the build succeeds.
+        let _guard = ENV_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let previous = std::env::var(ENV_REQUEST_STATE_KEY).ok();
+        std::env::set_var(ENV_REQUEST_STATE_KEY, b64(&KEY_B));
+        let resolved = RequestStateCodec::from_env();
+        match previous {
+            Some(value) => std::env::set_var(ENV_REQUEST_STATE_KEY, value),
+            None => std::env::remove_var(ENV_REQUEST_STATE_KEY),
+        }
+        assert_eq!(
+            resolved.expect("valid key in the real env").minting_key_id(),
+            key_id_of(&KEY_B),
+            "production must read std::env::var, not only the test seam"
+        );
+    }
+
+    #[test]
+    fn previous_key_is_accepted_for_verification_but_never_for_minting() {
+        let codec = with_env(
+            &[
+                (ENV_REQUEST_STATE_KEY, &b64(&KEY_A)),
+                (ENV_REQUEST_STATE_KEY_PREVIOUS, &b64(&KEY_B)),
+            ],
+            || RequestStateCodec::from_env().expect("both keys valid"),
+        );
+        assert_eq!(codec.minting_key_id(), key_id_of(&KEY_A));
+        let accepting = codec.accepting_key_ids();
+        assert!(accepting.contains(&key_id_of(&KEY_A)));
+        assert!(accepting.contains(&key_id_of(&KEY_B)));
+        assert_ne!(
+            codec.minting_key_id(),
+            key_id_of(&KEY_B),
+            "the previous key must never become the minting key"
+        );
+    }
+
+    #[test]
+    fn ttl_env_overrides_the_default() {
+        let codec = with_env(
+            &[
+                (ENV_REQUEST_STATE_KEY, &b64(&KEY_A)),
+                (ENV_REQUEST_STATE_TTL_SECS, "42"),
+            ],
+            || RequestStateCodec::from_env().expect("valid key"),
+        );
+        assert_eq!(codec.ttl(), Duration::from_secs(42));
+    }
+
+    #[test]
+    fn ttl_env_unparseable_falls_back_to_default_without_erroring() {
+        let codec = with_env(
+            &[
+                (ENV_REQUEST_STATE_KEY, &b64(&KEY_A)),
+                (ENV_REQUEST_STATE_TTL_SECS, "five minutes"),
+            ],
+            || RequestStateCodec::from_env().expect("an unparseable ttl must not error"),
+        );
+        assert_eq!(codec.ttl(), Duration::from_secs(DEFAULT_TTL_SECS));
+    }
+
+    #[test]
+    fn key_id_is_the_first_eight_bytes_of_sha256() {
+        let mut hasher = Sha256::new();
+        hasher.update(KEY_A);
+        let digest = hasher.finalize();
+        assert_eq!(key_id_of(&KEY_A).as_bytes()[..], digest[..KEY_ID_LEN]);
+    }
+
+    #[test]
+    fn debug_never_renders_key_material() {
+        let codec = RequestStateCodec::new(&KEY_A, Duration::from_secs(60)).expect("valid key");
+        let rendered = format!("{codec:?}");
+        assert!(rendered.contains("ttl"));
+        assert!(rendered.contains(&key_id_of(&KEY_A).to_string()));
+        assert!(
+            !rendered.contains(&hex(&KEY_A)),
+            "key material must never appear in Debug output: {rendered}"
+        );
+    }
+
+    #[test]
+    fn fixed_clock_makes_now_deterministic() {
+        let codec = RequestStateCodec::new(&KEY_A, Duration::from_secs(60))
+            .expect("valid key")
+            .with_clock(Arc::new(FixedClock(1_700_000_000)));
+        assert_eq!(codec.now_unix(), 1_700_000_000);
+        assert_eq!(codec.now_unix(), 1_700_000_000);
+    }
+
+    // -- server wiring ------------------------------------------------------
+
+    #[test]
+    fn server_builder_malformed_request_state_key_fails_the_build() {
+        let result = with_env(&[(ENV_REQUEST_STATE_KEY, "bogus")], || {
+            crate::server::Server::builder()
+                .name("t")
+                .version("1")
+                .with_supported_protocol_versions(v2_versions())
+                .build()
+        });
+        assert!(
+            result.is_err(),
+            "a malformed CONFIGURED key must fail the server build (T-113-17)"
+        );
+    }
+
+    #[test]
+    fn server_builder_unset_key_warns_once_at_startup() {
+        let (server, warns) = capture_warns(|| {
+            with_env(&[], || {
+                crate::server::Server::builder()
+                    .name("t")
+                    .version("1")
+                    .with_supported_protocol_versions(v2_versions())
+                    .build()
+            })
+        });
+        assert!(server.is_ok(), "an unset key must still serve (D-04)");
+        assert_eq!(
+            warns.len(),
+            1,
+            "the D-04 warning must be emitted exactly once, at BUILD time: {warns:?}"
+        );
+    }
+
+    #[test]
+    fn server_builder_with_request_state_key_overrides_env() {
+        let server = with_env(&[(ENV_REQUEST_STATE_KEY, &b64(&KEY_A))], || {
+            crate::server::Server::builder()
+                .name("t")
+                .version("1")
+                .with_supported_protocol_versions(v2_versions())
+                .with_request_state_key(KEY_B)
+                .build()
+                .expect("builder key must win")
+        });
+        assert_eq!(
+            server
+                .request_state_codec()
+                .expect("v2 server has a codec")
+                .minting_key_id(),
+            key_id_of(&KEY_B)
+        );
+    }
+
+    #[test]
+    fn server_builder_with_request_state_ttl_overrides_default_and_env() {
+        let server = with_env(
+            &[
+                (ENV_REQUEST_STATE_KEY, &b64(&KEY_A)),
+                (ENV_REQUEST_STATE_TTL_SECS, "42"),
+            ],
+            || {
+                crate::server::Server::builder()
+                    .name("t")
+                    .version("1")
+                    .with_supported_protocol_versions(v2_versions())
+                    .with_request_state_ttl(Duration::from_secs(7))
+                    .build()
+                    .expect("builder ttl must win")
+            },
+        );
+        assert_eq!(
+            server.request_state_codec().expect("codec").ttl(),
+            Duration::from_secs(7)
+        );
+    }
+
+    #[test]
+    fn two_servers_with_different_keys_have_different_key_ids() {
+        // The direct regression guard for the removed process-global OnceLock:
+        // two differently-configured servers must coexist in ONE process.
+        let first = crate::server::Server::builder()
+            .name("a")
+            .version("1")
+            .with_supported_protocol_versions(v2_versions())
+            .with_request_state_key(KEY_A)
+            .build()
+            .expect("first server");
+        let second = crate::server::Server::builder()
+            .name("b")
+            .version("1")
+            .with_supported_protocol_versions(v2_versions())
+            .with_request_state_key(KEY_B)
+            .build()
+            .expect("second server");
+        assert_ne!(
+            first.request_state_codec().expect("codec").minting_key_id(),
+            second.request_state_codec().expect("codec").minting_key_id(),
+        );
+    }
+
+    #[test]
+    fn v1_only_server_constructs_no_codec_and_reads_no_env() {
+        // A deliberately MALFORMED key: a v1-only server must not even look.
+        let server = with_env(&[(ENV_REQUEST_STATE_KEY, "bogus")], || {
+            crate::server::Server::builder()
+                .name("t")
+                .version("1")
+                .build()
+                .expect("a v1-only server must pay nothing for MRTR (D-04)")
+        });
+        assert!(server.request_state_codec().is_none());
+    }
+
+    #[test]
+    fn server_core_builder_carries_the_codec() {
+        let core = crate::server::builder::ServerCoreBuilder::new()
+            .name("t")
+            .version("1")
+            .with_supported_protocol_versions(v2_versions())
+            .with_request_state_key(KEY_A)
+            .build()
+            .expect("core builds");
+        assert_eq!(
+            core.request_state_codec()
+                .expect("v2 core has a codec")
+                .minting_key_id(),
+            key_id_of(&KEY_A)
+        );
+    }
+
+    #[test]
+    fn server_core_builder_previous_keys_reach_the_accepting_set() {
+        let core = crate::server::builder::ServerCoreBuilder::new()
+            .name("t")
+            .version("1")
+            .with_supported_protocol_versions(v2_versions())
+            .with_request_state_key(KEY_A)
+            .with_request_state_previous_keys(vec![KEY_B])
+            .build()
+            .expect("core builds");
+        let accepting = core
+            .request_state_codec()
+            .expect("codec")
+            .accepting_key_ids();
+        assert!(accepting.contains(&key_id_of(&KEY_A)));
+        assert!(accepting.contains(&key_id_of(&KEY_B)));
+    }
+}

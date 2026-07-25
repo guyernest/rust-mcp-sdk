@@ -214,6 +214,11 @@ unstable = []
 simd = []
 rayon = ["dep:rayon"]
 
+# Internal test/fuzz support surface. NOT stable API, and deliberately absent
+# from BOTH `default` and `full` so `cargo public-api` never sees the seam on the
+# shipped surface. Only `fuzz/` enables it (see fuzz/Cargo.toml).
+fuzzing = []
+
 # Testing support
 test-helpers = []
 # Conformance helpers (pmcp::testing) — folded into `full` so the quality gate

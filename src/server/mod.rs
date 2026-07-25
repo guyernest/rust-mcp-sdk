@@ -67,6 +67,21 @@ pub mod preset;
 /// Progress reporting support for long-running operations.
 #[cfg(not(target_arch = "wasm32"))]
 pub mod progress;
+// Server-owned `requestState` AEAD continuation tokens (Phase 113, HTTP-02).
+//
+// D-14 locks MRTR AEAD to native + `streamable-http`: `ring` is only enabled by
+// that feature and the wasm server (`WasmServerCore`) gets no MRTR this phase.
+// The second `#[cfg]` widens the module's visibility for the `fuzzing` feature
+// ONLY, so `fuzz/fuzz_targets/fuzz_request_state.rs` can reach
+// `request_state::fuzz_support` without any item becoming part of the shipped
+// public API (`fuzzing` is in neither `default` nor `full`).
+#[cfg(all(feature = "streamable-http", not(target_arch = "wasm32")))]
+#[cfg(not(feature = "fuzzing"))]
+pub(crate) mod request_state;
+/// Server-owned `requestState` AEAD continuation tokens (Phase 113, HTTP-02).
+#[cfg(all(feature = "streamable-http", not(target_arch = "wasm32")))]
+#[cfg(feature = "fuzzing")]
+pub mod request_state;
 /// Outbound server-to-client request dispatcher with response correlation.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod server_request_dispatcher;
@@ -452,6 +467,13 @@ pub struct Server {
     /// through the SAME shared resolver. Default is v1-only (excludes
     /// `2026-07-28`) — an un-opted-in server is byte-for-byte unchanged.
     supported_protocol_versions: Vec<ProtocolVersion>,
+    /// The server-owned `requestState` codec (Phase 113, HTTP-02), resolved
+    /// EXACTLY ONCE at [`ServerBuilder::build`] time. `None` for a server that
+    /// did not opt into v2 — such a server reads no MRTR env var and pays
+    /// nothing (D-04). Deliberately an instance field, never a process-global:
+    /// see [`request_state`] for why.
+    #[cfg(feature = "streamable-http")]
+    request_state_codec: Option<Arc<request_state::RequestStateCodec>>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -471,6 +493,20 @@ impl std::fmt::Debug for Server {
 
 #[cfg(not(target_arch = "wasm32"))]
 impl Server {
+    /// The server-owned `requestState` codec, or `None` when this server did not
+    /// opt into the v2 (`2026-07-28`) era.
+    ///
+    /// Resolved once at build time; consumers (plan 06's dispatch-side `verify`,
+    /// plan 09's `mint`) borrow it from server state rather than reaching for a
+    /// process-global.
+    // Why: the production consumers land in plans 06 and 09; today only the
+    // build-time wiring tests read it. Plan 12 removes this allow.
+    #[cfg(feature = "streamable-http")]
+    #[allow(dead_code)]
+    pub(crate) fn request_state_codec(&self) -> Option<&request_state::RequestStateCodec> {
+        self.request_state_codec.as_deref()
+    }
+
     /// Check if a tool exists
     pub fn has_tool(&self, name: &str) -> bool {
         self.tools.contains_key(name)
@@ -2468,6 +2504,19 @@ pub struct ServerBuilder {
     /// to the v1-only legacy set (excludes `2026-07-28`); overridden via
     /// [`Self::with_supported_protocol_versions`].
     supported_protocol_versions: Vec<ProtocolVersion>,
+    /// Explicit `requestState` minting key (Phase 113, HTTP-02), set via
+    /// [`Self::with_request_state_key`]. When present it overrides
+    /// `PMCP_REQUEST_STATE_KEY` entirely.
+    #[cfg(feature = "streamable-http")]
+    request_state_key: Option<[u8; 32]>,
+    /// Rotated-out `requestState` keys accepted for VERIFICATION only, set via
+    /// [`Self::with_request_state_previous_keys`].
+    #[cfg(feature = "streamable-http")]
+    request_state_previous_keys: Vec<[u8; 32]>,
+    /// Explicit continuation lifetime, set via [`Self::with_request_state_ttl`].
+    /// Beats both the 300-second default and `PMCP_REQUEST_STATE_TTL_SECS` (D-05).
+    #[cfg(feature = "streamable-http")]
+    request_state_ttl: Option<std::time::Duration>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -2538,7 +2587,60 @@ impl ServerBuilder {
             #[cfg(not(target_arch = "wasm32"))]
             suppress_double_wrap: HashSet::new(),
             supported_protocol_versions: crate::types::protocol::context::default_accept_list(),
+            #[cfg(feature = "streamable-http")]
+            request_state_key: None,
+            #[cfg(feature = "streamable-http")]
+            request_state_previous_keys: Vec::new(),
+            #[cfg(feature = "streamable-http")]
+            request_state_ttl: None,
         }
+    }
+
+    /// Configure the shared `requestState` minting key (Phase 113, HTTP-02, D-03).
+    ///
+    /// With no call, the key is resolved from `PMCP_REQUEST_STATE_KEY`; when that
+    /// variable is unset the server generates a per-process key and WARNs at build
+    /// time (D-04). Calling this overrides the environment entirely, which is what
+    /// makes deterministic integration tests and multiple differently-configured
+    /// servers in one process possible.
+    ///
+    /// The key must be shared byte-for-byte by every instance behind a load
+    /// balancer that should be able to resume each other's multi-round-trip
+    /// requests.
+    ///
+    /// Has no effect on a server that did not opt into the v2 (`2026-07-28`) era.
+    #[cfg(feature = "streamable-http")]
+    #[must_use]
+    pub fn with_request_state_key(mut self, key: [u8; 32]) -> Self {
+        self.request_state_key = Some(key);
+        self
+    }
+
+    /// Accept rotated-out `requestState` keys for VERIFICATION only.
+    ///
+    /// Tokens minted under a listed key still verify, but new tokens are always
+    /// minted under the current key — so a rotation does not strand in-flight
+    /// continuations. With no call, only the current key is accepted.
+    ///
+    /// Has no effect on a server that did not opt into the v2 (`2026-07-28`) era.
+    #[cfg(feature = "streamable-http")]
+    #[must_use]
+    pub fn with_request_state_previous_keys(mut self, keys: Vec<[u8; 32]>) -> Self {
+        self.request_state_previous_keys = keys;
+        self
+    }
+
+    /// Configure the `requestState` continuation lifetime (D-05).
+    ///
+    /// With no call, the lifetime is `PMCP_REQUEST_STATE_TTL_SECS` if parseable,
+    /// else 300 seconds. A builder value beats both.
+    ///
+    /// Has no effect on a server that did not opt into the v2 (`2026-07-28`) era.
+    #[cfg(feature = "streamable-http")]
+    #[must_use]
+    pub fn with_request_state_ttl(mut self, ttl: std::time::Duration) -> Self {
+        self.request_state_ttl = Some(ttl);
+        self
     }
 
     /// Opt into a protocol-version accept-list (Phase 112, VERS-01/02; D-02/D-04).
@@ -4499,6 +4601,19 @@ impl ServerBuilder {
         #[cfg(not(feature = "skills"))]
         let final_resources = self.resources;
 
+        // Resolve the server-owned `requestState` codec EXACTLY ONCE, here at
+        // BUILD time (Phase 113, HTTP-02). A malformed CONFIGURED key fails the
+        // build; an UNSET key falls back to a per-process key with a WARN emitted
+        // from inside `from_env`, which is a genuine STARTUP warning because this
+        // is startup. A v1-only server gets `None` and reads no env var at all.
+        #[cfg(feature = "streamable-http")]
+        let request_state_codec = request_state::resolve_codec_at_build(
+            &self.supported_protocol_versions,
+            self.request_state_key,
+            &self.request_state_previous_keys,
+            self.request_state_ttl,
+        )?;
+
         Ok(Server {
             info: {
                 let mut info = Implementation::new(&name, &version);
@@ -4539,6 +4654,8 @@ impl ServerBuilder {
             #[cfg(not(target_arch = "wasm32"))]
             suppress_double_wrap: self.suppress_double_wrap,
             supported_protocol_versions: self.supported_protocol_versions,
+            #[cfg(feature = "streamable-http")]
+            request_state_codec,
         })
     }
 }

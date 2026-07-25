@@ -94,6 +94,18 @@ pub struct ServerCoreBuilder {
     /// [`Self::with_supported_protocol_versions`]; an explicitly-empty accept-list
     /// falls back to this v1-only default (never an all-reject server).
     supported_protocol_versions: Vec<crate::types::ProtocolVersion>,
+    /// Explicit `requestState` minting key (Phase 113, HTTP-02), set via
+    /// [`Self::with_request_state_key`]. Overrides `PMCP_REQUEST_STATE_KEY`.
+    #[cfg(all(feature = "streamable-http", not(target_arch = "wasm32")))]
+    request_state_key: Option<[u8; 32]>,
+    /// Rotated-out `requestState` keys accepted for VERIFICATION only, set via
+    /// [`Self::with_request_state_previous_keys`].
+    #[cfg(all(feature = "streamable-http", not(target_arch = "wasm32")))]
+    request_state_previous_keys: Vec<[u8; 32]>,
+    /// Explicit continuation lifetime, set via [`Self::with_request_state_ttl`].
+    /// Beats both the 300-second default and `PMCP_REQUEST_STATE_TTL_SECS` (D-05).
+    #[cfg(all(feature = "streamable-http", not(target_arch = "wasm32")))]
+    request_state_ttl: Option<std::time::Duration>,
     /// Host-specific metadata layers (e.g., `ChatGpt` for openai/* keys)
     #[cfg(feature = "mcp-apps")]
     host_layers: Vec<crate::types::mcp_apps::HostType>,
@@ -142,6 +154,12 @@ impl ServerCoreBuilder {
             suppress_double_wrap: HashSet::new(),
             stateless_mode: None, // Auto-detect by default
             supported_protocol_versions: crate::types::protocol::context::default_accept_list(),
+            #[cfg(all(feature = "streamable-http", not(target_arch = "wasm32")))]
+            request_state_key: None,
+            #[cfg(all(feature = "streamable-http", not(target_arch = "wasm32")))]
+            request_state_previous_keys: Vec::new(),
+            #[cfg(all(feature = "streamable-http", not(target_arch = "wasm32")))]
+            request_state_ttl: None,
             #[cfg(feature = "mcp-apps")]
             host_layers: Vec::new(),
             website_url: None,
@@ -777,6 +795,49 @@ impl ServerCoreBuilder {
         self
     }
 
+    /// Configure the shared `requestState` minting key (Phase 113, HTTP-02, D-03).
+    ///
+    /// The [`ServerCoreBuilder`] twin of
+    /// [`ServerBuilder::with_request_state_key`](crate::ServerBuilder::with_request_state_key).
+    /// With no call, the key is resolved from `PMCP_REQUEST_STATE_KEY`; when that
+    /// variable is unset the core generates a per-process key and WARNs at build
+    /// time (D-04). Calling this overrides the environment entirely.
+    ///
+    /// Has no effect on a core that did not opt into the v2 (`2026-07-28`) era.
+    #[cfg(all(feature = "streamable-http", not(target_arch = "wasm32")))]
+    #[must_use]
+    pub fn with_request_state_key(mut self, key: [u8; 32]) -> Self {
+        self.request_state_key = Some(key);
+        self
+    }
+
+    /// Accept rotated-out `requestState` keys for VERIFICATION only.
+    ///
+    /// Tokens minted under a listed key still verify, but new tokens are always
+    /// minted under the current key — so a rotation does not strand in-flight
+    /// continuations. With no call, only the current key is accepted.
+    ///
+    /// Has no effect on a core that did not opt into the v2 (`2026-07-28`) era.
+    #[cfg(all(feature = "streamable-http", not(target_arch = "wasm32")))]
+    #[must_use]
+    pub fn with_request_state_previous_keys(mut self, keys: Vec<[u8; 32]>) -> Self {
+        self.request_state_previous_keys = keys;
+        self
+    }
+
+    /// Configure the `requestState` continuation lifetime (D-05).
+    ///
+    /// With no call, the lifetime is `PMCP_REQUEST_STATE_TTL_SECS` if parseable,
+    /// else 300 seconds. A builder value beats both.
+    ///
+    /// Has no effect on a core that did not opt into the v2 (`2026-07-28`) era.
+    #[cfg(all(feature = "streamable-http", not(target_arch = "wasm32")))]
+    #[must_use]
+    pub fn with_request_state_ttl(mut self, ttl: std::time::Duration) -> Self {
+        self.request_state_ttl = Some(ttl);
+        self
+    }
+
     /// Populate a reverse-DNS-keyed entry in the server's `extensions` capability
     /// map (Phase 112, VERS-08).
     ///
@@ -1182,6 +1243,19 @@ impl ServerCoreBuilder {
         #[cfg(not(all(feature = "skills", not(target_arch = "wasm32"))))]
         let final_resources = self.resources.take();
 
+        // Resolve the server-owned `requestState` codec EXACTLY ONCE, here at
+        // BUILD time (Phase 113, HTTP-02) — before `supported_protocol_versions`
+        // is moved into the core below. A malformed CONFIGURED key fails the
+        // build; an UNSET key falls back to a per-process key with a genuine
+        // startup WARN. A v1-only core gets `None` and reads no env var.
+        #[cfg(all(feature = "streamable-http", not(target_arch = "wasm32")))]
+        let request_state_codec = crate::server::request_state::resolve_codec_at_build(
+            &self.supported_protocol_versions,
+            self.request_state_key,
+            &self.request_state_previous_keys,
+            self.request_state_ttl,
+        )?;
+
         let core = ServerCore::new(
             info,
             self.capabilities,
@@ -1212,6 +1286,10 @@ impl ServerCoreBuilder {
         // VERS-01/02) so ingress era-resolution enforces the exact set the author
         // opted into. Default (unset) is v1-only — the server behaves as today.
         let core = core.with_supported_protocol_versions(self.supported_protocol_versions);
+        // Thread the once-resolved `requestState` codec (Phase 113, HTTP-02) into
+        // the running core. `None` for a v1-only core.
+        #[cfg(all(feature = "streamable-http", not(target_arch = "wasm32")))]
+        let core = core.with_request_state_codec(request_state_codec);
         Ok(core)
     }
 }
