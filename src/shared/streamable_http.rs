@@ -1,10 +1,11 @@
 use crate::error::{Error, Result, TransportError};
 use crate::shared::http_constants::{
-    ACCEPT, ACCEPT_STREAMABLE, APPLICATION_JSON, CONTENT_TYPE, LAST_EVENT_ID, MCP_PROTOCOL_VERSION,
-    MCP_SESSION_ID, TEXT_EVENT_STREAM,
+    ACCEPT, ACCEPT_STREAMABLE, APPLICATION_JSON, CONTENT_TYPE, LAST_EVENT_ID, MCP_METHOD, MCP_NAME,
+    MCP_PROTOCOL_VERSION, MCP_SESSION_ID, TEXT_EVENT_STREAM,
 };
 use crate::shared::sse_parser::SseParser;
 use crate::shared::{Transport, TransportMessage};
+use crate::types::mrtr::{encode_header_value, logical_name_key};
 use async_trait::async_trait;
 use bytes::Bytes;
 use http_body_util::{BodyExt, Full};
@@ -13,6 +14,7 @@ use hyper_util::client::legacy::Client;
 use hyper_util::rt::TokioExecutor;
 use parking_lot::RwLock;
 use std::fmt::Debug;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 #[cfg(not(target_arch = "wasm32"))]
 use tokio::sync::mpsc;
@@ -298,6 +300,17 @@ pub struct StreamableHttpTransport {
     sender: mpsc::UnboundedSender<TransportMessage>,
     /// Protocol version negotiated with server
     protocol_version: Arc<RwLock<Option<String>>>,
+    /// Whether the CLIENT explicitly selected the v2 (`2026-07-28`) era
+    /// (Phase 113, CLNT-01).
+    ///
+    /// Written ONLY by [`Transport::set_negotiated_protocol_version`], i.e. once
+    /// at `ClientBuilder::build` time. Deliberately separate from
+    /// [`Self::protocol_version`], which [`Self::process_response_headers`]
+    /// overwrites from whatever the SERVER echoed: a rogue or confused server
+    /// replying `MCP-Protocol-Version: 2026-07-28` must not be able to flip a v1
+    /// client into v2 emission mode (which would suppress its session id and
+    /// break the connection).
+    v2_mode: Arc<AtomicBool>,
     /// Abort controller for SSE streams
     abort_handle: Arc<RwLock<Option<tokio::task::JoinHandle<()>>>>,
     /// Last event ID for resumability
@@ -376,9 +389,18 @@ impl StreamableHttpTransport {
             receiver: Arc::new(tokio::sync::Mutex::new(receiver)),
             sender,
             protocol_version: Arc::new(RwLock::new(None)),
+            v2_mode: Arc::new(AtomicBool::new(false)),
             abort_handle: Arc::new(RwLock::new(None)),
             last_event_id: Arc::new(RwLock::new(None)),
         }
+    }
+
+    /// Whether this connection speaks the v2 (`2026-07-28`) wire contract.
+    ///
+    /// See [`Self::v2_mode`] for why this is not derived from
+    /// [`Self::protocol_version`].
+    fn is_v2(&self) -> bool {
+        self.v2_mode.load(Ordering::Relaxed)
     }
 
     /// Get the current session ID
@@ -529,6 +551,38 @@ impl StreamableHttpTransport {
         Ok(())
     }
 
+    /// Emit the two v2-only routing headers onto an outbound request builder
+    /// (Phase 113, CLNT-01 / VERS-05).
+    ///
+    /// Mirrors the SERVER-side emitter
+    /// (`streamable_http_server.rs::apply_v2_outbound_headers`): every insert
+    /// goes through `HeaderValue::from_str` and a pathological value SKIPS its
+    /// header rather than panicking (T-113-20).
+    ///
+    /// `MCP-Protocol-Version` is emitted by the existing per-request block, not
+    /// here, so a v1 request keeps exactly the headers it has today.
+    fn apply_v2_outbound_headers(
+        mut builder: hyper::http::request::Builder,
+        method: &str,
+        name: &str,
+    ) -> hyper::http::request::Builder {
+        if let Ok(value) = hyper::header::HeaderValue::from_str(method) {
+            builder = builder.header(MCP_METHOD, value);
+        }
+        // `Mcp-Name` is emitted on EVERY v2 request, with the EMPTY STRING for a
+        // method that carries no logical name. Provenance: `113-SPEC-RECHECK.md`
+        // § `Mcp-Name Header Rule` and Phase-112 D-05 — the server's
+        // `require_three_headers` demands PRESENCE on every v2 request and only
+        // `cross_check_name` compares the VALUE, and then only for the three
+        // name-bearing methods. Omitting the header would 400 every `tools/list`
+        // this client sends. pmcp is deliberately stricter than the draft
+        // transport spec here (Phase-113 DRIFT-1).
+        if let Ok(value) = hyper::header::HeaderValue::from_str(name) {
+            builder = builder.header(MCP_NAME, value);
+        }
+        builder
+    }
+
     /// Build a `hyper::Request` with middleware integration.
     ///
     /// This method:
@@ -571,15 +625,38 @@ impl StreamableHttpTransport {
             false
         };
 
-        // Add session ID header if we have one
+        let is_v2 = self.is_v2();
+
+        // Add session ID header if we have one.
+        //
+        // NEVER on v2: `2026-07-28` has no session at all, and a session id
+        // surviving into the v2 path is exactly the identity-collapse failure
+        // class HTTP-01/HTTP-05 exist to close (T-113-06). The suppression is
+        // unconditional — a value left over from a v1 exchange on the same
+        // transport must not leak either.
         if let Some(session_id) = &session_id {
-            request_builder = request_builder.header(MCP_SESSION_ID, session_id.as_str());
+            if !is_v2 {
+                request_builder = request_builder.header(MCP_SESSION_ID, session_id.as_str());
+            }
         }
 
         // Add protocol version header if we have one
         if let Some(protocol_version) = self.protocol_version.read().as_ref() {
             request_builder =
                 request_builder.header(MCP_PROTOCOL_VERSION, protocol_version.as_str());
+        }
+
+        // v2 routing headers, DERIVED from the body this request is about to
+        // carry — the same `logical_name_key` table the server's
+        // `extract_body_method_and_name` reads. Deriving them here (rather than
+        // threading a name down from `Client`) is what makes the header and the
+        // body incapable of desyncing (T-113-08). A body with no `method` (a
+        // JSON-RPC response, or the empty GET/SSE body) yields `None` and emits
+        // neither header.
+        if is_v2 {
+            if let Some((method, name)) = v2_routing_headers(&body) {
+                request_builder = Self::apply_v2_outbound_headers(request_builder, &method, &name);
+            }
         }
 
         // Build temporary request to extract headers for middleware
@@ -672,10 +749,18 @@ impl StreamableHttpTransport {
 
     /// Process response headers and extract session/protocol information
     fn process_response_headers(&self, response: &HyperResponse<impl hyper::body::Body>) {
-        // Update session ID from response header
-        if let Some(session_id) = response.headers().get(MCP_SESSION_ID) {
-            if let Ok(session_id_str) = session_id.to_str() {
-                self.config.write().session_id = Some(session_id_str.to_string());
+        // Update session ID from response header.
+        //
+        // NEVER on v2 (T-113-06): there is no session in `2026-07-28`, so a
+        // response that carries `Mcp-Session-Id` anyway (a misconfigured
+        // intermediary, a dual-stack server echoing v1 state) must not be able
+        // to plant one that the outbound path would then have to suppress.
+        // Refusing to STORE it is the belt to the outbound braces.
+        if !self.is_v2() {
+            if let Some(session_id) = response.headers().get(MCP_SESSION_ID) {
+                if let Ok(session_id_str) = session_id.to_str() {
+                    self.config.write().session_id = Some(session_id_str.to_string());
+                }
             }
         }
 
@@ -701,6 +786,21 @@ impl StreamableHttpTransport {
 
         // Use JSON-RPC compatibility layer for serialization
         let body_bytes = crate::shared::StdioTransport::serialize_message(&message)?;
+        let is_notification = matches!(message, TransportMessage::Notification { .. });
+        self.post_body(body_bytes, is_notification).await
+    }
+
+    /// POST an ALREADY-SERIALIZED JSON-RPC frame.
+    ///
+    /// The shared tail of [`Self::send_with_options`] and
+    /// [`Transport::send_raw`]: the v2 client path assembles its own frame (so
+    /// it can stamp `params._meta` on methods whose typed struct has no `_meta`
+    /// field), and both paths must go through the SAME header emission, 401
+    /// retry, and response handling.
+    ///
+    /// `is_notification` only selects the 202-Accepted behavior; it is not
+    /// re-derived from the bytes so the typed path keeps its exact semantics.
+    async fn post_body(&mut self, body_bytes: Vec<u8>, is_notification: bool) -> Result<()> {
         // Clone body_bytes so we can retry with the identical payload on 401.
         let body_bytes_snapshot = body_bytes.clone();
 
@@ -797,7 +897,7 @@ impl StreamableHttpTransport {
             // Special handling for 202 Accepted (notification acknowledged)
             if response.status() == StatusCode::ACCEPTED {
                 // For initialization messages, try to start SSE stream
-                if matches!(message, TransportMessage::Notification { .. }) {
+                if is_notification {
                     // Try to start GET SSE (tolerate 405)
                     let _ = self.start_sse(None).await;
                 }
@@ -1039,6 +1139,62 @@ impl Transport for StreamableHttpTransport {
         // we can make requests. There's no persistent connection.
         true
     }
+
+    fn transport_type(&self) -> &'static str {
+        "streamable-http"
+    }
+
+    /// Receive the client's per-connection era selection (Phase 113, CLNT-01).
+    ///
+    /// Delegates to the existing inherent
+    /// [`Self::set_protocol_version`], which writes the field the
+    /// `MCP-Protocol-Version` request header is emitted from, AND latches the
+    /// separate [`Self::v2_mode`] flag that gates every v2-only behavior. The
+    /// two are distinct on purpose — see that field's docs.
+    fn set_negotiated_protocol_version(&mut self, version: Option<String>) {
+        let is_v2 = version.as_deref() == Some(crate::types::protocol::PROTOCOL_VERSION_2026_07_28);
+        self.set_protocol_version(version);
+        self.v2_mode.store(is_v2, Ordering::Relaxed);
+    }
+
+    /// This transport DOES have a wire representation for the negotiated version
+    /// (the `MCP-Protocol-Version` header plus the v2 routing headers).
+    fn supports_negotiated_protocol_version(&self) -> bool {
+        true
+    }
+
+    async fn send_raw(&mut self, body: Vec<u8>) -> Result<()> {
+        self.post_body(body, false).await
+    }
+}
+
+/// Derive the `(Mcp-Method, Mcp-Name)` pair a v2 request must carry, from the
+/// JSON-RPC frame that request is about to send (Phase 113, CLNT-01 / VERS-05).
+///
+/// Returns `None` when the body is not a JSON-RPC frame with a `method` — a
+/// response, or the empty body of a GET/DELETE — in which case no v2 routing
+/// header is emitted.
+///
+/// The logical name is resolved METHOD-AWARELY through
+/// [`crate::types::mrtr::logical_name_key`], the SAME single table the server's
+/// `extract_body_method_and_name` reads: `tools/call` and `prompts/get` carry it
+/// in `params.name`, `resources/read` in `params.uri`, and every other method has
+/// none — for which the returned name is the EMPTY STRING, never an omission.
+///
+/// The value is run through [`crate::types::mrtr::encode_header_value`], so a
+/// non-header-safe name (non-ASCII, or an RFC 9110 field-value delimiter) travels
+/// in the `=?base64?…?=` sentinel form the server's decoder understands
+/// (T-113-47). The empty string round-trips unchanged.
+///
+/// Pure and non-panicking on arbitrary bytes.
+fn v2_routing_headers(body: &[u8]) -> Option<(String, String)> {
+    let value = serde_json::from_slice::<serde_json::Value>(body).ok()?;
+    let method = value.get("method")?.as_str()?.to_string();
+    let name = logical_name_key(&method)
+        .and_then(|name_key| value.get("params").and_then(|params| params.get(name_key)))
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default();
+    Some((method, encode_header_value(name)))
 }
 
 /// A trait for providing authentication tokens.
@@ -1485,5 +1641,261 @@ mod tests {
             "get_access_token must be called AFTER on_unauthorized; order = {:?}",
             order
         );
+    }
+
+    // ==================================================================
+    // Phase 113 / CLNT-01 — v2 (`2026-07-28`) outbound headers.
+    // ==================================================================
+
+    mod v2_outbound {
+        use super::*;
+        use crate::types::protocol::PROTOCOL_VERSION_2026_07_28;
+        use serde_json::json;
+
+        fn body(method: &str, params: serde_json::Value) -> Vec<u8> {
+            json!({ "jsonrpc": "2.0", "id": 1, "method": method, "params": params })
+                .to_string()
+                .into_bytes()
+        }
+
+        /// A transport with the v2 era selected through the PRODUCTION seam.
+        fn v2_transport(session_id: Option<&str>) -> StreamableHttpTransport {
+            let mut config = StreamableHttpTransportConfigBuilder::new(
+                Url::parse("http://127.0.0.1:1/").unwrap(),
+            )
+            .build();
+            config.session_id = session_id.map(str::to_string);
+            let mut transport = StreamableHttpTransport::new(config);
+            transport
+                .set_negotiated_protocol_version(Some(PROTOCOL_VERSION_2026_07_28.to_string()));
+            transport
+        }
+
+        fn v1_transport(session_id: Option<&str>) -> StreamableHttpTransport {
+            let mut config = StreamableHttpTransportConfigBuilder::new(
+                Url::parse("http://127.0.0.1:1/").unwrap(),
+            )
+            .build();
+            config.session_id = session_id.map(str::to_string);
+            StreamableHttpTransport::new(config)
+        }
+
+        async fn headers_for(
+            transport: &StreamableHttpTransport,
+            body: Vec<u8>,
+        ) -> hyper::HeaderMap {
+            transport
+                .build_request_with_middleware(Method::POST, "http://127.0.0.1:1/", body)
+                .await
+                .expect("request builds")
+                .headers()
+                .clone()
+        }
+
+        fn header(map: &hyper::HeaderMap, name: &str) -> Option<String> {
+            map.get(name)
+                .and_then(|v| v.to_str().ok())
+                .map(str::to_string)
+        }
+
+        // ---- the pure derivation --------------------------------------
+
+        #[test]
+        fn routing_headers_read_name_for_tools_call() {
+            let derived = v2_routing_headers(&body("tools/call", json!({ "name": "search" })));
+            assert_eq!(
+                derived,
+                Some(("tools/call".to_string(), "search".to_string()))
+            );
+        }
+
+        #[test]
+        fn routing_headers_read_name_for_prompts_get() {
+            let derived = v2_routing_headers(&body("prompts/get", json!({ "name": "greeting" })));
+            assert_eq!(
+                derived,
+                Some(("prompts/get".to_string(), "greeting".to_string()))
+            );
+        }
+
+        /// `resources/read` carries its logical name in `params.uri` — a
+        /// `ReadResourceRequest` has NO `name` field, so reading `params.name`
+        /// would emit an empty value and fail the server's body cross-check.
+        #[test]
+        fn routing_headers_read_uri_for_resources_read() {
+            let derived =
+                v2_routing_headers(&body("resources/read", json!({ "uri": "mem://greeting" })));
+            assert_eq!(
+                derived,
+                Some(("resources/read".to_string(), "mem://greeting".to_string()))
+            );
+        }
+
+        #[test]
+        fn routing_headers_are_none_for_a_body_without_a_method() {
+            assert_eq!(
+                v2_routing_headers(br#"{"jsonrpc":"2.0","id":1,"result":{}}"#),
+                None
+            );
+            assert_eq!(v2_routing_headers(b"not json"), None);
+            assert_eq!(v2_routing_headers(b""), None);
+        }
+
+        #[test]
+        fn routing_headers_sentinel_encode_a_non_ascii_name() {
+            let (_, name) = v2_routing_headers(&body("tools/call", json!({ "name": "поиск" })))
+                .expect("derived");
+            assert!(
+                name.starts_with(crate::types::mrtr::HEADER_SENTINEL_PREFIX),
+                "a non-header-safe name must travel as a sentinel, got {name}"
+            );
+            assert_eq!(
+                crate::types::mrtr::decode_header_value(&name).as_deref(),
+                Some("поиск"),
+                "the shared codec must round-trip"
+            );
+        }
+
+        // ---- emission on the actual request builder ---------------------
+
+        #[tokio::test]
+        async fn v2_tools_call_emits_all_three_headers() {
+            let transport = v2_transport(None);
+            let map = headers_for(
+                &transport,
+                body("tools/call", json!({ "name": "search", "arguments": {} })),
+            )
+            .await;
+
+            assert_eq!(header(&map, MCP_METHOD).as_deref(), Some("tools/call"));
+            assert_eq!(header(&map, MCP_NAME).as_deref(), Some("search"));
+            assert_eq!(
+                header(&map, MCP_PROTOCOL_VERSION).as_deref(),
+                Some(PROTOCOL_VERSION_2026_07_28)
+            );
+        }
+
+        /// The locked cross-plan rule: PRESENT, EMPTY — never omitted. If the
+        /// client skipped the header, the server's `require_three_headers` would
+        /// 400 every `tools/list` it sends.
+        #[tokio::test]
+        async fn v2_nameless_method_emits_an_empty_mcp_name() {
+            let transport = v2_transport(None);
+            let map = headers_for(&transport, body("tools/list", json!({}))).await;
+
+            assert_eq!(header(&map, MCP_METHOD).as_deref(), Some("tools/list"));
+            assert!(
+                map.contains_key(MCP_NAME),
+                "Mcp-Name must be PRESENT on every v2 request"
+            );
+            assert_eq!(header(&map, MCP_NAME).as_deref(), Some(""));
+        }
+
+        #[tokio::test]
+        async fn v2_resources_read_puts_the_uri_in_mcp_name() {
+            let transport = v2_transport(None);
+            let map = headers_for(
+                &transport,
+                body("resources/read", json!({ "uri": "mem://greeting" })),
+            )
+            .await;
+            assert_eq!(header(&map, MCP_NAME).as_deref(), Some("mem://greeting"));
+        }
+
+        #[tokio::test]
+        async fn v2_lists_both_accept_content_types() {
+            // `Accept` is set on the POST itself (both content types, because a
+            // v2 POST may be answered with JSON or an SSE stream).
+            assert_eq!(ACCEPT_STREAMABLE, "application/json, text/event-stream");
+        }
+
+        // ---- session-id suppression (T-113-06) ---------------------------
+
+        #[tokio::test]
+        async fn v2_never_emits_a_stored_session_id() {
+            let transport = v2_transport(Some("left-over-from-v1"));
+            let map = headers_for(&transport, body("tools/list", json!({}))).await;
+            assert!(
+                !map.contains_key(MCP_SESSION_ID),
+                "a session id must never reach the v2 wire, even when one is stored"
+            );
+        }
+
+        #[test]
+        fn v2_does_not_store_a_session_id_from_a_response() {
+            let transport = v2_transport(None);
+            let response = HyperResponse::builder()
+                .status(StatusCode::OK)
+                .header(MCP_SESSION_ID, "planted")
+                .body(Full::new(Bytes::new()))
+                .unwrap();
+            transport.process_response_headers(&response);
+            assert_eq!(
+                transport.session_id(),
+                None,
+                "a v2 response's Mcp-Session-Id must not be stored"
+            );
+        }
+
+        #[test]
+        fn v1_still_stores_a_session_id_from_a_response() {
+            let transport = v1_transport(None);
+            let response = HyperResponse::builder()
+                .status(StatusCode::OK)
+                .header(MCP_SESSION_ID, "kept")
+                .body(Full::new(Bytes::new()))
+                .unwrap();
+            transport.process_response_headers(&response);
+            assert_eq!(transport.session_id().as_deref(), Some("kept"));
+        }
+
+        /// A rogue server echoing the v2 version header must NOT be able to flip
+        /// a v1 client into v2 emission mode (which would suppress its session).
+        #[test]
+        fn a_server_echo_cannot_flip_a_v1_client_into_v2() {
+            let transport = v1_transport(Some("s1"));
+            let response = HyperResponse::builder()
+                .status(StatusCode::OK)
+                .header(MCP_PROTOCOL_VERSION, PROTOCOL_VERSION_2026_07_28)
+                .body(Full::new(Bytes::new()))
+                .unwrap();
+            transport.process_response_headers(&response);
+            assert!(!transport.is_v2(), "only the client selects the era");
+        }
+
+        // ---- v1 is unchanged ---------------------------------------------
+
+        #[tokio::test]
+        async fn v1_emits_no_v2_routing_headers_and_keeps_its_session() {
+            let transport = v1_transport(Some("session-123"));
+            let map = headers_for(
+                &transport,
+                body("tools/call", json!({ "name": "search", "arguments": {} })),
+            )
+            .await;
+
+            assert!(!map.contains_key(MCP_METHOD));
+            assert!(!map.contains_key(MCP_NAME));
+            assert_eq!(header(&map, MCP_SESSION_ID).as_deref(), Some("session-123"));
+        }
+
+        // ---- non-panicking emission (T-113-20) ---------------------------
+
+        proptest::proptest! {
+            #[test]
+            fn header_emission_never_panics_for_any_method_or_name(
+                method in ".{0,64}",
+                name in ".{0,64}",
+            ) {
+                let frame = body(&method, json!({ "name": name, "uri": name }));
+                // Derivation is total and non-panicking...
+                let derived = v2_routing_headers(&frame);
+                // ...and so is emission, for whatever it produced.
+                if let Some((m, n)) = derived {
+                    let builder = Request::builder().method(Method::POST).uri("http://127.0.0.1:1/");
+                    let _ = StreamableHttpTransport::apply_v2_outbound_headers(builder, &m, &n);
+                }
+            }
+        }
     }
 }
