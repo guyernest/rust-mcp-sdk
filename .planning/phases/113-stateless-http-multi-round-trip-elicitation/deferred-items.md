@@ -72,23 +72,50 @@ signal is the ONLY era channel — which meant `tools/list`, `prompts/list`,
 v2 requests. They were rejected 400 with
 "MCP-Protocol-Version header claims v2 but `_meta` protocolVersion disagrees".
 
-**Resolution (owner decision at plan 04):** an optional
-`_meta: Option<RequestMeta>` field (same serde attributes as D-113-A) was added to
-`ListToolsRequest`, `ListPromptsRequest`, `ListResourcesRequest`,
-`ListResourceTemplatesRequest` and `CompleteRequest`, and
-`extract_request_meta_value` was widened to read all five. `ListResourceTemplatesRequest`
-was included beyond the enumerated list because omitting it would have left
-`resources/templates/list` as the sole remaining un-v2-able list method.
+**Resolution (owner decision at plan 04, option 3 of D-113-D): read the RAW body.**
+
+The first attempt added an optional `_meta` field to the five list-shaped request
+types. That worked, but measurement showed it forced a MAJOR semver bump
+(D-113-D), so it was reverted in `b2cc87fe` and replaced in `f6735c03` by a
+raw-body read that needs **zero public API change**:
+
+- `Server::resolve_discover_protocol_context` → `resolve_raw_meta_protocol_context`
+  — same behavior, no longer discover-specific, now the era resolver for EVERY
+  method on the HTTP path.
+- `run_v2_header_gate` reads `raw_params_meta(body)` and absorbed the former
+  `run_v2_header_gate_raw` / `finish_v2_gate` pair. The `server/discover` ingress
+  is now simply the one caller that passes a `body_method_override`.
+- `raw_params_meta` prefers the spec `_meta` and falls back to `meta`, mirroring
+  the `#[serde(rename = "_meta", alias = "meta")]` ingress contract D-113-A put on
+  the typed structs, so the two readers cannot disagree about what a `_meta`
+  object IS.
+
+**This also closes the "two ingress paths disagree" defect** that plan 02 flagged
+alongside D-113-A. There is now ONE era-detection path in the HTTP transport,
+reading the spec-spelled `_meta` from the raw body, instead of a typed path
+(3 methods) and a raw path (discover only) that covered different method sets.
 
 The tripwire `forward_tripwire_tools_list_cannot_be_a_v2_request` is now
-`tests/common_harness_smoke.rs::tools_list_is_a_valid_v2_request` (asserts 200),
-and `tests/v2_stateless_http.rs::v2_nameless_method_empty_mcp_name_accepted`
-exercises the same path live.
+`tests/common_harness_smoke.rs::tools_list_is_a_valid_v2_request` (asserts 200) and
+passes **because of the raw route**, not because a field was added — it was
+observed RED again after the revert and GREEN again after the raw gate landed.
+`tests/v2_stateless_http.rs::v2_nameless_method_empty_mcp_name_accepted` exercises
+the same path live, and
+`v2_gate_accepts_every_method_from_the_raw_body` covers all five list-shaped
+methods at the unit level.
 
-**Plan 10 obligation:** `subscriptions/listen` lands as a new `ClientRequest`
-variant. `extract_request_meta_value`'s match is wildcard-free, so the new variant
-is a COMPILE ERROR there until it is classified — it must be classified as
-`_meta`-bearing.
+**Accepted cost.** Handlers can no longer read `_meta` off a typed list-request
+struct, because those structs have no such field. The supported way for a handler
+to reach the per-request signal is the `ProtocolContext`-derived
+`RequestHandlerExtra` accessors (`era()`, `client_info()`, `trace_context()`) that
+Phase 112 wired — the HTTP layer resolves the context from the raw body and threads
+that SAME value into dispatch. Plans 06/09/10 should not re-litigate this.
+
+**Plan 10 note:** `subscriptions/listen` will be v2-capable for free — the raw
+reader does not care whether a `ClientRequest` variant carries a `_meta` field. If
+plan 10 also wants the TYPED extractor to see it (for the non-HTTP transports), it
+must add the variant to `extract_request_meta_value`, whose wildcard-free match
+makes that a compile-time decision point.
 
 ---
 
@@ -116,9 +143,30 @@ now `tests/common_harness_smoke.rs::stateful_config_runs_v2_session_free`, and
 
 **Found during:** plan 04 (measured immediately after the D-113-B fix landed)
 **Severity:** HIGH — the v2.5 milestone is scoped as additive (2.x minor)
-**Owner:** **needs a phase-level decision**; plan 12 owns the authoritative
-`cargo semver-checks` gate and cannot pass it as-is
-**Status:** OPEN
+**Owner:** phase-level decision; plan 12 owns the authoritative
+`cargo semver-checks` gate
+**Status:** ✅ **RESOLVED** — owner chose **option 3**; reverted in `b2cc87fe`,
+replaced by the raw-body read in `f6735c03`
+
+**Rationale in one line:** the WIRE was always fine (`Option` + `default` +
+`skip_serializing_if`, so an absent `_meta` emits no key); the break was purely
+Rust SOURCE compatibility on five constructible `pub` structs — and reading
+`params._meta` off the raw body at HTTP ingress achieves the same v2 coverage
+with no public API surface at all.
+
+**Proof the break is gone** (after `f6735c03`):
+
+```
+$ cargo semver-checks check-release --baseline-version 2.17.0 -p pmcp
+     Checked [   0.148s] 223 checks: 223 pass, 30 skip
+     Summary no semver update required
+```
+
+versus the measurement that triggered the decision (below).
+
+---
+
+### The original measurement (kept for the record)
 
 Measured, not inferred:
 
@@ -150,24 +198,29 @@ purely a Rust-API source-compatibility break.
 There is no way to add a field to a constructible struct without this break —
 `#[non_exhaustive]` and a private field are both flagged major by the same tool.
 
-**Options for the phase owner:**
+**Options put to the phase owner:**
 
 1. **Accept the major bump** and ship this milestone as 3.0. Contradicts the
    ROADMAP's "milestone stays additive (2.x minor)" and research Pitfall 10
    ("accidental 3.0").
 2. **Mark the five structs `#[non_exhaustive]` as well** while taking the break,
    so this is the LAST time a `_meta`-style addition breaks these types. Same
-   major bump, better long-run shape. (Costs a mechanical update to
-   `tests/protocol_invariants.rs`, `crates/pmcp-openapi-server`, and
-   `examples/wasm-client`, all of which already needed `_meta: None` added.)
-3. **Revert the five field additions and resolve D-113-B from the RAW body
-   instead** — the HTTP layer already has the body bytes and already resolves a
-   raw `params._meta` for `server/discover`
-   (`Server::resolve_discover_protocol_context`). Generalizing that read to every
-   method makes all methods v2-able with ZERO public API change, at the cost of
-   handlers no longer being able to read `_meta` off the typed list-request struct
-   (the `ProtocolContext`-derived `RequestHandlerExtra` accessors still work).
+   major bump, better long-run shape.
+3. ✅ **CHOSEN — revert the five field additions and resolve D-113-B from the RAW
+   body instead.** The HTTP layer already has the body bytes and already resolved a
+   raw `params._meta` for `server/discover`. Generalizing that read to every method
+   makes all methods v2-able with ZERO public API change, at the cost of handlers
+   no longer being able to read `_meta` off the typed list-request struct (the
+   `ProtocolContext`-derived `RequestHandlerExtra` accessors still work).
 
-The 15 live tests in `tests/v2_stateless_http.rs` and the harness tripwires pass
-under option 1 and 2 unchanged; option 3 would need `extract_request_meta_value`'s
-new arms reverted and the raw path wired instead.
+### What shipping option 3 actually took
+
+| Commit | What |
+|--------|------|
+| `b2cc87fe` | Pure revert — the five fields, the five `extract_request_meta_value` arms, and every mechanical `_meta: None` initializer restored **byte-identically** to the pre-plan baseline (verified with `git diff 73a24cf1~1`). Left `tools_list_is_a_valid_v2_request` and `v2_nameless_method_empty_mcp_name_accepted` RED with the original era-disagreement rejection. |
+| `f6735c03` | The raw-body gate — `resolve_raw_meta_protocol_context`, `raw_params_meta`, one merged `run_v2_header_gate`, `SERVER_DISCOVER_METHOD`. Both tests GREEN again **via the raw route**. |
+
+D-113-A was untouched by the revert: it is serde-attributes-only and semver-clean.
+
+The 15 live tests in `tests/v2_stateless_http.rs`, the 25 Phase-112 baseline tests
+and the 7 harness smoke tests all pass under the shipped design.
