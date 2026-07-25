@@ -1172,10 +1172,9 @@ impl ResponseDisposition {
 /// - era != V2 (or no resolved context) → response left BYTE-IDENTICAL to
 ///   today (the v1 promise — no key added, golden-fixtured).
 /// - error responses / notifications (no `result`) → NO injection.
-/// - `result` is a JSON object → insert `resultType` (from `disposition`,
-///   `complete` this phase) INTO the inner result object UNLESS the handler
-///   already set one (respected, never overwritten — the 113/114 path), and
-///   attach `serverInfo` (never overwritten).
+/// - `result` is a JSON object → the SERVER-OWNED reserved fields are asserted
+///   over it by [`own_reserved_result_fields`]; every other key, including every
+///   non-reserved `_meta` key, is left exactly as the handler wrote it.
 /// - `result` is scalar/array/null → left unchanged (cannot key a non-object;
 ///   no in-scope v2 method returns a non-object).
 pub(crate) fn inject_v2_result_envelope(
@@ -1198,35 +1197,146 @@ pub(crate) fn inject_v2_result_envelope(
     };
 
     // A non-object result (scalar/array/null) cannot carry a key — leave it.
-    let Some(obj) = value.as_object_mut() else {
+    if !value.is_object() {
         return;
-    };
-
-    // The SOLE writer of `resultType`.
-    //
-    // A non-`Complete` disposition is server-SELECTED (phases 113/114 decide it
-    // at dispatch), so it is authoritative and overwrites: a handler cannot
-    // mislabel an `input_required` or `task` result by pre-setting the key.
-    // `Complete` stays collision-safe `or_insert`, preserving the Phase-112
-    // contract that a handler may label its own ordinary result.
-    //
-    // Previously `seal_input_required` ALSO wrote this key, which made that
-    // branch's `or_insert` a guaranteed no-op — the disposition looked
-    // load-bearing while the wire value actually came from the other writer.
-    // Plan 09's `serverInfo` relocation edits this function, so a second writer
-    // would have silently decided whether `input_required` results followed it.
-    if disposition == ResponseDisposition::Complete {
-        obj.entry("resultType".to_string())
-            .or_insert_with(|| Value::String(disposition.as_wire_str().to_string()));
-    } else {
-        obj.insert(
-            "resultType".to_string(),
-            Value::String(disposition.as_wire_str().to_string()),
-        );
     }
-    // Attach serverInfo on the v2 object result; never overwrite a handler value.
-    obj.entry("serverInfo".to_string())
-        .or_insert_with(|| serde_json::to_value(server_info).unwrap_or(Value::Null));
+
+    own_reserved_result_fields(value, server_info, disposition);
+}
+
+/// The `_meta` object of a result, creating it when absent.
+///
+/// ONE helper for THREE result shapes. `CallToolResult._meta`,
+/// `GetPromptResult._meta` and `ReadResourceResult._meta` have three different
+/// Rust types (`Option<Value>`, `Option<Map>`, `Option<Value>`), which makes
+/// "merge without clobbering" ambiguous at the type level; doing the merge on
+/// the SERIALIZED JSON instead means there are no per-type special cases and the
+/// envelope stays method-agnostic.
+///
+/// Returns `None` only when `result` itself is not a JSON object. A handler that
+/// set `_meta` to a NON-object (a string, an array, a number) gets it REPLACED
+/// with an object and a warning logged — the alternative is either dropping the
+/// server-owned reserved keys or emitting a `_meta` the spec says must be an
+/// object.
+pub(crate) fn result_meta_object_mut(
+    result: &mut Value,
+) -> Option<&mut serde_json::Map<String, Value>> {
+    let object = result.as_object_mut()?;
+    let existing_is_object = matches!(object.get("_meta"), Some(Value::Object(_)));
+    if !existing_is_object {
+        if object.contains_key("_meta") {
+            tracing::warn!(
+                target: "mcp.v2",
+                "a handler set result._meta to a non-object; replacing it with an object so \
+                 the server-owned reserved keys can be attached"
+            );
+        }
+        object.insert("_meta".to_string(), Value::Object(serde_json::Map::new()));
+    }
+    object.get_mut("_meta").and_then(Value::as_object_mut)
+}
+
+/// Assert SERVER OWNERSHIP over the closed set of reserved result fields
+/// (T-113-59 / T-113-60).
+///
+/// # The authoritative reserved-field registry
+///
+/// | Reserved key | Location | Server behavior when a handler already set it |
+/// |---|---|---|
+/// | `resultType` | top-level result | OVERWRITE with the disposition the server computed |
+/// | `serverInfo` | top-level result | OVERWRITE with the server's real `Implementation` |
+/// | `requestState` | top-level result | REMOVE unless this egress minted it |
+/// | `inputRequests` | top-level result | REMOVE unless this egress produced it |
+/// | `dev.pmcp/mrtr` | `result._meta` | REMOVE always |
+///
+/// Every OTHER `_meta` key a handler set is preserved untouched — ownership
+/// applies to this enumerated set only. [`MRTR_SIGNAL_META_KEY`](crate::types::mrtr::MRTR_SIGNAL_META_KEY)
+/// carries a copy of this table in its rustdoc, since it is the key handler
+/// authors actually type.
+///
+/// # Why OVERWRITE rather than the collision-safe `entry().or_insert`
+///
+/// Phase 112 preserved a handler-supplied value, which is exactly backwards for
+/// a reserved field. Under that rule a handler could set
+/// `resultType: "input_required"` on `tools/list` and sail straight past the
+/// [`client_request_mrtr_eligible`] tripwire — the enum match gates what the
+/// SERVER emits, not what a handler smuggles into its own result object — or
+/// spoof `serverInfo` to impersonate another server. Both are server identity /
+/// protocol-envelope claims, not handler payload, so the server states them
+/// unconditionally and logs a `tracing::warn!` naming the field it overrode, so
+/// a handler author sees the mistake instead of it failing silently.
+///
+/// `mrtr_owned` is derived from the disposition rather than passed separately:
+/// [`ResponseDisposition::InputRequired`] is selected by `mrtr_egress` and by
+/// nothing else, so it IS the "this egress minted the MRTR fields" signal.
+pub(crate) fn own_reserved_result_fields(
+    result: &mut Value,
+    server_info: &Implementation,
+    disposition: ResponseDisposition,
+) {
+    let mrtr_owned = disposition == ResponseDisposition::InputRequired;
+    let wire_result_type = disposition.as_wire_str();
+    if let Some(object) = result.as_object_mut() {
+        if object
+            .get("resultType")
+            .is_some_and(|existing| existing != wire_result_type)
+        {
+            tracing::warn!(
+                target: "mcp.v2",
+                field = "resultType",
+                "overwrote a handler-supplied reserved result field with the server-computed \
+                 value"
+            );
+        }
+        object.insert(
+            "resultType".to_string(),
+            Value::String(wire_result_type.to_string()),
+        );
+        object.insert(
+            "serverInfo".to_string(),
+            serde_json::to_value(server_info).unwrap_or(Value::Null),
+        );
+        if !mrtr_owned {
+            for field in [
+                crate::types::mrtr::REQUEST_STATE_KEY,
+                crate::types::mrtr::INPUT_REQUESTS_KEY,
+            ] {
+                if object.remove(field).is_some() {
+                    tracing::warn!(
+                        target: "mcp.v2",
+                        field,
+                        "removed a handler-supplied reserved result field from a result this \
+                         egress did not mint"
+                    );
+                }
+            }
+        }
+    }
+
+    // Defense in depth for the internal signal key. `mrtr_egress` — which strips
+    // it unconditionally — is `streamable-http`-only by D-14, so on a build
+    // without that feature NOTHING else would remove it from a v2 result. Only
+    // an EXISTING `_meta` is inspected; this must not manufacture one.
+    if result.get("_meta").is_some() {
+        if let Some(meta) = result_meta_object_mut(result) {
+            if meta
+                .remove(crate::types::mrtr::MRTR_SIGNAL_META_KEY)
+                .is_some()
+            {
+                tracing::warn!(
+                    target: "mcp.v2",
+                    field = crate::types::mrtr::MRTR_SIGNAL_META_KEY,
+                    "removed the pmcp-internal MRTR signal from an outgoing result"
+                );
+            }
+            let emptied = meta.is_empty();
+            if emptied {
+                if let Some(object) = result.as_object_mut() {
+                    object.remove("_meta");
+                }
+            }
+        }
+    }
 }
 
 /// Build the v2 `server/discover` response (Phase 112, VERS-04, D-09/D-10).
@@ -1371,11 +1481,64 @@ fn resolve_mrtr_principal(principal: MrtrPrincipal<'_>) -> Option<&str> {
 /// model them (D-113-D) — so this is belt-and-braces: the params handed to the
 /// digest, and therefore the shape a re-run handler is bound to, can never carry
 /// a client-echoed MRTR field even if the salient whitelist is widened later.
+/// Whether this [`ClientRequest`] variant may carry an `input_required` result
+/// — the COMPILE-TIME half of the eligibility tripwire (T-113-23).
+///
+/// The spec is explicit: "Servers **MUST NOT** send `InputRequiredResult`
+/// responses on any other client requests." Two independent mechanisms enforce
+/// that, and both must agree:
+///
+/// * this EXHAUSTIVE no-wildcard match over the request ENUM, and
+/// * the [`MRTR_METHODS`](crate::types::mrtr::MRTR_METHODS) string table that
+///   [`mrtr_eligible`](crate::types::mrtr::mrtr_eligible) reads.
+///
+/// The absence of a wildcard arm is the point: a future `ClientRequest` variant
+/// is a `non-exhaustive patterns` COMPILE ERROR here, forcing its author to
+/// classify it explicitly rather than inheriting "not eligible" by silence — the
+/// same discipline [`extract_request_meta_value`] applies to the `_meta` signal.
+/// The three eligible arms DERIVE their answer from the table rather than
+/// returning a bare `true`, so the enum and the table cannot drift apart in the
+/// permissive direction either; `enum_eligibility_agrees_with_the_method_table`
+/// pins the other direction.
+#[cfg(all(feature = "streamable-http", not(target_arch = "wasm32")))]
+pub(crate) fn client_request_mrtr_eligible(request: &ClientRequest) -> bool {
+    use crate::types::mrtr::{
+        mrtr_eligible, CALL_TOOL_METHOD, GET_PROMPT_METHOD, READ_RESOURCE_METHOD,
+    };
+    match request {
+        // Eligible — and eligible BECAUSE the one method table says so.
+        ClientRequest::CallTool(_) => mrtr_eligible(CALL_TOOL_METHOD),
+        ClientRequest::GetPrompt(_) => mrtr_eligible(GET_PROMPT_METHOD),
+        ClientRequest::ReadResource(_) => mrtr_eligible(READ_RESOURCE_METHOD),
+        // NOT eligible — enumerated explicitly, no wildcard arm.
+        ClientRequest::Initialize(_)
+        | ClientRequest::ListTools(_)
+        | ClientRequest::ListPrompts(_)
+        | ClientRequest::ListResources(_)
+        | ClientRequest::ListResourceTemplates(_)
+        | ClientRequest::Subscribe(_)
+        | ClientRequest::Unsubscribe(_)
+        | ClientRequest::Complete(_)
+        | ClientRequest::CreateMessage(_)
+        | ClientRequest::TasksGet(_)
+        | ClientRequest::TasksResult(_)
+        | ClientRequest::TasksList(_)
+        | ClientRequest::TasksCancel(_)
+        | ClientRequest::SetLoggingLevel { .. }
+        | ClientRequest::Ping => false,
+    }
+}
+
 #[cfg(all(feature = "streamable-http", not(target_arch = "wasm32")))]
 pub(crate) fn mrtr_binding_parts(request: &Request) -> Option<(&'static str, Value)> {
     let Request::Client(boxed) = request else {
         return None;
     };
+    // The compile-time tripwire runs FIRST, so an unclassified future variant
+    // can never reach the serde-derived resolution below.
+    if !client_request_mrtr_eligible(boxed.as_ref()) {
+        return None;
+    }
     // Derive (method, params) from serde, NOT from a hand-written match.
     //
     // `ClientRequest` is `#[serde(tag = "method", content = "params")]`, so this
@@ -3165,6 +3328,15 @@ mod tests {
         }
     }
 
+    /// Read `serverInfo` from wherever the v2 envelope puts it.
+    ///
+    /// ONE reader, so the tests that care about OWNERSHIP stay independent of
+    /// the tests that pin PLACEMENT — the latter index the nesting directly and
+    /// are the ones that must fail if the placement drifts.
+    fn server_info_of(result: &Value) -> &Value {
+        &result["serverInfo"]
+    }
+
     /// A v2 OBJECT success result gains inner-result `resultType:"complete"` and
     /// a `serverInfo` object.
     #[test]
@@ -3177,32 +3349,183 @@ mod tests {
             panic!("expected result");
         };
         assert_eq!(v["resultType"], "complete");
-        assert_eq!(v["serverInfo"]["name"], "srv");
-        assert_eq!(v["serverInfo"]["version"], "2.0.0");
+        assert_eq!(server_info_of(&v)["name"], "srv");
+        assert_eq!(server_info_of(&v)["version"], "2.0.0");
     }
 
-    /// A handler-set `resultType` is PRESERVED, never overwritten (the 113/114
-    /// path). This proves the disposition the serialization layer reads.
+    /// `resultType` is SERVER-OWNED: a handler-set value is OVERWRITTEN with the
+    /// disposition the server computed (Codex Plan-09 HIGH #3).
+    ///
+    /// Phase 112 preserved the handler's value. That let a handler write
+    /// `resultType: "input_required"` on a method the spec forbids it on and
+    /// sail straight past the eligibility tripwire, because the tripwire gates
+    /// what the SERVER emits, not what a handler smuggles into its own result.
     #[test]
-    fn result_type_envelope_preserves_handler_disposition() {
+    fn result_type_envelope_overwrites_handler_disposition() {
         let info = Implementation::new("srv", "2.0.0");
         let ctx = v2_ctx();
         let mut resp = result_response(1, serde_json::json!({ "resultType": "task", "x": 1 }));
-        // Even though we ask for Complete, the handler's "task" must survive.
         inject_v2_result_envelope(&mut resp, Some(&ctx), &info, ResponseDisposition::Complete);
         let ResponsePayload::Result(v) = resp.payload else {
             panic!("expected result");
         };
         assert_eq!(
-            v["resultType"], "task",
-            "handler disposition must be preserved"
+            v["resultType"], "complete",
+            "the server-computed disposition must win"
         );
+        assert_eq!(v["x"], 1, "non-reserved handler keys survive untouched");
         // Non-default dispositions round-trip through the wire discriminator.
         assert_eq!(
             ResponseDisposition::InputRequired.as_wire_str(),
             "input_required"
         );
         assert_eq!(ResponseDisposition::Task.as_wire_str(), "task");
+    }
+
+    /// The forged-`input_required`-on-`tools/list` scenario, end to end at the
+    /// envelope: a handler writing the reserved key itself gets `"complete"`.
+    #[test]
+    fn handler_forged_input_required_is_overwritten_to_complete() {
+        let info = Implementation::new("srv", "2.0.0");
+        let ctx = v2_ctx();
+        // The shape a malicious/confused `tools/list` handler would return.
+        let mut resp = result_response(
+            1,
+            serde_json::json!({
+                "tools": [],
+                "resultType": "input_required",
+                "requestState": "forged-token",
+                "inputRequests": { "x": { "method": "roots/list" } },
+            }),
+        );
+        inject_v2_result_envelope(&mut resp, Some(&ctx), &info, ResponseDisposition::Complete);
+        let ResponsePayload::Result(v) = resp.payload else {
+            panic!("expected result");
+        };
+        assert_eq!(v["resultType"], "complete");
+        assert!(
+            v.get("requestState").is_none(),
+            "a handler-supplied requestState must be removed: {v}"
+        );
+        assert!(
+            v.get("inputRequests").is_none(),
+            "a handler-supplied inputRequests must be removed: {v}"
+        );
+        assert!(v["tools"].is_array(), "the real payload survives");
+    }
+
+    /// An `input_required` result KEEPS the MRTR fields, because that egress
+    /// minted them — the removal is scoped to results the server did not mint.
+    #[test]
+    fn input_required_disposition_keeps_the_minted_mrtr_fields() {
+        let info = Implementation::new("srv", "2.0.0");
+        let ctx = v2_ctx();
+        let mut resp = result_response(
+            1,
+            serde_json::json!({
+                "content": [],
+                "requestState": "minted-token",
+                "inputRequests": { "x": { "method": "roots/list" } },
+            }),
+        );
+        inject_v2_result_envelope(
+            &mut resp,
+            Some(&ctx),
+            &info,
+            ResponseDisposition::InputRequired,
+        );
+        let ResponsePayload::Result(v) = resp.payload else {
+            panic!("expected result");
+        };
+        assert_eq!(v["resultType"], "input_required");
+        assert_eq!(v["requestState"], "minted-token");
+        assert!(v["inputRequests"]["x"].is_object());
+    }
+
+    /// A handler-set `serverInfo` is OVERWRITTEN with the server's real
+    /// `Implementation` — server identity is not a handler claim (T-113-59).
+    #[test]
+    fn handler_supplied_server_info_is_overwritten() {
+        let info = Implementation::new("real-server", "2.0.0");
+        let ctx = v2_ctx();
+        let mut resp = result_response(
+            1,
+            serde_json::json!({
+                "serverInfo": { "name": "impersonated", "version": "0.0.0" },
+            }),
+        );
+        inject_v2_result_envelope(&mut resp, Some(&ctx), &info, ResponseDisposition::Complete);
+        let ResponsePayload::Result(v) = resp.payload else {
+            panic!("expected result");
+        };
+        assert_eq!(server_info_of(&v)["name"], "real-server");
+        assert_eq!(server_info_of(&v)["version"], "2.0.0");
+    }
+
+    /// Non-reserved handler `_meta` keys SURVIVE alongside the server's
+    /// ownership pass — ownership is scoped to the enumerated set only.
+    #[test]
+    fn non_reserved_handler_meta_survives() {
+        let info = Implementation::new("srv", "2.0.0");
+        let ctx = v2_ctx();
+        let mut resp = result_response(
+            1,
+            serde_json::json!({ "_meta": { "vendor/key": 1, "io.example/trace": "abc" } }),
+        );
+        inject_v2_result_envelope(&mut resp, Some(&ctx), &info, ResponseDisposition::Complete);
+        let ResponsePayload::Result(v) = resp.payload else {
+            panic!("expected result");
+        };
+        assert_eq!(v["_meta"]["vendor/key"], 1);
+        assert_eq!(v["_meta"]["io.example/trace"], "abc");
+    }
+
+    /// The pmcp-internal signal key is removed at the ENVELOPE too, not only in
+    /// `mrtr_egress` — which is `streamable-http`-only, so on a build without
+    /// that feature nothing else would strip it (T-113-60).
+    #[test]
+    fn envelope_removes_the_internal_signal_key_defense_in_depth() {
+        let info = Implementation::new("srv", "2.0.0");
+        let ctx = v2_ctx();
+        let mut resp = result_response(
+            1,
+            serde_json::json!({
+                "_meta": { crate::types::mrtr::MRTR_SIGNAL_META_KEY: { "continuation": 1 } },
+            }),
+        );
+        inject_v2_result_envelope(&mut resp, Some(&ctx), &info, ResponseDisposition::Complete);
+        let ResponsePayload::Result(v) = resp.payload else {
+            panic!("expected result");
+        };
+        let rendered = v.to_string();
+        assert!(
+            !rendered.contains(crate::types::mrtr::MRTR_SIGNAL_META_KEY),
+            "the internal signal leaked through the envelope: {rendered}"
+        );
+        // The emptied `_meta` is dropped, so the wire shape matches a
+        // non-signalling result exactly.
+        assert!(v.get("_meta").is_none(), "got {v}");
+    }
+
+    /// A handler that set `_meta` to a NON-object gets it replaced with an
+    /// object rather than the server dropping its reserved keys.
+    #[test]
+    fn non_object_handler_meta_is_replaced_with_an_object() {
+        let mut result = serde_json::json!({ "_meta": "not-an-object" });
+        let meta = result_meta_object_mut(&mut result).expect("an object result");
+        meta.insert("vendor/key".to_string(), serde_json::json!(1));
+        assert_eq!(result["_meta"]["vendor/key"], 1);
+        assert!(result["_meta"].is_object());
+    }
+
+    /// `result_meta_object_mut` reports `None` for a non-object RESULT — there
+    /// is nowhere to put a `_meta` on a scalar.
+    #[test]
+    fn result_meta_object_mut_declines_a_non_object_result() {
+        let mut scalar = serde_json::json!(42);
+        assert!(result_meta_object_mut(&mut scalar).is_none());
+        let mut null = Value::Null;
+        assert!(result_meta_object_mut(&mut null).is_none());
     }
 
     /// A v2 scalar/null result is left unchanged (cannot key a non-object), and
@@ -3288,7 +3611,7 @@ mod tests {
             panic!("expected result");
         };
         assert_eq!(v["resultType"], "complete");
-        assert_eq!(v["serverInfo"]["name"], "discover-server");
+        assert_eq!(server_info_of(&v)["name"], "discover-server");
     }
 
     #[tokio::test]
@@ -4692,6 +5015,429 @@ mod tests {
                 };
                 assert_eq!(round_of(&first_token), 1);
                 assert_eq!(round_of(&second_token), 2);
+            }
+
+            // -------------------------------------------------------------
+            // The eligibility tripwire (T-113-23).
+            // -------------------------------------------------------------
+
+            /// EXACTLY three `ClientRequest` variants are MRTR-eligible, and
+            /// these are they. In the spirit of Phase 112's
+            /// `all_meta_bearing_client_requests_are_extracted`: the enum match
+            /// is exhaustive, so a NEW variant is a compile error there; this
+            /// test pins that no EXISTING variant silently joins the set.
+            #[test]
+            fn exactly_three_client_request_variants_are_mrtr_eligible() {
+                let eligible: Vec<&str> = every_client_request()
+                    .iter()
+                    .filter(|(_, request)| client_request_mrtr_eligible(request))
+                    .map(|(label, _)| *label)
+                    .collect();
+                assert_eq!(
+                    eligible,
+                    vec!["tools/call", "prompts/get", "resources/read"],
+                    "the spec confines input_required to exactly these three methods"
+                );
+            }
+
+            /// The enum tripwire and the `MRTR_METHODS` string table cannot
+            /// drift: every table row has an eligible enum variant, and every
+            /// eligible enum variant resolves back to a table row.
+            #[test]
+            fn enum_eligibility_agrees_with_the_method_table() {
+                for (method, request) in every_client_request() {
+                    assert_eq!(
+                        client_request_mrtr_eligible(&request),
+                        crate::types::mrtr::mrtr_eligible(method),
+                        "{method}: the enum tripwire and MRTR_METHODS disagree"
+                    );
+                }
+                // And the table's own rows are all covered by the enum.
+                for row in &crate::types::mrtr::MRTR_METHODS {
+                    assert!(
+                        every_client_request()
+                            .iter()
+                            .any(|(method, request)| *method == row.method
+                                && client_request_mrtr_eligible(request)),
+                        "{}: a table row with no eligible enum variant",
+                        row.method
+                    );
+                }
+            }
+
+            /// `mrtr_binding_parts` covers EXACTLY the table's rows — driven
+            /// from `MRTR_METHODS` rather than a hand-written list, so a new row
+            /// automatically widens this test instead of silently escaping it.
+            #[test]
+            fn binding_parts_cover_exactly_the_method_table() {
+                let covered: Vec<&'static str> = every_client_request()
+                    .into_iter()
+                    .filter_map(|(_, request)| {
+                        mrtr_binding_parts(&Request::Client(Box::new(request))).map(|(m, _)| m)
+                    })
+                    .collect();
+                let expected: Vec<&'static str> = crate::types::mrtr::MRTR_METHODS
+                    .iter()
+                    .map(|row| row.method)
+                    .collect();
+                assert_eq!(covered, expected);
+            }
+
+            /// One instance of EVERY `ClientRequest` variant, paired with its
+            /// wire method string.
+            ///
+            /// Hand-built on purpose: the compile-time tripwire lives in
+            /// `client_request_mrtr_eligible`, and a new variant that is missing
+            /// here shows up as a mismatch in
+            /// `exactly_three_client_request_variants_are_mrtr_eligible` after
+            /// the author has already been forced to classify it.
+            fn every_client_request() -> Vec<(&'static str, ClientRequest)> {
+                use crate::types::prompts::ListPromptsRequest;
+                use crate::types::protocol::{
+                    CompleteRequest, CompletionArgument, CompletionReference, InitializeRequest,
+                };
+                use crate::types::resources::{ListResourceTemplatesRequest, ListResourcesRequest};
+                vec![
+                    (
+                        "initialize",
+                        ClientRequest::Initialize(InitializeRequest {
+                            protocol_version: "2026-07-28".to_string(),
+                            capabilities: crate::types::ClientCapabilities::default(),
+                            client_info: Implementation::new("c", "1"),
+                        }),
+                    ),
+                    (
+                        "tools/call",
+                        ClientRequest::CallTool(CallToolRequest {
+                            name: "search".to_string(),
+                            arguments: json!({}),
+                            _meta: None,
+                            task: None,
+                        }),
+                    ),
+                    (
+                        "prompts/get",
+                        ClientRequest::GetPrompt(crate::types::GetPromptRequest {
+                            name: "greeting".to_string(),
+                            arguments: HashMap::new(),
+                            _meta: None,
+                        }),
+                    ),
+                    (
+                        "resources/read",
+                        ClientRequest::ReadResource(crate::types::ReadResourceRequest {
+                            uri: "mem://x".to_string(),
+                            _meta: None,
+                        }),
+                    ),
+                    (
+                        "tools/list",
+                        ClientRequest::ListTools(ListToolsRequest { cursor: None }),
+                    ),
+                    (
+                        "prompts/list",
+                        ClientRequest::ListPrompts(ListPromptsRequest { cursor: None }),
+                    ),
+                    (
+                        "resources/list",
+                        ClientRequest::ListResources(ListResourcesRequest { cursor: None }),
+                    ),
+                    (
+                        "resources/templates/list",
+                        ClientRequest::ListResourceTemplates(ListResourceTemplatesRequest {
+                            cursor: None,
+                        }),
+                    ),
+                    (
+                        "resources/subscribe",
+                        ClientRequest::Subscribe(crate::types::SubscribeRequest {
+                            uri: "mem://x".to_string(),
+                        }),
+                    ),
+                    (
+                        "resources/unsubscribe",
+                        ClientRequest::Unsubscribe(crate::types::UnsubscribeRequest {
+                            uri: "mem://x".to_string(),
+                        }),
+                    ),
+                    (
+                        "completion/complete",
+                        ClientRequest::Complete(CompleteRequest {
+                            r#ref: CompletionReference::Prompt {
+                                name: "p".to_string(),
+                            },
+                            argument: CompletionArgument {
+                                name: "a".to_string(),
+                                value: String::new(),
+                            },
+                        }),
+                    ),
+                    (
+                        "sampling/createMessage",
+                        ClientRequest::CreateMessage(Box::new(
+                            crate::types::sampling::CreateMessageParams::new(vec![]),
+                        )),
+                    ),
+                    (
+                        "tasks/get",
+                        ClientRequest::TasksGet(crate::types::tasks::GetTaskRequest {
+                            task_id: "t".to_string(),
+                        }),
+                    ),
+                    (
+                        "tasks/result",
+                        ClientRequest::TasksResult(crate::types::tasks::GetTaskPayloadRequest {
+                            task_id: "t".to_string(),
+                        }),
+                    ),
+                    (
+                        "tasks/list",
+                        ClientRequest::TasksList(crate::types::tasks::ListTasksRequest {
+                            cursor: None,
+                        }),
+                    ),
+                    (
+                        "tasks/cancel",
+                        ClientRequest::TasksCancel(crate::types::tasks::CancelTaskRequest {
+                            task_id: "t".to_string(),
+                            result: None,
+                        }),
+                    ),
+                    (
+                        "logging/setLevel",
+                        ClientRequest::SetLoggingLevel {
+                            level: crate::types::notifications::LoggingLevel::Info,
+                        },
+                    ),
+                    ("ping", ClientRequest::Ping),
+                ]
+            }
+
+            // -------------------------------------------------------------
+            // Declared-capability precheck, SUBMODE-aware (T-113-32).
+            // -------------------------------------------------------------
+
+            fn requests_of(entries: Vec<(&str, crate::types::mrtr::InputRequest)>) -> Value {
+                let mut map = crate::types::mrtr::InputRequests::new();
+                for (key, request) in entries {
+                    map.insert(key.to_string(), request);
+                }
+                let (_, value) = crate::types::mrtr::MrtrSignal {
+                    input_requests: map,
+                    continuation: json!({ "step": 1 }),
+                }
+                .into_meta_entry()
+                .expect("signal serializes");
+                value
+            }
+
+            fn url_elicitation() -> crate::types::mrtr::InputRequest {
+                crate::types::mrtr::InputRequest::Elicitation(Box::new(
+                    crate::types::elicitation::ElicitRequestParams::Url {
+                        message: "Approve the payment".to_string(),
+                        elicitation_id: "e1".to_string(),
+                        url: "https://example.test/approve".to_string(),
+                    },
+                ))
+            }
+
+            fn form_elicitation() -> crate::types::mrtr::InputRequest {
+                crate::types::mrtr::InputRequest::Elicitation(Box::new(
+                    crate::types::elicitation::ElicitRequestParams::Form {
+                        message: "Who are you?".to_string(),
+                        requested_schema: json!({ "type": "object" }),
+                    },
+                ))
+            }
+
+            /// Drive egress with `signal` against a context declaring `caps`,
+            /// returning the resulting JSON-RPC error.
+            fn reject_for(
+                signal: &Value,
+                declared: crate::types::ClientCapabilities,
+            ) -> crate::types::jsonrpc::JSONRPCError {
+                let codec = codec(&KEY_A, 300);
+                let context = v2_context().with_client_capabilities(declared);
+                let mut response = signalling_response_for(signal);
+                let disposition = egress_with(&mut response, Some(&context), Some(&codec), 0);
+                assert_eq!(disposition, ResponseDisposition::Complete);
+                error_of(&response).clone()
+            }
+
+            /// A form elicitation against a client that declared NO elicitation
+            /// is `-32021`, and `data.requiredCapabilities` is an OBJECT.
+            #[test]
+            fn undeclared_elicitation_is_minus_32021_with_an_object_payload() {
+                let error = reject_for(
+                    &requests_of(vec![("who", form_elicitation())]),
+                    caps(None, None, None),
+                );
+                assert_eq!(error.code, -32021);
+                assert_eq!(
+                    error.code,
+                    crate::types::protocol::error_codes::MISSING_REQUIRED_CLIENT_CAPABILITY
+                );
+                let required = &error.data.as_ref().expect("a payload")["requiredCapabilities"];
+                assert!(
+                    required.is_object(),
+                    "requiredCapabilities MUST be a ClientCapabilities object, not an array \
+                     or a string list: {required}"
+                );
+                assert!(!required.is_array());
+                assert_eq!(required, &json!({ "elicitation": {} }));
+            }
+
+            /// A URL-mode elicitation against a client that declared
+            /// elicitation WITHOUT url support is `-32021` — the SUBMODE is what
+            /// is missing, and the payload names it.
+            #[test]
+            fn url_elicitation_against_a_form_only_client_is_minus_32021() {
+                let form_only = caps(
+                    Some(crate::types::capabilities::ElicitationCapabilities {
+                        form: Some(
+                            crate::types::capabilities::FormElicitationCapability::default(),
+                        ),
+                        url: None,
+                    }),
+                    None,
+                    None,
+                );
+                let error = reject_for(&requests_of(vec![("pay", url_elicitation())]), form_only);
+                assert_eq!(
+                    error.code,
+                    crate::types::protocol::error_codes::MISSING_REQUIRED_CLIENT_CAPABILITY
+                );
+                let required = &error.data.as_ref().expect("a payload")["requiredCapabilities"];
+                assert_eq!(required, &json!({ "elicitation": { "url": {} } }));
+            }
+
+            /// A URL elicitation against a client that DID declare url support
+            /// passes through unchanged.
+            #[test]
+            fn url_elicitation_against_a_url_capable_client_passes() {
+                let codec = codec(&KEY_A, 300);
+                let context = v2_context_all_caps();
+                let mut response =
+                    signalling_response_for(&requests_of(vec![("pay", url_elicitation())]));
+                let disposition = egress_with(&mut response, Some(&context), Some(&codec), 0);
+                assert_eq!(disposition, ResponseDisposition::InputRequired);
+                assert!(result_of(&response)["inputRequests"]["pay"].is_object());
+            }
+
+            /// A sampling entry against a client that declared no `sampling`
+            /// is `-32021`.
+            #[test]
+            fn undeclared_sampling_is_minus_32021() {
+                let error = reject_for(
+                    &requests_of(vec![(
+                        "draft",
+                        crate::types::mrtr::InputRequest::Sampling(Box::new(
+                            crate::types::sampling::CreateMessageParams::new(vec![]),
+                        )),
+                    )]),
+                    caps(
+                        Some(crate::types::capabilities::ElicitationCapabilities::default()),
+                        None,
+                        None,
+                    ),
+                );
+                assert_eq!(
+                    error.code,
+                    crate::types::protocol::error_codes::MISSING_REQUIRED_CLIENT_CAPABILITY
+                );
+                let required = &error.data.as_ref().expect("a payload")["requiredCapabilities"];
+                assert_eq!(required, &json!({ "sampling": {} }));
+            }
+
+            /// A TOOL-AUGMENTED sampling entry against a client that declared
+            /// plain `sampling` needs the `sampling.tools` sub-capability too.
+            #[test]
+            fn tool_augmented_sampling_needs_the_tools_sub_capability() {
+                let mut params = crate::types::sampling::CreateMessageParams::new(vec![]);
+                params.tools = Some(vec![]);
+                let error = reject_for(
+                    &requests_of(vec![(
+                        "draft",
+                        crate::types::mrtr::InputRequest::Sampling(Box::new(params)),
+                    )]),
+                    caps(
+                        None,
+                        Some(crate::types::capabilities::SamplingCapabilities::default()),
+                        None,
+                    ),
+                );
+                assert_eq!(
+                    error.code,
+                    crate::types::protocol::error_codes::MISSING_REQUIRED_CLIENT_CAPABILITY
+                );
+                let required = &error.data.as_ref().expect("a payload")["requiredCapabilities"];
+                assert_eq!(required, &json!({ "sampling": { "tools": {} } }));
+            }
+
+            /// A `roots/list` entry against a client that declared no `roots`
+            /// is `-32021`.
+            #[test]
+            fn undeclared_roots_is_minus_32021() {
+                let error = reject_for(
+                    &requests_of(vec![("roots", crate::types::mrtr::InputRequest::ListRoots)]),
+                    caps(None, None, None),
+                );
+                assert_eq!(
+                    error.code,
+                    crate::types::protocol::error_codes::MISSING_REQUIRED_CLIENT_CAPABILITY
+                );
+                let required = &error.data.as_ref().expect("a payload")["requiredCapabilities"];
+                assert!(required["roots"].is_object());
+            }
+
+            /// The rejection is ALL-OR-NOTHING: a map mixing a declared and an
+            /// undeclared kind emits NO partial `inputRequests`, and the payload
+            /// names only what is missing.
+            #[test]
+            fn a_mixed_map_is_rejected_wholesale_never_partially_emitted() {
+                let error = reject_for(
+                    &requests_of(vec![
+                        ("who", form_elicitation()),
+                        ("roots", crate::types::mrtr::InputRequest::ListRoots),
+                    ]),
+                    caps(
+                        Some(crate::types::capabilities::ElicitationCapabilities::default()),
+                        None,
+                        None,
+                    ),
+                );
+                assert_eq!(
+                    error.code,
+                    crate::types::protocol::error_codes::MISSING_REQUIRED_CLIENT_CAPABILITY
+                );
+                let required = &error.data.as_ref().expect("a payload")["requiredCapabilities"];
+                assert!(
+                    required.get("elicitation").is_none(),
+                    "a DECLARED capability must not appear in the missing set: {required}"
+                );
+                assert!(required["roots"].is_object());
+            }
+
+            /// `inputRequests` keys are unique within one result BY
+            /// CONSTRUCTION: `InputRequests` is a `BTreeMap`, so a duplicate key
+            /// replaces rather than duplicating. A future change to a
+            /// Vec-of-pairs shape fails this test.
+            #[test]
+            fn input_requests_keys_are_unique_by_construction() {
+                let mut map = crate::types::mrtr::InputRequests::new();
+                map.insert("dup".to_string(), form_elicitation());
+                map.insert(
+                    "dup".to_string(),
+                    crate::types::mrtr::InputRequest::ListRoots,
+                );
+                assert_eq!(map.len(), 1, "a BTreeMap cannot hold a duplicate key");
+
+                let serialized = serde_json::to_value(&map).expect("serializes");
+                assert_eq!(
+                    serialized.as_object().expect("an object").len(),
+                    1,
+                    "and the wire shape carries the key exactly once"
+                );
             }
 
             /// Fail closed: a server that cannot seal the continuation answers a
