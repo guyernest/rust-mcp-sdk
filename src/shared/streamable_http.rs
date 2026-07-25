@@ -800,7 +800,7 @@ impl StreamableHttpTransport {
     ///
     /// `is_notification` only selects the 202-Accepted behavior; it is not
     /// re-derived from the bytes so the typed path keeps its exact semantics.
-    async fn post_body(&mut self, body_bytes: Vec<u8>, is_notification: bool) -> Result<()> {
+    async fn post_body(&self, body_bytes: Vec<u8>, is_notification: bool) -> Result<()> {
         // Clone body_bytes so we can retry with the identical payload on 401.
         let body_bytes_snapshot = body_bytes.clone();
 
@@ -1652,7 +1652,7 @@ mod tests {
         use crate::types::protocol::PROTOCOL_VERSION_2026_07_28;
         use serde_json::json;
 
-        fn body(method: &str, params: serde_json::Value) -> Vec<u8> {
+        fn body(method: &str, params: &serde_json::Value) -> Vec<u8> {
             json!({ "jsonrpc": "2.0", "id": 1, "method": method, "params": params })
                 .to_string()
                 .into_bytes()
@@ -1702,7 +1702,7 @@ mod tests {
 
         #[test]
         fn routing_headers_read_name_for_tools_call() {
-            let derived = v2_routing_headers(&body("tools/call", json!({ "name": "search" })));
+            let derived = v2_routing_headers(&body("tools/call", &json!({ "name": "search" })));
             assert_eq!(
                 derived,
                 Some(("tools/call".to_string(), "search".to_string()))
@@ -1711,7 +1711,7 @@ mod tests {
 
         #[test]
         fn routing_headers_read_name_for_prompts_get() {
-            let derived = v2_routing_headers(&body("prompts/get", json!({ "name": "greeting" })));
+            let derived = v2_routing_headers(&body("prompts/get", &json!({ "name": "greeting" })));
             assert_eq!(
                 derived,
                 Some(("prompts/get".to_string(), "greeting".to_string()))
@@ -1724,7 +1724,7 @@ mod tests {
         #[test]
         fn routing_headers_read_uri_for_resources_read() {
             let derived =
-                v2_routing_headers(&body("resources/read", json!({ "uri": "mem://greeting" })));
+                v2_routing_headers(&body("resources/read", &json!({ "uri": "mem://greeting" })));
             assert_eq!(
                 derived,
                 Some(("resources/read".to_string(), "mem://greeting".to_string()))
@@ -1743,7 +1743,7 @@ mod tests {
 
         #[test]
         fn routing_headers_sentinel_encode_a_non_ascii_name() {
-            let (_, name) = v2_routing_headers(&body("tools/call", json!({ "name": "поиск" })))
+            let (_, name) = v2_routing_headers(&body("tools/call", &json!({ "name": "поиск" })))
                 .expect("derived");
             assert!(
                 name.starts_with(crate::types::mrtr::HEADER_SENTINEL_PREFIX),
@@ -1763,7 +1763,7 @@ mod tests {
             let transport = v2_transport(None);
             let map = headers_for(
                 &transport,
-                body("tools/call", json!({ "name": "search", "arguments": {} })),
+                body("tools/call", &json!({ "name": "search", "arguments": {} })),
             )
             .await;
 
@@ -1781,7 +1781,7 @@ mod tests {
         #[tokio::test]
         async fn v2_nameless_method_emits_an_empty_mcp_name() {
             let transport = v2_transport(None);
-            let map = headers_for(&transport, body("tools/list", json!({}))).await;
+            let map = headers_for(&transport, body("tools/list", &json!({}))).await;
 
             assert_eq!(header(&map, MCP_METHOD).as_deref(), Some("tools/list"));
             assert!(
@@ -1796,7 +1796,7 @@ mod tests {
             let transport = v2_transport(None);
             let map = headers_for(
                 &transport,
-                body("resources/read", json!({ "uri": "mem://greeting" })),
+                body("resources/read", &json!({ "uri": "mem://greeting" })),
             )
             .await;
             assert_eq!(header(&map, MCP_NAME).as_deref(), Some("mem://greeting"));
@@ -1814,7 +1814,7 @@ mod tests {
         #[tokio::test]
         async fn v2_never_emits_a_stored_session_id() {
             let transport = v2_transport(Some("left-over-from-v1"));
-            let map = headers_for(&transport, body("tools/list", json!({}))).await;
+            let map = headers_for(&transport, body("tools/list", &json!({}))).await;
             assert!(
                 !map.contains_key(MCP_SESSION_ID),
                 "a session id must never reach the v2 wire, even when one is stored"
@@ -1870,7 +1870,7 @@ mod tests {
             let transport = v1_transport(Some("session-123"));
             let map = headers_for(
                 &transport,
-                body("tools/call", json!({ "name": "search", "arguments": {} })),
+                body("tools/call", &json!({ "name": "search", "arguments": {} })),
             )
             .await;
 
@@ -1887,7 +1887,7 @@ mod tests {
                 method in ".{0,64}",
                 name in ".{0,64}",
             ) {
-                let frame = body(&method, json!({ "name": name, "uri": name }));
+                let frame = body(&method, &json!({ "name": name, "uri": name }));
                 // Derivation is total and non-panicking...
                 let derived = v2_routing_headers(&frame);
                 // ...and so is emission, for whatever it produced.

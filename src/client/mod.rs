@@ -573,15 +573,11 @@ impl<T: Transport> Client<T> {
     /// signal at all and would be rejected by the server's header gate.
     fn splice_v2_meta(&self, params: &mut Option<serde_json::Value>) {
         let reserved = self.v2_request_meta();
-        let object = match params {
-            Some(serde_json::Value::Object(existing)) => existing,
-            _ => {
-                *params = Some(serde_json::Value::Object(serde_json::Map::new()));
-                let Some(serde_json::Value::Object(fresh)) = params.as_mut() else {
-                    return;
-                };
-                fresh
-            },
+        if !matches!(params, Some(serde_json::Value::Object(_))) {
+            *params = Some(serde_json::Value::Object(serde_json::Map::new()));
+        }
+        let Some(serde_json::Value::Object(object)) = params.as_mut() else {
+            return;
         };
         let meta = object
             .entry(PARAMS_META_KEY.to_string())

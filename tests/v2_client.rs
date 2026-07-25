@@ -112,11 +112,11 @@ fn build_server_with_unicode_tool() -> Server {
 struct Observed {
     /// Set when ANY request body carried `"method":"initialize"` or
     /// `"notifications/initialized"`.
-    saw_handshake: AtomicBool,
+    handshake: AtomicBool,
     /// Set when ANY request carried an inbound `Mcp-Session-Id` header.
-    saw_session_id: AtomicBool,
+    inbound_session_id: AtomicBool,
     /// Set when at least one request arrived at all (guards vacuous assertions).
-    saw_any_request: AtomicBool,
+    traffic_arrived: AtomicBool,
 }
 
 /// A thin recording wrapper at the HTTP boundary.
@@ -135,9 +135,11 @@ impl ServerHttpMiddleware for RecordingMiddleware {
         request: &mut ServerHttpRequest,
         _context: &ServerHttpContext,
     ) -> pmcp::Result<()> {
-        self.observed.saw_any_request.store(true, Ordering::SeqCst);
+        self.observed.traffic_arrived.store(true, Ordering::SeqCst);
         if request.get_header(MCP_SESSION_ID).is_some() {
-            self.observed.saw_session_id.store(true, Ordering::SeqCst);
+            self.observed
+                .inbound_session_id
+                .store(true, Ordering::SeqCst);
         }
         let method = serde_json::from_slice::<Value>(&request.body)
             .ok()
@@ -150,7 +152,7 @@ impl ServerHttpMiddleware for RecordingMiddleware {
             method.as_deref(),
             Some("initialize" | "notifications/initialized")
         ) {
-            self.observed.saw_handshake.store(true, Ordering::SeqCst);
+            self.observed.handshake.store(true, Ordering::SeqCst);
         }
         Ok(())
     }
@@ -287,11 +289,11 @@ async fn no_initialize_on_v2() {
     handle.abort();
     assert!(result.is_ok(), "the call must succeed: {result:?}");
     assert!(
-        observed.saw_any_request.load(Ordering::SeqCst),
+        observed.traffic_arrived.load(Ordering::SeqCst),
         "the recording middleware must have seen the traffic (guard against a vacuous pass)"
     );
     assert!(
-        !observed.saw_handshake.load(Ordering::SeqCst),
+        !observed.handshake.load(Ordering::SeqCst),
         "v2 has no handshake — neither initialize nor notifications/initialized may be sent"
     );
 }
@@ -311,7 +313,7 @@ async fn no_session_id_from_v2_client() {
     assert!(first.is_ok(), "first call must succeed: {first:?}");
     assert!(second.is_ok(), "second call must succeed: {second:?}");
     assert!(
-        !observed.saw_session_id.load(Ordering::SeqCst),
+        !observed.inbound_session_id.load(Ordering::SeqCst),
         "no v2 request may carry Mcp-Session-Id, on any round trip"
     );
 }
@@ -400,7 +402,7 @@ async fn v1_client_unchanged() {
 
     assert!(result.is_ok(), "a v1 tools/call must succeed: {result:?}");
     assert!(
-        observed.saw_handshake.load(Ordering::SeqCst),
+        observed.handshake.load(Ordering::SeqCst),
         "the v1 path MUST still send initialize"
     );
 }
