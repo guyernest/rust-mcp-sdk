@@ -699,6 +699,115 @@ mod tests {
             .contains_key("io.modelcontextprotocol/related-task"));
     }
 
+    // -----------------------------------------------------------------------
+    // The `_meta` wire-spelling contract (Phase-113 D-113-A / D-113-B).
+    //
+    // Every request type that carries a per-request `_meta` object MUST spell it
+    // `_meta` on the wire (the MCP spec spelling) and MUST also ACCEPT the legacy
+    // `meta` spelling pmcp emitted before this phase, so an older pmcp peer keeps
+    // interoperating on ingress. These tests are the binding guard for both
+    // halves.
+    // -----------------------------------------------------------------------
+
+    /// The reserved `_meta` payload every spelling test round-trips.
+    fn meta_probe() -> serde_json::Value {
+        serde_json::json!({ "ns/key": "v" })
+    }
+
+    /// `base` with `key` set to [`meta_probe`].
+    fn with_meta_key(base: &serde_json::Value, key: &str) -> serde_json::Value {
+        let mut out = base.clone();
+        out.as_object_mut()
+            .expect("base is an object")
+            .insert(key.to_string(), meta_probe());
+        out
+    }
+
+    /// Assert the full `_meta` wire contract for one request type, driven
+    /// entirely from JSON so the test never depends on a Rust field NAME.
+    ///
+    /// 1. EGRESS — a request carrying `_meta` re-serializes under the SPEC
+    ///    spelling `_meta`, never the camelCase-renamed `meta`.
+    /// 2. INGRESS (spec) — a spec-spelled `_meta` on the wire survives a
+    ///    deserialize → serialize round trip (i.e. it was actually READ, not
+    ///    silently dropped by an unknown-field skip).
+    /// 3. INGRESS (legacy) — the `meta` spelling pmcp emitted before Phase 113
+    ///    still deserializes, via `#[serde(alias = "meta")]`, and is re-emitted
+    ///    under the spec spelling.
+    fn assert_meta_spelling<T>(base: &serde_json::Value)
+    where
+        T: serde::Serialize + serde::de::DeserializeOwned,
+    {
+        for (label, incoming) in [
+            ("spec spelling `_meta`", with_meta_key(base, "_meta")),
+            ("legacy spelling `meta`", with_meta_key(base, "meta")),
+        ] {
+            let typed: T = serde_json::from_value(incoming.clone())
+                .unwrap_or_else(|e| panic!("{label} must deserialize ({incoming}): {e}"));
+            let wire = serde_json::to_value(&typed).expect("serializes");
+            assert_eq!(
+                wire.get("_meta"),
+                Some(&meta_probe()),
+                "{label}: the reserved object must be READ and re-emitted under \
+                 the spec spelling `_meta`; got {wire}"
+            );
+            assert!(
+                wire.get("meta").is_none(),
+                "{label}: the camelCase-renamed `meta` spelling must NOT be \
+                 emitted; got {wire}"
+            );
+        }
+    }
+
+    /// An absent `_meta` must emit NO key at all, so v1 wire bytes are unchanged
+    /// for every request that does not opt into the per-request signal.
+    fn assert_absent_meta_emits_no_key<T>(base: &serde_json::Value)
+    where
+        T: serde::Serialize + serde::de::DeserializeOwned,
+    {
+        let typed: T = serde_json::from_value(base.clone()).expect("base deserializes");
+        let wire = serde_json::to_value(&typed).expect("serializes");
+        assert!(
+            wire.get("_meta").is_none() && wire.get("meta").is_none(),
+            "an absent _meta must emit neither spelling; got {wire}"
+        );
+    }
+
+    /// `(base params, type)` for every request type that must carry `_meta`.
+    macro_rules! for_each_meta_bearing_request {
+        ($assertion:ident) => {
+            $assertion::<super::super::tools::CallToolRequest>(
+                &serde_json::json!({ "name": "t", "arguments": {} }),
+            );
+            $assertion::<super::super::prompts::GetPromptRequest>(
+                &serde_json::json!({ "name": "p", "arguments": {} }),
+            );
+            $assertion::<super::super::resources::ReadResourceRequest>(
+                &serde_json::json!({ "uri": "mem://x" }),
+            );
+            $assertion::<super::super::tools::ListToolsRequest>(&serde_json::json!({}));
+            $assertion::<super::super::prompts::ListPromptsRequest>(&serde_json::json!({}));
+            $assertion::<super::super::resources::ListResourcesRequest>(&serde_json::json!({}));
+            $assertion::<super::super::resources::ListResourceTemplatesRequest>(
+                &serde_json::json!({}),
+            );
+            $assertion::<CompleteRequest>(&serde_json::json!({
+                "ref": { "type": "ref/prompt", "name": "p" },
+                "argument": { "name": "a", "value": "v" },
+            }));
+        };
+    }
+
+    #[test]
+    fn every_meta_bearing_request_uses_the_spec_spelling_and_accepts_the_legacy_alias() {
+        for_each_meta_bearing_request!(assert_meta_spelling);
+    }
+
+    #[test]
+    fn absent_meta_emits_no_key_on_any_request_type() {
+        for_each_meta_bearing_request!(assert_absent_meta_emits_no_key);
+    }
+
     #[test]
     fn server_discover_request_round_trips() {
         // Empty-but-extensible struct serializes to `{}` and round-trips.

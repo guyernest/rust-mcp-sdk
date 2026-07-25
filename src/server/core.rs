@@ -2762,6 +2762,85 @@ mod tests {
             }
         }
 
+        /// D-113-B: a stateless v2 server has NO `initialize` handshake, so the
+        /// per-request `_meta` object is the ONLY era channel. Every method a v2
+        /// client can call must therefore be able to carry it — including the
+        /// list-shaped methods that had no `_meta` field before Phase 113.
+        ///
+        /// Driven from the WIRE (a raw JSON-RPC `params` object) rather than from
+        /// a typed literal, so it proves the spec `_meta` spelling reaches the
+        /// extractor, not merely that a Rust field exists.
+        #[test]
+        fn list_shaped_methods_can_carry_a_v2_meta_signal() {
+            let expected = serde_json::json!({ "ns/key": "v" });
+            for method in [
+                "tools/list",
+                "prompts/list",
+                "resources/list",
+                "resources/templates/list",
+                "completion/complete",
+            ] {
+                let mut params = serde_json::json!({ "_meta": { "ns/key": "v" } });
+                if method == "completion/complete" {
+                    let obj = params.as_object_mut().unwrap();
+                    obj.insert(
+                        "ref".to_string(),
+                        serde_json::json!({ "type": "ref/prompt", "name": "p" }),
+                    );
+                    obj.insert(
+                        "argument".to_string(),
+                        serde_json::json!({ "name": "a", "value": "v" }),
+                    );
+                }
+                let client: ClientRequest = serde_json::from_value(serde_json::json!({
+                    "method": method,
+                    "params": params,
+                }))
+                .unwrap_or_else(|e| panic!("{method} must deserialize: {e}"));
+                let req = Request::Client(Box::new(client));
+                assert_eq!(
+                    extract_request_meta_value(&req),
+                    Some(expected.clone()),
+                    "{method} must surface its per-request _meta to era resolution"
+                );
+            }
+        }
+
+        /// The three name-bearing methods must surface a SPEC-SPELLED `_meta`
+        /// arriving on the wire (D-113-A). Before Phase 113 the typed structs
+        /// renamed the field to `meta`, so a conformant client was never detected
+        /// as v2 at all.
+        #[test]
+        fn spec_spelled_meta_on_the_wire_reaches_era_resolution() {
+            let expected = serde_json::json!({ "ns/key": "v" });
+            for (method, params) in [
+                (
+                    "tools/call",
+                    serde_json::json!({ "name": "t", "arguments": {}, "_meta": { "ns/key": "v" } }),
+                ),
+                (
+                    "prompts/get",
+                    serde_json::json!({ "name": "p", "arguments": {}, "_meta": { "ns/key": "v" } }),
+                ),
+                (
+                    "resources/read",
+                    serde_json::json!({ "uri": "mem://x", "_meta": { "ns/key": "v" } }),
+                ),
+            ] {
+                let client: ClientRequest = serde_json::from_value(serde_json::json!({
+                    "method": method,
+                    "params": params,
+                }))
+                .unwrap_or_else(|e| panic!("{method} must deserialize: {e}"));
+                let req = Request::Client(Box::new(client));
+                assert_eq!(
+                    extract_request_meta_value(&req),
+                    Some(expected.clone()),
+                    "{method} must read the SPEC-spelled `_meta`, not `meta`"
+                );
+            }
+        }
+
         proptest::proptest! {
             #[test]
             fn extract_request_meta_value_fuzz_never_panics(
