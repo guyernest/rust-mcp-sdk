@@ -68,7 +68,7 @@
 
 use crate::error::{Error, Result};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
-use ring::aead::{LessSafeKey, UnboundKey, CHACHA20_POLY1305, NONCE_LEN};
+use ring::aead::{LessSafeKey, UnboundKey, CHACHA20_POLY1305};
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
 use std::time::Duration;
@@ -247,43 +247,127 @@ impl std::fmt::Debug for RequestStateCodec {
 
 /// Bind raw key bytes into a `ring` AEAD key plus its derived [`KeyId`].
 fn bind_key(key: &[u8]) -> Result<(KeyId, LessSafeKey)> {
-    let _ = key;
-    unimplemented!("plan 113-03 task 1")
+    if key.len() != KEY_LEN {
+        return Err(Error::validation(format!(
+            "a requestState key must be exactly {KEY_LEN} bytes, got {}",
+            key.len()
+        )));
+    }
+    let unbound = UnboundKey::new(&CHACHA20_POLY1305, key)
+        .map_err(|_| Error::internal("ring rejected a 32-byte CHACHA20_POLY1305 key"))?;
+    Ok((key_id_of(key), LessSafeKey::new(unbound)))
 }
 
 impl RequestStateCodec {
     /// Deterministic constructor: build a codec over one known key.
+    ///
+    /// This is the constructor tests, property tests, the fuzz seam and
+    /// [`crate::ServerBuilder::with_request_state_key`] all go through — the
+    /// codec never becomes ambient state.
     pub(crate) fn new(key: &[u8; KEY_LEN], ttl: Duration) -> Result<Self> {
-        let _ = (key, ttl);
-        unimplemented!("plan 113-03 task 1")
+        Self::from_key_slice(key, ttl)
+    }
+
+    /// Shared body of [`Self::new`] and [`Self::from_env`].
+    fn from_key_slice(key: &[u8], ttl: Duration) -> Result<Self> {
+        let minting = bind_key(key)?;
+        let accepting = vec![minting.clone()];
+        Ok(Self {
+            minting,
+            accepting,
+            ttl,
+            clock: Arc::new(SystemClock),
+        })
     }
 
     /// Resolve the codec from the process environment (D-03/D-04).
+    ///
+    /// * `PMCP_REQUEST_STATE_KEY` set and valid → that key mints and verifies.
+    /// * `PMCP_REQUEST_STATE_KEY` set and MALFORMED → `Err`. This is an operator
+    ///   misconfiguration, and D-04's "no silent hard-error" fallback covers the
+    ///   UNSET case only — silently substituting a random key for a key the
+    ///   operator believed was shared would degrade security invisibly (T-113-17).
+    /// * `PMCP_REQUEST_STATE_KEY` UNSET → a fresh per-process key plus exactly one
+    ///   `tracing::warn!` naming the variable and the consequence.
+    /// * `PMCP_REQUEST_STATE_KEY_PREVIOUS`, when set, joins the accepting set only.
+    /// * `PMCP_REQUEST_STATE_TTL_SECS` overrides [`DEFAULT_TTL_SECS`]; an absent or
+    ///   unparseable value falls back to it without erroring.
+    ///
+    /// Both the decoded key buffer and the `String` read out of the environment are
+    /// zeroized once the `UnboundKey` exists (threat T-113-05).
     pub(crate) fn from_env() -> Result<Self> {
-        unimplemented!("plan 113-03 task 1")
+        let ttl = ttl_from_env();
+        let mut codec = match env_var(ENV_REQUEST_STATE_KEY) {
+            Some(raw) => Self::from_configured_key(&raw, ttl)?,
+            None => Self::from_generated_key(ttl)?,
+        };
+        if let Some(raw) = env_var(ENV_REQUEST_STATE_KEY_PREVIOUS) {
+            codec
+                .accepting
+                .push(bind_scrubbed(&raw, ENV_REQUEST_STATE_KEY_PREVIOUS)?);
+        }
+        Ok(codec)
+    }
+
+    /// Build from an operator-configured key string, scrubbing both buffers.
+    fn from_configured_key(raw: &str, ttl: Duration) -> Result<Self> {
+        let mut scrubbed = raw.to_string();
+        let decoded = decode_key_material(&scrubbed, ENV_REQUEST_STATE_KEY);
+        scrubbed.zeroize();
+        let mut decoded = decoded?;
+        let built = Self::from_key_slice(&decoded, ttl);
+        decoded.zeroize();
+        built
+    }
+
+    /// The D-04 fallback: a fresh per-process key plus the startup warning.
+    fn from_generated_key(ttl: Duration) -> Result<Self> {
+        let mut key = random_key()?;
+        let built = Self::from_key_slice(&key, ttl);
+        key.zeroize();
+        let codec = built?;
+        tracing::warn!(
+            env_var = ENV_REQUEST_STATE_KEY,
+            key_id = %codec.minting.0,
+            "PMCP_REQUEST_STATE_KEY is not set — generated a per-process requestState \
+             key. Multi-round-trip requests whose follow-up lands on a DIFFERENT \
+             instance behind a load balancer cannot be resumed and will be \
+             re-elicited. Set PMCP_REQUEST_STATE_KEY to the SAME 32-byte \
+             base64url (or hex) value on every instance to enable resumption."
+        );
+        Ok(codec)
     }
 
     /// Add verify-only keys to the accepting set.
+    ///
+    /// Entries are appended without de-duplication: two DIFFERENT keys may share a
+    /// key-id (see [`KeyId`]'s collision policy), and collapsing them would turn a
+    /// resolvable collision into a false `UnknownKey`.
     pub(crate) fn with_previous_keys(
-        self,
+        mut self,
         keys: impl IntoIterator<Item = [u8; KEY_LEN]>,
     ) -> Result<Self> {
-        let _ = keys;
-        unimplemented!("plan 113-03 task 1")
+        for key in keys {
+            let mut key = key;
+            let bound = bind_key(&key);
+            key.zeroize();
+            self.accepting.push(bound?);
+        }
+        Ok(self)
     }
 
     /// Replace the clock (see [`RequestStateClock`]).
     #[must_use]
-    pub(crate) fn with_clock(self, clock: Arc<dyn RequestStateClock>) -> Self {
-        let _ = clock;
-        unimplemented!("plan 113-03 task 1")
+    pub(crate) fn with_clock(mut self, clock: Arc<dyn RequestStateClock>) -> Self {
+        self.clock = clock;
+        self
     }
 
     /// Replace the continuation lifetime.
     #[must_use]
-    pub(crate) fn with_ttl(self, ttl: Duration) -> Self {
-        let _ = ttl;
-        unimplemented!("plan 113-03 task 1")
+    pub(crate) fn with_ttl(mut self, ttl: Duration) -> Self {
+        self.ttl = ttl;
+        self
     }
 
     /// The id of the key new tokens are minted under.
@@ -307,38 +391,107 @@ impl RequestStateCodec {
     }
 }
 
+/// Decode + bind one configured key string, scrubbing both buffers.
+fn bind_scrubbed(raw: &str, var: &str) -> Result<(KeyId, LessSafeKey)> {
+    let mut scrubbed = raw.to_string();
+    let decoded = decode_key_material(&scrubbed, var);
+    scrubbed.zeroize();
+    let mut decoded = decoded?;
+    let bound = bind_key(&decoded);
+    decoded.zeroize();
+    bound
+}
+
 /// Decode configured key material: base64url-no-pad **or** hex, exactly
 /// [`KEY_LEN`] bytes after decoding.
+///
+/// Length disambiguates the two encodings: a 64-character hex string is also
+/// valid base64url, but decodes to 48 bytes rather than 32, so it falls through
+/// to the hex attempt. Any intermediate wrong-length buffer is zeroized before it
+/// is dropped.
 fn decode_key_material(raw: &str, var: &str) -> Result<Vec<u8>> {
-    let _ = (raw, var);
-    unimplemented!("plan 113-03 task 1")
+    let trimmed = raw.trim();
+    let attempts = [
+        URL_SAFE_NO_PAD.decode(trimmed.as_bytes()).ok(),
+        decode_hex(trimmed),
+    ];
+    for attempt in attempts {
+        if let Some(mut bytes) = attempt {
+            if bytes.len() == KEY_LEN {
+                return Ok(bytes);
+            }
+            bytes.zeroize();
+        }
+    }
+    Err(Error::validation(format!(
+        "{var} must decode to exactly {KEY_LEN} bytes as base64url-no-pad or hex; \
+         the configured value does not. Generate one with: \
+         `head -c 32 /dev/urandom | base64 | tr '+/' '-_' | tr -d '='`"
+    )))
 }
 
 /// Decode a lowercase/uppercase hex string, or `None` if it is not valid hex.
 fn decode_hex(s: &str) -> Option<Vec<u8>> {
-    let _ = s;
-    unimplemented!("plan 113-03 task 1")
+    if s.is_empty() || s.len() % 2 != 0 || !s.is_ascii() {
+        return None;
+    }
+    let mut out = Vec::with_capacity(s.len() / 2);
+    for pair in s.as_bytes().chunks_exact(2) {
+        let hi = char::from(pair[0]).to_digit(16)?;
+        let lo = char::from(pair[1]).to_digit(16)?;
+        out.push(u8::try_from(hi * 16 + lo).ok()?);
+    }
+    Some(out)
 }
 
-/// Draw a fresh 32-byte key from the CSPRNG (no `unwrap`/`expect`).
+/// Draw a fresh 32-byte key from the CSPRNG.
+///
+/// Mirrors `crate::shared::pkce::random_bytes`: one `getrandom::fill` call whose
+/// error is mapped to [`Error::internal`], never `unwrap`/`expect`.
 fn random_key() -> Result<[u8; KEY_LEN]> {
-    unimplemented!("plan 113-03 task 1")
+    let mut buf = [0u8; KEY_LEN];
+    getrandom::fill(&mut buf)
+        .map_err(|e| Error::internal(format!("CSPRNG (getrandom) failed: {e}")))?;
+    Ok(buf)
 }
 
 /// Resolve the configured ttl, defaulting on absent or unparseable.
 fn ttl_from_env() -> Duration {
-    unimplemented!("plan 113-03 task 1")
+    env_var(ENV_REQUEST_STATE_TTL_SECS)
+        .and_then(|raw| raw.trim().parse::<u64>().ok())
+        .map_or_else(|| Duration::from_secs(DEFAULT_TTL_SECS), Duration::from_secs)
 }
 
 /// Resolve the server's codec **once**, at build time.
+///
+/// Returns `Ok(None)` — reading no environment variable and emitting no warning —
+/// for a server that did not opt into the v2 (`2026-07-28`) era, so a v1-only
+/// server pays nothing for MRTR (D-04's zero-era-code rule).
+///
+/// Precedence for an opted-in server:
+/// 1. a builder-supplied key beats `PMCP_REQUEST_STATE_KEY` entirely;
+/// 2. a builder-supplied ttl beats `PMCP_REQUEST_STATE_TTL_SECS`, which beats
+///    [`DEFAULT_TTL_SECS`] (D-05 — configurable by env OR builder);
+/// 3. builder-supplied previous keys are appended to whatever
+///    `PMCP_REQUEST_STATE_KEY_PREVIOUS` already contributed.
+///
+/// An `Err` here is a BUILD failure by design: see [`RequestStateCodec::from_env`].
 pub(crate) fn resolve_codec_at_build(
     accept_list: &[crate::types::ProtocolVersion],
     key: Option<[u8; KEY_LEN]>,
     previous_keys: &[[u8; KEY_LEN]],
     ttl: Option<Duration>,
 ) -> Result<Option<Arc<RequestStateCodec>>> {
-    let _ = (accept_list, key, previous_keys, ttl);
-    Ok(None)
+    if !crate::types::protocol::context::is_v2_opted_in(accept_list) {
+        return Ok(None);
+    }
+    let effective_ttl = ttl.unwrap_or_else(ttl_from_env);
+    let codec = match key {
+        Some(explicit) => RequestStateCodec::new(&explicit, effective_ttl)?,
+        None => RequestStateCodec::from_env()?.with_ttl(effective_ttl),
+    };
+    let codec = codec.with_previous_keys(previous_keys.iter().copied())?;
+    Ok(Some(Arc::new(codec)))
 }
 
 #[cfg(test)]
