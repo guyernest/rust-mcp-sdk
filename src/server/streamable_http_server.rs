@@ -4089,6 +4089,109 @@ mod tests {
         assert!(matches!(outcome, V2GateOutcome::Reject { .. }));
     }
 
+    // -----------------------------------------------------------------------
+    // Resumability era gate (Plan 113-08, HTTP-05).
+    // -----------------------------------------------------------------------
+
+    /// A `ServerState` accepting BOTH eras, which every resumability test needs
+    /// (the v1 half is what keeps the v2 zero-traffic assertions non-vacuous).
+    fn dual_era_state() -> ServerState {
+        state_with_accept(vec![
+            ProtocolVersion(crate::LATEST_PROTOCOL_VERSION.to_string()),
+            v2_version(),
+        ])
+    }
+
+    /// Build a POST for the private fast-path handler — the real POST pipeline,
+    /// with no socket in the way.
+    fn post_request(extra: &[(&str, &str)], body: &str) -> axum::extract::Request<Body> {
+        let mut builder = axum::http::Request::builder()
+            .method("POST")
+            .uri("/")
+            .header(header::CONTENT_TYPE, APPLICATION_JSON)
+            .header(
+                header::ACCEPT,
+                crate::shared::http_constants::ACCEPT_STREAMABLE,
+            );
+        for (name, value) in extra {
+            builder = builder.header(*name, *value);
+        }
+        builder
+            .body(Body::from(body.to_string()))
+            .expect("request builds")
+    }
+
+    /// The three v2 headers plus any extras, as `(&str, &str)` pairs.
+    fn v2_post_headers<'a>(
+        method: &'a str,
+        extra: &[(&'a str, &'a str)],
+    ) -> Vec<(&'a str, &'a str)> {
+        let mut headers = vec![
+            (MCP_PROTOCOL_VERSION, V2),
+            (MCP_METHOD, method),
+            (MCP_NAME, ""),
+        ];
+        headers.extend_from_slice(extra);
+        headers
+    }
+
+    /// Open a real v1 SSE stream and return its minted session id.
+    async fn open_v1_sse_stream(state: &ServerState) -> String {
+        let headers = headers_from(&[(http::header::ACCEPT.as_str(), TEXT_EVENT_STREAM)]);
+        let response = handle_get_sse(State(state.clone()), headers)
+            .await
+            .into_response();
+        assert_eq!(
+            response.status(),
+            StatusCode::OK,
+            "v1 GET opens an SSE stream"
+        );
+        response
+            .headers()
+            .get(MCP_SESSION_ID)
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_string)
+            .expect("a v1 SSE GET mints and echoes a session id")
+    }
+
+    /// **The discovery-cache bug class, at the transport layer.**
+    ///
+    /// `build_response` routes a reply into `state.sse_streams[sid]` keyed on the
+    /// RAW INBOUND `Mcp-Session-Id` header — not on the era-resolved
+    /// `response_session_id`, which is always `None` on v2. So a v2 POST that
+    /// merely NAMES a v1 caller's open session id had its response delivered into
+    /// THAT caller's stream (and written into the event store on the way), while
+    /// the v2 caller got a bare `202 Accepted`.
+    ///
+    /// That is simultaneously T-113-07 (a response reaching a caller that did not
+    /// issue it), T-113-29 and T-113-30 (v2 traffic reaching the event store).
+    #[tokio::test]
+    async fn v2_response_is_never_routed_into_a_session_sse_stream() {
+        let state = dual_era_state();
+        let victim_session = open_v1_sse_stream(&state).await;
+
+        let response = handle_post_fast_path(
+            state.clone(),
+            post_request(
+                &v2_post_headers("tools/list", &[(MCP_SESSION_ID, victim_session.as_str())]),
+                &String::from_utf8(v2_body_bytes("tools/list", "_meta")).unwrap(),
+            ),
+        )
+        .await;
+
+        assert_ne!(
+            response.status(),
+            StatusCode::ACCEPTED,
+            "a v2 response must NEVER be handed to a session SSE stream — \
+             202 Accepted means it went to the v1 caller instead of this one"
+        );
+        assert_eq!(
+            response.status(),
+            StatusCode::OK,
+            "the v2 caller must get its OWN response back"
+        );
+    }
+
     proptest::proptest! {
         /// The raw-body ingress classifier NEVER panics over arbitrary bytes, and
         /// a non-`server/discover` method NEVER classifies as Discover (T-112-13).
