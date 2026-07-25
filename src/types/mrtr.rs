@@ -128,10 +128,7 @@ pub(crate) fn logical_name_key(method: &str) -> Option<&'static str> {
 /// carry a string at the method's logical-name key.
 pub(crate) fn logical_name_of(method: &str, params: &Value) -> Option<String> {
     let key = logical_name_key(method)?;
-    params
-        .get(key)
-        .and_then(Value::as_str)
-        .map(str::to_string)
+    params.get(key).and_then(Value::as_str).map(str::to_string)
 }
 
 // ===========================================================================
@@ -167,8 +164,16 @@ fn header_byte_is_safe(byte: u8) -> bool {
 /// A value that itself begins with [`HEADER_SENTINEL_PREFIX`] is always
 /// sentinel-encoded even when otherwise safe, so decoding stays unambiguous.
 pub(crate) fn encode_header_value(value: &str) -> String {
-    let _ = value;
-    unimplemented!("RED: Mcp-Name sentinel encoder")
+    let passthrough = value.bytes().all(header_byte_is_safe)
+        && !value.starts_with(HEADER_SENTINEL_PREFIX)
+        && value.len() <= MAX_HEADER_VALUE_LEN;
+    if passthrough {
+        return value.to_string();
+    }
+    format!(
+        "{HEADER_SENTINEL_PREFIX}{}{HEADER_SENTINEL_SUFFIX}",
+        BASE64_STANDARD.encode(value.as_bytes())
+    )
 }
 
 /// Decode an `Mcp-Name` header value produced by [`encode_header_value`].
@@ -177,8 +182,18 @@ pub(crate) fn encode_header_value(value: &str) -> String {
 /// well-formed sentinel, and `None` for a malformed sentinel, invalid UTF-8, or a
 /// value/decoding longer than [`MAX_HEADER_VALUE_LEN`]. Never panics.
 pub(crate) fn decode_header_value(raw: &str) -> Option<String> {
-    let _ = raw;
-    unimplemented!("RED: Mcp-Name sentinel decoder")
+    if raw.len() > MAX_HEADER_VALUE_LEN {
+        return None;
+    }
+    let Some(rest) = raw.strip_prefix(HEADER_SENTINEL_PREFIX) else {
+        return Some(raw.to_string());
+    };
+    let payload = rest.strip_suffix(HEADER_SENTINEL_SUFFIX)?;
+    let bytes = BASE64_STANDARD.decode(payload).ok()?;
+    if bytes.len() > MAX_HEADER_VALUE_LEN {
+        return None;
+    }
+    String::from_utf8(bytes).ok()
 }
 
 // ===========================================================================
@@ -270,8 +285,17 @@ impl InputResponse {
     /// [`InputRequest`], so a `CreateMessageResult`-shaped value presented for an
     /// `elicitation/create` entry is REJECTED rather than silently reclassified.
     pub fn decode_for(kind: InputRequestKind, value: Value) -> Result<Self, serde_json::Error> {
-        let _ = (kind, value);
-        unimplemented!("RED: kind-directed InputResponse decode")
+        match kind {
+            InputRequestKind::Elicitation => {
+                serde_json::from_value(value).map(|r| Self::Elicitation(Box::new(r)))
+            },
+            InputRequestKind::Sampling => {
+                serde_json::from_value(value).map(|r| Self::Sampling(Box::new(r)))
+            },
+            InputRequestKind::Roots => {
+                serde_json::from_value(value).map(|r| Self::Roots(Box::new(r)))
+            },
+        }
     }
 
     /// Best-effort untagged decode — **server-ingress only**.
@@ -704,8 +728,13 @@ fn extract_input_responses(
 /// A PRESENT but wrong-shaped, oversized, over-deep or over-count value yields
 /// `Err`, so ABSENT is never conflated with INVALID (T-113-44). Never panics.
 pub(crate) fn extract_mrtr_params(params: &Value) -> Result<MrtrRequestParams, MrtrParseError> {
-    let _ = params;
-    unimplemented!("RED: fail-loud MRTR params extraction")
+    let Some(object) = params.as_object() else {
+        return Ok(MrtrRequestParams::default());
+    };
+    Ok(MrtrRequestParams {
+        input_responses: extract_input_responses(object)?,
+        request_state: extract_request_state(object)?,
+    })
 }
 
 /// Write the MRTR fields onto a request's top-level `params`.
@@ -716,8 +745,19 @@ pub(crate) fn extract_mrtr_params(params: &Value) -> Result<MrtrRequestParams, M
 /// fields land as TOP-LEVEL siblings of `name`/`arguments`/`uri`, never inside
 /// `_meta` and never inside `arguments`. No-op on a non-object value.
 pub(crate) fn splice_mrtr_params(params: &mut Value, mrtr: &MrtrRequestParams) {
-    let _ = (params, mrtr);
-    unimplemented!("RED: stale-clearing MRTR params splice")
+    let Some(object) = params.as_object_mut() else {
+        return;
+    };
+    object.remove(INPUT_RESPONSES_KEY);
+    object.remove(REQUEST_STATE_KEY);
+    if let Some(responses) = mrtr.input_responses.as_ref() {
+        if let Ok(value) = serde_json::to_value(responses) {
+            object.insert(INPUT_RESPONSES_KEY.to_string(), value);
+        }
+    }
+    if let Some(state) = mrtr.request_state.as_ref() {
+        object.insert(REQUEST_STATE_KEY.to_string(), Value::String(state.clone()));
+    }
 }
 
 // ===========================================================================
@@ -792,8 +832,16 @@ fn salient_params(method: &str, params: &Value) -> Value {
 /// `requestState` AEAD as additional authenticated data, so a token minted for one
 /// tool + arguments cannot verify against another (T-113-03).
 pub(crate) fn salient_param_digest(method: &str, params: &Value) -> [u8; 32] {
-    let _ = (method, params);
-    unimplemented!("RED: originating-request AAD digest")
+    let mut canonical = String::new();
+    write_canonical(&salient_params(method, params), 0, &mut canonical);
+    let mut hasher = Sha256::new();
+    hasher.update(method.as_bytes());
+    hasher.update([0u8]);
+    hasher.update(canonical.as_bytes());
+    let output = hasher.finalize();
+    let mut digest = [0u8; 32];
+    digest.copy_from_slice(&output);
+    digest
 }
 
 #[cfg(test)]
@@ -883,7 +931,10 @@ mod tests {
         assert!(matches!(ok, Ok(InputResponse::Elicitation(_))));
 
         let err = InputResponse::decode_for(InputRequestKind::Elicitation, sampling_result_value());
-        assert!(err.is_err(), "a CreateMessageResult must not decode as an ElicitResult");
+        assert!(
+            err.is_err(),
+            "a CreateMessageResult must not decode as an ElicitResult"
+        );
     }
 
     #[test]
@@ -892,7 +943,10 @@ mod tests {
         assert!(matches!(ok, Ok(InputResponse::Sampling(_))));
 
         let err = InputResponse::decode_for(InputRequestKind::Sampling, elicit_result_value());
-        assert!(err.is_err(), "an ElicitResult must not decode as a CreateMessageResult");
+        assert!(
+            err.is_err(),
+            "an ElicitResult must not decode as a CreateMessageResult"
+        );
     }
 
     #[test]
@@ -904,10 +958,14 @@ mod tests {
     #[test]
     fn input_response_serializes_as_a_bare_result_object() {
         let response =
-            InputResponse::decode_for(InputRequestKind::Elicitation, elicit_result_value()).unwrap();
+            InputResponse::decode_for(InputRequestKind::Elicitation, elicit_result_value())
+                .unwrap();
         let value = serde_json::to_value(&response).unwrap();
         assert_eq!(value["action"], "accept");
-        assert!(value.get("Elicitation").is_none(), "must be untagged on the wire");
+        assert!(
+            value.get("Elicitation").is_none(),
+            "must be untagged on the wire"
+        );
     }
 
     #[test]
@@ -1037,7 +1095,8 @@ mod tests {
         let mut map = InputResponses::new();
         map.insert(
             "user_name".to_string(),
-            InputResponse::decode_for(InputRequestKind::Elicitation, elicit_result_value()).unwrap(),
+            InputResponse::decode_for(InputRequestKind::Elicitation, elicit_result_value())
+                .unwrap(),
         );
         map
     }
@@ -1364,12 +1423,13 @@ mod tests {
         assert!(matches!(complete, MrtrOutcome::Complete(_)));
         assert!(complete.complete().is_some());
 
-        let pending: MrtrOutcome<crate::types::CallToolResult> =
-            MrtrOutcome::InputRequired(serde_json::from_value(json!({
+        let pending: MrtrOutcome<crate::types::CallToolResult> = MrtrOutcome::InputRequired(
+            serde_json::from_value(json!({
                 "resultType": "input_required",
                 "requestState": "abc"
             }))
-            .unwrap());
+            .unwrap(),
+        );
         assert!(matches!(pending, MrtrOutcome::InputRequired(_)));
         assert!(pending.clone().complete().is_none());
         assert!(pending.input_required().is_some());
@@ -1413,9 +1473,8 @@ mod tests {
         leaf.prop_recursive(4, 32, 4, |inner| {
             prop_oneof![
                 prop::collection::vec(inner.clone(), 0..4).prop_map(Value::Array),
-                prop::collection::hash_map("[a-zA-Z]{1,6}", inner, 0..4).prop_map(|map| {
-                    Value::Object(map.into_iter().collect())
-                }),
+                prop::collection::hash_map("[a-zA-Z]{1,6}", inner, 0..4)
+                    .prop_map(|map| { Value::Object(map.into_iter().collect()) }),
             ]
         })
     }
