@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v2.5
 milestone_name: MCP Spec 2026-07-28
 status: executing
-stopped_at: Completed 113-03-PLAN.md
-last_updated: "2026-07-25T05:14:00.050Z"
+stopped_at: Completed 113-04-PLAN.md
+last_updated: "2026-07-25T06:23:37.899Z"
 last_activity: 2026-07-25
 progress:
   total_phases: 71
   completed_phases: 57
   total_plans: 294
-  completed_plans: 284
+  completed_plans: 285
   percent: 80
 ---
 
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-07-22) · .planning/ROADMAP.md (v2.5 mil
 ## Current Position
 
 Phase: 113 (stateless-http-multi-round-trip-elicitation) — EXECUTING
-Plan: 4 of 13
+Plan: 5 of 13
 Status: Ready to execute
 Last activity: 2026-07-25
 
@@ -120,6 +120,10 @@ Decisions are logged in PROJECT.md Key Decisions table. Decisions framing this m
 - [Phase ?]: 113-03: Verdict not Result — UnknownKey (re-elicit) can never collapse into AuthFailed (JSON-RPC error); Expired carries the DECRYPTED continuation so round survives (T-113-49)
 - [Phase ?]: 113-03: key-id collisions try EVERY matching accepting entry -> AuthFailed, never a false Ok and never a misleading UnknownKey; proven via cfg(test) forced-id constructors
 - [Phase ?]: 113-03: env reads route through a cfg(test) thread-local seam (ENV_LOCK alone is insufficient — cargo test --lib is in-process parallel and from_env now runs inside ServerBuilder::build)
+- [Phase ?]: [Phase 113]: 113-04: HTTP-01 landed as ONE sessions_active(state, era) predicate over the server-wide config, not a transport fork; the v2 header gate MOVED above session resolution in both POST entrypoints because the era must be known before the first session decision
+- [Phase ?]: [Phase 113]: 113-04: D-113-A resolved with serde rename=_meta + alias=meta (conformant egress, backward-compatible ingress); D-113-B added optional _meta to the five list-shaped request types and widened extract_request_meta_value — absent _meta emits no key so v1 wire bytes are unchanged
+- [Phase ?]: [Phase 113]: 113-04: v2 status mapping is CODE-driven not call-site-driven (plan 09's -32021 is emitted by dispatch, never the gate) and runs at the RAW level for unknown methods, recovering the original id from the body bytes for 404+-32601
+- [Phase ?]: [Phase 113]: 113-04: BLOCKER D-113-D — the D-113-B field additions fail cargo semver-checks constructible_struct_adds_field, so pmcp now requires a MAJOR bump against the ROADMAP's additive-2.x scope; wire bytes unaffected; three options recorded in deferred-items.md for a phase-level decision
 
 ### Pending Todos
 
@@ -130,6 +134,7 @@ None yet.
 yet. (Research flags per phase to be surfaced during `/gsd:plan-phase`.)
 
 - 113-02 finding D-113-A (HIGH, owned by plan 04): pmcp typed request structs rename the _meta field to 'meta' via serde camelCase, so a conformant v2 client sending the spec-spelled _meta gets NO era detection and is rejected as a header/_meta disagreement. Blocks HTTP-01 and every plan-11 conformance scenario. Pinned by a forward tripwire; see deferred-items.md.
+- 113-04 finding D-113-D (HIGH, needs a phase-level decision, blocks plan 12's semver gate): adding the optional _meta field to ListToolsRequest / ListPromptsRequest / ListResourcesRequest / ListResourceTemplatesRequest / CompleteRequest fails cargo semver-checks constructible_struct_adds_field (222/223 pass, 1 MAJOR), so pmcp requires a 3.0 against the ROADMAP's additive-2.x milestone scope. WIRE bytes are unaffected (Option + default + skip_serializing_if). Three options in deferred-items.md: accept major; accept major + mark non_exhaustive; or revert the fields and read a raw params._meta at HTTP ingress instead (zero API change).
 
 ## Deferred Items
 
@@ -157,8 +162,8 @@ Items deferred by design for this milestone (design §7 / REQUIREMENTS v2):
 
 ## Session Continuity
 
-Last session: 2026-07-25T05:14:00.044Z
-Stopped at: Completed 113-03-PLAN.md
+Last session: 2026-07-25T06:23:37.894Z
+Stopped at: Completed 113-04-PLAN.md
 Resume file: None
 
 ## Performance Metrics
@@ -194,3 +199,4 @@ Resume file: None
 | Phase 113 P01 | 28min | 3 tasks | 3 files |
 | Phase 113 P02 | 42min | 3 tasks | 7 files |
 | Phase 113 P03 | 78min | 3 tasks tasks | 7 files files |
+| Phase 113 P04 | 118min | 4 tasks | 11 files |
