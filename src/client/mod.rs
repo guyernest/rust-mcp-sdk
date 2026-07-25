@@ -221,15 +221,19 @@ enum RoundOutcome {
 
 /// What the whole MRTR loop produced.
 ///
-/// `unfulfilled` is `Some` exactly when the loop stopped because no registered
-/// handler could answer the server's `inputRequests` — the ONE case where
-/// `raw_result` is an `input_required` result rather than a completed one.
+/// A two-variant enum rather than a struct with an `Option`: the struct form
+/// needed six doc lines to state the invariant "`unfulfilled` is `Some` exactly
+/// when `raw_result` is an `input_required` result", and paid a full deep clone
+/// of the server's result body to populate a field that BOTH consumers
+/// provably never read in that case (each returns early on `unfulfilled`).
+/// As an enum the invariant is type-enforced and the clone is unrepresentable.
 #[derive(Debug)]
-struct MrtrLoopOutcome {
-    /// The verbatim `result` object of the final response.
-    raw_result: serde_json::Value,
-    /// The parsed unfulfilled continuation, when there is one.
-    unfulfilled: Option<crate::types::mrtr::InputRequiredResult>,
+enum MrtrLoopOutcome {
+    /// The loop finished: the verbatim `result` object of the final response.
+    Complete(serde_json::Value),
+    /// The loop stopped because no registered handler could answer the server's
+    /// `inputRequests`.
+    Unfulfilled(Box<crate::types::mrtr::InputRequiredResult>),
 }
 
 /// MCP client for connecting to servers.
@@ -3411,13 +3415,15 @@ impl<T: Transport> Client<T> {
         // `resultType` this build has never heard of (e.g. Phase 114's
         // `"task"`), and including a result with no `resultType` at all. That
         // is what lets later result types compose without touching this loop.
-        if result.get("resultType").and_then(serde_json::Value::as_str)
+        if result
+            .get(crate::types::mrtr::RESULT_TYPE_KEY)
+            .and_then(serde_json::Value::as_str)
             != Some(INPUT_REQUIRED_RESULT_TYPE)
         {
             return RoundOutcome::Terminal(result);
         }
 
-        let parsed = match serde_json::from_value::<InputRequiredResult>(result.clone()) {
+        let parsed = match <InputRequiredResult as serde::Deserialize>::deserialize(&result) {
             Ok(parsed) => parsed,
             Err(error) => {
                 // A malformed `input_required` is not something a retry can
@@ -3432,7 +3438,12 @@ impl<T: Transport> Client<T> {
         // principal-bound continuation), so it is only ever moved — never read.
         let request_state = parsed.request_state.clone();
 
-        let Some(requests) = parsed.input_requests.clone() else {
+        // Borrowed, not cloned: `fold_input_requests` takes `&InputRequests` and
+        // `parsed` keeps its own copy. Cloning here deep-copied every elicitation
+        // schema and every `CreateMessageParams` once per round, purely to dodge
+        // a borrow/move conflict with the `Unfulfilled(Box::new(parsed))` arm —
+        // which binding the fold result to a local resolves under NLL.
+        let Some(requests) = parsed.input_requests.as_ref() else {
             // Server-side load shedding: `requestState` only, no questions.
             // The client MAY retry immediately, and no handler is invoked.
             return RoundOutcome::Continue(MrtrRequestParams {
@@ -3441,7 +3452,7 @@ impl<T: Transport> Client<T> {
             });
         };
 
-        match self.fold_input_requests(&requests).await {
+        match self.fold_input_requests(requests).await {
             FoldOutcome::Fulfilled(responses) => RoundOutcome::Continue(MrtrRequestParams {
                 input_responses: Some(responses),
                 request_state,
@@ -3484,16 +3495,10 @@ impl<T: Transport> Client<T> {
             };
             match self.mrtr_round_step(result).await {
                 RoundOutcome::Terminal(raw_result) => {
-                    return Ok(MrtrLoopOutcome {
-                        raw_result,
-                        unfulfilled: None,
-                    })
+                    return Ok(MrtrLoopOutcome::Complete(raw_result))
                 },
                 RoundOutcome::Unfulfilled(parsed) => {
-                    return Ok(MrtrLoopOutcome {
-                        raw_result: parsed.raw.clone(),
-                        unfulfilled: Some(*parsed),
-                    })
+                    return Ok(MrtrLoopOutcome::Unfulfilled(parsed))
                 },
                 RoundOutcome::Continue(mrtr) => {
                     // `splice_mrtr_params` REMOVES both keys before inserting,
@@ -3513,22 +3518,28 @@ impl<T: Transport> Client<T> {
     /// Deserialize a completed MRTR result, or convert an unfulfilled one into
     /// the typed client-local error the EXISTING methods return.
     fn mrtr_result_or_error<R: serde::de::DeserializeOwned>(outcome: MrtrLoopOutcome) -> Result<R> {
-        if let Some(unfulfilled) = outcome.unfulfilled {
-            return Err(Error::input_required_unfulfilled(unfulfilled));
+        match outcome {
+            MrtrLoopOutcome::Unfulfilled(unfulfilled) => {
+                Err(Error::input_required_unfulfilled(*unfulfilled))
+            },
+            MrtrLoopOutcome::Complete(raw) => {
+                serde_json::from_value(raw).map_err(|e| Error::parse(e.to_string()))
+            },
         }
-        serde_json::from_value(outcome.raw_result).map_err(|e| Error::parse(e.to_string()))
     }
 
     /// Map a loop outcome onto the additive [`MrtrOutcome`] return type.
     fn mrtr_outcome<R: serde::de::DeserializeOwned>(
         outcome: MrtrLoopOutcome,
     ) -> Result<crate::types::mrtr::MrtrOutcome<R>> {
-        if let Some(unfulfilled) = outcome.unfulfilled {
-            return Ok(crate::types::mrtr::MrtrOutcome::InputRequired(unfulfilled));
+        match outcome {
+            MrtrLoopOutcome::Unfulfilled(unfulfilled) => {
+                Ok(crate::types::mrtr::MrtrOutcome::InputRequired(*unfulfilled))
+            },
+            MrtrLoopOutcome::Complete(raw) => serde_json::from_value(raw)
+                .map(crate::types::mrtr::MrtrOutcome::Complete)
+                .map_err(|e| Error::parse(e.to_string())),
         }
-        serde_json::from_value(outcome.raw_result)
-            .map(crate::types::mrtr::MrtrOutcome::Complete)
-            .map_err(|e| Error::parse(e.to_string()))
     }
 
     /// The `tools/call` params object, byte-identical to what the typed path

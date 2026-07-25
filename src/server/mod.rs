@@ -1429,46 +1429,20 @@ impl Server {
         // threaded into dispatch. Inert on v1 / non-opted-in / non-eligible
         // requests, so the legacy path is byte-for-byte unchanged.
         #[cfg(feature = "streamable-http")]
-        let mrtr_target = protocol_context
-            .as_ref()
-            .filter(|context| context.era == crate::types::protocol::Era::V2)
-            .and_then(|_| crate::server::core::mrtr_binding_parts(&request));
-        #[cfg(feature = "streamable-http")]
-        let mrtr_principal = crate::server::core::MrtrPrincipal {
-            authenticated_subject: auth_context.as_ref().map(|ctx| ctx.subject.as_str()),
-            has_auth_provider: self.auth_provider.is_some(),
+        let (mrtr, protocol_context) = match crate::server::core::MrtrRound::begin(
+            &request,
+            protocol_context,
+            auth_context.as_ref().map(|ctx| ctx.subject.as_str()),
+            self.auth_provider.is_some(),
+            self.request_state_codec(),
+        ) {
+            Ok(resolved) => resolved,
+            // The single-source envelope builder, rather than a hand-written
+            // `JSONRPCResponse` literal re-spelling `"2.0"` and `data: None`.
+            Err((code, message)) => {
+                return crate::server::task_dispatch::error_response(id, code, message.to_string())
+            },
         };
-        // Owned copy of the ONE identity anchor, so egress can rebuild the same
-        // binding after `auth_context` has moved into dispatch.
-        #[cfg(feature = "streamable-http")]
-        let mrtr_subject: Option<String> = mrtr_target
-            .as_ref()
-            .and_then(|_| mrtr_principal.authenticated_subject.map(str::to_string));
-        #[cfg(feature = "streamable-http")]
-        let (protocol_context, mrtr_round) =
-            match crate::server::core::mrtr_ingest(&crate::server::core::MrtrIngestInputs {
-                target: mrtr_target.as_ref(),
-                protocol_context: protocol_context.as_ref(),
-                principal: mrtr_principal,
-                codec: self.request_state_codec(),
-            })
-            .apply(protocol_context)
-            {
-                Ok(resolved) => resolved,
-                Err((code, message)) => {
-                    return JSONRPCResponse {
-                        jsonrpc: "2.0".to_string(),
-                        id,
-                        payload: crate::types::jsonrpc::ResponsePayload::Error(
-                            crate::types::jsonrpc::JSONRPCError {
-                                code,
-                                message: message.to_string(),
-                                data: None,
-                            },
-                        ),
-                    };
-                },
-            };
 
         let mut response = match request {
             Request::Client(ref boxed_req)
@@ -1530,18 +1504,10 @@ impl Server {
         // `input_required` result carrying a freshly minted `requestState`, and
         // STRIPS the pmcp-internal signal key on every other path.
         #[cfg(feature = "streamable-http")]
-        let disposition = crate::server::core::mrtr_egress(
+        let disposition = mrtr.finish(
             &mut response,
-            &crate::server::core::MrtrEgressInputs {
-                target: mrtr_target.as_ref(),
-                protocol_context: protocol_context.as_ref(),
-                principal: crate::server::core::MrtrPrincipal {
-                    authenticated_subject: mrtr_subject.as_deref(),
-                    has_auth_provider: self.auth_provider.is_some(),
-                },
-                codec: self.request_state_codec(),
-                round: mrtr_round,
-            },
+            protocol_context.as_ref(),
+            self.request_state_codec(),
         );
         #[cfg(not(feature = "streamable-http"))]
         let disposition = crate::server::core::ResponseDisposition::Complete;

@@ -431,7 +431,7 @@ impl Error {
         Self::Protocol {
             // The field is `ErrorCode`, not a bare `i32` — the value comes
             // from the centralized VERS-06 table and is WRAPPED here.
-            code: ErrorCode(crate::types::protocol::error_codes::INTERNAL_ERROR),
+            code: ErrorCode::INTERNAL_ERROR,
             message: format!(
                 "MRTR round limit exceeded: gave up after {limit} rounds without a complete result"
             ),
@@ -504,7 +504,7 @@ impl Error {
             serde_json::to_value(&result).unwrap_or(serde_json::Value::Null)
         };
         Self::Protocol {
-            code: ErrorCode(crate::types::protocol::error_codes::INTERNAL_ERROR),
+            code: ErrorCode::INTERNAL_ERROR,
             message: "the server requires more input, and no registered handler could supply it — \
                  see Error::input_required_result() or the *_mrtr client methods"
                 .to_string(),

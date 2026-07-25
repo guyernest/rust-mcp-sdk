@@ -83,7 +83,15 @@ pub(crate) const REQUEST_STATE_KEY: &str = "requestState";
 /// Wire key for the server→client input-request map (inside `result`).
 pub(crate) const INPUT_REQUESTS_KEY: &str = "inputRequests";
 
-/// Wire value of `resultType` on an [`InputRequiredResult`].
+/// Wire KEY of the v2 result discriminator (top level, inside `result`).
+///
+/// The one top-level reserved key that used to be spelled as a bare literal
+/// while its three siblings came from this block — and the most
+/// protocol-critical of them, since the client's whole gather->resend loop
+/// branches on it. Server and client now read the key AND the value from here.
+pub(crate) const RESULT_TYPE_KEY: &str = "resultType";
+
+/// Wire value of [`RESULT_TYPE_KEY`] on an [`InputRequiredResult`].
 pub(crate) const INPUT_REQUIRED_RESULT_TYPE: &str = "input_required";
 
 // ===========================================================================
@@ -116,34 +124,38 @@ pub(crate) struct MrtrMethod {
 /// forbidden method reads it, and so does the client-side retry loop.
 pub(crate) const MRTR_METHODS: [MrtrMethod; 3] = [
     MrtrMethod {
-        method: "tools/call",
+        method: CALL_TOOL_METHOD,
         name_key: "name",
         salient: &["name", "arguments"],
     },
     MrtrMethod {
-        method: "prompts/get",
+        method: GET_PROMPT_METHOD,
         name_key: "name",
         salient: &["name", "arguments"],
     },
     MrtrMethod {
-        method: "resources/read",
+        method: READ_RESOURCE_METHOD,
         name_key: "uri",
         salient: &["uri"],
     },
 ];
 
-/// `tools/call`, sourced from the ONE table so no caller spells it by hand.
-///
-/// The row order is pinned by
-/// `mrtr_method_constants_match_the_table` — reordering [`MRTR_METHODS`]
-/// without updating these indices fails that test loudly.
-pub(crate) const CALL_TOOL_METHOD: &str = MRTR_METHODS[0].method;
+// The three method constants are the LITERALS and the table REFERENCES them —
+// not the other way round. Deriving them as `MRTR_METHODS[0].method` made row
+// order a load-bearing positional contract defended only by a test that
+// re-spelled the same literals it was meant to protect: inserting or reordering
+// a row silently repointed `CALL_TOOL_METHOD` at `prompts/get`, and the client
+// would then have sent tool params under the prompts method. This direction has
+// no index to get wrong.
+
+/// `tools/call` — the spelling the table row references.
+pub(crate) const CALL_TOOL_METHOD: &str = "tools/call";
 
 /// `prompts/get`. See [`CALL_TOOL_METHOD`].
-pub(crate) const GET_PROMPT_METHOD: &str = MRTR_METHODS[1].method;
+pub(crate) const GET_PROMPT_METHOD: &str = "prompts/get";
 
 /// `resources/read`. See [`CALL_TOOL_METHOD`].
-pub(crate) const READ_RESOURCE_METHOD: &str = MRTR_METHODS[2].method;
+pub(crate) const READ_RESOURCE_METHOD: &str = "resources/read";
 
 /// The table row for `method`, if it is an MRTR method.
 ///

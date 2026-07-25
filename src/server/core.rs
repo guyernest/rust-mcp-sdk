@@ -1304,18 +1304,18 @@ pub(crate) fn own_reserved_result_fields(
     let wire_result_type = disposition.as_wire_str();
     if let Some(object) = result.as_object_mut() {
         if object
-            .get("resultType")
+            .get(crate::types::mrtr::RESULT_TYPE_KEY)
             .is_some_and(|existing| existing != wire_result_type)
         {
             tracing::warn!(
                 target: "mcp.v2",
-                field = "resultType",
+                field = crate::types::mrtr::RESULT_TYPE_KEY,
                 "overwrote a handler-supplied reserved result field with the server-computed \
                  value"
             );
         }
         object.insert(
-            "resultType".to_string(),
+            crate::types::mrtr::RESULT_TYPE_KEY.to_string(),
             Value::String(wire_result_type.to_string()),
         );
         if !mrtr_owned {
@@ -2233,6 +2233,124 @@ fn seal_input_required(
     Ok(ResponseDisposition::InputRequired)
 }
 
+/// One request's MRTR round, owned across the dispatch `.await`.
+///
+/// # Why this exists
+///
+/// `mrtr_ingest` and `mrtr_egress` were always shared, but the ~120 lines of
+/// PLUMBING around them — derive the target, build [`MrtrPrincipal`], clone the
+/// subject so it outlives `auth_context` moving into dispatch, `.apply()` the
+/// verdict, map the rejection, thread `round` to egress, rebuild the principal —
+/// were copy-pasted at BOTH dispatch sites (`ServerCore::handle_request` and
+/// `Server::handle_request_with_context`), ~85% byte-identical, kept in step by a
+/// "twin-site parity" comment rather than by the compiler.
+///
+/// That was survivable while egress could only fail to emit `input_required`.
+/// It stopped being survivable when plan 09 gave egress four fail-closed exits
+/// (malformed signal, forbidden method, undeclared capability, mint failure):
+/// a site that assembled `MrtrEgressInputs` even slightly differently would emit
+/// DIVERGENT wire-visible JSON-RPC errors depending on which dispatch path the
+/// request took. Now there is one assembly, so divergence is structurally
+/// impossible instead of review-enforced.
+///
+/// Holds no borrows, so nothing is kept alive across the handler `.await` beyond
+/// the binding egress genuinely needs.
+#[cfg(all(feature = "streamable-http", not(target_arch = "wasm32")))]
+pub(crate) struct MrtrRound {
+    /// The `(method, params)` binding this request is bound to, or `None` when
+    /// the request is v1 / non-opted-in / not MRTR-eligible.
+    target: Option<(&'static str, Value)>,
+    /// The ONE owned identity anchor, so egress rebuilds the SAME binding after
+    /// `auth_context` has moved into dispatch.
+    subject: Option<String>,
+    /// Whether this server has an auth provider configured (fail-closed input).
+    has_auth_provider: bool,
+    /// The round a verified continuation arrived on; egress mints at `round + 1`.
+    round: u8,
+}
+
+#[cfg(all(feature = "streamable-http", not(target_arch = "wasm32")))]
+impl MrtrRound {
+    /// Ingress: verify a presented `requestState` and fold the D-15 verdict into
+    /// the context threaded into dispatch.
+    ///
+    /// `Err((code, message))` is a rejection the caller turns into its own
+    /// site-appropriate error response — the ONE thing that legitimately differs
+    /// between the two dispatch sites.
+    ///
+    /// Inert on v1 / non-opted-in / non-eligible requests, so the legacy path is
+    /// byte-for-byte unchanged.
+    pub(crate) fn begin(
+        request: &Request,
+        context: Option<crate::types::protocol::ProtocolContext>,
+        auth_subject: Option<&str>,
+        has_auth_provider: bool,
+        codec: Option<&crate::server::request_state::RequestStateCodec>,
+    ) -> std::result::Result<
+        (Self, Option<crate::types::protocol::ProtocolContext>),
+        (i32, &'static str),
+    > {
+        // Era-gated before the binding is derived, so v1 runs ZERO MRTR code and
+        // pays no deep clone of the request params.
+        let target = context
+            .as_ref()
+            .filter(|context| context.era == crate::types::protocol::Era::V2)
+            .and_then(|_| mrtr_binding_parts(request));
+        // Owned once, used by BOTH halves. `mrtr_ingest` short-circuits to
+        // `Inert` on a `None` target before it ever reads the principal, so
+        // deriving the subject from the target here is observationally identical
+        // to the previous split (ingest borrowed from `auth_context`, egress read
+        // this owned copy).
+        let subject = target
+            .as_ref()
+            .and_then(|_| auth_subject.map(str::to_string));
+        let (context, round) = mrtr_ingest(&MrtrIngestInputs {
+            target: target.as_ref(),
+            protocol_context: context.as_ref(),
+            principal: MrtrPrincipal {
+                authenticated_subject: subject.as_deref(),
+                has_auth_provider,
+            },
+            codec,
+        })
+        .apply(context)?;
+        Ok((
+            Self {
+                target,
+                subject,
+                has_auth_provider,
+                round,
+            },
+            context,
+        ))
+    }
+
+    /// Egress: mint an `input_required` continuation, or strip-only.
+    ///
+    /// The SINGLE assembly of [`MrtrEgressInputs`] — see the type docs for why
+    /// having two was a wire-divergence hazard.
+    pub(crate) fn finish(
+        &self,
+        response: &mut JSONRPCResponse,
+        context: Option<&crate::types::protocol::ProtocolContext>,
+        codec: Option<&crate::server::request_state::RequestStateCodec>,
+    ) -> ResponseDisposition {
+        mrtr_egress(
+            response,
+            &MrtrEgressInputs {
+                target: self.target.as_ref(),
+                protocol_context: context,
+                principal: MrtrPrincipal {
+                    authenticated_subject: self.subject.as_deref(),
+                    has_auth_provider: self.has_auth_provider,
+                },
+                codec,
+                round: self.round,
+            },
+        )
+    }
+}
+
 #[async_trait]
 impl ProtocolHandler for ServerCore {
     async fn handle_request(
@@ -2282,30 +2400,13 @@ impl ProtocolHandler for ServerCore {
         // into the context threaded into dispatch. Inert on v1 / non-opted-in /
         // non-eligible requests, so the legacy path is unchanged.
         #[cfg(feature = "streamable-http")]
-        let mrtr_target = protocol_context
-            .as_ref()
-            .filter(|context| context.era == crate::types::protocol::Era::V2)
-            .and_then(|_| mrtr_binding_parts(&request));
-        #[cfg(feature = "streamable-http")]
-        let mrtr_principal = MrtrPrincipal {
-            authenticated_subject: auth_context.as_ref().map(|ctx| ctx.subject.as_str()),
-            has_auth_provider: self.auth_provider.is_some(),
-        };
-        // Owned copy of the ONE identity anchor, so egress can rebuild the same
-        // binding after `auth_context` has moved into dispatch.
-        #[cfg(feature = "streamable-http")]
-        let mrtr_subject: Option<String> = mrtr_target
-            .as_ref()
-            .and_then(|_| mrtr_principal.authenticated_subject.map(str::to_string));
-        #[cfg(feature = "streamable-http")]
-        let (protocol_context, mrtr_round) = match mrtr_ingest(&MrtrIngestInputs {
-            target: mrtr_target.as_ref(),
-            protocol_context: protocol_context.as_ref(),
-            principal: mrtr_principal,
-            codec: self.request_state_codec(),
-        })
-        .apply(protocol_context)
-        {
+        let (mrtr, protocol_context) = match MrtrRound::begin(
+            &request,
+            protocol_context,
+            auth_context.as_ref().map(|ctx| ctx.subject.as_str()),
+            self.auth_provider.is_some(),
+            self.request_state_codec(),
+        ) {
             Ok(resolved) => resolved,
             Err((code, message)) => return Self::error_response(id, code, message.to_string()),
         };
@@ -2320,18 +2421,10 @@ impl ProtocolHandler for ServerCore {
         // `requestState`, and STRIP the pmcp-internal signal key on every other
         // path so it never reaches the wire.
         #[cfg(feature = "streamable-http")]
-        let disposition = mrtr_egress(
+        let disposition = mrtr.finish(
             &mut response,
-            &MrtrEgressInputs {
-                target: mrtr_target.as_ref(),
-                protocol_context: protocol_context.as_ref(),
-                principal: MrtrPrincipal {
-                    authenticated_subject: mrtr_subject.as_deref(),
-                    has_auth_provider: self.auth_provider.is_some(),
-                },
-                codec: self.request_state_codec(),
-                round: mrtr_round,
-            },
+            protocol_context.as_ref(),
+            self.request_state_codec(),
         );
         #[cfg(not(feature = "streamable-http"))]
         let disposition = ResponseDisposition::Complete;

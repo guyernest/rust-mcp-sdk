@@ -519,7 +519,13 @@ const fn resumability_active_for(
     cfg_has_event_store: bool,
     era: Option<crate::types::protocol::Era>,
 ) -> bool {
-    !matches!(era, Some(crate::types::protocol::Era::V2)) && cfg_has_event_store
+    // The RULE is shared with `sessions_active_for` — both facilities are
+    // "v1-only, and only when configured". Sharing the pure predicate does NOT
+    // couple the two GATES (the point of keeping them independent): each still
+    // reads its own config field, `event_store` here and `session_id_generator`
+    // there. What it removes is a second copy of the era rule that had to be
+    // edited in lockstep, along with a cloned truth table and a cloned proptest.
+    sessions_active_for(cfg_has_event_store, era)
 }
 
 /// Is resumability live for this request? THE single reader of the event
@@ -617,20 +623,20 @@ fn envelope_for_live_request(
     payload: crate::types::jsonrpc::ResponsePayload<serde_json::Value, crate::types::JSONRPCError>,
     live_id: crate::types::RequestId,
 ) -> crate::types::JSONRPCResponse {
-    let expected = live_id.clone();
-    let response = match payload {
+    // No `debug_assert_eq!` that the response carries `live_id`: this function
+    // CONSTRUCTS the response from `live_id`, so the assertion could not fail for
+    // any input — the argument shape IS the guarantee. It also cost a `RequestId`
+    // clone (a heap `String` for the UUID ids this transport uses) on every
+    // direct response, because `debug_assert_eq!` compiles to a runtime `false`
+    // branch rather than `#[cfg]` — so the binding survived into release builds.
+    match payload {
         crate::types::jsonrpc::ResponsePayload::Result(result) => {
             crate::types::JSONRPCResponse::success(live_id, result)
         },
         crate::types::jsonrpc::ResponsePayload::Error(error) => {
             crate::types::JSONRPCResponse::error(live_id, error)
         },
-    };
-    debug_assert_eq!(
-        response.id, expected,
-        "a direct response must carry the LIVE request id"
-    );
-    response
+    }
 }
 
 /// The decoded `MCP-Protocol-Version` header, classified for the era matrix.

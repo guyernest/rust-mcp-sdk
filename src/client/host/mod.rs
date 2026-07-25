@@ -153,26 +153,14 @@ pub fn classify_host_request(request: &Request) -> HostRequestKind {
 #[doc(hidden)]
 #[must_use]
 pub fn classify_input_request(request: &InputRequest) -> HostRequestKind {
-    // Routed through the STRING classifier so there is exactly one mapping and
-    // the production path is the one the property test exercises.
-    classify_input_method(request.kind().wire_method())
-}
-
-/// Classify an MRTR input-request METHOD STRING.
-///
-/// The string half of [`classify_input_request`], for callers that hold a raw
-/// method name rather than a decoded [`InputRequest`]. Anything outside the
-/// three spec-permitted kinds is [`HostRequestKind::Unhandled`]. Total and
-/// non-panicking for any input.
-pub(crate) fn classify_input_method(method: &str) -> HostRequestKind {
-    [
-        InputRequestKind::Elicitation,
-        InputRequestKind::Sampling,
-        InputRequestKind::Roots,
-    ]
-    .into_iter()
-    .find(|kind| kind.wire_method() == method)
-    .map_or(HostRequestKind::Unhandled, host_kind_of)
+    // `InputRequest::kind()` is already the total, exhaustive, const enum->kind
+    // mapping. This used to route through a string classifier that took
+    // `request.kind().wire_method()` and linearly scanned the same three kinds
+    // to recover the kind it had just been handed — a typed value round-tripped
+    // through its own wire spelling and back. The string half had no caller of
+    // its own, and the detour manufactured an `Unhandled` outcome that is
+    // structurally unreachable from a decoded `InputRequest`.
+    host_kind_of(request.kind())
 }
 
 /// The ONE mapping from an MRTR kind to its host-handler kind.
@@ -348,30 +336,6 @@ mod tests {
         }
 
         #[test]
-        fn classify_method_maps_the_three_wire_methods() {
-            assert_eq!(
-                classify_input_method("elicitation/create"),
-                HostRequestKind::Elicitation
-            );
-            assert_eq!(
-                classify_input_method("sampling/createMessage"),
-                HostRequestKind::Sampling
-            );
-            assert_eq!(classify_input_method("roots/list"), HostRequestKind::Roots);
-        }
-
-        #[test]
-        fn classify_method_is_unhandled_for_anything_else() {
-            for method in ["tools/call", "", "ping", "Elicitation/Create"] {
-                assert_eq!(
-                    classify_input_method(method),
-                    HostRequestKind::Unhandled,
-                    "{method} must not classify as a host kind"
-                );
-            }
-        }
-
-        #[test]
         fn preflight_passes_when_every_kind_has_a_handler() {
             let registry = registry_with_elicitation();
             let mut requests = InputRequests::new();
@@ -420,14 +384,6 @@ mod tests {
             let mut requests = InputRequests::new();
             requests.insert("a".to_string(), sampling_entry());
             assert!(registry.preflight_input_requests(&requests).is_ok());
-        }
-
-        proptest::proptest! {
-            /// Total and non-panicking over arbitrary method strings.
-            #[test]
-            fn classify_input_method_never_panics(method in ".{0,64}") {
-                let _ = classify_input_method(&method);
-            }
         }
     }
 }
