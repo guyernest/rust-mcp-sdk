@@ -224,3 +224,81 @@ D-113-A was untouched by the revert: it is serde-attributes-only and semver-clea
 
 The 15 live tests in `tests/v2_stateless_http.rs`, the 25 Phase-112 baseline tests
 and the 7 harness smoke tests all pass under the shipped design.
+
+---
+
+## D-113-E — the v2 client cannot read a structured JSON-RPC error off a 4xx
+
+**Found during:** plan 05 (recorded in `113-05-SUMMARY.md`, not here)
+**Severity:** HIGH — blocks any client-side dispatch on `error.code`
+**Owner:** plan 07
+**Status:** ✅ **RESOLVED** in plan 07, commit `cec054d4`
+
+`StreamableHttpTransport::post_body` turned ANY non-2xx into
+`Err(TransportError::Request("Request failed with status: …"))`, discarding the
+JSON-RPC envelope. Plan 04 deliberately maps the v2 error codes onto 4xx statuses
+(`-32601` at 404; `-32020`/`-32021`/`-32022` at 400) and plan 06 answers a
+tampered or expired `requestState` with `-32602` at 400, so a v2 client saw all of
+them as one opaque transport error.
+
+**Resolution.** A new `jsonrpc_error_envelope` reader: on the **v2 path only**, a
+non-2xx whose body is a well-formed JSON-RPC 2.0 frame carrying an `error` member
+is fed through the normal response channel and surfaces as `Error::Protocol`
+(hence `error_code()`, and plan 09's `-32021` becomes actionable). It is
+deliberately strict about `jsonrpc == "2.0"` **and** the presence of `error`, so a
+proxy's HTML page or JSON error document is never laundered into what a caller
+reads as a server-authored protocol error — those still fail on the status. v1 is
+gated out by the `v2_mode` latch and is byte-identical to prior releases.
+
+Pinned by three unit tests in `src/shared/streamable_http.rs`
+(`v2_error_envelope::{v2_surfaces_a_jsonrpc_error_carried_on_a_400,
+v2_falls_back_to_the_status_error_for_a_non_envelope_body,
+v1_still_errors_on_the_status_alone}`), driven against a `mockito` server.
+
+---
+
+## D-113-F — `Client::send_notification` never received plan 05's v2 branch
+
+**Found during:** plan 07 (confirmed, not caused, by this plan)
+**Severity:** MEDIUM — every client→server message that is NOT a request is
+rejected at HTTP 400 by pmcp's own v2 gate
+**Owner:** plan 13 (client subscriptions/listen) — the next plan whose work sits
+on that path
+**Status:** OPEN
+
+Plan 05 put the v2 branch in `Client::dispatch_request`: on v2 the client
+assembles the JSON-RPC frame, splices the reserved `params._meta` era keys, and
+calls `Transport::send_raw`. `Client::send_notification` was not given the same
+treatment — it still builds a typed `TransportMessage::Notification` and calls
+`Transport::send`. The transport then emits `MCP-Protocol-Version: 2026-07-28`
+plus the routing headers (they are derived from the body, which does carry a
+`method`) while the body carries **no `_meta` era key**, which pmcp's own
+`classify_v2_request` matrix classifies as `-32020 HEADER_MISMATCH` at HTTP 400.
+
+Affected outbound messages on a v2 client:
+
+| Path | Caller |
+|------|--------|
+| `Client::cancel_request` | `notifications/cancelled` |
+| `Client::send_progress` | `notifications/progress` |
+| `Client::notify_roots_list_changed` / `send_roots_list_changed` | `notifications/roots/list_changed` |
+| the host-reply `send` inside `Client::dispatch_request` | client→server RESPONSES to a server-initiated `sampling`/`elicitation` request |
+
+**Why plan 07 did NOT fix it.** The MRTR loop sends nothing that is not a request.
+`inputRequests` are answered **locally** from the host registry and the answers
+travel back as `params.inputResponses` on the next `tools/call` / `prompts/get` /
+`resources/read` **request**, which goes through `dispatch_request`'s v2 raw-frame
+path and is fully conformant. The fourth row above (host replies) is also
+unreachable on a conformant v2 connection, because the spec forbids a v2 server
+sending independent requests — MRTR replaces that direction entirely. So the gap
+never blocked this plan, and a broad refactor here would have been scope creep
+(executor SCOPE BOUNDARY).
+
+**Fix shape for the owner.** Give `send_notification` the same `is_v2()` branch
+`dispatch_request` has: build `JSONRPCNotification` via `create_notification`,
+splice the reserved `_meta` with the existing `splice_v2_meta`, serialize, and
+`send_raw`. The host-reply `send` needs the same treatment if v1-style
+server-initiated requests are ever to be answered on a v2 connection. Note
+`send_raw`'s `is_notification` flag is currently hard-coded `false`, which
+suppresses the 202-Accepted/SSE-start behavior — a notification path needs that
+parameter threaded through.
