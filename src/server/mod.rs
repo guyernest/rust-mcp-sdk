@@ -5217,8 +5217,15 @@ mod tests {
             panic!("expected result");
         };
         assert_eq!(v["resultType"], "complete");
-        assert_eq!(v["serverInfo"]["name"], "envelope-server");
-        assert_eq!(v["serverInfo"]["version"], "3.2.1");
+        // Plan 113-09 Task 3: the schema places server identity INSIDE
+        // `result._meta`, not at the top level.
+        let server_info = &v["_meta"][crate::server::core::RESERVED_SERVER_INFO_KEY];
+        assert_eq!(server_info["name"], "envelope-server");
+        assert_eq!(server_info["version"], "3.2.1");
+        assert!(
+            v.get("serverInfo").is_none(),
+            "the envelope must not write a top-level serverInfo: {v}"
+        );
     }
 
     /// v1 byte-identity at the twin site: a non-opted-in `Server` gains NO
@@ -5240,6 +5247,10 @@ mod tests {
         };
         assert!(v.get("resultType").is_none(), "v1 must not gain resultType");
         assert!(v.get("serverInfo").is_none(), "v1 must not gain serverInfo");
+        assert!(
+            v.get("_meta").is_none(),
+            "v1 must not gain the _meta the v2 envelope creates: {v}"
+        );
     }
 
     /// A non-opted-in high-level `Server` runs zero era-detection: the handler

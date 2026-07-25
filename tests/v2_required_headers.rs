@@ -33,6 +33,7 @@ use pmcp::server::http_middleware::{
 };
 use pmcp::server::streamable_http_server::{StreamableHttpServer, StreamableHttpServerConfig};
 use pmcp::server::{PromptHandler, ResourceHandler, Server};
+use pmcp::testing::META_SERVER_INFO;
 use pmcp::types::prompts::GetPromptRequest;
 use pmcp::types::protocol::{ProtocolVersion, PROTOCOL_VERSION_2026_07_28 as V2};
 use pmcp::types::resources::ReadResourceRequest;
@@ -661,9 +662,16 @@ async fn v2_prompts_get_accepts_and_envelopes() {
         "v2 prompts/get result must carry resultType:complete: {}",
         r.body
     );
+    // Plan 113-09 Task 3: server identity lives INSIDE `result._meta` at the
+    // schema key, never as a top-level result key.
     assert!(
-        result.get("serverInfo").is_some_and(|v| v.is_object()),
-        "v2 prompts/get result must carry a serverInfo object: {}",
+        result["_meta"][META_SERVER_INFO].is_object(),
+        "v2 prompts/get result must carry _meta[{META_SERVER_INFO}]: {}",
+        r.body
+    );
+    assert!(
+        result.get("serverInfo").is_none(),
+        "v2 prompts/get must not carry a top-level serverInfo: {}",
         r.body
     );
     // Outbound headers echoed on success.
@@ -707,8 +715,13 @@ async fn v2_resources_read_accepts_and_envelopes() {
         r.body
     );
     assert!(
-        result.get("serverInfo").is_some_and(|v| v.is_object()),
-        "v2 resources/read result must carry a serverInfo object: {}",
+        result["_meta"][META_SERVER_INFO].is_object(),
+        "v2 resources/read result must carry _meta[{META_SERVER_INFO}]: {}",
+        r.body
+    );
+    assert!(
+        result.get("serverInfo").is_none(),
+        "v2 resources/read must not carry a top-level serverInfo: {}",
         r.body
     );
     assert_eq!(r.mcp_method.as_deref(), Some("resources/read"));
@@ -859,10 +872,18 @@ async fn server_discover_v2_returns_capability_projection_with_extensions() {
         "discover projection must carry the registered extension id: {}",
         r.body
     );
-    // serverInfo + resultType envelope present.
+    // serverInfo + resultType envelope present. `server/discover` is the one
+    // shape carrying BOTH: its own `ServerDiscoverResult.serverInfo` schema
+    // field (which the reserved-field registry deliberately does not own) and
+    // the envelope's `_meta` key that every v2 result gets.
     assert!(
         result.get("serverInfo").is_some_and(|v| v.is_object()),
-        "discover result must carry a serverInfo object: {}",
+        "discover result must keep its OWN serverInfo schema field: {}",
+        r.body
+    );
+    assert!(
+        result["_meta"][META_SERVER_INFO].is_object(),
+        "discover result must also carry _meta[{META_SERVER_INFO}]: {}",
         r.body
     );
     assert_eq!(

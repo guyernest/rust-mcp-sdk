@@ -1162,6 +1162,27 @@ impl ResponseDisposition {
     }
 }
 
+/// The reserved `result._meta` key the v2 envelope publishes the server's
+/// [`Implementation`] under.
+///
+/// `schema/draft/schema.ts` places server identity inside the result's
+/// `ResultMetaObject`, NOT as a top-level result key, and the conformance suite
+/// reads it from there. Phase 112 verified PRESENCE and had no conformance
+/// harness, so it attached the value one level too high; Phase 113 owns the v2
+/// response path and is the first phase graded by conformance, which makes this
+/// the cheap moment to correct it rather than a wire-visible break later.
+///
+/// This is the RESPONSE-side sibling of the REQUEST-side reserved keys
+/// (`RESERVED_PROTOCOL_VERSION_KEY`, `RESERVED_CLIENT_INFO_KEY`,
+/// `RESERVED_CLIENT_CAPABILITIES_KEY`) in `crate::types::protocol::context`,
+/// which live on `params._meta`. Same `io.modelcontextprotocol/*` namespace,
+/// opposite direction — hence the separate home next to the envelope that is its
+/// only writer.
+///
+/// It is a SERVER-OWNED reserved field: see [`own_reserved_result_fields`] for
+/// the full registry.
+pub(crate) const RESERVED_SERVER_INFO_KEY: &str = "io.modelcontextprotocol/serverInfo";
+
 /// Inject the v2-only response envelope (`resultType` + `serverInfo`) at the
 /// era-gated serialization boundary (Phase 112, VERS-07 / D-07 / D-08).
 ///
@@ -1244,10 +1265,15 @@ pub(crate) fn result_meta_object_mut(
 /// | Reserved key | Location | Server behavior when a handler already set it |
 /// |---|---|---|
 /// | `resultType` | top-level result | OVERWRITE with the disposition the server computed |
-/// | `serverInfo` | top-level result | OVERWRITE with the server's real `Implementation` |
+/// | `io.modelcontextprotocol/serverInfo` | `result._meta` | OVERWRITE with the server's real `Implementation` |
 /// | `requestState` | top-level result | REMOVE unless this egress minted it |
 /// | `inputRequests` | top-level result | REMOVE unless this egress produced it |
 /// | `dev.pmcp/mrtr` | `result._meta` | REMOVE always |
+///
+/// A TOP-LEVEL `serverInfo` is deliberately NOT in the registry: it is a
+/// legitimate schema field of `ServerDiscoverResult` and `InitializeResult`, and
+/// removing or overwriting it would corrupt those results. The reserved location
+/// is [`RESERVED_SERVER_INFO_KEY`] inside `_meta`, and only that one is owned.
 ///
 /// Every OTHER `_meta` key a handler set is preserved untouched — ownership
 /// applies to this enumerated set only. [`MRTR_SIGNAL_META_KEY`](crate::types::mrtr::MRTR_SIGNAL_META_KEY)
@@ -1292,10 +1318,6 @@ pub(crate) fn own_reserved_result_fields(
             "resultType".to_string(),
             Value::String(wire_result_type.to_string()),
         );
-        object.insert(
-            "serverInfo".to_string(),
-            serde_json::to_value(server_info).unwrap_or(Value::Null),
-        );
         if !mrtr_owned {
             for field in [
                 crate::types::mrtr::REQUEST_STATE_KEY,
@@ -1313,30 +1335,38 @@ pub(crate) fn own_reserved_result_fields(
         }
     }
 
+    // `_meta` is CREATED here when absent (v2 object results only — the era gate
+    // is above), and MERGED into when the handler already set other keys. The
+    // reserved key is INSERTED, so a handler-supplied server identity is
+    // overwritten rather than respected.
+    let Some(meta) = result_meta_object_mut(result) else {
+        return;
+    };
     // Defense in depth for the internal signal key. `mrtr_egress` — which strips
     // it unconditionally — is `streamable-http`-only by D-14, so on a build
-    // without that feature NOTHING else would remove it from a v2 result. Only
-    // an EXISTING `_meta` is inspected; this must not manufacture one.
-    if result.get("_meta").is_some() {
-        if let Some(meta) = result_meta_object_mut(result) {
-            if meta
-                .remove(crate::types::mrtr::MRTR_SIGNAL_META_KEY)
-                .is_some()
-            {
-                tracing::warn!(
-                    target: "mcp.v2",
-                    field = crate::types::mrtr::MRTR_SIGNAL_META_KEY,
-                    "removed the pmcp-internal MRTR signal from an outgoing result"
-                );
-            }
-            let emptied = meta.is_empty();
-            if emptied {
-                if let Some(object) = result.as_object_mut() {
-                    object.remove("_meta");
-                }
-            }
-        }
+    // without that feature NOTHING else would remove it from a v2 result.
+    if meta
+        .remove(crate::types::mrtr::MRTR_SIGNAL_META_KEY)
+        .is_some()
+    {
+        tracing::warn!(
+            target: "mcp.v2",
+            field = crate::types::mrtr::MRTR_SIGNAL_META_KEY,
+            "removed the pmcp-internal MRTR signal from an outgoing result"
+        );
     }
+    if meta.contains_key(RESERVED_SERVER_INFO_KEY) {
+        tracing::warn!(
+            target: "mcp.v2",
+            field = RESERVED_SERVER_INFO_KEY,
+            "overwrote a handler-supplied reserved _meta field with the server's real \
+             Implementation"
+        );
+    }
+    meta.insert(
+        RESERVED_SERVER_INFO_KEY.to_string(),
+        serde_json::to_value(server_info).unwrap_or(Value::Null),
+    );
 }
 
 /// Build the v2 `server/discover` response (Phase 112, VERS-04, D-09/D-10).
@@ -3334,7 +3364,7 @@ mod tests {
     /// the tests that pin PLACEMENT — the latter index the nesting directly and
     /// are the ones that must fail if the placement drifts.
     fn server_info_of(result: &Value) -> &Value {
-        &result["serverInfo"]
+        &result["_meta"][RESERVED_SERVER_INFO_KEY]
     }
 
     /// A v2 OBJECT success result gains inner-result `resultType:"complete"` and
@@ -3442,8 +3472,9 @@ mod tests {
         assert!(v["inputRequests"]["x"].is_object());
     }
 
-    /// A handler-set `serverInfo` is OVERWRITTEN with the server's real
-    /// `Implementation` — server identity is not a handler claim (T-113-59).
+    /// A handler-set `io.modelcontextprotocol/serverInfo` is OVERWRITTEN with
+    /// the server's real `Implementation` — server identity is not a handler
+    /// claim (T-113-59).
     #[test]
     fn handler_supplied_server_info_is_overwritten() {
         let info = Implementation::new("real-server", "2.0.0");
@@ -3451,7 +3482,9 @@ mod tests {
         let mut resp = result_response(
             1,
             serde_json::json!({
-                "serverInfo": { "name": "impersonated", "version": "0.0.0" },
+                "_meta": {
+                    RESERVED_SERVER_INFO_KEY: { "name": "impersonated", "version": "0.0.0" },
+                },
             }),
         );
         inject_v2_result_envelope(&mut resp, Some(&ctx), &info, ResponseDisposition::Complete);
@@ -3460,6 +3493,165 @@ mod tests {
         };
         assert_eq!(server_info_of(&v)["name"], "real-server");
         assert_eq!(server_info_of(&v)["version"], "2.0.0");
+    }
+
+    // ---- Phase 113 Plan 09 Task 3: serverInfo lives inside result._meta ----
+
+    /// The schema places server identity at
+    /// `result._meta["io.modelcontextprotocol/serverInfo"]`, and the top-level
+    /// key the envelope used to write is GONE (RESEARCH Pitfall 6).
+    #[test]
+    fn server_info_lives_inside_result_meta_not_at_the_top_level() {
+        let info = Implementation::new("srv", "2.0.0");
+        let ctx = v2_ctx();
+        let mut resp = result_response(1, serde_json::json!({ "tools": [] }));
+        inject_v2_result_envelope(&mut resp, Some(&ctx), &info, ResponseDisposition::Complete);
+        let ResponsePayload::Result(v) = resp.payload else {
+            panic!("expected result");
+        };
+        assert_eq!(v["_meta"][RESERVED_SERVER_INFO_KEY]["name"], "srv");
+        assert_eq!(v["_meta"][RESERVED_SERVER_INFO_KEY]["version"], "2.0.0");
+        assert!(
+            v.get("serverInfo").is_none(),
+            "the envelope must no longer write a top-level serverInfo: {v}"
+        );
+        assert_eq!(
+            RESERVED_SERVER_INFO_KEY,
+            "io.modelcontextprotocol/serverInfo"
+        );
+    }
+
+    /// `_meta` is CREATED when the handler set none, and MERGED into (never
+    /// wholesale replaced) when it did.
+    #[test]
+    fn server_info_merges_into_an_existing_meta() {
+        let info = Implementation::new("srv", "2.0.0");
+        let ctx = v2_ctx();
+
+        // Created from nothing.
+        let mut created = result_response(1, serde_json::json!({}));
+        inject_v2_result_envelope(
+            &mut created,
+            Some(&ctx),
+            &info,
+            ResponseDisposition::Complete,
+        );
+        let ResponsePayload::Result(v) = created.payload else {
+            panic!("expected result");
+        };
+        assert_eq!(
+            v["_meta"].as_object().expect("an object").len(),
+            1,
+            "a created _meta carries only the reserved key: {v}"
+        );
+
+        // Merged into an existing one.
+        let mut merged = result_response(
+            2,
+            serde_json::json!({ "_meta": { "vendor/key": 1, "io.example/trace": "abc" } }),
+        );
+        inject_v2_result_envelope(
+            &mut merged,
+            Some(&ctx),
+            &info,
+            ResponseDisposition::Complete,
+        );
+        let ResponsePayload::Result(v) = merged.payload else {
+            panic!("expected result");
+        };
+        assert_eq!(v["_meta"]["vendor/key"], 1);
+        assert_eq!(v["_meta"]["io.example/trace"], "abc");
+        assert_eq!(v["_meta"][RESERVED_SERVER_INFO_KEY]["name"], "srv");
+    }
+
+    /// A v1 / non-opted-in response gains NO `_meta` — the creation is strictly
+    /// inside the v2 gate.
+    #[test]
+    fn v1_gains_no_meta_from_the_envelope() {
+        let info = Implementation::new("srv", "2.0.0");
+        for ctx in [Some(v1_ctx()), None] {
+            let original = serde_json::json!({ "tools": [] });
+            let mut resp = result_response(1, original.clone());
+            inject_v2_result_envelope(
+                &mut resp,
+                ctx.as_ref(),
+                &info,
+                ResponseDisposition::Complete,
+            );
+            let ResponsePayload::Result(v) = resp.payload else {
+                panic!("expected result");
+            };
+            assert_eq!(v, original, "v1 must gain no _meta and stay byte-identical");
+        }
+    }
+
+    /// The ONE envelope path means `server/discover`, `tools/call`,
+    /// `prompts/get`, `resources/read` and an `input_required` result all carry
+    /// the reserved key identically. `server/discover` additionally keeps its
+    /// OWN top-level `serverInfo` schema field, which the registry deliberately
+    /// does not own.
+    #[test]
+    fn every_v2_result_shape_carries_server_info_identically() {
+        let info = Implementation::new("srv", "2.0.0");
+        let ctx = v2_ctx();
+        let shapes = [
+            ("tools/call", serde_json::json!({ "content": [] })),
+            (
+                "prompts/get",
+                serde_json::json!({ "description": "d", "messages": [] }),
+            ),
+            ("resources/read", serde_json::json!({ "contents": [] })),
+        ];
+        for (label, shape) in shapes {
+            let mut resp = result_response(1, shape);
+            inject_v2_result_envelope(&mut resp, Some(&ctx), &info, ResponseDisposition::Complete);
+            let ResponsePayload::Result(v) = resp.payload else {
+                panic!("expected result");
+            };
+            assert_eq!(
+                v["_meta"][RESERVED_SERVER_INFO_KEY]["name"], "srv",
+                "{label}"
+            );
+            assert!(v.get("serverInfo").is_none(), "{label}: {v}");
+        }
+
+        // An input_required result travels the same path.
+        let mut input_required = result_response(
+            2,
+            serde_json::json!({ "content": [], "requestState": "t", "inputRequests": {} }),
+        );
+        inject_v2_result_envelope(
+            &mut input_required,
+            Some(&ctx),
+            &info,
+            ResponseDisposition::InputRequired,
+        );
+        let ResponsePayload::Result(v) = input_required.payload else {
+            panic!("expected result");
+        };
+        assert_eq!(v["resultType"], "input_required");
+        assert_eq!(v["_meta"][RESERVED_SERVER_INFO_KEY]["name"], "srv");
+
+        // `server/discover` keeps its own schema field AND gains the reserved one.
+        let server = discover_server();
+        let discover_ctx = v2_ctx();
+        let response = build_discover_response(
+            RequestId::from(3i64),
+            &server.capabilities,
+            &server.info,
+            Some(&discover_ctx),
+        );
+        let ResponsePayload::Result(v) = response.payload else {
+            panic!("expected result");
+        };
+        assert_eq!(
+            v["serverInfo"]["name"], "discover-server",
+            "ServerDiscoverResult's OWN serverInfo field is not server-owned and survives"
+        );
+        assert_eq!(
+            v["_meta"][RESERVED_SERVER_INFO_KEY]["name"],
+            "discover-server"
+        );
     }
 
     /// Non-reserved handler `_meta` keys SURVIVE alongside the server's
@@ -3502,9 +3694,10 @@ mod tests {
             !rendered.contains(crate::types::mrtr::MRTR_SIGNAL_META_KEY),
             "the internal signal leaked through the envelope: {rendered}"
         );
-        // The emptied `_meta` is dropped, so the wire shape matches a
-        // non-signalling result exactly.
-        assert!(v.get("_meta").is_none(), "got {v}");
+        // What remains is exactly the reserved key the envelope owns — the
+        // handler's signal left no residue.
+        assert_eq!(v["_meta"].as_object().expect("an object").len(), 1);
+        assert!(v["_meta"][RESERVED_SERVER_INFO_KEY].is_object());
     }
 
     /// A handler that set `_meta` to a NON-object gets it replaced with an
@@ -4767,8 +4960,16 @@ mod tests {
                 let token = result["requestState"]
                     .as_str()
                     .expect("a fresh requestState is minted");
-                // The internal signal is gone, and the emptied `_meta` with it.
-                assert!(result.get("_meta").is_none(), "got {result}");
+                // The internal signal is gone; what `_meta` carries is exactly
+                // the server-owned reserved key the envelope wrote.
+                assert!(
+                    !serde_json::to_string(result)
+                        .expect("serializes")
+                        .contains(crate::types::mrtr::MRTR_SIGNAL_META_KEY),
+                    "got {result}"
+                );
+                assert_eq!(result["_meta"].as_object().expect("an object").len(), 1);
+                assert!(result["_meta"][RESERVED_SERVER_INFO_KEY].is_object());
 
                 // Decrypt in-test: the fresh token carries round + 1.
                 let binding = RequestBinding::from_request(

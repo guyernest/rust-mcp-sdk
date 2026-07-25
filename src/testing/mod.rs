@@ -87,6 +87,15 @@ pub const META_CLIENT_INFO: &str = crate::types::protocol::context::RESERVED_CLI
 pub const META_CLIENT_CAPABILITIES: &str =
     crate::types::protocol::context::RESERVED_CLIENT_CAPABILITIES_KEY;
 
+/// Reserved `result._meta` key carrying the server's identity on a v2 response.
+///
+/// The RESPONSE-side sibling of the three request-side keys above. Re-exported
+/// for the same reason: a live-HTTP test asserting the v2 envelope placement must
+/// read the crate's constant, not re-spell `io.modelcontextprotocol/serverInfo`
+/// and drift from it.
+#[cfg(all(not(target_arch = "wasm32"), feature = "streamable-http"))]
+pub const META_SERVER_INFO: &str = crate::server::core::RESERVED_SERVER_INFO_KEY;
+
 /// The opening marker of the `Mcp-Name` base64 sentinel form.
 pub const HEADER_SENTINEL_PREFIX: &str = crate::types::mrtr::HEADER_SENTINEL_PREFIX;
 
