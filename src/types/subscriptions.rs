@@ -722,6 +722,70 @@ mod tests {
         );
     }
 
+    proptest::proptest! {
+        /// INVARIANT (T-113-34): for ANY requested filter and ANY server
+        /// capabilities, the AGREED filter covers a notification kind ONLY IF
+        /// the client requested it AND the server supports it.
+        ///
+        /// This is the property the whole information-disclosure mitigation
+        /// rests on, so it is asserted over the full 2^8 input space rather than
+        /// the handful of examples above.
+        #[test]
+        fn the_agreed_filter_is_the_intersection_and_nothing_more(
+            requested_flags in proptest::prelude::any::<[bool; 4]>(),
+            supported_flags in proptest::prelude::any::<[bool; 4]>(),
+        ) {
+            let uri = "mem://a".to_string();
+            let requested = SubscriptionFilter {
+                tools_list_changed: requested_flags[TOOLS].then_some(true),
+                prompts_list_changed: requested_flags[PROMPTS].then_some(true),
+                resources_list_changed: requested_flags[RESOURCES_LIST].then_some(true),
+                resource_subscriptions: requested_flags[RESOURCES_SUB]
+                    .then(|| vec![uri.clone()]),
+            };
+            let capabilities = caps(supported_flags);
+            let agreed = requested.intersect_with_capabilities(&capabilities);
+
+            let kinds = [
+                (
+                    SubscriptionNotificationKind::ToolsListChanged,
+                    TOOLS,
+                ),
+                (
+                    SubscriptionNotificationKind::PromptsListChanged,
+                    PROMPTS,
+                ),
+                (
+                    SubscriptionNotificationKind::ResourcesListChanged,
+                    RESOURCES_LIST,
+                ),
+                (
+                    SubscriptionNotificationKind::ResourceUpdated(uri),
+                    RESOURCES_SUB,
+                ),
+            ];
+            for (kind, index) in kinds {
+                proptest::prop_assert_eq!(
+                    agreed.covers(&kind),
+                    requested_flags[index] && supported_flags[index],
+                    "agreed filter must be exactly requested AND supported for {:?}",
+                    kind
+                );
+            }
+
+            // An agreed filter that covers nothing is reported as empty, which is
+            // still a conformant acknowledgement.
+            let any_agreed = (0..4).any(|i| requested_flags[i] && supported_flags[i]);
+            proptest::prop_assert_eq!(!agreed.is_empty(), any_agreed);
+
+            // And the advertisement predicate agrees with the support side.
+            proptest::prop_assert_eq!(
+                advertises_subscriptions(&capabilities),
+                supported_flags.iter().any(|f| *f)
+            );
+        }
+    }
+
     #[test]
     fn the_agreed_filter_is_never_a_superset_of_the_request() {
         let requested = SubscriptionFilter {
