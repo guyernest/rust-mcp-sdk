@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v2.5
 milestone_name: MCP Spec 2026-07-28
 status: executing
-stopped_at: Completed 113-01-PLAN.md
-last_updated: "2026-07-25T03:32:03.223Z"
+stopped_at: Completed 113-02-PLAN.md
+last_updated: "2026-07-25T04:17:38.505Z"
 last_activity: 2026-07-25
 progress:
   total_phases: 71
   completed_phases: 57
   total_plans: 294
-  completed_plans: 282
+  completed_plans: 283
   percent: 80
 ---
 
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-07-22) · .planning/ROADMAP.md (v2.5 mil
 ## Current Position
 
 Phase: 113 (stateless-http-multi-round-trip-elicitation) — EXECUTING
-Plan: 2 of 13
+Plan: 3 of 13
 Status: Ready to execute
 Last activity: 2026-07-25
 
@@ -112,6 +112,9 @@ Decisions are logged in PROJECT.md Key Decisions table. Decisions framing this m
 - [Phase ?]: 113-01: DRIFT-1 adjudicated — Phase-112 D-05 stays LOCKED (Mcp-Name required on EVERY v2 request) despite the draft transport spec requiring it only for tools/call|resources/read|prompts/get; plan 04 keeps the rule, plan 11 marks affected conformance header scenarios KNOWN-FAILING rather than loosening the fail-closed gate
 - [Phase ?]: 113-01: ring 0.17 + zeroize 1.8 promoted to explicit optional deps under streamable-http with zeroize default=[alloc] ON / derive OFF; zero-new-crates proven as a MEASURED lockfile package-name delta (728->728 byte-identical) plus cargo tree -p pmcp cleanliness, never an absolute count against the workspace-shared lockfile
 - [Phase ?]: 113-01: plan 11 builds its conformance scenario manifest from 113-SPEC-RECHECK.md Section B (23 sep-2322 check ids / 14 classes @ pin a8651182), NOT the 113-RESEARCH.md table which omits 4 ids and misreports a class name as a check id
+- [Phase ?]: 113-02: MRTR wire adapter lands as ONE module (src/types/mrtr.rs) with fail-loud extract (Result, absent != invalid), stale-clearing splice, kind-directed InputResponse::decode_for, whitelist-canonicalized salient_param_digest; parsing/plumbing pub(crate), only authoring/result types pub
+- [Phase ?]: 113-02: ElicitRequestParams gets hand-written serde impls -- mode-optional on deserialize (v2 implicit form), byte-identical mode-tagged serialize (v1); semver-checks 223/223, no bump required
+- [Phase ?]: 113-02: three pre-existing v2 blockers surfaced and pinned by FORWARD TRIPWIRE tests, not comments -- typed requests rename _meta->meta on the wire (a conformant v2 client is never detected as v2), tools/list carries no _meta so cannot be a v2 request, stateful config still demands a session on v2; all owned by plan 04
 
 ### Pending Todos
 
@@ -119,7 +122,9 @@ None yet.
 
 ### Blockers/Concerns
 
-None yet. (Research flags per phase to be surfaced during `/gsd:plan-phase`.)
+yet. (Research flags per phase to be surfaced during `/gsd:plan-phase`.)
+
+- 113-02 finding D-113-A (HIGH, owned by plan 04): pmcp typed request structs rename the _meta field to 'meta' via serde camelCase, so a conformant v2 client sending the spec-spelled _meta gets NO era detection and is rejected as a header/_meta disagreement. Blocks HTTP-01 and every plan-11 conformance scenario. Pinned by a forward tripwire; see deferred-items.md.
 
 ## Deferred Items
 
@@ -147,8 +152,8 @@ Items deferred by design for this milestone (design §7 / REQUIREMENTS v2):
 
 ## Session Continuity
 
-Last session: 2026-07-25T03:32:03.217Z
-Stopped at: Completed 113-01-PLAN.md
+Last session: 2026-07-25T04:17:29.261Z
+Stopped at: Completed 113-02-PLAN.md
 Resume file: None
 
 ## Performance Metrics
@@ -182,3 +187,4 @@ Resume file: None
 | Phase 112 P9 | 40 | 3 tasks | 4 files |
 | Phase 112 P10 | 50 | 3 tasks | 5 files |
 | Phase 113 P01 | 28min | 3 tasks | 3 files |
+| Phase 113 P02 | 42min | 3 tasks | 7 files |

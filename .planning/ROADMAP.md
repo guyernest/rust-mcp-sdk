@@ -2286,7 +2286,7 @@ Plans:
 **Wave 1**
 
 - [x] 113-01-PLAN.md — Foundations: an ENFORCING three-state final-spec verdict (PUBLISHED-CONFIRMED/DRIFT/PENDING) that also re-pins the conformance-suite commit and records the contract-first/PDMT/PMAT environment, `ring`+`zeroize` promoted to explicit optional deps under `streamable-http` (blocking package-legitimacy checkpoint), and the three v2 transport error codes -32020/-32021/-32022 with locking tests
-- [ ] 113-02-PLAN.md — MRTR protocol-type layer: wire types plus the public `InputRequiredResult`/`MrtrOutcome` client-outcome types, the ONE MRTR-eligible-method + logical-name table, FAIL-LOUD params extract (`Result<_, MrtrParseError>`) and stale-key-clearing splice, five DoS bounds, AAD salient-param digest, `Mcp-Name` base64 sentinel codec, `ElicitRequestParams` mode-optional serde fix, and the shared `tests/common/v2.rs` harness
+- [x] 113-02-PLAN.md — MRTR protocol-type layer: wire types plus the public `InputRequiredResult`/`MrtrOutcome` client-outcome types, the ONE MRTR-eligible-method + logical-name table, FAIL-LOUD params extract (`Result<_, MrtrParseError>`) and stale-key-clearing splice, five DoS bounds, AAD salient-param digest, `Mcp-Name` base64 sentinel codec, `ElicitRequestParams` mode-optional serde fix, and the shared `tests/common/v2.rs` harness
 
 **Wave 2** *(blocked on Wave 1)*
 
@@ -2405,7 +2405,7 @@ Plans:
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 112. Version Plumbing Spine | 10/10 | Complete    | 2026-07-23 |
-| 113. Stateless HTTP + MRTR | 1/13 | In Progress|  |
+| 113. Stateless HTTP + MRTR | 2/13 | In Progress|  |
 | 114. Tasks Extension Migration | 0/TBD | Not started | - |
 | 115. JSON Schema 2020-12 + Caching Hints | 0/TBD | Not started | - |
 | 116. Auth Hardening SEPs | 0/TBD | Not started | - |
