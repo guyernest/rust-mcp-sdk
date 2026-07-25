@@ -25,7 +25,8 @@
 //!
 //! # Ownership: the codec belongs to the SERVER, not the process
 //!
-//! There is deliberately **no** `OnceLock` and **no** `fn codec()` free function.
+//! There is deliberately **no** process-global one-shot cell and **no** free
+//! accessor function returning a `&'static` codec.
 //! The codec is an `Arc<RequestStateCodec>` resolved exactly once at server
 //! **build** time and stored on the server instance. That is what makes all four
 //! of these possible at the same time:
@@ -65,6 +66,13 @@
 // result path). Until then every `pub(crate)` item here is dead code under
 // `RUSTFLAGS = -D warnings`. Plan 12 removes this allow once both consumers exist.
 #![allow(dead_code)]
+// Why: the `pub(crate)` markers are load-bearing, not redundant. Under
+// `feature = "fuzzing"` this module is declared `pub mod` (so the fuzz target can
+// reach `fuzz_support`), and `pub(crate)` is then the ONLY thing keeping the
+// codec, its keys, `Continuation` and `Verdict` off the shipped public API.
+// Downgrading them to bare `pub` as the lint suggests would also trip the
+// crate-level `unreachable_pub` warn in the default (non-`fuzzing`) build.
+#![allow(clippy::redundant_pub_crate)]
 
 use crate::error::{Error, Result};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
@@ -484,8 +492,9 @@ impl<'a> RequestBinding<'a> {
     /// method name, so even a contrived concatenation collision would still have to
     /// agree on the method.
     fn aad(&self) -> Vec<u8> {
-        let mut out =
-            Vec::with_capacity(self.principal.len() + self.method.len() + 2 + self.param_digest.len());
+        let mut out = Vec::with_capacity(
+            self.principal.len() + self.method.len() + 2 + self.param_digest.len(),
+        );
         out.extend_from_slice(self.principal.as_bytes());
         out.push(0x00);
         out.extend_from_slice(self.method.as_bytes());
@@ -550,50 +559,156 @@ fn decode_token(token: &str) -> Option<Vec<u8>> {
 }
 
 /// Split the cleartext key-id and nonce off a decoded token.
+///
+/// Every malformed shape returns `None` (which the caller renders as
+/// [`Verdict::AuthFailed`]) rather than panicking — the input is
+/// attacker-controlled by spec (T-113-14).
 fn split_key_id(raw: &[u8]) -> Option<TokenParts<'_>> {
-    let _ = raw;
-    unimplemented!("plan 113-03 task 2")
+    let (&declared_len, rest) = raw.split_first()?;
+    if usize::from(declared_len) != KEY_ID_LEN {
+        return None;
+    }
+    if rest.len() <= KEY_ID_LEN + NONCE_LEN {
+        return None;
+    }
+    let (id_bytes, rest) = rest.split_at(KEY_ID_LEN);
+    let (nonce_bytes, sealed) = rest.split_at(NONCE_LEN);
+    let mut key_id = [0u8; KEY_ID_LEN];
+    key_id.copy_from_slice(id_bytes);
+    let mut nonce = [0u8; NONCE_LEN];
+    nonce.copy_from_slice(nonce_bytes);
+    Some(TokenParts {
+        key_id: KeyId(key_id),
+        nonce,
+        sealed,
+    })
 }
 
 /// Open one sealed payload under one candidate key.
+///
+/// `open_in_place` mutates its buffer, so each candidate gets its own copy.
 fn open_sealed(
     key: &LessSafeKey,
     nonce: [u8; NONCE_LEN],
     aad: &[u8],
     sealed: &[u8],
 ) -> Option<Continuation> {
-    let _ = (key, nonce, aad, sealed);
-    unimplemented!("plan 113-03 task 2")
+    let mut buffer = sealed.to_vec();
+    let plaintext = key
+        .open_in_place(
+            Nonce::assume_unique_for_key(nonce),
+            Aad::from(aad),
+            &mut buffer,
+        )
+        .ok()?;
+    serde_json::from_slice::<Continuation>(plaintext).ok()
 }
 
 impl RequestStateCodec {
     /// Seal a continuation into an opaque `requestState` token.
+    ///
+    /// A fresh 12-byte nonce is drawn per call, `exp` is
+    /// `clock.now_unix() + ttl`, and the seal uses the MINTING key only — a
+    /// rotated-out key verifies but never mints.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the CSPRNG fails, if the continuation is not
+    /// serializable, if `ring` refuses to seal, or if the resulting token would
+    /// exceed [`crate::types::mrtr::MAX_REQUEST_STATE_LEN`] — the server must never
+    /// mint a token it would itself reject at ingress.
     pub(crate) fn mint(
         &self,
         state: &serde_json::Value,
         binding: &RequestBinding<'_>,
         round: u8,
     ) -> Result<String> {
-        let _ = (state, binding, round);
-        unimplemented!("plan 113-03 task 2")
+        let ttl_secs = i64::try_from(self.ttl.as_secs()).unwrap_or(i64::MAX);
+        let continuation = Continuation {
+            state: state.clone(),
+            exp: self.clock.now_unix().saturating_add(ttl_secs),
+            round,
+        };
+        let mut sealed = serde_json::to_vec(&continuation).map_err(|e| {
+            Error::internal(format!(
+                "requestState continuation is not serializable: {e}"
+            ))
+        })?;
+
+        let mut nonce = [0u8; NONCE_LEN];
+        getrandom::fill(&mut nonce)
+            .map_err(|e| Error::internal(format!("CSPRNG (getrandom) failed: {e}")))?;
+
+        let aad = binding.aad();
+        self.minting
+            .1
+            .seal_in_place_append_tag(
+                Nonce::assume_unique_for_key(nonce),
+                Aad::from(aad.as_slice()),
+                &mut sealed,
+            )
+            .map_err(|_| Error::internal("requestState AEAD sealing failed"))?;
+
+        let mut raw = Vec::with_capacity(1 + KEY_ID_LEN + NONCE_LEN + sealed.len());
+        raw.push(KEY_ID_LEN_U8);
+        raw.extend_from_slice(self.minting.0.as_bytes());
+        raw.extend_from_slice(&nonce);
+        raw.extend_from_slice(&sealed);
+
+        let token = URL_SAFE_NO_PAD.encode(&raw);
+        if token.len() > crate::types::mrtr::MAX_REQUEST_STATE_LEN {
+            return Err(Error::validation(format!(
+                "minted requestState token is {} bytes, over the {} byte accepted \
+                 bound — the continuation state is too large to be self-contained",
+                token.len(),
+                crate::types::mrtr::MAX_REQUEST_STATE_LEN
+            )));
+        }
+        Ok(token)
     }
 
     /// Verify a presented token against the binding of the CURRENT request.
+    ///
+    /// Never returns a `Result`: every failure mode is a [`Verdict`], so a caller
+    /// cannot accidentally `?` a security decision into a 500. See [`Verdict`] for
+    /// the D-15 decision table.
     pub(crate) fn verify(&self, token: &str, binding: &RequestBinding<'_>) -> Verdict {
-        let _ = (token, binding);
-        unimplemented!("plan 113-03 task 2")
+        let Some(raw) = decode_token(token) else {
+            return Verdict::AuthFailed;
+        };
+        let Some(parts) = split_key_id(&raw) else {
+            return Verdict::AuthFailed;
+        };
+        let candidates = self.candidate_keys(parts.key_id);
+        if candidates.is_empty() {
+            // Not tampering — most likely another instance's per-process key.
+            return Verdict::UnknownKey;
+        }
+        let aad = binding.aad();
+        for key in candidates {
+            if let Some(continuation) = open_sealed(key, parts.nonce, &aad, parts.sealed) {
+                return self.check_expiry(continuation);
+            }
+        }
+        Verdict::AuthFailed
     }
 
     /// Every accepting key whose key-id matches (see [`KeyId`]'s collision policy).
     fn candidate_keys(&self, id: KeyId) -> Vec<&LessSafeKey> {
-        let _ = id;
-        unimplemented!("plan 113-03 task 2")
+        self.accepting
+            .iter()
+            .filter(|(candidate, _)| *candidate == id)
+            .map(|(_, key)| key)
+            .collect()
     }
 
     /// Classify an opened continuation as live or expired.
     fn check_expiry(&self, continuation: Continuation) -> Verdict {
-        let _ = continuation;
-        unimplemented!("plan 113-03 task 2")
+        if continuation.exp <= self.clock.now_unix() {
+            Verdict::Expired(continuation)
+        } else {
+            Verdict::Ok(continuation)
+        }
     }
 }
 
@@ -621,13 +736,11 @@ fn decode_key_material(raw: &str, var: &str) -> Result<Vec<u8>> {
         URL_SAFE_NO_PAD.decode(trimmed.as_bytes()).ok(),
         decode_hex(trimmed),
     ];
-    for attempt in attempts {
-        if let Some(mut bytes) = attempt {
-            if bytes.len() == KEY_LEN {
-                return Ok(bytes);
-            }
-            bytes.zeroize();
+    for mut bytes in attempts.into_iter().flatten() {
+        if bytes.len() == KEY_LEN {
+            return Ok(bytes);
         }
+        bytes.zeroize();
     }
     Err(Error::validation(format!(
         "{var} must decode to exactly {KEY_LEN} bytes as base64url-no-pad or hex; \
@@ -638,7 +751,7 @@ fn decode_key_material(raw: &str, var: &str) -> Result<Vec<u8>> {
 
 /// Decode a lowercase/uppercase hex string, or `None` if it is not valid hex.
 fn decode_hex(s: &str) -> Option<Vec<u8>> {
-    if s.is_empty() || s.len() % 2 != 0 || !s.is_ascii() {
+    if s.is_empty() || !s.len().is_multiple_of(2) || !s.is_ascii() {
         return None;
     }
     let mut out = Vec::with_capacity(s.len() / 2);
@@ -665,7 +778,10 @@ fn random_key() -> Result<[u8; KEY_LEN]> {
 fn ttl_from_env() -> Duration {
     env_var(ENV_REQUEST_STATE_TTL_SECS)
         .and_then(|raw| raw.trim().parse::<u64>().ok())
-        .map_or_else(|| Duration::from_secs(DEFAULT_TTL_SECS), Duration::from_secs)
+        .map_or_else(
+            || Duration::from_secs(DEFAULT_TTL_SECS),
+            Duration::from_secs,
+        )
 }
 
 /// Resolve the server's codec **once**, at build time.
@@ -739,7 +855,11 @@ mod tests {
     }
 
     fn hex(key: &[u8]) -> String {
-        key.iter().map(|b| format!("{b:02x}")).collect()
+        use std::fmt::Write as _;
+        key.iter().fold(String::new(), |mut out, b| {
+            let _ = write!(out, "{b:02x}");
+            out
+        })
     }
 
     // -- WARN capture -------------------------------------------------------
@@ -789,10 +909,30 @@ mod tests {
 
     /// Run `f` with a WARN-counting subscriber installed, returning the captured
     /// WARN messages alongside `f`'s output.
+    ///
+    /// # Why the warm-up and the explicit cache rebuild
+    ///
+    /// `tracing` caches an `Interest` per callsite, computed the FIRST time that
+    /// callsite executes, against the executing thread's dispatcher. Other tests in
+    /// this suite build v2 servers with no `PMCP_REQUEST_STATE_KEY` and no
+    /// subscriber, so whichever thread reaches the D-04 `warn!` first can cache it
+    /// as `Interest::never()` — after which no scoped subscriber ever sees it, and
+    /// this assertion fails intermittently depending on test-thread interleaving.
+    ///
+    /// `tracing_core::dispatcher::set_default` (the SCOPED form that
+    /// `with_default` uses) deliberately does not rebuild that cache — only
+    /// `set_global_default` does. So: register the callsite outside the capture
+    /// scope, then rebuild the cache once this thread has a subscriber. Both steps
+    /// are needed; a rebuild alone cannot reach a callsite that is not yet
+    /// registered.
     fn capture_warns<T>(f: impl FnOnce() -> T) -> (T, Vec<String>) {
+        let _warm_up = with_env(&[], RequestStateCodec::from_env);
         let counter = WarnCounter::default();
         let sink = counter.warns.clone();
-        let out = tracing::subscriber::with_default(counter, f);
+        let out = tracing::subscriber::with_default(counter, || {
+            tracing::callsite::rebuild_interest_cache();
+            f()
+        });
         let warns = sink.lock().map(|w| w.clone()).unwrap_or_default();
         (out, warns)
     }
@@ -835,7 +975,11 @@ mod tests {
     fn from_env_unset_generates_a_key_and_warns_exactly_once() {
         let (codec, warns) = capture_warns(|| with_env(&[], RequestStateCodec::from_env));
         assert!(codec.is_ok(), "an unset key must NOT fail the build (D-04)");
-        assert_eq!(warns.len(), 1, "exactly one WARN must be emitted, got {warns:?}");
+        assert_eq!(
+            warns.len(),
+            1,
+            "exactly one WARN must be emitted, got {warns:?}"
+        );
         assert!(
             warns[0].contains(ENV_REQUEST_STATE_KEY),
             "the WARN must name the env var: {}",
@@ -879,7 +1023,9 @@ mod tests {
     fn from_env_reads_the_real_process_environment() {
         // The ONE test that touches process-global state. It sets a VALID key, so
         // even if a concurrently-building server observes it the build succeeds.
-        let _guard = ENV_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _guard = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let previous = std::env::var(ENV_REQUEST_STATE_KEY).ok();
         std::env::set_var(ENV_REQUEST_STATE_KEY, b64(&KEY_B));
         let resolved = RequestStateCodec::from_env();
@@ -888,7 +1034,9 @@ mod tests {
             None => std::env::remove_var(ENV_REQUEST_STATE_KEY),
         }
         assert_eq!(
-            resolved.expect("valid key in the real env").minting_key_id(),
+            resolved
+                .expect("valid key in the real env")
+                .minting_key_id(),
             key_id_of(&KEY_B),
             "production must read std::env::var, not only the test seam"
         );
@@ -948,7 +1096,7 @@ mod tests {
 
     #[test]
     fn debug_never_renders_key_material() {
-        let codec = RequestStateCodec::new(&KEY_A, Duration::from_secs(60)).expect("valid key");
+        let codec = RequestStateCodec::new(&KEY_A, Duration::from_secs(45)).expect("valid key");
         let rendered = format!("{codec:?}");
         assert!(rendered.contains("ttl"));
         assert!(rendered.contains(&key_id_of(&KEY_A).to_string()));
@@ -960,7 +1108,7 @@ mod tests {
 
     #[test]
     fn fixed_clock_makes_now_deterministic() {
-        let codec = RequestStateCodec::new(&KEY_A, Duration::from_secs(60))
+        let codec = RequestStateCodec::new(&KEY_A, Duration::from_secs(45))
             .expect("valid key")
             .with_clock(Arc::new(FixedClock(1_700_000_000)));
         assert_eq!(codec.now_unix(), 1_700_000_000);
@@ -1048,7 +1196,7 @@ mod tests {
 
     #[test]
     fn two_servers_with_different_keys_have_different_key_ids() {
-        // The direct regression guard for the removed process-global OnceLock:
+        // The direct regression guard for the rejected process-global design:
         // two differently-configured servers must coexist in ONE process.
         let first = crate::server::Server::builder()
             .name("a")
@@ -1066,7 +1214,10 @@ mod tests {
             .expect("second server");
         assert_ne!(
             first.request_state_codec().expect("codec").minting_key_id(),
-            second.request_state_codec().expect("codec").minting_key_id(),
+            second
+                .request_state_codec()
+                .expect("codec")
+                .minting_key_id(),
         );
     }
 
@@ -1115,7 +1266,11 @@ mod tests {
         serde_json::json!({ "name": "read_file", "arguments": { "path": path } })
     }
 
-    fn binding<'a>(principal: &'a str, method: &'a str, params: &serde_json::Value) -> RequestBinding<'a> {
+    fn binding<'a>(
+        principal: &'a str,
+        method: &'a str,
+        params: &serde_json::Value,
+    ) -> RequestBinding<'a> {
         RequestBinding::from_request(principal, method, params)
     }
 
@@ -1156,7 +1311,7 @@ mod tests {
         let raw = URL_SAFE_NO_PAD.decode(token.as_bytes()).expect("base64url");
         assert_eq!(raw[0], KEY_ID_LEN_U8, "leading length byte");
         assert_eq!(
-            &raw[1..1 + KEY_ID_LEN],
+            &raw[1..=KEY_ID_LEN],
             key_id_of(&KEY_A).as_bytes(),
             "cleartext key-id prefix"
         );
@@ -1171,7 +1326,9 @@ mod tests {
         let codec = codec_at(&KEY_A, 1_000, 300);
         let params = tool_params("/safe");
         let bind = binding("alice", "tools/call", &params);
-        let token = codec.mint(&serde_json::json!({ "a": 1 }), &bind, 0).expect("mint");
+        let token = codec
+            .mint(&serde_json::json!({ "a": 1 }), &bind, 0)
+            .expect("mint");
         let mut raw = URL_SAFE_NO_PAD.decode(token.as_bytes()).expect("base64url");
         let last = raw.len() - 1;
         raw[last] ^= 0xff;
@@ -1186,7 +1343,9 @@ mod tests {
         let codec = codec_at(&KEY_A, 1_000, 300);
         let params = tool_params("/safe");
         let bind = binding("alice", "tools/call", &params);
-        let token = codec.mint(&serde_json::json!({ "a": 1 }), &bind, 0).expect("mint");
+        let token = codec
+            .mint(&serde_json::json!({ "a": 1 }), &bind, 0)
+            .expect("mint");
         let tampered = format!("{token}-TAMPERED");
         assert_eq!(codec.verify(&tampered, &bind), Verdict::AuthFailed);
     }
@@ -1197,7 +1356,9 @@ mod tests {
         let params = tool_params("/safe");
         let alice = binding("alice", "tools/call", &params);
         let bob = binding("bob", "tools/call", &params);
-        let token = codec.mint(&serde_json::json!({ "a": 1 }), &alice, 0).expect("mint");
+        let token = codec
+            .mint(&serde_json::json!({ "a": 1 }), &alice, 0)
+            .expect("mint");
         assert_eq!(codec.verify(&token, &bob), Verdict::AuthFailed);
     }
 
@@ -1208,7 +1369,9 @@ mod tests {
         let shadow = tool_params("/etc/shadow");
         let minted_for = binding("alice", "tools/call", &safe);
         let replayed_onto = binding("alice", "tools/call", &shadow);
-        let token = codec.mint(&serde_json::json!({ "a": 1 }), &minted_for, 0).expect("mint");
+        let token = codec
+            .mint(&serde_json::json!({ "a": 1 }), &minted_for, 0)
+            .expect("mint");
         assert_eq!(codec.verify(&token, &replayed_onto), Verdict::AuthFailed);
     }
 
@@ -1219,7 +1382,9 @@ mod tests {
         let prompt = serde_json::json!({ "name": "x", "arguments": {} });
         let minted_for = binding("alice", "tools/call", &call);
         let replayed_onto = binding("alice", "prompts/get", &prompt);
-        let token = codec.mint(&serde_json::json!({ "a": 1 }), &minted_for, 0).expect("mint");
+        let token = codec
+            .mint(&serde_json::json!({ "a": 1 }), &minted_for, 0)
+            .expect("mint");
         assert_eq!(codec.verify(&token, &replayed_onto), Verdict::AuthFailed);
     }
 
@@ -1236,7 +1401,10 @@ mod tests {
         match verifier.verify(&token, &bind) {
             Verdict::Expired(continuation) => {
                 assert_eq!(continuation.state, state, "state must be READABLE");
-                assert_eq!(continuation.round, 3, "round must survive so D-09 is not reset");
+                assert_eq!(
+                    continuation.round, 3,
+                    "round must survive so D-09 is not reset"
+                );
             },
             other => panic!("expected Expired, got {other:?}"),
         }
@@ -1248,7 +1416,9 @@ mod tests {
         let verifier = codec_at(&KEY_B, 1_000, 300);
         let params = tool_params("/safe");
         let bind = binding("alice", "tools/call", &params);
-        let token = minter.mint(&serde_json::json!({ "a": 1 }), &bind, 0).expect("mint");
+        let token = minter
+            .mint(&serde_json::json!({ "a": 1 }), &bind, 0)
+            .expect("mint");
         assert_eq!(
             verifier.verify(&token, &bind),
             Verdict::UnknownKey,
@@ -1264,7 +1434,9 @@ mod tests {
             .expect("previous key");
         let params = tool_params("/safe");
         let bind = binding("alice", "tools/call", &params);
-        let token = old.mint(&serde_json::json!({ "a": 1 }), &bind, 0).expect("mint");
+        let token = old
+            .mint(&serde_json::json!({ "a": 1 }), &bind, 0)
+            .expect("mint");
         assert!(matches!(rotated.verify(&token, &bind), Verdict::Ok(_)));
     }
 
@@ -1282,18 +1454,24 @@ mod tests {
 
         // Minted under KEY_A -> the matching entry opens it.
         let minter_a = codec_at(&KEY_A, 1_000, 300).with_forced_minting_key_id(forced);
-        let token_a = minter_a.mint(&serde_json::json!({ "a": 1 }), &bind, 0).expect("mint");
+        let token_a = minter_a
+            .mint(&serde_json::json!({ "a": 1 }), &bind, 0)
+            .expect("mint");
         assert!(matches!(verifier.verify(&token_a, &bind), Verdict::Ok(_)));
 
         // Minted under KEY_B -> the OTHER matching entry opens it.
         let minter_b = codec_at(&KEY_B, 1_000, 300).with_forced_minting_key_id(forced);
-        let token_b = minter_b.mint(&serde_json::json!({ "b": 2 }), &bind, 0).expect("mint");
+        let token_b = minter_b
+            .mint(&serde_json::json!({ "b": 2 }), &bind, 0)
+            .expect("mint");
         assert!(matches!(verifier.verify(&token_b, &bind), Verdict::Ok(_)));
 
         // Minted under an unrelated third key wearing the SAME id -> AuthFailed,
         // never UnknownKey and never a false Ok.
         let minter_c = codec_at(&KEY_C, 1_000, 300).with_forced_minting_key_id(forced);
-        let token_c = minter_c.mint(&serde_json::json!({ "c": 3 }), &bind, 0).expect("mint");
+        let token_c = minter_c
+            .mint(&serde_json::json!({ "c": 3 }), &bind, 0)
+            .expect("mint");
         assert_eq!(verifier.verify(&token_c, &bind), Verdict::AuthFailed);
     }
 
@@ -1336,7 +1514,8 @@ mod tests {
         let codec = codec_at(&KEY_A, 1_000, 300);
         let params = tool_params("/safe");
         let bind = binding("alice", "tools/call", &params);
-        let huge = serde_json::json!({ "blob": "x".repeat(crate::types::mrtr::MAX_REQUEST_STATE_LEN) });
+        let huge =
+            serde_json::json!({ "blob": "x".repeat(crate::types::mrtr::MAX_REQUEST_STATE_LEN) });
         assert!(
             codec.mint(&huge, &bind, 0).is_err(),
             "a token the server would itself reject must never be minted"
