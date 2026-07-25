@@ -4,13 +4,13 @@ milestone: v2.5
 milestone_name: MCP Spec 2026-07-28
 status: executing
 stopped_at: Completed 113-07-PLAN.md
-last_updated: "2026-07-25T20:13:04.971Z"
+last_updated: "2026-07-25T21:28:44.075Z"
 last_activity: 2026-07-25
 progress:
   total_phases: 71
   completed_phases: 57
   total_plans: 294
-  completed_plans: 289
+  completed_plans: 290
   percent: 80
 ---
 
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-07-22) · .planning/ROADMAP.md (v2.5 mil
 ## Current Position
 
 Phase: 113 (stateless-http-multi-round-trip-elicitation) — EXECUTING
-Plan: 9 of 13
+Plan: 10 of 13
 Status: Ready to execute
 Last activity: 2026-07-25
 
@@ -142,6 +142,11 @@ Decisions are logged in PROJECT.md Key Decisions table. Decisions framing this m
 - [Phase 113]: 113-08: envelope_for_live_request(payload, live_id) is the ONE direct-response constructor on the HTTP transport — payload and id are separate arguments, so a cached envelope's stale id is structurally unconstructible
 - [Phase 113]: 113-08: the event store is type-erased on the crate-private ServerState (EventStoreHandle = Arc<dyn EventStore>), NOT on the public config field — widening that public field would be a MAJOR semver break (D-113-D)
 - [Phase 113]: 113-08: FOUND AND FIXED a real cross-caller bug — build_response selected its SSE destination stream from the RAW INBOUND Mcp-Session-Id, so a v2 POST naming a v1 caller's open session had its response delivered into THAT caller's stream (T-113-07) and written to the event store on the way (T-113-29/30); now gated on sessions_on
+- [Phase 113]: 113-09: reserved envelope fields are SERVER-OWNED — resultType/_meta serverInfo OVERWRITTEN, requestState/inputRequests REMOVED unless this egress minted them, dev.pmcp/mrtr removed always; entry().or_insert replaced for the enumerated set only, every other handler _meta key survives
+- [Phase 113]: 113-09: a handler signal on v1 or a non-eligible v2 method now FAILS LOUDLY with INTERNAL_ERROR instead of emitting a mangled complete result; strip_mrtr_signal returns a THREE-state outcome so a malformed reserved payload cannot degrade into "no signal"
+- [Phase 113]: 113-09: the declared-client-capability precheck is submode-aware (form vs URL elicitation, tool-augmented sampling) and runs BEFORE any minting, proven structurally by running it with codec:None so a mint attempt would fail differently; -32021 payload is a ClientCapabilities OBJECT, all-or-nothing
+- [Phase 113]: 113-09: serverInfo moved to result._meta["io.modelcontextprotocol/serverInfo"]; a TOP-LEVEL serverInfo is deliberately NOT owned because it is a real schema field of ServerDiscoverResult/InitializeResult, so server/discover carries both
+- [Phase 113]: 113-09: two plan verification commands matched ZERO tests and passed vacuously; each suite is now nested in a module named after the production symbol (mod mrtr_egress, mod inject_v2_result_envelope) so the filters select 21 and 16 tests
 
 ### Pending Todos
 
@@ -182,7 +187,7 @@ Items deferred by design for this milestone (design §7 / REQUIREMENTS v2):
 
 ## Session Continuity
 
-Last session: 2026-07-25T20:12:57.215Z
+Last session: 2026-07-25T21:28:10.932Z
 Stopped at: Completed 113-07-PLAN.md
 Resume file: None
 
@@ -224,3 +229,4 @@ Resume file: None
 | Phase 113 P06 | 95min | 3 tasks | 7 files |
 | Phase 113 P07 | 41min | 3 tasks tasks | 6 files files |
 | Phase 113 P08 | 25min | 2 tasks | 2 files |
+| Phase 113 P09 | 118min | 3 tasks | 7 files |
