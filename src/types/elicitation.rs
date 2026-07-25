@@ -12,8 +12,7 @@
 //! - `ElicitInputBuilder` -> removed (construct `ElicitRequestParams` directly)
 //! - Method name: `elicitation/elicitInput` -> `elicitation/create`
 
-use serde::ser::SerializeStruct;
-use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
+use serde::{de, Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 
@@ -27,18 +26,26 @@ use std::collections::HashMap;
 ///
 /// The v2 schema makes `ElicitRequestFormParams.mode` OPTIONAL — a conformant
 /// server may omit it entirely, in which case `form` is implied. `mode: "url"`
-/// stays REQUIRED. [`Serialize`] and [`Deserialize`] are therefore hand-written
-/// rather than derived from a serde internally-tagged `mode` discriminator:
+/// stays REQUIRED. Only [`Deserialize`] is therefore hand-written:
 ///
 /// - deserialization treats an ABSENT `mode` as `"form"` (v2 tolerance), and
-/// - serialization still emits `"mode":"form"` / `"mode":"url"` so the v1 wire
-///   bytes are unchanged (Phase-113 D-10).
+/// - serialization stays DERIVED from the serde internally-tagged `mode`
+///   discriminator, so the v1 wire bytes are unchanged (Phase-113 D-10) by
+///   construction rather than by test.
+///
+/// Deriving the egress half matters: with a hand-written `serialize`, adding a
+/// field to a variant compiles fine and silently drops it from the wire, and the
+/// camelCase key spellings live in two places at once. The draft spec is still
+/// moving, so that asymmetry would have been a live risk on the exact type MRTR
+/// carries inside `InputRequest::Elicitation`.
 ///
 /// The public enum shape, its variants and its field names are untouched — this
 /// is a serde-only, semver-additive change.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "mode")]
 pub enum ElicitRequestParams {
     /// Form-based elicitation with JSON Schema
+    #[serde(rename = "form", rename_all = "camelCase")]
     Form {
         /// Human-readable message explaining what input is needed
         message: String,
@@ -47,6 +54,7 @@ pub enum ElicitRequestParams {
         requested_schema: Value,
     },
     /// URL-based elicitation for out-of-band interaction
+    #[serde(rename = "url", rename_all = "camelCase")]
     Url {
         /// Human-readable message explaining what action is needed
         message: String,
@@ -79,40 +87,6 @@ struct UrlShape {
     message: String,
     elicitation_id: String,
     url: String,
-}
-
-impl Serialize for ElicitRequestParams {
-    /// Emits the internally-`mode`-tagged form the derived impl produced, byte for
-    /// byte: the tag first, then the variant's camelCase fields.
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        match self {
-            Self::Form {
-                message,
-                requested_schema,
-            } => {
-                let mut state = serializer.serialize_struct("ElicitRequestParams", 3)?;
-                state.serialize_field("mode", ELICIT_MODE_FORM)?;
-                state.serialize_field("message", message)?;
-                state.serialize_field("requestedSchema", requested_schema)?;
-                state.end()
-            },
-            Self::Url {
-                message,
-                elicitation_id,
-                url,
-            } => {
-                let mut state = serializer.serialize_struct("ElicitRequestParams", 4)?;
-                state.serialize_field("mode", ELICIT_MODE_URL)?;
-                state.serialize_field("message", message)?;
-                state.serialize_field("elicitationId", elicitation_id)?;
-                state.serialize_field("url", url)?;
-                state.end()
-            },
-        }
-    }
 }
 
 impl<'de> Deserialize<'de> for ElicitRequestParams {

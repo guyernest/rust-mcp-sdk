@@ -73,6 +73,52 @@ where
     }
 }
 
+/// Reserved `_meta` key carrying the per-request protocol version.
+///
+/// Re-exported so tests read the crate's constant instead of re-spelling the
+/// `io.modelcontextprotocol/*` string and silently drifting from it.
+pub const META_PROTOCOL_VERSION: &str =
+    crate::types::protocol::context::RESERVED_PROTOCOL_VERSION_KEY;
+
+/// Reserved `_meta` key carrying the per-request client identity.
+pub const META_CLIENT_INFO: &str = crate::types::protocol::context::RESERVED_CLIENT_INFO_KEY;
+
+/// Reserved `_meta` key carrying the per-request client capabilities.
+pub const META_CLIENT_CAPABILITIES: &str =
+    crate::types::protocol::context::RESERVED_CLIENT_CAPABILITIES_KEY;
+
+/// The opening marker of the `Mcp-Name` base64 sentinel form.
+pub const HEADER_SENTINEL_PREFIX: &str = crate::types::mrtr::HEADER_SENTINEL_PREFIX;
+
+/// The closing marker of the `Mcp-Name` base64 sentinel form.
+pub const HEADER_SENTINEL_SUFFIX: &str = crate::types::mrtr::HEADER_SENTINEL_SUFFIX;
+
+/// Encode a value for the `Mcp-Name` header, using the PRODUCTION codec.
+///
+/// **Why this wrapper exists.** The codec in `crate::types::mrtr` is `pub(crate)`
+/// (Phase-113 D-10 keeps the MRTR plumbing off the public API), so the v2 test
+/// harness previously carried a hand-copied mirror of it — and the mirror had
+/// already drifted, omitting the `MAX_HEADER_VALUE_LEN` term from its passthrough
+/// predicate. That meant the harness could emit a raw oversized header the real
+/// encoder would have sentinel-encoded, so every test built on it was validating
+/// the harness against itself rather than against the shipped encoder.
+///
+/// A `pub use` of a `pub(crate)` item does not compile (E0365), so this thin
+/// wrapper is the seam. Six Phase-113 plans build their requests through it.
+#[must_use]
+pub fn encode_mcp_name(value: &str) -> String {
+    crate::types::mrtr::encode_header_value(value)
+}
+
+/// Decode an `Mcp-Name` header value, using the PRODUCTION codec.
+///
+/// Returns `None` for a malformed sentinel or an over-long value. See
+/// [`encode_mcp_name`] for why this wrapper exists.
+#[must_use]
+pub fn decode_mcp_name(raw: &str) -> Option<String> {
+    crate::types::mrtr::decode_header_value(raw)
+}
+
 #[cfg(test)]
 mod tests {
     use super::assert_roundtrips_through_client;

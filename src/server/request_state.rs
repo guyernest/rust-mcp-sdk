@@ -501,7 +501,7 @@ impl<'a> RequestBinding<'a> {
     /// The trailing 32 bytes are a fixed-length digest and the byte before them is
     /// a `0x00` separator, so `principal || 0x00 || method` is recovered exactly.
     /// Every method that can MINT is drawn from
-    /// [`crate::types::mrtr::MRTR_ELIGIBLE_METHODS`], all of which are NUL-free, so
+    /// [`crate::types::mrtr::MRTR_METHODS`], all of which are NUL-free, so
     /// `method` is unambiguously the segment after the LAST `0x00` and `principal`
     /// is everything before it. Belt and braces: `param_digest` itself hashes the
     /// method name, so even a contrived concatenation collision would still have to
@@ -694,13 +694,15 @@ impl RequestStateCodec {
         let Some(parts) = split_key_id(&raw) else {
             return Verdict::AuthFailed;
         };
-        let candidates = self.candidate_keys(parts.key_id);
-        if candidates.is_empty() {
+        if !self.has_candidate_key(parts.key_id) {
             // Not tampering — most likely another instance's per-process key.
             return Verdict::UnknownKey;
         }
         let aad = binding.aad();
-        for key in candidates {
+        for (candidate, key) in &self.accepting {
+            if *candidate != parts.key_id {
+                continue;
+            }
             if let Some(continuation) = open_sealed(key, parts.nonce, &aad, parts.sealed) {
                 return self.check_expiry(continuation);
             }
@@ -708,13 +710,14 @@ impl RequestStateCodec {
         Verdict::AuthFailed
     }
 
-    /// Every accepting key whose key-id matches (see [`KeyId`]'s collision policy).
-    fn candidate_keys(&self, id: KeyId) -> Vec<&LessSafeKey> {
-        self.accepting
-            .iter()
-            .filter(|(candidate, _)| *candidate == id)
-            .map(|(_, key)| key)
-            .collect()
+    /// Whether any accepting key has this key-id (see [`KeyId`]'s collision policy).
+    ///
+    /// `accepting` holds 1–3 entries, so the linear scan is the right structure —
+    /// but answering this with a `collect()` into a `Vec` allocated once per verify,
+    /// on the hot path, purely to call `is_empty()`. The loop above re-filters
+    /// instead, which is the same short-circuit with no allocation.
+    fn has_candidate_key(&self, id: KeyId) -> bool {
+        self.accepting.iter().any(|(candidate, _)| *candidate == id)
     }
 
     /// Classify an opened continuation as live or expired.
@@ -780,13 +783,13 @@ fn decode_hex(s: &str) -> Option<Vec<u8>> {
 
 /// Draw a fresh 32-byte key from the CSPRNG.
 ///
-/// Mirrors `crate::shared::pkce::random_bytes`: one `getrandom::fill` call whose
-/// error is mapped to [`Error::internal`], never `unwrap`/`expect`.
+/// Delegates to `crate::shared::pkce::random_bytes` rather than mirroring it. That
+/// helper's own doc states it exists to centralise "the single `getrandom::fill`
+/// call so both the verifier and the state generators share one CSPRNG source, and
+/// so a `getrandom::Error` is mapped to [`Error::internal`] in exactly one place" —
+/// a second copy here would have broken the invariant it was written to hold.
 fn random_key() -> Result<[u8; KEY_LEN]> {
-    let mut buf = [0u8; KEY_LEN];
-    getrandom::fill(&mut buf)
-        .map_err(|e| Error::internal(format!("CSPRNG (getrandom) failed: {e}")))?;
-    Ok(buf)
+    crate::shared::pkce::random_bytes()
 }
 
 /// Resolve the configured ttl, defaulting on absent or unparseable.

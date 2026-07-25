@@ -48,7 +48,12 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use pmcp::server::streamable_http_server::{StreamableHttpServer, StreamableHttpServerConfig};
 use pmcp::server::{PromptHandler, ResourceHandler, Server};
-use pmcp::types::protocol::{ProtocolVersion, PROTOCOL_VERSION_2026_07_28};
+use pmcp::shared::http_constants::{
+    ACCEPT_STREAMABLE, MCP_METHOD, MCP_NAME, MCP_PROTOCOL_VERSION, MCP_SESSION_ID,
+};
+use pmcp::types::protocol::{
+    ProtocolVersion, LATEST_PROTOCOL_VERSION, PROTOCOL_VERSION_2026_07_28,
+};
 use pmcp::types::{Content, GetPromptResult, ListResourcesResult, ReadResourceResult, RequestMeta};
 use pmcp::ServerCapabilities;
 use pmcp::{RequestHandlerExtra, ToolHandler};
@@ -61,20 +66,16 @@ use tokio::task::JoinHandle;
 pub const V2: &str = PROTOCOL_VERSION_2026_07_28;
 
 /// The v1 protocol version an opted-in server keeps accepting alongside [`V2`].
-pub const V1: &str = "2025-11-25";
+///
+/// Sourced from pmcp's own constant, like [`V2`] — this was the one version string
+/// in the harness still spelled as a literal.
+pub const V1: &str = LATEST_PROTOCOL_VERSION;
 
 // ===========================================================================
-// Reserved `_meta` keys (mirrors `src/types/protocol/context.rs`).
+// Reserved `_meta` keys — re-exported from the crate, not re-spelled.
 // ===========================================================================
 
-/// Reserved `_meta` key carrying the per-request protocol version.
-pub const META_PROTOCOL_VERSION: &str = "io.modelcontextprotocol/protocolVersion";
-
-/// Reserved `_meta` key carrying the per-request client identity.
-pub const META_CLIENT_INFO: &str = "io.modelcontextprotocol/clientInfo";
-
-/// Reserved `_meta` key carrying the per-request client capabilities.
-pub const META_CLIENT_CAPABILITIES: &str = "io.modelcontextprotocol/clientCapabilities";
+pub use pmcp::testing::{META_CLIENT_CAPABILITIES, META_CLIENT_INFO, META_PROTOCOL_VERSION};
 
 // ===========================================================================
 // Handlers — one real dispatch target per MRTR-eligible method.
@@ -298,35 +299,20 @@ pub fn v1_body(method: &str, id: Value, params: Value) -> String {
 // `Mcp-Name` value encoding.
 // ===========================================================================
 
-/// Opening marker of the base64 sentinel form.
-pub const HEADER_SENTINEL_PREFIX: &str = "=?base64?";
+// The sentinel markers are NOT re-exported here. They were only ever used by the
+// hand-copied encoder this module used to carry; a test that needs them should read
+// `pmcp::testing::HEADER_SENTINEL_PREFIX` / `_SUFFIX` directly, which is one hop
+// from the production constants rather than two.
 
-/// Closing marker of the base64 sentinel form.
-pub const HEADER_SENTINEL_SUFFIX: &str = "?=";
-
-/// Test-side mirror of pmcp's `Mcp-Name` value encoder.
+/// pmcp's `Mcp-Name` value encoder — the PRODUCTION one.
 ///
-/// The production codec is `pmcp::types::mrtr::encode_header_value`, which is
-/// `pub(crate)` (Phase-113 D-10 keeps the MRTR plumbing off the public API), so the
-/// harness carries an equivalent. **`src/types/mrtr.rs` is the source of truth** —
-/// keep the two in step. Safe bytes are printable US-ASCII EXCLUDING the RFC 9110
-/// field-value delimiters `"`, `,`, `;` and `\`; everything else, plus a value that
-/// itself starts with the sentinel marker, is base64 sentinel-encoded. The EMPTY
-/// string passes through unchanged (the name-less-method case).
-pub fn encode_header_value(value: &str) -> String {
-    use base64::engine::general_purpose::STANDARD;
-    use base64::Engine as _;
-    let safe = value
-        .bytes()
-        .all(|b| (0x20..=0x7E).contains(&b) && !matches!(b, b'"' | b',' | b';' | b'\\'));
-    if safe && !value.starts_with(HEADER_SENTINEL_PREFIX) {
-        return value.to_string();
-    }
-    format!(
-        "{HEADER_SENTINEL_PREFIX}{}{HEADER_SENTINEL_SUFFIX}",
-        STANDARD.encode(value.as_bytes())
-    )
-}
+/// This used to be a hand-copied mirror, and the mirror had already drifted: it
+/// omitted the `MAX_HEADER_VALUE_LEN` clause from its passthrough predicate, so the
+/// harness would emit a raw >8 KiB header where the real encoder sentinel-encodes.
+/// Six Phase-113 plans build every request through this file, so the tests were
+/// validating the harness against itself. Now it calls the shipped codec via the
+/// `pmcp::testing` seam and cannot drift at all.
+pub use pmcp::testing::encode_mcp_name as encode_header_value;
 
 /// The three required v2 headers, with `name` sentinel-encoded as needed.
 ///
@@ -341,9 +327,9 @@ pub fn v2_headers(method: &str, name: &str) -> Vec<(String, String)> {
 /// malformed sentinel or a raw non-ASCII value.
 pub fn v2_headers_raw(method: &str, raw_name: &str) -> Vec<(String, String)> {
     vec![
-        ("mcp-method".to_string(), method.to_string()),
-        ("mcp-name".to_string(), raw_name.to_string()),
-        ("mcp-protocol-version".to_string(), V2.to_string()),
+        (MCP_METHOD.to_string(), method.to_string()),
+        (MCP_NAME.to_string(), raw_name.to_string()),
+        (MCP_PROTOCOL_VERSION.to_string(), V2.to_string()),
     ]
 }
 
@@ -423,10 +409,10 @@ async fn send(request: reqwest::RequestBuilder, extra: &[(String, String)]) -> R
             .and_then(|v| v.to_str().ok())
             .map(str::to_string)
     };
-    let mcp_method = hget("mcp-method");
-    let mcp_name = hget("mcp-name");
-    let mcp_version = hget("mcp-protocol-version");
-    let mcp_session_id = hget("mcp-session-id");
+    let mcp_method = hget(MCP_METHOD);
+    let mcp_name = hget(MCP_NAME);
+    let mcp_version = hget(MCP_PROTOCOL_VERSION);
+    let mcp_session_id = hget(MCP_SESSION_ID);
     let content_type = hget("content-type");
     let raw = response.text().await.unwrap_or_default();
     let body = parse_body(&raw, content_type.as_deref());
@@ -443,12 +429,20 @@ async fn send(request: reqwest::RequestBuilder, extra: &[(String, String)]) -> R
 }
 
 /// The `Accept` value a v2 client sends: both content types, per the transport spec.
-pub const ACCEPT_BOTH: &str = "application/json, text/event-stream";
+pub const ACCEPT_BOTH: &str = ACCEPT_STREAMABLE;
 
 /// POST a body with the given extra headers.
 pub async fn post(addr: SocketAddr, extra: &[(String, String)], body: &str) -> Resp {
     post_with_accept(addr, ACCEPT_BOTH, extra, body).await
 }
+
+/// One shared `reqwest::Client` for the whole harness.
+///
+/// Each `Client::new()` builds a fresh rustls `ClientConfig` and root-certificate
+/// store and gets its own connection pool, so a per-call client meant no connection
+/// was ever reused across the hundreds of requests the Phase-113 test files make.
+static CLIENT: std::sync::LazyLock<reqwest::Client> =
+    std::sync::LazyLock::new(reqwest::Client::new);
 
 /// [`post`] with an explicit `Accept` value, for the content-negotiation tests.
 pub async fn post_with_accept(
@@ -457,7 +451,7 @@ pub async fn post_with_accept(
     extra: &[(String, String)],
     body: &str,
 ) -> Resp {
-    let request = reqwest::Client::new()
+    let request = CLIENT
         .post(format!("http://{addr}"))
         .header("content-type", "application/json")
         .header("accept", accept)
@@ -473,7 +467,7 @@ pub async fn post_raw(addr: SocketAddr, extra: &[(String, String)], raw_body: &s
 
 /// GET the MCP endpoint — v2 must answer 405 (HTTP-01).
 pub async fn get(addr: SocketAddr, extra: &[(String, String)]) -> Resp {
-    let request = reqwest::Client::new()
+    let request = CLIENT
         .get(format!("http://{addr}"))
         .header("accept", "text/event-stream");
     send(request, extra).await
@@ -481,7 +475,7 @@ pub async fn get(addr: SocketAddr, extra: &[(String, String)]) -> Resp {
 
 /// DELETE the MCP endpoint — v2 must answer 405 (HTTP-01).
 pub async fn delete(addr: SocketAddr, extra: &[(String, String)]) -> Resp {
-    let request = reqwest::Client::new()
+    let request = CLIENT
         .delete(format!("http://{addr}"))
         .header("accept", "application/json");
     send(request, extra).await

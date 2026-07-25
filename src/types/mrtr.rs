@@ -90,19 +90,61 @@ pub(crate) const INPUT_REQUIRED_RESULT_TYPE: &str = "input_required";
 // The ONE method table (T-113-16).
 // ===========================================================================
 
-/// The exact set of client requests MRTR applies to.
+/// One row of the MRTR method table.
+///
+/// Every per-method fact MRTR needs lives here as a column, so a method cannot be
+/// half-registered: adding a row supplies its logical-name key and its digest-salient
+/// params at the same time. Before this was a struct, the same three method strings
+/// were spelled out in three independent `match` arms, and omitting one of them
+/// failed *silently in the security direction* — a method missing from the salient
+/// list digests to the empty object, which quietly removes replay clause 5c's
+/// parameter binding.
+pub(crate) struct MrtrMethod {
+    /// The JSON-RPC method string.
+    pub method: &'static str,
+    /// Where this method carries its logical name (`params.name`, `params.uri`, …).
+    pub name_key: &'static str,
+    /// The WHITELIST of params folded into the AAD digest.
+    pub salient: &'static [&'static str],
+}
+
+/// The ONE method table: the exact set of client requests MRTR applies to.
 ///
 /// The spec is explicit: "Servers **MUST NOT** send `InputRequiredResult` responses
-/// on any other client requests." This constant is the ONE source of truth for that
+/// on any other client requests." This table is the single source of truth for that
 /// rule — the dispatch-layer tripwire that refuses to emit `input_required` on a
 /// forbidden method reads it, and so does the client-side retry loop.
-pub(crate) const MRTR_ELIGIBLE_METHODS: [&str; 3] = ["tools/call", "prompts/get", "resources/read"];
+pub(crate) const MRTR_METHODS: [MrtrMethod; 3] = [
+    MrtrMethod {
+        method: "tools/call",
+        name_key: "name",
+        salient: &["name", "arguments"],
+    },
+    MrtrMethod {
+        method: "prompts/get",
+        name_key: "name",
+        salient: &["name", "arguments"],
+    },
+    MrtrMethod {
+        method: "resources/read",
+        name_key: "uri",
+        salient: &["uri"],
+    },
+];
+
+/// The table row for `method`, if it is an MRTR method.
+///
+/// A linear scan over three `&str` beats hashing at this size, and the table is
+/// consulted once per request.
+fn mrtr_row(method: &str) -> Option<&'static MrtrMethod> {
+    MRTR_METHODS.iter().find(|row| row.method == method)
+}
 
 /// Whether `method` may carry an `input_required` result.
 ///
-/// Derived from [`MRTR_ELIGIBLE_METHODS`] so the set cannot drift.
+/// Derived from [`MRTR_METHODS`] so the set cannot drift.
 pub(crate) fn mrtr_eligible(method: &str) -> bool {
-    MRTR_ELIGIBLE_METHODS.contains(&method)
+    mrtr_row(method).is_some()
 }
 
 /// Single source of truth for a name-bearing method's logical-name location.
@@ -112,14 +154,9 @@ pub(crate) fn mrtr_eligible(method: &str) -> bool {
 /// every other method is not name-bearing and its `Mcp-Name` header value is the
 /// EMPTY STRING (see the module doc's header rule).
 ///
-/// Moved here verbatim from `src/server/streamable_http_server.rs` so the client
-/// and the server read ONE table.
+/// Derived from [`MRTR_METHODS`] so the client and the server read ONE table.
 pub(crate) fn logical_name_key(method: &str) -> Option<&'static str> {
-    match method {
-        "tools/call" | "prompts/get" => Some("name"),
-        "resources/read" => Some("uri"),
-        _ => None,
-    }
+    Some(mrtr_row(method)?.name_key)
 }
 
 /// Resolve a request's logical name from its params, method-awarely.
@@ -141,9 +178,18 @@ pub(crate) const HEADER_SENTINEL_PREFIX: &str = "=?base64?";
 /// Case-sensitive closing marker of the base64 sentinel form.
 pub(crate) const HEADER_SENTINEL_SUFFIX: &str = "?=";
 
-/// Upper bound on a decoded `Mcp-Name` value, mirroring the transport's
-/// `MAX_V2_HEADER_VALUE_LEN`. Bounds a decompression-style amplification `DoS`
-/// where a short base64 sentinel expands into a large allocation.
+/// Upper bound on a v2 header value, for BOTH the transport's raw ingress check and
+/// this module's sentinel decoder.
+///
+/// Single-sourced deliberately. These two bounds are coupled: the transport admits a
+/// raw header, then `cross_check_name` runs it through [`decode_header_value`]. Were
+/// they separate constants "mirroring" each other by doc comment, raising only the
+/// transport's would reject a legitimate conformant `Mcp-Name` in the gap as a
+/// malformed sentinel — the wrong error for a well-formed request — while lowering
+/// only the transport's would make this check dead code.
+///
+/// Bounds a decompression-style amplification `DoS` where a short base64 sentinel
+/// expands into a large allocation.
 pub(crate) const MAX_HEADER_VALUE_LEN: usize = 8192;
 
 /// Whether a byte may travel verbatim in an `Mcp-Name` header value.
@@ -814,13 +860,12 @@ fn write_canonical(value: &Value, depth: usize, out: &mut String) {
 /// A whitelist, never a blacklist: `_meta`, `inputResponses` and `requestState` are
 /// excluded BY CONSTRUCTION because they are simply not on it, so adding or removing
 /// them cannot change the digest.
+///
+/// Derived from [`MRTR_METHODS`] so a newly registered method cannot silently digest
+/// to the empty object.
 fn salient_params(method: &str, params: &Value) -> Value {
     let mut salient = serde_json::Map::new();
-    let keys: &[&str] = match method {
-        "tools/call" | "prompts/get" => &["name", "arguments"],
-        "resources/read" => &["uri"],
-        _ => &[],
-    };
+    let keys: &[&str] = mrtr_row(method).map_or(&[], |row| row.salient);
     for key in keys {
         if let Some(value) = params.get(*key) {
             salient.insert((*key).to_string(), value.clone());
@@ -1009,7 +1054,37 @@ mod tests {
         ] {
             assert!(!mrtr_eligible(method), "{method} must NOT be MRTR-eligible");
         }
-        assert_eq!(MRTR_ELIGIBLE_METHODS.len(), 3);
+        assert_eq!(MRTR_METHODS.len(), 3);
+    }
+
+    /// A method cannot be half-registered.
+    ///
+    /// Splitting this knowledge across three `match` arms made the failure mode
+    /// silent AND security-relevant: a row present in the eligibility list but
+    /// missing from the salient list digests to the empty object, dropping replay
+    /// clause 5c's parameter binding. As one table, the invariant is checkable.
+    #[test]
+    fn every_mrtr_method_row_is_completely_populated() {
+        for row in &MRTR_METHODS {
+            assert!(
+                !row.salient.is_empty(),
+                "{} is MRTR-eligible but has no salient params — its AAD digest \
+                 would degrade to the empty object and stop binding the request",
+                row.method
+            );
+            assert!(
+                row.salient.contains(&row.name_key),
+                "{}'s logical-name key {:?} must be digest-salient, or a token \
+                 minted for one name would verify against another",
+                row.method,
+                row.name_key
+            );
+            assert!(
+                !row.method.is_empty() && !row.name_key.is_empty(),
+                "{} has an empty method or name_key",
+                row.method
+            );
+        }
     }
 
     #[test]

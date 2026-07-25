@@ -360,8 +360,12 @@ fn create_error_response(status: StatusCode, code: i32, message: &str) -> Respon
 // its JSON-RPC code from `error_codes::` (VERS-06); no new bare -326xx literal.
 // ===========================================================================
 
-/// Upper bound on a decoded header value we will consider (`DoS` guard, T-112-13).
-const MAX_V2_HEADER_VALUE_LEN: usize = 8192;
+/// Upper bound on a header value we will consider (`DoS` guard, T-112-13).
+///
+/// Re-exported from `types::mrtr` rather than redeclared: the ingress bound and the
+/// `Mcp-Name` sentinel decoder's bound MUST be the same number, or a value in the gap
+/// is admitted here and then rejected there as a malformed sentinel.
+use crate::types::mrtr::MAX_HEADER_VALUE_LEN as MAX_V2_HEADER_VALUE_LEN;
 
 // ---------------------------------------------------------------------------
 // Session era gate (Plan 113-04, HTTP-01).
