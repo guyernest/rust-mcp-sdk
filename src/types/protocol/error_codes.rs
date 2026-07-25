@@ -11,14 +11,23 @@
 //!
 //! The constants below are grouped by semantic so that a later version-gated
 //! resolver (`code_for(era, semantic)`) and the v2 remaps can drop in at
-//! finalization **without restructuring**. v2 semantic error-code values
-//! (e.g. the SEP-2164 resource-not-found `-32002`→`-32602` remap) are finalized
-//! only when the 2026-07-28 `schema.json` publishes; see the Phase 112 VERS-06
-//! final-schema finalization item tracked in the planning system
-//! (`112-VALIDATION.md` marks VERS-06 partial-until-final-schema). Those v2
-//! values are **structurally omitted** here (absent, not stubbed) — there is no
-//! placeholder constant and, deliberately, no self-admitted-technical-debt
-//! marker token anywhere, so PMAT's zero-SATD gate passes.
+//! finalization **without restructuring**.
+//!
+//! Phase 113 landed the three v2 **transport-layer** codes — [`HEADER_MISMATCH`],
+//! [`MISSING_REQUIRED_CLIENT_CAPABILITY`] and [`UNSUPPORTED_PROTOCOL_VERSION`]
+//! — under a recorded developer exception. Their verification record, including
+//! the schema path and commit their values were read from and the re-verification
+//! obligation that record imposes, is
+//! `.planning/phases/113-stateless-http-multi-round-trip-elicitation/113-SPEC-RECHECK.md`.
+//!
+//! v2 **semantic** error-code values (e.g. the resource-not-found
+//! `-32002`→`-32602` remap) remain absent: they are finalized only when the
+//! 2026-07-28 `schema.json` publishes; see the Phase 112 VERS-06 final-schema
+//! finalization item tracked in the planning system (`112-VALIDATION.md` marks
+//! VERS-06 partial-until-final-schema). Those values are absent rather than
+//! stubbed — there is no placeholder constant and, deliberately, no
+//! self-admitted-technical-debt marker token anywhere, so PMAT's zero-SATD gate
+//! passes.
 //!
 //! # The two distinct meanings of `-32002`
 //!
@@ -93,6 +102,83 @@ pub const RATE_LIMITED: i32 = -32005;
 /// Circuit breaker open — an upstream dependency is being shed.
 pub const CIRCUIT_BREAKER_OPEN: i32 = -32006;
 
+// ---------------------------------------------------------------------------
+// v2 (MCP 2026-07-28) transport-layer error codes (-3202x family).
+//
+// The spec partitions the JSON-RPC implementation-defined range: `-32000` to
+// `-32019` is implementation-defined (where pmcp's own `-320xx` codes above
+// live), while `-32020` to `-32099` is reserved for codes the MCP
+// specification itself defines. The three below are the first three
+// spec-allocated codes and are transport-layer rejections, not handler
+// semantics.
+//
+// PROVENANCE: the numeric values and identifiers were read from
+// `schema/draft/schema.ts` @ commit 71e306956a4959c9655e5036be215d41986596e6
+// (2026-07-16) under the `PENDING` verdict + `## Recorded Exception` in
+// `.planning/phases/113-stateless-http-multi-round-trip-elicitation/113-SPEC-RECHECK.md`,
+// because the final `schema/2026-07-28` had not yet published. That record
+// obliges a re-verification against the published schema before any Phase-113
+// requirement is flipped complete.
+// ---------------------------------------------------------------------------
+
+/// Header/body mismatch or a missing required v2 header (`-32020`).
+///
+/// Returned on the v2 HTTP path when a required standard header
+/// (`MCP-Protocol-Version`, `Mcp-Method`, `Mcp-Name`) is missing or malformed,
+/// or when a header value does not match the corresponding value in the
+/// JSON-RPC request body.
+///
+/// **HTTP status: `400 Bad Request`** (spec MUST). This is the single
+/// documented source for that mapping — the v2 status mapper reads it here
+/// rather than re-deciding per call site.
+///
+/// Provenance: `HEADER_MISMATCH = -32020` in `schema/draft/schema.ts` @
+/// `71e3069`; see `113-SPEC-RECHECK.md` (verdict `PENDING` + recorded
+/// exception).
+pub const HEADER_MISMATCH: i32 = -32020;
+
+/// The server requires a client capability that was not declared (`-32021`).
+///
+/// Returned when processing a request needs a client capability absent from the
+/// request's `_meta.clientCapabilities` — for example, a handler that wants to
+/// emit an `elicitation/create` input request to a client that never declared
+/// `elicitation`.
+///
+/// **HTTP status: `400 Bad Request`** (spec MUST).
+///
+/// The accompanying `error.data.requiredCapabilities` payload is a
+/// `ClientCapabilities` **OBJECT** (e.g. `{"sampling": {}}`) — never an array.
+/// Emitting an array here is a wire-contract violation that the official
+/// conformance suite grades.
+///
+/// This is a **DIFFERENT** constant from [`UNSUPPORTED_CAPABILITY`] (`-32002`).
+/// That one is pmcp's own long-standing capability-unsupported code in the
+/// implementation-defined range; this one is the spec-allocated v2 code for the
+/// narrower "the CLIENT did not declare a capability the SERVER needs"
+/// direction. They are not interchangeable and must not be reconciled.
+///
+/// Provenance: `MISSING_REQUIRED_CLIENT_CAPABILITY = -32021` in
+/// `schema/draft/schema.ts` @ `71e3069`; see `113-SPEC-RECHECK.md` (verdict
+/// `PENDING` + recorded exception).
+pub const MISSING_REQUIRED_CLIENT_CAPABILITY: i32 = -32021;
+
+/// The requested protocol version is not supported by the server (`-32022`).
+///
+/// Returned when a request's protocol version is unknown to the server or is a
+/// known version the server has chosen not to implement — i.e. it is not in the
+/// server's accept-list.
+///
+/// **HTTP status: `400 Bad Request`** (spec MUST).
+///
+/// The accompanying `error.data` carries `supported` (the list of protocol
+/// versions the server accepts, so the client can pick a mutually supported one
+/// and retry) alongside `requested`.
+///
+/// Provenance: `UNSUPPORTED_PROTOCOL_VERSION = -32022` in
+/// `schema/draft/schema.ts` @ `71e3069`; see `113-SPEC-RECHECK.md` (verdict
+/// `PENDING` + recorded exception).
+pub const UNSUPPORTED_PROTOCOL_VERSION: i32 = -32022;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -146,6 +232,121 @@ mod tests {
             ErrorCode::CIRCUIT_BREAKER_OPEN.as_i32(),
             CIRCUIT_BREAKER_OPEN
         );
+    }
+
+    /// Locks `HEADER_MISMATCH` to the spec-allocated `-32020`.
+    ///
+    /// Landed from `schema/draft/schema.ts` @ `71e3069` under the recorded
+    /// exception in `113-SPEC-RECHECK.md`; plan 12 must re-verify this value
+    /// against the published `schema/2026-07-28` before any Phase-113
+    /// requirement is flipped complete.
+    #[test]
+    fn header_mismatch_is_locked_to_minus_32020() {
+        assert_eq!(HEADER_MISMATCH, -32020);
+    }
+
+    /// Locks `MISSING_REQUIRED_CLIENT_CAPABILITY` to the spec-allocated
+    /// `-32021` — distinct from pmcp's own `UNSUPPORTED_CAPABILITY` (`-32002`).
+    #[test]
+    fn missing_required_client_capability_is_locked_to_minus_32021() {
+        assert_eq!(MISSING_REQUIRED_CLIENT_CAPABILITY, -32021);
+        // The two "capability" codes are NOT the same error and must never be
+        // collapsed: -32002 is pmcp's implementation-defined code, -32021 is
+        // the spec-allocated v2 code for an undeclared CLIENT capability.
+        assert_ne!(MISSING_REQUIRED_CLIENT_CAPABILITY, UNSUPPORTED_CAPABILITY);
+    }
+
+    /// Locks `UNSUPPORTED_PROTOCOL_VERSION` to the spec-allocated `-32022`.
+    #[test]
+    fn unsupported_protocol_version_is_locked_to_minus_32022() {
+        assert_eq!(UNSUPPORTED_PROTOCOL_VERSION, -32022);
+    }
+
+    /// The three v2 transport codes are pairwise distinct from each other AND
+    /// from every pre-existing constant in this table.
+    ///
+    /// This is the drift guard: if a future edit ever gives a v2 code a value
+    /// that collides with a v1 code (or with another v2 code), two different
+    /// wire meanings would silently share one number — the exact class of
+    /// defect the deliberately-preserved `-32002` collision documents as
+    /// something to never create again.
+    #[test]
+    fn v2_transport_codes_are_distinct_from_each_other_and_all_v1_codes() {
+        let v2 = [
+            ("HEADER_MISMATCH", HEADER_MISMATCH),
+            (
+                "MISSING_REQUIRED_CLIENT_CAPABILITY",
+                MISSING_REQUIRED_CLIENT_CAPABILITY,
+            ),
+            ("UNSUPPORTED_PROTOCOL_VERSION", UNSUPPORTED_PROTOCOL_VERSION),
+        ];
+
+        // Pairwise distinct among themselves.
+        for (i, (name_a, a)) in v2.iter().enumerate() {
+            for (name_b, b) in v2.iter().skip(i + 1) {
+                assert_ne!(a, b, "v2 codes {name_a} and {name_b} collide");
+            }
+        }
+
+        // Every pre-existing constant in this table. `V1_TASK_PENDING` and
+        // `UNSUPPORTED_CAPABILITY` are deliberately both listed even though
+        // they share `-32002`: the assertion is that no v2 code equals either.
+        let pre_existing = [
+            ("PARSE_ERROR", PARSE_ERROR),
+            ("INVALID_REQUEST", INVALID_REQUEST),
+            ("METHOD_NOT_FOUND", METHOD_NOT_FOUND),
+            ("INVALID_PARAMS", INVALID_PARAMS),
+            ("INTERNAL_ERROR", INTERNAL_ERROR),
+            ("REQUEST_TIMEOUT", REQUEST_TIMEOUT),
+            ("UNSUPPORTED_CAPABILITY", UNSUPPORTED_CAPABILITY),
+            ("V1_TASK_PENDING", V1_TASK_PENDING),
+            ("AUTHENTICATION_REQUIRED", AUTHENTICATION_REQUIRED),
+            ("PERMISSION_DENIED", PERMISSION_DENIED),
+            ("RATE_LIMITED", RATE_LIMITED),
+            ("CIRCUIT_BREAKER_OPEN", CIRCUIT_BREAKER_OPEN),
+        ];
+
+        for (v2_name, v2_code) in &v2 {
+            for (old_name, old_code) in &pre_existing {
+                assert_ne!(
+                    v2_code, old_code,
+                    "v2 code {v2_name} collides with pre-existing {old_name}"
+                );
+            }
+        }
+    }
+
+    /// The v2 transport codes live in the spec-reserved `-32020..=-32099`
+    /// sub-range, while every pmcp implementation-defined code stays in
+    /// `-32000..=-32019`. Crossing that boundary in either direction would
+    /// squat on numbers the specification reserves for itself.
+    #[test]
+    fn v2_codes_sit_in_the_spec_reserved_subrange() {
+        for code in [
+            HEADER_MISMATCH,
+            MISSING_REQUIRED_CLIENT_CAPABILITY,
+            UNSUPPORTED_PROTOCOL_VERSION,
+        ] {
+            assert!(
+                (-32099..=-32020).contains(&code),
+                "{code} is outside the spec-reserved -32020..=-32099 range"
+            );
+        }
+
+        for code in [
+            REQUEST_TIMEOUT,
+            UNSUPPORTED_CAPABILITY,
+            V1_TASK_PENDING,
+            AUTHENTICATION_REQUIRED,
+            PERMISSION_DENIED,
+            RATE_LIMITED,
+            CIRCUIT_BREAKER_OPEN,
+        ] {
+            assert!(
+                (-32019..=-32000).contains(&code),
+                "{code} escaped the implementation-defined -32000..=-32019 range"
+            );
+        }
     }
 
     /// `ErrorCode::UNSUPPORTED_CAPABILITY` delegates to the capability `-32002`,

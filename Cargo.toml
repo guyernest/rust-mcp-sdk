@@ -115,6 +115,17 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 axum = { version = "0.8.5", optional = true }
 tower = { version = "0.5", optional = true }
 tower-http = { version = "0.7", features = ["cors", "set-header"], optional = true }
+# Already in the dependency tree transitively via `rustls`'s `ring` feature; promoted to an
+# explicit optional dep so `pmcp`'s own production code can `use ring::aead;` for the v2
+# `requestState` AEAD token (D-14, native-only — deliberately NOT reachable from wasm32).
+ring = { version = "0.17", optional = true }
+# Already in the dependency tree transitively via the rustls crypto chain; promoted to an
+# explicit optional dep so `src/server/request_state.rs` can scrub the decoded key buffer
+# (the accepted mitigation for threat T-113-05). Default features are deliberately LEFT ON:
+# `default = ["alloc"]`, and the `Zeroize` impls for `Vec<u8>`/`String` live behind `alloc`.
+# The `derive` feature is deliberately NOT enabled — it would pull `zeroize_derive` into
+# `pmcp`'s own dependency tree.
+zeroize = { version = "1.8", optional = true }
 
 # File watching dependencies (optional, feature-gated)
 notify = { version = "8.2", optional = true }
@@ -183,7 +194,7 @@ oauth = ["http-client", "dep:webbrowser", "dep:dirs", "dep:rand"]
 sse = ["http-client", "dep:bytes"]
 websocket = ["dep:tokio-tungstenite"]
 http = ["dep:hyper", "dep:hyper-util", "dep:bytes"]
-streamable-http = ["dep:hyper", "dep:hyper-util", "dep:hyper-rustls", "dep:rustls", "dep:futures-util", "dep:bytes", "dep:axum", "dep:tower", "dep:tower-http"]
+streamable-http = ["dep:hyper", "dep:hyper-util", "dep:hyper-rustls", "dep:rustls", "dep:futures-util", "dep:bytes", "dep:axum", "dep:tower", "dep:tower-http", "dep:ring", "dep:zeroize"]
 validation = ["dep:jsonschema", "dep:garde"]
 resource-watcher = ["dep:notify", "dep:glob-match"]
 schema-generation = ["dep:schemars"]
