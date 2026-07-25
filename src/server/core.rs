@@ -1083,27 +1083,13 @@ impl crate::server::middleware_executor::MiddlewareExecutor for ServerCore {
 
 /// The wire result of a v2 `server/discover` request (Phase 112, VERS-04).
 ///
-/// A read-only projection of the server's ALREADY-COMPUTED capabilities plus
-/// its implementation info. It reuses the existing [`ServerCapabilities`] /
-/// [`Implementation`] types — it does NOT invent a parallel capability model —
-/// and is produced ONLY through the isolated [`discover_result_from_capabilities`]
-/// conversion fn so a final-spec wire adjustment stays localized.
-///
-/// It is `#[non_exhaustive]` (spec-defined fields may be added without a break)
-/// and crate-private (server-produced wire output, not a client-constructed
-/// public API type this phase — the pmcp `Client` gains v2 discover parsing in
-/// Phase 113).
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[non_exhaustive]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct ServerDiscoverResult {
-    /// The negotiated protocol version this projection was produced under.
-    pub protocol_version: String,
-    /// The server's already-computed capabilities (incl. the `extensions` map).
-    pub capabilities: ServerCapabilities,
-    /// The server's self-reported implementation info.
-    pub server_info: Implementation,
-}
+/// Phase 113 (CLNT-01) MOVED this type to
+/// [`crate::types::protocol::ServerDiscoverResult`] and made it public: it is now
+/// the return type of [`Client::server_discover`](crate::Client::server_discover),
+/// and the client compiles on `wasm32` where this whole module is `cfg`-ed out.
+/// The re-export keeps every existing in-crate reference (and this module's
+/// tests) working against the one shared definition.
+pub(crate) use crate::types::protocol::ServerDiscoverResult;
 
 /// Isolated conversion fn producing the [`ServerDiscoverResult`] wire shape
 /// (Phase 112, VERS-04).

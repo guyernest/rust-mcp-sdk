@@ -321,6 +321,64 @@ pub trait Transport: Send + Sync + Debug {
     fn transport_type(&self) -> &'static str {
         "unknown"
     }
+
+    /// Receive the per-connection NEGOTIATED protocol version (Phase 113, CLNT-01).
+    ///
+    /// The client pushes its
+    /// [`ClientBuilder::with_protocol_version`](crate::ClientBuilder::with_protocol_version)
+    /// selection here EXACTLY ONCE at build time; a transport that has no wire
+    /// representation for it ignores the call (the default body). This is the
+    /// mode-propagation seam: `Client<T>` is generic over `T`, but emitting the
+    /// `MCP-Protocol-Version` / `Mcp-Method` / `Mcp-Name` headers is the
+    /// transport's job, so the selection has to cross that boundary explicitly
+    /// rather than by assumption.
+    ///
+    /// Deliberately NOT named `set_protocol_version`:
+    /// [`StreamableHttpTransport`](crate::shared::StreamableHttpTransport) already
+    /// has an INHERENT `set_protocol_version(&self, Option<String>)` that the
+    /// v1 handshake path writes, and an identically-named trait method would
+    /// shadow it confusingly.
+    fn set_negotiated_protocol_version(&mut self, _version: Option<String>) {}
+
+    /// Whether this transport has a wire representation for the negotiated
+    /// protocol version (Phase 113, CLNT-01).
+    ///
+    /// `false` by default. `ClientBuilder::build` emits a `tracing::warn!` when a
+    /// caller selects `2026-07-28` on a transport that answers `false`, so an
+    /// INERT v2 selection is visible instead of silently producing requests a v2
+    /// server rejects (T-113-53). v2-over-stdio is explicitly out of scope for
+    /// Phase 113.
+    fn supports_negotiated_protocol_version(&self) -> bool {
+        false
+    }
+
+    /// Send an ALREADY-ENCODED JSON-RPC frame verbatim (Phase 113, CLNT-01).
+    ///
+    /// The v2 (`2026-07-28`) client path needs this for two reasons the typed
+    /// [`TransportMessage::Request`] cannot serve:
+    ///
+    /// 1. Every v2 request must carry `params._meta` with the reserved
+    ///    `io.modelcontextprotocol/*` keys, and only three typed request structs
+    ///    have a `_meta` field — adding one to the rest is a MAJOR semver break
+    ///    (Phase-113 D-113-D).
+    /// 2. `server/discover` has no [`ClientRequest`](crate::types::ClientRequest)
+    ///    variant and must not gain one (adding a variant to an exhaustive public
+    ///    enum is also a MAJOR break, Phase-112 D-10).
+    ///
+    /// The default body errors, so a transport that does not implement it simply
+    /// cannot speak v2 — which is exactly what
+    /// [`Self::supports_negotiated_protocol_version`] reports up front.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::InvalidState`](crate::Error::InvalidState) by default.
+    /// Implementors return whatever their normal send path returns.
+    async fn send_raw(&mut self, _body: Vec<u8>) -> Result<()> {
+        Err(crate::Error::InvalidState(format!(
+            "transport {} cannot send raw JSON-RPC frames (required by the 2026-07-28 era)",
+            self.transport_type()
+        )))
+    }
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -343,6 +401,34 @@ pub trait Transport: Debug {
     /// Get the transport type name for debugging.
     fn transport_type(&self) -> &'static str {
         "unknown"
+    }
+
+    /// Receive the per-connection NEGOTIATED protocol version (Phase 113, CLNT-01).
+    ///
+    /// Parity mirror of the native definition — see that one for the full
+    /// contract. Kept identical so the two trait definitions cannot drift.
+    fn set_negotiated_protocol_version(&mut self, _version: Option<String>) {}
+
+    /// Whether this transport has a wire representation for the negotiated
+    /// protocol version (Phase 113, CLNT-01).
+    ///
+    /// Parity mirror of the native definition.
+    fn supports_negotiated_protocol_version(&self) -> bool {
+        false
+    }
+
+    /// Send an ALREADY-ENCODED JSON-RPC frame verbatim (Phase 113, CLNT-01).
+    ///
+    /// Parity mirror of the native definition.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::InvalidState`](crate::Error::InvalidState) by default.
+    async fn send_raw(&mut self, _body: Vec<u8>) -> Result<()> {
+        Err(crate::Error::InvalidState(format!(
+            "transport {} cannot send raw JSON-RPC frames (required by the 2026-07-28 era)",
+            self.transport_type()
+        )))
     }
 }
 

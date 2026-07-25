@@ -597,6 +597,38 @@ impl ServerDiscoverRequest {
     }
 }
 
+/// The wire result of a v2 `server/discover` request (VERS-04, MCP 2026-07-28).
+///
+/// A read-only projection of the server's ALREADY-COMPUTED capabilities plus its
+/// implementation info. It reuses the existing [`ServerCapabilities`] /
+/// [`Implementation`] types — it does NOT invent a parallel capability model — and
+/// is produced ONLY through the server's isolated
+/// `discover_result_from_capabilities` conversion fn so a final-spec wire
+/// adjustment stays localized.
+///
+/// It is `#[non_exhaustive]` (spec-defined fields may be added without a break).
+///
+/// # Why it lives in `types::protocol` and not in the server
+///
+/// Phase 113 (CLNT-01) makes this the return type of
+/// [`Client::server_discover`](crate::Client::server_discover), and the pmcp
+/// `Client` compiles on `wasm32` where the whole `server::core` module is
+/// `cfg`-ed out. Keeping the shared wire type in the `cfg`-agnostic protocol
+/// module is what lets ONE type serve both ends.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
+#[serde(rename_all = "camelCase")]
+pub struct ServerDiscoverResult {
+    /// The negotiated protocol version this projection was produced under.
+    pub protocol_version: String,
+    /// The server's already-computed capabilities (incl. the `extensions` map).
+    pub capabilities: crate::types::ServerCapabilities,
+    /// The server's self-reported implementation info.
+    ///
+    /// SELF-REPORTED and unverified — never derive authorization from it.
+    pub server_info: Implementation,
+}
+
 /// Crate-private internal dispatch representation for methods that must be
 /// routable WITHOUT appearing in the public exhaustive [`ClientRequest`] /
 /// [`Request`] enums.

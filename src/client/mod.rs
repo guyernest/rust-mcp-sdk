@@ -109,6 +109,30 @@ impl From<TaskMetadata> for WaitForTaskOptions {
     }
 }
 
+/// The reserved `_meta` key carrying the per-request self-reported protocol
+/// version. Spelled `io.modelcontextprotocol/protocolVersion` on the wire.
+///
+/// Sourced from the ONE crate-level table (`types::protocol::context`) that the
+/// SERVER resolver reads, so the two ends cannot drift.
+/// [`Client::v2_request_meta`] emits it on every v2 request.
+const META_PROTOCOL_VERSION: &str = crate::types::protocol::context::RESERVED_PROTOCOL_VERSION_KEY;
+
+/// The reserved `_meta` key carrying the client's self-reported
+/// `io.modelcontextprotocol/clientInfo`.
+const META_CLIENT_INFO: &str = crate::types::protocol::context::RESERVED_CLIENT_INFO_KEY;
+
+/// The reserved `_meta` key carrying the client's
+/// `io.modelcontextprotocol/clientCapabilities`.
+const META_CLIENT_CAPABILITIES: &str =
+    crate::types::protocol::context::RESERVED_CLIENT_CAPABILITIES_KEY;
+
+/// The `_meta` object key inside `params` (the SPEC spelling).
+///
+/// Phase-113 D-113-A pinned `_meta` as pmcp's egress spelling on the typed
+/// request structs; the raw v2 injection below uses the same key so a single
+/// request never carries two spellings.
+const PARAMS_META_KEY: &str = "_meta";
+
 /// MCP client for connecting to servers.
 pub struct Client<T: Transport> {
     transport: Arc<RwLock<T>>,
@@ -126,6 +150,13 @@ pub struct Client<T: Transport> {
     /// Registered host handlers answering inbound server -> client requests
     /// (sampling / elicitation / roots). Immutable after construction.
     host_registry: crate::client::host::ClientHostRegistry,
+    /// The EXPLICIT per-connection protocol-version selection made via
+    /// [`ClientBuilder::with_protocol_version`] (Phase 113, CLNT-01).
+    ///
+    /// `None` — the default and the only state reachable without that builder
+    /// call — means "behave exactly as pmcp always has": v1, full `initialize`
+    /// handshake, no v2 headers, no per-request `_meta`.
+    negotiated_protocol_version: Option<crate::types::ProtocolVersion>,
 }
 
 impl<T: Transport> std::fmt::Debug for Client<T> {
@@ -192,6 +223,7 @@ impl<T: Transport> Client<T> {
             active_requests: Arc::new(RwLock::new(HashMap::new())),
             options: ClientOptions::default(),
             host_registry: crate::client::host::ClientHostRegistry::default(),
+            negotiated_protocol_version: None,
         }
     }
 
@@ -236,6 +268,7 @@ impl<T: Transport> Client<T> {
             active_requests: Arc::new(RwLock::new(HashMap::new())),
             options: ClientOptions::default(),
             host_registry: crate::client::host::ClientHostRegistry::default(),
+            negotiated_protocol_version: None,
         }
     }
 
@@ -276,6 +309,7 @@ impl<T: Transport> Client<T> {
             active_requests: Arc::new(RwLock::new(HashMap::new())),
             options,
             host_registry: crate::client::host::ClientHostRegistry::default(),
+            negotiated_protocol_version: None,
         }
     }
 
@@ -328,6 +362,15 @@ impl<T: Transport> Client<T> {
         &mut self,
         mut capabilities: ClientCapabilities,
     ) -> Result<InitializeResult> {
+        // v2 (2026-07-28) REMOVED the initialize handshake: every request carries
+        // its own `_meta` era signal and there is no session to establish. This
+        // stays callable so existing v1-shaped application code keeps compiling
+        // when it opts into v2, but it sends NOTHING — no `initialize`, no
+        // `notifications/initialized`.
+        if self.is_v2() {
+            self.initialized = true;
+            return Ok(Self::v2_synthetic_initialize_result());
+        }
         if self.initialized {
             return Err(Error::InvalidState("Client already initialized".into()));
         }
@@ -410,15 +453,200 @@ impl<T: Transport> Client<T> {
             }
         }
 
+        // EITHER sampling handler shape can service an inbound
+        // `sampling/createMessage`: `on_sampling_with_tools` sets only
+        // `sampling_with_tools`, and dispatch prefers it. Checking only
+        // `sampling` made a `WithTools`-ONLY client advertise no sampling
+        // capability at all — an under-claim that stops a server from ever
+        // asking, and (on v2) makes the server answer `-32021` instead of
+        // sending the sampling input request the client can in fact fulfil.
         sync_cap(
             &mut capabilities.sampling,
-            self.host_registry.sampling.is_some(),
+            self.host_registry.sampling.is_some()
+                || self.host_registry.sampling_with_tools.is_some(),
         );
         sync_cap(
             &mut capabilities.elicitation,
             self.host_registry.elicitation.is_some(),
         );
         sync_cap(&mut capabilities.roots, self.host_registry.roots.is_some());
+    }
+
+    // =======================================================================
+    // v2 (`2026-07-28`) era plumbing — Phase 113, CLNT-01.
+    // =======================================================================
+
+    /// The era this connection speaks, from the EXPLICIT
+    /// [`ClientBuilder::with_protocol_version`] selection.
+    ///
+    /// A client that never made that call is [`Era::V1`](crate::types::protocol::Era::V1)
+    /// and every v2 branch below is dead for it.
+    fn era(&self) -> crate::types::protocol::Era {
+        self.negotiated_protocol_version
+            .as_ref()
+            .map_or(crate::types::protocol::Era::V1, |version| {
+                crate::types::protocol::protocol_era(version.as_str())
+            })
+    }
+
+    /// Whether this connection speaks the v2 (`2026-07-28`) wire contract.
+    fn is_v2(&self) -> bool {
+        self.era() == crate::types::protocol::Era::V2
+    }
+
+    /// The `InitializeResult` a v2 client returns from its handshake-free
+    /// [`Self::initialize`].
+    ///
+    /// It is LOCAL and SYNTHETIC: v2 removed `initialize`, so no byte of this
+    /// came from the server. Deliberately it is NOT stored into
+    /// `server_capabilities` — a v2 client learns the server's capabilities only
+    /// from an explicit [`Self::server_discover`] call, and
+    /// [`Self::assert_capability`] depends on that distinction.
+    fn v2_synthetic_initialize_result() -> InitializeResult {
+        InitializeResult {
+            protocol_version: crate::types::ProtocolVersion(
+                crate::types::protocol::PROTOCOL_VERSION_2026_07_28.to_string(),
+            ),
+            capabilities: ServerCapabilities::default(),
+            server_info: Implementation::new("unknown", "unknown"),
+            instructions: None,
+        }
+    }
+
+    /// The capabilities a v2 client declares in
+    /// `_meta["io.modelcontextprotocol/clientCapabilities"]`.
+    ///
+    /// DERIVED FROM THE HANDLER REGISTRY, never from a caller-supplied value —
+    /// the same registry-authoritative anti-capability-lie rule
+    /// [`Self::derive_host_capabilities`] applies to the v1 handshake (HOST-05).
+    ///
+    /// This is capability HONESTY, and on v2 it is load-bearing in BOTH
+    /// directions (spec MRTR obligation 7, conformance
+    /// `input-required-result-capability-check`): a server may only put an
+    /// `inputRequests` entry in an `input_required` result for a capability the
+    /// client DECLARED, so an over-claiming client receives requests it cannot
+    /// fulfil and an under-claiming one gets `-32021` where the round could have
+    /// completed.
+    fn v2_client_capabilities(&self) -> ClientCapabilities {
+        let mut capabilities = ClientCapabilities::default();
+        self.derive_host_capabilities(&mut capabilities);
+        capabilities
+    }
+
+    /// Build the reserved `_meta` object every v2 request carries.
+    ///
+    /// Exactly three keys, all read by the server's `resolve_protocol_context`:
+    /// `io.modelcontextprotocol/protocolVersion` (the era channel — a stateless
+    /// v2 request has no handshake, so this is the ONLY one),
+    /// `io.modelcontextprotocol/clientInfo` and
+    /// `io.modelcontextprotocol/clientCapabilities`.
+    ///
+    /// `clientInfo` is SELF-REPORTED and unverified by construction — a server
+    /// must never derive authorization from it (T-113-21).
+    fn v2_request_meta(&self) -> serde_json::Map<String, serde_json::Value> {
+        let mut meta = serde_json::Map::new();
+        meta.insert(
+            META_PROTOCOL_VERSION.to_string(),
+            serde_json::Value::String(
+                crate::types::protocol::PROTOCOL_VERSION_2026_07_28.to_string(),
+            ),
+        );
+        if let Ok(info) = serde_json::to_value(&self.info) {
+            meta.insert(META_CLIENT_INFO.to_string(), info);
+        }
+        if let Ok(capabilities) = serde_json::to_value(self.v2_client_capabilities()) {
+            meta.insert(META_CLIENT_CAPABILITIES.to_string(), capabilities);
+        }
+        meta
+    }
+
+    /// MERGE the v2 reserved `_meta` keys into an outgoing request's `params`.
+    ///
+    /// Merge, never replace (T-113-54): a caller-supplied `_meta` — W3C trace
+    /// context (`traceparent` / `tracestate` / `baggage`), a progress token, a
+    /// namespaced extension key — SURVIVES, so plan 07's MRTR retries keep their
+    /// distributed-tracing spans linked. Only the three reserved
+    /// `io.modelcontextprotocol/*` keys are authoritative and overwrite.
+    ///
+    /// A `params` that is absent or not an object is replaced with a fresh
+    /// object carrying only `_meta`: on v2 a request with no `_meta` has no era
+    /// signal at all and would be rejected by the server's header gate.
+    fn splice_v2_meta(&self, params: &mut Option<serde_json::Value>) {
+        let reserved = self.v2_request_meta();
+        let object = match params {
+            Some(serde_json::Value::Object(existing)) => existing,
+            _ => {
+                *params = Some(serde_json::Value::Object(serde_json::Map::new()));
+                let Some(serde_json::Value::Object(fresh)) = params.as_mut() else {
+                    return;
+                };
+                fresh
+            },
+        };
+        let meta = object
+            .entry(PARAMS_META_KEY.to_string())
+            .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()));
+        if !meta.is_object() {
+            *meta = serde_json::Value::Object(serde_json::Map::new());
+        }
+        let Some(meta) = meta.as_object_mut() else {
+            return;
+        };
+        for (key, value) in reserved {
+            meta.insert(key, value);
+        }
+    }
+
+    /// Ask a v2 server for its capability projection (`server/discover`).
+    ///
+    /// v2 has no `initialize`, so this is how a client learns what the server
+    /// supports. It is EXPLICIT: pmcp never calls it implicitly, and never uses
+    /// it to CHOOSE an era (Phase-113 D-08 forbids exactly that auto-probe).
+    /// Populating capabilities from a call the USER made is a different thing
+    /// from probing to decide which protocol to speak — do not "restore" the
+    /// latter.
+    ///
+    /// Takes `&mut self` because it STORES the returned capabilities: after this
+    /// call [`Self::assert_capability`] enforces on v2 exactly as it does on v1
+    /// against initialize-learned ones.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the connection did not opt into `2026-07-28`
+    /// (`server/discover` does not exist on v1 — a v1 server answers `-32601`),
+    /// when the transport fails, or when the server returns a JSON-RPC error.
+    pub async fn server_discover(
+        &mut self,
+    ) -> Result<crate::types::protocol::ServerDiscoverResult> {
+        if !self.is_v2() {
+            return Err(Error::InvalidState(
+                "server/discover requires the 2026-07-28 era — select it with \
+                 ClientBuilder::with_protocol_version"
+                    .into(),
+            ));
+        }
+        let request_id = RequestId::String(Uuid::new_v4().to_string());
+        let response = self
+            .send_untyped_request(
+                request_id,
+                crate::types::protocol::SERVER_DISCOVER_METHOD,
+                serde_json::json!({}),
+            )
+            .await?;
+        match response.payload {
+            crate::types::jsonrpc::ResponsePayload::Result(result) => {
+                let discovered = serde_json::from_value::<
+                    crate::types::protocol::ServerDiscoverResult,
+                >(result)
+                .map_err(|e| Error::parse(format!("Invalid server/discover result: {e}")))?;
+                self.server_capabilities = Some(discovered.capabilities.clone());
+                self.server_version = Some(discovered.server_info.clone());
+                Ok(discovered)
+            },
+            crate::types::jsonrpc::ResponsePayload::Error(error) => {
+                Err(Error::from_jsonrpc_error(error))
+            },
+        }
     }
 
     /// Get server capabilities after initialization.
@@ -2322,7 +2550,27 @@ impl<T: Transport> Client<T> {
     }
 
     /// Assert that the server has a specific capability.
+    ///
+    /// # Era awareness (Phase 113, CLNT-01)
+    ///
+    /// `server_capabilities` is populated ONLY by the `initialize` handshake,
+    /// and v2 (`2026-07-28`) has no handshake. Left unguarded, a v2 client's
+    /// `server_capabilities` is `None`, every `is_some_and(..)` below is `false`,
+    /// and EVERY `call_tool` / `get_prompt` / `read_resource` fails locally
+    /// before a byte leaves the process.
+    ///
+    /// So on v2 with nothing observed, this returns `Ok(())`: the client has not
+    /// learned the server's capabilities and the SERVER is the authority. A v2
+    /// server answers an unsupported method with `-32601` at HTTP 404, which is a
+    /// truthful error from the party that knows, not a fabricated local one.
+    ///
+    /// Once an EXPLICIT [`Self::server_discover`] has stored a projection, v2
+    /// enforcement is exactly as strict as v1. v1 is untouched and still fails
+    /// closed.
     fn assert_capability(&self, capability: &str, method: &str) -> Result<()> {
+        if self.is_v2() && self.server_capabilities.is_none() {
+            return Ok(());
+        }
         let has_capability = match capability {
             "tools" => self
                 .server_capabilities
@@ -2386,7 +2634,7 @@ impl<T: Transport> Client<T> {
         }
     }
 
-    /// Send a request and wait for response.
+    /// Send a TYPED request and wait for its response.
     async fn send_request(
         &self,
         request_id: RequestId,
@@ -2394,6 +2642,43 @@ impl<T: Transport> Client<T> {
     ) -> Result<crate::types::JSONRPCResponse> {
         use crate::shared::protocol_helpers::create_request;
 
+        let jsonrpc_request = create_request(request_id.clone(), request.clone());
+        self.dispatch_request(request_id, Some(request), jsonrpc_request)
+            .await
+    }
+
+    /// Send a request whose method has NO public [`ClientRequest`] variant.
+    ///
+    /// Today that is exactly `server/discover` (Phase-112 D-10 keeps it out of the
+    /// exhaustive public enums, because adding a variant there is a MAJOR semver
+    /// break). Only reachable on v2, where the raw transport frame is the normal
+    /// path anyway.
+    async fn send_untyped_request(
+        &self,
+        request_id: RequestId,
+        method: &str,
+        params: serde_json::Value,
+    ) -> Result<crate::types::JSONRPCResponse> {
+        let jsonrpc_request =
+            crate::types::JSONRPCRequest::new(request_id.clone(), method, Some(params));
+        self.dispatch_request(request_id, None, jsonrpc_request)
+            .await
+    }
+
+    /// The ONE place a client request is put on the wire and its response awaited.
+    ///
+    /// `typed` carries the original [`Request`] for the v1 path, which sends the
+    /// typed [`TransportMessage::Request`](crate::types::TransportMessage) exactly
+    /// as it always has. On v2 the already-assembled JSON-RPC frame is stamped
+    /// with the reserved `_meta` keys and sent RAW, which is what lets EVERY
+    /// method — including the ones whose request struct has no `_meta` field —
+    /// carry the era signal (Phase-113 D-113-D).
+    async fn dispatch_request(
+        &self,
+        request_id: RequestId,
+        typed: Option<Request>,
+        mut jsonrpc_request: crate::types::JSONRPCRequest<serde_json::Value>,
+    ) -> Result<crate::types::JSONRPCResponse> {
         // Track request for cancellation
         let (cancel_tx, _cancel_rx) = oneshot::channel();
         self.active_requests
@@ -2414,9 +2699,6 @@ impl<T: Transport> Client<T> {
         // later reused id. The happy path still removes the entry inline when
         // the matching response arrives.
         let result = async {
-            // Convert to JSONRPC request
-            let mut jsonrpc_request = create_request(request_id.clone(), request.clone());
-
             // Process request through middleware chain (read-only access)
             self.middleware_chain
                 .read()
@@ -2424,13 +2706,27 @@ impl<T: Transport> Client<T> {
                 .process_request_with_context(&mut jsonrpc_request, &context)
                 .await?;
 
-            // Send request through transport
-            let message = crate::types::TransportMessage::Request {
-                id: request_id.clone(),
-                request,
-            };
-
-            self.transport.write().await.send(message).await?;
+            if self.is_v2() {
+                // v2: stamp the reserved `_meta` keys onto the assembled frame
+                // and send it verbatim. The transport derives `Mcp-Method` /
+                // `Mcp-Name` from these SAME bytes, so header and body cannot
+                // desync (T-113-08).
+                self.splice_v2_meta(&mut jsonrpc_request.params);
+                let body = serde_json::to_vec(&jsonrpc_request)
+                    .map_err(|e| Error::parse(format!("Failed to serialize v2 request: {e}")))?;
+                self.transport.write().await.send_raw(body).await?;
+            } else {
+                // v1: byte-identical to every prior release — the typed message
+                // is re-serialized by the transport exactly as before.
+                let request = typed.ok_or_else(|| {
+                    Error::InvalidState("untyped requests require the 2026-07-28 era".to_string())
+                })?;
+                let message = crate::types::TransportMessage::Request {
+                    id: request_id.clone(),
+                    request,
+                };
+                self.transport.write().await.send(message).await?;
+            }
 
             // Wait for response, dispatching any unsolicited notifications along the way
             loop {
@@ -2893,6 +3189,9 @@ pub struct ClientBuilder<T: Transport> {
     options: ProtocolOptions,
     middleware_chain: EnhancedMiddlewareChain,
     host_registry: crate::client::host::ClientHostRegistry,
+    /// The EXPLICIT per-connection protocol-version selection (Phase 113,
+    /// CLNT-01). `None` with no [`ClientBuilder::with_protocol_version`] call.
+    negotiated_protocol_version: Option<crate::types::ProtocolVersion>,
 }
 
 impl<T: Transport> std::fmt::Debug for ClientBuilder<T> {
@@ -2912,7 +3211,76 @@ impl<T: Transport> ClientBuilder<T> {
             options: ProtocolOptions::default(),
             middleware_chain: EnhancedMiddlewareChain::new(),
             host_registry: crate::client::host::ClientHostRegistry::default(),
+            negotiated_protocol_version: None,
         }
+    }
+
+    /// Opt into an EXPLICIT per-connection protocol version (Phase 113, CLNT-01).
+    ///
+    /// The client twin of
+    /// [`Server::with_supported_protocol_versions`](crate::ServerBuilder::with_supported_protocol_versions).
+    /// **With no call, the client behaves exactly as it does today** — v1, full
+    /// `initialize` handshake, no v2 headers, no per-request `_meta`. There is no
+    /// auto-detection: the selection is EXPLICIT and PER-CONNECTION, and the
+    /// client NEVER probes `server/discover` to CHOOSE an era (Phase-113 D-08).
+    ///
+    /// Selecting [`PROTOCOL_VERSION_2026_07_28`](crate::types::protocol::PROTOCOL_VERSION_2026_07_28)
+    /// switches the connection to the v2 wire contract:
+    ///
+    /// - no `initialize` / `notifications/initialized` (v2 has no handshake),
+    /// - every request carries `params._meta` with the reserved
+    ///   `io.modelcontextprotocol/*` keys,
+    /// - every request carries `MCP-Protocol-Version`, `Mcp-Method` and
+    ///   `Mcp-Name` (empty for a name-less method),
+    /// - no `Mcp-Session-Id`, in either direction.
+    ///
+    /// The selection is pushed into the transport EXACTLY ONCE at
+    /// [`ClientBuilder::build`] time via
+    /// [`Transport::set_negotiated_protocol_version`]. A transport with no wire
+    /// representation for it (stdio, WebSocket) logs a `tracing::warn!` at build
+    /// time — v2-over-stdio is out of scope for this phase.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::validation`](crate::Error::validation) when `version` is
+    /// neither a member of [`SUPPORTED_PROTOCOL_VERSIONS`](crate::types::SUPPORTED_PROTOCOL_VERSIONS)
+    /// nor `2026-07-28`. Validating here (rather than silently emitting an
+    /// arbitrary `MCP-Protocol-Version` header) closes T-113-52.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// use pmcp::{ClientBuilder, StdioTransport};
+    /// use pmcp::types::protocol::{ProtocolVersion, PROTOCOL_VERSION_2026_07_28};
+    ///
+    /// # fn main() -> Result<(), pmcp::Error> {
+    /// let client = ClientBuilder::new(StdioTransport::new())
+    ///     .with_protocol_version(ProtocolVersion(PROTOCOL_VERSION_2026_07_28.to_string()))?
+    ///     .build();
+    /// # Ok(()) }
+    /// ```
+    pub fn with_protocol_version(mut self, version: crate::types::ProtocolVersion) -> Result<Self> {
+        if !Self::is_selectable_protocol_version(version.as_str()) {
+            return Err(Error::validation(format!(
+                "unsupported protocol version {:?}: pmcp clients may select one of {:?} or {:?}",
+                version.as_str(),
+                crate::types::SUPPORTED_PROTOCOL_VERSIONS,
+                crate::types::protocol::PROTOCOL_VERSION_2026_07_28,
+            )));
+        }
+        self.negotiated_protocol_version = Some(version);
+        Ok(self)
+    }
+
+    /// The versions [`Self::with_protocol_version`] accepts.
+    ///
+    /// `SUPPORTED_PROTOCOL_VERSIONS` deliberately does NOT list `2026-07-28`
+    /// (Phase-112 Pitfall 1: v2 is reachable only via explicit opt-in, so it must
+    /// never be picked by the v1 negotiation fallback), which is why the v2
+    /// constant is unioned in here rather than added to that table.
+    fn is_selectable_protocol_version(version: &str) -> bool {
+        crate::types::SUPPORTED_PROTOCOL_VERSIONS.contains(&version)
+            || version == crate::types::protocol::PROTOCOL_VERSION_2026_07_28
     }
 
     /// Set whether to enforce strict capabilities.
@@ -3131,8 +3499,29 @@ impl<T: Transport> ClientBuilder<T> {
 
     /// Build the client.
     pub fn build(self) -> Client<T> {
+        let mut transport = self.transport;
+        // The mode-propagation seam (Phase 113, CLNT-01): the selection crosses
+        // into the transport EXACTLY ONCE, and only when the caller actually made
+        // one — a non-opted-in build never touches the transport at all, so its
+        // wire bytes are byte-identical to every prior release.
+        if let Some(version) = self.negotiated_protocol_version.as_ref() {
+            transport.set_negotiated_protocol_version(Some(version.as_str().to_string()));
+            if version.as_str() == crate::types::protocol::PROTOCOL_VERSION_2026_07_28
+                && !transport.supports_negotiated_protocol_version()
+            {
+                // T-113-53: an inert v2 selection would otherwise emit requests
+                // no v2 server accepts, with no local signal at all.
+                tracing::warn!(
+                    transport = transport.transport_type(),
+                    "protocol version 2026-07-28 was selected but this transport has no wire \
+                     representation for it — the selection is INERT (v2 is streamable-HTTP only \
+                     in this release)"
+                );
+            }
+        }
+
         let mut client = Client::with_options(
-            self.transport,
+            transport,
             Implementation::new("pmcp-client", env!("CARGO_PKG_VERSION")),
             self.options,
         );
@@ -3140,6 +3529,13 @@ impl<T: Transport> ClientBuilder<T> {
         client.middleware_chain = Arc::new(RwLock::new(self.middleware_chain));
         // Thread the configured host registry onto the client.
         client.host_registry = self.host_registry;
+        client.negotiated_protocol_version = self.negotiated_protocol_version;
+        // v2 has NO handshake, so a v2 client is ready the moment it is built.
+        // `ensure_initialized` therefore passes without an `initialize` round
+        // trip, which is the whole point of the stateless era.
+        if client.is_v2() {
+            client.initialized = true;
+        }
         client
     }
 }
@@ -3160,6 +3556,7 @@ impl<T: Transport> Clone for Client<T> {
             active_requests: self.active_requests.clone(),
             options: self.options.clone(),
             host_registry: self.host_registry.clone(),
+            negotiated_protocol_version: self.negotiated_protocol_version.clone(),
         }
     }
 }
@@ -4615,5 +5012,362 @@ mod tests {
                 .any(|e| e.fields.get("method").map(String::as_str) == Some("tasks/get")),
             "no task-deserialize WARN must fire on a well-formed response"
         );
+    }
+
+    // =======================================================================
+    // Phase 113 / CLNT-01 — the v2 (`2026-07-28`) client era.
+    // =======================================================================
+
+    mod v2_era {
+        use super::*;
+        use crate::types::protocol::{
+            Era, ProtocolVersion, LATEST_PROTOCOL_VERSION, PROTOCOL_VERSION_2026_07_28,
+        };
+        use crate::types::ServerCapabilities;
+
+        /// A transport that RECORDS the mode-propagation seam calls and every
+        /// raw frame, so the wiring can be asserted without a socket.
+        #[derive(Debug, Default, Clone)]
+        struct ModeRecordingTransport {
+            mode_calls: Arc<Mutex<Vec<Option<String>>>>,
+            raw_bodies: Arc<Mutex<Vec<Vec<u8>>>>,
+            typed_sends: Arc<Mutex<usize>>,
+            supports_mode: bool,
+        }
+
+        impl ModeRecordingTransport {
+            fn http_like() -> Self {
+                Self {
+                    supports_mode: true,
+                    ..Self::default()
+                }
+            }
+        }
+
+        #[async_trait]
+        impl Transport for ModeRecordingTransport {
+            async fn send(&mut self, _message: TransportMessage) -> Result<()> {
+                *self.typed_sends.lock().unwrap() += 1;
+                Ok(())
+            }
+
+            async fn receive(&mut self) -> Result<TransportMessage> {
+                Err(Error::protocol_msg("no responses"))
+            }
+
+            async fn close(&mut self) -> Result<()> {
+                Ok(())
+            }
+
+            fn transport_type(&self) -> &'static str {
+                "mode-recording"
+            }
+
+            fn set_negotiated_protocol_version(&mut self, version: Option<String>) {
+                self.mode_calls.lock().unwrap().push(version);
+            }
+
+            fn supports_negotiated_protocol_version(&self) -> bool {
+                self.supports_mode
+            }
+
+            async fn send_raw(&mut self, body: Vec<u8>) -> Result<()> {
+                self.raw_bodies.lock().unwrap().push(body);
+                Ok(())
+            }
+        }
+
+        fn v2() -> ProtocolVersion {
+            ProtocolVersion(PROTOCOL_VERSION_2026_07_28.to_string())
+        }
+
+        fn v2_client() -> Client<ModeRecordingTransport> {
+            ClientBuilder::new(ModeRecordingTransport::http_like())
+                .with_protocol_version(v2())
+                .expect("2026-07-28 is selectable")
+                .build()
+        }
+
+        // ---- the propagation seam -----------------------------------------
+
+        #[test]
+        fn v2_selection_reaches_the_transport_exactly_once() {
+            let transport = ModeRecordingTransport::http_like();
+            let calls = transport.mode_calls.clone();
+            let client = ClientBuilder::new(transport)
+                .with_protocol_version(v2())
+                .expect("2026-07-28 is selectable")
+                .build();
+
+            let calls = calls.lock().unwrap();
+            assert_eq!(
+                &*calls,
+                &[Some(PROTOCOL_VERSION_2026_07_28.to_string())],
+                "the selected version must cross into the transport exactly once"
+            );
+            assert_eq!(client.era(), Era::V2);
+        }
+
+        #[test]
+        fn a_non_opted_in_build_never_touches_the_transport_mode_seam() {
+            let transport = ModeRecordingTransport::http_like();
+            let calls = transport.mode_calls.clone();
+            let client = ClientBuilder::new(transport).build();
+
+            assert!(
+                calls.lock().unwrap().is_empty(),
+                "a client that never called with_protocol_version must be byte-identical to today"
+            );
+            assert_eq!(client.era(), Era::V1);
+            assert!(!client.initialized, "v1 still requires the handshake");
+        }
+
+        #[test]
+        fn a_v2_client_is_ready_without_a_handshake() {
+            assert!(
+                v2_client().initialized,
+                "v2 has no initialize, so the client is ready on construction"
+            );
+        }
+
+        // ---- version validation (T-113-52) --------------------------------
+
+        #[test]
+        fn with_protocol_version_accepts_the_two_documented_versions() {
+            for accepted in [PROTOCOL_VERSION_2026_07_28, LATEST_PROTOCOL_VERSION] {
+                assert!(
+                    ClientBuilder::new(MockTransport::new())
+                        .with_protocol_version(ProtocolVersion(accepted.to_string()))
+                        .is_ok(),
+                    "{accepted} must be selectable"
+                );
+            }
+        }
+
+        #[test]
+        fn with_protocol_version_rejects_an_unsupported_version() {
+            let error = ClientBuilder::new(MockTransport::new())
+                .with_protocol_version(ProtocolVersion("1999-01-01".to_string()))
+                .expect_err("an unknown version must be rejected, never silently emitted");
+            let rendered = error.to_string();
+            assert!(
+                rendered.contains("1999-01-01") && rendered.contains(PROTOCOL_VERSION_2026_07_28),
+                "the error must name both the offending and the accepted values: {rendered}"
+            );
+        }
+
+        // ---- reserved `_meta` emission -------------------------------------
+
+        /// The literal wire spellings, restated here on purpose: this test is the
+        /// drift guard between the client emitter and the server resolver.
+        #[test]
+        fn v2_meta_carries_exactly_the_three_reserved_keys() {
+            let client = v2_client();
+            let mut params = Some(json!({}));
+            client.splice_v2_meta(&mut params);
+
+            let meta = params.as_ref().unwrap()["_meta"].clone();
+            assert_eq!(
+                meta["io.modelcontextprotocol/protocolVersion"],
+                "2026-07-28"
+            );
+            assert_eq!(
+                meta["io.modelcontextprotocol/clientInfo"]["name"],
+                "pmcp-client"
+            );
+            assert!(meta
+                .get("io.modelcontextprotocol/clientCapabilities")
+                .is_some());
+        }
+
+        #[test]
+        fn v2_meta_injection_preserves_caller_trace_context() {
+            let client = v2_client();
+            let mut params = Some(json!({
+                "name": "search",
+                "_meta": { "traceparent": "00-abc-def-01", "progressToken": 7 },
+            }));
+            client.splice_v2_meta(&mut params);
+
+            let params = params.unwrap();
+            assert_eq!(params["_meta"]["traceparent"], "00-abc-def-01");
+            assert_eq!(params["_meta"]["progressToken"], 7);
+            assert_eq!(
+                params["_meta"]["io.modelcontextprotocol/protocolVersion"],
+                "2026-07-28"
+            );
+            assert_eq!(params["name"], "search", "sibling params are untouched");
+        }
+
+        #[test]
+        fn v2_meta_injection_creates_params_when_absent() {
+            let client = v2_client();
+            let mut params = None;
+            client.splice_v2_meta(&mut params);
+            assert_eq!(
+                params.unwrap()["_meta"]["io.modelcontextprotocol/protocolVersion"],
+                "2026-07-28"
+            );
+        }
+
+        // ---- capability honesty (T-113-12) ---------------------------------
+
+        struct NoopElicitation;
+
+        #[async_trait]
+        impl host::HostElicitationHandler for NoopElicitation {
+            async fn handle_elicitation(
+                &self,
+                _params: crate::types::elicitation::ElicitRequestParams,
+            ) -> Result<crate::types::elicitation::ElicitResult> {
+                Ok(crate::types::elicitation::ElicitResult {
+                    action: crate::types::elicitation::ElicitAction::Cancel,
+                    content: None,
+                })
+            }
+        }
+
+        #[test]
+        fn client_capabilities_are_empty_for_an_empty_registry() {
+            let capabilities = v2_client().v2_client_capabilities();
+            let value = serde_json::to_value(capabilities).unwrap();
+            assert_eq!(
+                value,
+                json!({}),
+                "a client with no host handlers must claim nothing"
+            );
+        }
+
+        #[test]
+        fn client_capabilities_declare_elicitation_once_registered() {
+            let client = ClientBuilder::new(ModeRecordingTransport::http_like())
+                .with_protocol_version(v2())
+                .expect("selectable")
+                .on_elicitation(NoopElicitation)
+                .build();
+            let value = serde_json::to_value(client.v2_client_capabilities()).unwrap();
+            assert!(value.get("elicitation").is_some(), "got {value}");
+            assert!(value.get("sampling").is_none(), "must not over-claim");
+            assert!(value.get("roots").is_none(), "must not over-claim");
+        }
+
+        #[test]
+        fn client_capabilities_declare_sampling_for_the_with_tools_handler() {
+            struct ToolAwareHost;
+            #[async_trait]
+            impl host::HostSamplingHandlerWithTools for ToolAwareHost {
+                async fn handle_create_message_with_tools(
+                    &self,
+                    _params: crate::types::sampling::CreateMessageParams,
+                ) -> Result<crate::types::sampling::CreateMessageResultWithTools> {
+                    Err(Error::internal("unused"))
+                }
+            }
+
+            let client = ClientBuilder::new(ModeRecordingTransport::http_like())
+                .with_protocol_version(v2())
+                .expect("selectable")
+                .on_sampling_with_tools(ToolAwareHost)
+                .build();
+            let value = serde_json::to_value(client.v2_client_capabilities()).unwrap();
+            assert!(
+                value.get("sampling").is_some(),
+                "a WithTools-only client CAN service sampling and must say so: {value}"
+            );
+        }
+
+        // ---- era-aware capability enforcement ------------------------------
+
+        #[test]
+        fn v2_without_discovery_does_not_block_locally() {
+            let client = v2_client();
+            assert!(client.server_capabilities.is_none());
+            assert!(
+                client.assert_capability("tools", "tools/call").is_ok(),
+                "a v2 client never learned capabilities — the server is the authority"
+            );
+        }
+
+        #[test]
+        fn v1_without_capabilities_still_fails_closed() {
+            let client = ClientBuilder::new(MockTransport::new()).build();
+            assert!(
+                client.assert_capability("tools", "tools/call").is_err(),
+                "v1 enforcement must be unchanged"
+            );
+        }
+
+        #[test]
+        fn v2_enforces_once_discovery_has_stored_a_projection() {
+            let mut client = v2_client();
+            client.server_capabilities = Some(ServerCapabilities::default());
+            assert!(
+                client.assert_capability("tools", "tools/call").is_err(),
+                "after server_discover stored a projection, v2 is as strict as v1"
+            );
+
+            client.server_capabilities = Some(ServerCapabilities::tools_only());
+            assert!(client.assert_capability("tools", "tools/call").is_ok());
+        }
+
+        // ---- no handshake on the wire ---------------------------------------
+
+        #[test]
+        fn initialize_on_v2_sends_nothing() {
+            let transport = ModeRecordingTransport::http_like();
+            let typed = transport.typed_sends.clone();
+            let raw = transport.raw_bodies.clone();
+            let mut client = ClientBuilder::new(transport)
+                .with_protocol_version(v2())
+                .expect("selectable")
+                .build();
+
+            let result =
+                futures::executor::block_on(client.initialize(ClientCapabilities::default()))
+                    .expect("v2 initialize is a local no-op");
+
+            assert_eq!(
+                result.protocol_version.as_str(),
+                PROTOCOL_VERSION_2026_07_28
+            );
+            assert_eq!(*typed.lock().unwrap(), 0, "no typed frame may be sent");
+            assert!(
+                raw.lock().unwrap().is_empty(),
+                "no initialize and no notifications/initialized on v2"
+            );
+        }
+
+        #[test]
+        fn a_v2_request_travels_as_a_raw_frame_carrying_meta() {
+            let transport = ModeRecordingTransport::http_like();
+            let raw = transport.raw_bodies.clone();
+            let typed = transport.typed_sends.clone();
+            let client = ClientBuilder::new(transport)
+                .with_protocol_version(v2())
+                .expect("selectable")
+                .build();
+
+            // `receive` errors, so the call fails AFTER the frame was sent —
+            // which is exactly the observation this test wants.
+            let _ = futures::executor::block_on(client.list_tools(None));
+
+            assert_eq!(*typed.lock().unwrap(), 0, "v2 never uses the typed path");
+            let bodies = raw.lock().unwrap();
+            let body: serde_json::Value =
+                serde_json::from_slice(&bodies[0]).expect("valid JSON frame");
+            assert_eq!(body["method"], "tools/list");
+            assert_eq!(
+                body["params"]["_meta"]["io.modelcontextprotocol/protocolVersion"], "2026-07-28",
+                "tools/list has no typed _meta field, so the raw frame is the only era channel"
+            );
+        }
+
+        #[test]
+        fn server_discover_is_refused_on_v1() {
+            let mut client = ClientBuilder::new(MockTransport::new()).build();
+            let error = futures::executor::block_on(client.server_discover())
+                .expect_err("server/discover does not exist on v1");
+            assert!(error.to_string().contains("2026-07-28"), "{error}");
+        }
     }
 }
