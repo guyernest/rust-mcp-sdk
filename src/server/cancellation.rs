@@ -409,6 +409,52 @@ impl RequestHandlerExtra {
             .and_then(|ctx| ctx.client_capabilities.as_ref())
     }
 
+    /// The client's answers to a PREVIOUS round's `inputRequests`
+    /// (MCP 2026-07-28 multi-round-trip elicitation, HTTP-03).
+    ///
+    /// Returns `None` when the request carried no `inputResponses`, on v1, and
+    /// on the re-elicitation path (an unknown-key or expired `requestState` is
+    /// re-run as a pristine FIRST call, so nothing MRTR-shaped is observable).
+    ///
+    /// **Security — CLIENT-SUPPLIED and UNTRUSTED.** Every value here came off
+    /// the wire. It is bounded in count, per-entry size, total size and nesting
+    /// depth at transport ingress, and each entry is proven to be one of the
+    /// three spec-permitted result shapes — but nothing validates it against the
+    /// schema the handler asked for. A handler MUST schema-validate an entry
+    /// before acting on it, exactly as it would validate tool arguments. Compare
+    /// [`mrtr_continuation`](Self::mrtr_continuation), which is server-minted.
+    #[must_use]
+    pub fn input_responses(&self) -> Option<&crate::types::mrtr::InputResponses> {
+        self.protocol_context.as_ref()?.input_responses()
+    }
+
+    /// The DECRYPTED continuation state from a VERIFIED `requestState` token
+    /// (MCP 2026-07-28 multi-round-trip elicitation, HTTP-03).
+    ///
+    /// **Security — SERVER-MINTED and TRUSTED.** This value is whatever the
+    /// handler itself sealed on a previous round. It reaches here only after the
+    /// server-owned AEAD codec authenticated the token against the authenticated
+    /// principal, the live method and a digest of the request's salient
+    /// parameters, so a tampered, cross-principal or cross-request token never
+    /// produces a `Some` — it produces a JSON-RPC error instead.
+    ///
+    /// `None` on a first call, on v1, and inside a re-run handler.
+    #[must_use]
+    pub fn mrtr_continuation(&self) -> Option<&serde_json::Value> {
+        self.protocol_context.as_ref()?.mrtr_continuation()
+    }
+
+    /// The multi-round-trip round counter carried by a verified `requestState`.
+    ///
+    /// A handler uses this to decide it has asked enough times and should fail
+    /// or degrade rather than elicit again (D-09). Counts from `0` for the round
+    /// the FIRST continuation was minted in; `None` on a first call, on v1, and
+    /// inside a re-run handler.
+    #[must_use]
+    pub fn mrtr_round(&self) -> Option<u8> {
+        self.protocol_context.as_ref()?.mrtr_round()
+    }
+
     /// Extracts the W3C trace-context self-reported in the request `_meta`
     /// (MCP v2.5, VERS-09), reading the existing
     /// [`request_meta`](Self::request_meta) — no dedicated field is stored.
