@@ -397,19 +397,6 @@ pub struct CompleteRequest {
     pub r#ref: CompletionReference,
     /// The argument to complete
     pub argument: CompletionArgument,
-    /// Request metadata (per-request protocol context, D-113-B).
-    ///
-    /// A stateless v2 server runs no `initialize` handshake, so this per-request
-    /// object is the ONLY channel carrying the era signal. Absent by default, so
-    /// v1 wire bytes are unchanged.
-    #[serde(
-        rename = "_meta",
-        alias = "meta",
-        skip_serializing_if = "Option::is_none",
-        default
-    )]
-    #[allow(clippy::pub_underscore_fields)] // _meta is part of MCP protocol spec
-    pub _meta: Option<RequestMeta>,
 }
 
 /// Completion reference.
@@ -786,7 +773,13 @@ mod tests {
         );
     }
 
-    /// `(base params, type)` for every request type that must carry `_meta`.
+    /// `(base params, type)` for every request type that carries a typed `_meta`.
+    ///
+    /// Deliberately just the three name/uri-bearing methods. The list-shaped
+    /// requests do NOT carry a typed `_meta` — adding a `pub` field to those
+    /// constructible `pub` structs is a MAJOR semver break, so the v2 era signal
+    /// for those methods is read from the RAW body at HTTP ingress instead
+    /// (Phase-113 D-113-B / D-113-D resolution).
     macro_rules! for_each_meta_bearing_request {
         ($assertion:ident) => {
             $assertion::<super::super::tools::CallToolRequest>(
@@ -798,16 +791,6 @@ mod tests {
             $assertion::<super::super::resources::ReadResourceRequest>(
                 &serde_json::json!({ "uri": "mem://x" }),
             );
-            $assertion::<super::super::tools::ListToolsRequest>(&serde_json::json!({}));
-            $assertion::<super::super::prompts::ListPromptsRequest>(&serde_json::json!({}));
-            $assertion::<super::super::resources::ListResourcesRequest>(&serde_json::json!({}));
-            $assertion::<super::super::resources::ListResourceTemplatesRequest>(
-                &serde_json::json!({}),
-            );
-            $assertion::<CompleteRequest>(&serde_json::json!({
-                "ref": { "type": "ref/prompt", "name": "p" },
-                "argument": { "name": "a", "value": "v" },
-            }));
         };
     }
 

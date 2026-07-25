@@ -113,7 +113,6 @@ async fn http_smoke_curated_only_no_spec_boots_and_lists_tools() {
         id: RequestId::from(2i64),
         request: Request::Client(Box::new(ClientRequest::ListTools(ListToolsRequest {
             cursor: None,
-            _meta: None,
         }))),
     };
     transport.send(list).await.expect("send tools/list");

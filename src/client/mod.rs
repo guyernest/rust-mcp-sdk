@@ -503,7 +503,6 @@ impl<T: Transport> Client<T> {
 
         let request = Request::Client(Box::new(ClientRequest::ListTools(ListToolsRequest {
             cursor,
-            _meta: None,
         })));
         let request_id = RequestId::String(Uuid::new_v4().to_string());
         let response = self.send_request(request_id, request).await?;
@@ -1199,7 +1198,6 @@ impl<T: Transport> Client<T> {
 
         let request = Request::Client(Box::new(ClientRequest::ListPrompts(ListPromptsRequest {
             cursor,
-            _meta: None,
         })));
         let request_id = RequestId::String(Uuid::new_v4().to_string());
         let response = self.send_request(request_id, request).await?;
@@ -1495,10 +1493,7 @@ impl<T: Transport> Client<T> {
         self.assert_capability("resources", "resources/list")?;
 
         let request = Request::Client(Box::new(ClientRequest::ListResources(
-            ListResourcesRequest {
-                cursor,
-                _meta: None,
-            },
+            ListResourcesRequest { cursor },
         )));
         let request_id = RequestId::String(Uuid::new_v4().to_string());
         let response = self.send_request(request_id, request).await?;
@@ -1558,10 +1553,7 @@ impl<T: Transport> Client<T> {
         self.assert_capability("resources", "resources/templates/list")?;
 
         let request = Request::Client(Box::new(ClientRequest::ListResourceTemplates(
-            ListResourceTemplatesRequest {
-                cursor,
-                _meta: None,
-            },
+            ListResourceTemplatesRequest { cursor },
         )));
         let request_id = RequestId::String(Uuid::new_v4().to_string());
         let response = self.send_request(request_id, request).await?;
@@ -1963,7 +1955,6 @@ impl<T: Transport> Client<T> {
     ///         name: "function_name".to_string(),
     ///         value: "calc_".to_string(),
     ///     },
-    ///     _meta: None,
     /// };
     ///
     /// let completions = client.complete(completion_request).await?;
@@ -4126,7 +4117,6 @@ mod tests {
                     name: "test".to_string(),
                     value: "t".to_string(),
                 },
-                _meta: None,
             })
             .await;
         assert!(result.is_ok());

@@ -206,7 +206,6 @@ impl WasmClient {
                     &pmcp::types::Request::Client(Box::new(
                         pmcp::types::ClientRequest::ListTools(pmcp::types::ListToolsRequest {
                             cursor: None,
-                            _meta: None,
                         }),
                     )),
                 );
@@ -305,7 +304,6 @@ impl WasmClient {
                     &pmcp::types::Request::Client(Box::new(
                         pmcp::types::ClientRequest::ListResources(pmcp::types::ListResourcesRequest {
                             cursor: None,
-                            _meta: None,
                         }),
                     )),
                 );
@@ -394,7 +392,6 @@ impl WasmClient {
                     &pmcp::types::Request::Client(Box::new(
                         pmcp::types::ClientRequest::ListPrompts(pmcp::types::ListPromptsRequest {
                             cursor: None,
-                            _meta: None,
                         }),
                     )),
                 );
@@ -495,7 +492,6 @@ impl WasmClient {
                     &pmcp::types::Request::Client(Box::new(
                         pmcp::types::ClientRequest::ListTools(pmcp::types::ListToolsRequest {
                             cursor: None,
-                            _meta: None,
                         }),
                     )),
                 );

@@ -404,21 +404,6 @@ pub struct ListToolsRequest {
     /// Pagination cursor
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cursor: Cursor,
-    /// Request metadata (per-request protocol context, D-113-B).
-    ///
-    /// A stateless v2 server runs no `initialize` handshake, so this per-request
-    /// object is the ONLY channel carrying the era / client identity /
-    /// capabilities signal. Every method a v2 client can call must therefore be
-    /// able to carry it — including the list-shaped ones. Absent by default, so
-    /// v1 wire bytes are unchanged.
-    #[serde(
-        rename = "_meta",
-        alias = "meta",
-        skip_serializing_if = "Option::is_none",
-        default
-    )]
-    #[allow(clippy::pub_underscore_fields)] // _meta is part of MCP protocol spec
-    pub _meta: Option<RequestMeta>,
 }
 
 /// List tools response.

@@ -1772,31 +1772,39 @@ pub(crate) fn request_meta_to_value<T: serde::Serialize>(
 /// Extract the request's `_meta` object as raw JSON for ingress era-resolution
 /// (Phase 112, D-11 — the per-request signal is transport-agnostic).
 ///
-/// # Go-forward policy (Phase 112 Plan 09, widened by Phase 113 D-113-B)
+/// # Go-forward policy (Phase 112 Plan 09)
 ///
 /// EVERY [`ClientRequest`] variant that carries a per-request
 /// `_meta: Option<RequestMeta>` field MUST be read here so its era/identity/trace
-/// signal reaches ingress resolution. As of Phase 113 that is the three
-/// name/uri-bearing methods (`CallTool`, `GetPrompt`, `ReadResource`) PLUS the
-/// list-shaped methods (`ListTools`, `ListPrompts`, `ListResources`,
-/// `ListResourceTemplates`, `Complete`).
+/// signal reaches ingress resolution. That is `CallTool`, `GetPrompt`, and
+/// `ReadResource` — the three name/uri-bearing methods. Variants with NO `_meta`
+/// field yield `None` and resolve to the v1 fallback by design.
 ///
-/// The list-shaped widening is load-bearing for HTTP-01: a stateless v2 server
-/// runs NO `initialize` handshake, so the per-request `_meta` object is the ONLY
-/// era channel. Before D-113-B those methods had no `_meta` field at all, which
-/// meant a v2 `tools/list` could not be expressed — the header claimed v2 and
-/// `_meta` could not agree, so the fail-closed matrix rejected it with 400.
+/// # This is the TYPED extractor, and it is NOT the HTTP path (Phase 113 D-113-B)
 ///
-/// Variants with NO `_meta` field yield `None` and resolve to the v1 fallback by
-/// design (an opted-in server serves them as v1 unless a header/`_meta` signal
-/// says otherwise).
+/// A stateless v2 server runs no `initialize` handshake, so the per-request
+/// `_meta` object is the ONLY era channel — which would make every method that
+/// lacks a typed `_meta` field un-v2-able if this were the only extractor.
+///
+/// It is not. The streamable-HTTP transport resolves the era from the RAW request
+/// body's `params._meta` via
+/// [`Server::resolve_raw_meta_protocol_context`](crate::server::Server::resolve_raw_meta_protocol_context),
+/// which works for EVERY method without any public type carrying a field. That
+/// route was chosen over widening these structs because adding a `pub` field to a
+/// constructible `pub` struct is a MAJOR semver break (`cargo semver-checks`
+/// `constructible_struct_adds_field`), and the v2.5 milestone is scoped additive.
+///
+/// This typed extractor therefore serves only the dispatch surfaces that have NO
+/// raw body at their ingress seam — [`Server::handle_request`] for the stdio /
+/// WebSocket transports, and `ServerCore`. Both extractors read the SAME spec
+/// spelling `_meta` (Phase 113 D-113-A pinned the three structs with
+/// `#[serde(rename = "_meta", alias = "meta")]`), so they cannot disagree about
+/// what a `_meta` object IS — they differ only in method coverage, and the HTTP
+/// path (the one v2 targets) has full coverage.
 ///
 /// The inner match is EXHAUSTIVE with no wildcard arm: a future `ClientRequest`
 /// variant is a `non-exhaustive patterns` COMPILE ERROR here, forcing the author
-/// to classify it as `_meta`-bearing or not. That compile-time tripwire — not a
-/// doc comment or a hand-maintained test — is what keeps this in sync with the
-/// enum. `subscriptions/listen` (plan 10) lands as a new variant and MUST be
-/// classified as `_meta`-bearing here.
+/// to classify it as `_meta`-bearing or not.
 #[allow(clippy::used_underscore_binding)] // _meta is part of the MCP protocol spec
 pub(crate) fn extract_request_meta_value(request: &Request) -> Option<serde_json::Value> {
     match request {
@@ -1805,23 +1813,18 @@ pub(crate) fn extract_request_meta_value(request: &Request) -> Option<serde_json
             ClientRequest::CallTool(req) => request_meta_to_value(req._meta.as_ref()),
             ClientRequest::GetPrompt(req) => request_meta_to_value(req._meta.as_ref()),
             ClientRequest::ReadResource(req) => request_meta_to_value(req._meta.as_ref()),
-            ClientRequest::ListTools(req) => request_meta_to_value(req._meta.as_ref()),
-            ClientRequest::ListPrompts(req) => request_meta_to_value(req._meta.as_ref()),
-            ClientRequest::ListResources(req) => request_meta_to_value(req._meta.as_ref()),
-            ClientRequest::ListResourceTemplates(req) => request_meta_to_value(req._meta.as_ref()),
-            ClientRequest::Complete(req) => request_meta_to_value(req._meta.as_ref()),
             // Non-`_meta`-bearing variants — enumerated explicitly (no wildcard)
             // so adding a variant forces a decision above rather than silently
-            // dropping its signal.
-            //
-            // `Initialize` is v1-only (v2 has no handshake); `Subscribe` /
-            // `Unsubscribe` are removed on v2 (superseded by
-            // `subscriptions/listen`, HTTP-04); the `Tasks*` family is Phase
-            // 114's surface; `Ping` and `SetLoggingLevel` carry no params object
-            // that could hold `_meta`.
+            // dropping its signal. On the HTTP path these still reach v2 via the
+            // raw-body reader; see the module note above.
             ClientRequest::Initialize(_)
+            | ClientRequest::ListTools(_)
+            | ClientRequest::ListPrompts(_)
+            | ClientRequest::ListResources(_)
+            | ClientRequest::ListResourceTemplates(_)
             | ClientRequest::Subscribe(_)
             | ClientRequest::Unsubscribe(_)
+            | ClientRequest::Complete(_)
             | ClientRequest::CreateMessage(_)
             | ClientRequest::TasksGet(_)
             | ClientRequest::TasksResult(_)
@@ -2000,7 +2003,6 @@ mod tests {
         // List tools
         let list_req = Request::Client(Box::new(ClientRequest::ListTools(ListToolsRequest {
             cursor: None,
-            _meta: None,
         })));
         let response = server
             .handle_request(RequestId::from(2i64), list_req, None)
@@ -2491,7 +2493,6 @@ mod tests {
         // Try to list tools WITHOUT initializing first
         let list_req = Request::Client(Box::new(ClientRequest::ListTools(ListToolsRequest {
             cursor: None,
-            _meta: None,
         })));
         let response = server
             .handle_request(RequestId::from(1i64), list_req, None)
@@ -2543,7 +2544,6 @@ mod tests {
         // Try to list tools WITHOUT initializing first
         let list_req = Request::Client(Box::new(ClientRequest::ListTools(ListToolsRequest {
             cursor: None,
-            _meta: None,
         })));
         let response = server
             .handle_request(RequestId::from(1i64), list_req, None)
@@ -2781,46 +2781,34 @@ mod tests {
             }
         }
 
-        /// D-113-B: a stateless v2 server has NO `initialize` handshake, so the
-        /// per-request `_meta` object is the ONLY era channel. Every method a v2
-        /// client can call must therefore be able to carry it — including the
-        /// list-shaped methods that had no `_meta` field before Phase 113.
+        /// The TYPED extractor deliberately covers only the three `_meta`-bearing
+        /// methods, and a list-shaped method yields `None` here.
         ///
-        /// Driven from the WIRE (a raw JSON-RPC `params` object) rather than from
-        /// a typed literal, so it proves the spec `_meta` spelling reaches the
-        /// extractor, not merely that a Rust field exists.
+        /// That is NOT a v2 gap: the streamable-HTTP transport reads the era from
+        /// the RAW body's `params._meta` instead (D-113-B resolution — widening
+        /// these `pub` structs would have been a MAJOR semver break). This test
+        /// pins the boundary so a future reader does not mistake the `None` for a
+        /// defect and "fix" it back into a breaking change.
+        /// `tests/v2_stateless_http.rs` proves the HTTP path serves these methods
+        /// as v2.
         #[test]
-        fn list_shaped_methods_can_carry_a_v2_meta_signal() {
-            let expected = serde_json::json!({ "ns/key": "v" });
+        fn typed_extractor_scope_is_the_three_meta_bearing_methods() {
             for method in [
                 "tools/list",
                 "prompts/list",
                 "resources/list",
                 "resources/templates/list",
-                "completion/complete",
             ] {
-                let mut params = serde_json::json!({ "_meta": { "ns/key": "v" } });
-                if method == "completion/complete" {
-                    let obj = params.as_object_mut().unwrap();
-                    obj.insert(
-                        "ref".to_string(),
-                        serde_json::json!({ "type": "ref/prompt", "name": "p" }),
-                    );
-                    obj.insert(
-                        "argument".to_string(),
-                        serde_json::json!({ "name": "a", "value": "v" }),
-                    );
-                }
                 let client: ClientRequest = serde_json::from_value(serde_json::json!({
                     "method": method,
-                    "params": params,
+                    "params": { "_meta": { "ns/key": "v" } },
                 }))
                 .unwrap_or_else(|e| panic!("{method} must deserialize: {e}"));
                 let req = Request::Client(Box::new(client));
                 assert_eq!(
                     extract_request_meta_value(&req),
-                    Some(expected.clone()),
-                    "{method} must surface its per-request _meta to era resolution"
+                    None,
+                    "{method} has no typed _meta field; the HTTP path reads the raw body"
                 );
             }
         }

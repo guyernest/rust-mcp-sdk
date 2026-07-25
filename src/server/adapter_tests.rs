@@ -504,7 +504,6 @@ mod tests {
                 let request =
                     Request::Client(Box::new(ClientRequest::ListTools(ListToolsRequest {
                         cursor: None,
-                        _meta: None,
                     })));
                 adapter.add_request(RequestId::from(*id), request).await;
             }

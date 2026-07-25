@@ -197,7 +197,6 @@ mod tests {
         // Try to call a tool before initialization
         let request = Request::Client(Box::new(ClientRequest::ListTools(ListToolsRequest {
             cursor: None,
-            _meta: None,
         })));
 
         let response = server
@@ -235,7 +234,6 @@ mod tests {
         // List tools
         let request = Request::Client(Box::new(ClientRequest::ListTools(ListToolsRequest {
             cursor: None,
-            _meta: None,
         })));
 
         let response = server
@@ -291,7 +289,6 @@ mod tests {
         // List tools
         let request = Request::Client(Box::new(ClientRequest::ListTools(ListToolsRequest {
             cursor: None,
-            _meta: None,
         })));
 
         let response = server
@@ -533,7 +530,6 @@ mod tests {
         let list_request =
             Request::Client(Box::new(ClientRequest::ListPrompts(ListPromptsRequest {
                 cursor: None,
-                _meta: None,
             })));
 
         let list_response = server
@@ -588,10 +584,7 @@ mod tests {
 
         // List resources
         let list_request = Request::Client(Box::new(ClientRequest::ListResources(
-            ListResourcesRequest {
-                cursor: None,
-                _meta: None,
-            },
+            ListResourcesRequest { cursor: None },
         )));
 
         let list_response = server
