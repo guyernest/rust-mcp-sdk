@@ -4,7 +4,7 @@ milestone: v2.5
 milestone_name: MCP Spec 2026-07-28
 status: executing
 stopped_at: Completed 113-04-PLAN.md
-last_updated: "2026-07-25T06:23:37.899Z"
+last_updated: "2026-07-25T14:34:24.260Z"
 last_activity: 2026-07-25
 progress:
   total_phases: 71
@@ -124,6 +124,9 @@ Decisions are logged in PROJECT.md Key Decisions table. Decisions framing this m
 - [Phase ?]: [Phase 113]: 113-04: D-113-A resolved with serde rename=_meta + alias=meta (conformant egress, backward-compatible ingress); D-113-B added optional _meta to the five list-shaped request types and widened extract_request_meta_value — absent _meta emits no key so v1 wire bytes are unchanged
 - [Phase ?]: [Phase 113]: 113-04: v2 status mapping is CODE-driven not call-site-driven (plan 09's -32021 is emitted by dispatch, never the gate) and runs at the RAW level for unknown methods, recovering the original id from the body bytes for 404+-32601
 - [Phase ?]: [Phase 113]: 113-04: BLOCKER D-113-D — the D-113-B field additions fail cargo semver-checks constructible_struct_adds_field, so pmcp now requires a MAJOR bump against the ROADMAP's additive-2.x scope; wire bytes unaffected; three options recorded in deferred-items.md for a phase-level decision
+- [Phase ?]: [Phase 113]: 113-04: D-113-D RESOLVED by owner option 3 — the five _meta field additions were REVERTED and D-113-B re-resolved by reading params._meta off the RAW body at HTTP ingress (resolve_raw_meta_protocol_context + raw_params_meta), which covers every method with ZERO public API change; semver-checks back to 223/223 pass, no update required, milestone stays additive 2.x
+- [Phase ?]: [Phase 113]: 113-04: the typed and raw v2 gates COLLAPSED into one — there is now a single era-detection path on the HTTP transport reading the spec-spelled _meta from the raw body, closing the plan-02 'two ingress paths disagree' defect; the typed extract_request_meta_value survives only for the non-HTTP transports that have no raw bytes, and both readers agree on spelling via D-113-A
+- [Phase ?]: [Phase 113]: 113-04: ACCEPTED COST (do not re-litigate in plans 06/09/10) — handlers reach the per-request _meta through the ProtocolContext-derived RequestHandlerExtra accessors, NOT through a typed _meta field on a list-request struct; adding such a field to a constructible pub struct is a MAJOR semver break
 
 ### Pending Todos
 
@@ -133,8 +136,10 @@ None yet.
 
 yet. (Research flags per phase to be surfaced during `/gsd:plan-phase`.)
 
-- 113-02 finding D-113-A (HIGH, owned by plan 04): pmcp typed request structs rename the _meta field to 'meta' via serde camelCase, so a conformant v2 client sending the spec-spelled _meta gets NO era detection and is rejected as a header/_meta disagreement. Blocks HTTP-01 and every plan-11 conformance scenario. Pinned by a forward tripwire; see deferred-items.md.
-- 113-04 finding D-113-D (HIGH, needs a phase-level decision, blocks plan 12's semver gate): adding the optional _meta field to ListToolsRequest / ListPromptsRequest / ListResourcesRequest / ListResourceTemplatesRequest / CompleteRequest fails cargo semver-checks constructible_struct_adds_field (222/223 pass, 1 MAJOR), so pmcp requires a 3.0 against the ROADMAP's additive-2.x milestone scope. WIRE bytes are unaffected (Option + default + skip_serializing_if). Three options in deferred-items.md: accept major; accept major + mark non_exhaustive; or revert the fields and read a raw params._meta at HTTP ingress instead (zero API change).
+- ~~113-02 finding D-113-A (HIGH, owned by plan 04)~~ — RESOLVED in 113-04 (`47eaad68`): the three typed request structs are pinned with `#[serde(rename = "_meta", alias = "meta")]`, so egress is spec-conformant and ingress still accepts pre-113 pmcp peers. The forward tripwire was inverted into the permanent regression guard `typed_requests_use_the_spec_meta_spelling`.
+- ~~113-04 finding D-113-D (HIGH, phase-level decision)~~ — RESOLVED: the owner chose option 3. The five `_meta` field additions were reverted (`b2cc87fe`) and D-113-B re-resolved by reading `params._meta` off the RAW body at HTTP ingress (`f6735c03`), which needs zero public API change. `cargo semver-checks check-release --baseline-version 2.17.0 -p pmcp` now reports `223 checks: 223 pass, 30 skip / Summary no semver update required`, so the milestone stays additive (2.x minor) and plan 12's semver gate is clear.
+
+No open blockers.
 
 ## Deferred Items
 
@@ -162,7 +167,7 @@ Items deferred by design for this milestone (design §7 / REQUIREMENTS v2):
 
 ## Session Continuity
 
-Last session: 2026-07-25T06:23:37.894Z
+Last session: 2026-07-25T14:34:24.254Z
 Stopped at: Completed 113-04-PLAN.md
 Resume file: None
 
@@ -199,4 +204,4 @@ Resume file: None
 | Phase 113 P01 | 28min | 3 tasks | 3 files |
 | Phase 113 P02 | 42min | 3 tasks | 7 files |
 | Phase 113 P03 | 78min | 3 tasks tasks | 7 files files |
-| Phase 113 P04 | 118min | 4 tasks | 11 files |
+| Phase 113 P04 | 165min | 5 tasks | 10 files |
