@@ -30,7 +30,11 @@ syn = { version = "2", features = ["full", "parsing", "extra-traits"] }
 [dependencies.pmcp]
 path = ".."
 default-features = false
-features = ["oauth"]
+# `streamable-http` gates `src/server/request_state.rs` (D-14 locks the MRTR AEAD
+# to native + that feature); `fuzzing` widens the module and exposes the
+# `fuzz_support::verify_bytes` seam. `fuzzing` is in neither `default` nor `full`,
+# so enabling it here adds nothing to the shipped public API.
+features = ["oauth", "streamable-http", "fuzzing"]
 
 [dependencies.pmcp-code-mode]
 path = "../crates/pmcp-code-mode"
@@ -141,6 +145,13 @@ bench = false
 [[bin]]
 name = "trace_context_from_meta"
 path = "fuzz_targets/trace_context_from_meta.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_request_state"
+path = "fuzz_targets/fuzz_request_state.rs"
 test = false
 doc = false
 bench = false

@@ -60,6 +60,21 @@
 //!
 //! `D-14` locks MRTR AEAD to native + `streamable-http`. `ring` is only enabled by
 //! that feature, and the wasm server (`WasmServerCore`) gets no MRTR this phase.
+//!
+//! # Property and fuzz coverage
+//!
+//! Per the repo's ALWAYS requirements, `requestState` carries both. The full
+//! strength property sweep and the fuzz target are:
+//!
+//! ```text
+//! PROPTEST_CASES=1000 cargo test --lib --features full -- property_request_state
+//! cargo fuzz run fuzz_request_state -- -runs=20000
+//! ```
+//!
+//! The fuzz target reaches [`RequestStateCodec::verify`] through
+//! [`fuzz_support`], which exists only behind `feature = "fuzzing"` — a feature
+//! deliberately absent from both `default` and `full`, so the seam adds nothing to
+//! the shipped public API.
 
 // Why: this module lands in Wave 2, ahead of its production consumers (plan 06
 // wires `verify` into dispatch; plan 09 wires `mint` into the input-required
@@ -816,6 +831,59 @@ pub(crate) fn resolve_codec_at_build(
     Ok(Some(Arc::new(codec)))
 }
 
+/// Minimal seam for `fuzz/fuzz_targets/fuzz_request_state.rs`.
+///
+/// # ⚠️ Not stable API
+///
+/// This module exists only behind `feature = "fuzzing"`, which is in neither
+/// `default` nor `full`, so `cargo public-api` never sees it on the shipped
+/// surface. Do not depend on it.
+#[cfg(feature = "fuzzing")]
+pub mod fuzz_support {
+    use super::{RequestBinding, RequestStateCodec, Verdict, DEFAULT_TTL_SECS, KEY_LEN};
+    use std::time::Duration;
+
+    /// Discriminant for [`super::Verdict::Ok`].
+    pub const VERDICT_OK: u8 = 0;
+    /// Discriminant for [`super::Verdict::Expired`].
+    pub const VERDICT_EXPIRED: u8 = 1;
+    /// Discriminant for [`super::Verdict::UnknownKey`].
+    pub const VERDICT_UNKNOWN_KEY: u8 = 2;
+    /// Discriminant for [`super::Verdict::AuthFailed`].
+    pub const VERDICT_AUTH_FAILED: u8 = 3;
+    /// The codec itself could not be constructed (never expected).
+    pub const VERDICT_UNAVAILABLE: u8 = 4;
+
+    /// A FIXED key, so the fuzz target is reproducible from a crash artifact.
+    /// Deliberately not `from_env`, which would make replay depend on ambient
+    /// process state.
+    const FIXED_KEY: [u8; KEY_LEN] = [0x5a; KEY_LEN];
+
+    /// Drive [`RequestStateCodec::verify`] with arbitrary bytes.
+    ///
+    /// Invariants the target asserts: this never panics, and it never returns
+    /// [`VERDICT_OK`] for input that was not produced by
+    /// [`RequestStateCodec::mint`].
+    #[must_use]
+    pub fn verify_bytes(input: &[u8]) -> u8 {
+        let Ok(codec) = RequestStateCodec::new(&FIXED_KEY, Duration::from_secs(DEFAULT_TTL_SECS))
+        else {
+            return VERDICT_UNAVAILABLE;
+        };
+        // Lossy rather than a UTF-8 bail, so every arbitrary byte string still
+        // reaches the decoder rather than being filtered out before it.
+        let token = String::from_utf8_lossy(input);
+        let params = serde_json::json!({ "name": "fuzz", "arguments": {} });
+        let binding = RequestBinding::from_request("fuzz-principal", "tools/call", &params);
+        match codec.verify(&token, &binding) {
+            Verdict::Ok(_) => VERDICT_OK,
+            Verdict::Expired(_) => VERDICT_EXPIRED,
+            Verdict::UnknownKey => VERDICT_UNKNOWN_KEY,
+            Verdict::AuthFailed => VERDICT_AUTH_FAILED,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1538,5 +1606,108 @@ mod tests {
             .accepting_key_ids();
         assert!(accepting.contains(&key_id_of(&KEY_A)));
         assert!(accepting.contains(&key_id_of(&KEY_B)));
+    }
+
+    // -- fuzz seam ----------------------------------------------------------
+
+    /// The seam cannot rot silently: if `fuzz_support` is removed or its
+    /// discriminants shift, this fails under `--features fuzzing`.
+    #[cfg(feature = "fuzzing")]
+    #[test]
+    fn fuzz_support_seam_rejects_garbage() {
+        assert_eq!(
+            super::fuzz_support::verify_bytes(b"garbage"),
+            super::fuzz_support::VERDICT_AUTH_FAILED
+        );
+        assert_ne!(
+            super::fuzz_support::verify_bytes(&[0xff, 0xfe, 0xfd]),
+            super::fuzz_support::VERDICT_OK
+        );
+    }
+
+    // -- properties ---------------------------------------------------------
+    //
+    // Run the full-strength sweep with:
+    //   PROPTEST_CASES=1000 cargo test --lib --features full -- property_request_state
+
+    /// Arbitrary JSON-ish continuation state.
+    fn arb_state() -> impl proptest::strategy::Strategy<Value = serde_json::Value> {
+        use proptest::prelude::*;
+        prop_oneof![
+            Just(serde_json::Value::Null),
+            any::<bool>().prop_map(serde_json::Value::from),
+            any::<i32>().prop_map(serde_json::Value::from),
+            "[ -~]{0,64}".prop_map(serde_json::Value::from),
+            proptest::collection::vec("[ -~]{0,16}", 0..6).prop_map(|v| serde_json::json!(v)),
+            proptest::collection::hash_map("[a-z]{1,8}", "[ -~]{0,16}", 0..6)
+                .prop_map(|m| serde_json::json!(m)),
+        ]
+    }
+
+    proptest::proptest! {
+        /// mint -> verify is the identity on the continuation state, for arbitrary
+        /// state, principal, method and ttl.
+        #[test]
+        fn property_request_state_roundtrip(
+            state in arb_state(),
+            principal in "[ -~]{0,48}",
+            method in "[a-z/]{1,24}",
+            ttl_secs in 1u64..3600,
+            round in 0u8..=255,
+        ) {
+            let codec = RequestStateCodec::new(&KEY_A, Duration::from_secs(ttl_secs))
+                .expect("valid key")
+                .with_clock(Arc::new(FixedClock(1_000)));
+            let params = serde_json::json!({ "name": "n", "arguments": { "k": "v" } });
+            let bind = RequestBinding::from_request(&principal, &method, &params);
+            let token = codec.mint(&state, &bind, round).expect("mint");
+            match codec.verify(&token, &bind) {
+                Verdict::Ok(continuation) => {
+                    proptest::prop_assert_eq!(continuation.state, state);
+                    proptest::prop_assert_eq!(continuation.round, round);
+                },
+                other => proptest::prop_assert!(false, "expected Ok, got {:?}", other),
+            }
+        }
+
+        /// The binding is TOTAL: a token minted under one binding never verifies
+        /// `Ok` under a different one, whichever component differs.
+        #[test]
+        fn property_request_state_binding_is_total(
+            principal_a in "[ -~]{0,24}",
+            principal_b in "[ -~]{0,24}",
+            method_a in "[a-z/]{1,16}",
+            method_b in "[a-z/]{1,16}",
+            arg_a in "[ -~]{0,24}",
+            arg_b in "[ -~]{0,24}",
+        ) {
+            let params_a = serde_json::json!({ "name": "n", "arguments": { "k": arg_a } });
+            let params_b = serde_json::json!({ "name": "n", "arguments": { "k": arg_b } });
+            let bind_a = RequestBinding::from_request(&principal_a, &method_a, &params_a);
+            let bind_b = RequestBinding::from_request(&principal_b, &method_b, &params_b);
+            // Only interesting when the bindings genuinely differ.
+            proptest::prop_assume!(
+                principal_a != principal_b || method_a != method_b || arg_a != arg_b
+            );
+
+            let codec = RequestStateCodec::new(&KEY_A, Duration::from_secs(300))
+                .expect("valid key")
+                .with_clock(Arc::new(FixedClock(1_000)));
+            let token = codec.mint(&serde_json::json!({ "s": 1 }), &bind_a, 0).expect("mint");
+            proptest::prop_assert_eq!(codec.verify(&token, &bind_b), Verdict::AuthFailed);
+        }
+
+        /// `verify` is TOTAL over arbitrary strings: it always returns a verdict
+        /// and never panics (T-113-14).
+        #[test]
+        fn property_request_state_never_panics(token in ".{0,512}") {
+            let codec = RequestStateCodec::new(&KEY_A, Duration::from_secs(300))
+                .expect("valid key")
+                .with_clock(Arc::new(FixedClock(1_000)));
+            let params = serde_json::json!({ "name": "n", "arguments": {} });
+            let bind = RequestBinding::from_request("alice", "tools/call", &params);
+            // A token this codec did not mint must never verify Ok.
+            proptest::prop_assert!(!matches!(codec.verify(&token, &bind), Verdict::Ok(_)));
+        }
     }
 }
