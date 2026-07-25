@@ -2280,38 +2280,42 @@ Plans:
   4. SSE resumability (`Last-Event-ID`) is not offered on the v2 path, and a regression test proves response JSON-RPC ids are always derived from the live request — closing the id-replay / discovery-cache bug class (HTTP-05)
   5. The pmcp `Client`, selected explicitly per connection, speaks v2 (per-request `_meta`, `server/discover`, required headers, no `initialize`) and fulfills MRTR `input_required` results by producing `inputResponses`, with the Phase-106 host handlers (sampling/elicitation/roots) folded into the v2 flow (CLNT-01, CLNT-02)
 
-**Plans**: 12 plans
+**Plans**: 13 plans (12 replanned + 1 added after cross-AI review — see `113-REVIEWS.md` § Review Adjudication)
 
 Plans:
 **Wave 1**
 
-- [ ] 113-01-PLAN.md — Foundations: final-spec re-diff record, `ring` promoted to an explicit optional dep under `streamable-http` (blocking package-legitimacy checkpoint), and the three v2 transport error codes -32020/-32021/-32022 with locking tests
-- [ ] 113-02-PLAN.md — MRTR protocol-type layer: wire types, the ONE MRTR-eligible-method + logical-name table, params splice/extract, AAD salient-param digest, `Mcp-Name` base64 sentinel codec, `ElicitRequestParams` mode-optional serde fix, and the shared `tests/common/v2.rs` harness
+- [ ] 113-01-PLAN.md — Foundations: an ENFORCING three-state final-spec verdict (PUBLISHED-CONFIRMED/DRIFT/PENDING) that also re-pins the conformance-suite commit and records the contract-first/PDMT/PMAT environment, `ring`+`zeroize` promoted to explicit optional deps under `streamable-http` (blocking package-legitimacy checkpoint), and the three v2 transport error codes -32020/-32021/-32022 with locking tests
+- [ ] 113-02-PLAN.md — MRTR protocol-type layer: wire types plus the public `InputRequiredResult`/`MrtrOutcome` client-outcome types, the ONE MRTR-eligible-method + logical-name table, FAIL-LOUD params extract (`Result<_, MrtrParseError>`) and stale-key-clearing splice, five DoS bounds, AAD salient-param digest, `Mcp-Name` base64 sentinel codec, `ElicitRequestParams` mode-optional serde fix, and the shared `tests/common/v2.rs` harness
 
 **Wave 2** *(blocked on Wave 1)*
 
-- [ ] 113-03-PLAN.md — `requestState` AEAD token (`src/server/request_state.rs`): key resolution + key-id + TTL (D-03/D-04/D-05), mint/verify with principal‖method‖param-digest AAD, the D-15 verdict table, property tests and a fuzz target
-- [ ] 113-04-PLAN.md — HTTP-01 stateless era gate: one `sessions_active(state, era)` predicate routing all four session sites, GET/DELETE→405, unknown-method→404, the -3202x→400 status mapper, sentinel-decoded `Mcp-Name` cross-check, and `tests/v2_stateless_http.rs` against a STATEFUL default config
-- [ ] 113-05-PLAN.md — CLNT-01 client v2 transport: `with_protocol_version` opt-in, per-request `_meta` with registry-derived capabilities, no-handshake path, `server/discover`, the three required outbound headers with sentinel encoding, and session-id suppression
+- [ ] 113-03-PLAN.md — `requestState` AEAD token (`src/server/request_state.rs`): SERVER-OWNED `Arc<RequestStateCodec>` built once at server build (no `OnceLock`), builder key/previous-keys/TTL + injectable clock, fail-the-build on a malformed configured key, mint/verify with principal‖method‖param-digest AAD, the D-15 verdict table with `Expired(Continuation)`, property tests and a `fuzzing`-feature fuzz target
+- [ ] 113-04-PLAN.md — HTTP-01 stateless era gate: one `sessions_active(state, era)` predicate routing all four session sites, GET/DELETE→405, RAW-level unknown-method→404, the -3202x→400 status mapper with structured `Reject { code, message, data }`, the locked `Mcp-Name` presence-always rule, sentinel-decoded cross-check, and `tests/v2_stateless_http.rs` against a STATEFUL default config
 
 **Wave 3** *(blocked on Wave 2)*
 
-- [ ] 113-06-PLAN.md — MRTR server ingress: MRTR params carried on `ProtocolContext`, extracted once from the raw v2 body, verified in `ServerCore` against `AuthContext.subject` + live params, D-15 verdict routing, `RequestHandlerExtra` accessors, and the live verdict suite
-- [ ] 113-07-PLAN.md — CLNT-02 client MRTR loop: typed `MrtrRoundLimitExceeded` without a new `Error` variant, the three-way `inputRequests` fold onto the existing host registry, and the bounded gather→resend loop with a fresh id per round
+- [ ] 113-05-PLAN.md — CLNT-01 client v2 transport: the additive defaulted `Transport::set_negotiated_protocol_version` mode seam, validated `with_protocol_version` opt-in, per-request `_meta` with registry-derived capabilities and trace-context merge, no-handshake path, ERA-AWARE capability enforcement, `server/discover`, the three required outbound headers (empty `Mcp-Name` for name-less methods) with sentinel encoding, and session-id suppression
+- [ ] 113-06-PLAN.md — MRTR server ingress: MRTR params carried on `ProtocolContext`, extracted once from the raw v2 body with malformed input REJECTED at -32602, verified against `AuthContext.subject` (fail-closed for unauthenticated callers on auth-configured servers) + live params, D-15 routing with `Reelicit` = strip-and-RE-RUN the handler (round preserved on expiry), `RequestHandlerExtra` accessors, and the live verdict suite
 
 **Wave 4** *(blocked on Wave 3)*
 
-- [ ] 113-08-PLAN.md — HTTP-05: `resumability_active` era gate turning `Last-Event-ID`/EventStore off on v2, plus the response-id-always-from-the-live-request invariant, audit and concurrent-caller regression tests
-- [ ] 113-09-PLAN.md — MRTR server egress: handler `_meta` signal → AEAD mint → `resultType:"input_required"` at both dispatch sites, the exhaustive eligible-method tripwire, `-32021` capability check, and the `serverInfo`→`result._meta` placement fix
+- [ ] 113-07-PLAN.md — CLNT-02 client MRTR loop: typed `MrtrRoundLimitExceeded` and `InputRequiredUnfulfilled` without new `Error` variants, additive `*_mrtr` methods returning `MrtrOutcome`, preflight-before-invoke, the three-way fold through the FULL host pipeline (approval + result review), and the bounded gather→resend loop with a fresh id and stale-key-free params per round (mock transport only)
+- [ ] 113-08-PLAN.md — HTTP-05: `resumability_active` era gate turning `Last-Event-ID`/EventStore reads AND writes off on v2 (proven by a spy), plus the STRUCTURAL `envelope_for_live_request(payload, live_id)` constructor scoping the id invariant to DIRECT responses while v1 historical replay keeps its original ids
+- [ ] 113-09-PLAN.md — MRTR server egress: handler `_meta` signal → capability precheck → AEAD mint → `resultType:"input_required"` at both dispatch sites, unconditional `strip_mrtr_signal` on EVERY path (v1 included), SERVER-OWNED reserved fields (`resultType`/`serverInfo`/`requestState`/`inputRequests` overwritten or removed), the exhaustive eligible-method tripwire, submode-aware `-32021`, and the `serverInfo`→`result._meta` placement fix
 
 **Wave 5** *(blocked on Wave 4)*
 
-- [ ] 113-10-PLAN.md — HTTP-04 `subscriptions/listen`: subscription wire types, the capability gate shared with the discover projection, the ack-first subscriptionId-tagged SSE stream (opt-in, bounded per principal), v2 retirement of `resources/subscribe`/`unsubscribe`, and the advertise-implies-serve tripwire
-- [ ] 113-11-PLAN.md — MRTR end to end: a Rust mirror of every official `sep-2322` conformance check, a real-Client↔real-server multi-round exchange, and the runnable `examples/s47_v2_stateless_mrtr.rs`
+- [ ] 113-10-PLAN.md — HTTP-04 server `subscriptions/listen`: subscription wire types locked from the spec checkpoint, the capability gate shared with the discover projection, the ack-first `(principal, RequestId)`-keyed SSE stream with a BOUNDED channel, RAII `ListenGuard` teardown and shared-envelope framing (opt-in, bounded per principal, documented instance-local), v2 retirement of `resources/subscribe`/`unsubscribe`, and the advertise-implies-serve tripwire
+- [ ] 113-11-PLAN.md — MRTR end to end: `113-CONFORMANCE-MANIFEST.md` generated from the PINNED conformance commit with a must-be-empty Unmapped section, a Rust mirror of every `sep-2322` scenario, a real-Client↔real-server multi-round exchange, and the runnable `examples/s47_v2_stateless_mrtr.rs` + `examples/s48_v2_mrtr_client.rs` pair
 
 **Wave 6** *(blocked on Wave 5)*
 
-- [ ] 113-12-PLAN.md — Phase gate: the feature/target build matrix (no-default-features, wasm32, dev-dep-free all-features), `cargo semver-checks`/`cargo public-api` additivity, `make quality-gate`, contract update, and the HTTP-04 reword + SEP-2243 gap record
+- [ ] 113-13-PLAN.md — HTTP-04 CLIENT half (added by the cross-AI review replan): `Client::subscriptions_listen` returning a typed `SubscriptionStream` that enforces acknowledgement-first and subscriptionId tagging, era-gating the retired `subscribe_resource`/`unsubscribe_resource` to a typed `retired_on_v2` error, and live proof a pmcp v2 client receives change notifications
+
+**Wave 7** *(blocked on Wave 6)*
+
+- [ ] 113-12-PLAN.md — Phase gate: the feature/target build matrix under the absolute rustup cargo (no-default-features, wasm32, `fuzzing` unreachable from `full`, two verbatim dev-dep-free commands), `cargo semver-checks`/`cargo public-api` additivity, `make quality-gate` + PMAT complexity + per-file coverage + the 20k-run fuzz target, the contract-first environment record, and the EVIDENCE-GATED HTTP-04 reword + requirement flips + SEP-2243 gap record
 
 ### Phase 114: Tasks Extension Migration
 
