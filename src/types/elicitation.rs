@@ -12,7 +12,8 @@
 //! - `ElicitInputBuilder` -> removed (construct `ElicitRequestParams` directly)
 //! - Method name: `elicitation/elicitInput` -> `elicitation/create`
 
-use serde::{Deserialize, Serialize};
+use serde::ser::SerializeStruct;
+use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
 use std::collections::HashMap;
 
@@ -21,11 +22,23 @@ use std::collections::HashMap;
 /// Supports two modes:
 /// - `form`: Server provides a JSON Schema subset; client renders a form
 /// - `url`: Server provides a URL for out-of-band user interaction
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "mode")]
+///
+/// # `mode` is optional on the wire (MCP 2026-07-28)
+///
+/// The v2 schema makes `ElicitRequestFormParams.mode` OPTIONAL — a conformant
+/// server may omit it entirely, in which case `form` is implied. `mode: "url"`
+/// stays REQUIRED. [`Serialize`] and [`Deserialize`] are therefore hand-written
+/// rather than derived from a serde internally-tagged `mode` discriminator:
+///
+/// - deserialization treats an ABSENT `mode` as `"form"` (v2 tolerance), and
+/// - serialization still emits `"mode":"form"` / `"mode":"url"` so the v1 wire
+///   bytes are unchanged (Phase-113 D-10).
+///
+/// The public enum shape, its variants and its field names are untouched — this
+/// is a serde-only, semver-additive change.
+#[derive(Debug, Clone)]
 pub enum ElicitRequestParams {
     /// Form-based elicitation with JSON Schema
-    #[serde(rename = "form", rename_all = "camelCase")]
     Form {
         /// Human-readable message explaining what input is needed
         message: String,
@@ -34,7 +47,6 @@ pub enum ElicitRequestParams {
         requested_schema: Value,
     },
     /// URL-based elicitation for out-of-band interaction
-    #[serde(rename = "url", rename_all = "camelCase")]
     Url {
         /// Human-readable message explaining what action is needed
         message: String,
@@ -43,6 +55,101 @@ pub enum ElicitRequestParams {
         /// URL the user should visit
         url: String,
     },
+}
+
+/// The `mode` value implied when a form elicitation omits the field.
+const ELICIT_MODE_FORM: &str = "form";
+
+/// The `mode` value a URL elicitation must carry explicitly.
+const ELICIT_MODE_URL: &str = "url";
+
+/// Serde-generated field handling for the `form` shape, so camelCase renaming and
+/// missing-required-field errors stay serde-produced rather than hand-rolled.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct FormShape {
+    message: String,
+    requested_schema: Value,
+}
+
+/// Serde-generated field handling for the `url` shape.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UrlShape {
+    message: String,
+    elicitation_id: String,
+    url: String,
+}
+
+impl Serialize for ElicitRequestParams {
+    /// Emits the internally-`mode`-tagged form the derived impl produced, byte for
+    /// byte: the tag first, then the variant's camelCase fields.
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match self {
+            Self::Form {
+                message,
+                requested_schema,
+            } => {
+                let mut state = serializer.serialize_struct("ElicitRequestParams", 3)?;
+                state.serialize_field("mode", ELICIT_MODE_FORM)?;
+                state.serialize_field("message", message)?;
+                state.serialize_field("requestedSchema", requested_schema)?;
+                state.end()
+            },
+            Self::Url {
+                message,
+                elicitation_id,
+                url,
+            } => {
+                let mut state = serializer.serialize_struct("ElicitRequestParams", 4)?;
+                state.serialize_field("mode", ELICIT_MODE_URL)?;
+                state.serialize_field("message", message)?;
+                state.serialize_field("elicitationId", elicitation_id)?;
+                state.serialize_field("url", url)?;
+                state.end()
+            },
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for ElicitRequestParams {
+    /// Reads the OPTIONAL `mode` discriminator, defaulting an absent one to
+    /// `"form"`, then dispatches to a serde-derived shape struct.
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let raw = Value::deserialize(deserializer)?;
+        let mode = match raw.get("mode") {
+            None | Some(Value::Null) => ELICIT_MODE_FORM,
+            Some(Value::String(mode)) => mode.as_str(),
+            Some(_) => return Err(de::Error::custom("`mode` must be a string")),
+        };
+        match mode {
+            ELICIT_MODE_FORM => {
+                let shape = FormShape::deserialize(&raw).map_err(de::Error::custom)?;
+                Ok(Self::Form {
+                    message: shape.message,
+                    requested_schema: shape.requested_schema,
+                })
+            },
+            ELICIT_MODE_URL => {
+                let shape = UrlShape::deserialize(&raw).map_err(de::Error::custom)?;
+                Ok(Self::Url {
+                    message: shape.message,
+                    elicitation_id: shape.elicitation_id,
+                    url: shape.url,
+                })
+            },
+            other => Err(de::Error::unknown_variant(
+                other,
+                &[ELICIT_MODE_FORM, ELICIT_MODE_URL],
+            )),
+        }
+    }
 }
 
 /// Elicitation result returned by the client (MCP 2025-11-25).
