@@ -1690,7 +1690,7 @@ mod tests {
                 principal_a != principal_b || method_a != method_b || arg_a != arg_b
             );
 
-            let codec = RequestStateCodec::new(&KEY_A, Duration::from_secs(300))
+            let codec = RequestStateCodec::new(&KEY_A, Duration::from_secs(DEFAULT_TTL_SECS))
                 .expect("valid key")
                 .with_clock(Arc::new(FixedClock(1_000)));
             let token = codec.mint(&serde_json::json!({ "s": 1 }), &bind_a, 0).expect("mint");
@@ -1701,7 +1701,7 @@ mod tests {
         /// and never panics (T-113-14).
         #[test]
         fn property_request_state_never_panics(token in ".{0,512}") {
-            let codec = RequestStateCodec::new(&KEY_A, Duration::from_secs(300))
+            let codec = RequestStateCodec::new(&KEY_A, Duration::from_secs(DEFAULT_TTL_SECS))
                 .expect("valid key")
                 .with_clock(Arc::new(FixedClock(1_000)));
             let params = serde_json::json!({ "name": "n", "arguments": {} });
