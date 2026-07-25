@@ -3349,462 +3349,476 @@ mod tests {
     }
 
     // ---- Phase 112 Plan 05: resultType + serverInfo envelope (VERS-07) ----
+    //
+    // Its OWN module so `cargo test -- inject_v2_result_envelope` selects
+    // exactly this suite (including plan 09's reserved-field ownership and the
+    // `serverInfo` relocation) rather than matching nothing; the surrounding
+    // `ServerCore` fixtures are reached through `use super::*`.
+    mod inject_v2_result_envelope {
+        use super::*;
 
-    fn result_response(id: i64, result: Value) -> JSONRPCResponse {
-        JSONRPCResponse {
-            jsonrpc: "2.0".to_string(),
-            id: RequestId::from(id),
-            payload: ResponsePayload::Result(result),
+        fn result_response(id: i64, result: Value) -> JSONRPCResponse {
+            JSONRPCResponse {
+                jsonrpc: "2.0".to_string(),
+                id: RequestId::from(id),
+                payload: ResponsePayload::Result(result),
+            }
         }
-    }
 
-    /// Read `serverInfo` from wherever the v2 envelope puts it.
-    ///
-    /// ONE reader, so the tests that care about OWNERSHIP stay independent of
-    /// the tests that pin PLACEMENT — the latter index the nesting directly and
-    /// are the ones that must fail if the placement drifts.
-    fn server_info_of(result: &Value) -> &Value {
-        &result["_meta"][RESERVED_SERVER_INFO_KEY]
-    }
+        /// Read `serverInfo` from wherever the v2 envelope puts it.
+        ///
+        /// ONE reader, so the tests that care about OWNERSHIP stay independent of
+        /// the tests that pin PLACEMENT — the latter index the nesting directly and
+        /// are the ones that must fail if the placement drifts.
+        fn server_info_of(result: &Value) -> &Value {
+            &result["_meta"][RESERVED_SERVER_INFO_KEY]
+        }
 
-    /// A v2 OBJECT success result gains inner-result `resultType:"complete"` and
-    /// a `serverInfo` object.
-    #[test]
-    fn result_type_envelope_v2_object_gets_complete_and_server_info() {
-        let info = Implementation::new("srv", "2.0.0");
-        let ctx = v2_ctx();
-        let mut resp = result_response(1, serde_json::json!({ "tools": [] }));
-        inject_v2_result_envelope(&mut resp, Some(&ctx), &info, ResponseDisposition::Complete);
-        let ResponsePayload::Result(v) = resp.payload else {
-            panic!("expected result");
-        };
-        assert_eq!(v["resultType"], "complete");
-        assert_eq!(server_info_of(&v)["name"], "srv");
-        assert_eq!(server_info_of(&v)["version"], "2.0.0");
-    }
-
-    /// `resultType` is SERVER-OWNED: a handler-set value is OVERWRITTEN with the
-    /// disposition the server computed (Codex Plan-09 HIGH #3).
-    ///
-    /// Phase 112 preserved the handler's value. That let a handler write
-    /// `resultType: "input_required"` on a method the spec forbids it on and
-    /// sail straight past the eligibility tripwire, because the tripwire gates
-    /// what the SERVER emits, not what a handler smuggles into its own result.
-    #[test]
-    fn result_type_envelope_overwrites_handler_disposition() {
-        let info = Implementation::new("srv", "2.0.0");
-        let ctx = v2_ctx();
-        let mut resp = result_response(1, serde_json::json!({ "resultType": "task", "x": 1 }));
-        inject_v2_result_envelope(&mut resp, Some(&ctx), &info, ResponseDisposition::Complete);
-        let ResponsePayload::Result(v) = resp.payload else {
-            panic!("expected result");
-        };
-        assert_eq!(
-            v["resultType"], "complete",
-            "the server-computed disposition must win"
-        );
-        assert_eq!(v["x"], 1, "non-reserved handler keys survive untouched");
-        // Non-default dispositions round-trip through the wire discriminator.
-        assert_eq!(
-            ResponseDisposition::InputRequired.as_wire_str(),
-            "input_required"
-        );
-        assert_eq!(ResponseDisposition::Task.as_wire_str(), "task");
-    }
-
-    /// The forged-`input_required`-on-`tools/list` scenario, end to end at the
-    /// envelope: a handler writing the reserved key itself gets `"complete"`.
-    #[test]
-    fn handler_forged_input_required_is_overwritten_to_complete() {
-        let info = Implementation::new("srv", "2.0.0");
-        let ctx = v2_ctx();
-        // The shape a malicious/confused `tools/list` handler would return.
-        let mut resp = result_response(
-            1,
-            serde_json::json!({
-                "tools": [],
-                "resultType": "input_required",
-                "requestState": "forged-token",
-                "inputRequests": { "x": { "method": "roots/list" } },
-            }),
-        );
-        inject_v2_result_envelope(&mut resp, Some(&ctx), &info, ResponseDisposition::Complete);
-        let ResponsePayload::Result(v) = resp.payload else {
-            panic!("expected result");
-        };
-        assert_eq!(v["resultType"], "complete");
-        assert!(
-            v.get("requestState").is_none(),
-            "a handler-supplied requestState must be removed: {v}"
-        );
-        assert!(
-            v.get("inputRequests").is_none(),
-            "a handler-supplied inputRequests must be removed: {v}"
-        );
-        assert!(v["tools"].is_array(), "the real payload survives");
-    }
-
-    /// An `input_required` result KEEPS the MRTR fields, because that egress
-    /// minted them — the removal is scoped to results the server did not mint.
-    #[test]
-    fn input_required_disposition_keeps_the_minted_mrtr_fields() {
-        let info = Implementation::new("srv", "2.0.0");
-        let ctx = v2_ctx();
-        let mut resp = result_response(
-            1,
-            serde_json::json!({
-                "content": [],
-                "requestState": "minted-token",
-                "inputRequests": { "x": { "method": "roots/list" } },
-            }),
-        );
-        inject_v2_result_envelope(
-            &mut resp,
-            Some(&ctx),
-            &info,
-            ResponseDisposition::InputRequired,
-        );
-        let ResponsePayload::Result(v) = resp.payload else {
-            panic!("expected result");
-        };
-        assert_eq!(v["resultType"], "input_required");
-        assert_eq!(v["requestState"], "minted-token");
-        assert!(v["inputRequests"]["x"].is_object());
-    }
-
-    /// A handler-set `io.modelcontextprotocol/serverInfo` is OVERWRITTEN with
-    /// the server's real `Implementation` — server identity is not a handler
-    /// claim (T-113-59).
-    #[test]
-    fn handler_supplied_server_info_is_overwritten() {
-        let info = Implementation::new("real-server", "2.0.0");
-        let ctx = v2_ctx();
-        let mut resp = result_response(
-            1,
-            serde_json::json!({
-                "_meta": {
-                    RESERVED_SERVER_INFO_KEY: { "name": "impersonated", "version": "0.0.0" },
-                },
-            }),
-        );
-        inject_v2_result_envelope(&mut resp, Some(&ctx), &info, ResponseDisposition::Complete);
-        let ResponsePayload::Result(v) = resp.payload else {
-            panic!("expected result");
-        };
-        assert_eq!(server_info_of(&v)["name"], "real-server");
-        assert_eq!(server_info_of(&v)["version"], "2.0.0");
-    }
-
-    // ---- Phase 113 Plan 09 Task 3: serverInfo lives inside result._meta ----
-
-    /// The schema places server identity at
-    /// `result._meta["io.modelcontextprotocol/serverInfo"]`, and the top-level
-    /// key the envelope used to write is GONE (RESEARCH Pitfall 6).
-    #[test]
-    fn server_info_lives_inside_result_meta_not_at_the_top_level() {
-        let info = Implementation::new("srv", "2.0.0");
-        let ctx = v2_ctx();
-        let mut resp = result_response(1, serde_json::json!({ "tools": [] }));
-        inject_v2_result_envelope(&mut resp, Some(&ctx), &info, ResponseDisposition::Complete);
-        let ResponsePayload::Result(v) = resp.payload else {
-            panic!("expected result");
-        };
-        assert_eq!(v["_meta"][RESERVED_SERVER_INFO_KEY]["name"], "srv");
-        assert_eq!(v["_meta"][RESERVED_SERVER_INFO_KEY]["version"], "2.0.0");
-        assert!(
-            v.get("serverInfo").is_none(),
-            "the envelope must no longer write a top-level serverInfo: {v}"
-        );
-        assert_eq!(
-            RESERVED_SERVER_INFO_KEY,
-            "io.modelcontextprotocol/serverInfo"
-        );
-    }
-
-    /// `_meta` is CREATED when the handler set none, and MERGED into (never
-    /// wholesale replaced) when it did.
-    #[test]
-    fn server_info_merges_into_an_existing_meta() {
-        let info = Implementation::new("srv", "2.0.0");
-        let ctx = v2_ctx();
-
-        // Created from nothing.
-        let mut created = result_response(1, serde_json::json!({}));
-        inject_v2_result_envelope(
-            &mut created,
-            Some(&ctx),
-            &info,
-            ResponseDisposition::Complete,
-        );
-        let ResponsePayload::Result(v) = created.payload else {
-            panic!("expected result");
-        };
-        assert_eq!(
-            v["_meta"].as_object().expect("an object").len(),
-            1,
-            "a created _meta carries only the reserved key: {v}"
-        );
-
-        // Merged into an existing one.
-        let mut merged = result_response(
-            2,
-            serde_json::json!({ "_meta": { "vendor/key": 1, "io.example/trace": "abc" } }),
-        );
-        inject_v2_result_envelope(
-            &mut merged,
-            Some(&ctx),
-            &info,
-            ResponseDisposition::Complete,
-        );
-        let ResponsePayload::Result(v) = merged.payload else {
-            panic!("expected result");
-        };
-        assert_eq!(v["_meta"]["vendor/key"], 1);
-        assert_eq!(v["_meta"]["io.example/trace"], "abc");
-        assert_eq!(v["_meta"][RESERVED_SERVER_INFO_KEY]["name"], "srv");
-    }
-
-    /// A v1 / non-opted-in response gains NO `_meta` — the creation is strictly
-    /// inside the v2 gate.
-    #[test]
-    fn v1_gains_no_meta_from_the_envelope() {
-        let info = Implementation::new("srv", "2.0.0");
-        for ctx in [Some(v1_ctx()), None] {
-            let original = serde_json::json!({ "tools": [] });
-            let mut resp = result_response(1, original.clone());
-            inject_v2_result_envelope(
-                &mut resp,
-                ctx.as_ref(),
-                &info,
-                ResponseDisposition::Complete,
-            );
+        /// A v2 OBJECT success result gains inner-result `resultType:"complete"` and
+        /// a `serverInfo` object.
+        #[test]
+        fn result_type_envelope_v2_object_gets_complete_and_server_info() {
+            let info = Implementation::new("srv", "2.0.0");
+            let ctx = v2_ctx();
+            let mut resp = result_response(1, serde_json::json!({ "tools": [] }));
+            inject_v2_result_envelope(&mut resp, Some(&ctx), &info, ResponseDisposition::Complete);
             let ResponsePayload::Result(v) = resp.payload else {
                 panic!("expected result");
             };
-            assert_eq!(v, original, "v1 must gain no _meta and stay byte-identical");
+            assert_eq!(v["resultType"], "complete");
+            assert_eq!(server_info_of(&v)["name"], "srv");
+            assert_eq!(server_info_of(&v)["version"], "2.0.0");
         }
-    }
 
-    /// The ONE envelope path means `server/discover`, `tools/call`,
-    /// `prompts/get`, `resources/read` and an `input_required` result all carry
-    /// the reserved key identically. `server/discover` additionally keeps its
-    /// OWN top-level `serverInfo` schema field, which the registry deliberately
-    /// does not own.
-    #[test]
-    fn every_v2_result_shape_carries_server_info_identically() {
-        let info = Implementation::new("srv", "2.0.0");
-        let ctx = v2_ctx();
-        let shapes = [
-            ("tools/call", serde_json::json!({ "content": [] })),
-            (
-                "prompts/get",
-                serde_json::json!({ "description": "d", "messages": [] }),
-            ),
-            ("resources/read", serde_json::json!({ "contents": [] })),
-        ];
-        for (label, shape) in shapes {
-            let mut resp = result_response(1, shape);
+        /// `resultType` is SERVER-OWNED: a handler-set value is OVERWRITTEN with the
+        /// disposition the server computed (Codex Plan-09 HIGH #3).
+        ///
+        /// Phase 112 preserved the handler's value. That let a handler write
+        /// `resultType: "input_required"` on a method the spec forbids it on and
+        /// sail straight past the eligibility tripwire, because the tripwire gates
+        /// what the SERVER emits, not what a handler smuggles into its own result.
+        #[test]
+        fn result_type_envelope_overwrites_handler_disposition() {
+            let info = Implementation::new("srv", "2.0.0");
+            let ctx = v2_ctx();
+            let mut resp = result_response(1, serde_json::json!({ "resultType": "task", "x": 1 }));
             inject_v2_result_envelope(&mut resp, Some(&ctx), &info, ResponseDisposition::Complete);
             let ResponsePayload::Result(v) = resp.payload else {
                 panic!("expected result");
             };
             assert_eq!(
-                v["_meta"][RESERVED_SERVER_INFO_KEY]["name"], "srv",
-                "{label}"
+                v["resultType"], "complete",
+                "the server-computed disposition must win"
             );
-            assert!(v.get("serverInfo").is_none(), "{label}: {v}");
+            assert_eq!(v["x"], 1, "non-reserved handler keys survive untouched");
+            // Non-default dispositions round-trip through the wire discriminator.
+            assert_eq!(
+                ResponseDisposition::InputRequired.as_wire_str(),
+                "input_required"
+            );
+            assert_eq!(ResponseDisposition::Task.as_wire_str(), "task");
         }
 
-        // An input_required result travels the same path.
-        let mut input_required = result_response(
-            2,
-            serde_json::json!({ "content": [], "requestState": "t", "inputRequests": {} }),
-        );
-        inject_v2_result_envelope(
-            &mut input_required,
-            Some(&ctx),
-            &info,
-            ResponseDisposition::InputRequired,
-        );
-        let ResponsePayload::Result(v) = input_required.payload else {
-            panic!("expected result");
-        };
-        assert_eq!(v["resultType"], "input_required");
-        assert_eq!(v["_meta"][RESERVED_SERVER_INFO_KEY]["name"], "srv");
+        /// The forged-`input_required`-on-`tools/list` scenario, end to end at the
+        /// envelope: a handler writing the reserved key itself gets `"complete"`.
+        #[test]
+        fn handler_forged_input_required_is_overwritten_to_complete() {
+            let info = Implementation::new("srv", "2.0.0");
+            let ctx = v2_ctx();
+            // The shape a malicious/confused `tools/list` handler would return.
+            let mut resp = result_response(
+                1,
+                serde_json::json!({
+                    "tools": [],
+                    "resultType": "input_required",
+                    "requestState": "forged-token",
+                    "inputRequests": { "x": { "method": "roots/list" } },
+                }),
+            );
+            inject_v2_result_envelope(&mut resp, Some(&ctx), &info, ResponseDisposition::Complete);
+            let ResponsePayload::Result(v) = resp.payload else {
+                panic!("expected result");
+            };
+            assert_eq!(v["resultType"], "complete");
+            assert!(
+                v.get("requestState").is_none(),
+                "a handler-supplied requestState must be removed: {v}"
+            );
+            assert!(
+                v.get("inputRequests").is_none(),
+                "a handler-supplied inputRequests must be removed: {v}"
+            );
+            assert!(v["tools"].is_array(), "the real payload survives");
+        }
 
-        // `server/discover` keeps its own schema field AND gains the reserved one.
-        let server = discover_server();
-        let discover_ctx = v2_ctx();
-        let response = build_discover_response(
-            RequestId::from(3i64),
-            &server.capabilities,
-            &server.info,
-            Some(&discover_ctx),
-        );
-        let ResponsePayload::Result(v) = response.payload else {
-            panic!("expected result");
-        };
-        assert_eq!(
-            v["serverInfo"]["name"], "discover-server",
-            "ServerDiscoverResult's OWN serverInfo field is not server-owned and survives"
-        );
-        assert_eq!(
-            v["_meta"][RESERVED_SERVER_INFO_KEY]["name"],
-            "discover-server"
-        );
-    }
+        /// An `input_required` result KEEPS the MRTR fields, because that egress
+        /// minted them — the removal is scoped to results the server did not mint.
+        #[test]
+        fn input_required_disposition_keeps_the_minted_mrtr_fields() {
+            let info = Implementation::new("srv", "2.0.0");
+            let ctx = v2_ctx();
+            let mut resp = result_response(
+                1,
+                serde_json::json!({
+                    "content": [],
+                    "requestState": "minted-token",
+                    "inputRequests": { "x": { "method": "roots/list" } },
+                }),
+            );
+            inject_v2_result_envelope(
+                &mut resp,
+                Some(&ctx),
+                &info,
+                ResponseDisposition::InputRequired,
+            );
+            let ResponsePayload::Result(v) = resp.payload else {
+                panic!("expected result");
+            };
+            assert_eq!(v["resultType"], "input_required");
+            assert_eq!(v["requestState"], "minted-token");
+            assert!(v["inputRequests"]["x"].is_object());
+        }
 
-    /// Non-reserved handler `_meta` keys SURVIVE alongside the server's
-    /// ownership pass — ownership is scoped to the enumerated set only.
-    #[test]
-    fn non_reserved_handler_meta_survives() {
-        let info = Implementation::new("srv", "2.0.0");
-        let ctx = v2_ctx();
-        let mut resp = result_response(
-            1,
-            serde_json::json!({ "_meta": { "vendor/key": 1, "io.example/trace": "abc" } }),
-        );
-        inject_v2_result_envelope(&mut resp, Some(&ctx), &info, ResponseDisposition::Complete);
-        let ResponsePayload::Result(v) = resp.payload else {
-            panic!("expected result");
-        };
-        assert_eq!(v["_meta"]["vendor/key"], 1);
-        assert_eq!(v["_meta"]["io.example/trace"], "abc");
-    }
+        /// A handler-set `io.modelcontextprotocol/serverInfo` is OVERWRITTEN with
+        /// the server's real `Implementation` — server identity is not a handler
+        /// claim (T-113-59).
+        #[test]
+        fn handler_supplied_server_info_is_overwritten() {
+            let info = Implementation::new("real-server", "2.0.0");
+            let ctx = v2_ctx();
+            let mut resp = result_response(
+                1,
+                serde_json::json!({
+                    "_meta": {
+                        RESERVED_SERVER_INFO_KEY: { "name": "impersonated", "version": "0.0.0" },
+                    },
+                }),
+            );
+            inject_v2_result_envelope(&mut resp, Some(&ctx), &info, ResponseDisposition::Complete);
+            let ResponsePayload::Result(v) = resp.payload else {
+                panic!("expected result");
+            };
+            assert_eq!(server_info_of(&v)["name"], "real-server");
+            assert_eq!(server_info_of(&v)["version"], "2.0.0");
+        }
 
-    /// The pmcp-internal signal key is removed at the ENVELOPE too, not only in
-    /// `mrtr_egress` — which is `streamable-http`-only, so on a build without
-    /// that feature nothing else would strip it (T-113-60).
-    #[test]
-    fn envelope_removes_the_internal_signal_key_defense_in_depth() {
-        let info = Implementation::new("srv", "2.0.0");
-        let ctx = v2_ctx();
-        let mut resp = result_response(
-            1,
-            serde_json::json!({
-                "_meta": { crate::types::mrtr::MRTR_SIGNAL_META_KEY: { "continuation": 1 } },
-            }),
-        );
-        inject_v2_result_envelope(&mut resp, Some(&ctx), &info, ResponseDisposition::Complete);
-        let ResponsePayload::Result(v) = resp.payload else {
-            panic!("expected result");
-        };
-        let rendered = v.to_string();
-        assert!(
-            !rendered.contains(crate::types::mrtr::MRTR_SIGNAL_META_KEY),
-            "the internal signal leaked through the envelope: {rendered}"
-        );
-        // What remains is exactly the reserved key the envelope owns — the
-        // handler's signal left no residue.
-        assert_eq!(v["_meta"].as_object().expect("an object").len(), 1);
-        assert!(v["_meta"][RESERVED_SERVER_INFO_KEY].is_object());
-    }
+        // ---- Phase 113 Plan 09 Task 3: serverInfo lives inside result._meta ----
 
-    /// A handler that set `_meta` to a NON-object gets it replaced with an
-    /// object rather than the server dropping its reserved keys.
-    #[test]
-    fn non_object_handler_meta_is_replaced_with_an_object() {
-        let mut result = serde_json::json!({ "_meta": "not-an-object" });
-        let meta = result_meta_object_mut(&mut result).expect("an object result");
-        meta.insert("vendor/key".to_string(), serde_json::json!(1));
-        assert_eq!(result["_meta"]["vendor/key"], 1);
-        assert!(result["_meta"].is_object());
-    }
+        /// The schema places server identity at
+        /// `result._meta["io.modelcontextprotocol/serverInfo"]`, and the top-level
+        /// key the envelope used to write is GONE (RESEARCH Pitfall 6).
+        #[test]
+        fn server_info_lives_inside_result_meta_not_at_the_top_level() {
+            let info = Implementation::new("srv", "2.0.0");
+            let ctx = v2_ctx();
+            let mut resp = result_response(1, serde_json::json!({ "tools": [] }));
+            inject_v2_result_envelope(&mut resp, Some(&ctx), &info, ResponseDisposition::Complete);
+            let ResponsePayload::Result(v) = resp.payload else {
+                panic!("expected result");
+            };
+            assert_eq!(v["_meta"][RESERVED_SERVER_INFO_KEY]["name"], "srv");
+            assert_eq!(v["_meta"][RESERVED_SERVER_INFO_KEY]["version"], "2.0.0");
+            assert!(
+                v.get("serverInfo").is_none(),
+                "the envelope must no longer write a top-level serverInfo: {v}"
+            );
+            assert_eq!(
+                RESERVED_SERVER_INFO_KEY,
+                "io.modelcontextprotocol/serverInfo"
+            );
+        }
 
-    /// `result_meta_object_mut` reports `None` for a non-object RESULT — there
-    /// is nowhere to put a `_meta` on a scalar.
-    #[test]
-    fn result_meta_object_mut_declines_a_non_object_result() {
-        let mut scalar = serde_json::json!(42);
-        assert!(result_meta_object_mut(&mut scalar).is_none());
-        let mut null = Value::Null;
-        assert!(result_meta_object_mut(&mut null).is_none());
-    }
+        /// `_meta` is CREATED when the handler set none, and MERGED into (never
+        /// wholesale replaced) when it did.
+        #[test]
+        fn server_info_merges_into_an_existing_meta() {
+            let info = Implementation::new("srv", "2.0.0");
+            let ctx = v2_ctx();
 
-    /// A v2 scalar/null result is left unchanged (cannot key a non-object), and
-    /// error responses get no injection.
-    #[test]
-    fn result_type_envelope_non_object_and_error_untouched() {
-        let info = Implementation::new("srv", "2.0.0");
-        let ctx = v2_ctx();
+            // Created from nothing.
+            let mut created = result_response(1, serde_json::json!({}));
+            inject_v2_result_envelope(
+                &mut created,
+                Some(&ctx),
+                &info,
+                ResponseDisposition::Complete,
+            );
+            let ResponsePayload::Result(v) = created.payload else {
+                panic!("expected result");
+            };
+            assert_eq!(
+                v["_meta"].as_object().expect("an object").len(),
+                1,
+                "a created _meta carries only the reserved key: {v}"
+            );
 
-        // scalar
-        let mut scalar = result_response(1, serde_json::json!(42));
-        inject_v2_result_envelope(
-            &mut scalar,
-            Some(&ctx),
-            &info,
-            ResponseDisposition::Complete,
-        );
-        let ResponsePayload::Result(v) = scalar.payload else {
-            panic!("expected result");
-        };
-        assert_eq!(v, serde_json::json!(42));
+            // Merged into an existing one.
+            let mut merged = result_response(
+                2,
+                serde_json::json!({ "_meta": { "vendor/key": 1, "io.example/trace": "abc" } }),
+            );
+            inject_v2_result_envelope(
+                &mut merged,
+                Some(&ctx),
+                &info,
+                ResponseDisposition::Complete,
+            );
+            let ResponsePayload::Result(v) = merged.payload else {
+                panic!("expected result");
+            };
+            assert_eq!(v["_meta"]["vendor/key"], 1);
+            assert_eq!(v["_meta"]["io.example/trace"], "abc");
+            assert_eq!(v["_meta"][RESERVED_SERVER_INFO_KEY]["name"], "srv");
+        }
 
-        // null
-        let mut null = result_response(2, Value::Null);
-        inject_v2_result_envelope(&mut null, Some(&ctx), &info, ResponseDisposition::Complete);
-        let ResponsePayload::Result(v) = null.payload else {
-            panic!("expected result");
-        };
-        assert_eq!(v, Value::Null);
+        /// A v1 / non-opted-in response gains NO `_meta` — the creation is strictly
+        /// inside the v2 gate.
+        #[test]
+        fn v1_gains_no_meta_from_the_envelope() {
+            let info = Implementation::new("srv", "2.0.0");
+            for ctx in [Some(v1_ctx()), None] {
+                let original = serde_json::json!({ "tools": [] });
+                let mut resp = result_response(1, original.clone());
+                inject_v2_result_envelope(
+                    &mut resp,
+                    ctx.as_ref(),
+                    &info,
+                    ResponseDisposition::Complete,
+                );
+                let ResponsePayload::Result(v) = resp.payload else {
+                    panic!("expected result");
+                };
+                assert_eq!(v, original, "v1 must gain no _meta and stay byte-identical");
+            }
+        }
 
-        // error → no injection
-        let mut err = ServerCore::error_response(RequestId::from(3i64), -32601, "nope".to_string());
-        inject_v2_result_envelope(&mut err, Some(&ctx), &info, ResponseDisposition::Complete);
-        assert!(matches!(err.payload, ResponsePayload::Error(_)));
-    }
+        /// The ONE envelope path means `server/discover`, `tools/call`,
+        /// `prompts/get`, `resources/read` and an `input_required` result all carry
+        /// the reserved key identically. `server/discover` additionally keeps its
+        /// OWN top-level `serverInfo` schema field, which the registry deliberately
+        /// does not own.
+        #[test]
+        fn every_v2_result_shape_carries_server_info_identically() {
+            let info = Implementation::new("srv", "2.0.0");
+            let ctx = v2_ctx();
+            let shapes = [
+                ("tools/call", serde_json::json!({ "content": [] })),
+                (
+                    "prompts/get",
+                    serde_json::json!({ "description": "d", "messages": [] }),
+                ),
+                ("resources/read", serde_json::json!({ "contents": [] })),
+            ];
+            for (label, shape) in shapes {
+                let mut resp = result_response(1, shape);
+                inject_v2_result_envelope(
+                    &mut resp,
+                    Some(&ctx),
+                    &info,
+                    ResponseDisposition::Complete,
+                );
+                let ResponsePayload::Result(v) = resp.payload else {
+                    panic!("expected result");
+                };
+                assert_eq!(
+                    v["_meta"][RESERVED_SERVER_INFO_KEY]["name"], "srv",
+                    "{label}"
+                );
+                assert!(v.get("serverInfo").is_none(), "{label}: {v}");
+            }
 
-    /// Golden byte-identity: a v1 (or non-opted-in) response is UNCHANGED — no
-    /// resultType, no serverInfo — for both a success and an error.
-    #[test]
-    fn result_type_envelope_v1_byte_identical_golden() {
-        let info = Implementation::new("srv", "2.0.0");
-        let ctx = v1_ctx();
+            // An input_required result travels the same path.
+            let mut input_required = result_response(
+                2,
+                serde_json::json!({ "content": [], "requestState": "t", "inputRequests": {} }),
+            );
+            inject_v2_result_envelope(
+                &mut input_required,
+                Some(&ctx),
+                &info,
+                ResponseDisposition::InputRequired,
+            );
+            let ResponsePayload::Result(v) = input_required.payload else {
+                panic!("expected result");
+            };
+            assert_eq!(v["resultType"], "input_required");
+            assert_eq!(v["_meta"][RESERVED_SERVER_INFO_KEY]["name"], "srv");
 
-        // v1 success — byte-identical
-        let original = serde_json::json!({ "tools": [], "nextCursor": null });
-        let mut resp = result_response(1, original.clone());
-        inject_v2_result_envelope(&mut resp, Some(&ctx), &info, ResponseDisposition::Complete);
-        let ResponsePayload::Result(v) = resp.payload else {
-            panic!("expected result");
-        };
-        assert_eq!(v, original, "v1 success must stay byte-identical");
+            // `server/discover` keeps its own schema field AND gains the reserved one.
+            let server = discover_server();
+            let discover_ctx = v2_ctx();
+            let response = build_discover_response(
+                RequestId::from(3i64),
+                &server.capabilities,
+                &server.info,
+                Some(&discover_ctx),
+            );
+            let ResponsePayload::Result(v) = response.payload else {
+                panic!("expected result");
+            };
+            assert_eq!(
+                v["serverInfo"]["name"], "discover-server",
+                "ServerDiscoverResult's OWN serverInfo field is not server-owned and survives"
+            );
+            assert_eq!(
+                v["_meta"][RESERVED_SERVER_INFO_KEY]["name"],
+                "discover-server"
+            );
+        }
 
-        // No context at all — also byte-identical.
-        let mut resp_none = result_response(2, original.clone());
-        inject_v2_result_envelope(&mut resp_none, None, &info, ResponseDisposition::Complete);
-        let ResponsePayload::Result(v2) = resp_none.payload else {
-            panic!("expected result");
-        };
-        assert_eq!(v2, original);
+        /// Non-reserved handler `_meta` keys SURVIVE alongside the server's
+        /// ownership pass — ownership is scoped to the enumerated set only.
+        #[test]
+        fn non_reserved_handler_meta_survives() {
+            let info = Implementation::new("srv", "2.0.0");
+            let ctx = v2_ctx();
+            let mut resp = result_response(
+                1,
+                serde_json::json!({ "_meta": { "vendor/key": 1, "io.example/trace": "abc" } }),
+            );
+            inject_v2_result_envelope(&mut resp, Some(&ctx), &info, ResponseDisposition::Complete);
+            let ResponsePayload::Result(v) = resp.payload else {
+                panic!("expected result");
+            };
+            assert_eq!(v["_meta"]["vendor/key"], 1);
+            assert_eq!(v["_meta"]["io.example/trace"], "abc");
+        }
 
-        // v1 error/task-pending — byte-identical (frozen -32002 survives).
-        let mut err = ServerCore::error_response(
-            RequestId::from(3i64),
-            -32002,
-            "Task not completed".to_string(),
-        );
-        let before = serde_json::to_value(&err).unwrap();
-        inject_v2_result_envelope(&mut err, Some(&ctx), &info, ResponseDisposition::Complete);
-        let after = serde_json::to_value(&err).unwrap();
-        assert_eq!(before, after, "v1 error must stay byte-identical");
-    }
+        /// The pmcp-internal signal key is removed at the ENVELOPE too, not only in
+        /// `mrtr_egress` — which is `streamable-http`-only, so on a build without
+        /// that feature nothing else would strip it (T-113-60).
+        #[test]
+        fn envelope_removes_the_internal_signal_key_defense_in_depth() {
+            let info = Implementation::new("srv", "2.0.0");
+            let ctx = v2_ctx();
+            let mut resp = result_response(
+                1,
+                serde_json::json!({
+                    "_meta": { crate::types::mrtr::MRTR_SIGNAL_META_KEY: { "continuation": 1 } },
+                }),
+            );
+            inject_v2_result_envelope(&mut resp, Some(&ctx), &info, ResponseDisposition::Complete);
+            let ResponsePayload::Result(v) = resp.payload else {
+                panic!("expected result");
+            };
+            let rendered = v.to_string();
+            assert!(
+                !rendered.contains(crate::types::mrtr::MRTR_SIGNAL_META_KEY),
+                "the internal signal leaked through the envelope: {rendered}"
+            );
+            // What remains is exactly the reserved key the envelope owns — the
+            // handler's signal left no residue.
+            assert_eq!(v["_meta"].as_object().expect("an object").len(), 1);
+            assert!(v["_meta"][RESERVED_SERVER_INFO_KEY].is_object());
+        }
 
-    /// End-to-end through `handle_request`: a v2 tools/list carries the envelope.
-    #[tokio::test]
-    async fn result_type_envelope_end_to_end_v2_handle_request() {
-        let server = discover_server();
-        // `probe_call_with_v2_meta` carries the v2 `_meta` so ingress resolves
-        // Era::V2; the tool result is a JSON object → gains the envelope.
-        let response = server
-            .handle_request(RequestId::from(1i64), probe_call_with_v2_meta(), None)
-            .await;
-        let ResponsePayload::Result(v) = response.payload else {
-            panic!("expected result");
-        };
-        assert_eq!(v["resultType"], "complete");
-        assert_eq!(server_info_of(&v)["name"], "discover-server");
+        /// A handler that set `_meta` to a NON-object gets it replaced with an
+        /// object rather than the server dropping its reserved keys.
+        #[test]
+        fn non_object_handler_meta_is_replaced_with_an_object() {
+            let mut result = serde_json::json!({ "_meta": "not-an-object" });
+            let meta = result_meta_object_mut(&mut result).expect("an object result");
+            meta.insert("vendor/key".to_string(), serde_json::json!(1));
+            assert_eq!(result["_meta"]["vendor/key"], 1);
+            assert!(result["_meta"].is_object());
+        }
+
+        /// `result_meta_object_mut` reports `None` for a non-object RESULT — there
+        /// is nowhere to put a `_meta` on a scalar.
+        #[test]
+        fn result_meta_object_mut_declines_a_non_object_result() {
+            let mut scalar = serde_json::json!(42);
+            assert!(result_meta_object_mut(&mut scalar).is_none());
+            let mut null = Value::Null;
+            assert!(result_meta_object_mut(&mut null).is_none());
+        }
+
+        /// A v2 scalar/null result is left unchanged (cannot key a non-object), and
+        /// error responses get no injection.
+        #[test]
+        fn result_type_envelope_non_object_and_error_untouched() {
+            let info = Implementation::new("srv", "2.0.0");
+            let ctx = v2_ctx();
+
+            // scalar
+            let mut scalar = result_response(1, serde_json::json!(42));
+            inject_v2_result_envelope(
+                &mut scalar,
+                Some(&ctx),
+                &info,
+                ResponseDisposition::Complete,
+            );
+            let ResponsePayload::Result(v) = scalar.payload else {
+                panic!("expected result");
+            };
+            assert_eq!(v, serde_json::json!(42));
+
+            // null
+            let mut null = result_response(2, Value::Null);
+            inject_v2_result_envelope(&mut null, Some(&ctx), &info, ResponseDisposition::Complete);
+            let ResponsePayload::Result(v) = null.payload else {
+                panic!("expected result");
+            };
+            assert_eq!(v, Value::Null);
+
+            // error → no injection
+            let mut err =
+                ServerCore::error_response(RequestId::from(3i64), -32601, "nope".to_string());
+            inject_v2_result_envelope(&mut err, Some(&ctx), &info, ResponseDisposition::Complete);
+            assert!(matches!(err.payload, ResponsePayload::Error(_)));
+        }
+
+        /// Golden byte-identity: a v1 (or non-opted-in) response is UNCHANGED — no
+        /// resultType, no serverInfo — for both a success and an error.
+        #[test]
+        fn result_type_envelope_v1_byte_identical_golden() {
+            let info = Implementation::new("srv", "2.0.0");
+            let ctx = v1_ctx();
+
+            // v1 success — byte-identical
+            let original = serde_json::json!({ "tools": [], "nextCursor": null });
+            let mut resp = result_response(1, original.clone());
+            inject_v2_result_envelope(&mut resp, Some(&ctx), &info, ResponseDisposition::Complete);
+            let ResponsePayload::Result(v) = resp.payload else {
+                panic!("expected result");
+            };
+            assert_eq!(v, original, "v1 success must stay byte-identical");
+
+            // No context at all — also byte-identical.
+            let mut resp_none = result_response(2, original.clone());
+            inject_v2_result_envelope(&mut resp_none, None, &info, ResponseDisposition::Complete);
+            let ResponsePayload::Result(v2) = resp_none.payload else {
+                panic!("expected result");
+            };
+            assert_eq!(v2, original);
+
+            // v1 error/task-pending — byte-identical (frozen -32002 survives).
+            let mut err = ServerCore::error_response(
+                RequestId::from(3i64),
+                -32002,
+                "Task not completed".to_string(),
+            );
+            let before = serde_json::to_value(&err).unwrap();
+            inject_v2_result_envelope(&mut err, Some(&ctx), &info, ResponseDisposition::Complete);
+            let after = serde_json::to_value(&err).unwrap();
+            assert_eq!(before, after, "v1 error must stay byte-identical");
+        }
+
+        /// End-to-end through `handle_request`: a v2 tools/list carries the envelope.
+        #[tokio::test]
+        async fn result_type_envelope_end_to_end_v2_handle_request() {
+            let server = discover_server();
+            // `probe_call_with_v2_meta` carries the v2 `_meta` so ingress resolves
+            // Era::V2; the tool result is a JSON object → gains the envelope.
+            let response = server
+                .handle_request(RequestId::from(1i64), probe_call_with_v2_meta(), None)
+                .await;
+            let ResponsePayload::Result(v) = response.payload else {
+                panic!("expected result");
+            };
+            assert_eq!(v["resultType"], "complete");
+            assert_eq!(server_info_of(&v)["name"], "discover-server");
+        }
     }
 
     #[tokio::test]
