@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v2.5
 milestone_name: MCP Spec 2026-07-28
 status: executing
-stopped_at: Completed 113-02-PLAN.md
-last_updated: "2026-07-25T04:17:38.505Z"
+stopped_at: Completed 113-03-PLAN.md
+last_updated: "2026-07-25T05:14:00.050Z"
 last_activity: 2026-07-25
 progress:
   total_phases: 71
   completed_phases: 57
   total_plans: 294
-  completed_plans: 283
+  completed_plans: 284
   percent: 80
 ---
 
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-07-22) · .planning/ROADMAP.md (v2.5 mil
 ## Current Position
 
 Phase: 113 (stateless-http-multi-round-trip-elicitation) — EXECUTING
-Plan: 3 of 13
+Plan: 4 of 13
 Status: Ready to execute
 Last activity: 2026-07-25
 
@@ -115,6 +115,11 @@ Decisions are logged in PROJECT.md Key Decisions table. Decisions framing this m
 - [Phase ?]: 113-02: MRTR wire adapter lands as ONE module (src/types/mrtr.rs) with fail-loud extract (Result, absent != invalid), stale-clearing splice, kind-directed InputResponse::decode_for, whitelist-canonicalized salient_param_digest; parsing/plumbing pub(crate), only authoring/result types pub
 - [Phase ?]: 113-02: ElicitRequestParams gets hand-written serde impls -- mode-optional on deserialize (v2 implicit form), byte-identical mode-tagged serialize (v1); semver-checks 223/223, no bump required
 - [Phase ?]: 113-02: three pre-existing v2 blockers surfaced and pinned by FORWARD TRIPWIRE tests, not comments -- typed requests rename _meta->meta on the wire (a conformant v2 client is never detected as v2), tools/list carries no _meta so cannot be a v2 request, stateful config still demands a session on v2; all owned by plan 04
+- [Phase ?]: 113-03: requestState codec is SERVER-instance-owned (Arc on Server + ServerCore), resolved exactly once at build() — no process-global; builder key/ttl beat env, and two differently-keyed servers coexist in one process (regression-tested)
+- [Phase ?]: 113-03: MALFORMED PMCP_REQUEST_STATE_KEY fails the server BUILD (T-113-17); D-04's warn-and-degrade fallback covers the UNSET case only
+- [Phase ?]: 113-03: Verdict not Result — UnknownKey (re-elicit) can never collapse into AuthFailed (JSON-RPC error); Expired carries the DECRYPTED continuation so round survives (T-113-49)
+- [Phase ?]: 113-03: key-id collisions try EVERY matching accepting entry -> AuthFailed, never a false Ok and never a misleading UnknownKey; proven via cfg(test) forced-id constructors
+- [Phase ?]: 113-03: env reads route through a cfg(test) thread-local seam (ENV_LOCK alone is insufficient — cargo test --lib is in-process parallel and from_env now runs inside ServerBuilder::build)
 
 ### Pending Todos
 
@@ -152,8 +157,8 @@ Items deferred by design for this milestone (design §7 / REQUIREMENTS v2):
 
 ## Session Continuity
 
-Last session: 2026-07-25T04:17:29.261Z
-Stopped at: Completed 113-02-PLAN.md
+Last session: 2026-07-25T05:14:00.044Z
+Stopped at: Completed 113-03-PLAN.md
 Resume file: None
 
 ## Performance Metrics
@@ -188,3 +193,4 @@ Resume file: None
 | Phase 112 P10 | 50 | 3 tasks | 5 files |
 | Phase 113 P01 | 28min | 3 tasks | 3 files |
 | Phase 113 P02 | 42min | 3 tasks | 7 files |
+| Phase 113 P03 | 78min | 3 tasks tasks | 7 files files |

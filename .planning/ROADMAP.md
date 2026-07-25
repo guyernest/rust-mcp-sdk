@@ -2290,7 +2290,7 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1)*
 
-- [ ] 113-03-PLAN.md — `requestState` AEAD token (`src/server/request_state.rs`): SERVER-OWNED `Arc<RequestStateCodec>` built once at server build (no `OnceLock`), builder key/previous-keys/TTL + injectable clock, fail-the-build on a malformed configured key, mint/verify with principal‖method‖param-digest AAD, the D-15 verdict table with `Expired(Continuation)`, property tests and a `fuzzing`-feature fuzz target
+- [x] 113-03-PLAN.md — `requestState` AEAD token (`src/server/request_state.rs`): SERVER-OWNED `Arc<RequestStateCodec>` built once at server build (no `OnceLock`), builder key/previous-keys/TTL + injectable clock, fail-the-build on a malformed configured key, mint/verify with principal‖method‖param-digest AAD, the D-15 verdict table with `Expired(Continuation)`, property tests and a `fuzzing`-feature fuzz target
 - [ ] 113-04-PLAN.md — HTTP-01 stateless era gate: one `sessions_active(state, era)` predicate routing all four session sites, GET/DELETE→405, RAW-level unknown-method→404, the -3202x→400 status mapper with structured `Reject { code, message, data }`, the locked `Mcp-Name` presence-always rule, sentinel-decoded cross-check, and `tests/v2_stateless_http.rs` against a STATEFUL default config
 
 **Wave 3** *(blocked on Wave 2)*
@@ -2405,7 +2405,7 @@ Plans:
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 112. Version Plumbing Spine | 10/10 | Complete    | 2026-07-23 |
-| 113. Stateless HTTP + MRTR | 2/13 | In Progress|  |
+| 113. Stateless HTTP + MRTR | 3/13 | In Progress|  |
 | 114. Tasks Extension Migration | 0/TBD | Not started | - |
 | 115. JSON Schema 2020-12 + Caching Hints | 0/TBD | Not started | - |
 | 116. Auth Hardening SEPs | 0/TBD | Not started | - |
