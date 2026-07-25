@@ -31,6 +31,7 @@ pub mod elicitation;
 pub mod roots;
 pub mod sampling;
 
+use crate::types::mrtr::{InputRequest, InputRequestKind, InputRequests};
 use crate::types::protocol::{ClientRequest, Request, ServerRequest};
 use std::sync::Arc;
 
@@ -130,6 +131,98 @@ pub fn classify_host_request(request: &Request) -> HostRequestKind {
     }
 }
 
+// ===========================================================================
+// The MRTR (`inputRequests`) sibling — Phase 113, CLNT-02.
+// ===========================================================================
+
+/// Classify one MRTR [`InputRequest`] into the host-handler kind that answers it.
+///
+/// # Why there are TWO classifiers
+///
+/// On v1 the three host request kinds arrive as server-initiated JSON-RPC
+/// requests and are classified by [`classify_host_request`]. On v2 the spec says
+/// servers **MUST NOT** send independent requests: the SAME three kinds arrive
+/// instead as entries of an `input_required` result's `inputRequests` map. The
+/// Phase-106 host surface is therefore REPLACED by MRTR on v2, not supplemented
+/// — which is exactly why both classifiers return the SAME
+/// [`HostRequestKind`] and both feed the SAME dispatch helpers (D-06: one
+/// elicitation callback serves both eras).
+///
+/// Pure, synchronous and side-effect free, so it is property/fuzz testable
+/// independently of the async fold.
+#[doc(hidden)]
+#[must_use]
+pub fn classify_input_request(request: &InputRequest) -> HostRequestKind {
+    host_kind_of(request.kind())
+}
+
+/// Classify an MRTR input-request METHOD STRING.
+///
+/// The string half of [`classify_input_request`], for callers that hold a raw
+/// method name rather than a decoded [`InputRequest`]. Anything outside the
+/// three spec-permitted kinds is [`HostRequestKind::Unhandled`]. Total and
+/// non-panicking for any input.
+pub(crate) fn classify_input_method(method: &str) -> HostRequestKind {
+    [
+        InputRequestKind::Elicitation,
+        InputRequestKind::Sampling,
+        InputRequestKind::Roots,
+    ]
+    .into_iter()
+    .find(|kind| kind.wire_method() == method)
+    .map_or(HostRequestKind::Unhandled, host_kind_of)
+}
+
+/// The ONE mapping from an MRTR kind to its host-handler kind.
+const fn host_kind_of(kind: InputRequestKind) -> HostRequestKind {
+    match kind {
+        InputRequestKind::Elicitation => HostRequestKind::Elicitation,
+        InputRequestKind::Sampling => HostRequestKind::Sampling,
+        InputRequestKind::Roots => HostRequestKind::Roots,
+    }
+}
+
+impl ClientHostRegistry {
+    /// Whether a registered handler exists that COULD answer `kind`.
+    ///
+    /// Presence only — nothing is invoked, no approval gate runs.
+    fn can_fulfil(&self, kind: HostRequestKind) -> bool {
+        match kind {
+            // Either sampling shape can service an inbound
+            // `sampling/createMessage`; dispatch prefers `sampling_with_tools`.
+            HostRequestKind::Sampling => {
+                self.sampling.is_some() || self.sampling_with_tools.is_some()
+            },
+            HostRequestKind::Elicitation => self.elicitation.is_some(),
+            HostRequestKind::Roots => self.roots.is_some(),
+            // `ping` is never an MRTR input request, and `Unhandled` is by
+            // definition unfulfillable.
+            HostRequestKind::Ping | HostRequestKind::Unhandled => false,
+        }
+    }
+
+    /// Prove EVERY entry of an `inputRequests` map is fulfillable, BEFORE any
+    /// handler runs.
+    ///
+    /// Returns `Err(kind)` naming the FIRST unfulfillable kind. The ordering
+    /// matters: a map whose second entry has no handler must not first prompt a
+    /// human (or spend an agent's tokens) on the fulfillable first entry, since
+    /// the fold is all-or-nothing and that work would be discarded (T-113-26 /
+    /// T-113-27).
+    pub(crate) fn preflight_input_requests(
+        &self,
+        requests: &InputRequests,
+    ) -> std::result::Result<(), HostRequestKind> {
+        for request in requests.values() {
+            let kind = classify_input_request(request);
+            if !self.can_fulfil(kind) {
+                return Err(kind);
+            }
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -198,5 +291,141 @@ mod tests {
         // fall through to Unhandled / method-not-found.
         let req = Request::Client(Box::new(ClientRequest::Ping));
         assert_eq!(classify_host_request(&req), HostRequestKind::Ping);
+    }
+
+    // =======================================================================
+    // MRTR `inputRequests` classification + preflight (Phase 113, CLNT-02).
+    // =======================================================================
+
+    mod input_requests {
+        use super::*;
+        use crate::types::elicitation::ElicitRequestParams;
+
+        fn elicitation_entry() -> InputRequest {
+            InputRequest::Elicitation(Box::new(ElicitRequestParams::Form {
+                message: "who?".to_string(),
+                requested_schema: serde_json::json!({}),
+            }))
+        }
+
+        fn sampling_entry() -> InputRequest {
+            InputRequest::Sampling(Box::new(CreateMessageParams::new(Vec::new())))
+        }
+
+        fn registry_with_elicitation() -> ClientHostRegistry {
+            struct Handler;
+            #[async_trait::async_trait]
+            impl HostElicitationHandler for Handler {
+                async fn handle_elicitation(
+                    &self,
+                    _params: ElicitRequestParams,
+                ) -> crate::Result<crate::types::elicitation::ElicitResult> {
+                    unreachable!("preflight must not invoke anything")
+                }
+            }
+            ClientHostRegistry {
+                elicitation: Some(Arc::new(Handler)),
+                ..ClientHostRegistry::default()
+            }
+        }
+
+        #[test]
+        fn classify_maps_the_three_kinds() {
+            assert_eq!(
+                classify_input_request(&elicitation_entry()),
+                HostRequestKind::Elicitation
+            );
+            assert_eq!(
+                classify_input_request(&sampling_entry()),
+                HostRequestKind::Sampling
+            );
+            assert_eq!(
+                classify_input_request(&InputRequest::ListRoots),
+                HostRequestKind::Roots
+            );
+        }
+
+        #[test]
+        fn classify_method_maps_the_three_wire_methods() {
+            assert_eq!(
+                classify_input_method("elicitation/create"),
+                HostRequestKind::Elicitation
+            );
+            assert_eq!(
+                classify_input_method("sampling/createMessage"),
+                HostRequestKind::Sampling
+            );
+            assert_eq!(classify_input_method("roots/list"), HostRequestKind::Roots);
+        }
+
+        #[test]
+        fn classify_method_is_unhandled_for_anything_else() {
+            for method in ["tools/call", "", "ping", "Elicitation/Create"] {
+                assert_eq!(
+                    classify_input_method(method),
+                    HostRequestKind::Unhandled,
+                    "{method} must not classify as a host kind"
+                );
+            }
+        }
+
+        #[test]
+        fn preflight_passes_when_every_kind_has_a_handler() {
+            let registry = registry_with_elicitation();
+            let mut requests = InputRequests::new();
+            requests.insert("a".to_string(), elicitation_entry());
+            assert!(registry.preflight_input_requests(&requests).is_ok());
+        }
+
+        /// The FIRST unfulfillable kind is named, and an empty map trivially
+        /// passes.
+        #[test]
+        fn preflight_names_the_first_unfulfillable_kind() {
+            let registry = registry_with_elicitation();
+            let mut requests = InputRequests::new();
+            requests.insert("a".to_string(), elicitation_entry());
+            requests.insert("b".to_string(), sampling_entry());
+            assert_eq!(
+                registry.preflight_input_requests(&requests),
+                Err(HostRequestKind::Sampling)
+            );
+
+            assert!(registry
+                .preflight_input_requests(&InputRequests::new())
+                .is_ok());
+        }
+
+        /// `on_sampling_with_tools` sets only `sampling_with_tools`, and
+        /// dispatch prefers it — preflight must accept either shape or a
+        /// `WithTools`-only client would refuse a sampling entry it can answer.
+        #[test]
+        fn preflight_accepts_either_sampling_handler_shape() {
+            struct WithTools;
+            #[async_trait::async_trait]
+            impl HostSamplingHandlerWithTools for WithTools {
+                async fn handle_create_message_with_tools(
+                    &self,
+                    _params: CreateMessageParams,
+                ) -> crate::Result<crate::types::sampling::CreateMessageResultWithTools>
+                {
+                    unreachable!("preflight must not invoke anything")
+                }
+            }
+            let registry = ClientHostRegistry {
+                sampling_with_tools: Some(Arc::new(WithTools)),
+                ..ClientHostRegistry::default()
+            };
+            let mut requests = InputRequests::new();
+            requests.insert("a".to_string(), sampling_entry());
+            assert!(registry.preflight_input_requests(&requests).is_ok());
+        }
+
+        proptest::proptest! {
+            /// Total and non-panicking over arbitrary method strings.
+            #[test]
+            fn classify_input_method_never_panics(method in ".{0,64}") {
+                let _ = classify_input_method(&method);
+            }
+        }
     }
 }

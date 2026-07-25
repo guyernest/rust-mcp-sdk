@@ -133,6 +133,71 @@ const META_CLIENT_CAPABILITIES: &str =
 /// request never carries two spellings.
 const PARAMS_META_KEY: &str = "_meta";
 
+/// The `sampling/createMessage` method name, sourced from the ONE MRTR kind
+/// table so the v1 host path and the v2 fold cannot spell it differently.
+const SAMPLING_METHOD: &str = crate::types::mrtr::InputRequestKind::Sampling.wire_method();
+
+/// The `elicitation/create` method name. See [`SAMPLING_METHOD`].
+const ELICITATION_METHOD: &str = crate::types::mrtr::InputRequestKind::Elicitation.wire_method();
+
+/// The `roots/list` method name. See [`SAMPLING_METHOD`].
+const ROOTS_METHOD: &str = crate::types::mrtr::InputRequestKind::Roots.wire_method();
+
+/// Why a host request could not be answered.
+///
+/// Shared by the v1 server-initiated dispatch and the v2 MRTR fold so both
+/// consume the SAME pipeline (approval gate, handler preference, result
+/// review) and only differ in how they render the refusal.
+#[derive(Debug)]
+enum HostRefusal {
+    /// No handler is registered for this kind.
+    NoHandler,
+    /// A policy gate (preflight approval or result review) denied it. The
+    /// reason is logged at the denial site and deliberately not carried here —
+    /// local host policy is never forwarded to the remote server.
+    Denied,
+    /// The registered handler or provider itself failed.
+    Failed(Error),
+    /// The handler's result could not be serialized.
+    Serialization,
+}
+
+impl HostRefusal {
+    /// A short, non-sensitive reason string for MRTR fold logging.
+    fn reason(&self) -> &'static str {
+        match self {
+            Self::NoHandler => "no registered handler",
+            Self::Denied => "denied by host policy",
+            Self::Failed(_) => "handler returned an error",
+            Self::Serialization => "handler result could not be serialized",
+        }
+    }
+}
+
+/// A sampling completion, still typed as the registered handler produced it.
+///
+/// The shared pipeline returns this rather than a serialized value because the
+/// two entry points render it differently: the v1 host response carries the
+/// tool-aware result in FULL, while an MRTR `inputResponses` value is
+/// spec-typed as a `CreateMessageResult`.
+#[derive(Debug)]
+enum HostSamplingCompletion {
+    /// From a [`host::HostSamplingHandler`].
+    Legacy(CreateMessageResult),
+    /// From a [`host::HostSamplingHandlerWithTools`].
+    WithTools(crate::types::sampling::CreateMessageResultWithTools),
+}
+
+/// The outcome of folding an entire `inputRequests` map into `inputResponses`.
+#[derive(Debug)]
+enum FoldOutcome {
+    /// EVERY entry was answered.
+    Fulfilled(crate::types::mrtr::InputResponses),
+    /// At least one entry could not be answered. All-or-nothing: no partial
+    /// map, no fabricated response, and the client does NOT resend.
+    CannotFulfil,
+}
+
 /// MCP client for connecting to servers.
 pub struct Client<T: Transport> {
     transport: Arc<RwLock<T>>,
@@ -2879,15 +2944,6 @@ impl<T: Transport> Client<T> {
         id: RequestId,
         request: Request,
     ) -> crate::types::JSONRPCResponse {
-        // At least one sampling handler (legacy or WithTools) must be registered.
-        if self.host_registry.sampling.is_none() && self.host_registry.sampling_with_tools.is_none()
-        {
-            return Self::host_error(
-                id,
-                crate::error::ErrorCode::METHOD_NOT_FOUND.as_i32(),
-                "Method not found",
-            );
-        }
         let Some(params) = Self::extract_sampling_params(request) else {
             return Self::host_error(
                 id,
@@ -2895,6 +2951,27 @@ impl<T: Transport> Client<T> {
                 "Method not found",
             );
         };
+        Self::host_response(id, SAMPLING_METHOD, self.answer_host_sampling(params).await)
+    }
+
+    /// The FULL host sampling pipeline: handler presence, the preflight
+    /// approval gate, handler preference, and the result-review gate.
+    ///
+    /// ONE implementation with TWO entry points — the v1 server-initiated
+    /// [`Self::answer_host_sampling`] and the v2 MRTR
+    /// [`Self::answer_mrtr_sampling`]. Routing MRTR through here is what stops
+    /// the v2 path from silently bypassing `on_sampling_approval` /
+    /// `on_sampling_result_review` (T-113-57). The two entry points differ only
+    /// in how they RENDER the completion, which is why this returns it typed.
+    async fn run_host_sampling(
+        &self,
+        params: CreateMessageParams,
+    ) -> std::result::Result<HostSamplingCompletion, HostRefusal> {
+        // At least one sampling handler (legacy or WithTools) must be registered.
+        if self.host_registry.sampling.is_none() && self.host_registry.sampling_with_tools.is_none()
+        {
+            return Err(HostRefusal::NoHandler);
+        }
 
         // (1) PREFLIGHT approval gate — runs BEFORE any handler so a denial
         // prevents the LLM call entirely (no tokens billed). It operates on the
@@ -2903,11 +2980,7 @@ impl<T: Transport> Client<T> {
         if let Some(approval) = &self.host_registry.approval {
             if let ApprovalDecision::Deny(reason) = approval(params.clone()).await {
                 tracing::warn!(%reason, "sampling denied by host preflight");
-                return Self::host_error(
-                    id,
-                    crate::error::ErrorCode::INTERNAL_ERROR.as_i32(),
-                    "request denied by host policy",
-                );
+                return Err(HostRefusal::Denied);
             }
         }
 
@@ -2915,18 +2988,53 @@ impl<T: Transport> Client<T> {
         // A client that registered only a legacy handler keeps its EXACT current
         // wire behavior (serializes a `CreateMessageResult`).
         if self.host_registry.sampling_with_tools.is_some() {
-            self.answer_sampling_with_tools(id, params).await
+            self.answer_sampling_with_tools(params)
+                .await
+                .map(HostSamplingCompletion::WithTools)
         } else {
-            self.answer_sampling_legacy(id, params).await
+            self.answer_sampling_legacy(params)
+                .await
+                .map(HostSamplingCompletion::Legacy)
+        }
+    }
+
+    /// The v1 host rendering of a sampling completion: the tool-aware result is
+    /// serialized in FULL, exactly as before this pipeline was shared.
+    async fn answer_host_sampling(
+        &self,
+        params: CreateMessageParams,
+    ) -> std::result::Result<serde_json::Value, HostRefusal> {
+        match self.run_host_sampling(params).await? {
+            HostSamplingCompletion::Legacy(result) => Self::host_value(&result),
+            HostSamplingCompletion::WithTools(result) => Self::host_value(&result),
+        }
+    }
+
+    /// The MRTR rendering of a sampling completion.
+    ///
+    /// An `inputResponses` value for a `sampling/createMessage` entry is
+    /// SPEC-TYPED as a `CreateMessageResult`, so a tool-aware completion is
+    /// projected down through the SAME projection the result-review gate uses.
+    /// Without this a `WithTools`-only client would advertise the `sampling`
+    /// capability (it can service the request) and then fail to produce a
+    /// decodable answer — an under-supply the server would re-request forever.
+    async fn answer_mrtr_sampling(
+        &self,
+        params: CreateMessageParams,
+    ) -> std::result::Result<serde_json::Value, HostRefusal> {
+        match self.run_host_sampling(params).await? {
+            HostSamplingCompletion::Legacy(result) => Self::host_value(&result),
+            HostSamplingCompletion::WithTools(result) => {
+                Self::host_value(&Self::project_with_tools_to_legacy(&result))
+            },
         }
     }
 
     /// Legacy single-content sampling answer path (unchanged behavior).
     async fn answer_sampling_legacy(
         &self,
-        id: RequestId,
         params: CreateMessageParams,
-    ) -> crate::types::JSONRPCResponse {
+    ) -> std::result::Result<CreateMessageResult, HostRefusal> {
         let handler = self
             .host_registry
             .sampling
@@ -2942,25 +3050,21 @@ impl<T: Transport> Client<T> {
             .is_some()
             .then(|| params.clone());
 
-        let result = match handler.handle_create_message(params).await {
-            Ok(result) => result,
-            Err(e) => return Self::host_handler_error(id, "sampling/createMessage", &e),
-        };
+        let result = handler
+            .handle_create_message(params)
+            .await
+            .map_err(HostRefusal::Failed)?;
 
         // Optional post-generation review (default pass-through). `review_params`
         // is `Some` exactly when `result_review` is `Some`, so the pair matches.
         if let (Some(review), Some(params)) = (&self.host_registry.result_review, review_params) {
             if let ApprovalDecision::Deny(reason) = review(params, result.clone()).await {
                 tracing::warn!(%reason, "sampling denied by host result review");
-                return Self::host_error(
-                    id,
-                    crate::error::ErrorCode::INTERNAL_ERROR.as_i32(),
-                    "request denied by host policy",
-                );
+                return Err(HostRefusal::Denied);
             }
         }
 
-        Self::host_ok(id, &result)
+        Ok(result)
     }
 
     /// Tool-aware (`WithTools`) sampling answer path.
@@ -2973,9 +3077,9 @@ impl<T: Transport> Client<T> {
     /// value remains the full `CreateMessageResultWithTools`.
     async fn answer_sampling_with_tools(
         &self,
-        id: RequestId,
         params: CreateMessageParams,
-    ) -> crate::types::JSONRPCResponse {
+    ) -> std::result::Result<crate::types::sampling::CreateMessageResultWithTools, HostRefusal>
+    {
         let handler = self
             .host_registry
             .sampling_with_tools
@@ -2988,31 +3092,30 @@ impl<T: Transport> Client<T> {
             .is_some()
             .then(|| params.clone());
 
-        let result = match handler.handle_create_message_with_tools(params).await {
-            Ok(result) => result,
-            Err(e) => return Self::host_handler_error(id, "sampling/createMessage", &e),
-        };
+        let result = handler
+            .handle_create_message_with_tools(params)
+            .await
+            .map_err(HostRefusal::Failed)?;
 
         if let (Some(review), Some(params)) = (&self.host_registry.result_review, review_params) {
-            let projected = Self::project_with_tools_for_review(&result);
+            let projected = Self::project_with_tools_to_legacy(&result);
             if let ApprovalDecision::Deny(reason) = review(params, projected).await {
                 tracing::warn!(%reason, "sampling denied by host result review");
-                return Self::host_error(
-                    id,
-                    crate::error::ErrorCode::INTERNAL_ERROR.as_i32(),
-                    "request denied by host policy",
-                );
+                return Err(HostRefusal::Denied);
             }
         }
 
-        Self::host_ok(id, &result)
+        Ok(result)
     }
 
     /// Project a [`CreateMessageResultWithTools`] into a single-content
-    /// [`CreateMessageResult`] for the (optional) result-review gate. Tool
-    /// blocks have no single-`Content` counterpart, so they are rendered as a
-    /// short text marker; the reviewer still sees enough to allow or deny.
-    fn project_with_tools_for_review(
+    /// [`CreateMessageResult`]. Tool blocks have no single-`Content`
+    /// counterpart, so they are rendered as a short text marker.
+    ///
+    /// TWO consumers: the optional result-review gate (which must still see the
+    /// completion so it can deny it), and the MRTR fold (whose
+    /// `inputResponses` value is spec-typed as a `CreateMessageResult`).
+    fn project_with_tools_to_legacy(
         result: &crate::types::sampling::CreateMessageResultWithTools,
     ) -> crate::types::sampling::CreateMessageResult {
         use crate::types::sampling::SamplingMessageContent as Smc;
@@ -3044,13 +3147,6 @@ impl<T: Transport> Client<T> {
         id: RequestId,
         request: Request,
     ) -> crate::types::JSONRPCResponse {
-        let Some(handler) = &self.host_registry.elicitation else {
-            return Self::host_error(
-                id,
-                crate::error::ErrorCode::METHOD_NOT_FOUND.as_i32(),
-                "Method not found",
-            );
-        };
         // Extract the single elicitation parse variant inline (server-side
         // `elicitation/create`); anything else is not routable here.
         let Request::Server(server) = request else {
@@ -3067,25 +3163,135 @@ impl<T: Transport> Client<T> {
                 "Method not found",
             );
         };
-        match handler.handle_elicitation(*params).await {
-            Ok(result) => Self::host_ok(id, &result),
-            Err(e) => Self::host_handler_error(id, "elicitation/create", &e),
-        }
+        Self::host_response(
+            id,
+            ELICITATION_METHOD,
+            self.answer_host_elicitation(*params).await,
+        )
+    }
+
+    /// The host elicitation pipeline. ONE implementation, two entry points —
+    /// the v1 server-initiated dispatch and the v2 MRTR fold (D-06: app authors
+    /// write ONE elicitation callback that serves both eras).
+    async fn answer_host_elicitation(
+        &self,
+        params: crate::types::elicitation::ElicitRequestParams,
+    ) -> std::result::Result<serde_json::Value, HostRefusal> {
+        let Some(handler) = &self.host_registry.elicitation else {
+            return Err(HostRefusal::NoHandler);
+        };
+        let result = handler
+            .handle_elicitation(params)
+            .await
+            .map_err(HostRefusal::Failed)?;
+        Self::host_value(&result)
     }
 
     /// Answer a classified `roots/list` request from the registered provider.
     async fn dispatch_host_roots(&self, id: RequestId) -> crate::types::JSONRPCResponse {
+        Self::host_response(id, ROOTS_METHOD, self.answer_host_roots().await)
+    }
+
+    /// The host roots pipeline. ONE implementation, two entry points.
+    async fn answer_host_roots(&self) -> std::result::Result<serde_json::Value, HostRefusal> {
         let Some(provider) = &self.host_registry.roots else {
-            return Self::host_error(
-                id,
-                crate::error::ErrorCode::METHOD_NOT_FOUND.as_i32(),
-                "Method not found",
-            );
+            return Err(HostRefusal::NoHandler);
         };
-        match provider().await {
-            Ok(result) => Self::host_ok(id, &result),
-            Err(e) => Self::host_handler_error(id, "roots/list", &e),
+        let result = provider().await.map_err(HostRefusal::Failed)?;
+        Self::host_value(&result)
+    }
+
+    // =======================================================================
+    // MRTR `inputRequests` fold (Phase 113, CLNT-02).
+    // =======================================================================
+
+    /// Answer an entire `inputRequests` map from the registered host handlers.
+    ///
+    /// ALL-OR-NOTHING (T-113-26): either every entry is answered, or the result
+    /// is [`FoldOutcome::CannotFulfil`] and the caller does NOT resend. A
+    /// partially-filled map and a fabricated response are both forbidden — the
+    /// former would let a server harvest partial answers, the latter would
+    /// synthesize consent for a capability the client never registered.
+    ///
+    /// Every refusal path emits a `tracing::warn!` naming the entry key, so a
+    /// handler failure is observable rather than swallowed into "the caller got
+    /// the original result back".
+    async fn fold_input_requests(
+        &self,
+        requests: &crate::types::mrtr::InputRequests,
+    ) -> FoldOutcome {
+        use crate::types::mrtr::{InputRequest, InputResponse};
+
+        // PREFLIGHT FIRST: prove every kind is fulfillable BEFORE invoking
+        // anything. Otherwise a map whose second entry has no handler would
+        // first prompt a human (or spend an agent's tokens) on the fulfillable
+        // first entry, and then discard that work.
+        if let Err(kind) = self.host_registry.preflight_input_requests(requests) {
+            tracing::warn!(
+                ?kind,
+                "MRTR: no registered handler for a requested input kind — not resending"
+            );
+            return FoldOutcome::CannotFulfil;
         }
+
+        let mut responses = crate::types::mrtr::InputResponses::new();
+        for (key, request) in requests {
+            let kind = request.kind();
+            // Routed through the SAME helpers the v1 host dispatch uses, so the
+            // approval and result-review hooks apply identically (T-113-57).
+            let answered = match request {
+                InputRequest::Elicitation(params) => {
+                    self.answer_host_elicitation((**params).clone()).await
+                },
+                InputRequest::Sampling(params) => {
+                    self.answer_mrtr_sampling((**params).clone()).await
+                },
+                InputRequest::ListRoots => self.answer_host_roots().await,
+            };
+            let value = match answered {
+                Ok(value) => value,
+                Err(refusal) => {
+                    tracing::warn!(
+                        key = %key,
+                        reason = refusal.reason(),
+                        "MRTR: could not fulfil an inputRequests entry — not resending"
+                    );
+                    return FoldOutcome::CannotFulfil;
+                },
+            };
+            // KIND-DIRECTED decode: the three response shapes overlap on the
+            // wire, so decoding by the ORIGINATING kind is what stops a
+            // misclassification (T-113-46).
+            let response = match InputResponse::decode_for(kind, value) {
+                Ok(response) => response,
+                Err(error) => {
+                    tracing::warn!(
+                        key = %key,
+                        %error,
+                        "MRTR: a host handler produced a response that does not match the \
+                         requested kind — not resending"
+                    );
+                    return FoldOutcome::CannotFulfil;
+                },
+            };
+            // A declined/cancelled elicitation is a legitimate v1 answer but is
+            // NOT a fulfilled MRTR input: the user said no, so the client must
+            // not resend on their behalf (D-06).
+            if let InputResponse::Elicitation(result) = &response {
+                if result.action != crate::types::elicitation::ElicitAction::Accept {
+                    tracing::warn!(
+                        key = %key,
+                        action = ?result.action,
+                        "MRTR: elicitation was not accepted — not resending"
+                    );
+                    return FoldOutcome::CannotFulfil;
+                }
+            }
+            // The server-assigned key is preserved VERBATIM: it is how the
+            // server correlates the answer with its own continuation state.
+            responses.insert(key.clone(), response);
+        }
+        FoldOutcome::Fulfilled(responses)
     }
 
     /// Extract [`CreateMessageParams`] from either inbound sampling parse
@@ -3103,18 +3309,45 @@ impl<T: Transport> Client<T> {
         }
     }
 
-    /// Build a successful host response, serializing the handler result.
-    fn host_ok<S: serde::Serialize>(id: RequestId, value: &S) -> crate::types::JSONRPCResponse {
-        match serde_json::to_value(value) {
-            Ok(v) => crate::types::JSONRPCResponse::success(id, v),
-            Err(e) => {
-                tracing::error!("failed to serialize host response: {e}");
-                Self::host_error(
-                    id,
-                    crate::error::ErrorCode::INTERNAL_ERROR.as_i32(),
-                    "Internal error handling host request",
-                )
-            },
+    /// Serialize a handler result into the wire value both entry points use.
+    fn host_value<S: serde::Serialize>(
+        value: &S,
+    ) -> std::result::Result<serde_json::Value, HostRefusal> {
+        serde_json::to_value(value).map_err(|e| {
+            tracing::error!("failed to serialize host response: {e}");
+            HostRefusal::Serialization
+        })
+    }
+
+    /// Turn a shared host-pipeline outcome into the v1 JSON-RPC response.
+    ///
+    /// The wire mapping is unchanged from before the pipeline was shared:
+    /// no handler => `-32601`, a policy denial or a serialization failure =>
+    /// a sanitized `-32603`, a handler failure => a sanitized `-32603` with the
+    /// raw error logged locally.
+    fn host_response(
+        id: RequestId,
+        method: &str,
+        outcome: std::result::Result<serde_json::Value, HostRefusal>,
+    ) -> crate::types::JSONRPCResponse {
+        match outcome {
+            Ok(value) => crate::types::JSONRPCResponse::success(id, value),
+            Err(HostRefusal::NoHandler) => Self::host_error(
+                id,
+                crate::error::ErrorCode::METHOD_NOT_FOUND.as_i32(),
+                "Method not found",
+            ),
+            Err(HostRefusal::Denied) => Self::host_error(
+                id,
+                crate::error::ErrorCode::INTERNAL_ERROR.as_i32(),
+                "request denied by host policy",
+            ),
+            Err(HostRefusal::Failed(error)) => Self::host_handler_error(id, method, &error),
+            Err(HostRefusal::Serialization) => Self::host_error(
+                id,
+                crate::error::ErrorCode::INTERNAL_ERROR.as_i32(),
+                "Internal error handling host request",
+            ),
         }
     }
 
@@ -4054,6 +4287,305 @@ mod tests {
             Some(serde_json::json!(true)),
             "experimental must be preserved"
         );
+    }
+
+    // =======================================================================
+    // MRTR `inputRequests` fold (Phase 113, CLNT-02).
+    // =======================================================================
+
+    mod mrtr_fold {
+        use super::*;
+        use crate::types::content::Role;
+        use crate::types::elicitation::{ElicitAction, ElicitRequestParams, ElicitResult};
+        use crate::types::mrtr::{InputRequest, InputRequests, InputResponse};
+        use crate::types::roots::{ListRootsResult, Root};
+        use crate::types::sampling::{CreateMessageResultWithTools, SamplingMessageContent};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        /// An elicitation handler that counts invocations and returns a
+        /// configurable action.
+        struct CountingElicitation {
+            calls: Arc<AtomicUsize>,
+            action: ElicitAction,
+        }
+
+        #[async_trait]
+        impl host::HostElicitationHandler for CountingElicitation {
+            async fn handle_elicitation(
+                &self,
+                _params: ElicitRequestParams,
+            ) -> Result<ElicitResult> {
+                self.calls.fetch_add(1, Ordering::SeqCst);
+                let mut content = HashMap::new();
+                content.insert("user_name".to_string(), serde_json::json!("ada"));
+                Ok(ElicitResult {
+                    action: self.action,
+                    content: matches!(self.action, ElicitAction::Accept).then_some(content),
+                })
+            }
+        }
+
+        /// A sampling handler that counts invocations.
+        struct CountingSampling {
+            calls: Arc<AtomicUsize>,
+        }
+
+        #[async_trait]
+        impl host::HostSamplingHandler for CountingSampling {
+            async fn handle_create_message(
+                &self,
+                _params: CreateMessageParams,
+            ) -> Result<CreateMessageResult> {
+                self.calls.fetch_add(1, Ordering::SeqCst);
+                Ok(CreateMessageResult::new(
+                    crate::types::Content::text("sampled"),
+                    "test-model",
+                ))
+            }
+        }
+
+        struct WithToolsSampling;
+
+        #[async_trait]
+        impl host::HostSamplingHandlerWithTools for WithToolsSampling {
+            async fn handle_create_message_with_tools(
+                &self,
+                _params: CreateMessageParams,
+            ) -> Result<CreateMessageResultWithTools> {
+                Ok(CreateMessageResultWithTools::new(
+                    "with-tools-model",
+                    Role::Assistant,
+                    vec![SamplingMessageContent::Text {
+                        text: "sampled with tools".to_string(),
+                        meta: None,
+                    }],
+                ))
+            }
+        }
+
+        fn elicitation_request() -> InputRequest {
+            InputRequest::Elicitation(Box::new(ElicitRequestParams::Form {
+                message: "who?".to_string(),
+                requested_schema: serde_json::json!({}),
+            }))
+        }
+
+        fn sampling_request() -> InputRequest {
+            InputRequest::Sampling(Box::new(CreateMessageParams::new(Vec::new())))
+        }
+
+        fn requests(entries: Vec<(&str, InputRequest)>) -> InputRequests {
+            entries
+                .into_iter()
+                .map(|(key, request)| (key.to_string(), request))
+                .collect()
+        }
+
+        /// All three kinds are answered from the already-registered Phase-106
+        /// registry, and the server-assigned keys are preserved VERBATIM.
+        #[tokio::test]
+        async fn folds_all_three_kinds_preserving_keys() {
+            let elicit_calls = Arc::new(AtomicUsize::new(0));
+            let sample_calls = Arc::new(AtomicUsize::new(0));
+            let client = ClientBuilder::new(MockTransport::new())
+                .on_elicitation(CountingElicitation {
+                    calls: elicit_calls.clone(),
+                    action: ElicitAction::Accept,
+                })
+                .on_sampling(CountingSampling {
+                    calls: sample_calls.clone(),
+                })
+                .on_roots(|| async {
+                    Ok(ListRootsResult {
+                        roots: vec![Root {
+                            uri: "file:///tmp".to_string(),
+                            name: None,
+                        }],
+                    })
+                })
+                .build();
+
+            let map = requests(vec![
+                ("server_key_a", elicitation_request()),
+                ("server_key_b", sampling_request()),
+                ("server_key_c", InputRequest::ListRoots),
+            ]);
+            let FoldOutcome::Fulfilled(responses) = client.fold_input_requests(&map).await else {
+                panic!("every kind has a registered handler");
+            };
+
+            assert_eq!(responses.len(), 3);
+            // Keys are the SERVER's, verbatim — never re-derived.
+            assert!(matches!(
+                responses.get("server_key_a"),
+                Some(InputResponse::Elicitation(_))
+            ));
+            assert!(matches!(
+                responses.get("server_key_b"),
+                Some(InputResponse::Sampling(_))
+            ));
+            assert!(matches!(
+                responses.get("server_key_c"),
+                Some(InputResponse::Roots(_))
+            ));
+            assert_eq!(elicit_calls.load(Ordering::SeqCst), 1);
+            assert_eq!(sample_calls.load(Ordering::SeqCst), 1);
+        }
+
+        /// `on_sampling_with_tools` alone can answer a sampling entry — the
+        /// same precedence the v1 dispatch applies.
+        #[tokio::test]
+        async fn folds_a_with_tools_only_sampling_handler() {
+            let client = ClientBuilder::new(MockTransport::new())
+                .on_sampling_with_tools(WithToolsSampling)
+                .build();
+            let map = requests(vec![("k", sampling_request())]);
+            let FoldOutcome::Fulfilled(responses) = client.fold_input_requests(&map).await else {
+                panic!("a WithTools handler must satisfy a sampling entry");
+            };
+            assert!(matches!(
+                responses.get("k"),
+                Some(InputResponse::Sampling(_))
+            ));
+        }
+
+        /// PREFLIGHT: the map's FIRST entry is fulfillable and the SECOND is
+        /// not, so ZERO handlers may run — otherwise a human is prompted (or an
+        /// agent's tokens are spent) for work the all-or-nothing fold discards.
+        #[tokio::test]
+        async fn preflight_failure_invokes_zero_handlers() {
+            let elicit_calls = Arc::new(AtomicUsize::new(0));
+            let client = ClientBuilder::new(MockTransport::new())
+                .on_elicitation(CountingElicitation {
+                    calls: elicit_calls.clone(),
+                    action: ElicitAction::Accept,
+                })
+                .build();
+
+            // BTreeMap ordering: "a" (fulfillable) is visited before "b".
+            let map = requests(vec![
+                ("a", elicitation_request()),
+                ("b", sampling_request()),
+            ]);
+            assert!(matches!(
+                client.fold_input_requests(&map).await,
+                FoldOutcome::CannotFulfil
+            ));
+            assert_eq!(
+                elicit_calls.load(Ordering::SeqCst),
+                0,
+                "no handler may run once ANY kind is known unfulfillable"
+            );
+        }
+
+        /// A rejecting `on_sampling_approval` gate reaches the MRTR path — the
+        /// fold must not bypass the wallet gate (T-113-57).
+        #[tokio::test]
+        async fn rejecting_approval_yields_cannot_fulfil() {
+            let sample_calls = Arc::new(AtomicUsize::new(0));
+            let client = ClientBuilder::new(MockTransport::new())
+                .on_sampling(CountingSampling {
+                    calls: sample_calls.clone(),
+                })
+                .on_sampling_approval(|_params| async {
+                    host::ApprovalDecision::Deny("policy".to_string())
+                })
+                .build();
+
+            let map = requests(vec![("k", sampling_request())]);
+            assert!(matches!(
+                client.fold_input_requests(&map).await,
+                FoldOutcome::CannotFulfil
+            ));
+            assert_eq!(
+                sample_calls.load(Ordering::SeqCst),
+                0,
+                "the preflight approval gate must prevent the LLM call"
+            );
+        }
+
+        /// The post-generation `on_sampling_result_review` gate also runs on
+        /// the MRTR path.
+        #[tokio::test]
+        async fn result_review_runs_on_a_sampling_result() {
+            let reviewed = Arc::new(AtomicUsize::new(0));
+            let seen = reviewed.clone();
+            let client = ClientBuilder::new(MockTransport::new())
+                .on_sampling(CountingSampling {
+                    calls: Arc::new(AtomicUsize::new(0)),
+                })
+                .on_sampling_result_review(move |_params, result| {
+                    let seen = seen.clone();
+                    async move {
+                        assert_eq!(
+                            result.model, "test-model",
+                            "the reviewer sees the completion"
+                        );
+                        seen.fetch_add(1, Ordering::SeqCst);
+                        host::ApprovalDecision::Deny("no".to_string())
+                    }
+                })
+                .build();
+
+            let map = requests(vec![("k", sampling_request())]);
+            assert!(matches!(
+                client.fold_input_requests(&map).await,
+                FoldOutcome::CannotFulfil
+            ));
+            assert_eq!(
+                reviewed.load(Ordering::SeqCst),
+                1,
+                "the result review must have run on the MRTR path"
+            );
+        }
+
+        /// A declined (or cancelled) elicitation is a legitimate v1 answer but
+        /// is NOT a fulfilled MRTR input — the client must not resend.
+        #[tokio::test]
+        async fn declined_elicitation_yields_cannot_fulfil() {
+            for action in [ElicitAction::Decline, ElicitAction::Cancel] {
+                let client = ClientBuilder::new(MockTransport::new())
+                    .on_elicitation(CountingElicitation {
+                        calls: Arc::new(AtomicUsize::new(0)),
+                        action,
+                    })
+                    .build();
+                let map = requests(vec![("k", elicitation_request())]);
+                assert!(
+                    matches!(
+                        client.fold_input_requests(&map).await,
+                        FoldOutcome::CannotFulfil
+                    ),
+                    "{action:?} must not be treated as a fulfilled input"
+                );
+            }
+        }
+
+        /// A handler that ERRORS yields `CannotFulfil` — never a partial map
+        /// and never a fabricated response.
+        #[tokio::test]
+        async fn handler_error_yields_cannot_fulfil() {
+            let client = ClientBuilder::new(MockTransport::new())
+                .on_sampling(FailingHostSampling)
+                .build();
+            let map = requests(vec![("k", sampling_request())]);
+            assert!(matches!(
+                client.fold_input_requests(&map).await,
+                FoldOutcome::CannotFulfil
+            ));
+        }
+
+        /// An empty map folds to an empty (but fulfilled) response map.
+        #[tokio::test]
+        async fn an_empty_map_is_trivially_fulfilled() {
+            let client = ClientBuilder::new(MockTransport::new()).build();
+            let FoldOutcome::Fulfilled(responses) =
+                client.fold_input_requests(&InputRequests::new()).await
+            else {
+                panic!("nothing to fulfil");
+            };
+            assert!(responses.is_empty());
+        }
     }
 
     // === Typed-helper unit tests ===
