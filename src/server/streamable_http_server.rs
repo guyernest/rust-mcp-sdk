@@ -885,7 +885,16 @@ fn classify_v2_request(
 /// - any other method → `None` (presence-only; `cross_check_name` returns Ok for
 ///   non-name-bearing methods)
 fn extract_body_method_and_name(body: &[u8]) -> (Option<String>, Option<String>) {
-    let Ok(value) = serde_json::from_slice::<serde_json::Value>(body) else {
+    method_and_name_of(raw_body_json(body).as_ref())
+}
+
+/// [`extract_body_method_and_name`] over an ALREADY-PARSED body.
+///
+/// The gate parses the raw body exactly once and hands the value to each reader,
+/// so the era read, the header cross-check and the MRTR params read can never
+/// disagree about what the body says.
+fn method_and_name_of(value: Option<&serde_json::Value>) -> (Option<String>, Option<String>) {
+    let Some(value) = value else {
         return (None, None);
     };
     let method = value
@@ -972,13 +981,101 @@ fn negotiation_error_to_gate_reject(
 /// typed structs carry (D-113-A) and the two can never disagree about what counts
 /// as a `_meta` object. Never panics on adversarial bytes (T-112-13).
 fn raw_params_meta(body: &[u8]) -> Option<serde_json::Value> {
-    let value = serde_json::from_slice::<serde_json::Value>(body).ok()?;
-    let params = value.get("params")?;
+    params_meta_of(raw_body_json(body).as_ref())
+}
+
+/// Parse the raw JSON-RPC body ONCE. `None` for adversarial / non-JSON bytes.
+fn raw_body_json(body: &[u8]) -> Option<serde_json::Value> {
+    serde_json::from_slice::<serde_json::Value>(body).ok()
+}
+
+/// [`raw_params_meta`] over an ALREADY-PARSED body.
+fn params_meta_of(value: Option<&serde_json::Value>) -> Option<serde_json::Value> {
+    let params = value?.get("params")?;
     params
         .get("_meta")
         .or_else(|| params.get("meta"))
         .filter(|meta| !meta.is_null())
         .cloned()
+}
+
+/// The raw top-level `params` value of an ALREADY-PARSED body, or `Null`.
+///
+/// `Null` is the "no MRTR fields" input for
+/// [`crate::types::mrtr::extract_mrtr_params`], which returns the default
+/// (both fields absent) for any non-object value.
+fn params_of(value: Option<&serde_json::Value>) -> serde_json::Value {
+    value
+        .and_then(|v| v.get("params"))
+        .cloned()
+        .unwrap_or(serde_json::Value::Null)
+}
+
+// ---------------------------------------------------------------------------
+// MRTR request params at v2 ingress (Plan 113-06, HTTP-03 / T-113-44).
+//
+// # Why the TRANSPORT does this extraction
+//
+// `inputResponses` and `requestState` are top-level `params` SIBLINGS of
+// `name`/`arguments`/`uri` — they are NOT `_meta` keys. `GetPromptRequest` and
+// `ReadResourceRequest` are `pub` structs with all-`pub` fields and are NOT
+// `#[non_exhaustive]`, so giving them typed MRTR fields is a MAJOR semver break
+// (`cargo semver-checks` `constructible_struct_adds_field` — the measured
+// D-113-D finding that forced the raw-body route). Reading the fields off the
+// already-parsed raw body needs ZERO public API change and is the SAME route
+// Phase 112 already uses for the raw `params._meta` era signal.
+//
+// The read runs ONLY for an ACCEPTED v2 request: v1 and non-opted-in requests
+// execute zero MRTR code (D-04).
+// ---------------------------------------------------------------------------
+
+/// Attach the raw-body MRTR params to an accepted v2 request's context, or turn
+/// a PRESENT-but-unusable field into an `INVALID_PARAMS` rejection.
+///
+/// A malformed / oversized / wrong-shaped MRTR field must never be silently
+/// treated as ABSENT: doing so lets an attacker skip the `requestState` verdict
+/// table entirely (T-113-44). `extract_mrtr_params` therefore returns a
+/// `Result`, and every `Err` short-circuits into the plan-04 rejection path,
+/// which the code-driven status mapper renders as HTTP 400.
+///
+/// The client-facing message is the `MrtrParseError`'s `Display`, which names
+/// the violated BOUND and never echoes attacker-supplied content; the
+/// discriminated reason is logged server-side only.
+fn attach_v2_mrtr_params(
+    context: Option<crate::types::protocol::ProtocolContext>,
+    outcome: V2GateOutcome,
+    body_json: Option<&serde_json::Value>,
+) -> (
+    Option<crate::types::protocol::ProtocolContext>,
+    V2GateOutcome,
+) {
+    // Only an ACCEPTED v2 request carries MRTR fields (D-04: zero era code on
+    // v1 / non-opted-in, and a rejected request never reaches dispatch).
+    if !matches!(outcome, V2GateOutcome::EnforceOk { .. }) {
+        return (context, outcome);
+    }
+    let Some(ctx) = context else {
+        return (None, outcome);
+    };
+    match crate::types::mrtr::extract_mrtr_params(&params_of(body_json)) {
+        Ok(mrtr) => (Some(ctx.with_mrtr_params(mrtr)), outcome),
+        Err(reason) => {
+            tracing::warn!(
+                target: "mcp.http",
+                reason = ?reason,
+                "rejecting a v2 request whose MRTR params are present but unusable"
+            );
+            let message = reason.to_string();
+            (
+                Some(ctx),
+                V2GateOutcome::Reject {
+                    code: crate::types::protocol::error_codes::INVALID_PARAMS,
+                    message,
+                    data: None,
+                },
+            )
+        },
+    }
 }
 
 /// THE v2 header gate for the streamable-HTTP transport — one path, every method.
@@ -1009,7 +1106,10 @@ async fn run_v2_header_gate(
     Option<crate::types::protocol::ProtocolContext>,
     V2GateOutcome,
 ) {
-    let raw_meta = raw_params_meta(raw_body);
+    // ONE parse of the raw body, shared by the era read, the header cross-check
+    // and the MRTR params read — they can never disagree about what it says.
+    let body_json = raw_body_json(raw_body);
+    let raw_meta = params_meta_of(body_json.as_ref());
     let (resolved, accept_list) = {
         let server = state.server.lock().await;
         // Non-opted-in servers run ZERO era-detection — the v1 path is
@@ -1029,10 +1129,12 @@ async fn run_v2_header_gate(
         return (context.clone(), V2GateOutcome::Passthrough);
     };
     let meta_is_v2 = pc.era == crate::types::protocol::Era::V2;
-    let (extracted_method, body_name) = extract_body_method_and_name(raw_body);
+    let (extracted_method, body_name) = method_and_name_of(body_json.as_ref());
     let body_method = body_method_override.or(extracted_method.as_deref());
     let outcome = classify_v2_request(headers, meta_is_v2, body_method, body_name.as_deref());
-    (context, outcome)
+    // MRTR params (HTTP-03): read on the ACCEPTED v2 path only; a present but
+    // unusable field becomes an `INVALID_PARAMS` rejection here, BEFORE dispatch.
+    attach_v2_mrtr_params(context, outcome, body_json.as_ref())
 }
 
 /// Crate-LOCAL ingress classification for the POST pipeline (Phase 112, VERS-04).
@@ -3702,6 +3804,188 @@ mod tests {
         assert_eq!(raw_params_meta(br#"{"jsonrpc":"2.0","id":1}"#), None);
         assert_eq!(raw_params_meta(b"not json"), None);
         assert_eq!(raw_params_meta(&[0xff, 0xfe, 0x00]), None);
+    }
+
+    // -------------------------------------------------------------------
+    // MRTR params at v2 ingress (Plan 113-06, HTTP-03 / T-113-44).
+    // -------------------------------------------------------------------
+
+    /// An accepted-v2 gate outcome, for the `attach_v2_mrtr_params` tests.
+    fn accepted_v2() -> V2GateOutcome {
+        V2GateOutcome::EnforceOk {
+            method: "tools/call".to_string(),
+            name: "search".to_string(),
+        }
+    }
+
+    /// A v2 `ProtocolContext`, for the `attach_v2_mrtr_params` tests.
+    fn v2_context() -> crate::types::protocol::ProtocolContext {
+        crate::types::protocol::ProtocolContext::new(crate::types::protocol::Era::V2, v2_version())
+    }
+
+    /// Body bytes for a `tools/call` carrying arbitrary extra top-level params.
+    fn mrtr_body(extra: serde_json::Value) -> Vec<u8> {
+        let mut params = serde_json::json!({ "name": "search", "arguments": {} });
+        if let (Some(target), Some(source)) = (params.as_object_mut(), extra.as_object()) {
+            for (key, value) in source {
+                target.insert(key.clone(), value.clone());
+            }
+        }
+        serde_json::json!({
+            "jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": params,
+        })
+        .to_string()
+        .into_bytes()
+    }
+
+    /// The MRTR params of an accepted v2 body land on the threaded context.
+    #[test]
+    fn attach_v2_mrtr_params_lands_the_fields_on_the_context() {
+        let body = mrtr_body(serde_json::json!({
+            "requestState": "opaque-token",
+            "inputResponses": { "user_name": { "action": "accept" } },
+        }));
+        let parsed = raw_body_json(&body);
+        let (ctx, outcome) =
+            attach_v2_mrtr_params(Some(v2_context()), accepted_v2(), parsed.as_ref());
+        assert!(matches!(outcome, V2GateOutcome::EnforceOk { .. }));
+        let ctx = ctx.expect("context survives");
+        assert_eq!(ctx.request_state_token(), Some("opaque-token"));
+        assert!(ctx.input_responses().is_some());
+    }
+
+    /// A v1 / non-accepted body never gets MRTR params extracted (D-04).
+    #[test]
+    fn attach_v2_mrtr_params_skips_a_non_accepted_request() {
+        let body = mrtr_body(serde_json::json!({ "requestState": "opaque-token" }));
+        let parsed = raw_body_json(&body);
+        for outcome in [
+            V2GateOutcome::Passthrough,
+            V2GateOutcome::Reject {
+                code: crate::types::protocol::error_codes::HEADER_MISMATCH,
+                message: "nope".to_string(),
+                data: None,
+            },
+        ] {
+            let (ctx, _) = attach_v2_mrtr_params(Some(v2_context()), outcome, parsed.as_ref());
+            assert!(
+                ctx.expect("context survives")
+                    .request_state_token()
+                    .is_none(),
+                "MRTR extraction must not run outside the accepted v2 path"
+            );
+        }
+    }
+
+    /// A body with NO MRTR fields yields the default (both absent), which
+    /// dispatch treats identically to no context-carried MRTR at all.
+    #[test]
+    fn attach_v2_mrtr_params_absent_fields_are_the_default() {
+        let body = mrtr_body(serde_json::json!({}));
+        let parsed = raw_body_json(&body);
+        let (ctx, outcome) =
+            attach_v2_mrtr_params(Some(v2_context()), accepted_v2(), parsed.as_ref());
+        assert!(matches!(outcome, V2GateOutcome::EnforceOk { .. }));
+        let ctx = ctx.expect("context survives");
+        assert!(ctx.request_state_token().is_none());
+        assert!(ctx.input_responses().is_none());
+    }
+
+    /// Every PRESENT-but-unusable MRTR shape is REJECTED with `INVALID_PARAMS`,
+    /// never silently treated as absent (T-113-44).
+    #[test]
+    fn attach_v2_mrtr_params_rejects_every_malformed_shape() {
+        use crate::types::mrtr::{
+            MAX_INPUT_RESPONSES, MAX_INPUT_RESPONSE_BYTES, MAX_INPUT_RESPONSE_DEPTH,
+            MAX_REQUEST_STATE_LEN,
+        };
+        let mut too_many = serde_json::Map::new();
+        for index in 0..=MAX_INPUT_RESPONSES {
+            too_many.insert(
+                format!("k{index}"),
+                serde_json::json!({ "action": "accept" }),
+            );
+        }
+        let mut chunky = serde_json::Map::new();
+        for index in 0..8 {
+            chunky.insert(
+                format!("k{index}"),
+                serde_json::json!({
+                    "action": "accept",
+                    "content": { "v": "z".repeat(MAX_INPUT_RESPONSE_BYTES - 1_000) }
+                }),
+            );
+        }
+        let mut nested = serde_json::json!("leaf");
+        for _ in 0..(MAX_INPUT_RESPONSE_DEPTH + 4) {
+            nested = serde_json::json!({ "n": nested });
+        }
+        let cases = [
+            // requestState not a string
+            serde_json::json!({ "requestState": 42 }),
+            // requestState over the length bound
+            serde_json::json!({ "requestState": "x".repeat(MAX_REQUEST_STATE_LEN + 1) }),
+            // inputResponses not an object
+            serde_json::json!({ "inputResponses": [] }),
+            // too many inputResponses entries
+            serde_json::json!({ "inputResponses": too_many }),
+            // one entry over the per-entry byte bound
+            serde_json::json!({ "inputResponses": {
+                "big": { "action": "accept",
+                         "content": { "v": "y".repeat(MAX_INPUT_RESPONSE_BYTES + 1) } } } }),
+            // entries over the TOTAL byte bound
+            serde_json::json!({ "inputResponses": chunky }),
+            // one entry over the depth bound
+            serde_json::json!({ "inputResponses": {
+                "deep": { "action": "accept", "content": { "v": nested } } } }),
+            // an entry matching none of the three permitted result shapes
+            serde_json::json!({ "inputResponses": { "bad": { "totally": "wrong" } } }),
+        ];
+        for case in cases {
+            let body = mrtr_body(case.clone());
+            let parsed = raw_body_json(&body);
+            let (_, outcome) =
+                attach_v2_mrtr_params(Some(v2_context()), accepted_v2(), parsed.as_ref());
+            let V2GateOutcome::Reject { code, .. } = outcome else {
+                panic!("a present-but-unusable MRTR field must REJECT, got a pass for {case}");
+            };
+            assert_eq!(
+                code,
+                crate::types::protocol::error_codes::INVALID_PARAMS,
+                "malformed MRTR maps to -32602 for {case}"
+            );
+            // …and -32602 renders as HTTP 400 on the v2 status table.
+            assert_eq!(
+                v2_status_for_code(code),
+                StatusCode::BAD_REQUEST,
+                "a malformed MRTR field is a 400"
+            );
+        }
+    }
+
+    /// The client-facing rejection names the BOUND, never the offending value
+    /// (T-113-10 — no attacker-controlled content echoed back).
+    #[test]
+    fn attach_v2_mrtr_params_rejection_never_echoes_the_offending_value() {
+        let secret = "x".repeat(crate::types::mrtr::MAX_REQUEST_STATE_LEN + 1);
+        let body = mrtr_body(serde_json::json!({
+            "inputResponses": { "super-secret-key": { "totally": "wrong" } },
+            "requestState": secret,
+        }));
+        let parsed = raw_body_json(&body);
+        let (_, outcome) =
+            attach_v2_mrtr_params(Some(v2_context()), accepted_v2(), parsed.as_ref());
+        let V2GateOutcome::Reject { message, .. } = outcome else {
+            panic!("expected a rejection");
+        };
+        assert!(
+            !message.contains("super-secret-key"),
+            "message leaked an attacker-supplied key: {message}"
+        );
+        assert!(
+            !message.contains(&secret),
+            "message leaked the attacker-supplied value"
+        );
     }
 
     /// D-04 ordering: a NON-opted-in server short-circuits to Passthrough EVEN

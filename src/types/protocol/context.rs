@@ -67,12 +67,28 @@ pub(crate) fn is_v2_opted_in(accept_list: &[ProtocolVersion]) -> bool {
 /// handler (threat T-112-09, bounded ingress).
 const MAX_TRACE_VALUE_LEN: usize = 8192;
 
+/// A DECRYPTED, cryptographically verified MRTR continuation (Phase 113,
+/// HTTP-02/HTTP-03).
+///
+/// Produced ONLY by the dispatch layer, after the server-owned `requestState`
+/// codec returned an authentic, live verdict for the token the client echoed.
+/// It is therefore SERVER-MINTED and TRUSTED — unlike `inputResponses`, which is
+/// client-supplied and must be schema-validated by the handler.
+#[derive(Debug, Clone)]
+pub(crate) struct VerifiedContinuation {
+    /// The handler-owned continuation state the server sealed on a prior round.
+    pub state: serde_json::Value,
+    /// Which multi-round-trip round this continuation belongs to (D-09).
+    pub round: u8,
+}
+
 /// The protocol context resolved once at request ingress and threaded through
 /// dispatch.
 ///
 /// This is an additive `#[non_exhaustive]` value type: construct it with
 /// [`ProtocolContext::new`] and layer optional fields via the `with_*`
-/// builders. All four fields are public and directly readable.
+/// builders. The four negotiation fields are public and directly readable; the
+/// MRTR fields are crate-private (see [`ProtocolContext::with_mrtr_params`]).
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct ProtocolContext {
@@ -84,6 +100,21 @@ pub struct ProtocolContext {
     pub client_info: Option<Implementation>,
     /// The client's advertised capabilities, if known.
     pub client_capabilities: Option<ClientCapabilities>,
+    /// The per-request MRTR continuation signals, extracted from the raw
+    /// `params` at transport ingress; `None` on v1 and on any non-opted-in
+    /// request (D-04's zero-era-code rule).
+    ///
+    /// Crate-private DELIBERATELY: `MrtrRequestParams` is `pub(crate)`
+    /// (Phase-113 D-10 keeps the MRTR plumbing off the public API), so a `pub`
+    /// field here would expose a private type from a public interface. Handlers
+    /// read the values through the `RequestHandlerExtra` MRTR accessors.
+    pub(crate) mrtr: Option<crate::types::mrtr::MrtrRequestParams>,
+    /// The decrypted, verified continuation for this request.
+    ///
+    /// Set by the DISPATCH layer only (never at transport ingress) after the
+    /// server-owned codec verified the echoed `requestState` against the live
+    /// principal and originating request.
+    pub(crate) mrtr_verified: Option<VerifiedContinuation>,
 }
 
 impl ProtocolContext {
@@ -96,6 +127,8 @@ impl ProtocolContext {
             negotiated_version,
             client_info: None,
             client_capabilities: None,
+            mrtr: None,
+            mrtr_verified: None,
         }
     }
 
@@ -111,6 +144,65 @@ impl ProtocolContext {
     pub fn with_client_capabilities(mut self, client_capabilities: ClientCapabilities) -> Self {
         self.client_capabilities = Some(client_capabilities);
         self
+    }
+
+    /// Attach the MRTR continuation signals read off the raw request `params`
+    /// at transport ingress (Phase 113, HTTP-03).
+    ///
+    /// `inputResponses` / `requestState` are top-level `params` SIBLINGS of
+    /// `name`/`arguments`/`uri`, not `_meta` keys, and the typed request structs
+    /// deliberately do not model them (D-113-D: adding a field to a
+    /// constructible `pub` struct is a MAJOR semver break). The transport
+    /// therefore reads them from the raw body and rides them here, on the value
+    /// already threaded end-to-end into `RequestHandlerExtra`.
+    #[must_use]
+    pub(crate) fn with_mrtr_params(mut self, mrtr: crate::types::mrtr::MrtrRequestParams) -> Self {
+        self.mrtr = Some(mrtr);
+        self
+    }
+
+    /// Attach the DECRYPTED, verified continuation and its round counter.
+    #[must_use]
+    pub(crate) fn with_verified_continuation(
+        mut self,
+        state: serde_json::Value,
+        round: u8,
+    ) -> Self {
+        self.mrtr_verified = Some(VerifiedContinuation { state, round });
+        self
+    }
+
+    /// Clear EVERY MRTR signal, so the handler sees a pristine FIRST call.
+    ///
+    /// This is the context half of the D-15 `UnknownKey`/`Expired` strip-and-
+    /// re-run mechanic: the re-run handler must observe no continuation, no
+    /// round and no input responses, exactly as if the client had never
+    /// presented a token.
+    #[must_use]
+    pub(crate) fn without_mrtr(mut self) -> Self {
+        self.mrtr = None;
+        self.mrtr_verified = None;
+        self
+    }
+
+    /// The client-supplied `inputResponses` map, if any.
+    pub(crate) fn input_responses(&self) -> Option<&crate::types::mrtr::InputResponses> {
+        self.mrtr.as_ref()?.input_responses.as_ref()
+    }
+
+    /// The client-echoed `requestState` token, if any (still UNVERIFIED).
+    pub(crate) fn request_state_token(&self) -> Option<&str> {
+        self.mrtr.as_ref()?.request_state.as_deref()
+    }
+
+    /// The DECRYPTED continuation state from a verified token.
+    pub(crate) fn mrtr_continuation(&self) -> Option<&serde_json::Value> {
+        Some(&self.mrtr_verified.as_ref()?.state)
+    }
+
+    /// The round counter carried by a verified token.
+    pub(crate) fn mrtr_round(&self) -> Option<u8> {
+        Some(self.mrtr_verified.as_ref()?.round)
     }
 }
 
@@ -428,6 +520,67 @@ mod tests {
         assert_eq!(ctx.negotiated_version.as_str(), "2026-07-28");
         assert!(ctx.client_info.is_none());
         assert!(ctx.client_capabilities.is_none());
+    }
+
+    /// A context built WITHOUT the MRTR builder carries no MRTR signal at all —
+    /// the Phase-112 construction path is unchanged (`mrtr == None`).
+    #[test]
+    fn protocol_context_without_the_mrtr_builder_has_no_mrtr() {
+        let ctx = ProtocolContext::new(Era::V2, ProtocolVersion("2026-07-28".to_string()));
+        assert!(ctx.mrtr.is_none());
+        assert!(ctx.mrtr_verified.is_none());
+        assert!(ctx.input_responses().is_none());
+        assert!(ctx.request_state_token().is_none());
+        assert!(ctx.mrtr_continuation().is_none());
+        assert!(ctx.mrtr_round().is_none());
+
+        // Every resolver-built context is equally MRTR-free: the resolver reads
+        // `_meta`, and MRTR fields are top-level `params` siblings.
+        let meta = json!({ RESERVED_PROTOCOL_VERSION_KEY: "2026-07-28" });
+        let resolved = resolve_protocol_context(&dual_accept_list(), Some(&meta))
+            .expect("resolves")
+            .expect("some");
+        assert!(resolved.mrtr.is_none());
+    }
+
+    #[test]
+    fn protocol_context_with_mrtr_params_round_trips() {
+        let mrtr = crate::types::mrtr::MrtrRequestParams {
+            input_responses: None,
+            request_state: Some("opaque-token".to_string()),
+        };
+        let ctx = ProtocolContext::new(Era::V2, ProtocolVersion("2026-07-28".to_string()))
+            .with_mrtr_params(mrtr);
+        assert_eq!(ctx.request_state_token(), Some("opaque-token"));
+        // Not yet verified — the transport only READS the token, dispatch verifies.
+        assert!(ctx.mrtr_continuation().is_none());
+        assert!(ctx.mrtr_round().is_none());
+    }
+
+    #[test]
+    fn protocol_context_verified_continuation_surfaces_state_and_round() {
+        let ctx = ProtocolContext::new(Era::V2, ProtocolVersion("2026-07-28".to_string()))
+            .with_verified_continuation(json!({ "step": 2 }), 3);
+        assert_eq!(ctx.mrtr_continuation(), Some(&json!({ "step": 2 })));
+        assert_eq!(ctx.mrtr_round(), Some(3));
+    }
+
+    /// The D-15 strip-and-re-run mechanic: after `without_mrtr` a handler cannot
+    /// observe ANY MRTR signal.
+    #[test]
+    fn protocol_context_without_mrtr_clears_every_signal() {
+        let mrtr = crate::types::mrtr::MrtrRequestParams {
+            input_responses: Some(crate::types::mrtr::InputResponses::new()),
+            request_state: Some("opaque-token".to_string()),
+        };
+        let ctx = ProtocolContext::new(Era::V2, ProtocolVersion("2026-07-28".to_string()))
+            .with_mrtr_params(mrtr)
+            .with_verified_continuation(json!({ "step": 9 }), 4)
+            .without_mrtr();
+        assert!(ctx.input_responses().is_none());
+        assert!(ctx.request_state_token().is_none());
+        assert!(ctx.mrtr_continuation().is_none());
+        assert!(ctx.mrtr_round().is_none());
     }
 
     #[test]
