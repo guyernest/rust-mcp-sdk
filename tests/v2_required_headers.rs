@@ -25,6 +25,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use async_trait::async_trait;
+use pmcp::types::protocol::error_codes::{HEADER_MISMATCH, UNSUPPORTED_PROTOCOL_VERSION};
+
 use pmcp::server::auth::{AuthContext, AuthProvider};
 use pmcp::server::http_middleware::{
     ServerHttpContext, ServerHttpMiddleware, ServerHttpMiddlewareChain, ServerHttpResponse,
@@ -423,7 +425,10 @@ async fn v2_required_headers_rejects_v2_header_with_non_v2_meta() {
     shutdown(handle).await;
 
     assert_eq!(r.status, 400, "header/_meta disagreement must fail closed");
-    assert_eq!(r.body["error"]["code"], -32600);
+    assert_eq!(
+        r.body["error"]["code"], HEADER_MISMATCH,
+        "a missing required header or a header/body disagreement is HEADER_MISMATCH"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -441,7 +446,10 @@ async fn v2_required_headers_rejects_v2_meta_without_version_header() {
     shutdown(handle).await;
 
     assert_eq!(r.status, 400, "_meta v2 with no version header must reject");
-    assert_eq!(r.body["error"]["code"], -32600);
+    assert_eq!(
+        r.body["error"]["code"], HEADER_MISMATCH,
+        "a missing required header or a header/body disagreement is HEADER_MISMATCH"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -459,7 +467,10 @@ async fn v2_required_headers_rejects_missing_mcp_name() {
     shutdown(handle).await;
 
     assert_eq!(r.status, 400, "missing Mcp-Name must reject (D-05)");
-    assert_eq!(r.body["error"]["code"], -32600);
+    assert_eq!(
+        r.body["error"]["code"], HEADER_MISMATCH,
+        "a missing required header or a header/body disagreement is HEADER_MISMATCH"
+    );
     assert_eq!(r.body["jsonrpc"], "2.0");
 }
 
@@ -485,7 +496,10 @@ async fn v2_required_headers_rejects_method_body_mismatch() {
         r.status, 400,
         "Mcp-Method vs body-method mismatch must reject"
     );
-    assert_eq!(r.body["error"]["code"], -32600);
+    assert_eq!(
+        r.body["error"]["code"], HEADER_MISMATCH,
+        "a missing required header or a header/body disagreement is HEADER_MISMATCH"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -510,7 +524,10 @@ async fn v2_required_headers_rejects_name_body_mismatch() {
         r.status, 400,
         "Mcp-Name vs params.name mismatch must reject"
     );
-    assert_eq!(r.body["error"]["code"], -32600);
+    assert_eq!(
+        r.body["error"]["code"], HEADER_MISMATCH,
+        "a missing required header or a header/body disagreement is HEADER_MISMATCH"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -559,8 +576,15 @@ async fn v2_required_headers_rejects_unsupported_version() {
     shutdown(handle).await;
 
     assert_eq!(r.status, 400, "unsupported version must reject");
-    // Mapped via the shared resolver → INVALID_PARAMS.
-    assert_eq!(r.body["error"]["code"], -32602);
+    // Phase 113 plan 04: the spec-allocated UNSUPPORTED_PROTOCOL_VERSION replaces
+    // the generic INVALID_PARAMS, and the payload MUST list what the server accepts
+    // so the client can retry with a mutually supported version instead of probing.
+    assert_eq!(r.body["error"]["code"], UNSUPPORTED_PROTOCOL_VERSION);
+    assert!(
+        r.body["error"]["data"]["supported"].is_array(),
+        "-32022 MUST carry an error.data.supported ARRAY: {}",
+        r.raw
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -715,7 +739,10 @@ async fn v2_prompts_get_rejects_v2_header_with_non_v2_meta() {
         r.status, 400,
         "v2-header prompts/get with non-v2 _meta must fail closed"
     );
-    assert_eq!(r.body["error"]["code"], -32600);
+    assert_eq!(
+        r.body["error"]["code"], HEADER_MISMATCH,
+        "a missing required header or a header/body disagreement is HEADER_MISMATCH"
+    );
 }
 
 /// Parse the raw v1 response text and assert full structural equality against a
@@ -871,7 +898,10 @@ async fn server_discover_rejects_v2_meta_without_header() {
     shutdown(handle).await;
 
     assert_eq!(r.status, 400, "v2 _meta with no version header must reject");
-    assert_eq!(r.body["error"]["code"], -32600);
+    assert_eq!(
+        r.body["error"]["code"], HEADER_MISMATCH,
+        "a missing required header or a header/body disagreement is HEADER_MISMATCH"
+    );
 }
 
 // v2 version header but NO v2 _meta → REJECT (fail closed).
@@ -882,7 +912,10 @@ async fn server_discover_rejects_header_without_v2_meta() {
     shutdown(handle).await;
 
     assert_eq!(r.status, 400, "v2 header with no v2 _meta must reject");
-    assert_eq!(r.body["error"]["code"], -32600);
+    assert_eq!(
+        r.body["error"]["code"], HEADER_MISMATCH,
+        "a missing required header or a header/body disagreement is HEADER_MISMATCH"
+    );
 }
 
 // Mcp-Method header disagreeing with the fixed discover body method → REJECT.
@@ -902,7 +935,10 @@ async fn server_discover_rejects_mismatched_mcp_method() {
     shutdown(handle).await;
 
     assert_eq!(r.status, 400, "mismatched Mcp-Method must reject");
-    assert_eq!(r.body["error"]["code"], -32600);
+    assert_eq!(
+        r.body["error"]["code"], HEADER_MISMATCH,
+        "a missing required header or a header/body disagreement is HEADER_MISMATCH"
+    );
 }
 
 // Missing Mcp-Name on the v2 discover → REJECT (D-05 strict all-three-headers).
@@ -921,7 +957,10 @@ async fn server_discover_rejects_missing_mcp_name() {
     shutdown(handle).await;
 
     assert_eq!(r.status, 400, "missing Mcp-Name must reject (D-05)");
-    assert_eq!(r.body["error"]["code"], -32600);
+    assert_eq!(
+        r.body["error"]["code"], HEADER_MISMATCH,
+        "a missing required header or a header/body disagreement is HEADER_MISMATCH"
+    );
 }
 
 // A v1 discover (opted-in server, NO v2 signal) returns JSON-RPC -32601 at HTTP

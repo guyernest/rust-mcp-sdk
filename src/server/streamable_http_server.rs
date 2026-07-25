@@ -472,14 +472,217 @@ enum V2Classification {
     Reject(i32, &'static str),
 }
 
+// ---------------------------------------------------------------------------
+// v2 HTTP status mapping (Plan 113-04, HTTP-01).
+//
+// The transport spec turns several JSON-RPC error codes into specific HTTP
+// statuses on the v2 path — most notably "If the server does not implement the
+// requested RPC method, it MUST respond with 404 Not Found and a JSON-RPC error
+// with code -32601", which pmcp answered at HTTP 200 (v1 behavior) before this
+// plan.
+//
+// The mapper below is CODE-driven, never call-site-driven: -32021 is emitted by
+// dispatch (plan 09), not by the header gate, and a code that reaches the wire
+// from anywhere must map identically. It is also era-gated: on v1 / a
+// non-opted-in server every status is exactly what it was before.
+// ---------------------------------------------------------------------------
+
+/// The HTTP status the v2 transport requires for a JSON-RPC error `code`.
+///
+/// Values come from the centralized table (VERS-06); the per-constant rustdoc in
+/// `error_codes.rs` is the single documented source for each mapping. Anything
+/// not listed is handler semantics rather than a transport-layer rejection and
+/// stays at HTTP 200 with the JSON-RPC error in the body.
+fn v2_status_for_code(code: i32) -> StatusCode {
+    use crate::types::protocol::error_codes as ec;
+    match code {
+        ec::METHOD_NOT_FOUND => StatusCode::NOT_FOUND,
+        ec::HEADER_MISMATCH
+        | ec::MISSING_REQUIRED_CLIENT_CAPABILITY
+        | ec::UNSUPPORTED_PROTOCOL_VERSION
+        | ec::PARSE_ERROR
+        | ec::INVALID_REQUEST
+        | ec::INVALID_PARAMS => StatusCode::BAD_REQUEST,
+        _ => StatusCode::OK,
+    }
+}
+
+/// Era-gated status for an error `code`: v2 uses [`v2_status_for_code`], every
+/// other era keeps `v1_status` byte-for-byte.
+fn status_for_error(
+    era: Option<crate::types::protocol::Era>,
+    code: i32,
+    v1_status: StatusCode,
+) -> StatusCode {
+    if matches!(era, Some(crate::types::protocol::Era::V2)) {
+        v2_status_for_code(code)
+    } else {
+        v1_status
+    }
+}
+
+/// The JSON-RPC `id` of a raw request body, or `Null` when it has none.
+///
+/// Used so a v2 error envelope built BEFORE (or INSTEAD OF) a successful typed
+/// parse still carries the ORIGINAL request id — HTTP-05 depends on it and plan
+/// 08 asserts it. Never panics on adversarial input.
+fn raw_request_id(body: &[u8]) -> serde_json::Value {
+    serde_json::from_slice::<serde_json::Value>(body)
+        .ok()
+        .and_then(|v| v.get("id").cloned())
+        .unwrap_or(serde_json::Value::Null)
+}
+
+/// Build a JSON-RPC error response with an explicit id and optional structured
+/// `data`.
+///
+/// The v2 counterpart of [`create_error_response`], which hardcodes `id: null`.
+/// Kept separate so no v1 response byte changes: only v2 paths call this.
+fn create_error_response_with_id(
+    status: StatusCode,
+    id: serde_json::Value,
+    code: i32,
+    message: &str,
+    data: Option<serde_json::Value>,
+) -> Response {
+    let mut error = serde_json::Map::new();
+    error.insert("code".to_string(), json!(code));
+    error.insert("message".to_string(), json!(message));
+    if let Some(data) = data {
+        error.insert("data".to_string(), data);
+    }
+    // Built through a `Map` rather than the `json!` macro because the macro
+    // BORROWS its interpolated values, which would leave `id` passed-by-value
+    // but never consumed.
+    let mut body = serde_json::Map::new();
+    body.insert("jsonrpc".to_string(), json!("2.0"));
+    body.insert("error".to_string(), serde_json::Value::Object(error));
+    body.insert("id".to_string(), id);
+    (status, Json(serde_json::Value::Object(body))).into_response()
+}
+
+/// Re-map a pre-dispatch parse rejection onto the v2 status table.
+///
+/// The typed parse is where an UNKNOWN METHOD surfaces: `parse_request_or_internal`
+/// answers `Error::method_not_found` for any method string that matches no
+/// `ClientRequest` / `ServerRequest` variant, which the transport stringifies into
+/// an "Invalid request" parse failure. On v1 that has always been HTTP 400 with
+/// `-32700` and `id: null`, and it stays exactly that.
+///
+/// On v2 the spec is explicit: "If the server does not implement the requested RPC
+/// method, it MUST respond with `404 Not Found` and a JSON-RPC error with code
+/// `-32601`." A body whose method never deserializes therefore cannot be diagnosed
+/// from an already-built TYPED response — this mapping has to happen at the RAW
+/// level, from the body bytes, which is what this function does.
+///
+/// The era is resolved from the RAW `params._meta` (the same read the
+/// `server/discover` ingress uses) because no typed request exists to read it
+/// from. A body that is not a well-formed JSON-RPC request, or a server that is
+/// not opted into v2, or a v1 request, all keep `v1_response` untouched.
+///
+/// KNOWN LIMITATION: a KNOWN method whose params fail to deserialize also reaches
+/// `method_not_found` at this seam and is therefore reported as `-32601`/404 on
+/// v2 rather than `-32602`/400. Distinguishing the two requires a method-string
+/// table this layer does not own; plan 06 (MRTR param parse errors) adds the
+/// precise per-parameter mapping.
+async fn map_unparsed_body_for_v2(
+    state: &ServerState,
+    raw_body: &[u8],
+    v1_response: Response,
+) -> Response {
+    use crate::types::protocol::error_codes::METHOD_NOT_FOUND;
+    let Ok(envelope) = serde_json::from_slice::<serde_json::Value>(raw_body) else {
+        return v1_response;
+    };
+    // Only a well-formed JSON-RPC REQUEST (method + id) can be an unknown-method
+    // rejection; anything else keeps the v1 parse-error response.
+    let Some(method) = envelope.get("method").and_then(serde_json::Value::as_str) else {
+        return v1_response;
+    };
+    if envelope.get("id").is_none() {
+        return v1_response;
+    }
+    let raw_meta = envelope.get("params").and_then(|p| p.get("_meta")).cloned();
+    let resolved = {
+        let server = state.server.lock().await;
+        server.resolve_discover_protocol_context(raw_meta.as_ref())
+    };
+    let Ok(Some(context)) = resolved else {
+        return v1_response;
+    };
+    if context.era != crate::types::protocol::Era::V2 {
+        return v1_response;
+    }
+    create_error_response_with_id(
+        v2_status_for_code(METHOD_NOT_FOUND),
+        envelope
+            .get("id")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null),
+        METHOD_NOT_FOUND,
+        &format!("Method not found: {method}"),
+        None,
+    )
+}
+
+/// The v2 status a built JSON-RPC response must carry, or `None` to keep the
+/// status the response already has.
+///
+/// This is the CODE-driven half of the mapper: `MISSING_REQUIRED_CLIENT_CAPABILITY`
+/// (-32021) is emitted by dispatch (plan 09), not by the header gate, so the
+/// mapping cannot be attached at rejection call sites — it has to read the code
+/// that is actually about to reach the wire.
+fn v2_dispatch_response_status(
+    era: Option<crate::types::protocol::Era>,
+    response: &crate::types::JSONRPCResponse,
+) -> Option<StatusCode> {
+    if !matches!(era, Some(crate::types::protocol::Era::V2)) {
+        return None;
+    }
+    let crate::types::jsonrpc::ResponsePayload::Error(ref error) = response.payload else {
+        return None;
+    };
+    Some(v2_status_for_code(error.code))
+}
+
+/// Assemble the response for a [`V2GateOutcome::Reject`].
+///
+/// The status is code-driven via [`status_for_error`] with a `400` v1 floor (the
+/// gate only rejects requests that already carry a v2 signal on one side, and
+/// `400` is what Phase 112 returned for every such cell). The id is recovered
+/// from the RAW body so a rejection that happened before — or instead of — a
+/// successful typed parse still echoes the client's id.
+fn v2_gate_reject_response(
+    raw_body: &[u8],
+    era: Option<crate::types::protocol::Era>,
+    code: i32,
+    message: &str,
+    data: Option<serde_json::Value>,
+) -> Response {
+    let status = status_for_error(era, code, StatusCode::BAD_REQUEST);
+    create_error_response_with_id(status, raw_request_id(raw_body), code, message, data)
+}
+
 /// Outcome of the whole v2 gate for one request.
 enum V2GateOutcome {
     /// Not a v2 request (v1 / non-opted-in) — dispatch normally, no v2 headers.
     Passthrough,
     /// Accepted v2 request — dispatch, then echo these headers outbound.
     EnforceOk { method: String, name: String },
-    /// Rejected — build a 4xx structured JSON-RPC error with this code/message.
-    Reject(i32, String),
+    /// Rejected — build a 4xx structured JSON-RPC error with this code/message
+    /// and, when the code defines one, a structured `error.data` payload.
+    ///
+    /// `data` is not optional decoration: `UNSUPPORTED_PROTOCOL_VERSION`
+    /// (`-32022`) MUST carry a `supported` array so the client can pick a
+    /// mutually supported version instead of probing, and
+    /// `MISSING_REQUIRED_CLIENT_CAPABILITY` (`-32021`, emitted by dispatch in
+    /// plan 09) MUST carry an object-shaped `requiredCapabilities`. A
+    /// `(code, message)` pair alone cannot express either.
+    Reject {
+        code: i32,
+        message: String,
+        data: Option<serde_json::Value>,
+    },
 }
 
 /// Decode the `MCP-Protocol-Version` header without panicking (T-112-13).
@@ -517,18 +720,41 @@ fn classify_era_cell(header: HeaderProtocolVersion, meta_is_v2: bool) -> V2Class
     match (header_is_v2, meta_is_v2) {
         (true, true) => V2Classification::Enforce,
         (false, false) => V2Classification::Legacy,
+        // Both conflict cells are a HEADER/BODY DISAGREEMENT, which is exactly
+        // what the spec allocates `HEADER_MISMATCH` (-32020) for. Before Phase
+        // 113 these emitted the generic `INVALID_REQUEST` (-32600) because the
+        // v2 code did not exist yet.
         (true, false) => V2Classification::Reject(
-            crate::types::protocol::error_codes::INVALID_REQUEST,
+            crate::types::protocol::error_codes::HEADER_MISMATCH,
             "MCP-Protocol-Version header claims v2 but _meta protocolVersion disagrees",
         ),
         (false, true) => V2Classification::Reject(
-            crate::types::protocol::error_codes::INVALID_REQUEST,
+            crate::types::protocol::error_codes::HEADER_MISMATCH,
             "_meta claims v2 but MCP-Protocol-Version header is absent or not 2026-07-28",
         ),
     }
 }
 
 /// Require all THREE v2 headers (VERS-05 / D-05); return `(method, name)`.
+///
+/// # The `Mcp-Name` header rule (locked cross-plan contract)
+///
+/// > `Mcp-Name` MUST be PRESENT on every v2 request. Its VALUE is cross-checked
+/// > against the request's logical name only for the name-bearing methods
+/// > (`tools/call`, `prompts/get` → `params.name`; `resources/read` →
+/// > `params.uri`). For every other v2 method the value is the EMPTY STRING and
+/// > is not cross-checked.
+///
+/// Verbatim from `113-SPEC-RECHECK.md` § `Mcp-Name Header Rule`, and locked by
+/// Phase-112 D-05. This function enforces the PRESENCE half (an absent header is
+/// a rejection even when the value would be empty); [`cross_check_name`] enforces
+/// the VALUE half and returns `Ok` immediately for a non-name-bearing method.
+///
+/// The draft transport spec requires the header only for the three name-bearing
+/// methods. pmcp deliberately keeps the stricter, fail-closed rule (Phase-113
+/// DRIFT-1 adjudication): a header a WAF can rely on being present on every
+/// request is worth more than matching the laxer wording, and plan 05's client
+/// emits exactly this — `Mcp-Name: ""` for a name-less method.
 fn require_three_headers(
     headers: &HeaderMap,
 ) -> std::result::Result<(String, String), &'static str> {
@@ -552,29 +778,30 @@ fn cross_check_method(
     }
 }
 
-/// Single source of truth for a name-bearing method's logical-name location.
-///
-/// `tools/call` and `prompts/get` carry it in `params.name`; `resources/read` in
-/// `params.uri` (it has a `uri` field and NO `name` field); every other method is
-/// not name-bearing. Both [`is_name_bearing_method`] and the body-name extraction
-/// in [`extract_body_method_and_name`] derive from this one table so the
-/// "which methods are name-bearing" set and the "where the name lives" map can
-/// never drift (the drift that review finding #2 fixed for `resources/read`).
-fn logical_name_key(method: &str) -> Option<&'static str> {
-    match method {
-        "tools/call" | "prompts/get" => Some("name"),
-        "resources/read" => Some("uri"),
-        _ => None,
-    }
-}
-
 /// Methods whose logical name must be cross-checked against `Mcp-Name` (D-06).
+///
+/// The name-bearing set and the "where the logical name lives" map are ONE table,
+/// [`crate::types::mrtr::logical_name_key`] — shared with the client emitter
+/// (plan 05) so the two ends can never disagree about which methods carry a name
+/// or which params key holds it.
 fn is_name_bearing_method(method: &str) -> bool {
-    logical_name_key(method).is_some()
+    crate::types::mrtr::logical_name_key(method).is_some()
 }
 
-/// Cross-check `Mcp-Name` against `params.name` for name-bearing methods (D-06).
-/// Name-less methods are presence-only (already enforced upstream).
+/// Cross-check `Mcp-Name` against the request's logical name for name-bearing
+/// methods (D-06). Name-less methods are presence-only (enforced upstream by
+/// [`require_three_headers`]).
+///
+/// # The sentinel decode is load-bearing
+///
+/// A logical name that is not header-safe (non-ASCII, or containing an RFC 9110
+/// field-value delimiter) MUST travel in the `=?base64?<b64>?=` sentinel form. A
+/// verbatim comparison would therefore reject a legitimate conformant request, so
+/// the header value is decoded through the SHARED codec
+/// [`crate::types::mrtr::decode_header_value`] — the same one the client emitter
+/// uses — before it is compared. A value that starts the sentinel but does not
+/// decode is a malformed header, i.e. a `HEADER_MISMATCH` rejection, never a
+/// silent pass.
 fn cross_check_name(
     mcp_name: &str,
     method: &str,
@@ -583,9 +810,12 @@ fn cross_check_name(
     if !is_name_bearing_method(method) {
         return Ok(());
     }
+    let Some(decoded) = crate::types::mrtr::decode_header_value(mcp_name) else {
+        return Err("Mcp-Name header is a malformed =?base64?...?= sentinel value");
+    };
     match body_name {
-        Some(bn) if bn == mcp_name => Ok(()),
-        _ => Err("Mcp-Name header does not match the request's logical name (params.name)"),
+        Some(bn) if bn == decoded => Ok(()),
+        _ => Err("Mcp-Name header does not match the request's logical name"),
     }
 }
 
@@ -600,21 +830,33 @@ fn classify_v2_request(
     body_method: Option<&str>,
     body_name: Option<&str>,
 ) -> V2GateOutcome {
-    use crate::types::protocol::error_codes::INVALID_REQUEST;
+    use crate::types::protocol::error_codes::HEADER_MISMATCH;
+    // Every rejection this classifier can produce is a missing-required-header
+    // or a header/body mismatch, so they all carry `HEADER_MISMATCH` and no
+    // structured `data`.
+    let reject = |msg: &str| V2GateOutcome::Reject {
+        code: HEADER_MISMATCH,
+        message: msg.to_string(),
+        data: None,
+    };
     let header = decode_version_header(headers);
     match classify_era_cell(header, meta_is_v2) {
         V2Classification::Legacy => V2GateOutcome::Passthrough,
-        V2Classification::Reject(code, msg) => V2GateOutcome::Reject(code, msg.to_string()),
+        V2Classification::Reject(code, msg) => V2GateOutcome::Reject {
+            code,
+            message: msg.to_string(),
+            data: None,
+        },
         V2Classification::Enforce => {
             let (method, name) = match require_three_headers(headers) {
                 Ok(pair) => pair,
-                Err(msg) => return V2GateOutcome::Reject(INVALID_REQUEST, msg.to_string()),
+                Err(msg) => return reject(msg),
             };
             if let Err(msg) = cross_check_method(&method, body_method) {
-                return V2GateOutcome::Reject(INVALID_REQUEST, msg.to_string());
+                return reject(msg);
             }
             if let Err(msg) = cross_check_name(&name, &method, body_name) {
-                return V2GateOutcome::Reject(INVALID_REQUEST, msg.to_string());
+                return reject(msg);
             }
             V2GateOutcome::EnforceOk { method, name }
         },
@@ -648,7 +890,7 @@ fn extract_body_method_and_name(body: &[u8]) -> (Option<String>, Option<String>)
     // table; non-name-bearing methods yield `None` (presence-only cross-check).
     let name = method
         .as_deref()
-        .and_then(logical_name_key)
+        .and_then(crate::types::mrtr::logical_name_key)
         .and_then(|name_key| value.get("params").and_then(|p| p.get(name_key)))
         .and_then(serde_json::Value::as_str)
         .map(str::to_string);
@@ -673,6 +915,39 @@ fn apply_v2_outbound_headers(headers: &mut HeaderMap, method: &str, name: &str) 
     }
 }
 
+/// Map a per-request version-negotiation failure to a structured gate rejection.
+///
+/// An UNSUPPORTED version is the spec's `UNSUPPORTED_PROTOCOL_VERSION` (-32022),
+/// and its `error.data` MUST list the versions the server DOES accept so the
+/// client can pick a mutually supported one and retry rather than probe. A
+/// MALFORMED reserved `_meta` key is a bad method parameter, so it keeps the
+/// `INVALID_PARAMS` mapping the shared dispatch resolver uses.
+fn negotiation_error_to_gate_reject(
+    error: &crate::types::protocol::context::ProtocolNegotiationError,
+    accept_list: &[crate::types::ProtocolVersion],
+) -> V2GateOutcome {
+    use crate::types::protocol::context::ProtocolNegotiationError;
+    use crate::types::protocol::error_codes::UNSUPPORTED_PROTOCOL_VERSION;
+    match error {
+        ProtocolNegotiationError::UnsupportedVersion(requested) => {
+            let supported: Vec<&str> = accept_list.iter().map(|v| v.as_str()).collect();
+            V2GateOutcome::Reject {
+                code: UNSUPPORTED_PROTOCOL_VERSION,
+                message: format!("Unsupported protocol version: {requested}"),
+                data: Some(json!({ "requested": requested, "supported": supported })),
+            }
+        },
+        ProtocolNegotiationError::MalformedMeta(_) => {
+            let (code, message) = crate::server::core::negotiation_error_to_rejection(error);
+            V2GateOutcome::Reject {
+                code,
+                message,
+                data: None,
+            }
+        },
+    }
+}
+
 /// Shared tail of BOTH v2 gates: map a resolved-context result to a
 /// `(ProtocolContext, V2GateOutcome)` pair via the SAME error-mapping, D-04
 /// passthrough ordering, and `classify_v2_request` matrix.
@@ -687,6 +962,7 @@ fn finish_v2_gate(
         Option<crate::types::protocol::ProtocolContext>,
         crate::types::protocol::context::ProtocolNegotiationError,
     >,
+    accept_list: &[crate::types::ProtocolVersion],
     headers: &HeaderMap,
     raw_body: &[u8],
     body_method_override: Option<&str>,
@@ -696,12 +972,7 @@ fn finish_v2_gate(
 ) {
     let context = match resolved {
         Ok(ctx) => ctx,
-        Err(err) => {
-            // Unsupported/malformed per-request version — reject via the SAME
-            // mapping dispatch uses (structured INVALID_PARAMS, VERS-06).
-            let (code, message) = crate::server::core::negotiation_error_to_rejection(&err);
-            return (None, V2GateOutcome::Reject(code, message));
-        },
+        Err(err) => return (None, negotiation_error_to_gate_reject(&err, accept_list)),
     };
     // `Ok(None)` == not opted in → zero enforcement (D-04).
     let Some(ref pc) = context else {
@@ -724,14 +995,17 @@ async fn run_v2_header_gate(
     Option<crate::types::protocol::ProtocolContext>,
     V2GateOutcome,
 ) {
-    let resolved = {
+    let (resolved, accept_list) = {
         let server = state.server.lock().await;
         // Non-opted-in servers run ZERO era-detection — v1 path byte-for-byte
         // unchanged (D-04). `resolve_ingress_protocol_context` already
         // short-circuits to `Ok(None)` there.
-        server.resolve_ingress_protocol_context(request)
+        (
+            server.resolve_ingress_protocol_context(request),
+            server.supported_protocol_versions().to_vec(),
+        )
     };
-    finish_v2_gate(resolved, headers, raw_body, None)
+    finish_v2_gate(resolved, &accept_list, headers, raw_body, None)
 }
 
 /// Crate-LOCAL ingress classification for the POST pipeline (Phase 112, VERS-04).
@@ -813,15 +1087,24 @@ async fn run_v2_header_gate_raw(
     Option<crate::types::protocol::ProtocolContext>,
     V2GateOutcome,
 ) {
-    let resolved = {
+    let (resolved, accept_list) = {
         let server = state.server.lock().await;
         // Non-opted-in → `Ok(None)` WITHOUT touching the v2 `_meta` (D-04).
-        server.resolve_discover_protocol_context(raw_meta)
+        (
+            server.resolve_discover_protocol_context(raw_meta),
+            server.supported_protocol_versions().to_vec(),
+        )
     };
     // `server/discover` is NOT a name-bearing method, so `Mcp-Name` is
     // presence-only; the body method is FIXED (override) so the header/body
     // cross-check pins `Mcp-Method` regardless of the raw body's method field.
-    finish_v2_gate(resolved, headers, raw_body, Some("server/discover"))
+    finish_v2_gate(
+        resolved,
+        &accept_list,
+        headers,
+        raw_body,
+        Some("server/discover"),
+    )
 }
 
 impl StreamableHttpServer {
@@ -865,6 +1148,31 @@ impl StreamableHttpServer {
 
         Ok((local_addr, server_task))
     }
+}
+
+/// Reject a v2 `GET` / `DELETE` with `405 Method Not Allowed`, or `None` to let
+/// the existing v1 handler run.
+///
+/// Spec, verbatim: "HTTP GET or DELETE to the MCP endpoint: respond with
+/// `405 Method Not Allowed`." Neither verb carries a body, so `_meta` is
+/// unavailable and the ONLY era signal is the `MCP-Protocol-Version` header —
+/// read through the existing non-panicking [`decode_version_header`], so an
+/// oversized or non-UTF-8 value classifies as `Malformed` (v1 behavior) rather
+/// than 405.
+///
+/// pmcp is dual-version, so the routes STAY registered: every other header value
+/// reaches today's handler unchanged. The guard runs BEFORE header validation and
+/// before session validation, so a v2 GET never touches session state or the
+/// event store (T-113-18).
+fn v2_method_not_allowed(headers: &HeaderMap, verb: &str) -> Option<Response> {
+    if !matches!(decode_version_header(headers), HeaderProtocolVersion::V2) {
+        return None;
+    }
+    Some(create_error_response(
+        StatusCode::METHOD_NOT_ALLOWED,
+        crate::types::protocol::error_codes::METHOD_NOT_FOUND,
+        &format!("HTTP {verb} is not supported on the MCP endpoint for protocol 2026-07-28"),
+    ))
 }
 
 /// Validate `Content-Type: application/json` for POST.
@@ -1710,6 +2018,7 @@ async fn handle_fast_path_request(
         sessions_on,
     } = dispatch;
 
+    let era = protocol_context.as_ref().map(|pc| pc.era);
     let json_response = {
         let server = state.server.lock().await;
         // Thread the ALREADY-RESOLVED ProtocolContext into dispatch — the HTTP
@@ -1725,6 +2034,11 @@ async fn handle_fast_path_request(
         response = %serde_json::to_string(&json_response).unwrap_or_default(),
         "StreamableHttpServer response"
     );
+
+    // Code-driven v2 status: an error the HANDLER produced (e.g. -32601 for an
+    // unsupported method, or plan 09's -32021) maps to its spec HTTP status.
+    // `None` on v1 / not-opted-in, so every legacy status is unchanged.
+    let v2_status = v2_dispatch_response_status(era, &json_response);
 
     let response_msg = TransportMessage::Response(json_response);
 
@@ -1761,6 +2075,10 @@ async fn handle_fast_path_request(
     // MCP-Protocol-Version above with the v2 value for an accepted v2 request.
     if let Some((method, name)) = &v2_outbound {
         apply_v2_outbound_headers(response.headers_mut(), method, name);
+    }
+
+    if let Some(status) = v2_status {
+        *response.status_mut() = status;
     }
 
     response
@@ -1811,6 +2129,7 @@ async fn assemble_discover_response_fast(
         let server = state.server.lock().await;
         server.handle_discover(id, protocol_context)
     };
+    let v2_status = v2_dispatch_response_status(protocol_context.map(|pc| pc.era), &json_response);
     let response_msg = TransportMessage::Response(json_response);
 
     store_response_event(state, response_session_id, &response_msg).await;
@@ -1829,6 +2148,10 @@ async fn assemble_discover_response_fast(
     // Echo the v2 outbound headers on an accepted v2 discover (VERS-05).
     if let Some((method, name)) = &v2_outbound {
         apply_v2_outbound_headers(response.headers_mut(), method, name);
+    }
+
+    if let Some(status) = v2_status {
+        *response.status_mut() = status;
     }
 
     response
@@ -1860,7 +2183,9 @@ async fn handle_post_fast_path(
 
     let ingress = match parse_transport_message_fast(body.as_bytes()) {
         Ok(i) => i,
-        Err(response) => return response,
+        // A v2 unknown method must be 404 + -32601 with the ORIGINAL id, even
+        // though its body never produced a typed request (raw-level mapping).
+        Err(response) => return map_unparsed_body_for_v2(&state, body.as_bytes(), response).await,
     };
 
     let (session_id, protocol_version) = extract_session_and_protocol_headers(&headers);
@@ -1884,8 +2209,13 @@ async fn handle_post_fast_path(
         HttpIngress::Public(TransportMessage::Request { request, .. }) => {
             let (ctx, gate) = run_v2_header_gate(&state, request, &headers, body.as_bytes()).await;
             match gate {
-                V2GateOutcome::Reject(code, msg) => {
-                    return create_error_response(StatusCode::BAD_REQUEST, code, &msg);
+                V2GateOutcome::Reject {
+                    code,
+                    message,
+                    data,
+                } => {
+                    let era = ctx.as_ref().map(|pc| pc.era);
+                    return v2_gate_reject_response(body.as_bytes(), era, code, &message, data);
                 },
                 V2GateOutcome::Passthrough => (ctx, None),
                 V2GateOutcome::EnforceOk { method, name } => (ctx, Some((method, name))),
@@ -1895,8 +2225,13 @@ async fn handle_post_fast_path(
             let (ctx, gate) =
                 run_v2_header_gate_raw(&state, raw_meta.as_ref(), &headers, body.as_bytes()).await;
             match gate {
-                V2GateOutcome::Reject(code, msg) => {
-                    return create_error_response(StatusCode::BAD_REQUEST, code, &msg);
+                V2GateOutcome::Reject {
+                    code,
+                    message,
+                    data,
+                } => {
+                    let era = ctx.as_ref().map(|pc| pc.era);
+                    return v2_gate_reject_response(body.as_bytes(), era, code, &message, data);
                 },
                 V2GateOutcome::Passthrough => (ctx, None),
                 V2GateOutcome::EnforceOk { method, name } => (ctx, Some((method, name))),
@@ -1937,7 +2272,11 @@ async fn handle_post_fast_path(
 
     match ingress {
         HttpIngress::Public(TransportMessage::Request { id, request }) => {
-            handle_fast_path_request(
+            // `Box::pin`: the dispatch future crosses clippy's large_future
+            // threshold once the v2 status mapping is threaded through it —
+            // boxing keeps the handler future small without changing behavior
+            // (same treatment the two POST entrypoints already get).
+            Box::pin(handle_fast_path_request(
                 &state,
                 id,
                 request,
@@ -1950,7 +2289,7 @@ async fn handle_post_fast_path(
                     sessions_on,
                 },
                 session_id.as_ref(),
-            )
+            ))
             .await
         },
         // Per-path response assembly (finding #3/#4): reached AFTER session, the v2
@@ -2106,6 +2445,7 @@ async fn assemble_discover_response_with_middleware(
         let server = state.server.lock().await;
         server.handle_discover(id, protocol_context)
     };
+    let v2_status = v2_dispatch_response_status(protocol_context.map(|pc| pc.era), &json_response);
     let response_msg = TransportMessage::Response(json_response);
 
     store_response_event(state, response_session_id, &response_msg).await;
@@ -2126,6 +2466,9 @@ async fn assemble_discover_response_with_middleware(
 
     if let Some((method, name)) = &v2_outbound {
         apply_v2_outbound_headers(response.headers_mut(), method, name);
+    }
+    if let Some(status) = v2_status {
+        *response.status_mut() = status;
     }
     response
 }
@@ -2167,6 +2510,7 @@ async fn dispatch_message_with_middleware(
             .await
         },
         HttpIngress::Public(TransportMessage::Request { id, request }) => {
+            let era = protocol_context.as_ref().map(|pc| pc.era);
             let json_response = {
                 let server = state.server.lock().await;
                 // Thread the ALREADY-RESOLVED ProtocolContext into dispatch
@@ -2175,6 +2519,8 @@ async fn dispatch_message_with_middleware(
                     .handle_request_with_context(id, request, auth_context, protocol_context)
                     .await
             };
+            // Code-driven v2 status (see the fast-path twin).
+            let v2_status = v2_dispatch_response_status(era, &json_response);
             let response_msg = TransportMessage::Response(json_response);
 
             let negotiated_version = if is_init_request {
@@ -2207,6 +2553,9 @@ async fn dispatch_message_with_middleware(
             // v2 outbound headers on BOTH success and structured error (VERS-05).
             if let Some((method, name)) = &v2_outbound {
                 apply_v2_outbound_headers(response.headers_mut(), method, name);
+            }
+            if let Some(status) = v2_status {
+                *response.status_mut() = status;
             }
             response
         },
@@ -2261,7 +2610,11 @@ async fn handle_post_with_middleware(
     .await
     {
         Ok(i) => i,
-        Err(response) => return response,
+        // A v2 unknown method must be 404 + -32601 with the ORIGINAL id, even
+        // though its body never produced a typed request (raw-level mapping).
+        Err(response) => {
+            return map_unparsed_body_for_v2(&state, &server_request.body, response).await
+        },
     };
 
     let (session_id, protocol_version) =
@@ -2290,14 +2643,25 @@ async fn handle_post_with_middleware(
             )
             .await;
             match gate {
-                V2GateOutcome::Reject(code, msg) => {
+                V2GateOutcome::Reject {
+                    code,
+                    message,
+                    data,
+                } => {
                     report_middleware_error(
                         http_middleware,
                         &http_context,
                         "v2 header gate rejected",
                     )
                     .await;
-                    return create_error_response(StatusCode::BAD_REQUEST, code, &msg);
+                    let era = ctx.as_ref().map(|pc| pc.era);
+                    return v2_gate_reject_response(
+                        &server_request.body,
+                        era,
+                        code,
+                        &message,
+                        data,
+                    );
                 },
                 V2GateOutcome::Passthrough => (ctx, None),
                 V2GateOutcome::EnforceOk { method, name } => (ctx, Some((method, name))),
@@ -2312,14 +2676,25 @@ async fn handle_post_with_middleware(
             )
             .await;
             match gate {
-                V2GateOutcome::Reject(code, msg) => {
+                V2GateOutcome::Reject {
+                    code,
+                    message,
+                    data,
+                } => {
                     report_middleware_error(
                         http_middleware,
                         &http_context,
                         "v2 header gate rejected",
                     )
                     .await;
-                    return create_error_response(StatusCode::BAD_REQUEST, code, &msg);
+                    let era = ctx.as_ref().map(|pc| pc.era);
+                    return v2_gate_reject_response(
+                        &server_request.body,
+                        era,
+                        code,
+                        &message,
+                        data,
+                    );
                 },
                 V2GateOutcome::Passthrough => (ctx, None),
                 V2GateOutcome::EnforceOk { method, name } => (ctx, Some((method, name))),
@@ -2505,6 +2880,9 @@ fn attach_sse_response_headers(response: &mut Response, session_id: &str) {
 /// [`replay_sse_events_from_header`], [`sse_event_for_message`], and
 /// [`attach_sse_response_headers`] so this orchestrator is a short pipeline.
 async fn handle_get_sse(State(state): State<ServerState>, headers: HeaderMap) -> impl IntoResponse {
+    if let Some(rejection) = v2_method_not_allowed(&headers, "GET") {
+        return rejection;
+    }
     if let Err(error_response) = validate_headers(&headers, "GET") {
         return error_response;
     }
@@ -2558,6 +2936,9 @@ async fn handle_delete_session(
     State(state): State<ServerState>,
     headers: HeaderMap,
 ) -> impl IntoResponse {
+    if let Some(rejection) = v2_method_not_allowed(&headers, "DELETE") {
+        return rejection;
+    }
     // Extract session ID
     let session_id = headers
         .get(MCP_SESSION_ID)
@@ -2751,7 +3132,7 @@ mod tests {
     // Unit + property coverage of the PURE, non-panicking gate helpers.
     // ======================================================================
 
-    use crate::types::protocol::error_codes::INVALID_REQUEST;
+    use crate::types::protocol::error_codes::{HEADER_MISMATCH, METHOD_NOT_FOUND};
     use crate::types::protocol::PROTOCOL_VERSION_2026_07_28 as V2;
 
     /// Build a `HeaderMap` from `(name, value)` pairs for classifier tests.
@@ -2805,16 +3186,16 @@ mod tests {
         // v2-header / non-v2-meta → reject
         assert!(matches!(
             classify_era_cell(HeaderProtocolVersion::V2, false),
-            V2Classification::Reject(INVALID_REQUEST, _)
+            V2Classification::Reject(HEADER_MISMATCH, _)
         ));
         // non-v2-header / v2-meta → reject
         assert!(matches!(
             classify_era_cell(HeaderProtocolVersion::Absent, true),
-            V2Classification::Reject(INVALID_REQUEST, _)
+            V2Classification::Reject(HEADER_MISMATCH, _)
         ));
         assert!(matches!(
             classify_era_cell(HeaderProtocolVersion::Malformed, true),
-            V2Classification::Reject(INVALID_REQUEST, _)
+            V2Classification::Reject(HEADER_MISMATCH, _)
         ));
     }
 
@@ -2869,7 +3250,272 @@ mod tests {
         ]);
         // body method disagrees with Mcp-Method (smuggling)
         let out = classify_v2_request(&h, true, Some("resources/read"), Some("search"));
-        assert!(matches!(out, V2GateOutcome::Reject(INVALID_REQUEST, _)));
+        assert!(matches!(
+            out,
+            V2GateOutcome::Reject {
+                code: HEADER_MISMATCH,
+                ..
+            }
+        ));
+    }
+
+    // -----------------------------------------------------------------------
+    // The locked `Mcp-Name` header rule, in BOTH directions (Plan 113-04).
+    //
+    // RULE (113-SPEC-RECHECK.md § `Mcp-Name Header Rule`, Phase-112 D-05):
+    // `Mcp-Name` MUST be PRESENT on every v2 request; its VALUE is cross-checked
+    // only for the name-bearing methods. Plan 05's client emits exactly this.
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn name_less_method_with_empty_mcp_name_is_enforce_ok() {
+        let h = headers_from(&[
+            (MCP_PROTOCOL_VERSION, V2),
+            (MCP_METHOD, "tools/list"),
+            (MCP_NAME, ""),
+        ]);
+        let out = classify_v2_request(&h, true, Some("tools/list"), None);
+        assert!(
+            matches!(out, V2GateOutcome::EnforceOk { .. }),
+            "an EMPTY Mcp-Name on a name-less v2 method must be ACCEPTED"
+        );
+    }
+
+    #[test]
+    fn name_less_method_with_absent_mcp_name_is_rejected() {
+        // Header OMITTED entirely — presence is required on EVERY v2 request.
+        let h = headers_from(&[(MCP_PROTOCOL_VERSION, V2), (MCP_METHOD, "tools/list")]);
+        let out = classify_v2_request(&h, true, Some("tools/list"), None);
+        assert!(
+            matches!(
+                out,
+                V2GateOutcome::Reject {
+                    code: HEADER_MISMATCH,
+                    ..
+                }
+            ),
+            "an ABSENT Mcp-Name must be rejected even for a name-less method"
+        );
+    }
+
+    #[test]
+    fn sentinel_encoded_mcp_name_matches_a_non_ascii_body_name() {
+        let name = "日本語ツール";
+        let encoded = crate::types::mrtr::encode_header_value(name);
+        assert_ne!(encoded, name, "a non-ASCII name must be sentinel-encoded");
+
+        // The pure cross-check decodes before comparing.
+        assert!(cross_check_name(&encoded, "tools/call", Some(name)).is_ok());
+        // ...and still rejects a genuine mismatch.
+        assert!(cross_check_name(&encoded, "tools/call", Some("other")).is_err());
+
+        // End to end through the classifier.
+        let h = headers_from(&[
+            (MCP_PROTOCOL_VERSION, V2),
+            (MCP_METHOD, "tools/call"),
+            (MCP_NAME, &encoded),
+        ]);
+        let out = classify_v2_request(&h, true, Some("tools/call"), Some(name));
+        assert!(matches!(out, V2GateOutcome::EnforceOk { .. }));
+    }
+
+    #[test]
+    fn malformed_mcp_name_sentinel_is_a_header_mismatch() {
+        // Opens the sentinel but never closes it / is not valid base64.
+        for bad in ["=?base64?not-base64!!", "=?base64?%%%%?="] {
+            assert!(
+                cross_check_name(bad, "tools/call", Some("search")).is_err(),
+                "malformed sentinel `{bad}` must be rejected"
+            );
+            let h = headers_from(&[
+                (MCP_PROTOCOL_VERSION, V2),
+                (MCP_METHOD, "tools/call"),
+                (MCP_NAME, bad),
+            ]);
+            let out = classify_v2_request(&h, true, Some("tools/call"), Some("search"));
+            assert!(matches!(
+                out,
+                V2GateOutcome::Reject {
+                    code: HEADER_MISMATCH,
+                    ..
+                }
+            ));
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // v2 HTTP status mapping (Plan 113-04).
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn v2_status_table_covers_every_transport_code() {
+        use crate::types::protocol::error_codes as ec;
+        assert_eq!(
+            v2_status_for_code(ec::METHOD_NOT_FOUND),
+            StatusCode::NOT_FOUND
+        );
+        for code in [
+            ec::HEADER_MISMATCH,
+            ec::MISSING_REQUIRED_CLIENT_CAPABILITY,
+            ec::UNSUPPORTED_PROTOCOL_VERSION,
+            ec::PARSE_ERROR,
+            ec::INVALID_REQUEST,
+            ec::INVALID_PARAMS,
+        ] {
+            assert_eq!(
+                v2_status_for_code(code),
+                StatusCode::BAD_REQUEST,
+                "{code} must map to 400 on v2"
+            );
+        }
+        // Handler semantics stay at HTTP 200 with the error in the body.
+        for code in [ec::INTERNAL_ERROR, ec::REQUEST_TIMEOUT, ec::V1_TASK_PENDING] {
+            assert_eq!(v2_status_for_code(code), StatusCode::OK);
+        }
+    }
+
+    #[test]
+    fn status_mapping_is_era_gated_so_v1_is_untouched() {
+        use crate::types::protocol::Era;
+        // v1 and not-opted-in keep the caller's v1 status for EVERY code.
+        for era in [None, Some(Era::V1)] {
+            for code in [
+                METHOD_NOT_FOUND,
+                HEADER_MISMATCH,
+                crate::types::protocol::error_codes::PARSE_ERROR,
+            ] {
+                assert_eq!(status_for_error(era, code, StatusCode::OK), StatusCode::OK);
+            }
+        }
+        // v2 re-maps from the table.
+        assert_eq!(
+            status_for_error(Some(Era::V2), METHOD_NOT_FOUND, StatusCode::OK),
+            StatusCode::NOT_FOUND
+        );
+    }
+
+    #[test]
+    fn raw_request_id_survives_a_body_that_never_typed_parses() {
+        // Numeric, string and absent ids, plus adversarial bytes — never panics.
+        assert_eq!(
+            raw_request_id(br#"{"jsonrpc":"2.0","id":7,"method":"totally/unknown"}"#),
+            serde_json::json!(7)
+        );
+        assert_eq!(
+            raw_request_id(br#"{"jsonrpc":"2.0","id":"abc","method":"nope","params":{}}"#),
+            serde_json::json!("abc")
+        );
+        assert_eq!(
+            raw_request_id(br#"{"jsonrpc":"2.0","method":"notify"}"#),
+            serde_json::Value::Null
+        );
+        assert_eq!(raw_request_id(b"{not json"), serde_json::Value::Null);
+        assert_eq!(raw_request_id(&[0xff, 0xfe, 0x00]), serde_json::Value::Null);
+    }
+
+    #[test]
+    fn v2_dispatch_status_reads_the_code_not_the_call_site() {
+        use crate::types::jsonrpc::{JSONRPCError, ResponsePayload};
+        use crate::types::protocol::Era;
+
+        let error_response = |code: i32| crate::types::JSONRPCResponse {
+            jsonrpc: "2.0".to_string(),
+            id: crate::types::RequestId::Number(1),
+            payload: ResponsePayload::Error(JSONRPCError {
+                code,
+                message: "x".to_string(),
+                data: None,
+            }),
+        };
+
+        // -32021 is emitted by DISPATCH (plan 09), never by the header gate, so
+        // the mapping must be code-driven to reach it at all.
+        assert_eq!(
+            v2_dispatch_response_status(
+                Some(Era::V2),
+                &error_response(
+                    crate::types::protocol::error_codes::MISSING_REQUIRED_CLIENT_CAPABILITY
+                )
+            ),
+            Some(StatusCode::BAD_REQUEST)
+        );
+        assert_eq!(
+            v2_dispatch_response_status(Some(Era::V2), &error_response(METHOD_NOT_FOUND)),
+            Some(StatusCode::NOT_FOUND)
+        );
+        // v1 / not-opted-in → no re-map at all.
+        assert_eq!(
+            v2_dispatch_response_status(Some(Era::V1), &error_response(METHOD_NOT_FOUND)),
+            None
+        );
+        assert_eq!(
+            v2_dispatch_response_status(None, &error_response(METHOD_NOT_FOUND)),
+            None
+        );
+        // A successful result is never re-mapped.
+        let ok = crate::types::JSONRPCResponse {
+            jsonrpc: "2.0".to_string(),
+            id: crate::types::RequestId::Number(1),
+            payload: ResponsePayload::Result(serde_json::json!({})),
+        };
+        assert_eq!(v2_dispatch_response_status(Some(Era::V2), &ok), None);
+    }
+
+    #[test]
+    fn v2_method_not_allowed_only_fires_on_the_v2_version_header() {
+        // v2 header → 405 on both verbs.
+        for verb in ["GET", "DELETE"] {
+            let h = headers_from(&[(MCP_PROTOCOL_VERSION, V2)]);
+            let response = v2_method_not_allowed(&h, verb).expect("v2 must be 405");
+            assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
+        }
+        // Absent / v1 / unknown / malformed → the v1 handler runs unchanged.
+        assert!(v2_method_not_allowed(&headers_from(&[]), "GET").is_none());
+        assert!(v2_method_not_allowed(
+            &headers_from(&[(MCP_PROTOCOL_VERSION, "2025-11-25")]),
+            "GET"
+        )
+        .is_none());
+        let big = "x".repeat(MAX_V2_HEADER_VALUE_LEN + 1);
+        assert!(
+            v2_method_not_allowed(&headers_from(&[(MCP_PROTOCOL_VERSION, &big)]), "DELETE")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn unsupported_version_reject_carries_a_supported_array() {
+        use crate::types::protocol::context::ProtocolNegotiationError;
+        let accept = vec![ProtocolVersion("2025-11-25".to_string()), v2_version()];
+        let outcome = negotiation_error_to_gate_reject(
+            &ProtocolNegotiationError::UnsupportedVersion("1999-01-01".to_string()),
+            &accept,
+        );
+        let V2GateOutcome::Reject { code, data, .. } = outcome else {
+            panic!("an unsupported version must reject");
+        };
+        assert_eq!(
+            code,
+            crate::types::protocol::error_codes::UNSUPPORTED_PROTOCOL_VERSION
+        );
+        let data = data.expect("UNSUPPORTED_PROTOCOL_VERSION MUST carry structured data");
+        assert!(
+            data["supported"].is_array(),
+            "data.supported must be an ARRAY: {data}"
+        );
+        assert_eq!(data["supported"][0], "2025-11-25");
+        assert_eq!(data["requested"], "1999-01-01");
+
+        // A MALFORMED _meta keeps the shared INVALID_PARAMS mapping, no data.
+        let outcome = negotiation_error_to_gate_reject(
+            &ProtocolNegotiationError::MalformedMeta("bad"),
+            &accept,
+        );
+        let V2GateOutcome::Reject { code, data, .. } = outcome else {
+            panic!("malformed _meta must reject");
+        };
+        assert_eq!(code, crate::types::protocol::error_codes::INVALID_PARAMS);
+        assert!(data.is_none());
     }
 
     #[test]
@@ -2985,8 +3631,8 @@ mod tests {
                     proptest::prop_assert!(header_is_v2 && meta_is_v2);
                     proptest::prop_assert!(have_method && have_name);
                 },
-                V2GateOutcome::Reject(code, _) => {
-                    proptest::prop_assert_eq!(code, INVALID_REQUEST);
+                V2GateOutcome::Reject { code, .. } => {
+                    proptest::prop_assert_eq!(code, HEADER_MISMATCH);
                 },
             }
         }
@@ -3109,7 +3755,7 @@ mod tests {
         let headers = headers_from(&[(MCP_METHOD, "server/discover"), (MCP_NAME, "x")]);
         let body = br#"{"jsonrpc":"2.0","id":1,"method":"server/discover","params":{}}"#;
         let (_ctx, outcome) = run_v2_header_gate_raw(&state, Some(&raw_meta), &headers, body).await;
-        assert!(matches!(outcome, V2GateOutcome::Reject(_, _)));
+        assert!(matches!(outcome, V2GateOutcome::Reject { .. }));
     }
 
     proptest::proptest! {

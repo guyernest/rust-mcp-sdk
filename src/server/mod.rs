@@ -1293,6 +1293,17 @@ impl Server {
     /// [`handle_request_with_context`](Self::handle_request_with_context) — the
     /// HTTP layer CONSUMES the resolved era, it never runs a second resolver
     /// (D-11 / Pitfall 2).
+    /// The server's configured protocol-version accept-list.
+    ///
+    /// `pub(crate)` so the streamable-HTTP layer can put it in an
+    /// `UNSUPPORTED_PROTOCOL_VERSION` (-32022) rejection's
+    /// `error.data.supported` — the spec requires the rejection to tell the
+    /// client which versions it COULD have asked for, so it can pick a mutually
+    /// supported one instead of probing.
+    pub(crate) fn supported_protocol_versions(&self) -> &[ProtocolVersion] {
+        &self.supported_protocol_versions
+    }
+
     pub(crate) fn resolve_ingress_protocol_context(
         &self,
         request: &Request,
