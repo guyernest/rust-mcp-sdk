@@ -119,6 +119,98 @@ pub fn decode_mcp_name(raw: &str) -> Option<String> {
     crate::types::mrtr::decode_header_value(raw)
 }
 
+/// Mint a `requestState` continuation token with the PRODUCTION codec
+/// (Phase 113, HTTP-02).
+///
+/// **Why this wrapper exists.** `RequestStateCodec` is `pub(crate)` (Phase-113
+/// D-10 keeps the MRTR plumbing off the public API), so an integration test
+/// cannot construct one — and a test that hand-rolled the token layout would be
+/// validating itself rather than the shipped codec. This is the same one-hop
+/// seam [`encode_mcp_name`] provides for the `Mcp-Name` codec.
+///
+/// `key` is the SAME 32 bytes the server under test was built with via
+/// [`ServerBuilder::with_request_state_key`](crate::ServerBuilder::with_request_state_key),
+/// so tests configure the key through the builder and never mutate
+/// `PMCP_REQUEST_STATE_KEY` (which is process-global and therefore
+/// order-dependent under parallel test threads).
+///
+/// `params` MUST be the params DISPATCH derives from the typed request, because
+/// that is what the AEAD binds to:
+///
+/// | method | params |
+/// |--------|--------|
+/// | `tools/call` | `{"name": …, "arguments": …}` |
+/// | `prompts/get` | `{"name": …, "arguments": …}` |
+/// | `resources/read` | `{"uri": …}` |
+///
+/// A `ttl` of zero mints an ALREADY-EXPIRED token (`exp == now`), which is how a
+/// test exercises the expiry verdict deterministically instead of sleeping.
+///
+/// Returns `None` only if the codec refuses the key or cannot seal the state.
+#[cfg(all(feature = "streamable-http", not(target_arch = "wasm32")))]
+#[must_use]
+pub fn mint_request_state(
+    key: &[u8; 32],
+    ttl: std::time::Duration,
+    principal: &str,
+    method: &str,
+    params: &serde_json::Value,
+    state: &serde_json::Value,
+    round: u8,
+) -> Option<String> {
+    let codec = crate::server::request_state::RequestStateCodec::new(key, ttl).ok()?;
+    let binding =
+        crate::server::request_state::RequestBinding::from_request(principal, method, params);
+    codec.mint(state, &binding, round).ok()
+}
+
+/// Open a `requestState` token with the PRODUCTION codec, returning
+/// `(continuation state, round)`.
+///
+/// The inverse of [`mint_request_state`], and the only way an integration test
+/// can assert that a token the SERVER minted carries the round it should — the
+/// D-15 expiry path must PRESERVE the round rather than reset it (T-113-49).
+///
+/// Returns `None` for any verdict other than "authentic and live": an
+/// unknown key, a failed tag check, or an expired token all yield `None`.
+/// `params` follows the same rule as [`mint_request_state`].
+#[cfg(all(feature = "streamable-http", not(target_arch = "wasm32")))]
+#[must_use]
+pub fn open_request_state(
+    key: &[u8; 32],
+    principal: &str,
+    method: &str,
+    params: &serde_json::Value,
+    token: &str,
+) -> Option<(serde_json::Value, u8)> {
+    let codec = crate::server::request_state::RequestStateCodec::new(
+        key,
+        std::time::Duration::from_secs(1),
+    )
+    .ok()?;
+    let binding =
+        crate::server::request_state::RequestBinding::from_request(principal, method, params);
+    match codec.verify(token, &binding) {
+        crate::server::request_state::Verdict::Ok(continuation) => {
+            Some((continuation.state, continuation.round))
+        },
+        _ => None,
+    }
+}
+
+/// The principal a server with NO auth provider binds continuations to.
+///
+/// Re-exported so a test spells the anonymous principal through the crate's own
+/// constant instead of hard-coding the empty string.
+#[cfg(all(feature = "streamable-http", not(target_arch = "wasm32")))]
+pub const ANONYMOUS_PRINCIPAL: &str = crate::server::core::ANONYMOUS_PRINCIPAL;
+
+/// The reserved result-`_meta` key a handler sets to signal "I need more input".
+///
+/// Re-exported for symmetry with the other MRTR test seams; the underlying
+/// constant is already `pub` at [`crate::types::mrtr::MRTR_SIGNAL_META_KEY`].
+pub const MRTR_SIGNAL_META_KEY: &str = crate::types::mrtr::MRTR_SIGNAL_META_KEY;
+
 #[cfg(test)]
 mod tests {
     use super::assert_roundtrips_through_client;

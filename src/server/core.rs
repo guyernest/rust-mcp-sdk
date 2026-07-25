@@ -3626,7 +3626,7 @@ mod tests {
         // -----------------------------------------------------------------
 
         #[test]
-        fn mrtr_ingest_valid_token_proceeds_with_state_and_round() {
+        fn valid_token_proceeds_with_state_and_round() {
             let codec = codec(&KEY_A, 300);
             let request = call_tool(json!({}));
             let token = mint_for(&codec, ALICE, &request, &json!({ "step": 7 }), 2);
@@ -3646,7 +3646,7 @@ mod tests {
         /// a re-prompt and never a complete result
         /// (`sep-2322-reject-tampered-state`).
         #[test]
-        fn mrtr_ingest_tampered_token_rejects_and_never_reelicits() {
+        fn tampered_token_rejects_and_never_reelicits() {
             let codec = codec(&KEY_A, 300);
             let request = call_tool(json!({}));
             let token = format!(
@@ -3664,7 +3664,7 @@ mod tests {
         /// A token minted for `alice` and presented by `bob` fails the AEAD tag
         /// check — the principal lives in the AAD (T-113-02).
         #[test]
-        fn mrtr_ingest_principal_mismatch_rejects() {
+        fn principal_mismatch_rejects() {
             let codec = codec(&KEY_A, 300);
             let request = call_tool(json!({}));
             let token = mint_for(&codec, ALICE, &request, &json!({}), 0);
@@ -3678,7 +3678,7 @@ mod tests {
         /// A token minted for one set of salient arguments cannot be replayed
         /// onto another, nor onto a different method (T-113-03).
         #[test]
-        fn mrtr_ingest_originating_request_mismatch_rejects() {
+        fn originating_request_mismatch_rejects() {
             let codec = codec(&KEY_A, 300);
             let minted_for = call_tool(json!({ "q": "a" }));
             let token = mint_for(&codec, ALICE, &minted_for, &json!({}), 0);
@@ -3717,7 +3717,7 @@ mod tests {
         /// D-04 degraded path: another instance's per-process key is NOT
         /// tampering — it re-elicits from round 0.
         #[test]
-        fn mrtr_ingest_unknown_key_reelicits_from_round_zero() {
+        fn unknown_key_reelicits_from_round_zero() {
             let minting = codec(&KEY_B, 300);
             let serving = codec(&KEY_A, 300);
             let request = call_tool(json!({}));
@@ -3733,7 +3733,7 @@ mod tests {
         /// the round, so a hostile server cannot reset the client's D-09 bound
         /// by letting tokens expire.
         #[test]
-        fn mrtr_ingest_expired_token_reelicits_preserving_the_round() {
+        fn expired_token_reelicits_preserving_the_round() {
             // A zero-second TTL mints `exp == now`, which the codec classifies
             // as expired — deterministic, no sleeping.
             let minting = codec(&KEY_A, 0);
@@ -3754,7 +3754,7 @@ mod tests {
         /// T-113-23: the spec confines MRTR to three methods. A `requestState`
         /// on `tools/list` is IGNORED — not verified, not errored.
         #[test]
-        fn mrtr_ingest_ignores_a_request_state_on_a_non_eligible_method() {
+        fn ignores_a_request_state_on_a_non_eligible_method() {
             let codec = codec(&KEY_A, 300);
             let list = Request::Client(Box::new(ClientRequest::ListTools(ListToolsRequest {
                 cursor: None,
@@ -3768,7 +3768,7 @@ mod tests {
         }
 
         #[test]
-        fn mrtr_ingest_is_inert_on_v1_and_without_a_token_or_codec() {
+        fn is_inert_on_v1_and_without_a_token_or_codec() {
             let codec = codec(&KEY_A, 300);
             let request = call_tool(json!({}));
             let token = mint_for(&codec, ALICE, &request, &json!({}), 0);
@@ -3827,7 +3827,7 @@ mod tests {
         /// A server WITH an auth provider refuses MRTR to an unauthenticated
         /// caller: verification is never attempted and a `-32602` is returned.
         #[test]
-        fn mrtr_ingest_auth_configured_server_refuses_an_unauthenticated_caller() {
+        fn auth_configured_server_refuses_an_unauthenticated_caller() {
             let codec = codec(&KEY_A, 300);
             let request = call_tool(json!({}));
             let token = mint_for(&codec, ANONYMOUS_PRINCIPAL, &request, &json!({}), 0);
@@ -3841,7 +3841,7 @@ mod tests {
         /// A server with NO auth provider has no principals to separate, so the
         /// documented anonymous constant is used and MRTR works.
         #[test]
-        fn mrtr_ingest_anonymous_principal_is_used_only_without_an_auth_provider() {
+        fn anonymous_principal_is_used_only_without_an_auth_provider() {
             assert_eq!(ANONYMOUS_PRINCIPAL, "");
             assert_eq!(
                 resolve_mrtr_principal(MrtrPrincipal {
@@ -3880,7 +3880,7 @@ mod tests {
         // -----------------------------------------------------------------
 
         #[test]
-        fn mrtr_ingest_apply_proceed_surfaces_continuation_and_round() {
+        fn apply_proceed_surfaces_continuation_and_round() {
             let (context, round) = MrtrIngest::Proceed {
                 continuation: json!({ "step": 3 }),
                 round: 2,
@@ -3896,7 +3896,7 @@ mod tests {
         /// The consensus fix: a re-run handler sees a PRISTINE first call — all
         /// three MRTR accessors `None`.
         #[test]
-        fn mrtr_ingest_apply_reelicit_strips_every_signal_and_keeps_the_round() {
+        fn apply_reelicit_strips_every_signal_and_keeps_the_round() {
             let carried = v2_context()
                 .with_mrtr_params(crate::types::mrtr::MrtrRequestParams {
                     input_responses: Some(crate::types::mrtr::InputResponses::new()),
@@ -3915,7 +3915,7 @@ mod tests {
         }
 
         #[test]
-        fn mrtr_ingest_apply_reject_is_an_error_so_the_handler_never_runs() {
+        fn apply_reject_is_an_error_so_the_handler_never_runs() {
             let outcome = MrtrIngest::Reject {
                 code: crate::types::protocol::error_codes::INVALID_PARAMS,
                 message: MRTR_REJECT_MESSAGE,
@@ -3929,7 +3929,7 @@ mod tests {
         }
 
         #[test]
-        fn mrtr_ingest_apply_inert_leaves_the_context_untouched() {
+        fn apply_inert_leaves_the_context_untouched() {
             let (context, round) = MrtrIngest::Inert
                 .apply(Some(v2_context()))
                 .expect("Inert is not a rejection");
@@ -3979,7 +3979,7 @@ mod tests {
         }
 
         #[test]
-        fn mrtr_ingest_egress_emits_input_required_with_a_round_plus_one_token() {
+        fn egress_emits_input_required_with_a_round_plus_one_token() {
             let codec = codec(&KEY_A, 300);
             let request = call_tool(json!({}));
             let target = mrtr_binding_parts(&request);
@@ -4031,7 +4031,7 @@ mod tests {
         /// The pmcp-internal signal key must never reach the wire — not on v1,
         /// and not on a method the spec forbids `input_required` on.
         #[test]
-        fn mrtr_ingest_egress_strips_the_internal_signal_on_every_path() {
+        fn egress_strips_the_internal_signal_on_every_path() {
             let codec = codec(&KEY_A, 300);
             let request = call_tool(json!({}));
             let target = mrtr_binding_parts(&request);
@@ -4078,7 +4078,7 @@ mod tests {
         /// JSON-RPC error rather than a bogus "complete" result for an
         /// operation the handler did not complete.
         #[test]
-        fn mrtr_ingest_egress_fails_closed_when_it_cannot_mint() {
+        fn egress_fails_closed_when_it_cannot_mint() {
             let request = call_tool(json!({}));
             let target = mrtr_binding_parts(&request);
             let context = v2_context();
@@ -4109,7 +4109,7 @@ mod tests {
 
         /// A response with no signal is left byte-identical.
         #[test]
-        fn mrtr_ingest_egress_is_a_noop_without_a_signal() {
+        fn egress_is_a_noop_without_a_signal() {
             let codec = codec(&KEY_A, 300);
             let request = call_tool(json!({}));
             let target = mrtr_binding_parts(&request);
@@ -4139,7 +4139,7 @@ mod tests {
         // -----------------------------------------------------------------
 
         #[test]
-        fn mrtr_ingest_binding_parts_cover_exactly_the_eligible_methods() {
+        fn binding_parts_cover_exactly_the_eligible_methods() {
             for (request, method) in [
                 (call_tool(json!({})), "tools/call"),
                 (
