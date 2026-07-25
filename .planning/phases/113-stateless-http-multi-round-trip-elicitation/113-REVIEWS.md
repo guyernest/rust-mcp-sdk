@@ -626,3 +626,141 @@ The two reviewers reached **opposite overall verdicts** — Gemini: *approved wi
 2. Decide the client-facing API for unfulfilled `input_required` (additive `MrtrOutcome`-style return vs structured error) before Wave 3.
 3. Make reserved envelope fields (`resultType`, `serverInfo`, MRTR signal key) server-owned — strip/overwrite on every path, including v1 and non-eligible methods.
 4. Resolve the `Mcp-Name` header matrix contradiction between Plans 04 and 05 (three-headers-always vs no-name-methods-omit) against the final spec.
+
+---
+
+## Review Adjudication
+
+**Adjudicated:** 2026-07-25 · **Mode:** `/gsd:plan-phase --reviews` replan · **Outcome:** 12 plans revised in place, 1 plan added (113-13), waves recomputed 6 → 7.
+
+Every Codex blocking finding and HIGH concern was verified against the actual codebase before being accepted. Claims that were wrong, or that conflict with a locked owner decision, are REJECTED with a one-line rationale. Gemini's four recommendations are adjudicated at the end.
+
+### Verification performed before adjudicating
+
+| Claim under test | Method | Result |
+|---|---|---|
+| Client methods discard `inputRequests`/`requestState`/`resultType` | Read `src/types/tools.rs` `CallToolResult`, `src/types/resources.rs` `ReadResourceResult`, `src/client/mod.rs:577` `call_tool` | **CONFIRMED, worse than claimed.** `CallToolResult.content` has `#[serde(default)]`, so an `input_required` result deserializes into a SILENTLY EMPTY success. `ReadResourceResult.contents` has no default and a custom deserializer, so the same result fails to deserialize entirely. |
+| Plan 04's three-header gate contradicts Plan 05's name-less behavior | Read `src/server/streamable_http_server.rs:446` `require_three_headers` and `:492` `cross_check_name` | **CONFIRMED.** `require_three_headers` demands `Mcp-Name` be PRESENT on every v2 request; `cross_check_name` skips the VALUE comparison for non-name-bearing methods. Plan 05's "emit no `Mcp-Name`" would 400 every `tools/list`. |
+| Plan 03 uses a process-global `OnceLock` codec | Read 113-03-PLAN.md Task 1 | **CONFIRMED.** The plan text specified `pub(crate) fn codec() -> &'static RequestStateCodec` backed by `std::sync::OnceLock`. |
+| `Error::Protocol.code` is `ErrorCode`, not `i32` | Read `src/error/mod.rs:18-28` | **CONFIRMED.** |
+| `assert_capability` blocks v2 calls | Read `src/client/mod.rs:2316` `ensure_initialized`, `:2325` `assert_capability` | **CONFIRMED.** `server_capabilities` is populated only by `initialize`; on v2 it is `None`, so `is_some_and(..)` is false and every `call_tool` fails locally before sending. Plan 05 addressed `ensure_initialized` but not this. |
+| Existing client subscribe methods stay callable on v2 | Read `src/client/mod.rs:1848`, `:1912` | **CONFIRMED.** |
+| `../provable-contracts` checkout is absent | `ls -d ../provable-contracts` | **CONFIRMED ABSENT.** `pmat` IS on PATH; `pdmt` is NOT. |
+| Transport has no mode-propagation seam | Read `src/shared/transport.rs:279`/`:328`, `src/shared/streamable_http.rs:289-405` | **PARTIALLY REJECTED.** The seam half-exists: `StreamableHttpTransport` already owns `protocol_version: Arc<RwLock<Option<String>>>` (`:300`), an inherent `set_protocol_version` (`:400`), and header emission from it (`:580`). What is genuinely missing is a `Transport`-trait path from a generic `Client<T>`. |
+
+### Codex blocking findings
+
+| # | Finding | Verdict | Disposition |
+|---|---|---|---|
+| 1 | Final-spec gate is not actually blocking | **ACCEPTED** | Plan 01 Task 1 now emits a three-state verdict (`PUBLISHED-CONFIRMED` / `PUBLISHED-DRIFT` / `PENDING`); Task 2 is a blocking human gate that also decides the spec path (`proceed` / `wait` / `exception`); Task 3 refuses to land wire constants under `PENDING` without a written `## Recorded Exception`. Plan 12 Task 3 re-verifies before flipping any requirement. `Cargo.lock` added to `files_modified`; the conformance-suite commit is re-pinned in the same checkpoint. |
+| 2 | Client cannot return an unfulfilled `input_required` result | **ACCEPTED** (verified worse than reported) | Plan 02 adds public `InputRequiredResult` + `MrtrOutcome<T>`. Plan 07 adds `call_tool_mrtr` / `get_prompt_mrtr` / `read_resource_mrtr` returning `MrtrOutcome`, and makes the EXISTING methods return `Err(Error::input_required_unfulfilled(result))` on v2 instead of deserializing into an empty success. Plan 11 asserts both live. |
+| 3 | Unknown-key/expired re-elicitation is underspecified or impossible | **ACCEPTED** (both reviewers' top consensus item) | Plan 03 changes `Verdict::Expired` to `Expired(Continuation)` — the tag already verified, so the plaintext IS available. Plan 06 defines the mechanic exactly: `Reelicit` strips MRTR fields via `splice_mrtr_params(&mut params, &Default::default())` and RE-RUNS the original handler, so the fresh `input_required` carries real `inputRequests`. `UnknownKey` → round 0; `Expired(c)` → round `c.round` preserved, so a hostile server cannot reset the client's D-09 bound. Handler idempotence-up-to-first-`input_required` is documented on `MrtrSignal`. |
+| 4 | The crypto codec cannot be process-global | **ACCEPTED** | Plan 03 removes `OnceLock` and the `codec()` free function entirely. `Arc<RequestStateCodec>` is built once in `ServerBuilder::build()` / `ServerCoreBuilder::build()` and stored on server state. Adds `with_request_state_key` / `with_request_state_previous_keys` / `with_request_state_ttl` and an injectable `RequestStateClock`. A malformed CONFIGURED key now FAILS the server build (D-04's fallback covers the UNSET case only); the startup warning is emitted at build time so it is reliable. Key-id collision policy specified. Plan 06's live tests use the builder instead of mutating `PMCP_REQUEST_STATE_KEY`. |
+| 5 | Handler-controlled `resultType` defeats the eligibility tripwire | **ACCEPTED** | Plan 09 Task 2 replaces `entry().or_insert()` with OWNERSHIP for a closed reserved set (`resultType`, `_meta` `serverInfo`, `requestState`, `inputRequests`, `dev.pmcp/mrtr`) via `own_reserved_result_fields`, each overwrite/removal logged. Non-reserved handler `_meta` keys still survive. |
+| 6 | The internal MRTR signal leaks on v1 and unsupported methods | **ACCEPTED** | Plan 09 Task 1 adds `strip_mrtr_signal`, called UNCONDITIONALLY before any era or eligibility branch. A signal on v1 or a non-eligible method is stripped, logged at `error`, and answered with a JSON-RPC internal error. Plan 11 adds `mrtr_signal_key_never_on_wire`, greping every raw response body. |
+| 6b | Prefer an explicit internal `HandlerOutcome::InputRequired` over `_meta` smuggling | **REJECTED** | Would require changing the return types of the public `ToolHandler`/`PromptHandler`/`ResourceHandler` traits — a MAJOR semver break, forbidden by the milestone's additive constraint (`cargo semver-checks` gates every phase). Rationale recorded as a doc comment on `MRTR_SIGNAL_META_KEY`; noted as the right shape for a future 3.0. |
+| 7 | HTTP-04 lacks the pmcp Client half | **ACCEPTED** | Judged WITHIN the requirement, not scope creep: HTTP-04's grammatical subject is "**v2 clients get** change notifications", and D-13 scopes only the SERVER ADVERTISEMENT as opt-in. New **plan 113-13** (wave 6) adds `Client::subscriptions_listen -> SubscriptionStream`, era-gates the retired `subscribe_resource`/`unsubscribe_resource` to a typed `retired_on_v2` error, and proves both live. Deliberately minimal: one stream type, one method, one gate. |
+| 8 | Mandatory project workflow not followed (contract-first, PDMT, PMAT proxy) | **PARTIALLY ACCEPTED — environment-constrained** | Contract-first ORDERING accepted: plan 01 Task 1 Section C now records the contract-first state BEFORE any implementation plan runs, and plan 12 consumes that record rather than re-discovering it. `../provable-contracts` VERIFIED ABSENT, so the executable step is the in-repo `pmat comply check --path .` that `make quality-gate` already chains — recorded as an environment constraint, not silently skipped. **PDMT REJECTED as a blocking requirement**: `pdmt` is not on PATH; the GSD `<acceptance_criteria>` + `<verify>` blocks already carry the equivalent quality-gate/success-criteria structure. **PMAT quality-proxy REJECTED as a per-plan requirement**: it needs a running `pmat mcp-server --enable-quality-proxy` process a plan executor cannot assume; the binding checks are `make quality-gate` locally and the PMAT job in CI (`pmat` IS present, so plan 12's complexity run is now mandatory rather than skippable). |
+
+### Codex per-plan HIGH/MEDIUM concerns
+
+| Plan | Concern | Verdict | Disposition |
+|---|---|---|---|
+| 01 | `Cargo.lock` omitted from `files_modified` | ACCEPTED | Added. |
+| 01 | zeroize-rejection fallback contradicts unconditional must-haves | ACCEPTED | Must-haves and acceptance criteria now name the rejection path explicitly. |
+| 01 | conformance-suite commit not re-pinned | ACCEPTED | New `## Conformance Suite Pin` section enumerating the `sep-2322` scenario ids; plan 11 derives from it. |
+| 01 | blocking human gate makes the phase non-autonomous | ACCEPTED | `autonomous: false` was already set on plan 01; noted in the return summary. |
+| 02 | `extract_mrtr_params` conflates absent/malformed/oversized | ACCEPTED | Now returns `Result<MrtrRequestParams, MrtrParseError>` with six distinct variants; plan 06 maps every `Err` to `-32602` at HTTP 400 before dispatch. |
+| 02 | `splice_mrtr_params` leaves stale keys | ACCEPTED | Removes both keys unconditionally before inserting; proptest asserts a default-splice leaves neither. |
+| 02 | shared `v2_body` omits `clientCapabilities` | ACCEPTED | Now mandatory on every shared test request, with `v2_body_with_caps` for deliberate under-declaration. |
+| 02 | untagged `InputResponse` can misclassify | ACCEPTED | `InputRequestKind` + `InputResponse::decode_for(kind, value)`; the untagged path is an explicitly documented server-ingress-only fallback. |
+| 02 | broad flat re-exports contradict D-10's "internal adapter" | ACCEPTED | Only `InputRequest`, `InputRequestKind`, `InputRequests`, `InputResponse`, `InputResponses`, `InputRequiredResult`, `MrtrOutcome`, `MrtrSignal` are `pub`; every parsing helper is `pub(crate)`. |
+| 02 | header encoding rules underspecified | ACCEPTED | Exact allowed byte set (`0x20..=0x7E` minus `"`, `,`, `;`, `\`), empty-string round-trip guaranteed, self-sentinel values force-encoded. |
+| 02 | `common_harness_smoke.rs` missing from `files_modified` | ACCEPTED | Added. |
+| 03 | malformed configured key replaced by a random fallback | ACCEPTED | Now fails `ServerBuilder::build()`. D-04 governs the UNSET case only. |
+| 03 | lazy init makes the startup warning unreliable | ACCEPTED | Emitted at build time. |
+| 03 | D-05 wants env AND builder TTL | ACCEPTED | `with_request_state_ttl` added; builder beats env. |
+| 03 | expiry tests need an injected clock | ACCEPTED | `RequestStateClock` trait + `FixedClock`; acceptance criteria forbid `sleep` in the module. |
+| 03 | only decoded key bytes scrubbed | ACCEPTED | The env `String` is zeroized too. |
+| 03 | 8-byte key-id can collide | ACCEPTED | Every matching entry is tried; `UnknownKey` only when none matches, so a collision yields `AuthFailed`, never a false `Ok`. Forced-collision test required. |
+| 03 | hidden public fuzz seam expands the API | ACCEPTED | Replaced by a `fuzzing = []` feature not reachable from `full`/`default`; plan 12 asserts that. |
+| 04 | Mcp-Name matrix contradiction | ACCEPTED | Resolved in favor of the EXISTING implementation and Phase-112 D-05 (locked, non-overridable): presence always, empty value for name-less methods, value cross-checked only for name-bearing. Written into plan 01's checkpoint as `## Mcp-Name Header Rule` and implemented identically in plans 02, 04 and 05, with tests on both sides. |
+| 04 | `Reject` cannot carry `-32022`'s `supported` | ACCEPTED | Widened to `Reject { code, message, data }`. |
+| 04 | unknown-method 404 may miss raw unknown methods | ACCEPTED | The status mapper now runs at the RAW level on the code about to be emitted, with the id taken from the raw body; `v2_unknown_method_404` drives it with a method that cannot typed-parse. |
+| 04 | brittle grep gates and exact test counts | ACCEPTED | Comment-filtered greps; counts relaxed to "at least N". |
+| 05 | transport-mode propagation undefined | ACCEPTED (claim partially refined) | Additive defaulted `Transport::set_negotiated_protocol_version` + `supports_negotiated_protocol_version`, overridden by `StreamableHttpTransport` to delegate to its EXISTING inherent setter and field. A build-time warning fires when v2 is selected on a transport with no wire representation. |
+| 05 | `assert_capability` fails locally on v2 | ACCEPTED | Era-aware: on v2 with no observed capabilities it returns `Ok`; an EXPLICIT `server_discover()` populates them and enforcement resumes. Distinguished in-doc from D-08's prohibited era auto-probe. |
+| 05 | Unicode live test needs plan 04's decoder | ACCEPTED | `depends_on` now `["113-02", "113-04"]`; plan 05 moves to wave 3. |
+| 05 | `with_protocol_version` on non-HTTP transports / arbitrary versions | ACCEPTED | Validated against `SUPPORTED_PROTOCOL_VERSIONS`; inert selections warn. |
+| 06 | `""` principal makes tokens transferable between anonymous callers | ACCEPTED (hardened, residual accepted) | On a server WITH an auth provider, an unauthenticated request is now REFUSED MRTR entirely. Only a server with NO auth provider uses the named `ANONYMOUS_PRINCIPAL`, where there are no principals to separate; T-113-22 upgraded from `accept` to `mitigate` with TTL + originating-request binding as residual controls. |
+| 06 | no limits on `inputResponses` | ACCEPTED | Five bounds (`MAX_REQUEST_STATE_LEN`, count, per-entry bytes, total bytes, depth) enforced at parse time in plan 02, before any clone; live test for the count bound. |
+| 06 | env-controlled integration tests are order-dependent | ACCEPTED | Plan 06 Task 3 uses `with_request_state_key`; `grep -c PMCP_REQUEST_STATE_KEY tests/v2_mrtr_ingress.rs` must be `0`. |
+| 07 | live fixtures cannot emit `input_required` before plan 09 | ACCEPTED | Plan 07 is now mock-transport only; the live client↔server MRTR tests moved to plan 11 (which depends on 07 and 09). Plan 07 moves to wave 4. |
+| 07 | direct handler calls bypass approval/result-review | ACCEPTED | The fold routes through the same internal dispatch helpers the v1 host path uses; dedicated tests for a rejecting approval hook and a running result review. |
+| 07 | handlers invoked before proving all kinds fulfillable | ACCEPTED | `preflight_input_requests` runs first; a test asserts ZERO invocations when the SECOND entry is unfulfillable. |
+| 07 | handler errors swallowed silently | ACCEPTED | Every `CannotFulfil` path emits `tracing::warn!` with the entry key and reason. |
+| 07 | `Error::Protocol.code` is `ErrorCode` | ACCEPTED | Constructors wrap the value. |
+| 08 | id invariant conflicts with v1 replay | ACCEPTED | Scoped to DIRECT responses; `v1_replayed_event_retains_original_id` asserts historical identity separately as correct behavior. |
+| 08 | `tools/list` does not test the cached-envelope bug | ACCEPTED | `cached_payload_is_reenveloped_with_live_id` forces genuine payload reuse. |
+| 08 | `debug_assert!` weaker than a structural design | ACCEPTED | `envelope_for_live_request(payload, live_id)` takes payload and id as SEPARATE arguments, so a whole cached envelope cannot be passed through; the `debug_assert!` is retained as belt-and-braces. |
+| 08 | event-store spy needed | ACCEPTED | `SpyEventStore` asserts zero stores/replays on v2 and NON-zero on v1 so the assertion is not vacuous. |
+| 08 | brittle `LAST_EVENT_ID` count | ACCEPTED | Replaced with an "at least 1, retained for v1" assertion plus behavioral tests. |
+| 09 | capability check considers only presence | ACCEPTED | Submode-aware: form vs URL elicitation, sampling sub-capabilities, with a fallback note to re-check the URL sub-field against the final schema. |
+| 09 | `_meta` shapes inconsistent across result types | ACCEPTED | One `result_meta_object_mut` helper operating on the SERIALIZED JSON; non-object `_meta` is replaced with a warning. |
+| 09 | capability validation after minting | ACCEPTED | Precheck runs first; a test asserts a failed precheck mints ZERO tokens. |
+| 09 | `into_meta_entry` declared infallible | ACCEPTED | Returns `Result`. |
+| 10 | registry keyed by JSON-RPC id alone | ACCEPTED | `ListenKey { principal, request_id }`; `two_callers_same_request_id_do_not_cross` proves it live. |
+| 10 | unbounded channel | ACCEPTED | Bounded `mpsc::channel(LISTEN_CHANNEL_CAPACITY)` with a documented disconnect-on-overflow policy; `unbounded_channel` count must be `0`. |
+| 10 | disconnect-safe unregistering not designed | ACCEPTED | RAII `ListenGuard` holding the key, the registry `Arc` and the semaphore permit, moved into the stream future; `disconnect_releases_registry_slot` proves the reclaim live. |
+| 10 | `AuthContext` path to the listen registry unexplained | ACCEPTED | Threaded from the same POST-path resolution that feeds `handle_request_with_context`, with a per-connection fallback when no auth provider is configured. |
+| 10 | instance-local streams behind a load balancer | ACCEPTED | Documented as single-instance/sticky-only, with a build-time `tracing::warn!` when subscription capabilities are advertised. Cross-instance backends explicitly out of scope. |
+| 10 | SSE frames bypass envelope/header helpers | ACCEPTED | The ack and terminal result go through `inject_v2_result_envelope` + `own_reserved_result_fields` + `apply_v2_outbound_headers`. |
+| 10 | `src/server/core.rs` and client files missing from `files_modified` | ACCEPTED | `core.rs` and `mod.rs` added to plan 10; the client work is plan 13. |
+| 10 | no graceful-closure trigger defined | ACCEPTED | Three named triggers (client disconnect, shutdown signal, overflow); only shutdown sends the terminal result. |
+| 10 | field types must be locked from the final schema | ACCEPTED | Taken from plan 01's `## Verdict` record, with a delta note if they differ. |
+| 11 | tests derived from the July-24 research table | ACCEPTED | `113-CONFORMANCE-MANIFEST.md` generated from the PINNED commit with a must-be-empty `## Unmapped` section and a mechanical id→test-name derivation; a `## Research-Table Delta` section records discrepancies. |
+| 11 | example demonstrates only the server side | ACCEPTED | `examples/s48_v2_mrtr_client.rs` added, proving automatic fulfilment AND the no-handler typed-error path. |
+| 11 | the 20k fuzz run is not in any gate | ACCEPTED | Moved into plan 12's phase gate as a recorded row. |
+| 11 | `timeout` is environment-sensitive | ACCEPTED | Guarded with a `command -v timeout` branch and a background-spawn fallback. |
+| 12 | dev-dep-free command described vaguely | ACCEPTED | Two exact commands recorded verbatim with an explanation of what each catches. |
+| 12 | verification used bare `cargo` | ACCEPTED | Every row and the `<verify>` block use `$(rustup which cargo)`. |
+| 12 | no coverage measurement | ACCEPTED | Per-file line coverage recorded for the five new/changed files against the 80% target. |
+| 12 | requirements marked complete prematurely | ACCEPTED | Task 3 Step 1 gates every flip on a `PUBLISHED-*` verdict AND an empty `## Unmapped` manifest section, with a partial marker and a blocked-phase report as the documented alternative. |
+| 12 | one final plan makes recovery cumbersome | REJECTED | Plan 12 has three independent tasks with separate verifies; splitting further would add a wave for no parallelism (it is the terminal wave by construction). |
+
+### Gemini recommendations
+
+| # | Recommendation | Verdict | Disposition |
+|---|---|---|---|
+| 1 | Strict unknown-key vs tampered-token layout adherence | ACCEPTED | Already the design; strengthened by plan 03's key-id collision policy and `Expired(Continuation)`. |
+| 2 | Verify `serverInfo` nesting inside `_meta` in wave 4 | ACCEPTED and strengthened | Plan 09 Task 3 does the move AND makes the key server-OWNED (overwritten), which Gemini did not ask for but Codex correctly did. |
+| 3 | Auto-derive `_meta.clientCapabilities` from `ClientHostRegistry` | ACCEPTED | Already in plan 05; now paired with the era-aware `assert_capability` fix that makes v2 calls possible at all. |
+| 4 | Preserve W3C trace context across MRTR rounds | ACCEPTED | Plan 05's `_meta` helper MERGES rather than replaces, with a unit test asserting a caller `traceparent` survives; plan 07's resend reuses the same params object. |
+
+### Deferred
+
+| Item | Reason |
+|---|---|
+| Cross-instance notification backend for `subscriptions/listen` | Out of scope this phase; the opt-in is documented and warned as single-instance/sticky-only (plan 10). Revisit if an enterprise user needs `listChanged` behind a load balancer. |
+| Typed `HandlerOutcome::InputRequired` replacing the `_meta` signal | Requires a public handler-trait signature change = MAJOR semver break. Recorded on `MRTR_SIGNAL_META_KEY` as the right shape for a future 3.0. |
+| PDMT todo generation per implementation plan | `pdmt` not installed in this workspace; GSD task `<acceptance_criteria>`/`<verify>` blocks carry the equivalent structure. Recorded in plan 01's environment checkpoint. |
+| PMAT quality-proxy MCP writes | Requires a long-running `pmat mcp-server --enable-quality-proxy` process outside a plan executor's control. Binding checks are `make quality-gate` and the CI PMAT job. |
+| External `../provable-contracts` YAML updates | Checkout VERIFIED absent from this workspace. Plan 01 records the environment; plan 12 runs the in-repo `pmat comply check --path .` instead, and updates the YAML only if the checkout has appeared. |
+
+### Wave restructuring
+
+Two ordering bugs the review exposed forced a recompute (6 waves → 7):
+
+| Plan | Was | Now | Reason |
+|---|---|---|---|
+| 05 | wave 2, `depends_on: [02]` | wave 3, `depends_on: [02, 04]` | The non-ASCII `Mcp-Name` live test needs plan 04's server-side sentinel decoder. |
+| 06 | wave 3 | wave 3 (unchanged) | — |
+| 07 | wave 3, `depends_on: [02, 05]` | wave 4, same deps | Follows 05's move; live MRTR tests relocated to plan 11. |
+| 08 | wave 4 | wave 4 (unchanged) | — |
+| 09 | wave 4 | wave 4 (unchanged) | — |
+| 10 | wave 5, `depends_on: [04, 08]` | wave 5, `depends_on: [04, 08, 09]` | The listen stream must route its ack/result through plan 09's envelope helpers. |
+| 11 | wave 5 | wave 5 (unchanged) | — |
+| 13 | — | wave 6, `depends_on: [05, 10]` | New plan closing HTTP-04's client half. |
+| 12 | wave 6 | wave 7, `depends_on` gains `113-13` | Terminal gate follows the new wave 6. |
+
+Same-wave `files_modified` overlap was re-checked after the move: no two plans in any wave share a file.
