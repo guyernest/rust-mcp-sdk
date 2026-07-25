@@ -4,13 +4,13 @@ milestone: v2.5
 milestone_name: MCP Spec 2026-07-28
 status: executing
 stopped_at: Completed 113-07-PLAN.md
-last_updated: "2026-07-25T19:39:42.422Z"
+last_updated: "2026-07-25T20:13:04.971Z"
 last_activity: 2026-07-25
 progress:
   total_phases: 71
   completed_phases: 57
   total_plans: 294
-  completed_plans: 288
+  completed_plans: 289
   percent: 80
 ---
 
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-07-22) · .planning/ROADMAP.md (v2.5 mil
 ## Current Position
 
 Phase: 113 (stateless-http-multi-round-trip-elicitation) — EXECUTING
-Plan: 8 of 13
+Plan: 9 of 13
 Status: Ready to execute
 Last activity: 2026-07-25
 
@@ -138,6 +138,10 @@ Decisions are logged in PROJECT.md Key Decisions table. Decisions framing this m
 - [Phase 113]: 113-07: a WithTools-only sampling handler answers an MRTR entry via project_with_tools_to_legacy — an inputResponses value is spec-typed as CreateMessageResult, while the v1 host response still carries the full CreateMessageResultWithTools (one pipeline, two renderers)
 - [Phase 113]: 113-07: D-113-E fixed — a v2 non-2xx whose body is a strict JSON-RPC 2.0 error envelope is fed through the normal response channel (so error.code is readable); v1 gated out by the transport v2_mode latch and byte-identical
 - [Phase 113]: 113-07: a missing or non-input_required resultType is TERMINAL, so Phase 114's "task" composes with the MRTR loop without touching it; rounds are counted per LOGICAL round and the resend always uses a fresh id plus splice_mrtr_params (stale-key-free)
+- [Phase 113]: 113-08: the resumability era gate is INDEPENDENT of the session gate — before this plan a v2 request reached no event store only INCIDENTALLY, via the session gate's zeroed response_session_id
+- [Phase 113]: 113-08: envelope_for_live_request(payload, live_id) is the ONE direct-response constructor on the HTTP transport — payload and id are separate arguments, so a cached envelope's stale id is structurally unconstructible
+- [Phase 113]: 113-08: the event store is type-erased on the crate-private ServerState (EventStoreHandle = Arc<dyn EventStore>), NOT on the public config field — widening that public field would be a MAJOR semver break (D-113-D)
+- [Phase 113]: 113-08: FOUND AND FIXED a real cross-caller bug — build_response selected its SSE destination stream from the RAW INBOUND Mcp-Session-Id, so a v2 POST naming a v1 caller's open session had its response delivered into THAT caller's stream (T-113-07) and written to the event store on the way (T-113-29/30); now gated on sessions_on
 
 ### Pending Todos
 
@@ -178,7 +182,7 @@ Items deferred by design for this milestone (design §7 / REQUIREMENTS v2):
 
 ## Session Continuity
 
-Last session: 2026-07-25T19:39:42.409Z
+Last session: 2026-07-25T20:12:57.215Z
 Stopped at: Completed 113-07-PLAN.md
 Resume file: None
 
@@ -219,3 +223,4 @@ Resume file: None
 | Phase 113 P05 | 105min | 3 tasks | 6 files |
 | Phase 113 P06 | 95min | 3 tasks | 7 files |
 | Phase 113 P07 | 41min | 3 tasks tasks | 6 files files |
+| Phase 113 P08 | 25min | 2 tasks | 2 files |
