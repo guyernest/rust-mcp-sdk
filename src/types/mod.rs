@@ -9,6 +9,7 @@ pub mod completable;
 pub mod content;
 pub mod elicitation;
 pub mod jsonrpc;
+pub mod mrtr;
 pub mod notifications;
 pub mod prompts;
 pub mod protocol;
@@ -47,6 +48,12 @@ pub use elicitation::{
     ElicitAction, ElicitRequestParams, ElicitResult, ElicitationCompleteNotification,
 };
 pub use jsonrpc::{JSONRPCError, JSONRPCNotification, JSONRPCRequest, JSONRPCResponse, RequestId};
+// NARROW re-export: only the handler-AUTHORING and client-facing RESULT types.
+// Every MRTR parsing/plumbing helper stays `pub(crate)` (Phase-113 D-10).
+pub use mrtr::{
+    InputRequest, InputRequestKind, InputRequests, InputRequiredResult, InputResponse,
+    InputResponses, MrtrOutcome, MrtrSignal,
+};
 pub use ui::{ToolUIMetadata, UIMimeType, UIResource, UIResourceContents};
 
 // MCP Apps Extension re-exports
