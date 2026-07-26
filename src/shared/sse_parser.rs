@@ -171,11 +171,28 @@ impl SseParser {
         let mut events = Vec::new();
 
         while let Some(line_end) = self.buffer.find('\n') {
-            let line = if line_end > 0 && self.buffer.chars().nth(line_end - 1) == Some('\r') {
-                self.buffer[..line_end - 1].to_string()
+            // `line_end` is a BYTE index (`str::find` returns one). The CRLF
+            // check must therefore also be a BYTE check.
+            //
+            // It used to read `self.buffer.chars().nth(line_end - 1)`, which
+            // indexes by CHARACTER. On any buffer containing a multi-byte
+            // character the two disagree, so the check could report `'\r'` for
+            // a position that is not byte `line_end - 1`, and the slice that
+            // followed (`self.buffer[..line_end - 1]`) then cut INSIDE a
+            // character and PANICKED — on bytes supplied by a remote server.
+            // Found by `client::subscriptions`'s arbitrary-bytes property test
+            // (Phase 113-13, T-113-67); `feed_never_panics_on_arbitrary_text`
+            // below is the permanent guard.
+            //
+            // `\n` and `\r` are ASCII, so both `line_end` and `line_end - 1`
+            // (taken only when that byte IS `\r`) are guaranteed char
+            // boundaries.
+            let line_start_len = if line_end > 0 && self.buffer.as_bytes()[line_end - 1] == b'\r' {
+                line_end - 1
             } else {
-                self.buffer[..line_end].to_string()
+                line_end
             };
+            let line = self.buffer[..line_start_len].to_string();
 
             if let Some(event) = self.process_line(&line) {
                 events.push(event);
@@ -483,6 +500,54 @@ mod tests {
         assert!(stream.contains("data: pong"));
         assert!(stream.contains("id: 42"));
         assert!(stream.contains("retry: 1000"));
+    }
+
+    /// Regression: a multi-byte character before the first `\n`, with a `\r`
+    /// later in the buffer, used to PANIC with "byte index N is not a char
+    /// boundary".
+    ///
+    /// The old CRLF check indexed by CHARACTER (`chars().nth(line_end - 1)`)
+    /// while `line_end` is a BYTE index, so it reported `'\r'` for a position
+    /// that was actually inside `'\u{2602}'`, and the slice that followed cut
+    /// mid-character. These bytes come off the wire from a remote server, so
+    /// the panic was a remote-triggerable client crash (T-113-67).
+    #[test]
+    fn feed_does_not_panic_on_a_multibyte_char_before_a_later_cr() {
+        let mut parser = SseParser::new();
+        // bytes: 0..2 = '\u{2602}', 3 = '\n', 4 = '\r', 5 = 'X', 6 = '\n'.
+        // `find('\n')` is 3 and `chars().nth(2)` was `'\r'` — the disagreement.
+        let events = parser.feed("\u{2602}\n\rX\n");
+        assert!(
+            events.is_empty(),
+            "neither line carries data, so nothing dispatches: {events:?}"
+        );
+    }
+
+    /// A CRLF-terminated line still has its `\r` stripped, and a multi-byte
+    /// payload survives intact.
+    #[test]
+    fn feed_strips_crlf_and_preserves_multibyte_data() {
+        let mut parser = SseParser::new();
+        let events = parser.feed("data: \u{2602}-\u{4f60}\u{597d}\r\n\r\n");
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].data, "\u{2602}-\u{4f60}\u{597d}");
+    }
+
+    proptest::proptest! {
+        /// `feed` runs on bytes a remote peer chose. It must never panic, for
+        /// ANY text, at ANY chunk split.
+        #[test]
+        fn feed_never_panics_on_arbitrary_text(
+            chunks in proptest::collection::vec(
+                "(\\PC|\r|\n|\u{2602}|\u{4f60}){0,40}",
+                0..4,
+            ),
+        ) {
+            let mut parser = SseParser::new();
+            for chunk in chunks {
+                let _ = parser.feed(&chunk);
+            }
+        }
     }
 
     #[test]
