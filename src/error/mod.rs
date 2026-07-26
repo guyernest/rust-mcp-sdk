@@ -123,8 +123,21 @@ pub const MRTR_ROUND_LIMIT_MARKER: &str = "MrtrRoundLimitExceeded";
 /// Carried in the error's `data.pmcpError`. See [`MRTR_ROUND_LIMIT_MARKER`].
 pub const MRTR_INPUT_REQUIRED_MARKER: &str = "InputRequiredUnfulfilled";
 
+/// The stable programmatic identity of [`Error::retired_on_v2`].
+///
+/// Carried in the error's `data.pmcpError`. It is the discriminator
+/// [`Error::is_retired_on_v2`] matches on, so it is part of the crate's
+/// compatibility surface: **do not change this string**.
+pub const RETIRED_ON_V2_MARKER: &str = "RetiredOnV2";
+
 /// The `data` member both MRTR markers ride under.
 const PMCP_ERROR_KEY: &str = "pmcpError";
+
+/// The `data` member carrying the retired method's name.
+const RETIRED_METHOD_KEY: &str = "method";
+
+/// The `data` member carrying the replacement API's name.
+const RETIRED_REPLACEMENT_KEY: &str = "replacement";
 
 /// The `data` member carrying the exceeded round limit.
 const MRTR_LIMIT_KEY: &str = "limit";
@@ -536,6 +549,86 @@ impl Error {
         serde_json::from_value(payload.clone()).ok()
     }
 
+    /// A method the 2026-07-28 schema RETIRED was called on a v2 connection
+    /// (Phase 113, HTTP-04).
+    ///
+    /// `resources/subscribe` and `resources/unsubscribe` are gone from the v2
+    /// schema, and a pmcp v2 server answers both with `404` + `-32601`. Rather
+    /// than perform that pointless round trip and hand back an opaque
+    /// method-not-found, the client fails fast LOCALLY with this error, whose
+    /// message names the replacement API.
+    ///
+    /// Like the two MRTR client-local errors above, this rides the existing
+    /// [`Error::Protocol`] variant discriminated by a marker in
+    /// `data.pmcpError`, because [`Error`] is not `#[non_exhaustive]` and a new
+    /// variant would be a MAJOR semver break. Don't "fix" it into one.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use pmcp::Error;
+    ///
+    /// let err = Error::retired_on_v2("resources/subscribe", "subscriptions/listen");
+    /// assert!(err.is_retired_on_v2());
+    /// assert_eq!(err.retired_method().as_deref(), Some("resources/subscribe"));
+    /// assert!(err.to_string().contains("subscriptions/listen"));
+    /// assert!(!Error::internal("nope").is_retired_on_v2());
+    /// ```
+    #[must_use]
+    pub fn retired_on_v2(method: &str, replacement: &str) -> Self {
+        Self::Protocol {
+            // The field is `ErrorCode`, not a bare `i32` — the value comes from
+            // the centralized VERS-06 table and is WRAPPED here. `-32601` is the
+            // code the SERVER would have answered with; producing it locally
+            // keeps a caller that already branches on method-not-found working.
+            code: ErrorCode::METHOD_NOT_FOUND,
+            message: format!(
+                "{method} was removed in MCP 2026-07-28 and this connection speaks that version; \
+                 use {replacement} instead (Client::subscriptions_listen)"
+            ),
+            data: Some(serde_json::json!({
+                PMCP_ERROR_KEY: RETIRED_ON_V2_MARKER,
+                RETIRED_METHOD_KEY: method,
+                RETIRED_REPLACEMENT_KEY: replacement,
+            })),
+        }
+    }
+
+    /// Whether this is the [`Error::retired_on_v2`] local fail-fast.
+    #[must_use]
+    pub fn is_retired_on_v2(&self) -> bool {
+        self.pmcp_error_marker() == Some(RETIRED_ON_V2_MARKER)
+    }
+
+    /// The retired method name, for an [`Error::retired_on_v2`]; `None` for any
+    /// other error.
+    #[must_use]
+    pub fn retired_method(&self) -> Option<String> {
+        if !self.is_retired_on_v2() {
+            return None;
+        }
+        Some(
+            self.protocol_data()?
+                .get(RETIRED_METHOD_KEY)?
+                .as_str()?
+                .to_string(),
+        )
+    }
+
+    /// The replacement API a caller should use instead of the retired method.
+    #[must_use]
+    pub fn retired_replacement(&self) -> Option<String> {
+        if !self.is_retired_on_v2() {
+            return None;
+        }
+        Some(
+            self.protocol_data()?
+                .get(RETIRED_REPLACEMENT_KEY)?
+                .as_str()?
+                .to_string(),
+        )
+    }
+
     /// The `data` object of an [`Error::Protocol`], if it has one.
     fn protocol_data(&self) -> Option<&serde_json::Map<String, serde_json::Value>> {
         match self {
@@ -689,6 +782,57 @@ mod tests {
         fn markers_are_stable_strings() {
             assert_eq!(MRTR_ROUND_LIMIT_MARKER, "MrtrRoundLimitExceeded");
             assert_eq!(MRTR_INPUT_REQUIRED_MARKER, "InputRequiredUnfulfilled");
+            assert_eq!(RETIRED_ON_V2_MARKER, "RetiredOnV2");
+        }
+    }
+
+    /// The v2 retired-RPC local fail-fast (Phase 113, HTTP-04).
+    mod retired_on_v2 {
+        use super::*;
+
+        #[test]
+        fn it_is_identifiable_and_carries_both_names() {
+            let err = Error::retired_on_v2("resources/subscribe", "subscriptions/listen");
+            assert!(err.is_retired_on_v2());
+            assert_eq!(err.retired_method().as_deref(), Some("resources/subscribe"));
+            assert_eq!(
+                err.retired_replacement().as_deref(),
+                Some("subscriptions/listen")
+            );
+        }
+
+        /// The message must be ACTIONABLE: it names the replacement API, which
+        /// is the whole reason this beats the server's opaque `-32601`.
+        #[test]
+        fn the_message_names_the_replacement() {
+            let err = Error::retired_on_v2("resources/unsubscribe", "subscriptions/listen");
+            let message = err.to_string();
+            assert!(message.contains("subscriptions/listen"), "{message}");
+            assert!(message.contains("resources/unsubscribe"), "{message}");
+        }
+
+        /// It rides `Error::Protocol` with a WRAPPED code — no new enum
+        /// variant, because `Error` is not `#[non_exhaustive]`.
+        #[test]
+        fn it_rides_the_protocol_variant_with_method_not_found() {
+            let err = Error::retired_on_v2("resources/subscribe", "subscriptions/listen");
+            assert!(matches!(err, Error::Protocol { .. }));
+            assert_eq!(err.error_code(), Some(ErrorCode::METHOD_NOT_FOUND));
+        }
+
+        /// The predicates must not fire on unrelated errors, including the two
+        /// sibling MRTR markers.
+        #[test]
+        fn other_errors_are_not_mistaken_for_it() {
+            for err in [
+                Error::internal("nope"),
+                Error::protocol(ErrorCode::METHOD_NOT_FOUND, "Method not found: whatever"),
+                Error::mrtr_round_limit_exceeded(3),
+            ] {
+                assert!(!err.is_retired_on_v2(), "{err}");
+                assert!(err.retired_method().is_none());
+                assert!(err.retired_replacement().is_none());
+            }
         }
     }
 }

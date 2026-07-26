@@ -607,6 +607,26 @@ impl<T: Transport> Client<T> {
         self.era() == crate::types::protocol::Era::V2
     }
 
+    /// Refuse a method the 2026-07-28 schema RETIRED, on a v2 connection
+    /// (Phase 113, HTTP-04).
+    ///
+    /// `resources/subscribe` and `resources/unsubscribe` no longer exist on the
+    /// v2 wire, and plan 10 made pmcp's own server answer both with `404` +
+    /// `-32601`. Sending them anyway costs a round trip and yields an opaque
+    /// method-not-found; failing here yields a typed error that NAMES the
+    /// replacement (T-113-68).
+    ///
+    /// On v1 this is a no-op, so the legacy path stays byte-identical.
+    fn reject_if_retired_on_v2(&self, method: &str) -> Result<()> {
+        if self.is_v2() {
+            return Err(Error::retired_on_v2(
+                method,
+                crate::types::subscriptions::SUBSCRIPTIONS_LISTEN_METHOD,
+            ));
+        }
+        Ok(())
+    }
+
     /// The `InitializeResult` a v2 client returns from its handshake-free
     /// [`Self::initialize`].
     ///
@@ -2254,14 +2274,31 @@ impl<T: Transport> Client<T> {
     /// # }
     /// ```
     ///
+    /// # v2 behavior (2026-07-28)
+    ///
+    /// `resources/subscribe` was REMOVED from the 2026-07-28 schema and replaced
+    /// by the `subscriptions/listen` stream. On a connection that opted into
+    /// that version this method sends NOTHING and returns
+    /// [`Error::retired_on_v2`](crate::Error::retired_on_v2) immediately — a
+    /// v2 server answers the retired RPC with `404` + `-32601`, so the round
+    /// trip can only fail. Use
+    /// [`Client::subscriptions_listen`](Self::subscriptions_listen) with
+    /// [`SubscriptionFilter::resource_subscriptions`](crate::types::subscriptions::SubscriptionFilter::resource_subscriptions)
+    /// instead. The v1 path below is unchanged.
+    ///
     /// # Errors
     ///
     /// Returns an error if:
+    /// - The connection speaks 2026-07-28 (see **v2 behavior** above)
     /// - The client is not initialized
     /// - The server doesn't support resource subscriptions
     /// - The resource URI doesn't exist
     /// - Network or protocol errors occur
     pub async fn subscribe_resource(&self, uri: String) -> Result<()> {
+        // BEFORE `ensure_initialized` and before `assert_capability`: the era is
+        // a property of the connection, and neither of those checks is
+        // meaningful for a method the wire no longer defines.
+        self.reject_if_retired_on_v2("resources/subscribe")?;
         self.ensure_initialized()?;
         self.assert_capability("resources", "resources/subscribe")?;
 
@@ -2318,14 +2355,28 @@ impl<T: Transport> Client<T> {
     /// # }
     /// ```
     ///
+    /// # v2 behavior (2026-07-28)
+    ///
+    /// `resources/unsubscribe` was REMOVED from the 2026-07-28 schema along with
+    /// `resources/subscribe`. On a connection that opted into that version this
+    /// method sends NOTHING and returns
+    /// [`Error::retired_on_v2`](crate::Error::retired_on_v2) immediately.
+    /// Unsubscribing on v2 means DROPPING the
+    /// [`SubscriptionStream`](crate::client::subscriptions::SubscriptionStream)
+    /// returned by [`Client::subscriptions_listen`](Self::subscriptions_listen),
+    /// which closes the connection and releases the server's registry slot. The
+    /// v1 path below is unchanged.
+    ///
     /// # Errors
     ///
     /// Returns an error if:
+    /// - The connection speaks 2026-07-28 (see **v2 behavior** above)
     /// - The client is not initialized
     /// - The server doesn't support resource subscriptions
     /// - The resource URI was not previously subscribed to
     /// - Network or protocol errors occur
     pub async fn unsubscribe_resource(&self, uri: String) -> Result<()> {
+        self.reject_if_retired_on_v2("resources/unsubscribe")?;
         self.ensure_initialized()?;
         self.assert_capability("resources", "resources/unsubscribe")?;
 
@@ -6456,6 +6507,100 @@ mod tests {
             let error = futures::executor::block_on(client.server_discover())
                 .expect_err("server/discover does not exist on v1");
             assert!(error.to_string().contains("2026-07-28"), "{error}");
+        }
+
+        // ---- the retired subscription RPCs (Phase 113-13, HTTP-04) ---------
+
+        /// A v2 `subscribe_resource` fails LOCALLY: nothing reaches the wire.
+        ///
+        /// The send counters are the proof. The typed counter is `0` because v2
+        /// never uses the typed path, and the RAW counter is `0` because the
+        /// gate returns before `dispatch_request` is ever reached — an
+        /// un-gated method WOULD have pushed a body there (see
+        /// `a_v2_request_travels_as_a_raw_frame_carrying_meta` above).
+        #[test]
+        fn v2_subscribe_resource_is_retired_and_sends_nothing() {
+            for method in ["resources/subscribe", "resources/unsubscribe"] {
+                let transport = ModeRecordingTransport::http_like();
+                let raw = transport.raw_bodies.clone();
+                let typed = transport.typed_sends.clone();
+                let client = ClientBuilder::new(transport)
+                    .with_protocol_version(v2())
+                    .expect("selectable")
+                    .build();
+
+                let uri = "mem://greeting".to_string();
+                let error = if method == "resources/subscribe" {
+                    futures::executor::block_on(client.subscribe_resource(uri))
+                } else {
+                    futures::executor::block_on(client.unsubscribe_resource(uri))
+                }
+                .expect_err("the method is gone from the 2026-07-28 schema");
+
+                assert!(error.is_retired_on_v2(), "{method}: {error}");
+                assert_eq!(error.retired_method().as_deref(), Some(method));
+                assert!(
+                    error.to_string().contains("subscriptions/listen"),
+                    "{method}: the error names the replacement: {error}"
+                );
+                assert_eq!(
+                    raw.lock().unwrap().len(),
+                    0,
+                    "{method}: NO raw frame may reach the transport"
+                );
+                assert_eq!(
+                    *typed.lock().unwrap(),
+                    0,
+                    "{method}: NO typed frame may reach the transport either"
+                );
+            }
+        }
+
+        /// A v1 `subscribe_resource` is byte-identical to today: it still sends
+        /// exactly one typed request, with the same capability assertion.
+        #[test]
+        fn v1_subscribe_resource_still_sends_exactly_one_request() {
+            for method in ["resources/subscribe", "resources/unsubscribe"] {
+                let transport = ModeRecordingTransport::default();
+                let raw = transport.raw_bodies.clone();
+                let typed = transport.typed_sends.clone();
+                let mut client = ClientBuilder::new(transport).build();
+
+                // A v1 client learns capabilities from `initialize`; short-circuit
+                // that here so the capability assertion passes and the send path
+                // is reached.
+                client.initialized = true;
+                client.server_capabilities = Some(ServerCapabilities {
+                    resources: Some(crate::types::ResourceCapabilities {
+                        subscribe: Some(true),
+                        list_changed: Some(true),
+                    }),
+                    ..ServerCapabilities::default()
+                });
+
+                let uri = "mem://greeting".to_string();
+                // `receive` errors, so the call fails AFTER the send — which is
+                // exactly the observation this test wants.
+                let result = if method == "resources/subscribe" {
+                    futures::executor::block_on(client.subscribe_resource(uri))
+                } else {
+                    futures::executor::block_on(client.unsubscribe_resource(uri))
+                };
+
+                assert!(
+                    !result.as_ref().err().is_some_and(Error::is_retired_on_v2),
+                    "{method}: v1 must NOT be gated: {result:?}"
+                );
+                assert_eq!(
+                    *typed.lock().unwrap(),
+                    1,
+                    "{method}: v1 still sends exactly one typed request"
+                );
+                assert!(
+                    raw.lock().unwrap().is_empty(),
+                    "{method}: v1 never uses the raw path"
+                );
+            }
         }
     }
 }
