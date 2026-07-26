@@ -455,3 +455,53 @@ cargo +nightly fuzz run auth_flows \
 
 If it no longer reproduces, delete the artifact. If it does, it is a live
 untriaged crash in an AUTH code path and deserves its own phase item.
+
+---
+
+## D-113-I — `with_native_roots()` panics the SDK when the OS trust store hiccups
+
+**Found during:** the phase-113 post-merge test gate (orchestrator, after plan 16)
+**Severity:** MEDIUM — turns a transient OS condition into 14 hard test failures,
+and would panic a real client the same way
+**Owner:** unassigned — pre-existing, untouched by any Phase-113 plan
+
+`StreamableHttpTransport`'s constructor does
+
+```rust
+hyper_rustls::HttpsConnectorBuilder::new()
+    .with_native_roots()
+    .expect("Failed to load native root certificates")
+```
+
+at `src/shared/streamable_http.rs:374`. When macOS Keychain returns
+`Os { code: -36 }` (`ioErr`) for user/admin/system trust settings — which it does
+under full-suite concurrency in one particular long-lived checkout — that
+`.expect()` **panics** instead of surfacing a `Result`. Observed failure text:
+
+```
+Failed to load native root certificates: Custom { kind: NotFound, error:
+"no native root CA certificates found (errors: [ ... failed to load user trust
+settings, kind: Os(Error { code: -36, message: \"I/O error.\" }) ... ])" }
+```
+
+**Proven NOT a Phase-113 regression.** Complete 2x2, same machine, minutes apart:
+
+| source tree | main checkout | clean worktree |
+|---|---|---|
+| plan-16 reverted (`9e685d04` content) | FAIL 14 | PASS 2158/2158 |
+| HEAD `84fe84cc` | FAIL 14 | PASS 2161/2161 |
+
+Reverting plan 16's only compiled change does not fix it; the identical source
+passes in a different directory. The same main checkout passed these very tests
+in the wave-1 gate earlier the same day, so the checkout degraded partway
+through the session. Failure is load-dependent: the 23-test group alone passes,
+the 2161-test suite fails reliably.
+
+**Two separable follow-ups for the owner:**
+
+1. *Environmental* — why can this working directory no longer read macOS trust
+   settings under concurrent load? Not reproducible from `/private/tmp`.
+2. *Code robustness* — `.expect()` on OS trust-store loading is the wrong
+   failure mode for a library. Returning `Error` would degrade gracefully
+   instead of panicking. Out of scope for every Phase-113 plan (none of them
+   declare `src/shared/streamable_http.rs`), so recorded rather than fixed.
