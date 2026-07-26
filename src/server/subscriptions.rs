@@ -37,6 +37,7 @@ use crate::types::subscriptions::{
     subscription_kind_of, tag_notification_with_subscription_id, SubscriptionFilter,
 };
 use crate::types::{protocol::ResourceUpdatedParams, RequestId, ServerNotification};
+use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -553,25 +554,26 @@ impl ListenRegistry {
             .try_acquire_owned()
             .map_err(|_| ListenRejection::PerPrincipalLimit)?;
 
-        let generation = {
+        // Both of these are computed BEFORE the write guard: the guard is the
+        // one lock `fan_out` contends with, so it should cover the occupancy
+        // decision and nothing else. Burning a generation on a rejected
+        // registration is harmless — the token only has to be unique and
+        // increasing, never dense.
+        let generation = self.next_generation.fetch_add(1, Ordering::Relaxed);
+        let stored_key = key.clone();
+        {
             // ONE guard covers both the occupancy question and the answer, so
             // no concurrent registration can slip between them.
-            let mut entries = self.entries.write();
-            if entries.contains_key(&key) {
-                return Err(ListenRejection::DuplicateSubscriptionId);
-            }
-            let generation = self.next_generation.fetch_add(1, Ordering::Relaxed);
-            entries.insert(
-                key.clone(),
-                ListenEntry {
+            match self.entries.write().entry(stored_key) {
+                Entry::Occupied(_) => return Err(ListenRejection::DuplicateSubscriptionId),
+                Entry::Vacant(slot) => slot.insert(ListenEntry {
                     sender,
                     filter,
                     terminal,
                     generation,
-                },
-            );
-            generation
-        };
+                }),
+            };
+        }
         Ok(ListenGuard {
             key,
             generation,
@@ -643,12 +645,21 @@ impl ListenRegistry {
                     .try_send(ListenFrame::Message(frame.to_string()))
                     .is_err()
                 {
-                    // `Closed` — the subscriber is already gone and its guard
-                    // will (or did) clean up. `Full` cannot happen: the capacity
-                    // check above ran under the same read lock.
+                    // Almost always `Closed` — the subscriber is already gone
+                    // and its guard will (or did) clean up.
+                    //
+                    // `Full` is RARE but not impossible: the capacity check above
+                    // runs under a READ guard, which is SHARED, so two concurrent
+                    // fan-outs can both observe the same free slot and both send.
+                    // Nothing is corrupted when that happens — the frame is
+                    // dropped and the next fan-out sees the entry as overflowed —
+                    // but it can consume the slot reserved for the terminal
+                    // overflow notice, so that notice is best-effort rather than
+                    // guaranteed.
                     tracing::debug!(
                         target: "mcp.subscriptions",
-                        "listen stream closed before delivery; skipping"
+                        "listen frame not delivered (stream closed, or the buffer filled \
+                         between the capacity check and the send); skipping"
                     );
                 }
             }
@@ -672,17 +683,9 @@ impl ListenRegistry {
     /// observed when the entry was seen full, and a disconnect that arrives
     /// after that entry was already replaced removes NOTHING (T-113-71).
     fn disconnect_overflowed(&self, key: &ListenKey, generation: u64) {
-        // Scoped so the write guard is released BEFORE the `try_send` below —
-        // the notice must never be queued while holding the entries lock.
-        let removed = {
-            let mut entries = self.entries.write();
-            if entries.get(key).is_some_and(|e| e.generation == generation) {
-                entries.remove(key)
-            } else {
-                None
-            }
-        };
-        let Some(entry) = removed else {
+        // `take_entry` releases the write guard before returning, so the
+        // `try_send` below never runs while holding the entries lock.
+        let Some(entry) = self.take_entry(key, generation) else {
             return;
         };
         let _ = entry
@@ -712,21 +715,36 @@ impl ListenRegistry {
         }
     }
 
-    /// Remove one entry, but ONLY while it still carries `generation`.
+    /// Take one entry, but ONLY while it still carries `generation`.
     ///
-    /// A successor at the same key must SURVIVE. The two teardown paths both run
-    /// after an arbitrary delay — a guard drops when its SSE stream future
-    /// finally unwinds, and an overflow disconnect is computed from a scan that
-    /// has already released its lock — so by the time either arrives the key may
+    /// This is the single ownership predicate BOTH teardown paths share
+    /// ([`ListenGuard::drop`] via [`Self::remove_entry`], and
+    /// [`Self::disconnect_overflowed`]) — written once because it is the whole
+    /// correctness argument for T-113-70/71 and the two must never diverge.
+    ///
+    /// A successor at the same key must SURVIVE. Both teardown paths run after
+    /// an arbitrary delay — a guard drops when its SSE stream future finally
+    /// unwinds, and an overflow disconnect is computed from a scan that has
+    /// already released its lock — so by the time either arrives the key may
     /// legitimately belong to somebody else. Comparing the token first is what
-    /// makes the removal ownership-scoped rather than key-scoped (T-113-70).
+    /// makes the removal ownership-scoped rather than key-scoped.
+    ///
+    /// The write guard is released before returning, so the caller drops the
+    /// returned entry's `Sender` OUTSIDE the lock.
+    fn take_entry(&self, key: &ListenKey, generation: u64) -> Option<ListenEntry> {
+        let mut entries = self.entries.write();
+        if entries.get(key).is_some_and(|e| e.generation == generation) {
+            entries.remove(key)
+        } else {
+            None
+        }
+    }
+
+    /// Remove one entry, but ONLY while it still carries `generation`.
     ///
     /// Called only by [`ListenGuard::drop`]; there is no public `unregister`.
     fn remove_entry(&self, key: &ListenKey, generation: u64) {
-        let mut entries = self.entries.write();
-        if entries.get(key).is_some_and(|e| e.generation == generation) {
-            entries.remove(key);
-        }
+        drop(self.take_entry(key, generation));
     }
 
     /// Drop a principal's semaphore once nothing references it, so the map does
@@ -945,6 +963,37 @@ mod tests {
 
         type Opened = (ListenGuard, tokio::sync::mpsc::Receiver<ListenFrame>);
 
+        /// The key `open(registry, principal, id, ..)` registers under.
+        ///
+        /// `open` builds its key by calling this, so a test that targets a key
+        /// directly can never drift from the key that was actually registered —
+        /// a drift that would fail SILENTLY, since the tests asserting on it
+        /// assert that a removal removes NOTHING.
+        fn key_for(principal: &str, id: i64) -> ListenKey {
+            ListenKey {
+                principal: principal.to_string(),
+                request_id: RequestId::Number(id),
+            }
+        }
+
+        /// Reach the eviction the way PRODUCTION does: fill the bounded channel
+        /// by repeated fan-out until the overflow policy disconnects the
+        /// (single) registered subscriber. Exercises the real
+        /// `disconnect_overflowed` path rather than a synthetic removal.
+        ///
+        /// The `+ 8` overshoot is the margin past capacity that guarantees
+        /// eviction; it lives here so it exists in exactly one place.
+        fn overflow_the_only_subscriber(registry: &Arc<ListenRegistry>) {
+            for _ in 0..LISTEN_CHANNEL_CAPACITY + 8 {
+                registry.fan_out(&ServerNotification::ToolsChanged);
+            }
+            assert_eq!(
+                registry.live_streams(),
+                0,
+                "the overflow policy evicts the subscriber that fell behind"
+            );
+        }
+
         /// Open a stream exactly the way the transport does: create the channel,
         /// push the ack FIRST, then register.
         fn open(
@@ -956,12 +1005,12 @@ mod tests {
             let (tx, rx) = tokio::sync::mpsc::channel(LISTEN_CHANNEL_CAPACITY + 1);
             tx.try_send(ListenFrame::Message("{\"ack\":true}".to_string()))
                 .expect("a fresh channel has room for the acknowledgement");
-            let key = ListenKey {
-                principal: principal.to_string(),
-                request_id: RequestId::Number(id),
-            };
-            let guard =
-                registry.register(key, filter, tx, format!("{{\"id\":{id},\"result\":{{}}}}"))?;
+            let guard = registry.register(
+                key_for(principal, id),
+                filter,
+                tx,
+                format!("{{\"id\":{id},\"result\":{{}}}}"),
+            )?;
             Ok((guard, rx))
         }
 
@@ -1141,14 +1190,7 @@ mod tests {
             let registry = Arc::new(ListenRegistry::new());
             let (_guard, mut rx) = open(&registry, "slow", 1, tools_only()).expect("registers");
             // Fill the buffer without reading: the ack already took one slot.
-            for _ in 0..LISTEN_CHANNEL_CAPACITY + 8 {
-                registry.fan_out(&ServerNotification::ToolsChanged);
-            }
-            assert_eq!(
-                registry.live_streams(),
-                0,
-                "an overflowed subscriber is DISCONNECTED, not grown"
-            );
+            overflow_the_only_subscriber(&registry);
 
             // Drain: ack, then at most LISTEN_CHANNEL_CAPACITY frames, then the
             // terminal overflow comment, then end-of-stream.
@@ -1220,29 +1262,6 @@ mod tests {
         /// suite never exercised.
         mod entry_ownership {
             use super::*;
-
-            /// The key `open(registry, principal, id, ..)` registers under.
-            fn key_for(principal: &str, id: i64) -> ListenKey {
-                ListenKey {
-                    principal: principal.to_string(),
-                    request_id: RequestId::Number(id),
-                }
-            }
-
-            /// Reach the eviction the way PRODUCTION does: fill the bounded
-            /// channel by repeated fan-out until the overflow policy disconnects
-            /// the (single) registered subscriber. Exercises the real
-            /// `disconnect_overflowed` path rather than a synthetic removal.
-            fn overflow_the_only_subscriber(registry: &Arc<ListenRegistry>) {
-                for _ in 0..LISTEN_CHANNEL_CAPACITY + 8 {
-                    registry.fan_out(&ServerNotification::ToolsChanged);
-                }
-                assert_eq!(
-                    registry.live_streams(),
-                    0,
-                    "the overflow policy evicts the subscriber that fell behind"
-                );
-            }
 
             #[tokio::test]
             async fn duplicate_key_is_rejected_and_the_first_stream_survives() {

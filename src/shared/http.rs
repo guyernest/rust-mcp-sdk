@@ -1,7 +1,7 @@
 //! HTTP/SSE transport implementation for MCP.
 
 use crate::error::Result;
-use crate::shared::sse_parser::{SseConfig, SseParser};
+use crate::shared::sse_parser::SseParser;
 use crate::shared::{Transport, TransportMessage};
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -69,6 +69,18 @@ impl std::fmt::Debug for HttpTransport {
     }
 }
 
+/// Build the parser [`HttpTransport::connect_sse`]'s reader task feeds.
+///
+/// Named rather than inlined so a test can assert on the bound this transport
+/// ACTUALLY uses. Asserting on a separately-constructed `SseParser::new()` would
+/// pass no matter what the reader task were changed to.
+fn sse_reader_parser() -> SseParser {
+    // The SHARED default, deliberately: this transport carries arbitrary
+    // JSON-RPC results, so tightening its payload ceiling would be a behaviour
+    // change to a pre-existing exported transport.
+    SseParser::new()
+}
+
 /// Report an SSE line-buffer overflow, returning whether the reader task must
 /// end.
 ///
@@ -80,10 +92,8 @@ impl std::fmt::Debug for HttpTransport {
 /// would carry on as if nothing had happened — strictly worse than the
 /// unbounded-but-correct behaviour it replaced (T-113-78).
 ///
-/// The bound itself is deliberately left at the shared 1 MiB default: this
-/// transport carries arbitrary JSON-RPC results, so tightening its effective
-/// payload ceiling would be a behaviour change to a pre-existing exported
-/// transport.
+/// The bound itself is deliberately left at the shared 1 MiB default (see
+/// [`sse_reader_parser`]).
 ///
 /// A free function rather than an inline `if` so the condition is reachable from
 /// a test — the reader task owns a live `hyper::body::Incoming`, which cannot be
@@ -96,7 +106,7 @@ fn report_sse_line_overflow(parser: &SseParser) -> bool {
         "SSE stream sent a single line exceeding the {}-byte parser bound; the \
          oversized line was discarded, so the stream is corrupt and the \
          connection is being closed",
-        SseConfig::default().max_buffer_size
+        parser.max_buffer_size()
     );
     true
 }
@@ -170,13 +180,21 @@ impl HttpTransport {
                 *connected.write() = true;
 
                 let mut body = response.into_body();
-                let mut sse_parser = SseParser::new();
+                let mut sse_parser = sse_reader_parser();
+                // Bytes received but not yet decodable as complete UTF-8. A body
+                // frame boundary can fall in the MIDDLE of a multi-byte
+                // character, so decoding each chunk with `from_utf8_lossy` would
+                // corrupt any non-ASCII payload that straddles two frames. The
+                // shared incremental decoder retains the (≤3 byte) tail instead.
+                let mut undecoded: Vec<u8> = Vec::new();
 
                 while let Some(chunk) = body.frame().await {
                     match chunk {
                         Ok(frame) => {
                             if let Some(data) = frame.data_ref() {
-                                let text = String::from_utf8_lossy(data);
+                                undecoded.extend_from_slice(data);
+                                let text =
+                                    crate::shared::sse_parser::take_utf8_prefix(&mut undecoded);
                                 let events = sse_parser.feed(&text);
 
                                 if report_sse_line_overflow(&sse_parser) {
@@ -447,15 +465,20 @@ mod tests {
     /// `connect_sse` keeps the SHARED default bound — this transport carries
     /// arbitrary JSON-RPC results, so tightening its payload ceiling is a
     /// behaviour change it must not make.
+    ///
+    /// This asserts on `sse_reader_parser()`, the function the reader task
+    /// actually calls, so tightening the bound at that site FAILS here.
     #[test]
     fn connect_sse_keeps_the_shared_default_bound() {
-        let mut parser = SseParser::new();
+        use crate::shared::sse_parser::DEFAULT_MAX_BUFFER_SIZE;
+
+        let mut parser = sse_reader_parser();
+        assert_eq!(parser.max_buffer_size(), DEFAULT_MAX_BUFFER_SIZE);
         let _ = parser.feed(&"x".repeat(256));
         assert!(
             !report_sse_line_overflow(&parser),
             "256 bytes is nowhere near the 1 MiB default"
         );
-        assert_eq!(SseConfig::default().max_buffer_size, 1024 * 1024);
     }
 
     #[tokio::test]

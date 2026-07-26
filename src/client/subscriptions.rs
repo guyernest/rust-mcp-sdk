@@ -45,7 +45,7 @@
 
 use crate::error::{Error, ErrorCode, Result, TransportError};
 use crate::shared::http_constants::{CONTENT_TYPE, TEXT_EVENT_STREAM};
-use crate::shared::sse_parser::SseParser;
+use crate::shared::sse_parser::{take_utf8_prefix, SseParser};
 use crate::shared::StreamableHttpTransport;
 use crate::types::jsonrpc::RequestId;
 use crate::types::mrtr::META_KEY;
@@ -250,46 +250,6 @@ async fn read_next_frame(state: &mut PayloadState) -> Option<Error> {
     }
 }
 
-/// Split the longest decodable UTF-8 prefix off `buffer`, leaving the rest.
-///
-/// A chunk boundary can fall in the MIDDLE of a multi-byte character, so
-/// `String::from_utf8_lossy` per chunk would corrupt any non-ASCII resource URI
-/// travelling on the stream. An INCOMPLETE tail is retained for the next chunk;
-/// genuinely INVALID bytes are replaced with U+FFFD immediately, because
-/// retaining those forever would wedge the stream on hostile input (T-113-67).
-///
-/// The two cases are handled INDEPENDENTLY rather than "any invalid byte means
-/// decode the whole buffer lossily": a chunk that carries both an invalid byte
-/// AND a trailing incomplete character would otherwise have that trailing
-/// character replaced too, corrupting a legitimate multi-byte character that the
-/// next chunk was about to complete.
-fn take_utf8_prefix(buffer: &mut Vec<u8>) -> String {
-    let mut text = String::new();
-    loop {
-        let error = match std::str::from_utf8(buffer) {
-            Ok(valid) => {
-                text.push_str(valid);
-                buffer.clear();
-                return text;
-            },
-            Err(error) => error,
-        };
-        let valid_up_to = error.valid_up_to();
-        if let Ok(valid) = std::str::from_utf8(&buffer[..valid_up_to]) {
-            text.push_str(valid);
-        }
-        let Some(invalid_len) = error.error_len() else {
-            // "Unexpected end of input": an incomplete character the next chunk
-            // will finish. Keep exactly those bytes and yield what decoded.
-            buffer.drain(..valid_up_to);
-            return text;
-        };
-        // Never completable — emit the replacement character and skip past it.
-        text.push('\u{FFFD}');
-        buffer.drain(..valid_up_to + invalid_len);
-    }
-}
-
 /// Feed `chunk` to the SHARED SSE parser and return the payloads it completed.
 ///
 /// Keep-alive comment lines (`: ...`) never produce an event — the shared
@@ -324,9 +284,9 @@ fn listen_overflow(parser: &SseParser) -> Option<Error> {
     Some(Error::protocol(
         ErrorCode::INVALID_REQUEST,
         format!(
-            "the server sent a single subscriptions/listen line exceeding \
-             {MAX_LISTEN_LINE_BYTES} bytes; the oversized line was discarded and the \
-             stream was ended"
+            "the server sent a single subscriptions/listen line exceeding {} bytes; \
+             the oversized line was discarded and the stream was ended",
+            parser.max_buffer_size()
         ),
     ))
 }
@@ -612,38 +572,18 @@ fn decode_notification(mut cleaned: Value, payload: &str) -> Result<ServerNotifi
 // Internal support surface for `fuzz_targets/`.
 // ===========================================================================
 
-/// Run ONE untrusted chunk of listen-stream bytes through EXACTLY the decode a
-/// live [`SubscriptionStream`] performs, and report what each completed frame
-/// classified as.
+/// Run a SEQUENCE of untrusted listen-stream chunks through EXACTLY the decode a
+/// live [`SubscriptionStream`] performs, under an explicit line-buffer bound.
 ///
-/// `#[doc(hidden)]`: this is internal support surface for
+/// `#[doc(hidden)]`: internal support surface for
 /// `fuzz/fuzz_targets/subscription_listen_frames.rs`, NOT stable API. It exists
 /// because the decode path is private and a fuzz target may only reach public
 /// items — the same `#[doc(hidden)]` seam convention Phase 110 established for
 /// `cargo-pmcp`'s fuzz and example targets. Do not build on it.
 ///
 /// Errors are flattened to their `Display` string so no private type escapes.
-/// A terminal result contributes no entry.
-///
-/// Bounded at [`MAX_LISTEN_LINE_BYTES`], i.e. at exactly the bound a live listen
-/// stream uses — a default-bounded parser would decode the same bytes under a
-/// limit this path never applies.
-#[doc(hidden)]
-#[must_use]
-pub fn decode_listen_chunk_for_fuzz(
-    chunk: &[u8],
-    subscription_id: &str,
-) -> Vec<std::result::Result<ServerNotification, String>> {
-    decode_listen_chunks_for_fuzz(&[chunk], subscription_id, MAX_LISTEN_LINE_BYTES).0
-}
-
-/// Run a SEQUENCE of untrusted listen-stream chunks through EXACTLY the decode a
-/// live [`SubscriptionStream`] performs, under an explicit line-buffer bound.
-///
-/// `#[doc(hidden)]`: internal support surface for
-/// `fuzz/fuzz_targets/subscription_listen_frames.rs`, NOT stable API — the same
-/// convention as [`decode_listen_chunk_for_fuzz`], of which this is the
-/// multi-chunk, explicitly-bounded sibling. Do not build on it.
+/// A terminal result contributes no entry. Pass [`MAX_LISTEN_LINE_BYTES`] to
+/// decode under exactly the bound a live listen stream uses.
 ///
 /// Two things the single-chunk seam cannot express, and both matter to a fuzzer:
 ///
@@ -1051,11 +991,12 @@ mod tests {
         );
 
         let error = listen_overflow(&parser).expect("a discarded line ends the stream");
+        // The bound named is THIS parser's (64), not a re-derived constant. A
+        // message that reported `MAX_LISTEN_LINE_BYTES` here would be naming a
+        // limit this parser never had.
         assert!(
-            error
-                .to_string()
-                .contains(&MAX_LISTEN_LINE_BYTES.to_string()),
-            "the error names the limit, so an operator can act on it: {error}"
+            error.to_string().contains("64"),
+            "the error names the limit the parser actually enforced: {error}"
         );
         match error {
             Error::Protocol { code, .. } => {
@@ -1089,15 +1030,21 @@ mod tests {
         );
     }
 
-    /// The chunked fuzz seam reaches the overflow branch under a small bound and
-    /// the flag LATCHES — the contract `read_next_frame` relies on when it
-    /// decides to stop polling, and the invariant the libFuzzer campaign asserts
-    /// on every generated input (plan 113-16).
+    /// The chunked fuzz seam reaches the overflow branch under a small bound,
+    /// and reaches it by ACCUMULATION across chunks — the contract
+    /// `read_next_frame` relies on when it decides to stop polling.
+    ///
+    /// Note what is deliberately NOT asserted here: that the flag never clears
+    /// once set. `overflowed` has exactly two writes — `false` at construction
+    /// and `true` in `feed` — so no input can make it clear, and an assertion
+    /// over generated data cannot fail. The one decision that COULD change it
+    /// (that `reset()` leaves it alone) is pinned deterministically by
+    /// `sse_parser::tests::the_overflow_flag_latches`, which is its right level.
     #[test]
-    fn the_chunked_fuzz_seam_latches_overflow_and_never_clears_it() {
+    fn the_chunked_fuzz_seam_trips_the_bound_partway_through() {
         // 8 chunks of 16 newline-free bytes against a 64-byte bound: the bound
-        // trips partway through, not on the first chunk, so "latched" is
-        // distinguishable from "always true".
+        // trips partway through, not on the first chunk, so "tripped by
+        // accumulation" is distinguishable from "tripped immediately".
         let chunk = [b'x'; 16];
         let chunks: Vec<&[u8]> = vec![&chunk[..]; 8];
         let (outcomes, overflowed) = decode_listen_chunks_for_fuzz(&chunks, "sub-1", 64);
@@ -1114,11 +1061,6 @@ mod tests {
         assert!(
             overflowed.last().copied().unwrap_or_default(),
             "the bound is tripped by the end: {overflowed:?}"
-        );
-        let first_true = overflowed.iter().position(|seen| *seen).expect("tripped");
-        assert!(
-            overflowed[first_true..].iter().all(|seen| *seen),
-            "overflowed() must never clear once latched: {overflowed:?}"
         );
     }
 
@@ -1205,7 +1147,7 @@ mod tests {
         fn arbitrary_bytes_never_panic_the_decoder(
             bytes in proptest::collection::vec(proptest::prelude::any::<u8>(), 0..512),
         ) {
-            let _ = decode_listen_chunk_for_fuzz(&bytes, "prop-subscription");
+            let _ = decode_listen_chunks_for_fuzz(&[&bytes], "prop-subscription", MAX_LISTEN_LINE_BYTES);
         }
 
         /// And neither does arbitrary TEXT that looks more like SSE than random
@@ -1214,28 +1156,19 @@ mod tests {
         fn arbitrary_sse_shaped_text_never_panics_the_decoder(
             body in "(data|event|id|:|\\{|\\}|\"|a|1|\n){0,200}",
         ) {
-            let _ = decode_listen_chunk_for_fuzz(body.as_bytes(), "prop-subscription");
+            let _ = decode_listen_chunks_for_fuzz(&[body.as_bytes()], "prop-subscription", MAX_LISTEN_LINE_BYTES);
         }
 
-        /// The libFuzzer campaign's own invariants, held in-tree as a fast
-        /// regression: arbitrary bytes split into chunks against a TINY bound
-        /// never panic, and `overflowed()` never clears once latched (113-16).
+        /// The same non-panic invariant, but CHUNKED against a tiny bound so the
+        /// state carried across chunk boundaries — the undecoded-UTF-8 tail, the
+        /// SSE line buffer, and the overflow discard branch — is exercised too.
+        /// A split mid-character or mid-line is unreachable with one chunk.
         #[test]
-        fn chunked_arbitrary_bytes_never_panic_and_the_latch_never_clears(
+        fn chunked_arbitrary_bytes_never_panic_the_decoder(
             bytes in proptest::collection::vec(proptest::prelude::any::<u8>(), 0..512),
         ) {
             let chunks: Vec<&[u8]> = bytes.chunks(16).collect();
-            let (_, overflowed) =
-                decode_listen_chunks_for_fuzz(&chunks, "prop-subscription", 64);
-
-            let mut latched = false;
-            for seen in overflowed {
-                proptest::prop_assert!(
-                    seen || !latched,
-                    "overflowed() cleared after latching",
-                );
-                latched |= seen;
-            }
+            let _ = decode_listen_chunks_for_fuzz(&chunks, "prop-subscription", 64);
         }
     }
 

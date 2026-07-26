@@ -128,9 +128,62 @@ pub struct SseParser {
     overflowed: bool,
 }
 
+/// The default bound on ONE unterminated SSE line, in bytes (1 MiB).
+///
+/// Single source of truth for [`SseParser::new`] and [`SseConfig::default()`],
+/// so the two can never disagree. Reading it through `SseConfig::default()`
+/// would allocate that struct's `HashMap` and four `String`s just to fetch one
+/// `usize`, on a path taken once per SSE response.
+pub const DEFAULT_MAX_BUFFER_SIZE: usize = 1024 * 1024;
+
+/// Split the longest decodable UTF-8 prefix off `buffer`, leaving the rest.
+///
+/// The companion every INCREMENTAL feeder of [`SseParser`] needs, and the reason
+/// it lives beside the parser rather than beside one of them: a body chunk
+/// boundary can fall in the MIDDLE of a multi-byte character, so a per-chunk
+/// `String::from_utf8_lossy` corrupts any non-ASCII payload (a `file:///café.txt`
+/// resource URI, a non-Latin tool argument) that happens to straddle two frames.
+/// An INCOMPLETE tail is retained for the next chunk; genuinely INVALID bytes are
+/// replaced with U+FFFD immediately, because retaining those forever would wedge
+/// the stream on hostile input (T-113-67).
+///
+/// The two cases are handled INDEPENDENTLY rather than "any invalid byte means
+/// decode the whole buffer lossily": a chunk that carries both an invalid byte
+/// AND a trailing incomplete character would otherwise have that trailing
+/// character replaced too, corrupting a legitimate multi-byte character that the
+/// next chunk was about to complete.
+///
+/// The retained tail is at most 3 bytes, so this cannot grow without bound.
+pub(crate) fn take_utf8_prefix(buffer: &mut Vec<u8>) -> String {
+    let mut text = String::new();
+    loop {
+        let error = match std::str::from_utf8(buffer) {
+            Ok(valid) => {
+                text.push_str(valid);
+                buffer.clear();
+                return text;
+            },
+            Err(error) => error,
+        };
+        let valid_up_to = error.valid_up_to();
+        if let Ok(valid) = std::str::from_utf8(&buffer[..valid_up_to]) {
+            text.push_str(valid);
+        }
+        let Some(invalid_len) = error.error_len() else {
+            // "Unexpected end of input": an incomplete character the next chunk
+            // will finish. Keep exactly those bytes and yield what decoded.
+            buffer.drain(..valid_up_to);
+            return text;
+        };
+        // Never completable — emit the replacement character and skip past it.
+        text.push('\u{FFFD}');
+        buffer.drain(..valid_up_to + invalid_len);
+    }
+}
+
 impl SseParser {
-    /// Create a new SSE parser bounded by [`SseConfig::default()`]'s
-    /// `max_buffer_size` (1 MiB).
+    /// Create a new SSE parser bounded by [`DEFAULT_MAX_BUFFER_SIZE`] (1 MiB),
+    /// the same value [`SseConfig::default()`] carries.
     ///
     /// # Examples
     ///
@@ -142,7 +195,7 @@ impl SseParser {
     /// assert!(!parser.overflowed());
     /// ```
     pub fn new() -> Self {
-        Self::with_max_buffer_size(SseConfig::default().max_buffer_size)
+        Self::with_max_buffer_size(DEFAULT_MAX_BUFFER_SIZE)
     }
 
     /// Create a new SSE parser with an explicit line-buffer bound.
@@ -207,6 +260,25 @@ impl SseParser {
         self.overflowed
     }
 
+    /// The bound THIS parser was built with, in bytes.
+    ///
+    /// A caller reporting an overflow should name this rather than re-deriving
+    /// a bound from config: parsers on different paths are deliberately built
+    /// with different bounds, so a re-derived number can name a limit the
+    /// parser never had.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use pmcp::shared::sse_parser::SseParser;
+    ///
+    /// assert_eq!(SseParser::with_max_buffer_size(64).max_buffer_size(), 64);
+    /// ```
+    #[must_use]
+    pub fn max_buffer_size(&self) -> usize {
+        self.max_buffer_size
+    }
+
     /// Feed data to the parser and get parsed events.
     ///
     /// # Examples
@@ -238,16 +310,25 @@ impl SseParser {
         // `buffer` holds ONE unterminated line, and a REMOTE peer decides when
         // (or whether) that line ends. Bound it: when appending `data` would
         // push the buffer past `max_buffer_size` AND this chunk can complete no
-        // line at all (neither side carries a `\n`), the line is unbounded by
-        // construction — so DISCARD it and latch `overflowed` rather than grow.
+        // line at all, the line is unbounded by construction — so DISCARD it
+        // and latch `overflowed` rather than grow.
         //
-        // The "contains a `\n`" condition is what keeps a single legitimately
-        // large COMPLETE body working: such a body carries newlines and drains
-        // in the loop below, so it never trips the bound. The two whole-body
-        // `feed` call sites in the streamable-HTTP transport are therefore
+        // Only `data` has to be tested. The drain loop below runs to exhaustion
+        // (`drain(..=line_end)` consumes through each `\n`), and `process_line`
+        // never touches `buffer`, so every `feed` RETURNS with a newline-free
+        // buffer and it starts empty — an unterminated line is all it can hold.
+        // The question is therefore only whether THIS chunk can end that line.
+        //
+        // The `data` condition is what keeps a single legitimately large
+        // COMPLETE body working: such a body carries newlines and drains in the
+        // loop below, so it never trips the bound. The two whole-body `feed`
+        // call sites in the streamable-HTTP transport are therefore
         // behaviourally unchanged.
+        debug_assert!(
+            !self.buffer.contains('\n'),
+            "the drain loop leaves no newline in the buffer"
+        );
         if self.buffer.len().saturating_add(data.len()) > self.max_buffer_size
-            && !self.buffer.contains('\n')
             && !data.contains('\n')
         {
             self.overflowed = true;
@@ -292,6 +373,19 @@ impl SseParser {
             }
 
             self.buffer.drain(..=line_end);
+        }
+
+        // The pre-check above can only refuse a chunk that completes NO line, so
+        // a chunk that begins with `\n` and then carries megabytes of
+        // newline-free bytes sails past it: the drain loop consumes through that
+        // single `\n` and leaves the whole remainder as one unterminated line,
+        // arbitrarily larger than `max_buffer_size`. Re-check the RESIDUAL so the
+        // bound holds on what this call actually leaves behind, not only on what
+        // it was asked to add.
+        if self.buffer.len() > self.max_buffer_size {
+            self.overflowed = true;
+            self.buffer.clear();
+            self.current_event = EventBuilder::new();
         }
 
         events
@@ -493,7 +587,7 @@ impl Default for SseConfig {
 
         Self {
             retry: 3000,
-            max_buffer_size: 1024 * 1024, // 1MB
+            max_buffer_size: DEFAULT_MAX_BUFFER_SIZE,
             compression: false,
             headers,
         }
@@ -681,6 +775,33 @@ mod tests {
         let events = parser.feed(&"x".repeat(256));
         assert!(events.is_empty(), "an overflowing feed completes nothing");
         assert!(parser.overflowed());
+    }
+
+    /// A chunk that CONTAINS a newline skips the pre-check, so the bound has to
+    /// hold on the RESIDUAL the drain loop leaves behind. Without the residual
+    /// check a single `"\n" + 256 bytes` chunk parks 256 bytes in a 64-byte
+    /// parser — and a peer can repeat that with megabyte chunks.
+    #[test]
+    fn a_newline_prefixed_flood_still_trips_the_bound() {
+        let mut parser = SseParser::with_max_buffer_size(64);
+
+        let mut chunk = String::from("\n");
+        chunk.push_str(&"x".repeat(256));
+        let events = parser.feed(&chunk);
+
+        assert!(
+            events.is_empty(),
+            "the leading blank line dispatches nothing"
+        );
+        assert!(
+            parser.overflowed(),
+            "the residual unterminated line exceeds the bound and is discarded"
+        );
+
+        // The parser keeps working afterwards, exactly as after a pre-check trip.
+        let events = parser.feed("data: ok\n\n");
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].data, "ok");
     }
 
     /// A parser that never exceeds its bound behaves byte-identically to the
