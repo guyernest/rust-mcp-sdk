@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v2.5
 milestone_name: MCP Spec 2026-07-28
 status: executing
-stopped_at: Completed 113-10-PLAN.md
-last_updated: "2026-07-26T00:13:46.492Z"
-last_activity: 2026-07-25 -- Completed 113-10-PLAN.md (subscriptions/listen, HTTP-04)
+stopped_at: Completed 113-11-PLAN.md
+last_updated: "2026-07-26T00:58:12.801Z"
+last_activity: 2026-07-26 -- Completed 113-11-PLAN.md (sep-2322 conformance mirror + real-client MRTR + runnable examples)
 progress:
   total_phases: 71
   completed_phases: 57
   total_plans: 294
-  completed_plans: 291
+  completed_plans: 292
   percent: 80
 ---
 
@@ -26,9 +26,9 @@ See: .planning/PROJECT.md (updated 2026-07-22) · .planning/ROADMAP.md (v2.5 mil
 ## Current Position
 
 Phase: 113 (stateless-http-multi-round-trip-elicitation) — EXECUTING
-Plan: 11 of 13
+Plan: 12 of 13
 Status: Ready to execute
-Last activity: 2026-07-25 -- Completed 113-10-PLAN.md (subscriptions/listen, HTTP-04)
+Last activity: 2026-07-26 -- Completed 113-11-PLAN.md (sep-2322 conformance mirror + real-client MRTR + runnable examples)
 
 ## v2.5 Phase Plan (8 phases, 38 requirements)
 
@@ -147,6 +147,10 @@ Decisions are logged in PROJECT.md Key Decisions table. Decisions framing this m
 - [Phase 113]: 113-09: the declared-client-capability precheck is submode-aware (form vs URL elicitation, tool-augmented sampling) and runs BEFORE any minting, proven structurally by running it with codec:None so a mint attempt would fail differently; -32021 payload is a ClientCapabilities OBJECT, all-or-nothing
 - [Phase 113]: 113-09: serverInfo moved to result._meta["io.modelcontextprotocol/serverInfo"]; a TOP-LEVEL serverInfo is deliberately NOT owned because it is a real schema field of ServerDiscoverResult/InitializeResult, so server/discover carries both
 - [Phase 113]: 113-09: two plan verification commands matched ZERO tests and passed vacuously; each suite is now nested in a module named after the production symbol (mod mrtr_egress, mod inject_v2_result_envelope) so the filters select 21 and 16 tests
+- [Phase ?]: [Phase 113]: 113-11: the conformance manifest is GENERATED from 113-SPEC-RECHECK.md section B (pin a8651182, 23 sep-2322 check ids) and ENFORCED by manifest_maps_every_pinned_scenario, which re-reads both planning records at runtime -- an unmapped upstream scenario is a build-visible failure, verified negatively by breaking a mapping cell
+- [Phase ?]: [Phase 113]: 113-11: FOUND -- a handler-less pmcp client can NEVER receive an input_required from a pmcp server; registry-authoritative clientCapabilities (HOST-05) compose with the server's -32021 precheck (T-113-32) so the refusal happens first. The two D-06 tests use a DECLINING handler (the reachable path, identical shape) and client_server_mrtr_undeclared_capability_is_refused locks the composition
+- [Phase ?]: [Phase 113]: 113-11: conformance mirrors drive raw bytes via post while interoperability drives a real Client -- a Client inside a conformance assertion passes whenever both ends share a bug; the typed-error test OPENS the recovered requestState with the server's own key to prove it is the real minted continuation
+- [Phase ?]: [Phase 113]: 113-11: examples s47_v2_stateless_mrtr + s48_v2_mrtr_client keep the plan-pinned names despite colliding with the existing s47/s48 task examples (artifact contract); the printed round-1 and round-2 curl procedures were executed verbatim against a live server, so the example documentation is verified rather than asserted
 
 ### Pending Todos
 
@@ -187,8 +191,8 @@ Items deferred by design for this milestone (design §7 / REQUIREMENTS v2):
 
 ## Session Continuity
 
-Last session: 2026-07-26T00:13:46.469Z
-Stopped at: Completed 113-07-PLAN.md
+Last session: 2026-07-26T00:58:12.791Z
+Stopped at: Completed 113-11-PLAN.md
 Resume file: None
 
 ## Performance Metrics
@@ -231,3 +235,4 @@ Resume file: None
 | Phase 113 P08 | 25min | 2 tasks | 2 files |
 | Phase 113 P09 | 118min | 3 tasks | 7 files |
 | Phase 113 P10 | 60min | 3 tasks | 6 files |
+| Phase 113 P11 | 40min | 3 tasks | 6 files |

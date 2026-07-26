@@ -2307,7 +2307,7 @@ Plans:
 **Wave 5** *(blocked on Wave 4)*
 
 - [x] 113-10-PLAN.md — HTTP-04 server `subscriptions/listen`: subscription wire types locked from the spec checkpoint, the capability gate shared with the discover projection, the ack-first `(principal, RequestId)`-keyed SSE stream with a BOUNDED channel, RAII `ListenGuard` teardown and shared-envelope framing (opt-in, bounded per principal, documented instance-local), v2 retirement of `resources/subscribe`/`unsubscribe`, and the advertise-implies-serve tripwire
-- [ ] 113-11-PLAN.md — MRTR end to end: `113-CONFORMANCE-MANIFEST.md` generated from the PINNED conformance commit with a must-be-empty Unmapped section, a Rust mirror of every `sep-2322` scenario, a real-Client↔real-server multi-round exchange, and the runnable `examples/s47_v2_stateless_mrtr.rs` + `examples/s48_v2_mrtr_client.rs` pair
+- [x] 113-11-PLAN.md — MRTR end to end: `113-CONFORMANCE-MANIFEST.md` generated from the PINNED conformance commit with a must-be-empty Unmapped section, a Rust mirror of every `sep-2322` scenario, a real-Client↔real-server multi-round exchange, and the runnable `examples/s47_v2_stateless_mrtr.rs` + `examples/s48_v2_mrtr_client.rs` pair
 
 **Wave 6** *(blocked on Wave 5)*
 
@@ -2405,7 +2405,7 @@ Plans:
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 112. Version Plumbing Spine | 10/10 | Complete    | 2026-07-23 |
-| 113. Stateless HTTP + MRTR | 10/13 | In Progress|  |
+| 113. Stateless HTTP + MRTR | 11/13 | In Progress|  |
 | 114. Tasks Extension Migration | 0/TBD | Not started | - |
 | 115. JSON Schema 2020-12 + Caching Hints | 0/TBD | Not started | - |
 | 116. Auth Hardening SEPs | 0/TBD | Not started | - |
