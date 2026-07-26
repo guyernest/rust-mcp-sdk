@@ -184,8 +184,17 @@ impl StdioTransport {
     /// available. Returns:
     /// - `Ok(Some(bytes))` — one complete, non-empty line (trailing `\r`/`\n`
     ///   stripped);
-    /// - `Ok(None)` — EOF with no further complete line;
+    /// - `Ok(None)` — EOF with nothing left buffered;
     /// - `Err(InvalidMessage)` — an empty line (skipped per the MCP spec).
+    ///
+    /// # EOF with an unterminated tail
+    ///
+    /// A peer that writes a complete JSON-RPC frame and closes WITHOUT a
+    /// trailing newline leaves those bytes in `partial`. `read_line` — which
+    /// this replaced — returned them as the final message, so discarding them
+    /// here would silently drop the last frame of every such peer. The tail is
+    /// therefore delivered exactly once, and the next call sees an empty buffer
+    /// plus a `0`-byte read and reports EOF.
     ///
     /// Generic over the reader so the drop-mid-read cancel-safety property can
     /// be exercised in tests against an in-memory duplex pipe.
@@ -203,16 +212,7 @@ impl StdioTransport {
                 let mut line: Vec<u8> = partial.drain(..=idx).collect();
                 // Strip the trailing '\n' and an optional '\r'.
                 line.pop();
-                if line.last() == Some(&b'\r') {
-                    line.pop();
-                }
-                if line.is_empty() {
-                    // Skip empty lines (per MCP spec: newline-delimited frames).
-                    return Err(
-                        TransportError::InvalidMessage("Empty line received".to_string()).into(),
-                    );
-                }
-                return Ok(Some(line));
+                return Self::finish_line(line);
             }
 
             // No complete line yet — append more bytes into the PERSISTENT
@@ -223,9 +223,28 @@ impl StdioTransport {
                 .await
                 .map_err(TransportError::from)?;
             if bytes_read == 0 {
-                return Ok(None);
+                // EOF. Anything still buffered is a final, newline-less frame:
+                // deliver it rather than dropping it (see the doc note above).
+                if partial.is_empty() {
+                    return Ok(None);
+                }
+                return Self::finish_line(std::mem::take(partial));
             }
         }
+    }
+
+    /// Trim an optional trailing `\r` off an already-`\n`-stripped line and
+    /// classify it — the ONE place both the newline-terminated and the
+    /// EOF-terminated exits above agree on what a line is.
+    fn finish_line(mut line: Vec<u8>) -> Result<Option<Vec<u8>>> {
+        if line.last() == Some(&b'\r') {
+            line.pop();
+        }
+        if line.is_empty() {
+            // Skip empty lines (per MCP spec: newline-delimited frames).
+            return Err(TransportError::InvalidMessage("Empty line received".to_string()).into());
+        }
+        Ok(Some(line))
     }
 
     /// Parse JSON message and determine its type.
@@ -344,5 +363,39 @@ mod tests {
             .await
             .unwrap();
         assert!(eof.is_none(), "closed pipe must yield EOF (Ok(None))");
+    }
+
+    /// A peer that writes a complete frame and closes WITHOUT a trailing
+    /// newline must still have that frame delivered — `read_line`, which the
+    /// cancel-safe reader replaced, returned it, so dropping it would silently
+    /// lose the last message of every such peer.
+    #[tokio::test]
+    async fn read_cancel_safe_line_delivers_an_unterminated_tail_at_eof() {
+        use tokio::io::{AsyncWriteExt, BufReader};
+
+        let (mut writer, reader) = tokio::io::duplex(64);
+        let mut reader = BufReader::new(reader);
+        let mut partial: Vec<u8> = Vec::new();
+
+        writer.write_all(b"first\nlast-no-newline").await.unwrap();
+        drop(writer); // EOF with an unterminated tail still buffered.
+
+        let first = StdioTransport::read_cancel_safe_line(&mut reader, &mut partial)
+            .await
+            .unwrap()
+            .expect("the terminated line");
+        assert_eq!(first, b"first");
+
+        let last = StdioTransport::read_cancel_safe_line(&mut reader, &mut partial)
+            .await
+            .unwrap()
+            .expect("the unterminated tail is still a frame");
+        assert_eq!(last, b"last-no-newline");
+
+        // And it is delivered exactly once.
+        let eof = StdioTransport::read_cancel_safe_line(&mut reader, &mut partial)
+            .await
+            .unwrap();
+        assert!(eof.is_none(), "the tail must not be re-delivered");
     }
 }
