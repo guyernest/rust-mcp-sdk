@@ -591,6 +591,26 @@ name = "s47_task_augmented_result"
 path = "examples/s47_task_augmented_result.rs"
 required-features = ["full"]
 
+# Phase 113 (MCP 2026-07-28): the stateless multi-round-trip-elicitation pair.
+# `s47_v2_stateless_mrtr` is the SERVER, `s48_v2_mrtr_client` the CLIENT that
+# fulfils it automatically; run the server first.
+#
+# NOTE on the numbering: `s47_task_augmented_result` and `s48_durable_poll_decision`
+# already occupy the s47/s48 slots. Cargo example NAMES are unique so both pairs
+# build and run, but the `sNN_` sequence is no longer a bijection. Renaming these
+# two to the next free slots is deferred: their paths are pinned by the Phase-113
+# plan's artifact contract, and a rename would break the phase's acceptance
+# record. See `.planning/phases/113-.../113-11-SUMMARY.md`.
+[[example]]
+name = "s47_v2_stateless_mrtr"
+path = "examples/s47_v2_stateless_mrtr.rs"
+required-features = ["streamable-http", "testing"]
+
+[[example]]
+name = "s48_v2_mrtr_client"
+path = "examples/s48_v2_mrtr_client.rs"
+required-features = ["streamable-http", "http-client"]
+
 [[bench]]
 name = "comprehensive_benchmarks"
 harness = false

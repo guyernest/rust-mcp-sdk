@@ -725,6 +725,12 @@ impl MrtrSignal {
     /// assert!(meta.contains_key("dev.pmcp/mrtr"));
     /// # Ok::<(), serde_json::Error>(())
     /// ```
+    ///
+    /// For the same thing as a RUNNABLE server — including the retry that
+    /// resumes from the sealed continuation, and the `PMCP_REQUEST_STATE_KEY`
+    /// deployment contract — see `examples/s47_v2_stateless_mrtr.rs`
+    /// (`cargo run --example s47_v2_stateless_mrtr --features full`) and its
+    /// paired client `examples/s48_v2_mrtr_client.rs`.
     pub fn into_meta_entry(self) -> Result<(String, Value), serde_json::Error> {
         Ok((
             MRTR_SIGNAL_META_KEY.to_string(),
