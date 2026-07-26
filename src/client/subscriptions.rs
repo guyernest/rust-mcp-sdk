@@ -520,6 +520,42 @@ fn decode_notification(frame: &Value) -> Result<ServerNotification> {
     })
 }
 
+// ===========================================================================
+// Internal support surface for `fuzz_targets/`.
+// ===========================================================================
+
+/// Run ONE untrusted chunk of listen-stream bytes through EXACTLY the decode a
+/// live [`SubscriptionStream`] performs, and report what each completed frame
+/// classified as.
+///
+/// `#[doc(hidden)]`: this is internal support surface for
+/// `fuzz/fuzz_targets/subscription_listen_frames.rs`, NOT stable API. It exists
+/// because the decode path is private and a fuzz target may only reach public
+/// items — the same `#[doc(hidden)]` seam convention Phase 110 established for
+/// `cargo-pmcp`'s fuzz and example targets. Do not build on it.
+///
+/// Errors are flattened to their `Display` string so no private type escapes.
+/// A terminal result contributes no entry.
+#[doc(hidden)]
+#[must_use]
+pub fn decode_listen_chunk_for_fuzz(
+    chunk: &[u8],
+    subscription_id: &str,
+) -> Vec<std::result::Result<ServerNotification, String>> {
+    let id = RequestId::String(subscription_id.to_string());
+    let mut buffer = chunk.to_vec();
+    let text = take_utf8_prefix(&mut buffer);
+    let mut parser = SseParser::new();
+    drain_sse_payloads(&mut parser, &text)
+        .into_iter()
+        .filter_map(|payload| match classify_frame(&payload, &id) {
+            FrameOutcome::Notification(notification) => Some(Ok(*notification)),
+            FrameOutcome::Failed(e) => Some(Err(e.to_string())),
+            FrameOutcome::Terminal => None,
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -861,6 +897,74 @@ mod tests {
         let huge = "x".repeat(MAX_ECHOED_FRAME * 4);
         let truncated = truncate(&huge);
         assert!(truncated.chars().count() <= MAX_ECHOED_FRAME + 1);
+    }
+
+    // ---- properties (CLAUDE.md ALWAYS / PROPERTY testing) ------------------
+
+    /// Every notification method a listen stream can legitimately carry, plus
+    /// one this SDK does not model.
+    const METHODS: [&str; 4] = [
+        "notifications/tools/list_changed",
+        "notifications/prompts/list_changed",
+        "notifications/resources/list_changed",
+        "notifications/from/the/future",
+    ];
+
+    proptest::proptest! {
+        /// T-113-66 as an invariant over the whole id space: a frame is
+        /// delivered to the caller IF AND ONLY IF it is tagged with THIS
+        /// stream's subscription id (and carries a method this SDK models).
+        ///
+        /// An example-based test can only pin the two cases it happens to
+        /// write; this pins the implication itself.
+        #[test]
+        fn a_frame_is_delivered_only_when_its_tag_matches_this_stream(
+            stream_id in 0i64..8,
+            frame_id in 0i64..8,
+            method_index in 0usize..4,
+        ) {
+            let frame = json!({
+                "jsonrpc": "2.0",
+                "method": METHODS[method_index],
+                "params": {
+                    "_meta": subscription_id_meta(&RequestId::Number(frame_id)),
+                },
+            });
+
+            let delivered = matches!(
+                classify_frame(&frame.to_string(), &RequestId::Number(stream_id)),
+                FrameOutcome::Notification(_)
+            );
+
+            proptest::prop_assert_eq!(
+                delivered,
+                stream_id == frame_id && method_index < 3,
+                "delivery must be exactly (matching tag AND known method); \
+                 stream={} frame={} method={}",
+                stream_id,
+                frame_id,
+                METHODS[method_index],
+            );
+        }
+
+        /// The decode path is fed by a REMOTE peer. Arbitrary bytes must never
+        /// panic it (T-113-67) — the same invariant the fuzz target asserts,
+        /// held here as a fast in-tree regression.
+        #[test]
+        fn arbitrary_bytes_never_panic_the_decoder(
+            bytes in proptest::collection::vec(proptest::prelude::any::<u8>(), 0..512),
+        ) {
+            let _ = decode_listen_chunk_for_fuzz(&bytes, "prop-subscription");
+        }
+
+        /// And neither does arbitrary TEXT that looks more like SSE than random
+        /// bytes do, which is the shape a hostile-but-well-formed peer sends.
+        #[test]
+        fn arbitrary_sse_shaped_text_never_panics_the_decoder(
+            body in "(data|event|id|:|\\{|\\}|\"|a|1|\n){0,200}",
+        ) {
+            let _ = decode_listen_chunk_for_fuzz(body.as_bytes(), "prop-subscription");
+        }
     }
 
     // ---- the era gate, proven with a counting stub transport ---------------

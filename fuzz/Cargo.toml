@@ -155,3 +155,12 @@ path = "fuzz_targets/fuzz_request_state.rs"
 test = false
 doc = false
 bench = false
+
+# Phase 113-13 (HTTP-04): the `subscriptions/listen` CLIENT frame decoder runs on
+# bytes supplied by a remote server, so it is fuzzed at that boundary.
+[[bin]]
+name = "subscription_listen_frames"
+path = "fuzz_targets/subscription_listen_frames.rs"
+test = false
+doc = false
+bench = false

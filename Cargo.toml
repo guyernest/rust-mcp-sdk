@@ -611,6 +611,16 @@ name = "s48_v2_mrtr_client"
 path = "examples/s48_v2_mrtr_client.rs"
 required-features = ["streamable-http", "http-client"]
 
+# Phase 113-13 (HTTP-04): the `subscriptions/listen` CLIENT stream. Unlike the
+# s47/s48 pair this one is SELF-CONTAINED — it starts its own v2 server on an
+# ephemeral loopback port — so it needs no companion process. The `sNN_`
+# sequence is already not a bijection (see the note above); `s49_sampling_host`
+# occupies the other `s49` slot.
+[[example]]
+name = "s49_v2_subscriptions_client"
+path = "examples/s49_v2_subscriptions_client.rs"
+required-features = ["streamable-http", "http-client"]
+
 [[bench]]
 name = "comprehensive_benchmarks"
 harness = false
