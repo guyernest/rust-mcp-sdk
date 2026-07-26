@@ -2311,7 +2311,7 @@ Plans:
 
 **Wave 6** *(blocked on Wave 5)*
 
-- [ ] 113-13-PLAN.md — HTTP-04 CLIENT half (added by the cross-AI review replan): `Client::subscriptions_listen` returning a typed `SubscriptionStream` that enforces acknowledgement-first and subscriptionId tagging, era-gating the retired `subscribe_resource`/`unsubscribe_resource` to a typed `retired_on_v2` error, and live proof a pmcp v2 client receives change notifications
+- [x] 113-13-PLAN.md — HTTP-04 CLIENT half (added by the cross-AI review replan): `Client::subscriptions_listen` returning a typed `SubscriptionStream` that enforces acknowledgement-first and subscriptionId tagging, era-gating the retired `subscribe_resource`/`unsubscribe_resource` to a typed `retired_on_v2` error, and live proof a pmcp v2 client receives change notifications
 
 **Wave 7** *(blocked on Wave 6)*
 
@@ -2405,7 +2405,7 @@ Plans:
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 112. Version Plumbing Spine | 10/10 | Complete    | 2026-07-23 |
-| 113. Stateless HTTP + MRTR | 11/13 | In Progress|  |
+| 113. Stateless HTTP + MRTR | 12/13 | In Progress|  |
 | 114. Tasks Extension Migration | 0/TBD | Not started | - |
 | 115. JSON Schema 2020-12 + Caching Hints | 0/TBD | Not started | - |
 | 116. Auth Hardening SEPs | 0/TBD | Not started | - |

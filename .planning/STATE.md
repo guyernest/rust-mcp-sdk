@@ -4,13 +4,13 @@ milestone: v2.5
 milestone_name: MCP Spec 2026-07-28
 status: executing
 stopped_at: Completed 113-11-PLAN.md
-last_updated: "2026-07-26T00:58:12.801Z"
-last_activity: 2026-07-26 -- Completed 113-11-PLAN.md (sep-2322 conformance mirror + real-client MRTR + runnable examples)
+last_updated: "2026-07-26T02:56:05.078Z"
+last_activity: 2026-07-26 -- Completed 113-13-PLAN.md (subscriptions/listen CLIENT half + retired-RPC era gate)
 progress:
   total_phases: 71
   completed_phases: 57
   total_plans: 294
-  completed_plans: 292
+  completed_plans: 293
   percent: 80
 ---
 
@@ -26,9 +26,9 @@ See: .planning/PROJECT.md (updated 2026-07-22) · .planning/ROADMAP.md (v2.5 mil
 ## Current Position
 
 Phase: 113 (stateless-http-multi-round-trip-elicitation) — EXECUTING
-Plan: 12 of 13
+Plan: 12 of 13 (plan 13 executed ahead of it as wave 6; 12 is the phase-closing semver/spec re-verification and is the only one left)
 Status: Ready to execute
-Last activity: 2026-07-26 -- Completed 113-11-PLAN.md (sep-2322 conformance mirror + real-client MRTR + runnable examples)
+Last activity: 2026-07-26 -- Completed 113-13-PLAN.md (subscriptions/listen CLIENT half + retired-RPC era gate)
 
 ## v2.5 Phase Plan (8 phases, 38 requirements)
 
@@ -151,6 +151,11 @@ Decisions are logged in PROJECT.md Key Decisions table. Decisions framing this m
 - [Phase ?]: [Phase 113]: 113-11: FOUND -- a handler-less pmcp client can NEVER receive an input_required from a pmcp server; registry-authoritative clientCapabilities (HOST-05) compose with the server's -32021 precheck (T-113-32) so the refusal happens first. The two D-06 tests use a DECLINING handler (the reachable path, identical shape) and client_server_mrtr_undeclared_capability_is_refused locks the composition
 - [Phase ?]: [Phase 113]: 113-11: conformance mirrors drive raw bytes via post while interoperability drives a real Client -- a Client inside a conformance assertion passes whenever both ends share a bug; the typed-error test OPENS the recovered requestState with the server's own key to prove it is the real minted continuation
 - [Phase ?]: [Phase 113]: 113-11: examples s47_v2_stateless_mrtr + s48_v2_mrtr_client keep the plan-pinned names despite colliding with the existing s47/s48 task examples (artifact contract); the printed round-1 and round-2 curl procedures were executed verbatim against a live server, so the example documentation is verified rather than asserted
+- [Phase ?]: 113-13: subscriptions_listen is generic over a NEW narrow EventStreamTransport trait, not a 4th defaulted Transport method — an incrementally-read body is an HTTP concept and stdio/WebSocket/wasm must not carry a meaningless default; keeps the method stub-transport testable
+- [Phase ?]: 113-13: post_once EXTRACTED from post_body so the long-lived stream inherits the same header emission and the same at-most-once 401 refresh; a parallel POST path would have silently skipped the auth retry
+- [Phase ?]: 113-13: a malformed / cross-tagged / unmodelled listen frame is an Err ITEM and the stream CONTINUES; only transport failure, the terminal result, or end-of-body ends it (T-113-66/67)
+- [Phase ?]: 113-13: the retired-RPC client error carries METHOD_NOT_FOUND (the code the server would have answered with) and rides Error::Protocol behind RETIRED_ON_V2_MARKER; the gate runs BEFORE ensure_initialized and assert_capability
+- [Phase ?]: 113-13: FOUND AND FIXED a remote-triggerable panic in the SHARED SseParser::feed — a CHARACTER-indexed CRLF check against a BYTE index sliced mid-character; it also hit the pre-existing GET-SSE path. Found by this plan's own arbitrary-bytes proptest, not by review
 
 ### Pending Todos
 
@@ -191,7 +196,7 @@ Items deferred by design for this milestone (design §7 / REQUIREMENTS v2):
 
 ## Session Continuity
 
-Last session: 2026-07-26T00:58:12.791Z
+Last session: 2026-07-26T02:55:41.599Z
 Stopped at: Completed 113-11-PLAN.md
 Resume file: None
 
@@ -236,3 +241,4 @@ Resume file: None
 | Phase 113 P09 | 118min | 3 tasks | 7 files |
 | Phase 113 P10 | 60min | 3 tasks | 6 files |
 | Phase 113 P11 | 40min | 3 tasks | 6 files |
+| Phase 113 P13 | 105min | 3 tasks tasks | 10 files files |
