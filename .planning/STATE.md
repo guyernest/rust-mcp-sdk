@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v2.5
 milestone_name: MCP Spec 2026-07-28
-status: verifying
+status: executing
 stopped_at: "Completed 113-16-PLAN.md (gap closure: the RUN libFuzzer campaign for subscription_listen_frames)"
-last_updated: "2026-07-26T19:16:14.782Z"
-last_activity: 2026-07-26
+last_updated: "2026-07-26T22:51:07.431Z"
+last_activity: 2026-07-26 -- Phase 113 planning complete
 progress:
   total_phases: 71
-  completed_phases: 58
-  total_plans: 297
+  completed_phases: 57
+  total_plans: 300
   completed_plans: 297
-  percent: 82
+  percent: 80
 ---
 
 # Project State
@@ -27,9 +27,9 @@ See: .planning/PROJECT.md (updated 2026-07-22) · .planning/ROADMAP.md (v2.5 mil
 
 Phase: 113 (stateless-http-multi-round-trip-elicitation) — EXECUTING
 Plan: 16 of 16
-Status: Phase complete — ready for verification
+Status: Ready to execute
 Next action: re-verify the phase — all five verification gap items are now closed. Plan 113-14 closed gap items 1, 2 and 4 (HTTP-04 same-principal `subscriptions/listen` id-reuse collision safety); 113-15 closed gap item 3 / CR-03 (`SseParser`'s unbounded line buffer and the dead `SseConfig::max_buffer_size`); 113-16 closed gap item 5 — a 20 000-run libFuzzer campaign against `subscription_listen_frames` (exit 0, artifacts/ EMPTY, `113-FUZZ-EVIDENCE.md`) that provably reached 113-15's discard-and-latch branch. Then, on or after 2026-07-28, re-run the 4-step procedure in `113-SPEC-RECHECK.md` § Recorded Exception, upgrade the Verdict, and only then flip the seven requirements. A value mismatch is a phase-reopening event.
-Last activity: 2026-07-26 -- Phase 113 plan 16 (gap closure: the RUN fuzz campaign) complete
+Last activity: 2026-07-26 -- Phase 113 planning complete
 
 ## v2.5 Phase Plan (8 phases, 38 requirements)
 
