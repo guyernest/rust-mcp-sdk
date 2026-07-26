@@ -413,3 +413,45 @@ done
 ```
 
 with `FUZZ_RUNS ?= 2000` locally and a larger value in the nightly CI job.
+
+**Update (plan 16).** Gap item 5 is now closed for `subscription_listen_frames`
+the same way: the campaign was invoked directly, bypassing the gate, and recorded
+in `113-FUZZ-EVIDENCE.md`. D-113-G itself remains open and unowned — plan 16's
+scope fence explicitly forbade editing the Makefile — and was re-confirmed during
+that plan: the gate log carries 17 `failed to build fuzz script ... -Zsanitizer=address`
+errors and still exits 0.
+
+---
+
+## D-113-H — Pre-existing crash artifact for the `auth_flows` fuzz target
+
+**Found during:** plan 16, task 2 (proving `fuzz/artifacts/` empty after the
+`subscription_listen_frames` campaign)
+**Severity:** UNKNOWN — never triaged; possibly stale, possibly a live defect
+**Owner:** none (needs one)
+**Status:** open, NOT touched by plan 16
+
+```console
+$ /usr/bin/find fuzz/artifacts -type f -exec /bin/ls -la {} \;
+-rw-r--r--@ 1 guy staff 8 Sep 12 2025 fuzz/artifacts/auth_flows/crash-e29e9da4b8b23e9e48def2fd1201ea339341fc89
+```
+
+An 8-byte crash artifact dated **2025-09-12** — ten months before Phase 113 —
+sits in the working tree for the `auth_flows` target. `fuzz/.gitignore` ignores
+`artifacts`, so it has never been committed and no CI job has ever seen it; it
+survives only because this checkout is long-lived. D-113-G is why nothing has
+flagged it since: the gate builds zero targets and swallows the result.
+
+Out of plan 16's scope fence ("running campaigns against targets other than
+`subscription_listen_frames` … is not this gap"), so it was recorded rather than
+investigated.
+
+**Next step for the owner:** replay it and find out whether it still reproduces —
+
+```bash
+cargo +nightly fuzz run auth_flows \
+  fuzz/artifacts/auth_flows/crash-e29e9da4b8b23e9e48def2fd1201ea339341fc89
+```
+
+If it no longer reproduces, delete the artifact. If it does, it is a live
+untriaged crash in an AUTH code path and deserves its own phase item.
