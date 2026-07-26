@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v2.5
 milestone_name: MCP Spec 2026-07-28
 status: executing
-stopped_at: "Completed 113-14-PLAN.md (gap closure: HTTP-04 subscriptions collision safety)"
-last_updated: "2026-07-26T17:39:32.728Z"
+stopped_at: "Completed 113-15-PLAN.md (gap closure: CR-03 bounded SseParser line buffer)"
+last_updated: "2026-07-26T18:19:18.769Z"
 last_activity: 2026-07-26
 progress:
   total_phases: 71
   completed_phases: 57
   total_plans: 297
-  completed_plans: 295
+  completed_plans: 296
   percent: 80
 ---
 
@@ -26,10 +26,10 @@ See: .planning/PROJECT.md (updated 2026-07-22) · .planning/ROADMAP.md (v2.5 mil
 ## Current Position
 
 Phase: 113 (stateless-http-multi-round-trip-elicitation) — EXECUTING
-Plan: 15 of 16
+Plan: 16 of 16
 Status: Ready to execute
-Next action: execute the remaining gap-closure plans 113-15 and 113-16 (CR-03: `SseParser` unbounded buffer / dead `SseConfig::max_buffer_size`). Plan 113-14 closed verification gap items 1, 2 and 4 (HTTP-04 same-principal `subscriptions/listen` id-reuse collision safety). Then, on or after 2026-07-28, re-run the 4-step procedure in `113-SPEC-RECHECK.md` § Recorded Exception, upgrade the Verdict, and only then flip the seven requirements. A value mismatch is a phase-reopening event.
-Last activity: 2026-07-26 -- Phase 113 plan 14 (gap closure) complete
+Next action: execute the last gap-closure plan 113-16 (gap item 5 — the libFuzzer campaign, which depended on 113-15's bound landing). Plan 113-14 closed gap items 1, 2 and 4 (HTTP-04 same-principal `subscriptions/listen` id-reuse collision safety); plan 113-15 closed gap item 3 / CR-03 (`SseParser`'s unbounded line buffer and the dead `SseConfig::max_buffer_size`). Then, on or after 2026-07-28, re-run the 4-step procedure in `113-SPEC-RECHECK.md` § Recorded Exception, upgrade the Verdict, and only then flip the seven requirements. A value mismatch is a phase-reopening event.
+Last activity: 2026-07-26 -- Phase 113 plan 15 (gap closure: bounded SSE line buffer) complete
 
 ## v2.5 Phase Plan (8 phases, 38 requirements)
 
@@ -160,6 +160,10 @@ Decisions are logged in PROJECT.md Key Decisions table. Decisions framing this m
 - [Phase 113]: 113-14: a duplicate LIVE (principal, subscriptionId) subscriptions/listen registration is REFUSED with -32600 at HTTP 400 (ListenRejection::DuplicateSubscriptionId), never a licence to evict the incumbent — occupancy check and insert run under ONE entries write guard
 - [Phase 113]: 113-14: every listen-registry removal is OWNERSHIP-scoped via a per-entry u64 generation (ListenGuard::drop + disconnect_overflowed both compare before removing), closing CR-02's overflow-evict/successor-registers/old-guard-drops window; ListenRejection::code() is exhaustive with no wildcard arm
 - [Phase 113]: 113-14: the same-principal id-reuse path is now proven LIVE (same_principal_id_reuse_rejects_the_second_and_spares_the_first) and demonstrated to fail without the fix — twice: at the 400 status and, with that assertion disabled, at the load-bearing first-stream-survives read
+- [Phase 113]: 113-15: the SSE line-buffer bound lives INSIDE SseParser with a LATCHING overflowed() flag (option A) — one enforcement point covers every present and future feeder, feed()'s signature is unchanged (a Result would be a MAJOR break), and it never truncates silently (a corrupted-but-parseable frame is strictly worse than a named failure)
+- [Phase 113]: 113-15: enforcement fires ONLY when no line can be completed by this chunk (neither buffer nor data carries a newline) — that condition is exactly what leaves the two whole-body streamable_http.rs feed call sites behaviourally unchanged; SseParser::new() now sources its 1 MiB from SseConfig::default().max_buffer_size, the config field's FIRST real reader
+- [Phase 113]: 113-15: HttpTransport::connect_sse is a SECOND incremental feeder (exported, consumed in-repo by pmcp-team-servers) and is guarded too — bounding without observing there would have turned correct-but-unbounded behaviour into a SILENT discard; it keeps the 1 MiB default (it carries arbitrary JSON-RPC results) while the listen path tightens to 256 KiB
+- [Phase 113]: 113-15: both overflow checks are free functions over the parser (listen_overflow, report_sse_line_overflow) because their call sites own a live hyper::body::Incoming which cannot be constructed outside hyper — the unit tests drive the PRODUCTION predicates rather than reconstructions of them
 
 ### Pending Todos
 
@@ -203,8 +207,8 @@ Items deferred by design for this milestone (design §7 / REQUIREMENTS v2):
 
 ## Session Continuity
 
-Last session: 2026-07-26T17:39:32.707Z
-Stopped at: Completed 113-14-PLAN.md (gap closure: HTTP-04 subscriptions collision safety)
+Last session: 2026-07-26T18:19:18.757Z
+Stopped at: Completed 113-15-PLAN.md (gap closure: CR-03 bounded SseParser line buffer)
 Resume file: None
 
 ## Performance Metrics
@@ -251,3 +255,4 @@ Resume file: None
 | Phase 113 P13 | 105min | 3 tasks tasks | 10 files files |
 | Phase 113 P12 | 69min | 3 tasks | 6 files |
 | Phase 113 P14 | 62min | 2 tasks | 3 files |
+| Phase 113 P15 | 36min | 2 tasks | 3 files |
