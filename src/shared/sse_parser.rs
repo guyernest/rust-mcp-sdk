@@ -118,10 +118,19 @@ pub struct SseParser {
     buffer: String,
     current_event: EventBuilder,
     last_event_id: Option<String>,
+    /// Upper bound on `buffer`, i.e. on ONE unterminated SSE line.
+    ///
+    /// The bytes fed to a parser are chosen by a REMOTE peer, and `buffer` only
+    /// ever drains as far as a `\n`. Without a bound, a peer that never emits
+    /// one grows this process's heap for as long as it holds the stream open.
+    max_buffer_size: usize,
+    /// Latched once an oversized line has been discarded.
+    overflowed: bool,
 }
 
 impl SseParser {
-    /// Create a new SSE parser.
+    /// Create a new SSE parser bounded by [`SseConfig::default()`]'s
+    /// `max_buffer_size` (1 MiB).
     ///
     /// # Examples
     ///
@@ -130,13 +139,72 @@ impl SseParser {
     ///
     /// let mut parser = SseParser::new();
     /// assert!(parser.last_event_id().is_none());
+    /// assert!(!parser.overflowed());
     /// ```
     pub fn new() -> Self {
+        Self::with_max_buffer_size(SseConfig::default().max_buffer_size)
+    }
+
+    /// Create a new SSE parser with an explicit line-buffer bound.
+    ///
+    /// [`SseParser::new`] takes its bound from [`SseConfig::default()`]'s
+    /// `max_buffer_size`. Use this constructor when a caller needs a TIGHTER
+    /// one — a long-lived stream of small frames read from an untrusted remote
+    /// peer, for example — or a looser one.
+    ///
+    /// The bound applies to ONE unterminated line. A chunk that would push the
+    /// buffer past it while completing no line at all is DISCARDED, not
+    /// truncated-and-emitted, and [`Self::overflowed`] latches: a silently
+    /// truncated line would surface later as a misleading JSON parse failure,
+    /// which is strictly worse for an operator than a named one.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use pmcp::shared::sse_parser::SseParser;
+    ///
+    /// let mut parser = SseParser::with_max_buffer_size(64);
+    ///
+    /// // A peer that never sends a newline cannot grow this parser's heap.
+    /// assert!(parser.feed(&"x".repeat(1024)).is_empty());
+    /// assert!(parser.overflowed());
+    ///
+    /// // The parser keeps working — but the flag stays latched.
+    /// let events = parser.feed("data: ok\n\n");
+    /// assert_eq!(events[0].data, "ok");
+    /// assert!(parser.overflowed());
+    /// ```
+    #[must_use]
+    pub fn with_max_buffer_size(max_buffer_size: usize) -> Self {
         Self {
             buffer: String::new(),
             current_event: EventBuilder::new(),
             last_event_id: None,
+            max_buffer_size,
+            overflowed: false,
         }
+    }
+
+    /// Whether this parser has DISCARDED an oversized line.
+    ///
+    /// LATCHING: once set it stays set for the parser's lifetime — including
+    /// across [`Self::reset`] — so a caller that polls once per chunk cannot
+    /// miss the event. An overflowed parser has lost bytes a remote peer sent,
+    /// so its stream should be considered CORRUPT: the recommended response is
+    /// to end the stream with an error naming the limit, not to keep parsing.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use pmcp::shared::sse_parser::SseParser;
+    ///
+    /// let mut parser = SseParser::new();
+    /// let _ = parser.feed("data: a well-formed event\n\n");
+    /// assert!(!parser.overflowed());
+    /// ```
+    #[must_use]
+    pub fn overflowed(&self) -> bool {
+        self.overflowed
     }
 
     /// Feed data to the parser and get parsed events.
@@ -167,6 +235,31 @@ impl SseParser {
     /// assert_eq!(events[0].event, Some("ping".to_string()));
     /// ```
     pub fn feed(&mut self, data: &str) -> Vec<SseEvent> {
+        // `buffer` holds ONE unterminated line, and a REMOTE peer decides when
+        // (or whether) that line ends. Bound it: when appending `data` would
+        // push the buffer past `max_buffer_size` AND this chunk can complete no
+        // line at all (neither side carries a `\n`), the line is unbounded by
+        // construction — so DISCARD it and latch `overflowed` rather than grow.
+        //
+        // The "contains a `\n`" condition is what keeps a single legitimately
+        // large COMPLETE body working: such a body carries newlines and drains
+        // in the loop below, so it never trips the bound. The two whole-body
+        // `feed` call sites in the streamable-HTTP transport are therefore
+        // behaviourally unchanged.
+        if self.buffer.len().saturating_add(data.len()) > self.max_buffer_size
+            && !self.buffer.contains('\n')
+            && !data.contains('\n')
+        {
+            self.overflowed = true;
+            self.buffer.clear();
+            // The in-progress event is now missing a line; anything built from
+            // it would be a corrupted frame presented to the caller as genuine.
+            self.current_event = EventBuilder::new();
+            // `last_event_id` is deliberately untouched: it is stream-level
+            // resumption state, not line state.
+            return Vec::new();
+        }
+
         self.buffer.push_str(data);
         let mut events = Vec::new();
 
@@ -287,6 +380,10 @@ impl SseParser {
     }
 
     /// Reset the parser state.
+    ///
+    /// Clears the line buffer and any in-progress event. It deliberately does
+    /// NOT clear [`Self::overflowed`], which records that bytes a peer sent were
+    /// already LOST — a fact resetting the line state cannot undo.
     pub fn reset(&mut self) {
         self.buffer.clear();
         self.current_event = EventBuilder::new();
@@ -374,7 +471,13 @@ impl Default for SseStream {
 pub struct SseConfig {
     /// Reconnection retry interval in milliseconds
     pub retry: u64,
-    /// Maximum buffer size for incomplete lines
+    /// Maximum buffer size for incomplete lines.
+    ///
+    /// [`SseParser::new`] takes its bound from this field's DEFAULT value, and
+    /// [`SseParser::with_max_buffer_size`] overrides it per parser. A chunk that
+    /// would push a parser's line buffer past the bound without completing any
+    /// line is discarded and latches [`SseParser::overflowed`], so a peer that
+    /// never emits a newline cannot grow the process's heap without limit.
     pub max_buffer_size: usize,
     /// Enable compression
     pub compression: bool,
@@ -493,7 +596,8 @@ mod tests {
     /// `feed` pushes every chunk into `buffer` and only ever drains as far as a
     /// `\n`, so before the bound existed a hostile or broken server could hold a
     /// `subscriptions/listen` stream open and stream newline-free bytes until
-    /// the client OOMed (review CR-03, verification gap item 3, T-113-73).
+    /// the client ran out of memory (review CR-03, verification gap item 3,
+    /// T-113-73).
     #[test]
     fn a_newlineless_flood_cannot_grow_the_buffer_past_the_bound() {
         let mut parser = SseParser::new();
@@ -510,6 +614,86 @@ mod tests {
             "the line buffer grew to {} bytes, past the 1 MiB bound",
             parser.buffer.len()
         );
+    }
+
+    /// The default bound is the one `SseConfig` already documented — the number
+    /// is sourced from there, not re-typed, so there is exactly ONE of it.
+    #[test]
+    fn new_takes_its_bound_from_the_sse_config_default() {
+        let parser = SseParser::new();
+        assert_eq!(parser.max_buffer_size, SseConfig::default().max_buffer_size);
+        assert_eq!(parser.max_buffer_size, 1024 * 1024, "1 MiB");
+        assert!(!parser.overflowed(), "a fresh parser has lost nothing");
+    }
+
+    /// The limit is real CONFIG, not a constant baked into `feed`: a parser
+    /// built with a tighter bound trips on bytes the default-bounded one
+    /// swallows without complaint.
+    #[test]
+    fn with_max_buffer_size_bounds_at_the_value_given() {
+        let flood = "x".repeat(256);
+
+        let mut tight = SseParser::with_max_buffer_size(64);
+        assert!(tight.feed(&flood).is_empty());
+        assert!(tight.overflowed(), "256 bytes is past a 64-byte bound");
+        assert!(tight.buffer.is_empty(), "the oversized line was discarded");
+
+        let mut wide = SseParser::new();
+        let _ = wide.feed(&flood);
+        assert!(
+            !wide.overflowed(),
+            "the same bytes are nowhere near the 1 MiB default"
+        );
+    }
+
+    /// The flag never auto-clears, so a caller polling once per chunk cannot
+    /// miss the event even when well-formed frames follow the bad one.
+    #[test]
+    fn the_overflow_flag_latches() {
+        let mut parser = SseParser::with_max_buffer_size(64);
+        assert!(parser.feed(&"x".repeat(256)).is_empty());
+        assert!(parser.overflowed());
+
+        let events = parser.feed("data: ok\n\n");
+        assert_eq!(events.len(), 1, "the parser keeps working");
+        assert_eq!(events[0].data, "ok");
+        assert!(parser.overflowed(), "and the flag stays set");
+
+        parser.reset();
+        assert!(
+            parser.overflowed(),
+            "reset cannot un-lose the discarded bytes"
+        );
+    }
+
+    /// Events completed BEFORE the oversized line are still delivered, and the
+    /// overflowing feed itself completes nothing rather than emitting a
+    /// truncated frame that would fail JSON parsing with a misleading error.
+    #[test]
+    fn events_completed_before_an_oversized_line_are_still_returned() {
+        let mut parser = SseParser::with_max_buffer_size(64);
+
+        let events = parser.feed("data: first\n\n");
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].data, "first");
+        assert!(!parser.overflowed());
+
+        let events = parser.feed(&"x".repeat(256));
+        assert!(events.is_empty(), "an overflowing feed completes nothing");
+        assert!(parser.overflowed());
+    }
+
+    /// A parser that never exceeds its bound behaves byte-identically to the
+    /// pre-bound parser — every other test in this module is the rest of that
+    /// proof; this one pins the flag itself.
+    #[test]
+    fn a_parser_under_its_bound_never_reports_overflow() {
+        let mut parser = SseParser::new();
+        let events = parser.feed("id: 7\nevent: message\ndata: {\"a\":1}\n\n");
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].data, "{\"a\":1}");
+        assert_eq!(parser.last_event_id(), Some("7"));
+        assert!(!parser.overflowed());
     }
 
     #[test]
@@ -571,6 +755,32 @@ mod tests {
             let mut parser = SseParser::new();
             for chunk in chunks {
                 let _ = parser.feed(&chunk);
+            }
+        }
+
+        /// And neither does a TIGHTLY bounded parser, whose enforcement branch
+        /// discards a partial line mid-stream — including one cut in the middle
+        /// of a multi-byte character (the 113-13 char-boundary guard, now
+        /// exercised against the bound as well).
+        #[test]
+        fn a_bounded_feed_never_panics_on_arbitrary_text(
+            chunks in proptest::collection::vec(
+                "(\\PC|\r|\n|\u{2602}|\u{4f60}){0,40}",
+                0..4,
+            ),
+        ) {
+            let mut parser = SseParser::with_max_buffer_size(8);
+            for chunk in chunks {
+                let _ = parser.feed(&chunk);
+                // The residual is either an unterminated line the bound
+                // permitted (<= 8) or the tail of THIS chunk after its last
+                // `\n`. Neither accumulates across chunks, which is the whole
+                // point: memory is a function of one chunk, not of stream age.
+                proptest::prop_assert!(
+                    parser.buffer.len() <= std::cmp::max(8, chunk.len()),
+                    "buffer {} outgrew both the bound and this chunk",
+                    parser.buffer.len(),
+                );
             }
         }
     }
