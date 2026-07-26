@@ -21,11 +21,19 @@
 
 ### Stateless HTTP & Multi-Round-Trip (HTTP)
 
-- [ ] **HTTP-01**: v2 HTTP requests run with no `initialize` handshake and no `Mcp-Session-Id`, era-gated onto the existing `stateless()` branch; v1 session behavior is unchanged
-- [ ] **HTTP-02**: A server handler can return `input_required` with `inputRequests` and an opaque `requestState` that is integrity-protected, principal-bound, and TTL'd
-- [ ] **HTTP-03**: A client retry of the original request carrying `inputResponses` + echoed `requestState` resumes the operation correctly (multi-round-trip elicitation end-to-end)
-- [x] **HTTP-04**: v2 clients get change notifications via a `subscriptions/listen` long-lived stream (opt-ins for toolsListChanged/promptsListChanged/resourcesListChanged/resourceSubscriptions, `subscriptionId` tagging), replacing HTTP GET + `resources/subscribe`/`unsubscribe` on the v2 path
-- [ ] **HTTP-05**: SSE resumability (`Last-Event-ID`) is not offered on the v2 path, and a regression test proves response JSON-RPC ids are always derived from the live request (the id-replay / discovery-cache bug class)
+> **Status marker `[~]` — implemented, gated on the final schema.** Every HTTP-0x and CLNT-0x
+> requirement below is **implemented and green** at Phase-113 HEAD, but none is marked complete.
+> `113-SPEC-RECHECK.md`'s `## Verdict` is still `PENDING`: as re-verified on 2026-07-26 there is
+> no `schema/2026-07-28` directory upstream, so the wire constants Phase 113 landed
+> (`-32020`/`-32021`/`-32022`) are **pre-final values held under a written developer exception**.
+> The exception's re-verification obligation is binding and a mismatch is a phase-reopening
+> event. Re-run the checkpoint on or after 2026-07-28 and flip these to `[x]` only then.
+
+- [~] **HTTP-01**: v2 HTTP requests run with no `initialize` handshake and no `Mcp-Session-Id`, era-gated onto the existing `stateless()` branch; v1 session behavior is unchanged — *implemented; pending final schema*
+- [~] **HTTP-02**: A server handler can return `input_required` with `inputRequests` and an opaque `requestState` that is integrity-protected, principal-bound, and TTL'd — *implemented; pending final schema*
+- [~] **HTTP-03**: A client retry of the original request carrying `inputResponses` + echoed `requestState` resumes the operation correctly (multi-round-trip elicitation end-to-end) — *implemented; pending final schema*
+- [~] **HTTP-04**: On the v2 path, `resources/subscribe`/`unsubscribe` and the HTTP GET stream endpoint are **removed**. v2 change notifications are delivered over a `subscriptions/listen` long-lived stream (`toolsListChanged`/`promptsListChanged`/`resourcesListChanged`/`resourceSubscriptions` opt-ins, `subscriptionId` tagging, `notifications/subscriptions/acknowledged` as the mandatory first frame). The stream is **opt-in**: pmcp's stateless enterprise default advertises no subscription-delivered capability, and answering `subscriptions/listen` with method-not-found in that configuration **is conformant**; a tripwire test enforces that advertising any subscription capability requires serving the stream. The **client half** ships too — the pmcp `Client` exposes `subscriptions_listen` returning a typed `SubscriptionStream` of notifications, and the retired `subscribe_resource`/`unsubscribe_resource` methods fail fast with a typed `retired_on_v2` error on v2. Per **D-11**, polling over the Tasks mechanism remains pmcp's RECOMMENDED enterprise mechanism, documented as a pmcp extension and **not** as a conformant substitute for this stream. **Deployment constraint (plan 113-10):** the `ListenRegistry` is instance-local, so advertising a subscription capability behind a non-sticky load balancer under-delivers notifications; a build-time `tracing::warn!` names this but does not prevent it. — *implemented; pending final schema*
+- [~] **HTTP-05**: SSE resumability (`Last-Event-ID`) is not offered on the v2 path, and a regression test proves response JSON-RPC ids are always derived from the live request (the id-replay / discovery-cache bug class) — *implemented; pending final schema*
 
 ### Tasks Extension Migration (TASK)
 
@@ -50,8 +58,8 @@
 
 ### Client & Agents on v2 (CLNT)
 
-- [ ] **CLNT-01**: The pmcp `Client` can speak v2: per-request `_meta` emission, `server/discover`, required headers, no `initialize` — selected explicitly per connection
-- [ ] **CLNT-02**: The pmcp `Client` fulfills MRTR `input_required` results by producing `inputResponses` — the Phase-106 host handlers (sampling/elicitation/roots) are folded into this flow on v2
+- [~] **CLNT-01**: The pmcp `Client` can speak v2: per-request `_meta` emission, `server/discover`, required headers, no `initialize` — selected explicitly per connection — *implemented; pending final schema*
+- [~] **CLNT-02**: The pmcp `Client` fulfills MRTR `input_required` results by producing `inputResponses` — the Phase-106 host handlers (sampling/elicitation/roots) are folded into this flow on v2 — *implemented; pending final schema*
 - [ ] **CLNT-03**: `pmcp-agent` (including its `ToolInvoker` and task polling) works end-to-end against a v2 server
 - [ ] **CLNT-04**: `mcp-tester` can exercise a v2 server (headers, discover, stateless flow) for dual-version testing
 
@@ -71,6 +79,14 @@
 - [ ] **DOCS-04**: Agents & Teams documented in three shapes (pmcp-book chapters, runnable examples, README/course), cargo-pmcp-first — carried from v2.4 Phase 111
 - [ ] **DOCS-05**: v2 migration guide + dual-version documentation: how to opt into v2, the dual-version story, Tasks extension migration, and the legacy sunset policy
 - [ ] **DOCS-06**: Runnable v2 examples: a stateless (Lambda-style) v2 server and a v2 client/agent example
+
+### Unassigned — Awaiting Phase Assignment (UNAS)
+
+In-milestone requirements surfaced after roadmap creation. **These are NOT deferred to a later
+milestone** — they belong to v2.5 but have no phase yet. Assign them during the next
+`/gsd:plan-phase` pass.
+
+- [ ] **UNAS-01**: SEP-2243 `x-mcp-header` / `Mcp-Param-{Name}` support — the v2 transport spec says clients **MUST** support `x-mcp-header` mirroring, and the header-mismatch validation table covers `Mcp-Param-*` alongside `Mcp-Method`/`Mcp-Name`. **No current requirement covers it**: not VERS-05 (which scopes only `Mcp-Method`/`Mcp-Name`), not HTTP-01..05, not CLNT-01. Surfaced by 113-RESEARCH.md assumption A8 and Open Question 4, both of which explicitly resolved *not* to absorb it into Phase 113 — no Phase-113 plan implements `Mcp-Param-{Name}` mirroring. It is **closest to CLNT-01's header work** (the client's outbound required-header emission) and would most naturally extend the server-side `classify_v2_request` matrix that Phase 112 landed. **UNASSIGNED — do not fold this into a phase without an explicit scoping decision.**
 
 ## Future Requirements
 
@@ -112,13 +128,13 @@ Which phases cover which requirements. Updated during roadmap creation.
 | VERS-07 | Phase 112 | Complete |
 | VERS-08 | Phase 112 | Complete |
 | VERS-09 | Phase 112 | Complete |
-| HTTP-01 | Phase 113 | Pending |
-| HTTP-02 | Phase 113 | Pending |
-| HTTP-03 | Phase 113 | Pending |
-| HTTP-04 | Phase 113 | Complete |
-| HTTP-05 | Phase 113 | Pending |
-| CLNT-01 | Phase 113 | Pending |
-| CLNT-02 | Phase 113 | Pending |
+| HTTP-01 | Phase 113 | Implemented — pending final schema |
+| HTTP-02 | Phase 113 | Implemented — pending final schema |
+| HTTP-03 | Phase 113 | Implemented — pending final schema |
+| HTTP-04 | Phase 113 | Implemented — pending final schema |
+| HTTP-05 | Phase 113 | Implemented — pending final schema |
+| CLNT-01 | Phase 113 | Implemented — pending final schema |
+| CLNT-02 | Phase 113 | Implemented — pending final schema |
 | TASK-01 | Phase 114 | Pending |
 | TASK-02 | Phase 114 | Pending |
 | TASK-03 | Phase 114 | Pending |
@@ -141,12 +157,23 @@ Which phases cover which requirements. Updated during roadmap creation.
 | DOCS-04 | Phase 119 | Pending |
 | DOCS-05 | Phase 119 | Pending |
 | DOCS-06 | Phase 119 | Pending |
+| UNAS-01 | **unassigned** | Awaiting phase assignment |
 
 **Coverage:**
 
 - v1 requirements: 38 total
 - Mapped to phases: 38 ✓
 - Unmapped: 0
+- **Added after roadmap creation: 1 (UNAS-01, SEP-2243 `x-mcp-header`) — UNMAPPED, needs a phase**
+- Running total: 39 requirements, 38 mapped, **1 unmapped**
+
+**Status-marker legend:**
+
+| Marker | Meaning |
+|--------|---------|
+| `[x]` / Complete | Shipped and verified |
+| `[~]` / Implemented — pending final schema | Code shipped and green, but the completion gate (`113-SPEC-RECHECK.md` `## Verdict` == `PUBLISHED-*`) has not passed. Re-run on or after 2026-07-28. |
+| `[ ]` / Pending | Not started |
 
 **Phase map (8 phases, 112-119):**
 

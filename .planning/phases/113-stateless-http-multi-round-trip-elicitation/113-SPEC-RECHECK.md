@@ -252,6 +252,37 @@ the package-legitimacy half of the Task 2 checkpoint.
 
 **The exception WAS granted.** See `## Recorded Exception` immediately below.
 
+### Verdict re-verification — plan 12 Task 3 (2026-07-26)
+
+The `## Recorded Exception` below makes plan 12 Task 3's re-verification **binding**. It was
+executed. Step 1 of the recorded procedure:
+
+```
+$ gh api repos/modelcontextprotocol/modelcontextprotocol/contents/schema --jq '.[].name'
+2024-11-05
+2025-03-26
+2025-06-18
+2025-11-25
+draft
+```
+
+**There is still NO `schema/2026-07-28` directory.** Today is 2026-07-26; the final spec
+publishes 2026-07-28, two days from now. Steps 2-3 of the procedure (grep the published
+`schema/2026-07-28/schema.ts` for the three identifiers and assert their values and payload
+shapes) are therefore **not executable**, and step 4 cannot upgrade this verdict.
+
+| Field | Value |
+|-------|-------|
+| Re-verified by | Plan 113-12, Task 3 |
+| Re-verified on | 2026-07-26 |
+| Result | **VERDICT UNCHANGED — still `PENDING`** |
+| Consequence | The gate on flipping requirements **FAILED**. HTTP-01..05 and CLNT-01..02 were NOT marked complete. They carry `[~]` (implemented, pending final schema) in `.planning/REQUIREMENTS.md`, and Phase 113 is reported as **blocked on publication**, not complete. |
+
+The three landed constants (`-32020` / `-32021` / `-32022`) therefore remain **pre-final
+values held under a developer exception**. The re-verification obligation is **NOT discharged**
+— it rolls forward. Re-run this checkpoint on or after 2026-07-28; a mismatch against the
+published schema is still a **phase-reopening event**, not an advisory.
+
 ---
 
 ## Recorded Exception
