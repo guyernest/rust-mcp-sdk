@@ -1,0 +1,1502 @@
+//! Phase 113-11 (HTTP-02 / HTTP-03 / CLNT-02): the Rust mirror of every `sep-2322`
+//! conformance scenario, plus the real-client interoperability proof.
+//!
+//! # Why this file exists
+//!
+//! Phase 118 owns the official Node `@modelcontextprotocol/conformance` suite in CI.
+//! Phase 113 has to be self-verifying WITHOUT a Node toolchain, so every `sep-2322`
+//! check id emitted by the PINNED suite commit is mirrored here as a native Rust
+//! integration test. Phase 118 then inherits a codebase that already passes rather
+//! than discovering the gaps late.
+//!
+//! The inventory is
+//! `.planning/phases/113-stateless-http-multi-round-trip-elicitation/113-CONFORMANCE-MANIFEST.md`,
+//! generated from `113-SPEC-RECHECK.md` § B (23 check ids across 14 scenario classes
+//! at conformance pin `a865118206d4d8cc8dbc5f5201607839281d0c3b`) and NOT from the
+//! `113-RESEARCH.md` table, which omits four ids and mis-keys a scenario CLASS name
+//! as a check id. [`manifest_maps_every_pinned_scenario`] is the enforcement: an
+//! upstream scenario with no local mirror is a test FAILURE, not a silent omission.
+//!
+//! # Two halves, deliberately different
+//!
+//! * **Scenario mirrors** drive the wire with raw `post`, so every assertion is on
+//!   actual bytes and concrete JSON paths — a `pmcp::Client` in the middle would
+//!   make the test pass whenever client and server share a bug.
+//! * **Interoperability** (`client_server_mrtr_*`) drives the SAME fixture server
+//!   with a real `pmcp::Client`. Until now the server half (plans 06/09) and the
+//!   client half (plans 05/07) had each only been tested against a hand-built
+//!   counterpart.
+//!
+//! Plan 06's `requestState` verdict table lives in `tests/v2_mrtr_ingress.rs` and is
+//! NOT duplicated here; this file covers the round-trip scenarios.
+//!
+//! # Keys come from the BUILDER, never from the environment
+//!
+//! Every server here is built with
+//! [`ServerBuilder::with_request_state_key`](pmcp::ServerBuilder::with_request_state_key),
+//! so no test mutates the `requestState` key environment variable — a process-global
+//! whose value is order-dependent under `cargo test`'s in-process parallel threads.
+//!
+//! Test reliability doctrine (carried from `tests/v2_required_headers.rs`): EPHEMERAL
+//! PORT (`127.0.0.1:0`, address read back from `start()`), READINESS (`start()` binds
+//! before returning), SHUTDOWN (`JoinHandle::abort()` after each round trip).
+#![cfg(all(
+    feature = "streamable-http",
+    feature = "http-client",
+    not(target_arch = "wasm32")
+))]
+
+mod common;
+
+use std::collections::HashMap;
+use std::fs;
+use std::net::SocketAddr;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
+
+use async_trait::async_trait;
+use common::v2::{
+    post, spawn_default_config, spawn_stateless_config, v1_body, v2_body, v2_body_with_caps,
+    v2_headers, Resp, V1, V2,
+};
+use pmcp::server::{PromptHandler, ResourceHandler, Server};
+use pmcp::types::elicitation::ElicitRequestParams;
+use pmcp::types::mrtr::{InputRequest, InputRequests, MrtrSignal, MRTR_SIGNAL_META_KEY};
+use pmcp::types::protocol::error_codes::{
+    INTERNAL_ERROR, INVALID_PARAMS, MISSING_REQUIRED_CLIENT_CAPABILITY,
+};
+use pmcp::types::protocol::ProtocolVersion;
+use pmcp::types::{Content, GetPromptResult, ListResourcesResult, ReadResourceResult};
+use pmcp::{RequestHandlerExtra, ServerCapabilities, ToolHandler};
+use serde_json::{json, Value};
+use tokio::task::JoinHandle;
+
+// ===========================================================================
+// Fixture vocabulary.
+// ===========================================================================
+
+/// The `requestState` key every fixture server in this file is BUILT with.
+const KEY: [u8; 32] = [0x2b; 32];
+
+/// Marker the scripted handlers put in an INCOMPLETE result's payload.
+const NEED_INPUT: &str = "need-input";
+
+/// Marker the scripted handlers put in a RESUMED result's payload.
+const RESUMED: &str = "resumed";
+
+/// Tool that asks for one `elicitation/create` input, then completes.
+const TOOL_ELICIT: &str = "elicit_once";
+
+/// Tool that asks for one `sampling/createMessage` input, then completes.
+const TOOL_SAMPLE: &str = "sample_once";
+
+/// Tool that asks for one `roots/list` input, then completes.
+const TOOL_ROOTS: &str = "roots_once";
+
+/// Tool that asks for all three kinds in ONE result, then completes.
+const TOOL_MIXED: &str = "mixed_kinds";
+
+/// Tool that needs THREE rounds, evolving its continuation each time.
+const TOOL_THREE_ROUNDS: &str = "three_rounds";
+
+/// Tool that asks for TWO entries and re-requests whichever is still missing.
+const TOOL_TWO_ENTRIES: &str = "two_entries";
+
+/// Tool that NEVER completes — it re-elicits forever (round-limit fixture).
+const TOOL_FOREVER: &str = "never_completes";
+
+/// Tool that always fails, so a genuine protocol error can be observed.
+const TOOL_BOOM: &str = "always_fails";
+
+/// The prompt that participates in MRTR.
+const PROMPT_NAME: &str = "greeting";
+
+/// The resource that participates in MRTR.
+const RESOURCE_URI: &str = "mem://mrtr";
+
+/// The two keys [`Script::TwoEntries`] insists on before it completes.
+const TWO_ENTRY_KEYS: [&str; 2] = ["first", "second"];
+
+/// How many elicitation rounds [`Script::ThreeRounds`] performs.
+const TOTAL_ROUNDS: u64 = 3;
+
+// ===========================================================================
+// Scripted handlers.
+// ===========================================================================
+
+/// What a scripted handler does when it is invoked.
+#[derive(Clone, Copy, Debug)]
+enum Script {
+    /// Ask for one `elicitation/create` input, then complete.
+    Elicit,
+    /// Ask for one `sampling/createMessage` input, then complete.
+    Sample,
+    /// Ask for one `roots/list` input, then complete.
+    Roots,
+    /// Ask for all three kinds at once, then complete.
+    Mixed,
+    /// Ask three times, evolving the continuation each round.
+    ThreeRounds,
+    /// Ask for two named entries, re-requesting whichever is still missing.
+    TwoEntries,
+    /// Never complete.
+    Forever,
+    /// Always fail with a protocol error.
+    Boom,
+}
+
+/// One `inputRequests` map holding a single entry.
+fn one(key: &str, request: InputRequest) -> InputRequests {
+    let mut requests = InputRequests::new();
+    requests.insert(key.to_string(), request);
+    requests
+}
+
+/// An `elicitation/create` entry, built through the shipped authoring type.
+fn elicit_entry(message: &str) -> InputRequest {
+    InputRequest::Elicitation(Box::new(ElicitRequestParams::Form {
+        message: message.to_string(),
+        requested_schema: json!({
+            "type": "object",
+            "properties": { "value": { "type": "string" } },
+        }),
+    }))
+}
+
+/// A `sampling/createMessage` entry, decoded from the wire shape so this file
+/// cannot drift from `CreateMessageParams`' field set.
+fn sampling_entry() -> InputRequest {
+    decode_entry(json!({
+        "method": "sampling/createMessage",
+        "params": { "messages": [], "maxTokens": 16 },
+    }))
+}
+
+/// A `roots/list` entry.
+fn roots_entry() -> InputRequest {
+    decode_entry(json!({ "method": "roots/list" }))
+}
+
+/// Decode an `inputRequests` VALUE into the typed entry.
+fn decode_entry(value: Value) -> InputRequest {
+    serde_json::from_value(value).expect("the input-request entry decodes")
+}
+
+/// The keys the client answered on this invocation.
+fn answered_keys(extra: &RequestHandlerExtra) -> Vec<String> {
+    extra
+        .input_responses()
+        .map(|responses| responses.keys().cloned().collect())
+        .unwrap_or_default()
+}
+
+/// The ENTIRE server-side MRTR authoring surface: build the requests you need
+/// answered, attach the continuation that lets you resume, and put the returned
+/// pair on the result's `_meta`.
+fn signal_meta(
+    input_requests: InputRequests,
+    continuation: Value,
+) -> pmcp::Result<serde_json::Map<String, Value>> {
+    let (key, value) = MrtrSignal {
+        input_requests,
+        continuation,
+    }
+    .into_meta_entry()
+    .map_err(|error| pmcp::Error::internal(error.to_string()))?;
+    let mut meta = serde_json::Map::new();
+    meta.insert(key, value);
+    Ok(meta)
+}
+
+/// Signal `input_required` from a TOOL handler (the payload dispatch path).
+fn ask(
+    extra: &RequestHandlerExtra,
+    input_requests: InputRequests,
+    continuation: Value,
+) -> pmcp::Result<Value> {
+    extra.set_result_meta(signal_meta(input_requests, continuation)?);
+    Ok(json!({ "answer": NEED_INPUT }))
+}
+
+/// A tool whose behavior is fixed by its [`Script`].
+#[derive(Clone)]
+struct ScriptedTool {
+    script: Script,
+    calls: Arc<AtomicUsize>,
+}
+
+#[async_trait]
+impl ToolHandler for ScriptedTool {
+    async fn handle(&self, _args: Value, extra: RequestHandlerExtra) -> pmcp::Result<Value> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        match self.script {
+            Script::Boom => Err(pmcp::Error::validation("this tool always fails")),
+            Script::ThreeRounds => three_rounds(&extra),
+            Script::TwoEntries => two_entries(&extra),
+            Script::Forever => ask(
+                &extra,
+                one("again", elicit_entry("and again")),
+                json!({ "forever": true }),
+            ),
+            other => single_kind(&extra, other),
+        }
+    }
+}
+
+/// One round of elicit-then-complete, for whichever single kind the script names.
+fn single_kind(extra: &RequestHandlerExtra, script: Script) -> pmcp::Result<Value> {
+    if extra.mrtr_continuation().is_some() {
+        return Ok(json!({ "answer": RESUMED, "answered": answered_keys(extra) }));
+    }
+    let requests = match script {
+        Script::Sample => one("model_says", sampling_entry()),
+        Script::Roots => one("workspace", roots_entry()),
+        Script::Mixed => {
+            let mut requests = one("who", elicit_entry("Who is asking?"));
+            requests.insert("model_says".to_string(), sampling_entry());
+            requests.insert("workspace".to_string(), roots_entry());
+            requests
+        },
+        _ => one("user_name", elicit_entry("What is your name?")),
+    };
+    ask(extra, requests, json!({ "step": 1 }))
+}
+
+/// Three rounds with an EVOLVING continuation: `round` counts up inside the
+/// sealed `requestState`, so each round's token is minted from different state.
+fn three_rounds(extra: &RequestHandlerExtra) -> pmcp::Result<Value> {
+    let round = extra
+        .mrtr_continuation()
+        .and_then(|state| state.get("round"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    if round >= TOTAL_ROUNDS {
+        return Ok(json!({ "answer": RESUMED, "rounds": round }));
+    }
+    let next = round + 1;
+    ask(
+        extra,
+        one(&format!("q{next}"), elicit_entry("one more, please")),
+        json!({ "round": next }),
+    )
+}
+
+/// Ask for [`TWO_ENTRY_KEYS`], accumulating what has been answered in the sealed
+/// continuation and RE-REQUESTING whatever is still missing (server obligation 9).
+fn two_entries(extra: &RequestHandlerExtra) -> pmcp::Result<Value> {
+    let mut seen: Vec<String> = extra
+        .mrtr_continuation()
+        .and_then(|state| state.get("answered"))
+        .and_then(Value::as_array)
+        .map(|values| {
+            values
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default();
+    for key in answered_keys(extra) {
+        if !seen.contains(&key) {
+            seen.push(key);
+        }
+    }
+    let missing: Vec<String> = TWO_ENTRY_KEYS
+        .iter()
+        .filter(|key| !seen.iter().any(|answered| answered == *key))
+        .map(|key| (*key).to_string())
+        .collect();
+    if missing.is_empty() {
+        return Ok(json!({ "answer": RESUMED, "answered": seen }));
+    }
+    let mut requests = InputRequests::new();
+    for key in &missing {
+        requests.insert(key.clone(), elicit_entry("still needed"));
+    }
+    ask(extra, requests, json!({ "answered": seen }))
+}
+
+/// A prompt that asks once and then resumes — the `prompts/get` leg of
+/// `sep-2322-non-tool-*`.
+struct MrtrPrompt;
+
+#[async_trait]
+impl PromptHandler for MrtrPrompt {
+    async fn handle(
+        &self,
+        _args: HashMap<String, String>,
+        extra: RequestHandlerExtra,
+    ) -> pmcp::Result<GetPromptResult> {
+        if extra.mrtr_continuation().is_some() {
+            return Ok(GetPromptResult::new(vec![], Some(RESUMED.to_string())));
+        }
+        let meta = signal_meta(
+            one("user_name", elicit_entry("Who should I greet?")),
+            json!({ "step": 1 }),
+        )?;
+        Ok(GetPromptResult::new(vec![], Some(NEED_INPUT.to_string())).with_meta(meta))
+    }
+}
+
+/// A resource that asks once and then resumes — the `resources/read` leg of
+/// `sep-2322-non-tool-*`. `ReadResourceResult._meta` is the third leg of the
+/// authoring surface, added by plan 113-09.
+struct MrtrResource;
+
+#[async_trait]
+impl ResourceHandler for MrtrResource {
+    async fn read(
+        &self,
+        uri: &str,
+        extra: RequestHandlerExtra,
+    ) -> pmcp::Result<ReadResourceResult> {
+        let resuming = extra.mrtr_continuation().is_some();
+        let text = if resuming { RESUMED } else { NEED_INPUT };
+        let mut result = ReadResourceResult::new(vec![Content::resource_with_text(
+            uri.to_string(),
+            text.to_string(),
+            "text/plain".to_string(),
+        )]);
+        if !resuming {
+            let meta = signal_meta(
+                one("user_name", elicit_entry("Who is reading?")),
+                json!({ "step": 1 }),
+            )?;
+            result._meta = Some(Value::Object(meta));
+        }
+        Ok(result)
+    }
+
+    async fn list(
+        &self,
+        _cursor: Option<String>,
+        _extra: RequestHandlerExtra,
+    ) -> pmcp::Result<ListResourcesResult> {
+        Ok(ListResourcesResult::new(vec![]))
+    }
+}
+
+// ===========================================================================
+// Spawning.
+// ===========================================================================
+
+/// A v2-opted-in server exposing every scripted tool plus the MRTR prompt and
+/// resource, holding [`KEY`] and no auth provider (so the AAD principal is the
+/// anonymous one).
+fn build_fixture_server(calls: &Arc<AtomicUsize>) -> Server {
+    let tool = |script: Script| ScriptedTool {
+        script,
+        calls: Arc::clone(calls),
+    };
+    Server::builder()
+        .name("v2-mrtr-conformance")
+        .version("1.0.0")
+        .capabilities(ServerCapabilities::default())
+        .with_supported_protocol_versions([
+            ProtocolVersion(V1.to_string()),
+            ProtocolVersion(V2.to_string()),
+        ])
+        .with_request_state_key(KEY)
+        .tool(TOOL_ELICIT, tool(Script::Elicit))
+        .tool(TOOL_SAMPLE, tool(Script::Sample))
+        .tool(TOOL_ROOTS, tool(Script::Roots))
+        .tool(TOOL_MIXED, tool(Script::Mixed))
+        .tool(TOOL_THREE_ROUNDS, tool(Script::ThreeRounds))
+        .tool(TOOL_TWO_ENTRIES, tool(Script::TwoEntries))
+        .tool(TOOL_FOREVER, tool(Script::Forever))
+        .tool(TOOL_BOOM, tool(Script::Boom))
+        .prompt(PROMPT_NAME, MrtrPrompt)
+        .resources(MrtrResource)
+        .build()
+        .expect("the fixture server builds")
+}
+
+/// Spawn the fixture on the STATEFUL default config, so what makes these round
+/// trips session-free is the PER-REQUEST era gate rather than a build-time
+/// stateless branch (RESEARCH Pitfall 1).
+async fn spawn_fixture() -> (SocketAddr, JoinHandle<()>, Arc<AtomicUsize>) {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let (addr, handle) = spawn_default_config(build_fixture_server(&calls)).await;
+    (addr, handle, calls)
+}
+
+// ===========================================================================
+// Request construction.
+// ===========================================================================
+
+/// `tools/call` params, identical between the first call and every retry —
+/// `name` and `arguments` are the digest-salient pair the `requestState` AAD
+/// binds to, so they must not move.
+fn tool_params(name: &str) -> Value {
+    json!({ "name": name, "arguments": {} })
+}
+
+/// A first-round `tools/call`.
+async fn call_tool(addr: SocketAddr, id: i64, name: &str) -> Resp {
+    post(
+        addr,
+        &v2_headers("tools/call", name),
+        &v2_body("tools/call", json!(id), tool_params(name)),
+    )
+    .await
+}
+
+/// A retry carrying `requestState` and `inputResponses` as TOP-LEVEL `params`
+/// siblings of `name` / `arguments` — never inside `_meta`.
+async fn retry_tool(addr: SocketAddr, id: Value, name: &str, state: &str, answers: Value) -> Resp {
+    let mut params = tool_params(name);
+    let object = params.as_object_mut().expect("params is an object");
+    object.insert("requestState".to_string(), json!(state));
+    object.insert("inputResponses".to_string(), answers);
+    post(
+        addr,
+        &v2_headers("tools/call", name),
+        &v2_body("tools/call", id, params),
+    )
+    .await
+}
+
+/// A well-formed `ElicitResult`.
+fn elicit_answer() -> Value {
+    json!({ "action": "accept", "content": { "value": "ada" } })
+}
+
+/// A well-formed `CreateMessageResult`.
+fn sampling_answer() -> Value {
+    json!({ "content": { "type": "text", "text": "hello" }, "model": "fixture-model" })
+}
+
+/// A well-formed `ListRootsResult`.
+fn roots_answer() -> Value {
+    json!({ "roots": [] })
+}
+
+// ===========================================================================
+// Response assertions.
+// ===========================================================================
+
+/// The `result` object, or a panic naming the raw body.
+fn result_of(response: &Resp) -> &Value {
+    response
+        .body
+        .get("result")
+        .unwrap_or_else(|| panic!("expected a result, got: {}", response.raw))
+}
+
+/// Assert an `input_required` result and return its `(requestState, keys)`.
+fn expect_input_required(response: &Resp) -> (String, Vec<String>) {
+    assert_eq!(response.status, 200, "body was {}", response.raw);
+    let result = result_of(response);
+    assert_eq!(
+        result.get("resultType").and_then(Value::as_str),
+        Some("input_required"),
+        "expected an input_required result, got: {result}"
+    );
+    let state = result["requestState"]
+        .as_str()
+        .unwrap_or_else(|| panic!("an input_required result must carry a requestState: {result}"))
+        .to_string();
+    let keys = result["inputRequests"]
+        .as_object()
+        .unwrap_or_else(|| panic!("an input_required result must carry inputRequests: {result}"))
+        .keys()
+        .cloned()
+        .collect::<Vec<_>>();
+    assert!(
+        !keys.is_empty(),
+        "inputRequests must not be empty: {result}"
+    );
+    (state, keys)
+}
+
+/// Assert a COMPLETE result whose payload carries the resumed marker.
+fn expect_resumed(response: &Resp) {
+    assert_eq!(response.status, 200, "body was {}", response.raw);
+    let result = result_of(response);
+    assert_eq!(
+        result.get("resultType").and_then(Value::as_str),
+        Some("complete"),
+        "expected a complete result, got: {result}"
+    );
+    assert!(
+        result.get("inputRequests").is_none() && result.get("requestState").is_none(),
+        "a complete result carries no MRTR fields: {result}"
+    );
+    assert!(
+        response.raw.contains(RESUMED),
+        "the handler must have taken its RESUME branch: {}",
+        response.raw
+    );
+}
+
+// ===========================================================================
+// sep-2322 basic kinds: incomplete then complete.
+// ===========================================================================
+
+/// `sep-2322-elicitation-incomplete` + `sep-2322-elicitation-complete`.
+#[tokio::test]
+async fn sep_2322_elicitation_incomplete_then_complete() {
+    let (addr, handle, calls) = spawn_fixture().await;
+
+    let first = call_tool(addr, 1, TOOL_ELICIT).await;
+    let (state, keys) = expect_input_required(&first);
+    assert_eq!(keys, vec!["user_name".to_string()]);
+    let entry = &result_of(&first)["inputRequests"]["user_name"];
+    assert_eq!(
+        entry["method"], "elicitation/create",
+        "the entry is a full request object: {entry}"
+    );
+
+    let second = retry_tool(
+        addr,
+        json!(2),
+        TOOL_ELICIT,
+        &state,
+        json!({ "user_name": elicit_answer() }),
+    )
+    .await;
+    handle.abort();
+
+    expect_resumed(&second);
+    assert!(
+        second.raw.contains("user_name"),
+        "the handler must have observed the answered key: {}",
+        second.raw
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 2, "one call per round");
+}
+
+/// `sep-2322-sampling-incomplete` + `sep-2322-sampling-complete`.
+#[tokio::test]
+async fn sep_2322_sampling_incomplete_then_complete() {
+    let (addr, handle, _calls) = spawn_fixture().await;
+
+    let first = call_tool(addr, 1, TOOL_SAMPLE).await;
+    let (state, keys) = expect_input_required(&first);
+    assert_eq!(keys, vec!["model_says".to_string()]);
+    assert_eq!(
+        result_of(&first)["inputRequests"]["model_says"]["method"],
+        "sampling/createMessage"
+    );
+
+    let second = retry_tool(
+        addr,
+        json!(2),
+        TOOL_SAMPLE,
+        &state,
+        json!({ "model_says": sampling_answer() }),
+    )
+    .await;
+    handle.abort();
+
+    expect_resumed(&second);
+}
+
+/// `sep-2322-list-roots-incomplete` + `sep-2322-list-roots-complete`.
+#[tokio::test]
+async fn sep_2322_list_roots_incomplete_then_complete() {
+    let (addr, handle, _calls) = spawn_fixture().await;
+
+    let first = call_tool(addr, 1, TOOL_ROOTS).await;
+    let (state, keys) = expect_input_required(&first);
+    assert_eq!(keys, vec!["workspace".to_string()]);
+    assert_eq!(
+        result_of(&first)["inputRequests"]["workspace"]["method"],
+        "roots/list"
+    );
+
+    let second = retry_tool(
+        addr,
+        json!(2),
+        TOOL_ROOTS,
+        &state,
+        json!({ "workspace": roots_answer() }),
+    )
+    .await;
+    handle.abort();
+
+    expect_resumed(&second);
+}
+
+/// `sep-2322-request-state-incomplete` + `sep-2322-request-state-complete`: the
+/// round trip carries BOTH `inputRequests` and `requestState`, and the retry
+/// echoing both resumes the handler's SEALED continuation.
+#[tokio::test]
+async fn sep_2322_request_state_incomplete_then_complete() {
+    let (addr, handle, _calls) = spawn_fixture().await;
+
+    let first = call_tool(addr, 1, TOOL_ELICIT).await;
+    let result = result_of(&first);
+    assert!(
+        result.get("inputRequests").is_some() && result.get("requestState").is_some(),
+        "the spec requires at least one; pmcp always emits BOTH: {result}"
+    );
+    let state = result["requestState"]
+        .as_str()
+        .expect("requestState is a string")
+        .to_string();
+    assert!(
+        !state.is_empty(),
+        "the continuation token must be a non-empty opaque blob"
+    );
+
+    let second = retry_tool(
+        addr,
+        json!(2),
+        TOOL_ELICIT,
+        &state,
+        json!({ "user_name": elicit_answer() }),
+    )
+    .await;
+    handle.abort();
+
+    expect_resumed(&second);
+}
+
+// ===========================================================================
+// sep-2322 multi-entry and multi-round.
+// ===========================================================================
+
+/// `sep-2322-multiple-inputs-incomplete` + `-complete`: several `inputRequests`
+/// of DIFFERENT kinds in one result, all answered in ONE retry.
+#[tokio::test]
+async fn sep_2322_multiple_inputs() {
+    let (addr, handle, calls) = spawn_fixture().await;
+
+    let first = call_tool(addr, 1, TOOL_MIXED).await;
+    let (state, mut keys) = expect_input_required(&first);
+    keys.sort();
+    assert_eq!(
+        keys,
+        vec![
+            "model_says".to_string(),
+            "who".to_string(),
+            "workspace".to_string()
+        ],
+        "all three kinds ride in ONE result"
+    );
+    let requests = &result_of(&first)["inputRequests"];
+    assert_eq!(requests["who"]["method"], "elicitation/create");
+    assert_eq!(requests["model_says"]["method"], "sampling/createMessage");
+    assert_eq!(requests["workspace"]["method"], "roots/list");
+
+    let second = retry_tool(
+        addr,
+        json!(2),
+        TOOL_MIXED,
+        &state,
+        json!({
+            "who": elicit_answer(),
+            "model_says": sampling_answer(),
+            "workspace": roots_answer(),
+        }),
+    )
+    .await;
+    handle.abort();
+
+    expect_resumed(&second);
+    assert_eq!(calls.load(Ordering::SeqCst), 2, "one retry, not three");
+}
+
+/// `sep-2322-multi-round-r1` + `-r2` + `-r3`: THREE rounds with an EVOLVING
+/// `requestState`, every token distinct from the previous one.
+#[tokio::test]
+async fn sep_2322_multi_round() {
+    let (addr, handle, calls) = spawn_fixture().await;
+
+    let r1 = call_tool(addr, 1, TOOL_THREE_ROUNDS).await;
+    let (state1, keys1) = expect_input_required(&r1);
+    assert_eq!(keys1, vec!["q1".to_string()]);
+
+    let r2 = retry_tool(
+        addr,
+        json!(2),
+        TOOL_THREE_ROUNDS,
+        &state1,
+        json!({ "q1": elicit_answer() }),
+    )
+    .await;
+    let (state2, keys2) = expect_input_required(&r2);
+    assert_eq!(keys2, vec!["q2".to_string()], "the ask EVOLVED");
+
+    let r3 = retry_tool(
+        addr,
+        json!(3),
+        TOOL_THREE_ROUNDS,
+        &state2,
+        json!({ "q2": elicit_answer() }),
+    )
+    .await;
+    let (state3, keys3) = expect_input_required(&r3);
+    assert_eq!(keys3, vec!["q3".to_string()]);
+
+    let r4 = retry_tool(
+        addr,
+        json!(4),
+        TOOL_THREE_ROUNDS,
+        &state3,
+        json!({ "q3": elicit_answer() }),
+    )
+    .await;
+    handle.abort();
+
+    expect_resumed(&r4);
+    assert_ne!(state1, state2, "round 2's token must differ from round 1's");
+    assert_ne!(state2, state3, "round 3's token must differ from round 2's");
+    assert_ne!(state1, state3, "no token may repeat across the exchange");
+    assert_eq!(calls.load(Ordering::SeqCst), 4, "three asks, then a resume");
+}
+
+/// `sep-2322-missing-response-rerequests`: under-supplied `inputResponses`
+/// produce a NEW `input_required` re-requesting ONLY the missing entry — never
+/// an error.
+#[tokio::test]
+async fn sep_2322_missing_response_rerequests() {
+    let (addr, handle, _calls) = spawn_fixture().await;
+
+    let first = call_tool(addr, 1, TOOL_TWO_ENTRIES).await;
+    let (state1, mut keys1) = expect_input_required(&first);
+    keys1.sort();
+    assert_eq!(keys1, vec!["first".to_string(), "second".to_string()]);
+
+    // Answer only ONE of the two.
+    let second = retry_tool(
+        addr,
+        json!(2),
+        TOOL_TWO_ENTRIES,
+        &state1,
+        json!({ "first": elicit_answer() }),
+    )
+    .await;
+    let (state2, keys2) = expect_input_required(&second);
+    assert!(
+        second.body.get("error").is_none(),
+        "an under-supplied retry must RE-REQUEST, not error: {}",
+        second.raw
+    );
+    assert_eq!(
+        keys2,
+        vec!["second".to_string()],
+        "only the MISSING entry is re-requested"
+    );
+    assert_ne!(state1, state2, "the re-request carries a fresh token");
+
+    let third = retry_tool(
+        addr,
+        json!(3),
+        TOOL_TWO_ENTRIES,
+        &state2,
+        json!({ "second": elicit_answer() }),
+    )
+    .await;
+    handle.abort();
+
+    expect_resumed(&third);
+}
+
+// ===========================================================================
+// sep-2322 non-tool methods.
+// ===========================================================================
+
+/// `sep-2322-non-tool-incomplete` + `-complete`, on `prompts/get` AND on
+/// `resources/read`.
+#[tokio::test]
+async fn sep_2322_non_tool_incomplete_then_complete() {
+    let (addr, handle, _calls) = spawn_fixture().await;
+
+    // --- prompts/get ---
+    let prompt_params = json!({ "name": PROMPT_NAME, "arguments": {} });
+    let prompt_first = post(
+        addr,
+        &v2_headers("prompts/get", PROMPT_NAME),
+        &v2_body("prompts/get", json!(1), prompt_params.clone()),
+    )
+    .await;
+    let (prompt_state, prompt_keys) = expect_input_required(&prompt_first);
+    assert_eq!(prompt_keys, vec!["user_name".to_string()]);
+
+    let mut prompt_retry = prompt_params;
+    let object = prompt_retry.as_object_mut().expect("params is an object");
+    object.insert("requestState".to_string(), json!(prompt_state));
+    object.insert(
+        "inputResponses".to_string(),
+        json!({ "user_name": elicit_answer() }),
+    );
+    let prompt_second = post(
+        addr,
+        &v2_headers("prompts/get", PROMPT_NAME),
+        &v2_body("prompts/get", json!(2), prompt_retry),
+    )
+    .await;
+    expect_resumed(&prompt_second);
+
+    // --- resources/read ---
+    let resource_params = json!({ "uri": RESOURCE_URI });
+    let resource_first = post(
+        addr,
+        &v2_headers("resources/read", RESOURCE_URI),
+        &v2_body("resources/read", json!(3), resource_params.clone()),
+    )
+    .await;
+    let (resource_state, resource_keys) = expect_input_required(&resource_first);
+    assert_eq!(resource_keys, vec!["user_name".to_string()]);
+
+    let mut resource_retry = resource_params;
+    let object = resource_retry.as_object_mut().expect("params is an object");
+    object.insert("requestState".to_string(), json!(resource_state));
+    object.insert(
+        "inputResponses".to_string(),
+        json!({ "user_name": elicit_answer() }),
+    );
+    let resource_second = post(
+        addr,
+        &v2_headers("resources/read", RESOURCE_URI),
+        &v2_body("resources/read", json!(4), resource_retry),
+    )
+    .await;
+    handle.abort();
+
+    expect_resumed(&resource_second);
+}
+
+// ===========================================================================
+// sep-2322 envelope and confinement.
+// ===========================================================================
+
+/// `sep-2322-result-type-included`: `resultType` is EXPLICITLY present with the
+/// right value on BOTH legs — never inferred from the presence of
+/// `inputRequests`.
+#[tokio::test]
+async fn sep_2322_result_type_included() {
+    let (addr, handle, _calls) = spawn_fixture().await;
+
+    let first = call_tool(addr, 1, TOOL_ELICIT).await;
+    let incomplete = result_of(&first);
+    assert!(
+        incomplete.get("resultType").is_some(),
+        "the KEY itself must be present: {incomplete}"
+    );
+    assert_eq!(incomplete["resultType"], "input_required");
+    let state = incomplete["requestState"]
+        .as_str()
+        .expect("requestState")
+        .to_string();
+
+    let second = retry_tool(
+        addr,
+        json!(2),
+        TOOL_ELICIT,
+        &state,
+        json!({ "user_name": elicit_answer() }),
+    )
+    .await;
+    let complete = result_of(&second);
+    assert_eq!(complete["resultType"], "complete");
+
+    // ...and a method that never participates in MRTR still states it.
+    let listed = post(
+        addr,
+        &v2_headers("tools/list", ""),
+        &v2_body("tools/list", json!(3), json!({})),
+    )
+    .await;
+    handle.abort();
+
+    assert_eq!(result_of(&listed)["resultType"], "complete");
+}
+
+/// `sep-2322-not-on-unsupported-requests`: `input_required` NEVER appears on a
+/// method outside `tools/call` / `prompts/get` / `resources/read`.
+///
+/// Two halves, both asserted at the wire level:
+/// 1. MRTR fields presented on `tools/list` are INERT — a normal complete result;
+/// 2. the same signalling tool invoked where MRTR is impossible (here: on v1)
+///    fails LOUDLY with `-32603`, which is the behavior plan 113-09 shipped —
+///    never a mangled "complete" and never a leaked internal signal.
+#[tokio::test]
+async fn sep_2322_not_on_unsupported_requests() {
+    let (addr, handle, _calls) = spawn_fixture().await;
+
+    let listed = post(
+        addr,
+        &v2_headers("tools/list", ""),
+        &v2_body(
+            "tools/list",
+            json!(1),
+            json!({
+                "requestState": "not-even-a-real-token",
+                "inputResponses": { "user_name": elicit_answer() },
+            }),
+        ),
+    )
+    .await;
+    handle.abort();
+
+    assert_eq!(listed.status, 200, "body was {}", listed.raw);
+    let result = result_of(&listed);
+    assert_eq!(result["resultType"], "complete");
+    assert!(result["tools"].is_array(), "the listing is the real one");
+    assert!(
+        result.get("inputRequests").is_none() && result.get("requestState").is_none(),
+        "no MRTR field may appear on a non-eligible method's result: {result}"
+    );
+
+    // A signal where MRTR is IMPOSSIBLE is a server bug, and plan 09 made it
+    // loud. The stateless config is used only so the absence of a v1 session is
+    // not the variable under test.
+    let calls = Arc::new(AtomicUsize::new(0));
+    let (v1_addr, v1_handle) = spawn_stateless_config(build_fixture_server(&calls)).await;
+    let v1 = post(
+        v1_addr,
+        &[],
+        &v1_body("tools/call", json!(1), tool_params(TOOL_ELICIT)),
+    )
+    .await;
+    v1_handle.abort();
+
+    assert_eq!(
+        v1.body["error"]["code"], INTERNAL_ERROR,
+        "a signal on v1 must fail loudly, got: {}",
+        v1.raw
+    );
+    assert!(
+        v1.body.get("result").is_none(),
+        "no result may accompany the failure: {}",
+        v1.raw
+    );
+    assert!(
+        !v1.raw.contains(MRTR_SIGNAL_META_KEY),
+        "the internal signal key must never reach the wire: {}",
+        v1.raw
+    );
+}
+
+/// `sep-2322-reject-tampered-state`: a tampered `requestState` is a JSON-RPC
+/// error — never a complete result and never a re-prompt.
+///
+/// Distinct from `tests/v2_mrtr_ingress.rs::tampered_state_errors`, which mints
+/// its token through the testing seam: this one tampers with a token the SERVER
+/// actually minted during a live round trip, which is the conformance shape.
+#[tokio::test]
+async fn sep_2322_reject_tampered_state() {
+    let (addr, handle, calls) = spawn_fixture().await;
+
+    let first = call_tool(addr, 1, TOOL_ELICIT).await;
+    let (state, _keys) = expect_input_required(&first);
+
+    let tampered = retry_tool(
+        addr,
+        json!(2),
+        TOOL_ELICIT,
+        &format!("{state}-TAMPERED"),
+        json!({ "user_name": elicit_answer() }),
+    )
+    .await;
+    handle.abort();
+
+    assert_eq!(
+        tampered.body["error"]["code"], INVALID_PARAMS,
+        "body was {}",
+        tampered.raw
+    );
+    assert!(
+        tampered.body.get("result").is_none(),
+        "neither a complete result nor a re-prompt: {}",
+        tampered.raw
+    );
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "only the first round reached the handler"
+    );
+}
+
+/// `sep-2322-respect-client-capabilities` (scenario class
+/// `input-required-result-capability-check`): a server that needs a capability
+/// the client did not declare answers `-32021` at HTTP 400 with an
+/// OBJECT-shaped `data.requiredCapabilities`.
+///
+/// The under-declaration is DELIBERATE — built with `v2_body_with_caps` rather
+/// than by omitting the harness default — so this cannot pass by accident.
+#[tokio::test]
+async fn input_required_result_capability_check() {
+    let (addr, handle, calls) = spawn_fixture().await;
+
+    let response = post(
+        addr,
+        &v2_headers("tools/call", TOOL_SAMPLE),
+        &v2_body_with_caps(
+            "tools/call",
+            json!(1),
+            tool_params(TOOL_SAMPLE),
+            json!({ "elicitation": {}, "roots": {} }),
+        ),
+    )
+    .await;
+    handle.abort();
+
+    assert_eq!(response.status, 400, "body was {}", response.raw);
+    assert_eq!(
+        response.body["error"]["code"], MISSING_REQUIRED_CLIENT_CAPABILITY,
+        "body was {}",
+        response.raw
+    );
+    let required = &response.body["error"]["data"]["requiredCapabilities"];
+    assert!(
+        required.is_object(),
+        "requiredCapabilities is a ClientCapabilities OBJECT, never an array or a \
+         list of strings: {required}"
+    );
+    assert!(
+        required.get("sampling").is_some(),
+        "the undeclared capability must be named: {required}"
+    );
+    assert!(
+        response.body.get("result").is_none(),
+        "the whole result is refused, all-or-nothing: {}",
+        response.raw
+    );
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "the handler ran; the REFUSAL happened at egress, before any minting"
+    );
+}
+
+/// `sep-2322-ignore-unexpected-params`: unexpected/extra `params` are TOLERATED
+/// rather than erroring — on the first call AND on the retry.
+#[tokio::test]
+async fn sep_2322_ignore_unexpected_params() {
+    let (addr, handle, _calls) = spawn_fixture().await;
+
+    let mut params = tool_params(TOOL_ELICIT);
+    let object = params.as_object_mut().expect("params is an object");
+    object.insert(
+        "unexpectedField".to_string(),
+        json!({ "anything": [1, 2, 3] }),
+    );
+    object.insert("anotherOne".to_string(), json!("surplus"));
+
+    let first = post(
+        addr,
+        &v2_headers("tools/call", TOOL_ELICIT),
+        &v2_body("tools/call", json!(1), params.clone()),
+    )
+    .await;
+    let (state, _keys) = expect_input_required(&first);
+
+    let object = params.as_object_mut().expect("params is an object");
+    object.insert("requestState".to_string(), json!(state));
+    object.insert(
+        "inputResponses".to_string(),
+        json!({ "user_name": elicit_answer() }),
+    );
+    let second = post(
+        addr,
+        &v2_headers("tools/call", TOOL_ELICIT),
+        &v2_body("tools/call", json!(2), params),
+    )
+    .await;
+    handle.abort();
+
+    expect_resumed(&second);
+}
+
+/// `sep-2322-validate-input-responses`: a structurally invalid `inputResponses`
+/// map is REJECTED before the handler runs — absent is never conflated with
+/// invalid.
+#[tokio::test]
+async fn sep_2322_validate_input_responses() {
+    let (addr, handle, calls) = spawn_fixture().await;
+
+    let first = call_tool(addr, 1, TOOL_ELICIT).await;
+    let (state, _keys) = expect_input_required(&first);
+
+    let invalid = retry_tool(
+        addr,
+        json!(2),
+        TOOL_ELICIT,
+        &state,
+        json!({ "user_name": "not a result object at all" }),
+    )
+    .await;
+    handle.abort();
+
+    assert_eq!(invalid.status, 400, "body was {}", invalid.raw);
+    assert_eq!(invalid.body["error"]["code"], INVALID_PARAMS);
+    assert!(
+        invalid.body.get("result").is_none(),
+        "an invalid map must not produce a result: {}",
+        invalid.raw
+    );
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "validation happens BEFORE the handler is invoked"
+    );
+}
+
+/// `sep-2322-error-on-protocol-error`: a genuine protocol error surfaces as a
+/// JSON-RPC error, not as a re-prompt.
+#[tokio::test]
+async fn sep_2322_error_on_protocol_error() {
+    let (addr, handle, _calls) = spawn_fixture().await;
+
+    // (a) a handler that fails.
+    let boom = call_tool(addr, 1, TOOL_BOOM).await;
+    assert!(
+        boom.body.get("error").is_some() || result_of(&boom).get("isError").is_some(),
+        "a failing handler must surface as an error, got: {}",
+        boom.raw
+    );
+    assert!(
+        !boom.raw.contains("input_required"),
+        "an error must never be dressed up as a re-prompt: {}",
+        boom.raw
+    );
+
+    // (b) a request naming a tool that does not exist.
+    let unknown = call_tool(addr, 2, "no-such-tool").await;
+    handle.abort();
+
+    assert!(
+        unknown.body.get("error").is_some() || result_of(&unknown).get("isError").is_some(),
+        "an unknown tool is a protocol error, got: {}",
+        unknown.raw
+    );
+    assert!(
+        !unknown.raw.contains("input_required"),
+        "...and never a re-prompt: {}",
+        unknown.raw
+    );
+}
+
+// ===========================================================================
+// pmcp-added wire-shape assertions.
+// ===========================================================================
+
+/// The MRTR fields are TOP-LEVEL `params` siblings, NOT `_meta` members.
+///
+/// This is the single most likely silent interop failure in the phase: an
+/// in-house-only round-trip test that put them in `_meta` at both ends would
+/// pass while every conformance check failed (T-113-28).
+#[tokio::test]
+async fn mrtr_fields_are_params_siblings() {
+    let (addr, handle, _calls) = spawn_fixture().await;
+
+    let first = call_tool(addr, 1, TOOL_ELICIT).await;
+    let (state, _keys) = expect_input_required(&first);
+
+    // (a) the WRONG placement: inside `params._meta`.
+    let mut frame: Value =
+        serde_json::from_str(&v2_body("tools/call", json!(2), tool_params(TOOL_ELICIT)))
+            .expect("the harness emits valid JSON");
+    let meta = frame["params"]["_meta"]
+        .as_object_mut()
+        .expect("the harness always writes params._meta");
+    meta.insert("requestState".to_string(), json!(state.clone()));
+    meta.insert(
+        "inputResponses".to_string(),
+        json!({ "user_name": elicit_answer() }),
+    );
+    let misplaced = post(
+        addr,
+        &v2_headers("tools/call", TOOL_ELICIT),
+        &frame.to_string(),
+    )
+    .await;
+    let (_state, keys) = expect_input_required(&misplaced);
+    assert_eq!(
+        keys,
+        vec!["user_name".to_string()],
+        "an `_meta`-placed retry must NOT resume — it re-elicits from scratch"
+    );
+
+    // (b) the RIGHT placement: top-level `params` siblings.
+    let correct = retry_tool(
+        addr,
+        json!(3),
+        TOOL_ELICIT,
+        &state,
+        json!({ "user_name": elicit_answer() }),
+    )
+    .await;
+    handle.abort();
+
+    expect_resumed(&correct);
+}
+
+/// Spec MUST: the JSON-RPC id differs between the initial request and the retry.
+/// The server accepts the different id and echoes the RETRY's id back.
+#[tokio::test]
+async fn mrtr_retry_uses_different_id() {
+    let (addr, handle, _calls) = spawn_fixture().await;
+
+    let first = call_tool(addr, 101, TOOL_ELICIT).await;
+    assert_eq!(first.body["id"], json!(101), "round 1 echoes its own id");
+    let (state, _keys) = expect_input_required(&first);
+
+    // A STRING id, which is also a different JSON type from round 1's.
+    let second = retry_tool(
+        addr,
+        json!("retry-202"),
+        TOOL_ELICIT,
+        &state,
+        json!({ "user_name": elicit_answer() }),
+    )
+    .await;
+    handle.abort();
+
+    expect_resumed(&second);
+    assert_eq!(
+        second.body["id"],
+        json!("retry-202"),
+        "the retry's OWN id is echoed, never round 1's: {}",
+        second.raw
+    );
+}
+
+/// The pmcp-internal MRTR signal key never reaches the wire, on ANY path.
+///
+/// `dev.pmcp/mrtr` carries the handler's PLAINTEXT continuation — the very state
+/// the AEAD `requestState` token exists to seal (T-113-31).
+#[tokio::test]
+async fn mrtr_signal_key_never_on_wire() {
+    let (addr, handle, _calls) = spawn_fixture().await;
+
+    let mut bodies: Vec<String> = Vec::new();
+
+    let first = call_tool(addr, 1, TOOL_ELICIT).await;
+    let (state, _keys) = expect_input_required(&first);
+    bodies.push(first.raw.clone());
+
+    bodies.push(
+        retry_tool(
+            addr,
+            json!(2),
+            TOOL_ELICIT,
+            &state,
+            json!({ "user_name": elicit_answer() }),
+        )
+        .await
+        .raw,
+    );
+    bodies.push(call_tool(addr, 3, TOOL_MIXED).await.raw);
+    bodies.push(call_tool(addr, 4, TOOL_BOOM).await.raw);
+    bodies.push(
+        post(
+            addr,
+            &v2_headers("prompts/get", PROMPT_NAME),
+            &v2_body(
+                "prompts/get",
+                json!(5),
+                json!({ "name": PROMPT_NAME, "arguments": {} }),
+            ),
+        )
+        .await
+        .raw,
+    );
+    bodies.push(
+        post(
+            addr,
+            &v2_headers("resources/read", RESOURCE_URI),
+            &v2_body("resources/read", json!(6), json!({ "uri": RESOURCE_URI })),
+        )
+        .await
+        .raw,
+    );
+    bodies.push(
+        post(
+            addr,
+            &v2_headers("tools/list", ""),
+            &v2_body("tools/list", json!(7), json!({})),
+        )
+        .await
+        .raw,
+    );
+    handle.abort();
+
+    assert_eq!(bodies.len(), 7, "every exchange was captured");
+    for body in &bodies {
+        assert!(!body.is_empty(), "a captured body must not be empty");
+        assert!(
+            !body.contains(MRTR_SIGNAL_META_KEY),
+            "the internal signal key leaked onto the wire: {body}"
+        );
+    }
+}
+
+// ===========================================================================
+// Manifest enforcement.
+// ===========================================================================
+
+/// The phase directory holding the manifest and the spec re-check record.
+fn phase_dir() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join(".planning")
+        .join("phases")
+        .join("113-stateless-http-multi-round-trip-elicitation")
+}
+
+/// The lines of `text` under the `## `-level `heading`, up to the next `## `.
+///
+/// `###` sub-headings are kept, since they belong to the section.
+fn section(text: &str, heading: &str) -> String {
+    let mut collected = String::new();
+    let mut inside = false;
+    for line in text.lines() {
+        if line.starts_with("## ") {
+            if inside {
+                break;
+            }
+            inside = line.trim() == heading;
+            continue;
+        }
+        if inside {
+            collected.push_str(line);
+            collected.push('\n');
+        }
+    }
+    collected
+}
+
+/// The cells of every markdown table row in `text`, minus separator rows.
+fn table_rows(text: &str) -> Vec<Vec<String>> {
+    text.lines()
+        .map(str::trim)
+        .filter(|line| line.starts_with('|'))
+        .map(|line| {
+            line.trim_matches('|')
+                .split('|')
+                .map(|cell| cell.trim().trim_matches('`').to_string())
+                .collect::<Vec<_>>()
+        })
+        .filter(|cells| {
+            !cells
+                .iter()
+                .all(|cell| cell.chars().all(|ch| ch == '-' || ch == ':'))
+        })
+        .collect()
+}
+
+/// Every backticked `sep-2322-*` check id in `113-SPEC-RECHECK.md` § B.2.
+fn pinned_check_ids(recheck: &str) -> Vec<String> {
+    let start = recheck.find("### B.2").expect("§ B.2 exists");
+    let rest = &recheck[start..];
+    let end = rest.find("### B.3").expect("§ B.3 follows § B.2");
+    let mut ids: Vec<String> = table_rows(&rest[..end])
+        .into_iter()
+        .filter_map(|cells| cells.get(1).cloned())
+        .filter(|cell| cell.starts_with("sep-2322-"))
+        .collect();
+    ids.sort();
+    ids.dedup();
+    ids
+}
+
+/// The 40-character pinned conformance sha recorded in `113-SPEC-RECHECK.md`.
+fn pinned_sha(recheck: &str) -> String {
+    table_rows(recheck)
+        .into_iter()
+        .find(|cells| cells.first().is_some_and(|c| c.contains("Pinned sha")))
+        .and_then(|cells| cells.get(1).cloned())
+        .expect("§ B.1 records a pinned sha")
+}
+
+/// The auxiliary manifest tables whose FIRST column names a local test.
+const AUXILIARY_SECTIONS: [&str; 3] = [
+    "## pmcp-Added Wire-Shape Rows",
+    "## Enforcement",
+    "## Real-Client Interoperability (Plan 113-11 Task 2)",
+];
+
+/// Every `sep-2322` scenario at the PINNED commit has a named test in this file.
+///
+/// This is what makes an unmapped upstream scenario a BUILD-VISIBLE FAILURE
+/// rather than a silent omission (T-113-65). It re-reads
+/// `113-SPEC-RECHECK.md` § B (the authority) and `113-CONFORMANCE-MANIFEST.md`
+/// (the derived inventory) and cross-checks both against this file's source.
+#[test]
+fn manifest_maps_every_pinned_scenario() {
+    let dir = phase_dir();
+    let Ok(manifest) = fs::read_to_string(dir.join("113-CONFORMANCE-MANIFEST.md")) else {
+        // `.planning/` is excluded from the published crate (Cargo.toml
+        // `exclude`), so a downstream `cargo test` has no manifest to check.
+        // In THIS repo the directory exists, so the check below always runs —
+        // deleting the manifest while keeping the phase directory FAILS here.
+        assert!(
+            !dir.exists(),
+            "the phase directory exists but its conformance manifest is missing — an \
+             upstream scenario would go unmeasured"
+        );
+        return;
+    };
+    let recheck = fs::read_to_string(dir.join("113-SPEC-RECHECK.md"))
+        .expect("the spec re-check record is the manifest's authority");
+    let source = fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("v2_mrtr.rs"),
+    )
+    .expect("this test file is readable");
+
+    // 1. The manifest is pinned to the SAME conformance commit as the record.
+    let sha = pinned_sha(&recheck);
+    assert_eq!(sha.len(), 40, "a conformance pin is a full sha: {sha}");
+    assert!(
+        manifest.contains(&sha),
+        "the manifest must carry the pinned sha {sha} copied from 113-SPEC-RECHECK.md"
+    );
+
+    // 2. The mapping covers the pinned check ids EXACTLY, in both directions.
+    let pinned = pinned_check_ids(&recheck);
+    assert!(!pinned.is_empty(), "§ B.2 enumerates the check ids");
+    let mapping = table_rows(&section(&manifest, "## Scenario → Test Mapping"));
+    let rows: Vec<(String, String)> = mapping
+        .into_iter()
+        .filter(|cells| cells.len() == 5 && cells[0].parse::<usize>().is_ok())
+        .map(|cells| (cells[1].clone(), cells[4].clone()))
+        .collect();
+    assert_eq!(
+        rows.len(),
+        pinned.len(),
+        "one manifest row per pinned check id"
+    );
+    let mut mapped: Vec<String> = rows.iter().map(|(id, _)| id.clone()).collect();
+    mapped.sort();
+    assert_eq!(
+        mapped, pinned,
+        "the manifest's check-id set must equal 113-SPEC-RECHECK.md § B.2's — a \
+         difference means either an UNMAPPED upstream scenario or a stale row"
+    );
+
+    // 3. Every mapped test exists in this file.
+    for (check_id, test_name) in &rows {
+        assert!(
+            source.contains(&format!("fn {test_name}(")),
+            "{check_id} maps to `{test_name}`, which does not exist in tests/v2_mrtr.rs"
+        );
+    }
+
+    // 4. The auxiliary tables name real tests too (strict when present).
+    for heading in AUXILIARY_SECTIONS {
+        for cells in table_rows(&section(&manifest, heading)) {
+            let Some(name) = cells.first() else { continue };
+            if name.is_empty() || name.contains(' ') {
+                continue;
+            }
+            assert!(
+                source.contains(&format!("fn {name}(")),
+                "{heading} names `{name}`, which does not exist in tests/v2_mrtr.rs"
+            );
+        }
+    }
+
+    // 5. `## Unmapped` is EMPTY.
+    let unmapped = section(&manifest, "## Unmapped");
+    assert!(
+        !unmapped.contains("sep-2322-"),
+        "the Unmapped section lists an unmeasured scenario:\n{unmapped}"
+    );
+}
