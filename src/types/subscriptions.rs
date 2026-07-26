@@ -55,6 +55,17 @@ pub const ACKNOWLEDGED_METHOD: &str = "notifications/subscriptions/acknowledged"
 /// stream (and equals this response's `id`)".
 pub const SUBSCRIPTION_ID_META_KEY: &str = "io.modelcontextprotocol/subscriptionId";
 
+/// Upper bound on the number of `resourceSubscriptions` URIs ONE agreed listen
+/// filter retains.
+///
+/// The registry keeps an agreed filter per live stream and
+/// [`SubscriptionFilter::covers`] scans this list for every
+/// `notifications/resources/updated`, so an unbounded list is both a retained-memory
+/// and a work-amplification `DoS` — the same class every other Phase-113 ingress
+/// field (`requestState`, `inputResponses`, the SSE line buffer, the v2 headers) is
+/// already bounded against. Generous enough that no plausible client hits it.
+pub const MAX_AGREED_RESOURCE_SUBSCRIPTIONS: usize = 1024;
+
 /// The set of notification types a client asks a listen stream to deliver.
 ///
 /// All four fields are OPTIONAL (`113-SPEC-RECHECK.md` § A.6):
@@ -175,6 +186,16 @@ impl SubscriptionFilter {
     /// The result can never be a superset of `self` — every field is a
     /// conjunction with the requested value — which is the spec MUST that
     /// [`SubscriptionAcknowledgedParams::notifications`] reports.
+    ///
+    /// `resourceSubscriptions` is additionally TRUNCATED to
+    /// [`MAX_AGREED_RESOURCE_SUBSCRIPTIONS`]: the requested list is
+    /// client-supplied and was otherwise bounded only by the transport's whole-body
+    /// limit, so a single caller could park megabytes of URIs in the server's
+    /// instance-local listen registry AND make every `notifications/resources/updated`
+    /// fan-out a linear scan of them, once per subscriber, under the registry read
+    /// lock. Truncating rather than rejecting keeps the operation conformant — the
+    /// agreed set is explicitly allowed to omit entries and is reported back to the
+    /// client in the acknowledgement, so the omission is visible rather than silent.
     #[must_use]
     pub fn intersect_with_capabilities(&self, capabilities: &ServerCapabilities) -> Self {
         let [tools, prompts, resources_list, resource_subscribe] = supported_flags(capabilities);
@@ -184,7 +205,23 @@ impl SubscriptionFilter {
             prompts_list_changed: agreed_flag(self.prompts_list_changed, prompts),
             resources_list_changed: agreed_flag(self.resources_list_changed, resources_list),
             resource_subscriptions: match (&self.resource_subscriptions, resource_subscribe) {
-                (Some(uris), true) if !uris.is_empty() => Some(uris.clone()),
+                (Some(uris), true) if !uris.is_empty() => {
+                    if uris.len() > MAX_AGREED_RESOURCE_SUBSCRIPTIONS {
+                        tracing::warn!(
+                            target: "mcp.subscriptions",
+                            requested = uris.len(),
+                            max = MAX_AGREED_RESOURCE_SUBSCRIPTIONS,
+                            "truncated a subscriptions/listen resourceSubscriptions list to the \
+                             per-stream bound; the acknowledgement reports the agreed subset"
+                        );
+                    }
+                    Some(
+                        uris.iter()
+                            .take(MAX_AGREED_RESOURCE_SUBSCRIPTIONS)
+                            .cloned()
+                            .collect(),
+                    )
+                },
                 _ => None,
             },
         }
