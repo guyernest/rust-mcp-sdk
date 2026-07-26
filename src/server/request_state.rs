@@ -76,11 +76,6 @@
 //! deliberately absent from both `default` and `full`, so the seam adds nothing to
 //! the shipped public API.
 
-// Why: this module lands in Wave 2, ahead of its production consumers (plan 06
-// wires `verify` into dispatch; plan 09 wires `mint` into the input-required
-// result path). Until then every `pub(crate)` item here is dead code under
-// `RUSTFLAGS = -D warnings`. Plan 12 removes this allow once both consumers exist.
-#![allow(dead_code)]
 // Why: the `pub(crate)` markers are load-bearing, not redundant. Under
 // `feature = "fuzzing"` this module is declared `pub mod` (so the fuzz target can
 // reach `fuzz_support`), and `pub(crate)` is then the ONLY thing keeping the
@@ -228,9 +223,15 @@ impl RequestStateClock for SystemClock {
 }
 
 /// A clock pinned to a fixed instant, for deterministic expiry tests.
+///
+/// `#[cfg(test)]` rather than covered by a module-wide `allow(dead_code)`: it has
+/// no production caller, and scoping it means a genuinely dead PRODUCTION item
+/// still fails the `-D warnings` build instead of hiding behind a blanket allow.
+#[cfg(test)]
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct FixedClock(pub i64);
 
+#[cfg(test)]
 impl RequestStateClock for FixedClock {
     fn now_unix(&self) -> i64 {
         self.0
@@ -392,7 +393,9 @@ impl RequestStateCodec {
         Ok(self)
     }
 
-    /// Replace the clock (see [`RequestStateClock`]).
+    /// Replace the clock (see [`RequestStateClock`]). Test seam — see
+    /// [`FixedClock`] for why these are `#[cfg(test)]` rather than blanket-allowed.
+    #[cfg(test)]
     #[must_use]
     pub(crate) fn with_clock(mut self, clock: Arc<dyn RequestStateClock>) -> Self {
         self.clock = clock;
@@ -406,7 +409,8 @@ impl RequestStateCodec {
         self
     }
 
-    /// The id of the key new tokens are minted under.
+    /// The id of the key new tokens are minted under. Test seam.
+    #[cfg(test)]
     pub(crate) const fn minting_key_id(&self) -> KeyId {
         self.minting.0
     }
@@ -416,12 +420,14 @@ impl RequestStateCodec {
         self.accepting.iter().map(|(id, _)| *id).collect()
     }
 
-    /// The configured continuation lifetime.
+    /// The configured continuation lifetime. Test seam.
+    #[cfg(test)]
     pub(crate) const fn ttl(&self) -> Duration {
         self.ttl
     }
 
-    /// The codec's current time, through its injected clock.
+    /// The codec's current time, through its injected clock. Test seam.
+    #[cfg(test)]
     pub(crate) fn now_unix(&self) -> i64 {
         self.clock.now_unix()
     }
@@ -666,6 +672,13 @@ impl RequestStateCodec {
                 "requestState continuation is not serializable: {e}"
             ))
         })?;
+        // `seal_in_place_append_tag` APPENDS the 16-byte tag. Without headroom
+        // that push reallocates, and the old allocation — still holding the
+        // CONFIDENTIAL plaintext continuation — is handed back to the allocator
+        // unscrubbed, with no handle left to zeroize it (T-113-05). Reserving the
+        // tag up front keeps the seal genuinely in place, so the only copy of the
+        // plaintext is the buffer that is overwritten with ciphertext.
+        sealed.reserve(CHACHA20_POLY1305.tag_len());
 
         let mut nonce = [0u8; NONCE_LEN];
         getrandom::fill(&mut nonce)
@@ -763,19 +776,26 @@ fn bind_scrubbed(raw: &str, var: &str) -> Result<(KeyId, LessSafeKey)> {
 ///
 /// Length disambiguates the two encodings: a 64-character hex string is also
 /// valid base64url, but decodes to 48 bytes rather than 32, so it falls through
-/// to the hex attempt. Any intermediate wrong-length buffer is zeroized before it
-/// is dropped.
+/// to the hex attempt. EVERY buffer this function decodes and does not return is
+/// zeroized before it is dropped — including the attempts AFTER the accepted one.
+/// Returning early out of the loop dropped those unscrubbed, which is exactly the
+/// key material T-113-05 says never reaches the allocator in the clear.
 fn decode_key_material(raw: &str, var: &str) -> Result<Vec<u8>> {
     let trimmed = raw.trim();
     let attempts = [
         URL_SAFE_NO_PAD.decode(trimmed.as_bytes()).ok(),
         decode_hex(trimmed),
     ];
+    let mut accepted: Option<Vec<u8>> = None;
     for mut bytes in attempts.into_iter().flatten() {
-        if bytes.len() == KEY_LEN {
-            return Ok(bytes);
+        if accepted.is_none() && bytes.len() == KEY_LEN {
+            accepted = Some(bytes);
+            continue;
         }
         bytes.zeroize();
+    }
+    if let Some(bytes) = accepted {
+        return Ok(bytes);
     }
     Err(Error::validation(format!(
         "{var} must decode to exactly {KEY_LEN} bytes as base64url-no-pad or hex; \

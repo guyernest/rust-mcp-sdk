@@ -229,25 +229,39 @@ async fn read_next_frame(state: &mut PayloadState) -> Option<Error> {
 /// A chunk boundary can fall in the MIDDLE of a multi-byte character, so
 /// `String::from_utf8_lossy` per chunk would corrupt any non-ASCII resource URI
 /// travelling on the stream. An INCOMPLETE tail is retained for the next chunk;
-/// genuinely INVALID bytes are lossily decoded immediately, because retaining
-/// those forever would wedge the stream on hostile input (T-113-67).
+/// genuinely INVALID bytes are replaced with U+FFFD immediately, because
+/// retaining those forever would wedge the stream on hostile input (T-113-67).
+///
+/// The two cases are handled INDEPENDENTLY rather than "any invalid byte means
+/// decode the whole buffer lossily": a chunk that carries both an invalid byte
+/// AND a trailing incomplete character would otherwise have that trailing
+/// character replaced too, corrupting a legitimate multi-byte character that the
+/// next chunk was about to complete.
 fn take_utf8_prefix(buffer: &mut Vec<u8>) -> String {
-    let valid_up_to = match std::str::from_utf8(buffer) {
-        Ok(_) => buffer.len(),
-        // `error_len() == None` means "unexpected end of input" — an incomplete
-        // character that the next chunk will finish.
-        Err(e) if e.error_len().is_none() => e.valid_up_to(),
-        // Genuinely invalid bytes: never completable, so decode lossily now.
-        Err(_) => {
-            let text = String::from_utf8_lossy(buffer).into_owned();
-            buffer.clear();
+    let mut text = String::new();
+    loop {
+        let error = match std::str::from_utf8(buffer) {
+            Ok(valid) => {
+                text.push_str(valid);
+                buffer.clear();
+                return text;
+            },
+            Err(error) => error,
+        };
+        let valid_up_to = error.valid_up_to();
+        if let Ok(valid) = std::str::from_utf8(&buffer[..valid_up_to]) {
+            text.push_str(valid);
+        }
+        let Some(invalid_len) = error.error_len() else {
+            // "Unexpected end of input": an incomplete character the next chunk
+            // will finish. Keep exactly those bytes and yield what decoded.
+            buffer.drain(..valid_up_to);
             return text;
-        },
-    };
-    let rest = buffer.split_off(valid_up_to);
-    let text = String::from_utf8_lossy(buffer).into_owned();
-    *buffer = rest;
-    text
+        };
+        // Never completable — emit the replacement character and skip past it.
+        text.push('\u{FFFD}');
+        buffer.drain(..valid_up_to + invalid_len);
+    }
 }
 
 /// Feed `chunk` to the SHARED SSE parser and return the payloads it completed.
@@ -470,13 +484,14 @@ fn classify_frame(payload: &str, subscription_id: &RequestId) -> FrameOutcome {
             truncate(payload)
         ))));
     };
-    if let Err(e) = verify_subscription_id(&frame, subscription_id) {
-        return FrameOutcome::Failed(Box::new(e));
-    }
-    if frame.get("result").is_some() {
-        // The graceful-teardown `SubscriptionsListenResult`.
-        return FrameOutcome::Terminal;
-    }
+    // The error arm runs BEFORE the subscription-id check, and deliberately so:
+    // a JSON-RPC error frame carries neither `params` nor `result`, which are the
+    // only two places `verify_subscription_id` looks. Checking the tag first made
+    // this arm UNREACHABLE — every server-authored error on the stream surfaced
+    // as a bogus "carries subscriptionId <absent>" protocol error and the real
+    // `code`/`message` were discarded. An error carries no notification payload,
+    // so surfacing it cannot cross-deliver another subscription's data (T-113-66
+    // is about delivered notifications, which still go through the check below).
     if let Some(error) = frame.get("error") {
         let error = serde_json::from_value::<crate::types::jsonrpc::JSONRPCError>(error.clone())
             .map_or_else(
@@ -484,6 +499,13 @@ fn classify_frame(payload: &str, subscription_id: &RequestId) -> FrameOutcome {
                 Error::from_jsonrpc_error,
             );
         return FrameOutcome::Failed(Box::new(error));
+    }
+    if let Err(e) = verify_subscription_id(&frame, subscription_id) {
+        return FrameOutcome::Failed(Box::new(e));
+    }
+    if frame.get("result").is_some() {
+        // The graceful-teardown `SubscriptionsListenResult`.
+        return FrameOutcome::Terminal;
     }
     if frame.get("method").and_then(Value::as_str) == Some(ACKNOWLEDGED_METHOD) {
         return FrameOutcome::Failed(Box::new(Error::protocol(

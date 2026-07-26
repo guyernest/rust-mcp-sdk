@@ -1313,8 +1313,20 @@ async fn run_v2_header_gate(
     Option<crate::types::protocol::ProtocolContext>,
     V2GateOutcome,
 ) {
+    // D-04, taken literally: a server that never opted into `2026-07-28` runs
+    // ZERO era code. The accept-list check is a 1–2 element scan; the body parse
+    // below is a full `serde_json` walk of an arbitrarily large request, and on a
+    // v1-only server every byte of its output was discarded.
+    {
+        let server = state.server.lock().await;
+        if !crate::types::protocol::context::is_v2_opted_in(server.supported_protocol_versions()) {
+            return (None, V2GateOutcome::Passthrough);
+        }
+    }
     // ONE parse of the raw body, shared by the era read, the header cross-check
     // and the MRTR params read — they can never disagree about what it says.
+    // Deliberately OUTSIDE the lock: parsing an attacker-sized body while holding
+    // the server mutex would serialize every other request behind it.
     let body_json = raw_body_json(raw_body);
     let raw_meta = params_meta_of(body_json.as_ref());
     // The rejection is built INSIDE the lock scope so the accept-list is only
@@ -1491,8 +1503,17 @@ impl StreamableHttpServer {
 /// reaches today's handler unchanged. The guard runs BEFORE header validation and
 /// before session validation, so a v2 GET never touches session state or the
 /// event store (T-113-18).
-fn v2_method_not_allowed(headers: &HeaderMap, verb: &str) -> Option<Response> {
-    if !matches!(decode_version_header(headers), HeaderProtocolVersion::V2) {
+///
+/// It is ALSO gated on `v2_opted_in`, the server's accept-list (D-04: a server
+/// that never opted into `2026-07-28` runs zero era code). Without that gate a
+/// client sending `MCP-Protocol-Version: 2026-07-28` at a v1-only server would
+/// have its legitimate v1 SSE `GET` / session `DELETE` answered `405` by a server
+/// that does not speak v2 at all.
+///
+/// Kept pure (no [`ServerState`]) so the RULE is unit-testable; the live wiring
+/// is [`v2_verb_rejection`].
+fn v2_method_not_allowed(headers: &HeaderMap, verb: &str, v2_opted_in: bool) -> Option<Response> {
+    if !v2_opted_in || !matches!(decode_version_header(headers), HeaderProtocolVersion::V2) {
         return None;
     }
     Some(create_error_response(
@@ -1500,6 +1521,25 @@ fn v2_method_not_allowed(headers: &HeaderMap, verb: &str) -> Option<Response> {
         crate::types::protocol::error_codes::METHOD_NOT_FOUND,
         &format!("HTTP {verb} is not supported on the MCP endpoint for protocol 2026-07-28"),
     ))
+}
+
+/// [`v2_method_not_allowed`] against a live server.
+///
+/// The cheap header classification runs FIRST, so the overwhelmingly common v1
+/// `GET`/`DELETE` never touches the server mutex to learn the accept-list.
+async fn v2_verb_rejection(
+    state: &ServerState,
+    headers: &HeaderMap,
+    verb: &str,
+) -> Option<Response> {
+    if !matches!(decode_version_header(headers), HeaderProtocolVersion::V2) {
+        return None;
+    }
+    let opted_in = {
+        let server = state.server.lock().await;
+        crate::types::protocol::context::is_v2_opted_in(server.supported_protocol_versions())
+    };
+    v2_method_not_allowed(headers, verb, opted_in)
 }
 
 /// Validate `Content-Type: application/json` for POST.
@@ -3671,7 +3711,7 @@ fn attach_sse_response_headers(response: &mut Response, session_id: &str) {
 /// [`replay_sse_events_from_header`], [`sse_event_for_message`], and
 /// [`attach_sse_response_headers`] so this orchestrator is a short pipeline.
 async fn handle_get_sse(State(state): State<ServerState>, headers: HeaderMap) -> impl IntoResponse {
-    if let Some(rejection) = v2_method_not_allowed(&headers, "GET") {
+    if let Some(rejection) = v2_verb_rejection(&state, &headers, "GET").await {
         return rejection;
     }
     if let Err(error_response) = validate_headers(&headers, "GET") {
@@ -3734,7 +3774,7 @@ async fn handle_delete_session(
     State(state): State<ServerState>,
     headers: HeaderMap,
 ) -> impl IntoResponse {
-    if let Some(rejection) = v2_method_not_allowed(&headers, "DELETE") {
+    if let Some(rejection) = v2_verb_rejection(&state, &headers, "DELETE").await {
         return rejection;
     }
     // Extract session ID
@@ -4261,24 +4301,37 @@ mod tests {
 
     #[test]
     fn v2_method_not_allowed_only_fires_on_the_v2_version_header() {
-        // v2 header → 405 on both verbs.
+        // v2 header on a v2-opted-in server → 405 on both verbs.
         for verb in ["GET", "DELETE"] {
             let h = headers_from(&[(MCP_PROTOCOL_VERSION, V2)]);
-            let response = v2_method_not_allowed(&h, verb).expect("v2 must be 405");
+            let response = v2_method_not_allowed(&h, verb, true).expect("v2 must be 405");
             assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
         }
         // Absent / v1 / unknown / malformed → the v1 handler runs unchanged.
-        assert!(v2_method_not_allowed(&headers_from(&[]), "GET").is_none());
+        assert!(v2_method_not_allowed(&headers_from(&[]), "GET", true).is_none());
         assert!(v2_method_not_allowed(
             &headers_from(&[(MCP_PROTOCOL_VERSION, "2025-11-25")]),
-            "GET"
+            "GET",
+            true
         )
         .is_none());
         let big = "x".repeat(MAX_V2_HEADER_VALUE_LEN + 1);
-        assert!(
-            v2_method_not_allowed(&headers_from(&[(MCP_PROTOCOL_VERSION, &big)]), "DELETE")
-                .is_none()
-        );
+        assert!(v2_method_not_allowed(
+            &headers_from(&[(MCP_PROTOCOL_VERSION, &big)]),
+            "DELETE",
+            true
+        )
+        .is_none());
+        // D-04: a server that never opted into 2026-07-28 runs ZERO era code, so
+        // its v1 GET/DELETE handlers stay reachable no matter what header the
+        // client sends.
+        for verb in ["GET", "DELETE"] {
+            assert!(
+                v2_method_not_allowed(&headers_from(&[(MCP_PROTOCOL_VERSION, V2)]), verb, false)
+                    .is_none(),
+                "{verb}: a non-opted-in server must not answer 405"
+            );
+        }
     }
 
     #[test]

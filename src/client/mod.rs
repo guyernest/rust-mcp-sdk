@@ -3511,8 +3511,23 @@ impl<T: Transport> Client<T> {
             Err(error) => {
                 // A malformed `input_required` is not something a retry can
                 // fix — hand the raw result back rather than resending blind.
+                //
+                // It must NOT go back as `Terminal`: the caller would then
+                // deserialize it into the concrete result type, and
+                // `CallToolResult::content` is `#[serde(default)]`, so a result
+                // the server explicitly marked `input_required` would arrive as
+                // a silently EMPTY success — the exact failure this whole type
+                // exists to prevent. Carry the VERBATIM object instead, so the
+                // caller receives `Error::input_required_unfulfilled` and can
+                // read `raw`.
                 tracing::warn!(%error, "MRTR: could not parse an input_required result");
-                return RoundOutcome::Terminal(result);
+                return RoundOutcome::Unfulfilled(Box::new(InputRequiredResult {
+                    result_type: INPUT_REQUIRED_RESULT_TYPE.to_string(),
+                    input_requests: None,
+                    request_state: None,
+                    meta: None,
+                    raw: result,
+                }));
             },
         };
 
@@ -3529,6 +3544,20 @@ impl<T: Transport> Client<T> {
         let Some(requests) = parsed.input_requests.as_ref() else {
             // Server-side load shedding: `requestState` only, no questions.
             // The client MAY retry immediately, and no handler is invoked.
+            //
+            // Only when a token is actually present. The spec requires an
+            // `input_required` result to carry at least one of `inputRequests`
+            // or `requestState`; a result with NEITHER gives the retry nothing
+            // new to send, so resending the byte-identical request would just
+            // burn the whole round budget on identical round trips before
+            // reporting a misleading "round limit exceeded".
+            if request_state.is_none() {
+                tracing::warn!(
+                    "MRTR: an input_required result carried neither inputRequests nor \
+                     requestState — nothing to resend with"
+                );
+                return RoundOutcome::Unfulfilled(Box::new(parsed));
+            }
             return RoundOutcome::Continue(MrtrRequestParams {
                 input_responses: None,
                 request_state,

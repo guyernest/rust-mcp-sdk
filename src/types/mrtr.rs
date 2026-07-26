@@ -50,15 +50,6 @@
 //! helper is `pub(crate)`, which reaches all in-crate consumers while keeping the
 //! `cargo public-api` delta small.
 
-// Why: this module is the Phase-113 wire adapter and lands in Wave 1, AHEAD of its
-// production consumers — the header codec is wired by plan 04, the ingress parse and
-// `requestState` verification by plans 03/06, the client outcome by plan 07, and the
-// `input_required` emission + eligible-method tripwire by plan 09. Until those land,
-// the `pub(crate)` surface is exercised only by this module's own tests, which
-// `-D warnings` would otherwise reject as dead code. Plan 12's public-API audit
-// removes this allow once every consumer is wired.
-#![allow(dead_code)]
-
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine as _;
 use serde::{de, Deserialize, Deserializer, Serialize};

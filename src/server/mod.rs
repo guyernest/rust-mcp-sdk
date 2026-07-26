@@ -4747,7 +4747,17 @@ impl ServerBuilder {
         // INSTANCE-LOCAL. Warn at BUILD time — this is startup, and a silent
         // under-delivery behind a load balancer surfaces no error at runtime
         // (T-113-64).
-        if crate::types::subscriptions::advertises_subscriptions(&self.capabilities) {
+        //
+        // Gated on the v2 opt-in as well as the capability: `subscriptions/listen`
+        // is a 2026-07-28-only route, so a v1-only server can never serve it and
+        // the warning would be FALSE. It is not a rare corner either —
+        // `ServerCapabilities::tools_only()` sets `tools.listChanged = true`, so
+        // without this gate essentially every existing pmcp server would print a
+        // warning about a stream it does not implement (D-04: zero era behaviour
+        // on a non-opted-in server).
+        if crate::types::protocol::context::is_v2_opted_in(&self.supported_protocol_versions)
+            && crate::types::subscriptions::advertises_subscriptions(&self.capabilities)
+        {
             tracing::warn!(
                 target: "mcp.subscriptions",
                 "a subscription-delivered capability is advertised, so subscriptions/listen \
