@@ -1,610 +1,528 @@
 ---
 phase: 113-stateless-http-multi-round-trip-elicitation
-reviewed: 2026-07-26T04:25:38Z
+reviewed: 2026-07-26T09:40:00Z
 depth: standard
-files_reviewed: 20
+files_reviewed: 7
 files_reviewed_list:
-  - src/client/mod.rs
-  - src/client/subscriptions.rs
-  - src/error/mod.rs
-  - src/server/mod.rs
-  - src/server/streamable_http_server.rs
   - src/server/subscriptions.rs
-  - src/shared/sse_parser.rs
-  - src/shared/streamable_http.rs
-  - src/types/mod.rs
-  - src/types/mrtr.rs
-  - src/types/subscriptions.rs
-  - examples/s47_v2_stateless_mrtr.rs
-  - examples/s48_v2_mrtr_client.rs
-  - examples/s49_v2_subscriptions_client.rs
-  - fuzz/fuzz_targets/subscription_listen_frames.rs
-  - tests/v2_mrtr.rs
+  - src/server/streamable_http_server.rs
   - tests/v2_subscriptions.rs
-  - tests/v2_subscriptions_client.rs
-  - Cargo.toml
-  - fuzz/Cargo.toml
+  - src/shared/sse_parser.rs
+  - src/shared/http.rs
+  - src/client/subscriptions.rs
+  - fuzz/fuzz_targets/subscription_listen_frames.rs
 findings:
   critical: 3
-  warning: 9
-  info: 7
-  total: 19
+  warning: 6
+  info: 4
+  total: 13
 status: issues_found
 ---
 
-# Phase 113: Code Review Report
+# Phase 113: Code Review Report (gap closure)
 
-**Reviewed:** 2026-07-26T04:25:38Z
+**Reviewed:** 2026-07-26T09:40:00Z
 **Depth:** standard
-**Files Reviewed:** 20
+**Files Reviewed:** 7
+**Scope:** `d3b54221..HEAD`, non-`.planning/` paths (plans 113-14, 113-15, 113-16)
 **Status:** issues_found
 
 ## Summary
 
-Scope was the delta `a721ede0..HEAD` — waves 5–7 (plans 113-10, 113-11, 113-12,
-113-13): the server-side `subscriptions/listen` registry and route, the client-side
-`SubscriptionStream`, the era gate for the two retired `resources/*` RPCs, the
-SSE-parser char-boundary fix, three examples, one fuzz target and ~3.4 kLOC of tests.
+Three plans claimed to close CR-01, CR-02 and CR-03 from the previous review. Two of
+those claims hold. One does not, and it does not hold in a way the shipped test suite
+cannot see.
 
-The era gating is sound. `advertises_subscriptions` is genuinely a single predicate
-read by both the `server/discover` projection and the listen route; the retirement
-of `resources/subscribe` / `resources/unsubscribe` is enforced on both POST
-entrypoints via one seam (`dispatch_request_or_retire`) and mirrored client-side
-before any byte reaches the wire; the v1 paths are untouched. The SSE byte-index fix
-is correct and complete — the remaining `find(':')`/`drain(..=line_end)` indexing all
-lands on ASCII delimiters, so no other mixed byte/char indexing survives.
+**CR-01 / CR-02 (113-14) — CLOSED, with one new regression.** The generation scheme is
+sound. `next_generation` is drawn under the same `entries.write()` guard that performs
+the insert (`src/server/subscriptions.rs:556-574`), it is strictly monotonic per
+registry and never reused, and both teardown paths compare it before removing
+(`remove_entry:725-730`, `disconnect_overflowed:674-698`). Because a generation is
+globally unique within a registry, a match implies entry identity — there is no ABA
+window; the only theoretical reuse is `u64` wraparound. The occupancy check and the
+insert genuinely share one write guard, so two concurrent registrations cannot both see
+the key free. Lock ordering is clean: `per_principal` is scoped and released before
+`entries` is taken in `register`, and `remove_entry` releases `entries` before
+`prune_principal` takes `per_principal`, so there is no inversion. The `-32600` →
+HTTP 400 claim is verified end to end (`ListenRejection::code:391-398` →
+`listen_rejection_response:2692-2715` → `v2_dispatch_response_status:834-845` →
+`v2_status_for_code:690-702`), and `tests/v2_subscriptions.rs:681-762` pins it live.
+What the fix did NOT consider is the ordinary reconnect: the duplicate check asks only
+"is the key occupied", never "is the incumbent still alive" (CR-03 below).
 
-The concurrency and lifetime story in `ListenRegistry` does not hold up. The module's
-own headline claim — that `ListenKey { principal, request_id }` makes id reuse safe —
-is only true ACROSS principals. WITHIN a principal the registry blind-overwrites and
-the RAII guard blind-removes, so two connections belonging to the same authenticated
-subject that reuse one JSON-RPC id silently destroy each other's streams. The overflow
-policy removes the map entry but does not release the concurrency permits it is
-accounted against, so `live_streams()` and the semaphores drift apart. And the shared
-SSE parser — now on a long-lived, remote-fed stream — still has no buffer bound at all,
-while the `SseConfig::max_buffer_size` field that documents one is dead code.
+**CR-03 (113-15) — NOT CLOSED.** The bound added to `SseParser` covers only `buffer`,
+i.e. one unterminated *line*. `EventBuilder::data` still accumulates across `data:`
+lines with no bound at all (`src/shared/sse_parser.rs:329-336`), and the new discard
+branch is gated on `!data.contains('\n')` (`:249-261`), so a peer that simply includes
+newlines never trips it. I compiled the crate and measured this: with
+`SseParser::with_max_buffer_size(64)`, feeding `"data: AAAAAAAA\n"` 100,000 times
+accumulated **899,999 bytes** into one in-progress event with `overflowed() == false`.
+The same construction at 200,000 iterations of `"data:x\n"` reached 399,999 bytes. Heap
+growth is linear in stream lifetime and entirely peer-controlled — which is exactly the
+CR-03 vulnerability, on exactly the long-lived `subscriptions/listen` path the plan
+named. Separately, a single SSE line of 1,000,000 bytes is accepted and emitted under a
+64-byte bound (`overflowed() == false`) whenever the chunk carrying it also carries the
+terminating newline, so `max_buffer_size` is not an upper bound on `buffer` and
+`overflowed()` does not reliably detect the condition its two consumers were added to
+observe.
 
-Secondary theme: several "structural guarantee" claims in the doc comments are stronger
-than the code. The reserved overflow slot is not reserved under concurrent fan-out, the
-acknowledged filter is never validated client-side, the graceful-shutdown trigger has
-zero callers anywhere in the repo, and the build-time load-balancer WARN fires on
-v1-only servers that can never serve the route.
+Both bounding tests and both new doctests only ever feed newline-free chunks. That is
+precisely why a green suite (I ran `cargo test --lib ... sse_parser`: 20/20 pass) is
+compatible with the vulnerability still being open.
+
+**113-16 (fuzz).** The target now runs two bounds and three invariants. Invariant 3 is a
+tautology — `overflowed` has one write site and no clearing path — and it is duplicated
+as an in-tree proptest. Invariant 2 was fixed for the `\u`-escape false positive by
+disabling itself for any input containing a backslash, which is far broader than
+necessary. The property the plan exists to defend — that memory stays bounded — is not
+asserted by the fuzz target at all, because the seam exposes no size. And
+`decode_listen_chunks_for_fuzz` is `pub` in a `pub mod`, so the undeclared scope
+expansion into `src/client/subscriptions.rs` is a real public-API widening, not just a
+paperwork issue.
+
+**Verified as claimed, no finding:** the two whole-body `feed` call sites
+(`src/shared/streamable_http.rs:528` and `:1150`) are behaviourally unchanged. Each
+builds a fresh per-body parser and feeds a complete SSE body; a well-formed body carries
+newlines and skips the branch, and a >1 MiB body with no newline at all produced no
+events before the change and produces no events after it. There is no path where
+overflow truncates-and-emits a partial frame *as if complete*: the discard branch
+returns `Vec::new()` and resets `current_event` before any dispatch. (The distinct
+problem is that oversized content reaches the caller *without* the branch firing — CR-02.)
 
 ## Critical Issues
 
-### CR-01: Same-principal JSON-RPC id reuse silently destroys both listen streams
+### CR-01: The SSE line bound does not bound the parser — `data:` accumulation is still unbounded remote-driven heap growth
 
-**File:** `src/server/subscriptions.rs:474-481` (with `410-418`)
+**File:** `src/shared/sse_parser.rs:249-261` (the new bound), `:329-336` (the unbounded
+accumulator); reached from `src/client/subscriptions.rs:188` and `src/shared/http.rs:173`
+**Status:** NEW as a defect of the gap-closure fix — plan 113-15 claims this vector is
+closed and it is not. The accumulator itself is pre-existing.
 
-**Issue:** `ListenRegistry::register` inserts into a `HashMap` with no occupancy check:
+**Issue:** The bound is only ever consulted when the incoming chunk contains no newline:
 
 ```rust
-self.entries.write().insert(
-    key.clone(),
-    ListenEntry { sender, filter, terminal },
-);
+if self.buffer.len().saturating_add(data.len()) > self.max_buffer_size
+    && !self.buffer.contains('\n')
+    && !data.contains('\n')
+{ /* discard + latch */ }
 ```
 
-`HashMap::insert` REPLACES on a duplicate key and drops the displaced `ListenEntry` —
-including its `mpsc::Sender`. Dropping that sender ends the first subscriber's stream
-immediately, with no terminal result and no overflow notice: the client just sees EOF.
-
-It gets worse. When the first stream's future finally unwinds, `ListenGuard::drop`
-(line 410-418) runs `self.registry.remove_entry(&self.key)` unconditionally — and the
-entry now at that key is the SECOND subscriber's. So the replacement stream is killed
-too. Two well-behaved callers, both under every cap, and BOTH streams die.
-
-The module doc at lines 294-300 asserts this class of collision is fixed:
-
-> Keying on the request id ALONE cross-delivers between callers: different principals
-> and **different connections** routinely reuse ids such as `1` […] The pair is the fix
-
-Only the "different principals" half is fixed. `two_callers_same_request_id_do_not_cross`
-(line 855) and `tests/v2_subscriptions.rs:662` both use DIFFERENT principals, so the
-same-principal case is untested. `pmcp`'s own client happens to escape it because
-`Client::subscriptions_listen` mints `RequestId::String(Uuid::new_v4())`, but every
-other MCP SDK uses small integer ids, and one user legitimately runs several clients.
-
-Impact escalates when `AuthContext::subject` is empty or constant (a token with no
-`sub` claim, a shared service account): every caller then collapses onto ONE principal,
-so any client can terminate any other client's subscription by picking their id — and
-`MAX_LISTEN_STREAMS_PER_PRINCIPAL = 4` becomes a server-wide cap. Note that
-`anonymous_principal()` is only used when `auth_context` is `None`, so an empty subject
-is NOT routed to the anonymous fallback.
-
-**Fix:** Reject a duplicate key instead of overwriting, and make the guard remove only
-its own entry. A per-entry generation token is the smallest change that closes both
-halves:
+An SSE event is only dispatched on a blank line (`process_line:303-305`). Until then
+every `data:` line is appended to `self.current_event.data`:
 
 ```rust
-// In ListenEntry:
-generation: u64,
+"data" => {
+    if self.current_event.data.is_empty() { self.current_event.data = value.to_string(); }
+    else { self.current_event.data.push('\n'); self.current_event.data.push_str(value); }
+},
+```
 
-// In ListenRegistry:
-next_generation: std::sync::atomic::AtomicU64,
+Nothing bounds `current_event.data`. A peer that streams `"data: A\n"` forever and never
+sends the blank line grows the client's heap without limit, and because every chunk
+carries `\n` the new discard branch is never entered and `overflowed()` never latches —
+so neither `listen_overflow` (`src/client/subscriptions.rs:320-332`) nor
+`report_sse_line_overflow` (`src/shared/http.rs:82-96`) ever ends the stream.
 
-pub(crate) fn register(...) -> std::result::Result<ListenGuard, ListenRejection> {
-    // ... permits as today ...
-    let generation = self.next_generation.fetch_add(1, Ordering::Relaxed);
-    {
-        let mut entries = self.entries.write();
-        // A duplicate (principal, id) is the CALLER's error, not a licence to
-        // evict a live stream.
-        if entries.contains_key(&key) {
-            return Err(ListenRejection::DuplicateSubscriptionId);
-        }
-        entries.insert(key.clone(), ListenEntry { sender, filter, terminal, generation });
-    }
-    Ok(ListenGuard { key, generation, registry: Arc::clone(self), .. })
-}
+Measured against the built crate (`SseParser::with_max_buffer_size(64)`):
 
-fn remove_entry(&self, key: &ListenKey, generation: u64) {
-    let mut entries = self.entries.write();
-    // Only MY entry — a successor at the same key must survive.
-    if entries.get(key).is_some_and(|e| e.generation == generation) {
-        entries.remove(key);
-    }
+| input | result |
+|---|---|
+| `feed("data: AAAAAAAA\n")` x 100 000 | `event.data.len() == 899_999`, `overflowed() == false` |
+| `feed("data:x\n")` x 200 000 | `event.data.len() == 399_999`, `overflowed() == false` |
+
+This is the same denial-of-service the prior CR-03 named ("a peer that streams bytes
+... grows `buffer` without limit until the process is OOM-killed"), unchanged except
+that the attacker must now include newline bytes.
+
+**Fix:** Bound the accumulated event, not only the line. The cheapest correct form
+reuses the existing latch so both consumers keep working unmodified:
+
+```rust
+// in SseParser::feed, before push_str — one bound covering BOTH accumulators
+let in_flight = self.buffer.len().saturating_add(self.current_event.data.len());
+if in_flight.saturating_add(data.len()) > self.max_buffer_size {
+    self.overflowed = true;
+    self.buffer.clear();
+    self.current_event = EventBuilder::new();
+    return Vec::new();
 }
 ```
 
-`ListenRejection::DuplicateSubscriptionId` should answer `-32600 INVALID_REQUEST`
-("a subscriptions/listen stream is already open for this id"), which is honest and
-actionable. Add a regression test that opens two streams for ONE principal with the
-same id and asserts the first still receives a fan-out.
-
-### CR-02: `ListenGuard::drop` reclaims an entry it does not own after an overflow-disconnect
-
-**File:** `src/server/subscriptions.rs:410-418`, `562-576`
-
-**Issue:** This is reachable independently of CR-01's overwrite. `disconnect_overflowed`
-removes the entry from the map but does NOT drop the guard (the guard lives in the SSE
-stream future and is only dropped when that future unwinds). During the window between
-the two, a new `register` for the same `(principal, request_id)` succeeds — the map slot
-is free and the per-principal semaphore has a spare permit only if the overflowed stream
-has already unwound, but the GLOBAL permit path can still admit it. When the old guard
-finally drops:
+Note this deliberately drops the `contains('\n')` guard, which CR-02 shows is what makes
+the bound unenforceable; a legitimately large *complete* body then needs its call sites
+to pass a bound that admits it (`SseParser::with_max_buffer_size(body.len().max(default))`
+at the two whole-body sites, or a `feed_whole_body` entry point that bypasses the check).
+Add a regression test that asserts the newline-carrying flood latches:
 
 ```rust
-impl Drop for ListenGuard {
-    fn drop(&mut self) {
-        self.registry.remove_entry(&self.key);   // <- removes the SUCCESSOR
-        ...
-    }
+#[test]
+fn a_newline_carrying_flood_is_bounded_too() {
+    let mut parser = SseParser::with_max_buffer_size(64);
+    for _ in 0..10_000 { let _ = parser.feed("data: AAAAAAAA\n"); }
+    assert!(parser.overflowed(), "an unterminated EVENT is as unbounded as an unterminated LINE");
 }
 ```
 
-the successor's `ListenEntry` (and its sender) is destroyed, ending a healthy stream
-with no terminal frame. Since the overflow policy explicitly tells the client to
-"re-issue `subscriptions/listen`" (`LISTEN_OVERFLOW_NOTICE`, line 282), a compliant
-client that reuses its id is walking directly into this.
+### CR-02: `max_buffer_size` is not an upper bound and `overflowed()` misses the condition it exists to detect
 
-**Fix:** The generation-token `remove_entry` in CR-01 closes this too. Do not fix CR-01
-without also fixing this, or a duplicate-id rejection will just move the failure.
+**File:** `src/shared/sse_parser.rs:121-129` (field doc), `:155-159` (contract),
+`:249-263` (enforcement)
+**Status:** NEW — introduced by plan 113-15.
 
-### CR-03: `SseParser` accumulates unbounded remote bytes; `SseConfig::max_buffer_size` is dead code
+**Issue:** When the incoming chunk contains a newline the bound check is skipped
+entirely and `self.buffer.push_str(data)` runs unconditionally. So:
 
-**File:** `src/shared/sse_parser.rs:169-205` (buffer), `src/shared/sse_parser.rs:372-398`
-(dead config)
+* `buffer` transiently reaches `max_buffer_size + data.len()`, contradicting the field
+  doc "Upper bound on `buffer`, i.e. on ONE unterminated SSE line";
+* a single SSE line arbitrarily larger than the bound is parsed and emitted,
+  contradicting `with_max_buffer_size`'s stated contract "A chunk that would push the
+  buffer past it while completing no line at all is DISCARDED";
+* `overflowed()` stays `false`, so the two observers built on it in this same diff —
+  `listen_overflow` and `report_sse_line_overflow` — do not fire.
 
-**Issue:** `feed` does `self.buffer.push_str(data)` and only ever drains up to a `\n`.
-A peer that streams bytes containing no newline — or a single event whose payload is
-arbitrarily large — grows `buffer` without limit until the process is OOM-killed. On a
-`subscriptions/listen` stream that is the DESIGNED steady state: the connection is
-long-lived and every byte comes from the remote server.
+Measured: `SseParser::with_max_buffer_size(64).feed("data: " + "B"x1_000_000 + "\n\n")`
+returns one event with `data.len() == 1_000_000` and `overflowed() == false`. The
+property test at `:762-781` already encodes the looseness (`buffer.len() <= max(8,
+chunk.len())`) without the docs being corrected to match.
 
-`SseConfig` declares the bound and never enforces it:
+The practical ceiling is `max_buffer_size + one transport chunk` (hyper's adaptive read
+buffer, up to a few hundred KiB), so this is not by itself an OOM — but it is a
+security control that does not enforce what its callers are told it enforces, and it is
+the mechanism CR-01 walks through.
 
-```rust
-/// Maximum buffer size for incomplete lines
-pub max_buffer_size: usize,   // set to 1 MiB in Default, referenced NOWHERE else
-```
-
-`grep -rn max_buffer_size src/` returns exactly two hits, both in the struct definition
-and its `Default`. Nothing reads it.
-
-This is in scope because this phase (a) added a second, long-lived untrusted consumer of
-this parser (`client::subscriptions::drain_sse_payloads`), and (b) shipped
-`feed_never_panics_on_arbitrary_text` and a fuzz target whose stated invariant is
-"a hostile or merely broken frame must not take down a client". Unbounded growth takes
-the client down; it just does it with an allocator abort instead of a panic. Note the
-client-side `PayloadState::bytes` IS bounded (at most 3 trailing bytes), so the parser
-buffer is the only unbounded accumulator on the path.
-
-**Fix:** Enforce the documented cap inside `feed`, and give the parser a way to report
-the overrun rather than silently truncating:
+**Fix:** Drop the `contains('\n')` conditions (see CR-01's patch) so the bound is
+unconditional, and correct the two doc blocks to state the real guarantee. If the
+whole-body call sites need to keep accepting oversized complete bodies, give them an
+explicit escape hatch rather than making the bound conditional on peer-chosen framing:
 
 ```rust
-pub struct SseParser {
-    buffer: String,
-    max_buffer_size: usize,   // from SseConfig; default 1 MiB
-    overflowed: bool,
-    ...
-}
-
-pub fn feed(&mut self, data: &str) -> Vec<SseEvent> {
-    if self.overflowed {
-        return Vec::new();
-    }
-    if self.buffer.len().saturating_add(data.len()) > self.max_buffer_size {
-        tracing::warn!(
-            target: "mcp.sse",
-            limit = self.max_buffer_size,
-            "SSE line exceeded the buffer bound; discarding the parser state"
-        );
-        self.overflowed = true;
-        self.buffer.clear();
-        self.current_event = EventBuilder::new();
-        return Vec::new();
-    }
-    self.buffer.push_str(data);
-    // ... existing loop ...
-}
+/// Feed a COMPLETE body in one call, bypassing the incremental line bound.
+/// Only safe where the body was already read into memory under a separate size cap.
+pub fn feed_complete_body(&mut self, body: &str) -> Vec<SseEvent> { /* old unbounded path */ }
 ```
 
-Then surface `overflowed` to `sse_payload_stream` so the subscription stream ends with a
-transport error instead of going quiet, and add a property test asserting
-`parser.buffer.len() <= max_buffer_size` for arbitrary chunk sequences.
+### CR-03: The duplicate-id refusal has no liveness check, so an ordinary reconnect is answered `-32600` at HTTP 400
 
-## Warnings
-
-### WR-01: Overflow-disconnect drops the registry entry but leaks both concurrency permits
-
-**File:** `src/server/subscriptions.rs:562-576`
-
-**Issue:** `disconnect_overflowed` removes the entry from `entries` but the
-`OwnedSemaphorePermit`s live in `ListenGuard`, which is only dropped when the SSE stream
-future unwinds. That future only unwinds after the receiver drains the buffered frames —
-and the subscriber overflowed precisely because it stopped reading, so under TCP
-backpressure the frames sit there and the guard is held until the socket times out.
-
-The observable result is that `live_streams()` (and therefore `Debug for ListenRegistry`)
-reports 0 while all `MAX_LISTEN_STREAMS_TOTAL` global permits are still held, and every
-new `subscriptions/listen` is refused with "too many concurrent subscriptions/listen
-streams on this server". Operators reading the count will conclude the cap is broken.
-
-**Fix:** Make permit release part of the disconnect, not only of the guard. Move the
-permits into `ListenEntry` (the guard then holds only the key + registry handle for the
-disconnect-by-client path), so `disconnect_overflowed`'s `remove` releases them together
-with the sender:
-
-```rust
-struct ListenEntry {
-    sender: tokio::sync::mpsc::Sender<ListenFrame>,
-    filter: SubscriptionFilter,
-    terminal: String,
-    _principal_permit: tokio::sync::OwnedSemaphorePermit,
-    _global_permit: tokio::sync::OwnedSemaphorePermit,
-}
-```
-
-and assert the invariant in a test: after `disconnect_overflowed`, `live_streams() == 0`
-AND a fresh `register` for a new principal succeeds.
-
-### WR-02: The "reserved" overflow slot is not reserved under concurrent fan-out
-
-**File:** `src/server/subscriptions.rs:259-268`, `527-545`
-
-**Issue:** The documented invariant is that the last channel slot is reserved so an
-overflowed subscriber always receives `LISTEN_OVERFLOW_NOTICE`. The reservation is
-implemented as a check-then-send under a READ lock:
-
-```rust
-if entry.sender.capacity() <= 1 { overflowed.push(key.clone()); continue; }
-// ... other threads can be here at the same time ...
-entry.sender.try_send(ListenFrame::Message(frame.to_string()))
-```
-
-`Server::send_notification` takes `&self`, so two tasks holding the server through
-different `Arc`s can be inside `fan_out` concurrently. Both can observe `capacity() == 2`
-and both send, leaving capacity 0. The subsequent `disconnect_overflowed` then does
-`let _ = entry.sender.try_send(Comment(...))` — which fails, is discarded, and the
-subscriber's stream simply ends with no explanation. The inline comment at line 538-540
-("`Full` cannot happen: the capacity check above ran under the same read lock") is
-incorrect: a read lock does not exclude other readers.
-
-**Fix:** Either reserve the slot with a real permit
-(`sender.reserve_owned()` held in `ListenEntry` and consumed by `disconnect_overflowed`),
-or downgrade the doc claim to "best effort" and remove the "cannot happen" comment. The
-permit approach is preferable since the notice is the only signal the client gets.
-
-### WR-03: The build-time instance-local WARN fires on v1-only servers that can never serve the route
-
-**File:** `src/server/mod.rs:4750-4761`
-
-**Issue:** The warning is gated only on capability advertisement:
-
-```rust
-if crate::types::subscriptions::advertises_subscriptions(&self.capabilities) {
-    tracing::warn!(target: "mcp.subscriptions",
-        "a subscription-delivered capability is advertised, so subscriptions/listen \
-         will be SERVED; its registry is INSTANCE-LOCAL, ...");
-}
-```
-
-`assemble_subscriptions_listen` returns `-32601` unless `era == Era::V2`, and the era can
-only be V2 if the server opted in via `with_supported_protocol_versions`. The default
-accept list is v1-only (`src/types/protocol/context.rs:30-31`: "falling back to the
-v1-only `default_accept_list`"). So every EXISTING pmcp server that advertises
-`tools.listChanged` — which is the common case — now emits an alarming, load-balancer-
-flavoured WARN at startup that is factually false for it ("will be SERVED" — it will not).
-
-**Fix:** Add the era condition that the route itself enforces:
-
-```rust
-if crate::types::protocol::context::is_v2_opted_in(&self.supported_protocol_versions)
-    && crate::types::subscriptions::advertises_subscriptions(&self.capabilities)
-{
-    tracing::warn!(...);
-}
-```
-
-`is_v2_opted_in` already exists and is used at `src/server/mod.rs:1417`.
-
-### WR-04: Concurrency and buffering limits are hardcoded with no configuration surface
-
-**File:** `src/server/subscriptions.rs:268`, `271`, `278`;
-`src/server/streamable_http_server.rs:2547`
-
-**Issue:** `LISTEN_CHANNEL_CAPACITY = 64`, `MAX_LISTEN_STREAMS_PER_PRINCIPAL = 4`,
-`MAX_LISTEN_STREAMS_TOTAL = 64` and `LISTEN_KEEP_ALIVE_INTERVAL = 15s` are all
-`pub(crate) const` with no builder or config knob (`ListenRegistry::with_limits` is
-private and used only by unit tests). A deployment with more than 64 legitimate
-subscribers cannot serve them, and one behind a proxy with a 10 s idle timeout cannot
-lower the keep-alive interval. Combined with `anonymous_principal()`'s per-stream
-counter (documented at lines 345-358), an unauthenticated deployment's ONLY bound is
-this fixed 64, exhaustible by a single client — and cheaply, since
-`resolve_agreed_filter` happily serves an EMPTY agreed filter, so
-`{"notifications":{}}` × 64 occupies every slot while receiving nothing.
-
-**Fix:** Thread the three limits (and the keep-alive interval) through
-`StreamableHttpServerConfig` / `ServerBuilder`, defaulting to today's values, and pass
-them into `ListenRegistry::with_limits`. Document the unauthenticated exhaustion vector
-in the `subscriptions_listen` rustdoc as an operational requirement (put the route behind
-auth or a reverse-proxy connection limit), rather than only in a module-private comment.
-
-### WR-05: The client never validates that the agreed filter is a subset of what it requested, nor filters incoming frames
-
-**File:** `src/client/subscriptions.rs:328-405`, `467-501`
-
-**Issue:** `SubscriptionStream::open` deserializes the acknowledgement's `notifications`
-into `self.acknowledged` and exposes it via `acknowledged()` as authoritative, but never
-compares it to the filter the caller passed to `Client::subscriptions_listen`. Likewise
-`classify_frame` forwards any tagged, decodable `ServerNotification` regardless of
-whether the caller asked for that kind. `examples/s49_v2_subscriptions_client.rs:139-143`
-then asserts on `acknowledged().notifications` as if it were verified.
-
-The module doc enumerates five wire-contract checks the client performs; the "never a
-superset" MUST (stated at `src/types/subscriptions.rs:180-183` and
-`src/server/streamable_http_server.rs:256-258`) is not among them and is enforced only
-server-side. A buggy or hostile server can therefore claim agreement it was not asked
-for and push `notifications/resources/updated` for URIs the caller never named, and the
-SDK will hand them to the application as legitimate subscription traffic.
-
-**Fix:** Keep the requested filter on the stream and enforce both halves:
-
-```rust
-pub(crate) async fn open(
-    subscription_id: RequestId,
-    requested: SubscriptionFilter,
-    mut frames: SubscriptionFrameStream,
-) -> Result<Self> {
-    // ... existing ack parsing ...
-    if !acknowledged.notifications.is_subset_of(&requested) {
-        return Err(Error::protocol(
-            ErrorCode::INVALID_REQUEST,
-            "spec MUST: the agreed filter is never a superset of the request",
-        ));
-    }
-    ...
-}
-```
-
-and in `classify_frame`, yield `FrameOutcome::Failed` for a notification whose
-`subscription_kind_of` is not covered by the agreed filter. `SubscriptionFilter::covers`
-already exists; it needs to be reachable from the client module (or mirrored).
-
-### WR-06: `rejection_error` collects an unbounded response body from an untrusted server
-
-**File:** `src/client/subscriptions.rs:131-150`
+**File:** `src/server/subscriptions.rs:559-562`
+**Status:** NEW — introduced by plan 113-14.
 
 **Issue:**
 
 ```rust
-let collected = match body.collect().await { ... };
-```
-
-There is no size limit. `MAX_ECHOED_FRAME` / `truncate` bound only what is echoed into
-the error MESSAGE — by then the whole body is already resident. A server (or an
-intermediary error page) that answers `subscriptions/listen` with a non-`text/event-stream`
-content type and a multi-gigabyte body exhausts client memory. The doc comment at line 66-71
-explicitly reasons about hostile unbounded strings for the echo path but not for the read.
-
-**Fix:** Bound the read the same way the server bounds request bodies
-(`read_body_with_limit`):
-
-```rust
-use http_body_util::{BodyExt, Limited};
-
-const MAX_REJECTION_BODY: usize = 64 * 1024;
-
-let collected = match Limited::new(body, MAX_REJECTION_BODY).collect().await {
-    Ok(collected) => collected.to_bytes(),
-    Err(e) => return Error::Transport(TransportError::Request(e.to_string())),
-};
-```
-
-### WR-07: `close_subscription_streams` — the only graceful-teardown trigger — has zero callers
-
-**File:** `src/server/mod.rs:859-861`, `src/server/subscriptions.rs:584-591`
-
-**Issue:** `grep -rn close_subscription_streams src/ tests/ examples/` returns only the
-definition and two doc references. Nothing in `StreamableHttpServer`'s shutdown path
-calls it, no integration test exercises it, and `examples/s49_v2_subscriptions_client.rs`
-uses `http.abort()` instead. Consequences:
-
-- the documented "server shutdown" closure trigger (the only one that emits a terminal
-  `SubscriptionsListenResult`) is never exercised end-to-end;
-- `ListenEntry::terminal` — a pre-built `String` per live stream — is dead weight in
-  every deployment that does not hand-wire the call;
-- the client's `FrameOutcome::Terminal` arm is covered only by canned unit-test payloads,
-  never by a real server frame.
-
-Also note `close_all` does not mark the registry closed, so a stream registered a
-microsecond after shutdown begins is never told to close.
-
-**Fix:** Call `close_subscription_streams()` from `StreamableHttpServer`'s shutdown /
-`Drop` path (or from whatever graceful-shutdown signal handler the transport owns), and
-add an integration test in `tests/v2_subscriptions_client.rs` that opens a stream, calls
-it, and asserts the client's stream ends with `None` after receiving the terminal result.
-Consider an `AtomicBool closed` on `ListenRegistry` so post-shutdown registrations are
-refused.
-
-### WR-08: The fuzz target's cross-delivery invariant can report a false crash
-
-**File:** `fuzz/fuzz_targets/subscription_listen_frames.rs:30-40`
-
-**Issue:** Invariant 2 asserts that a delivered notification implies the raw bytes
-contained the literal subscription id:
-
-```rust
-let text = String::from_utf8_lossy(data);
-assert!(text.contains(SUBSCRIPTION_ID), "...");
-```
-
-JSON permits `\u` escapes, so `"fuzz-subscription-4f1c9a2e"` decodes to the correct
-id while the raw bytes do not contain the literal. libFuzzer will eventually find this
-and report it as a crash in the decoder, which it is not. A fuzz target that produces
-false positives gets muted.
-
-**Fix:** Compare against the DECODED value rather than the raw bytes — e.g. re-parse each
-delivered frame, or relax the assertion to the substring that survives escaping:
-
-```rust
-// The id after JSON unescaping is what matters; a `\uXXXX`-escaped spelling is a
-// legitimate encoding of the same id, not a cross-tag escape.
-if outcomes.iter().any(std::result::Result::is_ok) {
-    let text = String::from_utf8_lossy(data);
-    let unescaped_hit = serde_json::from_slice::<serde_json::Value>(data)
-        .map(|v| v.to_string().contains(SUBSCRIPTION_ID))
-        .unwrap_or(false);
-    assert!(text.contains(SUBSCRIPTION_ID) || unescaped_hit, "...");
+let mut entries = self.entries.write();
+if entries.contains_key(&key) {
+    return Err(ListenRejection::DuplicateSubscriptionId);
 }
 ```
 
-### WR-09: Silent `unwrap_or_else` fallbacks can emit a spec-violating terminal frame
+The check asks whether the key is *occupied*, never whether the incumbent is *alive*.
+`ListenGuard` is dropped only when the SSE stream future unwinds
+(`src/server/streamable_http_server.rs:2970-2976`), which for an ungraceful client
+disconnect — mobile handoff, NAT rebind, LB reap, `SIGKILL`ed client — does not happen
+until the keep-alive write fails (`LISTEN_KEEP_ALIVE_INTERVAL`, 15 s) plus TCP
+retransmit. During that whole window a client that reconnects with the same
+`subscriptionId` — which the spec defines as the JSON-RPC request id, and which every
+SDK that uses small integer ids or a stable id will reuse — is refused.
 
-**File:** `src/server/streamable_http_server.rs:2702-2720`
+Two things make that worse than a plain race:
 
-**Issue:** `listen_terminal_result_frame` degrades twice without a trace:
+1. The refusal is `-32600 INVALID_REQUEST` at HTTP 400. That is the JSON-RPC code for a
+   structurally malformed request and the HTTP class for "do not retry this". The actual
+   condition is transient server state. A client SDK reading the code correctly will
+   surface a hard protocol error rather than backing off and retrying.
+2. `ListenRejection::message()` says "a subscriptions/listen stream is already open for
+   this subscription id", which is false from the client's point of view — its stream is
+   not open, it just lost the socket.
+
+The pre-fix behaviour (blind eviction) was the CR-01 bug, so reverting is not the
+answer; the missing piece is that an incumbent whose receiver is gone is not a live
+stream at all. Note also the still-open WR-01 interaction: after an overflow disconnect
+the entry is removed but the permits are not, so the `LISTEN_OVERFLOW_NOTICE`'s advice
+to "re-issue subscriptions/listen" can instead hit `PerPrincipalLimit`. The gap-closure
+diff did not make WR-01 worse, but CR-03 sits on the same reconnect path.
+
+**Fix:** Treat a closed channel as a free key — this cannot evict a live stream, because
+a live stream's receiver is held by its own SSE future:
 
 ```rust
-serde_json::to_value(result).unwrap_or_else(|_| json!({})),        // line 2710
-...
-serde_json::to_string(&response).unwrap_or_else(|_| "{}".to_string())  // line 2720
+let mut entries = self.entries.write();
+match entries.get(&key) {
+    // The incumbent's receiver is gone: its stream is already dead and only its
+    // guard has yet to unwind. Reclaiming it here cannot disconnect anybody.
+    Some(existing) if existing.sender.is_closed() => { entries.remove(&key); },
+    Some(_) => return Err(ListenRejection::DuplicateSubscriptionId),
+    None => {},
+}
 ```
 
-The first fallback produces a result with NO `_meta.subscriptionId`, which the spec marks
-REQUIRED; the client's `verify_subscription_id` then rejects the frame as a cross-tag
-error instead of closing the stream gracefully. The second produces a literal `{}` frame,
-which the client classifies as an untagged-frame error. Both are practically unreachable,
-but the fallback silently converts an internal error into a protocol violation attributed
-to the server.
+The late guard drop is already harmless — `remove_entry` is generation-scoped, so it
+will not reclaim the successor. Add a test that closes the receiver, leaves the guard
+alive, and asserts the same key re-registers:
 
-**Fix:** Return `Option<String>` (or `Result`) and log at `error!` on failure; skip
-registering the terminal frame rather than storing a malformed one. A stream with no
-terminal frame simply ends, which is already one of the three documented closure modes.
+```rust
+#[tokio::test]
+async fn a_reconnect_takes_over_a_key_whose_stream_is_already_dead() {
+    let registry = Arc::new(ListenRegistry::new());
+    let (_stale_guard, rx) = open(&registry, "solo", 1, tools_only()).expect("A registers");
+    drop(rx); // the client vanished; only the guard has yet to unwind
+    assert!(open(&registry, "solo", 1, tools_only()).is_ok(), "a reconnect is not a duplicate");
+}
+```
+
+If takeover is judged too aggressive, the minimum is to stop answering a transient
+server-state condition with a non-retryable client-error code: use `RATE_LIMITED`
+(`-32005`) or add a `SUBSCRIPTION_ID_IN_USE` code mapped to `409 Conflict` in
+`v2_status_for_code`, and say "still open" rather than "already open".
+
+## Warnings
+
+### WR-01: The `!self.buffer.contains('\n')` term in the bound check is dead, and its comment claims a role it does not have
+
+**File:** `src/shared/sse_parser.rs:244-251`
+**Status:** NEW.
+
+**Issue:** At every entry to `feed`, `self.buffer` cannot contain `\n`. The drain loop
+runs `while let Some(line_end) = self.buffer.find('\n')` and only exits when there is
+none (`:266-295`), and the overflow branch clears the buffer outright (`:254`). So
+`!self.buffer.contains('\n')` is unconditionally `true` — a dead predicate, and an O(n)
+scan of up to 1 MiB on every chunk. The comment above it states:
+
+> The "contains a `\n`" condition is what keeps a single legitimately large COMPLETE
+> body working
+
+That role belongs entirely to `!data.contains('\n')`. A reader auditing the bound is
+told the buffer term is load-bearing; it is not, and the misattribution is what conceals
+CR-02.
+
+**Fix:** Delete the buffer term. Once CR-01/CR-02 are fixed the `data` term goes too;
+if it is retained in the interim, replace the comment with the accurate statement:
+
+```rust
+// `buffer` never contains a `\n` here (the drain loop below runs to exhaustion),
+// so only `data` can complete a line. Skipping the bound when it can is what keeps
+// a single legitimately large COMPLETE body working.
+```
+
+### WR-02: `SseConfig` is still not configuration — only its `Default` is read
+
+**File:** `src/shared/sse_parser.rs:474-481` (doc), `:145` (the only read)
+**Status:** NEW (the doc claim), pre-existing (the dead struct).
+
+**Issue:** The gap-closure diff answers "`max_buffer_size` is dead code" by reading
+`SseConfig::default().max_buffer_size`. Nothing anywhere constructs an `SseConfig` and
+plumbs it into a parser (`grep -rn SseConfig src/ tests/ examples/` returns only the
+definition, the two `::default()` reads, and test assertions). A user who writes
+`SseConfig { max_buffer_size: 4096, ..Default::default() }` still gets no behaviour
+change, yet the field's new doc reads as though the struct configures the parser. The
+same is true of `retry`, `compression` and `headers`, none of which is read anywhere.
+
+**Fix:** Either give the struct a real consumer —
+
+```rust
+impl SseParser {
+    #[must_use]
+    pub fn from_config(config: &SseConfig) -> Self {
+        Self::with_max_buffer_size(config.max_buffer_size)
+    }
+}
+```
+
+— or state plainly in the field doc that `SseConfig` is a value type not yet wired into
+any transport and that `SseParser::with_max_buffer_size` is the only way to change the
+bound.
+
+### WR-03: The fuzz target's Invariant 3 is a tautology, and the property the plan exists to defend is never asserted
+
+**File:** `fuzz/fuzz_targets/subscription_listen_frames.rs:108-120`; duplicated at
+`src/client/subscriptions.rs:1220-1239`
+**Status:** NEW.
+
+**Issue:** `SseParser::overflowed` is a `bool` with exactly one write site
+(`self.overflowed = true` at `sse_parser.rs:253`) and no path that clears it — `reset`
+explicitly does not. "The latch never clears" therefore cannot fail for any input, at
+any bound, ever. It is asserted twice (fuzz campaign plus in-tree proptest) and
+documented at length in three places.
+
+Meanwhile the invariant that would have caught CR-01 and CR-02 — that parser memory
+stays bounded — is not asserted anywhere in the fuzz target, because
+`decode_listen_chunks_for_fuzz` returns only outcomes and flags, never a size. And the
+`max_buffer_size = 8` pass of `MAX_BUFFER_SIZES` puts the parser into the
+discarded/latched state on essentially the first 16-byte chunk of nearly every input —
+a state `read_next_frame` exits immediately in production — so roughly half the campaign
+budget is spent on inputs that produce no outcomes and no checkable assertions.
+
+**Fix:** Replace Invariant 3 with a bound assertion, which requires the seam to report
+a size:
+
+```rust
+// in decode_listen_chunks_for_fuzz, alongside `overflowed`
+peak_parser_bytes.push(parser.buffered_bytes()); // new pub(crate) accessor: buffer + current_event.data
+
+// in the fuzz target
+assert!(
+    peak_parser_bytes.iter().all(|n| *n <= max_buffer_size),
+    "the parser retained {peak_parser_bytes:?} bytes under a {max_buffer_size}-byte bound",
+);
+```
+
+### WR-04: Invariant 2's backslash escape hatch is scoped to the whole input, not to the frame it protects
+
+**File:** `fuzz/fuzz_targets/subscription_listen_frames.rs:100-106`
+**Status:** NEW.
+
+**Issue:**
+
+```rust
+if outcomes.iter().any(std::result::Result::is_ok) && !text.contains('\\') {
+    assert!(text.contains(SUBSCRIPTION_ID), "...");
+}
+```
+
+`text` is the lossy decode of the *entire* input. One `0x5C` byte anywhere — in a
+completely unrelated frame, in trailing garbage, inside a comment line the parser
+discards — suppresses the cross-delivery assertion for every frame in that run.
+libFuzzer preferentially retains inputs that reach new coverage, and inputs containing
+backslashes reach the JSON-escape decoder, so the fraction of runs where the invariant
+is actually checked will fall over a long campaign. The prior review's suggested fix
+(compare against the DECODED id) does not have this property and is directly available
+here: `outcomes` already carries typed `ServerNotification`s.
+
+**Fix:** Assert on the decoded value instead of gating on the raw bytes:
+
+```rust
+for outcome in outcomes.iter().flatten() {
+    let tagged = serde_json::to_value(outcome).ok()
+        .and_then(|v| v["params"]["_meta"][SUBSCRIPTION_ID_META_KEY].as_str().map(str::to_owned));
+    assert_eq!(
+        tagged.as_deref(), Some(SUBSCRIPTION_ID),
+        "a notification was delivered that is not tagged with this subscription's id",
+    );
+}
+```
+
+### WR-05: `decode_listen_chunks_for_fuzz` widens the crate's public API surface
+
+**File:** `src/client/subscriptions.rs:666-696`
+**Status:** NEW, and an undeclared scope expansion — plan 113-16 did not list
+`src/client/subscriptions.rs` in `files_modified`.
+
+**Issue:** `pub mod subscriptions;` (`src/client/mod.rs:48`) inside `pub mod client;`
+(`src/lib.rs:27`) makes this a fully public item. `#[doc(hidden)]` hides it from
+rustdoc; it does not restrict visibility and does not exempt it from semver. Every
+downstream crate can call it, and its signature bakes in three things the SDK should not
+be committing to: a `&[&[u8]]` chunk model, an unvalidated `max_buffer_size: usize`
+(`0` is accepted and makes the parser latch on the first non-empty chunk), and errors
+flattened to `String` `Display` output. It also silently drops terminal frames, so a
+caller who mistook it for a decode API would lose stream-close signals.
+
+`cargo-fuzz` passes `--cfg fuzzing`, so there is a strictly better option that keeps
+this out of the public API for every normal build.
+
+**Fix:**
+
+```rust
+#[cfg(any(fuzzing, test))]
+#[doc(hidden)]
+#[must_use]
+pub fn decode_listen_chunks_for_fuzz(/* ... */) { /* ... */ }
+```
+
+and add an `unexpected_cfgs` allowance for `fuzzing` in `Cargo.toml` `[lints.rust]` if
+the crate denies it. The in-crate proptests continue to compile under `cfg(test)`.
+
+### WR-06: `register`'s new early return skips `prune_principal`, so a per-principal semaphore can be orphaned
+
+**File:** `src/server/subscriptions.rs:552-562`, `:738-746`
+**Status:** NEW — the `DuplicateSubscriptionId` arm is the first rejection path that can
+return after the `per_principal` map entry has been created and then leave no live
+guard behind to prune it.
+
+**Issue:** `prune_principal` is called only from `ListenGuard::drop` (`:479`). Consider
+this interleaving, all of which is reachable:
+
+1. B enters `register` for principal P, clones P's `Arc<Semaphore>` (strong count 3:
+   map + A's permit + B's local).
+2. B reads `entries` and sees A's entry — duplicate.
+3. A's guard drops: `remove_entry`, then `drop(permits)` (count 2), then
+   `prune_principal` — which sees count 2 and does not prune.
+4. B returns `Err(DuplicateSubscriptionId)`; its local `Arc` drops (count 1).
+
+The map now holds an entry nothing will ever remove. Growth is bounded by the number of
+distinct authenticated subjects rather than by request volume, so this is a slow leak
+rather than a vector — but it defeats the stated purpose of `prune_principal` ("so the
+map does not grow without bound").
+
+**Fix:** Prune on the rejection paths too:
+
+```rust
+let principal_permit = match principal_semaphore.try_acquire_owned() {
+    Ok(permit) => permit,
+    Err(_) => { self.prune_principal(&key.principal); return Err(ListenRejection::PerPrincipalLimit); },
+};
+// ... and in the duplicate arm:
+if entries.contains_key(&key) {
+    drop(entries);
+    drop(principal_permit);
+    self.prune_principal(&key.principal);
+    return Err(ListenRejection::DuplicateSubscriptionId);
+}
+```
 
 ## Info
 
-### IN-01: `-32005 RATE_LIMITED` is answered with HTTP 200
+### IN-01: `decode_listen_chunk_for_fuzz` is now an unused fuzz seam that remains public
 
-**File:** `src/server/streamable_http_server.rs:2909`, `690-702`
+**File:** `src/client/subscriptions.rs:631-638`
 
-**Issue:** The concurrency-cap refusal uses `RATE_LIMITED`, which falls into
-`v2_status_for_code`'s `_ => StatusCode::OK` arm. A cap refusal therefore ships as
-HTTP 200 with a JSON-RPC error body. Proxies, load balancers and metrics pipelines that
-key on status cannot see the throttle.
+**Issue:** No fuzz target calls the singular seam any more — `subscription_listen_frames.rs`
+uses the plural one. Its only callers are two in-crate proptests
+(`:1208`, `:1217`), which can reach the private decode path directly. It stays `pub`
+in a public module, so the crate now exports two `#[doc(hidden)]` fuzz seams, one of
+which no fuzz target uses.
 
-**Fix:** Add `ec::RATE_LIMITED => StatusCode::TOO_MANY_REQUESTS` to `v2_status_for_code`,
-and pin it in the existing status-mapping test.
+**Fix:** Fold it into WR-05's `#[cfg(any(fuzzing, test))]` treatment, or delete it and
+have the two proptests call `decode_listen_chunks_for_fuzz(&[bytes], id, MAX_LISTEN_LINE_BYTES)`.
 
-### IN-02: The global-cap refusal message leaks server-wide capacity state to unauthenticated callers
+### IN-02: The flood test re-types the 1 MiB literal it claims to source from `SseConfig`
 
-**File:** `src/server/subscriptions.rs:340`
+**File:** `src/shared/sse_parser.rs:604-612`
 
-**Issue:** `"too many concurrent subscriptions/listen streams on this server"` tells an
-anonymous caller that the SERVER (not their own quota) is saturated — a free saturation
-oracle for an attacker probing the 64-slot bound.
+**Issue:** `a_newlineless_flood_cannot_grow_the_buffer_past_the_bound` hardcodes
+`1024 * 1024` in both the assertion and its message, while
+`new_takes_its_bound_from_the_sse_config_default` exists specifically to establish that
+the number lives in exactly one place. Changing `SseConfig::default()` would leave this
+test asserting a stale bound and still passing.
 
-**Fix:** Return one indistinguishable message for both `ListenRejection` variants on the
-wire and keep the discriminated text in `tracing` only.
+**Fix:** `let bound = SseConfig::default().max_buffer_size;` and use it in both places.
 
-### IN-03: Anonymous principals share a namespace with authenticated subjects
+### IN-03: Every bounding test and doctest feeds only newline-free chunks
 
-**File:** `src/server/subscriptions.rs:359-362`
+**File:** `src/shared/sse_parser.rs:597-700`, `:762-781`; `src/client/subscriptions.rs:1040-1066`,
+`:1096-1123`; `src/shared/http.rs:427-459`
 
-**Issue:** `anonymous_principal()` returns `anon#N` as a plain `String` into the same
-`ListenKey::principal` field an `AuthContext::subject` occupies. An auth provider whose
-subjects happen to look like `anon#5` collides with the anonymous namespace.
+**Issue:** Ten new tests exercise the bound. Every single one drives it with
+`"x".repeat(N)` or a `[b'x'; 16]` chunk — no newline anywhere. That is the one input
+class the enforcement handles, which is why the suite is green while CR-01 and CR-02 are
+open. The one property test that does generate `\n`
+(`a_bounded_feed_never_panics_on_arbitrary_text`) asserts only `buffer.len() <= max(8,
+chunk.len())`, which is satisfied by design and says nothing about `current_event`.
 
-**Fix:** Make the principal an enum (`Principal::Anonymous(u64)` /
-`Principal::Subject(String)`) so the two namespaces are type-separated, or prefix
-authenticated subjects (`sub:{subject}`).
+**Fix:** Add at least one newline-carrying flood case per feeder (see CR-01's suggested
+regression test) and one oversized-complete-line case (CR-02).
 
-### IN-04: `take_utf8_prefix` discards a legitimately incomplete tail after an invalid byte
+### IN-04: A source file references a planning artifact by bare filename
 
-**File:** `src/client/subscriptions.rs:236-253`
+**File:** `fuzz/fuzz_targets/subscription_listen_frames.rs:6`
 
-**Issue:** The `Err(_)` arm lossily decodes and clears the ENTIRE buffer. For
-`[0xff, 0xE2, 0x98]` (one invalid byte followed by two thirds of `'☂'`), the valid
-incomplete tail is destroyed and the character arriving in the next chunk is corrupted
-into a second replacement char. Only reachable after invalid bytes are already present,
-so the practical impact is limited to garbled diagnostics.
+**Issue:** "The recorded campaign lives in `113-FUZZ-EVIDENCE.md`" — no path, and the
+file lives under `.planning/phases/113-.../`, which is not shipped in the published
+crate. A reader of the crate source cannot resolve it.
 
-**Fix:** Decode lossily only up to `valid_up_to() + error_len()`, then re-run the
-incomplete-tail logic on the remainder.
-
-### IN-05: `subscriptions/listen` performs no scope/permission check beyond authentication
-
-**File:** `src/server/streamable_http_server.rs:2877`
-
-**Issue:** `AuthContext.scopes` is ignored; any authenticated principal receives every
-`listChanged` notification and any `resources/updated` for any URI it names. Where tool or
-resource visibility is scope-gated elsewhere in the server, the stream is a side channel
-for change/timing information about resources the principal cannot read.
-
-**Fix:** Document the trust boundary in `Client::subscriptions_listen` / the module docs,
-and consider an optional `AuthContext`-aware filter hook on the registry.
-
-### IN-06: `required-features` for `s49_v2_subscriptions_client` over-constrains
-
-**File:** `Cargo.toml:620-622`
-
-**Issue:** The example is declared `required-features = ["streamable-http", "http-client"]`
-but nothing on its path needs `http-client` (which pulls in `reqwest`);
-`client::subscriptions` is gated on `streamable-http` alone. The example's own header also
-says `--features full`, which is a third spelling.
-
-**Fix:** Drop `http-client` from the required features and make the header's run command
-match (`--features streamable-http`).
-
-### IN-07: Self-admitted deferred work in `Cargo.toml` (CLAUDE.md zero-SATD)
-
-**File:** `Cargo.toml:594-604`
-
-**Issue:** "Renaming these two to the next free slots is **deferred**: their paths are
-pinned by the Phase-113 plan's artifact contract" is a deferral note carried in a shipped
-manifest. CLAUDE.md states "Zero SATD (Self-Admitted Technical Debt) comments" as a
-non-negotiable. The `sNN_` example prefix is now ambiguous (`s47`, `s48`, `s49` each name
-two different examples), which will confuse anyone following the numbered sequence.
-
-**Fix:** Either rename the three new examples to free slots now (the plan artifact record
-is a `.planning/` document, not a compatibility surface), or move the rationale into
-`.planning/phases/113-.../deferred-items.md` — where it already lives — and leave only a
-neutral one-line pointer in `Cargo.toml`.
+**Fix:** Either give the full repo-relative path or drop the reference and inline the
+one-line campaign command the target should be run with.
 
 ---
 
-_Reviewed: 2026-07-26T04:25:38Z_
+_Reviewed: 2026-07-26T09:40:00Z_
 _Reviewer: Claude (gsd-code-reviewer)_
 _Depth: standard_
