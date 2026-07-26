@@ -296,8 +296,26 @@ pub(crate) enum ListenFrame {
 /// Keying on the request id ALONE cross-delivers between callers: different
 /// principals and different connections routinely reuse ids such as `1`, so an
 /// id-keyed map would have the second `listen` evict the first and then deliver
-/// the first caller's notifications to the second (T-113-61). The pair is the
-/// fix, and `two_callers_same_request_id_do_not_cross` is the live proof.
+/// the first caller's notifications to the second (T-113-61).
+///
+/// The pair closes the CROSS-principal half of that collision, and
+/// `two_callers_same_request_id_do_not_cross` is the live proof. It does NOT by
+/// itself close the WITHIN-principal half: two connections authenticated as the
+/// same subject (several tabs, a shared service account, a token with a constant
+/// `sub`) collapse onto ONE principal and can still choose the same id. That half
+/// is closed by two further rules, both of which are ownership rather than
+/// keying:
+///
+/// * a duplicate live key is REFUSED with
+///   [`ListenRejection::DuplicateSubscriptionId`] instead of evicting the
+///   incumbent (T-113-69), and
+/// * every removal is scoped by the per-entry [`ListenEntry::generation`], so
+///   neither a late [`ListenGuard::drop`] nor an in-flight overflow disconnect
+///   can reclaim a successor that took the same key (T-113-70 / T-113-71).
+///
+/// The unit proofs are `listen_registry::entry_ownership::*` and the live proof
+/// is `same_principal_id_reuse_rejects_the_second_and_spares_the_first` in
+/// `tests/v2_subscriptions.rs`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct ListenKey {
     /// The authenticated subject, or an [`anonymous_principal`] fallback.
@@ -319,6 +337,15 @@ struct ListenEntry {
     /// helpers) and stored here so [`ListenRegistry::close_all`] needs no
     /// envelope logic of its own.
     terminal: String,
+    /// The token that makes a removal OWNERSHIP-scoped rather than key-scoped.
+    ///
+    /// Drawn from [`ListenRegistry::next_generation`] at insertion and copied
+    /// into the returned [`ListenGuard`], so every teardown path can ask "is the
+    /// entry at this key still MINE?" before removing anything. Without it a
+    /// late guard drop or an in-flight overflow disconnect reclaims whatever
+    /// entry currently occupies the key — which may be a healthy successor
+    /// (T-113-70 / T-113-71).
+    generation: u64,
 }
 
 /// Why a `subscriptions/listen` registration was refused.
@@ -328,16 +355,45 @@ pub(crate) enum ListenRejection {
     PerPrincipalLimit,
     /// The server already holds [`MAX_LISTEN_STREAMS_TOTAL`] streams.
     GlobalLimit,
+    /// This principal already has a LIVE stream under this subscription id.
+    ///
+    /// The caller's own error, and never a licence to evict the incumbent: the
+    /// id is the caller's to choose, so it is the caller that must choose a free
+    /// one (T-113-69).
+    DuplicateSubscriptionId,
 }
 
 impl ListenRejection {
     /// The client-facing message for this refusal.
+    ///
+    /// The duplicate wording deliberately avoids the substring
+    /// `too many concurrent`, which the live suite uses to identify a CAP
+    /// refusal.
     pub(crate) fn message(self) -> &'static str {
         match self {
             Self::PerPrincipalLimit => {
                 "too many concurrent subscriptions/listen streams for this principal"
             },
             Self::GlobalLimit => "too many concurrent subscriptions/listen streams on this server",
+            Self::DuplicateSubscriptionId => {
+                "a subscriptions/listen stream is already open for this subscription id"
+            },
+        }
+    }
+
+    /// The JSON-RPC error code this refusal is answered with.
+    ///
+    /// EXHAUSTIVE by construction — no wildcard arm — so a future variant cannot
+    /// silently inherit another refusal's code. The two capacity refusals are
+    /// server-state conditions (`-32005`); a duplicate id is a malformed request
+    /// from this caller's own point of view (`-32600`, answered at HTTP 400 by
+    /// `v2_status_for_code`).
+    pub(crate) fn code(self) -> i32 {
+        match self {
+            Self::PerPrincipalLimit | Self::GlobalLimit => {
+                crate::types::protocol::error_codes::RATE_LIMITED
+            },
+            Self::DuplicateSubscriptionId => crate::types::protocol::error_codes::INVALID_REQUEST,
         }
     }
 }
@@ -368,6 +424,10 @@ pub struct ListenRegistry {
     entries: parking_lot::RwLock<HashMap<ListenKey, ListenEntry>>,
     global: Arc<tokio::sync::Semaphore>,
     per_principal: parking_lot::Mutex<HashMap<String, Arc<tokio::sync::Semaphore>>>,
+    /// Monotonic source of [`ListenEntry::generation`]. Never reset, never
+    /// reused: every registration this registry ever performs gets a strictly
+    /// larger token than the one before it.
+    next_generation: AtomicU64,
 }
 
 impl Default for ListenRegistry {
@@ -394,6 +454,9 @@ impl std::fmt::Debug for ListenRegistry {
 /// call to forget (T-113-63).
 pub(crate) struct ListenGuard {
     key: ListenKey,
+    /// The [`ListenEntry::generation`] this guard OWNS. Its drop removes the
+    /// entry at [`Self::key`] only while that entry still carries this token.
+    generation: u64,
     registry: Arc<ListenRegistry>,
     principal_permit: Option<tokio::sync::OwnedSemaphorePermit>,
     global_permit: Option<tokio::sync::OwnedSemaphorePermit>,
@@ -409,7 +472,7 @@ impl std::fmt::Debug for ListenGuard {
 
 impl Drop for ListenGuard {
     fn drop(&mut self) {
-        self.registry.remove_entry(&self.key);
+        self.registry.remove_entry(&self.key, self.generation);
         // Release the permits BEFORE pruning so the prune sees the final count.
         drop(self.principal_permit.take());
         drop(self.global_permit.take());
@@ -430,6 +493,7 @@ impl ListenRegistry {
             entries: parking_lot::RwLock::new(HashMap::new()),
             global: Arc::new(tokio::sync::Semaphore::new(global)),
             per_principal: parking_lot::Mutex::new(HashMap::new()),
+            next_generation: AtomicU64::new(0),
         }
     }
 
@@ -445,6 +509,24 @@ impl ListenRegistry {
     /// it BEFORE calling this: that is what makes "the acknowledgement is the
     /// first frame" structural rather than a convention. Nothing can reach the
     /// channel until this call inserts the entry.
+    ///
+    /// A duplicate LIVE key is the CALLER's error — answered with
+    /// [`ListenRejection::DuplicateSubscriptionId`] — and NEVER a licence to
+    /// evict a live stream. A blind `insert` here would drop the incumbent's
+    /// `mpsc::Sender` and end that stream with no terminal frame and no overflow
+    /// notice, which is exactly how a co-tenant sharing one principal could
+    /// silently kill another's subscription by choosing their id (T-113-69). The
+    /// occupancy check and the insert therefore happen under ONE write guard, so
+    /// two concurrent registrations for the same key cannot both observe it
+    /// free.
+    ///
+    /// Order of refusals: the global permit, then the per-principal permit, then
+    /// the duplicate check. A caller at its cap learns that it is at its cap —
+    /// the permits are what establish that — and the narrower, more specific
+    /// duplicate condition is reported only once the capacity questions are
+    /// settled. The acquired permits release on the early return.
+    ///
+    /// Sequential reuse of a RELEASED key is unaffected and still registers.
     pub(crate) fn register(
         self: &Arc<Self>,
         key: ListenKey,
@@ -471,16 +553,28 @@ impl ListenRegistry {
             .try_acquire_owned()
             .map_err(|_| ListenRejection::PerPrincipalLimit)?;
 
-        self.entries.write().insert(
-            key.clone(),
-            ListenEntry {
-                sender,
-                filter,
-                terminal,
-            },
-        );
+        let generation = {
+            // ONE guard covers both the occupancy question and the answer, so
+            // no concurrent registration can slip between them.
+            let mut entries = self.entries.write();
+            if entries.contains_key(&key) {
+                return Err(ListenRejection::DuplicateSubscriptionId);
+            }
+            let generation = self.next_generation.fetch_add(1, Ordering::Relaxed);
+            entries.insert(
+                key.clone(),
+                ListenEntry {
+                    sender,
+                    filter,
+                    terminal,
+                    generation,
+                },
+            );
+            generation
+        };
         Ok(ListenGuard {
             key,
+            generation,
             registry: Arc::clone(self),
             principal_permit: Some(principal_permit),
             global_permit: Some(global_permit),
@@ -522,7 +616,10 @@ impl ListenRegistry {
             );
         }
 
-        let mut overflowed = Vec::new();
+        // Each overflowed key travels with the GENERATION observed under this
+        // read lock, so the disconnect below can only close the entry this scan
+        // actually saw full — never a successor registered in between.
+        let mut overflowed: Vec<(ListenKey, u64)> = Vec::new();
         {
             let entries = self.entries.read();
             for (key, entry) in entries.iter() {
@@ -532,7 +629,7 @@ impl ListenRegistry {
                 // The LAST slot is reserved for the overflow notice, so "full"
                 // is one remaining slot rather than zero.
                 if entry.sender.capacity() <= 1 {
-                    overflowed.push(key.clone());
+                    overflowed.push((key.clone(), entry.generation));
                     continue;
                 }
                 // Re-tagged in place rather than cloned per subscriber: the tag
@@ -556,8 +653,8 @@ impl ListenRegistry {
                 }
             }
         }
-        for key in overflowed {
-            self.disconnect_overflowed(&key);
+        for (key, generation) in overflowed {
+            self.disconnect_overflowed(&key, generation);
         }
     }
 
@@ -570,8 +667,22 @@ impl ListenRegistry {
     /// memory stays bounded by [`LISTEN_CHANNEL_CAPACITY`]. Disconnect-and-retry
     /// is the stateless-correct behavior: the stream carries no replayable
     /// history, so a fresh subscription loses nothing a resumed one would keep.
-    fn disconnect_overflowed(&self, key: &ListenKey) {
-        let Some(entry) = self.entries.write().remove(key) else {
+    ///
+    /// OWNERSHIP-SCOPED like [`Self::remove_entry`]: `generation` is the token
+    /// observed when the entry was seen full, and a disconnect that arrives
+    /// after that entry was already replaced removes NOTHING (T-113-71).
+    fn disconnect_overflowed(&self, key: &ListenKey, generation: u64) {
+        // Scoped so the write guard is released BEFORE the `try_send` below —
+        // the notice must never be queued while holding the entries lock.
+        let removed = {
+            let mut entries = self.entries.write();
+            if entries.get(key).is_some_and(|e| e.generation == generation) {
+                entries.remove(key)
+            } else {
+                None
+            }
+        };
+        let Some(entry) = removed else {
             return;
         };
         let _ = entry
@@ -601,10 +712,21 @@ impl ListenRegistry {
         }
     }
 
-    /// Remove one entry. Called only by [`ListenGuard::drop`] and by
-    /// [`Self::disconnect_overflowed`]; there is no public `unregister`.
-    fn remove_entry(&self, key: &ListenKey) {
-        self.entries.write().remove(key);
+    /// Remove one entry, but ONLY while it still carries `generation`.
+    ///
+    /// A successor at the same key must SURVIVE. The two teardown paths both run
+    /// after an arbitrary delay — a guard drops when its SSE stream future
+    /// finally unwinds, and an overflow disconnect is computed from a scan that
+    /// has already released its lock — so by the time either arrives the key may
+    /// legitimately belong to somebody else. Comparing the token first is what
+    /// makes the removal ownership-scoped rather than key-scoped (T-113-70).
+    ///
+    /// Called only by [`ListenGuard::drop`]; there is no public `unregister`.
+    fn remove_entry(&self, key: &ListenKey, generation: u64) {
+        let mut entries = self.entries.write();
+        if entries.get(key).is_some_and(|e| e.generation == generation) {
+            entries.remove(key);
+        }
     }
 
     /// Drop a principal's semaphore once nothing references it, so the map does
@@ -1088,6 +1210,182 @@ mod tests {
                 0,
                 "the per-principal semaphore map does not grow without bound"
             );
+        }
+
+        /// The WITHIN-principal half of the id-reuse collision (gap items 1 and
+        /// 2 of `113-VERIFICATION.md`, code review CR-01 / CR-02).
+        ///
+        /// Every test here uses ONE principal, because that is the configuration
+        /// the pair-keying does NOT by itself protect and the one the pre-113-14
+        /// suite never exercised.
+        mod entry_ownership {
+            use super::*;
+
+            /// The key `open(registry, principal, id, ..)` registers under.
+            fn key_for(principal: &str, id: i64) -> ListenKey {
+                ListenKey {
+                    principal: principal.to_string(),
+                    request_id: RequestId::Number(id),
+                }
+            }
+
+            /// Reach the eviction the way PRODUCTION does: fill the bounded
+            /// channel by repeated fan-out until the overflow policy disconnects
+            /// the (single) registered subscriber. Exercises the real
+            /// `disconnect_overflowed` path rather than a synthetic removal.
+            fn overflow_the_only_subscriber(registry: &Arc<ListenRegistry>) {
+                for _ in 0..LISTEN_CHANNEL_CAPACITY + 8 {
+                    registry.fan_out(&ServerNotification::ToolsChanged);
+                }
+                assert_eq!(
+                    registry.live_streams(),
+                    0,
+                    "the overflow policy evicts the subscriber that fell behind"
+                );
+            }
+
+            #[tokio::test]
+            async fn duplicate_key_is_rejected_and_the_first_stream_survives() {
+                let registry = Arc::new(ListenRegistry::new());
+                // ONE principal, ONE id, TWO connections — a shared service
+                // account, or the same user in two tabs.
+                let (_first, mut first_rx) =
+                    open(&registry, "alice", 1, tools_only()).expect("the first stream registers");
+                skip_ack(&mut first_rx);
+
+                assert_eq!(
+                    open(&registry, "alice", 1, tools_only()).err(),
+                    Some(ListenRejection::DuplicateSubscriptionId),
+                    "the SECOND registration is refused, never applied"
+                );
+                assert_eq!(
+                    registry.live_streams(),
+                    1,
+                    "the incumbent entry was not evicted"
+                );
+
+                registry.fan_out(&ServerNotification::ToolsChanged);
+                let Ok(ListenFrame::Message(frame)) = first_rx.try_recv() else {
+                    panic!("the FIRST subscriber's stream must still be open and receiving");
+                };
+                assert!(frame.contains("notifications/tools/list_changed"));
+            }
+
+            #[tokio::test]
+            async fn sequential_reuse_of_a_released_key_still_registers() {
+                let registry = Arc::new(ListenRegistry::new());
+                let (first, _first_rx) =
+                    open(&registry, "alice", 1, tools_only()).expect("the first stream registers");
+                drop(first);
+                assert_eq!(registry.live_streams(), 0);
+
+                let (_second, _second_rx) = open(&registry, "alice", 1, tools_only())
+                    .expect("a RELEASED key is free to reuse — only a LIVE one is refused");
+                assert_eq!(registry.live_streams(), 1);
+            }
+
+            #[tokio::test]
+            async fn a_guard_drop_cannot_reclaim_a_successor_at_the_same_key() {
+                let registry = Arc::new(ListenRegistry::new());
+                let (guard_a, _a_rx) =
+                    open(&registry, "solo", 1, tools_only()).expect("A registers");
+                overflow_the_only_subscriber(&registry);
+
+                // A's ENTRY is gone but A's GUARD is still alive: it lives in the
+                // SSE stream future and only drops when that future unwinds. The
+                // client, told to re-issue, takes the freed key.
+                let (_guard_b, mut b_rx) =
+                    open(&registry, "solo", 1, tools_only()).expect("B takes the free slot");
+                assert_eq!(registry.live_streams(), 1);
+                skip_ack(&mut b_rx);
+
+                drop(guard_a);
+
+                assert_eq!(
+                    registry.live_streams(),
+                    1,
+                    "a late guard drop removes only ITS OWN generation (CR-02)"
+                );
+                registry.fan_out(&ServerNotification::ToolsChanged);
+                assert!(
+                    matches!(b_rx.try_recv(), Ok(ListenFrame::Message(_))),
+                    "B's stream is still live and still receiving"
+                );
+            }
+
+            #[tokio::test]
+            async fn a_stale_overflow_disconnect_cannot_evict_a_successor() {
+                let registry = Arc::new(ListenRegistry::new());
+                let (guard_a, _a_rx) =
+                    open(&registry, "solo", 1, tools_only()).expect("A registers");
+                let stale_generation = guard_a.generation;
+                overflow_the_only_subscriber(&registry);
+
+                let (_guard_b, mut b_rx) =
+                    open(&registry, "solo", 1, tools_only()).expect("B takes the free slot");
+                skip_ack(&mut b_rx);
+
+                // An in-flight disconnect carrying A's generation, arriving after
+                // B took the key.
+                registry.disconnect_overflowed(&key_for("solo", 1), stale_generation);
+
+                assert_eq!(
+                    registry.live_streams(),
+                    1,
+                    "a stale disconnect removes NOTHING"
+                );
+                registry.fan_out(&ServerNotification::ToolsChanged);
+                assert!(
+                    matches!(b_rx.try_recv(), Ok(ListenFrame::Message(_))),
+                    "B's stream is untouched by the stale disconnect"
+                );
+            }
+
+            #[tokio::test]
+            async fn generations_are_strictly_increasing() {
+                let registry = Arc::new(ListenRegistry::new());
+                // Held for the whole test so no key is ever released and reused.
+                let held: Vec<Opened> = (0..4)
+                    .map(|id| open(&registry, "alice", id, tools_only()).expect("within the cap"))
+                    .collect();
+
+                let generations: Vec<u64> =
+                    held.iter().map(|(guard, _)| guard.generation).collect();
+                for pair in generations.windows(2) {
+                    assert!(
+                        pair[1] > pair[0],
+                        "every registration draws a strictly larger token: {:?}",
+                        generations
+                    );
+                }
+            }
+
+            #[tokio::test]
+            async fn the_duplicate_rejection_maps_to_invalid_request() {
+                use crate::types::protocol::error_codes::{INVALID_REQUEST, RATE_LIMITED};
+
+                assert_eq!(
+                    ListenRejection::DuplicateSubscriptionId.code(),
+                    INVALID_REQUEST,
+                    "a duplicate id is a malformed request, answered at HTTP 400"
+                );
+                for capacity in [
+                    ListenRejection::PerPrincipalLimit,
+                    ListenRejection::GlobalLimit,
+                ] {
+                    assert_eq!(
+                        capacity.code(),
+                        RATE_LIMITED,
+                        "the CAP refusals keep the code they already answered with"
+                    );
+                }
+                assert!(
+                    !ListenRejection::DuplicateSubscriptionId
+                        .message()
+                        .contains("too many concurrent"),
+                    "the duplicate wording must not read as a capacity refusal"
+                );
+            }
         }
     }
 }

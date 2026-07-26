@@ -2845,7 +2845,11 @@ fn resolve_agreed_filter(
 ///    conformant-by-absence configuration;
 /// 3. `params` that do not deserialize (`notifications` is REQUIRED) ->
 ///    `-32602`, AFTER the header gate and auth have already run;
-/// 4. the per-principal or global concurrency cap is exhausted -> `-32005`.
+/// 4. the per-principal or global concurrency cap is exhausted -> `-32005`;
+/// 5. a duplicate LIVE `(principal, subscriptionId)` -> `-32600` at HTTP 400.
+///    The incumbent stream is untouched: the id belongs to the caller, so the
+///    caller — not the server — resolves the collision by choosing a free one
+///    (see [`ListenRejection::code`](crate::server::subscriptions::ListenRejection)).
 ///
 /// # The three closure triggers
 ///
@@ -2877,7 +2881,7 @@ async fn assemble_subscriptions_listen(
     use crate::server::subscriptions::{
         anonymous_principal, ListenFrame, ListenKey, LISTEN_CHANNEL_CAPACITY,
     };
-    use crate::types::protocol::error_codes::{METHOD_NOT_FOUND, RATE_LIMITED};
+    use crate::types::protocol::error_codes::METHOD_NOT_FOUND;
     use crate::types::subscriptions::SUBSCRIPTIONS_LISTEN_METHOD;
 
     let era = protocol_context.map(|pc| pc.era);
@@ -2948,12 +2952,15 @@ async fn assemble_subscriptions_listen(
     let guard = match registry.register(key, agreed, sender, terminal) {
         Ok(guard) => guard,
         Err(rejection) => {
+            // PER-VARIANT code, owned by the rejection itself: a capacity
+            // refusal and a duplicate subscription id are different conditions
+            // and must not share one status.
             return listen_rejection_response(
                 era,
                 id,
-                RATE_LIMITED,
+                rejection.code(),
                 rejection.message().to_string(),
-            )
+            );
         },
     };
 
