@@ -1,7 +1,7 @@
 //! HTTP/SSE transport implementation for MCP.
 
 use crate::error::Result;
-use crate::shared::sse_parser::SseParser;
+use crate::shared::sse_parser::{SseConfig, SseParser};
 use crate::shared::{Transport, TransportMessage};
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -67,6 +67,38 @@ impl std::fmt::Debug for HttpTransport {
             .field("connected", &self.connected)
             .finish_non_exhaustive()
     }
+}
+
+/// Report an SSE line-buffer overflow, returning whether the reader task must
+/// end.
+///
+/// [`HttpTransport::connect_sse`] is the SECOND incremental feeder of the shared
+/// [`SseParser`] (the `subscriptions/listen` client is the other): it holds ONE
+/// parser for the lifetime of its spawned reader task and feeds it frame by
+/// frame. Since Phase 113-15 the parser BOUNDS its line buffer, so without this
+/// observation an oversized line would be discarded SILENTLY here and the task
+/// would carry on as if nothing had happened — strictly worse than the
+/// unbounded-but-correct behaviour it replaced (T-113-78).
+///
+/// The bound itself is deliberately left at the shared 1 MiB default: this
+/// transport carries arbitrary JSON-RPC results, so tightening its effective
+/// payload ceiling would be a behaviour change to a pre-existing exported
+/// transport.
+///
+/// A free function rather than an inline `if` so the condition is reachable from
+/// a test — the reader task owns a live `hyper::body::Incoming`, which cannot be
+/// constructed outside hyper.
+fn report_sse_line_overflow(parser: &SseParser) -> bool {
+    if !parser.overflowed() {
+        return false;
+    }
+    error!(
+        "SSE stream sent a single line exceeding the {}-byte parser bound; the \
+         oversized line was discarded, so the stream is corrupt and the \
+         connection is being closed",
+        SseConfig::default().max_buffer_size
+    );
+    true
 }
 
 impl HttpTransport {
@@ -146,6 +178,10 @@ impl HttpTransport {
                             if let Some(data) = frame.data_ref() {
                                 let text = String::from_utf8_lossy(data);
                                 let events = sse_parser.feed(&text);
+
+                                if report_sse_line_overflow(&sse_parser) {
+                                    break;
+                                }
 
                                 for event in events {
                                     // Process SSE event data as JSON-RPC message
@@ -385,6 +421,41 @@ mod tests {
         assert_eq!(config.base_url, cloned.base_url);
         assert_eq!(config.timeout, cloned.timeout);
         assert_eq!(config.enable_pooling, cloned.enable_pooling);
+    }
+
+    /// The reader task's overflow arm, exercised on the predicate it actually
+    /// calls. A deliberately tiny parser stands in for the 1 MiB production
+    /// bound so the test allocates bytes rather than a megabyte.
+    #[test]
+    fn an_oversized_sse_line_ends_the_reader_task() {
+        let mut parser = SseParser::with_max_buffer_size(64);
+        assert!(
+            !report_sse_line_overflow(&parser),
+            "a fresh parser has lost nothing, so the task keeps reading"
+        );
+
+        assert!(
+            parser.feed(&"x".repeat(256)).is_empty(),
+            "an unterminated line completes no event"
+        );
+        assert!(
+            report_sse_line_overflow(&parser),
+            "a discarded line ends the task instead of being silently swallowed"
+        );
+    }
+
+    /// `connect_sse` keeps the SHARED default bound — this transport carries
+    /// arbitrary JSON-RPC results, so tightening its payload ceiling is a
+    /// behaviour change it must not make.
+    #[test]
+    fn connect_sse_keeps_the_shared_default_bound() {
+        let mut parser = SseParser::new();
+        let _ = parser.feed(&"x".repeat(256));
+        assert!(
+            !report_sse_line_overflow(&parser),
+            "256 bytes is nowhere near the 1 MiB default"
+        );
+        assert_eq!(SseConfig::default().max_buffer_size, 1024 * 1024);
     }
 
     #[tokio::test]

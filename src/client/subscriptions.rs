@@ -68,6 +68,19 @@ use std::task::{Context, Poll};
 /// error `Display` (T-113-67).
 const MAX_ECHOED_FRAME: usize = 200;
 
+/// The largest single SSE line a `subscriptions/listen` stream may carry.
+///
+/// Deliberately TIGHTER than the shared 1 MiB [`SseParser`] default. This is a
+/// LONG-LIVED stream, fed one chunk at a time from UNTRUSTED remote input, whose
+/// frames are notifications and therefore small by construction — a peer that
+/// held the stream open and never emitted a newline would otherwise grow this
+/// client's heap for the lifetime of the connection (review CR-03, T-113-74).
+///
+/// The transports that carry arbitrary JSON-RPC results keep the looser shared
+/// default; only this path, whose payloads are bounded by the protocol itself,
+/// tightens it.
+const MAX_LISTEN_LINE_BYTES: usize = 256 * 1024;
+
 /// A stream of raw SSE `data:` payloads, one item per event.
 ///
 /// The unit is the payload STRING rather than a parsed value because the
@@ -169,7 +182,10 @@ struct PayloadState {
 fn sse_payload_stream(body: hyper::body::Incoming) -> impl Stream<Item = Result<String>> + Send {
     let state = PayloadState {
         body,
-        parser: SseParser::new(),
+        // An EXPLICIT bound, not `SseParser::new()`'s default: this path's limit
+        // is visible at the call site and can be tightened independently of the
+        // shared one.
+        parser: SseParser::with_max_buffer_size(MAX_LISTEN_LINE_BYTES),
         bytes: Vec::new(),
         pending: VecDeque::new(),
         done: false,
@@ -217,6 +233,16 @@ async fn read_next_frame(state: &mut PayloadState) -> Option<Error> {
                 state
                     .pending
                     .extend(drain_sse_payloads(&mut state.parser, &text));
+                if let Some(error) = listen_overflow(&state.parser) {
+                    // The peer sent a single line past MAX_LISTEN_LINE_BYTES, so
+                    // the parser DISCARDED bytes and this byte stream is no
+                    // longer trustworthy. Unlike a malformed frame — which is an
+                    // `Err` ITEM the stream continues past — there is nothing
+                    // meaningful to continue to, so stop polling a peer already
+                    // established as hostile or broken.
+                    state.done = true;
+                    return Some(error);
+                }
             }
             // A trailers frame carries no data; the caller loops and reads again.
             None
@@ -277,6 +303,32 @@ fn drain_sse_payloads(parser: &mut SseParser, chunk: &str) -> Vec<String> {
         .filter(|event| event.event.as_deref().is_none_or(|name| name == "message"))
         .map(|event| event.data)
         .collect()
+}
+
+/// The stream-ENDING error, when the server has sent a single SSE line longer
+/// than [`MAX_LISTEN_LINE_BYTES`].
+///
+/// The message names the limit and the peer's behaviour and nothing else — no
+/// frame content is echoed, because the bytes that tripped the bound are exactly
+/// the untrusted input [`MAX_ECHOED_FRAME`] exists to keep out of a client's
+/// logs.
+///
+/// A free function over the parser rather than an inline check in
+/// [`read_next_frame`] so the condition is reachable from a test: that function
+/// owns a live `hyper::body::Incoming`, which cannot be constructed outside
+/// hyper.
+fn listen_overflow(parser: &SseParser) -> Option<Error> {
+    if !parser.overflowed() {
+        return None;
+    }
+    Some(Error::protocol(
+        ErrorCode::INVALID_REQUEST,
+        format!(
+            "the server sent a single subscriptions/listen line exceeding \
+             {MAX_LISTEN_LINE_BYTES} bytes; the oversized line was discarded and the \
+             stream was ended"
+        ),
+    ))
 }
 
 /// Bound an untrusted string for inclusion in an error message.
@@ -926,6 +978,64 @@ mod tests {
             "genuinely invalid bytes are consumed, not retained forever"
         );
         assert!(text.contains('a'), "the valid remainder survives: {text:?}");
+    }
+
+    /// A server that streams past the line bound with no newline latches the
+    /// SHARED parser, which is the condition `read_next_frame` checks after
+    /// every drain before ending the stream.
+    ///
+    /// Driven through a deliberately tiny parser: the production bound is
+    /// 256 KiB and a test must not allocate it to prove the wiring.
+    #[test]
+    fn a_line_past_the_bound_latches_the_parser_and_ends_the_stream() {
+        let mut parser = SseParser::with_max_buffer_size(64);
+        assert!(
+            listen_overflow(&parser).is_none(),
+            "a fresh parser has lost nothing, so the stream keeps reading"
+        );
+
+        assert!(
+            drain_sse_payloads(&mut parser, &"x".repeat(256)).is_empty(),
+            "an unterminated line completes no payload"
+        );
+
+        let error = listen_overflow(&parser).expect("a discarded line ends the stream");
+        assert!(
+            error
+                .to_string()
+                .contains(&MAX_LISTEN_LINE_BYTES.to_string()),
+            "the error names the limit, so an operator can act on it: {error}"
+        );
+        match error {
+            Error::Protocol { code, .. } => {
+                assert_eq!(code, ErrorCode::INVALID_REQUEST);
+            },
+            other => panic!("expected a structured protocol error, got {other:?}"),
+        }
+    }
+
+    /// A normal stream never observes the flag, so nothing about the existing
+    /// behaviour changes for a well-behaved server.
+    #[test]
+    fn a_normal_listen_stream_never_trips_the_bound() {
+        let mut parser = SseParser::with_max_buffer_size(MAX_LISTEN_LINE_BYTES);
+        let payloads = drain_sse_payloads(
+            &mut parser,
+            &format!("event: message\ndata: {}\n\n", tools_changed(&id())),
+        );
+        assert_eq!(payloads.len(), 1);
+        assert!(listen_overflow(&parser).is_none());
+    }
+
+    /// The listen path is bounded TIGHTER than the shared default, because its
+    /// frames are notifications and small by construction.
+    #[test]
+    fn the_listen_bound_is_tighter_than_the_shared_default() {
+        let shared = crate::shared::sse_parser::SseConfig::default().max_buffer_size;
+        assert!(
+            MAX_LISTEN_LINE_BYTES < shared,
+            "{MAX_LISTEN_LINE_BYTES} must be tighter than the shared {shared}"
+        );
     }
 
     #[test]
