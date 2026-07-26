@@ -302,3 +302,114 @@ server-initiated requests are ever to be answered on a v2 connection. Note
 `send_raw`'s `is_notification` flag is currently hard-coded `false`, which
 suppresses the 202-Accepted/SSE-start behavior — a notification path needs that
 parameter threaded through.
+
+---
+
+## D-113-F — Two PRE-EXISTING cog-25 violations in `streamable_http_server.rs`
+
+**Found during:** plan 12, task 2 (the mandatory PMAT complexity budget)
+**Severity:** MEDIUM — the PR-blocking CI gate is red, but it was red BEFORE this phase
+**Owner:** unassigned — needs its own refactor slice
+**Status:** ⏸️ **DEFERRED** (executor SCOPE BOUNDARY — not caused by Phase 113)
+
+`pmat quality-gate --fail-on-violation --checks complexity` (the exact PR-blocking
+invocation CLAUDE.md pins in `.github/workflows/ci.yml`) reports **3** violations at
+Phase-113 HEAD. One of them — `src/client/subscriptions.rs::sse_payload_stream`, cog 26 —
+WAS a Phase-113 regression and was fixed in place (commit `14fc8d64`, P1 extract-method).
+
+The other two are **pre-existing and were measurably WORSE before this phase**:
+
+| Function | Baseline `0c598639` (pre-113) | Phase-113 HEAD | Delta |
+|----------|-------------------------------|----------------|-------|
+| `handle_post_fast_path` | cognitive **35** | cognitive **30** | **−5** |
+| `handle_post_with_middleware` | cognitive **36** | cognitive **31** | **−5** |
+
+Measured by extracting `src/server/streamable_http_server.rs` at commit `0c598639`
+(the last Phase-112 commit) into a scratch tree and running the identical
+`pmat analyze complexity --max-cognitive 25`.
+
+**Why not fixed here.** They are not caused by this plan's changes, and Phase 113 already
+moved both in the right direction by 5 points each while adding the whole v2 header gate,
+session gate, status mapper and MRTR ingress to the same two functions. Decomposing them
+properly means restructuring the two POST entrypoints, which is a design change with real
+regression surface across every transport test — a refactor slice of its own, not a
+close-out task.
+
+**Fix shape for the owner.** Both are the same shape: a long linear sequence of
+gate → resolve → dispatch → assemble steps with early returns. P2 (extract the
+gate/pipeline stages into named `fn`s returning a small decision enum) is the natural
+technique, mirroring how `sessions_active` / `resumability_active` / `classify_v2_request`
+were already pulled out of these functions during Phase 113. The hard cap is 50 and both
+are well under it, so the `// Why:`-annotated `#[allow(clippy::cognitive_complexity)]`
+escape hatch is NOT justified here — they are reducible.
+
+**Do not** "fix" this by weakening the gate: CLAUDE.md forbids disabling, weakening or
+removing it without explicit Phase-level approval.
+
+---
+
+## D-113-G — `make quality-gate`'s fuzz stage never fuzzes anything
+
+**Found during:** plan 12, task 2 (the mandatory quality gate)
+**Severity:** HIGH — a MANDATORY CLAUDE.md requirement reports green while doing nothing
+**Owner:** unassigned — needs an owner policy decision (deviation Rule 4)
+**Status:** ⏸️ **DEFERRED** (pre-existing; not caused by Phase 113)
+
+`Makefile:10` sets `CARGO = cargo`. `Makefile:234-244`'s `test-fuzz` then runs:
+
+```make
+cd fuzz && $(CARGO) fuzz list | while read target; do \
+    timeout 30s $(CARGO) fuzz run $$target || echo "Fuzz target $$target completed"; \
+done
+```
+
+`cargo fuzz` requires **nightly** — it passes `-Zsanitizer=address`. The default toolchain in
+this workspace is stable, so every one of the **17** fuzz targets fails to build:
+
+```
+error: the option `Z` is only accepted on the nightly compiler
+error: 1 nightly option were parsed
+Error: failed to build fuzz script: … -Zsanitizer=address … --bin app_widget_scanner
+```
+
+The `|| echo` swallows all 17 failures. `test-fuzz` then prints `✓ Fuzz testing completed`,
+`validate-always` prints `✅ ALL ALWAYS requirements validated!`, and `make quality-gate`
+exits **0** having fuzzed nothing.
+
+Confirmed on a quality-gate run with **no** concurrent cargo process, so it is not lock
+contention — it is unconditional. CLAUDE.md lists FUZZ testing as an ALWAYS requirement for
+every new feature; this stage has not been meeting it.
+
+**Why not fixed here.** Making the stage real is a policy call, not a bug fix (deviation
+Rule 4). It requires choosing:
+1. a toolchain pin (`RUSTUP_TOOLCHAIN=nightly` or `cargo +nightly fuzz`), and whether CI has
+   nightly available;
+2. a per-target budget — 17 targets at the current `timeout 30s` adds ~8.5 minutes to *every*
+   `make quality-gate`, which is the repo's pre-commit gate. A `-runs=N` bound is probably
+   better than a wall-clock timeout because it is deterministic;
+3. whether a fuzz *failure* should be fatal (today even a genuine crash would be swallowed by
+   the `|| echo`, which is the more serious half of this defect).
+
+A phase executor should not unilaterally change the pre-commit gate's runtime for the whole
+repo.
+
+**Compensating control actually exercised in Phase 113.** Plan 12 ran the campaign explicitly:
+
+```bash
+RUSTUP_TOOLCHAIN=nightly cargo fuzz run fuzz_request_state -- -runs=20000
+# exit 0 — #20000 DONE cov: 570 ft: 803 corp: 79/1905b — zero crash artifacts
+```
+
+This is precisely why the plan mandated an explicit 20k-run invocation instead of trusting
+`cargo fuzz build` or the gate. Evidence is recorded in `113-FEATURE-MATRIX.md` § Fuzz.
+
+**Fix shape for the owner.** Pin the toolchain in the recipe, replace the wall-clock timeout
+with a deterministic run bound, and drop the `|| echo` so a crash is fatal:
+
+```make
+cd fuzz && RUSTUP_TOOLCHAIN=nightly $(CARGO) fuzz list | while read target; do \
+    RUSTUP_TOOLCHAIN=nightly $(CARGO) fuzz run $$target -- -runs=$(FUZZ_RUNS) || exit 1; \
+done
+```
+
+with `FUZZ_RUNS ?= 2000` locally and a larger value in the nightly CI job.

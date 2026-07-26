@@ -383,3 +383,267 @@ the Cargo.toml comment ("deliberately absent from BOTH `default` and `full` so
 `cargo public-api` never sees the seam on the shipped surface") is accurate for the shipped
 surface. The seam is visible only when `--all-features` explicitly turns `fuzzing` on, which is
 what `fuzz/Cargo.toml` does and nothing else in the repo does.
+
+---
+
+## Quality Gate
+
+**Produced by:** Plan 113-12, Task 2
+
+`make quality-gate` is the repo's mandatory pre-commit / pre-push gate and the only invocation
+that matches CI exactly (workspace-wide `cargo fmt --all`, clippy with pedantic + nursery lint
+groups). No individual `cargo fmt` / `cargo clippy` call was substituted for it.
+
+| Run | When | Exit |
+|-----|------|------|
+| 1 | before the complexity refactor | **0** |
+| 2 | after the complexity refactor | **0** |
+| 3 | clean re-run, no concurrent cargo process | **0** |
+
+Stages chained and passed: `fmt-check` → `lint` → `build` → `test-all` → `pmcp-package-gate` →
+`audit` (1169 advisories loaded) → `unused-deps` → `check-todos` → `check-unwraps` →
+`validate-always` → `purity-check` → `comply`.
+
+### FINDING F-3 — `make quality-gate`'s fuzz stage is VACUOUS (pre-existing)
+
+Recorded because it is a false-green in a MANDATORY CLAUDE.md requirement, and because it is
+the precise reason this plan was told to run an explicit fuzz campaign rather than trust the gate.
+
+`Makefile:10` sets `CARGO = cargo`, and `Makefile:234-244`'s `test-fuzz` runs
+`cd fuzz && $(CARGO) fuzz list | while read target; do timeout 30s $(CARGO) fuzz run $$target || echo "…completed"; done`.
+`cargo fuzz` requires **nightly** (`-Zsanitizer=address`); the default toolchain here is stable.
+Every one of the **17** fuzz targets therefore fails to build with:
+
+```
+error: the option `Z` is only accepted on the nightly compiler
+error: 1 nightly option were parsed
+Error: failed to build fuzz script: … -Zsanitizer=address … --bin app_widget_scanner
+```
+
+and the `|| echo` swallows all 17 failures, after which the target prints
+`✓ Fuzz testing completed` and `validate-always` reports
+`✅ ALL ALWAYS requirements validated!`. The gate exits 0 **having fuzzed nothing**.
+
+This was confirmed on quality-gate run 3, which had **no** concurrent cargo process — so it is
+not lock contention. It is unconditional.
+
+**NOT fixed here** (deviation Rule 4 — this is a policy call, not a bug fix). Making the stage
+real means choosing a toolchain pin and a per-target budget: 17 targets × the current 30 s
+timeout would add ~8.5 minutes to *every* `make quality-gate`, which is a workflow change the
+phase executor should not make unilaterally. Recorded in `deferred-items.md` as **D-113-G** with
+the fix shape. The compensating control is § Fuzz below, which ran the target for real.
+
+## Complexity Budget
+
+`pmat` 3.15.0 at `/Users/guy/.cargo/bin/pmat` — the version CLAUDE.md pins for CI. It was
+verified present by plan 01 (§ C.1 of `113-SPEC-RECHECK.md`), so "unavailable" was never an
+acceptable outcome and was not used.
+
+### The plan's literal jq filter passes VACUOUSLY — do not reuse it
+
+```bash
+# The command as written in the plan. It matches NOTHING, for two independent reasons.
+pmat analyze complexity --format json --max-cognitive 25 \
+  | jq '.violations[] | select(.path | startswith("src/"))'
+```
+
+1. Violations live under **`.summary.violations`**, not `.violations`.
+2. Every path is emitted with a **`./` prefix** (`./src/server/…`), so `startswith("src/")`
+   is false even once the path is found.
+
+Running it returns empty and looks like a pass. The corrected filter, used below, is:
+
+```bash
+pmat analyze complexity --format json --max-cognitive 25 \
+  | jq -r '.summary.violations[]? | select((.file // .path) | test("^\\./src/"))'
+```
+
+### Result — and the PR-blocking gate was RED
+
+The exact CI invocation from `.github/workflows/ci.yml`:
+
+```bash
+pmat quality-gate --fail-on-violation --checks complexity   # exit 1 — Quality Gate: FAILED
+```
+
+**3 violations** at the start of this task, all cognitive-complexity over the cog-25 threshold:
+
+| Function | File:line | Cog | Introduced by Phase 113? |
+|----------|-----------|-----|--------------------------|
+| `sse_payload_stream` | `src/client/subscriptions.rs:171` | 26 | **YES** — the file does not exist at the pre-phase baseline |
+| `handle_post_fast_path` | `src/server/streamable_http_server.rs:2942` | 30 | **NO** — pre-existing |
+| `handle_post_with_middleware` | `src/server/streamable_http_server.rs:3378` | 31 | **NO** — pre-existing |
+
+"Pre-existing" is a **measurement**, not an assertion. `src/server/streamable_http_server.rs`
+was extracted at commit `0c598639` (the last Phase-112 commit) into a scratch tree and run
+through the identical `pmat analyze complexity --max-cognitive 25`:
+
+| Function | Baseline `0c598639` | Phase-113 HEAD | Delta |
+|----------|---------------------|----------------|-------|
+| `handle_post_fast_path` | cognitive **35** | cognitive **30** | **−5** |
+| `handle_post_with_middleware` | cognitive **36** | cognitive **31** | **−5** |
+
+Phase 113 **reduced** both by 5 points while adding the v2 header gate, the session gate, the
+status mapper and MRTR ingress to those same two functions.
+
+### The one Phase-113 violation was FIXED, not silenced
+
+`sse_payload_stream` was decomposed with **P1 (extract method)** — the body-frame `match` moved
+into a new `read_next_frame`, leaving the `unfold` closure a flat loop. Behaviour-preserving:
+the old "end-of-body but payloads still buffered" fall-through is reproduced exactly by the
+caller's existing `pop_front`/`done` ordering. Commit `14fc8d64`.
+
+No `#[allow(clippy::cognitive_complexity)]` was added anywhere — the plan forbids it where the
+function is reducible, and this one was.
+
+Post-fix `src/` violations: **2**, both the pre-existing pair above, deferred as **D-113-F** in
+`deferred-items.md`. `pmat quality-gate --fail-on-violation --checks complexity` still exits 1
+on them; it also exited 1 (worse) before this phase started.
+
+## Zero SATD
+
+| Measurement | Baseline `0c598639` | Phase-113 HEAD |
+|-------------|---------------------|----------------|
+| `grep -rnE '\b(TODO\|FIXME\|XXX\|HACK\|PLACEHOLDER)\b' src/ --include='*.rs' \| wc -l` | **0** | **0** |
+
+Unchanged at zero. Phase 113 introduced no self-admitted technical debt.
+
+**`#[allow(dead_code)]` on `ResponseDisposition::InputRequired` — REMOVED.**
+
+| | Baseline `0c598639` | HEAD |
+|-|---------------------|------|
+| `grep -c '#\[allow(dead_code)\]' src/server/core.rs` | **4** | **2** |
+| lines | 203 (`ServerCore`), **1119 (`InputRequired`)**, **1122 (`Task`)**, 1190 (doc-comment prose) | 203 (`ServerCore`), 1378 (doc-comment prose) |
+
+Both forward-looking allows are gone — `InputRequired` because plan 09 wired it into
+`mrtr_egress`, and `Task` alongside it. Of the 2 remaining matches only line 203 is an actual
+attribute (on the pre-existing `ServerCore` struct, unrelated to this phase); line 1378 is the
+literal string inside a doc comment.
+
+## Coverage
+
+CLAUDE.md mandates an 80% coverage target. Measured with the repo's own coverage flags
+(`Makefile:379-387`), using `--summary-only` to get the per-file table:
+
+```bash
+"$C" llvm-cov --all-features --package pmcp --summary-only     # exit 0
+```
+
+Line coverage for every file this phase created or materially changed:
+
+| File | Lines | Missed | **Line coverage** | Region coverage | ≥ 80%? |
+|------|-------|--------|-------------------|-----------------|--------|
+| `src/types/subscriptions.rs` | 401 | 2 | **99.50%** | 99.45% | ✅ |
+| `src/types/mrtr.rs` | 750 | 22 | **97.07%** | 95.92% | ✅ |
+| `src/server/request_state.rs` | 898 | 28 | **96.88%** | 96.25% | ✅ |
+| `src/server/core.rs` | 3119 | 233 | **92.53%** | 91.96% | ✅ |
+| `src/client/subscriptions.rs` | 654 | 58 | **91.13%** | 91.64% | ✅ |
+| `src/server/streamable_http_server.rs` | 2898 | 266 | **90.82%** | 91.20% | ✅ |
+| `src/client/mod.rs` | 3251 | 517 | **84.10%** | 82.11% | ✅ |
+| **`pmcp` crate TOTAL** | 53752 | 11502 | **78.60%** | 79.90% | ⚠️ see note |
+
+**All seven** new/changed files clear the 80% target; the two smallest and newest
+(`types/subscriptions.rs`, `types/mrtr.rs`) are the best-covered files in the set. No file
+needed a justification.
+
+*Note on the crate total:* 78.60% line / 79.90% region is a **crate-wide** figure dominated by
+~54k lines of pre-Phase-113 code, and it is not a regression — every file this phase touched is
+above target and pulls the average **up**, not down. Recorded as a number rather than a pass so
+the milestone can track it.
+
+## Fuzz
+
+The bounded campaign the plan mandates, run for real (see F-3 for why the gate's own fuzz stage
+could not be relied on):
+
+```bash
+RUSTUP_TOOLCHAIN=nightly cargo fuzz run fuzz_request_state -- -runs=20000
+```
+
+| Field | Value |
+|-------|-------|
+| Exit status | **0** |
+| Final line | `#20000  DONE   cov: 570 ft: 803 corp: 79/1905b lim: 270 exec/s: 0 rss: 133Mb` |
+| Runs completed | `Done 20000 runs in 0 second(s)` |
+| Coverage reached | 570 edges, 803 features, 79-input corpus |
+| **Crash artifacts written** | **NONE** — `fuzz/artifacts/fuzz_request_state/` contained 0 files before the run and 0 files after |
+
+`fuzz_request_state` targets the `requestState` AEAD verify path — the untrusted-bytes boundary
+where a client-echoed continuation token is decrypted and its principal‖method‖param-digest AAD
+checked. 20 000 mutations produced no panic, no timeout and no OOM.
+
+Toolchain note: the run needs `RUSTUP_TOOLCHAIN=nightly` explicitly. That is not a workaround —
+it is the requirement `cargo fuzz` has always had, and forgetting it is exactly the defect F-3
+records in the Makefile.
+
+## Contract-First
+
+Plan 01 recorded this environment **before** any implementation ran (`113-SPEC-RECHECK.md`
+§ "Contract-First Environment (Section C)"). This task **re-verified** every command rather than
+copying the record blind, so the phase's evidence is self-contained and current.
+
+### Literal command outputs, re-run at close-out (2026-07-26)
+
+```
+$ ls -d ../provable-contracts/contracts/pmcp
+ls: ../provable-contracts/contracts/pmcp: No such file or directory      (exit 1)
+
+$ ls -d ../provable-contracts
+ls: ../provable-contracts: No such file or directory                     (exit 1)
+
+$ command -v pdmt
+(no output; exit status 1)
+
+$ command -v pmat
+/Users/guy/.cargo/bin/pmat
+
+$ pmat --version
+pmat 3.15.0
+```
+
+**Identical to plan 01's Section C.1 in every particular.** The `../provable-contracts` checkout
+has NOT appeared since plan 01 ran, so step (c) of this task — "if the checkout HAS appeared,
+update the contract YAML under `contracts/pmcp/`" — does not apply. **No contract was updated
+in a checkout that does not exist, and none is claimed.**
+
+### `pmat comply check --path .`
+
+The in-repo compliance step that `make quality-gate` already chains (`Makefile:690` → `:842-849`):
+
+```bash
+pmat comply check --path .        # exit 1
+```
+
+| Check | Result |
+|-------|--------|
+| Version Currency | ⚠ project pinned 3.11.1, PMAT is 3.15.0 — 4 versions behind |
+| Config Files | ⚠ missing `.pmat-metrics.toml` |
+| Git Hooks | ⚠ no pre-commit hook installed in this checkout |
+| CB-030 O(1) Hooks / CB-031 Cache Health | ⚠ / — hooks cache not initialized |
+| Quality Thresholds | ⚠ no `.pmat-metrics.toml`, using defaults |
+| Deprecated Features | ✓ none detected |
+| ComputeBrick Compliance | — not a ComputeBrick project |
+| CB-1620…CB-1649 (30 work-ticket checks) | — all report "no `.pmat-work/` directory / no tickets present" |
+
+Every finding is a **project-level advisory** about PMAT's own scaffolding
+(`.pmat-work/`, `.pmat-metrics.toml`, hook installation) — none is a Phase-113 code finding, and
+none names a `src/` file. This is precisely the outcome `Makefile:845` anticipates by
+appending `|| echo "note: pmat comply reported project-level advisories (informational; see
+CLAUDE.md D-07)"`, which is why `make quality-gate` still exits 0. It matches Phase 109's
+recorded 109-08 decision that `pmat comply` is holistic and cache-driven on this repo and runs
+as an informational report. The repo's own deterministic `comply-bindings-check`
+(`Makefile:819-835`) runs alongside it and passes.
+
+### PDMT and the PMAT quality-proxy — honest non-compliance
+
+Both are marked **MANDATORY** in CLAUDE.md. Phase 113 does **not** satisfy either literally.
+Copied forward from plan 01's pre-implementation record and re-verified above:
+
+| Directive | Status | Substitute actually used |
+|-----------|--------|--------------------------|
+| "Use PDMT for all todos" (`pdmt_deterministic_todos`) | **NOT RUN** — `command -v pdmt` exits 1; not installed, and the MCP tool form was unavailable | The GSD per-task `<acceptance_criteria>` + `<verify><automated>` + `<done>` blocks in every `113-*-PLAN.md`, which carry the same structure PDMT emits (quality gate, measurable criteria, validation command). **Residual risk LOW-MEDIUM:** PDMT's determinism guarantee and its automatic 80%-coverage-target injection are lost; coverage is enforced only where a plan states it — which this plan did. |
+| "ALL code changes via the pmat quality-gate proxy" (`quality_proxy` MCP tool) | **NOT USED** — requires a long-running `pmat mcp-server --enable-quality-proxy` process registered as an MCP server; a plan executor cannot assume, start or verify it, and no `quality_proxy` tool was available | Three real compensating controls: (1) `make quality-gate` locally — run 3× in this task, exit 0 each time; (2) the PR-blocking PMAT `quality-gate` job in `.github/workflows/ci.yml`; (3) this task's mandatory `pmat analyze complexity` run, which was **not** skippable since `pmat` is on PATH — and which **caught a real cog-26 regression**. **Residual risk MEDIUM→LOW:** the lost property is *pre-write* rejection, so a violating edit can exist transiently on disk; it cannot reach `main`. |
+| Contract-first in `../provable-contracts/contracts/<crate>/` | **IN-REPO ONLY** — the external checkout is absent (verified twice, at plan 01 and again here) | `pmat comply check --path .` plus the deterministic `comply-bindings-check`. **Residual risk MEDIUM:** Phase 113's wire-level behavior is not graded against an external versioned contract, so drift between the shipped SDK and the canonical YAML would go undetected in this phase. Codex blocking finding 8 asked for contract updates to *precede* implementation; with the checkout absent that ordering could not be honored and remains genuinely unmet, not deferred to a later task. |
+
+A reviewer should read this table as **three consciously-deviated MANDATORY directives with
+compensating controls**, not as compliance.
