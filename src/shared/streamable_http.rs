@@ -937,8 +937,6 @@ impl StreamableHttpTransport {
     /// `is_notification` only selects the 202-Accepted behavior; it is not
     /// re-derived from the bytes so the typed path keeps its exact semantics.
     async fn post_body(&self, body_bytes: Vec<u8>, is_notification: bool) -> Result<()> {
-        let url = self.config.read().url.clone();
-
         let response = self.post_once(body_bytes).await?;
 
         // Process headers for session and protocol info
@@ -1026,8 +1024,18 @@ impl StreamableHttpTransport {
             "HTTP response received"
         );
 
-        // Fast path: Check if middleware exists before creating temp response
-        let modified_body = if self.config.read().http_middleware_chain.is_some() {
+        // Fast path: Check if middleware exists before creating temp response.
+        // The URL is read from the SAME acquisition rather than eagerly at entry:
+        // `post_once` already owns the request build, so the no-middleware path
+        // (the common one) pays no config lock and no `Url` clone here.
+        let middleware_url = {
+            let config = self.config.read();
+            config
+                .http_middleware_chain
+                .is_some()
+                .then(|| config.url.clone())
+        };
+        let modified_body = if let Some(url) = middleware_url {
             // Run response middleware (create a minimal response for middleware processing)
             let temp_response = HyperResponse::builder()
                 .status(status_code)

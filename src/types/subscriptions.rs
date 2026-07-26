@@ -32,6 +32,7 @@
 
 use crate::types::capabilities::ServerCapabilities;
 use crate::types::jsonrpc::RequestId;
+use crate::types::mrtr::META_KEY;
 use crate::types::notifications::ServerNotification;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -53,13 +54,6 @@ pub const ACKNOWLEDGED_METHOD: &str = "notifications/subscriptions/acknowledged"
 /// "is the JSON-RPC ID of the `subscriptions/listen` request that opened the
 /// stream (and equals this response's `id`)".
 pub const SUBSCRIPTION_ID_META_KEY: &str = "io.modelcontextprotocol/subscriptionId";
-
-/// The `_meta` key of a params/result object.
-///
-/// Spelled here rather than imported from [`crate::types::mrtr`] so this module
-/// carries no dependency on the MRTR unit (which is `streamable-http`-gated),
-/// and asserted equal to it by [`tests::meta_key_agrees_with_the_mrtr_spelling`].
-const META_KEY: &str = "_meta";
 
 /// The set of notification types a client asks a listen stream to deliver.
 ///
@@ -183,26 +177,7 @@ impl SubscriptionFilter {
     /// [`SubscriptionAcknowledgedParams::notifications`] reports.
     #[must_use]
     pub fn intersect_with_capabilities(&self, capabilities: &ServerCapabilities) -> Self {
-        let tools = capabilities
-            .tools
-            .as_ref()
-            .and_then(|c| c.list_changed)
-            .unwrap_or(false);
-        let prompts = capabilities
-            .prompts
-            .as_ref()
-            .and_then(|c| c.list_changed)
-            .unwrap_or(false);
-        let resources_list = capabilities
-            .resources
-            .as_ref()
-            .and_then(|c| c.list_changed)
-            .unwrap_or(false);
-        let resource_subscribe = capabilities
-            .resources
-            .as_ref()
-            .and_then(|c| c.subscribe)
-            .unwrap_or(false);
+        let [tools, prompts, resources_list, resource_subscribe] = supported_flags(capabilities);
 
         Self {
             tools_list_changed: agreed_flag(self.tools_list_changed, tools),
@@ -342,12 +317,9 @@ impl SubscriptionsListenResult {
     /// The empty result closing the stream opened by `subscription_id`.
     #[must_use]
     pub fn new(subscription_id: &RequestId) -> Self {
-        let mut meta = serde_json::Map::new();
-        meta.insert(
-            SUBSCRIPTION_ID_META_KEY.to_string(),
-            request_id_value(subscription_id),
-        );
-        Self { meta }
+        Self {
+            meta: subscription_id_map(subscription_id),
+        }
     }
 
     /// The subscription id this result closes, if present.
@@ -357,24 +329,35 @@ impl SubscriptionsListenResult {
     }
 }
 
-/// A `_meta` object carrying only [`SUBSCRIPTION_ID_META_KEY`].
-#[must_use]
-pub fn subscription_id_meta(subscription_id: &RequestId) -> Value {
+/// The single-entry `{ SUBSCRIPTION_ID_META_KEY: <id> }` map.
+///
+/// The ONE writer of the subscription-id tag. Every frame that carries the tag —
+/// the acknowledgement ([`SubscriptionAcknowledgedParams::new`]), the terminal
+/// result ([`SubscriptionsListenResult::new`]) and every tagged notification
+/// ([`tag_notification_with_subscription_id`]) — builds it from here, so the key
+/// spelling and the id encoding cannot disagree between frames.
+fn subscription_id_map(subscription_id: &RequestId) -> serde_json::Map<String, Value> {
     let mut meta = serde_json::Map::new();
     meta.insert(
         SUBSCRIPTION_ID_META_KEY.to_string(),
         request_id_value(subscription_id),
     );
-    Value::Object(meta)
+    meta
+}
+
+/// A `_meta` object carrying only [`SUBSCRIPTION_ID_META_KEY`].
+#[must_use]
+pub fn subscription_id_meta(subscription_id: &RequestId) -> Value {
+    Value::Object(subscription_id_map(subscription_id))
 }
 
 /// A [`RequestId`] as its wire JSON value (an untagged string or number).
-#[must_use]
-pub fn request_id_value(id: &RequestId) -> Value {
-    match id {
-        RequestId::String(s) => Value::String(s.clone()),
-        RequestId::Number(n) => Value::Number((*n).into()),
-    }
+///
+/// Defers to `RequestId`'s own `#[serde(untagged)]` `Serialize` rather than
+/// re-matching its variants, so a new variant cannot reach the wire spelled two
+/// different ways.
+pub(crate) fn request_id_value(id: &RequestId) -> Value {
+    serde_json::json!(id)
 }
 
 /// Tag an already-serialized notification's `params._meta` with
@@ -401,10 +384,7 @@ pub(crate) fn tag_notification_with_subscription_id(
         params.insert(META_KEY.to_string(), Value::Object(serde_json::Map::new()));
     }
     if let Some(meta) = params.get_mut(META_KEY).and_then(Value::as_object_mut) {
-        meta.insert(
-            SUBSCRIPTION_ID_META_KEY.to_string(),
-            request_id_value(subscription_id),
-        );
+        meta.extend(subscription_id_map(subscription_id));
     }
 }
 
@@ -455,26 +435,42 @@ pub(crate) fn tag_notification_with_subscription_id(
 /// ```
 #[must_use]
 pub fn advertises_subscriptions(capabilities: &ServerCapabilities) -> bool {
-    capabilities
-        .tools
-        .as_ref()
-        .and_then(|c| c.list_changed)
-        .unwrap_or(false)
-        || capabilities
+    supported_flags(capabilities).iter().any(|flag| *flag)
+}
+
+/// The four subscription-delivered capability flags, in the fixed order
+/// `[tools.listChanged, prompts.listChanged, resources.listChanged,
+/// resources.subscribe]`.
+///
+/// The ONE place those four expressions are written. Both
+/// [`advertises_subscriptions`] (the route gate and the `server/discover`
+/// projection) and [`SubscriptionFilter::intersect_with_capabilities`] (the
+/// agreed filter) read them from here, so the advertisement and what the stream
+/// actually delivers cannot drift. The `[bool; 4]` shape and its index order
+/// match the `caps` test helper below.
+fn supported_flags(capabilities: &ServerCapabilities) -> [bool; 4] {
+    [
+        capabilities
+            .tools
+            .as_ref()
+            .and_then(|c| c.list_changed)
+            .unwrap_or(false),
+        capabilities
             .prompts
             .as_ref()
             .and_then(|c| c.list_changed)
-            .unwrap_or(false)
-        || capabilities
+            .unwrap_or(false),
+        capabilities
             .resources
             .as_ref()
             .and_then(|c| c.list_changed)
-            .unwrap_or(false)
-        || capabilities
+            .unwrap_or(false),
+        capabilities
             .resources
             .as_ref()
             .and_then(|c| c.subscribe)
-            .unwrap_or(false)
+            .unwrap_or(false),
+    ]
 }
 
 #[cfg(test)]
@@ -509,13 +505,6 @@ mod tests {
             resources,
             ..ServerCapabilities::default()
         }
-    }
-
-    #[test]
-    fn meta_key_agrees_with_the_mrtr_spelling() {
-        // One `_meta` spelling across the crate: if the MRTR unit ever renames
-        // it, this fails rather than the two silently diverging.
-        assert_eq!(META_KEY, crate::types::mrtr::META_KEY);
     }
 
     #[test]

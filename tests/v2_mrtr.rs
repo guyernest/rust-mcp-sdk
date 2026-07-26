@@ -454,17 +454,42 @@ async fn call_tool(addr: SocketAddr, id: i64, name: &str) -> Resp {
     .await
 }
 
-/// A retry carrying `requestState` and `inputResponses` as TOP-LEVEL `params`
-/// siblings of `name` / `arguments` — never inside `_meta`.
-async fn retry_tool(addr: SocketAddr, id: Value, name: &str, state: &str, answers: Value) -> Resp {
-    let mut params = tool_params(name);
+/// A retry of ANY MRTR-eligible method, carrying `requestState` and
+/// `inputResponses` as TOP-LEVEL `params` siblings — never inside `_meta`.
+///
+/// Method-agnostic because MRTR is: `prompts/get` and `resources/read` splice the
+/// two fields at exactly the same place `tools/call` does, and a helper that
+/// baked in `tools/call` is what made the non-tool test inline this block twice.
+async fn retry(
+    addr: SocketAddr,
+    method: &str,
+    logical_name: &str,
+    id: Value,
+    mut params: Value,
+    state: &str,
+    answers: Value,
+) -> Resp {
     let object = params.as_object_mut().expect("params is an object");
     object.insert("requestState".to_string(), json!(state));
     object.insert("inputResponses".to_string(), answers);
     post(
         addr,
-        &v2_headers("tools/call", name),
-        &v2_body("tools/call", id, params),
+        &v2_headers(method, logical_name),
+        &v2_body(method, id, params),
+    )
+    .await
+}
+
+/// [`retry`] for `tools/call`, whose params are derived from the tool name.
+async fn retry_tool(addr: SocketAddr, id: Value, name: &str, state: &str, answers: Value) -> Resp {
+    retry(
+        addr,
+        "tools/call",
+        name,
+        id,
+        tool_params(name),
+        state,
+        answers,
     )
     .await
 }
@@ -828,17 +853,14 @@ async fn sep_2322_non_tool_incomplete_then_complete() {
     let (prompt_state, prompt_keys) = expect_input_required(&prompt_first);
     assert_eq!(prompt_keys, vec!["user_name".to_string()]);
 
-    let mut prompt_retry = prompt_params;
-    let object = prompt_retry.as_object_mut().expect("params is an object");
-    object.insert("requestState".to_string(), json!(prompt_state));
-    object.insert(
-        "inputResponses".to_string(),
-        json!({ "user_name": elicit_answer() }),
-    );
-    let prompt_second = post(
+    let prompt_second = retry(
         addr,
-        &v2_headers("prompts/get", PROMPT_NAME),
-        &v2_body("prompts/get", json!(2), prompt_retry),
+        "prompts/get",
+        PROMPT_NAME,
+        json!(2),
+        prompt_params,
+        &prompt_state,
+        json!({ "user_name": elicit_answer() }),
     )
     .await;
     expect_resumed(&prompt_second);
@@ -854,17 +876,14 @@ async fn sep_2322_non_tool_incomplete_then_complete() {
     let (resource_state, resource_keys) = expect_input_required(&resource_first);
     assert_eq!(resource_keys, vec!["user_name".to_string()]);
 
-    let mut resource_retry = resource_params;
-    let object = resource_retry.as_object_mut().expect("params is an object");
-    object.insert("requestState".to_string(), json!(resource_state));
-    object.insert(
-        "inputResponses".to_string(),
-        json!({ "user_name": elicit_answer() }),
-    );
-    let resource_second = post(
+    let resource_second = retry(
         addr,
-        &v2_headers("resources/read", RESOURCE_URI),
-        &v2_body("resources/read", json!(4), resource_retry),
+        "resources/read",
+        RESOURCE_URI,
+        json!(4),
+        resource_params,
+        &resource_state,
+        json!({ "user_name": elicit_answer() }),
     )
     .await;
     handle.abort();

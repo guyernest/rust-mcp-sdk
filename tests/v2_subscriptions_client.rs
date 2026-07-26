@@ -35,11 +35,11 @@
 mod common;
 
 use common::v2::{
-    build_v2_server, extensions_capabilities, spawn_default_config, GreetingPrompt,
-    GreetingResource, SearchTool, V1, V2,
+    build_v2_server, build_v2_server_with, extensions_capabilities, spawn_default_config,
+    spawn_shared, BearerSubjects, SearchTool, FRAME_TIMEOUT, V1, V2,
 };
 
-use std::net::{Ipv4Addr, SocketAddr};
+use std::net::SocketAddr;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -47,11 +47,10 @@ use std::time::Duration;
 use async_trait::async_trait;
 use futures::StreamExt;
 use pmcp::client::subscriptions::SubscriptionStream;
-use pmcp::server::auth::{AuthContext, AuthProvider};
 use pmcp::server::http_middleware::{
     ServerHttpContext, ServerHttpMiddleware, ServerHttpMiddlewareChain, ServerHttpRequest,
 };
-use pmcp::server::streamable_http_server::{StreamableHttpServer, StreamableHttpServerConfig};
+use pmcp::server::streamable_http_server::StreamableHttpServerConfig;
 use pmcp::server::Server;
 use pmcp::shared::streamable_http::StreamableHttpTransportConfigBuilder;
 use pmcp::shared::StreamableHttpTransport;
@@ -66,9 +65,6 @@ use pmcp::{Client, ClientBuilder};
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 use url::Url;
-
-/// Upper bound on any single stream poll. A hung stream must FAIL, not hang.
-const FRAME_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// The `mem://` resource `GreetingResource` serves.
 const RESOURCE_URI: &str = "mem://greeting";
@@ -101,36 +97,7 @@ fn advertising(prompts: bool, resource_subscribe: bool) -> ServerCapabilities {
 
 /// A v2-opted-in server with `caps` and one real handler per method.
 fn server_with(caps: ServerCapabilities) -> Server {
-    Server::builder()
-        .name("v2-subscriptions-client")
-        .version("1.0.0")
-        .capabilities(caps)
-        .with_supported_protocol_versions([
-            ProtocolVersion(V1.to_string()),
-            ProtocolVersion(V2.to_string()),
-        ])
-        .tool("search", SearchTool)
-        .prompt("greeting", GreetingPrompt)
-        .resources(GreetingResource)
-        .build()
-        .expect("server builds")
-}
-
-/// Maps `Bearer <name>` onto the subject `<name>`, so a client's streams all
-/// share ONE principal and the per-principal cap binds.
-struct BearerSubjects;
-
-#[async_trait]
-impl AuthProvider for BearerSubjects {
-    async fn validate_request(
-        &self,
-        authorization_header: Option<&str>,
-    ) -> pmcp::Result<Option<AuthContext>> {
-        match authorization_header.and_then(|h| h.strip_prefix("Bearer ")) {
-            Some(subject) if !subject.is_empty() => Ok(Some(AuthContext::new(subject))),
-            _ => Err(pmcp::Error::authentication("missing or invalid token")),
-        }
-    }
+    build_v2_server_with("v2-subscriptions-client", caps)
 }
 
 /// An authenticated server advertising `tools.listChanged`.
@@ -149,19 +116,9 @@ fn authenticated_server() -> Server {
         .expect("server builds")
 }
 
-/// Spawn a server the test still holds, so it can drive the REAL notification
-/// path (`Server::send_notification`) rather than injecting frames.
-async fn spawn_shared(server: Arc<Mutex<Server>>) -> (SocketAddr, JoinHandle<()>) {
-    let addr = SocketAddr::new(Ipv4Addr::LOCALHOST.into(), 0);
-    StreamableHttpServer::with_config(addr, server, StreamableHttpServerConfig::default())
-        .start()
-        .await
-        .expect("server starts")
-}
-
 /// Spawn a server this test does not need a handle to.
 async fn spawn(server: Server) -> (SocketAddr, JoinHandle<()>) {
-    spawn_shared(Arc::new(Mutex::new(server))).await
+    spawn_default_config(server).await
 }
 
 /// Counts the JSON-RPC methods that actually arrived at the HTTP boundary.
@@ -211,12 +168,7 @@ async fn spawn_counting(server: Server) -> (SocketAddr, JoinHandle<()>, Arc<Meth
         http_middleware: Some(Arc::new(chain)),
         ..StreamableHttpServerConfig::default()
     };
-    let addr = SocketAddr::new(Ipv4Addr::LOCALHOST.into(), 0);
-    let (addr, handle) =
-        StreamableHttpServer::with_config(addr, Arc::new(Mutex::new(server)), config)
-            .start()
-            .await
-            .expect("server starts");
+    let (addr, handle) = common::v2::spawn_with(server, config).await;
     (addr, handle, counts)
 }
 
@@ -478,7 +430,7 @@ async fn client_subscribe_resource_retired_on_v2() {
     ] {
         let error = result.expect_err("the RPC is gone from the 2026-07-28 schema");
         assert!(error.is_retired_on_v2(), "{method}: {error}");
-        assert_eq!(error.retired_method().as_deref(), Some(method));
+        assert_eq!(error.retired_method(), Some(method));
         assert!(
             error.to_string().contains("subscriptions/listen"),
             "{method}: the error names the replacement: {error}"

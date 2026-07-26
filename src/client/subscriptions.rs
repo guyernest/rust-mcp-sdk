@@ -48,6 +48,7 @@ use crate::shared::http_constants::{CONTENT_TYPE, TEXT_EVENT_STREAM};
 use crate::shared::sse_parser::SseParser;
 use crate::shared::StreamableHttpTransport;
 use crate::types::jsonrpc::RequestId;
+use crate::types::mrtr::META_KEY;
 use crate::types::notifications::ServerNotification;
 use crate::types::subscriptions::{
     request_id_value, SubscriptionAcknowledgedParams, ACKNOWLEDGED_METHOD, SUBSCRIPTION_ID_META_KEY,
@@ -59,9 +60,6 @@ use serde_json::Value;
 use std::collections::VecDeque;
 use std::pin::Pin;
 use std::task::{Context, Poll};
-
-/// The `_meta` member of a params/result object, spelled once here.
-const META_KEY: &str = "_meta";
 
 /// How much of a malformed frame is echoed back in an error message.
 ///
@@ -494,7 +492,7 @@ fn classify_frame(payload: &str, subscription_id: &RequestId) -> FrameOutcome {
              acknowledgement arrived",
         )));
     }
-    match decode_notification(&frame) {
+    match decode_notification(frame, payload) {
         Ok(notification) => FrameOutcome::Notification(Box::new(notification)),
         Err(e) => FrameOutcome::Failed(Box::new(e)),
     }
@@ -508,8 +506,11 @@ fn classify_frame(payload: &str, subscription_id: &RequestId) -> FrameOutcome {
 /// A unit-variant notification (`notifications/tools/list_changed`) has an
 /// EMPTY `params` once the tag is removed, and an empty content object is not a
 /// unit, so `params` is dropped entirely in that case.
-fn decode_notification(frame: &Value) -> Result<ServerNotification> {
-    let mut cleaned = frame.clone();
+///
+/// Takes the parsed frame by value — the caller has no further use for it — and
+/// the original `payload` for the error text, so neither the frame nor its
+/// re-serialization is cloned on the per-notification receive path.
+fn decode_notification(mut cleaned: Value, payload: &str) -> Result<ServerNotification> {
     let Some(object) = cleaned.as_object_mut() else {
         return Err(Error::parse("subscriptions/listen frame is not an object"));
     };
@@ -528,7 +529,7 @@ fn decode_notification(frame: &Value) -> Result<ServerNotification> {
     serde_json::from_value::<ServerNotification>(cleaned).map_err(|e| {
         Error::parse(format!(
             "subscriptions/listen frame is not a known server notification ({e}): {}",
-            truncate(&frame.to_string())
+            truncate(payload)
         ))
     })
 }

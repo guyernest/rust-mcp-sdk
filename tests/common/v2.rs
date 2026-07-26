@@ -159,10 +159,21 @@ pub fn extensions_capabilities() -> ServerCapabilities {
 /// The accept-list carries BOTH [`V1`] and [`V2`]; the extensions map is pre-seeded
 /// BEFORE the handlers (which layer their own sub-capabilities on top).
 pub fn build_v2_server() -> Server {
+    build_v2_server_with("v2-harness", extensions_capabilities())
+}
+
+/// [`build_v2_server`] with a caller-chosen name and capability set.
+///
+/// The subscription suites need servers that advertise a specific combination of
+/// `listChanged` / `subscribe`, but must otherwise be the SAME fixture — same
+/// protocol versions, same three handlers. Keeping one builder means a handler
+/// added here reaches every v2 test file instead of only the ones that had not
+/// forked their own copy.
+pub fn build_v2_server_with(name: &str, capabilities: ServerCapabilities) -> Server {
     Server::builder()
-        .name("v2-harness")
+        .name(name)
         .version("1.0.0")
-        .capabilities(extensions_capabilities())
+        .capabilities(capabilities)
         .with_supported_protocol_versions([
             ProtocolVersion(V1.to_string()),
             ProtocolVersion(V2.to_string()),
@@ -172,6 +183,30 @@ pub fn build_v2_server() -> Server {
         .resources(GreetingResource)
         .build()
         .expect("server builds")
+}
+
+/// An auth provider mapping `Bearer <name>` onto the subject `<name>`.
+///
+/// Lets a test choose its principals: two requests with different bearers arrive
+/// as two DIFFERENT principals (which the `ListenKey` collision tests need),
+/// while several streams under one bearer share ONE principal (which is what
+/// makes the per-principal stream cap reachable — `anonymous_principal` is a
+/// per-stream counter, so an unauthenticated caller never binds it).
+pub struct BearerSubjects;
+
+#[async_trait]
+impl pmcp::server::auth::AuthProvider for BearerSubjects {
+    async fn validate_request(
+        &self,
+        authorization_header: Option<&str>,
+    ) -> pmcp::Result<Option<pmcp::server::auth::AuthContext>> {
+        match authorization_header.and_then(|h| h.strip_prefix("Bearer ")) {
+            Some(subject) if !subject.is_empty() => {
+                Ok(Some(pmcp::server::auth::AuthContext::new(subject)))
+            },
+            _ => Err(pmcp::Error::authentication("missing or invalid token")),
+        }
+    }
 }
 
 // ===========================================================================
@@ -205,11 +240,34 @@ pub async fn spawn_with(
     server: Server,
     config: StreamableHttpServerConfig,
 ) -> (SocketAddr, JoinHandle<()>) {
-    let server = Arc::new(Mutex::new(server));
+    spawn_shared_with(Arc::new(Mutex::new(server)), config).await
+}
+
+/// [`spawn_with`] for a server the test still holds a handle to.
+///
+/// The subscription suites need the `Arc<Mutex<Server>>` back so they can drive
+/// the REAL notification path (`Server::send_notification`) rather than injecting
+/// a frame into the registry — which is the whole point of those tests. Taking
+/// the server by value, as [`spawn_with`] does, makes that impossible, so this is
+/// the primitive and `spawn_with` is the wrapper.
+pub async fn spawn_shared_with(
+    server: Arc<Mutex<Server>>,
+    config: StreamableHttpServerConfig,
+) -> (SocketAddr, JoinHandle<()>) {
     let addr = SocketAddr::new(Ipv4Addr::LOCALHOST.into(), 0);
     let http = StreamableHttpServer::with_config(addr, server, config);
     http.start().await.expect("server starts")
 }
+
+/// [`spawn_shared_with`] with `StreamableHttpServerConfig::default()`.
+pub async fn spawn_shared(server: Arc<Mutex<Server>>) -> (SocketAddr, JoinHandle<()>) {
+    spawn_shared_with(server, StreamableHttpServerConfig::default()).await
+}
+
+/// Upper bound on any single stream read or poll in the subscription suites.
+///
+/// A hung stream must FAIL the test, not hang it.
+pub const FRAME_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
 // ===========================================================================
 // Request construction.

@@ -34,10 +34,10 @@
 
 mod common;
 
-use async_trait::async_trait;
-use common::v2::{post, v2_body, v2_headers, GreetingPrompt, GreetingResource, SearchTool, V1, V2};
-use pmcp::server::auth::{AuthContext, AuthProvider};
-use pmcp::server::streamable_http_server::{StreamableHttpServer, StreamableHttpServerConfig};
+use common::v2::{
+    build_v2_server_with, post, spawn_default_config, spawn_shared, v2_body, v2_headers,
+    BearerSubjects, GreetingPrompt, SearchTool, FRAME_TIMEOUT, V1, V2,
+};
 use pmcp::server::Server;
 use pmcp::types::protocol::error_codes::METHOD_NOT_FOUND;
 use pmcp::types::protocol::ProtocolVersion;
@@ -49,16 +49,13 @@ use pmcp::types::{
     ToolCapabilities,
 };
 use serde_json::{json, Value};
-use std::net::{Ipv4Addr, SocketAddr};
+use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
-
-/// Upper bound on any single stream read. A hung stream must FAIL, not hang.
-const FRAME_TIMEOUT: Duration = Duration::from_secs(5);
 
 // ===========================================================================
 // Servers.
@@ -109,36 +106,7 @@ fn advertising(which: Option<&str>) -> ServerCapabilities {
 
 /// A v2-opted-in server with the given capabilities and one handler per method.
 fn server_with(caps: ServerCapabilities) -> Server {
-    Server::builder()
-        .name("v2-subscriptions")
-        .version("1.0.0")
-        .capabilities(caps)
-        .with_supported_protocol_versions([
-            ProtocolVersion(V1.to_string()),
-            ProtocolVersion(V2.to_string()),
-        ])
-        .tool("search", SearchTool)
-        .prompt("greeting", GreetingPrompt)
-        .resources(GreetingResource)
-        .build()
-        .expect("server builds")
-}
-
-/// An auth provider that maps `Bearer <name>` onto the subject `<name>`, so two
-/// requests can arrive as two DIFFERENT principals.
-struct BearerSubjects;
-
-#[async_trait]
-impl AuthProvider for BearerSubjects {
-    async fn validate_request(
-        &self,
-        authorization_header: Option<&str>,
-    ) -> pmcp::Result<Option<AuthContext>> {
-        match authorization_header.and_then(|h| h.strip_prefix("Bearer ")) {
-            Some(subject) if !subject.is_empty() => Ok(Some(AuthContext::new(subject))),
-            _ => Err(pmcp::Error::authentication("missing or invalid token")),
-        }
-    }
+    build_v2_server_with("v2-subscriptions", caps)
 }
 
 /// The two-principal server the `ListenKey` collision test drives.
@@ -165,20 +133,9 @@ fn server_with_two_principals() -> Server {
         .expect("server builds")
 }
 
-/// Spawn a server the test still holds a handle to, so it can drive the REAL
-/// notification path (`Server::send_notification`) rather than injecting a frame
-/// into the registry.
-async fn spawn_shared(server: Arc<Mutex<Server>>) -> (SocketAddr, JoinHandle<()>) {
-    let addr = SocketAddr::new(Ipv4Addr::LOCALHOST.into(), 0);
-    StreamableHttpServer::with_config(addr, server, StreamableHttpServerConfig::default())
-        .start()
-        .await
-        .expect("server starts")
-}
-
 /// Spawn a server this test does not need a handle to.
 async fn spawn(server: Server) -> (SocketAddr, JoinHandle<()>) {
-    spawn_shared(Arc::new(Mutex::new(server))).await
+    spawn_default_config(server).await
 }
 
 // ===========================================================================

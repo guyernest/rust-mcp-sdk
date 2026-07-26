@@ -570,7 +570,7 @@ impl Error {
     ///
     /// let err = Error::retired_on_v2("resources/subscribe", "subscriptions/listen");
     /// assert!(err.is_retired_on_v2());
-    /// assert_eq!(err.retired_method().as_deref(), Some("resources/subscribe"));
+    /// assert_eq!(err.retired_method(), Some("resources/subscribe"));
     /// assert!(err.to_string().contains("subscriptions/listen"));
     /// assert!(!Error::internal("nope").is_retired_on_v2());
     /// ```
@@ -603,30 +603,25 @@ impl Error {
     /// The retired method name, for an [`Error::retired_on_v2`]; `None` for any
     /// other error.
     #[must_use]
-    pub fn retired_method(&self) -> Option<String> {
-        if !self.is_retired_on_v2() {
-            return None;
-        }
-        Some(
-            self.protocol_data()?
-                .get(RETIRED_METHOD_KEY)?
-                .as_str()?
-                .to_string(),
-        )
+    pub fn retired_method(&self) -> Option<&str> {
+        self.retired_field(RETIRED_METHOD_KEY)
     }
 
     /// The replacement API a caller should use instead of the retired method.
     #[must_use]
-    pub fn retired_replacement(&self) -> Option<String> {
+    pub fn retired_replacement(&self) -> Option<&str> {
+        self.retired_field(RETIRED_REPLACEMENT_KEY)
+    }
+
+    /// One string field of an [`Error::retired_on_v2`] marker payload.
+    ///
+    /// Borrows rather than allocating: every caller of the two public accessors
+    /// only ever compares the value.
+    fn retired_field(&self, key: &str) -> Option<&str> {
         if !self.is_retired_on_v2() {
             return None;
         }
-        Some(
-            self.protocol_data()?
-                .get(RETIRED_REPLACEMENT_KEY)?
-                .as_str()?
-                .to_string(),
-        )
+        self.protocol_data()?.get(key)?.as_str()
     }
 
     /// The `data` object of an [`Error::Protocol`], if it has one.
@@ -794,11 +789,8 @@ mod tests {
         fn it_is_identifiable_and_carries_both_names() {
             let err = Error::retired_on_v2("resources/subscribe", "subscriptions/listen");
             assert!(err.is_retired_on_v2());
-            assert_eq!(err.retired_method().as_deref(), Some("resources/subscribe"));
-            assert_eq!(
-                err.retired_replacement().as_deref(),
-                Some("subscriptions/listen")
-            );
+            assert_eq!(err.retired_method(), Some("resources/subscribe"));
+            assert_eq!(err.retired_replacement(), Some("subscriptions/listen"));
         }
 
         /// The message must be ACTIONABLE: it names the replacement API, which

@@ -2592,8 +2592,8 @@ async fn dispatch_request_or_retire(
                 crate::types::jsonrpc::JSONRPCError {
                     code: crate::types::protocol::error_codes::METHOD_NOT_FOUND,
                     message: format!(
-                        "Method not found: {method} (retired in MCP 2026-07-28; use \
-                         subscriptions/listen)"
+                        "Method not found: {method} (retired in MCP 2026-07-28; use {})",
+                        crate::types::subscriptions::SUBSCRIPTIONS_LISTEN_METHOD
                     ),
                     data: None,
                 },
@@ -2606,25 +2606,33 @@ async fn dispatch_request_or_retire(
         .await
 }
 
-/// The capability projection + identity the listen route needs, read ONCE under
-/// the server lock.
+/// Everything the listen route needs from the server, read ONCE under the
+/// server lock.
+///
+/// Holds only what cannot be derived: whether the route is advertised is
+/// [`crate::types::subscriptions::advertises_subscriptions`] of `capabilities`,
+/// so caching it here would be a second copy that can drift from its own source.
 struct ListenServerView {
-    /// Whether ANY subscription-delivered capability is advertised.
-    advertises: bool,
-    /// The server's advertised capabilities, for the agreed-filter intersection.
+    /// The server's advertised capabilities, for the agreed-filter intersection
+    /// and the advertisement gate.
     capabilities: crate::types::ServerCapabilities,
     /// The server identity the v2 result envelope publishes.
     info: crate::types::Implementation,
+    /// The registry the accepted stream registers with.
+    registry: Arc<crate::server::subscriptions::ListenRegistry>,
 }
 
 /// Read the listen route's view of the server under ONE lock acquisition.
+///
+/// The registry is taken here rather than re-locking at registration time: the
+/// whole point of this struct is that the listen route touches the server mutex
+/// — which serializes all dispatch on this transport — exactly once.
 async fn listen_server_view(state: &ServerState) -> ListenServerView {
     let server = state.server.lock().await;
-    let capabilities = server.capabilities().clone();
     ListenServerView {
-        advertises: crate::types::subscriptions::advertises_subscriptions(&capabilities),
-        capabilities,
+        capabilities: server.capabilities().clone(),
         info: server.info().clone(),
+        registry: Arc::clone(server.listen_registry()),
     }
 }
 
@@ -2848,7 +2856,7 @@ async fn assemble_subscriptions_listen(
     );
 
     let view = listen_server_view(state).await;
-    if !view.advertises {
+    if !crate::types::subscriptions::advertises_subscriptions(&view.capabilities) {
         // The conformant-by-absence configuration (D-12 RESOLUTION): this server
         // advertises no subscription-delivered capability, so it has nothing to
         // serve here and the conformance suite records SKIPPED. The tripwire is
@@ -2892,10 +2900,7 @@ async fn assemble_subscriptions_listen(
     }
 
     let terminal = listen_terminal_result_frame(&id, protocol_context, &view.info);
-    let registry = {
-        let server = state.server.lock().await;
-        Arc::clone(server.listen_registry())
-    };
+    let registry = view.registry;
     let key = ListenKey {
         principal,
         request_id: id.clone(),

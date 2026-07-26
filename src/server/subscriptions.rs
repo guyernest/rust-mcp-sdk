@@ -499,16 +499,23 @@ impl ListenRegistry {
     ///
     /// Every delivered frame is tagged with its OWN entry's `subscriptionId`.
     pub(crate) fn fan_out(&self, notification: &ServerNotification) {
+        // Nobody is listening — the overwhelmingly common case, and every v1
+        // server's only case. Checked BEFORE classifying and serializing so a
+        // server with no subscribers pays one uncontended read acquire rather
+        // than a serde round trip whose output is discarded.
+        if self.entries.read().is_empty() {
+            return;
+        }
         let Some(kind) = subscription_kind_of(notification) else {
             // Request-scoped (`progress`, `message`) or non-subscribable — never
             // delivered on a listen stream, by construction.
             return;
         };
-        let Ok(mut template) = serde_json::to_value(notification) else {
+        let Ok(mut frame) = serde_json::to_value(notification) else {
             tracing::warn!(target: "mcp.subscriptions", "notification did not serialize; not fanned out");
             return;
         };
-        if let Some(object) = template.as_object_mut() {
+        if let Some(object) = frame.as_object_mut() {
             object.insert(
                 "jsonrpc".to_string(),
                 serde_json::Value::String("2.0".into()),
@@ -528,7 +535,11 @@ impl ListenRegistry {
                     overflowed.push(key.clone());
                     continue;
                 }
-                let mut frame = template.clone();
+                // Re-tagged in place rather than cloned per subscriber: the tag
+                // writes ONE fixed key at ONE fixed path, so overwriting it is
+                // idempotent modulo the id. Only the per-subscriber
+                // serialization is irreducible — each frame carries a different
+                // `subscriptionId`.
                 tag_notification_with_subscription_id(&mut frame, &key.request_id);
                 if entry
                     .sender

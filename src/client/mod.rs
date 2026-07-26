@@ -627,6 +627,22 @@ impl<T: Transport> Client<T> {
         Ok(())
     }
 
+    /// Fail fast and LOCALLY when a v2-only method is called on a v1 connection.
+    ///
+    /// The mirror image of [`Self::reject_if_retired_on_v2`], and the ONE place
+    /// the remedy is spelled — naming `ClientBuilder::with_protocol_version` once
+    /// rather than in every v2-only method, so renaming the builder does not
+    /// leave stale guidance behind in N error strings.
+    fn require_v2(&self, method: &str) -> Result<()> {
+        if self.is_v2() {
+            return Ok(());
+        }
+        Err(Error::InvalidState(format!(
+            "{method} requires the 2026-07-28 era — select it with \
+             ClientBuilder::with_protocol_version"
+        )))
+    }
+
     /// The `InitializeResult` a v2 client returns from its handshake-free
     /// [`Self::initialize`].
     ///
@@ -766,13 +782,7 @@ impl<T: Transport> Client<T> {
     pub async fn server_discover(
         &mut self,
     ) -> Result<crate::types::protocol::ServerDiscoverResult> {
-        if !self.is_v2() {
-            return Err(Error::InvalidState(
-                "server/discover requires the 2026-07-28 era — select it with \
-                 ClientBuilder::with_protocol_version"
-                    .into(),
-            ));
-        }
+        self.require_v2(crate::types::protocol::SERVER_DISCOVER_METHOD)?;
         let request_id = RequestId::String(Uuid::new_v4().to_string());
         let response = self
             .send_untyped_request(
@@ -3909,13 +3919,7 @@ where
 
         // Fail fast and LOCALLY: `subscriptions/listen` does not exist on v1, so
         // a request from a v1 client cannot succeed and must not be sent.
-        if !self.is_v2() {
-            return Err(Error::InvalidState(
-                "subscriptions/listen requires the 2026-07-28 era — select it with \
-                 ClientBuilder::with_protocol_version"
-                    .into(),
-            ));
-        }
+        self.require_v2(SUBSCRIPTIONS_LISTEN_METHOD)?;
 
         let request_id = RequestId::String(Uuid::new_v4().to_string());
         let params = serde_json::to_value(SubscriptionsListenParams::new(notifications))
@@ -6538,7 +6542,7 @@ mod tests {
                 .expect_err("the method is gone from the 2026-07-28 schema");
 
                 assert!(error.is_retired_on_v2(), "{method}: {error}");
-                assert_eq!(error.retired_method().as_deref(), Some(method));
+                assert_eq!(error.retired_method(), Some(method));
                 assert!(
                     error.to_string().contains("subscriptions/listen"),
                     "{method}: the error names the replacement: {error}"
