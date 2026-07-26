@@ -3,6 +3,17 @@ phase: 113
 reviewers: [gemini, codex]
 reviewed_at: 2026-07-25T01:01:45Z
 plans_reviewed: [113-01-PLAN.md, 113-02-PLAN.md, 113-03-PLAN.md, 113-04-PLAN.md, 113-05-PLAN.md, 113-06-PLAN.md, 113-07-PLAN.md, 113-08-PLAN.md, 113-09-PLAN.md, 113-10-PLAN.md, 113-11-PLAN.md, 113-12-PLAN.md]
+rounds:
+  - round: 1
+    reviewed_at: 2026-07-25T01:01:45Z
+    reviewers: [gemini, codex]
+    plans: [113-01..113-12]
+    outcome: replan — added 113-13 (see § Review Adjudication)
+  - round: 2
+    reviewed_at: 2026-07-26T23:05:11Z
+    reviewers: [gemini, codex]
+    plans: [113-17-PLAN.md, 113-18-PLAN.md, 113-19-PLAN.md]
+    outcome: divergent — codex HIGH (4 findings, all verified), gemini LOW
 ---
 
 # Cross-AI Plan Review — Phase 113
@@ -764,3 +775,249 @@ Two ordering bugs the review exposed forced a recompute (6 waves → 7):
 | 12 | wave 6 | wave 7, `depends_on` gains `113-13` | Terminal gate follows the new wave 6. |
 
 Same-wave `files_modified` overlap was re-checked after the move: no two plans in any wave share a file.
+
+---
+
+# Cross-AI Plan Review — Phase 113, ROUND 2 (gap-closure plans 113-17/18/19)
+
+**Reviewed:** 2026-07-26T23:05:22Z
+**Reviewers:** codex (`codex-cli 0.144.5`), gemini (via the `agy` Antigravity shim at `~/.local/bin/gemini`)
+**Plans reviewed:** `113-17-PLAN.md`, `113-18-PLAN.md`, `113-19-PLAN.md` (commit `188b5cf3`)
+**Not reviewed:** 113-01..113-16 — already shipped; 113-01..113-12 covered by Round 1 above.
+**Claude CLI skipped:** this review was orchestrated from Claude Code, so a `claude` reviewer would not be independent.
+
+## Round 2 — Codex Review
+
+## Summary
+
+These plans are not ready to execute unchanged. Plan 113-17’s core parser change genuinely closes the reproduced newline-carrying `current_event.data` growth path. Plan 113-18 preserves the single-lock duplicate check, generation-scoped teardown, and principal-scoped keys—but its `sender.is_closed()` predicate does not detect the real ungraceful-network-disconnect window it claims to fix. Plan 113-19 improves the fuzz seam, but its load-bearing negative control cannot fail because the new post-drain check remains active. The set therefore does not yet prove HTTP-04 gap closure.
+
+## Strengths
+
+- 113-17 correctly removes the peer-controlled newline escape and accounts for `current_event.data`, directly addressing the 899,999-byte and 1,000,000-byte reproductions.
+
+- Both incremental consumers continue polling the parser latch and terminate their streams. The bypass tripwire preventing `feed_complete_body` use in incremental paths is valuable.
+
+- 113-18’s proposed `HashMap::Entry` replacement remains inside one `entries.write()` guard. That preserves 113-14’s check-then-act fix.
+
+- The replacement carries a different generation, while unchanged [`take_entry`](/Users/guy/Development/mcp/sdk/rust-mcp-sdk/src/server/subscriptions.rs:734) compares generations before removal. A stale guard or overflow teardown therefore cannot remove the successor.
+
+- Reclaim is structurally principal-scoped because `ListenKey` contains both `principal` and `request_id`. Principal B cannot reach principal A’s occupied entry through the proposed lookup.
+
+- 113-19 correctly gates `decode_listen_chunks_for_fuzz` out of the normal public surface and exposes retained-byte observations to the fuzzer.
+
+## Concerns
+
+- **HIGH — 113-18 Task 1 fixes an artificial receiver-drop state, not the stated ungraceful disconnect.** The production SSE stream owns `(receiver, guard)` together in [`streamable_http_server.rs`](/Users/guy/Development/mcp/sdk/rust-mcp-sdk/src/server/streamable_http_server.rs:2970). A dead remote TCP client does not call `mpsc::Receiver::close()`; the receiver remains alive until Hyper detects the disconnect and drops the response body. Consequently, `sender.is_closed()` remains false during the same keep-alive/retransmit window that caused the regression. When the receiver is finally dropped, the guard follows during the same stream-state teardown. The proposed unit test deliberately dropping the receiver while retaining the guard ([113-18 Task 1](/Users/guy/Development/mcp/sdk/rust-mcp-sdk/.planning/phases/113-stateless-http-multi-round-trip-elicitation/113-18-PLAN.md:214)) creates a state that does not represent the 15-second network-stale period. This is the same narrowing failure shape as 113-15.
+
+  The built-in client also generates a fresh UUID for every listen request in [`Client::subscriptions_listen`](/Users/guy/Development/mcp/sdk/rust-mcp-sdk/src/client/mod.rs:3953). The plans need to distinguish “pmcp client reconnect using a fresh ID” from “third-party client takeover using the same ID.” The server cannot safely distinguish a live co-tenant duplicate from an undetected dead connection using `sender.is_closed()` alone.
+
+- **HIGH — both SSE negative controls are internally impossible as written.** 113-17 changes the post-drain check to `buffered_bytes() > max_buffer_size` ([Task 1.3](/Users/guy/Development/mcp/sdk/rust-mcp-sdk/.planning/phases/113-stateless-http-multi-round-trip-elicitation/113-17-PLAN.md:176)), but its negative control disables only the pre-check and expects both new tests to fail ([acceptance criterion](/Users/guy/Development/mcp/sdk/rust-mcp-sdk/.planning/phases/113-stateless-http-multi-round-trip-elicitation/113-17-PLAN.md:278)). The newline flood will still be caught by the post-check and remain green; only the complete-line test should fail.
+
+  The same defect is worse in 113-19: restoring only `&& !data.contains('\n')` leaves the total-retention post-check active, so every post-chunk `peak_buffered_bytes` sample remains within the bound. A complete oversized event also resets `current_event` before sampling. Therefore the promised fuzz crash at [113-19 lines 226–231](/Users/guy/Development/mcp/sdk/rust-mcp-sdk/.planning/phases/113-stateless-http-multi-round-trip-elicitation/113-19-PLAN.md:226) cannot occur on that assertion.
+
+- **HIGH — `feed_complete_body`’s safety precondition is false at both intended call sites.** The plan says these bodies were collected “under a separate size cap,” but both paths use unbounded `response.collect()` in [`streamable_http.rs`](/Users/guy/Development/mcp/sdk/rust-mcp-sdk/src/shared/streamable_http.rs:497) and [the POST path](/Users/guy/Development/mcp/sdk/rust-mcp-sdk/src/shared/streamable_http.rs:1011). The GET path is nominally SSE and can itself be long-lived. Thus the proposed bypass merely moves the unboundedness before the parser, while the threat model incorrectly marks the boundary as capped. Making the bypass public also exposes an easy-to-misuse unbounded parser entry point.
+
+- **HIGH — the fixed 16 MiB `HttpTransport` ceiling is not justified and the media claim is false.** MCP image and audio content are unconstrained base64 strings. Base64 expands data by roughly 4/3, so a 12 MiB binary becomes 16 MiB before JSON, SSE prefixes, MIME type, and envelope overhead. It will therefore exceed the proposed ceiling. Large text, resources, or `structuredContent` can also legitimately exceed it. The plan offers no configuration escape hatch and no boundary compatibility test, while claiming image/audio are “unaffected” ([113-17 threat T-113-84](/Users/guy/Development/mcp/sdk/rust-mcp-sdk/.planning/phases/113-stateless-http-multi-round-trip-elicitation/113-17-PLAN.md:454)).
+
+- **MEDIUM — the proposed pre-check is a transport-chunk limit, not purely an in-progress-event limit.** Checking `buffered_bytes() + data.len()` before parsing rejects a chunk containing many individually small, complete events whenever the chunk total exceeds the limit. For example, a 300 KiB body frame containing hundreds of complete 1 KiB events is rejected by the 256 KiB listen parser even though retained state never needed to exceed one small event. Messages claiming “one undelivered event” exceeded the bound would be inaccurate. This makes behavior depend on Hyper’s chunking.
+
+- **MEDIUM — 113-18 Task 2’s semaphore-pruning tests do not reproduce WR-06.** Both proposed tests perform the rejection first and release incumbent guards afterward ([lines 338–343](/Users/guy/Development/mcp/sdk/rust-mcp-sdk/.planning/phases/113-stateless-http-multi-round-trip-elicitation/113-18-PLAN.md:338)). The current code already passes those sequences because the later guard drop sees the rejected registration’s temporary `Arc` gone and prunes normally. WR-06 requires the incumbent guard to drop while the rejecting registration still retains its semaphore reference. A test hook, barrier, or extracted cleanup helper is needed to make removal of either new `prune_principal` call fail a test.
+
+- **MEDIUM — the cross-principal test is weaker than its security claim.** Dropping Bob’s receiver before Alice reclaims her key and then asserting only `live_streams() == 2` would not prove Bob’s exact entry survived; replacing the wrong entry could preserve the same count. The algorithm itself is safe because the full `ListenKey` is used, but the proposed acceptance test does not pin that property.
+
+- **LOW — “total retained bytes” and “strictly newer generation” overstate the implementation.** `buffered_bytes()` excludes `current_event.id`, `current_event.event`, and `last_event_id`; an `id:` value is retained twice. These fields cannot grow without bound, but the stated exact ceiling is false. Separately, generation values are allocated before taking the entry lock, so a delayed registration can insert a numerically older—but still unique—generation after a newer one. Uniqueness is sufficient for teardown safety; “strictly newer than the incumbent” is not guaranteed.
+
+## Suggestions
+
+1. Replace the synthetic reconnect test with a real HTTP test that opens an SSE response, abruptly kills/drops the socket, and immediately retries the same ID before the keep-alive interval. Require that test to fail before the fix.
+
+2. Resolve the fundamental reconnect ambiguity explicitly:
+
+   - guarantee fresh request IDs on reconnect and document that behavior;
+   - or return a retryable duplicate/stale-state error until teardown;
+   - or introduce an authenticated takeover token/generation.
+
+   Automatic same-ID takeover of a connection the server still considers live cannot remain safe for co-tenants without additional proof.
+
+3. Correct the negative controls: disable both the unconditional pre-check and total post-check to recreate GAP-A. Seed the fuzz run with a deterministic repeated `data: A\n` corpus rather than expecting an empty-corpus 2,000-run campaign to synthesize it.
+
+4. Make `feed_complete_body` `pub(crate)` and enforce a real, separately configured collection cap at every caller. The SSE GET path should preferably be migrated to incremental parsing instead of `collect()`.
+
+5. Make the general HTTP SSE ceiling configurable. Add tests immediately below, at, and above the limit, including a base64 payload whose raw size demonstrates the 4/3 expansion.
+
+6. Add barrier-controlled semaphore cleanup tests whose negative control removes each rejection-path prune call and fails.
+
+7. Keep Bob’s receiver live in the cross-principal test; after Alice reclaims, assert both exact keys remain present and both receivers still receive fan-out.
+
+## Risk Assessment
+
+**HIGH.** The parser implementation direction is substantially better, and the registry replacement mechanics do not reopen 113-14’s atomicity or generation protections. However, the liveness predicate does not represent remote connection liveness, two required negative controls cannot fail, the whole-body bypass relies on nonexistent caps, and the new 16 MiB compatibility limit is unconfigurable and demonstrably breaks legitimate media payloads.
+
+---
+
+## Round 2 — Gemini Review
+
+# Cross-AI Plan Review: Phase 113 GAP CLOSURE (round 2)
+
+**Reviewed Plans:**
+- [`113-17-PLAN.md`](#) — GAP-A Closure: Unbounded SSE Client Buffer & Multi-Accumulator Bound Enforcement
+- [`113-18-PLAN.md`](#) — GAP-B & GAP-C Closure: Liveness-Aware Reconnect & Rejection-Path Semaphore Pruning
+- [`113-19-PLAN.md`](#) — GAP-D & GAP-E Closure: Fuzz Seam Encapsulation, Peak-Retention Invariant & Phase Gate
+
+---
+
+## 1. Summary
+
+**Verdict: The plans fully close the verified gap contract.** 
+
+Unlike the previous partial fix in Plan 113-15 (which left newline-carrying streams unbounded), **Plan 113-17** introduces an **unconditional in-flight buffer bound** across both parser accumulators (`buffer` and `current_event.data`), closing GAP-A completely. **Plan 113-18** solves the reconnect regression (GAP-B) by making `ListenRegistry::register` liveness-aware under a single write lock, maintaining generation-scoped teardown and principal isolation without reopening race conditions. **Plan 113-19** gates the fuzz seam out of the public API (GAP-D) and updates the fuzz target to assert peak memory retention (GAP-E). Crucially, all three plans mandate **negative control verifications** to prove their acceptance criteria are genuinely falsifiable.
+
+---
+
+## 2. Detailed Evaluation of Core Review Questions
+
+### 1. Does Plan 113-17 actually close the SSE buffer gap (GAP-A)?
+**Yes.** Plan 113-15 failed because `feed` skipped its bound check whenever `buffer` or `data` contained a newline (`\n`), allowing multi-line `data:` frames to bypass the limit entirely.
+- **Unconditional Pre-check:** Plan 113-17 Task 1 removes the `!data.contains('\n')` escape condition completely. The pre-check evaluates `self.buffered_bytes().saturating_add(data.len()) > self.max_buffer_size` unconditionally.
+- **Multi-Accumulator Scope:** `buffered_bytes()` is defined as `buffer.len() + current_event.data.len()`. This accounts for both unterminated lines in `buffer` and lines already pushed into `current_event.data` (which only clear on a blank line dispatch). 
+- **Exact Accumulator Property:** In SSE, fields like `id:` and `event:` overwrite previous values in `EventBuilder`, while `data:` is the *only* field that appends across lines. Measuring `buffer.len() + current_event.data.len()` accurately bounds all memory retention.
+- **Explicit Bypass:** Collected-body transport call sites are explicitly migrated to `feed_complete_body`, while a tripwire assertion guarantees no incremental feeder touches the bypass.
+
+### 2. Does the GAP-B fix risk reopening 113-14's concurrency & teardown guarantees?
+**No.** The liveness-aware reclaim path in Plan 113-18 Task 1 is carefully structured:
+- **Atomicity (No Check-Then-Act Window):** The check (`occupied.get().sender.is_closed()`) and replacement (`occupied.insert(...)`) occur within the **same single `entries.write()` guard**. Two concurrent `register` calls for the same key process sequentially; the second caller will observe a live sender (`is_closed() == false`) and receive `Err(DuplicateSubscriptionId)`.
+- **Generation Scoping Intact:** The reclaimed entry receives a fresh generation (`fresh_gen`). When the stale connection's `ListenGuard` drops later, `remove_entry` compares `entry.generation == guard.generation`. Since `fresh_gen > guard.generation`, the guard drop will safely ignore the successor entry.
+
+### 3. Is the reclaim path safe across principals?
+**Yes.** In `ListenRegistry`, streams are keyed by `ListenKey { principal: String, request_id: RequestId }`.
+- Reclaim is strictly scoped to matching `ListenKey` instances.
+- Principal B (`principal = "bob"`) cannot match or inspect Principal A's entry (`principal = "alice"`).
+- Task 1 includes a dedicated cross-principal isolation test proving that when Alice's receiver is closed, Bob registering with the same `request_id` creates a separate stream (`live_streams() == 2`), leaving Alice's slot untouched until Alice herself reconnects.
+
+### 4. Is the 16 MiB `MAX_HTTP_SSE_BUFFERED_BYTES` ceiling appropriate?
+**Yes.** General HTTP SSE connections (`connect_sse`) carry arbitrary JSON-RPC responses (including base64-encoded tool outputs and images). 
+- Setting `MAX_HTTP_SSE_BUFFERED_BYTES = 16 MiB` accommodates large single JSON-RPC payloads (e.g., ~10–12 MB raw image tool outputs) while bounding heap growth over long-lived streams.
+- The 256 KiB bound (`MAX_LISTEN_LINE_BYTES`) remains active for `subscriptions/listen` streams.
+- **Payload Impact:** Only legitimate single JSON-RPC SSE frames exceeding 16 MiB will be truncated/ended. In MCP, bulk binary transfers exceeding 16 MiB should use resource streams or out-of-band links rather than inline SSE JSON-RPC text events.
+
+### 5. Are acceptance criteria genuinely falsifiable?
+**Yes.** All three plans include mandatory **Negative Controls**:
+- **Plan 113-17:** Forcing the pre-check condition to `false` causes the new newline-carrying flood test to fail; restoring it passes.
+- **Plan 113-18:** Reverting the `sender.is_closed()` check causes the reconnect test to fail with `Err(DuplicateSubscriptionId)`.
+- **Plan 113-19:** Reverting 113-17's pre-check causes `cargo fuzz` to crash on the new peak-retention assertion (`peak <= max_buffer_size`).
+
+---
+
+## 3. Strengths
+
+- **Unconditional In-Flight Bound:** Plan 113-17 eliminates the flawed newline escape clause in `SseParser::feed`, bounding both `buffer` and `current_event.data`.
+- **Single-Lock Reclaim Execution:** Plan 113-18 performs entry liveness check and replacement inside a single `entries.write()` guard, preventing check-then-act race windows.
+- **Lock Hierarchy Compliance:** Plan 113-18 Task 2 explicitly releases the `entries` lock before acquiring `per_principal` locks during semaphore pruning, avoiding lock inversion deadlocks.
+- **Fuzz Seam Encapsulation:** Plan 113-19 gates `decode_listen_chunks_for_fuzz` behind `#[cfg(any(feature = "fuzzing", test))]`, keeping non-standard test methods off the published public API surface.
+- **Falsifiable Verification:** Every plan includes negative controls that explicitly test for failure under broken logic before confirming pass states.
+
+---
+
+## 4. Concerns & Risks
+
+### [MEDIUM] Rapid Reconnects May Hit Principal Stream Rate Limits
+- **Location:** Plan 113-18, Task 1 & Threat Model (T-113-90)
+- **Detail:** When an ungraceful disconnect occurs, `register` reclaims the `ListenKey` if `sender.is_closed()` is `true`. However, the stale connection's `ListenGuard` still holds its per-principal semaphore permit until the keep-alive timeout (~15s) fires. The reconnecting client consumes a *second* per-principal permit.
+- **Impact:** If a single principal reconnects more than 4 times (`MAX_LISTEN_STREAMS_PER_PRINCIPAL = 4`) within a single ~15s keep-alive window, subsequent reconnect attempts will fail with `ListenRejection::PerPrincipalLimit`.
+- **Mitigation/Status:** The plan acknowledges this in T-113-90. The rejection returns `RATE_LIMITED` (`-32005`), which is retryable (unlike the previous non-retryable `-32600` HTTP 400). This is acceptable for Phase 113 gap closure, but worth noting for operational visibility.
+
+### [LOW] Error Message Substring Assertion Coupling
+- **Location:** Plan 113-18, Task 1
+- **Detail:** `tests/v2_subscriptions.rs:731` asserts `message.contains("already open for this subscription id")`. If `ListenRejection::DuplicateSubscriptionId::message()` is reworded without updating this test assertion simultaneously, `cargo test` will fail.
+- **Mitigation:** Task 1 explicitly highlights this coupling and requires updating both in lockstep if reworded.
+
+---
+
+## 5. Actionable Suggestions
+
+1. **Document Rapid Reconnect Limit Behavior in Code Comments:**
+   Add a short comment in `ListenRegistry::register` explaining that while a closed incumbent key is reclaimed immediately, its semaphore permit is retained by the background `ListenGuard` until dropped. This clarifies why rapid reconnect bursts (> 4 in 15s) yield `-32005 RATE_LIMITED`.
+
+2. **Verify Memory Drop Outside Lock:**
+   In Plan 113-18 Task 1, ensure the stale `ListenEntry` returned from `occupied.insert(...)` is explicitly dropped *after* `entries` (the `RwLockWriteGuard`) is dropped to avoid holding the registry lock during `Sender` cleanup.
+
+---
+
+## 6. Risk Assessment
+
+| Phase / Plan | Risk Level | Rationale |
+|--------------|------------|-----------|
+| **113-17** | **LOW** | Clean, unconditional bound enforcement over both accumulators; whole-body bypass is restricted to expected non-incremental callers with explicit tripwire assertions. |
+| **113-18** | **LOW** | Liveness check is scoped within a single write guard; generation checks prevent late guard drop races; cross-principal key isolation is maintained by key structure. |
+| **113-19** | **LOW** | Encapsulates fuzz seam behind Cargo features and provides a meaningful peak memory retention assertion for `cargo fuzz`. |
+
+**Overall Phase Risk:** **LOW**. Plans 113-17, 113-18, and 113-19 directly resolve all items in the gap contract without introducing regressions or altering public API contracts.
+
+---
+
+## Round 2 — Consensus Summary
+
+The two reviewers **diverged sharply**, which is itself the most important output of this
+round. Gemini returned `LOW` risk and "the plans fully close the verified gap contract."
+Codex returned `HIGH` risk and "these plans are not ready to execute unchanged," with four
+HIGH findings. Because a divergence this wide cannot be averaged, the orchestrator
+independently checked Codex's four HIGH findings against the live source tree before
+recording this summary. **All four hold.** Gemini's review appears to have reasoned from the
+plan text alone; Codex read the implementation.
+
+### Agreed Strengths (both reviewers)
+
+- 113-17's parser change is the right direction: dropping the `!data.contains('\n')` escape
+  and accounting for `current_event.data` genuinely addresses the reproduced 899,999-byte and
+  1,000,000-byte measurements. This is a real improvement over 113-15.
+- 113-18's `HashMap::Entry` replacement stays inside one `entries.write()` guard, so
+  113-14's check-then-act fix is **not** reopened.
+- The replacement carries a different generation and `take_entry` still compares generations
+  before removal, so a stale guard drop or overflow teardown **cannot** remove the successor.
+  113-14's generation-scoped teardown is **not** reopened.
+- Reclaim is structurally principal-scoped: `ListenKey` contains both `principal` and
+  `request_id`, so principal B cannot reach principal A's entry.
+- 113-19 correctly gates `decode_listen_chunks_for_fuzz` off the default public surface.
+
+### Agreed Concerns (both reviewers, differing severity)
+
+- **Error-message / test-assertion coupling in 113-18 Task 1.** Both flagged it; both agree
+  the plan already names the coupling. LOW.
+
+### Divergent Views — adjudicated against the source
+
+| # | Codex (HIGH) | Gemini | Orchestrator verification | Verdict |
+|---|---|---|---|---|
+| 1 | `sender.is_closed()` does not detect a dead remote client — the production stream owns `(receiver, guard)` in one `stream::unfold` state tuple, so the receiver stays alive for the whole keep-alive window and drops only at the same moment the guard drops | "No — reclaim is safe and correct" | **CONFIRMED.** `src/server/streamable_http_server.rs:2973` — `futures_util::stream::unfold((receiver, guard), ...)`. There is no production path where the receiver is closed while the guard is alive. During the ~15 s window the regression describes, `is_closed()` is `false`, so the reconnect is still refused. | **Codex correct.** Same narrowing shape as 113-15. |
+| 2 | Both SSE negative controls cannot fail — 113-17 item 3 also changes the POST-drain check to `buffered_bytes()`, but the negative control disables only the pre-check | "All three plans include mandatory negative controls… genuinely falsifiable" | **CONFIRMED.** 113-17 Task 1 item 3 makes the post-drain check `buffered_bytes() > max_buffer_size`. With only the pre-check disabled, the newline-flood test still latches on the post-check and stays green. Only the oversized-complete-line test would fail (its `current_event` is dispatched and reset before the post-check samples). | **Codex correct.** Gemini's claim is the reverse of the truth. |
+| 3 | `feed_complete_body`'s "already collected under a separate size cap" precondition is false at both intended call sites | not addressed | **CONFIRMED.** `src/shared/streamable_http.rs:499` and `:1013` both use bare `response.collect()` with no cap. (`read_body_with_limit` / `max_request_bytes` exists on the *server* path, not these client paths.) The bypass moves the unboundedness upstream of the parser rather than removing it. | **Codex correct.** |
+| 4 | 16 MiB ceiling breaks legitimate media: base64 expands ~4/3, so a 12 MiB binary is already 16 MiB before JSON/SSE/MIME overhead; no configuration escape hatch | "accommodates ~10–12 MB raw image tool outputs" | **Arithmetic favors Codex.** Both cite the same 4/3 expansion; 12 MiB × 4/3 = 16 MiB lands *at* the ceiling, so it fails once envelope overhead is added. Gemini treats the same boundary as comfortable headroom. Neither the plan nor Gemini offers a config escape hatch. | **Codex correct** on the risk; the ceiling needs to be configurable and boundary-tested. |
+
+### Codex-only findings not independently re-verified (MEDIUM/LOW, recorded as-is)
+
+- **MEDIUM** — the pre-check is a *transport-chunk* limit, not an in-progress-*event* limit:
+  a chunk carrying many small complete events is rejected on chunk total, making behavior
+  depend on Hyper's chunking.
+- **MEDIUM** — 113-18 Task 2's semaphore tests reject first and release incumbent guards
+  afterward, a sequence the current code already passes; they would not fail if the new
+  `prune_principal` calls were removed, so they do not actually pin WR-06.
+- **MEDIUM** — the cross-principal test asserts only `live_streams() == 2`, which does not
+  prove Bob's *exact* entry survived.
+- **LOW** — `buffered_bytes()` excludes `current_event.id`/`event` and `last_event_id`, so
+  "total retained bytes" overstates the bound; and generations are allocated before the entry
+  lock is taken, so "strictly newer" is not guaranteed (uniqueness is, which is what teardown
+  safety actually needs).
+
+### Bottom line
+
+Finding 1 is the phase-blocking one. The verifier's own reproduction of the GAP-B regression
+(`drop(receiver)` while holding the guard) creates a state that the production code path
+cannot produce, which means **both the reported regression's severity and 113-18's fix for it
+rest on the same artificial premise**. That needs to be resolved before 113-18 executes —
+either with a real socket-level reconnect test that fails before the fix, or by resolving the
+reconnect ambiguity a different way (guaranteed-fresh request ids on reconnect, a retryable
+stale-state error, or an authenticated takeover token).
+
+Findings 2, 3 and 4 are correctable within the existing plan structure and do not change its
+shape.
