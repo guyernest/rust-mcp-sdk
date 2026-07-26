@@ -227,6 +227,14 @@ None — no external service configuration required.
 - **Plan 11 (conformance)** can rely on `absent_capability_is_conformant` matching the suite's gating logic: the default pmcp server records SKIPPED, not FAILURE, and the conjunction (observed discover AND no advertisement) is what the local test asserts.
 - **Open, deliberately out of scope:** a cross-instance notification backend. Advertising a subscription capability behind a non-sticky load balancer under-delivers silently; the build-time warning names the constraint but does not prevent the configuration.
 
+## Self-Check: PASSED
+
+Files verified on disk: `src/types/subscriptions.rs` (927 lines, min 130, contains `SubscriptionFilter`), `tests/v2_subscriptions.rs` (856 lines, min 220), `src/server/subscriptions.rs`, `src/server/streamable_http_server.rs` (contains `subscriptions/listen`), `src/server/mod.rs`, `src/types/mod.rs`, `113-10-SUMMARY.md`.
+
+Commits verified in `git log`: `8d4f138b`, `207ca356`, `1aa2aa1f`, `26dcc169`, `53efc0f2`.
+
+Key links verified: `advertises_subscriptions` (6 sites in the transport, incl. the gate and the agreement test), `ListenKey` (8 sites in the registry), `inject_v2_result_envelope` (called in the listen terminal-result builder).
+
 ---
 *Phase: 113-stateless-http-multi-round-trip-elicitation*
 *Completed: 2026-07-25*

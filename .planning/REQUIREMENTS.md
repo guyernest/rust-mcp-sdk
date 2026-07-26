@@ -24,7 +24,7 @@
 - [ ] **HTTP-01**: v2 HTTP requests run with no `initialize` handshake and no `Mcp-Session-Id`, era-gated onto the existing `stateless()` branch; v1 session behavior is unchanged
 - [ ] **HTTP-02**: A server handler can return `input_required` with `inputRequests` and an opaque `requestState` that is integrity-protected, principal-bound, and TTL'd
 - [ ] **HTTP-03**: A client retry of the original request carrying `inputResponses` + echoed `requestState` resumes the operation correctly (multi-round-trip elicitation end-to-end)
-- [ ] **HTTP-04**: v2 clients get change notifications via a `subscriptions/listen` long-lived stream (opt-ins for toolsListChanged/promptsListChanged/resourcesListChanged/resourceSubscriptions, `subscriptionId` tagging), replacing HTTP GET + `resources/subscribe`/`unsubscribe` on the v2 path
+- [x] **HTTP-04**: v2 clients get change notifications via a `subscriptions/listen` long-lived stream (opt-ins for toolsListChanged/promptsListChanged/resourcesListChanged/resourceSubscriptions, `subscriptionId` tagging), replacing HTTP GET + `resources/subscribe`/`unsubscribe` on the v2 path
 - [ ] **HTTP-05**: SSE resumability (`Last-Event-ID`) is not offered on the v2 path, and a regression test proves response JSON-RPC ids are always derived from the live request (the id-replay / discovery-cache bug class)
 
 ### Tasks Extension Migration (TASK)
@@ -115,7 +115,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | HTTP-01 | Phase 113 | Pending |
 | HTTP-02 | Phase 113 | Pending |
 | HTTP-03 | Phase 113 | Pending |
-| HTTP-04 | Phase 113 | Pending |
+| HTTP-04 | Phase 113 | Complete |
 | HTTP-05 | Phase 113 | Pending |
 | CLNT-01 | Phase 113 | Pending |
 | CLNT-02 | Phase 113 | Pending |
