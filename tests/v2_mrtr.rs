@@ -52,25 +52,37 @@ use std::collections::HashMap;
 use std::fs;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use common::v2::{
-    post, spawn_default_config, spawn_stateless_config, v1_body, v2_body, v2_body_with_caps,
-    v2_headers, Resp, V1, V2,
+    post, spawn_default_config, spawn_stateless_config, spawn_with, v1_body, v2_body,
+    v2_body_with_caps, v2_headers, Resp, V1, V2,
 };
+use pmcp::client::host::{HostElicitationHandler, HostSamplingHandler};
+use pmcp::server::http_middleware::{
+    ServerHttpContext, ServerHttpMiddleware, ServerHttpMiddlewareChain, ServerHttpRequest,
+};
+use pmcp::server::streamable_http_server::StreamableHttpServerConfig;
 use pmcp::server::{PromptHandler, ResourceHandler, Server};
-use pmcp::types::elicitation::ElicitRequestParams;
+use pmcp::shared::http_constants::MCP_SESSION_ID;
+use pmcp::shared::streamable_http::StreamableHttpTransportConfigBuilder;
+use pmcp::shared::StreamableHttpTransport;
+use pmcp::testing::{open_request_state, ANONYMOUS_PRINCIPAL};
+use pmcp::types::elicitation::{ElicitAction, ElicitRequestParams, ElicitResult};
 use pmcp::types::mrtr::{InputRequest, InputRequests, MrtrSignal, MRTR_SIGNAL_META_KEY};
 use pmcp::types::protocol::error_codes::{
     INTERNAL_ERROR, INVALID_PARAMS, MISSING_REQUIRED_CLIENT_CAPABILITY,
 };
 use pmcp::types::protocol::ProtocolVersion;
-use pmcp::types::{Content, GetPromptResult, ListResourcesResult, ReadResourceResult};
-use pmcp::{RequestHandlerExtra, ServerCapabilities, ToolHandler};
+use pmcp::types::roots::ListRootsResult;
+use pmcp::types::sampling::{CreateMessageParams, CreateMessageResult};
+use pmcp::types::{Content, GetPromptResult, ListResourcesResult, MrtrOutcome, ReadResourceResult};
+use pmcp::{ClientBuilder, RequestHandlerExtra, ServerCapabilities, ToolHandler};
 use serde_json::{json, Value};
 use tokio::task::JoinHandle;
+use url::Url;
 
 // ===========================================================================
 // Fixture vocabulary.
@@ -1498,5 +1510,506 @@ fn manifest_maps_every_pinned_scenario() {
     assert!(
         !unmapped.contains("sep-2322-"),
         "the Unmapped section lists an unmeasured scenario:\n{unmapped}"
+    );
+}
+
+// ===========================================================================
+// Real pmcp Client <-> real pmcp server (Plan 113-11 Task 2, CLNT-02).
+//
+// Everything above drives the wire by hand. Everything below drives the SAME
+// fixture server with a REAL `pmcp::Client`, which is the first proof that the
+// server half (plans 06/09) and the client half (plans 05/07) agree — each had
+// only ever been tested against a hand-built counterpart. These tests live here
+// rather than in plan 07 because a SCRIPTED real server cannot emit
+// `input_required` until plan 09 exists.
+// ===========================================================================
+
+/// What the recording middleware observed about the requests that arrived.
+#[derive(Debug, Default)]
+struct Observed {
+    /// How many HTTP requests reached the server.
+    requests: AtomicUsize,
+    /// Set when ANY body carried `initialize` or `notifications/initialized`.
+    handshake: AtomicBool,
+    /// Set when ANY request carried an inbound `Mcp-Session-Id` header.
+    inbound_session_id: AtomicBool,
+}
+
+/// A thin recording wrapper at the HTTP boundary.
+///
+/// The three facts under observation — how many requests left the client,
+/// whether a handshake was attempted, and whether a session id travelled — all
+/// live at the transport layer, not in a handler, and counting them here is
+/// what makes "exactly N requests" an observation rather than an inference.
+struct RecordingMiddleware {
+    observed: Arc<Observed>,
+}
+
+#[async_trait]
+impl ServerHttpMiddleware for RecordingMiddleware {
+    async fn on_request(
+        &self,
+        request: &mut ServerHttpRequest,
+        _context: &ServerHttpContext,
+    ) -> pmcp::Result<()> {
+        self.observed.requests.fetch_add(1, Ordering::SeqCst);
+        if request.get_header(MCP_SESSION_ID).is_some() {
+            self.observed
+                .inbound_session_id
+                .store(true, Ordering::SeqCst);
+        }
+        let method = serde_json::from_slice::<Value>(&request.body)
+            .ok()
+            .and_then(|body| {
+                body.get("method")
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+            });
+        if matches!(
+            method.as_deref(),
+            Some("initialize" | "notifications/initialized")
+        ) {
+            self.observed.handshake.store(true, Ordering::SeqCst);
+        }
+        Ok(())
+    }
+}
+
+/// Spawn the fixture behind a [`RecordingMiddleware`], on the STATEFUL default
+/// config so session-freedom is proven by the per-request era gate.
+async fn spawn_recorded_fixture() -> (SocketAddr, JoinHandle<()>, Arc<AtomicUsize>, Arc<Observed>) {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let observed = Arc::new(Observed::default());
+    let mut chain = ServerHttpMiddlewareChain::new();
+    chain.add(Arc::new(RecordingMiddleware {
+        observed: Arc::clone(&observed),
+    }));
+    let config = StreamableHttpServerConfig {
+        http_middleware: Some(Arc::new(chain)),
+        ..StreamableHttpServerConfig::default()
+    };
+    let (addr, handle) = spawn_with(build_fixture_server(&calls), config).await;
+    (addr, handle, calls, observed)
+}
+
+/// A `StreamableHttpTransport` pointed at `addr`.
+fn transport_for(addr: SocketAddr) -> StreamableHttpTransport {
+    let url = Url::parse(&format!("http://{addr}/")).expect("the loopback URL parses");
+    StreamableHttpTransport::new(StreamableHttpTransportConfigBuilder::new(url).build())
+}
+
+/// A client builder already opted into `2026-07-28`.
+fn v2_builder(addr: SocketAddr) -> ClientBuilder<StreamableHttpTransport> {
+    ClientBuilder::new(transport_for(addr))
+        .with_protocol_version(ProtocolVersion(V2.to_string()))
+        .expect("2026-07-28 is selectable")
+}
+
+/// A host elicitation handler that counts its invocations and answers with a
+/// fixed [`ElicitAction`].
+struct CountingElicitation {
+    calls: Arc<AtomicUsize>,
+    action: ElicitAction,
+}
+
+impl CountingElicitation {
+    /// The accepting handler most tests use.
+    fn accepting(calls: &Arc<AtomicUsize>) -> Self {
+        Self {
+            calls: Arc::clone(calls),
+            action: ElicitAction::Accept,
+        }
+    }
+
+    /// A handler that DECLINES — the reachable "the client cannot fulfil" path
+    /// (see `client_server_mrtr_undeclared_capability_is_refused` for why an
+    /// EMPTY registry cannot reach it).
+    fn declining(calls: &Arc<AtomicUsize>) -> Self {
+        Self {
+            calls: Arc::clone(calls),
+            action: ElicitAction::Decline,
+        }
+    }
+}
+
+#[async_trait]
+impl HostElicitationHandler for CountingElicitation {
+    async fn handle_elicitation(&self, _params: ElicitRequestParams) -> pmcp::Result<ElicitResult> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        let mut content = HashMap::new();
+        content.insert("value".to_string(), json!("ada"));
+        Ok(ElicitResult {
+            action: self.action,
+            content: matches!(self.action, ElicitAction::Accept).then_some(content),
+        })
+    }
+}
+
+/// A host sampling handler that counts its invocations.
+struct CountingSampling {
+    calls: Arc<AtomicUsize>,
+}
+
+#[async_trait]
+impl HostSamplingHandler for CountingSampling {
+    async fn handle_create_message(
+        &self,
+        _params: CreateMessageParams,
+    ) -> pmcp::Result<CreateMessageResult> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        Ok(CreateMessageResult::new(
+            Content::text("sampled"),
+            "fixture-model",
+        ))
+    }
+}
+
+/// A real `Client` completes a one-round MRTR exchange over HTTP, and the host
+/// elicitation handler ran EXACTLY once.
+#[tokio::test]
+async fn client_server_mrtr_elicitation_roundtrip() {
+    let (addr, handle, server_calls, observed) = spawn_recorded_fixture().await;
+    let elicit_calls = Arc::new(AtomicUsize::new(0));
+    let client = v2_builder(addr)
+        .on_elicitation(CountingElicitation::accepting(&elicit_calls))
+        .build();
+
+    let result = client.call_tool(TOOL_ELICIT.to_string(), json!({})).await;
+
+    handle.abort();
+    let completed = result.expect("the gather->resend loop completes for the caller");
+    assert!(
+        !completed.content.is_empty(),
+        "the caller receives the COMPLETE result, not an empty success"
+    );
+    assert_eq!(
+        elicit_calls.load(Ordering::SeqCst),
+        1,
+        "exactly one elicitation was answered"
+    );
+    assert_eq!(
+        server_calls.load(Ordering::SeqCst),
+        2,
+        "one ask, one resume"
+    );
+    assert_eq!(
+        observed.requests.load(Ordering::SeqCst),
+        2,
+        "one initial request and one retry"
+    );
+}
+
+/// Three rounds: the caller still sees ONE completed result, and the handler ran
+/// EXACTLY three times.
+#[tokio::test]
+async fn client_server_mrtr_three_rounds() {
+    let (addr, handle, _server_calls, observed) = spawn_recorded_fixture().await;
+    let elicit_calls = Arc::new(AtomicUsize::new(0));
+    let client = v2_builder(addr)
+        .on_elicitation(CountingElicitation::accepting(&elicit_calls))
+        .build();
+
+    let result = client
+        .call_tool(TOOL_THREE_ROUNDS.to_string(), json!({}))
+        .await;
+
+    handle.abort();
+    assert!(result.is_ok(), "three rounds complete: {result:?}");
+    assert_eq!(
+        elicit_calls.load(Ordering::SeqCst),
+        3,
+        "one handler invocation per LOGICAL round"
+    );
+    assert_eq!(
+        observed.requests.load(Ordering::SeqCst),
+        4,
+        "three asks plus the resuming retry"
+    );
+}
+
+/// Elicitation + sampling + roots arrive in ONE result and are all fulfilled in
+/// ONE retry, with exactly one invocation of each handler.
+#[tokio::test]
+async fn client_server_mrtr_mixed_kinds() {
+    let (addr, handle, _server_calls, observed) = spawn_recorded_fixture().await;
+    let elicit_calls = Arc::new(AtomicUsize::new(0));
+    let sample_calls = Arc::new(AtomicUsize::new(0));
+    let roots_calls = Arc::new(AtomicUsize::new(0));
+    let roots_counter = Arc::clone(&roots_calls);
+    let client = v2_builder(addr)
+        .on_elicitation(CountingElicitation::accepting(&elicit_calls))
+        .on_sampling(CountingSampling {
+            calls: Arc::clone(&sample_calls),
+        })
+        .on_roots(move || {
+            let counter = Arc::clone(&roots_counter);
+            async move {
+                counter.fetch_add(1, Ordering::SeqCst);
+                Ok(ListRootsResult { roots: vec![] })
+            }
+        })
+        .build();
+
+    let result = client.call_tool(TOOL_MIXED.to_string(), json!({})).await;
+
+    handle.abort();
+    assert!(result.is_ok(), "a mixed-kind round completes: {result:?}");
+    assert_eq!(elicit_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(sample_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(roots_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        observed.requests.load(Ordering::SeqCst),
+        2,
+        "all three kinds are answered in ONE retry"
+    );
+}
+
+/// The whole exchange happened with NO `initialize` and NO `Mcp-Session-Id` —
+/// the stateless promise (HTTP-01) holds across a MULTI-request MRTR loop, not
+/// just for a single round trip.
+#[tokio::test]
+async fn client_server_mrtr_no_session_no_handshake() {
+    let (addr, handle, _server_calls, observed) = spawn_recorded_fixture().await;
+    let elicit_calls = Arc::new(AtomicUsize::new(0));
+    let client = v2_builder(addr)
+        .on_elicitation(CountingElicitation::accepting(&elicit_calls))
+        .build();
+
+    let result = client
+        .call_tool(TOOL_THREE_ROUNDS.to_string(), json!({}))
+        .await;
+
+    handle.abort();
+    assert!(result.is_ok(), "the exchange completes: {result:?}");
+    assert_eq!(
+        observed.requests.load(Ordering::SeqCst),
+        4,
+        "guard against a vacuous pass — traffic must have arrived"
+    );
+    assert!(
+        !observed.handshake.load(Ordering::SeqCst),
+        "v2 has no handshake: neither initialize nor notifications/initialized may be sent"
+    );
+    assert!(
+        !observed.inbound_session_id.load(Ordering::SeqCst),
+        "no request in the MRTR loop may carry Mcp-Session-Id"
+    );
+}
+
+/// A server that never completes trips the client's bound: EXACTLY `limit`
+/// requests leave, and the caller gets the programmatically distinguishable
+/// error rather than an infinite loop (T-113-11).
+#[tokio::test]
+async fn client_server_mrtr_round_limit_typed_error() {
+    let (addr, handle, _server_calls, observed) = spawn_recorded_fixture().await;
+    let elicit_calls = Arc::new(AtomicUsize::new(0));
+    let client = v2_builder(addr)
+        .mrtr_round_limit(2)
+        .on_elicitation(CountingElicitation::accepting(&elicit_calls))
+        .build();
+
+    let error = client
+        .call_tool(TOOL_FOREVER.to_string(), json!({}))
+        .await
+        .expect_err("a looping server must not loop the client forever");
+
+    handle.abort();
+    assert!(
+        error.is_mrtr_round_limit_exceeded(),
+        "the bound must be distinguishable: {error}"
+    );
+    assert_eq!(error.mrtr_round_limit(), Some(2));
+    assert_eq!(
+        observed.requests.load(Ordering::SeqCst),
+        2,
+        "exactly `limit` requests may reach the server"
+    );
+    assert_eq!(
+        elicit_calls.load(Ordering::SeqCst),
+        2,
+        "one invocation per round, and none after the bound trips"
+    );
+}
+
+/// An UNFULFILLABLE `input_required` reaches the caller as a VALUE on the
+/// additive `*_mrtr` path, and the client does NOT resend.
+///
+/// # Why the handler is registered but DECLINING
+///
+/// The plan asked for "no handlers at all". Against a REAL pmcp server that
+/// scenario is unreachable, and correctly so: the client's v2
+/// `clientCapabilities` are REGISTRY-AUTHORITATIVE (capability honesty,
+/// HOST-05), so an empty registry declares no `elicitation`, and the server's
+/// declared-capability precheck refuses the whole result with `-32021` BEFORE
+/// minting anything (T-113-32). Two correct rules compose into "the server
+/// never asks a question this client could not answer" — which is exactly what
+/// `client_server_mrtr_undeclared_capability_is_refused` locks.
+///
+/// A DECLINING handler is the reachable D-06 path with the identical shape: the
+/// capability IS declared, the server DOES mint, and the client still cannot
+/// fulfil — because the user said no.
+#[tokio::test]
+async fn client_server_mrtr_outcome_input_required() {
+    let (addr, handle, _server_calls, observed) = spawn_recorded_fixture().await;
+    let elicit_calls = Arc::new(AtomicUsize::new(0));
+    let client = v2_builder(addr)
+        .on_elicitation(CountingElicitation::declining(&elicit_calls))
+        .build();
+
+    let outcome = client
+        .call_tool_mrtr(TOOL_ELICIT.to_string(), json!({}))
+        .await
+        .expect("an unfulfillable result is not an error on the *_mrtr path");
+
+    handle.abort();
+    assert_eq!(
+        elicit_calls.load(Ordering::SeqCst),
+        1,
+        "the handler DID run — and declined"
+    );
+    let MrtrOutcome::InputRequired(result) = outcome else {
+        panic!("expected MrtrOutcome::InputRequired");
+    };
+    assert!(
+        result
+            .input_requests
+            .as_ref()
+            .is_some_and(|requests| !requests.is_empty()),
+        "the inputRequests the client could not answer must survive"
+    );
+    let state = result
+        .request_state
+        .as_deref()
+        .expect("the continuation token reaches the caller");
+    assert!(!state.is_empty());
+    assert_eq!(
+        observed.requests.load(Ordering::SeqCst),
+        1,
+        "the client must NOT resend what it cannot answer"
+    );
+}
+
+/// The SAME scenario through the EXISTING `call_tool` is the typed error
+/// carrying the FULL result — explicitly NOT an empty `CallToolResult`.
+///
+/// This is the live proof of the review's most consequential finding:
+/// `CallToolResult::content` is `#[serde(default)]`, so an `input_required`
+/// result deserializes into it SUCCESSFULLY and yields a silently empty
+/// success. The token recovered from the error is opened with the server's own
+/// key, proving it is the server's real minted continuation and not a shell.
+///
+/// The handler is registered-but-declining for the reason documented on
+/// [`client_server_mrtr_outcome_input_required`].
+#[tokio::test]
+async fn client_server_mrtr_existing_method_typed_error() {
+    let (addr, handle, _server_calls, observed) = spawn_recorded_fixture().await;
+    let elicit_calls = Arc::new(AtomicUsize::new(0));
+    let client = v2_builder(addr)
+        .on_elicitation(CountingElicitation::declining(&elicit_calls))
+        .build();
+
+    let outcome = client.call_tool(TOOL_ELICIT.to_string(), json!({})).await;
+
+    handle.abort();
+    let error = match outcome {
+        Ok(result) => panic!(
+            "an input_required result must NOT deserialize into a CallToolResult — \
+             content is #[serde(default)], so this is a silently EMPTY success: {result:?}"
+        ),
+        Err(error) => error,
+    };
+    assert!(
+        error.is_input_required_unfulfilled(),
+        "the error must be programmatically distinguishable: {error}"
+    );
+    let recovered = error
+        .input_required_result()
+        .expect("the full result must be recoverable from the error");
+    assert!(
+        recovered
+            .input_requests
+            .as_ref()
+            .is_some_and(|requests| !requests.is_empty()),
+        "the inputRequests survive the error path"
+    );
+    let state = recovered
+        .request_state
+        .as_deref()
+        .expect("the continuation token survives the error path");
+
+    // The SAME `requestState` the server minted: opening it with the server's
+    // own key recovers the continuation the scripted handler sealed.
+    let (continuation, round) = open_request_state(
+        &KEY,
+        ANONYMOUS_PRINCIPAL,
+        "tools/call",
+        &tool_params(TOOL_ELICIT),
+        state,
+    )
+    .expect("the token verifies against the fixture server's key");
+    assert_eq!(continuation, json!({ "step": 1 }));
+    assert_eq!(round, 1, "minted at round + 1");
+    assert_eq!(
+        observed.requests.load(Ordering::SeqCst),
+        1,
+        "no resend on the typed-error path either"
+    );
+}
+
+/// A client with an EMPTY host registry is REFUSED with `-32021` rather than
+/// handed an `input_required` it could never answer.
+///
+/// Discovered by this plan while wiring the real client to the real server, and
+/// locked here because it is the composition of two independently-correct rules
+/// that no single-sided test could observe:
+///
+/// * the CLIENT's v2 `clientCapabilities` are registry-authoritative — it cannot
+///   advertise `elicitation` without an elicitation handler (capability honesty,
+///   HOST-05); and
+/// * the SERVER refuses, all-or-nothing, to emit `inputRequests` for a
+///   capability the client did not declare, BEFORE minting any continuation
+///   (T-113-32, `sep-2322-respect-client-capabilities`).
+///
+/// So the "handler-less client receives an `input_required`" scenario is
+/// UNREACHABLE between two conformant pmcp peers: the server answers `-32021`
+/// first. That is the better outcome — it costs no cryptographic work and tells
+/// the client exactly what to declare — and it is why the two D-06 tests above
+/// use a DECLINING handler instead of an empty registry.
+#[tokio::test]
+async fn client_server_mrtr_undeclared_capability_is_refused() {
+    let (addr, handle, server_calls, observed) = spawn_recorded_fixture().await;
+    let client = v2_builder(addr).build();
+
+    let error = client
+        .call_tool_mrtr(TOOL_ELICIT.to_string(), json!({}))
+        .await
+        .expect_err("a server may not ask for an undeclared capability");
+
+    handle.abort();
+    let pmcp::Error::Protocol { code, data, .. } = &error else {
+        panic!("expected a JSON-RPC protocol error, got: {error:?}");
+    };
+    assert_eq!(
+        code.as_i32(),
+        MISSING_REQUIRED_CLIENT_CAPABILITY,
+        "got: {error:?}"
+    );
+    let required = data
+        .as_ref()
+        .and_then(|data| data.get("requiredCapabilities"))
+        .expect("the refusal names what to declare");
+    assert!(
+        required.is_object() && required.get("elicitation").is_some(),
+        "requiredCapabilities is a ClientCapabilities OBJECT naming the gap: {required}"
+    );
+    assert_eq!(
+        observed.requests.load(Ordering::SeqCst),
+        1,
+        "one request, refused — no retry loop"
+    );
+    assert_eq!(
+        server_calls.load(Ordering::SeqCst),
+        1,
+        "the handler ran; the refusal happened at egress"
     );
 }

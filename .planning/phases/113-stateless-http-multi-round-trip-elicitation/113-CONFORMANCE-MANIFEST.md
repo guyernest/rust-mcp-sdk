@@ -119,6 +119,42 @@ they are the single most likely silent interop failures in this phase, so they a
 |------------|------------------|
 | `manifest_maps_every_pinned_scenario` | this manifest's sha equals `113-SPEC-RECHECK.md` § B.1's; this manifest's check-id set equals § B.2's EXACTLY (both directions); every `Local test` cell above names a fn that exists in `tests/v2_mrtr.rs`; and `## Unmapped` is empty |
 
+## Real-Client Interoperability (Plan 113-11 Task 2)
+
+Not conformance rows — the official suite drives a Node client, so it cannot grade pmcp's OWN
+client against pmcp's OWN server. These prove the two halves built in plans 05/07 (client) and
+06/09 (server) agree on the wire, each having been tested only against a hand-built counterpart
+until now. They drive the SAME fixture server as the scenario mirrors above.
+
+| Local test | What it proves |
+|------------|----------------|
+| `client_server_mrtr_elicitation_roundtrip` | a real `Client` completes a one-round MRTR exchange; the host handler ran exactly once |
+| `client_server_mrtr_three_rounds` | three rounds complete for the caller; the handler ran exactly three times |
+| `client_server_mrtr_mixed_kinds` | elicitation + sampling + roots in one result, one invocation of each, one retry |
+| `client_server_mrtr_no_session_no_handshake` | the whole MULTI-request loop ran with NO `initialize` observed and NO `Mcp-Session-Id` on any request |
+| `client_server_mrtr_round_limit_typed_error` | `mrtr_round_limit(2)` surfaces as a typed error after EXACTLY 2 server-observed requests |
+| `client_server_mrtr_outcome_input_required` | an unfulfillable result reaches `call_tool_mrtr` as `MrtrOutcome::InputRequired` after EXACTLY 1 server-observed request (no resend) |
+| `client_server_mrtr_existing_method_typed_error` | the same scenario through plain `call_tool` is `Error::input_required_unfulfilled` carrying the full result — explicitly NOT an empty `CallToolResult`; the recovered token OPENS with the server's key |
+| `client_server_mrtr_undeclared_capability_is_refused` | **discovered by this plan** — a client with an EMPTY host registry is refused `-32021` rather than handed an `input_required` it could never answer |
+
+### The "no handlers at all" scenario is unreachable between two conformant pmcp peers
+
+Plan 113-11 Task 2 specified the two D-06 tests as "register NO handlers". Wiring the real client
+to the real server showed that shape cannot occur, because two independently-correct rules
+compose:
+
+* the CLIENT's v2 `clientCapabilities` are REGISTRY-AUTHORITATIVE — it cannot advertise
+  `elicitation` without an elicitation handler (capability honesty, HOST-05); and
+* the SERVER refuses, all-or-nothing, to emit `inputRequests` for a capability the client did not
+  declare, BEFORE minting any continuation (T-113-32, row 20).
+
+So an empty registry gets `-32021`, never an `input_required`. That is the BETTER outcome — no
+cryptographic work is spent and the client is told exactly what to declare. The two D-06 tests
+therefore use a registered-but-DECLINING elicitation handler, which is the reachable path with
+the identical shape (capability declared, server mints, client still cannot fulfil because the
+user said no), and the newly-added row above locks the composed behavior so neither rule can
+regress unnoticed.
+
 ---
 
 ## Unmapped
