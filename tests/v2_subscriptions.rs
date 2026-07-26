@@ -39,7 +39,7 @@ use common::v2::{
     BearerSubjects, GreetingPrompt, SearchTool, FRAME_TIMEOUT, V1, V2,
 };
 use pmcp::server::Server;
-use pmcp::types::protocol::error_codes::METHOD_NOT_FOUND;
+use pmcp::types::protocol::error_codes::{INVALID_REQUEST, METHOD_NOT_FOUND};
 use pmcp::types::protocol::ProtocolVersion;
 use pmcp::types::subscriptions::{
     advertises_subscriptions, ACKNOWLEDGED_METHOD, SUBSCRIPTION_ID_META_KEY,
@@ -661,6 +661,101 @@ async fn two_callers_same_request_id_do_not_cross() {
 
     drop(alice);
     drop(bob);
+    handle.abort();
+}
+
+/// The SAME-principal twin of the test above — the half that shipped UNTESTED.
+///
+/// Plan 113-10 proved id reuse only ACROSS principals (both tests that claimed
+/// to cover it used two different subjects), and `113-VERIFICATION.md` gap item
+/// 4 recorded that omission after independently reproducing the defect: two
+/// connections authenticated as ONE subject — several tabs, a shared service
+/// account, a token with a constant `sub` — collapse onto ONE principal and can
+/// still choose the same JSON-RPC id.
+///
+/// Before the plan-14 fix the second registration EVICTED the first (dropping
+/// its `mpsc::Sender`, ending that stream with no terminal frame), so the
+/// closing assertion here — that the FIRST stream still receives a fanned-out
+/// `tools/list_changed` — is the load-bearing one: alice-1 was already
+/// disconnected at that point and the read would time out.
+#[tokio::test]
+async fn same_principal_id_reuse_rejects_the_second_and_spares_the_first() {
+    let server = Arc::new(Mutex::new(server_with_two_principals()));
+    let (addr, handle) = spawn_shared(Arc::clone(&server)).await;
+
+    // The ONE difference from the cross-principal twin above: the second caller
+    // presents alice's subject too, so both resolve to `AuthContext.subject ==
+    // "alice"` and share ONE principal.
+    let mut first_headers = listen_headers();
+    first_headers.push(("authorization".to_string(), "Bearer alice".to_string()));
+    let mut second_headers = listen_headers();
+    second_headers.push(("authorization".to_string(), "Bearer alice".to_string()));
+
+    let mut first = SseStream::open(
+        addr,
+        &first_headers,
+        &listen_body(json!(1), &json!({ "toolsListChanged": true })),
+    )
+    .await;
+    let ack = first.expect_json().await;
+    assert_eq!(
+        ack["method"],
+        json!(ACKNOWLEDGED_METHOD),
+        "the first stream is served, ack first"
+    );
+    assert_eq!(subscription_id_of(&ack), Some(&json!(1)));
+
+    // The SAME principal, the SAME id, a second connection.
+    let mut second = SseStream::open(
+        addr,
+        &second_headers,
+        &listen_body(json!(1), &json!({ "toolsListChanged": true })),
+    )
+    .await;
+    assert_eq!(
+        second.status, 400,
+        "a duplicate live (principal, subscriptionId) is a bad request"
+    );
+    let refusal = second.expect_json().await;
+    assert!(
+        refusal["error"].is_object(),
+        "the second stream is refused, not served: {refusal}"
+    );
+    assert_eq!(
+        refusal["error"]["code"],
+        json!(INVALID_REQUEST),
+        "the refusal is -32600, not a capacity code: {refusal}"
+    );
+    let message = refusal["error"]["message"].as_str().unwrap_or_default();
+    assert!(
+        message.contains("already open for this subscription id"),
+        "the refusal names the real reason: {refusal}"
+    );
+    assert!(
+        !message.contains("too many concurrent"),
+        "this is a DUPLICATE refusal, not a cap refusal: {refusal}"
+    );
+
+    server
+        .lock()
+        .await
+        .send_notification(ServerNotification::ToolsChanged)
+        .await;
+
+    let delivered = first.expect_json().await;
+    assert_eq!(
+        delivered["method"],
+        json!("notifications/tools/list_changed"),
+        "the FIRST stream survived the duplicate registration"
+    );
+    assert_eq!(
+        subscription_id_of(&delivered),
+        Some(&json!(1)),
+        "and is still tagged with its own subscriptionId"
+    );
+
+    drop(first);
+    drop(second);
     handle.abort();
 }
 
