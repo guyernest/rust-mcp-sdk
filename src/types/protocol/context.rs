@@ -89,7 +89,20 @@ pub(crate) struct VerifiedContinuation {
 /// [`ProtocolContext::new`] and layer optional fields via the `with_*`
 /// builders. The four negotiation fields are public and directly readable; the
 /// MRTR fields are crate-private (see [`ProtocolContext::with_mrtr_params`]).
-#[derive(Debug, Clone)]
+///
+/// # `Debug` is hand-written and REDACTS the MRTR fields
+///
+/// A derived `Debug` printed [`VerifiedContinuation::state`] — the DECRYPTED,
+/// server-minted continuation, which routinely holds partially collected tool
+/// arguments — plus the raw `requestState` token and the client's
+/// `inputResponses`, verbatim. This value is carried on
+/// [`RequestHandlerExtra`](crate::RequestHandlerExtra), whose own `Debug` prints
+/// it, so a single `tracing::debug!("{extra:?}")` in a handler or middleware
+/// published exactly the material the AEAD token exists to seal (T-113-05 /
+/// T-113-31). The impl below reports only PRESENCE for those three, matching the
+/// redaction discipline `RequestHandlerExtra`'s `Debug` already applies to
+/// `metadata` and `task_request`.
+#[derive(Clone)]
 #[non_exhaustive]
 pub struct ProtocolContext {
     /// The behavioral era the negotiated version belongs to (v1 vs v2).
@@ -115,6 +128,26 @@ pub struct ProtocolContext {
     /// server-owned codec verified the echoed `requestState` against the live
     /// principal and originating request.
     pub(crate) mrtr_verified: Option<VerifiedContinuation>,
+}
+
+impl std::fmt::Debug for ProtocolContext {
+    /// Renders the negotiation fields in full and the MRTR fields as PRESENCE
+    /// only — see the type-level note for why the derive was unsafe here.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ProtocolContext")
+            .field("era", &self.era)
+            .field("negotiated_version", &self.negotiated_version)
+            .field("client_info", &self.client_info)
+            .field("client_capabilities", &self.client_capabilities)
+            .field("has_input_responses", &self.input_responses().is_some())
+            .field(
+                "has_request_state_token",
+                &self.request_state_token().is_some(),
+            )
+            .field("has_verified_continuation", &self.mrtr_verified.is_some())
+            .field("mrtr_round", &self.mrtr_round())
+            .finish()
+    }
 }
 
 impl ProtocolContext {
