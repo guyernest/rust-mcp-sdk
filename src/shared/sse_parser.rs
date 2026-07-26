@@ -487,6 +487,31 @@ mod tests {
         assert_eq!(events3[0].data, "partial\nmore");
     }
 
+    /// A remote peer that never emits a newline must not be able to grow a
+    /// pmcp client's heap without limit.
+    ///
+    /// `feed` pushes every chunk into `buffer` and only ever drains as far as a
+    /// `\n`, so before the bound existed a hostile or broken server could hold a
+    /// `subscriptions/listen` stream open and stream newline-free bytes until
+    /// the client OOMed (review CR-03, verification gap item 3, T-113-73).
+    #[test]
+    fn a_newlineless_flood_cannot_grow_the_buffer_past_the_bound() {
+        let mut parser = SseParser::new();
+        let chunk = "x".repeat(64 * 1024);
+        // 2 MiB, with not one newline in it.
+        for _ in 0..32 {
+            assert!(
+                parser.feed(&chunk).is_empty(),
+                "an unterminated line completes no event"
+            );
+        }
+        assert!(
+            parser.buffer.len() <= 1024 * 1024,
+            "the line buffer grew to {} bytes, past the 1 MiB bound",
+            parser.buffer.len()
+        );
+    }
+
     #[test]
     fn test_sse_stream_builder() {
         let stream = SseStream::new()
