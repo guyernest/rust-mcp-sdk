@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v2.5
 milestone_name: MCP Spec 2026-07-28
 status: executing
-stopped_at: Completed 113-11-PLAN.md
-last_updated: "2026-07-26T02:56:05.078Z"
-last_activity: 2026-07-26 -- Completed 113-13-PLAN.md (subscriptions/listen CLIENT half + retired-RPC era gate)
+stopped_at: Completed 113-12-PLAN.md (phase gate) — phase BLOCKED on the 2026-07-28 schema
+last_updated: "2026-07-26T04:11:46.074Z"
+last_activity: 2026-07-26 -- Completed 113-12-PLAN.md (phase gate; requirements held at [~] under a PENDING spec verdict)
 progress:
   total_phases: 71
-  completed_phases: 57
+  completed_phases: 58
   total_plans: 294
-  completed_plans: 293
-  percent: 80
+  completed_plans: 294
+  percent: 82
 ---
 
 # Project State
@@ -25,10 +25,11 @@ See: .planning/PROJECT.md (updated 2026-07-22) · .planning/ROADMAP.md (v2.5 mil
 
 ## Current Position
 
-Phase: 113 (stateless-http-multi-round-trip-elicitation) — EXECUTING
-Plan: 12 of 13 (plan 13 executed ahead of it as wave 6; 12 is the phase-closing semver/spec re-verification and is the only one left)
-Status: Ready to execute
-Last activity: 2026-07-26 -- Completed 113-13-PLAN.md (subscriptions/listen CLIENT half + retired-RPC era gate)
+Phase: 113 (stateless-http-multi-round-trip-elicitation) — ALL 13 PLANS DONE, **BLOCKED ON PUBLICATION**
+Plan: 13 of 13 (all shipped; 113-12, the phase gate, closed last)
+Status: **Not complete.** Every phase gate is green — 16/16 build-matrix rows, `cargo semver-checks` 223/223 with no bump required, `cargo public-api` zero removals, `make quality-gate` exit 0, all seven new/changed files ≥ 84% coverage, a 20 000-run fuzz campaign with zero crash artifacts. But `113-SPEC-RECHECK.md`'s `## Verdict` is still `PENDING`: re-verified 2026-07-26, there is no `schema/2026-07-28` upstream. HTTP-01..05 and CLNT-01..02 are therefore marked `[~]` (implemented — pending final schema), **not** `[x]`.
+Next action: on or after 2026-07-28 re-run the 4-step procedure in `113-SPEC-RECHECK.md` § Recorded Exception, upgrade the Verdict, then flip the seven requirements. A value mismatch is a phase-reopening event.
+Last activity: 2026-07-26 -- Completed 113-12-PLAN.md (phase gate; evidence-gated reconciliation)
 
 ## v2.5 Phase Plan (8 phases, 38 requirements)
 
@@ -168,7 +169,10 @@ yet. (Research flags per phase to be surfaced during `/gsd:plan-phase`.)
 - ~~113-02 finding D-113-A (HIGH, owned by plan 04)~~ — RESOLVED in 113-04 (`47eaad68`): the three typed request structs are pinned with `#[serde(rename = "_meta", alias = "meta")]`, so egress is spec-conformant and ingress still accepts pre-113 pmcp peers. The forward tripwire was inverted into the permanent regression guard `typed_requests_use_the_spec_meta_spelling`.
 - ~~113-04 finding D-113-D (HIGH, phase-level decision)~~ — RESOLVED: the owner chose option 3. The five `_meta` field additions were reverted (`b2cc87fe`) and D-113-B re-resolved by reading `params._meta` off the RAW body at HTTP ingress (`f6735c03`), which needs zero public API change. `cargo semver-checks check-release --baseline-version 2.17.0 -p pmcp` now reports `223 checks: 223 pass, 30 skip / Summary no semver update required`, so the milestone stays additive (2.x minor) and plan 12's semver gate is clear.
 
-No open blockers.
+**2 open blockers (both raised by 113-12, the phase gate):**
+
+- Phase 113 is BLOCKED ON PUBLICATION, not complete. 113-SPEC-RECHECK.md ## Verdict is still PENDING (re-verified 2026-07-26: no schema/2026-07-28 upstream). The three v2 error codes -32020/-32021/-32022 are pre-final values held under a written developer exception whose re-verification is BINDING and whose failure mode is phase-reopening, not advisory. HTTP-01..05 and CLNT-01..02 are marked [~] implemented-pending-final-schema. ACTION on or after 2026-07-28: re-run the 4-step procedure in 113-SPEC-RECHECK.md ## Recorded Exception, upgrade the Verdict, and only then flip the seven requirements to [x].
+- UNAS-01 (SEP-2243 x-mcp-header / Mcp-Param-{Name}) is an UNASSIGNED v2.5 requirement with no phase. Also open: D-113-F (two pre-existing cog-25 violations in streamable_http_server.rs) and D-113-G (make quality-gate's fuzz stage builds 0 of 17 targets and swallows failures) — both need owners.
 
 ## Deferred Items
 
@@ -196,8 +200,8 @@ Items deferred by design for this milestone (design §7 / REQUIREMENTS v2):
 
 ## Session Continuity
 
-Last session: 2026-07-26T02:55:41.599Z
-Stopped at: Completed 113-11-PLAN.md
+Last session: 2026-07-26T04:11:31.701Z
+Stopped at: Completed 113-12-PLAN.md (phase gate) — Phase 113 BLOCKED on the 2026-07-28 schema publication
 Resume file: None
 
 ## Performance Metrics
@@ -242,3 +246,4 @@ Resume file: None
 | Phase 113 P10 | 60min | 3 tasks | 6 files |
 | Phase 113 P11 | 40min | 3 tasks | 6 files |
 | Phase 113 P13 | 105min | 3 tasks tasks | 10 files files |
+| Phase 113 P12 | 69min | 3 tasks | 6 files |
