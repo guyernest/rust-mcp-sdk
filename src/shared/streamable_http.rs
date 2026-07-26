@@ -818,28 +818,13 @@ impl StreamableHttpTransport {
         }
     }
 
-    /// POST an ALREADY-SERIALIZED JSON-RPC frame.
+    /// Insert the two per-request POST headers every JSON-RPC frame carries.
     ///
-    /// The shared tail of [`Self::send_with_options`] and
-    /// [`Transport::send_raw`]: the v2 client path assembles its own frame (so
-    /// it can stamp `params._meta` on methods whose typed struct has no `_meta`
-    /// field), and both paths must go through the SAME header emission, 401
-    /// retry, and response handling.
-    ///
-    /// `is_notification` only selects the 202-Accepted behavior; it is not
-    /// re-derived from the bytes so the typed path keeps its exact semantics.
-    async fn post_body(&self, body_bytes: Vec<u8>, is_notification: bool) -> Result<()> {
-        // Clone body_bytes so we can retry with the identical payload on 401.
-        let body_bytes_snapshot = body_bytes.clone();
-
-        let url = self.config.read().url.clone();
-
-        // Build POST request with middleware integration
-        let mut request = self
-            .build_request_with_middleware(Method::POST, url.as_str(), body_bytes)
-            .await?;
-
-        // Add request-specific headers
+    /// Factored out of [`Self::post_once`] so the first attempt and the 401
+    /// retry cannot drift: the retry MUST preserve the original method, body and
+    /// headers, and the only way to guarantee that is for both to build them
+    /// from one place.
+    fn apply_post_headers(request: &mut Request<Full<Bytes>>) -> Result<()> {
         request.headers_mut().insert(
             CONTENT_TYPE,
             APPLICATION_JSON.parse().map_err(|e| {
@@ -858,6 +843,33 @@ impl StreamableHttpTransport {
                 )))
             })?,
         );
+        Ok(())
+    }
+
+    /// Build, send, and (on a `401` with a configured auth provider) retry ONCE
+    /// an already-serialized POST body, returning the raw HTTP response with its
+    /// body UNREAD.
+    ///
+    /// The shared head of [`Self::post_body`] and [`Self::post_streaming`].
+    /// Extracted because a long-lived `subscriptions/listen` stream (HTTP-04)
+    /// must go through the SAME header emission and the SAME single-shot 401
+    /// refresh as every other request — a second, hand-rolled POST path would
+    /// silently miss the auth retry.
+    ///
+    /// The retry is structurally at-most-once: it returns directly from this
+    /// function, so there is no loop to go around twice. A second `401` on the
+    /// retry is returned to the caller unchanged.
+    async fn post_once(&self, body_bytes: Vec<u8>) -> Result<HyperResponse<hyper::body::Incoming>> {
+        // Clone body_bytes so we can retry with the identical payload on 401.
+        let body_bytes_snapshot = body_bytes.clone();
+
+        let url = self.config.read().url.clone();
+
+        // Build POST request with middleware integration
+        let mut request = self
+            .build_request_with_middleware(Method::POST, url.as_str(), body_bytes)
+            .await?;
+        Self::apply_post_headers(&mut request)?;
 
         // Send first attempt.
         let response = self
@@ -866,56 +878,68 @@ impl StreamableHttpTransport {
             .await
             .map_err(|e| Error::Transport(TransportError::Request(e.to_string())))?;
 
-        // 401 retry — exactly once, only when an auth provider is configured.
-        // `retried_unauthorized` is implicit: the retry path returns directly from
-        // this expression, so we structurally cannot loop back and retry again.
-        // A second 401 on the retry is returned to the caller unchanged.
-        // The retry preserves the original request body, method, and all headers
-        // (except Authorization, which is recomputed from a freshly-vended token).
-        let retried_unauthorized = response.status() == StatusCode::UNAUTHORIZED;
-        let response = if retried_unauthorized {
-            let auth_provider = self.config.read().auth_provider.clone();
-            if let Some(provider) = auth_provider {
-                // Step 1: purge cached token (on_unauthorized BEFORE get_access_token — Test 5).
-                provider.on_unauthorized().await?;
+        if response.status() != StatusCode::UNAUTHORIZED {
+            return Ok(response);
+        }
 
-                // Step 2: rebuild the request using the byte-identical body snapshot.
-                let mut retry_request = self
-                    .build_request_with_middleware(Method::POST, url.as_str(), body_bytes_snapshot)
-                    .await?;
-
-                // Re-apply the same per-request headers.
-                retry_request.headers_mut().insert(
-                    CONTENT_TYPE,
-                    APPLICATION_JSON.parse().map_err(|e| {
-                        Error::Transport(TransportError::InvalidMessage(format!(
-                            "Invalid header: {}",
-                            e
-                        )))
-                    })?,
-                );
-                retry_request.headers_mut().insert(
-                    ACCEPT,
-                    ACCEPT_STREAMABLE.parse().map_err(|e| {
-                        Error::Transport(TransportError::InvalidMessage(format!(
-                            "Invalid header: {}",
-                            e
-                        )))
-                    })?,
-                );
-
-                // Step 3: send retry — do NOT retry again on a second 401.
-                self.client
-                    .request(retry_request)
-                    .await
-                    .map_err(|e| Error::Transport(TransportError::Request(e.to_string())))?
-            } else {
-                // No auth provider — cannot retry; return the 401 as-is.
-                response
-            }
-        } else {
-            response
+        // No auth provider — cannot retry; return the 401 as-is.
+        let auth_provider = self.config.read().auth_provider.clone();
+        let Some(provider) = auth_provider else {
+            return Ok(response);
         };
+
+        // Step 1: purge cached token (on_unauthorized BEFORE get_access_token — Test 5).
+        provider.on_unauthorized().await?;
+
+        // Step 2: rebuild the request using the byte-identical body snapshot.
+        let mut retry_request = self
+            .build_request_with_middleware(Method::POST, url.as_str(), body_bytes_snapshot)
+            .await?;
+        Self::apply_post_headers(&mut retry_request)?;
+
+        // Step 3: send retry — do NOT retry again on a second 401.
+        self.client
+            .request(retry_request)
+            .await
+            .map_err(|e| Error::Transport(TransportError::Request(e.to_string())))
+    }
+
+    /// POST an already-serialized frame and hand back the response with its body
+    /// STILL UNREAD, so a long-lived `text/event-stream` can be consumed
+    /// incrementally (HTTP-04, `subscriptions/listen`).
+    ///
+    /// [`Self::post_body`] collects the body to completion, which would hang
+    /// forever on a stream that never ends. This is the streaming sibling: same
+    /// request construction, same 401 retry, same response-header processing —
+    /// and then the caller owns the body.
+    ///
+    /// The HTTP response-middleware chain is deliberately NOT run here, for the
+    /// same reason the server side does not run its own over a listen stream:
+    /// the chain processes a complete `Vec<u8>` body, and a stream has none by
+    /// construction.
+    pub(crate) async fn post_streaming(
+        &self,
+        body_bytes: Vec<u8>,
+    ) -> Result<HyperResponse<hyper::body::Incoming>> {
+        let response = self.post_once(body_bytes).await?;
+        self.process_response_headers(&response);
+        Ok(response)
+    }
+
+    /// POST an ALREADY-SERIALIZED JSON-RPC frame.
+    ///
+    /// The shared tail of [`Self::send_with_options`] and
+    /// [`Transport::send_raw`]: the v2 client path assembles its own frame (so
+    /// it can stamp `params._meta` on methods whose typed struct has no `_meta`
+    /// field), and both paths must go through the SAME header emission, 401
+    /// retry, and response handling.
+    ///
+    /// `is_notification` only selects the 202-Accepted behavior; it is not
+    /// re-derived from the bytes so the typed path keeps its exact semantics.
+    async fn post_body(&self, body_bytes: Vec<u8>, is_notification: bool) -> Result<()> {
+        let url = self.config.read().url.clone();
+
+        let response = self.post_once(body_bytes).await?;
 
         // Process headers for session and protocol info
         self.process_response_headers(&response);

@@ -43,6 +43,9 @@ pub mod http_middleware;
 pub mod oauth;
 pub mod oauth_middleware;
 mod options;
+/// The client half of the v2 `subscriptions/listen` long-lived stream (HTTP-04).
+#[cfg(all(feature = "streamable-http", not(target_arch = "wasm32")))]
+pub mod subscriptions;
 pub mod transport;
 
 pub use options::ClientOptions;
@@ -3769,6 +3772,124 @@ impl<T: Transport> Client<T> {
     async fn send_notification(&self, notification: Notification) -> Result<()> {
         let message = crate::types::TransportMessage::Notification(notification);
         self.transport.write().await.send(message).await
+    }
+}
+
+// ===========================================================================
+// `subscriptions/listen` — the v2 change-notification stream (HTTP-04).
+// ===========================================================================
+
+#[cfg(all(feature = "streamable-http", not(target_arch = "wasm32")))]
+impl<T> Client<T>
+where
+    T: Transport + crate::client::subscriptions::EventStreamTransport,
+{
+    /// Open a v2 `subscriptions/listen` stream and receive change notifications
+    /// (HTTP-04).
+    ///
+    /// The 2026-07-28 schema REMOVED `resources/subscribe` and
+    /// `resources/unsubscribe` and replaced both with this single long-lived
+    /// stream. The returned [`SubscriptionStream`](crate::client::subscriptions::SubscriptionStream)
+    /// has already consumed the server's mandatory acknowledgement — read the
+    /// AGREED filter from
+    /// [`acknowledged()`](crate::client::subscriptions::SubscriptionStream::acknowledged)
+    /// before polling — and then yields one item per delivered notification.
+    ///
+    /// Dropping the returned stream closes the underlying HTTP response, which
+    /// is what releases the server's registry slot; there is no `close()` to
+    /// forget.
+    ///
+    /// # D-11: polling remains the RECOMMENDED enterprise mechanism
+    ///
+    /// Polling over the Tasks mechanism stays pmcp's recommended mechanism for
+    /// enterprise remote deployments. This stream is the spec-conformant OPT-IN:
+    /// its server side is documented single-instance / sticky-routed only,
+    /// because the server's subscription registry is instance-local. Behind a
+    /// non-sticky load balancer a subscriber silently under-receives.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// use futures::StreamExt;
+    /// use pmcp::shared::streamable_http::StreamableHttpTransportConfigBuilder;
+    /// use pmcp::shared::StreamableHttpTransport;
+    /// use pmcp::types::protocol::{ProtocolVersion, PROTOCOL_VERSION_2026_07_28};
+    /// use pmcp::types::subscriptions::SubscriptionFilter;
+    /// use pmcp::ClientBuilder;
+    ///
+    /// # async fn example() -> pmcp::Result<()> {
+    /// let url = url::Url::parse("https://example.invalid/mcp").unwrap();
+    /// let transport =
+    ///     StreamableHttpTransport::new(StreamableHttpTransportConfigBuilder::new(url).build());
+    /// let client = ClientBuilder::new(transport)
+    ///     .with_protocol_version(ProtocolVersion(PROTOCOL_VERSION_2026_07_28.to_string()))?
+    ///     .build();
+    ///
+    /// let filter = SubscriptionFilter {
+    ///     tools_list_changed: Some(true),
+    ///     ..SubscriptionFilter::default()
+    /// };
+    /// let mut stream = client.subscriptions_listen(filter).await?;
+    /// println!("agreed: {:?}", stream.acknowledged().notifications);
+    ///
+    /// while let Some(notification) = stream.next().await {
+    ///     println!("{:?}", notification?);
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when:
+    /// - the connection did not opt into `2026-07-28` — NO request is sent, and
+    ///   the message names `ClientBuilder::with_protocol_version`;
+    /// - the server rejected the request, in which case its own JSON-RPC error
+    ///   is returned UNCHANGED (a server advertising no subscription-delivered
+    ///   capability answers `-32601`, which is how "this server does not do
+    ///   subscriptions" is distinguished from a transport fault);
+    /// - the first frame on the stream is not the mandatory acknowledgement, or
+    ///   is tagged with a different `subscriptionId`.
+    pub async fn subscriptions_listen(
+        &self,
+        notifications: crate::types::subscriptions::SubscriptionFilter,
+    ) -> Result<crate::client::subscriptions::SubscriptionStream> {
+        use crate::types::subscriptions::{SubscriptionsListenParams, SUBSCRIPTIONS_LISTEN_METHOD};
+
+        // Fail fast and LOCALLY: `subscriptions/listen` does not exist on v1, so
+        // a request from a v1 client cannot succeed and must not be sent.
+        if !self.is_v2() {
+            return Err(Error::InvalidState(
+                "subscriptions/listen requires the 2026-07-28 era — select it with \
+                 ClientBuilder::with_protocol_version"
+                    .into(),
+            ));
+        }
+
+        let request_id = RequestId::String(Uuid::new_v4().to_string());
+        let params = serde_json::to_value(SubscriptionsListenParams::new(notifications))
+            .map_err(|e| Error::parse(format!("Failed to serialize listen params: {e}")))?;
+        let mut jsonrpc_request = crate::types::JSONRPCRequest::new(
+            request_id.clone(),
+            SUBSCRIPTIONS_LISTEN_METHOD,
+            Some(params),
+        );
+        // The SAME reserved `_meta` every other v2 request carries: the transport
+        // derives `Mcp-Method` / `Mcp-Name` from these very bytes, so the header
+        // and the body cannot desync (T-113-08), and `Mcp-Name` comes out EMPTY
+        // because `subscriptions/listen` is not name-bearing.
+        self.splice_v2_meta(&mut jsonrpc_request.params);
+        let body = serde_json::to_vec(&jsonrpc_request)
+            .map_err(|e| Error::parse(format!("Failed to serialize v2 request: {e}")))?;
+
+        let frames = {
+            // A READ lock: the stream outlives this call and owns its own HTTP
+            // response, so nothing here may hold the transport for the lifetime
+            // of the subscription.
+            let transport = self.transport.read().await;
+            transport.open_event_stream(body).await?
+        };
+        crate::client::subscriptions::SubscriptionStream::open(request_id, frames).await
     }
 }
 
