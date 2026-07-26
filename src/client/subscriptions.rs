@@ -184,33 +184,46 @@ fn sse_payload_stream(body: hyper::body::Incoming) -> impl Stream<Item = Result<
             if state.done {
                 return None;
             }
-            match state.body.frame().await {
-                None => {
-                    state.done = true;
-                    if state.pending.is_empty() {
-                        return None;
-                    }
-                },
-                Some(Err(e)) => {
-                    state.done = true;
-                    return Some((
-                        Err(Error::Transport(TransportError::Request(e.to_string()))),
-                        state,
-                    ));
-                },
-                Some(Ok(frame)) => {
-                    if let Some(chunk) = frame.data_ref() {
-                        state.bytes.extend_from_slice(chunk);
-                        let text = take_utf8_prefix(&mut state.bytes);
-                        state
-                            .pending
-                            .extend(drain_sse_payloads(&mut state.parser, &text));
-                    }
-                    // A trailers frame carries no data; loop and read again.
-                },
+            if let Some(error) = read_next_frame(&mut state).await {
+                return Some((Err(error), state));
             }
         }
     })
+}
+
+/// Read ONE body frame into `state`, returning `Some(error)` only for a
+/// transport failure.
+///
+/// Extracted from [`sse_payload_stream`]'s `unfold` closure so neither function
+/// exceeds the repo's cognitive-complexity budget (CLAUDE.md: cog ≤ 25, enforced
+/// by the PR-blocking PMAT gate). The split is behaviour-preserving: every exit
+/// leaves `state` in the same shape the inline `match` produced, and the caller
+/// re-enters its loop, where `pending.pop_front()` and the `done` check together
+/// reproduce the old "end-of-body but payloads still buffered" fall-through.
+async fn read_next_frame(state: &mut PayloadState) -> Option<Error> {
+    match state.body.frame().await {
+        // End of body. Anything already in `pending` is still drained by the
+        // caller's loop before the `done` check ends the stream.
+        None => {
+            state.done = true;
+            None
+        },
+        Some(Err(e)) => {
+            state.done = true;
+            Some(Error::Transport(TransportError::Request(e.to_string())))
+        },
+        Some(Ok(frame)) => {
+            if let Some(chunk) = frame.data_ref() {
+                state.bytes.extend_from_slice(chunk);
+                let text = take_utf8_prefix(&mut state.bytes);
+                state
+                    .pending
+                    .extend(drain_sse_payloads(&mut state.parser, &text));
+            }
+            // A trailers frame carries no data; the caller loops and reads again.
+            None
+        },
+    }
 }
 
 /// Split the longest decodable UTF-8 prefix off `buffer`, leaving the rest.
