@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v2.5
 milestone_name: MCP Spec 2026-07-28
 status: executing
-stopped_at: Completed 113-12-PLAN.md (phase gate) — phase BLOCKED on the 2026-07-28 schema
-last_updated: "2026-07-26T04:11:46.074Z"
-last_activity: 2026-07-26 -- Completed 113-12-PLAN.md (phase gate; requirements held at [~] under a PENDING spec verdict)
+stopped_at: "Completed 113-14-PLAN.md (gap closure: HTTP-04 subscriptions collision safety)"
+last_updated: "2026-07-26T17:39:32.728Z"
+last_activity: 2026-07-26
 progress:
   total_phases: 71
-  completed_phases: 58
-  total_plans: 294
-  completed_plans: 294
-  percent: 82
+  completed_phases: 57
+  total_plans: 297
+  completed_plans: 295
+  percent: 80
 ---
 
 # Project State
@@ -25,11 +25,11 @@ See: .planning/PROJECT.md (updated 2026-07-22) · .planning/ROADMAP.md (v2.5 mil
 
 ## Current Position
 
-Phase: 113 (stateless-http-multi-round-trip-elicitation) — ALL 13 PLANS DONE, **BLOCKED ON PUBLICATION**
-Plan: 13 of 13 (all shipped; 113-12, the phase gate, closed last)
-Status: **Not complete.** Every phase gate is green — 16/16 build-matrix rows, `cargo semver-checks` 223/223 with no bump required, `cargo public-api` zero removals, `make quality-gate` exit 0, all seven new/changed files ≥ 84% coverage, a 20 000-run fuzz campaign with zero crash artifacts. But `113-SPEC-RECHECK.md`'s `## Verdict` is still `PENDING`: re-verified 2026-07-26, there is no `schema/2026-07-28` upstream. HTTP-01..05 and CLNT-01..02 are therefore marked `[~]` (implemented — pending final schema), **not** `[x]`.
-Next action: on or after 2026-07-28 re-run the 4-step procedure in `113-SPEC-RECHECK.md` § Recorded Exception, upgrade the Verdict, then flip the seven requirements. A value mismatch is a phase-reopening event.
-Last activity: 2026-07-26 -- Completed 113-12-PLAN.md (phase gate; evidence-gated reconciliation)
+Phase: 113 (stateless-http-multi-round-trip-elicitation) — EXECUTING
+Plan: 15 of 16
+Status: Ready to execute
+Next action: execute the remaining gap-closure plans 113-15 and 113-16 (CR-03: `SseParser` unbounded buffer / dead `SseConfig::max_buffer_size`). Plan 113-14 closed verification gap items 1, 2 and 4 (HTTP-04 same-principal `subscriptions/listen` id-reuse collision safety). Then, on or after 2026-07-28, re-run the 4-step procedure in `113-SPEC-RECHECK.md` § Recorded Exception, upgrade the Verdict, and only then flip the seven requirements. A value mismatch is a phase-reopening event.
+Last activity: 2026-07-26 -- Phase 113 plan 14 (gap closure) complete
 
 ## v2.5 Phase Plan (8 phases, 38 requirements)
 
@@ -157,6 +157,9 @@ Decisions are logged in PROJECT.md Key Decisions table. Decisions framing this m
 - [Phase ?]: 113-13: a malformed / cross-tagged / unmodelled listen frame is an Err ITEM and the stream CONTINUES; only transport failure, the terminal result, or end-of-body ends it (T-113-66/67)
 - [Phase ?]: 113-13: the retired-RPC client error carries METHOD_NOT_FOUND (the code the server would have answered with) and rides Error::Protocol behind RETIRED_ON_V2_MARKER; the gate runs BEFORE ensure_initialized and assert_capability
 - [Phase ?]: 113-13: FOUND AND FIXED a remote-triggerable panic in the SHARED SseParser::feed — a CHARACTER-indexed CRLF check against a BYTE index sliced mid-character; it also hit the pre-existing GET-SSE path. Found by this plan's own arbitrary-bytes proptest, not by review
+- [Phase 113]: 113-14: a duplicate LIVE (principal, subscriptionId) subscriptions/listen registration is REFUSED with -32600 at HTTP 400 (ListenRejection::DuplicateSubscriptionId), never a licence to evict the incumbent — occupancy check and insert run under ONE entries write guard
+- [Phase 113]: 113-14: every listen-registry removal is OWNERSHIP-scoped via a per-entry u64 generation (ListenGuard::drop + disconnect_overflowed both compare before removing), closing CR-02's overflow-evict/successor-registers/old-guard-drops window; ListenRejection::code() is exhaustive with no wildcard arm
+- [Phase 113]: 113-14: the same-principal id-reuse path is now proven LIVE (same_principal_id_reuse_rejects_the_second_and_spares_the_first) and demonstrated to fail without the fix — twice: at the 400 status and, with that assertion disabled, at the load-bearing first-stream-survives read
 
 ### Pending Todos
 
@@ -200,8 +203,8 @@ Items deferred by design for this milestone (design §7 / REQUIREMENTS v2):
 
 ## Session Continuity
 
-Last session: 2026-07-26T04:11:31.701Z
-Stopped at: Completed 113-12-PLAN.md (phase gate) — Phase 113 BLOCKED on the 2026-07-28 schema publication
+Last session: 2026-07-26T17:39:32.707Z
+Stopped at: Completed 113-14-PLAN.md (gap closure: HTTP-04 subscriptions collision safety)
 Resume file: None
 
 ## Performance Metrics
@@ -247,3 +250,4 @@ Resume file: None
 | Phase 113 P11 | 40min | 3 tasks | 6 files |
 | Phase 113 P13 | 105min | 3 tasks tasks | 10 files files |
 | Phase 113 P12 | 69min | 3 tasks | 6 files |
+| Phase 113 P14 | 62min | 2 tasks | 3 files |

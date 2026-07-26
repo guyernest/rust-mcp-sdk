@@ -239,5 +239,20 @@ introduced.
 - `ListenRejection::code()` is the extension point for any future refusal: it is
   exhaustive by construction, so adding a variant is a compile error until its
   code is chosen deliberately.
+
+## Self-Check: PASSED
+
+All three modified source files exist on disk and all three commits resolve in
+`git log --all`:
+
+| Artifact | Result |
+|----------|--------|
+| `src/server/subscriptions.rs` | FOUND |
+| `src/server/streamable_http_server.rs` | FOUND |
+| `tests/v2_subscriptions.rs` | FOUND |
+| `113-14-SUMMARY.md` | FOUND |
+| `07c51641` (Task 1) | FOUND |
+| `18893a54` (Task 2) | FOUND |
+| `98625aa8` (summary) | FOUND |
 </content>
 </invoke>
