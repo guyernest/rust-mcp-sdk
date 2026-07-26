@@ -4,12 +4,12 @@ milestone: v2.5
 milestone_name: MCP Spec 2026-07-28
 status: executing
 stopped_at: "Completed 113-16-PLAN.md (gap closure: the RUN libFuzzer campaign for subscription_listen_frames)"
-last_updated: "2026-07-26T22:51:07.431Z"
+last_updated: "2026-07-26T23:49:19.485Z"
 last_activity: 2026-07-26 -- Phase 113 planning complete
 progress:
   total_phases: 71
   completed_phases: 57
-  total_plans: 300
+  total_plans: 301
   completed_plans: 297
   percent: 80
 ---
