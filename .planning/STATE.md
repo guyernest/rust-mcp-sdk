@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v2.5
 milestone_name: MCP Spec 2026-07-28
-status: executing
-stopped_at: "Completed 113-15-PLAN.md (gap closure: CR-03 bounded SseParser line buffer)"
-last_updated: "2026-07-26T18:19:18.769Z"
+status: verifying
+stopped_at: "Completed 113-16-PLAN.md (gap closure: the RUN libFuzzer campaign for subscription_listen_frames)"
+last_updated: "2026-07-26T19:16:14.782Z"
 last_activity: 2026-07-26
 progress:
   total_phases: 71
-  completed_phases: 57
+  completed_phases: 58
   total_plans: 297
-  completed_plans: 296
-  percent: 80
+  completed_plans: 297
+  percent: 82
 ---
 
 # Project State
@@ -27,9 +27,9 @@ See: .planning/PROJECT.md (updated 2026-07-22) · .planning/ROADMAP.md (v2.5 mil
 
 Phase: 113 (stateless-http-multi-round-trip-elicitation) — EXECUTING
 Plan: 16 of 16
-Status: Ready to execute
-Next action: execute the last gap-closure plan 113-16 (gap item 5 — the libFuzzer campaign, which depended on 113-15's bound landing). Plan 113-14 closed gap items 1, 2 and 4 (HTTP-04 same-principal `subscriptions/listen` id-reuse collision safety); plan 113-15 closed gap item 3 / CR-03 (`SseParser`'s unbounded line buffer and the dead `SseConfig::max_buffer_size`). Then, on or after 2026-07-28, re-run the 4-step procedure in `113-SPEC-RECHECK.md` § Recorded Exception, upgrade the Verdict, and only then flip the seven requirements. A value mismatch is a phase-reopening event.
-Last activity: 2026-07-26 -- Phase 113 plan 15 (gap closure: bounded SSE line buffer) complete
+Status: Phase complete — ready for verification
+Next action: re-verify the phase — all five verification gap items are now closed. Plan 113-14 closed gap items 1, 2 and 4 (HTTP-04 same-principal `subscriptions/listen` id-reuse collision safety); 113-15 closed gap item 3 / CR-03 (`SseParser`'s unbounded line buffer and the dead `SseConfig::max_buffer_size`); 113-16 closed gap item 5 — a 20 000-run libFuzzer campaign against `subscription_listen_frames` (exit 0, artifacts/ EMPTY, `113-FUZZ-EVIDENCE.md`) that provably reached 113-15's discard-and-latch branch. Then, on or after 2026-07-28, re-run the 4-step procedure in `113-SPEC-RECHECK.md` § Recorded Exception, upgrade the Verdict, and only then flip the seven requirements. A value mismatch is a phase-reopening event.
+Last activity: 2026-07-26 -- Phase 113 plan 16 (gap closure: the RUN fuzz campaign) complete
 
 ## v2.5 Phase Plan (8 phases, 38 requirements)
 
@@ -164,6 +164,9 @@ Decisions are logged in PROJECT.md Key Decisions table. Decisions framing this m
 - [Phase 113]: 113-15: enforcement fires ONLY when no line can be completed by this chunk (neither buffer nor data carries a newline) — that condition is exactly what leaves the two whole-body streamable_http.rs feed call sites behaviourally unchanged; SseParser::new() now sources its 1 MiB from SseConfig::default().max_buffer_size, the config field's FIRST real reader
 - [Phase 113]: 113-15: HttpTransport::connect_sse is a SECOND incremental feeder (exported, consumed in-repo by pmcp-team-servers) and is guarded too — bounding without observing there would have turned correct-but-unbounded behaviour into a SILENT discard; it keeps the 1 MiB default (it carries arbitrary JSON-RPC results) while the listen path tightens to 256 KiB
 - [Phase 113]: 113-15: both overflow checks are free functions over the parser (listen_overflow, report_sse_line_overflow) because their call sites own a live hyper::body::Incoming which cannot be constructed outside hyper — the unit tests drive the PRODUCTION predicates rather than reconstructions of them
+- [Phase 113]: 113-16: the fuzz seam takes the BOUND as a parameter (decode_listen_chunks_for_fuzz -> SseParser::with_max_buffer_size) and reports the production listen_overflow observer per chunk — fuzzing the 256 KiB production constant can never reach the enforcement branch
+- [Phase 113]: 113-16: MEASURED — a single 64-byte bound covers plan 15's discard-and-latch branch ZERO times in 20 000 runs (libFuzzer's length ramp reached 38-byte inputs; retained corpus max 53 bytes, 0 entries over 64), so every input is decoded once per bound [64, 8]; coverage lives in the TARGET, not in invocation flags or a gitignored seed corpus
+- [Phase 113]: 113-16: branch coverage is PROVEN from the retained corpus (50 of 180 entries satisfy SseParser::feed's enforcement predicate by construction) plus a single-input replay, never asserted; artifacts-empty proofs use absolute binary paths because the rtk shell proxy reported a spurious 1 for a demonstrably empty directory
 
 ### Pending Todos
 
@@ -180,6 +183,7 @@ yet. (Research flags per phase to be surfaced during `/gsd:plan-phase`.)
 
 - Phase 113 is BLOCKED ON PUBLICATION, not complete. 113-SPEC-RECHECK.md ## Verdict is still PENDING (re-verified 2026-07-26: no schema/2026-07-28 upstream). The three v2 error codes -32020/-32021/-32022 are pre-final values held under a written developer exception whose re-verification is BINDING and whose failure mode is phase-reopening, not advisory. HTTP-01..05 and CLNT-01..02 are marked [~] implemented-pending-final-schema. ACTION on or after 2026-07-28: re-run the 4-step procedure in 113-SPEC-RECHECK.md ## Recorded Exception, upgrade the Verdict, and only then flip the seven requirements to [x].
 - UNAS-01 (SEP-2243 x-mcp-header / Mcp-Param-{Name}) is an UNASSIGNED v2.5 requirement with no phase. Also open: D-113-F (two pre-existing cog-25 violations in streamable_http_server.rs) and D-113-G (make quality-gate's fuzz stage builds 0 of 17 targets and swallows failures) — both need owners.
+- D-113-H: a pre-existing untriaged crash artifact for the auth_flows fuzz target (fuzz/artifacts/auth_flows/crash-e29e9da4..., 8 bytes, dated 2025-09-12) surfaced in 113-16 while proving artifacts/ empty. Out of that plan's scope fence; unowned. Replay: cargo +nightly fuzz run auth_flows <artifact>
 
 ## Deferred Items
 
@@ -207,8 +211,8 @@ Items deferred by design for this milestone (design §7 / REQUIREMENTS v2):
 
 ## Session Continuity
 
-Last session: 2026-07-26T18:19:18.757Z
-Stopped at: Completed 113-15-PLAN.md (gap closure: CR-03 bounded SseParser line buffer)
+Last session: 2026-07-26T19:16:14.776Z
+Stopped at: Completed 113-16-PLAN.md (gap closure: the RUN libFuzzer campaign for subscription_listen_frames)
 Resume file: None
 
 ## Performance Metrics
@@ -256,3 +260,4 @@ Resume file: None
 | Phase 113 P12 | 69min | 3 tasks | 6 files |
 | Phase 113 P14 | 62min | 2 tasks | 3 files |
 | Phase 113 P15 | 36min | 2 tasks | 3 files |
+| Phase 113 P16 | 49min | 2 tasks | 4 files |
