@@ -2294,7 +2294,7 @@ Plans:
   4. SSE resumability (`Last-Event-ID`) is not offered on the v2 path, and a regression test proves response JSON-RPC ids are always derived from the live request — closing the id-replay / discovery-cache bug class (HTTP-05)
   5. The pmcp `Client`, selected explicitly per connection, speaks v2 (per-request `_meta`, `server/discover`, required headers, no `initialize`) and fulfills MRTR `input_required` results by producing `inputResponses`, with the Phase-106 host handlers (sampling/elicitation/roots) folded into the v2 flow (CLNT-01, CLNT-02)
 
-**Plans**: 28 plans — 13 original (113-01…113-13) + 7 gap-closure round 1 (113-14…113-20) + 8 gap-closure round 2 (113-21…113-28, planned 2026-07-27)
+**Plans**: 32 plans — 13 original (113-01…113-13) + 7 gap-closure round 1 (113-14…113-20) + 12 gap-closure round 2 (113-21…113-32, planned 2026-07-27; 113-29…113-32 supplemented after the RC spec-research pass landed Findings 11-14)
 
 Plans:
 **Wave 1**
@@ -2359,9 +2359,16 @@ Plans:
 
 - [ ] 113-27-PLAN.md — D-113-O: `inputResponses` typed KIND-DIRECTED at server ingress from the sealed continuation's own record, replacing the best-effort untagged guess that silently reclassifies a wrong-shaped answer into an infinite re-elicitation
 
-**Wave 4** *(blocked on Wave 3)*
+**Wave 4** *(blocked on Wave 3; added by the RC spec-research supplement — see `113-SPEC-RECHECK-ADDENDUM-2026-07-26.md` Findings 11-14)*
 
-- [ ] 113-28-PLAN.md — the publication-gate THIRD-OUTCOME decision (checkpoint): the binding re-verification procedure has no branch for `schema/2026-07-28` still not existing on the date; assembles the evidence brief and records the maintainer's policy without flipping any checkbox
+- [ ] 113-29-PLAN.md — Finding 11: `basic/index.mdx` says implementations of this version MUST NOT emit `-32002`, but pmcp's two call sites (`server/core.rs:2616`, `task_dispatch.rs:605`) have never had v2-path reachability traced; traced by execution rather than inspection, and era-gated if reachable
+- [ ] 113-30-PLAN.md — Finding 13: `src/server/subscriptions.rs:17-18` ships a FALSE claim in public rustdoc ("no polling shape for change notifications anywhere in the MCP spec") — `caching.mdx` defines TTL re-fetch via `ttlMs`/`cacheScope` (SEP-2549) and blesses it *instead of* `listChanged`; the D-11 conclusion stands, its justification does not. Also records Finding 14a (no stdio `subscriptions/listen`) as a deliberate deferral
+- [ ] 113-31-PLAN.md — Finding 14b: `resourceSubscriptions`/`resourcesListChanged` have zero end-to-end wire tests — half of HTTP-08's mandated opt-in surface is unit-tested only; adds live-socket coverage
+- [ ] 113-32-PLAN.md — Finding 12: HTTP-08's advertise-implies-serve predicate has NO spec sentence behind it — it lives in the conformance repo, which the schema-only gate cannot see; adds a second gate arm pinning a conformance sha verbatim from upstream
+
+**Wave 5** *(blocked on Wave 4)*
+
+- [ ] 113-28-PLAN.md — the publication-gate THIRD-OUTCOME decision (checkpoint): the binding re-verification procedure has no branch for `schema/2026-07-28` still not existing on the date; assembles the evidence brief and records the maintainer's policy without flipping any checkbox. Amended with Findings 7/8/10 — the RC is a strict ancestor of our pin 236 commits behind, the three constants under exception were renumbered *after* the RC lock, and the gate's trigger is restated as a condition ("a versioned schema directory exists") rather than the date
 
 
 **Phase-gate outcome (plan 12):** 16/16 build-matrix rows exit 0; `cargo semver-checks` 223/223 pass with no update required and `cargo public-api` shows **zero** removed public items, so the milestone is provably still additive; `make quality-gate` exits 0; all seven new/changed files clear the 80% coverage target; the 20k-run fuzz campaign passed with zero crash artifacts. **The phase is NOT closed as complete** — `113-SPEC-RECHECK.md`'s `## Verdict` is still `PENDING` (re-verified 2026-07-26: no `schema/2026-07-28` upstream), so HTTP-01..05 and CLNT-01..02 are marked `[~]` implemented-pending-final-schema rather than complete. See `113-12-SUMMARY.md`.
