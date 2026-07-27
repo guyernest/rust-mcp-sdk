@@ -127,7 +127,20 @@ impl EventStreamTransport for StreamableHttpTransport {
             .is_some_and(|value| value.contains(TEXT_EVENT_STREAM));
 
         if !is_event_stream {
-            return Err(rejection_error(status, response.into_body()).await);
+            // The body is read through the TRANSPORT's capped collector, never a
+            // bare `collect()`: this is a peer-controlled body on the very stream
+            // HTTP-04 exists to harden, and an uncapped read here would be the
+            // one unbounded whole-body read left on this transport (review
+            // CR-01).
+            let collected = match self.collect_capped_body(response).await {
+                Ok(bytes) => bytes,
+                // Over the cap, or the body failed mid-read. Either way there is
+                // no envelope to surface, so the caller gets the transport error
+                // naming the condition — exactly what a malformed body already
+                // produced.
+                Err(error) => return Err(error),
+            };
+            return Err(rejection_error(status, &collected));
         }
         Ok(Box::pin(sse_payload_stream(response.into_body())))
     }
@@ -144,12 +157,13 @@ impl EventStreamTransport for StreamableHttpTransport {
 /// mirroring the transport's own `jsonrpc_error_envelope`: an intermediary's
 /// JSON error page must never be laundered into what a caller reads as a
 /// server-authored protocol error.
-async fn rejection_error(status: hyper::StatusCode, body: hyper::body::Incoming) -> Error {
-    let collected = match body.collect().await {
-        Ok(collected) => collected.to_bytes(),
-        Err(e) => return Error::Transport(TransportError::Request(e.to_string())),
-    };
-    if let Ok(value) = serde_json::from_slice::<Value>(&collected) {
+///
+/// Takes ALREADY-COLLECTED bytes rather than the live body: the collection is
+/// the size-sensitive half and belongs to the transport's capped collector, so
+/// this function cannot be the place an unbounded read creeps back in (review
+/// CR-01). Being synchronous over a byte slice also makes it directly testable.
+fn rejection_error(status: hyper::StatusCode, collected: &[u8]) -> Error {
+    if let Ok(value) = serde_json::from_slice::<Value>(collected) {
         let is_jsonrpc = value.get("jsonrpc").and_then(Value::as_str) == Some("2.0");
         if let (true, Some(error)) = (is_jsonrpc, value.get("error")) {
             if let Ok(error) =
@@ -161,7 +175,7 @@ async fn rejection_error(status: hyper::StatusCode, body: hyper::body::Incoming)
     }
     Error::Transport(TransportError::Request(format!(
         "subscriptions/listen did not open a stream (HTTP {status}): {}",
-        truncate(&String::from_utf8_lossy(&collected))
+        truncate(&String::from_utf8_lossy(collected))
     )))
 }
 
@@ -305,11 +319,24 @@ fn listen_overflow(parser: &SseParser) -> Option<Error> {
 }
 
 /// Bound an untrusted string for inclusion in an error message.
+///
+/// Scans at most `MAX_ECHOED_FRAME + 1` characters. `text.chars().count()`
+/// walked the WHOLE untrusted string — up to a capped body or a whole frame —
+/// just to answer "is it longer than 200 chars?", which is work a remote peer
+/// chooses the size of, on an error path.
 fn truncate(text: &str) -> String {
-    if text.chars().count() <= MAX_ECHOED_FRAME {
-        return text.to_string();
+    let mut boundary = None;
+    for (index, (offset, _)) in text.char_indices().enumerate() {
+        if index == MAX_ECHOED_FRAME {
+            boundary = Some(offset);
+            break;
+        }
     }
-    let mut out: String = text.chars().take(MAX_ECHOED_FRAME).collect();
+    let Some(boundary) = boundary else {
+        return text.to_string();
+    };
+    let mut out = String::with_capacity(boundary + '…'.len_utf8());
+    out.push_str(&text[..boundary]);
     out.push('…');
     out
 }
@@ -1254,6 +1281,51 @@ mod tests {
         let huge = "x".repeat(MAX_ECHOED_FRAME * 4);
         let truncated = truncate(&huge);
         assert!(truncated.chars().count() <= MAX_ECHOED_FRAME + 1);
+        assert!(truncated.ends_with('…'), "the elision is visible");
+
+        // Exactly at the bound is NOT truncated, and a multi-byte character at
+        // the cut is not split (the cut is a char boundary, never a byte offset).
+        let exact = "y".repeat(MAX_ECHOED_FRAME);
+        assert_eq!(truncate(&exact), exact);
+        let umbrellas = "\u{2602}".repeat(MAX_ECHOED_FRAME * 2);
+        let cut = truncate(&umbrellas);
+        assert_eq!(cut.chars().count(), MAX_ECHOED_FRAME + 1);
+    }
+
+    // ---- the non-stream rejection path -------------------------------------
+
+    /// A well-formed JSON-RPC error envelope reaches the caller VERBATIM, which
+    /// is how "this server does not do subscriptions" (`-32601`) stays
+    /// distinguishable from a transport fault.
+    #[test]
+    fn a_jsonrpc_error_envelope_is_surfaced_unchanged() {
+        let body = json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "error": { "code": -32601, "message": "Method not found" },
+        })
+        .to_string();
+        let error = rejection_error(hyper::StatusCode::NOT_FOUND, body.as_bytes());
+        match error {
+            Error::Protocol { code, .. } => assert_eq!(code.as_i32(), -32601),
+            other => panic!("expected the server's own protocol error, got {other:?}"),
+        }
+    }
+
+    /// An intermediary's error page is NOT laundered into a protocol error, and
+    /// the bytes it carries are truncated before they reach the message.
+    #[test]
+    fn a_non_envelope_body_becomes_a_truncated_transport_error() {
+        let body = "<html>".to_string() + &"z".repeat(MAX_ECHOED_FRAME * 10);
+        let error = rejection_error(hyper::StatusCode::BAD_GATEWAY, body.as_bytes());
+        let rendered = error.to_string();
+        assert!(matches!(error, Error::Transport(_)), "{rendered}");
+        assert!(rendered.contains("502"), "the status is named: {rendered}");
+        assert!(
+            rendered.matches('z').count() < MAX_ECHOED_FRAME + 1,
+            "the untrusted body is bounded in the message: {} echoed bytes",
+            rendered.matches('z').count()
+        );
     }
 
     // ---- properties (CLAUDE.md ALWAYS / PROPERTY testing) ------------------

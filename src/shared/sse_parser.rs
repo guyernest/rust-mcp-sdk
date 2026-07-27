@@ -161,10 +161,26 @@ pub const DEFAULT_MAX_BUFFER_SIZE: usize = 1024 * 1024;
 /// next chunk was about to complete.
 ///
 /// The retained tail is at most 3 bytes, so this cannot grow without bound.
+///
+/// # Linear, not quadratic
+///
+/// The scan advances a `consumed` CURSOR and performs at most ONE `Vec::drain`
+/// (or `clear`) for the whole call. The previous shape re-validated the buffer
+/// from index 0 and `drain`-ed one invalid run per iteration, so a chunk of `n`
+/// invalid bytes cost `O(n^2)` byte moves AND `O(n^2)` validation — a remote
+/// CPU-exhaustion vector on a decoder that is fed directly from an untrusted
+/// peer by both incremental feeders (`connect_sse`'s reader task and the
+/// `subscriptions/listen` client), and one that no byte-count bound limits
+/// because it runs BEFORE the parser sees the text (review CR-02).
 pub(crate) fn take_utf8_prefix(buffer: &mut Vec<u8>) -> String {
     let mut text = String::new();
+    // Bytes already appended to `text` (as themselves or as U+FFFD). Never
+    // removed from `buffer` until the single exit-point drain below, so the
+    // remaining slice is only ever validated once end-to-end.
+    let mut consumed = 0usize;
     loop {
-        let error = match std::str::from_utf8(buffer) {
+        let rest = &buffer[consumed..];
+        let error = match std::str::from_utf8(rest) {
             Ok(valid) => {
                 text.push_str(valid);
                 buffer.clear();
@@ -173,18 +189,18 @@ pub(crate) fn take_utf8_prefix(buffer: &mut Vec<u8>) -> String {
             Err(error) => error,
         };
         let valid_up_to = error.valid_up_to();
-        if let Ok(valid) = std::str::from_utf8(&buffer[..valid_up_to]) {
+        if let Ok(valid) = std::str::from_utf8(&rest[..valid_up_to]) {
             text.push_str(valid);
         }
         let Some(invalid_len) = error.error_len() else {
             // "Unexpected end of input": an incomplete character the next chunk
             // will finish. Keep exactly those bytes and yield what decoded.
-            buffer.drain(..valid_up_to);
+            buffer.drain(..consumed + valid_up_to);
             return text;
         };
         // Never completable — emit the replacement character and skip past it.
         text.push('\u{FFFD}');
-        buffer.drain(..valid_up_to + invalid_len);
+        consumed += valid_up_to + invalid_len;
     }
 }
 
@@ -716,6 +732,59 @@ impl Default for SseConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `take_utf8_prefix` agrees with `String::from_utf8_lossy` on a buffer
+    /// that carries valid text, invalid runs and a trailing INCOMPLETE
+    /// character — the three cases the cursor rewrite has to keep distinct.
+    #[test]
+    fn take_utf8_prefix_decodes_mixed_valid_and_invalid_runs() {
+        // "a" | 0xff 0xfe (two independent invalid bytes) | "b☂" | 0xE2 0x98
+        // (the first two bytes of a three-byte character).
+        let mut buffer: Vec<u8> = Vec::new();
+        buffer.push(b'a');
+        buffer.extend_from_slice(&[0xff, 0xfe]);
+        buffer.extend_from_slice("b\u{2602}".as_bytes());
+        buffer.extend_from_slice(&[0xE2, 0x98]);
+
+        let text = take_utf8_prefix(&mut buffer);
+        assert_eq!(text, "a\u{FFFD}\u{FFFD}b\u{2602}");
+        assert_eq!(
+            buffer,
+            vec![0xE2, 0x98],
+            "only the incomplete trailing character is retained"
+        );
+
+        // The next chunk completes it, and nothing was lost across the split.
+        buffer.push(0x82);
+        assert_eq!(take_utf8_prefix(&mut buffer), "\u{2602}");
+        assert!(buffer.is_empty());
+    }
+
+    /// A LARGE invalid-byte run must be linear, not quadratic (review CR-02).
+    ///
+    /// The bytes here are supplied by a remote peer on both incremental feeders,
+    /// and this decoder runs BEFORE any of the parser's byte-count bounds apply,
+    /// so a per-invalid-byte `Vec::drain` (plus a re-validation from index 0)
+    /// was a remote CPU-exhaustion vector. 256 KiB of garbage took over a CPU
+    /// second under the old shape and is instantaneous under the cursor scan;
+    /// this pins the OUTPUT rather than a wall-clock number, so it is
+    /// deterministic on any machine, while the input size is what makes a
+    /// reintroduced quadratic shape hang the suite instead of passing it.
+    #[test]
+    fn take_utf8_prefix_is_linear_over_a_large_invalid_run() {
+        const GARBAGE: usize = 256 * 1024;
+        let mut buffer = vec![0xffu8; GARBAGE];
+        buffer.extend_from_slice(b"data: ok\n\n");
+
+        let text = take_utf8_prefix(&mut buffer);
+        assert!(buffer.is_empty(), "nothing completable is retained");
+        assert_eq!(
+            text.chars().filter(|c| *c == '\u{FFFD}').count(),
+            GARBAGE,
+            "one replacement character per invalid byte, exactly as from_utf8_lossy"
+        );
+        assert!(text.ends_with("data: ok\n\n"), "the valid tail survives");
+    }
 
     #[test]
     fn test_sse_parser_simple() {

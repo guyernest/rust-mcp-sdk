@@ -1494,24 +1494,6 @@ fn resolve_mrtr_principal(principal: MrtrPrincipal<'_>) -> Option<&str> {
     }
 }
 
-/// The `(method, live params)` pair MRTR binds a `requestState` token to.
-///
-/// Derived from the TYPED request dispatch will ACTUALLY execute, never from an
-/// attacker-echoed copy of the params (T-113-03) — so a token minted for one
-/// tool + arguments cannot verify against another.
-///
-/// Returns `None` for every request outside the three MRTR-eligible methods,
-/// which is what makes a `requestState` presented on e.g. `tools/list` inert
-/// rather than verified (T-113-23).
-///
-/// # The strip half of the D-15 strip-and-re-run mechanic
-///
-/// [`splice_mrtr_params`](crate::types::mrtr::splice_mrtr_params) with the
-/// DEFAULT removes `inputResponses` and `requestState` unconditionally. On this
-/// path they are already absent — the typed request structs deliberately do not
-/// model them (D-113-D) — so this is belt-and-braces: the params handed to the
-/// digest, and therefore the shape a re-run handler is bound to, can never carry
-/// a client-echoed MRTR field even if the salient whitelist is widened later.
 /// Whether this [`ClientRequest`] variant may carry an `input_required` result
 /// — the COMPILE-TIME half of the eligibility tripwire (T-113-23).
 ///
@@ -1560,6 +1542,24 @@ pub(crate) fn client_request_mrtr_eligible(request: &ClientRequest) -> bool {
     }
 }
 
+/// The `(method, live params)` pair MRTR binds a `requestState` token to.
+///
+/// Derived from the TYPED request dispatch will ACTUALLY execute, never from an
+/// attacker-echoed copy of the params (T-113-03) — so a token minted for one
+/// tool + arguments cannot verify against another.
+///
+/// Returns `None` for every request outside the three MRTR-eligible methods,
+/// which is what makes a `requestState` presented on e.g. `tools/list` inert
+/// rather than verified (T-113-23).
+///
+/// # The strip half of the D-15 strip-and-re-run mechanic
+///
+/// [`splice_mrtr_params`](crate::types::mrtr::splice_mrtr_params) with the
+/// DEFAULT removes `inputResponses` and `requestState` unconditionally. On this
+/// path they are already absent — the typed request structs deliberately do not
+/// model them (D-113-D) — so this is belt-and-braces: the params handed to the
+/// digest, and therefore the shape a re-run handler is bound to, can never carry
+/// a client-echoed MRTR field even if the salient whitelist is widened later.
 #[cfg(all(feature = "streamable-http", not(target_arch = "wasm32")))]
 pub(crate) fn mrtr_binding_parts(request: &Request) -> Option<(&'static str, Value)> {
     let Request::Client(boxed) = request else {

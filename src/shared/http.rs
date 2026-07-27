@@ -5,7 +5,7 @@ use crate::shared::sse_parser::SseParser;
 use crate::shared::{Transport, TransportMessage};
 use async_trait::async_trait;
 use bytes::Bytes;
-use http_body_util::{BodyExt, Full};
+use http_body_util::{BodyExt, Full, LengthLimitError, Limited};
 use hyper::{Method, Request, StatusCode};
 use hyper_util::client::legacy::Client;
 use hyper_util::rt::TokioExecutor;
@@ -69,6 +69,14 @@ pub struct HttpTransport {
     /// 113-17's `<config_surface_decision>`. Every field of this struct is
     /// already private, so adding one here is invisible to semver.
     sse_buffered_bytes: usize,
+    /// Cap on ONE fully-collected response body — the POST response
+    /// [`Self::send_request`] reads — defaulted from
+    /// [`DEFAULT_HTTP_COLLECTED_BODY_BYTES`] and overridable through
+    /// [`Self::with_max_collected_body_bytes`].
+    ///
+    /// A PRIVATE field for the same measured semver reason as
+    /// [`Self::sse_buffered_bytes`].
+    max_collected_body_bytes: usize,
 }
 
 impl std::fmt::Debug for HttpTransport {
@@ -77,6 +85,7 @@ impl std::fmt::Debug for HttpTransport {
             .field("config", &self.config)
             .field("connected", &self.connected)
             .field("sse_buffered_bytes", &self.sse_buffered_bytes)
+            .field("max_collected_body_bytes", &self.max_collected_body_bytes)
             .finish_non_exhaustive()
     }
 }
@@ -105,6 +114,32 @@ impl std::fmt::Debug for HttpTransport {
 /// [`HttpTransport::with_sse_buffered_bytes`] is the escape hatch: raise the
 /// ceiling for a deployment whose payloads are legitimately larger.
 pub const DEFAULT_HTTP_SSE_BUFFERED_BYTES: usize = 16 * 1024 * 1024;
+
+/// Default cap on ONE fully-collected response body on this transport, in bytes
+/// (16 MiB).
+///
+/// [`HttpTransport::send_request`] reads its POST response with
+/// `Full`-body semantics: the whole thing lands in memory before it is parsed,
+/// and the PEER chooses how many bytes it sends. Without a cap that read was
+/// unbounded — the same defect class 113-17 fixed on this file's sibling SSE
+/// reader and 113-20 fixed on `StreamableHttpTransport`'s three whole-body reads
+/// (review CR-03).
+///
+/// # Deliberately NOT the same quantity as the SSE in-flight ceiling
+///
+/// [`DEFAULT_HTTP_SSE_BUFFERED_BYTES`] bounds INCREMENTAL retention inside the
+/// long-lived `connect_sse` reader — a running total across many chunks. This
+/// bounds a ONE-SHOT collected body. They happen to share a number; they are not
+/// the same knob and must not be unified.
+///
+/// # What breaks at this boundary
+///
+/// A response larger than the configured cap now fails with
+/// [`TransportError::Request`](crate::error::TransportError::Request) instead of
+/// being delivered. Base64 `image`/`audio` content expands by ~4/3, so a 12 MiB
+/// binary is already 16 MiB encoded and does NOT fit under this default;
+/// [`HttpTransport::with_max_collected_body_bytes`] is the escape hatch.
+pub const DEFAULT_HTTP_COLLECTED_BODY_BYTES: usize = 16 * 1024 * 1024;
 
 /// Build the parser [`HttpTransport::connect_sse`]'s reader task feeds, bounded
 /// at the transport's CONFIGURED ceiling.
@@ -170,6 +205,7 @@ impl HttpTransport {
             message_tx: tx,
             connected: Arc::new(RwLock::new(false)),
             sse_buffered_bytes: DEFAULT_HTTP_SSE_BUFFERED_BYTES,
+            max_collected_body_bytes: DEFAULT_HTTP_COLLECTED_BODY_BYTES,
         }
     }
 
@@ -209,6 +245,77 @@ impl HttpTransport {
     pub fn with_sse_buffered_bytes(mut self, sse_buffered_bytes: usize) -> Self {
         self.sse_buffered_bytes = sse_buffered_bytes;
         self
+    }
+
+    /// Override the cap on ONE fully-collected POST response body, in bytes.
+    ///
+    /// Defaults to [`DEFAULT_HTTP_COLLECTED_BODY_BYTES`] (16 MiB). Raise it for a
+    /// deployment whose responses are legitimately larger — base64 `image` /
+    /// `audio` content expands by ~4/3, so a 12 MiB binary does NOT fit under the
+    /// default once encoded.
+    ///
+    /// An inherent builder method rather than an [`HttpConfig`] field, for the
+    /// same measured semver reason as [`Self::with_sse_buffered_bytes`].
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// use pmcp::shared::http::{HttpConfig, HttpTransport};
+    ///
+    /// let transport = HttpTransport::new(HttpConfig::default())
+    ///     .with_max_collected_body_bytes(64 * 1024 * 1024);
+    /// ```
+    #[must_use]
+    pub fn with_max_collected_body_bytes(mut self, max_collected_body_bytes: usize) -> Self {
+        self.max_collected_body_bytes = max_collected_body_bytes;
+        self
+    }
+
+    /// Collect a POST response body, refusing anything over `max_bytes`.
+    ///
+    /// The sibling of `StreamableHttpTransport::collect_body_within_cap`, with
+    /// the same two independently-sufficient refusals: a declared
+    /// `Content-Length` over the cap is refused before a byte is read, and the
+    /// bytes actually delivered are read through `Limited`, which stops at the
+    /// cap — so a peer that understates or omits `Content-Length` gains nothing.
+    ///
+    /// A body of exactly `max_bytes` is admitted; one byte over is refused.
+    async fn collect_body_within_cap(
+        response: hyper::Response<hyper::body::Incoming>,
+        max_bytes: usize,
+    ) -> Result<Bytes> {
+        let declared = response
+            .headers()
+            .get(hyper::header::CONTENT_LENGTH)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.parse::<usize>().ok());
+        if let Some(declared) = declared {
+            if declared > max_bytes {
+                return Err(crate::error::Error::Transport(
+                    crate::error::TransportError::Request(format!(
+                        "response body declares Content-Length {declared}, over this transport's \
+                         {max_bytes}-byte collected-body cap (DEFAULT_HTTP_COLLECTED_BODY_BYTES); \
+                         raise it with HttpTransport::with_max_collected_body_bytes"
+                    )),
+                ));
+            }
+        }
+        match Limited::new(response.into_body(), max_bytes)
+            .collect()
+            .await
+        {
+            Ok(collected) => Ok(collected.to_bytes()),
+            Err(error) if error.is::<LengthLimitError>() => Err(crate::error::Error::Transport(
+                crate::error::TransportError::Request(format!(
+                    "response body delivered more than this transport's {max_bytes}-byte \
+                     collected-body cap (Content-Length absent or understated); raise it with \
+                     HttpTransport::with_max_collected_body_bytes"
+                )),
+            )),
+            Err(error) => Err(crate::error::Error::Transport(
+                crate::error::TransportError::Request(error.to_string()),
+            )),
+        }
     }
 
     /// Connect to SSE endpoint for receiving notifications.
@@ -343,16 +450,20 @@ impl HttpTransport {
             ));
         }
 
-        // Process response
-        let body_bytes = response
-            .collect()
+        // Collect the response body under this transport's collected-body cap.
+        //
+        // The PEER chooses how many bytes it sends and this read buffers all of
+        // them before parsing, so an uncapped `collect()` here was the one
+        // unbounded whole-body read left on this transport — the same defect
+        // class 113-17 fixed on the sibling `connect_sse` reader in this very
+        // file (review CR-03). See `DEFAULT_HTTP_COLLECTED_BODY_BYTES`.
+        let body_bytes = Self::collect_body_within_cap(response, self.max_collected_body_bytes)
             .await
             .map_err(|e| {
                 crate::error::Error::Transport(crate::error::TransportError::InvalidMessage(
                     e.to_string(),
                 ))
-            })?
-            .to_bytes();
+            })?;
         let response_msg = crate::shared::stdio::StdioTransport::parse_message(&body_bytes)?;
 
         // Send response through message queue
@@ -516,7 +627,14 @@ mod tests {
 
     /// One SSE frame of exactly `len` bytes, carrying a complete event.
     fn sse_frame_of_len(len: usize) -> String {
-        // "data: " + payload + "\n\n"
+        // "data: " + payload + "\n\n" — the 8 fixed bytes of framing. Asserted
+        // rather than subtracted blind: `len - 8` underflow-PANICS for any
+        // caller that picks a smaller ceiling, which would report a bound bug as
+        // an arithmetic crash inside the helper.
+        assert!(
+            len >= 8,
+            "an SSE frame cannot be shorter than its 8 bytes of framing (asked for {len})"
+        );
         format!("data: {}\n\n", "A".repeat(len - 8))
     }
 
@@ -700,6 +818,7 @@ mod tests {
             message_tx: transport.message_tx,
             connected: transport.connected,
             sse_buffered_bytes: transport.sse_buffered_bytes,
+            max_collected_body_bytes: transport.max_collected_body_bytes,
         };
 
         // Receive should error with ConnectionClosed

@@ -2845,10 +2845,16 @@ fn resolve_agreed_filter(
 ///    conformant-by-absence configuration;
 /// 3. `params` that do not deserialize (`notifications` is REQUIRED) ->
 ///    `-32602`, AFTER the header gate and auth have already run;
-/// 4. the per-principal or global concurrency cap is exhausted -> `-32005`;
-/// 5. a duplicate LIVE `(principal, subscriptionId)` -> `-32600` at HTTP 400.
-///    The incumbent stream is untouched: the id belongs to the caller, so the
-///    caller — not the server — resolves the collision by choosing a free one
+/// 4. the per-principal or global concurrency cap is exhausted -> `-32005`
+///    (`RATE_LIMITED`) at HTTP 200, carrying a JSON-RPC error body;
+/// 5. a duplicate LIVE `(principal, subscriptionId)` -> ALSO `-32005` at HTTP
+///    200. Since 113-18 all three refusals share the RETRYABLE `RATE_LIMITED`
+///    code — the duplicate previously answered `-32600` at HTTP 400, the "do not
+///    retry" class, for a condition that clears on its own — so the refusal
+///    MESSAGE is the only discriminator (the `too many concurrent` substring is
+///    load-bearing). The incumbent stream is untouched: the id belongs to the
+///    caller, so the caller — not the server — resolves the collision by
+///    choosing a free one
 ///    (see [`ListenRejection::code`](crate::server::subscriptions::ListenRejection)).
 ///
 /// # The three closure triggers
@@ -2952,9 +2958,11 @@ async fn assemble_subscriptions_listen(
     let guard = match registry.register(key, agreed, sender, terminal) {
         Ok(guard) => guard,
         Err(rejection) => {
-            // PER-VARIANT code, owned by the rejection itself: a capacity
-            // refusal and a duplicate subscription id are different conditions
-            // and must not share one status.
+            // The code is OWNED by the rejection itself rather than chosen
+            // here, so this route can never disagree with
+            // `ListenRejection::code`'s exhaustive table. As of 113-18 that
+            // table answers all three refusals with the RETRYABLE
+            // `RATE_LIMITED`; the discriminator is the MESSAGE, not the code.
             return listen_rejection_response(
                 era,
                 id,

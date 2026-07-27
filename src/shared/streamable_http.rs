@@ -552,6 +552,24 @@ impl StreamableHttpTransport {
         }
     }
 
+    /// [`Self::collect_body_within_cap`] at THIS transport's configured cap.
+    ///
+    /// The seam the `subscriptions/listen` client uses for the ONE collected-body
+    /// read that lives outside this module: `open_event_stream`'s non-stream
+    /// REJECTION path, which reads a peer-controlled error envelope off the same
+    /// response `post_streaming` returned. Routing it here rather than through a
+    /// bare `body.collect()` is what keeps "every one of this transport's
+    /// whole-body reads is capped" true (review CR-01, T-113-84) — and doing it
+    /// through the transport's own configured value means
+    /// [`Self::with_max_collected_body_bytes`] raises this cap too, rather than
+    /// leaving one read pinned to a constant a deployment cannot move.
+    pub(crate) async fn collect_capped_body(
+        &self,
+        response: HyperResponse<hyper::body::Incoming>,
+    ) -> Result<Bytes> {
+        Self::collect_body_within_cap(response, self.max_collected_body_bytes).await
+    }
+
     /// Whether this connection speaks the v2 (`2026-07-28`) wire contract.
     ///
     /// See [`Self::v2_mode`] for why this is not derived from
