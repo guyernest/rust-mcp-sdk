@@ -34,17 +34,25 @@
 //! Two semantically different errors intentionally share the number `-32002`
 //! and are represented here as two separately-named constants:
 //!
-//! - [`V1_TASK_PENDING`] — the FROZEN v1 task-pending code. Its call sites are
-//!   `src/server/core.rs` (server-not-initialized) and
+//! - [`V1_TASK_PENDING`] — the FROZEN **v1-ONLY** task-pending code. Its call
+//!   sites are `src/server/core.rs` (server-not-initialized) and
 //!   `src/server/task_dispatch.rs` (task result not yet available), locked by
 //!   the `pending_tasks_result_preserves_minus_32002` regression test. This
 //!   value and its semantics MUST NOT be reconciled with the spec's
 //!   resource-not-found rename.
 //! - [`UNSUPPORTED_CAPABILITY`] — the capability-unsupported semantic that
-//!   [`crate::error::ErrorCode`] already carries at `-32002`.
+//!   [`crate::error::ErrorCode`] already carries at `-32002`. It has NO emission
+//!   site at all.
 //!
 //! The numeric collision of these two distinct meanings is preserved by name,
 //! never "fixed".
+//!
+//! **Protocol version 2026-07-28 MUST NOT emit `-32002`** (nor `-32042`) —
+//! `docs/specification/draft/basic/index.mdx` § Error Codes, added to the draft
+//! after the `2026-07-28-RC` tag; Finding 11 of `113-SPEC-RECHECK-ADDENDUM-2026-07-26.md`.
+//! Both `V1_TASK_PENDING` call sites are era-guarded; see that constant's
+//! rustdoc for the guard each one carries and for the tripwire that enforces
+//! them.
 
 // ---------------------------------------------------------------------------
 // Standard JSON-RPC 2.0 error codes.
@@ -80,17 +88,59 @@ pub const REQUEST_TIMEOUT: i32 = -32001;
 /// [`crate::error::ErrorCode::UNSUPPORTED_CAPABILITY`]. This intentionally
 /// shares the number `-32002` with [`V1_TASK_PENDING`] but is a DIFFERENT
 /// meaning — the two are kept distinct by name and are NOT reconciled.
+///
+/// **This name has NO emission site.** Nothing in compiled `src/` ever writes it
+/// onto a wire: it is declared here, re-declared once as the delegating
+/// associated const `ErrorCode::UNSUPPORTED_CAPABILITY`, and used nowhere. That
+/// is the fact that makes it safe despite squatting on a number protocol version
+/// 2026-07-28 MUST NOT emit, and it was previously written down nowhere.
+/// `unsupported_capability_is_declared_twice_and_emitted_never` in
+/// `tests/v2_prohibited_error_codes.rs` measures it; adding a use of this name
+/// fails that test until the new site carries an era guard.
 pub const UNSUPPORTED_CAPABILITY: i32 = -32002;
 
-/// Frozen v1 task-pending code (`-32002`).
+/// Frozen **v1-ONLY** task-pending code (`-32002`).
 ///
-/// Re-exports the FROZEN task-pending literal verbatim. Call sites:
-/// `src/server/core.rs` (server-not-initialized) and
-/// `src/server/task_dispatch.rs` (task result not yet available). Locked by the
-/// `pending_tasks_result_preserves_minus_32002` regression test. This value and
-/// its semantics MUST NOT change and MUST NOT be reconciled with the spec's
+/// # The value is FROZEN and v1-only
+///
+/// Re-exports the FROZEN task-pending literal verbatim. This value and its
+/// semantics MUST NOT change and MUST NOT be reconciled with the spec's
 /// resource-not-found rename or with [`UNSUPPORTED_CAPABILITY`] (a different
 /// meaning that squats on the same number).
+///
+/// # Protocol version 2026-07-28 MUST NOT emit it
+///
+/// > Implementations of this protocol version **MUST NOT** emit these codes:
+/// > `-32002` … `-32042`.
+///
+/// — `docs/specification/draft/basic/index.mdx` § Error Codes, a section that is
+/// ABSENT at the `2026-07-28-RC` tag and was added to the draft afterwards.
+/// Recorded as Finding 11 of
+/// `.planning/phases/113-stateless-http-multi-round-trip-elicitation/113-SPEC-RECHECK-ADDENDUM-2026-07-26.md`.
+/// This is an INDEPENDENT, semantics-agnostic prohibition on the NUMBER; it does
+/// not contradict the phase's `-32002`→`-32602` conclusion, which concerned
+/// resource-not-found SEMANTICS.
+///
+/// # Call sites, and the era guard each one carries
+///
+/// Both sites were commented as v1-scoped and neither had been traced.
+/// `tests/v2_prohibited_error_codes.rs` traced both BY EXECUTION and found both
+/// v2-reachable, so both now carry a named era predicate:
+///
+/// | Call site | Guard |
+/// |---|---|
+/// | `src/server/core.rs` — server-not-initialized | `v1_initialize_gate_applies` — v2 has no `initialize` handshake at all (HTTP-01), so the gate is skipped rather than re-coded |
+/// | `src/server/task_dispatch.rs` — `tasks/result` pending | `is_v1_task_era` — on v2 the tasks surface is an un-negotiated extension, so that branch answers `METHOD_NOT_FOUND` |
+///
+/// # The tests that enforce this
+///
+/// * `pending_tasks_result_preserves_minus_32002` locks the v1 wire value.
+/// * `tests/v2_prohibited_error_codes.rs` holds the executed v2 probes, the v1
+///   negative controls, and the source tripwire: adding a `V1_TASK_PENDING`
+///   emission site anywhere in compiled `src/` fails
+///   `every_v1_task_pending_site_is_allowlisted_and_era_guarded` until the site
+///   is allowlisted with the era guard that keeps it off the v2 path, and
+///   deleting an existing guard fails it too.
 pub const V1_TASK_PENDING: i32 = -32002;
 
 /// Authentication required — the request must be authenticated.

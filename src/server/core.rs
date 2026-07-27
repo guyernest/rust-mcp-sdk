@@ -2945,14 +2945,20 @@ impl ServerCore {
                 }
             },
             Request::Client(ref boxed_req) => {
-                // Check if server is initialized for server requests (skip in stateless mode)
-                // Stateless mode is for serverless deployments where each request may create
-                // a fresh server instance (AWS Lambda, Cloudflare Workers, etc.)
-                if !self.stateless_mode && !self.is_initialized().await {
+                // Check if server is initialized for server requests (skip in stateless mode
+                // and on v2, which has no `initialize` handshake at all — see
+                // `v1_initialize_gate_applies`).
+                if v1_initialize_gate_applies(
+                    self.stateless_mode,
+                    protocol_context.as_ref().map(|ctx| ctx.era),
+                ) && !self.is_initialized().await
+                {
                     return Self::error_response(
                         id,
                         // FROZEN wire value -32002 (byte-identical); read from the
-                        // centralized table by name (Pitfall 6).
+                        // centralized table by name (Pitfall 6). Unreachable on v2
+                        // by the predicate above, which is what keeps this
+                        // spec-prohibited code off the v2 wire (Finding 11).
                         crate::types::protocol::error_codes::V1_TASK_PENDING,
                         "Server not initialized. Call initialize first.".to_string(),
                     );
@@ -3153,7 +3159,12 @@ impl ServerCore {
                     | ClientRequest::TasksList(_)
                     | ClientRequest::TasksCancel(_)) => {
                         self.task_dispatch()
-                            .route_tasks_endpoint(id, request, auth_context.as_ref())
+                            .route_tasks_endpoint(
+                                id,
+                                request,
+                                auth_context.as_ref(),
+                                protocol_context.as_ref().map(|ctx| ctx.era),
+                            )
                             .await
                     },
                     _ => Self::error_response(
@@ -3341,6 +3352,50 @@ pub(crate) fn resolve_ingress_protocol_context(
     }
     let meta = extract_request_meta_value(request);
     crate::types::protocol::context::resolve_protocol_context(accept_list, meta.as_ref())
+}
+
+/// The pure initialize-gate rule: must THIS request have been preceded by an
+/// `initialize` handshake?
+///
+/// | `stateless_mode` | `era`           | result  | why |
+/// |------------------|-----------------|---------|-----|
+/// | `false`          | `Some(Era::V2)` | `false` | v2 is handshake-free by design (HTTP-01) |
+/// | `false`          | `Some(Era::V1)` | `true`  | v1 lifecycle is untouched |
+/// | `false`          | `None`          | `true`  | not opted into v2 → zero era code, v1 path unchanged (D-04) |
+/// | `true`           | anything        | `false` | an explicitly stateless server never had a handshake to demand |
+///
+/// # Why the era clause exists (Finding 11 / HTTP-01)
+///
+/// The gate this predicate governs emits
+/// [`V1_TASK_PENDING`](crate::types::protocol::error_codes::V1_TASK_PENDING)
+/// (`-32002`), which protocol version 2026-07-28 **MUST NOT** emit
+/// (`docs/specification/draft/basic/index.mdx` § Error Codes). That site was
+/// commented as v1-scoped but had never had its v2 reachability traced;
+/// `tests/v2_prohibited_error_codes.rs` traced it BY EXECUTION and found it
+/// reachable, because [`ProtocolHandler`] is a PUBLIC trait and
+/// `ServerCore::handle_request` is not behind the streamable-HTTP transport whose
+/// era gating Phase 113 built.
+///
+/// The right answer is not a different error code. A v2 request carries no
+/// `initialize` handshake at all (HTTP-01), so demanding one before serving it is
+/// simply the wrong rule for that era — a different constant would still be
+/// refusing a conformant request.
+///
+/// `stateless_mode` is NOT an era decision: `ServerCoreBuilder::build` resolves it
+/// as `self.stateless_mode.unwrap_or_else(Self::detect_stateless_environment)`,
+/// i.e. by ENVIRONMENT auto-detection. That is exactly why it could not be relied
+/// on to keep `-32002` off the v2 wire, and why the era is a separate clause.
+///
+/// Split out as a named predicate — the shape
+/// [`sessions_active_for`](crate::server::streamable_http_server) established for
+/// the session decision — so a third caller cannot re-derive the rule
+/// differently.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) const fn v1_initialize_gate_applies(
+    stateless_mode: bool,
+    era: Option<crate::types::protocol::Era>,
+) -> bool {
+    !stateless_mode && !matches!(era, Some(crate::types::protocol::Era::V2))
 }
 
 /// Map a [`ProtocolNegotiationError`](crate::types::protocol::context::ProtocolNegotiationError)

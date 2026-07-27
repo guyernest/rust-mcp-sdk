@@ -46,6 +46,50 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+/// The refusal a v2 `tasks/result` receives when a store is configured but the
+/// task has no result yet.
+///
+/// Stated as a fact about what pmcp serves today, not as a promise: on protocol
+/// version 2026-07-28 the task lifecycle is an EXTENSION that has to be
+/// negotiated through the `capabilities.extensions` map, and pmcp advertises no
+/// `io.modelcontextprotocol/tasks` entry. An un-negotiated extension method is
+/// genuinely method-not-found.
+pub(crate) const V2_TASKS_NOT_NEGOTIATED: &str =
+    "tasks/result is not served on protocol version 2026-07-28: the tasks extension is not \
+     negotiated";
+
+/// Does this request run under the v1 task lifecycle?
+///
+/// | `era`           | result  | why |
+/// |-----------------|---------|-----|
+/// | `Some(Era::V1)` | `true`  | the v1 task lifecycle is untouched |
+/// | `None`          | `true`  | not opted into v2 → zero era code, v1 path unchanged (D-04) |
+/// | `Some(Era::V2)` | `false` | the v2 task surface is not implemented and not negotiated |
+///
+/// # Why this predicate exists (Finding 11)
+///
+/// The `tasks/result` pending refusal emits
+/// [`V1_TASK_PENDING`](crate::types::protocol::error_codes::V1_TASK_PENDING)
+/// (`-32002`), which protocol version 2026-07-28 **MUST NOT** emit
+/// (`docs/specification/draft/basic/index.mdx` § Error Codes). That site *looked*
+/// v1-scoped — this module contains no era gating at all — but
+/// `tests/v2_prohibited_error_codes.rs` drove a real v2 HTTP `tasks/result` at it
+/// and read `-32002` off the response. It is reachable because the HTTP ingress
+/// resolves the era from `params._meta` on the RAW body, so a `tasks/result`
+/// arrives classified v2 even though the typed
+/// [`GetTaskPayloadRequest`](crate::types::tasks::GetTaskPayloadRequest) has no
+/// `_meta` field for it to ride on.
+///
+/// # What this predicate deliberately does NOT do
+///
+/// It gates ONLY the `-32002` emission. `tasks/get`, `tasks/list` and
+/// `tasks/cancel` are unchanged on every era: the real v2 task semantics are
+/// owned by Phase 114 (requirement TASK-03), and re-deciding them here would be a
+/// redesign rather than the removal of a prohibited wire value.
+pub(crate) const fn is_v1_task_era(era: Option<crate::types::protocol::Era>) -> bool {
+    !matches!(era, Some(crate::types::protocol::Era::V2))
+}
+
 /// Build the default server-level `tasks` capability advertised when a task
 /// backend (a [`TaskStore`] or a [`TaskRouter`]) is present.
 ///
@@ -544,12 +588,13 @@ impl TaskDispatch<'_> {
     /// never a hard error when a router can serve it. When the store has no result
     /// and NO router is configured, returns the SPECIFIED "task not completed"
     /// error (`-32002`), distinct from the truly-no-backend `-32601` (FROZEN by
-    /// Phase 101; T-102-03).
+    /// Phase 101; T-102-03) — **on v1 only**; see [`is_v1_task_era`].
     pub(crate) async fn handle_tasks_result(
         &self,
         id: RequestId,
         params: &crate::types::tasks::GetTaskPayloadRequest,
         auth_context: Option<&AuthContext>,
+        era: Option<crate::types::protocol::Era>,
     ) -> JSONRPCResponse {
         let owner_id = self
             .resolve_owner(auth_context)
@@ -596,21 +641,27 @@ impl TaskDispatch<'_> {
 
         // No router: distinguish "store exists but task not completed yet"
         // (specified error) from "no task backend at all".
-        if self.task_store.is_some() {
-            error_response(
+        match (self.task_store.is_some(), is_v1_task_era(era)) {
+            (true, true) => error_response(
                 id,
                 // FROZEN wire value -32002 (byte-identical); read by name from the
                 // centralized table (Pitfall 6). The
                 // pending_tasks_result_preserves_minus_32002 test is the guard.
+                // Unreachable on v2 by the arm below, which is what keeps this
+                // spec-prohibited code off the v2 wire (Finding 11).
                 crate::types::protocol::error_codes::V1_TASK_PENDING,
                 "task result not available: task not completed".to_string(),
-            )
-        } else {
-            error_response(
+            ),
+            (true, false) => error_response(
+                id,
+                crate::types::protocol::error_codes::METHOD_NOT_FOUND,
+                V2_TASKS_NOT_NEGOTIATED.to_string(),
+            ),
+            (false, _) => error_response(
                 id,
                 crate::types::protocol::error_codes::METHOD_NOT_FOUND,
                 "tasks/result not supported".to_string(),
-            )
+            ),
         }
     }
 
@@ -752,16 +803,24 @@ impl TaskDispatch<'_> {
     /// helpers and `TasksResult` to [`Self::handle_tasks_result`]. Non-`tasks/*`
     /// variants return the FROZEN `-32601 "Method not supported"` (callers only
     /// pass `tasks/*` variants here).
+    ///
+    /// `era` is the ALREADY-RESOLVED
+    /// [`ProtocolContext::era`](crate::types::protocol::ProtocolContext) being
+    /// CONSUMED here — this module never runs an era resolver of its own. It is
+    /// read by exactly one branch, the `tasks/result` pending refusal; see
+    /// [`is_v1_task_era`].
     pub(crate) async fn route_tasks_endpoint(
         &self,
         id: RequestId,
         request: &ClientRequest,
         auth_context: Option<&AuthContext>,
+        era: Option<crate::types::protocol::Era>,
     ) -> JSONRPCResponse {
         match request {
             ClientRequest::TasksGet(params) => self.route_tasks_get(id, params, auth_context).await,
             ClientRequest::TasksResult(params) => {
-                self.handle_tasks_result(id, params, auth_context).await
+                self.handle_tasks_result(id, params, auth_context, era)
+                    .await
             },
             ClientRequest::TasksList(params) => {
                 self.route_tasks_list(id, params, auth_context).await

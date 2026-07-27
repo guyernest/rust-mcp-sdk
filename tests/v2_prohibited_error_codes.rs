@@ -535,6 +535,23 @@ async fn site_b_v2_http_request_must_not_elicit_a_prohibited_code() {
          was {}",
         probe.raw
     );
+    // And the replacement answer, pinned. `METHOD_NOT_FOUND` is the truthful one:
+    // on v2 the task lifecycle is an EXTENSION that must be negotiated through
+    // the `capabilities.extensions` map, and pmcp advertises no
+    // `io.modelcontextprotocol/tasks` entry (TASK-01, Phase 114, still open).
+    assert_eq!(
+        code,
+        Some(i64::from(
+            pmcp::types::protocol::error_codes::METHOD_NOT_FOUND
+        )),
+        "body was {}",
+        probe.raw
+    );
+    assert!(
+        http_error_message(&probe).is_some_and(|m| m.contains("not negotiated")),
+        "the v2 refusal must say WHY, not just refuse. body was {}",
+        probe.raw
+    );
 }
 
 // ===========================================================================
