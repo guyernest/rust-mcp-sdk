@@ -1449,7 +1449,8 @@ mod tests {
 
         let codec = core.request_state_codec().expect("a v2 core has a codec");
         let params = serde_json::json!({ "name": "t", "arguments": { "a": 1 } });
-        let binding = RequestBinding::from_request("alice", "tools/call", &params);
+        let binding = RequestBinding::from_request("alice", "tools/call", &params)
+            .expect("a two-level fixture is far inside the canonical depth cap");
         let token = codec
             .mint(&serde_json::json!({ "step": 1 }), &binding, 0)
             .expect("mint");

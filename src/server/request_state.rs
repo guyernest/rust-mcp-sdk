@@ -85,6 +85,7 @@
 #![allow(clippy::redundant_pub_crate)]
 
 use crate::error::{Error, Result};
+use crate::types::mrtr::CanonicalDepthExceeded;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use ring::aead::{Aad, LessSafeKey, Nonce, UnboundKey, CHACHA20_POLY1305, NONCE_LEN};
 use serde::{Deserialize, Serialize};
@@ -517,11 +518,17 @@ pub(crate) struct Continuation {
 ///
 /// The three bindings are exactly the spec's replay-prevention clauses:
 ///
-/// | Clause | Binding |
-/// |--------|---------|
-/// | 5a — authenticated principal | `principal` (from `AuthContext::subject`) |
-/// | 5b — short expiry | the ttl baked into [`Continuation::exp`] |
-/// | 5c — identifier for the originating request | `method` + `param_digest` |
+/// | Clause | Binding | Enforced or refused |
+/// |--------|---------|---------------------|
+/// | 5a — authenticated principal | `principal` (from `AuthContext::subject`) | enforced |
+/// | 5b — short expiry | the ttl baked into [`Continuation::exp`] | enforced |
+/// | 5c — identifier for the originating request | `method` + `param_digest` | enforced, or the request is REFUSED |
+///
+/// The 5c row is a two-state row on purpose (D-113-M). `param_digest` cannot always
+/// be computed: params nested past the canonicalizer's depth cap have no digest that
+/// identifies them uniquely. There is no third state in which a binding exists with
+/// a digest that does not identify its request — [`Self::from_request`] returns
+/// `Err` instead, and its callers refuse.
 #[derive(Debug, Clone)]
 pub(crate) struct RequestBinding<'a> {
     /// The authenticated principal — `AuthContext::subject`, never a
@@ -535,16 +542,23 @@ pub(crate) struct RequestBinding<'a> {
 
 impl<'a> RequestBinding<'a> {
     /// Compose a binding from a live request.
+    ///
+    /// Fails with [`CanonicalDepthExceeded`] when the params nest past the
+    /// canonicalizer's depth cap and therefore have no digest that identifies THIS
+    /// request rather than a class of them (D-113-M). This is the ONLY constructor,
+    /// which is what forces every caller — mint site, verify site, test seam and
+    /// fuzz seam alike — to decide explicitly what an unidentifiable request means
+    /// to it, instead of inheriting a silently aliasing digest.
     pub(crate) fn from_request(
         principal: &'a str,
         method: &'a str,
         params: &serde_json::Value,
-    ) -> Self {
-        Self {
+    ) -> std::result::Result<Self, CanonicalDepthExceeded> {
+        Ok(Self {
             principal,
             method,
-            param_digest: crate::types::mrtr::salient_param_digest(method, params),
-        }
+            param_digest: crate::types::mrtr::salient_param_digest(method, params)?,
+        })
     }
 
     /// The AEAD additional authenticated data:
@@ -946,7 +960,15 @@ pub mod fuzz_support {
     pub const VERDICT_UNKNOWN_KEY: u8 = 2;
     /// Discriminant for [`super::Verdict::AuthFailed`].
     pub const VERDICT_AUTH_FAILED: u8 = 3;
-    /// The codec itself could not be constructed (never expected).
+    /// No verdict could be reached: the codec could not be constructed, or the
+    /// request could not be BOUND (its params exceed the canonicalization depth
+    /// cap, D-113-M). Neither is expected for this target's FIXED params.
+    ///
+    /// Deliberately an existing discriminant rather than a new one. The fuzz
+    /// target's invariant is "never `VERDICT_OK` for input `mint` did not produce";
+    /// both conditions are "no verification happened at all", so folding them
+    /// together cannot mask an `Ok`, and adding a discriminant would invalidate
+    /// every archived crash artifact's expected output.
     pub const VERDICT_UNAVAILABLE: u8 = 4;
 
     /// A FIXED key, so the fuzz target is reproducible from a crash artifact.
@@ -969,7 +991,13 @@ pub mod fuzz_support {
         // reaches the decoder rather than being filtered out before it.
         let token = String::from_utf8_lossy(input);
         let params = serde_json::json!({ "name": "fuzz", "arguments": {} });
-        let binding = RequestBinding::from_request("fuzz-principal", "tools/call", &params);
+        // The params are FIXED and two levels deep, so the depth refusal is
+        // unreachable here — handled explicitly rather than unwrapped, because a
+        // panic in a fuzz target is a false crash artifact.
+        let Ok(binding) = RequestBinding::from_request("fuzz-principal", "tools/call", &params)
+        else {
+            return VERDICT_UNAVAILABLE;
+        };
         match codec.verify(&token, &binding) {
             Verdict::Ok(_) => VERDICT_OK,
             Verdict::Expired(_) => VERDICT_EXPIRED,
@@ -1439,12 +1467,16 @@ mod tests {
         serde_json::json!({ "name": "read_file", "arguments": { "path": path } })
     }
 
+    /// Every fixture in this module is shallow, so the depth refusal is
+    /// unreachable through this helper; the depth boundary itself is pinned in
+    /// `crate::types::mrtr`'s own tests, where the canonicalizer lives.
     fn binding<'a>(
         principal: &'a str,
         method: &'a str,
         params: &serde_json::Value,
     ) -> RequestBinding<'a> {
         RequestBinding::from_request(principal, method, params)
+            .expect("shallow fixture params bind")
     }
 
     #[test]
@@ -1895,7 +1927,8 @@ mod tests {
                 .expect("valid key")
                 .with_clock(Arc::new(FixedClock(1_000)));
             let params = serde_json::json!({ "name": "n", "arguments": { "k": "v" } });
-            let bind = RequestBinding::from_request(&principal, &method, &params);
+            let bind = RequestBinding::from_request(&principal, &method, &params)
+                .expect("a two-level fixture is far inside the canonical depth cap");
             let token = codec.mint(&state, &bind, round).expect("mint");
             match codec.verify(&token, &bind) {
                 Verdict::Ok(continuation) => {
@@ -1919,8 +1952,10 @@ mod tests {
         ) {
             let params_a = serde_json::json!({ "name": "n", "arguments": { "k": arg_a } });
             let params_b = serde_json::json!({ "name": "n", "arguments": { "k": arg_b } });
-            let bind_a = RequestBinding::from_request(&principal_a, &method_a, &params_a);
-            let bind_b = RequestBinding::from_request(&principal_b, &method_b, &params_b);
+            let bind_a = RequestBinding::from_request(&principal_a, &method_a, &params_a)
+                .expect("a two-level fixture is far inside the canonical depth cap");
+            let bind_b = RequestBinding::from_request(&principal_b, &method_b, &params_b)
+                .expect("a two-level fixture is far inside the canonical depth cap");
             // Only interesting when the bindings genuinely differ.
             proptest::prop_assume!(
                 principal_a != principal_b || method_a != method_b || arg_a != arg_b
@@ -1941,7 +1976,8 @@ mod tests {
                 .expect("valid key")
                 .with_clock(Arc::new(FixedClock(1_000)));
             let params = serde_json::json!({ "name": "n", "arguments": {} });
-            let bind = RequestBinding::from_request("alice", "tools/call", &params);
+            let bind = RequestBinding::from_request("alice", "tools/call", &params)
+                .expect("a two-level fixture is far inside the canonical depth cap");
             // A token this codec did not mint must never verify Ok.
             proptest::prop_assert!(!matches!(codec.verify(&token, &bind), Verdict::Ok(_)));
         }

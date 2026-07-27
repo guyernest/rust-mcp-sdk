@@ -782,7 +782,20 @@ pub(crate) const MAX_INPUT_RESPONSES_TOTAL_BYTES: usize = 262_144;
 pub(crate) const MAX_INPUT_RESPONSE_DEPTH: usize = 32;
 
 /// Upper bound on the nesting depth the canonicalizer will descend for the AAD
-/// digest before emitting a cap marker (T-113-14).
+/// digest before REFUSING to canonicalize (T-113-14, D-113-M).
+///
+/// The cap exists for STACK SAFETY: [`write_canonical`] is recursive over
+/// peer-chosen JSON, and `serde_json`'s own default recursion limit is 128, so a
+/// 128-deep `arguments` is reachable over the wire. That reason is unchanged.
+///
+/// What changed (D-113-M) is the behaviour AT the cap. It used to substitute a
+/// fixed marker string for everything below, which made the digest identify an
+/// EQUIVALENCE CLASS of requests instead of one request: any two `tools/call`s
+/// agreeing to this depth hashed identically, so a `requestState` minted for one
+/// verified against the other. The cap now returns
+/// [`CanonicalDepthExceeded`], and the callers refuse the request — which keeps
+/// BOTH properties closed, rather than trading the aliasing hole for the
+/// unbounded-recursion one that removing the cap would reintroduce.
 const MAX_CANONICAL_DEPTH: usize = 64;
 
 /// The MRTR fields carried on a client→server request's top-level `params`.
@@ -1036,15 +1049,65 @@ pub(crate) fn splice_mrtr_params(params: &mut Value, mrtr: &MrtrRequestParams) {
 // Originating-request binding for the AEAD AAD (T-113-03).
 // ===========================================================================
 
+/// The params nest deeper than [`MAX_CANONICAL_DEPTH`], so no AAD can be computed
+/// for them (D-113-M).
+///
+/// # Why this is an ERROR and not a fallback value
+///
+/// The digest is the sole enforcement of the spec's replay-prevention clause 5c —
+/// "an identifier for the originating request … rejecting state presented on a
+/// request that does not match". A request that cannot be canonicalized cannot be
+/// IDENTIFIED, and a request that cannot be identified must not be bound to a
+/// continuation: any fallback value, marker or default would make one digest stand
+/// for every request that reached the cap, which is exactly the aliasing D-113-M
+/// records. Refusing is the only answer that keeps clause 5c true for every request
+/// that can mint or present a token.
+///
+/// Deliberately `pub(crate)`: the milestone is additive-2.x, and a new `pub` type
+/// (or a new variant on a `pub` enum) would be a semver event for a condition no
+/// caller outside this crate can act on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct CanonicalDepthExceeded {
+    /// The depth at which the canonicalizer stopped.
+    pub depth: usize,
+    /// The bound that was exceeded — [`MAX_CANONICAL_DEPTH`].
+    pub max: usize,
+}
+
+impl std::fmt::Display for CanonicalDepthExceeded {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Names the BOUND only, never any attacker-controlled content — the same
+        // discipline `MrtrParseError`'s `Display` follows.
+        write!(
+            f,
+            "request params exceed the {}-level canonicalization depth limit",
+            self.max
+        )
+    }
+}
+
+impl std::error::Error for CanonicalDepthExceeded {}
+
 /// Append a canonical, key-sorted rendering of `value` to `out`.
 ///
 /// `serde_json`'s `preserve_order` feature is enabled crate-wide, so a plain
 /// `to_string` would leak the client's key INSERTION order into the digest and make
 /// two logically identical requests produce different AADs. Sorting fixes that.
-fn write_canonical(value: &Value, depth: usize, out: &mut String) {
+///
+/// Fallible past [`MAX_CANONICAL_DEPTH`]: the recursion REFUSES rather than
+/// substituting a placeholder, because a placeholder collapses every request below
+/// the cap onto one digest (D-113-M). `out` may hold a partial rendering when this
+/// returns `Err`; every caller discards it.
+fn write_canonical(
+    value: &Value,
+    depth: usize,
+    out: &mut String,
+) -> Result<(), CanonicalDepthExceeded> {
     if depth > MAX_CANONICAL_DEPTH {
-        out.push_str("\"__mrtr_depth_capped__\"");
-        return;
+        return Err(CanonicalDepthExceeded {
+            depth,
+            max: MAX_CANONICAL_DEPTH,
+        });
     }
     match value {
         Value::Object(entries) => {
@@ -1057,7 +1120,7 @@ fn write_canonical(value: &Value, depth: usize, out: &mut String) {
                 }
                 out.push_str(&Value::String((*key).clone()).to_string());
                 out.push(':');
-                write_canonical(&entries[key.as_str()], depth + 1, out);
+                write_canonical(&entries[key.as_str()], depth + 1, out)?;
             }
             out.push('}');
         },
@@ -1067,12 +1130,13 @@ fn write_canonical(value: &Value, depth: usize, out: &mut String) {
                 if index > 0 {
                     out.push(',');
                 }
-                write_canonical(item, depth + 1, out);
+                write_canonical(item, depth + 1, out)?;
             }
             out.push(']');
         },
         other => out.push_str(&other.to_string()),
     }
+    Ok(())
 }
 
 /// The per-method WHITELIST of digest-salient params.
@@ -1096,15 +1160,32 @@ fn salient_params(method: &str, params: &Value) -> Value {
 
 /// SHA-256 over the method name and its canonicalized salient params.
 ///
-/// This is the third replay binding the spec requires alongside the authenticated
-/// principal and the TTL: "an identifier for the originating request, e.g. the
-/// method name and a digest of its salient parameters, rejecting state presented on
-/// a request that does not match" (replay-prevention clause 5c). It is fed to the
-/// `requestState` AEAD as additional authenticated data, so a token minted for one
-/// tool + arguments cannot verify against another (T-113-03).
-pub(crate) fn salient_param_digest(method: &str, params: &Value) -> [u8; 32] {
+/// This is the SOLE enforcement of the spec's replay-prevention clause 5c: "an
+/// identifier for the originating request, e.g. the method name and a digest of its
+/// salient parameters, rejecting state presented on a request that does not match".
+/// It is fed to the `requestState` AEAD as additional authenticated data, so a token
+/// minted for one tool + arguments cannot verify against another (T-113-03). Nothing
+/// else in the mint/verify path distinguishes two requests by their params — if this
+/// digest cannot tell them apart, neither can the server.
+///
+/// # Why it is fallible (D-113-M)
+///
+/// Before this was a `Result`, params past [`MAX_CANONICAL_DEPTH`] were digested
+/// with a fixed marker substituted for everything below the cap. That digest
+/// identified a whole EQUIVALENCE CLASS of requests rather than one request: any
+/// two `tools/call`s agreeing down to the cap produced the same 32 bytes, the same
+/// AAD, and therefore mutual acceptance of each other's continuations — clause 5c
+/// silently unenforced for every request deep enough to reach the cap.
+///
+/// The cap is RETAINED for the stack-safety reason it was introduced for
+/// (T-113-14); only the behaviour at it changed, from aliasing to refusing. Callers
+/// must fail the request closed — see `mrtr_ingest` and `mrtr_egress`.
+pub(crate) fn salient_param_digest(
+    method: &str,
+    params: &Value,
+) -> Result<[u8; 32], CanonicalDepthExceeded> {
     let mut canonical = String::new();
-    write_canonical(&salient_params(method, params), 0, &mut canonical);
+    write_canonical(&salient_params(method, params), 0, &mut canonical)?;
     let mut hasher = Sha256::new();
     hasher.update(method.as_bytes());
     hasher.update([0u8]);
@@ -1112,7 +1193,7 @@ pub(crate) fn salient_param_digest(method: &str, params: &Value) -> [u8; 32] {
     let output = hasher.finalize();
     let mut digest = [0u8; 32];
     digest.copy_from_slice(&output);
-    digest
+    Ok(digest)
 }
 
 #[cfg(test)]
@@ -1613,6 +1694,11 @@ mod tests {
     // AAD digest
     // -----------------------------------------------------------------
 
+    /// The digest of `params`, which every fixture below is shallow enough to have.
+    fn digest(method: &str, params: &Value) -> [u8; 32] {
+        salient_param_digest(method, params).expect("the fixture is inside the depth cap")
+    }
+
     #[test]
     fn salient_digest_is_stable_across_key_insertion_order() {
         let mut first = serde_json::Map::new();
@@ -1624,8 +1710,8 @@ mod tests {
         second.insert("name".to_string(), json!("search"));
 
         assert_eq!(
-            salient_param_digest("tools/call", &Value::Object(first)),
-            salient_param_digest("tools/call", &Value::Object(second))
+            digest("tools/call", &Value::Object(first)),
+            digest("tools/call", &Value::Object(second))
         );
     }
 
@@ -1635,16 +1721,16 @@ mod tests {
         let other_name = json!({ "name": "delete", "arguments": { "q": "a" } });
         let other_args = json!({ "name": "search", "arguments": { "q": "b" } });
         assert_ne!(
-            salient_param_digest("tools/call", &base),
-            salient_param_digest("tools/call", &other_name)
+            digest("tools/call", &base),
+            digest("tools/call", &other_name)
         );
         assert_ne!(
-            salient_param_digest("tools/call", &base),
-            salient_param_digest("tools/call", &other_args)
+            digest("tools/call", &base),
+            digest("tools/call", &other_args)
         );
         assert_ne!(
-            salient_param_digest("resources/read", &json!({ "uri": "mem://a" })),
-            salient_param_digest("resources/read", &json!({ "uri": "mem://b" }))
+            digest("resources/read", &json!({ "uri": "mem://a" })),
+            digest("resources/read", &json!({ "uri": "mem://b" }))
         );
     }
 
@@ -1658,17 +1744,14 @@ mod tests {
             "inputResponses": { "k": { "action": "accept" } },
             "requestState": "token"
         });
-        assert_eq!(
-            salient_param_digest("tools/call", &bare),
-            salient_param_digest("tools/call", &noisy)
-        );
+        assert_eq!(digest("tools/call", &bare), digest("tools/call", &noisy));
     }
 
     #[test]
     fn salient_digest_of_an_ineligible_method_is_the_empty_object_digest() {
         assert_eq!(
-            salient_param_digest("tools/list", &json!({ "name": "x", "cursor": "y" })),
-            salient_param_digest("tools/list", &json!({}))
+            digest("tools/list", &json!({ "name": "x", "cursor": "y" })),
+            digest("tools/list", &json!({}))
         );
     }
 
@@ -1676,9 +1759,246 @@ mod tests {
     fn salient_digest_binds_the_method_name() {
         let params = json!({ "name": "search", "arguments": {} });
         assert_ne!(
-            salient_param_digest("tools/call", &params),
-            salient_param_digest("prompts/get", &params)
+            digest("tools/call", &params),
+            digest("prompts/get", &params)
         );
+    }
+
+    // -----------------------------------------------------------------
+    // The canonicalization depth cap (D-113-M, T-113-14).
+    // -----------------------------------------------------------------
+
+    /// A value nested exactly `levels` objects deep: `levels == 0` is the bare
+    /// leaf, and the leaf of `nest(k)` sits at canonical depth `k`.
+    fn nest(levels: usize, leaf: Value) -> Value {
+        let mut value = leaf;
+        for _ in 0..levels {
+            value = json!({ "n": value });
+        }
+        value
+    }
+
+    /// `tools/call` params whose `arguments` nest `levels` deep.
+    ///
+    /// The whitelist wrapper `salient_params` builds is canonical depth 0 and the
+    /// `arguments` VALUE is depth 1, so the leaf here lands at depth `levels + 1`.
+    fn deep_call_params(levels: usize, leaf: Value) -> Value {
+        json!({ "name": "search", "arguments": nest(levels, leaf) })
+    }
+
+    /// THE D-113-M ALIASING REGRESSION.
+    ///
+    /// Two `tools/call`s identical down to the cap and differing below it used to
+    /// produce the SAME 32 bytes — the marker literal stood in for everything
+    /// below [`MAX_CANONICAL_DEPTH`], so the digest identified an equivalence
+    /// class of requests instead of one request, and a `requestState` minted for
+    /// either verified against the other. The measured collision was
+    /// `1bfce28e6995b41583047d92ab099f4b86329e5e2566ce1dc149655b555698f5` for
+    /// both.
+    ///
+    /// Both digests are now `Err`. Restoring the marker branch makes this test
+    /// fail with two equal digests, which is exactly the negative control.
+    #[test]
+    fn params_differing_only_below_the_depth_cap_can_never_share_a_digest() {
+        let a = deep_call_params(MAX_CANONICAL_DEPTH, json!("SECRET-A"));
+        let b = deep_call_params(MAX_CANONICAL_DEPTH, json!("SECRET-B"));
+        assert_ne!(a, b, "the fixtures must genuinely differ");
+
+        let digest_a = salient_param_digest("tools/call", &a);
+        let digest_b = salient_param_digest("tools/call", &b);
+        assert!(
+            digest_a.is_err() && digest_b.is_err(),
+            "over-deep params must be REFUSED, not digested: {digest_a:?} / {digest_b:?}"
+        );
+
+        // The sharper statement of the property the marker violated: DISTINCT
+        // canonicalizable params never share a digest. The named case is the pair
+        // from the old collision, lifted one level to fit inside the cap.
+        let shallow_a = deep_call_params(MAX_CANONICAL_DEPTH - 2, json!("SECRET-A"));
+        let shallow_b = deep_call_params(MAX_CANONICAL_DEPTH - 2, json!("SECRET-B"));
+        assert_ne!(
+            digest("tools/call", &shallow_a),
+            digest("tools/call", &shallow_b),
+            "the old collision pair, inside the cap, must digest DIFFERENTLY"
+        );
+    }
+
+    /// The boundary is exact, asserted on BOTH sides. An off-by-one here silently
+    /// narrows or widens what the server accepts on the wire.
+    #[test]
+    fn canonical_depth_boundary_admits_the_cap_and_refuses_one_past_it() {
+        let mut at_cap = String::new();
+        assert_eq!(
+            write_canonical(&nest(MAX_CANONICAL_DEPTH, json!("leaf")), 0, &mut at_cap),
+            Ok(()),
+            "a value whose leaf sits exactly AT the cap must canonicalize"
+        );
+        assert!(
+            at_cap.contains("leaf"),
+            "and must render the leaf: {at_cap}"
+        );
+
+        let mut past_cap = String::new();
+        assert_eq!(
+            write_canonical(
+                &nest(MAX_CANONICAL_DEPTH + 1, json!("leaf")),
+                0,
+                &mut past_cap
+            ),
+            Err(CanonicalDepthExceeded {
+                depth: MAX_CANONICAL_DEPTH + 1,
+                max: MAX_CANONICAL_DEPTH,
+            }),
+            "one level past the cap must REFUSE"
+        );
+    }
+
+    /// The same boundary as the wire sees it, through `salient_param_digest`.
+    ///
+    /// The whitelist wrapper costs one level, so `tools/call` `arguments` may nest
+    /// `MAX_CANONICAL_DEPTH - 1` objects and no more. This is the number a blast
+    /// radius statement is about.
+    #[test]
+    fn the_digest_boundary_accounts_for_the_salient_wrapper_level() {
+        assert!(
+            salient_param_digest(
+                "tools/call",
+                &deep_call_params(MAX_CANONICAL_DEPTH - 1, json!("leaf"))
+            )
+            .is_ok(),
+            "arguments nested MAX_CANONICAL_DEPTH - 1 deep must still bind"
+        );
+        assert!(
+            salient_param_digest(
+                "tools/call",
+                &deep_call_params(MAX_CANONICAL_DEPTH, json!("leaf"))
+            )
+            .is_err(),
+            "one deeper must be refused"
+        );
+    }
+
+    /// Arrays count toward the cap exactly as objects do — a nesting bound that
+    /// only saw one container kind would be trivially bypassed.
+    #[test]
+    fn arrays_count_toward_the_canonical_depth_cap() {
+        let mut value = json!("leaf");
+        for _ in 0..=MAX_CANONICAL_DEPTH {
+            value = json!([value]);
+        }
+        let mut out = String::new();
+        assert!(write_canonical(&value, 0, &mut out).is_err());
+    }
+
+    /// The `Display` impl names the BOUND and nothing attacker-controlled — the
+    /// same discipline `MrtrParseError` follows.
+    #[test]
+    fn canonical_depth_error_display_names_only_the_bound() {
+        let rendered = CanonicalDepthExceeded {
+            depth: 99,
+            max: MAX_CANONICAL_DEPTH,
+        }
+        .to_string();
+        assert!(rendered.contains(&MAX_CANONICAL_DEPTH.to_string()));
+        assert!(!rendered.contains("99"));
+    }
+
+    /// The two depth bounds are ORDERED, checked at compile time: the ingress
+    /// bound on `inputResponses` is the tighter one, so it can never be the thing
+    /// that saves `arguments` from the canonicalizer.
+    const _: () = assert!(MAX_INPUT_RESPONSE_DEPTH < MAX_CANONICAL_DEPTH);
+
+    /// The DEPTH ASYMMETRY, pinned so the next reader sees why the canonical cap
+    /// is load-bearing rather than redundant.
+    ///
+    /// `inputResponses` entries are depth-bounded at INGRESS by
+    /// `check_input_response_bounds` — an over-deep entry never reaches dispatch.
+    /// `arguments` have no such ingress bound: the typed request carries whatever
+    /// the client sent, up to `serde_json`'s own 128-level recursion limit, and it
+    /// reaches the canonicalizer unfiltered. So for `arguments` the canonical cap
+    /// is not a second line of defence — it is the ONLY one, which is why what it
+    /// does at the bound is a security decision.
+    #[test]
+    fn input_responses_are_depth_bounded_at_ingress_but_arguments_are_not() {
+        // (a) inputResponses: refused before anything else looks at them.
+        let over_deep = nest(MAX_INPUT_RESPONSE_DEPTH + 4, json!("leaf"));
+        assert!(
+            matches!(
+                check_input_response_bounds("k", &over_deep),
+                Err(MrtrParseError::InputResponseTooDeep { .. })
+            ),
+            "an over-deep inputResponses entry is rejected at ingress"
+        );
+
+        // (b) arguments at the SAME depth sail past every ingress bound — the
+        // parse accepts them and reports no MRTR field problem at all.
+        let params = deep_call_params(MAX_INPUT_RESPONSE_DEPTH + 4, json!("leaf"));
+        assert!(
+            extract_mrtr_params(&params).is_ok(),
+            "deep arguments are not bounded at ingress"
+        );
+        // ...and are still comfortably canonicalizable, because the canonical cap
+        // is the LATER, larger bound (ordered by the `const _` assertion above).
+        assert!(salient_param_digest("tools/call", &params).is_ok());
+    }
+
+    proptest::proptest! {
+        /// Within the cap, the digest is (a) stable under key REORDERING and
+        /// (b) different for structurally different values.
+        ///
+        /// (b) is asserted, not proven: two distinct canonical strings could in
+        /// principle share a SHA-256 image. The honest claim is that no such pair
+        /// is known and none is found here — which is a far stronger position than
+        /// the marker left the code in, where the collisions were CONSTRUCTIBLE by
+        /// anyone who could count to 64.
+        #[test]
+        fn distinct_params_within_the_cap_digest_distinctly(
+            left in arb_shallow_json(),
+            right in arb_shallow_json(),
+        ) {
+            let left_params = json!({ "name": "search", "arguments": left });
+            let right_params = json!({ "name": "search", "arguments": right });
+
+            let left_digest = salient_param_digest("tools/call", &left_params)
+                .expect("a bounded-depth value canonicalizes");
+            let right_digest = salient_param_digest("tools/call", &right_params)
+                .expect("a bounded-depth value canonicalizes");
+
+            // (a) reordering the top-level keys cannot move the digest.
+            let reordered = json!({ "arguments": left_params["arguments"], "name": "search" });
+            proptest::prop_assert_eq!(
+                salient_param_digest("tools/call", &reordered)
+                    .expect("a bounded-depth value canonicalizes"),
+                left_digest
+            );
+
+            // (b) equal values <=> equal digests, within SHA-256's collision
+            // resistance.
+            if left_params["arguments"] == right_params["arguments"] {
+                proptest::prop_assert_eq!(left_digest, right_digest);
+            } else {
+                proptest::prop_assert_ne!(left_digest, right_digest);
+            }
+        }
+    }
+
+    /// Nested JSON comfortably inside [`MAX_CANONICAL_DEPTH`].
+    fn arb_shallow_json() -> impl proptest::strategy::Strategy<Value = Value> {
+        use proptest::prelude::*;
+        let leaf = prop_oneof![
+            Just(Value::Null),
+            any::<bool>().prop_map(Value::from),
+            any::<i32>().prop_map(Value::from),
+            "[a-z ]{0,8}".prop_map(Value::from),
+        ];
+        // 4 levels of recursion, so nothing generated here can reach the cap and
+        // the property is about the IN-CAP behaviour only.
+        leaf.prop_recursive(4, 24, 3, |inner| {
+            prop_oneof![
+                proptest::collection::vec(inner.clone(), 0..3).prop_map(Value::from),
+                proptest::collection::btree_map("[a-z]{1,4}", inner, 0..3).prop_map(|m| json!(m)),
+            ]
+        })
     }
 
     // -----------------------------------------------------------------

@@ -1771,8 +1771,17 @@ pub(crate) fn mrtr_ingest(inputs: &MrtrIngestInputs<'_>) -> MrtrIngest {
     let Some(codec) = inputs.codec else {
         return MrtrIngest::Inert;
     };
-    let binding =
-        crate::server::request_state::RequestBinding::from_request(principal, target.0, &target.1);
+    // TRANSITIONAL (D-113-M, task 1 of 2): fail closed on an unbindable request.
+    // Task 2 replaces this with the typed refusal, its own message constant and a
+    // `tracing::warn!`.
+    let Ok(binding) =
+        crate::server::request_state::RequestBinding::from_request(principal, target.0, &target.1)
+    else {
+        return MrtrIngest::Reject {
+            code: crate::types::protocol::error_codes::INVALID_PARAMS,
+            message: MRTR_REJECT_MESSAGE,
+        };
+    };
     route_mrtr_verdict(codec.verify(token, &binding), target.0)
 }
 
@@ -2366,8 +2375,12 @@ fn seal_input_required(
     let codec = inputs
         .codec
         .ok_or("this server has no requestState codec configured")?;
+    // TRANSITIONAL (D-113-M, task 1 of 2): fail closed rather than mint against a
+    // digest that does not identify this request. Task 2 gives it its own message
+    // and adds the egress-side refusal that makes this site unreachable.
     let binding =
-        crate::server::request_state::RequestBinding::from_request(principal, target.0, &target.1);
+        crate::server::request_state::RequestBinding::from_request(principal, target.0, &target.1)
+            .map_err(|_| "the originating request could not be canonicalized for binding")?;
     let token = codec
         .mint(&signal.continuation, &binding, next_round)
         .map_err(|_| "the requestState continuation could not be sealed")?;
@@ -4726,7 +4739,8 @@ mod tests {
             round: u8,
         ) -> String {
             let target = mrtr_binding_parts(request).expect("an MRTR-eligible request");
-            let binding = RequestBinding::from_request(principal, target.0, &target.1);
+            let binding = RequestBinding::from_request(principal, target.0, &target.1)
+                .expect("the fixture params are inside the canonical depth cap");
             codec.mint(state, &binding, round).expect("mint succeeds")
         }
 
@@ -5388,7 +5402,8 @@ mod tests {
                     ALICE,
                     target.as_ref().expect("eligible").0,
                     &target.as_ref().expect("eligible").1,
-                );
+                )
+                .expect("the fixture params are inside the canonical depth cap");
                 let crate::server::request_state::Verdict::Ok(continuation) =
                     codec.verify(token, &binding)
                 else {
@@ -5587,7 +5602,8 @@ mod tests {
                 let token = result_of(&response)["requestState"]
                     .as_str()
                     .expect("a token is minted");
-                let binding = RequestBinding::from_request(ALICE, target.0, &target.1);
+                let binding = RequestBinding::from_request(ALICE, target.0, &target.1)
+                    .expect("the fixture params are inside the canonical depth cap");
                 let crate::server::request_state::Verdict::Ok(continuation) =
                     codec.verify(token, &binding)
                 else {
@@ -5604,7 +5620,8 @@ mod tests {
                 let codec = codec(&KEY_A, 300);
                 let request = call_tool(json!({}));
                 let target = mrtr_binding_parts(&request).expect("eligible");
-                let binding = RequestBinding::from_request(ALICE, target.0, &target.1);
+                let binding = RequestBinding::from_request(ALICE, target.0, &target.1)
+                    .expect("the fixture params are inside the canonical depth cap");
                 let context = v2_context_all_caps();
 
                 let mut first = signalling_response();
@@ -5656,7 +5673,8 @@ mod tests {
                 let token = result_of(&admitted)["requestState"]
                     .as_str()
                     .expect("a token is minted one below the ceiling");
-                let binding = RequestBinding::from_request(ALICE, target.0, &target.1);
+                let binding = RequestBinding::from_request(ALICE, target.0, &target.1)
+                    .expect("the fixture params are inside the canonical depth cap");
                 let Verdict::Ok(continuation) = codec.verify(token, &binding) else {
                     panic!("the freshly minted token must verify");
                 };

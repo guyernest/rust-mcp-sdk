@@ -155,7 +155,9 @@ pub fn decode_mcp_name(raw: &str) -> Option<String> {
 /// A `ttl` of zero mints an ALREADY-EXPIRED token (`exp == now`), which is how a
 /// test exercises the expiry verdict deterministically instead of sleeping.
 ///
-/// Returns `None` only if the codec refuses the key or cannot seal the state.
+/// Returns `None` if the codec refuses the key, cannot seal the state, or cannot
+/// BIND the request — the last being params nested past the canonicalization depth
+/// cap, which the production mint path refuses for the same reason (D-113-M).
 #[cfg(all(feature = "streamable-http", not(target_arch = "wasm32")))]
 #[must_use]
 pub fn mint_request_state(
@@ -169,7 +171,8 @@ pub fn mint_request_state(
 ) -> Option<String> {
     let codec = crate::server::request_state::RequestStateCodec::new(key, ttl).ok()?;
     let binding =
-        crate::server::request_state::RequestBinding::from_request(principal, method, params);
+        crate::server::request_state::RequestBinding::from_request(principal, method, params)
+            .ok()?;
     codec.mint(state, &binding, round).ok()
 }
 
@@ -181,7 +184,8 @@ pub fn mint_request_state(
 /// D-15 expiry path must PRESERVE the round rather than reset it (T-113-49).
 ///
 /// Returns `None` for any verdict other than "authentic and live": an
-/// unknown key, a failed tag check, or an expired token all yield `None`.
+/// unknown key, a failed tag check, or an expired token all yield `None`, as does
+/// a request too deeply nested to bind (D-113-M).
 /// `params` follows the same rule as [`mint_request_state`].
 #[cfg(all(feature = "streamable-http", not(target_arch = "wasm32")))]
 #[must_use]
@@ -198,7 +202,8 @@ pub fn open_request_state(
     )
     .ok()?;
     let binding =
-        crate::server::request_state::RequestBinding::from_request(principal, method, params);
+        crate::server::request_state::RequestBinding::from_request(principal, method, params)
+            .ok()?;
     match codec.verify(token, &binding) {
         crate::server::request_state::Verdict::Ok(continuation) => {
             Some((continuation.state, continuation.round))
