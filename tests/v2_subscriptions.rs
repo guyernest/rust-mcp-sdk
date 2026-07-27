@@ -1031,13 +1031,13 @@ async fn unauthenticated_listen_still_serves_on_a_server_with_no_auth_provider()
 /// show them un-starved, not merely show the anonymous caller refused.
 #[tokio::test]
 async fn one_unauthenticated_caller_cannot_exhaust_the_global_listen_budget() {
-    let (addr, handle) = spawn(server_with_optional_auth()).await;
-
     // `MAX_LISTEN_STREAMS_TOTAL` is 64 and `pub(crate)`, so it is spelled out
     // here; the count deliberately EXCEEDS it, because a run that stopped at the
     // per-principal cap (4) would not reproduce the global exhaustion the defect
     // is about.
     const ATTEMPTS: i64 = 68;
+
+    let (addr, handle) = spawn(server_with_optional_auth()).await;
 
     // Held, not dropped: under the pre-fix behaviour these connections really do
     // occupy registry slots, and releasing them as we went would hide the
