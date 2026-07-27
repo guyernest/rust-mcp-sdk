@@ -39,7 +39,7 @@ use common::v2::{
     BearerSubjects, GreetingPrompt, SearchTool, FRAME_TIMEOUT, V1, V2,
 };
 use pmcp::server::Server;
-use pmcp::types::protocol::error_codes::{METHOD_NOT_FOUND, RATE_LIMITED};
+use pmcp::types::protocol::error_codes::{AUTHENTICATION_REQUIRED, METHOD_NOT_FOUND, RATE_LIMITED};
 use pmcp::types::protocol::ProtocolVersion;
 use pmcp::types::subscriptions::{
     advertises_subscriptions, ACKNOWLEDGED_METHOD, SUBSCRIPTION_ID_META_KEY,
@@ -127,6 +127,52 @@ fn server_with_two_principals() -> Server {
             ProtocolVersion(V2.to_string()),
         ])
         .auth_provider(BearerSubjects)
+        .tool("search", SearchTool)
+        .prompt("greeting", GreetingPrompt)
+        .build()
+        .expect("server builds")
+}
+
+/// An auth provider that ADMITS unauthenticated requests.
+///
+/// D-113-N's precondition is a server that HAS an auth provider AND lets an
+/// unauthenticated request through to dispatch. The shared harness's
+/// [`BearerSubjects`] cannot produce it: it returns `Err` for a missing token, so
+/// the transport answers `401` long before the listen route runs. So this suite
+/// constructs the precondition EXPLICITLY rather than hoping the shared fixture
+/// happens to have that shape.
+///
+/// `Ok(None)` for an absent token is a real and common configuration — optional
+/// auth, an anonymous read tier, a gateway that forwards claims only when it has
+/// them — and it is exactly the configuration on which the pre-fix route handed
+/// every unauthenticated caller a private, uncapped `anon#N`.
+struct OptionalBearer;
+
+#[async_trait::async_trait]
+impl pmcp::server::auth::AuthProvider for OptionalBearer {
+    async fn validate_request(
+        &self,
+        authorization_header: Option<&str>,
+    ) -> pmcp::Result<Option<pmcp::server::auth::AuthContext>> {
+        Ok(authorization_header
+            .and_then(|header| header.strip_prefix("Bearer "))
+            .filter(|subject| !subject.is_empty())
+            .map(pmcp::server::auth::AuthContext::new))
+    }
+}
+
+/// A v2 server advertising `tools.listChanged` whose auth provider ADMITS
+/// unauthenticated requests — the D-113-N configuration.
+fn server_with_optional_auth() -> Server {
+    Server::builder()
+        .name("v2-subscriptions-optional-auth")
+        .version("1.0.0")
+        .capabilities(advertising(Some("tools.listChanged")))
+        .with_supported_protocol_versions([
+            ProtocolVersion(V1.to_string()),
+            ProtocolVersion(V2.to_string()),
+        ])
+        .auth_provider(OptionalBearer)
         .tool("search", SearchTool)
         .prompt("greeting", GreetingPrompt)
         .build()
@@ -837,6 +883,206 @@ async fn disconnect_releases_registry_slot() {
 
     drop(held);
     handle.abort();
+}
+
+// ===========================================================================
+// D-113-N — the listen route agrees with the MRTR ingress about what an
+// unauthenticated caller is.
+// ===========================================================================
+
+/// An unauthenticated `subscriptions/listen` on an auth-configured server is
+/// REFUSED, not handed a private anonymous identity.
+///
+/// This is the row `resolve_mrtr_principal` has always answered `None` for
+/// (`(None, has_auth_provider = true)`), and which the listen route answered
+/// `Some(anon#N)` for until plan 113-23. Two ingress paths on ONE server
+/// disagreeing about identity is the defect; agreeing is the fix.
+#[tokio::test]
+async fn unauthenticated_listen_is_refused_on_an_auth_configured_server() {
+    let (addr, handle) = spawn(server_with_optional_auth()).await;
+
+    // No `authorization` header at all — the provider returns `Ok(None)`, so the
+    // request reaches the listen route with `auth_context: None`.
+    let mut stream = SseStream::open(
+        addr,
+        &listen_headers(),
+        &listen_body(json!(41), &json!({ "toolsListChanged": true })),
+    )
+    .await;
+
+    assert_eq!(
+        stream.status, 200,
+        "-32003 is DELIBERATELY unremapped: it is not in v2_status_for_code's \
+         400 arm, so it answers at HTTP 200 with a JSON-RPC error body exactly \
+         like the three RATE_LIMITED listen refusals. Remapping it to 401 would \
+         change the status of every other emitter of that code on this transport"
+    );
+    assert_ne!(
+        stream.header("content-type"),
+        Some("text/event-stream"),
+        "no stream body is opened for a refused caller"
+    );
+
+    let refusal = stream.expect_json().await;
+    assert_eq!(
+        refusal["error"]["code"],
+        json!(AUTHENTICATION_REQUIRED),
+        "the refusal is -32003, the same fail-closed answer the MRTR ingress \
+         gives on this server: {refusal}"
+    );
+    assert_eq!(
+        refusal["id"],
+        json!(41),
+        "the ORIGINAL request id is echoed: {refusal}"
+    );
+    assert!(
+        refusal["result"].is_null(),
+        "a refusal carries no result: {refusal}"
+    );
+
+    drop(stream);
+    handle.abort();
+}
+
+/// The DELIBERATE divergence: a server with NO auth provider still serves an
+/// unauthenticated listen, and still keeps its full global capacity.
+///
+/// This is the regression guard for the third row of `resolve_listen_principal`.
+/// Without it, a later "cleanup" collapses both `None` rows onto the MRTR
+/// ingress's single shared `ANONYMOUS_PRINCIPAL` and quietly caps a no-auth
+/// server at `MAX_LISTEN_STREAMS_PER_PRINCIPAL` (4) concurrent streams instead
+/// of `MAX_LISTEN_STREAMS_TOTAL` (64) — the local/dev configuration the shipped
+/// `s47_v2_stateless_mrtr` / `s48_v2_mrtr_client` examples use. The AAD-binding
+/// reason MRTR needs a stable principal simply does not apply to a
+/// concurrency-accounting key.
+#[tokio::test]
+async fn unauthenticated_listen_still_serves_on_a_server_with_no_auth_provider() {
+    let (addr, handle) = spawn(server_with(advertising(Some("tools.listChanged")))).await;
+
+    let mut stream = SseStream::open(
+        addr,
+        &listen_headers(),
+        &listen_body(json!(42), &json!({ "toolsListChanged": true })),
+    )
+    .await;
+
+    assert_eq!(
+        stream.status, 200,
+        "a no-auth server still serves the stream"
+    );
+    assert_eq!(
+        stream.header("content-type"),
+        Some("text/event-stream"),
+        "and it really is a stream, not a refusal body"
+    );
+    let ack = stream.expect_json().await;
+    assert_eq!(
+        ack["method"],
+        json!(ACKNOWLEDGED_METHOD),
+        "the acknowledgement arrives exactly as before the D-113-N fix: {ack}"
+    );
+    assert_eq!(subscription_id_of(&ack), Some(&json!(42)));
+
+    // Five concurrent anonymous streams — one MORE than
+    // MAX_LISTEN_STREAMS_PER_PRINCIPAL. All are served, which is the capacity
+    // claim above stated as an assertion rather than a comment: had the two rows
+    // been unified onto one shared principal, the fifth would be refused.
+    let mut held = vec![stream];
+    for id in 43..47 {
+        let mut extra = SseStream::open(
+            addr,
+            &listen_headers(),
+            &listen_body(json!(id), &json!({ "toolsListChanged": true })),
+        )
+        .await;
+        let frame = extra.expect_json().await;
+        assert_eq!(
+            frame["method"],
+            json!(ACKNOWLEDGED_METHOD),
+            "anonymous stream {id} must be served: a per-stream principal means \
+             MAX_LISTEN_STREAMS_PER_PRINCIPAL does not bind here: {frame}"
+        );
+        held.push(extra);
+    }
+
+    // Sockets first, then the accept loop, then WAIT for it: several concurrent
+    // streams make runtime teardown slow enough to trip nextest's 100 ms leak
+    // timeout otherwise, which is noise rather than signal.
+    drop(held);
+    handle.abort();
+    let _ = handle.await;
+}
+
+/// The D-113-N harm, reproduced and then denied: one unauthenticated caller can
+/// no longer take the whole global listen budget.
+///
+/// Before the fix each of these attempts minted its OWN `anon#N`, so the
+/// per-principal cap never bound and the first `MAX_LISTEN_STREAMS_TOTAL` (64)
+/// of them were SERVED — after which the authenticated subscriber below was
+/// refused `RATE_LIMITED`. The second half of this test is the point: the harm
+/// D-113-N names is starvation of authenticated subscribers, so the test has to
+/// show them un-starved, not merely show the anonymous caller refused.
+#[tokio::test]
+async fn one_unauthenticated_caller_cannot_exhaust_the_global_listen_budget() {
+    let (addr, handle) = spawn(server_with_optional_auth()).await;
+
+    // `MAX_LISTEN_STREAMS_TOTAL` is 64 and `pub(crate)`, so it is spelled out
+    // here; the count deliberately EXCEEDS it, because a run that stopped at the
+    // per-principal cap (4) would not reproduce the global exhaustion the defect
+    // is about.
+    const ATTEMPTS: i64 = 68;
+
+    // Held, not dropped: under the pre-fix behaviour these connections really do
+    // occupy registry slots, and releasing them as we went would hide the
+    // exhaustion this test exists to reproduce.
+    let mut held = Vec::new();
+    for id in 0..ATTEMPTS {
+        let mut stream = SseStream::open(
+            addr,
+            &listen_headers(),
+            &listen_body(json!(id), &json!({ "toolsListChanged": true })),
+        )
+        .await;
+        let frame = stream.expect_json().await;
+        assert_eq!(
+            frame["error"]["code"],
+            json!(AUTHENTICATION_REQUIRED),
+            "unauthenticated attempt {id} must be REFUSED, never granted a \
+             private uncapped anon#N principal: {frame}"
+        );
+        held.push(stream);
+    }
+
+    // The load-bearing half: an authenticated subscriber is un-starved.
+    let mut authenticated_headers = listen_headers();
+    authenticated_headers.push(("authorization".to_string(), "Bearer carol".to_string()));
+    let mut authenticated = SseStream::open(
+        addr,
+        &authenticated_headers,
+        &listen_body(json!(1), &json!({ "toolsListChanged": true })),
+    )
+    .await;
+    assert_eq!(authenticated.status, 200);
+    assert_eq!(
+        authenticated.header("content-type"),
+        Some("text/event-stream"),
+        "the authenticated subscriber gets a real stream, not a refusal body"
+    );
+    let ack = authenticated.expect_json().await;
+    assert_eq!(
+        ack["method"],
+        json!(ACKNOWLEDGED_METHOD),
+        "an authenticated subscriber still registers after {ATTEMPTS} \
+         unauthenticated attempts — the global budget was never consumed: {ack}"
+    );
+    assert_eq!(subscription_id_of(&ack), Some(&json!(1)));
+
+    // See the teardown note on the no-auth-provider twin: 68+ sockets make
+    // runtime teardown slow enough to trip nextest's leak timeout otherwise.
+    drop(authenticated);
+    drop(held);
+    handle.abort();
+    let _ = handle.await;
 }
 
 /// `resources/subscribe` and `resources/unsubscribe` are GONE on v2.
