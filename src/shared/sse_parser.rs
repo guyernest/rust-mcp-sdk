@@ -731,6 +731,27 @@ impl Default for SseConfig {
 
 #[cfg(test)]
 mod tests {
+    //! # Which ALWAYS requirement each piece of plan 113-22 discharges
+    //!
+    //! CLAUDE.md asks every change for FUZZ, PROPERTY, UNIT and EXAMPLE. Stated
+    //! here explicitly rather than left to a reviewer to reconstruct:
+    //!
+    //! - **PROPERTY** — `property_take_utf8_prefix_retains_at_most_a_three_byte_tail`,
+    //!   which proves the ≤3-byte retained-tail bound over arbitrary bytes rather
+    //!   than over the three fixtures it used to rest on.
+    //! - **UNIT** — the two budget tests, the growth-ratio test, the retained-tail
+    //!   companion and the pre-existing output test.
+    //! - **FUZZ** — the EXISTING `fuzz_listen_frames` target (113-16), which already
+    //!   drives this decoder through `decode_listen_chunks_for_fuzz`. No new target
+    //!   is added, and the reason is recorded rather than assumed: D-113-G notes
+    //!   that `make quality-gate`'s fuzz stage currently builds 0 of 17 targets and
+    //!   swallows failures. That is a known, separately-owned defect; adding an
+    //!   18th target that also would not build would be motion, not coverage, and
+    //!   this plan does not adopt D-113-G.
+    //! - **EXAMPLE** — none. This plan ships no new feature surface, only guards on
+    //!   existing behaviour, so there is nothing for an example to demonstrate.
+    //!   Said plainly instead of inventing one to satisfy a checklist.
+
     use super::*;
     use std::time::{Duration, Instant};
 
@@ -1067,6 +1088,97 @@ mod tests {
             "every fed byte is still retained — that is what makes this the \
              accumulating path"
         );
+    }
+
+    /// The named, readable companion to the retained-tail property test below.
+    ///
+    /// A 4-byte UTF-8 sequence truncated to its first 3 bytes is the WORST case:
+    /// 3 is the largest incomplete-character prefix that exists, so it is the
+    /// exact figure `take_utf8_prefix`'s rustdoc promises ("at most 3 bytes").
+    /// The property test proves the bound over arbitrary input; this states what
+    /// the number means, so a future reader does not have to derive `4` from a
+    /// `prop_assert!`.
+    #[test]
+    fn take_utf8_prefix_retained_tail_is_documented_bound() {
+        // U+1F600 GRINNING FACE = F0 9F 98 80, cut one byte short.
+        let mut buffer = vec![0xF0u8, 0x9F, 0x98];
+        let text = take_utf8_prefix(&mut buffer);
+
+        assert!(text.is_empty(), "nothing is decodable yet");
+        assert_eq!(
+            buffer,
+            vec![0xF0, 0x9F, 0x98],
+            "all three bytes are retained for the next chunk — the maximum this \
+             function may ever hold, and the reason the accumulation in \
+             `connect_sse` and in the listen client is bounded across iterations"
+        );
+
+        // The next chunk completes it and nothing was lost across the split.
+        buffer.push(0x80);
+        assert_eq!(take_utf8_prefix(&mut buffer), "\u{1F600}");
+        assert!(buffer.is_empty());
+    }
+
+    proptest::proptest! {
+        /// The ≤3-byte retained tail, over ARBITRARY bytes rather than three
+        /// hand-picked fixtures (HTTP-09, T-113-103).
+        ///
+        /// This is the invariant that makes the accumulation in `connect_sse`'s
+        /// reader and in the `subscriptions/listen` client bounded ACROSS
+        /// iterations: each call hands back a buffer holding at most an
+        /// incomplete character, so the undecoded `Vec` cannot grow with stream
+        /// age no matter how a peer frames its chunks. Until now it rested on
+        /// the three fixtures in
+        /// `take_utf8_prefix_decodes_mixed_valid_and_invalid_runs`.
+        #[test]
+        fn property_take_utf8_prefix_retains_at_most_a_three_byte_tail(
+            bytes in proptest::collection::vec(proptest::prelude::any::<u8>(), 0..4096),
+        ) {
+            let mut buffer = bytes.clone();
+            let _text = take_utf8_prefix(&mut buffer);
+
+            // (a) the documented bound. Only the HEAD of an over-long residual is
+            // printed: on failure this can hold thousands of bytes, and a hex dump
+            // of all of them buries the number that matters.
+            proptest::prop_assert!(
+                buffer.len() < 4,
+                "retained {} bytes (starting {:x?}) — the incomplete-character tail \
+                 is at most 3, and a larger residual is unbounded accumulation \
+                 across chunks, not a decode detail",
+                buffer.len(),
+                &buffer[..buffer.len().min(8)],
+            );
+
+            // (b) the residual is a SUFFIX of the input. Anything else would mean
+            // bytes were reordered or resurrected from the middle of the buffer,
+            // and the caller appends the NEXT chunk directly onto this residual.
+            proptest::prop_assert!(
+                bytes.ends_with(&buffer),
+                "residual {:x?} is not a suffix of the input",
+                buffer,
+            );
+
+            // (c) no wedge. Feeding the residual plus one more ASCII byte always
+            // terminates AND always clears: the retained tail is by construction
+            // an incomplete-character PREFIX at the end of the buffer, and a
+            // buffer ending in a complete 1-byte character has no such tail. This
+            // is what stops hostile input from parking bytes in the decoder
+            // forever (T-113-67).
+            buffer.push(b'!');
+            let follow_up = take_utf8_prefix(&mut buffer);
+            proptest::prop_assert!(
+                buffer.len() < 4,
+                "the second call retained {} bytes",
+                buffer.len(),
+            );
+            proptest::prop_assert!(
+                buffer.is_empty(),
+                "an ASCII byte completes the buffer, so nothing may be retained; \
+                 residual {:x?} after decoding {:?}",
+                buffer,
+                follow_up,
+            );
+        }
     }
 
     #[test]

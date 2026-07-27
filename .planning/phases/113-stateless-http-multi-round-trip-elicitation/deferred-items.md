@@ -716,3 +716,79 @@ equivalent, so this means streaming via `bytes_stream()` with a running total),
 or retire the transport. Removing the `WHOLE_BODY_ALLOWLIST` entry is part of the
 fix — the tripwire's dead-entry rule does not cover that list, so the fixer must
 delete it by hand.
+
+## D-113-R — `SseParser::feed` is quadratic over peer-chosen chunking (found by the HTTP-09 budget work)
+
+**Found during:** plan 113-22, task 1 (writing the falsifiable O(n) guards for HTTP-09)
+**Severity:** HIGH — a remote CPU-exhaustion channel on both incremental feeders,
+the same class and the same paths as review CR-02, which was a BLOCKER
+**Owner:** UNASSIGNED
+**Status:** OPEN — **HTTP-09's O(n) clause is not fully dischargeable until this is fixed**
+
+`SseParser::drain_complete_lines` (behind the public `SseParser::feed`) runs
+`self.buffer.find('\n')` over the WHOLE retained buffer on every call, including
+the prefix every earlier call already scanned. The invariant right above it —
+`debug_assert!(!self.buffer.contains('\n'))` — states exactly why that re-scan is
+pure waste: the loop leaves the buffer newline-free on every return, so only the
+newly appended region can possibly contain a newline.
+
+**A peer chooses the chunking.** Both incremental feeders call `feed` once per
+`hyper` body FRAME (`src/shared/http.rs:371-378` in `connect_sse`,
+`src/client/subscriptions.rs:248-255` in the listen client), and a server chooses
+its HTTP chunked framing. One byte per chunk means one full-buffer scan per byte.
+
+**Measured** (plan 113-22, `cargo nextest run --release`, so this is the SHIPPED
+cost, not a debug artifact — single-byte chunks under a bound large enough not to
+trip):
+
+| retained bytes | cost | vs. 16 KiB |
+|---|---|---|
+| 16 KiB | 5.6 ms | 1x |
+| 64 KiB | 59 ms | 10.6x for 4x input |
+| 256 KiB | 833 ms | 148x for 16x input |
+
+256 KiB is exactly `MAX_LISTEN_LINE_BYTES`, so a peer gets ~0.83 CPU-seconds out
+of a listen client for 256 KiB of traffic before the bound latches. On
+`connect_sse`'s 16 MiB `DEFAULT_HTTP_SSE_BUFFERED_BYTES` the same shape is 64x the
+input and therefore ~4096x the work — extrapolating, roughly an hour of CPU per
+connection. For comparison, the CR-02 BLOCKER was 1.17 s for 400 KiB.
+
+**Why the phase's existing bounds do not cover it.** Every Phase-113 bound is a
+BYTE bound. This is a CPU bound: the byte bound is what caps the buffer, and the
+cost is quadratic *in that cap*. Bounding memory harder makes this worse, not
+better — the 16 MiB ceiling is what makes `connect_sse` the severe case.
+
+**Why not fixed in 113-22.** That plan's fence is test-only (its verification step
+expects only `src/shared/sse_parser.rs`, and only its `#[cfg(test)]` region plus
+one corrected rustdoc). The fix is a production change to the line splitter — the
+function with the T-113-67 remote-panic history, where a byte-vs-character index
+confusion was a remote-triggerable client crash found by a property test rather
+than by review. It needs its own tests, its own fuzz run and its own review, not a
+drive-by edit inside a testing plan.
+
+**Fix shape.** Track how much of the buffer has already been scanned and search
+only the appended region:
+
+```rust
+let already_scanned = self.buffer.len();
+self.buffer.push_str(data);
+let mut search_from = already_scanned;
+while let Some(offset) = self.buffer[search_from..].find('\n') {
+    let line_end = search_from + offset;
+    // ... unchanged CRLF handling and process_line ...
+    self.buffer.drain(..=line_end);
+    // everything before the drained point is gone, so the remaining bytes are
+    // all still un-scanned
+    search_from = 0;
+}
+```
+
+Note the debug-only `contains('\n')` assert is a second full scan and would need
+the same treatment (or removal) for the invariant to hold cheaply in test builds.
+
+**How it is currently visible.** `sse_parser_feed_stays_within_its_linear_time_budget`
+does NOT catch it — at that test's 4 KiB chunking the re-scan is a memchr over at
+most 1 MiB, single-digit milliseconds. That is stated in the test's own rustdoc
+along with these measurements, and confirmed by a negative control: injecting
+T-113-102's per-chunk full-buffer copy moved the measurement from 6.7 ms to
+11.7 ms and the test still passed. Whoever closes HTTP-09 must read that rustdoc.
