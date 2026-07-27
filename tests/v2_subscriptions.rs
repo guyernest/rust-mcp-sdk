@@ -52,8 +52,8 @@ use pmcp::types::subscriptions::{
     advertises_subscriptions, ACKNOWLEDGED_METHOD, SUBSCRIPTION_ID_META_KEY,
 };
 use pmcp::types::{
-    PromptCapabilities, ResourceCapabilities, ServerCapabilities, ServerNotification,
-    ToolCapabilities,
+    PromptCapabilities, ResourceCapabilities, ResourceUpdatedParams, ServerCapabilities,
+    ServerNotification, ToolCapabilities,
 };
 use serde_json::{json, Value};
 use std::net::SocketAddr;
@@ -661,6 +661,204 @@ async fn ack_is_first_frame() {
 
     drop(stream);
     handle.abort();
+}
+
+// ===========================================================================
+// Addendum Finding 14(b) — the RESOURCES half of HTTP-08's four opt-ins.
+//
+// `toolsListChanged` and `promptsListChanged` are proven over a real socket by
+// the tests above. `resourcesListChanged` and `resourceSubscriptions` were, until
+// this section existed, exercised ONLY by `#[cfg(test)]` unit tests inside
+// `src/types/subscriptions.rs` — never over the wire. That asymmetry is invisible
+// in a green suite, because the tests that would fail did not exist.
+//
+// `resourceSubscriptions` is also the only one of the four that is not a boolean:
+// it is a `string[]` of URIs, its delivery decision is a linear EXACT-STRING scan
+// (`SubscriptionFilter::covers`'s `ResourceUpdated` arm — no prefix matching, no
+// normalisation), and it carries a per-stream truncation bound. None of that had
+// ever been proven to compose over live HTTP.
+// ===========================================================================
+
+/// The resource URI the tests below SUBSCRIBE to.
+const SUBSCRIBED_URI: &str = "mem://a";
+
+/// A DIFFERENT resource URI that no test below ever subscribes to.
+///
+/// Deliberately one character from [`SUBSCRIBED_URI`] in the same scheme, so a
+/// mix-up shows up as a legible diff in the failure message rather than as two
+/// unrelated strings.
+const UNSUBSCRIBED_URI: &str = "mem://b";
+
+/// A `notifications/resources/updated` reaches a stream that named its URI, and
+/// a stream that did not name a URI never sees it.
+///
+/// This is the live-socket proof of `SubscriptionFilter::covers`'s
+/// `ResourceUpdated` arm — the one arm that consults a client-supplied list
+/// rather than reading a flag, and therefore the one arm whose over-broad failure
+/// mode leaks another resource's change notification to a subscriber that never
+/// asked for it (T-113-150).
+///
+/// The unsubscribed URI is fired FIRST and the subscribed one second, exactly as
+/// [`no_unrequested_notification_types`] orders its two triggers: a test that
+/// fired only the subscribed URI could not distinguish "filtered out" from
+/// "merely slower", and would still pass against a `covers` that returned `true`
+/// unconditionally.
+#[tokio::test]
+async fn resource_subscriptions_deliver_the_subscribed_uri_and_not_another() {
+    let server = Arc::new(Mutex::new(server_with(advertising(Some(
+        "resources.subscribe",
+    )))));
+    let (addr, handle) = spawn_shared(Arc::clone(&server)).await;
+
+    let mut stream = SseStream::open(
+        addr,
+        &listen_headers(),
+        &listen_body(
+            json!(51),
+            &json!({ "resourceSubscriptions": [SUBSCRIBED_URI] }),
+        ),
+    )
+    .await;
+
+    assert_eq!(stream.status, 200, "resources.subscribe is advertised");
+    assert_eq!(
+        stream.header("content-type"),
+        Some("text/event-stream"),
+        "the served response is a stream, not a refusal body"
+    );
+
+    // The acknowledgement is asserted BEFORE anything is fired. It is the only
+    // observable proof that `intersect_with_capabilities` KEPT the requested
+    // list; asserting delivery alone would still pass on a server that agreed to
+    // something else entirely and delivered by coincidence.
+    let ack = stream.expect_json().await;
+    assert_eq!(ack["method"], json!(ACKNOWLEDGED_METHOD));
+    assert_eq!(
+        ack["params"]["notifications"],
+        json!({ "resourceSubscriptions": [SUBSCRIBED_URI] }),
+        "the agreed filter echoes the requested URI list EXACTLY — the whole \
+         object is compared, so an extra agreed field would fail here too: {ack}"
+    );
+    assert_eq!(
+        subscription_id_of(&ack),
+        Some(&json!(51)),
+        "the subscriptionId equals the listen request's JSON-RPC id: {ack}"
+    );
+
+    // The UNSUBSCRIBED URI goes out FIRST — under one lock, so nothing can
+    // reorder them between the two sends.
+    {
+        let server = server.lock().await;
+        server
+            .send_notification(ServerNotification::ResourceUpdated(
+                ResourceUpdatedParams::new(UNSUBSCRIBED_URI),
+            ))
+            .await;
+        server
+            .send_notification(ServerNotification::ResourceUpdated(
+                ResourceUpdatedParams::new(SUBSCRIBED_URI),
+            ))
+            .await;
+    }
+
+    let delivered = stream.expect_json().await;
+    assert_eq!(
+        delivered["method"],
+        json!("notifications/resources/updated"),
+        "the subscribed URI is delivered as a resources/updated frame: {delivered}"
+    );
+    assert_eq!(
+        delivered["params"]["uri"],
+        json!(SUBSCRIBED_URI),
+        "and it is the SUBSCRIBED URI that arrives first, despite \
+         {UNSUBSCRIBED_URI} having been fired before it: {delivered}"
+    );
+    assert_eq!(
+        subscription_id_of(&delivered),
+        Some(&json!(51)),
+        "a delivered resources/updated carries the stream's subscriptionId: {delivered}"
+    );
+
+    // `covers` is EXACT string equality, so the unsubscribed URI must never
+    // arrive — proven by a bounded wait rather than by the absence of a further
+    // assertion.
+    stream.expect_no_json(Duration::from_millis(300)).await;
+
+    drop(stream);
+    handle.abort();
+    let _ = handle.await;
+}
+
+/// The two resources opt-ins are INDEPENDENT: a `resources.subscribe`-only
+/// server neither agrees to nor delivers `resourcesListChanged`.
+///
+/// The client here asks for BOTH halves. `advertising("resources.subscribe")`
+/// sets `list_changed: Some(false)`, so `agreed_flag` OMITS the requested
+/// `resourcesListChanged` — and the omission has to be observable as an ABSENT
+/// key, because `skip_serializing_if = "Option::is_none"` means an omitted field
+/// never reaches the wire at all. Accepting `false` or `null` here would pass on
+/// a future change that started agreeing to unsupported types.
+///
+/// `ResourcesChanged` is fired FIRST for the same reason the test above fires the
+/// unsubscribed URI first.
+#[tokio::test]
+async fn a_resource_subscriptions_stream_is_not_a_resources_list_changed_stream() {
+    let server = Arc::new(Mutex::new(server_with(advertising(Some(
+        "resources.subscribe",
+    )))));
+    let (addr, handle) = spawn_shared(Arc::clone(&server)).await;
+
+    let mut stream = SseStream::open(
+        addr,
+        &listen_headers(),
+        &listen_body(
+            json!(52),
+            &json!({
+                "resourceSubscriptions": [SUBSCRIBED_URI],
+                "resourcesListChanged": true,
+            }),
+        ),
+    )
+    .await;
+
+    let ack = stream.expect_json().await;
+    let agreed = &ack["params"]["notifications"];
+    assert!(
+        agreed.get("resourcesListChanged").is_none(),
+        "an unsupported requested type is OMITTED from the agreed filter, not \
+         agreed as `false` and not emitted as `null`: {ack}"
+    );
+    assert_eq!(
+        *agreed,
+        json!({ "resourceSubscriptions": [SUBSCRIBED_URI] }),
+        "only the supported half survives the intersection: {ack}"
+    );
+
+    {
+        let server = server.lock().await;
+        server
+            .send_notification(ServerNotification::ResourcesChanged)
+            .await;
+        server
+            .send_notification(ServerNotification::ResourceUpdated(
+                ResourceUpdatedParams::new(SUBSCRIBED_URI),
+            ))
+            .await;
+    }
+
+    let delivered = stream.expect_json().await;
+    assert_eq!(
+        delivered["method"],
+        json!("notifications/resources/updated"),
+        "the FIRST frame is the resources/updated, even though \
+         resources/list_changed was fired before it — the list-changed half was \
+         never agreed to, so it is not merely late: {delivered}"
+    );
+    stream.expect_no_json(Duration::from_millis(300)).await;
+
+    drop(stream);
+    handle.abort();
+    let _ = handle.await;
 }
 
 /// Two DIFFERENT principals both using JSON-RPC id `1` must not cross-deliver.
