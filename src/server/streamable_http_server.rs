@@ -2124,6 +2124,68 @@ fn resolve_session_for_request(
     }
 }
 
+/// Resolved output of the v2 required-header gate for one request: the
+/// `ProtocolContext` (consumed by dispatch) and the outbound-header echo.
+type V2GateResolved = (
+    Option<crate::types::protocol::ProtocolContext>,
+    Option<(String, String)>,
+);
+
+/// Run the v2 required-header gate (VERS-05) for one request: resolve the
+/// `ProtocolContext` ONCE (consumed by dispatch), classify the header/`_meta`
+/// matrix fail-closed, and derive the outbound-header echo.
+///
+/// # Ordering — load-bearing, not stylistic
+///
+/// This MUST run BEFORE session resolution (Plan 113-04 / HTTP-01): the ERA
+/// decides whether sessions apply at all, so it must be known before the first
+/// session decision. It MUST also run BEFORE the legacy protocol-version check,
+/// because an accepted v2 request carries `MCP-Protocol-Version: 2026-07-28`,
+/// which the static-SUPPORTED check would otherwise reject.
+///
+/// v1 / non-opted-in → `Passthrough` (zero enforcement, D-04). A
+/// `server/discover` ingress runs the SAME matrix via the raw-`_meta`
+/// counterpart (finding #1).
+///
+/// Extracted in plan 113.1-01 (D-06 / D-09): both POST entrypoints carried this
+/// block verbatim, so [`run_v2_header_gate`] now has exactly one call site. The
+/// middleware path's extra error-hook step lives in the sibling
+/// [`resolve_v2_gate_with_error_hook`], following this file's existing
+/// plain-fn + `*_with_error_hook` convention.
+async fn resolve_v2_gate(
+    state: &ServerState,
+    headers: &HeaderMap,
+    raw_body: &[u8],
+    ingress: &HttpIngress,
+) -> std::result::Result<V2GateResolved, Response> {
+    match ingress {
+        // Only a REQUEST carries a header contract. `server/discover` pins its
+        // method (it is routed by classification, not by the body's `method`
+        // field); every other request — including `subscriptions/listen`, whose
+        // body DOES carry its method — reads the method from the body.
+        HttpIngress::Public(TransportMessage::Request { .. })
+        | HttpIngress::Discover { .. }
+        | HttpIngress::SubscriptionsListen { .. } => {
+            let method_override = matches!(ingress, HttpIngress::Discover { .. })
+                .then_some(crate::types::protocol::SERVER_DISCOVER_METHOD);
+            let (ctx, gate) = run_v2_header_gate(state, headers, raw_body, method_override).await;
+            match gate {
+                V2GateOutcome::Reject {
+                    code,
+                    message,
+                    data,
+                } => {
+                    let era = ctx.as_ref().map(|pc| pc.era);
+                    Err(v2_gate_reject_response(raw_body, era, code, &message, data))
+                },
+                V2GateOutcome::Passthrough => Ok((ctx, None)),
+                V2GateOutcome::EnforceOk { method, name } => Ok((ctx, Some((method, name)))),
+            }
+        },
+        HttpIngress::Public(_) => Ok((None, None)),
+    }
+}
+
 /// Compute the outbound `MCP-Protocol-Version` header value.
 ///
 /// Used by both POST handlers to echo either the negotiated version from an
@@ -3112,43 +3174,14 @@ async fn handle_post_fast_path(
         HttpIngress::Discover { .. } | HttpIngress::SubscriptionsListen { .. } => false,
     };
 
-    // v2 required-header gate (VERS-05): resolve the ProtocolContext ONCE
-    // (consumed by dispatch), classify the header/_meta matrix fail-closed, and
-    // derive the outbound-header echo. Runs BEFORE session resolution (Plan
-    // 113-04 / HTTP-01): the ERA decides whether sessions apply at all, so it
-    // must be known before the first session decision. It also runs before the
-    // legacy protocol-version check because an accepted v2 request carries
-    // MCP-Protocol-Version: 2026-07-28, which the static-SUPPORTED check would
-    // otherwise reject. v1 / non-opted-in → Passthrough (zero enforcement, D-04).
-    // A `server/discover` ingress runs the SAME matrix via the raw-_meta
-    // counterpart (finding #1).
-    let (protocol_context, v2_outbound) = match &ingress {
-        // Only a REQUEST carries a header contract. `server/discover` pins its
-        // method (it is routed by classification, not by the body's `method`
-        // field); every other request — including `subscriptions/listen`, whose
-        // body DOES carry its method — reads the method from the body.
-        HttpIngress::Public(TransportMessage::Request { .. })
-        | HttpIngress::Discover { .. }
-        | HttpIngress::SubscriptionsListen { .. } => {
-            let method_override = matches!(ingress, HttpIngress::Discover { .. })
-                .then_some(crate::types::protocol::SERVER_DISCOVER_METHOD);
-            let (ctx, gate) =
-                run_v2_header_gate(&state, &headers, body.as_bytes(), method_override).await;
-            match gate {
-                V2GateOutcome::Reject {
-                    code,
-                    message,
-                    data,
-                } => {
-                    let era = ctx.as_ref().map(|pc| pc.era);
-                    return v2_gate_reject_response(body.as_bytes(), era, code, &message, data);
-                },
-                V2GateOutcome::Passthrough => (ctx, None),
-                V2GateOutcome::EnforceOk { method, name } => (ctx, Some((method, name))),
-            }
-        },
-        HttpIngress::Public(_) => (None, None),
-    };
+    // v2 required-header gate (VERS-05). The ordering constraints this call
+    // carries — gate BEFORE session resolution and BEFORE the legacy
+    // protocol-version check — are documented on `resolve_v2_gate` itself.
+    let (protocol_context, v2_outbound) =
+        match resolve_v2_gate(&state, &headers, body.as_bytes(), &ingress).await {
+            Ok(resolved) => resolved,
+            Err(response) => return response,
+        };
     let is_v2_request = v2_outbound.is_some();
     let era = protocol_context.as_ref().map(|pc| pc.era);
     let sessions_on = sessions_active(&state, era);
@@ -3325,6 +3358,29 @@ async fn validate_protocol_version_with_error_hook(
         return Err(error_response);
     }
     Ok(())
+}
+
+/// Run the v2 required-header gate and fire the middleware error hook on a
+/// gate rejection.
+///
+/// Wraps [`resolve_v2_gate`] so the middleware path does not have to repeat the
+/// gate's three-arm classification just to add one hook call. The ordering
+/// constraints documented on [`resolve_v2_gate`] apply identically here.
+async fn resolve_v2_gate_with_error_hook(
+    state: &ServerState,
+    headers: &HeaderMap,
+    raw_body: &[u8],
+    ingress: &HttpIngress,
+    http_middleware: &ServerHttpMiddlewareChain,
+    http_context: &ServerHttpContext,
+) -> std::result::Result<V2GateResolved, Response> {
+    match resolve_v2_gate(state, headers, raw_body, ingress).await {
+        Ok(resolved) => Ok(resolved),
+        Err(error_response) => {
+            report_middleware_error(http_middleware, http_context, "v2 header gate rejected").await;
+            Err(error_response)
+        },
+    }
 }
 
 /// Per-request dispatch inputs threaded into the middleware-path handler.
@@ -3568,54 +3624,21 @@ async fn handle_post_with_middleware(
         HttpIngress::Discover { .. } | HttpIngress::SubscriptionsListen { .. } => false,
     };
 
-    // v2 required-header gate (VERS-05): resolve the ProtocolContext ONCE and
-    // classify the header/_meta matrix fail-closed before dispatch. Runs BEFORE
-    // session resolution (Plan 113-04 / HTTP-01): the ERA decides whether
-    // sessions apply at all. It also runs before the legacy protocol-version
-    // check because an accepted v2 request carries MCP-Protocol-Version:
-    // 2026-07-28 (which the static-SUPPORTED check would reject). Only Request /
-    // discover ingresses carry a header contract; v1 / non-opted-in →
-    // Passthrough (zero enforcement, D-04). Since Plan 113-04 there is ONE gate
-    // for every ingress, reading `params._meta` from the raw body.
-    let (protocol_context, v2_outbound) = match &ingress {
-        HttpIngress::Public(TransportMessage::Request { .. })
-        | HttpIngress::Discover { .. }
-        | HttpIngress::SubscriptionsListen { .. } => {
-            let method_override = matches!(ingress, HttpIngress::Discover { .. })
-                .then_some(crate::types::protocol::SERVER_DISCOVER_METHOD);
-            let (ctx, gate) = run_v2_header_gate(
-                &state,
-                &server_request.headers,
-                &server_request.body,
-                method_override,
-            )
-            .await;
-            match gate {
-                V2GateOutcome::Reject {
-                    code,
-                    message,
-                    data,
-                } => {
-                    report_middleware_error(
-                        http_middleware,
-                        &http_context,
-                        "v2 header gate rejected",
-                    )
-                    .await;
-                    let era = ctx.as_ref().map(|pc| pc.era);
-                    return v2_gate_reject_response(
-                        &server_request.body,
-                        era,
-                        code,
-                        &message,
-                        data,
-                    );
-                },
-                V2GateOutcome::Passthrough => (ctx, None),
-                V2GateOutcome::EnforceOk { method, name } => (ctx, Some((method, name))),
-            }
-        },
-        HttpIngress::Public(_) => (None, None),
+    // v2 required-header gate (VERS-05). The ordering constraints this call
+    // carries — gate BEFORE session resolution and BEFORE the legacy
+    // protocol-version check — are documented on `resolve_v2_gate` itself.
+    let (protocol_context, v2_outbound) = match resolve_v2_gate_with_error_hook(
+        &state,
+        &server_request.headers,
+        &server_request.body,
+        &ingress,
+        http_middleware,
+        &http_context,
+    )
+    .await
+    {
+        Ok(resolved) => resolved,
+        Err(response) => return response,
     };
     let is_v2_request = v2_outbound.is_some();
     let era = protocol_context.as_ref().map(|pc| pc.era);
