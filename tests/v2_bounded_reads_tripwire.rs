@@ -48,6 +48,7 @@
 //! justification reviewed. Raising a number to match reality is the failure mode
 //! this file exists to prevent.
 
+use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::fs;
 use std::ops::Range;
@@ -551,11 +552,22 @@ fn scanned_scope() -> Vec<ScannedFile> {
 /// * `body::to_bytes(` is the axum/hyper one-shot helper. Its limit is a
 ///   REQUIRED argument, so it is bounded by construction — the only way to
 ///   unbound it is to pass the maximum, which is what its rule checks for.
+/// * `.text().await` / `.bytes().await` / `.json().await` / `.json::<` are
+///   `reqwest`'s response-consuming reads. They take NO limit argument, so there
+///   is no bounded form of them to recognise and every occurrence needs a
+///   reviewed exemption. They are here because the four families above cover
+///   hyper, axum, std and tokio but not the HTTP client one shared transport
+///   actually uses — the exact "the needles named this round" gap this file
+///   exists to close.
 const WHOLE_BODY_NEEDLES: &[&str] = &[
     ".collect().await",
     "read_to_end",
     "read_to_string",
     "body::to_bytes(",
+    ".text().await",
+    ".bytes().await",
+    ".json().await",
+    ".json::<",
 ];
 
 /// A reviewed exemption from the whole-body-read rule.
@@ -565,13 +577,27 @@ struct Allowed {
     why: &'static str,
 }
 
-/// Whole-body reads that genuinely cannot be bounded.
+/// Whole-body reads that are not bounded in their own statement.
 ///
-/// EMPTY is the healthy state, and it is empty today: every live site in scope
-/// is wrapped in `http_body_util::Limited`. The mechanism survives so that a
-/// future genuinely-unboundable site has a reviewed home with a written reason,
-/// instead of a silent exemption or a deleted needle.
-const WHOLE_BODY_ALLOWLIST: &[Allowed] = &[];
+/// An entry is a REVIEWED, WRITTEN exemption, never a silent one: `why` must say
+/// either what bounds the read or, plainly, that it is unbounded and who owns
+/// the fix. Enumerating a gap is the point — an unnamed gap is what reopened
+/// this requirement three times.
+///
+/// This list should shrink, never grow.
+const WHOLE_BODY_ALLOWLIST: &[Allowed] = &[Allowed {
+    path: "src/shared/sse_optimized.rs",
+    needle: ".text().await",
+    why: "NOT BOUNDED — recorded here rather than left unnamed. \
+          OptimizedSseTransport::connect_sse reads the entire SSE response with reqwest's \
+          Response::text(), which accepts no limit argument, so a peer chooses the allocation. \
+          This transport is NOT on the v2 streamable-HTTP path (v2 collects through \
+          StreamableHttpTransport::collect_body_within_cap) and has no in-crate consumer, but it \
+          is exported from shared:: and so is reachable in a shipped build. Bounding it is a src/ \
+          change outside the scope fence of the plan that added this file (113-21), and is \
+          recorded as a deferred item of phase 113. Found BY this tripwire, which is the \
+          behaviour HTTP-09 asks for.",
+}];
 
 /// The statement a match sits in: everything back to the nearest `;`, `{` or
 /// `}`.
@@ -691,10 +717,261 @@ fn every_whole_body_exemption_carries_a_substantive_justification() {
             entry.why
         );
     }
+    assert_eq!(
+        WHOLE_BODY_ALLOWLIST.len(),
+        1,
+        "the whole-body exemption list should SHRINK, never grow. At the time this file landed it \
+         held exactly one entry: the reqwest whole-body read in OptimizedSseTransport that this \
+         tripwire itself found. A second entry means a new unbounded read was exempted rather \
+         than fixed, and that is a decision a human has to make on the record."
+    );
 }
 
 /// An exemption shorter than this is a label, not a justification.
 const MIN_JUSTIFICATION_CHARS: usize = 40;
+
+// ---------------------------------------------------------------------------
+// Accumulations — a CHANGE DETECTOR over a justified allowlist
+// ---------------------------------------------------------------------------
+
+/// Ways bytes get appended to a growable buffer.
+///
+/// `.extend(` does not match inside `extend_from_slice(` — the character after
+/// `extend` there is `_`, not `(` — so the two needles never double-count.
+const ACCUMULATION_NEEDLES: &[&str] = &["extend_from_slice(", "push_str(", ".extend(", ".append("];
+
+/// One reviewed accumulation site population.
+///
+/// Keyed by file + needle + exact count rather than by line number on purpose:
+/// line numbers churn on every unrelated edit, which would make this a nuisance
+/// rather than a gate, while a COUNT change is exactly the event that needs a
+/// human to look.
+struct Accumulation {
+    path: &'static str,
+    needle: &'static str,
+    count: usize,
+    why: &'static str,
+}
+
+/// Every accumulation site in scope, with the mechanism that bounds it.
+///
+/// Whether appending to a growable buffer is bounded depends on the drain
+/// downstream of it, which no lexical scan can see — so this list is where the
+/// reasoning lives, and the test below only detects that the population moved.
+///
+/// Counts were MEASURED by running the check with an empty list, not copied from
+/// a plan. Lines are recorded in the plan summary; the key deliberately is not a
+/// line number, because those churn on every unrelated edit.
+const ALLOWLIST: &[Accumulation] = &[
+    Accumulation {
+        path: "src/client/subscriptions.rs",
+        needle: "extend_from_slice(",
+        count: 2,
+        why: "The listen stream's reader and its fuzz seam each append ONE hyper frame to a byte \
+              buffer and then fully drain it with take_utf8_prefix on the same iteration, so the \
+              residual is the incomplete-character tail of at most three bytes. What the decoded \
+              text then feeds is bounded by SseParser::feed's unconditional pre-check over \
+              retained state PLUS this chunk (113-17), under the 256 KiB MAX_LISTEN_LINE_BYTES \
+              listen ceiling.",
+    },
+    Accumulation {
+        path: "src/client/subscriptions.rs",
+        needle: ".extend(",
+        count: 2,
+        why: "These collect the payloads drain_sse_payloads has just COMPLETED from one chunk, \
+              not bytes retained across chunks: the stream yields each pending payload and \
+              removes it before the next poll, so the population is bounded by what a single \
+              hyper frame can complete, and each completed payload was itself admitted under the \
+              parser's 256 KiB retained-state bound.",
+    },
+    Accumulation {
+        path: "src/client/subscriptions.rs",
+        needle: "push_str(",
+        count: 1,
+        why: "truncate_frame copies at most MAX_ECHOED_FRAME characters into a String pre-sized \
+              to exactly that boundary. It IS a bound rather than a consumer of one: it exists to \
+              keep untrusted peer frame bytes out of a client's logs, and it is the only writer \
+              of that String.",
+    },
+    Accumulation {
+        path: "src/shared/http.rs",
+        needle: "extend_from_slice(",
+        count: 1,
+        why: "connect_sse's reader appends one hyper frame to `undecoded` and take_utf8_prefix \
+              drains it in the same loop iteration, leaving only the incomplete-character tail of \
+              at most three bytes. The parser downstream is bounded by 113-17's unconditional \
+              retained-plus-chunk pre-check under this transport's configurable \
+              DEFAULT_HTTP_SSE_BUFFERED_BYTES ceiling (16 MiB, movable via \
+              with_sse_buffered_bytes).",
+    },
+    Accumulation {
+        path: "src/shared/simd_parsing.rs",
+        needle: "extend_from_slice(",
+        count: 2,
+        why: "SimdSseParser::parse_chunk drains every COMPLETE event out of its buffer before \
+              returning, so only an unterminated event tail is retained, and current_data \
+              accumulates the data lines of that one event. It carries no ceiling of its own, and \
+              the honest statement is that nothing feeds it a peer byte stream today: it is an \
+              exported standalone utility with zero in-crate callers outside its own test module. \
+              Wiring a transport to it requires giving it the same unconditional pre-check \
+              SseParser::feed carries.",
+    },
+    Accumulation {
+        path: "src/shared/sse_optimized.rs",
+        needle: "push_str(",
+        count: 1,
+        why: "parse_sse_event builds one event out of the BytesMut slice that split_to() has \
+              already cut at the event boundary, so this push is bounded by that single event. \
+              The function carries allow(dead_code) and has no caller; the LIVE path in this file \
+              is connect_sse's reqwest whole-body read, which is enumerated separately in \
+              WHOLE_BODY_ALLOWLIST rather than folded in here.",
+    },
+    Accumulation {
+        path: "src/shared/sse_parser.rs",
+        needle: "push_str(",
+        count: 4,
+        why: "take_utf8_prefix's output is bounded by the caller's buffer length — each byte is \
+              appended exactly once and the buffer is drained at a single exit point, which is \
+              also what makes it linear rather than quadratic. The two parser buffers are bounded \
+              by feed's UNCONDITIONAL pre-check over retained state plus this chunk (113-17, \
+              T-113-86). feed_complete_body skips that pre-check by design and states the byte \
+              cap as a precondition on the caller, discharged at both call sites by \
+              collect_body_within_cap (113-20, T-113-84).",
+    },
+    Accumulation {
+        path: "src/shared/uri_template.rs",
+        needle: "push_str(",
+        count: 11,
+        why: "URI-template expansion and regex-pattern construction over a SERVER-AUTHORED \
+              template plus a bounded variable map. This is not a peer-supplied byte stream and \
+              has no incremental reader, so the accurate statement is that its input is not \
+              peer-chosen — not that it carries a ceiling. It is in scope only because it lives \
+              under src/shared/.",
+    },
+    Accumulation {
+        path: "src/shared/wasm_http.rs",
+        needle: "push_str(",
+        count: 1,
+        why: "The wasm transport has no incremental reader: the browser fetch API hands it one \
+              already-materialised response String, and this loop reassembles the data lines of \
+              the FIRST event out of that existing allocation, stopping at the blank line. It \
+              introduces no growth beyond the response that already exists in memory.",
+    },
+];
+
+/// Observed `(path, needle) -> source lines` across the whole scope.
+fn observed_accumulations() -> BTreeMap<(String, &'static str), Vec<u32>> {
+    let mut observed = BTreeMap::new();
+    for file in scanned_scope() {
+        let path = rel(&file.path);
+        for needle in ACCUMULATION_NEEDLES {
+            let lines: Vec<u32> = file
+                .shipped_hits(needle)
+                .into_iter()
+                .map(|at| file.line(at))
+                .collect();
+            if !lines.is_empty() {
+                observed.insert((path.clone(), *needle), lines);
+            }
+        }
+    }
+    observed
+}
+
+fn allowlisted_accumulation(path: &str, needle: &str) -> Option<&'static Accumulation> {
+    ALLOWLIST
+        .iter()
+        .find(|entry| entry.path == path && entry.needle == needle)
+}
+
+/// Report an observed population the allowlist does not cover, or covers with a
+/// smaller count.
+fn report_unreviewed(out: &mut String, path: &str, needle: &str, lines: &[u32]) {
+    let Some(entry) = allowlisted_accumulation(path, needle) else {
+        let _ = writeln!(
+            out,
+            "\n  NEW accumulation site(s): {path} `{needle}` at line(s) {lines:?}\n    \
+             Bound it, or add an ALLOWLIST entry naming the mechanism that bounds it."
+        );
+        return;
+    };
+    if lines.len() > entry.count {
+        let _ = writeln!(
+            out,
+            "\n  COUNT ROSE: {path} `{needle}` — allowlisted {}, observed {} at line(s) {lines:?}\n    \
+             One of those lines is new. Raising the number to match reality WITHOUT a justification \
+             is the failure mode this test exists to prevent.",
+            entry.count,
+            lines.len()
+        );
+    }
+}
+
+/// Report an allowlist entry that no longer describes anything.
+///
+/// This is the anti-rot half: a stale entry is how the next round quietly loses
+/// coverage, because a real new site can hide under a number that was set for a
+/// site since deleted.
+fn report_dead_entry(
+    out: &mut String,
+    entry: &Accumulation,
+    observed: &BTreeMap<(String, &'static str), Vec<u32>>,
+) {
+    let seen = observed
+        .get(&(entry.path.to_string(), entry.needle))
+        .map_or(0, Vec::len);
+    if seen < entry.count {
+        let _ = writeln!(
+            out,
+            "\n  DEAD allowlist entry: {} `{}` — allowlisted {}, observed {}.\n    \
+             Delete the entry (or lower its count). A site was removed and its justification was \
+             not.",
+            entry.path, entry.needle, entry.count, seen
+        );
+    }
+}
+
+#[test]
+fn every_peer_byte_accumulation_is_reviewed() {
+    let observed = observed_accumulations();
+    let mut failures = String::new();
+    for ((path, needle), lines) in &observed {
+        report_unreviewed(&mut failures, path, needle, lines);
+    }
+    for entry in ALLOWLIST {
+        report_dead_entry(&mut failures, entry, &observed);
+    }
+    assert!(
+        failures.is_empty(),
+        "HTTP-09: the reviewed accumulation population changed:{failures}\n\
+         This check is a CHANGE DETECTOR, not a proof of boundedness — it exists so that a new \
+         append over peer-supplied bytes cannot enter this scope without somebody writing down \
+         what bounds it."
+    );
+}
+
+#[test]
+fn every_allowlist_justification_is_substantive() {
+    let mut seen: Vec<&str> = Vec::new();
+    for entry in ALLOWLIST {
+        let why = entry.why.trim();
+        assert!(
+            why.len() >= MIN_JUSTIFICATION_CHARS,
+            "ALLOWLIST entry {} `{}` needs a real justification naming the mechanism that bounds \
+             it, not {why:?}",
+            entry.path,
+            entry.needle
+        );
+        assert!(
+            !seen.contains(&why),
+            "ALLOWLIST entry {} `{}` reuses another entry's justification verbatim; a \
+             copy-pasted reason is not a reason",
+            entry.path,
+            entry.needle
+        );
+        seen.push(why);
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Tests for the scanner itself — without these, every check built on top of it
