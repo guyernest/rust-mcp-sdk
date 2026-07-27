@@ -3143,6 +3143,39 @@ async fn assemble_subscriptions_listen(
 /// [`extract_session_and_protocol_headers`], [`is_initialize_request`],
 /// [`resolve_session_for_request`], and [`compute_outbound_protocol_version`]
 /// with the middleware path.
+/// The fast path's legacy protocol-version guard.
+///
+/// Condition: `!is_init_request && !is_v2_request`, calling the PLAIN
+/// [`validate_protocol_version`]. Legacy validation applies to v1 non-init
+/// requests ONLY — an accepted v2 request is validated by the v2 gate that ran
+/// before this (D-11 left v1 untouched). A v1 / non-opted-in `server/discover`
+/// also flows through here, with no bypass.
+///
+/// # The asymmetry with its twin is DELIBERATE (D-08)
+///
+/// [`guard_legacy_version_with_middleware`] gates on `!is_v2_request` ONLY and
+/// passes `is_init_request` INTO
+/// [`validate_protocol_version_with_error_hook`], whose own rustdoc reads
+/// "A no-op for init requests" — the init check is folded inside the wrapper by
+/// design. These are TWO helpers, each preserving its own call site's condition
+/// verbatim, precisely so nobody "harmonises" them: a single shared helper, or
+/// conditions edited to read alike, silently changes behavior on one path.
+///
+/// Extracted in plan 113.1-05 (D-08, D-10).
+fn guard_legacy_version_fast(
+    state: &ServerState,
+    era: Option<crate::types::protocol::Era>,
+    is_init_request: bool,
+    is_v2_request: bool,
+    session_id: Option<&String>,
+    protocol_version: Option<&String>,
+) -> std::result::Result<(), Response> {
+    if !is_init_request && !is_v2_request {
+        validate_protocol_version(state, era, session_id, protocol_version)?;
+    }
+    Ok(())
+}
+
 /// Everything the fast path's read-and-classify preamble produces.
 ///
 /// SIX fields — a different bundle at a different pipeline stage from
@@ -3251,15 +3284,15 @@ async fn handle_post_fast_path(
         Err(error_response) => return error_response,
     };
 
-    // Legacy protocol-version validation applies to v1 non-init requests ONLY —
-    // an accepted v2 request is validated by the gate above (D-11 untouched v1).
-    // A v1 / non-opted-in `server/discover` also flows through here (no bypass).
-    if !is_init_request && !is_v2_request {
-        if let Err(error_response) =
-            validate_protocol_version(&state, era, session_id.as_ref(), protocol_version.as_ref())
-        {
-            return error_response;
-        }
+    if let Err(error_response) = guard_legacy_version_fast(
+        &state,
+        era,
+        is_init_request,
+        is_v2_request,
+        session_id.as_ref(),
+        protocol_version.as_ref(),
+    ) {
+        return error_response;
     }
 
     let auth_context = match extract_and_validate_auth(&state, &headers).await {
@@ -3679,6 +3712,49 @@ async fn dispatch_message_with_middleware(
 /// [`resolve_session_for_request`], [`extract_auth_with_middleware`], and
 /// [`dispatch_message_with_middleware`] so this orchestrator is a thin
 /// early-return pipeline.
+/// The middleware path's legacy protocol-version guard.
+///
+/// Condition: `!is_v2_request` **ONLY**, passing `is_init_request` INTO
+/// [`validate_protocol_version_with_error_hook`] rather than testing it here.
+/// That wrapper's own rustdoc reads "A no-op for init requests" — the init check
+/// is folded inside it BY DESIGN, and it also fires `report_middleware_error` on
+/// failure, which the plain fast-path call cannot do.
+///
+/// # The asymmetry with its twin is DELIBERATE (D-08)
+///
+/// [`guard_legacy_version_fast`] gates on `!is_init_request && !is_v2_request`
+/// and calls the PLAIN [`validate_protocol_version`]. These are TWO helpers,
+/// each preserving its own call site's condition verbatim, precisely so nobody
+/// "harmonises" them: a single shared helper, or conditions edited to read
+/// alike, silently changes behavior on one path.
+///
+/// Extracted in plan 113.1-05 (D-08, D-10).
+#[allow(clippy::too_many_arguments)]
+async fn guard_legacy_version_with_middleware(
+    state: &ServerState,
+    era: Option<crate::types::protocol::Era>,
+    is_init_request: bool,
+    is_v2_request: bool,
+    session_id: Option<&String>,
+    protocol_version: Option<&String>,
+    http_middleware: &ServerHttpMiddlewareChain,
+    http_context: &ServerHttpContext,
+) -> std::result::Result<(), Response> {
+    if !is_v2_request {
+        validate_protocol_version_with_error_hook(
+            state,
+            era,
+            is_init_request,
+            session_id,
+            protocol_version,
+            http_middleware,
+            http_context,
+        )
+        .await?;
+    }
+    Ok(())
+}
+
 /// Everything the middleware path's read-and-classify preamble produces.
 ///
 /// SIX fields, not eight: the middleware path's headers and body stay reachable
@@ -3823,22 +3899,19 @@ async fn handle_post_with_middleware(
         Err(response) => return response,
     };
 
-    // Legacy protocol-version validation applies to v1 non-init requests ONLY —
-    // an accepted v2 request is validated by the gate above (v1 path untouched).
-    if !is_v2_request {
-        if let Err(response) = validate_protocol_version_with_error_hook(
-            &state,
-            era,
-            is_init_request,
-            session_id.as_ref(),
-            protocol_version.as_ref(),
-            http_middleware,
-            &http_context,
-        )
-        .await
-        {
-            return response;
-        }
+    if let Err(response) = guard_legacy_version_with_middleware(
+        &state,
+        era,
+        is_init_request,
+        is_v2_request,
+        session_id.as_ref(),
+        protocol_version.as_ref(),
+        http_middleware,
+        &http_context,
+    )
+    .await
+    {
+        return response;
     }
 
     let auth_context =
