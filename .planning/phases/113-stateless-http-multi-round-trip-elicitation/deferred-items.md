@@ -547,3 +547,49 @@ nothing else.
 after the PR-blocking gate fails, and it currently answers "clean" for a tree
 that is not. Recorded rather than fixed because editing `CLAUDE.md` is outside
 this plan's file fence.
+
+---
+
+## D-113-K — the nominally-SSE GET path is collect-then-parse, not streaming
+
+**Found during:** plan 20, task 1 (the collected-body cap)
+**Severity:** MEDIUM — bounded, but structurally the wrong shape for an SSE path
+**Owner:** unassigned — a transport rewrite slice, not a bound fix
+**Status:** ⏸️ **DEFERRED and RECORDED** (T-113-94, disposition `accept, recorded`)
+
+`StreamableHttpTransport::start_sse` issues a GET whose response is
+**nominally an SSE stream** — a `text/event-stream` body that a conformant server
+may hold open indefinitely — and then reads it with a single whole-body
+`collect()` before handing the result to the parser's complete-body entry point.
+The `text/event-stream` branch of `post_body` has the same shape.
+
+Plan 20 **capped** both reads (`collect_body_within_cap` at the transport's
+configured `DEFAULT_MAX_COLLECTED_BODY_BYTES`), which bounds the allocation and
+makes the parser bypass's precondition true. It does **not** make either path
+streaming. Two consequences survive the cap:
+
+1. A long-lived SSE stream is still buffered whole before ANY event is
+   dispatched, so events arrive only when the server closes the body. That is a
+   pre-existing latency/semantics defect, older than Phase 113 (the code comment
+   `// Collect body (for now - could be streamed in future)` predates it).
+2. A legitimately long-lived stream now hits the cap where before it grew
+   without limit. Bounded failure beats unbounded growth, but the *right*
+   behaviour for this path is incremental parsing with the parser's in-flight
+   bound — exactly what `HttpTransport::connect_sse` and the
+   `subscriptions/listen` client already do since plans 113-15/113-17.
+
+**Why not fixed here.** Migrating these two sites from `collect()` to an
+incremental `Frame`-at-a-time reader feeding `SseParser::feed` is a transport
+rewrite: it changes when events are dispatched, how the abort handle and the
+resumption-token callback interleave, and how middleware (which today receives
+one whole body) is invoked. That is a design change with regression surface
+across every streamable-HTTP test, not a bound fix. Plan 20's fence is the
+cap; the rewrite is recorded rather than implied.
+
+**Fix shape for the owner.** Follow `src/shared/http.rs::connect_sse`: drive
+`BodyExt::frame()` in a loop inside the spawned task, feed each chunk to
+`SseParser::feed` (which bounds `retained + chunk` unconditionally since 113-17),
+poll `overflowed()` per chunk and end the stream on trip. The collected-body cap
+then applies only to the genuinely one-shot reads (the JSON POST response and the
+v2 error envelope), and the complete-body parser bypass loses two of its three
+callers.

@@ -421,20 +421,26 @@ impl SseParser {
     /// Feed a COMPLETE, already-size-capped SSE body, bypassing the in-flight
     /// bound entirely.
     ///
-    /// # Precondition — a REQUIREMENT ON THE CALLER
+    /// # Precondition — SATISFIED by both call sites
     ///
     /// This is only sound where the caller has ALREADY enforced its own byte cap
     /// on the collected body. It performs no bound check and never latches
     /// [`Self::overflowed`], so the caller's cap is the ONLY thing standing
     /// between a remote peer and this process's heap.
     ///
-    /// That precondition is stated as an obligation, NOT as an established fact.
-    /// Its two call sites — the POST-response and `start_sse` GET handlers in
-    /// [`crate::shared::streamable_http`] — currently collect the whole response
-    /// body with no cap at all. Plan 113-20 adds the real, overridable
-    /// collected-body cap at both sites, enforced BEFORE this function is
-    /// reached; until it lands the precondition is not yet satisfied and this
-    /// doc comment must not pretend otherwise (review HIGH-3, T-113-84).
+    /// Since plan 113-20 that cap is an established fact, not an obligation. Both
+    /// call sites — `StreamableHttpTransport::post_body` (the POST response) and
+    /// `StreamableHttpTransport::start_sse` (the GET SSE stream), both in
+    /// [`crate::shared::streamable_http`] — read their body through
+    /// `StreamableHttpTransport::collect_body_within_cap` at the transport's
+    /// configured
+    /// [`crate::shared::streamable_http::DEFAULT_MAX_COLLECTED_BODY_BYTES`], which
+    /// refuses an over-cap body with a `TransportError` BEFORE this function is
+    /// reached. The cap is a streaming bound, so an over-cap body is never
+    /// allocated whole either (review HIGH-3, T-113-84).
+    ///
+    /// A NEW caller inherits the obligation: capping is the caller's job, and
+    /// this function will not do it for you.
     ///
     /// # An incremental feeder may NEVER call this
     ///
