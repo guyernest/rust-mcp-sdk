@@ -998,3 +998,53 @@ behavior between HTTP and STDIO" sentence should be recorded as a known,
 deliberate non-conformance in the phase's positioning notes and this entry closes as
 *won't-do*. If **yes**, under which requirement — a **new** one, or an extension of
 CLNT-04 / SMPL-01 in Phase 117?
+
+---
+
+## D-113-T — nextest `LEAK` on FOUR pre-existing `tests/v2_subscriptions.rs` tests
+
+**Found during:** plan 113-31 (adding four live-socket resource-subscription tests).
+**Status:** recorded, NOT fixed — out of 113-31's fence (its `files_modified` is one
+test file and its scope fence forbids widening).
+
+### The measurement
+
+Sixteen consecutive full-suite runs of `cargo nextest run --features "full" --test
+v2_subscriptions` (19 tests) produced **4 `LEAK` reports across 12 of those runs**,
+each on a DIFFERENT pre-existing test:
+
+```
+LEAK [ 0.115s] pmcp::v2_subscriptions absent_capability_is_conformant
+LEAK [ 0.116s] pmcp::v2_subscriptions advertise_implies_serve
+LEAK [ 0.113s] pmcp::v2_subscriptions listen_stream_protocol
+LEAK [ 0.170s] pmcp::v2_subscriptions disconnect_releases_registry_slot
+```
+
+**Zero** of the four tests plan 113-31 added ever leaked in those 16 runs. They were
+written with the deterministic teardown 113-23 established for this file
+(`drop(stream); handle.abort(); let _ = handle.await;`). A run of the 15 pre-existing
+tests ALONE, six times, also produced zero leaks — so this is a load-dependent
+teardown race that a slightly busier suite makes visible, not a defect introduced by
+the new tests.
+
+### The cause and the one-line remedy
+
+Every leaking test ends with a bare `handle.abort()` and never awaits the aborted
+accept loop, so tokio runtime teardown can outrun nextest's 100 ms default leak
+timeout. Plan 113-23 hit exactly this on its own multi-socket tests and fixed it by
+awaiting the handle (`tests/v2_subscriptions.rs`, deviation 2 of `113-23-SUMMARY.md`).
+
+Eleven pre-existing tests in the file still lack that teardown. The fix is mechanical
+— add `let _ = handle.await;` after each `handle.abort()` — but it is an eleven-test
+sweep with no behavioural content, and doing it inside a coverage plan would bury the
+coverage change it exists to make reviewable.
+
+### Why it matters
+
+A `LEAK` is still a PASS, so this is noise rather than failure. It is worth closing
+because intermittent noise in a file that half-follows a documented doctrine and half
+does not reads to a future maintainer as flake attributable to whichever plan touched
+the file last.
+
+**Suggested owner:** any plan already editing `tests/v2_subscriptions.rs`, or a
+standalone test-hygiene sweep across the `v2_*` suites.
