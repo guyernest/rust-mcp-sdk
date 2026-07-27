@@ -2362,7 +2362,7 @@ Plans:
 **Wave 4** *(blocked on Wave 3; added by the RC spec-research supplement — see `113-SPEC-RECHECK-ADDENDUM-2026-07-26.md` Findings 11-14)*
 
 - [ ] 113-29-PLAN.md — Finding 11: `basic/index.mdx` says implementations of this version MUST NOT emit `-32002`, but pmcp's two call sites (`server/core.rs:2616`, `task_dispatch.rs:605`) have never had v2-path reachability traced; traced by execution rather than inspection, and era-gated if reachable
-- [ ] 113-30-PLAN.md — Finding 13: `src/server/subscriptions.rs:17-18` ships a FALSE claim in public rustdoc ("no polling shape for change notifications anywhere in the MCP spec") — `caching.mdx` defines TTL re-fetch via `ttlMs`/`cacheScope` (SEP-2549) and blesses it *instead of* `listChanged`; the D-11 conclusion stands, its justification does not. Also records Finding 14a (no stdio `subscriptions/listen`) as a deliberate deferral
+- [x] 113-30-PLAN.md — Finding 13: BOTH false clauses retired from the `# D-11` rustdoc — the one the addendum quoted *and* "the only spec-conformant delivery shape for `listChanged`", false for the same reason one sentence later. The block now names the spec's real polling shape (`ttlMs`/`cacheScope`, SEP-2549, `server/utilities/caching`, blessed *instead of* `listChanged`), states that pmcp implements none of it (re-measured at execution time: zero hits in `src/`) and cross-references SCHM-03/Phase 115 — with D-11's conclusion unchanged and stated first, and the second clause replaced by a checkable claim about pmcp ("the only delivery shape pmcp CURRENTLY implements"). Two guards keep it out: an `include_str!` self-scan whose forbidden phrases are assembled at runtime from sub-40-char fragments (so it cannot contain its own needle, nor decay into `contains("")`) and flattened against comment markers (so a rustdoc line wrap cannot hide a reintroduction — proven by control B), plus a companion requiring the replacement to keep naming `ttlMs`/`cacheScope`/`SEP-2549`/`SCHM-03`. RED before the edit; three negative controls run and reverted. Finding 14a recorded as **D-113-S** (not the plan's D-113-Q — A..R are all in use), blocked on missing information and not difficulty: Phase-112 D-05 requires `Mcp-Name` on every v2 request and stdio has no headers. Finding 14b left to 113-31. `.planning/REQUIREMENTS.md` untouched, no checkbox flipped
 - [ ] 113-31-PLAN.md — Finding 14b: `resourceSubscriptions`/`resourcesListChanged` have zero end-to-end wire tests — half of HTTP-08's mandated opt-in surface is unit-tested only; adds live-socket coverage
 - [x] 113-32-PLAN.md — Finding 12: HTTP-08's advertise-implies-serve predicate has NO spec sentence behind it — it lives in the conformance repo, which the schema-only gate cannot see; adds a second gate arm pinning a conformance sha verbatim from upstream
 
@@ -2460,7 +2460,7 @@ Plans:
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 112. Version Plumbing Spine | 10/10 | Complete    | 2026-07-23 |
-| 113. Stateless HTTP + MRTR | 27/32 | In Progress|  |
+| 113. Stateless HTTP + MRTR | 28/32 | In Progress|  |
 | 114. Tasks Extension Migration | 0/TBD | Not started | - |
 | 115. JSON Schema 2020-12 + Caching Hints | 0/TBD | Not started | - |
 | 116. Auth Hardening SEPs | 0/TBD | Not started | - |
