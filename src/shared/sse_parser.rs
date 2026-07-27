@@ -480,26 +480,57 @@ impl SseParser {
     /// first) and [`Self::feed_complete_body`] (which does not), so the two
     /// entry points can never drift in how they tokenize.
     fn drain_complete_lines(&mut self, data: &str) -> Vec<SseEvent> {
-        // The drain loop below runs to exhaustion (`drain(..=line_end)` consumes
-        // through each `\n`) and `process_line` never touches `buffer`, so every
-        // call RETURNS with a newline-free buffer and it starts empty — an
-        // unterminated line is all it can ever hold on entry.
-        debug_assert!(
-            !self.buffer.contains('\n'),
-            "the drain loop leaves no newline in the buffer"
-        );
+        // # Invariant — the retained buffer is NEWLINE-FREE on entry
+        //
+        // The drain loop below runs to exhaustion and `process_line` never
+        // touches `buffer`, so every call RETURNS with a newline-free buffer and
+        // it starts empty — an unterminated line is all it can ever hold on
+        // entry.
+        //
+        // This is now the SOUNDNESS PRECONDITION for `scan_start` below, not
+        // merely a comment: the search skips the retained prefix entirely, which
+        // can only miss a line if no `'\n'` can hide in that prefix.
+        //
+        // It used to be a `debug_assert!(!self.buffer.contains('\n'))`. That
+        // assertion was itself an O(retained-length) scan on EVERY call, so it
+        // kept this function quadratic in debug builds — precisely the profile
+        // `cargo test` and the 1-byte-chunk proptest run in, which would have
+        // left the new guards RED after a correct fix. Deleted in plan 113.1-02
+        // (D-15); the invariant is pinned instead by the named test
+        // `drain_leaves_no_newline_in_the_retained_buffer`, which covers feeds of
+        // every shape including a CRLF split across a chunk boundary.
+        let scan_start = self.buffer.len();
         self.buffer.push_str(data);
         let mut events = Vec::new();
 
-        // LINEAR, not quadratic. A `drain(..=line_end)` per line memmoves the
-        // whole remaining buffer once per line, so one chunk carrying `n` lines
-        // cost `O(n * len)` byte moves — on bytes a REMOTE peer chooses the
-        // shape of, at both incremental feeders. A `consumed` cursor advances
-        // instead and the single drain below runs once for the whole call, the
-        // same shape `take_utf8_prefix` above uses for the same reason.
+        // LINEAR, not quadratic — in TWO distinct senses, fixed in two rounds.
+        //
+        // Per-LINE (fixed in `0493d9fb`): a `drain(..=line_end)` per line memmoves
+        // the whole remaining buffer once per line, so one chunk carrying `n`
+        // lines cost `O(n * len)` byte moves. A `consumed` cursor advances instead
+        // and the single drain below runs once for the whole call, the same shape
+        // `take_utf8_prefix` above uses for the same reason.
+        //
+        // Per-CALL (D-113-R, fixed in plan 113.1-02): the search itself used to
+        // restart at offset 0 on every call, re-scanning the whole retained prefix
+        // that every earlier call had already scanned. A peer chooses the chunk
+        // framing, so a peer chose how many times its bytes got re-scanned —
+        // 1-byte chunks cost one full-buffer scan per byte. `search_from` starts
+        // at `scan_start`, the length BEFORE this chunk was appended, so each call
+        // scans only the bytes it just added. Sound because the retained prefix is
+        // newline-free (see the invariant above).
+        //
+        // `consumed` MUST stay initialised to 0, not to `scan_start`: it drives
+        // both the final `drain(..consumed)` and the CRLF lookback guard. When the
+        // retained prefix ends with `\r` and this chunk begins with `\n`,
+        // `line_end == scan_start` and `line_end - 1` points INTO the retained
+        // prefix; the guard `line_end > consumed` is then `scan_start > 0`, which
+        // is true, so the `\r` is correctly trimmed. Seeding `consumed` to
+        // `scan_start` would make that guard false and leak the `\r` into the line.
         let mut consumed = 0usize;
-        while let Some(offset) = self.buffer[consumed..].find('\n') {
-            let line_end = consumed + offset;
+        let mut search_from = scan_start;
+        while let Some(offset) = self.buffer[search_from..].find('\n') {
+            let line_end = search_from + offset;
             // `line_end` is a BYTE index (`str::find` returns one). The CRLF
             // check must therefore also be a BYTE check.
             //
@@ -531,6 +562,7 @@ impl SseParser {
             }
 
             consumed = line_end + 1;
+            search_from = consumed;
         }
         self.buffer.drain(..consumed);
 
@@ -1103,6 +1135,219 @@ mod tests {
         );
     }
 
+    /// The LOAD-BEARING absolute budget for `feed` at ADVERSARIAL chunking (HTTP-09 clause 3).
+    ///
+    /// `sse_parser_feed_stays_within_its_linear_time_budget` above cannot catch
+    /// this defect class and says so in its own rustdoc: at its 4 KiB chunking
+    /// the per-call re-scan is a memchr over at most 1 MiB, single-digit
+    /// milliseconds, and a negative control (a per-chunk full-buffer copy) moved
+    /// it 6.7 ms -> 11.7 ms while it still PASSED. The shape that separates
+    /// linear from quadratic is the one a peer actually gets to choose: **one
+    /// byte per `feed()` call**, with nothing ever completing, so the retained
+    /// prefix grows monotonically and every call re-scans it.
+    ///
+    /// # Why 512 KiB and why one second
+    ///
+    /// Measured at `opt-level = 0` (the profile `cargo test` builds this module
+    /// with — the crate sets no `[profile.dev]` override), 512 KiB fed one byte
+    /// per call, minimum of 3 runs, on the plan 113.1-02 development machine:
+    ///
+    /// | shape | cost | vs. this ceiling |
+    /// |---|---|---|
+    /// | committed scan-window cursor | 63.6 ms | 15.7x UNDER |
+    /// | pre-113.1-02: `find` restarting at offset 0 every call | 6.81 s | 6.8x OVER |
+    ///
+    /// BOTH rows were measured, the second twice: once against the unfixed tree
+    /// before the fix landed, and again by a post-fix negative control that
+    /// reverted only the cursor. The margins are asymmetric and written down on
+    /// purpose — the honest defence of a wall-clock assertion is its measurement.
+    #[test]
+    fn sse_parser_feed_1b_chunks_stays_within_its_linear_time_budget() {
+        const CHUNKS: usize = 512 * 1024;
+        // Large enough that the retained total never trips the bound — this test
+        // is about cost, not about enforcement. `DEFAULT_MAX_BUFFER_SIZE` is
+        // 1 MiB, which would admit 512 KiB, but the bound is stated explicitly so
+        // the test does not silently change meaning if that default moves.
+        const BOUND: usize = 4 * 1024 * 1024;
+        const CEILING: Duration = Duration::from_secs(1);
+
+        let best = min_elapsed(3, || {
+            let mut parser = SseParser::with_max_buffer_size(BOUND);
+            // Neither `\n` nor `\r`: nothing ever drains, so every call scans a
+            // buffer one byte longer than the last. That is the adversarial shape.
+            for _ in 0..CHUNKS {
+                std::hint::black_box(parser.feed("x"));
+            }
+            std::hint::black_box(parser.buffered_bytes());
+        });
+
+        eprintln!("SseParser::feed: {CHUNKS} single-byte chunks in {best:?} (ceiling {CEILING:?})");
+
+        assert!(
+            best < CEILING,
+            "SseParser::feed took {best:?} (minimum of 3 runs) to absorb {CHUNKS} \
+             single-byte chunks; the ceiling is {CEILING:?}.\n\
+             \n\
+             This excludes ONE shape: restarting the `find('\\n')` search at offset \
+             0 on every call, so a peer sending N one-byte chunks pays O(N^2) \
+             scanning. Measured at opt-level 0: that shape costs ~6.81 s here and \
+             the committed scan-window cursor costs ~63.6 ms, so this ceiling sits \
+             ~15.7x above linear and ~6.8x below quadratic.\n\
+             \n\
+             A measurement in the upper region means the per-call rescan is back, \
+             not that the machine is slow. Do NOT raise this number to make the \
+             test pass; that converts the guard back into the unfalsifiable ceiling \
+             D-113-R exists to record (plan 113.1-02)."
+        );
+
+        // A time budget alone would also be satisfied by a parser that got fast by
+        // retaining LESS. Pin the retention contract at the budget size too, so
+        // "fast" has to mean "fast AND still holding every byte".
+        let mut parser = SseParser::with_max_buffer_size(BOUND);
+        for _ in 0..CHUNKS {
+            assert!(
+                parser.feed("x").is_empty(),
+                "no chunk carries a newline, so no line completes and nothing dispatches"
+            );
+        }
+        assert_eq!(
+            parser.buffered_bytes(),
+            CHUNKS,
+            "every fed byte is still retained — that is what makes this the \
+             accumulating path"
+        );
+    }
+
+    /// The MACHINE-INDEPENDENT guard for `feed` at adversarial chunking (D-16).
+    ///
+    /// `take_utf8_prefix` carries both an absolute budget and this ratio; `feed`
+    /// only ever got the budget half. A 4x input step predicts ~4x time under
+    /// O(n) and ~16x under O(n^2), so a ceiling of 8x separates them with roughly
+    /// equal log-scale headroom.
+    ///
+    /// This one cannot be flaked by a slow or loaded CI box — it cancels the
+    /// machine's constant factor — and unlike the absolute budget it also catches
+    /// a merely-worse-but-still-under-ceiling regression. Measured on the plan
+    /// 113.1-02 development machine, both sizes fed one byte per call:
+    ///
+    /// | shape | 64 KiB | 256 KiB | ratio |
+    /// |---|---|---|---|
+    /// | committed scan-window cursor | 6.70 ms | 29.4 ms | **4.39x** |
+    /// | pre-113.1-02: `find` restarting at 0 | 113 ms | 1.71 s | **15.06x** |
+    #[test]
+    fn sse_parser_feed_cost_grows_linearly_not_quadratically() {
+        const SMALL: usize = 64 * 1024;
+        const BIG: usize = 4 * SMALL;
+        // Below this, the measurement is dominated by timer resolution and
+        // allocator warm-up rather than by the scan.
+        const RESOLUTION_FLOOR: Duration = Duration::from_micros(50);
+        const MAX_RATIO: f64 = 8.0;
+        const BOUND: usize = 4 * 1024 * 1024;
+
+        let measure = |chunks: usize| {
+            min_elapsed(3, || {
+                let mut parser = SseParser::with_max_buffer_size(BOUND);
+                for _ in 0..chunks {
+                    std::hint::black_box(parser.feed("x"));
+                }
+                std::hint::black_box(parser.buffered_bytes());
+            })
+        };
+
+        let small = measure(SMALL);
+        let big = measure(BIG);
+
+        if small < RESOLUTION_FLOOR {
+            eprintln!(
+                "sse_parser_feed_cost_grows_linearly_not_quadratically: SKIPPING the \
+                 ratio assertion. The {SMALL}-chunk measurement is {small:?}, under \
+                 the {RESOLUTION_FLOOR:?} floor, so the ratio would be asserted on \
+                 noise. The absolute budget in \
+                 sse_parser_feed_1b_chunks_stays_within_its_linear_time_budget is \
+                 unaffected and remains load-bearing, so the guard does not degrade \
+                 to nothing."
+            );
+            return;
+        }
+
+        let ratio = big.as_secs_f64() / small.as_secs_f64();
+        eprintln!(
+            "SseParser::feed growth: {SMALL} -> {small:?}, {BIG} -> {big:?}, \
+             ratio {ratio:.2}x (ceiling {MAX_RATIO:.1}x)"
+        );
+        assert!(
+            ratio <= MAX_RATIO,
+            "SseParser::feed cost grew {ratio:.1}x for a 4x input step \
+             ({SMALL} single-byte chunks -> {small:?}, {BIG} -> {big:?}); the \
+             ceiling is {MAX_RATIO:.1}x.\n\
+             \n\
+             O(n) predicts ~4x (measured 4.39x on the committed scan-window cursor: \
+             6.70 ms -> 29.4 ms). O(n^2) predicts ~16x (measured 15.06x on the \
+             pre-113.1-02 shape that restarts `find` at offset 0: 113 ms -> \
+             1.71 s). A ratio in the upper region is the quadratic shape, not \
+             scheduling noise — this is a minimum over 3 runs at each size, and \
+             noise raises a minimum only by raising every sample."
+        );
+    }
+
+    /// The soundness precondition for the scan-window cursor, as a named test.
+    ///
+    /// `drain_complete_lines` starts its `find('\n')` search at the byte offset
+    /// where the NEW chunk begins, skipping the retained prefix. That is only
+    /// correct because the retained prefix cannot contain a `'\n'`. This test is
+    /// what pins that invariant.
+    ///
+    /// It replaces the per-call `debug_assert!(!self.buffer.contains('\n'))`
+    /// deleted in plan 113.1-02: that assertion was itself an O(retained-length)
+    /// scan on EVERY call, so it kept the function quadratic in debug builds —
+    /// which is exactly the profile `cargo test` and the 1-byte-chunk proptest
+    /// run in. The invariant is unchanged; only its enforcement moved from a
+    /// per-call scan to one test covering feeds of every shape.
+    #[test]
+    fn drain_leaves_no_newline_in_the_retained_buffer() {
+        // Each case is a sequence of chunks fed to ONE parser in order.
+        let cases: &[(&str, &[&str])] = &[
+            (
+                "a line split mid-way across two chunks",
+                &["data: hel", "lo\n\n"],
+            ),
+            (
+                "a CRLF split across a chunk boundary",
+                &["data: x\r", "\n\r\n"],
+            ),
+            ("a bare empty line", &["\n\n"]),
+            (
+                "a chunk that is exactly one newline",
+                &["data: y", "\n", "\n"],
+            ),
+            // NOT "a multi-byte character split across two feeds" — that is
+            // unrepresentable through `feed(&str)`, since every `&str` is valid
+            // UTF-8 by construction. What IS reachable is a chunk boundary placed
+            // immediately before and immediately after such a character.
+            (
+                "a boundary hugging a multi-byte character",
+                &["data: ", "\u{2602}", "\u{4f60}\u{597d}\n\n"],
+            ),
+            ("a lone CR retained with no LF yet", &["data: z\r"]),
+            ("nothing but a partial line", &["data: unterminated"]),
+        ];
+
+        for (name, chunks) in cases {
+            let mut parser = SseParser::new();
+            for chunk in *chunks {
+                let _ = parser.feed(chunk);
+                assert!(
+                    !parser.buffer.contains('\n'),
+                    "case {name:?}: the retained buffer holds a newline ({:?}) after \
+                     feeding {chunk:?}. The scan-window cursor in \
+                     drain_complete_lines skips this prefix, so a newline hiding in \
+                     it would silently drop or merge SSE frames.",
+                    parser.buffer,
+                );
+            }
+        }
+    }
+
     /// The named, readable companion to the retained-tail property test below.
     ///
     /// A 4-byte UTF-8 sequence truncated to its first 3 bytes is the WORST case:
@@ -1549,6 +1794,81 @@ mod tests {
             for chunk in chunks {
                 let _ = parser.feed(&chunk);
             }
+        }
+
+        /// The SAME text, re-cut at different CHARACTER boundaries, must produce
+        /// the same events and leave the same retained tail.
+        ///
+        /// This is the property the scan-window cursor (D-12) can violate: it
+        /// starts each search at the offset where the new chunk begins, so a bug
+        /// in where that offset lands would drop or merge frames only for SOME
+        /// chunkings — invisible to any fixed-fixture test. The claim is
+        /// deliberately *arbitrary text under arbitrary character-boundary
+        /// chunking*, and NOT a claim over arbitrary raw bytes: `feed` takes
+        /// `&str`, and every `&str` is valid UTF-8 by construction, so a `feed`
+        /// call can never receive half a character. Byte-level fragmentation is
+        /// [`take_utf8_prefix`]'s responsibility and has its own coverage there
+        /// (`property_take_utf8_prefix_retains_at_most_a_three_byte_tail`), so
+        /// this property has no hole where that case would be.
+        ///
+        /// The strategy is the block's established alphabet, which already mixes
+        /// `\r`, `\n` and multi-byte characters — exactly what this needs.
+        #[test]
+        fn property_feed_chunking_invariance(
+            chunks_a in proptest::collection::vec(
+                "(\\PC|\r|\n|\u{2602}|\u{4f60}){0,40}",
+                0..4,
+            ),
+            split_sizes in proptest::collection::vec(1usize..7usize, 1..8),
+        ) {
+            // Splitting A is the generated vector itself, so the reference text is
+            // its concatenation — which makes character-boundary safety structural
+            // rather than something the test has to get right.
+            let text: String = chunks_a.concat();
+
+            // Splitting B re-cuts that same text at independent character counts,
+            // never at raw byte offsets (slicing `&str` at a non-boundary index
+            // panics).
+            let chars: Vec<char> = text.chars().collect();
+            let mut chunks_b: Vec<String> = Vec::new();
+            let mut at = 0usize;
+            let mut step = 0usize;
+            while at < chars.len() {
+                let take = split_sizes[step % split_sizes.len()];
+                let end = (at + take).min(chars.len());
+                chunks_b.push(chars[at..end].iter().collect());
+                at = end;
+                step += 1;
+            }
+
+            let mut parser_a = SseParser::new();
+            let mut events_a = Vec::new();
+            for chunk in &chunks_a {
+                events_a.extend(parser_a.feed(chunk));
+            }
+
+            let mut parser_b = SseParser::new();
+            let mut events_b = Vec::new();
+            for chunk in &chunks_b {
+                events_b.extend(parser_b.feed(chunk));
+            }
+
+            proptest::prop_assert_eq!(
+                &events_a,
+                &events_b,
+                "the same text emitted a different event sequence under a \
+                 different chunking (A: {:?}, B: {:?})",
+                chunks_a,
+                chunks_b
+            );
+            proptest::prop_assert_eq!(
+                &parser_a.buffer,
+                &parser_b.buffer,
+                "the same text left a different retained tail under a different \
+                 chunking (A: {:?}, B: {:?})",
+                chunks_a,
+                chunks_b
+            );
         }
 
         /// And neither does a TIGHTLY bounded parser, whose enforcement branch
