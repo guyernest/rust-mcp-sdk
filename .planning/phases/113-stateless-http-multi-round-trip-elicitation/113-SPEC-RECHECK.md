@@ -280,8 +280,15 @@ shapes) are therefore **not executable**, and step 4 cannot upgrade this verdict
 
 The three landed constants (`-32020` / `-32021` / `-32022`) therefore remain **pre-final
 values held under a developer exception**. The re-verification obligation is **NOT discharged**
-— it rolls forward. Re-run this checkpoint on or after 2026-07-28; a mismatch against the
-published schema is still a **phase-reopening event**, not an advisory.
+— it rolls forward. A mismatch against the published schema is still a **phase-reopening
+event**, not an advisory.
+
+> **Trigger amended by plan 113-28 (2026-07-27).** This paragraph originally instructed
+> "Re-run this checkpoint on or after 2026-07-28". That is the wrong trigger and is superseded
+> by § Re-verification obligation → **TRIGGER — a CONDITION, not a date**: the obligation
+> becomes runnable when a **versioned schema directory exists**, not when a date passes. The
+> measurement recorded above — five directories, no `2026-07-28`, on 2026-07-26 — is unchanged
+> and remains the historical record of that run.
 
 ---
 
@@ -327,6 +334,30 @@ other and from every pre-existing constant, and their containment in the spec-re
 **Plan 12 Task 3 MUST re-verify these three values against the published `schema/2026-07-28`
 before flipping HTTP-01 or HTTP-02 — or any other requirement — to complete.**
 
+> #### TRIGGER — a CONDITION, not a date
+>
+> *(Restated by plan 113-28 Task 3, 2026-07-27, per addendum Finding 10. The original wording
+> said "re-run on or after 2026-07-28"; that is the wrong trigger and it is superseded here.)*
+>
+> **This obligation becomes runnable when a VERSIONED SCHEMA DIRECTORY EXISTS upstream — not
+> when a date passes.**
+>
+> The date is context, not a condition. The RC announcement says plainly that nothing breaks on
+> July 28: it "is merely the date when the normative text is published", and the June 29
+> SDK-betas post still speaks of a time "before the new specification is **locked**". Waiting
+> for a date is not the same as waiting for the artifact.
+>
+> Two consequences, both load-bearing:
+>
+> - **The gate is not DISCHARGED merely because a day passed.** Arm 1 remains un-runnable while
+>   the directory is absent, and `## Verdict` stays `PENDING` no matter what the calendar says.
+> - **The gate is not DUE merely because a day passed either.** A re-run finding the directory
+>   still absent lands in `STILL-ABSENT` (step 4) and rolls forward. That is a recorded outcome,
+>   not a failure and not a deferral.
+>
+> **Arm 2 is not gated on this condition at all.** The conformance repository moves on its own
+> cadence; arm 2 can and should be run independently of whether the schema has been published.
+
 A mismatch between any value landed here and the published schema is a **phase-reopening
 event, not a warning**. It does not get recorded as an advisory, deferred to a follow-up, or
 absorbed as a known-issue: the affected requirement stays incomplete and the phase reopens to
@@ -360,8 +391,23 @@ Re-verification procedure for plan 12 Task 3:
 3. Assert each identifier still maps to `-32020` / `-32021` / `-32022` respectively, and that
    the HTTP-400 mappings and the `requiredCapabilities`-is-an-object /
    `supported`-is-a-string-array payload shapes are unchanged.
-4. Record the outcome by upgrading this file's `## Verdict` to `PUBLISHED-CONFIRMED` or
-   `PUBLISHED-DRIFT`. Only then may requirements be flipped.
+4. Record the outcome. **THREE landing states are defined and this step cannot end in a
+   fourth.** *(The third branch was added by plan 113-28 Task 3, 2026-07-27. Branches 1 and 2
+   are the original text and are unchanged in substance.)*
+
+   | Step-1 result | Landing state | Action |
+   |---|---|---|
+   | the directory EXISTS and steps 2-3 agree | `PUBLISHED-CONFIRMED` | upgrade this file's `## Verdict`. Only then may requirements be flipped — and only once **arm 2 has also been run and recorded**. |
+   | the directory EXISTS and steps 2-3 disagree | `PUBLISHED-DRIFT` | upgrade this file's `## Verdict`. The mismatch is a **phase-reopening event** per the clause above: the affected requirement stays incomplete and the phase reopens to correct the wire constant. No requirement is flipped. |
+   | **the directory still DOES NOT EXIST** | **`STILL-ABSENT`** | apply **`## Third Outcome Policy`** below. `## Verdict` stays `PENDING`, the obligation is **not discharged** and rolls forward, and no requirement is flipped. |
+
+   **`STILL-ABSENT` is a legitimate, non-failing outcome.** It exists so that a re-run cannot
+   end in an undefined state, and so that the eleven `[~]` requirements stay `[~]` **by
+   recorded decision rather than by default**.
+
+   It weakens nothing. A `PUBLISHED-DRIFT` is a phase-reopening event exactly as before, and
+   `STILL-ABSENT` is not a licence to treat the draft as published — see the policy's
+   § What this policy does NOT permit.
 
 #### Arm 2 — Conformance predicate (§ B.6)
 
@@ -393,6 +439,134 @@ repository moves on its own cadence and is already ahead of the pin recorded in 
 **Landing state (shared).** Arm 1's step 4 is the landing state for the obligation as a whole. It
 is reached only when **both** arms have been run and recorded. A `## Verdict` upgraded on the
 strength of arm 1 alone is invalid, and requirements flipped under it must be flipped back.
+
+---
+
+## Third Outcome Policy
+
+This section answers step 4's third branch — what the re-verification does when
+`schema/2026-07-28/` still does not exist. It exists for the same reason the
+`## Recorded Exception` above exists: so the decision is traceable to a named person, a date
+and a specific body of evidence, rather than being inferred later from a commit message or
+from the mere fact that nothing happened.
+
+| Field | Value |
+|-------|-------|
+| **Decided by** | Guy Ernest (maintainer) |
+| **Decided via** | `/gsd:execute-phase 113` — plan 113-28 Task 2, `type="checkpoint:decision" gate="blocking"` |
+| **Decision** | **`hold`** — hold the eleven `[~]` requirements indefinitely |
+| **UTC date** | 2026-07-27 |
+| **Question being answered** | What does the binding re-verification procedure do on or after 2026-07-28 if `schema/2026-07-28/` still does not exist upstream — the third outcome, neither `PUBLISHED-CONFIRMED` nor `PUBLISHED-DRIFT`? |
+| **Verdict at time of decision** | `PENDING` |
+| **Evidence** | `113-PUBLICATION-DECISION-BRIEF.md`, produced 2026-07-27 by plan 113-28 Task 1. Probe re-run **2026-07-27T14:17:03Z – 14:25:05Z** (`gh` 2.64.0, authenticated, every exit 0; no probe recorded `UNAVAILABLE`). |
+| **Conditions stated by the decider** | **none stated** |
+| **Review date stated** | **none stated** |
+| **Scope narrowing stated** | **none stated** |
+
+The three "none stated" rows are recorded as such deliberately. The decider stated no
+conditions; none were inferred, and none may be read into this record later.
+
+### The rule
+
+**On a `STILL-ABSENT` landing (step 4, branch 3):**
+
+1. `## Verdict` stays **`PENDING`**. It is not upgraded, not annotated as "effectively
+   confirmed", and not given a new state.
+2. The eleven `[~]` requirements — HTTP-01 … HTTP-08, CLNT-01, CLNT-02, CLNT-05 — **stay
+   `[~]`**. No checkbox is flipped.
+3. The re-verification obligation is **NOT discharged**. It rolls forward and is re-run
+   whenever the trigger condition is next worth checking.
+4. The run **is still recorded** — a `STILL-ABSENT` result gets a dated sub-section under
+   `### Verdict re-verification` exactly as the 2026-07-26 run did, so that "we checked and it
+   was absent" is distinguishable from "nobody checked".
+5. **Arm 2 is run regardless.** It is not gated on the schema's publication (see § TRIGGER),
+   and a `STILL-ABSENT` on arm 1 is no reason to skip it. Drift in the conformance predicate is
+   detectable today and would be an HTTP-08 phase-reopening event on its own terms.
+
+### What this policy does NOT permit
+
+Stated explicitly, because `hold` is the option that changes least and is therefore the easiest
+to quietly over-read:
+
+- It does **not** promote the draft pin to an authoritative source. `schema/draft/schema.ts` @
+  `71e306956a4959c9655e5036be215d41986596e6` remains what the `## Recorded Exception` calls it:
+  the strongest source available, and **not** the final schema.
+- It does **not** spend a second exception against VERS-06's values-from-final-schema-only rule
+  or against REQUIREMENTS.md's Out-of-Scope entry. The first exception stands unchanged; no
+  second one was granted.
+- It does **not** authorise flipping any requirement at a future run on the strength of elapsed
+  time, accumulated confidence, or the evidence in the brief. Only a `PUBLISHED-CONFIRMED`
+  landing — with **both arms** run — may do that.
+- It does **not** weaken the phase-reopening consequence of a `PUBLISHED-DRIFT`.
+
+### Two measured facts a future re-runner must carry
+
+Both were measured by plan 113-28 Task 1 and both bear directly on why `hold` is not
+open-ended in practice. They are recorded here so a later reader reaches them without having to
+reconstruct the investigation.
+
+**1. The absence of an in-flight commit is the EXPECTED state, not a signal.**
+`.github/workflows/cut-release.yml` exists on `main` and states its own contract: `kind=final`
+is a **`workflow_dispatch`** job that runs
+
+```
+cp -r docs/specification/draft "docs/specification/$VERSION"
+cp -r schema/draft "schema/$VERSION"
+sed -i "s|^export const LATEST_PROTOCOL_VERSION = .*|export const LATEST_PROTOCOL_VERSION = \"$VERSION\";|" "schema/$VERSION/schema.ts"
+```
+
+then regenerates `schema.json` and opens a reviewed PR (`release/<version>`) for core
+maintainers. **No branch is supposed to carry `schema/<version>/` before someone dispatches
+that workflow.** Anyone re-running this checkpoint must therefore **not** read "no in-flight PR
+creates the directory" as evidence that publication is unlikely, nor as evidence of drift risk.
+It follows that the published `schema/2026-07-28/schema.ts` will be a **byte-copy of
+`schema/draft/schema.ts` as it stands at dispatch time**, modulo the one stamped
+`LATEST_PROTOCOL_VERSION` line — **a dispatch today would publish exactly the
+`-32020`/`-32021`/`-32022` this SDK already ships.**
+
+**2. Zero drift for eleven days, and no open change targets the three constants.**
+Re-measured 2026-07-27 against `main` HEAD `31eefec6` (2026-07-27T11:11:09Z), **32 commits**
+past this phase's pin: `schema/draft/schema.ts` and `schema.json` are blob- and
+sha256-identical to the pin (`c56f0ad2…` / `9281c489…`). All **82** open PRs were enumerated;
+**11** modify `schema/draft/schema.ts`; each one's patch was grepped and **none touches the
+`-3202x` block**.
+
+**The one forward risk worth re-checking is PR #2678** ("SEP-2678: Introduce additional error
+codes to protocol", open, non-draft, +582/−0, last updated 2026-06-23). It proposes
+`SERVER_ERROR = -32000`, `NOT_FOUND = -32001` and `RESOURCE_NOT_FOUND = -32002` in the adjacent
+*implementation-defined* range. It does not touch the three constants under exception, but it
+would contradict the draft's current "codes … remain reserved and are never reused" text for
+`-32002` — the very rule plan 113-29 era-gated pmcp's two `-32002` emission sites against.
+**Re-check #2678's state at every future run of this obligation.**
+
+### Authorised for the re-verification run — requirement TEXT corrections
+
+The maintainer answered `prose: correct` at the same checkpoint, authorising **both** prose
+corrections that plan 113-32 routed to plan 113-28. **Neither was applied.**
+`.planning/REQUIREMENTS.md` was deliberately not edited by plan 113-28 (0-byte diff), so that
+every requirement-text change in this phase lands in one reviewable place — the re-verification
+run.
+
+| # | Requirement | Change AUTHORISED (apply at the re-verification run, not before) |
+|---|---|---|
+| 1 | HTTP-08 (requirement text and its `⚠` caveat block) | Replace the citation `conformance/src/scenarios/server/stateless.ts:988-1015` with **`stateless.ts:983-1016`**. Measured by 113-32 against the fetched file: the start is exact (988 is `const advertisesSubscriptions = !!(`), the end is **one line short** (the consuming `listenRejected` closure terminates at **1016**), and 983–987 is the suite's own rationale comment, omitted entirely. |
+| 1b | HTTP-08 caveat block | Mark the sentence *"The gate needs a second arm pinning a conformance-repo sha (currently `a865118206d4d8cc8dbc5f5201607839281d0c3b`)"* as **SATISFIED** — plan 113-32 added exactly that arm (§ B.6 and Arm 2 above). |
+| 2 | HTTP-08 requirement text | Where HTTP-08 describes what **gates the stream**, name the **`resources.subscribe` capability** — which is what the conformance predicate reads and what pmcp reads — keeping `resourceSubscriptions` only where it describes the `SubscriptionFilter` **field** a client sends. The two are different surfaces; pmcp's implementation is correct and `tests/v2_conformance_pin.rs` proves the binding. This is a clarity correction, not a correctness one. |
+
+**HTTP-07's wording is NOT in this table and must not be changed.** Plan 113-23 measured pmcp's
+actual `subscriptionId` emission over a live socket and recorded: *"HTTP-07's CURRENT wording is
+CORRECT and is CONFIRMED by measurement. No change is needed and none is proposed."*
+
+### Open item this policy does not cover
+
+**D-113-U** — the PR-blocking PMAT complexity gate reports **3** violations at
+`4ac6ebeb`, up from the 2 recorded as D-113-F. The new one is
+`src/types/mrtr.rs:1299 write_canonical`, cognitive **26**, introduced by plan 113-26's
+fallible-canonicalizer fix (`323b2e1a`); the same file measured **0** violations at the
+pre-113-26 baseline `1ba8138d`. Per CLAUDE.md that gate is PR-blocking through the org-required
+`gate` check, so **it needs an owner before this branch merges**. It is unowned, is recorded in
+`deferred-items.md` § D-113-U with a fix shape and two hard constraints, and is **not** a
+publication-gated item — no option in the decision brief would have closed it.
 
 ---
 
@@ -899,5 +1073,11 @@ read from one place.
 
 ---
 
-*Record produced 2026-07-25 by Phase 113 Plan 01 Task 1. Re-run this checkpoint on or after
-2026-07-28 to upgrade the verdict.*
+*Record produced 2026-07-25 by Phase 113 Plan 01 Task 1.*
+
+*Re-run this checkpoint when a **versioned schema directory exists** upstream — the condition,
+not the date (§ Re-verification obligation → TRIGGER, restated by plan 113-28 on 2026-07-27).
+Run **both arms**; arm 2 is not gated on publication and can be run today. If arm 1 finds the
+directory still absent, that is the `STILL-ABSENT` landing state and
+`## Third Outcome Policy` — decided `hold` by Guy Ernest on 2026-07-27 — governs what happens
+next.*
