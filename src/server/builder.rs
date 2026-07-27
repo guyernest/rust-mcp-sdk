@@ -22,6 +22,12 @@ use std::collections::HashMap;
 #[cfg(not(target_arch = "wasm32"))]
 use std::collections::HashSet;
 use std::sync::Arc;
+// Scrubs the by-value `[u8; 32]` / `Vec<[u8; 32]>` setter parameters after their
+// contents move into the zeroizing fields (D-113-P, copy 2 of 3). `zeroize` is
+// only compiled in under `streamable-http`, so the import carries the same gate
+// as the fields it serves.
+#[cfg(all(feature = "streamable-http", not(target_arch = "wasm32")))]
+use zeroize::Zeroize;
 
 /// Builder for constructing a `ServerCore` instance.
 ///
@@ -96,12 +102,22 @@ pub struct ServerCoreBuilder {
     supported_protocol_versions: Vec<crate::types::ProtocolVersion>,
     /// Explicit `requestState` minting key (Phase 113, HTTP-02), set via
     /// [`Self::with_request_state_key`]. Overrides `PMCP_REQUEST_STATE_KEY`.
+    ///
+    /// Copy 1 of 3 (D-113-P): held as a
+    /// [`SecretKey`](crate::server::request_state::SecretKey), never as bare
+    /// `[u8; 32]`, so the destructor rides on the value and scrubs on drop —
+    /// including on every early-`?` path out of [`Self::build`]. Reverting this
+    /// to bare bytes is caught at COMPILE time by
+    /// `request_state_key_field_is_the_zeroizing_type`.
     #[cfg(all(feature = "streamable-http", not(target_arch = "wasm32")))]
-    request_state_key: Option<[u8; 32]>,
+    request_state_key: Option<crate::server::request_state::SecretKey>,
     /// Rotated-out `requestState` keys accepted for VERIFICATION only, set via
     /// [`Self::with_request_state_previous_keys`].
+    ///
+    /// Copy 1 of 3 (D-113-P), the rotated-out half: each element scrubs itself
+    /// when the `Vec` drops.
     #[cfg(all(feature = "streamable-http", not(target_arch = "wasm32")))]
-    request_state_previous_keys: Vec<[u8; 32]>,
+    request_state_previous_keys: Vec<crate::server::request_state::SecretKey>,
     /// Explicit continuation lifetime, set via [`Self::with_request_state_ttl`].
     /// Beats both the 300-second default and `PMCP_REQUEST_STATE_TTL_SECS` (D-05).
     #[cfg(all(feature = "streamable-http", not(target_arch = "wasm32")))]
@@ -804,10 +820,18 @@ impl ServerCoreBuilder {
     /// time (D-04). Calling this overrides the environment entirely.
     ///
     /// Has no effect on a core that did not opt into the v2 (`2026-07-28`) era.
+    ///
+    /// The parameter type is deliberately still `[u8; 32]`: the SDK owns the
+    /// copy it takes, not the caller's (D-113-P, T-113-121).
     #[cfg(all(feature = "streamable-http", not(target_arch = "wasm32")))]
     #[must_use]
-    pub fn with_request_state_key(mut self, key: [u8; 32]) -> Self {
-        self.request_state_key = Some(key);
+    pub fn with_request_state_key(mut self, mut key: [u8; 32]) -> Self {
+        // Closes copy 1 of 3 (D-113-P): the FIELD now scrubs on drop.
+        self.request_state_key = Some(crate::server::request_state::SecretKey::new(key));
+        // Closes copy 2 of 3 (D-113-P): this by-value parameter's OWN stack
+        // slot. `[u8; 32]` is `Copy`, so the line above copied out of it and
+        // left the caller's key bytes sitting here.
+        key.zeroize();
         self
     }
 
@@ -820,8 +844,18 @@ impl ServerCoreBuilder {
     /// Has no effect on a core that did not opt into the v2 (`2026-07-28`) era.
     #[cfg(all(feature = "streamable-http", not(target_arch = "wasm32")))]
     #[must_use]
-    pub fn with_request_state_previous_keys(mut self, keys: Vec<[u8; 32]>) -> Self {
-        self.request_state_previous_keys = keys;
+    pub fn with_request_state_previous_keys(mut self, mut keys: Vec<[u8; 32]>) -> Self {
+        // Closes copy 1 of 3 (D-113-P), rotated-out half.
+        self.request_state_previous_keys = keys
+            .iter()
+            .copied()
+            .map(crate::server::request_state::SecretKey::new)
+            .collect();
+        // Closes copy 2 of 3 (D-113-P): the by-value `Vec`'s own heap buffer,
+        // which the copy above read out of and would otherwise return to the
+        // allocator holding every rotated-out key in the clear. `Vec::zeroize`
+        // scrubs the initialized elements AND the spare capacity.
+        keys.zeroize();
         self
     }
 
@@ -1248,27 +1282,20 @@ impl ServerCoreBuilder {
         // is moved into the core below. A malformed CONFIGURED key fails the
         // build; an UNSET key falls back to a per-process key with a genuine
         // startup WARN. A v1-only core gets `None` and reads no env var.
+        //
+        // Both key arguments go BY REFERENCE, which closes copy 3 of 3
+        // (D-113-P): the by-value form manufactured an unscrubbed stack copy on
+        // every call. Because they are borrowed rather than moved, the two
+        // fields are still owned by `self` here and drop through the zeroizing
+        // destructor — on this path AND on every early `?` above, none of which
+        // moves the key material anywhere.
         #[cfg(all(feature = "streamable-http", not(target_arch = "wasm32")))]
-        let request_state_codec = {
-            use crate::server::request_state::SecretKey;
-            // TRANSITIONAL (D-113-P, task 1 of 2): the builder FIELDS are still
-            // bare `[u8; 32]` at this commit, so they are lifted into the
-            // zeroizing type here. Task 2 changes the fields themselves and this
-            // block collapses back to two by-reference arguments.
-            let key = self.request_state_key.map(SecretKey::new);
-            let previous: Vec<SecretKey> = self
-                .request_state_previous_keys
-                .iter()
-                .copied()
-                .map(SecretKey::new)
-                .collect();
-            crate::server::request_state::resolve_codec_at_build(
-                &self.supported_protocol_versions,
-                key.as_ref(),
-                &previous,
-                self.request_state_ttl,
-            )?
-        };
+        let request_state_codec = crate::server::request_state::resolve_codec_at_build(
+            &self.supported_protocol_versions,
+            self.request_state_key.as_ref(),
+            &self.request_state_previous_keys,
+            self.request_state_ttl,
+        )?;
 
         let core = ServerCore::new(
             info,
@@ -1370,6 +1397,71 @@ mod tests {
             .version("1.0.0")
             .build();
         assert!(result.is_ok());
+    }
+
+    // -- requestState key material (D-113-P) --------------------------------
+
+    /// COMPILE-LEVEL guard on the FIELD TYPES, not on behaviour.
+    ///
+    /// The whole D-113-P fix is invisible at run time: a builder that stores
+    /// bare `[u8; 32]` mints and verifies exactly like one that stores
+    /// [`SecretKey`](crate::server::request_state::SecretKey), so no behavioural
+    /// test can detect a silent revert. The type is the guard — reverting either
+    /// field to bare bytes makes the two `let` bindings below fail to compile.
+    #[cfg(all(feature = "streamable-http", not(target_arch = "wasm32")))]
+    #[test]
+    fn request_state_key_field_is_the_zeroizing_type() {
+        use crate::server::request_state::SecretKey;
+        let builder = ServerCoreBuilder::new()
+            .with_request_state_key([0x11; 32])
+            .with_request_state_previous_keys(vec![[0x22; 32]]);
+
+        let key: &Option<SecretKey> = &builder.request_state_key;
+        let previous: &Vec<SecretKey> = &builder.request_state_previous_keys;
+
+        assert_eq!(key.as_deref(), Some(&[0x11u8; 32]));
+        assert_eq!(previous.len(), 1);
+        assert_eq!(**previous.first().expect("one previous key"), [0x22u8; 32]);
+    }
+
+    /// The real regression risk of the D-113-P type change is the PLUMBING, not
+    /// the scrubbing: a core configured with a key plus a rotated-out key must
+    /// still mint a token under the current key and verify it.
+    #[cfg(all(feature = "streamable-http", not(target_arch = "wasm32")))]
+    #[test]
+    fn a_core_with_zeroizing_key_fields_still_mints_and_verifies() {
+        use crate::server::request_state::{RequestBinding, Verdict};
+
+        const CURRENT: [u8; 32] = [0x11; 32];
+        const ROTATED: [u8; 32] = [0x22; 32];
+
+        let core = ServerCoreBuilder::new()
+            .name("t")
+            .version("1")
+            .with_supported_protocol_versions([
+                crate::types::ProtocolVersion("2026-07-28".to_string()),
+                crate::types::ProtocolVersion("2025-11-25".to_string()),
+            ])
+            .with_request_state_key(CURRENT)
+            .with_request_state_previous_keys(vec![ROTATED])
+            .build()
+            .expect("core builds");
+
+        let codec = core.request_state_codec().expect("a v2 core has a codec");
+        let params = serde_json::json!({ "name": "t", "arguments": { "a": 1 } });
+        let binding = RequestBinding::from_request("alice", "tools/call", &params);
+        let token = codec
+            .mint(&serde_json::json!({ "step": 1 }), &binding, 0)
+            .expect("mint");
+        assert!(
+            matches!(codec.verify(&token, &binding), Verdict::Ok(_)),
+            "the zeroizing field type must not disturb the key plumbing"
+        );
+
+        // The rotated-out key reached the ACCEPTING set through the new
+        // by-reference `resolve_codec_at_build` argument.
+        let accepting = codec.accepting_key_ids();
+        assert!(accepting.contains(&crate::server::request_state::key_id_of(&ROTATED)));
     }
 
     #[test]
