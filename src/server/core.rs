@@ -1460,6 +1460,71 @@ pub(crate) const ANONYMOUS_PRINCIPAL: &str = "";
 #[cfg(all(feature = "streamable-http", not(target_arch = "wasm32")))]
 const MRTR_REJECT_MESSAGE: &str = "invalid requestState";
 
+/// The SERVER-side ceiling on MRTR rounds (D-113-L).
+///
+/// A "round" is one gather→resend cycle: the server answers `input_required`
+/// carrying a `requestState` minted at `round + 1`, and the client resends the
+/// same request presenting it. [`seal_input_required`] mints that increment;
+/// this constant is what the increment is finally compared against.
+///
+/// # Why a server-side bound exists at all
+///
+/// It did not, until D-113-L. The D-09 round counter had exactly ONE enforcement
+/// point in the tree — `DEFAULT_MRTR_ROUND_LIMIT` (8) in `src/client/mod.rs` —
+/// i.e. the security counter was enforced solely by the party it exists to
+/// constrain. A non-pmcp or hostile client simply ignored its own limit, resent
+/// indefinitely, and the server obligingly re-ran the handler and re-minted every
+/// time until the counter SATURATED at 255, at which point a handler trying to
+/// self-limit on [`RequestHandlerExtra::mrtr_round`] could no longer distinguish
+/// round 255 from round 3000. A bound only the attacker enforces is not a bound.
+///
+/// # Why 16
+///
+/// Exactly TWICE `DEFAULT_MRTR_ROUND_LIMIT`. A default-configured pmcp client
+/// gives up at 8 and therefore can never trip this ceiling; the 2x headroom
+/// leaves room for a deliberately raised client limit while still bounding an
+/// absent one. That relationship is a checked invariant rather than a comment
+/// two files apart: the integration test
+/// `a_flow_within_the_client_default_limit_is_unaffected` in `tests/v2_mrtr.rs`
+/// drives a full 8-round flow and fails if this value is ever lowered past it.
+///
+/// # Why a constant and not a builder knob
+///
+/// Deliberately deferred. A per-server ceiling would have to be threaded through
+/// `ServerCoreBuilder` and `ServerBuilder` and carried into both dispatch sites —
+/// a config-surface change with its own semver, precedence and default-value
+/// questions, none of which is what closes D-113-L. What closes D-113-L is a
+/// bound the SERVER enforces. Making that bound tunable later is additive and
+/// cannot reintroduce the defect, because the enforcement point will already
+/// exist; shipping the knob first would have left the same hole behind a
+/// configuration default.
+#[cfg(all(feature = "streamable-http", not(target_arch = "wasm32")))]
+pub(crate) const MAX_MRTR_ROUNDS: u8 = 16;
+
+/// The client-facing message for a request refused at [`MAX_MRTR_ROUNDS`].
+///
+/// Deliberately NOT [`MRTR_REJECT_MESSAGE`]. That message is generic because
+/// telling a client WHICH of tamper / wrong-principal / cross-request replay
+/// failed would be a discrimination oracle (T-113-10). This refusal happens
+/// AFTER the AEAD tag check passed — the caller is provably the principal the
+/// continuation was minted for, on the request it was minted for — so naming the
+/// ceiling discloses nothing the caller could not already count for itself, and
+/// it saves an operator a debugging session against an opaque `-32602`.
+#[cfg(all(feature = "streamable-http", not(target_arch = "wasm32")))]
+const MRTR_ROUND_CEILING_MESSAGE: &str =
+    "this request exceeded the server's multi-round-trip round limit";
+
+/// The client-facing message for the MINT-site round backstop.
+///
+/// Distinct from [`MRTR_ROUND_CEILING_MESSAGE`] on purpose: reaching the ingress
+/// refusal is normal server operation against a misbehaving client, whereas
+/// reaching the mint backstop means the ingress bound was bypassed, which is a
+/// server-internal invariant violation. Two messages keep the two situations
+/// distinguishable in an operator's logs.
+#[cfg(all(feature = "streamable-http", not(target_arch = "wasm32")))]
+const MRTR_ROUND_CEILING_INVARIANT_MESSAGE: &str =
+    "a requestState continuation cannot be minted past the server's round limit";
+
 /// The identity inputs MRTR binds a continuation to.
 ///
 /// `AuthContext::subject` is the ONLY identity anchor — never `clientInfo`
@@ -1599,10 +1664,22 @@ pub(crate) fn mrtr_binding_parts(request: &Request) -> Option<(&'static str, Val
 ///
 /// | Verdict | Route | Why |
 /// |---------|-------|-----|
+/// | `Ok(c)` whose round is at or past [`MAX_MRTR_ROUNDS`] | [`Reject`](Self::Reject) | D-113-L — the SERVER half of the D-09 bound. Refused here, before dispatch, so the handler is never invoked on the refused round |
 /// | `Ok(c)` | [`Proceed`](Self::Proceed) | resume from the decrypted continuation |
 /// | `AuthFailed` | [`Reject`](Self::Reject) | conformance `sep-2322-reject-tampered-state`: a complete result OR a re-prompt is a FAILURE |
 /// | `UnknownKey` | [`Reelicit`](Self::Reelicit) `{ round: 0 }` | D-04 degraded path — another instance's per-process key, nothing is decryptable, so start over |
+/// | `Expired(c)` whose round is at or past [`MAX_MRTR_ROUNDS`] | [`Reject`](Self::Reject) | D-113-L — expiry must not LAUNDER a round past the ceiling. The same round-preservation that stops a hostile server resetting the bound (T-113-49) would otherwise become the bypass, since a server can always let its own tokens expire |
 /// | `Expired(c)` | [`Reelicit`](Self::Reelicit) `{ round: c.round }` | D-05/D-15 — authentic, so the round SURVIVES and a hostile server cannot reset the client's D-09 bound by letting tokens expire (T-113-49) |
+///
+/// # `UnknownKey` resetting to round 0 is NOT a ceiling bypass
+///
+/// A client that wants a fresh round counter does not need a forged key id: it
+/// can simply send the request WITHOUT a `requestState` and start a new
+/// operation, which any client may always do and which no server can prevent.
+/// `UnknownKey` is therefore indistinguishable from a legitimate fresh start,
+/// and refusing it would break the D-04 multi-instance degradation path — a real
+/// cost paid for no security gain (T-113-113, disposition ACCEPT). Recorded here
+/// so it is not re-litigated on the next read.
 #[cfg(all(feature = "streamable-http", not(target_arch = "wasm32")))]
 #[derive(Debug)]
 pub(crate) enum MrtrIngest {
@@ -1615,12 +1692,16 @@ pub(crate) enum MrtrIngest {
         /// The round the token was minted in.
         round: u8,
     },
-    /// The token failed authentication: answer a JSON-RPC error and NEVER invoke
-    /// the handler.
+    /// The token failed authentication, or the verified continuation is at or
+    /// past [`MAX_MRTR_ROUNDS`]: answer a JSON-RPC error and NEVER invoke the
+    /// handler.
     Reject {
         /// The JSON-RPC error code (always `INVALID_PARAMS`).
         code: i32,
-        /// The single generic client-facing message.
+        /// The client-facing message: [`MRTR_REJECT_MESSAGE`] — deliberately
+        /// generic — for an authentication failure, and
+        /// [`MRTR_ROUND_CEILING_MESSAGE`] — deliberately specific — for a
+        /// round-ceiling refusal, which happens only AFTER the token verified.
         message: &'static str,
     },
     /// Strip the MRTR fields and RE-RUN the original handler from scratch, so
@@ -1695,15 +1776,50 @@ pub(crate) fn mrtr_ingest(inputs: &MrtrIngestInputs<'_>) -> MrtrIngest {
     route_mrtr_verdict(codec.verify(token, &binding), target.0)
 }
 
+/// ENFORCEMENT POINT A for [`MAX_MRTR_ROUNDS`] — refuse a VERIFIED continuation
+/// that has reached the server's round ceiling (D-113-L).
+///
+/// `round` here has already survived the AEAD tag check, so it is server-minted
+/// and integrity-protected: it is trustworthy input to a policy decision in a way
+/// that nothing else on the request is.
+///
+/// Extracted rather than inlined at the two call sites because
+/// [`route_mrtr_verdict`] exists precisely to hold `mrtr_ingest`'s cognitive
+/// complexity down, and a bound duplicated inline in two match arms is a bound
+/// that can be half-removed.
+#[cfg(all(feature = "streamable-http", not(target_arch = "wasm32")))]
+fn refuse_past_round_ceiling(round: u8, method: &str) -> Option<MrtrIngest> {
+    if round < MAX_MRTR_ROUNDS {
+        return None;
+    }
+    tracing::warn!(
+        target: "mcp.mrtr",
+        method,
+        round,
+        max_rounds = MAX_MRTR_ROUNDS,
+        "refused a requestState at or past the server's round ceiling — this client \
+         resent past the bound its own round limit should have stopped it at (D-113-L)"
+    );
+    Some(MrtrIngest::Reject {
+        code: crate::types::protocol::error_codes::INVALID_PARAMS,
+        message: MRTR_ROUND_CEILING_MESSAGE,
+    })
+}
+
 /// The D-15 verdict table, isolated so [`mrtr_ingest`] stays well under
 /// cognitive-complexity 25.
 #[cfg(all(feature = "streamable-http", not(target_arch = "wasm32")))]
 fn route_mrtr_verdict(verdict: crate::server::request_state::Verdict, method: &str) -> MrtrIngest {
     use crate::server::request_state::Verdict;
     match verdict {
-        Verdict::Ok(continuation) => MrtrIngest::Proceed {
-            continuation: continuation.state,
-            round: continuation.round,
+        Verdict::Ok(continuation) => {
+            if let Some(refusal) = refuse_past_round_ceiling(continuation.round, method) {
+                return refusal;
+            }
+            MrtrIngest::Proceed {
+                continuation: continuation.state,
+                round: continuation.round,
+            }
         },
         Verdict::AuthFailed => {
             tracing::warn!(
@@ -1726,9 +1842,18 @@ fn route_mrtr_verdict(verdict: crate::server::request_state::Verdict, method: &s
             );
             MrtrIngest::Reelicit { round: 0 }
         },
-        // Authentic, so the round survives (T-113-49).
-        Verdict::Expired(continuation) => MrtrIngest::Reelicit {
-            round: continuation.round,
+        // Authentic, so the round survives (T-113-49) — and so, therefore, must
+        // the ceiling: re-eliciting at or past it would turn the very property
+        // that stops a hostile server resetting the bound into the bypass, since
+        // letting one's own tokens expire is entirely within a server's gift
+        // (T-113-112).
+        Verdict::Expired(continuation) => {
+            if let Some(refusal) = refuse_past_round_ceiling(continuation.round, method) {
+                return refusal;
+            }
+            MrtrIngest::Reelicit {
+                round: continuation.round,
+            }
         },
     }
 }
@@ -1784,7 +1909,8 @@ pub(crate) struct MrtrEgressInputs<'a> {
     /// The SERVER-OWNED codec, borrowed from server state.
     pub codec: Option<&'a crate::server::request_state::RequestStateCodec>,
     /// The round [`MrtrIngest::apply`] resolved; the fresh token is minted at
-    /// `round + 1`.
+    /// `round + 1`, unless that would exceed [`MAX_MRTR_ROUNDS`], in which case
+    /// [`seal_input_required`] refuses to mint at all (D-113-L).
     pub round: u8,
 }
 
@@ -2216,6 +2342,25 @@ fn seal_input_required(
     target: &(&'static str, Value),
     inputs: &MrtrEgressInputs<'_>,
 ) -> std::result::Result<ResponseDisposition, &'static str> {
+    // ENFORCEMENT POINT B for `MAX_MRTR_ROUNDS` (D-113-L): the mint-site
+    // backstop.
+    //
+    // UNREACHABLE while `refuse_past_round_ceiling` is intact at the ingress
+    // verdict — a continuation at or past the ceiling is refused there, so
+    // `inputs.round` cannot arrive here above `MAX_MRTR_ROUNDS - 1`. It exists so
+    // that a future refactor of the verdict table cannot silently DELETE the
+    // bound; that exact failure mode is what D-113-L already demonstrated once,
+    // when the only enforcement lived in a different crate module and nothing on
+    // the server compared the minted round to anything.
+    //
+    // Its `INTERNAL_ERROR` classification — `mrtr_egress` routes this
+    // `Err(&'static str)` through `fail_mrtr_egress` — is correct PRECISELY
+    // because reaching it means that internal invariant is broken. The client
+    // did nothing new; the server did.
+    let next_round = inputs.round.saturating_add(1);
+    if next_round > MAX_MRTR_ROUNDS {
+        return Err(MRTR_ROUND_CEILING_INVARIANT_MESSAGE);
+    }
     let principal = resolve_mrtr_principal(inputs.principal)
         .ok_or("a requestState continuation cannot be minted for an unauthenticated caller")?;
     let codec = inputs
@@ -2224,11 +2369,7 @@ fn seal_input_required(
     let binding =
         crate::server::request_state::RequestBinding::from_request(principal, target.0, &target.1);
     let token = codec
-        .mint(
-            &signal.continuation,
-            &binding,
-            inputs.round.saturating_add(1),
-        )
+        .mint(&signal.continuation, &binding, next_round)
         .map_err(|_| "the requestState continuation could not be sealed")?;
     let input_requests = serde_json::to_value(&signal.input_requests)
         .map_err(|_| "the handler's inputRequests map is not serializable")?;
@@ -4545,7 +4686,9 @@ mod tests {
     #[cfg(all(feature = "streamable-http", not(target_arch = "wasm32")))]
     mod mrtr_ingest_tests {
         use super::super::*;
-        use crate::server::request_state::{RequestBinding, RequestStateCodec};
+        use crate::server::request_state::{
+            Continuation, RequestBinding, RequestStateCodec, Verdict,
+        };
         use crate::types::protocol::{Era, ProtocolContext};
         use crate::types::{CallToolRequest, ListToolsRequest, ProtocolVersion};
         use serde_json::json;
@@ -4737,6 +4880,142 @@ mod tests {
                 matches!(verdict, MrtrIngest::Reelicit { round: 5 }),
                 "an expired token must re-elicit at its own round, got {verdict:?}"
             );
+        }
+
+        // -----------------------------------------------------------------
+        // The server-side round ceiling (D-113-L, T-113-110/111/112/114).
+        //
+        // These drive `route_mrtr_verdict` DIRECTLY with a constructed
+        // `Continuation` rather than minting one. That is deliberate and not a
+        // shortcut: the ceiling is a policy over a round that has ALREADY passed
+        // the AEAD tag check, so the value under test is exactly the trustworthy
+        // one, and a test that had to mint 16 tokens to reach the boundary would
+        // be testing the codec instead of the policy.
+        // -----------------------------------------------------------------
+
+        /// A decrypted, authenticated continuation carrying `round`.
+        fn continuation_at(round: u8) -> Continuation {
+            Continuation {
+                state: json!({ "step": 1 }),
+                exp: 0,
+                round,
+            }
+        }
+
+        /// Both verdicts that carry an authentic round are refused AT the
+        /// ceiling — `Expired` included, because expiry is within a server's own
+        /// gift and must not launder a round past the bound (T-113-112).
+        #[test]
+        fn round_ceiling_refuses_every_authentic_verdict_at_the_ceiling() {
+            for (label, verdict) in [
+                ("Ok", Verdict::Ok(continuation_at(MAX_MRTR_ROUNDS))),
+                (
+                    "Expired",
+                    Verdict::Expired(continuation_at(MAX_MRTR_ROUNDS)),
+                ),
+            ] {
+                let routed = route_mrtr_verdict(verdict, "tools/call");
+                let MrtrIngest::Reject { code, message } = routed else {
+                    panic!("{label} at the ceiling must Reject, got {routed:?}");
+                };
+                assert_eq!(
+                    code,
+                    crate::types::protocol::error_codes::INVALID_PARAMS,
+                    "{label}: the sibling MRTR reject code, so the v2 HTTP status \
+                     mapping is unchanged"
+                );
+                assert_eq!(message, MRTR_ROUND_CEILING_MESSAGE, "{label}");
+                assert_ne!(
+                    message, MRTR_REJECT_MESSAGE,
+                    "{label}: a ceiling refusal happens AFTER the token verified, so it \
+                     is not an authentication oracle and must not hide behind the \
+                     generic message"
+                );
+            }
+        }
+
+        /// The boundary is EXACT, asserted on both sides: one below the ceiling
+        /// still routes normally.
+        #[test]
+        fn round_ceiling_admits_exactly_one_below_itself() {
+            let below = MAX_MRTR_ROUNDS - 1;
+            let proceed = route_mrtr_verdict(Verdict::Ok(continuation_at(below)), "tools/call");
+            let MrtrIngest::Proceed {
+                continuation,
+                round,
+            } = proceed
+            else {
+                panic!("ceiling - 1 must still Proceed, got {proceed:?}");
+            };
+            assert_eq!(round, below);
+            assert_eq!(continuation, json!({ "step": 1 }));
+
+            let reelicit =
+                route_mrtr_verdict(Verdict::Expired(continuation_at(below)), "tools/call");
+            assert!(
+                matches!(reelicit, MrtrIngest::Reelicit { round } if round == below),
+                "ceiling - 1 must still re-elicit at its own round, got {reelicit:?}"
+            );
+        }
+
+        /// `UnknownKey` still resets to round 0, ceiling or no ceiling. It is not
+        /// a bypass: a client wanting a fresh counter can always just omit the
+        /// `requestState` (T-113-113, ACCEPT).
+        #[test]
+        fn unknown_key_still_resets_to_round_zero_under_the_ceiling() {
+            assert!(matches!(
+                route_mrtr_verdict(Verdict::UnknownKey, "tools/call"),
+                MrtrIngest::Reelicit { round: 0 }
+            ));
+        }
+
+        /// An authentication failure keeps its OWN generic message — the ceiling
+        /// work must not have collapsed the two reject paths into one.
+        #[test]
+        fn auth_failure_keeps_the_generic_message() {
+            let routed = route_mrtr_verdict(Verdict::AuthFailed, "tools/call");
+            let MrtrIngest::Reject { message, .. } = routed else {
+                panic!("AuthFailed must Reject, got {routed:?}");
+            };
+            assert_eq!(message, MRTR_REJECT_MESSAGE);
+        }
+
+        proptest::proptest! {
+            /// For EVERY round an authentic continuation could carry, the round
+            /// threaded into egress is strictly below [`MAX_MRTR_ROUNDS`], so the
+            /// mint's `saturating_add(1)` can never be observed SATURATING at 255
+            /// (T-113-114). Before D-113-L was closed this property was false for
+            /// every round from 255 upward — and, worse, unobservable, which is
+            /// what made `RequestHandlerExtra::mrtr_round` useless as a
+            /// self-limiting input for a handler.
+            #[test]
+            fn no_authentic_round_can_reach_saturation(round in 0u8..=u8::MAX) {
+                for verdict in [
+                    Verdict::Ok(continuation_at(round)),
+                    Verdict::Expired(continuation_at(round)),
+                ] {
+                    match route_mrtr_verdict(verdict, "tools/call").apply(Some(v2_context())) {
+                        Err((code, message)) => {
+                            proptest::prop_assert!(round >= MAX_MRTR_ROUNDS);
+                            proptest::prop_assert_eq!(
+                                code,
+                                crate::types::protocol::error_codes::INVALID_PARAMS
+                            );
+                            proptest::prop_assert_eq!(message, MRTR_ROUND_CEILING_MESSAGE);
+                        },
+                        Ok((_, threaded)) => {
+                            proptest::prop_assert!(threaded < MAX_MRTR_ROUNDS);
+                            // `saturating_add` did not saturate: the widened
+                            // arithmetic agrees with it exactly.
+                            proptest::prop_assert_eq!(
+                                u16::from(threaded.saturating_add(1)),
+                                u16::from(threaded) + 1
+                            );
+                            proptest::prop_assert!(threaded.saturating_add(1) <= MAX_MRTR_ROUNDS);
+                        },
+                    }
+                }
+            }
         }
 
         // -----------------------------------------------------------------
@@ -5349,6 +5628,86 @@ mod tests {
                 };
                 assert_eq!(round_of(&first_token), 1);
                 assert_eq!(round_of(&second_token), 2);
+            }
+
+            /// ENFORCEMENT POINT B: the mint refuses at the ceiling and admits
+            /// exactly one below it, and the refusal reaches the WIRE as
+            /// `INTERNAL_ERROR` through `mrtr_egress` (D-113-L, T-113-115).
+            ///
+            /// `INTERNAL_ERROR` rather than `INVALID_PARAMS` is the point: this
+            /// path is unreachable while the ingress bound is intact, so reaching
+            /// it means a server invariant broke, not that the client misbehaved.
+            #[test]
+            fn mint_backstop_refuses_at_the_ceiling_and_admits_one_below() {
+                let codec = codec(&KEY_A, 300);
+                let request = call_tool(json!({}));
+                let target = mrtr_binding_parts(&request).expect("eligible");
+                let context = v2_context_all_caps();
+
+                // One below the ceiling: mints normally, at EXACTLY the ceiling.
+                let mut admitted = signalling_response();
+                let disposition = egress_with(
+                    &mut admitted,
+                    Some(&context),
+                    Some(&codec),
+                    MAX_MRTR_ROUNDS - 1,
+                );
+                assert_eq!(disposition, ResponseDisposition::InputRequired);
+                let token = result_of(&admitted)["requestState"]
+                    .as_str()
+                    .expect("a token is minted one below the ceiling");
+                let binding = RequestBinding::from_request(ALICE, target.0, &target.1);
+                let Verdict::Ok(continuation) = codec.verify(token, &binding) else {
+                    panic!("the freshly minted token must verify");
+                };
+                assert_eq!(
+                    continuation.round, MAX_MRTR_ROUNDS,
+                    "the last admissible mint lands exactly ON the ceiling, which the \
+                     ingress bound then refuses when it is presented"
+                );
+
+                // At the ceiling: refused BEFORE the mint.
+                let mut refused = signalling_response();
+                let disposition =
+                    egress_with(&mut refused, Some(&context), Some(&codec), MAX_MRTR_ROUNDS);
+                assert_eq!(disposition, ResponseDisposition::Complete);
+                assert_eq!(
+                    error_of(&refused).code,
+                    crate::types::protocol::error_codes::INTERNAL_ERROR
+                );
+                assert_eq!(
+                    error_of(&refused).message,
+                    MRTR_ROUND_CEILING_INVARIANT_MESSAGE
+                );
+                let rendered = serde_json::to_string(&refused).expect("serializes");
+                // The FIELD, not the substring: the refusal message itself names
+                // `requestState` in prose, which is not a minted token.
+                assert!(
+                    !rendered.contains(&format!("\"{}\":", crate::types::mrtr::REQUEST_STATE_KEY)),
+                    "nothing may be minted past the ceiling: {rendered}"
+                );
+                assert!(
+                    !rendered.contains("\"step\""),
+                    "and the plaintext continuation must not leak either: {rendered}"
+                );
+            }
+
+            /// The two enforcement points are NOT redundant, pinned structurally:
+            /// the mint backstop refuses with NO codec configured, which the
+            /// mint itself would need. Getting the ceiling message rather than
+            /// "this server has no requestState codec configured" is only
+            /// possible if the round check ran FIRST.
+            #[test]
+            fn mint_backstop_precedes_every_other_mint_precondition() {
+                let context = v2_context_all_caps();
+                let mut response = signalling_response();
+                let disposition = egress_with(&mut response, Some(&context), None, MAX_MRTR_ROUNDS);
+                assert_eq!(disposition, ResponseDisposition::Complete);
+                assert_eq!(
+                    error_of(&response).message,
+                    MRTR_ROUND_CEILING_INVARIANT_MESSAGE,
+                    "the round check must precede the codec lookup"
+                );
             }
 
             // -------------------------------------------------------------
