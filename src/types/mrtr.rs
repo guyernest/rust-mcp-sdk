@@ -796,7 +796,11 @@ pub(crate) const MAX_INPUT_RESPONSE_DEPTH: usize = 32;
 /// [`CanonicalDepthExceeded`], and the callers refuse the request — which keeps
 /// BOTH properties closed, rather than trading the aliasing hole for the
 /// unbounded-recursion one that removing the cap would reintroduce.
-const MAX_CANONICAL_DEPTH: usize = 64;
+///
+/// `pub(crate)` so the two refusal points in `server::core` can pin the boundary
+/// BY NAME in their own tests instead of re-spelling `64`, which is how the two
+/// halves of a bound drift apart.
+pub(crate) const MAX_CANONICAL_DEPTH: usize = 64;
 
 /// The MRTR fields carried on a client→server request's top-level `params`.
 ///

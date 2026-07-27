@@ -1525,6 +1525,31 @@ const MRTR_ROUND_CEILING_MESSAGE: &str =
 const MRTR_ROUND_CEILING_INVARIANT_MESSAGE: &str =
     "a requestState continuation cannot be minted past the server's round limit";
 
+/// The client-facing message for a request whose params cannot be canonicalized
+/// for the AEAD binding (D-113-M).
+///
+/// Deliberately NOT [`MRTR_REJECT_MESSAGE`]. Genericity buys secrecy only where
+/// there is something to keep secret: the generic message exists so a client
+/// cannot distinguish tamper from wrong-principal from cross-request replay
+/// (T-113-10). This condition is STRUCTURAL and entirely client-side — the caller
+/// chose the nesting depth and can measure it itself — so it is not an
+/// authentication oracle, and a specific message is what lets an operator tell a
+/// too-deep payload from a forged token.
+#[cfg(all(feature = "streamable-http", not(target_arch = "wasm32")))]
+const MRTR_UNCANONICALIZABLE_MESSAGE: &str =
+    "these request params nest too deeply to be bound to a multi-round-trip continuation";
+
+/// The message for the MINT-site canonicalization backstop.
+///
+/// Distinct from [`MRTR_UNCANONICALIZABLE_MESSAGE`] for the same reason
+/// [`MRTR_ROUND_CEILING_INVARIANT_MESSAGE`] is distinct from
+/// [`MRTR_ROUND_CEILING_MESSAGE`]: reaching the egress refusal is normal
+/// operation against a deep payload, whereas reaching the mint backstop means the
+/// egress precheck was bypassed, which is a server-internal invariant violation.
+#[cfg(all(feature = "streamable-http", not(target_arch = "wasm32")))]
+const MRTR_UNCANONICALIZABLE_INVARIANT_MESSAGE: &str =
+    "the originating request could not be canonicalized for the continuation binding";
+
 /// The identity inputs MRTR binds a continuation to.
 ///
 /// `AuthContext::subject` is the ONLY identity anchor — never `clientInfo`
@@ -1664,6 +1689,7 @@ pub(crate) fn mrtr_binding_parts(request: &Request) -> Option<(&'static str, Val
 ///
 /// | Verdict | Route | Why |
 /// |---------|-------|-----|
+/// | no verdict — the params could not be CANONICALIZED | [`Reject`](Self::Reject) | D-113-M — the binding is computed BEFORE `verify`, so a request nested past the canonicalization depth cap never reaches the table at all. Refused rather than verified against a digest that would identify a whole class of requests instead of this one |
 /// | `Ok(c)` whose round is at or past [`MAX_MRTR_ROUNDS`] | [`Reject`](Self::Reject) | D-113-L — the SERVER half of the D-09 bound. Refused here, before dispatch, so the handler is never invoked on the refused round |
 /// | `Ok(c)` | [`Proceed`](Self::Proceed) | resume from the decrypted continuation |
 /// | `AuthFailed` | [`Reject`](Self::Reject) | conformance `sep-2322-reject-tampered-state`: a complete result OR a re-prompt is a FAILURE |
@@ -1692,16 +1718,19 @@ pub(crate) enum MrtrIngest {
         /// The round the token was minted in.
         round: u8,
     },
-    /// The token failed authentication, or the verified continuation is at or
-    /// past [`MAX_MRTR_ROUNDS`]: answer a JSON-RPC error and NEVER invoke the
-    /// handler.
+    /// The token failed authentication, the verified continuation is at or past
+    /// [`MAX_MRTR_ROUNDS`], or the request could not be canonicalized: answer a
+    /// JSON-RPC error and NEVER invoke the handler.
     Reject {
         /// The JSON-RPC error code (always `INVALID_PARAMS`).
         code: i32,
         /// The client-facing message: [`MRTR_REJECT_MESSAGE`] — deliberately
-        /// generic — for an authentication failure, and
+        /// generic — for an authentication failure;
         /// [`MRTR_ROUND_CEILING_MESSAGE`] — deliberately specific — for a
-        /// round-ceiling refusal, which happens only AFTER the token verified.
+        /// round-ceiling refusal, which happens only AFTER the token verified;
+        /// and [`MRTR_UNCANONICALIZABLE_MESSAGE`] — also specific, because the
+        /// condition is structural and client-chosen rather than an
+        /// authentication outcome.
         message: &'static str,
     },
     /// Strip the MRTR fields and RE-RUN the original handler from scratch, so
@@ -1771,16 +1800,30 @@ pub(crate) fn mrtr_ingest(inputs: &MrtrIngestInputs<'_>) -> MrtrIngest {
     let Some(codec) = inputs.codec else {
         return MrtrIngest::Inert;
     };
-    // TRANSITIONAL (D-113-M, task 1 of 2): fail closed on an unbindable request.
-    // Task 2 replaces this with the typed refusal, its own message constant and a
-    // `tracing::warn!`.
-    let Ok(binding) =
-        crate::server::request_state::RequestBinding::from_request(principal, target.0, &target.1)
-    else {
-        return MrtrIngest::Reject {
-            code: crate::types::protocol::error_codes::INVALID_PARAMS,
-            message: MRTR_REJECT_MESSAGE,
-        };
+    // REFUSAL POINT 1 of 2 for D-113-M — the VERIFY path.
+    //
+    // A token was presented and the request cannot be identified. Fail CLOSED: a
+    // request whose identity cannot be computed must not be granted a verification
+    // attempt at all, because the only thing that would distinguish it from any
+    // other over-deep request is the very digest that could not be computed.
+    let binding = match crate::server::request_state::RequestBinding::from_request(
+        principal, target.0, &target.1,
+    ) {
+        Ok(binding) => binding,
+        Err(error) => {
+            tracing::warn!(
+                target: "mcp.mrtr",
+                method = target.0,
+                max_depth = error.max,
+                "refused a state-bearing request whose params nest past the \
+                 canonicalization depth limit — such a request has no digest that \
+                 identifies it rather than a class of requests (D-113-M)"
+            );
+            return MrtrIngest::Reject {
+                code: crate::types::protocol::error_codes::INVALID_PARAMS,
+                message: MRTR_UNCANONICALIZABLE_MESSAGE,
+            };
+        },
     };
     route_mrtr_verdict(codec.verify(token, &binding), target.0)
 }
@@ -2048,6 +2091,12 @@ fn fail_mrtr_egress(
 /// 3. **Check declared client capabilities BEFORE minting.** A rejected result
 ///    costs zero cryptographic work, and the server never asks a client for
 ///    something it cannot answer (T-113-32).
+///    **(3b) Refuse a request that cannot be BOUND.** Params nested past the
+///    canonicalization depth cap have no digest that identifies them, so no
+///    continuation may be minted against them — `INVALID_PARAMS`, because the
+///    cause is the client's params, not a server bug (D-113-M). Sits with the
+///    capability precheck for the same reason: a refused result costs zero
+///    cryptographic work.
 /// 4. **Mint, then write.** A mint failure is an error, never a partial result.
 #[cfg(all(feature = "streamable-http", not(target_arch = "wasm32")))]
 pub(crate) fn mrtr_egress(
@@ -2104,6 +2153,29 @@ pub(crate) fn mrtr_egress(
             crate::types::protocol::error_codes::MISSING_REQUIRED_CLIENT_CAPABILITY,
             rejection.0,
             Some(rejection.1),
+        );
+    }
+
+    // (3b) REFUSAL POINT 2 of 2 for D-113-M — the MINT path.
+    //
+    // `INVALID_PARAMS`, not `INTERNAL_ERROR`: the condition is caused entirely by
+    // the params the CLIENT sent, so it belongs with the sibling MRTR reject
+    // rather than in the `INTERNAL_ERROR` mint-failure channel below, which is
+    // reserved for server bugs. Placed before the mint for the same reason step
+    // (3) is: a request that cannot be bound costs zero cryptographic work.
+    if let Err(error) = crate::types::mrtr::salient_param_digest(target.0, &target.1) {
+        tracing::warn!(
+            target: "mcp.mrtr",
+            method = target.0,
+            max_depth = error.max,
+            "refused to mint a continuation for params that nest past the \
+             canonicalization depth limit — no requestState was minted (D-113-M)"
+        );
+        return fail_mrtr_egress(
+            response,
+            crate::types::protocol::error_codes::INVALID_PARAMS,
+            MRTR_UNCANONICALIZABLE_MESSAGE.to_string(),
+            None,
         );
     }
 
@@ -2375,12 +2447,22 @@ fn seal_input_required(
     let codec = inputs
         .codec
         .ok_or("this server has no requestState codec configured")?;
-    // TRANSITIONAL (D-113-M, task 1 of 2): fail closed rather than mint against a
-    // digest that does not identify this request. Task 2 gives it its own message
-    // and adds the egress-side refusal that makes this site unreachable.
+    // The D-113-M mint-site BACKSTOP.
+    //
+    // UNREACHABLE BY CONSTRUCTION while `mrtr_egress` step (3b) is intact: that
+    // step computes the digest for this exact `target` and refuses before calling
+    // here, so `from_request` cannot fail on the same value moments later. It is
+    // retained against a future reordering that moved or deleted step (3b) —
+    // the same two-point structure, and the same reason, as the round-ceiling
+    // backstop above.
+    //
+    // Its `INTERNAL_ERROR` classification (via `mrtr_egress`'s `Err(&'static str)`
+    // routing) is correct PRECISELY because reaching it means that internal
+    // ordering invariant broke. Step (3b) owns the client-caused
+    // `INVALID_PARAMS` answer.
     let binding =
         crate::server::request_state::RequestBinding::from_request(principal, target.0, &target.1)
-            .map_err(|_| "the originating request could not be canonicalized for binding")?;
+            .map_err(|_| MRTR_UNCANONICALIZABLE_INVARIANT_MESSAGE)?;
     let token = codec
         .mint(&signal.continuation, &binding, next_round)
         .map_err(|_| "the requestState continuation could not be sealed")?;
@@ -4715,6 +4797,31 @@ mod tests {
             RequestStateCodec::new(key, Duration::from_secs(ttl_secs)).expect("codec builds")
         }
 
+        /// `arguments` nested `levels` objects deep.
+        ///
+        /// The salient whitelist wrapper costs one canonical level, so the
+        /// `arguments` VALUE sits at depth 1 and its leaf at depth `levels + 1`.
+        /// `levels == MAX_CANONICAL_DEPTH - 1` is therefore the deepest
+        /// `arguments` the digest still accepts, and `MAX_CANONICAL_DEPTH` the
+        /// shallowest it refuses.
+        fn nested_arguments(levels: usize) -> Value {
+            let mut value = json!("leaf");
+            for _ in 0..levels {
+                value = json!({ "n": value });
+            }
+            value
+        }
+
+        /// The deepest `arguments` an MRTR request may carry.
+        fn arguments_at_the_cap() -> Value {
+            nested_arguments(crate::types::mrtr::MAX_CANONICAL_DEPTH - 1)
+        }
+
+        /// One level deeper than [`arguments_at_the_cap`] — refused.
+        fn arguments_past_the_cap() -> Value {
+            nested_arguments(crate::types::mrtr::MAX_CANONICAL_DEPTH)
+        }
+
         /// A `tools/call` for `search` with the given arguments.
         fn call_tool(arguments: Value) -> Request {
             Request::Client(Box::new(ClientRequest::CallTool(CallToolRequest {
@@ -4894,6 +5001,112 @@ mod tests {
                 matches!(verdict, MrtrIngest::Reelicit { round: 5 }),
                 "an expired token must re-elicit at its own round, got {verdict:?}"
             );
+        }
+
+        // -----------------------------------------------------------------
+        // The canonicalization depth refusal (D-113-M, T-113-122/123/125).
+        // -----------------------------------------------------------------
+
+        /// REFUSAL POINT 1: a request that cannot be canonicalized and PRESENTS a
+        /// token is refused with `INVALID_PARAMS`, and the handler never runs.
+        ///
+        /// The token here was minted for a DIFFERENT (shallow) request, so before
+        /// the refusal existed this path reached `verify` and produced
+        /// [`MRTR_REJECT_MESSAGE`]. Asserting the message is
+        /// [`MRTR_UNCANONICALIZABLE_MESSAGE`] is therefore a structural proof that
+        /// the refusal fires BEFORE the tag check, not merely alongside it.
+        #[test]
+        fn an_uncanonicalizable_request_presenting_a_token_is_refused() {
+            let codec = codec(&KEY_A, 300);
+            let shallow = call_tool(json!({ "q": "a" }));
+            let token = mint_for(&codec, ALICE, &shallow, &json!({ "step": 1 }), 0);
+
+            let deep = call_tool(arguments_past_the_cap());
+            let verdict = ingest(&deep, Some(&token), Some(ALICE), false, Some(&codec));
+            let MrtrIngest::Reject { code, message } = verdict else {
+                panic!("an unbindable state-bearing request must Reject, got {verdict:?}");
+            };
+            assert_eq!(code, crate::types::protocol::error_codes::INVALID_PARAMS);
+            assert_eq!(message, MRTR_UNCANONICALIZABLE_MESSAGE);
+            assert_ne!(
+                message, MRTR_REJECT_MESSAGE,
+                "the refusal must precede `verify` — reaching the tag check would \
+                 have produced the generic authentication message instead"
+            );
+
+            // `Reject` -> `Err` is what both dispatch sites turn into a JSON-RPC
+            // error WITHOUT invoking the handler.
+            assert!(
+                verdict_is_rejected(&deep, &token, &codec),
+                "the handler must never be invoked for an unbindable request"
+            );
+        }
+
+        /// `MrtrIngest::apply` maps the refusal to `Err`, which is the mechanism by
+        /// which the handler is skipped.
+        fn verdict_is_rejected(request: &Request, token: &str, codec: &RequestStateCodec) -> bool {
+            ingest(request, Some(token), Some(ALICE), false, Some(codec))
+                .apply(Some(v2_context()))
+                .is_err()
+        }
+
+        /// The boundary is EXACT on the ingress side too: `arguments` one level
+        /// shallower than the refusal mint, resend and verify end to end.
+        #[test]
+        fn a_request_exactly_at_the_depth_cap_still_mints_and_verifies() {
+            let codec = codec(&KEY_A, 300);
+            let request = call_tool(arguments_at_the_cap());
+            let token = mint_for(&codec, ALICE, &request, &json!({ "step": 3 }), 1);
+            let verdict = ingest(&request, Some(&token), Some(ALICE), false, Some(&codec));
+            let MrtrIngest::Proceed {
+                continuation,
+                round,
+            } = verdict
+            else {
+                panic!("a request AT the cap must still Proceed, got {verdict:?}");
+            };
+            assert_eq!(continuation, json!({ "step": 3 }));
+            assert_eq!(round, 1);
+        }
+
+        /// THE BLAST-RADIUS TEST for the wire-visible behaviour change.
+        ///
+        /// The refusal is confined to requests that MINT or PRESENT a continuation.
+        /// An ordinary deep-`arguments` `tools/call` that never touches MRTR — no
+        /// token presented — computes no digest at all and is `Inert`, so it
+        /// dispatches byte-for-byte as it did before this change. Explicit rather
+        /// than implied: this is the whole claim that bounds the change.
+        #[test]
+        fn a_deep_request_that_never_touches_mrtr_is_unaffected() {
+            let codec = codec(&KEY_A, 300);
+            let deep = call_tool(arguments_past_the_cap());
+            let verdict = ingest(&deep, None, Some(ALICE), false, Some(&codec));
+            assert!(
+                matches!(verdict, MrtrIngest::Inert),
+                "a deep request with NO requestState must be Inert, got {verdict:?}"
+            );
+            let (context, round) = verdict
+                .apply(Some(v2_context()))
+                .expect("Inert is not a rejection");
+            assert!(context
+                .expect("the context survives")
+                .mrtr_continuation()
+                .is_none());
+            assert_eq!(round, 0);
+
+            // And the same request on a v1 client is equally untouched.
+            let v1 = ProtocolContext::new(Era::V1, ProtocolVersion("2025-11-25".to_string()));
+            let target = mrtr_binding_parts(&deep);
+            let v1_verdict = mrtr_ingest(&MrtrIngestInputs {
+                target: target.as_ref(),
+                protocol_context: Some(&v1),
+                principal: MrtrPrincipal {
+                    authenticated_subject: Some(ALICE),
+                    has_auth_provider: false,
+                },
+                codec: Some(&codec),
+            });
+            assert!(matches!(v1_verdict, MrtrIngest::Inert));
         }
 
         // -----------------------------------------------------------------
@@ -5707,6 +5920,113 @@ mod tests {
                 assert!(
                     !rendered.contains("\"step\""),
                     "and the plaintext continuation must not leak either: {rendered}"
+                );
+            }
+
+            // -------------------------------------------------------------
+            // The canonicalization depth refusal at the MINT path (D-113-M).
+            // -------------------------------------------------------------
+
+            /// Run egress against a `tools/call` carrying the given `arguments`.
+            fn egress_for_arguments(
+                response: &mut JSONRPCResponse,
+                arguments: Value,
+                codec: Option<&RequestStateCodec>,
+            ) -> ResponseDisposition {
+                let request = call_tool(arguments);
+                let target = mrtr_binding_parts(&request);
+                let context = v2_context_all_caps();
+                mrtr_egress(
+                    response,
+                    &MrtrEgressInputs {
+                        target: target.as_ref(),
+                        protocol_context: Some(&context),
+                        principal: MrtrPrincipal {
+                            authenticated_subject: Some(ALICE),
+                            has_auth_provider: false,
+                        },
+                        codec,
+                        round: 0,
+                    },
+                )
+            }
+
+            /// REFUSAL POINT 2: a handler that signals `input_required` on an
+            /// unbindable request is refused with `INVALID_PARAMS` and NOTHING is
+            /// minted.
+            ///
+            /// `INVALID_PARAMS` and not `INTERNAL_ERROR` is the assertion that
+            /// matters: the sibling `INTERNAL_ERROR` mint-failure channel is for
+            /// server bugs, and this condition is caused entirely by the params the
+            /// client sent.
+            #[test]
+            fn egress_refuses_to_mint_for_an_uncanonicalizable_request() {
+                let codec = codec(&KEY_A, 300);
+                let mut response = signalling_response();
+                let disposition =
+                    egress_for_arguments(&mut response, arguments_past_the_cap(), Some(&codec));
+
+                assert_eq!(disposition, ResponseDisposition::Complete);
+                assert_eq!(
+                    error_of(&response).code,
+                    crate::types::protocol::error_codes::INVALID_PARAMS,
+                    "the client's params caused this, so it is not an INTERNAL_ERROR"
+                );
+                assert_eq!(error_of(&response).message, MRTR_UNCANONICALIZABLE_MESSAGE);
+
+                let rendered = serde_json::to_string(&response).expect("serializes");
+                assert!(
+                    !rendered.contains(&format!("\"{}\":", crate::types::mrtr::REQUEST_STATE_KEY)),
+                    "no continuation may be minted for an unidentifiable request: {rendered}"
+                );
+                assert!(
+                    !rendered.contains("\"step\""),
+                    "and the plaintext continuation must not leak either: {rendered}"
+                );
+            }
+
+            /// The egress boundary is exact on both sides: at the cap the mint
+            /// still happens and the token verifies against the same live request.
+            #[test]
+            fn egress_at_the_depth_cap_still_mints_a_verifiable_token() {
+                let codec = codec(&KEY_A, 300);
+                let request = call_tool(arguments_at_the_cap());
+                let target = mrtr_binding_parts(&request).expect("eligible");
+                let mut response = signalling_response();
+                let disposition =
+                    egress_for_arguments(&mut response, arguments_at_the_cap(), Some(&codec));
+
+                assert_eq!(disposition, ResponseDisposition::InputRequired);
+                let token = result_of(&response)["requestState"]
+                    .as_str()
+                    .expect("a token is minted at the cap");
+                let binding = RequestBinding::from_request(ALICE, target.0, &target.1)
+                    .expect("params at the cap still bind");
+                let Verdict::Ok(continuation) = codec.verify(token, &binding) else {
+                    panic!("the freshly minted token must verify");
+                };
+                assert_eq!(continuation.round, 1);
+            }
+
+            /// The step (3b) refusal precedes the mint's own preconditions, which
+            /// is what makes the `seal_input_required` backstop unreachable rather
+            /// than merely unlikely: it refuses with NO codec configured, which the
+            /// mint itself would need.
+            #[test]
+            fn the_depth_refusal_precedes_every_mint_precondition() {
+                let mut response = signalling_response();
+                let disposition =
+                    egress_for_arguments(&mut response, arguments_past_the_cap(), None);
+                assert_eq!(disposition, ResponseDisposition::Complete);
+                assert_eq!(
+                    error_of(&response).message,
+                    MRTR_UNCANONICALIZABLE_MESSAGE,
+                    "the depth check must precede the codec lookup"
+                );
+                assert_ne!(
+                    error_of(&response).message,
+                    MRTR_UNCANONICALIZABLE_INVARIANT_MESSAGE,
+                    "the mint-site backstop must be UNREACHABLE while step (3b) stands"
                 );
             }
 
