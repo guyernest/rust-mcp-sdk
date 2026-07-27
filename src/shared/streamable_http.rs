@@ -524,8 +524,15 @@ impl StreamableHttpTransport {
             let mut sse_parser = SseParser::new();
             let body = String::from_utf8_lossy(&modified_body);
 
-            // Parse SSE events
-            let events = sse_parser.feed(&body);
+            // Parse SSE events.
+            //
+            // Deliberately the COMPLETE-body entry point rather than `feed`:
+            // this body was already read into memory in one piece, not a chunk
+            // of a live stream, so the parser's incremental in-flight bound does
+            // not apply to it. See that entry point's rustdoc for the byte-cap
+            // precondition this call site owes it — plan 113-20 is what makes it
+            // true.
+            let events = sse_parser.feed_complete_body(&body);
             for event in events {
                 // Update last event ID and notify callback
                 if let Some(id) = &event.id {
@@ -1146,8 +1153,15 @@ impl StreamableHttpTransport {
                 let mut sse_parser = SseParser::new();
                 let body = String::from_utf8_lossy(&modified_body);
 
-                // Parse the SSE body
-                let events = sse_parser.feed(&body);
+                // Parse the SSE body.
+                //
+                // Deliberately the COMPLETE-body entry point rather than `feed`:
+                // this body was already read into memory in one piece, not a
+                // chunk of a live stream, so the parser's incremental in-flight
+                // bound does not apply to it. See that entry point's rustdoc for
+                // the byte-cap precondition this call site owes it — plan 113-20
+                // is what makes it true.
+                let events = sse_parser.feed_complete_body(&body);
                 for event in events {
                     // Update last event ID and notify callback
                     if let Some(id) = &event.id {

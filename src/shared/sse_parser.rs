@@ -118,17 +118,24 @@ pub struct SseParser {
     buffer: String,
     current_event: EventBuilder,
     last_event_id: Option<String>,
-    /// Upper bound on `buffer`, i.e. on ONE unterminated SSE line.
+    /// Upper bound on the parser's total IN-FLIGHT bytes: the unterminated line
+    /// still sitting in `buffer` PLUS the `data:` lines already accumulated into
+    /// `current_event`, which only a BLANK line dispatches.
     ///
-    /// The bytes fed to a parser are chosen by a REMOTE peer, and `buffer` only
-    /// ever drains as far as a `\n`. Without a bound, a peer that never emits
-    /// one grows this process's heap for as long as it holds the stream open.
+    /// The bytes fed to a parser are chosen by a REMOTE peer, and NEITHER
+    /// accumulator drains on its own: `buffer` only drains as far as a `\n`, and
+    /// `current_event.data` only drains when the peer sends the blank line that
+    /// ends the event. Bounding `buffer` alone is therefore not a bound at all —
+    /// a peer that streams ordinary newline-terminated `data:` lines forever
+    /// grows this process's heap for as long as it holds the stream open, which
+    /// is the realistic shape of the attack rather than the artificial one
+    /// (verification gap item 3, review CR-01/CR-02, T-113-79).
     max_buffer_size: usize,
-    /// Latched once an oversized line has been discarded.
+    /// Latched once oversized in-flight data has been discarded.
     overflowed: bool,
 }
 
-/// The default bound on ONE unterminated SSE line, in bytes (1 MiB).
+/// The default bound on a parser's total in-flight bytes (1 MiB).
 ///
 /// Single source of truth for [`SseParser::new`] and [`SseConfig::default()`],
 /// so the two can never disagree. Reading it through `SseConfig::default()`
@@ -198,15 +205,17 @@ impl SseParser {
         Self::with_max_buffer_size(DEFAULT_MAX_BUFFER_SIZE)
     }
 
-    /// Create a new SSE parser with an explicit line-buffer bound.
+    /// Create a new SSE parser with an explicit in-flight bound.
     ///
     /// [`SseParser::new`] takes its bound from [`SseConfig::default()`]'s
     /// `max_buffer_size`. Use this constructor when a caller needs a TIGHTER
     /// one — a long-lived stream of small frames read from an untrusted remote
     /// peer, for example — or a looser one.
     ///
-    /// The bound applies to ONE unterminated line. A chunk that would push the
-    /// buffer past it while completing no line at all is DISCARDED, not
+    /// The bound applies to everything the parser RETAINS across calls: the
+    /// unterminated line in its buffer plus the `data:` lines already
+    /// accumulated into the event still awaiting its blank line. A chunk that
+    /// would push that total past the bound is DISCARDED, not
     /// truncated-and-emitted, and [`Self::overflowed`] latches: a silently
     /// truncated line would surface later as a misleading JSON parse failure,
     /// which is strictly worse for an operator than a named one.
@@ -227,6 +236,22 @@ impl SseParser {
     /// assert_eq!(events[0].data, "ok");
     /// assert!(parser.overflowed());
     /// ```
+    ///
+    /// Neither does a peer that sends perfectly ordinary NEWLINE-TERMINATED
+    /// `data:` lines and simply never ends the event with a blank line — the
+    /// realistic shape of the same attack, and the one a bound over the line
+    /// buffer alone does not stop:
+    ///
+    /// ```rust
+    /// use pmcp::shared::sse_parser::SseParser;
+    ///
+    /// let mut parser = SseParser::with_max_buffer_size(64);
+    /// for _ in 0..1_000 {
+    ///     // Every chunk is well-formed and ends in a newline.
+    ///     assert!(parser.feed("data: AAAAAAAA\n").is_empty());
+    /// }
+    /// assert!(parser.overflowed());
+    /// ```
     #[must_use]
     pub fn with_max_buffer_size(max_buffer_size: usize) -> Self {
         Self {
@@ -238,7 +263,7 @@ impl SseParser {
         }
     }
 
-    /// Whether this parser has DISCARDED an oversized line.
+    /// Whether this parser has DISCARDED oversized IN-FLIGHT data.
     ///
     /// LATCHING: once set it stays set for the parser's lifetime — including
     /// across [`Self::reset`] — so a caller that polls once per chunk cannot
@@ -279,7 +304,38 @@ impl SseParser {
         self.max_buffer_size
     }
 
+    /// The bytes this parser retains ACROSS lines, i.e. the two accumulators
+    /// [`Self::max_buffer_size`] bounds: the unterminated line in the buffer plus
+    /// the `data:` payload of the event still awaiting its blank line.
+    ///
+    /// NOT "total retained bytes", and deliberately not named that. It EXCLUDES
+    /// `current_event.id`, `current_event.event` and `last_event_id`, and an
+    /// `id:` value is in fact retained TWICE (once in each of the first and last
+    /// of those). Those three fields are each ASSIGNED from a single line rather
+    /// than APPENDED to, and a line can only reach `process_line` if the chunk
+    /// carrying it satisfied the bound, so each is itself bounded by roughly
+    /// `max_buffer_size` and none of them can grow with stream age. The true
+    /// ceiling on a parser is therefore a small constant multiple of
+    /// `max_buffer_size` rather than exactly it.
+    ///
+    /// What this function measures is the only pair of quantities that
+    /// ACCUMULATE across lines — which is the property that matters for a
+    /// long-lived stream, and the one the pre-113-17 bound violated.
+    ///
+    /// `pub(crate)` deliberately: its consumers are this module's tests,
+    /// [`crate::client`]'s `subscriptions` module and (through that module) the
+    /// fuzz seam. It is diagnostic detail, not shipped public API.
+    pub(crate) fn buffered_bytes(&self) -> usize {
+        self.buffer.len() + self.current_event.data.len()
+    }
+
     /// Feed data to the parser and get parsed events.
+    ///
+    /// The parser retains at most [`Self::max_buffer_size`] bytes across its two
+    /// accumulators on return; see [`Self::buffered_bytes`]. A chunk that would
+    /// break that is refused whole and [`Self::overflowed`] latches. Callers with
+    /// an ALREADY-CAPPED complete body, rather than a chunk of a live stream,
+    /// want [`Self::feed_complete_body`].
     ///
     /// # Examples
     ///
@@ -307,30 +363,32 @@ impl SseParser {
     /// assert_eq!(events[0].event, Some("ping".to_string()));
     /// ```
     pub fn feed(&mut self, data: &str) -> Vec<SseEvent> {
-        // `buffer` holds ONE unterminated line, and a REMOTE peer decides when
-        // (or whether) that line ends. Bound it: when appending `data` would
-        // push the buffer past `max_buffer_size` AND this chunk can complete no
-        // line at all, the line is unbounded by construction — so DISCARD it
-        // and latch `overflowed` rather than grow.
+        // A REMOTE peer decides every byte here, and BOTH of the parser's
+        // accumulators are peer-drained: `buffer` empties only as far as a `\n`,
+        // and `current_event.data` empties only when the peer sends the blank
+        // line that dispatches the event. Bound their SUM, unconditionally: when
+        // appending `data` would push the retained total past `max_buffer_size`,
+        // DISCARD what is held and latch `overflowed` rather than grow.
         //
-        // Only `data` has to be tested. The drain loop below runs to exhaustion
-        // (`drain(..=line_end)` consumes through each `\n`), and `process_line`
-        // never touches `buffer`, so every `feed` RETURNS with a newline-free
-        // buffer and it starts empty — an unterminated line is all it can hold.
-        // The question is therefore only whether THIS chunk can end that line.
+        // There is deliberately no "unless this chunk carries a newline" escape.
+        // That escape used to be here, on the theory that a chunk containing a
+        // newline completes a line and therefore cannot accumulate — but a
+        // `data:` line accumulates into the EVENT, which no newline ends. Only a
+        // BLANK line does. `feed("data: AAAAAAAA\n")` repeated 100 000 times
+        // under a 64-byte bound reached 899 999 retained bytes with the flag
+        // clear (review CR-01/CR-02, verification gap item 3).
         //
-        // The `data` condition is what keeps a single legitimately large
-        // COMPLETE body working: such a body carries newlines and drains in the
-        // loop below, so it never trips the bound. The two whole-body `feed`
-        // call sites in the streamable-HTTP transport are therefore
-        // behaviourally unchanged.
-        debug_assert!(
-            !self.buffer.contains('\n'),
-            "the drain loop leaves no newline in the buffer"
-        );
-        if self.buffer.len().saturating_add(data.len()) > self.max_buffer_size
-            && !data.contains('\n')
-        {
+        // The bound is over RETAINED STATE PLUS THIS CHUNK, not over "one
+        // in-progress event". A chunk carrying many individually small COMPLETE
+        // events is refused whenever the chunk TOTAL exceeds the limit, so
+        // behaviour depends partly on how the transport frames its reads. That
+        // is accepted rather than fixed: evaluating the bound only over what
+        // survives after splitting the complete events out of the chunk would
+        // require parsing the whole unbounded chunk first — performing exactly
+        // the allocation the bound exists to prevent (review MEDIUM-1,
+        // T-113-86). Callers holding a COMPLETE, already-capped body want
+        // `feed_complete_body` instead.
+        if self.buffered_bytes().saturating_add(data.len()) > self.max_buffer_size {
             self.overflowed = true;
             self.buffer.clear();
             // The in-progress event is now missing a line; anything built from
@@ -341,6 +399,72 @@ impl SseParser {
             return Vec::new();
         }
 
+        let events = self.drain_complete_lines(data);
+
+        // A SECOND, independently sufficient enforcement point over the RESIDUAL
+        // this call actually leaves behind. Before the pre-check became
+        // unconditional this caught the chunk that begins with `\n` and then
+        // carries megabytes of newline-free bytes; it is kept because the two
+        // checks fail independently, and a future change that weakens one must
+        // still meet the other. It covers the event accumulator as well as the
+        // line buffer, so the invariant that holds on RETURN from `feed` is
+        // `buffered_bytes() <= max_buffer_size`.
+        if self.buffered_bytes() > self.max_buffer_size {
+            self.overflowed = true;
+            self.buffer.clear();
+            self.current_event = EventBuilder::new();
+        }
+
+        events
+    }
+
+    /// Feed a COMPLETE, already-size-capped SSE body, bypassing the in-flight
+    /// bound entirely.
+    ///
+    /// # Precondition — a REQUIREMENT ON THE CALLER
+    ///
+    /// This is only sound where the caller has ALREADY enforced its own byte cap
+    /// on the collected body. It performs no bound check and never latches
+    /// [`Self::overflowed`], so the caller's cap is the ONLY thing standing
+    /// between a remote peer and this process's heap.
+    ///
+    /// That precondition is stated as an obligation, NOT as an established fact.
+    /// Its two call sites — the POST-response and `start_sse` GET handlers in
+    /// [`crate::shared::streamable_http`] — currently collect the whole response
+    /// body with no cap at all. Plan 113-20 adds the real, overridable
+    /// collected-body cap at both sites, enforced BEFORE this function is
+    /// reached; until it lands the precondition is not yet satisfied and this
+    /// doc comment must not pretend otherwise (review HIGH-3, T-113-84).
+    ///
+    /// # An incremental feeder may NEVER call this
+    ///
+    /// Chunk-at-a-time feeders — [`crate::shared::http`]'s `connect_sse` reader
+    /// task and the `subscriptions/listen` client — must use [`Self::feed`].
+    /// Retention across chunks with no bound is precisely the unbounded
+    /// condition `feed` exists to refuse, and no per-call cap can substitute for
+    /// it because the peer chooses how many calls there are.
+    ///
+    /// `pub(crate)` deliberately: a public unbounded parser entry point is an
+    /// attractive nuisance, and keeping it crate-private also keeps this
+    /// module's semver verdict trivially additive (T-113-81).
+    pub(crate) fn feed_complete_body(&mut self, body: &str) -> Vec<SseEvent> {
+        self.drain_complete_lines(body)
+    }
+
+    /// Append `data` and drain every COMPLETE line out of the buffer.
+    ///
+    /// The shared implementation behind [`Self::feed`] (which bound-checks
+    /// first) and [`Self::feed_complete_body`] (which does not), so the two
+    /// entry points can never drift in how they tokenize.
+    fn drain_complete_lines(&mut self, data: &str) -> Vec<SseEvent> {
+        // The drain loop below runs to exhaustion (`drain(..=line_end)` consumes
+        // through each `\n`) and `process_line` never touches `buffer`, so every
+        // call RETURNS with a newline-free buffer and it starts empty — an
+        // unterminated line is all it can ever hold on entry.
+        debug_assert!(
+            !self.buffer.contains('\n'),
+            "the drain loop leaves no newline in the buffer"
+        );
         self.buffer.push_str(data);
         let mut events = Vec::new();
 
@@ -373,19 +497,6 @@ impl SseParser {
             }
 
             self.buffer.drain(..=line_end);
-        }
-
-        // The pre-check above can only refuse a chunk that completes NO line, so
-        // a chunk that begins with `\n` and then carries megabytes of
-        // newline-free bytes sails past it: the drain loop consumes through that
-        // single `\n` and leaves the whole remainder as one unterminated line,
-        // arbitrarily larger than `max_buffer_size`. Re-check the RESIDUAL so the
-        // bound holds on what this call actually leaves behind, not only on what
-        // it was asked to add.
-        if self.buffer.len() > self.max_buffer_size {
-            self.overflowed = true;
-            self.buffer.clear();
-            self.current_event = EventBuilder::new();
         }
 
         events
@@ -565,13 +676,15 @@ impl Default for SseStream {
 pub struct SseConfig {
     /// Reconnection retry interval in milliseconds
     pub retry: u64,
-    /// Maximum buffer size for incomplete lines.
+    /// Maximum in-flight bytes a parser may retain.
     ///
     /// [`SseParser::new`] takes its bound from this field's DEFAULT value, and
-    /// [`SseParser::with_max_buffer_size`] overrides it per parser. A chunk that
-    /// would push a parser's line buffer past the bound without completing any
-    /// line is discarded and latches [`SseParser::overflowed`], so a peer that
-    /// never emits a newline cannot grow the process's heap without limit.
+    /// [`SseParser::with_max_buffer_size`] overrides it per parser. It covers
+    /// BOTH of the parser's accumulators — the unterminated line in its buffer
+    /// and the `data:` payload of the event still awaiting its blank line. A
+    /// chunk that would push that total past the bound is discarded whole and
+    /// latches [`SseParser::overflowed`], so no peer can grow the process's heap
+    /// without limit by holding a stream open, whether or not it sends newlines.
     pub max_buffer_size: usize,
     /// Enable compression
     pub compression: bool,
@@ -694,6 +807,7 @@ mod tests {
     /// T-113-73).
     #[test]
     fn a_newlineless_flood_cannot_grow_the_buffer_past_the_bound() {
+        let bound = SseConfig::default().max_buffer_size;
         let mut parser = SseParser::new();
         let chunk = "x".repeat(64 * 1024);
         // 2 MiB, with not one newline in it.
@@ -704,9 +818,84 @@ mod tests {
             );
         }
         assert!(
-            parser.buffer.len() <= 1024 * 1024,
-            "the line buffer grew to {} bytes, past the 1 MiB bound",
-            parser.buffer.len()
+            parser.buffered_bytes() <= bound,
+            "the parser retained {} bytes, past the {bound}-byte bound",
+            parser.buffered_bytes()
+        );
+    }
+
+    /// The TWIN of the test above, and the one that matters: a peer sending
+    /// perfectly ordinary NEWLINE-TERMINATED `data:` lines, forever, without ever
+    /// sending the blank line that would dispatch the event.
+    ///
+    /// Every chunk here is well-formed, so the pre-113-17 bound — which only
+    /// refused chunks carrying no newline at all — never fired: 100 000 chunks
+    /// under a 64-byte bound accumulated 899 999 bytes into `current_event.data`
+    /// with `overflowed()` still false (independently reproduced by the phase
+    /// verifier; review CR-01, T-113-79). The bound must cover what accumulates
+    /// ACROSS lines, not only the unterminated line.
+    #[test]
+    fn a_newline_carrying_flood_cannot_grow_the_event_past_the_bound() {
+        let mut parser = SseParser::with_max_buffer_size(64);
+        for _ in 0..100_000 {
+            let _ = parser.feed("data: AAAAAAAA\n");
+        }
+        assert!(
+            parser.overflowed(),
+            "100,000 newline-terminated `data:` lines accumulated {} bytes \
+             without tripping the 64-byte bound",
+            parser.buffered_bytes()
+        );
+        assert!(
+            parser.buffered_bytes() <= 64,
+            "the parser retains {} bytes, past its 64-byte bound",
+            parser.buffered_bytes()
+        );
+    }
+
+    /// A single COMPLETE line larger than the bound is REFUSED, not parsed and
+    /// emitted.
+    ///
+    /// Before 113-17 the `contains('\n')` escape let this through whole: the
+    /// parser returned one 1 000 000-byte event from a 64-byte-bounded parser
+    /// with `overflowed()` false, so the flag could not observe the condition it
+    /// exists to detect (review CR-02, T-113-80).
+    #[test]
+    fn an_oversized_complete_line_is_refused_not_emitted() {
+        let mut parser = SseParser::with_max_buffer_size(64);
+        let body = format!("data: {}\n\n", "B".repeat(1_000_000));
+
+        let events = parser.feed(&body);
+
+        assert!(
+            events.is_empty(),
+            "a 1,000,000-byte line under a 64-byte bound must be refused; got \
+             {} event(s), the first of {} bytes",
+            events.len(),
+            events.first().map_or(0, |event| event.data.len())
+        );
+        assert!(parser.overflowed(), "and the refusal is observable");
+    }
+
+    /// The bypass the two whole-body transport call sites depend on: a COMPLETE
+    /// body is parsed in full regardless of the parser's in-flight bound, and
+    /// nothing latches.
+    ///
+    /// This must fail loudly if `feed_complete_body` is ever removed or quietly
+    /// re-pointed at the bounded entry point — an SSE POST response larger than
+    /// the bound would then be silently dropped instead of delivered.
+    #[test]
+    fn feed_complete_body_bypasses_the_bound() {
+        let mut parser = SseParser::with_max_buffer_size(64);
+        let body = format!("data: {}\n\n", "B".repeat(1_000_000));
+
+        let events = parser.feed_complete_body(&body);
+
+        assert_eq!(events.len(), 1, "the whole body is parsed");
+        assert_eq!(events[0].data.len(), 1_000_000);
+        assert!(
+            !parser.overflowed(),
+            "the bypass performs no bound check and latches nothing"
         );
     }
 
@@ -893,14 +1082,17 @@ mod tests {
             let mut parser = SseParser::with_max_buffer_size(8);
             for chunk in chunks {
                 let _ = parser.feed(&chunk);
-                // The residual is either an unterminated line the bound
-                // permitted (<= 8) or the tail of THIS chunk after its last
-                // `\n`. Neither accumulates across chunks, which is the whole
-                // point: memory is a function of one chunk, not of stream age.
+                // The bound holds on RETURN, over BOTH accumulators, with no
+                // slack for "the tail of this chunk". The looser form this
+                // replaced (`buffer.len() <= max(8, chunk.len())`) is exactly
+                // why the property test could not see GAP-A: it excused any
+                // residual up to the size of the chunk, and it ignored the
+                // event accumulator entirely (review CR-02).
                 proptest::prop_assert!(
-                    parser.buffer.len() <= std::cmp::max(8, chunk.len()),
-                    "buffer {} outgrew both the bound and this chunk",
-                    parser.buffer.len(),
+                    parser.buffered_bytes() <= parser.max_buffer_size(),
+                    "the parser retains {} bytes, past its {}-byte bound",
+                    parser.buffered_bytes(),
+                    parser.max_buffer_size(),
                 );
             }
         }
