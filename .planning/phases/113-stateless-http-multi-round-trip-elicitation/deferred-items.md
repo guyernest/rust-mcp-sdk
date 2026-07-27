@@ -1111,3 +1111,100 @@ the file last.
 
 **Suggested owner:** any plan already editing `tests/v2_subscriptions.rs`, or a
 standalone test-hygiene sweep across the `v2_*` suites.
+
+---
+
+## D-113-U — `write_canonical` crossed the cog-25 gate during this round (PR-blocking CI is RED)
+
+**Found during:** plan 113-28, task 1 — the cross-cutting gate over the whole gap-closure
+round (plans 113-21 … 113-32).
+**Severity:** MEDIUM — the PR-blocking CI gate fails, and unlike D-113-F's two entries this
+one was **introduced by this round**, not inherited.
+**Owner:** unassigned.
+**Status:** ⏸️ **DEFERRED** (executor SCOPE BOUNDARY — plan 113-28 changes no source file).
+
+### The measurement
+
+The exact PR-blocking invocation CLAUDE.md pins in `.github/workflows/ci.yml`, run at HEAD
+`4ac6ebeb` on 2026-07-27:
+
+```
+$ pmat quality-gate --fail-on-violation --checks complexity
+Quality Gate: FAILED
+Total violations: 3
+  - ./src/server/streamable_http_server.rs:3084 - handle_post_fast_path: cognitive-complexity 30 > 25
+  - ./src/server/streamable_http_server.rs:3520 - handle_post_with_middleware: cognitive-complexity 31 > 25
+  - ./src/types/mrtr.rs:1299 - write_canonical: cognitive-complexity 26 > 25
+```
+
+The first two are **D-113-F**, pre-existing and measurably better than their pre-Phase-113
+baseline (35 → 30 and 36 → 31). The third is new.
+
+### Proof that it is new, by D-113-F's own methodology
+
+`src/types/mrtr.rs` was extracted at the last commit that touched it BEFORE plan 113-26 and
+at HEAD, each into a scratch tree, and the identical analysis was run on each:
+
+| Tree | file | cognitive-complexity violations |
+|---|---|---|
+| `1ba8138d` (pre-113-26) | 1846 lines | **0** |
+| `4ac6ebeb` (HEAD) | 2720 lines | **1** — `write_canonical` = 26 |
+
+```
+$ pmat analyze complexity --path <scratch> --format json --max-cognitive 25 \
+  | jq -r '.summary.violations[]? | "\(.file):\(.line) \(.function) \(.rule)=\(.value)"'
+# baseline 1ba8138d → (no output)
+# HEAD     4ac6ebeb → …/src/types/mrtr.rs:1299 write_canonical cognitive-complexity=26
+```
+
+**Cause:** plan 113-26 commit `323b2e1a`, *"make the AAD canonicalizer fallible and delete the
+aliasing marker"* — the D-113-M fix. Making `write_canonical` return
+`Result<_, CanonicalDepthExceeded>` added error-propagation branches to a function that was
+already at the edge of the threshold. The fix itself is correct and load-bearing (it closes a
+replay-prevention hole in clause 5c); only its complexity cost went unmeasured, because
+113-26's own verification ran `make quality-gate` — which per CLAUDE.md D-07 deliberately does
+**not** run PMAT — and not the CI gate.
+
+### Why not fixed in 113-28
+
+Plan 113-28's `files_modified` is three planning documents; it changes no source file. Beyond
+the fence, `write_canonical` is the AEAD **AAD canonicalizer** — the sole enforcement of
+replay-prevention clause 5c. Refactoring it means touching the function whose depth semantics
+113-26 spent a whole plan pinning boundary-exactly (leaf accepted at depth 64, refused at 65;
+`tools/call` `arguments` may nest 63 and the 64th is refused), with a compile-time
+`const _: () = assert!(MAX_INPUT_RESPONSE_DEPTH < MAX_CANONICAL_DEPTH)` and a live
+`mint_request_state` depth-ladder measurement riding on it. That is a refactor slice with real
+security regression surface, not a close-out task, and doing it inside the plan that produces
+the publication decision brief would make neither reviewable.
+
+### Fix shape for the owner
+
+Same family as D-113-F: **P2, extract the stages into named `fn`s.** `write_canonical` is a
+recursive JSON walk with a depth guard, per-type arms and sorted-key object handling; the
+natural cut is to lift the object-arm (sort keys, recurse per entry) and the array-arm into
+private helpers that take the same `depth` parameter and return the same
+`Result<(), CanonicalDepthExceeded>`, leaving the top-level function as a small dispatch over
+`serde_json::Value` variants.
+
+Two hard constraints on any such refactor:
+
+1. **The canonical byte output MUST NOT change.** It is AEAD AAD — a single byte difference
+   invalidates every continuation token in flight and silently breaks resumption for any
+   client mid-round-trip. Pin the existing digest for a fixture request before and after
+   (113-26 recorded a concrete one:
+   `1bfce28e6995b41583047d92ab099f4b86329e5e2566ce1dc149655b555698f5`).
+2. **The depth boundary MUST stay exact at 64/65.** `tests/v2_mrtr_ingress.rs` measures the
+   live cap by walking `mint_request_state` up the depth ladder rather than trusting a mirror;
+   that test is the oracle and must stay green unedited.
+
+The hard cap is cog 50 and this is 26, so the `// Why:`-annotated
+`#[allow(clippy::cognitive_complexity)]` escape hatch is **not** justified — it is reducible.
+
+**Do not** "fix" this by weakening the gate. CLAUDE.md forbids disabling, weakening or removing
+it without explicit Phase-level approval.
+
+### Cross-reference
+
+Recorded in `113-PUBLICATION-DECISION-BRIEF.md` § 4.1, because it changes what a decision to
+"hold `[~]` indefinitely" is actually holding: a tree whose PR-blocking quality gate is red
+with a violation this round introduced, rather than a clean one.
