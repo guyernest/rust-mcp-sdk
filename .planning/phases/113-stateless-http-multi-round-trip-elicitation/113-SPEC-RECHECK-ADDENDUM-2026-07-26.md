@@ -91,3 +91,127 @@ authoritative source with a documented risk acceptance, or gating the milestone'
 directory appearing.
 
 This addendum does not make that decision.
+
+---
+
+# Part 2 — RC-vs-pin content diff (added 2026-07-26, second pass)
+
+Part 1 established provenance. This part is the actual **content** diff between the RC tag and
+Phase 113's pin, which Part 1 did not contain.
+
+## Finding 7 — the RC is a STRICT ANCESTOR of our pin, 236 commits behind
+
+| Ref | Commit | Date | `schema/draft/schema.ts` |
+|---|---|---|---|
+| tag `2026-07-28-RC` (lightweight) | `9d700ed6` | 2026-05-29T12:49:07Z | 3075 lines |
+| Phase 113 pin | `71e3069` | 2026-07-16T02:16:04Z | 3184 lines |
+| `main` HEAD | `76346843` | 2026-07-23T23:49:30Z | 3184 lines |
+
+`gh api .../compare/9d700ed...71e3069` → `status: "ahead", ahead_by: 236, behind_by: 0`.
+
+Phase 113's pinned `schema.ts` **and** `schema.json` are **sha256-identical to `main` HEAD**
+(`c56f0ad2…` / `9281c489…`) — zero schema drift from 2026-07-16 to today. **The RC cannot
+discharge a re-verification of a newer pin.** Our baseline is the most current source available.
+
+## Finding 8 — the error codes were RENUMBERED *after* the RC lock ⚠ decisive
+
+| | RC tag | Our pin / main |
+|---|---|---|
+| HeaderMismatch | `-32001` (prose only, no schema const) | `HEADER_MISMATCH = -32020` |
+| MissingRequiredClientCapability | `-32003` | `-32021` |
+| UnsupportedProtocolVersion | `-32004` | `-32022` |
+
+**This makes the case for KEEPING the gate stronger, not weaker.** The renumbering risk the
+recorded exception guards against is *realized history*, not hypothetical — these exact three
+constants moved after a "locked" RC.
+
+Adopting the RC values would also collide head-on with pmcp's own pre-existing
+`AUTHENTICATION_REQUIRED = -32003` and `PERMISSION_DENIED = -32004`
+(`src/types/protocol/error_codes.rs:97-99`). The post-RC renumbering is what *avoided* that
+collision. **pmcp's shipped values already match the newest available source.**
+
+## Finding 9 — obligations 5 and 6 DID NOT EXIST at the RC
+
+At the RC tag, `grep -c subscriptionId` = **0**. `SubscriptionsListenResult`,
+`SubscriptionsListenResultMeta`, `NotificationMetaObject` — all **0**. The acknowledgement
+docblock was *descriptive*, carrying **no MUST**; the three `*ListChangedNotification` docblocks
+said the **opposite** of today's ("may be issued … without any previous subscription").
+
+These landed post-RC via PRs #2889 / #2953 (June 17 / 23), and **open PR #3006 still targets this
+exact surface.**
+
+The parts of HTTP-04 that consumed the most implementation effort — `subscriptionId` tagging and
+the ack-first MUST — are precisely the least settled. The parts that were never in doubt (the
+four opt-in field names, `ClientRequest` union membership, GET removal) are byte-identical at
+both refs.
+
+## Finding 10 — the gate's trigger is stated wrongly
+
+`113-SPEC-RECHECK.md` frames re-verification as *"re-run on or after 2026-07-28"*. The RC blog
+post says plainly that **nothing breaks on July 28** — it "is merely the date when the normative
+text is published", and the June 29 SDK-betas post still refers to a time "before the new
+specification is **locked**."
+
+**The gate should be restated as a condition, not a date:** *"a versioned schema directory
+exists"*. Waiting for the date is not the same as waiting for the artifact, and Finding 1 shows
+no in-flight change creates that directory.
+
+## Finding 11 — `-32002` MUST-NOT-emit rule ⚠ untraced, actionable
+
+`docs/specification/draft/basic/index.mdx` §Error Codes — **absent at the RC, added after** —
+states: *"Implementations of this protocol version **MUST NOT** emit these codes: `-32002` …
+`-32042`."* It further says new implementations **SHOULD NOT** use `-32000`..`-32019` at all.
+
+pmcp has two `-32002` call sites — `src/server/core.rs:2616` (server-not-initialized, v1
+lifecycle) and `src/server/task_dispatch.rs:605` (v1 `tasks/result`). Both *look* v1-scoped, but
+**v2-path reachability was NOT traced.** This does not contradict the phase's earlier
+`-32002`→`-32602` conclusion (which concerned *resource-not-found* semantics and remains sound);
+it is an independent, semantics-agnostic prohibition. **Worth closing before the gate does.**
+
+## Finding 12 — the gate watches only ONE of three sources of truth
+
+HTTP-04's obligations draw on three sources with three different drift clocks:
+
+| Obligations | Source | Gate watches it? |
+|---|---|---|
+| 1–6, 9 | the **schema** | yes (pinned sha) |
+| 7–8 | the conformance suite's `advertisesSubscriptions` predicate | **NO** |
+| 10, 11, 11b | pure pmcp policy | n/a |
+
+Obligations 7–8 have **no spec sentence behind them at all**: `subscriptions.mdx` (165 lines,
+read in full) contains no capability-gating rule, and there is no `subscriptions` capability in
+`ServerCapabilities`. The FAILURE grading comes solely from
+`conformance/src/scenarios/server/stateless.ts:988-1015`, whose own `specReferences` is a single
+SEP-2575 PR URL.
+
+**A schema re-check can never detect drift here.** The gate needs a **second arm pinning a
+conformance-repo sha** alongside the schema sha.
+
+## Finding 13 — a false spec claim ships in public rustdoc ⚠ one-line fix
+
+`src/server/subscriptions.rs:17-18` states in shipped rustdoc: *"there is no polling shape for
+change notifications anywhere in the MCP spec."*
+
+**That is false.** `docs/specification/draft/server/utilities/caching.mdx:110-118` defines
+TTL-driven re-fetch via `ttlMs`/`cacheScope` (SEP-2549) and explicitly blesses relying on it
+*instead of* `listChanged`. pmcp implements none of it (`grep ttlMs|cacheScope|CacheableResult
+src/` → zero hits; tracked as SCHM-03 `[ ]`, Phase 115).
+
+The D-11 *conclusion* (Tasks-polling is not a conformant substitute) is still correct — only the
+stated justification is wrong.
+
+## Finding 14 — two coverage gaps, neither a spec violation
+
+- **No stdio `subscriptions/listen`.** The schema's stated purpose is "consistent behavior
+  between HTTP and STDIO"; pmcp routes it only in `streamable_http_server.rs`.
+- **`resourceSubscriptions` / `resourcesListChanged` have zero end-to-end wire tests.**
+  `grep -rn "resourceSubscriptions|resources/updated" tests/ examples/` returns nothing — half
+  the mandated opt-in surface is unit-tested only.
+
+## What still cannot be determined
+
+- Whether the final publication keeps `-32020`/`-32021`/`-32022`.
+- Whether the conformance `advertisesSubscriptions` predicate has changed (separate repo, not
+  re-checked this pass).
+- When the lightweight `2026-07-28-RC` tag was actually pushed (no tagger timestamp). Note its
+  commit is dated 2026-05-29, eight days after the blog's stated 2026-05-21 lock.
