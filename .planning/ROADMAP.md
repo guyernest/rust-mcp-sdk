@@ -2368,7 +2368,7 @@ Plans:
 
 **Wave 5** *(blocked on Wave 4)*
 
-- [ ] 113-28-PLAN.md — the publication-gate THIRD-OUTCOME decision (checkpoint): the binding re-verification procedure has no branch for `schema/2026-07-28` still not existing on the date; assembles the evidence brief and records the maintainer's policy without flipping any checkbox. Amended with Findings 7/8/10 — the RC is a strict ancestor of our pin 236 commits behind, the three constants under exception were renumbered *after* the RC lock, and the gate's trigger is restated as a condition ("a versioned schema directory exists") rather than the date
+- [x] 113-28-PLAN.md — the publication-gate THIRD-OUTCOME decision (checkpoint): the binding re-verification procedure has no branch for `schema/2026-07-28` still not existing on the date; assembles the evidence brief and records the maintainer's policy without flipping any checkbox. Amended with Findings 7/8/10 — the RC is a strict ancestor of our pin 236 commits behind, the three constants under exception were renumbered *after* the RC lock, and the gate's trigger is restated as a condition ("a versioned schema directory exists") rather than the date
 
 **Phase-gate outcome (plan 12):** 16/16 build-matrix rows exit 0; `cargo semver-checks` 223/223 pass with no update required and `cargo public-api` shows **zero** removed public items, so the milestone is provably still additive; `make quality-gate` exits 0; all seven new/changed files clear the 80% coverage target; the 20k-run fuzz campaign passed with zero crash artifacts. **The phase is NOT closed as complete** — `113-SPEC-RECHECK.md`'s `## Verdict` is still `PENDING` (re-verified 2026-07-26: no `schema/2026-07-28` upstream), so HTTP-01..05 and CLNT-01..02 are marked `[~]` implemented-pending-final-schema rather than complete. See `113-12-SUMMARY.md`.
 
@@ -2460,10 +2460,27 @@ Plans:
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 112. Version Plumbing Spine | 10/10 | Complete    | 2026-07-23 |
-| 113. Stateless HTTP + MRTR | 31/32 | In Progress|  |
+| 113. Stateless HTTP + MRTR | 32/32 | Complete   | 2026-07-27 |
 | 114. Tasks Extension Migration | 0/TBD | Not started | - |
 | 115. JSON Schema 2020-12 + Caching Hints | 0/TBD | Not started | - |
 | 116. Auth Hardening SEPs | 0/TBD | Not started | - |
 | 117. Agents, Tester & v1 Severability | 0/TBD | Not started | - |
 | 118. Conformance Against the Official Suite | 0/TBD | Not started | - |
 | 119. Documentation — Three Shapes + v2 Migration | 0/TBD | Not started | - |
+
+> **⚠ Phase 113's `Complete` above counts PLANS, not REQUIREMENTS — the phase is HELD, not closed.**
+> All 32 plans have SUMMARYs, which is what that column measures. But eleven requirements
+> (HTTP-01 … HTTP-08, CLNT-01/02/05) remain `[~]` *implemented; pending final schema*, and
+> **HTTP-09 remains `[ ]` on the merits** — D-113-R (a quadratic scan over peer-chosen input)
+> violates its explicit O(n) clause and is unowned.
+>
+> The `[~]` hold is a **recorded decision, not a default**: plan 113-28's
+> `## Third Outcome Policy` in `113-SPEC-RECHECK.md` records `hold`, decided by Guy Ernest on
+> 2026-07-27. `## Verdict` is still `PENDING`; the re-verification obligation is **not
+> discharged** and rolls forward; its trigger is now the **condition** *"a versioned schema
+> directory exists"*, not the 2026-07-28 date. Both arms must be run — arm 2 (the conformance
+> predicate) is not publication-gated and can be run today.
+>
+> Also open before this branch merges: **D-113-U** — the PR-blocking PMAT complexity gate reports
+> 3 violations (up from 2); `write_canonical` is at cognitive 26, introduced during the
+> gap-closure round. Unowned.
