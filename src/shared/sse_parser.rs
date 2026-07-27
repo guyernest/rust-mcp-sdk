@@ -1060,25 +1060,39 @@ mod tests {
     /// | 64 KiB | 59 ms | 10.6x (4x input) |
     /// | 256 KiB | 833 ms | 148x (16x input) |
     ///
-    /// 256 KiB is exactly `MAX_LISTEN_LINE_BYTES`. That is recorded as **D-113-R**
-    /// and it is NOT fixed here: this plan's fence is test-only, and rewriting
-    /// this splitter's scan is a production change to the function with the
-    /// T-113-67 remote-panic history, which needs its own tests and fuzz run.
+    /// 256 KiB is exactly `MAX_LISTEN_LINE_BYTES`. That was recorded as
+    /// **D-113-R**, and it is now **CLOSED in plan 113.1-02**: the scan starts at
+    /// the offset where the new chunk begins instead of at 0. The table above is
+    /// kept as the record of the defect that motivated the fix.
     ///
-    /// The consequence for THIS test: at 4 KiB chunks the per-chunk re-scan is a
-    /// memchr over at most 1 MiB, single-digit milliseconds in total, so no
-    /// absolute ceiling here can separate "linear" from "quadratic with a
-    /// memchr-sized constant". The negative control confirms it — injecting
-    /// T-113-102's per-chunk full-buffer copy moved this measurement from 6.7 ms
-    /// to 11.7 ms and the test still PASSED (113-22-SUMMARY.md).
+    /// The consequence for THIS test is unchanged and is why it stays: at 4 KiB
+    /// chunks the per-chunk re-scan is a memchr over at most 1 MiB, single-digit
+    /// milliseconds in total, so no absolute ceiling here can separate "linear"
+    /// from "quadratic with a memchr-sized constant". Two negative controls
+    /// confirm it, and BOTH are recorded rather than erased:
+    ///
+    /// - injecting T-113-102's per-chunk full-buffer copy moved this measurement
+    ///   from 6.7 ms to 11.7 ms and the test still PASSED (113-22-SUMMARY.md);
+    /// - plan 113.1-02's own post-fix control reverted the scan-window cursor,
+    ///   and this test PASSED at 5.13 ms in the very run where the two guards
+    ///   below failed at 4.36 s and 14.85x (113.1-02-SUMMARY.md).
+    ///
+    /// # Which of the three `feed` guards owns which shape
+    ///
+    /// | test | shape it owns | kind |
+    /// |---|---|---|
+    /// | this one | many lines per chunk, 4 KiB x 256 | absolute ceiling |
+    /// | `sse_parser_feed_1b_chunks_stays_within_its_linear_time_budget` | adversarial 1-byte chunking | absolute ceiling |
+    /// | `sse_parser_feed_cost_grows_linearly_not_quadratically` | adversarial 1-byte chunking | ratio, machine-independent |
     ///
     /// So what this test IS: a ceiling that catches a regression making the
     /// retained-state path egregiously expensive (a per-chunk re-parse or
-    /// re-validation), plus a pin on the retention contract — nothing dispatched,
-    /// nothing overflowed, every byte still held. The falsifiable complexity
-    /// claim for HTTP-09 lives in
-    /// `take_utf8_prefix_stays_within_its_linear_time_budget`, the scan that runs
-    /// BEFORE this one and before every byte-count bound.
+    /// re-validation) at the many-lines-per-chunk shape — the failure mode fixed
+    /// in `0493d9fb` — plus a pin on the retention contract: nothing dispatched,
+    /// nothing overflowed, every byte still held. It is NOT the falsifiable O(n)
+    /// claim for HTTP-09 clause 3; that lives in the two guards named above, and
+    /// in `take_utf8_prefix_stays_within_its_linear_time_budget` for the scan that
+    /// runs BEFORE this one and before every byte-count bound.
     #[test]
     fn sse_parser_feed_stays_within_its_linear_time_budget() {
         const CHUNK_BYTES: usize = 4 * 1024;

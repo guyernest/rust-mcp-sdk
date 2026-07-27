@@ -528,3 +528,125 @@ No manifest changed: `git diff --name-only -- Cargo.toml Cargo.lock fuzz/Cargo.t
 is empty. No Makefile changed. No requirement checkbox flipped — HTTP-01..05 and
 CLNT-01..02 stay `[~]` under the `113-SPEC-RECHECK.md` recorded exception and the
 binding STATE.md 2026-07-28 re-verification gate.
+
+---
+
+# Campaign 3 (2026-07-27) — plan 113.1-02, post-D-113-R-fix re-run
+
+Discharges **D-13(3)**, the third part of D-113-R's proof, and CLAUDE.md's
+ALWAYS/FUZZ requirement for plan 113.1-02.
+
+**Verdict: PASS — 20 000 runs, exit 0, zero crash artifacts.**
+
+The change under test is the scan-window cursor in
+`SseParser::drain_complete_lines` plus the deletion of the per-call
+`debug_assert!(!buffer.contains('\n'))`. This is a production change to the
+function with the **T-113-67 remote-panic history** (a byte-vs-character index
+confusion that panicked on bytes supplied by a remote server), and it changes
+*where the newline search starts*. That is precisely the class of edit a fuzz
+campaign over arbitrary remote frames exists to check, which is why D-13 names it
+as a hard completion condition rather than a best-effort step.
+
+## 3.1 What was run, exactly
+
+| | |
+|---|---|
+| Target | `subscription_listen_frames` (`fuzz/fuzz_targets/subscription_listen_frames.rs`) — no new target added; this one already drives `SseParser` through the listen path |
+| Code under test | `pmcp::client::subscriptions` frame decoder + the SHARED `SseParser` (`src/shared/sse_parser.rs`), now carrying plan 113.1-02's scan-window cursor |
+| Repo commit | **`647d2f4bcd343dede2e8f71420e5c007ef6a014e`** (plan 113.1-02 Task 1) |
+| Branch | `fix/mcp-publisher-oidc-audience` |
+| Tree state at run time | `git status --porcelain -- src fuzz` showed `M src/shared/sse_parser.rs`. **Recorded rather than glossed:** the only uncommitted delta was a doc comment inside the `#[cfg(test)] mod tests` block (the D-14 rustdoc amendment, Task 2 Part 1). The fuzz binary builds the library without `cfg(test)`, so no byte of code reachable by this campaign differed from commit `647d2f4b`. |
+
+```bash
+rustup toolchain list | grep nightly     # nightly-aarch64-apple-darwin
+cargo +nightly fuzz --version            # cargo-fuzz 0.13.1
+RUSTUP_TOOLCHAIN=nightly cargo fuzz run subscription_listen_frames -- -runs=20000
+```
+
+## 3.2 Counters
+
+Starting state:
+
+```
+INFO: Running with entropic power schedule (0xFF, 100).
+INFO: Seed: 1834408178
+INFO:      132 files found in <repo>/fuzz/corpus/subscription_listen_frames
+INFO: -max_len is not provided; libFuzzer will not generate inputs larger than 4096 bytes
+INFO: seed corpus: files: 132 min: 1b max: 38b total: 1757b rss: 68Mb
+#133	INITED cov: 234 ft: 702 corp: 109/1385b exec/s: 0 rss: 70Mb
+```
+
+Final line:
+
+```
+#20000	DONE   cov: 235 ft: 864 corp: 163/4426b lim: 92 exec/s: 20000 rss: 129Mb
+Done 20000 runs in 1 second(s)
+```
+
+| Counter | Value | Campaign 2 |
+|---------|-------|-----------|
+| Iterations | **20 000** (`-runs=20000`, reached `#20000 DONE`) | 20 000 |
+| Process exit code | **0** | 0 |
+| libFuzzer seed | **1834408178** | 3621664529 |
+| Coverage | `cov: 235` (edges), `ft: 864` (features) | `cov: 229`, `ft: 692` |
+| Corpus | seeded from campaign 2's retained 132 files; `corp: 163/4426b`; **202 files on disk** after the run | `corp: 133/1758b`; 132 on disk |
+| Max RSS | 129 MB | 104 MB |
+| Crash / timeout / OOM artifacts | **none** | none |
+
+Unlike campaigns 1 and 2 this run started from the RETAINED corpus rather than an
+empty one — deliberately, since the point here is to re-drive the inputs earlier
+campaigns already found interesting through a changed scan, not to rediscover
+them. Coverage rose (`cov: 229 → 235`, `ft: 692 → 864`), consistent with a
+warm-started corpus; as § 2.2 records, run-to-run `cov` variance is expected and
+is not on its own a signal in either direction.
+
+## 3.3 Artifacts-empty proof
+
+```
+$ /bin/ls -A fuzz/artifacts/subscription_listen_frames/ | /usr/bin/wc -l
+       0
+```
+
+No crash, timeout or OOM input was written. Combined with exit code 0 and the
+`#20000 DONE` line, the campaign completed rather than aborting early.
+
+## 3.4 What this campaign does and does not establish
+
+It establishes that 20 000 arbitrary-byte frames drove the changed scan without
+a panic, a hang or a sanitizer report — the T-113-67 invariant, over the edit
+most able to reintroduce it.
+
+It does **not** establish the complexity claim. Cost is not what libFuzzer
+measures. HTTP-09 clause 3 is discharged by the two guards in
+`src/shared/sse_parser.rs` —
+`sse_parser_feed_1b_chunks_stays_within_its_linear_time_budget` and
+`sse_parser_feed_cost_grows_linearly_not_quadratically` — each demonstrated RED
+before the fix (6.81 s; 15.06x) and RED again under a post-fix negative control
+(4.36 s; 14.85x). See `113.1-02-SUMMARY.md`.
+
+Nor does it establish the chunking-invariance property, which is
+`property_feed_chunking_invariance`'s job.
+
+## 3.5 Why this was run directly and not through `make quality-gate`
+
+**D-113-G, unchanged and still unowned.** The gate's `test-fuzz` stage sets
+`CARGO = cargo` (stable) while `cargo fuzz` needs nightly for
+`-Zsanitizer=address`, so all 17 targets fail to build and each failure is
+swallowed by `|| echo`. **A green `make test-fuzz` therefore proves nothing and
+is never accepted as evidence here.** No Makefile was edited — that remains out
+of scope, exactly as it was for campaigns 1 and 2.
+
+## 3.6 Reproducing this run
+
+```bash
+git checkout 647d2f4bcd343dede2e8f71420e5c007ef6a014e
+rustup toolchain install nightly            # if absent
+RUSTUP_TOOLCHAIN=nightly cargo fuzz run subscription_listen_frames -- -runs=20000 -seed=1834408178
+/bin/ls -A fuzz/artifacts/subscription_listen_frames/ | /usr/bin/wc -l   # expect 0
+```
+
+## 3.7 Scope
+
+No manifest changed: `git diff --name-only -- Cargo.toml Cargo.lock fuzz/Cargo.toml`
+is empty. No Makefile changed. No fuzz target was added or edited. No requirement
+checkbox flipped by this campaign — HTTP-09's flip belongs to plan 113.1-06.
