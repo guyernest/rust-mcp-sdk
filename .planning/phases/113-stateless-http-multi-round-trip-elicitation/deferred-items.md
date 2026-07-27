@@ -684,3 +684,35 @@ exists to protect.
 **Why not fixed in review.** The natural fix is a `Drop` impl, which conflicts
 with by-value builder chaining — it wants a design decision (e.g. a `Zeroizing`
 newtype around the fields).
+
+## D-113-Q — `OptimizedSseTransport::connect_sse` reads the whole SSE body unbounded (found by the HTTP-09 tripwire)
+
+`src/shared/sse_optimized.rs:266` does `response.text().await` on a peer-supplied
+SSE response. `reqwest::Response::text()` accepts no limit argument, so the peer
+chooses the allocation. This is the same defect class the phase capped three
+times elsewhere (`HttpTransport::send_request` / CR-03,
+`StreamableHttpTransport`'s three reads / 113-20, `subscriptions/listen`'s
+rejection body / CR-01) — it survived every round because every round's needle
+set was hyper/axum-shaped and this transport uses `reqwest`.
+
+**Found by** plan 113-21's tripwire, not by review. Adding the `reqwest` needle
+family to `WHOLE_BODY_NEEDLES` surfaced it on the first run.
+
+**Failure.** A peer answering `OptimizedSseTransport`'s GET with an arbitrarily
+large body is buffered whole before a byte is parsed. Not on the v2 streamable-HTTP
+path (v2 collects through `StreamableHttpTransport::collect_body_within_cap`) and
+with no in-crate consumer, but `OptimizedSseTransport` is exported from
+`shared::`, so the read is reachable in a shipped build.
+
+**Why not fixed here.** 113-21's scope fence is test-only — its verification step
+requires `git status` to show no modification to any `src/` file. Enumerated
+instead: `WHOLE_BODY_ALLOWLIST` in `tests/v2_bounded_reads_tripwire.rs` carries
+the site with a written `NOT BOUNDED` justification, and the list length is
+pinned at 1 so a second exemption cannot be added without a human decision.
+
+**Fix shape.** Either give `OptimizedSseTransport` a configured cap the way
+`HttpTransport::with_max_collected_body_bytes` does (reqwest has no `Limited`
+equivalent, so this means streaming via `bytes_stream()` with a running total),
+or retire the transport. Removing the `WHOLE_BODY_ALLOWLIST` entry is part of the
+fix — the tripwire's dead-entry rule does not cover that list, so the fixer must
+delete it by hand.
