@@ -638,7 +638,31 @@ rather than digest them to a constant, which is a wire-visible behaviour change.
 **Fix shape.** Return an error from `write_canonical` past the depth cap and fail
 the mint/verify, rather than emitting a marker that aliases.
 
-## D-113-N — the listen route invents an anonymous principal instead of failing closed
+## ~~D-113-N — the listen route invents an anonymous principal instead of failing closed~~ — RESOLVED (plan 113-23, `cba463b4`)
+
+**RESOLVED.** `resolve_listen_principal` (`src/server/streamable_http_server.rs`)
+now implements the SAME three-row table as `resolve_mrtr_principal`:
+`(None, has_auth_provider = true)` REFUSES with `AUTHENTICATION_REQUIRED` before
+`registry.register`, so a refused caller never takes a permit.
+`has_auth_provider` is read once, in `listen_server_view`, via the existing
+public `Server::get_auth_provider`.
+
+The **policy call** the fix shape asked for was made and is recorded at both
+sites: `(None, false)` DELIBERATELY keeps the per-request `anon#N` and does NOT
+collapse onto MRTR's shared `ANONYMOUS_PRINCIPAL`. MRTR needs a stable principal
+because it is AEAD additional-authenticated-data; a listen principal is only a
+concurrency-accounting key, and unifying them would cap a no-auth server at
+`MAX_LISTEN_STREAMS_PER_PRINCIPAL` (4) concurrent streams instead of
+`MAX_LISTEN_STREAMS_TOTAL` (64) — the common local/dev configuration.
+
+Pinned by three tests in `tests/v2_subscriptions.rs`
+(`unauthenticated_listen_is_refused_on_an_auth_configured_server`,
+`unauthenticated_listen_still_serves_on_a_server_with_no_auth_provider`,
+`one_unauthenticated_caller_cannot_exhaust_the_global_listen_budget`). Negative
+control and the reproduced starvation are recorded verbatim in
+`113-23-SUMMARY.md`.
+
+Original report follows.
 
 `src/server/streamable_http_server.rs:2935` falls back to a fresh anonymous
 principal whenever `auth_context` is `None`, with no `has_auth_provider` check —
