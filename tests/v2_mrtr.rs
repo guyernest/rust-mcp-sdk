@@ -118,6 +118,10 @@ const TOOL_TWO_ENTRIES: &str = "two_entries";
 /// Tool that NEVER completes — it re-elicits forever (round-limit fixture).
 const TOOL_FOREVER: &str = "never_completes";
 
+/// Tool that needs as many rounds as the SHIPPED client default allows, then
+/// completes — the legitimate-deep-flow fixture for the server round ceiling.
+const TOOL_CLIENT_DEFAULT_DEPTH: &str = "client_default_depth";
+
 /// Tool that always fails, so a genuine protocol error can be observed.
 const TOOL_BOOM: &str = "always_fails";
 
@@ -132,6 +136,32 @@ const TWO_ENTRY_KEYS: [&str; 2] = ["first", "second"];
 
 /// How many elicitation rounds [`Script::ThreeRounds`] performs.
 const TOTAL_ROUNDS: u64 = 3;
+
+/// `DEFAULT_MRTR_ROUND_LIMIT` from `src/client/mod.rs` — the shipped client-side
+/// D-09 bound, which is private, so it is mirrored here.
+///
+/// Not a comment-pinned duplicate:
+/// [`a_flow_within_the_client_default_limit_is_unaffected`] MEASURES the MRTR
+/// round it reaches by opening each minted token with the server's own key, so
+/// this value is checked against live behaviour rather than asserted about.
+const CLIENT_DEFAULT_ROUND_LIMIT: u64 = 8;
+
+/// `MAX_MRTR_ROUNDS` from `src/server/core.rs` — the SERVER-side ceiling closed
+/// by D-113-L. `pub(crate)`, so an integration test cannot name it.
+///
+/// Also not a comment-pinned duplicate:
+/// [`a_client_that_ignores_its_own_round_limit_is_stopped_by_the_server`]
+/// measures the ceiling by resending until the server refuses and asserts the
+/// measurement equals this value. Lowering `MAX_MRTR_ROUNDS` without updating
+/// this constant is a test FAILURE, which is the tripwire — and the boundary is
+/// pinned by name in `core.rs`'s own unit tests, so the two halves cannot both
+/// drift silently.
+const SERVER_MAX_MRTR_ROUNDS: u64 = 16;
+
+/// The server ceiling is deliberately TWICE the shipped client default, so a
+/// default-configured pmcp client can never trip it (D-113-L). Asserting the
+/// relationship here means a future edit to either constant has to confront it.
+const _: () = assert!(SERVER_MAX_MRTR_ROUNDS == CLIENT_DEFAULT_ROUND_LIMIT * 2);
 
 // ===========================================================================
 // Scripted handlers.
@@ -150,6 +180,10 @@ enum Script {
     Mixed,
     /// Ask three times, evolving the continuation each round.
     ThreeRounds,
+    /// Ask [`CLIENT_DEFAULT_ROUND_LIMIT`] times, evolving the continuation each
+    /// round — a legitimate DEEP flow, at exactly the depth the shipped client
+    /// default reaches.
+    ClientDefaultDepth,
     /// Ask for two named entries, re-requesting whichever is still missing.
     TwoEntries,
     /// Never complete.
@@ -244,7 +278,8 @@ impl ToolHandler for ScriptedTool {
         self.calls.fetch_add(1, Ordering::SeqCst);
         match self.script {
             Script::Boom => Err(pmcp::Error::validation("this tool always fails")),
-            Script::ThreeRounds => three_rounds(&extra),
+            Script::ThreeRounds => counting_rounds(&extra, TOTAL_ROUNDS),
+            Script::ClientDefaultDepth => counting_rounds(&extra, CLIENT_DEFAULT_ROUND_LIMIT),
             Script::TwoEntries => two_entries(&extra),
             Script::Forever => ask(
                 &extra,
@@ -275,15 +310,19 @@ fn single_kind(extra: &RequestHandlerExtra, script: Script) -> pmcp::Result<Valu
     ask(extra, requests, json!({ "step": 1 }))
 }
 
-/// Three rounds with an EVOLVING continuation: `round` counts up inside the
+/// `total` rounds with an EVOLVING continuation: `round` counts up inside the
 /// sealed `requestState`, so each round's token is minted from different state.
-fn three_rounds(extra: &RequestHandlerExtra) -> pmcp::Result<Value> {
+///
+/// Parameterised over `total` so the three-round scenario mirror and the
+/// deep-flow fixture that guards the server round ceiling share ONE shape — two
+/// hand-written variants would be free to drift into proving different things.
+fn counting_rounds(extra: &RequestHandlerExtra, total: u64) -> pmcp::Result<Value> {
     let round = extra
         .mrtr_continuation()
         .and_then(|state| state.get("round"))
         .and_then(Value::as_u64)
         .unwrap_or(0);
-    if round >= TOTAL_ROUNDS {
+    if round >= total {
         return Ok(json!({ "answer": RESUMED, "rounds": round }));
     }
     let next = round + 1;
@@ -417,6 +456,7 @@ fn build_fixture_server(calls: &Arc<AtomicUsize>) -> Server {
         .tool(TOOL_THREE_ROUNDS, tool(Script::ThreeRounds))
         .tool(TOOL_TWO_ENTRIES, tool(Script::TwoEntries))
         .tool(TOOL_FOREVER, tool(Script::Forever))
+        .tool(TOOL_CLIENT_DEFAULT_DEPTH, tool(Script::ClientDefaultDepth))
         .tool(TOOL_BOOM, tool(Script::Boom))
         .prompt(PROMPT_NAME, MrtrPrompt)
         .resources(MrtrResource)
@@ -1200,6 +1240,209 @@ async fn sep_2322_error_on_protocol_error() {
         !unknown.raw.contains("input_required"),
         "...and never a re-prompt: {}",
         unknown.raw
+    );
+}
+
+// ===========================================================================
+// The SERVER-side round ceiling (D-113-L, HTTP-02 / HTTP-03).
+//
+// Both tests here drive the wire with RAW frames on purpose. `pmcp::Client`
+// honours its own `mrtr_round_limit`, so a Client on both ends would prove only
+// that two peers sharing an assumption agree with each other — which is exactly
+// the state D-113-L found the SDK in: the D-09 counter was enforced solely by
+// the party it exists to constrain. The loop below is the party that does not
+// cooperate.
+// ===========================================================================
+
+/// Open a minted `requestState` with the fixture server's own key and report the
+/// round sealed inside it.
+///
+/// The round is INSIDE the AEAD, so this is the only way a test can observe what
+/// the server actually minted rather than what it hoped was minted.
+fn sealed_round(tool: &str, state: &str) -> u8 {
+    let (_, round) = open_request_state(
+        &KEY,
+        ANONYMOUS_PRINCIPAL,
+        "tools/call",
+        &tool_params(tool),
+        state,
+    )
+    .expect("a token the fixture server minted verifies against its own key");
+    round
+}
+
+/// A client that ignores its own round limit and resends forever is stopped by
+/// the SERVER (D-113-L, T-113-110/111/114).
+///
+/// Four things are asserted, and only together do they mean anything:
+///
+/// 1. the loop TERMINATES — before D-113-L was closed it did not;
+/// 2. the terminating frame is a typed `-32602` at HTTP 400 whose message names
+///    the round limit, not the generic `invalid requestState` used for
+///    authentication failures;
+/// 3. the handler ran exactly `SERVER_MAX_MRTR_ROUNDS` times — the refusing
+///    round did NOT reach it, which is the property the INGRESS enforcement
+///    point owns and the mint-site backstop cannot provide;
+/// 4. the deepest round the server ever sealed is the ceiling, so the counter
+///    never approaches the 255 saturation that made
+///    `RequestHandlerExtra::mrtr_round` useless to a self-limiting handler.
+#[tokio::test]
+async fn a_client_that_ignores_its_own_round_limit_is_stopped_by_the_server() {
+    let (addr, handle, calls) = spawn_fixture().await;
+
+    // `TOOL_FOREVER` never completes, so nothing but the server's ceiling can
+    // end this exchange.
+    let first = call_tool(addr, 1, TOOL_FOREVER).await;
+    let (mut state, _) = expect_input_required(&first);
+    let mut deepest = sealed_round(TOOL_FOREVER, &state);
+
+    // Three times the ceiling: far enough past it that a regression producing a
+    // saturating counter would be visible, and bounded so a regression fails
+    // FAST instead of hanging the suite.
+    let attempts = SERVER_MAX_MRTR_ROUNDS * 3;
+    let mut resends = 0_u64;
+    let mut refusal = None;
+    for id in 2..=(attempts + 1) {
+        resends += 1;
+        let response = retry_tool(
+            addr,
+            json!(id),
+            TOOL_FOREVER,
+            &state,
+            json!({ "again": elicit_answer() }),
+        )
+        .await;
+        if response.body.get("error").is_some() {
+            refusal = Some(response);
+            break;
+        }
+        let (next, _) = expect_input_required(&response);
+        deepest = deepest.max(sealed_round(TOOL_FOREVER, &next));
+        state = next;
+    }
+    handle.abort();
+
+    let refusal =
+        refusal.expect("the server must terminate an unbounded resend loop, not follow it");
+    assert_eq!(refusal.status, 400, "body was {}", refusal.raw);
+    assert_eq!(
+        refusal.body["error"]["code"], INVALID_PARAMS,
+        "body was {}",
+        refusal.raw
+    );
+    let message = refusal.body["error"]["message"]
+        .as_str()
+        .unwrap_or_else(|| panic!("a JSON-RPC error carries a message: {}", refusal.raw));
+    assert!(
+        message.contains("round limit"),
+        "the refusal must NAME the ceiling — it happens after the token verified, so it \
+         is not an authentication oracle and has nothing to hide: {message}"
+    );
+    assert_ne!(
+        message, "invalid requestState",
+        "and it must not hide behind the generic authentication message"
+    );
+    assert!(
+        refusal.body.get("result").is_none(),
+        "neither a complete result nor a re-prompt: {}",
+        refusal.raw
+    );
+
+    assert_eq!(
+        resends, SERVER_MAX_MRTR_ROUNDS,
+        "the ceiling is measured, not assumed: the server admitted exactly this many \
+         resends before refusing"
+    );
+    assert_eq!(
+        calls.load(Ordering::SeqCst) as u64,
+        SERVER_MAX_MRTR_ROUNDS,
+        "the refused round must NOT have reached the handler — the first call plus \
+         `ceiling - 1` admitted resends is exactly `ceiling` invocations"
+    );
+    assert_eq!(
+        u64::from(deepest),
+        SERVER_MAX_MRTR_ROUNDS,
+        "the deepest round the server ever sealed is the ceiling itself — nowhere near \
+         the 255 saturation D-113-L described"
+    );
+}
+
+/// A legitimate deep flow — at exactly the depth the shipped client default
+/// reaches — is UNAFFECTED by the ceiling.
+///
+/// This is what makes the 2x headroom a checked property rather than a comment
+/// in `core.rs`: a future "tighten the ceiling" change that broke real
+/// multi-round flows would fail here rather than in a user's deployment.
+///
+/// The arithmetic, stated so it cannot be misread: `TOOL_CLIENT_DEFAULT_DEPTH`
+/// completes once its sealed counter reaches [`CLIENT_DEFAULT_ROUND_LIMIT`], so
+/// the exchange is one initial call plus eight resends, the deepest MRTR round
+/// sealed is 8, and the handler runs nine times. That is one request MORE than a
+/// default-limited `pmcp::Client` would ever send, which makes the guard
+/// strictly stronger than the client-side bound it protects.
+#[tokio::test]
+async fn a_flow_within_the_client_default_limit_is_unaffected() {
+    let (addr, handle, calls) = spawn_fixture().await;
+
+    let first = call_tool(addr, 1, TOOL_CLIENT_DEFAULT_DEPTH).await;
+    let (mut state, mut keys) = expect_input_required(&first);
+    let mut deepest = sealed_round(TOOL_CLIENT_DEFAULT_DEPTH, &state);
+    let mut resends = 0_u64;
+
+    let complete = loop {
+        resends += 1;
+        assert!(
+            resends <= CLIENT_DEFAULT_ROUND_LIMIT,
+            "the fixture must complete within the client default; it did not by resend \
+             {resends}"
+        );
+        let answers = keys
+            .iter()
+            .map(|key| (key.clone(), elicit_answer()))
+            .collect::<serde_json::Map<String, Value>>();
+        let response = retry_tool(
+            addr,
+            json!(resends + 1),
+            TOOL_CLIENT_DEFAULT_DEPTH,
+            &state,
+            Value::Object(answers),
+        )
+        .await;
+        assert!(
+            response.body.get("error").is_none(),
+            "a flow within the shipped client default must never be refused, and this \
+             one was at resend {resends}: {}",
+            response.raw
+        );
+        if result_of(&response)
+            .get("resultType")
+            .and_then(Value::as_str)
+            == Some("complete")
+        {
+            break response;
+        }
+        let (next, next_keys) = expect_input_required(&response);
+        deepest = deepest.max(sealed_round(TOOL_CLIENT_DEFAULT_DEPTH, &next));
+        state = next;
+        keys = next_keys;
+    };
+    handle.abort();
+
+    expect_resumed(&complete);
+    assert_eq!(
+        resends, CLIENT_DEFAULT_ROUND_LIMIT,
+        "the flow ran to the full depth of the shipped client default"
+    );
+    assert_eq!(
+        u64::from(deepest),
+        CLIENT_DEFAULT_ROUND_LIMIT,
+        "and the deepest round the server sealed is that same depth — comfortably under \
+         the ceiling, which is deliberately 2x it"
+    );
+    assert_eq!(
+        calls.load(Ordering::SeqCst) as u64,
+        CLIENT_DEFAULT_ROUND_LIMIT + 1,
+        "one handler invocation per request, refusals included — there were none"
     );
 }
 
