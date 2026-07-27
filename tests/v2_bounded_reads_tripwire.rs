@@ -48,6 +48,7 @@
 //! justification reviewed. Raising a number to match reality is the failure mode
 //! this file exists to prevent.
 
+use std::fmt::Write as _;
 use std::fs;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
@@ -489,6 +490,211 @@ fn occurrences(text: &str, needle: &str) -> Vec<usize> {
     }
     out
 }
+
+/// The last `max` characters of `text`, for a failure message that shows the
+/// offending statement without dumping a whole file.
+fn tail(text: &str, max: usize) -> String {
+    let mut chars: Vec<char> = text.chars().rev().take(max).collect();
+    chars.reverse();
+    chars.into_iter().collect()
+}
+
+/// One scanned file: its path, its stripped text and its `cfg(test)`-only
+/// regions.
+struct ScannedFile {
+    path: PathBuf,
+    stripped: Stripped,
+    excluded: Vec<Range<usize>>,
+}
+
+impl ScannedFile {
+    fn load(path: PathBuf) -> Self {
+        let source = fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
+        let stripped = strip(&source);
+        let excluded = cfg_test_spans(&stripped);
+        Self {
+            path,
+            stripped,
+            excluded,
+        }
+    }
+
+    /// Offsets of `needle` outside every `cfg(test)`-only region — that is, the
+    /// occurrences that exist in a shipped build.
+    fn shipped_hits(&self, needle: &str) -> Vec<usize> {
+        occurrences(&self.stripped.text, needle)
+            .into_iter()
+            .filter(|at| !is_excluded(&self.excluded, *at))
+            .collect()
+    }
+
+    fn line(&self, index: usize) -> u32 {
+        line_of(&self.stripped, index)
+    }
+}
+
+fn scanned_scope() -> Vec<ScannedFile> {
+    scope_files().into_iter().map(ScannedFile::load).collect()
+}
+
+// ---------------------------------------------------------------------------
+// Whole-body reads — a STRUCTURAL check
+// ---------------------------------------------------------------------------
+
+/// The reads that turn a peer-chosen body length into a single allocation.
+///
+/// * `.collect().await` is `http_body_util::BodyExt::collect`. It is
+///   discriminating precisely BECAUSE an iterator `collect` is never awaited, so
+///   ordinary iterator code cannot trip it.
+/// * `read_to_end` / `read_to_string` are the std and tokio unbounded reads.
+/// * `body::to_bytes(` is the axum/hyper one-shot helper. Its limit is a
+///   REQUIRED argument, so it is bounded by construction — the only way to
+///   unbound it is to pass the maximum, which is what its rule checks for.
+const WHOLE_BODY_NEEDLES: &[&str] = &[
+    ".collect().await",
+    "read_to_end",
+    "read_to_string",
+    "body::to_bytes(",
+];
+
+/// A reviewed exemption from the whole-body-read rule.
+struct Allowed {
+    path: &'static str,
+    needle: &'static str,
+    why: &'static str,
+}
+
+/// Whole-body reads that genuinely cannot be bounded.
+///
+/// EMPTY is the healthy state, and it is empty today: every live site in scope
+/// is wrapped in `http_body_util::Limited`. The mechanism survives so that a
+/// future genuinely-unboundable site has a reviewed home with a written reason,
+/// instead of a silent exemption or a deleted needle.
+const WHOLE_BODY_ALLOWLIST: &[Allowed] = &[];
+
+/// The statement a match sits in: everything back to the nearest `;`, `{` or
+/// `}`.
+///
+/// This is the window the bound must appear in. Whitespace is already collapsed,
+/// so a rustfmt-broken method chain is one statement here.
+fn statement_scope(text: &str, match_start: usize) -> &str {
+    let start = text[..match_start]
+        .rfind([';', '{', '}'])
+        .map_or(0, |at| at + 1);
+    &text[start..match_start]
+}
+
+/// Whether the statement around a whole-body read bounds it.
+///
+/// This is a STRUCTURAL check, and that is the whole point: it fails when a NEW
+/// unbounded site is added AND when an EXISTING site loses its bound. A
+/// count-based check can only see the first, which is how a review that
+/// enumerated "the sites this round found" kept missing the next one.
+fn bound_in_scope(scope: &str, needle: &str) -> bool {
+    match needle {
+        ".collect().await" => scope.contains("Limited::new("),
+        "read_to_end" | "read_to_string" => scope.contains(".take("),
+        "body::to_bytes(" => !scope.contains("usize::MAX"),
+        _ => false,
+    }
+}
+
+fn allowlisted<'a>(list: &'a [Allowed], path: &str, needle: &str) -> Option<&'a Allowed> {
+    list.iter()
+        .find(|entry| entry.path == path && entry.needle == needle)
+}
+
+#[test]
+fn no_unbounded_whole_body_read_over_peer_supplied_bytes() {
+    let mut violations = String::new();
+    for file in scanned_scope() {
+        let path = rel(&file.path);
+        for needle in WHOLE_BODY_NEEDLES {
+            if allowlisted(WHOLE_BODY_ALLOWLIST, &path, needle).is_some() {
+                continue;
+            }
+            for at in file.shipped_hits(needle) {
+                let scope = statement_scope(&file.stripped.text, at);
+                if bound_in_scope(scope, needle) {
+                    continue;
+                }
+                let _ = writeln!(
+                    violations,
+                    "\n  {}:{} — unbounded `{}`\n    statement: ...{}",
+                    path,
+                    file.line(at),
+                    needle,
+                    tail(scope, 200)
+                );
+            }
+        }
+    }
+    assert!(
+        violations.is_empty(),
+        "HTTP-09: unbounded whole-body read(s) over peer-supplied bytes:{violations}\n\
+         Required action: wrap the read in `http_body_util::Limited` with the transport's \
+         configured cap, exactly as `collect_body_within_cap` does in src/shared/http.rs and \
+         src/shared/streamable_http.rs. If this site genuinely cannot be bounded, add a \
+         WHOLE_BODY_ALLOWLIST entry with a written justification and get it reviewed. \
+         Deleting the needle is not a fix."
+    );
+}
+
+/// Anti-vacuity guard for the check above.
+///
+/// If `strip` ever over-strips, or scope discovery regresses, the structural
+/// test would pass over an EMPTY set of sites and report success. This test
+/// fails in that case: it pins the two known reads and asserts both are
+/// classified bounded.
+#[test]
+fn the_two_known_capped_whole_body_reads_are_found_and_classified_bounded() {
+    let mut found: Vec<(String, u32)> = Vec::new();
+    for file in scanned_scope() {
+        let path = rel(&file.path);
+        for at in file.shipped_hits(".collect().await") {
+            let scope = statement_scope(&file.stripped.text, at);
+            assert!(
+                scope.contains("Limited::new("),
+                "{}:{} is a shipped whole-body read that is NOT Limited-wrapped",
+                path,
+                file.line(at)
+            );
+            found.push((path.clone(), file.line(at)));
+        }
+    }
+    assert_eq!(
+        found.len(),
+        2,
+        "expected exactly the two capped collect_body_within_cap reads in scope, found {found:?} \
+         — if this fell to zero the structural check above is passing vacuously; if it rose, a new \
+         whole-body read was added and needs review"
+    );
+    let paths: Vec<&str> = found.iter().map(|(p, _)| p.as_str()).collect();
+    assert!(
+        paths.contains(&"src/shared/http.rs") && paths.contains(&"src/shared/streamable_http.rs"),
+        "the two capped reads should be the two transports' collect_body_within_cap helpers, \
+         found {found:?}"
+    );
+}
+
+/// The exemption mechanism is only worth keeping if an entry must say something.
+#[test]
+fn every_whole_body_exemption_carries_a_substantive_justification() {
+    for entry in WHOLE_BODY_ALLOWLIST {
+        assert!(
+            entry.why.trim().len() >= MIN_JUSTIFICATION_CHARS,
+            "WHOLE_BODY_ALLOWLIST entry {}/{} needs a real justification naming why this read \
+             cannot be bounded, not {:?}",
+            entry.path,
+            entry.needle,
+            entry.why
+        );
+    }
+}
+
+/// An exemption shorter than this is a label, not a justification.
+const MIN_JUSTIFICATION_CHARS: usize = 40;
 
 // ---------------------------------------------------------------------------
 // Tests for the scanner itself — without these, every check built on top of it
