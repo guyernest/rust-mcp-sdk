@@ -2349,7 +2349,7 @@ Plans:
 - [x] 113-22-PLAN.md — HTTP-09 O(n) half: a FALSIFIABLE linear-time budget for `take_utf8_prefix` and `SseParser::feed` (the existing guard passes on the very quadratic shape it names), plus a retained-tail property test
 - [x] 113-23-PLAN.md — D-113-N: the `subscriptions/listen` route fails closed on an auth-configured server instead of minting a private `anon#N` that makes the per-principal cap unreachable; plus the Finding-5 audit of pmcp's actual `subscriptionId` emission on all three frame classes
 - [x] 113-24-PLAN.md — D-113-L: a server-side `MAX_MRTR_ROUNDS` ceiling enforced at the ingress verdict and at the mint, so the D-09 security counter stops being enforced solely by the client it exists to constrain
-- [ ] 113-25-PLAN.md — D-113-P: `requestState` key material zeroized on both builders and `resolve_codec_at_build` taking the key by reference, closing all three unscrubbed copies without breaking by-value builder chaining
+- [x] 113-25-PLAN.md — D-113-P: `requestState` key material zeroized on both builders and `resolve_codec_at_build` taking the key by reference, closing all three unscrubbed copies without breaking by-value builder chaining
 
 **Wave 2** *(blocked on Wave 1)*
 
@@ -2460,7 +2460,7 @@ Plans:
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 112. Version Plumbing Spine | 10/10 | Complete    | 2026-07-23 |
-| 113. Stateless HTTP + MRTR | 24/32 | In Progress|  |
+| 113. Stateless HTTP + MRTR | 25/32 | In Progress|  |
 | 114. Tasks Extension Migration | 0/TBD | Not started | - |
 | 115. JSON Schema 2020-12 + Caching Hints | 0/TBD | Not started | - |
 | 116. Auth Hardening SEPs | 0/TBD | Not started | - |

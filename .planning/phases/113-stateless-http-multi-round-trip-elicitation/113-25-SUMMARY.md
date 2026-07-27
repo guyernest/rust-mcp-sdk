@@ -351,6 +351,14 @@ honours it. `requirements-completed` in the frontmatter is deliberately empty fo
   quadratic; blocks HTTP-09 substantively).
 - No blockers introduced.
 
+## Self-Check: PASSED
+
+- Files claimed created/modified: all 4 present on disk.
+- Commits claimed: `cccbe6a3`, `f127f319`, `f36f4f56` all present in `git log --all`.
+- `SecretKey` occurrences in the tree: `request_state.rs` 12, `builder.rs` 9, `mod.rs` 8.
+- `TRANSITIONAL` occurrences in the final tree: **0** in both builder files, confirming deviation 3's
+  scaffolding was removed as claimed.
+
 ---
 *Phase: 113-stateless-http-multi-round-trip-elicitation*
 *Completed: 2026-07-27*

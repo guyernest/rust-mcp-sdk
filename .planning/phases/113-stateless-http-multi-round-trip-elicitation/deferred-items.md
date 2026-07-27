@@ -735,7 +735,48 @@ falls through, and it re-elicits forever with no error anywhere.
 **Fix shape.** Carry the requested kind to ingress and decode kind-directed,
 erroring on mismatch. Currently documented as best-effort.
 
-## D-113-P — `ServerCoreBuilder` drops raw requestState key material un-scrubbed
+## ~~D-113-P — `ServerCoreBuilder` drops raw requestState key material un-scrubbed~~ — RESOLVED (plan 113-25, `cccbe6a3` + `f127f319`)
+
+**RESOLVED.** Both builders now hold
+`pub(crate) type SecretKey = zeroize::Zeroizing<[u8; KEY_LEN]>`
+(`src/server/request_state.rs`) instead of bare `[u8; 32]`. D-113-P named only
+`ServerCoreBuilder`; `ServerBuilder` (`src/server/mod.rs`) carried the identical
+field and was fixed too.
+
+The **design decision** this item asked for was made and is recorded in the
+`SecretKey` rustdoc: a `Zeroizing` FIELD, **not** a struct-level `Drop`. A
+`Drop` impl makes every move of a field out of `self` an `E0509`, so `build()`
+could no longer destructure the builder and the by-value `mut self` chaining
+idiom would have had to be abandoned. Putting the destructor on the value scrubs
+on drop, survives moves, and changes nothing about how callers chain.
+
+Three copies were enumerated and each is closed with an in-code comment naming
+which one it closes: (1) the FIELDS on both builders; (2) the SETTERS' by-value
+parameters — `[u8; 32]` is `Copy`, so the move leaves the caller's bytes in the
+parameter's own slot, hence an explicit `zeroize()` after the transfer; (3)
+`resolve_codec_at_build`, whose signature is now `Option<&SecretKey>` /
+`&[SecretKey]`, so calling it manufactures no new stack copy. A fourth,
+unenumerated copy was found and closed on the way: `with_previous_keys`'s
+shadowing `let mut key = key`.
+
+**Public signatures are byte-identical** (`with_request_state_key([u8; 32])`
+unchanged; `mut` on a parameter binding is not part of a signature), so
+`semver-checks` stays 223/223 no-update-required.
+
+**Scope of the guarantee, stated rather than overclaimed:** zeroize 1.8.2's
+primitive is `volatile_write` + `compiler_fence(SeqCst)`, so the overwrite is not
+dead-code-eliminated — but no safe-Rust test can observe post-drop memory, so the
+`SecretKey` test pins the CONTRACT only. This bounds what the SDK leaves behind;
+it does not recover optimiser-made copies, register spills or swapped pages. See
+`113-25-SUMMARY.md` § "What the zeroization test PROVES vs what it ASSERTS".
+
+Pinned by a compile-level field-type guard per builder
+(`request_state_key_field_is_the_zeroizing_type`,
+`server_builder_request_state_key_field_is_the_zeroizing_type`), because the
+negative control proved behaviour cannot detect a missing scrub: with the fix
+reverted AND the guard removed, all 75 behavioural tests still passed.
+
+Original report follows.
 
 `src/server/builder.rs:100` stores `Option<[u8;32]>` plus a `Vec<[u8;32]>` of
 rotated-out keys and drops them in the clear, while every other copy of that
