@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v2.5
 milestone_name: MCP Spec 2026-07-28
 status: executing
-stopped_at: "Completed 113-18-PLAN.md (gap closure: retryable duplicate refusal, fresh-id contract tripwire, WR-06 semaphore prune)"
-last_updated: "2026-07-27T01:33:08.411Z"
+stopped_at: "Completed 113-20-PLAN.md (gap closure: collected-body cap at every response.collect() site; T-113-84 discharged)"
+last_updated: "2026-07-27T02:28:51.074Z"
 last_activity: 2026-07-27
 progress:
   total_phases: 71
   completed_phases: 57
   total_plans: 301
-  completed_plans: 299
+  completed_plans: 300
   percent: 80
 ---
 
@@ -26,9 +26,9 @@ See: .planning/PROJECT.md (updated 2026-07-22) · .planning/ROADMAP.md (v2.5 mil
 ## Current Position
 
 Phase: 113 (stateless-http-multi-round-trip-elicitation) — EXECUTING
-Plan: 3 of 20
+Plan: 4 of 20
 Status: Ready to execute
-Next action: 113-18 closed GAP-B and GAP-C. GAP-B is closed by CONTRACT, not by the originally-planned liveness reclaim: the receiver and the `ListenGuard` share one `stream::unfold` state tuple, so sender liveness cannot observe remote death (the verifier's reproduction dropped the receiver while holding the guard — a state production cannot enter). Instead the duplicate refusal became RETRYABLE (`RATE_LIMITED` -32005 at HTTP 200, `v2_status_for_code` byte-unchanged) and the fresh-id reconnect contract is documented in three places and pinned by a live tripwire whose negative control fails. GAP-C/WR-06 closed: both entry-creating rejection paths route through `prune_after_rejection`, proven by a test that fails when the prune is removed. A re-verifier must reproduce GAP-B through a REAL socket. Earlier in this wave 113-17 landed the parser work — `SseParser`'s bound is now UNCONDITIONAL over `buffer + current_event.data + chunk` (GAP-A closed for real), the two whole-body transport sites go through a `pub(crate)` `feed_complete_body`, and `connect_sse`'s ceiling is a configurable 16 MiB with no public-config-struct change (semver 223/223, no update required). **113-20 is now load-bearing**: `feed_complete_body`'s byte-cap precondition is stated as a caller obligation but is NOT yet satisfied — both `response.collect()` sites are still uncapped (T-113-84). After the remaining wave plans, re-verify the phase; then, on or after 2026-07-28, re-run the 4-step procedure in `113-SPEC-RECHECK.md` § Recorded Exception, upgrade the Verdict, and only then flip the seven requirements. HTTP-04 stays `[~]` until that gate clears. A value mismatch is a phase-reopening event.
+Next action: 113-18 closed GAP-B and GAP-C. GAP-B is closed by CONTRACT, not by the originally-planned liveness reclaim: the receiver and the `ListenGuard` share one `stream::unfold` state tuple, so sender liveness cannot observe remote death (the verifier's reproduction dropped the receiver while holding the guard — a state production cannot enter). Instead the duplicate refusal became RETRYABLE (`RATE_LIMITED` -32005 at HTTP 200, `v2_status_for_code` byte-unchanged) and the fresh-id reconnect contract is documented in three places and pinned by a live tripwire whose negative control fails. GAP-C/WR-06 closed: both entry-creating rejection paths route through `prune_after_rejection`, proven by a test that fails when the prune is removed. A re-verifier must reproduce GAP-B through a REAL socket. Earlier in this wave 113-17 landed the parser work — `SseParser`'s bound is now UNCONDITIONAL over `buffer + current_event.data + chunk` (GAP-A closed for real), the two whole-body transport sites go through a `pub(crate)` `feed_complete_body`, and `connect_sse`'s ceiling is a configurable 16 MiB with no public-config-struct change (semver 223/223, no update required). **113-20 has now landed and T-113-84 is DISCHARGED**: `feed_complete_body`'s byte-cap precondition is an established fact naming both enforcing call sites. Every whole-body read on `StreamableHttpTransport` — the POST response, the `start_sse` GET stream, AND the previously-unenumerated v2 error envelope — goes through one `collect_body_within_cap` helper that refuses an over-cap `Content-Length` before reading a byte and bounds the delivered bytes with `http_body_util::Limited` (a STREAMING bound, so an over-cap body is never allocated whole). Zero `response.collect()` remain in that file. `DEFAULT_MAX_COLLECTED_BODY_BYTES` (16 MiB) lives on a PRIVATE field with an additive `with_max_collected_body_bytes()` seam, so semver stays 223/223 no-update-required. Four per-site negative-control runs recorded. D-113-K records the deferred GET-path incremental-parsing rewrite (T-113-94). Wave 3 (113-19, the phase gate) is unblocked. After it, re-verify the phase; then, on or after 2026-07-28, re-run the 4-step procedure in `113-SPEC-RECHECK.md` § Recorded Exception, upgrade the Verdict, and only then flip the seven requirements. HTTP-04 stays `[~]` until that gate clears. A value mismatch is a phase-reopening event.
 Last activity: 2026-07-27
 
 ## v2.5 Phase Plan (8 phases, 38 requirements)
@@ -177,6 +177,12 @@ Decisions are logged in PROJECT.md Key Decisions table. Decisions framing this m
 - [Phase ?]: 113-18: all three listen refusals now answer RATE_LIMITED (-32005) at HTTP 200 (v2_status_for_code byte-unchanged), so the 'too many concurrent' MESSAGE is the ONLY discriminator between a duplicate and a capacity refusal
 - [Phase ?]: 113-18: the fresh-id reconnect contract is a CHECKED property — Client::subscriptions_listen's Uuid::new_v4() mint is pinned by a live tripwire whose negative control (constant id) fails twice: equal ids AND an outright -32005 refusal
 - [Phase ?]: 113-18: WR-06's semaphore leak is a RACE, not a missing call — prune_after_rejection covers both entry-creating rejection paths and ships with its reachability argument; the deterministic test pins the STATE the race produces and fails when the prune is removed
+- [Phase ?]: 113-20: the collected-body cap is a STREAMING bound (http_body_util::Limited), not collect-then-measure — collecting an over-cap body before measuring it performs exactly the unbounded allocation the cap exists to prevent; Content-Length is an early-refusal OPTIMISATION, never the authority (T-113-93)
+- [Phase ?]: 113-20: ALL THREE whole-body reads on StreamableHttpTransport are capped, not the two the plan enumerates — jsonrpc_error_envelope is a third response.collect(); zero response.collect() now remain in the file
+- [Phase ?]: 113-20: T-113-84 DISCHARGED — feed_complete_body's byte-cap precondition is now an established fact naming both enforcing call sites; DEFAULT_MAX_COLLECTED_BODY_BYTES (16 MiB) lives on a PRIVATE StreamableHttpTransport field with an additive with_max_collected_body_bytes() seam, so semver-checks stays 223/223 no-update-required with no constructible_struct_adds_field
+- [Phase ?]: 113-20: the 16 MiB default matches DEFAULT_HTTP_SSE_BUFFERED_BYTES's VALUE but deliberately not its CONCEPT (one-shot collected body vs incremental in-flight retention, two transports) — both constants say so in rustdoc so nobody unifies them
+- [Phase ?]: 113-20: HTTP-04 NOT flipped to [x] despite the plan frontmatter listing it — the STATE.md phase gate forbids flipping HTTP-01..05/CLNT-01..02 before the 2026-07-28 schema re-verification; requirements mark-complete deliberately not run
+- [Phase ?]: 113-20: D-113-K records the deferred GET-path incremental-parsing rewrite (T-113-94) — capping bounds the allocation but does not make a nominally-long-lived SSE path streaming; that is a transport rewrite, not a bound fix
 
 ### Pending Todos
 
@@ -221,8 +227,8 @@ Items deferred by design for this milestone (design §7 / REQUIREMENTS v2):
 
 ## Session Continuity
 
-Last session: 2026-07-27T01:33:08.401Z
-Stopped at: Completed 113-18-PLAN.md (gap closure: retryable duplicate refusal, fresh-id contract tripwire, WR-06 semaphore prune)
+Last session: 2026-07-27T02:28:51.066Z
+Stopped at: Completed 113-20-PLAN.md (gap closure: collected-body cap at every response.collect() site; T-113-84 discharged)
 Resume file: None
 
 ## Performance Metrics
@@ -273,3 +279,4 @@ Resume file: None
 | Phase 113 P16 | 49min | 2 tasks | 4 files |
 | Phase 113 P17 | 43min | 2 tasks | 4 files |
 | Phase 113 P18 | 47min | 2 tasks tasks | 4 files files |
+| Phase 113 P20 | 47min | 1 task tasks | 3 files files |
