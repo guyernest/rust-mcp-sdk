@@ -2294,7 +2294,7 @@ Plans:
   4. SSE resumability (`Last-Event-ID`) is not offered on the v2 path, and a regression test proves response JSON-RPC ids are always derived from the live request — closing the id-replay / discovery-cache bug class (HTTP-05)
   5. The pmcp `Client`, selected explicitly per connection, speaks v2 (per-request `_meta`, `server/discover`, required headers, no `initialize`) and fulfills MRTR `input_required` results by producing `inputResponses`, with the Phase-106 host handlers (sampling/elicitation/roots) folded into the v2 flow (CLNT-01, CLNT-02)
 
-**Plans**: 13 plans (12 replanned + 1 added after cross-AI review — see `113-REVIEWS.md` § Review Adjudication)
+**Plans**: 28 plans — 13 original (113-01…113-13) + 7 gap-closure round 1 (113-14…113-20) + 8 gap-closure round 2 (113-21…113-28, planned 2026-07-27)
 
 Plans:
 **Wave 1**
@@ -2330,6 +2330,39 @@ Plans:
 **Wave 7** *(blocked on Wave 6)*
 
 - [x] 113-12-PLAN.md — Phase gate: the feature/target build matrix under the absolute rustup cargo (no-default-features, wasm32, `fuzzing` unreachable from `full`, two verbatim dev-dep-free commands), `cargo semver-checks`/`cargo public-api` additivity, `make quality-gate` + PMAT complexity + per-file coverage + the 20k-run fuzz target, the contract-first environment record, and the EVIDENCE-GATED HTTP-04 reword + requirement flips + SEP-2243 gap record
+
+**Gap-closure round 1** *(after `113-VERIFICATION.md` returned `gaps_found`)*
+
+- [x] 113-14-PLAN.md — listen-registry collision safety: a duplicate LIVE `(principal, subscriptionId)` registration refused rather than evicting the incumbent, and every removal ownership-scoped by a per-entry generation
+- [x] 113-15-PLAN.md — the SSE line-buffer bound moved INSIDE `SseParser` with a latching `overflowed()` flag, one enforcement point covering every present and future feeder; `connect_sse` guarded too
+- [x] 113-16-PLAN.md — the bound-taking fuzz seam (`decode_listen_chunks_for_fuzz`) plus a measured 20 000-run campaign with branch coverage proven from the retained corpus
+- [x] 113-17-PLAN.md — `SseParser::feed`'s bound made UNCONDITIONAL over retained-state + chunk (GAP-A), both whole-body transport sites routed through `feed_complete_body`, and `connect_sse`'s ceiling made configurable without a public config-struct change
+- [x] 113-18-PLAN.md — GAP-B closed by CONTRACT: all three listen refusals become the retryable `RATE_LIMITED` at HTTP 200, the fresh-id reconnect contract pinned by a live tripwire, and WR-06's semaphore-leak race closed by `prune_after_rejection`
+- [x] 113-20-PLAN.md — a STREAMING collected-body cap (`http_body_util::Limited`) at all three `StreamableHttpTransport` whole-body reads, discharging T-113-84; `Content-Length` an early-refusal optimisation, never the authority
+- [x] 113-19-PLAN.md — round-1 phase gate: the fuzz seam gated off the public API (`cargo public-api` is blind to `doc(hidden)`, so the prior criterion passed vacuously) and the fuzz target's tautological latch invariant replaced by a per-chunk retention assertion proven falsifiable
+
+**Gap-closure round 2** *(planned 2026-07-27, after the 2026-07-26 full-phase review; the three BLOCKERs it named were fixed in commit `5f045086` and are NOT re-planned here)*
+
+**Wave 1**
+
+- [ ] 113-21-PLAN.md — HTTP-09 bounded-read source tripwire: runtime discovery of `src/shared/`, comment/literal-stripped scanning with line mapping, a structural `Limited`-in-statement rule for whole-body reads and a justified allowlist for peer-byte accumulations, with five recorded negative controls
+- [ ] 113-22-PLAN.md — HTTP-09 O(n) half: a FALSIFIABLE linear-time budget for `take_utf8_prefix` and `SseParser::feed` (the existing guard passes on the very quadratic shape it names), plus a retained-tail property test
+- [ ] 113-23-PLAN.md — D-113-N: the `subscriptions/listen` route fails closed on an auth-configured server instead of minting a private `anon#N` that makes the per-principal cap unreachable; plus the Finding-5 audit of pmcp's actual `subscriptionId` emission on all three frame classes
+- [ ] 113-24-PLAN.md — D-113-L: a server-side `MAX_MRTR_ROUNDS` ceiling enforced at the ingress verdict and at the mint, so the D-09 security counter stops being enforced solely by the client it exists to constrain
+- [ ] 113-25-PLAN.md — D-113-P: `requestState` key material zeroized on both builders and `resolve_codec_at_build` taking the key by reference, closing all three unscrubbed copies without breaking by-value builder chaining
+
+**Wave 2** *(blocked on Wave 1)*
+
+- [ ] 113-26-PLAN.md — D-113-M: `write_canonical`'s depth-cap marker deleted and the canonicaliser made fallible, so two requests differing only below depth 64 can no longer share one AEAD AAD (replay-prevention clause 5c)
+
+**Wave 3** *(blocked on Wave 2)*
+
+- [ ] 113-27-PLAN.md — D-113-O: `inputResponses` typed KIND-DIRECTED at server ingress from the sealed continuation's own record, replacing the best-effort untagged guess that silently reclassifies a wrong-shaped answer into an infinite re-elicitation
+
+**Wave 4** *(blocked on Wave 3)*
+
+- [ ] 113-28-PLAN.md — the publication-gate THIRD-OUTCOME decision (checkpoint): the binding re-verification procedure has no branch for `schema/2026-07-28` still not existing on the date; assembles the evidence brief and records the maintainer's policy without flipping any checkbox
+
 
 **Phase-gate outcome (plan 12):** 16/16 build-matrix rows exit 0; `cargo semver-checks` 223/223 pass with no update required and `cargo public-api` shows **zero** removed public items, so the milestone is provably still additive; `make quality-gate` exits 0; all seven new/changed files clear the 80% coverage target; the 20k-run fuzz campaign passed with zero crash artifacts. **The phase is NOT closed as complete** — `113-SPEC-RECHECK.md`'s `## Verdict` is still `PENDING` (re-verified 2026-07-26: no `schema/2026-07-28` upstream), so HTTP-01..05 and CLNT-01..02 are marked `[~]` implemented-pending-final-schema rather than complete. See `113-12-SUMMARY.md`.
 
