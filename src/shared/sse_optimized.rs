@@ -221,6 +221,99 @@ impl OptimizedSseTransport {
         });
     }
 
+    /// Collect a response body as text, refusing anything over `max_bytes`.
+    ///
+    /// The ONE place this transport turns a peer-controlled response into an
+    /// in-memory buffer. Two independently-sufficient refusals, the same doctrine
+    /// [`crate::shared::streamable_http`]'s `collect_body_within_cap` applies:
+    ///
+    /// 1. A declared `Content-Length` over the cap is refused before a single
+    ///    body byte is read. The header is a peer-controlled OPTIMISATION, never
+    ///    the authority.
+    /// 2. The bytes actually delivered are accumulated through
+    ///    [`reqwest::Response::chunk`] with a running total checked BEFORE each
+    ///    append, so the read stops mid-flight. A peer that understates or omits
+    ///    `Content-Length` therefore gains nothing (T-113-93), and the allocation
+    ///    is bounded DURING the read rather than measured after it.
+    ///
+    /// A body of exactly `max_bytes` is ADMITTED; one byte over is refused.
+    ///
+    /// `max_bytes` is a parameter so the tests can drive a small cap and cost
+    /// bytes rather than megabytes. Production has exactly ONE call site, and it
+    /// passes [`crate::shared::http_constants::DEFAULT_HTTP_SSE_BUFFERED_BYTES`].
+    ///
+    /// # Why `chunk()` and not `bytes_stream()`
+    ///
+    /// `Response::chunk` carries no `cfg`, while `bytes_stream` is behind
+    /// `#[cfg(feature = "stream")]`, which this crate does not enable
+    /// (`Cargo.toml` pins reqwest with `default-features = false`, features
+    /// `["json", "rustls", "form"]`). Accumulating through `chunk()` therefore
+    /// costs zero dependency-surface change (D-02).
+    ///
+    /// Decoding is `String::from_utf8_lossy`, matching the lossy tolerance the
+    /// `.text()` call this replaced already had — so this change is a bound and
+    /// not also a strictness change.
+    ///
+    /// Added in plan 113.1-03 (D-113-Q): the previous `response.text().await`
+    /// accepted no limit argument, so a remote peer chose the allocation.
+    async fn collect_sse_text_within_cap(
+        mut response: reqwest::Response,
+        max_bytes: usize,
+    ) -> Result<String> {
+        // Refusal 1 — advisory, and only ever an early exit.
+        if let Some(declared) = response.content_length() {
+            if declared > max_bytes as u64 {
+                return Err(Self::sse_body_over_cap(max_bytes, Some(declared)));
+            }
+        }
+
+        // Refusal 2 — authoritative, over the bytes actually delivered.
+        let mut accumulated: Vec<u8> = Vec::new();
+        loop {
+            let next = response.chunk().await;
+            let Some(chunk) =
+                next.map_err(|e| Error::internal(format!("SSE body read failed: {}", e)))?
+            else {
+                break;
+            };
+            // Overflow-safe by construction: `accumulated.len() <= max_bytes` is
+            // the loop invariant, so `max_bytes - accumulated.len()` cannot
+            // underflow, and no unguarded `a + b` is ever computed.
+            if chunk.len() > max_bytes - accumulated.len() {
+                return Err(Self::sse_body_over_cap(max_bytes, None));
+            }
+            accumulated.extend_from_slice(&chunk);
+        }
+
+        Ok(String::from_utf8_lossy(&accumulated).into_owned())
+    }
+
+    /// Build the over-cap refusal for [`Self::collect_sse_text_within_cap`].
+    ///
+    /// Names the LIMIT and the observed size, and deliberately echoes no body
+    /// content: the refusal must not become a channel for the very bytes it
+    /// refused. `declared` is `Some` only when the peer's `Content-Length` was
+    /// itself over the cap; when the peer understated or omitted it the read is
+    /// stopped mid-flight and no total is knowable, so the message says so rather
+    /// than inventing one.
+    ///
+    /// Uses [`Error::internal`], the family `connect_sse`'s other four failure
+    /// sites already use, so a caller matching on the error family sees no new
+    /// shape.
+    fn sse_body_over_cap(max_bytes: usize, declared: Option<u64>) -> Error {
+        let observed = match declared {
+            Some(bytes) => format!("declares Content-Length {bytes}"),
+            None => {
+                "delivered more than the cap (Content-Length absent or understated)".to_string()
+            },
+        };
+        Error::internal(format!(
+            "SSE response body {observed}, over the {max_bytes}-byte SSE buffered-bytes cap \
+             (DEFAULT_HTTP_SSE_BUFFERED_BYTES); OptimizedSseTransport is deprecated — use \
+             StreamableHttpTransport, which carries a configurable cap"
+        ))
+    }
+
     /// Connect to SSE endpoint
     async fn connect_sse(
         config: &OptimizedSseConfig,
@@ -263,7 +356,17 @@ impl OptimizedSseTransport {
 
         // Process event stream - simplified for now
         // In a real implementation, this would use eventsource or similar
-        match response.text().await {
+        //
+        // The read is BOUNDED (D-113-Q, plan 113.1-03): it used to be
+        // `response.text().await`, which accepts no limit argument, so the peer
+        // chose the allocation. `collect_sse_text_within_cap` applies the crate's
+        // single SSE ceiling through a running total.
+        match Self::collect_sse_text_within_cap(
+            response,
+            crate::shared::http_constants::DEFAULT_HTTP_SSE_BUFFERED_BYTES,
+        )
+        .await
+        {
             Ok(text) => {
                 // Parse SSE events from text
                 for line in text.lines() {

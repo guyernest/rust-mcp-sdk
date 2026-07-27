@@ -1,4 +1,11 @@
-//! Constants for HTTP headers and content types used in MCP.
+//! Constants for HTTP headers, content types and transport byte ceilings used
+//! in MCP.
+//!
+//! This module is deliberately UNGATED (`src/shared/mod.rs` declares it with no
+//! `cfg`), which is why the shared SSE byte ceiling lives here rather than in
+//! `crate::shared::http`: that module is gated on `feature = "http"`, and
+//! `feature = "sse"` does not enable it, yet `sse_optimized` needs the same
+//! number. One ceiling for every SSE read in the crate.
 
 // Header Names
 /// MCP session ID header name
@@ -41,3 +48,46 @@ pub const TEXT_EVENT_STREAM: &str = "text/event-stream";
 
 /// Accept header value for streamable HTTP (both JSON and SSE)
 pub const ACCEPT_STREAMABLE: &str = "application/json, text/event-stream";
+
+// Transport byte ceilings
+
+/// Default ceiling on the SSE bytes an SSE reader may hold IN FLIGHT, in bytes
+/// (16 MiB).
+///
+/// # Its two readers
+///
+/// One number for every SSE read in the crate (plan 113.1-03, D-03):
+///
+/// - `HttpTransport::connect_sse`'s reader task, which retains across chunks;
+/// - `OptimizedSseTransport::connect_sse`, whose whole-response read is bounded
+///   by a running total checked against this value before each append.
+///
+/// Re-exported as `crate::shared::http::DEFAULT_HTTP_SSE_BUFFERED_BYTES`, which
+/// remains the documented public path. The definition lives here because this
+/// module is ungated while `crate::shared::http` is behind `feature = "http"`,
+/// which `feature = "sse"` does not enable.
+///
+/// # What breaks at this boundary
+///
+/// A single JSON-RPC payload whose in-flight bytes exceed the configured ceiling
+/// is DISCARDED and ENDS the reader task. That is a real behaviour change: before
+/// Phase 113-17 that transport's parser bounded only an unterminated line, so an
+/// arbitrarily large `data:` payload accumulated without limit and was delivered
+/// (T-113-85).
+///
+/// # Why it is configurable rather than fixed
+///
+/// A fixed ceiling is not defensible for a transport that carries arbitrary
+/// JSON-RPC results. MCP `image`/`audio` content is unconstrained base64, and
+/// base64 expands by ~4/3: a 12 MiB binary is ALREADY 16 MiB once encoded,
+/// BEFORE the JSON envelope, the `data: ` prefix and the MIME type — so it does
+/// NOT fit under this default. Large text, resources and `structuredContent` can
+/// legitimately exceed it too. Any claim that media is "unaffected" by a 16 MiB
+/// ceiling is arithmetically false.
+///
+/// [`crate::shared::http::HttpTransport::with_sse_buffered_bytes`] is the escape
+/// hatch for that reader: raise the ceiling for a deployment whose payloads are
+/// legitimately larger. `OptimizedSseTransport` has no such setter — it is
+/// deprecated toward `StreamableHttpTransport`, which carries its own
+/// configurable cap.
+pub const DEFAULT_HTTP_SSE_BUFFERED_BYTES: usize = 16 * 1024 * 1024;

@@ -818,13 +818,28 @@ const ALLOWLIST: &[Accumulation] = &[
     },
     Accumulation {
         path: "src/shared/sse_optimized.rs",
+        needle: "extend_from_slice(",
+        count: 1,
+        why: "collect_sse_text_within_cap appends one reqwest chunk at a time into `accumulated`, \
+              and checks the running total against its max_bytes parameter BEFORE each append — \
+              `chunk.len() > max_bytes - accumulated.len()` returns Err rather than appending, so \
+              an over-cap body is never held whole. The subtraction cannot underflow because \
+              `accumulated.len() <= max_bytes` is the loop invariant. The single production call \
+              site passes DEFAULT_HTTP_SSE_BUFFERED_BYTES (16 MiB), the same ceiling the sibling \
+              reader in src/shared/http.rs uses. A declared Content-Length over the cap is \
+              refused before any body byte is read, but that header is an OPTIMISATION only — \
+              the delivered-byte total is the authority (T-113-93).",
+    },
+    Accumulation {
+        path: "src/shared/sse_optimized.rs",
         needle: "push_str(",
         count: 1,
         why: "parse_sse_event builds one event out of the BytesMut slice that split_to() has \
               already cut at the event boundary, so this push is bounded by that single event. \
-              The function carries allow(dead_code) and has no caller; the LIVE path in this file \
-              is connect_sse's reqwest whole-body read, which is enumerated separately in \
-              WHOLE_BODY_ALLOWLIST rather than folded in here.",
+              The function carries allow(dead_code) and has no caller. The LIVE path in this file \
+              is connect_sse's response read, which since plan 113.1-03 is bounded by \
+              collect_sse_text_within_cap (its own entry above) rather than being an unbounded \
+              reqwest whole-body read enumerated in WHOLE_BODY_ALLOWLIST — that list is now EMPTY.",
     },
     Accumulation {
         path: "src/shared/sse_parser.rs",

@@ -90,30 +90,13 @@ impl std::fmt::Debug for HttpTransport {
     }
 }
 
-/// Default ceiling on the SSE bytes [`HttpTransport::connect_sse`]'s reader task
-/// may hold IN FLIGHT, in bytes (16 MiB).
-///
-/// # What breaks at this boundary
-///
-/// A single JSON-RPC payload whose in-flight bytes exceed the configured ceiling
-/// is DISCARDED and ENDS the reader task. That is a real behaviour change: before
-/// Phase 113-17 this transport's parser bounded only an unterminated line, so an
-/// arbitrarily large `data:` payload accumulated without limit and was delivered
-/// (T-113-85).
-///
-/// # Why it is configurable rather than fixed
-///
-/// A fixed ceiling is not defensible for a transport that carries arbitrary
-/// JSON-RPC results. MCP `image`/`audio` content is unconstrained base64, and
-/// base64 expands by ~4/3: a 12 MiB binary is ALREADY 16 MiB once encoded,
-/// BEFORE the JSON envelope, the `data: ` prefix and the MIME type — so it does
-/// NOT fit under this default. Large text, resources and `structuredContent` can
-/// legitimately exceed it too. Any claim that media is "unaffected" by a 16 MiB
-/// ceiling is arithmetically false.
-///
-/// [`HttpTransport::with_sse_buffered_bytes`] is the escape hatch: raise the
-/// ceiling for a deployment whose payloads are legitimately larger.
-pub const DEFAULT_HTTP_SSE_BUFFERED_BYTES: usize = 16 * 1024 * 1024;
+// The DEFINITION moved to `crate::shared::http_constants` in plan 113.1-03 so
+// `sse_optimized.rs` can reach it: this module is gated on `feature = "http"`,
+// which `feature = "sse"` does NOT enable, while `http_constants` is ungated.
+// Re-exported here so the existing public path
+// `pmcp::shared::http::DEFAULT_HTTP_SSE_BUFFERED_BYTES` is preserved
+// byte-for-byte and every unqualified reference in this file keeps resolving.
+pub use crate::shared::http_constants::DEFAULT_HTTP_SSE_BUFFERED_BYTES;
 
 /// Default cap on ONE fully-collected response body on this transport, in bytes
 /// (16 MiB).
