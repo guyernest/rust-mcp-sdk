@@ -314,3 +314,99 @@ Finding 5 is answered; **HTTP-07 is not thereby met**. Two independent gates sti
    draft says nothing about whether today's draft survives. A future re-check that finds the tag
    made REQUIRED on `NotificationMetaObject`, or the ack MUST relaxed, is a phase-reopening
    event exactly as before.
+
+---
+
+# Finding 13 — CORRECTED in source (plan 113-30, 2026-07-27)
+
+**Status: CLOSED.** The false claim no longer ships.
+
+`src/server/subscriptions.rs`, the `# D-11` module-rustdoc block, commit `4b912ea8`.
+
+**Two clauses were wrong, not one.** Finding 13 quoted the first; the second sat one sentence
+later and was false for the same reason. Both are gone:
+
+| # | Retired text | Why it was false |
+|---|---|---|
+| 1 | "there is no polling shape for change notifications anywhere in the MCP spec" | the caching utility (SEP-2549) defines exactly such a shape |
+| 2 | "this stream exists because it is the only spec-conformant delivery shape for `listChanged`" | `caching.mdx` blesses TTL re-fetch as an alternative to `listChanged`, so this stream is not the only conformant shape — only the only one pmcp implements |
+
+**What the rustdoc now says.** The D-11 CONCLUSION is stated first and is unchanged — polling over
+Tasks is a pmcp EXTENSION and **not** a conformant substitute for the stream. What changed is the
+justification: the block now states that the spec *does* define a polling shape for change
+notifications (the caching utility, spec `server/utilities/caching`, SEP-2549, specifying
+TTL-driven re-fetch through `ttlMs` / `cacheScope` and explicitly blessing relying on cache expiry
+*instead of* `listChanged`); that this is a **different mechanism** from polling over Tasks; that
+pmcp implements none of it today and that `ttlMs` / `cacheScope` are owned by **SCHM-03
+(Phase 115)**; and therefore that `subscriptions/listen` is the only delivery shape pmcp
+**CURRENTLY** implements for `listChanged`. A reader can now name the real mechanism and find its
+owner without leaving the file.
+
+**The measurement, re-run at execution time** (not copied from this addendum — SCHM-03 could have
+landed in between):
+
+```
+$ grep -rn "ttlMs\|cacheScope\|CacheableResult" src/
+$ echo $?
+1
+```
+
+Zero hits, exit 1. The "pmcp implements none of it" clause is therefore true as of `4b912ea8`.
+
+**Guard.** `d11_rustdoc_must_not_reintroduce_the_retired_false_spec_claims`
+(`src/server/subscriptions.rs`, `mod tests`) `include_str!`s the module's own source, flattens it
+so a rustdoc line wrap cannot hide a claim, and searches for both retired phrases assembled at
+RUNTIME from fragments — a literal would be in the file it scans and would fail on the day it was
+written. Each assembled phrase is asserted ≥ 40 characters and each half alone is under that
+floor, so emptying a fragment fails loudly instead of degrading into `contains("")`. A companion,
+`d11_rustdoc_names_the_specs_real_polling_shape_and_its_owner`, requires the corrected block to
+still name `ttlMs`, `cacheScope`, `SEP-2549` and `SCHM-03`, so the correction cannot be reduced to
+deleting the false sentence and leaving the reader with nothing. Both were RED before the edit;
+three negative controls (reinsert clause 1, reinsert clause 2, empty a fragment) each produced
+their named failure and were reverted. Verbatim output is in `113-30-SUMMARY.md`.
+
+**Sweep.** `grep -rn "polling shape\|only spec-conformant\|conformant substitute\|no polling"
+src/ tests/ examples/ docs/ crates/` finds the claim at **exactly one site** — the three lines
+corrected here. No other source copy exists. `.planning/REQUIREMENTS.md`'s D-11 positioning clause
+(lines 72–74) was **read and is correct as written**: it says only that Tasks-polling is
+"documented as a pmcp extension and explicitly **not** a conformant substitute", which is the
+conclusion, not the retired justification. **No change to it is proposed and it was not edited.**
+
+**What this does NOT discharge.** SCHM-03 is untouched — pmcp still implements no `ttlMs` /
+`cacheScope`, and this plan deliberately did not pull that work forward from Phase 115. HTTP-04
+stays `[~]`; the STATE.md publication gate binds independently and no checkbox was flipped.
+
+---
+
+# Finding 14 — dispositions (plan 113-30, 2026-07-27)
+
+## Finding 14(a) — no stdio `subscriptions/listen`: **DEFERRED as D-113-S**
+
+Recorded in `deferred-items.md` as **D-113-S** with routing evidence, closing conditions and a
+named maintainer question. *(Plan 113-30 allocated this as `D-113-Q`; that letter was already
+taken by the `OptimizedSseTransport` unbounded read and `D-113-R` by the quadratic
+`SseParser::feed`, so the next genuinely-free identifier was used. Anything citing "113-30's
+D-113-Q" means D-113-S.)*
+
+**Blocking reason, in one line: MISSING INFORMATION, not difficulty.** Phase-112 **D-05 is
+LOCKED** and requires `Mcp-Name` on every v2 request; `Mcp-Name` is an HTTP header; stdio has
+none. The milestone has no resolved answer to "what does a v2 request look like on a headerless
+transport", and that answer is a prerequisite for routing *any* v2 method there —
+`subscriptions/listen` is merely where the absence first shows.
+
+It is also not obliged by any requirement: HTTP-04/06/07/08 and CLNT-05 are the subscriptions
+requirements and none mentions stdio. Implementing it in this phase would be scope EXPANSION past
+the requirement set. Not implemented; recorded so the decision is reviewable and reversible.
+
+See `deferred-items.md` § D-113-S for the routing evidence, the stdio-teardown design question
+(an HTTP listen stream ends when the socket closes; stdio has no per-stream connection and
+therefore no analogue of client-initiated cancellation, which the `MAX_LISTEN_STREAMS_*` caps
+make a security question and not only an ergonomic one), and the yes/no maintainer question.
+
+## Finding 14(b) — `resourceSubscriptions` / `resourcesListChanged` wire coverage: **OWNED by plan 113-31**
+
+**NOT closed here.** Plan 113-31 (wave 4, requirements HTTP-04 + HTTP-08) names this finding in
+its `closes` list and adds the live-socket coverage: URI-selective `resourceSubscriptions`
+delivery, `resourcesListChanged` delivery, the capability-intersection cross-product between the
+two, and the agreed-list truncation bound. Plan 113-30 touched no test file and asserts nothing
+about it.

@@ -899,3 +899,102 @@ most 1 MiB, single-digit milliseconds. That is stated in the test's own rustdoc
 along with these measurements, and confirmed by a negative control: injecting
 T-113-102's per-chunk full-buffer copy moved the measurement from 6.7 ms to
 11.7 ms and the test still passed. Whoever closes HTTP-09 must read that rustdoc.
+
+---
+
+## D-113-S — `subscriptions/listen` is served on HTTP only, never on stdio
+
+**Found during:** the 2026-07-26 spec re-check (addendum Finding 14(a)); recorded by
+plan 113-30
+**Severity:** LOW — a coverage gap, **not** a spec violation, and not covered by any
+requirement in this milestone
+**Owner:** UNASSIGNED
+**Status:** ⏸️ **RECORDED, NOT RESOLVED** (T-113-148)
+
+> Plan 113-30 allocated this as `D-113-Q`. That letter was already taken by the
+> `OptimizedSseTransport` unbounded read (recorded by 113-21, after 113-30 was
+> written), and `D-113-R` by the quadratic `SseParser::feed`. `D-113-S` is the next
+> genuinely free identifier — verified by reading the headings in this file and by
+> `grep -rho "D-113-[A-Z]" .planning/`, which returns `A`..`R` with none free below
+> `S`. Anything citing "113-30's D-113-Q" means this entry.
+
+### What is missing
+
+The v2 schema states that `subscriptions/listen` exists to give "consistent behavior
+between HTTP and STDIO". pmcp serves it on HTTP **only**.
+
+Routing evidence, verified at `4b912ea8`: the sole server-side dispatch site is
+`src/server/streamable_http_server.rs:1417`
+(`if req.method == crate::types::subscriptions::SUBSCRIPTIONS_LISTEN_METHOD`), which
+sits inside that transport's `HttpIngress` classification. `grep -rn
+"SUBSCRIPTIONS_LISTEN_METHOD" src/` finds no other server route — every remaining hit
+is the constant's own definition, a client-side send (`src/client/mod.rs:3990`), an
+error message, or a test. The registry itself is **transport-agnostic**:
+`ListenRegistry` and the notification fan-out live in `src/server/subscriptions.rs`
+and `src/server/mod.rs` and know nothing about HTTP. The **route** is what is
+HTTP-only, not the machinery behind it.
+
+The client side is a deliberate stance rather than an oversight: plan 113-13 made
+`Client::subscriptions_listen` generic over a new narrow `EventStreamTransport` trait
+instead of adding a fourth defaulted `Transport` method, with the recorded reason that
+"an incrementally-read body is an HTTP concept and stdio/WebSocket/wasm must not carry
+a meaningless default".
+
+### Why this is NOT a spec violation
+
+The addendum's own Finding 14 classifies both of its items as **coverage gaps, neither
+a spec violation**. No requirement in this milestone obliges a stdio route:
+HTTP-04/06/07/08 and CLNT-05 are the subscriptions requirements and **none of them
+mentions stdio** — the family is literally named "Stateless HTTP & Multi-Round-Trip".
+Implementing it here would be scope EXPANSION past the requirement set, which is a
+different failure from scope reduction and is equally unwanted.
+
+### The blocking reason: MISSING INFORMATION, not difficulty
+
+This distinction is load-bearing, so it is stated plainly: **this is a prerequisite
+gap, not a judgement that the work is hard.** "Hard" would not be a legitimate reason
+to defer; "the phase has not decided the thing this depends on" is.
+
+Phase-112 **D-05 is LOCKED** and requires all three v2 headers — `Mcp-Method`,
+`Mcp-Name`, `MCP-Protocol-Version` — on **every** v2 request, strict-rejecting any v2
+request missing one (`112-06-SUMMARY.md`; enforced by `require_three_headers` in
+`classify_v2_request`). `Mcp-Name` is an HTTP header. **stdio has no headers.**
+
+The milestone therefore has no resolved answer to the prior question *"what does a v2
+request look like at all on a headerless transport"*, and that answer is a
+prerequisite for routing **any** v2 method onto stdio. `subscriptions/listen` is
+merely the first place the absence becomes visible; it is not the thing that is
+blocked. No source artifact in this milestone contains the answer — `113-RESEARCH.md`,
+`113-CONTEXT.md` and `REQUIREMENTS.md` all scope the v2 transport work to HTTP.
+
+### What would close it
+
+1. **An explicit v2-on-stdio negotiation decision** — which requirement owns it, and
+   what replaces D-05's header contract on a transport that has no headers (an
+   in-band `_meta` triple? a handshake frame? a declaration that v2 is HTTP-only and
+   the schema's "consistent behavior" sentence is aspirational?). Until this exists,
+   steps 2 and 3 have nothing to build against.
+2. **A stdio dispatch route** for `subscriptions/listen`, reusing the existing
+   transport-agnostic `ListenRegistry` — the cheap half.
+3. **Teardown semantics, which are the substantive design content and should not have
+   to be rediscovered.** On HTTP the stream's lifetime IS the response body's
+   lifetime: the client cancels by closing the socket, and the server observes that
+   directly (this is exactly what makes the stream connection-stateful, per D-11).
+   stdio is a single multiplexed bidirectional pipe that stays open for the whole
+   session, so there is no per-stream connection to close and therefore **no analogue
+   of client-initiated cancellation**. A stdio listen would need an explicit
+   cancellation channel — a `notifications/cancelled` for the listen request id, a
+   `subscriptions/stop` method, or reuse of the existing request-cancellation path —
+   AND a decision about what happens to the registry entry when the client simply
+   stops reading but never cancels, which on HTTP is answered for free by the socket
+   dying. The per-principal and global concurrency caps (`MAX_LISTEN_STREAMS_*`) leak
+   permanently if that question is answered wrongly, which makes this a security
+   decision and not only an ergonomics one.
+
+### Named question for the maintainer (answerable yes/no)
+
+**Does v2-on-stdio belong to v2.5 at all?** If **no**, the schema's "consistent
+behavior between HTTP and STDIO" sentence should be recorded as a known,
+deliberate non-conformance in the phase's positioning notes and this entry closes as
+*won't-do*. If **yes**, under which requirement — a **new** one, or an extension of
+CLNT-04 / SMPL-01 in Phase 117?
