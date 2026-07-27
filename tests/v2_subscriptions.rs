@@ -39,7 +39,7 @@ use common::v2::{
     BearerSubjects, GreetingPrompt, SearchTool, FRAME_TIMEOUT, V1, V2,
 };
 use pmcp::server::Server;
-use pmcp::types::protocol::error_codes::{INVALID_REQUEST, METHOD_NOT_FOUND};
+use pmcp::types::protocol::error_codes::{METHOD_NOT_FOUND, RATE_LIMITED};
 use pmcp::types::protocol::ProtocolVersion;
 use pmcp::types::subscriptions::{
     advertises_subscriptions, ACKNOWLEDGED_METHOD, SUBSCRIPTION_ID_META_KEY,
@@ -678,6 +678,13 @@ async fn two_callers_same_request_id_do_not_cross() {
 /// closing assertion here — that the FIRST stream still receives a fanned-out
 /// `tools/list_changed` — is the load-bearing one: alice-1 was already
 /// disconnected at that point and the read would time out.
+///
+/// Plan 113-18 changed only the SHAPE of the refusal, never its existence: the
+/// duplicate now answers the RETRYABLE `-32005` at HTTP 200 instead of `-32600`
+/// at HTTP 400, because the condition is transient server state rather than a
+/// malformed request. The status and code assertions below moved with it; the
+/// two MESSAGE assertions did not, and are now the only thing distinguishing
+/// this refusal from a capacity refusal.
 #[tokio::test]
 async fn same_principal_id_reuse_rejects_the_second_and_spares_the_first() {
     let server = Arc::new(Mutex::new(server_with_two_principals()));
@@ -713,8 +720,10 @@ async fn same_principal_id_reuse_rejects_the_second_and_spares_the_first() {
     )
     .await;
     assert_eq!(
-        second.status, 400,
-        "a duplicate live (principal, subscriptionId) is a bad request"
+        second.status, 200,
+        "a duplicate is a transient, RETRYABLE condition: RATE_LIMITED is not in \
+         v2_status_for_code's 400 arm, so it answers at 200 with a JSON-RPC error \
+         body, exactly as both capacity refusals already do"
     );
     let refusal = second.expect_json().await;
     assert!(
@@ -723,8 +732,9 @@ async fn same_principal_id_reuse_rejects_the_second_and_spares_the_first() {
     );
     assert_eq!(
         refusal["error"]["code"],
-        json!(INVALID_REQUEST),
-        "the refusal is -32600, not a capacity code: {refusal}"
+        json!(RATE_LIMITED),
+        "the refusal is the RETRYABLE -32005, not the non-retryable -32600 it \
+         answered with before 113-18: {refusal}"
     );
     let message = refusal["error"]["message"].as_str().unwrap_or_default();
     assert!(

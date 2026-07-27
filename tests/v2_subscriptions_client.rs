@@ -289,6 +289,78 @@ async fn client_receives_tools_list_changed() {
     handle.abort();
 }
 
+/// TRIPWIRE for the fresh-id reconnect contract (113-18, T-113-86).
+///
+/// The server refuses a second LIVE registration under a
+/// `(principal, subscriptionId)` pair it already holds, and it cannot tell an
+/// ungracefully disconnected peer from a live one — the receiver and the
+/// registry guard live in ONE `stream::unfold` state tuple, so the entry
+/// survives until Hyper drops the response body, at which point RAII has already
+/// reclaimed it. The property that makes a pmcp client immune to that is
+/// therefore NOT a server-side liveness probe (which is not implementable at
+/// that layer) but the client's own guarantee that
+/// `Client::subscriptions_listen` mints a FRESH `Uuid::new_v4()` id per call.
+///
+/// This test makes that guarantee a CHECKED property rather than a claim. Both
+/// streams present the SAME bearer, so they resolve to ONE server-side principal
+/// — the exact configuration in which a sticky or counter-derived id WOULD
+/// collide. Make the id constant and this test fails twice over: the ids compare
+/// equal, and the second `subscriptions_listen` is refused outright.
+///
+/// The per-stream tagging is proven by construction rather than by reading
+/// `_meta` here: `SubscriptionStream` yields a frame as `Ok` only when the
+/// frame's `subscriptionId` matches ITS OWN id, and surfaces a mismatch as an
+/// `Err` item (T-113-66). Two `Ok(ToolsChanged)` from one `fan_out` is therefore
+/// exactly "each stream received a frame tagged with its own id".
+#[tokio::test]
+async fn successive_listen_calls_mint_distinct_subscription_ids() {
+    let server = Arc::new(Mutex::new(authenticated_server()));
+    let (addr, handle) = spawn_shared(Arc::clone(&server)).await;
+    // ONE bearer for BOTH streams: `BearerSubjects` maps it to one subject, so
+    // both registrations land on the same principal.
+    let client = v2_client(addr, Some("alice"));
+
+    let mut first = client
+        .subscriptions_listen(tools_only())
+        .await
+        .expect("the first stream is served");
+    let mut second = client.subscriptions_listen(tools_only()).await.expect(
+        "the second stream is served too: its id is FRESH, so it cannot collide \
+         with the first — which the server still holds LIVE under the same principal",
+    );
+
+    assert_ne!(
+        first.subscription_id(),
+        second.subscription_id(),
+        "every subscriptions_listen call MUST mint a fresh subscription id; a \
+         sticky or counter-derived id would collide with a live incumbent on \
+         reconnect and be refused for the rest of the keep-alive window"
+    );
+
+    server
+        .lock()
+        .await
+        .send_notification(ServerNotification::ToolsChanged)
+        .await;
+
+    for (label, stream) in [("first", &mut first), ("second", &mut second)] {
+        let notification = next_frame(stream)
+            .await
+            .unwrap_or_else(|| panic!("{label}: a notification must arrive"))
+            .unwrap_or_else(|e| {
+                panic!("{label}: the frame must be tagged with THIS stream's id: {e}")
+            });
+        assert!(
+            matches!(notification, ServerNotification::ToolsChanged),
+            "{label}: both streams coexist and both receive the fan-out: {notification:?}"
+        );
+    }
+
+    drop(first);
+    drop(second);
+    handle.abort();
+}
+
 /// A notification type the client did not request never reaches it — the
 /// client-side half of T-113-34.
 #[tokio::test]

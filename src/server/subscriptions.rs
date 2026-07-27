@@ -346,6 +346,10 @@ struct ListenEntry {
     /// late guard drop or an in-flight overflow disconnect reclaims whatever
     /// entry currently occupies the key — which may be a healthy successor
     /// (T-113-70 / T-113-71).
+    ///
+    /// The property that carries that argument is UNIQUENESS, not ordering: a
+    /// successor's token is unique but not necessarily larger than the token of
+    /// the entry it replaced (see [`ListenRegistry::next_generation`]).
     generation: u64,
 }
 
@@ -361,6 +365,23 @@ pub(crate) enum ListenRejection {
     /// The caller's own error, and never a licence to evict the incumbent: the
     /// id is the caller's to choose, so it is the caller that must choose a free
     /// one (T-113-69).
+    ///
+    /// # What it means, and the two remedies
+    ///
+    /// It means a stream is STILL REGISTERED under this id — transient server
+    /// state, not a malformed request. The caller's remedies are, in order of
+    /// preference:
+    ///
+    /// 1. **A FRESH subscription id.** A reconnect MUST use one. pmcp's own
+    ///    `Client::subscriptions_listen` mints a fresh `Uuid::new_v4()` id on
+    ///    every call, so a pmcp client can never reach this refusal by
+    ///    reconnecting.
+    /// 2. **Retry after backoff**, if the caller insists on its id and believes
+    ///    its previous stream is already gone. That is why [`Self::code`]
+    ///    answers this with the RETRYABLE `RATE_LIMITED` rather than a
+    ///    "do not retry" request-malformed code: the incumbent's guard is
+    ///    reclaimed the moment its response body is dropped, so the condition
+    ///    clears on its own.
     DuplicateSubscriptionId,
 }
 
@@ -385,16 +406,33 @@ impl ListenRejection {
     /// The JSON-RPC error code this refusal is answered with.
     ///
     /// EXHAUSTIVE by construction — no wildcard arm — so a future variant cannot
-    /// silently inherit another refusal's code. The two capacity refusals are
-    /// server-state conditions (`-32005`); a duplicate id is a malformed request
-    /// from this caller's own point of view (`-32600`, answered at HTTP 400 by
-    /// `v2_status_for_code`).
+    /// silently inherit another refusal's code.
+    ///
+    /// ALL THREE are `RATE_LIMITED` (`-32005`), because all three are transient
+    /// SERVER STATE rather than anything wrong with the request's structure. The
+    /// duplicate joined the two capacity refusals here in 113-18: it previously
+    /// answered `-32600`, the code for a structurally malformed request, which
+    /// `v2_status_for_code` maps to HTTP 400 — the "do not retry" class — for a
+    /// condition that clears on its own the moment the incumbent's response body
+    /// is dropped. A conforming third-party client that reused a subscription id
+    /// after an ungraceful disconnect therefore surfaced a hard protocol error
+    /// where it should have backed off and retried.
+    ///
+    /// `RATE_LIMITED` is NOT in `v2_status_for_code`'s 400 arm, so all three
+    /// refusals fall through to **HTTP 200** carrying a JSON-RPC error body —
+    /// the convention the two capacity refusals already used (`113-14-SUMMARY.md`
+    /// IN-01). Do not add `RATE_LIMITED` to that arm.
+    ///
+    /// CONSEQUENCE, stated so nobody has to rediscover it: the code no longer
+    /// distinguishes a duplicate from a capacity refusal — the MESSAGE is now the
+    /// ONLY discriminator, and the `too many concurrent` substring
+    /// [`Self::message`] documents is load-bearing for both the unit and the live
+    /// suite.
     pub(crate) fn code(self) -> i32 {
         match self {
-            Self::PerPrincipalLimit | Self::GlobalLimit => {
+            Self::PerPrincipalLimit | Self::GlobalLimit | Self::DuplicateSubscriptionId => {
                 crate::types::protocol::error_codes::RATE_LIMITED
             },
-            Self::DuplicateSubscriptionId => crate::types::protocol::error_codes::INVALID_REQUEST,
         }
     }
 }
@@ -426,8 +464,16 @@ pub struct ListenRegistry {
     global: Arc<tokio::sync::Semaphore>,
     per_principal: parking_lot::Mutex<HashMap<String, Arc<tokio::sync::Semaphore>>>,
     /// Monotonic source of [`ListenEntry::generation`]. Never reset, never
-    /// reused: every registration this registry ever performs gets a strictly
-    /// larger token than the one before it.
+    /// reused: every registration this registry ever performs DRAWS a strictly
+    /// larger token than the draw before it.
+    ///
+    /// UNIQUENESS is the property teardown safety needs, not ordering. Tokens
+    /// are drawn BEFORE the `entries` lock is taken, so a delayed registration
+    /// can insert a numerically OLDER — but still unique — token AFTER a newer
+    /// one, and a successor at a key is therefore not guaranteed to carry a
+    /// larger token than the incumbent it replaced. Nothing depends on that:
+    /// [`ListenRegistry::take_entry`] compares tokens for EQUALITY, never for
+    /// ordering.
     next_generation: AtomicU64,
 }
 
@@ -528,6 +574,41 @@ impl ListenRegistry {
     /// settled. The acquired permits release on the early return.
     ///
     /// Sequential reuse of a RELEASED key is unaffected and still registers.
+    ///
+    /// # A reconnect MUST use a FRESH subscription id
+    ///
+    /// The subscription id is the JSON-RPC request id, which is the CALLER's to
+    /// choose, and this registry will NEVER evict a live incumbent to make room
+    /// for a caller reusing one (T-113-69). A client reconnecting after ANY
+    /// disconnect — graceful or not — must therefore mint a fresh id. pmcp's own
+    /// `Client::subscriptions_listen` does exactly that on every call
+    /// (`Uuid::new_v4()`), pinned by the live tripwire
+    /// `successive_listen_calls_mint_distinct_subscription_ids` in
+    /// `tests/v2_subscriptions_client.rs`, so a pmcp client is structurally
+    /// immune to the collision.
+    ///
+    /// ## Why the server cannot just detect the dead one
+    ///
+    /// Because at this layer a dead peer is INDISTINGUISHABLE from a live one.
+    /// The transport builds the SSE body as
+    /// `futures_util::stream::unfold((receiver, guard), ..)`, so the
+    /// `mpsc::Receiver` and the [`ListenGuard`] live in ONE stream-state tuple:
+    /// a dead remote TCP peer does not close the receiver, and the receiver
+    /// stays alive until Hyper drops the response body — at which moment the
+    /// guard drops too and RAII has already reclaimed the entry. A liveness
+    /// probe on the entry's `Sender` would consequently report the stream OPEN
+    /// for the entire keep-alive window, and would reclaim only in a window
+    /// where the entry is being removed anyway. Such a probe, and the
+    /// same-key reclaim built on it, are deliberately NOT implemented — the
+    /// evidence is recorded in `113-18-SUMMARY.md`, so a future reader does not
+    /// have to rediscover it. Do not add one.
+    ///
+    /// What a third-party client that reuses ids gets instead is a RETRYABLE
+    /// refusal ([`ListenRejection::code`] answers `RATE_LIMITED` at HTTP 200), so
+    /// it can back off rather than surface a hard protocol error. Automatic
+    /// same-id TAKEOVER of a stream the server still considers live is not safe
+    /// for co-tenants sharing one principal without an authenticated takeover
+    /// token, and is out of scope.
     pub(crate) fn register(
         self: &Arc<Self>,
         key: ListenKey,
@@ -1062,6 +1143,69 @@ mod tests {
             );
         }
 
+        /// The cross-principal half of the id collision, pinned by EXACT KEY
+        /// rather than by a count (review MEDIUM-3).
+        ///
+        /// `two_principals_sharing_request_id_one_do_not_cross` asserts
+        /// `live_streams() == 2`, which would ALSO hold if bob's registration had
+        /// replaced alice's entry and alice's had been re-created, or if either
+        /// entry had been swapped for the other's. This asserts the two facts a
+        /// count cannot: that BOTH exact keys are present — built with `key_for`,
+        /// the same constructor `open` registers under, so the assertion cannot
+        /// drift from what was actually stored — and that ONE `fan_out` reaches
+        /// BOTH live receivers, each frame tagged with its OWN `subscriptionId`.
+        ///
+        /// Both receivers stay LIVE for the whole test: a dropped receiver would
+        /// make the delivery assertions vacuous.
+        #[tokio::test]
+        async fn two_principals_sharing_request_id_one_hold_two_distinct_entries() {
+            use crate::types::subscriptions::SUBSCRIPTION_ID_META_KEY;
+
+            let registry = Arc::new(ListenRegistry::new());
+            // The SAME JSON-RPC id `1`, under two different principals — the
+            // configuration `ListenKey`'s pairing exists to keep apart, and the
+            // one T-113-88 is about.
+            let (_alice, mut alice_rx) =
+                open(&registry, "alice", 1, tools_only()).expect("alice registers");
+            let (_bob, mut bob_rx) =
+                open(&registry, "bob", 1, tools_only()).expect("bob registers under the same id");
+
+            {
+                let entries = registry.entries.read();
+                assert!(
+                    entries.contains_key(&key_for("alice", 1)),
+                    "alice's EXACT key survived bob's registration"
+                );
+                assert!(
+                    entries.contains_key(&key_for("bob", 1)),
+                    "and bob's EXACT key is present too — two entries, not one \
+                     replaced twice"
+                );
+                assert_eq!(entries.len(), 2, "and there are exactly those two");
+            }
+
+            skip_ack(&mut alice_rx);
+            skip_ack(&mut bob_rx);
+            registry.fan_out(&ServerNotification::ToolsChanged);
+
+            for (owner, rx) in [("alice", &mut alice_rx), ("bob", &mut bob_rx)] {
+                let Ok(ListenFrame::Message(frame)) = rx.try_recv() else {
+                    panic!("{owner} requested toolsListChanged and must receive it");
+                };
+                let value: serde_json::Value = serde_json::from_str(&frame).expect("json");
+                assert_eq!(
+                    value["method"],
+                    serde_json::json!("notifications/tools/list_changed"),
+                    "{owner} receives the fanned-out notification"
+                );
+                assert_eq!(
+                    value["params"]["_meta"][SUBSCRIPTION_ID_META_KEY],
+                    serde_json::json!(1),
+                    "{owner}'s frame is tagged with ITS OWN subscriptionId"
+                );
+            }
+        }
+
         #[tokio::test]
         async fn an_unrequested_notification_type_is_never_delivered() {
             let registry = Arc::new(ListenRegistry::new());
@@ -1360,6 +1504,14 @@ mod tests {
                 );
             }
 
+            /// Successive DRAWS from `next_generation` strictly increase.
+            ///
+            /// A statement about ALLOCATION order only. It does NOT say — and
+            /// nothing may infer — that a successor at a key carries a larger
+            /// token than the incumbent it replaced: tokens are drawn before the
+            /// `entries` lock is taken, so a delayed registration can insert an
+            /// older token after a newer one. UNIQUENESS is what teardown safety
+            /// rests on, because `take_entry` compares for EQUALITY.
             #[tokio::test]
             async fn generations_are_strictly_increasing() {
                 let registry = Arc::new(ListenRegistry::new());
@@ -1379,23 +1531,46 @@ mod tests {
                 }
             }
 
+            /// Every listen refusal is RETRYABLE, and the MESSAGE is the only
+            /// thing that tells them apart.
+            ///
+            /// This test replaces `the_duplicate_rejection_maps_to_invalid_request`,
+            /// whose premise 113-18 inverted: the duplicate used to answer
+            /// `-32600` at HTTP 400 — "do not retry" — for a condition that is
+            /// purely transient server state and clears on its own. It now joins
+            /// the two capacity refusals on `RATE_LIMITED`.
+            ///
+            /// The consequence is asserted here rather than left implicit: with
+            /// all three sharing one code, the `too many concurrent` substring is
+            /// now the ONLY discriminator between a duplicate and a capacity
+            /// refusal. The "not a capacity refusal" assertion carried over from
+            /// the old test is therefore MORE load-bearing than it was, not less
+            /// — `tests/v2_subscriptions.rs` and `disconnect_releases_registry_slot`
+            /// both identify a cap refusal by exactly that substring.
             #[tokio::test]
-            async fn the_duplicate_rejection_maps_to_invalid_request() {
-                use crate::types::protocol::error_codes::{INVALID_REQUEST, RATE_LIMITED};
+            async fn every_listen_refusal_is_retryable_and_only_the_message_distinguishes_them() {
+                use crate::types::protocol::error_codes::RATE_LIMITED;
 
-                assert_eq!(
-                    ListenRejection::DuplicateSubscriptionId.code(),
-                    INVALID_REQUEST,
-                    "a duplicate id is a malformed request, answered at HTTP 400"
-                );
+                for rejection in [
+                    ListenRejection::PerPrincipalLimit,
+                    ListenRejection::GlobalLimit,
+                    ListenRejection::DuplicateSubscriptionId,
+                ] {
+                    assert_eq!(
+                        rejection.code(),
+                        RATE_LIMITED,
+                        "{rejection:?} is transient server state, so it is RETRYABLE"
+                    );
+                }
+
                 for capacity in [
                     ListenRejection::PerPrincipalLimit,
                     ListenRejection::GlobalLimit,
                 ] {
-                    assert_eq!(
-                        capacity.code(),
-                        RATE_LIMITED,
-                        "the CAP refusals keep the code they already answered with"
+                    assert!(
+                        capacity.message().contains("too many concurrent"),
+                        "a CAP refusal is identified by its message alone: {}",
+                        capacity.message()
                     );
                 }
                 assert!(
@@ -1403,6 +1578,14 @@ mod tests {
                         .message()
                         .contains("too many concurrent"),
                     "the duplicate wording must not read as a capacity refusal"
+                );
+                assert!(
+                    ListenRejection::DuplicateSubscriptionId
+                        .message()
+                        .contains("already open for this subscription id"),
+                    "and it must name the real reason, which is what the live \
+                     suite asserts on: {}",
+                    ListenRejection::DuplicateSubscriptionId.message()
                 );
             }
         }

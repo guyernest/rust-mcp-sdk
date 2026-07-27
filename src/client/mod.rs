@@ -3889,6 +3889,34 @@ where
     /// is what releases the server's registry slot; there is no `close()` to
     /// forget.
     ///
+    /// # Every call mints a FRESH subscription id
+    ///
+    /// The subscription id IS the JSON-RPC request id of this call, and this
+    /// method mints a fresh `Uuid::new_v4()` for it every time. It is never
+    /// derived from the transport, from a counter, or from a previous stream.
+    ///
+    /// That is a CONTRACT, not an implementation detail, and it is what makes a
+    /// pmcp client structurally immune to the reconnect collision: the server
+    /// refuses a second LIVE registration under a `(principal, subscriptionId)`
+    /// pair it already holds, and it CANNOT tell an ungracefully disconnected
+    /// peer from a live one (the receiver and the registry guard live in one
+    /// stream-state tuple, so the entry survives until Hyper drops the response
+    /// body — at which moment RAII reclaims it anyway). A client that reused its
+    /// id when reconnecting would therefore be refused for the remainder of the
+    /// server's keep-alive window. Because every call here mints a fresh id, a
+    /// reconnect after ANY disconnect — graceful or not — can never collide with
+    /// the incumbent the server may still consider live.
+    ///
+    /// The guard against a future refactor making ids sticky is the live
+    /// tripwire `successive_listen_calls_mint_distinct_subscription_ids` in
+    /// `tests/v2_subscriptions_client.rs`, which opens two streams from ONE
+    /// client and asserts their acknowledged ids DIFFER.
+    ///
+    /// A third-party client that does reuse an id is refused with the RETRYABLE
+    /// `RATE_LIMITED` (`-32005`, delivered at HTTP 200), so backing off and
+    /// retrying is the correct response — but minting a fresh id, as this method
+    /// does, is strictly better.
+    ///
     /// # D-11: polling remains the RECOMMENDED enterprise mechanism
     ///
     /// Polling over the Tasks mechanism stays pmcp's recommended mechanism for
@@ -3950,6 +3978,10 @@ where
         // a request from a v1 client cannot succeed and must not be sent.
         self.require_v2(SUBSCRIPTIONS_LISTEN_METHOD)?;
 
+        // A FRESH id per call, never a sticky or derived one — see this method's
+        // docs. Making this constant, or reusing a previous stream's id, breaks
+        // the reconnect contract and fails
+        // `successive_listen_calls_mint_distinct_subscription_ids`.
         let request_id = RequestId::String(Uuid::new_v4().to_string());
         let params = serde_json::to_value(SubscriptionsListenParams::new(notifications))
             .map_err(|e| Error::parse(format!("Failed to serialize listen params: {e}")))?;
