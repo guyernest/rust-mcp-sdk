@@ -13,10 +13,15 @@
 //! deployments this SDK targets. Polling over Tasks has none of that cost and
 //! stays the RECOMMENDED pmcp mechanism.
 //!
-//! It is, however, a pmcp EXTENSION and **not** a conformant substitute: there is
-//! no polling shape for change notifications anywhere in the MCP spec. This
-//! stream exists because it is the only spec-conformant delivery shape for
-//! `listChanged`, and it is therefore OPT-IN — a server that advertises none of
+//! It is, however, a pmcp EXTENSION and **not** a conformant substitute for this
+//! stream. The spec *does* define a polling shape for change notifications — the
+//! caching utility (spec `server/utilities/caching`, SEP-2549) specifies
+//! TTL-driven re-fetch through `ttlMs` / `cacheScope` and explicitly blesses
+//! relying on cache expiry *instead of* `listChanged` — but that is a different
+//! mechanism from polling over Tasks, and pmcp implements none of it today:
+//! `ttlMs` / `cacheScope` are owned by SCHM-03 (Phase 115). So
+//! `subscriptions/listen` is the only delivery shape pmcp CURRENTLY implements
+//! for `listChanged`, and it is OPT-IN — a server that advertises none of
 //! `tools.listChanged` / `prompts.listChanged` / `resources.listChanged` /
 //! `resources.subscribe` answers `subscriptions/listen` with `-32601`, which the
 //! official conformance suite records as SKIPPED.
@@ -960,6 +965,114 @@ pub struct SubscriptionStats {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// This module's own source, read at COMPILE time.
+    ///
+    /// Compile-time is deliberate: a `std::fs` read at runtime could disagree
+    /// with what actually compiled (stale checkout, published crate, different
+    /// working directory), and a doc guard that inspects a different file than
+    /// the one it ships inside guards nothing.
+    const THIS_MODULE_SOURCE: &str = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/src/server/subscriptions.rs"
+    ));
+
+    /// Flatten source text so a claim cannot hide behind comment line wrapping.
+    ///
+    /// The retired sentences were wrapped across `//!` lines, so a naive
+    /// substring search would miss them even while they ship. Stripping the
+    /// leading comment markers (`//!`, `///`, `//` alike, so the scan covers
+    /// item docs and ordinary comments too) and collapsing every whitespace run
+    /// to one space makes the search insensitive to where the wrap falls.
+    fn flattened(text: &str) -> String {
+        text.lines()
+            .map(|line| {
+                line.trim_start()
+                    .trim_start_matches('/')
+                    .trim_start_matches('!')
+            })
+            .collect::<Vec<_>>()
+            .join(" ")
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
+    /// The `# D-11` rustdoc must never again justify its positioning with a
+    /// statement the MCP specification contradicts.
+    ///
+    /// **Why this test exists.** Until 2026-07-27 this module told every reader
+    /// of pmcp's published docs that the specification contained no polling
+    /// mechanism whatsoever for change notifications, and that this stream was
+    /// consequently the sole conformant way to deliver `listChanged`. Both
+    /// clauses were false: the caching utility (SEP-2549) specifies TTL-driven
+    /// re-fetch through `ttlMs` / `cacheScope` and explicitly blesses relying on
+    /// it *instead of* `listChanged`. D-11's CONCLUSION was and remains correct
+    /// — polling over Tasks is a pmcp extension and not a conformant substitute
+    /// — only its justification was wrong, which is the easiest kind of error to
+    /// reintroduce while "restoring clarity" to a positioning note.
+    ///
+    /// **Why the forbidden phrases are assembled at runtime.** A test that
+    /// spelled either sentence as one literal would fail the moment it was
+    /// written, because the literal would then be in the file it scans. Each
+    /// phrase is therefore split into two fragments that are individually
+    /// harmless, and the halves are joined here. The length assertions exist so
+    /// that emptying a fragment in some future edit cannot quietly degrade the
+    /// scan into `contains("")`: each half alone is under the 40-character
+    /// floor, so losing either half fails loudly instead of passing vacuously.
+    #[test]
+    fn d11_rustdoc_must_not_reintroduce_the_retired_false_spec_claims() {
+        const NO_POLLING_SHAPE_HEAD: &str = "no polling shape for change";
+        const NO_POLLING_SHAPE_TAIL: &str = " notifications anywhere in the MCP spec";
+        const ONLY_CONFORMANT_HEAD: &str = "the only spec-conformant delivery";
+        const ONLY_CONFORMANT_TAIL: &str = " shape for `listChanged`";
+
+        let flat = flattened(THIS_MODULE_SOURCE);
+
+        for (head, tail) in [
+            (NO_POLLING_SHAPE_HEAD, NO_POLLING_SHAPE_TAIL),
+            (ONLY_CONFORMANT_HEAD, ONLY_CONFORMANT_TAIL),
+        ] {
+            let forbidden = format!("{head}{tail}");
+            assert!(
+                forbidden.len() >= 40,
+                "the assembled phrase must stay long enough to be a real needle; \
+                 a fragment was emptied and this scan would have become vacuous: \
+                 {forbidden:?}"
+            );
+            assert!(
+                !flat.contains(&forbidden),
+                "src/server/subscriptions.rs asserts something the MCP spec \
+                 contradicts. The spec's polling shape for change notifications \
+                 is TTL-driven re-fetch via `ttlMs` / `cacheScope` (SEP-2549), \
+                 specified in the caching utility, which blesses relying on it \
+                 instead of `listChanged`. pmcp does not implement it (SCHM-03, \
+                 Phase 115) — that is what the rustdoc must say. Offending \
+                 phrase: {forbidden:?}"
+            );
+        }
+    }
+
+    /// Deleting the false claim is not sufficient: the corrected `# D-11` block
+    /// must leave the reader able to find the spec's real polling shape by name
+    /// and find who owns implementing it, without leaving this file.
+    #[test]
+    fn d11_rustdoc_names_the_specs_real_polling_shape_and_its_owner() {
+        let module_doc: String = THIS_MODULE_SOURCE
+            .lines()
+            .take_while(|line| line.starts_with("//!") || line.trim().is_empty())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        for needle in ["ttlMs", "cacheScope", "SEP-2549", "SCHM-03"] {
+            assert!(
+                module_doc.contains(needle),
+                "the corrected D-11 block must name {needle} — a reader who is \
+                 told Tasks-polling is not the spec's shape needs to be told \
+                 what the spec's shape IS and who owns it"
+            );
+        }
+    }
 
     #[tokio::test]
     async fn test_subscribe_unsubscribe() {
