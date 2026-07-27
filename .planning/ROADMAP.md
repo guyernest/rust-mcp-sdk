@@ -2364,7 +2364,7 @@ Plans:
 - [ ] 113-29-PLAN.md — Finding 11: `basic/index.mdx` says implementations of this version MUST NOT emit `-32002`, but pmcp's two call sites (`server/core.rs:2616`, `task_dispatch.rs:605`) have never had v2-path reachability traced; traced by execution rather than inspection, and era-gated if reachable
 - [ ] 113-30-PLAN.md — Finding 13: `src/server/subscriptions.rs:17-18` ships a FALSE claim in public rustdoc ("no polling shape for change notifications anywhere in the MCP spec") — `caching.mdx` defines TTL re-fetch via `ttlMs`/`cacheScope` (SEP-2549) and blesses it *instead of* `listChanged`; the D-11 conclusion stands, its justification does not. Also records Finding 14a (no stdio `subscriptions/listen`) as a deliberate deferral
 - [ ] 113-31-PLAN.md — Finding 14b: `resourceSubscriptions`/`resourcesListChanged` have zero end-to-end wire tests — half of HTTP-08's mandated opt-in surface is unit-tested only; adds live-socket coverage
-- [ ] 113-32-PLAN.md — Finding 12: HTTP-08's advertise-implies-serve predicate has NO spec sentence behind it — it lives in the conformance repo, which the schema-only gate cannot see; adds a second gate arm pinning a conformance sha verbatim from upstream
+- [x] 113-32-PLAN.md — Finding 12: HTTP-08's advertise-implies-serve predicate has NO spec sentence behind it — it lives in the conformance repo, which the schema-only gate cannot see; adds a second gate arm pinning a conformance sha verbatim from upstream
 
 **Wave 5** *(blocked on Wave 4)*
 
@@ -2460,7 +2460,7 @@ Plans:
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 112. Version Plumbing Spine | 10/10 | Complete    | 2026-07-23 |
-| 113. Stateless HTTP + MRTR | 25/32 | In Progress|  |
+| 113. Stateless HTTP + MRTR | 26/32 | In Progress|  |
 | 114. Tasks Extension Migration | 0/TBD | Not started | - |
 | 115. JSON Schema 2020-12 + Caching Hints | 0/TBD | Not started | - |
 | 116. Auth Hardening SEPs | 0/TBD | Not started | - |

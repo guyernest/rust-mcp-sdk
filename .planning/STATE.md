@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v2.5
 milestone_name: MCP Spec 2026-07-28
 status: executing
-stopped_at: "Completed 113-25-PLAN.md (D-113-P closed: both server builders hold zeroizing requestState key material; resolve_codec_at_build takes the key by reference)"
-last_updated: "2026-07-27T10:05:05.044Z"
+stopped_at: Completed 113-32-PLAN.md
+last_updated: "2026-07-27T10:26:15.073Z"
 last_activity: 2026-07-27
 progress:
   total_phases: 71
   completed_phases: 57
   total_plans: 313
-  completed_plans: 306
+  completed_plans: 307
   percent: 80
 ---
 
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-07-22) · .planning/ROADMAP.md (v2.5 mil
 ## Current Position
 
 Phase: 113 (stateless-http-multi-round-trip-elicitation) — EXECUTING
-Plan: 25 of 32 complete (next: 113-26)
+Plan: 26 of 32 complete (next: 113-26)
 Status: Ready to execute
 Next action: **113-25 has landed: D-113-P is closed — neither server builder returns `requestState` AEAD key material to the allocator un-scrubbed any more.** `ServerCoreBuilder` (`src/server/builder.rs`) held `Option<[u8;32]>` plus a `Vec<[u8;32]>` of rotated-out keys and dropped both in the clear while every other copy in the module was zeroized for T-113-05; `ServerBuilder` (`src/server/mod.rs`) carried the **identical** field, and D-113-P named only the former — **both are fixed**, because leaving one would have left the documented threat live on the path most users take. The vehicle is `pub(crate) type SecretKey = zeroize::Zeroizing<[u8; KEY_LEN]>`: the destructor rides on the **value**, so it scrubs on drop through moves and needs **no struct-level `Drop`**, which would have made every `self` field move in `build()` an `E0509` and broken the by-value `mut self` chaining idiom the whole builder API rests on (that was D-113-P's own open question; it is decided and recorded in the `SecretKey` rustdoc). **All three enumerated copies are closed and each site says which one it closes:** (1) the FIELDS on both builders; (2) the SETTERS' by-value parameters — `[u8; 32]` is `Copy`, so moving into the wrapper leaves the caller's bytes in the parameter's own slot, hence an explicit `key.zeroize()` / `keys.zeroize()` after the transfer (`Vec::zeroize` also scrubs spare capacity); (3) `resolve_codec_at_build`, which now takes `Option<&SecretKey>` / `&[SecretKey]`, so merely CALLING it no longer manufactures an unscrubbed stack copy. A **fourth, unenumerated copy** was found and closed on the way: `with_previous_keys`'s shadowing `let mut key = key` produced a second `Copy` slot and `zeroize()` scrubbed only the shadow. **PUBLIC SIGNATURES ARE BYTE-IDENTICAL** (`mut` on a parameter binding is not part of a signature); only private field types moved, and `semver-checks` is **223/223 no-update-required**. **On the zeroization caveat, stated plainly rather than overclaimed:** zeroize 1.8.2's primitive IS volatile-and-fence-backed (`volatile_write` + `compiler_fence(SeqCst)`), so the overwrite is not dead-code-eliminated — but **no test in safe Rust can observe post-drop memory** (reading a dropped/freed value is UB), so `secret_key_zeroize_replaces_the_key_bytes_with_zeroes` pins the CONTRACT on a value it still owns and its rustdoc says which half is mechanism and which is assertion; `Vec::zeroize` is self-described "best effort" over prior reallocations. The fix bounds what the SDK leaves behind; it does not claim to recover optimiser-made copies, register spills, or swapped pages. **NEGATIVE CONTROLS — both run, verbatim in `113-25-SUMMARY.md`, reverted:** NC part 1 reverted `ServerCoreBuilder`'s two fields to bare `[u8; 32]` and the compile-level guard fired with two `E0308`s naming both fields; **NC part 2 is the load-bearing one** — with the fix reverted AND the guard removed, **all 75 behavioural tests still passed**, including the 113-03 regression `two_servers_with_different_keys_have_different_key_ids`. Behaviour cannot detect a missing scrub, so the **field TYPE is the guard**, one per builder. `make quality-gate` exit 0 (246 suites, **4375 passed, 0 failed**); `make wasm-build` green; `Cargo.toml`/`Cargo.lock` **untouched** (728 unique lockfile package names — byte-identical to 113-01's zero-new-crates measurement); `v2_mrtr` 29/29 + `v2_mrtr_ingress` 10/10. Note for the wave record: this plan's clippy break was NOT the usual weak-verify-command case — the plan literally prescribed `&**explicit`, which `clippy::explicit_auto_deref` (in `clippy::all`) rejects; `make lint` was still run as mandated and found nothing further. **HTTP-02 stays `[~]`, `.planning/REQUIREMENTS.md` untouched, no checkbox flipped.** Still open and unowned: **D-113-M** (`write_canonical`'s depth cap collapsing distinct params to one AAD — a hole in replay-prevention clause 5c), **D-113-O**, **D-113-Q**, **D-113-R**. **NEXT: 113-26.**
 
@@ -217,6 +217,9 @@ Decisions are logged in PROJECT.md Key Decisions table. Decisions framing this m
 - [Phase 113]: 113-25: both builders fixed though D-113-P names only ServerCoreBuilder; ServerBuilder carried the identical field on the path most users take. Public setter signatures stay [u8;32]/Vec<[u8;32]> (the SDK owns its copy, not the caller's — T-113-121), so only private field types moved and semver-checks stays 223/223 no-update-required
 - [Phase 113]: 113-25: the compile-level field-type guard is the regression guard because behaviour cannot detect a missing scrub — NC part 2 ran the fix fully reverted WITH the guard removed and all 75 behavioural tests still passed, including the 113-03 two-keyed-servers regression
 - [Phase 113]: 113-25: zeroize 1.8.2's primitive is volatile_write + compiler_fence(SeqCst), so the overwrite is not dead-code-eliminated; but no safe-Rust test can observe post-drop memory, so the SecretKey test pins the CONTRACT only and the SUMMARY says so explicitly
+- [Phase ?]: 113-32: HTTP-08's advertise-implies-serve rule is pinned VERBATIM from upstream (conformance sha a865118206d4d8cc8dbc5f5201607839281d0c3b, stateless.ts:983-1016) in 113-SPEC-RECHECK.md § B.6 — fetched via gh, never reconstructed
+- [Phase ?]: 113-32: the re-verification obligation is now TWO-ARMED (Arm 1 schema, Arm 2 conformance predicate) and states explicitly that running arm 1 alone does not discharge the gate
+- [Phase ?]: 113-32: the pinned predicate AGREES exactly with pmcp's four supported_flags arms — no mismatch, no deferred item, no production source changed
 
 ### Pending Todos
 
@@ -263,8 +266,8 @@ Items deferred by design for this milestone (design §7 / REQUIREMENTS v2):
 
 ## Session Continuity
 
-Last session: 2026-07-27T10:04:41.051Z
-Stopped at: Completed 113-25-PLAN.md (D-113-P closed: both server builders hold zeroizing requestState key material; resolve_codec_at_build takes the key by reference)
+Last session: 2026-07-27T10:26:15.066Z
+Stopped at: Completed 113-32-PLAN.md
 Resume file: None
 
 ## Performance Metrics
@@ -322,3 +325,4 @@ Resume file: None
 | Phase 113 P23 | 27min | 3 tasks | 4 files |
 | Phase 113 P24 | 21min | 2 tasks | 2 files |
 | Phase 113 P25 | 85min | 2 tasks | 3 files |
+| Phase 113 P32 | 17min | 2 tasks | 2 files |
