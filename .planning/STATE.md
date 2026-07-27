@@ -4,14 +4,14 @@ milestone: v2.5
 milestone_name: MCP Spec 2026-07-28
 status: executing
 stopped_at: "Completed 113-19-PLAN.md (phase gate: fuzz seam gated off the public API, real bound invariant proven falsifiable, whole gap-closure round green)"
-last_updated: "2026-07-27T03:19:48.777Z"
-last_activity: 2026-07-27
+last_updated: "2026-07-27T07:59:22.027Z"
+last_activity: 2026-07-27 -- Phase 113 execution started
 progress:
   total_phases: 71
-  completed_phases: 58
-  total_plans: 301
-  completed_plans: 301
-  percent: 82
+  completed_phases: 57
+  total_plans: 313
+  completed_plans: 302
+  percent: 80
 ---
 
 # Project State
@@ -25,13 +25,15 @@ See: .planning/PROJECT.md (updated 2026-07-22) · .planning/ROADMAP.md (v2.5 mil
 
 ## Current Position
 
-Phase: 113 (stateless-http-multi-round-trip-elicitation) — ALL 20 PLANS SHIPPED; awaiting re-verification, then BLOCKED ON PUBLICATION
-Plan: 20 of 20
-Status: Plans complete — next action is re-verification, NOT another plan
-Next action: **113-19 (wave 3) has landed and the four-plan gap-closure round is CLOSED.** GAP-D: `decode_listen_chunks_for_fuzz` is now behind `#[cfg(any(feature = "fuzzing", test))]`; `#[doc(hidden)]` had hidden it from rustdoc but not from downstream callers or semver. Note for any re-verifier: `cargo public-api` OMITS `doc(hidden)` items, so the plan's seam-absence criterion passed vacuously (it was 0 before the fix too) — the falsifiable proof is a real downstream crate that fails `E0425` under `full` and compiles under `full,fuzzing`. GAP-E: the fuzz target's "latch never clears" tautology is replaced by a per-chunk `buffered_bytes() <= max_buffer_size` assertion, and it is PROVEN falsifiable — with only 113-17's pre-check disabled the campaign stays GREEN (113-17's two enforcement points are independently sufficient), and only with BOTH disabled does it crash (`the parser retained 9 bytes after chunk 0 under a 8-byte bound`). A 20 000-run campaign at `569f3533` is recorded in `113-FUZZ-EVIDENCE.md` § Campaign 2 (seed 3621664529, exit 0, artifacts dir EXISTS and is empty); campaign 1's PASS verdict is preserved verbatim because that campaign was green while GAP-A was open. The cross-cutting phase gate over 113-17 + 113-18 + 113-20 + 113-19 is GREEN: 6 suites, 4 build-matrix rows, `semver-checks` 223/223 no-update-required, zero REMOVED public items, zero new PMAT violations, `make quality-gate` exit 0 (243 ok / 0 FAILED). **NEXT: re-verify the phase** (`/gsd:verify-phase 113`) against `113-VERIFICATION.md`'s GAP-A..E; then, on or after 2026-07-28, re-run the 4-step procedure in `113-SPEC-RECHECK.md` § Recorded Exception, upgrade the Verdict, and only then flip HTTP-01..05 / CLNT-01..02 to `[x]`. A value mismatch is a phase-reopening event. Still unowned: WR-01, WR-02, WR-04, D-113-F..K, UNAS-01.
+Phase: 113 (stateless-http-multi-round-trip-elicitation) — EXECUTING
+Plan: 21 of 32 complete (next: 113-22)
+Status: Executing Phase 113
+Next action: **113-21 has landed: HTTP-09 now has a mechanical, enumerable check.** `tests/v2_bounded_reads_tripwire.rs` (13 tests) scans `src/shared/` (discovered at runtime via `read_dir`, so a NEW file is in scope automatically), `src/client/subscriptions.rs` and `src/server/streamable_http_server.rs` over comment- and literal-STRIPPED text with a byte-to-line map, excluding only `cfg` regions that REQUIRE `test` (per-item brace matching — `streamable_http_server.rs` has two `cfg(test)` fns at 1094/1191 ahead of `mod tests` at 3839, so truncate-at-first-marker would have dropped ~2700 production lines; `any(feature="fuzzing", test)` ships and stays IN scope). The whole-body-read rule is STRUCTURAL — `Limited::new(` must appear in the same STATEMENT — so it fails both on a new site and on a DELETED bound with the site count unchanged (NC-2 proves exactly that). The accumulation rule is documented in-source as a CHANGE DETECTOR, not a proof of boundedness, over a 9-entry / 25-site allowlist whose counts were MEASURED (not copied from the plan: `uri_template.rs` is 11 `push_str` not 9, and `streamable_http_server.rs:4945` is inside `cfg(test)` so that file contributes ZERO) and whose per-entry justifications are enforced ≥40 chars and pairwise distinct. All five mandated negative controls were run against the PREBUILT test binary (a source scanner reads `src/` at runtime, which is the only way NC-5 — an undeclared, never-compiled file — is a valid control), each produced the expected named failure, each reverted; verbatim output is in `113-21-SUMMARY.md`. `make quality-gate` exit 0; full suite 2201/2201 passed. **FOUND (Rule 2): D-113-Q** — the plan's needle families were hyper/axum/std/tokio-shaped and missed `reqwest`; adding `.text()/.bytes()/.json()` surfaced an unbounded `response.text().await` in `OptimizedSseTransport::connect_sse` (`src/shared/sse_optimized.rs:266`) on the FIRST run. That is the fourth-round unnamed site this requirement exists to catch; it is enumerated in `WHOLE_BODY_ALLOWLIST` with a written NOT BOUNDED justification and the list length is pinned at 1, so it cannot go quiet. **HTTP-09 stays `[ ]`** — 113-22 owns the O(n) half, and the publication gate below forbids flipping any checkbox this round. **NEXT: 113-22.**
+
+Prior-wave context — **113-19 (wave 3) landed and the four-plan gap-closure round is CLOSED.** GAP-D: `decode_listen_chunks_for_fuzz` is now behind `#[cfg(any(feature = "fuzzing", test))]`; `#[doc(hidden)]` had hidden it from rustdoc but not from downstream callers or semver. Note for any re-verifier: `cargo public-api` OMITS `doc(hidden)` items, so the plan's seam-absence criterion passed vacuously (it was 0 before the fix too) — the falsifiable proof is a real downstream crate that fails `E0425` under `full` and compiles under `full,fuzzing`. GAP-E: the fuzz target's "latch never clears" tautology is replaced by a per-chunk `buffered_bytes() <= max_buffer_size` assertion, and it is PROVEN falsifiable — with only 113-17's pre-check disabled the campaign stays GREEN (113-17's two enforcement points are independently sufficient), and only with BOTH disabled does it crash (`the parser retained 9 bytes after chunk 0 under a 8-byte bound`). A 20 000-run campaign at `569f3533` is recorded in `113-FUZZ-EVIDENCE.md` § Campaign 2 (seed 3621664529, exit 0, artifacts dir EXISTS and is empty); campaign 1's PASS verdict is preserved verbatim because that campaign was green while GAP-A was open. The cross-cutting phase gate over 113-17 + 113-18 + 113-20 + 113-19 is GREEN: 6 suites, 4 build-matrix rows, `semver-checks` 223/223 no-update-required, zero REMOVED public items, zero new PMAT violations, `make quality-gate` exit 0 (243 ok / 0 FAILED). **NEXT: re-verify the phase** (`/gsd:verify-phase 113`) against `113-VERIFICATION.md`'s GAP-A..E; then, on or after 2026-07-28, re-run the 4-step procedure in `113-SPEC-RECHECK.md` § Recorded Exception, upgrade the Verdict, and only then flip HTTP-01..05 / CLNT-01..02 to `[x]`. A value mismatch is a phase-reopening event. Still unowned: WR-01, WR-02, WR-04, D-113-F..K, UNAS-01.
 
 Prior-wave context — 113-18 closed GAP-B and GAP-C. GAP-B is closed by CONTRACT, not by the originally-planned liveness reclaim: the receiver and the `ListenGuard` share one `stream::unfold` state tuple, so sender liveness cannot observe remote death (the verifier's reproduction dropped the receiver while holding the guard — a state production cannot enter). Instead the duplicate refusal became RETRYABLE (`RATE_LIMITED` -32005 at HTTP 200, `v2_status_for_code` byte-unchanged) and the fresh-id reconnect contract is documented in three places and pinned by a live tripwire whose negative control fails. GAP-C/WR-06 closed: both entry-creating rejection paths route through `prune_after_rejection`, proven by a test that fails when the prune is removed. A re-verifier must reproduce GAP-B through a REAL socket. Earlier in this wave 113-17 landed the parser work — `SseParser`'s bound is now UNCONDITIONAL over `buffer + current_event.data + chunk` (GAP-A closed for real), the two whole-body transport sites go through a `pub(crate)` `feed_complete_body`, and `connect_sse`'s ceiling is a configurable 16 MiB with no public-config-struct change (semver 223/223, no update required). **113-20 has now landed and T-113-84 is DISCHARGED**: `feed_complete_body`'s byte-cap precondition is an established fact naming both enforcing call sites. Every whole-body read on `StreamableHttpTransport` — the POST response, the `start_sse` GET stream, AND the previously-unenumerated v2 error envelope — goes through one `collect_body_within_cap` helper that refuses an over-cap `Content-Length` before reading a byte and bounds the delivered bytes with `http_body_util::Limited` (a STREAMING bound, so an over-cap body is never allocated whole). Zero `response.collect()` remain in that file. `DEFAULT_MAX_COLLECTED_BODY_BYTES` (16 MiB) lives on a PRIVATE field with an additive `with_max_collected_body_bytes()` seam, so semver stays 223/223 no-update-required. Four per-site negative-control runs recorded. D-113-K records the deferred GET-path incremental-parsing rewrite (T-113-94). Wave 3 (113-19, the phase gate) is unblocked. After it, re-verify the phase; then, on or after 2026-07-28, re-run the 4-step procedure in `113-SPEC-RECHECK.md` § Recorded Exception, upgrade the Verdict, and only then flip the seven requirements. HTTP-04 stays `[~]` until that gate clears. A value mismatch is a phase-reopening event.
-Last activity: 2026-07-27
+Last activity: 2026-07-27 -- Phase 113 execution started
 
 ## v2.5 Phase Plan (8 phases, 38 requirements)
 
@@ -207,6 +209,7 @@ yet. (Research flags per phase to be surfaced during `/gsd:plan-phase`.)
 - Phase 113 is BLOCKED ON PUBLICATION, not complete. 113-SPEC-RECHECK.md ## Verdict is still PENDING (re-verified 2026-07-26: no schema/2026-07-28 upstream). The three v2 error codes -32020/-32021/-32022 are pre-final values held under a written developer exception whose re-verification is BINDING and whose failure mode is phase-reopening, not advisory. HTTP-01..05 and CLNT-01..02 are marked [~] implemented-pending-final-schema. ACTION on or after 2026-07-28: re-run the 4-step procedure in 113-SPEC-RECHECK.md ## Recorded Exception, upgrade the Verdict, and only then flip the seven requirements to [x].
 - UNAS-01 (SEP-2243 x-mcp-header / Mcp-Param-{Name}) is an UNASSIGNED v2.5 requirement with no phase. Also open: D-113-F (two pre-existing cog-25 violations in streamable_http_server.rs) and D-113-G (make quality-gate's fuzz stage builds 0 of 17 targets and swallows failures) — both need owners.
 - D-113-H: a pre-existing untriaged crash artifact for the auth_flows fuzz target (fuzz/artifacts/auth_flows/crash-e29e9da4..., 8 bytes, dated 2025-09-12) surfaced in 113-16 while proving artifacts/ empty. Out of that plan's scope fence; unowned. Replay: cargo +nightly fuzz run auth_flows <artifact>
+- D-113-Q (raised by 113-21, unowned): src/shared/sse_optimized.rs:266 — OptimizedSseTransport::connect_sse buffers a peer-chosen SSE body whole via reqwest::Response::text(), which takes no limit argument. Same defect class the phase capped three times elsewhere; it survived every round because every round's needle set was hyper/axum-shaped. NOT on the v2 streamable-HTTP path and no in-crate consumer, but exported from shared:: so reachable in a shipped build. Enumerated in tests/v2_bounded_reads_tripwire.rs WHOLE_BODY_ALLOWLIST with a written NOT BOUNDED justification (list length pinned at 1). Fix shape in deferred-items.md D-113-Q; deleting the allowlist entry is part of the fix.
 
 ## Deferred Items
 
@@ -234,7 +237,7 @@ Items deferred by design for this milestone (design §7 / REQUIREMENTS v2):
 
 ## Session Continuity
 
-Last session: 2026-07-27T03:18:28.706Z
+Last session: 2026-07-27T07:59:17.430Z
 Stopped at: Completed 113-19-PLAN.md (phase gate: fuzz seam gated off the public API, real bound invariant proven falsifiable, whole gap-closure round green)
 Resume file: None
 
@@ -288,3 +291,4 @@ Resume file: None
 | Phase 113 P18 | 47min | 2 tasks tasks | 4 files files |
 | Phase 113 P20 | 47min | 1 task tasks | 3 files files |
 | Phase 113 P19 | 43min | 2 tasks | 3 files |
+| Phase 113 P21 | 82min | 3 tasks tasks | 1 file files |

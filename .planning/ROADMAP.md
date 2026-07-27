@@ -2345,7 +2345,7 @@ Plans:
 
 **Wave 1**
 
-- [ ] 113-21-PLAN.md — HTTP-09 bounded-read source tripwire: runtime discovery of `src/shared/`, comment/literal-stripped scanning with line mapping, a structural `Limited`-in-statement rule for whole-body reads and a justified allowlist for peer-byte accumulations, with five recorded negative controls
+- [x] 113-21-PLAN.md — HTTP-09 bounded-read source tripwire: runtime discovery of `src/shared/`, comment/literal-stripped scanning with line mapping, a structural `Limited`-in-statement rule for whole-body reads and a justified allowlist for peer-byte accumulations, with five recorded negative controls
 - [ ] 113-22-PLAN.md — HTTP-09 O(n) half: a FALSIFIABLE linear-time budget for `take_utf8_prefix` and `SseParser::feed` (the existing guard passes on the very quadratic shape it names), plus a retained-tail property test
 - [ ] 113-23-PLAN.md — D-113-N: the `subscriptions/listen` route fails closed on an auth-configured server instead of minting a private `anon#N` that makes the per-principal cap unreachable; plus the Finding-5 audit of pmcp's actual `subscriptionId` emission on all three frame classes
 - [ ] 113-24-PLAN.md — D-113-L: a server-side `MAX_MRTR_ROUNDS` ceiling enforced at the ingress verdict and at the mint, so the D-09 security counter stops being enforced solely by the client it exists to constrain
@@ -2369,7 +2369,6 @@ Plans:
 **Wave 5** *(blocked on Wave 4)*
 
 - [ ] 113-28-PLAN.md — the publication-gate THIRD-OUTCOME decision (checkpoint): the binding re-verification procedure has no branch for `schema/2026-07-28` still not existing on the date; assembles the evidence brief and records the maintainer's policy without flipping any checkbox. Amended with Findings 7/8/10 — the RC is a strict ancestor of our pin 236 commits behind, the three constants under exception were renumbered *after* the RC lock, and the gate's trigger is restated as a condition ("a versioned schema directory exists") rather than the date
-
 
 **Phase-gate outcome (plan 12):** 16/16 build-matrix rows exit 0; `cargo semver-checks` 223/223 pass with no update required and `cargo public-api` shows **zero** removed public items, so the milestone is provably still additive; `make quality-gate` exits 0; all seven new/changed files clear the 80% coverage target; the 20k-run fuzz campaign passed with zero crash artifacts. **The phase is NOT closed as complete** — `113-SPEC-RECHECK.md`'s `## Verdict` is still `PENDING` (re-verified 2026-07-26: no `schema/2026-07-28` upstream), so HTTP-01..05 and CLNT-01..02 are marked `[~]` implemented-pending-final-schema rather than complete. See `113-12-SUMMARY.md`.
 
@@ -2461,7 +2460,7 @@ Plans:
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 112. Version Plumbing Spine | 10/10 | Complete    | 2026-07-23 |
-| 113. Stateless HTTP + MRTR | 20/20 | Complete   | 2026-07-27 |
+| 113. Stateless HTTP + MRTR | 21/32 | In Progress|  |
 | 114. Tasks Extension Migration | 0/TBD | Not started | - |
 | 115. JSON Schema 2020-12 + Caching Hints | 0/TBD | Not started | - |
 | 116. Auth Hardening SEPs | 0/TBD | Not started | - |

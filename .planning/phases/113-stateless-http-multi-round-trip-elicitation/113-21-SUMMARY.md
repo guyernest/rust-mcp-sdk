@@ -370,3 +370,10 @@ Threat register dispositions from the plan, all `mitigate`, all discharged:
 - **Do not "fix" a tripwire failure by raising a number.** Every failure message says so explicitly. The three failure modes are: unreviewed site, count rose, dead entry.
 - **D-113-Q needs an owner.** Bounding `OptimizedSseTransport` means streaming via `bytes_stream()` with a running total (reqwest has no `http_body_util::Limited` equivalent) — or retiring the transport. Deleting the `WHOLE_BODY_ALLOWLIST` entry is part of that fix; the dead-entry rule does not cover that list.
 - **Adding a file to `src/shared/` puts it in scope automatically.** That is by design and it is proven (NC-5). If your new file needs a peer-byte read, bound it before you commit.
+
+## Self-Check: PASSED
+
+- `tests/v2_bounded_reads_tripwire.rs` — FOUND
+- `.planning/phases/113-stateless-http-multi-round-trip-elicitation/113-21-SUMMARY.md` — FOUND
+- `src/shared/zz_tripwire_probe.rs` (NC-5 probe) — correctly ABSENT
+- Commits `c8b84fca`, `0a0cf8af`, `3241aee8`, `df95796d` — all FOUND
