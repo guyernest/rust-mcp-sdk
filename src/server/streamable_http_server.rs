@@ -3143,27 +3143,55 @@ async fn assemble_subscriptions_listen(
 /// [`extract_session_and_protocol_headers`], [`is_initialize_request`],
 /// [`resolve_session_for_request`], and [`compute_outbound_protocol_version`]
 /// with the middleware path.
-async fn handle_post_fast_path(
-    state: ServerState,
+/// Everything the fast path's read-and-classify preamble produces.
+///
+/// SIX fields — a different bundle at a different pipeline stage from
+/// [`FastPathDispatch`], which carries five. Do not conflate them.
+struct FastIngress {
+    /// The request headers, consumed by the v2 gate, session resolution and auth.
+    headers: HeaderMap,
+    /// The read-and-capped body, still needed as raw bytes by the v2 gate.
+    body: String,
+    /// The classified ingress (public request, discover, or subscriptions listen).
+    ingress: HttpIngress,
+    /// `Mcp-Session-Id`, from [`extract_session_and_protocol_headers`].
+    session_id: Option<String>,
+    /// `MCP-Protocol-Version`, from the same call.
+    protocol_version: Option<String>,
+    /// Whether this is an `initialize` request — decides session minting.
+    is_init_request: bool,
+}
+
+/// Read, validate, parse and classify a fast-path POST request.
+///
+/// The first stage of the pipeline: body read under the configured cap, header
+/// validation, transport-message parse, and ingress classification. Every
+/// failure is already a `Response`, including the v2 raw-level id recovery on a
+/// parse error (an unknown v2 method must answer 404 + -32601 with the ORIGINAL
+/// id even though its body never produced a typed request).
+///
+/// Extracted in plan 113.1-05 (D-10): this is a per-path helper by design, NOT
+/// shared with the middleware twin — a shared preamble is the pipeline
+/// unification D-06 rejects, and the two genuinely differ (the middleware path
+/// runs conversion, context-building and the request-middleware chain first).
+async fn read_and_classify_fast(
+    state: &ServerState,
     request: axum::extract::Request<Body>,
-) -> Response {
+) -> std::result::Result<FastIngress, Response> {
     let (parts, body) = request.into_parts();
     let headers = parts.headers;
 
-    let body = match read_body_with_limit(body, state.config.max_request_bytes).await {
-        Ok(b) => b,
-        Err(response) => return response,
-    };
+    let body = read_body_with_limit(body, state.config.max_request_bytes).await?;
 
-    if let Err(error_response) = validate_headers(&headers, "POST") {
-        return error_response;
-    }
+    validate_headers(&headers, "POST")?;
 
     let ingress = match parse_transport_message_fast(body.as_bytes()) {
         Ok(i) => i,
         // A v2 unknown method must be 404 + -32601 with the ORIGINAL id, even
         // though its body never produced a typed request (raw-level mapping).
-        Err(response) => return map_unparsed_body_for_v2(&state, body.as_bytes(), response).await,
+        Err(response) => {
+            return Err(map_unparsed_body_for_v2(state, body.as_bytes(), response).await)
+        },
     };
 
     let (session_id, protocol_version) = extract_session_and_protocol_headers(&headers);
@@ -3172,6 +3200,32 @@ async fn handle_post_fast_path(
     let is_init_request = match &ingress {
         HttpIngress::Public(msg) => is_initialize_request(msg),
         HttpIngress::Discover { .. } | HttpIngress::SubscriptionsListen { .. } => false,
+    };
+
+    Ok(FastIngress {
+        headers,
+        body,
+        ingress,
+        session_id,
+        protocol_version,
+        is_init_request,
+    })
+}
+
+async fn handle_post_fast_path(
+    state: ServerState,
+    request: axum::extract::Request<Body>,
+) -> Response {
+    let FastIngress {
+        headers,
+        body,
+        ingress,
+        session_id,
+        protocol_version,
+        is_init_request,
+    } = match read_and_classify_fast(&state, request).await {
+        Ok(classified) => classified,
+        Err(response) => return response,
     };
 
     // v2 required-header gate (VERS-05). The ordering constraints this call
@@ -3625,33 +3679,59 @@ async fn dispatch_message_with_middleware(
 /// [`resolve_session_for_request`], [`extract_auth_with_middleware`], and
 /// [`dispatch_message_with_middleware`] so this orchestrator is a thin
 /// early-return pipeline.
-async fn handle_post_with_middleware(
-    state: ServerState,
-    request: axum::extract::Request<Body>,
-) -> Response {
-    let http_middleware = state
-        .config
-        .http_middleware
-        .as_ref()
-        .expect("Middleware chain must exist");
+/// Everything the middleware path's read-and-classify preamble produces.
+///
+/// SIX fields, not eight: the middleware path's headers and body stay reachable
+/// through `server_request` rather than being lifted into separate bindings, so
+/// carrying them again would duplicate state the handler already reads from
+/// there. A different bundle at a different pipeline stage from
+/// [`MiddlewareDispatch`], which carries five.
+struct MwIngress {
+    /// The converted middleware request — this path's headers/body carrier.
+    server_request: crate::server::http_middleware::ServerHttpRequest,
+    /// Built by [`build_middleware_context`]; threaded into every later hook.
+    http_context: ServerHttpContext,
+    /// The classified ingress (public request, discover, or subscriptions listen).
+    ingress: HttpIngress,
+    /// `Mcp-Session-Id`, from [`extract_session_and_protocol_headers`].
+    session_id: Option<String>,
+    /// `MCP-Protocol-Version`, from the same call.
+    protocol_version: Option<String>,
+    /// Whether this is an `initialize` request — decides session minting.
+    is_init_request: bool,
+}
 
+/// Convert, run request middleware, validate, parse and classify a
+/// middleware-path POST request.
+///
+/// The middleware twin of [`read_and_classify_fast`], and deliberately a
+/// SEPARATE function rather than a shared preamble (D-06 rejects pipeline
+/// unification). The divergence is real: this path converts the axum request,
+/// builds the middleware context, runs the request-middleware chain, and hooks
+/// `report_middleware_error` on header-validation failure — none of which the
+/// fast path has.
+///
+/// Two orderings inside are load-bearing and must not be rearranged:
+/// [`build_middleware_context`] runs BEFORE [`run_request_middleware`] (the
+/// chain receives the context), and `report_middleware_error` runs AFTER the
+/// [`validate_headers`] call it reports on.
+///
+/// Extracted in plan 113.1-05 (D-10).
+async fn read_and_classify_with_middleware(
+    state: &ServerState,
+    request: axum::extract::Request<Body>,
+    http_middleware: &ServerHttpMiddlewareChain,
+) -> std::result::Result<MwIngress, Response> {
     let mut server_request =
-        match convert_axum_to_middleware_request(request, state.config.max_request_bytes).await {
-            Ok(req) => req,
-            Err(response) => return response,
-        };
+        convert_axum_to_middleware_request(request, state.config.max_request_bytes).await?;
 
     let http_context = build_middleware_context(&server_request);
 
-    if let Err(response) =
-        run_request_middleware(http_middleware, &mut server_request, &http_context).await
-    {
-        return response;
-    }
+    run_request_middleware(http_middleware, &mut server_request, &http_context).await?;
 
     if let Err(error_response) = validate_headers(&server_request.headers, "POST") {
         report_middleware_error(http_middleware, &http_context, "Header validation failed").await;
-        return error_response;
+        return Err(error_response);
     }
 
     let ingress = match parse_transport_message_with_middleware(
@@ -3665,7 +3745,7 @@ async fn handle_post_with_middleware(
         // A v2 unknown method must be 404 + -32601 with the ORIGINAL id, even
         // though its body never produced a typed request (raw-level mapping).
         Err(response) => {
-            return map_unparsed_body_for_v2(&state, &server_request.body, response).await
+            return Err(map_unparsed_body_for_v2(state, &server_request.body, response).await)
         },
     };
 
@@ -3674,6 +3754,38 @@ async fn handle_post_with_middleware(
     let is_init_request = match &ingress {
         HttpIngress::Public(msg) => is_initialize_request(msg),
         HttpIngress::Discover { .. } | HttpIngress::SubscriptionsListen { .. } => false,
+    };
+
+    Ok(MwIngress {
+        server_request,
+        http_context,
+        ingress,
+        session_id,
+        protocol_version,
+        is_init_request,
+    })
+}
+
+async fn handle_post_with_middleware(
+    state: ServerState,
+    request: axum::extract::Request<Body>,
+) -> Response {
+    let http_middleware = state
+        .config
+        .http_middleware
+        .as_ref()
+        .expect("Middleware chain must exist");
+
+    let MwIngress {
+        server_request,
+        http_context,
+        ingress,
+        session_id,
+        protocol_version,
+        is_init_request,
+    } = match read_and_classify_with_middleware(&state, request, http_middleware).await {
+        Ok(classified) => classified,
+        Err(response) => return response,
     };
 
     // v2 required-header gate (VERS-05). The ordering constraints this call
