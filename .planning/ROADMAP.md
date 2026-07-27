@@ -2378,7 +2378,7 @@ Plans:
 **Goal:** Clear the three things that keep the `fix/mcp-publisher-oidc-audience` branch from merging, so Phases 114-119 can start. Two of them (D-113-R, D-113-Q) are what hold **HTTP-09** at `[ ]` on the merits; the third (D-113-U) is the org-required CI `gate` check itself.
 **Requirements**: HTTP-09
 **Depends on:** Phase 113
-**Plans:** TBD
+**Plans:** 6 plans in 3 waves
 
 **Scope** (the three blockers, verbatim from the milestone phase list):
 
@@ -2398,7 +2398,17 @@ Plans:
 
 Plans:
 
-- [ ] TBD (run /gsd:plan-phase 113.1 to break down)
+*Wave 1 (parallel — disjoint files):*
+- [ ] 113.1-01-PLAN.md — D-113-U part 1: extract the copy-pasted v2 header gate into the `resolve_v2_gate` / `resolve_v2_gate_with_error_hook` sibling pair and the fast path's inline ingress dispatch into `dispatch_message_fast` (D-06/D-09), with three recorded negative controls (D-11). Lands at a measured 26/28 — the gate is closed by 113.1-05
+- [ ] 113.1-02-PLAN.md — D-113-R: the scan-window cursor plus the `debug_assert` removal as ONE atomic change (D-12+D-15), preceded by four RED-first falsifiable guards (D-13/D-16) and followed by a recorded fuzz campaign
+- [ ] 113.1-03-PLAN.md — D-113-Q: bound `connect_sse` with a `reqwest::chunk()` running total against the crate's 16 MiB SSE ceiling (D-02/D-03), drive `WHOLE_BODY_ALLOWLIST` to 0 (D-05), add the accumulation entry the fix requires, and deprecate `OptimizedSseTransport` toward `StreamableHttpTransport` (D-01/D-04)
+- [ ] 113.1-04-PLAN.md — records only: the 18 auth-surface unbounded reads enumerated and assigned to Phase 116 without widening the tripwire fence (D-18), and arm 2 of the rolled-forward re-verification executed and recorded (D-19)
+
+*Wave 2 (blocked on 113.1-01 — same file):*
+- [ ] 113.1-05-PLAN.md — D-113-U part 2: the read/classify preamble and legacy-version guard extractions RESEARCH measured as necessary, landing BOTH handlers at cognitive <= 20 (D-10) and turning the PR-blocking PMAT gate green
+
+*Wave 3 (blocked on 113.1-02/03/04/05):*
+- [ ] 113.1-06-PLAN.md — closure: HTTP-09 flipped to `[x]` on the merits at all three sites (D-17), the falsified ROADMAP warning-block claims corrected, D-113-Q/R/U marked RESOLVED, and the full phase gate run including the PMAT invocation `make quality-gate` does not cover (D-20)
 
 ### Phase 114: Tasks Extension Migration
 
