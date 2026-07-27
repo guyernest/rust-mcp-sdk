@@ -732,6 +732,26 @@ impl Default for SseConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::{Duration, Instant};
+
+    /// Run `body` `runs` times and return the MINIMUM elapsed wall-clock time.
+    ///
+    /// The minimum, never the mean, and never a single sample: it is the
+    /// statistic robust to scheduler preemption on a loaded machine, and — the
+    /// property that makes it sound for a complexity guard — noise can only push
+    /// a measurement UP. Every run pays the same asymptotic cost, so a quadratic
+    /// shape cannot get lucky its way under a ceiling, while a linear one that
+    /// happened to be descheduled gets a second chance.
+    fn min_elapsed(runs: usize, mut body: impl FnMut()) -> Duration {
+        assert!(runs > 0, "a minimum over zero runs is not a measurement");
+        let mut best = Duration::MAX;
+        for _ in 0..runs {
+            let start = Instant::now();
+            body();
+            best = best.min(start.elapsed());
+        }
+        best
+    }
 
     /// `take_utf8_prefix` agrees with `String::from_utf8_lossy` on a buffer
     /// that carries valid text, invalid runs and a trailing INCOMPLETE
@@ -760,16 +780,35 @@ mod tests {
         assert!(buffer.is_empty());
     }
 
-    /// A LARGE invalid-byte run must be linear, not quadratic (review CR-02).
+    /// The OUTPUT of a LARGE invalid-byte run (review CR-02).
     ///
     /// The bytes here are supplied by a remote peer on both incremental feeders,
     /// and this decoder runs BEFORE any of the parser's byte-count bounds apply,
     /// so a per-invalid-byte `Vec::drain` (plus a re-validation from index 0)
-    /// was a remote CPU-exhaustion vector. 256 KiB of garbage took over a CPU
-    /// second under the old shape and is instantaneous under the cursor scan;
-    /// this pins the OUTPUT rather than a wall-clock number, so it is
-    /// deterministic on any machine, while the input size is what makes a
-    /// reintroduced quadratic shape hang the suite instead of passing it.
+    /// was a remote CPU-exhaustion vector. This test pins the OUTPUT rather than
+    /// a wall-clock number, so it is deterministic on any machine — and that
+    /// output pin is worth having on its own: it is what a decoder that got
+    /// "fast" by decoding LESS fails.
+    ///
+    /// # Correction — this test is NOT the falsifiable complexity guard
+    ///
+    /// It used to end "…while the input size is what makes a reintroduced
+    /// quadratic shape hang the suite instead of passing it". That claim is
+    /// arithmetically false, and it is recorded here rather than deleted so the
+    /// next reader knows which guard is load-bearing. Quadratic cost scales with
+    /// n², and review CR-02 measured the pre-`5f045086` shape at 1.17 s for
+    /// 400 KiB, so the 256 KiB here costs about half a second — this test PASSES,
+    /// in half a second, on the exact defect it named. That is not a deduction:
+    /// plan 113-22 restored the quadratic shape and watched this test go green in
+    /// **0.54 s** while the two budget tests below failed. Re-measured at that
+    /// execution, at `opt-level = 0` (how `cargo nextest` builds this module):
+    /// 256 KiB costs 9.2 ms on the committed cursor scan and 514 ms on the
+    /// restored quadratic shape. Both are under any tolerable ceiling, so no
+    /// timing assertion at THIS size could separate them.
+    ///
+    /// The falsifiable guards are `take_utf8_prefix_stays_within_its_linear_time_budget`
+    /// and `take_utf8_prefix_cost_grows_linearly_not_quadratically` below, which
+    /// move to 1 MiB — where the same two shapes cost 32 ms and 7.9 s (HTTP-09).
     #[test]
     fn take_utf8_prefix_is_linear_over_a_large_invalid_run() {
         const GARBAGE: usize = 256 * 1024;
@@ -784,6 +823,250 @@ mod tests {
             "one replacement character per invalid byte, exactly as from_utf8_lossy"
         );
         assert!(text.ends_with("data: ok\n\n"), "the valid tail survives");
+    }
+
+    /// The LOAD-BEARING complexity guard for `take_utf8_prefix` (HTTP-09).
+    ///
+    /// HTTP-09 asks that no scan over peer-chosen input be worse than O(n). An
+    /// output assertion cannot say that, and neither can a timing assertion at a
+    /// size where both shapes finish quickly. This one is sized so that the two
+    /// shapes land on OPPOSITE sides of the ceiling.
+    ///
+    /// # Why 1 MiB and why one second
+    ///
+    /// Measured at `opt-level = 0` (the profile `cargo nextest run` builds this
+    /// module with — the crate sets no `[profile.dev]` override) on the plan
+    /// 113-22 development machine, over 1 MiB of `0xFF`:
+    ///
+    /// | shape | cost | vs. this ceiling |
+    /// |---|---|---|
+    /// | committed single-pass cursor scan | 32 ms | 31x UNDER |
+    /// | pre-`5f045086`: re-validate from 0, one `Vec::drain` per invalid run | 7.9 s | 7.9x OVER |
+    ///
+    /// The gap between those two is the whole test, and BOTH rows were measured,
+    /// the second by restoring the old shape and watching this test fail at
+    /// 9.39 s. A machine would have to be 31x slower than this one at a
+    /// single-pass 1 MiB scan to fail here spuriously — and that is against the
+    /// MINIMUM of three runs, so it would have to be 31x slower every time, not
+    /// once. Conversely a machine 7.9x FASTER than this one would still fail on
+    /// the quadratic shape. The margins are asymmetric and both are written down
+    /// on purpose: this is a wall-clock assertion, and the honest defence of one
+    /// is its measurement, not its round number.
+    ///
+    /// The 1 MiB is also where quadratic cost stops being survivable: at 256 KiB
+    /// — the size `take_utf8_prefix_is_linear_over_a_large_invalid_run` uses —
+    /// the quadratic shape costs 514 ms and passes everything.
+    #[test]
+    fn take_utf8_prefix_stays_within_its_linear_time_budget() {
+        const GARBAGE: usize = 1024 * 1024;
+        const CEILING: Duration = Duration::from_secs(1);
+
+        let best = min_elapsed(3, || {
+            // A fresh buffer per run: the call consumes it.
+            let mut buffer = vec![0xffu8; GARBAGE];
+            let text = take_utf8_prefix(&mut buffer);
+            std::hint::black_box((&text, &buffer));
+        });
+
+        // Emit the measurement even on success (`--success-output=immediate` or
+        // `--nocapture` to see it). A wall-clock guard whose margin is invisible
+        // until the day it fails is a guard nobody can maintain.
+        eprintln!("take_utf8_prefix: {GARBAGE} invalid bytes in {best:?} (ceiling {CEILING:?})");
+
+        assert!(
+            best < CEILING,
+            "take_utf8_prefix took {best:?} (minimum of 3 runs) over {GARBAGE} bytes of \
+             invalid input; the ceiling is {CEILING:?}.\n\
+             \n\
+             This excludes ONE shape: re-validating the buffer from index 0 each \
+             iteration and performing one `Vec::drain` per invalid run, which is \
+             O(n^2) byte moves. Measured at opt-level 0: that shape costs ~7.9 s here \
+             (9.39 s when this very assertion was run against it) and the committed \
+             single-pass cursor scan costs ~32 ms, so this ceiling sits ~31x above \
+             linear and ~7.9x below quadratic.\n\
+             \n\
+             A measurement in the upper region means the quadratic shape is back, not \
+             that the machine is slow — no machine that can run this suite needs a \
+             second to scan 1 MiB once. Do NOT raise this number to make the test \
+             pass; that converts the guard back into the unfalsifiable one this \
+             replaced (review CR-02, plan 113-22)."
+        );
+
+        // A time budget alone would also be satisfied by a decoder that got fast
+        // by decoding LESS. Pin the output at the budget size too, so "fast" has
+        // to mean "fast AND still correct".
+        let mut buffer = vec![0xffu8; GARBAGE];
+        let text = take_utf8_prefix(&mut buffer);
+        assert!(
+            buffer.is_empty(),
+            "nothing completable is retained at 1 MiB"
+        );
+        assert_eq!(
+            text.chars().filter(|c| *c == '\u{FFFD}').count(),
+            GARBAGE,
+            "one replacement character per invalid byte, at the budget size too"
+        );
+    }
+
+    /// The SECONDARY signal: cost must grow with the input, not with its square.
+    ///
+    /// A 4x input step predicts ~4x time under O(n) and ~16x under O(n^2), so a
+    /// ceiling of 8x separates them with roughly equal headroom on both sides.
+    /// This is machine-independent in a way the absolute budget is not — it
+    /// cancels the machine's constant factor — but it is the WEAKER of the two,
+    /// because a ratio measured on two short samples is a ratio of two noise
+    /// floors. Hence the resolution guard below, and hence the absolute budget
+    /// stays load-bearing.
+    #[test]
+    fn take_utf8_prefix_cost_grows_linearly_not_quadratically() {
+        const SMALL: usize = 256 * 1024;
+        const BIG: usize = 4 * SMALL;
+        // Below this, the measurement is dominated by timer resolution and
+        // allocator warm-up rather than by the scan.
+        const RESOLUTION_FLOOR: Duration = Duration::from_micros(50);
+        const MAX_RATIO: f64 = 8.0;
+
+        let measure = |bytes: usize| {
+            min_elapsed(5, || {
+                let mut buffer = vec![0xffu8; bytes];
+                let text = take_utf8_prefix(&mut buffer);
+                std::hint::black_box((&text, &buffer));
+            })
+        };
+
+        let small = measure(SMALL);
+        let big = measure(BIG);
+
+        if small < RESOLUTION_FLOOR {
+            eprintln!(
+                "take_utf8_prefix_cost_grows_linearly_not_quadratically: SKIPPING the \
+                 ratio assertion. The {SMALL}-byte measurement is {small:?}, under the \
+                 {RESOLUTION_FLOOR:?} floor, so the ratio would be asserted on noise. \
+                 The absolute budget in \
+                 take_utf8_prefix_stays_within_its_linear_time_budget is unaffected and \
+                 remains load-bearing, so the guard does not degrade to nothing."
+            );
+            return;
+        }
+
+        let ratio = big.as_secs_f64() / small.as_secs_f64();
+        eprintln!(
+            "take_utf8_prefix growth: {SMALL} -> {small:?}, {BIG} -> {big:?}, \
+             ratio {ratio:.2}x (ceiling {MAX_RATIO:.1}x)"
+        );
+        assert!(
+            ratio <= MAX_RATIO,
+            "take_utf8_prefix cost grew {ratio:.1}x for a 4x input step \
+             ({SMALL} bytes -> {small:?}, {BIG} bytes -> {big:?}); the ceiling is \
+             {MAX_RATIO:.1}x.\n\
+             \n\
+             O(n) predicts ~4x (measured 3.46x on the committed shape: 9.18 ms -> \
+             31.8 ms). O(n^2) predicts ~16x (measured 15.38x on the restored \
+             pre-`5f045086` shape: 514 ms -> 7.91 s). A ratio in \
+             the upper region is the quadratic shape, not scheduling noise — this is a \
+             minimum over 5 runs at each size, and noise raises a minimum only by \
+             raising every sample."
+        );
+    }
+
+    /// The same budget on the PUBLIC entry point, over its retained-state path.
+    ///
+    /// `SseParser::feed` is what a peer actually drives (review WR-04), and the
+    /// path with an accumulation risk is the one where nothing completes: 256
+    /// newline-free chunks, so every byte is retained and no event dispatches.
+    ///
+    /// # This is a CEILING, not a complexity proof — and D-113-R is why
+    ///
+    /// Stated plainly, because an undocumented margin is how the guard this plan
+    /// replaced went wrong.
+    ///
+    /// `feed`'s retained-state path is ALREADY quadratic in total bytes, and
+    /// plan 113-22 measured it rather than assuming otherwise. Each call runs
+    /// `str::find('\n')` over the WHOLE retained buffer, including the prefix
+    /// every earlier call already scanned; a peer chooses the chunking, so a peer
+    /// chooses how many times its bytes get re-scanned. Measured in a RELEASE
+    /// build, feeding single-byte chunks (one HTTP chunked frame per byte — both
+    /// incremental feeders call this once per `hyper` body frame):
+    ///
+    /// | retained bytes | cost | vs. 16 KiB |
+    /// |---|---|---|
+    /// | 16 KiB | 5.6 ms | 1x |
+    /// | 64 KiB | 59 ms | 10.6x (4x input) |
+    /// | 256 KiB | 833 ms | 148x (16x input) |
+    ///
+    /// 256 KiB is exactly `MAX_LISTEN_LINE_BYTES`. That is recorded as **D-113-R**
+    /// and it is NOT fixed here: this plan's fence is test-only, and rewriting
+    /// this splitter's scan is a production change to the function with the
+    /// T-113-67 remote-panic history, which needs its own tests and fuzz run.
+    ///
+    /// The consequence for THIS test: at 4 KiB chunks the per-chunk re-scan is a
+    /// memchr over at most 1 MiB, single-digit milliseconds in total, so no
+    /// absolute ceiling here can separate "linear" from "quadratic with a
+    /// memchr-sized constant". The negative control confirms it — injecting
+    /// T-113-102's per-chunk full-buffer copy moved this measurement from 6.7 ms
+    /// to 11.7 ms and the test still PASSED (113-22-SUMMARY.md).
+    ///
+    /// So what this test IS: a ceiling that catches a regression making the
+    /// retained-state path egregiously expensive (a per-chunk re-parse or
+    /// re-validation), plus a pin on the retention contract — nothing dispatched,
+    /// nothing overflowed, every byte still held. The falsifiable complexity
+    /// claim for HTTP-09 lives in
+    /// `take_utf8_prefix_stays_within_its_linear_time_budget`, the scan that runs
+    /// BEFORE this one and before every byte-count bound.
+    #[test]
+    fn sse_parser_feed_stays_within_its_linear_time_budget() {
+        const CHUNK_BYTES: usize = 4 * 1024;
+        const CHUNKS: usize = 256;
+        // Large enough that the retained total (1 MiB) never trips the bound —
+        // this test is about cost, not about enforcement.
+        const BOUND: usize = 4 * 1024 * 1024;
+        const CEILING: Duration = Duration::from_secs(1);
+
+        let chunk = "x".repeat(CHUNK_BYTES);
+
+        let best = min_elapsed(3, || {
+            let mut parser = SseParser::with_max_buffer_size(BOUND);
+            for _ in 0..CHUNKS {
+                std::hint::black_box(parser.feed(&chunk));
+            }
+            std::hint::black_box(parser.buffered_bytes());
+        });
+
+        eprintln!(
+            "SseParser::feed: {CHUNKS} x {CHUNK_BYTES} retained bytes in {best:?} \
+             (ceiling {CEILING:?})"
+        );
+
+        assert!(
+            best < CEILING,
+            "SseParser::feed took {best:?} (minimum of 3 runs) to retain {CHUNKS} \
+             newline-free chunks of {CHUNK_BYTES} bytes; the ceiling is {CEILING:?}. \
+             The retained-state path costs single-digit milliseconds here, so a \
+             measurement anywhere near this ceiling means a per-chunk cost over the \
+             whole retained buffer was introduced. Bound the work per chunk; do not \
+             raise this number."
+        );
+
+        // The retention contract this path depends on, checked on an untimed run
+        // so a failure reads as a behaviour change rather than a slow machine.
+        let mut parser = SseParser::with_max_buffer_size(BOUND);
+        for _ in 0..CHUNKS {
+            assert!(
+                parser.feed(&chunk).is_empty(),
+                "no chunk carries a newline, so no line completes and nothing dispatches"
+            );
+        }
+        assert!(
+            !parser.overflowed(),
+            "{} retained bytes is under the {BOUND}-byte bound",
+            parser.buffered_bytes()
+        );
+        assert_eq!(
+            parser.buffered_bytes(),
+            CHUNKS * CHUNK_BYTES,
+            "every fed byte is still retained — that is what makes this the \
+             accumulating path"
+        );
     }
 
     #[test]
