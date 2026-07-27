@@ -68,17 +68,22 @@ use std::task::{Context, Poll};
 /// error `Display` (T-113-67).
 const MAX_ECHOED_FRAME: usize = 200;
 
-/// The largest single SSE line a `subscriptions/listen` stream may carry.
+/// The most a `subscriptions/listen` parser may hold IN FLIGHT at once.
+///
+/// Named for the line buffer it originally bounded; since 113-17 it bounds BOTH
+/// of the parser's accumulators — the unterminated line AND the `data:` payload
+/// of the event still awaiting its blank line — plus whatever chunk is being
+/// fed. It is NOT a per-line limit, and no message derived from it may say it is.
 ///
 /// Deliberately TIGHTER than the shared 1 MiB [`SseParser`] default. This is a
 /// LONG-LIVED stream, fed one chunk at a time from UNTRUSTED remote input, whose
 /// frames are notifications and therefore small by construction — a peer that
-/// held the stream open and never emitted a newline would otherwise grow this
-/// client's heap for the lifetime of the connection (review CR-03, T-113-74).
+/// held the stream open and streamed `data:` lines it never terminated with a
+/// blank line would otherwise grow this client's heap for the lifetime of the
+/// connection (review CR-03, T-113-74/79).
 ///
-/// The transports that carry arbitrary JSON-RPC results keep the looser shared
-/// default; only this path, whose payloads are bounded by the protocol itself,
-/// tightens it.
+/// The transports that carry arbitrary JSON-RPC results keep a looser ceiling;
+/// only this path, whose payloads are bounded by the protocol itself, tightens it.
 const MAX_LISTEN_LINE_BYTES: usize = 256 * 1024;
 
 /// A stream of raw SSE `data:` payloads, one item per event.
@@ -234,12 +239,13 @@ async fn read_next_frame(state: &mut PayloadState) -> Option<Error> {
                     .pending
                     .extend(drain_sse_payloads(&mut state.parser, &text));
                 if let Some(error) = listen_overflow(&state.parser) {
-                    // The peer sent a single line past MAX_LISTEN_LINE_BYTES, so
-                    // the parser DISCARDED bytes and this byte stream is no
-                    // longer trustworthy. Unlike a malformed frame — which is an
-                    // `Err` ITEM the stream continues past — there is nothing
-                    // meaningful to continue to, so stop polling a peer already
-                    // established as hostile or broken.
+                    // The peer pushed the parser's retained state plus this
+                    // chunk past MAX_LISTEN_LINE_BYTES, so the parser DISCARDED
+                    // bytes and this byte stream is no longer trustworthy.
+                    // Unlike a malformed frame — which is an `Err` ITEM the
+                    // stream continues past — there is nothing meaningful to
+                    // continue to, so stop polling a peer already established as
+                    // hostile or broken.
                     state.done = true;
                     return Some(error);
                 }
@@ -265,13 +271,19 @@ fn drain_sse_payloads(parser: &mut SseParser, chunk: &str) -> Vec<String> {
         .collect()
 }
 
-/// The stream-ENDING error, when the server has sent a single SSE line longer
-/// than [`MAX_LISTEN_LINE_BYTES`].
+/// The stream-ENDING error, when the parser has discarded in-flight bytes past
+/// [`MAX_LISTEN_LINE_BYTES`].
 ///
-/// The message names the limit and the peer's behaviour and nothing else — no
-/// frame content is echoed, because the bytes that tripped the bound are exactly
-/// the untrusted input [`MAX_ECHOED_FRAME`] exists to keep out of a client's
-/// logs.
+/// What trips the bound is the parser's RETAINED state plus the chunk being fed,
+/// not one line and not one event: the retained state is an unterminated line
+/// PLUS every `data:` line accumulated into an event the peer has not yet ended
+/// with a blank line, and a single chunk carrying many small complete events can
+/// exceed the limit on its total alone (T-113-86). The message says exactly that
+/// and nothing more precise, because nothing more precise is true.
+///
+/// It names the limit and the peer's behaviour and nothing else — no frame
+/// content is echoed, because the bytes that tripped the bound are exactly the
+/// untrusted input [`MAX_ECHOED_FRAME`] exists to keep out of a client's logs.
 ///
 /// A free function over the parser rather than an inline check in
 /// [`read_next_frame`] so the condition is reachable from a test: that function
@@ -284,8 +296,9 @@ fn listen_overflow(parser: &SseParser) -> Option<Error> {
     Some(Error::protocol(
         ErrorCode::INVALID_REQUEST,
         format!(
-            "the server sent a single subscriptions/listen line exceeding {} bytes; \
-             the oversized line was discarded and the stream was ended",
+            "a subscriptions/listen chunk pushed the buffered stream state past the \
+             {}-byte parser bound; the buffered bytes were discarded and the stream \
+             was ended",
             parser.max_buffer_size()
         ),
     ))
@@ -971,7 +984,7 @@ mod tests {
         assert!(text.contains('a'), "the valid remainder survives: {text:?}");
     }
 
-    /// A server that streams past the line bound with no newline latches the
+    /// A server that streams past the bound with no newline at all latches the
     /// SHARED parser, which is the condition `read_next_frame` checks after
     /// every drain before ending the stream.
     ///
@@ -1004,6 +1017,41 @@ mod tests {
             },
             other => panic!("expected a structured protocol error, got {other:?}"),
         }
+    }
+
+    /// The realistic flood: a peer streaming perfectly ordinary
+    /// NEWLINE-TERMINATED `data:` lines and simply never sending the blank line
+    /// that would end the event.
+    ///
+    /// Every existing bound test in this module feeds `"x".repeat(N)` with no
+    /// newline in it (review IN-03), which is the artificial case — and it is
+    /// exactly why a green suite coexisted with GAP-A. This drives the same
+    /// PRODUCTION pair the live stream uses, `drain_sse_payloads` then
+    /// `listen_overflow`, on the input class the old bound could not see.
+    #[test]
+    fn a_newline_carrying_flood_ends_the_stream_too() {
+        let mut parser = SseParser::with_max_buffer_size(64);
+        let mut error = None;
+        for _ in 0..1_000 {
+            assert!(
+                drain_sse_payloads(&mut parser, "data: AAAAAAAA\n").is_empty(),
+                "a `data:` line with no blank line after it completes no payload"
+            );
+            if let Some(seen) = listen_overflow(&parser) {
+                error = Some(seen);
+                break;
+            }
+        }
+
+        let error = error.expect("accumulated `data:` lines must trip the bound");
+        assert!(
+            error.to_string().contains("64"),
+            "the error names the limit the parser actually enforced: {error}"
+        );
+        assert!(
+            !error.to_string().contains('A'),
+            "no fed byte is echoed into the message: {error}"
+        );
     }
 
     /// A normal stream never observes the flag, so nothing about the existing
