@@ -1,4 +1,18 @@
+// Why: `OptimizedSseTransport` is deprecated ON PURPOSE (plan 113.1-03, D-01)
+// and is still SHIPPED for 2.x compatibility, so the crate must go on compiling
+// its own retained transport. The `deprecated` lint fires on uses within the
+// defining crate — including every `impl` block on the type — and `make lint`
+// runs clippy with `-D warnings`, so without this the crate cannot build itself.
+// One module-level allow rather than ~15 per-item ones.
+#![allow(deprecated)]
+
 //! Optimized SSE transport with advanced features.
+//!
+//! **DEPRECATED** — use
+//! [`StreamableHttpTransport`](crate::shared::streamable_http::StreamableHttpTransport)
+//! for new code. It bounds every peer-controlled read and carries a configurable
+//! cap. This module is retained for 2.x compatibility only; retiring it removes
+//! public items and is therefore a 3.0 action.
 //!
 //! PMCP-4002: High-performance SSE implementation with:
 //! - Connection pooling and reuse
@@ -71,6 +85,10 @@ enum ConnectionState {
 }
 
 /// Optimized SSE transport implementation
+#[deprecated(
+    since = "2.18.0",
+    note = "Use StreamableHttpTransport, which bounds every peer-controlled read; OptimizedSseTransport is retained for 2.x compatibility only"
+)]
 pub struct OptimizedSseTransport {
     config: OptimizedSseConfig,
     client: reqwest::Client,

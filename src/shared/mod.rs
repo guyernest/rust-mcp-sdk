@@ -102,6 +102,13 @@ pub use http::{HttpConfig, HttpTransport};
 #[cfg(all(feature = "streamable-http", not(target_arch = "wasm32")))]
 pub use streamable_http::{StreamableHttpTransport, StreamableHttpTransportConfig};
 
+// Why: `OptimizedSseTransport` is deprecated on purpose (plan 113.1-03, D-01)
+// but is NOT removed — retiring a public item is a 3.0 action, and this
+// milestone's additivity claim is "zero removed public items". The `deprecated`
+// lint fires on a `pub use` re-export within the defining crate, and `make lint`
+// runs with `-D warnings`, so the crate must allow it to compile its own
+// retained transport. `OptimizedSseConfig` is deliberately NOT deprecated.
+#[allow(deprecated)]
 #[cfg(feature = "sse")]
 pub use sse_optimized::{OptimizedSseConfig, OptimizedSseTransport};
 
