@@ -171,10 +171,29 @@ impl ProtocolHandler for WasmServerCore {
 
         // Create response with proper structure
         match result {
-            Ok(value) => JSONRPCResponse {
-                jsonrpc: "2.0".to_string(),
-                id,
-                payload: crate::types::jsonrpc::ResponsePayload::Result(value),
+            Ok(mut value) => {
+                // The pmcp-internal MRTR signal carries the handler's PLAINTEXT
+                // continuation — the very state the AEAD `requestState` token
+                // exists to seal. `server::core`'s `strip_mrtr_signal` /
+                // `scrub_mrtr_signal` are both `cfg(not(target_arch = "wasm32"))`,
+                // so this is the wasm half of the "removed on EVERY path before
+                // serialization" guarantee that
+                // `crate::types::mrtr::MRTR_SIGNAL_META_KEY` documents. The key
+                // and `MrtrSignal` are `pub` on every target, so a handler can
+                // write them here even though this core has no MRTR egress to
+                // consume them.
+                if crate::types::mrtr::remove_mrtr_signal(&mut value).is_some() {
+                    tracing::warn!(
+                        target: "mcp.mrtr",
+                        field = crate::types::mrtr::MRTR_SIGNAL_META_KEY,
+                        "removed the pmcp-internal MRTR signal from an outgoing result"
+                    );
+                }
+                JSONRPCResponse {
+                    jsonrpc: "2.0".to_string(),
+                    id,
+                    payload: crate::types::jsonrpc::ResponsePayload::Result(value),
+                }
             },
             Err(error) => JSONRPCResponse {
                 jsonrpc: "2.0".to_string(),

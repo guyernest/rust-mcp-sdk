@@ -491,7 +491,15 @@ impl SseParser {
         self.buffer.push_str(data);
         let mut events = Vec::new();
 
-        while let Some(line_end) = self.buffer.find('\n') {
+        // LINEAR, not quadratic. A `drain(..=line_end)` per line memmoves the
+        // whole remaining buffer once per line, so one chunk carrying `n` lines
+        // cost `O(n * len)` byte moves — on bytes a REMOTE peer chooses the
+        // shape of, at both incremental feeders. A `consumed` cursor advances
+        // instead and the single drain below runs once for the whole call, the
+        // same shape `take_utf8_prefix` above uses for the same reason.
+        let mut consumed = 0usize;
+        while let Some(offset) = self.buffer[consumed..].find('\n') {
+            let line_end = consumed + offset;
             // `line_end` is a BYTE index (`str::find` returns one). The CRLF
             // check must therefore also be a BYTE check.
             //
@@ -507,20 +515,24 @@ impl SseParser {
             //
             // `\n` and `\r` are ASCII, so both `line_end` and `line_end - 1`
             // (taken only when that byte IS `\r`) are guaranteed char
-            // boundaries.
-            let line_start_len = if line_end > 0 && self.buffer.as_bytes()[line_end - 1] == b'\r' {
-                line_end - 1
-            } else {
-                line_end
-            };
-            let line = self.buffer[..line_start_len].to_string();
+            // boundaries. The `> consumed` guard — not `> 0` — keeps the lookback
+            // inside THIS line, so an empty line never reads the previous line's
+            // terminator.
+            let line_start_len =
+                if line_end > consumed && self.buffer.as_bytes()[line_end - 1] == b'\r' {
+                    line_end - 1
+                } else {
+                    line_end
+                };
+            let line = self.buffer[consumed..line_start_len].to_string();
 
             if let Some(event) = self.process_line(&line) {
                 events.push(event);
             }
 
-            self.buffer.drain(..=line_end);
+            consumed = line_end + 1;
         }
+        self.buffer.drain(..consumed);
 
         events
     }

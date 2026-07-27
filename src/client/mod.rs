@@ -742,6 +742,17 @@ impl<T: Transport> Client<T> {
     fn splice_v2_meta(&self, params: &mut Option<serde_json::Value>) {
         let reserved = self.v2_request_meta();
         if !matches!(params, Some(serde_json::Value::Object(_))) {
+            // Replacing a NON-NULL, non-object `params` DISCARDS it — a JSON-RPC
+            // array (positional) `params` cannot carry a `_meta` sibling. No MCP
+            // method uses that shape, so this is unreachable from this crate's
+            // own request types, but a silent drop of caller data must be
+            // observable rather than inferred from a missing field server-side.
+            if matches!(params, Some(value) if !value.is_null()) {
+                tracing::warn!(
+                    "v2 request params were not a JSON object and have been replaced with one \
+                     carrying only the reserved _meta keys; the original params were discarded"
+                );
+            }
             *params = Some(serde_json::Value::Object(serde_json::Map::new()));
         }
         let Some(serde_json::Value::Object(object)) = params.as_mut() else {

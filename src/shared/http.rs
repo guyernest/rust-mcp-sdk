@@ -377,9 +377,15 @@ impl HttpTransport {
                                     crate::shared::sse_parser::take_utf8_prefix(&mut undecoded);
                                 let events = sse_parser.feed(&text);
 
-                                if report_sse_overflow(&sse_parser) {
-                                    break;
-                                }
+                                // Observed BEFORE the events are drained, ENDED
+                                // after: the events this chunk completed are
+                                // legitimate and already decoded, so discarding
+                                // them would lose good frames on top of the ones
+                                // the parser discarded. Same order the
+                                // `subscriptions/listen` client uses, which
+                                // drains its `pending` queue before honouring the
+                                // latch.
+                                let overflowed = report_sse_overflow(&sse_parser);
 
                                 for event in events {
                                     // Process SSE event data as JSON-RPC message
@@ -396,6 +402,14 @@ impl HttpTransport {
                                             error!("Failed to parse SSE message: {}", e);
                                         },
                                     }
+                                }
+
+                                if overflowed {
+                                    // The parser DISCARDED buffered bytes, so the
+                                    // byte stream is no longer trustworthy — stop
+                                    // reading a peer already established as
+                                    // hostile or broken.
+                                    break;
                                 }
                             }
                         },

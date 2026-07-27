@@ -126,7 +126,13 @@ impl EventStreamTransport for StreamableHttpTransport {
             .and_then(|value| value.to_str().ok())
             .is_some_and(|value| value.contains(TEXT_EVENT_STREAM));
 
-        if !is_event_stream {
+        // The STATUS is checked alongside the content type: a stream is only
+        // SERVED on a 2xx. A non-2xx that happens to carry `text/event-stream`
+        // (an intermediary's error page, a misconfigured gateway) would
+        // otherwise be consumed as a live subscription that never acknowledges,
+        // hiding the server's real answer behind the generic
+        // "ended before the mandatory acknowledgement" error.
+        if !is_event_stream || !status.is_success() {
             // The body is read through the TRANSPORT's capped collector, never a
             // bare `collect()`: this is a peer-controlled body on the very stream
             // HTTP-04 exists to harden, and an uncapped read here would be the
