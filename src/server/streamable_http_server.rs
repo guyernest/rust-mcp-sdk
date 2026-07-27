@@ -3135,14 +3135,6 @@ async fn assemble_subscriptions_listen(
     response
 }
 
-/// Fast path handler without HTTP middleware.
-///
-/// Refactored in 75-01 Task 1a-A: extracted [`read_body_with_limit`],
-/// [`parse_transport_message_fast`], and [`handle_fast_path_request`] so
-/// this orchestrator is a thin early-return pipeline, sharing
-/// [`extract_session_and_protocol_headers`], [`is_initialize_request`],
-/// [`resolve_session_for_request`], and [`compute_outbound_protocol_version`]
-/// with the middleware path.
 /// The fast path's legacy protocol-version guard.
 ///
 /// Condition: `!is_init_request && !is_v2_request`, calling the PLAIN
@@ -3245,6 +3237,32 @@ async fn read_and_classify_fast(
     })
 }
 
+/// Fast path handler without HTTP middleware.
+///
+/// Refactored in 75-01 Task 1a-A: extracted [`read_body_with_limit`],
+/// [`parse_transport_message_fast`], and [`handle_fast_path_request`] so
+/// this orchestrator is a thin early-return pipeline, sharing
+/// [`extract_session_and_protocol_headers`], [`is_initialize_request`],
+/// [`resolve_session_for_request`], and [`compute_outbound_protocol_version`]
+/// with the middleware path.
+///
+/// # The pipeline, in order (plans 113.1-01 and 113.1-05)
+///
+/// 1. [`read_and_classify_fast`] — body read under cap, header validation,
+///    parse, ingress classification (113.1-05)
+/// 2. [`resolve_v2_gate`] — the v2 required-header gate (113.1-01). **Runs
+///    BEFORE session resolution and BEFORE the legacy version check**; see its
+///    own rustdoc for why that ordering is load-bearing
+/// 3. [`resolve_session_for_request`] — session minting / validation
+/// 4. [`guard_legacy_version_fast`] — the v1 protocol-version guard (113.1-05),
+///    asymmetric with its middleware twin BY DESIGN (D-08)
+/// 5. [`extract_and_validate_auth`] — authentication
+/// 6. [`dispatch_message_fast`] — the 4-arm ingress dispatch (113.1-01), which
+///    every arm reaches only downstream of step 5
+///
+/// **Complexity budget: cognitive 15** (pmat 3.15.0), down from 30 before phase
+/// 113.1, against a hard gate of 25 and this phase's stricter target of 20.
+/// Recorded so a later phase adding to this handler can see what it is spending.
 async fn handle_post_fast_path(
     state: ServerState,
     request: axum::extract::Request<Body>,
@@ -3704,14 +3722,6 @@ async fn dispatch_message_with_middleware(
     }
 }
 
-/// Handler with HTTP middleware integration.
-///
-/// Refactored in 75-01 Task 1a-A: extracted
-/// [`convert_axum_to_middleware_request`], [`build_middleware_context`],
-/// [`run_request_middleware`], [`parse_transport_message_with_middleware`],
-/// [`resolve_session_for_request`], [`extract_auth_with_middleware`], and
-/// [`dispatch_message_with_middleware`] so this orchestrator is a thin
-/// early-return pipeline.
 /// The middleware path's legacy protocol-version guard.
 ///
 /// Condition: `!is_v2_request` **ONLY**, passing `is_init_request` INTO
@@ -3842,6 +3852,33 @@ async fn read_and_classify_with_middleware(
     })
 }
 
+/// Handler with HTTP middleware integration.
+///
+/// Refactored in 75-01 Task 1a-A: extracted
+/// [`convert_axum_to_middleware_request`], [`build_middleware_context`],
+/// [`run_request_middleware`], [`parse_transport_message_with_middleware`],
+/// [`resolve_session_for_request`], [`extract_auth_with_middleware`], and
+/// [`dispatch_message_with_middleware`] so this orchestrator is a thin
+/// early-return pipeline.
+///
+/// # The pipeline, in order (plans 113.1-01 and 113.1-05)
+///
+/// 1. [`read_and_classify_with_middleware`] — conversion, context build,
+///    request-middleware chain, header validation, parse, classification
+///    (113.1-05)
+/// 2. [`resolve_v2_gate_with_error_hook`] — the v2 required-header gate plus the
+///    middleware error hook (113.1-01). **Runs BEFORE session resolution and
+///    BEFORE the legacy version check**; see [`resolve_v2_gate`]'s rustdoc for
+///    why that ordering is load-bearing
+/// 3. [`resolve_session_with_error_hook`] — session minting / validation
+/// 4. [`guard_legacy_version_with_middleware`] — the v1 protocol-version guard
+///    (113.1-05), asymmetric with its fast-path twin BY DESIGN (D-08)
+/// 5. [`extract_auth_with_middleware`] — authentication
+/// 6. [`dispatch_message_with_middleware`] — the ingress dispatch
+///
+/// **Complexity budget: cognitive 15** (pmat 3.15.0), down from 31 before phase
+/// 113.1, against a hard gate of 25 and this phase's stricter target of 20.
+/// Recorded so a later phase adding to this handler can see what it is spending.
 async fn handle_post_with_middleware(
     state: ServerState,
     request: axum::extract::Request<Body>,
