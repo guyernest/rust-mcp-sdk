@@ -2510,22 +2510,35 @@ Plans:
 > **⚠ Phase 113's `Complete` above counts PLANS, not REQUIREMENTS — the phase is HELD, not closed.**
 > All 32 plans have SUMMARYs, which is what that column measures. But eleven requirements
 > (HTTP-01 … HTTP-08, CLNT-01/02/05) remain `[~]` *implemented; pending final schema*, and
-> **HTTP-09 remains `[ ]` on the merits** — D-113-R (a quadratic scan over peer-chosen input)
-> violates its explicit O(n) clause and is unowned.
+> **HTTP-09 is now `[x]`, closed on the merits by Phase 113.1** — D-113-R (the quadratic scan over
+> peer-chosen input that violated its explicit O(n) clause) is fixed, and D-113-Q (the unbounded
+> `reqwest` whole-body read) is bounded, leaving `WHOLE_BODY_ALLOWLIST` EMPTY.
 >
 > The `[~]` hold is a **recorded decision, not a default**: plan 113-28's
 > `## Third Outcome Policy` in `113-SPEC-RECHECK.md` records `hold`, decided by Guy Ernest on
 > 2026-07-27. `## Verdict` is still `PENDING`; the re-verification obligation is **not
 > discharged** and rolls forward; its trigger is now the **condition** *"a versioned schema
-> directory exists"*, not the 2026-07-28 date. Both arms must be run — arm 2 (the conformance
-> predicate) is not publication-gated and can be run today.
+> directory exists"*, not the 2026-07-28 date. Both arms must be run — and **arm 2 (the conformance
+> predicate) HAS now been run**, by plan 113.1-04 on 2026-07-27 against upstream HEAD
+> `5cc567c3`: the predicate is byte-identical to its pin, verdict **NO DRIFT**, recorded in
+> `113-SPEC-RECHECK.md` § B.6.5. **Arm 1 remains open** and the obligation as a whole is still
+> undischarged.
 >
 > Also open before this branch merges: **D-113-U** — the PR-blocking PMAT complexity gate.
 > `write_canonical`'s cog-26 violation (the one this round introduced) was **closed** in
 > `58f82368` by splitting the container arms out; canonical bytes and the 64/65 depth boundary
-> are byte-identical. Two violations remain and still block merge: `handle_post_fast_path`
-> (cog 30) and `handle_post_with_middleware` (cog 31), both 22/21 on `main` and pushed up by
-> earlier commits on this branch. **Owned by Phase 113.1.**
+> are byte-identical. The two remaining violations are **CLOSED by Phase 113.1**:
+> `handle_post_fast_path` went 30 → **15** and `handle_post_with_middleware` 31 → **15**
+> (pmat 3.15.0, measured per-function), so
+> `pmat quality-gate --fail-on-violation --checks complexity` passes **locally** with zero
+> violations — five points of margin under the phase's own ≤ 20 target and ten under the gate's 25.
+>
+> **The org-required `gate` status check on PR #299 is a separate, still-outstanding matter.** It
+> cannot turn green without a human push (D-20 reserves pushing, opening the PR and merging as
+> human actions), and two **pre-existing** CI failures unrelated to this phase's three defects
+> stand in front of it: `make doc-check` is red on 26 rustdoc errors present at HEAD before Phase
+> 113.1 began (recorded as **D-113-W**), and the Purity Gate carries its own known tooling drift.
+> Neither was caused by Phase 113.1 and neither is in a merge unblock's scope.
 
 ---
 

@@ -897,6 +897,15 @@ newtype around the fields).
 
 ## D-113-Q — `OptimizedSseTransport::connect_sse` reads the whole SSE body unbounded (found by the HTTP-09 tripwire)
 
+**Status:** ✅ **RESOLVED** in plan 113.1-03, commit `8d010dba` (the bound) + `dca1702c` (the
+falsifiability tests and the allowlist ratchet) + `9b33a00f` (the deprecation).
+`connect_sse` now reads through `collect_sse_text_within_cap`: a `Content-Length` early refusal
+(advisory) plus a `reqwest::Response::chunk()` loop whose overflow-safe running total is checked
+against `DEFAULT_HTTP_SSE_BUFFERED_BYTES` (16 MiB) BEFORE each append, so an over-cap body is never
+held whole. Proven falsifiable by a recorded negative control: deleting the running-total check
+makes `connect_sse_one_byte_over_the_cap_is_refused` go RED with the 513-byte body admitted whole.
+`WHOLE_BODY_ALLOWLIST` is now EMPTY and its pin asserts length 0.
+
 `src/shared/sse_optimized.rs:266` does `response.text().await` on a peer-supplied
 SSE response. `reqwest::Response::text()` accepts no limit argument, so the peer
 chooses the allocation. This is the same defect class the phase capped three
@@ -932,8 +941,15 @@ delete it by hand.
 **Found during:** plan 113-22, task 1 (writing the falsifiable O(n) guards for HTTP-09)
 **Severity:** HIGH — a remote CPU-exhaustion channel on both incremental feeders,
 the same class and the same paths as review CR-02, which was a BLOCKER
-**Owner:** UNASSIGNED
-**Status:** OPEN — **HTTP-09's O(n) clause is not fully dischargeable until this is fixed**
+**Owner:** Phase 113.1
+**Status:** ✅ **RESOLVED** in plan 113.1-02, commit `647d2f4b`. **HTTP-09's O(n) clause is now
+discharged**, by two falsifiable guards rather than by assertion:
+`sse_parser_feed_1b_chunks_stays_within_its_linear_time_budget` (absolute, 512 KiB at 1-byte
+chunks) and `sse_parser_feed_cost_grows_linearly_not_quadratically` (machine-independent ratio).
+Both were demonstrated RED against the unfixed tree (6.81 s; 15.06x) AND RED again under a
+post-fix negative control that reverts only the cursor (4.36 s; 14.85x); committed values are
+63.6 ms and 4.39x. The fix is a scan-window cursor plus removal of the per-call `debug_assert`
+full-buffer scan — atomic, because the assertion alone kept the function quadratic in debug builds.
 
 `SseParser::drain_complete_lines` (behind the public `SseParser::feed`) runs
 `self.buffer.find('\n')` over the WHOLE retained buffer on every call, including
@@ -1160,8 +1176,18 @@ standalone test-hygiene sweep across the `v2_*` suites.
 round (plans 113-21 … 113-32).
 **Severity:** MEDIUM — the PR-blocking CI gate fails, and unlike D-113-F's two entries this
 one was **introduced by this round**, not inherited.
-**Owner:** unassigned.
-**Status:** ⏸️ **DEFERRED** (executor SCOPE BOUNDARY — plan 113-28 changes no source file).
+**Owner:** Phase 113.1
+**Status:** ✅ **RESOLVED** in plans 113.1-01 (commits `1ca4b52c`, `7ee92523`) and 113.1-05
+(commits `331528dd`, `9eeb85ce`, `42b05c5a`). Both handlers now measure **cognitive 15**
+(`handle_post_fast_path` 30 → 15, `handle_post_with_middleware` 31 → 15; pmat 3.15.0,
+`--top-files 0`), and `pmat quality-gate --fail-on-violation --checks complexity` reports
+**zero violations**. The third violation this entry originally recorded, `write_canonical`, was
+already closed separately in `58f82368`.
+
+**Scope of the resolution: the LOCAL gate (SC-1a) only.** The org-required `gate` status check on
+PR #299 is a separate human action — D-20 reserves pushing, opening the PR and merging — and two
+pre-existing CI failures unrelated to these handlers stand in front of it (see **D-113-W** and the
+Purity Gate's known tooling drift).
 
 ### The measurement
 
@@ -1353,5 +1379,103 @@ plus `Response::chunk()` accumulated with an overflow-safe running total checked
 before each append, so an over-cap body is never held whole. `chunk()` needs no
 new reqwest feature. `collect_body_within_cap`
 (`src/shared/streamable_http.rs:528`) is the `hyper` analogue.
+
+---
+
+---
+
+## D-113-W — `make doc-check` is RED at HEAD on 26 pre-existing rustdoc errors (blocks the org-required `gate`)
+
+**Found during:** plan 113.1-03 (phase 113.1), running the constant-relocation verification.
+**Severity:** HIGH for MERGE, not for runtime — it emits no wrong behavior, but
+`make doc-check` runs in CI's `quality-gate` job (`.github/workflows/ci.yml:231`),
+and that job is in the org-required **`gate`** aggregate's `needs:` list
+(`ci.yml:386`). While it is red, the branch cannot merge regardless of the
+complexity gate.
+**Owner:** UNASSIGNED — needs a phase. **Phase 119 (Documentation — Three Shapes
++ v2 Migration)** is the natural home, but this blocks merge *now*, so it may
+warrant an earlier owner than a docs phase.
+**Status:** OPEN
+
+### The measurement — and the proof it is NOT phase 113.1's doing
+
+`make doc-check` runs `RUSTDOCFLAGS="-D warnings" cargo doc --no-deps` over the
+full feature list (`Makefile:418-421`).
+
+| Tree | `make doc-check` | rustdoc errors |
+|---|---|---|
+| `HEAD` before any phase-113.1 edit (files stashed) | **exit 2** | **26** |
+| after plan 113.1-03 Task 1 (constant relocated) | exit 2 | 26 |
+| after plan 113.1-03 Task 3 (`#[deprecated]` added) | exit 2 | 26 |
+
+`diff` of the sorted error lists is **EMPTY across all three**. Phase 113.1
+introduced **zero** rustdoc errors, and neither the relocated
+`DEFAULT_HTTP_SSE_BUFFERED_BYTES` nor the new `#[deprecated]` appears anywhere in
+the output.
+
+Method, reproducible: `git stash push -- src/shared/http.rs
+src/shared/http_constants.rs src/shared/sse_optimized.rs`, re-run, `git stash pop`.
+
+### The 26 errors
+
+Two families, all in modules unrelated to this phase's three defects.
+
+**`rustdoc::private_intra_doc_links`** — public docs linking to private items:
+`feed` → `Self::buffered_bytes`, `feed` → `Self::feed_complete_body`,
+`mrtr` → `splice_mrtr_params` / `extract_mrtr_params` / `encode_header_value`,
+`ProtocolContext` → `ProtocolContext::with_mrtr_params` / `VerifiedContinuation::state`,
+`server_discover` → `Self::assert_capability`,
+`ServerDiscoverRequest` → `classify_internal_method` / `InternalClientRequest`,
+`parse_request` → `parse_request_or_internal`,
+`TraceContext` / `from_meta` → `MAX_TRACE_VALUE_LEN`,
+`InputRequestKind` → `crate::server::request_state::Continuation`,
+`MAX_AGREED_RESOURCE_SUBSCRIPTIONS` → `SubscriptionFilter::covers`,
+`set_negotiated_protocol_version` → `Self::v2_mode`,
+`DEFAULT_HTTP_COLLECTED_BODY_BYTES` → `HttpTransport::send_request`,
+`with_max_collected_body_bytes` → `Self::max_collected_body_bytes`.
+
+**`rustdoc::broken_intra_doc_links`** — unresolved: `ServerNotification`,
+`ACKNOWLEDGED_METHOD`, `SUBSCRIPTION_ID_META_KEY`, `SseParser`,
+`tests::a_boolean_resource_subscriptions_is_rejected`,
+`tests::filter_matches_the_shape_recorded_in_the_spec_recheck`.
+
+Plus `` `Error` is both an enum and a derive macro `` and the terminal
+`could not document `pmcp` ``.
+
+### Likely cause — a hypothesis, stated as one
+
+CI check runs at PR #299's head `fb99bca1` (2026-07-10, **532 commits behind**
+this branch) show the `quality-gate` job failing at the **"Run quality gate"**
+step, not at "Check rustdoc zero-warnings" — so doc-check was green in CI then.
+Either these errors accumulated across those 532 commits, or local
+`rustc 1.97.1` is newer than the toolchain that last passed and rustdoc's
+`private_intra_doc_links` detection has tightened. CLAUDE.md's own pre-flight
+checklist names local/CI toolchain skew as the #1 cause of CI surprises. **Not
+diagnosed further** — the measured fact is that the gate is red at HEAD and
+phase 113.1 did not change that in either direction.
+
+### Why phase 113.1 recorded rather than fixed it
+
+Phase 113.1's fence is three named defects (D-113-Q, D-113-R, D-113-U). Fixing 26
+rustdoc errors across `feed`, `mrtr`, `ProtocolContext`, `server_discover`,
+`TraceContext` and others is scope expansion into modules this phase does not
+touch. Silencing them with `#[allow]` is forbidden by CLAUDE.md's zero-tolerance
+rule and would be exactly the "make the number look complete" move HTTP-09 exists
+to prevent. Recorded and assigned, per the developer decision taken on
+2026-07-27.
+
+### Companion blocker, same class
+
+The **Purity Gate** job is also failing at PR #299's head, at its own
+`Run purity gate` step. That is separately known tooling/lockfile drift, is not
+phase 113.1's doing either, and also stands in front of the org-required `gate`.
+Anyone driving SC-1b to green needs both cleared.
+
+### Fix shape
+
+Mechanical: for each `private_intra_doc_links` hit, either make the target `pub`,
+or demote the link to plain inline code (backticks, no brackets). For each
+unresolved link, add the missing path qualification. Then `make doc-check` must
+exit 0 with no `#[allow]` added anywhere.
 
 ---

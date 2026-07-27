@@ -23,8 +23,10 @@
 
 > **Status marker `[~]` — implemented, gated on the final schema.** Every `[~]` HTTP-0x and CLNT-0x
 > requirement below is **implemented and green** at Phase-113 HEAD, but none is marked complete.
-> **HTTP-09 is the exception: it is `[ ]`, not `[~]`** — it is a genuine open gap, not a
-> publication-gated one, and it does not clear on 2026-07-28.
+> **HTTP-09 was the exception: it was `[ ]`, not `[~]`** — a genuine open gap rather than a
+> publication-gated one, which is why it did not clear on 2026-07-28. It was **closed on the
+> merits by Phase 113.1** and now reads `[x]`; the hold below applies to the remaining `[~]`
+> requirements only.
 > `113-SPEC-RECHECK.md`'s `## Verdict` is still `PENDING`: as re-verified on 2026-07-26 there is
 > no `schema/2026-07-28` directory upstream, so the wire constants Phase 113 landed
 > (`-32020`/`-32021`/`-32022`) are **pre-final values held under a written developer exception**.
@@ -51,7 +53,7 @@
 > `ServerCapabilities` has no `subscriptions` capability. `113-SPEC-RECHECK.md` pins only a schema
 > sha, so drift in `advertisesSubscriptions` is undetectable by the current gate. The gate needs a
 > second arm pinning a conformance-repo sha (currently `a865118206d4d8cc8dbc5f5201607839281d0c3b`).
-- [ ] **HTTP-09**: Every peer-controlled read on the v2 transport path is memory-bounded. Closure is **enumerable, not narrative**: a tripwire test asserts that no unbounded whole-body read (`.collect()`, `read_to_end`) and no unbounded accumulation over peer-supplied bytes exists in `src/shared/`, `src/client/subscriptions.rs`, or `src/server/streamable_http_server.rs` outside an explicit reviewed allowlist, and that no scan over peer-chosen input is worse than O(n). — *NOT met; see below*
+- [x] **HTTP-09**: Every peer-controlled read on the v2 transport path is memory-bounded. Closure is **enumerable, not narrative**: a tripwire test asserts that no unbounded whole-body read (`.collect()`, `read_to_end`) and no unbounded accumulation over peer-supplied bytes exists in `src/shared/`, `src/client/subscriptions.rs`, or `src/server/streamable_http_server.rs` outside an explicit reviewed allowlist, and that no scan over peer-chosen input is worse than O(n).
 
 > **Why HTTP-09 exists.** The "memory-bounded long-lived stream" criterion was a *derived* success
 > criterion of the old HTTP-04 — it appeared in no requirement text, so it had no enumerable
@@ -208,7 +210,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | HTTP-06 | Phase 113 | Implemented — pending final schema |
 | HTTP-07 | Phase 113 | Implemented — pending final schema |
 | HTTP-08 | Phase 113 | Implemented — pending final schema |
-| HTTP-09 | Phase 113 | **NOT met** — needs the bounded-read tripwire test |
+| HTTP-09 | Phase 113.1 | **Met** — bounded-read tripwire green with an EMPTY `WHOLE_BODY_ALLOWLIST`, plus two falsifiable O(n) guards on `SseParser::feed` |
 | CLNT-01 | Phase 113 | Implemented — pending final schema |
 | CLNT-02 | Phase 113 | Implemented — pending final schema |
 | CLNT-05 | Phase 113 | Implemented — pending final schema |
