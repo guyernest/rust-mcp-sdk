@@ -2463,8 +2463,23 @@ fn seal_input_required(
     let binding =
         crate::server::request_state::RequestBinding::from_request(principal, target.0, &target.1)
             .map_err(|_| MRTR_UNCANONICALIZABLE_INVARIANT_MESSAGE)?;
+    // The kinds map (D-113-O). This is the ONE place in the SDK where the
+    // requested kinds are known, so it is the one place they can be sealed: the
+    // map is built from the handler's OWN `inputRequests`, via
+    // `InputRequest::kind()`, and never from anything on the client's request.
+    //
+    // `Some(...)` unconditionally, INCLUDING when the handler asked for nothing.
+    // `None` means "minted by a build that predates this field" and selects the
+    // untagged degradation; a handler that signalled an empty `inputRequests`
+    // asked for nothing, which is a different statement and must reject every
+    // answer rather than accept arbitrary ones. See `Continuation::kinds`.
+    let kinds: crate::types::mrtr::InputRequestKinds = signal
+        .input_requests
+        .iter()
+        .map(|(key, request)| (key.clone(), request.kind()))
+        .collect();
     let token = codec
-        .mint(&signal.continuation, &binding, next_round)
+        .mint(&signal.continuation, &binding, next_round, Some(kinds))
         .map_err(|_| "the requestState continuation could not be sealed")?;
     let input_requests = serde_json::to_value(&signal.input_requests)
         .map_err(|_| "the handler's inputRequests map is not serializable")?;
@@ -4848,7 +4863,9 @@ mod tests {
             let target = mrtr_binding_parts(request).expect("an MRTR-eligible request");
             let binding = RequestBinding::from_request(principal, target.0, &target.1)
                 .expect("the fixture params are inside the canonical depth cap");
-            codec.mint(state, &binding, round).expect("mint succeeds")
+            codec
+                .mint(state, &binding, round, None)
+                .expect("mint succeeds")
         }
 
         fn ingest(
@@ -5126,6 +5143,7 @@ mod tests {
                 state: json!({ "step": 1 }),
                 exp: 0,
                 round,
+                kinds: None,
             }
         }
 

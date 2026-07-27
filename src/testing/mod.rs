@@ -158,6 +158,24 @@ pub fn decode_mcp_name(raw: &str) -> Option<String> {
 /// Returns `None` if the codec refuses the key, cannot seal the state, or cannot
 /// BIND the request — the last being params nested past the canonicalization depth
 /// cap, which the production mint path refuses for the same reason (D-113-M).
+///
+/// # This seam mints a KINDS-LESS continuation, deliberately
+///
+/// The production mint path seals the server's record of which
+/// [`InputRequestKind`](crate::types::mrtr::InputRequestKind) it requested under
+/// each `inputRequests` key, so ingress can type the client's answers
+/// kind-directed (D-113-O). This helper has no `inputRequests` to derive that
+/// from — it mints a bare continuation for a test that wants to control `state`,
+/// `round` and `ttl` — so it passes `None`, which selects the documented
+/// untagged-decode degradation on
+/// [`Continuation::kinds`](crate::server::request_state::Continuation).
+///
+/// That keeps this function's PUBLIC SIGNATURE byte-unchanged and keeps every
+/// existing caller's behaviour byte-identical. It is not a hole: a token minted
+/// here is minted with the caller's OWN key, so it grants no capability the
+/// caller did not already hold. A test that wants to exercise kind-directed
+/// typing drives a real server and answers the `inputRequests` it actually
+/// returned.
 #[cfg(all(feature = "streamable-http", not(target_arch = "wasm32")))]
 #[must_use]
 pub fn mint_request_state(
@@ -173,7 +191,7 @@ pub fn mint_request_state(
     let binding =
         crate::server::request_state::RequestBinding::from_request(principal, method, params)
             .ok()?;
-    codec.mint(state, &binding, round).ok()
+    codec.mint(state, &binding, round, None).ok()
 }
 
 /// Open a `requestState` token with the PRODUCTION codec, returning

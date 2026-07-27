@@ -1452,7 +1452,7 @@ mod tests {
         let binding = RequestBinding::from_request("alice", "tools/call", &params)
             .expect("a two-level fixture is far inside the canonical depth cap");
         let token = codec
-            .mint(&serde_json::json!({ "step": 1 }), &binding, 0)
+            .mint(&serde_json::json!({ "step": 1 }), &binding, 0, None)
             .expect("mint");
         assert!(
             matches!(codec.verify(&token, &binding), Verdict::Ok(_)),

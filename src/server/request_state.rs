@@ -509,6 +509,54 @@ pub(crate) struct Continuation {
     pub exp: i64,
     /// Which multi-round-trip round this continuation belongs to (D-09).
     pub round: u8,
+    /// The server's OWN record of which [`InputRequestKind`] it requested under
+    /// each `inputRequests` key on the round this continuation was minted for
+    /// (D-113-O).
+    ///
+    /// # What it is
+    ///
+    /// Built at mint time from [`InputRequest::kind`](crate::types::mrtr::InputRequest::kind)
+    /// over the handler's own `inputRequests` map — never from anything the
+    /// client sent. It lets ingress decode the answers KIND-DIRECTED
+    /// ([`InputResponse::decode_for`](crate::types::mrtr::InputResponse::decode_for))
+    /// instead of guessing from overlapping untagged shapes, which is what let a
+    /// wrongly-shaped answer be silently reclassified into a variant the handler
+    /// would never match.
+    ///
+    /// # Why it lives in the SEALED payload
+    ///
+    /// It must be UNFORGEABLE: the whole point is that the server enforces
+    /// against what IT asked for, so a client that could choose the kinds map
+    /// would simply relabel its answer and be back where D-113-O started.
+    /// Sealing it costs nothing in confidentiality — the client was told the
+    /// kinds in the previous round's `inputRequests`, so it already knows them —
+    /// and buys integrity, which is the property that matters.
+    ///
+    /// # Absent means PRE-KINDS, and empty means "asked for nothing"
+    ///
+    /// The field is an `Option` rather than a bare map, and the distinction is
+    /// load-bearing:
+    ///
+    /// | Value | Meaning | Ingress behaviour |
+    /// |-------|---------|-------------------|
+    /// | `None` (the `#[serde(default)]`) | minted by a build that predates this field | DEGRADE to the untagged decode |
+    /// | `Some(map)`, non-empty | this build minted it and asked for these kinds | ENFORCE kind-directed |
+    /// | `Some(map)`, EMPTY | this build minted it and asked for NOTHING | ENFORCE — every answer is unsolicited |
+    ///
+    /// A bare map would conflate the first and third rows, and the third row is
+    /// reachable in production: a handler may signal `input_required` with an
+    /// empty `inputRequests`, and an "empty means degrade" rule would then accept
+    /// arbitrary untagged answers on a round that requested none.
+    ///
+    /// # Why the `None` degradation is not a bypass
+    ///
+    /// A rejection would fail every in-flight token during a rolling deploy — a
+    /// real availability cost. And an attacker cannot reach the degraded path
+    /// anyway: it requires presenting a continuation whose AEAD tag verifies, and
+    /// only a holder of the server's key can mint one. The only party who can
+    /// produce a kinds-less continuation is a previous build of this same server.
+    #[serde(default)]
+    pub kinds: Option<crate::types::mrtr::InputRequestKinds>,
 }
 
 /// The three values a `requestState` token is cryptographically bound to.
@@ -699,23 +747,34 @@ impl RequestStateCodec {
     /// `clock.now_unix() + ttl`, and the seal uses the MINTING key only — a
     /// rotated-out key verifies but never mints.
     ///
+    /// `kinds` is an explicit parameter rather than an `Option` defaulted inside,
+    /// for the same reason [`RequestBinding::from_request`] is the only binding
+    /// constructor (D-113-M): it forces every mint site to DECIDE whether it can
+    /// state which kinds were requested. Passing `None` opts that token into the
+    /// untagged-decode degradation documented on [`Continuation::kinds`], so it
+    /// must be a choice, never an omission.
+    ///
     /// # Errors
     ///
     /// Returns an error if the CSPRNG fails, if the continuation is not
     /// serializable, if `ring` refuses to seal, or if the resulting token would
     /// exceed [`crate::types::mrtr::MAX_REQUEST_STATE_LEN`] — the server must never
-    /// mint a token it would itself reject at ingress.
+    /// mint a token it would itself reject at ingress. That last check is what
+    /// bounds the `kinds` map: a map large enough to push the token past the
+    /// accepted bound is REFUSED at the mint rather than emitted.
     pub(crate) fn mint(
         &self,
         state: &serde_json::Value,
         binding: &RequestBinding<'_>,
         round: u8,
+        kinds: Option<crate::types::mrtr::InputRequestKinds>,
     ) -> Result<String> {
         let ttl_secs = i64::try_from(self.ttl.as_secs()).unwrap_or(i64::MAX);
         let continuation = Continuation {
             state: state.clone(),
             exp: self.clock.now_unix().saturating_add(ttl_secs),
             round,
+            kinds,
         };
         let mut sealed = serde_json::to_vec(&continuation).map_err(|e| {
             Error::internal(format!(
@@ -1485,7 +1544,7 @@ mod tests {
         let params = tool_params("/safe");
         let bind = binding("alice", "tools/call", &params);
         let state = serde_json::json!({ "collected": { "path": "/safe" }, "step": 2 });
-        let token = codec.mint(&state, &bind, 1).expect("mint");
+        let token = codec.mint(&state, &bind, 1, None).expect("mint");
         match codec.verify(&token, &bind) {
             Verdict::Ok(continuation) => {
                 assert_eq!(continuation.state, state);
@@ -1496,14 +1555,175 @@ mod tests {
         }
     }
 
+    // -----------------------------------------------------------------
+    // The sealed kinds map (D-113-O).
+    // -----------------------------------------------------------------
+
+    /// A kinds map of `count` entries at a realistic `inputRequests` key length.
+    ///
+    /// The keys are the shape a real handler uses — `user_name`, `workspace`,
+    /// `model_says` — padded to a fixed width so the measurement below is a
+    /// property of the COUNT rather than of whichever names this test picked.
+    fn kinds_map(count: usize, key_len: usize) -> crate::types::mrtr::InputRequestKinds {
+        use crate::types::mrtr::InputRequestKind;
+        let cycle = [
+            InputRequestKind::Elicitation,
+            InputRequestKind::Sampling,
+            InputRequestKind::Roots,
+        ];
+        (0..count)
+            .map(|index| {
+                let key = format!("{index:0>width$}", width = key_len);
+                (key, cycle[index % cycle.len()])
+            })
+            .collect()
+    }
+
+    /// The kinds the server sealed come back out of a VERIFIED token unchanged.
+    ///
+    /// This is the whole mechanism D-113-O needs: the server's record of what it
+    /// asked for survives the round trip through the client, integrity-protected,
+    /// without the client being able to choose or alter it.
+    #[test]
+    fn mint_then_verify_round_trips_the_requested_kinds() {
+        use crate::types::mrtr::InputRequestKind;
+        let codec = codec_at(&KEY_A, 1_000, 300);
+        let params = tool_params("/safe");
+        let bind = binding("alice", "tools/call", &params);
+        let kinds: crate::types::mrtr::InputRequestKinds = [
+            ("user_name".to_string(), InputRequestKind::Elicitation),
+            ("model_says".to_string(), InputRequestKind::Sampling),
+            ("workspace".to_string(), InputRequestKind::Roots),
+        ]
+        .into_iter()
+        .collect();
+        let token = codec
+            .mint(
+                &serde_json::json!({ "step": 1 }),
+                &bind,
+                0,
+                Some(kinds.clone()),
+            )
+            .expect("mint");
+        match codec.verify(&token, &bind) {
+            Verdict::Ok(continuation) => assert_eq!(continuation.kinds, Some(kinds)),
+            other => panic!("expected Ok, got {other:?}"),
+        }
+    }
+
+    /// A continuation minted by a build WITHOUT the field still deserializes, and
+    /// yields `None` — the rolling-deploy degradation, pinned against the
+    /// serialized form rather than against a hand-built `Continuation`, because
+    /// what has to survive is the BYTES an older build sealed.
+    #[test]
+    fn a_continuation_serialized_without_kinds_still_deserializes_as_none() {
+        let legacy = serde_json::json!({ "state": { "step": 1 }, "exp": 1_300, "round": 2 });
+        let continuation: Continuation =
+            serde_json::from_value(legacy).expect("a pre-kinds continuation must still decode");
+        assert_eq!(continuation.round, 2);
+        assert_eq!(
+            continuation.kinds, None,
+            "an ABSENT kinds field must be None — the pre-kinds marker — and must never \
+             be conflated with an empty map, which means \"this build asked for nothing\""
+        );
+    }
+
+    /// An EMPTY kinds map survives as `Some(empty)`, distinct from absent.
+    ///
+    /// The two are different statements and ingress treats them differently
+    /// (`Continuation::kinds`), so a serde round trip that collapsed one into the
+    /// other would silently reopen D-113-O for any handler that signalled an
+    /// empty `inputRequests`.
+    #[test]
+    fn an_empty_kinds_map_survives_as_some_not_none() {
+        let continuation = Continuation {
+            state: serde_json::json!({}),
+            exp: 1_300,
+            round: 0,
+            kinds: Some(crate::types::mrtr::InputRequestKinds::new()),
+        };
+        let bytes = serde_json::to_vec(&continuation).expect("serializable");
+        let decoded: Continuation = serde_json::from_slice(&bytes).expect("deserializable");
+        assert_eq!(
+            decoded.kinds,
+            Some(crate::types::mrtr::InputRequestKinds::new())
+        );
+        assert_ne!(decoded.kinds, None);
+    }
+
+    /// The kinds map does NOT push a minted token past the bound the server's own
+    /// ingress applies — MEASURED at the worst case ingress will ever accept.
+    ///
+    /// `MAX_INPUT_RESPONSES` (64) is the most entries a client may ANSWER, so a
+    /// handler asking for more than 64 has already built a round that cannot be
+    /// completed; 64 is therefore the widest kinds map worth minting. The token
+    /// size is printed so the SUMMARY records a number rather than a claim.
+    ///
+    /// A guard already exists and needs no addition: `mint` refuses with an error
+    /// when the encoded token would exceed `MAX_REQUEST_STATE_LEN`, so the failure
+    /// mode at the bound is a loud refusal, never a token the server would reject
+    /// at its own front door. This test pins that the REALISTIC case is nowhere
+    /// near it.
+    #[test]
+    fn a_full_width_kinds_map_stays_within_the_accepted_token_bound() {
+        let codec = codec_at(&KEY_A, 1_000, 300);
+        let params = tool_params("/safe");
+        let bind = binding("alice", "tools/call", &params);
+        let state = serde_json::json!({ "collected": {}, "step": 1 });
+
+        let bare = codec.mint(&state, &bind, 0, None).expect("mint");
+        let full = codec
+            .mint(
+                &state,
+                &bind,
+                0,
+                Some(kinds_map(
+                    crate::types::mrtr::MAX_INPUT_RESPONSES,
+                    "user_name_00".len(),
+                )),
+            )
+            .expect("a 64-entry kinds map must still mint");
+
+        println!(
+            "D-113-O minted token bytes: bare = {}, with {} kinds entries = {} (bound {})",
+            bare.len(),
+            crate::types::mrtr::MAX_INPUT_RESPONSES,
+            full.len(),
+            crate::types::mrtr::MAX_REQUEST_STATE_LEN
+        );
+        assert!(
+            full.len() <= crate::types::mrtr::MAX_REQUEST_STATE_LEN,
+            "a token carrying the widest kinds map ingress can ever be answered with \
+             must not exceed the bound ingress applies: {} > {}",
+            full.len(),
+            crate::types::mrtr::MAX_REQUEST_STATE_LEN
+        );
+    }
+
+    /// A kinds map big enough to burst the bound is REFUSED at the mint, not
+    /// emitted — the "never mint a token our own ingress rejects" rule, exercised
+    /// through the new field rather than through `state`.
+    #[test]
+    fn an_absurd_kinds_map_is_refused_at_the_mint_rather_than_minted() {
+        let codec = codec_at(&KEY_A, 1_000, 300);
+        let params = tool_params("/safe");
+        let bind = binding("alice", "tools/call", &params);
+        assert!(
+            codec
+                .mint(&serde_json::json!({}), &bind, 0, Some(kinds_map(512, 64)),)
+                .is_err(),
+            "a kinds map that would burst MAX_REQUEST_STATE_LEN must fail the mint"
+        );
+    }
+
     #[test]
     fn two_mints_of_identical_input_produce_different_tokens() {
         let codec = codec_at(&KEY_A, 1_000, 300);
         let params = tool_params("/safe");
         let bind = binding("alice", "tools/call", &params);
         let state = serde_json::json!({ "a": 1 });
-        let first = codec.mint(&state, &bind, 0).expect("mint");
-        let second = codec.mint(&state, &bind, 0).expect("mint");
+        let first = codec.mint(&state, &bind, 0, None).expect("mint");
+        let second = codec.mint(&state, &bind, 0, None).expect("mint");
         assert_ne!(first, second, "a fresh nonce must be drawn per mint");
     }
 
@@ -1512,7 +1732,9 @@ mod tests {
         let codec = codec_at(&KEY_A, 1_000, 300);
         let params = tool_params("/safe");
         let bind = binding("alice", "tools/call", &params);
-        let token = codec.mint(&serde_json::json!({}), &bind, 0).expect("mint");
+        let token = codec
+            .mint(&serde_json::json!({}), &bind, 0, None)
+            .expect("mint");
         let raw = URL_SAFE_NO_PAD.decode(token.as_bytes()).expect("base64url");
         assert_eq!(raw[0], KEY_ID_LEN_U8, "leading length byte");
         assert_eq!(
@@ -1532,7 +1754,7 @@ mod tests {
         let params = tool_params("/safe");
         let bind = binding("alice", "tools/call", &params);
         let token = codec
-            .mint(&serde_json::json!({ "a": 1 }), &bind, 0)
+            .mint(&serde_json::json!({ "a": 1 }), &bind, 0, None)
             .expect("mint");
         let mut raw = URL_SAFE_NO_PAD.decode(token.as_bytes()).expect("base64url");
         let last = raw.len() - 1;
@@ -1549,7 +1771,7 @@ mod tests {
         let params = tool_params("/safe");
         let bind = binding("alice", "tools/call", &params);
         let token = codec
-            .mint(&serde_json::json!({ "a": 1 }), &bind, 0)
+            .mint(&serde_json::json!({ "a": 1 }), &bind, 0, None)
             .expect("mint");
         let tampered = format!("{token}-TAMPERED");
         assert_eq!(codec.verify(&tampered, &bind), Verdict::AuthFailed);
@@ -1562,7 +1784,7 @@ mod tests {
         let alice = binding("alice", "tools/call", &params);
         let bob = binding("bob", "tools/call", &params);
         let token = codec
-            .mint(&serde_json::json!({ "a": 1 }), &alice, 0)
+            .mint(&serde_json::json!({ "a": 1 }), &alice, 0, None)
             .expect("mint");
         assert_eq!(codec.verify(&token, &bob), Verdict::AuthFailed);
     }
@@ -1575,7 +1797,7 @@ mod tests {
         let minted_for = binding("alice", "tools/call", &safe);
         let replayed_onto = binding("alice", "tools/call", &shadow);
         let token = codec
-            .mint(&serde_json::json!({ "a": 1 }), &minted_for, 0)
+            .mint(&serde_json::json!({ "a": 1 }), &minted_for, 0, None)
             .expect("mint");
         assert_eq!(codec.verify(&token, &replayed_onto), Verdict::AuthFailed);
     }
@@ -1588,7 +1810,7 @@ mod tests {
         let minted_for = binding("alice", "tools/call", &call);
         let replayed_onto = binding("alice", "prompts/get", &prompt);
         let token = codec
-            .mint(&serde_json::json!({ "a": 1 }), &minted_for, 0)
+            .mint(&serde_json::json!({ "a": 1 }), &minted_for, 0, None)
             .expect("mint");
         assert_eq!(codec.verify(&token, &replayed_onto), Verdict::AuthFailed);
     }
@@ -1600,7 +1822,7 @@ mod tests {
         let params = tool_params("/safe");
         let bind = binding("alice", "tools/call", &params);
         let state = serde_json::json!({ "collected": { "path": "/safe" } });
-        let token = minter.mint(&state, &bind, 3).expect("mint");
+        let token = minter.mint(&state, &bind, 3, None).expect("mint");
 
         let verifier = codec_at(&KEY_A, 5_000, 60);
         match verifier.verify(&token, &bind) {
@@ -1622,7 +1844,7 @@ mod tests {
         let params = tool_params("/safe");
         let bind = binding("alice", "tools/call", &params);
         let token = minter
-            .mint(&serde_json::json!({ "a": 1 }), &bind, 0)
+            .mint(&serde_json::json!({ "a": 1 }), &bind, 0, None)
             .expect("mint");
         assert_eq!(
             verifier.verify(&token, &bind),
@@ -1640,7 +1862,7 @@ mod tests {
         let params = tool_params("/safe");
         let bind = binding("alice", "tools/call", &params);
         let token = old
-            .mint(&serde_json::json!({ "a": 1 }), &bind, 0)
+            .mint(&serde_json::json!({ "a": 1 }), &bind, 0, None)
             .expect("mint");
         assert!(matches!(rotated.verify(&token, &bind), Verdict::Ok(_)));
     }
@@ -1660,14 +1882,14 @@ mod tests {
         // Minted under KEY_A -> the matching entry opens it.
         let minter_a = codec_at(&KEY_A, 1_000, 300).with_forced_minting_key_id(forced);
         let token_a = minter_a
-            .mint(&serde_json::json!({ "a": 1 }), &bind, 0)
+            .mint(&serde_json::json!({ "a": 1 }), &bind, 0, None)
             .expect("mint");
         assert!(matches!(verifier.verify(&token_a, &bind), Verdict::Ok(_)));
 
         // Minted under KEY_B -> the OTHER matching entry opens it.
         let minter_b = codec_at(&KEY_B, 1_000, 300).with_forced_minting_key_id(forced);
         let token_b = minter_b
-            .mint(&serde_json::json!({ "b": 2 }), &bind, 0)
+            .mint(&serde_json::json!({ "b": 2 }), &bind, 0, None)
             .expect("mint");
         assert!(matches!(verifier.verify(&token_b, &bind), Verdict::Ok(_)));
 
@@ -1675,7 +1897,7 @@ mod tests {
         // never UnknownKey and never a false Ok.
         let minter_c = codec_at(&KEY_C, 1_000, 300).with_forced_minting_key_id(forced);
         let token_c = minter_c
-            .mint(&serde_json::json!({ "c": 3 }), &bind, 0)
+            .mint(&serde_json::json!({ "c": 3 }), &bind, 0, None)
             .expect("mint");
         assert_eq!(verifier.verify(&token_c, &bind), Verdict::AuthFailed);
     }
@@ -1709,7 +1931,7 @@ mod tests {
         let params = tool_params("/safe");
         let bind = binding("alice", "tools/call", &params);
         let token = codec
-            .mint(&serde_json::json!({ "a": "x".repeat(64) }), &bind, 0)
+            .mint(&serde_json::json!({ "a": "x".repeat(64) }), &bind, 0, None)
             .expect("mint");
         assert!(token.len() <= crate::types::mrtr::MAX_REQUEST_STATE_LEN);
     }
@@ -1722,7 +1944,7 @@ mod tests {
         let huge =
             serde_json::json!({ "blob": "x".repeat(crate::types::mrtr::MAX_REQUEST_STATE_LEN) });
         assert!(
-            codec.mint(&huge, &bind, 0).is_err(),
+            codec.mint(&huge, &bind, 0, None).is_err(),
             "a token the server would itself reject must never be minted"
         );
     }
@@ -1929,7 +2151,7 @@ mod tests {
             let params = serde_json::json!({ "name": "n", "arguments": { "k": "v" } });
             let bind = RequestBinding::from_request(&principal, &method, &params)
                 .expect("a two-level fixture is far inside the canonical depth cap");
-            let token = codec.mint(&state, &bind, round).expect("mint");
+            let token = codec.mint(&state, &bind, round, None).expect("mint");
             match codec.verify(&token, &bind) {
                 Verdict::Ok(continuation) => {
                     proptest::prop_assert_eq!(continuation.state, state);
@@ -1964,7 +2186,7 @@ mod tests {
             let codec = RequestStateCodec::new(&KEY_A, Duration::from_secs(DEFAULT_TTL_SECS))
                 .expect("valid key")
                 .with_clock(Arc::new(FixedClock(1_000)));
-            let token = codec.mint(&serde_json::json!({ "s": 1 }), &bind_a, 0).expect("mint");
+            let token = codec.mint(&serde_json::json!({ "s": 1 }), &bind_a, 0, None).expect("mint");
             proptest::prop_assert_eq!(codec.verify(&token, &bind_b), Verdict::AuthFailed);
         }
 

@@ -337,13 +337,32 @@ pub(crate) fn decode_header_value(raw: &str) -> Option<String> {
 /// Carried alongside an [`InputRequest`] so a response can be decoded
 /// KIND-DIRECTED ([`InputResponse::decode_for`]) instead of guessed from an
 /// overlapping untagged shape (T-113-46).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+///
+/// # The serde spelling is EXPLICIT and STABLE, and never appears on the wire
+///
+/// These three strings travel in exactly one place: inside the AEAD-sealed
+/// `requestState` continuation, as the server's own record of which kind it
+/// requested under each `inputRequests` key (D-113-O). They are never emitted on
+/// the public JSON-RPC wire — the wire spelling of a kind is its
+/// [`wire_method`](Self::wire_method), which is unchanged.
+///
+/// They are spelled with per-variant `rename` rather than a container-level
+/// `rename_all` so that a future container attribute cannot silently re-spell
+/// them. That matters because a token minted by one build is presented to
+/// another during a rolling deploy: a changed spelling would make every
+/// in-flight continuation's kinds map undecodable, which — under
+/// [`Continuation`](crate::server::request_state::Continuation)'s
+/// absent-means-pre-kinds rule — is a HARD failure, not a graceful degradation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum InputRequestKind {
     /// `elicitation/create` — ask the user for structured input.
+    #[serde(rename = "elicitation")]
     Elicitation,
     /// `sampling/createMessage` — ask the client's model for a completion.
+    #[serde(rename = "sampling")]
     Sampling,
     /// `roots/list` — ask the client for its filesystem roots.
+    #[serde(rename = "roots")]
     Roots,
 }
 
@@ -430,12 +449,34 @@ impl InputResponse {
         }
     }
 
-    /// Best-effort untagged decode — **server-ingress only**.
+    /// Best-effort untagged decode — the fallback for exactly TWO cases where the
+    /// requested kind is genuinely unknowable.
     ///
     /// A server reading a client's `inputResponses` map at ingress has not yet
-    /// opened `requestState` and therefore does not know which kind each key maps
-    /// to. This tries the three shapes most-specific-first. Wherever the kind IS
-    /// known, [`decode_for`](Self::decode_for) is the correct path.
+    /// opened `requestState`, so it cannot know which kind each key maps to. This
+    /// tries the three shapes most-specific-first and takes the first that fits.
+    ///
+    /// # Why this used to be the server's ONLY path, and why it no longer is
+    ///
+    /// [`ElicitResult`] and [`CreateMessageResult`] OVERLAP: an object carrying
+    /// `action`, `content` and `model` satisfies both, and Sampling is tried
+    /// first. So a client answering an `elicitation/create` request with such an
+    /// object was silently RECLASSIFIED as [`Sampling`](Self::Sampling); the
+    /// handler's `Elicitation` arm never matched, it re-elicited, and the
+    /// operation looped with no error raised anywhere — D-113-O.
+    ///
+    /// The server DOES know the kinds, because it minted them. They now travel
+    /// inside the sealed continuation, and the dispatch layer RE-DECODES every
+    /// entry with [`decode_for`](Self::decode_for) once the token has verified.
+    /// This function survives only where there is no verified continuation to
+    /// read a kind from:
+    ///
+    /// 1. a FIRST call carrying `inputResponses` with no `requestState` at all —
+    ///    nothing was requested, so nothing is being answered;
+    /// 2. a continuation minted by a build that PREDATES the kinds map, during a
+    ///    rolling deploy.
+    ///
+    /// Everywhere else, [`decode_for`](Self::decode_for) is the correct path.
     pub fn try_from_value_untagged(value: Value) -> Result<Self, serde_json::Error> {
         // Most-specific-first: `ListRootsResult` requires `roots`,
         // `CreateMessageResult` requires `content` + `model`, `ElicitResult`
@@ -480,6 +521,15 @@ pub type InputRequests = BTreeMap<String, InputRequest>;
 ///
 /// A `BTreeMap` for the same determinism reason as [`InputRequests`].
 pub type InputResponses = BTreeMap<String, InputResponse>;
+
+/// The server's own record of which KIND it requested under each
+/// [`InputRequests`] key (D-113-O).
+///
+/// Derived from [`InputRequest::kind`] at mint time and carried inside the
+/// AEAD-sealed continuation, never on the wire. `pub(crate)`: it is MRTR
+/// plumbing (Phase-113 D-10), and the public surface stays
+/// [`InputRequestKind`] alone.
+pub(crate) type InputRequestKinds = BTreeMap<String, InputRequestKind>;
 
 /// A parsed `input_required` result.
 ///
