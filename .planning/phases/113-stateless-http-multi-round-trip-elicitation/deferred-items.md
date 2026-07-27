@@ -510,7 +510,14 @@ the 2161-test suite fails reliably.
 
 **Found by:** plan 113-18, running verification step 15 (the `register` cog-25
 check).
-**Owner:** unassigned — a CLAUDE.md documentation fix, owned by no Phase-113 plan.
+**Owner:** **Phase 119 (Documentation — Three Shapes + v2 Migration)** — the next
+phase that touches developer documentation. **AWAITING DEVELOPER APPROVAL:** the
+fix is a two-line change to `CLAUDE.md`, which is a BINDING file, and editing it
+is outside phase 113.1's decisions D-01…D-20. Phase 113.1 therefore records and
+assigns this rather than making the edit — it does not have that authority.
+**Status:** OPEN
+**Re-confirmed:** plan 113.1-04 (phase 113.1) re-observed the same behavior on
+pmat 3.15.0 during this round. The entry is current, not stale.
 
 `CLAUDE.md` § "CI Quality Gates" tells a developer whose PR fails the PMAT gate
 to run:
@@ -547,6 +554,39 @@ nothing else.
 after the PR-blocking gate fails, and it currently answers "clean" for a tree
 that is not. Recorded rather than fixed because editing `CLAUDE.md` is outside
 this plan's file fence.
+
+### A SECOND measured trap, added by plan 113.1-04
+
+Two more ways to ask pmat 3.15.0 this question and get a wrong answer. Both were
+measured on the phase-113.1 tree, not inferred.
+
+1. **`pmat analyze complexity --file <path>` is NOT the gate.** On the identical
+   unmodified `src/server/streamable_http_server.rs` it reports **14** and **18**
+   for the two handlers that the gate simultaneously reports at **30** and **31**.
+   The `Cargo.toml` at the analysis root is what selects the real AST engine, so
+   `-p .` and `--file` are different measurements. Never cite a `--file` number
+   as a gate number.
+
+2. **`pmat analyze complexity -p . --format json` truncates to the top 10 files.**
+   `--top-files` defaults to `10`, and the top-level `files` array honours it —
+   `src/server/streamable_http_server.rs` is NOT among the 10 most complex files
+   in this workspace (the top entry is
+   `cargo-pmcp/src/deployment/post_deploy_tests.rs`). So any script that iterates
+   `.files[].functions[]` looking for `handle_post_*` finds **nothing** and, if it
+   asserts on an empty list, reports success. `summary.files` is truncated the
+   same way.
+
+   The working invocation is **`--top-files 0`** ("show all"), which reproduces
+   the gate exactly: `handle_post_fast_path` cognitive 30 / nesting_max 10,
+   `handle_post_with_middleware` 31 / 10.
+
+   Measured top-level JSON keys on 3.15.0: `summary`, `files`, `top_files_limit`
+   — and **no** `violations`, which is the drift the original entry above records.
+
+This second trap bit phase 113.1 directly: the `<automated>` verify blocks in
+plans 113.1-01 and 113.1-05 both specify the un-flagged form, and both would have
+passed vacuously or failed with an empty list rather than measuring the handlers.
+They were run with `--top-files 0` instead.
 
 ---
 
@@ -1208,3 +1248,110 @@ it without explicit Phase-level approval.
 Recorded in `113-PUBLICATION-DECISION-BRIEF.md` § 4.1, because it changes what a decision to
 "hold `[~]` indefinitely" is actually holding: a tree whose PR-blocking quality gate is red
 with a violation this round introduced, rather than a clean one.
+
+---
+
+## D-113-V — the auth surface's whole-body reads are unbounded (semi-trusted IdP, not arbitrary peer)
+
+**Found during:** plan 113.1-04 (D-18, phase 113.1), while closing HTTP-09's last
+in-scope unbounded read.
+**Severity:** MEDIUM — the same DEFECT CLASS as D-113-Q, at a DIFFERENT TRUST
+BOUNDARY. These bodies come from an identity provider the deployment configured,
+not from an arbitrary remote peer. That is a statement about who chooses the
+bytes, not a claim that the reads are harmless: a compromised, misconfigured or
+MITM'd IdP endpoint reaches the same `Vec` growth, and an `unwrap_or_default()`
+error-path read will happily allocate a multi-gigabyte "error message".
+**Owner:** **Phase 116 (Auth Hardening SEPs)**
+**Status:** OPEN
+
+### Measured population
+
+Two numbers per file, because a raw needle match is a SYNTACTIC count and not
+automatically an unbounded-read count.
+
+**Method.** Column 1 is occurrences of the tripwire's own `WHOLE_BODY_NEEDLES`
+(`tests/v2_bounded_reads_tripwire.rs:562`) — the single-line substrings the
+tripwire would see. Column 2 counts `.json()` / `.text()` / `.bytes()` chains
+that rustfmt has SPLIT across lines so that `.await` lands on the next line;
+these are invisible to a single-line substring needle and were found by a
+line-pair scan. Column 3 is the reviewed subset: every match in columns 1 and 2
+opened and read, minus those confirmed to carry a local bound or to sit at a
+different boundary entirely.
+
+| File | raw needle matches | split-chain matches the needles MISS | reviewed-unbounded |
+|---|---|---|---|
+| `src/server/auth/providers/generic_oidc.rs` | 5 | 6 | **11** |
+| `src/client/auth.rs` | 5 | 0 | **5** |
+| `src/server/auth/providers/cognito.rs` | 4 | 5 | **9** |
+| `src/client/oauth.rs` | 5 | 3 | **6** |
+| **total** | **19** | **14** | **31** |
+
+All matches sit ABOVE each file's `mod tests` (at `:770`, `:431`, `:536`;
+`oauth.rs` has none), so every one is production code.
+
+### This supersedes the "18" in the ROADMAP and in 113.1-CONTEXT
+
+Both are undercounts, and the reason is worth recording because it is a property
+of the tripwire rather than of the auth code: **the needles are single-line
+substrings, and rustfmt splits these call chains.** `response.json().await`
+written across three lines matches nothing. The roadmap also says three files;
+CONTEXT corrected that to four, and four is right.
+
+### Two exclusions — recorded rather than rounded away
+
+- **`src/client/oauth.rs:282`** (`.bytes().await`) is **ALREADY BOUNDED** by
+  `const MAX_DCR_RESPONSE_BYTES: usize = 1_048_576` declared at `:280` and
+  checked at `:285`. Excluded from the unbounded subset. Worth a note for
+  Phase 116: it is a POST-HOC check — the body is allocated whole and then
+  measured — so it bounds what is ACCEPTED, not what is ALLOCATED. That is
+  weaker than `collect_body_within_cap`'s streaming bound, and is the shape
+  113-20 deliberately moved away from.
+- **`src/client/oauth.rs:953`** (`tokio::fs::read_to_string(cache_file)`) reads
+  the SDK's OWN token-cache file off local disk. Not an IdP read, not a network
+  read, not this defect class. Excluded.
+
+### Why the trust-boundary distinction is the reason for the deferral, not an excuse
+
+`SseParser::drain_complete_lines` (D-113-R) and
+`OptimizedSseTransport::connect_sse` (D-113-Q) read from an arbitrary remote
+peer: anyone who can open a connection chooses those bytes. These 31 read from
+an issuer the deployment configured and, in most flows, over TLS to a pinned
+host. Same defect class, different adversary. That difference is what makes them
+schedulable rather than blocking — it is not a claim that they are safe.
+
+### Why Phase 116 is the right owner
+
+Phase 116's subject is re-examining exactly the trust assumption these reads rest
+on — RFC 9207 `iss` validation, DCR `application_type`, issuer-keyed credential
+storage. A bound landed BEFORE that re-examination would be defending a trust
+model that is about to change, and would have to be revisited anyway.
+
+### Why the tripwire's scope fence was NOT widened
+
+The fence (`tests/v2_bounded_reads_tripwire.rs:64-69` — `src/shared/` plus
+`src/client/subscriptions.rs` and `src/server/streamable_http_server.rs`) mirrors
+HTTP-09's requirement text verbatim, which scopes to *"peer-controlled read on
+the v2 transport path"*. These four files sit outside it **by design, not by
+oversight**.
+
+Widening it needs a HOME REQUIREMENT first: either editing HTTP-09, which phase
+113.1's own success criterion forbids, or minting a new requirement, which is
+milestone-scoping work inside a merge unblock. See the existing deferred idea
+"Widening the bounded-read tripwire's scope fence" in `113.1-CONTEXT.md`
+§ Deferred Ideas; this entry does not duplicate it.
+
+**Corollary Phase 116 should not miss:** if the fence is ever widened, the
+needle set must be widened too, or it will under-report by ~40% on
+rustfmt-split chains exactly as it does here.
+
+### Fix shape
+
+The same running-total doctrine plan 113.1-03 applied to `connect_sse`.
+`collect_sse_text_within_cap` (`src/shared/sse_optimized.rs`) is the worked
+`reqwest` example: a `Content-Length` early refusal as an advisory optimisation,
+plus `Response::chunk()` accumulated with an overflow-safe running total checked
+before each append, so an over-cap body is never held whole. `chunk()` needs no
+new reqwest feature. `collect_body_within_cap`
+(`src/shared/streamable_http.rs:528`) is the `hyper` analogue.
+
+---
