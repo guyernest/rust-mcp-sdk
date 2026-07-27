@@ -1249,12 +1249,26 @@ impl ServerCoreBuilder {
         // build; an UNSET key falls back to a per-process key with a genuine
         // startup WARN. A v1-only core gets `None` and reads no env var.
         #[cfg(all(feature = "streamable-http", not(target_arch = "wasm32")))]
-        let request_state_codec = crate::server::request_state::resolve_codec_at_build(
-            &self.supported_protocol_versions,
-            self.request_state_key,
-            &self.request_state_previous_keys,
-            self.request_state_ttl,
-        )?;
+        let request_state_codec = {
+            use crate::server::request_state::SecretKey;
+            // TRANSITIONAL (D-113-P, task 1 of 2): the builder FIELDS are still
+            // bare `[u8; 32]` at this commit, so they are lifted into the
+            // zeroizing type here. Task 2 changes the fields themselves and this
+            // block collapses back to two by-reference arguments.
+            let key = self.request_state_key.map(SecretKey::new);
+            let previous: Vec<SecretKey> = self
+                .request_state_previous_keys
+                .iter()
+                .copied()
+                .map(SecretKey::new)
+                .collect();
+            crate::server::request_state::resolve_codec_at_build(
+                &self.supported_protocol_versions,
+                key.as_ref(),
+                &previous,
+                self.request_state_ttl,
+            )?
+        };
 
         let core = ServerCore::new(
             info,

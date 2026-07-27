@@ -115,6 +115,35 @@ pub(crate) const ENV_REQUEST_STATE_KEY_PREVIOUS: &str = "PMCP_REQUEST_STATE_KEY_
 /// Environment variable overriding [`DEFAULT_TTL_SECS`] (D-05).
 pub(crate) const ENV_REQUEST_STATE_TTL_SECS: &str = "PMCP_REQUEST_STATE_TTL_SECS";
 
+/// The **one** type any pre-codec holder of `requestState` key material must use.
+///
+/// # Why this exists (D-113-P)
+///
+/// T-113-05 says raw key bytes never reach the allocator in the clear, and
+/// [`RequestStateCodec`] honours that for every buffer it owns. The two SERVER
+/// BUILDERS that feed it did not: `ServerCoreBuilder` and `ServerBuilder` each
+/// held an `Option<[u8; KEY_LEN]>` plus a `Vec<[u8; KEY_LEN]>` of rotated-out
+/// keys and dropped both un-scrubbed, so
+/// `.with_request_state_key(k).build()` handed the AEAD key back to the
+/// allocator readable by a core dump, an allocator reuse or a debugger.
+///
+/// # Why a wrapper and not a `Drop` impl on the builder
+///
+/// A struct-level `Drop` is incompatible with the by-value `mut self` builder
+/// idiom: with `Drop`, moving any field out of `self` is `E0509`, so `build()`
+/// could no longer destructure the builder. Putting the destructor on the
+/// **value** instead scrubs on drop, survives moves, and changes nothing about
+/// how the builders chain.
+///
+/// # What it does and does not buy
+///
+/// [`zeroize::Zeroizing`] runs [`Zeroize`] from its own `Drop`, and zeroize's
+/// primitive is a volatile write followed by a `SeqCst` compiler fence — so the
+/// overwrite is not dead-code-eliminated. It cannot recover copies the optimiser
+/// made *before* the value reached this wrapper, nor bytes the OS paged out; it
+/// bounds what the SDK itself leaves behind, which is the boundary the SDK owns.
+pub(crate) type SecretKey = zeroize::Zeroizing<[u8; KEY_LEN]>;
+
 // ---------------------------------------------------------------------------
 // Environment access seam
 // ---------------------------------------------------------------------------
@@ -380,12 +409,19 @@ impl RequestStateCodec {
     /// Entries are appended without de-duplication: two DIFFERENT keys may share a
     /// key-id (see [`KeyId`]'s collision policy), and collapsing them would turn a
     /// resolvable collision into a false `UnknownKey`.
+    /// Every accepted item — including the ones AFTER a `bind_key` failure — is
+    /// scrubbed before it drops: `bound` is deliberately held as a `Result` and
+    /// `?`-ed only after `key.zeroize()`, so an early return cannot skip the
+    /// scrub. This is the guarantee [`resolve_codec_at_build`] relies on when it
+    /// hands over owned copies of its caller's keys.
     pub(crate) fn with_previous_keys(
         mut self,
         keys: impl IntoIterator<Item = [u8; KEY_LEN]>,
     ) -> Result<Self> {
-        for key in keys {
-            let mut key = key;
+        // `for mut key in` rather than `for key in` + a shadowing `let mut key`:
+        // `[u8; KEY_LEN]` is `Copy`, so the shadow produced a SECOND stack slot
+        // and `zeroize()` scrubbed only the shadow (D-113-P, copy discipline).
+        for mut key in keys {
             let bound = bind_key(&key);
             key.zeroize();
             self.accepting.push(bound?);
@@ -853,10 +889,17 @@ fn ttl_from_env() -> Duration {
 ///    `PMCP_REQUEST_STATE_KEY_PREVIOUS` already contributed.
 ///
 /// An `Err` here is a BUILD failure by design: see [`RequestStateCodec::from_env`].
+///
+/// # Key material is taken BY REFERENCE (D-113-P, copy 3 of 3)
+///
+/// The key arrives as `Option<&SecretKey>`, not `Option<[u8; KEY_LEN]>`. The
+/// by-value form meant that merely CALLING this function manufactured a fresh,
+/// never-scrubbed stack copy of the caller's key — so even a perfectly zeroizing
+/// builder still leaked one copy per `build()`. Do not widen it back.
 pub(crate) fn resolve_codec_at_build(
     accept_list: &[crate::types::ProtocolVersion],
-    key: Option<[u8; KEY_LEN]>,
-    previous_keys: &[[u8; KEY_LEN]],
+    key: Option<&SecretKey>,
+    previous_keys: &[SecretKey],
     ttl: Option<Duration>,
 ) -> Result<Option<Arc<RequestStateCodec>>> {
     if !crate::types::protocol::context::is_v2_opted_in(accept_list) {
@@ -867,12 +910,19 @@ pub(crate) fn resolve_codec_at_build(
         // A builder key overrides `PMCP_REQUEST_STATE_KEY` — but NOT
         // `PMCP_REQUEST_STATE_KEY_PREVIOUS`, which is a separate rotation
         // setting this function's contract promises to honour either way.
+        //
+        // `explicit` auto-derefs THROUGH the zeroizing wrapper to the caller's
+        // own bytes; no `[u8; KEY_LEN]` is copied out of it here.
         Some(explicit) => {
-            RequestStateCodec::new(&explicit, effective_ttl)?.with_env_previous_key()?
+            RequestStateCodec::new(explicit, effective_ttl)?.with_env_previous_key()?
         },
         None => RequestStateCodec::from_env()?.with_ttl(effective_ttl),
     };
-    let codec = codec.with_previous_keys(previous_keys.iter().copied())?;
+    // `with_previous_keys` takes an OWNING iterator, so this does copy each
+    // rotated-out key once. That copy is not a leak: the loop above zeroizes
+    // every item it receives before it drops, including on the error path. The
+    // caller's own `Vec<SecretKey>` is untouched and scrubs itself on drop.
+    let codec = codec.with_previous_keys(previous_keys.iter().map(|k| **k))?;
     Ok(Some(Arc::new(codec)))
 }
 
@@ -1643,6 +1693,137 @@ mod tests {
             codec.mint(&huge, &bind, 0).is_err(),
             "a token the server would itself reject must never be minted"
         );
+    }
+
+    // -- SecretKey / resolve_codec_at_build (D-113-P) ------------------------
+
+    /// Pins [`SecretKey`]'s CONTRACT, which is all a test can honestly pin.
+    ///
+    /// What this PROVES: the zeroization code path `Zeroizing`'s `Drop` invokes
+    /// — `<[u8; KEY_LEN] as Zeroize>::zeroize` — replaces the key bytes with
+    /// zeroes when it runs.
+    ///
+    /// What it does NOT prove: that the destructor ran, or that the freed heap
+    /// or stack slot afterwards contains zeroes. Reading a dropped or freed
+    /// value is undefined behaviour, so no test in safe Rust can observe it.
+    /// "The drop runs" comes from [`zeroize::Zeroizing`]'s own `Drop` impl, and
+    /// "the write is not optimised away" comes from zeroize's volatile write
+    /// plus its `SeqCst` compiler fence — mechanisms, not assertions.
+    #[test]
+    fn secret_key_zeroize_replaces_the_key_bytes_with_zeroes() {
+        let secret = SecretKey::new(KEY_A);
+        let before: [u8; KEY_LEN] = *secret;
+        assert_eq!(before, KEY_A, "the wrapper must not alter the key it holds");
+
+        // Same code path `Zeroizing::drop` takes, run on a value we still own so
+        // the result is observable without touching dropped memory.
+        let mut scrubbed: [u8; KEY_LEN] = *secret;
+        scrubbed.zeroize();
+        assert_eq!(scrubbed, [0u8; KEY_LEN]);
+        assert_ne!(
+            scrubbed, before,
+            "a fixture key of all zeroes would make this test vacuous"
+        );
+    }
+
+    #[test]
+    fn resolve_codec_at_build_returns_none_for_a_v1_only_accept_list() {
+        // A deliberately MALFORMED env key: a v1-only server must not even look,
+        // so this resolves to `None` rather than erroring (D-04).
+        let resolved = with_env(&[(ENV_REQUEST_STATE_KEY, "bogus")], || {
+            resolve_codec_at_build(
+                &crate::types::protocol::context::default_accept_list(),
+                None,
+                &[],
+                None,
+            )
+        })
+        .expect("a v1-only accept-list reads no env var");
+        assert!(resolved.is_none());
+    }
+
+    #[test]
+    fn resolve_codec_at_build_prefers_the_by_reference_key_over_the_environment() {
+        let key = SecretKey::new(KEY_B);
+        let codec = with_env(&[(ENV_REQUEST_STATE_KEY, &b64(&KEY_A))], || {
+            resolve_codec_at_build(&v2_versions(), Some(&key), &[], None)
+        })
+        .expect("resolves")
+        .expect("a v2 accept-list has a codec");
+        assert_eq!(
+            codec.minting_key_id(),
+            key_id_of(&KEY_B),
+            "a builder-supplied key must beat PMCP_REQUEST_STATE_KEY"
+        );
+        assert_eq!(
+            *key, KEY_B,
+            "taking the key by reference must not consume or alter the caller's copy"
+        );
+    }
+
+    #[test]
+    fn resolve_codec_at_build_appends_previous_keys_to_the_env_derived_set() {
+        let previous = [SecretKey::new(KEY_C)];
+        let codec = with_env(
+            &[
+                (ENV_REQUEST_STATE_KEY, &b64(&KEY_A)),
+                (ENV_REQUEST_STATE_KEY_PREVIOUS, &b64(&KEY_B)),
+            ],
+            || resolve_codec_at_build(&v2_versions(), None, &previous, None),
+        )
+        .expect("resolves")
+        .expect("codec");
+        let accepting = codec.accepting_key_ids();
+        assert_eq!(codec.minting_key_id(), key_id_of(&KEY_A));
+        assert!(
+            accepting.contains(&key_id_of(&KEY_B)),
+            "the env-derived rotated-out key must survive: {accepting:?}"
+        );
+        assert!(
+            accepting.contains(&key_id_of(&KEY_C)),
+            "builder previous keys are APPENDED, not substituted: {accepting:?}"
+        );
+    }
+
+    #[test]
+    fn resolve_codec_at_build_honours_env_previous_key_even_with_an_explicit_key() {
+        let key = SecretKey::new(KEY_A);
+        let codec = with_env(&[(ENV_REQUEST_STATE_KEY_PREVIOUS, &b64(&KEY_B))], || {
+            resolve_codec_at_build(&v2_versions(), Some(&key), &[], None)
+        })
+        .expect("resolves")
+        .expect("codec");
+        assert!(
+            codec.accepting_key_ids().contains(&key_id_of(&KEY_B)),
+            "a builder key overrides PMCP_REQUEST_STATE_KEY but NOT the separate \
+             rotation setting"
+        );
+    }
+
+    #[test]
+    fn resolve_codec_at_build_fails_the_build_on_a_malformed_env_key() {
+        let result = with_env(&[(ENV_REQUEST_STATE_KEY, "bogus")], || {
+            resolve_codec_at_build(&v2_versions(), None, &[], None)
+        });
+        assert!(
+            result.is_err(),
+            "a malformed CONFIGURED key must fail the BUILD (T-113-17)"
+        );
+    }
+
+    #[test]
+    fn resolve_codec_at_build_prefers_an_explicit_ttl_over_the_environment() {
+        let codec = with_env(&[(ENV_REQUEST_STATE_TTL_SECS, "42")], || {
+            resolve_codec_at_build(
+                &v2_versions(),
+                Some(&SecretKey::new(KEY_A)),
+                &[],
+                Some(Duration::from_secs(7)),
+            )
+        })
+        .expect("resolves")
+        .expect("codec");
+        assert_eq!(codec.ttl(), Duration::from_secs(7));
     }
 
     #[test]

@@ -4774,12 +4774,26 @@ impl ServerBuilder {
         // from inside `from_env`, which is a genuine STARTUP warning because this
         // is startup. A v1-only server gets `None` and reads no env var at all.
         #[cfg(feature = "streamable-http")]
-        let request_state_codec = request_state::resolve_codec_at_build(
-            &self.supported_protocol_versions,
-            self.request_state_key,
-            &self.request_state_previous_keys,
-            self.request_state_ttl,
-        )?;
+        let request_state_codec = {
+            use request_state::SecretKey;
+            // TRANSITIONAL (D-113-P, task 1 of 2): the builder FIELDS are still
+            // bare `[u8; 32]` at this commit, so they are lifted into the
+            // zeroizing type here. Task 2 changes the fields themselves and this
+            // block collapses back to two by-reference arguments.
+            let key = self.request_state_key.map(SecretKey::new);
+            let previous: Vec<SecretKey> = self
+                .request_state_previous_keys
+                .iter()
+                .copied()
+                .map(SecretKey::new)
+                .collect();
+            request_state::resolve_codec_at_build(
+                &self.supported_protocol_versions,
+                key.as_ref(),
+                &previous,
+                self.request_state_ttl,
+            )?
+        };
 
         Ok(Server {
             info: {
