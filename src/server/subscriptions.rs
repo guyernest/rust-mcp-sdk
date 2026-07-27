@@ -616,6 +616,10 @@ impl ListenRegistry {
         sender: tokio::sync::mpsc::Sender<ListenFrame>,
         terminal: String,
     ) -> std::result::Result<ListenGuard, ListenRejection> {
+        // The GLOBAL permit is taken FIRST, and deliberately: this refusal
+        // returns BEFORE the `per_principal` map entry below exists, so it is
+        // the one rejection path with nothing to prune. Do not "fix" it by
+        // adding a cleanup call here — there is no entry yet to clean up.
         let global_permit = Arc::clone(&self.global)
             .try_acquire_owned()
             .map_err(|_| ListenRejection::GlobalLimit)?;
@@ -631,9 +635,14 @@ impl ListenRegistry {
                     }),
             )
         };
-        let principal_permit = principal_semaphore
-            .try_acquire_owned()
-            .map_err(|_| ListenRejection::PerPrincipalLimit)?;
+        // From HERE ON a `per_principal` entry exists for this principal, so
+        // every refusal below must go through `prune_after_rejection` (WR-06).
+        let Ok(principal_permit) = principal_semaphore.try_acquire_owned() else {
+            // `try_acquire_owned` consumed the local `Arc` on its way to this
+            // error, so there is no permit to hand over — only the prune is owed.
+            self.prune_after_rejection(&key.principal, None);
+            return Err(ListenRejection::PerPrincipalLimit);
+        };
 
         // Both of these are computed BEFORE the write guard: the guard is the
         // one lock `fan_out` contends with, so it should cover the occupancy
@@ -642,18 +651,31 @@ impl ListenRegistry {
         // increasing, never dense.
         let generation = self.next_generation.fetch_add(1, Ordering::Relaxed);
         let stored_key = key.clone();
-        {
+        let occupied = {
             // ONE guard covers both the occupancy question and the answer, so
             // no concurrent registration can slip between them.
-            match self.entries.write().entry(stored_key) {
-                Entry::Occupied(_) => return Err(ListenRejection::DuplicateSubscriptionId),
-                Entry::Vacant(slot) => slot.insert(ListenEntry {
-                    sender,
-                    filter,
-                    terminal,
-                    generation,
-                }),
+            let mut entries = self.entries.write();
+            let occupied = match entries.entry(stored_key) {
+                Entry::Occupied(_) => true,
+                Entry::Vacant(slot) => {
+                    slot.insert(ListenEntry {
+                        sender,
+                        filter,
+                        terminal,
+                        generation,
+                    });
+                    false
+                },
             };
+            // Released HERE, before any `per_principal` work: `ListenGuard::drop`
+            // takes `entries` and then `per_principal`, and pruning while this
+            // guard was still held would invert that order.
+            drop(entries);
+            occupied
+        };
+        if occupied {
+            self.prune_after_rejection(&key.principal, Some(principal_permit));
+            return Err(ListenRejection::DuplicateSubscriptionId);
         }
         Ok(ListenGuard {
             key,
@@ -828,12 +850,65 @@ impl ListenRegistry {
         drop(self.take_entry(key, generation));
     }
 
+    /// The cleanup every REFUSED registration owes, once it has created (or
+    /// found) a `per_principal` map entry: release the permit it acquired, then
+    /// [`Self::prune_principal`] (WR-06).
+    ///
+    /// # Why this is not dead code, even though it usually does nothing
+    ///
+    /// It reads like a no-op, and outside one race it IS one. Do not delete it
+    /// on that reasoning:
+    ///
+    /// * `Semaphore::try_acquire_owned` takes `Arc<Self>` BY VALUE, so a
+    ///   successful acquisition parks the caller's clone inside the returned
+    ///   permit and a failed one drops it. A rejecting call therefore holds at
+    ///   most ONE extra reference, and it is released here before the count is
+    ///   read.
+    /// * A `DuplicateSubscriptionId` or `PerPrincipalLimit` refusal implies some
+    ///   INCUMBENT guard is alive — that is what made the key occupied or the
+    ///   permits exhausted — so `strong_count >= 2` and the prune finds nothing
+    ///   to do.
+    ///
+    /// The leak is consequently a genuine RACE, not a missing call on the
+    /// ordinary path: it manifests only when the incumbent's guard drops DURING
+    /// the rejecting call. The incumbent's own `prune_principal` then sees the
+    /// rejecting call's in-flight `Arc` (count 2) and declines, and before this
+    /// helper existed the rejecting call returned without pruning — leaving a map
+    /// entry nothing would ever remove. Growth is bounded by the number of
+    /// distinct principals rather than by request volume, so it is a slow leak
+    /// rather than a vector, but it defeats the stated purpose of
+    /// `prune_principal`.
+    ///
+    /// `permit` is `None` on the [`ListenRejection::PerPrincipalLimit`] path,
+    /// where the failed `try_acquire_owned` already consumed the clone.
+    ///
+    /// # Lock order
+    ///
+    /// The caller MUST have released its `entries` guard first.
+    /// [`ListenGuard::drop`] takes `entries` and then `per_principal`; calling
+    /// this while holding `entries` would establish the opposite order and make
+    /// a cycle possible.
+    fn prune_after_rejection(
+        &self,
+        principal: &str,
+        permit: Option<tokio::sync::OwnedSemaphorePermit>,
+    ) {
+        // Released BEFORE the count is read, exactly as `ListenGuard::drop`
+        // releases its permits before pruning.
+        drop(permit);
+        self.prune_principal(principal);
+    }
+
     /// Drop a principal's semaphore once nothing references it, so the map does
     /// not grow without bound across many short-lived anonymous principals.
     ///
     /// `strong_count == 1` under the SAME lock `register` clones under means no
     /// in-flight registration holds a handle, so removing it cannot lose a
     /// concurrent acquisition.
+    ///
+    /// Two callers: [`ListenGuard::drop`] (the success path) and
+    /// [`Self::prune_after_rejection`] (both refusal paths that created an
+    /// entry).
     fn prune_principal(&self, principal: &str) {
         let mut per_principal = self.per_principal.lock();
         let prune = per_principal
@@ -1395,6 +1470,100 @@ mod tests {
                 registry.per_principal.lock().len(),
                 0,
                 "the per-principal semaphore map does not grow without bound"
+            );
+        }
+
+        /// WR-06: a REFUSED registration must not orphan a per-principal
+        /// semaphore.
+        ///
+        /// The leak is a RACE, and this test reproduces the STATE that race
+        /// produces rather than trying to schedule the race itself. Written
+        /// the obvious way — reject first, release the incumbents afterwards —
+        /// it would pass with or without the fix (Codex round 2, MEDIUM), which
+        /// is precisely the trap this shape avoids: the assertion in the middle
+        /// pins the leaked state, and the final assertion fails if the
+        /// `prune_principal` call is removed from
+        /// [`ListenRegistry::prune_after_rejection`].
+        #[tokio::test]
+        async fn the_rejection_path_prunes_a_semaphore_the_incumbent_could_not() {
+            let registry = Arc::new(ListenRegistry::new());
+            let (guard_a, _a_rx) = open(&registry, "raced", 1, tools_only()).expect("A registers");
+
+            // Stand in for a rejecting registration's IN-FLIGHT reference:
+            // `register` clones the map's `Arc` under the `per_principal` lock
+            // and then parks that clone inside the permit `try_acquire_owned`
+            // returns. Holding one here reproduces exactly that, with no thread
+            // interleaving to schedule.
+            let standin = {
+                let per_principal = registry.per_principal.lock();
+                Arc::clone(per_principal.get("raced").expect("A created the entry"))
+            }
+            .try_acquire_owned()
+            .expect("the per-principal cap is 4, so a second permit is available");
+
+            // The incumbent goes away DURING that call: its own
+            // `prune_principal` sees `strong_count == 2` and declines.
+            drop(guard_a);
+
+            assert_eq!(registry.live_streams(), 0, "A's registry entry is gone");
+            assert_eq!(
+                registry.per_principal.lock().len(),
+                1,
+                "but its semaphore is NOT: the incumbent's prune saw the rejecting \
+                 call's in-flight Arc and declined. THIS is the leaked state WR-06 \
+                 describes, and nothing else would ever remove it."
+            );
+
+            // Exactly what both of `register`'s refusal paths now do.
+            registry.prune_after_rejection("raced", Some(standin));
+
+            assert_eq!(
+                registry.per_principal.lock().len(),
+                0,
+                "the rejection path prunes what the incumbent could not"
+            );
+        }
+
+        /// SUPPLEMENTARY and PROBABILISTIC: concurrent churn must leave no
+        /// per-principal semaphore behind.
+        ///
+        /// It can CATCH a leak but cannot prove its absence — the schedule that
+        /// produces WR-06 is not guaranteed to occur. The deterministic proof is
+        /// [`the_rejection_path_prunes_a_semaphore_the_incumbent_could_not`];
+        /// this one exists to exercise the real interleaving that test
+        /// deliberately simulates. Kept small because CI runs
+        /// `--test-threads=1`, so its cost is paid serially.
+        #[tokio::test]
+        async fn concurrent_register_churn_leaves_no_orphaned_semaphores() {
+            /// Enough concurrency to reach both the per-principal cap (4) and
+            /// the duplicate-key path, without making the suite slow.
+            const THREADS: usize = 4;
+            const ITERATIONS: usize = 30;
+
+            let registry = Arc::new(ListenRegistry::new());
+            std::thread::scope(|scope| {
+                for thread in 0..THREADS {
+                    let registry = Arc::clone(&registry);
+                    scope.spawn(move || {
+                        for iteration in 0..ITERATIONS {
+                            // TWO principals across FOUR threads, and only TWO
+                            // ids each, so registrations collide on both the
+                            // cap and the key.
+                            let principal = if thread % 2 == 0 { "even" } else { "odd" };
+                            let id = i64::try_from(iteration % 2).expect("0 or 1");
+                            // A refusal is an EXPECTED outcome here, not a
+                            // failure: it is half the point.
+                            drop(open(&registry, principal, id, tools_only()));
+                        }
+                    });
+                }
+            });
+
+            assert_eq!(registry.live_streams(), 0, "every guard was dropped");
+            assert_eq!(
+                registry.per_principal.lock().len(),
+                0,
+                "no principal semaphore outlived the churn"
             );
         }
 
