@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v2.5
 milestone_name: MCP Spec 2026-07-28
 status: executing
-stopped_at: "Completed 113-16-PLAN.md (gap closure: the RUN libFuzzer campaign for subscription_listen_frames)"
-last_updated: "2026-07-26T23:49:19.485Z"
-last_activity: 2026-07-26 -- Phase 113 planning complete
+stopped_at: "Completed 113-17-PLAN.md (gap closure: the unconditional SseParser in-flight bound + configurable connect_sse ceiling)"
+last_updated: "2026-07-27T00:40:55.023Z"
+last_activity: 2026-07-27
 progress:
   total_phases: 71
   completed_phases: 57
   total_plans: 301
-  completed_plans: 297
+  completed_plans: 298
   percent: 80
 ---
 
@@ -26,10 +26,10 @@ See: .planning/PROJECT.md (updated 2026-07-22) · .planning/ROADMAP.md (v2.5 mil
 ## Current Position
 
 Phase: 113 (stateless-http-multi-round-trip-elicitation) — EXECUTING
-Plan: 16 of 16
+Plan: 2 of 20
 Status: Ready to execute
-Next action: re-verify the phase — all five verification gap items are now closed. Plan 113-14 closed gap items 1, 2 and 4 (HTTP-04 same-principal `subscriptions/listen` id-reuse collision safety); 113-15 closed gap item 3 / CR-03 (`SseParser`'s unbounded line buffer and the dead `SseConfig::max_buffer_size`); 113-16 closed gap item 5 — a 20 000-run libFuzzer campaign against `subscription_listen_frames` (exit 0, artifacts/ EMPTY, `113-FUZZ-EVIDENCE.md`) that provably reached 113-15's discard-and-latch branch. Then, on or after 2026-07-28, re-run the 4-step procedure in `113-SPEC-RECHECK.md` § Recorded Exception, upgrade the Verdict, and only then flip the seven requirements. A value mismatch is a phase-reopening event.
-Last activity: 2026-07-26 -- Phase 113 planning complete
+Next action: 113-17 landed the gap-closure replan's wave-1 parser work — `SseParser`'s bound is now UNCONDITIONAL over `buffer + current_event.data + chunk` (GAP-A closed for real; 113-15 had bounded only the newline-free case, which is the artificial one), the two whole-body transport sites go through a `pub(crate)` `feed_complete_body`, and `connect_sse`'s ceiling is a configurable 16 MiB with no public-config-struct change (semver 223/223, no update required). **113-20 is now load-bearing**: `feed_complete_body`'s byte-cap precondition is stated as a caller obligation but is NOT yet satisfied — both `response.collect()` sites are still uncapped (T-113-84). After the remaining wave plans, re-verify the phase; then, on or after 2026-07-28, re-run the 4-step procedure in `113-SPEC-RECHECK.md` § Recorded Exception, upgrade the Verdict, and only then flip the seven requirements. HTTP-04 stays `[~]` until that gate clears. A value mismatch is a phase-reopening event.
+Last activity: 2026-07-27
 
 ## v2.5 Phase Plan (8 phases, 38 requirements)
 
@@ -167,6 +167,12 @@ Decisions are logged in PROJECT.md Key Decisions table. Decisions framing this m
 - [Phase 113]: 113-16: the fuzz seam takes the BOUND as a parameter (decode_listen_chunks_for_fuzz -> SseParser::with_max_buffer_size) and reports the production listen_overflow observer per chunk — fuzzing the 256 KiB production constant can never reach the enforcement branch
 - [Phase 113]: 113-16: MEASURED — a single 64-byte bound covers plan 15's discard-and-latch branch ZERO times in 20 000 runs (libFuzzer's length ramp reached 38-byte inputs; retained corpus max 53 bytes, 0 entries over 64), so every input is decoded once per bound [64, 8]; coverage lives in the TARGET, not in invocation flags or a gitignored seed corpus
 - [Phase 113]: 113-16: branch coverage is PROVEN from the retained corpus (50 of 180 entries satisfy SseParser::feed's enforcement predicate by construction) plus a single-input replay, never asserted; artifacts-empty proofs use absolute binary paths because the rtk shell proxy reported a spurious 1 for a demonstrably empty directory
+- [Phase ?]: 113-17: the SSE bound is over RETAINED STATE + THIS CHUNK, not 'one in-progress event' (T-113-86) — evaluating it post-split would require the unbounded parse the bound prevents; accepted and paid for as a documentation obligation in sse_parser.rs, http.rs and client/subscriptions.rs
+- [Phase ?]: 113-17: two INDEPENDENTLY SUFFICIENT enforcement points kept (unconditional pre-check on retained+chunk, post-drain check on buffered_bytes) — negative control run 1 proves non-redundancy: the post-check alone stops the accumulating flood but cannot stop a single oversized COMPLETE line
+- [Phase ?]: 113-17: feed_complete_body is pub(crate) and its rustdoc states the byte-cap precondition as a REQUIREMENT ON THE CALLER naming plan 113-20 — it never claims the boundary is already capped (both sites still use a bare uncapped response.collect())
+- [Phase ?]: 113-17: the connect_sse SSE ceiling is CONFIGURABLE via DEFAULT_HTTP_SSE_BUFFERED_BYTES (16 MiB) + a PRIVATE HttpTransport field + an additive with_sse_buffered_bytes() builder — NOT an HttpConfig field, which is a MEASURED constructible_struct_adds_field major break; semver-checks stays 223/223 no-update-required
+- [Phase ?]: 113-17: base64 expands ~4/3, so the 'media unaffected by a 16 MiB ceiling' claim is WITHDRAWN in source — a 12 MiB binary is EXACTLY 16 MiB encoded before any envelope; pinned by a scaled-down expansion test rather than a comment
+- [Phase ?]: 113-17: HTTP-04 deliberately left at [~] implemented-pending-final-schema — the STATE.md phase gate forbids flipping HTTP-01..05/CLNT-01..02 to [x] before the 2026-07-28 schema re-verification
 
 ### Pending Todos
 
@@ -211,8 +217,8 @@ Items deferred by design for this milestone (design §7 / REQUIREMENTS v2):
 
 ## Session Continuity
 
-Last session: 2026-07-26T19:16:14.776Z
-Stopped at: Completed 113-16-PLAN.md (gap closure: the RUN libFuzzer campaign for subscription_listen_frames)
+Last session: 2026-07-27T00:40:55.013Z
+Stopped at: Completed 113-17-PLAN.md (gap closure: the unconditional SseParser in-flight bound + configurable connect_sse ceiling)
 Resume file: None
 
 ## Performance Metrics
@@ -261,3 +267,4 @@ Resume file: None
 | Phase 113 P14 | 62min | 2 tasks | 3 files |
 | Phase 113 P15 | 36min | 2 tasks | 3 files |
 | Phase 113 P16 | 49min | 2 tasks | 4 files |
+| Phase 113 P17 | 43min | 2 tasks | 4 files |

@@ -278,6 +278,13 @@ None. No hardcoded empty values, placeholder text or unwired data paths were int
 - **HTTP-04 / Success Criterion 3 ("memory-bounded long-lived stream") is now verifiable** on both incremental feeders: `overflowed()` latches and each feeder's per-chunk poll ends its stream.
 - **Behaviour change to flag for release notes:** `HttpTransport::connect_sse` now discards and ends the reader task on a payload exceeding 16 MiB of in-flight bytes. `with_sse_buffered_bytes()` is the escape hatch. Base64 media is materially affected (~4/3 expansion), contrary to the earlier withdrawn claim.
 
+## Self-Check: PASSED
+
+All claimed files exist on disk (`113-17-SUMMARY.md`, `src/shared/sse_parser.rs`,
+`src/shared/streamable_http.rs`, `src/shared/http.rs`, `src/client/subscriptions.rs`) and all
+three claimed commits are reachable in `git log --oneline --all`: `57d7a211`, `25ae4a17`,
+`253a7db8`.
+
 ---
 *Phase: 113-stateless-http-multi-round-trip-elicitation*
 *Completed: 2026-07-27*
