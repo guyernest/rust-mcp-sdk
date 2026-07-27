@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v2.5
 milestone_name: MCP Spec 2026-07-28
 status: executing
-stopped_at: "Completed 113-17-PLAN.md (gap closure: the unconditional SseParser in-flight bound + configurable connect_sse ceiling)"
-last_updated: "2026-07-27T00:40:55.023Z"
+stopped_at: "Completed 113-18-PLAN.md (gap closure: retryable duplicate refusal, fresh-id contract tripwire, WR-06 semaphore prune)"
+last_updated: "2026-07-27T01:33:08.411Z"
 last_activity: 2026-07-27
 progress:
   total_phases: 71
   completed_phases: 57
   total_plans: 301
-  completed_plans: 298
+  completed_plans: 299
   percent: 80
 ---
 
@@ -26,9 +26,9 @@ See: .planning/PROJECT.md (updated 2026-07-22) · .planning/ROADMAP.md (v2.5 mil
 ## Current Position
 
 Phase: 113 (stateless-http-multi-round-trip-elicitation) — EXECUTING
-Plan: 2 of 20
+Plan: 3 of 20
 Status: Ready to execute
-Next action: 113-17 landed the gap-closure replan's wave-1 parser work — `SseParser`'s bound is now UNCONDITIONAL over `buffer + current_event.data + chunk` (GAP-A closed for real; 113-15 had bounded only the newline-free case, which is the artificial one), the two whole-body transport sites go through a `pub(crate)` `feed_complete_body`, and `connect_sse`'s ceiling is a configurable 16 MiB with no public-config-struct change (semver 223/223, no update required). **113-20 is now load-bearing**: `feed_complete_body`'s byte-cap precondition is stated as a caller obligation but is NOT yet satisfied — both `response.collect()` sites are still uncapped (T-113-84). After the remaining wave plans, re-verify the phase; then, on or after 2026-07-28, re-run the 4-step procedure in `113-SPEC-RECHECK.md` § Recorded Exception, upgrade the Verdict, and only then flip the seven requirements. HTTP-04 stays `[~]` until that gate clears. A value mismatch is a phase-reopening event.
+Next action: 113-18 closed GAP-B and GAP-C. GAP-B is closed by CONTRACT, not by the originally-planned liveness reclaim: the receiver and the `ListenGuard` share one `stream::unfold` state tuple, so sender liveness cannot observe remote death (the verifier's reproduction dropped the receiver while holding the guard — a state production cannot enter). Instead the duplicate refusal became RETRYABLE (`RATE_LIMITED` -32005 at HTTP 200, `v2_status_for_code` byte-unchanged) and the fresh-id reconnect contract is documented in three places and pinned by a live tripwire whose negative control fails. GAP-C/WR-06 closed: both entry-creating rejection paths route through `prune_after_rejection`, proven by a test that fails when the prune is removed. A re-verifier must reproduce GAP-B through a REAL socket. Earlier in this wave 113-17 landed the parser work — `SseParser`'s bound is now UNCONDITIONAL over `buffer + current_event.data + chunk` (GAP-A closed for real), the two whole-body transport sites go through a `pub(crate)` `feed_complete_body`, and `connect_sse`'s ceiling is a configurable 16 MiB with no public-config-struct change (semver 223/223, no update required). **113-20 is now load-bearing**: `feed_complete_body`'s byte-cap precondition is stated as a caller obligation but is NOT yet satisfied — both `response.collect()` sites are still uncapped (T-113-84). After the remaining wave plans, re-verify the phase; then, on or after 2026-07-28, re-run the 4-step procedure in `113-SPEC-RECHECK.md` § Recorded Exception, upgrade the Verdict, and only then flip the seven requirements. HTTP-04 stays `[~]` until that gate clears. A value mismatch is a phase-reopening event.
 Last activity: 2026-07-27
 
 ## v2.5 Phase Plan (8 phases, 38 requirements)
@@ -173,6 +173,10 @@ Decisions are logged in PROJECT.md Key Decisions table. Decisions framing this m
 - [Phase ?]: 113-17: the connect_sse SSE ceiling is CONFIGURABLE via DEFAULT_HTTP_SSE_BUFFERED_BYTES (16 MiB) + a PRIVATE HttpTransport field + an additive with_sse_buffered_bytes() builder — NOT an HttpConfig field, which is a MEASURED constructible_struct_adds_field major break; semver-checks stays 223/223 no-update-required
 - [Phase ?]: 113-17: base64 expands ~4/3, so the 'media unaffected by a 16 MiB ceiling' claim is WITHDRAWN in source — a 12 MiB binary is EXACTLY 16 MiB encoded before any envelope; pinned by a scaled-down expansion test rather than a comment
 - [Phase ?]: 113-17: HTTP-04 deliberately left at [~] implemented-pending-final-schema — the STATE.md phase gate forbids flipping HTTP-01..05/CLNT-01..02 to [x] before the 2026-07-28 schema re-verification
+- [Phase ?]: 113-18: GAP-B closed by CONTRACT + retryability, not liveness reclaim — the receiver and ListenGuard share one stream::unfold state tuple, so sender liveness cannot observe remote death; the reclaim is abandoned with its evidence recorded
+- [Phase ?]: 113-18: all three listen refusals now answer RATE_LIMITED (-32005) at HTTP 200 (v2_status_for_code byte-unchanged), so the 'too many concurrent' MESSAGE is the ONLY discriminator between a duplicate and a capacity refusal
+- [Phase ?]: 113-18: the fresh-id reconnect contract is a CHECKED property — Client::subscriptions_listen's Uuid::new_v4() mint is pinned by a live tripwire whose negative control (constant id) fails twice: equal ids AND an outright -32005 refusal
+- [Phase ?]: 113-18: WR-06's semaphore leak is a RACE, not a missing call — prune_after_rejection covers both entry-creating rejection paths and ships with its reachability argument; the deterministic test pins the STATE the race produces and fails when the prune is removed
 
 ### Pending Todos
 
@@ -217,8 +221,8 @@ Items deferred by design for this milestone (design §7 / REQUIREMENTS v2):
 
 ## Session Continuity
 
-Last session: 2026-07-27T00:40:55.013Z
-Stopped at: Completed 113-17-PLAN.md (gap closure: the unconditional SseParser in-flight bound + configurable connect_sse ceiling)
+Last session: 2026-07-27T01:33:08.401Z
+Stopped at: Completed 113-18-PLAN.md (gap closure: retryable duplicate refusal, fresh-id contract tripwire, WR-06 semaphore prune)
 Resume file: None
 
 ## Performance Metrics
@@ -268,3 +272,4 @@ Resume file: None
 | Phase 113 P15 | 36min | 2 tasks | 3 files |
 | Phase 113 P16 | 49min | 2 tasks | 4 files |
 | Phase 113 P17 | 43min | 2 tasks | 4 files |
+| Phase 113 P18 | 47min | 2 tasks tasks | 4 files files |
