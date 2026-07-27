@@ -505,3 +505,45 @@ the 2161-test suite fails reliably.
    failure mode for a library. Returning `Error` would degrade gracefully
    instead of panicking. Out of scope for every Phase-113 plan (none of them
    declare `src/shared/streamable_http.rs`), so recorded rather than fixed.
+
+## D-113-J — CLAUDE.md's PMAT complexity query returns `null` on pmat 3.15.0
+
+**Found by:** plan 113-18, running verification step 15 (the `register` cog-25
+check).
+**Owner:** unassigned — a CLAUDE.md documentation fix, owned by no Phase-113 plan.
+
+`CLAUDE.md` § "CI Quality Gates" tells a developer whose PR fails the PMAT gate
+to run:
+
+```bash
+pmat analyze complexity --format json --max-cognitive 25 \
+  | jq '.violations[] | select(.path | startswith("src/"))'
+```
+
+On the pinned `pmat 3.15.0` that command is **silently vacuous**. Two things
+about the JSON shape have drifted:
+
+1. `.violations` at the TOP level is `null`. The violations array lives at
+   `.summary.violations`, so `.violations[]` errors with
+   `jq: Cannot iterate over null` — or, when the error is swallowed by
+   `2>/dev/null`, prints nothing and reads as "no violations."
+2. Each violation names its file under `.file` (as `./src/...`), not `.path`, so
+   `select(.path | startswith("src/"))` would match nothing even if the array
+   were found. `.files[].path` exists but is capped by `top_files_limit` (4 files
+   of 884 analyzed), so it is not a substitute.
+
+The working query on 3.15.0:
+
+```bash
+pmat analyze complexity --format json --max-cognitive 25 \
+  | jq -r '.summary.violations[] | select(.file | test("/src/")) | "\(.file):\(.line) \(.function) \(.rule)=\(.value)"'
+```
+
+which reports exactly the two known D-113-F violations
+(`handle_post_fast_path` cog 30, `handle_post_with_middleware` cog 31) and
+nothing else.
+
+**Why it matters:** the documented query is the FIRST thing a developer runs
+after the PR-blocking gate fails, and it currently answers "clean" for a tree
+that is not. Recorded rather than fixed because editing `CLAUDE.md` is outside
+this plan's file fence.
