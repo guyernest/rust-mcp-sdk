@@ -3560,6 +3560,11 @@ impl<T: Transport> Client<T> {
             }
             return RoundOutcome::Continue(MrtrRequestParams {
                 input_responses: None,
+                // EGRESS: `splice_mrtr_params` serializes the TYPED map, so the
+                // raw retention has no meaning on the client's write path. It
+                // exists only for the server's kind-directed re-decode at
+                // ingress (D-113-O).
+                input_responses_raw: None,
                 request_state,
             });
         };
@@ -3567,6 +3572,8 @@ impl<T: Transport> Client<T> {
         match self.fold_input_requests(requests).await {
             FoldOutcome::Fulfilled(responses) => RoundOutcome::Continue(MrtrRequestParams {
                 input_responses: Some(responses),
+                // EGRESS — see the sibling arm above.
+                input_responses_raw: None,
                 request_state,
             }),
             // D-06: no handler, or a decline/error — do NOT resend, and do NOT

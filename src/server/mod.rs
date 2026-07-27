@@ -1517,7 +1517,7 @@ impl Server {
             // The single-source envelope builder, rather than a hand-written
             // `JSONRPCResponse` literal re-spelling `"2.0"` and `data: None`.
             Err((code, message)) => {
-                return crate::server::task_dispatch::error_response(id, code, message.to_string())
+                return crate::server::task_dispatch::error_response(id, code, message)
             },
         };
 

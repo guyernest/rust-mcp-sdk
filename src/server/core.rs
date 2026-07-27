@@ -1717,10 +1717,20 @@ pub(crate) enum MrtrIngest {
         continuation: Value,
         /// The round the token was minted in.
         round: u8,
+        /// The server's OWN record of which kind it requested under each
+        /// `inputRequests` key, read back out of the verified continuation
+        /// (D-113-O). `None` means the token predates the field — see
+        /// [`Continuation::kinds`](crate::server::request_state::Continuation).
+        ///
+        /// It arrives here only on the `Ok` verdict, i.e. only AFTER the AEAD
+        /// tag check passed, which is what makes it trustworthy input to a
+        /// policy decision: the client can neither choose it nor alter it.
+        kinds: Option<crate::types::mrtr::InputRequestKinds>,
     },
     /// The token failed authentication, the verified continuation is at or past
-    /// [`MAX_MRTR_ROUNDS`], or the request could not be canonicalized: answer a
-    /// JSON-RPC error and NEVER invoke the handler.
+    /// [`MAX_MRTR_ROUNDS`], the request could not be canonicalized, or the
+    /// client's `inputResponses` do not match the kinds the server requested:
+    /// answer a JSON-RPC error and NEVER invoke the handler.
     Reject {
         /// The JSON-RPC error code (always `INVALID_PARAMS`).
         code: i32,
@@ -1731,7 +1741,14 @@ pub(crate) enum MrtrIngest {
         /// and [`MRTR_UNCANONICALIZABLE_MESSAGE`] — also specific, because the
         /// condition is structural and client-chosen rather than an
         /// authentication outcome.
-        message: &'static str,
+        ///
+        /// Owned rather than `&'static str` because the kind-mismatch refusal
+        /// (D-113-O) NAMES the offending key, and that key is only known at
+        /// runtime. It comes from the sealed continuation, never from the
+        /// request — see
+        /// [`InputResponseTypingError`](crate::types::mrtr::InputResponseTypingError)
+        /// for why one variant may name its key and the other may not.
+        message: String,
     },
     /// Strip the MRTR fields and RE-RUN the original handler from scratch, so
     /// the response carries real `inputRequests` the client can answer.
@@ -1793,7 +1810,7 @@ pub(crate) fn mrtr_ingest(inputs: &MrtrIngestInputs<'_>) -> MrtrIngest {
         );
         return MrtrIngest::Reject {
             code: crate::types::protocol::error_codes::INVALID_PARAMS,
-            message: MRTR_REJECT_MESSAGE,
+            message: MRTR_REJECT_MESSAGE.to_string(),
         };
     };
     // A server with no codec never opted into v2 continuations.
@@ -1821,7 +1838,7 @@ pub(crate) fn mrtr_ingest(inputs: &MrtrIngestInputs<'_>) -> MrtrIngest {
             );
             return MrtrIngest::Reject {
                 code: crate::types::protocol::error_codes::INVALID_PARAMS,
-                message: MRTR_UNCANONICALIZABLE_MESSAGE,
+                message: MRTR_UNCANONICALIZABLE_MESSAGE.to_string(),
             };
         },
     };
@@ -1854,7 +1871,7 @@ fn refuse_past_round_ceiling(round: u8, method: &str) -> Option<MrtrIngest> {
     );
     Some(MrtrIngest::Reject {
         code: crate::types::protocol::error_codes::INVALID_PARAMS,
-        message: MRTR_ROUND_CEILING_MESSAGE,
+        message: MRTR_ROUND_CEILING_MESSAGE.to_string(),
     })
 }
 
@@ -1871,6 +1888,7 @@ fn route_mrtr_verdict(verdict: crate::server::request_state::Verdict, method: &s
             MrtrIngest::Proceed {
                 continuation: continuation.state,
                 round: continuation.round,
+                kinds: continuation.kinds,
             }
         },
         Verdict::AuthFailed => {
@@ -1882,7 +1900,7 @@ fn route_mrtr_verdict(verdict: crate::server::request_state::Verdict, method: &s
             );
             MrtrIngest::Reject {
                 code: crate::types::protocol::error_codes::INVALID_PARAMS,
-                message: MRTR_REJECT_MESSAGE,
+                message: MRTR_REJECT_MESSAGE.to_string(),
             }
         },
         Verdict::UnknownKey => {
@@ -1924,22 +1942,31 @@ impl MrtrIngest {
     /// handlers must therefore be idempotent up to the point of their first
     /// `input_required` return, which is inherently true: a handler that returned
     /// `input_required` had not completed the operation.
+    ///
+    /// [`Proceed`](Self::Proceed) additionally RE-TYPES the client's
+    /// `inputResponses` against the kinds the verified continuation records
+    /// (D-113-O) — see [`retype_verified_input_responses`].
     pub(crate) fn apply(
         self,
         context: Option<crate::types::protocol::ProtocolContext>,
-    ) -> std::result::Result<
-        (Option<crate::types::protocol::ProtocolContext>, u8),
-        (i32, &'static str),
-    > {
+    ) -> std::result::Result<(Option<crate::types::protocol::ProtocolContext>, u8), (i32, String)>
+    {
         match self {
             Self::Inert => Ok((context, 0)),
             Self::Proceed {
                 continuation,
                 round,
-            } => Ok((
-                context.map(|ctx| ctx.with_verified_continuation(continuation, round)),
-                round,
-            )),
+                kinds,
+            } => {
+                let context = match context {
+                    Some(ctx) => Some(
+                        retype_verified_input_responses(ctx, kinds.as_ref())?
+                            .with_verified_continuation(continuation, round),
+                    ),
+                    None => None,
+                };
+                Ok((context, round))
+            },
             Self::Reelicit { round } => Ok((
                 context.map(crate::types::protocol::ProtocolContext::without_mrtr),
                 round,
@@ -1947,6 +1974,70 @@ impl MrtrIngest {
             Self::Reject { code, message } => Err((code, message)),
         }
     }
+}
+
+/// Re-type the client's `inputResponses` against the kinds the SERVER recorded
+/// requesting, replacing the untagged guess ingress made (D-113-O).
+///
+/// # Why this runs here and not at transport ingress
+///
+/// The kinds live inside the AEAD-sealed continuation, so they are readable only
+/// after `codec.verify` returned [`Verdict::Ok`](crate::server::request_state::Verdict).
+/// Ingress parses `params` long before that and cannot know them — which is why it
+/// guessed, and why the guess could be wrong in a way nothing detected. Running
+/// here means the kinds this enforces against have already passed the AEAD tag
+/// check: the client can neither choose them nor alter them.
+///
+/// # The three outcomes
+///
+/// | Continuation's `kinds` | Behaviour |
+/// |------------------------|-----------|
+/// | `None` (minted by a pre-D-113-O build) | keep the untagged values — the documented rolling-deploy degradation |
+/// | `Some(map)`, every answered key present and decodable as its kind | replace with the kind-directed typing |
+/// | `Some(map)`, any key missing or any value undecodable | REJECT with `INVALID_PARAMS` |
+///
+/// A decode failure is a rejection, never a fallback to the untagged guess:
+/// falling back is exactly the defect.
+#[cfg(all(feature = "streamable-http", not(target_arch = "wasm32")))]
+fn retype_verified_input_responses(
+    context: crate::types::protocol::ProtocolContext,
+    kinds: Option<&crate::types::mrtr::InputRequestKinds>,
+) -> std::result::Result<crate::types::protocol::ProtocolContext, (i32, String)> {
+    // No answers on this round: the client presented a token and asked the
+    // handler to continue without answering anything. Nothing to re-type, and
+    // nothing to reject — a handler that still needs an answer will simply ask
+    // again, which is the pre-existing `sep-2322-missing-response` behaviour.
+    let Some(raw) = context.input_responses_raw() else {
+        return Ok(context);
+    };
+    let retyped =
+        crate::types::mrtr::retype_input_responses_for_kinds(raw, kinds).map_err(|error| {
+            // The message is SPECIFIC rather than the generic
+            // `MRTR_REJECT_MESSAGE`, for the same reason the round-ceiling
+            // refusal is: it fires only AFTER the AEAD tag check passed, so it
+            // is not an authentication oracle. What it may and may not name is
+            // decided by `InputResponseTypingError`'s own `Display`, which
+            // distinguishes a server-assigned key from a client-chosen one.
+            tracing::warn!(
+                target: "mcp.mrtr",
+                unsolicited = matches!(
+                    error,
+                    crate::types::mrtr::InputResponseTypingError::Unsolicited { .. }
+                ),
+                "rejected an inputResponses entry that does not match the input request \
+                 the server recorded making — before D-113-O this was silently \
+                 reclassified and the handler re-elicited forever"
+            );
+            (
+                crate::types::protocol::error_codes::INVALID_PARAMS,
+                error.to_string(),
+            )
+        })?;
+    // `None` is the pre-kinds degradation: leave the untagged typing in place.
+    Ok(match retyped {
+        Some(typed) => context.with_kind_directed_input_responses(typed),
+        None => context,
+    })
 }
 
 /// Inputs to [`mrtr_egress`], bundled so both dispatch sites pass the same shape.
@@ -2557,10 +2648,8 @@ impl MrtrRound {
         auth_subject: Option<&str>,
         has_auth_provider: bool,
         codec: Option<&crate::server::request_state::RequestStateCodec>,
-    ) -> std::result::Result<
-        (Self, Option<crate::types::protocol::ProtocolContext>),
-        (i32, &'static str),
-    > {
+    ) -> std::result::Result<(Self, Option<crate::types::protocol::ProtocolContext>), (i32, String)>
+    {
         // Era-gated before the binding is derived, so v1 runs ZERO MRTR code and
         // pays no deep clone of the request params.
         let target = context
@@ -2679,7 +2768,7 @@ impl ProtocolHandler for ServerCore {
             self.request_state_codec(),
         ) {
             Ok(resolved) => resolved,
-            Err((code, message)) => return Self::error_response(id, code, message.to_string()),
+            Err((code, message)) => return Self::error_response(id, code, message),
         };
 
         // Execute the actual request handling with auth_context
@@ -4879,6 +4968,7 @@ mod tests {
             if let Some(token) = token {
                 context = context.with_mrtr_params(crate::types::mrtr::MrtrRequestParams {
                     input_responses: None,
+                    input_responses_raw: None,
                     request_state: Some(token.to_string()),
                 });
             }
@@ -4907,6 +4997,7 @@ mod tests {
             let MrtrIngest::Proceed {
                 continuation,
                 round,
+                kinds: _,
             } = verdict
             else {
                 panic!("a live, authentic token must Proceed, got {verdict:?}");
@@ -5078,6 +5169,7 @@ mod tests {
             let MrtrIngest::Proceed {
                 continuation,
                 round,
+                kinds: _,
             } = verdict
             else {
                 panic!("a request AT the cap must still Proceed, got {verdict:?}");
@@ -5188,6 +5280,7 @@ mod tests {
             let MrtrIngest::Proceed {
                 continuation,
                 round,
+                kinds: _,
             } = proceed
             else {
                 panic!("ceiling - 1 must still Proceed, got {proceed:?}");
@@ -5294,6 +5387,7 @@ mod tests {
             let v1 = ProtocolContext::new(Era::V1, ProtocolVersion("2025-11-25".to_string()))
                 .with_mrtr_params(crate::types::mrtr::MrtrRequestParams {
                     input_responses: None,
+                    input_responses_raw: None,
                     request_state: Some(token.clone()),
                 });
             assert!(matches!(
@@ -5400,6 +5494,7 @@ mod tests {
             let (context, round) = MrtrIngest::Proceed {
                 continuation: json!({ "step": 3 }),
                 round: 2,
+                kinds: None,
             }
             .apply(Some(v2_context()))
             .expect("Proceed is not a rejection");
@@ -5416,6 +5511,7 @@ mod tests {
             let carried = v2_context()
                 .with_mrtr_params(crate::types::mrtr::MrtrRequestParams {
                     input_responses: Some(crate::types::mrtr::InputResponses::new()),
+                    input_responses_raw: None,
                     request_state: Some("token".to_string()),
                 })
                 .with_verified_continuation(json!({ "step": 1 }), 4);
@@ -5434,7 +5530,7 @@ mod tests {
         fn apply_reject_is_an_error_so_the_handler_never_runs() {
             let outcome = MrtrIngest::Reject {
                 code: crate::types::protocol::error_codes::INVALID_PARAMS,
-                message: MRTR_REJECT_MESSAGE,
+                message: MRTR_REJECT_MESSAGE.to_string(),
             }
             .apply(Some(v2_context()));
             let Err((code, message)) = outcome else {
@@ -5452,6 +5548,229 @@ mod tests {
             let context = context.expect("context survives");
             assert!(context.mrtr_continuation().is_none());
             assert_eq!(round, 0);
+        }
+
+        // -----------------------------------------------------------------
+        // The kind-directed re-decode on the VERIFIED path (D-113-O).
+        //
+        // These drive `apply` directly with a constructed `Proceed`, for the
+        // same reason the round-ceiling tests do: the kinds map is a policy
+        // input that has ALREADY passed the AEAD tag check, so the value under
+        // test is exactly the trustworthy one. The end-to-end proof that the
+        // kinds actually SURVIVE the seal lives in `request_state`'s
+        // `mint_then_verify_round_trips_the_requested_kinds` and in
+        // `tests/v2_mrtr.rs`, over a real socket.
+        // -----------------------------------------------------------------
+
+        /// The literal overlapping answer of D-113-O: `action` AND
+        /// `content` + `model`, so it satisfies both `ElicitResult` and
+        /// `CreateMessageResult`, and Sampling is tried first.
+        fn overlapping_answer() -> Value {
+            json!({
+                "action": "accept",
+                "content": { "type": "text", "text": "hello" },
+                "model": "attacker-chosen-model",
+            })
+        }
+
+        /// A v2 context carrying `answers` as the client sent them, typed the way
+        /// transport ingress types them — by untagged guess.
+        fn context_answering(answers: &[(&str, Value)]) -> crate::types::protocol::ProtocolContext {
+            let raw: serde_json::Map<String, Value> = answers
+                .iter()
+                .map(|(key, value)| ((*key).to_string(), value.clone()))
+                .collect();
+            let mut params = json!({ "name": "t", "arguments": {} });
+            params["inputResponses"] = Value::Object(raw);
+            let mrtr = crate::types::mrtr::extract_mrtr_params(&params)
+                .expect("the fixture answers are inside every ingress bound");
+            v2_context().with_mrtr_params(mrtr)
+        }
+
+        fn kinds_of(
+            entries: &[(&str, crate::types::mrtr::InputRequestKind)],
+        ) -> crate::types::mrtr::InputRequestKinds {
+            entries
+                .iter()
+                .map(|(key, kind)| ((*key).to_string(), *kind))
+                .collect()
+        }
+
+        fn proceed_with(
+            context: crate::types::protocol::ProtocolContext,
+            kinds: Option<crate::types::mrtr::InputRequestKinds>,
+        ) -> std::result::Result<(Option<crate::types::protocol::ProtocolContext>, u8), (i32, String)>
+        {
+            MrtrIngest::Proceed {
+                continuation: json!({ "step": 1 }),
+                round: 1,
+                kinds,
+            }
+            .apply(Some(context))
+        }
+
+        /// D-113-O through `apply`: an elicitation was requested under `"k"` and
+        /// the client answers with the overlapping object. The handler now
+        /// receives it typed as an ELICITATION — where the untagged guess handed
+        /// it over as `Sampling`, the handler's arm fell through, and it
+        /// re-elicited.
+        ///
+        /// The outcome is correct TYPING, not rejection: the overlapping object
+        /// is a valid `ElicitResult` (surplus `model` ignored), so the client's
+        /// answer was fine and the server's guess was the defect. See the mrtr
+        /// unit test of the same name for the full reasoning.
+        #[test]
+        fn the_literal_d113o_answer_reaches_the_handler_as_an_elicitation() {
+            let (context, _) = proceed_with(
+                context_answering(&[("k", overlapping_answer())]),
+                Some(kinds_of(&[(
+                    "k",
+                    crate::types::mrtr::InputRequestKind::Elicitation,
+                )])),
+            )
+            .expect("a valid ElicitResult answered to an elicitation proceeds");
+            assert!(matches!(
+                context
+                    .expect("context survives")
+                    .input_responses()
+                    .expect("answers")["k"],
+                crate::types::mrtr::InputResponse::Elicitation(_)
+            ));
+        }
+
+        /// An answer that genuinely cannot be the requested kind is REJECTED with
+        /// `INVALID_PARAMS`, and the refusal names the key and the kind.
+        #[test]
+        fn an_answer_that_cannot_be_the_requested_kind_is_rejected_at_the_verified_path() {
+            let sampling_only = json!({
+                "content": { "type": "text", "text": "hello" },
+                "model": "attacker-chosen-model",
+            });
+            let outcome = proceed_with(
+                context_answering(&[("k", sampling_only)]),
+                Some(kinds_of(&[(
+                    "k",
+                    crate::types::mrtr::InputRequestKind::Elicitation,
+                )])),
+            );
+            let Err((code, message)) = outcome else {
+                panic!("an answer that is not an ElicitResult must short-circuit dispatch");
+            };
+            assert_eq!(code, crate::types::protocol::error_codes::INVALID_PARAMS);
+            assert!(
+                message.contains("\"k\""),
+                "the refusal must NAME the key it is about: {message}"
+            );
+            assert!(
+                message.contains("elicitation/create"),
+                "...and the kind the server actually requested there: {message}"
+            );
+            assert_ne!(
+                message, MRTR_REJECT_MESSAGE,
+                "it fires only AFTER the tag check passed, so it is not an authentication \
+                 oracle and must not hide behind the generic message"
+            );
+        }
+
+        /// An UNAMBIGUOUS `ElicitResult` proceeds too, and the continuation still
+        /// lands. Without this, a fix that rejected everything would pass the
+        /// rejection test above.
+        #[test]
+        fn a_correctly_shaped_answer_reaches_the_handler_typed_by_kind() {
+            let (context, round) = proceed_with(
+                context_answering(&[("k", json!({ "action": "accept", "content": { "v": 1 } }))]),
+                Some(kinds_of(&[(
+                    "k",
+                    crate::types::mrtr::InputRequestKind::Elicitation,
+                )])),
+            )
+            .expect("a well-shaped answer proceeds");
+            let context = context.expect("context survives");
+            assert_eq!(round, 1);
+            assert!(matches!(
+                context.input_responses().expect("answers survive")["k"],
+                crate::types::mrtr::InputResponse::Elicitation(_)
+            ));
+            assert_eq!(context.mrtr_continuation(), Some(&json!({ "step": 1 })));
+        }
+
+        /// A SAMPLING request answered with the overlapping object is ACCEPTED —
+        /// the same bytes the elicitation case rejects. The rejection is a
+        /// property of the mismatch, not of the value.
+        #[test]
+        fn the_same_bytes_are_accepted_when_sampling_is_what_was_requested() {
+            let (context, _) = proceed_with(
+                context_answering(&[("k", overlapping_answer())]),
+                Some(kinds_of(&[(
+                    "k",
+                    crate::types::mrtr::InputRequestKind::Sampling,
+                )])),
+            )
+            .expect("the overlapping object IS a valid CreateMessageResult");
+            assert!(matches!(
+                context
+                    .expect("context survives")
+                    .input_responses()
+                    .expect("answers")["k"],
+                crate::types::mrtr::InputResponse::Sampling(_)
+            ));
+        }
+
+        /// An answer under a key the continuation never requested is rejected,
+        /// and the message does NOT echo that key — it is client-chosen.
+        #[test]
+        fn an_unsolicited_key_is_rejected_at_the_verified_path() {
+            let outcome = proceed_with(
+                context_answering(&[("surprise", json!({ "roots": [] }))]),
+                Some(kinds_of(&[(
+                    "k",
+                    crate::types::mrtr::InputRequestKind::Elicitation,
+                )])),
+            );
+            let Err((code, message)) = outcome else {
+                panic!("an unsolicited key must short-circuit dispatch");
+            };
+            assert_eq!(code, crate::types::protocol::error_codes::INVALID_PARAMS);
+            assert!(
+                !message.contains("surprise"),
+                "an unsolicited key is CLIENT-chosen, so it must not be echoed: {message}"
+            );
+        }
+
+        /// A continuation minted before the kinds map existed degrades to the
+        /// untagged typing and does NOT reject — the rolling-deploy path. The
+        /// answer stays `Sampling`, which is the pre-fix behaviour, preserved
+        /// deliberately rather than by omission.
+        #[test]
+        fn a_pre_kinds_continuation_degrades_to_untagged_instead_of_rejecting() {
+            let (context, _) =
+                proceed_with(context_answering(&[("k", overlapping_answer())]), None)
+                    .expect("a pre-kinds continuation must never reject");
+            assert!(matches!(
+                context
+                    .expect("context survives")
+                    .input_responses()
+                    .expect("answers")["k"],
+                crate::types::mrtr::InputResponse::Sampling(_)
+            ));
+        }
+
+        /// A verified round carrying NO `inputResponses` is untouched: the client
+        /// may resend without answering, and the handler simply asks again.
+        #[test]
+        fn a_verified_round_with_no_answers_is_not_a_mismatch() {
+            let (context, _) = proceed_with(
+                v2_context(),
+                Some(kinds_of(&[(
+                    "k",
+                    crate::types::mrtr::InputRequestKind::Elicitation,
+                )])),
+            )
+            .expect("answering nothing is not an error");
+            assert!(context
+                .expect("context survives")
+                .input_responses()
+                .is_none());
         }
 
         // -----------------------------------------------------------------

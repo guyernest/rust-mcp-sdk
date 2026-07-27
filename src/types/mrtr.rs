@@ -864,6 +864,28 @@ pub(crate) const MAX_CANONICAL_DEPTH: usize = 64;
 pub(crate) struct MrtrRequestParams {
     /// The client's answers to a previous round's `inputRequests`.
     pub input_responses: Option<InputResponses>,
+    /// The same answers, UNDECODED, retained so the dispatch layer can re-decode
+    /// them KIND-DIRECTED once the continuation has been opened (D-113-O).
+    ///
+    /// # Why the raw values have to be kept
+    ///
+    /// `input_responses` above is typed by [`InputResponse::try_from_value_untagged`],
+    /// which is a guess: the three result shapes overlap and it takes the first
+    /// that fits. Ingress cannot do better, because the requested kinds live
+    /// inside a `requestState` that has not been verified yet. Re-decoding
+    /// correctly later needs the ORIGINAL value — a value already forced into the
+    /// wrong variant cannot be un-forced.
+    ///
+    /// # Why this is a BOUNDED duplication
+    ///
+    /// The copy is taken in [`extract_input_responses`] only AFTER all four
+    /// ingress bounds have passed, never as a way around them, so it inherits
+    /// every one of them: at most [`MAX_INPUT_RESPONSES`] entries, each at most
+    /// [`MAX_INPUT_RESPONSE_BYTES`] and [`MAX_INPUT_RESPONSE_DEPTH`] deep, and
+    /// [`MAX_INPUT_RESPONSES_TOTAL_BYTES`] (256 KiB) in total. The worst case this
+    /// adds to a request's footprint is therefore 256 KiB of already-accepted
+    /// JSON, not a new unbounded retention.
+    pub input_responses_raw: Option<serde_json::Map<String, Value>>,
     /// The opaque continuation token echoed back verbatim from a previous round.
     pub request_state: Option<String>,
 }
@@ -1026,9 +1048,19 @@ fn check_input_response_bounds(key: &str, value: &Value) -> Result<usize, MrtrPa
 }
 
 /// Read the `inputResponses` field: absent → `Ok(None)`, present-but-bad → `Err`.
+///
+/// Returns the typed map AND a verbatim copy of the raw entries. The raw copy
+/// exists so the dispatch layer can re-decode kind-directed after opening the
+/// continuation (D-113-O); see [`MrtrRequestParams::input_responses_raw`].
+///
+/// The ORDER here is load-bearing. All four bounds — count, per-entry depth,
+/// per-entry bytes and running total — are applied per entry BEFORE that entry is
+/// decoded or copied, and the loop returns on the first violation. So the raw
+/// retention can never become a way to hold more than the bounds already permit.
+#[allow(clippy::type_complexity)]
 fn extract_input_responses(
     params: &serde_json::Map<String, Value>,
-) -> Result<Option<InputResponses>, MrtrParseError> {
+) -> Result<Option<(InputResponses, serde_json::Map<String, Value>)>, MrtrParseError> {
     let Some(value) = params.get(INPUT_RESPONSES_KEY) else {
         return Ok(None);
     };
@@ -1043,6 +1075,7 @@ fn extract_input_responses(
     }
     let mut total = 0usize;
     let mut decoded = InputResponses::new();
+    let mut raw = serde_json::Map::new();
     for (key, entry) in entries {
         total = total.saturating_add(check_input_response_bounds(key, entry)?);
         if total > MAX_INPUT_RESPONSES_TOTAL_BYTES {
@@ -1054,8 +1087,114 @@ fn extract_input_responses(
         let response = InputResponse::try_from_value_untagged(entry.clone())
             .map_err(|_| MrtrParseError::InputResponseUndecodable { key: key.clone() })?;
         decoded.insert(key.clone(), response);
+        raw.insert(key.clone(), entry.clone());
     }
-    Ok(Some(decoded))
+    Ok(Some((decoded, raw)))
+}
+
+/// Why a client's `inputResponses` entry could not be typed against the kinds the
+/// server actually requested (D-113-O).
+///
+/// # The two variants have different PROVENANCE, and that decides what may be said
+///
+/// [`KindMismatch`](Self::KindMismatch)'s `key` is taken from the SEALED
+/// continuation's kinds map — server-assigned, AEAD-protected, and bounded by
+/// [`MAX_REQUEST_STATE_LEN`] because the whole continuation had to fit inside a
+/// token. Naming it in a client-facing message discloses nothing the client did
+/// not already receive in the previous round's `inputRequests`, and it is the one
+/// piece of information that makes the error actionable.
+///
+/// [`Unsolicited`](Self::Unsolicited)'s key is CLIENT-CHOSEN by definition — it is
+/// a key the continuation never contained — so it is attacker-controlled content
+/// bounded only by the 256 KiB `inputResponses` total. Its `Display` names
+/// NOTHING, matching the discipline [`MrtrParseError`] already applies to its own
+/// `key` fields: carried for programmatic use, never echoed.
+///
+/// Neither variant ever renders the VALUE, which is attacker-controlled in both
+/// cases.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum InputResponseTypingError {
+    /// The value under a key the server DID request does not decode as the kind
+    /// it requested there.
+    KindMismatch {
+        /// The offending key, taken from the sealed kinds map (see the type doc).
+        key: String,
+        /// The kind the server requested under that key.
+        expected: InputRequestKind,
+    },
+    /// The client answered under a key this continuation never requested.
+    Unsolicited {
+        /// The offending key — CLIENT-chosen, so NOT echoed by `Display`.
+        key: String,
+    },
+}
+
+impl std::fmt::Display for InputResponseTypingError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::KindMismatch { key, expected } => write!(
+                f,
+                "the inputResponses entry for {key:?} is not a valid response to the \
+                 {} request the server made under that key",
+                expected.wire_method()
+            ),
+            Self::Unsolicited { .. } => write!(
+                f,
+                "inputResponses carries an entry under a key this continuation never requested"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for InputResponseTypingError {}
+
+/// Re-type a client's raw `inputResponses` against the kinds the server RECORDED
+/// requesting, instead of against whichever overlapping shape happened to fit.
+///
+/// This is D-113-O's fix. `kinds` must come from a VERIFIED continuation — the
+/// server's own sealed record — never from anything on the request.
+///
+/// | `kinds` | Meaning | Result |
+/// |---------|---------|--------|
+/// | `None` | the continuation predates the kinds map (rolling deploy) | `Ok(None)` — keep the untagged values |
+/// | `Some(map)` | this build minted it | `Ok(Some(typed))`, or `Err` |
+///
+/// `Ok(None)` is a deliberate third state rather than "return the input
+/// unchanged": it makes the caller's degradation branch explicit and keeps the
+/// untagged values from being re-derived twice.
+///
+/// # Errors
+///
+/// [`InputResponseTypingError::KindMismatch`] when a requested key's value does
+/// not decode as the requested kind, and
+/// [`InputResponseTypingError::Unsolicited`] when the client answers under a key
+/// the continuation never requested. Both are rejections; neither falls back to
+/// the untagged guess, because falling back is precisely the defect.
+pub(crate) fn retype_input_responses_for_kinds(
+    raw: &serde_json::Map<String, Value>,
+    kinds: Option<&InputRequestKinds>,
+) -> Result<Option<InputResponses>, InputResponseTypingError> {
+    let Some(kinds) = kinds else {
+        return Ok(None);
+    };
+    let mut typed = InputResponses::new();
+    for (key, value) in raw {
+        // `get_key_value` so the key that may be NAMED in the error is the SEALED
+        // one, not the client's — identical by construction here, but taking it
+        // from the trusted side makes the provenance structural rather than
+        // argued.
+        let Some((sealed_key, kind)) = kinds.get_key_value(key) else {
+            return Err(InputResponseTypingError::Unsolicited { key: key.clone() });
+        };
+        let response = InputResponse::decode_for(*kind, value.clone()).map_err(|_| {
+            InputResponseTypingError::KindMismatch {
+                key: sealed_key.clone(),
+                expected: *kind,
+            }
+        })?;
+        typed.insert(key.clone(), response);
+    }
+    Ok(Some(typed))
 }
 
 /// Extract the MRTR fields from a request's top-level `params`.
@@ -1070,8 +1209,13 @@ pub(crate) fn extract_mrtr_params(params: &Value) -> Result<MrtrRequestParams, M
     let Some(object) = params.as_object() else {
         return Ok(MrtrRequestParams::default());
     };
+    let (input_responses, input_responses_raw) = match extract_input_responses(object)? {
+        Some((typed, raw)) => (Some(typed), Some(raw)),
+        None => (None, None),
+    };
     Ok(MrtrRequestParams {
-        input_responses: extract_input_responses(object)?,
+        input_responses,
+        input_responses_raw,
         request_state: extract_request_state(object)?,
     })
 }
@@ -1248,6 +1392,346 @@ pub(crate) fn salient_param_digest(
     let mut digest = [0u8; 32];
     digest.copy_from_slice(&output);
     Ok(digest)
+}
+
+#[cfg(test)]
+mod kind_directed_tests {
+    use super::*;
+    use serde_json::json;
+
+    /// The literal answer D-113-O describes: an object carrying BOTH `action`
+    /// (which makes it an `ElicitResult`) and `content` + `model` (which make it
+    /// a `CreateMessageResult`).
+    ///
+    /// `try_from_value_untagged` tries Sampling before Elicitation, so this is
+    /// the value that used to be silently reclassified.
+    fn overlapping_answer() -> Value {
+        json!({
+            "action": "accept",
+            "content": { "type": "text", "text": "hello" },
+            "model": "attacker-chosen-model",
+        })
+    }
+
+    fn raw_map(entries: &[(&str, Value)]) -> serde_json::Map<String, Value> {
+        entries
+            .iter()
+            .map(|(key, value)| ((*key).to_string(), value.clone()))
+            .collect()
+    }
+
+    fn kinds_of(entries: &[(&str, InputRequestKind)]) -> InputRequestKinds {
+        entries
+            .iter()
+            .map(|(key, kind)| ((*key).to_string(), *kind))
+            .collect()
+    }
+
+    /// The UNTAGGED decoder still reclassifies. Pinned, not as an endorsement but
+    /// as the premise the fix rests on: if this ever stopped being true, the
+    /// kind-directed path would be solving a problem that no longer exists and
+    /// the tests below would pass vacuously.
+    #[test]
+    fn the_untagged_decoder_still_reclassifies_the_overlapping_answer() {
+        let decoded = InputResponse::try_from_value_untagged(overlapping_answer())
+            .expect("the overlapping value decodes as something");
+        assert!(
+            matches!(decoded, InputResponse::Sampling(_)),
+            "Sampling is tried before Elicitation, which is the whole of D-113-O"
+        );
+    }
+
+    /// D-113-O, exactly as the deferred item narrates it: an elicitation was
+    /// requested under `"k"` and the client answers with the overlapping object.
+    /// Kind-directed, it is typed as the ELICITATION it actually is — where the
+    /// untagged guess called it `Sampling`, the handler's `Elicitation` arm fell
+    /// through, and the operation re-elicited forever.
+    ///
+    /// # Note the outcome: TYPED, not rejected
+    ///
+    /// [`ElicitResult`] carries no `deny_unknown_fields`, and its `content` is an
+    /// `Option<HashMap<String, Value>>`, so `{"action":…, "content":{…},
+    /// "model":…}` IS a valid `ElicitResult` — the surplus `model` is ignored.
+    /// The client's answer was well-formed all along; it was the SERVER's guess
+    /// that was wrong. So the correct fix for this value is to type it right, not
+    /// to reject it, and the loop closes because the handler's arm now matches.
+    ///
+    /// Rejection is the outcome for a value that genuinely cannot be the
+    /// requested kind — see
+    /// [`an_answer_that_cannot_be_the_requested_kind_is_rejected_naming_the_key`].
+    #[test]
+    fn the_literal_d113o_answer_is_typed_as_the_elicitation_it_answers() {
+        let typed = retype_input_responses_for_kinds(
+            &raw_map(&[("k", overlapping_answer())]),
+            Some(&kinds_of(&[("k", InputRequestKind::Elicitation)])),
+        )
+        .expect("a valid ElicitResult answered to an elicitation is not an error")
+        .expect("a non-None kinds map produces a kind-directed map");
+        assert!(
+            matches!(typed["k"], InputResponse::Elicitation(_)),
+            "kind-directed typing must follow what the SERVER asked for, not which \
+             overlapping shape happens to be tried first"
+        );
+    }
+
+    /// An answer that genuinely CANNOT be the requested kind is rejected, and the
+    /// message names the key.
+    ///
+    /// Dropping `action` is what makes this value a `CreateMessageResult` and
+    /// nothing else: `ElicitResult::action` has no default, so `decode_for` fails
+    /// rather than tolerating it the way it tolerates a surplus `model`.
+    #[test]
+    fn an_answer_that_cannot_be_the_requested_kind_is_rejected_naming_the_key() {
+        let sampling_only = json!({
+            "content": { "type": "text", "text": "hello" },
+            "model": "attacker-chosen-model",
+        });
+        let error = retype_input_responses_for_kinds(
+            &raw_map(&[("k", sampling_only)]),
+            Some(&kinds_of(&[("k", InputRequestKind::Elicitation)])),
+        )
+        .expect_err("an answer that is not an ElicitResult must be REJECTED");
+        assert_eq!(
+            error,
+            InputResponseTypingError::KindMismatch {
+                key: "k".to_string(),
+                expected: InputRequestKind::Elicitation,
+            }
+        );
+        let rendered = error.to_string();
+        assert!(
+            rendered.contains("\"k\""),
+            "the message must NAME the key, which came from the sealed continuation \
+             and is what makes the error actionable: {rendered}"
+        );
+        assert!(
+            rendered.contains("elicitation/create"),
+            "...and the kind that was actually requested there: {rendered}"
+        );
+        assert!(
+            !rendered.contains("attacker-chosen-model") && !rendered.contains("hello"),
+            "...and must never echo the VALUE, which is attacker-controlled: {rendered}"
+        );
+    }
+
+    /// A correctly-shaped answer for each of the three kinds decodes to THAT
+    /// kind. Without this, a fix that rejected everything would pass the test
+    /// above.
+    #[test]
+    fn a_correctly_shaped_answer_decodes_to_the_requested_kind() {
+        let raw = raw_map(&[
+            ("ask", json!({ "action": "accept", "content": { "v": 1 } })),
+            (
+                "model",
+                json!({ "content": { "type": "text", "text": "hi" }, "model": "m" }),
+            ),
+            ("roots", json!({ "roots": [] })),
+        ]);
+        let kinds = kinds_of(&[
+            ("ask", InputRequestKind::Elicitation),
+            ("model", InputRequestKind::Sampling),
+            ("roots", InputRequestKind::Roots),
+        ]);
+        let typed = retype_input_responses_for_kinds(&raw, Some(&kinds))
+            .expect("well-shaped answers are accepted")
+            .expect("a non-None kinds map produces a kind-directed map");
+        assert!(matches!(typed["ask"], InputResponse::Elicitation(_)));
+        assert!(matches!(typed["model"], InputResponse::Sampling(_)));
+        assert!(matches!(typed["roots"], InputResponse::Roots(_)));
+    }
+
+    /// An `ElicitResult`-shaped answer to a SAMPLING request is rejected too —
+    /// the guarantee is symmetric, not a special case aimed at one overlap.
+    #[test]
+    fn a_sampling_request_answered_with_an_elicitation_shape_is_rejected() {
+        let error = retype_input_responses_for_kinds(
+            &raw_map(&[("model", json!({ "action": "decline" }))]),
+            Some(&kinds_of(&[("model", InputRequestKind::Sampling)])),
+        )
+        .expect_err("a wrongly-shaped answer must be REJECTED");
+        assert_eq!(
+            error,
+            InputResponseTypingError::KindMismatch {
+                key: "model".to_string(),
+                expected: InputRequestKind::Sampling,
+            }
+        );
+    }
+
+    /// A key the continuation never requested is REJECTED, and the message does
+    /// NOT name it — that key is CLIENT-chosen, unlike a mismatch's key, which
+    /// comes out of the sealed map.
+    #[test]
+    fn an_unsolicited_key_is_rejected_without_being_echoed() {
+        // A distinctive key, so "is it echoed?" is decidable — a one-letter key
+        // would collide with ordinary words in the message and make the negative
+        // assertion vacuous or accidentally true.
+        let client_chosen = "zzz_client_chosen_key_zzz";
+        let error = retype_input_responses_for_kinds(
+            &raw_map(&[(client_chosen, json!({ "action": "accept" }))]),
+            Some(&kinds_of(&[(
+                "something_else",
+                InputRequestKind::Elicitation,
+            )])),
+        )
+        .expect_err("a key the server never asked about must be REJECTED");
+        assert_eq!(
+            error,
+            InputResponseTypingError::Unsolicited {
+                key: client_chosen.to_string(),
+            },
+            "the key is carried for programmatic use..."
+        );
+        assert!(
+            !error.to_string().contains(client_chosen),
+            "...but never rendered: it is client-chosen and bounded only by the 256 KiB \
+             inputResponses total, so echoing it would both amplify and poison logs — the \
+             same discipline MrtrParseError's Display already applies: {error}"
+        );
+    }
+
+    /// An EMPTY kinds map means "this round asked for nothing", so every answer
+    /// is unsolicited. This is the case a bare-map "empty means degrade" rule
+    /// would have silently accepted.
+    #[test]
+    fn an_empty_kinds_map_rejects_every_answer_rather_than_degrading() {
+        let error = retype_input_responses_for_kinds(
+            &raw_map(&[("k", overlapping_answer())]),
+            Some(&InputRequestKinds::new()),
+        )
+        .expect_err("a round that requested nothing can be answered with nothing");
+        assert!(matches!(
+            error,
+            InputResponseTypingError::Unsolicited { .. }
+        ));
+    }
+
+    /// An ABSENT kinds map — a continuation minted by a build that predates the
+    /// field — degrades to the untagged values and does NOT reject. This is the
+    /// rolling-deploy path.
+    #[test]
+    fn an_absent_kinds_map_degrades_to_untagged_without_rejecting() {
+        let retyped =
+            retype_input_responses_for_kinds(&raw_map(&[("k", overlapping_answer())]), None)
+                .expect("a pre-kinds continuation must never reject");
+        assert!(
+            retyped.is_none(),
+            "None means \"keep what ingress guessed\" — the caller's degradation branch"
+        );
+    }
+
+    /// A round that answers NOTHING against a non-empty kinds map is fine: the
+    /// client is allowed to resend without answering, and the handler simply asks
+    /// again (`sep-2322-missing-response-rerequests`).
+    #[test]
+    fn answering_nothing_is_not_a_mismatch() {
+        let typed = retype_input_responses_for_kinds(
+            &serde_json::Map::new(),
+            Some(&kinds_of(&[("k", InputRequestKind::Elicitation)])),
+        )
+        .expect("answering nothing is not an error")
+        .expect("a non-None kinds map produces a map");
+        assert!(typed.is_empty());
+    }
+
+    // -----------------------------------------------------------------
+    // The RAW retention, and the bounds that gate it.
+    // -----------------------------------------------------------------
+
+    /// The raw entries are retained VERBATIM alongside the guessed typing, so the
+    /// re-decode has the original value to work from. A value already forced into
+    /// the wrong variant cannot be un-forced.
+    #[test]
+    fn ingress_retains_the_raw_entries_verbatim() {
+        let params = json!({
+            "name": "elicit_once",
+            "arguments": {},
+            "inputResponses": { "k": overlapping_answer() },
+        });
+        let extracted = extract_mrtr_params(&params).expect("ingress accepts it");
+        let raw = extracted
+            .input_responses_raw
+            .expect("the raw entries are retained");
+        assert_eq!(raw["k"], overlapping_answer());
+        assert!(
+            matches!(
+                extracted.input_responses.expect("typed")["k"],
+                InputResponse::Sampling(_)
+            ),
+            "the TYPED map is still the untagged guess at this layer — correcting it \
+             needs the continuation, which ingress has not opened yet"
+        );
+    }
+
+    /// The four ingress bounds still fire BEFORE anything is decoded or copied,
+    /// so the raw retention is not a way around them. Asserted against the
+    /// unchanged `MrtrParseError` variants — if the retention had been inserted
+    /// ahead of a bound, the over-count case below would return a map instead of
+    /// an error.
+    #[test]
+    fn the_ingress_bounds_still_fire_before_the_raw_retention() {
+        let mut over_count = serde_json::Map::new();
+        for index in 0..=MAX_INPUT_RESPONSES {
+            over_count.insert(format!("k{index}"), json!({ "roots": [] }));
+        }
+        // `MrtrRequestParams` is deliberately not `PartialEq`, so the Ok side is
+        // matched rather than compared.
+        assert!(matches!(
+            extract_mrtr_params(&json!({ "inputResponses": over_count })),
+            Err(MrtrParseError::TooManyInputResponses {
+                count,
+                max: MAX_INPUT_RESPONSES,
+            }) if count == MAX_INPUT_RESPONSES + 1
+        ));
+
+        let huge = json!({ "roots": [], "pad": "x".repeat(MAX_INPUT_RESPONSE_BYTES) });
+        assert!(matches!(
+            extract_mrtr_params(&json!({ "inputResponses": { "k": huge } })),
+            Err(MrtrParseError::InputResponseTooLarge { .. })
+        ));
+
+        let mut deep = json!({ "roots": [] });
+        for _ in 0..=MAX_INPUT_RESPONSE_DEPTH {
+            deep = json!({ "n": deep });
+        }
+        assert!(matches!(
+            extract_mrtr_params(&json!({ "inputResponses": { "k": deep } })),
+            Err(MrtrParseError::InputResponseTooDeep { .. })
+        ));
+
+        // Many medium values: each under the per-entry cap, over the total.
+        let each = MAX_INPUT_RESPONSE_BYTES / 2;
+        let mut many = serde_json::Map::new();
+        for index in 0..MAX_INPUT_RESPONSES {
+            many.insert(
+                format!("k{index}"),
+                json!({ "roots": [], "pad": "x".repeat(each) }),
+            );
+        }
+        assert!(matches!(
+            extract_mrtr_params(&json!({ "inputResponses": many })),
+            Err(MrtrParseError::InputResponsesTotalTooLarge { .. })
+        ));
+    }
+
+    /// The sealed wire spelling of each kind is EXPLICIT and pinned. A changed
+    /// spelling makes every in-flight continuation's kinds map undecodable during
+    /// a rolling deploy, which is a hard failure rather than a degradation, so it
+    /// must not be free to drift.
+    #[test]
+    fn the_sealed_kind_spelling_is_pinned() {
+        for (kind, expected) in [
+            (InputRequestKind::Elicitation, "elicitation"),
+            (InputRequestKind::Sampling, "sampling"),
+            (InputRequestKind::Roots, "roots"),
+        ] {
+            assert_eq!(serde_json::to_value(kind).unwrap(), json!(expected));
+            assert_eq!(
+                serde_json::from_value::<InputRequestKind>(json!(expected)).unwrap(),
+                kind
+            );
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1559,6 +2043,7 @@ mod tests {
             &mut params,
             &MrtrRequestParams {
                 input_responses: Some(responses_fixture()),
+                input_responses_raw: None,
                 request_state: Some("opaque".to_string()),
             },
         );
@@ -1590,6 +2075,7 @@ mod tests {
             &mut params,
             &MrtrRequestParams {
                 input_responses: None,
+                input_responses_raw: None,
                 request_state: Some("x".to_string()),
             },
         );
@@ -1733,6 +2219,7 @@ mod tests {
         let mut params = json!({ "name": "search" });
         let original = MrtrRequestParams {
             input_responses: Some(responses_fixture()),
+            input_responses_raw: None,
             request_state: Some("token".to_string()),
         };
         splice_mrtr_params(&mut params, &original);
@@ -2194,6 +2681,7 @@ mod tests {
             let mut params = json!({ "name": "search" });
             let original = MrtrRequestParams {
                 input_responses: None,
+                input_responses_raw: None,
                 request_state: Some(state.clone()),
             };
             splice_mrtr_params(&mut params, &original);

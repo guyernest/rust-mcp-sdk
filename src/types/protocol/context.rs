@@ -248,6 +248,50 @@ impl ProtocolContext {
     pub(crate) fn request_state_token(&self) -> Option<&str> {
         self.mrtr.as_ref()?.request_state.as_deref()
     }
+
+    /// The client's `inputResponses` entries UNDECODED, as they arrived.
+    ///
+    /// The input to the kind-directed re-decode (D-113-O). Read only by the
+    /// dispatch layer, and only after a continuation has verified — see
+    /// [`with_kind_directed_input_responses`](Self::with_kind_directed_input_responses).
+    pub(crate) fn input_responses_raw(
+        &self,
+    ) -> Option<&serde_json::Map<String, serde_json::Value>> {
+        self.mrtr.as_ref()?.input_responses_raw.as_ref()
+    }
+
+    /// REPLACE the guessed `inputResponses` typing with the kind-directed one
+    /// (D-113-O).
+    ///
+    /// At transport ingress the entries were typed by
+    /// [`InputResponse::try_from_value_untagged`](crate::types::mrtr::InputResponse::try_from_value_untagged),
+    /// which takes the first of three overlapping shapes that fits. Once the
+    /// dispatch layer has opened the sealed continuation it knows which kind was
+    /// requested under each key, and this is where the corrected map lands.
+    ///
+    /// Handlers see NO difference in shape: they still read
+    /// `Option<&InputResponses>` through
+    /// [`RequestHandlerExtra::input_responses`](crate::RequestHandlerExtra::input_responses),
+    /// whose signature and behaviour are unchanged. Only the CORRECTNESS of the
+    /// typing changes — which is the point: a handler matching on
+    /// [`InputResponse::Elicitation`](crate::types::mrtr::InputResponse) now
+    /// matches when the server asked for an elicitation, instead of falling
+    /// through to a re-elicit because the value happened to also satisfy
+    /// `CreateMessageResult`.
+    ///
+    /// No-op when no MRTR params were attached, which cannot happen on the path
+    /// that calls this: a verified continuation implies a presented
+    /// `requestState`, which implies `mrtr` is `Some`.
+    #[must_use]
+    pub(crate) fn with_kind_directed_input_responses(
+        mut self,
+        responses: crate::types::mrtr::InputResponses,
+    ) -> Self {
+        if let Some(mrtr) = self.mrtr.as_mut() {
+            mrtr.input_responses = Some(responses);
+        }
+        self
+    }
 }
 
 /// Reserved `_meta` key carrying the per-request self-reported protocol version
@@ -591,6 +635,7 @@ mod tests {
     fn protocol_context_with_mrtr_params_round_trips() {
         let mrtr = crate::types::mrtr::MrtrRequestParams {
             input_responses: None,
+            input_responses_raw: None,
             request_state: Some("opaque-token".to_string()),
         };
         let ctx = ProtocolContext::new(Era::V2, ProtocolVersion("2026-07-28".to_string()))
@@ -615,6 +660,7 @@ mod tests {
     fn protocol_context_without_mrtr_clears_every_signal() {
         let mrtr = crate::types::mrtr::MrtrRequestParams {
             input_responses: Some(crate::types::mrtr::InputResponses::new()),
+            input_responses_raw: None,
             request_state: Some("opaque-token".to_string()),
         };
         let ctx = ProtocolContext::new(Era::V2, ProtocolVersion("2026-07-28".to_string()))
