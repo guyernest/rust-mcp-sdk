@@ -593,3 +593,94 @@ poll `overflowed()` per chunk and end the stream on trip. The collected-body cap
 then applies only to the genuinely one-shot reads (the JSON POST response and the
 v2 error envelope), and the complete-body parser bypass loses two of its three
 callers.
+
+---
+
+## D-113-L — the MRTR `round` counter is a security bound enforced only by the attacker
+
+Found by the full-phase review of 2026-07-26, not by any prior verification.
+
+`src/server/core.rs:2230` mints `inputs.round.saturating_add(1)` on every MRTR
+resend and **never compares it against anything**. The only round bound in the
+tree is `ClientBuilder::mrtr_round_limit` / `DEFAULT_MRTR_ROUND_LIMIT` in
+`src/client/mod.rs` — i.e. the D-09 "security counter" is enforced exclusively by
+the client, which is the party it exists to constrain. `grep -rn
+"MAX_MRTR_ROUNDS\|max_rounds" src/` returns nothing on the server side.
+
+**Failure.** A non-pmcp or hostile client ignores its own limit and resends
+`tools/call` with the echoed `requestState` indefinitely. The server mints
+`round+1` each time and saturates at 255, so a handler trying to self-limit on
+`extra.mrtr_round()` cannot distinguish round 255 from round 3000. Nothing in the
+SDK terminates the loop.
+
+**Why not fixed in review.** Picking the server-side ceiling, deciding whether it
+is per-server config or per-tool, and choosing the refusal code are protocol
+policy calls, not review fixes.
+
+**Fix shape.** A server-side `MAX_MRTR_ROUNDS` checked at the same site that mints
+the increment, refusing with a typed error before the handler is invoked. Bears on
+HTTP-02/HTTP-03, which are currently marked "implemented; pending final schema".
+
+## D-113-M — `write_canonical`'s depth cap collapses distinct params to one AAD
+
+`src/types/mrtr.rs:1045` replaces everything below `MAX_CANONICAL_DEPTH` (64) with
+the literal `"__mrtr_depth_capped__"`. Two `tools/call` requests whose `arguments`
+are identical to depth 64 but differ below it therefore produce the **same**
+`salient_param_digest`, and so the same AEAD AAD.
+
+**Failure.** A `requestState` minted for request A verifies against request B — a
+hole in the spec's replay-prevention clause 5c ("rejecting state presented on a
+request that does not match"), for which the AAD is the sole enforcement.
+
+**Why not fixed in review.** The safe behaviour is to *refuse* over-deep params
+rather than digest them to a constant, which is a wire-visible behaviour change.
+
+**Fix shape.** Return an error from `write_canonical` past the depth cap and fail
+the mint/verify, rather than emitting a marker that aliases.
+
+## D-113-N — the listen route invents an anonymous principal instead of failing closed
+
+`src/server/streamable_http_server.rs:2935` falls back to a fresh anonymous
+principal whenever `auth_context` is `None`, with no `has_auth_provider` check —
+unlike the MRTR path, which refuses outright (`resolve_mrtr_principal`, T-113-22).
+The two ingress paths disagree about what an unauthenticated caller is on the
+same server.
+
+**Failure.** Where an auth provider admits unauthenticated requests, every
+unauthenticated `subscriptions/listen` gets a brand-new `anon#N`, so
+`MAX_LISTEN_STREAMS_PER_PRINCIPAL` (4) never binds and one caller can hold all 64
+global slots, denying service to authenticated subscribers.
+
+**Fix shape.** Plumb `has_auth_provider` into the route and mirror the MRTR
+decision; needs a policy call on what an unauthenticated listener is.
+
+## D-113-O — server ingress types `inputResponses` by best-effort guess, not by kind
+
+`src/types/mrtr.rs:987` types every entry with the untagged decoder (Roots, then
+Sampling, then Elicitation), so a wrongly-shaped answer is silently reclassified
+rather than rejected. The kind-directed guarantee of T-113-46 holds only on the
+client.
+
+**Failure.** A handler requests an elicitation under key `"k"`; the client answers
+with an object carrying both `action` and `content`+`model`.
+`try_from_value_untagged` matches Sampling first, the handler's `Elicitation` arm
+falls through, and it re-elicits forever with no error anywhere.
+
+**Fix shape.** Carry the requested kind to ingress and decode kind-directed,
+erroring on mismatch. Currently documented as best-effort.
+
+## D-113-P — `ServerCoreBuilder` drops raw requestState key material un-scrubbed
+
+`src/server/builder.rs:100` stores `Option<[u8;32]>` plus a `Vec<[u8;32]>` of
+rotated-out keys and drops them in the clear, while every other copy of that
+material in the module is zeroized for T-113-05. `resolve_codec_at_build`
+zeroizes only its own locals.
+
+**Failure.** `.with_request_state_key(k).with_request_state_previous_keys(v)
+.build()` returns the builder's buffers to the allocator unscrubbed; any later
+heap read (core dump, allocator reuse, debugger) recovers the AEAD key the module
+exists to protect.
+
+**Why not fixed in review.** The natural fix is a `Drop` impl, which conflicts
+with by-value builder chaining — it wants a design decision (e.g. a `Zeroizing`
+newtype around the fields).
