@@ -333,6 +333,24 @@ absorbed as a known-issue: the affected requirement stays incomplete and the pha
 correct the wire constant, because a pre-final value baked into a released SDK is a
 wire-visible break for every downstream client (threat T-113-43).
 
+> ### THIS OBLIGATION HAS TWO ARMS
+>
+> **Arm 1 watches the SCHEMA. Arm 2 watches the CONFORMANCE SUITE. Running arm 1 alone is NOT a
+> run of this gate, and does NOT discharge this obligation.**
+>
+> The two arms exist because the requirements in this phase draw on two upstream sources with
+> two different release cadences. HTTP-01/HTTP-02 and most of HTTP-04 are graded by the
+> **schema** — arm 1. **HTTP-08 is graded by neither the schema nor any specification sentence**:
+> its advertise-implies-serve rule exists only as a TypeScript predicate in the conformance
+> repository (§ B.6). A schema re-check can never detect drift there.
+>
+> The failure mode this guards against is not neglect but *misplaced confidence*: arm 1 is
+> rigorous, so completing it feels like completing the gate. Anyone recording
+> `PUBLISHED-CONFIRMED` after running only arm 1 has verified the schema and asserted nothing
+> whatsoever about HTTP-08. See `113-SPEC-RECHECK-ADDENDUM-2026-07-26.md` Finding 12.
+
+#### Arm 1 — Schema
+
 Re-verification procedure for plan 12 Task 3:
 
 1. `gh api repos/modelcontextprotocol/modelcontextprotocol/contents/schema --jq '.[].name'`
@@ -344,6 +362,37 @@ Re-verification procedure for plan 12 Task 3:
    `supported`-is-a-string-array payload shapes are unchanged.
 4. Record the outcome by upgrading this file's `## Verdict` to `PUBLISHED-CONFIRMED` or
    `PUBLISHED-DRIFT`. Only then may requirements be flipped.
+
+#### Arm 2 — Conformance predicate (§ B.6)
+
+Owner: **HTTP-08**. This arm is independent of the schema's publication date — the conformance
+repository moves on its own cadence and is already ahead of the pin recorded in § B.1.
+
+1. Re-fetch `src/scenarios/server/stateless.ts` from
+   `github.com/modelcontextprotocol/conformance` at **`main`/HEAD** (not at § B.1's pinned sha —
+   fetching the pin back would compare the pin against itself and can never detect drift):
+
+   ```
+   gh api "repos/modelcontextprotocol/conformance/contents/src/scenarios/server/stateless.ts?ref=main" --jq '.content' | base64 -d
+   ```
+
+2. Locate `advertisesSubscriptions` and diff it against § B.6.2's verbatim quotation. Record the
+   HEAD sha and the line range actually found, as § B.6.1 does — the predicate has moved within
+   the file before, so a changed line number is not by itself drift.
+
+3. **Any difference in the DISJUNCT SET is drift**, whether a disjunct is gained, lost or its
+   capability path renamed. Comment and formatting changes are not drift; record them and move
+   on. § B.6.4 states the consequence of each kind.
+
+4. If the disjunct set changed, update § B.6.3's table to match upstream and re-run
+   `cargo nextest run --test v2_conformance_pin`. That test binds the table to pmcp's
+   `advertises_subscriptions` and will FAIL by name on any disjunct pmcp has no counterpart for —
+   which is the signal that HTTP-08's obligation itself has changed and the phase must reopen.
+   Do **not** resolve such a failure by editing the table back.
+
+**Landing state (shared).** Arm 1's step 4 is the landing state for the obligation as a whole. It
+is reached only when **both** arms have been run and recorded. A `## Verdict` upgraded on the
+strength of arm 1 alone is invalid, and requirements flipped under it must be flipped back.
 
 ---
 
@@ -449,6 +498,148 @@ No `sep-2322`-prefixed check id exists under `src/scenarios/server/tasks/`. Clie
 scenarios live in `src/scenarios/client/mrtr-client.ts` and are **out of scope** for this
 enumeration (the task scoped it to `src/scenarios/server/`), but plan 13 should be aware they
 exist.
+
+### B.6 — `advertisesSubscriptions` predicate pin (the SECOND source of truth)
+
+**Why this section exists.** HTTP-08's advertise-implies-serve rule — *a server that advertises a
+subscription-delivered capability but answers `subscriptions/listen` with `-32601` is graded
+FAILURE* — **has no specification sentence behind it at all.**
+`docs/specification/draft/server/utilities/subscriptions.mdx` (165 lines, read in full) contains
+no capability-gating rule, and `ServerCapabilities` has no `subscriptions` capability. The entire
+grading comes from the TypeScript predicate quoted below, which lives in a **different repository
+on a different release cadence** from the schema Section A pins.
+
+That asymmetry is the danger addressed here. Section A's schema arm is rigorous, so running it
+*feels* like running "the gate" — and a `PUBLISHED-CONFIRMED` verdict could then be recorded
+while the only source HTTP-08 actually depends on went unread. See
+`113-SPEC-RECHECK-ADDENDUM-2026-07-26.md` **Finding 12**, which states the gap, and **Finding 8**,
+which is the proof that this class of drift is realized history rather than theory: the three
+error-code constants `-32020`/`-32021`/`-32022` were **renumbered after a locked release
+candidate**. A predicate in a fast-moving conformance repository is at least as mobile as a
+schema constant.
+
+#### B.6.1 Provenance
+
+| Field | Value |
+|-------|-------|
+| Repository | `github.com/modelcontextprotocol/conformance` |
+| Sha (as pinned in § B.1) | `a865118206d4d8cc8dbc5f5201607839281d0c3b` |
+| File path | `src/scenarios/server/stateless.ts` (1343 lines at this sha) |
+| Line range quoted below | **983–1016** |
+| Predicate proper | **988–993** (`const advertisesSubscriptions = !!( … );`) |
+| Fetched at (UTC) | 2026-07-27T10:07:49Z |
+
+§ B.1 remains this section's single pin — the sha above is a **copy for cross-checking**, not a
+rival source of truth, and `tests/v2_conformance_pin.rs` asserts the two are equal at runtime.
+
+Fetch command, literal:
+
+```
+gh api "repos/modelcontextprotocol/conformance/contents/src/scenarios/server/stateless.ts?ref=a865118206d4d8cc8dbc5f5201607839281d0c3b" --jq '.content' | base64 -d
+```
+
+Sha confirmation, literal:
+
+```
+$ gh api repos/modelcontextprotocol/conformance/commits/a865118206d4d8cc8dbc5f5201607839281d0c3b \
+    --jq '{sha:.sha,date:.commit.committer.date,subject:(.commit.message|split("\n")[0])}'
+{"date":"2026-07-23T06:04:40Z","sha":"a865118206d4d8cc8dbc5f5201607839281d0c3b","subject":"fix request metadata HTTP method handling (#409)"}
+```
+
+**Line-range finding.** `.planning/REQUIREMENTS.md` and the addendum's Finding 12 both cite
+`stateless.ts:988-1015`. That citation is **correct at its start** — line 988 is exactly
+`const advertisesSubscriptions = !!(` — and **one line short at its end**: the `listenRejected`
+closure that consumes the predicate closes at line **1016**, not 1015. The range quoted here is
+therefore widened to **983–1016**, which additionally captures the five-line rationale comment
+(983–987) stating the rule in the suite's own words. No relocation was found; the citation is
+accurate, merely truncated by one line and missing the rationale. Recorded for exactness, not as
+a defect.
+
+#### B.6.2 The predicate, verbatim
+
+Quoted byte-for-byte from the fetched file. Not reformatted, not elided, not tidied — the whole
+value of a pin is that a future re-check can diff text against text.
+
+```typescript
+// conformance @ a865118206d4d8cc8dbc5f5201607839281d0c3b
+// src/scenarios/server/stateless.ts:983-1016
+    // A server that advertises no subscription-delivered capability has
+    // nothing to serve on subscriptions/listen, so a -32601 there is a
+    // legitimate feature absence (SKIPPED). A server that DOES advertise
+    // listChanged/subscribe but rejects the method fails: it claims a
+    // feature it does not serve.
+    const advertisesSubscriptions = !!(
+      discoverCapabilities?.tools?.listChanged ||
+      discoverCapabilities?.prompts?.listChanged ||
+      discoverCapabilities?.resources?.listChanged ||
+      discoverCapabilities?.resources?.subscribe
+    );
+    // The legitimate skip requires an OBSERVED advertisement: when
+    // server/discover itself failed, nothing is known about the server's
+    // capabilities and the gap must not read as an intentional absence.
+    const discoverObserved = !discoverRpcError && discoverResult != null;
+    const listenRejected = (frames: any[]) => {
+      if (frames[0]?.error?.code !== -32601) return null;
+      if (discoverObserved && !advertisesSubscriptions) {
+        return {
+          skipped: true,
+          details: {
+            note: 'Server advertises no subscription-delivered capability; subscriptions/listen is not applicable.'
+          }
+        };
+      }
+      return {
+        error: notTestable(
+          advertisesSubscriptions
+            ? 'server advertises listChanged/subscribe capabilities but answers subscriptions/listen with -32601 (Method not found)'
+            : 'server/discover was not observed, so the -32601 on subscriptions/listen cannot be attributed to an intentionally absent capability'
+        ),
+        details: { untestable: true, response: frames[0] }
+      };
+    };
+```
+
+`discoverCapabilities` is the server's own advertisement: `stateless.ts:463-466` assigns it from
+`discoverResult.capabilities`, i.e. the `capabilities` object returned by `server/discover`.
+
+#### B.6.3 Disjuncts
+
+Four disjuncts, listed in the fixed order the predicate evaluates them — which is also the index
+order of pmcp's `supported_flags` (`src/types/subscriptions.rs:488-511`) and of
+`CAPABILITY_NAMES` in `tests/v2_subscriptions.rs`. **`tests/v2_conformance_pin.rs` parses this
+table at runtime**, so its shape is load-bearing: one disjunct per row, four columns, no merged
+cells, capability path in column 2.
+
+| # | Conformance capability path | Predicate disjunct (verbatim) | pmcp counterpart |
+|---|-----------------------------|-------------------------------|------------------|
+| 1 | `tools.listChanged` | `discoverCapabilities?.tools?.listChanged` | `ServerCapabilities::tools.list_changed` (`supported_flags` index 0) |
+| 2 | `prompts.listChanged` | `discoverCapabilities?.prompts?.listChanged` | `ServerCapabilities::prompts.list_changed` (`supported_flags` index 1) |
+| 3 | `resources.listChanged` | `discoverCapabilities?.resources?.listChanged` | `ServerCapabilities::resources.list_changed` (`supported_flags` index 2) |
+| 4 | `resources.subscribe` | `discoverCapabilities?.resources?.subscribe` | `ServerCapabilities::resources.subscribe` (`supported_flags` index 3) |
+
+**Agreement at this pin: EXACT.** The predicate's four disjuncts and pmcp's four
+`supported_flags` arms are the same four capability paths in the same order. No mismatch was
+found, so nothing is deferred under the scope fence. Note that the predicate keys the fourth
+disjunct on `resources.subscribe` — the *capability* — not on the `resourceSubscriptions` field
+of `SubscriptionFilter`; HTTP-08's requirement text names the latter when enumerating the opt-ins,
+and the two are different surfaces. pmcp reads `resources.subscribe`, matching the predicate.
+
+#### B.6.4 What drift here means
+
+Concretely, for **HTTP-08**:
+
+| Drift | Consequence for pmcp |
+|-------|----------------------|
+| A disjunct is **GAINED** upstream | pmcp under-advertises: a server setting only the new capability would answer `subscriptions/listen` with `-32601` while the suite now considers it advertised, and would be newly graded **FAILURE** — "claims a feature it does not serve" |
+| A disjunct is **LOST** upstream | pmcp over-obliges itself: it serves a stream the suite no longer requires, wasting the fail-closed default and diverging from the SKIPPED grading |
+| A capability path is **RENAMED** | the two sides silently stop describing the same thing — the worst case, because both continue to pass their own local tests |
+
+**The consequence of detected drift matches the schema arm's: phase-reopening, not advisory.**
+HTTP-08 does not get flipped to complete over a predicate that has moved; the requirement stays
+incomplete and the phase reopens to reconcile `supported_flags` against the new pin. A
+subscription route gate that disagrees with the grader is a wire-visible conformance break for
+every downstream server built on pmcp's default, exactly as a pre-final error-code constant would
+be (threat T-113-156).
 
 ---
 
