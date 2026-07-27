@@ -720,7 +720,70 @@ global slots, denying service to authenticated subscribers.
 **Fix shape.** Plumb `has_auth_provider` into the route and mirror the MRTR
 decision; needs a policy call on what an unauthenticated listener is.
 
-## D-113-O — server ingress types `inputResponses` by best-effort guess, not by kind
+## ~~D-113-O — server ingress types `inputResponses` by best-effort guess, not by kind~~ — RESOLVED (plan 113-27, `64de5b15` + `7b47694e` + `9b7fedb0`)
+
+**RESOLVED.** The server's own record of which kind it requested under each
+`inputRequests` key now rides inside the AEAD-sealed `Continuation`
+(`Continuation.kinds`), built at mint time from `InputRequest::kind()` over the
+handler's own map and never from anything the client sent. `MrtrIngest::apply`
+re-decodes every entry with `InputResponse::decode_for` on the `Verdict::Ok` arm
+— i.e. strictly after the AEAD tag check, so the kinds it enforces against cannot
+be chosen or altered by the client — and does it before the handler is invoked.
+
+**The fix shape's "erroring on mismatch" is only half the outcome, and the
+measurement corrected the expectation.** `ElicitResult` carries no
+`deny_unknown_fields` and its `content` is `Option<HashMap<String, Value>>`, so
+the literal answer this item describes (`action` + `content` + `model`) **is a
+valid `ElicitResult`**. The client's answer was well formed; the SERVER's guess
+was the defect. Kind-directed, it types as `Elicitation`, the handler's arm
+matches, and the round COMPLETES — the loop closes by succeeding, not by
+erroring. Rejection is the outcome for an answer that genuinely cannot be the
+requested kind (drop `action` and it is a `CreateMessageResult` and nothing
+else), and for a key the continuation never requested. Both branches are pinned
+at the unit and socket level.
+
+**The composition with D-113-L is recorded rather than assumed.** This item says
+the loop runs "forever with no error anywhere". Since plan 113-24 that is no
+longer literally true — `MAX_MRTR_ROUNDS` (16) terminates it, but with a
+MISLEADING round-limit error after 16 wasted round trips and 16 handler
+invocations, measured verbatim against `9a7024cd`. The ceiling bounds a loop it
+cannot diagnose; this plan removes the cause. The negative control shows 113-24's
+round-limit test staying green while all three D-113-O tests fail, which is the
+direct evidence the two are independent.
+
+**Policy calls made and recorded in-source:**
+
+* **`Option<InputRequestKinds>`, not a bare map.** ABSENT means "minted by a
+  pre-D-113-O build" and DEGRADES to the untagged decode (the rolling-deploy
+  path, not a bypass: only a holder of the server's key can mint a continuation
+  at all). `Some(empty)` means "this round asked for NOTHING" and rejects every
+  answer. An empty-map sentinel would have conflated them, and the second state
+  is reachable — a handler may signal `input_required` with an empty
+  `inputRequests`.
+* **What a refusal may NAME is decided by provenance.** A `KindMismatch` names
+  its key, taken via `kinds.get_key_value` so the rendered key provably comes out
+  of the SEALED map (server-assigned, bounded by `MAX_REQUEST_STATE_LEN`). An
+  `Unsolicited` key is CLIENT-chosen by definition and bounded only by the 256
+  KiB `inputResponses` total, so it is carried for programmatic use and never
+  rendered — the discipline `MrtrParseError`'s `Display` already applies. Neither
+  ever renders a VALUE.
+* **`mint` takes the kinds as an explicit parameter**, so every mint site must
+  decide — the same reason `RequestBinding::from_request` is the only binding
+  constructor (D-113-M).
+
+The untagged decoder SURVIVES, deliberately and now documented rather than
+implicit, for the two cases where the kind is genuinely unknowable: a first call
+carrying `inputResponses` with no continuation, and a pre-kinds continuation.
+
+Measured: a token carrying 64 kinds entries (the widest map
+`MAX_INPUT_RESPONSES` can ever be answered with) is **2360 bytes against the
+8192-byte bound**; no new mint guard was needed, since `mint` already refuses to
+emit a token its own ingress would reject. `semver-checks` 223/223 no update
+required with the new public `Serialize`/`Deserialize` on `InputRequestKind` in
+place. Full verbatim reproduction and negative-control output in
+`113-27-SUMMARY.md`.
+
+Original report follows.
 
 `src/types/mrtr.rs:987` types every entry with the untagged decoder (Roots, then
 Sampling, then Elicitation), so a wrongly-shaped answer is silently reclassified

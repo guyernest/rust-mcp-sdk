@@ -2357,7 +2357,7 @@ Plans:
 
 **Wave 3** *(blocked on Wave 2)*
 
-- [ ] 113-27-PLAN.md — D-113-O: `inputResponses` typed KIND-DIRECTED at server ingress from the sealed continuation's own record, replacing the best-effort untagged guess that silently reclassifies a wrong-shaped answer into an infinite re-elicitation
+- [x] 113-27-PLAN.md — D-113-O: `inputResponses` typed KIND-DIRECTED at server ingress from the sealed continuation's own record, replacing the best-effort untagged guess that silently reclassifies a wrong-shaped answer into an infinite re-elicitation
 
 **Wave 4** *(blocked on Wave 3; added by the RC spec-research supplement — see `113-SPEC-RECHECK-ADDENDUM-2026-07-26.md` Findings 11-14)*
 
@@ -2460,7 +2460,7 @@ Plans:
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 112. Version Plumbing Spine | 10/10 | Complete    | 2026-07-23 |
-| 113. Stateless HTTP + MRTR | 29/32 | In Progress|  |
+| 113. Stateless HTTP + MRTR | 30/32 | In Progress|  |
 | 114. Tasks Extension Migration | 0/TBD | Not started | - |
 | 115. JSON Schema 2020-12 + Caching Hints | 0/TBD | Not started | - |
 | 116. Auth Hardening SEPs | 0/TBD | Not started | - |
