@@ -596,7 +596,49 @@ callers.
 
 ---
 
-## D-113-L — the MRTR `round` counter is a security bound enforced only by the attacker
+## ~~D-113-L — the MRTR `round` counter is a security bound enforced only by the attacker~~ — RESOLVED (plan 113-24, `6f1a44b6` / `4f045462`)
+
+**RESOLVED.** `src/server/core.rs` now carries
+`pub(crate) const MAX_MRTR_ROUNDS: u8 = 16` — **exactly 2x** the shipped
+`DEFAULT_MRTR_ROUND_LIMIT` (8), with the relationship stated in the constant's
+rustdoc and asserted at compile time in `tests/v2_mrtr.rs`, so a
+default-configured pmcp client can never trip it.
+
+The **protocol-policy calls** the "why not fixed in review" note deferred were
+made and are recorded in-source:
+
+* **A CONSTANT, not per-server config.** A knob would have to land on
+  `ServerCoreBuilder` / `ServerBuilder` (files plan 113-25 owns in the same
+  wave), and a knob is not what closes this item — an enforced bound is. The
+  deferral and its reason are in the constant's rustdoc; making it tunable later
+  is additive and cannot reintroduce the defect.
+* **Refusal code `INVALID_PARAMS` (-32602)**, matching the sibling MRTR reject,
+  so `v2_status_for_code` → HTTP 400 is byte-unchanged and no new code enters the
+  pre-final `-3202x` range.
+* **A DISTINCT, informative message.** The generic `MRTR_REJECT_MESSAGE` exists
+  to avoid an authentication oracle; a ceiling refusal fires only *after* the
+  AEAD tag check passed, so naming the limit discloses nothing.
+* **`Verdict::Expired` at or past the ceiling is REFUSED, not re-elicited** —
+  letting one's own tokens expire is within a server's gift, so re-eliciting
+  there would convert T-113-49's round-preservation into the bypass.
+* **`Verdict::UnknownKey` → round 0 is ACCEPTED, not a bypass** (T-113-113):
+  indistinguishable from a client starting a fresh operation, which it may always
+  do. Written into the verdict-table rustdoc so it is not re-litigated.
+
+Two enforcement points, and their relationship is **measured**, not assumed:
+`route_mrtr_verdict` refuses before dispatch (so the handler never runs on the
+refused round), and `seal_input_required` refuses to mint ahead of every other
+mint precondition. NC-1 (ingress off) shows the handler running **17 times
+instead of 16**; **NC-2 (mint off) is still green** — A is sufficient for the
+client-driven path, so B is a backstop against a future refactor deleting the
+ingress bound, not a co-equal check. NC-3 (both off) exhausted a 48-resend cap
+with no refusal. All three are recorded verbatim in `113-24-SUMMARY.md`.
+
+Saturation is now unreachable and proven so: a proptest over the whole
+`0u8..=u8::MAX` range asserts every round threaded into egress is strictly below
+the ceiling and that `saturating_add(1)` agrees exactly with widened arithmetic.
+
+Original report follows.
 
 Found by the full-phase review of 2026-07-26, not by any prior verification.
 
