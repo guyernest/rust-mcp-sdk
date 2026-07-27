@@ -451,6 +451,30 @@ impl ListenRejection {
 /// unauthenticated deployment — [`MAX_LISTEN_STREAMS_TOTAL`] is the operative
 /// bound there. A deployment that needs per-caller stream limits must configure
 /// an auth provider, which is the same posture MRTR takes (`core::ANONYMOUS_PRINCIPAL`).
+///
+/// # Reachability, since D-113-N (plan 113-23)
+///
+/// This function is now reached ONLY on a server with NO auth provider
+/// configured. The listen route resolves its principal through
+/// `resolve_listen_principal` (`src/server/streamable_http_server.rs`), which
+/// REFUSES an unauthenticated caller with `AUTHENTICATION_REQUIRED` when a
+/// provider IS configured. Before that fix, a provider that admitted
+/// unauthenticated requests let one caller mint an unbounded number of private
+/// principals here and hold every [`MAX_LISTEN_STREAMS_TOTAL`] slot.
+///
+/// # Why this is NOT the MRTR ingress's shared `ANONYMOUS_PRINCIPAL`
+///
+/// The two v2 ingress paths agree on rows one and two of the decision and
+/// DELIBERATELY differ on the third. MRTR's principal is AEAD
+/// additional-authenticated-data, so it must be STABLE across the two rounds of
+/// one exchange — a per-request `anon#N` there would make every round-2
+/// `requestState` fail to verify, hence its single shared constant. A listen
+/// principal is only a concurrency-accounting key and has no such binding, so it
+/// keeps the per-stream counter: collapsing it onto one shared constant would
+/// cap a no-auth server at [`MAX_LISTEN_STREAMS_PER_PRINCIPAL`] (4) concurrent
+/// streams instead of [`MAX_LISTEN_STREAMS_TOTAL`] (64), which is precisely the
+/// local/dev configuration the shipped examples use. Pinned by
+/// `unauthenticated_listen_still_serves_on_a_server_with_no_auth_provider`.
 pub(crate) fn anonymous_principal() -> String {
     static NEXT: AtomicU64 = AtomicU64::new(0);
     format!("anon#{}", NEXT.fetch_add(1, Ordering::Relaxed))

@@ -2660,6 +2660,14 @@ struct ListenServerView {
     info: crate::types::Implementation,
     /// The registry the accepted stream registers with.
     registry: Arc<crate::server::subscriptions::ListenRegistry>,
+    /// Whether this server has an auth provider configured — the FAIL-CLOSED
+    /// input to [`resolve_listen_principal`] (D-113-N).
+    ///
+    /// Read HERE, under the one lock acquisition this struct exists to make, and
+    /// nowhere else on the listen path: a second `get_auth_provider()` call
+    /// would be both a second lock and a second place the decision could drift
+    /// from the MRTR ingress it now mirrors.
+    has_auth_provider: bool,
 }
 
 /// Read the listen route's view of the server under ONE lock acquisition.
@@ -2673,6 +2681,9 @@ async fn listen_server_view(state: &ServerState) -> ListenServerView {
         capabilities: server.capabilities().clone(),
         info: server.info().clone(),
         registry: Arc::clone(server.listen_registry()),
+        // The EXISTING public accessor (`src/server/mod.rs`), not a new seam and
+        // not a widened field.
+        has_auth_provider: server.get_auth_provider().is_some(),
     }
 }
 
@@ -2830,6 +2841,53 @@ fn resolve_agreed_filter(
         .intersect_with_capabilities(&view.capabilities))
 }
 
+/// Resolve the listen stream's concurrency-accounting principal, FAIL-CLOSED.
+///
+/// The SIBLING this mirrors is `crate::server::core`'s `resolve_mrtr_principal`
+/// (its `MrtrPrincipal` carries the same two inputs), so the two v2 ingress
+/// paths on ONE server give the SAME answer to "what is an unauthenticated
+/// caller":
+///
+/// * an `AuthContext` is present → its `subject`;
+/// * no `AuthContext` but an auth provider IS configured → `None`, i.e. REFUSE;
+/// * no auth provider at all → a fresh
+///   [`anonymous_principal`](crate::server::subscriptions::anonymous_principal).
+///
+/// # The defect this closes (D-113-N)
+///
+/// Before this function the route minted a fresh `anon#N` whenever
+/// `auth_context` was `None` with no `has_auth_provider` check, so on a server
+/// whose provider ADMITS unauthenticated requests every unauthenticated listen
+/// received a private, uncapped identity —
+/// `MAX_LISTEN_STREAMS_PER_PRINCIPAL` never bound and one caller could hold all
+/// `MAX_LISTEN_STREAMS_TOTAL` global slots, starving authenticated subscribers.
+///
+/// # Why the third row deliberately does NOT collapse onto MRTR's shared constant
+///
+/// This is a DECISION, not an oversight — do not "simplify" the two rows into
+/// one. MRTR needs a STABLE principal string on a no-auth server because that
+/// principal is AEAD additional-authenticated-data: a per-request `anon#N` would
+/// make every round-2 `requestState` fail to verify, which is exactly why
+/// `resolve_mrtr_principal` answers with one shared `ANONYMOUS_PRINCIPAL`. This
+/// route has no such binding — its principal is ONLY a concurrency-accounting
+/// key. Unifying them would silently drop a no-auth server from
+/// `MAX_LISTEN_STREAMS_TOTAL` (64) concurrent streams to
+/// `MAX_LISTEN_STREAMS_PER_PRINCIPAL` (4), which is the common local/dev
+/// configuration and the one the shipped `s47_v2_stateless_mrtr` /
+/// `s48_v2_mrtr_client` examples use. The regression guard is
+/// `unauthenticated_listen_still_serves_on_a_server_with_no_auth_provider` in
+/// `tests/v2_subscriptions.rs`.
+fn resolve_listen_principal(
+    auth_context: Option<&crate::server::auth::AuthContext>,
+    has_auth_provider: bool,
+) -> Option<String> {
+    match (auth_context, has_auth_provider) {
+        (Some(context), _) => Some(context.subject.clone()),
+        (None, true) => None,
+        (None, false) => Some(crate::server::subscriptions::anonymous_principal()),
+    }
+}
+
 /// Serve — or conformantly reject — a `subscriptions/listen` request (HTTP-04).
 ///
 /// THE single implementation both POST entrypoints call, so the fast and
@@ -2843,11 +2901,19 @@ fn resolve_agreed_filter(
 /// 1. era is not v2 -> `-32601` (`subscriptions/listen` does not exist on v1);
 /// 2. no subscription-delivered capability advertised -> `-32601`, the
 ///    conformant-by-absence configuration;
-/// 3. `params` that do not deserialize (`notifications` is REQUIRED) ->
+/// 3. an unauthenticated caller on a server that HAS an auth provider ->
+///    `-32003` (`AUTHENTICATION_REQUIRED`) at HTTP 200 (D-113-N). Placed HERE
+///    deliberately: after the two `-32601` gates, so a v1 or capability-less
+///    server keeps answering "no such method" rather than advertising that it
+///    authenticates; before the params parse, so the refusal never depends on
+///    an unauthenticated caller's body; and before `registry.register`, so a
+///    refused caller never takes a permit. The decision itself lives in
+///    [`resolve_listen_principal`], which mirrors the MRTR ingress;
+/// 4. `params` that do not deserialize (`notifications` is REQUIRED) ->
 ///    `-32602`, AFTER the header gate and auth have already run;
-/// 4. the per-principal or global concurrency cap is exhausted -> `-32005`
+/// 5. the per-principal or global concurrency cap is exhausted -> `-32005`
 ///    (`RATE_LIMITED`) at HTTP 200, carrying a JSON-RPC error body;
-/// 5. a duplicate LIVE `(principal, subscriptionId)` -> ALSO `-32005` at HTTP
+/// 6. a duplicate LIVE `(principal, subscriptionId)` -> ALSO `-32005` at HTTP
 ///    200. Since 113-18 all three refusals share the RETRYABLE `RATE_LIMITED`
 ///    code — the duplicate previously answered `-32600` at HTTP 400, the "do not
 ///    retry" class, for a condition that clears on its own — so the refusal
@@ -2884,10 +2950,8 @@ async fn assemble_subscriptions_listen(
     v2_outbound: Option<(String, String)>,
     auth_context: Option<&crate::server::auth::AuthContext>,
 ) -> Response {
-    use crate::server::subscriptions::{
-        anonymous_principal, ListenFrame, ListenKey, LISTEN_CHANNEL_CAPACITY,
-    };
-    use crate::types::protocol::error_codes::METHOD_NOT_FOUND;
+    use crate::server::subscriptions::{ListenFrame, ListenKey, LISTEN_CHANNEL_CAPACITY};
+    use crate::types::protocol::error_codes::{AUTHENTICATION_REQUIRED, METHOD_NOT_FOUND};
     use crate::types::subscriptions::SUBSCRIPTIONS_LISTEN_METHOD;
 
     let era = protocol_context.map(|pc| pc.era);
@@ -2923,16 +2987,34 @@ async fn assemble_subscriptions_listen(
         );
     }
 
-    let agreed = match resolve_agreed_filter(params, &view) {
-        Ok(filter) => filter,
-        Err((code, message)) => return listen_rejection_response(era, id, code, message),
-    };
-
     // AUTH PLUMBING (the ONE threading site — do not re-resolve elsewhere): the
     // POST pipeline already validated the request and produced this
     // `AuthContext` before dispatch, and it is passed straight in here. Both the
     // per-principal cap and the collision-free `ListenKey` key off its subject.
-    let principal = auth_context.map_or_else(anonymous_principal, |ctx| ctx.subject.clone());
+    //
+    // FAIL-CLOSED (D-113-N): rejection case 3 above. `None` means "an auth
+    // provider is configured and this caller presented nothing it accepted", the
+    // same answer `resolve_mrtr_principal` gives the MRTR ingress on the same
+    // server. `AUTHENTICATION_REQUIRED` is deliberately NOT in
+    // `v2_status_for_code`'s 400 arm, so — exactly like the three `RATE_LIMITED`
+    // listen refusals — it answers at HTTP 200 with a JSON-RPC error body.
+    // Remapping -32003 to 401 would change the status of every other emitter of
+    // that code across this transport, so `v2_status_for_code` stays untouched.
+    let Some(principal) = resolve_listen_principal(auth_context, view.has_auth_provider) else {
+        return listen_rejection_response(
+            era,
+            id,
+            AUTHENTICATION_REQUIRED,
+            format!(
+                "{SUBSCRIPTIONS_LISTEN_METHOD} requires an authenticated caller on this server"
+            ),
+        );
+    };
+
+    let agreed = match resolve_agreed_filter(params, &view) {
+        Ok(filter) => filter,
+        Err((code, message)) => return listen_rejection_response(era, id, code, message),
+    };
 
     let (sender, receiver) = mpsc::channel(LISTEN_CHANNEL_CAPACITY + 1);
     // The acknowledgement goes into the channel BEFORE the entry exists, so
