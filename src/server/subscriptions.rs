@@ -1703,9 +1703,9 @@ mod tests {
             /// Every listen refusal is RETRYABLE, and the MESSAGE is the only
             /// thing that tells them apart.
             ///
-            /// This test replaces `the_duplicate_rejection_maps_to_invalid_request`,
-            /// whose premise 113-18 inverted: the duplicate used to answer
-            /// `-32600` at HTTP 400 — "do not retry" — for a condition that is
+            /// It replaces the pre-113-18 test whose premise this plan inverted:
+            /// the duplicate used to answer the request-malformed code `-32600`
+            /// at HTTP 400 — the "do not retry" class — for a condition that is
             /// purely transient server state and clears on its own. It now joins
             /// the two capacity refusals on `RATE_LIMITED`.
             ///
