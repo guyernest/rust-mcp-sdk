@@ -2353,7 +2353,7 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1)*
 
-- [ ] 113-26-PLAN.md — D-113-M: `write_canonical`'s depth-cap marker deleted and the canonicaliser made fallible, so two requests differing only below depth 64 can no longer share one AEAD AAD (replay-prevention clause 5c)
+- [x] 113-26-PLAN.md — D-113-M: `write_canonical`'s depth-cap marker deleted and the canonicaliser made fallible, so two requests differing only below depth 64 can no longer share one AEAD AAD (replay-prevention clause 5c)
 
 **Wave 3** *(blocked on Wave 2)*
 
@@ -2460,7 +2460,7 @@ Plans:
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 112. Version Plumbing Spine | 10/10 | Complete    | 2026-07-23 |
-| 113. Stateless HTTP + MRTR | 26/32 | In Progress|  |
+| 113. Stateless HTTP + MRTR | 27/32 | In Progress|  |
 | 114. Tasks Extension Migration | 0/TBD | Not started | - |
 | 115. JSON Schema 2020-12 + Caching Hints | 0/TBD | Not started | - |
 | 116. Auth Hardening SEPs | 0/TBD | Not started | - |
