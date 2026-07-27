@@ -2373,6 +2373,33 @@ Plans:
 
 **Phase-gate outcome (plan 12):** 16/16 build-matrix rows exit 0; `cargo semver-checks` 223/223 pass with no update required and `cargo public-api` shows **zero** removed public items, so the milestone is provably still additive; `make quality-gate` exits 0; all seven new/changed files clear the 80% coverage target; the 20k-run fuzz campaign passed with zero crash artifacts. **The phase is NOT closed as complete** — `113-SPEC-RECHECK.md`'s `## Verdict` is still `PENDING` (re-verified 2026-07-26: no `schema/2026-07-28` upstream), so HTTP-01..05 and CLNT-01..02 are marked `[~]` implemented-pending-final-schema rather than complete. See `113-12-SUMMARY.md`.
 
+### Phase 113.1: Merge Unblock (INSERTED)
+
+**Goal:** Clear the three things that keep the `fix/mcp-publisher-oidc-audience` branch from merging, so Phases 114-119 can start. Two of them (D-113-R, D-113-Q) are what hold **HTTP-09** at `[ ]` on the merits; the third (D-113-U) is the org-required CI `gate` check itself.
+**Requirements**: HTTP-09
+**Depends on:** Phase 113
+**Plans:** TBD
+
+**Scope** (the three blockers, verbatim from the milestone phase list):
+
+  1. **D-113-U — PR-blocking PMAT complexity.** `handle_post_fast_path` (cog 30) and `handle_post_with_middleware` (cog 31) against the hard ceiling of 25, reaching CI through the org-required `gate` check. Both were 22/21 on `main` and were pushed up by earlier commits on this branch. The identified fix is extracting the v2 header gate — copy-pasted between the two handlers — into one `resolve_v2_gate` helper (`FastPathDispatch`/`MiddlewareDispatch` are also field-for-field identical).
+  2. **D-113-R — quadratic scan over peer-chosen input.** `drain_complete_lines`'s per-CALL cost: `consumed` restarts at 0 each `feed()`, so a peer sending 1-byte chunks gets one full-buffer rescan per byte. Distinct from the per-line drain quadratic already fixed in `0493d9fb`. Violates HTTP-09's explicit O(n) clause.
+  3. **D-113-Q — unbounded peer read.** `src/shared/sse_optimized.rs:266`'s unbounded `reqwest::Response::text()`, currently allowlisted `NOT BOUNDED` in the Phase-113 bounded-read tripwire.
+
+**Also in scope (record, not necessarily fix):** the 18 unbounded `reqwest` reads in `src/client/oauth.rs`, `src/client/auth.rs` and the two auth providers — same defect class, outside the tripwire's scope fence, semi-trusted IdP rather than arbitrary peer.
+
+**Success Criteria** (what must be TRUE):
+
+  1. `pmat quality-gate --fail-on-violation --checks complexity` passes with no `src/` function over cog 25, and the org-required `gate` status check is green on the branch (D-113-U)
+  2. No scan over peer-chosen input on the v2 transport path is worse than O(n), proven by a falsifiable linear-time budget that fails on the current `drain_complete_lines` shape (D-113-R)
+  3. The bounded-read tripwire's allowlist no longer carries `sse_optimized.rs:266` as `NOT BOUNDED` (D-113-Q)
+  4. **HTTP-09 flips from `[ ]` to met on the merits** in `.planning/REQUIREMENTS.md` — not by narrowing the requirement
+  5. The 18 auth-path unbounded reads are recorded as a named deferral with an owning phase
+
+Plans:
+
+- [ ] TBD (run /gsd:plan-phase 113.1 to break down)
+
 ### Phase 114: Tasks Extension Migration
 
 **Goal**: Tasks become a v2 extension — a wire-API reshape behind the proven `serde_json::Value` `TaskRouter` boundary, not a storage rewrite — while v1 Tasks stay fully functional, all backends survive unchanged, and stateless v2 owner-binding fails closed (the critical no-session cross-caller-leak guard).
@@ -2512,6 +2539,7 @@ that has *no bespoke binary*, any transport off the local disk, and any notion o
    version is promoted; trust is anchored in pmcp.run, not in a developer-held key. The SDK's job
    is therefore *carriage and verification*, NOT signing — **no crypto dependency is added to
    `pmcp-package`.** (`digest::verify` is and remains an integrity check, not a signature check.)
+
 2. **GraphQL mediates import.** The package is uploaded through pmcp.run's endpoint, which owns
    placement into ECR. **`oci-client` is therefore NOT added** — the CLI never speaks to a registry.
    `oci-spec` (types only) stays; the manifest types were already chosen so a registry client
