@@ -3213,62 +3213,23 @@ async fn handle_post_fast_path(
         Err(response) => return response,
     };
 
-    match ingress {
-        HttpIngress::Public(TransportMessage::Request { id, request }) => {
-            // `Box::pin`: the dispatch future crosses clippy's large_future
-            // threshold once the v2 status mapping is threaded through it —
-            // boxing keeps the handler future small without changing behavior
-            // (same treatment the two POST entrypoints already get).
-            Box::pin(handle_fast_path_request(
-                &state,
-                id,
-                request,
-                auth_context,
-                FastPathDispatch {
-                    is_init_request,
-                    response_session_id,
-                    protocol_context,
-                    v2_outbound,
-                    sessions_on,
-                },
-                session_id.as_ref(),
-            ))
-            .await
+    // `Box::pin` the dispatch future: the per-path response assemblies grow it
+    // past clippy's large_future threshold; boxing keeps the handler future
+    // small without changing behavior (mirrors the middleware-path handler).
+    Box::pin(dispatch_message_fast(
+        &state,
+        ingress,
+        FastPathDispatch {
+            is_init_request,
+            response_session_id,
+            protocol_context,
+            v2_outbound,
+            sessions_on,
         },
-        // Per-path response assembly (finding #3/#4): reached AFTER session, the v2
-        // matrix, legacy-version validation, and auth — never an early return.
-        HttpIngress::Discover { id, .. } => {
-            assemble_discover_response_fast(
-                &state,
-                id,
-                protocol_context.as_ref(),
-                DiscoverResponseShape {
-                    response_session_id: response_session_id.as_ref(),
-                    v2_outbound,
-                    sessions_on,
-                },
-                session_id.as_ref(),
-            )
-            .await
-        },
-        // HTTP-04: the capability-gated listen route. Reached AFTER the same
-        // session / v2-matrix / legacy-version / auth pipeline as every other
-        // ingress — a held-open stream must not be a way around auth.
-        HttpIngress::SubscriptionsListen { id, params } => {
-            Box::pin(assemble_subscriptions_listen(
-                &state,
-                id,
-                params,
-                protocol_context.as_ref(),
-                v2_outbound,
-                auth_context.as_ref(),
-            ))
-            .await
-        },
-        HttpIngress::Public(
-            TransportMessage::Notification { .. } | TransportMessage::Response(_),
-        ) => StatusCode::ACCEPTED.into_response(),
-    }
+        auth_context,
+        session_id.as_ref(),
+    ))
+    .await
 }
 
 /// Build the HTTP middleware context from a middleware-adapted request.
@@ -3455,6 +3416,97 @@ async fn assemble_discover_response_with_middleware(
         *response.status_mut() = status;
     }
     response
+}
+
+/// Dispatch the classified ingress on the fast path.
+///
+/// Handles a public `Request` (server-handled + response assembly), a
+/// `server/discover` ingress (the VERS-04 per-path assembly), a
+/// `subscriptions/listen` ingress (the HTTP-04 held-open stream), and
+/// `Notification` / `Response` (202 Accepted) in separate arms.
+///
+/// # Calling contract — auth has ALREADY succeeded
+///
+/// This helper assumes authentication is done: its `auth_context` parameter is
+/// the value [`extract_and_validate_auth`] returned, and EVERY arm — including
+/// `SubscriptionsListen` — therefore runs downstream of it. The access-control
+/// property is that the caller invokes this only after that call returned `Ok`;
+/// it is not the textual order of the match arms below, which are mutually
+/// exclusive `HttpIngress` variants.
+///
+/// Extracted in plan 113.1-01 (D-06): the fast path held this match inline
+/// while the middleware path already delegated to
+/// [`dispatch_message_with_middleware`]. The twins now sit adjacent.
+async fn dispatch_message_fast(
+    state: &ServerState,
+    ingress: HttpIngress,
+    dispatch: FastPathDispatch,
+    auth_context: Option<crate::server::auth::AuthContext>,
+    session_id: Option<&String>,
+) -> Response {
+    let FastPathDispatch {
+        is_init_request,
+        response_session_id,
+        protocol_context,
+        v2_outbound,
+        sessions_on,
+    } = dispatch;
+    match ingress {
+        HttpIngress::Public(TransportMessage::Request { id, request }) => {
+            // `Box::pin`: the dispatch future crosses clippy's large_future
+            // threshold once the v2 status mapping is threaded through it —
+            // boxing keeps the handler future small without changing behavior
+            // (same treatment the two POST entrypoints already get).
+            Box::pin(handle_fast_path_request(
+                state,
+                id,
+                request,
+                auth_context,
+                FastPathDispatch {
+                    is_init_request,
+                    response_session_id,
+                    protocol_context,
+                    v2_outbound,
+                    sessions_on,
+                },
+                session_id,
+            ))
+            .await
+        },
+        // Per-path response assembly (finding #3/#4): reached AFTER session, the v2
+        // matrix, legacy-version validation, and auth — never an early return.
+        HttpIngress::Discover { id, .. } => {
+            assemble_discover_response_fast(
+                state,
+                id,
+                protocol_context.as_ref(),
+                DiscoverResponseShape {
+                    response_session_id: response_session_id.as_ref(),
+                    v2_outbound,
+                    sessions_on,
+                },
+                session_id,
+            )
+            .await
+        },
+        // HTTP-04: the capability-gated listen route. Reached AFTER the same
+        // session / v2-matrix / legacy-version / auth pipeline as every other
+        // ingress — a held-open stream must not be a way around auth.
+        HttpIngress::SubscriptionsListen { id, params } => {
+            Box::pin(assemble_subscriptions_listen(
+                state,
+                id,
+                params,
+                protocol_context.as_ref(),
+                v2_outbound,
+                auth_context.as_ref(),
+            ))
+            .await
+        },
+        HttpIngress::Public(
+            TransportMessage::Notification { .. } | TransportMessage::Response(_),
+        ) => StatusCode::ACCEPTED.into_response(),
+    }
 }
 
 /// Dispatch the classified ingress on the middleware path.
