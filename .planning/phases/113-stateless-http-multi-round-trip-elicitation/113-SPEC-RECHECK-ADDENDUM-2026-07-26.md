@@ -215,3 +215,102 @@ stated justification is wrong.
   re-checked this pass).
 - When the lightweight `2026-07-28-RC` tag was actually pushed (no tagger timestamp). Note its
   commit is dated 2026-05-29, eight days after the blog's stated 2026-05-21 lock.
+
+---
+
+# Finding 5 — resolved by measurement (plan 113-23, 2026-07-27)
+
+Finding 5 asked for pmcp's **actual** `subscriptionId` emission to be checked against the
+schema's REQUIRED/OPTIONAL split before HTTP-07 is treated as met. It has been measured, not
+argued. Two tests in `tests/v2_subscriptions.rs` are the evidence; the frames below are the
+verbatim wire output captured from those tests at commit `2a899fd6`+.
+
+## What pmcp emits, per frame class
+
+Evidence: `subscription_id_is_emitted_on_all_three_listen_frame_classes` — one real
+`subscriptions/listen` stream over a loopback socket, request id `77`. Each class asserts
+**equality** with the request id, not mere presence (a frame tagged with the *wrong* id is worse
+than an untagged one).
+
+| # | Frame class | Schema type | Tag present? | Value |
+|---|---|---|---|---|
+| a | `notifications/subscriptions/acknowledged` (first frame) | `SubscriptionsAcknowledgedNotificationParams` | **yes**, in `params._meta` | `77` |
+| b | delivered `notifications/tools/list_changed` | `NotificationMetaObject` (**OPTIONAL**) | **yes**, in `params._meta` | `77` |
+| c | terminal `SubscriptionsListenResult` | `SubscriptionsListenResultMeta` (**REQUIRED**) | **yes**, in `result._meta` | `77` |
+
+Verbatim:
+
+```
+(a) {"jsonrpc":"2.0","method":"notifications/subscriptions/acknowledged","params":{"notifications":{"toolsListChanged":true},"_meta":{"io.modelcontextprotocol/subscriptionId":77}}}
+(b) {"method":"notifications/tools/list_changed","jsonrpc":"2.0","params":{"_meta":{"io.modelcontextprotocol/subscriptionId":77}}}
+(c) {"jsonrpc":"2.0","id":77,"result":{"_meta":{"io.modelcontextprotocol/subscriptionId":77,"io.modelcontextprotocol/serverInfo":{"name":"v2-subscriptions","version":"1.0.0"}},"resultType":"complete"}}
+```
+
+Note on (c): the REQUIRED `_meta` also carries the shared v2 envelope's
+`io.modelcontextprotocol/serverInfo`, because `SubscriptionsListenResult::meta` is modelled as an
+open map. That is additive and does not affect the REQUIRED key.
+
+## Does pmcp stamp the tag on notifications that have NO subscription?
+
+**No.** Evidence: `a_notification_not_delivered_over_a_listen_stream_carries_no_subscription_id`.
+
+This is the half Finding 5 actually asks about, and it needed a **non-listen transport** to
+answer: on `StreamableHttpServer` the listen registry is the ONLY server→client notification
+sink (that transport never calls `Server::run`, so `notification_tx` stays `None` and
+`Server::send_notification` reaches nothing else). The probe therefore drives a `tools/call`
+carrying a progress token over the in-process duplex transport, where `notification_tx` IS wired,
+and re-encodes the received frame through `pmcp::shared::transport::serialize_message` — the
+crate's own single source of truth for the on-the-wire JSON-RPC encoding — so the assertion is
+made against what a peer would really receive:
+
+```
+{"jsonrpc":"2.0","method":"notifications/progress","params":{"progressToken":"off-stream","progress":1.0,"total":2.0,"message":"halfway"}}
+```
+
+No `_meta` at all, and the string `io.modelcontextprotocol/subscriptionId` appears nowhere in the
+frame (asserted twice: structurally via `params._meta`, and as a whole-frame substring, so a tag
+smuggled into some other position would also fail).
+
+The structural reason: `tag_notification_with_subscription_id` (`src/types/subscriptions.rs:407`)
+is the ONLY writer of the tag on a notification, and its ONLY caller is
+`ListenRegistry::fan_out` (`src/server/subscriptions.rs:745`). A notification that is not being
+delivered onto a listen stream is never routed through it. `notifications/progress` is a
+particularly clean probe because `subscription_kind_of` classifies it as request-scoped, so the
+registry excludes it *structurally* rather than by filter.
+
+## Verdict on HTTP-07's wording
+
+**HTTP-07's CURRENT wording is CORRECT and is CONFIRMED by measurement. No change is needed and
+none is proposed.**
+
+`.planning/REQUIREMENTS.md` HTTP-07 already reads "every notification **delivered on a
+subscription stream** carries `io.modelcontextprotocol/subscriptionId` tagging (the key is
+REQUIRED on `SubscriptionsListenResultMeta` but OPTIONAL on `NotificationMetaObject` — it is
+absent for notifications not delivered via a subscription, so this is a stream-path obligation,
+not a universal type requirement)". Every clause of that sentence is now backed by a frame
+captured above:
+
+- "delivered on a subscription stream … carries the tag" → classes (a) and (b);
+- "REQUIRED on `SubscriptionsListenResultMeta`" → class (c);
+- "absent for notifications not delivered via a subscription" → the off-stream probe;
+- "a stream-path obligation, not a universal type requirement" → pmcp implements exactly that
+  distinction, in exactly one code path.
+
+The wording Finding 5 flagged — the *earlier* phrasing "every delivered notification carries
+`subscriptionId` tagging" — **would** have overstated the schema, because it reads as a property
+of the notification type rather than of the delivery path. That correction has already been
+applied to the requirement text; this measurement is what retires the ⚠ on it. Nothing is routed
+to the plan 113-28 decision checkpoint from Finding 5, and `.planning/REQUIREMENTS.md` was NOT
+edited by plan 113-23.
+
+## What this does NOT discharge
+
+Finding 5 is answered; **HTTP-07 is not thereby met**. Two independent gates still bind:
+
+1. The STATE.md publication gate (HTTP-01..09 / CLNT-01/02/05 stay `[~]`/`[ ]` until the
+   2026-07-28 schema re-verification clears).
+2. Finding 9's substantive risk is unchanged: both HTTP-07 obligations are **post-RC additions**
+   and open PR #3006 still targets this exact surface. Measuring pmcp's conformance to today's
+   draft says nothing about whether today's draft survives. A future re-check that finds the tag
+   made REQUIRED on `NotificationMetaObject`, or the ack MUST relaxed, is a phase-reopening
+   event exactly as before.

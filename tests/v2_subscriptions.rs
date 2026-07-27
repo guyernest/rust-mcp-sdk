@@ -34,6 +34,13 @@
 
 mod common;
 
+// The in-process duplex transport, included per-crate exactly as its own module
+// docs prescribe. Needed for the Finding 5 off-stream probe: on the HTTP
+// transport the listen registry is the ONLY notification sink, so the
+// non-listen delivery path can only be observed on a `Server::run` transport.
+#[path = "common/duplex.rs"]
+mod duplex;
+
 use common::v2::{
     build_v2_server_with, post, spawn_default_config, spawn_shared, v2_body, v2_headers,
     BearerSubjects, GreetingPrompt, SearchTool, FRAME_TIMEOUT, V1, V2,
@@ -1083,6 +1090,241 @@ async fn one_unauthenticated_caller_cannot_exhaust_the_global_listen_budget() {
     drop(held);
     handle.abort();
     let _ = handle.await;
+}
+
+// ===========================================================================
+// Finding 5 (113-SPEC-RECHECK-ADDENDUM-2026-07-26) — what pmcp ACTUALLY emits
+// for `io.modelcontextprotocol/subscriptionId`.
+//
+// The draft schema makes the key REQUIRED on `SubscriptionsListenResultMeta`
+// (the teardown result) but OPTIONAL on `NotificationMetaObject` — absent for
+// notifications not delivered via a subscription. HTTP-07's wording ("every
+// delivered notification carries `subscriptionId` tagging") therefore has to be
+// MEASURED against both halves, not assumed. These two tests are the
+// measurement; the verdict is recorded in the addendum.
+// ===========================================================================
+
+/// All THREE listen frame classes carry the tag, and all three carry the SAME
+/// id as the `subscriptions/listen` request that opened the stream.
+///
+/// Equality with the request id is asserted everywhere, not mere presence: a
+/// frame tagged with the WRONG subscription id is worse than an untagged one —
+/// it routes a client's notification onto the wrong subscription.
+///
+/// The terminal result is reached through
+/// [`Server::close_subscription_streams`], which is the ONLY one of the three
+/// closure triggers that can emit one (a client disconnect has no peer left to
+/// send to, and the overflow policy has no buffer slot left).
+#[tokio::test]
+async fn subscription_id_is_emitted_on_all_three_listen_frame_classes() {
+    let server = Arc::new(Mutex::new(server_with(advertising(Some(
+        "tools.listChanged",
+    )))));
+    let (addr, handle) = spawn_shared(Arc::clone(&server)).await;
+
+    let mut stream = SseStream::open(
+        addr,
+        &listen_headers(),
+        &listen_body(json!(77), &json!({ "toolsListChanged": true })),
+    )
+    .await;
+
+    // (a) The mandatory acknowledgement — `SubscriptionAcknowledgedParams`.
+    let ack = stream.expect_json().await;
+    assert_eq!(ack["method"], json!(ACKNOWLEDGED_METHOD));
+    assert_eq!(
+        subscription_id_of(&ack),
+        Some(&json!(77)),
+        "class (a) acknowledgement: params._meta carries the request's own id: {ack}"
+    );
+
+    // (b) A delivered change notification — `NotificationMetaObject`, the half
+    // the schema makes OPTIONAL.
+    server
+        .lock()
+        .await
+        .send_notification(ServerNotification::ToolsChanged)
+        .await;
+    let delivered = stream.expect_json().await;
+    assert_eq!(
+        delivered["method"],
+        json!("notifications/tools/list_changed")
+    );
+    assert_eq!(
+        subscription_id_of(&delivered),
+        Some(&json!(77)),
+        "class (b) delivered notification: params._meta carries the SAME id: {delivered}"
+    );
+
+    // (c) The terminal `SubscriptionsListenResult` — `_meta` is REQUIRED here.
+    server.lock().await.close_subscription_streams();
+    let terminal = stream.expect_json().await;
+    assert!(
+        terminal["result"].is_object(),
+        "class (c) is a RESULT, not a notification: {terminal}"
+    );
+    assert_eq!(
+        terminal["id"],
+        json!(77),
+        "the terminal result answers the original listen request: {terminal}"
+    );
+    assert_eq!(
+        terminal["result"]["_meta"][SUBSCRIPTION_ID_META_KEY],
+        json!(77),
+        "class (c) teardown result: _meta is REQUIRED and carries the id: {terminal}"
+    );
+    assert_eq!(subscription_id_of(&terminal), Some(&json!(77)));
+
+    drop(stream);
+    handle.abort();
+    let _ = handle.await;
+}
+
+/// A tool that reports progress, so the off-stream probe has a real
+/// server-originated notification to observe.
+struct ProgressTool;
+
+#[async_trait::async_trait]
+impl pmcp::ToolHandler for ProgressTool {
+    async fn handle(&self, _args: Value, extra: pmcp::RequestHandlerExtra) -> pmcp::Result<Value> {
+        extra
+            .report_progress(1.0, Some(2.0), Some("halfway".to_string()))
+            .await?;
+        Ok(json!({ "answer": "ok" }))
+    }
+}
+
+/// Drive a `tools/call` carrying a progress token over an IN-PROCESS DUPLEX
+/// transport and return the raw wire frame of the first notification the server
+/// emits.
+///
+/// # Why this transport and not the HTTP one
+///
+/// On `StreamableHttpServer` the listen registry is the ONLY server→client
+/// notification sink: that transport never calls `Server::run`, so
+/// `notification_tx` stays `None` and `Server::send_notification` reaches
+/// nothing else. The non-listen delivery path therefore has to be observed on a
+/// `Server::run` transport, where `notification_tx` IS wired — and
+/// `notifications/progress` is a good probe precisely because
+/// `subscription_kind_of` classifies it as request-scoped, so the listen
+/// registry excludes it STRUCTURALLY.
+///
+/// The frame is re-encoded through `pmcp::shared::transport::serialize_message`,
+/// the crate's own single source of truth for the on-the-wire JSON-RPC encoding,
+/// so this measures what a peer would actually receive rather than an ad-hoc
+/// re-serialization of the enum.
+async fn off_stream_notification_frame() -> Value {
+    use duplex::DuplexTransport;
+    use pmcp::shared::transport::serialize_message;
+    use pmcp::shared::{Transport, TransportMessage};
+    use pmcp::types::notifications::ProgressToken;
+    use pmcp::types::tools::CallToolRequest;
+    use pmcp::types::{
+        ClientCapabilities, ClientNotification, ClientRequest, Implementation, InitializeRequest,
+        Notification, Request, RequestId, RequestMeta,
+    };
+
+    let server = Server::builder()
+        .name("v2-subscriptions-off-stream")
+        .version("1.0.0")
+        .capabilities(advertising(Some("tools.listChanged")))
+        .tool("progress", ProgressTool)
+        .build()
+        .expect("server builds");
+
+    let (mut client, server_transport) = DuplexTransport::pair();
+    tokio::spawn(async move {
+        let _ = server.run(server_transport).await;
+    });
+
+    client
+        .send(TransportMessage::Request {
+            id: RequestId::from(1i64),
+            // `InitializeRequest::new` defaults `protocol_version` to
+            // `LATEST_PROTOCOL_VERSION`, which IS `V1`; the struct is
+            // `#[non_exhaustive]`, so the constructor is the forward-compatible
+            // way to build it.
+            request: Request::Client(Box::new(ClientRequest::Initialize(InitializeRequest::new(
+                Implementation::new("off-stream-probe", "1.0.0"),
+                ClientCapabilities::default(),
+            )))),
+        })
+        .await
+        .expect("initialize sent");
+    let _initialize_result = receive_bounded(&mut client).await;
+    client
+        .send(TransportMessage::Notification(Notification::Client(
+            ClientNotification::Initialized,
+        )))
+        .await
+        .expect("initialized sent");
+
+    let mut call = CallToolRequest::new("progress", json!({}));
+    call._meta = Some(
+        RequestMeta::new().with_progress_token(ProgressToken::String("off-stream".to_string())),
+    );
+    client
+        .send(TransportMessage::Request {
+            id: RequestId::from(2i64),
+            request: Request::Client(Box::new(ClientRequest::CallTool(call))),
+        })
+        .await
+        .expect("tools/call sent");
+
+    loop {
+        let message = receive_bounded(&mut client).await;
+        if matches!(message, TransportMessage::Notification(_)) {
+            let bytes = serialize_message(&message).expect("the frame serializes");
+            return serde_json::from_slice(&bytes).expect("the frame is JSON");
+        }
+    }
+}
+
+/// One duplex read, bounded by [`FRAME_TIMEOUT`] so a wedged probe FAILS rather
+/// than hangs — the same doctrine every `SseStream` read in this file follows.
+async fn receive_bounded(client: &mut duplex::DuplexTransport) -> pmcp::shared::TransportMessage {
+    use pmcp::shared::Transport;
+
+    tokio::time::timeout(FRAME_TIMEOUT, client.receive())
+        .await
+        .expect("a frame arrived within the timeout")
+        .expect("the duplex peer is alive")
+}
+
+/// The OTHER half of Finding 5: a notification NOT delivered over a listen
+/// stream carries NO `subscriptionId`.
+///
+/// The schema makes the key OPTIONAL on `NotificationMetaObject` precisely so a
+/// notification with no subscription can omit it, so a pmcp that stamped the tag
+/// universally would be emitting a subscription id for a notification that
+/// belongs to no subscription. It does not: the tag is written in exactly one
+/// place (`tag_notification_with_subscription_id`, called only from the listen
+/// registry's fan-out), so it reaches only frames delivered on a stream.
+///
+/// If this assertion ever fails, that is a FINDING to record — not something to
+/// "fix" by changing the emission. Over-tagging would be a wire-behaviour change
+/// and belongs to a decision, not to plan 113-23's fence.
+#[tokio::test]
+async fn a_notification_not_delivered_over_a_listen_stream_carries_no_subscription_id() {
+    let frame = off_stream_notification_frame().await;
+
+    assert_eq!(
+        frame["method"],
+        json!("notifications/progress"),
+        "the probe observed the request-scoped notification it drove: {frame}"
+    );
+    assert_eq!(
+        subscription_id_of(&frame),
+        None,
+        "a notification with no subscription must carry NO subscriptionId — the \
+         key is OPTIONAL on NotificationMetaObject, and pmcp writes it in exactly \
+         one place (the listen registry's fan-out): {frame}"
+    );
+    assert!(
+        !frame.to_string().contains(SUBSCRIPTION_ID_META_KEY),
+        "the key must not appear ANYWHERE in the off-stream frame, not merely \
+         outside `params._meta`: {frame}"
+    );
 }
 
 /// `resources/subscribe` and `resources/unsubscribe` are GONE on v2.
