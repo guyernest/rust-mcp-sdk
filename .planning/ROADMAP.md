@@ -2217,6 +2217,7 @@ Plans:
 
 - [x] **Phase 112: Version Plumbing Spine** — `ProtocolContext` resolved once at ingress + threaded through dispatch; 2026-07-28 as explicit opt-in (LATEST stays 2025-11-25); `server/discover`, extensions map, required v2 headers, `resultType` envelope, W3C trace-context, centralized version-gated error-code table (completed 2026-07-23)
 - [~] **Phase 113: Stateless HTTP + Multi-Round-Trip Elicitation** — v2 requests run handshake-free/session-free on the existing `stateless()` branch; MRTR (`input_required`/`requestState`/`inputResponses`) end-to-end; opt-in `subscriptions/listen` (server + client halves); no SSE resumability + id-replay regression test; the pmcp `Client` speaks v2 and fulfills MRTR. **All 20 plans shipped, but re-verification on 2026-07-26 returned `gaps_found` (4/5 must-haves)** — the original 13, plus the four-plan gap-closure round (113-17 SSE parser bound / 113-18 listen refusal + semaphore prune / 113-20 collected-body cap / 113-19 fuzz-seam gating + phase gate) that answered `113-VERIFICATION.md`'s GAP-A..E. **The progress table's "Complete" for this phase means all 20 plans shipped; the phase itself is NOT complete, for two independent reasons:** (1) **Open codebase gaps.** A fresh `113-REVIEW.md` (2026-07-26) found three BLOCKERs that the gap-closure round neither introduced nor closed, all independently reproduced by re-verification: an uncapped `body.collect()` in `rejection_error` (`src/client/subscriptions.rs:147`), an O(n²) `take_utf8_prefix` upstream of every new bound (`src/shared/sse_parser.rs:164`), and an uncapped `response.collect()` in `HttpTransport::send_request` (`src/shared/http.rs:346`). These leave HTTP-04's memory-bounded-stream criterion genuinely unmet. (2) **Blocked on publication.** The final `schema/2026-07-28` had still not published as of 2026-07-26, so the three v2 error-code constants remain pre-final values held under a written developer exception and HTTP-01..05 / CLNT-01..02 stay `[~]`. Re-run the `113-SPEC-RECHECK.md` checkpoint on or after 2026-07-28 to close (2); (1) needs a further gap-closure round.
+- [ ] **Phase 113.1: Merge Unblock** — the branch cannot merge and nothing downstream can ship until three things clear. (1) **PR-blocking PMAT complexity**: `handle_post_fast_path` (cog 30) and `handle_post_with_middleware` (cog 31) against the hard ceiling of 25, reaching CI through the org-required `gate` check. Both were 22/21 on `main` and were pushed up by earlier commits on this branch — the fix is extracting the v2 header gate, copy-pasted between the two handlers, into one `resolve_v2_gate` helper (`FastPathDispatch`/`MiddlewareDispatch` are also field-for-field identical). (2) **D-113-R**: `drain_complete_lines`'s per-CALL cost — `consumed` restarts at 0 each `feed()`, so a peer sending 1-byte chunks gets one full-buffer rescan per byte. Distinct from the per-line drain quadratic already fixed in `0493d9fb`. (3) **D-113-Q**: `src/shared/sse_optimized.rs:266`'s unbounded `reqwest::Response::text()`, currently allowlisted `NOT BOUNDED`. (2) and (3) are what hold **HTTP-09** at `[ ]`; closing them is what lets the bounded-read requirement close on the merits. Also record the 18 unbounded `reqwest` reads in `src/client/oauth.rs`, `src/client/auth.rs` and the two auth providers — same defect class, outside the tripwire's scope fence, semi-trusted IdP rather than arbitrary peer.
 - [ ] **Phase 114: Tasks Extension Migration** — Tasks negotiated via the extensions map, `tasks/update` added, `tasks/list` era-gated off on v2; `resultType:"task"` + 5-state→v2-enum mapping; stateless owner-binding fails closed; TaskStore/backends survive unchanged (wire reshape behind TaskRouter)
 - [ ] **Phase 115: JSON Schema 2020-12 + Structured Output + Caching Hints** — jsonschema 0.48 Draft 2020-12 explicitly pinned (wasm-clean, SEP-2106); `structuredContent` accepts any JSON value on v2; additive `ttlMs`/`cacheScope` on the five list/read results
 - [ ] **Phase 116: Auth Hardening SEPs** — RFC 9207 `iss` validation (strict v2 / lenient v1), DCR `application_type`, issuer-keyed credential storage + three clarifications — all source changes to the hand-rolled OAuth stack, no new crates
@@ -2461,6 +2462,7 @@ Plans:
 |-------|----------------|--------|-----------|
 | 112. Version Plumbing Spine | 10/10 | Complete    | 2026-07-23 |
 | 113. Stateless HTTP + MRTR | 32/32 | Complete   | 2026-07-27 |
+| 113.1 Merge Unblock | 0/TBD | Not started | - |
 | 114. Tasks Extension Migration | 0/TBD | Not started | - |
 | 115. JSON Schema 2020-12 + Caching Hints | 0/TBD | Not started | - |
 | 116. Auth Hardening SEPs | 0/TBD | Not started | - |
@@ -2481,6 +2483,76 @@ Plans:
 > directory exists"*, not the 2026-07-28 date. Both arms must be run — arm 2 (the conformance
 > predicate) is not publication-gated and can be run today.
 >
-> Also open before this branch merges: **D-113-U** — the PR-blocking PMAT complexity gate reports
-> 3 violations (up from 2); `write_canonical` is at cognitive 26, introduced during the
-> gap-closure round. Unowned.
+> Also open before this branch merges: **D-113-U** — the PR-blocking PMAT complexity gate.
+> `write_canonical`'s cog-26 violation (the one this round introduced) was **closed** in
+> `58f82368` by splitting the container arms out; canonical bytes and the 64/65 depth boundary
+> are byte-identical. Two violations remain and still block merge: `handle_post_fast_path`
+> (cog 30) and `handle_post_with_middleware` (cog 31), both 22/21 on `main` and pushed up by
+> earlier commits on this branch. **Owned by Phase 113.1.**
+
+---
+
+## v2.6 AI-Package Portability (Phases 120-124)
+
+**Milestone Goal:** Make an AI-Package genuinely portable between pmcp.run environments — build a
+server from **configuration only**, test and attest it in one AWS account/region, export it, and
+import it into another with the target environment told exactly what it must supply. The proving
+case is `pmcp-openapi-server`: a Shape A pure-config binary whose entire identity is a `config.toml`
+plus an OpenAPI spec.
+
+**Why now, and why shaped this way.** `pmcp-package` 0.1.0 already has the primitives — local OCI
+layout, `pack_server`/`unpack_server`, canonical digest + `verify`, and the config-slot machinery
+(`classify` / `aggregate` / `detect_deviation`). What it lacks is the ability to express a server
+that has *no bespoke binary*, any transport off the local disk, and any notion of attestation.
+`cargo pmcp package` today has exactly one verb: `inspect`.
+
+**Two decisions taken at milestone scoping (2026-07-27), both of which SHRINK the SDK's share:**
+
+1. **Attestation is pmcp.run-issued.** The GraphQL endpoint issues/attests a signature when a
+   version is promoted; trust is anchored in pmcp.run, not in a developer-held key. The SDK's job
+   is therefore *carriage and verification*, NOT signing — **no crypto dependency is added to
+   `pmcp-package`.** (`digest::verify` is and remains an integrity check, not a signature check.)
+2. **GraphQL mediates import.** The package is uploaded through pmcp.run's endpoint, which owns
+   placement into ECR. **`oci-client` is therefore NOT added** — the CLI never speaks to a registry.
+   `oci-spec` (types only) stays; the manifest types were already chosen so a registry client
+   consumes them with zero translation, which keeps that door open.
+
+**The consequence, stated plainly:** both decisions put the critical path in the pmcp.run backend,
+outside this repo. Phases 122-123 are therefore **contract-first and parked** — they land a vendored
+GraphQL contract plus an offline blocking contract test, exactly the pattern
+`feat/package-remote-capture-show` already used for `capture-v1.graphql`, and go green when the
+backend ships. Phases 120-121 depend on nothing external and are where the durable value is.
+
+**Branch:** this milestone continues on a rebased `feat/package-remote-capture-show` (254 commits,
+31 behind `main`, **zero overlap** with `src/server/`, `src/shared/`, `src/types/` — so it does not
+collide with v2.5). That branch already gated its own release tag on an import E2E; this milestone
+is finishing what it deliberately left open, not starting fresh.
+
+**Non-goals:** signing keys or PKI in the SDK (decision 1); an ECR client in the CLI (decision 2);
+changing `LATEST_PROTOCOL_VERSION` (that is a v2.5 concern and stays pinned); refactoring the
+manifest schema for elegance — the schema is expected to churn, so the E2E is the asset, not the API.
+
+- [ ] **Phase 120: Config-Server Packaging** — `pack_server` currently demands `bootstrap: &[u8]`, so a config-only server cannot be expressed. Add vendor media types for the server's own `config.toml` and its OpenAPI spec as layers, and make the binary **dual-mode**: embedded (bootstrap bytes, for a new server or a new version) or referenced (`BinaryRef { digest, media_type }` resolved in the target environment, for a server already deployed there). Both modes are required. Decide and document what is *baked* versus what is a *slot* — the working split is that the spec is baked (it defines the tool surface; change it and it is a different package) while endpoint, credentials and auth mode are slots.
+- [ ] **Phase 121: Local Round-Trip E2E** — the regression net, and the piece that needs no backend. Using the London Tube fixture already in `crates/pmcp-openapi-server/tests/fixtures/`: pack in env A → unpack in env B → `detect_deviation` names **exactly** the slots B must fill → fill them → assert **tool-list parity** with A via the existing `parity_replay.rs`. Parity is the property; byte round-tripping is not. This test must survive an arbitrary number of manifest-shape refactors, so assert on behaviour, not on manifest structure.
+- [ ] **Phase 122: Attestation Carriage** *(contract-first, parked on backend)* — a layer to hold a pmcp.run-issued attestation and a verification path against pmcp.run's identity. No signing, no crypto dependency. Vendor the attestation contract from the live platform and write the offline blocking contract test; the live half activates when the backend issues attestations.
+- [ ] **Phase 123: Export/Import Verbs** *(contract-first, parked on backend)* — `cargo pmcp package pack | unpack | export | import`, resolving environments through `configure`'s existing resolver and reusing the working `deployment/targets/pmcp_run/{graphql,auth}.rs` seam (`PMCP_API_URL`, token cache + TTL) rather than inventing a second API path. `pack`/`unpack` are local and can land immediately; `export`/`import` are contract-first.
+- [ ] **Phase 124: Release & Publish Order** — `pmcp-openapi-server` is **absent from CLAUDE.md's publish order** (zero occurrences) and would silently not publish, unlike its siblings `pmcp-sql-server` and `pmcp-workbook-server`. Add it, publish `pmcp-package` 0.2.0 and `cargo-pmcp` 0.19.0, and record the ordering constraint that `pmcp-package` precedes `pmcp-agent` and `cargo-pmcp`.
+
+## Progress — v2.6 Milestone (AI-Package Portability)
+
+**Execution order:** 120 → 121 first and together (no external dependency, and 121 is the regression
+net every later refactor leans on) → 122 and 123 in parallel, both contract-first → 124 last.
+
+| Phase | Plans Complete | Status | Completed |
+|-------|----------------|--------|-----------|
+| 120. Config-Server Packaging | 0/TBD | Not started | - |
+| 121. Local Round-Trip E2E | 0/TBD | Not started | - |
+| 122. Attestation Carriage | 0/TBD | Not started | - |
+| 123. Export/Import Verbs | 0/TBD | Not started | - |
+| 124. Release & Publish Order | 0/TBD | Not started | - |
+
+> **⚠ Phases 122 and 123 cannot fully close inside this repo.** Both depend on pmcp.run backend
+> capabilities — package import and attestation issuance — that were not confirmed as scheduled at
+> milestone scoping. They are planned contract-first so the in-repo half is completable and
+> verifiable offline. If the backend work is scheduled, promote them from parked to blocking and
+> add the live E2E leg.
