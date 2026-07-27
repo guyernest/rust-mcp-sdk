@@ -414,6 +414,16 @@ Re-verification procedure for plan 12 Task 3:
 Owner: **HTTP-08**. This arm is independent of the schema's publication date — the conformance
 repository moves on its own cadence and is already ahead of the pin recorded in § B.1.
 
+> **RUN 2026-07-27 by plan 113.1-04 (phase 113.1, D-19) — verdict NO DRIFT.**
+> Executed against upstream HEAD `5cc567c39912bc6105b14287d42abed2956e7955`. The predicate is
+> byte-identical to § B.6.2's quotation, having moved only to `:992-1025`; the disjunct set is
+> unchanged; `v2_conformance_pin` passes 5/5. The run log, with literal commands and output, is
+> **§ B.6.5** below. A future re-verifier should read "arm 2 was run on 2026-07-27, no drift"
+> there rather than re-deriving it.
+>
+> This does NOT discharge the obligation: **arm 1 is still open**, blocked on the condition
+> *"a versioned schema directory exists"*. `## Verdict` stays `PENDING`.
+
 1. Re-fetch `src/scenarios/server/stateless.ts` from
    `github.com/modelcontextprotocol/conformance` at **`main`/HEAD** (not at § B.1's pinned sha —
    fetching the pin back would compare the pin against itself and can never detect drift):
@@ -814,6 +824,88 @@ incomplete and the phase reopens to reconcile `supported_flags` against the new 
 subscription route gate that disagrees with the grader is a wire-visible conformance break for
 every downstream server built on pmcp's default, exactly as a pre-final error-code constant would
 be (threat T-113-156).
+
+---
+
+#### B.6.5 Arm-2 re-verification runs
+
+Arm 2 of the rolled-forward obligation is RECORD-ONLY and non-blocking (phase 113.1, D-19). This
+log distinguishes *"we checked and found no drift"* from *"nobody checked"* — which is the whole
+point of running it before the branch merges.
+
+| Run date (UTC) | Executing plan | Upstream HEAD sha | Predicate found at | Disjunct set vs pin | `v2_conformance_pin` | Verdict |
+|---|---|---|---|---|---|---|
+| 2026-07-27 | 113.1-04 | `5cc567c39912bc6105b14287d42abed2956e7955` | `:992-1025` (pin recorded `:983-1016`) | **MATCHES** — all four disjuncts, none gained, lost or renamed | 5 passed, 0 failed | **NO DRIFT** |
+
+**Fetched against `main`/HEAD, not against the pin.** Fetching § B.1's sha back would compare the
+pin against itself and could never detect drift.
+
+Literal commands and output:
+
+```
+$ gh api repos/modelcontextprotocol/conformance/commits/main --jq '.sha'
+5cc567c39912bc6105b14287d42abed2956e7955
+
+$ gh api repos/modelcontextprotocol/conformance/commits/5cc567c39912bc6105b14287d42abed2956e7955 \
+    --jq '{sha:.sha,date:.commit.committer.date,subject:(.commit.message|split("\n")[0])}'
+{"date":"2026-07-27T19:32:17Z","sha":"5cc567c39912bc6105b14287d42abed2956e7955","subject":"Fix wire-validation attribution bugs and extend the schema erratum to 2025-06-18 (#421)"}
+
+$ gh api "repos/modelcontextprotocol/conformance/contents/src/scenarios/server/stateless.ts?ref=main" --jq '.content' | base64 -d > head.ts
+$ wc -l head.ts
+1352 head.ts        # 1343 at the pinned sha — the file grew by 9 lines
+
+$ grep -n 'advertisesSubscriptions' head.ts
+997:    const advertisesSubscriptions = !!(
+1009:      if (discoverObserved && !advertisesSubscriptions) {
+1019:          advertisesSubscriptions
+```
+
+**Byte-for-byte diff of § B.6.2's 34-line quotation against the same block at HEAD (`:992-1025`):**
+
+```
+$ diff pinned_block.txt head_block.txt
+$ echo $?
+0
+```
+
+**Empty. The predicate is byte-identical to its pin.**
+
+It has MOVED by exactly +9 lines (`:983-1016` → `:992-1025`), consistent with the 9-line growth of
+the file as a whole. § B.6.2 step 2 states explicitly that a changed line number is not by itself
+drift, and this is that case — the same finding the earlier round recorded when the citation moved
+from `:988-1015`.
+
+**Disjunct set, checked explicitly against § B.6.3 (step 3):**
+
+| Disjunct | At the pin | At HEAD `5cc567c3` |
+|---|---|---|
+| `discoverCapabilities?.tools?.listChanged` | present | present |
+| `discoverCapabilities?.prompts?.listChanged` | present | present |
+| `discoverCapabilities?.resources?.listChanged` | present | present |
+| `discoverCapabilities?.resources?.subscribe` | present | present |
+
+None gained, none lost, none renamed.
+
+**Branch A taken (NO DRIFT).** Per D-19's defined branches, § B.6.3's table was **not edited** —
+`tests/v2_conformance_pin.rs` parses that table at runtime, so its shape is load-bearing rather
+than cosmetic. The pin test was run anyway, because it is cheap and is worthwhile evidence either
+way:
+
+```
+$ cargo nextest run --features full --test v2_conformance_pin
+        PASS [   0.009s] pmcp::v2_conformance_pin every_pinned_disjunct_maps_to_a_pmcp_counterpart
+        PASS [   0.009s] pmcp::v2_conformance_pin advertises_subscriptions_over_the_pinned_combination_space
+        PASS [   0.009s] pmcp::v2_conformance_pin pinned_disjunct_list_matches_pmcp_supported_flags
+        PASS [   0.009s] pmcp::v2_conformance_pin b6_quotes_the_predicate_verbatim
+        PASS [   0.009s] pmcp::v2_conformance_pin b6_and_b1_record_the_same_conformance_sha
+     Summary [   0.010s] 5 tests run: 5 passed, 0 skipped
+```
+
+**What this run does NOT discharge.** Arm 2 only. **Arm 1 remains OPEN**, still blocked on the
+condition *"a versioned schema directory exists"* upstream — a condition, not the 2026-07-28 date.
+The obligation as a whole lands only when BOTH arms have been run, so `## Verdict` stays `PENDING`
+and no requirement checkbox moved on the strength of this run. The `[~]` publication hold on
+HTTP-01..08 / CLNT-01/02/05 is untouched.
 
 ---
 
