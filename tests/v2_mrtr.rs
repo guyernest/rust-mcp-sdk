@@ -71,7 +71,9 @@ use pmcp::shared::streamable_http::StreamableHttpTransportConfigBuilder;
 use pmcp::shared::StreamableHttpTransport;
 use pmcp::testing::{open_request_state, ANONYMOUS_PRINCIPAL};
 use pmcp::types::elicitation::{ElicitAction, ElicitRequestParams, ElicitResult};
-use pmcp::types::mrtr::{InputRequest, InputRequests, MrtrSignal, MRTR_SIGNAL_META_KEY};
+use pmcp::types::mrtr::{
+    InputRequest, InputRequests, InputResponse, MrtrSignal, MRTR_SIGNAL_META_KEY,
+};
 use pmcp::types::protocol::error_codes::{
     INTERNAL_ERROR, INVALID_PARAMS, MISSING_REQUIRED_CLIENT_CAPABILITY,
 };
@@ -117,6 +119,14 @@ const TOOL_TWO_ENTRIES: &str = "two_entries";
 
 /// Tool that NEVER completes — it re-elicits forever (round-limit fixture).
 const TOOL_FOREVER: &str = "never_completes";
+
+/// Tool that asks for an `elicitation/create` under [`KIND_STRICT_KEY`] and
+/// completes only once the answer arrives TYPED as an elicitation (D-113-O).
+const TOOL_KIND_STRICT: &str = "kind_strict";
+
+/// The single `inputRequests` key [`TOOL_KIND_STRICT`] asks under — the literal
+/// `"k"` of D-113-O's failure narrative.
+const KIND_STRICT_KEY: &str = "k";
 
 /// Tool that needs as many rounds as the SHIPPED client default allows, then
 /// completes — the legitimate-deep-flow fixture for the server round ceiling.
@@ -190,6 +200,10 @@ enum Script {
     Forever,
     /// Always fail with a protocol error.
     Boom,
+    /// Ask for ONE `elicitation/create` under [`KIND_STRICT_KEY`] and complete
+    /// only when the answer arrives typed as [`InputResponse::Elicitation`]
+    /// (D-113-O).
+    KindStrict,
 }
 
 /// One `inputRequests` map holding a single entry.
@@ -286,6 +300,7 @@ impl ToolHandler for ScriptedTool {
                 one("again", elicit_entry("and again")),
                 json!({ "forever": true }),
             ),
+            Script::KindStrict => kind_strict(&extra),
             other => single_kind(&extra, other),
         }
     }
@@ -366,6 +381,32 @@ fn two_entries(extra: &RequestHandlerExtra) -> pmcp::Result<Value> {
         requests.insert(key.clone(), elicit_entry("still needed"));
     }
     ask(extra, requests, json!({ "answered": seen }))
+}
+
+/// D-113-O's handler, written exactly as the deferred item narrates it: ask for
+/// an ELICITATION under `"k"`, then MATCH ON THE VARIANT the SDK typed the answer
+/// as. The `Elicitation` arm completes; anything else falls through and
+/// re-elicits.
+///
+/// This is what a handler that trusts `InputResponse`'s typing looks like — and
+/// trusting it is the documented contract, since `InputRequest::kind()` and
+/// `InputResponse::decode_for` exist precisely so a handler need not re-inspect
+/// raw JSON. A server that types the answer by SHAPE rather than by the kind it
+/// requested hands this handler the wrong variant, the match falls through, and
+/// the operation loops with no error raised anywhere.
+fn kind_strict(extra: &RequestHandlerExtra) -> pmcp::Result<Value> {
+    let answered_as_elicitation = extra
+        .input_responses()
+        .and_then(|responses| responses.get(KIND_STRICT_KEY))
+        .is_some_and(|response| matches!(response, InputResponse::Elicitation(_)));
+    if answered_as_elicitation {
+        return Ok(json!({ "answer": RESUMED }));
+    }
+    ask(
+        extra,
+        one(KIND_STRICT_KEY, elicit_entry("What is your name?")),
+        json!({ "step": 1 }),
+    )
 }
 
 /// A prompt that asks once and then resumes — the `prompts/get` leg of
@@ -458,6 +499,7 @@ fn build_fixture_server(calls: &Arc<AtomicUsize>) -> Server {
         .tool(TOOL_FOREVER, tool(Script::Forever))
         .tool(TOOL_CLIENT_DEFAULT_DEPTH, tool(Script::ClientDefaultDepth))
         .tool(TOOL_BOOM, tool(Script::Boom))
+        .tool(TOOL_KIND_STRICT, tool(Script::KindStrict))
         .prompt(PROMPT_NAME, MrtrPrompt)
         .resources(MrtrResource)
         .build()
@@ -1365,6 +1407,234 @@ async fn a_client_that_ignores_its_own_round_limit_is_stopped_by_the_server() {
         "the deepest round the server ever sealed is the ceiling itself — nowhere near \
          the 255 saturation D-113-L described"
     );
+}
+
+// ===========================================================================
+// Kind-directed typing at ingress (D-113-O, HTTP-03).
+//
+// Raw frames again, and for a sharper reason than the round-ceiling tests
+// above: `pmcp::Client` builds its `inputResponses` from the very
+// `inputRequests` the server sent, through `InputResponse::decode_for`. A
+// Client on both ends therefore CANNOT produce a mismatched answer — it is
+// structurally incapable of the thing under test. That is exactly the shape
+// D-113-O found the SDK in: the kind-directed guarantee held on the client, and
+// only on the client, so no test involving one could ever have caught it.
+// ===========================================================================
+
+/// The overlapping answer of D-113-O: `action` (making it an `ElicitResult`)
+/// AND `content` + `model` (making it a `CreateMessageResult`).
+///
+/// `try_from_value_untagged` tries Sampling before Elicitation, so this is the
+/// value the server used to reclassify.
+fn overlapping_answer() -> Value {
+    json!({
+        "action": "accept",
+        "content": { "type": "text", "text": "hello" },
+        "model": "attacker-chosen-model",
+    })
+}
+
+/// An answer that can ONLY be a `CreateMessageResult`: dropping `action` makes
+/// it undecodable as an `ElicitResult`, whose `action` has no default.
+fn sampling_only_answer() -> Value {
+    json!({
+        "content": { "type": "text", "text": "hello" },
+        "model": "attacker-chosen-model",
+    })
+}
+
+/// D-113-O's loop TERMINATES: the overlapping answer is typed as the elicitation
+/// it actually is, the handler's `Elicitation` arm matches, and the operation
+/// completes on the FIRST resend.
+///
+/// # What this looked like before the fix
+///
+/// Recorded here because the test's value is the contrast. The server typed the
+/// answer by shape, `Sampling` matched first, `kind_strict`'s `Elicitation` arm
+/// fell through, and it re-elicited. The client answered identically, forever.
+/// Measured against the tree at `9a7024cd`, the exchange ran **16 resends and 16
+/// handler invocations** before dying on a MISLEADING
+/// `-32602 "this request exceeded the server's multi-round-trip round limit"` —
+/// an error blaming the client's round count for a mistyped answer on round one.
+///
+/// That 16 is plan 113-24's `MAX_MRTR_ROUNDS`, and the composition is worth
+/// stating: the round ceiling turned an infinite loop into a bounded but still
+/// wrong one, and this plan turns it into a correct outcome. Neither fix
+/// subsumes the other — 113-24 bounds a loop it cannot diagnose, and this one
+/// removes the cause.
+#[tokio::test]
+async fn the_literal_d113o_answer_completes_instead_of_looping() {
+    let (addr, handle, calls) = spawn_fixture().await;
+
+    let first = call_tool(addr, 1, TOOL_KIND_STRICT).await;
+    let (state, keys) = expect_input_required(&first);
+    assert_eq!(keys, vec![KIND_STRICT_KEY.to_string()]);
+
+    let second = retry_tool(
+        addr,
+        json!(2),
+        TOOL_KIND_STRICT,
+        &state,
+        json!({ KIND_STRICT_KEY: overlapping_answer() }),
+    )
+    .await;
+    handle.abort();
+
+    expect_resumed(&second);
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        2,
+        "the handler ran exactly twice — the call that asked, and the resend that \
+         answered. Any more means it re-elicited, which is the defect."
+    );
+}
+
+/// An answer that CANNOT be the requested kind is refused with a typed
+/// `INVALID_PARAMS` naming the key, and the handler is never invoked on the
+/// refused round.
+///
+/// The refusal is the half of D-113-O that could not be expressed at all before
+/// the kinds travelled: ingress had nothing to compare the answer against, so
+/// there was no shape it could call wrong.
+#[tokio::test]
+async fn an_answer_that_cannot_be_the_requested_kind_is_refused() {
+    let (addr, handle, calls) = spawn_fixture().await;
+
+    let first = call_tool(addr, 1, TOOL_KIND_STRICT).await;
+    let (state, _keys) = expect_input_required(&first);
+
+    let refusal = retry_tool(
+        addr,
+        json!(2),
+        TOOL_KIND_STRICT,
+        &state,
+        json!({ KIND_STRICT_KEY: sampling_only_answer() }),
+    )
+    .await;
+    handle.abort();
+
+    assert_eq!(refusal.status, 400, "body was {}", refusal.raw);
+    assert_eq!(
+        refusal.body["error"]["code"], INVALID_PARAMS,
+        "body was {}",
+        refusal.raw
+    );
+    assert!(
+        refusal.body.get("result").is_none(),
+        "neither a complete result nor a re-prompt: {}",
+        refusal.raw
+    );
+    let message = refusal.body["error"]["message"]
+        .as_str()
+        .unwrap_or_else(|| panic!("a JSON-RPC error carries a message: {}", refusal.raw));
+    assert!(
+        message.contains(&format!("{KIND_STRICT_KEY:?}")),
+        "the refusal must NAME the key, which is server-assigned and read back out of \
+         the sealed continuation: {message}"
+    );
+    assert!(
+        message.contains("elicitation/create"),
+        "...and the kind the server actually requested under it: {message}"
+    );
+    assert!(
+        !refusal.raw.contains("attacker-chosen-model"),
+        "...and must never echo the attacker-controlled VALUE: {}",
+        refusal.raw
+    );
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "the refusal fires at ingress, so the refused round never reaches the handler"
+    );
+}
+
+/// The control: an UNAMBIGUOUS `ElicitResult` still completes the round.
+///
+/// Without this, a fix that refused every answer would pass both tests above —
+/// the first by never getting past the elicitation, the second trivially.
+#[tokio::test]
+async fn a_correctly_shaped_answer_still_completes_the_round() {
+    let (addr, handle, calls) = spawn_fixture().await;
+
+    let first = call_tool(addr, 1, TOOL_KIND_STRICT).await;
+    let (state, _keys) = expect_input_required(&first);
+
+    let second = retry_tool(
+        addr,
+        json!(2),
+        TOOL_KIND_STRICT,
+        &state,
+        json!({ KIND_STRICT_KEY: elicit_answer() }),
+    )
+    .await;
+    handle.abort();
+
+    expect_resumed(&second);
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+}
+
+/// An answer under a key the server never asked about is refused — and the
+/// refusal does NOT echo that key, because it is client-chosen.
+#[tokio::test]
+async fn an_unsolicited_key_is_refused_without_being_echoed() {
+    let (addr, handle, calls) = spawn_fixture().await;
+
+    let first = call_tool(addr, 1, TOOL_KIND_STRICT).await;
+    let (state, _keys) = expect_input_required(&first);
+
+    let unsolicited = "zzz_client_chosen_key_zzz";
+    let refusal = retry_tool(
+        addr,
+        json!(2),
+        TOOL_KIND_STRICT,
+        &state,
+        json!({ unsolicited: elicit_answer() }),
+    )
+    .await;
+    handle.abort();
+
+    assert_eq!(refusal.status, 400, "body was {}", refusal.raw);
+    assert_eq!(refusal.body["error"]["code"], INVALID_PARAMS);
+    assert!(
+        !refusal.raw.contains(unsolicited),
+        "an unsolicited key is CLIENT-chosen and bounded only by the 256 KiB \
+         inputResponses total, so echoing it would both amplify and poison logs: {}",
+        refusal.raw
+    );
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "refused at ingress, so the handler never ran on that round"
+    );
+}
+
+/// BLAST RADIUS: every OTHER MRTR flow in this file is untouched.
+///
+/// The rejection is wire-visible, so the boundary has to be stated as something
+/// checkable rather than asserted. It is: an answer is refused only when it is
+/// answered under a key the continuation did not request, or cannot decode as
+/// the kind requested there. A client that answers the `inputRequests` it was
+/// actually sent — which is all `pmcp::Client` can do — sees no change.
+///
+/// The three single-kind fixtures exercise all three kinds through the full
+/// mint/verify/re-decode path, so a re-decode that got any one of them backwards
+/// fails here rather than in a deployment.
+#[tokio::test]
+async fn well_behaved_answers_of_every_kind_are_unaffected() {
+    let (addr, handle, _calls) = spawn_fixture().await;
+
+    for (id, tool, key, answer) in [
+        (1_i64, TOOL_ELICIT, "user_name", elicit_answer()),
+        (3, TOOL_SAMPLE, "model_says", sampling_answer()),
+        (5, TOOL_ROOTS, "workspace", roots_answer()),
+    ] {
+        let first = call_tool(addr, id, tool).await;
+        let (state, keys) = expect_input_required(&first);
+        assert_eq!(keys, vec![key.to_string()]);
+        let second = retry_tool(addr, json!(id + 1), tool, &state, json!({ key: answer })).await;
+        expect_resumed(&second);
+    }
+    handle.abort();
 }
 
 /// A legitimate deep flow — at exactly the depth the shipped client default
