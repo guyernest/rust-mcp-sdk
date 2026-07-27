@@ -49,7 +49,8 @@ use pmcp::server::Server;
 use pmcp::types::protocol::error_codes::{AUTHENTICATION_REQUIRED, METHOD_NOT_FOUND, RATE_LIMITED};
 use pmcp::types::protocol::ProtocolVersion;
 use pmcp::types::subscriptions::{
-    advertises_subscriptions, ACKNOWLEDGED_METHOD, SUBSCRIPTION_ID_META_KEY,
+    advertises_subscriptions, ACKNOWLEDGED_METHOD, MAX_AGREED_RESOURCE_SUBSCRIPTIONS,
+    SUBSCRIPTION_ID_META_KEY,
 };
 use pmcp::types::{
     PromptCapabilities, ResourceCapabilities, ResourceUpdatedParams, ServerCapabilities,
@@ -853,6 +854,199 @@ async fn a_resource_subscriptions_stream_is_not_a_resources_list_changed_stream(
         "the FIRST frame is the resources/updated, even though \
          resources/list_changed was fired before it — the list-changed half was \
          never agreed to, so it is not merely late: {delivered}"
+    );
+    stream.expect_no_json(Duration::from_millis(300)).await;
+
+    drop(stream);
+    handle.abort();
+    let _ = handle.await;
+}
+
+/// The MIRROR of the test above: a `resources.listChanged`-only server agrees to
+/// and delivers `resourcesListChanged`, and refuses `resourceSubscriptions`.
+///
+/// Together the two tests are the cross-product that proves the two resources
+/// opt-ins are independent rather than one capability wearing two names: each
+/// server advertises exactly one half, each client requests BOTH halves, and each
+/// acknowledgement keeps exactly the advertised half.
+///
+/// The omitted half is asserted as an ABSENT KEY. `agreed_flag` and
+/// `intersect_with_capabilities`'s `_ => None` arm both produce `None`, and
+/// `skip_serializing_if = "Option::is_none"` keeps `None` off the wire entirely —
+/// so accepting `null` or `[]` here would let a future change that started
+/// emitting an empty agreed list pass, and that is a DIFFERENT contract (a server
+/// agreeing to a capability it does not advertise, T-113-152).
+#[tokio::test]
+async fn resources_list_changed_is_agreed_and_delivered_when_subscriptions_are_not() {
+    let server = Arc::new(Mutex::new(server_with(advertising(Some(
+        "resources.listChanged",
+    )))));
+    let (addr, handle) = spawn_shared(Arc::clone(&server)).await;
+
+    let mut stream = SseStream::open(
+        addr,
+        &listen_headers(),
+        &listen_body(
+            json!(53),
+            &json!({
+                "resourcesListChanged": true,
+                "resourceSubscriptions": [SUBSCRIBED_URI],
+            }),
+        ),
+    )
+    .await;
+
+    assert_eq!(stream.status, 200, "resources.listChanged is advertised");
+    let ack = stream.expect_json().await;
+    let agreed = &ack["params"]["notifications"];
+    assert!(
+        agreed.get("resourceSubscriptions").is_none(),
+        "`resources.subscribe` is NOT advertised, so the requested URI list is \
+         OMITTED from the agreed filter — the key must be ABSENT, not present as \
+         `[]` and not present as `null`: {ack}"
+    );
+    assert_eq!(
+        *agreed,
+        json!({ "resourcesListChanged": true }),
+        "only the advertised half survives: {ack}"
+    );
+    assert_eq!(subscription_id_of(&ack), Some(&json!(53)));
+
+    // The requested-but-NOT-agreed URI goes out first.
+    {
+        let server = server.lock().await;
+        server
+            .send_notification(ServerNotification::ResourceUpdated(
+                ResourceUpdatedParams::new(SUBSCRIBED_URI),
+            ))
+            .await;
+        server
+            .send_notification(ServerNotification::ResourcesChanged)
+            .await;
+    }
+
+    let delivered = stream.expect_json().await;
+    assert_eq!(
+        delivered["method"],
+        json!("notifications/resources/list_changed"),
+        "the agreed half is delivered, and it arrives FIRST despite the \
+         un-agreed resources/updated having been fired before it: {delivered}"
+    );
+    assert_eq!(
+        subscription_id_of(&delivered),
+        Some(&json!(53)),
+        "a delivered resources/list_changed carries the stream's \
+         subscriptionId: {delivered}"
+    );
+    stream.expect_no_json(Duration::from_millis(300)).await;
+
+    drop(stream);
+    handle.abort();
+    let _ = handle.await;
+}
+
+/// An over-bound `resourceSubscriptions` list is ACCEPTED and TRUNCATED, and the
+/// truncation is reported back in the acknowledgement the client actually reads.
+///
+/// The spec allows the agreed set to omit entries precisely so a server can bound
+/// a client-supplied list without failing the request, on the condition that the
+/// omission is *reported* rather than silent. That contract is only meaningful if
+/// it is observed on the wire: `MAX_AGREED_RESOURCE_SUBSCRIPTIONS` exists because
+/// the agreed list is retained per live stream and rescanned on every
+/// `notifications/resources/updated` fan-out under the registry read lock
+/// (T-113-151), and a bound nobody can see is a bound nobody can rely on.
+///
+/// The bound is IMPORTED, never spelled `1024`: a future change to the production
+/// constant must move this test with it rather than quietly making it vacuous.
+/// The two probe URIs are likewise chosen BY INDEX — one from the head of the
+/// list, one at the first index past the bound — so the test states the
+/// truncation semantics rather than a coincidence about particular strings.
+///
+/// This test's request body is deliberately the largest in the file (roughly
+/// 16 KB of URIs, far under the 4 MB `DEFAULT_MAX_REQUEST_BYTES`); it is the only
+/// one here that exercises the whole-body path at size, and the size is the point
+/// rather than sloppiness.
+#[tokio::test]
+async fn an_over_bound_resource_subscriptions_list_is_truncated_and_reported() {
+    let uris: Vec<String> = (0..=MAX_AGREED_RESOURCE_SUBSCRIPTIONS)
+        .map(|index| format!("mem://r/{index}"))
+        .collect();
+    let kept = uris[0].clone();
+    let truncated_away = uris[MAX_AGREED_RESOURCE_SUBSCRIPTIONS].clone();
+
+    let server = Arc::new(Mutex::new(server_with(advertising(Some(
+        "resources.subscribe",
+    )))));
+    let (addr, handle) = spawn_shared(Arc::clone(&server)).await;
+
+    let mut stream = SseStream::open(
+        addr,
+        &listen_headers(),
+        &listen_body(json!(54), &json!({ "resourceSubscriptions": uris })),
+    )
+    .await;
+
+    assert_eq!(
+        stream.status, 200,
+        "an over-bound list is TRUNCATED, not rejected: truncating keeps the \
+         operation conformant because the agreed set is allowed to omit entries"
+    );
+    assert_eq!(
+        stream.header("content-type"),
+        Some("text/event-stream"),
+        "the stream is served, not refused"
+    );
+
+    let ack = stream.expect_json().await;
+    let agreed = ack["params"]["notifications"]["resourceSubscriptions"]
+        .as_array()
+        .expect("the agreed filter reports the URI list it kept");
+    assert_eq!(
+        agreed.len(),
+        MAX_AGREED_RESOURCE_SUBSCRIPTIONS,
+        "{} URIs were requested; the acknowledgement reports exactly \
+         MAX_AGREED_RESOURCE_SUBSCRIPTIONS of them",
+        uris.len()
+    );
+    assert_eq!(
+        agreed[0],
+        json!(kept),
+        "truncation keeps the HEAD of the requested list (`.take(..)`), so index \
+         0 survives"
+    );
+    assert!(
+        !agreed.contains(&json!(truncated_away)),
+        "the URI at index MAX_AGREED_RESOURCE_SUBSCRIPTIONS is past the bound and \
+         must not appear in the agreed list"
+    );
+    assert_eq!(subscription_id_of(&ack), Some(&json!(54)));
+
+    // The TRUNCATED-AWAY URI is fired first: it must be filtered, not merely late.
+    {
+        let server = server.lock().await;
+        server
+            .send_notification(ServerNotification::ResourceUpdated(
+                ResourceUpdatedParams::new(truncated_away.clone()),
+            ))
+            .await;
+        server
+            .send_notification(ServerNotification::ResourceUpdated(
+                ResourceUpdatedParams::new(kept.clone()),
+            ))
+            .await;
+    }
+
+    let delivered = stream.expect_json().await;
+    assert_eq!(
+        delivered["method"],
+        json!("notifications/resources/updated"),
+        "the kept URI still delivers after truncation: {delivered}"
+    );
+    assert_eq!(
+        delivered["params"]["uri"],
+        json!(kept),
+        "a URI that survived truncation delivers; the one truncated away does \
+         not, even though it was fired first: {delivered}"
     );
     stream.expect_no_json(Duration::from_millis(300)).await;
 
