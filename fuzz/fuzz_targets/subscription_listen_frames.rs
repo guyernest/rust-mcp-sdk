@@ -3,7 +3,10 @@
 //! CLAUDE.md ALWAYS / FUZZ Testing: `cargo +nightly fuzz run
 //! subscription_listen_frames -- -runs=20000`. The `+nightly` is load-bearing —
 //! `cargo fuzz run` passes `-Zsanitizer=address`, which stable rustc rejects.
-//! The recorded campaign lives in `113-FUZZ-EVIDENCE.md`.
+//! The recorded campaigns live in the repo at
+//! `.planning/phases/113-stateless-http-multi-round-trip-elicitation/113-FUZZ-EVIDENCE.md`
+//! (a planning artifact, not shipped in the published crate — the command above
+//! is the whole reproduction recipe).
 //!
 //! A listen stream's bytes come from a REMOTE server (or whatever intermediary
 //! sits between), so the SSE tokenizing, incremental UTF-8 decoding, JSON-RPC
@@ -19,11 +22,25 @@
 //!      improbable enough that a delivery from bytes not containing it would be
 //!      a real cross-tag escape, which is exactly the failure the server-side
 //!      `ListenKey` pairing prevents and the client must not paper over.
-//!   3. **The overflow latch never clears** (T-113-73) — once the bounded parser
-//!      has discarded an oversized line, `overflowed()` stays true for the rest
-//!      of the stream. `read_next_frame` polls that flag once per body frame and
-//!      ends the stream on the first `true`; if it could clear, a peer could
-//!      hide a discarded line behind a subsequent well-formed one.
+//!   3. **Memory stays bounded** (T-113-79 / T-113-93) — after every chunk, the
+//!      bytes the parser RETAINS across lines (`SseParser::buffered_bytes()`:
+//!      the unterminated line plus the `data:` payload of the event still
+//!      awaiting its blank line) are `<= max_buffer_size`. This is the property
+//!      the campaign exists to defend: a peer that streams ordinary
+//!      newline-terminated `data:` lines forever must not be able to grow the
+//!      parser. It is asserted here because it was NOT — the target previously
+//!      asserted only that the overflow latch never clears, which cannot fail
+//!      for any input at any bound, so 20 000 green runs coexisted with exactly
+//!      that unbounded-growth defect (`113-VERIFICATION.md` gap item 3, review
+//!      CR-01/WR-03, closed by plan 113-17 and pinned here by plan 113-19).
+//!
+//! Subordinate note, kept because it is cheap and it documents the latch: once
+//! the bounded parser has discarded an oversized line, `overflowed()` stays true
+//! for the rest of the stream (T-113-73). `read_next_frame` polls that flag once
+//! per body frame and ends the stream on the first `true`; if it could clear, a
+//! peer could hide a discarded line behind a subsequent well-formed one. This is
+//! deliberately NOT a numbered invariant: `overflowed` has one write site and no
+//! clearing path, so no generated input can falsify it.
 
 #![no_main]
 
@@ -80,11 +97,12 @@ fuzz_target!(|data: &[u8]| {
 
     for max_buffer_size in MAX_BUFFER_SIZES {
         // Invariant 1: arbitrary bytes in, no panic out.
-        let (outcomes, overflowed) = pmcp::client::subscriptions::decode_listen_chunks_for_fuzz(
-            &chunks,
-            SUBSCRIPTION_ID,
-            max_buffer_size,
-        );
+        let (outcomes, overflowed, peak_buffered_bytes) =
+            pmcp::client::subscriptions::decode_listen_chunks_for_fuzz(
+                &chunks,
+                SUBSCRIPTION_ID,
+                max_buffer_size,
+            );
 
         // Invariant 2: nothing is delivered from bytes that never named this
         // subscription.
@@ -105,9 +123,39 @@ fuzz_target!(|data: &[u8]| {
             );
         }
 
-        // Invariant 3: `overflowed()` LATCHES. Once a line has been discarded the
-        // stream has lost bytes; a later chunk must not be able to present it as
-        // healthy again.
+        // Invariant 3: MEMORY STAYS BOUNDED.
+        //
+        // What this defends: a peer that streams perfectly ordinary
+        // newline-terminated `data:` lines and simply never sends the blank line
+        // that would dispatch the event must not be able to grow the parser. Each
+        // such line completes — so a "does this chunk carry a newline?" escape
+        // hatch waves it through — while its payload accumulates into
+        // `current_event.data`, which only a BLANK line ever clears. That is
+        // GAP-A (`113-VERIFICATION.md` gap item 3 / review CR-01), and the reason
+        // it survived a 20 000-run green campaign is that the target asserted no
+        // SIZE at all: the seam reported outcomes and flags, never retention.
+        //
+        // `peak_buffered_bytes[i]` is `SseParser::buffered_bytes()` sampled after
+        // chunk `i` was drained, i.e. exactly the pair of accumulators
+        // `max_buffer_size` bounds. Enforcement discards both and latches rather
+        // than growing, so the bound holds on return from every feed — and a
+        // regression that reintroduces any escape hatch produces a crash artifact
+        // here instead of a silent pass.
+        for (index, held) in peak_buffered_bytes.iter().copied().enumerate() {
+            assert!(
+                held <= max_buffer_size,
+                "the parser retained {held} bytes after chunk {index} under a \
+                 {max_buffer_size}-byte bound (peaks: {peak_buffered_bytes:?})"
+            );
+        }
+
+        // Subordinate note, not a numbered invariant: `overflowed()` LATCHES.
+        // Once a line has been discarded the stream has lost bytes, so a later
+        // chunk must not present it as healthy again. Kept because it is cheap
+        // and it documents the latch — but `overflowed` has exactly one write
+        // site and no clearing path, so no input can falsify this. It is the
+        // assertion that USED to be Invariant 3, and its tautology is why this
+        // target needed a real bound check (review WR-03).
         let mut latched = false;
         for (index, seen) in overflowed.into_iter().enumerate() {
             assert!(

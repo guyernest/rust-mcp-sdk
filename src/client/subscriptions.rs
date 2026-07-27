@@ -583,18 +583,46 @@ fn decode_notification(mut cleaned: Value, payload: &str) -> Result<ServerNotifi
 
 // ===========================================================================
 // Internal support surface for `fuzz_targets/`.
+//
+// Everything in this section is compiled ONLY under `feature = "fuzzing"` — a
+// feature that is in neither `default` nor `full`, so `cargo public-api` never
+// sees it on the shipped surface — or under `cfg(test)`, which is what keeps
+// this module's own tests and proptests compiling. `fuzz/Cargo.toml` enables
+// `fuzzing`; nothing a downstream crate can reach does. This mirrors the
+// convention `crate::server::request_state`'s `fuzz_support` established.
 // ===========================================================================
 
 /// Run a SEQUENCE of untrusted listen-stream chunks through EXACTLY the decode a
 /// live [`SubscriptionStream`] performs, under an explicit line-buffer bound.
 ///
-/// `#[doc(hidden)]`: internal support surface for
-/// `fuzz/fuzz_targets/subscription_listen_frames.rs`, NOT stable API. It exists
-/// because the decode path is private and a fuzz target may only reach public
-/// items — the same `#[doc(hidden)]` seam convention Phase 110 established for
+/// # ⚠️ Not stable API
+///
+/// This function exists only behind `feature = "fuzzing"` (absent from BOTH
+/// `default` and `full`, so `cargo public-api` never sees it on the shipped
+/// surface) plus `cfg(test)` for this module's own callers. It is internal
+/// support surface for `fuzz/fuzz_targets/subscription_listen_frames.rs`, in the
+/// same spirit as the `#[doc(hidden)]` seam convention Phase 110 established for
 /// `cargo-pmcp`'s fuzz and example targets. Do not build on it.
 ///
-/// Errors are flattened to their `Display` string so no private type escapes.
+/// The gate is deliberate rather than cosmetic. `#[doc(hidden)]` hides an item
+/// from rustdoc; it does NOT restrict visibility and does NOT exempt the item
+/// from semver, and `pub mod client` → `pub mod subscriptions` makes everything
+/// here reachable by every dependent crate. Three properties of this signature
+/// are convenient for a fuzz harness and would be defects in stable API, so they
+/// are named here rather than silently inherited by the next refactor:
+///
+/// - the `&[&[u8]]` **chunk model**, which commits the SDK to "a body is a slice
+///   of byte slices" — a shape chosen to replay a libFuzzer artifact
+///   deterministically, not to describe an HTTP body;
+/// - the **unvalidated `max_buffer_size`**, which accepts `0` and then latches
+///   the parser on the first non-empty chunk (a fuzz campaign wants that reachable;
+///   a caller almost never does);
+/// - **errors flattened to `String`**, so no private type escapes — which also
+///   means no caller can match on the failure.
+///
+/// It additionally drops terminal frames, so a caller who mistook it for a decode
+/// API would lose stream-close signals.
+///
 /// A terminal result contributes no entry. Pass [`MAX_LISTEN_LINE_BYTES`] to
 /// decode under exactly the bound a live listen stream uses.
 ///
@@ -610,12 +638,26 @@ fn decode_notification(mut cleaned: Value, payload: &str) -> Result<ServerNotifi
 ///    as in [`read_next_frame`] — so a split mid-character or mid-line is
 ///    reachable here and is not reachable with one chunk.
 ///
-/// Returns `(outcomes, overflowed_after_each_chunk)`. The second vector has one
-/// entry per input chunk and holds `listen_overflow(&parser).is_some()` — the
-/// PRODUCTION observer, not a reconstruction of it — evaluated after that chunk
-/// was drained. Because [`SseParser::overflowed`] latches, that vector must never
-/// go `true` then `false`; a live stream ENDS on the first `true`, while this
-/// seam deliberately keeps feeding so the latch itself is testable.
+/// # Returns
+///
+/// `(outcomes, overflowed_after_each_chunk, peak_buffered_bytes)`. The second and
+/// third vectors each have one entry per INPUT CHUNK, evaluated after that chunk
+/// was drained:
+///
+/// - `outcomes` — one entry per frame the stream would have delivered or failed
+///   on, with errors flattened to their `Display` string.
+/// - `overflowed_after_each_chunk` — `listen_overflow(&parser).is_some()`, the
+///   PRODUCTION observer rather than a reconstruction of it. Because
+///   [`SseParser::overflowed`] latches, that vector must never go `true` then
+///   `false`; a live stream ENDS on the first `true`, while this seam deliberately
+///   keeps feeding so the latch itself is testable.
+/// - `peak_buffered_bytes` — `SseParser::buffered_bytes()`, i.e. the two
+///   accumulators the bound actually covers (the unterminated line PLUS the
+///   `data:` payload of the event still awaiting its blank line). This is the
+///   quantity a campaign asserts against `max_buffer_size`: it is what GAP-A grew
+///   without limit, and reporting only outcomes and flags is precisely why 20 000
+///   green runs could coexist with that defect.
+#[cfg(any(feature = "fuzzing", test))]
 #[doc(hidden)]
 #[must_use]
 pub fn decode_listen_chunks_for_fuzz(
@@ -625,12 +667,14 @@ pub fn decode_listen_chunks_for_fuzz(
 ) -> (
     Vec<std::result::Result<ServerNotification, String>>,
     Vec<bool>,
+    Vec<usize>,
 ) {
     let id = RequestId::String(subscription_id.to_string());
     let mut parser = SseParser::with_max_buffer_size(max_buffer_size);
     let mut bytes: Vec<u8> = Vec::new();
     let mut outcomes = Vec::new();
     let mut overflowed = Vec::with_capacity(chunks.len());
+    let mut peak_buffered_bytes = Vec::with_capacity(chunks.len());
     for chunk in chunks {
         bytes.extend_from_slice(chunk);
         let text = take_utf8_prefix(&mut bytes);
@@ -644,8 +688,9 @@ pub fn decode_listen_chunks_for_fuzz(
                 }),
         );
         overflowed.push(listen_overflow(&parser).is_some());
+        peak_buffered_bytes.push(parser.buffered_bytes());
     }
-    (outcomes, overflowed)
+    (outcomes, overflowed, peak_buffered_bytes)
 }
 
 #[cfg(test)]
@@ -1095,7 +1140,8 @@ mod tests {
         // accumulation" is distinguishable from "tripped immediately".
         let chunk = [b'x'; 16];
         let chunks: Vec<&[u8]> = vec![&chunk[..]; 8];
-        let (outcomes, overflowed) = decode_listen_chunks_for_fuzz(&chunks, "sub-1", 64);
+        let (outcomes, overflowed, peak_buffered_bytes) =
+            decode_listen_chunks_for_fuzz(&chunks, "sub-1", 64);
 
         assert!(
             outcomes.is_empty(),
@@ -1110,6 +1156,16 @@ mod tests {
             overflowed.last().copied().unwrap_or_default(),
             "the bound is tripped by the end: {overflowed:?}"
         );
+        assert_eq!(
+            peak_buffered_bytes.len(),
+            chunks.len(),
+            "one retention sample per chunk"
+        );
+        assert!(
+            peak_buffered_bytes.iter().all(|held| *held <= 64),
+            "retention stays inside the bound even while it is being approached: \
+             {peak_buffered_bytes:?}"
+        );
     }
 
     /// A well-formed frame delivered ACROSS chunk boundaries still arrives —
@@ -1123,13 +1179,73 @@ mod tests {
         let chunks: Vec<&[u8]> = bytes.chunks(5).collect();
         assert!(chunks.len() > 1, "the frame must actually be split");
 
-        let (outcomes, overflowed) =
+        let (outcomes, overflowed, peak_buffered_bytes) =
             decode_listen_chunks_for_fuzz(&chunks, "sub-1", MAX_LISTEN_LINE_BYTES);
         assert_eq!(outcomes.len(), 1, "exactly one frame is reassembled");
         assert!(outcomes[0].is_ok(), "and it is delivered: {outcomes:?}");
         assert!(
             overflowed.iter().all(|seen| !*seen),
             "a legitimate frame never trips the bound"
+        );
+        assert!(
+            peak_buffered_bytes
+                .iter()
+                .all(|held| *held <= MAX_LISTEN_LINE_BYTES),
+            "a legitimate frame stays inside the bound: {peak_buffered_bytes:?}"
+        );
+    }
+
+    /// The campaign's NEW invariant, proven non-vacuous on the input class the
+    /// fuzzer actually generates.
+    ///
+    /// `fuzz_targets/subscription_listen_frames.rs` asserts that every
+    /// `peak_buffered_bytes` sample stays `<= max_buffer_size`. An assertion that
+    /// holds only because the parser never accumulates anything would be the same
+    /// failure as the latch tautology it replaces (review WR-03) — 20 000 green
+    /// runs that could not have seen GAP-A. So this drives the seam with the
+    /// realistic flood: ordinary NEWLINE-TERMINATED `data:` lines that no blank
+    /// line ever ends, which is the input class the pre-113-17 bound could not
+    /// see, and pins THREE things at once:
+    ///
+    /// 1. every sample is inside the bound (the campaign's assertion),
+    /// 2. the bound is actually REACHED — at least one overflow observation is
+    ///    `true` — so the samples are not trivially small, and
+    /// 3. retention ACCUMULATES across lines (some sample exceeds what one chunk
+    ///    alone contributes), so the samples are not trivially per-chunk either.
+    #[test]
+    fn the_seam_reports_retention_that_stays_inside_a_tiny_bound_while_reaching_it() {
+        const BOUND: usize = 64;
+        // 15 bytes: a complete `data:` line whose payload is 8 bytes. No blank
+        // line anywhere, so the event accumulates and is never dispatched.
+        let line = b"data: AAAAAAAA\n";
+        let chunks: Vec<&[u8]> = vec![&line[..]; 20];
+
+        let (outcomes, overflowed, peak_buffered_bytes) =
+            decode_listen_chunks_for_fuzz(&chunks, "sub-1", BOUND);
+
+        assert!(
+            outcomes.is_empty(),
+            "a `data:` line with no blank line after it completes no frame: {outcomes:?}"
+        );
+        assert_eq!(
+            peak_buffered_bytes.len(),
+            chunks.len(),
+            "one retention sample per chunk"
+        );
+        assert!(
+            peak_buffered_bytes.iter().all(|held| *held <= BOUND),
+            "the campaign's invariant: retention never exceeds the bound, \
+             {peak_buffered_bytes:?} under {BOUND}"
+        );
+        assert!(
+            overflowed.iter().any(|seen| *seen),
+            "non-vacuity: the flood must actually REACH the bound, or the \
+             invariant above holds for an uninteresting reason: {overflowed:?}"
+        );
+        assert!(
+            peak_buffered_bytes.iter().any(|held| *held > line.len()),
+            "non-vacuity: retention must ACCUMULATE across lines, not merely \
+             hold one chunk: {peak_buffered_bytes:?}"
         );
     }
 
