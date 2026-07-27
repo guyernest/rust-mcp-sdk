@@ -650,6 +650,205 @@ async fn unauthenticated_on_auth_server_refused() {
     );
 }
 
+// ===========================================================================
+// D-113-M: a request that cannot be canonicalized cannot be bound, so it can
+// neither mint nor present a continuation (T-113-122/123/125/126).
+// ===========================================================================
+
+/// Mirror of the crate-internal `MAX_CANONICAL_DEPTH`, which is `pub(crate)` and
+/// therefore unnameable from an integration test.
+///
+/// NOT a comment-pinned duplicate:
+/// [`the_mirrored_depth_cap_matches_the_live_one`] MEASURES the live bound by
+/// walking `mint_request_state` until it refuses, and asserts the measurement
+/// equals this value. Both halves cannot drift silently.
+const CANONICAL_DEPTH_CAP: usize = 64;
+
+/// `arguments` nested `levels` objects deep around `leaf`.
+///
+/// The salient whitelist wrapper costs one canonical level, so the deepest
+/// `arguments` that still binds is `CANONICAL_DEPTH_CAP - 1` levels.
+fn nested_arguments(levels: usize, leaf: &str) -> Value {
+    let mut value = json!(leaf);
+    for _ in 0..levels {
+        value = json!({ "n": value });
+    }
+    value
+}
+
+/// Walk the depth ladder until minting refuses, and check the mirror.
+///
+/// This is what makes [`CANONICAL_DEPTH_CAP`] a measurement rather than a
+/// comment. `mint_request_state` wraps the PRODUCTION codec and the PRODUCTION
+/// binding, so `None` here is exactly the condition the server refuses on.
+#[test]
+fn the_mirrored_depth_cap_matches_the_live_one() {
+    let mints_at = |levels: usize| {
+        mint_request_state(
+            &KEY,
+            LIVE_TTL,
+            ANONYMOUS_PRINCIPAL,
+            "tools/call",
+            &search_params(&nested_arguments(levels, "leaf")),
+            &json!({ "step": 1 }),
+            0,
+        )
+        .is_some()
+    };
+
+    // A hard scan bound sized as a multiple of the mirror, so a regression that
+    // removed the cap fails FAST instead of hanging the suite.
+    let observed = (0..CANONICAL_DEPTH_CAP * 3)
+        .find(|&levels| !mints_at(levels))
+        .expect("the depth cap must refuse SOMEWHERE below 3x the mirrored value");
+
+    assert_eq!(
+        observed, CANONICAL_DEPTH_CAP,
+        "the live canonicalization cap moved; update CANONICAL_DEPTH_CAP"
+    );
+    assert!(
+        mints_at(observed - 1),
+        "the boundary must be exact: one level shallower still mints"
+    );
+}
+
+/// THE D-113-M END-TO-END PROOF, in two halves.
+///
+/// **Half 1 (the fix).** Requests A and B whose `arguments` are identical down to
+/// the canonicalization cap and differ BELOW it used to digest identically, so a
+/// `requestState` minted for A verified against B. A can no longer mint at all:
+/// the server answers `INVALID_PARAMS` and issues no token, so there is nothing
+/// to cross-verify.
+///
+/// **Half 2 (the control).** Requests A' and B' differing ABOVE the cap mint and
+/// cross-reject exactly as they always did. Without this half, half 1 would be
+/// consistent with the server having simply stopped minting — this shows normal
+/// cross-request rejection is untouched, and that the recovered token is the real
+/// minted continuation, opened with the server's own key (the 113-11 pattern)
+/// rather than trusted because it round-tripped.
+#[tokio::test]
+async fn a_token_minted_for_one_request_is_refused_on_a_request_differing_below_the_depth_cap() {
+    // ---- Half 1: A cannot mint, so it can never be cross-verified. ----
+    let (addr, handle, tool) = spawn_anon().await;
+    let deep_a = nested_arguments(CANONICAL_DEPTH_CAP, "SECRET-A");
+    let deep_b = nested_arguments(CANONICAL_DEPTH_CAP, "SECRET-B");
+    assert_ne!(deep_a, deep_b, "the fixtures must genuinely differ");
+
+    // The handler signals `input_required`, which is what would mint.
+    let response = post(
+        addr,
+        &v2_headers("tools/call", "search"),
+        &v2_body("tools/call", json!(2), search_params(&deep_a)),
+    )
+    .await;
+
+    assert_eq!(
+        response.body["error"]["code"], INVALID_PARAMS,
+        "an over-deep request must be refused at the mint path, body was {}",
+        response.raw
+    );
+    assert!(
+        response.body.get("result").is_none(),
+        "no result may be emitted for an unbindable request: {}",
+        response.raw
+    );
+    assert!(
+        !response.raw.contains("requestState"),
+        "no continuation may be minted for a request that cannot be identified: {}",
+        response.raw
+    );
+    // The mint refusal is at EGRESS, so the handler did run — that is the
+    // documented shape, and it is why nothing reaches the wire instead.
+    assert_eq!(tool.calls.load(Ordering::SeqCst), 1);
+
+    // And a token PRESENTED on the deep request is refused before verification.
+    let presented = post(
+        addr,
+        &v2_headers("tools/call", "search"),
+        &retry_body(3, &deep_b, json!("any-token-at-all"), false),
+    )
+    .await;
+    handle.abort();
+    assert_eq!(
+        presented.body["error"]["code"], INVALID_PARAMS,
+        "body was {}",
+        presented.raw
+    );
+    assert!(presented.body.get("result").is_none());
+    assert_eq!(
+        tool.calls.load(Ordering::SeqCst),
+        1,
+        "a state-bearing over-deep request must never reach the handler"
+    );
+
+    // ---- Half 2: the shallow control, unchanged. ----
+    let (addr, handle, tool) = spawn_anon().await;
+    let shallow_a = nested_arguments(CANONICAL_DEPTH_CAP - 2, "SECRET-A");
+    let shallow_b = nested_arguments(CANONICAL_DEPTH_CAP - 2, "SECRET-B");
+
+    let minted = post(
+        addr,
+        &v2_headers("tools/call", "search"),
+        &v2_body("tools/call", json!(2), search_params(&shallow_a)),
+    )
+    .await;
+    let result = minted
+        .body
+        .get("result")
+        .unwrap_or_else(|| panic!("A' must still mint, body was {}", minted.raw));
+    assert_eq!(result["resultType"], "input_required", "got {result}");
+    let token = result["requestState"]
+        .as_str()
+        .expect("A' mints a continuation");
+
+    // Prove it is the REAL minted continuation by opening it with the server's
+    // own key, rather than inferring that from a successful round-trip.
+    let (state, round) = open_request_state(
+        &KEY,
+        ANONYMOUS_PRINCIPAL,
+        "tools/call",
+        &search_params(&shallow_a),
+        token,
+    )
+    .expect("the server's own token opens against A' and the shared key");
+    assert_eq!(state, json!({ "step": 1 }));
+    assert_eq!(round, 1);
+
+    // The same token does NOT open against B' — the digests differ.
+    assert!(
+        open_request_state(
+            &KEY,
+            ANONYMOUS_PRINCIPAL,
+            "tools/call",
+            &search_params(&shallow_b),
+            token,
+        )
+        .is_none(),
+        "a token minted for A' must not open against B'"
+    );
+
+    // ...and the server agrees, over real HTTP.
+    let replayed = post(
+        addr,
+        &v2_headers("tools/call", "search"),
+        &retry_body(3, &shallow_b, json!(token), true),
+    )
+    .await;
+    handle.abort();
+
+    assert_eq!(
+        replayed.body["error"]["code"], INVALID_PARAMS,
+        "the cross-request replay must still be rejected, body was {}",
+        replayed.raw
+    );
+    assert!(replayed.body.get("result").is_none());
+    assert_eq!(
+        tool.calls.load(Ordering::SeqCst),
+        1,
+        "only the minting call reached the handler; the replay did not"
+    );
+}
+
 /// T-113-23: MRTR is confined to `tools/call`, `prompts/get` and
 /// `resources/read`. A `requestState` on any other method is IGNORED — not
 /// verified, not errored.

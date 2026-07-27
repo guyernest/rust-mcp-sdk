@@ -1810,9 +1810,21 @@ mod tests {
 
         let digest_a = salient_param_digest("tools/call", &a);
         let digest_b = salient_param_digest("tools/call", &b);
+        // Rendered hex rather than `[u8; 32]` Debug, so that when this test FAILS
+        // — which is exactly what restoring the marker branch does — the output IS
+        // the two equal digests, legibly, and comparable to the measurement in the
+        // D-113-M record.
+        let show = |outcome: &Result<[u8; 32], CanonicalDepthExceeded>| match outcome {
+            Ok(bytes) => bytes.map(|byte| format!("{byte:02x}")).join(""),
+            Err(error) => format!("REFUSED ({error})"),
+        };
         assert!(
             digest_a.is_err() && digest_b.is_err(),
-            "over-deep params must be REFUSED, not digested: {digest_a:?} / {digest_b:?}"
+            "over-deep params must be REFUSED, not digested.\n  \
+             A      = {}\n  B      = {}\n  equal? = {}",
+            show(&digest_a),
+            show(&digest_b),
+            digest_a == digest_b
         );
 
         // The sharper statement of the property the marker violated: DISTINCT
