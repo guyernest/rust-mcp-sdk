@@ -2274,7 +2274,18 @@ Plans:
 
 **Goal**: v2 HTTP requests run with no `initialize` handshake and no `Mcp-Session-Id`, era-gated onto pmcp's existing `stateless()` branch (not a transport fork); multi-round-trip elicitation works end-to-end; and the pmcp `Client` is the v2-speaking counterpart, folding the Phase-106 host handlers into the v2 flow. v1 session behavior is untouched.
 **Depends on**: Phase 112 (ProtocolContext / era gate)
-**Requirements**: HTTP-01, HTTP-02, HTTP-03, HTTP-04, HTTP-05, CLNT-01, CLNT-02
+**Requirements**: HTTP-01, HTTP-02, HTTP-03, HTTP-04, HTTP-05, HTTP-06, HTTP-07, HTTP-08, HTTP-09, CLNT-01, CLNT-02, CLNT-05
+
+> **HTTP-04 was split on 2026-07-26.** It had bundled ten obligations behind one checkbox and was
+> the sole paragraph-length entry in `REQUIREMENTS.md` — every other requirement in that file is a
+> single sentence. All seven gap-closure plans in this phase (113-14…113-20) targeted HTTP-04 and
+> no other requirement, because a single checkbox covering ten obligations can never partially
+> close: each review reopened the whole thing. The split is HTTP-04 (method removal + replacement),
+> HTTP-06 (GET-stream transport removal), HTTP-07 (frame protocol), HTTP-08 (opt-in capability
+> gating), HTTP-09 (bounded reads — **new, and NOT met**), and CLNT-05 (client half, moved to the
+> CLNT section where the other client-side mirrors live). D-11 positioning and the instance-local
+> `ListenRegistry` limitation were removed from the requirement entirely — neither has a pass/fail
+> condition.
 **Success Criteria** (what must be TRUE):
 
   1. A v2 HTTP request completes with no `initialize` handshake and no `Mcp-Session-Id`, era-gated onto the existing `stateless()` branch, while v1 session behavior is unchanged (HTTP-01)

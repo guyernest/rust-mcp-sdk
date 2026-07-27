@@ -21,8 +21,10 @@
 
 ### Stateless HTTP & Multi-Round-Trip (HTTP)
 
-> **Status marker `[~]` — implemented, gated on the final schema.** Every HTTP-0x and CLNT-0x
+> **Status marker `[~]` — implemented, gated on the final schema.** Every `[~]` HTTP-0x and CLNT-0x
 > requirement below is **implemented and green** at Phase-113 HEAD, but none is marked complete.
+> **HTTP-09 is the exception: it is `[ ]`, not `[~]`** — it is a genuine open gap, not a
+> publication-gated one, and it does not clear on 2026-07-28.
 > `113-SPEC-RECHECK.md`'s `## Verdict` is still `PENDING`: as re-verified on 2026-07-26 there is
 > no `schema/2026-07-28` directory upstream, so the wire constants Phase 113 landed
 > (`-32020`/`-32021`/`-32022`) are **pre-final values held under a written developer exception**.
@@ -32,8 +34,36 @@
 - [~] **HTTP-01**: v2 HTTP requests run with no `initialize` handshake and no `Mcp-Session-Id`, era-gated onto the existing `stateless()` branch; v1 session behavior is unchanged — *implemented; pending final schema*
 - [~] **HTTP-02**: A server handler can return `input_required` with `inputRequests` and an opaque `requestState` that is integrity-protected, principal-bound, and TTL'd — *implemented; pending final schema*
 - [~] **HTTP-03**: A client retry of the original request carrying `inputResponses` + echoed `requestState` resumes the operation correctly (multi-round-trip elicitation end-to-end) — *implemented; pending final schema*
-- [~] **HTTP-04**: On the v2 path, `resources/subscribe`/`unsubscribe` and the HTTP GET stream endpoint are **removed**. v2 change notifications are delivered over a `subscriptions/listen` long-lived stream (`toolsListChanged`/`promptsListChanged`/`resourcesListChanged`/`resourceSubscriptions` opt-ins, `subscriptionId` tagging, `notifications/subscriptions/acknowledged` as the mandatory first frame). The stream is **opt-in**: pmcp's stateless enterprise default advertises no subscription-delivered capability, and answering `subscriptions/listen` with method-not-found in that configuration **is conformant**; a tripwire test enforces that advertising any subscription capability requires serving the stream. The **client half** ships too — the pmcp `Client` exposes `subscriptions_listen` returning a typed `SubscriptionStream` of notifications, and the retired `subscribe_resource`/`unsubscribe_resource` methods fail fast with a typed `retired_on_v2` error on v2. Per **D-11**, polling over the Tasks mechanism remains pmcp's RECOMMENDED enterprise mechanism, documented as a pmcp extension and **not** as a conformant substitute for this stream. **Deployment constraint (plan 113-10):** the `ListenRegistry` is instance-local, so advertising a subscription capability behind a non-sticky load balancer under-delivers notifications; a build-time `tracing::warn!` names this but does not prevent it. — *implemented; pending final schema*
+- [~] **HTTP-04**: On the v2 path, `resources/subscribe`/`unsubscribe` are removed and change notifications are instead delivered over a `subscriptions/listen` long-lived stream — *implemented; pending final schema*
 - [~] **HTTP-05**: SSE resumability (`Last-Event-ID`) is not offered on the v2 path, and a regression test proves response JSON-RPC ids are always derived from the live request (the id-replay / discovery-cache bug class) — *implemented; pending final schema*
+- [~] **HTTP-06**: The HTTP GET stream endpoint is not served on the v2 path (transport-level removal, distinct from HTTP-04's method-level removal) — *implemented; pending final schema*
+- [~] **HTTP-07**: The `subscriptions/listen` stream's frame protocol: `notifications/subscriptions/acknowledged` is the mandatory first frame, and every delivered notification carries `subscriptionId` tagging — *implemented; pending final schema*
+- [~] **HTTP-08**: Subscription delivery is opt-in and self-consistent: the four capability opt-ins (`toolsListChanged`/`promptsListChanged`/`resourcesListChanged`/`resourceSubscriptions`) gate the stream; a server advertising none may answer `subscriptions/listen` with method-not-found and remain conformant; a tripwire test enforces that advertising any subscription capability obliges serving the stream — *implemented; pending final schema*
+- [ ] **HTTP-09**: Every peer-controlled read on the v2 transport path is memory-bounded. Closure is **enumerable, not narrative**: a tripwire test asserts that no unbounded whole-body read (`.collect()`, `read_to_end`) and no unbounded accumulation over peer-supplied bytes exists in `src/shared/`, `src/client/subscriptions.rs`, or `src/server/streamable_http_server.rs` outside an explicit reviewed allowlist, and that no scan over peer-chosen input is worse than O(n). — *NOT met; see below*
+
+> **Why HTTP-09 exists.** The "memory-bounded long-lived stream" criterion was a *derived* success
+> criterion of the old HTTP-04 — it appeared in no requirement text, so it had no enumerable
+> closure condition. It reopened three times (plans 113-14/15/16, 113-17/20, then the 2026-07-26
+> full-phase review), each round capping the specific sites that round's findings named while the
+> next review found another unnamed site: a 4th uncapped `collect()` in `rejection_error`, an
+> uncapped `HttpTransport::send_request`, and an O(n²) `take_utf8_prefix` sitting *upstream* of
+> every bound the phase had added. Those three are fixed (commit `5f045086`), but the requirement
+> is stated as an **invariant with a mechanical check** so the next review cannot miss a site by
+> omission. It stays `[ ]` until that tripwire test exists — the fixes alone do not satisfy it.
+
+#### Positioning & known limitations carried out of the old HTTP-04
+
+These two clauses were embedded in the pre-split HTTP-04. Neither is a requirement — neither has
+a pass/fail closure condition — so both are recorded here as standing context rather than as
+checkboxes a verifier can fail on.
+
+- **D-11 positioning.** Polling over the Tasks mechanism remains pmcp's RECOMMENDED enterprise
+  mechanism, documented as a pmcp extension and explicitly **not** a conformant substitute for the
+  `subscriptions/listen` stream. Verifiable only as a documentation claim; belongs to DOCS-05.
+- **Deployment limitation (plan 113-10).** The `ListenRegistry` is instance-local, so advertising a
+  subscription capability behind a non-sticky load balancer under-delivers notifications. A
+  build-time `tracing::warn!` names this but does not prevent it. This is a known limitation, not
+  an obligation — it is satisfied by being documented, not by being fixed.
 
 ### Tasks Extension Migration (TASK)
 
@@ -62,6 +92,7 @@
 - [~] **CLNT-02**: The pmcp `Client` fulfills MRTR `input_required` results by producing `inputResponses` — the Phase-106 host handlers (sampling/elicitation/roots) are folded into this flow on v2 — *implemented; pending final schema*
 - [ ] **CLNT-03**: `pmcp-agent` (including its `ToolInvoker` and task polling) works end-to-end against a v2 server
 - [ ] **CLNT-04**: `mcp-tester` can exercise a v2 server (headers, discover, stateless flow) for dual-version testing
+- [~] **CLNT-05**: The pmcp `Client` exposes `subscriptions_listen` returning a typed `SubscriptionStream` of notifications, and the retired `subscribe_resource`/`unsubscribe_resource` methods fail fast with a typed `retired_on_v2` error on v2 (client half of HTTP-04/07/08) — *implemented; pending final schema*
 
 ### Simplification & v1 Sunset (SMPL)
 
@@ -133,8 +164,13 @@ Which phases cover which requirements. Updated during roadmap creation.
 | HTTP-03 | Phase 113 | Implemented — pending final schema |
 | HTTP-04 | Phase 113 | Implemented — pending final schema |
 | HTTP-05 | Phase 113 | Implemented — pending final schema |
+| HTTP-06 | Phase 113 | Implemented — pending final schema |
+| HTTP-07 | Phase 113 | Implemented — pending final schema |
+| HTTP-08 | Phase 113 | Implemented — pending final schema |
+| HTTP-09 | Phase 113 | **NOT met** — needs the bounded-read tripwire test |
 | CLNT-01 | Phase 113 | Implemented — pending final schema |
 | CLNT-02 | Phase 113 | Implemented — pending final schema |
+| CLNT-05 | Phase 113 | Implemented — pending final schema |
 | TASK-01 | Phase 114 | Pending |
 | TASK-02 | Phase 114 | Pending |
 | TASK-03 | Phase 114 | Pending |
