@@ -189,9 +189,10 @@ pub(crate) fn take_utf8_prefix(buffer: &mut Vec<u8>) -> String {
             Err(error) => error,
         };
         let valid_up_to = error.valid_up_to();
-        if let Ok(valid) = std::str::from_utf8(&rest[..valid_up_to]) {
-            text.push_str(valid);
-        }
+        // `Utf8Error::valid_up_to()` is DEFINED as the length of the verified-valid
+        // prefix, so this re-validation cannot fail; the `else` arm was unreachable.
+        // The second pass itself is unavoidable under `#![deny(unsafe_code)]`.
+        text.push_str(std::str::from_utf8(&rest[..valid_up_to]).unwrap_or_default());
         let Some(invalid_len) = error.error_len() else {
             // "Unexpected end of input": an incomplete character the next chunk
             // will finish. Keep exactly those bytes and yield what decoded.

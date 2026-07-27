@@ -289,6 +289,11 @@ impl ProtocolContext {
     ) -> Self {
         if let Some(mrtr) = self.mrtr.as_mut() {
             mrtr.input_responses = Some(responses);
+            // The raw map's ONLY consumer is the kind-directed retype that just
+            // ran, so from here it is dead weight — and `ProtocolContext` is
+            // cloned on the dispatch path, which would deep-copy it (up to the
+            // 256 KiB `inputResponses` bound) for the rest of the request.
+            mrtr.input_responses_raw = None;
         }
         self
     }

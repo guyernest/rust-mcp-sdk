@@ -1308,32 +1308,57 @@ fn write_canonical(
         });
     }
     match value {
-        Value::Object(entries) => {
-            let mut keys: Vec<&String> = entries.keys().collect();
-            keys.sort_unstable();
-            out.push('{');
-            for (index, key) in keys.iter().enumerate() {
-                if index > 0 {
-                    out.push(',');
-                }
-                out.push_str(&Value::String((*key).clone()).to_string());
-                out.push(':');
-                write_canonical(&entries[key.as_str()], depth + 1, out)?;
-            }
-            out.push('}');
+        Value::Object(entries) => write_canonical_object(entries, depth, out),
+        Value::Array(items) => write_canonical_array(items, depth, out),
+        other => {
+            out.push_str(&other.to_string());
+            Ok(())
         },
-        Value::Array(items) => {
-            out.push('[');
-            for (index, item) in items.iter().enumerate() {
-                if index > 0 {
-                    out.push(',');
-                }
-                write_canonical(item, depth + 1, out)?;
-            }
-            out.push(']');
-        },
-        other => out.push_str(&other.to_string()),
     }
+}
+
+/// The object arm of [`write_canonical`]: keys sorted, rendered `"key":value`.
+///
+/// Split out of [`write_canonical`] purely to keep that function under the
+/// project's cognitive-complexity ceiling of 25 (D-113-U); the body is
+/// unchanged, so the canonical bytes it emits are byte-identical.
+fn write_canonical_object(
+    entries: &serde_json::Map<String, Value>,
+    depth: usize,
+    out: &mut String,
+) -> Result<(), CanonicalDepthExceeded> {
+    let mut keys: Vec<&String> = entries.keys().collect();
+    keys.sort_unstable();
+    out.push('{');
+    for (index, key) in keys.iter().enumerate() {
+        if index > 0 {
+            out.push(',');
+        }
+        out.push_str(&Value::String((*key).clone()).to_string());
+        out.push(':');
+        write_canonical(&entries[key.as_str()], depth + 1, out)?;
+    }
+    out.push('}');
+    Ok(())
+}
+
+/// The array arm of [`write_canonical`]: items in order, comma separated.
+///
+/// Split out for the same reason as [`write_canonical_object`], with the body
+/// unchanged.
+fn write_canonical_array(
+    items: &[Value],
+    depth: usize,
+    out: &mut String,
+) -> Result<(), CanonicalDepthExceeded> {
+    out.push('[');
+    for (index, item) in items.iter().enumerate() {
+        if index > 0 {
+            out.push(',');
+        }
+        write_canonical(item, depth + 1, out)?;
+    }
+    out.push(']');
     Ok(())
 }
 
