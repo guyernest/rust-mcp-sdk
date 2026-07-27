@@ -584,20 +584,11 @@ struct Allowed {
 /// the fix. Enumerating a gap is the point — an unnamed gap is what reopened
 /// this requirement three times.
 ///
-/// This list should shrink, never grow.
-const WHOLE_BODY_ALLOWLIST: &[Allowed] = &[Allowed {
-    path: "src/shared/sse_optimized.rs",
-    needle: ".text().await",
-    why: "NOT BOUNDED — recorded here rather than left unnamed. \
-          OptimizedSseTransport::connect_sse reads the entire SSE response with reqwest's \
-          Response::text(), which accepts no limit argument, so a peer chooses the allocation. \
-          This transport is NOT on the v2 streamable-HTTP path (v2 collects through \
-          StreamableHttpTransport::collect_body_within_cap) and has no in-crate consumer, but it \
-          is exported from shared:: and so is reachable in a shipped build. Bounding it is a src/ \
-          change outside the scope fence of the plan that added this file (113-21), and is \
-          recorded as a deferred item of phase 113. Found BY this tripwire, which is the \
-          behaviour HTTP-09 asks for.",
-}];
+/// This list should shrink, never grow. It is now EMPTY, which is its floor:
+/// the last entry — the `reqwest` whole-body read in
+/// `OptimizedSseTransport::connect_sse`, which this tripwire itself found — was
+/// BOUNDED in plan 113.1-03 rather than re-exempted, and removed by hand.
+const WHOLE_BODY_ALLOWLIST: &[Allowed] = &[];
 
 /// The statement a match sits in: everything back to the nearest `;`, `{` or
 /// `}`.
@@ -719,11 +710,14 @@ fn every_whole_body_exemption_carries_a_substantive_justification() {
     }
     assert_eq!(
         WHOLE_BODY_ALLOWLIST.len(),
-        1,
-        "the whole-body exemption list should SHRINK, never grow. At the time this file landed it \
-         held exactly one entry: the reqwest whole-body read in OptimizedSseTransport that this \
-         tripwire itself found. A second entry means a new unbounded read was exempted rather \
-         than fixed, and that is a decision a human has to make on the record."
+        0,
+        "the whole-body exemption list should SHRINK, never grow, and it is now EMPTY — its \
+         floor. At the time this file landed it held exactly one entry: the reqwest whole-body \
+         read in OptimizedSseTransport that this tripwire itself found. Plan 113.1-03 BOUNDED \
+         that read (collect_sse_text_within_cap, a running total against \
+         DEFAULT_HTTP_SSE_BUFFERED_BYTES) and deleted the entry, closing HTTP-09 on the merits. \
+         ANY entry at all now means a new unbounded read was exempted rather than fixed, and \
+         that is a decision a human has to make on the record."
     );
 }
 

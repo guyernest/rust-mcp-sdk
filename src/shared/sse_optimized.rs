@@ -585,4 +585,166 @@ mod tests {
         assert_eq!(event.data, "test message");
         assert_eq!(event.id, Some("123".to_string()));
     }
+
+    // ------------------------------------------------------------------
+    // D-113-Q: the bounded whole-body read (plan 113.1-03).
+    //
+    // A small cap so the tests cost BYTES, not megabytes — which is exactly
+    // why `collect_sse_text_within_cap` takes `max_bytes` as a parameter
+    // rather than reading the 16 MiB constant directly. Mirrors
+    // `streamable_http.rs`'s `const CAP: usize = 512;` and its over/at pair.
+    // ------------------------------------------------------------------
+
+    /// The cap under test. 512 bytes, not 16 MiB.
+    const CAP: usize = 512;
+
+    /// A distinctive token the refusal must NOT echo back.
+    const FILLER: &str = "pppppppp";
+
+    /// Assert the refusal names the limit and leaks no body content.
+    fn assert_over_cap_refusal(error: &Error, cap: usize) {
+        let text = error.to_string();
+        assert!(
+            text.contains(&cap.to_string()),
+            "the refusal must NAME the limit: {text}"
+        );
+        assert!(
+            !text.contains(FILLER) && !text.contains("jsonrpc"),
+            "the refusal must not echo body content: {text}"
+        );
+    }
+
+    /// Build a body of exactly `bytes` bytes made of the filler token.
+    fn filler_body(bytes: usize) -> String {
+        FILLER.repeat(bytes.div_ceil(FILLER.len()))[..bytes].to_string()
+    }
+
+    /// One byte over the cap is refused — with NO `Content-Length` at all.
+    ///
+    /// `with_chunked_body` means the advisory header path cannot be what
+    /// produces the pass: only the authoritative running total over delivered
+    /// bytes can refuse this body (T-113-93).
+    #[tokio::test]
+    async fn connect_sse_one_byte_over_the_cap_is_refused() {
+        let mut server = mockito::Server::new_async().await;
+        let body = filler_body(CAP + 1);
+        let _mock = server
+            .mock("GET", "/")
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_chunked_body(move |w| w.write_all(body.as_bytes()))
+            .create_async()
+            .await;
+
+        let client = reqwest::Client::new();
+        let response = client.get(server.url()).send().await.unwrap();
+        let error = OptimizedSseTransport::collect_sse_text_within_cap(response, CAP)
+            .await
+            .expect_err("a body one byte over the cap must be refused");
+        assert_over_cap_refusal(&error, CAP);
+    }
+
+    /// A body of EXACTLY the cap is admitted, and its content survives.
+    ///
+    /// This is what pins the comparison as `>` and not `>=`, and it also
+    /// prevents a "fast because it read less" regression: the returned text
+    /// must still carry the `data:` line.
+    #[tokio::test]
+    async fn connect_sse_at_exactly_the_cap_is_admitted() {
+        let mut server = mockito::Server::new_async().await;
+        // A real `data:` line, padded out to exactly CAP bytes.
+        let line = r#"data: {"jsonrpc":"2.0","method":"x","params":{}}"#;
+        let mut body = format!("{line}\n");
+        body.push_str(&filler_body(CAP - body.len()));
+        assert_eq!(body.len(), CAP, "the fixture must be exactly at the cap");
+
+        let _mock = server
+            .mock("GET", "/")
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_chunked_body(move |w| w.write_all(body.as_bytes()))
+            .create_async()
+            .await;
+
+        let client = reqwest::Client::new();
+        let response = client.get(server.url()).send().await.unwrap();
+        let text = OptimizedSseTransport::collect_sse_text_within_cap(response, CAP)
+            .await
+            .expect("a body of exactly the cap must be admitted");
+        assert_eq!(text.len(), CAP, "every admitted byte is returned");
+        assert!(
+            text.contains(line),
+            "the admitted body still carries its data line: {text:?}"
+        );
+    }
+
+    /// A DECLARED `Content-Length` over the cap is refused before the body is
+    /// read.
+    ///
+    /// `mockito`'s default `.with_body(..)` sets a real `Content-Length`, so
+    /// 513 bytes against a 512-byte cap exercises the early-refusal branch
+    /// exactly. No 16 MiB transfer is needed — the branch is about the header
+    /// value versus `max_bytes`.
+    #[tokio::test]
+    async fn declared_content_length_over_the_cap_is_refused_without_reading_the_body() {
+        let mut server = mockito::Server::new_async().await;
+        let _mock = server
+            .mock("GET", "/")
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(filler_body(CAP + 1))
+            .create_async()
+            .await;
+
+        let client = reqwest::Client::new();
+        let response = client.get(server.url()).send().await.unwrap();
+        assert_eq!(
+            response.content_length(),
+            Some((CAP + 1) as u64),
+            "this test is only meaningful if the peer actually declared a length"
+        );
+        let error = OptimizedSseTransport::collect_sse_text_within_cap(response, CAP)
+            .await
+            .expect_err("a declared Content-Length over the cap must be refused");
+        assert_over_cap_refusal(&error, CAP);
+    }
+
+    /// The WIRING test: an under-cap body still flows through `connect_sse`
+    /// itself into `recv_tx`.
+    ///
+    /// The three tests above exercise the collector in isolation; none of them
+    /// proves that an ADMITTED body still reaches the channel. This is the one
+    /// that would catch the cap being wired in a way that swallows the body.
+    #[tokio::test]
+    async fn connect_sse_under_the_cap_still_delivers_a_message_to_recv_tx() {
+        let mut server = mockito::Server::new_async().await;
+        let _mock = server
+            .mock("GET", "/")
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body("data: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}\n\n")
+            .create_async()
+            .await;
+
+        let config = OptimizedSseConfig {
+            url: server.url(),
+            ..Default::default()
+        };
+        let client = reqwest::Client::new();
+        let state = Arc::new(RwLock::new(ConnectionState::Disconnected));
+        let (tx, mut rx) = mpsc::channel(4);
+        let last_event_id = Arc::new(RwLock::new(None));
+
+        OptimizedSseTransport::connect_sse(&config, &client, &state, &tx, &last_event_id)
+            .await
+            .expect("an under-cap body must be served normally");
+
+        let message = rx
+            .try_recv()
+            .expect("the admitted body's data line must reach recv_tx");
+        assert!(
+            matches!(message, TransportMessage::Notification(_)),
+            "the delivered message is the notification the body carried: {message:?}"
+        );
+    }
 }
