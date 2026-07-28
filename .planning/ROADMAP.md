@@ -2463,7 +2463,7 @@ Plans:
 
 **Wave 2** *(parallel)*
 
-- [ ] 114-05-PLAN.md — Server extension advertisement via the shared endpoint-backed rule (D-01) + era-projected capabilities: v2 discover shows the entry and drops the v1 tasks keys, v1 `initialize` byte-identical (D-02/D-03)
+- [x] 114-05-PLAN.md — Server extension advertisement via the shared endpoint-backed rule (D-01) + era-projected capabilities: v2 discover shows the entry and drops the v1 tasks keys, v1 `initialize` byte-identical (D-02/D-03)
 - [ ] 114-06-PLAN.md — Client half: per-request extension declaration, era-aware `assert_capability` reading the extensions map (D-04), `Mcp-Name` = `params.taskId` via a SEPARATE table keeping `tasks/update` MRTR-ineligible (DQ4)
 - [ ] 114-07-PLAN.md — `pmcp-tasks` input delivery in `GenericTaskStore<B>` (one CAS via `put_if_version`) + memory delegation (D-13 site 2, F12) + router override + pre-114 record byte fixture
 
@@ -2584,7 +2584,7 @@ Plans:
 | 112. Version Plumbing Spine | 10/10 | Complete    | 2026-07-23 |
 | 113. Stateless HTTP + MRTR | 32/32 | Complete   | 2026-07-27 |
 | 113.1 Merge Unblock | 6/6 | Complete | 2026-07-27 |
-| 114. Tasks Extension Migration | 5/20 | In Progress|  |
+| 114. Tasks Extension Migration | 6/20 | In Progress|  |
 | 115. JSON Schema 2020-12 + Caching Hints | 0/TBD | Not started | - |
 | 116. Auth Hardening SEPs | 0/TBD | Not started | - |
 | 117. Agents, Tester & v1 Severability | 0/TBD | Not started | - |
