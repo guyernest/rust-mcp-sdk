@@ -134,3 +134,78 @@ path, so it does not belong inside a `tasks/update` plan.
 
 **Suggested owner:** whichever plan next touches `crates/pmcp-tasks/src/store/dynamodb.rs`,
 or the phase that first deploys the tasks extension against DynamoDB.
+
+---
+
+## D-114-E — `make test-feature-flags` is RED, and was already red before 114-07
+
+**Found by:** 114-07 close-out (verification re-run)
+**Status:** open, unowned, **pre-existing and PROVEN so**
+**Severity:** medium — it is an acceptance criterion of 114-07 (and D-14 item 4) that no
+plan in this phase can satisfy while it stays red, so it will keep being "failed" by
+later plans that did not cause it
+
+`make test-feature-flags` exits **2**. The failure is in row **1/4**, at its second
+sub-command:
+
+```
+cargo clippy -p pmcp-tasks --no-default-features -- -D warnings   → exit 101
+```
+
+56 `dead_code` warnings in the **root `pmcp` lib** are promoted to errors by the target's
+`-D warnings`. Building `pmcp` through `-p pmcp-tasks --no-default-features` selects a
+reduced pmcp feature set in which those items have no caller.
+
+**Attributed by file** (identical at HEAD and at the 114-07 base commit):
+
+| File | Errors |
+|------|--------|
+| `src/types/mrtr.rs` | 42 |
+| `src/server/subscriptions.rs` | 7 |
+| `src/server/core.rs` | 4 |
+| `src/shared/sse_parser.rs` | 2 |
+| `src/server/mod.rs` | 1 |
+
+**Zero** are in `crates/pmcp-tasks/` and **zero** are in `src/server/task_store.rs` — i.e.
+none are on 114-07's surface. The named items (`write_canonical`, `salient_params`,
+`salient_param_digest`, `project_capabilities_for_v2`, `EXPERIMENTAL_TASKS_KEY`, …) belong
+to Phase 113 and to 114-05, both of which landed before 114-07.
+
+**Measured, not argued.** A detached worktree was created at 114-07's base commit
+`4327b246` (114-06's last commit) with its own `CARGO_TARGET_DIR`, and the same commands
+were run there:
+
+| Command | at base `4327b246` | at HEAD `9081be3b` |
+|---------|--------------------|--------------------|
+| `make test-feature-flags` | exit **2**, 56 errors | exit **2**, 56 errors |
+| `cargo clippy -p pmcp-tasks --no-default-features -- -D warnings` | exit **101** | exit **101** |
+
+Same exit codes, same error count, same per-file distribution. The worktree and its target
+directory were removed afterwards (`git worktree list` back to its three pre-existing
+entries).
+
+**The dev-dep-free rows the plan actually cares about are GREEN.** 114-07's `verification`
+block singles out "the `cargo check -p pmcp-tasks --features X` rows are the dev-dep-free
+ones", and every one of those exits 0 at HEAD:
+
+```
+cargo check -p pmcp-tasks --no-default-features        exit 0
+cargo check -p pmcp-tasks --features dynamodb          exit 0
+cargo check -p pmcp-tasks --features redis             exit 0
+cargo check -p pmcp-tasks --features dynamodb,redis    exit 0
+cargo check -p pmcp-tasks                              exit 0
+```
+
+So the *compile* claim across the four feature rows holds; what is red is the root crate's
+dead-code hygiene under a reduced feature set.
+
+**Why not fixed here:** the fix lands in five root-`pmcp` files owned by other plans
+(Phase 113's MRTR module and subscriptions; 114-05's capability projections). Adding
+`#[cfg]` gates or `#[allow(dead_code)]` across them from inside a `pmcp-tasks` store plan
+would bury a decision about the root crate's feature hygiene in a plan whose declared
+`files_modified` is five files under `crates/pmcp-tasks/`. It is also NOT caught by
+`make quality-gate` or CI, which lint the root crate with its own generous allow-list.
+
+**Suggested owner:** a Phase 118 (conformance/hardening) item, or whichever plan next
+touches `src/types/mrtr.rs`. The narrow fix is to gate or `allow` the reduced-feature dead
+code at each site, then re-run `make test-feature-flags` to green.
