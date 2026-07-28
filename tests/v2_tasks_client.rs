@@ -91,47 +91,59 @@ async fn capture_server() -> (SocketAddr, Arc<Mutex<Vec<Captured>>>, JoinHandle<
     let sink = captured.clone();
 
     let handle = tokio::spawn(async move {
-        loop {
-            let Ok((mut socket, _)) = listener.accept().await else {
-                return;
-            };
+        while let Ok((socket, _)) = listener.accept().await {
             let sink = sink.clone();
-            tokio::spawn(async move {
-                let mut buffer = Vec::new();
-                let mut chunk = [0_u8; 4096];
-                // Read the head, then exactly `Content-Length` more bytes.
-                let (head_len, content_length) = loop {
-                    if let Some(split) = find_head_end(&buffer) {
-                        break (split, content_length_of(&buffer[..split]));
-                    }
-                    match socket.read(&mut chunk).await {
-                        Ok(0) | Err(_) => return,
-                        Ok(n) => buffer.extend_from_slice(&chunk[..n]),
-                    }
-                };
-                while buffer.len() < head_len + content_length {
-                    match socket.read(&mut chunk).await {
-                        Ok(0) | Err(_) => break,
-                        Ok(n) => buffer.extend_from_slice(&chunk[..n]),
-                    }
-                }
-                let head = String::from_utf8_lossy(&buffer[..head_len]).to_string();
-                let body = String::from_utf8_lossy(
-                    &buffer[head_len..(head_len + content_length).min(buffer.len())],
-                )
-                .to_string();
-                let reply = method_not_found_reply(&body);
-                sink.lock().expect("capture sink").push(Captured {
-                    headers: parse_headers(&head),
-                    body,
-                });
-                let _ = socket.write_all(reply.as_bytes()).await;
-                let _ = socket.shutdown().await;
-            });
+            tokio::spawn(serve_one(socket, sink));
         }
     });
 
     (addr, captured, handle)
+}
+
+/// Record one request off `socket`, then answer it.
+///
+/// Split out of [`capture_server`] so neither function carries the accept loop
+/// AND the framing loop: together they exceed the repository's cognitive
+/// complexity cap of 25.
+async fn serve_one(mut socket: tokio::net::TcpStream, sink: Arc<Mutex<Vec<Captured>>>) {
+    let Some((head, body)) = read_one_request(&mut socket).await else {
+        return;
+    };
+    let reply = method_not_found_reply(&body);
+    sink.lock().expect("capture sink").push(Captured {
+        headers: parse_headers(&head),
+        body,
+    });
+    let _ = socket.write_all(reply.as_bytes()).await;
+    let _ = socket.shutdown().await;
+}
+
+/// Read one HTTP request as `(head, body)`, framing on `Content-Length`.
+///
+/// `None` when the peer closed before a complete head arrived.
+async fn read_one_request(socket: &mut tokio::net::TcpStream) -> Option<(String, String)> {
+    let mut buffer = Vec::new();
+    let mut chunk = [0_u8; 4096];
+    let (head_len, content_length) = loop {
+        if let Some(split) = find_head_end(&buffer) {
+            break (split, content_length_of(&buffer[..split]));
+        }
+        match socket.read(&mut chunk).await {
+            Ok(0) | Err(_) => return None,
+            Ok(n) => buffer.extend_from_slice(&chunk[..n]),
+        }
+    };
+    while buffer.len() < head_len + content_length {
+        match socket.read(&mut chunk).await {
+            Ok(0) | Err(_) => break,
+            Ok(n) => buffer.extend_from_slice(&chunk[..n]),
+        }
+    }
+    let head = String::from_utf8_lossy(&buffer[..head_len]).to_string();
+    let body =
+        String::from_utf8_lossy(&buffer[head_len..(head_len + content_length).min(buffer.len())])
+            .to_string();
+    Some((head, body))
 }
 
 /// A complete HTTP `200` carrying a JSON-RPC `-32601` for `request_body`'s id.
