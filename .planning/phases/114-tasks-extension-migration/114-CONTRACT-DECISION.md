@@ -2,15 +2,17 @@
 
 **Measured:** 2026-07-28
 **Plan:** 114-20 (wave 1, no dependencies, touches no source file)
-**Status:** Task 1 complete (measurement + options). `## Decision` awaiting the owner at the Task 2 blocking checkpoint.
+**Status:** COMPLETE. §1–§3 measured and drafted by Task 1; §4 `## Decision` recorded by the
+**owner** at the Task 2 `gate="blocking"` checkpoint — `Chosen: option-b`, 2026-07-28.
 
 This document exists because `CLAUDE.md` § *Contract-First Development* states a **mandatory**,
 unqualified repository rule, and a phase plan cannot grant itself an exemption from one. The
 question is settled here, at wave 1, **before** the seventeen implementation plans run — rather
 than being discovered at the end of them in `114-18`.
 
-This document deliberately does **not** choose. It measures, states both options with their real
-costs, and stops.
+Sections 1–3 deliberately do **not** choose: they measure, state both options with their real
+costs, and stop. §4 records the owner's choice, made at the Task 2 blocking checkpoint **with
+§1.5's correction in hand**.
 
 ---
 
@@ -372,18 +374,77 @@ policy. `"revisit later"` is explicitly disallowed.
 
 ## 4. Decision
 
-*To be filled at the Task 2 blocking checkpoint by the owner. `Chosen:` MUST be exactly
-`option-a` or `option-b` (or a recorded third path). `Follow-up obligation:` MUST name a concrete
-artifact and gate — never "revisit later".*
+Recorded at the `114-20` Task 2 `type="checkpoint:decision" gate="blocking"` checkpoint. **The
+choice was made by the owner, not inferred by the executor** — which is the entire reason this
+plan is wave 1 and `autonomous: false`.
 
-Chosen:
-Decided by:
-Date:
-Follow-up obligation:
+Chosen: option-b
+Decided by: Guy Ernest (owner)
+Date: 2026-07-28
+Follow-up obligation: `114-SPEC-RECHECK.md` row — **WHEN** a versioned (non-`draft`) schema
+directory exists in **BOTH** `modelcontextprotocol/modelcontextprotocol` **AND**
+`modelcontextprotocol/ext-tasks`, the contract question **re-enters**: author the Phase-114
+equations, or record a further explicit owner waiver. Partial publication → **`STILL-ABSENT`**.
+Change detector: `114-01`'s SHA-256 provenance tripwire.
 
-### Rationale
+The row implementing that obligation was appended by this plan to
+`114-SPEC-RECHECK.md` § *Wire-Value Inventory* → `### ⚠ Carried obligation — the Phase-114
+contract-first waiver`.
 
-*(To be filled with the owner's stated reasoning, if any is given. If none is given, this section
-records that plainly rather than inventing one — the Phase 113 precedent for that discipline is
-the 113-28 checkpoint, where no conditions, review date or scope narrowing were stated and none
-were invented.)*
+### Rationale — and what this waiver does NOT rest on
+
+**This plan's own stated premise was measurably wrong, and the owner decided with the correction
+in hand rather than without it.** That sequencing is load-bearing and is recorded here so it
+cannot be reconstructed the other way round.
+
+`114-20-PLAN.md`'s objective asserted that `make comply` runs advisory `pmat comply check` plus
+`comply-bindings-check` and that *"neither reads a per-crate contract YAML. So the rule's step 1
+currently has no destination."* §1.5 measured that assertion and it is **FALSE**. This repository
+carries an in-repo, **git-tracked** `contracts/` tree — 38 tracked files, three YAMLs — and
+`pmat comply check --path .` reads and grades it today (CB-1200, CB-1202, CB-1205, CB-1305). The
+absent `../provable-contracts/` sibling holds the **`pv` verifier CLI and `proof-status.json`**,
+not the authoring destination. Step 1 of the contract-first rule has a destination, and it is
+`contracts/`.
+
+**Therefore option-b rests SOLELY on the D-18 provisional-values argument.** Phase 114's wire
+values are held provisional under D-18 pending a versioned schema in both upstream repositories.
+A contract authored now would pin the 39 values inventoried in `114-SPEC-RECHECK.md`
+§ *Wire-Value Inventory* — values the final-schema gate is expected to move — and would need
+re-authoring at that gate. That argument, and only that argument, is the ground for this waiver.
+
+**A future reader may NOT cite this waiver as precedent for *"there was nowhere to write it."***
+That rationale was measured, found false, and withdrawn *before* the decision was taken. Any
+later phase reaching for this record as precedent must argue from provisional values on its own
+facts, or it is arguing from a premise this document has already falsified.
+
+### Residual cost — accepted, not resolved
+
+Option-b's cost is real, and §1.5 sharpened rather than softened it. It is recorded plainly:
+
+- **`contracts/mcp-protocol-sdk-v1.yaml` stays stale.** Last touched 2026-04-03 — **116 days** —
+  with **zero** `task` hits and **zero** `extension` hits (§1.6), and metadata still describing
+  *"PAIML MCP Protocol SDK v2.1"* while the crate is at **2.17**. This phase does not refresh it,
+  and CB-1207 will keep reporting it stale.
+- **CB-1409 already flags this phase's own commits.** It names `114-01`'s commits among
+  *"5/9 AI-authored commit(s) lack work contracts"* (§1.5). That advisory stands after this
+  decision; the waiver does not clear it and is not claimed to.
+- **The phase ships ungraded against a versioned contract before implementation.** Phase 113's
+  own residual-risk assessment for the identical gap was **MEDIUM** (§2), and nothing in this
+  decision lowers it.
+
+What option-b does buy over the Phase 113 precedent (§2) is the correction of that precedent's
+two measured defects: this waiver is **owner-decided** rather than executor-authored, and it
+**carries a gate** rather than terminating in a record.
+
+### What this decision binds
+
+- **`114-18` cites this record** — `Chosen: option-b`, Guy Ernest (owner), 2026-07-28 — rather
+  than declining the contract on its own authority. That is threat **T-114-106**'s mitigation and
+  it is not optional: a plan may not re-decide a question an owner has already settled, nor settle
+  one an owner has not.
+- **The obligation is re-entered by condition, not by memory.** The appended
+  `114-SPEC-RECHECK.md` row is worded as a condition with `STILL-ABSENT` as its third outcome, so
+  a re-run cannot end in an undefined state and the waiver cannot quietly become permanent
+  (**T-114-107**). *"Revisit later"* is explicitly disallowed and does not appear in it.
+- **No contract YAML was authored and `contracts/` was not touched by this plan.** The waiver is a
+  decision record, not a partial implementation of the thing it waives.

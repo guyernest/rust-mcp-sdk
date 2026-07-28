@@ -439,6 +439,32 @@ made v2 task creation unreachable and TASK-04 undemonstrable end to end.
 Rows 37/38 are the reason TASK-03 and TASK-05 are *"the same improvement viewed from two
 angles"*: removing enumeration and binding the owner are one security posture.
 
+### ⚠ Carried obligation — the Phase-114 contract-first waiver
+
+**This is its own row, and it is deliberately NOT numbered, because it is not a wire value.** It
+is an obligation created by an **owner decision** and carried to *this* gate because the same
+condition releases it. Row numbering stops at 39; nothing below is an inventory value. A
+re-runner walking `## Procedure` step 3 must still read this row — a carried obligation that was
+not checked is not discharged, exactly as a wire value that was not checked is not confirmed.
+
+| Field | Value |
+|-------|-------|
+| **What was waived** | `CLAUDE.md` § *Contract-First Development* step 1 — authoring a contract YAML covering Phase 114's surface (TASK-01…TASK-06) **before** implementation — is waived for Phase 114. |
+| **Decided by** | **Guy Ernest (owner)**, 2026-07-28, at the `114-20` Task 2 `type="checkpoint:decision" gate="blocking"` checkpoint. Recorded in `114-CONTRACT-DECISION.md` § 4 as `Chosen: option-b`. **Owner-decided, not executor-authored** — this is the one substantive way it departs from the Phase 113 precedent it otherwise continues. |
+| **Ground for the waiver** | **D-18 provisional values, and nothing else.** A contract authored now would pin the 39 values inventoried above — values this gate is expected to move — and would need re-authoring at the same gate. |
+| **NOT a ground for the waiver** | *"There is nowhere to write it."* `114-CONTRACT-DECISION.md` §1.5 **measured that premise and found it false**: `contracts/` is in-repo, git-tracked (38 files, 3 YAMLs) and already graded by `pmat comply check --path .` (CB-1200/1202/1205/1305). The absent `../provable-contracts/` holds the `pv` CLI and `proof-status.json`, not the authoring destination. This row records the falsification so the waiver cannot later be cited on a premise that was already withdrawn. |
+| **THE CONDITION** | **WHEN** a versioned (non-`draft`) schema directory exists in **BOTH** `modelcontextprotocol/modelcontextprotocol` **AND** `modelcontextprotocol/ext-tasks` — the same both-repositories condition `## Trigger Condition` states under DQ6 — **THEN** the contract-first question **re-enters**. It is not scheduled, not dated, and not "revisited later". |
+| **What re-entry requires** | Exactly one of two outcomes, recorded: **(a)** author the Phase-114 equations in `contracts/mcp-protocol-sdk-v1.yaml` (or a sibling YAML) with their `contracts/binding.yaml` rows, against the **published** values, and run `pmat comply check --path .`; **or (b)** record a **further explicit owner waiver**, with its own `Chosen:` / `Decided by:` / `Date:`. A plan may not choose (b) on its own authority. |
+| **Third outcome — `STILL-ABSENT`** | If a versioned directory is absent from **either** repository, this obligation lands in **`STILL-ABSENT`** exactly as `## Procedure` step 4 and `## Third Outcome Policy` define it: **not discharged**, rolls forward, and **still recorded** in the dated `### Verdict re-verification` sub-section, so *"we checked and it was absent"* stays distinguishable from *"nobody checked"*. **Partial publication is `STILL-ABSENT`**, not a fourth state — do not author a contract against a half-published pair and call the obligation met. |
+| **Change detector** | `114-01`'s SHA-256 vendored-schema provenance tripwire over `schema/vendored/ext-tasks/` @ `2c1425d9a288b9b1f489430fe1e00bb392b47e48` (`cargo nextest run --features full -E 'test(/vendored_schema/)'`) — the same detector `## Procedure` step 2 uses. |
+| **Residual cost accepted at the time of the waiver** | `contracts/mcp-protocol-sdk-v1.yaml` stays stale — 116 days, **zero** `task` hits, **zero** `extension` hits, metadata describing *"SDK v2.1"* while the crate is at 2.17 — and **CB-1409 already flags this phase's own `114-01` commits** as lacking work contracts. Both were accepted by the owner, not resolved. A re-runner should expect to find them unchanged and should not read that as drift. |
+| **Binds** | `114-18` **cites** this waiver rather than declining the contract on its own authority (**T-114-106**). The condition wording above is what keeps the waiver from quietly becoming permanent (**T-114-107**) — the failure mode §2 of `114-CONTRACT-DECISION.md` observed in Phase 113 in the wild. |
+
+**Relationship to the six held requirements:** this obligation is carried *alongside*
+TASK-01…TASK-06, not *among* them. A `PUBLISHED-CONFIRMED` landing flips those six together; it
+does **not** by itself discharge this row. This row is discharged only by outcome (a) or (b)
+above, recorded.
+
 ---
 
 ## Verdict
