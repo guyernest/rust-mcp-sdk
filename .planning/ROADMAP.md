@@ -2469,7 +2469,7 @@ Plans:
 
 **Wave 3**
 
-- [ ] 114-08-PLAN.md — `tasks/list` + `tasks/result` era-gated off on v2 with two distinct truthful `-32601` messages; frozen `-32002` untouched; `is_v1_task_era` rustdoc corrected (TASK-03)
+- [x] 114-08-PLAN.md — `tasks/list` + `tasks/result` era-gated off on v2 with two distinct truthful `-32601` messages; frozen `-32002` untouched; `is_v1_task_era` rustdoc corrected (TASK-03)
 
 **Wave 4**
 
@@ -2584,7 +2584,7 @@ Plans:
 | 112. Version Plumbing Spine | 10/10 | Complete    | 2026-07-23 |
 | 113. Stateless HTTP + MRTR | 32/32 | Complete   | 2026-07-27 |
 | 113.1 Merge Unblock | 6/6 | Complete | 2026-07-27 |
-| 114. Tasks Extension Migration | 8/20 | In Progress|  |
+| 114. Tasks Extension Migration | 9/20 | In Progress|  |
 | 115. JSON Schema 2020-12 + Caching Hints | 0/TBD | Not started | - |
 | 116. Auth Hardening SEPs | 0/TBD | Not started | - |
 | 117. Agents, Tester & v1 Severability | 0/TBD | Not started | - |
