@@ -91,3 +91,46 @@ separable decision rather than a line in a client plan.
 
 The tradeoff is also recorded in the rustdoc on `TASK_NAME_BEARING_METHODS`, so a reader of
 the table cannot miss it.
+
+---
+
+## D-114-D — an immediate `tasks/get` after create needs a strongly-consistent read
+
+**Found by:** 114-07 (Task 3, `a_created_task_is_immediately_readable_from_its_returned_handle`)
+**Status:** open, unowned — a BACKEND CONFIGURATION obligation, not a store defect
+**Severity:** low today (no eventually-consistent backend is wired in CI), rising with the
+first real DynamoDB deployment of the tasks extension
+
+The tasks extension requires the handle a create returns to be resolvable straight away.
+`GenericTaskStore::create` satisfies that structurally: it returns the record it just wrote
+and issues **zero reads** of the new key — asserted by a get-counter on the backend double,
+so "does not depend on read-after-write" is measured, not argued.
+
+**What was measured, and it is the part worth carrying.** Driven through an
+`EventuallyConsistentBackend` double whose `get` serves each key's PREVIOUS value once
+before converging, a follow-up `store.get` on the freshly created key returns
+`TaskError::NotFound`, and the next read succeeds. That is faithful to DynamoDB's default
+eventually-consistent read, which may be served by a replica that has not yet received the
+write. The record is durable throughout; only that one read is stale.
+
+**A trap inside the trap.** The double got this wrong on the first attempt: it stored the
+previous value as `Option<(bytes, version)>` and then `.flatten()`ed the lookup, so
+`Some(None)` — "the key had no value before this write" — collapsed into "no staleness
+recorded" and fell through to the converged value. The test PASSED for the wrong reason. A
+staleness double must keep three cases distinct (`stale value` / `stale absence` /
+`converged`); collapsing the middle one is exactly how it stops being faithful. The
+corrected double is in `crates/pmcp-tasks/tests/input_delivery.rs` with the reason at the
+site.
+
+**What a deployment owes.** Either a strongly-consistent read on the `tasks/get` path
+(DynamoDB's `ConsistentRead`, which is opt-in and costs double a read unit), or a client
+retry on the first `NotFound` after a create. `DynamoDbBackend::get` in this crate does
+**not** currently request a consistent read.
+
+**Why not fixed here:** 114-07 is additive at the domain layer and changed no backend.
+Flipping `DynamoDbBackend::get` to a consistent read is a cost and latency decision that
+affects every existing v1 tasks deployment on that backend, not just the v2 input-delivery
+path, so it does not belong inside a `tasks/update` plan.
+
+**Suggested owner:** whichever plan next touches `crates/pmcp-tasks/src/store/dynamodb.rs`,
+or the phase that first deploys the tasks extension against DynamoDB.
