@@ -287,6 +287,269 @@ pub fn open_request_state(
 #[cfg(all(feature = "streamable-http", not(target_arch = "wasm32")))]
 pub const ANONYMOUS_PRINCIPAL: &str = crate::server::core::ANONYMOUS_PRINCIPAL;
 
+/// The reserved TOP-LEVEL result key carrying an `inputRequests` map.
+///
+/// Re-exported for the same reason as [`META_SERVER_INFO`]: a test asserting on
+/// raw response bytes must read the crate's own constant rather than re-spell
+/// the wire key and drift from it. `INPUT_REQUESTS_KEY` is `pub(crate)` in
+/// `crate::types::mrtr`, which is where BOTH legitimate minters of this key —
+/// the MRTR egress and the v2 tasks dispatch — read it from.
+pub const RESERVED_INPUT_REQUESTS: &str = crate::types::mrtr::INPUT_REQUESTS_KEY;
+
+/// The reserved TOP-LEVEL result key carrying an MRTR continuation token.
+///
+/// Unlike [`RESERVED_INPUT_REQUESTS`] this key has exactly ONE legitimate
+/// minter — the MRTR egress. The tasks surface has no continuation token (the
+/// persisted task record replaces the sealed continuation, D-17), so a tasks
+/// result carrying it is stripped.
+pub const RESERVED_REQUEST_STATE: &str = crate::types::mrtr::REQUEST_STATE_KEY;
+
+#[cfg(not(target_arch = "wasm32"))]
+pub use reserved_fields::{
+    v1_result_envelope, v2_result_envelope, CapturedWarning, EnvelopeOutcome, ReservedFieldEgress,
+};
+
+/// The seam an integration test uses to drive the PRODUCTION v2 result envelope
+/// and observe BOTH halves of what it did — the bytes it emitted and the
+/// `tracing` warnings it logged (Phase 114, plan 10).
+///
+/// **Why this seam exists.** `server::core::inject_v2_result_envelope` and its
+/// reserved-field registry `own_reserved_result_fields` are `pub(crate)`, and a
+/// `pub use` of a `pub(crate)` item does not compile (E0365) — the same wall
+/// [`encode_mcp_name`] and [`routing_name_key`] already work around. A test that
+/// hand-rolled the registry's strip rules would be validating itself rather than
+/// the shipped egress.
+///
+/// **Why the warnings are captured rather than left to a global subscriber.**
+/// The registry's removals are DELIBERATELY silent on the wire — a
+/// `tracing::warn!`, never an error — which is precisely how a spec-required
+/// field could be deleted from every v2 `tasks/get` while every integration test
+/// asserting "the request succeeded" stayed green. A test that cannot see the
+/// warning cannot tell "the key was never there" from "the key was removed", so
+/// the two facts are returned together.
+#[cfg(not(target_arch = "wasm32"))]
+mod reserved_fields {
+    use std::sync::{Arc, Mutex};
+
+    /// One `tracing` event the production envelope emitted.
+    ///
+    /// The registry logs `target: "mcp.v2"` with a `field` naming the reserved
+    /// key it acted on, so a test can attribute a warning to a specific key
+    /// rather than matching on prose.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct CapturedWarning {
+        /// The `tracing` target — `mcp.v2` for every registry event.
+        pub target: String,
+        /// The `field = …` value naming the reserved key, when the event set one.
+        pub field: Option<String>,
+        /// The event message, verbatim.
+        pub message: String,
+    }
+
+    /// What the production envelope produced: the response BYTES plus every
+    /// warning it logged while producing them.
+    #[derive(Debug, Clone)]
+    pub struct EnvelopeOutcome {
+        /// The serialized JSON-RPC response.
+        ///
+        /// Assert on THIS, not on a parsed struct: a struct with
+        /// `skip_serializing_if` would hide a deleted key behind a `None`.
+        pub bytes: String,
+        /// Every warning the envelope logged, in emission order.
+        pub warnings: Vec<CapturedWarning>,
+    }
+
+    impl EnvelopeOutcome {
+        /// Whether a warning naming `field` fired.
+        #[must_use]
+        pub fn warned_about(&self, field: &str) -> bool {
+            self.warnings
+                .iter()
+                .any(|warning| warning.field.as_deref() == Some(field))
+        }
+    }
+
+    /// Which egress minted the reserved result fields on the response under test.
+    ///
+    /// This is the TEST-side spelling of the production
+    /// `server::core::ReservedFieldOwner`, paired with the disposition that
+    /// egress really selects, so a test cannot construct a pairing production
+    /// never produces:
+    ///
+    /// | variant | disposition | owner |
+    /// |---|---|---|
+    /// | [`NoEgress`](Self::NoEgress) | `complete` | none — both reserved keys stripped |
+    /// | [`Mrtr`](Self::Mrtr) | `input_required` | the MRTR egress |
+    /// | [`TasksDispatch`](Self::TasksDispatch) | `complete` | the v2 tasks dispatch |
+    ///
+    /// [`TasksDispatch`](Self::TasksDispatch) pairs with `complete` and not with
+    /// `input_required` because a v2 `tasks/get` on an `input_required` TASK is
+    /// still a COMPLETE JSON-RPC result — the task is what is waiting, not the
+    /// request. That is the pairing the reserved-field registry got wrong.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum ReservedFieldEgress {
+        /// No egress minted the reserved fields.
+        NoEgress,
+        /// The MRTR egress minted `requestState` + `inputRequests`.
+        Mrtr,
+        /// The v2 tasks dispatch minted `inputRequests`.
+        TasksDispatch,
+    }
+
+    /// Run the PRODUCTION v2 result envelope over `result`.
+    ///
+    /// `result` is the raw result value a dispatch produced — for the tasks
+    /// cases, the flat `tasks/get` shape the ext-tasks schema specifies
+    /// (`GetTaskResult` is `Result & (WorkingTask | InputRequiredTask | …)`, so
+    /// `inputRequests` is a TOP-LEVEL result key, not a nested one).
+    #[must_use]
+    pub fn v2_result_envelope(
+        result: serde_json::Value,
+        egress: ReservedFieldEgress,
+    ) -> EnvelopeOutcome {
+        run_envelope(result, Some(crate::types::protocol::Era::V2), egress)
+    }
+
+    /// Run the PRODUCTION envelope over a **v1** result.
+    ///
+    /// The envelope is v2-only, so this must leave the result byte-identical —
+    /// including a `inputRequests` key a v1 tasks path put there. Pins the early
+    /// return in `inject_v2_result_envelope`.
+    #[must_use]
+    pub fn v1_result_envelope(result: serde_json::Value) -> EnvelopeOutcome {
+        run_envelope(result, Some(crate::types::protocol::Era::V1), egress_none())
+    }
+
+    fn egress_none() -> ReservedFieldEgress {
+        ReservedFieldEgress::NoEgress
+    }
+
+    fn run_envelope(
+        result: serde_json::Value,
+        era: Option<crate::types::protocol::Era>,
+        egress: ReservedFieldEgress,
+    ) -> EnvelopeOutcome {
+        let disposition = match egress {
+            ReservedFieldEgress::Mrtr => crate::server::core::ResponseDisposition::InputRequired,
+            ReservedFieldEgress::NoEgress | ReservedFieldEgress::TasksDispatch => {
+                crate::server::core::ResponseDisposition::Complete
+            },
+        };
+        let context = era.map(|era| {
+            let version = match era {
+                crate::types::protocol::Era::V2 => {
+                    crate::types::protocol::PROTOCOL_VERSION_2026_07_28
+                },
+                crate::types::protocol::Era::V1 => crate::LATEST_PROTOCOL_VERSION,
+            };
+            crate::types::protocol::ProtocolContext::new(
+                era,
+                crate::types::protocol::ProtocolVersion(version.to_string()),
+            )
+        });
+        let server_info =
+            crate::types::Implementation::new("reserved-field-registry-probe", "1.0.0");
+        let mut response = crate::types::jsonrpc::JSONRPCResponse {
+            jsonrpc: "2.0".to_string(),
+            id: crate::types::RequestId::from(1i64),
+            payload: crate::types::jsonrpc::ResponsePayload::Result(result),
+        };
+
+        let events = Arc::new(Mutex::new(Vec::new()));
+        {
+            let collector = capture::Collector {
+                events: Arc::clone(&events),
+            };
+            tracing::subscriber::with_default(collector, || {
+                crate::server::core::inject_v2_result_envelope(
+                    &mut response,
+                    context.as_ref(),
+                    &server_info,
+                    disposition,
+                );
+            });
+        }
+        let warnings = std::mem::take(&mut *events.lock().unwrap_or_else(|e| e.into_inner()));
+        EnvelopeOutcome {
+            bytes: serde_json::to_string(&response).unwrap_or_default(),
+            warnings,
+        }
+    }
+
+    /// A minimal thread-local `tracing` subscriber.
+    ///
+    /// Hand-written against `tracing` itself rather than pulled from
+    /// `tracing-subscriber`, so this seam carries no feature gate beyond the one
+    /// `server::core` already has, and no new dependency.
+    /// [`tracing::subscriber::with_default`] scopes it to one closure on one
+    /// thread, so parallel test threads cannot observe each other's events.
+    mod capture {
+        use super::{Arc, CapturedWarning, Mutex};
+
+        pub(super) struct Collector {
+            pub(super) events: Arc<Mutex<Vec<CapturedWarning>>>,
+        }
+
+        #[derive(Default)]
+        struct Fields {
+            message: String,
+            field: Option<String>,
+        }
+
+        impl tracing::field::Visit for Fields {
+            fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+                self.assign(field.name(), value.to_string());
+            }
+
+            fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+                self.assign(field.name(), format!("{value:?}"));
+            }
+        }
+
+        impl Fields {
+            fn assign(&mut self, name: &str, value: String) {
+                match name {
+                    "message" => self.message = value,
+                    "field" => self.field = Some(value),
+                    _ => {},
+                }
+            }
+        }
+
+        impl tracing::Subscriber for Collector {
+            fn enabled(&self, _metadata: &tracing::Metadata<'_>) -> bool {
+                true
+            }
+
+            fn new_span(&self, _span: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+                tracing::span::Id::from_u64(1)
+            }
+
+            fn record(&self, _span: &tracing::span::Id, _values: &tracing::span::Record<'_>) {}
+
+            fn record_follows_from(&self, _span: &tracing::span::Id, _follows: &tracing::span::Id) {
+            }
+
+            fn event(&self, event: &tracing::Event<'_>) {
+                let mut fields = Fields::default();
+                event.record(&mut fields);
+                let captured = CapturedWarning {
+                    target: event.metadata().target().to_string(),
+                    field: fields.field,
+                    message: fields.message,
+                };
+                if let Ok(mut events) = self.events.lock() {
+                    events.push(captured);
+                }
+            }
+
+            fn enter(&self, _span: &tracing::span::Id) {}
+
+            fn exit(&self, _span: &tracing::span::Id) {}
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::assert_roundtrips_through_client;
