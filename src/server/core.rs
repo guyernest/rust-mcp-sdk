@@ -1302,6 +1302,106 @@ impl ResponseDisposition {
     }
 }
 
+/// WHICH egress minted the reserved result fields on this response
+/// (Phase 114, plan 10 — DQ2).
+///
+/// This is an EXPLICIT input to [`own_reserved_result_fields`], threaded from
+/// the egress that did the minting. It replaces a flag the registry used to
+/// DERIVE from the [`ResponseDisposition`]:
+///
+/// ```text
+/// let mrtr_owned = disposition == ResponseDisposition::InputRequired;
+/// ```
+///
+/// # Why the derivation had to go
+///
+/// It was correct while `mrtr_egress` was the ONLY minter of `requestState` and
+/// `inputRequests`. Phase 114 adds a second legitimate minter whose disposition
+/// is `complete`: a v2 `tasks/get` on an `input_required` TASK is a complete
+/// JSON-RPC result — the task is waiting, not the request — and the ext-tasks
+/// schema makes `inputRequests` a REQUIRED top-level key of it
+/// (`$defs.InputRequiredTask.required`). Under the derived flag that required
+/// field was SILENTLY deleted, with a `tracing::warn!` rather than an error, so
+/// an integration test asserting only "the request succeeded" passed against a
+/// response a conformant client rejects.
+///
+/// # Why a named enum and not a `bool`
+///
+/// A bare `owns_reserved_fields: bool` at a call site reads as "true means
+/// allowed" and is exactly the parameter a future refactor flips by accident. A
+/// named variant forces every call site to state WHICH egress it is, and it lets
+/// the grant be per-KEY per-OWNER rather than a single all-or-nothing flag —
+/// which is what keeps `requestState` MRTR-only (see [`Self::may_emit`]).
+///
+/// Two alternatives were considered and rejected during planning: re-adding the
+/// field after stripping it, and special-casing by method string. Both re-create
+/// the per-site divergence the single-registry design exists to prevent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ReservedFieldOwner {
+    /// No egress minted the reserved fields — strip every one of them.
+    ///
+    /// The default posture of every ordinary result. A handler that wrote one of
+    /// these keys onto its own result is forging a protocol field, and the
+    /// registry removes it and says so.
+    None,
+    /// The MRTR egress minted them (`requestState` AND `inputRequests`).
+    ///
+    /// Selected by `seal_input_required`, at the site that writes both keys.
+    ///
+    /// The conditional `allow` is feature-scoped and the scope was MEASURED, not
+    /// guessed: `seal_input_required` is `streamable-http`-only by D-14 and the
+    /// `pmcp::testing` seam is `testing`-only, so this variant is dead only when
+    /// NEITHER feature is on. With `--no-default-features` and `-D warnings`,
+    /// dropping the allow reports `variants Mrtr and TasksDispatch are never
+    /// constructed`; with `--features streamable-http` alone it reports only
+    /// `TasksDispatch`.
+    #[cfg_attr(
+        not(any(feature = "streamable-http", feature = "testing")),
+        allow(dead_code)
+    )]
+    Mrtr,
+    /// The v2 tasks dispatch minted `inputRequests`, and ONLY `inputRequests`.
+    ///
+    /// The tasks surface has no continuation token: the persisted task record
+    /// replaces the sealed continuation (D-17), so no key material is introduced
+    /// and a tasks result carrying `requestState` is still a strip.
+    ///
+    /// Its only constructor TODAY is the `pmcp::testing` reserved-field seam;
+    /// the v2 `tasks/get` dispatch constructs it when plan 114-12 wires that
+    /// result shape.
+    ///
+    // Why the allow is scoped to `not(feature = "testing")` and NOT to
+    // `not(test)`: `make lint` runs `cargo clippy --features "full" --lib
+    // --tests` under `RUSTFLAGS = -D warnings`, and the `--lib` half is a
+    // NON-test build with `testing` ON. Under `not(test)` the allow would be
+    // active for exactly that half, hiding the variant from the stricter of the
+    // two. Scoped to the feature that carries its only constructor, BOTH halves
+    // of the gate lint it — so deleting the seam before production wires the
+    // variant fails the gate instead of passing quietly.
+    #[cfg_attr(not(feature = "testing"), allow(dead_code))]
+    TasksDispatch,
+}
+
+impl ReservedFieldOwner {
+    /// Whether this owner may publish the reserved top-level result key `field`.
+    ///
+    /// The grant is per-KEY per-OWNER, never per-key-globally. "Always allow
+    /// `inputRequests`" would fix the tasks case and simultaneously hand every
+    /// tool handler the ability to forge an input-request set (T-114-45), and
+    /// granting the tasks owner `requestState` would let a surface with no
+    /// continuation publish something shaped like one (T-114-44).
+    fn may_emit(self, field: &str) -> bool {
+        match self {
+            Self::None => false,
+            Self::Mrtr => {
+                field == crate::types::mrtr::REQUEST_STATE_KEY
+                    || field == crate::types::mrtr::INPUT_REQUESTS_KEY
+            },
+            Self::TasksDispatch => field == crate::types::mrtr::INPUT_REQUESTS_KEY,
+        }
+    }
+}
+
 /// The reserved `result._meta` key the v2 envelope publishes the server's
 /// [`Implementation`] under.
 ///
@@ -1338,11 +1438,16 @@ pub(crate) const RESERVED_SERVER_INFO_KEY: &str = "io.modelcontextprotocol/serve
 ///   non-reserved `_meta` key, is left exactly as the handler wrote it.
 /// - `result` is scalar/array/null → left unchanged (cannot key a non-object;
 ///   no in-scope v2 method returns a non-object).
+///
+/// `owner` states WHICH egress minted the reserved result fields. It has no
+/// default and every call site names it, so a result that no egress minted
+/// cannot acquire one by omission — see [`ReservedFieldOwner`].
 pub(crate) fn inject_v2_result_envelope(
     response: &mut JSONRPCResponse,
     protocol_context: Option<&crate::types::protocol::ProtocolContext>,
     server_info: &Implementation,
     disposition: ResponseDisposition,
+    owner: ReservedFieldOwner,
 ) {
     // v2-only: a v1 (or non-opted-in) response is left byte-identical.
     if !matches!(
@@ -1362,7 +1467,7 @@ pub(crate) fn inject_v2_result_envelope(
         return;
     }
 
-    own_reserved_result_fields(value, server_info, disposition);
+    own_reserved_result_fields(value, server_info, disposition, owner);
 }
 
 /// The `_meta` object of a result, creating it when absent.
@@ -1407,9 +1512,16 @@ pub(crate) fn result_meta_object_mut(
 /// |---|---|---|
 /// | `resultType` | top-level result | OVERWRITE with the disposition the server computed |
 /// | `io.modelcontextprotocol/serverInfo` | `result._meta` | OVERWRITE with the server's real `Implementation` |
-/// | `requestState` | top-level result | REMOVE unless this egress minted it |
-/// | `inputRequests` | top-level result | REMOVE unless this egress produced it |
+/// | `requestState` | top-level result | REMOVE unless the **MRTR** egress minted it — that is its ONLY legitimate minter |
+/// | `inputRequests` | top-level result | REMOVE unless the **MRTR** egress minted it (on an `input_required` result) **or** the **v2 tasks dispatch** did (on a `tasks/get` for an `input_required` task, where the ext-tasks schema marks it a REQUIRED top-level field) |
 /// | `dev.pmcp/mrtr` | `result._meta` | REMOVE always |
+///
+/// `inputRequests` is the one reserved key with TWO legitimate minters, which is
+/// why ownership is an explicit [`ReservedFieldOwner`] input rather than a single
+/// boolean: the grant is per-KEY per-OWNER. The tasks dispatch may publish
+/// `inputRequests` and may NOT publish `requestState` — the tasks surface has no
+/// continuation token, because the persisted task record replaces the sealed
+/// continuation (D-17).
 ///
 /// A TOP-LEVEL `serverInfo` is deliberately NOT in the registry: it is a
 /// legitimate schema field of `ServerDiscoverResult` and `InitializeResult`, and
@@ -1433,15 +1545,19 @@ pub(crate) fn result_meta_object_mut(
 /// unconditionally and logs a `tracing::warn!` naming the field it overrode, so
 /// a handler author sees the mistake instead of it failing silently.
 ///
-/// `mrtr_owned` is derived from the disposition rather than passed separately:
-/// [`ResponseDisposition::InputRequired`] is selected by `mrtr_egress` and by
-/// nothing else, so it IS the "this egress minted the MRTR fields" signal.
+/// # Ownership is an INPUT, never derived from the disposition
+///
+/// `owner` is supplied by the egress that did the minting — see
+/// [`ReservedFieldOwner`] for the measured defect that removing the derivation
+/// fixed. It is deliberately a separate parameter from `disposition`: the two
+/// facts are independent, and the case that proves it is the v2 tasks dispatch,
+/// whose disposition is `complete` while it legitimately owns `inputRequests`.
 pub(crate) fn own_reserved_result_fields(
     result: &mut Value,
     server_info: &Implementation,
     disposition: ResponseDisposition,
+    owner: ReservedFieldOwner,
 ) {
-    let mrtr_owned = disposition == ResponseDisposition::InputRequired;
     let wire_result_type = disposition.as_wire_str();
     if let Some(object) = result.as_object_mut() {
         if object
@@ -1459,19 +1575,23 @@ pub(crate) fn own_reserved_result_fields(
             crate::types::mrtr::RESULT_TYPE_KEY.to_string(),
             Value::String(wire_result_type.to_string()),
         );
-        if !mrtr_owned {
-            for field in [
-                crate::types::mrtr::REQUEST_STATE_KEY,
-                crate::types::mrtr::INPUT_REQUESTS_KEY,
-            ] {
-                if object.remove(field).is_some() {
-                    tracing::warn!(
-                        target: "mcp.v2",
-                        field,
-                        "removed a handler-supplied reserved result field from a result this \
-                         egress did not mint"
-                    );
-                }
+        // Per-KEY, per-OWNER. The loop visits every reserved top-level key on
+        // every path, so a new owner cannot silently gain a key by being added
+        // to the enum — it has to say so in `may_emit`.
+        for field in [
+            crate::types::mrtr::REQUEST_STATE_KEY,
+            crate::types::mrtr::INPUT_REQUESTS_KEY,
+        ] {
+            if owner.may_emit(field) {
+                continue;
+            }
+            if object.remove(field).is_some() {
+                tracing::warn!(
+                    target: "mcp.v2",
+                    field,
+                    "removed a handler-supplied reserved result field from a result this \
+                     egress did not mint"
+                );
             }
         }
     }
@@ -1553,12 +1673,14 @@ pub(crate) fn build_discover_response(
     let result = discover_result_from_capabilities(capabilities, info, negotiated_version);
     let mut response = ServerCore::success_response(id, serde_json::to_value(result).unwrap());
     // Parity: the v2 object result carries resultType + serverInfo via the SAME
-    // shared envelope helper every other v2 result uses.
+    // shared envelope helper every other v2 result uses. `server/discover` mints
+    // no reserved MRTR/tasks field, so it owns none of them.
     inject_v2_result_envelope(
         &mut response,
         protocol_context,
         info,
         ResponseDisposition::Complete,
+        ReservedFieldOwner::None,
     );
     response
 }
@@ -2331,19 +2453,23 @@ fn fail_mrtr_egress(
     code: i32,
     message: String,
     data: Option<Value>,
-) -> ResponseDisposition {
+) -> (ResponseDisposition, ReservedFieldOwner) {
     response.payload =
         crate::types::jsonrpc::ResponsePayload::Error(crate::types::jsonrpc::JSONRPCError {
             code,
             message,
             data,
         });
-    ResponseDisposition::Complete
+    (ResponseDisposition::Complete, ReservedFieldOwner::None)
 }
 
 /// Convert a handler's MRTR signal into a wire `input_required` result.
 ///
-/// Returns the [`ResponseDisposition`] the shared envelope helper should emit.
+/// Returns the [`ResponseDisposition`] the shared envelope helper should emit,
+/// paired with the [`ReservedFieldOwner`] that minted the reserved result
+/// fields. Both travel to [`inject_v2_result_envelope`] together: the owner is
+/// stated by the code that WRITES the keys (`seal_input_required`), never
+/// re-derived downstream from the disposition.
 ///
 /// # The order of operations is load-bearing
 ///
@@ -2368,7 +2494,7 @@ fn fail_mrtr_egress(
 pub(crate) fn mrtr_egress(
     response: &mut JSONRPCResponse,
     inputs: &MrtrEgressInputs<'_>,
-) -> ResponseDisposition {
+) -> (ResponseDisposition, ReservedFieldOwner) {
     // (1) UNCONDITIONAL strip — before the era check, before the eligibility
     // check, on v1 as well as v2.
     let stripped = match response.payload {
@@ -2376,7 +2502,7 @@ pub(crate) fn mrtr_egress(
         crate::types::jsonrpc::ResponsePayload::Error(_) => StrippedSignal::Absent,
     };
     let signal = match stripped {
-        StrippedSignal::Absent => return ResponseDisposition::Complete,
+        StrippedSignal::Absent => return (ResponseDisposition::Complete, ReservedFieldOwner::None),
         StrippedSignal::Malformed => {
             tracing::error!(
                 target: "mcp.mrtr",
@@ -2447,7 +2573,7 @@ pub(crate) fn mrtr_egress(
 
     // (4) Mint and write.
     match seal_input_required(response, &signal, target, inputs) {
-        Ok(disposition) => disposition,
+        Ok(minted) => minted,
         Err(reason) => {
             tracing::error!(target: "mcp.mrtr", reason, "could not emit an input_required result");
             fail_mrtr_egress(
@@ -2688,7 +2814,7 @@ fn seal_input_required(
     signal: &crate::types::mrtr::MrtrSignal,
     target: &(&'static str, Value),
     inputs: &MrtrEgressInputs<'_>,
-) -> std::result::Result<ResponseDisposition, &'static str> {
+) -> std::result::Result<(ResponseDisposition, ReservedFieldOwner), &'static str> {
     // ENFORCEMENT POINT B for `MAX_MRTR_ROUNDS` (D-113-L): the mint-site
     // backstop.
     //
@@ -2767,7 +2893,10 @@ fn seal_input_required(
         crate::types::mrtr::REQUEST_STATE_KEY.to_string(),
         Value::String(token),
     );
-    Ok(ResponseDisposition::InputRequired)
+    // The ownership claim is made HERE, at the two `insert` calls it describes,
+    // and travels with the disposition to the registry. It is not re-derived
+    // downstream from the disposition — that derivation is the row-23 defect.
+    Ok((ResponseDisposition::InputRequired, ReservedFieldOwner::Mrtr))
 }
 
 /// One request's MRTR round, owned across the dispatch `.await`.
@@ -2864,12 +2993,15 @@ impl MrtrRound {
     ///
     /// The SINGLE assembly of [`MrtrEgressInputs`] — see the type docs for why
     /// having two was a wire-divergence hazard.
+    ///
+    /// Returns the disposition AND the [`ReservedFieldOwner`], which both
+    /// dispatch sites hand straight to [`inject_v2_result_envelope`].
     pub(crate) fn finish(
         &self,
         response: &mut JSONRPCResponse,
         context: Option<&crate::types::protocol::ProtocolContext>,
         codec: Option<&crate::server::request_state::RequestStateCodec>,
-    ) -> ResponseDisposition {
+    ) -> (ResponseDisposition, ReservedFieldOwner) {
         mrtr_egress(
             response,
             &MrtrEgressInputs {
@@ -2956,18 +3088,18 @@ impl ProtocolHandler for ServerCore {
         // `requestState`, and STRIP the pmcp-internal signal key on every other
         // path so it never reaches the wire.
         #[cfg(feature = "streamable-http")]
-        let disposition = mrtr.finish(
+        let (disposition, reserved_field_owner) = mrtr.finish(
             &mut response,
             protocol_context.as_ref(),
             self.request_state_codec(),
         );
         #[cfg(not(feature = "streamable-http"))]
-        let disposition = {
+        let (disposition, reserved_field_owner) = {
             // No `mrtr_egress` on this build, so the unconditional strip has to
             // happen here or the reserved key reaches the wire (see
             // `scrub_mrtr_signal`).
             scrub_mrtr_signal(&mut response);
-            ResponseDisposition::Complete
+            (ResponseDisposition::Complete, ReservedFieldOwner::None)
         };
 
         // Inject the v2-only response envelope (resultType + serverInfo) at the
@@ -2979,6 +3111,7 @@ impl ProtocolHandler for ServerCore {
             protocol_context.as_ref(),
             &self.info,
             disposition,
+            reserved_field_owner,
         );
 
         // Process response through protocol middleware chain (read-only access)
@@ -4338,7 +4471,13 @@ mod tests {
             let info = Implementation::new("srv", "2.0.0");
             let ctx = v2_ctx();
             let mut resp = result_response(1, serde_json::json!({ "tools": [] }));
-            inject_v2_result_envelope(&mut resp, Some(&ctx), &info, ResponseDisposition::Complete);
+            inject_v2_result_envelope(
+                &mut resp,
+                Some(&ctx),
+                &info,
+                ResponseDisposition::Complete,
+                ReservedFieldOwner::None,
+            );
             let ResponsePayload::Result(v) = resp.payload else {
                 panic!("expected result");
             };
@@ -4359,7 +4498,13 @@ mod tests {
             let info = Implementation::new("srv", "2.0.0");
             let ctx = v2_ctx();
             let mut resp = result_response(1, serde_json::json!({ "resultType": "task", "x": 1 }));
-            inject_v2_result_envelope(&mut resp, Some(&ctx), &info, ResponseDisposition::Complete);
+            inject_v2_result_envelope(
+                &mut resp,
+                Some(&ctx),
+                &info,
+                ResponseDisposition::Complete,
+                ReservedFieldOwner::None,
+            );
             let ResponsePayload::Result(v) = resp.payload else {
                 panic!("expected result");
             };
@@ -4392,7 +4537,13 @@ mod tests {
                     "inputRequests": { "x": { "method": "roots/list" } },
                 }),
             );
-            inject_v2_result_envelope(&mut resp, Some(&ctx), &info, ResponseDisposition::Complete);
+            inject_v2_result_envelope(
+                &mut resp,
+                Some(&ctx),
+                &info,
+                ResponseDisposition::Complete,
+                ReservedFieldOwner::None,
+            );
             let ResponsePayload::Result(v) = resp.payload else {
                 panic!("expected result");
             };
@@ -4427,6 +4578,7 @@ mod tests {
                 Some(&ctx),
                 &info,
                 ResponseDisposition::InputRequired,
+                ReservedFieldOwner::Mrtr,
             );
             let ResponsePayload::Result(v) = resp.payload else {
                 panic!("expected result");
@@ -4451,7 +4603,13 @@ mod tests {
                     },
                 }),
             );
-            inject_v2_result_envelope(&mut resp, Some(&ctx), &info, ResponseDisposition::Complete);
+            inject_v2_result_envelope(
+                &mut resp,
+                Some(&ctx),
+                &info,
+                ResponseDisposition::Complete,
+                ReservedFieldOwner::None,
+            );
             let ResponsePayload::Result(v) = resp.payload else {
                 panic!("expected result");
             };
@@ -4469,7 +4627,13 @@ mod tests {
             let info = Implementation::new("srv", "2.0.0");
             let ctx = v2_ctx();
             let mut resp = result_response(1, serde_json::json!({ "tools": [] }));
-            inject_v2_result_envelope(&mut resp, Some(&ctx), &info, ResponseDisposition::Complete);
+            inject_v2_result_envelope(
+                &mut resp,
+                Some(&ctx),
+                &info,
+                ResponseDisposition::Complete,
+                ReservedFieldOwner::None,
+            );
             let ResponsePayload::Result(v) = resp.payload else {
                 panic!("expected result");
             };
@@ -4499,6 +4663,7 @@ mod tests {
                 Some(&ctx),
                 &info,
                 ResponseDisposition::Complete,
+                ReservedFieldOwner::None,
             );
             let ResponsePayload::Result(v) = created.payload else {
                 panic!("expected result");
@@ -4519,6 +4684,7 @@ mod tests {
                 Some(&ctx),
                 &info,
                 ResponseDisposition::Complete,
+                ReservedFieldOwner::None,
             );
             let ResponsePayload::Result(v) = merged.payload else {
                 panic!("expected result");
@@ -4541,6 +4707,7 @@ mod tests {
                     ctx.as_ref(),
                     &info,
                     ResponseDisposition::Complete,
+                    ReservedFieldOwner::None,
                 );
                 let ResponsePayload::Result(v) = resp.payload else {
                     panic!("expected result");
@@ -4573,6 +4740,7 @@ mod tests {
                     Some(&ctx),
                     &info,
                     ResponseDisposition::Complete,
+                    ReservedFieldOwner::None,
                 );
                 let ResponsePayload::Result(v) = resp.payload else {
                     panic!("expected result");
@@ -4594,6 +4762,7 @@ mod tests {
                 Some(&ctx),
                 &info,
                 ResponseDisposition::InputRequired,
+                ReservedFieldOwner::Mrtr,
             );
             let ResponsePayload::Result(v) = input_required.payload else {
                 panic!("expected result");
@@ -4633,7 +4802,13 @@ mod tests {
                 1,
                 serde_json::json!({ "_meta": { "vendor/key": 1, "io.example/trace": "abc" } }),
             );
-            inject_v2_result_envelope(&mut resp, Some(&ctx), &info, ResponseDisposition::Complete);
+            inject_v2_result_envelope(
+                &mut resp,
+                Some(&ctx),
+                &info,
+                ResponseDisposition::Complete,
+                ReservedFieldOwner::None,
+            );
             let ResponsePayload::Result(v) = resp.payload else {
                 panic!("expected result");
             };
@@ -4654,7 +4829,13 @@ mod tests {
                     "_meta": { crate::types::mrtr::MRTR_SIGNAL_META_KEY: { "continuation": 1 } },
                 }),
             );
-            inject_v2_result_envelope(&mut resp, Some(&ctx), &info, ResponseDisposition::Complete);
+            inject_v2_result_envelope(
+                &mut resp,
+                Some(&ctx),
+                &info,
+                ResponseDisposition::Complete,
+                ReservedFieldOwner::None,
+            );
             let ResponsePayload::Result(v) = resp.payload else {
                 panic!("expected result");
             };
@@ -4704,6 +4885,7 @@ mod tests {
                 Some(&ctx),
                 &info,
                 ResponseDisposition::Complete,
+                ReservedFieldOwner::None,
             );
             let ResponsePayload::Result(v) = scalar.payload else {
                 panic!("expected result");
@@ -4712,7 +4894,13 @@ mod tests {
 
             // null
             let mut null = result_response(2, Value::Null);
-            inject_v2_result_envelope(&mut null, Some(&ctx), &info, ResponseDisposition::Complete);
+            inject_v2_result_envelope(
+                &mut null,
+                Some(&ctx),
+                &info,
+                ResponseDisposition::Complete,
+                ReservedFieldOwner::None,
+            );
             let ResponsePayload::Result(v) = null.payload else {
                 panic!("expected result");
             };
@@ -4721,7 +4909,13 @@ mod tests {
             // error → no injection
             let mut err =
                 ServerCore::error_response(RequestId::from(3i64), -32601, "nope".to_string());
-            inject_v2_result_envelope(&mut err, Some(&ctx), &info, ResponseDisposition::Complete);
+            inject_v2_result_envelope(
+                &mut err,
+                Some(&ctx),
+                &info,
+                ResponseDisposition::Complete,
+                ReservedFieldOwner::None,
+            );
             assert!(matches!(err.payload, ResponsePayload::Error(_)));
         }
 
@@ -4735,7 +4929,13 @@ mod tests {
             // v1 success — byte-identical
             let original = serde_json::json!({ "tools": [], "nextCursor": null });
             let mut resp = result_response(1, original.clone());
-            inject_v2_result_envelope(&mut resp, Some(&ctx), &info, ResponseDisposition::Complete);
+            inject_v2_result_envelope(
+                &mut resp,
+                Some(&ctx),
+                &info,
+                ResponseDisposition::Complete,
+                ReservedFieldOwner::None,
+            );
             let ResponsePayload::Result(v) = resp.payload else {
                 panic!("expected result");
             };
@@ -4743,7 +4943,13 @@ mod tests {
 
             // No context at all — also byte-identical.
             let mut resp_none = result_response(2, original.clone());
-            inject_v2_result_envelope(&mut resp_none, None, &info, ResponseDisposition::Complete);
+            inject_v2_result_envelope(
+                &mut resp_none,
+                None,
+                &info,
+                ResponseDisposition::Complete,
+                ReservedFieldOwner::None,
+            );
             let ResponsePayload::Result(v2) = resp_none.payload else {
                 panic!("expected result");
             };
@@ -4756,7 +4962,13 @@ mod tests {
                 "Task not completed".to_string(),
             );
             let before = serde_json::to_value(&err).unwrap();
-            inject_v2_result_envelope(&mut err, Some(&ctx), &info, ResponseDisposition::Complete);
+            inject_v2_result_envelope(
+                &mut err,
+                Some(&ctx),
+                &info,
+                ResponseDisposition::Complete,
+                ReservedFieldOwner::None,
+            );
             let after = serde_json::to_value(&err).unwrap();
             assert_eq!(before, after, "v1 error must stay byte-identical");
         }
@@ -6364,7 +6576,7 @@ mod tests {
                 context: Option<&ProtocolContext>,
                 codec: Option<&RequestStateCodec>,
                 round: u8,
-            ) -> ResponseDisposition {
+            ) -> (ResponseDisposition, ReservedFieldOwner) {
                 let request = call_tool(json!({}));
                 let target = mrtr_binding_parts(&request);
                 mrtr_egress(
@@ -6396,7 +6608,7 @@ mod tests {
                 let target = mrtr_binding_parts(&request);
                 let context = v2_context_all_caps();
                 let mut response = signalling_response();
-                let disposition = mrtr_egress(
+                let (disposition, owner) = mrtr_egress(
                     &mut response,
                     &MrtrEgressInputs {
                         target: target.as_ref(),
@@ -6409,7 +6621,10 @@ mod tests {
                         round: 4,
                     },
                 );
-                assert_eq!(disposition, ResponseDisposition::InputRequired);
+                assert_eq!(
+                    (disposition, owner),
+                    (ResponseDisposition::InputRequired, ReservedFieldOwner::Mrtr)
+                );
 
                 // `resultType` is written by the envelope step, NOT by egress —
                 // there is exactly one writer of that key. Run the real envelope
@@ -6421,7 +6636,13 @@ mod tests {
                     "egress must not write resultType — the envelope owns it"
                 );
                 let server_info = Implementation::new("test", "1.0.0");
-                inject_v2_result_envelope(&mut response, Some(&context), &server_info, disposition);
+                inject_v2_result_envelope(
+                    &mut response,
+                    Some(&context),
+                    &server_info,
+                    disposition,
+                    owner,
+                );
 
                 let result = result_of(&response);
                 assert_eq!(result["resultType"], "input_required");
@@ -6483,7 +6704,7 @@ mod tests {
                     ("non-eligible method", Some(&v2), list_target.as_ref()),
                 ] {
                     let mut response = signalling_response();
-                    let disposition = mrtr_egress(
+                    let (disposition, owner) = mrtr_egress(
                         &mut response,
                         &MrtrEgressInputs {
                             target,
@@ -6496,7 +6717,11 @@ mod tests {
                             round: 0,
                         },
                     );
-                    assert_eq!(disposition, ResponseDisposition::Complete, "{label}");
+                    assert_eq!(
+                        (disposition, owner),
+                        (ResponseDisposition::Complete, ReservedFieldOwner::None),
+                        "{label}"
+                    );
                     // The ENTIRE serialized frame — not merely the result object,
                     // which no longer exists on these paths.
                     let rendered =
@@ -6533,9 +6758,13 @@ mod tests {
                 let codec = codec(&KEY_A, 300);
                 let context = v2_context_all_caps();
                 let mut response = signalling_response_for(&json!("not-a-signal"));
-                let disposition = egress_with(&mut response, Some(&context), Some(&codec), 0);
+                let (disposition, owner) =
+                    egress_with(&mut response, Some(&context), Some(&codec), 0);
 
-                assert_eq!(disposition, ResponseDisposition::Complete);
+                assert_eq!(
+                    (disposition, owner),
+                    (ResponseDisposition::Complete, ReservedFieldOwner::None)
+                );
                 assert_eq!(
                     error_of(&response).code,
                     crate::types::protocol::error_codes::INTERNAL_ERROR
@@ -6581,8 +6810,12 @@ mod tests {
                     let codec = codec(&KEY_A, 300);
                     let context = v2_context_all_caps();
                     let mut response = ServerCore::success_response(RequestId::from(1i64), shape);
-                    let disposition = egress_with(&mut response, Some(&context), Some(&codec), 0);
-                    assert_eq!(disposition, ResponseDisposition::InputRequired);
+                    let (disposition, owner) =
+                        egress_with(&mut response, Some(&context), Some(&codec), 0);
+                    assert_eq!(
+                        (disposition, owner),
+                        (ResponseDisposition::InputRequired, ReservedFieldOwner::Mrtr)
+                    );
                     let result = result_of(&response);
                     assert!(result["requestState"].is_string());
                     assert!(result["inputRequests"]["user_name"].is_object());
@@ -6614,9 +6847,12 @@ mod tests {
                     Some(crate::types::capabilities::RootsCapabilities::default()),
                 ));
                 let mut response = signalling_response();
-                let disposition = egress_with(&mut response, Some(&context), None, 0);
+                let (disposition, owner) = egress_with(&mut response, Some(&context), None, 0);
 
-                assert_eq!(disposition, ResponseDisposition::Complete);
+                assert_eq!(
+                    (disposition, owner),
+                    (ResponseDisposition::Complete, ReservedFieldOwner::None)
+                );
                 let error = error_of(&response);
                 assert_eq!(
                     error.code,
@@ -6644,9 +6880,13 @@ mod tests {
                 let target = mrtr_binding_parts(&request).expect("eligible");
                 let context = v2_context_all_caps();
                 let mut response = signalling_response();
-                let disposition = egress_with(&mut response, Some(&context), Some(&codec), 3);
+                let (disposition, owner) =
+                    egress_with(&mut response, Some(&context), Some(&codec), 3);
 
-                assert_eq!(disposition, ResponseDisposition::InputRequired);
+                assert_eq!(
+                    (disposition, owner),
+                    (ResponseDisposition::InputRequired, ReservedFieldOwner::Mrtr)
+                );
                 let token = result_of(&response)["requestState"]
                     .as_str()
                     .expect("a token is minted");
@@ -6711,13 +6951,16 @@ mod tests {
 
                 // One below the ceiling: mints normally, at EXACTLY the ceiling.
                 let mut admitted = signalling_response();
-                let disposition = egress_with(
+                let (disposition, owner) = egress_with(
                     &mut admitted,
                     Some(&context),
                     Some(&codec),
                     MAX_MRTR_ROUNDS - 1,
                 );
-                assert_eq!(disposition, ResponseDisposition::InputRequired);
+                assert_eq!(
+                    (disposition, owner),
+                    (ResponseDisposition::InputRequired, ReservedFieldOwner::Mrtr)
+                );
                 let token = result_of(&admitted)["requestState"]
                     .as_str()
                     .expect("a token is minted one below the ceiling");
@@ -6734,9 +6977,12 @@ mod tests {
 
                 // At the ceiling: refused BEFORE the mint.
                 let mut refused = signalling_response();
-                let disposition =
+                let (disposition, owner) =
                     egress_with(&mut refused, Some(&context), Some(&codec), MAX_MRTR_ROUNDS);
-                assert_eq!(disposition, ResponseDisposition::Complete);
+                assert_eq!(
+                    (disposition, owner),
+                    (ResponseDisposition::Complete, ReservedFieldOwner::None)
+                );
                 assert_eq!(
                     error_of(&refused).code,
                     crate::types::protocol::error_codes::INTERNAL_ERROR
@@ -6767,7 +7013,7 @@ mod tests {
                 response: &mut JSONRPCResponse,
                 arguments: Value,
                 codec: Option<&RequestStateCodec>,
-            ) -> ResponseDisposition {
+            ) -> (ResponseDisposition, ReservedFieldOwner) {
                 let request = call_tool(arguments);
                 let target = mrtr_binding_parts(&request);
                 let context = v2_context_all_caps();
@@ -6798,10 +7044,13 @@ mod tests {
             fn egress_refuses_to_mint_for_an_uncanonicalizable_request() {
                 let codec = codec(&KEY_A, 300);
                 let mut response = signalling_response();
-                let disposition =
+                let (disposition, owner) =
                     egress_for_arguments(&mut response, arguments_past_the_cap(), Some(&codec));
 
-                assert_eq!(disposition, ResponseDisposition::Complete);
+                assert_eq!(
+                    (disposition, owner),
+                    (ResponseDisposition::Complete, ReservedFieldOwner::None)
+                );
                 assert_eq!(
                     error_of(&response).code,
                     crate::types::protocol::error_codes::INVALID_PARAMS,
@@ -6828,10 +7077,13 @@ mod tests {
                 let request = call_tool(arguments_at_the_cap());
                 let target = mrtr_binding_parts(&request).expect("eligible");
                 let mut response = signalling_response();
-                let disposition =
+                let (disposition, owner) =
                     egress_for_arguments(&mut response, arguments_at_the_cap(), Some(&codec));
 
-                assert_eq!(disposition, ResponseDisposition::InputRequired);
+                assert_eq!(
+                    (disposition, owner),
+                    (ResponseDisposition::InputRequired, ReservedFieldOwner::Mrtr)
+                );
                 let token = result_of(&response)["requestState"]
                     .as_str()
                     .expect("a token is minted at the cap");
@@ -6850,9 +7102,12 @@ mod tests {
             #[test]
             fn the_depth_refusal_precedes_every_mint_precondition() {
                 let mut response = signalling_response();
-                let disposition =
+                let (disposition, owner) =
                     egress_for_arguments(&mut response, arguments_past_the_cap(), None);
-                assert_eq!(disposition, ResponseDisposition::Complete);
+                assert_eq!(
+                    (disposition, owner),
+                    (ResponseDisposition::Complete, ReservedFieldOwner::None)
+                );
                 assert_eq!(
                     error_of(&response).message,
                     MRTR_UNCANONICALIZABLE_MESSAGE,
@@ -6874,8 +7129,12 @@ mod tests {
             fn mint_backstop_precedes_every_other_mint_precondition() {
                 let context = v2_context_all_caps();
                 let mut response = signalling_response();
-                let disposition = egress_with(&mut response, Some(&context), None, MAX_MRTR_ROUNDS);
-                assert_eq!(disposition, ResponseDisposition::Complete);
+                let (disposition, owner) =
+                    egress_with(&mut response, Some(&context), None, MAX_MRTR_ROUNDS);
+                assert_eq!(
+                    (disposition, owner),
+                    (ResponseDisposition::Complete, ReservedFieldOwner::None)
+                );
                 assert_eq!(
                     error_of(&response).message,
                     MRTR_ROUND_CEILING_INVARIANT_MESSAGE,
@@ -7125,8 +7384,12 @@ mod tests {
                 let codec = codec(&KEY_A, 300);
                 let context = v2_context().with_client_capabilities(declared);
                 let mut response = signalling_response_for(signal);
-                let disposition = egress_with(&mut response, Some(&context), Some(&codec), 0);
-                assert_eq!(disposition, ResponseDisposition::Complete);
+                let (disposition, owner) =
+                    egress_with(&mut response, Some(&context), Some(&codec), 0);
+                assert_eq!(
+                    (disposition, owner),
+                    (ResponseDisposition::Complete, ReservedFieldOwner::None)
+                );
                 error_of(&response).clone()
             }
 
@@ -7185,8 +7448,12 @@ mod tests {
                 let context = v2_context_all_caps();
                 let mut response =
                     signalling_response_for(&requests_of(vec![("pay", url_elicitation())]));
-                let disposition = egress_with(&mut response, Some(&context), Some(&codec), 0);
-                assert_eq!(disposition, ResponseDisposition::InputRequired);
+                let (disposition, owner) =
+                    egress_with(&mut response, Some(&context), Some(&codec), 0);
+                assert_eq!(
+                    (disposition, owner),
+                    (ResponseDisposition::InputRequired, ReservedFieldOwner::Mrtr)
+                );
                 assert!(result_of(&response)["inputRequests"]["pay"].is_object());
             }
 
@@ -7315,7 +7582,7 @@ mod tests {
                 let target = mrtr_binding_parts(&request);
                 let context = v2_context_all_caps();
                 let mut response = signalling_response();
-                let disposition = mrtr_egress(
+                let (disposition, owner) = mrtr_egress(
                     &mut response,
                     &MrtrEgressInputs {
                         target: target.as_ref(),
@@ -7329,7 +7596,10 @@ mod tests {
                         round: 0,
                     },
                 );
-                assert_eq!(disposition, ResponseDisposition::Complete);
+                assert_eq!(
+                    (disposition, owner),
+                    (ResponseDisposition::Complete, ReservedFieldOwner::None)
+                );
                 let ResponsePayload::Error(ref error) = response.payload else {
                     panic!("an unmintable continuation must fail closed with an error");
                 };
@@ -7349,7 +7619,7 @@ mod tests {
                 let original = json!({ "content": [], "_meta": { "vendor/key": 1 } });
                 let mut response =
                     ServerCore::success_response(RequestId::from(1i64), original.clone());
-                let disposition = mrtr_egress(
+                let (disposition, owner) = mrtr_egress(
                     &mut response,
                     &MrtrEgressInputs {
                         target: target.as_ref(),
@@ -7362,7 +7632,10 @@ mod tests {
                         round: 0,
                     },
                 );
-                assert_eq!(disposition, ResponseDisposition::Complete);
+                assert_eq!(
+                    (disposition, owner),
+                    (ResponseDisposition::Complete, ReservedFieldOwner::None)
+                );
                 assert_eq!(result_of(&response), &original);
             }
         }

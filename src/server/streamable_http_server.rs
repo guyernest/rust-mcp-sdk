@@ -2855,6 +2855,8 @@ fn listen_terminal_result_frame(
         protocol_context,
         server_info,
         crate::server::core::ResponseDisposition::Complete,
+        // A listen teardown mints no reserved MRTR/tasks field.
+        crate::server::core::ReservedFieldOwner::None,
     );
     serde_json::to_string(&response).unwrap_or_else(|_| "{}".to_string())
 }

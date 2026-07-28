@@ -429,11 +429,22 @@ mod reserved_fields {
         era: Option<crate::types::protocol::Era>,
         egress: ReservedFieldEgress,
     ) -> EnvelopeOutcome {
-        let disposition = match egress {
-            ReservedFieldEgress::Mrtr => crate::server::core::ResponseDisposition::InputRequired,
-            ReservedFieldEgress::NoEgress | ReservedFieldEgress::TasksDispatch => {
-                crate::server::core::ResponseDisposition::Complete
-            },
+        // The two facts travel to the registry exactly as production pairs them:
+        // MRTR selects `input_required` and owns both reserved keys; the tasks
+        // dispatch selects `complete` and owns `inputRequests` alone.
+        let (disposition, owner) = match egress {
+            ReservedFieldEgress::NoEgress => (
+                crate::server::core::ResponseDisposition::Complete,
+                crate::server::core::ReservedFieldOwner::None,
+            ),
+            ReservedFieldEgress::Mrtr => (
+                crate::server::core::ResponseDisposition::InputRequired,
+                crate::server::core::ReservedFieldOwner::Mrtr,
+            ),
+            ReservedFieldEgress::TasksDispatch => (
+                crate::server::core::ResponseDisposition::Complete,
+                crate::server::core::ReservedFieldOwner::TasksDispatch,
+            ),
         };
         let context = era.map(|era| {
             let version = match era {
@@ -466,6 +477,7 @@ mod reserved_fields {
                     context.as_ref(),
                     &server_info,
                     disposition,
+                    owner,
                 );
             });
         }

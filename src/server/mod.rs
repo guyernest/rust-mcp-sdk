@@ -1588,27 +1588,33 @@ impl Server {
         // `input_required` result carrying a freshly minted `requestState`, and
         // STRIPS the pmcp-internal signal key on every other path.
         #[cfg(feature = "streamable-http")]
-        let disposition = mrtr.finish(
+        let (disposition, reserved_field_owner) = mrtr.finish(
             &mut response,
             protocol_context.as_ref(),
             self.request_state_codec(),
         );
         #[cfg(not(feature = "streamable-http"))]
-        let disposition = {
+        let (disposition, reserved_field_owner) = {
             // No `mrtr_egress` on this build — strip the reserved signal key
             // here so it cannot reach the wire (see `core::scrub_mrtr_signal`).
             crate::server::core::scrub_mrtr_signal(&mut response);
-            crate::server::core::ResponseDisposition::Complete
+            (
+                crate::server::core::ResponseDisposition::Complete,
+                crate::server::core::ReservedFieldOwner::None,
+            )
         };
 
         // Twin-site v2 envelope injection (VERS-07 / D-07 / D-08): the ONE shared
         // helper in `core.rs` — v2-only, object-results-only, collision-safe;
-        // v1 / non-opted-in responses stay byte-identical.
+        // v1 / non-opted-in responses stay byte-identical. The reserved-field
+        // owner comes from the egress that minted the fields, never from the
+        // disposition (Phase 114 plan 10).
         crate::server::core::inject_v2_result_envelope(
             &mut response,
             protocol_context.as_ref(),
             &self.info,
             disposition,
+            reserved_field_owner,
         );
         response
     }
