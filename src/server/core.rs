@@ -1092,8 +1092,50 @@ impl crate::server::middleware_executor::MiddlewareExecutor for ServerCore {
 /// tests) working against the one shared definition.
 pub(crate) use crate::types::protocol::ServerDiscoverResult;
 
+/// The `experimental` sub-key some MCP 2025-11-25 servers advertise the task
+/// lifecycle under, before it became a first-class `capabilities.tasks` field.
+///
+/// It is suppressed on v2 for the same reason `capabilities.tasks` is: on
+/// MCP 2026-07-28 tasks live in the Extensions Track, and an `experimental.tasks`
+/// flag on a v2 wire tells a client to use a negotiation home that does not exist
+/// there. Only THIS key is removed — this phase does not own any other
+/// `experimental` entry, and suppressing the whole block was explicitly rejected
+/// (D-02).
+const EXPERIMENTAL_TASKS_KEY: &str = "tasks";
+
+/// Project a server's already-computed capabilities onto the MCP 2026-07-28
+/// wire (plan 114-05, D-02).
+///
+/// Returns a CLONE. The caller's `capabilities` are never mutated — see
+/// [`discover_result_from_capabilities`] for why that matters.
+///
+/// Two edits, both suppressions:
+///
+/// - `capabilities.tasks` is cleared. On v2 the task lifecycle is an EXTENSION,
+///   negotiated under
+///   [`TASKS_EXTENSION_KEY`](crate::types::capabilities::TASKS_EXTENSION_KEY) in
+///   the `extensions` map, and `capabilities.tasks` is a v1 spelling a v2 client
+///   has no rule for reading.
+/// - the `tasks` key is removed from `capabilities.experimental`, if present.
+///
+/// `extensions` is emitted UNCHANGED, tasks entry included: the entry is written
+/// once, at build time, by the single shared
+/// `task_dispatch::apply_tasks_capability_rule`, so this projection reads it
+/// rather than re-deriving it. If the resulting `experimental` map is left empty
+/// it is emitted as `{}` rather than dropped — "omit an emptied map" would be a
+/// second, unrelated wire-shape rule this phase does not own, and an empty object
+/// advertises nothing.
+fn project_capabilities_for_v2(capabilities: &ServerCapabilities) -> ServerCapabilities {
+    let mut projected = capabilities.clone();
+    projected.tasks = None;
+    if let Some(experimental) = projected.experimental.as_mut() {
+        experimental.remove(EXPERIMENTAL_TASKS_KEY);
+    }
+    projected
+}
+
 /// Isolated conversion fn producing the [`ServerDiscoverResult`] wire shape
-/// (Phase 112, VERS-04).
+/// (Phase 112, VERS-04; era projection added by plan 114-05, D-02).
 ///
 /// This is the SINGLE place the discover wire shape is assembled: it projects
 /// the already-computed `capabilities` (including `extensions`) and `info`
@@ -1101,6 +1143,31 @@ pub(crate) use crate::types::protocol::ServerDiscoverResult;
 /// initialize-style side effect. Keeping the shape behind one fn means a
 /// final-spec change is localized (Codex MEDIUM — "server/discover wire shape is
 /// provisional").
+///
+/// # The projection is PER-REQUEST-ERA and MUST NOT mutate stored capabilities
+///
+/// [`project_capabilities_for_v2`] works on a CLONE, deliberately. A server's
+/// `capabilities` are per-SERVER while the projection is per-REQUEST-ERA: one
+/// pmcp binary serves both eras, so mutating the stored struct here would make
+/// the first v2 `server/discover` permanently change what every subsequent v1
+/// `initialize` client sees. That is a cross-request state leak, not an
+/// optimisation — do not "avoid the clone" by taking `&mut`.
+///
+/// # Why the projection is applied unconditionally rather than era-gated here
+///
+/// `server/discover` is a v2-ONLY method: [`build_discover_response`] answers
+/// `-32601` for any request that is not `Era::V2` BEFORE reaching this fn, so
+/// every wire shape assembled here is by construction a v2 one. The v1
+/// `initialize` response does not flow through this fn at all — it is built from
+/// `self.capabilities.clone()` directly, in `ServerCore::handle_initialize`
+/// (`core.rs`), `Server::handle_request` (`server/mod.rs`) and
+/// `WasmServer` (`server/wasm_server.rs`). That is why v1 bytes are frozen by
+/// leaving the v1 path untouched rather than by adding a branch here.
+///
+/// The anti-pattern this deliberately avoids: doing the suppression as a serde
+/// change in `src/types/capabilities.rs`. That would alter the `initialize`
+/// bytes of every existing tasks server on every era, which is exactly the lock
+/// D-02 exists to hold.
 pub(crate) fn discover_result_from_capabilities(
     capabilities: &ServerCapabilities,
     info: &Implementation,
@@ -1108,7 +1175,7 @@ pub(crate) fn discover_result_from_capabilities(
 ) -> ServerDiscoverResult {
     ServerDiscoverResult {
         protocol_version: negotiated_version,
-        capabilities: capabilities.clone(),
+        capabilities: project_capabilities_for_v2(capabilities),
         server_info: info.clone(),
     }
 }
@@ -3860,6 +3927,114 @@ mod tests {
             "serverInfo": { "name": "golden-server", "version": "1.2.3" }
         });
         assert_eq!(value, expected, "discover wire shape drifted from golden");
+    }
+
+    // ---- Plan 114-05 (TASK-01, D-02): the per-era capability projection ----
+
+    /// A tasks-backed server's capabilities as the build-time rule leaves them:
+    /// the v1 `tasks` capability, the v2 extensions entry, an `experimental`
+    /// map carrying BOTH a `tasks` flag and an unrelated one.
+    fn tasks_backed_capabilities() -> ServerCapabilities {
+        let mut caps = ServerCapabilities::default();
+        crate::server::task_dispatch::apply_tasks_capability_rule(&mut caps, &HashMap::new(), true)
+            .unwrap();
+        let mut experimental = HashMap::new();
+        experimental.insert("tasks".to_string(), serde_json::json!({ "legacy": true }));
+        experimental.insert("io.example/flag".to_string(), serde_json::json!(true));
+        caps.experimental = Some(experimental);
+        caps
+    }
+
+    /// The v2 projection shows the extension and hides BOTH v1 spellings.
+    #[test]
+    fn server_discover_projects_the_tasks_extension_and_hides_the_v1_tasks_keys() {
+        let info = Implementation::new("tasks-server", "1.0.0");
+        let result = discover_result_from_capabilities(
+            &tasks_backed_capabilities(),
+            &info,
+            "2026-07-28".to_string(),
+        );
+        let value = serde_json::to_value(&result).unwrap();
+        let caps = &value["capabilities"];
+
+        assert_eq!(
+            caps["extensions"][crate::types::capabilities::TASKS_EXTENSION_KEY],
+            serde_json::json!({}),
+            "v2 discover must advertise the tasks extension as the empty object: {value}"
+        );
+        // Key ABSENCE, never a falsy value: `skip_serializing_if` keeps `None`
+        // off the wire entirely, so accepting `null` here would pass on a change
+        // that started emitting an explicit null.
+        assert!(
+            caps.get("tasks").is_none(),
+            "the v1 `tasks` capability must be ABSENT from a v2 discover: {value}"
+        );
+        assert!(
+            caps["experimental"].get("tasks").is_none(),
+            "the v1 `experimental.tasks` flag must be ABSENT from a v2 discover: {value}"
+        );
+    }
+
+    /// A non-tasks `experimental` key SURVIVES the v2 projection.
+    ///
+    /// D-02 rejected suppressing the whole `experimental` block; this phase owns
+    /// exactly one key in it.
+    #[test]
+    fn server_discover_preserves_unrelated_experimental_keys() {
+        let info = Implementation::new("tasks-server", "1.0.0");
+        let result = discover_result_from_capabilities(
+            &tasks_backed_capabilities(),
+            &info,
+            "2026-07-28".to_string(),
+        );
+        let value = serde_json::to_value(&result).unwrap();
+        assert_eq!(
+            value["capabilities"]["experimental"]["io.example/flag"],
+            serde_json::json!(true),
+            "an unrelated experimental key must survive the v2 projection: {value}"
+        );
+    }
+
+    /// Two successive projections of the SAME capabilities yield identical
+    /// output, and the source struct is unchanged after both.
+    ///
+    /// The regression guard for a projection that mutated stored state: under
+    /// that bug the first v2 `server/discover` would permanently change what a
+    /// subsequent v1 `initialize` client sees.
+    #[test]
+    fn server_discover_projection_never_mutates_the_stored_capabilities() {
+        let caps = tasks_backed_capabilities();
+        let before = serde_json::to_value(&caps).unwrap();
+        let info = Implementation::new("tasks-server", "1.0.0");
+
+        let first = serde_json::to_value(discover_result_from_capabilities(
+            &caps,
+            &info,
+            "2026-07-28".to_string(),
+        ))
+        .unwrap();
+        let second = serde_json::to_value(discover_result_from_capabilities(
+            &caps,
+            &info,
+            "2026-07-28".to_string(),
+        ))
+        .unwrap();
+
+        assert_eq!(
+            first, second,
+            "two projections of one server must be identical — no accumulated mutation"
+        );
+        assert_eq!(
+            serde_json::to_value(&caps).unwrap(),
+            before,
+            "the projection must leave the server's OWN capabilities untouched: \
+             they are per-server, the projection is per-request-era"
+        );
+        assert!(
+            caps.tasks.is_some(),
+            "specifically, the v1 tasks capability must still be there for the \
+             next v1 initialize client"
+        );
     }
 
     // ---- Phase 112 Plan 05: resultType + serverInfo envelope (VERS-07) ----
