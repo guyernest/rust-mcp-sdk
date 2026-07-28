@@ -276,6 +276,63 @@ pub struct TaskInputDelivery {
     pub complete: bool,
 }
 
+/// Decide one `tasks/update` delivery: which delivered keys are accepted,
+/// which are ignored, and whether the task's input set is now complete.
+///
+/// Pure and storage-agnostic — it reads key sets only, never values, which is
+/// what lets the typed in-crate store and the `serde_json`-shaped generic
+/// store share ONE copy of this policy across the crate boundary. Callers
+/// persist the accepted values themselves; this function decides nothing about
+/// persistence and mutates nothing.
+///
+/// `complete` is computed from the post-delivery answer set (already-answered
+/// UNION accepted), so it does not require the caller to have inserted
+/// anything yet.
+///
+/// # Examples
+///
+/// ```
+/// use std::collections::BTreeSet;
+/// use pmcp::server::task_store::partition_input_delivery;
+///
+/// let outstanding: BTreeSet<String> = ["city".to_string(), "date".to_string()]
+///     .into_iter()
+///     .collect();
+///
+/// // A partial delivery: `city` is accepted, `never-issued` is ignored, and the
+/// // outstanding set is NOT yet complete because `date` is still unanswered.
+/// let delivery = partition_input_delivery(
+///     &outstanding,
+///     |_key| false,
+///     ["city".to_string(), "never-issued".to_string()],
+/// );
+/// assert!(delivery.accepted.contains("city"));
+/// assert!(delivery.ignored.contains("never-issued"));
+/// assert!(!delivery.complete);
+/// ```
+pub fn partition_input_delivery(
+    outstanding: &BTreeSet<String>,
+    already_answered: impl Fn(&str) -> bool,
+    delivered: impl IntoIterator<Item = String>,
+) -> TaskInputDelivery {
+    let mut delivery = TaskInputDelivery::default();
+    for key in delivered {
+        if outstanding.contains(&key) && !already_answered(&key) {
+            delivery.accepted.insert(key);
+        } else {
+            // Never issued, already answered, or superseded. Ignoring is the
+            // specified behaviour, not an error — and an already-answered key
+            // is never re-accepted, so a response cannot be replayed over.
+            delivery.ignored.insert(key);
+        }
+    }
+    delivery.complete = !outstanding.is_empty()
+        && outstanding
+            .iter()
+            .all(|key| delivery.accepted.contains(key) || already_answered(key));
+    delivery
+}
+
 /// A normalized, owner-scoped view of one task's input state, returned by
 /// [`TaskStore::task_input_snapshot`].
 ///
@@ -345,7 +402,11 @@ impl TaskInputSnapshot {
     /// A task with NO recorded requests is not "complete" — there is nothing to
     /// answer, so it cannot be resumed by a delivery.
     pub fn is_complete(&self) -> bool {
-        !self.input_requests.is_empty() && self.outstanding().is_empty()
+        !self.input_requests.is_empty()
+            && self
+                .input_requests
+                .keys()
+                .all(|key| self.input_responses.contains_key(key))
     }
 }
 
@@ -456,11 +517,10 @@ pub trait TaskStore: Send + Sync {
     /// ```
     async fn set_result(
         &self,
-        task_id: &str,
+        _task_id: &str,
         _owner_id: &str,
         _result: crate::types::CallToolResult,
     ) -> Result<(), TaskStoreError> {
-        let _ = task_id;
         Err(TaskStoreError::Internal {
             message: "store does not support terminal results".to_string(),
         })
@@ -604,11 +664,10 @@ pub trait TaskStore: Send + Sync {
     /// ```
     async fn deliver_task_inputs(
         &self,
-        task_id: &str,
+        _task_id: &str,
         _owner_id: &str,
         _responses: InputResponses,
     ) -> Result<TaskInputDelivery, TaskStoreError> {
-        let _ = task_id;
         Err(TaskStoreError::Internal {
             message: "store does not support task input delivery".to_string(),
         })
@@ -731,11 +790,10 @@ pub trait TaskStore: Send + Sync {
     /// ```
     async fn record_input_requests(
         &self,
-        task_id: &str,
+        _task_id: &str,
         _owner_id: &str,
         _requests: InputRequests,
     ) -> Result<Task, TaskStoreError> {
-        let _ = task_id;
         Err(TaskStoreError::Internal {
             message: "store does not support recording task input requests".to_string(),
         })
@@ -787,11 +845,10 @@ pub trait TaskStore: Send + Sync {
     /// ```
     async fn set_error(
         &self,
-        task_id: &str,
+        _task_id: &str,
         _owner_id: &str,
         _error: serde_json::Value,
     ) -> Result<(), TaskStoreError> {
-        let _ = task_id;
         Err(TaskStoreError::Internal {
             message: "store does not support task errors".to_string(),
         })
@@ -1214,31 +1271,32 @@ impl TaskStore for InMemoryTaskStore {
             .map(|requests| requests.keys().cloned().collect())
             .unwrap_or_default();
 
-        let mut delivery = TaskInputDelivery::default();
+        // The accept/ignore/complete decision is the SHARED policy, not a local
+        // one: `partition_input_delivery` is the single copy this store and the
+        // `pmcp-tasks` generic store both call, so the two cannot drift apart.
+        // The closure's borrow of `input_responses` ends with the call, which is
+        // what lets the persistence loop below take `&mut` afterwards.
+        let delivery = partition_input_delivery(
+            &outstanding,
+            |key| {
+                record
+                    .input_responses
+                    .as_ref()
+                    .is_some_and(|answered| answered.contains_key(key))
+            },
+            responses.keys().cloned(),
+        );
+
+        // Persist ONLY the accepted values; the ignored ones are reported back
+        // and dropped.
         for (key, response) in responses {
-            let already_answered = record
-                .input_responses
-                .as_ref()
-                .is_some_and(|answered| answered.contains_key(&key));
-            if outstanding.contains(&key) && !already_answered {
+            if delivery.accepted.contains(&key) {
                 record
                     .input_responses
                     .get_or_insert_with(InputResponses::new)
-                    .insert(key.clone(), response);
-                delivery.accepted.insert(key);
-            } else {
-                // Never issued, already answered, or superseded. Ignored rather
-                // than an error, per spec — and an already-answered key is never
-                // re-accepted, so a delivered response cannot be replayed over.
-                delivery.ignored.insert(key);
+                    .insert(key, response);
             }
         }
-
-        delivery.complete = !outstanding.is_empty()
-            && record
-                .input_responses
-                .as_ref()
-                .is_some_and(|answered| outstanding.iter().all(|key| answered.contains_key(key)));
 
         // The atomic unit is (persist responses [+ transition iff now complete]).
         // A PARTIAL delivery persists its responses and the task STAYS

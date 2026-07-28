@@ -35,6 +35,7 @@
 
 use std::collections::{BTreeSet, HashMap};
 
+use pmcp::server::task_store::partition_input_delivery;
 use serde_json::{json, Map, Value};
 
 use crate::domain::record::{validate_variables, TaskRecord};
@@ -218,17 +219,7 @@ impl<B: StorageBackend> GenericTaskStore<B> {
         record.version = versioned.version;
 
         // Defense in depth: verify owner_id even though key is scoped
-        if record.owner_id != owner_id {
-            tracing::warn!(
-                task_id = task_id,
-                expected_owner = owner_id,
-                actual_owner = record.owner_id,
-                "owner mismatch on task get (returning NotFound)"
-            );
-            return Err(TaskError::NotFound {
-                task_id: task_id.to_string(),
-            });
-        }
+        Self::check_owner(&record, task_id, owner_id, "get")?;
 
         Ok(record)
     }
@@ -255,25 +246,10 @@ impl<B: StorageBackend> GenericTaskStore<B> {
         record.version = versioned.version;
 
         // Owner isolation
-        if record.owner_id != owner_id {
-            tracing::warn!(
-                task_id = task_id,
-                expected_owner = owner_id,
-                actual_owner = record.owner_id,
-                "owner mismatch on task update_status (returning NotFound)"
-            );
-            return Err(TaskError::NotFound {
-                task_id: task_id.to_string(),
-            });
-        }
+        Self::check_owner(&record, task_id, owner_id, "update_status")?;
 
         // Reject mutations on expired tasks
-        if record.is_expired() {
-            return Err(TaskError::Expired {
-                task_id: task_id.to_string(),
-                expired_at: record.expires_at.map(|e| e.to_rfc3339()),
-            });
-        }
+        Self::check_not_expired(&record, task_id)?;
 
         // Validate state machine transition
         record
@@ -284,8 +260,7 @@ impl<B: StorageBackend> GenericTaskStore<B> {
         // Apply transition
         record.task.status = new_status;
         record.task.status_message = status_message;
-        record.task.last_updated_at =
-            chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+        Self::touch(&mut record);
 
         // CAS write
         let bytes = Self::serialize_record(&record)?;
@@ -320,25 +295,10 @@ impl<B: StorageBackend> GenericTaskStore<B> {
         record.version = versioned.version;
 
         // Owner isolation
-        if record.owner_id != owner_id {
-            tracing::warn!(
-                task_id = task_id,
-                expected_owner = owner_id,
-                actual_owner = record.owner_id,
-                "owner mismatch on task set_variables (returning NotFound)"
-            );
-            return Err(TaskError::NotFound {
-                task_id: task_id.to_string(),
-            });
-        }
+        Self::check_owner(&record, task_id, owner_id, "set_variables")?;
 
         // Reject mutations on expired tasks
-        if record.is_expired() {
-            return Err(TaskError::Expired {
-                task_id: task_id.to_string(),
-                expired_at: record.expires_at.map(|e| e.to_rfc3339()),
-            });
-        }
+        Self::check_not_expired(&record, task_id)?;
 
         // Validate incoming variables for depth bombs and long strings
         validate_variables(
@@ -371,8 +331,7 @@ impl<B: StorageBackend> GenericTaskStore<B> {
 
         // Commit the merged variables
         record.variables = merged;
-        record.task.last_updated_at =
-            chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+        Self::touch(&mut record);
 
         // CAS write
         let bytes = Self::serialize_record(&record)?;
@@ -404,29 +363,13 @@ impl<B: StorageBackend> GenericTaskStore<B> {
         record.version = versioned.version;
 
         // Owner isolation
-        if record.owner_id != owner_id {
-            tracing::warn!(
-                task_id = task_id,
-                expected_owner = owner_id,
-                actual_owner = record.owner_id,
-                "owner mismatch on task set_result (returning NotFound)"
-            );
-            return Err(TaskError::NotFound {
-                task_id: task_id.to_string(),
-            });
-        }
+        Self::check_owner(&record, task_id, owner_id, "set_result")?;
 
         // Reject mutations on expired tasks
-        if record.is_expired() {
-            return Err(TaskError::Expired {
-                task_id: task_id.to_string(),
-                expired_at: record.expires_at.map(|e| e.to_rfc3339()),
-            });
-        }
+        Self::check_not_expired(&record, task_id)?;
 
         record.result = Some(result);
-        record.task.last_updated_at =
-            chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+        Self::touch(&mut record);
 
         // CAS write
         let bytes = Self::serialize_record(&record)?;
@@ -481,25 +424,10 @@ impl<B: StorageBackend> GenericTaskStore<B> {
         record.version = versioned.version;
 
         // Owner isolation
-        if record.owner_id != owner_id {
-            tracing::warn!(
-                task_id = task_id,
-                expected_owner = owner_id,
-                actual_owner = record.owner_id,
-                "owner mismatch on task complete_with_result (returning NotFound)"
-            );
-            return Err(TaskError::NotFound {
-                task_id: task_id.to_string(),
-            });
-        }
+        Self::check_owner(&record, task_id, owner_id, "complete_with_result")?;
 
         // Reject mutations on expired tasks
-        if record.is_expired() {
-            return Err(TaskError::Expired {
-                task_id: task_id.to_string(),
-                expired_at: record.expires_at.map(|e| e.to_rfc3339()),
-            });
-        }
+        Self::check_not_expired(&record, task_id)?;
 
         // Validate state machine transition
         record.task.status.validate_transition(task_id, &status)?;
@@ -508,8 +436,7 @@ impl<B: StorageBackend> GenericTaskStore<B> {
         record.task.status = status;
         record.task.status_message = status_message;
         record.result = Some(result);
-        record.task.last_updated_at =
-            chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+        Self::touch(&mut record);
 
         // CAS write
         let bytes = Self::serialize_record(&record)?;
@@ -599,18 +526,13 @@ impl<B: StorageBackend> GenericTaskStore<B> {
     }
 
     // -----------------------------------------------------------------------
-    // v2 tasks extension: input delivery
+    // Shared record guards
     //
-    // These live here, once, for the same reason every other domain operation
-    // does: `GenericTaskStore<B>` is the ONE implementation and the backends are
-    // dumb KV stores, so the in-memory, DynamoDB and Redis deployments share
-    // identical semantics with zero divergence. Each operation below is a single
-    // `put_if_version` compare-and-set. There is deliberately NO internal retry
-    // and NO mutex around the read-then-write: a mutex would be local to one
-    // process and would not prevent a lost update across two Lambda invocations
-    // or two server instances, which is exactly the failure the CAS primitive
-    // exists to prevent. A conflict propagates to the caller as
-    // `ConcurrentModification` — first writer wins, second writer is told.
+    // Every domain operation above and below runs the same three steps against a
+    // freshly-read record: prove the owner, refuse an expired task, stamp the
+    // update time. They live here ONCE. The owner rule in particular is
+    // security-critical — six hand-inlined copies is six places for a `NotFound`
+    // to become something that reveals another owner's task exists.
     // -----------------------------------------------------------------------
 
     /// Owner isolation, defence in depth.
@@ -620,6 +542,9 @@ impl<B: StorageBackend> GenericTaskStore<B> {
     /// check catches a record whose stored `ownerId` disagrees with the key it
     /// was found under, and reports it as `NotFound` so the store never reveals
     /// that a task exists for someone else.
+    ///
+    /// `op` names the calling operation and travels as a structured log field,
+    /// so one message text serves every call site without any of them drifting.
     fn check_owner(
         record: &TaskRecord,
         task_id: &str,
@@ -634,7 +559,7 @@ impl<B: StorageBackend> GenericTaskStore<B> {
             expected_owner = owner_id,
             actual_owner = record.owner_id,
             operation = op,
-            "owner mismatch on task input operation (returning NotFound)"
+            "owner mismatch on task operation (returning NotFound)"
         );
         Err(TaskError::NotFound {
             task_id: task_id.to_string(),
@@ -652,6 +577,28 @@ impl<B: StorageBackend> GenericTaskStore<B> {
         Ok(())
     }
 
+    /// Stamps `lastUpdatedAt` with the store's canonical millisecond-precision
+    /// RFC 3339 encoding.
+    fn touch(record: &mut TaskRecord) {
+        record.task.last_updated_at =
+            chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+    }
+
+    // -----------------------------------------------------------------------
+    // v2 tasks extension: input delivery
+    //
+    // These live here, once, for the same reason every other domain operation
+    // does: `GenericTaskStore<B>` is the ONE implementation and the backends are
+    // dumb KV stores, so the in-memory, DynamoDB and Redis deployments share
+    // identical semantics with zero divergence. Each operation below is a single
+    // `put_if_version` compare-and-set. There is deliberately NO internal retry
+    // and NO mutex around the read-then-write: a mutex would be local to one
+    // process and would not prevent a lost update across two Lambda invocations
+    // or two server instances, which is exactly the failure the CAS primitive
+    // exists to prevent. A conflict propagates to the caller as
+    // `ConcurrentModification` — first writer wins, second writer is told.
+    // -----------------------------------------------------------------------
+
     /// Interprets a seam value as a JSON object. `null` and an absent value both
     /// mean "empty", which is what lets a pre-v2 record and an omitted parameter
     /// read the same way.
@@ -664,11 +611,6 @@ impl<B: StorageBackend> GenericTaskStore<B> {
                 json_type_name(&other)
             ))),
         }
-    }
-
-    fn touch(record: &mut TaskRecord) {
-        record.task.last_updated_at =
-            chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
     }
 
     /// Delivers a client's `inputResponses` against the task's server-recorded
@@ -731,35 +673,39 @@ impl<B: StorageBackend> GenericTaskStore<B> {
             .map(|requests| requests.keys().cloned().collect())
             .unwrap_or_default();
 
-        let mut accepted: BTreeSet<String> = BTreeSet::new();
-        let mut ignored: BTreeSet<String> = BTreeSet::new();
+        // The accept/ignore/complete decision is the SHARED policy, imported from
+        // `pmcp` rather than restated here. It reads key sets only, never values,
+        // which is what lets this `serde_json`-shaped store and the typed in-crate
+        // `InMemoryTaskStore` run the SAME decision procedure — the two copies had
+        // already begun to drift before it was extracted. The closure's borrow of
+        // `input_responses` ends with the call, leaving the persistence loop free
+        // to take `&mut`.
+        let delivery = partition_input_delivery(
+            &outstanding,
+            |wanted| {
+                record
+                    .input_responses
+                    .as_ref()
+                    .is_some_and(|answered| answered.contains_key(wanted))
+            },
+            delivered.keys().cloned(),
+        );
+
+        // Persist ONLY the accepted values; the ignored ones are reported back
+        // and dropped.
         for (delivered_key, response) in delivered {
-            let already_answered = record
-                .input_responses
-                .as_ref()
-                .is_some_and(|answered| answered.contains_key(&delivered_key));
-            if outstanding.contains(&delivered_key) && !already_answered {
+            if delivery.accepted.contains(&delivered_key) {
                 record
                     .input_responses
                     .get_or_insert_with(Map::new)
-                    .insert(delivered_key.clone(), response);
-                accepted.insert(delivered_key);
-            } else {
-                ignored.insert(delivered_key);
+                    .insert(delivered_key, response);
             }
         }
-
-        let complete = !outstanding.is_empty()
-            && record.input_responses.as_ref().is_some_and(|answered| {
-                outstanding
-                    .iter()
-                    .all(|wanted| answered.contains_key(wanted))
-            });
 
         // The `accepted` guard means a delivery that changed nothing cannot
         // resume a paused task: vacuous completeness would let a caller restart
         // a task using only keys the server never issued.
-        if complete && !accepted.is_empty() {
+        if delivery.complete && !delivery.accepted.is_empty() {
             record.task.status = TaskStatus::Working;
         }
         Self::touch(&mut record);
@@ -771,9 +717,9 @@ impl<B: StorageBackend> GenericTaskStore<B> {
             .map_err(|e| Self::map_storage_error(e, task_id))?;
 
         Ok(json!({
-            "accepted": accepted,
-            "ignored": ignored,
-            "complete": complete,
+            "accepted": delivery.accepted,
+            "ignored": delivery.ignored,
+            "complete": delivery.complete,
         }))
     }
 

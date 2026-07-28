@@ -471,11 +471,10 @@ pub trait TaskStore: Send + Sync {
     ///   a JSON object.
     async fn deliver_inputs(
         &self,
-        task_id: &str,
+        _task_id: &str,
         _owner_id: &str,
         _responses: Value,
     ) -> Result<Value, TaskError> {
-        let _ = task_id;
         Err(TaskError::StoreError(
             "store does not support task input delivery".to_string(),
         ))
@@ -539,11 +538,10 @@ pub trait TaskStore: Send + Sync {
     ///   erase a response already delivered against it).
     async fn record_input_requests(
         &self,
-        task_id: &str,
+        _task_id: &str,
         _owner_id: &str,
         _requests: Value,
     ) -> Result<Value, TaskError> {
-        let _ = task_id;
         Err(TaskError::StoreError(
             "store does not support recording task input requests".to_string(),
         ))
@@ -568,11 +566,10 @@ pub trait TaskStore: Send + Sync {
     /// - [`TaskError::StoreError`] on backend failures.
     async fn set_error(
         &self,
-        task_id: &str,
+        _task_id: &str,
         _owner_id: &str,
         _error: Value,
     ) -> Result<(), TaskError> {
-        let _ = task_id;
         Err(TaskError::StoreError(
             "store does not support task errors".to_string(),
         ))
