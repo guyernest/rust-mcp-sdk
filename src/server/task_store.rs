@@ -866,20 +866,11 @@ struct TaskRecord {
     result: Option<CallToolResult>,
     /// Absent until the server records what it needs; `Some(empty)` is a
     /// distinct, meaningful state ("a round that asked for nothing").
-    //
-    // `allow(dead_code)`: written by `create` here, READ by the
-    // `InMemoryTaskStore` input overrides that land in the very next commit of
-    // this plan. `RUSTFLAGS = -D warnings` makes an unread private field a hard
-    // lint error, so this keeps the trait-seam commit lint-green on its own; the
-    // allow is removed the moment the reads exist.
-    #[allow(dead_code)]
     input_requests: Option<InputRequests>,
     /// Absent until a response is delivered against `input_requests`.
-    #[allow(dead_code)]
     input_responses: Option<InputResponses>,
     /// The JSON-RPC error object for a `failed` task, carried verbatim as a
     /// `Value` across the same seam the task router sits below.
-    #[allow(dead_code)]
     error: Option<serde_json::Value>,
 }
 
@@ -1154,6 +1145,212 @@ impl TaskStore for InMemoryTaskStore {
     }
 
     fn supports_results(&self) -> bool {
+        true
+    }
+
+    /// Deliver responses against the server-recorded requests.
+    ///
+    /// The whole read / partition / write runs under ONE `DashMap` entry guard
+    /// with no intervening `.await`, so two concurrent deliveries cannot
+    /// interleave and lose an update. (The compare-and-swap equivalent for the
+    /// production backends is a versioned put; this store gets the same property
+    /// from the guard.)
+    ///
+    /// Bounds on the delivered payload — entry count, per-entry size, total size
+    /// and nesting depth — are NOT checked here. They are enforced at request
+    /// ingress before any decode; see the trait method's docs.
+    async fn deliver_task_inputs(
+        &self,
+        task_id: &str,
+        owner_id: &str,
+        responses: InputResponses,
+    ) -> Result<TaskInputDelivery, TaskStoreError> {
+        let mut entry = self
+            .records
+            .get_mut(task_id)
+            .ok_or_else(|| TaskStoreError::NotFound {
+                task_id: task_id.to_string(),
+            })?;
+        let record = entry.value_mut();
+        Self::validate_access(record, task_id, owner_id)?;
+
+        // Only a task that is AWAITING input may be fed, and the check runs
+        // through the shared state machine rather than a hand-written match.
+        // The predicate is exact: `can_transition_to(Working)` is true for
+        // `InputRequired` ALONE — `Working -> Working` is rejected as a
+        // self-transition, and every terminal state is rejected outright.
+        if !record.task.status.can_transition_to(&TaskStatus::Working) {
+            return Err(TaskStoreError::InvalidTransition {
+                task_id: task_id.to_string(),
+                from: record.task.status,
+                to: TaskStatus::Working,
+            });
+        }
+
+        let outstanding: BTreeSet<String> = record
+            .input_requests
+            .as_ref()
+            .map(|requests| requests.keys().cloned().collect())
+            .unwrap_or_default();
+
+        let mut delivery = TaskInputDelivery::default();
+        for (key, response) in responses {
+            let already_answered = record
+                .input_responses
+                .as_ref()
+                .is_some_and(|answered| answered.contains_key(&key));
+            if outstanding.contains(&key) && !already_answered {
+                record
+                    .input_responses
+                    .get_or_insert_with(InputResponses::new)
+                    .insert(key.clone(), response);
+                delivery.accepted.insert(key);
+            } else {
+                // Never issued, already answered, or superseded. Ignored rather
+                // than an error, per spec — and an already-answered key is never
+                // re-accepted, so a delivered response cannot be replayed over.
+                delivery.ignored.insert(key);
+            }
+        }
+
+        delivery.complete = !outstanding.is_empty()
+            && record
+                .input_responses
+                .as_ref()
+                .is_some_and(|answered| outstanding.iter().all(|key| answered.contains_key(key)));
+
+        // The atomic unit is (persist responses [+ transition iff now complete]).
+        // A PARTIAL delivery persists its responses and the task STAYS
+        // `input_required` until the rest arrive. The `accepted` guard means a
+        // delivery that changed nothing cannot resume a paused task.
+        if delivery.complete && !delivery.accepted.is_empty() {
+            record.task.status = TaskStatus::Working;
+            record.task.last_updated_at = chrono::Utc::now().to_rfc3339();
+        }
+
+        Ok(delivery)
+    }
+
+    async fn task_input_snapshot(
+        &self,
+        task_id: &str,
+        owner_id: &str,
+    ) -> Result<TaskInputSnapshot, TaskStoreError> {
+        let entry = self
+            .records
+            .get(task_id)
+            .ok_or_else(|| TaskStoreError::NotFound {
+                task_id: task_id.to_string(),
+            })?;
+        Self::validate_access(entry.value(), task_id, owner_id)?;
+        let record = entry.value();
+        // No recorded requests means there is no input state to snapshot.
+        let input_requests =
+            record
+                .input_requests
+                .clone()
+                .ok_or_else(|| TaskStoreError::NotFound {
+                    task_id: task_id.to_string(),
+                })?;
+        Ok(TaskInputSnapshot {
+            input_requests,
+            input_responses: record.input_responses.clone().unwrap_or_default(),
+            status: record.task.status,
+        })
+    }
+
+    async fn record_input_requests(
+        &self,
+        task_id: &str,
+        owner_id: &str,
+        requests: InputRequests,
+    ) -> Result<Task, TaskStoreError> {
+        let mut entry = self
+            .records
+            .get_mut(task_id)
+            .ok_or_else(|| TaskStoreError::NotFound {
+                task_id: task_id.to_string(),
+            })?;
+        let record = entry.value_mut();
+        Self::validate_access(record, task_id, owner_id)?;
+
+        // REFUSE rather than overwrite. The in-crate store records exactly one
+        // round per task: a second write would replace the request set the
+        // delivered responses are keyed against, orphaning — and on a superseding
+        // write, erasing — answers already given. A multi-round production
+        // backend may relax this to supersede-with-merge; the dev/test store
+        // makes that failure unreachable by construction instead.
+        if record
+            .input_requests
+            .as_ref()
+            .is_some_and(|recorded| !recorded.is_empty())
+        {
+            return Err(TaskStoreError::Internal {
+                message: format!("task {task_id} already has recorded input requests"),
+            });
+        }
+
+        if !record
+            .task
+            .status
+            .can_transition_to(&TaskStatus::InputRequired)
+        {
+            return Err(TaskStoreError::InvalidTransition {
+                task_id: task_id.to_string(),
+                from: record.task.status,
+                to: TaskStatus::InputRequired,
+            });
+        }
+
+        // Requests and transition land in the SAME write, so a task is never
+        // observable as `input_required` with nothing recorded to answer.
+        record.input_requests = Some(requests);
+        record.task.status = TaskStatus::InputRequired;
+        record.task.last_updated_at = chrono::Utc::now().to_rfc3339();
+        Ok(record.task.clone())
+    }
+
+    async fn set_error(
+        &self,
+        task_id: &str,
+        owner_id: &str,
+        error: serde_json::Value,
+    ) -> Result<(), TaskStoreError> {
+        let mut entry = self
+            .records
+            .get_mut(task_id)
+            .ok_or_else(|| TaskStoreError::NotFound {
+                task_id: task_id.to_string(),
+            })?;
+        let record = entry.value_mut();
+        Self::validate_access(record, task_id, owner_id)?;
+        record.error = Some(error);
+        Ok(())
+    }
+
+    async fn get_error(
+        &self,
+        task_id: &str,
+        owner_id: &str,
+    ) -> Result<serde_json::Value, TaskStoreError> {
+        let entry = self
+            .records
+            .get(task_id)
+            .ok_or_else(|| TaskStoreError::NotFound {
+                task_id: task_id.to_string(),
+            })?;
+        Self::validate_access(entry.value(), task_id, owner_id)?;
+        // A task that exists but recorded no error has none to return.
+        entry
+            .value()
+            .error
+            .clone()
+            .ok_or_else(|| TaskStoreError::NotFound {
+                task_id: task_id.to_string(),
+            })
+    }
+
+    fn supports_inputs(&self) -> bool {
         true
     }
 }
@@ -1612,17 +1809,24 @@ mod tests {
 
     #[tokio::test]
     async fn cleanup_expired_drops_result() {
+        // The TTL must outlive SETUP. `set_result` goes through
+        // `validate_access`, which returns `Expired` once the TTL has elapsed, so
+        // the original 1ms TTL made this test fail under load at the `unwrap()`
+        // below — observed firing while this plan was adding tests to the same
+        // binary. Widened for determinism; the asserted property is unchanged.
+        let ttl_ms: u64 = 500;
+
         let store = InMemoryTaskStore::with_config(StoreConfig {
-            default_ttl_ms: Some(1),
+            default_ttl_ms: Some(ttl_ms),
             ..StoreConfig::default()
         });
-        let created = store.create("owner-1", Some(1)).await.unwrap();
+        let created = store.create("owner-1", Some(ttl_ms)).await.unwrap();
         store
             .set_result(&created.task_id, "owner-1", sample_result("ephemeral"))
             .await
             .unwrap();
 
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        tokio::time::sleep(std::time::Duration::from_millis(ttl_ms + 50)).await;
 
         let removed = store.cleanup_expired().await.unwrap();
         assert_eq!(removed, 1);
@@ -1744,5 +1948,460 @@ mod tests {
             matches!(get, Err(TaskStoreError::NotFound { .. })),
             "default get_error must be NotFound, got: {get:?}"
         );
+    }
+
+    // -- InMemoryTaskStore input delivery --
+
+    use crate::types::elicitation::{ElicitAction, ElicitRequestParams, ElicitResult};
+    use crate::types::mrtr::{InputRequest, InputResponse};
+    use crate::types::roots::ListRootsResult;
+
+    fn elicit_request(message: &str) -> InputRequest {
+        InputRequest::Elicitation(Box::new(ElicitRequestParams::Form {
+            message: message.to_string(),
+            requested_schema: json!({ "type": "object" }),
+        }))
+    }
+
+    fn elicit_response() -> InputResponse {
+        InputResponse::Elicitation(Box::new(ElicitResult {
+            action: ElicitAction::Accept,
+            content: None,
+        }))
+    }
+
+    fn roots_response() -> InputResponse {
+        InputResponse::Roots(Box::new(ListRootsResult { roots: Vec::new() }))
+    }
+
+    fn requests_of(keys: &[&str]) -> InputRequests {
+        let mut requests = InputRequests::new();
+        for key in keys {
+            requests.insert((*key).to_string(), elicit_request(key));
+        }
+        requests
+    }
+
+    fn responses_of(keys: &[&str]) -> InputResponses {
+        let mut responses = InputResponses::new();
+        for key in keys {
+            responses.insert((*key).to_string(), elicit_response());
+        }
+        responses
+    }
+
+    /// A task paused on the given server-recorded keys.
+    async fn paused_task(store: &InMemoryTaskStore, owner: &str, keys: &[&str]) -> Task {
+        let task = store.create(owner, None).await.unwrap();
+        store
+            .record_input_requests(&task.task_id, owner, requests_of(keys))
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn in_memory_store_supports_inputs() {
+        let store = InMemoryTaskStore::new();
+        assert!(store.supports_inputs());
+    }
+
+    #[tokio::test]
+    async fn deliver_inputs_completes_the_outstanding_set_and_transitions() {
+        let store = InMemoryTaskStore::new();
+        let task = paused_task(&store, "owner-1", &["city"]).await;
+
+        let delivery = store
+            .deliver_task_inputs(&task.task_id, "owner-1", responses_of(&["city"]))
+            .await
+            .unwrap();
+
+        assert!(delivery.accepted.contains("city"), "got: {delivery:?}");
+        assert!(delivery.ignored.is_empty(), "got: {delivery:?}");
+        assert!(delivery.complete, "got: {delivery:?}");
+
+        let resumed = store.get(&task.task_id, "owner-1").await.unwrap();
+        assert_eq!(resumed.status, TaskStatus::Working);
+        assert_ne!(
+            resumed.last_updated_at, task.last_updated_at,
+            "a completing delivery must bump last_updated_at"
+        );
+    }
+
+    #[tokio::test]
+    async fn deliver_inputs_partial_set_persists_and_stays_input_required() {
+        let store = InMemoryTaskStore::new();
+        let task = paused_task(&store, "owner-1", &["city", "units"]).await;
+
+        let delivery = store
+            .deliver_task_inputs(&task.task_id, "owner-1", responses_of(&["city"]))
+            .await
+            .unwrap();
+
+        assert!(delivery.accepted.contains("city"), "got: {delivery:?}");
+        assert!(
+            !delivery.complete,
+            "one of two outstanding keys is not a complete set: {delivery:?}"
+        );
+
+        // The task STAYS awaiting input ...
+        let still = store.get(&task.task_id, "owner-1").await.unwrap();
+        assert_eq!(still.status, TaskStatus::InputRequired);
+
+        // ... and the delivered response was persisted all the same.
+        let snapshot = store
+            .task_input_snapshot(&task.task_id, "owner-1")
+            .await
+            .unwrap();
+        assert!(snapshot.input_responses.contains_key("city"));
+        assert_eq!(snapshot.outstanding(), BTreeSet::from(["units"]));
+    }
+
+    #[tokio::test]
+    async fn deliver_inputs_ignores_keys_that_are_not_outstanding() {
+        let store = InMemoryTaskStore::new();
+        let task = paused_task(&store, "owner-1", &["city"]).await;
+
+        let delivery = store
+            .deliver_task_inputs(&task.task_id, "owner-1", responses_of(&["never-issued"]))
+            .await
+            .unwrap();
+
+        assert!(
+            delivery.accepted.is_empty(),
+            "a key the server never issued must not be accepted: {delivery:?}"
+        );
+        assert!(
+            delivery.ignored.contains("never-issued"),
+            "got: {delivery:?}"
+        );
+        assert!(!delivery.complete, "got: {delivery:?}");
+
+        // Ignoring is not an error, but it also cannot resume the task.
+        let still = store.get(&task.task_id, "owner-1").await.unwrap();
+        assert_eq!(still.status, TaskStatus::InputRequired);
+    }
+
+    #[tokio::test]
+    async fn deliver_inputs_ignores_a_key_already_answered() {
+        let store = InMemoryTaskStore::new();
+        let task = paused_task(&store, "owner-1", &["city", "units"]).await;
+
+        store
+            .deliver_task_inputs(&task.task_id, "owner-1", responses_of(&["city"]))
+            .await
+            .unwrap();
+
+        // Replaying the same key must not be re-accepted.
+        let replay = store
+            .deliver_task_inputs(&task.task_id, "owner-1", responses_of(&["city"]))
+            .await
+            .unwrap();
+
+        assert!(
+            replay.accepted.is_empty(),
+            "an already-answered key must not be re-accepted: {replay:?}"
+        );
+        assert!(replay.ignored.contains("city"), "got: {replay:?}");
+        assert!(!replay.complete, "got: {replay:?}");
+    }
+
+    #[tokio::test]
+    async fn deliver_inputs_on_a_completed_task_is_refused() {
+        let store = InMemoryTaskStore::new();
+        let created = store.create("owner-1", None).await.unwrap();
+        store
+            .update_status(&created.task_id, "owner-1", TaskStatus::Completed, None)
+            .await
+            .unwrap();
+
+        let result = store
+            .deliver_task_inputs(&created.task_id, "owner-1", responses_of(&["city"]))
+            .await;
+
+        assert!(
+            matches!(result, Err(TaskStoreError::InvalidTransition { .. })),
+            "a terminal task cannot be fed, got: {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn deliver_inputs_for_another_owner_is_not_found() {
+        let store = InMemoryTaskStore::new();
+        let task = paused_task(&store, "owner-1", &["city"]).await;
+
+        let result = store
+            .deliver_task_inputs(&task.task_id, "owner-2", responses_of(&["city"]))
+            .await;
+
+        let Err(err) = result else {
+            panic!("cross-owner delivery must fail");
+        };
+        assert!(
+            matches!(err, TaskStoreError::NotFound { .. }),
+            "cross-owner delivery must be NotFound, got: {err:?}"
+        );
+        // The refusal must not disclose that the task belongs to someone else.
+        let rendered = err.to_string();
+        assert!(
+            !rendered.contains("owner"),
+            "refusal leaked the word `owner`: {rendered}"
+        );
+        assert!(
+            !rendered.contains("owner-1"),
+            "refusal leaked the other owner's id: {rendered}"
+        );
+    }
+
+    // -- Snapshot / record_input_requests / error accessors --
+
+    #[tokio::test]
+    async fn snapshot_returns_the_server_recorded_kinds_and_delivered_responses() {
+        let store = InMemoryTaskStore::new();
+        let created = store.create("owner-1", None).await.unwrap();
+
+        // Two DIFFERENT kinds, so the snapshot proves it reports the kind the
+        // server recorded per key rather than one blanket kind.
+        let mut requests = InputRequests::new();
+        requests.insert("city".to_string(), elicit_request("Which city?"));
+        requests.insert("roots".to_string(), InputRequest::ListRoots);
+        store
+            .record_input_requests(&created.task_id, "owner-1", requests)
+            .await
+            .unwrap();
+
+        let mut delivered = InputResponses::new();
+        delivered.insert("roots".to_string(), roots_response());
+        store
+            .deliver_task_inputs(&created.task_id, "owner-1", delivered)
+            .await
+            .unwrap();
+
+        let snapshot = store
+            .task_input_snapshot(&created.task_id, "owner-1")
+            .await
+            .unwrap();
+
+        assert_eq!(
+            snapshot.kind_of("city"),
+            Some(InputRequestKind::Elicitation)
+        );
+        assert_eq!(snapshot.kind_of("roots"), Some(InputRequestKind::Roots));
+        assert_eq!(
+            snapshot.kind_of("never-issued"),
+            None,
+            "a key the server never issued has no kind to decode against"
+        );
+        assert!(snapshot.input_responses.contains_key("roots"));
+        assert_eq!(snapshot.outstanding(), BTreeSet::from(["city"]));
+        assert!(!snapshot.is_complete());
+        assert_eq!(snapshot.status, TaskStatus::InputRequired);
+    }
+
+    #[tokio::test]
+    async fn snapshot_for_another_owner_is_not_found() {
+        let store = InMemoryTaskStore::new();
+        let task = paused_task(&store, "owner-1", &["city"]).await;
+
+        let result = store.task_input_snapshot(&task.task_id, "owner-2").await;
+
+        let Err(err) = result else {
+            panic!("cross-owner snapshot must fail");
+        };
+        assert!(
+            matches!(err, TaskStoreError::NotFound { .. }),
+            "cross-owner snapshot must be NotFound, got: {err:?}"
+        );
+        let rendered = err.to_string();
+        assert!(
+            !rendered.contains("owner"),
+            "refusal leaked the word `owner`: {rendered}"
+        );
+        assert!(
+            !rendered.contains("owner-1"),
+            "refusal leaked the other owner's id: {rendered}"
+        );
+    }
+
+    #[tokio::test]
+    async fn snapshot_without_recorded_requests_is_not_found() {
+        let store = InMemoryTaskStore::new();
+        let created = store.create("owner-1", None).await.unwrap();
+        let result = store.task_input_snapshot(&created.task_id, "owner-1").await;
+        assert!(
+            matches!(result, Err(TaskStoreError::NotFound { .. })),
+            "a task with no recorded requests has no snapshot, got: {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn record_input_requests_transitions_to_input_required() {
+        let store = InMemoryTaskStore::new();
+        let created = store.create("owner-1", None).await.unwrap();
+        assert_eq!(created.status, TaskStatus::Working);
+
+        let paused = store
+            .record_input_requests(&created.task_id, "owner-1", requests_of(&["city"]))
+            .await
+            .unwrap();
+
+        assert_eq!(paused.status, TaskStatus::InputRequired);
+        // The transition is persisted, not just reported.
+        let fetched = store.get(&created.task_id, "owner-1").await.unwrap();
+        assert_eq!(fetched.status, TaskStatus::InputRequired);
+    }
+
+    #[tokio::test]
+    async fn record_input_requests_twice_is_refused_and_does_not_erase_answers() {
+        let store = InMemoryTaskStore::new();
+        let task = paused_task(&store, "owner-1", &["city", "units"]).await;
+
+        // Answer one of the two, so there IS an answer that a second write could
+        // erase.
+        store
+            .deliver_task_inputs(&task.task_id, "owner-1", responses_of(&["city"]))
+            .await
+            .unwrap();
+
+        let second = store
+            .record_input_requests(&task.task_id, "owner-1", requests_of(&["something-else"]))
+            .await;
+        assert!(
+            second.is_err(),
+            "a second record_input_requests must be refused, got: {second:?}"
+        );
+
+        // The previously-delivered response survived the refusal, and the
+        // original request set is intact.
+        let snapshot = store
+            .task_input_snapshot(&task.task_id, "owner-1")
+            .await
+            .unwrap();
+        assert!(
+            snapshot.input_responses.contains_key("city"),
+            "the refusal erased a delivered answer: {snapshot:?}"
+        );
+        assert!(snapshot.input_requests.contains_key("city"));
+        assert!(snapshot.input_requests.contains_key("units"));
+        assert!(
+            !snapshot.input_requests.contains_key("something-else"),
+            "the refused write must not have landed: {snapshot:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn record_input_requests_on_a_terminal_task_is_refused() {
+        let store = InMemoryTaskStore::new();
+        let created = store.create("owner-1", None).await.unwrap();
+        store
+            .update_status(&created.task_id, "owner-1", TaskStatus::Cancelled, None)
+            .await
+            .unwrap();
+
+        let result = store
+            .record_input_requests(&created.task_id, "owner-1", requests_of(&["city"]))
+            .await;
+        assert!(
+            matches!(result, Err(TaskStoreError::InvalidTransition { .. })),
+            "a cancelled task cannot be paused for input, got: {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn set_error_then_get_error_round_trips_the_jsonrpc_error_value() {
+        let store = InMemoryTaskStore::new();
+        let created = store.create("owner-1", None).await.unwrap();
+        let error = json!({
+            "code": -32603,
+            "message": "upstream timed out",
+            "data": { "attempts": 3 }
+        });
+
+        store
+            .set_error(&created.task_id, "owner-1", error.clone())
+            .await
+            .unwrap();
+        let fetched = store.get_error(&created.task_id, "owner-1").await.unwrap();
+
+        assert_eq!(
+            fetched, error,
+            "the JSON-RPC error object must cross the Value seam unchanged"
+        );
+    }
+
+    #[tokio::test]
+    async fn get_error_for_another_owner_is_not_found() {
+        let store = InMemoryTaskStore::new();
+        let created = store.create("owner-1", None).await.unwrap();
+        store
+            .set_error(
+                &created.task_id,
+                "owner-1",
+                json!({ "code": -32603, "message": "private" }),
+            )
+            .await
+            .unwrap();
+
+        let result = store.get_error(&created.task_id, "owner-2").await;
+
+        let Err(err) = result else {
+            panic!("cross-owner error read must fail");
+        };
+        assert!(
+            matches!(err, TaskStoreError::NotFound { .. }),
+            "cross-owner error read must be NotFound, got: {err:?}"
+        );
+        let rendered = err.to_string();
+        assert!(
+            !rendered.contains("owner"),
+            "refusal leaked the word `owner`: {rendered}"
+        );
+        assert!(
+            !rendered.contains("owner-1"),
+            "refusal leaked the other owner's id: {rendered}"
+        );
+    }
+
+    #[tokio::test]
+    async fn get_error_on_a_task_with_no_error_is_not_found() {
+        let store = InMemoryTaskStore::new();
+        let created = store.create("owner-1", None).await.unwrap();
+        let result = store.get_error(&created.task_id, "owner-1").await;
+        assert!(
+            matches!(result, Err(TaskStoreError::NotFound { .. })),
+            "a task that did not fail has no error, got: {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn cleanup_expired_drops_recorded_input_state() {
+        // The TTL must outlive SETUP, not just be short. Every write below goes
+        // through `validate_access`, which returns `Expired` — not a lost write —
+        // the moment the TTL has elapsed, so a 1ms TTL makes this test fail under
+        // load for a reason that has nothing to do with the property it asserts.
+        // 500ms is orders of magnitude above the setup cost (pure in-memory) and
+        // still short enough to sleep past. A `let`, not a `const`: this plan
+        // introduces no new named numeric bound to `task_store.rs`.
+        let ttl_ms: u64 = 500;
+
+        let store = InMemoryTaskStore::with_config(StoreConfig {
+            default_ttl_ms: Some(ttl_ms),
+            ..StoreConfig::default()
+        });
+        let created = store.create("owner-1", Some(ttl_ms)).await.unwrap();
+        store
+            .record_input_requests(&created.task_id, "owner-1", requests_of(&["city"]))
+            .await
+            .unwrap();
+        store
+            .set_error(&created.task_id, "owner-1", json!({ "code": -32603 }))
+            .await
+            .unwrap();
+
+        tokio::time::sleep(std::time::Duration::from_millis(ttl_ms + 50)).await;
+        assert_eq!(store.cleanup_expired().await.unwrap(), 1);
+
+        // Requests, responses and error live on the INTERNAL record, so they are
+        // purged with the task — there is no separate unexpiring map.
+        assert!(store.records.is_empty());
     }
 }
