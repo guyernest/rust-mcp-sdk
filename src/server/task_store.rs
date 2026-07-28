@@ -96,8 +96,10 @@
 
 use async_trait::async_trait;
 use dashmap::DashMap;
+use std::collections::BTreeSet;
 use std::time::Instant;
 
+use crate::types::mrtr::{InputRequestKind, InputRequests, InputResponses};
 use crate::types::tasks::{Task, TaskStatus};
 use crate::types::CallToolResult;
 
@@ -209,6 +211,120 @@ impl Default for StoreConfig {
             default_poll_interval_ms: 5000,  // 5 seconds
             max_tasks_per_owner: 100,
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Task input delivery / snapshot
+// ---------------------------------------------------------------------------
+
+/// The outcome of a [`TaskStore::deliver_task_inputs`] call.
+///
+/// # Why this is a value and not `Ok(())`
+///
+/// A delivery has THREE independently-observable outcomes and the spec requires
+/// all three to stay distinguishable:
+///
+/// 1. which keys were ACCEPTED (outstanding and not previously answered);
+/// 2. which keys were IGNORED — a server SHOULD ignore a key that is not
+///    currently outstanding (never issued, already answered, or superseded)
+///    rather than fail the whole delivery;
+/// 3. whether the outstanding set is now COMPLETE — a server MAY accept a
+///    partial set, and the task then REMAINS
+///    [`TaskStatus::InputRequired`] until the rest arrive.
+///
+/// Collapsing this to `Ok(())` would make the partial-vs-complete distinction
+/// unrepresentable and force the dispatch layer to re-read the task record to
+/// recover it.
+///
+/// The fields are public and the struct is deliberately NOT `#[non_exhaustive]`:
+/// out-of-tree [`TaskStore`] implementations must be able to construct it.
+///
+/// # Examples
+///
+/// ```
+/// use pmcp::server::task_store::TaskInputDelivery;
+///
+/// // Nothing outstanding matched: everything ignored, nothing accepted.
+/// let delivery = TaskInputDelivery::default();
+/// assert!(delivery.accepted.is_empty());
+/// assert!(!delivery.complete);
+/// ```
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TaskInputDelivery {
+    /// Keys that were outstanding and not previously answered, and whose
+    /// responses have been persisted by this call.
+    pub accepted: BTreeSet<String>,
+    /// Keys that were NOT currently outstanding and were therefore ignored —
+    /// never issued by this task, already answered, or superseded. Ignoring is
+    /// the specified behaviour; this is not an error condition.
+    pub ignored: BTreeSet<String>,
+    /// Whether every outstanding request now has a delivered response. `false`
+    /// means the task is still awaiting input.
+    pub complete: bool,
+}
+
+/// A normalized, owner-scoped view of one task's input state, returned by
+/// [`TaskStore::task_input_snapshot`].
+///
+/// # Why this type exists
+///
+/// [`TaskStore::get`] returns only the wire [`Task`], whose shape is locked, and
+/// the store's internal record is private. Without this accessor there is no way
+/// for the dispatch layer to read the kinds the SERVER recorded — which is the
+/// only trustworthy source for a kind-directed decode of a client's
+/// `inputResponses` — nor the `inputRequests` a v2 `tasks/get` must inline for
+/// an `input_required` task.
+///
+/// # The kinds source is the server's own record
+///
+/// [`Self::kind_of`] resolves a key to its [`InputRequestKind`] from
+/// [`Self::input_requests`], i.e. from what the server itself asked for, never
+/// from anything the client sent. That is what makes
+/// [`InputResponse::decode_for`](crate::types::mrtr::InputResponse::decode_for)
+/// reachable instead of the overlapping untagged guess it replaced.
+#[derive(Debug, Clone)]
+pub struct TaskInputSnapshot {
+    /// The FULL set of input requests the server recorded for this task, keyed
+    /// by the server-assigned key. This is the set a v2 `tasks/get` inlines as
+    /// `inputRequests`; for the not-yet-answered subset use
+    /// [`Self::outstanding`].
+    pub input_requests: InputRequests,
+    /// The responses already delivered against [`Self::input_requests`], keyed
+    /// identically. Empty when nothing has been delivered yet.
+    pub input_responses: InputResponses,
+    /// The task's current status at the moment the snapshot was taken.
+    pub status: TaskStatus,
+}
+
+impl TaskInputSnapshot {
+    /// The keys that are still awaiting a response — recorded but not yet
+    /// answered.
+    pub fn outstanding(&self) -> BTreeSet<&str> {
+        self.input_requests
+            .keys()
+            .filter(|key| !self.input_responses.contains_key(*key))
+            .map(String::as_str)
+            .collect()
+    }
+
+    /// The [`InputRequestKind`] the SERVER recorded under `key`, or `None` if the
+    /// server never issued that key.
+    ///
+    /// This is the accessor a kind-directed decode reads: a key absent here was
+    /// never requested, so no response for it may be decoded at all.
+    pub fn kind_of(&self, key: &str) -> Option<InputRequestKind> {
+        self.input_requests
+            .get(key)
+            .map(crate::types::mrtr::InputRequest::kind)
+    }
+
+    /// Whether every recorded request has a delivered response.
+    ///
+    /// A task with NO recorded requests is not "complete" — there is nothing to
+    /// answer, so it cannot be resumed by a delivery.
+    pub fn is_complete(&self) -> bool {
+        !self.input_requests.is_empty() && self.outstanding().is_empty()
     }
 }
 
@@ -388,6 +504,337 @@ pub trait TaskStore: Send + Sync {
     fn supports_results(&self) -> bool {
         false
     }
+
+    /// Deliver a client's `inputResponses` against the task's SERVER-recorded
+    /// `inputRequests`, scoped to `owner_id`.
+    ///
+    /// This is an **additive** trait method with a default implementation, so
+    /// existing out-of-tree [`TaskStore`] implementations keep compiling. The
+    /// default returns [`TaskStoreError::Internal`] to signal — explicitly,
+    /// never silently — that the store does not accept task inputs. Stores that
+    /// DO accept inputs (e.g. [`InMemoryTaskStore`]) override this method and
+    /// also override [`TaskStore::supports_inputs`] to return `true`.
+    ///
+    /// Implementations MUST scope the write by `owner_id` (mirroring
+    /// [`TaskStore::get`] / [`TaskStore::cancel`]) so one owner cannot feed
+    /// another owner's task.
+    ///
+    /// # Partial delivery is legitimate
+    ///
+    /// A key that is not currently outstanding — never issued, already answered,
+    /// or superseded — is IGNORED rather than turned into an error, and a caller
+    /// MAY deliver only a subset of the outstanding keys. In that case the task
+    /// REMAINS [`TaskStatus::InputRequired`] until the rest arrive. All three
+    /// outcomes travel back in [`TaskInputDelivery`]; see its docs for why this
+    /// is not an `Ok(())`.
+    ///
+    /// # Bounds are NOT enforced here
+    ///
+    /// The four `inputResponses` denial-of-service bounds — on the entry COUNT,
+    /// on ONE entry's serialized size, on the TOTAL serialized size, and on one
+    /// entry's nesting DEPTH — are enforced at request INGRESS, before any decode,
+    /// so an oversized payload never reaches a store at all. An implementation
+    /// must not re-check them and must not mint new limits of its own. (There is
+    /// a fifth, adjacent MRTR bound on the `requestState` continuation-token
+    /// length; it does NOT apply here, because a `tasks/update` carries no
+    /// continuation token. Four, not five.)
+    ///
+    /// # Errors
+    ///
+    /// The default implementation always returns [`TaskStoreError::Internal`]
+    /// ("store does not support task input delivery"). Overriding
+    /// implementations return [`TaskStoreError::NotFound`] when the task does not
+    /// exist or belongs to a different owner, and
+    /// [`TaskStoreError::InvalidTransition`] when the task is not currently
+    /// awaiting input (a terminal or still-`working` task cannot be fed).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use pmcp::server::task_store::{InMemoryTaskStore, TaskStore};
+    /// use pmcp::types::mrtr::{InputRequest, InputRequests, InputResponse, InputResponses};
+    /// use pmcp::types::roots::ListRootsResult;
+    ///
+    /// # async fn example() {
+    /// let store = InMemoryTaskStore::new();
+    /// let task = store.create("owner-1", None).await.unwrap();
+    ///
+    /// // The SERVER records what it needs, against the store-minted task id.
+    /// let mut requests = InputRequests::new();
+    /// requests.insert("roots".to_string(), InputRequest::ListRoots);
+    /// store
+    ///     .record_input_requests(&task.task_id, "owner-1", requests)
+    ///     .await
+    ///     .unwrap();
+    ///
+    /// // The client's answer arrives keyed identically.
+    /// let mut responses = InputResponses::new();
+    /// responses.insert(
+    ///     "roots".to_string(),
+    ///     InputResponse::Roots(Box::new(ListRootsResult { roots: Vec::new() })),
+    /// );
+    /// let delivery = store
+    ///     .deliver_task_inputs(&task.task_id, "owner-1", responses)
+    ///     .await
+    ///     .unwrap();
+    /// assert!(delivery.accepted.contains("roots"));
+    /// assert!(delivery.complete);
+    /// # }
+    /// ```
+    async fn deliver_task_inputs(
+        &self,
+        task_id: &str,
+        _owner_id: &str,
+        _responses: InputResponses,
+    ) -> Result<TaskInputDelivery, TaskStoreError> {
+        let _ = task_id;
+        Err(TaskStoreError::Internal {
+            message: "store does not support task input delivery".to_string(),
+        })
+    }
+
+    /// Read the task's input state — the server-recorded requests, the delivered
+    /// responses and the current status — scoped to `owner_id`.
+    ///
+    /// This is an **additive** trait method with a default implementation. The
+    /// default returns [`TaskStoreError::NotFound`] — a store that records no
+    /// input requests has no snapshot to return. Stores that record them override
+    /// this method.
+    ///
+    /// Implementations MUST scope the read by `owner_id` and MUST return
+    /// [`TaskStoreError::NotFound`] (never a distinct error) on owner mismatch,
+    /// so the existence of another owner's task is never revealed. A task that
+    /// exists under the given owner but has no recorded `inputRequests` also
+    /// returns [`TaskStoreError::NotFound`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TaskStoreError::NotFound`] when no snapshot is available for the
+    /// task under the given owner (task absent, owner mismatch, or no recorded
+    /// input requests).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use pmcp::server::task_store::{InMemoryTaskStore, TaskStore};
+    /// use pmcp::types::mrtr::{InputRequest, InputRequestKind, InputRequests};
+    ///
+    /// # async fn example() {
+    /// let store = InMemoryTaskStore::new();
+    /// let task = store.create("owner-1", None).await.unwrap();
+    ///
+    /// let mut requests = InputRequests::new();
+    /// requests.insert("roots".to_string(), InputRequest::ListRoots);
+    /// store
+    ///     .record_input_requests(&task.task_id, "owner-1", requests)
+    ///     .await
+    ///     .unwrap();
+    ///
+    /// let snapshot = store
+    ///     .task_input_snapshot(&task.task_id, "owner-1")
+    ///     .await
+    ///     .unwrap();
+    /// // The kind comes from the server's own record, not from client input.
+    /// assert_eq!(snapshot.kind_of("roots"), Some(InputRequestKind::Roots));
+    /// assert!(snapshot.outstanding().contains("roots"));
+    /// # }
+    /// ```
+    async fn task_input_snapshot(
+        &self,
+        task_id: &str,
+        _owner_id: &str,
+    ) -> Result<TaskInputSnapshot, TaskStoreError> {
+        Err(TaskStoreError::NotFound {
+            task_id: task_id.to_string(),
+        })
+    }
+
+    /// Record the inputs the server needs before this task can continue, and
+    /// transition it to [`TaskStatus::InputRequired`] in the same write.
+    ///
+    /// This is an **additive** trait method with a default implementation, so
+    /// existing out-of-tree [`TaskStore`] implementations keep compiling. The
+    /// default returns [`TaskStoreError::Internal`] to signal — explicitly, never
+    /// silently — that the store cannot record input requests.
+    ///
+    /// # `requests` is SERVER-AUTHORED
+    ///
+    /// `requests` MUST be authored by the server and MUST NOT be sourced from
+    /// anything a client sent. What is written here becomes the only trustworthy
+    /// record of which KIND was asked for under each key, and a kind-directed
+    /// decode of the client's answers reads it back
+    /// ([`TaskInputSnapshot::kind_of`]). Letting a client influence it would let
+    /// the client choose how its own answer is typed — the exact
+    /// mis-classification the kind-directed decode exists to prevent.
+    ///
+    /// # Why this method is needed at all
+    ///
+    /// The store mints the task id INSIDE dispatch, AFTER the tool handler has
+    /// returned, so a handler cannot associate its input requests with an id that
+    /// did not exist while it ran. This method closes that loop: dispatch calls it
+    /// with the store-minted id.
+    ///
+    /// Implementations MUST scope the write by `owner_id` and MUST NOT silently
+    /// overwrite requests that are already recorded — a second call must not be
+    /// able to erase responses already delivered.
+    ///
+    /// # Errors
+    ///
+    /// The default implementation always returns [`TaskStoreError::Internal`]
+    /// ("store does not support recording task input requests"). Overriding
+    /// implementations return [`TaskStoreError::NotFound`] when the task does not
+    /// exist or belongs to a different owner,
+    /// [`TaskStoreError::InvalidTransition`] when the task cannot move to
+    /// [`TaskStatus::InputRequired`], and [`TaskStoreError::Internal`] when
+    /// requests are already recorded.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use pmcp::server::task_store::{InMemoryTaskStore, TaskStore};
+    /// use pmcp::types::mrtr::{InputRequest, InputRequests};
+    /// use pmcp::types::tasks::TaskStatus;
+    ///
+    /// # async fn example() {
+    /// let store = InMemoryTaskStore::new();
+    /// let task = store.create("owner-1", None).await.unwrap();
+    ///
+    /// let mut requests = InputRequests::new();
+    /// requests.insert("roots".to_string(), InputRequest::ListRoots);
+    /// let paused = store
+    ///     .record_input_requests(&task.task_id, "owner-1", requests)
+    ///     .await
+    ///     .unwrap();
+    /// assert_eq!(paused.status, TaskStatus::InputRequired);
+    /// # }
+    /// ```
+    async fn record_input_requests(
+        &self,
+        task_id: &str,
+        _owner_id: &str,
+        _requests: InputRequests,
+    ) -> Result<Task, TaskStoreError> {
+        let _ = task_id;
+        Err(TaskStoreError::Internal {
+            message: "store does not support recording task input requests".to_string(),
+        })
+    }
+
+    /// Persist the JSON-RPC error object for a FAILED task, scoped to `owner_id`.
+    ///
+    /// This is an **additive** trait method with a default implementation, so
+    /// existing out-of-tree [`TaskStore`] implementations keep compiling. The
+    /// default returns [`TaskStoreError::Internal`] to signal — explicitly, never
+    /// silently — that the store does not persist task errors.
+    ///
+    /// Implementations MUST scope the write by `owner_id` (mirroring
+    /// [`TaskStore::get`] / [`TaskStore::cancel`]) so one owner cannot set an
+    /// error on another owner's task.
+    ///
+    /// # Why a `Value` and not a typed error
+    ///
+    /// This is the JSON-RPC error OBJECT (`code`/`message`/`data`) exactly as it
+    /// will be inlined on a v2 `tasks/get` for a `failed` task. It crosses the
+    /// same `serde_json::Value` seam the task router sits below, so it is carried
+    /// verbatim rather than re-typed and re-serialized on the way through.
+    ///
+    /// # Errors
+    ///
+    /// The default implementation always returns [`TaskStoreError::Internal`]
+    /// ("store does not support task errors"). Overriding implementations return
+    /// [`TaskStoreError::NotFound`] when the task does not exist or belongs to a
+    /// different owner.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use pmcp::server::task_store::{InMemoryTaskStore, TaskStore};
+    /// use serde_json::json;
+    ///
+    /// # async fn example() {
+    /// let store = InMemoryTaskStore::new();
+    /// let task = store.create("owner-1", None).await.unwrap();
+    /// store
+    ///     .set_error(
+    ///         &task.task_id,
+    ///         "owner-1",
+    ///         json!({ "code": -32603, "message": "upstream timed out" }),
+    ///     )
+    ///     .await
+    ///     .unwrap();
+    /// # }
+    /// ```
+    async fn set_error(
+        &self,
+        task_id: &str,
+        _owner_id: &str,
+        _error: serde_json::Value,
+    ) -> Result<(), TaskStoreError> {
+        let _ = task_id;
+        Err(TaskStoreError::Internal {
+            message: "store does not support task errors".to_string(),
+        })
+    }
+
+    /// Retrieve the persisted JSON-RPC error object for a task, scoped to
+    /// `owner_id`.
+    ///
+    /// This is an **additive** trait method with a default implementation. The
+    /// default returns [`TaskStoreError::NotFound`] — a store that does not
+    /// persist errors has none to return. Stores that persist them override this
+    /// method.
+    ///
+    /// Implementations MUST return [`TaskStoreError::NotFound`] (never a distinct
+    /// error) on owner mismatch, so the existence of another owner's task is
+    /// never revealed. A task that exists but has no stored error (it did not
+    /// fail, or has not failed yet) also returns [`TaskStoreError::NotFound`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TaskStoreError::NotFound`] when no error is available for the
+    /// task under the given owner (task absent, owner mismatch, or no error
+    /// recorded).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use pmcp::server::task_store::{InMemoryTaskStore, TaskStore};
+    /// use serde_json::json;
+    ///
+    /// # async fn example() {
+    /// let store = InMemoryTaskStore::new();
+    /// let task = store.create("owner-1", None).await.unwrap();
+    /// let error = json!({ "code": -32603, "message": "upstream timed out" });
+    /// store
+    ///     .set_error(&task.task_id, "owner-1", error.clone())
+    ///     .await
+    ///     .unwrap();
+    ///
+    /// let fetched = store.get_error(&task.task_id, "owner-1").await.unwrap();
+    /// assert_eq!(fetched, error);
+    /// # }
+    /// ```
+    async fn get_error(
+        &self,
+        task_id: &str,
+        _owner_id: &str,
+    ) -> Result<serde_json::Value, TaskStoreError> {
+        Err(TaskStoreError::NotFound {
+            task_id: task_id.to_string(),
+        })
+    }
+
+    /// Whether this store accepts task inputs
+    /// (i.e. [`TaskStore::deliver_task_inputs`] /
+    /// [`TaskStore::record_input_requests`] are real).
+    ///
+    /// Defaults to `false`. The dispatch layer consults this before serving the
+    /// store-input path, so a store that cannot accept inputs falls through to
+    /// the [`TaskRouter`](crate::server::tasks::TaskRouter) instead of pretending
+    /// it accepted them.
+    fn supports_inputs(&self) -> bool {
+        false
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -400,12 +847,40 @@ pub trait TaskStore: Send + Sync {
 /// task. It lives on this INTERNAL record (never on the wire [`Task`], whose
 /// shape is locked) so it is purged together with the task by
 /// [`InMemoryTaskStore::cleanup_expired`] — no separate unexpiring map.
+///
+/// `input_requests`, `input_responses` and `error` are on this INTERNAL record
+/// for exactly the same reason, and are purged with the task by the same sweep.
+///
+/// `input_requests` is the SERVER-recorded record of which kind was asked for
+/// under each key — the source a kind-directed decode of the client's answers
+/// reads back through [`TaskInputSnapshot::kind_of`]. It MUST NOT be settable
+/// from client input: it is written only by
+/// [`TaskStore::record_input_requests`], whose contract says the requests are
+/// server-authored. If a client could influence it, a client could choose how
+/// its own answer is typed.
 #[derive(Debug)]
 struct TaskRecord {
     task: Task,
     owner_id: String,
     expires_at: Option<Instant>,
     result: Option<CallToolResult>,
+    /// Absent until the server records what it needs; `Some(empty)` is a
+    /// distinct, meaningful state ("a round that asked for nothing").
+    //
+    // `allow(dead_code)`: written by `create` here, READ by the
+    // `InMemoryTaskStore` input overrides that land in the very next commit of
+    // this plan. `RUSTFLAGS = -D warnings` makes an unread private field a hard
+    // lint error, so this keeps the trait-seam commit lint-green on its own; the
+    // allow is removed the moment the reads exist.
+    #[allow(dead_code)]
+    input_requests: Option<InputRequests>,
+    /// Absent until a response is delivered against `input_requests`.
+    #[allow(dead_code)]
+    input_responses: Option<InputResponses>,
+    /// The JSON-RPC error object for a `failed` task, carried verbatim as a
+    /// `Value` across the same seam the task router sits below.
+    #[allow(dead_code)]
+    error: Option<serde_json::Value>,
 }
 
 // ---------------------------------------------------------------------------
@@ -530,6 +1005,9 @@ impl TaskStore for InMemoryTaskStore {
             owner_id: owner_id.to_string(),
             expires_at,
             result: None,
+            input_requests: None,
+            input_responses: None,
+            error: None,
         };
 
         self.records.insert(task_id, record);
@@ -1068,6 +1546,7 @@ mod tests {
     // -- Terminal result (set_result / get_result / supports_results) tests --
 
     use crate::types::{CallToolResult, Content};
+    use serde_json::json;
 
     fn sample_result(text: &str) -> CallToolResult {
         CallToolResult::new(vec![Content::text(text)])
@@ -1191,7 +1670,11 @@ mod tests {
         fn config(&self) -> &StoreConfig {
             &self.config
         }
-        // Deliberately does NOT override set_result/get_result/supports_results.
+        // Deliberately does NOT override set_result/get_result/supports_results,
+        // NOR any of the input-delivery / error additions. This impl is the
+        // compile-time proof that a pre-114 out-of-tree TaskStore keeps compiling
+        // with zero changes: if any addition were made a REQUIRED trait method,
+        // this block would fail with E0046.
     }
 
     #[tokio::test]
@@ -1211,6 +1694,55 @@ mod tests {
         assert!(
             matches!(get, Err(TaskStoreError::NotFound { .. })),
             "default get_result must be NotFound, got: {get:?}"
+        );
+    }
+
+    // -- Additive input-delivery / error seam defaults --
+
+    #[tokio::test]
+    async fn default_impl_store_reports_inputs_unsupported() {
+        let store = DefaultOnlyStore {
+            config: StoreConfig::default(),
+        };
+        assert!(
+            !store.supports_inputs(),
+            "supports_inputs must default to false"
+        );
+
+        // Explicit unsupported errors, never a silent success.
+        let delivered = store
+            .deliver_task_inputs("t", "owner-1", InputResponses::new())
+            .await;
+        assert!(
+            matches!(delivered, Err(TaskStoreError::Internal { .. })),
+            "default deliver_task_inputs must be an explicit unsupported error, got: {delivered:?}"
+        );
+
+        let recorded = store
+            .record_input_requests("t", "owner-1", InputRequests::new())
+            .await;
+        assert!(
+            matches!(recorded, Err(TaskStoreError::Internal { .. })),
+            "default record_input_requests must be an explicit unsupported error, got: {recorded:?}"
+        );
+
+        let set = store.set_error("t", "owner-1", json!({ "code": -1 })).await;
+        assert!(
+            matches!(set, Err(TaskStoreError::Internal { .. })),
+            "default set_error must be an explicit unsupported error, got: {set:?}"
+        );
+
+        // A store that records nothing has no snapshot and no error to return.
+        let snapshot = store.task_input_snapshot("t", "owner-1").await;
+        assert!(
+            matches!(snapshot, Err(TaskStoreError::NotFound { .. })),
+            "default task_input_snapshot must be NotFound, got: {snapshot:?}"
+        );
+
+        let get = store.get_error("t", "owner-1").await;
+        assert!(
+            matches!(get, Err(TaskStoreError::NotFound { .. })),
+            "default get_error must be NotFound, got: {get:?}"
         );
     }
 }
