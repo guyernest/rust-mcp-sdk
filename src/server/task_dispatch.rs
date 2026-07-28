@@ -48,52 +48,88 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-/// The refusal a v2 `tasks/result` receives when a store is configured but the
-/// task has no result yet.
+/// `tasks/list` — RETIRED on protocol version 2026-07-28.
 ///
-/// Stated as a fact about what pmcp serves today, not as a promise.
+/// Spelled here rather than in `crate::types::mrtr`: that module's method
+/// constants exist to key the routing-NAME table, and a retired method has no
+/// row there. This constant exists so an era gate and its refusal message
+/// cannot disagree about the spelling.
+const TASKS_LIST_METHOD: &str = "tasks/list";
+
+/// `tasks/result` — RETIRED on protocol version 2026-07-28.
 ///
-/// # What changed in plan 114-05, and why this doc had to be rewritten
+/// See [`TASKS_LIST_METHOD`].
+const TASKS_RESULT_METHOD: &str = "tasks/result";
+
+/// The `-32601` message body for a `tasks/*` method protocol version 2026-07-28
+/// RETIRED.
 ///
-/// On protocol version 2026-07-28 the task lifecycle is an EXTENSION, negotiated
-/// through the `capabilities.extensions` map under
-/// [`TASKS_EXTENSION_KEY`](crate::types::capabilities::TASKS_EXTENSION_KEY).
-/// Before 114-05 pmcp populated NO entry under that key on any server, so the
-/// word "negotiated" in the message below was literally accurate and this doc
-/// said so as a fact.
+/// Emitted as `format!("{method} {V2_TASKS_METHOD_RETIRED}")` so the caller is
+/// told WHICH method it asked for as well as why the answer is
+/// `METHOD_NOT_FOUND`; the two gates share one builder (`retired_on_v2`) so
+/// they cannot drift into two different sentences for one condition.
 ///
-/// It is no longer accurate. [`apply_tasks_capability_rule`] now writes
-/// `extensions["io.modelcontextprotocol/tasks"] = {}` into the capabilities of
-/// every server that has a task backend, so a v2 client CAN negotiate the
-/// extension against exactly the servers that reach this refusal. What has NOT
-/// landed is the v2 `tasks/*` SEMANTICS (requirement TASK-03): the flat result
-/// projection, the v2 owner binding and the v2 not-found mapping. Until those
-/// land, this site answers method-not-found rather than the spec-PROHIBITED
-/// `-32002` pending refusal (Finding 11).
+/// # Provenance
 ///
-/// A stale "pmcp deliberately does not do X" comment actively misleads the next
-/// reader, which is the failure class 113-29 recorded (two `-32002` sites
-/// "commented v1-scoped, neither ever traced"). Hence this rewrite ships in the
-/// same commit as the advertisement.
+/// The vendored draft extension schema — `schema/vendored/ext-tasks/schema.ts`
+/// at the commit pinned by `schema/vendored/ext-tasks/PROVENANCE.md` (plan
+/// 114-01) — declares exactly THREE `tasks/*` request methods: `tasks/get`,
+/// `tasks/update` and `tasks/cancel`. `tasks/list` and `tasks/result` are
+/// ABSENT from it. They are not "unimplemented here"; they do not exist on that
+/// protocol version:
 ///
-/// # The one emission row this constant covers
+/// * `tasks/list` was removed as a SECURITY improvement — with no enumeration
+///   primitive a server cannot inadvertently leak the existence of one caller's
+///   tasks to another. TASK-03 and TASK-05 are that one improvement seen from
+///   two angles.
+/// * `tasks/result` was removed because the v2 `tasks/get` inlines `result` /
+///   `error` on the terminal task, so a second round trip has nothing left to
+///   do (plan 114-11).
 ///
-/// It is written on exactly one row of [`TaskDispatch::handle_tasks_result`]'s
-/// final match: a task STORE is configured (so the unconditional
-/// "tasks/result not supported" answer would be untrue) AND the era is v2 (so
-/// `-32002` is prohibited). A server with no task backend at all takes the
-/// `(false, _)` row instead, and carries no extension entry either.
+/// # Why this constant REPLACED `V2_TASKS_NOT_NEGOTIATED`
 ///
-/// # The message TEXT is owned by the plan that lands the v2 routes
+/// Until this plan the v2 `tasks/result` refusal read "the tasks extension is
+/// not negotiated". That sentence was true only while pmcp advertised no entry
+/// under [`TASKS_EXTENSION_KEY`](crate::types::capabilities::TASKS_EXTENSION_KEY).
+/// Plan 114-05 made [`apply_tasks_capability_rule`] advertise it on every
+/// backend-configured server, at which point the message told the caller to fix
+/// a negotiation that had already succeeded. A refusal message is the ONLY
+/// signal a caller has for choosing its next move, so an untruthful one makes
+/// the correct fix undiscoverable (T-114-33).
 ///
-/// Its wording is left BYTE-UNCHANGED here on purpose: 114-05 owns the
-/// capability advertisement, not the v2 `tasks/*` route bodies. Rewording a live
-/// refusal from a plan that does not own the route is how two plans come to
-/// disagree about one wire string. The plan that implements v2 `tasks/result`
-/// replaces both this value and that match row.
-pub(crate) const V2_TASKS_NOT_NEGOTIATED: &str =
-    "tasks/result is not served on protocol version 2026-07-28: the tasks extension is not \
-     negotiated";
+/// The old constant is GONE rather than reworded-and-kept: a second, unreachable
+/// spelling of "no" is how two plans come to disagree about one wire string.
+/// And there is no "the client did not declare the extension" refusal in the
+/// tree today — 114-05 landed the server-side ADVERTISEMENT and 114-06 the
+/// CLIENT-side refusal, but no server-side negotiation gate exists, so a
+/// constant for that condition would have no emission site. Whichever plan
+/// lands that gate mints its own message then.
+///
+/// # The three `-32601` conditions this module answers, kept distinguishable
+///
+/// | condition | message | when |
+/// |-----------|---------|------|
+/// | RETIRED | this constant, prefixed by the method | era is v2 AND a task backend exists |
+/// | NO BACKEND | `"Tasks not enabled"` / `"tasks/result not supported"` | neither a `TaskStore` nor a `TaskRouter`, on ANY era |
+/// | NOT A `tasks/*` METHOD | `"Method not supported"` | the wildcard arm of `route_tasks_endpoint` |
+///
+/// Distinguishability is the mitigation, not a nicety: "this method was
+/// retired" and "this server serves no tasks at all" call for opposite fixes.
+pub(crate) const V2_TASKS_METHOD_RETIRED: &str =
+    "is not a method of the tasks extension on protocol version 2026-07-28: the extension \
+     declares only tasks/get, tasks/update and tasks/cancel";
+
+/// Build the `-32601` a v2 caller receives for a RETIRED `tasks/*` method.
+///
+/// The SINGLE builder both era gates use, so `tasks/list` and `tasks/result`
+/// answer one condition with one sentence.
+fn retired_on_v2(id: RequestId, method: &str) -> JSONRPCResponse {
+    error_response(
+        id,
+        crate::types::protocol::error_codes::METHOD_NOT_FOUND,
+        format!("{method} {V2_TASKS_METHOD_RETIRED}"),
+    )
+}
 
 /// Does this request run under the v1 task lifecycle?
 ///
@@ -122,14 +158,75 @@ pub(crate) const V2_TASKS_NOT_NEGOTIATED: &str =
 /// [`GetTaskPayloadRequest`](crate::types::tasks::GetTaskPayloadRequest) has no
 /// `_meta` field for it to ride on.
 ///
-/// # What this predicate deliberately does NOT do
+/// # What this predicate gates, and what it deliberately does NOT
 ///
-/// It gates ONLY the `-32002` emission. `tasks/get`, `tasks/list` and
-/// `tasks/cancel` are unchanged on every era: the real v2 task semantics are
-/// owned by Phase 114 (requirement TASK-03), and re-deciding them here would be a
-/// redesign rather than the removal of a prohibited wire value.
+/// It is the ONE era definition this module has, and three things now read it:
+/// the `-32002` pending emission, [`tasks_list_serves_on_era`] and
+/// [`tasks_result_serves_on_era`] — the last two because plan 114-08 RETIRED
+/// both of those methods on v2 (see [`V2_TASKS_METHOD_RETIRED`]).
+///
+/// It does NOT retire `tasks/get` or `tasks/cancel`: both still serve on BOTH
+/// eras, because both survive in the v2 extension schema. Their v2 response
+/// SHAPE changes (plan 114-11 flattens the result and remaps not-found), but a
+/// shape change is not a retirement and this predicate must not be widened into
+/// one.
+///
+/// This block previously claimed the predicate gated only the `-32002` emission
+/// and that `tasks/list` was unchanged on every era. Both sentences were
+/// falsified by plan 114-08 and are rewritten in the same commit that falsified
+/// them: a stale "deliberately does NOT do X" comment actively misleads the next
+/// reader, which is the failure class 113-29 recorded.
 pub(crate) const fn is_v1_task_era(era: Option<crate::types::protocol::Era>) -> bool {
     !matches!(era, Some(crate::types::protocol::Era::V2))
+}
+
+/// Does `tasks/list` serve on this era?
+///
+/// | `era`           | result  | why |
+/// |-----------------|---------|-----|
+/// | `Some(Era::V1)` | `true`  | v1 enumerates a caller's tasks exactly as it always has |
+/// | `None`          | `true`  | not opted into v2 → zero era code, v1 path unchanged (D-04) |
+/// | `Some(Era::V2)` | `false` | `tasks/list` is ABSENT from the tasks extension — [`V2_TASKS_METHOD_RETIRED`] |
+///
+/// # Why this is its own predicate rather than a shared boolean
+///
+/// [`tasks_result_serves_on_era`] answers the same question for the other
+/// retired method and currently returns the same value. They are deliberately
+/// two functions: a negative control that disables ONE gate must fail ONLY that
+/// gate's probe, which is the orthogonality discipline 113-29 established and
+/// which a single shared boolean makes impossible.
+///
+/// The era answer itself is NOT re-derived here — it delegates to
+/// [`is_v1_task_era`] — so the file still has exactly one definition of "which
+/// era is this".
+///
+/// # This predicate alone does not decide the refusal
+///
+/// A `false` here means "not on this era"; the caller ALSO checks
+/// `TaskDispatch::has_task_backend`, because a server with no task backend must
+/// keep its existing "not enabled" answer rather than claim a retirement.
+pub(crate) const fn tasks_list_serves_on_era(era: Option<crate::types::protocol::Era>) -> bool {
+    is_v1_task_era(era)
+}
+
+/// Does `tasks/result` serve on this era?
+///
+/// | `era`           | result  | why |
+/// |-----------------|---------|-----|
+/// | `Some(Era::V1)` | `true`  | v1 serves the terminal payload, including the FROZEN `-32002` pending refusal |
+/// | `None`          | `true`  | not opted into v2 → zero era code, v1 path unchanged (D-04) |
+/// | `Some(Era::V2)` | `false` | `tasks/result` is ABSENT from the tasks extension — [`V2_TASKS_METHOD_RETIRED`] |
+///
+/// Retiring the method on v2 also removes the LAST v2-reachable emission path
+/// for `V1_TASK_PENDING` (`-32002`), the code protocol version 2026-07-28 MUST
+/// NOT emit: `tests/v2_prohibited_error_codes.rs` proved that path reachable
+/// over a real v2 HTTP request, and the gate now returns before the store is
+/// ever consulted.
+///
+/// Separate from [`tasks_list_serves_on_era`] for the orthogonality reason
+/// documented there.
+pub(crate) const fn tasks_result_serves_on_era(era: Option<crate::types::protocol::Era>) -> bool {
+    is_v1_task_era(era)
 }
 
 /// Build the default server-level `tasks` capability advertised when a task
@@ -484,6 +581,18 @@ pub(crate) struct TaskDispatch<'a> {
 }
 
 impl TaskDispatch<'_> {
+    /// Does this server have ANY task backend — a [`TaskStore`], a
+    /// [`TaskRouter`], or both?
+    ///
+    /// The two v2 era gates consult it so a backend-LESS server keeps its
+    /// existing "not enabled" / "not supported" refusal on EVERY era. "This
+    /// method was retired" and "this server serves no tasks at all" are
+    /// different facts calling for opposite fixes, and the `-32601` message is
+    /// the only place a caller can tell them apart (T-114-33).
+    const fn has_task_backend(&self) -> bool {
+        self.task_store.is_some() || self.task_router.is_some()
+    }
+
     /// Resolve the owner ID from the authentication context.
     ///
     /// Returns `None` if no backend is configured. With a `TaskRouter`, delegates
@@ -679,14 +788,21 @@ impl TaskDispatch<'_> {
         )
     }
 
-    /// Handle a `tasks/result` request (store-first → router → -32002 → -32601).
+    /// Handle a `tasks/result` request (era gate → store-first → router →
+    /// -32002 → -32601).
     ///
-    /// Serves from the configured [`TaskStore`] FIRST when it `supports_results()`,
-    /// but FALLS THROUGH to the [`TaskRouter`] on store `NotFound`/unsupported —
-    /// never a hard error when a router can serve it. When the store has no result
-    /// and NO router is configured, returns the SPECIFIED "task not completed"
-    /// error (`-32002`), distinct from the truly-no-backend `-32601` (FROZEN by
-    /// Phase 101; T-102-03) — **on v1 only**; see [`is_v1_task_era`].
+    /// On protocol version 2026-07-28 the method is RETIRED and answers
+    /// `-32601` before any backend is consulted; see
+    /// [`tasks_result_serves_on_era`] and [`V2_TASKS_METHOD_RETIRED`].
+    ///
+    /// On v1 (and on a request carrying no era code at all) the behaviour is
+    /// byte-for-byte what it has always been: serves from the configured
+    /// [`TaskStore`] FIRST when it `supports_results()`, but FALLS THROUGH to the
+    /// [`TaskRouter`] on store `NotFound`/unsupported — never a hard error when a
+    /// router can serve it. When the store has no result and NO router is
+    /// configured, returns the SPECIFIED "task not completed" error (`-32002`),
+    /// distinct from the truly-no-backend `-32601` (FROZEN by Phase 101;
+    /// T-102-03); see [`is_v1_task_era`].
     pub(crate) async fn handle_tasks_result(
         &self,
         id: RequestId,
@@ -694,6 +810,14 @@ impl TaskDispatch<'_> {
         auth_context: Option<&AuthContext>,
         era: Option<crate::types::protocol::Era>,
     ) -> JSONRPCResponse {
+        // v2 era gate (TASK-03). Returning HERE — before the store, the router
+        // and the owner resolution — is what makes the frozen `-32002` below
+        // unreachable on v2 no matter how a backend answers, and is why a v2
+        // response can carry no task payload at all.
+        if !tasks_result_serves_on_era(era) && self.has_task_backend() {
+            return retired_on_v2(id, TASKS_RESULT_METHOD);
+        }
+
         let owner_id = self
             .resolve_owner(auth_context)
             .unwrap_or_else(|| "local".to_string());
@@ -750,11 +874,13 @@ impl TaskDispatch<'_> {
                 crate::types::protocol::error_codes::V1_TASK_PENDING,
                 "task result not available: task not completed".to_string(),
             ),
-            (true, false) => error_response(
-                id,
-                crate::types::protocol::error_codes::METHOD_NOT_FOUND,
-                V2_TASKS_NOT_NEGOTIATED.to_string(),
-            ),
+            // Unreachable by construction since the era gate at the head of this
+            // function returns first whenever a backend is present (and
+            // `task_store.is_some()` implies one). It is KEPT, answering
+            // identically, as defense in depth: the era predicate stays adjacent
+            // to the frozen `-32002` arm, so a reader of that arm sees what keeps
+            // it off the v2 wire without leaving the match.
+            (true, false) => retired_on_v2(id, TASKS_RESULT_METHOD),
             (false, _) => error_response(
                 id,
                 crate::types::protocol::error_codes::METHOD_NOT_FOUND,
@@ -806,13 +932,28 @@ impl TaskDispatch<'_> {
         }
     }
 
-    /// Route a `tasks/list` request (store-first, router fall-through).
+    /// Route a `tasks/list` request (era gate → store-first, router
+    /// fall-through).
+    ///
+    /// On protocol version 2026-07-28 the method is RETIRED and answers
+    /// `-32601` WITHOUT enumerating anything; see [`tasks_list_serves_on_era`]
+    /// and [`V2_TASKS_METHOD_RETIRED`]. On v1 the store/router behaviour below
+    /// is unchanged.
     async fn route_tasks_list(
         &self,
         id: RequestId,
         params: &crate::types::tasks::ListTasksRequest,
         auth_context: Option<&AuthContext>,
+        era: Option<crate::types::protocol::Era>,
     ) -> JSONRPCResponse {
+        // v2 era gate (TASK-03, T-114-32). Returning HERE — before the owner is
+        // even resolved — is what makes enumeration impossible rather than
+        // merely refused: no store `list`, no router call, so nothing can leak
+        // the existence of a task into the response body.
+        if !tasks_list_serves_on_era(era) && self.has_task_backend() {
+            return retired_on_v2(id, TASKS_LIST_METHOD);
+        }
+
         let owner_id = self
             .resolve_owner(auth_context)
             .unwrap_or_else(|| "local".to_string());
@@ -904,9 +1045,14 @@ impl TaskDispatch<'_> {
     ///
     /// `era` is the ALREADY-RESOLVED
     /// [`ProtocolContext::era`](crate::types::protocol::ProtocolContext) being
-    /// CONSUMED here — this module never runs an era resolver of its own. It is
-    /// read by exactly one branch, the `tasks/result` pending refusal; see
-    /// [`is_v1_task_era`].
+    /// CONSUMED here — this module never runs an era resolver of its own. Three
+    /// branches read it: the `tasks/result` pending refusal (see
+    /// [`is_v1_task_era`]) and the two v2 retirement gates
+    /// ([`tasks_list_serves_on_era`], [`tasks_result_serves_on_era`]).
+    ///
+    /// `TasksGet` and `TasksCancel` take NO era argument on purpose: both
+    /// survive in the v2 extension schema, so neither is gated. Their v2
+    /// response SHAPE is plan 114-11's, not this router's.
     pub(crate) async fn route_tasks_endpoint(
         &self,
         id: RequestId,
@@ -921,7 +1067,7 @@ impl TaskDispatch<'_> {
                     .await
             },
             ClientRequest::TasksList(params) => {
-                self.route_tasks_list(id, params, auth_context).await
+                self.route_tasks_list(id, params, auth_context, era).await
             },
             ClientRequest::TasksCancel(params) => {
                 self.route_tasks_cancel(id, params, auth_context).await
@@ -1100,6 +1246,194 @@ mod gate_tests {
             .await;
         let resp = out.expect("Required + task-shaped must yield Some");
         assert_store_minted(&resp);
+    }
+}
+
+/// The v2 retirement of `tasks/list` and `tasks/result` (plan 114-08, TASK-03).
+///
+/// One `#[tokio::test]` per row of the per-method era matrix, each named for the
+/// row it proves — the shape `gate_tests` above established. The live-socket
+/// half, with a negative control per gate, is `tests/v2_tasks_era_gates.rs`.
+#[cfg(test)]
+// Why: `store_backend()` always returns `Some` BY DESIGN, so each caller reads
+// as a backend-present row (clippy::unnecessary_wraps); and `route()` takes
+// `&Option<Arc<dyn TaskStore>>` because that is the type
+// `TaskDispatch::task_store` borrows — a helper taking `Option<&T>` could not
+// construct the production struct at all (clippy::ref_option). Both are the same
+// truth-table-test noise `gate_tests` above already allows.
+#[allow(clippy::unnecessary_wraps, clippy::ref_option)]
+mod era_gate_tests {
+    use super::*;
+    use crate::server::task_store::InMemoryTaskStore;
+    use crate::types::protocol::error_codes::{METHOD_NOT_FOUND, V1_TASK_PENDING};
+    use crate::types::protocol::Era;
+    use crate::types::RequestId;
+
+    /// Every era value a request can carry, in truth-table order.
+    const ERAS: [(Option<Era>, bool); 3] =
+        [(Some(Era::V1), true), (None, true), (Some(Era::V2), false)];
+
+    fn id() -> RequestId {
+        RequestId::from(1i64)
+    }
+
+    fn store_backend() -> Option<Arc<dyn TaskStore>> {
+        Some(Arc::new(InMemoryTaskStore::new()) as Arc<dyn TaskStore>)
+    }
+
+    fn list_request() -> ClientRequest {
+        ClientRequest::TasksList(crate::types::tasks::ListTasksRequest { cursor: None })
+    }
+
+    fn result_request() -> ClientRequest {
+        ClientRequest::TasksResult(crate::types::tasks::GetTaskPayloadRequest {
+            task_id: "absent".to_string(),
+        })
+    }
+
+    /// Drive one `tasks/*` request through the real router at one era.
+    async fn route(
+        store: &Option<Arc<dyn TaskStore>>,
+        request: &ClientRequest,
+        era: Option<Era>,
+    ) -> JSONRPCResponse {
+        let router = None;
+        let dispatch = TaskDispatch {
+            task_store: store,
+            task_router: &router,
+        };
+        dispatch
+            .route_tasks_endpoint(id(), request, None, era)
+            .await
+    }
+
+    /// The `(code, message)` of an error response, or `None` for a success.
+    fn error_of(response: &JSONRPCResponse) -> Option<(i32, String)> {
+        match &response.payload {
+            ResponsePayload::Error(error) => Some((error.code, error.message.clone())),
+            ResponsePayload::Result(_) => None,
+        }
+    }
+
+    /// `tasks/list` serves on v1 and on an era-less request, and not on v2.
+    #[test]
+    fn tasks_list_era_truth_table() {
+        for (era, expected) in ERAS {
+            assert_eq!(
+                tasks_list_serves_on_era(era),
+                expected,
+                "tasks/list serving decision for era {era:?}"
+            );
+        }
+    }
+
+    /// `tasks/result` serves on v1 and on an era-less request, and not on v2.
+    #[test]
+    fn tasks_result_era_truth_table() {
+        for (era, expected) in ERAS {
+            assert_eq!(
+                tasks_result_serves_on_era(era),
+                expected,
+                "tasks/result serving decision for era {era:?}"
+            );
+        }
+    }
+
+    /// A v2 `tasks/list` is `-32601` with the RETIRED message and enumerates
+    /// nothing.
+    #[tokio::test]
+    async fn v2_tasks_list_is_retired() {
+        let store = store_backend();
+        let response = route(&store, &list_request(), Some(Era::V2)).await;
+
+        let (code, message) = error_of(&response).expect("a v2 tasks/list must be refused");
+        assert_eq!(code, METHOD_NOT_FOUND, "message was {message}");
+        assert!(
+            message.starts_with(TASKS_LIST_METHOD) && message.contains(V2_TASKS_METHOD_RETIRED),
+            "the refusal must name the method AND the retirement: {message}"
+        );
+    }
+
+    /// A v2 `tasks/result` is `-32601` with the RETIRED message and never the
+    /// spec-prohibited `-32002`.
+    #[tokio::test]
+    async fn v2_tasks_result_is_retired() {
+        let store = store_backend();
+        let response = route(&store, &result_request(), Some(Era::V2)).await;
+
+        let (code, message) = error_of(&response).expect("a v2 tasks/result must be refused");
+        assert_eq!(code, METHOD_NOT_FOUND, "message was {message}");
+        assert_ne!(
+            code, V1_TASK_PENDING,
+            "protocol version 2026-07-28 MUST NOT emit -32002: {message}"
+        );
+        assert!(
+            message.starts_with(TASKS_RESULT_METHOD) && message.contains(V2_TASKS_METHOD_RETIRED),
+            "the refusal must name the method AND the retirement: {message}"
+        );
+    }
+
+    /// The v1 side of the same two gates is untouched: `tasks/list` still
+    /// enumerates and `tasks/result` still emits the FROZEN `-32002` with its
+    /// existing message.
+    #[tokio::test]
+    async fn v1_list_and_result_are_unchanged() {
+        let store = store_backend();
+
+        let listed = route(&store, &list_request(), Some(Era::V1)).await;
+        let ResponsePayload::Result(value) = &listed.payload else {
+            panic!("a v1 tasks/list must still serve: {:?}", listed.payload);
+        };
+        assert!(
+            value.get("tasks").is_some_and(Value::is_array),
+            "a v1 tasks/list result still carries the tasks array: {value}"
+        );
+
+        let pending = route(&store, &result_request(), Some(Era::V1)).await;
+        assert_eq!(
+            error_of(&pending),
+            Some((
+                V1_TASK_PENDING,
+                "task result not available: task not completed".to_string()
+            )),
+            "the v1 pending refusal is FROZEN, code and message"
+        );
+    }
+
+    /// A server with NO backend keeps its "not enabled" / "not supported"
+    /// answers on v2, and they are DIFFERENT strings from the RETIRED message.
+    ///
+    /// This is what makes the two-message split observable rather than
+    /// cosmetic: a caller that hits the no-backend answer must not be told a
+    /// method was retired, because the fix is to configure a backend.
+    #[tokio::test]
+    async fn a_backendless_v2_server_is_not_told_the_methods_were_retired() {
+        let store = None;
+
+        let listed = route(&store, &list_request(), Some(Era::V2)).await;
+        let (list_code, list_message) = error_of(&listed).expect("no backend refuses tasks/list");
+        assert_eq!(list_code, METHOD_NOT_FOUND, "message was {list_message}");
+        assert_eq!(list_message, "Tasks not enabled");
+
+        let resulted = route(&store, &result_request(), Some(Era::V2)).await;
+        let (result_code, result_message) =
+            error_of(&resulted).expect("no backend refuses tasks/result");
+        assert_eq!(
+            result_code, METHOD_NOT_FOUND,
+            "message was {result_message}"
+        );
+        assert_eq!(result_message, "tasks/result not supported");
+
+        for message in [&list_message, &result_message] {
+            assert!(
+                !message.contains(V2_TASKS_METHOD_RETIRED),
+                "a no-backend refusal must not claim a retirement: {message}"
+            );
+        }
+        assert_ne!(
+            list_message, result_message,
+            "the two no-backend refusals are themselves distinguishable"
+        );
     }
 }
 

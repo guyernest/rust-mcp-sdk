@@ -535,10 +535,18 @@ async fn site_b_v2_http_request_must_not_elicit_a_prohibited_code() {
          was {}",
         probe.raw
     );
-    // And the replacement answer, pinned. `METHOD_NOT_FOUND` is the truthful one:
-    // on v2 the task lifecycle is an EXTENSION that must be negotiated through
-    // the `capabilities.extensions` map, and pmcp advertises no
-    // `io.modelcontextprotocol/tasks` entry (TASK-01, Phase 114, still open).
+    // And the replacement answer, pinned. `METHOD_NOT_FOUND` is the truthful
+    // one: `tasks/result` is ABSENT from the vendored tasks-extension schema,
+    // which declares only `tasks/get`, `tasks/update` and `tasks/cancel`. The
+    // method does not exist on this protocol version.
+    //
+    // This comment used to say the refusal was `METHOD_NOT_FOUND` because pmcp
+    // advertised no `io.modelcontextprotocol/tasks` entry. Plan 114-05 made
+    // every backend-configured server advertise exactly that entry, and plan
+    // 114-08 replaced the resulting untruthful "the tasks extension is not
+    // negotiated" wire message — which told the caller to fix a negotiation
+    // that had already succeeded — with the retirement message asserted below.
+    // The assertion's INTENT is unchanged: the refusal must say WHY.
     assert_eq!(
         code,
         Some(i64::from(
@@ -548,7 +556,8 @@ async fn site_b_v2_http_request_must_not_elicit_a_prohibited_code() {
         probe.raw
     );
     assert!(
-        http_error_message(&probe).is_some_and(|m| m.contains("not negotiated")),
+        http_error_message(&probe)
+            .is_some_and(|m| m.contains(pmcp::testing::V2_TASKS_METHOD_RETIRED)),
         "the v2 refusal must say WHY, not just refuse. body was {}",
         probe.raw
     );

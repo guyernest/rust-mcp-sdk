@@ -160,6 +160,24 @@ pub fn method_is_mrtr_eligible(method: &str) -> bool {
     crate::types::mrtr::mrtr_eligible(method)
 }
 
+/// The PRODUCTION `-32601` message body a v2 caller receives for a `tasks/*`
+/// method protocol version 2026-07-28 RETIRED (Phase 114, TASK-03).
+///
+/// The wire message is `format!("{method} {V2_TASKS_METHOD_RETIRED}")`, so a
+/// test asserts the method prefix and this suffix separately.
+///
+/// **Why this re-export exists.** The constant lives in the `pub(crate)`
+/// `server::task_dispatch` module, and the suites that assert on the refusal
+/// cross a real HTTP boundary — so without it every one of them would hand-copy
+/// the sentence. This file already records what a hand-copied mirror costs (the
+/// `Mcp-Name` encoder mirror had silently drifted from the shipped codec), and a
+/// refusal message that drifts is worse than most: it is the ONLY signal telling
+/// a caller which of the three `-32601` conditions it hit.
+///
+/// `#[cfg(not(target_arch = "wasm32"))]` because the whole task subsystem is.
+#[cfg(not(target_arch = "wasm32"))]
+pub const V2_TASKS_METHOD_RETIRED: &str = crate::server::task_dispatch::V2_TASKS_METHOD_RETIRED;
+
 /// Mint a `requestState` continuation token with the PRODUCTION codec
 /// (Phase 113, HTTP-02).
 ///

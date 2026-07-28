@@ -1650,9 +1650,12 @@ impl Server {
                     &request,
                     auth_context.as_ref(),
                     // The era resolved ONCE at transport ingress, CONSUMED here.
-                    // Read by the `tasks/result` pending refusal only, so that a
-                    // v2 request cannot elicit the spec-prohibited `-32002`
-                    // (Finding 11; `task_dispatch::is_v1_task_era`).
+                    // Read by the `tasks/result` pending refusal, so that a v2
+                    // request cannot elicit the spec-prohibited `-32002`
+                    // (Finding 11; `task_dispatch::is_v1_task_era`), AND by the
+                    // two v2 retirement gates for `tasks/list` / `tasks/result`
+                    // (TASK-03; `task_dispatch::tasks_list_serves_on_era`).
+                    // Every gate lives in `task_dispatch`, never here.
                     protocol_context.as_ref().map(|ctx| ctx.era),
                 )
                 .await;
