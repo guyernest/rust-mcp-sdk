@@ -2443,7 +2443,63 @@ Plans:
   4. On v2, task owner binding requires OAuth `sub` or a stable per-request identity and fails closed when absent (no session-id fallback); a security test proves no cross-caller task visibility (TASK-05)
   5. The `TaskStore` trait, state machine, and DynamoDB/Redis/in-memory backends are unchanged — the migration is a wire-API reshape behind the `TaskRouter` boundary, verified by the v1 storage/tasks test suite staying green (TASK-06)
 
-**Plans**: TBD
+**Plans**: 18 plans (12 waves)
+
+Plans:
+
+**Wave 1** *(no dependencies — parallel)*
+
+- [ ] 114-01-PLAN.md — Vendor the ext-tasks draft schema at a pinned commit (PROVENANCE + SHA256 tripwire) + the `114-SPEC-RECHECK.md` hold record with the both-repos condition (DQ6)
+- [ ] 114-02-PLAN.md — v1 `tasks/*` golden byte fixtures captured PRE-reshape (D-14 item 2; none existed) + shared tasks test harness (`OptionalBearer`, tasks-backed spawn, client-declaration body builder)
+- [ ] 114-03-PLAN.md — `ClientCapabilities.extensions` field (F6 gap) + `TASKS_EXTENSION_KEY` + typed `TasksExtensionCapability` serializing as `{}` + five serde locks
+- [ ] 114-04-PLAN.md — Additive `TaskStore` input-delivery + `supports_inputs()` and `TaskRouter::handle_tasks_update` seams (D-12) + in-crate `InMemoryTaskStore` delivery (D-13 site 3)
+
+**Wave 2** *(parallel)*
+
+- [ ] 114-05-PLAN.md — Server extension advertisement via the shared endpoint-backed rule (D-01) + era-projected capabilities: v2 discover shows the entry and drops the v1 tasks keys, v1 `initialize` byte-identical (D-02/D-03)
+- [ ] 114-06-PLAN.md — Client half: per-request extension declaration, era-aware `assert_capability` reading the extensions map (D-04), `Mcp-Name` = `params.taskId` via a SEPARATE table keeping `tasks/update` MRTR-ineligible (DQ4)
+- [ ] 114-07-PLAN.md — `pmcp-tasks` input delivery in `GenericTaskStore<B>` (one CAS via `put_if_version`) + memory delegation (D-13 site 2, F12) + router override + pre-114 record byte fixture
+
+**Wave 3**
+
+- [ ] 114-08-PLAN.md — `tasks/list` + `tasks/result` era-gated off on v2 with two distinct truthful `-32601` messages; frozen `-32002` untouched; `is_v1_task_era` rustdoc corrected (TASK-03)
+
+**Wave 4**
+
+- [ ] 114-09-PLAN.md — v2 owner binding fails closed on Phase 113's three-row identity table (no session-id, no `client_id`); ordered refusals `-32021` then `-32003` at HTTP 200 before the params parse (DQ3); v1 `"local"` frozen + migration warn
+
+**Wave 5**
+
+- [ ] 114-10-PLAN.md — Reserved-field registry fix: explicit ownership replaces the disposition-derived flag so a v2 `tasks/get` keeps its required top-level `inputRequests` (DQ2, highest-severity finding); `ResponseDisposition::Task` promoted to live code
+
+**Wave 6**
+
+- [ ] 114-11-PLAN.md — v2 wire shapes: flat `CreateTaskResult`/`GetTaskResult` with `ttlMs`/`pollIntervalMs`, status-conditional `result`/`error`/`inputRequests`, empty acks, `NotFound` → `-32602` without an oracle; v1 shapes untouched (TASK-04)
+
+**Wave 7**
+
+- [ ] 114-12-PLAN.md — Server-directed v2 create trigger: the client's per-request declaration replaces v1's `task` field (DQ1), enforced in ONE expression reached from both dispatch sites; end-to-end over a real `tools/call`
+
+**Wave 8**
+
+- [ ] 114-13-PLAN.md — `tasks/update` routing via `InternalClientRequest` (no public-enum variant — `ClientRequest` is NOT `#[non_exhaustive]`) + three replacement guards for the lost MRTR compile tripwire (Pitfall 4)
+
+**Wave 9**
+
+- [ ] 114-14-PLAN.md — `tasks/update` delivery: five MRTR bounds FIRST, kind-directed `decode_for` against server-recorded kinds (D-17 / the D-113-O class), atomic partial-vs-complete transition, empty ack + property test + fuzz target
+
+**Wave 10** *(parallel)*
+
+- [ ] 114-15-PLAN.md — TASK-05 live-socket two-principal cross-caller matrix over `tasks/get`/`update`/`cancel` with measured indistinguishability and per-method negative controls (D-09)
+- [ ] 114-16-PLAN.md — Source tripwires: every tasks route carries a named era guard, no v2 `NotFound` → `-32603`, status-string set-equality against the vendored schema, per-value provenance
+
+**Wave 11**
+
+- [ ] 114-17-PLAN.md — Client `tasks_update()` + input-supplying poll helper, and the paired runnable example `s50_v2_tasks_server` / `s51_v2_tasks_agent` (autonomous agent poll loop, D-05; `s49` was already taken twice)
+
+**Wave 12**
+
+- [ ] 114-18-PLAN.md — Whole-phase gate (quality-gate, semver 223/223, feature matrix, wasm, pmat), stale-doc sweep, TASK-01..06 booked `[~]` under the D-18 hold, deferred-items ledger + sign-off checkpoint
 
 ### Phase 115: JSON Schema 2020-12 + Structured Output + Caching Hints
 
