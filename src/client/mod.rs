@@ -2864,6 +2864,21 @@ impl<T: Transport> Client<T> {
     /// Once an EXPLICIT [`Self::server_discover`] has stored a projection, v2
     /// enforcement is exactly as strict as v1. v1 is untouched and still fails
     /// closed.
+    ///
+    /// # `"tasks"` is era-SPLIT (Phase 114, D-04)
+    ///
+    /// The two eras spell the same capability in two different places, so the
+    /// `"tasks"` arm reads a different field on each:
+    ///
+    /// | Era | Where the server advertises tasks |
+    /// |-----|-----------------------------------|
+    /// | v1 (`2025-11-25`) | `capabilities.tasks` |
+    /// | v2 (`2026-07-28`) | `capabilities.extensions["io.modelcontextprotocol/tasks"]` |
+    ///
+    /// Reading `capabilities.tasks` on v2 would refuse EVERY conformant v2
+    /// server: `core::project_capabilities_for_v2` strips that field from the
+    /// v2 `server/discover` projection precisely because advertising it there
+    /// would be a capability lie. See [`Self::tasks_capability_satisfied_by`].
     fn assert_capability(&self, capability: &str, method: &str) -> Result<()> {
         if self.is_v2() && self.server_capabilities.is_none() {
             return Ok(());
@@ -2892,7 +2907,7 @@ impl<T: Transport> Client<T> {
             "tasks" => self
                 .server_capabilities
                 .as_ref()
-                .is_some_and(|c| c.tasks.is_some()),
+                .is_some_and(|c| self.tasks_capability_satisfied_by(c)),
             // The LLM-server pattern: `create_message` asks a server whose
             // `SamplingHandler` runs the LLM. A pmcp `Server` built with
             // `.sampling(handler)` advertises this by setting
@@ -2924,11 +2939,58 @@ impl<T: Transport> Client<T> {
         if has_capability {
             Ok(())
         } else {
-            Err(Error::capability(format!(
-                "Server does not support {} (required for {})",
-                capability, method
-            )))
+            Err(Error::capability(
+                self.unsupported_capability_message(capability, method),
+            ))
         }
+    }
+
+    /// Whether `capabilities` satisfies the `"tasks"` capability ON THIS ERA
+    /// (Phase 114, D-04).
+    ///
+    /// - **v2** — the tasks extension is an Extensions-Track capability, so it
+    ///   is satisfied iff the `extensions` map carries
+    ///   [`TASKS_EXTENSION_KEY`](crate::types::capabilities::TASKS_EXTENSION_KEY).
+    ///   `capabilities.tasks` is deliberately NOT consulted: a v2 server
+    ///   projects that field away, so reading it would refuse every conformant
+    ///   v2 server.
+    /// - **v1** — unchanged: `capabilities.tasks`.
+    ///
+    /// # PRESENCE, not `{}`-equality
+    ///
+    /// The check is `contains_key`. The draft schema types the value as
+    /// `Record<string, never>` and pmcp's own server advertises exactly `{}`,
+    /// but an operator may configure a richer value, and refusing to CALL a
+    /// server that advertised support with a value we did not expect would be
+    /// the mirror image of the over-removal the server-side v1 projection
+    /// deliberately avoids. Presence is what the negotiation rule tests.
+    fn tasks_capability_satisfied_by(&self, capabilities: &ServerCapabilities) -> bool {
+        if self.is_v2() {
+            return capabilities.extensions.as_ref().is_some_and(|extensions| {
+                extensions.contains_key(crate::types::capabilities::TASKS_EXTENSION_KEY)
+            });
+        }
+        capabilities.tasks.is_some()
+    }
+
+    /// Render the refusal [`assert_capability`](Self::assert_capability) returns.
+    ///
+    /// The v2 `"tasks"` refusal NAMES the extension key (T-114-23: a public,
+    /// non-secret protocol identifier), because the remedy — the server has to
+    /// advertise it, or the caller is talking to a server that does not support
+    /// tasks at all — is not discoverable from "does not support tasks". No
+    /// server state, task id or principal is rendered.
+    fn unsupported_capability_message(&self, capability: &str, method: &str) -> String {
+        let base = format!("Server does not support {capability} (required for {method})");
+        if capability == "tasks" && self.is_v2() {
+            return format!(
+                "{base} — a 2026-07-28 server negotiates tasks through \
+                 capabilities.extensions[\"{key}\"], and this server's server/discover \
+                 projection carries no such entry",
+                key = crate::types::capabilities::TASKS_EXTENSION_KEY,
+            );
+        }
+        base
     }
 
     /// Send a TYPED request and wait for its response.
@@ -6742,6 +6804,133 @@ mod tests {
 
             client.server_capabilities = Some(ServerCapabilities::tools_only());
             assert!(client.assert_capability("tools", "tools/call").is_ok());
+        }
+
+        // ---- tasks negotiation, era-split (Phase 114, D-04) -----------------
+
+        /// A `ServerCapabilities` advertising the tasks extension the v2 way.
+        fn v2_tasks_capabilities() -> ServerCapabilities {
+            let mut extensions = HashMap::new();
+            extensions.insert(
+                crate::types::capabilities::TASKS_EXTENSION_KEY.to_string(),
+                json!({}),
+            );
+            ServerCapabilities {
+                extensions: Some(extensions),
+                ..ServerCapabilities::default()
+            }
+        }
+
+        #[test]
+        fn v2_tasks_capability_is_satisfied_by_the_extensions_entry() {
+            let mut client = v2_client();
+            client.server_capabilities = Some(v2_tasks_capabilities());
+            assert!(
+                client.assert_capability("tasks", "tasks/get").is_ok(),
+                "a v2 server advertising the extension must be callable"
+            );
+        }
+
+        /// The refusal NAMES the key, or the remedy is undiscoverable.
+        #[test]
+        fn v2_tasks_capability_is_refused_when_the_extensions_entry_is_absent() {
+            let mut client = v2_client();
+            client.server_capabilities = Some(ServerCapabilities::default());
+            let error = client
+                .assert_capability("tasks", "tasks/get")
+                .expect_err("a v2 server that did not advertise the extension must be refused");
+            let rendered = error.to_string();
+            assert!(
+                rendered.contains(crate::types::capabilities::TASKS_EXTENSION_KEY),
+                "the refusal must name the extension key: {rendered}"
+            );
+        }
+
+        /// The v1 field is NOT the v2 signal.
+        ///
+        /// Non-vacuity guard for the arm above: a v2 server projects
+        /// `capabilities.tasks` away, so an implementation that kept reading it
+        /// would refuse every conformant v2 server. This is the fixture that
+        /// would pass under the old arm and must now fail.
+        #[test]
+        fn v2_tasks_capability_ignores_the_v1_tasks_field() {
+            let mut client = v2_client();
+            client.server_capabilities = Some(ServerCapabilities {
+                tasks: Some(crate::types::capabilities::ServerTasksCapability::default()),
+                ..ServerCapabilities::default()
+            });
+            assert!(
+                client.assert_capability("tasks", "tasks/get").is_err(),
+                "capabilities.tasks is the v1 spelling and must not satisfy v2"
+            );
+        }
+
+        /// The escape hatch is NOT narrowed for tasks.
+        #[test]
+        fn v2_tasks_capability_passes_without_a_stored_projection() {
+            let client = v2_client();
+            assert!(client.server_capabilities.is_none());
+            assert!(
+                client.assert_capability("tasks", "tasks/get").is_ok(),
+                "a v2 client that never called server_discover has no basis to refuse"
+            );
+        }
+
+        /// v1 still gates on `capabilities.tasks`, in BOTH directions.
+        #[test]
+        fn v1_tasks_capability_still_gates_on_the_tasks_field() {
+            let mut client = ClientBuilder::new(MockTransport::new()).build();
+            client.server_capabilities = Some(ServerCapabilities::default());
+            assert!(
+                client.assert_capability("tasks", "tasks/get").is_err(),
+                "v1 with no tasks field must still fail closed"
+            );
+
+            client.server_capabilities = Some(ServerCapabilities {
+                tasks: Some(crate::types::capabilities::ServerTasksCapability::default()),
+                ..ServerCapabilities::default()
+            });
+            assert!(
+                client.assert_capability("tasks", "tasks/get").is_ok(),
+                "v1 behaviour is untouched"
+            );
+
+            // And the v2 spelling must NOT satisfy v1 — the two tables stay
+            // era-separated in both directions.
+            client.server_capabilities = Some(v2_tasks_capabilities());
+            assert!(
+                client.assert_capability("tasks", "tasks/get").is_err(),
+                "an extensions entry is the v2 spelling and must not satisfy v1"
+            );
+        }
+
+        /// "Fails fast" is MEASURED, not assumed: zero bytes leave the process.
+        #[test]
+        fn an_un_negotiated_v2_tasks_call_sends_nothing() {
+            let transport = ModeRecordingTransport::http_like();
+            let typed = transport.typed_sends.clone();
+            let raw = transport.raw_bodies.clone();
+            let mut client = ClientBuilder::new(transport)
+                .with_protocol_version(v2())
+                .expect("selectable")
+                .with_tasks_extension()
+                .build();
+            client.server_capabilities = Some(ServerCapabilities::default());
+
+            let error = futures::executor::block_on(client.tasks_get("task-1"))
+                .expect_err("an un-negotiated tasks call must be refused locally");
+            assert!(error
+                .to_string()
+                .contains(crate::types::capabilities::TASKS_EXTENSION_KEY));
+            assert_eq!(
+                *typed.lock().unwrap(),
+                0,
+                "the refusal must precede the round trip"
+            );
+            assert!(
+                raw.lock().unwrap().is_empty(),
+                "the refusal must precede the round trip"
+            );
         }
 
         // ---- no handshake on the wire ---------------------------------------
