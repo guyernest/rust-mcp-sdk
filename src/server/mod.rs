@@ -1863,6 +1863,13 @@ impl Server {
         #[cfg(not(target_arch = "wasm32"))]
         let create_path_auth = validated_auth_context.clone();
 
+        // Capture the ALREADY-RESOLVED era before `protocol_context` is moved into
+        // `extra` below, so the create-path owner binding reads the SAME ingress
+        // value the handler does and never re-parses `params._meta` (Phase 112).
+        // The twin of the `ServerCore` capture on its own `CallTool` arm.
+        #[cfg(not(target_arch = "wasm32"))]
+        let create_path_era = protocol_context.as_ref().map(|ctx| ctx.era);
+
         // Propagate the request's `_meta` object (raw JSON incl. namespaced
         // `other` keys) so handlers can read it via `extra.request_meta` in the
         // high-level `Server` path too (ServerCore already wires this at core.rs).
@@ -2020,6 +2027,7 @@ impl Server {
                     tool_task_support,
                     task_requested,
                     create_path_auth.as_ref(),
+                    create_path_era,
                 )
                 .await
             {

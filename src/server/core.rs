@@ -1575,8 +1575,8 @@ pub(crate) fn build_discover_response(
 // MRTR code.
 // ===========================================================================
 
-/// The principal a server with NO auth provider configured binds continuations
-/// to.
+/// The principal a server with NO auth provider configured binds v2
+/// state-bearing artifacts to.
 ///
 /// Such a deployment has no principals to separate — every caller arrives as the
 /// same (absent) identity — so collapsing them onto one NAMED constant is honest
@@ -1585,8 +1585,17 @@ pub(crate) fn build_discover_response(
 /// originating-request binding remain the residual replay controls.
 ///
 /// A server that DOES configure an auth provider never reaches this value: an
-/// unauthenticated request is refused MRTR outright (T-113-22).
-#[cfg(all(feature = "streamable-http", not(target_arch = "wasm32")))]
+/// unauthenticated request is refused outright (T-113-22 / T-114-37).
+///
+/// # Why this is not `streamable-http`-gated
+///
+/// It was, while MRTR was its only consumer. Plan 114-09 gave the v2 `tasks/*`
+/// owner binding the SAME identity table, and `task_dispatch` is gated
+/// `not(wasm32)` WITHOUT the feature — so a build without `streamable-http`
+/// still needs this constant. Widening the gate is what lets `task_dispatch`
+/// REUSE the value instead of writing a second `""` literal, which would be a
+/// second source of truth for "the anonymous bucket".
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) const ANONYMOUS_PRINCIPAL: &str = "";
 
 /// The ONE client-facing message for every `requestState` authentication
@@ -1690,13 +1699,18 @@ const MRTR_UNCANONICALIZABLE_MESSAGE: &str =
 const MRTR_UNCANONICALIZABLE_INVARIANT_MESSAGE: &str =
     "the originating request could not be canonicalized for the continuation binding";
 
-/// The identity inputs MRTR binds a continuation to.
+/// The identity inputs a v2 state-bearing artifact is bound to.
 ///
 /// `AuthContext::subject` is the ONLY identity anchor — never `clientInfo`
-/// (self-reported), never a session id (v2 has none). Carried as a `&str` so
-/// both the ingress and the egress call site can pass the SAME value without
-/// cloning the whole `AuthContext`.
-#[cfg(all(feature = "streamable-http", not(target_arch = "wasm32")))]
+/// (self-reported), never a `client_id` (per-APPLICATION, OAuth `azp`), never a
+/// session id (v2 has none). Carried as a `&str` so every call site can pass the
+/// SAME value without cloning the whole `AuthContext`.
+///
+/// Named for MRTR because MRTR minted it (Phase 113). Since plan 114-09 it is
+/// also the input to the v2 `tasks/*` owner binding — ONE identity table for
+/// every v2 ingress path on the server, so the name is now historical rather
+/// than a scope statement. See [`resolve_mrtr_principal`].
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct MrtrPrincipal<'a> {
     /// `AuthContext::subject`, or `None` when the request produced no
@@ -1707,16 +1721,37 @@ pub(crate) struct MrtrPrincipal<'a> {
     pub has_auth_provider: bool,
 }
 
-/// Resolve the AAD principal, FAIL-CLOSED.
+/// Resolve the v2 principal, FAIL-CLOSED — the SINGLE identity table.
 ///
-/// * an `AuthContext` is present → its `subject`;
-/// * no `AuthContext` but an auth provider IS configured → `None`, i.e. refuse
-///   MRTR entirely — a state-bearing continuation must not be mintable or
-///   redeemable by an unauthenticated caller on a server that expects
-///   authentication (T-113-22);
-/// * no auth provider at all → [`ANONYMOUS_PRINCIPAL`].
-#[cfg(all(feature = "streamable-http", not(target_arch = "wasm32")))]
-fn resolve_mrtr_principal(principal: MrtrPrincipal<'_>) -> Option<&str> {
+/// | `authenticated_subject` | `has_auth_provider` | result |
+/// |---|---|---|
+/// | `Some(subject)` | any | `Some(subject)` |
+/// | `None` | `true` | `None` — REFUSE |
+/// | `None` | `false` | `Some(`[`ANONYMOUS_PRINCIPAL`]`)` |
+///
+/// Row 2 is the fail-closed row: a state-bearing artifact must not be mintable
+/// or redeemable by an unauthenticated caller on a server that expects
+/// authentication (T-113-22).
+///
+/// # Two callers, one table (plan 114-09)
+///
+/// 1. MRTR ingress/egress, which binds a `requestState` continuation to it
+///    (Phase 113, this file), and
+/// 2. [`TaskDispatch::resolve_owner`](crate::server::task_dispatch::TaskDispatch::resolve_owner),
+///    which binds a v2 TASK owner to it (Phase 114, TASK-05).
+///
+/// The argument is the same one in both cases: a continuation and a task record
+/// are both server-held state a later request redeems, so "who may redeem it"
+/// must have exactly one answer per server. A second `match` over the same two
+/// inputs — however carefully copied — is a second answer waiting to drift, and
+/// (the 114-08 lesson) it also destroys the negative control that would prove
+/// either copy load-bearing.
+///
+/// `subscriptions/listen`'s `resolve_listen_principal` deliberately does NOT
+/// collapse onto this function; its third row is a concurrency-accounting key,
+/// not an identity, and the reason is written at that function.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn resolve_mrtr_principal(principal: MrtrPrincipal<'_>) -> Option<&str> {
     match (principal.authenticated_subject, principal.has_auth_provider) {
         (Some(subject), _) => Some(subject),
         (None, true) => None,
@@ -2995,18 +3030,30 @@ impl ProtocolHandler for ServerCore {
 }
 
 impl ServerCore {
-    /// Resolve the owner ID from the authentication context using the task router.
+    /// Bind this request to a task owner — ERA-AWARE, fail-closed on v2.
     ///
-    /// Returns `None` if no task router is configured. When a task router is
-    /// available, it delegates to [`TaskRouter::resolve_owner`] which uses
-    /// the priority chain: OAuth subject > client ID > session ID > "local".
-    /// When only a `TaskStore` is configured (no `TaskRouter`), derives
-    /// the owner from the auth context directly.
+    /// A thin delegation to
+    /// [`TaskDispatch::resolve_owner`](crate::server::task_dispatch::TaskDispatch::resolve_owner),
+    /// which holds the rule ONCE for both dispatchers. On v1 (and on a request
+    /// carrying no era code at all) the answer is byte-identical to what it has
+    /// always been: the [`TaskRouter`] priority chain, or the OAuth subject with
+    /// a store-only backend, or the shared `"local"` bucket. On v2 it is the
+    /// three-row identity table, whose middle row answers
+    /// [`OwnerBinding::Refused`](crate::server::task_dispatch::OwnerBinding::Refused)
+    /// — an unauthenticated caller on a server that HAS an auth provider binds
+    /// no owner at all (TASK-05, T-114-37).
+    ///
+    /// `era` is the ALREADY-RESOLVED per-request era (Phase 112); this function
+    /// never re-reads `params._meta` to recover it.
     #[cfg(not(target_arch = "wasm32"))]
-    fn resolve_task_owner(&self, auth_context: Option<&AuthContext>) -> Option<String> {
+    fn resolve_task_owner(
+        &self,
+        auth_context: Option<&AuthContext>,
+        era: Option<crate::types::protocol::Era>,
+    ) -> crate::server::task_dispatch::OwnerBinding {
         // Delegate to the shared TaskDispatch unit (owner-resolution lives there,
         // once, for both dispatchers).
-        self.task_dispatch().resolve_owner(auth_context)
+        self.task_dispatch().resolve_owner(auth_context, era)
     }
 
     /// Borrow this `ServerCore`'s task backends into the shared dispatch unit.
@@ -3042,14 +3089,19 @@ impl ServerCore {
         id: RequestId,
         task_value: Value,
         auth_context: Option<&AuthContext>,
+        era: Option<crate::types::protocol::Era>,
     ) -> JSONRPCResponse {
         // Delegate to the shared TaskDispatch unit. It RE-EXTRACTS the task id and
         // the terminal result from `task_value` internally (store mints the id;
         // `extract_terminal_result` recovers the terminal CallToolResult), so the
         // store-minted-id and synchronous-completion-persistence invariants live in
         // exactly one place.
+        //
+        // `era` reaches the SAME owner-binding table every `tasks/*` route uses, so
+        // a task is created under exactly the rule that later governs who may read
+        // it — and on v2's refuse row nothing is minted at all (T-114-37).
         self.task_dispatch()
-            .build_task_created_response(id, task_value, auth_context)
+            .build_task_created_response(id, task_value, auth_context, era)
             .await
     }
 
@@ -3120,6 +3172,12 @@ impl ServerCore {
                         ),
                     },
                     ClientRequest::CallTool(req) => {
+                        // Capture the ALREADY-RESOLVED era before `protocol_context`
+                        // is moved into `handle_call_tool` below, so both create-path
+                        // owner bindings on this arm read the SAME ingress value and
+                        // neither has to re-parse `params._meta` (Phase 112).
+                        #[cfg(not(target_arch = "wasm32"))]
+                        let call_tool_era = protocol_context.as_ref().map(|ctx| ctx.era);
                         // Check for task-augmented call: explicit task field or tool requires task
                         #[cfg(not(target_arch = "wasm32"))]
                         if let Some(ref task_router) = self.task_router {
@@ -3134,9 +3192,20 @@ impl ServerCore {
                                 task_router.tool_requires_task(&req.name, exec_value.as_ref())
                             };
                             if needs_task {
-                                let owner_id = self
-                                    .resolve_task_owner(auth_context.as_ref())
-                                    .unwrap_or_else(|| "local".to_string());
+                                // A router-minted task is state a LATER request
+                                // redeems, so it is bound by the same table that
+                                // governs redemption. On v2's refuse row nothing is
+                                // minted and the tool never runs (T-114-37); on v1
+                                // this is byte-identical to the previous
+                                // `.unwrap_or_else(|| "local")`.
+                                let crate::server::task_dispatch::OwnerBinding::Owner(owner_id) =
+                                    self.resolve_task_owner(auth_context.as_ref(), call_tool_era)
+                                else {
+                                    return crate::server::task_dispatch::authentication_required(
+                                        id,
+                                        crate::types::mrtr::CALL_TOOL_METHOD,
+                                    );
+                                };
                                 let task_params =
                                     req.task.clone().unwrap_or_else(|| serde_json::json!({}));
                                 #[allow(clippy::used_underscore_binding)]
@@ -3187,6 +3256,7 @@ impl ServerCore {
                                         id,
                                         task_value,
                                         auth_context.as_ref(),
+                                        call_tool_era,
                                     )
                                     .await
                                 },
@@ -3196,25 +3266,54 @@ impl ServerCore {
                                     if let (Some((task_id, tool_name)), Some(ref task_router)) =
                                         (continuation_ctx, &self.task_router)
                                     {
-                                        let owner_id = self
-                                            .resolve_task_owner(auth_context.as_ref())
-                                            .unwrap_or_else(|| "local".to_string());
-                                        let tool_result_value =
-                                            serde_json::to_value(&result).unwrap_or_default();
-                                        if let Err(e) = task_router
-                                            .handle_workflow_continuation(
-                                                &task_id,
-                                                &tool_name,
-                                                tool_result_value,
-                                                &owner_id,
-                                            )
-                                            .await
-                                        {
-                                            tracing::warn!(
-                                                "Workflow continuation recording failed for task {}: {}",
-                                                task_id,
-                                                e
-                                            );
+                                        // Recording a continuation WRITES to a task
+                                        // record, so it needs a bound owner for the
+                                        // same reason minting one does. On v2's
+                                        // refuse row there is no owner to write
+                                        // under, and inventing one would file the
+                                        // continuation into a bucket the caller was
+                                        // just refused (T-114-37). Skip and warn
+                                        // rather than refuse the whole response:
+                                        // this path is ALREADY fire-and-forget, the
+                                        // tool has already run, and its result is
+                                        // returned unchanged below. Unreachable on
+                                        // v1, where the table never refuses.
+                                        match self.resolve_task_owner(
+                                            auth_context.as_ref(),
+                                            call_tool_era,
+                                        ) {
+                                            crate::server::task_dispatch::OwnerBinding::Owner(
+                                                owner_id,
+                                            ) => {
+                                                let tool_result_value =
+                                                    serde_json::to_value(&result)
+                                                        .unwrap_or_default();
+                                                if let Err(e) = task_router
+                                                    .handle_workflow_continuation(
+                                                        &task_id,
+                                                        &tool_name,
+                                                        tool_result_value,
+                                                        &owner_id,
+                                                    )
+                                                    .await
+                                                {
+                                                    tracing::warn!(
+                                                        "Workflow continuation recording failed for task {}: {}",
+                                                        task_id,
+                                                        e
+                                                    );
+                                                }
+                                            },
+                                            crate::server::task_dispatch::OwnerBinding::Refused => {
+                                                tracing::warn!(
+                                                    target: "mcp.tasks",
+                                                    task_id = %task_id,
+                                                    tool = %tool_name,
+                                                    "workflow continuation NOT recorded: an \
+                                                     unauthenticated caller on an auth-configured \
+                                                     server binds no v2 task owner"
+                                                );
+                                            },
                                         }
                                     }
                                     Self::success_response(

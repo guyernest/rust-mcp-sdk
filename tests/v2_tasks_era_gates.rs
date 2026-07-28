@@ -80,9 +80,19 @@ const NO_BACKEND_RESULT_MESSAGE: &str = "tasks/result not supported";
 /// the v1 legs — and only the v1 legs — need a handshake first; v2 has no
 /// `initialize` at all, which is HTTP-01.
 async fn v1_session(addr: SocketAddr) -> String {
+    v1_session_as(addr, &[]).await
+}
+
+/// [`v1_session`] carrying EXTRA headers (an `Authorization` bearer, in
+/// practice).
+///
+/// The single implementation; `v1_session` is the no-extra-headers spelling of
+/// it. One body rather than two so an authenticated leg and an anonymous leg
+/// cannot drift apart in anything but the headers they send.
+async fn v1_session_as(addr: SocketAddr, extra: &[(String, String)]) -> String {
     let init = post(
         addr,
-        &[],
+        extra,
         &v1_body(
             "initialize",
             json!(1),
@@ -100,7 +110,19 @@ async fn v1_session(addr: SocketAddr) -> String {
 
 /// POST a v1 request on `session`.
 async fn v1_post(addr: SocketAddr, session: &str, body: &str) -> Resp {
-    post(addr, &[header(SESSION_HEADER, session)], body).await
+    v1_post_as(addr, session, body, &[]).await
+}
+
+/// [`v1_post`] carrying EXTRA headers. The single implementation.
+async fn v1_post_as(
+    addr: SocketAddr,
+    session: &str,
+    body: &str,
+    extra: &[(String, String)],
+) -> Resp {
+    let mut headers = vec![header(SESSION_HEADER, session)];
+    headers.extend_from_slice(extra);
+    post(addr, &headers, body).await
 }
 
 /// POST a v2 request: three required headers plus the `_meta` era signal.
@@ -115,9 +137,22 @@ async fn v2_post(addr: SocketAddr, method: &str, id: i64, params: serde_json::Va
 
 /// POST a v2 `tasks/*` request carrying a `taskId`.
 async fn v2_task_post(addr: SocketAddr, method: &str, id: i64, task_id: &str) -> Resp {
+    v2_task_post_as(addr, method, id, task_id, &[]).await
+}
+
+/// [`v2_task_post`] carrying EXTRA headers. The single implementation.
+async fn v2_task_post_as(
+    addr: SocketAddr,
+    method: &str,
+    id: i64,
+    task_id: &str,
+    extra: &[(String, String)],
+) -> Resp {
+    let mut headers = v2_headers(method, "");
+    headers.extend_from_slice(extra);
     post(
         addr,
-        &v2_headers(method, ""),
+        &headers,
         &tasks_request_body(method, json!(id), task_id),
     )
     .await
@@ -129,7 +164,16 @@ async fn v2_task_post(addr: SocketAddr, method: &str, id: i64, task_id: &str) ->
 /// terminal result, so the created task stays `working` — which is what makes
 /// the `-32002` pending row reachable at all.
 async fn create_v1_task(addr: SocketAddr, session: &str) -> String {
-    let created = v1_post(
+    create_v1_task_as(addr, session, &[]).await
+}
+
+/// [`create_v1_task`] carrying EXTRA headers. The single implementation.
+///
+/// The headers matter: with an `Authorization` bearer the created task is owned
+/// by that SUBJECT and is therefore reachable from either era; without one it
+/// lands in v1's `"local"` bucket, which no v2 caller can address (TASK-05).
+async fn create_v1_task_as(addr: SocketAddr, session: &str, extra: &[(String, String)]) -> String {
+    let created = v1_post_as(
         addr,
         session,
         &v1_body(
@@ -137,6 +181,7 @@ async fn create_v1_task(addr: SocketAddr, session: &str) -> String {
             json!(10),
             json!({ "name": TASKS_TOOL_NAME, "arguments": {}, "task": {} }),
         ),
+        extra,
     )
     .await;
     created.body["result"]["task"]["taskId"]
@@ -413,6 +458,25 @@ async fn v2_tasks_result_on_a_backendless_server_says_not_supported() {
 // 7 — the scope fence.
 // ===========================================================================
 
+/// The subject BOTH legs of the scope-fence test authenticate as.
+///
+/// The fence creates on v1 and reads on v2, so it can only find its own task if
+/// the two eras agree on the owner. An AUTHENTICATED caller is the only identity
+/// that satisfies that: plan 114-09 binds the OAuth subject on both eras, while
+/// an UNAUTHENTICATED caller binds the v1 `"local"` bucket and the v2
+/// `ANONYMOUS_PRINCIPAL` (`""`) bucket, which `GenericTaskStore::make_key`
+/// prefixes into DISJOINT key spaces by design (TASK-05). Before 114-09 both
+/// eras used `"local"`, so this test could reach its task anonymously; that it
+/// no longer can is the owner binding working, not a regression, and pinning the
+/// subject here keeps this test measuring the RETIREMENT fence it is named for
+/// rather than the owner binding 114-15 measures.
+const FENCE_SUBJECT: &str = "era-fence-subject";
+
+/// The `Authorization` header both fence legs carry.
+fn fence_bearer() -> (String, String) {
+    header("authorization", &format!("Bearer {FENCE_SUBJECT}"))
+}
+
 /// `tasks/get` and `tasks/cancel` SURVIVE in the v2 extension schema, so neither
 /// is gated.
 ///
@@ -422,12 +486,16 @@ async fn v2_tasks_result_on_a_backendless_server_says_not_supported() {
 /// from widening the retirement to methods that were not retired.
 #[tokio::test]
 async fn v2_tasks_get_and_cancel_are_not_gated() {
-    let (addr, handle) = spawn_tasks_server(AuthPosture::None).await;
-    let session = v1_session(addr).await;
-    let task_id = create_v1_task(addr, &session).await;
+    // `Optional`, not `None`: the fence needs a STABLE identity on both eras
+    // (see [`FENCE_SUBJECT`]), and `OptionalBearer` is the posture that maps a
+    // bearer onto a subject while still admitting unauthenticated callers.
+    let (addr, handle) = spawn_tasks_server(AuthPosture::Optional).await;
+    let auth = [fence_bearer()];
+    let session = v1_session_as(addr, &auth).await;
+    let task_id = create_v1_task_as(addr, &session, &auth).await;
 
-    let got = v2_task_post(addr, "tasks/get", 50, &task_id).await;
-    let cancelled = v2_task_post(addr, "tasks/cancel", 51, &task_id).await;
+    let got = v2_task_post_as(addr, "tasks/get", 50, &task_id, &auth).await;
+    let cancelled = v2_task_post_as(addr, "tasks/cancel", 51, &task_id, &auth).await;
     teardown(handle, ()).await;
 
     for (method, response) in [("tasks/get", &got), ("tasks/cancel", &cancelled)] {

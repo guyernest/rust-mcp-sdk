@@ -119,6 +119,43 @@ pub(crate) const V2_TASKS_METHOD_RETIRED: &str =
     "is not a method of the tasks extension on protocol version 2026-07-28: the extension \
      declares only tasks/get, tasks/update and tasks/cancel";
 
+/// The owner a v1 task request from an UNAUTHENTICATED caller is bound to —
+/// FROZEN.
+///
+/// A shared bucket: every unauthenticated caller on the server lands in it, and
+/// `tests/v1_tasks_golden.rs` pins the resulting wire bytes. Spelled once so the
+/// binding and the D-10 migration warn that names it cannot disagree.
+///
+/// It is a DIFFERENT key from v2's
+/// [`ANONYMOUS_PRINCIPAL`](crate::server::core::ANONYMOUS_PRINCIPAL) (`""`).
+/// `GenericTaskStore::is_anonymous_owner` treats the two IDENTICALLY for the
+/// `allow_anonymous` decision, but `make_key` prefixes every record by owner, so
+/// they are DISJOINT key spaces: a task created on v1 by an unauthenticated
+/// caller is not reachable by an unauthenticated v2 caller on the same
+/// no-auth-provider server, and vice versa. Those two facts are easy to
+/// conflate; they are separate.
+const V1_UNAUTHENTICATED_OWNER: &str = "local";
+
+/// The FROZEN `-32601` message for a `tasks/*` method on a server with no task
+/// backend at all.
+///
+/// Spelled once because two sites emit it: the per-endpoint handlers'
+/// no-backend `else` arms. It is deliberately DIFFERENT from
+/// [`V2_TASKS_METHOD_RETIRED`] — "this method was retired" and "this server
+/// serves no tasks at all" call for opposite fixes (T-114-33).
+const TASKS_NOT_ENABLED: &str = "Tasks not enabled";
+
+/// The FROZEN `-32601` message `tasks/result` uses for the same no-backend
+/// condition [`TASKS_NOT_ENABLED`] covers for the other three methods.
+///
+/// Deliberately a different sentence from its three siblings: `tests/…` and
+/// `the_minus_32601_conditions_are_mutually_distinct` assert all four refusals
+/// pairwise distinct, so a caller can always tell which one it hit.
+const TASKS_RESULT_NOT_SUPPORTED: &str = "tasks/result not supported";
+
+/// The `-32601` message for a request that is not a `tasks/*` method at all.
+const NOT_A_TASKS_METHOD: &str = "Method not supported";
+
 /// Build the `-32601` a v2 caller receives for a RETIRED `tasks/*` method.
 ///
 /// The SINGLE builder both era gates use, so `tasks/list` and `tasks/result`
@@ -407,6 +444,30 @@ pub(crate) enum DispatchOutput {
     Middleware(Result<Value>),
 }
 
+/// Build the `-32003` a caller receives for case 4 of the ordered refusal chain.
+///
+/// The message shape is `subscriptions/listen`'s verbatim, because it is the
+/// same condition on the same server and a caller that hits both should not have
+/// to learn two sentences for it.
+///
+/// It deliberately answers at HTTP **200** with a JSON-RPC error body:
+/// [`AUTHENTICATION_REQUIRED`](crate::types::protocol::error_codes::AUTHENTICATION_REQUIRED)
+/// is not in `v2_status_for_code`'s 400 arm, and putting it there would change
+/// the status of every other emitter of that code across the transport
+/// (T-114-43). The transport file is untouched by this plan.
+///
+/// It is not an authentication ORACLE: it fires only for a method that EXISTS on
+/// a server that ADVERTISES it, so all it reveals is "this server wants
+/// authentication" — already public from the server's `WWW-Authenticate` posture
+/// (T-114-40).
+pub(crate) fn authentication_required(id: RequestId, method: &str) -> JSONRPCResponse {
+    error_response(
+        id,
+        crate::types::protocol::error_codes::AUTHENTICATION_REQUIRED,
+        format!("{method} requires an authenticated caller on this server"),
+    )
+}
+
 /// Resolve a handler's `Result<ToolOutput>` into the shared [`DispatchOutput`]
 /// decision (D-05: one copy of the Payload-vs-Result + bypass rule).
 ///
@@ -568,6 +629,23 @@ pub fn double_wrap_tripwire(
     Some(marker)
 }
 
+/// The outcome of binding a task request to a task OWNER.
+///
+/// A two-variant enum rather than `Option<String>` because the two answers mean
+/// opposite things and one of them has to reach the wire: `None` used to mean
+/// "no task backend", and reusing it for "refused" would make the fail-closed
+/// row indistinguishable from a configuration fact at every call site.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum OwnerBinding {
+    /// The owner id every downstream store/router call is scoped to.
+    Owner(String),
+    /// Row 2 of the v2 identity table: an unauthenticated caller on a server
+    /// that HAS an auth provider. The caller receives `-32003`
+    /// [`AUTHENTICATION_REQUIRED`](crate::types::protocol::error_codes::AUTHENTICATION_REQUIRED)
+    /// and no task is read, minted or enumerated (T-114-37).
+    Refused,
+}
+
 /// Borrow-struct holding the task backend handles and the identity inputs a
 /// dispatcher owns.
 ///
@@ -589,16 +667,6 @@ pub(crate) struct TaskDispatch<'a> {
     /// `MrtrRound::begin` already makes) — no new field is added to either
     /// server, exactly as `listen_server_view` does for
     /// `subscriptions/listen`.
-    //
-    // Why the allow, and why it is TEMPORARY: plan 114-09 deliberately splits
-    // "give the identity decision every input it needs" (this commit, pure
-    // plumbing) from "make the decision" (the next commit), so that the next
-    // commit's negative control can fail for exactly one reason. That leaves the
-    // field write-only for exactly one commit, and this crate builds with
-    // `-D warnings`, which makes `dead_code` a HARD ERROR rather than a warning.
-    // Removed by the `resolve_owner` commit — the same two-commit-lived pattern
-    // plan 114-04 recorded for `TaskRecord`'s three new fields.
-    #[allow(dead_code)]
     pub(crate) has_auth_provider: bool,
 }
 
@@ -615,36 +683,128 @@ impl TaskDispatch<'_> {
         self.task_store.is_some() || self.task_router.is_some()
     }
 
-    /// Resolve the owner ID from the authentication context.
+    /// Bind this request to a task owner, ERA-AWARE and FAIL-CLOSED on v2
+    /// (TASK-05, D-07).
     ///
-    /// Returns `None` if no backend is configured. With a `TaskRouter`, delegates
-    /// to [`TaskRouter::resolve_owner`] (priority chain: OAuth subject, then client
-    /// ID, then session ID, then "local"). With only a `TaskStore`, the owner IS
-    /// the OAuth subject (consistent with the router's subject-first priority), so
-    /// a given authenticated user owns the same tasks across reconnects/sessions.
-    /// Owner is ALWAYS derived from auth/router, NEVER from client params (IDOR
-    /// mitigation, T-102-01).
-    pub(crate) fn resolve_owner(&self, auth_context: Option<&AuthContext>) -> Option<String> {
+    /// Owner is ALWAYS derived from the `AuthContext`/router, NEVER from client
+    /// params (IDOR mitigation, T-102-01) — on both eras.
+    ///
+    /// # v1 (and a request carrying no era code at all) — FROZEN
+    ///
+    /// Byte-identical to what it has always been. With a [`TaskRouter`],
+    /// delegates to [`TaskRouter::resolve_owner`] (priority chain: OAuth subject,
+    /// then client id, then session id, then the shared
+    /// [`V1_UNAUTHENTICATED_OWNER`] bucket); with only a [`TaskStore`], the owner
+    /// IS the OAuth subject; with no backend at all, the value is inert and
+    /// collapses onto the same fallback every pre-114-09 caller already applied
+    /// with `.unwrap_or_else(|| "local")`. The ONLY addition is the D-10
+    /// migration `tracing::warn!` on the unauthenticated row.
+    ///
+    /// # v2 — the three-row identity table, REUSED not re-derived
+    ///
+    /// | authenticated subject | `has_auth_provider` | owner |
+    /// |---|---|---|
+    /// | `Some(sub)` | any | `sub` |
+    /// | `None` | `true` | [`OwnerBinding::Refused`] |
+    /// | `None` | `false` | [`ANONYMOUS_PRINCIPAL`](crate::server::core::ANONYMOUS_PRINCIPAL) |
+    ///
+    /// The decision is [`resolve_mrtr_principal`](crate::server::core::resolve_mrtr_principal)
+    /// itself — the same function, not a copy of its match — because a task
+    /// record and an MRTR continuation are both server-held state a later
+    /// request redeems, and "who may redeem it" must have exactly one answer per
+    /// server. See that function for why one table rather than two.
+    ///
+    /// ## The v2 arm never calls [`TaskRouter::resolve_owner`]
+    ///
+    /// Deliberate, and NOT an oversight to be tidied away by a later "unify the
+    /// two paths" change. That method's chain reaches:
+    ///
+    /// * a **session id**, which TASK-05 forbids outright — v2 is stateless by
+    ///   design and has no session, so binding an owner to one would either fail
+    ///   or (worse) collide callers who happen to share a synthesised id; and
+    /// * a **`client_id`**, which is per-APPLICATION (the OAuth `azp` claim), so
+    ///   using it would collapse per-USER isolation into per-APP isolation —
+    ///   every user of the same client application would share one task bucket
+    ///   (T-114-38).
+    ///
+    /// ## D-07's caveat, stated plainly rather than implied
+    ///
+    /// Row 3 means that on a server with **no auth provider at all**, every v2
+    /// caller shares ONE bucket. Fail-closed therefore applies to
+    /// **auth-configured deployments** (row 2); a no-auth-provider server runs v2
+    /// tasks in a single shared bucket BY DESIGN. That is a development / stdio
+    /// affordance, NOT per-caller isolation, and it is defensible only because
+    /// such a server has no notion of caller identity to separate in the first
+    /// place. The production backends refuse that bucket independently:
+    /// `TaskSecurityConfig::default()` sets `allow_anonymous: false`
+    /// (`crates/pmcp-tasks/src/security.rs:89`), so `GenericTaskStore` rejects an
+    /// anonymous owner unless an operator opts in (T-114-39).
+    ///
+    /// TASK-05's own wording says owner binding "fails closed" when no stable
+    /// identity exists, which row 3 does not do; that gap is recorded as its own
+    /// row in `114-SPEC-RECHECK.md` rather than left to be inferred, with the
+    /// deferred configurable proxy-header identity source named as its future
+    /// closure.
+    pub(crate) fn resolve_owner(
+        &self,
+        auth_context: Option<&AuthContext>,
+        era: Option<crate::types::protocol::Era>,
+    ) -> OwnerBinding {
+        if is_v1_task_era(era) {
+            return OwnerBinding::Owner(self.resolve_v1_owner(auth_context));
+        }
+        // v2: the SHARED table, not a second match over the same two inputs.
+        let principal = crate::server::core::MrtrPrincipal {
+            authenticated_subject: auth_context.map(|ctx| ctx.subject.as_str()),
+            has_auth_provider: self.has_auth_provider,
+        };
+        crate::server::core::resolve_mrtr_principal(principal)
+            .map_or(OwnerBinding::Refused, |owner| {
+                OwnerBinding::Owner(owner.to_string())
+            })
+    }
+
+    /// The FROZEN v1 owner binding, plus D-10's migration warn.
+    ///
+    /// Split out only so the v2 arm of [`Self::resolve_owner`] reads as one
+    /// decision; the body is byte-for-byte the pre-114-09 logic with the three
+    /// former `None` outcomes collapsed onto [`V1_UNAUTHENTICATED_OWNER`] — which
+    /// is what every caller already did with `.unwrap_or_else(|| "local")`.
+    fn resolve_v1_owner(&self, auth_context: Option<&AuthContext>) -> String {
+        if auth_context.is_none() {
+            // D-10 migration warn. Emitted once per unauthenticated v1 owner
+            // resolution, and it names the shared bucket rather than describing
+            // it, so an operator can grep for the string that is actually in
+            // their store.
+            tracing::warn!(
+                target: "mcp.tasks",
+                owner = V1_UNAUTHENTICATED_OWNER,
+                "an unauthenticated v1 task request was bound to the shared \"local\" owner \
+                 bucket, which every other unauthenticated caller on this server also shares; \
+                 protocol version 2026-07-28 binds the owner to the authenticated subject \
+                 instead and refuses the request outright when an auth provider is configured"
+            );
+        }
         // Legacy path: TaskRouter has its own resolve_owner logic.
         if let Some(router) = self.task_router {
-            return Some(match auth_context {
+            return match auth_context {
                 Some(ctx) => {
                     router.resolve_owner(Some(&ctx.subject), ctx.client_id.as_deref(), None)
                 },
                 None => router.resolve_owner(None, None, None),
-            });
+            };
         }
         // Standard path: derive owner from auth context when task_store is configured.
         // Key on the OAuth subject (the authenticated principal), matching the
         // router's subject-first priority — NOT client_id, which is per-application
         // (OAuth `azp`) and would collapse per-user isolation to per-app isolation.
-        if self.task_store.is_some() {
-            return Some(match auth_context {
-                Some(ctx) => ctx.subject.clone(),
-                None => "local".to_string(),
-            });
+        //
+        // With NO backend at all the value is inert: every route reaches its
+        // frozen `-32601` without reading it.
+        match auth_context {
+            Some(ctx) => ctx.subject.clone(),
+            None => V1_UNAUTHENTICATED_OWNER.to_string(),
         }
-        None
     }
 
     /// Extract the terminal [`CallToolResult`] from a task-shaped tool value.
@@ -681,11 +841,18 @@ impl TaskDispatch<'_> {
     ///
     /// Falls back to the legacy tool-fabricated envelope only when no store is
     /// configured (preserves prior behavior for router-only servers).
+    ///
+    /// `era` reaches the SAME [`Self::resolve_owner`] table every `tasks/*` route
+    /// uses, so a task's owner is bound at CREATE by exactly the rule that later
+    /// governs who may read it. On the v2 refuse row this answers `-32003` and
+    /// mints nothing. WHETHER a v2 `tools/call` becomes a task at all is plan
+    /// 114-12's decision (DQ1); this plan only decides WHOSE task it is.
     pub(crate) async fn build_task_created_response(
         &self,
         id: RequestId,
         value: Value,
         auth_context: Option<&AuthContext>,
+        era: Option<crate::types::protocol::Era>,
     ) -> JSONRPCResponse {
         let Some(store) = self.task_store.as_ref() else {
             // No store: preserve the legacy tool-fabricated envelope. The
@@ -703,9 +870,9 @@ impl TaskDispatch<'_> {
             return success_response(id, result_value);
         };
 
-        let owner_id = self
-            .resolve_owner(auth_context)
-            .unwrap_or_else(|| "local".to_string());
+        let OwnerBinding::Owner(owner_id) = self.resolve_owner(auth_context, era) else {
+            return authentication_required(id, crate::types::mrtr::CALL_TOOL_METHOD);
+        };
 
         // Carry the tool's requested TTL onto the store-minted task, if present.
         let ttl = value.get("ttl").and_then(serde_json::Value::as_u64);
@@ -790,6 +957,7 @@ impl TaskDispatch<'_> {
         task_support: Option<TaskSupport>,
         task_requested: bool,
         auth_context: Option<&AuthContext>,
+        era: Option<crate::types::protocol::Era>,
     ) -> Option<JSONRPCResponse> {
         let gate_open = task_requested
             && self.task_store.is_some()
@@ -805,17 +973,18 @@ impl TaskDispatch<'_> {
             return None;
         }
         Some(
-            self.build_task_created_response(id, value.clone(), auth_context)
+            self.build_task_created_response(id, value.clone(), auth_context, era)
                 .await,
         )
     }
 
-    /// Handle a `tasks/result` request (era gate → store-first → router →
-    /// -32002 → -32601).
+    /// Handle a `tasks/result` request (store-first → router → -32002 → -32601).
     ///
-    /// On protocol version 2026-07-28 the method is RETIRED and answers
-    /// `-32601` before any backend is consulted; see
-    /// [`tasks_result_serves_on_era`] and [`V2_TASKS_METHOD_RETIRED`].
+    /// On protocol version 2026-07-28 the method is RETIRED. That gate is case 1
+    /// of [`Self::route_tasks_endpoint`]'s ordered refusal chain and fires before
+    /// this function is entered at all — see [`tasks_result_serves_on_era`] and
+    /// [`V2_TASKS_METHOD_RETIRED`]. The tail `match` below still reads the SAME
+    /// predicate, deliberately: ONE era definition, N call sites (114-08).
     ///
     /// On v1 (and on a request carrying no era code at all) the behaviour is
     /// byte-for-byte what it has always been: serves from the configured
@@ -825,29 +994,21 @@ impl TaskDispatch<'_> {
     /// configured, returns the SPECIFIED "task not completed" error (`-32002`),
     /// distinct from the truly-no-backend `-32601` (FROZEN by Phase 101;
     /// T-102-03); see [`is_v1_task_era`].
+    ///
+    /// `owner_id` is the ALREADY-BOUND owner from [`Self::resolve_owner`],
+    /// resolved once per request by the caller. This function does not — and
+    /// must not — bind a second one.
     pub(crate) async fn handle_tasks_result(
         &self,
         id: RequestId,
         params: &crate::types::tasks::GetTaskPayloadRequest,
-        auth_context: Option<&AuthContext>,
+        owner_id: &str,
         era: Option<crate::types::protocol::Era>,
     ) -> JSONRPCResponse {
-        // v2 era gate (TASK-03). Returning HERE — before the store, the router
-        // and the owner resolution — is what makes the frozen `-32002` below
-        // unreachable on v2 no matter how a backend answers, and is why a v2
-        // response can carry no task payload at all.
-        if !tasks_result_serves_on_era(era) && self.has_task_backend() {
-            return retired_on_v2(id, TASKS_RESULT_METHOD);
-        }
-
-        let owner_id = self
-            .resolve_owner(auth_context)
-            .unwrap_or_else(|| "local".to_string());
-
         // Store-first: serve a typed CallToolResult when the store persists one.
         if let Some(store) = self.task_store {
             if store.supports_results() {
-                match store.get_result(&params.task_id, &owner_id).await {
+                match store.get_result(&params.task_id, owner_id).await {
                     Ok(call_result) => {
                         return success_response(
                             id,
@@ -871,7 +1032,7 @@ impl TaskDispatch<'_> {
         // Router fallback — behavior UNCHANGED for router-backed servers.
         if let Some(task_router) = self.task_router {
             return match task_router
-                .handle_tasks_result(serde_json::to_value(params).unwrap_or_default(), &owner_id)
+                .handle_tasks_result(serde_json::to_value(params).unwrap_or_default(), owner_id)
                 .await
             {
                 Ok(result) => success_response(id, result),
@@ -886,14 +1047,15 @@ impl TaskDispatch<'_> {
         // No router: distinguish "store exists but task not completed yet"
         // (specified error) from "no task backend at all".
         //
-        // The era axis reads the SAME predicate as the gate at the head of this
-        // function, deliberately — not a second, independently-disable-able copy
-        // of the era question. A negative control measured why: with this arm
-        // keyed on `is_v1_task_era` directly, disabling `tasks_result_serves_on_era`
-        // left this arm still refusing v2 with an identical body, so the head gate
-        // could not be proven load-bearing by any test. ONE predicate, two call
-        // sites: disable it and the whole gate opens, which is what a negative
-        // control has to be able to do.
+        // The era axis reads the SAME predicate as case 1 of
+        // `route_tasks_endpoint`'s chain, deliberately — not a second,
+        // independently-disable-able copy of the era question. A negative control
+        // measured why: with this arm keyed on `is_v1_task_era` directly,
+        // disabling `tasks_result_serves_on_era` left this arm still refusing v2
+        // with an identical body, so the retirement gate could not be proven
+        // load-bearing by any test. ONE predicate, two call sites: disable it and
+        // the whole gate opens, which is what a negative control has to be able
+        // to do.
         match (self.task_store.is_some(), tasks_result_serves_on_era(era)) {
             (true, true) => error_response(
                 id,
@@ -905,31 +1067,30 @@ impl TaskDispatch<'_> {
                 crate::types::protocol::error_codes::V1_TASK_PENDING,
                 "task result not available: task not completed".to_string(),
             ),
-            // Required for exhaustiveness, and unreachable in production: the head
-            // gate already returned for every era-v2 request that has a backend,
-            // and `task_store.is_some()` implies one. It answers IDENTICALLY so
-            // the two spellings of the refusal cannot diverge.
+            // Required for exhaustiveness, and unreachable in production: case 1
+            // already returned for every era-v2 request that has a backend, and
+            // `task_store.is_some()` implies one. It answers IDENTICALLY so the
+            // two spellings of the refusal cannot diverge.
             (true, false) => retired_on_v2(id, TASKS_RESULT_METHOD),
             (false, _) => error_response(
                 id,
                 crate::types::protocol::error_codes::METHOD_NOT_FOUND,
-                "tasks/result not supported".to_string(),
+                TASKS_RESULT_NOT_SUPPORTED.to_string(),
             ),
         }
     }
 
     /// Route a `tasks/get` request (store-first, router fall-through).
+    ///
+    /// `owner_id` is the ALREADY-BOUND owner from [`Self::resolve_owner`].
     async fn route_tasks_get(
         &self,
         id: RequestId,
         params: &crate::types::tasks::GetTaskRequest,
-        auth_context: Option<&AuthContext>,
+        owner_id: &str,
     ) -> JSONRPCResponse {
-        let owner_id = self
-            .resolve_owner(auth_context)
-            .unwrap_or_else(|| "local".to_string());
         if let Some(store) = self.task_store {
-            match store.get(&params.task_id, &owner_id).await {
+            match store.get(&params.task_id, owner_id).await {
                 Ok(task) => {
                     let result = crate::types::tasks::GetTaskResult::new(task);
                     success_response(id, serde_json::to_value(result).unwrap_or_default())
@@ -942,7 +1103,7 @@ impl TaskDispatch<'_> {
             }
         } else if let Some(task_router) = self.task_router {
             match task_router
-                .handle_tasks_get(serde_json::to_value(params).unwrap_or_default(), &owner_id)
+                .handle_tasks_get(serde_json::to_value(params).unwrap_or_default(), owner_id)
                 .await
             {
                 Ok(result) => success_response(id, result),
@@ -956,38 +1117,32 @@ impl TaskDispatch<'_> {
             error_response(
                 id,
                 crate::types::protocol::error_codes::METHOD_NOT_FOUND,
-                "Tasks not enabled".to_string(),
+                TASKS_NOT_ENABLED.to_string(),
             )
         }
     }
 
-    /// Route a `tasks/list` request (era gate → store-first, router
-    /// fall-through).
+    /// Route a `tasks/list` request (store-first, router fall-through).
     ///
     /// On protocol version 2026-07-28 the method is RETIRED and answers
-    /// `-32601` WITHOUT enumerating anything; see [`tasks_list_serves_on_era`]
-    /// and [`V2_TASKS_METHOD_RETIRED`]. On v1 the store/router behaviour below
-    /// is unchanged.
+    /// `-32601` WITHOUT enumerating anything. That gate is case 1 of
+    /// [`Self::route_tasks_endpoint`]'s ordered chain and fires before this
+    /// function is entered — which is what makes enumeration impossible rather
+    /// than merely refused: no store `list`, no router call, and not even an
+    /// owner binding, so nothing can leak the existence of a task into the
+    /// response body. See [`tasks_list_serves_on_era`] and
+    /// [`V2_TASKS_METHOD_RETIRED`]. On v1 the store/router behaviour below is
+    /// unchanged.
+    ///
+    /// `owner_id` is the ALREADY-BOUND owner from [`Self::resolve_owner`].
     async fn route_tasks_list(
         &self,
         id: RequestId,
         params: &crate::types::tasks::ListTasksRequest,
-        auth_context: Option<&AuthContext>,
-        era: Option<crate::types::protocol::Era>,
+        owner_id: &str,
     ) -> JSONRPCResponse {
-        // v2 era gate (TASK-03, T-114-32). Returning HERE — before the owner is
-        // even resolved — is what makes enumeration impossible rather than
-        // merely refused: no store `list`, no router call, so nothing can leak
-        // the existence of a task into the response body.
-        if !tasks_list_serves_on_era(era) && self.has_task_backend() {
-            return retired_on_v2(id, TASKS_LIST_METHOD);
-        }
-
-        let owner_id = self
-            .resolve_owner(auth_context)
-            .unwrap_or_else(|| "local".to_string());
         if let Some(store) = self.task_store {
-            match store.list(&owner_id, params.cursor.as_deref()).await {
+            match store.list(owner_id, params.cursor.as_deref()).await {
                 Ok((tasks, next_cursor)) => {
                     let mut result = crate::types::tasks::ListTasksResult::new(tasks);
                     if let Some(cursor) = next_cursor {
@@ -1003,7 +1158,7 @@ impl TaskDispatch<'_> {
             }
         } else if let Some(task_router) = self.task_router {
             match task_router
-                .handle_tasks_list(serde_json::to_value(params).unwrap_or_default(), &owner_id)
+                .handle_tasks_list(serde_json::to_value(params).unwrap_or_default(), owner_id)
                 .await
             {
                 Ok(result) => success_response(id, result),
@@ -1017,23 +1172,22 @@ impl TaskDispatch<'_> {
             error_response(
                 id,
                 crate::types::protocol::error_codes::METHOD_NOT_FOUND,
-                "Tasks not enabled".to_string(),
+                TASKS_NOT_ENABLED.to_string(),
             )
         }
     }
 
     /// Route a `tasks/cancel` request (store-first, router fall-through).
+    ///
+    /// `owner_id` is the ALREADY-BOUND owner from [`Self::resolve_owner`].
     async fn route_tasks_cancel(
         &self,
         id: RequestId,
         params: &crate::types::tasks::CancelTaskRequest,
-        auth_context: Option<&AuthContext>,
+        owner_id: &str,
     ) -> JSONRPCResponse {
-        let owner_id = self
-            .resolve_owner(auth_context)
-            .unwrap_or_else(|| "local".to_string());
         if let Some(store) = self.task_store {
-            match store.cancel(&params.task_id, &owner_id).await {
+            match store.cancel(&params.task_id, owner_id).await {
                 Ok(task) => {
                     let result = crate::types::tasks::CancelTaskResult::new(task);
                     success_response(id, serde_json::to_value(result).unwrap_or_default())
@@ -1046,7 +1200,7 @@ impl TaskDispatch<'_> {
             }
         } else if let Some(task_router) = self.task_router {
             match task_router
-                .handle_tasks_cancel(serde_json::to_value(params).unwrap_or_default(), &owner_id)
+                .handle_tasks_cancel(serde_json::to_value(params).unwrap_or_default(), owner_id)
                 .await
             {
                 Ok(result) => success_response(id, result),
@@ -1060,7 +1214,7 @@ impl TaskDispatch<'_> {
             error_response(
                 id,
                 crate::types::protocol::error_codes::METHOD_NOT_FOUND,
-                "Tasks not enabled".to_string(),
+                TASKS_NOT_ENABLED.to_string(),
             )
         }
     }
@@ -1086,6 +1240,42 @@ impl TaskDispatch<'_> {
     /// `TasksGet` and `TasksCancel` are not era-GATED on purpose: both survive
     /// in the v2 extension schema. Their v2 response SHAPE is plan 114-11's,
     /// not this router's.
+    ///
+    /// # Rejection cases, IN ORDER
+    ///
+    /// The order is the contract, not an implementation detail — each case says
+    /// something different to the caller, and the wrong order either leaks or
+    /// misdirects. The shape mirrors `subscriptions/listen`'s ordered chain
+    /// (D-08), which this reuses down to the `-32003` placement.
+    ///
+    /// 1. **RETIRED on this era → `-32601`.** A method that does not exist on
+    ///    protocol version 2026-07-28 answers "no such method" FIRST, so a
+    ///    `tasks/list` cannot be answered "authenticate yourself" and thereby
+    ///    imply that authenticating would enumerate anything (T-114-32).
+    /// 2. **No task backend → `-32601`.** Answered by the per-endpoint handlers
+    ///    below, where each method's FROZEN message lives
+    ///    ([`TASKS_NOT_ENABLED`] / [`TASKS_RESULT_NOT_SUPPORTED`]). Cases 3 and 4
+    ///    are therefore SKIPPED for a backendless server: it advertises no tasks
+    ///    extension at all, so telling such a caller to declare one — or to
+    ///    authenticate — would send it to fix the wrong thing (T-114-33).
+    /// 3. **Client did not declare the extension → `-32021`.** A
+    ///    method-availability-class refusal like cases 1 and 2, and placed with
+    ///    them, because it says "this method is not available to you as
+    ///    configured" and reveals NOTHING about authentication state.
+    ///    NOT YET IMPLEMENTED — it lands in the next commit of this plan, which
+    ///    also adds the ordering probes. The slot is documented here because
+    ///    case 4's placement is only meaningful relative to it.
+    /// 4. **Unauthenticated on an auth-configured server → `-32003`.** Row 2 of
+    ///    the identity table. Placed AFTER cases 1–3 so a retired method, a
+    ///    backendless server or an under-declaring client each keeps its own
+    ///    truthful answer rather than being told to authenticate; and BEFORE the
+    ///    params are used, so a refused caller's body is never read and no
+    ///    store or router is ever consulted (T-114-37).
+    /// 5. **The params, finally.** Everything below this line consumes
+    ///    `request`'s typed params. Nothing above it does.
+    ///
+    /// The owner is bound EXACTLY ONCE here and passed down as a `&str`; no
+    /// handler resolves a second one.
     pub(crate) async fn route_tasks_endpoint(
         &self,
         id: RequestId,
@@ -1094,23 +1284,81 @@ impl TaskDispatch<'_> {
         protocol_context: Option<&crate::types::protocol::ProtocolContext>,
     ) -> JSONRPCResponse {
         let era = protocol_context.map(|context| context.era);
+
+        if self.has_task_backend() {
+            // --- case 1 -----------------------------------------------------
+            if let Some(method) = Self::retired_method(request, era) {
+                return retired_on_v2(id, method);
+            }
+        }
+
+        // --- case 4 ---------------------------------------------------------
+        let owner_id = match self.resolve_owner(auth_context, era) {
+            OwnerBinding::Owner(owner) => owner,
+            // Case 2 owns the answer for a backendless server, and every handler
+            // below reaches its frozen `-32601` WITHOUT reading the owner, so
+            // this value is inert. It is spelled as the v1 fallback rather than
+            // as the v2 anonymous principal so that no reader mistakes it for a
+            // bucket a task could ever land in: no backend means no task.
+            OwnerBinding::Refused if !self.has_task_backend() => {
+                V1_UNAUTHENTICATED_OWNER.to_string()
+            },
+            OwnerBinding::Refused => {
+                return authentication_required(id, Self::method_of(request));
+            },
+        };
+
+        // --- case 5 ---------------------------------------------------------
         match request {
-            ClientRequest::TasksGet(params) => self.route_tasks_get(id, params, auth_context).await,
+            ClientRequest::TasksGet(params) => self.route_tasks_get(id, params, &owner_id).await,
             ClientRequest::TasksResult(params) => {
-                self.handle_tasks_result(id, params, auth_context, era)
-                    .await
+                self.handle_tasks_result(id, params, &owner_id, era).await
             },
-            ClientRequest::TasksList(params) => {
-                self.route_tasks_list(id, params, auth_context, era).await
-            },
+            ClientRequest::TasksList(params) => self.route_tasks_list(id, params, &owner_id).await,
             ClientRequest::TasksCancel(params) => {
-                self.route_tasks_cancel(id, params, auth_context).await
+                self.route_tasks_cancel(id, params, &owner_id).await
             },
             _ => error_response(
                 id,
                 crate::types::protocol::error_codes::METHOD_NOT_FOUND,
-                "Method not supported".to_string(),
+                NOT_A_TASKS_METHOD.to_string(),
             ),
+        }
+    }
+
+    /// The `tasks/*` method name IFF this request's method is RETIRED on `era`
+    /// — case 1 of [`Self::route_tasks_endpoint`]'s chain.
+    ///
+    /// A dispatch TABLE over the two EXISTING era predicates, not a third era
+    /// decision: `tasks/list` and `tasks/result` each keep exactly one predicate
+    /// (so a negative control that disables one fails only that method's
+    /// probes), and `tasks/get`/`tasks/cancel` survive on both eras so neither
+    /// has one at all.
+    fn retired_method(
+        request: &ClientRequest,
+        era: Option<crate::types::protocol::Era>,
+    ) -> Option<&'static str> {
+        match request {
+            ClientRequest::TasksList(_) if !tasks_list_serves_on_era(era) => {
+                Some(TASKS_LIST_METHOD)
+            },
+            ClientRequest::TasksResult(_) if !tasks_result_serves_on_era(era) => {
+                Some(TASKS_RESULT_METHOD)
+            },
+            _ => None,
+        }
+    }
+
+    /// The method string a `tasks/*` request names, for a refusal message.
+    ///
+    /// Every spelling is read from an existing constant, never re-typed here.
+    fn method_of(request: &ClientRequest) -> &'static str {
+        match request {
+            ClientRequest::TasksGet(_) => crate::types::mrtr::TASKS_GET_METHOD,
+            ClientRequest::TasksResult(_) => TASKS_RESULT_METHOD,
+            ClientRequest::TasksList(_) => TASKS_LIST_METHOD,
+            ClientRequest::TasksCancel(_) => crate::types::mrtr::TASKS_CANCEL_METHOD,
+            _ => NOT_A_TASKS_METHOD,
         }
     }
 }
@@ -1154,7 +1402,7 @@ mod gate_tests {
         };
         let value = task_shaped_value();
         let out = dispatch
-            .maybe_build_task_created(id(), &value, Some(TaskSupport::Required), false, None)
+            .maybe_build_task_created(id(), &value, Some(TaskSupport::Required), false, None, None)
             .await;
         assert!(out.is_none(), "task_requested=false must yield None");
     }
@@ -1171,7 +1419,7 @@ mod gate_tests {
         };
         let value = task_shaped_value();
         let out = dispatch
-            .maybe_build_task_created(id(), &value, Some(TaskSupport::Required), true, None)
+            .maybe_build_task_created(id(), &value, Some(TaskSupport::Required), true, None, None)
             .await;
         assert!(out.is_none(), "no backend must yield None");
     }
@@ -1188,7 +1436,7 @@ mod gate_tests {
         };
         let value = task_shaped_value();
         let out = dispatch
-            .maybe_build_task_created(id(), &value, Some(TaskSupport::Forbidden), true, None)
+            .maybe_build_task_created(id(), &value, Some(TaskSupport::Forbidden), true, None, None)
             .await;
         assert!(out.is_none(), "Forbidden must yield None, never an error");
     }
@@ -1205,7 +1453,7 @@ mod gate_tests {
         };
         let value = task_shaped_value();
         let out = dispatch
-            .maybe_build_task_created(id(), &value, None, true, None)
+            .maybe_build_task_created(id(), &value, None, true, None, None)
             .await;
         assert!(out.is_none(), "no task_support must yield None");
     }
@@ -1222,7 +1470,7 @@ mod gate_tests {
         };
         let value = serde_json::json!({ "foo": "bar" });
         let out = dispatch
-            .maybe_build_task_created(id(), &value, Some(TaskSupport::Required), true, None)
+            .maybe_build_task_created(id(), &value, Some(TaskSupport::Required), true, None, None)
             .await;
         assert!(out.is_none(), "non-task-shaped value must yield None");
     }
@@ -1265,7 +1513,7 @@ mod gate_tests {
         };
         let value = task_shaped_value();
         let out = dispatch
-            .maybe_build_task_created(id(), &value, Some(TaskSupport::Optional), true, None)
+            .maybe_build_task_created(id(), &value, Some(TaskSupport::Optional), true, None, None)
             .await;
         let resp = out.expect("Optional + task-shaped must yield Some");
         assert_store_minted(&resp);
@@ -1283,10 +1531,217 @@ mod gate_tests {
         };
         let value = task_shaped_value();
         let out = dispatch
-            .maybe_build_task_created(id(), &value, Some(TaskSupport::Required), true, None)
+            .maybe_build_task_created(id(), &value, Some(TaskSupport::Required), true, None, None)
             .await;
         let resp = out.expect("Required + task-shaped must yield Some");
         assert_store_minted(&resp);
+    }
+}
+
+/// The era-aware owner binding (plan 114-09, TASK-05, D-07).
+///
+/// One test per ROW of the v2 identity table, each named for the row it proves,
+/// plus the v1 freeze and its D-10 migration warn. These are the UNIT half; the
+/// ordered refusal chain is measured over a real socket in
+/// `tests/v2_tasks_owner_binding.rs`, and the cross-caller proof is 114-15.
+#[cfg(test)]
+mod owner_binding_tests {
+    use super::*;
+    use crate::server::auth::AuthContext;
+    use crate::server::core::ANONYMOUS_PRINCIPAL;
+    use crate::types::protocol::Era;
+
+    /// Bind an owner at `era` with the given identity inputs.
+    ///
+    /// Deliberately backend-LESS: the v2 table reads only
+    /// `authenticated_subject` and `has_auth_provider`, and the v1 arm's
+    /// store/router branches are already covered by `gate_tests` and
+    /// `era_gate_tests`. Keeping the fixture minimal is what makes each
+    /// assertion below attributable to exactly one row.
+    fn bind(subject: Option<&str>, has_auth_provider: bool, era: Option<Era>) -> OwnerBinding {
+        let store = None;
+        let router = None;
+        let dispatch = TaskDispatch {
+            task_store: &store,
+            task_router: &router,
+            has_auth_provider,
+        };
+        let auth = subject.map(AuthContext::new);
+        dispatch.resolve_owner(auth.as_ref(), era)
+    }
+
+    /// Row 1: an authenticated subject IS the owner, on either auth posture.
+    ///
+    /// `has_auth_provider` is the "any" column of the table, so both values are
+    /// asserted — a row-1 implementation that accidentally read the flag would
+    /// pass a single-value test.
+    #[test]
+    fn v2_owner_is_the_authenticated_subject() {
+        for has_auth_provider in [true, false] {
+            assert_eq!(
+                bind(Some("user-alice"), has_auth_provider, Some(Era::V2)),
+                OwnerBinding::Owner("user-alice".to_string()),
+                "row 1 must bind the OAuth subject verbatim, \
+                 has_auth_provider={has_auth_provider}"
+            );
+        }
+    }
+
+    /// Row 2, the FAIL-CLOSED row: unauthenticated + an auth provider → refused.
+    ///
+    /// This is TASK-05's central control. If it ever returns an `Owner`, an
+    /// anonymous caller can mint and read tasks on a server that expects
+    /// authentication (T-114-37).
+    #[test]
+    fn v2_unauthenticated_with_auth_provider_is_refused() {
+        assert_eq!(
+            bind(None, true, Some(Era::V2)),
+            OwnerBinding::Refused,
+            "row 2 must refuse: no subject on an auth-configured server binds NO owner"
+        );
+    }
+
+    /// Row 3: unauthenticated on a server with NO auth provider → the shared
+    /// anonymous bucket, NOT a refusal.
+    ///
+    /// The counterweight to row 2: a fail-closed change must not be satisfiable
+    /// by refusing everyone, which would break every stdio/dev server.
+    #[test]
+    fn v2_unauthenticated_without_auth_provider_is_anonymous() {
+        assert_eq!(
+            bind(None, false, Some(Era::V2)),
+            OwnerBinding::Owner(ANONYMOUS_PRINCIPAL.to_string()),
+            "row 3 must bind the NAMED anonymous principal, not refuse"
+        );
+    }
+
+    /// The v2 anonymous bucket and the v1 `"local"` bucket are DISJOINT keys.
+    ///
+    /// `GenericTaskStore::is_anonymous_owner` treats the two identically for the
+    /// `allow_anonymous` decision, but `make_key` prefixes every record by owner
+    /// — so these two facts are separate and easy to conflate. Asserting the
+    /// inequality here stops a future "simplify the two fallbacks" change from
+    /// silently merging two key spaces.
+    #[test]
+    fn the_v1_and_v2_unauthenticated_buckets_are_different_keys() {
+        assert_ne!(
+            ANONYMOUS_PRINCIPAL, V1_UNAUTHENTICATED_OWNER,
+            "the v1 and v2 unauthenticated owners must remain distinct key prefixes"
+        );
+    }
+
+    /// The v1 arm is FROZEN: an unauthenticated caller still binds `"local"`,
+    /// on an explicit v1 era AND on a request carrying no era code at all.
+    #[test]
+    fn v1_unauthenticated_owner_is_still_local() {
+        for era in [Some(Era::V1), None] {
+            for has_auth_provider in [true, false] {
+                assert_eq!(
+                    bind(None, has_auth_provider, era),
+                    OwnerBinding::Owner(V1_UNAUTHENTICATED_OWNER.to_string()),
+                    "v1 owner binding is frozen and NEVER refuses: \
+                     era={era:?}, has_auth_provider={has_auth_provider}"
+                );
+            }
+        }
+    }
+
+    /// v1 with a subject still binds that subject — the freeze is not "always
+    /// local".
+    #[test]
+    fn v1_authenticated_owner_is_still_the_subject() {
+        assert_eq!(
+            bind(Some("user-bob"), true, Some(Era::V1)),
+            OwnerBinding::Owner("user-bob".to_string()),
+            "v1 store-path owner binding is the OAuth subject, unchanged"
+        );
+    }
+
+    /// D-10's migration warn fires EXACTLY once per unauthenticated v1
+    /// resolution, and NOT for an authenticated one.
+    ///
+    /// Counted with a hand-rolled `tracing::Subscriber` rather than
+    /// `tracing-subscriber`, which is an OPTIONAL dependency behind the
+    /// `logging` feature — this assertion must hold under every feature set the
+    /// gate builds.
+    #[test]
+    fn the_v1_migration_warn_fires_once_per_unauthenticated_resolution() {
+        let counter = WarnCounter::default();
+        let counts = Arc::clone(&counter.warnings);
+
+        tracing::subscriber::with_default(counter, || {
+            assert_eq!(
+                bind(None, false, Some(Era::V1)),
+                OwnerBinding::Owner(V1_UNAUTHENTICATED_OWNER.to_string())
+            );
+        });
+        assert_eq!(
+            counts.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "exactly one migration warn per unauthenticated v1 owner resolution"
+        );
+
+        let counter = WarnCounter::default();
+        let counts = Arc::clone(&counter.warnings);
+        tracing::subscriber::with_default(counter, || {
+            assert_eq!(
+                bind(Some("user-carol"), false, Some(Era::V1)),
+                OwnerBinding::Owner("user-carol".to_string())
+            );
+        });
+        assert_eq!(
+            counts.load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "an AUTHENTICATED v1 caller is not in the shared bucket and must not be warned about"
+        );
+    }
+
+    /// A v2 resolution never emits the v1 migration warn — the two arms are
+    /// genuinely separate, not one arm with a flag.
+    #[test]
+    fn the_migration_warn_is_v1_only() {
+        let counter = WarnCounter::default();
+        let counts = Arc::clone(&counter.warnings);
+        tracing::subscriber::with_default(counter, || {
+            assert_eq!(bind(None, true, Some(Era::V2)), OwnerBinding::Refused);
+            assert_eq!(
+                bind(None, false, Some(Era::V2)),
+                OwnerBinding::Owner(ANONYMOUS_PRINCIPAL.to_string())
+            );
+        });
+        assert_eq!(
+            counts.load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "the D-10 migration warn is about v1's shared bucket and must not fire on v2"
+        );
+    }
+
+    /// Counts WARN-level events, and nothing else.
+    ///
+    /// Hand-rolled against `tracing`'s core `Subscriber` trait so the assertion
+    /// has no optional-dependency footprint (see the test above).
+    #[derive(Default)]
+    struct WarnCounter {
+        warnings: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    impl tracing::Subscriber for WarnCounter {
+        fn enabled(&self, metadata: &tracing::Metadata<'_>) -> bool {
+            *metadata.level() == tracing::Level::WARN
+        }
+        fn new_span(&self, _span: &tracing::span::Attributes<'_>) -> tracing::Id {
+            tracing::Id::from_u64(1)
+        }
+        fn record(&self, _span: &tracing::Id, _values: &tracing::span::Record<'_>) {}
+        fn record_follows_from(&self, _span: &tracing::Id, _follows: &tracing::Id) {}
+        fn event(&self, event: &tracing::Event<'_>) {
+            if *event.metadata().level() == tracing::Level::WARN {
+                self.warnings
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            }
+        }
+        fn enter(&self, _span: &tracing::Id) {}
+        fn exit(&self, _span: &tracing::Id) {}
     }
 }
 
