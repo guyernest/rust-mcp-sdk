@@ -1178,11 +1178,32 @@ round (plans 113-21 … 113-32).
 one was **introduced by this round**, not inherited.
 **Owner:** Phase 113.1
 **Status:** ✅ **RESOLVED** in plans 113.1-01 (commits `1ca4b52c`, `7ee92523`) and 113.1-05
-(commits `331528dd`, `9eeb85ce`, `42b05c5a`). Both handlers now measure **cognitive 15**
-(`handle_post_fast_path` 30 → 15, `handle_post_with_middleware` 31 → 15; pmat 3.15.0,
-`--top-files 0`), and `pmat quality-gate --fail-on-violation --checks complexity` reports
-**zero violations**. The third violation this entry originally recorded, `write_canonical`, was
-already closed separately in `58f82368`.
+(commits `331528dd`, `9eeb85ce`, `42b05c5a`), and `pmat quality-gate --fail-on-violation
+--checks complexity` reports **zero violations**. The third violation this entry originally
+recorded, `write_canonical`, was already closed separately in `58f82368`.
+
+**Measured figures, corrected 2026-07-28.** Those two plans landed both handlers at
+**cognitive 15**, and that is the figure this entry carried. A LATER commit — `dafc77c5`,
+a cleanup-review refactor that is not part of any 113.1 plan — moved each pipeline into a
+`*_inner` fn behind a `?`-collapsing wrapper, which changed the numbers again. Measured at
+`c9944a65` with pmat 3.15.0 (`analyze complexity --file src/server/streamable_http_server.rs`,
+stable across `--max-cognitive 0..3`):
+
+| Function | Cognitive |
+|---|---|
+| `handle_post_fast_path` (wrapper) | **4** (was 30) |
+| `handle_post_fast_path_inner` | **0** — branch-free, 5 `?` sites |
+| `handle_post_with_middleware` (wrapper) | **4** (was 31) |
+| `handle_post_with_middleware_inner` | **0** — branch-free |
+
+`dafc77c5`'s own commit message says "cognitive 15 -> 1 (wrapper) + 5 (inner)"; that figure is
+**also wrong** and was not re-measured before being written. pmat reports **no** cognitive-0
+function (the minimum value across all 116 functions it lists for this file is 1), so the two
+inner fns are absent from a per-function sweep entirely — absence here means zero, not
+unmeasured. Renaming one and re-running confirms the omission is driven by the score, not the
+name. This does **not** weaken the gate: complexity moved into the named helper fns
+(`read_and_classify_fast`, `resolve_v2_gate`, `dispatch_message_fast`, …), each of which pmat
+measures separately and all of which sit under 25.
 
 **Scope of the resolution: the LOCAL gate (SC-1a) only.** The org-required `gate` status check on
 PR #299 is a separate human action — D-20 reserves pushing, opening the PR and merging — and two

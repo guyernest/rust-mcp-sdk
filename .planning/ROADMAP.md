@@ -2548,10 +2548,16 @@ Plans:
 > `write_canonical`'s cog-26 violation (the one this round introduced) was **closed** in
 > `58f82368` by splitting the container arms out; canonical bytes and the 64/65 depth boundary
 > are byte-identical. The two remaining violations are **CLOSED by Phase 113.1**:
-> `handle_post_fast_path` went 30 → **15** and `handle_post_with_middleware` 31 → **15**
-> (pmat 3.15.0, measured per-function), so
+> `handle_post_fast_path` went 30 → **4** and `handle_post_with_middleware` 31 → **4**, each
+> paired with a branch-free `*_inner` `?` pipeline measuring **0** (pmat 3.15.0, measured
+> per-function at `c9944a65`), so
 > `pmat quality-gate --fail-on-violation --checks complexity` passes **locally** with zero
-> violations — five points of margin under the phase's own ≤ 20 target and ten under the gate's 25.
+> violations — twenty-one points of margin under the gate's 25.
+> *(Corrected 2026-07-28. Plans 113.1-01/05 landed both handlers at 15, which is what this
+> block and three other records said; the later cleanup commit `dafc77c5` — not part of any
+> 113.1 plan — introduced the wrapper/inner split and changed the figures again. Its own
+> message claims "1 (wrapper) + 5 (inner)", which is also wrong. See D-113-U in Phase 113's
+> `deferred-items.md` for the measured table and why pmat omits a cognitive-0 function.)*
 >
 > **The org-required `gate` status check on PR #299 is a separate, still-outstanding matter.** It
 > cannot turn green without a human push (D-20 reserves pushing, opening the PR and merging as

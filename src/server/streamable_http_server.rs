@@ -3284,8 +3284,12 @@ async fn read_and_classify_fast(
 /// 6. [`dispatch_message_fast`] — the 4-arm ingress dispatch (113.1-01), which
 ///    every arm reaches only downstream of step 5
 ///
-/// **Complexity budget: cognitive 15** (pmat 3.15.0), down from 30 before phase
+/// **Complexity budget: cognitive 4** here plus **0** in
+/// [`handle_post_fast_path_inner`] (pmat 3.15.0), down from 30 before phase
 /// 113.1, against a hard gate of 25 and this phase's stricter target of 20.
+/// The inner fn is a branch-free `?` pipeline, so pmat scores it 0 and does not
+/// list it at all — it reports no cognitive-0 function, which is why a
+/// per-function sweep appears to skip it.
 /// Recorded so a later phase adding to this handler can see what it is spending.
 async fn handle_post_fast_path(
     state: ServerState,
@@ -3905,8 +3909,11 @@ async fn read_and_classify_with_middleware(
 /// 5. [`extract_auth_with_middleware`] — authentication
 /// 6. [`dispatch_message_with_middleware`] — the ingress dispatch
 ///
-/// **Complexity budget: cognitive 15** (pmat 3.15.0), down from 31 before phase
-/// 113.1, against a hard gate of 25 and this phase's stricter target of 20.
+/// **Complexity budget: cognitive 4** here plus **0** in
+/// [`handle_post_with_middleware_inner`] (pmat 3.15.0), down from 31 before
+/// phase 113.1, against a hard gate of 25 and this phase's stricter target of
+/// 20. The inner fn is a branch-free `?` pipeline, so pmat scores it 0 and does
+/// not list it at all — see [`handle_post_fast_path`] for the same note.
 /// Recorded so a later phase adding to this handler can see what it is spending.
 async fn handle_post_with_middleware(
     state: ServerState,
