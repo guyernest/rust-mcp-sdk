@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v2.5
 milestone_name: MCP Spec 2026-07-28
 status: executing
-stopped_at: Phase 113.1 context gathered
-last_updated: "2026-07-27T20:31:52.711Z"
+stopped_at: Phase 114 context gathered
+last_updated: "2026-07-28T02:13:29.977Z"
 last_activity: 2026-07-27 -- Phase 113.1 planning complete
 progress:
   total_phases: 72
-  completed_phases: 58
+  completed_phases: 59
   total_plans: 319
-  completed_plans: 313
-  percent: 81
+  completed_plans: 319
+  percent: 82
 ---
 
 # Project State
@@ -299,9 +299,9 @@ Items deferred by design for this milestone (design §7 / REQUIREMENTS v2):
 
 ## Session Continuity
 
-Last session: 2026-07-27T18:02:20.741Z
-Stopped at: Phase 113.1 context gathered
-Resume file: .planning/phases/113.1-merge-unblock/113.1-CONTEXT.md
+Last session: 2026-07-28T02:13:29.964Z
+Stopped at: Phase 114 context gathered
+Resume file: .planning/phases/114-tasks-extension-migration/114-CONTEXT.md
 
 ## Performance Metrics
 
