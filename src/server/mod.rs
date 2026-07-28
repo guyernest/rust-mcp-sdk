@@ -1649,14 +1649,19 @@ impl Server {
                     id,
                     &request,
                     auth_context.as_ref(),
-                    // The era resolved ONCE at transport ingress, CONSUMED here.
-                    // Read by the `tasks/result` pending refusal, so that a v2
-                    // request cannot elicit the spec-prohibited `-32002`
-                    // (Finding 11; `task_dispatch::is_v1_task_era`), AND by the
-                    // two v2 retirement gates for `tasks/list` / `tasks/result`
-                    // (TASK-03; `task_dispatch::tasks_list_serves_on_era`).
-                    // Every gate lives in `task_dispatch`, never here.
-                    protocol_context.as_ref().map(|ctx| ctx.era),
+                    // The context resolved ONCE at transport ingress, CONSUMED
+                    // here. Its `era` is read by the `tasks/result` pending
+                    // refusal, so that a v2 request cannot elicit the
+                    // spec-prohibited `-32002` (Finding 11;
+                    // `task_dispatch::is_v1_task_era`), and by the two v2
+                    // retirement gates for `tasks/list` / `tasks/result`
+                    // (TASK-03; `task_dispatch::tasks_list_serves_on_era`); its
+                    // `client_capabilities` are read by the v2
+                    // extension-declaration gate (TASK-05). Passing the whole
+                    // context is what keeps this dispatcher from ever re-reading
+                    // `params._meta` for a second answer. Every gate lives in
+                    // `task_dispatch`, never here.
+                    protocol_context.as_ref(),
                 )
                 .await;
         }
@@ -1733,6 +1738,11 @@ impl Server {
         crate::server::task_dispatch::TaskDispatch {
             task_store: &self.task_store,
             task_router: &self.task_router,
+            // The EXISTING public accessor, not a new field and not a widened
+            // one — the same read `listen_server_view` makes for
+            // `subscriptions/listen` (D-113-N), now feeding the SAME identity
+            // table for `tasks/*` (TASK-05).
+            has_auth_provider: self.get_auth_provider().is_some(),
         }
     }
 

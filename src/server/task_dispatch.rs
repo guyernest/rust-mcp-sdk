@@ -568,7 +568,8 @@ pub fn double_wrap_tripwire(
     Some(marker)
 }
 
-/// Borrow-struct holding the two task backend handles a dispatcher owns.
+/// Borrow-struct holding the task backend handles and the identity inputs a
+/// dispatcher owns.
 ///
 /// Both `Server` and `ServerCore` construct a `TaskDispatch` borrowing their own
 /// `task_store`/`task_router` fields and call into it — the task-lifecycle logic
@@ -578,6 +579,27 @@ pub(crate) struct TaskDispatch<'a> {
     pub(crate) task_store: &'a Option<Arc<dyn TaskStore>>,
     /// Legacy experimental router backend (fall-through path).
     pub(crate) task_router: &'a Option<Arc<dyn TaskRouter>>,
+    /// Whether this server has an auth provider configured — the FAIL-CLOSED
+    /// input to the v2 identity table (TASK-05, D-07).
+    ///
+    /// A PER-SERVER fact, so it lives on the borrow-struct alongside the two
+    /// backend handles rather than being threaded through every route. Both
+    /// dispatchers read it from their EXISTING auth-provider accessor
+    /// (`Server::get_auth_provider` / `ServerCore`'s own field, the same read
+    /// `MrtrRound::begin` already makes) — no new field is added to either
+    /// server, exactly as `listen_server_view` does for
+    /// `subscriptions/listen`.
+    //
+    // Why the allow, and why it is TEMPORARY: plan 114-09 deliberately splits
+    // "give the identity decision every input it needs" (this commit, pure
+    // plumbing) from "make the decision" (the next commit), so that the next
+    // commit's negative control can fail for exactly one reason. That leaves the
+    // field write-only for exactly one commit, and this crate builds with
+    // `-D warnings`, which makes `dead_code` a HARD ERROR rather than a warning.
+    // Removed by the `resolve_owner` commit — the same two-commit-lived pattern
+    // plan 114-04 recorded for `TaskRecord`'s three new fields.
+    #[allow(dead_code)]
+    pub(crate) has_auth_provider: bool,
 }
 
 impl TaskDispatch<'_> {
@@ -1050,23 +1072,28 @@ impl TaskDispatch<'_> {
     /// variants return the FROZEN `-32601 "Method not supported"` (callers only
     /// pass `tasks/*` variants here).
     ///
-    /// `era` is the ALREADY-RESOLVED
-    /// [`ProtocolContext::era`](crate::types::protocol::ProtocolContext) being
-    /// CONSUMED here — this module never runs an era resolver of its own. Three
-    /// branches read it: the `tasks/result` pending refusal (see
-    /// [`is_v1_task_era`]) and the two v2 retirement gates
-    /// ([`tasks_list_serves_on_era`], [`tasks_result_serves_on_era`]).
+    /// `protocol_context` is the ALREADY-RESOLVED
+    /// [`ProtocolContext`](crate::types::protocol::ProtocolContext) being
+    /// CONSUMED here — this module never runs an era resolver of its own and
+    /// never re-reads `params._meta`. Two things are read off it: the
+    /// [`era`](crate::types::protocol::ProtocolContext::era), by the
+    /// `tasks/result` pending refusal (see [`is_v1_task_era`]) and the two v2
+    /// retirement gates ([`tasks_list_serves_on_era`],
+    /// [`tasks_result_serves_on_era`]); and the client's declared
+    /// [`client_capabilities`](crate::types::protocol::ProtocolContext::client_capabilities),
+    /// resolved once at ingress by Phase 112.
     ///
-    /// `TasksGet` and `TasksCancel` take NO era argument on purpose: both
-    /// survive in the v2 extension schema, so neither is gated. Their v2
-    /// response SHAPE is plan 114-11's, not this router's.
+    /// `TasksGet` and `TasksCancel` are not era-GATED on purpose: both survive
+    /// in the v2 extension schema. Their v2 response SHAPE is plan 114-11's,
+    /// not this router's.
     pub(crate) async fn route_tasks_endpoint(
         &self,
         id: RequestId,
         request: &ClientRequest,
         auth_context: Option<&AuthContext>,
-        era: Option<crate::types::protocol::Era>,
+        protocol_context: Option<&crate::types::protocol::ProtocolContext>,
     ) -> JSONRPCResponse {
+        let era = protocol_context.map(|context| context.era);
         match request {
             ClientRequest::TasksGet(params) => self.route_tasks_get(id, params, auth_context).await,
             ClientRequest::TasksResult(params) => {
@@ -1123,6 +1150,7 @@ mod gate_tests {
         let dispatch = TaskDispatch {
             task_store: &store,
             task_router: &router,
+            has_auth_provider: false,
         };
         let value = task_shaped_value();
         let out = dispatch
@@ -1139,6 +1167,7 @@ mod gate_tests {
         let dispatch = TaskDispatch {
             task_store: &store,
             task_router: &router,
+            has_auth_provider: false,
         };
         let value = task_shaped_value();
         let out = dispatch
@@ -1155,6 +1184,7 @@ mod gate_tests {
         let dispatch = TaskDispatch {
             task_store: &store,
             task_router: &router,
+            has_auth_provider: false,
         };
         let value = task_shaped_value();
         let out = dispatch
@@ -1171,6 +1201,7 @@ mod gate_tests {
         let dispatch = TaskDispatch {
             task_store: &store,
             task_router: &router,
+            has_auth_provider: false,
         };
         let value = task_shaped_value();
         let out = dispatch
@@ -1187,6 +1218,7 @@ mod gate_tests {
         let dispatch = TaskDispatch {
             task_store: &store,
             task_router: &router,
+            has_auth_provider: false,
         };
         let value = serde_json::json!({ "foo": "bar" });
         let out = dispatch
@@ -1229,6 +1261,7 @@ mod gate_tests {
         let dispatch = TaskDispatch {
             task_store: &store,
             task_router: &router,
+            has_auth_provider: false,
         };
         let value = task_shaped_value();
         let out = dispatch
@@ -1246,6 +1279,7 @@ mod gate_tests {
         let dispatch = TaskDispatch {
             task_store: &store,
             task_router: &router,
+            has_auth_provider: false,
         };
         let value = task_shaped_value();
         let out = dispatch
@@ -1298,6 +1332,36 @@ mod era_gate_tests {
         })
     }
 
+    /// A [`ClientCapabilities`] that DECLARES the tasks extension, spelled
+    /// through the shared key constant.
+    fn tasks_declaring_capabilities() -> crate::types::ClientCapabilities {
+        let mut extensions = HashMap::new();
+        extensions.insert(TASKS_EXTENSION_KEY.to_string(), tasks_extension_value());
+        crate::types::ClientCapabilities {
+            extensions: Some(extensions),
+            ..crate::types::ClientCapabilities::default()
+        }
+    }
+
+    /// The already-resolved [`ProtocolContext`] for `era`, DECLARING the tasks
+    /// extension.
+    ///
+    /// The declaration is deliberate: this module measures the ERA gates, so
+    /// every fixture must clear the extension-declaration gate
+    /// ([`missing_tasks_declaration_refusal`]) or a `-32021` would masquerade as
+    /// a retirement. `None` reproduces the "no era code at all" row.
+    fn context_for(era: Era) -> crate::types::protocol::ProtocolContext {
+        let version = match era {
+            Era::V2 => crate::types::protocol::PROTOCOL_VERSION_2026_07_28,
+            Era::V1 => crate::LATEST_PROTOCOL_VERSION,
+        };
+        crate::types::protocol::ProtocolContext::new(
+            era,
+            crate::types::ProtocolVersion(version.to_string()),
+        )
+        .with_client_capabilities(tasks_declaring_capabilities())
+    }
+
     /// Drive one `tasks/*` request through the real router at one era.
     async fn route(
         store: &Option<Arc<dyn TaskStore>>,
@@ -1308,9 +1372,11 @@ mod era_gate_tests {
         let dispatch = TaskDispatch {
             task_store: store,
             task_router: &router,
+            has_auth_provider: false,
         };
+        let context = era.map(context_for);
         dispatch
-            .route_tasks_endpoint(id(), request, None, era)
+            .route_tasks_endpoint(id(), request, None, context.as_ref())
             .await
     }
 

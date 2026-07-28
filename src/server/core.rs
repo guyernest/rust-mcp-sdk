@@ -3015,6 +3015,10 @@ impl ServerCore {
         crate::server::task_dispatch::TaskDispatch {
             task_store: &self.task_store,
             task_router: &self.task_router,
+            // The SAME read `MrtrRound::begin` already makes on this type — no
+            // new field and no new accessor, feeding the SAME identity table
+            // (TASK-05 / T-113-22).
+            has_auth_provider: self.auth_provider.is_some(),
         }
     }
 
@@ -3303,7 +3307,12 @@ impl ServerCore {
                                 id,
                                 request,
                                 auth_context.as_ref(),
-                                protocol_context.as_ref().map(|ctx| ctx.era),
+                                // The ALREADY-RESOLVED context, whole: the era
+                                // gates and the v2 extension-declaration gate
+                                // both read it, and neither re-reads
+                                // `params._meta` (twin-site parity with
+                                // `server/mod.rs`).
+                                protocol_context.as_ref(),
                             )
                             .await
                     },
