@@ -1053,6 +1053,184 @@ mod tests {
         assert!(!s.contains("\"extension\""));
     }
 
+    // ---------------------------------------------------------------------
+    // Phase 114 plan 03 — client-side twins of the four Phase-112 locks
+    // above, plus the two locks on the tasks-extension key and value.
+    //
+    // The four tests above are UNCHANGED by design: the first of them
+    // (`default_serializes_without_extensions_key`, on `ServerCapabilities`)
+    // is D-02's byte lock on the v1 `initialize` RESPONSE, and later plans in
+    // this phase depend on it staying byte-identical. What follows never
+    // edits them; it mirrors them onto the request direction.
+    // ---------------------------------------------------------------------
+
+    #[test]
+    fn client_default_serializes_without_extensions_key() {
+        // The client-side twin of `default_serializes_without_extensions_key`:
+        // a default `ClientCapabilities` must NOT emit `extensions` at all, so
+        // a v1 `initialize` REQUEST from an existing caller keeps its bytes.
+        let serialized = serde_json::to_string(&ClientCapabilities::default()).unwrap();
+
+        // Assert KEY ABSENCE on the serialized string, never a falsy value:
+        // `skip_serializing_if = "Option::is_none"` keeps `None` off the wire
+        // entirely, so an assertion that merely accepted `"extensions":null` or
+        // `"extensions":{}` would still pass on a future change that started
+        // emitting the key — which is exactly the regression this test exists
+        // to catch.
+        assert!(
+            !serialized.contains("extensions"),
+            "default ClientCapabilities must not serialize an `extensions` key \
+             at all (not even as null or {{}}); got: {serialized}"
+        );
+
+        // The whole default form is `{}` — every field is
+        // `Option<_> + skip_serializing_if`, and this is the v1 request shape.
+        assert_eq!(
+            serialized, "{}",
+            "default ClientCapabilities must serialize as exactly `{{}}`; got: {serialized}"
+        );
+    }
+
+    #[test]
+    fn client_extensions_round_trip_byte_equal() {
+        // serialize -> deserialize -> serialize must be BYTE-identical.
+        //
+        // The comparison is on raw strings, not on parsed `Value`s: this crate
+        // builds serde_json with `preserve_order`, so `Map` is an `IndexMap`
+        // whose `PartialEq` is order-INDEPENDENT and a structural assertion
+        // could not detect a key reorder.
+        let mut ext = HashMap::new();
+        ext.insert(TASKS_EXTENSION_KEY.to_string(), serde_json::json!({}));
+        let caps = ClientCapabilities {
+            extensions: Some(ext),
+            ..Default::default()
+        };
+
+        let first = serde_json::to_string(&caps).unwrap();
+        let round: ClientCapabilities = serde_json::from_str(&first).unwrap();
+        let second = serde_json::to_string(&round).unwrap();
+
+        assert_eq!(
+            first, second,
+            "ClientCapabilities.extensions must survive a round-trip byte-for-byte"
+        );
+        assert_eq!(
+            first, r#"{"extensions":{"io.modelcontextprotocol/tasks":{}}}"#,
+            "the wire form of a tasks-declaring client must match the spec's own \
+             example bytes; re-verify against schema/vendored/ext-tasks/schema.ts"
+        );
+        assert_eq!(
+            round.extensions.as_ref().unwrap().get(TASKS_EXTENSION_KEY),
+            Some(&serde_json::json!({})),
+            "round-tripped extensions value must equal the original"
+        );
+    }
+
+    #[test]
+    fn client_extensions_and_experimental_coexist() {
+        // Both maps are sibling fields; neither suppresses the other, and
+        // neither nests inside the other.
+        let mut exp = HashMap::new();
+        exp.insert("old-thing".to_string(), serde_json::json!({"v": 1}));
+        let mut ext = HashMap::new();
+        ext.insert(TASKS_EXTENSION_KEY.to_string(), serde_json::json!({}));
+        let caps = ClientCapabilities {
+            experimental: Some(exp),
+            extensions: Some(ext),
+            ..Default::default()
+        };
+
+        let json = serde_json::to_value(&caps).unwrap();
+        // (a) Both top-level keys present simultaneously.
+        assert!(json.get("experimental").is_some(), "experimental missing");
+        assert!(json.get("extensions").is_some(), "extensions missing");
+        // (b) Siblings, not nested.
+        assert!(
+            json["experimental"].get("extensions").is_none(),
+            "extensions must NOT be nested inside experimental"
+        );
+        assert!(
+            json["extensions"].get("experimental").is_none(),
+            "experimental must NOT be nested inside extensions"
+        );
+        // (c) Round-trip preserves both.
+        let round: ClientCapabilities = serde_json::from_value(json).unwrap();
+        assert_eq!(
+            round.extensions.as_ref().unwrap().get(TASKS_EXTENSION_KEY),
+            Some(&serde_json::json!({}))
+        );
+        assert_eq!(
+            round.experimental.as_ref().unwrap().get("old-thing"),
+            Some(&serde_json::json!({"v": 1}))
+        );
+    }
+
+    #[test]
+    fn tasks_extension_capability_serializes_as_empty_object() {
+        // D-03: the value under `TASKS_EXTENSION_KEY` is EXACTLY `{}` — the
+        // exact string, not merely "an object".
+        let serialized = serde_json::to_string(&TasksExtensionCapability::default()).unwrap();
+        assert_eq!(
+            serialized, "{}",
+            "TasksExtensionCapability must serialize as exactly `{{}}` \
+             (schema/vendored/ext-tasks/schema.ts declares it \
+             `Record<string, never>`); got: {serialized}"
+        );
+
+        // And it deserializes back from that same `{}`.
+        let parsed: TasksExtensionCapability = serde_json::from_str("{}").unwrap();
+        assert_eq!(parsed, TasksExtensionCapability::default());
+
+        // Tolerating an UNKNOWN key is DELIBERATE, not an oversight: there is
+        // intentionally no `deny_unknown_fields`, so if the final schema ever
+        // adds a settings field, a newer peer sending it cannot break an older
+        // pmcp build. Removing this tolerance would make that a hard error.
+        let with_future_field: TasksExtensionCapability =
+            serde_json::from_str(r#"{"someFutureSetting":true}"#).expect(
+                "TasksExtensionCapability must tolerate an unknown key so a future \
+                 upstream field cannot break an older client",
+            );
+        assert_eq!(with_future_field, TasksExtensionCapability::default());
+    }
+
+    #[test]
+    fn tasks_extension_key_is_the_reverse_dns_spelling() {
+        // One canonical spelling of the extension identifier. If this fails,
+        // the key was edited in source — re-verify it against
+        // `schema/vendored/ext-tasks/schema.ts` (pinned commit recorded in
+        // `schema/vendored/ext-tasks/PROVENANCE.md`) and against the D-18 hold
+        // in
+        // `.planning/phases/114-tasks-extension-migration/114-SPEC-RECHECK.md`
+        // before changing this test to match the code.
+        assert_eq!(
+            TASKS_EXTENSION_KEY, "io.modelcontextprotocol/tasks",
+            "TASKS_EXTENSION_KEY changed. This value is PRE-FINAL and held under \
+             Phase 114's D-18 hold: re-verify against \
+             schema/vendored/ext-tasks/schema.ts (see PROVENANCE.md for the \
+             pinned commit) and 114-SPEC-RECHECK.md. Do not `fix` this test to \
+             match the code — a mismatch with the published schema is a \
+             phase-reopening event."
+        );
+
+        // The key and the value together must compose the exact bytes the CORE
+        // spec's own capability example file carries.
+        let mut ext = HashMap::new();
+        ext.insert(
+            TASKS_EXTENSION_KEY.to_string(),
+            serde_json::to_value(TasksExtensionCapability::default()).unwrap(),
+        );
+        let caps = ServerCapabilities {
+            extensions: Some(ext),
+            ..Default::default()
+        };
+        assert_eq!(
+            serde_json::to_string(&caps).unwrap(),
+            r#"{"extensions":{"io.modelcontextprotocol/tasks":{}}}"#,
+            "must match schema/draft/examples/ServerCapabilities/extensions-tasks.json \
+             byte-for-byte"
+        );
+    }
+
     #[test]
     fn server_capabilities_with_none_fields_serialization() {
         // Test that capabilities with None fields still have the parent object
