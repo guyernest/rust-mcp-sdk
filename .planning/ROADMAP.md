@@ -2443,7 +2443,7 @@ Plans:
   4. On v2, task owner binding requires OAuth `sub` or a stable per-request identity and fails closed when absent (no session-id fallback); a security test proves no cross-caller task visibility (TASK-05)
   5. The `TaskStore` trait, state machine, and DynamoDB/Redis/in-memory backends are unchanged — the migration is a wire-API reshape behind the `TaskRouter` boundary, verified by the v1 storage/tasks test suite staying green (TASK-06)
 
-**Plans**: 18 plans (11 waves)
+**Plans**: 20 plans (12 waves)
 
 Plans:
 
@@ -2452,7 +2452,8 @@ Plans:
 - [ ] 114-01-PLAN.md — Vendor the ext-tasks draft schema at a pinned commit (PROVENANCE + SHA256 tripwire) + the `114-SPEC-RECHECK.md` hold record with the both-repos condition (DQ6)
 - [ ] 114-02-PLAN.md — v1 `tasks/*` golden byte fixtures captured PRE-reshape (D-14 item 2; none existed) + shared tasks test harness (`OptionalBearer`, tasks-backed spawn, client-declaration body builder)
 - [ ] 114-03-PLAN.md — `ClientCapabilities.extensions` field (F6 gap) + `TASKS_EXTENSION_KEY` + typed `TasksExtensionCapability` serializing as `{}` + five serde locks
-- [ ] 114-04-PLAN.md — Additive `TaskStore` input-delivery + `supports_inputs()` and `TaskRouter::handle_tasks_update` seams (D-12) + in-crate `InMemoryTaskStore` delivery (D-13 site 3)
+- [ ] 114-04-PLAN.md — Additive `TaskStore` input-delivery + owner-scoped `task_input_snapshot` + `record_input_requests` + error persistence + `supports_inputs()` and `TaskRouter::handle_tasks_update` seams (D-12) + in-crate `InMemoryTaskStore` impls (D-13 site 3)
+- [ ] 114-20-PLAN.md — **Contract-first owner decision** (blocking checkpoint): measure the absent `../provable-contracts/` dependency and settle author-vs-waive BEFORE implementation, replacing 114-18's self-granted exemption
 
 **Wave 2** *(parallel)*
 
@@ -2470,7 +2471,7 @@ Plans:
 
 **Wave 5**
 
-- [ ] 114-10-PLAN.md — Reserved-field registry fix: explicit ownership replaces the disposition-derived flag so a v2 `tasks/get` keeps its required top-level `inputRequests` (DQ2, highest-severity finding); `ResponseDisposition::Task` promoted to live code
+- [ ] 114-10-PLAN.md — Reserved-field registry fix: explicit ownership replaces the disposition-derived flag so a v2 `tasks/get` keeps its required top-level `inputRequests` (DQ2, highest-severity finding). The `ResponseDisposition::Task` dead-code allow is deliberately NOT removed here — see 114-12
 
 **Wave 6**
 
@@ -2478,7 +2479,7 @@ Plans:
 
 **Wave 7**
 
-- [ ] 114-12-PLAN.md — Server-directed v2 create trigger: the client's per-request declaration replaces v1's `task` field (DQ1), enforced in ONE expression reached from both dispatch sites; end-to-end over a real `tools/call`
+- [ ] 114-12-PLAN.md — Server-directed v2 create trigger: the client's per-request declaration replaces v1's `task` field (DQ1), enforced in ONE expression reached from both dispatch sites; the create→pause loop records handler-declared `inputRequests` against the STORE-minted id; `ResponseDisposition::Task` promoted to live code here (first production constructor); end-to-end over a real `tools/call`
 
 **Wave 8**
 
@@ -2486,17 +2487,21 @@ Plans:
 
 **Wave 9**
 
-- [ ] 114-14-PLAN.md — `tasks/update` delivery: five MRTR bounds FIRST, kind-directed `decode_for` against server-recorded kinds (D-17 / the D-113-O class), atomic partial-vs-complete transition, empty ack + property test + fuzz target
+- [ ] 114-14-PLAN.md — `tasks/update` delivery over a RAW map boundary: four input-response MRTR bounds FIRST (before the untagged decoder can run), kind-directed `decode_for` against kinds from `task_input_snapshot` (D-17 / the D-113-O class), atomic partial-vs-complete transition, empty ack + property test + fuzz target
 
-**Wave 10** *(parallel — disjoint files: security tests, tripwire tests, client + examples)*
+**Wave 10** *(parallel — disjoint files: security tests, tripwire tests, client)*
 
 - [ ] 114-15-PLAN.md — TASK-05 live-socket two-principal cross-caller matrix over `tasks/get`/`update`/`cancel` with measured indistinguishability and per-method negative controls (D-09)
 - [ ] 114-16-PLAN.md — Source tripwires: every tasks route carries a named era guard, no v2 `NotFound` → `-32603`, status-string set-equality against the vendored schema, per-value provenance
-- [ ] 114-17-PLAN.md — Client `tasks_update()` + input-supplying poll helper, and the paired runnable example `s50_v2_tasks_server` / `s51_v2_tasks_agent` (autonomous agent poll loop, D-05; `s49` was already taken twice)
+- [ ] 114-19-PLAN.md — **The v2 client half** (D-04/D-05's locked dual-surface steer): era-aware decoding of the flat create/get shapes and empty acks driven by `resultType`, `tasks_update()`, and a poll helper that reads the terminal result inline from `tasks/get` instead of the v2-retired `tasks/result`
 
 **Wave 11**
 
-- [ ] 114-18-PLAN.md — Whole-phase gate (quality-gate, semver 223/223, feature matrix, wasm, pmat), stale-doc sweep, TASK-01..06 booked `[~]` under the D-18 hold, deferred-items ledger + sign-off checkpoint
+- [ ] 114-17-PLAN.md — The paired runnable example `s50_v2_tasks_server` / `s51_v2_tasks_agent` (autonomous agent poll loop, D-05; `s49` was already taken twice). Examples-only — all client work moved to 114-19
+
+**Wave 12**
+
+- [ ] 114-18-PLAN.md — Whole-phase gate (quality-gate, semver + pmat asserted as deltas against a measured phase-base manifest, feature matrix, wasm), stale-doc sweep, TASK-01..06 booked `[~]` under the D-18 hold, deferred-items ledger + sign-off checkpoint; cites 114-20's contract decision and blocks on any 114-15 security defect
 
 ### Phase 115: JSON Schema 2020-12 + Structured Output + Caching Hints
 
