@@ -35,16 +35,28 @@
 //! newly vendored file is in scope automatically and **cannot be added
 //! un-recorded**.
 //!
-//! # Zero new dependencies
+//! # Zero new dependencies, and no subprocess
 //!
-//! `sha2` is not a pmcp dependency and this test does not make it one. The
-//! digest is computed by shelling out to a system binary. Plan 114-01's threat
-//! register books `Cargo.toml` and `Cargo.lock` as byte-unchanged, and they are.
+//! The digest is computed IN-PROCESS with `sha2`, which is already a
+//! non-optional `[dependencies]` entry of this crate (used by `shared::pkce`,
+//! `types::mrtr`, `server::request_state` and the OAuth paths). An integration
+//! test links the package's dependencies, so importing it adds nothing: plan
+//! 114-01's threat register books `Cargo.toml` and `Cargo.lock` as
+//! byte-unchanged, and they are.
+//!
+//! This deliberately replaced an earlier subprocess implementation that shelled
+//! out to `shasum` / `sha256sum` and SKIPPED when neither was present. A skip
+//! makes a tripwire always-green on the machines least likely to have the tool,
+//! which is precisely the failure mode this file's own docs say must not exist.
+//! Hashing in-process removes the skip path entirely: there is no environment in
+//! which these assertions do not run.
 
 use std::collections::BTreeSet;
+use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+
+use sha2::{Digest, Sha256};
 
 /// The vendored artifact directory, relative to the crate root.
 const VENDORED_DIR: &str = "schema/vendored/ext-tasks";
@@ -60,15 +72,6 @@ const PROVENANCE_FILE: &str = "PROVENANCE.md";
 /// minimum rather than an exact count or a file list, so vendoring a third file
 /// puts that file in scope without editing this test.
 const MINIMUM_VENDORED_FILES: usize = 2;
-
-/// SHA-256 binaries tried, in order, with the arguments each needs.
-///
-/// `shasum -a 256` is the canonical form and is what `PROVENANCE.md` documents
-/// in its reproduce-this-fetch recipe. `sha256sum` is the GNU coreutils name and
-/// is the fallback: it is present on Linux CI images, some of which ship no perl
-/// `shasum`. Without the fallback this tripwire would silently skip in CI, which
-/// is exactly the failure a tripwire must not have.
-const DIGEST_BINARIES: &[(&str, &[&str])] = &[("shasum", &["-a", "256"]), ("sha256sum", &[])];
 
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -116,57 +119,26 @@ fn discover_vendored_files(dir: &Path, out: &mut Vec<PathBuf>) {
     out.sort();
 }
 
-/// The SHA-256 of `path` as lowercase hex, or `None` when no digest binary is
-/// available on this machine.
-fn sha256_of(path: &Path) -> Option<String> {
-    for &(binary, args) in DIGEST_BINARIES {
-        let Ok(output) = Command::new(binary).args(args).arg(path).output() else {
-            continue;
-        };
-        if !output.status.success() {
-            continue;
-        }
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let Some(token) = stdout.split_whitespace().next() else {
-            continue;
-        };
-        let digest = token.to_ascii_lowercase();
-        if digest.len() == 64 && digest.chars().all(is_lower_hex) {
-            return Some(digest);
-        }
-    }
-    None
-}
-
-/// `true` when no SHA-256 binary exists here, after printing an unmissable
-/// notice. Callers MUST `return` immediately when this is `true`.
+/// The SHA-256 of `path`'s bytes as lowercase hex.
 ///
-/// The skip is LOUD by design. A silent skip would turn this tripwire into a
-/// test that always passes, which is worse than not having it: it would report
-/// green while asserting nothing about the artifact it exists to protect.
-fn skipped_for_missing_digest_tool(test_name: &str) -> bool {
-    // Probe against a file guaranteed to exist, so a MISSING `PROVENANCE.md`
-    // reports as the failure it is rather than being mistaken for a missing tool.
-    if sha256_of(&repo_root().join("Cargo.toml")).is_some() {
-        return false;
-    }
-    println!(
-        "\n\
-         ============================================================\n\
-         SKIPPED (ASSERTED NOTHING): {test_name}\n\
-         ============================================================\n\
-         No SHA-256 binary was found. Tried, in order: {}.\n\
-         This run did NOT verify that {VENDORED_DIR}/ matches its recorded\n\
-         digests. Treat this as UNVERIFIED, not as a pass.\n\
-         Install one of the binaries above and re-run.\n\
-         ============================================================\n",
-        DIGEST_BINARIES
-            .iter()
-            .map(|&(binary, _)| binary)
-            .collect::<Vec<_>>()
-            .join(", ")
-    );
-    true
+/// Computed in-process, so there is no environment-dependent path and no skip:
+/// either the file reads and hashes, or the test fails naming the file. The hex
+/// encoding is lowercase to match what `shasum -a 256` prints, which is the form
+/// `PROVENANCE.md` records.
+fn sha256_of(path: &Path) -> String {
+    let bytes = fs::read(path).unwrap_or_else(|err| {
+        panic!(
+            "cannot read {} to compute its SHA-256: {err}\n\
+             This tripwire asserts the vendored artifact is unmodified; an unreadable file \
+             cannot be verified.",
+            rel(path)
+        )
+    });
+    let digest = Sha256::digest(&bytes);
+    digest.iter().fold(String::with_capacity(64), |mut hex, b| {
+        let _ = write!(hex, "{b:02x}");
+        hex
+    })
 }
 
 fn is_lower_hex(ch: char) -> bool {
@@ -283,12 +255,6 @@ fn vendored_schema_provenance_md_exists_so_the_artifact_is_attributed() {
 
 #[test]
 fn vendored_schema_every_file_digest_is_recorded_in_provenance_md() {
-    if skipped_for_missing_digest_tool(
-        "vendored_schema_every_file_digest_is_recorded_in_provenance_md",
-    ) {
-        return;
-    }
-
     let provenance = read_provenance_or_fail();
     let recorded = recorded_digests(&provenance);
 
@@ -296,8 +262,7 @@ fn vendored_schema_every_file_digest_is_recorded_in_provenance_md() {
     discover_vendored_files(&vendored_dir(), &mut files);
 
     for file in &files {
-        let digest = sha256_of(file)
-            .unwrap_or_else(|| panic!("could not compute a SHA-256 for {}", rel(file)));
+        let digest = sha256_of(file);
         assert!(
             recorded.contains(&digest),
             "FAILURE MODE 1 — A VENDORED FILE WAS EDITED OR REPLACED WITHOUT UPDATING \
@@ -328,12 +293,6 @@ fn vendored_schema_every_file_digest_is_recorded_in_provenance_md() {
 
 #[test]
 fn vendored_schema_every_recorded_digest_belongs_to_a_file_that_still_exists() {
-    if skipped_for_missing_digest_tool(
-        "vendored_schema_every_recorded_digest_belongs_to_a_file_that_still_exists",
-    ) {
-        return;
-    }
-
     let provenance = read_provenance_or_fail();
     let recorded = recorded_digests(&provenance);
     assert!(
@@ -348,7 +307,7 @@ fn vendored_schema_every_recorded_digest_belongs_to_a_file_that_still_exists() {
 
     let mut files = Vec::new();
     discover_vendored_files(&vendored_dir(), &mut files);
-    let computed: BTreeSet<String> = files.iter().filter_map(|file| sha256_of(file)).collect();
+    let computed: BTreeSet<String> = files.iter().map(|file| sha256_of(file)).collect();
 
     for digest in &recorded {
         assert!(
