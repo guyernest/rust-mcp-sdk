@@ -1161,12 +1161,27 @@ messages, and both are `-32601`.
 | A8 | No golden byte fixtures for v1 `tasks/*` responses exist (grep for `golden`/`GOLDEN` across `tests/` matched only `v2_required_headers.rs`; no `tests/fixtures/` directory) | F19, Validation Architecture | LOW. Grep-verified two ways. Worst case some fixtures exist under a different name, which only *reduces* Wave-0 work |
 | A9 | pmcp-tasks is not published to crates.io, so `cargo semver-checks` has no baseline for it | F13 | LOW. The crates.io API returned an error object for `pmcp-tasks`, and it is absent from CLAUDE.md's publish order while being a workspace member |
 
-## Open Questions
+## Open Questions (RESOLVED)
 
-Q1 and Q2 change **task decomposition**, not just task content, and should be resolved before
-the planner writes plans. Q3–Q6 can be resolved inside planning.
+**All six questions were resolved during planning on 2026-07-27 and each has an owning plan.** They are
+retained in full below, unedited apart from the `RESOLVED:` marker on each, because the reasoning that led
+to each answer is what a re-verifier at the D-18 gate needs — the answers are recorded, not the questions
+erased. Q1 and Q4 additionally received **explicit user approval pre-execution** ("Approve DQ1 + DQ4",
+2026-07-27) because they widened scope beyond a literal reading of CONTEXT.md's deferrals.
+
+Resolution index: DQ1→114-12, DQ2→114-10, DQ3→114-09, DQ4→114-06, Q5 (answered by measurement in
+`114-PATTERNS.md` Fact 1) → DQ5→114-13, DQ6→114-01, and DQ7 (the contract-YAML question raised by
+PATTERNS Fact 3, not by this section) →114-18.
+
+Q1 and Q2 changed **task decomposition**, not just task content, which is why they were resolved before
+the planner wrote plans. Q3–Q6 were resolved inside planning.
 
 1. **Is server-directed task creation in scope? (Blocks TASK-04 demonstrability)**
+   - **RESOLVED → DQ1, owned by `114-12-PLAN.md`.** IN SCOPE. Research's reading was accepted: the spec's
+     `MAY` governs whether a server *elects* to materialize a task, not whether creation may be
+     server-initiated. The v2 create trigger is the client's per-request extension declaration; v1 keeps its
+     `task` field. **Explicitly approved by the user pre-execution on 2026-07-27**, superseding CONTEXT.md's
+     deferral for the create-trigger question. The narrower client-compatibility concern stays deferred.
    - **What we know:** The spec is unambiguous — creation is server-directed, no client `task`
      field exists on v2, and the server is "the sole decider". pmcp's create gate requires
      `task_requested` from v1's `CallToolRequest.task`.
@@ -1182,6 +1197,9 @@ the planner writes plans. Q3–Q6 can be resolved inside planning.
      checkpoint; this is a scope decision, not a research one.
 
 2. **How is the `inputRequests`-stripping collision resolved? (Blocks D-15's v2 `tasks/get`)**
+   - **RESOLVED → DQ2, owned by `114-10-PLAN.md`.** The recommended route was taken: an explicit ownership
+     input replaces the disposition-derived `mrtr_owned` flag, removing the derivation the registry's own
+     rustdoc flags as a convenience. The plan reproduces the silent strip at runtime BEFORE fixing it.
    - **What we know:** `own_reserved_result_fields` removes top-level `inputRequests` whenever
      `disposition != InputRequired`; a v2 `tasks/get` on an `input_required` task must carry it
      as a required top-level field with `resultType: "complete"`.
@@ -1194,6 +1212,11 @@ the planner writes plans. Q3–Q6 can be resolved inside planning.
      implements v2 `tasks/get`.
 
 3. **Does D-08 keep `-32003`, given the triple meaning?**
+   - **RESOLVED → DQ3, owned by `114-09-PLAN.md`.** Both codes, two meanings: `-32003` keeps the **auth**
+     refusal (D-08 verbatim, the 113-23 shape) and the existing `-32021 MISSING_REQUIRED_CLIENT_CAPABILITY`
+     carries the **non-declaring-client** refusal with an OBJECT-shaped `requiredCapabilities`. No new wire
+     value is minted. The ext-tasks/core `-32003`-vs-`-32021` disagreement is recorded as its own row in
+     `114-SPEC-RECHECK.md` for re-check at the gate.
    - **What we know:** pmcp `-32003` = `AUTHENTICATION_REQUIRED`; core draft `-32021` =
      `MISSING_REQUIRED_CLIENT_CAPABILITY`; ext-tasks prose uses `-32003` for
      missing-required-client-capability and requires it (**MUST**) for non-declaring clients
@@ -1211,6 +1234,11 @@ the planner writes plans. Q3–Q6 can be resolved inside planning.
      discrepancy for the re-verification run.
 
 4. **Do tasks methods become name-bearing (`Mcp-Name` = `taskId`)?**
+   - **RESOLVED → DQ4, owned by `114-06-PLAN.md`.** Yes on the CLIENT emitter, via a **separate** name-key
+     table — because `logical_name_key` and `mrtr_eligible` both derive from `MRTR_METHODS`, so a row there
+     would make `tasks/update` MRTR-eligible and `splice_mrtr_params` would delete its entire payload
+     (Pitfall 4). Server-side enforcement stays OFF this phase; the server is already tolerant.
+     **Explicitly approved by the user pre-execution on 2026-07-27.**
    - **What we know:** The spec says clients **MUST** set it. pmcp's server already accepts it
      (non-name-bearing ⇒ no cross-check); pmcp's client emits `""`, violating the MUST.
    - **What's unclear:** `logical_name_key` derives from `MRTR_METHODS`, which *also* drives
@@ -1221,6 +1249,13 @@ the planner writes plans. Q3–Q6 can be resolved inside planning.
      the two with a test — the same "one table, both ends" discipline, just a second table.
 
 5. **Is `ClientRequest` `#[non_exhaustive]`?** *(Not verified this session — verify first)*
+   - **RESOLVED by measurement → `114-PATTERNS.md` Fact 1; design consequence is DQ5, owned by
+     `114-13-PLAN.md`.** It is **NOT** `#[non_exhaustive]` (`src/types/protocol/mod.rs:479-483`), so A4 was
+     wrong and adding a variant would be semver-MAJOR. `tasks/update` therefore routes via
+     `InternalClientRequest` + `classify_internal_method` + `parse_request_or_internal` (transport-agnostic,
+     unlike the HTTP-only `HttpIngress` path `subscriptions/listen` uses). F16's 5-site table is the wrong
+     table under this design, and the lost `client_request_mrtr_eligible` compile tripwire is replaced by
+     three explicit guards.
    - **Why it matters:** If not, adding `TasksUpdate` is a semver-**major** break, and D-12's
      and D-14's "223/223 additive" evidence bar fails for a reason unrelated to the traits.
    - **Recommendation:** `rg '#\[non_exhaustive\]' -B2 src/types/protocol/mod.rs` and a
@@ -1229,6 +1264,10 @@ the planner writes plans. Q3–Q6 can be resolved inside planning.
      before typed deserialization as 113-29 showed the raw-body path already does).
 
 6. **Which repo's versioned schema directory satisfies D-18's condition?**
+   - **RESOLVED → DQ6, owned by `114-01-PLAN.md`.** BOTH. The recommendation was taken: the hold clears
+     only when a versioned schema directory exists in the core spec repo **and** in ext-tasks. Six `[~]`
+     requirements must not flip on a core-only publication event. Recorded in `114-SPEC-RECHECK.md`
+     § Trigger Condition as a CONDITION, not a date.
    - **What we know (measured this session, 2026-07-28T02:18Z):** core spec `schema/` holds
      `2024-11-05`, `2025-03-26`, `2025-06-18`, `2025-11-25`, `draft` — **no `2026-07-28`**.
      ext-tasks `schema/` holds only `draft`. So the condition is unmet in **both** repos and

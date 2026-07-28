@@ -2443,7 +2443,7 @@ Plans:
   4. On v2, task owner binding requires OAuth `sub` or a stable per-request identity and fails closed when absent (no session-id fallback); a security test proves no cross-caller task visibility (TASK-05)
   5. The `TaskStore` trait, state machine, and DynamoDB/Redis/in-memory backends are unchanged — the migration is a wire-API reshape behind the `TaskRouter` boundary, verified by the v1 storage/tasks test suite staying green (TASK-06)
 
-**Plans**: 18 plans (12 waves)
+**Plans**: 18 plans (11 waves)
 
 Plans:
 
@@ -2488,16 +2488,13 @@ Plans:
 
 - [ ] 114-14-PLAN.md — `tasks/update` delivery: five MRTR bounds FIRST, kind-directed `decode_for` against server-recorded kinds (D-17 / the D-113-O class), atomic partial-vs-complete transition, empty ack + property test + fuzz target
 
-**Wave 10** *(parallel)*
+**Wave 10** *(parallel — disjoint files: security tests, tripwire tests, client + examples)*
 
 - [ ] 114-15-PLAN.md — TASK-05 live-socket two-principal cross-caller matrix over `tasks/get`/`update`/`cancel` with measured indistinguishability and per-method negative controls (D-09)
 - [ ] 114-16-PLAN.md — Source tripwires: every tasks route carries a named era guard, no v2 `NotFound` → `-32603`, status-string set-equality against the vendored schema, per-value provenance
-
-**Wave 11**
-
 - [ ] 114-17-PLAN.md — Client `tasks_update()` + input-supplying poll helper, and the paired runnable example `s50_v2_tasks_server` / `s51_v2_tasks_agent` (autonomous agent poll loop, D-05; `s49` was already taken twice)
 
-**Wave 12**
+**Wave 11**
 
 - [ ] 114-18-PLAN.md — Whole-phase gate (quality-gate, semver 223/223, feature matrix, wasm, pmat), stale-doc sweep, TASK-01..06 booked `[~]` under the D-18 hold, deferred-items ledger + sign-off checkpoint
 
