@@ -96,6 +96,7 @@
 
 use async_trait::async_trait;
 use dashmap::DashMap;
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::time::Instant;
 
@@ -250,7 +251,18 @@ impl Default for StoreConfig {
 /// assert!(delivery.accepted.is_empty());
 /// assert!(!delivery.complete);
 /// ```
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+///
+/// # The serde impl is the cross-crate CONTRACT, not a convenience
+///
+/// `pmcp-tasks`' `GenericTaskStore` sits below a `serde_json::Value` seam and
+/// hand-writes this shape as a JSON literal. Deriving `Serialize` here makes
+/// that literal checkable: `crates/pmcp-tasks/tests/input_delivery.rs` asserts
+/// the two key sets are equal, so renaming a field on either side is a test
+/// failure instead of a silent runtime mismatch. The keys are already
+/// single-word, so `rename_all` changes nothing today — it is stated so a
+/// future multi-word field cannot quietly emit `snake_case` across that seam.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TaskInputDelivery {
     /// Keys that were outstanding and not previously answered, and whose
     /// responses have been persisted by this call.
@@ -283,7 +295,16 @@ pub struct TaskInputDelivery {
 /// from anything the client sent. That is what makes
 /// [`InputResponse::decode_for`](crate::types::mrtr::InputResponse::decode_for)
 /// reachable instead of the overlapping untagged guess it replaced.
-#[derive(Debug, Clone)]
+///
+/// # The serde impl is the cross-crate CONTRACT
+///
+/// `pmcp-tasks`' `GenericTaskStore` hand-writes this shape as a JSON literal
+/// below its `serde_json::Value` seam. `rename_all = "camelCase"` is what makes
+/// the derived keys `inputRequests` / `inputResponses` / `status` — i.e. exactly
+/// the literal's keys — rather than the `snake_case` the field names would
+/// otherwise produce.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TaskInputSnapshot {
     /// The FULL set of input requests the server recorded for this task, keyed
     /// by the server-assigned key. This is the set a v2 `tasks/get` inlines as

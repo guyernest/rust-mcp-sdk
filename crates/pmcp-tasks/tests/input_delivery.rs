@@ -1403,3 +1403,70 @@ async fn deliver_inputs_refuses_a_non_object_payload() {
         other => panic!("expected StoreError, got: {other:?}"),
     }
 }
+
+/// The `pmcp` typed shapes and this crate's hand-written JSON literals are the
+/// SAME wire contract, on the two sides of the `serde_json::Value` seam.
+///
+/// Nothing used to ENFORCE that. `TaskInputDelivery` and `TaskInputSnapshot`
+/// derived no `Serialize` at all, so the trait docs' "mirroring pmcp's
+/// `TaskInputDelivery` field for field" was an aspiration a reader had to
+/// verify by eye — and `TaskInputSnapshot`'s snake_case field names would not
+/// even have produced the literal's `inputRequests` / `inputResponses` keys.
+///
+/// With `Serialize` derived above the seam, the claim is checkable here: rename
+/// a field on either side and this test fails, instead of the mismatch
+/// surfacing at runtime as a key the other layer silently does not read.
+#[tokio::test]
+async fn the_emitted_json_mirrors_pmcps_typed_shapes_key_for_key() {
+    fn key_set(value: &Value) -> std::collections::BTreeSet<String> {
+        value
+            .as_object()
+            .expect("expected a JSON object")
+            .keys()
+            .cloned()
+            .collect()
+    }
+
+    fn expected(keys: &[&str]) -> std::collections::BTreeSet<String> {
+        keys.iter().map(|k| (*k).to_string()).collect()
+    }
+
+    let store = store();
+    let task_id = paused_task(&store, OWNER, &["city"]).await;
+    let emitted_delivery = store
+        .deliver_inputs(&task_id, OWNER, responses_of(&["city"]))
+        .await
+        .unwrap();
+    let emitted_snapshot = store.task_input_snapshot(&task_id, OWNER).await.unwrap();
+
+    let typed_delivery =
+        serde_json::to_value(pmcp::server::task_store::TaskInputDelivery::default())
+            .expect("TaskInputDelivery serializes");
+    assert_eq!(
+        key_set(&typed_delivery),
+        key_set(&emitted_delivery),
+        "deliver_inputs' JSON literal and pmcp's TaskInputDelivery disagree about their keys"
+    );
+    assert_eq!(
+        key_set(&typed_delivery),
+        expected(&["accepted", "ignored", "complete"]),
+        "both sides drifted together; the wire keys themselves changed"
+    );
+
+    let typed_snapshot = serde_json::to_value(pmcp::server::task_store::TaskInputSnapshot {
+        input_requests: pmcp::types::mrtr::InputRequests::new(),
+        input_responses: pmcp::types::mrtr::InputResponses::new(),
+        status: pmcp::types::tasks::TaskStatus::default(),
+    })
+    .expect("TaskInputSnapshot serializes");
+    assert_eq!(
+        key_set(&typed_snapshot),
+        key_set(&emitted_snapshot),
+        "task_input_snapshot's JSON literal and pmcp's TaskInputSnapshot disagree about their keys"
+    );
+    assert_eq!(
+        key_set(&typed_snapshot),
+        expected(&["inputRequests", "inputResponses", "status"]),
+        "both sides drifted together; the wire keys themselves changed"
+    );
+}
