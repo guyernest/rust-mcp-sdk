@@ -557,7 +557,10 @@ impl ServerCore {
 
         Ok(InitializeResult {
             protocol_version: ProtocolVersion(negotiated_version.to_string()),
-            capabilities: self.capabilities.clone(),
+            // Era projection (114-05, D-02): the stored struct carries what BOTH
+            // eras want; this boundary emits the v1 view. See
+            // `project_capabilities_for_v1`.
+            capabilities: project_capabilities_for_v1(&self.capabilities),
             server_info: self.info.clone(),
             instructions: None,
         })
@@ -1130,6 +1133,76 @@ fn project_capabilities_for_v2(capabilities: &ServerCapabilities) -> ServerCapab
     projected.tasks = None;
     if let Some(experimental) = projected.experimental.as_mut() {
         experimental.remove(EXPERIMENTAL_TASKS_KEY);
+    }
+    projected
+}
+
+/// Project a server's already-computed capabilities onto the MCP 2025-11-25
+/// `initialize` wire (plan 114-05, D-02 / T-114-16).
+///
+/// Returns a CLONE, for the same per-server-versus-per-request-era reason
+/// [`discover_result_from_capabilities`] spells out.
+///
+/// # Why this exists — a MEASURED leak, not a precaution
+///
+/// `task_dispatch::apply_tasks_capability_rule` runs at BUILD time, where no era
+/// exists, and writes the tasks-extension entry into the ONE
+/// [`ServerCapabilities`] both eras are served from. `initialize` serializes that
+/// struct verbatim, so without this projection a v1 `initialize` against a
+/// tasks-backed server gains
+/// `"extensions":{"io.modelcontextprotocol/tasks":{}}` — measured on the real
+/// wire by `tests/v2_tasks_negotiation.rs::v1_initialize_stays_byte_identical`
+/// before this fn existed. That is a v1 wire change on every tasks server that
+/// exists today, which is exactly the lock D-02 holds.
+///
+/// The struct carries what both eras could want; each serialization boundary
+/// decides what its era SEES. `server/discover` suppresses the v1 spellings;
+/// `initialize` suppresses the v2 one. The two projections are mirrors, and a
+/// reader can check both at once.
+///
+/// # Only the AUTO-ADVERTISED value is removed
+///
+/// The entry is dropped only when its value is EXACTLY what
+/// [`tasks_extension_value()`](crate::server::task_dispatch::tasks_extension_value)
+/// writes — the empty object. An operator who configured a non-empty value under
+/// that key authored something distinguishable, and silently deleting an
+/// operator's own configuration from the wire is worse than carrying it: the
+/// additive-only discipline this phase is built on cuts both ways.
+///
+/// If removing the entry empties the map, the map itself is dropped rather than
+/// emitted as `"extensions":{}`. A map that contained nothing but the
+/// auto-advertised entry did not exist before the rule created it, so leaving an
+/// empty object behind would itself be the byte change this projection prevents.
+///
+/// One residual case is stated rather than hidden: an operator who explicitly
+/// configured exactly `{}` under this key BEFORE plan 114-05 loses it from the
+/// v1 `initialize` wire, because that value is by construction indistinguishable
+/// from the auto-advertised one. It is still served on v2, where the key means
+/// something.
+///
+/// `WasmServer`'s `initialize` deliberately does NOT call this: the whole task
+/// subsystem (including the capability rule) is `#[cfg(not(target_arch =
+/// "wasm32"))]`, so no wasm build can auto-gain the entry, and applying the
+/// projection there could only ever remove an operator's own key.
+pub(crate) fn project_capabilities_for_v1(capabilities: &ServerCapabilities) -> ServerCapabilities {
+    let auto_advertised = crate::server::task_dispatch::tasks_extension_value();
+    let carries_the_auto_entry = capabilities.extensions.as_ref().is_some_and(|extensions| {
+        extensions.get(crate::types::capabilities::TASKS_EXTENSION_KEY) == Some(&auto_advertised)
+    });
+    if !carries_the_auto_entry {
+        return capabilities.clone();
+    }
+
+    let mut projected = capabilities.clone();
+    if let Some(extensions) = projected.extensions.as_mut() {
+        extensions.remove(crate::types::capabilities::TASKS_EXTENSION_KEY);
+    }
+    if projected
+        .extensions
+        .as_ref()
+        .is_some_and(std::collections::HashMap::is_empty)
+    {
+        projected.extensions = None;
     }
     projected
 }
@@ -3992,6 +4065,93 @@ mod tests {
             value["capabilities"]["experimental"]["io.example/flag"],
             serde_json::json!(true),
             "an unrelated experimental key must survive the v2 projection: {value}"
+        );
+    }
+
+    /// The v1 `initialize` view drops the AUTO-ADVERTISED tasks extension.
+    ///
+    /// The mirror of the v2 row above, and the unit-level guard for the leak
+    /// `tests/v2_tasks_negotiation.rs::v1_initialize_stays_byte_identical`
+    /// measured on the real wire.
+    #[test]
+    fn v1_projection_drops_the_auto_advertised_tasks_extension_from_capabilities() {
+        let mut caps = ServerCapabilities::default();
+        crate::server::task_dispatch::apply_tasks_capability_rule(&mut caps, &HashMap::new(), true)
+            .unwrap();
+        assert!(
+            caps.extensions.is_some(),
+            "precondition: the build-time rule must have created the entry"
+        );
+
+        let projected = project_capabilities_for_v1(&caps);
+        let value = serde_json::to_value(&projected).unwrap();
+
+        assert!(
+            value.get("extensions").is_none(),
+            "a map holding nothing but the auto-advertised entry must be dropped \
+             entirely — `\"extensions\":{{}}` would itself be the v1 byte change: {value}"
+        );
+        assert!(
+            projected.tasks.is_some(),
+            "and the v1 negotiation home stays exactly as before: {value}"
+        );
+        assert!(
+            caps.extensions.is_some(),
+            "the projection must not mutate the stored capabilities"
+        );
+    }
+
+    /// An OPERATOR-configured (non-empty) value under the same key survives the
+    /// v1 projection.
+    ///
+    /// Only what pmcp auto-added is removed. Silently deleting an operator's own
+    /// configuration from the wire is the mirror-image failure of silently
+    /// overwriting it.
+    #[test]
+    fn v1_projection_preserves_an_operator_configured_tasks_extension_in_capabilities() {
+        let configured = serde_json::json!({ "io.example/nonconformant": true });
+        let mut caps = ServerCapabilities::default();
+        let mut extensions = HashMap::new();
+        extensions.insert(
+            crate::types::capabilities::TASKS_EXTENSION_KEY.to_string(),
+            configured.clone(),
+        );
+        caps.extensions = Some(extensions);
+
+        let projected = project_capabilities_for_v1(&caps);
+
+        assert_eq!(
+            projected
+                .extensions
+                .as_ref()
+                .and_then(|map| map.get(crate::types::capabilities::TASKS_EXTENSION_KEY)),
+            Some(&configured),
+            "an operator-authored value must survive the v1 projection verbatim"
+        );
+    }
+
+    /// Unrelated extensions keys survive, and the map is kept when they do.
+    #[test]
+    fn v1_projection_leaves_unrelated_extensions_capabilities_intact() {
+        let mut caps = ServerCapabilities::default();
+        let mut extensions = HashMap::new();
+        extensions.insert(
+            crate::types::capabilities::TASKS_EXTENSION_KEY.to_string(),
+            crate::server::task_dispatch::tasks_extension_value(),
+        );
+        extensions.insert("io.example/skills".to_string(), serde_json::json!({}));
+        caps.extensions = Some(extensions);
+
+        let projected = project_capabilities_for_v1(&caps);
+        let extensions = projected.extensions.as_ref().expect("map is kept");
+
+        assert!(
+            extensions.contains_key("io.example/skills"),
+            "an unrelated extensions key must survive: {extensions:?}"
+        );
+        assert!(
+            !extensions.contains_key(crate::types::capabilities::TASKS_EXTENSION_KEY),
+            "and only the auto-advertised tasks entry is removed: {extensions:?}"
         );
     }
 

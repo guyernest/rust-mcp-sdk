@@ -1537,7 +1537,14 @@ impl Server {
 
                 let result = InitializeResult {
                     protocol_version: ProtocolVersion(negotiated_version.to_string()),
-                    capabilities: self.capabilities.clone(),
+                    // Twin-site parity (114-05, D-02): the SAME shared v1
+                    // projection `ServerCore::handle_initialize` uses — this
+                    // site never defines its own. Without it the build-time
+                    // tasks-extension entry, which is the v2 negotiation home,
+                    // leaks onto the v1 `initialize` wire of every tasks server.
+                    capabilities: crate::server::core::project_capabilities_for_v1(
+                        &self.capabilities,
+                    ),
                     server_info: self.info.clone(),
                     instructions: None,
                 };

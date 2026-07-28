@@ -168,7 +168,7 @@ pub(crate) fn default_tasks_capability() -> ServerTasksCapability {
 ///
 /// Serializing a field-less struct cannot fail; the fallback restates the SAME
 /// `{}` rather than introducing a panic path.
-fn tasks_extension_value() -> Value {
+pub(crate) fn tasks_extension_value() -> Value {
     serde_json::to_value(TasksExtensionCapability::default())
         .unwrap_or_else(|_| Value::Object(serde_json::Map::new()))
 }
