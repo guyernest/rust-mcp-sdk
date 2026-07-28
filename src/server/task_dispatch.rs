@@ -863,7 +863,16 @@ impl TaskDispatch<'_> {
 
         // No router: distinguish "store exists but task not completed yet"
         // (specified error) from "no task backend at all".
-        match (self.task_store.is_some(), is_v1_task_era(era)) {
+        //
+        // The era axis reads the SAME predicate as the gate at the head of this
+        // function, deliberately — not a second, independently-disable-able copy
+        // of the era question. A negative control measured why: with this arm
+        // keyed on `is_v1_task_era` directly, disabling `tasks_result_serves_on_era`
+        // left this arm still refusing v2 with an identical body, so the head gate
+        // could not be proven load-bearing by any test. ONE predicate, two call
+        // sites: disable it and the whole gate opens, which is what a negative
+        // control has to be able to do.
+        match (self.task_store.is_some(), tasks_result_serves_on_era(era)) {
             (true, true) => error_response(
                 id,
                 // FROZEN wire value -32002 (byte-identical); read by name from the
@@ -874,12 +883,10 @@ impl TaskDispatch<'_> {
                 crate::types::protocol::error_codes::V1_TASK_PENDING,
                 "task result not available: task not completed".to_string(),
             ),
-            // Unreachable by construction since the era gate at the head of this
-            // function returns first whenever a backend is present (and
-            // `task_store.is_some()` implies one). It is KEPT, answering
-            // identically, as defense in depth: the era predicate stays adjacent
-            // to the frozen `-32002` arm, so a reader of that arm sees what keeps
-            // it off the v2 wire without leaving the match.
+            // Required for exhaustiveness, and unreachable in production: the head
+            // gate already returned for every era-v2 request that has a backend,
+            // and `task_store.is_some()` implies one. It answers IDENTICALLY so
+            // the two spellings of the refusal cannot diverge.
             (true, false) => retired_on_v2(id, TASKS_RESULT_METHOD),
             (false, _) => error_response(
                 id,
