@@ -43,7 +43,7 @@ mod duplex;
 
 use common::v2::{
     build_v2_server_with, post, spawn_default_config, spawn_shared, v2_body, v2_headers,
-    BearerSubjects, GreetingPrompt, SearchTool, FRAME_TIMEOUT, V1, V2,
+    BearerSubjects, GreetingPrompt, OptionalBearer, SearchTool, FRAME_TIMEOUT, V1, V2,
 };
 use pmcp::server::Server;
 use pmcp::types::protocol::error_codes::{AUTHENTICATION_REQUIRED, METHOD_NOT_FOUND, RATE_LIMITED};
@@ -141,33 +141,14 @@ fn server_with_two_principals() -> Server {
         .expect("server builds")
 }
 
-/// An auth provider that ADMITS unauthenticated requests.
-///
-/// D-113-N's precondition is a server that HAS an auth provider AND lets an
-/// unauthenticated request through to dispatch. The shared harness's
-/// [`BearerSubjects`] cannot produce it: it returns `Err` for a missing token, so
-/// the transport answers `401` long before the listen route runs. So this suite
-/// constructs the precondition EXPLICITLY rather than hoping the shared fixture
-/// happens to have that shape.
-///
-/// `Ok(None)` for an absent token is a real and common configuration — optional
-/// auth, an anonymous read tier, a gateway that forwards claims only when it has
-/// them — and it is exactly the configuration on which the pre-fix route handed
-/// every unauthenticated caller a private, uncapped `anon#N`.
-struct OptionalBearer;
-
-#[async_trait::async_trait]
-impl pmcp::server::auth::AuthProvider for OptionalBearer {
-    async fn validate_request(
-        &self,
-        authorization_header: Option<&str>,
-    ) -> pmcp::Result<Option<pmcp::server::auth::AuthContext>> {
-        Ok(authorization_header
-            .and_then(|header| header.strip_prefix("Bearer "))
-            .filter(|subject| !subject.is_empty())
-            .map(pmcp::server::auth::AuthContext::new))
-    }
-}
+// `OptionalBearer` — the `Ok(None)` auth provider D-113-N's precondition needs —
+// used to be defined right here. Plan 114-02 MOVED it into the shared harness
+// (`tests/common/v2.rs`) because the Phase-114 tasks suites need the same
+// precondition, and two divergent definitions of "this server admits anonymous
+// callers" is how a security test comes to pass for the wrong reason. Its full
+// rustdoc, including why `BearerSubjects` cannot serve this role, travelled with
+// it. It is imported at the top of this file; nothing about the behaviour of the
+// tests below changed.
 
 /// A v2 server advertising `tools.listChanged` whose auth provider ADMITS
 /// unauthenticated requests — the D-113-N configuration.

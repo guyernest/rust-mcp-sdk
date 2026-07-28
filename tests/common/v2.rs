@@ -133,6 +133,38 @@ impl ResourceHandler for GreetingResource {
     }
 }
 
+/// The name of the task-capable tool [`spawn_tasks_server`] registers.
+pub const TASKS_TOOL_NAME: &str = "long_task";
+
+/// A task-capable tool whose task stays `working`.
+///
+/// It declares [`TaskSupport::Required`](pmcp::types::TaskSupport::Required) and
+/// returns a task-shaped value with NO nested terminal `result`, so the shared
+/// create gate mints a store task that is genuinely pending. That is the useful
+/// default for a tasks suite: a pending task can be polled, updated and
+/// cancelled, whereas a synchronously-completed one has already left the states
+/// most of those tests are about.
+pub fn long_task_tool() -> impl ToolHandler {
+    pmcp::server::typed_tool::TypedTool::new_with_schema(
+        TASKS_TOOL_NAME,
+        json!({ "type": "object" }),
+        |_args: Value, _extra| {
+            Box::pin(async {
+                Ok(json!({
+                    "taskId": "tool-fabricated",
+                    "status": "working",
+                    "createdAt": "2026-07-28T00:00:00Z",
+                    "lastUpdatedAt": "2026-07-28T00:00:00Z"
+                }))
+            })
+        },
+    )
+    .with_description("a task-capable tool whose task stays pending")
+    .with_execution(
+        pmcp::types::ToolExecution::new().with_task_support(pmcp::types::TaskSupport::Required),
+    )
+}
+
 /// The reverse-DNS extension id the v2-opted-in server advertises in its
 /// `capabilities.extensions` map, so a `server/discover` projection has a
 /// non-empty `extensions` map to assert over (VERS-04).
@@ -209,6 +241,40 @@ impl pmcp::server::auth::AuthProvider for BearerSubjects {
     }
 }
 
+/// An auth provider that ADMITS unauthenticated requests: `Ok(None)`, not `Err`.
+///
+/// Lifted verbatim (rustdoc included) from `tests/v2_subscriptions.rs`, where it
+/// was introduced for D-113-N and where a second copy no longer exists — the
+/// same precondition is now needed by the Phase-114 tasks suites, and two
+/// divergent definitions of "the server admits anonymous callers" is exactly the
+/// kind of fixture drift that makes a security test pass for the wrong reason.
+///
+/// [`BearerSubjects`] CANNOT serve this role: it returns `Err` for a missing
+/// token, so the transport answers `401` long before dispatch and the
+/// auth-refusal branch inside the route is never reached. So the precondition is
+/// constructed EXPLICITLY here rather than hoping the shared bearer fixture
+/// happens to have that shape.
+///
+/// `Ok(None)` for an absent token is a real and common configuration — optional
+/// auth, an anonymous read tier, a gateway that forwards claims only when it has
+/// them. It is also the ONLY way a test can reach the
+/// `(None, has_auth_provider = true)` row of the fail-closed identity table,
+/// which is the whole of TASK-05's refusal branch.
+pub struct OptionalBearer;
+
+#[async_trait]
+impl pmcp::server::auth::AuthProvider for OptionalBearer {
+    async fn validate_request(
+        &self,
+        authorization_header: Option<&str>,
+    ) -> pmcp::Result<Option<pmcp::server::auth::AuthContext>> {
+        Ok(authorization_header
+            .and_then(|header| header.strip_prefix("Bearer "))
+            .filter(|subject| !subject.is_empty())
+            .map(pmcp::server::auth::AuthContext::new))
+    }
+}
+
 // ===========================================================================
 // Spawning.
 // ===========================================================================
@@ -264,10 +330,90 @@ pub async fn spawn_shared(server: Arc<Mutex<Server>>) -> (SocketAddr, JoinHandle
     spawn_shared_with(server, StreamableHttpServerConfig::default()).await
 }
 
+/// The auth posture [`spawn_tasks_server`] installs.
+///
+/// There is deliberately NO `Default` and no defaulted overload: every caller
+/// must state its posture, so a security test cannot pass because it silently
+/// got a server with no auth provider (T-114-05).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AuthPosture {
+    /// No auth provider at all. An unauthenticated caller is the ONLY caller,
+    /// and `has_auth_provider` is `false`.
+    None,
+    /// [`OptionalBearer`]: a provider that returns `Ok(None)` for a missing
+    /// token, so `has_auth_provider` is `true` AND an unauthenticated request
+    /// still reaches dispatch. This is the only posture that can produce the
+    /// `(None, true)` row of the fail-closed identity table.
+    Optional,
+    /// [`BearerSubjects`]: a provider that returns `Err` for a missing token, so
+    /// the transport answers `401` before dispatch. Use it for two-principal
+    /// isolation tests, NOT for auth-refusal-branch tests.
+    Required,
+}
+
+/// Spawn a v2-opted-in, tasks-backed server over real loopback HTTP.
+///
+/// The server carries:
+///
+/// * both [`V1`] and [`V2`] in its accept-list, so a per-request era gate is
+///   actually exercised (the same reason [`spawn_default_config`] is used here
+///   rather than the build-time `stateless()` config),
+/// * an in-crate [`InMemoryTaskStore`](pmcp::server::task_store::InMemoryTaskStore),
+///   whose presence auto-advertises the `tasks` capability,
+/// * the task-capable [`long_task_tool`], and
+/// * the caller's chosen [`AuthPosture`].
+///
+/// The in-crate store is deliberate. `pmcp-tasks`' `GenericTaskStore` refuses
+/// the anonymous owner unless `allow_anonymous` is set (114-RESEARCH Pitfall 3),
+/// and a SHARED harness must not bake that configuration decision into every
+/// test that merely wants a task backend.
+///
+/// Returns the same `(addr, handle)` shape as [`spawn_default_config`], so
+/// [`post`], [`post_raw`], [`Resp`] and [`teardown`] all work unchanged.
+pub async fn spawn_tasks_server(posture: AuthPosture) -> (SocketAddr, JoinHandle<()>) {
+    let store = Arc::new(pmcp::server::task_store::InMemoryTaskStore::new())
+        as Arc<dyn pmcp::server::task_store::TaskStore>;
+    let mut builder = Server::builder()
+        .name("v2-tasks-harness")
+        .version("1.0.0")
+        .capabilities(extensions_capabilities())
+        .with_supported_protocol_versions([
+            ProtocolVersion(V1.to_string()),
+            ProtocolVersion(V2.to_string()),
+        ])
+        .tool(TASKS_TOOL_NAME, long_task_tool())
+        .task_store(store);
+    builder = match posture {
+        AuthPosture::None => builder,
+        AuthPosture::Optional => builder.auth_provider(OptionalBearer),
+        AuthPosture::Required => builder.auth_provider(BearerSubjects),
+    };
+    let server = builder.build().expect("tasks server builds");
+    spawn_default_config(server).await
+}
+
 /// Upper bound on any single stream read or poll in the subscription suites.
 ///
 /// A hung stream must FAIL the test, not hang it.
 pub const FRAME_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Shut a spawned server down in the order: drop sockets → `abort()` → `await`.
+///
+/// The order is the point. D-113-T recorded an intermittent nextest `LEAK` on
+/// four `tests/v2_subscriptions.rs` tests caused by a bare `handle.abort()` with
+/// no await: the aborted task has not necessarily finished when the test
+/// function returns, and nextest's 100 ms leak timeout then fires as noise. A
+/// still-open client socket keeps the server's connection task alive across the
+/// abort, so the sockets go first.
+///
+/// `sockets` is anything the test owns that must die before the server: one
+/// stream, a `Vec` of them, or `()` when the test only used the pooled
+/// `reqwest` client and owns no socket of its own.
+pub async fn teardown<S: Send>(handle: JoinHandle<()>, sockets: S) {
+    drop(sockets);
+    handle.abort();
+    let _ = handle.await;
+}
 
 // ===========================================================================
 // Request construction.
@@ -337,6 +483,52 @@ fn jsonrpc_envelope(method: &str, id: Value, params: Value) -> String {
     body.insert("method".to_string(), json!(method));
     body.insert("params".to_string(), params);
     Value::Object(body).to_string()
+}
+
+/// [`v2_body`] whose `clientCapabilities` DECLARES a set of protocol extensions.
+///
+/// The reserved `_meta` key written is
+/// `io.modelcontextprotocol/clientCapabilities` (sourced from the crate's own
+/// [`META_CLIENT_CAPABILITIES`], never re-spelled here), and its value is
+/// `{"extensions": {<key>: {}}, …}` — the wire-correct home for Extensions-Track
+/// declarations, alongside the three MRTR-fulfillable capabilities every shared
+/// request already declares.
+///
+/// This is an ADDITIVE sibling of [`v2_body_with_caps`], which is left
+/// untouched: several Phase-113 suites depend on its exact behaviour.
+///
+/// `extension_keys` is taken as `&str`s rather than read from a production
+/// constant so this helper has NO dependency on plan 114-03, which introduces
+/// the `io.modelcontextprotocol/tasks` key. Once that constant exists, callers
+/// should pass it instead of a literal.
+pub fn v2_body_with_client_extensions(
+    method: &str,
+    id: Value,
+    params: Value,
+    extension_keys: &[&str],
+) -> String {
+    let mut extensions = serde_json::Map::new();
+    for key in extension_keys {
+        extensions.insert((*key).to_string(), json!({}));
+    }
+    let mut caps = match default_client_capabilities() {
+        Value::Object(map) => map,
+        _ => serde_json::Map::new(),
+    };
+    caps.insert("extensions".to_string(), Value::Object(extensions));
+    v2_body_with_caps(method, id, params, Value::Object(caps))
+}
+
+/// A v2 `tasks/*` request body carrying a `taskId`.
+///
+/// Covers `tasks/get`, `tasks/update`, `tasks/cancel` and `tasks/result` — every
+/// `tasks/*` method whose params are "a task id" — so a per-method matrix in a
+/// later plan is one loop rather than six near-identical `json!` literals. Pass
+/// `method = "tasks/list"` only if the suite genuinely wants a `taskId` on a list
+/// request (a malformed-params case); the well-formed list body is
+/// `v2_body("tasks/list", id, json!({}))`.
+pub fn tasks_request_body(method: &str, id: Value, task_id: &str) -> String {
+    v2_body(method, id, json!({ "taskId": task_id }))
 }
 
 /// A `server/discover` request body — a v2-capable method that carries no logical

@@ -541,14 +541,13 @@ async fn spawn(server: Server) -> (SocketAddr, JoinHandle<()>) {
     spawn_stateless_config(server).await
 }
 
-/// Shut the spawned server down in the `abort()`-then-`await` order.
+/// Shut the spawned server down through the shared harness's one teardown order
+/// (drop sockets → `abort()` → `await`, D-113-T).
 ///
-/// The bare `abort()` with no await is what D-113-T recorded as an intermittent
-/// nextest `LEAK`; this file has owned no sockets to drop first (the shared
-/// harness pools its `reqwest` connections), so the drop step is a no-op here.
+/// `()` is passed for the sockets because this file owns none of its own — every
+/// request goes through the harness's pooled `reqwest` client.
 async fn shutdown(handle: JoinHandle<()>) {
-    handle.abort();
-    let _ = handle.await;
+    common::v2::teardown(handle, ()).await;
 }
 
 /// A v1 `tools/call` carrying a `task` field (no v2 headers, no v2 `_meta`).
