@@ -61,3 +61,33 @@ Both occurrences in this file are now widened to 500 ms with the reason written 
 (Rule 1, committed in `c3ff793e`). Recorded here because the same
 `default_ttl_ms: Some(1)` + `sleep(10)` shape may appear in other expiry tests across the
 tree; a sweep is out of scope for a seam plan.
+
+---
+
+## D-114-C — server-side `Mcp-Name` enforcement for `tasks/*` is deliberately OFF
+
+**Found by:** 114-06 (Task 3) — a **scoped decision**, not a discovery
+**Status:** open, owned by **Phase 118** (conformance hardening)
+**Severity:** low today, rising once the ecosystem's clients are conformant
+
+114-06 made pmcp's CLIENT emit the spec's `Mcp-Name: <params.taskId>` on `tasks/get`,
+`tasks/update` and `tasks/cancel` (a spec **MUST**, inventory row 34). The SERVER half was
+deliberately left unchanged: `is_name_bearing_method` in
+`src/server/streamable_http_server.rs` still reads `logical_name_key`, which is derived from
+`MRTR_METHODS` and therefore answers `None` for every `tasks/*` method, so
+`cross_check_name` returns `Ok(())` for them before comparing anything.
+
+**The tolerance this buys, stated plainly:** a pmcp v2 server accepts a conformant
+`Mcp-Name: <taskId>` AND a legacy `Mcp-Name: ""`, and does **not** detect a header that
+disagrees with `params.taskId`. That is what lets pre-existing clients keep working while
+the ecosystem migrates.
+
+**What turning it on would take:** point `is_name_bearing_method` at
+`crate::types::mrtr::name_bearing_key` instead of `logical_name_key`. The routing-name half
+already resolves through the combined lookup (`frame_routing_pair`), so the body value is
+already available at the comparison site — one predicate is the whole change. It is a
+BREAKING change for any client still sending the empty value, which is why it is a
+separable decision rather than a line in a client plan.
+
+The tradeoff is also recorded in the rustdoc on `TASK_NAME_BEARING_METHODS`, so a reader of
+the table cannot miss it.
