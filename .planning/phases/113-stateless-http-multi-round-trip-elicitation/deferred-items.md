@@ -1295,14 +1295,19 @@ error-path read will happily allocate a multi-gigabyte "error message".
 Two numbers per file, because a raw needle match is a SYNTACTIC count and not
 automatically an unbounded-read count.
 
-**Method.** Column 1 is occurrences of the tripwire's own `WHOLE_BODY_NEEDLES`
-(`tests/v2_bounded_reads_tripwire.rs:562`) — the single-line substrings the
-tripwire would see. Column 2 counts `.json()` / `.text()` / `.bytes()` chains
-that rustfmt has SPLIT across lines so that `.await` lands on the next line;
-these are invisible to a single-line substring needle and were found by a
-line-pair scan. Column 3 is the reviewed subset: every match in columns 1 and 2
-opened and read, minus those confirmed to carry a local bound or to sit at a
-different boundary entirely.
+**Method.** Column 1 is a NAIVE line-grep for the tripwire's
+`WHOLE_BODY_NEEDLES` (`tests/v2_bounded_reads_tripwire.rs:562`) — what you get
+by grepping the raw source. Column 2 counts the additional `.json()` /
+`.text()` / `.bytes()` chains that rustfmt has SPLIT across lines so `.await`
+lands on the next line, which a raw grep misses. Column 3 is the reviewed
+subset: every match in columns 1 and 2 opened and read, minus those confirmed
+to carry a local bound or to sit at a different boundary entirely.
+
+**The tripwire itself sees BOTH columns — 33, not 19.** Its scanner
+(`strip()`, `tests/v2_bounded_reads_tripwire.rs:324`) removes ALL whitespace
+before matching, and `scanner::a_rustfmt_broken_chain_is_matched_and_reports_its_first_line`
+(`:1050`) pins exactly that behavior on `body\n.collect()\n.await`. So the
+split-chain column is a limitation of a naive grep, NOT of the tripwire.
 
 | File | raw needle matches | split-chain matches the needles MISS | reviewed-unbounded |
 |---|---|---|---|
@@ -1317,11 +1322,20 @@ All matches sit ABOVE each file's `mod tests` (at `:770`, `:431`, `:536`;
 
 ### This supersedes the "18" in the ROADMAP and in 113.1-CONTEXT
 
-Both are undercounts, and the reason is worth recording because it is a property
-of the tripwire rather than of the auth code: **the needles are single-line
-substrings, and rustfmt splits these call chains.** `response.json().await`
-written across three lines matches nothing. The roadmap also says three files;
-CONTEXT corrected that to four, and four is right.
+Both are undercounts, and the reason is worth recording precisely — an earlier
+revision of this entry got it WRONG and is corrected here.
+
+The undercount is **not** a defect in the tripwire. Its scanner strips
+whitespace before matching and explicitly handles rustfmt-broken chains (test at
+`:1050`), so it would find all 33. The "18" is simply what a raw line-grep
+returns, which is close to this table's naive column (19).
+
+**The only reason these 31 reads go unreported is the SCOPE FENCE** — the four
+files are not in `SHARED_DIR` or `EXTRA_SCOPE`, so the scanner is never pointed
+at them. Point it at them and it reports every one, unaided.
+
+The roadmap also says three files; CONTEXT corrected that to four, and four is
+right.
 
 ### Two exclusions — recorded rather than rounded away
 
@@ -1366,9 +1380,12 @@ milestone-scoping work inside a merge unblock. See the existing deferred idea
 "Widening the bounded-read tripwire's scope fence" in `113.1-CONTEXT.md`
 § Deferred Ideas; this entry does not duplicate it.
 
-**Corollary Phase 116 should not miss:** if the fence is ever widened, the
-needle set must be widened too, or it will under-report by ~40% on
-rustfmt-split chains exactly as it does here.
+**Corollary Phase 116 should not miss:** widening the fence is SUFFICIENT — the
+needle set needs no change. The scanner already resolves rustfmt-split chains,
+so adding `src/server/auth/` and `src/client/oauth.rs` to `EXTRA_SCOPE` will
+surface all of these immediately, and the `WHOLE_BODY_ALLOWLIST.len() == 0` pin
+means each one must then be bounded or exempted on the record. Expect the fence
+widening itself to be the whole job.
 
 ### Fix shape
 
