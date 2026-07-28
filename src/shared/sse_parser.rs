@@ -1846,25 +1846,45 @@ mod tests {
             let chars: Vec<char> = text.chars().collect();
             let mut chunks_b: Vec<String> = Vec::new();
             let mut at = 0usize;
-            let mut step = 0usize;
+            // `split_sizes` is generated non-empty, so the cycle never ends.
+            let mut sizes = split_sizes.iter().copied().cycle();
             while at < chars.len() {
-                let take = split_sizes[step % split_sizes.len()];
-                let end = (at + take).min(chars.len());
+                let end = (at + sizes.next().unwrap_or(1)).min(chars.len());
                 chunks_b.push(chars[at..end].iter().collect());
                 at = end;
-                step += 1;
             }
 
+            // The newline-free retained buffer is the SOUNDNESS PRECONDITION for
+            // the scan-window cursor (D-15): `scan_start` skips the retained
+            // prefix, which is only correct if no '\n' can hide there. The
+            // per-call `debug_assert` that used to enforce it universally was
+            // deleted because it was itself an O(retained) scan. Asserting it
+            // here restores generative coverage — this test already drives
+            // arbitrary text under arbitrary chunkings, which is exactly the
+            // generator that finds shapes the seven fixtures in
+            // `drain_leaves_no_newline_in_the_retained_buffer` do not.
             let mut parser_a = SseParser::new();
             let mut events_a = Vec::new();
             for chunk in &chunks_a {
                 events_a.extend(parser_a.feed(chunk));
+                proptest::prop_assert!(
+                    !parser_a.buffer.contains('\n'),
+                    "retained buffer holds a newline after feeding {:?}: {:?}",
+                    chunk,
+                    parser_a.buffer
+                );
             }
 
             let mut parser_b = SseParser::new();
             let mut events_b = Vec::new();
             for chunk in &chunks_b {
                 events_b.extend(parser_b.feed(chunk));
+                proptest::prop_assert!(
+                    !parser_b.buffer.contains('\n'),
+                    "retained buffer holds a newline after feeding {:?}: {:?}",
+                    chunk,
+                    parser_b.buffer
+                );
             }
 
             proptest::prop_assert_eq!(

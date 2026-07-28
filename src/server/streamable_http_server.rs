@@ -1399,6 +1399,24 @@ enum HttpIngress {
     },
 }
 
+impl HttpIngress {
+    /// Whether this ingress is an `initialize` request — the flag that decides
+    /// session minting.
+    ///
+    /// `server/discover` and `subscriptions/listen` are non-init by construction
+    /// (a stateless capability projection and a v2 stream opener respectively).
+    ///
+    /// Both POST preambles derived this with the same inline `match` before plan
+    /// 113.1; it lives here so the two paths cannot drift, and so a new
+    /// `HttpIngress` variant has exactly one place to answer the question.
+    fn is_initialize(&self) -> bool {
+        match self {
+            Self::Public(msg) => is_initialize_request(msg),
+            Self::Discover { .. } | Self::SubscriptionsListen { .. } => false,
+        }
+    }
+}
+
 /// Classify a raw POST body as an internally-routed request, if it is one.
 ///
 /// Two methods are internally routed, neither of which has a public
@@ -3143,17 +3161,28 @@ async fn assemble_subscriptions_listen(
 /// before this (D-11 left v1 untouched). A v1 / non-opted-in `server/discover`
 /// also flows through here, with no bypass.
 ///
-/// # The asymmetry with its twin is DELIBERATE (D-08)
+/// # The asymmetry with its twin is DELIBERATE (D-08) — but it is not a
+/// # difference in the PREDICATE
 ///
-/// [`guard_legacy_version_with_middleware`] gates on `!is_v2_request` ONLY and
-/// passes `is_init_request` INTO
-/// [`validate_protocol_version_with_error_hook`], whose own rustdoc reads
-/// "A no-op for init requests" — the init check is folded inside the wrapper by
-/// design. These are TWO helpers, each preserving its own call site's condition
-/// verbatim, precisely so nobody "harmonises" them: a single shared helper, or
-/// conditions edited to read alike, silently changes behavior on one path.
+/// Stated precisely, because the imprecise version misleads:
+/// [`guard_legacy_version_with_middleware`] spells its condition
+/// `!is_v2_request` and passes `is_init_request` INTO
+/// [`validate_protocol_version_with_error_hook`], which opens with
+/// `if is_init_request { return Ok(()); }`. So **both guards evaluate the same
+/// effective predicate, `!is_init_request && !is_v2_request`** — they just
+/// spell it in different places.
 ///
-/// Extracted in plan 113.1-05 (D-08, D-10).
+/// What is genuinely asymmetric, and why there are two helpers:
+///
+/// 1. This path calls the PLAIN [`validate_protocol_version`], which has **no**
+///    init handling of its own — so dropping `!is_init_request` from the
+///    condition here WOULD change behavior. It cannot be "harmonised" toward
+///    the middleware spelling.
+/// 2. The middleware path additionally fires `report_middleware_error` on
+///    failure, which is `async`. That is this file's standard
+///    plain-fn + `*_with_error_hook` split, not a semantic divergence.
+///
+/// Extracted in plan 113.1-05 (D-08, D-10); wording corrected after review.
 fn guard_legacy_version_fast(
     state: &ServerState,
     era: Option<crate::types::protocol::Era>,
@@ -3220,12 +3249,7 @@ async fn read_and_classify_fast(
     };
 
     let (session_id, protocol_version) = extract_session_and_protocol_headers(&headers);
-    // `server/discover` and `subscriptions/listen` are non-init requests (a
-    // stateless capability projection and a v2 stream opener respectively).
-    let is_init_request = match &ingress {
-        HttpIngress::Public(msg) => is_initialize_request(msg),
-        HttpIngress::Discover { .. } | HttpIngress::SubscriptionsListen { .. } => false,
-    };
+    let is_init_request = ingress.is_initialize();
 
     Ok(FastIngress {
         headers,
@@ -3267,6 +3291,21 @@ async fn handle_post_fast_path(
     state: ServerState,
     request: axum::extract::Request<Body>,
 ) -> Response {
+    // Every stage returns `Result<_, Response>`, so the pipeline is written with
+    // `?` in an inner fn and both arms collapse to the same value here. The
+    // alternative — a four-line `match { Ok(v) => v, Err(r) => return r }` per
+    // stage — is the same control flow spelled out five times.
+    match handle_post_fast_path_inner(state, request).await {
+        Ok(response) | Err(response) => response,
+    }
+}
+
+/// The fast-path pipeline proper. See [`handle_post_fast_path`] for the stage
+/// list and the complexity budget.
+async fn handle_post_fast_path_inner(
+    state: ServerState,
+    request: axum::extract::Request<Body>,
+) -> std::result::Result<Response, Response> {
     let FastIngress {
         headers,
         body,
@@ -3274,54 +3313,37 @@ async fn handle_post_fast_path(
         session_id,
         protocol_version,
         is_init_request,
-    } = match read_and_classify_fast(&state, request).await {
-        Ok(classified) => classified,
-        Err(response) => return response,
-    };
+    } = read_and_classify_fast(&state, request).await?;
 
     // v2 required-header gate (VERS-05). The ordering constraints this call
     // carries — gate BEFORE session resolution and BEFORE the legacy
     // protocol-version check — are documented on `resolve_v2_gate` itself.
     let (protocol_context, v2_outbound) =
-        match resolve_v2_gate(&state, &headers, body.as_bytes(), &ingress).await {
-            Ok(resolved) => resolved,
-            Err(response) => return response,
-        };
+        resolve_v2_gate(&state, &headers, body.as_bytes(), &ingress).await?;
     let is_v2_request = v2_outbound.is_some();
     let era = protocol_context.as_ref().map(|pc| pc.era);
     let sessions_on = sessions_active(&state, era);
 
-    let response_session_id = match resolve_session_for_request(
+    let response_session_id = resolve_session_for_request(
         &state,
         era,
         is_init_request,
         session_id.clone(),
         protocol_version.clone(),
-    ) {
-        Ok(sid) => sid,
-        Err(error_response) => return error_response,
-    };
+    )?;
 
-    if let Err(error_response) = guard_legacy_version_fast(
+    guard_legacy_version_fast(
         &state,
         era,
         is_init_request,
         is_v2_request,
         session_id.as_ref(),
         protocol_version.as_ref(),
-    ) {
-        return error_response;
-    }
+    )?;
 
-    let auth_context = match extract_and_validate_auth(&state, &headers).await {
-        Ok(ctx) => ctx,
-        Err(response) => return response,
-    };
+    let auth_context = extract_and_validate_auth(&state, &headers).await?;
 
-    // `Box::pin` the dispatch future: the per-path response assemblies grow it
-    // past clippy's large_future threshold; boxing keeps the handler future
-    // small without changing behavior (mirrors the middleware-path handler).
-    Box::pin(dispatch_message_fast(
+    Ok(dispatch_message_fast(
         &state,
         ingress,
         FastPathDispatch {
@@ -3333,8 +3355,8 @@ async fn handle_post_fast_path(
         },
         auth_context,
         session_id.as_ref(),
-    ))
-    .await
+    )
+    .await)
 }
 
 /// Build the HTTP middleware context from a middleware-adapted request.
@@ -3549,15 +3571,13 @@ async fn dispatch_message_fast(
     auth_context: Option<crate::server::auth::AuthContext>,
     session_id: Option<&String>,
 ) -> Response {
-    let FastPathDispatch {
-        is_init_request,
-        response_session_id,
-        protocol_context,
-        v2_outbound,
-        sessions_on,
-    } = dispatch;
     match ingress {
         HttpIngress::Public(TransportMessage::Request { id, request }) => {
+            // `dispatch` is forwarded whole: this arm needs every field, so
+            // unpacking it here only to rebuild an identical struct would be an
+            // identity round-trip of a ~1 KiB value. The arms below destructure
+            // with `..` because they need only parts.
+            //
             // `Box::pin`: the dispatch future crosses clippy's large_future
             // threshold once the v2 status mapping is threaded through it —
             // boxing keeps the handler future small without changing behavior
@@ -3567,13 +3587,7 @@ async fn dispatch_message_fast(
                 id,
                 request,
                 auth_context,
-                FastPathDispatch {
-                    is_init_request,
-                    response_session_id,
-                    protocol_context,
-                    v2_outbound,
-                    sessions_on,
-                },
+                dispatch,
                 session_id,
             ))
             .await
@@ -3581,6 +3595,13 @@ async fn dispatch_message_fast(
         // Per-path response assembly (finding #3/#4): reached AFTER session, the v2
         // matrix, legacy-version validation, and auth — never an early return.
         HttpIngress::Discover { id, .. } => {
+            let FastPathDispatch {
+                response_session_id,
+                protocol_context,
+                v2_outbound,
+                sessions_on,
+                ..
+            } = dispatch;
             assemble_discover_response_fast(
                 state,
                 id,
@@ -3598,6 +3619,11 @@ async fn dispatch_message_fast(
         // session / v2-matrix / legacy-version / auth pipeline as every other
         // ingress — a held-open stream must not be a way around auth.
         HttpIngress::SubscriptionsListen { id, params } => {
+            let FastPathDispatch {
+                protocol_context,
+                v2_outbound,
+                ..
+            } = dispatch;
             Box::pin(assemble_subscriptions_listen(
                 state,
                 id,
@@ -3730,15 +3756,21 @@ async fn dispatch_message_with_middleware(
 /// is folded inside it BY DESIGN, and it also fires `report_middleware_error` on
 /// failure, which the plain fast-path call cannot do.
 ///
-/// # The asymmetry with its twin is DELIBERATE (D-08)
+/// # The asymmetry with its twin is DELIBERATE (D-08) — but it is not a
+/// # difference in the PREDICATE
 ///
-/// [`guard_legacy_version_fast`] gates on `!is_init_request && !is_v2_request`
-/// and calls the PLAIN [`validate_protocol_version`]. These are TWO helpers,
-/// each preserving its own call site's condition verbatim, precisely so nobody
-/// "harmonises" them: a single shared helper, or conditions edited to read
-/// alike, silently changes behavior on one path.
+/// [`guard_legacy_version_fast`] spells its condition
+/// `!is_init_request && !is_v2_request` and calls the PLAIN
+/// [`validate_protocol_version`]. Because the wrapper this one calls already
+/// returns early on `is_init_request`, **both guards evaluate the same
+/// effective predicate** — the init test simply lives one layer deeper here.
 ///
-/// Extracted in plan 113.1-05 (D-08, D-10).
+/// The real reasons there are two helpers: the fast path's callee has no init
+/// handling (so its condition must state it), and this path needs the `async`
+/// `report_middleware_error` hook. That is the file's standard
+/// plain-fn + `*_with_error_hook` split.
+///
+/// Extracted in plan 113.1-05 (D-08, D-10); wording corrected after review.
 #[allow(clippy::too_many_arguments)]
 async fn guard_legacy_version_with_middleware(
     state: &ServerState,
@@ -3837,10 +3869,7 @@ async fn read_and_classify_with_middleware(
 
     let (session_id, protocol_version) =
         extract_session_and_protocol_headers(&server_request.headers);
-    let is_init_request = match &ingress {
-        HttpIngress::Public(msg) => is_initialize_request(msg),
-        HttpIngress::Discover { .. } | HttpIngress::SubscriptionsListen { .. } => false,
-    };
+    let is_init_request = ingress.is_initialize();
 
     Ok(MwIngress {
         server_request,
@@ -3883,6 +3912,18 @@ async fn handle_post_with_middleware(
     state: ServerState,
     request: axum::extract::Request<Body>,
 ) -> Response {
+    // See [`handle_post_fast_path`] for why the pipeline lives in an inner fn.
+    match handle_post_with_middleware_inner(state, request).await {
+        Ok(response) | Err(response) => response,
+    }
+}
+
+/// The middleware-path pipeline proper. See [`handle_post_with_middleware`] for
+/// the stage list and the complexity budget.
+async fn handle_post_with_middleware_inner(
+    state: ServerState,
+    request: axum::extract::Request<Body>,
+) -> std::result::Result<Response, Response> {
     let http_middleware = state
         .config
         .http_middleware
@@ -3896,15 +3937,12 @@ async fn handle_post_with_middleware(
         session_id,
         protocol_version,
         is_init_request,
-    } = match read_and_classify_with_middleware(&state, request, http_middleware).await {
-        Ok(classified) => classified,
-        Err(response) => return response,
-    };
+    } = read_and_classify_with_middleware(&state, request, http_middleware).await?;
 
     // v2 required-header gate (VERS-05). The ordering constraints this call
     // carries — gate BEFORE session resolution and BEFORE the legacy
     // protocol-version check — are documented on `resolve_v2_gate` itself.
-    let (protocol_context, v2_outbound) = match resolve_v2_gate_with_error_hook(
+    let (protocol_context, v2_outbound) = resolve_v2_gate_with_error_hook(
         &state,
         &server_request.headers,
         &server_request.body,
@@ -3912,16 +3950,12 @@ async fn handle_post_with_middleware(
         http_middleware,
         &http_context,
     )
-    .await
-    {
-        Ok(resolved) => resolved,
-        Err(response) => return response,
-    };
+    .await?;
     let is_v2_request = v2_outbound.is_some();
     let era = protocol_context.as_ref().map(|pc| pc.era);
     let sessions_on = sessions_active(&state, era);
 
-    let response_session_id = match resolve_session_with_error_hook(
+    let response_session_id = resolve_session_with_error_hook(
         &state,
         era,
         is_init_request,
@@ -3930,13 +3964,9 @@ async fn handle_post_with_middleware(
         http_middleware,
         &http_context,
     )
-    .await
-    {
-        Ok(sid) => sid,
-        Err(response) => return response,
-    };
+    .await?;
 
-    if let Err(response) = guard_legacy_version_with_middleware(
+    guard_legacy_version_with_middleware(
         &state,
         era,
         is_init_request,
@@ -3946,23 +3976,18 @@ async fn handle_post_with_middleware(
         http_middleware,
         &http_context,
     )
-    .await
-    {
-        return response;
-    }
+    .await?;
 
     let auth_context =
-        match extract_auth_with_middleware(&state, &server_request, http_middleware, &http_context)
-            .await
-        {
-            Ok(ctx) => ctx,
-            Err(response) => return response,
-        };
+        extract_auth_with_middleware(&state, &server_request, http_middleware, &http_context)
+            .await?;
 
     // `Box::pin` the dispatch future: the discover per-path assembly (Plan 112-10)
     // grows it past clippy's large_future threshold; boxing keeps the handler
-    // future small without changing behavior (mirrors the fast-path handler).
-    Box::pin(dispatch_message_with_middleware(
+    // future small without changing behavior. Pre-dates plan 113.1 and is kept —
+    // unlike the fast path's, where an outer box was added by the extraction and
+    // measured unnecessary (see `dispatch_message_fast`'s call site).
+    Ok(Box::pin(dispatch_message_with_middleware(
         &state,
         ingress,
         MiddlewareDispatch {
@@ -3976,7 +4001,7 @@ async fn handle_post_with_middleware(
         http_middleware,
         &http_context,
     ))
-    .await
+    .await)
 }
 
 /// Handle GET requests for SSE streams

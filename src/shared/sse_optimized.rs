@@ -3,7 +3,10 @@
 // its own retained transport. The `deprecated` lint fires on uses within the
 // defining crate — including every `impl` block on the type — and `make lint`
 // runs clippy with `-D warnings`, so without this the crate cannot build itself.
-// One module-level allow rather than ~15 per-item ones.
+// Module-level rather than per-item: three `impl` blocks plus the test module
+// name the type. The trade-off is that this also silences unrelated future
+// deprecation warnings in this file — acceptable only because the whole module
+// is slated for removal at 3.0.
 #![allow(deprecated)]
 
 //! Optimized SSE transport with advanced features.
@@ -303,7 +306,16 @@ impl OptimizedSseTransport {
             accumulated.extend_from_slice(&chunk);
         }
 
-        Ok(String::from_utf8_lossy(&accumulated).into_owned())
+        // `from_utf8` REUSES the Vec's allocation on the valid-UTF-8 path, which
+        // is every real SSE body. The obvious
+        // `String::from_utf8_lossy(&accumulated).into_owned()` returns a
+        // `Cow::Borrowed` there and `into_owned()` then copies the whole buffer —
+        // a second 16 MiB allocation and memcpy at the production cap, with both
+        // copies live at once, so a function whose job is to bound in-flight
+        // bytes at 16 MiB would transiently hold 32. The lossy fallback keeps
+        // the tolerance `.text()` had for invalid bytes.
+        Ok(String::from_utf8(accumulated)
+            .unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned()))
     }
 
     /// Build the over-cap refusal for [`Self::collect_sse_text_within_cap`].
@@ -633,8 +645,17 @@ mod tests {
     }
 
     /// Build a body of exactly `bytes` bytes made of the filler token.
+    ///
+    /// `FILLER` is a run of one repeated character, so repeating that character
+    /// gives byte-identical output to repeat-then-truncate while allocating
+    /// once — and every window of it still contains `FILLER`, which is what
+    /// [`assert_over_cap_refusal`]'s "no body content echoed" check relies on.
     fn filler_body(bytes: usize) -> String {
-        FILLER.repeat(bytes.div_ceil(FILLER.len()))[..bytes].to_string()
+        debug_assert!(
+            FILLER.as_bytes().iter().all(|b| *b == FILLER.as_bytes()[0]),
+            "filler_body's single-char shortcut assumes FILLER is one repeated byte"
+        );
+        String::from_utf8(vec![FILLER.as_bytes()[0]; bytes]).expect("FILLER is ASCII")
     }
 
     /// One byte over the cap is refused — with NO `Content-Length` at all.
