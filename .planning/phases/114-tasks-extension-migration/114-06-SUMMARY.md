@@ -242,3 +242,12 @@ No reconciliation is claimed for the aggregate gate's **264 / 4649**: 114-05's o
 ---
 *Phase: 114-tasks-extension-migration*
 *Completed: 2026-07-28*
+
+## Self-Check: PASSED
+
+All claimed artifacts exist on disk (`tests/v2_tasks_client.rs`, `114-06-SUMMARY.md`, and the
+four modified source files) and all five commits (`542b8096`, `d27120dd`, `00225315`,
+`c878591e`, `18bfa6c2`) resolve in `git log --oneline --all`. Symbol greps confirm the
+must-have `contains` claims: `with_tasks_extension` (9 hits in `src/client/mod.rs`),
+`TASKS_EXTENSION_KEY` present in `src/client/mod.rs`, `TASK_NAME_BEARING_METHODS` (10) and
+`taskId` (10) in `src/types/mrtr.rs`.
