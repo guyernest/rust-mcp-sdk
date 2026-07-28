@@ -2404,10 +2404,13 @@ as written; they are not current-state claims. What shipped:
     **SC-1b NOT discharged** — the org-required `gate` needs a human push (D-20), and two
     PRE-EXISTING CI failures stand in front of it: `make doc-check`'s 26 rustdoc errors
     (**D-113-W**, proven present at HEAD before this phase) and the Purity Gate's tooling drift.
+
   - SC-2 **met** — two falsifiable O(n) guards, each RED before the fix and RED again under a
     post-fix negative control.
+
   - SC-3 **met** — `sse_optimized.rs`'s read is bounded and `WHOLE_BODY_ALLOWLIST` is EMPTY, so the
     `NOT BOUNDED` entry named in Scope item 3 no longer exists.
+
   - SC-4 **met** — HTTP-09 is `[x]` with its requirement text byte-unchanged.
   - SC-5 **met**, and the charter's figure corrected: the auth population is **31** reviewed-unbounded
     reads across **four** files, not 18 across three. The tripwire's needles are single-line
@@ -2419,15 +2422,18 @@ as written; they are not current-state claims. What shipped:
 Plans:
 
 *Wave 1 (parallel — disjoint files):*
+
 - [x] 113.1-01-PLAN.md — D-113-U part 1: extract the copy-pasted v2 header gate into the `resolve_v2_gate` / `resolve_v2_gate_with_error_hook` sibling pair and the fast path's inline ingress dispatch into `dispatch_message_fast` (D-06/D-09), with three recorded negative controls (D-11). Lands at a measured 26/28 — the gate is closed by 113.1-05
 - [x] 113.1-02-PLAN.md — D-113-R: four falsifiable guards written and recorded RED, then the scan-window cursor plus the `debug_assert` removal as ONE atomic change (D-12+D-15) — all in a single green commit, with a post-fix negative control proving the guards still falsify (D-13/D-16), followed by a MANDATORY fuzz campaign. Shipped: pre-fix RED 6.81 s / 15.06x, committed 63.6 ms / 4.39x, post-fix control RED 4.36 s / 14.85x
 - [x] 113.1-03-PLAN.md — D-113-Q: bound `connect_sse` with a `reqwest::chunk()` running total against the crate's 16 MiB SSE ceiling (D-02/D-03), drive `WHOLE_BODY_ALLOWLIST` to 0 (D-05), add the accumulation entry the fix requires, and deprecate `OptimizedSseTransport` toward `StreamableHttpTransport` (D-01/D-04)
 - [x] 113.1-04-PLAN.md — records only: the auth-surface unbounded reads enumerated (raw matches and reviewed-unbounded subset) and assigned to Phase 116 without widening the tripwire fence (D-18); the pre-existing `D-113-J` PMAT-recipe entry AMENDED IN PLACE with an owner, a status and a second measured trap rather than duplicated; and arm 2 of the rolled-forward re-verification executed against upstream HEAD `5cc567c3` (D-19). Shipped: the auth population re-measured at **31**, not 18 — the roadmap figure was a raw line-grep count; the tripwire's scanner would find all of them and only its SCOPE FENCE keeps these files unreported; arm 2 returned **NO DRIFT**, so Branch A was taken and no Phase-118 item was needed
 
 *Wave 2 (blocked on 113.1-01 — same file):*
+
 - [x] 113.1-05-PLAN.md — D-113-U part 2: the read/classify preamble and legacy-version guard extractions RESEARCH measured as necessary, landing BOTH handlers at cognitive <= 20 (D-10) and turning the PR-blocking PMAT gate green. Shipped: **15 / 15**, beating RESEARCH's 16/16 target row
 
 *Wave 3 (blocked on 113.1-02/03/04/05):*
+
 - [x] 113.1-06-PLAN.md — closure: HTTP-09 flipped to `[x]` on the merits at all three sites (D-17), the falsified ROADMAP warning-block claims corrected, D-113-Q/R/U marked RESOLVED, and the full phase gate run including the PMAT invocation `make quality-gate` does not cover (D-20)
 
 ### Phase 114: Tasks Extension Migration
@@ -2449,7 +2455,7 @@ Plans:
 
 **Wave 1** *(no dependencies — parallel)*
 
-- [ ] 114-01-PLAN.md — Vendor the ext-tasks draft schema at a pinned commit (PROVENANCE + SHA256 tripwire) + the `114-SPEC-RECHECK.md` hold record with the both-repos condition (DQ6)
+- [x] 114-01-PLAN.md — Vendor the ext-tasks draft schema at a pinned commit (PROVENANCE + SHA256 tripwire) + the `114-SPEC-RECHECK.md` hold record with the both-repos condition (DQ6)
 - [ ] 114-02-PLAN.md — v1 `tasks/*` golden byte fixtures captured PRE-reshape (D-14 item 2; none existed) + shared tasks test harness (`OptionalBearer`, tasks-backed spawn, client-declaration body builder)
 - [ ] 114-03-PLAN.md — `ClientCapabilities.extensions` field (F6 gap) + `TASKS_EXTENSION_KEY` + typed `TasksExtensionCapability` serializing as `{}` + five serde locks
 - [ ] 114-04-PLAN.md — Additive `TaskStore` input-delivery + owner-scoped `task_input_snapshot` + `record_input_requests` + error persistence + `supports_inputs()` and `TaskRouter::handle_tasks_update` seams (D-12) + in-crate `InMemoryTaskStore` impls (D-13 site 3)
@@ -2578,7 +2584,7 @@ Plans:
 | 112. Version Plumbing Spine | 10/10 | Complete    | 2026-07-23 |
 | 113. Stateless HTTP + MRTR | 32/32 | Complete   | 2026-07-27 |
 | 113.1 Merge Unblock | 6/6 | Complete | 2026-07-27 |
-| 114. Tasks Extension Migration | 0/TBD | Not started | - |
+| 114. Tasks Extension Migration | 1/20 | In Progress|  |
 | 115. JSON Schema 2020-12 + Caching Hints | 0/TBD | Not started | - |
 | 116. Auth Hardening SEPs | 0/TBD | Not started | - |
 | 117. Agents, Tester & v1 Severability | 0/TBD | Not started | - |
