@@ -209,3 +209,46 @@ would bury a decision about the root crate's feature hygiene in a plan whose dec
 **Suggested owner:** a Phase 118 (conformance/hardening) item, or whichever plan next
 touches `src/types/mrtr.rs`. The narrow fix is to gate or `allow` the reduced-feature dead
 code at each site, then re-run `make test-feature-flags` to green.
+
+---
+
+## D-114-F — a known method with malformed params answers `-32601`, not `-32602`
+
+**Found during:** `114-09` Task 3, while building the case-4-before-case-5 ordering probe.
+
+**Measured (v2 Streamable HTTP, `tests/v2_tasks_owner_binding.rs`):** a `tasks/get`
+carrying `{"taskId": 12345}` — a well-known method with a `taskId` of the wrong JSON
+type — is answered:
+
+```json
+{"jsonrpc":"2.0","error":{"code":-32601,"message":"Method not found: tasks/get"},"id":40}
+```
+
+`-32601 METHOD_NOT_FOUND`, not `-32602 INVALID_PARAMS`. The method plainly exists and is
+served; only its params are malformed.
+
+**Cause:** `ClientRequest` is deserialized at INGRESS, before any dispatch runs. The enum
+is method-tagged, so a params-shape mismatch makes the `tasks/get` variant fail to match
+and the request falls through to the not-a-known-method arm. Nothing in
+`route_tasks_endpoint` is reached.
+
+**Why this matters beyond tidiness:** it makes a whole class of ordering claims
+unobservable from outside. `114-09`'s plan specified proving "the auth refusal fires
+before the params parse" by sending malformed params with no credentials and asserting
+`-32003` rather than `-32602`. That probe cannot work: the request never reaches the
+refusal chain at all. `114-09` proved the ordering a different and stronger way instead
+(identical well-formed params, differing only in the credential; the authenticated leg
+reaches the store and hears "task not found", the unauthenticated leg hears `-32003` and
+learns nothing) and pinned the measured caveat as leg C of
+`an_unauthenticated_caller_is_refused_before_the_params_parse`.
+
+**Why not fixed here:** the fix is in the transport/ingress request-deserialization path
+(`ClientRequest`'s untagged fallthrough), not in `src/server/task_dispatch.rs`. It is
+NOT specific to `tasks/*` — every method with typed params has the same behaviour — so
+changing it from inside a tasks owner-binding plan would move a global wire behaviour
+under a `files_modified` list of three server files, and would need its own golden-byte
+review across every existing suite that may depend on the current code.
+
+**Suggested owner:** a conformance/hardening plan, or whichever plan next touches
+`ClientRequest`'s deserialization. The narrow fix is to match the method name FIRST and
+only then attempt the params, so a known method with bad params yields `-32602`.

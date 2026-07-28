@@ -44,10 +44,11 @@
 mod common;
 
 use common::v2::{
-    build_v2_server, header, post, spawn_default_config, spawn_tasks_server, tasks_request_body,
-    teardown, v1_body, v2_body, v2_headers, AuthPosture, Resp, TASKS_TOOL_NAME, V1,
+    build_v2_server, header, post, spawn_default_config, spawn_tasks_server, teardown, v1_body,
+    v2_body_with_client_extensions, v2_headers, AuthPosture, Resp, TASKS_TOOL_NAME, V1,
 };
 use pmcp::testing::V2_TASKS_METHOD_RETIRED;
+use pmcp::types::capabilities::TASKS_EXTENSION_KEY;
 use pmcp::types::protocol::error_codes::{METHOD_NOT_FOUND, V1_TASK_PENDING};
 use serde_json::json;
 use std::net::SocketAddr;
@@ -125,12 +126,20 @@ async fn v1_post_as(
     post(addr, &headers, body).await
 }
 
-/// POST a v2 request: three required headers plus the `_meta` era signal.
+/// POST a v2 request: three required headers plus the `_meta` era signal, and a
+/// `clientCapabilities` that DECLARES the tasks extension.
+///
+/// The declaration is deliberate. Plan 114-09 added case 3 of the ordered
+/// refusal chain: a v2 caller that never declared
+/// `io.modelcontextprotocol/tasks` is refused `-32021` before the identity table
+/// is consulted. This suite measures the ERA gates, so every probe must clear
+/// the declaration gate first or a `-32021` would masquerade as a retirement —
+/// the same reason the unit-level `context_for` fixture declares.
 async fn v2_post(addr: SocketAddr, method: &str, id: i64, params: serde_json::Value) -> Resp {
     post(
         addr,
         &v2_headers(method, ""),
-        &v2_body(method, json!(id), params),
+        &v2_body_with_client_extensions(method, json!(id), params, &[TASKS_EXTENSION_KEY]),
     )
     .await
 }
@@ -141,6 +150,8 @@ async fn v2_task_post(addr: SocketAddr, method: &str, id: i64, task_id: &str) ->
 }
 
 /// [`v2_task_post`] carrying EXTRA headers. The single implementation.
+///
+/// Declares the tasks extension for the reason [`v2_post`] gives.
 async fn v2_task_post_as(
     addr: SocketAddr,
     method: &str,
@@ -153,7 +164,12 @@ async fn v2_task_post_as(
     post(
         addr,
         &headers,
-        &tasks_request_body(method, json!(id), task_id),
+        &v2_body_with_client_extensions(
+            method,
+            json!(id),
+            json!({ "taskId": task_id }),
+            &[TASKS_EXTENSION_KEY],
+        ),
     )
     .await
 }

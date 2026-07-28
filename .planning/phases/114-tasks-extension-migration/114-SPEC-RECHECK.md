@@ -406,6 +406,22 @@ must be re-checked at the gate.**
 | **What was NOT done** | **No new wire value was minted.** Both codes already exist in `src/types/protocol/error_codes.rs`. The schema hold is respected. |
 | **THE OBLIGATION** | **Re-check the DIRECTION at the gate.** If the published ext-tasks prose still says `-32003` where the published core schema says `-32021`, record the disagreement as persisting and keep DQ3's split. If the published prose has been updated to `-32021`, record that pmcp already agrees. If either published document says something else entirely, that is **DRIFT** and a phase-reopening event. |
 
+### ⚠ Known INTERNAL wording gap — TASK-05 "fails closed" vs D-07 row 3
+
+**This is its own row because two of OUR OWN documents say different things about the same
+case, and the gap is a scope statement about how much isolation TASK-05 delivers. It is
+written down here so the gate re-reads it rather than inheriting it silently.**
+
+| Field | Value |
+|-------|-------|
+| **The gap** | **TASK-05** says owner binding *"fails closed"* when no stable identity exists. **D-07 row 3** deliberately maps exactly that case — an unauthenticated caller on a server with **no auth provider at all** — onto `ANONYMOUS_PRINCIPAL` (`""`), i.e. it does **not** fail closed there. `114-15` test 8 proves two anonymous callers share that one bucket. |
+| **Which one ships** | **D-07, as written.** It is a **LOCKED** decision and `114-09` implemented it verbatim. This row does **not** reopen it. |
+| **What fail-closed therefore means** | It applies to **auth-configured deployments** — row 2 of the identity table, where an auth provider exists and the caller presented no subject. That row refuses with `-32003`. On a server with **no auth provider at all**, v2 tasks run in a **single shared bucket by design**: a development / stdio affordance, **not** per-caller isolation. |
+| **Why that is defensible** | Such a server has no notion of caller identity to separate in the first place. It is also independently bounded on the production backends: `TaskSecurityConfig::default()` sets `allow_anonymous: false` (`crates/pmcp-tasks/src/security.rs:89`), so `GenericTaskStore` **refuses** that bucket unless an operator opts in (`114-07` test 8). |
+| **Where it is stated in code** | `TaskDispatch::resolve_owner`'s rustdoc (`src/server/task_dispatch.rs`) states both halves in these terms, rather than implying them. |
+| **Named future closure** | The **configurable proxy-header identity source** deferred in `114-CONTEXT.md` § Deferred. That is the mechanism that would give a no-auth-provider deployment a stable per-caller identity and so let row 3 fail closed too. It is deferred, not scheduled. |
+| **THE OBLIGATION** | `114-18`'s requirement booking **must carry this qualification when it books TASK-05**, so TASK-05 is never recorded as delivering more isolation than it does. At the gate, re-read TASK-05's wording against D-07 row 3 and either (a) amend TASK-05's wording to match the shipped scope, or (b) re-record this gap as still-accepted. |
+
 ### Transport / routing
 
 | # | Value | Recorded as | Lives in (once implemented) | Owning plan | Source |

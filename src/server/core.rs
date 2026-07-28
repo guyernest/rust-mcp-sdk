@@ -1727,7 +1727,7 @@ pub(crate) struct MrtrPrincipal<'a> {
 /// |---|---|---|
 /// | `Some(subject)` | any | `Some(subject)` |
 /// | `None` | `true` | `None` — REFUSE |
-/// | `None` | `false` | `Some(`[`ANONYMOUS_PRINCIPAL`]`)` |
+/// | `None` | `false` | <code>Some([ANONYMOUS_PRINCIPAL])</code> |
 ///
 /// Row 2 is the fail-closed row: a state-bearing artifact must not be mintable
 /// or redeemable by an unauthenticated caller on a server that expects

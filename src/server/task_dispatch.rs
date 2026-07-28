@@ -156,6 +156,18 @@ const TASKS_RESULT_NOT_SUPPORTED: &str = "tasks/result not supported";
 /// The `-32601` message for a request that is not a `tasks/*` method at all.
 const NOT_A_TASKS_METHOD: &str = "Method not supported";
 
+/// The client-facing message for case 3 of the ordered refusal chain.
+///
+/// It names the extension and the channel to declare it on, because the fix is
+/// entirely the caller's to make. It says NOTHING about authentication state:
+/// case 3 fires before the identity table is consulted, and a message that
+/// hinted at credentials would turn a negotiation refusal into an
+/// authentication oracle (T-114-40).
+const MISSING_TASKS_DECLARATION_MESSAGE: &str =
+    "the tasks extension was not declared on this request: send \
+     _meta[\"io.modelcontextprotocol/clientCapabilities\"].extensions\
+     [\"io.modelcontextprotocol/tasks\"]";
+
 /// Build the `-32601` a v2 caller receives for a RETIRED `tasks/*` method.
 ///
 /// The SINGLE builder both era gates use, so `tasks/list` and `tasks/result`
@@ -460,6 +472,53 @@ pub(crate) enum DispatchOutput {
 /// a server that ADVERTISES it, so all it reveals is "this server wants
 /// authentication" — already public from the server's `WWW-Authenticate` posture
 /// (T-114-40).
+/// Build the `-32021` a caller receives for case 3 of the ordered refusal chain:
+/// it never declared the tasks extension on this request.
+///
+/// The code is read from the NAMED constant
+/// [`MISSING_REQUIRED_CLIENT_CAPABILITY`](crate::types::protocol::error_codes::MISSING_REQUIRED_CLIENT_CAPABILITY)
+/// and is never spelled as a numeric literal anywhere in this module. Research
+/// measured that the ext-tasks PROSE uses `-32003` for a missing client
+/// capability while the core draft SCHEMA uses `-32021`; DQ3 locked `-32021`.
+/// Reading the value from one named constant at the single emission site is what
+/// makes a schema-driven change at the D-18 gate a one-line edit rather than an
+/// archaeology exercise.
+///
+/// `error.data.requiredCapabilities` is a `ClientCapabilities` **OBJECT**
+/// (`{"extensions":{"io.modelcontextprotocol/tasks":{}}}`), never an array —
+/// emitting an array is a wire-contract violation the official conformance suite
+/// grades. It is built by SERIALIZING the real capability types rather than by
+/// hand-writing the JSON, so the key and the empty-object value cannot drift
+/// from [`TASKS_EXTENSION_KEY`](crate::types::capabilities::TASKS_EXTENSION_KEY).
+///
+/// The payload carries the required capabilities and NOTHING else — no server
+/// configuration, no task state, no hint about authentication (T-114-41).
+fn missing_tasks_declaration_refusal(id: RequestId) -> JSONRPCResponse {
+    let mut extensions = std::collections::HashMap::new();
+    extensions.insert(
+        crate::types::capabilities::TASKS_EXTENSION_KEY.to_string(),
+        serde_json::to_value(crate::types::capabilities::TasksExtensionCapability::default())
+            .unwrap_or_else(|_| Value::Object(serde_json::Map::new())),
+    );
+    let required = crate::types::ClientCapabilities {
+        extensions: Some(extensions),
+        ..Default::default()
+    };
+
+    JSONRPCResponse {
+        jsonrpc: "2.0".to_string(),
+        id,
+        payload: ResponsePayload::Error(JSONRPCError {
+            code: crate::types::protocol::error_codes::MISSING_REQUIRED_CLIENT_CAPABILITY,
+            message: MISSING_TASKS_DECLARATION_MESSAGE.to_string(),
+            data: Some(serde_json::json!({
+                "requiredCapabilities": serde_json::to_value(&required)
+                    .unwrap_or_else(|_| Value::Object(serde_json::Map::new())),
+            })),
+        }),
+    }
+}
+
 pub(crate) fn authentication_required(id: RequestId, method: &str) -> JSONRPCResponse {
     error_response(
         id,
@@ -1261,10 +1320,8 @@ impl TaskDispatch<'_> {
     /// 3. **Client did not declare the extension → `-32021`.** A
     ///    method-availability-class refusal like cases 1 and 2, and placed with
     ///    them, because it says "this method is not available to you as
-    ///    configured" and reveals NOTHING about authentication state.
-    ///    NOT YET IMPLEMENTED — it lands in the next commit of this plan, which
-    ///    also adds the ordering probes. The slot is documented here because
-    ///    case 4's placement is only meaningful relative to it.
+    ///    configured" and reveals NOTHING about authentication state. See
+    ///    [`missing_tasks_declaration_refusal`].
     /// 4. **Unauthenticated on an auth-configured server → `-32003`.** Row 2 of
     ///    the identity table. Placed AFTER cases 1–3 so a retired method, a
     ///    backendless server or an under-declaring client each keeps its own
@@ -1289,6 +1346,15 @@ impl TaskDispatch<'_> {
             // --- case 1 -----------------------------------------------------
             if let Some(method) = Self::retired_method(request, era) {
                 return retired_on_v2(id, method);
+            }
+
+            // --- case 3 -----------------------------------------------------
+            // Inside the backend guard on purpose: case 2 (below, in the
+            // per-endpoint handlers) owns the answer for a backendless server,
+            // which advertises no tasks extension at all — telling such a caller
+            // to DECLARE one would send it to fix the wrong thing (T-114-33).
+            if !Self::declares_tasks_extension(protocol_context, era) {
+                return missing_tasks_declaration_refusal(id);
             }
         }
 
@@ -1324,6 +1390,36 @@ impl TaskDispatch<'_> {
                 NOT_A_TASKS_METHOD.to_string(),
             ),
         }
+    }
+
+    /// Did this request DECLARE the tasks extension — case 3's predicate?
+    ///
+    /// Read from the ALREADY-RESOLVED [`ProtocolContext`] that Phase 112 binds
+    /// once at ingress, never by re-parsing `params._meta` here. A second read
+    /// is the drift Phase 113 kept finding.
+    ///
+    /// v1 is exempt and always answers `true`: the declaration mechanism is the
+    /// v2 `_meta.clientCapabilities` channel, and v1 clients have no way to send
+    /// one. Requiring it there would retire `tasks/*` on v1, which is precisely
+    /// what this phase promises not to do.
+    ///
+    /// The declared capabilities are CLIENT-SUPPLIED and trivially forgeable, so
+    /// this is a NEGOTIATION check, never an access decision — it answers "is
+    /// this method available to you as configured", and the identity table
+    /// (case 4) is the only control that answers "who are you".
+    fn declares_tasks_extension(
+        protocol_context: Option<&crate::types::protocol::ProtocolContext>,
+        era: Option<crate::types::protocol::Era>,
+    ) -> bool {
+        if is_v1_task_era(era) {
+            return true;
+        }
+        protocol_context
+            .and_then(|context| context.client_capabilities.as_ref())
+            .and_then(|capabilities| capabilities.extensions.as_ref())
+            .is_some_and(|extensions| {
+                extensions.contains_key(crate::types::capabilities::TASKS_EXTENSION_KEY)
+            })
     }
 
     /// The `tasks/*` method name IFF this request's method is RETIRED on `era`
