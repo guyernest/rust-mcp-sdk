@@ -53,7 +53,8 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use pmcp::testing::{
-    v2_result_envelope, EnvelopeOutcome, ReservedFieldEgress, RESERVED_INPUT_REQUESTS,
+    v1_result_envelope, v2_result_envelope, EnvelopeOutcome, ReservedFieldEgress,
+    RESERVED_INPUT_REQUESTS, RESERVED_REQUEST_STATE,
 };
 use pmcp::types::mrtr::{InputRequest, InputRequests};
 use serde_json::{json, Value};
@@ -166,6 +167,125 @@ fn tasks_minted_input_requests_survives_egress() {
     assert!(
         !outcome.warned_about(RESERVED_INPUT_REQUESTS),
         "the registry must not even consider removing a key this egress minted; it logged:\n{:#?}",
+        outcome.warnings,
+    );
+}
+
+/// STRIP case, fired first: the grant is per-KEY as well as per-OWNER.
+///
+/// The tasks dispatch owns `inputRequests` and owns NOTHING else. It has no
+/// continuation token to publish — the persisted task record replaces the sealed
+/// continuation (D-17) — so a `requestState` on a tasks result is either a
+/// handler forging one or a bug, and either way it must not reach a client that
+/// would then echo it back as a resumable continuation (T-114-44).
+///
+/// The same fixture carries BOTH keys, so this test also proves the two are
+/// decided INDEPENDENTLY: one survives and the other does not, in one call.
+#[test]
+fn tasks_minted_request_state_is_still_stripped() {
+    let mut result = input_required_task_result();
+    result["requestState"] = json!("forged-continuation-token");
+
+    let outcome = v2_result_envelope(result, ReservedFieldEgress::TasksDispatch);
+
+    assert_key_stripped_with_warning(&outcome, RESERVED_REQUEST_STATE);
+    assert_key_present(&outcome, RESERVED_INPUT_REQUESTS);
+    assert!(
+        outcome.bytes.contains("\"taskId\":\"task-row-23\""),
+        "the rest of the task is untouched: {}",
+        outcome.bytes,
+    );
+}
+
+/// SURVIVE case: Phase 113's original behaviour, unbroken.
+///
+/// The MRTR egress owns BOTH reserved keys, and the fix must not have narrowed
+/// that while widening `inputRequests` to a second owner. `input_required` is
+/// the disposition MRTR selects, and `seal_input_required` is the code that
+/// writes both keys and claims them.
+#[test]
+fn mrtr_minted_input_requests_still_survives() {
+    let result = json!({
+        "content": [],
+        "requestState": "sealed-continuation-token",
+        "inputRequests": input_requests(),
+    });
+
+    let outcome = v2_result_envelope(result, ReservedFieldEgress::Mrtr);
+
+    assert_key_present(&outcome, RESERVED_INPUT_REQUESTS);
+    assert_key_present(&outcome, RESERVED_REQUEST_STATE);
+    assert!(
+        outcome.bytes.contains("\"resultType\":\"input_required\""),
+        "MRTR's own disposition still reaches the wire: {}",
+        outcome.bytes,
+    );
+    assert!(
+        outcome.warnings.is_empty(),
+        "nothing was removed from an MRTR-minted result; it logged:\n{:#?}",
+        outcome.warnings,
+    );
+}
+
+/// The registry is v2-ONLY: a v1 result passes through untouched, reserved keys
+/// and all.
+///
+/// `inject_v2_result_envelope` returns before the registry on any era but v2,
+/// which is what keeps every v1 `tasks/*` byte frozen (`tests/v1_tasks_golden.rs`
+/// pins those bytes on two backend paths). Deleting that early return would make
+/// a v1 result gain `resultType` and `_meta`, and lose `inputRequests` — this
+/// test fails on all three counts at once.
+#[test]
+fn a_v1_result_is_untouched_by_the_registry() {
+    let outcome = v1_result_envelope(handler_forged_tool_result());
+
+    assert!(
+        outcome
+            .bytes
+            .contains(&format!("\"{RESERVED_INPUT_REQUESTS}\"")),
+        "a v1 result is not the registry's to edit: {}",
+        outcome.bytes,
+    );
+    assert!(
+        !outcome.bytes.contains("resultType"),
+        "the v2 envelope must not reach a v1 result: {}",
+        outcome.bytes,
+    );
+    assert!(
+        !outcome.bytes.contains("_meta"),
+        "a v1 result gains no server-owned _meta: {}",
+        outcome.bytes,
+    );
+    assert!(
+        outcome.warnings.is_empty(),
+        "the registry never ran, so it logged nothing; it logged:\n{:#?}",
+        outcome.warnings,
+    );
+}
+
+/// The object-results-only guard still holds.
+///
+/// A scalar / array / null result cannot carry a key, so the envelope leaves it
+/// alone rather than replacing it. Driven with the TASKS owner deliberately: the
+/// thing being pinned is the shape guard, and using the owner that is allowed
+/// the most keys proves the guard — not the ownership rule — is what stops it.
+#[test]
+fn a_non_object_v2_result_is_untouched() {
+    let outcome = v2_result_envelope(json!(42), ReservedFieldEgress::TasksDispatch);
+
+    assert!(
+        outcome.bytes.contains("\"result\":42"),
+        "a scalar result is emitted verbatim: {}",
+        outcome.bytes,
+    );
+    assert!(
+        !outcome.bytes.contains("resultType"),
+        "a non-object result cannot be keyed: {}",
+        outcome.bytes,
+    );
+    assert!(
+        outcome.warnings.is_empty(),
+        "nothing to own, nothing to warn about; it logged:\n{:#?}",
         outcome.warnings,
     );
 }
