@@ -122,6 +122,24 @@ pub(crate) struct MrtrMethod {
 /// on any other client requests." This table is the single source of truth for that
 /// rule — the dispatch-layer tripwire that refuses to emit `input_required` on a
 /// forbidden method reads it, and so does the client-side retry loop.
+///
+/// # Why there is a SECOND name-key table (Phase 114, DQ4)
+///
+/// This table decides **two** properties at once: MRTR eligibility
+/// ([`mrtr_eligible`]) and where a method's routing name lives
+/// ([`logical_name_key`]). For `tools/call` / `prompts/get` / `resources/read`
+/// those are the same set. For the tasks methods they are NOT: the spec makes
+/// `tasks/get` / `tasks/update` / `tasks/cancel` name-bearing (`Mcp-Name` =
+/// `params.taskId`) while none of them may carry an `input_required` result.
+///
+/// A tasks row here would therefore make `tasks/update` MRTR-eligible, and
+/// `splice_mrtr_params` strips `inputResponses` from an eligible method's params
+/// **unconditionally** — but `inputResponses` IS the entire `tasks/update`
+/// payload, so the request body would be deleted in flight. The routing names
+/// live in [`TASK_NAME_BEARING_METHODS`] instead, and the two halves are pinned
+/// by `tasks_methods_are_name_bearing_but_not_mrtr_eligible`.
+///
+/// **Do not add a tasks row here.**
 pub(crate) const MRTR_METHODS: [MrtrMethod; 3] = [
     MrtrMethod {
         method: CALL_TOOL_METHOD,
@@ -157,6 +175,58 @@ pub(crate) const GET_PROMPT_METHOD: &str = "prompts/get";
 /// `resources/read`. See [`CALL_TOOL_METHOD`].
 pub(crate) const READ_RESOURCE_METHOD: &str = "resources/read";
 
+/// `tasks/get` — a row of [`TASK_NAME_BEARING_METHODS`], NOT of [`MRTR_METHODS`].
+pub(crate) const TASKS_GET_METHOD: &str = "tasks/get";
+
+/// `tasks/update`. See [`TASKS_GET_METHOD`].
+pub(crate) const TASKS_UPDATE_METHOD: &str = "tasks/update";
+
+/// `tasks/cancel`. See [`TASKS_GET_METHOD`].
+pub(crate) const TASKS_CANCEL_METHOD: &str = "tasks/cancel";
+
+/// The params key every tasks routing header reads.
+///
+/// Spelled once so the three rows below cannot disagree, and so a schema change
+/// to the key name is a one-line edit rather than a three-line one.
+pub(crate) const TASK_ID_KEY: &str = "taskId";
+
+/// The tasks routing-name table: `(method, params key)` for the methods the
+/// spec makes name-bearing WITHOUT making them MRTR-eligible (Phase 114, DQ4).
+///
+/// The ext-tasks specification's § *Streamable HTTP: Routing Headers* says a
+/// client sending `tasks/get`, `tasks/update` or `tasks/cancel` **MUST** set
+/// `Mcp-Name` to `params.taskId`, so an intermediary can route the request to
+/// the instance holding that task's state.
+///
+/// # Why this is a SECOND table rather than three more [`MRTR_METHODS`] rows
+///
+/// See the note on [`MRTR_METHODS`]: a row there also confers MRTR eligibility,
+/// and `splice_mrtr_params` would then delete `tasks/update`'s entire payload.
+/// [`mrtr_eligible`] reads [`MRTR_METHODS`] and ONLY [`MRTR_METHODS`]; this
+/// table feeds [`name_bearing_key`] alone.
+///
+/// # `tasks/list` and `tasks/result` are deliberately ABSENT
+///
+/// The spec's routing rule names exactly three methods, and the other two do not
+/// exist on the v2 wire at all (TASK-03). Adding them would emit an `Mcp-Name`
+/// for a method no v2 server routes, which is a claim pmcp cannot support.
+///
+/// # Server-side enforcement is deliberately OFF this phase
+///
+/// `is_name_bearing_method` (in `streamable_http_server.rs`) keeps reading
+/// [`logical_name_key`], so a tasks request is still treated as non-name-bearing
+/// at ingress and `cross_check_name` returns `Ok(())` for it. The named
+/// tradeoff: a pmcp server accepts BOTH a conformant `Mcp-Name: <taskId>` and a
+/// legacy empty value, and does not detect a header that disagrees with the
+/// body. That tolerance is what lets pre-existing clients keep working while the
+/// ecosystem migrates; turning enforcement on is a separable hardening decision
+/// (Phase 118).
+pub(crate) const TASK_NAME_BEARING_METHODS: [(&str, &str); 3] = [
+    (TASKS_GET_METHOD, TASK_ID_KEY),
+    (TASKS_UPDATE_METHOD, TASK_ID_KEY),
+    (TASKS_CANCEL_METHOD, TASK_ID_KEY),
+];
+
 /// The table row for `method`, if it is an MRTR method.
 ///
 /// A linear scan over three `&str` beats hashing at this size, and the table is
@@ -184,24 +254,56 @@ pub(crate) fn mrtr_method_static(method: &str) -> Option<&'static str> {
     Some(mrtr_row(method)?.method)
 }
 
-/// Single source of truth for a name-bearing method's logical-name location.
+/// Single source of truth for an **MRTR** method's logical-name location.
 ///
 /// `tools/call` and `prompts/get` carry it in `params.name`; `resources/read` in
-/// `params.uri` (a `ReadResourceRequest` has a `uri` field and NO `name` field);
-/// every other method is not name-bearing and its `Mcp-Name` header value is the
-/// EMPTY STRING (see the module doc's header rule).
+/// `params.uri` (a `ReadResourceRequest` has a `uri` field and NO `name` field).
 ///
 /// Derived from [`MRTR_METHODS`] so the client and the server read ONE table.
+///
+/// # Scope (Phase 114, DQ4)
+///
+/// This answers "where does an MRTR method keep its name", which is ALSO the
+/// server's name-bearing predicate (`is_name_bearing_method`) and therefore
+/// decides which methods get their `Mcp-Name` header cross-checked against the
+/// body. It is NOT the full set of methods that CARRY an `Mcp-Name`: the tasks
+/// methods do, via [`TASK_NAME_BEARING_METHODS`]. Callers that want "every
+/// method with a routing name" want [`name_bearing_key`].
 pub(crate) fn logical_name_key(method: &str) -> Option<&'static str> {
     Some(mrtr_row(method)?.name_key)
 }
 
-/// Resolve a request's logical name from its params, method-awarely.
+/// The COMBINED name-key lookup: every method that carries a routing name, from
+/// EITHER table (Phase 114, DQ4).
 ///
-/// Returns `None` for a non-name-bearing method, or when the params object does not
-/// carry a string at the method's logical-name key.
+/// [`logical_name_key`] is consulted first (the MRTR methods), then
+/// [`TASK_NAME_BEARING_METHODS`]. The two tables are disjoint by construction —
+/// no `tasks/*` method is MRTR-eligible and no MRTR method is a tasks method —
+/// so the order is documentation rather than a tie-break, and
+/// `the_two_name_key_tables_are_disjoint` pins that.
+///
+/// This is the function the `Mcp-Name` EMITTER resolves through.
+/// [`mrtr_eligible`] deliberately does not: eligibility and naming are two
+/// different properties and this is exactly where they part company.
+pub(crate) fn name_bearing_key(method: &str) -> Option<&'static str> {
+    if let Some(key) = logical_name_key(method) {
+        return Some(key);
+    }
+    TASK_NAME_BEARING_METHODS
+        .iter()
+        .find(|(table_method, _)| *table_method == method)
+        .map(|(_, key)| *key)
+}
+
+/// Resolve a request's routing name from its params, method-awarely.
+///
+/// Returns `None` for a method that carries no routing name, or when the params
+/// object does not carry a string at that method's key.
+///
+/// Resolves through [`name_bearing_key`], so `tasks/get` / `tasks/update` /
+/// `tasks/cancel` read `params.taskId` while remaining outside [`MRTR_METHODS`].
 pub(crate) fn logical_name_of(method: &str, params: &Value) -> Option<String> {
-    let key = logical_name_key(method)?;
+    let key = name_bearing_key(method)?;
     params.get(key).and_then(Value::as_str).map(str::to_string)
 }
 
@@ -219,6 +321,14 @@ pub(crate) fn logical_name_of(method: &str, params: &Value) -> Option<String> {
 /// a `None` name means the method is not name-bearing, or carries no string at
 /// its logical-name key — both of which the presence-only cross-check treats
 /// the same way.
+///
+/// # The name resolves through [`name_bearing_key`], not [`logical_name_key`]
+///
+/// So a `tasks/get` frame yields its `params.taskId` (Phase 114, DQ4). On the
+/// SERVER half this widening is inert by design: `cross_check_name` short-circuits
+/// on `is_name_bearing_method`, which still reads [`logical_name_key`], so a tasks
+/// request is never compared and no previously-accepted request becomes a
+/// `HEADER_MISMATCH`.
 pub(crate) fn frame_routing_pair(frame: &Value) -> Option<(&str, Option<String>)> {
     let method = frame.get("method")?.as_str()?;
     let name = frame
@@ -1972,6 +2082,142 @@ mod tests {
         assert_eq!(logical_name_key("prompts/get"), Some("name"));
         assert_eq!(logical_name_key("resources/read"), Some("uri"));
         assert_eq!(logical_name_key("tools/list"), None);
+    }
+
+    // -----------------------------------------------------------------
+    // The tasks name-key table (Phase 114, DQ4)
+    // -----------------------------------------------------------------
+
+    /// The whole point of the second table, in one assertion.
+    ///
+    /// A tasks row in `MRTR_METHODS` would satisfy the left half and BREAK the
+    /// right half — and `splice_mrtr_params` strips `inputResponses` from an
+    /// eligible method's params unconditionally, which for `tasks/update` is the
+    /// entire request body. Both halves are asserted for every row so the
+    /// coupling cannot be reintroduced silently.
+    #[test]
+    fn tasks_methods_are_name_bearing_but_not_mrtr_eligible() {
+        for method in [TASKS_GET_METHOD, TASKS_UPDATE_METHOD, TASKS_CANCEL_METHOD] {
+            assert_eq!(
+                name_bearing_key(method),
+                Some(TASK_ID_KEY),
+                "{method} must route on params.taskId"
+            );
+            assert!(
+                !mrtr_eligible(method),
+                "{method} must NOT be MRTR-eligible — an MRTR_METHODS row would make \
+                 splice_mrtr_params delete its inputResponses payload"
+            );
+        }
+        assert_eq!(TASK_NAME_BEARING_METHODS.len(), 3);
+        assert!(
+            TASK_NAME_BEARING_METHODS
+                .iter()
+                .all(|(_, key)| *key == TASK_ID_KEY),
+            "every tasks row maps to taskId"
+        );
+    }
+
+    /// The MECHANICAL half of the trap the two tables exist to avoid.
+    ///
+    /// [`splice_mrtr_params`] removes `inputResponses` UNCONDITIONALLY — the
+    /// method gate is upstream, in [`mrtr_eligible`]. So the moment a tasks row
+    /// entered [`MRTR_METHODS`], this removal would start applying to
+    /// `tasks/update`, whose entire payload IS `inputResponses`: the request
+    /// would arrive at the handler stripped of everything it carries. This test
+    /// pins the removal so the consequence stays visible next to the tables that
+    /// decide who is subject to it.
+    #[test]
+    fn splice_mrtr_params_would_delete_a_tasks_update_payload() {
+        let mut params = json!({
+            "taskId": "abc",
+            "inputResponses": { "k": { "action": "accept", "content": { "answer": 1 } } },
+        });
+        splice_mrtr_params(&mut params, &MrtrRequestParams::default());
+
+        assert!(
+            params.get(INPUT_RESPONSES_KEY).is_none(),
+            "the strip is unconditional — this is why tasks/update must stay \
+             OUT of MRTR_METHODS, got {params}"
+        );
+        assert_eq!(
+            params["taskId"], "abc",
+            "only the MRTR fields are stripped; the routing key survives"
+        );
+    }
+
+    /// The spec's routing rule names exactly three methods.
+    ///
+    /// `tasks/list` and `tasks/result` are additionally absent from the v2 wire
+    /// altogether (TASK-03), so emitting an `Mcp-Name` for them would assert a
+    /// routing claim pmcp cannot support.
+    #[test]
+    fn tasks_list_and_result_are_not_name_bearing() {
+        assert_eq!(name_bearing_key("tasks/list"), None);
+        assert_eq!(name_bearing_key("tasks/result"), None);
+    }
+
+    /// The lookup order in `name_bearing_key` is documentation, not a tie-break.
+    #[test]
+    fn the_two_name_key_tables_are_disjoint() {
+        for (method, _) in TASK_NAME_BEARING_METHODS {
+            assert_eq!(
+                logical_name_key(method),
+                None,
+                "{method} must not also live in MRTR_METHODS"
+            );
+        }
+        for row in &MRTR_METHODS {
+            assert!(
+                !TASK_NAME_BEARING_METHODS
+                    .iter()
+                    .any(|(method, _)| *method == row.method),
+                "{} must not also live in the tasks table",
+                row.method
+            );
+        }
+    }
+
+    /// The MRTR methods keep resolving through the combined lookup unchanged.
+    #[test]
+    fn name_bearing_key_still_answers_for_the_mrtr_methods() {
+        assert_eq!(name_bearing_key("tools/call"), Some("name"));
+        assert_eq!(name_bearing_key("prompts/get"), Some("name"));
+        assert_eq!(name_bearing_key("resources/read"), Some("uri"));
+        assert_eq!(name_bearing_key("tools/list"), None);
+    }
+
+    /// A task id that is not header-safe round-trips through the SHARED codec.
+    ///
+    /// **This is a lock, not a live case.** pmcp mints task ids as v4 UUIDs,
+    /// which are pure `[0-9a-f-]` and travel verbatim. The test exists so that a
+    /// future id shape — an opaque store cursor, a tenant-qualified id, an
+    /// operator-supplied id — cannot silently produce an `Mcp-Name` an
+    /// intermediary is free to re-split on (T-114-24). No SECOND encoder is
+    /// written for tasks: this is `encode_header_value`, the one codec the
+    /// server's decoder understands.
+    #[test]
+    fn a_non_header_safe_task_id_round_trips_through_the_shared_codec() {
+        let task_id = "tenant;a,b\\c \u{2713}";
+        let encoded = encode_header_value(task_id);
+        assert!(
+            encoded.starts_with(HEADER_SENTINEL_PREFIX),
+            "a task id carrying RFC 9110 delimiters must travel as a sentinel, got {encoded}"
+        );
+        assert_eq!(decode_header_value(&encoded).as_deref(), Some(task_id));
+
+        // And it must arrive at the emitter through the tasks table, not by
+        // accident: the routing pair reads it off a real `tasks/get` frame.
+        let frame = json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": TASKS_GET_METHOD,
+            "params": { TASK_ID_KEY: task_id },
+        });
+        assert_eq!(
+            frame_routing_pair(&frame),
+            Some((TASKS_GET_METHOD, Some(task_id.to_string())))
+        );
     }
 
     #[test]

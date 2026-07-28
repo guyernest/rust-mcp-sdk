@@ -1482,10 +1482,17 @@ impl Transport for StreamableHttpTransport {
 /// header is emitted.
 ///
 /// The logical name is resolved METHOD-AWARELY through
-/// [`crate::types::mrtr::logical_name_key`], the SAME single table the server's
+/// [`crate::types::mrtr::name_bearing_key`], the SAME combined lookup the server's
 /// `extract_body_method_and_name` reads: `tools/call` and `prompts/get` carry it
-/// in `params.name`, `resources/read` in `params.uri`, and every other method has
-/// none — for which the returned name is the EMPTY STRING, never an omission.
+/// in `params.name`, `resources/read` in `params.uri`, `tasks/get` /
+/// `tasks/update` / `tasks/cancel` in `params.taskId` (Phase 114, DQ4 — the spec
+/// makes this a client **MUST** so an intermediary can route to the instance
+/// holding the task state), and every other method has none — for which the
+/// returned name is the EMPTY STRING, never an omission.
+///
+/// The tasks rows come from a SEPARATE table
+/// ([`crate::types::mrtr::TASK_NAME_BEARING_METHODS`]) precisely so that naming
+/// them does not make them MRTR-eligible; see that table's rustdoc.
 ///
 /// The value is run through [`crate::types::mrtr::encode_header_value`], so a
 /// non-header-safe name (non-ASCII, or an RFC 9110 field-value delimiter) travels
@@ -2036,6 +2043,40 @@ mod tests {
                 derived,
                 Some(("resources/read".to_string(), "mem://greeting".to_string()))
             );
+        }
+
+        /// The spec MUST: `Mcp-Name` carries `params.taskId` (Phase 114, DQ4).
+        ///
+        /// pmcp emitted `Mcp-Name: ""` here before this change, which Phase
+        /// 118's conformance run grades.
+        #[test]
+        fn routing_headers_read_task_id_for_the_three_tasks_methods() {
+            for method in ["tasks/get", "tasks/update", "tasks/cancel"] {
+                let derived = v2_routing_headers(&body(method, &json!({ "taskId": "abc" })));
+                assert_eq!(
+                    derived,
+                    Some((method.to_string(), "abc".to_string())),
+                    "{method} must route on its taskId"
+                );
+            }
+        }
+
+        /// `tasks/list` is NOT in the tasks routing table, so it keeps emitting
+        /// the empty name every non-name-bearing method emits.
+        ///
+        /// The negative half of the assertion above: without it, an
+        /// implementation that made every `tasks/*` method name-bearing would
+        /// pass.
+        #[test]
+        fn routing_headers_are_empty_for_tasks_list_and_tasks_result() {
+            for method in ["tasks/list", "tasks/result"] {
+                let derived = v2_routing_headers(&body(method, &json!({ "taskId": "abc" })));
+                assert_eq!(
+                    derived,
+                    Some((method.to_string(), String::new())),
+                    "{method} is not name-bearing"
+                );
+            }
         }
 
         #[test]

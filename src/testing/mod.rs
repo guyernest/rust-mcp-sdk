@@ -128,6 +128,38 @@ pub fn decode_mcp_name(raw: &str) -> Option<String> {
     crate::types::mrtr::decode_header_value(raw)
 }
 
+/// Where `method` keeps its `Mcp-Name` routing value, from the PRODUCTION
+/// combined lookup (Phase 114, DQ4).
+///
+/// `Some("name")` for `tools/call` / `prompts/get`, `Some("uri")` for
+/// `resources/read`, `Some("taskId")` for `tasks/get` / `tasks/update` /
+/// `tasks/cancel`, and `None` for every other method (whose `Mcp-Name` is the
+/// empty string).
+///
+/// **Why this wrapper exists.** Both method tables are `pub(crate)` (Phase-113
+/// D-10 keeps the MRTR plumbing off the public API) and a `pub use` of a
+/// `pub(crate)` item does not compile (E0365). Paired with
+/// [`method_is_mrtr_eligible`] it lets an integration test state the ONE
+/// property that keeps the two tables from being merged back together: the
+/// tasks methods are name-bearing and NOT MRTR-eligible.
+#[must_use]
+pub fn routing_name_key(method: &str) -> Option<&'static str> {
+    crate::types::mrtr::name_bearing_key(method)
+}
+
+/// Whether `method` may carry an `input_required` result, from the PRODUCTION
+/// `MRTR_METHODS` table.
+///
+/// See [`routing_name_key`] for why this wrapper exists and what the pair is
+/// for. This reads `MRTR_METHODS` and ONLY `MRTR_METHODS`: making a tasks method
+/// eligible here would route `tasks/update` through `splice_mrtr_params`, which
+/// strips `inputResponses` unconditionally — i.e. deletes that request's entire
+/// payload.
+#[must_use]
+pub fn method_is_mrtr_eligible(method: &str) -> bool {
+    crate::types::mrtr::mrtr_eligible(method)
+}
+
 /// Mint a `requestState` continuation token with the PRODUCTION codec
 /// (Phase 113, HTTP-02).
 ///
