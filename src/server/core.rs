@@ -1186,22 +1186,22 @@ fn project_capabilities_for_v2(capabilities: &ServerCapabilities) -> ServerCapab
 /// projection there could only ever remove an operator's own key.
 pub(crate) fn project_capabilities_for_v1(capabilities: &ServerCapabilities) -> ServerCapabilities {
     let auto_advertised = crate::server::task_dispatch::tasks_extension_value();
-    let carries_the_auto_entry = capabilities.extensions.as_ref().is_some_and(|extensions| {
-        extensions.get(crate::types::capabilities::TASKS_EXTENSION_KEY) == Some(&auto_advertised)
-    });
-    if !carries_the_auto_entry {
-        return capabilities.clone();
-    }
-
     let mut projected = capabilities.clone();
-    if let Some(extensions) = projected.extensions.as_mut() {
+
+    // ONE pass, ONE clone, mirroring [`project_capabilities_for_v2`] above.
+    // Removing the entry can leave an empty map behind, and that map is then
+    // dropped — but ONLY on the branch that actually removed the entry, so a
+    // map the operator authored as empty is carried through untouched, exactly
+    // as it was before this projection existed.
+    let emptied_by_removal = projected.extensions.as_mut().is_some_and(|extensions| {
+        if extensions.get(crate::types::capabilities::TASKS_EXTENSION_KEY) != Some(&auto_advertised)
+        {
+            return false;
+        }
         extensions.remove(crate::types::capabilities::TASKS_EXTENSION_KEY);
-    }
-    if projected
-        .extensions
-        .as_ref()
-        .is_some_and(std::collections::HashMap::is_empty)
-    {
+        extensions.is_empty()
+    });
+    if emptied_by_removal {
         projected.extensions = None;
     }
     projected
