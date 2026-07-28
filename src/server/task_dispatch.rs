@@ -35,7 +35,9 @@ use crate::error::{Error, Result};
 use crate::server::auth::AuthContext;
 use crate::server::task_store::TaskStore;
 use crate::server::tasks::TaskRouter;
-use crate::types::capabilities::{ServerCapabilities, ServerTasksCapability};
+use crate::types::capabilities::{
+    ServerCapabilities, ServerTasksCapability, TasksExtensionCapability, TASKS_EXTENSION_KEY,
+};
 use crate::types::jsonrpc::ResponsePayload;
 use crate::types::tasks::{TaskStatus, RELATED_TASK_META_KEY};
 use crate::types::tools::TaskSupport;
@@ -49,11 +51,46 @@ use std::sync::Arc;
 /// The refusal a v2 `tasks/result` receives when a store is configured but the
 /// task has no result yet.
 ///
-/// Stated as a fact about what pmcp serves today, not as a promise: on protocol
-/// version 2026-07-28 the task lifecycle is an EXTENSION that has to be
-/// negotiated through the `capabilities.extensions` map, and pmcp advertises no
-/// `io.modelcontextprotocol/tasks` entry. An un-negotiated extension method is
-/// genuinely method-not-found.
+/// Stated as a fact about what pmcp serves today, not as a promise.
+///
+/// # What changed in plan 114-05, and why this doc had to be rewritten
+///
+/// On protocol version 2026-07-28 the task lifecycle is an EXTENSION, negotiated
+/// through the `capabilities.extensions` map under
+/// [`TASKS_EXTENSION_KEY`](crate::types::capabilities::TASKS_EXTENSION_KEY).
+/// Before 114-05 pmcp populated NO entry under that key on any server, so the
+/// word "negotiated" in the message below was literally accurate and this doc
+/// said so as a fact.
+///
+/// It is no longer accurate. [`apply_tasks_capability_rule`] now writes
+/// `extensions["io.modelcontextprotocol/tasks"] = {}` into the capabilities of
+/// every server that has a task backend, so a v2 client CAN negotiate the
+/// extension against exactly the servers that reach this refusal. What has NOT
+/// landed is the v2 `tasks/*` SEMANTICS (requirement TASK-03): the flat result
+/// projection, the v2 owner binding and the v2 not-found mapping. Until those
+/// land, this site answers method-not-found rather than the spec-PROHIBITED
+/// `-32002` pending refusal (Finding 11).
+///
+/// A stale "pmcp deliberately does not do X" comment actively misleads the next
+/// reader, which is the failure class 113-29 recorded (two `-32002` sites
+/// "commented v1-scoped, neither ever traced"). Hence this rewrite ships in the
+/// same commit as the advertisement.
+///
+/// # The one emission row this constant covers
+///
+/// It is written on exactly one row of [`TaskDispatch::handle_tasks_result`]'s
+/// final match: a task STORE is configured (so the unconditional
+/// "tasks/result not supported" answer would be untrue) AND the era is v2 (so
+/// `-32002` is prohibited). A server with no task backend at all takes the
+/// `(false, _)` row instead, and carries no extension entry either.
+///
+/// # The message TEXT is owned by the plan that lands the v2 routes
+///
+/// Its wording is left BYTE-UNCHANGED here on purpose: 114-05 owns the
+/// capability advertisement, not the v2 `tasks/*` route bodies. Rewording a live
+/// refusal from a plan that does not own the route is how two plans come to
+/// disagree about one wire string. The plan that implements v2 `tasks/result`
+/// replaces both this value and that match row.
 pub(crate) const V2_TASKS_NOT_NEGOTIATED: &str =
     "tasks/result is not served on protocol version 2026-07-28: the tasks extension is not \
      negotiated";
@@ -64,7 +101,12 @@ pub(crate) const V2_TASKS_NOT_NEGOTIATED: &str =
 /// |-----------------|---------|-----|
 /// | `Some(Era::V1)` | `true`  | the v1 task lifecycle is untouched |
 /// | `None`          | `true`  | not opted into v2 → zero era code, v1 path unchanged (D-04) |
-/// | `Some(Era::V2)` | `false` | the v2 task surface is not implemented and not negotiated |
+/// | `Some(Era::V2)` | `false` | the v2 task surface is not implemented (TASK-03) |
+///
+/// The v2 row deliberately no longer says "and not negotiated": since 114-05 a
+/// tasks-backed server DOES advertise the tasks extension, so the reason this
+/// predicate routes v2 away from the `-32002` refusal is the missing v2
+/// semantics, not a missing capability entry.
 ///
 /// # Why this predicate exists (Finding 11)
 ///
@@ -109,6 +151,28 @@ pub(crate) fn default_tasks_capability() -> ServerTasksCapability {
     }
 }
 
+/// The value pmcp auto-advertises under
+/// [`TASKS_EXTENSION_KEY`](crate::types::capabilities::TASKS_EXTENSION_KEY):
+/// the empty object.
+///
+/// Built through [`TasksExtensionCapability`] rather than a bare
+/// `serde_json::json!({})` so there is ONE canonical spelling of the value, in
+/// the same way `TASKS_EXTENSION_KEY` gives one canonical spelling of the key.
+///
+/// `default_tasks_capability()`'s `list` / `cancel` / `requests.tools.call`
+/// flags are deliberately NOT projected in here (D-03). Advertising
+/// `list: true` on an era where `tasks/list` answers `-32601` is exactly the
+/// capability lie the endpoint-backed rule exists to prevent, and the vendored
+/// draft schema types this capability as `Record<string, never>` — a value
+/// admitting no properties at all.
+///
+/// Serializing a field-less struct cannot fail; the fallback restates the SAME
+/// `{}` rather than introducing a panic path.
+fn tasks_extension_value() -> Value {
+    serde_json::to_value(TasksExtensionCapability::default())
+        .unwrap_or_else(|_| Value::Object(serde_json::Map::new()))
+}
+
 /// Apply the endpoint-backed `tasks`-capability rule (D-CAPABILITY-ENDPOINT-BACKED).
 ///
 /// This is the SINGLE shared rule both `ServerCoreBuilder` and (Plan 02)
@@ -127,6 +191,29 @@ pub(crate) fn default_tasks_capability() -> ServerTasksCapability {
 ///   cannot work).
 /// - An `Optional`/`Forbidden` task tool with no backend is NOT an error and does
 ///   NOT by itself trigger advertisement.
+///
+/// # ONE knob, TWO eras (plan 114-05, D-01)
+///
+/// The same `has_backend` fact drives BOTH advertisements:
+///
+/// | era | where it lands | value |
+/// |-----|----------------|-------|
+/// | MCP 2025-11-25 | `capabilities.tasks` | [`default_tasks_capability()`] |
+/// | MCP 2026-07-28 | `capabilities.extensions["io.modelcontextprotocol/tasks"]` | `{}` ([`tasks_extension_value()`]) |
+///
+/// So no existing tasks server needs a code change to serve a v2 client, and no
+/// v2 server with a working store can silently serve nothing. Both writes are
+/// ADDITIVE in both directions: an explicitly configured value — `tasks` or the
+/// extensions entry — is preserved VERBATIM, an absent `extensions` map is
+/// created, and an existing one gains the entry alongside its other keys without
+/// disturbing them.
+///
+/// This rule runs at BUILD time, where no era exists. Era-awareness is NOT its
+/// job: the struct carries everything both eras could want, and the
+/// serialization boundary decides what each era SEES
+/// (`core::discover_result_from_capabilities` for v2 `server/discover`). That
+/// split is D-02, and collapsing it — making this rule era-conditional — is what
+/// would move v1 `initialize` bytes.
 ///
 /// # Errors
 ///
@@ -154,6 +241,17 @@ pub(crate) fn apply_tasks_capability_rule(
 
     if capabilities.tasks.is_none() && has_backend {
         capabilities.tasks = Some(default_tasks_capability());
+    }
+
+    // The v2 arm of the SAME endpoint-backed rule. `entry(..).or_insert_with(..)`
+    // is the additive-only discipline the `tasks.is_none()` guard above expresses
+    // for v1: an operator-configured value is never overwritten.
+    if has_backend {
+        capabilities
+            .extensions
+            .get_or_insert_with(HashMap::new)
+            .entry(TASKS_EXTENSION_KEY.to_string())
+            .or_insert_with(tasks_extension_value);
     }
 
     Ok(())
@@ -1002,5 +1100,131 @@ mod gate_tests {
             .await;
         let resp = out.expect("Required + task-shaped must yield Some");
         assert_store_minted(&resp);
+    }
+}
+
+/// The v2 arm of [`apply_tasks_capability_rule`] (plan 114-05, D-01/D-03).
+///
+/// One test per row of the additive-only truth table, each named for the row it
+/// proves. Every test uses NO tools, so the `TaskSupport::Required` validation
+/// branch is out of the way and each assertion is about the capability writes
+/// alone.
+#[cfg(test)]
+mod capability_rule_tests {
+    use super::*;
+
+    fn no_tools() -> HashMap<String, ToolInfo> {
+        HashMap::new()
+    }
+
+    /// Read the tasks-extension entry, if any.
+    fn tasks_entry(capabilities: &ServerCapabilities) -> Option<&Value> {
+        capabilities
+            .extensions
+            .as_ref()
+            .and_then(|extensions| extensions.get(TASKS_EXTENSION_KEY))
+    }
+
+    /// A backend-configured server gains the extension entry, and its value is
+    /// EXACTLY `{}` — not merely present.
+    ///
+    /// Equality with `{}` rather than `is_some()` is the assertion that fails if
+    /// a future change starts projecting `default_tasks_capability()`'s
+    /// `list`/`cancel`/`requests` flags into the extension value: advertising
+    /// `list: true` on an era where `tasks/list` answers `-32601` is the
+    /// capability lie D-03 forbids.
+    #[test]
+    fn capability_rule_advertises_the_tasks_extension_when_a_backend_exists() {
+        let mut capabilities = ServerCapabilities::default();
+        apply_tasks_capability_rule(&mut capabilities, &no_tools(), true).unwrap();
+
+        assert_eq!(
+            tasks_entry(&capabilities),
+            Some(&serde_json::json!({})),
+            "a backend-configured server must advertise the tasks extension as \
+             the EMPTY OBJECT (D-03): {capabilities:?}"
+        );
+        // The v1 arm is unchanged by the v2 arm — one knob, two advertisements.
+        assert!(
+            capabilities.tasks.is_some(),
+            "the v1 tasks capability must still be auto-advertised: {capabilities:?}"
+        );
+    }
+
+    /// An EXPLICITLY configured extension value survives the rule byte-unchanged.
+    ///
+    /// This is the extensions-map twin of the `capabilities.tasks.is_none()`
+    /// guard: an operator-supplied value is the operator's, and silently
+    /// rewriting it would be worse than serving it.
+    #[test]
+    fn capability_rule_preserves_an_explicitly_configured_tasks_extension_value() {
+        let explicit = serde_json::json!({ "io.example/nonconformant": true });
+        let mut capabilities = ServerCapabilities::default();
+        let mut extensions = HashMap::new();
+        extensions.insert(TASKS_EXTENSION_KEY.to_string(), explicit.clone());
+        capabilities.extensions = Some(extensions);
+
+        apply_tasks_capability_rule(&mut capabilities, &no_tools(), true).unwrap();
+
+        assert_eq!(
+            serde_json::to_string(tasks_entry(&capabilities).expect("entry present")).unwrap(),
+            serde_json::to_string(&explicit).unwrap(),
+            "an explicitly configured extension value must survive the rule \
+             byte-unchanged: {capabilities:?}"
+        );
+    }
+
+    /// A server with NO task backend gains neither the v1 capability nor the v2
+    /// extension entry.
+    ///
+    /// The endpoint-backed rule's whole point: presence of the key is a promise
+    /// that `tasks/*` works, so a backend-less server must make no such promise
+    /// on either era.
+    #[test]
+    fn capability_rule_advertises_nothing_without_a_backend() {
+        let mut capabilities = ServerCapabilities::default();
+        apply_tasks_capability_rule(&mut capabilities, &no_tools(), false).unwrap();
+
+        assert!(
+            capabilities.tasks.is_none(),
+            "no backend must mean no v1 tasks capability: {capabilities:?}"
+        );
+        assert_eq!(
+            tasks_entry(&capabilities),
+            None,
+            "no backend must mean no v2 extension entry: {capabilities:?}"
+        );
+        assert!(
+            capabilities.extensions.is_none(),
+            "and the rule must not manufacture an empty extensions map: {capabilities:?}"
+        );
+    }
+
+    /// An unrelated pre-existing extensions key is still present afterwards.
+    ///
+    /// The insert is alongside, never a replacement of the map.
+    #[test]
+    fn capability_rule_leaves_an_unrelated_extensions_key_intact() {
+        let mut capabilities = ServerCapabilities::default();
+        let mut extensions = HashMap::new();
+        extensions.insert(
+            "io.example/experimental".to_string(),
+            serde_json::json!({ "enabled": true }),
+        );
+        capabilities.extensions = Some(extensions);
+
+        apply_tasks_capability_rule(&mut capabilities, &no_tools(), true).unwrap();
+
+        let extensions = capabilities.extensions.as_ref().expect("map present");
+        assert_eq!(
+            extensions.get("io.example/experimental"),
+            Some(&serde_json::json!({ "enabled": true })),
+            "an unrelated extensions key must survive: {extensions:?}"
+        );
+        assert_eq!(
+            extensions.get(TASKS_EXTENSION_KEY),
+            Some(&serde_json::json!({})),
+            "and the tasks entry lands alongside it: {extensions:?}"
+        );
     }
 }
