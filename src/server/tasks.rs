@@ -59,6 +59,41 @@ pub trait TaskRouter: Send + Sync {
     /// Requests cancellation of the given task.
     async fn handle_tasks_cancel(&self, params: Value, owner_id: &str) -> Result<Value>;
 
+    /// Handle `tasks/update` request.
+    ///
+    /// Delivers a client's `inputResponses` to a task that is awaiting input.
+    ///
+    /// This is an **additive** trait method with a default implementation, so
+    /// every existing `TaskRouter` implementation keeps compiling untouched.
+    ///
+    /// # Arguments
+    ///
+    /// * `params` - The already-validated request params as a `Value`.
+    /// * `owner_id` - Owner identity, ALREADY RESOLVED by the caller.
+    ///
+    /// # The owner must NOT be re-derived from `params`
+    ///
+    /// By the time this method is called, `TaskDispatch` has already resolved the
+    /// owner through the v2 identity table, bounds-checked the delivered
+    /// `inputResponses`, and decoded them KIND-DIRECTED against the kinds the
+    /// server itself recorded. An implementation must therefore take the owner
+    /// from the `owner_id` argument and must not read any owner, subject or task
+    /// ownership hint out of `params` — a client-supplied owner would be an
+    /// insecure direct object reference, which is precisely what passing the
+    /// resolved owner alongside the params exists to prevent.
+    ///
+    /// # Default
+    ///
+    /// Returns an error indicating `tasks/update` is not supported. The default is
+    /// an explicit error and never a silent success, so dispatch can answer
+    /// honestly when a router cannot accept inputs instead of reporting an
+    /// acceptance that never happened.
+    async fn handle_tasks_update(&self, _params: Value, _owner_id: &str) -> Result<Value> {
+        Err(crate::error::Error::internal(
+            "tasks/update not supported by this router",
+        ))
+    }
+
     /// Resolve owner ID from authentication context fields.
     ///
     /// The owner ID determines task visibility and access control.
