@@ -32,6 +32,14 @@ one of them is booked under this hold.
 | **Verdict at time of record** | `PENDING` |
 | **Vendored evidence** | `schema/vendored/ext-tasks/` @ `2c1425d9a288b9b1f489430fe1e00bb392b47e48` (2026-07-15), digests in `schema/vendored/ext-tasks/PROVENANCE.md` |
 
+**Booking status when this record was written (2026-07-28):** TASK-01…TASK-06 read **`[ ]`** in
+`.planning/REQUIREMENTS.md` (lines 84-89; traceability rows `Pending`), and that file has a
+0-byte diff from this plan. The `[~]` booking above is the **policy** this hold prescribes; it is
+applied by the phase's closing plan, once there is an implementation to book. The distinction
+matters only so a reader does not mistake this record for evidence that the booking already
+happened — either way, **no checkbox is flipped to `[x]` except on a `PUBLISHED-CONFIRMED`
+landing.**
+
 ### All six flip together, never individually
 
 TASK-01…TASK-06 are flipped **as a group** on a `PUBLISHED-CONFIRMED` landing, and not otherwise.

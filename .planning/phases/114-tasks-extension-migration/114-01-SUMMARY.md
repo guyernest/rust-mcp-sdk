@@ -248,7 +248,9 @@ None. This plan adds no network endpoint, no auth path, no schema at a trust bou
 - The **`-32003` vs `-32021`** upstream disagreement — its own inventory row with a direction-recheck obligation.
 - `114-RESEARCH.md` **A2** (extension versions independently of core) is recorded as a MEDIUM-risk assumption inside § Trigger Condition so a re-runner can falsify it rather than inherit it.
 
-**No requirement checkbox was flipped.** TASK-01…TASK-06 stay `[~]` in `.planning/REQUIREMENTS.md`; `## Verdict` is `PENDING`.
+**No requirement checkbox was flipped and `.planning/REQUIREMENTS.md` has a 0-byte diff.** Stated precisely, because the distinction matters to a verifier: TASK-01…TASK-06 currently read **`[ ]`** (`REQUIREMENTS.md:84-89`, traceability rows `Pending`), *not* `[~]`. This plan's `files_modified` does not include `REQUIREMENTS.md` and Task 2's acceptance criteria never asked for an edit there — its job was to **record** the hold, not to apply the booking. Applying the `[~]` *implemented; pending final schema* booking belongs to the phase's closing plan, once there is an implementation to book.
+
+`gsd-sdk query requirements.mark-complete` was **deliberately NOT run** despite this plan's `requirements: [TASK-01…TASK-04]` frontmatter. Running it would flip four checkboxes to `[x]`, directly contradicting the `## Verdict: PENDING` this plan committed and the D-18 hold it exists to record. `## Verdict` is `PENDING`.
 
 ---
 *Phase: 114-tasks-extension-migration*
