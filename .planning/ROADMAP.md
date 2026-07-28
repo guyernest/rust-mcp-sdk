@@ -2473,7 +2473,7 @@ Plans:
 
 **Wave 4**
 
-- [ ] 114-09-PLAN.md — v2 owner binding fails closed on Phase 113's three-row identity table (no session-id, no `client_id`); ordered refusals `-32021` then `-32003` at HTTP 200 before the params parse (DQ3); v1 `"local"` frozen + migration warn
+- [x] 114-09-PLAN.md — v2 owner binding fails closed on Phase 113's three-row identity table (no session-id, no `client_id`); ordered refusals `-32021` then `-32003` at HTTP 200 before the params parse (DQ3); v1 `"local"` frozen + migration warn
 
 **Wave 5**
 
@@ -2584,7 +2584,7 @@ Plans:
 | 112. Version Plumbing Spine | 10/10 | Complete    | 2026-07-23 |
 | 113. Stateless HTTP + MRTR | 32/32 | Complete   | 2026-07-27 |
 | 113.1 Merge Unblock | 6/6 | Complete | 2026-07-27 |
-| 114. Tasks Extension Migration | 9/20 | In Progress|  |
+| 114. Tasks Extension Migration | 10/20 | In Progress|  |
 | 115. JSON Schema 2020-12 + Caching Hints | 0/TBD | Not started | - |
 | 116. Auth Hardening SEPs | 0/TBD | Not started | - |
 | 117. Agents, Tester & v1 Severability | 0/TBD | Not started | - |
