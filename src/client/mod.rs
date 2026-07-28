@@ -267,6 +267,21 @@ pub struct Client<T: Transport> {
     ///
     /// See [`ClientBuilder::mrtr_round_limit`]. Dead on a v1 connection.
     mrtr_round_limit: usize,
+    /// The Extensions-Track capabilities this client DECLARES on v2 (Phase 114,
+    /// D-04), merged into the `extensions` map of the `ClientCapabilities` that
+    /// [`Self::v2_request_meta`] serializes into every request's
+    /// `_meta["io.modelcontextprotocol/clientCapabilities"]`.
+    ///
+    /// `None` — the default and the only state reachable without
+    /// [`ClientBuilder::with_tasks_extension`] — declares NOTHING, and the
+    /// `extensions` key is then absent from the serialized capabilities
+    /// entirely (the field carries `skip_serializing_if`).
+    ///
+    /// Deliberately NOT read on v1: the v1 `initialize` handshake advertises the
+    /// `ClientCapabilities` the CALLER passed to [`Self::initialize`], and
+    /// injecting an extension there would move the `initialize` bytes of every
+    /// existing caller (Phase-114 D-02).
+    declared_extensions: Option<HashMap<String, serde_json::Value>>,
 }
 
 impl<T: Transport> std::fmt::Debug for Client<T> {
@@ -335,6 +350,7 @@ impl<T: Transport> Client<T> {
             host_registry: crate::client::host::ClientHostRegistry::default(),
             negotiated_protocol_version: None,
             mrtr_round_limit: DEFAULT_MRTR_ROUND_LIMIT,
+            declared_extensions: None,
         }
     }
 
@@ -381,6 +397,7 @@ impl<T: Transport> Client<T> {
             host_registry: crate::client::host::ClientHostRegistry::default(),
             negotiated_protocol_version: None,
             mrtr_round_limit: DEFAULT_MRTR_ROUND_LIMIT,
+            declared_extensions: None,
         }
     }
 
@@ -423,6 +440,7 @@ impl<T: Transport> Client<T> {
             host_registry: crate::client::host::ClientHostRegistry::default(),
             negotiated_protocol_version: None,
             mrtr_round_limit: DEFAULT_MRTR_ROUND_LIMIT,
+            declared_extensions: None,
         }
     }
 
@@ -688,6 +706,16 @@ impl<T: Transport> Client<T> {
     /// tool-augmented `sampling/createMessage` the client can in fact service.
     /// That is the same under-claim `derive_host_capabilities` already fixes one
     /// level up for the `sampling` field itself.
+    ///
+    /// # The `extensions` map is DECLARED, not derived (Phase 114, D-04)
+    ///
+    /// The three host fields above are registry-derived because pmcp can check
+    /// whether a handler exists. An Extensions-Track capability has no such
+    /// local witness — it is a statement about what the APPLICATION does with a
+    /// `resultType:"task"` response — so it is opted into explicitly through
+    /// [`ClientBuilder::with_tasks_extension`] and merged here. A client that
+    /// never opted in gets no `extensions` key at all, because the field carries
+    /// `skip_serializing_if = "Option::is_none"`.
     fn v2_client_capabilities(&self) -> ClientCapabilities {
         let mut capabilities = ClientCapabilities::default();
         self.derive_host_capabilities(&mut capabilities);
@@ -696,6 +724,15 @@ impl<T: Transport> Client<T> {
                 if sampling.tools.is_none() {
                     sampling.tools = Some(serde_json::Value::Object(serde_json::Map::new()));
                 }
+            }
+        }
+        if let Some(declared) = self.declared_extensions.as_ref() {
+            // MERGE rather than assign: `ClientCapabilities::default()` carries
+            // `extensions: None` today, but a future default that pre-seeded the
+            // map would otherwise be silently discarded here.
+            let slot = capabilities.extensions.get_or_insert_with(HashMap::new);
+            for (key, value) in declared {
+                slot.insert(key.clone(), value.clone());
             }
         }
         capabilities
@@ -4071,6 +4108,9 @@ pub struct ClientBuilder<T: Transport> {
     /// The MRTR round bound (Phase 113, D-09). See
     /// [`ClientBuilder::mrtr_round_limit`].
     mrtr_round_limit: usize,
+    /// The Extensions-Track capabilities the built client DECLARES on v2
+    /// (Phase 114, D-04). See [`ClientBuilder::with_tasks_extension`].
+    declared_extensions: Option<HashMap<String, serde_json::Value>>,
 }
 
 impl<T: Transport> std::fmt::Debug for ClientBuilder<T> {
@@ -4092,6 +4132,7 @@ impl<T: Transport> ClientBuilder<T> {
             host_registry: crate::client::host::ClientHostRegistry::default(),
             negotiated_protocol_version: None,
             mrtr_round_limit: DEFAULT_MRTR_ROUND_LIMIT,
+            declared_extensions: None,
         }
     }
 
@@ -4201,6 +4242,70 @@ impl<T: Transport> ClientBuilder<T> {
     #[must_use]
     pub fn mrtr_round_limit(mut self, limit: usize) -> Self {
         self.mrtr_round_limit = limit;
+        self
+    }
+
+    /// DECLARE the tasks extension (`io.modelcontextprotocol/tasks`) on v2
+    /// (Phase 114, D-04 / TASK-01).
+    ///
+    /// Inserts [`TASKS_EXTENSION_KEY`](crate::types::capabilities::TASKS_EXTENSION_KEY)
+    /// → `{}` into the client capabilities' `extensions` map. **With no call the
+    /// client behaves exactly as today** and declares nothing.
+    ///
+    /// # This is a PER-REQUEST declaration, not a handshake
+    ///
+    /// v2 (`2026-07-28`) removed `initialize`, so there is no negotiation round
+    /// to carry it. The declaration therefore travels on EVERY request, inside
+    /// `params._meta["io.modelcontextprotocol/clientCapabilities"].extensions`,
+    /// and the server reads it out of the request it is answering. On a v1
+    /// connection this setter changes nothing on the wire: v1 advertises the
+    /// `ClientCapabilities` the caller passed to [`Client::initialize`], and
+    /// injecting here would move the `initialize` bytes of every existing
+    /// caller.
+    ///
+    /// # What declaring it means
+    ///
+    /// It is what the spec requires before a server may answer a task-capable
+    /// tool call with a task handle: the declaration is the server's CREATE
+    /// trigger. A client that declares it is announcing that it can handle a
+    /// `resultType:"task"` response — poll `tasks/get`, fetch `tasks/result` —
+    /// instead of the ordinary synchronous result. A client that cannot do that
+    /// must NOT declare it, or it will receive task handles it cannot follow.
+    ///
+    /// # It is SELF-REPORTED (T-114-22)
+    ///
+    /// The `extensions` map says what this client can HANDLE. It is unverified
+    /// and forgeable by construction, exactly like
+    /// `io.modelcontextprotocol/clientInfo`. A server may read it to decide what
+    /// may be SERVED; it must never read it as identity, and never derive
+    /// authorization from it. Owner binding reads the authenticated principal
+    /// (`AuthContext`), never this map.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// use pmcp::{ClientBuilder, StdioTransport};
+    /// use pmcp::types::protocol::{ProtocolVersion, PROTOCOL_VERSION_2026_07_28};
+    ///
+    /// # fn main() -> Result<(), pmcp::Error> {
+    /// let client = ClientBuilder::new(StdioTransport::new())
+    ///     .with_protocol_version(ProtocolVersion(PROTOCOL_VERSION_2026_07_28.to_string()))?
+    ///     .with_tasks_extension()
+    ///     .build();
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn with_tasks_extension(mut self) -> Self {
+        self.declared_extensions
+            .get_or_insert_with(HashMap::new)
+            .insert(
+                crate::types::capabilities::TASKS_EXTENSION_KEY.to_string(),
+                serde_json::to_value(
+                    crate::types::capabilities::TasksExtensionCapability::default(),
+                )
+                .unwrap_or_else(|_| serde_json::Value::Object(serde_json::Map::new())),
+            );
         self
     }
 
@@ -4452,6 +4557,7 @@ impl<T: Transport> ClientBuilder<T> {
         client.host_registry = self.host_registry;
         client.negotiated_protocol_version = self.negotiated_protocol_version;
         client.mrtr_round_limit = self.mrtr_round_limit;
+        client.declared_extensions = self.declared_extensions;
         // v2 has NO handshake, so a v2 client is ready the moment it is built.
         // `ensure_initialized` therefore passes without an `initialize` round
         // trip, which is the whole point of the stateless era.
@@ -4480,6 +4586,7 @@ impl<T: Transport> Clone for Client<T> {
             host_registry: self.host_registry.clone(),
             negotiated_protocol_version: self.negotiated_protocol_version.clone(),
             mrtr_round_limit: self.mrtr_round_limit,
+            declared_extensions: self.declared_extensions.clone(),
         }
     }
 }
@@ -6429,6 +6536,111 @@ mod tests {
             assert_eq!(
                 params.unwrap()["_meta"]["io.modelcontextprotocol/protocolVersion"],
                 "2026-07-28"
+            );
+        }
+
+        // ---- extension declaration (Phase 114, D-04) -----------------------
+
+        /// The declared `extensions` map reaches the per-request `_meta`.
+        ///
+        /// Asserted as EQUALITY with `{}` rather than presence: a presence-only
+        /// check passes on precisely the regression that would matter (a value
+        /// that is `null`, `true`, or a populated settings object none of which
+        /// the draft schema admits).
+        #[test]
+        fn a_declaring_v2_client_emits_the_tasks_extension_on_every_request() {
+            let client = ClientBuilder::new(ModeRecordingTransport::http_like())
+                .with_protocol_version(v2())
+                .expect("2026-07-28 is selectable")
+                .with_tasks_extension()
+                .build();
+
+            // TWO different requests, because the v2 declaration is per-request
+            // and a mechanism that only stamped the first would still pass a
+            // single-frame assertion.
+            for params in [json!({}), json!({ "name": "search" })] {
+                let mut params = Some(params);
+                client.splice_v2_meta(&mut params);
+                let declared = params.as_ref().unwrap()["_meta"]
+                    ["io.modelcontextprotocol/clientCapabilities"]["extensions"]
+                    [crate::types::capabilities::TASKS_EXTENSION_KEY]
+                    .clone();
+                assert_eq!(
+                    declared,
+                    json!({}),
+                    "the tasks extension must be declared as EXACTLY {{}}"
+                );
+            }
+        }
+
+        /// Absence is asserted as key ABSENCE, never as a falsy value.
+        ///
+        /// `ClientCapabilities::extensions` carries
+        /// `skip_serializing_if = "Option::is_none"`, so a regression that
+        /// started emitting `"extensions": null` would satisfy any check written
+        /// against the VALUE.
+        #[test]
+        fn a_non_declaring_v2_client_emits_no_extensions_key_at_all() {
+            let client = v2_client();
+            let mut params = Some(json!({}));
+            client.splice_v2_meta(&mut params);
+
+            let capabilities = params.as_ref().unwrap()["_meta"]
+                ["io.modelcontextprotocol/clientCapabilities"]
+                .clone();
+            assert!(
+                capabilities.get("extensions").is_none(),
+                "a client that never opted in must emit NO extensions key, got {capabilities}"
+            );
+        }
+
+        /// The declaration is threaded through the emission that SERIALIZES
+        /// `ClientCapabilities`, not through a hand-built `json!` object.
+        ///
+        /// If `v2_request_meta` ever hand-builds the capabilities value, this
+        /// test fails: a field added to `ClientCapabilities` would then be
+        /// invisible on the wire, which is exactly how the client and the
+        /// server's `ProtocolContext::client_capabilities` come to disagree.
+        #[test]
+        fn the_emitted_capabilities_deserialize_back_into_client_capabilities() {
+            let client = ClientBuilder::new(ModeRecordingTransport::http_like())
+                .with_protocol_version(v2())
+                .expect("2026-07-28 is selectable")
+                .with_tasks_extension()
+                .build();
+            let mut params = Some(json!({}));
+            client.splice_v2_meta(&mut params);
+
+            let raw = params.as_ref().unwrap()["_meta"]
+                ["io.modelcontextprotocol/clientCapabilities"]
+                .clone();
+            let round_tripped: ClientCapabilities =
+                serde_json::from_value(raw).expect("the emitted value IS a ClientCapabilities");
+            assert_eq!(
+                round_tripped
+                    .extensions
+                    .as_ref()
+                    .and_then(|e| e.get(crate::types::capabilities::TASKS_EXTENSION_KEY)),
+                Some(&json!({})),
+            );
+        }
+
+        /// A v1 client's `initialize` bytes do not move (Phase-114 D-02).
+        #[test]
+        fn the_declaration_never_reaches_a_v1_initialize() {
+            let client = ClientBuilder::new(ModeRecordingTransport::http_like())
+                .with_tasks_extension()
+                .build();
+            assert_eq!(client.era(), Era::V1);
+
+            // v1 advertises the CALLER's capabilities verbatim (modulo the
+            // registry-derived host fields), so the declaration is inert.
+            let mut capabilities = ClientCapabilities::default();
+            client.derive_host_capabilities(&mut capabilities);
+            let serialized = serde_json::to_string(&capabilities).expect("serializes");
+            assert!(
+                !serialized.contains("extensions"),
+                "a v1 initialize must carry no extensions key, got {serialized}"
             );
         }
 
