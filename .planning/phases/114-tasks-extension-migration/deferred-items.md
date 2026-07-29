@@ -428,3 +428,60 @@ protecting:
 
 None of this blocks the phase: the gate is conformant and the behaviour is the spec's. It is
 recorded so a later reader does not mistake the absence of an opt-out for an oversight.
+
+---
+
+## D-114-L — the retired `tasks/*` methods can no longer be observed on the client's wire
+
+**Found during:** 114-19 (Task 1, surfaced by the quality gate)
+**Status:** open — DELIBERATE consequence, recorded so a later reader does not re-add a
+control that cannot work
+**Severity:** low (a testability narrowing, not a defect)
+**Suggested owner:** whichever plan next wants to assert client-side header derivation
+
+114-19 makes `Client::tasks_result` and `Client::tasks_list` fail fast LOCALLY on v2 with
+zero bytes on the wire. `tasks/list` and `tasks/result` are also the ONLY two `tasks/*`
+methods absent from `TASK_NAME_BEARING_METHODS`. Those two facts together mean:
+
+> a pmcp v2 CLIENT can no longer emit a `tasks/*` method that is not name-bearing.
+
+114-06's `tasks_list_emits_an_empty_mcp_name` used exactly that shape as its vehicle and
+had to be re-pointed at `StreamableHttpTransport::send_raw`, which is the layer that owns
+the derivation anyway. That repair is in-tree and green.
+
+What is DEFERRED is the general problem it exposes: any future assertion about "how does
+the client emit headers for method X" is only reachable through the client API while X
+remains callable. As more methods are retired on v2, more such controls will have to drop
+to the transport layer. There is no shared helper for "hand this transport a raw frame and
+read back what the socket saw" — the repaired test hand-rolls it in ~10 lines. If a second
+test needs it, lift it into `tests/common/`.
+
+---
+
+## D-114-A addendum 2 — one keychain-denied read survives `RUST_TEST_THREADS=1`
+
+**Found during:** 114-19 (quality gate, four measured runs)
+
+114-12's addendum recorded that the `no native root CA certificates found` failure is
+100% reproducible in a sandboxed shell and parallelism-sensitive when unsandboxed, and
+that `-j 4` cleared it. In the 114-19 session that was no longer enough: an UNSANDBOXED
+`make quality-gate` with `RUST_TEST_THREADS=1` still lost exactly ONE test per full run,
+and **the identity of that test MOVED between runs** — `session_validation_tests::
+test_double_initialization_rejected` in one, `sse_middleware_integration::
+test_middleware_modifies_request_headers` in the next — while the panic site stayed the
+pre-existing `.expect` at `src/shared/streamable_http.rs:458`. Both files pass in
+isolation (10/10 and 1/1). A regression does not relocate itself between runs.
+
+Practical guidance for the next executor: `make quality-gate` may not reach exit 0 on this
+machine at all. Run the legs individually, grep every failure for the CA string FIRST, and
+re-run the single failing binary in isolation before treating it as a regression. The real
+fix — replacing the `.expect` at `streamable_http.rs:458` with a fallible path, or pinning
+`webpki-roots` for tests — is still unowned.
+
+### Process trap re-confirmed while writing THIS entry
+
+`/usr/bin/cat` does not exist on macOS (it is `/bin/cat`), so a
+`/usr/bin/cat >> deferred-items.md <<'EOF'` heredoc silently wrote NOTHING while the
+`echo appended` on the following line printed a reassuring "appended". This is the exact
+failure 114-10 recorded for `/usr/bin/cp`. **Verify the mutation landed before trusting
+the message that says it did.**
