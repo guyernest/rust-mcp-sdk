@@ -1178,6 +1178,44 @@ impl TaskDispatch<'_> {
         None
     }
 
+    /// Extract a handler-declared PAUSE from a task-shaped tool value.
+    ///
+    /// Returns the server-authored `inputRequests` map IFF the tool's value
+    /// declares BOTH:
+    ///
+    /// - a `status` that deserializes to [`TaskStatus::InputRequired`] — read
+    ///   through the TYPE, never compared against a re-spelled wire literal, and
+    /// - an `inputRequests` OBJECT that parses as a real
+    ///   [`InputRequests`](crate::types::mrtr::InputRequests).
+    ///
+    /// Both are required, so a tool that wrote one without the other gets the
+    /// ordinary `working` handle rather than a half-applied pause. A malformed
+    /// map yields `None` (fall through to `working`) rather than an error: the
+    /// tool already ran and its task already exists, so failing the whole call
+    /// here would discard work that succeeded.
+    ///
+    /// # This map is SERVER-AUTHORED
+    ///
+    /// `value` is the TOOL HANDLER's output — server code, not anything a client
+    /// sent. That is the precondition
+    /// [`TaskStore::record_input_requests`](crate::server::task_store::TaskStore::record_input_requests)
+    /// states: what is written becomes the only trustworthy record of which KIND
+    /// was asked for under each key, and a kind-directed decode of the client's
+    /// answers reads it back.
+    pub(crate) fn extract_input_requests(
+        value: &Value,
+    ) -> Option<crate::types::mrtr::InputRequests> {
+        let status = value.get("status")?;
+        if serde_json::from_value::<TaskStatus>(status.clone()).ok()? != TaskStatus::InputRequired {
+            return None;
+        }
+        let requests = value.get("inputRequests")?;
+        if !requests.is_object() {
+            return None;
+        }
+        serde_json::from_value::<crate::types::mrtr::InputRequests>(requests.clone()).ok()
+    }
+
     /// Build the `tools/call` create-task response.
     ///
     /// Per `D-STORE-MINTS-ID`: when a [`TaskStore`] is configured the store mints
@@ -1188,12 +1226,26 @@ impl TaskDispatch<'_> {
     /// `store.set_result()` and the task is transitioned `Working -> Completed`
     /// BEFORE the response returns, so a subsequent `tasks/get` shows `Completed`.
     ///
-    /// SIGNATURE NOTE: this fn does NOT take `task_id` or the terminal `result` as
-    /// params — it RE-EXTRACTS them from `value` internally (the store-minted id
-    /// comes back from `store.create`, and `extract_terminal_result(&value)`
-    /// recovers the terminal result for persistence). A future refactor that stops
-    /// re-extracting MUST add explicit params instead — never silently drop the
-    /// terminal-result persistence (that would regress synchronous completion).
+    /// SIGNATURE NOTE: this fn does NOT take `task_id`, the terminal `result`, or
+    /// the handler's `inputRequests` as params — it RE-EXTRACTS all three from
+    /// `value` internally (the store-minted id comes back from `store.create`,
+    /// [`Self::extract_terminal_result`] recovers the terminal result for
+    /// persistence, and [`Self::extract_input_requests`] recovers a
+    /// handler-declared pause). A future refactor that stops re-extracting MUST
+    /// add explicit params instead — never silently drop either write. Dropping
+    /// the terminal-result persistence regresses synchronous completion; dropping
+    /// the `inputRequests` persistence returns a handle that LOOKS pausable and is
+    /// not, which fails two waves downstream (`tasks/update` and the paired
+    /// example both assume the pause is already recorded).
+    ///
+    /// # Why the pause is recorded HERE and not by the handler
+    ///
+    /// `store.create()` mints the canonical id AFTER the tool handler has already
+    /// returned, discarding the tool's fabricated `taskId`. A handler therefore
+    /// CANNOT associate its input requests with the id the client will poll. This
+    /// is the one place both ids exist at once, so it is the only place the
+    /// association can be made — against the STORE-minted id, never the
+    /// fabricated one.
     ///
     /// Falls back to the legacy tool-fabricated envelope only when no store is
     /// configured (preserves prior behavior for router-only servers).
@@ -1262,9 +1314,16 @@ impl TaskDispatch<'_> {
         };
         let store_id = created.task_id.clone();
 
-        // Synchronous completion: persist the terminal result and complete.
-        let terminal_result = Self::extract_terminal_result(&value);
-        let final_task = if let Some(call_result) = terminal_result {
+        // The two post-create writes are MUTUALLY EXCLUSIVE, and the source SAYS
+        // so — one `if let … else if let …`, not two independent `if`s: a task is
+        // either already terminal or awaiting input, never both.
+        //
+        // - Synchronous completion: persist the terminal result and complete.
+        // - Handler-declared pause: record the server-authored input requests
+        //   against the STORE-minted id, so the handle this call returns is
+        //   ALREADY paused and pollable (a later `tasks/get` shows
+        //   `input_required` and inlines the same set the handler declared).
+        let final_task = if let Some(call_result) = Self::extract_terminal_result(&value) {
             if let Err(e) = store.set_result(&store_id, &owner_id, call_result).await {
                 return (
                     store_error_response(id, &e, era),
@@ -1273,6 +1332,19 @@ impl TaskDispatch<'_> {
             }
             match store
                 .update_status(&store_id, &owner_id, TaskStatus::Completed, None)
+                .await
+            {
+                Ok(task) => task,
+                Err(e) => {
+                    return (
+                        store_error_response(id, &e, era),
+                        DispatchEnvelopeClaim::NONE,
+                    )
+                },
+            }
+        } else if let Some(requests) = Self::extract_input_requests(&value) {
+            match store
+                .record_input_requests(&store_id, &owner_id, requests)
                 .await
             {
                 Ok(task) => task,
