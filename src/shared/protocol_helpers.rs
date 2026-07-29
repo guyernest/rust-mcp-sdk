@@ -17,7 +17,7 @@ static SIMD_PARSER: LazyLock<SimdJsonParser> = LazyLock::new(SimdJsonParser::new
 ///
 /// A raw request is either a public typed [`Request`] (the existing exhaustive
 /// enum path) or an internally-routed method that deliberately has NO public
-/// enum variant (e.g. v2 `server/discover`, carried by
+/// enum variant (v2 `server/discover` and v2 `tasks/update`, both carried by
 /// [`InternalClientRequest`](crate::types::protocol::InternalClientRequest)).
 ///
 /// This is the single method-string interception seam: it consults
@@ -27,6 +27,18 @@ static SIMD_PARSER: LazyLock<SimdJsonParser> = LazyLock::new(SimdJsonParser::new
 /// variant to `-32601` (v1 behavior, byte-identical); the era-gated server
 /// dispatch consumes the [`IngressRequest::Internal`] variant directly to reach
 /// the internal handler on the v2 path.
+///
+/// # Measured transport reach (Phase 114 plan 13)
+///
+/// The ONLY production consumer of [`IngressRequest::Internal`] is
+/// `classify_http_ingress` in `src/server/streamable_http_server.rs`. Every other
+/// transport reaches requests through the PUBLIC [`parse_request`], which maps
+/// `Internal` to [`Error::method_not_found`] — so an internally-routed method is
+/// served over streamable HTTP and answers `-32601` everywhere else, including
+/// stdio. That is the reach `server/discover` has had since Phase 112, and
+/// `tasks/update` inherits exactly it. The seam is transport-AGNOSTIC (it lives in
+/// `shared/`), so a later plan can widen the reach without a semver break; nothing
+/// in Phase 114 claims it already has.
 pub(crate) enum IngressRequest {
     /// A public typed request (the existing exhaustive-enum dispatch path).
     Public(Request),
@@ -37,12 +49,16 @@ pub(crate) enum IngressRequest {
 /// Parse a raw JSON-RPC request, intercepting internally-routed methods BEFORE
 /// the public-enum conversion (Phase 112, VERS-04).
 ///
-/// This is the crate-private routing seam. `server/discover` (and any future
-/// internally-routed method) is classified via
+/// This is the crate-private routing seam. `server/discover` and `tasks/update`
+/// (and any future internally-routed method) are classified via
 /// [`classify_internal_method`](crate::types::protocol::classify_internal_method)
 /// and returned as [`IngressRequest::Internal`]; every other method flows
 /// through the existing public-enum conversion as [`IngressRequest::Public`].
 /// Unknown methods still resolve to [`Error::method_not_found`].
+///
+/// The `RequestId` is read HERE and returned as the first tuple element. That is
+/// why no `InternalClientRequest` variant carries an id: the classifier below is
+/// never given one, and a routing site takes it from this tuple.
 pub(crate) fn parse_request_or_internal(
     request: JSONRPCRequest<Value>,
 ) -> Result<(RequestId, IngressRequest)> {
@@ -50,8 +66,9 @@ pub(crate) fn parse_request_or_internal(
     let method = request.method;
     let params = request.params.unwrap_or(Value::Null);
 
-    // Intercept internally-routed methods (e.g. `server/discover`) BEFORE the
-    // public-enum conversion — one routing decision, one place.
+    // Intercept internally-routed methods (`server/discover`, `tasks/update`)
+    // BEFORE the public-enum conversion — one routing decision, one place. The
+    // params are handed over RAW and are NOT deserialized here.
     if let Some(internal) = crate::types::protocol::classify_internal_method(&method, &params) {
         return Ok((id, IngressRequest::Internal(internal)));
     }
@@ -569,6 +586,70 @@ mod tests {
             Some(json!({})),
         );
         assert!(parse_request(req3)
+            .unwrap_err()
+            .to_string()
+            .contains("Method not found"));
+    }
+
+    /// `tasks/update` classifies as Internal, carries its params VERBATIM, and
+    /// still answers `-32601` on the public entrypoint (Phase 114, TASK-02).
+    ///
+    /// The verbatim half is the load-bearing one: it is what proves the classifier
+    /// does not deserialize, which is what keeps a malformed body from becoming a
+    /// parse error ahead of the `-32003` auth refusal. The params below are
+    /// deliberately NOT a well-formed `tasks/update` payload.
+    #[test]
+    fn test_parse_request_or_internal_routes_tasks_update_with_raw_params() {
+        let garbage = json!({ "taskId": 17, "wat": [1, 2, 3] });
+        let req = JSONRPCRequest::new(
+            RequestId::from(7i64),
+            "tasks/update".to_string(),
+            Some(garbage.clone()),
+        );
+        let (id, ingress) = parse_request_or_internal(req).unwrap();
+        assert_eq!(
+            id,
+            RequestId::from(7i64),
+            "the id comes off the OUTER tuple"
+        );
+        match ingress {
+            IngressRequest::Internal(
+                crate::types::protocol::InternalClientRequest::TasksUpdate { params },
+            ) => {
+                assert_eq!(
+                    params, garbage,
+                    "the classifier must pass params through RAW"
+                );
+            },
+            // Enumerated rather than `_`: this match is a compile-time tripwire
+            // over `InternalClientRequest` too, and a wildcard would silently
+            // absorb a future internally-routed method.
+            IngressRequest::Public(_)
+            | IngressRequest::Internal(
+                crate::types::protocol::InternalClientRequest::ServerDiscover(_),
+            ) => {
+                panic!("tasks/update must classify as InternalClientRequest::TasksUpdate")
+            },
+        }
+
+        // A frame with NO params at all still classifies — rejecting it here would
+        // be the classifier judging a body.
+        let bare = JSONRPCRequest::new(RequestId::from(8i64), "tasks/update".to_string(), None);
+        let (_id, bare_ingress) = parse_request_or_internal(bare).unwrap();
+        assert!(matches!(
+            bare_ingress,
+            IngressRequest::Internal(
+                crate::types::protocol::InternalClientRequest::TasksUpdate { .. }
+            )
+        ));
+
+        // The PUBLIC entrypoint keeps the v1-byte-identical `-32601`.
+        let public = JSONRPCRequest::new(
+            RequestId::from(9i64),
+            "tasks/update".to_string(),
+            Some(json!({})),
+        );
+        assert!(parse_request(public)
             .unwrap_err()
             .to_string()
             .contains("Method not found"));

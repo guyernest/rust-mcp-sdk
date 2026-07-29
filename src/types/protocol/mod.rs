@@ -647,6 +647,51 @@ pub struct ServerDiscoverResult {
 pub(crate) enum InternalClientRequest {
     /// The v2 `server/discover` request (VERS-04).
     ServerDiscover(ServerDiscoverRequest),
+    /// The v2 `tasks/update` request (Phase 114, TASK-02), carrying its **RAW**
+    /// `params` and NOTHING else.
+    ///
+    /// # Why it is here and NOT a [`ClientRequest`] variant
+    ///
+    /// MEASURED, not assumed: [`ClientRequest`] carries
+    /// `#[derive(Debug, Clone, Serialize, Deserialize)]` and
+    /// `#[serde(tag = "method", content = "params", rename_all = "camelCase")]`
+    /// with **no `#[non_exhaustive]`**. Adding a variant to a public exhaustive
+    /// enum is `enum_variant_added`, a semver-**MAJOR** break, and would fail this
+    /// milestone's hard 2.x-minor promise for a reason unrelated to the tasks
+    /// surface. `cargo semver-checks check-release` is what catches a regression;
+    /// `client_request_has_no_tasks_update_variant` in
+    /// `tests/v2_tasks_update_routing.rs` is the in-repo guard that fails with an
+    /// explanation rather than only failing CI.
+    ///
+    /// Adding `#[non_exhaustive]` to [`ClientRequest`] is NOT the escape hatch
+    /// either: that is itself a source break for every downstream exhaustive
+    /// `match`. This enum is `pub(crate)`, so it is invisible to
+    /// `cargo-semver-checks` / `cargo-public-api` and may grow freely.
+    ///
+    /// The `server/discover` precedent (the sibling variant above) established
+    /// exactly this route in Phase 112 and is followed here by name.
+    ///
+    /// # Why the params stay RAW, and why there is no id field
+    ///
+    /// RAW because [`classify_internal_method`] **must never reject a body**: a
+    /// malformed `params` has to become a structured `-32602` in the SERVED
+    /// branch — after the era gate, the backend gate, the client-declaration
+    /// `-32021` gate and the `-32003` auth refusal have all run (114-09's
+    /// documented order) — not a parse error before them. A classifier that
+    /// deserialized would hand an UNAUTHENTICATED caller a params error instead of
+    /// `-32003`, inverting that ordering guarantee.
+    ///
+    /// No request id: the classifier never receives one. `parse_request_or_internal`
+    /// reads `request.id` itself and returns it as the FIRST element of its
+    /// `(RequestId, IngressRequest)` tuple, so the routing site takes the id from
+    /// there — exactly as the `ServerDiscover` arm does. A field the classifier
+    /// cannot populate would either be a lie or force a signature change on the
+    /// shared classifier.
+    TasksUpdate {
+        /// The request's `params`, verbatim and undecoded (`Value::Null` when the
+        /// frame carried none).
+        params: serde_json::Value,
+    },
 }
 
 /// The wire method string of the v2 `server/discover` request (VERS-04).
@@ -656,23 +701,64 @@ pub(crate) enum InternalClientRequest {
 /// body) can never disagree on the spelling.
 pub(crate) const SERVER_DISCOVER_METHOD: &str = "server/discover";
 
+/// The wire method string of the v2 `tasks/update` request (Phase 114, TASK-02).
+///
+/// Single-sourced so the classifier, the streamable-HTTP ingress fast-reject and
+/// the routing-header table can never disagree on the spelling.
+///
+/// # This is a RE-EXPORT, deliberately — the plan asked for a new `const`
+///
+/// 114-13's action text said to declare a fresh
+/// `TASKS_UPDATE_METHOD: &str = "tasks/update"` beside [`SERVER_DISCOVER_METHOD`].
+/// That premise was false: the spelling ALREADY existed, at
+/// [`crate::types::mrtr::TASKS_UPDATE_METHOD`], as a row of
+/// `TASK_NAME_BEARING_METHODS` (Phase 114, DQ4). Minting a second constant with
+/// the same name and value is precisely the "two spellings that can disagree"
+/// failure the single-sourcing rustdoc on [`SERVER_DISCOVER_METHOD`] exists to
+/// prevent, so this re-exports the ONE definition instead.
+///
+/// MEASURED: after this change `src/` contains exactly ONE non-test
+/// `"tasks/update"` string literal — the definition at
+/// `src/types/mrtr.rs`. Every other occurrence is a doc comment or a
+/// `#[cfg(test)]` fixture.
+pub(crate) use crate::types::mrtr::TASKS_UPDATE_METHOD;
+
 /// Classify a raw JSON-RPC method string into a crate-private internal request,
 /// if it is one of the internally-routed (non-public-enum) methods.
 ///
 /// Returns `Some(InternalClientRequest::ServerDiscover(..))` for the exact
-/// method string [`SERVER_DISCOVER_METHOD`] and `None` for every other method
-/// (which then flows through the normal public-enum dispatch path). Plan 05 calls
-/// this from the server request path BEFORE the public-enum conversion. Consumed
-/// in production by [`parse_request_or_internal`](crate::shared::protocol_helpers)
+/// method string [`SERVER_DISCOVER_METHOD`], `Some(InternalClientRequest::TasksUpdate { .. })`
+/// for [`TASKS_UPDATE_METHOD`], and `None` for every other method (which then
+/// flows through the normal public-enum dispatch path). Plan 05 calls this from
+/// the server request path BEFORE the public-enum conversion. Consumed in
+/// production by [`parse_request_or_internal`](crate::shared::protocol_helpers)
 /// (Plan 05).
+///
+/// # It does not, and must not, deserialize `params`
+///
+/// `params` is passed through verbatim into the variant. See
+/// [`InternalClientRequest::TasksUpdate`] for the ordering guarantee that depends
+/// on it.
+///
+/// The parameter's ARITY and TYPES are unchanged by Phase 114 — the second
+/// parameter was already `&serde_json::Value`, spelled `_params` because the
+/// `server/discover` arm ignores it. It is renamed to `params` here because the
+/// `tasks/update` arm READS it, and an underscore prefix that claims "unused" on a
+/// binding that is used is both a `clippy::pedantic` violation
+/// (`used_underscore_binding`) and the stale-marker failure class 113-29 recorded.
+/// No parameter was added, removed or retyped — in particular the classifier still
+/// does NOT receive the request id.
 pub(crate) fn classify_internal_method(
     method: &str,
-    _params: &serde_json::Value,
+    params: &serde_json::Value,
 ) -> Option<InternalClientRequest> {
     match method {
         SERVER_DISCOVER_METHOD => Some(InternalClientRequest::ServerDiscover(
             ServerDiscoverRequest::new(),
         )),
+        TASKS_UPDATE_METHOD => Some(InternalClientRequest::TasksUpdate {
+            params: params.clone(),
+        }),
         _ => None,
     }
 }
@@ -868,6 +954,51 @@ mod tests {
         assert!(classify_internal_method("initialize", &serde_json::json!({})).is_none());
         // Near-miss method names are NOT matched.
         assert!(classify_internal_method("server/discovery", &serde_json::json!({})).is_none());
+    }
+
+    /// `tasks/update` classifies as its own internal variant and carries its
+    /// params VERBATIM (Phase 114 plan 13, TASK-02).
+    ///
+    /// The verbatim half is the property. A classifier that decoded would turn a
+    /// malformed body into a parse error BEFORE the `-32003` auth refusal that
+    /// `TaskDispatch::route_tasks_update` places ahead of the params — so the
+    /// inputs below are deliberately not a well-formed `tasks/update` payload, and
+    /// the assertion is that they arrive unchanged rather than that they are
+    /// accepted.
+    #[test]
+    fn classify_internal_method_routes_tasks_update_with_raw_params() {
+        let garbage = serde_json::json!({ "taskId": 1, "inputResponses": "not-an-object" });
+        match classify_internal_method("tasks/update", &garbage) {
+            Some(InternalClientRequest::TasksUpdate { params }) => {
+                assert_eq!(params, garbage, "params must pass through undecoded");
+            },
+            other => panic!("tasks/update must classify as TasksUpdate, got {other:?}"),
+        }
+
+        // `Value::Null` (a frame with no params at all) is still classified — the
+        // classifier judges the METHOD, never the body.
+        assert!(matches!(
+            classify_internal_method("tasks/update", &serde_json::Value::Null),
+            Some(InternalClientRequest::TasksUpdate { .. })
+        ));
+
+        // Near-miss method names are NOT matched, and the three surviving v2
+        // `tasks/*` methods keep their public-enum route.
+        assert!(classify_internal_method("tasks/updates", &serde_json::json!({})).is_none());
+        assert!(classify_internal_method("tasks/get", &serde_json::json!({})).is_none());
+        assert!(classify_internal_method("tasks/cancel", &serde_json::json!({})).is_none());
+    }
+
+    /// The one spelling: [`TASKS_UPDATE_METHOD`] is the re-exported
+    /// `types::mrtr` constant, not a second literal.
+    #[test]
+    fn the_tasks_update_method_spelling_is_single_sourced() {
+        assert_eq!(TASKS_UPDATE_METHOD, "tasks/update");
+        assert_eq!(
+            TASKS_UPDATE_METHOD,
+            crate::types::mrtr::TASKS_UPDATE_METHOD,
+            "these must be the SAME item, not two constants that happen to agree"
+        );
     }
 
     #[test]
