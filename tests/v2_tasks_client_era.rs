@@ -673,11 +673,15 @@ async fn v1_tasks_result_and_tasks_list_still_serve() {
     );
 }
 
-/// A v2 client whose `server/discover` projection carries NO tasks extension is
-/// refused by `assert_capability` before any tasks request is sent (114-06).
-#[tokio::test]
-async fn v2_undeclared_client_is_refused_before_the_wire() {
-    let transport = ScriptedTransport::new().on(
+/// A v2 client that HAS observed the server's capabilities, and found no tasks
+/// extension in them.
+///
+/// `server_discover` is what moves `assert_capability` from "defer to the
+/// server" to "enforce locally" on v2, so it has to actually run.
+async fn v2_client_with_no_tasks_extension(
+    transport: ScriptedTransport,
+) -> Client<ScriptedTransport> {
+    let transport = transport.on(
         "server/discover",
         json!({
             "protocolVersion": PROTOCOL_VERSION_2026_07_28,
@@ -685,18 +689,27 @@ async fn v2_undeclared_client_is_refused_before_the_wire() {
             "serverInfo": { "name": "scripted", "version": "1.0.0" },
         }),
     );
-    let mut client = ClientBuilder::new(transport.clone())
+    let mut client = ClientBuilder::new(transport)
         .with_protocol_version(ProtocolVersion(PROTOCOL_VERSION_2026_07_28.to_string()))
         .expect("2026-07-28 is selectable")
         .build();
     client
         .initialize(ClientCapabilities::default())
         .await
-        .expect("local");
+        .expect("a v2 initialize is local and infallible");
     client
         .server_discover()
         .await
         .expect("the scripted discover succeeds");
+    client
+}
+
+/// A v2 client whose `server/discover` projection carries NO tasks extension is
+/// refused by `assert_capability` before a `tasks/get` is sent (114-06).
+#[tokio::test]
+async fn v2_undeclared_tasks_get_is_refused_before_the_wire() {
+    let transport = ScriptedTransport::new();
+    let client = v2_client_with_no_tasks_extension(transport.clone()).await;
     let before = transport.frames();
 
     let error = client
@@ -713,15 +726,37 @@ async fn v2_undeclared_client_is_refused_before_the_wire() {
         error.to_string().contains("io.modelcontextprotocol/tasks"),
         "the v2 refusal names the extension key: {error}"
     );
+}
 
-    // The same gate covers `tasks/update`, whose payload would otherwise leak to
-    // a server that never advertised the extension (T-114-103).
+/// The SAME gate on `tasks/update`, whose payload would otherwise leak to a
+/// server that never advertised the extension (T-114-103).
+///
+/// Deliberately its OWN test rather than a second half of the one above: the two
+/// methods reach `assert_capability` through different call chains, and a
+/// control that removes the gate from one of them must fail exactly one test.
+/// Folded together, "the `tasks/get` gate is gone" and "the `tasks/update` gate
+/// is gone" produced the identical single-test failure set and could only be
+/// told apart by reading a panic MESSAGE.
+#[tokio::test]
+async fn v2_undeclared_tasks_update_is_refused_before_the_wire() {
+    let transport = ScriptedTransport::new();
+    let client = v2_client_with_no_tasks_extension(transport.clone()).await;
+    let before = transport.frames();
+
     let error = client
         .tasks_update("task-v2-0001", answers())
         .await
         .expect_err("an un-negotiated tasks/update must be refused");
-    assert_eq!(transport.frames(), before, "still zero additional frames");
-    assert!(error.to_string().contains("tasks/update"), "{error}");
+
+    assert_eq!(
+        transport.frames(),
+        before,
+        "the refusal must be LOCAL — zero additional frames"
+    );
+    assert!(
+        error.to_string().contains("tasks/update"),
+        "the refusal names the method it refused: {error}"
+    );
 }
 
 // ===========================================================================
