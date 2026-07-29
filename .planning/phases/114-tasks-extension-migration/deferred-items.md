@@ -42,6 +42,26 @@ that change.
 or a standalone hardening plan. The narrow fix is to stop `.expect`-ing on
 platform-verifier root loading in a test-reachable path.
 
+**Addendum, 114-12 (2026-07-28) — two REPRODUCIBLE triggers, not just "intermittent".**
+114-12 hit this hard enough to be worth pinning down, because it presents as 14 code
+regressions in files the plan never touched:
+
+1. **A SANDBOXED shell reproduces it 100% of the time.** Every run of
+   `cargo nextest run --features full -E 'binary_id(pmcp) and test(/collected_body_cap/)'`
+   under the default sandboxed Bash failed **8/8** with the `ioErr -36` signature; the
+   identical command with the sandbox disabled passed **8/8**. The keychain read is simply
+   denied there. `df -h /` showed 39 GiB free, so again NOT the disk-exhaustion mode.
+2. **Unsandboxed, it is PARALLELISM-sensitive.** The default `-j <ncpu>` produced 14 then 4
+   failures across two broad runs; `-j 4` produced **1845/1845 green** and `-j 2` re-ran the
+   4 stragglers green. The affected tests are always the same set in
+   `shared::streamable_http::tests`.
+
+**Practical guidance for later plans:** run test suites with the sandbox disabled and, for
+broad selectors, `-j 4` (or `NEXTEST_TEST_THREADS=4` for `make quality-gate`, which is how
+114-12's gate ran to exit 0). A failure whose stderr contains `no native root CA
+certificates found` is THIS item, not the plan under test — check for that string before
+bisecting anything.
+
 ---
 
 ## D-114-B — 1 ms-TTL setup races in `InMemoryTaskStore` expiry tests
@@ -352,6 +372,15 @@ on the **length or exact contents of `tools/list`** now sees two tools, not one.
 today (verified: the eight tasks/MRTR binaries are green at 98/98), but a `tools/list`
 cardinality assertion is a natural thing for 114-15's cross-caller matrix to write.
 
+**Addendum, 114-12 (2026-07-28): the count is now THREE, not two.** `pausing_task_tool`
+(`PAUSING_TOOL_NAME = "elicit_task"`) was added, because it is the first CLIENT-REACHABLE way
+to produce an `input_required` task — before it, a suite had to reach past the wire and poke
+`record_input_requests` on the store. 114-13 / 114-14 need a paused task the same way, which is
+why it lives in the shared harness rather than in one suite. Re-verified after the addition:
+`binary_id(pmcp) or <the eight tasks/MRTR binaries> or binary_id(pmcp::v2_tasks_create)` ran
+**1858 passed / 4 failed**, and all four failures were D-114-A's keychain signature (green on
+re-run at `-j 2`). Still no suite asserts `tools/list` cardinality.
+
 ## D-114-J — a v1 caller against the shared v2 harness must complete a real handshake
 
 **Found during:** 114-11 Task 3 (recorded 2026-07-28)
@@ -368,3 +397,34 @@ tasks bug and is not one.
 `initialize`, read `Resp::mcp_session_id`, then carry
 `pmcp::shared::http_constants::MCP_SESSION_ID` on every later v1 request. Any later plan writing a
 v1 row against the shared harness should reuse that shape rather than rediscovering the `-32600`.
+
+---
+
+## D-114-K — a declaring v2 client now gets a task handle from ANY task-capable tool
+
+**Found during:** 114-12 (recorded 2026-07-28)
+**Status:** open — DELIBERATE, re-recorded from the plan's own scope decision, not a defect
+**Severity:** medium (a UX / client-compatibility question, not a correctness one)
+**Suggested owner:** a post-114 client-experience plan, or the v2.6 AI-Package milestone
+
+114-12 made the v2 create trigger "the client declared `io.modelcontextprotocol/tasks` on this
+request". The trigger is per-REQUEST and per-CLIENT, but it is **not** per-TOOL: once a client
+declares the extension, EVERY tool on that server whose `TaskSupport` is `Required`/`Optional`
+and which returns a task-shaped value will hand that client a `CreateTaskResult` instead of a
+terminal result. That is what the extension's own text requires (the server is the sole decider,
+and the declaration is its `MUST NOT` precondition), and it is what makes TASK-04 demonstrable at
+all — DQ1, user-approved 2026-07-27.
+
+What remains DEFERRED is the surrounding design the original CONTEXT.md deferral was plausibly
+protecting:
+
+- a client that declares the extension once, at the transport layer, has no way to say "not for
+  THIS call" — there is no v2 equivalent of v1's per-request `task` field;
+- a v2 client library therefore has to be prepared to handle a task handle back from any
+  task-capable tool, and the ergonomics of that (auto-poll? surface the handle? opt out?) are
+  unspecified here;
+- there is no server-side per-tool or per-client policy knob for "advertise task support but
+  only materialize a task when X".
+
+None of this blocks the phase: the gate is conformant and the behaviour is the spec's. It is
+recorded so a later reader does not mistake the absence of an opt-out for an oversight.

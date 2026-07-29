@@ -2485,7 +2485,7 @@ Plans:
 
 **Wave 7**
 
-- [ ] 114-12-PLAN.md — Server-directed v2 create trigger: the client's per-request declaration replaces v1's `task` field (DQ1), enforced in ONE expression reached from both dispatch sites; the create→pause loop records handler-declared `inputRequests` against the STORE-minted id; `ResponseDisposition::Task` promoted to live code here (first production constructor); end-to-end over a real `tools/call`
+- [x] 114-12-PLAN.md — Server-directed v2 create trigger: the client's per-request declaration replaces v1's `task` field (DQ1), enforced in ONE expression reached from both dispatch sites; the create→pause loop records handler-declared `inputRequests` against the STORE-minted id; `ResponseDisposition::Task` promoted to live code here (first production constructor); end-to-end over a real `tools/call`
 
 **Wave 8**
 
@@ -2584,7 +2584,7 @@ Plans:
 | 112. Version Plumbing Spine | 10/10 | Complete    | 2026-07-23 |
 | 113. Stateless HTTP + MRTR | 32/32 | Complete   | 2026-07-27 |
 | 113.1 Merge Unblock | 6/6 | Complete | 2026-07-27 |
-| 114. Tasks Extension Migration | 12/20 | In Progress|  |
+| 114. Tasks Extension Migration | 13/20 | In Progress|  |
 | 115. JSON Schema 2020-12 + Caching Hints | 0/TBD | Not started | - |
 | 116. Auth Hardening SEPs | 0/TBD | Not started | - |
 | 117. Agents, Tester & v1 Severability | 0/TBD | Not started | - |

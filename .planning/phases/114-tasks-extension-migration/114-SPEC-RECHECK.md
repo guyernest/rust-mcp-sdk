@@ -565,6 +565,28 @@ Row 39 is DQ1, **explicitly approved by the user pre-execution on 2026-07-27**, 
 CONTEXT.md's deferral for the create-trigger question. Read literally, that deferral would have
 made v2 task creation unreachable and TASK-04 undemonstrable end to end.
 
+**Row 39 LANDED in 114-12 (2026-07-28).** What is implemented, stated so a re-runner can tell
+implementation from provisional wire value:
+
+* The trigger lives in **one** era-aware type, `task_dispatch::CreateTrigger`, whose v2 arm reads
+  the client's declaration through the **existing** `TaskDispatch::declares_tasks_extension` — the
+  same predicate `route_tasks_endpoint`'s `-32021` case-3 refusal uses — off the already-resolved
+  `ProtocolContext`. There is no second `params._meta` read anywhere on the create path.
+* The complete gate is **one expression**, `TaskDispatch::create_gate`, reached from BOTH
+  dispatchers. `core.rs`'s divergent inline copy (`req.task.is_some() && self.task_store.is_some()
+  && …` plus its own task-shape check) is DELETED.
+* **Each era ignores the other's trigger**, asserted in both directions: a v2 request carrying the
+  v1 `task` field but no declaration does not create; a v1 request carrying a declaration but no
+  `task` field does not create.
+* Proven over a REAL socket by `tests/v2_tasks_create.rs` (7 tests), including a `tasks/get` on the
+  returned handle so it is demonstrably usable rather than merely well-shaped.
+
+**What row 39 does NOT settle** is logged as **D-114-K**: the trigger is per-REQUEST and
+per-CLIENT, never per-TOOL, so a declaring client receives a handle from *every* task-capable tool
+on the server and has no per-call opt-out. That is the spec's own shape (the server is the sole
+decider), and the surrounding client-compatibility/UX design remains deferred exactly as the
+original CONTEXT.md deferral intended.
+
 Rows 37/38 are the reason TASK-03 and TASK-05 are *"the same improvement viewed from two
 angles"*: removing enumeration and binding the owner are one security posture.
 
