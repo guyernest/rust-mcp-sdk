@@ -364,6 +364,29 @@ whose disposition is not `InputRequired`. Left unfixed, a v2 `tasks/get` on an `
 task would emit a schema-invalid response, and an integration test asserting only "the request
 succeeded" would pass. Owned by 114-10 (DQ2).
 
+**Row 23 — the pmcp-side defect is RESOLVED by plan 114-10 (2026-07-28).** The registry's
+ownership test is no longer derived from the disposition: `own_reserved_result_fields` takes an
+explicit `ReservedFieldOwner{None, Mrtr, TasksDispatch}`, the grant is per-KEY per-OWNER
+(`ReservedFieldOwner::may_emit`), and `requestState` stays MRTR-only. The deletion was
+**reproduced at runtime first** — `tests/v2_reserved_fields_tasks.rs` failed against the pre-fix
+tree with the required key absent from the emitted bytes and the `tracing::warn!` (target
+`mcp.v2`, `field = "inputRequests"`) recorded verbatim in `114-10-SUMMARY.md` — and that
+reproduction is now the regression test, one of six, each proven load-bearing by its own
+negative control.
+
+**This does NOT release the row from the D-18 hold.** What is resolved is pmcp's *behaviour*: a
+legitimate second minter can now publish the key. The *wire value* — that `inputRequests` is
+required on `InputRequiredTask` and sits at the TOP LEVEL of the `tasks/get` result — is still
+read from the **draft** vendored artifact (`$defs.GetTaskResult` is a flat `allOf`, re-verified
+against `schema/vendored/ext-tasks/schema.json` by 114-10 Task 1 rather than quoted from
+research) and must be re-checked when the gate runs. **114-11 still owns the other half of this
+row**: emitting the flat `InputRequiredTask` shape from `task_dispatch`. 114-10 supplied only the
+egress permission; it dispatches nothing.
+
+If the published schema moves `inputRequests` under a nested wrapper, the fix here is still
+correct (the owner grant is key-based, not shape-based) but 114-11's shape changes and the
+`RESERVED_INPUT_REQUESTS` constant would need re-siting.
+
 ### `tasks/update`
 
 | # | Value | Recorded as | Lives in (once implemented) | Owning plan | Source |

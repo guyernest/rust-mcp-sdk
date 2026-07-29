@@ -2477,7 +2477,7 @@ Plans:
 
 **Wave 5**
 
-- [ ] 114-10-PLAN.md — Reserved-field registry fix: explicit ownership replaces the disposition-derived flag so a v2 `tasks/get` keeps its required top-level `inputRequests` (DQ2, highest-severity finding). The `ResponseDisposition::Task` dead-code allow is deliberately NOT removed here — see 114-12
+- [x] 114-10-PLAN.md — Reserved-field registry fix: explicit ownership replaces the disposition-derived flag so a v2 `tasks/get` keeps its required top-level `inputRequests` (DQ2, highest-severity finding). The `ResponseDisposition::Task` dead-code allow is deliberately NOT removed here — see 114-12
 
 **Wave 6**
 
@@ -2584,7 +2584,7 @@ Plans:
 | 112. Version Plumbing Spine | 10/10 | Complete    | 2026-07-23 |
 | 113. Stateless HTTP + MRTR | 32/32 | Complete   | 2026-07-27 |
 | 113.1 Merge Unblock | 6/6 | Complete | 2026-07-27 |
-| 114. Tasks Extension Migration | 10/20 | In Progress|  |
+| 114. Tasks Extension Migration | 11/20 | In Progress|  |
 | 115. JSON Schema 2020-12 + Caching Hints | 0/TBD | Not started | - |
 | 116. Auth Hardening SEPs | 0/TBD | Not started | - |
 | 117. Agents, Tester & v1 Severability | 0/TBD | Not started | - |

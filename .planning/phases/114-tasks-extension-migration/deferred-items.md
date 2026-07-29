@@ -252,3 +252,64 @@ review across every existing suite that may depend on the current code.
 **Suggested owner:** a conformance/hardening plan, or whichever plan next touches
 `ClientRequest`'s deserialization. The narrow fix is to match the method name FIRST and
 only then attempt the params, so a known method with bad params yields `-32602`.
+
+---
+
+## D-114-G — `pmcp::testing` is now a wire-behaviour seam, not only a wire-SHAPE seam
+
+**Found during:** 114-10 Task 1 (recorded 2026-07-28)
+**Status:** open — needs an owner
+**Severity:** low (documentation / module-charter drift, no wire impact)
+
+`src/testing/mod.rs` opens with a charter: it exists so a `tasks/*` wire SHAPE is proven
+against the real client deserialization types instead of an author-written fixture
+(the Phase 101 tools-as-tasks incident).
+
+114-10 added something structurally different to that module: `v2_result_envelope` /
+`v1_result_envelope` do not check a shape against a type — they RUN the production
+`inject_v2_result_envelope` and return the response bytes plus the `tracing` warnings it
+emitted, so a test can distinguish "the key was never there" from "the registry removed
+it". That is a behaviour-observation seam. It also carries a small hand-written
+`tracing::Subscriber` (no `tracing-subscriber` dependency, so no feature gate beyond the
+one `server::core` already has).
+
+The seam is correct and its own rustdoc explains itself, but the MODULE-level doc comment
+still describes only the shape-conformance charter, so a reader arriving at the top of the
+file gets a description that no longer covers everything below it. Not fixed here because
+rewriting the module charter of a file six Phase-113 plans build on is a wider edit than a
+row-23 fix should carry, and the charter sentence is load-bearing for those plans.
+
+**Suggested owner:** whichever plan next adds to `pmcp::testing`, or the phase's closing
+documentation plan.
+
+---
+
+## D-114-H — `ReservedFieldOwner::TasksDispatch` has no PRODUCTION constructor yet
+
+**Found during:** 114-10 Task 2 (recorded 2026-07-28)
+**Status:** open — owned by **114-12**, tracked here so it cannot be forgotten
+**Severity:** low (by design; the tripwire is already armed)
+
+`ReservedFieldOwner::TasksDispatch` exists and is honoured by the registry, but its ONLY
+constructor today is the `pmcp::testing` reserved-field seam. Nothing in `src/` dispatches
+a v2 `tasks/get` that names it — 114-10 supplies the egress PERMISSION and dispatches
+nothing, deliberately.
+
+Measured, not assumed (all with `RUSTFLAGS="-D warnings" cargo clippy --lib`):
+
+| feature selection | without the `allow` | with it |
+|---|---|---|
+| `--features full` | exit **0** (the testing seam constructs it) | exit 0 |
+| `--no-default-features --features streamable-http` | exit **101**, exactly one error: `variant TasksDispatch is never constructed` | exit 0 |
+| `--no-default-features` | exit 101, includes `variants Mrtr and TasksDispatch are never constructed` | (pre-existing D-114-E failures) |
+
+The `allow` is therefore scoped `not(feature = "testing")` and NOT `not(test)`: `make lint`
+runs `--lib --tests` with `full`, and the `--lib` half is a non-test build with `testing`
+ON, so a `not(test)` scope would deactivate the lint for exactly that half. Under the
+feature scope, BOTH halves of the gate lint the variant — deleting the seam before 114-12
+wires production fails the gate rather than passing quietly.
+
+**Closure condition:** 114-12 names `ReservedFieldOwner::TasksDispatch` at the v2
+`tasks/get` egress; the `#[cfg_attr(not(feature = "testing"), allow(dead_code))]` can then
+be deleted and the `--no-default-features --features streamable-http` row above becomes
+exit 0 without it.
