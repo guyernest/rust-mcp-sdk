@@ -322,6 +322,17 @@ Row 8 is the one to read twice: `ttlMs` is **required** (it appears in all five 
 `required` arrays) *and* nullable. "Optional because it can be null" is the wrong reading and
 would produce a schema-invalid response.
 
+**Rows 4-10 — IMPLEMENTED by plan 114-11 (2026-07-28).** `pmcp::types::tasks::TaskV2` carries all
+seven wire names, projected from the v1 `Task` by `TaskV2::from_v1`, which is the ONLY site where
+`ttl` -> `ttlMs` and `pollInterval` -> `pollIntervalMs` happen. Row 8's asymmetry is expressed in
+the type and pinned by two separate unit tests: `ttl_ms` is `Option<u64>` **without**
+`skip_serializing_if` (a `None` emits `"ttlMs":null`, present) and `poll_interval_ms` is
+`Option<u64>` **with** it (a `None` omits the key). The `required` sets are read from the vendored
+`schema.json` at compile time in BOTH the unit tests (`src/types/tasks.rs`) and the live suite
+(`tests/v2_tasks_shapes.rs`), so a re-vendoring at the gate moves the assertions rather than
+stranding them. **The wire VALUES remain draft-sourced and still under the D-18 hold** — what is
+resolved is that pmcp emits exactly what the vendored artifact says today.
+
 ### Status strings
 
 | # | Value | Recorded as | Lives in (once implemented) | Owning plan | Source |
@@ -334,6 +345,17 @@ would produce a schema-invalid response.
 
 Rows 12 and 15 are the two a re-verifier must read character by character: `input_required` (not
 `inputRequired`) and `cancelled` (not `canceled`).
+
+**Rows 11-15 — LOCKED by plan 114-11 (2026-07-28), by a tripwire rather than a conversion table.**
+Research measured that the v1 five-state `TaskStatus` is already NAME-IDENTICAL to the v2 union, so
+TASK-04's "deterministic mapping" is satisfied by pinning the identity, and building a mapping table
+where none is needed would only create a second place for it to drift.
+`task_status_wire_strings_match_the_extension_schema` (`tests/v2_tasks_shapes.rs`) compares the two
+**as SETS, for EQUALITY** — never a subset, which would pass if a sixth state were added on either
+side — and additionally asserts rows 12 and 15 by name. The Rust side's own exhaustiveness is a
+COMPILE-TIME lock: `TaskDetailV2::status()` and `Task::poll_decision()` are wildcard-free matches
+over `TaskStatus`, so a sixth variant fails to build before it can reach any assertion. Negative
+control NC-3 (renaming `cancelled` to `canceled`) fails this test.
 
 ### The four v2 result shapes
 
@@ -348,6 +370,32 @@ Rows 12 and 15 are the two a re-verifier must read character by character: `inpu
 Rows 16/18 are the v1→v2 reshape: v1 nested the task under a `task` key; v2 **flattens** it into
 the result. Rows 19/20 are the ones most easily got wrong by analogy — they carry no task body
 at all.
+
+**Rows 16, 17, 18, 20 — IMPLEMENTED by plan 114-11 (2026-07-28). Row 19 is NOT, and deliberately.**
+
+* Row 16/17 (`CreateTaskResult`, `resultType: "task"`): `v2_create_result_value` emits the flat
+  `Result & Task` with the `_meta.relatedTask` envelope retained (its key is a KNOWN property of
+  `CreateTaskResult._meta` in the vendored schema, so it survives the loss of the `task` wrapper).
+  The discriminator is **not written into the object**: `own_reserved_result_fields` OWNS
+  `resultType` and overwrites whatever a producer put there, so it is supplied by
+  `DispatchEnvelopeClaim::TASK_CREATED` threaded to the envelope. Two tests pin the boundary from
+  opposite sides — `tasks_get_never_carries_result_type_task` (absent on `tasks/get` in all three of
+  `working`/`input_required`/`completed`, and on `tasks/cancel` and `tasks/update`) and
+  `only_the_tool_call_create_path_mints_result_type_task` (present on exactly ONE response in the
+  suite). Both are needed: the first alone is satisfied by a server that never emits it at all.
+* Row 18 (`GetTaskResult` flat, `resultType: "complete"`): `v2_detailed_task_value` emits the
+  `DetailedTask` variant flat. Note the pairing that is easy to get wrong — the disposition is
+  `complete` **while** the body may carry a top-level `inputRequests`; the REQUEST completed, it is
+  the TASK that is waiting.
+* Row 20 (`CancelTaskResult` empty ack): `route_tasks_cancel` returns `{}` on v2, and the test
+  asserts the emitted key set is a SUBSET of the envelope's own keys rather than merely that `task`
+  is absent. **No wait and no poll were added** to make the ack look synchronous; the cooperative,
+  eventually-consistent semantics are written at the function.
+* Row 19 (`UpdateTaskResult`): `tasks/update` is not a routed method yet — plans 114-13/114-14 own
+  it, and a v2 `tasks/update` answers `-32601` today. 114-11 planted the forward tripwire only
+  (`tasks_get_never_carries_result_type_task` includes `tasks/update` in its raw-byte sweep, which
+  holds vacuously for an error response and becomes live the moment the method exists). **Whoever
+  lands the method still owns emitting the empty ack.**
 
 ### Per-variant required fields (the `DetailedTask` union)
 
@@ -387,6 +435,27 @@ If the published schema moves `inputRequests` under a nested wrapper, the fix he
 correct (the owner grant is key-based, not shape-based) but 114-11's shape changes and the
 `RESERVED_INPUT_REQUESTS` constant would need re-siting.
 
+**Row 23 — 114-11's half is now LANDED (2026-07-28), so the row is closed end to end on the pmcp
+side.** `TaskDispatch::v2_task_detail` reads the recorded set through 114-04's
+`TaskStore::task_input_snapshot` (never through the private `TaskRecord`), `v2_detailed_task_value`
+inlines it as a TOP-LEVEL key, and the route returns `DispatchEnvelopeClaim::TASKS_INPUT_REQUIRED`
+alongside the response so the egress grants it. The claim is threaded from the write site through
+`handle_request_internal` / `handle_client_request` to `inject_v2_result_envelope` — **never
+re-derived from the disposition or the method string**, both rejected under DQ2.
+`v2_tasks_get_inlines_input_requests_on_input_required` asserts on the RAW RESPONSE BYTES over a
+real socket, and negative control NC-1 (narrowing `ReservedFieldOwner::TasksDispatch`'s grant back
+to nothing) fails **exactly that test in this suite** and nothing else, plus two of 114-10's own.
+
+**Rows 21/22 (`result` / `error`) landed with it**, read through `TaskStore::get_result` and
+114-04's `TaskStore::get_error`. **Row 24** is expressed structurally: `TaskDetailV2::Working` and
+`::Cancelled` are field-less variants, so they cannot carry an extra key. When a backend can supply
+NONE of these, the projection degrades to the bare flat `Task` rather than emitting an empty
+required field — an `inputRequests: {}` on an `input_required` task is a **schema-valid lie**, and a
+client that trusted it would wait forever for requests it was told there were none of.
+
+**Still under the D-18 hold.** The wire VALUES on rows 21-24 remain read from the draft vendored
+artifact.
+
 ### `tasks/update`
 
 | # | Value | Recorded as | Lives in (once implemented) | Owning plan | Source |
@@ -414,6 +483,27 @@ reason to "restore" the older name.
 Row 29 carries an **anti-oracle constraint** that survives into the re-check: task-not-found,
 owner-mismatch and pending must remain **indistinguishable**. The `-32602` message must not vary
 between them. Making the code more specific must not make the message an existence oracle.
+
+**Row 29 — IMPLEMENTED by plan 114-11 (2026-07-28), with ONE scope correction worth reading.** The
+mapping lives in the single era-aware function `task_dispatch::store_error_response`: on v1 EVERY
+`TaskStoreError` stays `-32603` carrying its own message (byte-frozen); on v2 `NotFound` **and
+`Expired`** become `-32602` with the single constant `V2_TASK_NOT_FOUND_MESSAGE` (`"task not
+found"`), while `InvalidTransition` and `Internal` stay `-32603`.
+
+**`Expired` is folded onto the not-found answer even though the plan text named only `NotFound`.**
+The anti-oracle constraint on this row enumerates absent / wrong-owner / **expired** together, and
+`TaskStoreError`'s own `From<TaskStoreError> for Error` already maps `Expired` onto `not_found`
+"to avoid leaking existence of expired tasks". Leaving `Expired` on `-32603` with its own message
+would have told a caller "that id existed until recently" — the disclosure the owner-prefixed key
+design refuses — and would have made the SHARPER `-32602` code the thing that revealed it. Treat
+this as a correction to the plan text, not a deviation from the requirement.
+
+The two constraints are asserted separately and each has its own negative control: NC-7 (change the
+CODE, keep the message) fails only the code assertions; NC-6 (keep the code, echo the id in the
+message) fails only the message ones — including the absent-vs-wrong-owner EQUALITY comparison over
+a real socket. `V1_TASK_PENDING` (`-32002`) is untouched: its emission-site count in
+`task_dispatch.rs` is unchanged at 4, and the one new textual occurrence is a rustdoc stating that
+this row is **not** that frozen question.
 
 ### ⚠ Known upstream disagreement — `-32003` vs `-32021`
 

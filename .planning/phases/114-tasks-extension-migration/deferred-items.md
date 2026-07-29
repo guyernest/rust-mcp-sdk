@@ -313,3 +313,58 @@ wires production fails the gate rather than passing quietly.
 `tasks/get` egress; the `#[cfg_attr(not(feature = "testing"), allow(dead_code))]` can then
 be deleted and the `--no-default-features --features streamable-http` row above becomes
 exit 0 without it.
+
+**CLOSED by 114-11 (2026-07-28) — one plan earlier than expected.**
+`TaskDispatch::route_tasks_get` returns `DispatchEnvelopeClaim::TASKS_INPUT_REQUIRED` for an
+`input_required` task, and that constant constructs `ReservedFieldOwner::TasksDispatch`.
+`server::task_dispatch` is gated only on `not(target_arch = "wasm32")` and on **no feature**,
+so the production constructor is present on every native build. Re-measured with
+`RUSTFLAGS="-D warnings" cargo clippy --lib` before removing the `allow`: `--features full`
+exit **0**; `--no-default-features --features streamable-http` reports **no** error naming
+`TasksDispatch`; `--no-default-features` still reports its **55** pre-existing D-114-E
+dead-code errors and **none** of them names `TasksDispatch` or the `Task` disposition variant.
+Both `#[cfg_attr(…, allow(dead_code))]` guards — on `ReservedFieldOwner::TasksDispatch` and on
+`ResponseDisposition::Task` — are therefore **deleted**, and the comments in their place record
+the measurement so a future reader does not re-add them defensively.
+
+**Note for 114-12:** the "supply the owner from the tasks route" item STATE.md assigned to you is
+DONE. What remains yours is the v2 create TRIGGER. The claim plumbing you will find is:
+`route_tasks_endpoint` and `maybe_build_task_created` / `build_task_created_response` return
+`(JSONRPCResponse, DispatchEnvelopeClaim)`; `handle_request_internal` (core) and
+`handle_client_request` / `process_client_request` / `handle_call_tool` (mod) carry a
+`&mut DispatchEnvelopeClaim` out-param; both dispatch sites fold it with the MRTR egress's claim
+through `DispatchEnvelopeClaim::or_egress`. Do NOT add a second path.
+
+## D-114-I — `tests/common/v2.rs`'s tasks fixture now registers TWO tools
+
+**Found during:** 114-11 Task 3 (recorded 2026-07-28)
+**Status:** open — informational, no owner needed unless a later suite trips on it
+**Severity:** low
+
+`spawn_tasks_server` (and its new `spawn_tasks_server_with_store` primitive) registers
+`long_task_tool` under `TASKS_TOOL_NAME` **and** `completing_error_task_tool` under
+`COMPLETING_TOOL_NAME`. The second is required by `terminal_status_discipline`, which must
+exercise the REAL create path for a synchronously-completing `isError: true` outcome rather
+than poking the store into the answer it wants to assert.
+
+Consequence a later plan should know about: any test against this shared fixture that asserts
+on the **length or exact contents of `tools/list`** now sees two tools, not one. No suite does
+today (verified: the eight tasks/MRTR binaries are green at 98/98), but a `tools/list`
+cardinality assertion is a natural thing for 114-15's cross-caller matrix to write.
+
+## D-114-J — a v1 caller against the shared v2 harness must complete a real handshake
+
+**Found during:** 114-11 Task 3 (recorded 2026-07-28)
+**Status:** open — informational
+**Severity:** low
+
+`tests/v1_tasks_golden.rs` spawns with `spawn_stateless_config`, so its v1 requests need no
+session. The shared harness's `spawn_tasks_server` uses `StreamableHttpServerConfig::default()`,
+which is STATEFUL on purpose (RESEARCH Pitfall 1). A v1 request against it without a session id
+answers **`-32600 "Session ID required for non-initialization requests"`** — which looks like a
+tasks bug and is not one.
+
+`tests/v2_tasks_shapes.rs::v1_session_headers` is the fix and the pattern: POST a real v1
+`initialize`, read `Resp::mcp_session_id`, then carry
+`pmcp::shared::http_constants::MCP_SESSION_ID` on every later v1 request. Any later plan writing a
+v1 row against the shared harness should reuse that shape rather than rediscovering the `-32600`.
