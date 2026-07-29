@@ -165,6 +165,45 @@ pub fn long_task_tool() -> impl ToolHandler {
     )
 }
 
+/// The name of the SYNCHRONOUSLY-COMPLETING task-capable tool
+/// [`spawn_tasks_server`] registers alongside [`long_task_tool`].
+pub const COMPLETING_TOOL_NAME: &str = "reporting_task";
+
+/// A task-capable tool that completes SYNCHRONOUSLY with `isError: true`.
+///
+/// The tool RAN. It produced an outcome. That outcome happens to report a
+/// failure to the caller — which under the extension's terminal-status rule is
+/// still `completed`, with the error detail inside `result`, NOT `failed`
+/// (`failed` is reserved for a JSON-RPC protocol error during execution). The
+/// two look identical from a "the tool failed" mindset and are opposite on the
+/// wire, so the discipline needs a fixture that exercises the real create path
+/// (`extract_terminal_result` -> `set_result` -> `update_status(Completed)`)
+/// rather than a store poke that presupposes the answer.
+pub fn completing_error_task_tool() -> impl ToolHandler {
+    pmcp::server::typed_tool::TypedTool::new_with_schema(
+        COMPLETING_TOOL_NAME,
+        json!({ "type": "object" }),
+        |_args: Value, _extra| {
+            Box::pin(async {
+                Ok(json!({
+                    "taskId": "tool-fabricated",
+                    "status": "working",
+                    "createdAt": "2026-07-28T00:00:00Z",
+                    "lastUpdatedAt": "2026-07-28T00:00:00Z",
+                    "result": {
+                        "content": [{ "type": "text", "text": "the upstream returned 404" }],
+                        "isError": true
+                    }
+                }))
+            })
+        },
+    )
+    .with_description("a task-capable tool that completes with an isError result")
+    .with_execution(
+        pmcp::types::ToolExecution::new().with_task_support(pmcp::types::TaskSupport::Required),
+    )
+}
+
 /// The reverse-DNS extension id the v2-opted-in server advertises in its
 /// `capabilities.extensions` map, so a `server/discover` projection has a
 /// non-empty `extensions` map to assert over (VERS-04).
@@ -371,8 +410,31 @@ pub enum AuthPosture {
 /// Returns the same `(addr, handle)` shape as [`spawn_default_config`], so
 /// [`post`], [`post_raw`], [`Resp`] and [`teardown`] all work unchanged.
 pub async fn spawn_tasks_server(posture: AuthPosture) -> (SocketAddr, JoinHandle<()>) {
-    let store = Arc::new(pmcp::server::task_store::InMemoryTaskStore::new())
-        as Arc<dyn pmcp::server::task_store::TaskStore>;
+    let (addr, handle, _store) = spawn_tasks_server_with_store(posture).await;
+    (addr, handle)
+}
+
+/// [`spawn_tasks_server`] that ALSO hands the caller the store it installed.
+///
+/// The SAME fixture, one primitive lower — `spawn_tasks_server` is now a
+/// wrapper, so a tool or capability added here reaches every existing tasks
+/// suite unchanged.
+///
+/// The store handle exists because several task STATUSES are not reachable from
+/// outside the process at all. A `tools/call` can produce a `working` task and a
+/// `tasks/cancel` can produce a `cancelled` one, but `input_required` needs a
+/// server-authored `record_input_requests` and `failed` needs a `set_error` —
+/// both server-side writes with no client-facing trigger in this phase. A shape
+/// suite that could not construct those two statuses could not assert the two
+/// shapes the extension defines for them.
+pub async fn spawn_tasks_server_with_store(
+    posture: AuthPosture,
+) -> (
+    SocketAddr,
+    JoinHandle<()>,
+    Arc<pmcp::server::task_store::InMemoryTaskStore>,
+) {
+    let store = Arc::new(pmcp::server::task_store::InMemoryTaskStore::new());
     let mut builder = Server::builder()
         .name("v2-tasks-harness")
         .version("1.0.0")
@@ -382,14 +444,16 @@ pub async fn spawn_tasks_server(posture: AuthPosture) -> (SocketAddr, JoinHandle
             ProtocolVersion(V2.to_string()),
         ])
         .tool(TASKS_TOOL_NAME, long_task_tool())
-        .task_store(store);
+        .tool(COMPLETING_TOOL_NAME, completing_error_task_tool())
+        .task_store(store.clone() as Arc<dyn pmcp::server::task_store::TaskStore>);
     builder = match posture {
         AuthPosture::None => builder,
         AuthPosture::Optional => builder.auth_provider(OptionalBearer),
         AuthPosture::Required => builder.auth_provider(BearerSubjects),
     };
     let server = builder.build().expect("tasks server builds");
-    spawn_default_config(server).await
+    let (addr, handle) = spawn_default_config(server).await;
+    (addr, handle, store)
 }
 
 /// Upper bound on any single stream read or poll in the subscription suites.
