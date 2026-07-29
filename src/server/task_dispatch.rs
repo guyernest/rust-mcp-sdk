@@ -33,13 +33,16 @@
 
 use crate::error::{Error, Result};
 use crate::server::auth::AuthContext;
-use crate::server::task_store::TaskStore;
+use crate::server::core::DispatchEnvelopeClaim;
+use crate::server::task_store::{TaskStore, TaskStoreError};
 use crate::server::tasks::TaskRouter;
 use crate::types::capabilities::{
     ServerCapabilities, ServerTasksCapability, TasksExtensionCapability, TASKS_EXTENSION_KEY,
 };
 use crate::types::jsonrpc::ResponsePayload;
-use crate::types::tasks::{TaskStatus, RELATED_TASK_META_KEY};
+use crate::types::tasks::{
+    DetailedTaskV2, Task, TaskDetailV2, TaskStatus, TaskV2, RELATED_TASK_META_KEY,
+};
 use crate::types::tools::TaskSupport;
 use crate::types::{
     CallToolResult, ClientRequest, Content, JSONRPCError, JSONRPCResponse, RequestId, ToolInfo,
@@ -155,6 +158,26 @@ const TASKS_RESULT_NOT_SUPPORTED: &str = "tasks/result not supported";
 
 /// The `-32601` message for a request that is not a `tasks/*` method at all.
 const NOT_A_TASKS_METHOD: &str = "Method not supported";
+
+/// The message a v2 task-not-found refusal carries — ONE sentence, deliberately
+/// content-free (T-114-50).
+///
+/// Two properties, both asserted rather than asserted-about:
+///
+/// 1. It is IDENTICAL for an absent id, another owner's id and an expired task.
+///    Owner mismatch surfaces as [`TaskStoreError::NotFound`](crate::server::task_store::TaskStoreError::NotFound)
+///    ON PURPOSE — the owner-prefixed key design is what closes the existence
+///    oracle — so a message that varied between those cases would re-open it,
+///    and moving the code from `-32603` to `-32602` would make the oracle
+///    *sharper*, not the same. Expiry is folded onto the same answer for the same
+///    reason: [`TaskStoreError`](crate::server::task_store::TaskStoreError)'s own
+///    `From` impl already maps `Expired` onto `not_found` "to avoid leaking
+///    existence of expired tasks", and this is that rule expressed on the wire.
+/// 2. It does NOT render the requested task id back. A client already knows the
+///    id it sent, so echoing it buys the caller nothing and buys a log-poisoning
+///    attacker a free write into the operator's logs — the discipline
+///    `MrtrParseError` already established.
+const V2_TASK_NOT_FOUND_MESSAGE: &str = "task not found";
 
 /// The client-facing message for case 3 of the ordered refusal chain.
 ///
@@ -525,6 +548,176 @@ pub(crate) fn authentication_required(id: RequestId, method: &str) -> JSONRPCRes
         crate::types::protocol::error_codes::AUTHENTICATION_REQUIRED,
         format!("{method} requires an authenticated caller on this server"),
     )
+}
+
+// ===========================================================================
+// The v2 result surface: store-error mapping and the flat shape projections.
+//
+// Everything below sits ABOVE the `serde_json::Value` seam. No `TaskStore` and
+// no `crates/pmcp-tasks` backend changes to serve v2 (D-11) — which is what
+// makes DynamoDB/Redis-backed tasks work on v2 from day one.
+// ===========================================================================
+
+/// Map a [`TaskStoreError`] onto a JSON-RPC error response, ERA-AWARE.
+///
+/// # v1 — FROZEN
+///
+/// EVERY error becomes `-32603` carrying `error.to_string()`, byte-for-byte what
+/// it has always been. `tests/v1_tasks_golden.rs` is the gate.
+///
+/// # v2 — the extension's own not-found code
+///
+/// [`TaskStoreError::NotFound`] and [`TaskStoreError::Expired`] become `-32602`
+/// (`INVALID_PARAMS`) carrying [`V2_TASK_NOT_FOUND_MESSAGE`]; every other variant
+/// stays `-32603` with its own message. The extension's error-handling section
+/// makes `-32602` a MUST for `tasks/get` and a SHOULD for `tasks/update` and
+/// `tasks/cancel` (inventory row 29).
+///
+/// `Expired` is folded onto the SAME answer as `NotFound` deliberately: the
+/// anti-oracle constraint on row 29 names absent / wrong-owner / expired
+/// together, and `TaskStoreError`'s own `From<TaskStoreError> for Error` already
+/// maps `Expired` onto `not_found` for exactly that reason. Splitting them here
+/// would tell a caller "that id existed until recently", which is precisely the
+/// fact the owner-prefixed key design refuses to disclose.
+///
+/// # This is NOT the frozen `-32002` question
+///
+/// [`V1_TASK_PENDING`](crate::types::protocol::error_codes::V1_TASK_PENDING) is
+/// pmcp's *resource*-not-found / task-pending squat, which the ROADMAP forbids
+/// re-litigating. This function does not read it, does not emit it and does not
+/// change it; `-32602` here is the tasks extension's own independent allocation
+/// for *task*-not-found on v2.
+fn store_error_response(
+    id: RequestId,
+    error: &TaskStoreError,
+    era: Option<crate::types::protocol::Era>,
+) -> JSONRPCResponse {
+    if is_v1_task_era(era) {
+        return error_response(
+            id,
+            crate::types::protocol::error_codes::INTERNAL_ERROR,
+            error.to_string(),
+        );
+    }
+    match error {
+        TaskStoreError::NotFound { .. } | TaskStoreError::Expired { .. } => error_response(
+            id,
+            crate::types::protocol::error_codes::INVALID_PARAMS,
+            V2_TASK_NOT_FOUND_MESSAGE.to_string(),
+        ),
+        TaskStoreError::InvalidTransition { .. } | TaskStoreError::Internal { .. } => {
+            error_response(
+                id,
+                crate::types::protocol::error_codes::INTERNAL_ERROR,
+                error.to_string(),
+            )
+        },
+    }
+}
+
+/// A JSON value as an owned object map, or `None` when it is not an object.
+fn as_object(value: Value) -> Option<serde_json::Map<String, Value>> {
+    match value {
+        Value::Object(map) => Some(map),
+        _ => None,
+    }
+}
+
+/// The v2 `_meta.relatedTask` envelope every create response carries.
+///
+/// Its key is a KNOWN property of `CreateTaskResult._meta` in the vendored
+/// schema, so it stays on v2 rather than being dropped with the `task` wrapper.
+fn related_task_meta(task_id: &str) -> Value {
+    serde_json::json!({ RELATED_TASK_META_KEY: { "taskId": task_id } })
+}
+
+/// The v2 create body: a FLAT `Result & Task` (`resultType: "task"` is supplied
+/// by [`DispatchEnvelopeClaim::TASK_CREATED`], not written here).
+///
+/// The envelope discriminator is deliberately NOT hand-written into this object:
+/// `own_reserved_result_fields` OWNS `resultType` and overwrites whatever a
+/// producer put there, so writing it here would be a value that silently never
+/// reaches the wire. The claim is the only way to state it.
+fn v2_create_result_value(task: &Task, store_id: &str) -> Value {
+    let mut object = as_object(serde_json::to_value(TaskV2::from_v1(task)).unwrap_or_default())
+        .unwrap_or_default();
+    object.insert("_meta".to_string(), related_task_meta(store_id));
+    Value::Object(object)
+}
+
+/// The v1 create body: the FROZEN nested `{ "task": …, "_meta": … }` envelope.
+fn v1_create_result_value(task: &Task, store_id: &str) -> Value {
+    let create_result = crate::types::tasks::CreateTaskResult::new(task.clone());
+    let mut envelope = serde_json::to_value(create_result).unwrap_or_default();
+    if let Some(object) = envelope.as_object_mut() {
+        object.insert("_meta".to_string(), related_task_meta(store_id));
+    }
+    envelope
+}
+
+/// Project a `TaskRouter`'s `tasks/get` `Value` into the v2 flat shape.
+///
+/// A router is out-of-tree code returning an untyped `Value`, so this reads the
+/// SAME two things the store path reads — the task body and its status detail —
+/// from wherever the router put them, and passes the value through UNCHANGED
+/// when it cannot be understood. Silently emitting a half-projected object would
+/// be worse than emitting the router's own shape and saying so.
+fn v2_project_router_task(value: Value) -> Value {
+    let Some(object) = value.as_object() else {
+        return value;
+    };
+    // A router may return the v1 nested `{"task": …}` or a bare task body.
+    let body = object.get("task").unwrap_or(&value);
+    let Ok(task) = serde_json::from_value::<Task>(body.clone()) else {
+        tracing::warn!(
+            target: "mcp.tasks",
+            "a TaskRouter returned a tasks/get value that is not a Task; passing it through \
+             unprojected on protocol version 2026-07-28"
+        );
+        return value;
+    };
+    // The detail keys may sit at the top level or inside the nested body.
+    let detail_source = |key: &str| -> Option<Value> {
+        object
+            .get(key)
+            .or_else(|| body.as_object().and_then(|inner| inner.get(key)))
+            .cloned()
+    };
+    let detail = match task.status {
+        TaskStatus::Working => Some(TaskDetailV2::Working),
+        TaskStatus::Cancelled => Some(TaskDetailV2::Cancelled),
+        TaskStatus::InputRequired => detail_source(crate::types::tasks::DETAIL_KEY_INPUT_REQUESTS)
+            .and_then(|v| serde_json::from_value(v).ok())
+            .map(|input_requests| TaskDetailV2::InputRequired { input_requests }),
+        TaskStatus::Completed => detail_source(crate::types::tasks::DETAIL_KEY_RESULT)
+            .and_then(as_object)
+            .map(|result| TaskDetailV2::Completed { result }),
+        TaskStatus::Failed => detail_source(crate::types::tasks::DETAIL_KEY_ERROR)
+            .and_then(as_object)
+            .map(|error| TaskDetailV2::Failed { error }),
+    };
+    v2_detailed_task_value(&task, detail)
+}
+
+/// The v2 `tasks/get` body for `task`.
+///
+/// With a `detail` the shape is the full `DetailedTask` variant. WITHOUT one —
+/// a backend that cannot supply the terminal result, the stored error or the
+/// recorded input requests — the shape degrades to the bare flat `Task` rather
+/// than inventing an empty field: an `inputRequests: {}` on an `input_required`
+/// task is a schema-VALID lie, and a client that trusted it would wait forever
+/// for requests it was told there were none of.
+fn v2_detailed_task_value(task: &Task, detail: Option<TaskDetailV2>) -> Value {
+    if let Some(detail) = detail {
+        return Value::Object(DetailedTaskV2::new(TaskV2::from_v1(task), detail).to_wire_object());
+    }
+    tracing::warn!(
+        target: "mcp.tasks",
+        status = %task.status,
+        "no backend could supply this task's status detail; emitting the bare flat Task \
+         rather than an empty required field"
+    );
+    serde_json::to_value(TaskV2::from_v1(task)).unwrap_or_default()
 }
 
 /// Resolve a handler's `Result<ToolOutput>` into the shared [`DispatchOutput`]
@@ -912,7 +1105,8 @@ impl TaskDispatch<'_> {
         value: Value,
         auth_context: Option<&AuthContext>,
         era: Option<crate::types::protocol::Era>,
-    ) -> JSONRPCResponse {
+    ) -> (JSONRPCResponse, DispatchEnvelopeClaim) {
+        let v1 = is_v1_task_era(era);
         let Some(store) = self.task_store.as_ref() else {
             // No store: preserve the legacy tool-fabricated envelope. The
             // tool-fabricated task id is only needed on THIS path; with a store
@@ -922,15 +1116,32 @@ impl TaskDispatch<'_> {
                 .and_then(|v| v.as_str())
                 .unwrap_or_default()
                 .to_string();
+            // On v2 the same flat projection applies when the tool's value is a
+            // parseable task; otherwise the legacy nested envelope is emitted
+            // unchanged rather than half-projected.
+            if !v1 {
+                if let Ok(task) = serde_json::from_value::<Task>(value.clone()) {
+                    return (
+                        success_response(id, v2_create_result_value(&task, &tool_task_id)),
+                        DispatchEnvelopeClaim::TASK_CREATED,
+                    );
+                }
+            }
             let result_value = serde_json::json!({
                 "task": value,
                 "_meta": { RELATED_TASK_META_KEY: { "taskId": tool_task_id } }
             });
-            return success_response(id, result_value);
+            return (
+                success_response(id, result_value),
+                DispatchEnvelopeClaim::NONE,
+            );
         };
 
         let OwnerBinding::Owner(owner_id) = self.resolve_owner(auth_context, era) else {
-            return authentication_required(id, crate::types::mrtr::CALL_TOOL_METHOD);
+            return (
+                authentication_required(id, crate::types::mrtr::CALL_TOOL_METHOD),
+                DispatchEnvelopeClaim::NONE,
+            );
         };
 
         // Carry the tool's requested TTL onto the store-minted task, if present.
@@ -939,10 +1150,9 @@ impl TaskDispatch<'_> {
         let created = match store.create(&owner_id, ttl).await {
             Ok(task) => task,
             Err(e) => {
-                return error_response(
-                    id,
-                    crate::types::protocol::error_codes::INTERNAL_ERROR,
-                    e.to_string(),
+                return (
+                    store_error_response(id, &e, era),
+                    DispatchEnvelopeClaim::NONE,
                 )
             },
         };
@@ -952,10 +1162,9 @@ impl TaskDispatch<'_> {
         let terminal_result = Self::extract_terminal_result(&value);
         let final_task = if let Some(call_result) = terminal_result {
             if let Err(e) = store.set_result(&store_id, &owner_id, call_result).await {
-                return error_response(
-                    id,
-                    crate::types::protocol::error_codes::INTERNAL_ERROR,
-                    e.to_string(),
+                return (
+                    store_error_response(id, &e, era),
+                    DispatchEnvelopeClaim::NONE,
                 );
             }
             match store
@@ -964,10 +1173,9 @@ impl TaskDispatch<'_> {
             {
                 Ok(task) => task,
                 Err(e) => {
-                    return error_response(
-                        id,
-                        crate::types::protocol::error_codes::INTERNAL_ERROR,
-                        e.to_string(),
+                    return (
+                        store_error_response(id, &e, era),
+                        DispatchEnvelopeClaim::NONE,
                     )
                 },
             }
@@ -977,15 +1185,21 @@ impl TaskDispatch<'_> {
 
         // Build the wire envelope from the STORE-minted task (typed, no
         // hand-written task JSON) so task.taskId == _meta id == store id.
-        let create_result = crate::types::tasks::CreateTaskResult::new(final_task);
-        let mut envelope = serde_json::to_value(create_result).unwrap_or_default();
-        if let Some(obj) = envelope.as_object_mut() {
-            obj.insert(
-                "_meta".to_string(),
-                serde_json::json!({ RELATED_TASK_META_KEY: { "taskId": store_id } }),
+        //
+        // v1: the FROZEN nested `CreateTaskResult`. v2: the flat `Result & Task`
+        // the extension declares, and the ONE response in the whole surface that
+        // earns `resultType: "task"` — a `tasks/get`, a `tasks/cancel` and a
+        // `tasks/update` are all ordinary complete results ABOUT a task.
+        if v1 {
+            return (
+                success_response(id, v1_create_result_value(&final_task, &store_id)),
+                DispatchEnvelopeClaim::NONE,
             );
         }
-        success_response(id, envelope)
+        (
+            success_response(id, v2_create_result_value(&final_task, &store_id)),
+            DispatchEnvelopeClaim::TASK_CREATED,
+        )
     }
 
     /// Self-enforcing create-path gate: decide whether a `tools/call` becomes a
@@ -1017,7 +1231,7 @@ impl TaskDispatch<'_> {
         task_requested: bool,
         auth_context: Option<&AuthContext>,
         era: Option<crate::types::protocol::Era>,
-    ) -> Option<JSONRPCResponse> {
+    ) -> Option<(JSONRPCResponse, DispatchEnvelopeClaim)> {
         let gate_open = task_requested
             && self.task_store.is_some()
             && task_support
@@ -1139,46 +1353,146 @@ impl TaskDispatch<'_> {
         }
     }
 
+    /// Read the status-specific detail of `task` from the STORE, through
+    /// 114-04's accessors and never through the private record.
+    ///
+    /// The two values that are not on the wire [`Task`] at all come from the two
+    /// seams that exist for them: `inputRequests` from
+    /// [`TaskStore::task_input_snapshot`] and a failed task's `error` from
+    /// [`TaskStore::get_error`]. `TaskStore::get` returns only the wire `Task`
+    /// and `TaskRecord` is private, so neither is reachable any other way.
+    ///
+    /// Returns `None` when the backend cannot supply the detail — see
+    /// [`v2_detailed_task_value`] for why that degrades rather than fabricates.
+    async fn v2_task_detail(&self, task: &Task, owner_id: &str) -> Option<TaskDetailV2> {
+        let store = self.task_store.as_ref()?;
+        match task.status {
+            TaskStatus::Working => Some(TaskDetailV2::Working),
+            TaskStatus::Cancelled => Some(TaskDetailV2::Cancelled),
+            TaskStatus::InputRequired => store
+                .task_input_snapshot(&task.task_id, owner_id)
+                .await
+                .ok()
+                .map(|snapshot| TaskDetailV2::InputRequired {
+                    input_requests: snapshot.input_requests,
+                }),
+            TaskStatus::Completed => {
+                if !store.supports_results() {
+                    return None;
+                }
+                store
+                    .get_result(&task.task_id, owner_id)
+                    .await
+                    .ok()
+                    .and_then(|result| as_object(serde_json::to_value(result).ok()?))
+                    .map(|result| TaskDetailV2::Completed { result })
+            },
+            TaskStatus::Failed => store
+                .get_error(&task.task_id, owner_id)
+                .await
+                .ok()
+                .and_then(as_object)
+                .map(|error| TaskDetailV2::Failed { error }),
+        }
+    }
+
+    /// The v2 `tasks/get` success response, plus the envelope claim it earns.
+    ///
+    /// An `input_required` task inlines a TOP-LEVEL `inputRequests`, which the
+    /// reserved-result-field registry strips from any result whose owner is not
+    /// [`ReservedFieldOwner::TasksDispatch`](crate::server::core::ReservedFieldOwner::TasksDispatch)
+    /// — so the claim is returned alongside the response rather than left to be
+    /// re-derived at the envelope (DQ2). Every other status claims nothing.
+    async fn v2_get_response(
+        &self,
+        id: RequestId,
+        task: &Task,
+        owner_id: &str,
+    ) -> (JSONRPCResponse, DispatchEnvelopeClaim) {
+        let detail = self.v2_task_detail(task, owner_id).await;
+        let claims_input_requests = matches!(detail, Some(TaskDetailV2::InputRequired { .. }));
+        let response = success_response(id, v2_detailed_task_value(task, detail));
+        let claim = if claims_input_requests {
+            DispatchEnvelopeClaim::TASKS_INPUT_REQUIRED
+        } else {
+            DispatchEnvelopeClaim::NONE
+        };
+        (response, claim)
+    }
+
     /// Route a `tasks/get` request (store-first, router fall-through).
     ///
     /// `owner_id` is the ALREADY-BOUND owner from [`Self::resolve_owner`].
+    ///
+    /// # The era decides the SHAPE, not the routing
+    ///
+    /// v1 keeps the nested `{"task": {…}}` `GetTaskResult` with `ttl` and
+    /// `pollInterval`, byte-for-byte. v2 emits the flat `DetailedTask` variant —
+    /// `ttlMs`, `pollIntervalMs`, and the status-conditional `result` / `error` /
+    /// `inputRequests` inlined at the TOP LEVEL. Both eras take the same
+    /// store-first / router-fall-through / no-backend path to get there.
     async fn route_tasks_get(
         &self,
         id: RequestId,
         params: &crate::types::tasks::GetTaskRequest,
         owner_id: &str,
-    ) -> JSONRPCResponse {
+        era: Option<crate::types::protocol::Era>,
+    ) -> (JSONRPCResponse, DispatchEnvelopeClaim) {
+        let v1 = is_v1_task_era(era);
         if let Some(store) = self.task_store {
-            match store.get(&params.task_id, owner_id).await {
-                Ok(task) => {
+            return match store.get(&params.task_id, owner_id).await {
+                Ok(task) if v1 => {
                     let result = crate::types::tasks::GetTaskResult::new(task);
-                    success_response(id, serde_json::to_value(result).unwrap_or_default())
+                    (
+                        success_response(id, serde_json::to_value(result).unwrap_or_default()),
+                        DispatchEnvelopeClaim::NONE,
+                    )
                 },
-                Err(e) => error_response(
-                    id,
-                    crate::types::protocol::error_codes::INTERNAL_ERROR,
-                    e.to_string(),
+                Ok(task) => self.v2_get_response(id, &task, owner_id).await,
+                Err(e) => (
+                    store_error_response(id, &e, era),
+                    DispatchEnvelopeClaim::NONE,
                 ),
-            }
-        } else if let Some(task_router) = self.task_router {
-            match task_router
+            };
+        }
+        if let Some(task_router) = self.task_router {
+            return match task_router
                 .handle_tasks_get(serde_json::to_value(params).unwrap_or_default(), owner_id)
                 .await
             {
-                Ok(result) => success_response(id, result),
-                Err(e) => error_response(
-                    id,
-                    crate::types::protocol::error_codes::INTERNAL_ERROR,
-                    e.to_string(),
+                Ok(result) if v1 => (success_response(id, result), DispatchEnvelopeClaim::NONE),
+                Ok(result) => {
+                    let projected = v2_project_router_task(result);
+                    let claims = projected
+                        .get(crate::types::tasks::DETAIL_KEY_INPUT_REQUESTS)
+                        .is_some();
+                    (
+                        success_response(id, projected),
+                        if claims {
+                            DispatchEnvelopeClaim::TASKS_INPUT_REQUIRED
+                        } else {
+                            DispatchEnvelopeClaim::NONE
+                        },
+                    )
+                },
+                Err(e) => (
+                    error_response(
+                        id,
+                        crate::types::protocol::error_codes::INTERNAL_ERROR,
+                        e.to_string(),
+                    ),
+                    DispatchEnvelopeClaim::NONE,
                 ),
-            }
-        } else {
+            };
+        }
+        (
             error_response(
                 id,
                 crate::types::protocol::error_codes::METHOD_NOT_FOUND,
                 TASKS_NOT_ENABLED.to_string(),
-            )
-        }
+            ),
+            DispatchEnvelopeClaim::NONE,
+        )
     }
 
     /// Route a `tasks/list` request (store-first, router fall-through).
@@ -1239,43 +1553,56 @@ impl TaskDispatch<'_> {
     /// Route a `tasks/cancel` request (store-first, router fall-through).
     ///
     /// `owner_id` is the ALREADY-BOUND owner from [`Self::resolve_owner`].
+    ///
+    /// # v2 answers an EMPTY acknowledgement
+    ///
+    /// `CancelTaskResult = Result` in the extension schema — no task body at all
+    /// (inventory row 20). v1 keeps its nested `{"task": {…}}`.
+    ///
+    /// The empty ack is not a lossy simplification, it is the semantics:
+    /// **cancellation is cooperative and eventually consistent.** The task MAY
+    /// still be `working` when the ack arrives and MAY reach a terminal status
+    /// other than `cancelled`. Returning a task body would invite a client to
+    /// treat the ack as the final state; deliberately NO wait and NO poll is
+    /// added here to make the ack look synchronous. A client that wants the
+    /// settled state issues `tasks/get`.
     async fn route_tasks_cancel(
         &self,
         id: RequestId,
         params: &crate::types::tasks::CancelTaskRequest,
         owner_id: &str,
+        era: Option<crate::types::protocol::Era>,
     ) -> JSONRPCResponse {
+        let v1 = is_v1_task_era(era);
         if let Some(store) = self.task_store {
-            match store.cancel(&params.task_id, owner_id).await {
-                Ok(task) => {
+            return match store.cancel(&params.task_id, owner_id).await {
+                Ok(task) if v1 => {
                     let result = crate::types::tasks::CancelTaskResult::new(task);
                     success_response(id, serde_json::to_value(result).unwrap_or_default())
                 },
-                Err(e) => error_response(
-                    id,
-                    crate::types::protocol::error_codes::INTERNAL_ERROR,
-                    e.to_string(),
-                ),
-            }
-        } else if let Some(task_router) = self.task_router {
-            match task_router
+                Ok(_) => success_response(id, Value::Object(serde_json::Map::new())),
+                Err(e) => store_error_response(id, &e, era),
+            };
+        }
+        if let Some(task_router) = self.task_router {
+            return match task_router
                 .handle_tasks_cancel(serde_json::to_value(params).unwrap_or_default(), owner_id)
                 .await
             {
-                Ok(result) => success_response(id, result),
+                Ok(result) if v1 => success_response(id, result),
+                Ok(_) => success_response(id, Value::Object(serde_json::Map::new())),
                 Err(e) => error_response(
                     id,
                     crate::types::protocol::error_codes::INTERNAL_ERROR,
                     e.to_string(),
                 ),
-            }
-        } else {
-            error_response(
-                id,
-                crate::types::protocol::error_codes::METHOD_NOT_FOUND,
-                TASKS_NOT_ENABLED.to_string(),
-            )
+            };
         }
+        error_response(
+            id,
+            crate::types::protocol::error_codes::METHOD_NOT_FOUND,
+            TASKS_NOT_ENABLED.to_string(),
+        )
     }
 
     /// Route any `tasks/*` endpoint request to its handler.
@@ -1339,13 +1666,13 @@ impl TaskDispatch<'_> {
         request: &ClientRequest,
         auth_context: Option<&AuthContext>,
         protocol_context: Option<&crate::types::protocol::ProtocolContext>,
-    ) -> JSONRPCResponse {
+    ) -> (JSONRPCResponse, DispatchEnvelopeClaim) {
         let era = protocol_context.map(|context| context.era);
 
         if self.has_task_backend() {
             // --- case 1 -----------------------------------------------------
             if let Some(method) = Self::retired_method(request, era) {
-                return retired_on_v2(id, method);
+                return (retired_on_v2(id, method), DispatchEnvelopeClaim::NONE);
             }
 
             // --- case 3 -----------------------------------------------------
@@ -1354,7 +1681,10 @@ impl TaskDispatch<'_> {
             // which advertises no tasks extension at all — telling such a caller
             // to DECLARE one would send it to fix the wrong thing (T-114-33).
             if !Self::declares_tasks_extension(protocol_context, era) {
-                return missing_tasks_declaration_refusal(id);
+                return (
+                    missing_tasks_declaration_refusal(id),
+                    DispatchEnvelopeClaim::NONE,
+                );
             }
         }
 
@@ -1370,24 +1700,42 @@ impl TaskDispatch<'_> {
                 V1_UNAUTHENTICATED_OWNER.to_string()
             },
             OwnerBinding::Refused => {
-                return authentication_required(id, Self::method_of(request));
+                return (
+                    authentication_required(id, Self::method_of(request)),
+                    DispatchEnvelopeClaim::NONE,
+                );
             },
         };
 
         // --- case 5 ---------------------------------------------------------
+        //
+        // `tasks/get` is the ONLY route that can earn a non-default envelope
+        // claim: it is the only one that inlines a reserved top-level field.
+        // Every other arm returns `NONE` explicitly rather than by omission, so
+        // a route added later has to state its own claim.
         match request {
-            ClientRequest::TasksGet(params) => self.route_tasks_get(id, params, &owner_id).await,
-            ClientRequest::TasksResult(params) => {
-                self.handle_tasks_result(id, params, &owner_id, era).await
+            ClientRequest::TasksGet(params) => {
+                self.route_tasks_get(id, params, &owner_id, era).await
             },
-            ClientRequest::TasksList(params) => self.route_tasks_list(id, params, &owner_id).await,
-            ClientRequest::TasksCancel(params) => {
-                self.route_tasks_cancel(id, params, &owner_id).await
-            },
-            _ => error_response(
-                id,
-                crate::types::protocol::error_codes::METHOD_NOT_FOUND,
-                NOT_A_TASKS_METHOD.to_string(),
+            ClientRequest::TasksResult(params) => (
+                self.handle_tasks_result(id, params, &owner_id, era).await,
+                DispatchEnvelopeClaim::NONE,
+            ),
+            ClientRequest::TasksList(params) => (
+                self.route_tasks_list(id, params, &owner_id).await,
+                DispatchEnvelopeClaim::NONE,
+            ),
+            ClientRequest::TasksCancel(params) => (
+                self.route_tasks_cancel(id, params, &owner_id, era).await,
+                DispatchEnvelopeClaim::NONE,
+            ),
+            _ => (
+                error_response(
+                    id,
+                    crate::types::protocol::error_codes::METHOD_NOT_FOUND,
+                    NOT_A_TASKS_METHOD.to_string(),
+                ),
+                DispatchEnvelopeClaim::NONE,
             ),
         }
     }
@@ -1611,7 +1959,10 @@ mod gate_tests {
         let out = dispatch
             .maybe_build_task_created(id(), &value, Some(TaskSupport::Optional), true, None, None)
             .await;
-        let resp = out.expect("Optional + task-shaped must yield Some");
+        let (resp, claim) = out.expect("Optional + task-shaped must yield Some");
+        // These fixtures carry NO era, so the v1 create shape and its NONE claim
+        // are what must come back (the v2 claim is proven in `create_claim_tests`).
+        assert_eq!(claim, DispatchEnvelopeClaim::NONE);
         assert_store_minted(&resp);
     }
 
@@ -1629,7 +1980,8 @@ mod gate_tests {
         let out = dispatch
             .maybe_build_task_created(id(), &value, Some(TaskSupport::Required), true, None, None)
             .await;
-        let resp = out.expect("Required + task-shaped must yield Some");
+        let (resp, claim) = out.expect("Required + task-shaped must yield Some");
+        assert_eq!(claim, DispatchEnvelopeClaim::NONE);
         assert_store_minted(&resp);
     }
 }
@@ -1926,9 +2278,12 @@ mod era_gate_tests {
             has_auth_provider: false,
         };
         let context = era.map(context_for);
+        // These rows are about the ERA GATES, not the envelope claim; the claim
+        // is asserted by its own module below.
         dispatch
             .route_tasks_endpoint(id(), request, None, context.as_ref())
             .await
+            .0
     }
 
     /// The `(code, message)` of an error response, or `None` for a success.
@@ -2183,6 +2538,338 @@ mod capability_rule_tests {
             extensions.get(TASKS_EXTENSION_KEY),
             Some(&serde_json::json!({})),
             "and the tasks entry lands alongside it: {extensions:?}"
+        );
+    }
+}
+
+/// The v2 result surface: shapes and the era-aware store-error mapping
+/// (plan 114-11, TASK-04, inventory rows 16/18/20/29).
+///
+/// The UNIT half. Every one of these facts is ALSO proven over a real socket in
+/// `tests/v2_tasks_shapes.rs`; these exist because two of them — a non-NotFound
+/// store error, and the identity of the absent-vs-wrong-owner message — cannot
+/// be provoked from outside the process without a fault-injecting store.
+#[cfg(test)]
+mod v2_shape_tests {
+    use super::*;
+    use crate::server::task_store::InMemoryTaskStore;
+    use crate::types::protocol::error_codes::{INTERNAL_ERROR, INVALID_PARAMS};
+    use crate::types::protocol::Era;
+
+    fn id() -> RequestId {
+        RequestId::from(1i64)
+    }
+
+    /// The four `TaskStoreError` variants, each carrying the SAME task id so a
+    /// message that echoed it would be visible in every row.
+    fn all_store_errors() -> Vec<TaskStoreError> {
+        vec![
+            TaskStoreError::NotFound {
+                task_id: "task-abc".to_string(),
+            },
+            TaskStoreError::Expired {
+                task_id: "task-abc".to_string(),
+            },
+            TaskStoreError::InvalidTransition {
+                task_id: "task-abc".to_string(),
+                from: TaskStatus::Completed,
+                to: TaskStatus::Working,
+            },
+            TaskStoreError::Internal {
+                message: "backend unavailable".to_string(),
+            },
+        ]
+    }
+
+    fn error_of(response: &JSONRPCResponse) -> (i32, String) {
+        match &response.payload {
+            ResponsePayload::Error(error) => (error.code, error.message.clone()),
+            ResponsePayload::Result(value) => {
+                panic!("expected an error response, got a result: {value}")
+            },
+        }
+    }
+
+    fn result_of(response: &JSONRPCResponse) -> Value {
+        match &response.payload {
+            ResponsePayload::Result(value) => value.clone(),
+            ResponsePayload::Error(error) => {
+                panic!(
+                    "expected a success result, got {}: {}",
+                    error.code, error.message
+                )
+            },
+        }
+    }
+
+    /// v1 is FROZEN: every store error is `-32603` carrying the error's own
+    /// message, on both the explicit-v1 and the no-era-code rows.
+    #[test]
+    fn v1_store_errors_are_all_internal_error() {
+        for era in [Some(Era::V1), None] {
+            for error in all_store_errors() {
+                let (code, message) = error_of(&store_error_response(id(), &error, era));
+                assert_eq!(code, INTERNAL_ERROR, "{era:?} / {error}");
+                assert_eq!(message, error.to_string(), "{era:?} / {error}");
+            }
+        }
+    }
+
+    /// v2 maps not-found and expired onto `-32602`; everything else stays
+    /// `-32603` (inventory row 29).
+    #[test]
+    fn v2_maps_only_not_found_and_expired_to_invalid_params() {
+        let expected = [
+            (INVALID_PARAMS, true),
+            (INVALID_PARAMS, true),
+            (INTERNAL_ERROR, false),
+            (INTERNAL_ERROR, false),
+        ];
+        for (error, (code, is_not_found)) in all_store_errors().into_iter().zip(expected) {
+            let (actual_code, message) =
+                error_of(&store_error_response(id(), &error, Some(Era::V2)));
+            assert_eq!(actual_code, code, "{error}");
+            if is_not_found {
+                assert_eq!(message, V2_TASK_NOT_FOUND_MESSAGE, "{error}");
+            } else {
+                assert_eq!(message, error.to_string(), "{error}");
+            }
+        }
+    }
+
+    /// The `-32602` answer is IDENTICAL for an absent id and for another owner's
+    /// id — both surface as `NotFound`, and a message that distinguished them
+    /// would be the existence oracle the owner-prefixed key design closes
+    /// (T-114-50).
+    #[tokio::test]
+    async fn the_v2_not_found_answer_is_identical_for_absent_and_wrong_owner() {
+        let store = InMemoryTaskStore::new();
+        let owned = store.create("owner-a", None).await.expect("creates");
+
+        // Another owner asking for a task that DOES exist.
+        let wrong_owner = store
+            .get(&owned.task_id, "owner-b")
+            .await
+            .expect_err("another owner must not read it");
+        // Anyone asking for a task that does not exist.
+        let absent = store
+            .get("no-such-task", "owner-b")
+            .await
+            .expect_err("an absent task must not be found");
+
+        let a = error_of(&store_error_response(id(), &wrong_owner, Some(Era::V2)));
+        let b = error_of(&store_error_response(id(), &absent, Some(Era::V2)));
+        assert_eq!(a, b, "the two refusals must be indistinguishable");
+        assert!(
+            !a.1.contains(&owned.task_id) && !a.1.contains("no-such-task"),
+            "the refusal must not render a task id back: {}",
+            a.1
+        );
+    }
+
+    /// The `-32602` message never renders the requested id back, for EVERY id it
+    /// could be handed — including one that looks like a log-injection payload.
+    #[test]
+    fn the_v2_not_found_message_never_echoes_the_task_id() {
+        for task_id in [
+            "task-abc",
+            "\n2026-01-01 ERROR forged log line",
+            "../../etc/passwd",
+        ] {
+            let error = TaskStoreError::NotFound {
+                task_id: task_id.to_string(),
+            };
+            let (_, message) = error_of(&store_error_response(id(), &error, Some(Era::V2)));
+            assert!(
+                !message.contains(task_id),
+                "the id leaked into the refusal: {message}"
+            );
+            assert_eq!(message, V2_TASK_NOT_FOUND_MESSAGE);
+        }
+    }
+
+    fn sample_task() -> Task {
+        Task::new("t-1", TaskStatus::Working)
+            .with_timestamps("2026-07-28T00:00:00Z", "2026-07-28T00:00:01Z")
+            .with_ttl(60_000)
+            .with_poll_interval(2500)
+    }
+
+    /// The v2 create body is FLAT: `taskId` at the top level, no `task` wrapper,
+    /// the renamed keys, and the `_meta.relatedTask` envelope retained.
+    #[test]
+    fn the_v2_create_body_is_flat() {
+        let value = v2_create_result_value(&sample_task(), "t-1");
+        assert_eq!(value.get("taskId").and_then(Value::as_str), Some("t-1"));
+        assert!(value.get("task").is_none(), "v2 must not wrap: {value}");
+        assert_eq!(value.get("ttlMs").and_then(Value::as_u64), Some(60_000));
+        assert_eq!(
+            value.get("pollIntervalMs").and_then(Value::as_u64),
+            Some(2500)
+        );
+        assert!(
+            value.get("_meta").is_some(),
+            "the relatedTask envelope stays"
+        );
+    }
+
+    /// The v1 create body is the FROZEN nested envelope with the v1 key spellings.
+    #[test]
+    fn the_v1_create_body_is_still_nested() {
+        let value = v1_create_result_value(&sample_task(), "t-1");
+        let task = value.get("task").expect("v1 wraps under `task`");
+        assert_eq!(task.get("taskId").and_then(Value::as_str), Some("t-1"));
+        assert_eq!(task.get("ttl").and_then(Value::as_u64), Some(60_000));
+        assert_eq!(task.get("pollInterval").and_then(Value::as_u64), Some(2500));
+        let raw = value.to_string();
+        assert!(
+            !raw.contains("ttlMs"),
+            "a v2 spelling leaked into v1: {raw}"
+        );
+        assert!(
+            !raw.contains("pollIntervalMs"),
+            "a v2 spelling leaked into v1: {raw}"
+        );
+    }
+
+    /// The create path's ENVELOPE CLAIM is era-split: `resultType: "task"` on v2,
+    /// nothing at all on v1.
+    #[tokio::test]
+    async fn the_create_claim_is_era_split() {
+        let store = Some(Arc::new(InMemoryTaskStore::new()) as Arc<dyn TaskStore>);
+        let router = None;
+        let dispatch = TaskDispatch {
+            task_store: &store,
+            task_router: &router,
+            has_auth_provider: false,
+        };
+        let value = serde_json::json!({
+            "taskId": "tool-fabricated",
+            "status": "working",
+            "createdAt": "2026-07-28T00:00:00Z",
+            "lastUpdatedAt": "2026-07-28T00:00:00Z"
+        });
+        let (_, v1_claim) = dispatch
+            .build_task_created_response(id(), value.clone(), None, Some(Era::V1))
+            .await;
+        assert_eq!(v1_claim, DispatchEnvelopeClaim::NONE);
+        let (response, v2_claim) = dispatch
+            .build_task_created_response(id(), value, None, Some(Era::V2))
+            .await;
+        assert_eq!(v2_claim, DispatchEnvelopeClaim::TASK_CREATED);
+        assert_eq!(
+            v2_claim.disposition.as_wire_str(),
+            "task",
+            "the create claim is the ONLY source of `resultType: \"task\"`"
+        );
+        assert!(result_of(&response).get("taskId").is_some());
+    }
+
+    /// A v2 `tasks/get` on an `input_required` task inlines a TOP-LEVEL
+    /// `inputRequests` AND claims ownership of it, so the reserved-field registry
+    /// does not strip it (114-10 row 23). Every other status claims nothing.
+    #[tokio::test]
+    async fn the_get_claim_is_input_required_only() {
+        let store_impl = Arc::new(InMemoryTaskStore::new());
+        let store = Some(store_impl.clone() as Arc<dyn TaskStore>);
+        let router = None;
+        let dispatch = TaskDispatch {
+            task_store: &store,
+            task_router: &router,
+            has_auth_provider: false,
+        };
+        let task = store_impl.create("owner-a", None).await.expect("creates");
+        let params = crate::types::tasks::GetTaskRequest {
+            task_id: task.task_id.clone(),
+        };
+
+        // working -> no claim.
+        let (response, claim) = dispatch
+            .route_tasks_get(id(), &params, "owner-a", Some(Era::V2))
+            .await;
+        assert_eq!(claim, DispatchEnvelopeClaim::NONE);
+        assert!(result_of(&response).get("inputRequests").is_none());
+
+        // input_required -> the TasksDispatch claim and the inlined key.
+        let mut requests = crate::types::mrtr::InputRequests::new();
+        requests.insert(
+            "roots".to_string(),
+            crate::types::mrtr::InputRequest::ListRoots,
+        );
+        store_impl
+            .record_input_requests(&task.task_id, "owner-a", requests)
+            .await
+            .expect("records");
+        let (response, claim) = dispatch
+            .route_tasks_get(id(), &params, "owner-a", Some(Era::V2))
+            .await;
+        assert_eq!(claim, DispatchEnvelopeClaim::TASKS_INPUT_REQUIRED);
+        assert_eq!(
+            claim.owner,
+            crate::server::core::ReservedFieldOwner::TasksDispatch
+        );
+        assert_eq!(
+            claim.disposition.as_wire_str(),
+            "complete",
+            "the REQUEST completed; it is the TASK that is waiting"
+        );
+        let value = result_of(&response);
+        assert!(
+            value.get("inputRequests").is_some(),
+            "inputRequests must be TOP-LEVEL: {value}"
+        );
+        assert!(value.get("task").is_none(), "v2 must not wrap: {value}");
+    }
+
+    /// A router's `tasks/get` value is projected flat on v2, from either the
+    /// nested or the bare shape, and passed through when it is not a task.
+    #[test]
+    fn the_router_get_value_is_projected_on_v2() {
+        let nested = serde_json::json!({
+            "task": {
+                "taskId": "r-1",
+                "status": "completed",
+                "ttl": 1000,
+                "createdAt": "2026-07-28T00:00:00Z",
+                "lastUpdatedAt": "2026-07-28T00:00:01Z"
+            },
+            "result": { "content": [] }
+        });
+        let projected = v2_project_router_task(nested);
+        assert_eq!(projected.get("taskId").and_then(Value::as_str), Some("r-1"));
+        assert!(projected.get("task").is_none());
+        assert_eq!(projected.get("ttlMs").and_then(Value::as_u64), Some(1000));
+        assert!(projected.get("result").is_some(), "{projected}");
+
+        let opaque = serde_json::json!({ "something": "else" });
+        assert_eq!(
+            v2_project_router_task(opaque.clone()),
+            opaque,
+            "an unparseable router value passes through rather than half-projecting"
+        );
+    }
+
+    /// A backend that cannot supply the detail degrades to the BARE flat task
+    /// rather than fabricating an empty required field.
+    #[tokio::test]
+    async fn a_detail_less_backend_degrades_rather_than_fabricating() {
+        // `InMemoryTaskStore` records no input requests for this task, so the
+        // snapshot read fails and there is genuinely nothing to inline.
+        let mut task = Task::new("t-1", TaskStatus::InputRequired)
+            .with_timestamps("2026-07-28T00:00:00Z", "2026-07-28T00:00:01Z");
+        task.ttl = None;
+        let value = v2_detailed_task_value(&task, None);
+        assert_eq!(
+            value.get("status").and_then(Value::as_str),
+            Some("input_required")
+        );
+        assert!(
+            value.get("inputRequests").is_none(),
+            "an empty inputRequests would be a schema-valid lie: {value}"
+        );
+        assert!(
+            value.get("ttlMs").is_some_and(Value::is_null),
+            "the five required fields survive the degradation: {value}"
         );
     }
 }

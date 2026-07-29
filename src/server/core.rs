@@ -1276,18 +1276,22 @@ pub(crate) enum ResponseDisposition {
     /// that feature on — what every lint and build gate uses — it is live code.
     #[cfg_attr(not(feature = "streamable-http"), allow(dead_code))]
     InputRequired,
-    // Why: the `Task` disposition is the established selection path for Phase
-    // 114 — it is wired by that phase at dispatch and emitted by the shared
-    // helper below. Retained here (rather than added later) so the mechanism
-    // 114 depends on exists and is exercised by the `as_wire_str` unit test.
-    //
-    // The allow is SCOPED to `not(test)` rather than blanket, the same
-    // tightening plan 06 applied to `InputRequired`: the test build — which is
-    // what `make quality-gate` runs — still lints this variant, so if a future
-    // edit drops the unit test that constructs it AND Phase 114 has not yet
-    // wired it, the gate says so instead of the allow hiding it.
+    // Why there is NO `allow(dead_code)` here any more: Phase 114 plan 11 wired
+    // this variant into production. `DispatchEnvelopeClaim::TASK_CREATED`
+    // constructs it, `TaskDispatch::build_task_created_response` returns that
+    // claim on v2, and both dispatch sites fold it into
+    // `inject_v2_result_envelope`. `server::task_dispatch` is gated only on
+    // `not(target_arch = "wasm32")` and on no feature at all, so the constructor
+    // is present on EVERY native build and the allow would now be hiding
+    // nothing. Measured with `-D warnings` under `--features full`,
+    // `--no-default-features` and `--no-default-features --features
+    // streamable-http` before it was removed.
     /// The result is a task handle rather than a terminal result (Phase 114).
-    #[cfg_attr(not(test), allow(dead_code))]
+    ///
+    /// The ONLY response that earns it is a `tools/call` that returned a task
+    /// handle instead of a result. A `tasks/get` is an ordinary complete result
+    /// ABOUT a task and carries `"complete"` even when its body inlines a
+    /// terminal `result` — see [`DispatchEnvelopeClaim::TASK_CREATED`].
     Task,
 }
 
@@ -1366,19 +1370,16 @@ pub(crate) enum ReservedFieldOwner {
     /// replaces the sealed continuation (D-17), so no key material is introduced
     /// and a tasks result carrying `requestState` is still a strip.
     ///
-    /// Its only constructor TODAY is the `pmcp::testing` reserved-field seam;
-    /// the v2 `tasks/get` dispatch constructs it when plan 114-12 wires that
-    /// result shape.
+    /// Constructed by the v2 `tasks/get` dispatch — plan 114-11 wired it
+    /// (`DispatchEnvelopeClaim::TASKS_INPUT_REQUIRED`), closing D-114-H.
     ///
-    // Why the allow is scoped to `not(feature = "testing")` and NOT to
-    // `not(test)`: `make lint` runs `cargo clippy --features "full" --lib
-    // --tests` under `RUSTFLAGS = -D warnings`, and the `--lib` half is a
-    // NON-test build with `testing` ON. Under `not(test)` the allow would be
-    // active for exactly that half, hiding the variant from the stricter of the
-    // two. Scoped to the feature that carries its only constructor, BOTH halves
-    // of the gate lint it — so deleting the seam before production wires the
-    // variant fails the gate instead of passing quietly.
-    #[cfg_attr(not(feature = "testing"), allow(dead_code))]
+    // The `#[cfg_attr(not(feature = "testing"), allow(dead_code))]` this variant
+    // carried while the `pmcp::testing` seam was its only constructor is GONE:
+    // `server::task_dispatch` is gated only on `not(target_arch = "wasm32")` and
+    // on no feature, so the production constructor is present on every native
+    // build. Re-measured with `-D warnings` under `--features full`,
+    // `--no-default-features` and `--no-default-features --features
+    // streamable-http` before removal.
     TasksDispatch,
 }
 
@@ -1399,6 +1400,93 @@ impl ReservedFieldOwner {
             },
             Self::TasksDispatch => field == crate::types::mrtr::INPUT_REQUESTS_KEY,
         }
+    }
+}
+
+/// The v2 result-envelope claim a DISPATCH makes about the response it produced
+/// (Phase 114, plan 11).
+///
+/// A second, independent claimant alongside the MRTR egress. `mrtr_egress`
+/// already returns `(ResponseDisposition, ReservedFieldOwner)` from the site that
+/// mints its reserved fields; the tasks dispatch needs to say the same two things
+/// from ITS minting site, and it sits several frames below the one place that
+/// calls [`inject_v2_result_envelope`]. This struct is what travels those frames.
+///
+/// # Why a threaded claim rather than a re-derivation at the envelope
+///
+/// The envelope could, in principle, look at the response and guess. It must
+/// not: DQ2 rejected deriving ownership from the [`ResponseDisposition`] (the
+/// measured row-23 defect) and from the method string (which re-creates the
+/// per-site divergence the single registry exists to prevent). A claim made
+/// WHERE THE WRITE HAPPENS is the only form that cannot be wrong about what was
+/// written.
+///
+/// # The two claims are disjoint by construction
+///
+/// `MRTR_METHODS` carries no `tasks/*` row, and a `tools/call` that becomes a
+/// task returns a `CreateTaskResult` rather than an MRTR `input_required`
+/// result, so no response is minted by both claimants.
+/// [`Self::or_egress`] states the precedence anyway rather than assuming it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct DispatchEnvelopeClaim {
+    /// The wire `resultType` this dispatch produced.
+    pub(crate) disposition: ResponseDisposition,
+    /// Which egress minted the reserved top-level result fields.
+    pub(crate) owner: ReservedFieldOwner,
+}
+
+impl DispatchEnvelopeClaim {
+    /// The default: an ordinary complete result that minted no reserved field.
+    pub(crate) const NONE: Self = Self {
+        disposition: ResponseDisposition::Complete,
+        owner: ReservedFieldOwner::None,
+    };
+
+    /// A v2 `tasks/get` on an `input_required` task.
+    ///
+    /// The disposition is `complete` — the JSON-RPC REQUEST completed; it is the
+    /// TASK that is waiting — while the result legitimately carries a top-level
+    /// `inputRequests`, which is the whole reason ownership is a separate input
+    /// from the disposition (see [`ReservedFieldOwner`]).
+    pub(crate) const TASKS_INPUT_REQUIRED: Self = Self {
+        disposition: ResponseDisposition::Complete,
+        owner: ReservedFieldOwner::TasksDispatch,
+    };
+
+    /// A `tools/call` that returned a task handle instead of a result.
+    ///
+    /// `resultType: "task"` is a TOOL-CALL disposition and belongs to this
+    /// response only. A `tasks/get` — even one whose body is full of task fields,
+    /// even one inlining a terminal `result` — is an ordinary complete result
+    /// ABOUT a task and carries `"complete"`.
+    pub(crate) const TASK_CREATED: Self = Self {
+        disposition: ResponseDisposition::Task,
+        owner: ReservedFieldOwner::None,
+    };
+
+    /// Fold the MRTR egress's own claim over this dispatch claim.
+    ///
+    /// The egress wins when it made a claim at all, because it PHYSICALLY
+    /// rewrote the result body and minted key material into it; otherwise the
+    /// dispatch's claim stands. On every non-MRTR response the egress returns
+    /// exactly [`Self::NONE`], so the common path is a pass-through.
+    pub(crate) fn or_egress(
+        self,
+        disposition: ResponseDisposition,
+        owner: ReservedFieldOwner,
+    ) -> Self {
+        let egress = Self { disposition, owner };
+        if egress == Self::NONE {
+            self
+        } else {
+            egress
+        }
+    }
+}
+
+impl Default for DispatchEnvelopeClaim {
+    fn default() -> Self {
+        Self::NONE
     }
 }
 
@@ -3078,9 +3166,21 @@ impl ProtocolHandler for ServerCore {
             Err((code, message)) => return Self::error_response(id, code, message),
         };
 
-        // Execute the actual request handling with auth_context
+        // Execute the actual request handling with auth_context.
+        //
+        // `dispatch_claim` is the SECOND envelope claimant (Phase 114 plan 11):
+        // the tasks routes and the create path state their own `resultType` and
+        // reserved-field ownership from the site that writes them, several frames
+        // below here. It stays `NONE` for every other dispatch.
+        let mut dispatch_claim = DispatchEnvelopeClaim::NONE;
         let mut response = self
-            .handle_request_internal(id.clone(), request, auth_context, protocol_context.clone())
+            .handle_request_internal(
+                id.clone(),
+                request,
+                auth_context,
+                protocol_context.clone(),
+                &mut dispatch_claim,
+            )
             .await;
 
         // MRTR egress (Plan 113-06): convert a handler's "I need more input"
@@ -3106,12 +3206,16 @@ impl ProtocolHandler for ServerCore {
         // era-gated serialization boundary (VERS-07 / D-07 / D-08). This is a
         // no-op for v1 / non-opted-in responses (byte-identical) and for
         // error/notification/non-object results.
+        //
+        // The two claimants are folded through ONE named rule so precedence is
+        // stated rather than implied by argument order.
+        let claim = dispatch_claim.or_egress(disposition, reserved_field_owner);
         inject_v2_result_envelope(
             &mut response,
             protocol_context.as_ref(),
             &self.info,
-            disposition,
-            reserved_field_owner,
+            claim.disposition,
+            claim.owner,
         );
 
         // Process response through protocol middleware chain (read-only access)
@@ -3223,7 +3327,7 @@ impl ServerCore {
         task_value: Value,
         auth_context: Option<&AuthContext>,
         era: Option<crate::types::protocol::Era>,
-    ) -> JSONRPCResponse {
+    ) -> (JSONRPCResponse, DispatchEnvelopeClaim) {
         // Delegate to the shared TaskDispatch unit. It RE-EXTRACTS the task id and
         // the terminal result from `task_value` internally (store mints the id;
         // `extract_terminal_result` recovers the terminal CallToolResult), so the
@@ -3248,12 +3352,20 @@ impl ServerCore {
     /// SPECIFIED "task not completed" error (`-32002`), distinct from the
     /// truly-no-backend `-32601`.
     /// Internal request handler without middleware processing.
+    ///
+    /// `dispatch_claim` is an OUT parameter: the two dispatches that mint a
+    /// non-default v2 envelope (the `tasks/*` routes and the `tools/call` create
+    /// path) write their claim into it, and `handle_request` folds it with the
+    /// MRTR egress's own claim. It is an out-param rather than a changed return
+    /// type because only two of this function's ~two dozen arms have anything to
+    /// say, and the rest must stay untouched.
     async fn handle_request_internal(
         &self,
         id: RequestId,
         request: Request,
         auth_context: Option<AuthContext>,
         protocol_context: Option<crate::types::protocol::ProtocolContext>,
+        dispatch_claim: &mut DispatchEnvelopeClaim,
     ) -> JSONRPCResponse {
         contract_pre_session_lifecycle!();
         match request {
@@ -3385,13 +3497,16 @@ impl ServerCore {
                                 ToolCallOutcome::TaskCreated { task_value } => {
                                     // The shared unit re-extracts task_id + terminal
                                     // result from task_value (single-source create path).
-                                    self.build_task_created_response(
-                                        id,
-                                        task_value,
-                                        auth_context.as_ref(),
-                                        call_tool_era,
-                                    )
-                                    .await
+                                    let (response, claim) = self
+                                        .build_task_created_response(
+                                            id,
+                                            task_value,
+                                            auth_context.as_ref(),
+                                            call_tool_era,
+                                        )
+                                        .await;
+                                    *dispatch_claim = claim;
+                                    response
                                 },
                                 ToolCallOutcome::Result(result) => {
                                     // Fire-and-forget workflow continuation recording
@@ -3534,7 +3649,8 @@ impl ServerCore {
                     | ClientRequest::TasksResult(_)
                     | ClientRequest::TasksList(_)
                     | ClientRequest::TasksCancel(_)) => {
-                        self.task_dispatch()
+                        let (response, claim) = self
+                            .task_dispatch()
                             .route_tasks_endpoint(
                                 id,
                                 request,
@@ -3546,7 +3662,13 @@ impl ServerCore {
                                 // `server/mod.rs`).
                                 protocol_context.as_ref(),
                             )
-                            .await
+                            .await;
+                        // The claim travels WITH the response: a v2 `tasks/get`
+                        // on an `input_required` task owns the top-level
+                        // `inputRequests` the reserved-field registry would
+                        // otherwise strip (114-10 row 23).
+                        *dispatch_claim = claim;
+                        response
                     },
                     _ => Self::error_response(
                         id,
@@ -5519,6 +5641,7 @@ mod tests {
                 get_prompt_request("greeting", Some(v2_meta_with_trace())),
                 None,
                 Some(v2_context()),
+                &mut DispatchEnvelopeClaim::default(),
             )
             .await;
             core.handle_request_internal(
@@ -5526,6 +5649,7 @@ mod tests {
                 read_resource_request("mem://greeting", Some(v2_meta_with_trace())),
                 None,
                 Some(v2_context()),
+                &mut DispatchEnvelopeClaim::default(),
             )
             .await;
 
@@ -5550,6 +5674,7 @@ mod tests {
                 get_prompt_request("greeting", None),
                 None,
                 Some(v1.clone()),
+                &mut DispatchEnvelopeClaim::default(),
             )
             .await;
             core.handle_request_internal(
@@ -5557,6 +5682,7 @@ mod tests {
                 read_resource_request("mem://greeting", None),
                 None,
                 Some(v1),
+                &mut DispatchEnvelopeClaim::default(),
             )
             .await;
             assert_eq!(pcap.lock().unwrap().clone().unwrap().era, Some(Era::V1));
@@ -5571,6 +5697,7 @@ mod tests {
                 get_prompt_request("greeting", None),
                 None,
                 None,
+                &mut DispatchEnvelopeClaim::default(),
             )
             .await;
             core.handle_request_internal(
@@ -5578,6 +5705,7 @@ mod tests {
                 read_resource_request("mem://greeting", None),
                 None,
                 None,
+                &mut DispatchEnvelopeClaim::default(),
             )
             .await;
             assert_eq!(pcap.lock().unwrap().clone().unwrap().era, None);

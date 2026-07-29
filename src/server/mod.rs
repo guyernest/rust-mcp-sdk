@@ -1521,6 +1521,11 @@ impl Server {
             },
         };
 
+        // The SECOND envelope claimant (Phase 114 plan 11), twin of the
+        // `ServerCore` site: the `tasks/*` routes and the `tools/call` create
+        // path state their own `resultType` and reserved-field ownership from the
+        // site that writes them. `NONE` for every other dispatch.
+        let mut dispatch_claim = crate::server::core::DispatchEnvelopeClaim::NONE;
         let mut response = match request {
             Request::Client(ref boxed_req)
                 if matches!(**boxed_req, ClientRequest::Initialize(_)) =>
@@ -1567,6 +1572,7 @@ impl Server {
                     *boxed_req,
                     auth_context,
                     protocol_context.clone(),
+                    &mut dispatch_claim,
                 ))
                 .await
             },
@@ -1608,13 +1614,15 @@ impl Server {
         // helper in `core.rs` — v2-only, object-results-only, collision-safe;
         // v1 / non-opted-in responses stay byte-identical. The reserved-field
         // owner comes from the egress that minted the fields, never from the
-        // disposition (Phase 114 plan 10).
+        // disposition (Phase 114 plan 10) — folded with the dispatch's own claim
+        // through the SAME named rule `ServerCore` uses (Phase 114 plan 11).
+        let claim = dispatch_claim.or_egress(disposition, reserved_field_owner);
         crate::server::core::inject_v2_result_envelope(
             &mut response,
             protocol_context.as_ref(),
             &self.info,
-            disposition,
-            reserved_field_owner,
+            claim.disposition,
+            claim.owner,
         );
         response
     }
@@ -1625,6 +1633,7 @@ impl Server {
         request: ClientRequest,
         auth_context: Option<auth::AuthContext>,
         protocol_context: Option<crate::types::protocol::ProtocolContext>,
+        dispatch_claim: &mut crate::server::core::DispatchEnvelopeClaim,
     ) -> JSONRPCResponse {
         // ADAPTER (a) — tasks/* dispatch at the post-auth assembly layer.
         //
@@ -1649,7 +1658,7 @@ impl Server {
                 | ClientRequest::TasksList(_)
                 | ClientRequest::TasksCancel(_)
         ) {
-            return self
+            let (response, claim) = self
                 .task_dispatch()
                 .route_tasks_endpoint(
                     id,
@@ -1670,21 +1679,37 @@ impl Server {
                     protocol_context.as_ref(),
                 )
                 .await;
+            // The claim travels WITH the response: a v2 `tasks/get` on an
+            // `input_required` task owns the top-level `inputRequests` the
+            // reserved-field registry would otherwise strip (114-10 row 23).
+            *dispatch_claim = claim;
+            return response;
         }
 
         let result = self
-            .process_client_request(id.clone(), request, auth_context, protocol_context)
+            .process_client_request(
+                id.clone(),
+                request,
+                auth_context,
+                protocol_context,
+                dispatch_claim,
+            )
             .await;
         Self::create_response(id, result)
     }
 
     /// Process a client request and return the result.
+    ///
+    /// `dispatch_claim` is the out-param the `tools/call` create path writes its
+    /// v2 envelope claim into (Phase 114 plan 11); every other arm leaves it as
+    /// the caller set it.
     async fn process_client_request(
         &self,
         request_id: RequestId,
         request: ClientRequest,
         auth_context: Option<auth::AuthContext>,
         protocol_context: Option<crate::types::protocol::ProtocolContext>,
+        dispatch_claim: &mut crate::server::core::DispatchEnvelopeClaim,
     ) -> Result<serde_json::Value> {
         match request {
             ClientRequest::Initialize(_) => {
@@ -1693,8 +1718,14 @@ impl Server {
             },
             ClientRequest::ListTools(req) => self.handle_list_tools(req),
             ClientRequest::CallTool(req) => {
-                self.handle_call_tool(request_id, req, auth_context, protocol_context)
-                    .await
+                self.handle_call_tool(
+                    request_id,
+                    req,
+                    auth_context,
+                    protocol_context,
+                    dispatch_claim,
+                )
+                .await
             },
             ClientRequest::ListPrompts(req) => self.handle_list_prompts(req),
             ClientRequest::GetPrompt(req) => {
@@ -1789,6 +1820,7 @@ impl Server {
         req: CallToolRequest,
         auth_context: Option<auth::AuthContext>,
         protocol_context: Option<crate::types::protocol::ProtocolContext>,
+        dispatch_claim: &mut crate::server::core::DispatchEnvelopeClaim,
     ) -> Result<Value> {
         let handler = self
             .tools
@@ -2025,7 +2057,7 @@ impl Server {
         // surface as JSON-RPC errors).
         #[cfg(not(target_arch = "wasm32"))]
         {
-            if let Some(response) = self
+            if let Some((response, claim)) = self
                 .task_dispatch()
                 .maybe_build_task_created(
                     create_path_id,
@@ -2037,6 +2069,10 @@ impl Server {
                 )
                 .await
             {
+                // On v2 this is the ONE response in the whole surface that earns
+                // `resultType: "task"`; the claim is what carries that fact past
+                // the `Result<Value>` contract this fn is bound to.
+                *dispatch_claim = claim;
                 return match response.payload {
                     crate::types::jsonrpc::ResponsePayload::Result(value) => Ok(value),
                     // The create-path only emits `-32603` store errors here; the
@@ -5759,6 +5795,7 @@ mod tests {
                 }),
                 None,
                 Some(dispatch_v2_context()),
+                &mut crate::server::core::DispatchEnvelopeClaim::default(),
             )
             .await
             .unwrap();
@@ -5771,6 +5808,7 @@ mod tests {
                 }),
                 None,
                 Some(dispatch_v2_context()),
+                &mut crate::server::core::DispatchEnvelopeClaim::default(),
             )
             .await
             .unwrap();
@@ -5813,6 +5851,7 @@ mod tests {
                 }),
                 None,
                 Some(v1.clone()),
+                &mut crate::server::core::DispatchEnvelopeClaim::default(),
             )
             .await
             .unwrap();
@@ -5825,6 +5864,7 @@ mod tests {
                 }),
                 None,
                 Some(v1),
+                &mut crate::server::core::DispatchEnvelopeClaim::default(),
             )
             .await
             .unwrap();
@@ -5851,6 +5891,7 @@ mod tests {
                 }),
                 None,
                 None,
+                &mut crate::server::core::DispatchEnvelopeClaim::default(),
             )
             .await
             .unwrap();
@@ -5863,6 +5904,7 @@ mod tests {
                 }),
                 None,
                 None,
+                &mut crate::server::core::DispatchEnvelopeClaim::default(),
             )
             .await
             .unwrap();
