@@ -898,6 +898,110 @@ pub(crate) enum OwnerBinding {
     Refused,
 }
 
+/// WHICH era's create trigger this `tools/call` is being gated by, and whether
+/// it FIRED (plan 114-12, DQ1).
+///
+/// The two eras signal "make this a task" through completely different channels,
+/// and this enum exists so a call site cannot pass the wrong one:
+///
+/// | era | trigger | source |
+/// |-----|---------|--------|
+/// | MCP 2025-11-25 (and any request carrying no era code) | the request carried a `task` field | `CallToolRequest.task` |
+/// | MCP 2026-07-28 | the client DECLARED `io.modelcontextprotocol/tasks` on this request | `_meta.clientCapabilities.extensions`, already resolved onto [`ProtocolContext`](crate::types::protocol::ProtocolContext) |
+///
+/// # Why an enum and not a second `bool`
+///
+/// The alternative was `maybe_build_task_created(.., task_requested: bool,
+/// client_declared: bool, ..)`. Two adjacent booleans at a call site is precisely
+/// how the wrong one gets passed, and the compiler cannot tell them apart. A
+/// variant carrying its own fact makes the era EXPLICIT at every call site and
+/// makes "v1 consulted the declaration" a shape that does not exist.
+///
+/// # The v2 trigger is a CONFORMANCE requirement, not a pmcp preference
+///
+/// The extension states that a server MUST NOT return a `CreateTaskResult` to a
+/// client that did not declare the tasks extension — a client that never
+/// declared it has no rule for reading a task handle back and would break. The
+/// v2 arm below IS that precondition. It is also the reason the v1 `task` field
+/// is not consulted on v2: that field does not exist in the v2 extension at all,
+/// and requiring it would make v2 task creation unreachable.
+///
+/// # It decides WHETHER, never WHO
+///
+/// The declaration is CLIENT-SUPPLIED and trivially forgeable. It gates only
+/// whether a task is minted; the task's OWNER comes from [`TaskDispatch::resolve_owner`]
+/// via the `AuthContext` identity table (T-114-57), which no client input reaches.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CreateTrigger {
+    /// MCP 2025-11-25: the request carried a `task` field. BYTE-FROZEN.
+    V1TaskField {
+        /// Whether `CallToolRequest.task` was present on this request.
+        task_field_present: bool,
+    },
+    /// MCP 2026-07-28: the client declared the tasks extension on this request.
+    V2ClientDeclaration {
+        /// Whether `io.modelcontextprotocol/tasks` appeared in this request's
+        /// declared `clientCapabilities.extensions`.
+        client_declared_tasks: bool,
+    },
+}
+
+impl CreateTrigger {
+    /// Resolve the trigger for `era` from this request's RAW facts.
+    ///
+    /// The ONE place the era chooses a trigger. The declaration is read through
+    /// [`TaskDispatch::declares_tasks_extension`] — the SAME predicate
+    /// `route_tasks_endpoint`'s case-3 refusal uses — off the already-resolved
+    /// [`ProtocolContext`](crate::types::protocol::ProtocolContext), never by
+    /// re-parsing `params._meta` (resolving once at ingress is Phase 112's whole
+    /// point).
+    pub(crate) fn resolve(
+        era: Option<crate::types::protocol::Era>,
+        task_field_present: bool,
+        protocol_context: Option<&crate::types::protocol::ProtocolContext>,
+    ) -> Self {
+        if is_v1_task_era(era) {
+            return Self::V1TaskField { task_field_present };
+        }
+        Self::V2ClientDeclaration {
+            client_declared_tasks: TaskDispatch::declares_tasks_extension(protocol_context, era),
+        }
+    }
+
+    /// Did this era's trigger fire?
+    const fn fired(self) -> bool {
+        match self {
+            Self::V1TaskField { task_field_present } => task_field_present,
+            Self::V2ClientDeclaration {
+                client_declared_tasks,
+            } => client_declared_tasks,
+        }
+    }
+}
+
+/// The verdict of the SHARED create gate — the single expression both
+/// dispatchers ask (plan 114-12, T-114-58).
+///
+/// Three answers rather than a `bool` because `ServerCore` logs the middle one:
+/// a tool that declares task support but returns a non-task-shaped value is a
+/// tool-authoring mistake worth a `debug!`, while a closed gate is the ordinary
+/// "this is just a tool call" path and must stay silent. Collapsing them would
+/// have forced `ServerCore` to keep its own copy of the task-shape check, which
+/// is the divergent second copy this plan exists to delete.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CreateGate {
+    /// Every precondition holds — mint a task.
+    Create,
+    /// Trigger, backend and `TaskSupport` all hold, but the tool's value is not
+    /// task-shaped. Fall through to a normal `CallToolResult`; the caller MAY
+    /// log it.
+    NotTaskShaped,
+    /// A precondition is absent. Fall through SILENTLY and with NO error leak
+    /// (T-102-11) — this covers `TaskSupport::Forbidden`/absent, no backend, and
+    /// an untriggered request.
+    Closed,
+}
+
 /// Borrow-struct holding the task backend handles and the identity inputs a
 /// dispatcher owns.
 ///
@@ -1202,24 +1306,73 @@ impl TaskDispatch<'_> {
         )
     }
 
-    /// Self-enforcing create-path gate: decide whether a `tools/call` becomes a
-    /// task and, if so, build the create response.
+    /// The COMPLETE create gate, as ONE expression, reached from BOTH dispatch
+    /// sites (plan 114-12, T-114-58).
     ///
-    /// This is the SINGLE source of truth for "should this `tools/call` become a
-    /// task?". Both dispatchers call it; neither re-derives the gate. The helper
-    /// enforces the COMPLETE gate INTERNALLY — the caller passes raw facts
-    /// (`task_requested`, the tool's `task_support`, the produced `value`), never a
-    /// pre-checked precondition.
+    /// `Server` reaches it through [`Self::maybe_build_task_created`];
+    /// `ServerCore` calls it directly, because that dispatcher returns a
+    /// `ToolCallOutcome` rather than a `JSONRPCResponse` and builds its envelope
+    /// one frame up. The RESPONSE building is therefore NOT shared — the
+    /// PREDICATE is. Adding a future era's trigger means editing this one
+    /// expression and [`CreateTrigger`], and nothing else.
     ///
-    /// Returns `Some(envelope)` IFF ALL of:
-    /// - `task_requested == true` (the request carried a `task` field), AND
+    /// Returns [`CreateGate::Create`] IFF ALL of:
+    /// - the era's `trigger` FIRED (see [`CreateTrigger`] for the per-era table), AND
     /// - a backend is present (`self.task_store.is_some()`), AND
     /// - `task_support ∈ {Required, Optional}`, AND
     /// - `value` carries BOTH a `taskId` and a `status` (task-shaped).
     ///
-    /// `TaskSupport::Forbidden`/`None`, `task_requested == false`, an absent
-    /// backend, or a non-task-shaped value ALL return `None` ("fall through to a
-    /// normal `CallToolResult`") with NO error leak (T-102-11).
+    /// The caller passes RAW facts and this enforces the whole rule; no caller
+    /// pre-computes any part of it.
+    pub(crate) fn create_gate(
+        &self,
+        trigger: CreateTrigger,
+        task_support: Option<TaskSupport>,
+        value: &Value,
+    ) -> CreateGate {
+        let gate_open = trigger.fired()
+            && self.task_store.is_some()
+            && task_support
+                .is_some_and(|ts| matches!(ts, TaskSupport::Required | TaskSupport::Optional));
+        if !gate_open {
+            return CreateGate::Closed;
+        }
+        // Task-shaped value check: must carry BOTH a taskId and a status.
+        let is_task_shaped =
+            value.get("taskId").and_then(Value::as_str).is_some() && value.get("status").is_some();
+        if is_task_shaped {
+            CreateGate::Create
+        } else {
+            CreateGate::NotTaskShaped
+        }
+    }
+
+    /// Self-enforcing create-path gate: decide whether a `tools/call` becomes a
+    /// task and, if so, build the create response.
+    ///
+    /// The `Server` dispatcher's entry point to the SINGLE source of truth for
+    /// "should this `tools/call` become a task?" — [`Self::create_gate`]. The
+    /// helper enforces the COMPLETE gate INTERNALLY: the caller passes raw facts
+    /// (the era's [`CreateTrigger`], the tool's `task_support`, the produced
+    /// `value`), never a pre-checked precondition.
+    ///
+    /// # The trigger is ERA-AWARE and each era IGNORES the other's signal
+    ///
+    /// | era | trigger | the other era's signal |
+    /// |-----|---------|------------------------|
+    /// | MCP 2025-11-25 / no era code | `CallToolRequest.task` is present | a declaration is IGNORED |
+    /// | MCP 2026-07-28 | the client declared `io.modelcontextprotocol/tasks` on this request | the `task` field is IGNORED |
+    ///
+    /// On v2 the declaration is the extension's OWN precondition: a server MUST
+    /// NOT return a `CreateTaskResult` to a non-declaring client, which would
+    /// hand a task handle to a client that has no rule for reading one. So this
+    /// gate is a conformance requirement, not a pmcp preference. And the v1
+    /// `task` field is not consulted on v2 because it does not exist in the v2
+    /// extension at all — requiring it would make v2 task creation unreachable.
+    ///
+    /// A closed gate, a `TaskSupport::Forbidden`/`None`, an absent backend, or a
+    /// non-task-shaped value ALL return `None` ("fall through to a normal
+    /// `CallToolResult`") with NO error leak (T-102-11).
     // Why: proven by the in-module `gate_tests` truth-table in Plan 01 and wired
     // into the `Server` create-path in Plan 02 (`handle_call_tool`), so it is
     // production-reachable — no `dead_code` allow is needed.
@@ -1228,27 +1381,17 @@ impl TaskDispatch<'_> {
         id: RequestId,
         value: &Value,
         task_support: Option<TaskSupport>,
-        task_requested: bool,
+        trigger: CreateTrigger,
         auth_context: Option<&AuthContext>,
         era: Option<crate::types::protocol::Era>,
     ) -> Option<(JSONRPCResponse, DispatchEnvelopeClaim)> {
-        let gate_open = task_requested
-            && self.task_store.is_some()
-            && task_support
-                .is_some_and(|ts| matches!(ts, TaskSupport::Required | TaskSupport::Optional));
-        if !gate_open {
-            return None;
+        match self.create_gate(trigger, task_support, value) {
+            CreateGate::Create => Some(
+                self.build_task_created_response(id, value.clone(), auth_context, era)
+                    .await,
+            ),
+            CreateGate::NotTaskShaped | CreateGate::Closed => None,
         }
-        // Task-shaped value check: must carry BOTH a taskId and a status.
-        let is_task_shaped =
-            value.get("taskId").and_then(Value::as_str).is_some() && value.get("status").is_some();
-        if !is_task_shaped {
-            return None;
-        }
-        Some(
-            self.build_task_created_response(id, value.clone(), auth_context, era)
-                .await,
-        )
     }
 
     /// Handle a `tasks/result` request (store-first → router → -32002 → -32601).
@@ -1816,6 +1959,7 @@ impl TaskDispatch<'_> {
 mod gate_tests {
     use super::*;
     use crate::server::task_store::InMemoryTaskStore;
+    use crate::types::protocol::{Era, ProtocolContext};
     use crate::types::RequestId;
 
     fn store_backend() -> Option<Arc<dyn TaskStore>> {
@@ -1834,6 +1978,45 @@ mod gate_tests {
         RequestId::from(1i64)
     }
 
+    /// The v1 trigger — the request carried a `task` field, or it did not.
+    const fn v1_trigger(task_field_present: bool) -> CreateTrigger {
+        CreateTrigger::V1TaskField { task_field_present }
+    }
+
+    /// The already-resolved [`ProtocolContext`] a real ingress hands the create
+    /// path, at `era`, with or without the tasks-extension declaration.
+    ///
+    /// `declares` maps onto `clientCapabilities.extensions` through the SHARED
+    /// key constant and the SHARED value helper, so a fixture cannot declare the
+    /// extension by a spelling production would not recognise.
+    fn context(era: Era, declares: bool) -> ProtocolContext {
+        let version = match era {
+            Era::V2 => crate::types::protocol::PROTOCOL_VERSION_2026_07_28,
+            Era::V1 => crate::LATEST_PROTOCOL_VERSION,
+        };
+        let context = ProtocolContext::new(era, crate::types::ProtocolVersion(version.to_string()));
+        if !declares {
+            return context;
+        }
+        let mut extensions = HashMap::new();
+        extensions.insert(TASKS_EXTENSION_KEY.to_string(), tasks_extension_value());
+        context.with_client_capabilities(crate::types::ClientCapabilities {
+            extensions: Some(extensions),
+            ..crate::types::ClientCapabilities::default()
+        })
+    }
+
+    /// Resolve the trigger the way BOTH dispatchers do: through
+    /// [`CreateTrigger::resolve`], never by hand-picking a variant.
+    ///
+    /// That is the point of these five rows — a test that constructed the
+    /// variant directly would prove the gate reads its input, not that the ERA
+    /// picks the right input.
+    fn resolved_trigger(era: Era, task_field_present: bool, declares: bool) -> CreateTrigger {
+        let context = context(era, declares);
+        CreateTrigger::resolve(Some(era), task_field_present, Some(&context))
+    }
+
     /// task_requested == false → None regardless of other inputs.
     #[tokio::test]
     async fn gate_rejects_when_not_task_requested() {
@@ -1846,7 +2029,14 @@ mod gate_tests {
         };
         let value = task_shaped_value();
         let out = dispatch
-            .maybe_build_task_created(id(), &value, Some(TaskSupport::Required), false, None, None)
+            .maybe_build_task_created(
+                id(),
+                &value,
+                Some(TaskSupport::Required),
+                v1_trigger(false),
+                None,
+                None,
+            )
             .await;
         assert!(out.is_none(), "task_requested=false must yield None");
     }
@@ -1863,7 +2053,14 @@ mod gate_tests {
         };
         let value = task_shaped_value();
         let out = dispatch
-            .maybe_build_task_created(id(), &value, Some(TaskSupport::Required), true, None, None)
+            .maybe_build_task_created(
+                id(),
+                &value,
+                Some(TaskSupport::Required),
+                v1_trigger(true),
+                None,
+                None,
+            )
             .await;
         assert!(out.is_none(), "no backend must yield None");
     }
@@ -1880,7 +2077,14 @@ mod gate_tests {
         };
         let value = task_shaped_value();
         let out = dispatch
-            .maybe_build_task_created(id(), &value, Some(TaskSupport::Forbidden), true, None, None)
+            .maybe_build_task_created(
+                id(),
+                &value,
+                Some(TaskSupport::Forbidden),
+                v1_trigger(true),
+                None,
+                None,
+            )
             .await;
         assert!(out.is_none(), "Forbidden must yield None, never an error");
     }
@@ -1897,7 +2101,7 @@ mod gate_tests {
         };
         let value = task_shaped_value();
         let out = dispatch
-            .maybe_build_task_created(id(), &value, None, true, None, None)
+            .maybe_build_task_created(id(), &value, None, v1_trigger(true), None, None)
             .await;
         assert!(out.is_none(), "no task_support must yield None");
     }
@@ -1914,7 +2118,14 @@ mod gate_tests {
         };
         let value = serde_json::json!({ "foo": "bar" });
         let out = dispatch
-            .maybe_build_task_created(id(), &value, Some(TaskSupport::Required), true, None, None)
+            .maybe_build_task_created(
+                id(),
+                &value,
+                Some(TaskSupport::Required),
+                v1_trigger(true),
+                None,
+                None,
+            )
             .await;
         assert!(out.is_none(), "non-task-shaped value must yield None");
     }
@@ -1957,7 +2168,14 @@ mod gate_tests {
         };
         let value = task_shaped_value();
         let out = dispatch
-            .maybe_build_task_created(id(), &value, Some(TaskSupport::Optional), true, None, None)
+            .maybe_build_task_created(
+                id(),
+                &value,
+                Some(TaskSupport::Optional),
+                v1_trigger(true),
+                None,
+                None,
+            )
             .await;
         let (resp, claim) = out.expect("Optional + task-shaped must yield Some");
         // These fixtures carry NO era, so the v1 create shape and its NONE claim
@@ -1978,11 +2196,129 @@ mod gate_tests {
         };
         let value = task_shaped_value();
         let out = dispatch
-            .maybe_build_task_created(id(), &value, Some(TaskSupport::Required), true, None, None)
+            .maybe_build_task_created(
+                id(),
+                &value,
+                Some(TaskSupport::Required),
+                v1_trigger(true),
+                None,
+                None,
+            )
             .await;
         let (resp, claim) = out.expect("Required + task-shaped must yield Some");
         assert_eq!(claim, DispatchEnvelopeClaim::NONE);
         assert_store_minted(&resp);
+    }
+
+    // =======================================================================
+    // The ERA-AWARE trigger (plan 114-12, DQ1). One row per behaviour, named
+    // for the row it proves. Each asserts the SHARED `create_gate` verdict, so
+    // the assertion is on the predicate BOTH dispatchers reach — not on one
+    // dispatcher's rendering of it.
+    // =======================================================================
+
+    /// Ask the SHARED gate with a store, `TaskSupport::Required` and a
+    /// task-shaped value, varying ONLY the trigger.
+    fn gate_with(trigger: CreateTrigger) -> CreateGate {
+        let store = store_backend();
+        let router = None;
+        let dispatch = TaskDispatch {
+            task_store: &store,
+            task_router: &router,
+            has_auth_provider: false,
+        };
+        dispatch.create_gate(trigger, Some(TaskSupport::Required), &task_shaped_value())
+    }
+
+    /// v2: the client DECLARED the tasks extension → the gate OPENS.
+    ///
+    /// This is the row that makes v2 task creation reachable at all. Without it
+    /// no v2 `tools/call` could ever produce a `CreateTaskResult`.
+    #[test]
+    fn v2_gate_opens_on_a_client_declaration() {
+        assert_eq!(
+            gate_with(resolved_trigger(Era::V2, false, true)),
+            CreateGate::Create,
+            "a declaring v2 client must be able to receive a task handle"
+        );
+    }
+
+    /// v2: the client did NOT declare → the gate stays CLOSED.
+    ///
+    /// The extension's own precondition: a server MUST NOT return a
+    /// `CreateTaskResult` to a client that never declared the extension.
+    #[test]
+    fn v2_gate_rejects_a_non_declaring_client() {
+        assert_eq!(
+            gate_with(resolved_trigger(Era::V2, false, false)),
+            CreateGate::Closed,
+            "a non-declaring v2 client must never receive a task handle"
+        );
+    }
+
+    /// v2: a `task` field WITHOUT a declaration does NOT create.
+    ///
+    /// The v1 trigger is INERT on v2 — the field does not exist in the v2
+    /// extension, so carrying it must buy the caller nothing.
+    #[test]
+    fn v2_gate_ignores_the_v1_task_field() {
+        assert_eq!(
+            gate_with(resolved_trigger(Era::V2, true, false)),
+            CreateGate::Closed,
+            "the v1 `task` field must not open the v2 gate"
+        );
+    }
+
+    /// v1: the `task` field is still REQUIRED. BYTE-FROZEN behaviour.
+    #[test]
+    fn v1_gate_still_requires_the_task_field() {
+        assert_eq!(
+            gate_with(resolved_trigger(Era::V1, true, false)),
+            CreateGate::Create,
+            "v1 creation is triggered by the `task` field, exactly as before"
+        );
+        assert_eq!(
+            gate_with(resolved_trigger(Era::V1, false, false)),
+            CreateGate::Closed,
+            "v1 without a `task` field must still fall through"
+        );
+    }
+
+    /// v1: a declaration WITHOUT a `task` field does NOT create.
+    ///
+    /// The mirror of [`v2_gate_ignores_the_v1_task_field`]: each era ignores the
+    /// other's trigger, so a v1 client that somehow carried a v2-style
+    /// declaration cannot gain a task it did not ask for.
+    #[test]
+    fn v1_gate_ignores_a_client_declaration() {
+        assert_eq!(
+            gate_with(resolved_trigger(Era::V1, false, true)),
+            CreateGate::Closed,
+            "a declaration must not open the v1 gate"
+        );
+    }
+
+    /// The gate distinguishes "not task-shaped" from "closed", which is what
+    /// lets `ServerCore` keep its tool-authoring `debug!` without keeping its
+    /// own copy of the shape check.
+    #[test]
+    fn a_gate_open_but_unshaped_value_is_distinguishable_from_a_closed_gate() {
+        let store = store_backend();
+        let router = None;
+        let dispatch = TaskDispatch {
+            task_store: &store,
+            task_router: &router,
+            has_auth_provider: false,
+        };
+        let unshaped = serde_json::json!({ "foo": "bar" });
+        assert_eq!(
+            dispatch.create_gate(v1_trigger(true), Some(TaskSupport::Required), &unshaped),
+            CreateGate::NotTaskShaped
+        );
+        assert_eq!(
+            dispatch.create_gate(v1_trigger(false), Some(TaskSupport::Required), &unshaped),
+            CreateGate::Closed
+        );
     }
 }
 

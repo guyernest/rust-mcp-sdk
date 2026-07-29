@@ -1829,13 +1829,20 @@ impl Server {
 
         // Capture the create-path inputs BEFORE `req` is partially moved
         // (arguments are consumed by the middleware/handler below). The
-        // create-path gate (Phase 102) reads:
-        //   - whether the client requested task augmentation (`req.task`), and
+        // create-path gate reads:
+        //   - the ERA's create trigger — `req.task` on v1, the client's
+        //     per-request tasks-extension declaration on v2 (plan 114-12), and
         //   - the tool's declared `TaskSupport` (from the cached `tool_infos`).
         // The SHARED `maybe_build_task_created` enforces the FULL gate
         // internally — we pass these RAW facts, never a pre-filtered precondition.
+        // `CreateTrigger::resolve` is the ONE place the era picks a trigger, so
+        // this dispatcher cannot implement a trigger `ServerCore` misses.
         #[cfg(not(target_arch = "wasm32"))]
-        let task_requested = req.task.is_some();
+        let create_trigger = crate::server::task_dispatch::CreateTrigger::resolve(
+            protocol_context.as_ref().map(|ctx| ctx.era),
+            req.task.is_some(),
+            protocol_context.as_ref(),
+        );
         #[cfg(not(target_arch = "wasm32"))]
         let tool_task_support = self
             .tool_infos
@@ -2038,18 +2045,20 @@ impl Server {
             },
         };
 
-        // CREATE-PATH (Phase 102, HTASK-02): a task-augmented `tools/call` over
-        // the high-level `Server` mints a store task and returns a
-        // `CreateTaskResult` envelope. The SHARED `maybe_build_task_created`
-        // gate is the SINGLE source of truth: it returns `Some` ONLY when the
-        // client requested a task AND a store backend exists AND the tool's
-        // `TaskSupport ∈ {Required, Optional}` AND the produced value is
-        // task-shaped (`taskId` + `status`); otherwise `None` (fall through to a
-        // normal `CallToolResult`, no leakage — incl. `Forbidden`/`None`).
+        // CREATE-PATH (Phase 102, HTASK-02; era-aware trigger from plan 114-12):
+        // a `tools/call` whose era trigger fired over the high-level `Server`
+        // mints a store task and returns a `CreateTaskResult` envelope. The
+        // SHARED `maybe_build_task_created` gate is the SINGLE source of truth:
+        // it returns `Some` ONLY when the era's trigger fired (v1: the `task`
+        // field; v2: the client's tasks-extension declaration) AND a store
+        // backend exists AND the tool's `TaskSupport ∈ {Required, Optional}` AND
+        // the produced value is task-shaped (`taskId` + `status`); otherwise
+        // `None` (fall through to a normal `CallToolResult`, no leakage — incl.
+        // `Forbidden`/`None`).
         //
         // The store mints the canonical id (D-STORE-MINTS-ID); the tool's
         // fabricated `taskId` is never trusted on the wire. We pass the RAW
-        // facts (`task_requested`, `tool_task_support`) — the gate enforces the
+        // facts (`create_trigger`, `tool_task_support`) — the gate enforces the
         // complete precondition internally. The gate returns a full
         // `JSONRPCResponse`; we decompose it back into this fn's `Result<Value>`
         // contract (the caller re-wraps with the SAME request id via
@@ -2063,7 +2072,7 @@ impl Server {
                     create_path_id,
                     &result,
                     tool_task_support,
-                    task_requested,
+                    create_trigger,
                     create_path_auth.as_ref(),
                     create_path_era,
                 )

@@ -602,6 +602,21 @@ impl ServerCore {
             }
         }
 
+        // Capture the ERA-AWARE create trigger BEFORE `protocol_context` is moved
+        // into `extra` below (plan 114-12). `CreateTrigger::resolve` is the ONE
+        // place the era picks a trigger — v1 reads `CallToolRequest.task`, v2
+        // reads the client's tasks-extension declaration off this
+        // already-resolved context — so this dispatcher and the high-level
+        // `Server` can never implement different triggers. The declaration is
+        // read from the resolved `ProtocolContext`, never by re-parsing
+        // `params._meta` (Phase 112).
+        #[cfg(not(target_arch = "wasm32"))]
+        let create_trigger = crate::server::task_dispatch::CreateTrigger::resolve(
+            protocol_context.as_ref().map(|ctx| ctx.era),
+            req.task.is_some(),
+            protocol_context.as_ref(),
+        );
+
         // Create request handler extra data with auth_context and task request.
         // Middleware below takes `&mut extra`, so bind as mut.
         let request_id = format!("tool_{}", req.name);
@@ -725,13 +740,23 @@ impl ServerCore {
         };
         let tool_info = self.tool_infos.get(&req.name);
 
-        // Task detection: return CreateTaskResult only when ALL of:
-        // 1. task_store is configured
-        // 2. Tool declares taskSupport (Required or Optional)
-        // 3. Client sent `task` field in the request (explicit task-augmented call)
-        // 4. Tool returned a Task-shaped Value (has taskId + status)
-        // When the client doesn't send `task`, fall through to CallToolResult
-        // so non-task-aware clients (like ChatGPT) get normal tool output.
+        // Task detection: return CreateTaskResult only when the SHARED,
+        // era-aware create gate says so.
+        //
+        // This site used to carry its OWN copy of the rule — a `req.task.is_some()
+        // && self.task_store.is_some() && …` expression plus a second copy of the
+        // task-shape check, under a comment admitting it was the "same shape gate
+        // as `task_dispatch::maybe_build_task_created`". That is exactly the
+        // divergent second copy the task_dispatch module doc forbids, and it is
+        // how one era's trigger gets implemented in `Server` and missed in
+        // `ServerCore` (T-114-58). The predicate now lives in ONE expression,
+        // `TaskDispatch::create_gate`, reached from both dispatchers; only the
+        // RESPONSE building differs (this dispatcher returns a `ToolCallOutcome`
+        // and builds its envelope one frame up, at the `CallTool` arm).
+        //
+        // The trigger is era-aware (plan 114-12): v1 reads `CallToolRequest.task`,
+        // v2 reads the client's per-request tasks-extension declaration off the
+        // already-resolved `ProtocolContext`.
         #[cfg(not(target_arch = "wasm32"))]
         {
             let tool_task_support = tool_info
@@ -748,27 +773,25 @@ impl ServerCore {
                 );
             }
 
-            let has_task_support = req.task.is_some()
-                && self.task_store.is_some()
-                && tool_task_support
-                    .is_some_and(|ts| matches!(ts, TaskSupport::Required | TaskSupport::Optional));
-
-            if has_task_support {
-                // Task-shaped iff it carries both a `taskId` and a `status` (same
-                // shape gate as `task_dispatch::maybe_build_task_created`). The
-                // shared create-path re-extracts the task id + terminal
-                // CallToolResult from the value, so only the raw value crosses here.
-                let is_task_shaped = value.get("taskId").and_then(|v| v.as_str()).is_some()
-                    && value.get("status").is_some();
-                if is_task_shaped {
+            match self
+                .task_dispatch()
+                .create_gate(create_trigger, tool_task_support, &value)
+            {
+                crate::server::task_dispatch::CreateGate::Create => {
+                    // The shared create-path re-extracts the task id + terminal
+                    // CallToolResult from the value, so only the raw value
+                    // crosses here.
                     return Ok(ToolCallOutcome::TaskCreated { task_value: value });
-                }
-                // Tool declares task support but didn't return a Task — fall through to normal path
-                // (handles the "optional" case where the tool might not create a task).
-                tracing::debug!(
-                    tool = req.name.as_str(),
-                    "Tool declares taskSupport but returned non-Task value; using normal CallToolResult path"
-                );
+                },
+                crate::server::task_dispatch::CreateGate::NotTaskShaped => {
+                    // Tool declares task support but didn't return a Task — fall through to normal path
+                    // (handles the "optional" case where the tool might not create a task).
+                    tracing::debug!(
+                        tool = req.name.as_str(),
+                        "Tool declares taskSupport but returned non-Task value; using normal CallToolResult path"
+                    );
+                },
+                crate::server::task_dispatch::CreateGate::Closed => {},
             }
         }
 
