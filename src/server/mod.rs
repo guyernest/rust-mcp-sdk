@@ -1452,6 +1452,40 @@ impl Server {
         )
     }
 
+    /// Handle the v2 `tasks/update` request (Phase 114 plan 13, TASK-02).
+    ///
+    /// The production `tasks/update` caller, and a THIN delegate exactly like
+    /// [`handle_discover`](Self::handle_discover) beside it: the streamable-HTTP
+    /// transport classifies a `tasks/update` POST as `HttpIngress::TasksUpdate`
+    /// and, at the per-path response-assembly step, calls this. It constructs the
+    /// SHARED [`TaskDispatch`](crate::server::task_dispatch::TaskDispatch) over
+    /// this server's own backends — the same borrow-struct
+    /// [`handle_client_request`](Self::handle_client_request) builds for the four
+    /// `ClientRequest` tasks methods — and hands off.
+    ///
+    /// **It defines no gate of its own.** The era gate, the backend gate, the
+    /// `-32021` client-declaration gate, the `-32003` identity table and the
+    /// `-32602` params check all live in
+    /// [`TaskDispatch::route_tasks_update`](crate::server::task_dispatch::TaskDispatch::route_tasks_update),
+    /// in that order. This function's entire job is to pass the ALREADY-RESOLVED
+    /// `auth_context` and `ProtocolContext` through unchanged, which is also what
+    /// keeps it from ever re-reading `params._meta` for a second answer.
+    ///
+    /// `params` are the RAW value the classifier carried. Nothing between the wire
+    /// and the router deserializes them, so a malformed body becomes a structured
+    /// `-32602` AFTER the gates rather than a parse error before them.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn handle_tasks_update(
+        &self,
+        id: RequestId,
+        params: &serde_json::Value,
+        auth_context: Option<&auth::AuthContext>,
+        protocol_context: Option<&crate::types::protocol::ProtocolContext>,
+    ) -> JSONRPCResponse {
+        self.task_dispatch()
+            .route_tasks_update(id, params, auth_context, protocol_context)
+    }
+
     async fn handle_request(
         &self,
         id: RequestId,

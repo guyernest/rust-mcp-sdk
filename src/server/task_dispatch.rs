@@ -40,6 +40,13 @@ use crate::types::capabilities::{
     ServerCapabilities, ServerTasksCapability, TasksExtensionCapability, TASKS_EXTENSION_KEY,
 };
 use crate::types::jsonrpc::ResponsePayload;
+// The ONE `"tasks/update"` spelling in the crate. It lives in `types::mrtr`
+// because that module owns `TASK_NAME_BEARING_METHODS`, the routing table this
+// module's params gate resolves through; `types::protocol` re-exports the same
+// item for the classifier. It is deliberately NOT a row of `MRTR_METHODS` — see
+// that table's rustdoc, and `tests/v2_tasks_update_routing.rs` for the two
+// independent guards that keep it out.
+use crate::types::mrtr::TASKS_UPDATE_METHOD;
 use crate::types::tasks::{
     DetailedTaskV2, Task, TaskDetailV2, TaskStatus, TaskV2, RELATED_TASK_META_KEY,
 };
@@ -190,6 +197,65 @@ const MISSING_TASKS_DECLARATION_MESSAGE: &str =
     "the tasks extension was not declared on this request: send \
      _meta[\"io.modelcontextprotocol/clientCapabilities\"].extensions\
      [\"io.modelcontextprotocol/tasks\"]";
+
+/// The `-32601` suffix a **v1** caller receives for `tasks/update` — the OPPOSITE
+/// direction from [`V2_TASKS_METHOD_RETIRED`], and deliberately a different
+/// sentence.
+///
+/// `tasks/update` is a 2026-07-28-ONLY method: it has no MCP 2025-11-25 spelling
+/// at all, so on v1 the honest answer is "this method does not exist yet", not
+/// "this method was retired". Those two call for opposite fixes — upgrade versus
+/// migrate — and the `-32601` message is the only place a caller can tell them
+/// apart, which is the distinguishability rule T-114-33 already established for
+/// the other three `-32601` conditions in this module.
+///
+/// # This ALSO records a deliberate, benign v1 response change
+///
+/// Before Phase 114 plan 13 a `tasks/update` POST was an unrecognised method, so
+/// the streamable-HTTP transport answered a `PARSE_ERROR` at HTTP 400 with
+/// `id: null`. It now answers this `-32601` at HTTP 200 carrying the ORIGINAL id.
+/// That is the same change, for the same reason, that Phase 112 made for
+/// `server/discover` (D-10 finding #4): no conforming v1 client sends a v2-only
+/// method, so no v1-relied-upon response byte moves. `tests/v1_tasks_golden.rs`
+/// pins the v1 wire and never sends this method.
+const V1_TASKS_UPDATE_ABSENT: &str =
+    "is not a method of protocol version 2025-11-25: it is defined only by the tasks extension \
+     on protocol version 2026-07-28";
+
+/// The `-32602` message for a `tasks/update` whose params carry no addressable
+/// task.
+///
+/// The addressing key is NOT re-spelled here: the gate resolves it through
+/// [`logical_name_of`](crate::types::mrtr::logical_name_of), which reads
+/// `TASK_NAME_BEARING_METHODS` — the SAME table the `Mcp-Name` routing header
+/// derives from. One answer to "where does `tasks/update` keep its task id".
+///
+/// It names the required field and NOTHING else: no task state, no owner, and no
+/// echo of whatever the caller actually sent (the log-poisoning discipline
+/// [`V2_TASK_NOT_FOUND_MESSAGE`] records).
+const TASKS_UPDATE_MALFORMED_PARAMS: &str = "tasks/update requires params.taskId to be a string";
+
+/// The `-32603` a fully-gated `tasks/update` receives until plan 114-14 lands the
+/// delivery body.
+///
+/// # Why this is an ERROR and emphatically not an empty success ack
+///
+/// `114-SPEC-RECHECK.md` row 19 holds the provisional `UpdateTaskResult` empty-ack
+/// wire value, and this plan deliberately does NOT claim it — 114-14 does, in the
+/// same change that actually delivers the `inputResponses`. Emitting `{}` here
+/// would produce a successful-looking empty acknowledgement while the task never
+/// left `input_required`, which is byte-for-byte the failure mode Pitfall 4
+/// describes for an MRTR-eligible `tasks/update` whose payload
+/// `splice_mrtr_params` deleted. Shipping that shape as a placeholder would make
+/// the disaster and the intended behaviour indistinguishable on the wire, and the
+/// v2 client landed by 114-19 already decodes an empty ack as SUCCESS
+/// (`v2_empty_update_ack_is_not_a_decode_error`).
+///
+/// `-32603` rather than `-32601`: the method EXISTS on this server and this
+/// caller passed every gate. Answering "method not found" at that point would
+/// send a conformant client to fix its negotiation, which is not the problem.
+const TASKS_UPDATE_DELIVERY_UNIMPLEMENTED: &str =
+    "tasks/update is routed but its input delivery is not implemented on this build";
 
 /// Build the `-32601` a v2 caller receives for a RETIRED `tasks/*` method.
 ///
@@ -1953,6 +2019,135 @@ impl TaskDispatch<'_> {
                 DispatchEnvelopeClaim::NONE,
             ),
         }
+    }
+
+    /// Route a v2 `tasks/update` request — the ordered GATE chain only (Phase
+    /// 114, plan 13, TASK-02).
+    ///
+    /// The sibling of [`Self::route_tasks_endpoint`] for the one `tasks/*` method
+    /// that has no [`ClientRequest`] variant. It cannot go through that function,
+    /// which matches on `&ClientRequest`; it takes the RAW `params` instead. Every
+    /// other input is IDENTICAL, and every gate is the SAME helper — this function
+    /// contains no era definition, no backend predicate, no declaration predicate
+    /// and no identity table of its own.
+    ///
+    /// # Why `tasks/update` is not a `ClientRequest`
+    ///
+    /// See [`InternalClientRequest::TasksUpdate`](crate::types::protocol::InternalClientRequest):
+    /// [`ClientRequest`] is a PUBLIC EXHAUSTIVE enum, so a variant there is a
+    /// semver-MAJOR break. It rides the crate-private `InternalClientRequest`
+    /// route instead, following the `server/discover` precedent.
+    ///
+    /// # Rejection cases, IN ORDER — the same contract, one gate wider
+    ///
+    /// 1. **Not v2 → `-32601`** ([`V1_TASKS_UPDATE_ABSENT`]). Read through
+    ///    [`is_v1_task_era`], this module's ONE era definition. Placed FIRST and,
+    ///    unlike `route_tasks_endpoint`'s case 1, OUTSIDE the backend guard: a
+    ///    method that does not exist on the negotiated protocol version does not
+    ///    become conditional on how the server is configured.
+    /// 2. **No task backend → `-32601`** ([`TASKS_NOT_ENABLED`], the FROZEN
+    ///    message its three sibling methods already emit). Cases 3 and 4 are
+    ///    SKIPPED for a backendless server for T-114-33's reason: it advertises no
+    ///    tasks extension at all, so telling such a caller to declare one — or to
+    ///    authenticate — would send it to fix the wrong thing.
+    /// 3. **Client did not declare the extension → `-32021`.** The SAME
+    ///    [`Self::declares_tasks_extension`] predicate `route_tasks_endpoint`'s
+    ///    case 3 and `CreateTrigger`'s v2 arm both read, off the ALREADY-RESOLVED
+    ///    [`ProtocolContext`](crate::types::protocol::ProtocolContext). There is
+    ///    no second `params._meta` read on this path.
+    /// 4. **Unauthenticated on an auth-configured server → `-32003`.** Row 2 of
+    ///    the identity table, via [`Self::resolve_owner`].
+    /// 5. **The params, finally.** Nothing above this line reads `params`. That
+    ///    ordering is the whole reason
+    ///    [`classify_internal_method`](crate::types::protocol::classify_internal_method)
+    ///    keeps them RAW, and
+    ///    `malformed_params_from_an_unauthenticated_caller_yield_32003` is what
+    ///    measures it: an unauthenticated caller sending garbage gets `-32003`,
+    ///    not `-32602`.
+    ///
+    /// # What this plan deliberately does NOT do
+    ///
+    /// The delivery body — decoding `inputResponses`, bounding it, and the CAS
+    /// against the store through
+    /// [`partition_input_delivery`](crate::server::task_store::partition_input_delivery)
+    /// — is plan 114-14's. A request that passes all five gates receives
+    /// [`TASKS_UPDATE_DELIVERY_UNIMPLEMENTED`], NOT an empty success ack; that
+    /// constant's rustdoc records why the distinction is load-bearing rather than
+    /// cosmetic. Keeping the gates and the delivery in separate plans is what lets
+    /// 114-14's negative controls fail for exactly one reason.
+    ///
+    /// # Not `async`, on purpose
+    ///
+    /// Nothing here touches a store or a router, so an `async fn` would be a
+    /// `clippy::unused_async` violation and a false promise of I/O. 114-14's
+    /// delivery body makes it `async`; the single call site
+    /// ([`Server::handle_tasks_update`](crate::server::Server::handle_tasks_update))
+    /// gains one `.await` at that point.
+    pub(crate) fn route_tasks_update(
+        &self,
+        id: RequestId,
+        params: &Value,
+        auth_context: Option<&AuthContext>,
+        protocol_context: Option<&crate::types::protocol::ProtocolContext>,
+    ) -> JSONRPCResponse {
+        let era = protocol_context.map(|context| context.era);
+
+        // --- case 1 ---------------------------------------------------------
+        if is_v1_task_era(era) {
+            return error_response(
+                id,
+                crate::types::protocol::error_codes::METHOD_NOT_FOUND,
+                format!("{TASKS_UPDATE_METHOD} {V1_TASKS_UPDATE_ABSENT}"),
+            );
+        }
+
+        // --- case 2 ---------------------------------------------------------
+        if !self.has_task_backend() {
+            return error_response(
+                id,
+                crate::types::protocol::error_codes::METHOD_NOT_FOUND,
+                TASKS_NOT_ENABLED.to_string(),
+            );
+        }
+
+        // --- case 3 ---------------------------------------------------------
+        if !Self::declares_tasks_extension(protocol_context, era) {
+            return missing_tasks_declaration_refusal(id);
+        }
+
+        // --- case 4 ---------------------------------------------------------
+        // The owner is bound here and DISCARDED in this plan: 114-14's delivery
+        // is the first code that needs it. Binding it anyway keeps the refusal in
+        // its contractual position — an unauthenticated caller must be refused
+        // before its body is read, whether or not the body is used yet.
+        let owner_id = match self.resolve_owner(auth_context, era) {
+            OwnerBinding::Owner(owner) => owner,
+            OwnerBinding::Refused => {
+                return authentication_required(id, TASKS_UPDATE_METHOD);
+            },
+        };
+        debug_assert!(
+            !owner_id.is_empty() || !self.has_auth_provider,
+            "an empty owner is the anonymous principal, which only a server with no auth \
+             provider may bind"
+        );
+
+        // --- case 5 ---------------------------------------------------------
+        // The ONLY params read in this plan, and it resolves the key through the
+        // routing-name table rather than spelling `taskId` here.
+        if crate::types::mrtr::logical_name_of(TASKS_UPDATE_METHOD, params).is_none() {
+            return error_response(
+                id,
+                crate::types::protocol::error_codes::INVALID_PARAMS,
+                TASKS_UPDATE_MALFORMED_PARAMS.to_string(),
+            );
+        }
+
+        error_response(
+            id,
+            crate::types::protocol::error_codes::INTERNAL_ERROR,
+            TASKS_UPDATE_DELIVERY_UNIMPLEMENTED.to_string(),
+        )
     }
 
     /// Did this request DECLARE the tasks extension — case 3's predicate?

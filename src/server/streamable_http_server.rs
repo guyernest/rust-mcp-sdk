@@ -1236,8 +1236,9 @@ fn params_of(value: Option<&serde_json::Value>) -> &serde_json::Value {
 // execute zero MRTR code (D-04).
 // ---------------------------------------------------------------------------
 
-/// Attach the raw-body MRTR params to an accepted v2 request's context, or turn
-/// a PRESENT-but-unusable field into an `INVALID_PARAMS` rejection.
+/// Attach the raw-body MRTR params to an accepted v2 request **on an
+/// MRTR-eligible method**, or turn a PRESENT-but-unusable field into an
+/// `INVALID_PARAMS` rejection.
 ///
 /// A malformed / oversized / wrong-shaped MRTR field must never be silently
 /// treated as ABSENT: doing so lets an attacker skip the `requestState` verdict
@@ -1248,10 +1249,46 @@ fn params_of(value: Option<&serde_json::Value>) -> &serde_json::Value {
 /// The client-facing message is the `MrtrParseError`'s `Display`, which names
 /// the violated BOUND and never echoes attacker-supplied content; the
 /// discriminated reason is logged server-side only.
+///
+/// # The method gate, and the defect it closes (Phase 114 plan 13)
+///
+/// [`mrtr_ingest`](crate::server::core::mrtr_ingest) already states the rule —
+/// *"T-113-23: the spec confines MRTR to three methods. A `requestState`
+/// presented on any other method is IGNORED — not verified, not errored"* — and
+/// returns `Inert` for every non-eligible method. This EXTRACTION site had no
+/// method awareness at all, so it applied MRTR's parse and MRTR's bounds to the
+/// top-level `params` of **every** accepted v2 request. The two halves of one rule
+/// disagreed.
+///
+/// That was not cosmetic. `tasks/update`'s entire payload IS `inputResponses`, so
+/// the un-gated extraction judged that method's body at the TRANSPORT HEADER GATE
+/// — before the router's era gate, before the `-32021` declaration gate and before
+/// the `-32003` identity table. MEASURED over a real socket: an UNAUTHENTICATED
+/// caller sending `tasks/update` with `"inputResponses": "not-an-object"` received
+/// `-32602 "inputResponses must be an object"` instead of `-32003`, and an
+/// UNDECLARING caller received it instead of `-32021` — i.e. a free parse of the
+/// caller's own choosing on an unauthenticated path (T-114-64) and an inversion of
+/// 114-09's documented gate order (T-114-63). The regression tests are
+/// `malformed_params_from_an_unauthenticated_caller_yield_32003` and
+/// `an_undeclaring_v2_caller_is_refused_before_the_params_parse` in
+/// `tests/v2_tasks_update_routing.rs`.
+///
+/// The gate reads [`mrtr_eligible`](crate::types::mrtr::mrtr_eligible) — the SAME
+/// predicate over the SAME `MRTR_METHODS` table `mrtr_ingest` reads, never a
+/// second list. `method` is the already-resolved, override-aware body method that
+/// [`classify_v2_request`] has just cross-checked against `Mcp-Method`, so this
+/// adds no new read of the wire.
+///
+/// It is strictly NARROWING: for the three eligible methods nothing changes at
+/// all, and no request that is accepted today becomes rejected. What changes is
+/// that a non-eligible method's `inputResponses` / `requestState` are now IGNORED
+/// here exactly as `mrtr_ingest` already ignores them, instead of being able to
+/// reject the request.
 fn attach_v2_mrtr_params(
     context: Option<crate::types::protocol::ProtocolContext>,
     outcome: V2GateOutcome,
     body_json: Option<&serde_json::Value>,
+    method: Option<&str>,
 ) -> (
     Option<crate::types::protocol::ProtocolContext>,
     V2GateOutcome,
@@ -1259,6 +1296,10 @@ fn attach_v2_mrtr_params(
     // Only an ACCEPTED v2 request carries MRTR fields (D-04: zero era code on
     // v1 / non-opted-in, and a rejected request never reaches dispatch).
     if !matches!(outcome, V2GateOutcome::EnforceOk { .. }) {
+        return (context, outcome);
+    }
+    // ...and only on a method MRTR applies to. See the rustdoc above.
+    if !method.is_some_and(crate::types::mrtr::mrtr_eligible) {
         return (context, outcome);
     }
     let Some(ctx) = context else {
@@ -1356,9 +1397,11 @@ async fn run_v2_header_gate(
     let (extracted_method, body_name) = method_and_name_of(body_json.as_ref());
     let body_method = body_method_override.or(extracted_method.as_deref());
     let outcome = classify_v2_request(headers, meta_is_v2, body_method, body_name.as_deref());
-    // MRTR params (HTTP-03): read on the ACCEPTED v2 path only; a present but
-    // unusable field becomes an `INVALID_PARAMS` rejection here, BEFORE dispatch.
-    attach_v2_mrtr_params(context, outcome, body_json.as_ref())
+    // MRTR params (HTTP-03): read on the ACCEPTED v2 path only, and only for an
+    // MRTR-ELIGIBLE method; a present but unusable field becomes an
+    // `INVALID_PARAMS` rejection here, BEFORE dispatch. `body_method` is the
+    // value `classify_v2_request` just cross-checked, reused rather than re-read.
+    attach_v2_mrtr_params(context, outcome, body_json.as_ref(), body_method)
 }
 
 /// Crate-LOCAL ingress classification for the POST pipeline (Phase 112, VERS-04).
@@ -1397,14 +1440,37 @@ enum HttpIngress {
         id: crate::types::RequestId,
         params: Option<serde_json::Value>,
     },
+    /// A v2-only `tasks/update` request (Phase 114 plan 13, TASK-02), carrying the
+    /// ORIGINAL request id and the RAW `params` the served branch gates over.
+    ///
+    /// Classified through the SHARED
+    /// [`parse_request_or_internal`](crate::shared::protocol_helpers::parse_request_or_internal)
+    /// seam — the `server/discover` route, not this file's `SubscriptionsListen`
+    /// route. `subscriptions/listen` classifies HTTP-locally because it opens an
+    /// HTTP STREAM and has no meaning off this transport; `tasks/update` is an
+    /// ordinary request/response, so its classification belongs in `shared/` where
+    /// a later plan can widen its transport reach without a semver break.
+    ///
+    /// Not a public `ClientRequest` variant for the reason Phase 112 recorded on
+    /// [`Discover`](Self::Discover)'s sibling: `enum_variant_added` on a public
+    /// exhaustive enum is a MAJOR break, and `cargo semver-checks` catches a
+    /// regression. The params stay RAW because the classifier must never reject a
+    /// body — a malformed `params` becomes a structured `-32602` in the served
+    /// branch, AFTER the era, backend, declaration and auth gates have run, not a
+    /// parse error before them.
+    TasksUpdate {
+        id: crate::types::RequestId,
+        params: serde_json::Value,
+    },
 }
 
 impl HttpIngress {
     /// Whether this ingress is an `initialize` request — the flag that decides
     /// session minting.
     ///
-    /// `server/discover` and `subscriptions/listen` are non-init by construction
-    /// (a stateless capability projection and a v2 stream opener respectively).
+    /// `server/discover`, `subscriptions/listen` and `tasks/update` are non-init
+    /// by construction (a stateless capability projection, a v2 stream opener and
+    /// a v2 task-input delivery respectively).
     ///
     /// Both POST preambles derived this with the same inline `match` before plan
     /// 113.1; it lives here so the two paths cannot drift, and so a new
@@ -1412,16 +1478,19 @@ impl HttpIngress {
     fn is_initialize(&self) -> bool {
         match self {
             Self::Public(msg) => is_initialize_request(msg),
-            Self::Discover { .. } | Self::SubscriptionsListen { .. } => false,
+            Self::Discover { .. } | Self::SubscriptionsListen { .. } | Self::TasksUpdate { .. } => {
+                false
+            },
         }
     }
 }
 
 /// Classify a raw POST body as an internally-routed request, if it is one.
 ///
-/// Two methods are internally routed, neither of which has a public
-/// `ClientRequest` variant: `server/discover` (Phase 112, VERS-04) and
-/// `subscriptions/listen` (Phase 113 plan 10, HTTP-04). Never panics (T-112-13).
+/// Three methods are internally routed, none of which has a public
+/// `ClientRequest` variant: `server/discover` (Phase 112, VERS-04),
+/// `subscriptions/listen` (Phase 113 plan 10, HTTP-04) and `tasks/update`
+/// (Phase 114 plan 13, TASK-02). Never panics (T-112-13).
 ///
 /// Every other input (malformed JSON, a batch/notification with no `id`, a
 /// non-object, or any other method) returns `None`, so the caller falls through
@@ -1438,14 +1507,19 @@ fn classify_http_ingress(body: &[u8]) -> Option<HttpIngress> {
             params: req.params,
         });
     }
-    // Fast reject: `server/discover` is the only remaining internally-routed
-    // method, so for ~100% of traffic we skip the typed `parse_client_request`
-    // conversion and the `_meta` clone below. `parse_request_or_internal` remains
-    // the authority for the discover case (its
-    // `IngressRequest::Internal(ServerDiscover)` arm is the only path that yields
-    // `Discover`), so this peek changes no classification — any non-discover
-    // method returned `None` before too, via `Public(_) => None`.
-    if req.method != crate::types::protocol::SERVER_DISCOVER_METHOD {
+    // Fast reject: `server/discover` and `tasks/update` are the only remaining
+    // internally-routed methods, so for ~100% of traffic we skip the typed
+    // `parse_client_request` conversion and the `_meta` clone below.
+    // `parse_request_or_internal` remains the authority for both (its
+    // `IngressRequest::Internal(..)` arms are the only paths that yield `Discover`
+    // / `TasksUpdate`), so this peek changes no classification — any other method
+    // returned `None` before too, via `Public(_) => None`.
+    //
+    // Both spellings are read from the SINGLE-SOURCED constants; neither is
+    // re-typed here.
+    if req.method != crate::types::protocol::SERVER_DISCOVER_METHOD
+        && req.method != crate::types::protocol::TASKS_UPDATE_METHOD
+    {
         return None;
     }
     let (id, ingress) = crate::shared::protocol_helpers::parse_request_or_internal(req).ok()?;
@@ -1455,6 +1529,9 @@ fn classify_http_ingress(body: &[u8]) -> Option<HttpIngress> {
         crate::shared::protocol_helpers::IngressRequest::Internal(internal) => match internal {
             crate::types::protocol::InternalClientRequest::ServerDiscover(_) => {
                 Some(HttpIngress::Discover { id })
+            },
+            crate::types::protocol::InternalClientRequest::TasksUpdate { params } => {
+                Some(HttpIngress::TasksUpdate { id, params })
             },
         },
         // A public request re-parsed here is DISCARDED; the caller re-parses it via
@@ -2183,7 +2260,8 @@ async fn resolve_v2_gate(
         // body DOES carry its method — reads the method from the body.
         HttpIngress::Public(TransportMessage::Request { .. })
         | HttpIngress::Discover { .. }
-        | HttpIngress::SubscriptionsListen { .. } => {
+        | HttpIngress::SubscriptionsListen { .. }
+        | HttpIngress::TasksUpdate { .. } => {
             let method_override = matches!(ingress, HttpIngress::Discover { .. })
                 .then_some(crate::types::protocol::SERVER_DISCOVER_METHOD);
             let (ctx, gate) = run_v2_header_gate(state, headers, raw_body, method_override).await;
@@ -2561,10 +2639,18 @@ async fn handle_fast_path_request(
 /// header matrix, legacy-version validation, and auth (classify-then-continue —
 /// no pipeline bypass).
 ///
-/// Response-shaping inputs shared by BOTH `server/discover` assemblers, so the
-/// fast and middleware paths can never drift on session-header gating or the v2
-/// outbound echo.
-struct DiscoverResponseShape<'a> {
+/// Response-shaping inputs shared by every INTERNALLY-ROUTED request/response
+/// assembler, so the fast and middleware paths can never drift on session-header
+/// gating or the v2 outbound echo.
+///
+/// Two methods use it today — `server/discover` (Phase 112) and `tasks/update`
+/// (Phase 114 plan 13) — which is why it is not named after either. Both are
+/// classified out of the public-enum path by
+/// [`classify_http_ingress`] and both answer with a single JSON-RPC response, so
+/// both run the identical response tail. `subscriptions/listen` deliberately does
+/// NOT use it: it answers with a held-open SSE stream that has no complete body
+/// and therefore no response-middleware or session-header step.
+struct InternalResponseShape<'a> {
     /// The session id to echo, if any — already `None` on v2.
     response_session_id: Option<&'a String>,
     /// `Some((method, name))` for an accepted v2 discover (VERS-05 echo).
@@ -2584,10 +2670,10 @@ async fn assemble_discover_response_fast(
     state: &ServerState,
     id: crate::types::RequestId,
     protocol_context: Option<&crate::types::protocol::ProtocolContext>,
-    shape: DiscoverResponseShape<'_>,
+    shape: InternalResponseShape<'_>,
     session_id: Option<&String>,
 ) -> Response {
-    let DiscoverResponseShape {
+    let InternalResponseShape {
         response_session_id,
         v2_outbound,
         sessions_on,
@@ -2625,6 +2711,155 @@ async fn assemble_discover_response_fast(
         *response.status_mut() = status;
     }
 
+    response
+}
+
+// ===========================================================================
+// `tasks/update` (Phase 114 plan 13, TASK-02).
+// ===========================================================================
+
+/// Run the `tasks/update` GATE chain and produce its JSON-RPC response.
+///
+/// THE single place this transport reaches the tasks router for `tasks/update`,
+/// shared by the fast and middleware assemblers below so they cannot drift on
+/// which gates ran or in what order. It holds the server lock for exactly the
+/// delegate call, the same way both `server/discover` assemblers do.
+///
+/// It contains NO gate itself. `Server::handle_tasks_update` is a thin delegate
+/// onto `TaskDispatch::route_tasks_update`, which owns the whole ordered chain:
+/// era → backend → client declaration (`-32021`) → auth (`-32003`) → params
+/// (`-32602`). This function's `auth_context` is the value
+/// [`extract_and_validate_auth`] already produced, threaded through unchanged —
+/// `tasks/update` is subject to the SAME auth as every other request on this
+/// transport.
+async fn tasks_update_json_response(
+    state: &ServerState,
+    id: crate::types::RequestId,
+    params: &serde_json::Value,
+    protocol_context: Option<&crate::types::protocol::ProtocolContext>,
+    auth_context: Option<&crate::server::auth::AuthContext>,
+) -> crate::types::JSONRPCResponse {
+    let server = state.server.lock().await;
+    server.handle_tasks_update(id, params, auth_context, protocol_context)
+}
+
+/// Assemble the `tasks/update` response on the fast path (TASK-02).
+///
+/// Structurally the twin of [`assemble_discover_response_fast`] and it shares that
+/// function's [`InternalResponseShape`] and response tail verbatim in shape:
+/// store the response event, build the response, attach session / version /
+/// outbound-v2 headers, apply the code-driven v2 status. Reached only AFTER
+/// session resolution, the v2 header matrix, legacy-version validation and auth —
+/// classify-then-continue, no pipeline bypass.
+///
+/// # The v1 answer, and why it is a deliberate change
+///
+/// `tasks/update` does not exist on MCP 2025-11-25, so a v1 caller receives
+/// JSON-RPC `-32601` at HTTP 200 with the ORIGINAL id, where before plan 13 the
+/// unrecognised method produced a `PARSE_ERROR` at HTTP 400 with `id: null`. Same
+/// decision, same justification as `server/discover`'s D-10 finding #4: no
+/// conforming v1 client sends a v2-only method, so no v1-relied-upon response byte
+/// moves.
+async fn assemble_tasks_update_fast(
+    state: &ServerState,
+    id: crate::types::RequestId,
+    params: &serde_json::Value,
+    protocol_context: Option<&crate::types::protocol::ProtocolContext>,
+    auth_context: Option<&crate::server::auth::AuthContext>,
+    shape: InternalResponseShape<'_>,
+    session_id: Option<&String>,
+) -> Response {
+    let InternalResponseShape {
+        response_session_id,
+        v2_outbound,
+        sessions_on,
+    } = shape;
+    let live_id = id.clone();
+    let json_response =
+        tasks_update_json_response(state, id, params, protocol_context, auth_context).await;
+    let era = protocol_context.map(|pc| pc.era);
+    let v2_status = v2_dispatch_response_status(era, &json_response);
+    // Same structural guarantee as every other direct response (HTTP-05).
+    let response_msg =
+        TransportMessage::Response(envelope_for_live_request(json_response.payload, live_id));
+
+    store_response_event(state, era, response_session_id, &response_msg).await;
+
+    let mut response = build_response(state, response_msg, session_id, sessions_on);
+
+    apply_session_header(response.headers_mut(), response_session_id, sessions_on);
+
+    // `tasks/update` is never an init request → compute the outbound version
+    // normally.
+    let version_to_send =
+        compute_outbound_protocol_version(state, response_session_id, false, None);
+    response
+        .headers_mut()
+        .insert(MCP_PROTOCOL_VERSION, version_to_send.parse().unwrap());
+
+    // Echo the v2 outbound headers on BOTH success and structured error (VERS-05).
+    if let Some((method, name)) = &v2_outbound {
+        apply_v2_outbound_headers(response.headers_mut(), method, name);
+    }
+
+    if let Some(status) = v2_status {
+        *response.status_mut() = status;
+    }
+
+    response
+}
+
+/// Assemble the `tasks/update` response on the middleware path (TASK-02).
+///
+/// The middleware-path twin of [`assemble_tasks_update_fast`], differing ONLY in
+/// the response-BUILDING step ([`build_success_response_with_middleware`] instead
+/// of [`build_response`] + [`apply_session_header`]) — this file's established
+/// fast/middleware split. The gate chain is identical because both call the SAME
+/// [`tasks_update_json_response`].
+async fn assemble_tasks_update_with_middleware(
+    state: &ServerState,
+    id: crate::types::RequestId,
+    params: &serde_json::Value,
+    protocol_context: Option<&crate::types::protocol::ProtocolContext>,
+    auth_context: Option<&crate::server::auth::AuthContext>,
+    shape: InternalResponseShape<'_>,
+    http_middleware: &ServerHttpMiddlewareChain,
+    http_context: &ServerHttpContext,
+) -> Response {
+    let InternalResponseShape {
+        response_session_id,
+        v2_outbound,
+        sessions_on,
+    } = shape;
+    let live_id = id.clone();
+    let json_response =
+        tasks_update_json_response(state, id, params, protocol_context, auth_context).await;
+    let era = protocol_context.map(|pc| pc.era);
+    let v2_status = v2_dispatch_response_status(era, &json_response);
+    let response_msg =
+        TransportMessage::Response(envelope_for_live_request(json_response.payload, live_id));
+
+    store_response_event(state, era, response_session_id, &response_msg).await;
+
+    let version_to_send =
+        compute_outbound_protocol_version(state, response_session_id, false, None);
+
+    let mut response = build_success_response_with_middleware(
+        &response_msg,
+        response_session_id,
+        &version_to_send,
+        sessions_on,
+        http_middleware,
+        http_context,
+    )
+    .await;
+
+    if let Some((method, name)) = &v2_outbound {
+        apply_v2_outbound_headers(response.headers_mut(), method, name);
+    }
+    if let Some(status) = v2_status {
+        *response.status_mut() = status;
+    }
     response
 }
 
@@ -3506,11 +3741,11 @@ async fn assemble_discover_response_with_middleware(
     state: &ServerState,
     id: crate::types::RequestId,
     protocol_context: Option<&crate::types::protocol::ProtocolContext>,
-    shape: DiscoverResponseShape<'_>,
+    shape: InternalResponseShape<'_>,
     http_middleware: &ServerHttpMiddlewareChain,
     http_context: &ServerHttpContext,
 ) -> Response {
-    let DiscoverResponseShape {
+    let InternalResponseShape {
         response_session_id,
         v2_outbound,
         sessions_on,
@@ -3612,7 +3847,7 @@ async fn dispatch_message_fast(
                 state,
                 id,
                 protocol_context.as_ref(),
-                DiscoverResponseShape {
+                InternalResponseShape {
                     response_session_id: response_session_id.as_ref(),
                     v2_outbound,
                     sessions_on,
@@ -3637,6 +3872,33 @@ async fn dispatch_message_fast(
                 protocol_context.as_ref(),
                 v2_outbound,
                 auth_context.as_ref(),
+            ))
+            .await
+        },
+        // TASK-02: the v2 task-input delivery route. Like every other arm here it
+        // is reached AFTER the session / v2-matrix / legacy-version / auth
+        // pipeline, and it carries `auth_context` into the router because the
+        // `-32003` refusal is one of the router's five ordered gates.
+        HttpIngress::TasksUpdate { id, params } => {
+            let FastPathDispatch {
+                response_session_id,
+                protocol_context,
+                v2_outbound,
+                sessions_on,
+                ..
+            } = dispatch;
+            Box::pin(assemble_tasks_update_fast(
+                state,
+                id,
+                &params,
+                protocol_context.as_ref(),
+                auth_context.as_ref(),
+                InternalResponseShape {
+                    response_session_id: response_session_id.as_ref(),
+                    v2_outbound,
+                    sessions_on,
+                },
+                session_id,
             ))
             .await
         },
@@ -3672,7 +3934,7 @@ async fn dispatch_message_with_middleware(
                 state,
                 id,
                 protocol_context.as_ref(),
-                DiscoverResponseShape {
+                InternalResponseShape {
                     response_session_id: response_session_id.as_ref(),
                     v2_outbound,
                     sessions_on,
@@ -3691,6 +3953,24 @@ async fn dispatch_message_with_middleware(
                 protocol_context.as_ref(),
                 v2_outbound,
                 auth_context.as_ref(),
+            )
+            .await
+        },
+        // TASK-02: the v2 task-input delivery route (see the fast-path twin).
+        HttpIngress::TasksUpdate { id, params } => {
+            assemble_tasks_update_with_middleware(
+                state,
+                id,
+                &params,
+                protocol_context.as_ref(),
+                auth_context.as_ref(),
+                InternalResponseShape {
+                    response_session_id: response_session_id.as_ref(),
+                    v2_outbound,
+                    sessions_on,
+                },
+                http_middleware,
+                http_context,
             )
             .await
         },
@@ -4954,8 +5234,14 @@ mod tests {
     /// The `_meta` is NOT captured here — since Plan 113-04 the single
     /// [`run_v2_header_gate`] reads it from the raw body for every ingress, so a
     /// copy on this variant would be a duplicate read that could drift.
+    ///
+    /// RENAMED in Phase 114 plan 13 (was `..._server_discover_only`): `only` was
+    /// true when `server/discover` was the sole method reaching the
+    /// `parse_request_or_internal` peek, and `tasks/update` now reaches it too.
+    /// The sibling below covers that method; a name asserting an exclusivity that
+    /// no longer holds is the stale-marker failure class 113-29 recorded.
     #[test]
-    fn classify_http_ingress_routes_server_discover_only() {
+    fn classify_http_ingress_routes_server_discover() {
         let body = br#"{"jsonrpc":"2.0","id":7,"method":"server/discover","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}"#;
         let ingress = classify_http_ingress(body).expect("server/discover classifies");
         match ingress {
@@ -4967,7 +5253,9 @@ mod tests {
                     "2026-07-28"
                 );
             },
-            HttpIngress::Public(_) | HttpIngress::SubscriptionsListen { .. } => {
+            HttpIngress::Public(_)
+            | HttpIngress::SubscriptionsListen { .. }
+            | HttpIngress::TasksUpdate { .. } => {
                 panic!("server/discover must classify as Discover")
             },
         }
@@ -4980,6 +5268,40 @@ mod tests {
         assert!(classify_http_ingress(notif).is_none());
         // Garbage never panics and never classifies as Discover.
         assert!(classify_http_ingress(b"not json").is_none());
+    }
+
+    /// A `tasks/update` body classifies as `HttpIngress::TasksUpdate` carrying the
+    /// ORIGINAL id and its params VERBATIM (Phase 114 plan 13, TASK-02).
+    ///
+    /// The params below are deliberately NOT a well-formed `tasks/update` payload.
+    /// Classifying them anyway is the property: the classifier must never reject a
+    /// body, because a malformed one has to become a `-32602` in the served branch
+    /// AFTER the era, backend, declaration and auth gates — not a parse error
+    /// before them, which is what an unauthenticated caller would otherwise see
+    /// instead of `-32003`.
+    #[test]
+    fn classify_http_ingress_routes_tasks_update_with_raw_params() {
+        let body = br#"{"jsonrpc":"2.0","id":"u-1","method":"tasks/update","params":{"taskId":42,"junk":[1]}}"#;
+        let ingress = classify_http_ingress(body).expect("tasks/update classifies");
+        match ingress {
+            HttpIngress::TasksUpdate { id, params } => {
+                assert_eq!(id, crate::types::RequestId::from("u-1".to_string()));
+                assert_eq!(
+                    params,
+                    serde_json::json!({ "taskId": 42, "junk": [1] }),
+                    "the params must reach the served branch UNDECODED"
+                );
+            },
+            HttpIngress::Public(_)
+            | HttpIngress::Discover { .. }
+            | HttpIngress::SubscriptionsListen { .. } => {
+                panic!("tasks/update must classify as TasksUpdate")
+            },
+        }
+
+        // A notification (no id) is NOT an ingress — it has nothing to answer to.
+        let notif = br#"{"jsonrpc":"2.0","method":"tasks/update","params":{}}"#;
+        assert!(classify_http_ingress(notif).is_none());
     }
 
     /// A JSON-RPC body for `method` carrying a v2 `params._meta` under `key`.
@@ -5056,6 +5378,20 @@ mod tests {
         crate::types::protocol::ProtocolContext::new(crate::types::protocol::Era::V2, v2_version())
     }
 
+    /// The method [`mrtr_body`] builds — one of the three MRTR-ELIGIBLE methods,
+    /// which is what makes the extraction run at all (Phase 114 plan 13).
+    ///
+    /// Spelled through the production predicate rather than asserted by comment:
+    /// if `tools/call` ever left `MRTR_METHODS`, every test below would start
+    /// passing vacuously, and this catches that instead.
+    fn mrtr_test_method() -> Option<&'static str> {
+        assert!(
+            crate::types::mrtr::mrtr_eligible("tools/call"),
+            "these tests exercise the MRTR extraction, which only runs for an eligible method"
+        );
+        Some("tools/call")
+    }
+
     /// Body bytes for a `tools/call` carrying arbitrary extra top-level params.
     fn mrtr_body(extra: &serde_json::Value) -> Vec<u8> {
         let mut params = serde_json::json!({ "name": "search", "arguments": {} });
@@ -5079,8 +5415,12 @@ mod tests {
             "inputResponses": { "user_name": { "action": "accept" } },
         }));
         let parsed = raw_body_json(&body);
-        let (ctx, outcome) =
-            attach_v2_mrtr_params(Some(v2_context()), accepted_v2(), parsed.as_ref());
+        let (ctx, outcome) = attach_v2_mrtr_params(
+            Some(v2_context()),
+            accepted_v2(),
+            parsed.as_ref(),
+            mrtr_test_method(),
+        );
         assert!(matches!(outcome, V2GateOutcome::EnforceOk { .. }));
         let ctx = ctx.expect("context survives");
         assert_eq!(ctx.request_state_token(), Some("opaque-token"));
@@ -5100,7 +5440,12 @@ mod tests {
                 data: None,
             },
         ] {
-            let (ctx, _) = attach_v2_mrtr_params(Some(v2_context()), outcome, parsed.as_ref());
+            let (ctx, _) = attach_v2_mrtr_params(
+                Some(v2_context()),
+                outcome,
+                parsed.as_ref(),
+                mrtr_test_method(),
+            );
             assert!(
                 ctx.expect("context survives")
                     .request_state_token()
@@ -5116,8 +5461,12 @@ mod tests {
     fn attach_v2_mrtr_params_absent_fields_are_the_default() {
         let body = mrtr_body(&serde_json::json!({}));
         let parsed = raw_body_json(&body);
-        let (ctx, outcome) =
-            attach_v2_mrtr_params(Some(v2_context()), accepted_v2(), parsed.as_ref());
+        let (ctx, outcome) = attach_v2_mrtr_params(
+            Some(v2_context()),
+            accepted_v2(),
+            parsed.as_ref(),
+            mrtr_test_method(),
+        );
         assert!(matches!(outcome, V2GateOutcome::EnforceOk { .. }));
         let ctx = ctx.expect("context survives");
         assert!(ctx.request_state_token().is_none());
@@ -5177,8 +5526,12 @@ mod tests {
         for case in cases {
             let body = mrtr_body(&case);
             let parsed = raw_body_json(&body);
-            let (_, outcome) =
-                attach_v2_mrtr_params(Some(v2_context()), accepted_v2(), parsed.as_ref());
+            let (_, outcome) = attach_v2_mrtr_params(
+                Some(v2_context()),
+                accepted_v2(),
+                parsed.as_ref(),
+                mrtr_test_method(),
+            );
             let V2GateOutcome::Reject { code, .. } = outcome else {
                 panic!("a present-but-unusable MRTR field must REJECT, got a pass for {case}");
             };
@@ -5196,6 +5549,76 @@ mod tests {
         }
     }
 
+    /// A NON-MRTR-eligible method's top-level `inputResponses` / `requestState`
+    /// are IGNORED here, not parsed and not rejected (Phase 114 plan 13).
+    ///
+    /// This is the regression test for the two halves of one rule disagreeing.
+    /// `mrtr_ingest` has always returned `Inert` for a non-eligible method
+    /// ("T-113-23: the spec confines MRTR to three methods"); this EXTRACTION site
+    /// had no method awareness, so it judged every accepted v2 request's params
+    /// against MRTR's bounds at the transport header gate — ahead of every
+    /// dispatch-layer gate, including auth.
+    ///
+    /// `tasks/update` is the method where that mattered: its ENTIRE payload is
+    /// `inputResponses`, so an unauthenticated caller's malformed body produced
+    /// `-32602` where 114-09's order requires `-32003`. The end-to-end proof lives
+    /// in `tests/v2_tasks_update_routing.rs`; this is the unit-level statement of
+    /// the same fact.
+    #[test]
+    fn attach_v2_mrtr_params_ignores_a_non_eligible_method() {
+        // The exact shape that rejects on `tools/call` two tests above.
+        let malformed = serde_json::json!({ "inputResponses": "not-an-object" });
+        for method in ["tasks/update", "tasks/get", "tools/list", "server/discover"] {
+            assert!(
+                !crate::types::mrtr::mrtr_eligible(method),
+                "{method} must be outside MRTR_METHODS for this test to mean anything"
+            );
+            let body = serde_json::json!({
+                "jsonrpc": "2.0", "id": 1, "method": method,
+                "params": { "taskId": "t-1", "inputResponses": "not-an-object" },
+            })
+            .to_string()
+            .into_bytes();
+            let parsed = raw_body_json(&body);
+            let (ctx, outcome) = attach_v2_mrtr_params(
+                Some(v2_context()),
+                accepted_v2(),
+                parsed.as_ref(),
+                Some(method),
+            );
+            assert!(
+                matches!(outcome, V2GateOutcome::EnforceOk { .. }),
+                "{method} is not an MRTR method, so its params must not be judged here \
+                 (T-114-63/T-114-64); {malformed} was rejected"
+            );
+            let ctx = ctx.expect("context survives");
+            assert!(
+                ctx.input_responses().is_none(),
+                "{method} must carry NO MRTR-decoded inputResponses on the context"
+            );
+            assert!(
+                ctx.request_state_token().is_none(),
+                "{method} must carry NO MRTR requestState on the context"
+            );
+        }
+    }
+
+    /// A method that is absent, or unresolvable from the body, is treated as NOT
+    /// eligible — fail-closed on the extraction, which is the safe direction here
+    /// because the extraction can only REJECT.
+    #[test]
+    fn attach_v2_mrtr_params_skips_an_unresolvable_method() {
+        let body = mrtr_body(&serde_json::json!({ "requestState": "opaque-token" }));
+        let parsed = raw_body_json(&body);
+        let (ctx, outcome) =
+            attach_v2_mrtr_params(Some(v2_context()), accepted_v2(), parsed.as_ref(), None);
+        assert!(matches!(outcome, V2GateOutcome::EnforceOk { .. }));
+        assert!(ctx
+            .expect("context survives")
+            .request_state_token()
+            .is_none());
+    }
+
     /// The client-facing rejection names the BOUND, never the offending value
     /// (T-113-10 — no attacker-controlled content echoed back).
     #[test]
@@ -5206,8 +5629,12 @@ mod tests {
             "requestState": secret,
         }));
         let parsed = raw_body_json(&body);
-        let (_, outcome) =
-            attach_v2_mrtr_params(Some(v2_context()), accepted_v2(), parsed.as_ref());
+        let (_, outcome) = attach_v2_mrtr_params(
+            Some(v2_context()),
+            accepted_v2(),
+            parsed.as_ref(),
+            mrtr_test_method(),
+        );
         let V2GateOutcome::Reject { message, .. } = outcome else {
             panic!("expected a rejection");
         };
