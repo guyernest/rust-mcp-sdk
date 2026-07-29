@@ -204,6 +204,56 @@ pub fn completing_error_task_tool() -> impl ToolHandler {
     )
 }
 
+/// The name of the PAUSING task-capable tool [`spawn_tasks_server`] registers
+/// alongside [`long_task_tool`] and [`completing_error_task_tool`].
+pub const PAUSING_TOOL_NAME: &str = "elicit_task";
+
+/// The `inputRequests` key the [`pausing_task_tool`] declares.
+pub const PAUSING_TOOL_REQUEST_KEY: &str = "roots";
+
+/// A task-capable tool that declares it needs INPUT before it can continue.
+///
+/// Its task-shaped value carries `status: "input_required"` and a server-authored
+/// `inputRequests` map. That is the handler-side half of the create -> pause ->
+/// resume loop (plan 114-12): the store mints the canonical id AFTER this handler
+/// has returned, so the handler cannot record the requests itself;
+/// `build_task_created_response` re-extracts them and records them against the
+/// STORE-minted id, and the handle the caller receives is therefore ALREADY
+/// paused and pollable.
+///
+/// It lives in the SHARED harness rather than in one suite because it is the only
+/// CLIENT-REACHABLE way to produce an `input_required` task: before this tool
+/// existed, `tests/v2_tasks_shapes.rs` had to poke the store directly
+/// (`record_input_requests`) to construct that status at all. `tasks/update`
+/// (114-13 / 114-14) needs a paused task the same way.
+///
+/// The map is spelled as the wire JSON `InputRequest` serializes to
+/// (`{"method": "roots/list"}` for the unit `ListRoots` variant), which is what a
+/// real handler emitting a `serde_json::Value` writes.
+pub fn pausing_task_tool() -> impl ToolHandler {
+    pmcp::server::typed_tool::TypedTool::new_with_schema(
+        PAUSING_TOOL_NAME,
+        json!({ "type": "object" }),
+        |_args: Value, _extra| {
+            Box::pin(async {
+                Ok(json!({
+                    "taskId": "tool-fabricated",
+                    "status": "input_required",
+                    "createdAt": "2026-07-28T00:00:00Z",
+                    "lastUpdatedAt": "2026-07-28T00:00:00Z",
+                    "inputRequests": {
+                        PAUSING_TOOL_REQUEST_KEY: { "method": "roots/list" }
+                    }
+                }))
+            })
+        },
+    )
+    .with_description("a task-capable tool that pauses for a roots/list answer")
+    .with_execution(
+        pmcp::types::ToolExecution::new().with_task_support(pmcp::types::TaskSupport::Required),
+    )
+}
+
 /// The reverse-DNS extension id the v2-opted-in server advertises in its
 /// `capabilities.extensions` map, so a `server/discover` projection has a
 /// non-empty `extensions` map to assert over (VERS-04).
@@ -422,11 +472,12 @@ pub async fn spawn_tasks_server(posture: AuthPosture) -> (SocketAddr, JoinHandle
 ///
 /// The store handle exists because several task STATUSES are not reachable from
 /// outside the process at all. A `tools/call` can produce a `working` task and a
-/// `tasks/cancel` can produce a `cancelled` one, but `input_required` needs a
-/// server-authored `record_input_requests` and `failed` needs a `set_error` —
-/// both server-side writes with no client-facing trigger in this phase. A shape
-/// suite that could not construct those two statuses could not assert the two
-/// shapes the extension defines for them.
+/// `tasks/cancel` can produce a `cancelled` one, and since plan 114-12
+/// [`pausing_task_tool`] makes `input_required` reachable from a real
+/// `tools/call` too — but `failed` still needs a server-side `set_error`, which
+/// has no client-facing trigger in this phase. A shape suite that could not
+/// construct that status could not assert the shape the extension defines for
+/// it.
 pub async fn spawn_tasks_server_with_store(
     posture: AuthPosture,
 ) -> (
@@ -445,6 +496,7 @@ pub async fn spawn_tasks_server_with_store(
         ])
         .tool(TASKS_TOOL_NAME, long_task_tool())
         .tool(COMPLETING_TOOL_NAME, completing_error_task_tool())
+        .tool(PAUSING_TOOL_NAME, pausing_task_tool())
         .task_store(store.clone() as Arc<dyn pmcp::server::task_store::TaskStore>);
     builder = match posture {
         AuthPosture::None => builder,
