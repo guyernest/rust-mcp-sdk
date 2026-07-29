@@ -550,13 +550,23 @@ impl Error {
     }
 
     /// A method the 2026-07-28 schema RETIRED was called on a v2 connection
-    /// (Phase 113, HTTP-04).
+    /// (Phase 113, HTTP-04; Phase 114, TASK-03).
     ///
     /// `resources/subscribe` and `resources/unsubscribe` are gone from the v2
     /// schema, and a pmcp v2 server answers both with `404` + `-32601`. Rather
     /// than perform that pointless round trip and hand back an opaque
     /// method-not-found, the client fails fast LOCALLY with this error, whose
     /// message names the replacement API.
+    ///
+    /// # The message names ONLY the caller-supplied replacement
+    ///
+    /// It used to append a hard-coded `(Client::subscriptions_listen)`, from
+    /// when the subscriptions pair were the only two retired methods. Phase 114
+    /// added a SECOND family — `tasks/list` and `tasks/result` are absent from
+    /// the v2 tasks extension — for which that parenthetical is simply FALSE, and
+    /// a refusal message is the one signal a caller has for choosing its next
+    /// move. The pmcp API pointer belongs in the caller's `replacement` string,
+    /// not baked into a shared builder.
     ///
     /// Like the two MRTR client-local errors above, this rides the existing
     /// [`Error::Protocol`] variant discriminated by a marker in
@@ -584,7 +594,7 @@ impl Error {
             code: ErrorCode::METHOD_NOT_FOUND,
             message: format!(
                 "{method} was removed in MCP 2026-07-28 and this connection speaks that version; \
-                 use {replacement} instead (Client::subscriptions_listen)"
+                 use {replacement} instead"
             ),
             data: Some(serde_json::json!({
                 PMCP_ERROR_KEY: RETIRED_ON_V2_MARKER,

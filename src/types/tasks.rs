@@ -736,6 +736,35 @@ impl TaskV2 {
         }
     }
 
+    /// Project this v2 wire shape back onto the v1 [`Task`] — the exact inverse
+    /// of [`from_v1`](Self::from_v1) (Phase 114, plan 19).
+    ///
+    /// It lives HERE, immediately beside its inverse, for the reason
+    /// [`from_v1`](Self::from_v1) states: the two renames (`ttl` <-> `ttlMs`,
+    /// `pollInterval` <-> `pollIntervalMs`) must have exactly ONE definition. The
+    /// v2 CLIENT needs the backwards direction so [`Client::tasks_get`](crate::Client::tasks_get)
+    /// can keep returning a `Task` — a public signature that cannot change — from
+    /// a flat v2 payload, and doing that remap inside the client would have been
+    /// the second copy of this table.
+    ///
+    /// # Round-trip
+    ///
+    /// `TaskV2::from_v1(&t).to_v1()` is field-for-field `t`: every field of
+    /// [`Task`] has a counterpart here, so nothing is dropped in either
+    /// direction. A unit test pins that.
+    pub fn to_v1(&self) -> Task {
+        Task {
+            task_id: self.task_id.clone(),
+            status: self.status,
+            ttl: self.ttl_ms,
+            created_at: self.created_at.clone(),
+            last_updated_at: self.last_updated_at.clone(),
+            poll_interval: self.poll_interval_ms,
+            status_message: self.status_message.clone(),
+            diagnostic_detail: self.diagnostic_detail.clone(),
+        }
+    }
+
     /// Create a minimal projection with the five required fields set.
     ///
     /// Timestamps and `ttlMs` are taken explicitly because all three are
@@ -1529,6 +1558,66 @@ mod v2_projection_tests {
         assert!(
             !raw.contains("pollIntervalMs"),
             "a None pollIntervalMs is OPTIONAL and must be omitted, got {raw}"
+        );
+    }
+
+    /// `from_v1` and `to_v1` are exact inverses (Phase 114, plan 19).
+    ///
+    /// The v2 CLIENT decodes `tasks/get` and the flat create result through
+    /// `to_v1`, so a field this pair drops would silently vanish from a v2
+    /// caller's `Task`. Every field is compared by name — a `Task` that grew a
+    /// field without teaching BOTH directions fails here rather than in a user's
+    /// poll loop.
+    #[test]
+    fn v2_projection_round_trips_a_v1_task_field_for_field() {
+        let original = Task::new("task-round-trip", TaskStatus::InputRequired)
+            .with_timestamps("2026-07-28T00:00:00Z", "2026-07-28T00:00:09Z")
+            .with_ttl(60_000)
+            .with_poll_interval(250)
+            .with_status_message("waiting on you")
+            .with_diagnostic_detail("step 3 of 7");
+
+        let round_tripped = TaskV2::from_v1(&original).to_v1();
+
+        assert_eq!(round_tripped.task_id, original.task_id);
+        assert_eq!(round_tripped.status, original.status);
+        assert_eq!(round_tripped.ttl, original.ttl);
+        assert_eq!(round_tripped.created_at, original.created_at);
+        assert_eq!(round_tripped.last_updated_at, original.last_updated_at);
+        assert_eq!(round_tripped.poll_interval, original.poll_interval);
+        assert_eq!(round_tripped.status_message, original.status_message);
+        assert_eq!(round_tripped.diagnostic_detail, original.diagnostic_detail);
+        // Serialized equality catches a field the per-field list above forgot.
+        assert_eq!(
+            serde_json::to_value(&round_tripped).expect("serializes"),
+            serde_json::to_value(&original).expect("serializes"),
+        );
+    }
+
+    /// `to_v1` performs the two RENAMES, not a re-spelling of the v2 keys.
+    #[test]
+    fn to_v1_maps_ttl_ms_and_poll_interval_ms_onto_the_v1_names() {
+        let mut v2 = TaskV2::new(
+            "task-renames",
+            TaskStatus::Working,
+            "2026-07-28T00:00:00Z",
+            "2026-07-28T00:00:01Z",
+            Some(30_000),
+        );
+        v2.poll_interval_ms = Some(750);
+
+        let v1 = v2.to_v1();
+
+        assert_eq!(v1.ttl, Some(30_000), "ttlMs must land on ttl");
+        assert_eq!(
+            v1.poll_interval,
+            Some(750),
+            "pollIntervalMs must land on pollInterval"
+        );
+        let raw = serde_json::to_string(&v1).expect("serializes");
+        assert!(
+            !raw.contains("ttlMs") && !raw.contains("pollIntervalMs"),
+            "a v2 key spelling leaked onto the v1 Task: {raw}"
         );
     }
 

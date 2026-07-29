@@ -94,6 +94,31 @@ pub(crate) const RESULT_TYPE_KEY: &str = "resultType";
 /// Wire value of [`RESULT_TYPE_KEY`] on an [`InputRequiredResult`].
 pub(crate) const INPUT_REQUIRED_RESULT_TYPE: &str = "input_required";
 
+/// Wire value of [`RESULT_TYPE_KEY`] on a terminal, complete result.
+///
+/// The `absent-means-complete` default Phase 112 established (VERS-07): a v2
+/// result with no `resultType` at all is a complete result, and the server
+/// envelope writes this string explicitly.
+///
+/// # Why the two values below live HERE and not next to their emitter
+///
+/// The server spells them through `ResponseDisposition::as_wire_str` in
+/// `server::core`, which is `#[cfg(not(target_arch = "wasm32"))]`. The CLIENT
+/// decoder (Phase 114, plan 19) has to branch on the SAME strings and compiles
+/// on `wasm32`, so it cannot read the server's enum at all. Rather than let the
+/// two halves of one discriminator contract spell it twice, both now read these
+/// two `pub(crate)` constants — `as_wire_str` returns them, the client's
+/// task-augmented decoder compares against them.
+pub(crate) const COMPLETE_RESULT_TYPE: &str = "complete";
+
+/// Wire value of [`RESULT_TYPE_KEY`] on a v2 task-CREATED result (Phase 114).
+///
+/// The discriminator the client's `tools/call` decoder branches on: a v2
+/// response carrying it is a flat task handle, anything else is an ordinary
+/// [`CallToolResult`](crate::types::CallToolResult). See
+/// [`COMPLETE_RESULT_TYPE`] for why it is declared in this module.
+pub(crate) const TASK_RESULT_TYPE: &str = "task";
+
 // ===========================================================================
 // The ONE method table (T-113-16).
 // ===========================================================================

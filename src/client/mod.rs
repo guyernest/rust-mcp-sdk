@@ -4,11 +4,15 @@ use crate::error::{Error, Result};
 use crate::shared::{
     EnhancedMiddlewareChain, MiddlewareContext, Protocol, ProtocolOptions, Transport,
 };
-use crate::types::mrtr::{CALL_TOOL_METHOD, GET_PROMPT_METHOD, READ_RESOURCE_METHOD};
+use crate::types::mrtr::{
+    InputRequests, InputResponses, CALL_TOOL_METHOD, COMPLETE_RESULT_TYPE, GET_PROMPT_METHOD,
+    INPUT_RESPONSES_KEY, READ_RESOURCE_METHOD, RESULT_TYPE_KEY, TASKS_CANCEL_METHOD,
+    TASKS_GET_METHOD, TASKS_UPDATE_METHOD, TASK_ID_KEY, TASK_RESULT_TYPE,
+};
 use crate::types::tasks::{
-    resolve_poll_interval, CancelTaskRequest, CancelTaskResult, CreateTaskResult,
+    resolve_poll_interval, CancelTaskRequest, CancelTaskResult, CreateTaskResult, DetailedTaskV2,
     GetTaskPayloadRequest, GetTaskRequest, GetTaskResult, ListTasksRequest, ListTasksResult, Task,
-    TaskMetadata, TaskPollDecision, TaskStatus, MIN_POLL_MS,
+    TaskDetailV2, TaskMetadata, TaskPollDecision, TaskStatus, TaskV2, MIN_POLL_MS,
 };
 use crate::types::{
     CallToolRequest, CallToolResult, CancelledNotification, ClientCapabilities, ClientNotification,
@@ -59,13 +63,34 @@ pub use host::{
 ///
 /// When calling [`Client::call_tool_with_task`], the server may return either
 /// an async task (poll with `tasks/get`) or a synchronous result.
+///
+/// # Both eras land in the SAME two variants (Phase 114, plan 19)
+///
+/// This enum is PUBLIC and not `#[non_exhaustive]`, so neither its variants nor
+/// their payload types may change without a MAJOR semver bump. The `2026-07-28`
+/// create result is a FLAT `{taskId,status,createdAt,lastUpdatedAt,ttlMs}` body
+/// where v1's is a NESTED `{"task": {…}}` one, and the two eras also spell two
+/// fields differently (`ttlMs`/`pollIntervalMs` vs `ttl`/`pollInterval`) — but
+/// that difference is absorbed by
+/// [`TaskV2::to_v1`](crate::types::tasks::TaskV2::to_v1) at the decode site, so
+/// [`Task`] stays the one handle type a caller sees on either wire.
+///
+/// A v2 `tasks/get` carries STATUS-CONDITIONAL detail the v1 [`Task`] has no
+/// field for (`result` on `completed`, `error` on `failed`, `inputRequests` on
+/// `input_required`). That detail is reached through the ADDITIVE
+/// [`Client::tasks_get_detailed`] rather than by widening a variant here.
 #[derive(Debug, Clone)]
 pub enum ToolCallResponse {
     /// The server returned a synchronous result (no task created).
     Result(CallToolResult),
     /// The server created an async task. Poll with [`Client::tasks_get`]
-    /// until the task reaches a terminal status, then call
-    /// [`Client::tasks_result`] to get the final `CallToolResult`.
+    /// until the task reaches a terminal status.
+    ///
+    /// - **v1** — then call [`Client::tasks_result`] for the final
+    ///   `CallToolResult`.
+    /// - **v2** — `tasks/result` does not exist; the terminal payload is INLINE
+    ///   in the `tasks/get` result, read through [`Client::tasks_get_detailed`]
+    ///   (or simply let [`Client::wait_for_task`] do both).
     Task(Task),
 }
 
@@ -154,6 +179,37 @@ const ELICITATION_METHOD: &str = crate::types::mrtr::InputRequestKind::Elicitati
 
 /// The `roots/list` method name. See [`SAMPLING_METHOD`].
 const ROOTS_METHOD: &str = crate::types::mrtr::InputRequestKind::Roots.wire_method();
+
+/// `tasks/list` — RETIRED on the `2026-07-28` wire (Phase 114, TASK-03).
+///
+/// Deliberately NOT a row of either `types::mrtr` method table: those tables
+/// decide MRTR eligibility and `Mcp-Name` derivation, and this method exists on
+/// v1 ONLY — claiming a v2 routing name for it would be a claim pmcp cannot
+/// support. It is spelled here because exactly two client sites need it: the v1
+/// call and the v2 local refusal.
+const TASKS_LIST_METHOD: &str = "tasks/list";
+
+/// `tasks/result` — RETIRED on the `2026-07-28` wire. See [`TASKS_LIST_METHOD`].
+const TASKS_RESULT_METHOD: &str = "tasks/result";
+
+/// What a v2 caller should reach for instead of the retired `tasks/list`.
+///
+/// There is NO v2 list method — the enumeration primitive was removed as a
+/// security improvement (a server with no list cannot leak the existence of one
+/// caller's tasks to another), so the honest answer is that the client keeps its
+/// own ids. Saying "use `tasks/get`" here would be a lie: `tasks/get` answers
+/// about ONE id the caller already holds.
+const TASKS_LIST_V2_REPLACEMENT: &str = "client-side task tracking";
+
+/// The input-responder type [`Client::wait_for_task`] passes as `None`.
+///
+/// `Client::poll_task_to_terminal` is generic over its responder so that
+/// [`Client::wait_for_task_with_inputs`] can reuse it WHOLESALE rather than
+/// growing a second copy of the loop. A bare `None` leaves both type parameters
+/// unconstrained, so the no-responder caller names this concrete, NEVER-CALLED
+/// function-pointer type instead. `std::future::Ready` is simply the smallest
+/// concrete `Future` that satisfies the bound.
+type NoInputResponder = fn(InputRequests) -> std::future::Ready<Result<InputResponses>>;
 
 /// Why a host request could not be answered.
 ///
@@ -1098,24 +1154,7 @@ impl<T: Transport> Client<T> {
         })));
         let request_id = RequestId::String(Uuid::new_v4().to_string());
         let response = self.send_request(request_id, request).await?;
-
-        match response.payload {
-            crate::types::jsonrpc::ResponsePayload::Result(result) => {
-                // Try CreateTaskResult first (more specific), fall back to CallToolResult.
-                // This avoids brittle key-name duck-typing.
-                if let Ok(task_result) = serde_json::from_value::<CreateTaskResult>(result.clone())
-                {
-                    Ok(ToolCallResponse::Task(task_result.task))
-                } else {
-                    let tool_result: CallToolResult =
-                        serde_json::from_value(result).map_err(|e| Error::parse(e.to_string()))?;
-                    Ok(ToolCallResponse::Result(tool_result))
-                }
-            },
-            crate::types::jsonrpc::ResponsePayload::Error(error) => {
-                Err(Error::from_jsonrpc_error(error))
-            },
-        }
+        self.decode_task_augmented_response(response)
     }
 
     /// Call a tool with task augmentation AND custom request `_meta`.
@@ -1170,23 +1209,93 @@ impl<T: Transport> Client<T> {
         })));
         let request_id = RequestId::String(Uuid::new_v4().to_string());
         let response = self.send_request(request_id, request).await?;
+        self.decode_task_augmented_response(response)
+    }
 
-        match response.payload {
-            crate::types::jsonrpc::ResponsePayload::Result(result) => {
-                // Try CreateTaskResult first (more specific), fall back to CallToolResult.
-                if let Ok(task_result) = serde_json::from_value::<CreateTaskResult>(result.clone())
-                {
-                    Ok(ToolCallResponse::Task(task_result.task))
-                } else {
-                    let tool_result: CallToolResult =
-                        serde_json::from_value(result).map_err(|e| Error::parse(e.to_string()))?;
-                    Ok(ToolCallResponse::Result(tool_result))
-                }
-            },
+    /// Decode the response of a task-augmented `tools/call`, ERA-AWARE.
+    ///
+    /// The ONE decoder [`Self::call_tool_with_task`] and
+    /// [`Self::call_tool_with_task_and_meta`] share. Those two carried a
+    /// line-for-line identical copy of this arm before Phase 114 plan 19, and
+    /// making them era-aware would have created a third.
+    ///
+    /// # v2 branches on the DISCRIMINATOR, never on the shape
+    ///
+    /// The v1 arm below is the historical "try `CreateTaskResult`, else
+    /// `CallToolResult`" try-first-then-fall-back, kept byte-for-byte because v1
+    /// wire behaviour must not move. Its own comment warns against key-name
+    /// duck-typing, and on v2 the warning becomes load-bearing: the v2 create
+    /// payload is FLAT, so it and an ordinary `CallToolResult` no longer have a
+    /// reliably discriminating key — `CallToolResult::content` carries
+    /// `#[serde(default)]`, so essentially any object decodes as one.
+    ///
+    /// v2 therefore reads [`RESULT_TYPE_KEY`] and compares it to
+    /// [`TASK_RESULT_TYPE`], the SAME constant the server's
+    /// `ResponseDisposition::as_wire_str` emits. An absent or unrecognised
+    /// `resultType` is an ordinary complete result — the absent-means-complete
+    /// rule Phase 112 established for this envelope (T-114-99: a server cannot
+    /// steer a client's decode branch by crafting a task-SHAPED ordinary
+    /// result, because the shape is not consulted).
+    fn decode_task_augmented_response(
+        &self,
+        response: crate::types::JSONRPCResponse,
+    ) -> Result<ToolCallResponse> {
+        let result = match response.payload {
+            crate::types::jsonrpc::ResponsePayload::Result(result) => result,
             crate::types::jsonrpc::ResponsePayload::Error(error) => {
-                Err(Error::from_jsonrpc_error(error))
+                return Err(Error::from_jsonrpc_error(error))
             },
+        };
+        if self.is_v2() {
+            return Self::decode_v2_task_augmented_result(result);
         }
+        Self::decode_v1_task_augmented_result(result)
+    }
+
+    /// The v2 arm of [`Self::decode_task_augmented_response`].
+    ///
+    /// Every arm is named, including the two that mean the same thing: the
+    /// server's explicit `"complete"` and an ABSENT discriminator are one answer
+    /// (absent-means-complete), and an unrecognised value is that answer too —
+    /// but observably, because a value this client does not know is a protocol
+    /// version skew a developer needs to see, not something to swallow.
+    fn decode_v2_task_augmented_result(result: serde_json::Value) -> Result<ToolCallResponse> {
+        let created_a_task = match result
+            .get(RESULT_TYPE_KEY)
+            .and_then(serde_json::Value::as_str)
+        {
+            Some(TASK_RESULT_TYPE) => true,
+            Some(COMPLETE_RESULT_TYPE) | None => false,
+            Some(unknown) => {
+                tracing::debug!(
+                    target: "mcp.tasks",
+                    result_type = unknown,
+                    "unrecognised {RESULT_TYPE_KEY} on a v2 tools/call result; treating it as a \
+                     complete result (absent-means-complete)"
+                );
+                false
+            },
+        };
+        if !created_a_task {
+            let tool_result: CallToolResult =
+                serde_json::from_value(result).map_err(|e| Error::parse(e.to_string()))?;
+            return Ok(ToolCallResponse::Result(tool_result));
+        }
+        let created: TaskV2 =
+            serde_json::from_value(result).map_err(|e| Error::parse(e.to_string()))?;
+        Ok(ToolCallResponse::Task(created.to_v1()))
+    }
+
+    /// The v1 arm of [`Self::decode_task_augmented_response`] — FROZEN.
+    fn decode_v1_task_augmented_result(result: serde_json::Value) -> Result<ToolCallResponse> {
+        // Try CreateTaskResult first (more specific), fall back to CallToolResult.
+        // This avoids brittle key-name duck-typing.
+        if let Ok(task_result) = serde_json::from_value::<CreateTaskResult>(result.clone()) {
+            return Ok(ToolCallResponse::Task(task_result.task));
+        }
+        let tool_result: CallToolResult =
+            serde_json::from_value(result).map_err(|e| Error::parse(e.to_string()))?;
+        Ok(ToolCallResponse::Result(tool_result))
     }
 
     /// Call a tool (non-task) with custom request `_meta`.
@@ -1252,14 +1361,40 @@ impl<T: Transport> Client<T> {
     /// (respecting `task.poll_interval`) until the task reaches a terminal
     /// status (`Completed`, `Failed`, or `Cancelled`).
     ///
+    /// # Era awareness (Phase 114, plan 19)
+    ///
+    /// | Era | Wire shape | How it becomes a [`Task`] |
+    /// |-----|-----------|---------------------------|
+    /// | v1 | NESTED `{"task": {…, "ttl", "pollInterval"}}` | unchanged: decode `GetTaskResult`, return `.task` |
+    /// | v2 | FLAT `{taskId, status, createdAt, lastUpdatedAt, ttlMs, …}` | decode `TaskV2`, then [`TaskV2::to_v1`](crate::types::tasks::TaskV2::to_v1) |
+    ///
+    /// The signature is unchanged on purpose: `ttlMs` lands on [`Task::ttl`] and
+    /// `pollIntervalMs` on [`Task::poll_interval`], so an existing caller's poll
+    /// logic keeps working verbatim against a v2 server.
+    ///
+    /// The v2 arm decodes only the flat BASE task, never the status-discriminated
+    /// `DetailedTask`. That is deliberate: a backend that cannot supply a
+    /// terminal task's `result` degrades to the bare flat `Task`, and a strict
+    /// decode here would turn "I could not read the detail" into "I could not
+    /// read the task at all". Use [`Self::tasks_get_detailed`] when you want the
+    /// inlined detail and want a missing one to be an error.
+    ///
     /// # Errors
     ///
     /// Returns an error if:
     /// - The server doesn't support tasks
-    /// - The task ID doesn't exist or belongs to another owner
+    /// - The task ID doesn't exist or belongs to another owner. On v2 that is
+    ///   ONE `-32602` answer for absent / wrong-owner / EXPIRED alike — the
+    ///   three are deliberately indistinguishable (no existence oracle), so a
+    ///   client must not try to tell them apart.
     pub async fn tasks_get(&self, task_id: &str) -> Result<Task> {
+        if self.is_v2() {
+            let raw = self.tasks_get_raw_v2(task_id).await?;
+            return Ok(Self::decode_v2_task_base(&raw)?.to_v1());
+        }
+
         self.ensure_initialized()?;
-        self.assert_capability("tasks", "tasks/get")?;
+        self.assert_capability("tasks", TASKS_GET_METHOD)?;
 
         let request = Request::Client(Box::new(ClientRequest::TasksGet(GetTaskRequest {
             task_id: task_id.to_string(),
@@ -1267,18 +1402,88 @@ impl<T: Transport> Client<T> {
         let request_id = RequestId::String(Uuid::new_v4().to_string());
         let response = self.send_request(request_id, request).await?;
 
-        let task_result: GetTaskResult = self.parse_task_payload(response, "tasks/get").await?;
+        let task_result: GetTaskResult =
+            self.parse_task_payload(response, TASKS_GET_METHOD).await?;
         Ok(task_result.task)
     }
 
-    /// Get the final result of a completed task.
+    /// Get a task's status TOGETHER WITH its status-conditional detail — v2 only
+    /// (Phase 114, plan 19).
+    ///
+    /// The additive sibling of [`Self::tasks_get`]. On `2026-07-28` a
+    /// `tasks/get` result is a flat `DetailedTask`: one variant per status,
+    /// each carrying exactly the key its schema variant marks required —
+    /// `result` on `completed`, `error` on `failed`, `inputRequests` on
+    /// `input_required`, nothing extra on `working` / `cancelled`.
+    ///
+    /// This is what removes the second round trip v1 needed: `tasks/result` does
+    /// not exist on v2 because the terminal payload is already here.
+    ///
+    /// # Strict by design
+    ///
+    /// [`DetailedTaskV2::from_wire_value`](crate::types::tasks::DetailedTaskV2::from_wire_value)
+    /// is STATUS-DIRECTED: it reads `status` first and then REQUIRES that
+    /// status's key. A `completed` task with no `result` is an error here rather
+    /// than a best-effort decode into a variant that happens to fit — the same
+    /// discipline the server-side projection applies when it emits.
+    ///
+    /// # Errors
+    ///
+    /// - [`Error::InvalidState`] when the connection did not opt into
+    ///   `2026-07-28` — NO request is sent.
+    /// - The transport / JSON-RPC errors [`Self::tasks_get`] returns.
+    /// - [`Error::Parse`] when the payload's status and detail disagree.
+    pub async fn tasks_get_detailed(&self, task_id: &str) -> Result<DetailedTaskV2> {
+        self.require_v2("Client::tasks_get_detailed")?;
+        let raw = self.tasks_get_raw_v2(task_id).await?;
+        DetailedTaskV2::from_wire_value(&raw).map_err(Error::parse)
+    }
+
+    /// Send one v2 `tasks/get` and hand back the RAW result object.
+    ///
+    /// The single v2 fetch site: [`Self::tasks_get`], [`Self::tasks_get_detailed`]
+    /// and the poll loop all go through it, so the flat payload is fetched ONCE
+    /// per tick and both the base task and the inlined detail are read from the
+    /// SAME bytes. Decoding twice from one value is free; asking the server
+    /// twice is a second round trip and a second chance for the two answers to
+    /// disagree.
+    async fn tasks_get_raw_v2(&self, task_id: &str) -> Result<serde_json::Value> {
+        self.ensure_initialized()?;
+        self.assert_capability("tasks", TASKS_GET_METHOD)?;
+
+        let request = Request::Client(Box::new(ClientRequest::TasksGet(GetTaskRequest {
+            task_id: task_id.to_string(),
+        })));
+        let request_id = RequestId::String(Uuid::new_v4().to_string());
+        let response = self.send_request(request_id, request).await?;
+        self.parse_task_payload::<serde_json::Value>(response, TASKS_GET_METHOD)
+            .await
+    }
+
+    /// Decode the flat v2 base task out of a raw `tasks/get` payload.
+    fn decode_v2_task_base(raw: &serde_json::Value) -> Result<TaskV2> {
+        serde_json::from_value(raw.clone()).map_err(|e| Error::parse(e.to_string()))
+    }
+
+    /// Get the final result of a completed task — **v1 only**.
     ///
     /// For a task-augmented `tools/call`, this returns the `CallToolResult`
     /// that the tool would have returned synchronously. Only valid when
     /// the task status is `Completed`.
+    ///
+    /// # RETIRED on `2026-07-28` (Phase 114, TASK-03 / D-15)
+    ///
+    /// `tasks/result` is absent from the tasks extension: the v2 `tasks/get`
+    /// INLINES the terminal payload, so a second round trip has nothing left to
+    /// do. A v2 server answers this method `-32601`. Calling it on a v2
+    /// connection therefore fails LOCALLY — no bytes leave the process — with an
+    /// [`Error::retired_on_v2`] naming [`Self::tasks_get_detailed`]'s method as
+    /// the replacement. A clear local error beats a round trip to an opaque
+    /// method-not-found.
     pub async fn tasks_result(&self, task_id: &str) -> Result<CallToolResult> {
+        self.reject_retired_tasks_method_on_v2(TASKS_RESULT_METHOD, TASKS_GET_METHOD)?;
         self.ensure_initialized()?;
-        self.assert_capability("tasks", "tasks/result")?;
+        self.assert_capability("tasks", TASKS_RESULT_METHOD)?;
 
         let request = Request::Client(Box::new(ClientRequest::TasksResult(
             GetTaskPayloadRequest {
@@ -1288,17 +1493,49 @@ impl<T: Transport> Client<T> {
         let request_id = RequestId::String(Uuid::new_v4().to_string());
         let response = self.send_request(request_id, request).await?;
 
-        self.parse_task_payload::<CallToolResult>(response, "tasks/result")
+        self.parse_task_payload::<CallToolResult>(response, TASKS_RESULT_METHOD)
             .await
     }
 
-    /// Poll a task to terminal status, then return its `tasks/result`.
+    /// Refuse a `tasks/*` method the `2026-07-28` tasks extension does not
+    /// declare, LOCALLY and before any bytes go on the wire.
+    ///
+    /// The tasks twin of [`Self::reject_if_retired_on_v2`], kept separate from it
+    /// because the replacement differs per method and because the two families
+    /// were retired by different specs. Both mint the SAME
+    /// [`Error::retired_on_v2`] marker, so a caller has ONE typed check
+    /// ([`Error::is_retired_on_v2`]) for "this method is gone on v2".
+    ///
+    /// On v1 it is a no-op, so the legacy path stays byte-identical.
+    fn reject_retired_tasks_method_on_v2(&self, method: &str, replacement: &str) -> Result<()> {
+        if self.is_v2() {
+            return Err(Error::retired_on_v2(method, replacement));
+        }
+        Ok(())
+    }
+
+    /// Poll a task to terminal status, then return its final result.
     ///
     /// Drives `tasks/get` in a loop until [`TaskStatus::is_terminal`], honoring
     /// the polling interval (caller override, else the task-reported
     /// `pollInterval`, else a built-in default) and an optional overall timeout.
-    /// On terminal status it fetches and returns the persisted
-    /// [`CallToolResult`] via [`Client::tasks_result`].
+    ///
+    /// # Where the terminal result comes from is ERA-SPLIT (Phase 114, plan 19)
+    ///
+    /// | Era | Terminal step |
+    /// |-----|---------------|
+    /// | v1 | a second round trip: [`Client::tasks_result`], exactly as before |
+    /// | v2 | ZERO extra round trips — the result is INLINE in the `tasks/get` payload the loop already fetched |
+    ///
+    /// `tasks/result` does not exist on `2026-07-28` (a v2 server answers
+    /// `-32601`), so the v2 arm must not call it — and does not need to, because
+    /// a v2 `tasks/get` on a `completed` task carries `result` and on a `failed`
+    /// task carries `error`. Nothing else in the loop is era-aware: the
+    /// classifier, the floor, the budget clamp and the clock are shared.
+    ///
+    /// On v2 a task that reaches `failed` surfaces its inlined JSON-RPC `error`
+    /// as a typed client error rather than an empty success, and a `cancelled`
+    /// task is an error too — neither has a result to return.
     ///
     /// # Wasm safety
     ///
@@ -1324,7 +1561,9 @@ impl<T: Transport> Client<T> {
     ///   [`TaskStatus::InputRequired`]: that state is NOT terminal and needs
     ///   client-side action (elicitation) this poller cannot provide, so
     ///   polling on would hang forever under the default (unbounded) options.
-    ///   Handle the required input, then resume polling.
+    ///   Handle the required input, then resume polling — or use
+    ///   [`Client::wait_for_task_with_inputs`], which is exactly this poller
+    ///   with a responder attached and IS the answer to that message.
     ///
     /// # Durable and replay consumers
     ///
@@ -1362,13 +1601,125 @@ impl<T: Transport> Client<T> {
         task_id: &str,
         opts: WaitForTaskOptions,
     ) -> Result<CallToolResult> {
+        // No responder: the `InputRequired` arm below returns its error, which is
+        // the correct answer for a caller that supplied none. The turbofish names
+        // a concrete never-called callback type because `None` alone leaves both
+        // generic parameters unconstrained.
+        self.poll_task_to_terminal(task_id, opts, None::<NoInputResponder>)
+            .await
+    }
+
+    /// [`Client::wait_for_task`] WITH a responder for `input_required` — v2 only
+    /// (Phase 114, TASK-02).
+    ///
+    /// The same poller, with one behaviour added: when the task pauses for
+    /// input, `responder` is handed the task's `inputRequests` (read from the
+    /// `tasks/get` payload the loop already fetched — no extra round trip), its
+    /// answers are delivered with [`Client::tasks_update`], and polling resumes.
+    ///
+    /// Everything else is [`Client::wait_for_task`] VERBATIM — the same
+    /// `poll_decision()` classifier matched with no wildcard arm, the same
+    /// `MIN_POLL_MS` floor, the same remaining-budget clamp, the same
+    /// `web_time::Instant` clock — because it is literally the same function
+    /// with a responder passed in.
+    ///
+    /// # v2 only
+    ///
+    /// `tasks/update` does not exist on `2026-07-28`'s predecessor, so a v1 call
+    /// fails LOCALLY with no bytes on the wire. Use
+    /// [`Client::wait_for_task`] plus your own elicitation handling there.
+    ///
+    /// # The input rounds are BOUNDED
+    ///
+    /// A server that keeps re-requesting input cannot spin a client forever: the
+    /// number of `input_required` rounds is capped by the SAME configured bound
+    /// the MRTR gather->resend loop uses
+    /// ([`ClientBuilder::mrtr_round_limit`], defaulting to
+    /// `DEFAULT_MRTR_ROUND_LIMIT` = 8). It is deliberately the same knob and not
+    /// a new constant: both bound "how many times will I answer this server's
+    /// questions before I conclude it is not making progress", and two
+    /// independently-tuned answers to one question is how they drift apart.
+    /// Exceeding it returns [`Error::mrtr_round_limit_exceeded`].
+    ///
+    /// # A task is NOT a higher-trust channel
+    ///
+    /// The requests handed to `responder` are ordinary elicitation / sampling /
+    /// roots requests that happen to arrive through a task. Apply the SAME
+    /// consent and policy gates you would for a direct server-initiated request;
+    /// this poller passes values through and executes nothing server-supplied.
+    ///
+    /// # Errors
+    ///
+    /// Everything [`Client::wait_for_task`] returns, plus whatever `responder`
+    /// itself returns (propagated unchanged), plus the round-bound error above.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// use pmcp::client::WaitForTaskOptions;
+    /// use pmcp::types::mrtr::InputResponses;
+    ///
+    /// let result = client
+    ///     .wait_for_task_with_inputs("task-1", WaitForTaskOptions::default(), |requests| async move {
+    ///         let mut answers = InputResponses::new();
+    ///         for (key, request) in &requests {
+    ///             answers.insert(key.clone(), answer_one(request).await?);
+    ///         }
+    ///         Ok(answers)
+    ///     })
+    ///     .await?;
+    /// ```
+    pub async fn wait_for_task_with_inputs<F, Fut>(
+        &self,
+        task_id: &str,
+        opts: WaitForTaskOptions,
+        responder: F,
+    ) -> Result<CallToolResult>
+    where
+        F: FnMut(InputRequests) -> Fut,
+        Fut: std::future::Future<Output = Result<InputResponses>>,
+    {
+        // `tasks/update` is v2-only, so a v1 call could never complete a round.
+        // Refuse locally BEFORE the first `tasks/get` goes out.
+        self.require_v2("Client::wait_for_task_with_inputs")?;
+        self.poll_task_to_terminal(task_id, opts, Some(responder))
+            .await
+    }
+
+    /// The ONE task poll loop, shared by [`Self::wait_for_task`] and
+    /// [`Self::wait_for_task_with_inputs`].
+    ///
+    /// `responder` is the only difference between the two: `None` makes
+    /// `input_required` the terminal error it has always been, `Some` makes it a
+    /// round of the gather->update->resume loop.
+    async fn poll_task_to_terminal<F, Fut>(
+        &self,
+        task_id: &str,
+        opts: WaitForTaskOptions,
+        mut responder: Option<F>,
+    ) -> Result<CallToolResult>
+    where
+        F: FnMut(InputRequests) -> Fut,
+        Fut: std::future::Future<Output = Result<InputResponses>>,
+    {
         self.ensure_initialized()?;
-        self.assert_capability("tasks", "tasks/get")?;
+        self.assert_capability("tasks", TASKS_GET_METHOD)?;
 
         // Wasm-safe monotonic clock: IS std::time::Instant on native, browser-safe on wasm.
         let start = web_time::Instant::now();
+        let input_round_limit = self.mrtr_round_limit.max(1);
+        let mut input_rounds = 0usize;
         loop {
-            let task = self.tasks_get(task_id).await?;
+            // ONE fetch per tick on both eras. On v2 the RAW payload is kept:
+            // the terminal `result` / `error` and the pause's `inputRequests` are
+            // INLINE in it, so re-reading it costs nothing while re-ASKING would
+            // be a second round trip against a task that may have moved on.
+            let (task, v2_payload) = if self.is_v2() {
+                let raw = self.tasks_get_raw_v2(task_id).await?;
+                (Self::decode_v2_task_base(&raw)?.to_v1(), Some(raw))
+            } else {
+                (self.tasks_get(task_id).await?, None)
+            };
 
             // Single source of truth for the stop / ask / sleep decision: the
             // `poll_decision()` classifier in src/types/tasks.rs (D-13). No
@@ -1378,17 +1729,37 @@ impl<T: Transport> Client<T> {
             // because it is in-crate — a future variant becomes a compile error
             // here, forcing an explicit decision.
             match task.poll_decision() {
-                // Terminal — stop polling and fetch the persisted result below.
-                TaskPollDecision::Terminal { .. } => break,
+                // Terminal — the result comes from the payload already in hand on
+                // v2, and from a second `tasks/result` round trip on v1.
+                TaskPollDecision::Terminal { .. } => {
+                    return match v2_payload {
+                        Some(raw) => Self::terminal_result_from_v2_payload(task_id, &raw),
+                        None => self.tasks_result(task_id).await,
+                    };
+                },
                 // `input_required` is NOT terminal, and the task cannot progress
-                // without client-side action this poller does not perform —
-                // surface it (returning BEFORE any tasks/result fetch) instead
-                // of spinning until a (possibly absent) timeout (CR-01).
+                // without client-side action. With no responder, surface it
+                // (returning BEFORE any tasks/result fetch) instead of spinning
+                // until a (possibly absent) timeout (CR-01).
                 TaskPollDecision::InputRequired => {
-                    return Err(Error::validation(format!(
-                        "task {task_id} is input_required; wait_for_task cannot provide \
-                         input — handle the elicitation, then resume polling"
-                    )));
+                    let Some(callback) = responder.as_mut() else {
+                        return Err(Error::validation(format!(
+                            "task {task_id} is input_required; wait_for_task cannot provide \
+                             input — handle the elicitation, then resume polling"
+                        )));
+                    };
+                    input_rounds += 1;
+                    if input_rounds > input_round_limit {
+                        return Err(Error::mrtr_round_limit_exceeded(input_round_limit));
+                    }
+                    let requests =
+                        Self::input_requests_from_v2_payload(task_id, v2_payload.as_ref())?;
+                    let responses = callback(requests).await?;
+                    self.tasks_update(task_id, responses).await?;
+                    // Poll again immediately: the server has the answers now, so
+                    // sleeping a full interval before asking would only add
+                    // latency. The round bound above is what stops a server that
+                    // keeps re-requesting.
                 },
                 // Still running — resolve the next sleep through the shared
                 // resolver (D-02: caller override, else the server-reported
@@ -1418,8 +1789,87 @@ impl<T: Transport> Client<T> {
                 },
             }
         }
+    }
 
-        self.tasks_result(task_id).await
+    /// Read a terminal task's final result out of the v2 `tasks/get` payload the
+    /// poll loop already holds (Phase 114, plan 19).
+    ///
+    /// This is what replaces the v2-retired `tasks/result` round trip. The decode
+    /// is STATUS-DIRECTED, so a `completed` task with no inlined `result` is an
+    /// error rather than a silently EMPTY success — `CallToolResult::content`
+    /// carries `#[serde(default)]`, which is exactly how that lie would slip
+    /// through a permissive decode.
+    fn terminal_result_from_v2_payload(
+        task_id: &str,
+        raw: &serde_json::Value,
+    ) -> Result<CallToolResult> {
+        let detailed = DetailedTaskV2::from_wire_value(raw).map_err(Error::parse)?;
+        // `TaskDetailV2` is deliberately NOT `#[non_exhaustive]` (one variant per
+        // `TaskStatus`), so this match is exhaustive with no wildcard arm.
+        match detailed.detail() {
+            TaskDetailV2::Completed { result } => {
+                serde_json::from_value(serde_json::Value::Object(result.clone()))
+                    .map_err(|e| Error::parse(e.to_string()))
+            },
+            // A failed task carries a JSON-RPC error object, and it must surface
+            // AS an error: returning `Ok` with an empty result would report a
+            // protocol failure as a successful tool call.
+            TaskDetailV2::Failed { error } => {
+                Err(Self::error_from_inlined_task_error(task_id, error.clone()))
+            },
+            TaskDetailV2::Cancelled => Err(Error::validation(format!(
+                "task {task_id} was cancelled; a cancelled task has no result"
+            ))),
+            // Unreachable: `poll_decision()` returned `Terminal`, which only the
+            // three statuses above produce. Reported rather than `unwrap`ed
+            // because it would mean the payload's status and detail disagree.
+            TaskDetailV2::Working | TaskDetailV2::InputRequired { .. } => Err(Error::internal(
+                format!("task {task_id} reported a terminal status with non-terminal detail"),
+            )),
+        }
+    }
+
+    /// Turn a v2 task's INLINED JSON-RPC error object into a typed client error.
+    ///
+    /// Routed through [`Error::from_jsonrpc_error`] so a failed task is
+    /// indistinguishable, to a caller matching on `code`, from the same failure
+    /// delivered synchronously.
+    fn error_from_inlined_task_error(
+        task_id: &str,
+        error: serde_json::Map<String, serde_json::Value>,
+    ) -> Error {
+        match serde_json::from_value::<crate::types::jsonrpc::JSONRPCError>(
+            serde_json::Value::Object(error),
+        ) {
+            Ok(rpc_error) => Error::from_jsonrpc_error(rpc_error),
+            Err(e) => Error::parse(format!(
+                "task {task_id} failed, but its inlined error is malformed: {e}"
+            )),
+        }
+    }
+
+    /// Read a paused task's outstanding `inputRequests` out of the v2
+    /// `tasks/get` payload the poll loop already holds.
+    fn input_requests_from_v2_payload(
+        task_id: &str,
+        raw: Option<&serde_json::Value>,
+    ) -> Result<InputRequests> {
+        let raw = raw.ok_or_else(|| {
+            Error::internal(format!(
+                "task {task_id} paused for input on a connection with no v2 payload"
+            ))
+        })?;
+        let detailed = DetailedTaskV2::from_wire_value(raw).map_err(Error::parse)?;
+        match detailed.detail() {
+            TaskDetailV2::InputRequired { input_requests } => Ok(input_requests.clone()),
+            TaskDetailV2::Working
+            | TaskDetailV2::Completed { .. }
+            | TaskDetailV2::Failed { .. }
+            | TaskDetailV2::Cancelled => Err(Error::internal(format!(
+                "task {task_id} classified as input_required but its payload carries no \
+                 inputRequests"
+            ))),
+        }
     }
 
     /// Poll a task referenced by [`TaskMetadata`] to terminal, then return its
@@ -1442,10 +1892,20 @@ impl<T: Transport> Client<T> {
             .await
     }
 
-    /// List tasks owned by the current client.
+    /// List tasks owned by the current client — **v1 only**.
+    ///
+    /// # RETIRED on `2026-07-28` (Phase 114, TASK-03 / D-15)
+    ///
+    /// `tasks/list` is absent from the tasks extension, removed as a SECURITY
+    /// improvement: with no enumeration primitive a server cannot inadvertently
+    /// leak the existence of one caller's tasks to another. There is no
+    /// replacement method — a v2 client keeps the ids it was handed. Calling
+    /// this on a v2 connection fails LOCALLY with an [`Error::retired_on_v2`],
+    /// with no bytes on the wire.
     pub async fn tasks_list(&self, cursor: Option<String>) -> Result<ListTasksResult> {
+        self.reject_retired_tasks_method_on_v2(TASKS_LIST_METHOD, TASKS_LIST_V2_REPLACEMENT)?;
         self.ensure_initialized()?;
-        self.assert_capability("tasks", "tasks/list")?;
+        self.assert_capability("tasks", TASKS_LIST_METHOD)?;
 
         let request = Request::Client(Box::new(ClientRequest::TasksList(ListTasksRequest {
             cursor,
@@ -1453,14 +1913,41 @@ impl<T: Transport> Client<T> {
         let request_id = RequestId::String(Uuid::new_v4().to_string());
         let response = self.send_request(request_id, request).await?;
 
-        self.parse_task_payload::<ListTasksResult>(response, "tasks/list")
+        self.parse_task_payload::<ListTasksResult>(response, TASKS_LIST_METHOD)
             .await
     }
 
-    /// Cancel a running task.
+    /// Cancel a running task and report the task as the server now sees it.
+    ///
+    /// # Era awareness (Phase 114, plan 19)
+    ///
+    /// v1 answers a cancel with the NESTED `{"task": {…}}` envelope and this
+    /// method returns that task, exactly as it always has.
+    ///
+    /// v2's `CancelTaskResult` is `Result` — an **EMPTY acknowledgement** with no
+    /// task body at all (inventory row 20), so today's `CancelTaskResult` decode
+    /// fails outright against it. Because this method's return type is `Task` and
+    /// cannot change without a MAJOR semver bump, the v2 arm acknowledges the
+    /// cancel through [`Self::tasks_cancel_ack`] and then performs ONE follow-up
+    /// [`Self::tasks_get`]. It does NOT synthesise a `Task`: fabricating
+    /// `status: cancelled` would be inventing status information the server
+    /// deliberately did not send.
+    ///
+    /// # Cancellation is cooperative and eventually consistent
+    ///
+    /// That is the SEMANTICS of the empty ack, not a limitation of this client.
+    /// The returned task MAY still be `working`, and MAY later settle on a
+    /// terminal status other than `cancelled`. Callers that only need the
+    /// acknowledgement — and do not want the extra round trip — should call
+    /// [`Self::tasks_cancel_ack`] directly.
     pub async fn tasks_cancel(&self, task_id: &str) -> Result<Task> {
+        if self.is_v2() {
+            self.tasks_cancel_ack(task_id).await?;
+            return self.tasks_get(task_id).await;
+        }
+
         self.ensure_initialized()?;
-        self.assert_capability("tasks", "tasks/cancel")?;
+        self.assert_capability("tasks", TASKS_CANCEL_METHOD)?;
 
         let request = Request::Client(Box::new(ClientRequest::TasksCancel(CancelTaskRequest {
             task_id: task_id.to_string(),
@@ -1469,9 +1956,106 @@ impl<T: Transport> Client<T> {
         let request_id = RequestId::String(Uuid::new_v4().to_string());
         let response = self.send_request(request_id, request).await?;
 
-        let cancel_result: CancelTaskResult =
-            self.parse_task_payload(response, "tasks/cancel").await?;
+        let cancel_result: CancelTaskResult = self
+            .parse_task_payload(response, TASKS_CANCEL_METHOD)
+            .await?;
         Ok(cancel_result.task)
+    }
+
+    /// Request cancellation and read only the ACKNOWLEDGEMENT (Phase 114).
+    ///
+    /// The zero-invention primitive [`Self::tasks_cancel`] is built on: it
+    /// accepts ANY successful result — including v2's bare `{}` — and returns
+    /// `()`. One round trip, and nothing is claimed about the task's status.
+    ///
+    /// Works on BOTH eras. On v1 the response body carries a `Task` which this
+    /// method DISCARDS; call [`Self::tasks_cancel`] when you want it.
+    ///
+    /// Cancellation is cooperative and eventually consistent: a successful
+    /// acknowledgement means the request was accepted, NOT that the task has
+    /// stopped.
+    pub async fn tasks_cancel_ack(&self, task_id: &str) -> Result<()> {
+        self.ensure_initialized()?;
+        self.assert_capability("tasks", TASKS_CANCEL_METHOD)?;
+
+        let request = Request::Client(Box::new(ClientRequest::TasksCancel(CancelTaskRequest {
+            task_id: task_id.to_string(),
+            result: None,
+        })));
+        let request_id = RequestId::String(Uuid::new_v4().to_string());
+        let response = self.send_request(request_id, request).await?;
+
+        match response.payload {
+            crate::types::jsonrpc::ResponsePayload::Result(_) => Ok(()),
+            crate::types::jsonrpc::ResponsePayload::Error(error) => {
+                Err(Error::from_jsonrpc_error(error))
+            },
+        }
+    }
+
+    /// Deliver responses to a paused task's outstanding `inputRequests` — v2
+    /// only (Phase 114, TASK-02).
+    ///
+    /// `tasks/update` is how an `input_required` task is un-paused: each key of
+    /// `responses` MUST correspond to a currently-outstanding `inputRequests`
+    /// key from [`Self::tasks_get_detailed`]. The acknowledgement is EMPTY, so
+    /// this returns `()`.
+    ///
+    /// # It is sent UNTYPED, on purpose
+    ///
+    /// There is no `ClientRequest::TasksUpdate` variant and there must not be
+    /// one: [`ClientRequest`] is public and not `#[non_exhaustive]`, so adding a
+    /// variant is a MAJOR semver break. This goes out through the same raw path
+    /// [`Self::server_discover`] uses.
+    ///
+    /// # A task is NOT a higher-trust channel
+    ///
+    /// The spec is explicit that input requests delivered through a task carry
+    /// exactly the trust of the elicitation / sampling they wrap. Whatever
+    /// produces `responses` must apply the SAME consent and policy gates it
+    /// would for a direct `elicitation/create`; this method transmits the values
+    /// and executes nothing the server supplied.
+    ///
+    /// # Errors
+    ///
+    /// - [`Error::InvalidState`] on a v1 connection — `tasks/update` does not
+    ///   exist there, and NO bytes are sent.
+    /// - [`Error::Capability`] when the tasks extension was not negotiated —
+    ///   again with no bytes sent.
+    /// - The server's own JSON-RPC error otherwise (e.g. an unknown or
+    ///   already-answered input key).
+    pub async fn tasks_update(&self, task_id: &str, responses: InputResponses) -> Result<()> {
+        // Order matters only for WHICH local error you get; all three checks are
+        // local, so every refusal below performs ZERO transport sends.
+        self.require_v2(TASKS_UPDATE_METHOD)?;
+        self.ensure_initialized()?;
+        self.assert_capability("tasks", TASKS_UPDATE_METHOD)?;
+
+        let mut params = serde_json::Map::new();
+        params.insert(
+            TASK_ID_KEY.to_string(),
+            serde_json::Value::String(task_id.to_string()),
+        );
+        params.insert(
+            INPUT_RESPONSES_KEY.to_string(),
+            serde_json::to_value(&responses).map_err(|e| Error::parse(e.to_string()))?,
+        );
+
+        let request_id = RequestId::String(Uuid::new_v4().to_string());
+        let response = self
+            .send_untyped_request(
+                request_id,
+                TASKS_UPDATE_METHOD,
+                serde_json::Value::Object(params),
+            )
+            .await?;
+
+        match response.payload {
+            crate::types::jsonrpc::ResponsePayload::Result(_) => Ok(()),
+            crate::types::jsonrpc::ResponsePayload::Error(error) => {
+                Err(Error::from_jsonrpc_error(error))
+            },
+        }
     }
 
     /// Deserialize a `tasks/*` response payload into `T`, emitting a structured

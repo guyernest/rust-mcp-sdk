@@ -1320,11 +1320,16 @@ pub(crate) enum ResponseDisposition {
 
 impl ResponseDisposition {
     /// The wire `resultType` discriminator string.
+    ///
+    /// All three values come from `types::mrtr`'s reserved-spelling block, not
+    /// from literals here: the Phase-114 CLIENT decoder branches on the same
+    /// `"task"` / `"complete"` strings and compiles on `wasm32`, where this
+    /// module does not exist at all. One declaration, two readers.
     pub(crate) fn as_wire_str(self) -> &'static str {
         match self {
-            Self::Complete => "complete",
+            Self::Complete => crate::types::mrtr::COMPLETE_RESULT_TYPE,
             Self::InputRequired => crate::types::mrtr::INPUT_REQUIRED_RESULT_TYPE,
-            Self::Task => "task",
+            Self::Task => crate::types::mrtr::TASK_RESULT_TYPE,
         }
     }
 }
