@@ -486,12 +486,41 @@ async fn tasks_cancel_sets_mcp_name_to_the_task_id() {
 /// Fired against `tasks/list` specifically, because "every `tasks/*` method is
 /// name-bearing" is the plausible wrong implementation, and only this
 /// distinguishes it.
+///
+/// # Why this drives the TRANSPORT and not `Client::tasks_list` (Phase 114-19)
+///
+/// It used to call `client.tasks_list(None)`. Plan 114-19 then made
+/// `tasks/list` — RETIRED on `2026-07-28` — fail fast LOCALLY on a v2 client
+/// with ZERO bytes on the wire, which is a property that file asserts with a
+/// send counter. The two are not in conflict; the VEHICLE was. A v2 pmcp client
+/// can no longer put a `tasks/list` on the wire at all, so the only honest way
+/// to keep observing the header derivation for a non-name-bearing `tasks/*`
+/// method is to hand the frame to the layer that OWNS that derivation.
+///
+/// That is also the more precise test: `Mcp-Name` is derived by the transport
+/// from the frame bytes (T-113-08), so this measures the derivation directly
+/// rather than through a client method that may or may not still call it.
+///
+/// The TABLE-level half of the same fact already lives below in
+/// `tasks_list_and_tasks_result_carry_no_routing_name`; it is deliberately NOT
+/// restated here.
 #[tokio::test]
 async fn tasks_list_emits_an_empty_mcp_name() {
-    let (addr, captured, handle) = capture_server().await;
-    let client = v2_client(addr, true);
+    use pmcp::shared::Transport;
 
-    let _ = client.tasks_list(None).await;
+    let (addr, captured, handle) = capture_server().await;
+    let mut transport = v2_transport(addr);
+    transport.set_negotiated_protocol_version(Some(PROTOCOL_VERSION_2026_07_28.to_string()));
+
+    let frame = json!({
+        "jsonrpc": "2.0",
+        "id": "name-control-1",
+        "method": "tasks/list",
+        "params": { "_meta": { "io.modelcontextprotocol/protocolVersion": PROTOCOL_VERSION_2026_07_28 } },
+    });
+    let _ = transport
+        .send_raw(serde_json::to_vec(&frame).expect("serializes"))
+        .await;
 
     let seen = wait_for(&captured, 1).await;
     assert_eq!(seen[0].header("mcp-method"), Some("tasks/list"));
