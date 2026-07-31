@@ -485,3 +485,191 @@ fix — replacing the `.expect` at `streamable_http.rs:458` with a fallible path
 `echo appended` on the following line printed a reassuring "appended". This is the exact
 failure 114-10 recorded for `/usr/bin/cp`. **Verify the mutation landed before trusting
 the message that says it did.**
+
+---
+
+## D-114-M — `TaskRouter::handle_tasks_update`'s default returns `-32603` where `-32601` is arguably right
+
+**Found by:** 114-13 (decide-now item carried in from the phase brief)
+**Status:** open, owned by **114-14**
+**Severity:** low today (unreachable), medium once a caller exists
+
+`src/server/tasks.rs:91-95` — the defaulted `TaskRouter::handle_tasks_update` returns
+`Error::internal("tasks/update not supported by this router")`, which reaches the wire as
+`-32603`. At the protocol level, "this router does not implement this method" is `-32601`,
+and that is what the sibling no-backend refusals in `task_dispatch.rs` already emit
+(`TASKS_NOT_ENABLED` / `TASKS_RESULT_NOT_SUPPORTED`, both `-32601`).
+
+**Why 114-13 recorded it instead of changing it — and the reason is a measurement, not a
+preference:**
+
+```
+$ grep -rn handle_tasks_update src/
+src/server/tasks.rs:91:    async fn handle_tasks_update(&self, _params: Value, _owner_id: &str) -> Result<Value> {
+```
+
+**Zero callers, anywhere in the tree.** 114-13 routes `tasks/update` but stops at the gates;
+delivery — and therefore the store-vs-router split that would first invoke this default — is
+114-14's. Changing an unreachable default's wire code would be **unverifiable by
+construction**: no negative control could fail it, which is precisely the "a property no
+control fails" pattern this phase has now hit five times. It would also be a wire change
+landed by a plan that cannot demonstrate its effect.
+
+**For 114-14:** the moment you add the router branch, this becomes decidable and testable in
+one step. Prefer `-32601` with a message distinguishable from `TASKS_NOT_ENABLED` (a router
+that exists but does not do updates is a different fact from a server with no task backend at
+all — T-114-33's distinguishability rule), and pin it with a control.
+
+---
+
+## D-114-A addendum 3 (114-13) — `make test-unit` reads `RUST_TEST_THREADS`, not `NEXTEST_TEST_THREADS`
+
+**Found by:** 114-13 (two full gate runs)
+
+The phase brief's trap list says to use `NEXTEST_TEST_THREADS=4`. That is correct for
+`cargo nextest` invocations and **does nothing for the leg that actually fails**:
+`make test-unit` runs `cargo test --lib --features "full"`, which reads `RUST_TEST_THREADS`.
+
+Measured, same tree, same commit:
+
+| parallelism | result | `no native root CA` messages |
+|-------------|--------|------------------------------|
+| default (`-j ncpu`) | `1750 passed; 14 failed` | **14** |
+| `RUST_TEST_THREADS=4` | `1760 passed; 4 failed` | **4** |
+| `RUST_TEST_THREADS=1` | **`1764 passed; 0 failed`, exit 0** | **0** |
+
+Failure count equals CA-message count exactly at every level, and the population shrinks
+monotonically to zero as parallelism drops. A regression does not do that. The panic is in
+`StreamableHttpTransport::new_internal` — the **client transport constructor**, which runs
+before any request — so no server-side change can reach it.
+
+**Run `RUST_TEST_THREADS=1 make test-unit`.** The underlying fix (making the
+`.expect("Failed to load native root certificates")` fallible, or pinning `webpki-roots` for
+tests) is still unowned.
+
+---
+
+## D-114-M — the PUBLISHED core `2026-07-28` schema is not vendored and has no provenance tripwire
+
+**Found by:** the 2026-07-29 spec re-verification run (`114-SPEC-RECHECK.md` § `### Verdict
+re-verification` → `#### 2026-07-29`)
+**Status:** open, unowned, newly created by an upstream publication event
+**Severity:** medium — it leaves authoritative values sourced by inference rather than by a pin
+
+`114-01` vendored `modelcontextprotocol/ext-tasks` `schema/draft/` at
+`2c1425d9a288b9b1f489430fe1e00bb392b47e48` with a SHA-256 + git-blob provenance tripwire, because
+that was the only schema this phase read. On **2026-07-29** the core specification published
+`modelcontextprotocol/modelcontextprotocol` `schema/2026-07-28/` (`schema.ts`, `schema.json`,
+`schema.mdx`, `examples/`), declaring `LATEST_PROTOCOL_VERSION = "2026-07-28"`.
+
+That published core schema now **governs** three groups of values this phase relies on:
+
+| Group | Values | Inventory rows |
+|---|---|---|
+| The extension capability map | `extensions?: { [key: string]: JSONObject }` on `ClientCapabilities` **and** `ServerCapabilities` | 1-3 |
+| Error codes | `MISSING_REQUIRED_CLIENT_CAPABILITY = -32021`, `INVALID_PARAMS = -32602`, and the **absence** of `-32002` | 29, 30, 32, 33 |
+| The result discriminator | `resultType: ResultType`, `ResultType = "complete" \| "input_required" \| string` | 16-20 |
+
+**Nothing in the repo pins any of them.** They are currently asserted from a one-off HTTP read
+recorded in prose. If upstream renumbers a code or narrows `ResultType` again, no test fails.
+
+**Why not fixed at discovery:** vendoring a second schema tree is `114-01`-shaped work — a
+directory, a `PROVENANCE.md` with dual digests, and a tripwire test — and the discovery was made
+during a read-only verification run with no shell available (the harness Bash classifier was down),
+so nothing could be fetched, hashed or committed. It is also genuinely optional for *this* phase:
+the D-18 hold is still engaged and no requirement flips, so the pin buys future-run cheapness and
+drift detection, not present correctness.
+
+**Suggested owner:** a small standalone plan mirroring `114-01` (vendor + `PROVENANCE.md` + tripwire
+over `schema/vendored/core-2026-07-28/`), or `114-18` if it is willing to widen. **Note the
+asymmetry deliberately:** vendoring the CORE schema is safe because it is published and immutable;
+vendoring anything from `ext-tasks` beyond the existing `draft` pin is **not**, because that
+repository has not published and `## Recorded Exception` forbids promoting draft to authoritative.
+
+---
+
+## D-114-N — `ext-tasks` publishing is now the SOLE remaining D-18 trigger, and nothing watches it
+
+**Found by:** the 2026-07-29 spec re-verification run
+**Status:** open, unowned
+**Severity:** medium — six held requirements hinge on an event no mechanism detects
+
+The DQ6 trigger required a versioned (non-`draft`) schema directory in **both** repositories. As of
+2026-07-29 the core half is **satisfied** and the extension half is **not**:
+`modelcontextprotocol/ext-tasks` still carries `schema/draft/` and `specification/draft/` only, with
+**no tags and no releases**, 17 commits on `main`, and a README describing an experimental extension
+*"under development"* toward SEP-2663. Its `schema/draft` has not changed since **2026-05-22**
+(`29f83d5`).
+
+So the condition that releases TASK-01…TASK-06 — and, separately, re-enters the Phase-114
+contract-first waiver — has collapsed from a two-repository check to a **one-repository** check.
+That is strictly cheaper to monitor, and correspondingly cheaper to forget.
+
+**What is missing:** any detector. `114-01`'s provenance tripwire watches the **vendored bytes** for
+local tampering; it cannot see upstream publishing a new directory. Nothing in CI or the repo polls
+`ext-tasks`. Today the trigger is noticed only if a human happens to look — which is precisely the
+*"a waiver that quietly becomes permanent"* failure mode (**T-114-107**) that
+`114-CONTRACT-DECISION.md` § 2 observed in Phase 113 in the wild.
+
+**Why not fixed at discovery:** a watcher is infrastructure (a scheduled CI job, or a documented
+manual checkpoint), not a wire value, and the run that found it had no shell.
+
+**Suggested owner:** a scheduled check — e.g. a low-frequency CI workflow asserting
+`gh api repos/modelcontextprotocol/ext-tasks/contents/schema --jq '.[].name'` still yields only
+`draft`, failing loudly when it does not. Cheap, and it converts "someone must remember" into "the
+build tells us". Until then, the recorded fallback is `114-SPEC-RECHECK.md` § `## Procedure`, re-run
+by hand.
+
+---
+
+## D-114-M — a `TaskRouter` serving `tasks/update` performs its OWN decode, unaided (114-14)
+
+**Discovered:** 2026-07-31, while landing `tasks/update` delivery (plan 114-14).
+
+`TaskDispatch::deliver_tasks_update` is store-first with a router fall-through, the same
+precedence every other `tasks/*` route uses. The STORE leg reads the server-recorded kinds through
+`TaskStore::task_input_snapshot` and types every value with `InputResponse::decode_for`, which is
+the whole point of the route (D-113-O). The ROUTER leg cannot: a `TaskRouter` is out-of-tree code
+holding its own record, and the trait has no snapshot accessor, so it receives `params` VERBATIM
+and owns its own decode.
+
+**What IS still guaranteed on that path:** the four `inputResponses` bounds have already fired
+(they run at case 6, before the store/router split), so a router never sees an unbounded payload;
+the owner is the identity table's and is passed as `owner_id`, never read from `params`; and the
+trait rustdoc on `TaskRouter::handle_tasks_update` states both facts.
+
+**What is NOT:** nothing stops an out-of-tree router from running the untagged decoder on those
+values and reproducing D-113-O inside its own crate. The kind-direction property is enforced for
+`TaskStore` implementations and only *documented* for `TaskRouter` ones.
+
+**Why not fixed here:** closing it means widening the `TaskRouter` trait with a snapshot accessor
+(or handing it a pre-typed `InputResponses`, which requires kinds this dispatcher does not have for
+a router-backed task). Both are additive trait changes with real design questions about who owns
+the record, and `TaskRouter` is the *legacy experimental* backend — `TaskStore` is the supported
+one. Doing it inside a delivery plan would have been an architectural change smuggled in as a fix.
+
+**Suggested owner:** whichever plan next revisits `TaskRouter`. If the answer is "routers are
+deprecated", the honest closure is to say so rather than to widen the trait.
+
+---
+
+## D-114-N — a store that does not accept inputs answers `-32601 "Tasks not enabled"` (114-14)
+
+**Discovered:** 2026-07-31, writing the router fall-through arm of `deliver_tasks_update`.
+
+Reachable in exactly one configuration: a server with a `TaskStore` whose `supports_inputs()` is
+`false`, and NO `TaskRouter`. Case 2 of the gate chain already answered for a server with no task
+backend at all, so this arm is about a backend that exists and cannot do this one thing.
+
+It reuses `TASKS_NOT_ENABLED` — the FROZEN sibling message its three `tasks/*` siblings emit —
+rather than minting a fifth `-32601` sentence, deliberately: `the_minus_32601_conditions_are_mutually_distinct`
+asserts the population of those messages is pairwise distinct, and a fifth would have to be added
+to that population and justified. The reuse is slightly imprecise ("Tasks not enabled" on a server
+that plainly has tasks) and strictly better than a fifth near-synonym nobody can tell apart.
+
+**Why not fixed here:** the precise message is `tasks/update input delivery is not supported by
+this server's task backend`, which is a NEW member of the distinguishability set and therefore a
+change to a frozen contract, not a delivery detail. `InMemoryTaskStore` and `pmcp-tasks`'
+`GenericTaskStore` both return `true`, so no in-tree configuration reaches this arm.
+
+**Suggested owner:** a plan that is already touching the `-32601` message population.

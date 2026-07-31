@@ -371,7 +371,8 @@ Rows 16/18 are the v1→v2 reshape: v1 nested the task under a `task` key; v2 **
 the result. Rows 19/20 are the ones most easily got wrong by analogy — they carry no task body
 at all.
 
-**Rows 16, 17, 18, 20 — IMPLEMENTED by plan 114-11 (2026-07-28). Row 19 is NOT, and deliberately.**
+**Rows 16, 17, 18, 20 — IMPLEMENTED by plan 114-11 (2026-07-28). Row 19 — IMPLEMENTED by plan
+114-14 (2026-07-31).**
 
 * Row 16/17 (`CreateTaskResult`, `resultType: "task"`): `v2_create_result_value` emits the flat
   `Result & Task` with the `_meta.relatedTask` envelope retained (its key is a KNOWN property of
@@ -391,11 +392,21 @@ at all.
   asserts the emitted key set is a SUBSET of the envelope's own keys rather than merely that `task`
   is absent. **No wait and no poll were added** to make the ack look synchronous; the cooperative,
   eventually-consistent semantics are written at the function.
-* Row 19 (`UpdateTaskResult`): `tasks/update` is not a routed method yet — plans 114-13/114-14 own
-  it, and a v2 `tasks/update` answers `-32601` today. 114-11 planted the forward tripwire only
-  (`tasks_get_never_carries_result_type_task` includes `tasks/update` in its raw-byte sweep, which
-  holds vacuously for an error response and becomes live the moment the method exists). **Whoever
-  lands the method still owns emitting the empty ack.**
+* Row 19 (`UpdateTaskResult` empty ack) — **CLOSED by plan 114-14 (2026-07-31).** A delivered
+  `tasks/update` now returns `{}` plus the envelope's own keys, and
+  `tasks_update_ack_is_empty` asserts ELEVEN task-shaped keys absent individually (`task`,
+  `taskId`, `status`, `createdAt`, `lastUpdatedAt`, `ttlMs`, `pollIntervalMs`, `inputRequests`,
+  `inputResponses`, `result`, `error`) so a regression names WHICH field leaked. 114-11's forward
+  tripwire (`tasks_get_never_carries_result_type_task`) is now LIVE rather than vacuous for this
+  method, and stays green: the ack's discriminator is `"complete"`, not `"task"`.
+
+  **One thing this row did not say and a reader would have assumed.** The `resultType` is written
+  by the ENVELOPE, and `tasks/update` does not pass through the path that writes it. It rides the
+  crate-private internal-request route, which bypasses `process_client_request` — so without an
+  explicit `inject_v2_result_envelope` call the ack reached the wire as a bare `{}` with NO
+  `resultType` at all. That was measured off a real socket, not predicted. `Server::handle_tasks_update`
+  now makes that call directly, exactly as `build_discover_response` already did for the other
+  internal route (Phase 112). Any future method added on that route inherits the same trap.
 
 ### Per-variant required fields (the `DetailedTask` union)
 
@@ -622,10 +633,19 @@ above, recorded.
 
 **PENDING**
 
-No versioned (non-`draft`) schema directory exists in **either**
-`modelcontextprotocol/modelcontextprotocol` **or** `modelcontextprotocol/ext-tasks` as of
-2026-07-28 — the date the final specification was due. Both listings were measured on that date
-and are recorded verbatim in `## Trigger Condition`.
+> **Updated 2026-07-29 — the core specification has published; the extension has not.** The
+> statement below as originally written ("neither repository") was true on 2026-07-28 and is
+> **no longer true of the core repository**. `modelcontextprotocol/modelcontextprotocol` now
+> carries `schema/2026-07-28/`. `modelcontextprotocol/ext-tasks` still carries only `draft/`.
+> Under the **DQ6 both-repositories** trigger this is a **partial publication**, which
+> `## Third Outcome Policy` rule 5 defines as **`STILL-ABSENT`** — so the verdict stays
+> `PENDING` and no requirement flips. See `### Verdict re-verification` § 2026-07-29 for the
+> measured listings and the full run record.
+
+As originally recorded on 2026-07-28: no versioned (non-`draft`) schema directory existed in
+**either** `modelcontextprotocol/modelcontextprotocol` **or** `modelcontextprotocol/ext-tasks`
+as of that date — the date the final specification was due. Both listings were measured on that
+date and are recorded verbatim in `## Trigger Condition`.
 
 Every wire value in `## Wire-Value Inventory` was read from
 `schema/vendored/ext-tasks/` @ `2c1425d9a288b9b1f489430fe1e00bb392b47e48` — a `draft/`
@@ -639,5 +659,110 @@ step 4. The obligation is **not discharged**; it rolls forward.
 
 ### Verdict re-verification
 
-*(No re-verification run has been executed yet. Each future run — including a `STILL-ABSENT`
-one — appends a dated sub-section here.)*
+*(Each run — including a `STILL-ABSENT` one — appends a dated sub-section here.)*
+
+#### 2026-07-29 — `STILL-ABSENT` (partial publication: core published, extension not)
+
+**Trigger for the run:** the MCP blog announced the final `2026-07-28` specification
+(<https://blog.modelcontextprotocol.io/posts/2026-07-28/>): *"Today, we're officially pushing the
+release button on the next version of the MCP specification, `2026-07-28`"*, and *"Tasks move out
+of the experimental core and into the `io.modelcontextprotocol/tasks` extension, with a poll-based
+`tasks/get` and a new `tasks/update`"*.
+
+**Landing: `STILL-ABSENT`**, per `## Procedure` step 4 row 3 and `## Third Outcome Policy` rule 5
+(*"Partial publication is still `STILL-ABSENT`"*). `## Verdict` stays **`PENDING`**.
+TASK-01…TASK-06 **stay held**. The obligation is **NOT discharged** and rolls forward.
+
+##### Step 1 — both listings, as measured
+
+| Repository | Versioned directories | `2026-07-28` present? | Condition met? |
+|---|---|---|---|
+| `modelcontextprotocol/modelcontextprotocol` | `2024-11-05`, `2025-03-26`, `2025-06-18`, `2025-11-25`, **`2026-07-28`** (plus `draft`) | **YES** | yes |
+| `modelcontextprotocol/ext-tasks` | *(none — only `draft`)* | **NO** | **no** |
+
+`schema/2026-07-28/` in the core repo contains `schema.ts`, `schema.json`, `schema.mdx` and an
+`examples/` directory, and `schema.ts` declares
+`export const LATEST_PROTOCOL_VERSION = "2026-07-28";`.
+
+`ext-tasks` remains `schema/draft/` and `specification/draft/` only, with **no tags and no
+releases** ("There aren't any releases here"), 17 commits on `main`, and a README still describing
+an *experimental* extension *"under development"* working toward SEP-2663. The asymmetry
+`## Trigger Condition` flagged still holds: **`ext-tasks` has never published a versioned
+directory**, so there is still no precedent there for what a release looks like.
+
+> **METHOD CAVEAT — recorded because `## Procedure` step 1 prescribes `gh api`.** `gh`, `git` and
+> every other shell command were **unavailable** during this run (the harness Bash safety
+> classifier was down), so the listings above were read via authenticated-free HTTP fetches of
+> `github.com` tree pages plus `raw.githubusercontent.com` for `schema.ts`, **not** via
+> `gh api … --jq`. One fetch of the `ext-tasks` `schema/` tree warned its own listing might be
+> truncated; that result was therefore corroborated against **two** further independent fetches
+> (the repository root and `/tags`), which agree. A re-runner with a working shell should re-take
+> both listings with the prescribed `gh api` form before relying on this row for a
+> `PUBLISHED-*` landing.
+
+##### Steps 2–3 — NOT executed, deliberately
+
+`## Procedure` step 1 states that if **either** repository lacks a versioned directory, *"step 4
+lands in `STILL-ABSENT` and steps 2–3 are not executable"*, and rule 5 forbids running them
+against a half-published pair. **No inventory row is marked CONFIRMED by this run.** The vendored
+artifact remains the source for all 39 rows.
+
+##### Advance observations from the published CORE schema — NOT row confirmations
+
+Recorded because they are now readable from a **published** source and will shorten the next run.
+They are **observations, not confirmations**: rows 1-3 and 29-33 are only confirmable once
+`ext-tasks` also publishes, because the same rows are graded against the extension's prose.
+
+1. **`extensions` capability map — matches.** The published core `schema.ts` declares
+   `extensions?: { [key: string]: JSONObject };` on **both** `ClientCapabilities` and
+   `ServerCapabilities`. Consistent with rows 1-3 as implemented by `114-03`/`114-05`.
+2. **`-32021` — matches.** `export const MISSING_REQUIRED_CLIENT_CAPABILITY = -32021;` is present
+   in the published core codes, alongside `HEADER_MISMATCH = -32020` and
+   `UNSUPPORTED_PROTOCOL_VERSION = -32022`. Consistent with row 30.
+3. **`-32003` is absent from the published core codes — this is the EXPECTED result and it
+   CONFIRMS DQ3's split rather than challenging it.** Row 31 sources `-32003` to pmcp's own
+   `AUTHENTICATION_REQUIRED` (the 113-23 `subscriptions/listen` precedent), never to the core
+   schema. Its absence upstream is therefore not drift and **not** evidence of a minted wire value.
+4. **§ ⚠ Known upstream disagreement (`-32003` vs `-32021`) — the disagreement PERSISTS, so
+   DQ3's split stands.** That row's OBLIGATION is discharged for this run in its first branch: the
+   published **core schema** says `-32021`, while the ext-tasks **prose** that says `-32003` is
+   still `specification/draft/tasks.md` — unpublished, and unchanged since 2026-05-22. There is as
+   yet no *published* extension prose to have been corrected, so the direction cannot be re-read
+   as agreeing. **Keep both codes, two meanings.** Re-check again when `ext-tasks` publishes.
+5. **`resultType` is narrower and non-optional upstream than this phase assumed — BOOK THIS.**
+   The published core declares `resultType: ResultType` on `Result` (i.e. **required**, not
+   optional) with `export type ResultType = "complete" | "input_required" | string;`. Two
+   consequences for the next run, neither resolved here:
+   - pmcp mints `resultType: "task"` on the create path (rows 17-18). `"task"` is **not** a named
+     value upstream; it is admissible only via the open `| string` tail. Whether that is
+     conformant-by-extension or DRIFT is a judgement the gate must make **explicitly**, not absorb.
+   - Phase 112's *absent-means-complete* decoding (which `114-19`'s client implements as a named
+     arm) is a **tolerance**, not the contract, if upstream requires the field.
+   - Upstream names **`"input_required"` as a `resultType`**, while this phase uses that string as
+     a `TaskStatus` (row 12). Both readings may be correct simultaneously, but the overlap is
+     currently undocumented in this inventory and should get its own row.
+6. **`initialize` is REMOVED from the published core schema.** This *vindicates* `114-05`'s split
+   — v1 keeps `initialize` (with the v1 capability strip at both sites), v2 negotiates via
+   `server/discover` — rather than invalidating it. No action; recorded so the next runner does not
+   re-derive it.
+7. **The vendored bytes have NOT gone stale.** `ext-tasks` `schema/draft` was last modified
+   2026-05-22 (`29f83d5`, *"Write updated docs and port SEP-2663 content (#2)"*). The pin
+   `2c1425d9…` is a later repo-wide commit whose tree carries that same content, which is why the
+   two dates differ without implying drift. `114-01`'s provenance tripwire was **not** re-run this
+   session (no shell); a re-runner should run it before trusting any diff.
+
+##### Carried obligation — the Phase-114 contract-first waiver
+
+**`STILL-ABSENT`. Not discharged.** Its THE CONDITION is the same DQ6 both-repositories condition,
+which is unmet. The contract-first question does **not** re-enter on this partial publication, and
+per that row a plan may not choose outcome (b) on its own authority regardless.
+
+##### Consequence of this run
+
+- `## Verdict` stays **`PENDING`**.
+- TASK-01…TASK-06 stay held; **no checkbox flipped**.
+- The obligation rolls forward. **The sole remaining condition is `ext-tasks` publishing a
+  versioned (non-`draft`) schema directory** — the core half is now satisfied, so the next run is
+  cheaper, and a watch on that one repository is what triggers it.
+- Observations 5 (the `resultType` narrowing/overlap) and 4 (the persisting code disagreement) are
+  the two items `114-18` must carry into its booking.

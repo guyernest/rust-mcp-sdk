@@ -2489,11 +2489,11 @@ Plans:
 
 **Wave 8**
 
-- [ ] 114-13-PLAN.md — `tasks/update` routing via `InternalClientRequest` (no public-enum variant — `ClientRequest` is NOT `#[non_exhaustive]`) + three replacement guards for the lost MRTR compile tripwire (Pitfall 4)
+- [x] 114-13-PLAN.md — `tasks/update` routing via `InternalClientRequest` (no public-enum variant — `ClientRequest` is NOT `#[non_exhaustive]`) + three replacement guards for the lost MRTR compile tripwire (Pitfall 4)
 
 **Wave 9**
 
-- [ ] 114-14-PLAN.md — `tasks/update` delivery over a RAW map boundary: four input-response MRTR bounds FIRST (before the untagged decoder can run), kind-directed `decode_for` against kinds from `task_input_snapshot` (D-17 / the D-113-O class), atomic partial-vs-complete transition, empty ack + property test + fuzz target
+- [x] 114-14-PLAN.md — `tasks/update` delivery over a RAW map boundary: four input-response MRTR bounds FIRST (before the untagged decoder can run), kind-directed `decode_for` against kinds from `task_input_snapshot` (D-17 / the D-113-O class), atomic partial-vs-complete transition, empty ack + property test + fuzz target
 
 **Wave 10** *(parallel — disjoint files: security tests, tripwire tests, client)*
 
@@ -2584,7 +2584,7 @@ Plans:
 | 112. Version Plumbing Spine | 10/10 | Complete    | 2026-07-23 |
 | 113. Stateless HTTP + MRTR | 32/32 | Complete   | 2026-07-27 |
 | 113.1 Merge Unblock | 6/6 | Complete | 2026-07-27 |
-| 114. Tasks Extension Migration | 14/20 | In Progress|  |
+| 114. Tasks Extension Migration | 16/20 | In Progress|  |
 | 115. JSON Schema 2020-12 + Caching Hints | 0/TBD | Not started | - |
 | 116. Auth Hardening SEPs | 0/TBD | Not started | - |
 | 117. Agents, Tester & v1 Severability | 0/TBD | Not started | - |
