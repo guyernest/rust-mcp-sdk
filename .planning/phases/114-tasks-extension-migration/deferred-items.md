@@ -673,3 +673,34 @@ change to a frozen contract, not a delivery detail. `InMemoryTaskStore` and `pmc
 `GenericTaskStore` both return `true`, so no in-tree configuration reaches this arm.
 
 **Suggested owner:** a plan that is already touching the `-32601` message population.
+
+## D-114-O — a `pmcp` test cannot exercise `pmcp-tasks` behaviour, so a cross-crate security claim splits in two (114-15)
+
+**Discovered:** 2026-07-31, writing `v1_local_and_v2_anonymous_buckets_are_disjoint`.
+
+`pmcp-tasks` is a workspace MEMBER but not a dependency of the root `pmcp` crate in any profile —
+not `[dependencies]`, not `[dev-dependencies]`, not behind a feature. A `tests/*.rs` integration
+test of `pmcp` therefore cannot call `pmcp_tasks::…` at all.
+
+The concrete consequence for TASK-05: the plan asked one test to assert BOTH that the v1 `"local"`
+bucket and the v2 anonymous bucket are disjoint AND that `pmcp-tasks`' `is_anonymous_owner` treats
+`""` and `"local"` identically. The first half is behavioural and was measured over a live socket
+plus directly against the in-crate `InMemoryTaskStore`. The second half could only be asserted at
+the SOURCE — a substring tripwire over `crates/pmcp-tasks/src/store/generic.rs` and
+`crates/pmcp-tasks/src/store/backend.rs`. That is a real assertion (it rots loudly if the predicate
+is split or `make_key` drops its owner prefix) but it is a weaker instrument than execution, and a
+reader should know which half is which.
+
+**Why not fixed here:** the fix is `pmcp-tasks = { path = "crates/pmcp-tasks" }` under the root
+`[dev-dependencies]`, which is a manifest change. 114-15 is a coverage-only plan whose own threat
+register (T-114-SC) requires `Cargo.toml`/`Cargo.lock` to be byte-unchanged, and a dev-dependency
+edge from the core crate onto an experimental one deserves its own decision rather than arriving as
+a side effect of a test.
+
+**Interim mitigation, already in place:** `crates/pmcp-tasks/tests/input_delivery.rs` (114-07) owns
+the BEHAVIOURAL twin of the predicate claim from inside the crate that can execute it
+(`anonymous_owner_is_refused_by_default_on_this_backend`), and 114-15's source tripwire names it.
+The two suites together cover what one cannot.
+
+**Suggested owner:** a plan that already needs `pmcp-tasks` reachable from a `pmcp` test — most
+likely a future backend-parity suite.
