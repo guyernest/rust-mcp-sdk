@@ -456,7 +456,7 @@ used `sleep 3` after the kill and `sleep 4` after the start and passed.
 | `06842101` | `docs(114-17): add the v2 tasks server half — pause, update, resume` |
 | `4af27759` | `docs(114-17): add the autonomous v2 tasks agent half` |
 
-## Self-Check
+## Self-Check: PASSED
 
 - `examples/s50_v2_tasks_server.rs` — **FOUND** (406 lines, `min_lines: 200`)
 - `examples/s51_v2_tasks_agent.rs` — **FOUND** (615 lines, `min_lines: 200`)
