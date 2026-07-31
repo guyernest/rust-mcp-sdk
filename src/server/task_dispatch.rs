@@ -2259,7 +2259,9 @@ impl TaskDispatch<'_> {
     /// missing or non-string `taskId`, [`TASKS_UPDATE_MISSING_INPUT_RESPONSES`]
     /// for an absent or non-object `inputResponses`. Neither echoes anything the
     /// caller sent.
-    fn parse_tasks_update_params(params: &Value) -> std::result::Result<TasksUpdateParams<'_>, &'static str> {
+    fn parse_tasks_update_params(
+        params: &Value,
+    ) -> std::result::Result<TasksUpdateParams<'_>, &'static str> {
         // Resolved through `TASK_NAME_BEARING_METHODS`, the SAME table the
         // `Mcp-Name` routing header derives from: one answer to "where does
         // tasks/update keep its task id".
@@ -3801,5 +3803,269 @@ mod v2_shape_tests {
             value.get("ttlMs").is_some_and(Value::is_null),
             "the five required fields survive the degradation: {value}"
         );
+    }
+}
+
+/// The `tasks/update` delivery pipeline — deterministic unit tests plus the
+/// PROPERTY tests that generalize them (plan 114-14, TASK-02).
+///
+/// The pipeline under test is the pure prefix of the route: parse the RAW params,
+/// bound the map, then decode it KIND-DIRECTED against the record. Everything
+/// after that is the backend's single atomic write, which
+/// `crates/pmcp-tasks/tests/input_delivery.rs` and `tests/v2_tasks_update.rs`
+/// own; testing it again here would be testing the store through a second door.
+///
+/// The `proptest!` block sits beside the deterministic tests it generalizes,
+/// following the `types::mrtr` precedent, and its strategy's recursion depth
+/// stays INSIDE the depth bound it is generalizing over — a strategy that could
+/// build a 33-deep value would make "a bounded map is never refused by the
+/// bounds" fail for a reason that has nothing to do with the code.
+#[cfg(test)]
+mod update_delivery_tests {
+    use super::*;
+    use crate::types::mrtr::{
+        InputRequest, InputRequests, MAX_CANONICAL_DEPTH, MAX_INPUT_RESPONSES,
+        MAX_INPUT_RESPONSES_TOTAL_BYTES, MAX_INPUT_RESPONSE_BYTES, MAX_INPUT_RESPONSE_DEPTH,
+    };
+    use proptest::prelude::*;
+    use serde_json::Map;
+
+    /// The deepest value the generator below can build.
+    ///
+    /// `prop_recursive(depth, ..)` counts RECURSION levels, and each level adds
+    /// one container around a leaf, so a value from this strategy nests at most
+    /// `STRATEGY_RECURSION + 1` levels.
+    const STRATEGY_RECURSION: u32 = 4;
+
+    /// The generator can never build a value the depth bound would refuse.
+    ///
+    /// A compile-time lock rather than a runtime assertion: if someone raises
+    /// `STRATEGY_RECURSION` past the bound, the property
+    /// `a_bounded_map_is_never_refused_by_the_bounds` would start failing for a
+    /// reason that has nothing to do with the production code, and a
+    /// `const _: () = assert!` says so at the point of the change instead.
+    const _: () = assert!(
+        STRATEGY_RECURSION as usize + 1 < MAX_INPUT_RESPONSE_DEPTH,
+        "the inputResponses generator must stay strictly inside MAX_INPUT_RESPONSE_DEPTH, \
+         or the bounded-map property fails for a reason unrelated to the code under test"
+    );
+
+    /// The `inputResponses` depth bound is strictly tighter than the AAD
+    /// canonicalization depth cap.
+    ///
+    /// Both bound how deep a peer-supplied JSON value may be, and this route's
+    /// values are a SUBSET of what the canonicalizer may later see. If the
+    /// relationship inverted, a value could pass the ingress bound and then be
+    /// refused deeper in as uncanonicalizable — a refusal at the wrong layer,
+    /// with the wrong message, after the work had already been done.
+    const _: () = assert!(
+        MAX_INPUT_RESPONSE_DEPTH < MAX_CANONICAL_DEPTH,
+        "MAX_INPUT_RESPONSE_DEPTH must stay strictly below MAX_CANONICAL_DEPTH"
+    );
+
+    /// A synthetic record holding one key of EACH kind.
+    ///
+    /// All three so a generated key that happens to collide with a recorded one
+    /// exercises a real kind-directed decode rather than always taking the
+    /// ignore path.
+    fn synthetic_snapshot() -> TaskInputSnapshot {
+        let mut input_requests = InputRequests::new();
+        input_requests.insert("roots".to_string(), InputRequest::ListRoots);
+        input_requests.insert(
+            "form".to_string(),
+            InputRequest::Elicitation(Box::new(
+                crate::types::elicitation::ElicitRequestParams::Form {
+                    message: "which city?".to_string(),
+                    requested_schema: serde_json::json!({ "type": "object" }),
+                },
+            )),
+        );
+        input_requests.insert(
+            "sample".to_string(),
+            InputRequest::Sampling(Box::new(
+                serde_json::from_value(serde_json::json!({ "messages": [] }))
+                    .expect("a minimal CreateMessageParams parses"),
+            )),
+        );
+        TaskInputSnapshot {
+            input_requests,
+            input_responses: InputResponses::new(),
+            status: TaskStatus::InputRequired,
+        }
+    }
+
+    /// A depth-bounded arbitrary JSON value.
+    fn arb_response_value() -> impl Strategy<Value = Value> {
+        let leaf = prop_oneof![
+            Just(Value::Null),
+            any::<bool>().prop_map(Value::Bool),
+            any::<i32>().prop_map(|n| serde_json::json!(n)),
+            "[ -~]{0,12}".prop_map(Value::String),
+        ];
+        leaf.prop_recursive(STRATEGY_RECURSION, 24, 3, |inner| {
+            prop_oneof![
+                prop::collection::vec(inner.clone(), 0..3).prop_map(Value::Array),
+                prop::collection::btree_map("[a-z]{1,6}", inner, 0..3)
+                    .prop_map(|map| Value::Object(map.into_iter().collect())),
+            ]
+        })
+    }
+
+    /// An `inputResponses` map of at most `max_entries` entries.
+    ///
+    /// The key alphabet deliberately includes the three RECORDED keys as
+    /// generatable strings (`roots`, `form`, `sample` are all `[a-z]{1,6}`), so
+    /// the decode path is reachable rather than always short-circuiting on
+    /// ignore.
+    fn arb_input_responses(max_entries: usize) -> impl Strategy<Value = Map<String, Value>> {
+        prop::collection::btree_map(
+            prop_oneof![
+                Just("roots".to_string()),
+                Just("form".to_string()),
+                Just("sample".to_string()),
+                "[a-z]{1,6}",
+            ],
+            arb_response_value(),
+            0..=max_entries,
+        )
+        .prop_map(|map| map.into_iter().collect())
+    }
+
+    /// Every value this generator produces is small and shallow, so the ONLY
+    /// bound a generated map can cross is the entry COUNT.
+    ///
+    /// Stated as its own test because the two properties below depend on it: if
+    /// the generator could produce a 64 KiB entry, "a bounded map is never
+    /// refused" would be false and the failure would look like a production bug.
+    #[test]
+    fn the_generator_cannot_cross_a_size_or_depth_bound() {
+        proptest!(|(entries in arb_input_responses(MAX_INPUT_RESPONSES))| {
+            let mut total = 0usize;
+            for (key, value) in &entries {
+                let bytes = serde_json::to_string(value).map_or(usize::MAX, |s| s.len());
+                prop_assert!(bytes <= MAX_INPUT_RESPONSE_BYTES, "{key} is too large to be generatable");
+                total += bytes;
+            }
+            prop_assert!(total <= MAX_INPUT_RESPONSES_TOTAL_BYTES);
+        });
+    }
+
+    proptest! {
+        /// A map inside every bound is never refused BY the bounds.
+        #[test]
+        fn a_bounded_map_is_never_refused_by_the_bounds(
+            entries in arb_input_responses(MAX_INPUT_RESPONSES)
+        ) {
+            prop_assert!(check_input_responses_map_bounds(&entries).is_ok());
+        }
+
+        /// A map over the entry-count bound is ALWAYS refused, whatever it holds.
+        #[test]
+        fn an_over_count_map_is_always_refused(
+            entries in arb_input_responses(MAX_INPUT_RESPONSES)
+        ) {
+            let mut entries = entries;
+            // Fill past the bound with keys the generator cannot produce, so the
+            // count crosses regardless of how many the generator gave us.
+            for i in 0..=MAX_INPUT_RESPONSES {
+                entries.insert(format!("PAD-{i:04}"), Value::Null);
+            }
+            prop_assert!(entries.len() > MAX_INPUT_RESPONSES);
+            prop_assert!(check_input_responses_map_bounds(&entries).is_err());
+        }
+
+        /// The kind-directed decode never panics, and never accepts a key the
+        /// record does not hold.
+        ///
+        /// The second half is the one that matters: an ACCEPTED key that the
+        /// server never issued would mean the client chose its own kind, which is
+        /// the "spoof the decode" break (T-114-74).
+        #[test]
+        fn the_decode_accepts_only_recorded_keys_and_never_panics(
+            entries in arb_input_responses(MAX_INPUT_RESPONSES)
+        ) {
+            let snapshot = synthetic_snapshot();
+            if let Ok(typed) = TaskDispatch::decode_inputs_against_record(&entries, &snapshot) {
+                for key in typed.keys() {
+                    prop_assert!(
+                        snapshot.input_requests.contains_key(key),
+                        "accepted `{key}`, which the record never held"
+                    );
+                }
+            }
+        }
+
+        /// Parsing never panics over arbitrary params, and a parse that SUCCEEDS
+        /// always yields a string `taskId` plus an object `inputResponses`.
+        #[test]
+        fn parsing_params_never_panics(
+            task_id in prop_oneof![
+                Just(Value::Null),
+                any::<i32>().prop_map(|n| serde_json::json!(n)),
+                "[ -~]{0,16}".prop_map(Value::String),
+            ],
+            entries in arb_input_responses(4),
+        ) {
+            let params = serde_json::json!({
+                "taskId": task_id.clone(),
+                "inputResponses": Value::Object(entries),
+            });
+            match TaskDispatch::parse_tasks_update_params(&params) {
+                Ok(update) => {
+                    prop_assert_eq!(Some(update.task_id.as_str()), task_id.as_str());
+                    prop_assert!(params["inputResponses"].is_object());
+                },
+                Err(message) => prop_assert!(!message.is_empty()),
+            }
+        }
+    }
+
+    /// An UNRECORDED key is ignored and a RECORDED one whose value does not
+    /// decode is refused — the deterministic pair the property above generalizes.
+    #[test]
+    fn ignore_and_refuse_are_different_answers() {
+        let snapshot = synthetic_snapshot();
+
+        let mut ignored = Map::new();
+        ignored.insert(
+            "never-issued".to_string(),
+            serde_json::json!({ "nothing": true }),
+        );
+        let typed = TaskDispatch::decode_inputs_against_record(&ignored, &snapshot)
+            .expect("an unrecorded key is IGNORED, never an error");
+        assert!(
+            typed.is_empty(),
+            "and it contributes nothing to the delivery"
+        );
+
+        let mut refused = Map::new();
+        // A `CreateMessageResult` under the ELICITATION key: the D-113-O shape.
+        refused.insert(
+            "form".to_string(),
+            serde_json::json!({ "content": { "type": "text", "text": "x" }, "model": "m" }),
+        );
+        let error = TaskDispatch::decode_inputs_against_record(&refused, &snapshot)
+            .expect_err("a recorded key's value must decode as the RECORDED kind");
+        let rendered = error.to_string();
+        assert!(
+            rendered.contains("form"),
+            "names the record's key: {rendered}"
+        );
+        for from_the_value in ["model", "content", "text"] {
+            assert!(
+                !rendered.contains(from_the_value),
+                "the refusal must never render the value; it leaked `{from_the_value}`: {rendered}"
+            );
+        }
+    }
+
+    /// The empty acknowledgement is EMPTY.
+    #[test]
+    fn the_update_ack_carries_no_fields() {
+        let response = update_ack(RequestId::from(1i64));
+        let crate::types::jsonrpc::ResponsePayload::Result(value) = response.payload else {
+            panic!("an acknowledgement is a success result");
+        };
+        assert_eq!(value, Value::Object(Map::new()));
     }
 }

@@ -1481,6 +1481,27 @@ impl Server {
     ///
     /// `async` since plan 114-14: the delivery reads the task record and writes
     /// the responses.
+    ///
+    /// # The v2 result envelope is injected HERE, for the same reason `server/discover`'s is
+    ///
+    /// `tasks/update` rides the crate-private internal-request route, so it does
+    /// NOT pass through `process_client_request`, which is where every
+    /// `ClientRequest` result gets its `resultType` + `_meta.serverInfo`. Left
+    /// alone, the `UpdateTaskResult` acknowledgement would reach the wire as a
+    /// bare `{}` — and the extension says its `resultType` field MUST be
+    /// `"complete"`. `build_discover_response` solved the identical problem the
+    /// identical way (Phase 112), so the internal route has ONE shape rather than
+    /// two.
+    ///
+    /// [`ReservedFieldOwner::None`](crate::server::core::ReservedFieldOwner) is
+    /// named explicitly and is correct: the acknowledgement is EMPTY, so this
+    /// route mints no reserved result field at all — no `inputRequests` (that is
+    /// `tasks/get`'s, plan 114-11) and no `requestState` (the tasks surface has no
+    /// continuation token, D-17). A future change that made this ack non-empty
+    /// would have to state its own owner here rather than inherit one.
+    ///
+    /// The call is a no-op on v1 and for every ERROR payload, so all seven of the
+    /// route's refusals are byte-unchanged by it.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) async fn handle_tasks_update(
         &self,
@@ -1489,9 +1510,18 @@ impl Server {
         auth_context: Option<&auth::AuthContext>,
         protocol_context: Option<&crate::types::protocol::ProtocolContext>,
     ) -> JSONRPCResponse {
-        self.task_dispatch()
+        let mut response = self
+            .task_dispatch()
             .route_tasks_update(id, params, auth_context, protocol_context)
-            .await
+            .await;
+        crate::server::core::inject_v2_result_envelope(
+            &mut response,
+            protocol_context,
+            &self.info,
+            crate::server::core::ResponseDisposition::Complete,
+            crate::server::core::ReservedFieldOwner::None,
+        );
+        response
     }
 
     async fn handle_request(

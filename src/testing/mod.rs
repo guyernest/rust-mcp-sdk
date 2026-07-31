@@ -304,6 +304,36 @@ pub const RESERVED_INPUT_REQUESTS: &str = crate::types::mrtr::INPUT_REQUESTS_KEY
 /// result carrying it is stripped.
 pub const RESERVED_REQUEST_STATE: &str = crate::types::mrtr::REQUEST_STATE_KEY;
 
+// ===========================================================================
+// The FOUR `inputResponses` denial-of-service bounds (Phase 114, plan 14).
+//
+// Re-exported for one reason: a test that asserts "the bound fires" must build
+// its payload FROM the production limit, never from a number typed into the
+// test. A hand-typed `65` is correct only until someone changes the constant,
+// and the failure mode is silent — the payload stops crossing the bound and the
+// test keeps passing while asserting nothing.
+//
+// All four are `pub(crate)` in `crate::types::mrtr`, which owns them because the
+// SAME four guard both the MRTR ingress and the `tasks/update` route. There is
+// deliberately NO re-export of the fifth, `MAX_REQUEST_STATE_LEN`: it bounds the
+// continuation TOKEN, `tasks/update` carries none, and exporting it beside these
+// four is how a fifth test gets written asserting a bound the route correctly
+// does not enforce.
+// ===========================================================================
+
+/// Upper bound on the number of `inputResponses` entries one request may carry.
+pub const MAX_INPUT_RESPONSES: usize = crate::types::mrtr::MAX_INPUT_RESPONSES;
+
+/// Upper bound on ONE serialized `inputResponses` entry, in bytes.
+pub const MAX_INPUT_RESPONSE_BYTES: usize = crate::types::mrtr::MAX_INPUT_RESPONSE_BYTES;
+
+/// Upper bound on the TOTAL serialized size of all `inputResponses` entries.
+pub const MAX_INPUT_RESPONSES_TOTAL_BYTES: usize =
+    crate::types::mrtr::MAX_INPUT_RESPONSES_TOTAL_BYTES;
+
+/// Upper bound on the nesting DEPTH of ONE `inputResponses` entry.
+pub const MAX_INPUT_RESPONSE_DEPTH: usize = crate::types::mrtr::MAX_INPUT_RESPONSE_DEPTH;
+
 #[cfg(not(target_arch = "wasm32"))]
 pub use reserved_fields::{
     v1_result_envelope, v2_result_envelope, CapturedWarning, EnvelopeOutcome, ReservedFieldEgress,
