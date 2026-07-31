@@ -869,40 +869,74 @@ fn discovered_routes(stripped: &Stripped) -> BTreeSet<String> {
         .collect()
 }
 
-/// The whole population of `tasks/*` routes equals [`ROUTES`], and every named
-/// guard is present in the function it is named against.
+/// ROT CONDITION 1 — a route function the allowlist has never heard of.
+///
+/// # Why the three rot conditions are three TESTS
+///
+/// They began as one, which is the shape
+/// `tests/v2_prohibited_error_codes.rs` uses. The masking check then FIRED:
+/// three separate negative controls — a deleted guard, a new unlisted route and
+/// a stale entry — produced the IDENTICAL failing set at the IDENTICAL
+/// `assert!` line, separable only by reading the collected message text. That is
+/// the weaker separation 114-19 had to force its own split out of, so this one
+/// is split up front: each condition now fails a test nobody has to read a
+/// string to identify.
 #[test]
-fn every_tasks_route_is_allowlisted_and_era_guarded() {
+fn every_tasks_route_in_the_source_is_allowlisted() {
     let source = read(DISPATCH);
     let stripped = strip(&source);
     let discovered = discovered_routes(&stripped);
     let listed: BTreeSet<String> = ROUTES.iter().map(|e| e.function.to_string()).collect();
+    let unlisted: Vec<&String> = discovered.difference(&listed).collect();
+
+    assert!(
+        unlisted.is_empty(),
+        "UNLISTED route(s) in {DISPATCH}: {unlisted:?}\n  Every tasks route must name the \
+         predicate that keeps it correct per era. Add a ROUTES entry naming that predicate and \
+         the function it runs in, or the era gate can be deleted without failing anything."
+    );
+}
+
+/// ROT CONDITION 3 — an entry for a route that no longer exists.
+///
+/// A stale entry is how a real new route hides under a name set for a route
+/// since removed: the population check above compares against a list that still
+/// mentions the dead name, so a rename reads as "no change".
+#[test]
+fn every_allowlisted_route_still_exists() {
+    let source = read(DISPATCH);
+    let stripped = strip(&source);
+    let stale: Vec<&str> = ROUTES
+        .iter()
+        .filter(|entry| fn_body(&stripped, entry.function).is_none())
+        .map(|entry| entry.function)
+        .collect();
+
+    assert!(
+        stale.is_empty(),
+        "STALE ROUTES entr(ies): {stale:?} — {DISPATCH} no longer declares them.\n  Delete the \
+         entry, or point it at the function the route was renamed to."
+    );
+}
+
+/// ROT CONDITION 2 — a named guard that no longer runs where it must.
+///
+/// The SITE is the point. `route_tasks_list`'s retirement gate fires in
+/// `retired_method`, one frame above the route, and `is_v1_task_era` appears in
+/// eight places in this file — so a check that only asked "does the FILE still
+/// contain the token" would stay green after any single call site was deleted.
+#[test]
+fn every_allowlisted_routes_era_guard_is_present_in_its_named_site() {
+    let source = read(DISPATCH);
+    let stripped = strip(&source);
     let mut failures = String::new();
 
-    // --- rot condition 1: a route the allowlist has never heard of -----------
-    for name in discovered.difference(&listed) {
-        let _ = writeln!(
-            failures,
-            "\n  UNLISTED route: {DISPATCH} declares `{name}` and ROUTES does not mention it.\n    \
-             Every tasks route must name the predicate that keeps it correct per era. Add an \
-             entry naming that predicate and the function it runs in, or the era gate can be \
-             deleted without failing anything."
-        );
-    }
-
     for entry in ROUTES {
-        // --- rot condition 3: an entry for a route that is gone --------------
         if fn_body(&stripped, entry.function).is_none() {
-            let _ = writeln!(
-                failures,
-                "\n  STALE entry: ROUTES names `{}` and {DISPATCH} no longer declares it.\n    \
-                 Delete the entry. A stale one is how a real new route hides under a name set for \
-                 a route since removed.",
-                entry.function
-            );
+            // Owned by `every_allowlisted_route_still_exists`; skipping here
+            // keeps that control's failing set disjoint from this one's.
             continue;
         }
-        // --- rot condition 2: a guard that no longer runs where it must ------
         for guard in entry.guards {
             let Some(body) = fn_body(&stripped, guard.site) else {
                 let _ = writeln!(
@@ -927,7 +961,7 @@ fn every_tasks_route_is_allowlisted_and_era_guarded() {
 
     assert!(
         failures.is_empty(),
-        "the tasks route/era-guard population changed:{failures}"
+        "a tasks route lost its guard:{failures}"
     );
 }
 
