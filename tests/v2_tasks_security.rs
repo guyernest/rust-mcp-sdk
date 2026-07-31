@@ -45,10 +45,14 @@
 //! | 4 | `v2_owner_isolation_holds_for_a_second_task_of_the_same_shape` | BOTH directions: each reads its own, neither the other's |
 //! | 5 | `v2_a_guessed_task_id_is_not_found` | a never-minted id is refused identically, on all three methods |
 //! | 6 | `task_ids_are_unguessable` | the entropy / non-sequential / non-derived PROPERTIES the spec states |
+//! | 7 | `v1_local_and_v2_anonymous_buckets_are_disjoint` | one server, two eras, two anonymous spellings, two buckets |
+//! | 8 | `a_no_auth_provider_server_shares_one_v2_bucket` | D-07's accepted caveat, ASSERTED rather than implied |
 //!
 //! Test 4 exists because firing only the refusal direction cannot distinguish
 //! "isolated" from "broken for everyone" — a fail-closed implementation that
-//! refused EVERY caller would satisfy tests 1-3 completely.
+//! refused EVERY caller would satisfy tests 1-3 completely. Test 8 exists
+//! because a documented, accepted weakness that no test states is a weakness a
+//! future reader rediscovers as a bug.
 
 #![cfg(all(
     feature = "streamable-http",
@@ -59,10 +63,11 @@
 mod common;
 
 use common::v2::{
-    header, post, spawn_tasks_server_with_store, teardown, v2_body_with_client_extensions,
+    header, post, spawn_tasks_server_with_store, teardown, v1_body, v2_body_with_client_extensions,
     v2_headers, AuthPosture, Resp, PAUSING_TOOL_NAME, PAUSING_TOOL_REQUEST_KEY, TASKS_TOOL_NAME,
 };
 use pmcp::server::task_store::{InMemoryTaskStore, StoreConfig, TaskStore};
+use pmcp::testing::ANONYMOUS_PRINCIPAL;
 use pmcp::types::capabilities::TASKS_EXTENSION_KEY;
 use pmcp::types::protocol::error_codes::INVALID_PARAMS;
 use serde_json::{json, Value};
@@ -81,6 +86,16 @@ const OWNER_A: &str = "alice";
 /// model of an IDOR: the attacker is a valid user with a guessed or leaked
 /// identifier, not an outsider.
 const OWNER_B: &str = "mallory";
+
+/// The v1 anonymous owner bucket, frozen by D-10.
+///
+/// Spelled here rather than imported because `V1_UNAUTHENTICATED_OWNER` is
+/// `pub(crate)` in `src/server/task_dispatch.rs` and this crate's public testing
+/// seam deliberately does not re-export it. Test 7 asserts the DISJOINTNESS of
+/// the two buckets, and a disjointness claim needs both spellings written down;
+/// if this literal ever stops matching production, test 7 fails by observing the
+/// v1 caller cannot read its OWN task, which is the loudest possible signal.
+const V1_LOCAL_OWNER: &str = "local";
 
 /// A well-formed task id that was never minted by any store in this suite.
 ///
@@ -855,5 +870,254 @@ async fn task_ids_are_unguessable() {
         shared_literal_prefix(&population),
         "one owner's ids share no more of a prefix than the whole population does, so \
          the id carries no owner tag"
+    );
+}
+
+// ===========================================================================
+// 7 — one server, two eras, two anonymous spellings, two BUCKETS.
+// ===========================================================================
+
+/// The path, relative to the crate root, of the `pmcp-tasks` predicate this test
+/// makes a statement about.
+const GENERIC_STORE_SOURCE: &str = "crates/pmcp-tasks/src/store/generic.rs";
+
+/// The path of the `pmcp-tasks` key builder whose owner prefix IS the
+/// disjointness.
+const BACKEND_SOURCE: &str = "crates/pmcp-tasks/src/store/backend.rs";
+
+fn read_workspace_source(relative: &str) -> String {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(relative);
+    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()))
+}
+
+/// Complete a REAL v1 handshake and return the headers a v1 caller must carry.
+///
+/// D-114-J: the shared harness spawns with `StreamableHttpServerConfig::default()`,
+/// which is STATEFUL on purpose, so a v1 caller has to negotiate and then carry
+/// `Mcp-Session-Id` — otherwise it is answered `-32600`, which looks like a tasks
+/// bug and is not one.
+async fn v1_session_headers(addr: SocketAddr) -> Vec<(String, String)> {
+    let initialized = post(
+        addr,
+        &[],
+        &v1_body(
+            "initialize",
+            json!(0),
+            json!({
+                "protocolVersion": common::v2::V1,
+                "capabilities": {},
+                "clientInfo": { "name": "v1-client", "version": "0.0.0" }
+            }),
+        ),
+    )
+    .await;
+    let session = initialized.mcp_session_id.unwrap_or_else(|| {
+        panic!(
+            "a stateful v1 handshake must mint a session id: {}",
+            initialized.raw
+        )
+    });
+    vec![header(
+        pmcp::shared::http_constants::MCP_SESSION_ID,
+        &session,
+    )]
+}
+
+/// The v1 `"local"` bucket and the v2 anonymous bucket are DISJOINT storage
+/// namespaces on one server.
+///
+/// # Two statements that are easy to confuse, and are asserted separately
+///
+/// * **Disjointness** is about the storage KEY. `pmcp-tasks` prefixes every key
+///   with its owner (`make_key` -> `"{owner_id}:{task_id}"`), so `":<id>"` and
+///   `"local:<id>"` are different keys and neither owner's read can reach the
+///   other's record. The in-crate `InMemoryTaskStore` reaches the same outcome
+///   through `validate_access`'s owner comparison rather than a key prefix, and
+///   that is the store this live server runs, so the wire half below measures it
+///   there.
+/// * **`is_anonymous_owner`** is about whether an owner counts as anonymous for
+///   the `allow_anonymous` refusal, and it treats `""` and `"local"`
+///   IDENTICALLY. That is not a contradiction of the first statement: a
+///   production backend refuses BOTH buckets by default while still keeping them
+///   in separate namespaces.
+///
+/// The predicate half is asserted at the SOURCE because `pmcp-tasks` is not a
+/// dependency of the `pmcp` crate in any profile — adding one to reach a private
+/// helper would be a heavier change than the claim justifies, and this plan
+/// touches no manifest. `crates/pmcp-tasks/tests/input_delivery.rs` (114-07)
+/// owns the BEHAVIOURAL twin of the predicate claim from inside that crate;
+/// this is its pmcp-side counterpart and does not restate it.
+#[tokio::test]
+async fn v1_local_and_v2_anonymous_buckets_are_disjoint() {
+    let (addr, handle, store) = spawn_tasks_server_with_store(AuthPosture::None).await;
+
+    // --- the v1 caller: owner "local" ------------------------------------
+    let v1_headers = v1_session_headers(addr).await;
+    let v1_created = post(
+        addr,
+        &v1_headers,
+        &v1_body(
+            "tools/call",
+            json!(1),
+            json!({ "name": TASKS_TOOL_NAME, "arguments": {}, "task": {} }),
+        ),
+    )
+    .await;
+    let v1_task = v1_created.body["result"]["task"]["taskId"]
+        .as_str()
+        .unwrap_or_else(|| {
+            panic!(
+                "a v1 create envelope nests under `task`: {}",
+                v1_created.raw
+            )
+        })
+        .to_string();
+
+    // --- the v2 caller: owner ANONYMOUS_PRINCIPAL ------------------------
+    let v2_task = task_id_of(&create_task(addr, None, TASKS_TOOL_NAME, 2).await);
+
+    // Cross-era reads, both directions, BEFORE either same-era read.
+    let v2_reads_v1 = tasks_get(addr, None, &v1_task, 3).await;
+    let v1_reads_v2 = post(
+        addr,
+        &v1_headers,
+        &v1_body("tasks/get", json!(4), json!({ "taskId": v2_task })),
+    )
+    .await;
+    // The controls.
+    let v2_reads_v2 = tasks_get(addr, None, &v2_task, 5).await;
+    let v1_reads_v1 = post(
+        addr,
+        &v1_headers,
+        &v1_body("tasks/get", json!(6), json!({ "taskId": v1_task })),
+    )
+    .await;
+    teardown(handle, ()).await;
+
+    assert_ne!(
+        v1_task, v2_task,
+        "the two eras minted two distinct ids, or the disjointness claim is vacuous"
+    );
+    assert!(
+        v2_reads_v1.body.get("error").is_some(),
+        "a v2 (anonymous-principal) caller must not reach the v1 `local` bucket: {}",
+        v2_reads_v1.raw
+    );
+    assert!(
+        v1_reads_v2.body.get("error").is_some(),
+        "and a v1 (`local`) caller must not reach the v2 anonymous bucket: {}",
+        v1_reads_v2.raw
+    );
+    assert_eq!(
+        result_of(&v2_reads_v2)["taskId"],
+        json!(v2_task),
+        "the control: the v2 caller reads its OWN task: {}",
+        v2_reads_v2.raw
+    );
+    assert_eq!(
+        v1_reads_v1.body["result"]["task"]["taskId"],
+        json!(v1_task),
+        "the control: the v1 caller reads its OWN task, so the refusals above are \
+         disjointness and not an outage: {}",
+        v1_reads_v1.raw
+    );
+
+    // The same disjointness at the STORE, where the owner scoping actually
+    // lives — the wire assertions above cannot distinguish "the owner differs"
+    // from "the route refused for some other reason".
+    assert!(
+        store.get(&v1_task, ANONYMOUS_PRINCIPAL).await.is_err(),
+        "the v1 task is not readable under the v2 anonymous owner"
+    );
+    assert!(
+        store.get(&v2_task, V1_LOCAL_OWNER).await.is_err(),
+        "the v2 task is not readable under the v1 `local` owner"
+    );
+    assert!(
+        store.get(&v1_task, V1_LOCAL_OWNER).await.is_ok(),
+        "and each IS readable under its own owner, so the two refusals above are about \
+         the owner and not about the ids"
+    );
+    assert!(store.get(&v2_task, ANONYMOUS_PRINCIPAL).await.is_ok());
+    assert_ne!(
+        ANONYMOUS_PRINCIPAL, V1_LOCAL_OWNER,
+        "the two buckets are two DIFFERENT owner strings; that is what makes their \
+         storage namespaces disjoint"
+    );
+
+    // --- the SECOND, different statement ---------------------------------
+    // `is_anonymous_owner` treats the two spellings IDENTICALLY. This is a claim
+    // about the `allow_anonymous` refusal, NOT about namespaces, and conflating
+    // the two is the mistake this block exists to prevent.
+    let generic = read_workspace_source(GENERIC_STORE_SOURCE);
+    assert!(
+        generic.contains("fn is_anonymous_owner(owner_id: &str) -> bool {\n        owner_id.is_empty() || owner_id == DEFAULT_LOCAL_OWNER\n    }"),
+        "`is_anonymous_owner` in {GENERIC_STORE_SOURCE} must keep treating the empty \
+         owner and the `local` owner identically. If this predicate was split, the \
+         `allow_anonymous: false` default no longer refuses both buckets and this \
+         test's rustdoc has become wrong"
+    );
+    // …while the KEY builder is what keeps the namespaces apart.
+    let backend = read_workspace_source(BACKEND_SOURCE);
+    assert!(
+        backend.contains(r#"format!("{owner_id}:{task_id}")"#),
+        "`make_key` in {BACKEND_SOURCE} must keep prefixing by owner; dropping the \
+         prefix collapses every owner's tasks into one namespace and the disjointness \
+         asserted above stops holding on the production backends"
+    );
+}
+
+// ===========================================================================
+// 8 — D-07's accepted caveat, ASSERTED.
+// ===========================================================================
+
+/// On a server with NO auth provider, two v2 callers share ONE task bucket and
+/// CAN see each other's tasks.
+///
+/// # This is accepted, documented behaviour — not a bug, and not a bug report
+///
+/// Row 3 of the v2 identity table maps a caller on an auth-provider-less server
+/// onto `ANONYMOUS_PRINCIPAL`. There is no second identity to map it to: such a
+/// server has no notion of caller identity at all, so "isolate the callers" is
+/// not a thing it can do — it is a development / stdio affordance, and
+/// `TaskDispatch::resolve_owner`'s own rustdoc says so in those words. The
+/// fail-closed guarantee this phase makes is about AUTH-CONFIGURED deployments
+/// (row 2), which tests 1–5 exercise.
+///
+/// The production backends bound this independently: `TaskSecurityConfig`
+/// defaults `allow_anonymous` to `false`, so `pmcp-tasks`' `GenericTaskStore`
+/// refuses the anonymous bucket outright unless an operator opts in. A
+/// `DynamoDB`- or Redis-backed deployment therefore cannot reach the shape this
+/// test asserts without a deliberate configuration change.
+///
+/// A test that states the accepted weakness is what stops a future reader from
+/// "discovering" it as a vulnerability, filing it, and closing it with a change
+/// that breaks every stdio server. If this test ever fails because the sharing
+/// stopped, that is a DELIBERATE behaviour change and it needs its own plan —
+/// not a fix to this file.
+#[tokio::test]
+async fn a_no_auth_provider_server_shares_one_v2_bucket() {
+    let (addr, handle, _store) = spawn_tasks_server_with_store(AuthPosture::None).await;
+
+    // Two callers presenting DIFFERENT credentials to a server that has no
+    // provider to interpret them. Both bind ANONYMOUS_PRINCIPAL.
+    let created = task_id_of(&create_task(addr, Some(OWNER_A), TASKS_TOOL_NAME, 1).await);
+    let read_by_other = tasks_get(addr, Some(OWNER_B), &created, 2).await;
+    let read_by_nobody = tasks_get(addr, None, &created, 3).await;
+    teardown(handle, ()).await;
+
+    assert_eq!(
+        result_of(&read_by_other)["taskId"],
+        json!(created),
+        "ACCEPTED: with no auth provider there is one shared bucket, so a different \
+         bearer reads the same task. See this test's rustdoc before changing it: {}",
+        read_by_other.raw
+    );
+    assert_eq!(
+        result_of(&read_by_nobody)["taskId"],
+        json!(created),
+        "and a caller presenting no credential at all reads it too — the bearer was \
+         never interpreted, which is precisely why the bucket is shared: {}",
+        read_by_nobody.raw
     );
 }
