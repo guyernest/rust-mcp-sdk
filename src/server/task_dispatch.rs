@@ -109,22 +109,28 @@ const TASKS_RESULT_METHOD: &str = "tasks/result";
 ///
 /// The old constant is GONE rather than reworded-and-kept: a second, unreachable
 /// spelling of "no" is how two plans come to disagree about one wire string.
-/// And there is no "the client did not declare the extension" refusal in the
-/// tree today — 114-05 landed the server-side ADVERTISEMENT and 114-06 the
-/// CLIENT-side refusal, but no server-side negotiation gate exists, so a
-/// constant for that condition would have no emission site. Whichever plan
-/// lands that gate mints its own message then.
 ///
-/// # The three `-32601` conditions this module answers, kept distinguishable
+/// The server-side "the client did not declare the extension" refusal DOES now
+/// exist, and it is deliberately not this constant: plans 114-12 and 114-13 gate
+/// on `TaskDispatch::declares_tasks_extension` and answer `-32021` carrying
+/// `MISSING_TASKS_DECLARATION_MESSAGE`. A missing DECLARATION and a RETIRED
+/// method are opposite fixes — declare the extension versus stop calling the
+/// method — so they stay two sentences. (This paragraph previously asserted that
+/// no such gate existed; it was falsified one wave later, which is why the
+/// conditions below are no longer counted in the heading.)
+///
+/// # The `-32601` conditions this module answers, kept distinguishable
 ///
 /// | condition | message | when |
 /// |-----------|---------|------|
 /// | RETIRED | this constant, prefixed by the method | era is v2 AND a task backend exists |
-/// | NO BACKEND | `"Tasks not enabled"` / `"tasks/result not supported"` | neither a `TaskStore` nor a `TaskRouter`, on ANY era |
-/// | NOT A `tasks/*` METHOD | `"Method not supported"` | the wildcard arm of `route_tasks_endpoint` |
+/// | NO BACKEND | `TASKS_NOT_ENABLED` / `TASKS_RESULT_NOT_SUPPORTED` | neither a `TaskStore` nor a `TaskRouter`, on ANY era |
+/// | NOT A `tasks/*` METHOD | `NOT_A_TASKS_METHOD` | the wildcard arm of `route_tasks_endpoint` |
+/// | NOT YET A METHOD | `V1_TASKS_UPDATE_ABSENT`, prefixed by the method | `tasks/update` on v1 — the OPPOSITE direction from RETIRED |
 ///
 /// Distinguishability is the mitigation, not a nicety: "this method was
-/// retired" and "this server serves no tasks at all" call for opposite fixes.
+/// retired", "this method does not exist yet" and "this server serves no tasks
+/// at all" call for three different fixes.
 pub(crate) const V2_TASKS_METHOD_RETIRED: &str =
     "is not a method of the tasks extension on protocol version 2026-07-28: the extension \
      declares only tasks/get, tasks/update and tasks/cancel";
@@ -275,12 +281,18 @@ fn retired_on_v2(id: RequestId, method: &str) -> JSONRPCResponse {
 /// |-----------------|---------|-----|
 /// | `Some(Era::V1)` | `true`  | the v1 task lifecycle is untouched |
 /// | `None`          | `true`  | not opted into v2 → zero era code, v1 path unchanged (D-04) |
-/// | `Some(Era::V2)` | `false` | the v2 task surface is not implemented (TASK-03) |
+/// | `Some(Era::V2)` | `false` | this request runs under the v2 task surface, which answers separately |
 ///
 /// The v2 row deliberately no longer says "and not negotiated": since 114-05 a
 /// tasks-backed server DOES advertise the tasks extension, so the reason this
-/// predicate routes v2 away from the `-32002` refusal is the missing v2
-/// semantics, not a missing capability entry.
+/// predicate routes v2 away from the `-32002` refusal is not a missing
+/// capability entry.
+///
+/// Nor does it still say "the v2 task surface is not implemented" — plans
+/// 114-11, 114-12 and 114-13 implemented it (v2 result shapes, the
+/// `V2ClientDeclaration` create trigger, and `tasks/update` routing). `false`
+/// here means "answer this on the v2 path", not "there is nothing to answer
+/// with".
 ///
 /// # Why this predicate exists (Finding 11)
 ///
@@ -298,10 +310,16 @@ fn retired_on_v2(id: RequestId, method: &str) -> JSONRPCResponse {
 ///
 /// # What this predicate gates, and what it deliberately does NOT
 ///
-/// It is the ONE era definition this module has, and three things now read it:
-/// the `-32002` pending emission, [`tasks_list_serves_on_era`] and
-/// [`tasks_result_serves_on_era`] — the last two because plan 114-08 RETIRED
-/// both of those methods on v2 (see [`V2_TASKS_METHOD_RETIRED`]).
+/// It is the ONE era definition this module has, and every era-sensitive site
+/// here delegates to it rather than re-deriving the answer — the `-32002`
+/// pending emission, [`tasks_list_serves_on_era`] and
+/// [`tasks_result_serves_on_era`] (both because plan 114-08 RETIRED those
+/// methods on v2 — see [`V2_TASKS_METHOD_RETIRED`]), and the per-route v2 shape
+/// and gate decisions added by plans 114-11 through 114-13.
+///
+/// That list is deliberately NOT written as a count. It was "three things" until
+/// three more readers arrived in the following three waves, and a number in a
+/// doc comment rots silently while a delegation rule does not.
 ///
 /// It does NOT retire `tasks/get` or `tasks/cancel`: both still serve on BOTH
 /// eras, because both survive in the v2 extension schema. Their v2 response
@@ -2078,9 +2096,11 @@ impl TaskDispatch<'_> {
     ///
     /// # Not `async`, on purpose
     ///
-    /// Nothing here touches a store or a router, so an `async fn` would be a
-    /// `clippy::unused_async` violation and a false promise of I/O. 114-14's
-    /// delivery body makes it `async`; the single call site
+    /// Nothing here touches a store or a router, and an `async fn` that never
+    /// awaits is a false promise of I/O to every caller that has to decide where
+    /// to hold a lock across it. (`clippy::unused_async` would NOT have caught
+    /// this — it is on `make lint`'s allow-list; the reason is the contract, not
+    /// the lint.) 114-14's delivery body makes it `async`; the single call site
     /// ([`Server::handle_tasks_update`](crate::server::Server::handle_tasks_update))
     /// gains one `.await` at that point.
     pub(crate) fn route_tasks_update(

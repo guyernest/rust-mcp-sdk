@@ -990,8 +990,7 @@ fn shipped_sites(symbol: &str) -> Vec<(String, Vec<u32>)> {
 /// and an MRTR-ingress token cannot end up in one chunk unless they are genuinely
 /// adjacent in one expression, one call, one table row or one `use`.
 fn statements(text: &str) -> Vec<&str> {
-    text.split(|ch| ch == ';' || ch == '{' || ch == '}')
-        .collect()
+    text.split([';', '{', '}']).collect()
 }
 
 /// The population of shipped `TASKS_UPDATE_METHOD` sites equals the declared

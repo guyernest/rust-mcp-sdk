@@ -2718,6 +2718,27 @@ async fn assemble_discover_response_fast(
 // `tasks/update` (Phase 114 plan 13, TASK-02).
 // ===========================================================================
 
+/// The four inputs `TaskDispatch::route_tasks_update` consumes, carried as ONE
+/// value.
+///
+/// Bundled rather than passed as four parameters because the middleware assembler
+/// would otherwise take 8 arguments and trip `clippy::too_many_arguments` (7) —
+/// MEASURED in the plan-13 quality gate, not anticipated. The grouping is not
+/// arbitrary: these are exactly the router's inputs, and
+/// [`InternalResponseShape`] beside it is exactly the response tail's, so the two
+/// assemblers below read as "route with these, then shape with those".
+struct TasksUpdateCall<'a> {
+    /// The ORIGINAL JSON-RPC request id.
+    id: crate::types::RequestId,
+    /// The request's `params`, RAW and undecoded — nothing between the wire and
+    /// the router deserializes them.
+    params: serde_json::Value,
+    /// The context resolved ONCE at ingress and CONSUMED here (D-11).
+    protocol_context: Option<&'a crate::types::protocol::ProtocolContext>,
+    /// The value [`extract_and_validate_auth`] already produced.
+    auth_context: Option<&'a crate::server::auth::AuthContext>,
+}
+
 /// Run the `tasks/update` GATE chain and produce its JSON-RPC response.
 ///
 /// THE single place this transport reaches the tasks router for `tasks/update`,
@@ -2728,19 +2749,20 @@ async fn assemble_discover_response_fast(
 /// It contains NO gate itself. `Server::handle_tasks_update` is a thin delegate
 /// onto `TaskDispatch::route_tasks_update`, which owns the whole ordered chain:
 /// era → backend → client declaration (`-32021`) → auth (`-32003`) → params
-/// (`-32602`). This function's `auth_context` is the value
-/// [`extract_and_validate_auth`] already produced, threaded through unchanged —
+/// (`-32602`). The `auth_context` is threaded through unchanged —
 /// `tasks/update` is subject to the SAME auth as every other request on this
 /// transport.
 async fn tasks_update_json_response(
     state: &ServerState,
-    id: crate::types::RequestId,
-    params: &serde_json::Value,
-    protocol_context: Option<&crate::types::protocol::ProtocolContext>,
-    auth_context: Option<&crate::server::auth::AuthContext>,
+    call: &TasksUpdateCall<'_>,
 ) -> crate::types::JSONRPCResponse {
     let server = state.server.lock().await;
-    server.handle_tasks_update(id, params, auth_context, protocol_context)
+    server.handle_tasks_update(
+        call.id.clone(),
+        &call.params,
+        call.auth_context,
+        call.protocol_context,
+    )
 }
 
 /// Assemble the `tasks/update` response on the fast path (TASK-02).
@@ -2762,10 +2784,7 @@ async fn tasks_update_json_response(
 /// moves.
 async fn assemble_tasks_update_fast(
     state: &ServerState,
-    id: crate::types::RequestId,
-    params: &serde_json::Value,
-    protocol_context: Option<&crate::types::protocol::ProtocolContext>,
-    auth_context: Option<&crate::server::auth::AuthContext>,
+    call: TasksUpdateCall<'_>,
     shape: InternalResponseShape<'_>,
     session_id: Option<&String>,
 ) -> Response {
@@ -2774,9 +2793,9 @@ async fn assemble_tasks_update_fast(
         v2_outbound,
         sessions_on,
     } = shape;
-    let live_id = id.clone();
-    let json_response =
-        tasks_update_json_response(state, id, params, protocol_context, auth_context).await;
+    let live_id = call.id.clone();
+    let protocol_context = call.protocol_context;
+    let json_response = tasks_update_json_response(state, &call).await;
     let era = protocol_context.map(|pc| pc.era);
     let v2_status = v2_dispatch_response_status(era, &json_response);
     // Same structural guarantee as every other direct response (HTTP-05).
@@ -2818,10 +2837,7 @@ async fn assemble_tasks_update_fast(
 /// [`tasks_update_json_response`].
 async fn assemble_tasks_update_with_middleware(
     state: &ServerState,
-    id: crate::types::RequestId,
-    params: &serde_json::Value,
-    protocol_context: Option<&crate::types::protocol::ProtocolContext>,
-    auth_context: Option<&crate::server::auth::AuthContext>,
+    call: TasksUpdateCall<'_>,
     shape: InternalResponseShape<'_>,
     http_middleware: &ServerHttpMiddlewareChain,
     http_context: &ServerHttpContext,
@@ -2831,9 +2847,9 @@ async fn assemble_tasks_update_with_middleware(
         v2_outbound,
         sessions_on,
     } = shape;
-    let live_id = id.clone();
-    let json_response =
-        tasks_update_json_response(state, id, params, protocol_context, auth_context).await;
+    let live_id = call.id.clone();
+    let protocol_context = call.protocol_context;
+    let json_response = tasks_update_json_response(state, &call).await;
     let era = protocol_context.map(|pc| pc.era);
     let v2_status = v2_dispatch_response_status(era, &json_response);
     let response_msg =
@@ -3889,10 +3905,12 @@ async fn dispatch_message_fast(
             } = dispatch;
             Box::pin(assemble_tasks_update_fast(
                 state,
-                id,
-                &params,
-                protocol_context.as_ref(),
-                auth_context.as_ref(),
+                TasksUpdateCall {
+                    id,
+                    params,
+                    protocol_context: protocol_context.as_ref(),
+                    auth_context: auth_context.as_ref(),
+                },
                 InternalResponseShape {
                     response_session_id: response_session_id.as_ref(),
                     v2_outbound,
@@ -3960,10 +3978,12 @@ async fn dispatch_message_with_middleware(
         HttpIngress::TasksUpdate { id, params } => {
             assemble_tasks_update_with_middleware(
                 state,
-                id,
-                &params,
-                protocol_context.as_ref(),
-                auth_context.as_ref(),
+                TasksUpdateCall {
+                    id,
+                    params,
+                    protocol_context: protocol_context.as_ref(),
+                    auth_context: auth_context.as_ref(),
+                },
                 InternalResponseShape {
                     response_session_id: response_session_id.as_ref(),
                     v2_outbound,
@@ -5384,12 +5404,12 @@ mod tests {
     /// Spelled through the production predicate rather than asserted by comment:
     /// if `tools/call` ever left `MRTR_METHODS`, every test below would start
     /// passing vacuously, and this catches that instead.
-    fn mrtr_test_method() -> Option<&'static str> {
+    fn mrtr_test_method() -> &'static str {
         assert!(
             crate::types::mrtr::mrtr_eligible("tools/call"),
             "these tests exercise the MRTR extraction, which only runs for an eligible method"
         );
-        Some("tools/call")
+        "tools/call"
     }
 
     /// Body bytes for a `tools/call` carrying arbitrary extra top-level params.
@@ -5419,7 +5439,7 @@ mod tests {
             Some(v2_context()),
             accepted_v2(),
             parsed.as_ref(),
-            mrtr_test_method(),
+            Some(mrtr_test_method()),
         );
         assert!(matches!(outcome, V2GateOutcome::EnforceOk { .. }));
         let ctx = ctx.expect("context survives");
@@ -5444,7 +5464,7 @@ mod tests {
                 Some(v2_context()),
                 outcome,
                 parsed.as_ref(),
-                mrtr_test_method(),
+                Some(mrtr_test_method()),
             );
             assert!(
                 ctx.expect("context survives")
@@ -5465,7 +5485,7 @@ mod tests {
             Some(v2_context()),
             accepted_v2(),
             parsed.as_ref(),
-            mrtr_test_method(),
+            Some(mrtr_test_method()),
         );
         assert!(matches!(outcome, V2GateOutcome::EnforceOk { .. }));
         let ctx = ctx.expect("context survives");
@@ -5530,7 +5550,7 @@ mod tests {
                 Some(v2_context()),
                 accepted_v2(),
                 parsed.as_ref(),
-                mrtr_test_method(),
+                Some(mrtr_test_method()),
             );
             let V2GateOutcome::Reject { code, .. } = outcome else {
                 panic!("a present-but-unusable MRTR field must REJECT, got a pass for {case}");
@@ -5633,7 +5653,7 @@ mod tests {
             Some(v2_context()),
             accepted_v2(),
             parsed.as_ref(),
-            mrtr_test_method(),
+            Some(mrtr_test_method()),
         );
         let V2GateOutcome::Reject { message, .. } = outcome else {
             panic!("expected a rejection");
