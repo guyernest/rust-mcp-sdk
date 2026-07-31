@@ -71,11 +71,13 @@
 //! prevent.
 #![cfg(not(target_arch = "wasm32"))]
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::fs;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
+
+use pmcp::types::protocol::error_codes;
 
 /// A justification shorter than this is a label, not a decision.
 const MIN_JUSTIFICATION_CHARS: usize = 40;
@@ -86,6 +88,18 @@ const DISPATCH: &str = "src/server/task_dispatch.rs";
 /// The module that owns the three `tasks/*` method spellings the routing table
 /// references.
 const MRTR: &str = "src/types/mrtr.rs";
+
+/// The wire types module that declares `TaskStatus`.
+const TASK_TYPES: &str = "src/types/tasks.rs";
+
+/// The vendored extension schema, read at RUNTIME.
+///
+/// Deliberately `read_to_string` rather than `include_str!`: the plan's own text
+/// says "read the vendored file at runtime with `include_str!`", and those two
+/// halves contradict each other — `include_str!` bakes the bytes in at COMPILE
+/// time. Reading it at runtime is what makes a re-vendoring at the D-18 gate
+/// move this test without anyone remembering to touch it.
+const VENDORED_SCHEMA: &str = "schema/vendored/ext-tasks/schema.ts";
 
 // ===========================================================================
 // 1. Scanner primitives — restated, not shared. See the module docs.
@@ -639,6 +653,15 @@ fn enclosing_fn(spans: &[(String, Range<usize>)], index: usize) -> Option<&str> 
         .map(|(name, _)| name.as_str())
 }
 
+/// The balanced span of `header` (e.g. `impl std::fmt::Display for TaskStatus`).
+fn block_after<'a>(stripped: &'a Stripped, header: &str) -> Option<&'a str> {
+    let text = &stripped.text;
+    let at = text.find(header)?;
+    let brace = text[at..].find('{')? + at;
+    let end = balanced_end(text, brace)?;
+    Some(&text[brace..=end])
+}
+
 // ===========================================================================
 // 4. TASK 1 — every `tasks/*` route carries a NAMED era guard.
 // ===========================================================================
@@ -1000,6 +1023,759 @@ fn every_v2_tasks_wire_method_maps_to_an_allowlisted_route() {
 }
 
 // ===========================================================================
+// 5. TASK 2(a) — no v2-reachable `NotFound` becomes `-32603`.
+// ===========================================================================
+
+/// Why an `INTERNAL_ERROR` in the tasks dispatch is not a v2 `NotFound`.
+enum Disposition {
+    /// EVERY hit in this function is unreachable on v2, and `guard` in
+    /// `guard_site` is what keeps it that way.
+    V1Only {
+        guard: &'static str,
+        guard_site: &'static str,
+    },
+    /// The function IS v2-reachable, but a store `NotFound` never reaches these
+    /// hits — `why` names the arm that takes it instead.
+    NotFoundRoutedElsewhere {
+        guard: &'static str,
+        guard_site: &'static str,
+    },
+    /// An out-of-tree [`TaskRouter`] error, which is not a `TaskStoreError` at
+    /// all and carries no not-found discriminant this crate can read.
+    ///
+    /// **RECORDED GAP, not a clean bill of health.** See the entries' `why`.
+    RouterLeg,
+}
+
+struct InternalErrorEntry {
+    function: &'static str,
+    hits: usize,
+    disposition: Disposition,
+    why: &'static str,
+}
+
+/// Every `INTERNAL_ERROR` (`-32603`) emission in [`DISPATCH`], by enclosing
+/// function, with the MEASURED hit count.
+///
+/// The count is part of the entry on purpose: a second `INTERNAL_ERROR` added
+/// inside an already-allowlisted function is exactly the shape a regression
+/// takes, and a file-level or function-level presence check cannot see it.
+///
+/// The rule this defends: the extension makes `-32602` a MUST for a `tasks/get`
+/// naming an invalid or nonexistent `taskId`, and pmcp deliberately surfaces an
+/// OWNER MISMATCH as `NotFound` so that wrong-owner and absent are
+/// indistinguishable. A `-32603` on that path would therefore read a different
+/// failure CLASS to a conformant client for the one case the anti-oracle design
+/// most cares about — and Phase 118's conformance run grades exactly this.
+const INTERNAL_ERROR_SITES: &[InternalErrorEntry] = &[
+    InternalErrorEntry {
+        function: "store_error_response",
+        hits: 2,
+        disposition: Disposition::NotFoundRoutedElsewhere {
+            guard: "is_v1_task_era",
+            guard_site: "store_error_response",
+        },
+        why: "The era-aware mapping itself. Hit 1 is the v1 blanket arm, where EVERY store error \
+              is -32603 byte-for-byte as it always was. Hit 2 is the v2 arm for InvalidTransition \
+              and Internal, neither of which is a not-found. NotFound and Expired are folded onto \
+              one -32602 above it, which the ordering assertion in this test pins separately.",
+    },
+    InternalErrorEntry {
+        function: "handle_tasks_result",
+        hits: 2,
+        disposition: Disposition::V1Only {
+            guard: "tasks_result_serves_on_era",
+            guard_site: "retired_method",
+        },
+        why: "tasks/result is retired on v2, so both hits are unreachable there. They are also \
+              not-found-free on v1: the store leg matches TaskStoreError::NotFound explicitly and \
+              FALLS THROUGH to the router rather than erroring, and the second hit renders a \
+              router error, which is not a TaskStoreError.",
+    },
+    InternalErrorEntry {
+        function: "route_tasks_list",
+        hits: 2,
+        disposition: Disposition::V1Only {
+            guard: "tasks_list_serves_on_era",
+            guard_site: "retired_method",
+        },
+        why: "tasks/list is retired on v2 and its gate fires before this function is entered at \
+              all, so neither the store `list` error nor the router error can reach a v2 caller. \
+              Enumeration has no v2 surface, which is why this route needs no v2 code mapping of \
+              its own rather than having one that happens to be unused.",
+    },
+    InternalErrorEntry {
+        function: "route_tasks_get",
+        hits: 1,
+        disposition: Disposition::RouterLeg,
+        why: "The TaskRouter fall-through. RECORDED GAP (D-114-P): a router-backed v2 server \
+              answers -32603 for a task its router cannot find, where the extension requires \
+              -32602. The dispatch cannot fix it unilaterally — TaskRouter returns pmcp::Error \
+              with no not-found discriminant — so closing it means widening a legacy trait, which \
+              a coverage-only plan may not do. STORE-backed servers, which is every backend in \
+              this repository, take store_error_response and are correct.",
+    },
+    InternalErrorEntry {
+        function: "route_tasks_cancel",
+        hits: 1,
+        disposition: Disposition::RouterLeg,
+        why: "The same TaskRouter fall-through as tasks/get, and the same recorded gap, with one \
+              mitigating difference the extension itself supplies: -32602 is a SHOULD for \
+              tasks/cancel rather than the MUST it is for tasks/get, so a router-backed \
+              deployment is non-ideal here and non-conformant there.",
+    },
+    InternalErrorEntry {
+        function: "deliver_tasks_update",
+        hits: 1,
+        disposition: Disposition::RouterLeg,
+        why: "The tasks/update router leg. Its store leg cannot reach this hit: \
+              store_error_or_fall_through returns None for a NotFound while a router is \
+              configured, and routes every other store error through the era-aware mapping. \
+              -32602 is a SHOULD for tasks/update, as for cancel.",
+    },
+];
+
+/// Every `INTERNAL_ERROR` hit in [`DISPATCH`], grouped by enclosing function.
+fn internal_error_hits() -> BTreeMap<String, Vec<u32>> {
+    let source = read(DISPATCH);
+    let stripped = strip(&source);
+    let spans = fn_spans(&stripped);
+    let excluded = cfg_test_spans(&stripped);
+    let mut out: BTreeMap<String, Vec<u32>> = BTreeMap::new();
+    for at in token_hits(&stripped.text, "INTERNAL_ERROR") {
+        if is_excluded(&excluded, at) {
+            continue;
+        }
+        let owner = enclosing_fn(&spans, at)
+            .unwrap_or("<file scope>")
+            .to_string();
+        out.entry(owner).or_default().push(line_of(&stripped, at));
+    }
+    out
+}
+
+/// The `-32603` population in the tasks dispatch equals the allowlist, function
+/// by function and COUNT by count.
+#[test]
+fn the_minus_32603_population_in_the_tasks_dispatch_is_enumerated() {
+    let observed = internal_error_hits();
+    let mut failures = String::new();
+
+    assert!(
+        !observed.is_empty(),
+        "no INTERNAL_ERROR emission was found in {DISPATCH}; the scan is vacuous"
+    );
+
+    for (function, lines) in &observed {
+        let Some(entry) = INTERNAL_ERROR_SITES
+            .iter()
+            .find(|e| e.function == *function)
+        else {
+            let _ = writeln!(
+                failures,
+                "\n  UNLISTED -32603 site: `{function}` at line(s) {lines:?}.\n    Either it is \
+                 unreachable on v2 (name the era guard) or a store NotFound never reaches it \
+                 (name the arm that takes NotFound instead). A v2-reachable NotFound -> -32603 is \
+                 the conformance defect this list exists to prevent."
+            );
+            continue;
+        };
+        if entry.hits != lines.len() {
+            let _ = writeln!(
+                failures,
+                "\n  COUNT CHANGED: `{function}` was recorded with {} INTERNAL_ERROR emission(s) \
+                 and now has {} at line(s) {lines:?}.\n    A new -32603 inside an \
+                 already-allowlisted function is exactly the shape this regression takes; \
+                 re-derive the entry rather than raising the number.",
+                entry.hits,
+                lines.len()
+            );
+        }
+    }
+
+    for entry in INTERNAL_ERROR_SITES {
+        if !observed.contains_key(entry.function) {
+            let _ = writeln!(
+                failures,
+                "\n  STALE -32603 entry: `{}` no longer emits INTERNAL_ERROR. Delete the entry.",
+                entry.function
+            );
+            continue;
+        }
+        let source = read(DISPATCH);
+        let stripped = strip(&source);
+        let (guard, guard_site) = match entry.disposition {
+            Disposition::V1Only { guard, guard_site }
+            | Disposition::NotFoundRoutedElsewhere { guard, guard_site } => (guard, guard_site),
+            Disposition::RouterLeg => continue,
+        };
+        let present =
+            fn_body(&stripped, guard_site).is_some_and(|body| needle_present(body, guard));
+        if !present {
+            let _ = writeln!(
+                failures,
+                "\n  MISSING guard: `{}`'s -32603 emissions are kept off the v2 path by `{guard}` \
+                 inside `{guard_site}`, and that expression is gone.",
+                entry.function
+            );
+        }
+    }
+
+    assert!(
+        failures.is_empty(),
+        "the tasks dispatch -32603 population changed:{failures}"
+    );
+    assert_justifications(
+        "INTERNAL_ERROR_SITES",
+        &INTERNAL_ERROR_SITES
+            .iter()
+            .map(|entry| (entry.function, entry.why))
+            .collect::<Vec<_>>(),
+    );
+}
+
+/// A v2 `NotFound` maps to `-32602`, positionally, inside the one function that
+/// decides it.
+///
+/// The count check above notices that the POPULATION changed. This notices that
+/// the not-found ARM changed while the population did not — which is what a
+/// straight swap of `INVALID_PARAMS` for `INTERNAL_ERROR` looks like on the one
+/// arm that matters. The measure is order: in `store_error_response`, the first
+/// error-code constant appearing after the first `TaskStoreError::NotFound` must
+/// be `INVALID_PARAMS`.
+#[test]
+fn the_v2_store_not_found_arm_still_maps_to_minus_32602() {
+    let source = read(DISPATCH);
+    let stripped = strip(&source);
+    let body_span = fn_spans(&stripped)
+        .into_iter()
+        .find(|(name, _)| name == "store_error_response")
+        .map(|(_, span)| span)
+        .expect("store_error_response is the era-aware store mapping and must exist");
+    let body = &stripped.text[body_span.clone()];
+
+    let not_found = token_hits(body, "NotFound")
+        .first()
+        .copied()
+        .expect("store_error_response must still match TaskStoreError::NotFound");
+
+    let next_invalid = token_hits(body, "INVALID_PARAMS")
+        .into_iter()
+        .find(|at| *at > not_found);
+    let next_internal = token_hits(body, "INTERNAL_ERROR")
+        .into_iter()
+        .find(|at| *at > not_found);
+
+    let line = |at: usize| line_of(&stripped, body_span.start + at);
+    match (next_invalid, next_internal) {
+        (Some(invalid), Some(internal)) => assert!(
+            invalid < internal,
+            "the v2 NotFound arm of store_error_response now reaches INTERNAL_ERROR (-32603) at \
+             {DISPATCH}:{} before INVALID_PARAMS (-32602) at {DISPATCH}:{}.\n  The extension \
+             makes -32602 a MUST for a tasks/get naming a nonexistent taskId, and pmcp surfaces \
+             an owner MISMATCH as NotFound on purpose, so this arm is the one a cross-caller \
+             probe reads.",
+            line(internal),
+            line(invalid)
+        ),
+        (Some(_), None) => {},
+        (None, _) => panic!(
+            "no INVALID_PARAMS follows the NotFound arm in store_error_response \
+             ({DISPATCH}:{}); the v2 not-found mapping is gone",
+            line(not_found)
+        ),
+    }
+}
+
+// ===========================================================================
+// 6. TASK 2(b) — the status identity, at the SOURCE level.
+// ===========================================================================
+
+/// The five `TaskStatus` serde strings, derived from the SOURCE TEXT.
+///
+/// Deriving them by serializing `TaskStatus::Working` and its four siblings
+/// would require naming all five variants here, and a SIXTH variant added to the
+/// enum would then be invisible to this test — which is precisely the drift it
+/// exists to catch. So the variants are parsed out of the declaration, the
+/// container's `rename_all` is read and asserted, and any per-variant
+/// `#[serde(rename = "…")]` is honoured.
+fn task_status_wire_strings() -> BTreeSet<String> {
+    let source = read(TASK_TYPES);
+    let stripped = strip_keeping_literals(&source);
+    let text = &stripped.text;
+
+    let at = text
+        .find("enum TaskStatus")
+        .expect("src/types/tasks.rs must declare `enum TaskStatus`");
+    let container = &text[at.saturating_sub(200)..at];
+    assert!(
+        container.contains("rename_all = \"snake_case\""),
+        "TaskStatus no longer carries `#[serde(rename_all = \"snake_case\")]`. This test derives \
+         the wire strings by applying that exact transform, so a different one silently makes \
+         every string below wrong. Observed attributes: {container:?}"
+    );
+
+    let brace = text[at..].find('{').expect("an enum has a body") + at;
+    let end = balanced_end(text, brace).expect("balanced enum body");
+    let body = &text[brace + 1..end];
+
+    let mut out = BTreeSet::new();
+    for part in body.split(',') {
+        let part = part.trim();
+        if part.is_empty() {
+            continue;
+        }
+        let rename = part.find("rename = \"").map(|r| {
+            let rest = &part[r + "rename = \"".len()..];
+            rest[..rest.find('"').expect("a closed rename literal")].to_string()
+        });
+        let ident: String = part
+            .rsplit(']')
+            .next()
+            .unwrap_or(part)
+            .trim()
+            .chars()
+            .take_while(|c| is_ident_char(*c))
+            .collect();
+        if ident.is_empty() {
+            continue;
+        }
+        out.insert(rename.unwrap_or_else(|| snake_case(&ident)));
+    }
+    out
+}
+
+/// `InputRequired` -> `input_required`, the transform `rename_all` names.
+fn snake_case(ident: &str) -> String {
+    let mut out = String::new();
+    for (index, ch) in ident.chars().enumerate() {
+        if ch.is_uppercase() && index > 0 {
+            out.push('_');
+        }
+        out.extend(ch.to_lowercase());
+    }
+    out
+}
+
+/// The `TaskStatus` union of the vendored extension schema, read at runtime.
+fn schema_task_status_strings() -> BTreeSet<String> {
+    let schema = read(VENDORED_SCHEMA);
+    let at = schema
+        .find("export type TaskStatus =")
+        .expect("the vendored ext-tasks schema must declare `export type TaskStatus`");
+    let rest = &schema[at..];
+    let end = rest.find(';').expect("the union declaration is terminated");
+    let union = &rest[..end];
+
+    let mut out = BTreeSet::new();
+    let mut chars = union.char_indices().peekable();
+    while let Some((index, ch)) = chars.next() {
+        if ch != '"' {
+            continue;
+        }
+        let rest = &union[index + 1..];
+        let close = rest.find('"').expect("a closed schema string literal");
+        out.insert(rest[..close].to_string());
+        while let Some((next, _)) = chars.peek() {
+            if *next <= index + close + 1 {
+                chars.next();
+            } else {
+                break;
+            }
+        }
+    }
+    out
+}
+
+/// The Rust source and the vendored schema declare the SAME SET of status
+/// strings — exact set equality, no subset, no wildcard.
+///
+/// # How this differs from its behavioural twin
+///
+/// `tests/v2_tasks_shapes.rs :: task_status_wire_strings_match_the_extension_schema`
+/// (plan 114-11) asserts what a RUNNING server emits. This asserts what the
+/// SOURCE declares, and the two fail for different reasons: this one fires for a
+/// status that no route currently returns, and for a variant added with the arms
+/// needed to compile but with no wire path yet. A behavioural test cannot
+/// observe either, because there is nothing to observe.
+///
+/// # Why this pair is the whole of TASK-04, and no conversion table is needed
+///
+/// F15 measured that the v1 five-state enum is NAME-IDENTICAL to the v2 one:
+/// the extension did not rename, reorder or repartition the statuses. So
+/// TASK-04's "maps deterministically" is satisfied by exactly two locks — the
+/// wire strings are set-equal to the published union (here) and the running
+/// server emits them (the behavioural twin) — and NOT by a translation layer.
+/// A future reader who adds a v1->v2 status conversion function is adding a
+/// second place for the mapping to be wrong; there is nothing for it to convert.
+#[test]
+fn the_task_status_wire_strings_are_set_equal_to_the_vendored_schema() {
+    let declared = task_status_wire_strings();
+    let published = schema_task_status_strings();
+
+    assert_eq!(
+        declared.len(),
+        5,
+        "TaskStatus no longer declares exactly five wire strings. Observed: {declared:?}"
+    );
+    assert_eq!(
+        declared, published,
+        "the TaskStatus wire strings drifted from {VENDORED_SCHEMA}.\n  Rust declares \
+         {declared:?}\n  the vendored schema declares {published:?}\n  These are compared as \
+         SETS: a subset would pass while a status silently went unrepresented."
+    );
+}
+
+/// Nothing in the status mapping can absorb an unknown value.
+///
+/// A `_ =>` arm is how a sixth status stops being a compile error and starts
+/// being a silent default. Both total mappings over `TaskStatus` are checked:
+/// its `Display` impl (which produces the strings the test above derives) and
+/// `Task::poll_decision` (which every client poll loop branches on).
+#[test]
+fn the_task_status_mappings_carry_no_wildcard_arm() {
+    let source = read(TASK_TYPES);
+    let stripped = strip(&source);
+
+    let display = block_after(&stripped, "impl std::fmt::Display for TaskStatus")
+        .expect("TaskStatus must still implement Display");
+    assert!(
+        !display.contains("_ =>"),
+        "the Display impl for TaskStatus gained a wildcard arm; a sixth status would then render \
+         as whatever that arm says instead of failing to compile"
+    );
+
+    let poll = fn_body(&stripped, "poll_decision").expect("Task::poll_decision must still exist");
+    assert!(
+        !poll.contains("_ =>"),
+        "Task::poll_decision gained a wildcard arm; every client poll loop branches on it, so an \
+         unrecognised status would silently take one existing branch"
+    );
+}
+
+// ===========================================================================
+// 7. TASK 2(c) — every wire value this phase introduced has an attribution.
+// ===========================================================================
+
+/// How walkable a constant's provenance attribution is.
+enum Attribution {
+    /// The rustdoc names an artifact the D-18 gate can OPEN: the vendored schema
+    /// path, or the recheck record.
+    Pinned,
+    /// The rustdoc cites the extension by name but points at no file. Weaker on
+    /// purpose, and recorded rather than papered over: `records` names the
+    /// deferral that tracks it.
+    ProseOnly { records: &'static str },
+}
+
+/// Tokens that make an attribution mechanically walkable.
+const PINNED_TOKENS: [&str; 2] = ["schema/vendored/ext-tasks", "114-SPEC-RECHECK"];
+
+/// The weakest attribution this file accepts at all.
+const PROSE_TOKEN: &str = "ext-tasks";
+
+struct ProvenanceEntry {
+    constant: &'static str,
+    path: &'static str,
+    /// The literal start of the declaration line, so a rename fails here.
+    decl: &'static str,
+    /// The item whose rustdoc CARRIES the attribution: the constant itself, or
+    /// the table it is declared as a row of.
+    attribution_decl: &'static str,
+    attribution: Attribution,
+    why: &'static str,
+}
+
+/// Every wire value this phase introduced into `src/`, with the item whose
+/// rustdoc attributes it.
+///
+/// The discipline: a value cannot enter the tree without an attribution the D-18
+/// gate can walk. The lock is two-directional — a `Pinned` entry whose rustdoc
+/// loses its artifact reference fails, and a `ProseOnly` entry whose rustdoc
+/// GAINS one fails too, telling the next reader to promote the entry and close
+/// the deferral.
+const PROVENANCE: &[ProvenanceEntry] = &[
+    ProvenanceEntry {
+        constant: "TASKS_EXTENSION_KEY",
+        path: "src/types/capabilities.rs",
+        decl: "pub const TASKS_EXTENSION_KEY",
+        attribution_decl: "pub const TASKS_EXTENSION_KEY",
+        attribution: Attribution::Pinned,
+        why: "The negotiation identifier the whole extension hangs off. Its rustdoc names the \
+              vendored schema, the pinned upstream commit, a second corroborating artifact in the \
+              core repository, AND the D-18 hold with the recheck record to re-verify against — \
+              the fullest attribution in the phase, and the model the other two are graded on.",
+    },
+    ProvenanceEntry {
+        constant: "V2_TASKS_METHOD_RETIRED",
+        path: DISPATCH,
+        decl: "pub(crate) const V2_TASKS_METHOD_RETIRED",
+        attribution_decl: "pub(crate) const V2_TASKS_METHOD_RETIRED",
+        attribution: Attribution::Pinned,
+        why: "The refusal sentence for tasks/list and tasks/result. It is a wire value derived \
+              from an ABSENCE — the vendored schema declares three request methods and not these \
+              two — which is the one kind of claim a reader cannot check by reading the code, so \
+              the rustdoc names the artifact the absence was measured in.",
+    },
+    ProvenanceEntry {
+        constant: "TASKS_UPDATE_METHOD",
+        path: MRTR,
+        decl: "pub(crate) const TASKS_UPDATE_METHOD",
+        attribution_decl: "pub(crate) const TASK_NAME_BEARING_METHODS",
+        attribution: Attribution::ProseOnly { records: "D-114-Q" },
+        why: "The method string itself carries only `See [TASKS_GET_METHOD]`; the attribution \
+              lives on the routing table it is a row of, which cites the extension's Streamable \
+              HTTP routing-header section in PROSE and names no file. Measured, not assumed: the \
+              constant's own doc block contains neither walkable token. Recorded as a deferral \
+              because closing it edits production, which this coverage-only plan may not do.",
+    },
+];
+
+/// The contiguous `///` / attribute block immediately above `decl`.
+fn doc_block_above(source: &str, decl: &str) -> Option<String> {
+    let lines: Vec<&str> = source.lines().collect();
+    let at = lines
+        .iter()
+        .position(|line| line.trim_start().starts_with(decl))?;
+    let mut start = at;
+    while start > 0 {
+        let prev = lines[start - 1].trim_start();
+        if prev.starts_with("///") || prev.starts_with("#[") {
+            start -= 1;
+        } else {
+            break;
+        }
+    }
+    Some(lines[start..at].join("\n"))
+}
+
+/// Every wire-value constant this phase introduced carries an attribution, at
+/// the strength its entry claims.
+#[test]
+fn every_wire_value_constant_this_phase_introduced_carries_an_attribution() {
+    let mut failures = String::new();
+
+    for entry in PROVENANCE {
+        let source = read(entry.path);
+        if doc_block_above(&source, entry.decl).is_none() {
+            let _ = writeln!(
+                failures,
+                "\n  MISSING declaration: {} no longer declares `{}` as `{}`.\n    Either it was \
+                 renamed (update the entry) or deleted (delete the entry); a stale entry means \
+                 this check silently stops covering a live wire value.",
+                entry.path, entry.constant, entry.decl
+            );
+            continue;
+        }
+        let Some(doc) = doc_block_above(&source, entry.attribution_decl) else {
+            let _ = writeln!(
+                failures,
+                "\n  MISSING attribution site: `{}`'s provenance is recorded on `{}` in {}, which \
+                 no longer exists.",
+                entry.constant, entry.attribution_decl, entry.path
+            );
+            continue;
+        };
+        let pinned = PINNED_TOKENS.iter().any(|token| doc.contains(token));
+        match entry.attribution {
+            Attribution::Pinned if !pinned => {
+                let _ = writeln!(
+                    failures,
+                    "\n  LOST PROVENANCE: `{}` in {} no longer names {:?} anywhere in the rustdoc \
+                     of `{}`.\n    A wire value with no walkable attribution cannot be re-verified \
+                     when the extension publishes, which is the entire mechanism of the D-18 gate.",
+                    entry.constant, entry.path, PINNED_TOKENS, entry.attribution_decl
+                );
+            },
+            Attribution::Pinned => {},
+            Attribution::ProseOnly { records } => {
+                if pinned {
+                    let _ = writeln!(
+                        failures,
+                        "\n  PROVENANCE IMPROVED: `{}` is recorded as prose-only under {records}, \
+                         and `{}`'s rustdoc now names a walkable artifact.\n    Promote the entry \
+                         to Attribution::Pinned and close the deferral.",
+                        entry.constant, entry.attribution_decl
+                    );
+                } else if !doc.contains(PROSE_TOKEN) {
+                    let _ = writeln!(
+                        failures,
+                        "\n  NO ATTRIBUTION AT ALL: `{}` in {} has neither a walkable artifact \
+                         reference nor the `{PROSE_TOKEN}` prose citation on `{}`.\n    Recorded \
+                         under {records}; losing the prose citation too makes the value \
+                         unattributable.",
+                        entry.constant, entry.path, entry.attribution_decl
+                    );
+                }
+            },
+        }
+    }
+
+    assert!(
+        failures.is_empty(),
+        "the phase's provenance discipline changed:{failures}"
+    );
+    assert_justifications(
+        "PROVENANCE",
+        &PROVENANCE
+            .iter()
+            .map(|entry| (entry.constant, entry.why))
+            .collect::<Vec<_>>(),
+    );
+}
+
+// ===========================================================================
+// 8. The published-core codes this phase reused (amendment, 2026-07-29).
+// ===========================================================================
+
+/// `-32021` and `-32602` are bound to the NAMES this phase emits them under.
+///
+/// The MCP `2026-07-28` **core** specification published on 2026-07-29 with
+/// `LATEST_PROTOCOL_VERSION = "2026-07-28"` and declares
+/// `MISSING_REQUIRED_CLIENT_CAPABILITY = -32021` and `INVALID_PARAMS = -32602`.
+/// (`ext-tasks` did NOT publish; it is still `draft/`, so the D-18 hold stays
+/// engaged and every *tasks* wire value stays provisional. Full record:
+/// `114-SPEC-RECHECK.md` § `### Verdict re-verification` -> `#### 2026-07-29`.)
+///
+/// These two are therefore no longer provisional, and both halves are asserted:
+/// the NUMBER each name carries, and — for `-32021` — that this is the constant
+/// the non-declaring-client refusal actually reaches for. A renumbering upstream
+/// or a re-point to a different constant fails here rather than on a customer's
+/// wire.
+#[test]
+fn the_published_core_codes_this_phase_reused_are_pinned_by_name() {
+    assert_eq!(
+        error_codes::MISSING_REQUIRED_CLIENT_CAPABILITY,
+        -32021,
+        "MISSING_REQUIRED_CLIENT_CAPABILITY is the published core's own allocation; the tasks \
+         declaration gate emits it and the conformance suite reads the NUMBER"
+    );
+    assert_eq!(
+        error_codes::INVALID_PARAMS,
+        -32602,
+        "INVALID_PARAMS is the code the extension makes a MUST for a tasks/get naming a \
+         nonexistent taskId"
+    );
+
+    let source = read(DISPATCH);
+    let stripped = strip(&source);
+    let body = fn_body(&stripped, "missing_tasks_declaration_refusal")
+        .expect("the non-declaring-client refusal must still exist");
+    assert!(
+        needle_present(body, "MISSING_REQUIRED_CLIENT_CAPABILITY"),
+        "missing_tasks_declaration_refusal no longer names MISSING_REQUIRED_CLIENT_CAPABILITY. \
+         Pinning the constant's VALUE proves nothing if the refusal reaches for a different one."
+    );
+    for other in [
+        "INTERNAL_ERROR",
+        "INVALID_PARAMS",
+        "METHOD_NOT_FOUND",
+        "AUTHENTICATION_REQUIRED",
+        "V1_TASK_PENDING",
+    ] {
+        assert!(
+            !needle_present(body, other),
+            "missing_tasks_declaration_refusal now also names {other}; case 3 of the ordered chain \
+             answers exactly one code, and a second one there means the refusal branched"
+        );
+    }
+}
+
+/// `-32002` has no v2-reachable emission site, measured over BOTH its names and
+/// the bare number.
+///
+/// The published core omits `-32002` entirely, which turns this from a pmcp
+/// policy into a spec-grounded invariant. `tests/v2_prohibited_error_codes.rs`
+/// already tracks the NAME `V1_TASK_PENDING` per FILE and proves the two
+/// emission sites v1-only by EXECUTION; this adds the two axes that file does
+/// not have: the second name `UNSUPPORTED_CAPABILITY` and the bare numeric
+/// literal, so a future site writing `-32002` directly is caught, and a MEASURED
+/// per-file hit count rather than mere presence.
+#[test]
+fn minus_32002_has_no_v2_reachable_emission_site() {
+    let mut observed: BTreeMap<String, Vec<u32>> = BTreeMap::new();
+    for path in shipped_files() {
+        let source = fs::read_to_string(&path).expect("readable source");
+        let stripped = strip(&source);
+        let excluded = cfg_test_spans(&stripped);
+        let mut hits: Vec<usize> = Vec::new();
+        for name in ["V1_TASK_PENDING", "UNSUPPORTED_CAPABILITY"] {
+            hits.extend(token_hits(&stripped.text, name));
+        }
+        hits.extend(numeric_hits(&stripped.text, "-32002"));
+        hits.retain(|at| !is_excluded(&excluded, *at));
+        if !hits.is_empty() {
+            hits.sort_unstable();
+            observed.insert(
+                rel(&path),
+                hits.into_iter().map(|at| line_of(&stripped, at)).collect(),
+            );
+        }
+    }
+
+    let declaring = "src/types/protocol/error_codes.rs";
+    assert!(
+        observed.contains_key(declaring),
+        "the -32002 declaration site vanished from the scan; the scanner is over-stripping and \
+         every claim below would pass vacuously. Observed: {observed:?}"
+    );
+
+    let mut failures = String::new();
+    for (path, lines) in &observed {
+        let guard = match path.as_str() {
+            "src/types/protocol/error_codes.rs" | "src/error/mod.rs" => continue,
+            "src/server/core.rs" => "v1_initialize_gate_applies",
+            DISPATCH => "is_v1_task_era",
+            _ => {
+                let _ = writeln!(
+                    failures,
+                    "\n  UNLISTED -32002 site: {path} at line(s) {lines:?}.\n    Protocol version \
+                     2026-07-28 MUST NOT emit -32002 and the published core does not declare it \
+                     at all. Era-gate the site and record it here, or do not emit it."
+                );
+                continue;
+            },
+        };
+        if !read(path).contains(guard) {
+            let _ = writeln!(
+                failures,
+                "\n  MISSING era guard: {path} emits -32002 at line(s) {lines:?} and no longer \
+                 contains `{guard}`."
+            );
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "the -32002 population changed:{failures}"
+    );
+
+    // The count is MEASURED against the tree, and pinned so that a new emission
+    // hiding inside an already-listed file cannot pass as "the same set".
+    let dispatch_hits = observed.get(DISPATCH).map_or(0, Vec::len);
+    assert_eq!(
+        dispatch_hits,
+        1,
+        "the tasks dispatch was measured with exactly ONE -32002 emission (the v1 tasks/result \
+         pending refusal). Now: {:?}",
+        observed.get(DISPATCH)
+    );
+}
+
+/// Occurrences of a NEGATIVE numeric literal, not embedded in a longer number.
+fn numeric_hits(text: &str, number: &str) -> Vec<usize> {
+    let bytes = text.as_bytes();
+    occurrences(text, number)
+        .into_iter()
+        .filter(|at| {
+            let after = at + number.len();
+            let after_ok = after >= bytes.len() || !bytes[after].is_ascii_digit();
+            let before_ok = *at == 0 || !bytes[at - 1].is_ascii_digit();
+            before_ok && after_ok
+        })
+        .collect()
+}
+
+// ===========================================================================
 // 9. Shared allowlist discipline + anti-vacuity for the exclusions.
 // ===========================================================================
 
@@ -1092,8 +1868,9 @@ fn the_test_only_exclusions_are_load_bearing() {
 
 mod scanner {
     use super::{
-        cfg_requires_test, cfg_test_spans, declared_module_file, enclosing_fn, fn_body, fn_spans,
-        is_excluded, line_of, needle_present, strip, strip_keeping_literals, token_hits,
+        block_after, cfg_requires_test, cfg_test_spans, declared_module_file, enclosing_fn,
+        fn_body, fn_spans, is_excluded, line_of, needle_present, numeric_hits, snake_case, strip,
+        strip_keeping_literals, token_hits,
     };
 
     fn find_token(source: &str, needle: &str) -> Option<u32> {
@@ -1237,6 +2014,36 @@ mod scanner {
             ),
             "a guard in a SIBLING function must not satisfy this route's entry; that is the \
              whole reason each GuardRef names a site"
+        );
+    }
+
+    #[test]
+    fn block_after_returns_the_balanced_impl_body() {
+        let source = "impl std::fmt::Display for TaskStatus {\n    fn fmt(&self) {\n        \
+                      match self { Self::A => 1 }\n    }\n}\nfn after() { let _ = 0; }\n";
+        let stripped = strip(source);
+        let block = block_after(&stripped, "impl std::fmt::Display for TaskStatus")
+            .expect("the impl block");
+        assert!(block.contains("Self::A"));
+        assert!(
+            !block.contains("after"),
+            "the block must stop at its own closing brace"
+        );
+    }
+
+    #[test]
+    fn snake_case_matches_what_rename_all_produces() {
+        assert_eq!(snake_case("Working"), "working");
+        assert_eq!(snake_case("InputRequired"), "input_required");
+        assert_eq!(snake_case("Cancelled"), "cancelled");
+    }
+
+    #[test]
+    fn a_numeric_literal_is_matched_whole() {
+        assert_eq!(numeric_hits("let a = -32002;", "-32002").len(), 1);
+        assert!(
+            numeric_hits("let a = -320021;", "-32002").is_empty(),
+            "-32002 must not match inside a longer number"
         );
     }
 }
