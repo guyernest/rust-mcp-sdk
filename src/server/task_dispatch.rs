@@ -3806,6 +3806,164 @@ mod v2_shape_tests {
     }
 }
 
+/// Minimal seam for `fuzz/fuzz_targets/fuzz_tasks_update.rs` (plan 114-14).
+///
+/// # ⚠️ Not stable API
+///
+/// The gate is `#[cfg(any(feature = "fuzzing", test))]` and that is the FENCE,
+/// not a decoration. `#[doc(hidden)]` alone would not do: plan 113-19 measured
+/// that `cargo public-api` OMITS `doc(hidden)` items, so a `doc(hidden)`-only
+/// seam passes an absence check VACUOUSLY while remaining callable by every
+/// downstream crate and still counting for semver. `fuzzing` is in neither
+/// `default` nor `full`, so nothing a dependent can enable reaches this module.
+///
+/// # What it exposes, and why that is the boundary worth fuzzing
+///
+/// The RAW `tasks/update` params — the bytes an untrusted client supplies. That
+/// is the whole attack surface of this route: `inputResponses` is the entire
+/// request payload, it is the only large client-supplied structure on the path,
+/// and its decode is the one place in the tasks surface where guessing at
+/// overlapping shapes is actively wrong (D-113-O). It is the same reasoning that
+/// put `fuzz_request_state` at the continuation-token boundary.
+///
+/// [`judge_update_params`] runs EXACTLY the route's pure prefix — parse, bound,
+/// kind-directed decode — against a FIXED synthetic record, so a crash artifact
+/// replays deterministically regardless of ambient process state. Everything
+/// after that prefix is a store write, which no fuzz target should perform.
+#[cfg(any(feature = "fuzzing", test))]
+pub mod fuzz_support {
+    use super::{TaskDispatch, TaskInputSnapshot};
+    use crate::types::mrtr::{InputRequest, InputRequests, InputResponses};
+    use crate::types::tasks::TaskStatus;
+    use serde_json::Value;
+
+    /// The params parsed, bounded and decoded cleanly.
+    pub const VERDICT_ACCEPTED: u8 = 0;
+    /// The bytes were not JSON, or were not a well-formed `tasks/update` params
+    /// object (`-32602` before anything else looked at them).
+    pub const VERDICT_MALFORMED: u8 = 1;
+    /// A bound was exceeded. Reached BEFORE any decode, which is the property
+    /// invariant 2 exists to keep true.
+    pub const VERDICT_BOUNDED: u8 = 2;
+    /// A recorded key's value did not decode as the kind the record holds.
+    pub const VERDICT_REFUSED: u8 = 3;
+
+    /// The synthetic record's `roots/list` key.
+    pub const RECORDED_ROOTS_KEY: &str = "roots";
+    /// The synthetic record's `elicitation/create` key.
+    pub const RECORDED_ELICITATION_KEY: &str = "form";
+    /// The synthetic record's `sampling/createMessage` key.
+    pub const RECORDED_SAMPLING_KEY: &str = "sample";
+
+    /// The entry-count bound, re-exported so the target re-derives it rather
+    /// than spelling a number that can drift from production.
+    pub const MAX_ENTRIES: usize = crate::types::mrtr::MAX_INPUT_RESPONSES;
+    /// The per-entry serialized-size bound.
+    pub const MAX_ENTRY_BYTES: usize = crate::types::mrtr::MAX_INPUT_RESPONSE_BYTES;
+    /// The total serialized-size bound.
+    pub const MAX_TOTAL_BYTES: usize = crate::types::mrtr::MAX_INPUT_RESPONSES_TOTAL_BYTES;
+    /// The per-entry nesting-depth bound.
+    pub const MAX_DEPTH: usize = crate::types::mrtr::MAX_INPUT_RESPONSE_DEPTH;
+
+    /// What the pipeline decided, plus the keys it ACCEPTED.
+    ///
+    /// The accepted keys travel back because invariants 3 and 4 are about them
+    /// specifically, and a bare verdict byte cannot express "it succeeded, but
+    /// on a key the server never issued" — which is exactly the break those two
+    /// invariants exist to detect.
+    #[derive(Debug)]
+    pub struct UpdateVerdict {
+        /// One of the four `VERDICT_*` discriminants.
+        pub verdict: u8,
+        /// The keys that were typed against the record. Empty for every verdict
+        /// other than [`VERDICT_ACCEPTED`].
+        pub accepted: Vec<String>,
+    }
+
+    impl UpdateVerdict {
+        /// A verdict with no accepted keys.
+        const fn plain(verdict: u8) -> Self {
+            Self {
+                verdict,
+                accepted: Vec::new(),
+            }
+        }
+    }
+
+    /// The FIXED record every fuzz run — and every in-module unit test — decodes
+    /// against.
+    ///
+    /// One key of EACH kind, so a generated or fuzzed key that collides with a
+    /// recorded one exercises a real kind-directed decode instead of always
+    /// taking the ignore path. It is the SINGLE record fixture in this file: a
+    /// second copy in the test module would let a change to one silently pass
+    /// the other.
+    ///
+    /// # Panics
+    ///
+    /// Never in practice: the two `params` fixtures are compile-time literals
+    /// that the corresponding request types accept. The `expect` is the repo's
+    /// `check-unwraps`-compatible spelling of that fact.
+    #[must_use]
+    pub fn synthetic_snapshot() -> TaskInputSnapshot {
+        let mut input_requests = InputRequests::new();
+        input_requests.insert(RECORDED_ROOTS_KEY.to_string(), InputRequest::ListRoots);
+        input_requests.insert(
+            RECORDED_ELICITATION_KEY.to_string(),
+            InputRequest::Elicitation(Box::new(
+                crate::types::elicitation::ElicitRequestParams::Form {
+                    message: "which city?".to_string(),
+                    requested_schema: serde_json::json!({ "type": "object" }),
+                },
+            )),
+        );
+        input_requests.insert(
+            RECORDED_SAMPLING_KEY.to_string(),
+            InputRequest::Sampling(Box::new(
+                serde_json::from_value(serde_json::json!({ "messages": [] }))
+                    .expect("a minimal CreateMessageParams parses"),
+            )),
+        );
+        TaskInputSnapshot {
+            input_requests,
+            input_responses: InputResponses::new(),
+            status: TaskStatus::InputRequired,
+        }
+    }
+
+    /// Drive raw `tasks/update` params bytes through the route's pure prefix.
+    ///
+    /// Parse -> bound -> kind-directed decode, in that order and through the
+    /// PRODUCTION functions, so a campaign that stays green is evidence about the
+    /// shipped code rather than about a fuzz-only reimplementation of it.
+    ///
+    /// Invalid UTF-8 and non-JSON bytes reach the parser rather than being
+    /// filtered out before it, and both answer [`VERDICT_MALFORMED`].
+    #[must_use]
+    pub fn judge_update_params(input: &[u8]) -> UpdateVerdict {
+        let Ok(params) = serde_json::from_slice::<Value>(input) else {
+            return UpdateVerdict::plain(VERDICT_MALFORMED);
+        };
+        let Ok(update) = TaskDispatch::parse_tasks_update_params(&params) else {
+            return UpdateVerdict::plain(VERDICT_MALFORMED);
+        };
+        // BEFORE the decode. Removing this line is the falsifiability control:
+        // the target's invariant 2 then fires on an over-bound payload whose keys
+        // are all unrecorded, because those are IGNORED and the decode succeeds.
+        if crate::types::mrtr::check_input_responses_map_bounds(update.input_responses).is_err() {
+            return UpdateVerdict::plain(VERDICT_BOUNDED);
+        }
+        let snapshot = synthetic_snapshot();
+        match TaskDispatch::decode_inputs_against_record(update.input_responses, &snapshot) {
+            Ok(typed) => UpdateVerdict {
+                verdict: VERDICT_ACCEPTED,
+                accepted: typed.keys().cloned().collect(),
+            },
+            Err(_) => UpdateVerdict::plain(VERDICT_REFUSED),
+        }
+    }
+}
+
 /// The `tasks/update` delivery pipeline — deterministic unit tests plus the
 /// PROPERTY tests that generalize them (plan 114-14, TASK-02).
 ///
@@ -3822,10 +3980,14 @@ mod v2_shape_tests {
 /// bounds" fail for a reason that has nothing to do with the code.
 #[cfg(test)]
 mod update_delivery_tests {
+    use super::fuzz_support::{
+        judge_update_params, synthetic_snapshot, VERDICT_ACCEPTED, VERDICT_BOUNDED,
+        VERDICT_MALFORMED, VERDICT_REFUSED,
+    };
     use super::*;
     use crate::types::mrtr::{
-        InputRequest, InputRequests, MAX_CANONICAL_DEPTH, MAX_INPUT_RESPONSES,
-        MAX_INPUT_RESPONSES_TOTAL_BYTES, MAX_INPUT_RESPONSE_BYTES, MAX_INPUT_RESPONSE_DEPTH,
+        MAX_CANONICAL_DEPTH, MAX_INPUT_RESPONSES, MAX_INPUT_RESPONSES_TOTAL_BYTES,
+        MAX_INPUT_RESPONSE_BYTES, MAX_INPUT_RESPONSE_DEPTH,
     };
     use proptest::prelude::*;
     use serde_json::Map;
@@ -3862,37 +4024,6 @@ mod update_delivery_tests {
         MAX_INPUT_RESPONSE_DEPTH < MAX_CANONICAL_DEPTH,
         "MAX_INPUT_RESPONSE_DEPTH must stay strictly below MAX_CANONICAL_DEPTH"
     );
-
-    /// A synthetic record holding one key of EACH kind.
-    ///
-    /// All three so a generated key that happens to collide with a recorded one
-    /// exercises a real kind-directed decode rather than always taking the
-    /// ignore path.
-    fn synthetic_snapshot() -> TaskInputSnapshot {
-        let mut input_requests = InputRequests::new();
-        input_requests.insert("roots".to_string(), InputRequest::ListRoots);
-        input_requests.insert(
-            "form".to_string(),
-            InputRequest::Elicitation(Box::new(
-                crate::types::elicitation::ElicitRequestParams::Form {
-                    message: "which city?".to_string(),
-                    requested_schema: serde_json::json!({ "type": "object" }),
-                },
-            )),
-        );
-        input_requests.insert(
-            "sample".to_string(),
-            InputRequest::Sampling(Box::new(
-                serde_json::from_value(serde_json::json!({ "messages": [] }))
-                    .expect("a minimal CreateMessageParams parses"),
-            )),
-        );
-        TaskInputSnapshot {
-            input_requests,
-            input_responses: InputResponses::new(),
-            status: TaskStatus::InputRequired,
-        }
-    }
 
     /// A depth-bounded arbitrary JSON value.
     fn arb_response_value() -> impl Strategy<Value = Value> {
@@ -4057,6 +4188,64 @@ mod update_delivery_tests {
                 "the refusal must never render the value; it leaked `{from_the_value}`: {rendered}"
             );
         }
+    }
+
+    /// The fuzz seam cannot rot silently.
+    ///
+    /// `fuzz/` is not built by `make quality-gate` (and `cargo fuzz` needs a
+    /// nightly toolchain, which this repo does not default to), so a seam that
+    /// stopped compiling — or, worse, started answering the wrong verdict —
+    /// would go unnoticed until someone ran a campaign. One test per verdict,
+    /// driving the SAME entry point the target drives, is what makes the seam
+    /// part of the ordinary gate. This mirrors `request_state`'s
+    /// `fuzz_support_seam_rejects_garbage`.
+    #[test]
+    fn the_fuzz_seam_answers_every_verdict() {
+        let body = |responses: Value| {
+            serde_json::to_vec(&serde_json::json!({
+                "taskId": "t-1",
+                "inputResponses": responses,
+            }))
+            .expect("the fixture serializes")
+        };
+
+        assert_eq!(
+            judge_update_params(b"not json at all").verdict,
+            VERDICT_MALFORMED
+        );
+        assert_eq!(
+            judge_update_params(b"{\"inputResponses\":{}}").verdict,
+            VERDICT_MALFORMED,
+            "a params object with no string taskId is malformed"
+        );
+        assert_eq!(
+            judge_update_params(&body(serde_json::json!({ "roots": { "roots": [] } }))).verdict,
+            VERDICT_ACCEPTED
+        );
+        assert_eq!(
+            judge_update_params(&body(serde_json::json!({
+                "form": { "content": { "type": "text", "text": "x" }, "model": "m" }
+            })))
+            .verdict,
+            VERDICT_REFUSED,
+            "the D-113-O shape under an elicitation key"
+        );
+        let over_count: Map<String, Value> = (0..=MAX_INPUT_RESPONSES)
+            .map(|i| (format!("pad-{i:04}"), Value::Null))
+            .collect();
+        assert_eq!(
+            judge_update_params(&body(Value::Object(over_count))).verdict,
+            VERDICT_BOUNDED
+        );
+
+        // Invariant 3, stated here too: an ACCEPTED verdict never names a key
+        // the record does not hold.
+        let mixed = judge_update_params(&body(serde_json::json!({
+            "roots": { "roots": [] },
+            "never-issued": { "anything": true },
+        })));
+        assert_eq!(mixed.verdict, VERDICT_ACCEPTED);
+        assert_eq!(mixed.accepted, vec!["roots".to_string()]);
     }
 
     /// The empty acknowledgement is EMPTY.

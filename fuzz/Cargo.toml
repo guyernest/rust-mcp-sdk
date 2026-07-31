@@ -164,3 +164,16 @@ path = "fuzz_targets/subscription_listen_frames.rs"
 test = false
 doc = false
 bench = false
+
+# Phase 114-14 (TASK-02): the RAW `tasks/update` params boundary. `inputResponses`
+# is the ENTIRE request payload and its decode is the one place in the tasks
+# surface where guessing at overlapping result shapes is actively wrong (D-113-O),
+# so the untrusted bytes are fuzzed where they arrive. Registration only — this
+# target adds NO dependency; it reaches `task_dispatch::fuzz_support` through the
+# `fuzzing` feature already enabled on the `pmcp` dependency above.
+[[bin]]
+name = "fuzz_tasks_update"
+path = "fuzz_targets/fuzz_tasks_update.rs"
+test = false
+doc = false
+bench = false

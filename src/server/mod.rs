@@ -100,9 +100,22 @@ pub mod simple_resources;
 /// Simple tool implementations with schema support.
 #[cfg(not(target_arch = "wasm32"))]
 pub mod simple_tool;
+// Shared task-lifecycle dispatch unit used by both Server and ServerCore.
+//
+// The second `#[cfg]` widens the module's visibility for the `fuzzing` feature
+// ONLY, so `fuzz/fuzz_targets/fuzz_tasks_update.rs` can reach
+// `task_dispatch::fuzz_support` without any item becoming part of the shipped
+// public API (`fuzzing` is in neither `default` nor `full`, so `cargo public-api`
+// never sees it). This is verbatim the shape `server::request_state` already uses
+// for `fuzz_request_state`, so the crate has ONE convention for a fuzz seam
+// rather than two.
+#[cfg(not(target_arch = "wasm32"))]
+#[cfg(not(feature = "fuzzing"))]
+pub(crate) mod task_dispatch;
 /// Shared task-lifecycle dispatch unit used by both Server and ServerCore.
 #[cfg(not(target_arch = "wasm32"))]
-pub(crate) mod task_dispatch;
+#[cfg(feature = "fuzzing")]
+pub mod task_dispatch;
 /// SDK-level task store trait and in-memory implementation.
 #[cfg(not(target_arch = "wasm32"))]
 pub mod task_store;
