@@ -704,3 +704,84 @@ The two suites together cover what one cannot.
 
 **Suggested owner:** a plan that already needs `pmcp-tasks` reachable from a `pmcp` test — most
 likely a future backend-parity suite.
+
+---
+
+## D-114-P — a `TaskRouter`-backed v2 server answers `-32603` for a task its router cannot find (114-16)
+
+**Discovered:** 2026-07-31, enumerating every `-32603` emission in `src/server/task_dispatch.rs`
+for the `NotFound`-must-not-be-`INTERNAL_ERROR` tripwire.
+
+Three router fall-through legs render a `TaskRouter` error as `-32603`:
+
+| function | line | method |
+|---|---|---|
+| `route_tasks_get` | 1818 | `tasks/get` |
+| `route_tasks_cancel` | 1933 | `tasks/cancel` |
+| `deliver_tasks_update` | 2409 | `tasks/update` |
+
+The tasks extension's error-handling section makes `-32602` a **MUST** for a `tasks/get` naming an
+invalid or nonexistent `taskId`, and a SHOULD for `tasks/cancel` and `tasks/update` (inventory row
+29). So a router-backed v2 deployment is **non-conformant** on `tasks/get` and non-ideal on the
+other two.
+
+**This is a router-only gap.** Every STORE-backed path — which is every backend in this repository,
+`InMemoryTaskStore` and `GenericTaskStore` alike — reaches `store_error_response`, which maps
+`NotFound`/`Expired` onto the one oracle-free `-32602` that 114-11 landed and 114-15 measured over a
+live socket. `tests/v2_tasks_tripwires.rs :: the_v2_store_not_found_arm_still_maps_to_minus_32602`
+pins that arm positionally.
+
+**Why not fixed here:** `TaskRouter::handle_tasks_*` returns `crate::error::Error`, which carries no
+not-found discriminant the dispatch can read, so the dispatch cannot map it without either
+inspecting an error STRING (which would be a new, fragile wire dependency) or widening the trait
+with a typed not-found. Widening a legacy-experimental public trait is a semver and design decision
+of its own, and 114-16 is a coverage-only plan that touches no production byte.
+
+**Recorded rather than hidden:** the three legs are `Disposition::RouterLeg` entries in
+`INTERNAL_ERROR_SITES`, each naming this deferral in its justification, and the count is pinned — so
+a fourth router leg, or a second `-32603` inside one of these three, fails the tripwire.
+
+**Related:** D-114-M (114-14) records the sibling shape — a `TaskRouter` serving `tasks/update`
+performs its own decode unaided, so the kind-direction property is enforced for `TaskStore` and only
+documented for `TaskRouter`. Both close together, in a plan that decides what `TaskRouter` owes a v2
+caller.
+
+**Suggested owner:** Phase 118, alongside the conformance run that would grade `tasks/get` on a
+router-backed server.
+
+---
+
+## D-114-Q — `TASKS_UPDATE_METHOD` has a PROSE attribution, not a walkable one (114-16)
+
+**Discovered:** 2026-07-31, writing the provenance tripwire over the wire values this phase
+introduced.
+
+The D-18 gate's mechanism is that every provisional wire value carries an attribution a reader can
+WALK — a path to the vendored artifact, or the recheck record. Two of the three values this phase
+introduced do:
+
+| constant | attribution site | strength |
+|---|---|---|
+| `TASKS_EXTENSION_KEY` | itself | names `schema/vendored/ext-tasks/schema.ts`, the pinned commit, AND `114-SPEC-RECHECK.md` |
+| `V2_TASKS_METHOD_RETIRED` | itself | names `schema/vendored/ext-tasks/schema.ts` |
+| `TASKS_UPDATE_METHOD` | `TASK_NAME_BEARING_METHODS` | **prose only** |
+
+`TASKS_UPDATE_METHOD`'s own rustdoc is one line — ``/// `tasks/update`. See [`TASKS_GET_METHOD`].``
+— and following that link twice arrives at `TASK_NAME_BEARING_METHODS`, whose rustdoc cites "the
+ext-tasks specification's § *Streamable HTTP: Routing Headers*" and names **no file**. Measured, not
+assumed: neither walkable token appears in the constant's own doc block, and the table's block
+contains `ext-tasks` but neither `schema/vendored/ext-tasks` nor `114-SPEC-RECHECK`.
+
+**Why not fixed here:** the fix is one added rustdoc paragraph in `src/types/mrtr.rs`, which is a
+production edit. 114-16's own threat register (T-114-SC) and its `<verification>` both require
+`git diff --stat -- src/ crates/` to be EMPTY, and a coverage plan that edits the thing it is
+measuring stops being evidence.
+
+**The lock is two-directional, so this cannot rot in either direction:**
+`every_wire_value_constant_this_phase_introduced_carries_an_attribution` fails if the prose citation
+is ALSO lost, and it fails if the rustdoc GAINS a walkable artifact reference — the second failure
+message says "promote the entry to `Attribution::Pinned` and close the deferral". So closing this is
+a two-line change that the test itself demands.
+
+**Suggested owner:** any plan already editing `src/types/mrtr.rs` — most naturally the one that
+re-vendors the schema at the D-18 gate, since that is when every attribution gets walked anyway.
