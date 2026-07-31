@@ -1097,7 +1097,7 @@ pub(crate) enum CreateGate {
 /// 256 KiB [`MAX_INPUT_RESPONSES_TOTAL_BYTES`](crate::types::mrtr) budget BEFORE
 /// that budget has been checked.
 ///
-/// `input_responses` is a `serde_json::Map<String, Value>` — serde_json's
+/// `input_responses` is a `serde_json::Map<String, Value>` — `serde_json`'s
 /// `BTreeMap<String, Value>` — and emphatically NOT an
 /// [`InputResponses`]. See [`TaskDispatch::parse_tasks_update_params`] for why
 /// that distinction is the whole point of this type existing.
@@ -2245,7 +2245,7 @@ impl TaskDispatch<'_> {
     /// anywhere.
     ///
     /// So this function deliberately deserializes into
-    /// `&serde_json::Map<String, Value>` — serde_json's `BTreeMap<String, Value>`
+    /// `&serde_json::Map<String, Value>` — `serde_json`'s `BTreeMap<String, Value>`
     /// — and NOT into [`InputResponses`]. Doing otherwise would run that guess at
     /// ingress, one layer before the kind-directed decode this route exists to
     /// perform, and before the bounds had run at all.
@@ -3831,6 +3831,16 @@ mod v2_shape_tests {
 /// replays deterministically regardless of ambient process state. Everything
 /// after that prefix is a store write, which no fuzz target should perform.
 #[cfg(any(feature = "fuzzing", test))]
+// Why: under `cfg(test)` ALONE — i.e. the ordinary `make lint --lib --tests` build
+// — the parent module is still `pub(crate)`, so every `pub` item here is
+// unreachable from outside the crate, and the four bound re-exports have no
+// in-crate caller at all. Both are CORRECT: that half of the seam exists for the
+// fuzz target, which builds with `feature = "fuzzing"`, where the parent IS `pub`
+// and the target IS the caller. The allow is scoped to `not(fuzzing)` precisely so
+// the real fuzz configuration still gets full dead-code and reachability analysis
+// — the 114-10 discipline of scoping such an allow to the build where the
+// condition genuinely holds, rather than to `not(test)`.
+#[cfg_attr(not(feature = "fuzzing"), allow(unreachable_pub, dead_code))]
 pub mod fuzz_support {
     use super::{TaskDispatch, TaskInputSnapshot};
     use crate::types::mrtr::{InputRequest, InputRequests, InputResponses};

@@ -375,6 +375,12 @@ async fn tasks_update_partial_set_stays_input_required() {
 // 3-4. Ignore semantics.
 // ===========================================================================
 
+/// A distinctive CLIENT-CHOSEN `inputResponses` key.
+///
+/// If it appears anywhere in the response bytes, the server echoed
+/// attacker-controlled content into its own wire (T-114-69).
+const UNSOLICITED: &str = "zzz-client-invented-key-9f3a";
+
 /// A key the record never held is IGNORED, not refused.
 ///
 /// The extension says a server SHOULD ignore a key that is not currently
@@ -383,10 +389,6 @@ async fn tasks_update_partial_set_stays_input_required() {
 #[tokio::test]
 async fn tasks_update_ignores_a_key_that_was_never_issued() {
     let fixture = paused_on(roots_only()).await;
-
-    /// A distinctive client-chosen key. If it appears anywhere in the response
-    /// bytes, the server echoed attacker-controlled content into its own wire.
-    const UNSOLICITED: &str = "zzz-client-invented-key-9f3a";
 
     let acked = update(
         fixture.addr,
