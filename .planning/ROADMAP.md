@@ -2497,7 +2497,7 @@ Plans:
 
 **Wave 10** *(parallel — disjoint files: security tests, tripwire tests, client)*
 
-- [ ] 114-15-PLAN.md — TASK-05 live-socket two-principal cross-caller matrix over `tasks/get`/`update`/`cancel` with measured indistinguishability and per-method negative controls (D-09)
+- [x] 114-15-PLAN.md — TASK-05 live-socket two-principal cross-caller matrix over `tasks/get`/`update`/`cancel` with measured indistinguishability and per-method negative controls (D-09)
 - [ ] 114-16-PLAN.md — Source tripwires: every tasks route carries a named era guard, no v2 `NotFound` → `-32603`, status-string set-equality against the vendored schema, per-value provenance
 - [x] 114-19-PLAN.md — **The v2 client half** (D-04/D-05's locked dual-surface steer): era-aware decoding of the flat create/get shapes and empty acks driven by `resultType`, `tasks_update()`, and a poll helper that reads the terminal result inline from `tasks/get` instead of the v2-retired `tasks/result`
 
@@ -2584,7 +2584,7 @@ Plans:
 | 112. Version Plumbing Spine | 10/10 | Complete    | 2026-07-23 |
 | 113. Stateless HTTP + MRTR | 32/32 | Complete   | 2026-07-27 |
 | 113.1 Merge Unblock | 6/6 | Complete | 2026-07-27 |
-| 114. Tasks Extension Migration | 16/20 | In Progress|  |
+| 114. Tasks Extension Migration | 17/20 | In Progress|  |
 | 115. JSON Schema 2020-12 + Caching Hints | 0/TBD | Not started | - |
 | 116. Auth Hardening SEPs | 0/TBD | Not started | - |
 | 117. Agents, Tester & v1 Severability | 0/TBD | Not started | - |
