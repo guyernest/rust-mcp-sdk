@@ -2757,12 +2757,14 @@ async fn tasks_update_json_response(
     call: &TasksUpdateCall<'_>,
 ) -> crate::types::JSONRPCResponse {
     let server = state.server.lock().await;
-    server.handle_tasks_update(
-        call.id.clone(),
-        &call.params,
-        call.auth_context,
-        call.protocol_context,
-    )
+    server
+        .handle_tasks_update(
+            call.id.clone(),
+            &call.params,
+            call.auth_context,
+            call.protocol_context,
+        )
+        .await
 }
 
 /// Assemble the `tasks/update` response on the fast path (TASK-02).

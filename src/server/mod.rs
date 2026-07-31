@@ -1464,8 +1464,9 @@ impl Server {
     /// `ClientRequest` tasks methods — and hands off.
     ///
     /// **It defines no gate of its own.** The era gate, the backend gate, the
-    /// `-32021` client-declaration gate, the `-32003` identity table and the
-    /// `-32602` params check all live in
+    /// `-32021` client-declaration gate, the `-32003` identity table, the `-32602`
+    /// params check, the four `inputResponses` bounds and the kind-directed decode
+    /// all live in
     /// [`TaskDispatch::route_tasks_update`](crate::server::task_dispatch::TaskDispatch::route_tasks_update),
     /// in that order. This function's entire job is to pass the ALREADY-RESOLVED
     /// `auth_context` and `ProtocolContext` through unchanged, which is also what
@@ -1473,9 +1474,15 @@ impl Server {
     ///
     /// `params` are the RAW value the classifier carried. Nothing between the wire
     /// and the router deserializes them, so a malformed body becomes a structured
-    /// `-32602` AFTER the gates rather than a parse error before them.
+    /// `-32602` AFTER the gates rather than a parse error before them — and the
+    /// `inputResponses` map reaches the route UNDECODED, which is what lets the
+    /// route bound it and then type it against the kinds the SERVER recorded
+    /// rather than against whichever overlapping shape happened to fit (D-113-O).
+    ///
+    /// `async` since plan 114-14: the delivery reads the task record and writes
+    /// the responses.
     #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) fn handle_tasks_update(
+    pub(crate) async fn handle_tasks_update(
         &self,
         id: RequestId,
         params: &serde_json::Value,
@@ -1484,6 +1491,7 @@ impl Server {
     ) -> JSONRPCResponse {
         self.task_dispatch()
             .route_tasks_update(id, params, auth_context, protocol_context)
+            .await
     }
 
     async fn handle_request(

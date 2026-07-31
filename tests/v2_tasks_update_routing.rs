@@ -207,11 +207,21 @@ mod codes {
 /// `input_required` task (114-12). So this addresses a task that genuinely exists
 /// and is genuinely awaiting input, rather than an id the suite invented.
 ///
-/// The answer asserted is plan 13's placeholder `-32603`: every gate passed and
-/// the DELIVERY body is 114-14's. It is emphatically NOT an empty success ack —
-/// see `TASKS_UPDATE_DELIVERY_UNIMPLEMENTED`'s rustdoc, and note that shipping
-/// `{}` here would make the Pitfall-4 disaster and correct behaviour
-/// indistinguishable on the wire.
+/// The answer asserted was plan 13's placeholder `-32603`; since **plan 114-14**
+/// landed the delivery body it is the real `UpdateTaskResult` — an EMPTY
+/// acknowledgement with no `error` at all. This test's job is unchanged: prove
+/// the request REACHES `TaskDispatch` rather than falling out at one of the four
+/// gates above it. It asserts that by naming every refusal that must NOT happen,
+/// so it stays a routing test rather than becoming a second copy of
+/// `tests/v2_tasks_update.rs`'s delivery-semantics suite.
+///
+/// The `inputResponses` fixture is a real `ListRootsResult` (`{"roots": []}`),
+/// because the harness's `pausing_task_tool` records its one request under the
+/// `roots` key as `roots/list` and 114-14 decodes KIND-DIRECTED against that
+/// record. The value this test used to send — `{"action": …, "content": …}` — is
+/// an `ElicitResult` shape and is now correctly REFUSED under a roots key; that
+/// refusal is exactly what `tests/v2_tasks_update.rs` exists to pin, and
+/// asserting it here too would make one property two tests' business.
 ///
 /// The `Mcp-Name` sent is the CONFORMANT `params.taskId` the ext-tasks routing
 /// rule requires, so this also proves the server accepts it (server-side
@@ -248,47 +258,47 @@ async fn tasks_update_reaches_dispatch_on_v2() {
         2,
         json!({
             "taskId": task_id,
-            "inputResponses": { "roots": { "action": "accept", "content": { "roots": [] } } },
+            "inputResponses": { "roots": { "roots": [] } },
         }),
     )
     .await;
 
-    let code = code_of(&updated);
-    assert_ne!(
-        code,
-        codes::METHOD_NOT_FOUND,
-        "tasks/update must REACH dispatch on v2, not fall through to -32601: {}",
-        updated.raw
-    );
-    assert_ne!(
-        code,
-        codes::MISSING_REQUIRED_CLIENT_CAPABILITY,
-        "this request DECLARED the tasks extension: {}",
-        updated.raw
-    );
-    assert_ne!(
-        code,
-        codes::AUTHENTICATION_REQUIRED,
-        "this request carried a bearer the OptionalBearer provider accepts: {}",
-        updated.raw
-    );
-    assert_ne!(
-        code,
-        codes::INVALID_PARAMS,
-        "these params carry a string taskId: {}",
-        updated.raw
-    );
-    assert_eq!(
-        code,
-        codes::INTERNAL_ERROR,
-        "plan 13 routes and gates; the delivery body is 114-14's: {}",
-        updated.raw
-    );
     assert!(
-        message_of(&updated).contains("input delivery is not implemented"),
-        "the placeholder must SAY it is a placeholder: {}",
+        updated.body.get("error").is_none(),
+        "a fully gated tasks/update on a real paused task is answered, not refused: {}",
         updated.raw
     );
+    // Every refusal that must NOT have happened, named individually so a
+    // regression says WHICH gate started firing rather than only that one did.
+    for (code, why) in [
+        (
+            codes::METHOD_NOT_FOUND,
+            "tasks/update must REACH dispatch on v2, not fall through to -32601",
+        ),
+        (
+            codes::MISSING_REQUIRED_CLIENT_CAPABILITY,
+            "this request DECLARED the tasks extension",
+        ),
+        (
+            codes::AUTHENTICATION_REQUIRED,
+            "this request carried a bearer the OptionalBearer provider accepts",
+        ),
+        (
+            codes::INVALID_PARAMS,
+            "these params carry a string taskId and a kind-correct inputResponses map",
+        ),
+        (
+            codes::INTERNAL_ERROR,
+            "the delivery body landed in 114-14; a -32603 here means it did not run",
+        ),
+    ] {
+        assert_ne!(
+            updated.body["error"]["code"].as_i64(),
+            Some(code),
+            "{why}: {}",
+            updated.raw
+        );
+    }
     // The full response tail ran — this is not a pipeline bypass.
     assert_eq!(
         updated.mcp_version.as_deref(),

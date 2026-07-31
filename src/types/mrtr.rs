@@ -1162,7 +1162,17 @@ fn extract_request_state(
 }
 
 /// Enforce the per-entry bounds on one `inputResponses` value.
-fn check_input_response_bounds(key: &str, value: &Value) -> Result<usize, MrtrParseError> {
+///
+/// `pub(crate)` since plan 114-14: `tasks/update` enforces the SAME four bounds
+/// over its own raw `inputResponses` map, and a second bounds function written in
+/// `server::task_dispatch` would be free to pick different limits — two answers
+/// to "how big may an input response be" on one server. There is exactly one
+/// function with this name in `src/`; whole-map enforcement composes it (see
+/// [`check_input_responses_map_bounds`]) rather than restating it.
+pub(crate) fn check_input_response_bounds(
+    key: &str,
+    value: &Value,
+) -> Result<usize, MrtrParseError> {
     let depth = json_depth(value);
     if depth > MAX_INPUT_RESPONSE_DEPTH {
         return Err(MrtrParseError::InputResponseTooDeep {
@@ -1182,16 +1192,66 @@ fn check_input_response_bounds(key: &str, value: &Value) -> Result<usize, MrtrPa
     Ok(bytes)
 }
 
+/// Enforce ALL FOUR `inputResponses` denial-of-service bounds over a RAW entry
+/// map, before anything in it is decoded.
+///
+/// The four are the entry COUNT ([`MAX_INPUT_RESPONSES`]), ONE entry's serialized
+/// SIZE ([`MAX_INPUT_RESPONSE_BYTES`]), one entry's nesting DEPTH
+/// ([`MAX_INPUT_RESPONSE_DEPTH`]) and the running TOTAL
+/// ([`MAX_INPUT_RESPONSES_TOTAL_BYTES`]). The fifth adjacent MRTR constant,
+/// [`MAX_REQUEST_STATE_LEN`], is deliberately NOT applied: it bounds the
+/// continuation TOKEN, and a caller may legitimately present `inputResponses`
+/// with no token at all (`tasks/update` never carries one).
+///
+/// # Why this is one function with two callers
+///
+/// [`extract_mrtr_params`] reads a request's `inputResponses` at MRTR ingress;
+/// `server::task_dispatch`'s `tasks/update` route reads its own. Both must refuse
+/// the same payload, and both must refuse it BEFORE any decode — bounding after
+/// decoding means the decoder already did the work the bound exists to prevent.
+/// Two copies of "the four bounds" is how one of them silently gains a fifth, or
+/// loses the total.
+///
+/// # Errors
+///
+/// The first violated bound, as the corresponding [`MrtrParseError`] variant.
+/// Every one of those variants renders only the BOUND in its `Display`, never the
+/// offending key or value.
+pub(crate) fn check_input_responses_map_bounds(
+    entries: &serde_json::Map<String, Value>,
+) -> Result<(), MrtrParseError> {
+    if entries.len() > MAX_INPUT_RESPONSES {
+        return Err(MrtrParseError::TooManyInputResponses {
+            count: entries.len(),
+            max: MAX_INPUT_RESPONSES,
+        });
+    }
+    let mut total = 0usize;
+    for (key, entry) in entries {
+        total = total.saturating_add(check_input_response_bounds(key, entry)?);
+        if total > MAX_INPUT_RESPONSES_TOTAL_BYTES {
+            return Err(MrtrParseError::InputResponsesTotalTooLarge {
+                bytes: total,
+                max: MAX_INPUT_RESPONSES_TOTAL_BYTES,
+            });
+        }
+    }
+    Ok(())
+}
+
 /// Read the `inputResponses` field: absent → `Ok(None)`, present-but-bad → `Err`.
 ///
 /// Returns the typed map AND a verbatim copy of the raw entries. The raw copy
 /// exists so the dispatch layer can re-decode kind-directed after opening the
 /// continuation (D-113-O); see [`MrtrRequestParams::input_responses_raw`].
 ///
-/// The ORDER here is load-bearing. All four bounds — count, per-entry depth,
-/// per-entry bytes and running total — are applied per entry BEFORE that entry is
-/// decoded or copied, and the loop returns on the first violation. So the raw
-/// retention can never become a way to hold more than the bounds already permit.
+/// The ORDER here is load-bearing, and since plan 114-14 it is stronger than it
+/// was: [`check_input_responses_map_bounds`] applies ALL FOUR bounds across the
+/// WHOLE map before the first entry is decoded or copied, rather than
+/// interleaving a bound and a decode per entry. So the raw retention can never
+/// become a way to hold more than the bounds already permit, and an over-bound
+/// entry anywhere in the map wins over an undecodable one earlier in it — the
+/// bound is the cheaper refusal and the one an attacker is actually probing.
 #[allow(clippy::type_complexity)]
 fn extract_input_responses(
     params: &serde_json::Map<String, Value>,
@@ -1202,23 +1262,10 @@ fn extract_input_responses(
     let entries = value
         .as_object()
         .ok_or(MrtrParseError::InputResponsesNotAnObject)?;
-    if entries.len() > MAX_INPUT_RESPONSES {
-        return Err(MrtrParseError::TooManyInputResponses {
-            count: entries.len(),
-            max: MAX_INPUT_RESPONSES,
-        });
-    }
-    let mut total = 0usize;
+    check_input_responses_map_bounds(entries)?;
     let mut decoded = InputResponses::new();
     let mut raw = serde_json::Map::new();
     for (key, entry) in entries {
-        total = total.saturating_add(check_input_response_bounds(key, entry)?);
-        if total > MAX_INPUT_RESPONSES_TOTAL_BYTES {
-            return Err(MrtrParseError::InputResponsesTotalTooLarge {
-                bytes: total,
-                max: MAX_INPUT_RESPONSES_TOTAL_BYTES,
-            });
-        }
         let response = InputResponse::try_from_value_untagged(entry.clone())
             .map_err(|_| MrtrParseError::InputResponseUndecodable { key: key.clone() })?;
         decoded.insert(key.clone(), response);

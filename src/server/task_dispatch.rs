@@ -34,7 +34,7 @@
 use crate::error::{Error, Result};
 use crate::server::auth::AuthContext;
 use crate::server::core::DispatchEnvelopeClaim;
-use crate::server::task_store::{TaskStore, TaskStoreError};
+use crate::server::task_store::{TaskInputSnapshot, TaskStore, TaskStoreError};
 use crate::server::tasks::TaskRouter;
 use crate::types::capabilities::{
     ServerCapabilities, ServerTasksCapability, TasksExtensionCapability, TASKS_EXTENSION_KEY,
@@ -47,6 +47,15 @@ use crate::types::jsonrpc::ResponsePayload;
 // that table's rustdoc, and `tests/v2_tasks_update_routing.rs` for the two
 // independent guards that keep it out.
 use crate::types::mrtr::TASKS_UPDATE_METHOD;
+// The `tasks/update` delivery reads its bounds, its kind-directed decoder and its
+// refusal vocabulary from `types::mrtr` — never from local re-definitions. That
+// module owns them because the SAME four bounds and the SAME decode discipline
+// already guard the MRTR ingress, and two servers' worth of limits on one process
+// is how the halves of a bound drift apart (plan 114-14).
+use crate::types::mrtr::{
+    check_input_responses_map_bounds, InputResponse, InputResponseTypingError, InputResponses,
+    INPUT_RESPONSES_KEY,
+};
 use crate::types::tasks::{
     DetailedTaskV2, Task, TaskDetailV2, TaskStatus, TaskV2, RELATED_TASK_META_KEY,
 };
@@ -241,27 +250,22 @@ const V1_TASKS_UPDATE_ABSENT: &str =
 /// [`V2_TASK_NOT_FOUND_MESSAGE`] records).
 const TASKS_UPDATE_MALFORMED_PARAMS: &str = "tasks/update requires params.taskId to be a string";
 
-/// The `-32603` a fully-gated `tasks/update` receives until plan 114-14 lands the
-/// delivery body.
+/// The `-32602` message for a `tasks/update` whose `inputResponses` is absent or
+/// is not a JSON object.
 ///
-/// # Why this is an ERROR and emphatically not an empty success ack
+/// The vendored draft schema types `UpdateTaskRequest.params.inputResponses` as a
+/// REQUIRED `InputResponses`, so an absent key and a non-object one are the same
+/// defect from the caller's point of view and get one sentence. It names the
+/// required field and NOTHING else — no state, no owner, no echo of what arrived
+/// (the log-poisoning discipline [`V2_TASK_NOT_FOUND_MESSAGE`] records).
 ///
-/// `114-SPEC-RECHECK.md` row 19 holds the provisional `UpdateTaskResult` empty-ack
-/// wire value, and this plan deliberately does NOT claim it — 114-14 does, in the
-/// same change that actually delivers the `inputResponses`. Emitting `{}` here
-/// would produce a successful-looking empty acknowledgement while the task never
-/// left `input_required`, which is byte-for-byte the failure mode Pitfall 4
-/// describes for an MRTR-eligible `tasks/update` whose payload
-/// `splice_mrtr_params` deleted. Shipping that shape as a placeholder would make
-/// the disaster and the intended behaviour indistinguishable on the wire, and the
-/// v2 client landed by 114-19 already decodes an empty ack as SUCCESS
-/// (`v2_empty_update_ack_is_not_a_decode_error`).
-///
-/// `-32603` rather than `-32601`: the method EXISTS on this server and this
-/// caller passed every gate. Answering "method not found" at that point would
-/// send a conformant client to fix its negotiation, which is not the problem.
-const TASKS_UPDATE_DELIVERY_UNIMPLEMENTED: &str =
-    "tasks/update is routed but its input delivery is not implemented on this build";
+/// Deliberately a DIFFERENT sentence from [`TASKS_UPDATE_MALFORMED_PARAMS`]:
+/// "your task id is not a string" and "your responses map is missing" are
+/// different fixes, and the `-32602` message is the only place a caller can tell
+/// them apart — the distinguishability rule T-114-33 established for the `-32601`
+/// family, applied to this route's two params refusals.
+const TASKS_UPDATE_MISSING_INPUT_RESPONSES: &str =
+    "tasks/update requires params.inputResponses to be an object";
 
 /// Build the `-32601` a v2 caller receives for a RETIRED `tasks/*` method.
 ///
@@ -1084,6 +1088,40 @@ pub(crate) enum CreateGate {
     /// (T-102-11) — this covers `TaskSupport::Forbidden`/absent, no backend, and
     /// an untriggered request.
     Closed,
+}
+
+/// A `tasks/update`'s params in their RAW, UNDECODED form (plan 114-14).
+///
+/// A BORROW-struct: `input_responses` points into the caller's `params` value
+/// rather than owning a copy, because a copy taken here would duplicate up to the
+/// 256 KiB [`MAX_INPUT_RESPONSES_TOTAL_BYTES`](crate::types::mrtr) budget BEFORE
+/// that budget has been checked.
+///
+/// `input_responses` is a `serde_json::Map<String, Value>` — serde_json's
+/// `BTreeMap<String, Value>` — and emphatically NOT an
+/// [`InputResponses`]. See [`TaskDispatch::parse_tasks_update_params`] for why
+/// that distinction is the whole point of this type existing.
+struct TasksUpdateParams<'a> {
+    /// The task this delivery addresses, resolved through the routing-name table.
+    task_id: String,
+    /// The caller's `inputResponses`, UNDECODED and UNBOUNDED at construction
+    /// time. Both of those are fixed by the two steps that follow, in that order.
+    input_responses: &'a serde_json::Map<String, Value>,
+}
+
+/// The `UpdateTaskResult` wire body: an EMPTY acknowledgement.
+///
+/// `UpdateTaskResult = Result` in the vendored draft extension schema — the ack
+/// carries no task fields at all, and the `resultType: "complete"` discriminator
+/// is written by the envelope rather than here (`own_reserved_result_fields` owns
+/// that key and overwrites whatever a producer puts in it).
+///
+/// Spelled once, and beside [`Self`](update_ack)'s only two call sites, so the
+/// store leg and the router leg cannot come to disagree about what an
+/// acknowledgement looks like. The v2 client landed by 114-19 decodes exactly
+/// this shape as SUCCESS (`v2_empty_update_ack_is_not_a_decode_error`).
+fn update_ack(id: RequestId) -> JSONRPCResponse {
+    success_response(id, Value::Object(serde_json::Map::new()))
 }
 
 /// Borrow-struct holding the task backend handles and the identity inputs a
@@ -2083,27 +2121,35 @@ impl TaskDispatch<'_> {
     ///    measures it: an unauthenticated caller sending garbage gets `-32003`,
     ///    not `-32602`.
     ///
-    /// # What this plan deliberately does NOT do
+    /// 6. **The bounds, over the RAW map, before any decode.** The FOUR existing
+    ///    `inputResponses` MRTR bounds via [`check_input_responses_map_bounds`].
+    /// 7. **The kind-directed decode, then the delivery, then an EMPTY ack.** See
+    ///    [`Self::deliver_tasks_update`].
     ///
-    /// The delivery body — decoding `inputResponses`, bounding it, and the CAS
-    /// against the store through
-    /// [`partition_input_delivery`](crate::server::task_store::partition_input_delivery)
-    /// — is plan 114-14's. A request that passes all five gates receives
-    /// [`TASKS_UPDATE_DELIVERY_UNIMPLEMENTED`], NOT an empty success ack; that
-    /// constant's rustdoc records why the distinction is load-bearing rather than
-    /// cosmetic. Keeping the gates and the delivery in separate plans is what lets
-    /// 114-14's negative controls fail for exactly one reason.
+    /// # Cases 5-7 are plan 114-14's, and their ORDER is the security property
     ///
-    /// # Not `async`, on purpose
+    /// The params are read into a RAW map ([`TasksUpdateParams`]) and NOT into the
+    /// typed `InputResponses`, because that type's `Deserialize` impl runs
+    /// [`InputResponse::try_from_value_untagged`] — the overlapping guess that
+    /// mis-typed an elicitation answer as sampling and re-elicited sixteen times
+    /// (D-113-O). Deserializing straight into it would re-introduce that bug class
+    /// one layer EARLIER than the route exists to prevent it, and would do so
+    /// before the bounds had run.
     ///
-    /// Nothing here touches a store or a router, and an `async fn` that never
-    /// awaits is a false promise of I/O to every caller that has to decide where
-    /// to hold a lock across it. (`clippy::unused_async` would NOT have caught
-    /// this — it is on `make lint`'s allow-list; the reason is the contract, not
-    /// the lint.) 114-14's delivery body makes it `async`; the single call site
+    /// So: parse raw → bound → decode against the kinds the SERVER recorded. Each
+    /// step is refusable and none of them trusts the step's own input to describe
+    /// itself.
+    ///
+    /// # `async` since plan 114-14
+    ///
+    /// Cases 1-5 touch no store and no router, and until the delivery body landed
+    /// this function was deliberately synchronous — an `async fn` that never awaits
+    /// is a false promise of I/O to every caller that has to decide where to hold a
+    /// lock across it. Case 7 reads the task record and writes the delivery, so the
+    /// promise is now real and the single call site
     /// ([`Server::handle_tasks_update`](crate::server::Server::handle_tasks_update))
-    /// gains one `.await` at that point.
-    pub(crate) fn route_tasks_update(
+    /// awaits it.
+    pub(crate) async fn route_tasks_update(
         &self,
         id: RequestId,
         params: &Value,
@@ -2136,10 +2182,10 @@ impl TaskDispatch<'_> {
         }
 
         // --- case 4 ---------------------------------------------------------
-        // The owner is bound here and DISCARDED in this plan: 114-14's delivery
-        // is the first code that needs it. Binding it anyway keeps the refusal in
-        // its contractual position — an unauthenticated caller must be refused
-        // before its body is read, whether or not the body is used yet.
+        // The owner every read and write below is scoped to. It comes from the
+        // identity table and NEVER from `params` — a client-supplied owner would
+        // be a write-side IDOR straight into another caller's paused task
+        // (T-114-73).
         let owner_id = match self.resolve_owner(auth_context, era) {
             OwnerBinding::Owner(owner) => owner,
             OwnerBinding::Refused => {
@@ -2153,21 +2199,282 @@ impl TaskDispatch<'_> {
         );
 
         // --- case 5 ---------------------------------------------------------
-        // The ONLY params read in this plan, and it resolves the key through the
-        // routing-name table rather than spelling `taskId` here.
-        if crate::types::mrtr::logical_name_of(TASKS_UPDATE_METHOD, params).is_none() {
+        // The FIRST params read on this path, and it resolves the task id through
+        // the routing-name table rather than spelling `taskId` here.
+        let update = match Self::parse_tasks_update_params(params) {
+            Ok(update) => update,
+            Err(message) => {
+                return error_response(
+                    id,
+                    crate::types::protocol::error_codes::INVALID_PARAMS,
+                    message.to_string(),
+                )
+            },
+        };
+
+        // --- case 6 ---------------------------------------------------------
+        // BEFORE any decode. Bounding after decoding means the decoder already did
+        // the work the bound exists to prevent, and the `Display` of every one of
+        // these violations names only the BOUND — never the key, never the value
+        // (T-114-68, T-114-69).
+        if let Err(violation) = check_input_responses_map_bounds(update.input_responses) {
             return error_response(
                 id,
                 crate::types::protocol::error_codes::INVALID_PARAMS,
-                TASKS_UPDATE_MALFORMED_PARAMS.to_string(),
+                violation.to_string(),
             );
         }
 
-        error_response(
-            id,
-            crate::types::protocol::error_codes::INTERNAL_ERROR,
-            TASKS_UPDATE_DELIVERY_UNIMPLEMENTED.to_string(),
-        )
+        // --- case 7 ---------------------------------------------------------
+        self.deliver_tasks_update(id, params, &update, &owner_id, era)
+            .await
+    }
+
+    /// Read a `tasks/update`'s params into their RAW form — a task id and an
+    /// UNDECODED `inputResponses` map.
+    ///
+    /// # Why the map stays raw
+    ///
+    /// `inputResponses` is typed [`InputResponses`] — a `BTreeMap<String,
+    /// InputResponse>` — and [`InputResponse`]'s `Deserialize` impl is the
+    /// UNTAGGED guess: it tries `ListRootsResult`, then `CreateMessageResult`,
+    /// then `ElicitResult`, and takes the first that fits. `ElicitResult` and
+    /// `CreateMessageResult` structurally OVERLAP, which is how D-113-O silently
+    /// reclassified an elicitation answer as sampling, never matched the handler's
+    /// `Elicitation` arm, and re-elicited sixteen times with no error raised
+    /// anywhere.
+    ///
+    /// So this function deliberately deserializes into
+    /// `&serde_json::Map<String, Value>` — serde_json's `BTreeMap<String, Value>`
+    /// — and NOT into [`InputResponses`]. Doing otherwise would run that guess at
+    /// ingress, one layer before the kind-directed decode this route exists to
+    /// perform, and before the bounds had run at all.
+    ///
+    /// It BORROWS the map rather than cloning it: a clone here would copy up to
+    /// the 256 KiB total bound BEFORE that bound has been checked.
+    ///
+    /// # Errors
+    ///
+    /// The `-32602` message to emit: [`TASKS_UPDATE_MALFORMED_PARAMS`] for a
+    /// missing or non-string `taskId`, [`TASKS_UPDATE_MISSING_INPUT_RESPONSES`]
+    /// for an absent or non-object `inputResponses`. Neither echoes anything the
+    /// caller sent.
+    fn parse_tasks_update_params(params: &Value) -> std::result::Result<TasksUpdateParams<'_>, &'static str> {
+        // Resolved through `TASK_NAME_BEARING_METHODS`, the SAME table the
+        // `Mcp-Name` routing header derives from: one answer to "where does
+        // tasks/update keep its task id".
+        let Some(task_id) = crate::types::mrtr::logical_name_of(TASKS_UPDATE_METHOD, params) else {
+            return Err(TASKS_UPDATE_MALFORMED_PARAMS);
+        };
+        let Some(input_responses) = params.get(INPUT_RESPONSES_KEY).and_then(Value::as_object)
+        else {
+            return Err(TASKS_UPDATE_MISSING_INPUT_RESPONSES);
+        };
+        Ok(TasksUpdateParams {
+            task_id,
+            input_responses,
+        })
+    }
+
+    /// Decode a RAW `inputResponses` map against the kinds the SERVER recorded.
+    ///
+    /// # This is the D-113-O fix applied to the tasks surface
+    ///
+    /// Every value is typed with [`InputResponse::decode_for`] using the kind read
+    /// from `snapshot.input_requests` — the server's own record, which no client
+    /// input reaches. [`InputResponse::try_from_value_untagged`] is never called on
+    /// this path and must never be: it is the overlapping guess, and a client that
+    /// could choose which variant its answer became would be choosing the server's
+    /// control flow (T-114-74).
+    ///
+    /// The persisted task record is the tasks analogue of Phase 113's AEAD-sealed
+    /// continuation. Both hold server-minted kinds; neither is client-writable.
+    ///
+    /// # Ignore vs refuse — the two are not the same answer
+    ///
+    /// | the record… | the value… | outcome |
+    /// |---|---|---|
+    /// | does NOT hold the key | anything | IGNORED (never issued / already answered / superseded) |
+    /// | HOLDS the key | decodes as the recorded kind | accepted |
+    /// | HOLDS the key | does NOT decode as that kind | REFUSED |
+    ///
+    /// The ignore row is the extension's own rule: a server SHOULD ignore a key
+    /// that is not currently outstanding rather than fail the delivery. Turning it
+    /// into an error would break a client that legitimately re-sent an answer.
+    ///
+    /// # Message provenance
+    ///
+    /// The refused key is taken from the RECORD via `get_key_value`, not from the
+    /// caller's map, so the rendered string is provably server-assigned even
+    /// though the two are equal by construction here. An IGNORED key is
+    /// CLIENT-chosen by definition and is never rendered anywhere — echoing it
+    /// both amplifies and poisons logs (T-114-69). No value is ever rendered.
+    ///
+    /// # Errors
+    ///
+    /// [`InputResponseTypingError::KindMismatch`] for the first recorded key whose
+    /// value does not decode as its recorded kind.
+    fn decode_inputs_against_record(
+        raw: &serde_json::Map<String, Value>,
+        snapshot: &TaskInputSnapshot,
+    ) -> std::result::Result<InputResponses, InputResponseTypingError> {
+        let mut typed = InputResponses::new();
+        for (key, value) in raw {
+            let Some((recorded_key, request)) = snapshot.input_requests.get_key_value(key) else {
+                // IGNORED, per the extension's prose rule. Not an error, and the
+                // client-chosen key is not carried anywhere it could be rendered.
+                continue;
+            };
+            let kind = request.kind();
+            let response = InputResponse::decode_for(kind, value.clone()).map_err(|_| {
+                InputResponseTypingError::KindMismatch {
+                    key: recorded_key.clone(),
+                    expected: kind,
+                }
+            })?;
+            typed.insert(recorded_key.clone(), response);
+        }
+        Ok(typed)
+    }
+
+    /// The `tasks/update` delivery: store-first, router fall-through, EMPTY ack.
+    ///
+    /// The same store-first / router-fall-through precedence every other `tasks/*`
+    /// route uses ([`Self::route_tasks_get`], [`Self::handle_tasks_result`]) — a
+    /// store that cannot serve this request is never a hard error while a router
+    /// could serve it.
+    ///
+    /// # The transition is the BACKEND's, atomically
+    ///
+    /// `InputRequired → Working` iff the delivered set COMPLETES the outstanding
+    /// set; a PARTIAL set persists its responses and the task STAYS
+    /// `input_required`. That rule lives in
+    /// [`TaskStore::deliver_task_inputs`] and is applied there under one write
+    /// guard (114-04 / 114-07), so this function does NOT read-then-write around
+    /// it and does not re-derive it. Two concurrent deliveries therefore cannot
+    /// interleave and lose an update (T-114-70).
+    ///
+    /// # The acknowledgement is EMPTY and EVENTUALLY CONSISTENT
+    ///
+    /// `UpdateTaskResult = Result` in the vendored schema: no task body at all.
+    /// The `resultType: "complete"` discriminator is supplied by the envelope
+    /// (`own_reserved_result_fields` OWNS that key), never written here.
+    ///
+    /// The server MAY acknowledge before a subsequent `tasks/get` reflects the
+    /// change, so — exactly as for [`Self::route_tasks_cancel`] — NO wait and NO
+    /// re-read is inserted to make the ack look synchronous. A client that wants
+    /// the settled state issues `tasks/get`.
+    ///
+    /// # `raw_params` for the router leg
+    ///
+    /// A [`TaskRouter`] is out-of-tree code holding its own record, so it receives
+    /// the params VERBATIM and performs its own decode against its own kinds — the
+    /// same pass-through [`Self::route_tasks_get`] applies to a router's `Value`.
+    /// The four bounds have already fired, so what it receives is bounded.
+    async fn deliver_tasks_update(
+        &self,
+        id: RequestId,
+        raw_params: &Value,
+        update: &TasksUpdateParams<'_>,
+        owner_id: &str,
+        era: Option<crate::types::protocol::Era>,
+    ) -> JSONRPCResponse {
+        if let Some(response) = self
+            .deliver_update_through_store(id.clone(), update, owner_id, era)
+            .await
+        {
+            return response;
+        }
+        let Some(task_router) = self.task_router else {
+            // Reachable only for a store that does not accept inputs on a server
+            // with no router: case 2 already answered for a server with NO task
+            // backend at all. The FROZEN sibling message rather than a fifth
+            // `-32601` sentence, so `the_minus_32601_conditions_are_mutually_distinct`
+            // keeps describing the whole population.
+            return error_response(
+                id,
+                crate::types::protocol::error_codes::METHOD_NOT_FOUND,
+                TASKS_NOT_ENABLED.to_string(),
+            );
+        };
+        match task_router
+            .handle_tasks_update(raw_params.clone(), owner_id)
+            .await
+        {
+            Ok(_) => update_ack(id),
+            Err(e) => error_response(
+                id,
+                crate::types::protocol::error_codes::INTERNAL_ERROR,
+                e.to_string(),
+            ),
+        }
+    }
+
+    /// The STORE leg of [`Self::deliver_tasks_update`].
+    ///
+    /// `Some(response)` — the store answered, for better or worse. `None` — fall
+    /// through to the router: either there is no store, or it does not accept
+    /// inputs, or it answered `NotFound` while a router is configured.
+    ///
+    /// Split out so each of the route's seven steps is one short function: this
+    /// file is where the phase's cognitive complexity concentrates and the
+    /// PR-blocking gate is at 25.
+    async fn deliver_update_through_store(
+        &self,
+        id: RequestId,
+        update: &TasksUpdateParams<'_>,
+        owner_id: &str,
+        era: Option<crate::types::protocol::Era>,
+    ) -> Option<JSONRPCResponse> {
+        let store = self.task_store.as_ref()?;
+        if !store.supports_inputs() {
+            return None;
+        }
+        // The OWNER-SCOPED read, before anything on the request is trusted. It
+        // goes through 114-04's snapshot accessor because that is the ONLY
+        // supported way to reach the server-recorded kinds: `TaskStore::get`
+        // returns the wire `Task` alone and `TaskRecord` is private.
+        let snapshot = match store.task_input_snapshot(&update.task_id, owner_id).await {
+            Ok(snapshot) => snapshot,
+            Err(e) => return self.store_error_or_fall_through(id, &e, era),
+        };
+        let typed = match Self::decode_inputs_against_record(update.input_responses, &snapshot) {
+            Ok(typed) => typed,
+            Err(refusal) => {
+                return Some(error_response(
+                    id,
+                    crate::types::protocol::error_codes::INVALID_PARAMS,
+                    refusal.to_string(),
+                ))
+            },
+        };
+        match store
+            .deliver_task_inputs(&update.task_id, owner_id, typed)
+            .await
+        {
+            Ok(_delivery) => Some(update_ack(id)),
+            Err(e) => self.store_error_or_fall_through(id, &e, era),
+        }
+    }
+
+    /// A store error either ANSWERS or falls through to the router.
+    ///
+    /// `NotFound` with a router configured is the store saying "not mine" — the
+    /// same signal [`Self::handle_tasks_result`] falls through on. Everything else
+    /// (including `NotFound` with no router) is answered through the shared
+    /// era-aware [`store_error_response`], so a not-found task on v2 gets the ONE
+    /// oracle-free `-32602` that is identical for absent, wrong-owner and expired
+    /// (T-114-73), and a terminal task's `InvalidTransition` keeps its `-32603`.
+    fn store_error_or_fall_through(
+        &self,
+        id: RequestId,
+        error: &TaskStoreError,
+        era: Option<crate::types::protocol::Era>,
+    ) -> Option<JSONRPCResponse> {
+        if matches!(error, TaskStoreError::NotFound { .. }) && self.task_router.is_some() {
+            return None;
+        }
+        Some(store_error_response(id, error, era))
     }
 
     /// Did this request DECLARE the tasks extension — case 3's predicate?
