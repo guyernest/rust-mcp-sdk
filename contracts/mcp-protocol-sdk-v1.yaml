@@ -240,6 +240,122 @@ equations:
     - CreateMessageResult contains model response content
     lean_theorem: Theorems.SamplingDispatch
 
+  output_schema_draft_pin:
+    formula: |
+      validate: (era, outputSchema, structuredContent) -> Option<mismatch>
+        Era::V1 => jsonschema::validator_for(schema)                  (auto-detect; unchanged)
+        Era::V2 => draft202012::new(normalize_schema_dialect(schema)) (pinned)
+      normalize_schema_dialect(s)
+        = s                                    when root $schema is absent or already 2020-12
+        = s with root $schema := DRAFT_2020_12 otherwise
+      cache_key = (Era, canonical_json_text(schema))
+      external $ref (http:// | https:// | file:// | relative under an http-scheme $id)
+        => compile error on BOTH eras, zero network and zero filesystem I/O
+    domain: Declared outputSchema x emitted structuredContent x negotiated protocol era
+    codomain: Some(human-readable mismatch message) or None
+    invariants:
+    - >-
+      On Era::V2 the compiled validator enforces the schema's keywords even when the document
+      declares a legacy `$schema` (draft-04/06/07); a legacy declaration is normalized to the
+      2020-12 URI before compilation, never honoured and never used as a vocabulary source
+    - >-
+      On Era::V1 the verdict for any (schema, instance) pair is byte-identical to the
+      pre-Phase-115 verdict
+    - >-
+      The validator cache key is `(Era, canonical schema text)`, so one era's validator is never
+      served to the other
+    - >-
+      An external `$ref` (`http://`, `https://`, `file://`, or a relative ref under an
+      http-scheme `$id`) fails to COMPILE on both eras and performs zero network or filesystem I/O
+    - >-
+      `normalize_schema_dialect` is idempotent and alters only the root `$schema` key
+    - >-
+      Validation is warn-only on both eras: a mismatch never produces an error result and never
+      panics
+    preconditions:
+    - '`schema` and `value` are already-parsed `serde_json::Value`s'
+    - The negotiated era is captured before the protocol context is moved into the handler extra
+    postconditions:
+    - '`schema_mismatch` returns `Some(message)` on mismatch or invalid schema, `None` on conformance'
+    - The returned message names `outputSchema` when the schema itself failed to compile
+    lean_theorem: Theorems.OutputSchemaDraftPin
+
+  structured_content_shape:
+    formula: |
+      CallToolResult.structuredContent : Option<Value>
+        Era::V2 => Value is unconstrained: object | array | string | number | bool | null
+        Era::V1 => the wire is FROZEN, byte-identical to pre-Phase-115
+      structured(value: Value)       -> Self   (D-06: signature and behaviour unchanged)
+      structured_value(value: Value) -> Self   (D-06: the additive widening sibling)
+      declared outputSchema applies to EVERY shape (D-04); enforcement is warn-only
+    domain: Handler-produced JSON values bridged into CallToolResult.structuredContent
+    codomain: A CallToolResult whose structuredContent is any JSON value
+    invariants:
+    - >-
+      `structuredContent` accepts any JSON value — object, array, string, number, boolean or null
+    - >-
+      `Some(Value::Null)` serializes as `"structuredContent": null` and is NOT elided by
+      `skip_serializing_if = "Option::is_none"`
+    - >-
+      `CallToolResult::structured`'s signature and behaviour are unchanged; the widening is the
+      sibling constructor `structured_value`
+    - >-
+      A declared `outputSchema` still applies to a non-object payload (D-04); enforcement is
+      warn-only
+    - >-
+      pmcp's pre-existing v1 permissiveness is FROZEN, not corrected — tightening v1 would itself
+      be a v1 wire change (D-05)
+    preconditions:
+    - The tool handler produced a `serde_json::Value` of any shape
+    postconditions:
+    - '`structured_value(Value::Null)` serializes an explicit `"structuredContent": null`'
+    - Every pre-Phase-115 call site of `CallToolResult::structured` compiles and behaves unchanged
+    lean_theorem: Theorems.StructuredContentShape
+
+  result_caching_hints:
+    formula: |
+      project: (Value, Option<Era>, Cacheable) -> Value
+        Cacheable::No => identity                       (not a CacheableResult)
+        Some(Era::V2) => ensure(ttlMs, cacheScope)      (handler value wins, else defaults)
+        otherwise     => strip(ttlMs, cacheScope)       (v1, and a None protocol context)
+      defaults: ttlMs = 0, cacheScope = "private"
+      CacheableResult extenders = { DiscoverResult, ListToolsResult, ListResourcesResult,
+                                    ListResourceTemplatesResult, ReadResourceResult,
+                                    ListPromptsResult }
+    domain: Serialized result values x negotiated protocol era x cacheability classification
+    codomain: A result carrying both hints on v2 and neither on v1
+    invariants:
+    - >-
+      Exactly six result types are `CacheableResult`: `DiscoverResult`, `ListToolsResult`,
+      `ListResourcesResult`, `ListResourceTemplatesResult`, `ReadResourceResult`, `ListPromptsResult`
+    - >-
+      On Era::V2 a cacheable result carries both `ttlMs` and `cacheScope`; absent handler intent the
+      values are `0` and `"private"`
+    - >-
+      A handler-set hint survives the v2 projection unmodified
+    - >-
+      No v1 response carries `ttlMs` or `cacheScope`, EVEN WHEN a handler set them — the projection
+      strips on v1, and on a `None` protocol context, and on every dispatcher including
+      `WasmMcpServer`
+    - >-
+      `cacheScope` is the closed union `"public" | "private"`; an unknown value fails to deserialize
+    - >-
+      `cacheScope: "public"` states the response holds no user-specific data and that any client or
+      intermediary MAY cache it and serve it across authorization contexts; `"private"` confines
+      reuse to one authorization context and caches MUST NOT be shared between them
+    - >-
+      The default is `cacheScope: "private"` — `"public"` authorizes reuse
+      across authorization contexts and defaulting to it would be a cross-caller data leak
+    - >-
+      The hints are written in exactly ONE function; no result type projects independently (D-12)
+    preconditions:
+    - The result has already been serialized to a `serde_json::Value`
+    - The caller classified the originating request as `Cacheable::Yes` or `Cacheable::No`
+    postconditions:
+    - Every v2 response for one of the six CacheableResult types carries both `ttlMs` and `cacheScope`
+    - No v1 response carries either key; v1 bytes match the pre-change goldens
+    lean_theorem: Theorems.ResultCachingHints
+
 proof_obligations:
 - type: state_machine
   property: Session lifecycle enforces initialization
