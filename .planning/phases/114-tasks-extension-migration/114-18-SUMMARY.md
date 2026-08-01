@@ -729,7 +729,7 @@ the example transcript (§ *Task 2* item 9, demos [2] and [4]).
 
 ## Self-Check: PASSED
 
-All 12 claimed files exist on disk. All 4 claimed commits resolve in `git log`:
+All 12 claimed files exist on disk. All 6 claimed commits resolve in `git log`:
 
 | commit | task |
 |---|---|
@@ -737,5 +737,23 @@ All 12 claimed files exist on disk. All 4 claimed commits resolve in `git log`:
 | `9b7d9a01` | Task 2 — record the three findings the whole-phase gate run measured |
 | `e7b25072` | Task 3 — book TASK-01..06, finalize the hold record, sweep the ledger |
 | `64ec87e5` | this SUMMARY |
+| `de1f4622` | plan metadata; Task 4 returned unanswered for human sign-off |
+| `cb0d2ecc` | **Task 4 — the sign-off approval record** |
 
 No claimed artifact is missing.
+
+### Hold invariants re-asserted AFTER the approval
+
+Re-measured on disk after `cb0d2ecc`, because *"the human approved"* is exactly the moment a hold gets
+released by accident:
+
+| invariant | measured | required |
+|---|---|---|
+| `grep -cE '^- \[~\] \*\*TASK-0[1-6]\*\*' .planning/REQUIREMENTS.md` | **6** | 6 |
+| `grep -cE '^- \[x\] \*\*TASK-0[1-6]\*\*' .planning/REQUIREMENTS.md` | **0** | 0 |
+| `114-SPEC-RECHECK.md` `## Verdict` | **`PENDING`** | `PENDING` |
+| `grep -c '^- \[~\] \*\*Phase 114' .planning/ROADMAP.md` | **1** | 1 |
+| `STATE.md` `completed_phases` | **59** | 59 |
+| `git diff --diff-filter=D HEAD~1 HEAD` | **no deletions** | none |
+
+**The approval closed the checkpoint. It moved no checkbox, no verdict and no counter.**
