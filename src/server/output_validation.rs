@@ -23,11 +23,15 @@
 //!   `jsonschema` auto-detect entry point in this module lives on that arm and
 //!   nowhere else.
 //! - **v2** (`Era::V2`) compiles every `outputSchema` as JSON Schema Draft
-//!   2020-12, which MCP 2026-07-28 pins. On v2 the pin wins UNCONDITIONALLY: a
-//!   declared legacy `$schema` is ignored — neither honoured nor rejected — and
-//!   the ignoring is announced through a `tracing::warn!` (D-02). See
+//!   2020-12, which MCP 2026-07-28 pins. On v2 the pin wins UNCONDITIONALLY —
+//!   and "unconditionally" is meant across the whole DOCUMENT, not just its
+//!   root: EVERY dialect declaration is rewritten, the root one and the one on
+//!   every embedded schema resource below it, so a declared legacy `$schema` at
+//!   any depth is ignored — neither honoured nor rejected — and the ignoring is
+//!   announced through a `tracing::warn!` (D-02). See
 //!   [`normalize_schema_dialect`] for why "ignored" has to mean "rewritten"
-//!   rather than "compiled as-is".
+//!   rather than "compiled as-is", and for the measured bypass that rewriting
+//!   only the root left open (`115-VERIFICATION.md`, closed by 115-12).
 //!
 //! A consequence worth stating: some draft-07 constructs cannot be expressed
 //! under 2020-12 at all — `exclusiveMinimum: true` and array-form `items` are
@@ -111,17 +115,111 @@ pub(crate) fn schema_mismatch(schema: &Value, value: &Value, era: Option<Era>) -
     }
 }
 
-/// Rewrite the document's ROOT `$schema` to [`DRAFT_2020_12`], leaving every
-/// other byte of the document alone.
+/// Keywords whose VALUE is instance data rather than a subschema, and which the
+/// dialect walk therefore must not descend into.
 ///
-/// Pure and idempotent. Returns `Cow::Borrowed` when the root `$schema` is
-/// absent or already 2020-12 (the common case allocates nothing, and the
-/// borrow makes "this function did not copy the document" visible in the TYPE
-/// rather than only in a comment), and `Cow::Owned` of a clone with the root
-/// `$schema` OVERWRITTEN otherwise. Overwritten, not deleted, so the compiled
-/// document STATES the dialect it was evaluated under — which also matches
-/// `outputSchema`'s own declared type in the 2026-07-28 schema,
-/// `{ "$schema"?: string, [key: string]: unknown }`.
+/// A `$schema` string inside one of these is DATA — part of the instance a
+/// `const` pins, an `enum` alternative, a `default` a client may substitute, or
+/// an `examples` entry. Rewriting it would change which instances conform, which
+/// is a semantic corruption of the author's schema, not a normalization. Every
+/// other keyword's value is either a subschema, a map of subschemas or an array
+/// of subschemas, all of which a dialect declaration may legally appear inside.
+#[cfg(feature = "validation")]
+const DATA_ONLY_KEYWORDS: &[&str] = &["const", "enum", "default", "examples"];
+
+/// The first dialect declaration in `node` that is not already
+/// [`DRAFT_2020_12`], searched root-first, or `None` when the document declares
+/// no legacy dialect anywhere.
+///
+/// This is the DETECTOR half of the normalization; [`pin_dialect_in_place`] is
+/// the REWRITER half, and the two implement the identical traversal rule stated
+/// on [`normalize_schema_dialect`]. They must agree: a detector that sees a
+/// declaration the rewriter cannot reach yields a `Cow::Owned` that still
+/// carries a legacy declaration, which `compile_2020_12` then announces as
+/// "the declaration is ignored" while having ignored nothing.
+#[cfg(feature = "validation")]
+fn first_legacy_dialect(node: &Value) -> Option<&str> {
+    match node {
+        Value::Object(map) => {
+            if let Some(declared) = map.get("$schema").and_then(Value::as_str) {
+                if declared != DRAFT_2020_12 {
+                    return Some(declared);
+                }
+            }
+            map.iter()
+                .filter(|(key, _)| !DATA_ONLY_KEYWORDS.contains(&key.as_str()))
+                .find_map(|(_, value)| first_legacy_dialect(value))
+        },
+        Value::Array(items) => items.iter().find_map(first_legacy_dialect),
+        _ => None,
+    }
+}
+
+/// Overwrite EVERY dialect declaration in `node` with [`DRAFT_2020_12`], in
+/// place.
+///
+/// The REWRITER half of the normalization; see [`first_legacy_dialect`] for the
+/// detector it must agree with, and [`normalize_schema_dialect`] for the single
+/// traversal rule both implement.
+#[cfg(feature = "validation")]
+fn pin_dialect_in_place(node: &mut Value) {
+    match node {
+        Value::Object(map) => {
+            // A declaration is a STRING-valued `$schema`; anything else with
+            // that key is data (see the traversal rule) and is left alone.
+            if map.get("$schema").is_some_and(Value::is_string) {
+                map.insert(
+                    "$schema".to_string(),
+                    Value::String(DRAFT_2020_12.to_string()),
+                );
+            }
+            for (key, value) in map.iter_mut() {
+                if !DATA_ONLY_KEYWORDS.contains(&key.as_str()) {
+                    pin_dialect_in_place(value);
+                }
+            }
+        },
+        Value::Array(items) => items.iter_mut().for_each(pin_dialect_in_place),
+        _ => {},
+    }
+}
+
+/// Rewrite EVERY dialect declaration in the document — at the root and at any
+/// depth — to [`DRAFT_2020_12`], leaving every other byte alone.
+///
+/// Pure and idempotent. Returns `Cow::Borrowed` when no `$schema` anywhere in
+/// the document names a dialect other than 2020-12 (the common case allocates
+/// nothing, and the borrow makes "this function did not copy the document"
+/// visible in the TYPE rather than only in a comment), and `Cow::Owned` of a
+/// clone with every such `$schema` OVERWRITTEN otherwise. Overwritten, not
+/// deleted, so the compiled document STATES the dialect it was evaluated under
+/// — which also matches `outputSchema`'s own declared type in the 2026-07-28
+/// schema, `{ "$schema"?: string, [key: string]: unknown }`.
+///
+/// # The traversal rule, stated once
+///
+/// [`first_legacy_dialect`] and [`pin_dialect_in_place`] implement exactly this,
+/// and a disagreement between them is a defect:
+///
+/// 1. At an object node, the key `$schema` is a DIALECT DECLARATION **only when
+///    its value is a `Value::String`**. A non-string value is not a declaration:
+///    that is how a real declaration is told apart from a `properties` map entry
+///    for an instance property literally named `$schema`, whose value is a
+///    subschema (an object or a boolean) and never a string.
+/// 2. Recurse into every member value EXCEPT the values of the
+///    [`DATA_ONLY_KEYWORDS`] — `const`, `enum`, `default` and `examples` — which
+///    carry instance data rather than subschemas.
+/// 3. At an array node, recurse into every element. Scalars terminate.
+///
+/// The postcondition is therefore checkable, and is what replaces the `expect`
+/// this function used to carry: after an `Owned` return,
+/// `first_legacy_dialect(&owned)` is `None`. That is what guarantees an `Owned`
+/// really was rewritten rather than silently handed back unchanged — a
+/// non-object root now falls out of the walk naturally instead of needing a
+/// panic to fence it. `normalize_schema_dialect_changes_only_dollar_schema_keys`
+/// asserts the postcondition over every fixed case, and 115-13 re-states it
+/// independently in the fuzz target so the two are not the same code checking
+/// itself.
 ///
 /// # Why the rewrite is NOT cosmetic
 ///
@@ -140,36 +238,48 @@ pub(crate) fn schema_mismatch(schema: &Value, value: &Value, era: Option<Era>) -
 /// returns `true` for such a document, so there is no library-side detector.
 /// The `$schema` key has to be inspected here.
 ///
-/// Only the ROOT key is touched. A nested `$schema` (inside `properties.*`,
-/// say) is left untouched — measured: a nested declaration does not trigger
-/// the bypass.
+/// # Why the walk is recursive, and what "measured" used to mean here
+///
+/// This function rewrote ONLY the root key until 115-12, on the strength of a
+/// research measurement that a nested `$schema` — specifically one inside
+/// `properties.a` with no `$id` — does not trigger the bypass. That measurement
+/// is TRUE and is still fenced by `normalization_cases()`; the sentence
+/// generalizing it to "a nested declaration does not trigger the bypass" was
+/// not, and is the root cause of the whole gap. Under 2020-12 a `$schema` is
+/// legal at the root of any EMBEDDED SCHEMA RESOURCE — any subschema that also
+/// carries `$id` — and `jsonschema` 0.49.2 honours it there. Re-measured twice
+/// on this tree (code review CR-01 and `115-VERIFICATION.md`) through
+/// `fuzz_support::validate_bytes`, with `$defs.Inner` carrying `$id` +
+/// `$schema: draft-07` + `type: integer`, `$ref`'d from `properties.n`, against
+/// the instance `{"n": "NOT-AN-INTEGER"}`:
+///
+/// | Case | (v1, v2) before 115-12 |
+/// |---|---|
+/// | embedded legacy resource | `(Conforms, Conforms)` — `type` silently dropped |
+/// | control, no nested `$schema` | `(Violates, Violates)` — enforcement works |
+/// | root draft-07 + embedded | `(Violates, Conforms)` — **v2 weaker than v1** |
+///
+/// The third row is the regression direction SCHM-01 exists to forbid, so do
+/// not narrow this walk back to the root. `v2_pin_still_enforces_an_embedded_legacy_resource`
+/// is the fence, and it has been observed to fail against the root-only body.
+///
+/// Rewriting every declaration is deliberately a SUPERSET of what `jsonschema`
+/// honours — a nested declaration on a subschema with no `$id` is inert, and is
+/// rewritten anyway. That is strictly safer, and it is what makes the
+/// postcondition above statable without a per-node `$id` analysis.
 #[cfg(feature = "validation")]
 fn normalize_schema_dialect(schema: &Value) -> std::borrow::Cow<'_, Value> {
     use std::borrow::Cow;
 
-    match schema.get("$schema").and_then(Value::as_str) {
-        // Undeclared is already 2020-12: `Draft::default() == Draft202012`, and
-        // the MCP spec says the same. Nothing to rewrite.
-        None | Some(DRAFT_2020_12) => Cow::Borrowed(schema),
-        Some(_) => {
-            let mut pinned = schema.clone();
-            // `Value::get(&str)` only ever yields `Some` for an object, so the
-            // arm above proves `schema` — and therefore this clone — IS one.
-            // Stated as an `expect` rather than an `if let`: on the `if let`
-            // shape a non-object would silently return an UNREWRITTEN
-            // `Cow::Owned`, which `compile_2020_12` then reports as "the
-            // declaration is ignored and the schema is validated as 2020-12"
-            // while having ignored nothing.
-            pinned
-                .as_object_mut()
-                .expect("a document with a root $schema key is a JSON object")
-                .insert(
-                    "$schema".to_string(),
-                    Value::String(DRAFT_2020_12.to_string()),
-                );
-            Cow::Owned(pinned)
-        },
+    // No legacy declaration anywhere — including the undeclared document, which
+    // is already 2020-12 (`Draft::default() == Draft202012`, and the MCP spec
+    // says the same). Nothing to rewrite, nothing to allocate.
+    if first_legacy_dialect(schema).is_none() {
+        return Cow::Borrowed(schema);
     }
+    let mut pinned = schema.clone();
+    pin_dialect_in_place(&mut pinned);
+    Cow::Owned(pinned)
 }
 
 /// Compile `schema` under an explicitly-pinned Draft 2020-12 (the v2 dialect),
@@ -184,14 +294,17 @@ fn compile_2020_12(
 ) -> Result<jsonschema::Validator, jsonschema::ValidationError<'static>> {
     let normalized = normalize_schema_dialect(schema);
     if matches!(normalized, std::borrow::Cow::Owned(_)) {
-        let declared = schema
-            .get("$schema")
-            .and_then(Value::as_str)
-            .unwrap_or("<unknown>");
+        // Sourced from the DETECTOR, not from the root key: the declaration
+        // that triggered the rewrite may sit on an embedded schema resource,
+        // and reading `schema["$schema"]` would then report `<unknown>` — or,
+        // worse, a misleading `2020-12` — for the very case the warning exists
+        // to explain. This runs only on the rewrite path, which already clones.
+        let declared = first_legacy_dialect(schema).unwrap_or("<unknown>");
         tracing::warn!(
             declared,
-            "outputSchema declares JSON Schema {declared}; MCP 2026-07-28 pins Draft 2020-12, so \
-             the declaration is ignored and the schema is validated as 2020-12"
+            "outputSchema declares JSON Schema {declared} at the document root or on an embedded \
+             schema resource; MCP 2026-07-28 pins Draft 2020-12, so every such declaration is \
+             ignored and the schema is validated as 2020-12"
         );
     }
     jsonschema::draft202012::new(&normalized)
@@ -352,7 +465,7 @@ pub mod fuzz_support {
     ///
     /// Handing back all three documents lets a caller hold idempotence
     /// (`once == twice`) and surgical scope (`once` and `input` differ only at
-    /// the root `$schema` key) DIRECTLY, rather than inferring them from
+    /// `$schema` keys, at any depth) DIRECTLY, rather than inferring them from
     /// downstream validation behaviour — which cannot distinguish "the
     /// normalizer dropped a sibling keyword" from "the instance happened to
     /// conform anyway".
@@ -483,7 +596,7 @@ mod fuzz_support_tests {
         }
         assert_eq!(
             before, after,
-            "normalization touched a key other than the root $schema"
+            "normalization touched a key other than a $schema key"
         );
     }
 }
@@ -845,28 +958,52 @@ mod tests {
             (json!({ "$schema": DRAFT_2020_12, "type": "object" }), false),
             // (c) a draft-07 root declaration, with siblings that must survive
             (draft_07_declared_schema(), true),
-            // (d) a NESTED `$schema` and no root one
+            // (d) a NESTED `$schema` and no root one. `$id`-less, so it is
+            // INERT — `jsonschema` does not honour it and it cannot trigger the
+            // bypass. It is rewritten anyway: the walk is deliberately a
+            // superset of what the library honours, which is what makes the
+            // "no legacy declaration survives" postcondition statable without a
+            // per-node `$id` analysis.
             (
                 json!({
                     "type": "object",
                     "properties": { "a": { "$schema": DRAFT_07, "type": "string" } }
                 }),
-                false,
+                true,
             ),
         ]
     }
 
-    /// The PURE-function fence: `normalize_schema_dialect` alters the ROOT
-    /// `$schema` and NOTHING else.
+    /// Remove every `$schema` key at every depth, so two documents can be
+    /// compared for "identical apart from the dialect declarations".
+    ///
+    /// Recursive on purpose: a root-only strip would report a LEGITIMATE nested
+    /// rewrite as collateral damage, which is how this helper read before
+    /// 115-12 made the normalizer recursive.
+    fn strip_every_dollar_schema(node: &mut Value) {
+        match node {
+            Value::Object(map) => {
+                map.remove("$schema");
+                for value in map.values_mut() {
+                    strip_every_dollar_schema(value);
+                }
+            },
+            Value::Array(items) => items.iter_mut().for_each(strip_every_dollar_schema),
+            _ => {},
+        }
+    }
+
+    /// The PURE-function fence: `normalize_schema_dialect` alters `$schema`
+    /// keys and NOTHING else.
     ///
     /// Behavioural equivalence through [`schema_mismatch`] cannot prove this —
     /// a normalizer that also dropped a sibling key would still make
     /// `v2_pin_still_enforces_a_draft_07_declared_schema` pass on the cases it
     /// happens to check. This asserts the rewrite is surgical: the borrow/own
-    /// decision, the rewritten value, deep equality of every other key, and
-    /// that a nested `$schema` is left alone.
+    /// decision, the rewritten value, deep equality of everything else, and the
+    /// postcondition that no legacy declaration survives at any depth.
     #[test]
-    fn normalize_schema_dialect_changes_only_the_root_dollar_schema() {
+    fn normalize_schema_dialect_changes_only_dollar_schema_keys() {
         use std::borrow::Cow;
 
         for (schema, expected_owned) in normalization_cases() {
@@ -879,23 +1016,30 @@ mod tests {
                  nothing"
             );
 
+            // The postcondition, over EVERY case: after normalization no
+            // `$schema` string anywhere in the document names a dialect other
+            // than 2020-12. This is the single assertion that catches a
+            // detector/rewriter disagreement — a `first_legacy_dialect` that
+            // sees a declaration `pin_dialect_in_place` cannot reach would
+            // return an `Owned` document that still carries it.
+            assert_eq!(
+                first_legacy_dialect(&normalized),
+                None,
+                "a legacy dialect declaration survived normalization of {schema} — \
+                 first_legacy_dialect and pin_dialect_in_place have stopped agreeing on the \
+                 traversal rule"
+            );
+
             if expected_owned {
-                assert_eq!(
-                    normalized.get("$schema").and_then(Value::as_str),
-                    Some(DRAFT_2020_12),
-                    "the root $schema must be OVERWRITTEN with the 2020-12 URI, not deleted"
-                );
-                // Everything except `$schema` must be deep-equal to the input.
+                // Everything except the `$schema` keys must be deep-equal.
                 let mut before = schema.clone();
                 let mut after = normalized.into_owned();
                 for document in [&mut before, &mut after] {
-                    if let Some(object) = document.as_object_mut() {
-                        object.remove("$schema");
-                    }
+                    strip_every_dollar_schema(document);
                 }
                 assert_eq!(
                     before, after,
-                    "normalization touched a key other than the root $schema"
+                    "normalization touched a key other than a $schema key"
                 );
             } else {
                 assert_eq!(
@@ -905,7 +1049,17 @@ mod tests {
             }
         }
 
-        // (d) in detail: the NESTED declaration is left exactly as written.
+        // (c) in detail: the ROOT declaration is OVERWRITTEN, not deleted.
+        let rooted = normalize_schema_dialect(&draft_07_declared_schema()).into_owned();
+        assert_eq!(
+            rooted.get("$schema").and_then(Value::as_str),
+            Some(DRAFT_2020_12),
+            "the root $schema must be OVERWRITTEN with the 2020-12 URI, not deleted"
+        );
+
+        // (d) in detail: the NESTED declaration is rewritten too. This
+        // assertion was INVERTED before 115-12 — it asserted the nested
+        // declaration stayed draft-07, which is precisely the shipped bypass.
         let nested = json!({
             "type": "object",
             "properties": { "a": { "$schema": DRAFT_07, "type": "string" } }
@@ -915,8 +1069,10 @@ mod tests {
             normalized
                 .pointer("/properties/a/$schema")
                 .and_then(Value::as_str),
-            Some(DRAFT_07),
-            "a nested $schema is not the dialect declaration and must never be rewritten"
+            Some(DRAFT_2020_12),
+            "a nested $schema must be rewritten too: an $id-bearing sibling of this shape is an \
+             embedded schema resource whose declaration jsonschema DOES honour, and leaving it \
+             alone is the measured (Violates, Conforms) bypass 115-VERIFICATION.md reported"
         );
     }
 
