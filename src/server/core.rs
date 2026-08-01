@@ -5321,6 +5321,457 @@ mod tests {
             assert_eq!(v["resultType"], "complete");
             assert_eq!(server_info_of(&v)["name"], "discover-server");
         }
+
+        // ---- Phase 115 Plan 06: the caching-hint projection (SCHM-03) ----
+        //
+        // These cover the CHOKEPOINT: that it delegates to the projector, on
+        // the right eras, for the right cacheability claims. The PROJECTOR's
+        // own semantics are covered by `crate::types::caching`'s
+        // `projection_tests` module and are deliberately not duplicated here.
+
+        /// A v2 `CacheableResult` with no handler intent gains BOTH hints, at
+        /// the safe defaults (D-08).
+        #[test]
+        fn v2_cacheable_result_gains_both_hints_with_the_safe_defaults() {
+            let info = Implementation::new("srv", "2.0.0");
+            let ctx = v2_ctx();
+            let mut resp = result_response(1, serde_json::json!({ "tools": [] }));
+            inject_v2_result_envelope(
+                &mut resp,
+                Some(&ctx),
+                &info,
+                ResponseDisposition::Complete,
+                ReservedFieldOwner::None,
+                Cacheable::Yes,
+            );
+            let ResponsePayload::Result(v) = resp.payload else {
+                panic!("expected result");
+            };
+            assert_eq!(
+                v["ttlMs"],
+                serde_json::json!(crate::types::DEFAULT_TTL_MS),
+                "the v2 wire REQUIRES ttlMs; the default 0 means `immediately stale`, \
+                 which asserts nothing about cacheability. Got {v}"
+            );
+            assert_eq!(
+                v["cacheScope"],
+                serde_json::json!("private"),
+                "D-08: an un-considered response must default to `private`. Defaulting to \
+                 `public` would be a cross-authorization-context data leak — a shared \
+                 gateway would be authorized to serve one caller's response body to \
+                 another caller holding a different access token. Got {v}"
+            );
+            assert_eq!(v["tools"], serde_json::json!([]), "the payload survives");
+        }
+
+        /// A handler that DID express intent keeps it, byte for byte. This is
+        /// what makes 115-05's `with_ttl_ms` / `with_cache_scope` meaningful.
+        #[test]
+        fn v2_handler_set_hints_survive_the_projection_unmodified() {
+            let info = Implementation::new("srv", "2.0.0");
+            let ctx = v2_ctx();
+            let mut resp = result_response(
+                1,
+                serde_json::json!({ "tools": [], "ttlMs": 300_000, "cacheScope": "public" }),
+            );
+            inject_v2_result_envelope(
+                &mut resp,
+                Some(&ctx),
+                &info,
+                ResponseDisposition::Complete,
+                ReservedFieldOwner::None,
+                Cacheable::Yes,
+            );
+            let ResponsePayload::Result(v) = resp.payload else {
+                panic!("expected result");
+            };
+            assert_eq!(
+                v["ttlMs"],
+                serde_json::json!(300_000),
+                "a handler-set ttlMs must survive verbatim — the projection ENSURES, it \
+                 does not overwrite. Got {v}"
+            );
+            assert_eq!(
+                v["cacheScope"],
+                serde_json::json!("public"),
+                "a handler-set cacheScope must survive verbatim, got {v}"
+            );
+        }
+
+        /// `tools/call` and `tasks/update` are not `CacheableResult` extenders,
+        /// so a v2 response for them gains NEITHER key (D-07).
+        #[test]
+        fn v2_non_cacheable_result_gains_neither_hint() {
+            let info = Implementation::new("srv", "2.0.0");
+            let ctx = v2_ctx();
+            for shape in [
+                serde_json::json!({ "content": [] }), // tools/call
+                serde_json::json!({}),                // tasks/update ack
+            ] {
+                let mut resp = result_response(1, shape);
+                inject_v2_result_envelope(
+                    &mut resp,
+                    Some(&ctx),
+                    &info,
+                    ResponseDisposition::Complete,
+                    ReservedFieldOwner::None,
+                    Cacheable::No,
+                );
+                let ResponsePayload::Result(v) = resp.payload else {
+                    panic!("expected result");
+                };
+                assert!(
+                    v.get("ttlMs").is_none() && v.get("cacheScope").is_none(),
+                    "D-07: only the six CacheableResult extenders carry these keys, got {v}"
+                );
+                // The v2 envelope itself still applies — the two are independent.
+                assert_eq!(v["resultType"], "complete");
+            }
+        }
+
+        /// The plain D-11 case: a v1 response gains neither key even for a
+        /// method whose v2 result WOULD carry them.
+        #[test]
+        fn v1_cacheable_result_gains_neither_hint() {
+            let info = Implementation::new("srv", "2.0.0");
+            let ctx = v1_ctx();
+            let original = serde_json::json!({ "tools": [], "nextCursor": null });
+            let mut resp = result_response(1, original.clone());
+            inject_v2_result_envelope(
+                &mut resp,
+                Some(&ctx),
+                &info,
+                ResponseDisposition::Complete,
+                ReservedFieldOwner::None,
+                Cacheable::Yes,
+            );
+            let ResponsePayload::Result(v) = resp.payload else {
+                panic!("expected result");
+            };
+            assert_eq!(
+                v, original,
+                "a v1 response must stay byte-identical: no envelope key AND no caching hint"
+            );
+        }
+
+        /// The leak an ENSURE-ONLY projection would ship: a handler set the
+        /// hints and the client is v1.
+        #[test]
+        fn v1_strips_a_handler_set_hint() {
+            let info = Implementation::new("srv", "2.0.0");
+            let ctx = v1_ctx();
+            let mut resp = result_response(
+                1,
+                serde_json::json!({
+                    "resources": [],
+                    "nextCursor": null,
+                    "ttlMs": 300_000,
+                    "cacheScope": "public",
+                }),
+            );
+            inject_v2_result_envelope(
+                &mut resp,
+                Some(&ctx),
+                &info,
+                ResponseDisposition::Complete,
+                ReservedFieldOwner::None,
+                Cacheable::Yes,
+            );
+            let ResponsePayload::Result(v) = resp.payload else {
+                panic!("expected result");
+            };
+            assert!(
+                v.get("ttlMs").is_none(),
+                "D-11: a v1 wire must NEVER carry a v2 field. An ensure-only projection \
+                 would have left this handler-set ttlMs in place. Got {v}"
+            );
+            assert!(
+                v.get("cacheScope").is_none(),
+                "D-11: a v1 wire must NEVER carry a v2 field; cacheScope leaked. Got {v}"
+            );
+            assert_eq!(
+                v,
+                serde_json::json!({ "resources": [], "nextCursor": null }),
+                "the strip must disturb nothing else"
+            );
+        }
+
+        /// No resolved context is treated as v1 — the conservative unknown⇒V1
+        /// fallback, and the EXACT combination `WasmMcpServer` passes.
+        #[test]
+        fn no_protocol_context_is_treated_as_v1() {
+            let info = Implementation::new("srv", "2.0.0");
+            let mut resp = result_response(
+                1,
+                serde_json::json!({
+                    "contents": [],
+                    "ttlMs": 300_000,
+                    "cacheScope": "public",
+                }),
+            );
+            inject_v2_result_envelope(
+                &mut resp,
+                None,
+                &info,
+                ResponseDisposition::Complete,
+                ReservedFieldOwner::None,
+                Cacheable::Yes,
+            );
+            let ResponsePayload::Result(v) = resp.payload else {
+                panic!("expected result");
+            };
+            assert_eq!(
+                v,
+                serde_json::json!({ "contents": [] }),
+                "an era-less dispatcher (WasmMcpServer passes exactly this) must STRIP \
+                 both keys — D-11. Got {v}"
+            );
+        }
+
+        /// Errors are untouched on BOTH eras even with a cacheable claim.
+        #[test]
+        fn an_error_payload_is_untouched_on_both_eras() {
+            let info = Implementation::new("srv", "2.0.0");
+            for ctx in [Some(v2_ctx()), Some(v1_ctx()), None] {
+                let mut err = ServerCore::error_response(
+                    RequestId::from(3i64),
+                    -32002,
+                    "Task not completed".to_string(),
+                );
+                let before = serde_json::to_value(&err).unwrap();
+                inject_v2_result_envelope(
+                    &mut err,
+                    ctx.as_ref(),
+                    &info,
+                    ResponseDisposition::Complete,
+                    ReservedFieldOwner::None,
+                    Cacheable::Yes,
+                );
+                let after = serde_json::to_value(&err).unwrap();
+                assert_eq!(
+                    before, after,
+                    "an error payload carries no result body, so it can carry no hint"
+                );
+            }
+        }
+
+        /// A non-object result body cannot carry a key.
+        #[test]
+        fn a_non_object_result_is_untouched() {
+            let info = Implementation::new("srv", "2.0.0");
+            let ctx = v2_ctx();
+            for shape in [
+                serde_json::json!(42),
+                Value::Null,
+                serde_json::json!([1, 2, 3]),
+                serde_json::json!("a string"),
+            ] {
+                let mut resp = result_response(1, shape.clone());
+                inject_v2_result_envelope(
+                    &mut resp,
+                    Some(&ctx),
+                    &info,
+                    ResponseDisposition::Complete,
+                    ReservedFieldOwner::None,
+                    Cacheable::Yes,
+                );
+                let ResponsePayload::Result(v) = resp.payload else {
+                    panic!("expected result");
+                };
+                assert_eq!(v, shape, "a non-object result body must be left alone");
+            }
+        }
+
+        /// The injected scope is the SERIALIZATION of the enum default, never a
+        /// string literal — so the projection and the enum cannot drift.
+        ///
+        /// If someone changes `#[default]` to `Public`,
+        /// `v2_cacheable_result_gains_both_hints_with_the_safe_defaults` fails
+        /// (it names the concrete safe value) and this one keeps the two
+        /// consistent, so the pair localizes the change rather than hiding it.
+        #[test]
+        fn the_injected_scope_is_the_serialization_of_the_enum_default() {
+            let info = Implementation::new("srv", "2.0.0");
+            let ctx = v2_ctx();
+            let mut resp = result_response(1, serde_json::json!({ "prompts": [] }));
+            inject_v2_result_envelope(
+                &mut resp,
+                Some(&ctx),
+                &info,
+                ResponseDisposition::Complete,
+                ReservedFieldOwner::None,
+                Cacheable::Yes,
+            );
+            let ResponsePayload::Result(v) = resp.payload else {
+                panic!("expected result");
+            };
+            assert_eq!(
+                v["cacheScope"],
+                serde_json::to_value(crate::types::CacheScope::default()).unwrap(),
+                "the injected default must BE the enum's serialization, not a parallel \
+                 string literal that can drift from it"
+            );
+            assert_eq!(
+                v["ttlMs"],
+                serde_json::to_value(crate::types::DEFAULT_TTL_MS).unwrap(),
+                "same for the ttl: the constant is the single source"
+            );
+        }
+
+        /// A response middleware that deletes a projected key WINS.
+        ///
+        /// # This test asserts a LIMITATION, not an endorsement
+        ///
+        /// Measured ordering: [`ServerCore::handle_request`] calls
+        /// `inject_v2_result_envelope` and THEN
+        /// `process_response_with_context(&mut response, &context)`, whose
+        /// signature in `src/shared/middleware.rs` takes
+        /// `response: &mut JSONRPCResponse`. A registered response middleware
+        /// therefore runs AFTER the projection and can add, alter or remove
+        /// `ttlMs`, `cacheScope`, `resultType` or `serverInfo`.
+        ///
+        /// This test asserts the CURRENT behaviour so that a future change of
+        /// ordering surfaces as a deliberate decision rather than a silent
+        /// alteration of what the SDK puts on the v2 wire.
+        ///
+        /// The prohibition documented on `inject_v2_result_envelope` stands:
+        /// **response middleware MUST NOT mutate `ttlMs`, `cacheScope`,
+        /// `resultType` or `serverInfo`.** A middleware that needs to influence
+        /// cacheability must set the fields on the result TYPE before dispatch
+        /// returns.
+        ///
+        /// Moving the projection AFTER the middleware chain was considered and
+        /// NOT done: it would change what middleware observes about Phase 114's
+        /// `resultType` / `serverInfo`, which is a v2 behaviour change outside
+        /// SCHM-03's scope. It is fenced by a source tripwire in 115-08 and
+        /// booked as a deferred item by 115-10.
+        #[tokio::test]
+        async fn response_middleware_still_runs_after_the_projection_and_this_is_a_known_limitation(
+        ) {
+            use crate::shared::middleware::{
+                AdvancedMiddleware, EnhancedMiddlewareChain, MiddlewareContext,
+            };
+
+            /// Deletes one projected key from every result it sees.
+            struct KeyDeletingMiddleware {
+                key: &'static str,
+            }
+
+            #[async_trait]
+            impl AdvancedMiddleware for KeyDeletingMiddleware {
+                fn name(&self) -> &'static str {
+                    "key-deleting-probe"
+                }
+
+                async fn on_response_with_context(
+                    &self,
+                    response: &mut JSONRPCResponse,
+                    _context: &MiddlewareContext,
+                ) -> Result<()> {
+                    if let ResponsePayload::Result(ref mut value) = response.payload {
+                        if let Some(object) = value.as_object_mut() {
+                            object.remove(self.key);
+                        }
+                    }
+                    Ok(())
+                }
+            }
+
+            struct HintingResource;
+
+            #[async_trait]
+            impl ResourceHandler for HintingResource {
+                async fn read(
+                    &self,
+                    uri: &str,
+                    _extra: RequestHandlerExtra,
+                ) -> Result<ReadResourceResult> {
+                    Ok(ReadResourceResult::new(vec![Content::resource_with_text(
+                        uri,
+                        "hi",
+                        "text/plain",
+                    )]))
+                }
+
+                async fn list(
+                    &self,
+                    _cursor: Option<String>,
+                    _extra: RequestHandlerExtra,
+                ) -> Result<ListResourcesResult> {
+                    Ok(ListResourcesResult::new(vec![]))
+                }
+            }
+
+            async fn read_with_middleware(deleted_key: &'static str) -> Value {
+                let mut chain = EnhancedMiddlewareChain::new();
+                chain.add(Arc::new(KeyDeletingMiddleware { key: deleted_key }));
+                let server = crate::server::builder::ServerCoreBuilder::new()
+                    .name("middleware-ordering-probe")
+                    .version("1.0.0")
+                    .resources(HintingResource)
+                    .stateless_mode(true)
+                    .protocol_middleware(Arc::new(RwLock::new(chain)))
+                    .with_supported_protocol_versions([ProtocolVersion(
+                        crate::types::protocol::PROTOCOL_VERSION_2026_07_28.to_string(),
+                    )])
+                    .build()
+                    .unwrap();
+
+                let meta = crate::types::protocol::RequestMeta::new().with_meta(
+                    crate::types::protocol::context::RESERVED_PROTOCOL_VERSION_KEY,
+                    serde_json::json!("2026-07-28"),
+                );
+                let request =
+                    Request::Client(Box::new(ClientRequest::ReadResource(ReadResourceRequest {
+                        uri: "mem://x".to_string(),
+                        _meta: Some(meta),
+                    })));
+                let response = server
+                    .handle_request(RequestId::from(1i64), request, None)
+                    .await;
+                let ResponsePayload::Result(v) = response.payload else {
+                    panic!("expected a result");
+                };
+                v
+            }
+
+            // The middleware deleted `ttlMs` AFTER the projection wrote it.
+            let v = read_with_middleware("ttlMs").await;
+            assert!(
+                v.get("ttlMs").is_none(),
+                "KNOWN LIMITATION, asserted deliberately: inject_v2_result_envelope runs \
+                 BEFORE process_response_with_context, which takes `&mut JSONRPCResponse`, \
+                 so response middleware WINS over the projection. Response middleware \
+                 MUST NOT mutate ttlMs, cacheScope, resultType or serverInfo — a \
+                 middleware that needs to influence cacheability must set the fields on \
+                 the result TYPE before dispatch returns. If this assertion now FAILS, \
+                 the ordering changed: that is a v2 wire-behaviour change and must be a \
+                 deliberate decision (115-08 tripwire, 115-10 deferred item), not a \
+                 silent one. Got {v}"
+            );
+            assert_eq!(
+                v["cacheScope"],
+                serde_json::json!("private"),
+                "the key the middleware did NOT touch still carries the projection, which \
+                 is what makes this a measurement of ORDERING rather than of the \
+                 projection being absent. Got {v}"
+            );
+
+            // The same limitation holds for the OTHER projected key — the
+            // measurement is of ordering, not of one specific key.
+            let v = read_with_middleware("cacheScope").await;
+            assert!(
+                v.get("cacheScope").is_none(),
+                "the ordering limitation is per-response, not per-key: \
+                 process_response_with_context can remove cacheScope just as readily as \
+                 ttlMs. Got {v}"
+            );
+            assert_eq!(
+                v["ttlMs"],
+                serde_json::json!(crate::types::DEFAULT_TTL_MS),
+                "and the untouched key still carries the projection, got {v}"
+            );
+        }
     }
 
     #[tokio::test]
